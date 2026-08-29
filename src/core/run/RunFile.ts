@@ -110,6 +110,18 @@ export function isTerminal(status: string): boolean {
   return (TERMINAL_STATUSES as readonly string[]).includes(status);
 }
 
+/**
+ * Finished for good — nothing an operator can do will move it.
+ *
+ * `failed` is terminal for the ATTEMPT but not for the run: spec §5's failure
+ * path gives the operator `next` (retry) and `reject --note`, so a failed run is
+ * still the live run and must stay findable. Everything that asks "is this run
+ * over?" asks this, not `isTerminal`.
+ */
+export function isFinished(status: string): boolean {
+  return status === "done" || status === "cancelled";
+}
+
 /** Every stage in execution order, paired with its phase. */
 export function flatten(run: RunFile): readonly { phase: RunPhase; stage: RunStage }[] {
   const out: { phase: RunPhase; stage: RunStage }[] = [];
@@ -121,16 +133,23 @@ export function stageAt(run: RunFile, cursor: RunCursor): { phase: RunPhase; sta
   return flatten(run).find((e) => e.phase.id === cursor.phase && e.stage.id === cursor.stage) ?? null;
 }
 
-/** Spec §2.2: "Run status = status of the stage at cursor, or done when every phase is terminal." */
+/**
+ * Spec §2.2: "Run status = status of the stage at cursor, or done when every phase
+ * is terminal." A failed stage is checked FIRST, because a run holding one is not
+ * done — calling it done hides the failure and makes `next` refuse the retry the
+ * spec's failure path promises.
+ */
 export function deriveRunStatus(run: RunFile): StageStatus {
   const all = flatten(run);
+  if (all.some((e) => e.stage.status === "failed")) return "failed";
   if (all.length > 0 && all.every((e) => isTerminal(e.stage.status))) return "done";
   return stageAt(run, run.cursor)?.stage.status ?? "pending";
 }
 
-/** A phase is done when every stage in it is terminal; otherwise it wears its first live stage's status. */
+/** A phase wears a failure first, is done when every stage is terminal, else its first live stage's status. */
 export function derivePhaseStatus(phase: RunPhase): StageStatus {
   if (phase.stages.length === 0) return "skipped";
+  if (phase.stages.some((s) => s.status === "failed")) return "failed";
   if (phase.stages.every((s) => isTerminal(s.status))) return "done";
   const live = phase.stages.find((s) => !isTerminal(s.status));
   return live?.status ?? "pending";

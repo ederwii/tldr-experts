@@ -11,21 +11,25 @@ import { join } from "node:path";
 import { openBlocks, parseQuestions } from "../text/questions.ts";
 import { remaining } from "../budget/wouldExceed.ts";
 import type { RunBudget } from "../budget/RunBudget.ts";
-import { isTerminal, stageAt, type RunFile, type RunPhase } from "./RunFile.ts";
+import { isTerminal, stageAt, type RunFile, type RunPhase, type RunStage } from "./RunFile.ts";
 
 export const BAR_CELLS = 5;
 
 export interface PhaseProgress {
   readonly id: string;
   readonly status: string;
+  /** Stages that finished and did NOT fail. A failure is not progress. */
   readonly done: number;
+  readonly failed: number;
   readonly total: number;
   readonly bar: string;
+  /** The reason the first failed stage in this phase gave, or null. */
+  readonly failure: string | null;
   readonly spent_usd: number;
   readonly ceiling_usd: number;
 }
 
-export type WaitingKind = "gate" | "answer" | "ready" | "done" | "blocked";
+export type WaitingKind = "gate" | "answer" | "ready" | "done" | "blocked" | "failed";
 
 export interface Waiting {
   readonly kind: WaitingKind;
@@ -69,22 +73,48 @@ export function buildStatus(run: RunFile, budget: RunBudget, runDir: string): Ru
 
 function progressOf(phase: RunPhase, budget: RunBudget): PhaseProgress {
   const total = phase.stages.length;
-  const done = phase.stages.filter((s) => isTerminal(s.status)).length;
+  const failedStages = phase.stages.filter((s) => s.status === "failed");
+  const done = phase.stages.filter((s) => isTerminal(s.status) && s.status !== "failed").length;
   const money = budget.phases.find((p) => p.id === phase.id);
   return {
     id: phase.id,
     status: phase.status,
     done,
+    failed: failedStages.length,
     total,
-    bar: bar(done, total),
+    bar: bar(done, total, failedStages.length),
+    failure: failedStages[0] === undefined ? null : failureReason(failedStages[0]),
     spent_usd: money?.spent_usd ?? 0,
     ceiling_usd: money?.ceiling_usd ?? 0,
   };
 }
 
-export function bar(done: number, total: number): string {
+/**
+ * The bar counts finished-and-not-failed stages. A failure takes the first cell
+ * as `✗` and keeps it: a phase that shows a full bar after a stage failed is the
+ * exact lie this replaced.
+ */
+export function bar(done: number, total: number, failed = 0): string {
+  if (failed > 0) {
+    const cells = BAR_CELLS - 1;
+    const filled = total === 0 ? 0 : Math.min(cells, Math.round((done / total) * cells));
+    return `✗${"▓".repeat(filled)}${"░".repeat(cells - filled)}`;
+  }
   const filled = total === 0 ? 0 : Math.round((done / total) * BAR_CELLS);
   return "▓".repeat(filled) + "░".repeat(BAR_CELLS - filled);
+}
+
+/**
+ * Why a stage failed. `RunStage` has no `error` field (spec §2.2) — the reason is
+ * recorded on the task that failed, so that is where this reads it from.
+ */
+function failureReason(stage: RunStage): string | null {
+  const error = [...stage.tasks].reverse().find((task) => task.error !== null)?.error ?? null;
+  return error === null || error.trim() === "" ? null : oneLine(error);
+}
+
+function oneLine(text: string): string {
+  return text.split("\n")[0]?.trim() ?? "";
 }
 
 export function whatIsWaiting(run: RunFile, runDir: string): Waiting {
@@ -109,8 +139,16 @@ export function whatIsWaiting(run: RunFile, runDir: string): Waiting {
           : `${open.length} open question(s) in ${run.cursor.phase}/questions.md — \`tldrx answer ${open[0] ?? "Q1"} "…"\``,
         questions: open,
       };
+    case "failed": {
+      const reason = failureReason(entry.stage);
+      return {
+        kind: "failed",
+        message: `${entry.phase.id}/${entry.stage.id} FAILED${reason === null ? "" : `: ${reason}`} — ` +
+          "retry: `tldrx next` · or: `tldrx reject --note \"…\"`",
+        questions: open,
+      };
+    }
     case "done":
-    case "failed":
     case "skipped":
     case "cancelled":
       return { kind: "done", message: "every stage is terminal — nothing is waiting", questions: open };
@@ -145,9 +183,12 @@ export function renderStatus(view: RunStatusView): string {
   ];
   for (const phase of view.phases) {
     const marker = phase.id === view.cursor.phase ? ">" : " ";
+    const failure = phase.failed === 0
+      ? ""
+      : ` · failed: ${phase.failure ?? `${String(phase.failed)} stage(s)`}`;
     lines.push(
       `${marker} ${phase.id.padEnd(width)}  [${phase.bar}] ${String(phase.done)}/${String(phase.total)} stages` +
-        `   $${phase.spent_usd.toFixed(2)} / $${phase.ceiling_usd.toFixed(2)}`,
+        `   $${phase.spent_usd.toFixed(2)} / $${phase.ceiling_usd.toFixed(2)}${failure}`,
     );
   }
   lines.push(

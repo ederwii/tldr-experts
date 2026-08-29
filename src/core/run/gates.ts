@@ -99,38 +99,67 @@ export interface RejectOutcome {
   readonly stage: string;
   readonly phase: string;
   readonly note: string;
+  /** The status the stage was in when it was rejected: `awaiting_gate` or `failed`. */
+  readonly from: string;
 }
+
+/**
+ * Two states may be rejected, and spec §5 names them both.
+ *
+ * `awaiting_gate` is the ordinary one. `failed` is the other half of the failure
+ * path — "the operator's options are `next` (retry, re-spending), `reject --note`
+ * (send the stage back to `ready` with the note fed into the next prompt)" — so
+ * refusing a failed stage would leave the operator with retry as the only move.
+ *
+ * Both record the note in `gate.note` and append one `gate.rejected` event; the
+ * event's `from` payload says which state it came out of. There is deliberately
+ * no separate `stage.reset` event: one verb, one event, and the note lives in one
+ * place for `next` to read back.
+ */
+const REJECTABLE: readonly string[] = ["awaiting_gate", "failed"];
 
 export function reject(store: RunStore, ctx: GateContext): RejectOutcome {
   if (ctx.note.trim() === "") {
     throw new GateError("reject needs --note: a rejection without a reason is not actionable");
   }
-  const entry = requireGate(store, "reject");
+  const entry = requireStatus(store, "reject", REJECTABLE);
+  const from = entry.stage.status;
   store.mutate((run) =>
     mapStage(run, entry.phase.id, entry.stage.id, (stage) => ({
       ...stage,
       status: "ready",
+      ended_at: null,
       gate: { ...stage.gate, status: "rejected", by: ctx.actor, at: ctx.at, note: ctx.note } satisfies RunGate,
     })),
   );
   store.append(event(ctx.at, store.runId, entry.stage.id, "gate.rejected", ctx.actor, {
     phase: entry.phase.id,
     note: ctx.note,
+    from,
   }));
   store.save();
-  return { stage: entry.stage.id, phase: entry.phase.id, note: ctx.note };
+  return { stage: entry.stage.id, phase: entry.phase.id, note: ctx.note, from };
 }
 
 // --- helpers ---------------------------------------------------------------
 
 function requireGate(store: RunStore, verb: string): { phase: RunPhase; stage: RunStage } {
+  return requireStatus(store, verb, ["awaiting_gate"]);
+}
+
+function requireStatus(
+  store: RunStore,
+  verb: string,
+  allowed: readonly string[],
+): { phase: RunPhase; stage: RunStage } {
   const entry = store.cursorEntry();
   if (entry === null) {
     throw new GateError(`cursor ${store.run.cursor.phase}/${store.run.cursor.stage} does not resolve to a stage`);
   }
-  if (entry.stage.status !== "awaiting_gate") {
+  if (!allowed.includes(entry.stage.status)) {
+    const wanted = allowed.map((status) => `\`${status}\``).join(" or ");
     throw new GateError(
-      `nothing to ${verb}: ${entry.phase.id}/${entry.stage.id} is \`${entry.stage.status}\`, not \`awaiting_gate\``,
+      `nothing to ${verb}: ${entry.phase.id}/${entry.stage.id} is \`${entry.stage.status}\`, not ${wanted}`,
     );
   }
   return entry;

@@ -134,10 +134,15 @@ async function advance(store: RunStore, options: NextOptions, notes: string[]): 
     const phaseId = entry.phase.id;
     const stageId = entry.stage.id;
 
-    // `[assumption]` — the spec's pseudocode never reaches a terminal cursor stage
-    // because `approve` advances it. A `--dry-run` or a rejected-then-skipped stage
-    // can, so the cursor is walked forward rather than refusing to move.
-    if (isTerminal(entry.stage.status)) {
+    // Spec §5, failure path: "`stage.failed` never advances the cursor." Running
+    // `next` on a failed stage IS the retry, so it falls through and runs the
+    // stage again rather than being walked past.
+    //
+    // `[assumption]` — for the OTHER terminal statuses the spec's pseudocode never
+    // reaches a terminal cursor stage, because `approve` advances it. A `--dry-run`
+    // or a rejected-then-skipped stage can, so those the cursor walks forward
+    // rather than refusing to move.
+    if (isTerminal(entry.stage.status) && entry.stage.status !== "failed") {
       const moved = advanceCursor(store);
       if (moved === null) {
         store.save();
@@ -146,6 +151,10 @@ async function advance(store: RunStore, options: NextOptions, notes: string[]): 
       store.save();
       notes.push(`cursor moved past ${phaseId}/${stageId} (${entry.stage.status}) to ${moved.phase}/${moved.stage}`);
       continue;
+    }
+
+    if (entry.stage.status === "failed") {
+      notes.push(`retrying ${phaseId}/${stageId} (it failed; cost already spent is not refunded)`);
     }
 
     if (entry.stage.status === "awaiting_gate") {
@@ -535,6 +544,7 @@ function assemblePrompt(
   ];
   return buildPrompt({
     stageMd,
+    previousAttempt: describePreviousAttempt(stage),
     values: {
       run: store.runId,
       repos: store.run.repos.length === 0 ? "(none)" : store.run.repos.join(", "),
@@ -546,6 +556,33 @@ function assemblePrompt(
     experts: loadExpertBodies(options.root, expertNames),
     inputs: inputs.map((path) => ({ path, content: readOrEmpty(resolveDeclared(path, ctx)) })),
   });
+}
+
+/**
+ * What the last attempt at this stage left behind (spec §5, failure path: the
+ * reject note is "fed into the next prompt").
+ *
+ * Two sources, both already on the stage: the error of its last failed task, and
+ * an operator's rejection note. Either one means this is a retry, and the agent
+ * is told so rather than being handed the original prompt as if nothing happened.
+ */
+export function describePreviousAttempt(stage: RunStage): string {
+  const lines: string[] = [];
+  const failure = [...stage.tasks].reverse().find((task) => task.error !== null)?.error ?? null;
+  if (failure !== null && failure.trim() !== "") {
+    lines.push(`The previous attempt at this stage FAILED: ${failure.trim()}`);
+  }
+  if (stage.gate.status === "rejected" && stage.gate.note.trim() !== "") {
+    if (lines.length > 0) lines.push("");
+    lines.push(
+      "A human rejected the previous attempt. Their note is the primary instruction for this one:",
+      "",
+      ...stage.gate.note.trim().split("\n").map((line) => `> ${line}`),
+    );
+  }
+  if (lines.length === 0) return "";
+  lines.push("", "Fix what is described above. Everything else in this prompt still applies.");
+  return lines.join("\n");
 }
 
 /** `stage.md` sits beside the `stage.yml` the preset resolved. */
