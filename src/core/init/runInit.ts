@@ -25,7 +25,8 @@ import { CONVENTIONS_DIR, renderRepoConventions, renderSharedConventions } from 
 import { FACTS_FILE, FACTS_HEADER, buildFactsDocument, validateFactsDocument } from "./factsDocument.ts";
 import { renderInitHandoff } from "./handoff.ts";
 import { planExperts, type ExpertPlan } from "./planExperts.ts";
-import { buildProcessDocument } from "./processDocument.ts";
+import { buildProcessDocument, PROCESS_HEADER } from "./processDocument.ts";
+import { gitUserName } from "./gitUserName.ts";
 import { QUESTIONS_FILE, planQuestions, renderQuestions, type Question } from "./questions.ts";
 import { seedExperts } from "./seedExperts.ts";
 import { buildWorkspaceDocument } from "./workspaceDocument.ts";
@@ -199,10 +200,7 @@ async function writeProcess(
   if (!validation.ok) throw new Error(formatIssues(PROCESS_FILE, validation));
 
   await log.createIfAbsent(
-    join(out, PROCESS_FILE), PROCESS_FILE,
-    "# Written by `tldrx init` (spec §2.12). The team's way of working as DATA, never\n"
-    + "# assumed. Changing methodology means editing this file and nothing else.\n"
-    + stringifyYaml(document),
+    join(out, PROCESS_FILE), PROCESS_FILE, PROCESS_HEADER + stringifyYaml(document),
   );
 }
 
@@ -219,12 +217,6 @@ async function probe(deps: InitDependencies): Promise<readonly McpServer[]> {
   return result.servers;
 }
 
-/** `approvers` must be non-empty (spec §2.12); git knows who is sitting here. */
-async function gitUserName(runner: CommandRunner, cwd: string): Promise<string> {
-  const result = await runner.run(["git", "config", "user.name"], cwd);
-  const name = result.stdout.trim();
-  return result.exitCode === 0 && name !== "" ? name : "owner";
-}
 
 export function rfc3339(now: Date): string {
   return now.toISOString().replace(/\.\d{3}Z$/, "Z");

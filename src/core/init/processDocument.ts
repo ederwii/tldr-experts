@@ -13,6 +13,20 @@
  */
 import type { Methodology } from "../schemas/process.ts";
 
+/**
+ * The header every writer of this file puts on it, so a hand-opened `process.yml`
+ * says who wrote it and why — `init` when it creates the file, and the interview
+ * when it has to create one that init never wrote.
+ */
+export const PROCESS_HEADER =
+  "# Written by `tldrx init` (spec §2.12). The team's way of working as DATA, never\n"
+  + "# assumed. Changing methodology means editing this file and nothing else.\n";
+
+/** `[assumption]` — spec §2.12 requires a sprint length under scrum; nobody said 14. */
+export const DEFAULT_SPRINT_LENGTH_DAYS = 14;
+/** `[assumption]` — kanban needs a WIP limit to render a board; nobody said 3. */
+export const DEFAULT_WIP_LIMIT = 3;
+
 export interface ProcessDocument {
   readonly version: 1;
   readonly methodology: Methodology;
@@ -52,8 +66,8 @@ export function buildProcessDocument(input: BuildProcessInput): ProcessDocument 
     version: 1,
     methodology,
     cadence: {
-      sprint_length_days: methodology === "scrum" ? 14 : null,
-      wip_limit: methodology === "kanban" ? 3 : null,
+      sprint_length_days: methodology === "scrum" ? DEFAULT_SPRINT_LENGTH_DAYS : null,
+      wip_limit: methodology === "kanban" ? DEFAULT_WIP_LIMIT : null,
       review_day: null,
     },
     ticket_tool: { kind: "none", project: null, board: null, sync: "mirror-out" },
