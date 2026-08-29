@@ -77,9 +77,11 @@ describe("stub commands", () => {
     expect(run.stderr.trim()).toBe("tldrx run new: not implemented yet (v0 roadmap)");
   });
 
+  // `map --check` used to live here; map is implemented now, so this uses a
+  // command that is still a stub.
   test("a flag is not mistaken for a subcommand", async () => {
-    const run = await tldrx("map", "--check");
-    expect(run.stderr.trim()).toBe("tldrx map: not implemented yet (v0 roadmap)");
+    const run = await tldrx("dashboard", "--static");
+    expect(run.stderr.trim()).toBe("tldrx dashboard: not implemented yet (v0 roadmap)");
   });
 });
 

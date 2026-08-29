@@ -1,9 +1,9 @@
 # tldr-experts
 
-**Pre-alpha. Almost nothing works yet.** This repo is a skeleton: a command table,
-one real command, and the file shapes everything else will be built against. Every
-unimplemented command exits `64` and says so. Nothing here prints success for work
-it did not do.
+**Pre-alpha. Most of it does not work yet.** This repo is a skeleton: a command
+table, three real commands (`doctor`, `init`, `map`), and the file shapes everything
+else will be built against. Every unimplemented command exits `64` and says so.
+Nothing here prints success for work it did not do.
 
 A lightweight, file-based AI development workflow. Open source, tool-agnostic in
 design, piloted on Claude Code.
@@ -30,13 +30,13 @@ tldrx retro                # close the run and keep what was learned
 | `tldrx --version` | **implemented** | Prints `0.0.1`, read from `package.json`. |
 | `tldrx --help` | **implemented** | Lists every command and marks the stubs with `*`. |
 | `tldrx doctor` | **implemented** | Reads `env.yml`, runs each tool's `check` command, prints a table. Exit `0` when every required tool is present and meets its `min_version`, else `1`. `--mcp` also runs `claude mcp list` (slow — live health checks per server; off by default). |
-| `tldrx init` | stub → exit 64 | |
+| `tldrx init` | **implemented** | Detects repos/stack/commands → `.tldrx/workspace.yml` (spec §2.1), builds `.tldrx/map/<repo>/{architecture,domains,conventions,commands,hotspots,gotchas}.md` + `map/workspace.md`, writes `.tldrx/init-handoff.md` (§2.8) and `.tldrx/init-questions.md` (§2.7, only real gaps), seeds experts at level 0 (§2.6), writes `conventions/`, `process.yml` (§2.12) and an empty `facts.yml`, and appends a marked block to `.gitignore` and `CLAUDE.md`. Deterministic: filesystem + `git` only, no LLM and no network. Re-running regenerates detection output and **keeps** `facts.yml`, `experts/`, `process.yml`, `conventions/*.md` and an answered questions file. Flags: `--root <path>` `--out <path>` `--no-interview` `--process <scrum\|kanban\|shape-up\|none>` `--mcp` `--provider <auto\|graphify\|static>`. Exit `0`/`1`. |
 | `tldrx run <new\|status>` | stub → exit 64 | |
 | `tldrx next` | stub → exit 64 | |
 | `tldrx answer` | stub → exit 64 | |
 | `tldrx approve` | stub → exit 64 | |
 | `tldrx reject` | stub → exit 64 | |
-| `tldrx map [--refresh\|--check]` | stub → exit 64 | |
+| `tldrx map [--refresh\|--check]` | **implemented** | `--refresh` re-detects and rewrites `.tldrx/map/**`. `--check` resolves every `[src: <repo:>path:line]` citation in the map and the init handoff against the filesystem — exit `0` when they all land, `1` with the offending document, line and reason when they do not. Map providers: `graphify` when the binary is on PATH (runs only `graphify --version` and `graphify update <path> --no-cluster`, both documented, no LLM), otherwise `static` (file tree, manifests, 90-day `git log --numstat` churn, largest files). Which one ran is recorded as `provider:` in `workspace.yml`. |
 | `tldrx expert <list\|create\|train>` | stub → exit 64 | |
 | `tldrx dashboard` | stub → exit 64 | |
 | `tldrx replay` | stub → exit 64 | |
@@ -76,8 +76,8 @@ env.yml               the manifest `tldrx doctor` runs
 ```
 
 Per project, the framework writes into `.tldrx/` (framework state) and
-`tldrx-work/<yymmdd>-<slug>/` (one folder per piece of work). Neither is created
-yet — `tldrx init` is a stub.
+`tldrx-work/<yymmdd>-<slug>/` (one folder per piece of work). `tldrx init` creates
+`.tldrx/`; `tldrx-work/` waits on `tldrx run new`.
 
 ## Requirements
 
