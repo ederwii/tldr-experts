@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.0.2 — unreleased
+
+Fixes found by the first real pilot (scavtopia, `--from` an AI-DLC intent, What stage):
+
+- `claim-sources`: bare `path:line` sources now resolve against the workspace root, then the run directory, then a repo dir (a run-relative `01-what/intent.md:12` was reported as missing).
+- Handoff parser: wrapped bullets (token on an indented continuation line) and ordered items (`1.` / `1)` at column 0) are validated like `- ` bullets; the facilitator check, `approve` and the hook share one parser.
+- `next` retries a `failed` cursor stage instead of walking past it; `run status` renders failed stages; `reject --note` works from `failed` and the note reaches the next prompt under `## Previous attempt`.
+- `run new --from` no longer duplicates facts on re-import.
+- `--root` on every run-scoped command; `<cmd> --help` works without a workspace.
+- Stage prompts carry the citation grammar and the no-re-ask rule.
+- Hook bundles split into one shared chunk (`dist/` 2.4 MB → 0.9 MB); CI build step is honest; tag-driven trusted-publishing release workflow.
+
 All notable changes to tldr-experts. Dates are the day the work landed on `main`.
 
 ## 0.0.1 — 2026-08-29

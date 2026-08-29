@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { singleRepoFixture } from "./init-fixture.ts";
+const PKG_VERSION: string = JSON.parse(await Bun.file(new URL("../package.json", import.meta.url)).text()).version;
 
 /**
  * The portability contract (2026-08-28): **Bun to build, Node or Bun to run.**
@@ -91,7 +92,7 @@ describe("running the build under node", () => {
     const ran = await run(["node", join(DIST, "tldrx.js"), "--version"]);
     expect(ran.stderr).toBe("");
     expect(ran.code).toBe(0);
-    expect(ran.stdout.trim()).toBe("0.0.1");
+    expect(ran.stdout.trim()).toBe(PKG_VERSION);
   });
 
   test("`node dist/tldrx.js --help` finds the framework root from inside dist/", async () => {

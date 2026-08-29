@@ -7,6 +7,7 @@ import { parseQuestions } from "../src/core/text/questions.ts";
 import { FactsStore } from "../src/core/facts/FactsStore.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { makeWorkspace, FIXTURE_RUN, type TempWorkspace } from "./fixtures/tempWorkspace.ts";
+const PKG_VERSION: string = JSON.parse(await Bun.file(new URL("../package.json", import.meta.url)).text()).version;
 
 const HOOKS = ["claim-sources", "no-reask", "answer-capture", "dod-gate", "budget-gate", "session-start"] as const;
 
@@ -650,7 +651,7 @@ describe("plugin packaging", () => {
       name: string; version: string; description: string;
     };
     expect(manifest.name).toBe("tldrx");
-    expect(manifest.version).toBe("0.0.1");
+    expect(manifest.version).toBe(PKG_VERSION);
     expect(manifest.description.length).toBeGreaterThan(0);
   });
 

@@ -28,10 +28,10 @@ async function tldrx(...args: string[]): Promise<Run> {
 }
 
 describe("tldrx --version", () => {
-  test("prints 0.0.1 and exits 0", async () => {
+  test("prints the package.json version and exits 0", async () => {
     const run = await tldrx("--version");
     expect(run.code).toBe(EXIT_OK);
-    expect(run.stdout.trim()).toBe("0.0.1");
+    expect(run.stdout.trim()).toBe(JSON.parse(await Bun.file(new URL("../package.json", import.meta.url)).text()).version);
   });
 
   test("`version` and `-v` are the same command", () => {
