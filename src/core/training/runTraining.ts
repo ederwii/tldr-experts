@@ -35,6 +35,7 @@ import { selectFiles, keywordsFor } from "./selectFiles.ts";
 import { mineRuns } from "./mineRuns.ts";
 import { codePrompt, runsPrompt, type TrainingPromptInput } from "./trainingPrompt.ts";
 import { CompetenciesError, writeCompetencies } from "./competenciesWrite.ts";
+import { isRoleExpertOnDisk, lightModeRefusal, nothingToMineRefusal } from "./roleTraining.ts";
 import { TrainingLog, type TrainingEvent } from "./trainingLog.ts";
 
 export type TrainingRunMode = "headless" | "prepare" | "commit";
@@ -95,9 +96,19 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
     return fail(EXIT_USAGE, [`${options.expert} has no area '${options.area}' (areas: ${known})`]);
   }
 
+  // --- what kind of expert this is, before any money is committed ----------
+  // A role expert's domain is the workflow, not a folder, so light mode's grep
+  // has nothing to grep. `roleTraining.ts` says why this is a refusal rather
+  // than a run that produces an empty knowledge file at full price.
+  const isRole = isRoleExpertOnDisk(options.root, options.expert);
+  const refusal = lightModeRefusal(options.expert, area.id, options.mode, isRole);
+  if (refusal !== null) return fail(EXIT_USAGE, refusal);
+
   // --- money, before anything is read --------------------------------------
   const ceiling = options.maxUsd ?? DEFAULT_TRAIN_USD;
-  const agents = options.mode === "full" ? 2 : 1;
+  // A role expert in full mode runs the runs pass alone — one sub-agent, so the
+  // whole ceiling is its share rather than half of it.
+  const agents = options.mode === "full" && !isRole ? 2 : 1;
   if (ceiling < MIN_TRAIN_USD) {
     return fail(EXIT_GATE_REFUSED, [
       `refusing to train under the $${MIN_TRAIN_USD.toFixed(2)} floor — --max-usd was $${ceiling.toFixed(2)}.`,
@@ -125,15 +136,21 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
     budgetUsd: share,
   };
 
-  const selection = await selectFiles({
-    root: options.root,
-    repos,
-    areaId: area.id,
-    areaTitle: area.title,
-  });
-  const prompts: { key: string; prompt: string; output: string }[] = [
-    { key: CODE_TASK, prompt: codePrompt(promptInput, selection), output: knowledgeRelPath(area.id) },
-  ];
+  const prompts: { key: string; prompt: string; output: string }[] = [];
+  // The code pass is skipped for a role expert — not budgeted, not walked, not
+  // spawned. `selectFiles` walks every repo, so skipping it is also why a role
+  // training run starts instantly.
+  if (!isRole) {
+    const selection = await selectFiles({
+      root: options.root,
+      repos,
+      areaId: area.id,
+      areaTitle: area.title,
+    });
+    prompts.push({
+      key: CODE_TASK, prompt: codePrompt(promptInput, selection), output: knowledgeRelPath(area.id),
+    });
+  }
   if (options.mode === "full") {
     const mine = mineRuns({
       root: options.root,
@@ -142,6 +159,8 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
       keywords: keywordsFor(area.id, area.title),
       facts: FactsStore.loadOrEmpty(factsPath(options.root)).facts,
     });
+    const empty = nothingToMineRefusal(options.expert, area.id, mine.files.length, isRole);
+    if (empty !== null) return fail(EXIT_USAGE, empty);
     prompts.push({ key: RUNS_TASK, prompt: runsPrompt(promptInput, mine), output: fromRunsRelPath(area.id) });
   }
 

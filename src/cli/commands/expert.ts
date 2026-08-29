@@ -18,8 +18,8 @@ import { effortFlag } from "../effort.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
 import type { EffortLevel } from "../../core/schemas/stage.ts";
 import {
-  ExpertNotFound, isTrainingMode, recomputeExperts, recomputeJson, renderRecompute, runTraining,
-  type TrainingRunMode,
+  ExpertNotFound, isRoleExpertOnDisk, isTrainingMode, lightModeRefusal, recomputeExperts,
+  recomputeJson, renderRecompute, runTraining, type TrainingRunMode,
 } from "../../core/training/index.ts";
 import { loadWorkspaceFile } from "../../core/init/loadWorkspaceFile.ts";
 import {
@@ -173,6 +173,19 @@ async function train(argv: readonly string[]): Promise<number> {
   if (area === undefined) {
     const known = expert.areas.map((candidate) => candidate.id).join(", ") || "none";
     process.stderr.write(`tldrx expert train: ${name} has no area '${areaId}' (areas: ${known})\n`);
+    return EXIT_FAILED;
+  }
+
+  // A role expert has no code folder, so light mode's grep has nothing to grep
+  // (`core/training/roleTraining.ts`). Refused here as well as inside
+  // `runTraining`, because `--print-prompt` never reaches that function and a
+  // printed prompt a human pastes into their own session spends their money the
+  // same way ours would.
+  const roleRefusal = lightModeRefusal(
+    name, areaId, modeArg, isRoleExpertOnDisk(root, name),
+  );
+  if (roleRefusal !== null) {
+    process.stderr.write(prefix(`${roleRefusal.join("\n")}\n`));
     return EXIT_FAILED;
   }
 

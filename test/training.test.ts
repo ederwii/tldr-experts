@@ -20,6 +20,7 @@ import {
   runTraining, selectFiles, keywordsFor, mineRuns, relevantFacts, parseKnowledgeFile,
   codeEvidence, runEvidence, mergeEvidence, LIGHT_SHAPE, RUNS_SHAPE, TrainingLog,
   trainingCacheDir, expertRepos, MIN_TRAIN_USD, DEFAULT_TRAIN_USD, DEFAULT_TRAIN_EFFORT, withGutter,
+  isRoleExpertOnDisk, lightModeRefusal, nothingToMineRefusal,
   type TrainOptions,
 } from "../src/core/training/index.ts";
 import { allowedTools } from "../src/core/facilitator/spawnAgent.ts";
@@ -874,5 +875,145 @@ describe("expert list and the dashboard move with the evidence", () => {
     expect(area?.level).toBe(2);
     expect(area?.evidenceCount).toBe(2);
     expect(area?.newestEvidence).toBe("2026-09-01");
+  });
+});
+
+// --- role experts ------------------------------------------------------------
+
+/**
+ * A role expert's domain is the WORKFLOW, not a folder, so light mode's grep has
+ * nothing to grep. These tests pin both halves of that: the refusal that keeps
+ * money from being spent on a file that would say nothing, and the full-mode run
+ * that does work — one sub-agent over past runs, not two.
+ */
+describe("training a role expert", () => {
+  const ROLE = "architect";
+  const ROLE_FROM_RUNS = `.tldrx/experts/${ROLE}/knowledge/from-runs-${ROLE}.md`;
+
+  const ROLE_MD = [
+    "---",
+    `name: ${ROLE}`,
+    "kind: role",
+    "status: created",
+    'created_by: "tldrx init"',
+    "created_at: 2026-08-28T14:02:11Z",
+    "repos: [api, lab]",
+    "---",
+    "",
+    `# ${ROLE}`,
+    "",
+    "## Role",
+    "",
+    "You are the architect of this workspace inside the **How** stage.",
+    "",
+  ].join("\n");
+
+  const ROLE_COMPETENCIES = [
+    "version: 1",
+    `expert: ${ROLE}`,
+    "status: created",
+    "last_trained: null",
+    "areas:",
+    `  - id: ${ROLE}`,
+    "    title: The How stage",
+    "    level: 0",
+    `    train_prompt: tldrx expert train ${ROLE} --area ${ROLE} --mode full`,
+    "    evidence: []",
+  ].join("\n");
+
+  function roleWorkspace(options: TrainingWorkspaceOptions = {}): TrainingWorkspace {
+    return workspace({
+      ...options,
+      files: {
+        [`.tldrx/experts/${ROLE}/expert.md`]: ROLE_MD,
+        [`.tldrx/experts/${ROLE}/competencies.yml`]: ROLE_COMPETENCIES,
+        ...(options.files ?? {}),
+      },
+    });
+  }
+
+  function trainRole(ws: TrainingWorkspace, overrides: Partial<TrainOptions> = {}) {
+    return train(ws, { expert: ROLE, area: ROLE, ...overrides });
+  }
+
+  test("--mode light is refused (exit 1) before anything is spawned or spent", async () => {
+    const ws = roleWorkspace();
+    // No fake on PATH: a spawn here would fail loudly rather than quietly pass.
+    const outcome = await trainRole(ws, { mode: "light" });
+    expect(outcome.code).toBe(1);
+    expect(outcome.costUsd).toBe(0);
+    const text = outcome.lines.join("\n");
+    expect(text).toContain("role expert");
+    expect(text).toContain("--mode light` is refused");
+    expect(text).toContain(`tldrx expert train ${ROLE} --area ${ROLE} --mode full`);
+    // Nothing was written: no ledger, no status change, no knowledge file.
+    expect(existsSync(TrainingLog.forExpert(join(ws.root, ".tldrx/experts", ROLE)).path)).toBe(false);
+    expect(existsSync(join(ws.root, ROLE_FROM_RUNS))).toBe(false);
+  });
+
+  test("--mode full runs ONE sub-agent — the runs pass only — with the whole ceiling", async () => {
+    const ws = roleWorkspace();
+    fakeClaude(ws, [{ [ROLE_FROM_RUNS]: fromRunsMd() }]);
+    const argvLog = join(ws.root, "argv.log");
+    process.env.FAKE_TRAIN_ARGV_LOG = argvLog;
+
+    const outcome = await trainRole(ws, { mode: "full", maxUsd: 3 });
+    expect(outcome.code).toBe(0);
+    const spawns = readFileSync(argvLog, "utf8").trim().split("\n");
+    expect(spawns).toHaveLength(1);
+    // One agent, so the ceiling is not halved the way a two-agent full run halves it.
+    const argv = JSON.parse(spawns[0] ?? "[]") as string[];
+    expect(argv[argv.indexOf("--max-budget-usd") + 1]).toBe("3.00");
+    // The code pass never ran, so its output does not exist.
+    expect(existsSync(join(ws.root, `.tldrx/experts/${ROLE}/knowledge/${ROLE}.md`))).toBe(false);
+    expect(existsSync(join(ws.root, ROLE_FROM_RUNS))).toBe(true);
+  });
+
+  test("--mode full moves the level on run evidence, like any other area", async () => {
+    const ws = roleWorkspace();
+    fakeClaude(ws, [{ [ROLE_FROM_RUNS]: fromRunsMd() }]);
+    const outcome = await trainRole(ws, { mode: "full" });
+    expect(outcome.code).toBe(0);
+
+    const document = parseYaml(
+      readFileSync(join(ws.root, ".tldrx/experts", ROLE, "competencies.yml"), "utf8"),
+    ) as Record<string, unknown>;
+    const area = (document.areas as Record<string, unknown>[])[0];
+    expect((area?.evidence as unknown[]).length).toBeGreaterThan(0);
+    expect(area?.level).toBeGreaterThan(0);
+  });
+
+  test("--mode full with no run to mine is refused (exit 1) rather than paid for", async () => {
+    const ws = roleWorkspace({ withoutRuns: true });
+    // No fake on PATH again: this must not reach a spawn.
+    const outcome = await trainRole(ws, { mode: "full" });
+    expect(outcome.code).toBe(1);
+    expect(outcome.costUsd).toBe(0);
+    expect(outcome.lines.join("\n")).toContain("nothing to train from");
+    expect(existsSync(join(ws.root, ROLE_FROM_RUNS))).toBe(false);
+  });
+
+  test("a domain expert is untouched: light mode still trains it", async () => {
+    const ws = roleWorkspace();
+    fakeClaude(ws, [{ [KNOWLEDGE_REL]: knowledgeMd() }]);
+    const outcome = await train(ws, { mode: "light" });
+    expect(outcome.code).toBe(0);
+    expect(areaOf(ws, AREA).level).toBeGreaterThan(0);
+  });
+
+  test("the refusal is a pure function of kind and mode", () => {
+    expect(lightModeRefusal("architect", "architect", "light", true)).not.toBeNull();
+    expect(lightModeRefusal("architect", "architect", "full", true)).toBeNull();
+    expect(lightModeRefusal("checkout", "checkout", "light", false)).toBeNull();
+    expect(nothingToMineRefusal("architect", "architect", 0, true)).not.toBeNull();
+    expect(nothingToMineRefusal("architect", "architect", 3, true)).toBeNull();
+    expect(nothingToMineRefusal("checkout", "checkout", 0, false)).toBeNull();
+  });
+
+  test("`kind: role` is read off expert.md, not guessed from the name", () => {
+    const ws = roleWorkspace();
+    expect(isRoleExpertOnDisk(ws.root, ROLE)).toBe(true);
+    expect(isRoleExpertOnDisk(ws.root, EXPERT)).toBe(false);
+    expect(isRoleExpertOnDisk(ws.root, "no-such-expert")).toBe(false);
   });
 });
