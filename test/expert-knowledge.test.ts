@@ -14,8 +14,9 @@ import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import type { PendingExpert } from "../src/core/facilitator/pending.ts";
 import {
-  countFindings, describeStageLoads, domainPaths, loadExpertBundles, loadExpertKnowledge,
-  pathsIntersect, readExpertDomain, selectExperts, stagesLoadingExperts, truncateAtHeading,
+  countFindings, describeStageLoads, domainPaths, LEGACY_NOTE, loadExpertBundles,
+  loadExpertKnowledge, pathsIntersect, readExpertDomain, selectExperts, stagesLoadingExperts,
+  truncateAtHeading,
 } from "../src/core/experts/index.ts";
 import {
   makeFacilitatorWorkspace, type FacilitatorWorkspace, type StageOptions,
@@ -292,10 +293,35 @@ describe("expert selection (spec §2.3)", () => {
   });
 
   test("a stage naming an expert that does not exist says so instead of loading nothing quietly", async () => {
-    const ws = workspace({}, { experts: ["product", "domain"] });
+    const ws = workspace({}, { experts: ["product", "ghost"] });
     const outcome = await prepare(ws);
-    expect(outcome.lines.join("\n")).toContain("expert domain — NOT LOADED");
-    expect(outcome.lines.join("\n")).toContain(".tldrx/experts/domain/");
+    expect(outcome.lines.join("\n")).toContain("expert ghost — NOT LOADED");
+    expect(outcome.lines.join("\n")).toContain(".tldrx/experts/ghost/");
+  });
+
+  // `domain` and `stack` are the two names that were never experts (wave I). A
+  // forked stage file that still lists them must keep working, and must not train
+  // its operator to ignore the NOT LOADED line by printing one on every run.
+  test("the retired `domain`/`stack` placeholders are ignored with one note, not reported missing", async () => {
+    const ws = workspace({}, { experts: ["product", "domain", "stack"] });
+    const outcome = await prepare(ws);
+    const text = outcome.lines.join("\n");
+    expect(text).toContain(LEGACY_NOTE);
+    expect(text).toContain("experts: domain/stack are selected by rule, not by name");
+    expect(text).not.toContain("NOT LOADED");
+    // The note appears once however many of the two are listed.
+    expect(text.split(LEGACY_NOTE).length - 1).toBe(1);
+    // And the stage still loads what it really named.
+    expect(pendingExperts(ws).map((e) => e.name)).toContain("product");
+  });
+
+  test("a workspace that really has a `domain` expert folder loads it by name", () => {
+    const ws = workspace({ ".tldrx/experts/domain/competencies.yml": competencies("domain", "d", 0) });
+    const selection = selectExperts({
+      root: ws.root, staged: ["domain"], repos: [], stackExperts: false, stackNames: [],
+    });
+    expect(selection.experts.map((e) => `${e.name}:${e.reason}`)).toEqual(["domain:stage"]);
+    expect(selection.legacy).toEqual([]);
   });
 
   test("a cited path inside a domain expert's folder ranks it above a bare repo match", () => {

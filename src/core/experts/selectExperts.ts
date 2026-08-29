@@ -10,12 +10,15 @@
  * is written once, for every workspace, and cannot know that THIS workspace has a
  * checkout domain.
  *
- * Worse, the names the shipped stage files DO use are mostly names `init` never
- * writes. `stages/what/stage.yml` asks for `product` and `domain`; `init` seeds
+ * Worse, the names the shipped stage files DO use were mostly names `init` never
+ * wrote. `stages/what/stage.yml` asked for `product` and `domain`; `init` seeded
  * `product`, `<lang>-stack` and one expert per detected source folder
- * (`src/core/init/planExperts.ts`), so `domain` resolves to nothing and
+ * (`src/core/init/planExperts.ts`), so `domain` resolved to nothing and
  * `loadExpertBodies` skipped it in silence. This module reports that gap instead
- * of swallowing it.
+ * of swallowing it. Wave I closed both halves: `init` now seeds the five ROLE
+ * experts the stage files name, and `domain`/`stack` were retired from those
+ * lists — they were never expert NAMES, they were rules 2 and 3 below, written
+ * out as though they were folders.
  *
  * So there are three reasons an expert loads, and the order below is the order
  * they appear in the prompt:
@@ -47,6 +50,8 @@ export interface ExpertSelection {
   readonly missing: readonly string[];
   /** Domain experts that matched but fell past the cap. */
   readonly overflow: readonly string[];
+  /** `LEGACY_STAGE_EXPERTS` a stage file still names — ignored, and said once. */
+  readonly legacy: readonly string[];
 }
 
 export interface SelectExpertsInput {
@@ -76,16 +81,38 @@ export interface SelectExpertsInput {
  */
 export const MAX_DOMAIN_SELECTED = 8;
 
+/**
+ * The two names that were never experts.
+ *
+ * Until wave I the shipped `stages/how/stage.yml` read `experts: [architect,
+ * domain, stack]`, and `stages/what/stage.yml` read `[product, domain]`. Neither
+ * `domain` nor `stack` is a folder `init` ever wrote or could write: they are
+ * placeholders for rules 2 and 3 above, which pick the right stack expert for the
+ * run's repos and the right domain expert for the run's paths — by workspace, not
+ * by a name a stage file could know.
+ *
+ * They are removed from the shipped stage files, but a fork or an older workspace
+ * will still carry them, and reporting a rule as a MISSING EXPERT on every stage
+ * of every run is noise that trains an operator to ignore the missing-expert line
+ * — which is the one line that matters when a real name is misspelled. So exactly
+ * these two are ignored, once, with a note saying why. A workspace that really
+ * does have a `.tldrx/experts/domain/` folder loads it like any other name: the
+ * check below runs first, and only a name with NO folder can be legacy.
+ */
+export const LEGACY_STAGE_EXPERTS: readonly string[] = ["domain", "stack"];
+
 export function selectExperts(input: SelectExpertsInput): ExpertSelection {
   const experts: SelectedExpert[] = [];
   const seen = new Set<string>();
   const missing: string[] = [];
+  const legacy: string[] = [];
 
   for (const name of input.staged) {
     if (seen.has(name)) continue;
     seen.add(name);
     if (!hasExpert(input.root, name)) {
-      missing.push(name);
+      if (LEGACY_STAGE_EXPERTS.includes(name)) legacy.push(name);
+      else missing.push(name);
       continue;
     }
     experts.push({ name, reason: "stage" });
@@ -106,7 +133,7 @@ export function selectExperts(input: SelectExpertsInput): ExpertSelection {
     experts.push(match);
   }
 
-  return { experts, missing, overflow };
+  return { experts, missing, overflow, legacy };
 }
 
 /** Every expert folder on disk, sorted — the same order `loadExperts` uses. */

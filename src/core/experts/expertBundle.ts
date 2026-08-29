@@ -16,6 +16,16 @@ import {
   byteLength, DEFAULT_EXPERT_KNOWLEDGE_BYTES, loadExpertKnowledge, type KnowledgeFileView,
 } from "./expertKnowledge.ts";
 
+/**
+ * What `--prepare` says when a stage file still names `domain` or `stack`.
+ *
+ * Deliberately not phrased as a warning: nothing is wrong and nothing was
+ * dropped. The stage asked for something by a name, and the answer is that the
+ * framework decides that one by rule instead.
+ */
+export const LEGACY_NOTE =
+  "experts: domain/stack are selected by rule, not by name";
+
 export interface ExpertBundle {
   readonly name: string;
   readonly reason: ExpertReason;
@@ -42,6 +52,8 @@ export interface ExpertBundleSet {
   readonly missing: readonly string[];
   /** Domain experts that matched but fell past `MAX_DOMAIN_SELECTED`. */
   readonly overflow: readonly string[];
+  /** Retired placeholder names a stage file still lists (`LEGACY_STAGE_EXPERTS`). */
+  readonly legacy: readonly string[];
 }
 
 export interface LoadBundlesInput extends SelectExpertsInput {
@@ -80,7 +92,12 @@ export function loadExpertBundles(input: LoadBundlesInput): ExpertBundleSet {
     });
   }
 
-  return { experts, missing: selection.missing, overflow: selection.overflow };
+  return {
+    experts,
+    missing: selection.missing,
+    overflow: selection.overflow,
+    legacy: selection.legacy,
+  };
 }
 
 function trainPromptFor(name: string, area: string | null): string | null {
@@ -102,6 +119,11 @@ export function describeBundles(set: ExpertBundleSet): readonly string[] {
   }
   for (const name of set.missing) {
     lines.push(`expert ${name} — NOT LOADED: no .tldrx/experts/${name}/ in this workspace`);
+  }
+  // One line however many of the two a forked stage file lists: it is one fact
+  // about the stage file, not a complaint per name.
+  if (set.legacy.length > 0) {
+    lines.push(LEGACY_NOTE);
   }
   if (set.overflow.length > 0) {
     lines.push(`experts not loaded (past the domain cap): ${set.overflow.join(", ")}`);

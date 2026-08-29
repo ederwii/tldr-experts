@@ -30,10 +30,13 @@ outputs:
   - "handoff.md"
   - "questions.md"
 
+# `domain` and `stack` used to be listed here. They were never expert NAMES:
+# `stack_experts: true` above already loads `<lang>-stack` for the run's repos,
+# and a `kind: domain` expert is picked by the paths this run actually cites
+# (spec §2.3, rules 2 and 3). A name nothing can create is a permanent
+# "NOT LOADED" line, so the rules are left to do their own work.
 experts:
   - architect
-  - domain
-  - stack
 
 gate:
   type: human-approval
