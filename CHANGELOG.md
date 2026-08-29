@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.0 — unreleased
+
+- **Package renamed to `tldrx`** (`npm i -g tldrx`). `tldr-experts` on npm is deprecated with a pointer; the GitHub repo and brand keep the name.
+- README: release table with status tags (`alpha`/`beta`/`stable` defined) and npm/CI badges.
+
 ## 0.2.0 — 2026-08-29
 
 ### The Build phase executes

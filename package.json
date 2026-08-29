@@ -1,7 +1,7 @@
 {
-  "name": "tldr-experts",
+  "name": "tldrx",
   "version": "0.2.0",
-  "description": "A lightweight, file-based AI development workflow framework. Alpha.",
+  "description": "tldrx \u2014 the tldr-experts CLI: a lightweight, file-based AI development workflow. Alpha.",
   "license": "MIT",
   "author": "Alan Martinez",
   "repository": {

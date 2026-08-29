@@ -1,5 +1,7 @@
 # tldr-experts
 
+[![npm](https://img.shields.io/npm/v/tldrx?label=npm%20tldrx)](https://www.npmjs.com/package/tldrx) [![ci](https://github.com/ederwii/tldr-experts/actions/workflows/ci.yml/badge.svg)](https://github.com/ederwii/tldr-experts/actions/workflows/ci.yml) ![status](https://img.shields.io/badge/status-alpha-orange)
+
 **Status: alpha** — the v0 loop (What → How → Plan, hooks, distill, seed, budgets) is released; the Build and Watch phases, the live dashboard and expert training are landing wave by wave (see `docs/ROADMAP.md`; released versions in `CHANGELOG.md`). expert training are v1.** Every command in the table below is implemented and
 
 Every command in the table below is implemented and verified by running it. Nothing here prints success for work it did not do: a
@@ -16,7 +18,7 @@ design, piloted on Claude Code.
 ## Quick start
 
 ```bash
-npm i -g tldr-experts          # or, without installing: npx tldr-experts doctor
+npm i -g tldrx                 # or, without installing: npx tldrx doctor
 tldrx doctor                   # check the local environment first — it is the authority
 
 cd your-project
@@ -253,6 +255,24 @@ not implemented must exit `64` and say so on stderr; the only one left is
 MIT, © 2026 Alan Martinez. This was a placeholder choice made while scaffolding —
 change it freely before anything ships.
 
+## Releases and status tags
+
+Install name is **`tldrx`** (the package was published as `tldr-experts` for 0.0.1–0.2.0 and is
+deprecated under that name; the brand and repo stay `tldr-experts`).
+
+| Version | Date | Status | Contains |
+|---|---|---|---|
+| 0.3.0 | unreleased | `alpha` | expert training with provenance (light/full), package renamed to `tldrx` |
+| 0.2.0 | 2026-08-29 | `alpha` | Build executor (worktree + branch per story, epic branches, DoD gate, reviewer), Watch cards, live dashboard |
+| 0.1.0 | 2026-08-29 | `alpha` | greenfield `init --stack` + `run new --seed`, story/epic/waves schemas, `tldrx budget show\|raise`, sections must hold list items |
+| 0.0.2 | 2026-08-29 | `alpha` | pilot-driven fixes (source resolution, retry semantics, distill dedupe) |
+| 0.0.1 | 2026-08-29 | `alpha` | v0 loop: init, map, doctor, run lifecycle, `next`, six hooks, views |
+
+Status tags: `alpha` = every command real and tested, interfaces may change without notice, one
+pilot workspace; `beta` = file formats frozen (`version: 1` schemas only grow), two or more real
+workspaces through Build, upgrade path documented; `stable` = 1.0, semver from here on. The tag
+of the newest release is the one shown in the badge above.
+
 ## Roadmap and changelog
 
 `docs/ROADMAP.md` (what is next) · `CHANGELOG.md` (what shipped) · `docs/spec.md` §7 (open design questions).
@@ -264,5 +284,5 @@ tokens, no OTP; provenance attached automatically). Bump `version` in `package.j
 commit, then `git tag v<version> && git push origin v<version>`. `.github/workflows/publish.yml`
 runs typecheck, tests, build, checks the tag matches the version, and publishes. One-time
 setup on npmjs.com: package → Settings → Trusted Publisher → GitHub Actions (`ederwii` /
-`tldr-experts` / `publish.yml`). The very first publish of a new package name is done by a
+`tldr-experts` / `publish.yml`, configured on the npm package **`tldrx`**). The very first publish of a new package name is done by a
 human with 2FA (`npm publish --access public --otp=<code>`).
