@@ -27,6 +27,15 @@ export interface AreaSeed {
   readonly id: string;
   readonly title: string;
   readonly evidence?: readonly CompetencyEvidence[];
+  /**
+   * The `--mode` the seeded `train_prompt` names. Defaults to `light`, which is
+   * right for a stack or a domain expert: its subject is code, and light mode
+   * reads code. A ROLE expert seeds `full`, because light mode is REFUSED for one
+   * (`src/core/training/roleTraining.ts`) — a grep for the word "architect" over
+   * the codebase is not that expert's domain, and a copy-pasteable command that
+   * exits 1 is worse than no command at all.
+   */
+  readonly mode?: "light" | "full";
 }
 
 export function buildCompetenciesDocument(
@@ -45,7 +54,7 @@ export function buildCompetenciesDocument(
         id: area.id,
         title: area.title,
         level: competencyLevel(evidence, now),
-        train_prompt: `tldrx expert train ${expert} --area ${area.id} --mode light`,
+        train_prompt: `tldrx expert train ${expert} --area ${area.id} --mode ${area.mode ?? "light"}`,
         evidence,
       };
     }),

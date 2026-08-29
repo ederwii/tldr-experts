@@ -3,11 +3,15 @@
  *
  * Three kinds, and the order below is the order they are written:
  *
- *  - **product**, always exactly one. Its domain is the project itself. It is
- *    unconditional because the What stage names `product` as its expert
- *    (`stages/what/stage.yml`), so a workspace without one hands that stage a
- *    prompt with no expert body at all — measured on a greenfield workspace,
- *    2026-08-29, where `init` seeded zero experts.
+ *  - **role**, always exactly the five the shipped stage files name
+ *    (`ROLE_EXPERTS`): product · architect · delivery · developer · operations.
+ *    They are unconditional because `stages/<stage>/stage.yml` names them, and until
+ *    wave I `init` seeded only `product` — so on every real workspace four of the
+ *    five printed `expert <name> — NOT LOADED` and the stage ran with no body for
+ *    that role at all (measured 2026-08-29 on `~/aparece-v2`). Their subject is
+ *    the workflow rather than a folder, so their bodies ship as editable files
+ *    under `templates/experts/<role>.md` instead of being generated from
+ *    detection, which knows nothing about them.
  *  - **stack**, one per language actually detected, plus one per language the
  *    operator DECLARED (`--stack`, or the greenfield interview answer) when there
  *    is no code to detect it from. Frameworks become competency AREAS of the
@@ -17,6 +21,7 @@
  *    monorepo does not produce fifty stubs nobody trains.
  */
 import { repoSlug } from "../detect/repoSlug.ts";
+import { ROLE_AREA_TITLES, ROLE_EXPERTS } from "../experts/roleExperts.ts";
 import type { DetectedWorkspace } from "../detect/types.ts";
 import type { MapFacts } from "../map/MapFacts.ts";
 import type { AreaSeed } from "./competenciesDocument.ts";
@@ -26,7 +31,7 @@ export const PRODUCT_EXPERT = "product";
 
 const LANGUAGES: readonly string[] = ["typescript", "javascript", "dotnet", "python", "go", "rust"];
 
-export type ExpertKind = "product" | "stack" | "domain";
+export type ExpertKind = "role" | "stack" | "domain";
 
 export interface ExpertPlan {
   readonly name: string;
@@ -59,14 +64,16 @@ export function planExperts(
   const repoNames = workspace.repos.map((repo) => repo.name);
   const project = options.project ?? repoNames[0] ?? "product";
 
-  taken.add(PRODUCT_EXPERT);
-  plans.push({
-    name: PRODUCT_EXPERT,
-    kind: "product",
-    repos: repoNames,
-    folders: [],
-    areas: [{ id: project, title: `The ${project} product: what it is for and what counts as done` }],
-  });
+  for (const role of ROLE_EXPERTS) {
+    taken.add(role);
+    // `product` keeps the area id `init` has always given it — the project's own
+    // slug — because it is the one role whose subject has a real name this
+    // workspace knows. The other four are named for the role itself.
+    const area: AreaSeed = role === PRODUCT_EXPERT
+      ? { id: project, title: `The ${project} product: what it is for and what counts as done`, mode: "full" }
+      : { id: role, title: ROLE_AREA_TITLES[role] ?? `The ${role} role in this workflow`, mode: "full" };
+    plans.push({ name: role, kind: "role", repos: repoNames, folders: [], areas: [area] });
+  }
 
   for (const language of languagesOf(workspace, options.declaredLanguages ?? [])) {
     const repos = workspace.repos.filter((repo) => repo.languages.includes(language));

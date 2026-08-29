@@ -124,10 +124,15 @@ describe("tldrx init — multi-repo workspace", () => {
     }
   });
 
-  test("seeds a product expert, one per language and one per domain folder, all at level 0", async () => {
+  test("seeds the five role experts, one per language and one per domain folder, all at level 0", async () => {
     expect(report.experts.map((expert) => expert.name).sort())
-      .toEqual(["api", "dotnet-stack", "features", "product", "typescript-stack"]);
-    expect(report.experts[0]?.kind).toBe("product");
+      .toEqual([
+        "api", "architect", "delivery", "developer", "dotnet-stack", "features",
+        "operations", "product", "typescript-stack",
+      ]);
+    expect(report.experts.slice(0, 5).map((expert) => expert.name))
+      .toEqual(["product", "architect", "delivery", "developer", "operations"]);
+    expect(report.experts[0]?.kind).toBe("role");
 
     const document = await readYaml(join(fixture.root, ".tldrx/experts/typescript-stack/competencies.yml"));
     expect(document.version).toBe(1);
