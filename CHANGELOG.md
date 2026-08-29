@@ -217,7 +217,7 @@ was owned by a concurrent branch when this landed.
 
 All notable changes to tldr-experts. Dates are the day the work landed on `main`.
 
-## 0.0.2 — unreleased
+## 0.0.2 — 2026-08-29
 
 Fixes found by the first real pilot (scavtopia, `--from` an AI-DLC intent, What stage):
 
