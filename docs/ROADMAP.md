@@ -3,7 +3,7 @@
 Source of truth for *what is next*. Facts about *what shipped* live in `CHANGELOG.md`;
 design rationale lives in `docs/concept.md`; open design questions in `docs/spec.md` §7.
 
-## v0 — the loop (shipped: 0.0.1 → 0.0.2, 2026-08-29; install name `tldrex`)
+## v0 — the loop (shipped: 0.0.1 → 0.0.2, 2026-08-29; install name `tldr-experts`, commands `tldrx` / `tldr-experts`)
 
 `init` (detect → code map → handoff → interview → experts → conventions → process), `run new`
 (+ `--from` AI-DLC distill), `next` (headless `claude -p` and in-session `--prepare/--commit`),

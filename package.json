@@ -1,7 +1,7 @@
 {
-  "name": "tldrex",
-  "version": "0.2.0",
-  "description": "tldrx \u2014 the tldr-experts CLI: a lightweight, file-based AI development workflow. Alpha.",
+  "name": "tldr-experts",
+  "version": "0.3.0",
+  "description": "tldr-experts: a lightweight, file-based AI development workflow. Installs the `tldrx` (and `tldr-experts`) command. Alpha.",
   "license": "MIT",
   "author": "Alan Martinez",
   "repository": {
@@ -24,7 +24,8 @@
   ],
   "type": "module",
   "bin": {
-    "tldrx": "dist/tldrx.js"
+    "tldrx": "dist/tldrx.js",
+    "tldr-experts": "dist/tldrx.js"
   },
   "engines": {
     "node": ">=20",

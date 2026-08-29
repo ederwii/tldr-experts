@@ -1,6 +1,6 @@
 # tldr-experts
 
-[![npm](https://img.shields.io/npm/v/tldrex?label=npm%20tldrex)](https://www.npmjs.com/package/tldrex) [![ci](https://github.com/ederwii/tldr-experts/actions/workflows/ci.yml/badge.svg)](https://github.com/ederwii/tldr-experts/actions/workflows/ci.yml) ![status](https://img.shields.io/badge/status-alpha-orange)
+[![npm](https://img.shields.io/npm/v/tldr-experts?label=npm%20tldr-experts)](https://www.npmjs.com/package/tldr-experts) [![ci](https://github.com/ederwii/tldr-experts/actions/workflows/ci.yml/badge.svg)](https://github.com/ederwii/tldr-experts/actions/workflows/ci.yml) ![status](https://img.shields.io/badge/status-alpha-orange)
 
 **Status: alpha** — the v0 loop (What → How → Plan, hooks, distill, seed, budgets) is released; the Build and Watch phases, the live dashboard and expert training are landing wave by wave (see `docs/ROADMAP.md`; released versions in `CHANGELOG.md`). expert training are v1.** Every command in the table below is implemented and
 
@@ -18,7 +18,7 @@ design, piloted on Claude Code.
 ## Quick start
 
 ```bash
-npm i -g tldrex                # the command is `tldrx`; without installing: npx tldrex doctor
+npm i -g tldr-experts          # installs the `tldrx` command (alias: `tldr-experts`); or: npx tldr-experts doctor
 tldrx doctor                   # check the local environment first — it is the authority
 
 cd your-project
@@ -257,9 +257,10 @@ change it freely before anything ships.
 
 ## Releases and status tags
 
-Install name is **`tldrex`** (tl;dr **ex**perts); the command it installs is `tldrx`. (0.0.1–0.2.0 were first
-published as `tldr-experts` and then unpublished; unscoped `tldrx` is refused by npm's name-similarity
-rule (too close to `tsdx`), so the install name is `tldrex`. The brand and repo stay `tldr-experts`.)
+Install name is **`tldr-experts`**; it installs two commands, **`tldrx`** (short) and `tldr-experts` (same binary).
+Unscoped `tldrx` as a *package* name is refused by npm's name-similarity rule (too close to `tsdx`). Versions
+0.0.1–0.2.0 were published and then unpublished on 2026-08-29; per npm policy those numbers can never be
+reused, so the first version back on the registry is 0.3.0.
 
 | Version | Date | Status | Contains |
 |---|---|---|---|
@@ -285,5 +286,5 @@ tokens, no OTP; provenance attached automatically). Bump `version` in `package.j
 commit, then `git tag v<version> && git push origin v<version>`. `.github/workflows/publish.yml`
 runs typecheck, tests, build, checks the tag matches the version, and publishes. One-time
 setup on npmjs.com: package → Settings → Trusted Publisher → GitHub Actions (`ederwii` /
-`tldr-experts` / `publish.yml`, configured on the npm package **`tldrex`**). The very first publish of a new package name is done by a
+`tldr-experts` / `publish.yml`, configured on the npm package **`tldr-experts`**). The very first publish of a new package name is done by a
 human with 2FA (`npm publish --access public --otp=<code>`).

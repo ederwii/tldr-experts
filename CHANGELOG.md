@@ -2,7 +2,7 @@
 
 ## 0.3.0 — unreleased
 
-- **Package renamed to `tldrex`** (`npm i -g tldrex`, command `tldrx`). Unscoped `tldrx` is refused by npm's name-similarity rule (`tsdx`, `thdax`); `tldr-experts` was unpublished. The GitHub repo and brand keep the name.
+- **Package name stays `tldr-experts`**; it now installs two commands, `tldrx` and `tldr-experts`. (Unscoped `tldrx` as a package name is refused by npm's similarity rule; 0.0.1–0.2.0 were unpublished on 2026-08-29 and their numbers can never be reused, so this is the first version back on the registry.)
 - README: release table with status tags (`alpha`/`beta`/`stable` defined) and npm/CI badges.
 
 ## 0.2.0 — 2026-08-29
