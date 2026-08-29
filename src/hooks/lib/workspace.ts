@@ -66,6 +66,13 @@ export interface WorkspaceContext {
   readonly repoCommands: ReadonlyMap<string, readonly string[]>;
   /** repo name -> `default_branch` — the base an epic branch is cut from (spec §2.1). */
   readonly defaultBranches: ReadonlyMap<string, string>;
+  /**
+   * `seed_triage.threshold_tokens` — the size at which a seed is worth splitting
+   * (spec §6.2). Null when the workspace does not say, and the built-in default
+   * applies. Read here rather than in the triage command so the one parse of
+   * workspace.yml answers every question about it.
+   */
+  readonly seedTriageThresholdTokens: number | null;
 }
 
 interface RawRepo {
@@ -84,7 +91,10 @@ export function loadWorkspace(root: string): WorkspaceContext {
   const commands = new Set<string>();
   const repoCommands = new Map<string, readonly string[]>();
   const defaultBranches = new Map<string, string>();
-  const empty = (): WorkspaceContext => ({ root, repos, commands, repoCommands, defaultBranches });
+  let seedTriageThresholdTokens: number | null = null;
+  const empty = (): WorkspaceContext => ({
+    root, repos, commands, repoCommands, defaultBranches, seedTriageThresholdTokens,
+  });
   const path = join(root, PROJECT_FRAMEWORK_DIR, "workspace.yml");
   if (!existsSync(path)) return empty();
   let doc: unknown;
@@ -92,6 +102,13 @@ export function loadWorkspace(root: string): WorkspaceContext {
     doc = parseYaml(readFileSync(path, "utf8"));
   } catch {
     return empty();
+  }
+  const triage = (doc as { seed_triage?: unknown } | null)?.seed_triage;
+  if (triage !== null && typeof triage === "object") {
+    const tokens = (triage as { threshold_tokens?: unknown }).threshold_tokens;
+    if (typeof tokens === "number" && Number.isFinite(tokens) && tokens > 0) {
+      seedTriageThresholdTokens = tokens;
+    }
   }
   const list = (doc as { repos?: unknown } | null)?.repos;
   if (!Array.isArray(list)) return empty();
