@@ -30,6 +30,8 @@ export interface StageOptions {
   readonly dryRunAllowed?: boolean;
   readonly timeoutS?: number;
   readonly experts?: readonly string[];
+  /** `expert_knowledge_bytes:` — the per-expert trained-knowledge ceiling (§2.3). */
+  readonly expertKnowledgeBytes?: number;
   /** The stage's own `effort:`. Omitted ⇒ the stage file carries no effort at all. */
   readonly effort?: string;
   /** Body of `stage.md`. Defaults to one that uses every placeholder. */
@@ -163,6 +165,9 @@ function stageYaml(stage: StageOptions): string {
     `phase: ${stage.phase}`,
     `experts: [${(stage.experts ?? ["product"]).join(", ")}]`,
     "stack_experts: true",
+    ...(stage.expertKnowledgeBytes === undefined
+      ? []
+      : [`expert_knowledge_bytes: ${String(stage.expertKnowledgeBytes)}`]),
     "model: sonnet",
     ...(stage.effort === undefined ? [] : [`effort: ${stage.effort}`]),
     `budget_usd: ${String(stage.budgetUsd)}`,

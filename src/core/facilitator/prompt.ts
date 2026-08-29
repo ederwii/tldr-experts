@@ -11,8 +11,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
-import { parseYaml } from "../yaml.ts";
 import { isRetired, type Fact } from "../facts/Fact.ts";
+import { stackExpertNames } from "../experts/stackExperts.ts";
+
+export { stackExpertNames };
 
 export const PLACEHOLDERS = ["run", "repos", "inputs", "facts", "conventions", "budget_usd"] as const;
 export type Placeholder = (typeof PLACEHOLDERS)[number];
@@ -34,8 +36,16 @@ export interface PromptParts {
   /** `stage.md`, verbatim. */
   readonly stageMd: string;
   readonly values: Readonly<Record<Placeholder, string>>;
-  /** `expert.md` bodies, in load order, keyed by expert name. */
-  readonly experts: readonly { readonly name: string; readonly body: string }[];
+  /**
+   * `expert.md` bodies, in load order, each with the star chart and trained
+   * knowledge that `src/core/experts/expertBundle.ts` rendered for it (spec §5).
+   * `knowledge` is empty for an expert that has never been trained.
+   */
+  readonly experts: readonly {
+    readonly name: string;
+    readonly body: string;
+    readonly knowledge?: string;
+  }[];
   /** Declared input path -> file content, already read from disk. */
   readonly inputs: readonly PromptInput[];
   /** Prepended to `## Inputs` when something was cut to fit (see `seedInputs.ts`). */
@@ -55,9 +65,11 @@ export function buildPrompt(parts: PromptParts): string {
   const withPrevious = previous === ""
     ? withInputs
     : replaceSection(withInputs, "Previous attempt", previous);
-  const experts = parts.experts.map((expert) =>
-    `\n\n---\n\n<!-- expert: ${expert.name} -->\n${expert.body.trimEnd()}\n`,
-  );
+  const experts = parts.experts.map((expert) => {
+    const knowledge = (expert.knowledge ?? "").trim();
+    const tail = knowledge === "" ? "" : `\n\n${knowledge}\n`;
+    return `\n\n---\n\n<!-- expert: ${expert.name} -->\n${expert.body.trimEnd()}\n${tail}`;
+  });
   return `${withPrevious.trimEnd()}\n${experts.join("")}`;
 }
 
@@ -181,33 +193,3 @@ export function loadExpertBodies(
   return bodies;
 }
 
-/**
- * Spec §2.3 `stack_experts: also load stack expertise for run.repos`.
- * `[assumption]` — `tldrx init` names these `<language>-stack`
- * (`src/core/init/planExperts.ts`), so the mapping is repo -> its detected
- * languages -> `<language>-stack`, filtered to the ones that exist on disk.
- */
-export function stackExpertNames(root: string, repos: readonly string[]): readonly string[] {
-  const path = join(root, PROJECT_FRAMEWORK_DIR, "workspace.yml");
-  if (!existsSync(path)) return [];
-  let doc: unknown;
-  try {
-    doc = parseYaml(readFileSync(path, "utf8"));
-  } catch {
-    return [];
-  }
-  const list = (doc as { repos?: unknown } | null)?.repos;
-  if (!Array.isArray(list)) return [];
-
-  const names: string[] = [];
-  for (const row of list as { name?: unknown; stack?: unknown }[]) {
-    if (typeof row?.name !== "string" || !repos.includes(row.name)) continue;
-    const stack = Array.isArray(row.stack) ? (row.stack as unknown[]) : [];
-    for (const language of stack) {
-      if (typeof language !== "string" || language === "") continue;
-      const expert = `${language}-stack`;
-      if (!names.includes(expert)) names.push(expert);
-    }
-  }
-  return names;
-}

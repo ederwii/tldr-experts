@@ -300,6 +300,50 @@ moment `competencies.yml` does.
   and friends), so it *is*. An earlier reading the same afternoon said 24 files /
   ~44k tokens; the folder gained seven ADRs between the two runs, which is what a
   live design folder does and why the verdict is printed rather than remembered.
+### Training now reaches the work it was paid for
+
+- **A stage prompt carries what its experts LEARNED, not only who they are.**
+  Measured 2026-08-29 on a fixture whose `product` expert held a validated
+  `knowledge/loyalty.md` and a level-3 area: `tldrx next --prepare` produced a
+  **1,493-byte** prompt holding three `expert.md` bodies, **zero** occurrences of
+  the string "knowledge", zero stars, and none of the expert's 646 bytes of
+  findings. `tldrx expert train` wrote a level; nothing that did the work ever read
+  it. Each loaded expert now carries, after its `expert.md` body, its **star chart**
+  (one line per area, computed from evidence — §2.6) and its **knowledge files**,
+  most-recently-trained area first by the file's own `trained_at`, never an mtime.
+  Same fixture after: **4,758 bytes**, both areas' findings inlined with their
+  citations. The prompt states that the `[src: …]` tokens on those bullets already
+  resolved when the knowledge was accepted and may be **reused verbatim as
+  evidence** — otherwise the sub-agent re-derives what it was just handed.
+- **A per-expert byte budget, `expert_knowledge_bytes:` in `stage.yml`** (spec §2.3),
+  default **64 KB**, one knob and no second one. Truncation cuts at an **H2
+  boundary** — half a bullet is a claim with its citation torn off — and appends an
+  explicit `… N more findings in .tldrx/experts/<name>/knowledge/<area>.md`. A file
+  whose first section already blows the budget is named, not half-inlined.
+- **Domain experts load without a stage naming them.** Spec §2.3 gave two rules
+  (`experts:` and `stack_experts:`), and neither can reach an expert `init` seeded
+  from THIS workspace's folders. Worse, the names the shipped stage files use —
+  `domain`, `stack`, `architect`, `delivery`, `operations` — are names `init` never
+  writes (`planExperts.ts` seeds `product`, `<lang>-stack` and one per source
+  folder), and `loadExpertBodies` skipped every one of them in silence. A third rule:
+  a `kind: domain` expert whose front-matter `repos:` or `## Domain` paths intersect
+  the run's repos or its cited paths is loaded too, path matches ranked first, capped
+  at 8, deduped, deterministic. A stage naming an expert that does not exist now says
+  `expert domain — NOT LOADED: no .tldrx/experts/domain/ in this workspace`.
+- **You can see what the sub-agent was given.** `tldrx next --prepare` / `--dry-run`
+  prints one line per expert — `expert product (stage) — expert.md 280 B, knowledge
+  1.1 KB over 2 areas`, plus `truncated` when it bit — and `pending.json` gains an
+  `experts:` array with the same numbers, the reason each loaded, and its knowledge
+  file paths. `tldrx expert list` gains a `loaded by: what (named), how (stack)` line
+  per expert, derived from the same selection rule, so "trained and never loaded"
+  stops being invisible.
+- **A stub expert says so, once, on stderr.** An expert loaded with zero evidence in
+  every area earns `note: expert <name> has no evidence — \`tldrx expert train <name>
+  --area <area>\` before this stage would help`. It never blocks and never changes an
+  exit code; `--prepare`'s stdout stays parseable.
+- `tldrx expert train` now inlines the expert's own prior knowledge too, so a second
+  training run can see what the first one found instead of rediscovering it and
+  writing a second copy of the same finding.
 
 ## 0.2.0 — 2026-08-29
 

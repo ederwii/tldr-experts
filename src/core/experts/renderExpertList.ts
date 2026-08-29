@@ -8,7 +8,11 @@
  */
 import { starChart } from "./starChart.ts";
 import { ignoredRowWarnings } from "./readEvidenceRows.ts";
+import { describeStageLoads, type StageLoad } from "./stageCoverage.ts";
 import type { ExpertRecord } from "./ExpertRecord.ts";
+
+/** Expert name -> the stages that would load it (`stageCoverage.ts`). */
+export type StageLoads = ReadonlyMap<string, readonly StageLoad[]>;
 
 const HEADERS = ["expert", "status", "last_trained", "areas", "evidence", "levels"] as const;
 
@@ -46,7 +50,7 @@ export function evidenceWarnings(expert: ExpertRecord): readonly string[] {
   return expert.areas.flatMap((area) => ignoredRowWarnings(expert.name, area.id, area.ignored));
 }
 
-export function renderExpertList(experts: readonly ExpertRecord[]): string {
+export function renderExpertList(experts: readonly ExpertRecord[], loads?: StageLoads): string {
   if (experts.length === 0) {
     return [
       "No experts yet.",
@@ -77,6 +81,10 @@ export function renderExpertList(experts: readonly ExpertRecord[]): string {
 
   for (const expert of experts) {
     out.push("", `${expert.name} — ${expert.status}`);
+    // Where this expert's knowledge actually lands. An expert nobody's stage loads
+    // is training nobody will ever read, and until this line existed that fact was
+    // spread across five stage files and one selection rule.
+    if (loads !== undefined) out.push(`  ${describeStageLoads(loads.get(expert.name))}`);
     if (expert.error !== null) {
       out.push(`  unreadable: ${expert.error}`);
       continue;
@@ -95,7 +103,7 @@ export function renderExpertList(experts: readonly ExpertRecord[]): string {
 }
 
 /** `--json`: the same data, levels already recomputed. */
-export function expertListJson(experts: readonly ExpertRecord[]): string {
+export function expertListJson(experts: readonly ExpertRecord[], loads?: StageLoads): string {
   return JSON.stringify(
     experts.map((expert) => ({
       name: expert.name,
@@ -103,6 +111,9 @@ export function expertListJson(experts: readonly ExpertRecord[]): string {
       last_trained: expert.lastTrained,
       evidence_count: evidenceCount(expert),
       error: expert.error,
+      ...(loads === undefined
+        ? {}
+        : { loaded_by: (loads.get(expert.name) ?? []).map((load) => ({ stage: load.stage, reason: load.reason })) }),
       areas: expert.areas.map((area) => ({
         id: area.id,
         title: area.title,

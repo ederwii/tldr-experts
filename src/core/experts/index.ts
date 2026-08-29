@@ -14,3 +14,20 @@ export type { ExpertRecord, AreaRecord, ExpertStatus } from "./ExpertRecord.ts";
 export type { CreateExpertOptions, CreatedExpert } from "./createExpert.ts";
 export type { ExpertDocument } from "./expertDocument.ts";
 export type { TrainMode, TrainPromptInput, TrainRepo } from "./trainPrompt.ts";
+
+// --- the knowledge wave: selection, trained knowledge, and stage coverage ---
+export { stackExpertNames } from "./stackExperts.ts";
+export { readExpertDomain, domainPaths, normalisePath, pathsIntersect, parseList } from "./expertDomain.ts";
+export type { ExpertDomain } from "./expertDomain.ts";
+export { selectExperts, expertNames, matchedPath, MAX_DOMAIN_SELECTED } from "./selectExperts.ts";
+export type { ExpertReason, ExpertSelection, SelectedExpert, SelectExpertsInput } from "./selectExperts.ts";
+export {
+  loadExpertKnowledge, readKnowledgeFiles, truncateAtHeading, countFindings, chartLines,
+  byteLength, DEFAULT_EXPERT_KNOWLEDGE_BYTES, KNOWLEDGE_DIRNAME,
+} from "./expertKnowledge.ts";
+export type { ExpertKnowledge, KnowledgeFileView, KnowledgeOptions } from "./expertKnowledge.ts";
+export { loadExpertBundles, describeBundles, untrainedNotes } from "./expertBundle.ts";
+export type { ExpertBundle, ExpertBundleSet, LoadBundlesInput } from "./expertBundle.ts";
+export { stagesLoadingExperts, describeStageLoads, stageIds } from "./stageCoverage.ts";
+export type { StageLoad } from "./stageCoverage.ts";
+export type { StageLoads } from "./renderExpertList.ts";

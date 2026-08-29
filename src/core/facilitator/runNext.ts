@@ -29,9 +29,10 @@ import { acquireLock, releaseLock } from "./Lock.ts";
 import { loadStageSpec, type StageSpec } from "./stageSpec.ts";
 import { countSkipInputs, evaluateSkipIf, openQuestionIds, SkipIfError } from "./skipIf.ts";
 import { agentDir, expandAll, missing, present, resolveDeclared, type PathContext } from "./paths.ts";
+import { buildPrompt, renderConventions, renderFacts, stackExpertNames } from "./prompt.ts";
 import {
-  buildPrompt, loadExpertBodies, renderConventions, renderFacts, stackExpertNames,
-} from "./prompt.ts";
+  describeBundles, loadExpertBundles, untrainedNotes, type ExpertBundleSet,
+} from "../experts/expertBundle.ts";
 import { spawnAgent } from "./spawnAgent.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
 import { validateOutputs, describeProblems } from "./validateOutputs.ts";
@@ -63,6 +64,14 @@ export interface NextOptions {
 export interface NextOutcome {
   readonly code: number;
   readonly lines: readonly string[];
+  /**
+   * Advisory lines for stderr — never a reason to stop. Today that is the
+   * "this expert has no evidence" nudge (§2.6): a stub expert reads exactly like a
+   * trained one inside the prompt, so the one place it can be noticed is here.
+   * They are kept off `lines` so `--prepare`'s stdout stays a machine-readable
+   * instruction for the host session.
+   */
+  readonly stderr?: readonly string[];
 }
 
 const EXIT_OK = 0;
@@ -273,7 +282,13 @@ async function runStage(
   const model = options.model ?? stage.model ?? spec.planned.model;
   const effort = options.effort ?? spec.planned.effort ?? null;
   const cap = agentCap(options, store, stage);
-  const prompt = assemblePrompt(store, options, spec, stage, inputs, ctx, new Set(seed));
+  const assembled = assemblePrompt(store, options, spec, stage, inputs, ctx, new Set(seed));
+  const prompt = assembled.prompt;
+  // What the experts contributed, said out loud in every mode. Before this was
+  // reported, a stage could load three stub experts and nothing on any stream
+  // distinguished that from three trained ones.
+  notes.push(...describeBundles(assembled.bundles));
+  const advisories = untrainedNotes(assembled.bundles);
 
   const pending: PendingStage = {
     version: 1,
@@ -290,6 +305,7 @@ async function runStage(
     sections: Object.fromEntries(expandedSections(spec.planned, store.run.repos)),
     checks: spec.planned.checks,
     prepared_at: options.at,
+    experts: bundleSummary(assembled.bundles),
   };
   writeBundle(store.runDir, stageId, prompt, pending);
 
@@ -311,7 +327,7 @@ async function runStage(
         + `model ${model ?? "default"}, effort ${effort ?? "default"})`,
       `dispatch ONE sub-agent with ${dir}/prompt.md; it may write only: ${pending.outputs.join(", ") || "(no declared outputs)"}`,
       `then write {outputs, questions_asked, notes} to ${dir}/result.json and run \`tldrx next --commit\``,
-    ]);
+    ], advisories);
   }
 
   // --- headless spawn -----------------------------------------------------
@@ -361,9 +377,31 @@ async function runStage(
   store.save();
 
   if (!agent.ok) {
-    return failStage(store, options, phaseId, stageId, agent.error ?? "the sub-agent failed", notes);
+    return withStderr(
+      failStage(store, options, phaseId, stageId, agent.error ?? "the sub-agent failed", notes),
+      advisories,
+    );
   }
-  return await finishStage(store, options, phaseId, stageId, spec, notes);
+  return withStderr(await finishStage(store, options, phaseId, stageId, spec, notes), advisories);
+}
+
+/** Carry advisories out through an outcome another function already built. */
+function withStderr(outcome: NextOutcome, stderr: readonly string[]): NextOutcome {
+  if (stderr.length === 0) return outcome;
+  return { ...outcome, stderr: [...(outcome.stderr ?? []), ...stderr] };
+}
+
+/** The `experts:` block of `pending.json` — what loaded, why, and how many bytes. */
+function bundleSummary(set: ExpertBundleSet): PendingStage["experts"] {
+  return set.experts.map((expert) => ({
+    name: expert.name,
+    reason: expert.reason,
+    ...(expert.match === undefined ? {} : { match: expert.match }),
+    expert_md_bytes: expert.bodyBytes,
+    knowledge_bytes: expert.knowledgeBytes,
+    knowledge_files: expert.files.map((file) => file.path),
+    truncated: expert.truncated,
+  }));
 }
 
 /**
@@ -739,6 +777,11 @@ function withNote(result: InlineResult): { inputs: InlineResult["inputs"]; input
   return result.note === null ? { inputs: result.inputs } : { inputs: result.inputs, inputsNote: result.note };
 }
 
+interface AssembledPrompt {
+  readonly prompt: string;
+  readonly bundles: ExpertBundleSet;
+}
+
 function assemblePrompt(
   store: RunStore,
   options: NextOptions,
@@ -747,14 +790,22 @@ function assemblePrompt(
   inputs: readonly string[],
   ctx: PathContext,
   seed: ReadonlySet<string>,
-): string {
+): AssembledPrompt {
   const stageMd = readStageMd(spec.planned);
   const facts = FactsStore.loadOrEmpty(factsPath(options.root));
-  const expertNames = [
-    ...spec.planned.experts,
-    ...(spec.stackExperts ? stackExpertNames(options.root, store.run.repos) : []),
-  ];
-  return buildPrompt({
+  // The declared inputs ARE the run's cited paths at this point: they are what the
+  // seed put on the stage and what the stage file names, and nothing else has been
+  // read yet. A domain expert whose folder holds one of them ranks first.
+  const bundles = loadExpertBundles({
+    root: options.root,
+    staged: spec.planned.experts,
+    repos: store.run.repos,
+    stackExperts: spec.stackExperts,
+    stackNames: stackExpertNames(options.root, store.run.repos),
+    citedPaths: inputs,
+    knowledgeBytes: spec.expertKnowledgeBytes,
+  });
+  const prompt = buildPrompt({
     stageMd,
     previousAttempt: describePreviousAttempt(stage),
     values: {
@@ -765,13 +816,14 @@ function assemblePrompt(
       conventions: renderConventions(options.root, store.run.repos),
       budget_usd: stage.budget_usd.toFixed(2),
     },
-    experts: loadExpertBodies(options.root, expertNames),
+    experts: bundles.experts,
     ...withNote(inlineInputs(inputs, {
       ctx,
       seed,
       exempt: new Set(inputs.filter((path) => path.endsWith(`/${SEED_INDEX}`))),
     })),
   });
+  return { prompt, bundles };
 }
 
 /**
@@ -1006,6 +1058,6 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-function out(code: number, lines: readonly string[]): NextOutcome {
-  return { code, lines };
+function out(code: number, lines: readonly string[], stderr: readonly string[] = []): NextOutcome {
+  return stderr.length === 0 ? { code, lines } : { code, lines, stderr };
 }

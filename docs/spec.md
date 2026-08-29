@@ -169,6 +169,7 @@ title: "API, DTO and event contracts"
 phase: 02-how
 experts: [architect]
 stack_experts: true
+expert_knowledge_bytes: 65536
 model: sonnet
 effort: high
 budget_usd: 3.0
@@ -190,6 +191,7 @@ checks: [{id: claim-sources, on: post-write}, {id: schema, on: post-write},
 | `id` / `title` / `phase` | slug / str / `^0[1-5]-` | y | Identity and owning phase |
 | `experts` | slug[] | y | Expert folders loaded; empty ⇒ facilitator runs it inline |
 | `stack_experts` / `model` | bool / str | n (`true`) / y | Also load stack expertise for `run.repos`; per-stage model pin (Appendix A) |
+| `expert_knowledge_bytes` | int ≥0 | n (65536) | Per-expert ceiling on inlined **trained knowledge** (§5, "Expert composition"). The only knob: there is deliberately no workspace-wide default to override, because a Watch card and a Build story want different amounts and one number cannot be right for both |
 | `effort` | `low\|medium\|high\|xhigh\|max` | n (unset) | Passed to the sub-agent as `--effort`. **Unset ⇒ the flag is not passed at all** and the CLI uses its own default |
 | `budget_usd` | number >0 | y | Stage ceiling and the sub-agent's `--max-budget-usd` share |
 | `timeout_s` / `dry_run_allowed` | int >0 / bool | n (900 / `true`) | Wall clock for sub-agent and `cmd` checks `[assumption]`; `--dry-run` writes the handoff only |
@@ -228,6 +230,26 @@ ordinary inputs. This replaces the What stage's old placeholder input, the liter
 seeded What prompt inlined zero of the documents it was started from. `[assumption]` — the v0 skeleton validator still
 requires `inputs` to be an array (`src/core/schemas/stage.ts`), so the shipped `stages/what/stage.yml` writes the same
 flag as a top-level `seed: true` beside an array `inputs:`; the loader accepts both spellings.
+
+**Which experts a stage actually loads.** Three rules, applied in this order, deduped, and the order is the order they
+appear in the prompt:
+
+1. **`experts:`** — every name in the list that has a folder. A name with no `.tldrx/experts/<name>/` is **reported**
+   (`expert <name> — NOT LOADED: no .tldrx/experts/<name>/ in this workspace`), not skipped in silence. This matters
+   because the SHIPPED stage files name `domain`, `stack`, `architect`, `delivery`, `operations` and `developer`, and
+   `tldrx init` seeds none of those: it seeds `product`, `<language>-stack`, and one expert per detected source folder
+   (`src/core/init/planExperts.ts`). Measured 2026-08-29 on a fixture: the What stage's `experts: [product, domain]`
+   loaded one of the two and said nothing about the other.
+2. **`stack_experts: true`** — `<language>-stack` for each language of each repo in `run.repos`.
+3. **Domain match `[assumption]`** — an expert whose `expert.md` declares `kind: domain` and whose front-matter
+   `repos:` intersects `run.repos`, **or** whose `## Domain` bullets name a path containing one of the run's cited
+   paths (its declared inputs and seed documents; for the Build and Watch executors, the story's `touches:`). Path
+   matches rank above repo matches, then name order; capped at **8** — the same cap `init` puts on seeded domain
+   experts — with the overflow named rather than dropped. This rule exists because a stage file is written once for
+   every workspace and cannot know that THIS one has a `checkout` domain expert that has read the code the run touches.
+
+An expert is never loaded twice however many rules pick it, and the first rule that picks it owns the reason recorded
+in `pending.json`.
 
 **`stage.md` required sections** (H2, in this order; concatenated into the sub-agent prompt): `## Role` ·
 `## Objective` (done-when, testable) · `## Inputs` (auto-rendered list — read nothing else) · `## Investigate` (ordered
@@ -1085,7 +1107,7 @@ next(run, dry_run):
   if any(!exists(i) for i in sy.inputs.required): exit 1
   inputs = sy.inputs.required + present(sy.inputs.optional)          # ONLY these files
   prompt = render(stage.md, {run, repos, inputs, facts: grep(facts.yml, sy.area/r.repos), conventions,
-           budget_usd}) + concat(expert.md for sy.experts) + stack_experts(r.repos)
+           budget_usd}) + concat(expert_block(e) for e in select_experts(sy, r))
   st.status = running; write(run.yml); append(stage.started)
   for task in tasks_of(sy):                        # 1 per output group; parallel iff independent
      append(agent.spawned)
@@ -1101,6 +1123,49 @@ next(run, dry_run):
   advance_cursor(); write(run.yml); append(stage.done); exit 0
 FAIL: st.status = failed; st.error = first_error; write(run.yml); append(stage.failed); exit 5
 ```
+
+**Expert composition (§2.3, §2.6).** `select_experts` is the three-rule selection in §2.3 — `experts:`, then
+`stack_experts`, then a domain match — deduped, in that order. Each selected expert contributes ONE block, and the
+parts of that block are in this exact order:
+
+```
+---
+<!-- expert: <name> -->
+<expert.md, verbatim, front matter included>
+
+### Competencies
+<one star-chart line per area: `<area>  ★★★☆☆ 3  (17 evidence, newest 2026-08-20)`>
+
+### Trained knowledge
+<the sentence that says the `[src: …]` tokens below are reusable as evidence>
+
+<!-- knowledge: .tldrx/experts/<name>/knowledge/<area>.md · trained <ts> -->
+<that file's BODY, front matter stripped>
+```
+
+**Order and budget.** Knowledge files come most-recently-trained first, by each file's own `trained_at:` front matter
+— never an mtime, because a `git clone` rewrites every mtime in the tree and an order that changes when you clone the
+repo is not an order; files with no `trained_at` sort last by name, so the sequence is total. The running total is
+capped at `expert_knowledge_bytes` **per expert** (§2.3, default 65536), counting knowledge-file bytes only, not the
+framing prose. When a file does not fit, it is cut at an **H2 boundary** and the cut is declared on the page:
+`… N more findings in .tldrx/experts/<name>/knowledge/<area>.md`. When not even its first section fits, nothing of it
+is inlined and the marker says so with the file's size. There is no partial section, because half a `## Gotchas` reads
+to the next reader as a whole one, and no partial bullet, because a bullet without its `[src: …]` is a claim with its
+citation torn off. The knowledge file's own front matter is dropped and its `trained_at` moved into the comment: a
+`---` fence inside the prompt is one of the expert separators above, and a boundary that means two things is not one.
+
+**Why the citations are stated to be reusable.** A knowledge file is accepted whole or not at all (§2.6), and
+acceptance means every `[src: …]` on it resolved against a real file. So they are proof already, and the block says
+so — otherwise a sub-agent that may only read its declared inputs would either re-derive what it was just handed or
+decline to cite it. Measured 2026-08-29 before this existed: a prepared What prompt on a workspace with a trained,
+level-3 expert was 1,493 bytes and contained zero of that expert's 646 bytes of findings, zero stars, and not one
+occurrence of the word "knowledge".
+
+**Visibility.** `--prepare` and `--dry-run` print one line per loaded expert — name, reason, `expert.md` bytes,
+knowledge bytes, and `truncated` when the budget bit — and `pending.json` carries the same as an `experts:` array.
+An expert loaded with **zero** evidence in every area produces one **stderr** line, `note: expert <name> has no
+evidence — \`tldrx expert train <name> --area <area>\` before this stage would help`. It never blocks and never changes
+an exit code; stdout stays parseable for the host session.
 
 **Decisions (2026-08-28).** (a) Stage artefacts are Markdown validated by hooks (human-readable handoffs); the
 sub-agent's *result envelope* is structured via `--json-schema` (`{outputs: [], questions_asked: [], notes: ""}`) so

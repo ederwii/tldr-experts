@@ -25,7 +25,7 @@ import { loadWorkspaceFile } from "../../core/init/loadWorkspaceFile.ts";
 import {
   createExpert, evidenceWarnings, expertListJson, loadExpert, loadExperts,
   readExpertDocument, renderExpertList, renderTrainPrompt, resolveWorkspaceRoot,
-  type TrainRepo,
+  stagesLoadingExperts, type TrainRepo,
 } from "../../core/experts/index.ts";
 
 const USAGE = [
@@ -65,7 +65,10 @@ export const expertCommand: Command = {
 function listExperts(argv: readonly string[]): number {
   const root = resolveWorkspaceRoot(option(argv, "--root"));
   const experts = loadExperts(root);
-  const output = argv.includes("--json") ? expertListJson(experts) : renderExpertList(experts);
+  const loads = stagesLoadingExperts(root);
+  const output = argv.includes("--json")
+    ? expertListJson(experts, loads)
+    : renderExpertList(experts, loads);
   process.stdout.write(`${output}\n`);
   // Unknown-kind rows go to stderr rather than into the table, so they survive
   // `--json` (whose stdout must stay parseable) and a redirect to a file. A row

@@ -13,6 +13,8 @@
  * that points at the invariant and one that merely lands inside the right file.
  */
 import { fenceFor, loadExpertBodies, renderConventions, stackExpertNames } from "../facilitator/prompt.ts";
+import { loadExpertKnowledge } from "../experts/expertKnowledge.ts";
+import { loadExpert } from "../experts/loadExperts.ts";
 import { section, type ExpertDocument } from "../experts/expertDocument.ts";
 import { evidenceNote, stars } from "../experts/starChart.ts";
 import type { AreaRecord, ExpertRecord } from "../experts/ExpertRecord.ts";
@@ -261,12 +263,26 @@ function ceiling(input: TrainingPromptInput): readonly string[] {
   ]
 }
 
-/** The expert's own body, plus the stack experts of the repos it speaks for. */
+/**
+ * The expert's own body, plus the stack experts of the repos it speaks for — each
+ * carrying whatever earlier training already put on record.
+ *
+ * A training run that cannot see what the LAST training run found rediscovers it
+ * and writes a second copy of the same finding, which is how an area reaches
+ * twelve evidence rows over one file (spec §2.6, the distinct-source cap exists
+ * for exactly that).
+ */
 function expertBodies(input: TrainingPromptInput): readonly string[] {
   const names = [input.expert.name, ...stackExpertNames(input.root, input.repos)];
-  return loadExpertBodies(input.root, names).map(
-    (expert) => `\n---\n\n<!-- expert: ${expert.name} -->\n${expert.body.trimEnd()}\n`,
-  );
+  return loadExpertBodies(input.root, names).map((expert) => {
+    const knowledge = loadExpertKnowledge({
+      root: input.root,
+      name: expert.name,
+      record: loadExpert(input.root, expert.name),
+    }).text.trim();
+    const tail = knowledge === "" ? "" : `\n${knowledge}\n`;
+    return `\n---\n\n<!-- expert: ${expert.name} -->\n${expert.body.trimEnd()}\n${tail}`;
+  });
 }
 
 function describeRepos(repos: readonly string[]): string {

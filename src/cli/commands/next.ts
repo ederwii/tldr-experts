@@ -55,6 +55,9 @@ export const nextCommand: Command = {
       const text = `${outcome.lines.join("\n")}\n`;
       if (INFORMATIONAL.includes(outcome.code)) process.stdout.write(text);
       else process.stderr.write(prefix(text));
+      // Advisories never change the exit code and never gate anything; they go to
+      // stderr so a `--prepare` whose stdout a script parses stays parseable.
+      for (const line of outcome.stderr ?? []) process.stderr.write(`${line}\n`);
       return outcome.code;
     } catch (error) {
       if (error instanceof UsageError) return fail("next", error, EXIT_USAGE);

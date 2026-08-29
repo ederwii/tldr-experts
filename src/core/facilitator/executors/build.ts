@@ -24,7 +24,8 @@ import { PROJECT_FRAMEWORK_DIR } from "../../paths.ts";
 import { factsPath, loadWorkspace, type WorkspaceContext } from "../../../hooks/lib/workspace.ts";
 import { runDodCommand } from "../../../hooks/lib/story.ts";
 import { FactsStore } from "../../facts/FactsStore.ts";
-import { loadExpertBodies, renderConventions, renderFacts, stackExpertNames } from "../prompt.ts";
+import { renderConventions, renderFacts, stackExpertNames } from "../prompt.ts";
+import { loadExpertBundles } from "../../experts/expertBundle.ts";
 import { agentDir } from "../paths.ts";
 import { spawnAgent, BASE_TOOLS } from "../spawnAgent.ts";
 import { PendingError, readResult, writeBundle, writeRaw, type PendingStage } from "../pending.ts";
@@ -808,9 +809,17 @@ class BuildSession {
   private developerPrompt(story: StoryContext): string {
     const repo = story.planned.story.repo;
     const facts = FactsStore.loadOrEmpty(factsPath(this.ctx.root));
-    const experts = this.ctx.spec.stackExperts
-      ? ["developer", ...stackExpertNames(this.ctx.root, [repo])]
-      : ["developer"];
+    // The story's `touches:` is exactly the list of paths this sub-agent will
+    // edit, so a domain expert that has read one of them is the one to load.
+    const bundles = loadExpertBundles({
+      root: this.ctx.root,
+      staged: this.ctx.spec.planned.experts.length === 0 ? ["developer"] : this.ctx.spec.planned.experts,
+      repos: [repo],
+      stackExperts: this.ctx.spec.stackExperts,
+      stackNames: stackExpertNames(this.ctx.root, [repo]),
+      citedPaths: story.planned.story.touches,
+      knowledgeBytes: this.ctx.spec.expertKnowledgeBytes,
+    });
     return buildDeveloperPrompt({
       runId: this.ctx.runId,
       story: story.planned,
@@ -822,7 +831,7 @@ class BuildSession {
       commands: this.repoCommands(repo),
       conventions: renderConventions(this.ctx.root, [repo]),
       facts: renderFacts(facts.facts, [repo]),
-      experts: loadExpertBodies(this.ctx.root, experts),
+      experts: bundles.experts,
       budgetUsd: this.developerCap(),
       previousAttempt: story.previousAttempt,
     });

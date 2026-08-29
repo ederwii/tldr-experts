@@ -16,6 +16,7 @@ import { isRecord } from "../schemas/validation.ts";
 import {
   loadWorkflowPreset, stagePath, workflowPath, PresetError, type PlannedStage, type WorkflowPreset,
 } from "../run/workflowPreset.ts";
+import { DEFAULT_EXPERT_KNOWLEDGE_BYTES } from "../experts/expertKnowledge.ts";
 
 /** Spec §2.3 default when `stage.yml` is silent. */
 export const DEFAULT_STACK_EXPERTS = true;
@@ -39,6 +40,14 @@ export interface StageSpec {
    */
   readonly seedInputs: boolean;
   readonly stackExperts: boolean;
+  /**
+   * `expert_knowledge_bytes:` — how much of each loaded expert's TRAINED KNOWLEDGE
+   * this stage inlines (spec §2.3, §5). Per-stage and nowhere else: a Watch card
+   * wants a page of gotchas and a Build story wants everything the expert knows
+   * about the files it is editing, and a single workspace-wide number could not be
+   * right for both. Absent or unusable ⇒ `DEFAULT_EXPERT_KNOWLEDGE_BYTES` (64 KB).
+   */
+  readonly expertKnowledgeBytes: number;
   readonly dryRunAllowed: boolean;
   /** From the WORKFLOW entry (spec §2.4), not from stage.yml. */
   readonly skipIf: string | null;
@@ -63,7 +72,13 @@ function overlay(
   root: string,
   scope: string,
   stageId: string,
-): { stackExperts: boolean; dryRunAllowed: boolean; skipIf: string | null; questionsMax: number | null } {
+): {
+  stackExperts: boolean;
+  expertKnowledgeBytes: number;
+  dryRunAllowed: boolean;
+  skipIf: string | null;
+  questionsMax: number | null;
+} {
   const stageDoc = readDoc(stagePath(root, stageId));
   const workflowDoc = readDoc(workflowPath(root, scope));
 
@@ -79,6 +94,12 @@ function overlay(
     stackExperts: isRecord(stageDoc) && typeof stageDoc.stack_experts === "boolean"
       ? stageDoc.stack_experts
       : DEFAULT_STACK_EXPERTS,
+    expertKnowledgeBytes: isRecord(stageDoc)
+      && typeof stageDoc.expert_knowledge_bytes === "number"
+      && Number.isFinite(stageDoc.expert_knowledge_bytes)
+      && stageDoc.expert_knowledge_bytes >= 0
+      ? Math.trunc(stageDoc.expert_knowledge_bytes)
+      : DEFAULT_EXPERT_KNOWLEDGE_BYTES,
     dryRunAllowed: isRecord(stageDoc) && typeof stageDoc.dry_run_allowed === "boolean"
       ? stageDoc.dry_run_allowed
       : DEFAULT_DRY_RUN_ALLOWED,
