@@ -9,7 +9,18 @@
 import { starChart } from "./starChart.ts";
 import type { ExpertRecord } from "./ExpertRecord.ts";
 
-const HEADERS = ["expert", "status", "last_trained", "areas"] as const;
+const HEADERS = ["expert", "status", "last_trained", "areas", "evidence", "levels"] as const;
+
+/** Total evidence rows across an expert's areas — what a level is made of. */
+export function evidenceCount(expert: ExpertRecord): number {
+  return expert.areas.reduce((total, area) => total + area.evidence.length, 0);
+}
+
+/** `2/1/0` — every area's computed level, highest first. `—` when there are none. */
+export function levelSummary(expert: ExpertRecord): string {
+  if (expert.areas.length === 0) return "—";
+  return [...expert.areas].map((area) => area.level).sort((a, b) => b - a).join("/");
+}
 
 export function driftWarnings(expert: ExpertRecord): readonly string[] {
   return expert.drifted.map(
@@ -33,6 +44,8 @@ export function renderExpertList(experts: readonly ExpertRecord[]): string {
     expert.status,
     expert.lastTrained ?? "never",
     String(expert.areas.length),
+    String(evidenceCount(expert)),
+    levelSummary(expert),
   ]);
   const widths = HEADERS.map((header, column) =>
     rows.reduce((max, row) => Math.max(max, (row[column] ?? "").length), header.length),
@@ -72,6 +85,7 @@ export function expertListJson(experts: readonly ExpertRecord[]): string {
       name: expert.name,
       status: expert.status,
       last_trained: expert.lastTrained,
+      evidence_count: evidenceCount(expert),
       error: expert.error,
       areas: expert.areas.map((area) => ({
         id: area.id,
