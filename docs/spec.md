@@ -641,7 +641,18 @@ into the next prompt), or editing the stage inputs by hand and re-running.
 
 ## 7. Open decisions
 
-- Verify whether `claude -p` can be spawned from inside a Claude Code Bash tool (nested session); until then in-session mode uses `--prepare/--commit`.
+- ~~Verify whether `claude -p` can be spawned from inside a Claude Code Bash tool (nested session).~~ **Measured 2026-08-29
+  (macOS, Claude Code 2.1.x).** It works. `claude -p "reply with the single word pong" --output-format json
+  --max-budget-usd 0.05` from a Claude Code Bash tool: **exit 1**, `is_error: true`, `subtype: error_max_budget_usd`,
+  `errors: ["Reached maximum budget ($0.05)"]`, `total_cost_usd: 0.29084099999999996` — the nesting was never the
+  problem, the ceiling was: a cold session pays ~10–26k cache-creation tokens before the first reply, so **$0.05 is
+  below the floor of any real call**. Re-run at `--max-budget-usd 1.00`: **exit 0**, `result: "pong"`,
+  `total_cost_usd: 0.222039`, `session_id: 5b354e40-…`, `is_error: false`. Confirmed again end-to-end: a real
+  `tldrx next --max-usd 0.10` on a one-stage fixture spawned `claude -p` from inside this session, the sub-agent
+  wrote its declared output, and the stage closed at **$0.06** (`model: haiku`, session `bda47ec2-…`). So headless
+  mode is viable from inside a session; `--prepare/--commit` stays because it is *cheaper* (the host session's
+  context is already warm) and because it is the only mode that works where spawning is disallowed — not because
+  spawning fails.
 
 - Whether `.tldrx/` is one root install or also allowed per sub-repo simultaneously (spec assumes root-only in v0).
 - Story/epic file schemas (`stories/<id>.md`, `epics/<id>.md`, `waves.yml`) — v1 Execute, not specified here.
