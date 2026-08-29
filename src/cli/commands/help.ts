@@ -6,7 +6,7 @@ import { frameworkVersion } from "../../core/frameworkVersion.ts";
 export function renderHelp(version: string, commands: readonly Command[]): string {
   const width = Math.max(...commands.map((c) => c.name.length));
   const lines: string[] = [
-    `tldrx ${version} — tldr-experts, a file-based AI development workflow. PRE-ALPHA.`,
+    `tldrx ${version} — tldr-experts, a file-based AI development workflow. Alpha.`,
     "",
     "Usage: tldrx <command> [args]",
     "",
