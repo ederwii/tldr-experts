@@ -30,6 +30,8 @@ export interface StageOptions {
   readonly dryRunAllowed?: boolean;
   readonly timeoutS?: number;
   readonly experts?: readonly string[];
+  /** The stage's own `effort:`. Omitted ⇒ the stage file carries no effort at all. */
+  readonly effort?: string;
   /** Body of `stage.md`. Defaults to one that uses every placeholder. */
   readonly stageMd?: string;
 }
@@ -162,6 +164,7 @@ function stageYaml(stage: StageOptions): string {
     `experts: [${(stage.experts ?? ["product"]).join(", ")}]`,
     "stack_experts: true",
     "model: sonnet",
+    ...(stage.effort === undefined ? [] : [`effort: ${stage.effort}`]),
     `budget_usd: ${String(stage.budgetUsd)}`,
     `timeout_s: ${String(stage.timeoutS ?? 60)}`,
     `dry_run_allowed: ${String(stage.dryRunAllowed ?? true)}`,

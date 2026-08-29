@@ -44,7 +44,8 @@ export function validate(kind: FileKind, input: unknown) {
 export type { ValidationIssue, ValidationResult, Validator } from "./validation.ts";
 export type { Workspace, DetectedRepo, WorkspaceMode } from "./workspace.ts";
 export type { Run, RunPhase, RunStatus } from "./run.ts";
-export type { Stage, StageGate, GateType } from "./stage.ts";
+export type { Stage, StageGate, GateType, EffortLevel } from "./stage.ts";
+export { EFFORT_LEVELS, isEffortLevel } from "./stage.ts";
 export type { Workflow, WorkflowDepth } from "./workflow.ts";
 export type { FactsFile, Fact, FactSource } from "./facts.ts";
 export type { CompetenciesFile, Competency } from "./competencies.ts";

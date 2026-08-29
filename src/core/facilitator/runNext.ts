@@ -32,6 +32,7 @@ import {
   buildPrompt, loadExpertBodies, renderConventions, renderFacts, stackExpertNames,
 } from "./prompt.ts";
 import { spawnAgent } from "./spawnAgent.ts";
+import type { EffortLevel } from "../schemas/stage.ts";
 import { validateOutputs, describeProblems } from "./validateOutputs.ts";
 import { executorFor, type ExecutorContext, type ExecutorOutcome, type StageExecutor } from "./executors/index.ts";
 import { promptPath, readResult, writeBundle, writeRaw, PendingError, type PendingStage } from "./pending.ts";
@@ -47,6 +48,8 @@ export interface NextOptions {
   readonly mode: NextMode;
   /** `--model`, overriding the stage pin. */
   readonly model?: string;
+  /** `--effort`, overriding the stage's `effort:`. Undefined ⇒ the stage decides. */
+  readonly effort?: EffortLevel;
   /** `--max-usd`, an extra cap on top of the stage share and per_agent_max_usd. */
   readonly maxUsd?: number;
   readonly yolo: boolean;
@@ -260,6 +263,7 @@ async function runStage(
     ...seed.filter((p) => !required.includes(p) && !optional.includes(p)),
   ]);
   const model = options.model ?? stage.model ?? spec.planned.model;
+  const effort = options.effort ?? spec.planned.effort ?? null;
   const cap = agentCap(options, store, stage);
   const prompt = assemblePrompt(store, options, spec, stage, inputs, ctx, new Set(seed));
 
@@ -270,6 +274,7 @@ async function runStage(
     stage: stageId,
     expert: stage.expert ?? spec.planned.experts[0] ?? null,
     model,
+    effort,
     budget_usd: stage.budget_usd,
     max_budget_usd: cap,
     prompt: relative(store.runDir, promptPath(store.runDir, stageId)),
@@ -294,7 +299,8 @@ async function runStage(
     const dir = relative(options.root, agentDir(store.runDir, stageId));
     return out(EXIT_OK, [
       ...notes,
-      `prepared ${phaseId}/${stageId} — prompt bundle in ${dir}/ ($${cap.toFixed(2)} agent ceiling, model ${model ?? "default"})`,
+      `prepared ${phaseId}/${stageId} — prompt bundle in ${dir}/ ($${cap.toFixed(2)} agent ceiling, `
+        + `model ${model ?? "default"}, effort ${effort ?? "default"})`,
       `dispatch ONE sub-agent with ${dir}/prompt.md; it may write only: ${pending.outputs.join(", ") || "(no declared outputs)"}`,
       `then write {outputs, questions_asked, notes} to ${dir}/result.json and run \`tldrx next --commit\``,
     ]);
@@ -306,6 +312,7 @@ async function runStage(
     phase: phaseId,
     task: taskId,
     model,
+    effort,
     max_budget_usd: cap,
   }, 0, stage.expert));
 
@@ -313,6 +320,7 @@ async function runStage(
   const agent = await spawnAgent({
     prompt,
     model,
+    effort,
     maxBudgetUsd: cap,
     workspaceCommands: [...workspace.commands],
     yolo: options.yolo,
@@ -338,6 +346,7 @@ async function runStage(
     task: taskId,
     session_id: agent.sessionId,
     model,
+    effort,
     outputs: agent.envelope?.outputs ?? [],
     usage: { input_tokens: agent.usage.input_tokens, output_tokens: agent.usage.output_tokens },
   }, round2(agent.costUsd), stage.expert));
@@ -430,11 +439,13 @@ async function runExecutor(
   }
 
   const model = options.model ?? requireStage(store, phaseId, stageId).model ?? spec.planned.model;
+  const effort = options.effort ?? spec.planned.effort ?? null;
   if (!started) {
     markRunning(store, phaseId, stageId, options.at);
     store.append(event(options, store.runId, stageId, "stage.started", {
       phase: phaseId,
       model,
+      effort,
       budget_usd: requireStage(store, phaseId, stageId).budget_usd,
       mode: options.mode,
       executor: phaseId,
@@ -453,6 +464,7 @@ async function runExecutor(
     repos: store.run.repos,
     mode: options.mode,
     model,
+    effort,
     budgetUsd: stage.budget_usd,
     maxBudgetUsd: agentCap(options, store, stage),
     yolo: options.yolo,
@@ -511,6 +523,7 @@ function recordExecutorTasks(
       key: task.key,
       session_id: task.sessionId,
       model: task.model,
+      effort: options.effort ?? spec.planned.effort ?? null,
       outputs: task.outputs,
     }, round2(task.costUsd)));
   }
@@ -557,6 +570,7 @@ async function commitStage(
     task: taskId,
     session_id: result.session_id,
     model: options.model ?? stage.model ?? spec.planned.model,
+    effort: options.effort ?? spec.planned.effort ?? null,
     outputs: result.outputs,
     mode: "in-session",
   }, round2(result.cost_usd ?? 0), stage.expert));

@@ -178,6 +178,7 @@ function fixture(plan: Readonly<Record<string, string>> = defaultPlan()): Fixtur
       repos: store.run.repos,
       mode: "headless",
       model: null,
+      effort: null,
       budgetUsd: 2,
       maxBudgetUsd: 2,
       yolo: false,

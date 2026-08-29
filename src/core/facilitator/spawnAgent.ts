@@ -1,16 +1,19 @@
 /**
  * Spawning one sub-agent (spec §5, headless mode).
  *
- * Every flag here was read out of `claude --help` on 2026-08-28 before it was
- * used — `-p/--print`, `--output-format json`, `--json-schema`, `--model`,
- * `--max-budget-usd`, `--allowedTools`, `--dangerously-skip-permissions`. A flag
- * nobody has seen in `--help` does not go in this file.
+ * Every flag here was read out of `claude --help` before it was used —
+ * `-p/--print`, `--output-format json`, `--json-schema`, `--model`,
+ * `--max-budget-usd`, `--allowedTools`, `--dangerously-skip-permissions`
+ * (2026-08-28), and `--effort <level>` (2026-08-29, whose help line reads
+ * "Effort level for the current session (low, medium, high, xhigh, max)"). A
+ * flag nobody has seen in `--help` does not go in this file.
  *
  * The prompt goes in on **stdin**, not as an argv element: a stage prompt is tens
  * of kilobytes with newlines and quotes in it, and an argv is neither the right
  * size nor the right shape for that.
  */
 import { runtime } from "../runtime/index.ts";
+import type { EffortLevel } from "../schemas/stage.ts";
 import { ENVELOPE_SCHEMA, parseClaudeJson, toEnvelope, toUsage, type AgentEnvelope, type AgentUsage } from "./envelope.ts";
 
 export const CLAUDE_BIN = "claude";
@@ -26,6 +29,12 @@ export const BASE_TOOLS: readonly string[] = ["Read", "Write", "Edit", "Glob", "
 export interface AgentRequest {
   readonly prompt: string;
   readonly model: string | null;
+  /**
+   * `--effort`, the per-turn cost lever. Null/absent leaves the flag off entirely
+   * and the CLI picks its own default — a stage that says nothing about effort
+   * must behave exactly as it did before this option existed.
+   */
+  readonly effort?: EffortLevel | null;
   readonly maxBudgetUsd: number;
   /** Every command in `.tldrx/workspace.yml`, verbatim. */
   readonly workspaceCommands: readonly string[];
@@ -73,6 +82,7 @@ export function allowedTools(workspaceCommands: readonly string[]): readonly str
 export function buildClaudeArgs(request: AgentRequest): readonly string[] {
   const args: string[] = ["-p", "--output-format", "json"];
   if (request.model !== null && request.model !== "") args.push("--model", request.model);
+  if (request.effort !== null && request.effort !== undefined) args.push("--effort", request.effort);
   args.push("--max-budget-usd", formatUsd(request.maxBudgetUsd));
   args.push("--json-schema", JSON.stringify(request.schema ?? ENVELOPE_SCHEMA));
   args.push("--allowedTools", (request.tools ?? allowedTools(request.workspaceCommands)).join(","));

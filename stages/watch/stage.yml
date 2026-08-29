@@ -16,6 +16,12 @@ name: watch
 title: Watch
 phase: 5
 model: haiku
+# --effort for this stage's sub-agent (spec §2.3). The cost lever
+# `--max-budget-usd` is not: the budget flag only STOPS a turn already in flight.
+# `[assumption]` — Watch renders a card per shipped feature from evidence the
+# executor has already grouped and handed over. Low: it is a transcription job
+# with a validator behind it, not an analysis.
+effort: low
 budget_usd: 2
 timeout_s: 900
 

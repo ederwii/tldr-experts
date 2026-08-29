@@ -6,6 +6,11 @@ name: plan
 title: Plan
 phase: 3
 model: sonnet
+# --effort for this stage's sub-agent (spec §2.3). The cost lever
+# `--max-budget-usd` is not: the budget flag only STOPS a turn already in flight.
+# `[assumption]` — Plan is decomposition against a design that already exists:
+# split, order, size, cite. Medium; the hard judgement was made upstream in How.
+effort: medium
 budget_usd: 4
 
 inputs:

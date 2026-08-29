@@ -3,6 +3,7 @@
 ## 0.3.0 — unreleased
 
 - Documented, from measurement: `--max-budget-usd` stops after the current turn (a training call spent $5.15 against $1.50); budgets gate before and reconcile after, overshoot ≤ one turn.
+- **`effort:` on a stage, `--effort <level>` on the command line** — the cost lever `--max-budget-usd` is not: the budget flag can only end a turn already in flight, `--effort` changes what that turn costs. Optional `effort: low|medium|high|xhigh|max` in `stage.yml` (unset ⇒ the flag is never passed, behaviour unchanged; an unknown level is refused, not dropped), overridable per invocation by `tldrx next --effort` and `tldrx expert train --effort` (training defaults to `medium`). Shipped stage defaults, all `[assumption]`: what `medium`, how `high`, plan `medium`, build `high`, watch `low`. The level is recorded on `agent.spawned`/`agent.result` and on every `training.jsonl` line beside the cost, so cost-per-effort becomes measurable rather than arguable.
 ### Expert training runs
 
 `tldrx expert train <name> --area <a> [--mode light|full]` used to print a prompt

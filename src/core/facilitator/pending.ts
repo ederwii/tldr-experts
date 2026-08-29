@@ -13,6 +13,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { agentDir } from "./paths.ts";
 import type { PlannedCheck } from "../run/workflowPreset.ts";
+import type { EffortLevel } from "../schemas/stage.ts";
 
 export const PROMPT_FILE = "prompt.md";
 export const PENDING_FILE = "pending.json";
@@ -26,6 +27,8 @@ export interface PendingStage {
   readonly stage: string;
   readonly expert: string | null;
   readonly model: string | null;
+  /** `--effort` the sub-agent is to be spawned with. Null ⇒ the CLI's own default. */
+  readonly effort?: EffortLevel | null;
   readonly budget_usd: number;
   readonly max_budget_usd: number;
   readonly prompt: string;

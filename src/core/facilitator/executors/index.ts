@@ -25,6 +25,7 @@ import type { StageSpec } from "../stageSpec.ts";
 import type { NextMode } from "../runNext.ts";
 import type { GateType } from "../../run/RunFile.ts";
 import type { EventType } from "../../events/Event.ts";
+import type { EffortLevel } from "../../schemas/stage.ts";
 import { watchExecutor } from "./watch.ts";
 import { buildExecutor } from "./build.ts";
 
@@ -52,6 +53,11 @@ export interface ExecutorContext {
   readonly mode: NextMode;
   /** `--model`, when the operator overrode the stage pin. */
   readonly model: string | null;
+  /**
+   * `--effort` for every sub-agent this executor spawns: `--effort` if the
+   * operator gave one, else the stage's `effort:`, else null (flag omitted).
+   */
+  readonly effort: EffortLevel | null;
   /** The stage's own ceiling, as scaled into `run.yml`. */
   readonly budgetUsd: number;
   /** `min(stage share, per_agent_max_usd, --max-usd)` — what one sub-agent may spend. */
