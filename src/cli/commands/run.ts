@@ -15,6 +15,8 @@ import { fail } from "../report.ts";
 import { createRun } from "../../core/run/newRun.ts";
 import { RunStore } from "../../core/run/RunStore.ts";
 import { buildStatus, renderStatus } from "../../core/run/runStatus.ts";
+import { openRunRows, renderOpenRuns } from "../../core/run/openRuns.ts";
+import { notFound } from "../resolveRun.ts";
 import { currentActor } from "../../hooks/lib/actor.ts";
 import { PROJECT_WORK_DIR } from "../../core/paths.ts";
 
@@ -90,6 +92,16 @@ function runNew(argv: readonly string[]): number {
     }
     lines.push(`next: tldrx run status ${outcome.runId}`);
     process.stdout.write(`${lines.join("\n")}\n`);
+
+    // Several open runs stay legal — each has its own budget.yml, events.jsonl
+    // and epic branch. What is no longer legal is guessing between them, so say
+    // so at the moment the second one appears rather than at the first refusal.
+    const others = RunStore.findOpen(root).filter((store) => store.runId !== outcome.runId).length;
+    if (others > 0) {
+      process.stderr.write(
+        `note: ${String(others)} other run(s) open — pass a run id to next/answer/approve/… from now on\n`,
+      );
+    }
     return EXIT_OK;
   } catch (error) {
     return fail("run new", error);
@@ -101,19 +113,31 @@ function runStatus(argv: readonly string[]): number {
     const args = parseArgs(argv, VALUE_FLAGS);
     const root = workspaceRootFrom(args);
     const wanted = args.positionals[0] ?? stringFlag(args, "run");
-    const store = RunStore.find(root, wanted);
-    if (store === null) {
-      process.stderr.write(
-        wanted === undefined
-          ? `tldrx run status: no non-terminal run in ${PROJECT_WORK_DIR}/\n`
-          : `tldrx run status: no run '${wanted}' in ${PROJECT_WORK_DIR}/\n`,
-      );
+    const json = boolFlag(args, "json");
+    const resolution = RunStore.resolve(root, wanted);
+
+    if (resolution.kind === "none") {
+      process.stderr.write(`tldrx run status: ${notFound(wanted)} in ${PROJECT_WORK_DIR}/\n`);
       return EXIT_NOT_FOUND;
     }
+
+    // Several runs open and no id: SHOW them rather than refuse. `run status` is
+    // the screen you read to find out which id to pass to everything else, so a
+    // refusal here would be a locked door with the key behind it. Exit 0 — this
+    // is a complete answer, not a degraded one.
+    if (resolution.kind === "ambiguous") {
+      const views = resolution.open.map((store) => buildStatus(store.run, store.budget, store.runDir));
+      process.stdout.write(
+        json
+          ? `${JSON.stringify({ runs: views }, null, 2)}\n`
+          : `${renderOpenRuns(openRunRows(resolution.open))}\n`,
+      );
+      return EXIT_OK;
+    }
+
+    const store = resolution.store;
     const view = buildStatus(store.run, store.budget, store.runDir);
-    process.stdout.write(
-      boolFlag(args, "json") ? `${JSON.stringify(view, null, 2)}\n` : `${renderStatus(view)}\n`,
-    );
+    process.stdout.write(json ? `${JSON.stringify(view, null, 2)}\n` : `${renderStatus(view)}\n`);
     return EXIT_OK;
   } catch (error) {
     return fail("run status", error);

@@ -106,17 +106,34 @@ export function cursorStage(view: RunView): RunStage | null {
 }
 
 /**
- * The newest run that is not finished. "Newest" = latest `updated_at`, falling
- * back to the folder name, which is date-prefixed by construction (spec §2.2).
+ * Every run that is not finished, newest first. "Newest" = latest `updated_at`,
+ * falling back to the folder name, which is date-prefixed by construction
+ * (spec §2.2) — `listRunDirs` yields those in reverse order and `sort` is stable,
+ * so a shared second-precision timestamp still orders deterministically.
+ *
+ * The tolerant twin of `RunStore.findOpen`: same set, no schema validation, used
+ * where a hook must render something rather than argue about a schema.
  */
-export function newestActiveRun(root: string): RunView | null {
-  let best: RunView | null = null;
+export function openRunViews(root: string): readonly RunView[] {
+  const open: RunView[] = [];
   for (const dir of listRunDirs(root)) {
     const view = loadRunView(dir);
     if (view === null || isTerminal(view.status)) continue;
-    if (best === null || view.updated_at > best.updated_at) best = view;
+    open.push(view);
   }
-  return best;
+  return open.sort((a, b) => (a.updated_at > b.updated_at ? -1 : a.updated_at < b.updated_at ? 1 : 0));
+}
+
+/**
+ * The newest run that is not finished, or null.
+ *
+ * Still a deliberate single pick: `budget-gate` has one Bash command to judge and
+ * no way to ask which run it belongs to, so after `--run` and the cwd it falls
+ * back to the newest rather than failing open on ambiguity (a gate that stops
+ * gating when a second run exists is worse than one that guesses).
+ */
+export function newestActiveRun(root: string): RunView | null {
+  return openRunViews(root)[0] ?? null;
 }
 
 function str(value: unknown): string {

@@ -19,12 +19,12 @@
  */
 import { join } from "node:path";
 import type { Command } from "../Command.ts";
-import { EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
+import { EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
 import { boolFlag, parseArgs, stringFlag, UsageError, type ParsedArgs } from "../argv.ts";
 import { workspaceRootFrom } from "../workspace.ts";
 import { fail } from "../report.ts";
 import { RunStore } from "../../core/run/RunStore.ts";
-import { PROJECT_WORK_DIR } from "../../core/paths.ts";
+import { isResolved, resolveRunOrExplain, type RunOrExit } from "../resolveRun.ts";
 import { nowRfc3339, currentActor } from "../../hooks/lib/actor.ts";
 import {
   collectMirrorItems, createGithubProvider, PLAN_PHASE, createJiraProvider, isTicketProviderKind,
@@ -34,6 +34,9 @@ import {
 } from "../../core/adapters/index.ts";
 
 const VALUE_FLAGS = ["run", "root", "provider"];
+
+/** How the config file is named on screen, matching `disabledMessage` below. */
+const PROCESS_YML = ".tldrx/process.yml";
 
 export const ticketsCommand: Command = {
   name: "tickets",
@@ -71,8 +74,9 @@ async function ticketsSync(argv: readonly string[]): Promise<number> {
       return EXIT_OK;
     }
 
-    const store = openRun(args, root);
-    if (store === null) return EXIT_NOT_FOUND;
+    const resolved = openRun(args, root);
+    if (!isResolved(resolved)) return resolved.exit;
+    const store = resolved.store;
 
     // Resolved before anything is read from 03-plan/ and before any write.
     const provider = buildProvider(kind, config);
@@ -100,11 +104,20 @@ function ticketsStatus(argv: readonly string[]): number {
   try {
     const args = parseArgs(argv, VALUE_FLAGS);
     const root = workspaceRootFrom(args);
-    const store = openRun(args, root);
-    if (store === null) return EXIT_NOT_FOUND;
+
+    // The config comes FIRST, and it is printed whether or not a run exists.
+    // Before this, `tickets status` in a workspace with no run exited 3 without
+    // ever opening process.yml, so a ticket_tool that could never sync — a kind
+    // with no adapter, a missing project — stayed invisible until someone
+    // created a run and tried to sync it.
+    const config = readTicketToolConfig(root);
+    process.stdout.write(`${describeTicketTool(config).join("\n")}\n`);
+
+    const resolved = openRun(args, root);
+    if (!isResolved(resolved)) return resolved.exit;
+    const store = resolved.store;
 
     const collected = collectMirrorItems(join(store.runDir, PLAN_PHASE), store.runId);
-    const config = readTicketToolConfig(root);
     const lines = [
       `tickets · run ${store.runId} · ticket_tool ${config.kind}${config.project === null ? "" : ` (${config.project})`}`,
       "",
@@ -116,6 +129,44 @@ function ticketsStatus(argv: readonly string[]): number {
   } catch (error) {
     return fail("tickets status", error);
   }
+}
+
+/**
+ * What process.yml says, and whether `tickets sync` could act on it.
+ *
+ * Reports; it does not refuse. `status` reads nothing and calls nothing, so a
+ * broken ticket_tool is a finding here, not a failure — the exit code stays the
+ * one the run lookup produces. The wording of each problem matches the error
+ * `sync` would raise for it, so the two screens never describe it differently.
+ */
+function describeTicketTool(config: TicketToolConfig): readonly string[] {
+  const where = config.path === null ? `no ${PROCESS_YML}` : config.path;
+  const project = config.project === null ? "" : ` (${config.project})`;
+  const lines = [`ticket_tool ${config.kind}${project} · sync ${config.sync} · ${where}`];
+
+  if (config.kind === "none") {
+    lines.push(
+      config.path === null
+        ? `no ${PROCESS_YML}, so no ticket tool is configured — \`tldrx tickets sync\` is a no-op.`
+        : `ticket_tool.kind is none — \`tldrx tickets sync\` is a no-op.`,
+    );
+    return lines;
+  }
+  if (!isTicketProviderKind(config.kind)) {
+    lines.push(
+      `warning: kind '${config.kind}' has no adapter — this build ships github and jira. `
+      + "`tldrx tickets sync` will refuse until it is one of those, or none.",
+    );
+    return lines;
+  }
+  if (config.project === null) {
+    lines.push(
+      `warning: ticket_tool.project is required for the ${config.kind} provider `
+      + `(${config.kind === "github" ? "`owner/repo`" : "the Jira project key"}). `
+      + "`tldrx tickets sync` will refuse until it is set.",
+    );
+  }
+  return lines;
 }
 
 // --- wiring -----------------------------------------------------------------
@@ -165,16 +216,9 @@ function buildProvider(kind: "github" | "jira", config: TicketToolConfig): Ticke
   });
 }
 
-function openRun(args: ParsedArgs, root: string): RunStore | null {
-  const wanted = stringFlag(args, "run") ?? args.positionals[0];
-  const store = RunStore.find(root, wanted);
-  if (store !== null) return store;
-  process.stderr.write(
-    wanted === undefined
-      ? `tldrx tickets: no non-terminal run in ${PROJECT_WORK_DIR}/\n`
-      : `tldrx tickets: no run '${wanted}' in ${PROJECT_WORK_DIR}/\n`,
-  );
-  return null;
+/** The store, or the exit code to return — 3 for no run, 2 when several are open. */
+function openRun(args: ParsedArgs, root: string): RunOrExit {
+  return resolveRunOrExplain("tldrx tickets", root, stringFlag(args, "run") ?? args.positionals[0]);
 }
 
 /**

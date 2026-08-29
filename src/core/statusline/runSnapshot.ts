@@ -12,7 +12,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { RunStore } from "../run/RunStore.ts";
 import { isTerminal } from "../run/RunFile.ts";
-import { newestActiveRun, cursorStage } from "../../hooks/lib/runFile.ts";
+import { openRunViews, cursorStage } from "../../hooks/lib/runFile.ts";
 import { openQuestionIds, phaseDirs } from "../facilitator/skipIf.ts";
 
 export type SnapshotSource = "run-store" | "tolerant";
@@ -32,10 +32,12 @@ export interface RunSnapshot {
   readonly total: number;
   readonly ceilingUsd: number;
   readonly spentUsd: number;
+  /** How many runs are open right now, this one included. Never 0. */
+  readonly openCount: number;
   readonly source: SnapshotSource;
 }
 
-/** The newest non-terminal run under `root`, or null when there is none. */
+/** The newest OPEN run under `root`, or null when there is none. */
 export function runSnapshot(root: string): RunSnapshot | null {
   return fromStore(root) ?? fromTolerantRead(root);
 }
@@ -50,13 +52,16 @@ export function openQuestions(snapshot: RunSnapshot): readonly string[] {
 }
 
 function fromStore(root: string): RunSnapshot | null {
-  let store: RunStore | null;
+  let open: readonly RunStore[];
   try {
-    store = RunStore.find(root);
+    open = RunStore.findOpen(root);
   } catch {
     return null;
   }
-  if (store === null) return null;
+  // The NEWEST open run, plus how many there are. A status line must show one
+  // run — it is one line — but it must not pretend the other two do not exist.
+  const store = open[0];
+  if (store === undefined) return null;
   const run = store.run;
   const entry = store.cursorEntry();
   const stages = run.phases.flatMap((phase) => phase.stages);
@@ -74,13 +79,15 @@ function fromStore(root: string): RunSnapshot | null {
     total: stages.length,
     ceilingUsd: run.budget.ceiling_usd,
     spentUsd: run.budget.spent_usd,
+    openCount: open.length,
     source: "run-store",
   };
 }
 
 function fromTolerantRead(root: string): RunSnapshot | null {
-  const view = newestActiveRun(root);
-  if (view === null) return null;
+  const open = openRunViews(root);
+  const view = open[0];
+  if (view === undefined) return null;
   const stage = cursorStage(view);
   const stages = view.phases.flatMap((phase) => phase.stages);
   const budget = readBudgetMirror(view.dir);
@@ -98,6 +105,7 @@ function fromTolerantRead(root: string): RunSnapshot | null {
     total: stages.length,
     ceilingUsd: budget.ceiling_usd,
     spentUsd: budget.spent_usd,
+    openCount: open.length,
     source: "tolerant",
   };
 }

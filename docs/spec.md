@@ -851,27 +851,101 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx install --claude [--project\|--user] [--skill-only] [--no-hooks] [--no-statusline] [--force-statusline] [--uninstall] [--dry-run]` | `plugin/skills/tldrx/SKILL.md`, the target `.claude/settings.json` | `.claude/skills/tldrx/SKILL.md` (marked `<!-- tldrx-managed -->`), `.claude/settings.json` (the §4 hooks as `tldrx hook <name>` + `statusLine`), `settings.json.bak-tldrx-<ts>` | 0,1 |
 | `tldrx run new [--from <path>\|--seed <path>] [--scope <s>] [--budget <usd>]` | `workflows/<s>.yml`, `workspace.yml`, `facts.yml`, the `--from` source (§6) or the `--seed` documents (§6.1) | `tldrx-work/<run>/{run.yml,budget.yml,events.jsonl,01-what/*}`; `--seed` also writes `01-what/seed-index.md` and declares the documents as What inputs | 0,1 |
 | `tldrx run status [<run>]` | `run.yml`, `events.jsonl` | nothing (stdout) | 0,3 |
-| `tldrx next [<run>] [--dry-run]` | `run.yml`, `stage.yml`, `stage.md`, `expert.md`, declared inputs | stage outputs, `run.yml`, `events.jsonl` | 0,2,4,5 |
-| `tldrx answer <Qid> <text>` | `questions.md`, `facts.yml` | `questions.md`, `facts.yml`, `events.jsonl` | 0,1,3 |
-| `tldrx interview [--run <id>\|--init] [--yes-to-defaults]` | the cursor phase's `questions.md` (or `.tldrx/init-questions.md`), `run.yml`, `.tldrx/process.yml`, `workspace.yml`, `git remote get-url origin` | the same three files `answer` writes, one per answer recorded; with `--init`, also `.tldrx/process.yml` (§2.12) when a process answer settles `methodology` or `ticket_tool.kind` | 0,1,3 |
-| `tldrx approve [<run>] [--note]` | `run.yml`, stage outputs, stage checks | `run.yml` gate, `events.jsonl` | 0,2,3 |
-| `tldrx reject [<run>] --note <text>` | `run.yml` | `run.yml` gate, `events.jsonl`, stage status ⇒ `ready` | 0,3 |
-| `tldrx budget show [<run>] [--run <id>] [--json]` | `run.yml`, `budget.yml` | nothing (stdout) | 0,1,3 |
-| `tldrx budget raise <phase> <usd> [--run <id>] [--take-from <phase>]` | `run.yml`, `budget.yml` | `budget.yml` ceilings, `run.yml` ceiling mirror | 0,1,3 |
+| `tldrx next [<run>] [--dry-run]` | `run.yml`, `stage.yml`, `stage.md`, `expert.md`, declared inputs | stage outputs, `run.yml`, `events.jsonl` | 0,2,3,4,5 |
+| `tldrx answer <Qid> <text> [--run <id>]` | `questions.md`, `facts.yml` | `questions.md`, `facts.yml`, `events.jsonl` | 0,1,2,3 |
+| `tldrx interview [--run <id>\|--init] [--yes-to-defaults]` | the cursor phase's `questions.md` (or `.tldrx/init-questions.md`), `run.yml`, `.tldrx/process.yml`, `workspace.yml`, `git remote get-url origin` | the same three files `answer` writes, one per answer recorded; with `--init`, also `.tldrx/process.yml` (§2.12) when a process answer settles `methodology` or `ticket_tool.kind` | 0,1,2,3 |
+| `tldrx approve [--run <id>] [--note]` | `run.yml`, stage outputs, stage checks | `run.yml` gate, `events.jsonl` | 0,2,3 |
+| `tldrx reject [--run <id>] --note <text>` | `run.yml` | `run.yml` gate, `events.jsonl`, stage status ⇒ `ready` | 0,2,3 |
+| `tldrx budget show [<run>] [--run <id>] [--json]` | `run.yml`, `budget.yml` | nothing (stdout) | 0,1,2,3 |
+| `tldrx budget raise <phase> <usd> [--run <id>] [--take-from <phase>]` | `run.yml`, `budget.yml` | `budget.yml` ceilings, `run.yml` ceiling mirror | 0,1,2,3 |
 | `tldrx map --refresh` | `workspace.yml`, repos, `graphify-out/` | `map/**`, `graphify-out/`, `events.jsonl` | 0,1 |
 | `tldrx map --check` | `map/**` citations, filesystem | `cache/map-drift.json` (stdout report) | 0,1 |
 | `tldrx expert list` | `experts/*/competencies.yml` | nothing (stdout star chart) | 0 |
 | `tldrx expert create <name>` | `workspace.yml`, `map/**` | `experts/<name>/{expert.md,competencies.yml}` | 0,1 |
 | `tldrx expert train <name> --area <a> [--mode light\|full] [--max-usd <n>] [--model <m>] [--prepare\|--commit] [--print-prompt]` | `expert.md`, `competencies.yml`, `map/<repo>/domains.md`, `graphify-out/<repo>/graph.json`, repo code, `tldrx-work/**/{handoff,retro}.md`, `facts.yml` | `knowledge/<area>.md` (+ `knowledge/from-runs-<area>.md` in full mode), `competencies.yml`, `training.jsonl` (§2.6.1) | 0,1,2,3,5 |
 | `tldrx dashboard [--static]` | `tldrx-work/**`, `.tldrx/**` (watch) | nothing, or `dist/` with `--static` | 0,1 |
-| `tldrx watch list [--run <id>]` | `05-watch/watchers/*.md`, `workspace.yml` | nothing (stdout table) | 0,1,3 |
-| `tldrx watch check <feature>` | one card, the files it cites | nothing (stdout report) | 0,1,3 |
-| `tldrx tickets sync [--run <id>] [--dry-run] [--provider github\|jira]` | `process.yml`, `run.yml`, `03-plan/{epics,stories}/*.md` | `external:` + `external_status:` in those files, `events.jsonl` (`ticket.synced`), the remote issues | 0,1,3 |
-| `tldrx tickets status [--run <id>]` | the same files | nothing (stdout table) | 0,1,3 |
-| `tldrx replay <run>` | `events.jsonl`, handoffs | nothing (stdout narrative) | 0,3 |
-| `tldrx retro <run>` | `run.yml`, `events.jsonl`, handoffs | `retro.md`, `stages/proposed/**`, `practices.md` proposals | 0,3 |
+| `tldrx watch list [--run <id>]` | `05-watch/watchers/*.md`, `workspace.yml` | nothing (stdout table) | 0,1,2,3 |
+| `tldrx watch check <feature> [--run <id>]` | one card, the files it cites | nothing (stdout report) | 0,1,2,3 |
+| `tldrx tickets sync [--run <id>] [--dry-run] [--provider github\|jira]` | `process.yml`, `run.yml`, `03-plan/{epics,stories}/*.md` | `external:` + `external_status:` in those files, `events.jsonl` (`ticket.synced`), the remote issues | 0,1,2,3 |
+| `tldrx tickets status [--run <id>]` | `process.yml` **first**, then the same files | nothing (stdout table) | 0,1,2,3 |
+| `tldrx replay [<run>]` | `events.jsonl`, handoffs | nothing (stdout narrative) | 0,1,2,3 |
+| `tldrx retro [<run>] [--apply]` | `run.yml`, `events.jsonl`, handoffs | `retro.md`, `stages/proposed/**`, `practices.md` proposals | 0,1,2,3 |
 | `tldrx hook <name>` | stdin (the hook payload) | whatever the hook writes — stdout, stderr and the exit code are the script's, unchanged | the script's |
 | `tldrx statusline` | stdin (the statusLine payload) | one line on stdout | 0 |
+
+### 3.1 Several runs open at once
+
+`tldrx run new` allows a second open run on purpose — each carries its own
+`budget.yml`, `events.jsonl` and epic branch, and parking one piece of work to
+start another is a normal week. What is not allowed any more is **guessing which
+one a command meant**. A run is "open" when its status is neither `done` nor
+`cancelled`; a `failed` run is open, because it is exactly the one about to be
+retried or rejected.
+
+Resolution, for every command in the table above:
+
+| Situation | What happens |
+|---|---|
+| an explicit `<run>` / `--run <id>` | that run, always — never ambiguous |
+| exactly one open run, no id | that run — unchanged from before |
+| no open run, no id | `no non-terminal run in tldrx-work/`, exit `3` — unchanged |
+| several open runs, no id | **refused, exit `2`**, every candidate named |
+
+The refusal is one shape, on stderr, for every command:
+
+```
+tldrx approve: 2 runs are open — pass one:
+  260829-beta   awaiting_gate  02-how/contracts  gate
+  260829-alpha  pending        01-what/what      ready
+```
+
+`  <id>  <status>  <phase/stage cursor>  <waiting kind>`, newest first, columns
+padded to the widest value. Nothing is read, written or advanced on that path —
+in particular `tldrx next` refuses **before** it spawns anything.
+
+Two commands are deliberately exempt:
+
+- **`tldrx run status`** with no id and several open prints a table of them all
+  and exits `0`. It is the screen you read to find the id every other command
+  wants, so refusing there would be a locked door with the key behind it.
+- **`tldrx dashboard`** already renders every run in the workspace, so ambiguity
+  is not a question it can be asked.
+
+`tldrx run new` still creates the run and adds one stderr line:
+
+```
+note: 2 other run(s) open — pass a run id to next/answer/approve/… from now on
+```
+
+#### `run status` output shapes
+
+With **one** open run (or an explicit id), both the table and `--json` are
+exactly what they have always been — `--json` is one top-level `RunStatusView`
+object with the keys `run, title, scope, workflow, repos, status, cursor,
+phases, budget, attempts, build, waiting`.
+
+With **several** open and no id:
+
+```
+2 runs are open — `tldrx run status <id>` for one of them
+
+RUN           STATUS         CURSOR            WAITING  SPENT/CEILING
+260829-beta   awaiting_gate  02-how/contracts  gate     $3.75 / $25.00
+260829-alpha  pending        01-what/what      ready    $0.00 / $25.00
+
+Every command that changes a run needs one of these ids: `tldrx next <id>`, …
+```
+
+and `--json` wraps the same per-run objects, unchanged, in one key:
+
+```json
+{ "runs": [ { "run": "260829-beta", "…": "…" }, { "run": "260829-alpha", "…": "…" } ] }
+```
+
+A consumer that reads a single run's JSON (`waiting.kind`, `waiting.questions`)
+therefore keeps working untouched as long as it passes a run id, and can detect
+the multi-run answer by the absence of a top-level `run`.
+
 
 ## 4. Hooks (Claude Code)
 
@@ -894,7 +968,7 @@ disk). All but `DoD-gate` finish in <50 ms.
 | `answer-capture` | PostToolUse + FileChanged | `tldrx-work/**/questions.md` | Find blocks with `status: open` and a non-empty `[Answer]:` capture | Never blocks; writes footer + `facts.yml` + `question.answered`; echoes one line to stdout as context |
 | `DoD-gate` | PreToolUse (`Write\|Edit`) | would-be content of `tldrx-work/**/stories/*.md` sets `status: done` | Re-run every command in the story's fenced ```dod block, in its repo, with `stage.yml timeout_s`; all must exit 0 | Denies if any command fails or the block is missing (this hook is not <50 ms by design) |
 | `budget-gate` | PreToolUse (`Bash`) | `tool_input.command` matching `^(claude -p|tldrx next)` | `spent + estimate > phase ceiling` (or run ceiling) and `on_exceed: block` | Denies the spawn; appends `budget.blocked` |
-| `session-start-status` | SessionStart | always | Read the newest non-terminal `run.yml` | Never blocks; injects a 3-line "where we are" via `additionalContext` |
+| `session-start-status` | SessionStart | always | Read the newest non-terminal `run.yml`; when several are open, list them all first | Never blocks; injects a 3-line "where we are" via `additionalContext` |
 | `statusline` | statusLine | always | Render from the statusLine JSON + `run.yml` | Output only |
 
 Exact block messages (`permissionDecisionReason`, verbatim):
@@ -926,6 +1000,13 @@ Statusline renderer uses `model.display_name`, `cost.total_cost_usd`, `context_w
 `worktree.branch`, `session_id` from the statusLine JSON (Appendix A) plus `run`, `cursor`, phase progress and
 `budget.ceiling_usd` from `run.yml`, and prints:
 `[tldrx] 260828-leaderboard · 02-HOW [▓▓░░░] 2/5 > contracts — architect | Sonnet ctx:16% $3.75/$25`
+
+With several runs open (§3.1) the status line still shows ONE run — the newest open one — with a marker for the
+others: `[tldrx] 260828-leaderboard (+1 open) · 02-HOW …`. No hook refuses on ambiguity. `claim-sources`,
+`no-re-ask` and `DoD-gate` resolve the run from `tool_input.file_path` and are unaffected by construction;
+`budget-gate` judges a Bash command with no file to go on, so it keeps its order — `--run <id>` in the command,
+then the run the `cwd` sits inside, then the newest open run — because a gate that stopped gating the moment a
+second run existed would be worse than one that picks.
 
 ## 5. Facilitator algorithm (`tldrx next`)
 

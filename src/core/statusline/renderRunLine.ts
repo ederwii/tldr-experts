@@ -22,11 +22,22 @@ export function renderRunLine(host: StatusLineHost, snapshot: RunSnapshot): stri
   const stage = snapshot.stage === "" ? "?" : snapshot.stage;
   const expert = snapshot.expert === null || snapshot.expert === "" ? "" : ` — ${snapshot.expert}`;
   return (
-    `[tldrx] ${snapshot.run} · ${phase} [${bar(snapshot.done, snapshot.total)}] ` +
+    `[tldrx] ${snapshot.run}${alsoOpen(snapshot.openCount)} · ${phase} [${bar(snapshot.done, snapshot.total)}] ` +
     `${String(snapshot.done)}/${String(snapshot.total)} > ${stage}${expert} | ` +
     `${host.modelName} ctx:${String(Math.floor(host.usedPercentage))}% ` +
     `${money(host.totalCostUsd)}/${money(snapshot.ceilingUsd)}`
   );
+}
+
+/**
+ * ` (+2 open)` when other runs are open, nothing when this is the only one.
+ *
+ * The line shows ONE run because it is one line; the marker is what stops that
+ * from reading as "there is one run". The number counts the OTHERS, so it lines
+ * up with the `run new` notice and with what `tldrx run status` would list.
+ */
+function alsoOpen(openCount: number): string {
+  return openCount > 1 ? ` (+${String(openCount - 1)} open)` : "";
 }
 
 /** `$25` not `$25.00`; `$3.75` stays `$3.75`. A status line is read, not audited. */

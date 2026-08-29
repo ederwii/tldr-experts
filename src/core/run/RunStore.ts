@@ -22,6 +22,19 @@ import {
 
 export class RunStoreError extends Error {}
 
+/**
+ * What `RunStore.resolve()` found: one run, no run at all, or several open runs
+ * and no way to tell which was meant.
+ *
+ * A discriminated union rather than a throw, because `ambiguous` is not an error
+ * at this layer — the status screen renders all of them, the statusline picks the
+ * newest, and only the mutating commands refuse.
+ */
+export type RunResolution =
+  | { readonly kind: "one"; readonly store: RunStore }
+  | { readonly kind: "none" }
+  | { readonly kind: "ambiguous"; readonly open: readonly RunStore[] };
+
 export interface CursorEntry {
   readonly phase: RunPhase;
   readonly stage: RunStage;
@@ -62,33 +75,68 @@ export class RunStore {
   }
 
   /**
-   * Resolve a run by id, or the newest unfinished one when no id is given
-   * (spec §3: `run status [<run>]`). Returns null when nothing matches.
+   * Resolve a run BY ID. Returns null when no such run dir exists; throws when the
+   * run exists but does not parse, because an explicitly named broken run is a
+   * thing the operator has to be told about, not skipped.
    *
-   * "Unfinished" is `done`/`cancelled`, not `isTerminal`: a run whose stage failed
-   * is exactly the run the operator is about to retry or reject, so skipping it
-   * would make `tldrx next` answer "no non-terminal run" to the one person who
-   * needs it.
+   * The id is required. There is no "and otherwise guess" branch here on purpose:
+   * with two runs open, guessing silently retargeted every later command at
+   * whichever run was touched last. `resolve()` is the no-id door, and it can say
+   * "ambiguous" out loud.
    */
-  static find(root: string, runId?: string): RunStore | null {
-    const dirs = listRunDirs(root);
-    if (runId !== undefined && runId !== "") {
-      const dir = dirs.find((d) => basename(d) === runId);
-      if (dir === undefined) return null;
-      return RunStore.open(dir);
-    }
-    let newest: RunStore | null = null;
-    for (const dir of dirs) {
+  static find(root: string, runId: string): RunStore | null {
+    const dir = listRunDirs(root).find((d) => basename(d) === runId);
+    if (dir === undefined) return null;
+    return RunStore.open(dir);
+  }
+
+  /**
+   * Every OPEN run under `root`, newest first.
+   *
+   * "Open" is "not `done` and not `cancelled`", not `isTerminal`: a run whose
+   * stage failed is exactly the run the operator is about to retry or reject, so
+   * skipping it would make `tldrx next` answer "no non-terminal run" to the one
+   * person who needs it.
+   *
+   * Order is `updated_at` descending. `listRunDirs` already yields the newest
+   * folder name first and `Array.prototype.sort` is stable, so runs that share a
+   * timestamp (it is second-precision) settle by folder name, which is
+   * date-prefixed by construction (spec §2.2). A run that does not parse is
+   * skipped — it cannot be acted on, and it must not hide the ones that can.
+   */
+  static findOpen(root: string): readonly RunStore[] {
+    const open: RunStore[] = [];
+    for (const dir of listRunDirs(root)) {
       let store: RunStore;
       try {
         store = RunStore.open(dir);
       } catch {
-        continue; // a run we cannot parse is not the newest live run
+        continue;
       }
       if (isFinished(store.run.status)) continue;
-      if (newest === null || store.run.updated_at > newest.run.updated_at) newest = store;
+      open.push(store);
     }
-    return newest;
+    return open.sort((a, b) => compareDesc(a.run.updated_at, b.run.updated_at));
+  }
+
+  /**
+   * The one resolution every command goes through (spec §3).
+   *
+   * With an id: that run, or `none`. Without one: the single open run when there
+   * IS exactly one, `none` when there are zero, and `ambiguous` — carrying every
+   * candidate — when there are several. The caller decides what ambiguity means
+   * for it; what it may not do any more is pick.
+   */
+  static resolve(root: string, runId?: string): RunResolution {
+    if (runId !== undefined && runId !== "") {
+      const store = RunStore.find(root, runId);
+      return store === null ? { kind: "none" } : { kind: "one", store };
+    }
+    const open = RunStore.findOpen(root);
+    const only = open[0];
+    if (only === undefined) return { kind: "none" };
+    if (open.length === 1) return { kind: "one", store: only };
+    return { kind: "ambiguous", open };
   }
 
   get run(): RunFile {
@@ -194,6 +242,12 @@ export function rollUpBudget(budget: RunBudget, run: RunFile): RunBudget {
     ...budget,
     phases: budget.phases.map((p) => ({ ...p, spent_usd: spentByPhase.get(p.id) ?? p.spent_usd })),
   };
+}
+
+/** Newest first, with ties left to the caller's (stable) input order. */
+function compareDesc(a: string, b: string): number {
+  if (a > b) return -1;
+  return a < b ? 1 : 0;
 }
 
 function round(n: number): number {

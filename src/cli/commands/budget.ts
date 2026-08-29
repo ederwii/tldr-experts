@@ -9,14 +9,13 @@
  * Neither subcommand runs an agent, and neither advances the run.
  */
 import type { Command } from "../Command.ts";
-import { EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
+import { EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
 import { boolFlag, parseArgs, stringFlag, UsageError } from "../argv.ts";
 import { workspaceRootFrom } from "../workspace.ts";
 import { fail } from "../report.ts";
-import { RunStore } from "../../core/run/RunStore.ts";
+import { isResolved, resolveRunOrExplain, type RunOrExit } from "../resolveRun.ts";
 import { buildBudgetView, renderBudget } from "../../core/budget/budgetView.ts";
 import { describeRaise, raiseBudget } from "../../core/budget/raiseBudget.ts";
-import { PROJECT_WORK_DIR } from "../../core/paths.ts";
 
 const VALUE_FLAGS = ["run", "root", "take-from"];
 
@@ -45,8 +44,9 @@ export const budgetCommand: Command = {
 function budgetShow(argv: readonly string[]): number {
   try {
     const args = parseArgs(argv, VALUE_FLAGS);
-    const store = openRun(args.positionals[0] ?? stringFlag(args, "run"), workspaceRootFrom(args));
-    if (store === null) return EXIT_NOT_FOUND;
+    const resolved = openRun(args.positionals[0] ?? stringFlag(args, "run"), workspaceRootFrom(args));
+    if (!isResolved(resolved)) return resolved.exit;
+    const store = resolved.store;
 
     const view = buildBudgetView(store.run, store.budget);
     process.stdout.write(
@@ -70,8 +70,9 @@ function budgetRaise(argv: readonly string[]): number {
     if (!Number.isFinite(amountUsd)) {
       throw new UsageError(`the amount must be a number of dollars, got '${amountText}'`);
     }
-    const store = openRun(stringFlag(args, "run"), workspaceRootFrom(args));
-    if (store === null) return EXIT_NOT_FOUND;
+    const resolved = openRun(stringFlag(args, "run"), workspaceRootFrom(args));
+    if (!isResolved(resolved)) return resolved.exit;
+    const store = resolved.store;
 
     const outcome = raiseBudget(store.budget, {
       phaseId,
@@ -96,13 +97,7 @@ function budgetRaise(argv: readonly string[]): number {
   }
 }
 
-function openRun(wanted: string | undefined, root: string): RunStore | null {
-  const store = RunStore.find(root, wanted);
-  if (store !== null) return store;
-  process.stderr.write(
-    wanted === undefined
-      ? `tldrx budget: no non-terminal run in ${PROJECT_WORK_DIR}/\n`
-      : `tldrx budget: no run '${wanted}' in ${PROJECT_WORK_DIR}/\n`,
-  );
-  return null;
+/** The store, or the exit code to return — 3 for no run, 2 when several are open. */
+function openRun(wanted: string | undefined, root: string): RunOrExit {
+  return resolveRunOrExplain("tldrx budget", root, wanted);
 }

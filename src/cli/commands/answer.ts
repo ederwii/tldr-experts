@@ -14,6 +14,7 @@ import { parseArgs, stringFlag, UsageError } from "../argv.ts";
 import { workspaceRootFrom } from "../workspace.ts";
 import { fail } from "../report.ts";
 import { RunStore } from "../../core/run/RunStore.ts";
+import { isResolved, resolveRunOrExplain } from "../resolveRun.ts";
 import { captureAnswers, writeAnswerSlot } from "../../core/answers/captureAnswers.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
 import { parseQuestions } from "../../core/text/questions.ts";
@@ -39,13 +40,9 @@ export const answerCommand: Command = {
 
       const root = workspaceRootFrom(args);
       const wanted = stringFlag(args, "run");
-      const store = RunStore.find(root, wanted);
-      if (store === null) {
-        process.stderr.write(
-          `tldrx answer: ${wanted === undefined ? "no non-terminal run" : `no run '${wanted}'`} in tldrx-work/\n`,
-        );
-        return EXIT_NOT_FOUND;
-      }
+      const resolved = resolveRunOrExplain("tldrx answer", root, wanted);
+      if (!isResolved(resolved)) return resolved.exit;
+      const store = resolved.store;
 
       const path = locateQuestion(store, qid);
       if (path === null) {

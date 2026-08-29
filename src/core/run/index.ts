@@ -1,5 +1,7 @@
 export { RunStore, RunStoreError, rollUp, rollUpBudget } from "./RunStore.ts";
-export type { CursorEntry } from "./RunStore.ts";
+export type { CursorEntry, RunResolution } from "./RunStore.ts";
+export { openRunRow, openRunRows, ambiguousRunLines, renderOpenRuns } from "./openRuns.ts";
+export type { OpenRunRow } from "./openRuns.ts";
 export {
   validateRunFile, asRunFile, flatten, stageAt, isTerminal, deriveRunStatus, derivePhaseStatus,
   STAGE_STATUSES, TERMINAL_STATUSES, GATE_TYPES, GATE_STATUSES, RUN_ID_RE, PHASE_ID_RE,
@@ -13,7 +15,7 @@ export type { NewRunOptions, NewRunOutcome } from "./newRun.ts";
 export { buildStatus, renderStatus, whatIsWaiting, bar } from "./runStatus.ts";
 export { stageAttempts, renderAttempts } from "./attempts.ts";
 export type { StageAttempts } from "./attempts.ts";
-export type { RunStatusView, PhaseProgress, Waiting } from "./runStatus.ts";
+export type { RunStatusView, PhaseProgress, Waiting, WaitingKind } from "./runStatus.ts";
 export { approve, reject, GateError } from "./gates.ts";
 export type { ApproveOutcome, RejectOutcome, GateContext } from "./gates.ts";
 export { runChecks, runCheck, WRITE_TIME_ONLY } from "./checks.ts";

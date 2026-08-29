@@ -7,11 +7,12 @@
  * run closes, when the code the card points at has moved.
  */
 import type { Command } from "../Command.ts";
-import { EXIT_FAILED, EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
+import { EXIT_FAILED, EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
 import { parseArgs, stringFlag, UsageError, type ParsedArgs } from "../argv.ts";
 import { workspaceRootFrom } from "../workspace.ts";
 import { fail } from "../report.ts";
 import { RunStore } from "../../core/run/RunStore.ts";
+import { notFound, renderAmbiguous } from "../resolveRun.ts";
 import { listRunDirs, loadWorkspace, toSrcContext } from "../../hooks/lib/workspace.ts";
 import { checkCard, loadCards, renderWatchList, type LoadedCard } from "../../core/watch/index.ts";
 import { PROJECT_WORK_DIR } from "../../core/paths.ts";
@@ -47,7 +48,7 @@ export const watchCommand: Command = {
 function list(args: ParsedArgs, rest: readonly string[]): number {
   if (rest.length > 0) throw new UsageError(`watch list takes no positional argument, got '${rest[0] ?? ""}'`);
   const loaded = open(args);
-  if (loaded === null) return EXIT_NOT_FOUND;
+  if ("exit" in loaded) return loaded.exit;
   process.stdout.write(renderWatchList(loaded.runId, loaded.cards));
   return EXIT_OK;
 }
@@ -60,7 +61,7 @@ function check(args: ParsedArgs, rest: readonly string[]): number {
   const feature = rest[0];
   if (feature === undefined) throw new UsageError("watch check needs a feature id — `tldrx watch check <feature>`");
   const loaded = open(args);
-  if (loaded === null) return EXIT_NOT_FOUND;
+  if ("exit" in loaded) return loaded.exit;
 
   const card = loaded.cards.find((c) => c.id === feature);
   if (card === undefined) {
@@ -81,21 +82,26 @@ interface OpenedRun {
   readonly cards: readonly LoadedCard[];
 }
 
+/** The cards to render, or the exit code the subcommand must return. */
+type OpenedOrExit = OpenedRun | { readonly exit: number };
+
 /** The named run, or the newest unfinished one — the same resolution `next` uses. */
-function open(args: ParsedArgs): OpenedRun | null {
+function open(args: ParsedArgs): OpenedOrExit {
   const root = workspaceRootFrom(args);
   const runId = stringFlag(args, "run");
   // A run whose Watch stage produced cards is usually FINISHED, so falling back to
   // the newest unfinished run would answer "no run" to the one person reading
-  // watchers. Named run first, then newest unfinished, then newest run of any status.
-  const store = RunStore.find(root, runId) ?? (runId === undefined ? newest(root) : null);
+  // watchers. Named run first, then THE open run, then newest run of any status.
+  // Several open runs and no `--run` is a refusal, not a guess.
+  const resolution = RunStore.resolve(root, runId);
+  if (resolution.kind === "ambiguous") {
+    process.stderr.write(renderAmbiguous("tldrx watch", resolution.open));
+    return { exit: EXIT_GATE_REFUSED };
+  }
+  const store = resolution.kind === "one" ? resolution.store : runId === undefined ? newest(root) : null;
   if (store === null) {
-    process.stderr.write(
-      runId === undefined
-        ? `tldrx watch: no non-terminal run in ${PROJECT_WORK_DIR}/\n`
-        : `tldrx watch: no run '${runId}' in ${PROJECT_WORK_DIR}/\n`,
-    );
-    return null;
+    process.stderr.write(`tldrx watch: ${notFound(runId)} in ${PROJECT_WORK_DIR}/\n`);
+    return { exit: EXIT_NOT_FOUND };
   }
   const ctx = toSrcContext(loadWorkspace(root), store.runDir);
   return { runId: store.runId, cards: loadCards(store.runDir, ctx) };

@@ -15,6 +15,7 @@ import { rmSync } from "node:fs";
 import { readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { PROJECT_WORK_DIR } from "../paths.ts";
+import { ambiguousRunLines } from "../run/openRuns.ts";
 import { RunStore } from "../run/RunStore.ts";
 import { isTerminal, type GateType, type RunFile, type RunPhase, type RunStage, type RunTask } from "../run/RunFile.ts";
 import { runChecks } from "../run/checks.ts";
@@ -75,14 +76,21 @@ const EXIT_AGENT_FAILED = 5;
 const MAX_CURSOR_STEPS = 64;
 
 export async function runNext(options: NextOptions): Promise<NextOutcome> {
-  const store = RunStore.find(options.root, options.runId);
-  if (store === null) {
+  const resolution = RunStore.resolve(options.root, options.runId);
+  // `next` is the one command that spends money, so it is the one that must never
+  // guess. The lines come back unprefixed; `src/cli/commands/next.ts` puts
+  // `tldrx next: ` on the first and two spaces on the rest.
+  if (resolution.kind === "ambiguous") {
+    return out(EXIT_REFUSED, [...ambiguousRunLines(resolution.open)]);
+  }
+  if (resolution.kind === "none") {
     return out(EXIT_NOT_FOUND, [
       options.runId === undefined
         ? `no non-terminal run in ${PROJECT_WORK_DIR}/`
         : `no run '${options.runId}' in ${PROJECT_WORK_DIR}/`,
     ]);
   }
+  const store = resolution.store;
 
   const lock = acquireLock(store.runDir, options.at);
   if (!lock.ok) {
