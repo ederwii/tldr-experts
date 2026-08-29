@@ -76,8 +76,14 @@ export async function approve(store: RunStore, ctx: GateContext): Promise<Approv
     }));
   }
 
+  // `by` duplicates the envelope's `actor` on purpose: a reader of the event
+  // stream asks "who signed this gate", and the answer belongs in the payload it
+  // is reading, not in a field that also means "who ran the process". It is how
+  // `by: auto` is told apart from a person who happens to be called auto — the
+  // facilitator is the only caller that passes the AUTO_GATE_ACTOR.
   store.append(event(ctx.at, store.runId, entry.stage.id, "gate.approved", ctx.actor, {
     phase: entry.phase.id,
+    by: ctx.actor,
     note: ctx.note,
     checks: checks.map((c) => `${c.id}:${c.status}`),
   }));

@@ -19,6 +19,9 @@ import { ambiguousRunLines } from "../run/openRuns.ts";
 import { RunStore } from "../run/RunStore.ts";
 import { isTerminal, type GateType, type RunFile, type RunPhase, type RunStage, type RunTask } from "../run/RunFile.ts";
 import { runChecks } from "../run/checks.ts";
+import { approve } from "../run/gates.ts";
+import { AUTO_GATE_ACTOR, evaluateAutoGate } from "../run/autoGate.ts";
+import { gatePolicyFor } from "../run/gatePolicy.ts";
 import { PresetError, type PlannedStage } from "../run/workflowPreset.ts";
 import { remaining } from "../budget/wouldExceed.ts";
 import { raiseCommand, shortBy } from "../budget/budgetView.ts";
@@ -662,11 +665,53 @@ async function finishStage(
       checks: checks.map((c) => `${c.id}:${c.status}`),
     }));
     store.save();
-    return out(EXIT_AWAITING_HUMAN, [
-      ...notes,
-      `${phaseId}/${stageId} done — $${spent.toFixed(2)} of $${stage.budget_usd.toFixed(2)} (${checkSummary})`,
-      `gate pending: tldrx approve`,
-    ]);
+    const doneLine =
+      `${phaseId}/${stageId} done — $${spent.toFixed(2)} of $${stage.budget_usd.toFixed(2)} (${checkSummary})`;
+
+    // The gate is now REQUESTED either way. Who closes it is the policy's call —
+    // and an `auto` policy only closes it when all five §5 conditions hold.
+    if (gatePolicyFor(store.run.gates_policy, stageId) === "auto") {
+      const verdict = await evaluateAutoGate({
+        root: options.root,
+        runDir: store.runDir,
+        phaseId,
+        stage: requireStage(store, phaseId, stageId),
+        planned: spec.planned,
+        budget: store.budget,
+        checks,
+      });
+      let why = verdict.why;
+      if (verdict.ok) {
+        // Through the SAME door a person uses: `approve` re-runs the checks off
+        // disk, records `by`/`at`/`note`, appends gate.approved + stage.done and
+        // advances the cursor. A refusal there is a refusal here.
+        const approved = await approve(store, {
+          root: options.root,
+          actor: AUTO_GATE_ACTOR,
+          at: nowish(options),
+          note: verdict.note,
+        });
+        if (approved.ok) {
+          return out(EXIT_OK, [
+            ...notes,
+            `${doneLine} · auto-approved`,
+            `  ${verdict.note}`,
+            approved.advancedTo === null
+              ? `run ${store.runId} is finished`
+              : `cursor → ${approved.advancedTo.phase}/${approved.advancedTo.stage} (ready)`,
+          ]);
+        }
+        why = `approve re-ran the checks and \`${approved.failed?.id ?? "unknown"}\` failed: `
+          + `${approved.failed?.detail ?? ""}`;
+      }
+      return out(EXIT_AWAITING_HUMAN, [
+        ...notes,
+        doneLine,
+        `auto gate not taken — ${why}`,
+        `gate pending: tldrx approve`,
+      ]);
+    }
+    return out(EXIT_AWAITING_HUMAN, [...notes, doneLine, `gate pending: tldrx approve`]);
   }
 
   mapStage(store, phaseId, stageId, (s) => ({
