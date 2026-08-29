@@ -22,6 +22,7 @@ import {
   trainingCacheDir, expertRepos, MIN_TRAIN_USD, DEFAULT_TRAIN_USD, DEFAULT_TRAIN_EFFORT, withGutter,
   type TrainOptions,
 } from "../src/core/training/index.ts";
+import { allowedTools } from "../src/core/facilitator/spawnAgent.ts";
 import { FactsStore } from "../src/core/facts/FactsStore.ts";
 import { factsPath } from "../src/hooks/lib/workspace.ts";
 import {
@@ -221,6 +222,174 @@ describe("a knowledge file is accepted or rejected whole", () => {
     expect(merged.levelBefore).toBe(1);
     expect(merged.levelAfter).toBe(competencyLevel(merged.evidence, TRAIN_NOW));
     expect(merged.levelAfter).toBe(2);
+  });
+});
+
+// --- a command that was run is a `run` row -----------------------------------
+
+/**
+ * The gap wave E left: the ladder gates level 4 on a `kind: run` row, and the
+ * light-mode path could not produce one, because `codeEvidence` mapped `file`,
+ * `doc` and `fact` and silently dropped every `cmd` ref. `--mode light` was
+ * therefore capped at 3 by construction, whatever the sub-agent measured.
+ *
+ * The fixture workspace declares `build: "true"` and `test: "true"`, so `true` is
+ * the only command a `cmd` src may name here — which is the point of the last
+ * test in this block.
+ */
+describe("a cited command becomes evidence that something was executed", () => {
+  test("`$ cmd → exit n` produces a `kind: run` row carrying the command and the exit code", () => {
+    const ws = workspace();
+    const ctx = toSrcContext(loadWorkspace(ws.root), null);
+    const parsed = parseKnowledgeFile(
+      knowledgeMd({ extraItem: "- The suite is green on this [src: $ true → exit 0]" }), ctx, LIGHT_SHAPE);
+    expect(parsed.ok).toBe(true);
+
+    const evidence = codeEvidence(parsed.refs, "2026-09-01");
+    expect(evidence).toContainEqual({ kind: "run", src: "$ true → exit 0", at: "2026-09-01" });
+  });
+
+  test("that row is what lifts a light run past the §2.6 run cap of 3", () => {
+    const ws = workspace();
+    const ctx = toSrcContext(loadWorkspace(ws.root), null);
+    const reading = parseKnowledgeFile(knowledgeMd(), ctx, LIGHT_SHAPE);
+    // Reading alone: two files, W = 2.0 -> thresholds say 2, and the run cap is
+    // not even reached. The cap bites once enough files are read to pass 6.
+    expect(codeEvidence(reading.refs, "2026-09-01").some((row) => row.kind === "run")).toBe(false);
+
+    const measured = parseKnowledgeFile(
+      knowledgeMd({ extraItem: "- The suite is green on this [src: $ true → exit 0]" }), ctx, LIGHT_SHAPE);
+    const rows = [
+      ...codeEvidence(measured.refs, "2026-09-01"),
+      // Six more files read, so the weight sum clears the level-4 threshold and
+      // only the run cap is left deciding.
+      ...Array.from({ length: 6 }, (_, i) => (
+        { kind: "code" as const, src: `api:src/f${String(i)}.ts:1`, at: "2026-09-01" }
+      )),
+    ];
+    expect(competencyLevel(rows, TRAIN_NOW)).toBe(4);
+    expect(competencyLevel(rows.filter((row) => row.kind !== "run"), TRAIN_NOW)).toBe(3);
+  });
+
+  test("one row per distinct command+exit — the same command twice is one row", () => {
+    const ws = workspace();
+    const ctx = toSrcContext(loadWorkspace(ws.root), null);
+    const twice = parseKnowledgeFile(knowledgeMd({
+      extraItem: "- Green here [src: $ true → exit 0]\n- And green here too [src: $ true → exit 0]",
+    }), ctx, LIGHT_SHAPE);
+    expect(codeEvidence(twice.refs, "2026-09-01").filter((row) => row.kind === "run")).toHaveLength(1);
+
+    const twoExits = parseKnowledgeFile(knowledgeMd({
+      extraItem: "- Green [src: $ true → exit 0]\n- Red on the empty code [src: $ true → exit 1]",
+    }), ctx, LIGHT_SHAPE);
+    const runs = codeEvidence(twoExits.refs, "2026-09-01").filter((row) => row.kind === "run");
+    expect(runs.map((row) => row.src).sort()).toEqual(["$ true → exit 0", "$ true → exit 1"]);
+  });
+
+  test("a command workspace.yml does not declare is still rejected, and takes the whole file", () => {
+    const ws = workspace();
+    const ctx = toSrcContext(loadWorkspace(ws.root), null);
+    const parsed = parseKnowledgeFile(
+      knowledgeMd({ extraItem: "- Invented [src: $ npm run invent → exit 0]" }), ctx, LIGHT_SHAPE);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.issues.map((issue) => issue.message).join(" "))
+      .toContain("is not one of workspace.yml's commands");
+  });
+
+  test("end to end: a light run that cites a command writes the `run` row to competencies.yml", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [{
+      [KNOWLEDGE_REL]: knowledgeMd({ extraItem: "- The suite is green on this [src: $ true → exit 0]" }),
+    }]);
+
+    const outcome = await train(ws);
+    expect(outcome.code).toBe(0);
+    const evidence = areaOf(ws, AREA).evidence as { kind: string; src: string; at: string }[];
+    expect(evidence).toContainEqual({ kind: "run", src: "$ true → exit 0", at: "2026-09-01" });
+  });
+});
+
+// --- what the sub-agent is told it may run -----------------------------------
+
+/**
+ * The prompt used to say "do not run anything" while `allowedTools` was already
+ * handing the sub-agent a `Bash(<command>)` for every command in
+ * `workspace.yml`. These tests hold the two halves together: whatever the prompt
+ * says about running is checked against the grant the argv actually carries.
+ */
+describe("the prompt and the tool grant say the same thing", () => {
+  /** A workspace.yml identical to the fixture's, with every command nulled out. */
+  const NO_COMMANDS = `version: 1
+mode: multi-repo
+root_is_repo: true
+detected_at: 2026-08-28T14:02:11Z
+detected_by: "tldrx 0.2.0"
+repos:
+  - name: api
+    path: api
+    default_branch: main
+    stack: [typescript]
+    package_manager: npm
+    commands: {build: null, test: null, lint: null, typecheck: null, run: null}
+    ci: []
+    confidence: high
+`;
+
+  async function promptOf(ws: TrainingWorkspace): Promise<string> {
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_TRAIN_PROMPT_DIR = promptDir;
+    await train(ws);
+    return readFileSync(join(promptDir, "prompt-0.md"), "utf8");
+  }
+
+  test("it names the declared commands, and forbids everything else", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [{ [KNOWLEDGE_REL]: knowledgeMd() }]);
+    const prompt = await promptOf(ws);
+
+    expect(prompt).toContain("You may run ONLY the commands `.tldrx/workspace.yml` declares");
+    expect(prompt).toContain("`true`");
+    expect(prompt).toContain("no installs");
+    expect(prompt).toContain("Do not modify product code");
+    // The old blanket ban is gone: it contradicted the grant and cost every
+    // training run its only route to a `run` row.
+    expect(prompt).not.toContain("do not run anything");
+  });
+
+  test("it says citing the command is the only way to earn a `run` row", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [{ [KNOWLEDGE_REL]: knowledgeMd() }]);
+    const prompt = await promptOf(ws);
+
+    expect(prompt).toContain("[src: $ <cmd> → exit <n>]");
+    expect(prompt).toContain("levels 4 and 5");
+    expect(prompt).toContain("Reading alone stops at level 3.");
+  });
+
+  test("with no declared command it says so, and that level 3 is the honest ceiling", async () => {
+    const ws = workspace({ files: { ".tldrx/workspace.yml": NO_COMMANDS } });
+    fakeClaude(ws, [{ [KNOWLEDGE_REL]: knowledgeMd() }]);
+    const prompt = await promptOf(ws);
+
+    expect(prompt).toContain("**Do not run anything.**");
+    expect(prompt).toContain("declares no command");
+    expect(prompt).toContain("This run cannot go past level 3, and that is correct.");
+    expect(prompt).not.toContain("You may run ONLY");
+  });
+
+  test("the argv grants exactly the base tools plus those commands, and nothing more", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [{ [KNOWLEDGE_REL]: knowledgeMd() }]);
+    const argvLog = join(ws.root, "argv.log");
+    process.env.FAKE_TRAIN_ARGV_LOG = argvLog;
+
+    await train(ws);
+    const argv = JSON.parse(readFileSync(argvLog, "utf8").trim()) as string[];
+    const granted = argv[argv.indexOf("--allowedTools") + 1] ?? "";
+    // Both repos declare `build: "true"` and `test: "true"`, so the flat set is
+    // one command — and the prompt above names that same one.
+    expect(granted).toBe(allowedTools(["true"]).join(","));
+    expect(granted).toBe("Read,Write,Edit,Glob,Grep,Bash(true)");
   });
 });
 

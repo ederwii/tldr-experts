@@ -313,7 +313,7 @@ describe("competency levels (spec §2.6)", () => {
   test("weight and recency drive the level", () => {
     const fresh = [
       { kind: "code" as const, src: "a:x.ts:1", at: at(1) },
-      { kind: "run" as const, src: "tldrx-work/260801-x/04-build/log/S1.md", at: at(1) },
+      { kind: "run" as const, src: "tldrx-work/260801-x/04-build/log/S1.md:4", at: at(1) },
       { kind: "answer" as const, src: "F001", at: at(1) },
     ];
     expect(competencyLevel(fresh, now)).toBe(2);

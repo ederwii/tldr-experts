@@ -314,7 +314,7 @@ areas:
   - {id: ef-core, title: "EF Core mapping and migrations", level: 3,
      train_prompt: "tldrx expert train dotnet-stack --area ef-core --mode light",
      evidence: [{kind: code, src: "api:src/Scavtopia.Infrastructure/Persistence/AppDbContext.cs:41", at: 2026-08-20},
-                {kind: run, src: "tldrx-work/260812-scores/04-build/log/S3.md", at: 2026-08-12},
+                {kind: run, src: "tldrx-work/260812-scores/04-build/log/S3.md:9", at: 2026-08-12},
                 {kind: doc, src: "https://learn.microsoft.com/ef/core/modeling/", at: 2026-06-02},
                 {kind: answer, src: "F019", at: 2026-08-14}]}
 ```
@@ -364,12 +364,23 @@ two distinct sources, so level 2.
 grammar; ≤60 areas, ≤50 evidence items per area. Every area's level is recomputed on **every** write, not only the
 trained one — that is what makes a hand-edited number temporary.
 
-**An unrecognised `kind` is refused out loud.** A row whose `kind` is not one of the five is not counted — but every
-reader that drops one says so, on stderr or as a dashboard warning line, in one shape:
-`warning: <expert>/<area>: N evidence row(s) ignored — unknown kind '<x>' (allowed: code, run, test, doc, answer)`.
-Measured 2026-08-29: an in-session training wrote two `kind: test` rows, both were dropped without a message, and
-`expert list` printed 15 evidence over a file holding 17. A reader that silently discards data makes every count
-downstream of it a claim rather than a measurement.
+**An unrecognised `kind`, or a `src` that does not fit its `kind`, is refused out loud.** Three refusals, one channel —
+stderr or a dashboard warning line, always in the shape `warning: <expert>/<area>: N evidence row(s) ignored — <why>`:
+
+| `<why>` | When |
+|---|---|
+| `unknown kind '<x>' (allowed: code, run, test, doc, answer)` | `kind` is not one of the five |
+| `malformed src '<x>'` | `src` does not parse as a §2.8 `src` at all |
+| `kind '<k>' needs a <form> src` | `src` parses, but as the wrong class for that `kind` |
+
+The classes: `code` ⇒ `file`; `run` ⇒ `cmd`, or a `file` under `tldrx-work/`; `test` ⇒ `file` or `cmd`; `doc` ⇒ `doc`;
+`answer` ⇒ `fact`. Measured 2026-08-29: an in-session training wrote two `kind: test` rows, both were dropped without a
+message, and `expert list` printed 15 evidence over a file holding 17. A reader that silently discards data makes every
+count downstream of it a claim rather than a measurement. And until the `src` classes were checked, `{kind: run, src:
+"the tests pass"}` counted as a run — which, under the run cap above, is the whole difference between level 3 and level
+4. **On the way IN the rule is harder than a warning:** `tldrx expert train` REFUSES to write a row whose `src` does not
+fit its `kind` (exit 1). A reader is judging a file a human may have hand-edited; a writer is judging what the framework
+itself derived, so a bad row there is a bug, not bad input.
 
 **Where evidence comes from.** Only `tldrx expert train` writes it, and it is DERIVED from a knowledge file's
 citations rather than asserted by the sub-agent that wrote them:
@@ -381,6 +392,17 @@ citations rather than asserted by the sub-agent that wrote them:
 | `test` | a knowledge file cites a test that was read or run | `repo:path:line`, or `$ cmd → exit n` for a test run |
 | `answer` | either file cites a recorded fact | `F<n>` |
 | `doc` | the knowledge file cites an `https://` URL | the URL |
+
+**Where a `run` row comes from.** From a command the expert actually executed, cited in its knowledge file as the §2.8
+`cmd` production `$ <cmd> → exit <n>`, and from nothing else that a light run can do. Both training paths reach it: the
+headless/`--commit` path DERIVES the row from the citation when it re-reads the knowledge file off disk, and a session
+driven by `--print-prompt` writes the row by hand, where `tldrx expert recompute` counts it like any other. The command must be one
+`.tldrx/workspace.yml` declares — that is the §2.8 resolver rule for every `cmd` src, not a training-specific one, and
+an undeclared command fails the knowledge file whole. It is also exactly the set the sub-agent is granted as
+`Bash(<command>)` tools and the set its prompt names, so the permission, the instruction and the evidence rule are one
+list. A workspace that declares no command grants no `Bash` at all: no `run` row is reachable there, and the run cap
+holds every area of it at level 3. Full mode additionally mints `run` rows from `from-runs-<area>.md` citations into
+past runs (`tldrx-work/<run>/<file>:<line>`) — decisions that were made while something was actually being built.
 
 `absent:` sources are legal in a knowledge file and produce **no** evidence: "I looked here and there is nothing" is a
 finding, not a measurement. A knowledge file is accepted or rejected **whole** — one unsourced item, or one cited line

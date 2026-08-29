@@ -29,6 +29,13 @@ export interface TrainingPromptInput {
   readonly area: AreaRecord;
   readonly mode: TrainingMode;
   readonly repos: readonly string[];
+  /**
+   * Every command `.tldrx/workspace.yml` declares, verbatim — the SAME list that
+   * becomes the sub-agent's `Bash(<command>)` grants (`spawnAgent.allowedTools`).
+   * The prompt and the tool allowance must be spelled from one list, or the
+   * prompt is describing a permission the process does not actually hold.
+   */
+  readonly commands: readonly string[];
   readonly budgetUsd: number;
 }
 
@@ -73,11 +80,7 @@ export function codePrompt(input: TrainingPromptInput, selection: FileSelection)
     "framework derives both from what you cited. Citing the same file twelve times is worth one",
     "row; reading twelve files is worth twelve.",
     "",
-    "**This run cannot go past level 3, and that is correct.** Since 2026-08-29 the ladder caps",
-    "any area with no `kind: run` row at 3, and reading — which is all this prompt asks of you —",
-    "produces `code`, `doc` and `answer` rows only. Levels 4 and 5 are earned by measuring: a",
-    "command actually executed, or (in full mode) decisions mined from runs that already ran.",
-    "Do not pad the file to chase a number; the number is not reachable from here.",
+    ...ceiling(input),
     "",
     "## Selection",
     "",
@@ -192,12 +195,70 @@ function rules(input: TrainingPromptInput): readonly string[] {
     "- Read only what is inlined above. Nothing else is in scope and nothing else is inlined.",
     "- Never cite a variable name, a docstring or a UI label as evidence of behaviour.",
     "- Say which of *measured* / *inferred* / *assumed* each claim is.",
-    "- Do not modify product code, do not install anything, do not run anything.",
+    "- Do not modify product code, and do not install anything.",
+    ...commandRule(input),
     "",
     "## Conventions",
     "",
     renderConventions(input.root, input.repos),
   ];
+}
+
+/**
+ * What this sub-agent may execute, spelled from the same list that becomes its
+ * `Bash(<command>)` grants.
+ *
+ * The prompt used to read "do not run anything" while `allowedTools` already
+ * handed the sub-agent a `Bash(<command>)` for every command in `workspace.yml`
+ * (`spawnAgent.ts`, `allowedTools`). The instruction and the permission
+ * contradicted each other, and the instruction won — so no training run ever
+ * executed a command, no run ever produced a `kind: run` row, and light mode was
+ * pinned under the §2.6 run cap forever.
+ *
+ * With no declared command there is no `Bash` grant at all, and saying so is the
+ * honest form: the expert cannot earn a `run` row in this workspace, and the
+ * ladder will cap it at 3 whatever it reads.
+ */
+function commandRule(input: TrainingPromptInput): readonly string[] {
+  if (input.commands.length === 0) {
+    return [
+      "- **Do not run anything.** `.tldrx/workspace.yml` declares no command, so you hold no",
+      "  `Bash` tool at all. No `run` evidence is reachable in this workspace, and the §2.6 run",
+      "  cap therefore holds this area at level 3 however much you read. That is the honest",
+      "  ceiling; do not try to work around it.",
+    ];
+  }
+  return [
+    "- **You may run ONLY the commands `.tldrx/workspace.yml` declares**, spelled exactly as",
+    `  written: ${input.commands.map((command) => `\`${command}\``).join(" · ")}.`,
+    "  Nothing else — no installs, no package manager, no ad-hoc shell, no variation on those",
+    "  strings. That list is your entire `Bash` allowance, so anything else fails anyway.",
+    "- **Cite every command you ran** as `` [src: $ <cmd> → exit <n>] ``, with the command",
+    "  spelled as above and the exit code you actually saw (a non-zero exit is evidence too —",
+    "  report it, never re-run until it is green). That token is the ONLY way this expert earns",
+    "  a `kind: run` row, and a `run` row is what spec §2.6 requires for levels 4 and 5.",
+  ];
+}
+
+/** The level this run can honestly reach, which depends on whether it may run anything. */
+function ceiling(input: TrainingPromptInput): readonly string[] {
+  if (input.commands.length === 0) {
+    return [
+      "**This run cannot go past level 3, and that is correct.** Since 2026-08-29 the ladder caps",
+      "any area with no `kind: run` row at 3, and reading — which is all this workspace lets you",
+      "do, since `.tldrx/workspace.yml` declares no command — produces `code`, `doc` and `answer`",
+      "rows only. Do not pad the file to chase a number; the number is not reachable from here.",
+    ];
+  }
+  return [
+    "**Reading alone stops at level 3.** Since 2026-08-29 the ladder caps any area with no",
+    "`kind: run` row at 3, and reading produces `code`, `doc` and `answer` rows only. The one way",
+    "past that cap from here is to RUN one of the workspace commands listed under **Rules** below",
+    "and cite it as `` [src: $ <cmd> → exit <n>] `` — a command that was executed is the",
+    "measurement the cap is asking for, and one of them is worth more than fifty more readings.",
+    "Do not pad the file to chase a number: an unsourced claim is rejected, and a file you have",
+    "already cited is worth nothing the second time.",
+  ]
 }
 
 /** The expert's own body, plus the stack experts of the repos it speaks for. */

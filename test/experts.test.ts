@@ -4,9 +4,10 @@ import { join } from "node:path";
 import { competencyLevel, type CompetencyEvidence, type EvidenceKind } from "../src/core/init/competencyLevel.ts";
 import {
   createExpert, driftWarnings, evidenceNote, evidenceWarnings, loadExpert, loadExperts,
+  checkEvidenceSrc, ignoredRowWarnings,
   readEvidenceRows, readExpertDocument, renderExpertList, renderTrainPrompt, stars, starChartLine,
 } from "../src/core/experts/index.ts";
-import { writeCompetencies } from "../src/core/training/competenciesWrite.ts";
+import { CompetenciesError, writeCompetencies } from "../src/core/training/competenciesWrite.ts";
 import { EXIT_NOT_FOUND } from "../src/cli/exitCodes.ts";
 import { parseYaml } from "../src/core/yaml.ts";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
@@ -170,7 +171,10 @@ describe("the `test` evidence kind", () => {
       { kind: "nope", at: "2026-08-29" },
     ]);
     expect(rows.evidence.map((item) => item.kind)).toEqual(["test", "code"]);
-    expect(rows.ignored).toEqual([{ kind: "bogus", count: 2 }, { kind: "sketch", count: 1 }]);
+    expect(rows.ignored).toEqual([
+      { reason: "unknown-kind", kind: "bogus", src: "", count: 2 },
+      { reason: "unknown-kind", kind: "sketch", src: "", count: 1 },
+    ]);
   });
 
   test("`expert list` counts a test row and reports unknown kinds on stderr", async () => {
@@ -251,6 +255,146 @@ describe("the `test` evidence kind", () => {
       // The `test` row it was handed is real evidence, not another dropped row.
       expect(written.evidenceCount).toBe(1);
       expect(written.levelAfter).toBe(1);
+    } finally {
+      workspace.dispose();
+    }
+  });
+});
+
+// --- an evidence `src` has to be a citation of its own kind -------------------
+
+/**
+ * Before 2026-08-29 nothing validated an evidence `src`: `readEvidenceRows`
+ * rejected an empty string and `competenciesWrite` never looked at one. So
+ * `{kind: run, src: "the tests pass"}` counted as a run — and under the wave-E
+ * ladder that single row is the difference between level 3 and level 4. The
+ * grammar is spec §2.8's, read by the same `classifySrc` the `claim-sources`
+ * hook uses.
+ */
+describe("evidence src validation (spec §2.6/§2.8)", () => {
+  const AT = daysAgo(1);
+  const rowsFor = (kind: string, src: string) => readEvidenceRows([{ kind, src, at: AT }]);
+
+  test("a src that is not a citation at all is dropped, and named", () => {
+    const rows = rowsFor("code", "the auth file");
+    expect(rows.evidence).toEqual([]);
+    expect(ignoredRowWarnings("e", "a", rows.ignored)).toEqual([
+      "warning: e/a: 1 evidence row(s) ignored — malformed src 'the auth file'",
+    ]);
+  });
+
+  test("a `run` row whose src is a file read is a kind/src mismatch, not a run", () => {
+    const rows = rowsFor("run", "api:src/Thing.cs:1");
+    expect(rows.evidence).toEqual([]);
+    expect(ignoredRowWarnings("e", "a", rows.ignored)).toEqual([
+      "warning: e/a: 1 evidence row(s) ignored — kind 'run' needs a "
+      + "'$ <cmd> → exit <n>' or 'tldrx-work/<run>/<file>:<line>' src",
+    ]);
+  });
+
+  test("both refusals travel the same channel as an unknown kind, and tally per complaint", () => {
+    const rows = readEvidenceRows([
+      { kind: "code", src: "api:src/A.cs:1", at: AT },
+      { kind: "hunch", src: "api:src/B.cs:1", at: AT },
+      { kind: "doc", src: "not a url", at: AT },
+      { kind: "doc", src: "not a url", at: AT },
+      { kind: "answer", src: "api:src/C.cs:1", at: AT },
+    ]);
+    expect(rows.evidence.map((row) => row.kind)).toEqual(["code"]);
+    expect(rows.ignored.map((row) => row.reason))
+      .toEqual(["unknown-kind", "malformed-src", "kind-mismatch"]);
+    expect(rows.ignored[1]?.count).toBe(2);
+    expect(ignoredRowWarnings("e", "a", rows.ignored)).toEqual([
+      "warning: e/a: 1 evidence row(s) ignored — unknown kind 'hunch' (allowed: code, run, test, doc, answer)",
+      "warning: e/a: 2 evidence row(s) ignored — malformed src 'not a url'",
+      "warning: e/a: 1 evidence row(s) ignored — kind 'answer' needs a 'F<n>' src",
+    ]);
+  });
+
+  const table: readonly {
+    readonly kind: EvidenceKind;
+    readonly good: readonly string[];
+    readonly bad: readonly string[];
+  }[] = [
+    { kind: "code", good: ["api:src/A.cs:1", "src/A.cs:1-9"], bad: ["$ bun test → exit 0", "F001", "https://x.dev"] },
+    {
+      kind: "run",
+      good: ["$ bun test → exit 0", "$ npm run build → exit 1", "tldrx-work/260820-x/02-how/handoff.md:4"],
+      bad: ["api:src/A.cs:1", "F001", "https://x.dev"],
+    },
+    { kind: "test", good: ["api:tests/A.cs:1", "$ bun test → exit 0"], bad: ["F001", "https://x.dev"] },
+    { kind: "doc", good: ["https://x.dev/a"], bad: ["api:src/A.cs:1", "$ bun test → exit 0", "F001"] },
+    { kind: "answer", good: ["F001", "F00123"], bad: ["api:src/A.cs:1", "Q4", "$ bun test → exit 0"] },
+  ];
+
+  for (const row of table) {
+    test(`kind \`${row.kind}\` accepts only its own src class`, () => {
+      for (const src of row.good) {
+        expect(checkEvidenceSrc(row.kind, src)).toBeNull();
+        expect(rowsFor(row.kind, src).evidence).toHaveLength(1);
+      }
+      for (const src of row.bad) {
+        expect(checkEvidenceSrc(row.kind, src)).not.toBeNull();
+        expect(rowsFor(row.kind, src).evidence).toEqual([]);
+      }
+    });
+  }
+
+  test("a hand-written `run` row that IS a command is accepted, and counts toward the run cap", () => {
+    const hand = [
+      ...evidence("code", 6, 1),
+      { kind: "run" as const, src: "$ bun test → exit 0", at: AT },
+    ];
+    const rows = readEvidenceRows(hand);
+    expect(rows.ignored).toEqual([]);
+    expect(rows.evidence).toHaveLength(7);
+    // The run row is the whole difference: without it the §2.6 run cap holds at 3.
+    expect(competencyLevel(rows.evidence, NOW)).toBe(4);
+    expect(competencyLevel(rows.evidence.filter((r) => r.kind !== "run"), NOW)).toBe(3);
+  });
+
+  test("`expert list` prints the new refusals on stderr, like the old one", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      withEvidence(workspace.root, "lab-ui", "scoreboard-ui", [
+        `{kind: code, src: "lab:src/A.tsx:1", at: ${AT}}`,
+        `{kind: run, src: "lab:src/A.tsx:1", at: ${AT}}`,
+      ]);
+      const run = await tldrx("expert", "list", "--root", workspace.root);
+      expect(run.code).toBe(EXIT_OK);
+      expect(run.stderr).toBe(
+        "warning: lab-ui/scoreboard-ui: 1 evidence row(s) ignored — kind 'run' needs a "
+        + "'$ <cmd> → exit <n>' or 'tldrx-work/<run>/<file>:<line>' src\n",
+      );
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("the WRITE side throws instead of warning — a bad row there is a harness bug", () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      const write = (row: CompetencyEvidence) => (): unknown => writeCompetencies({
+        root: workspace.root,
+        expert: "lab-ui",
+        areaId: "scoreboard-ui",
+        evidence: [row],
+        status: "in-use",
+        lastTrained: "2026-09-01T00:00:00Z",
+        now: NOW,
+      });
+
+      expect(write({ kind: "run", src: "the tests pass", at: AT })).toThrow(CompetenciesError);
+      expect(write({ kind: "run", src: "the tests pass", at: AT }))
+        .toThrow("refusing to write evidence — malformed src 'the tests pass'");
+      expect(write({ kind: "run", src: "lab:src/A.tsx:1", at: AT }))
+        .toThrow("refusing to write evidence — kind 'run' needs a");
+      // …and the file was not touched by any of the three attempts.
+      expect(loadExpert(workspace.root, "lab-ui", NOW).areas[0]?.evidence).toHaveLength(1);
+
+      // The valid row on the same path still writes.
+      const ok = write({ kind: "run", src: "$ bun test → exit 0", at: AT })() as { evidenceCount: number };
+      expect(ok.evidenceCount).toBe(2);
     } finally {
       workspace.dispose();
     }
