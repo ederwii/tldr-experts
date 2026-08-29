@@ -9,7 +9,7 @@
 import { basename } from "node:path";
 import type { Command } from "../Command.ts";
 import { EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
-import { listFlag, numberFlag, parseArgs, stringFlag, UsageError, boolFlag } from "../argv.ts";
+import { listFlag, numberFlag, parseArgs, repeatedFlag, stringFlag, UsageError, boolFlag } from "../argv.ts";
 import { workspaceRootFrom } from "../workspace.ts";
 import { fail } from "../report.ts";
 import { createRun } from "../../core/run/newRun.ts";
@@ -19,6 +19,14 @@ import { openRunRows, renderOpenRuns } from "../../core/run/openRuns.ts";
 import { notFound } from "../resolveRun.ts";
 import { currentActor } from "../../hooks/lib/actor.ts";
 import { PROJECT_WORK_DIR } from "../../core/paths.ts";
+import { loadWorkspace } from "../../hooks/lib/workspace.ts";
+import { estimateTokens, formatTokens, DEFAULT_THRESHOLD_TOKENS } from "../../core/seed/triageInventory.ts";
+
+/**
+ * Spec §6.2: over this many documents a seed is worth triaging even when it is
+ * small, because "50 files" is a shape problem, not a size problem. `[assumption]`
+ */
+const HINT_FILE_COUNT = 10;
 
 const VALUE_FLAGS = ["title", "scope", "budget", "repos", "from", "seed", "run", "root"];
 
@@ -26,7 +34,7 @@ export const runCommand: Command = {
   name: "run",
   summary: "Create or inspect a piece of work",
   usage: "tldrx run new <slug> [--title <t>] [--scope <s>] [--budget <usd>] [--repos a,b]\n" +
-    "                  [--from <aidlc-intent-dir> | --seed <file|dir>] [--root <path>]\n" +
+    "                  [--from <aidlc-intent-dir> | --seed <file|dir> ...] [--root <path>]\n" +
     "       tldrx run status [<run>] [--json] [--root <path>]",
   subcommands: ["new", "status"],
   implemented: true,
@@ -51,6 +59,9 @@ function runNew(argv: readonly string[]): number {
     if (slug === undefined) throw new UsageError("run new needs a slug: `tldrx run new <slug>`");
 
     const root = workspaceRootFrom(args);
+    // `--seed` is repeatable (spec §6.2). One occurrence is the string form and is
+    // byte-for-byte what it always was; several are merged, deduped and re-sorted.
+    const seeds = repeatedFlag(args, "seed");
     const outcome = createRun({
       root,
       slug,
@@ -59,7 +70,7 @@ function runNew(argv: readonly string[]): number {
       budgetUsd: numberFlag(args, "budget"),
       repos: listFlag(args, "repos"),
       from: stringFlag(args, "from"),
-      seed: stringFlag(args, "seed"),
+      seed: seeds.length === 0 ? undefined : seeds.length === 1 ? seeds[0] : seeds,
       actor: currentActor(),
       now: new Date(),
     });
@@ -93,6 +104,12 @@ function runNew(argv: readonly string[]): number {
     lines.push(`next: tldrx run status ${outcome.runId}`);
     process.stdout.write(`${lines.join("\n")}\n`);
 
+    // The seed is bigger than one run should carry: say so, once, on STDERR.
+    // stdout is parsed by the chat bridge and by `--json` consumers downstream,
+    // and a note is not a result. It is a note, not a refusal — a big seed in one
+    // run still works, it is just more expensive than it needs to be.
+    for (const line of seedHint(root, seed, seeds)) process.stderr.write(`${line}\n`);
+
     // Several open runs stay legal — each has its own budget.yml, events.jsonl
     // and epic branch. What is no longer legal is guessing between them, so say
     // so at the moment the second one appears rather than at the first refusal.
@@ -106,6 +123,29 @@ function runNew(argv: readonly string[]): number {
   } catch (error) {
     return fail("run new", error);
   }
+}
+
+/**
+ * The one-line nudge toward `tldrx seed triage` (spec §6.2, F4).
+ *
+ * Two triggers, either alone is enough: over the token threshold (this is a big
+ * document set and one run will pay for all of it at every stage) or over ten
+ * files (this is several pieces of work wearing one folder). Silent otherwise.
+ */
+function seedHint(
+  root: string,
+  seed: { readonly documents: readonly { readonly bytes: number }[]; readonly sources: readonly string[] } | null,
+  seeds: readonly string[],
+): readonly string[] {
+  if (seed === null || seeds.length === 0) return [];
+  const bytes = seed.documents.reduce((sum, document) => sum + document.bytes, 0);
+  const tokens = estimateTokens(bytes);
+  const threshold = loadWorkspace(root).seedTriageThresholdTokens ?? DEFAULT_THRESHOLD_TOKENS;
+  if (tokens <= threshold && seed.documents.length <= HINT_FILE_COUNT) return [];
+  return [
+    `note: seed is ${String(seed.documents.length)} files / ${formatTokens(tokens)} tokens — `
+    + `\`tldrx seed triage ${seed.sources[0] ?? seeds[0] ?? ""}\` can propose a split`,
+  ];
 }
 
 function runStatus(argv: readonly string[]): number {

@@ -19,7 +19,7 @@ export function renderSeedIndex(runId: string, seed: SeedSet, phase: string): st
   const lines = [
     `# Seed documents — ${phase} — run ${runId}`,
     "",
-    `Imported by \`tldrx run new --seed ${seed.source}\`. The documents are NOT copied:`,
+    `Imported by \`tldrx run new ${seed.sources.map((path) => `--seed ${path}`).join(" ")}\`. The documents are NOT copied:`,
     "each row points at the file where the team already keeps it, and every Finding in",
     "`handoff.md` cites it as `[src: <path>:<line>]`.",
     "",

@@ -91,6 +91,22 @@ export interface RunBudgetMirror {
   readonly per_agent_max_usd: number;
 }
 
+/**
+ * Where this run came from, when `tldrx seed apply` created it (spec §6.2).
+ *
+ * Optional and additive: a run created by `run new` has no `triage:` key at all,
+ * every reader that never heard of it is unaffected, and `run status` does not
+ * mention it. It exists so a run can say which split proposed it and which of its
+ * siblings were meant to land first — the one piece of the triage that would
+ * otherwise live only in a file nobody opens again.
+ */
+export interface RunTriage {
+  /** Workspace-relative path of the `split.yml` this run came out of. */
+  readonly split: string;
+  /** Slugs of the sibling runs this one was proposed to follow. */
+  readonly depends_on: readonly string[];
+}
+
 export interface RunFile {
   readonly version: number;
   readonly run: string;
@@ -103,6 +119,8 @@ export interface RunFile {
   readonly status: StageStatus;
   readonly cursor: RunCursor;
   readonly budget: RunBudgetMirror;
+  /** Present only on a run created by `tldrx seed apply`. */
+  readonly triage?: RunTriage;
   readonly phases: readonly RunPhase[];
 }
 
@@ -199,6 +217,22 @@ export function validateRunFile(input: unknown): ValidationResult {
     requireNumber(doc.budget.per_agent_max_usd, "budget.per_agent_max_usd", issues);
   } else if (doc.budget !== undefined) {
     issues.push({ path: "budget", message: "expected a mapping" });
+  }
+
+  // Optional, additive (§6.2): absent on every run `run new` creates. Present it
+  // must still be well formed — a half-written provenance block is worse than none.
+  if (doc.triage !== undefined) {
+    if (isRecord(doc.triage)) {
+      requireKeys(doc.triage, ["split", "depends_on"], "triage", issues);
+      requireString(doc.triage.split, "triage.split", issues);
+      if (requireArray(doc.triage.depends_on, "triage.depends_on", issues)) {
+        (doc.triage.depends_on as unknown[]).forEach((slug, i) => {
+          requireString(slug, `triage.depends_on[${i}]`, issues);
+        });
+      }
+    } else {
+      issues.push({ path: "triage", message: "expected a mapping" });
+    }
   }
 
   if (!requireArray(doc.phases, "phases", issues)) return result(issues);

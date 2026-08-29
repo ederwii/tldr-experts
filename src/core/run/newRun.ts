@@ -33,14 +33,16 @@ import { parseQuestions, validateQuestions } from "../text/questions.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../hooks/lib/workspace.ts";
 import { validateRunBudget, type RunBudget } from "../budget/RunBudget.ts";
 import { distill, type DistillResult } from "../distill/distill.ts";
-import { collectSeed, type SeedSet } from "../seed/collectSeed.ts";
+import { collectSeeds, type SeedSet } from "../seed/collectSeed.ts";
 import { allSeedHeadings, seedClaims } from "../seed/seedClaims.ts";
 import { renderSeedHandoff, renderSeedIndex, SEED_INDEX } from "../seed/renderSeed.ts";
 import { findDuplicate } from "../facts/findDuplicate.ts";
 import { renderHandoff, renderProse, renderQuestions, targetOf } from "../distill/renderDistill.ts";
 import { emitBudgetYaml, emitRunYaml } from "./emitRunYaml.ts";
 import { loadWorkflowPreset, MAX_STAGE_INPUTS, type PlannedStage, type WorkflowPreset } from "./workflowPreset.ts";
-import { deriveRunStatus, validateRunFile, type RunFile, type RunPhase, type RunStage } from "./RunFile.ts";
+import {
+  deriveRunStatus, validateRunFile, type RunFile, type RunPhase, type RunStage, type RunTriage,
+} from "./RunFile.ts";
 
 export class NewRunError extends Error {}
 
@@ -62,8 +64,14 @@ export interface NewRunOptions {
    * with `--from`, which is AI-DLC-specific: both write `01-what/handoff.md`, and
    * two importers fighting over one file is a bug waiting to be reported as a
    * mystery. `[assumption]`
+   *
+   * An array is the repeatable form (`--seed a.md --seed docs/`, spec §6.2): the
+   * arguments are merged, deduped and re-sorted, and the caps apply to the merged
+   * set. A single string behaves exactly as it did before the array existed.
    */
-  readonly seed?: string;
+  readonly seed?: string | readonly string[];
+  /** Provenance written by `tldrx seed apply` (spec §6.2). Absent otherwise. */
+  readonly triage?: RunTriage;
   readonly actor: string;
   readonly now: Date;
 }
@@ -108,14 +116,17 @@ export function createRun(options: NewRunOptions): NewRunOutcome {
   if (options.from !== undefined && !existsSync(options.from)) {
     throw new NewRunError(`--from: no such directory: ${options.from}`);
   }
-  if (options.from !== undefined && options.seed !== undefined) {
+  const seedPaths = options.seed === undefined
+    ? []
+    : typeof options.seed === "string" ? [options.seed] : [...options.seed];
+  if (options.from !== undefined && seedPaths.length > 0) {
     throw new NewRunError(
       "--from and --seed both write 01-what/handoff.md — pass one.\n"
       + "  --from <dir>   an AI-DLC intent folder (spec §6)\n"
       + "  --seed <path>  any .md/.txt document or a directory of them (spec §6.1)",
     );
   }
-  const seedSet = options.seed === undefined ? null : collectSeed(options.root, options.seed);
+  const seedSet = seedPaths.length === 0 ? null : collectSeeds(options.root, seedPaths);
 
   const preset = loadWorkflowPreset(options.root, options.scope);
   const workspace = loadWorkspace(options.root);
@@ -151,6 +162,7 @@ export function createRun(options: NewRunOptions): NewRunOutcome {
       spent_usd: 0,
       per_agent_max_usd: budgetPlan.perAgentMax,
     },
+    ...(options.triage === undefined ? {} : { triage: options.triage }),
     phases,
   };
   const run: RunFile = { ...seed, status: deriveRunStatus(seed) };
@@ -199,7 +211,8 @@ export function createRun(options: NewRunOptions): NewRunOutcome {
       ceiling_usd: budgetPlan.ceiling,
       stages: phases.reduce((n, p) => n + p.stages.length, 0),
       from: options.from ?? null,
-      seed: options.seed ?? null,
+      seed: seedSet?.source ?? null,
+      seeds: seedPaths,
       seed_documents: seedSet === null ? 0 : seedSet.documents.length,
     }));
 
