@@ -227,3 +227,13 @@ not implemented must exit `64` and say so on stderr; in 0.0.1 the only two are
 
 MIT, © 2026 Alan Martinez. This was a placeholder choice made while scaffolding —
 change it freely before anything ships.
+
+## Releasing
+
+Releases are published by GitHub Actions through npm **trusted publishing** (OIDC — no
+tokens, no OTP; provenance attached automatically). Bump `version` in `package.json`,
+commit, then `git tag v<version> && git push origin v<version>`. `.github/workflows/publish.yml`
+runs typecheck, tests, build, checks the tag matches the version, and publishes. One-time
+setup on npmjs.com: package → Settings → Trusted Publisher → GitHub Actions (`ederwii` /
+`tldr-experts` / `publish.yml`). The very first publish of a new package name is done by a
+human with 2FA (`npm publish --access public --otp=<code>`).
