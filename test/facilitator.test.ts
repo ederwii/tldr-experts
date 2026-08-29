@@ -635,7 +635,7 @@ describe("after a failure", () => {
 
     const store = RunStore.open(ws.runDir);
     expect(store.run.status).toBe("failed");
-    expect(RunStore.find(ws.root)?.runId).toBe(ws.runId);
+    expect(RunStore.findOpen(ws.root)[0]?.runId).toBe(ws.runId);
   });
 
   test("`run status` shows the failure rather than counting it as progress", async () => {

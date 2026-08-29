@@ -6,11 +6,11 @@
  * the cursor advances to the next stage as `ready`.
  */
 import type { Command } from "../Command.ts";
-import { EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_OK } from "../exitCodes.ts";
+import { EXIT_GATE_REFUSED, EXIT_OK } from "../exitCodes.ts";
 import { parseArgs, stringFlag } from "../argv.ts";
 import { workspaceRootFrom } from "../workspace.ts";
 import { fail } from "../report.ts";
-import { RunStore } from "../../core/run/RunStore.ts";
+import { isResolved, resolveRunOrExplain } from "../resolveRun.ts";
 import { approve, GateError } from "../../core/run/gates.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
 
@@ -25,13 +25,9 @@ export const approveCommand: Command = {
       const args = parseArgs(argv, ["run", "note", "root"]);
       const root = workspaceRootFrom(args);
       const wanted = stringFlag(args, "run");
-      const store = RunStore.find(root, wanted);
-      if (store === null) {
-        process.stderr.write(
-          `tldrx approve: ${wanted === undefined ? "no non-terminal run" : `no run '${wanted}'`} in tldrx-work/\n`,
-        );
-        return EXIT_NOT_FOUND;
-      }
+      const resolved = resolveRunOrExplain("tldrx approve", root, wanted);
+      if (!isResolved(resolved)) return resolved.exit;
+      const store = resolved.store;
 
       const outcome = await approve(store, {
         root,

@@ -19,12 +19,12 @@
  */
 import { join } from "node:path";
 import type { Command } from "../Command.ts";
-import { EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
+import { EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
 import { boolFlag, parseArgs, stringFlag, UsageError, type ParsedArgs } from "../argv.ts";
 import { workspaceRootFrom } from "../workspace.ts";
 import { fail } from "../report.ts";
 import { RunStore } from "../../core/run/RunStore.ts";
-import { PROJECT_WORK_DIR } from "../../core/paths.ts";
+import { isResolved, resolveRunOrExplain, type RunOrExit } from "../resolveRun.ts";
 import { nowRfc3339, currentActor } from "../../hooks/lib/actor.ts";
 import {
   collectMirrorItems, createGithubProvider, PLAN_PHASE, createJiraProvider, isTicketProviderKind,
@@ -71,8 +71,9 @@ async function ticketsSync(argv: readonly string[]): Promise<number> {
       return EXIT_OK;
     }
 
-    const store = openRun(args, root);
-    if (store === null) return EXIT_NOT_FOUND;
+    const resolved = openRun(args, root);
+    if (!isResolved(resolved)) return resolved.exit;
+    const store = resolved.store;
 
     // Resolved before anything is read from 03-plan/ and before any write.
     const provider = buildProvider(kind, config);
@@ -100,8 +101,9 @@ function ticketsStatus(argv: readonly string[]): number {
   try {
     const args = parseArgs(argv, VALUE_FLAGS);
     const root = workspaceRootFrom(args);
-    const store = openRun(args, root);
-    if (store === null) return EXIT_NOT_FOUND;
+    const resolved = openRun(args, root);
+    if (!isResolved(resolved)) return resolved.exit;
+    const store = resolved.store;
 
     const collected = collectMirrorItems(join(store.runDir, PLAN_PHASE), store.runId);
     const config = readTicketToolConfig(root);
@@ -165,16 +167,9 @@ function buildProvider(kind: "github" | "jira", config: TicketToolConfig): Ticke
   });
 }
 
-function openRun(args: ParsedArgs, root: string): RunStore | null {
-  const wanted = stringFlag(args, "run") ?? args.positionals[0];
-  const store = RunStore.find(root, wanted);
-  if (store !== null) return store;
-  process.stderr.write(
-    wanted === undefined
-      ? `tldrx tickets: no non-terminal run in ${PROJECT_WORK_DIR}/\n`
-      : `tldrx tickets: no run '${wanted}' in ${PROJECT_WORK_DIR}/\n`,
-  );
-  return null;
+/** The store, or the exit code to return — 3 for no run, 2 when several are open. */
+function openRun(args: ParsedArgs, root: string): RunOrExit {
+  return resolveRunOrExplain("tldrx tickets", root, stringFlag(args, "run") ?? args.positionals[0]);
 }
 
 /**

@@ -8,7 +8,9 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Command } from "../Command.ts";
-import { EXIT_FAILED, EXIT_NOT_FOUND, EXIT_OK } from "../exitCodes.ts";
+import { EXIT_FAILED, EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_OK } from "../exitCodes.ts";
+import { RunStore } from "../../core/run/RunStore.ts";
+import { renderAmbiguous } from "../resolveRun.ts";
 import { resolveWorkspaceRoot } from "../../core/experts/index.ts";
 import { listRuns, loadRun } from "../../core/replay/index.ts";
 import { applyPractices, buildRetro, RETRO_FILE } from "../../core/retro/index.ts";
@@ -21,7 +23,15 @@ export const retroCommand: Command = {
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const root = resolveWorkspaceRoot(option(argv, "--root"));
-    const id = positional(argv) ?? listRuns(root)[0] ?? null;
+    const named = positional(argv);
+    // With no id and several runs open there is no defensible default: retro
+    // writes a file INTO one of them. Named run, else today's fallback (the
+    // newest run of any status — a retro is usually written for a finished one).
+    if (named === null && RunStore.resolve(root).kind === "ambiguous") {
+      process.stderr.write(renderAmbiguous("tldrx retro", RunStore.findOpen(root)));
+      return EXIT_GATE_REFUSED;
+    }
+    const id = named ?? listRuns(root)[0] ?? null;
     if (id === null) {
       process.stderr.write("tldrx retro: no run id given and no runs found under tldrx-work/\n");
       return EXIT_FAILED;

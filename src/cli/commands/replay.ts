@@ -5,7 +5,9 @@
  * that was actually logged.
  */
 import type { Command } from "../Command.ts";
-import { EXIT_FAILED, EXIT_NOT_FOUND, EXIT_OK } from "../exitCodes.ts";
+import { EXIT_FAILED, EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_OK } from "../exitCodes.ts";
+import { RunStore } from "../../core/run/RunStore.ts";
+import { renderAmbiguous } from "../resolveRun.ts";
 import { resolveWorkspaceRoot } from "../../core/experts/index.ts";
 import { listRuns, loadRun, renderReplay } from "../../core/replay/index.ts";
 
@@ -17,7 +19,14 @@ export const replayCommand: Command = {
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const root = resolveWorkspaceRoot(option(argv, "--root"));
-    const id = positional(argv) ?? listRuns(root)[0] ?? null;
+    const named = positional(argv);
+    // Read-only, but still an answer ABOUT one run: narrating the wrong run's
+    // history is the same lie as acting on it. Named run, else today's fallback.
+    if (named === null && RunStore.resolve(root).kind === "ambiguous") {
+      process.stderr.write(renderAmbiguous("tldrx replay", RunStore.findOpen(root)));
+      return EXIT_GATE_REFUSED;
+    }
+    const id = named ?? listRuns(root)[0] ?? null;
     if (id === null) {
       process.stderr.write("tldrx replay: no run id given and no runs found under tldrx-work/\n");
       return EXIT_FAILED;

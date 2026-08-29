@@ -13,11 +13,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Command } from "../Command.ts";
-import { EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
+import { EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
 import { boolFlag, parseArgs, stringFlag, UsageError } from "../argv.ts";
 import { workspaceRootFrom } from "../workspace.ts";
 import { fail } from "../report.ts";
 import { RunStore } from "../../core/run/RunStore.ts";
+import { notFound, renderAmbiguous } from "../resolveRun.ts";
 import { PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../../core/paths.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
 import { openBlocks, parseQuestions } from "../../core/text/questions.ts";
@@ -36,7 +37,7 @@ interface Target {
 }
 
 /** What resolution found: a file to work through, nothing to ask, or no run at all. */
-type Resolution = Target | "no-open-questions" | "not-found";
+type Resolution = Target | "no-open-questions" | "not-found" | "ambiguous";
 
 export const interviewCommand: Command = {
   name: "interview",
@@ -54,6 +55,7 @@ export const interviewCommand: Command = {
       const root = workspaceRootFrom(args);
       const target = init ? initTarget(root) : runTarget(root, runId);
       if (target === "not-found") return EXIT_NOT_FOUND;
+      if (target === "ambiguous") return EXIT_GATE_REFUSED;
       if (target === "no-open-questions") {
         process.stdout.write(renderNextSteps(!init));
         return EXIT_OK;
@@ -116,14 +118,16 @@ function initTarget(root: string): Resolution {
  * asked to answer questions, not to be told the cursor moved past them.
  */
 function runTarget(root: string, runId: string | undefined): Resolution {
-  const store = RunStore.find(root, runId);
-  if (store === null) {
-    process.stderr.write(
-      `tldrx interview: ${runId === undefined ? "no non-terminal run" : `no run '${runId}'`}`
-      + ` in ${PROJECT_WORK_DIR}/\n`,
-    );
+  const resolution = RunStore.resolve(root, runId);
+  if (resolution.kind === "ambiguous") {
+    process.stderr.write(renderAmbiguous("tldrx interview", resolution.open));
+    return "ambiguous";
+  }
+  if (resolution.kind === "none") {
+    process.stderr.write(`tldrx interview: ${notFound(runId)} in ${PROJECT_WORK_DIR}/\n`);
     return "not-found";
   }
+  const store = resolution.store;
   const cursorPhase = store.cursorEntry()?.phase.id;
   const phases = store.run.phases.map((phase) => phase.id);
   const ordered = cursorPhase === undefined ? phases : [cursorPhase, ...phases.filter((id) => id !== cursorPhase)];
