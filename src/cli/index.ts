@@ -1,12 +1,14 @@
 /**
  * The tldrx command table and dispatcher.
  *
- * v0 truth: only `--version`, `--help` and `doctor` do anything. Every other
- * command is a declared placeholder that exits 64. Nothing here prints success
- * for work it did not do.
+ * Every v0 command is implemented; a command that ever is not must exit 64 and
+ * say so. Nothing here prints success for work it did not do.
+ *
+ * `--help` is answered here rather than inside each command, so that asking a
+ * command what it does never needs a workspace, a run, or anything on disk.
  */
 import type { Command } from "./Command.ts";
-import { EXIT_NOT_IMPLEMENTED } from "./exitCodes.ts";
+import { EXIT_NOT_IMPLEMENTED, EXIT_OK } from "./exitCodes.ts";
 
 import { initCommand } from "./commands/init.ts";
 import { doctorCommand } from "./commands/doctor.ts";
@@ -21,7 +23,7 @@ import { dashboardCommand } from "./commands/dashboard.ts";
 import { replayCommand } from "./commands/replay.ts";
 import { retroCommand } from "./commands/retro.ts";
 import { versionCommand } from "./commands/version.ts";
-import { makeHelpCommand } from "./commands/help.ts";
+import { makeHelpCommand, renderCommandHelp } from "./commands/help.ts";
 
 /** Commands in the order `tldrx --help` lists them (the shape of the loop). */
 export const COMMANDS: readonly Command[] = [
@@ -66,7 +68,15 @@ export async function dispatch(argv: readonly string[]): Promise<number> {
     process.stderr.write(`tldrx: unknown command '${name}'\nRun \`tldrx --help\` for the command list.\n`);
     return EXIT_NOT_IMPLEMENTED;
   }
+  if (command !== helpCommand && rest.some(isHelpFlag)) {
+    process.stdout.write(`${renderCommandHelp(command)}\n`);
+    return EXIT_OK;
+  }
   return command.run(rest);
+}
+
+function isHelpFlag(arg: string): boolean {
+  return arg === "--help" || arg === "-h";
 }
 
 export type { Command } from "./Command.ts";

@@ -9,7 +9,7 @@ import { basename } from "node:path";
 import type { Command } from "../Command.ts";
 import { EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
 import { listFlag, numberFlag, parseArgs, stringFlag, UsageError, boolFlag } from "../argv.ts";
-import { requireWorkspaceRoot } from "../workspace.ts";
+import { workspaceRootFrom } from "../workspace.ts";
 import { fail } from "../report.ts";
 import { createRun } from "../../core/run/newRun.ts";
 import { RunStore } from "../../core/run/RunStore.ts";
@@ -17,13 +17,13 @@ import { buildStatus, renderStatus } from "../../core/run/runStatus.ts";
 import { currentActor } from "../../hooks/lib/actor.ts";
 import { PROJECT_WORK_DIR } from "../../core/paths.ts";
 
-const VALUE_FLAGS = ["title", "scope", "budget", "repos", "from", "run"];
+const VALUE_FLAGS = ["title", "scope", "budget", "repos", "from", "run", "root"];
 
 export const runCommand: Command = {
   name: "run",
   summary: "Create or inspect a piece of work",
-  usage: "tldrx run new <slug> [--title <t>] [--scope <s>] [--budget <usd>] [--repos a,b] [--from <path>]\n" +
-    "       tldrx run status [<run>] [--json]",
+  usage: "tldrx run new <slug> [--title <t>] [--scope <s>] [--budget <usd>] [--repos a,b] [--from <path>] [--root <path>]\n" +
+    "       tldrx run status [<run>] [--json] [--root <path>]",
   subcommands: ["new", "status"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
@@ -46,7 +46,7 @@ function runNew(argv: readonly string[]): number {
     const slug = args.positionals[0];
     if (slug === undefined) throw new UsageError("run new needs a slug: `tldrx run new <slug>`");
 
-    const root = requireWorkspaceRoot();
+    const root = workspaceRootFrom(args);
     const outcome = createRun({
       root,
       slug,
@@ -86,7 +86,7 @@ function runNew(argv: readonly string[]): number {
 function runStatus(argv: readonly string[]): number {
   try {
     const args = parseArgs(argv, VALUE_FLAGS);
-    const root = requireWorkspaceRoot();
+    const root = workspaceRootFrom(args);
     const wanted = args.positionals[0] ?? stringFlag(args, "run");
     const store = RunStore.find(root, wanted);
     if (store === null) {

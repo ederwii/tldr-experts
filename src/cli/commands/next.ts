@@ -16,7 +16,7 @@ import {
   EXIT_AGENT_FAILED, EXIT_AWAITING_HUMAN, EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE,
 } from "../exitCodes.ts";
 import { boolFlag, numberFlag, parseArgs, stringFlag, UsageError } from "../argv.ts";
-import { requireWorkspaceRoot } from "../workspace.ts";
+import { workspaceRootFrom } from "../workspace.ts";
 import { fail } from "../report.ts";
 import { runNext, type NextMode } from "../../core/facilitator/runNext.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
@@ -27,13 +27,13 @@ const INFORMATIONAL: readonly number[] = [EXIT_OK, EXIT_AWAITING_HUMAN];
 export const nextCommand: Command = {
   name: "next",
   summary: "Advance the active run to its next stage",
-  usage: "tldrx next [<run>] [--dry-run] [--prepare|--commit] [--model <m>] [--max-usd <n>] [--yolo]",
+  usage: "tldrx next [<run>] [--dry-run] [--prepare|--commit] [--model <m>] [--max-usd <n>] [--yolo] [--root <path>]",
   subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     try {
-      const args = parseArgs(argv, ["run", "model", "max-usd"]);
-      const root = requireWorkspaceRoot();
+      const args = parseArgs(argv, ["run", "model", "max-usd", "root"]);
+      const root = workspaceRootFrom(args);
       const mode = resolveMode(args.flags.has("prepare"), args.flags.has("commit"));
       const runId = args.positionals[0] ?? stringFlag(args, "run");
 

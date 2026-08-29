@@ -8,7 +8,7 @@
 import type { Command } from "../Command.ts";
 import { EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_OK } from "../exitCodes.ts";
 import { parseArgs, stringFlag } from "../argv.ts";
-import { requireWorkspaceRoot } from "../workspace.ts";
+import { workspaceRootFrom } from "../workspace.ts";
 import { fail } from "../report.ts";
 import { RunStore } from "../../core/run/RunStore.ts";
 import { approve, GateError } from "../../core/run/gates.ts";
@@ -17,13 +17,13 @@ import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
 export const approveCommand: Command = {
   name: "approve",
   summary: "Approve the current gate",
-  usage: "tldrx approve [--run <id>] [--note <text>]",
+  usage: "tldrx approve [--run <id>] [--note <text>] [--root <path>]",
   subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     try {
-      const args = parseArgs(argv, ["run", "note"]);
-      const root = requireWorkspaceRoot();
+      const args = parseArgs(argv, ["run", "note", "root"]);
+      const root = workspaceRootFrom(args);
       const wanted = stringFlag(args, "run");
       const store = RunStore.find(root, wanted);
       if (store === null) {
