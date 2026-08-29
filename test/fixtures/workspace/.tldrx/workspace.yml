@@ -1,0 +1,23 @@
+version: 1
+mode: multi-repo
+root_is_repo: true
+detected_at: 2026-08-28T14:02:11Z
+detected_by: "tldrx 0.1.0"
+repos:
+  - name: api
+    path: api
+    default_branch: main
+    stack: [dotnet]
+    package_manager: nuget
+    commands: {build: "dotnet build", test: "dotnet test", lint: null, typecheck: null, run: null}
+    ci: []
+    confidence: high
+  - name: lab
+    path: lab
+    default_branch: main
+    stack: [typescript, react]
+    package_manager: npm
+    commands: {build: "npm run build", test: "npm run test", lint: "npm run lint",
+               typecheck: "npm run typecheck", run: "npm run dev"}
+    ci: []
+    confidence: high

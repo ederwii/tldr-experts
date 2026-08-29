@@ -1,0 +1,23 @@
+# .tldrx/memory/facts.yml — durable, provenanced answers (spec §2.5).
+version: 1
+facts:
+  - id: F007
+    fact: "Backend CD is manual — deploy.yml is workflow_dispatch only; merged is not shipped."
+    area: deploy
+    repos: [api]
+    kind: answer
+    confidence: measured
+    source: {who: alan, when: "2026-07-28T18:02:00Z", run: 260727-leaderboard, q: Q3}
+    supersedes: null
+    superseded_by: F019
+    retired: null
+  - id: F019
+    fact: "Backend deploys run via deploy.yml (workflow_dispatch); lab auto-deploys on merge."
+    area: deploy
+    repos: [api, lab]
+    kind: answer
+    confidence: measured
+    source: {who: alan, when: "2026-08-14T10:11:00Z", run: 260814-envs, q: Q1}
+    supersedes: F007
+    superseded_by: null
+    retired: null
