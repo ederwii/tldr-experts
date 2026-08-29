@@ -35,6 +35,9 @@ import {
 
 const VALUE_FLAGS = ["run", "root", "provider"];
 
+/** How the config file is named on screen, matching `disabledMessage` below. */
+const PROCESS_YML = ".tldrx/process.yml";
+
 export const ticketsCommand: Command = {
   name: "tickets",
   summary: "Mirror the plan's epics and stories to a ticket tool (files stay the source of truth)",
@@ -101,12 +104,20 @@ function ticketsStatus(argv: readonly string[]): number {
   try {
     const args = parseArgs(argv, VALUE_FLAGS);
     const root = workspaceRootFrom(args);
+
+    // The config comes FIRST, and it is printed whether or not a run exists.
+    // Before this, `tickets status` in a workspace with no run exited 3 without
+    // ever opening process.yml, so a ticket_tool that could never sync — a kind
+    // with no adapter, a missing project — stayed invisible until someone
+    // created a run and tried to sync it.
+    const config = readTicketToolConfig(root);
+    process.stdout.write(`${describeTicketTool(config).join("\n")}\n`);
+
     const resolved = openRun(args, root);
     if (!isResolved(resolved)) return resolved.exit;
     const store = resolved.store;
 
     const collected = collectMirrorItems(join(store.runDir, PLAN_PHASE), store.runId);
-    const config = readTicketToolConfig(root);
     const lines = [
       `tickets · run ${store.runId} · ticket_tool ${config.kind}${config.project === null ? "" : ` (${config.project})`}`,
       "",
@@ -118,6 +129,44 @@ function ticketsStatus(argv: readonly string[]): number {
   } catch (error) {
     return fail("tickets status", error);
   }
+}
+
+/**
+ * What process.yml says, and whether `tickets sync` could act on it.
+ *
+ * Reports; it does not refuse. `status` reads nothing and calls nothing, so a
+ * broken ticket_tool is a finding here, not a failure — the exit code stays the
+ * one the run lookup produces. The wording of each problem matches the error
+ * `sync` would raise for it, so the two screens never describe it differently.
+ */
+function describeTicketTool(config: TicketToolConfig): readonly string[] {
+  const where = config.path === null ? `no ${PROCESS_YML}` : config.path;
+  const project = config.project === null ? "" : ` (${config.project})`;
+  const lines = [`ticket_tool ${config.kind}${project} · sync ${config.sync} · ${where}`];
+
+  if (config.kind === "none") {
+    lines.push(
+      config.path === null
+        ? `no ${PROCESS_YML}, so no ticket tool is configured — \`tldrx tickets sync\` is a no-op.`
+        : `ticket_tool.kind is none — \`tldrx tickets sync\` is a no-op.`,
+    );
+    return lines;
+  }
+  if (!isTicketProviderKind(config.kind)) {
+    lines.push(
+      `warning: kind '${config.kind}' has no adapter — this build ships github and jira. `
+      + "`tldrx tickets sync` will refuse until it is one of those, or none.",
+    );
+    return lines;
+  }
+  if (config.project === null) {
+    lines.push(
+      `warning: ticket_tool.project is required for the ${config.kind} provider `
+      + `(${config.kind === "github" ? "`owner/repo`" : "the Jira project key"}). `
+      + "`tldrx tickets sync` will refuse until it is set.",
+    );
+  }
+  return lines;
 }
 
 // --- wiring -----------------------------------------------------------------
