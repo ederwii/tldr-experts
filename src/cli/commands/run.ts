@@ -30,7 +30,7 @@ const VALUE_FLAGS = [
 
 export const runCommand: Command = {
   name: "run",
-  summary: "Create or inspect a piece of work",
+  summary: "Create, inspect or auto-run a piece of work",
   usage: "tldrx run new <slug> [--title <t>] [--scope <s>] [--budget <usd>] [--repos a,b]\n" +
     "                  [--from <aidlc-intent-dir> | --seed <file|dir>] [--gates <a,b|all|none>] [--root <path>]\n" +
     "       tldrx run status [<run>] [--json] [--root <path>]\n" +
