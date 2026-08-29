@@ -12,6 +12,8 @@
  * A hook that blocks on a rule it does not enforce is worse than no hook.
  */
 
+import { runtime } from "../runtime/index.ts";
+
 export interface HookInput {
   readonly session_id?: string;
   readonly hook_event_name?: string;
@@ -22,11 +24,7 @@ export interface HookInput {
 
 /** Read all of stdin as text. Returns "" when stdin is closed or empty. */
 export async function readStdin(): Promise<string> {
-  try {
-    return await Bun.stdin.text();
-  } catch {
-    return "";
-  }
+  return await runtime.readStdin();
 }
 
 /** Parse the hook payload. Returns null when stdin was empty or not JSON. */

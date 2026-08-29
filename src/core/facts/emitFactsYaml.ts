@@ -1,9 +1,10 @@
 /**
  * Block-style YAML for `.tldrx/memory/facts.yml`.
  *
- * `Bun.YAML.stringify` is correct but emits one flow-style line, and facts.yml is
- * a committed, human-read, diffed file. This emitter knows exactly one shape — the
- * §2.5 record — and produces the layout the spec sample shows.
+ * A generic YAML serialiser is correct but not readable: the runtime seam's two
+ * implementations disagree on layout, and facts.yml is a committed, human-read,
+ * diffed file. This emitter knows exactly one shape — the §2.5 record — and emits
+ * the layout the spec sample shows, byte-identically on every runtime.
  */
 import type { Fact, FactsFile } from "./Fact.ts";
 

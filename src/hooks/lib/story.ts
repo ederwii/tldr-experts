@@ -6,6 +6,8 @@
  * ```dod block, by line scanning rather than by assuming a frontmatter format.
  */
 
+import { runtime } from "../../core/runtime/index.ts";
+
 export interface StoryFacts {
   readonly setsDone: boolean;
   readonly repo: string | null;
@@ -71,18 +73,10 @@ export interface CommandResult {
  * a *stage file* may cite, not a story's dod block.
  */
 export async function runDodCommand(command: string, cwd: string, timeoutMs: number): Promise<CommandResult> {
-  const proc = Bun.spawn(["/bin/sh", "-c", command], { cwd, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    proc.kill(9);
-  }, timeoutMs);
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  clearTimeout(timer);
+  const { exitCode, stdout, stderr, timedOut } = await runtime.spawn("/bin/sh", ["-c", command], {
+    cwd,
+    timeoutMs,
+  });
   return { command, exitCode, timedOut, tail: lastMeaningfulLine(`${stdout}\n${stderr}`) };
 }
 

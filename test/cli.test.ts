@@ -72,9 +72,9 @@ describe("stub commands", () => {
   }
 
   test("a subcommand is named in the notice", async () => {
-    const run = await tldrx("run", "new");
+    const run = await tldrx("expert", "list");
     expect(run.code).toBe(EXIT_NOT_IMPLEMENTED);
-    expect(run.stderr.trim()).toBe("tldrx run new: not implemented yet (v0 roadmap)");
+    expect(run.stderr.trim()).toBe("tldrx expert list: not implemented yet (v0 roadmap)");
   });
 
   test("a flag is not mistaken for a subcommand", async () => {
