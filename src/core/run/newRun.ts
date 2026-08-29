@@ -228,7 +228,7 @@ export function createRun(options: NewRunOptions): NewRunOutcome {
       const check = validateHandoff(handoff, toSrcContext(workspace, temp));
       if (!check.ok) {
         throw new NewRunError(
-          `seeded handoff is invalid: ${describeHandoff(check.missingSections, check.unsourced, check.unresolved)}`,
+          `seeded handoff is invalid: ${describeHandoff(check.missingSections, check.emptySections, check.unsourced, check.unresolved)}`,
         );
       }
     }

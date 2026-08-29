@@ -74,7 +74,11 @@ at least one list item; a section that is present but carries only prose is now 
 section is written `- none [src: absent:<what was looked at>]`. This closes the way an unsourced claim used to get
 written anyway: a paragraph carries no bullet for the checker to look at, so "no unknowns that we can see" validated
 clean. The parser, the `claim-sources` hook, the facilitator's post-stage check and `tldrx approve` share one parser
-and all four now refuse it; the Evidence ledger in every shipped stage template is a list rather than a table.
+and all four now refuse it. The Evidence ledger in the shipped stage templates is a list rather than a table (a table
+holds no list items), and both deterministic renderers — the `--from` distill and the `--seed` import — write
+`- none [src: absent:…]` where they used to write an italic paragraph, so a `run new` cannot produce a handoff its own
+validator would reject. **Outstanding:** `stages/what/stage.md` still ships the table and the old `## Rules` block; it
+was owned by a concurrent branch when this landed.
 
 All notable changes to tldr-experts. Dates are the day the work landed on `main`.
 
