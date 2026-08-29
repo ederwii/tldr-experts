@@ -11,6 +11,7 @@ import { mkdir } from "node:fs/promises";
 import { MAP_DOCS, type MapFacts } from "./MapFacts.ts";
 import { renderMapDoc, renderWorkspaceMap } from "./renderMap.ts";
 import type { MapContext, MapProvider } from "./Provider.ts";
+import { runtime } from "../runtime/index.ts";
 import type { DetectedWorkspace } from "../detect/types.ts";
 
 export const MAP_DIR = ".tldrx/map";
@@ -52,7 +53,7 @@ export async function buildMap(options: BuildMapOptions): Promise<BuildMapResult
     await mkdir(repoDir, { recursive: true });
     for (const doc of MAP_DOCS) {
       const path = join(repoDir, `${doc}.md`);
-      await Bun.write(path, renderMapDoc(collected, doc));
+      await runtime.writeText(path, renderMapDoc(collected, doc));
       files.push(`${MAP_DIR}/${repo.name}/${doc}.md`);
     }
   }
@@ -60,7 +61,7 @@ export async function buildMap(options: BuildMapOptions): Promise<BuildMapResult
   if (options.workspace.mode === "multi-repo") {
     const path = join(options.workspaceDir, MAP_DIR, "workspace.md");
     await mkdir(join(options.workspaceDir, MAP_DIR), { recursive: true });
-    await Bun.write(path, renderWorkspaceMap(options.workspace, facts));
+    await runtime.writeText(path, renderWorkspaceMap(options.workspace, facts));
     files.push(`${MAP_DIR}/workspace.md`);
   }
 

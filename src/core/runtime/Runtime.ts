@@ -16,7 +16,14 @@
 
 export interface SpawnOptions {
   readonly cwd?: string;
-  /** Kill the child after this many milliseconds. Omitted = wait forever. */
+  /**
+   * Kill the child after this many milliseconds. Omitted = wait forever.
+   *
+   * A timed spawn is detached into its own process group and the timeout kills
+   * that whole group, so a shell's grandchildren die with it (see
+   * `killProcessTree`). An untimed spawn stays in the caller's group and keeps
+   * the terminal's normal Ctrl-C behaviour.
+   */
   readonly timeoutMs?: number;
   /** Written to the child's stdin, which is then closed. */
   readonly stdin?: string;
@@ -43,11 +50,19 @@ export interface Runtime {
   /**
    * Run one command as a single argv — never through a shell unless the caller
    * makes `sh -c` explicit. Never throws: a spawn failure comes back as exit 127.
+   * Always settles: `stdout` and `stderr` are strings even when a timed-out
+   * command left something behind holding the pipes.
    */
   spawn(cmd: string, args: readonly string[], opts?: SpawnOptions): Promise<SpawnResult>;
 
   readText(path: string): Promise<string>;
+  /** Writes `content`, creating parent directories — the same on both runtimes. */
   writeText(path: string, content: string): Promise<void>;
+  /**
+   * True when a REGULAR FILE exists at `path`. A directory is false, on both
+   * runtimes: `Bun.file(dir).exists()` says false, so `existsSync` (which says
+   * true) is not the node equivalent, and the seam would silently diverge.
+   */
   exists(path: string): Promise<boolean>;
   readJson(path: string): Promise<unknown>;
 

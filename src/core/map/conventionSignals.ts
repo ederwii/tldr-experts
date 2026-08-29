@@ -7,6 +7,7 @@
  */
 import { join } from "node:path";
 import { lineOf } from "../detect/lineOf.ts";
+import { runtime } from "../runtime/index.ts";
 
 export interface ConventionSignal {
   /** Repo-relative path of the config file. */
@@ -45,14 +46,14 @@ export async function detectConventionSignals(repoDir: string): Promise<Conventi
 
   for (const candidate of CANDIDATES) {
     for (const file of candidate.files) {
-      const handle = Bun.file(join(repoDir, file));
-      if (!(await handle.exists())) continue;
+      const absPath = join(repoDir, file);
+      if (!(await runtime.exists(absPath))) continue;
       const key = `${file}|${candidate.what}`;
       if (seen.has(key)) continue;
 
       let line = 1;
       if (candidate.contains !== undefined) {
-        const text = await handle.text();
+        const text = await runtime.readText(absPath);
         if (!text.includes(candidate.contains)) continue;
         line = lineOf(text, candidate.contains);
       }

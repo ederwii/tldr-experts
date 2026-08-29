@@ -1,10 +1,12 @@
 /**
- * The one place a child process is started.
+ * The one place detection starts a child process.
  *
  * Everything that shells out (git, graphify) takes a `CommandRunner`, so tests
  * inject a fake and the real one is exercised once, here. No shell: argv only,
- * so a command can never be string-concatenated into something else.
+ * so a command can never be string-concatenated into something else. The spawn
+ * itself goes through the runtime seam, so this runs unchanged under node.
  */
+import { runtime } from "../runtime/index.ts";
 
 export interface CommandResult {
   readonly exitCode: number;
@@ -22,18 +24,10 @@ export class SpawnCommandRunner implements CommandRunner {
   async run(argv: readonly string[], cwd: string): Promise<CommandResult> {
     const [command, ...args] = argv;
     if (command === undefined) return { exitCode: 127, stdout: "", stderr: "empty argv" };
-    try {
-      const proc = Bun.spawn([command, ...args], { cwd, stdout: "pipe", stderr: "pipe" });
-      const timer = setTimeout(() => proc.kill(), this.timeoutMs);
-      const [stdout, stderr] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-      ]);
-      const exitCode = await proc.exited;
-      clearTimeout(timer);
-      return { exitCode, stdout, stderr };
-    } catch (error) {
-      return { exitCode: 127, stdout: "", stderr: error instanceof Error ? error.message : String(error) };
-    }
+    const { exitCode, stdout, stderr } = await runtime.spawn(command, args, {
+      cwd,
+      timeoutMs: this.timeoutMs,
+    });
+    return { exitCode, stdout, stderr };
   }
 }

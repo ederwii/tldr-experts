@@ -7,6 +7,7 @@
  */
 import { join } from "node:path";
 import { readEntries, SKIPPED_DIRS } from "./walk.ts";
+import { runtime } from "../runtime/index.ts";
 import type { DetectedMode } from "./types.ts";
 
 export interface FoundRepos {
@@ -18,8 +19,8 @@ export interface FoundRepos {
 
 /** `.git` may be a directory (normal clone) or a file (worktree/submodule). */
 export async function isGitRepo(dir: string): Promise<boolean> {
-  return await Bun.file(join(dir, ".git", "HEAD")).exists()
-    || await Bun.file(join(dir, ".git")).exists();
+  return (await runtime.exists(join(dir, ".git", "HEAD")))
+    || (await runtime.exists(join(dir, ".git")));
 }
 
 export async function findRepos(root: string): Promise<FoundRepos> {

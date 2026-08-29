@@ -6,8 +6,7 @@
  * process, conventions, an answered questions file — is KEPT, and the report
  * says so out loud rather than silently doing nothing.
  */
-import { mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { runtime } from "../runtime/index.ts";
 
 export type WriteOutcome = "written" | "created" | "kept";
 
@@ -27,16 +26,14 @@ export class WriteLog {
 
   /** Always overwrite: derived output with no human edits to lose. */
   async overwrite(absPath: string, relPath: string, content: string): Promise<WriteOutcome> {
-    await mkdir(dirname(absPath), { recursive: true });
-    await Bun.write(absPath, endWithNewline(content));
+    await runtime.writeText(absPath, endWithNewline(content));
     return this.record(relPath, "written");
   }
 
   /** Write only when absent; an existing file is kept untouched. */
   async createIfAbsent(absPath: string, relPath: string, content: string): Promise<WriteOutcome> {
-    if (await Bun.file(absPath).exists()) return this.record(relPath, "kept");
-    await mkdir(dirname(absPath), { recursive: true });
-    await Bun.write(absPath, endWithNewline(content));
+    if (await runtime.exists(absPath)) return this.record(relPath, "kept");
+    await runtime.writeText(absPath, endWithNewline(content));
     return this.record(relPath, "created");
   }
 

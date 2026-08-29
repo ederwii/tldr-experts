@@ -9,6 +9,7 @@
 import { join } from "node:path";
 import { lineOf } from "./lineOf.ts";
 import { walkFiles } from "./walk.ts";
+import { runtime } from "../runtime/index.ts";
 import { COMMAND_SLOTS, type CommandSlot, type Evidence, type RepoCommands } from "./types.ts";
 import type { StackDetection } from "./stack.ts";
 
@@ -114,9 +115,9 @@ async function addDotnet(found: Found, repoDir: string, stack: StackDetection): 
 async function addPython(found: Found, repoDir: string, stack: StackDetection): Promise<void> {
   if (!stack.languages.includes("python")) return;
   for (const manifest of ["pyproject.toml", "requirements.txt"]) {
-    const file = Bun.file(join(repoDir, manifest));
-    if (!(await file.exists())) continue;
-    const text = await file.text();
+    const path = join(repoDir, manifest);
+    if (!(await runtime.exists(path))) continue;
+    const text = await runtime.readText(path);
     for (const [needle, slot, command] of [
       ["pytest", "test", "pytest"],
       ["ruff", "lint", "ruff check ."],
@@ -144,9 +145,9 @@ function addGoAndRust(found: Found, stack: StackDetection): void {
 const MAKE_TARGET = /^([A-Za-z0-9_.-]+):(?!=)/;
 
 async function addMakefile(found: Found, repoDir: string): Promise<void> {
-  const file = Bun.file(join(repoDir, "Makefile"));
-  if (!(await file.exists())) return;
-  const text = await file.text();
+  const path = join(repoDir, "Makefile");
+  if (!(await runtime.exists(path))) return;
+  const text = await runtime.readText(path);
   const lines = text.split("\n");
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];

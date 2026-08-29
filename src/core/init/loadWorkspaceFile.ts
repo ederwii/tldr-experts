@@ -7,6 +7,7 @@
  */
 import { isAbsolute, join, resolve } from "node:path";
 import { readYamlFile } from "../yaml.ts";
+import { runtime } from "../runtime/index.ts";
 import { WORKSPACE_FILE } from "./runInit.ts";
 
 export interface LoadedWorkspace {
@@ -18,7 +19,7 @@ export interface LoadedWorkspace {
 
 export async function loadWorkspaceFile(workspaceDir: string): Promise<LoadedWorkspace> {
   const path = join(workspaceDir, WORKSPACE_FILE);
-  if (!(await Bun.file(path).exists())) {
+  if (!(await runtime.exists(path))) {
     throw new Error(`${WORKSPACE_FILE} not found in ${workspaceDir} — run \`tldrx init\` first`);
   }
   const parsed = await readYamlFile(path);
