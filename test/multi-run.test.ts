@@ -217,6 +217,9 @@ describe("every command that resolves a run refuses when several are open", () =
 const SINGLE_RUN_KEYS = [
   "run", "title", "scope", "workflow", "repos", "status",
   "cursor", "phases", "budget", "attempts", "build", "waiting",
+  // Added deliberately in 0.3.0 (wave G, gate policy). Everything above keeps its
+  // position, so a consumer reading `run` or `waiting.kind` is untouched.
+  "gates_policy", "gates",
 ];
 
 describe("tldrx run status with several runs open", () => {

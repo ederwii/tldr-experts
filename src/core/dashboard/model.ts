@@ -43,6 +43,12 @@ export interface StageRowModel {
   readonly budgetUsd: number | null;
   /** `"approve: pending"`, or null when the stage has no gate. */
   readonly gate: string | null;
+  /**
+   * Who closed the gate: `auto` when the facilitator did (spec §5), the
+   * operator's name when a person did, null while it is still open. ADDITIVE —
+   * `gate` keeps its exact old spelling, so nothing reading it has to change.
+   */
+  readonly gateBy: string | null;
 }
 
 export interface QuestionOptionModel {
@@ -248,6 +254,7 @@ export function toRunModel(loaded: LoadedRun): RunModel {
       costUsd: stage.cost_usd,
       budgetUsd: stage.budget_usd,
       gate: stage.gate === null ? null : `${stage.gate.type}: ${stage.gate.status}`,
+      gateBy: stage.gate === null ? null : stage.gate.by,
     })),
   );
 
