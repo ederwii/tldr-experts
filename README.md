@@ -1,9 +1,9 @@
 # tldr-experts
 
-**Pre-alpha. Most of it does not work yet.** This repo is a skeleton: a command
-table, three real commands (`doctor`, `init`, `map`), and the file shapes everything
-else will be built against. Every unimplemented command exits `64` and says so.
-Nothing here prints success for work it did not do.
+**Status: pre-alpha 0.0.1 — the v0 loop is complete; the Build/Watch phases and
+expert training are v1.** Every command in the table below is implemented and
+verified by running it. Nothing here prints success for work it did not do: a
+command that cannot do the thing exits non-zero and says which thing.
 
 A lightweight, file-based AI development workflow. Open source, tool-agnostic in
 design, piloted on Claude Code.
@@ -12,6 +12,36 @@ design, piloted on Claude Code.
 > Every phase is the same loop — *Investigate → Handoff → Interview → Gate* — run by
 > a facilitator that only ever reads and writes files. The files ARE the state, the
 > dashboard, the resume point, and the memory.
+
+## Quick start
+
+```bash
+npm i -g tldr-experts          # or, without installing: npx tldr-experts doctor
+tldrx doctor                   # check the local environment first — it is the authority
+
+cd your-project
+tldrx init                     # detect repos, map the code, write .tldrx/, ask only the gaps
+tldrx run new payments --scope feature --budget 5
+tldrx next                     # run the next stage; it stops at a gate or a question
+tldrx run status               # where the run is, what it is waiting on, what it cost
+tldrx answer Q1 "the answer"   # answer what it asked
+tldrx approve                  # re-runs the stage's checks, then advances the cursor
+```
+
+**Runtime: Node ≥ 20 or Bun.** The published package is a pre-built bundle with
+zero runtime dependencies, so an installed `tldrx` needs only Node. Bun is
+required to *build* from source, not to run.
+
+## Two execution modes
+
+`tldrx next` can do the work itself or supervise someone else doing it, and it
+judges both by the same rules. **Headless** — `tldrx next` — spawns `claude -p`
+itself; use it from a terminal, CI or a chat bridge. **In-session** — the `/tldrx`
+skill runs `tldrx next --prepare`, the Claude Code session you are already in
+dispatches its own sub-agent against the prompt bundle, then `tldrx next --commit`
+picks it up. In-session is cheaper (that context is already warm) and works where
+spawning is disallowed. From "re-read the declared outputs off disk" onwards the
+two are literally the same function — see [Design notes](#design-notes).
 
 ## The loop, in five lines
 
@@ -28,26 +58,27 @@ tldrx retro                # close the run and keep what was learned
 | Command | Status | Notes |
 |---|---|---|
 | `tldrx --version` | **implemented** | Prints `0.0.1`, read from `package.json`. |
-| `tldrx --help` | **implemented** | Lists every command and marks the stubs with `*`. |
+| `tldrx --help` | **implemented** | Lists every command with its one-line summary. The `* = not implemented` legend is printed only when a command actually carries the mark — in 0.0.1 none do. `tldrx <command> --help` prints that command's usage and exits `0` **without needing a workspace**. |
 | `tldrx doctor` | **implemented** | Reads `env.yml`, runs each tool's `check` command, prints a table. Exit `0` when every required tool is present and meets its `min_version`, else `1`. `--mcp` also runs `claude mcp list` (slow — live health checks per server; off by default). |
 | `tldrx init` | **implemented** | Detects repos/stack/commands → `.tldrx/workspace.yml` (spec §2.1), builds `.tldrx/map/<repo>/{architecture,domains,conventions,commands,hotspots,gotchas}.md` + `map/workspace.md`, writes `.tldrx/init-handoff.md` (§2.8) and `.tldrx/init-questions.md` (§2.7, only real gaps), seeds experts at level 0 (§2.6), writes `conventions/`, `process.yml` (§2.12) and an empty `facts.yml`, and appends a marked block to `.gitignore` and `CLAUDE.md`. Deterministic: filesystem + `git` only, no LLM and no network. Re-running regenerates detection output and **keeps** `facts.yml`, `experts/`, `process.yml`, `conventions/*.md` and an answered questions file. Flags: `--root <path>` `--out <path>` `--no-interview` `--process <scrum\|kanban\|shape-up\|none>` `--mcp` `--provider <auto\|graphify\|static>`. Exit `0`/`1`. |
-| `tldrx run <new\|status>` | stub → exit 64 | |
-| `tldrx next [<run>]` | **implemented** | The facilitator (spec §5). Takes `.lock` (a live pid refuses with `2`; a dead one demotes the crashed `running` stage back to `ready`), resolves the cursor, honours `awaiting_gate`/`awaiting_answer` (exit `4`), evaluates `skip_if`, refuses a stage the phase budget cannot cover (exit `2` + `budget.blocked`), checks required inputs exist (exit `1`), assembles the prompt, spawns one sub-agent, then re-reads every declared output **off disk**, re-runs the stage's `checks`, rolls the cost into `run.yml`+`budget.yml` and either requests the gate (exit `4`) or advances the cursor (exit `0`). A failure is exit `5`, and the cost is recorded, never refunded. Flags: `--dry-run --prepare --commit --model --max-usd --yolo`. |
+| `tldrx next [<run>]` | **implemented** | The facilitator (spec §5). Takes `.lock` (a live pid refuses with `2`; a dead one demotes the crashed `running` stage back to `ready`), resolves the cursor, honours `awaiting_gate`/`awaiting_answer` (exit `4`), evaluates `skip_if`, refuses a stage the phase budget cannot cover (exit `2` + `budget.blocked`), checks required inputs exist (exit `1`), assembles the prompt, spawns one sub-agent, then re-reads every declared output **off disk**, re-runs the stage's `checks`, rolls the cost into `run.yml`+`budget.yml` and either requests the gate (exit `4`) or advances the cursor (exit `0`). A failure is exit `5`, and the cost is recorded, never refunded. Run again on a `failed` stage and it **retries that stage** — spec §5: `stage.failed` never advances the cursor. Flags: `--dry-run --prepare --commit --model --max-usd --yolo --root`. |
 | `tldrx next --dry-run` | **implemented** | Runs the stage, keeps `handoff.md`, reverts every other declared output, records `stage.skipped`. Refused when the stage sets `dry_run_allowed: false`. |
 | `tldrx next --prepare` / `--commit` | **implemented** | In-session mode. `--prepare` writes `.agent/<stage>/{prompt.md,pending.json}` and prints three lines of instructions; `--commit` reads `.agent/<stage>/result.json` and continues down the identical validation path. |
-| `tldrx answer` | stub → exit 64 | |
-| `tldrx reject` | stub → exit 64 | |
 | `tldrx map [--refresh\|--check]` | **implemented** | `--refresh` re-detects and rewrites `.tldrx/map/**`. `--check` resolves every `[src: <repo:>path:line]` citation in the map and the init handoff against the filesystem — exit `0` when they all land, `1` with the offending document, line and reason when they do not. Map providers: `graphify` when the binary is on PATH (runs only `graphify --version` and `graphify update <path> --no-cluster`, both documented, no LLM), otherwise `static` (file tree, manifests, 90-day `git log --numstat` churn, largest files). Which one ran is recorded as `provider:` in `workspace.yml`. |
 | `tldrx run new <slug>` | **implemented** | Seeds `tldrx-work/<yymmdd>-<slug>/` from `workflows/<scope>.yml` + each `stages/<id>/stage.yml`: `run.yml`, `budget.yml`, `events.jsonl` and the phase folders. Per-phase ceilings are proportional to the stages' `budget_usd`, scaled to `--budget` (or the preset default). Flags: `--title --scope --budget --repos --from`. Writes to a temp dir and renames, so a validation failure leaves nothing behind. Exit `0`/`1`. |
-| `tldrx run new --from <dir>` | **implemented** | The §6 AI-DLC distill. Reads only the listed files, turns every bullet/paragraph under a heading into a Finding tagged `[src: aidlc:<file>:<line>]` and every answered `## Q<n>.` block into a fact plus a Finding tagged `[src: aidlc:<file>#Q<n>]`. Unanswered blocks and ceremony stages are dropped; a claim contradicting a non-retired fact becomes a question in `01-what/questions.md`. Deterministic — no LLM, no network. |
-| `tldrx run status [<run>]` | **implemented** | Run id, scope, cursor, a progress bar per phase, budget spent/ceiling, and the pending question or gate. Newest non-terminal run when omitted. `--json` for the same view as data. Exit `0`/`3`. |
+| `tldrx run new --from <dir>` | **implemented** | The §6 AI-DLC distill. Reads only the listed files, turns every bullet/paragraph under a heading into a Finding tagged `[src: aidlc:<file>:<line>]` and every answered `## Q<n>.` block into a fact plus a Finding tagged `[src: aidlc:<file>#Q<n>]`. Unanswered blocks and ceremony stages are dropped; a claim contradicting a non-retired fact becomes a question in `01-what/questions.md`. A claim that **agrees** with a fact already held (same area, Jaccard ≥ 0.9) reuses it rather than appending a second copy, so importing the same folder twice leaves `facts.yml` byte-identical. Deterministic — no LLM, no network. |
+| `tldrx run status [<run>]` | **implemented** | Run id, scope, cursor, a progress bar per phase, budget spent/ceiling, and the pending question or gate. A **failed** stage is never counted as progress: the bar takes `✗` in its first cell (`[✗░░░░] 0/1 stages · failed: <reason>`) and the waiting line offers both ways out — `retry: tldrx next` · `or: tldrx reject --note`. Newest unfinished run when omitted (a failed run still counts as unfinished). `--json` for the same view as data. Exit `0`/`3`. |
 | `tldrx answer <Qid> <text>` | **implemented** | The terminal half of `answer-capture`, sharing its code path (`src/core/answers/`): fills the `[Answer]:` slot, flips the status, writes the footer, appends the fact and the `question.answered` + `fact.added` events, and prints the fact id. Exit `0`/`1`/`3`. |
 | `tldrx approve` | **implemented** | Only when the cursor stage is `awaiting_gate`. **Re-runs** the stage's `checks` against what is on disk — `claim-sources` and `schema` via the validators, `cmd` for real (and only a command `workspace.yml` declares verbatim). On a pass: gate approved with `by`/`at`, stage `done`, cursor advances to the next stage as `ready`. Exit `2` naming the failing check otherwise. |
-| `tldrx reject --note <t>` | **implemented** | Records the note on the gate and sends the stage back to `ready`. Exit `0`/`2`/`3`. |
+| `tldrx reject --note <t>` | **implemented** | Records the note on the gate and sends the stage back to `ready`. Valid on a stage that is `awaiting_gate` **or** `failed` — spec §5 lists both as the operator's moves after a failure. The note reaches the next attempt: `next` renders it, with the previous failure, under a `## Previous attempt` heading in the prompt. Exit `0`/`2`/`3`. |
 | `tldrx expert <list\|create\|train>` | **implemented** (read-only) | `list` prints a table plus an ASCII star chart per expert, **recomputing every level from evidence** with the §2.6 formula and warning when the stored number disagrees; `--json` for the same data, `--root <path>` to point elsewhere. `create <name> [--domain <slug>] [--stack <lang>]` writes `.tldrx/experts/<name>/{expert.md,competencies.yml}` at status `created` with zero areas (one per flag given, level 0, no evidence) and **refuses to overwrite** an existing expert (exit `1`). `train <name> --area <a> [--mode light\|full] --print-prompt` prints a deterministic copy-paste prompt built from `expert.md`, the area and `workspace.yml`; without `--print-prompt` it exits `64` (running training is v1.1). Exit `0`/`1`/`64`. |
 | `tldrx dashboard --static [--out <dir>]` | **implemented** (`--static` only) | Generates one self-contained `index.html` (default `.tldrx/cache/dashboard/`) with the runs list (status, phase progress, spent/ceiling, pending gate or question), run detail (execution path table, handoffs rendered to HTML, open questions with options), experts (status, inline SVG star chart, train prompts) and a how-to. Inline CSS/JS, theme-aware via `prefers-color-scheme`, **no external URL in any `src`/`href`** — an external citation is shown as text, never as a link. Read-only: no control on the page changes anything. Without `--static` it exits `64` (the live server is v1). |
 | `tldrx replay <run>` | **implemented** | Renders `events.jsonl` over the `run.yml` execution path as a stakeholder narrative on stdout: header (run, scope, status, spent/ceiling), then per phase and stage in event order — start/end, questions asked and answered with who, gate approvals and rejections with their notes, failed checks, budget warnings, cost against ceiling — ending with "Where it stands now" (cursor, pending gate, open questions). Writes nothing. Exit `0`/`3`. |
 | `tldrx retro <run> [--apply]` | **implemented** | Writes `tldrx-work/<run>/retro.md` with three sections: **Facts to remember** (facts whose `source.run` is this run, plus any `fact.added` the store is missing), **Practice proposals** (five deterministic heuristics over the log — a stage rejected at its gate, a stage past its `budget_usd`, a stage past `questions.max`, every `check.failed`, every `budget.warned`/`blocked`; each bullet ends in `[src: tldrx-work/<run>/events.jsonl:<line>]`), and **Proposed stages** (`none proposed` unless a rejection note contains `propose stage:`). No model runs. Touches nothing else unless `--apply`, which appends the proposals to `.tldrx/memory/practices.md` under a dated, run-stamped heading — idempotent, so a second `--apply` for the same run appends nothing. Exit `0`/`3`. |
+
+**`--root <path>`** works on every command that touches a workspace — `init`, `map`,
+`run new`, `run status`, `next`, `answer`, `approve`, `reject`, `expert`, `replay`,
+`retro`, `dashboard`. Omitted, they use the nearest `.tldrx/` at or above the cwd.
 
 Non-command pieces:
 
@@ -63,7 +94,7 @@ Non-command pieces:
 | `session-start` hook | **implemented** | SessionStart. Up to three lines of "where we are" from the same `RunStore` snapshot the status line uses, so the two can never disagree; silent when there is no run. |
 | Hook failure policy | **implemented** | Every hook but `dod-gate` fails **open**: an internal error exits `0` and prints one `tldrx hook <name>: internal error, allowing — …` line to stderr. Only PreToolUse can deny, and it denies by printing `permissionDecision: deny` and exiting `0` — never by an exit code. |
 | Runtime seam | **implemented** | `src/core/runtime/` — `readStdin`, `spawn`, `readText/writeText/exists/readJson`, `parseYaml/stringifyYaml`, picked at import time by `typeof Bun`. Every other file in `src/` is runtime-agnostic; `grep -rn 'Bun\.' src \| grep -v src/core/runtime/` comes back empty, and a test asserts it. |
-| `RunStore` | **implemented** | The one write path for a run: loads and validates `run.yml` + `budget.yml`, recomputes stage costs, phase status, run status and the budget mirror on every save, and refuses to write either file if it would be invalid. `next` will reuse it unchanged. |
+| `RunStore` | **implemented** | The one write path for a run: loads and validates `run.yml` + `budget.yml`, recomputes stage costs, phase status, run status and the budget mirror on every save, and refuses to write either file if it would be invalid. `run new`, `answer`, `approve`, `reject` and `next` all write through it. |
 | Text parsers + stores | **implemented** | `src/core/text/` (questions.md, handoff.md, the `src` grammar), `src/core/facts/`, `src/core/events/`, `src/core/budget/` — the schemas the hooks enforce. Validating a 256 KB handoff stays under 50 ms. |
 | 5 stages, 13 scopes, 10 templates | **read by `run new`** | A scope preset plus its stage files seed the run. Both the draft shape the repo ships and the spec §2.3/§2.4 shape load; a workspace's own `.tldrx/workflows/` and `.tldrx/stages/` win over the shipped defaults. |
 | Plugin packaging | **loadable** | `claude --plugin-dir ./plugin` loads the skill and all six live hooks. `claude plugin validate ./plugin` exits `0` (two documented warnings). |
@@ -72,7 +103,7 @@ Non-command pieces:
 
 ```
 bin/tldrx.ts          entrypoint — parses nothing, decides nothing
-scripts/build.ts      bundles bin/ + src/hooks/ into dist/ for node
+scripts/build.ts      bundles bin/ + src/hooks/ into dist/ for node (hooks share one chunk)
 src/cli/              command table + one file per command
 src/core/runtime/     the Bun/Node seam — the only place `Bun.` appears
 src/core/run/         run.yml, budget.yml, the run lifecycle and its gates
@@ -150,7 +181,10 @@ under Node it is `node:child_process`, `fs/promises` and the `yaml` npm package.
 `yaml` is a **devDependency on purpose**: `bun build --target=node` inlines it, so a
 published install still resolves zero runtime dependencies. Do not promote it to
 `dependencies` — that would reintroduce the install step the framework refuses to
-have. The invariant that keeps the seam honest is mechanical:
+have. Inlining it once per entry point is what made `dist/` 2.4 MB, so the seven
+hooks are built with `splitting: true` and share one chunk: entry points of 1.6–4.9 KB
+over a 242 KB chunk, `dist/` at 928 KB. `dist/tldrx.js` stays unsplit — one file to
+hand to `node`. The invariant that keeps the seam honest is mechanical:
 
 ```bash
 grep -rn 'Bun\.' src | grep -v src/core/runtime/    # must print nothing
@@ -183,8 +217,11 @@ in `plugin/README.md`.
 own `settings.json` supports only `agent` and `subagentStatusLine` — so the plugin
 cannot install it. Wire it yourself; the snippet is in `plugin/README.md`.
 
-**Exit codes.** `0` success · `1` a real check ran and failed (only `doctor` uses
-this) · `64` usage error or not implemented (`EX_USAGE`).
+**Exit codes** (spec §3). `0` ok · `1` usage or schema error, or a real check that
+ran and failed · `2` refused by a gate · `3` not found · `4` awaiting a human ·
+`5` the sub-agent failed · `64` not implemented (`EX_USAGE`). A command that is
+not implemented must exit `64` and say so on stderr; in 0.0.1 the only two are
+`expert train` without `--print-prompt` and `dashboard` without `--static`.
 
 ## License
 

@@ -1,4 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { COMMANDS, lookup } from "../src/cli/index.ts";
 import { EXIT_NOT_IMPLEMENTED, EXIT_OK } from "../src/cli/exitCodes.ts";
@@ -12,13 +14,17 @@ interface Run {
   readonly stderr: string;
 }
 
-async function tldrx(...args: string[]): Promise<Run> {
-  const proc = Bun.spawn(["bun", BIN, ...args], { stdout: "pipe", stderr: "pipe", cwd: FRAMEWORK_ROOT });
+async function tldrxIn(cwd: string, ...args: string[]): Promise<Run> {
+  const proc = Bun.spawn(["bun", BIN, ...args], { stdout: "pipe", stderr: "pipe", cwd });
   const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
   ]);
   return { code: await proc.exited, stdout, stderr };
+}
+
+async function tldrx(...args: string[]): Promise<Run> {
+  return tldrxIn(FRAMEWORK_ROOT, ...args);
 }
 
 describe("tldrx --version", () => {
@@ -41,9 +47,20 @@ describe("tldrx --help", () => {
     for (const command of COMMANDS) expect(run.stdout).toContain(command.name);
   });
 
-  test("marks the unimplemented commands so nobody is misled", async () => {
+  // The `*` marker and its legend travel together: printing the legend over a
+  // list that carries no `*` is itself a false claim about the CLI.
+  test("the stub marker and its legend appear together, or not at all", async () => {
     const run = await tldrx("--help");
-    expect(run.stdout).toContain("* = not implemented yet");
+    const stubs = COMMANDS.filter((c) => !c.implemented);
+    expect(run.stdout.includes("* = not implemented yet")).toBe(stubs.length > 0);
+    for (const command of COMMANDS.filter((c) => c.implemented)) {
+      expect(run.stdout).not.toContain(`* ${command.name}`);
+    }
+  });
+
+  test("every command's one-line summary is the one it declares", async () => {
+    const run = await tldrx("--help");
+    for (const command of COMMANDS) expect(run.stdout).toContain(command.summary);
   });
 
   test("bare invocation prints help rather than pretending to work", async () => {
@@ -87,6 +104,36 @@ describe("stub commands", () => {
     const run = await tldrx("expert", "train", "foo", "--area", "bar", "--mode", "light");
     expect(run.stderr.trim().startsWith("tldrx expert train:")).toBe(true);
     expect(run.stderr).not.toContain("--mode");
+  });
+});
+
+describe("<command> --help", () => {
+  // `--help` is a question about the CLI, not about a project: it must answer
+  // from a directory that has no workspace at all.
+  const foreign = mkdtempSync(join(tmpdir(), "tldrx-nohelp-"));
+
+  afterAll(() => rmSync(foreign, { recursive: true, force: true }));
+
+  for (const name of ["next", "run", "answer", "approve", "reject", "retro"]) {
+    test(`\`tldrx ${name} --help\` prints usage and exits 0 with no .tldrx`, async () => {
+      const run = await tldrxIn(foreign, name, "--help");
+      expect(run.stderr).toBe("");
+      expect(run.code).toBe(EXIT_OK);
+      expect(run.stdout).toContain(`tldrx ${name} —`);
+      expect(run.stdout).toContain("Usage:");
+      expect(run.stdout).not.toContain("run `tldrx init` first");
+    });
+  }
+
+  test("-h is the same as --help", async () => {
+    const run = await tldrxIn(foreign, "next", "-h");
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).toContain("tldrx next —");
+  });
+
+  test("subcommands are listed when the command takes them", async () => {
+    const run = await tldrxIn(foreign, "run", "--help");
+    expect(run.stdout).toContain("Subcommands: new, status");
   });
 });
 

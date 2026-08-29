@@ -18,9 +18,13 @@ export function renderHelp(version: string, commands: readonly Command[]): strin
     lines.push(`  ${mark} ${command.name.padEnd(width)}  ${command.summary}`);
   }
 
+  // Only explain the marker when a command actually carries it. Printing the
+  // legend over a list with no `*` in it is itself a false claim.
+  if (commands.some((command) => !command.implemented)) {
+    lines.push("", "  * = not implemented yet. These exit 64 and say so; they never pretend to work.");
+  }
+
   lines.push(
-    "",
-    "  * = not implemented yet. These exit 64 and say so; they never pretend to work.",
     "",
     "Flags:",
     "  --version    Print the version",
@@ -33,6 +37,22 @@ export function renderHelp(version: string, commands: readonly Command[]): strin
     "  tldrx answer / approve     answer the unknowns, approve the gate",
     "  tldrx retro                close the run and keep what was learned",
   );
+  return lines.join("\n");
+}
+
+/**
+ * `tldrx <command> --help`. Every command answers it, and answers it without a
+ * workspace: help is a question about the CLI, not about a project.
+ */
+export function renderCommandHelp(command: Command): string {
+  const lines = [`tldrx ${command.name} — ${command.summary}`, "", "Usage:"];
+  for (const line of command.usage.split("\n")) lines.push(`  ${line.trimStart()}`);
+  if (command.subcommands.length > 0) {
+    lines.push("", `Subcommands: ${command.subcommands.join(", ")}`);
+  }
+  if (!command.implemented) {
+    lines.push("", "Not implemented yet: this command exits 64 and says so.");
+  }
   return lines.join("\n");
 }
 

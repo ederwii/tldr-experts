@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -58,6 +58,20 @@ describe("bun run build", () => {
     for (const hook of ["statusline", "answer-capture", "claim-sources", "no-reask", "dod-gate", "budget-gate", "session-start"]) {
       expect(existsSync(join(DIST, "hooks", `${hook}.js`))).toBe(true);
     }
+  });
+
+  /**
+   * A guard on the `splitting: true` decision, not on a byte count. Each hook
+   * used to inline its own YAML parser and weigh ~250 KB; if that regresses, the
+   * shared chunk has stopped being shared and every hook pays for it again.
+   */
+  test("the hook entry points are thin — the shared code is in a chunk", () => {
+    const hooks = readdirSync(join(DIST, "hooks")).filter((n) => !n.startsWith("chunk-"));
+    expect(hooks).toHaveLength(7);
+    for (const hook of hooks) {
+      expect(statSync(join(DIST, "hooks", hook)).size).toBeLessThan(50_000);
+    }
+    expect(readdirSync(join(DIST, "hooks")).some((n) => n.startsWith("chunk-"))).toBe(true);
   });
 
   test("the built entry points say node, not bun", () => {

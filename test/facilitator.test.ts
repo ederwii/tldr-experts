@@ -17,6 +17,8 @@ import { ENVELOPE_SCHEMA } from "../src/core/facilitator/envelope.ts";
 import { evaluateSkipIf, SkipIfError } from "../src/core/facilitator/skipIf.ts";
 import { isAlive } from "../src/core/facilitator/Lock.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
+import { reject } from "../src/core/run/gates.ts";
+import { buildStatus, renderStatus } from "../src/core/run/runStatus.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import type { TldrxEvent } from "../src/core/events/Event.ts";
 import {
@@ -496,3 +498,137 @@ function questionsMd(state: "open" | "answered"): string {
     "",
   ].join("\n");
 }
+
+/**
+ * Spec §5, failure path: "`stage.failed` never advances the cursor … the
+ * operator's options are `next` (retry, re-spending), `reject --note` (send the
+ * stage back to `ready` with the note fed into the next prompt)".
+ *
+ * Before this block the cursor was walked PAST a failed stage, so `next` ran the
+ * following stage on a foundation that had failed, and `reject` refused because
+ * the stage was not `awaiting_gate`.
+ */
+describe("after a failure", () => {
+  /**
+   * `cost` matters to the tests that then RETRY: this fixture's phase ceiling is
+   * exactly the stage's own estimate, so a failure that spent anything leaves the
+   * phase unable to afford a second attempt and the budget gate refuses it with
+   * exit 2 — spec §5, and asserted on its own below. The retry tests therefore
+   * fail the stage for $0.00; the "cost is kept" property is asserted separately.
+   */
+  async function failAlpha(ws: FacilitatorWorkspace, cost = "0.42"): Promise<void> {
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: "{}", FAKE_CLAUDE_IS_ERROR: "1", FAKE_CLAUDE_COST: cost });
+    expect((await next(ws)).code).toBe(5);
+    expect(RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.status).toBe("failed");
+  }
+
+  test("`next` retries the failed stage instead of walking the cursor past it", async () => {
+    const ws = workspace(TWO_STAGE);
+    await failAlpha(ws, "0.00");
+
+    delete process.env.FAKE_CLAUDE_IS_ERROR;
+    process.env.FAKE_CLAUDE_OUTPUTS = ALPHA_OUTPUTS;
+    const retry = await next(ws);
+
+    expect(retry.lines.join("\n")).toContain("retrying 01-what/alpha");
+    expect(retry.code).toBe(0);
+    const store = RunStore.open(ws.runDir);
+    expect(store.run.phases[0]?.stages[0]?.status).toBe("done");
+    // Two attempts at alpha, and beta was never started on a failed foundation.
+    const started = events(ws).filter((e) => e.type === "stage.started");
+    expect(started.filter((e) => e.stage === "alpha")).toHaveLength(2);
+  });
+
+  test("a run holding a failed stage is still the run `next` finds without an id", async () => {
+    const ws = workspace(TWO_STAGE);
+    await failAlpha(ws);
+
+    const store = RunStore.open(ws.runDir);
+    expect(store.run.status).toBe("failed");
+    expect(RunStore.find(ws.root)?.runId).toBe(ws.runId);
+  });
+
+  test("`run status` shows the failure rather than counting it as progress", async () => {
+    const ws = workspace(TWO_STAGE);
+    await failAlpha(ws);
+
+    const store = RunStore.open(ws.runDir);
+    const view = buildStatus(store.run, store.budget, store.runDir);
+    const phase = view.phases[0];
+    expect(phase?.done).toBe(0);
+    expect(phase?.failed).toBe(1);
+    expect(phase?.bar.startsWith("✗")).toBe(true);
+    expect(view.waiting.kind).toBe("failed");
+
+    const text = renderStatus(view);
+    expect(text).toContain("[✗░░░░] 0/1 stages");
+    expect(text).toContain("· failed:");
+    expect(text).toContain("retry: `tldrx next`");
+    expect(text).toContain('or: `tldrx reject --note "…"`');
+    expect(text).not.toContain("every stage is terminal");
+  });
+
+  test("`reject --note` is allowed on a failed stage and sends it back to ready", async () => {
+    const ws = workspace(TWO_STAGE);
+    await failAlpha(ws);
+
+    const store = RunStore.open(ws.runDir);
+    const outcome = reject(store, {
+      root: ws.root, actor: "alan", at: "2026-08-28T10:00:00Z",
+      note: "write handoff.md with a src token on every finding",
+    });
+    expect(outcome.from).toBe("failed");
+
+    const after = RunStore.open(ws.runDir);
+    const alpha = after.run.phases[0]?.stages[0];
+    expect(alpha?.status).toBe("ready");
+    expect(alpha?.gate.status).toBe("rejected");
+    expect(alpha?.gate.note).toContain("src token");
+    expect(after.run.cursor.stage).toBe("alpha");
+    const rejected = events(ws).find((e) => e.type === "gate.rejected");
+    expect(rejected?.payload.from).toBe("failed");
+  });
+
+  test("the reject note reaches the next prompt under `## Previous attempt`", async () => {
+    const ws = workspace(TWO_STAGE);
+    await failAlpha(ws, "0.00");
+    reject(RunStore.open(ws.runDir), {
+      root: ws.root, actor: "alan", at: "2026-08-28T10:00:00Z",
+      note: "write handoff.md with a src token on every finding",
+    });
+
+    const promptOut = join(ws.root, "prompt.txt");
+    delete process.env.FAKE_CLAUDE_IS_ERROR;
+    process.env.FAKE_CLAUDE_OUTPUTS = ALPHA_OUTPUTS;
+    process.env.FAKE_CLAUDE_PROMPT_OUT = promptOut;
+    expect((await next(ws)).code).toBe(0);
+
+    const prompt = readFileSync(promptOut, "utf8");
+    expect(prompt).toContain("## Previous attempt");
+    expect(prompt).toContain("src token on every finding");
+    expect(prompt).toContain("The previous attempt at this stage FAILED");
+  });
+
+  test("a retry the phase can no longer afford is refused by the budget gate, not run", async () => {
+    const ws = workspace(TWO_STAGE);
+    await failAlpha(ws, "0.42");
+
+    delete process.env.FAKE_CLAUDE_IS_ERROR;
+    process.env.FAKE_CLAUDE_OUTPUTS = ALPHA_OUTPUTS;
+    const retry = await next(ws);
+
+    expect(retry.code).toBe(2);
+    expect(retry.lines.join("\n")).toContain("retrying 01-what/alpha");
+    expect(retry.lines.join("\n")).toContain("budget");
+    // The money from the failed attempt is still on the record.
+    expect(RunStore.open(ws.runDir).run.budget.spent_usd).toBe(0.42);
+  });
+
+  test("a first attempt carries no `## Previous attempt` section", async () => {
+    const ws = workspace(TWO_STAGE);
+    const promptOut = join(ws.root, "prompt.txt");
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS, FAKE_CLAUDE_PROMPT_OUT: promptOut });
+    expect((await next(ws)).code).toBe(0);
+    expect(readFileSync(promptOut, "utf8")).not.toContain("## Previous attempt");
+  });
+});

@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { parseYaml } from "../src/core/yaml.ts";
@@ -233,8 +234,21 @@ _none yet_
 _none yet_
 `;
 
+const ROOT_QUESTION = `# Questions — 01-what — run X
+
+## Q1 · Where does leaderboard state live?
+<!-- id: Q1 | status: open | area: data-model | asked_by: product | asked_at: 2026-08-28T14:02:11Z -->
+Why asked: no ranking store exists in the map [src: absent:.tldrx/map/domains.md]
+
+[Answer]:
+`;
+
 /** Put the cursor stage into the one state a gate is allowed to act on. */
 function parkAtGate(runDir: string): void {
+  parkAt(runDir, "awaiting_gate");
+}
+
+function parkAt(runDir: string, status: "awaiting_gate" | "failed"): void {
   const store = RunStore.open(runDir);
   store.mutate((run) => ({
     ...run,
@@ -245,7 +259,7 @@ function parkAtGate(runDir: string): void {
             ...phase,
             stages: phase.stages.map((stage) =>
               stage.id === run.cursor.stage
-                ? { ...stage, status: "awaiting_gate" as const, started_at: "2026-08-28T09:00:00Z" }
+                ? { ...stage, status, started_at: "2026-08-28T09:00:00Z" }
                 : stage,
             ),
           },
@@ -375,6 +389,27 @@ describe("tldrx reject", () => {
     await tldrx(ws.root, "run", "new", "leaderboard");
     const run = await tldrx(ws.root, "reject", "--note", "nope");
     expect(run.code).toBe(EXIT_GATE_REFUSED);
+    expect(run.stderr).toContain("`awaiting_gate` or `failed`");
+  });
+
+  // Spec §5 failure path: after `stage.failed` the operator may retry with `next`
+  // OR reject with a note. Rejecting used to be refused, leaving retry as the
+  // only move out of a failure.
+  test("a failed stage may be rejected, and goes back to ready with the note", async () => {
+    const ws = fresh();
+    await tldrx(ws.root, "run", "new", "leaderboard");
+    const runDir = onlyRunDir(ws.root);
+    parkAt(runDir, "failed");
+
+    const run = await tldrx(ws.root, "reject", "--note", "the handoff cites nothing");
+    expect(run.stderr).toBe("");
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).toContain("(it had failed)");
+    expect(run.stdout).toContain("the note goes into the next prompt");
+
+    const what = loadRun(runDir).phases[0]?.stages[0];
+    expect(what?.status).toBe("ready");
+    expect(what?.gate.note).toBe("the handoff cites nothing");
   });
 });
 
@@ -444,5 +479,92 @@ Why asked: no ranking store exists in the map [src: absent:.tldrx/map/domains.md
     await tldrx(ws.root, "run", "new", "leaderboard");
     const run = await tldrx(ws.root, "answer", "Q1");
     expect(run.code).toBe(EXIT_USAGE);
+  });
+});
+
+/**
+ * `--root <path>` on the run-lifecycle commands (spec §3).
+ *
+ * Every test here runs from a directory that has no `.tldrx/` anywhere above it,
+ * so without `--root` each command would fail with the "run `tldrx init` first"
+ * usage error. Reaching the workspace at all is the proof.
+ */
+describe("--root from a foreign cwd", () => {
+  let foreign = "";
+
+  beforeEach(() => {
+    foreign = mkdtempSync(join(tmpdir(), "tldrx-foreign-"));
+  });
+
+  afterEach(() => {
+    if (foreign !== "") rmSync(foreign, { recursive: true, force: true });
+    foreign = "";
+  });
+
+  test("without --root the same cwd has no workspace at all", async () => {
+    const run = await tldrx(foreign, "run", "status");
+    expect(run.code).toBe(EXIT_USAGE);
+    expect(run.stderr).toContain("run `tldrx init` first");
+  });
+
+  test("run new writes into the --root workspace", async () => {
+    const ws = fresh();
+    const run = await tldrx(foreign, "run", "new", "leaderboard", "--root", ws.root);
+    expect(run.stderr).toBe("");
+    expect(run.code).toBe(EXIT_OK);
+    expect(existsSync(join(onlyRunDir(ws.root), "run.yml"))).toBe(true);
+    expect(readdirSync(foreign)).toEqual([]);
+  });
+
+  test("run status reads the --root workspace", async () => {
+    const ws = fresh();
+    await tldrx(ws.root, "run", "new", "leaderboard");
+    const run = await tldrx(foreign, "run", "status", "--root", ws.root, "--json");
+    expect(run.code).toBe(EXIT_OK);
+    expect((JSON.parse(run.stdout) as { run: string }).run).toMatch(/-leaderboard$/);
+  });
+
+  test("next --prepare targets the --root workspace", async () => {
+    const ws = fresh();
+    await tldrx(ws.root, "run", "new", "leaderboard");
+    const run = await tldrx(foreign, "next", "--prepare", "--root", ws.root);
+    expect(run.stderr).toBe("");
+    expect(run.code).toBe(EXIT_OK);
+    expect(existsSync(join(onlyRunDir(ws.root), ".agent", "what", "prompt.md"))).toBe(true);
+  });
+
+  test("answer records against the --root workspace", async () => {
+    const ws = fresh();
+    await tldrx(ws.root, "run", "new", "leaderboard");
+    writeFileSync(join(onlyRunDir(ws.root), "01-what", "questions.md"), ROOT_QUESTION, "utf8");
+
+    const run = await tldrx(foreign, "answer", "Q1", "A", "—", "Postgres", "--root", ws.root);
+    expect(run.stderr).toBe("");
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).toMatch(/Q1 answered → F\d{3,6}/);
+  });
+
+  test("approve acts on the --root workspace", async () => {
+    const ws = fresh();
+    await tldrx(ws.root, "run", "new", "leaderboard");
+    const runDir = onlyRunDir(ws.root);
+    writeFileSync(join(runDir, "01-what", "handoff.md"), MINIMAL_HANDOFF, "utf8");
+    parkAtGate(runDir);
+
+    const run = await tldrx(foreign, "approve", "--note", "fine", "--root", ws.root);
+    expect(run.stderr).toBe("");
+    expect(run.code).toBe(EXIT_OK);
+    expect(loadRun(runDir).phases[0]?.stages[0]?.gate.status).toBe("approved");
+  });
+
+  test("reject acts on the --root workspace", async () => {
+    const ws = fresh();
+    await tldrx(ws.root, "run", "new", "leaderboard");
+    const runDir = onlyRunDir(ws.root);
+    parkAtGate(runDir);
+
+    const run = await tldrx(foreign, "reject", "--note", "not yet", "--root", ws.root);
+    expect(run.code).toBe(EXIT_OK);
+    expect(loadRun(runDir).phases[0]?.stages[0]?.gate.note).toBe("not yet");
   });
 });

@@ -16,7 +16,7 @@ import { listRunDirs } from "../../hooks/lib/workspace.ts";
 import { nowRfc3339 } from "../../hooks/lib/actor.ts";
 import { emitBudgetYaml, emitRunYaml } from "./emitRunYaml.ts";
 import {
-  asRunFile, derivePhaseStatus, deriveRunStatus, flatten, isTerminal, stageAt, validateRunFile,
+  asRunFile, derivePhaseStatus, deriveRunStatus, flatten, isFinished, stageAt, validateRunFile,
   type RunFile, type RunPhase, type RunStage,
 } from "./RunFile.ts";
 
@@ -62,8 +62,13 @@ export class RunStore {
   }
 
   /**
-   * Resolve a run by id, or the newest non-terminal one when no id is given
+   * Resolve a run by id, or the newest unfinished one when no id is given
    * (spec §3: `run status [<run>]`). Returns null when nothing matches.
+   *
+   * "Unfinished" is `done`/`cancelled`, not `isTerminal`: a run whose stage failed
+   * is exactly the run the operator is about to retry or reject, so skipping it
+   * would make `tldrx next` answer "no non-terminal run" to the one person who
+   * needs it.
    */
   static find(root: string, runId?: string): RunStore | null {
     const dirs = listRunDirs(root);
@@ -80,7 +85,7 @@ export class RunStore {
       } catch {
         continue; // a run we cannot parse is not the newest live run
       }
-      if (isTerminal(store.run.status)) continue;
+      if (isFinished(store.run.status)) continue;
       if (newest === null || store.run.updated_at > newest.run.updated_at) newest = store;
     }
     return newest;

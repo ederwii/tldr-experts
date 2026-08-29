@@ -12,7 +12,7 @@ import { DEFAULT_OUT_DIR, writeStaticDashboard } from "../../core/dashboard/inde
 
 export const dashboardCommand: Command = {
   name: "dashboard",
-  summary: "Serve or export the read-only dashboard",
+  summary: "Export the read-only dashboard to one static page",
   usage: "tldrx dashboard --static [--out <dir>] [--root <path>]",
   subcommands: [],
   implemented: true,

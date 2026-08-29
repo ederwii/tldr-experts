@@ -25,15 +25,25 @@ export interface PromptParts {
   readonly experts: readonly { readonly name: string; readonly body: string }[];
   /** Declared input path -> file content, already read from disk. */
   readonly inputs: readonly { readonly path: string; readonly content: string }[];
+  /**
+   * Why this stage is being run again — a previous failure, an operator's reject
+   * note, or both. Empty on a first attempt, and then no section is emitted at
+   * all: a heading saying "nothing went wrong last time" is noise in every prompt.
+   */
+  readonly previousAttempt?: string;
 }
 
 export function buildPrompt(parts: PromptParts): string {
   const substituted = substitute(parts.stageMd, parts.values);
   const withInputs = replaceSection(substituted, "Inputs", renderInputs(parts.inputs));
+  const previous = (parts.previousAttempt ?? "").trim();
+  const withPrevious = previous === ""
+    ? withInputs
+    : replaceSection(withInputs, "Previous attempt", previous);
   const experts = parts.experts.map((expert) =>
     `\n\n---\n\n<!-- expert: ${expert.name} -->\n${expert.body.trimEnd()}\n`,
   );
-  return `${withInputs.trimEnd()}\n${experts.join("")}`;
+  return `${withPrevious.trimEnd()}\n${experts.join("")}`;
 }
 
 /** Every `{{name}}` we own; anything else is left alone rather than blanked. */

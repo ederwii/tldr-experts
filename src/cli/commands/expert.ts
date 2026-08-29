@@ -25,8 +25,10 @@ const USAGE = [
 
 export const expertCommand: Command = {
   name: "expert",
-  summary: "Manage the expert files",
-  usage: "tldrx expert <list|create|train> [name]",
+  summary: "List or create experts, or print a training prompt",
+  usage: "tldrx expert list [--root <path>] [--json]\n" +
+    "       tldrx expert create <name> [--domain <slug>] [--stack <lang>] [--root <path>]\n" +
+    "       tldrx expert train <name> --area <area> [--mode light|full] --print-prompt [--root <path>]",
   subcommands: ["list", "create", "train"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {

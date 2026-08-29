@@ -17,6 +17,6 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun test
-      - name: build (if the script exists yet)
-        run: |
-          if bun run --silent build >/dev/null 2>&1; then echo "build ok"; else echo "no build script yet (pre-wave2)"; fi
+      # Not wrapped in an `if`: this step used to swallow the build's exit code and
+      # report "no build script yet", so a red build passed CI. It exists now.
+      - run: bun run build
