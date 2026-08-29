@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.3.0 — unreleased
+
+### `tldrx dashboard` — a live, read-only local server
+
+`dashboard` without `--static` used to exit `64`. It now serves.
+
+- **Three GET routes on `127.0.0.1`**, default port `4477` (`--port <n>`,
+  `--port 0` for any free one, `--open` to launch a browser): `/` is the page,
+  `/model.json` is the model it was drawn from, `/events` is a Server-Sent Events
+  stream. Nothing else is answered, and anything that is not a `GET` gets `405` —
+  a dashboard that can change state is a second source of truth competing with
+  the files (concept §12).
+- **A watcher over `.tldrx/**` and `tldrx-work/**`**, debounced 300 ms, pushes a
+  `reload` event; the page re-fetches the model and redraws. Recursive `fs.watch`
+  where the platform has it, an mtime sweep where it does not — an untested
+  fallback is a dashboard that quietly stops being live, so both paths are
+  covered by the same test.
+- **`node:http` and `node:fs`, nothing else.** No framework, no runtime
+  dependency, and the built `dist/tldrx.js` serves under plain `node` — proven by
+  a test that runs it, not by inspection.
+- Ctrl-C closes the listener and the watcher and exits `0`. A directory with no
+  `.tldrx/` gets a page that says which two commands fix that, and fills itself in
+  when one of them is run.
+
+### Model and renderer are now separate things
+
+The rendering layer is meant to be replaced by a designer, so it stopped being
+entangled with the reading layer.
+
+- **`src/core/dashboard/model.ts` produces one plain JSON `DashboardModel`** from
+  the files — runs, execution path, handoffs, open questions, experts with levels
+  recomputed from evidence, the FAQ as data, and the Plan's stories/epics/waves
+  when a run has written them. It survives a JSON round trip unchanged, and a test
+  pins the field NAMES rather than the markup. Documented field by field in
+  `docs/dashboard-model.md`.
+- **`src/core/dashboard/render.ts` is the only markup in the product.** The static
+  export renders on the server; the live page redraws in the browser — with the
+  *same functions*, serialised into the page by `clientRenderer()`. A test
+  evaluates that serialised source in an empty scope and demands byte-identical
+  output, so a template function that closes over a module constant fails there
+  instead of as a blank page in someone's browser.
+- `--static` is unchanged in what it shows, and gained the plan block.
+
 ## 0.1.0 — 2026-08-29
 
 ### Greenfield: a project with no code yet

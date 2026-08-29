@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { collect, offlineHtml, renderDashboard, writeStaticDashboard } from "../src/core/dashboard/index.ts";
+import {
+  buildModel, offlineHtml, renderDashboard, writeStaticDashboard,
+} from "../src/core/dashboard/index.ts";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
-import { EXIT_NOT_IMPLEMENTED, EXIT_OK } from "../src/cli/exitCodes.ts";
+import { EXIT_OK } from "../src/cli/exitCodes.ts";
 import { makeViewsWorkspace, VIEWS_FIXTURE, VIEWS_NOW, VIEWS_RUN } from "./fixtures/views/tempViews.ts";
 
 const BIN = join(FRAMEWORK_ROOT, "bin", "tldrx.ts");
@@ -18,26 +20,161 @@ async function tldrx(...args: string[]): Promise<{ code: number; stdout: string;
   return { code: await proc.exited, stdout, stderr };
 }
 
-const data = collect(VIEWS_FIXTURE, GENERATED_AT, VIEWS_NOW);
-const html = renderDashboard(data);
+const model = buildModel(VIEWS_FIXTURE, GENERATED_AT, { now: VIEWS_NOW });
+const html = renderDashboard(model);
 
 /** Every `src="…"` / `href="…"` value in the document. */
 function attributeTargets(document: string): readonly string[] {
   return [...document.matchAll(/(?:src|href)="([^"]*)"/g)].map((match) => match[1] ?? "");
 }
 
-describe("collect", () => {
+/**
+ * The field names a designer targets, as a flat sorted list of dotted paths.
+ *
+ * A snapshot of NAMES rather than of the whole page: the rendering layer is
+ * meant to be replaced, so this test is about the contract that survives that,
+ * not about the markup that does not.
+ */
+function fieldPaths(value: unknown, prefix = ""): readonly string[] {
+  if (Array.isArray(value)) {
+    return [...new Set(value.flatMap((item) => fieldPaths(item, `${prefix}[]`)))];
+  }
+  if (typeof value !== "object" || value === null) return [prefix];
+  const out: string[] = [];
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    out.push(...fieldPaths(child, prefix === "" ? key : `${prefix}.${key}`));
+  }
+  return [...new Set(out)];
+}
+
+describe("the dashboard model", () => {
+  test("is one plain JSON document — it survives a JSON round trip unchanged", () => {
+    expect(JSON.parse(JSON.stringify(model))).toEqual(model);
+  });
+
+  test("its field names are the contract a designer targets", () => {
+    expect([...fieldPaths(model)].sort()).toEqual([
+      "experts[].areas[].evidenceCount",
+      "experts[].areas[].id",
+      "experts[].areas[].level",
+      "experts[].areas[].newestEvidence",
+      "experts[].areas[].storedLevel",
+      "experts[].areas[].title",
+      "experts[].areas[].trainPrompt",
+      "experts[].error",
+      "experts[].lastTrained",
+      "experts[].name",
+      "experts[].status",
+      "experts[].warnings[]",
+      "faq[].commands[]",
+      "faq[].heading",
+      "generatedAt",
+      "live",
+      "maxLevel",
+      "modelVersion",
+      "root",
+      "runs[].ceilingUsd",
+      "runs[].cursor",
+      "runs[].filter",
+      "runs[].id",
+      "runs[].path[].budgetUsd",
+      "runs[].path[].costUsd",
+      "runs[].path[].expert",
+      "runs[].path[].gate",
+      "runs[].path[].id",
+      "runs[].path[].model",
+      "runs[].path[].phase",
+      "runs[].path[].status",
+      "runs[].pendingGate",
+      "runs[].pendingQuestion",
+      "runs[].percent",
+      "runs[].phases[].handoffHtml",
+      "runs[].phases[].id",
+      "runs[].phases[].questions[].answerCommand",
+      "runs[].phases[].questions[].id",
+      "runs[].phases[].questions[].options[].letter",
+      "runs[].phases[].questions[].options[].text",
+      "runs[].phases[].questions[].title",
+      "runs[].phases[].questions[].whyAsked",
+      "runs[].phases[].status",
+      "runs[].plan",
+      "runs[].repos[]",
+      "runs[].scope",
+      "runs[].spentUsd",
+      "runs[].stagesDone",
+      "runs[].stagesTotal",
+      "runs[].status",
+      "runs[].title",
+      "runs[].updatedAt",
+      "runs[].workflow",
+      "workspace",
+      "workspaceFound",
+    ]);
+  });
+
   test("finds the run, its phases, its artefacts and the experts", () => {
-    expect(data.runs).toHaveLength(1);
-    const run = data.runs[0]!;
-    expect(run.loaded.id).toBe(VIEWS_RUN);
+    expect(model.runs).toHaveLength(1);
+    const run = model.runs[0]!;
+    expect(run.id).toBe(VIEWS_RUN);
     expect(run.stagesTotal).toBe(2);
     expect(run.stagesDone).toBe(1);
+    expect(run.percent).toBe(50);
     expect(run.pendingGate).toBe("how");
     expect(run.pendingQuestion).toContain("Q2");
-    expect(run.phases[0]!.handoff).toContain("## Findings");
-    expect(run.phases[0]!.questions.map((block) => block.id)).toEqual(["Q2", "Q3"]);
-    expect(data.experts.map((expert) => expert.name)).toEqual(["dotnet-stack", "lab-ui"]);
+    expect(run.path.map((stage) => `${stage.phase}/${stage.id}`)).toEqual(["01-what/what", "02-how/how"]);
+    expect(run.phases[0]!.handoffHtml).toContain("<h2>Findings</h2>");
+    expect(run.phases[0]!.questions.map((question) => question.id)).toEqual(["Q2", "Q3"]);
+    expect(model.experts.map((expert) => expert.name)).toEqual(["dotnet-stack", "lab-ui"]);
+    expect(model.workspaceFound).toBe(true);
+    expect(model.live).toBe(false);
+  });
+
+  test("a run with no Plan artefacts carries `plan: null`", () => {
+    expect(model.runs[0]!.plan).toBeNull();
+  });
+
+  test("stories, epics and waves are read when the Plan has written them", () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      const plan = join(workspace.runDir, "03-plan");
+      mkdirSync(join(plan, "stories"), { recursive: true });
+      mkdirSync(join(plan, "epics"), { recursive: true });
+      writeFileSync(join(plan, "stories", "S1.md"), story("S1"), "utf8");
+      writeFileSync(join(plan, "stories", "S2.md"), story("S2", ["S1"]), "utf8");
+      writeFileSync(join(plan, "epics", "E1.md"), EPIC, "utf8");
+      writeFileSync(join(plan, "waves.yml"), WAVES, "utf8");
+
+      // The fixture's run.yml has no 03-plan phase, so the folder scan has to
+      // find it — which it cannot, by design: the model reads the phases run.yml
+      // declares. Add the phase and it appears.
+      const runYml = join(workspace.runDir, "run.yml");
+      writeFileSync(runYml, `${readFileSync(runYml, "utf8")}  - id: 03-plan\n    status: ready\n    stages: []\n`, "utf8");
+
+      const built = buildModel(workspace.root, GENERATED_AT, { now: VIEWS_NOW });
+      const found = built.runs[0]!.plan;
+      expect(found).not.toBeNull();
+      expect(found!.phase).toBe("03-plan");
+      expect(found!.stories.map((s) => `${s.id}:${s.wave ?? "-"}`)).toEqual(["S1:W1", "S2:W2"]);
+      expect(found!.stories[1]!.dependsOn).toEqual(["S1"]);
+      expect(found!.epics.map((e) => e.id)).toEqual(["E1"]);
+      expect(found!.waves.map((w) => w.id)).toEqual(["W1", "W2"]);
+      expect(found!.unreadable).toEqual([]);
+
+      const page = renderDashboard(built);
+      expect(page).toContain("Plan (03-plan)");
+      expect(page).toContain("<th>depends on</th>");
+      expect(page).toContain("branch <code>epic/leaderboard</code>");
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("a workspace with no .tldrx/ says so instead of looking empty", () => {
+    const empty = buildModel(join(FRAMEWORK_ROOT, "test", "fixtures"), GENERATED_AT, { now: VIEWS_NOW });
+    expect(empty.workspaceFound).toBe(false);
+    const page = renderDashboard(empty);
+    expect(page).toContain("No workspace here");
+    expect(page).toContain("tldrx init");
   });
 });
 
@@ -109,15 +246,16 @@ describe("the static page", () => {
     }
   });
 
-  test("it is read-only: no form controls that submit or act", () => {
+  test("it is read-only: no form controls that submit or act, and it does not watch", () => {
     expect(html).not.toContain("<button");
     expect(html).not.toContain("<form");
     expect(html).not.toContain("onclick");
     expect(html).not.toContain("fetch(");
+    expect(html).not.toContain("EventSource");
   });
 
   test("it is deterministic for the same inputs", () => {
-    expect(renderDashboard(collect(VIEWS_FIXTURE, GENERATED_AT, VIEWS_NOW))).toBe(html);
+    expect(renderDashboard(buildModel(VIEWS_FIXTURE, GENERATED_AT, { now: VIEWS_NOW }))).toBe(html);
   });
 });
 
@@ -129,8 +267,8 @@ describe("offlineHtml", () => {
   });
 });
 
-describe("tldrx dashboard", () => {
-  test("--static writes index.html and reports its size", async () => {
+describe("tldrx dashboard --static", () => {
+  test("writes index.html and reports its size", async () => {
     const workspace = makeViewsWorkspace();
     try {
       const run = await tldrx("dashboard", "--static", "--root", workspace.root);
@@ -158,11 +296,46 @@ describe("tldrx dashboard", () => {
       workspace.dispose();
     }
   });
-
-  test("without --static it stays a stub and says the live server is v1", async () => {
-    const run = await tldrx("dashboard");
-    expect(run.code).toBe(EXIT_NOT_IMPLEMENTED);
-    expect(run.stderr).toContain("live server is v1");
-    expect(run.stdout).toBe("");
-  });
 });
+
+function story(id: string, dependsOn: readonly string[] = []): string {
+  return `---
+version: 1
+id: ${id}
+epic: E1
+title: "Materialise the leaderboard read model"
+repo: lab
+status: todo
+depends_on: [${dependsOn.join(", ")}]
+touches: ["src/features/leaderboard/"]
+acceptance: ["Top-50 ranks render from the view"]
+test_plan: ["Unit: rank ordering with ties"]
+evidence: []
+---
+
+# ${id}
+
+\`\`\`dod
+npm test
+\`\`\`
+`;
+}
+
+const EPIC = `---
+version: 1
+id: E1
+title: "Player leaderboard"
+repos: [lab]
+stories: [S1, S2]
+branch: epic/leaderboard
+status: todo
+---
+
+# E1
+`;
+
+const WAVES = `version: 1
+waves:
+  - {id: W1, stories: [S1]}
+  - {id: W2, stories: [S2]}
+`;

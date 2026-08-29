@@ -75,7 +75,8 @@ tldrx retro                # close the run and keep what was learned
 | `tldrx budget raise <phase> <usd>` | **implemented** | The one sanctioned edit to `budget.yml`, validated before it writes: `Σ phase ceilings ≤ ceiling_usd` (spec §2.11) holds on the way out, and `--take-from <phase>` moves the money instead of adding it — refusing to cut a donor below what it has already spent. The output says which happened: the money moved, or the **run** ceiling grew. Writes `budget.yml` through `RunStore` and mirrors the ceiling into `run.yml`. Exit `0`/`1`/`3`. |
 | `tldrx reject --note <t>` | **implemented** | Records the note on the gate and sends the stage back to `ready`. Valid on a stage that is `awaiting_gate` **or** `failed` — spec §5 lists both as the operator's moves after a failure. The note reaches the next attempt: `next` renders it, with the previous failure, under a `## Previous attempt` heading in the prompt. Exit `0`/`2`/`3`. |
 | `tldrx expert <list\|create\|train>` | **implemented** (read-only) | `list` prints a table plus an ASCII star chart per expert, **recomputing every level from evidence** with the §2.6 formula and warning when the stored number disagrees; `--json` for the same data, `--root <path>` to point elsewhere. `create <name> [--domain <slug>] [--stack <lang>]` writes `.tldrx/experts/<name>/{expert.md,competencies.yml}` at status `created` with zero areas (one per flag given, level 0, no evidence) and **refuses to overwrite** an existing expert (exit `1`). `train <name> --area <a> [--mode light\|full] --print-prompt` prints a deterministic copy-paste prompt built from `expert.md`, the area and `workspace.yml`; without `--print-prompt` it exits `64` (running training is v1.1). Exit `0`/`1`/`64`. |
-| `tldrx dashboard --static [--out <dir>]` | **implemented** (`--static` only) | Generates one self-contained `index.html` (default `.tldrx/cache/dashboard/`) with the runs list (status, phase progress, spent/ceiling, pending gate or question), run detail (execution path table, handoffs rendered to HTML, open questions with options), experts (status, inline SVG star chart, train prompts) and a how-to. Inline CSS/JS, theme-aware via `prefers-color-scheme`, **no external URL in any `src`/`href`** — an external citation is shown as text, never as a link. Read-only: no control on the page changes anything. Without `--static` it exits `64` (the live server is v1). |
+| `tldrx dashboard [--port <n>] [--open]` | **implemented** | A live, read-only local server on `127.0.0.1` (default port `4477`, `--port 0` for any free one). `GET /` is the page, `GET /model.json` is the model it was drawn from, `GET /events` is a Server-Sent Events stream. A recursive watcher over `.tldrx/**` and `tldrx-work/**` (debounced 300 ms, mtime-sweep fallback where the platform has no recursive `fs.watch`) pushes a `reload`; the page re-fetches the model and redraws with the **same** template functions the server used, inlined into the page. `node:http` + `node:fs` only — no framework, no runtime dependency. Never writes; answers nothing but GET; Ctrl-C exits `0`. |
+| `tldrx dashboard --static [--out <dir>]` | **implemented** | The same model through the same renderer, written once as a self-contained `index.html` (default `.tldrx/cache/dashboard/`): runs list (status, phase progress, spent/ceiling, pending gate or question), run detail (execution path table, plan stories/epics/waves when present, handoffs rendered to HTML, open questions with options), experts (status, inline SVG star chart, train prompts) and a how-to. Inline CSS/JS, theme-aware via `prefers-color-scheme`, **no external URL in any `src`/`href`** — an external citation is shown as text, never as a link. Read-only: no control on the page changes anything. |
 | `tldrx replay <run>` | **implemented** | Renders `events.jsonl` over the `run.yml` execution path as a stakeholder narrative on stdout: header (run, scope, status, spent/ceiling), then per phase and stage in event order — start/end, questions asked and answered with who, gate approvals and rejections with their notes, failed checks, budget warnings, cost against ceiling — ending with "Where it stands now" (cursor, pending gate, open questions). Writes nothing. Exit `0`/`3`. |
 | `tldrx retro <run> [--apply]` | **implemented** | Writes `tldrx-work/<run>/retro.md` with three sections: **Facts to remember** (facts whose `source.run` is this run, plus any `fact.added` the store is missing), **Practice proposals** (five deterministic heuristics over the log — a stage rejected at its gate, a stage past its `budget_usd`, a stage past `questions.max`, every `check.failed`, every `budget.warned`/`blocked`; each bullet ends in `[src: tldrx-work/<run>/events.jsonl:<line>]`), and **Proposed stages** (`none proposed` unless a rejection note contains `propose stage:`). No model runs. Touches nothing else unless `--apply`, which appends the proposals to `.tldrx/memory/practices.md` under a dated, run-stamped heading — idempotent, so a second `--apply` for the same run appends nothing. Exit `0`/`3`. |
 
@@ -103,6 +104,17 @@ Non-command pieces:
 | 5 stages, 13 scopes, 13 templates | **read by `run new`** | A scope preset plus its stage files seed the run. Both the draft shape the repo ships and the spec §2.3/§2.4 shape load; a workspace's own `.tldrx/workflows/` and `.tldrx/stages/` win over the shipped defaults. |
 | Plugin packaging | **loadable** | `claude --plugin-dir ./plugin` loads the skill and all six live hooks. `claude plugin validate ./plugin` exits `0` (two documented warnings). |
 
+## Live dashboard
+
+`tldrx dashboard` serves the workspace at `http://127.0.0.1:4477` and keeps it in
+step with the files: a watcher over `.tldrx/**` and `tldrx-work/**` pushes an SSE
+`reload`, and the page redraws itself. It is read-only — three GET routes, no
+button that acts, no write path — and it is two separable halves, so a redesign
+only replaces the second: `GET /model.json` is one plain JSON document
+([`docs/dashboard-model.md`](docs/dashboard-model.md)), and the renderer that draws
+it is the *same* code on the server and in the page. `--static` exports a snapshot
+of exactly that.
+
 ## Layout
 
 ```
@@ -113,6 +125,7 @@ src/core/runtime/     the Bun/Node seam — the only place `Bun.` appears
 src/core/run/         run.yml, budget.yml, the run lifecycle and its gates
 src/core/budget/      ceilings, the phase table, and the one sanctioned edit to them
 src/core/plan/        epics + stories + waves.yml, checked together at the Plan gate
+src/core/dashboard/   model.ts reads the files, render.ts draws them, server.ts serves them
 src/core/distill/     the `--from` AI-DLC importer
 src/core/seed/        the `--seed` generic document importer
 src/core/answers/     recording an answer — shared by the hook and the CLI
@@ -227,8 +240,8 @@ cannot install it. Wire it yourself; the snippet is in `plugin/README.md`.
 **Exit codes** (spec §3). `0` ok · `1` usage or schema error, or a real check that
 ran and failed · `2` refused by a gate · `3` not found · `4` awaiting a human ·
 `5` the sub-agent failed · `64` not implemented (`EX_USAGE`). A command that is
-not implemented must exit `64` and say so on stderr; in 0.0.1 the only two are
-`expert train` without `--print-prompt` and `dashboard` without `--static`.
+not implemented must exit `64` and say so on stderr; the only one left is
+`expert train` without `--print-prompt`.
 
 ## License
 
