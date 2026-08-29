@@ -2,6 +2,7 @@
 
 ## 0.3.0 — unreleased
 
+- Documented, from measurement: `--max-budget-usd` stops after the current turn (a training call spent $5.15 against $1.50); budgets gate before and reconcile after, overshoot ≤ one turn.
 ### Expert training runs
 
 `tldrx expert train <name> --area <a> [--mode light|full]` used to print a prompt

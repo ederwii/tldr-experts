@@ -276,6 +276,16 @@ pilot workspace; `beta` = file formats frozen (`version: 1` schemas only grow), 
 workspaces through Build, upgrade path documented; `stable` = 1.0, semver from here on. The tag
 of the newest release is the one shown in the badge above.
 
+## Budgets — what the numbers mean
+
+Ceilings live in `budget.yml` (per run and per phase) and `stage.yml` (per stage). They gate a stage
+*before* it starts and are reconciled *after* from real costs. A single sub-agent call is passed
+`--max-budget-usd`, which the Claude CLI applies as a **stop after the current turn, not a hard cap**
+— measured: one 10-minute turn spent $5.15 against a $1.50 ceiling. Expect overshoot of up to one turn;
+every dollar is recorded in `events.jsonl` / `training.jsonl`. Measured costs so far (Sonnet, Aug 2026):
+a What stage ≈ $1.2–1.4; a light expert training over ~20 files ≈ $5; a cold `claude -p` call floors at
+≈ $0.25.
+
 ## Roadmap and changelog
 
 `docs/ROADMAP.md` (what is next) · `CHANGELOG.md` (what shipped) · `docs/spec.md` §7 (open design questions).

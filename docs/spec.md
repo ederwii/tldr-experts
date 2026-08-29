@@ -557,6 +557,14 @@ phases: [{id: 01-what, ceiling_usd: 4.0, spent_usd: 1.14}, {id: 02-how, ceiling_
 **Validation.** Σ phase ceilings ≤ `ceiling_usd`; every phase id appears in `run.yml`; `spent_usd ≤ ceiling_usd` per
 phase unless `on_exceed: warn`; ≤5 phases.
 
+**Budget semantics — measured 2026-08-29.** `claude -p --max-budget-usd` is a *stop after the current turn*, not a
+hard cap: a single long turn ran 597 s and spent **$5.15 against a $1.50 ceiling** (`error_max_budget_usd`, 105 k
+cache-creation + 60 k output tokens) before the CLI stopped it. Therefore: the phase/run ceilings in `budget.yml`
+are enforced *before* a spawn (the gate) and reconciled *after* it (actuals), and a single spawn can overshoot its
+share by the cost of one turn. Keep prompts small (the inline caps exist for this reason), prefer several short
+stages over one long one, and treat `per_agent_max_usd` as "the most we intend to spend", not "the most that can be
+spent". Every overshoot is recorded (`agent.result`, `training.jsonl`), never hidden.
+
 ### 2.12 `.tldrx/process.yml`
 
 The team's way of working, captured at the install interview (or `--process`), never assumed. The Plan phase renders
