@@ -228,6 +228,10 @@ not implemented must exit `64` and say so on stderr; in 0.0.1 the only two are
 MIT, © 2026 Alan Martinez. This was a placeholder choice made while scaffolding —
 change it freely before anything ships.
 
+## Roadmap and changelog
+
+`docs/ROADMAP.md` (what is next) · `CHANGELOG.md` (what shipped) · `docs/spec.md` §7 (open design questions).
+
 ## Releasing
 
 Releases are published by GitHub Actions through npm **trusted publishing** (OIDC — no
