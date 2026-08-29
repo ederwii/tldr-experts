@@ -54,3 +54,18 @@
 
 Blocked on: **<human approval | checks green>**. Requirements are in `stage.yml`.
 Nothing advances until this is recorded in `run.yml` and `events.jsonl`.
+
+## Rules
+
+- Every bullet under Findings / Decisions / Unknowns / Evidence ledger is ONE line and ENDS with a source token. A bullet without one is refused by the `claim-sources` gate and the whole stage fails.
+- Source token grammar (exact): `[src: <one or more sources separated by "; ">]` where a source is ONE of:
+  - `<repo>:<path>:<line>` or `<repo>:<path>:<start>-<end>` — a file with ONE line or ONE range. Never a whole file, never a comma list (`file.md:7,21` is invalid: write two sources or a range).
+  - `F<n>` — a fact id from `.tldrx/memory/facts.yml` (cite the id, never the file).
+  - `Q<n>` — a question from this run's questions.md.
+  - `https://…` — an external document (https only).
+  - `aidlc:<file>:<line>` / `aidlc:<file>#Q<n>` — an imported source, exactly as it already appears in intent.md/scope.md.
+  - `$ <command> → exit <n>` — only under Evidence ledger, only for commands listed in `.tldrx/workspace.yml`.
+  - `absent:<path>` — you looked there and found nothing.
+- Do not cite templates, expert files or directories (`.tldrx/experts/*` is not evidence).
+- Before asking a question, grep `.tldrx/memory/facts.yml`; if the answer is there, cite `F<n>` instead of asking.
+- Write only the declared outputs; do not add sections beyond the ones listed under Produce.
