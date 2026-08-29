@@ -609,8 +609,9 @@ parallel, one worktree per story.
 terminals, CI and chat bridges. *In-session*: when the user is already inside Claude Code, the `/tldrx` skill runs
 `tldrx next --prepare` (writes the prompt bundle + declared inputs to `.agent/prompt.md`), Claude Code dispatches the
 sub-agent with its own Agent tool, then `tldrx next --commit` validates outputs, checks, cost and gates exactly as the
-headless path does. Whether a nested `claude -p` works from inside a Claude Code Bash tool is **unverified** — the
-in-session mode exists so the framework never depends on it.
+headless path does. A nested `claude -p` from inside a Claude Code Bash tool is **verified working** (2026-08-29, see
+§7); the in-session mode exists because it is cheaper and because it is the only mode that survives where spawning is
+disallowed, not because spawning fails.
 
 **Resume path.** State lives only in files, so resume = run `next` again: the cursor points at the first non-terminal
 stage, a `running` left by a crash is demoted to `ready` when `.lock` holds a dead pid, and partial outputs are
@@ -641,22 +642,19 @@ into the next prompt), or editing the stage inputs by hand and re-running.
 
 ## 7. Open decisions
 
-- ~~Verify whether `claude -p` can be spawned from inside a Claude Code Bash tool (nested session).~~ **Measured 2026-08-29
-  (macOS, Claude Code 2.1.x).** It works. `claude -p "reply with the single word pong" --output-format json
-  --max-budget-usd 0.05` from a Claude Code Bash tool: **exit 1**, `is_error: true`, `subtype: error_max_budget_usd`,
-  `errors: ["Reached maximum budget ($0.05)"]`, `total_cost_usd: 0.29084099999999996` — the nesting was never the
-  problem, the ceiling was: a cold session pays ~10–26k cache-creation tokens before the first reply, so **$0.05 is
-  below the floor of any real call**. Re-run at `--max-budget-usd 1.00`: **exit 0**, `result: "pong"`,
-  `total_cost_usd: 0.222039`, `session_id: 5b354e40-…`, `is_error: false`. Confirmed again end-to-end: a real
-  `tldrx next --max-usd 0.10` on a one-stage fixture spawned `claude -p` from inside this session, the sub-agent
-  wrote its declared output, and the stage closed at **$0.06** (`model: haiku`, session `bda47ec2-…`). So headless
-  mode is viable from inside a session; `--prepare/--commit` stays because it is *cheaper* (the host session's
-  context is already warm) and because it is the only mode that works where spawning is disallowed — not because
-  spawning fails.
-
 - Whether `.tldrx/` is one root install or also allowed per sub-repo simultaneously (spec assumes root-only in v0).
-- Story/epic file schemas (`stories/<id>.md`, `epics/<id>.md`, `waves.yml`) — v1 Execute, not specified here.
-- Conflict policy when a new answer contradicts a fact (auto-supersede vs. always ask).
-- Retro-proposed stages: acceptance UX and whether they may alter shipped `workflows/*.yml`.
+- Story/epic file schemas (`stories/<id>.md`, `epics/<id>.md`, `waves.yml`) — v1 Execute, not specified here. The DoD
+  gate reads `status:`, `repo:` and the fenced ```dod block by line scanning precisely because the shape is not settled.
+- Conflict policy when a new answer contradicts a fact (auto-supersede vs. always ask). v0 always asks: `--from` turns a
+  contradiction into a question and `FactsStore.supersede` is only ever called by hand.
+- Retro-proposed stages: acceptance UX and whether they may alter shipped `workflows/*.yml`. `retro` writes the proposals
+  and `--apply` appends them to `practices.md`; nothing consumes them yet.
 - Ticket adapter direction (mirror-only vs. two-way) and which of Jira/GitHub ships first.
 - Multi-approver / enterprise gate packs: out of scope for v0, shape undecided.
+
+**Closed since the first draft.** Nested `claude -p` — measured 2026-08-29 (macOS, Claude Code 2.1.x): it works, and the
+ceiling was the real constraint, not the nesting. A cold session pays ~10–26k cache-creation tokens before its first
+reply, so any `--max-budget-usd` under about $0.25 fails as `error_max_budget_usd` before work starts. At $1.00 the same
+call returns `pong` for $0.222; a real `tldrx next --max-usd 0.10` on a one-stage fixture closed at $0.06 on haiku.
+`--prepare/--commit` stays because it is *cheaper* and because it is the only mode that works where spawning is
+disallowed — not because spawning fails. The narrative version is in README § Design notes.
