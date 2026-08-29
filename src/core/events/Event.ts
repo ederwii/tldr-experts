@@ -17,6 +17,7 @@ export const EVENT_TYPES = [
   "budget.warned", "budget.blocked",
   "fact.added", "fact.retired",
   "map.refreshed",
+  "ticket.synced",
   "error",
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];

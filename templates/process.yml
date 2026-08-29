@@ -13,9 +13,18 @@ cadence: null              # e.g. "weekly"
 wip_limit: null            # kanban only
 sprint_length: null        # scrum only, e.g. "2w"
 
+# The optional ticket mirror (spec §2.12, §5.1). `none` means `tldrx tickets sync`
+# exits 0 and does nothing. `project_key` is the GitHub `owner/repo` or the Jira
+# project key; `linear` is in the enum but has no adapter in this build.
 ticket_tool: none          # jira | github | linear | none
 project_key: null
 board_id: null
+
+# mirror-out  pushes epics/stories out and reads NOTHING back.
+# two-way     also pulls each issue's status into the file's `external_status:`.
+# Neither ever advances run.yml, changes a story's `status:`, or marks anything
+# done — filing a ticket is not "done".
+ticket_sync: mirror-out    # mirror-out | two-way
 
 story_granularity: days    # hours | days
 approvers: []

@@ -87,12 +87,14 @@ tldrx retro                # close the run and keep what was learned
 | `tldrx watch check <feature>` | **implemented** | Re-validates one card off disk: every `[src: …]` still resolves, and the stamped `status:` still equals the one its `## Signal` sources earn. Catches the two ways a card rots — the code moved under a citation, or somebody hand-edited `draft` to `verified` over an `absent:` signal. **Exit `1` when it fails**, not `0`: a check that reports a dead citation on stdout and exits `0` is invisible to CI. `3` for an unknown feature (naming the ones that exist). |
 | `tldrx hook <name>` | **implemented** | Runs one of the six hook scripts — `dist/hooks/<name>.js` when tldrx is running from `dist/`, `src/hooks/<name>.ts` in a source checkout — and passes stdin, stdout, stderr and the exit code through unchanged. It exists so a committed `settings.json` can say `tldrx hook claim-sources` instead of an absolute path that is wrong on the next machine. An unknown name exits `1` and lists the real ones. |
 | `tldrx statusline` | **implemented** | The same thing for `src/hooks/statusline.ts`, which is wired to the `statusLine` **settings key** rather than to a hook event. Always exits `0`. |
+| `tldrx tickets sync` | **implemented** | The optional ticket mirror. Reads `.tldrx/process.yml` for `ticket_tool` (`--provider github\|jira` overrides it; `none`, or no `process.yml`, exits `0` with "adapter disabled"), then for every epic and story in `03-plan/` creates-or-updates one remote issue and records `external: {provider, key, url, synced_at}` in the file's front matter. **Idempotent** — a second sync creates nothing and re-uses the stored key. In `ticket_tool.sync: two-way` it also pulls each issue's status string, verbatim, into `external_status:` — and into nothing else. Body = title + acceptance + test plan + the story's file path + the footer `managed by tldrx — edits here are not read back`. Emits one `ticket.synced` event per item. **GitHub** goes through the `gh` CLI (`issue create`/`edit`/`view --json`), so no token is ever handled here; **Jira** through REST v3 with `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN` — missing any of them is exit `1` naming all three, with nothing written. `--dry-run` prints the plan and makes zero calls. `--run <id>` `--root <path>`. Exit `0`/`1`/`3`. |
+| `tldrx tickets status` | **implemented** | A table of every epic and story: local `status`, `external_status`, the remote key and url, with `!=` marking a divergence and `..` an item never synced. Divergence is compared on **done-ness only** — a remote status string is free-form, and a finer mapping is one nobody configured. Reads two folders and prints; changes nothing. Exit `0`/`1`/`3`. |
 | `tldrx replay <run>` | **implemented** | Renders `events.jsonl` over the `run.yml` execution path as a stakeholder narrative on stdout: header (run, scope, status, spent/ceiling), then per phase and stage in event order — start/end, questions asked and answered with who, gate approvals and rejections with their notes, failed checks, budget warnings, cost against ceiling — ending with "Where it stands now" (cursor, pending gate, open questions). Writes nothing. Exit `0`/`3`. |
 | `tldrx retro <run> [--apply]` | **implemented** | Writes `tldrx-work/<run>/retro.md` with three sections: **Facts to remember** (facts whose `source.run` is this run, plus any `fact.added` the store is missing), **Practice proposals** (five deterministic heuristics over the log — a stage rejected at its gate, a stage past its `budget_usd`, a stage past `questions.max`, every `check.failed`, every `budget.warned`/`blocked`; each bullet ends in `[src: tldrx-work/<run>/events.jsonl:<line>]`), and **Proposed stages** (`none proposed` unless a rejection note contains `propose stage:`). No model runs. Touches nothing else unless `--apply`, which appends the proposals to `.tldrx/memory/practices.md` under a dated, run-stamped heading — idempotent, so a second `--apply` for the same run appends nothing. Exit `0`/`3`. |
 
 **`--root <path>`** works on every command that touches a workspace — `init`, `map`,
 `run new`, `run status`, `next`, `answer`, `interview`, `approve`, `reject`, `expert`,
-`replay`, `retro`, `dashboard`. Omitted, they use the nearest `.tldrx/` at or above the cwd.
+`replay`, `retro`, `tickets`, `dashboard`. Omitted, they use the nearest `.tldrx/` at or above the cwd.
 
 Non-command pieces:
 
@@ -109,6 +111,7 @@ Non-command pieces:
 | `budget-gate` hook | **implemented** | PreToolUse `Bash` on `claude -p …` / `tldrx next`. Denies when the cursor phase cannot afford the stage and `on_exceed: block`; appends `budget.blocked`. The denial names the exact `tldrx budget raise` command, shortfall included — the pilot's hand-edit of the field under-shot the estimate and the retry was refused twice. |
 | `session-start` hook | **implemented** | SessionStart. Up to three lines of "where we are" from the same `RunStore` snapshot the status line uses, so the two can never disagree; silent when there is no run. |
 | Hook failure policy | **implemented** | Every hook but `dod-gate` fails **open**: an internal error exits `0` and prints one `tldrx hook <name>: internal error, allowing — …` line to stderr. Only PreToolUse can deny, and it denies by printing `permissionDecision: deny` and exiting `0` — never by an exit code. |
+| Ticket adapter | **implemented** | `src/core/adapters/` — the optional mirror behind `tldrx tickets`. Two providers (`gh` CLI, Jira REST v3), each taking its transport as an argument, so the suite exercises the real argv and the real REST shapes through injected fakes: **no test makes an outbound call or spawns `gh`.** |
 | Runtime seam | **implemented** | `src/core/runtime/` — `readStdin`, `spawn`, `readText/writeText/exists/readJson`, `parseYaml/stringifyYaml`, picked at import time by `typeof Bun`. Every other file in `src/` is runtime-agnostic; `grep -rn 'Bun\.' src \| grep -v src/core/runtime/` comes back empty, and a test asserts it. |
 | `RunStore` | **implemented** | The one write path for a run: loads and validates `run.yml` + `budget.yml`, recomputes stage costs, phase status, run status and the budget mirror on every save, and refuses to write either file if it would be invalid. `run new`, `answer`, `approve`, `reject` and `next` all write through it. |
 | Text parsers + stores | **implemented** | `src/core/text/` (questions.md, handoff.md, the `src` grammar), `src/core/facts/`, `src/core/events/`, `src/core/budget/` — the schemas the hooks enforce. Validating a 256 KB handoff stays under 50 ms. |
@@ -202,6 +205,37 @@ only replaces the second: `GET /model.json` is one plain JSON document
 ([`docs/dashboard-model.md`](docs/dashboard-model.md)), and the renderer that draws
 it is the *same* code on the server and in the page. `--static` exports a snapshot
 of exactly that.
+
+## Ticket mirror
+
+Optional, off by default, and separate from the loop: `tldrx tickets sync` pushes
+every epic and story in `03-plan/` out to Jira or GitHub as an issue. It is a
+command a human runs — it appears in no stage, and `tldrx next` never calls it, so
+the loop cannot come to depend on a tracker being reachable.
+
+Two guard-rails, and the whole design is downstream of them:
+
+1. **Files are the source of truth.** The mirror pushes epics and stories *out*;
+   the only thing that comes back *in* is each issue's own status string, written
+   to `external_status:`. It never advances `run.yml` — the run is opened
+   read-only and never saved.
+2. **Filing a ticket is never "done".** The mirror may write exactly two
+   front-matter keys, `external:` and `external_status:`. Attempting to move a
+   story's `status:` line **throws**, so `external_status: Done` beside
+   `status: todo` is a legal state and stays one. Only the DoD hook marks a story
+   done — the lesson of a bot that reported `stage=done` to mean "ticket created"
+   and misled two people for a day.
+
+```bash
+tldrx tickets sync --dry-run     # the plan, and zero calls to anything
+tldrx tickets sync               # create-or-update; re-running creates nothing
+tldrx tickets status             # local status beside external_status, changes nothing
+```
+
+Configured in `.tldrx/process.yml` (`ticket_tool: {kind, project, sync}`); `none`
+exits `0`. GitHub goes through the `gh` CLI, so no token is ever handled here;
+Jira needs `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, and a missing one is
+exit `1` naming all three before anything is written.
 
 ## Layout
 
