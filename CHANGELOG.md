@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.1.0 — unreleased
+
+### Greenfield: a project with no code yet
+
+Measured on a temp repo holding only `requirements.md` (2026-08-29): `init` seeded
+zero experts, and `run new` had no way to be handed the document — so the What
+stage would have ideated from nothing.
+
+- **`tldrx init` names the case.** A single repo with zero code files is recorded
+  as `mode: greenfield` in `workspace.yml`, and `map/<repo>/architecture.md` says
+  so with an `absent:` source instead of describing an empty tree as an
+  architecture. "Code file" is one rule, by extension, shared with the map
+  (`src/core/detect/codeFiles.ts`).
+- **`init` always seeds a `product` expert** — the What stage names one, so a
+  workspace without it handed that stage a prompt with no expert body at all.
+- **`init --stack ts,dotnet,python,go,rust,…`** seeds a `<lang>-stack` expert per
+  declared language when there is no manifest to detect one from. Without it the
+  greenfield interview asks *"Which stack will this project use?"* (fixed list plus
+  free text) and *"Which single document is the source of requirements?"*.
+
+### `tldrx run new --seed <file|dir>` — import any document
+
+- Takes one `.md`/`.txt` file or a directory of them (recursive, sorted, ≤50 files,
+  ≤2 MB each; anything larger is skipped **and named**). PDFs and Word files are
+  out of scope and say so. Distinct from `--from`, which stays AI-DLC-specific;
+  passing both is an error.
+- **Copies nothing.** The originals stay where the team keeps them and every claim
+  cites them as `[src: <path>:<line>]`, workspace-relative.
+- Writes `01-what/seed-index.md` (documents, sizes, skips, warnings) and
+  `01-what/handoff.md` whose Findings are every heading, bullet and paragraph of
+  the seed. Unknowns are deterministic: the What outputs
+  (`intent`/`scope`/`success-metrics`/`open-questions`) that no seed heading
+  matches.
+- The seed documents are added to the What stage's **declared inputs** in
+  `run.yml`, so `tldrx next` inlines their content into the prompt. `stage.yml`
+  opts in with `seed: true` (§2.3 `inputs.seed` is accepted too); over the 64 KB
+  inline budget the index plus a labelled prefix is inlined and the prompt says
+  what was cut. Input count is capped at §2.3's 20.
+
+All notable changes to tldr-experts. Dates are the day the work landed on `main`.
+
 ## 0.0.2 — unreleased
 
 Fixes found by the first real pilot (scavtopia, `--from` an AI-DLC intent, What stage):
@@ -11,8 +52,6 @@ Fixes found by the first real pilot (scavtopia, `--from` an AI-DLC intent, What 
 - `--root` on every run-scoped command; `<cmd> --help` works without a workspace.
 - Stage prompts carry the citation grammar and the no-re-ask rule.
 - Hook bundles split into one shared chunk (`dist/` 2.4 MB → 0.9 MB); CI build step is honest; tag-driven trusted-publishing release workflow.
-
-All notable changes to tldr-experts. Dates are the day the work landed on `main`.
 
 ## 0.0.1 — 2026-08-29
 

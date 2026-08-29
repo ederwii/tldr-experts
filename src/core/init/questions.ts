@@ -12,6 +12,8 @@
  */
 import { srcToken } from "../map/srcToken.ts";
 import { gapSrc } from "../detect/gapSrc.ts";
+import { isGreenfield } from "../detect/greenfield.ts";
+import { STACK_CHOICES } from "./stackChoices.ts";
 import type { DetectedWorkspace } from "../detect/types.ts";
 import type { McpServer } from "../doctor/McpProbe.ts";
 
@@ -35,11 +37,43 @@ export interface QuestionInput {
   /** True when `--process` already settled the methodology. */
   readonly processGiven: boolean;
   readonly mcpServers: readonly McpServer[];
+  /** True when `--stack` already settled the intended stack. */
+  readonly stackGiven?: boolean;
 }
 
 /** The gaps, in a fixed order so question ids are stable across runs. */
 export function planQuestions(input: QuestionInput): Question[] {
   const questions: Omit<Question, "id">[] = [];
+
+  // Greenfield first: on a workspace with no code, these two answers decide what
+  // gets seeded and what the first run reads. Everything below them is about a
+  // codebase that does not exist yet.
+  if (isGreenfield(input.workspace)) {
+    const repo = input.workspace.repos[0];
+    if (repo !== undefined && input.stackGiven !== true) {
+      questions.push({
+        area: "stack",
+        question: "Which stack will this project use?",
+        why: "no code file and no build manifest exist in this workspace, so the stack cannot be detected",
+        whySrc: gapSrc(repo),
+        options: [
+          ...STACK_CHOICES.map((choice) => choice.label),
+          "other — write it below (e.g. `rust`, `java`, `kotlin`, or several, comma-separated)",
+        ],
+      });
+    }
+    questions.push({
+      area: "requirements",
+      question: "Which single document is the source of requirements?",
+      why: "there is no code to read, so the first run has nothing to distil unless a document is named",
+      whySrc: "absent:.tldrx/memory/facts.yml",
+      options: [
+        "There is no document yet — the run will start from a description instead",
+        "other — write the path below, then start the run with "
+          + "`tldrx run new <slug> --seed <path>`",
+      ],
+    });
+  }
 
   if (!input.processGiven) {
     questions.push({

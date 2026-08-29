@@ -6,13 +6,17 @@
  * files. It is a candidate, not a conclusion — the interview asks about it.
  */
 import { walkFiles, type WalkedFile } from "../detect/walk.ts";
+import { CODE_EXTENSIONS, extensionOf } from "../detect/codeFiles.ts";
 
-/** Extensions counted as source. Data and lock files are not architecture. */
-export const SOURCE_EXTENSIONS: ReadonlySet<string> = new Set([
-  ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".cs", ".py", ".go", ".rs",
-  ".java", ".kt", ".swift", ".rb", ".php", ".scala", ".c", ".h", ".cpp", ".hpp",
-  ".sql", ".sh", ".razor", ".vue", ".svelte",
-]);
+/**
+ * Extensions counted as source. Data and lock files are not architecture.
+ *
+ * One definition, two readers: `detect/codeFiles.ts` owns the set because
+ * `mode: greenfield` in `workspace.yml` is decided by the same rule the map uses
+ * to decide what an architecture is made of. Divergence between them would let a
+ * repo be "greenfield" and still have an architecture document.
+ */
+export const SOURCE_EXTENSIONS: ReadonlySet<string> = CODE_EXTENSIONS;
 
 /** Folders that hold source but are not a domain of the product. */
 const NON_DOMAIN_FOLDERS: ReadonlySet<string> = new Set([
@@ -92,8 +96,4 @@ export function topFolder(path: string): string {
   return first;
 }
 
-export function extensionOf(path: string): string {
-  const name = path.split("/").pop() ?? path;
-  const dot = name.lastIndexOf(".");
-  return dot <= 0 ? "" : name.slice(dot).toLowerCase();
-}
+export { extensionOf };

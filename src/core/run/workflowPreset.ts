@@ -23,6 +23,8 @@ export const PHASE_IDS = ["01-what", "02-how", "03-plan", "04-build", "05-watch"
 
 const PHASE_SEGMENT_RE = /^0[1-5]-[a-z]+$/;
 export const DEFAULT_TIMEOUT_S = 900;
+/** Spec §2.3 validation: "≤20 inputs". Counted where inputs are DECLARED and where they are INLINED. */
+export const MAX_STAGE_INPUTS = 20;
 
 export interface PlannedCheck {
   readonly id: string;

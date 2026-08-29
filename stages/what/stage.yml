@@ -8,10 +8,21 @@ phase: 1
 model: sonnet
 budget_usd: 4
 
+# `seed: true` — this stage ALSO receives the run's seed documents: the files
+# `tldrx run new --seed <file|dir>` recorded in `run.yml` for it (spec §2.3). They
+# cannot be named here because they differ per run; the stage opts in, the run
+# says what the seed was, and an unseeded run simply has none. This replaces the
+# old `"<free text, a PRD, any document, or a Jira epic>"` placeholder, which was
+# prose no code could act on — the facilitator inlined zero documents for it.
+#
+# The §2.3 spelling is `inputs: {seed: true, required: [...], optional: [...]}`
+# and the loader accepts it; the shipped file uses the draft array form plus this
+# top-level key because the v0 skeleton validator still requires `inputs` to be an
+# array (`src/core/schemas/stage.ts`). `[assumption]`
+seed: true
 inputs:
-  - "<free text, a PRD, any document, or a Jira epic>"
   - ".tldrx/memory/facts.yml"
-  - ".tldrx/map/domains.md"
+  - ".tldrx/map/{repo}/domains.md"
 
 outputs:
   - "intent.md"

@@ -33,10 +33,13 @@ import { parseQuestions, validateQuestions } from "../text/questions.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../hooks/lib/workspace.ts";
 import { validateRunBudget, type RunBudget } from "../budget/RunBudget.ts";
 import { distill, type DistillResult } from "../distill/distill.ts";
+import { collectSeed, type SeedSet } from "../seed/collectSeed.ts";
+import { allSeedHeadings, seedClaims } from "../seed/seedClaims.ts";
+import { renderSeedHandoff, renderSeedIndex, SEED_INDEX } from "../seed/renderSeed.ts";
 import { findDuplicate } from "../facts/findDuplicate.ts";
 import { renderHandoff, renderProse, renderQuestions, targetOf } from "../distill/renderDistill.ts";
 import { emitBudgetYaml, emitRunYaml } from "./emitRunYaml.ts";
-import { loadWorkflowPreset, type PlannedStage, type WorkflowPreset } from "./workflowPreset.ts";
+import { loadWorkflowPreset, MAX_STAGE_INPUTS, type PlannedStage, type WorkflowPreset } from "./workflowPreset.ts";
 import { deriveRunStatus, validateRunFile, type RunFile, type RunPhase, type RunStage } from "./RunFile.ts";
 
 export class NewRunError extends Error {}
@@ -54,6 +57,13 @@ export interface NewRunOptions {
   readonly budgetUsd?: number;
   readonly repos?: readonly string[];
   readonly from?: string;
+  /**
+   * `--seed <file|dir>` — generic document import (spec §6.1). Mutually exclusive
+   * with `--from`, which is AI-DLC-specific: both write `01-what/handoff.md`, and
+   * two importers fighting over one file is a bug waiting to be reported as a
+   * mystery. `[assumption]`
+   */
+  readonly seed?: string;
   readonly actor: string;
   readonly now: Date;
 }
@@ -65,6 +75,8 @@ export interface NewRunOutcome {
   readonly ceilingUsd: number;
   readonly stageCount: number;
   readonly distill: DistillResult | null;
+  /** What `--seed` read, or null when it was not passed. */
+  readonly seed: SeedSet | null;
   /** Facts the distill actually appended to `facts.yml`. */
   readonly factsAppended: number;
   /** Distilled facts that an existing non-retired fact already said. */
@@ -96,6 +108,14 @@ export function createRun(options: NewRunOptions): NewRunOutcome {
   if (options.from !== undefined && !existsSync(options.from)) {
     throw new NewRunError(`--from: no such directory: ${options.from}`);
   }
+  if (options.from !== undefined && options.seed !== undefined) {
+    throw new NewRunError(
+      "--from and --seed both write 01-what/handoff.md — pass one.\n"
+      + "  --from <dir>   an AI-DLC intent folder (spec §6)\n"
+      + "  --seed <path>  any .md/.txt document or a directory of them (spec §6.1)",
+    );
+  }
+  const seedSet = options.seed === undefined ? null : collectSeed(options.root, options.seed);
 
   const preset = loadWorkflowPreset(options.root, options.scope);
   const workspace = loadWorkspace(options.root);
@@ -103,7 +123,15 @@ export function createRun(options: NewRunOptions): NewRunOutcome {
   const at = rfc3339(options.now);
   const budgetPlan = planBudget(preset, options.budgetUsd);
 
-  const phases = buildPhases(preset, budgetPlan.perStage);
+  const planned = buildPhases(preset, budgetPlan.perStage);
+  const firstPhaseId = planned[0]?.id ?? "01-what";
+  // Spec §2.3: `inputs` is "the ONLY files the sub-agent gets". A seeded run's
+  // first stage therefore DECLARES its seed documents, or the facilitator would
+  // inline a prompt that never mentions the requirements it was handed.
+  const seedInputs = seedSet === null
+    ? []
+    : [`${firstPhaseId}/${SEED_INDEX}`, ...seedSet.documents.map((document) => document.rel)];
+  const phases = declareSeedInputs(planned, seedInputs);
   const first = phases[0]?.stages[0];
   if (first === undefined) throw new NewRunError(`workflow '${preset.name}' produced no stages`);
 
@@ -171,10 +199,39 @@ export function createRun(options: NewRunOptions): NewRunOutcome {
       ceiling_usd: budgetPlan.ceiling,
       stages: phases.reduce((n, p) => n + p.stages.length, 0),
       from: options.from ?? null,
+      seed: options.seed ?? null,
+      seed_documents: seedSet === null ? 0 : seedSet.documents.length,
     }));
 
     write(temp, "budget.yml", emitBudgetYaml(budget), written);
     write(temp, "run.yml", emitRunYaml(run), written);
+
+    if (seedSet !== null) {
+      const claims = seedClaims(seedSet.documents);
+      const headings = allSeedHeadings(seedSet.documents);
+      const indexPath = `${firstPhaseId}/${SEED_INDEX}`;
+      const handoffPath = `${firstPhaseId}/handoff.md`;
+
+      write(temp, indexPath, renderSeedIndex(runId, seedSet, firstPhaseId), written);
+      const handoff = renderSeedHandoff({
+        runId,
+        stageId: preset.stages[0]?.id ?? "what",
+        phase: firstPhaseId,
+        at,
+        seed: seedSet,
+        claims,
+        headings,
+      });
+      write(temp, handoffPath, handoff, written);
+      // `temp` IS the run dir until the atomic rename, and the seed documents are
+      // cited workspace-relative, so both bases §2.8 uses resolve here already.
+      const check = validateHandoff(handoff, toSrcContext(workspace, temp));
+      if (!check.ok) {
+        throw new NewRunError(
+          `seeded handoff is invalid: ${describeHandoff(check.missingSections, check.unsourced, check.unresolved)}`,
+        );
+      }
+    }
 
     let factsYaml: string | null = null;
     if (result !== null) {
@@ -277,6 +334,7 @@ export function createRun(options: NewRunOptions): NewRunOutcome {
     ceilingUsd: budgetPlan.ceiling,
     stageCount: preset.stages.length,
     distill: result,
+    seed: seedSet,
     factsAppended: appendedFacts.length,
     factsReused: reusedFacts.length,
     files: written,
@@ -356,6 +414,30 @@ function toRunStage(stage: PlannedStage, budgetUsd: number): RunStage {
     },
     tasks: [],
   };
+}
+
+/**
+ * Add the seed documents to the first stage's declared inputs.
+ *
+ * Capped at §2.3's 20 inputs: the declared list is a contract the facilitator
+ * validates, and a directory of 50 documents must not silently invalidate it. The
+ * index is added first, so an over-long seed still tells the stage what exists.
+ */
+function declareSeedInputs(phases: readonly RunPhase[], seedInputs: readonly string[]): RunPhase[] {
+  if (seedInputs.length === 0) return [...phases];
+  return phases.map((phase, phaseIndex) => phaseIndex > 0 ? phase : {
+    ...phase,
+    stages: phase.stages.map((stage, stageIndex) => {
+      if (stageIndex > 0) return stage;
+      const inputs = [...stage.inputs];
+      for (const entry of seedInputs) {
+        if (inputs.includes(entry)) continue;
+        if (inputs.length >= MAX_STAGE_INPUTS) break;
+        inputs.push(entry);
+      }
+      return { ...stage, inputs };
+    }),
+  });
 }
 
 function resolveRepos(requested: readonly string[] | undefined, known: ReadonlyMap<string, string>): string[] {

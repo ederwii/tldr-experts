@@ -2,8 +2,9 @@
  *
  * Spec §3. `run new` seeds `tldrx-work/<yymmdd>-<slug>/` from a scope preset and
  * its stage files; `--from` distills an AI-DLC intent folder into `01-what/` first
- * (§6). `run status` renders the execution path. Both are deterministic: no LLM,
- * no network, nothing that can invent a result.
+ * (§6) and `--seed` imports any Markdown/plain-text document or directory of them
+ * (§6.1). `run status` renders the execution path. All of it is deterministic: no
+ * LLM, no network, nothing that can invent a result.
  */
 import { basename } from "node:path";
 import type { Command } from "../Command.ts";
@@ -17,12 +18,13 @@ import { buildStatus, renderStatus } from "../../core/run/runStatus.ts";
 import { currentActor } from "../../hooks/lib/actor.ts";
 import { PROJECT_WORK_DIR } from "../../core/paths.ts";
 
-const VALUE_FLAGS = ["title", "scope", "budget", "repos", "from", "run", "root"];
+const VALUE_FLAGS = ["title", "scope", "budget", "repos", "from", "seed", "run", "root"];
 
 export const runCommand: Command = {
   name: "run",
   summary: "Create or inspect a piece of work",
-  usage: "tldrx run new <slug> [--title <t>] [--scope <s>] [--budget <usd>] [--repos a,b] [--from <path>] [--root <path>]\n" +
+  usage: "tldrx run new <slug> [--title <t>] [--scope <s>] [--budget <usd>] [--repos a,b]\n" +
+    "                  [--from <aidlc-intent-dir> | --seed <file|dir>] [--root <path>]\n" +
     "       tldrx run status [<run>] [--json] [--root <path>]",
   subcommands: ["new", "status"],
   implemented: true,
@@ -55,6 +57,7 @@ function runNew(argv: readonly string[]): number {
       budgetUsd: numberFlag(args, "budget"),
       repos: listFlag(args, "repos"),
       from: stringFlag(args, "from"),
+      seed: stringFlag(args, "seed"),
       actor: currentActor(),
       now: new Date(),
     });
@@ -75,6 +78,15 @@ function runNew(argv: readonly string[]): number {
           `${result.droppedUnanswered + result.droppedConflicting} dropped ` +
           `(${result.droppedUnanswered} unanswered, ${result.droppedConflicting} conflicting)`,
       );
+    }
+    const seed = outcome.seed;
+    if (seed !== null) {
+      lines.push(
+        `seeded from ${seed.source}: ${seed.documents.length} document(s), ` +
+          `${seed.documents.reduce((sum, document) => sum + document.lines, 0)} line(s), ` +
+          `${seed.skipped.length} skipped`,
+      );
+      for (const warning of seed.warnings) lines.push(`  warning: ${warning}`);
     }
     lines.push(`next: tldrx run status ${outcome.runId}`);
     process.stdout.write(`${lines.join("\n")}\n`);

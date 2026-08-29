@@ -87,7 +87,7 @@ async function refresh(args: MapArgs): Promise<number> {
     workspace,
     workspaceDir: args.workspaceDir,
     providers: chooseProviders(
-      { root: loaded.root, out: args.workspaceDir, interview: false, methodology: null, mcp: false, provider: args.provider },
+      { root: loaded.root, out: args.workspaceDir, interview: false, methodology: null, mcp: false, stack: [], provider: args.provider },
       runner,
     ),
   });

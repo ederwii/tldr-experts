@@ -27,6 +27,17 @@ export interface StageSpec {
   readonly requiredInputs: readonly string[];
   /** Passed only when present on disk. */
   readonly optionalInputs: readonly string[];
+  /**
+   * `inputs.seed: true` — this stage also takes THE RUN'S SEED DOCUMENTS, the
+   * files `tldrx run new --seed` recorded in `run.yml` for it. They cannot be
+   * named in `stage.yml` (they differ per run), so the stage opts in and the
+   * facilitator reads the list off `run.yml`.
+   *
+   * Two spellings, both accepted: `inputs: {seed: true, …}` is the §2.3 shape,
+   * and a top-level `seed: true` is the draft shape, whose `inputs` must stay a
+   * bare array for the v0 skeleton validator. `[assumption]`
+   */
+  readonly seedInputs: boolean;
   readonly stackExperts: boolean;
   readonly dryRunAllowed: boolean;
   /** From the WORKFLOW entry (spec §2.4), not from stage.yml. */
@@ -82,16 +93,21 @@ function overlay(
  * `"<free text, a PRD, any document>"`. Treating those as required would make
  * every draft stage exit 1 forever, so a bare list is read as ALL OPTIONAL.
  */
-function inputSplit(root: string, stageId: string): { requiredInputs: string[]; optionalInputs: string[] } {
+function inputSplit(
+  root: string,
+  stageId: string,
+): { requiredInputs: string[]; optionalInputs: string[]; seedInputs: boolean } {
   const doc = readDoc(stagePath(root, stageId));
   const inputs = isRecord(doc) ? doc.inputs : undefined;
+  const topLevelSeed = isRecord(doc) && doc.seed === true;
   if (isRecord(inputs)) {
     return {
       requiredInputs: strings(inputs.required),
       optionalInputs: strings(inputs.optional),
+      seedInputs: inputs.seed === true || topLevelSeed,
     };
   }
-  return { requiredInputs: [], optionalInputs: strings(inputs) };
+  return { requiredInputs: [], optionalInputs: strings(inputs), seedInputs: topLevelSeed };
 }
 
 function readDoc(path: string | null): unknown {

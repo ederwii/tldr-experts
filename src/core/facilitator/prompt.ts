@@ -17,6 +17,19 @@ import { isRetired, type Fact } from "../facts/Fact.ts";
 export const PLACEHOLDERS = ["run", "repos", "inputs", "facts", "conventions", "budget_usd"] as const;
 export type Placeholder = (typeof PLACEHOLDERS)[number];
 
+/** One declared input, already read from disk. */
+export interface PromptInput {
+  readonly path: string;
+  readonly content: string;
+  /**
+   * Set only when the file was inlined in part (a seed document over the inline
+   * budget): how many bytes of `totalBytes` are in `content`. The prompt says so
+   * rather than presenting a prefix as the whole document.
+   */
+  readonly inlinedBytes?: number;
+  readonly totalBytes?: number;
+}
+
 export interface PromptParts {
   /** `stage.md`, verbatim. */
   readonly stageMd: string;
@@ -24,7 +37,9 @@ export interface PromptParts {
   /** `expert.md` bodies, in load order, keyed by expert name. */
   readonly experts: readonly { readonly name: string; readonly body: string }[];
   /** Declared input path -> file content, already read from disk. */
-  readonly inputs: readonly { readonly path: string; readonly content: string }[];
+  readonly inputs: readonly PromptInput[];
+  /** Prepended to `## Inputs` when something was cut to fit (see `seedInputs.ts`). */
+  readonly inputsNote?: string;
   /**
    * Why this stage is being run again — a previous failure, an operator's reject
    * note, or both. Empty on a first attempt, and then no section is emitted at
@@ -35,7 +50,7 @@ export interface PromptParts {
 
 export function buildPrompt(parts: PromptParts): string {
   const substituted = substitute(parts.stageMd, parts.values);
-  const withInputs = replaceSection(substituted, "Inputs", renderInputs(parts.inputs));
+  const withInputs = replaceSection(substituted, "Inputs", renderInputs(parts.inputs, parts.inputsNote));
   const previous = (parts.previousAttempt ?? "").trim();
   const withPrevious = previous === ""
     ? withInputs
@@ -74,7 +89,7 @@ export function replaceSection(markdown: string, heading: string, body: string):
   return [...head, "", body.trimEnd(), "", ...tail].join("\n");
 }
 
-export function renderInputs(inputs: readonly { path: string; content: string }[]): string {
+export function renderInputs(inputs: readonly PromptInput[], note?: string): string {
   if (inputs.length === 0) {
     return "_No input files are declared for this stage. Do not go looking for others._";
   }
@@ -83,9 +98,27 @@ export function renderInputs(inputs: readonly { path: string; content: string }[
     "so there is nothing to open and nothing else to find.",
     "",
   ];
+  const trimmed = (note ?? "").trim();
+  if (trimmed !== "") out.push(`**${trimmed}**`, "");
+
   for (const input of inputs) {
     const fence = fenceFor(input.content);
-    out.push(`### \`${input.path}\``, "", `${fence}`, input.content.replace(/\n$/, ""), `${fence}`, "");
+    out.push(`### \`${input.path}\``, "");
+    if (input.totalBytes !== undefined && (input.inlinedBytes ?? 0) === 0) {
+      out.push(
+        `_Not inlined: ${input.totalBytes} bytes, past this stage's inline budget. `
+        + "It exists on disk; do not guess at its content._",
+        "",
+      );
+      continue;
+    }
+    if (input.totalBytes !== undefined && input.inlinedBytes !== undefined) {
+      out.push(
+        `_First ${input.inlinedBytes} of ${input.totalBytes} bytes only — the rest was not inlined._`,
+        "",
+      );
+    }
+    out.push(`${fence}`, input.content.replace(/\n$/, ""), `${fence}`, "");
   }
   return out.join("\n");
 }

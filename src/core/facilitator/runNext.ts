@@ -33,6 +33,8 @@ import {
 import { spawnAgent } from "./spawnAgent.ts";
 import { validateOutputs, describeProblems } from "./validateOutputs.ts";
 import { promptPath, readResult, writeBundle, writeRaw, PendingError, type PendingStage } from "./pending.ts";
+import { capInputs, inlineInputs, type InlineResult } from "./seedInputs.ts";
+import { SEED_INDEX } from "../seed/renderSeed.ts";
 
 export type NextMode = "headless" | "prepare" | "commit";
 
@@ -260,10 +262,15 @@ async function runStage(
 
   // --- prompt assembly ----------------------------------------------------
   const optional = present(expandAll(spec.optionalInputs, store.run.repos), ctx);
-  const inputs = [...required, ...optional.filter((p) => !required.includes(p))];
+  const seed = seedInputsOf(spec, stage, ctx);
+  const inputs = capInputs([
+    ...required,
+    ...optional.filter((p) => !required.includes(p)),
+    ...seed.filter((p) => !required.includes(p) && !optional.includes(p)),
+  ]);
   const model = options.model ?? stage.model ?? spec.planned.model;
   const cap = agentCap(options, store, stage);
-  const prompt = assemblePrompt(store, options, spec, stage, inputs, ctx);
+  const prompt = assemblePrompt(store, options, spec, stage, inputs, ctx, new Set(seed));
 
   const pending: PendingStage = {
     version: 1,
@@ -528,6 +535,25 @@ function failStage(
 
 // --- prompt ----------------------------------------------------------------
 
+/**
+ * The run's seed documents for a stage that asked for them (`inputs.seed: true`).
+ *
+ * They are the entries `run new --seed` added to THIS stage's `inputs` in
+ * `run.yml` — everything the stage file does not already declare. Reading them
+ * off `run.yml` rather than `stage.yml` is the whole point: the stage says "I take
+ * the seed", the run says what the seed was.
+ */
+function seedInputsOf(spec: StageSpec, stage: RunStage, ctx: PathContext): readonly string[] {
+  if (!spec.seedInputs) return [];
+  const fromStageFile = new Set([...spec.requiredInputs, ...spec.optionalInputs]);
+  return present(stage.inputs.filter((entry) => !fromStageFile.has(entry)), ctx);
+}
+
+/** `inlineInputs` speaks `{inputs, note}`; `buildPrompt` speaks `{inputs, inputsNote}`. */
+function withNote(result: InlineResult): { inputs: InlineResult["inputs"]; inputsNote?: string } {
+  return result.note === null ? { inputs: result.inputs } : { inputs: result.inputs, inputsNote: result.note };
+}
+
 function assemblePrompt(
   store: RunStore,
   options: NextOptions,
@@ -535,6 +561,7 @@ function assemblePrompt(
   stage: RunStage,
   inputs: readonly string[],
   ctx: PathContext,
+  seed: ReadonlySet<string>,
 ): string {
   const stageMd = readStageMd(spec.planned);
   const facts = FactsStore.loadOrEmpty(factsPath(options.root));
@@ -554,7 +581,11 @@ function assemblePrompt(
       budget_usd: stage.budget_usd.toFixed(2),
     },
     experts: loadExpertBodies(options.root, expertNames),
-    inputs: inputs.map((path) => ({ path, content: readOrEmpty(resolveDeclared(path, ctx)) })),
+    ...withNote(inlineInputs(inputs, {
+      ctx,
+      seed,
+      exempt: new Set(inputs.filter((path) => path.endsWith(`/${SEED_INDEX}`))),
+    })),
   });
 }
 

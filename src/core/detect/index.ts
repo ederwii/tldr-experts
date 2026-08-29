@@ -6,6 +6,8 @@ export { detectCi } from "./ci.ts";
 export { detectDefaultBranch, FALLBACK_BRANCH, type DefaultBranch } from "./defaultBranch.ts";
 export { scoreConfidence } from "./confidence.ts";
 export { gapSrc } from "./gapSrc.ts";
+export { CODE_EXTENSIONS, countCodeFiles, isCodeFile, extensionOf } from "./codeFiles.ts";
+export { isGreenfield, workspaceMode } from "./greenfield.ts";
 export { repoSlug, uniqueSlug } from "./repoSlug.ts";
 export { walkFiles, readEntries, toPosix, SKIPPED_DIRS, type WalkedFile } from "./walk.ts";
 export { lineOf, countLines } from "./lineOf.ts";

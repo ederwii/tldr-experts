@@ -10,6 +10,7 @@ import { detectCommands } from "./commands.ts";
 import { detectDefaultBranch } from "./defaultBranch.ts";
 import { findRepos } from "./findRepos.ts";
 import { detectStack } from "./stack.ts";
+import { countCodeFiles } from "./codeFiles.ts";
 import { scoreConfidence } from "./confidence.ts";
 import { repoSlug, uniqueSlug } from "./repoSlug.ts";
 import { toPosix } from "./walk.ts";
@@ -43,6 +44,7 @@ export async function detectWorkspace(root: string, runner: CommandRunner): Prom
     const commands = await detectCommands(absPath, stack);
     const ci = await detectCi(absPath);
     const branch = await detectDefaultBranch(runner, absPath);
+    const codeFiles = await countCodeFiles(absPath);
 
     const repoEvidence: Evidence[] = [...stack.evidence, ...commands.evidence];
     repoEvidence.push(
@@ -54,6 +56,13 @@ export async function detectWorkspace(root: string, runner: CommandRunner): Prom
     if (stack.manifests.length === 0) {
       repoEvidence.push({ claim: "No build manifest found — stack unknown", src: "absent:package.json" });
     }
+    if (codeFiles === 0) {
+      repoEvidence.push({
+        claim: "No code file of any known extension — this repo has not been built yet",
+        src: `absent:${dir === "." ? "." : toPosix(dir)}`,
+        workspaceScoped: true,
+      });
+    }
 
     repos.push({
       name,
@@ -64,6 +73,7 @@ export async function detectWorkspace(root: string, runner: CommandRunner): Prom
       languages: stack.languages,
       packageManager: stack.packageManager,
       manifests: stack.manifests,
+      codeFiles,
       commands: commands.commands,
       ci,
       confidence: scoreConfidence(commands.commands, stack.manifests.length),
