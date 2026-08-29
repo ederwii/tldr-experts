@@ -26,6 +26,12 @@ function denial(run: HookRun): string | null {
   return out.hookSpecificOutput.permissionDecisionReason ?? "";
 }
 
+/** `denial`, but always a string — a null denial reports what the hook did print. */
+function denialText(run: HookRun): string {
+  return denial(run)
+    ?? `no deny decision (exit ${run.code}) — stdout=${JSON.stringify(run.stdout)} stderr=${JSON.stringify(run.stderr)}`;
+}
+
 function context(run: HookRun): string | null {
   if (run.stdout.trim() === "") return null;
   const out = JSON.parse(run.stdout) as { hookSpecificOutput?: { additionalContext?: string } };
@@ -477,8 +483,20 @@ describe("DoD-gate (PreToolUse Write|Edit)", () => {
       hook_event_name: "PreToolUse", tool_name: "Write",
       tool_input: { file_path: storyPath(), content: `timeout_s: 1\n${story("done", ["sleep 30"])}` },
     });
-    expect(denial(run)).toContain("timed out after 1s");
-  });
+    // Always a string: `toContain` on a null denial reports a matcher-type error
+    // instead of the hook's actual output, which is what hid a Linux-only hang.
+    expect(denialText(run)).toContain("timed out after 1s");
+  }, 15_000);
+
+  test("times out even when the command leaves a child holding the pipes", async () => {
+    // `&` + `wait` forces a grandchild on every shell. Killing only `sh` leaves
+    // `sleep` alive with the gate's stdout pipe open, and the gate hangs.
+    const run = await hook("dod-gate", {
+      hook_event_name: "PreToolUse", tool_name: "Write",
+      tool_input: { file_path: storyPath(), content: `timeout_s: 1\n${story("done", ["sleep 30 & wait"])}` },
+    });
+    expect(denialText(run)).toContain("timed out after 1s");
+  }, 15_000);
 });
 
 describe("budget-gate (PreToolUse Bash)", () => {

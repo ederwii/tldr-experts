@@ -24,6 +24,7 @@ import { mkdir, rm } from "node:fs/promises";
 import { summariseGraph, type GraphSummary } from "./graphJson.ts";
 import { emptyDocs, MAP_DOCS, type MapBullet, type MapDoc, type MapFacts } from "./MapFacts.ts";
 import { cite } from "./StaticProvider.ts";
+import { runtime } from "../runtime/index.ts";
 import type { CommandRunner } from "../detect/CommandRunner.ts";
 import type { MapContext, MapProvider } from "./Provider.ts";
 
@@ -59,7 +60,7 @@ export class GraphifyProvider implements MapProvider {
   private async buildGraph(context: MapContext): Promise<GraphSummary | null> {
     await mkdir(context.outDir, { recursive: true });
     const repoOut = join(context.repo.absPath, "graphify-out");
-    const repoOutExisted = await Bun.file(join(repoOut, GRAPH_FILE)).exists();
+    const repoOutExisted = await runtime.exists(join(repoOut, GRAPH_FILE));
 
     await this.runner.run(["graphify", "update", context.repo.absPath, "--no-cluster"], context.repo.absPath);
 
@@ -69,7 +70,7 @@ export class GraphifyProvider implements MapProvider {
       join(context.outDir, "graphify-out", GRAPH_FILE),
       workspaceCopy,
     ]);
-    if (text !== null) await Bun.write(workspaceCopy, text);
+    if (text !== null) await runtime.writeText(workspaceCopy, text);
     if (!repoOutExisted) await rm(repoOut, { recursive: true, force: true });
     if (text === null) return null;
 
@@ -108,8 +109,7 @@ export class GraphifyProvider implements MapProvider {
 /** Text of the first path that exists, or null. */
 async function firstReadable(paths: readonly string[]): Promise<string | null> {
   for (const path of paths) {
-    const file = Bun.file(path);
-    if (await file.exists()) return file.text();
+    if (await runtime.exists(path)) return await runtime.readText(path);
   }
   return null;
 }

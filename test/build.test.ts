@@ -1,7 +1,10 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
+import { singleRepoFixture } from "./init-fixture.ts";
 
 /**
  * The portability contract (2026-08-28): **Bun to build, Node or Bun to run.**
@@ -95,6 +98,34 @@ describe("running the build under node", () => {
     const underBun = await run(["bun", join(FRAMEWORK_ROOT, "src", "hooks", "statusline.ts")], STATUSLINE_PAYLOAD);
     expect(underNode.stdout).toBe(underBun.stdout);
   });
+
+  test("`init` and `map --check` run end to end under node", async () => {
+    // The whole point of the seam: init walks the filesystem, spawns `git`,
+    // writes YAML and renders the map — every capability that differs between
+    // the two runtimes, in one command. `--provider static` keeps it
+    // deterministic; whether a dev machine has `graphify` on PATH is not what
+    // this test is about.
+    const fixture = await singleRepoFixture();
+    const out = await mkdtemp(join(tmpdir(), "tldrx-node-init-"));
+    try {
+      const init = await run([
+        "node", join(DIST, "tldrx.js"), "init",
+        "--no-interview", "--provider", "static", "--root", fixture.root, "--out", out,
+      ]);
+      expect(init.stderr, init.stderr).toBe("");
+      expect(init.code).toBe(0);
+      expect(existsSync(join(out, ".tldrx", "workspace.yml"))).toBe(true);
+      expect(readFileSync(join(out, ".tldrx", "workspace.yml"), "utf8")).toContain("mode: single-repo");
+
+      const checked = await run(["node", join(DIST, "tldrx.js"), "map", "--check", "--root", out]);
+      expect(checked.stderr, checked.stderr).toBe("");
+      expect(checked.code).toBe(0);
+      expect(checked.stdout).toContain("citations in");
+    } finally {
+      await fixture.cleanup();
+      await rm(out, { recursive: true, force: true });
+    }
+  }, 120_000);
 
   test("node parses the framework's own YAML through the seam", async () => {
     // `doctor` reads env.yml; getting a table out of it under node proves the

@@ -8,9 +8,12 @@
  * the framework refuses to have.
  */
 import { spawn as nodeSpawn } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { statSync } from "node:fs";
+import { dirname } from "node:path";
 import { parse as parseYamlText, stringify as stringifyYamlValue } from "yaml";
+import { killProcessTree } from "./killProcessTree.ts";
+import { OUTPUT_GRACE_MS } from "./outputGrace.ts";
 import type { Runtime, SpawnOptions, SpawnResult } from "./Runtime.ts";
 
 export const nodeRuntime: Runtime = {
@@ -38,9 +41,13 @@ export const nodeRuntime: Runtime = {
       let stdout = "";
       let stderr = "";
 
+      let graceTimer: ReturnType<typeof setTimeout> | null = null;
+
       const child = nodeSpawn(cmd, [...args], {
         cwd: opts.cwd,
         stdio: [opts.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+        // Own process group, so the timeout below can kill the whole tree.
+        detached: opts.timeoutMs !== undefined,
       });
 
       const timer =
@@ -48,13 +55,14 @@ export const nodeRuntime: Runtime = {
           ? null
           : setTimeout(() => {
               timedOut = true;
-              child.kill("SIGKILL");
+              killProcessTree(child.pid, () => child.kill("SIGKILL"));
             }, opts.timeoutMs);
 
       const finish = (exitCode: number): void => {
         if (settled) return;
         settled = true;
         if (timer !== null) clearTimeout(timer);
+        if (graceTimer !== null) clearTimeout(graceTimer);
         resolve({ exitCode, stdout, stderr, timedOut });
       };
 
@@ -64,7 +72,14 @@ export const nodeRuntime: Runtime = {
         stderr += error.message;
         finish(127);
       });
-      child.on("close", (code: number | null) => finish(code ?? (timedOut ? 137 : 1)));
+      // `close` waits for the pipes to reach EOF; `exit` does not. Something the
+      // child started can outlive it still holding stdout, so `exit` starts a
+      // grace period and then settles with whatever was read. See killProcessTree.
+      child.on("exit", (code: number | null, signal: NodeJS.Signals | null) => {
+        graceTimer = setTimeout(() => finish(exitCodeOf(code, signal)), OUTPUT_GRACE_MS);
+      });
+      child.on("close", (code: number | null, signal: NodeJS.Signals | null) =>
+        finish(exitCodeOf(code, signal)));
 
       if (opts.stdin !== undefined && child.stdin !== null) {
         child.stdin.end(opts.stdin);
@@ -77,11 +92,19 @@ export const nodeRuntime: Runtime = {
   },
 
   async writeText(path: string, content: string): Promise<void> {
+    // `Bun.write` creates missing parents; `writeFile` does not. Match Bun.
+    await mkdir(dirname(path), { recursive: true });
     await writeFile(path, content, "utf8");
   },
 
   async exists(path: string): Promise<boolean> {
-    return existsSync(path);
+    // Regular files only — `existsSync` would say true for a directory, which
+    // `Bun.file(dir).exists()` does not. See Runtime.exists.
+    try {
+      return statSync(path).isFile();
+    } catch {
+      return false;
+    }
   },
 
   async readJson(path: string): Promise<unknown> {
@@ -96,3 +119,9 @@ export const nodeRuntime: Runtime = {
     return indent > 0 ? stringifyYamlValue(value, { indent }) : stringifyYamlValue(value);
   },
 };
+
+/** Node reports a signalled death as `code === null`; Bun reports 128 + signal. */
+function exitCodeOf(code: number | null, signal: NodeJS.Signals | null): number {
+  if (code !== null) return code;
+  return signal === "SIGKILL" ? 137 : signal === "SIGTERM" ? 143 : 1;
+}

@@ -15,6 +15,7 @@ import { countLines } from "../detect/lineOf.ts";
 import { isBullet, parseToken, type FileSrc } from "./srcToken.ts";
 import { readEntries, toPosix } from "../detect/walk.ts";
 import { MAP_DIR } from "./buildMap.ts";
+import { runtime } from "../runtime/index.ts";
 import type { DetectedRepo } from "../detect/types.ts";
 
 export const HANDOFF_FILE = ".tldrx/init-handoff.md";
@@ -86,11 +87,11 @@ async function resolveFileSrc(
     base = repo.path === "." ? options.root : join(options.root, repo.path);
   }
 
-  const target = Bun.file(join(base, src.path));
-  if (!(await target.exists())) {
+  const target = join(base, src.path);
+  if (!(await runtime.exists(target))) {
     return { file: document, line, src: src.raw, reason: "file does not exist" };
   }
-  const lineCount = countLines(await target.text());
+  const lineCount = countLines(await runtime.readText(target));
   const highest = src.endLine ?? src.line;
   if (highest > lineCount || src.line < 1) {
     return { file: document, line, src: src.raw, reason: `line out of range (file has ${lineCount})` };
@@ -101,7 +102,7 @@ async function resolveFileSrc(
 /** Every document `--check` reads: the whole map tree plus the init handoff. */
 export async function citedDocuments(workspaceDir: string): Promise<string[]> {
   const found: string[] = [];
-  if (await Bun.file(join(workspaceDir, HANDOFF_FILE)).exists()) found.push(HANDOFF_FILE);
+  if (await runtime.exists(join(workspaceDir, HANDOFF_FILE))) found.push(HANDOFF_FILE);
 
   const mapDir = join(workspaceDir, MAP_DIR);
   for (const entry of await readEntries(mapDir)) {
@@ -121,7 +122,7 @@ export async function citedDocuments(workspaceDir: string): Promise<string[]> {
 
 async function readOrEmpty(path: string): Promise<string> {
   try {
-    return await Bun.file(path).text();
+    return await runtime.readText(path);
   } catch {
     return "";
   }

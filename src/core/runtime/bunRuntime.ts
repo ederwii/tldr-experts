@@ -6,6 +6,8 @@
  * `typeof Bun !== "undefined"`, so importing it under Node is inert — the `Bun`
  * references live inside function bodies, never at module scope.
  */
+import { killProcessTree } from "./killProcessTree.ts";
+import { OUTPUT_GRACE_MS } from "./outputGrace.ts";
 import type { Runtime, SpawnOptions, SpawnResult } from "./Runtime.ts";
 
 export const bunRuntime: Runtime = {
@@ -27,20 +29,27 @@ export const bunRuntime: Runtime = {
         stdout: "pipe",
         stderr: "pipe",
         stdin: opts.stdin === undefined ? "ignore" : new TextEncoder().encode(opts.stdin),
+        // Own process group, so the timeout below can kill the whole tree.
+        detached: opts.timeoutMs !== undefined,
       });
+      // Drain before awaiting exit: a child that fills the pipe buffer blocks on
+      // write, and would never exit if nothing were reading.
+      const collected: Promise<[string, string]> = Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
       const timer =
         opts.timeoutMs === undefined
           ? null
           : setTimeout(() => {
               timedOut = true;
-              proc.kill(9);
+              killProcessTree(proc.pid, () => proc.kill(9));
             }, opts.timeoutMs);
-      const [stdout, stderr, exitCode] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-        proc.exited,
-      ]);
+      const exitCode = await proc.exited;
       if (timer !== null) clearTimeout(timer);
+      // The process is gone; anything still holding its pipes is not ours to
+      // wait for. Settle on what was read rather than hang. See killProcessTree.
+      const [stdout, stderr] = await withinGrace(collected);
       return { exitCode, stdout, stderr, timedOut };
     } catch (error) {
       return { exitCode: 127, stdout: "", stderr: messageOf(error), timedOut };
@@ -74,4 +83,15 @@ export const bunRuntime: Runtime = {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Resolve `collected`, or give up on it after the grace period and report "". */
+function withinGrace(collected: Promise<[string, string]>): Promise<[string, string]> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(["", ""]), OUTPUT_GRACE_MS);
+    void collected.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      () => { clearTimeout(timer); resolve(["", ""]); },
+    );
+  });
 }

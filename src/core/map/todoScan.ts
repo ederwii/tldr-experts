@@ -5,6 +5,7 @@
  * a budget, and the rendered bullet says how many were read.
  */
 import { join } from "node:path";
+import { runtime } from "../runtime/index.ts";
 import type { WalkedFile } from "../detect/walk.ts";
 
 const MARKER = /\b(TODO|FIXME|HACK|XXX)\b:?\s*(.{0,120})/;
@@ -59,7 +60,7 @@ function clean(text: string): string {
 
 async function readText(absPath: string): Promise<string | null> {
   try {
-    return await Bun.file(absPath).text();
+    return await runtime.readText(absPath);
   } catch {
     return null;
   }

@@ -8,6 +8,7 @@
  */
 import { join } from "node:path";
 import { GITIGNORE_MARKERS, MARKDOWN_MARKERS, upsertBlock } from "./markerBlock.ts";
+import { runtime } from "../runtime/index.ts";
 import type { WriteLog } from "./writeFile.ts";
 
 /** Gitignored paths from spec §1: machine-local or regenerated state. */
@@ -43,7 +44,6 @@ async function upsertInto(
   markers: { begin: string; end: string },
   log: WriteLog,
 ): Promise<void> {
-  const file = Bun.file(absPath);
-  const existing = (await file.exists()) ? await file.text() : "";
+  const existing = (await runtime.exists(absPath)) ? await runtime.readText(absPath) : "";
   await log.overwrite(absPath, relPath, upsertBlock(existing, body, markers));
 }

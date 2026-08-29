@@ -7,6 +7,7 @@
 import { join } from "node:path";
 import { lineOf } from "./lineOf.ts";
 import { walkFiles } from "./walk.ts";
+import { runtime } from "../runtime/index.ts";
 import type { Evidence } from "./types.ts";
 
 /** Frameworks recognised from `package.json` dependencies, in report order. */
@@ -46,7 +47,7 @@ export async function detectStack(repoDir: string): Promise<StackDetection> {
   if (pkg !== null) {
     manifests.push(pkg.path);
     const typescript = pkg.dependencies.includes("typescript")
-      || (await Bun.file(join(repoDir, "tsconfig.json")).exists());
+      || (await runtime.exists(join(repoDir, "tsconfig.json")));
     languages.push(typescript ? "typescript" : "javascript");
     evidence.push({
       claim: `${typescript ? "TypeScript" : "JavaScript"} project: package.json declares ${pkg.dependencies.length} dependencies`,
@@ -73,7 +74,7 @@ export async function detectStack(repoDir: string): Promise<StackDetection> {
     ["go.mod", "go"], ["Cargo.toml", "rust"],
   ] as const) {
     if (languages.includes(language)) continue;
-    if (!(await Bun.file(join(repoDir, file)).exists())) continue;
+    if (!(await runtime.exists(join(repoDir, file)))) continue;
     languages.push(language);
     manifests.push(file);
     evidence.push({ claim: `${language} project manifest present`, src: `${file}:1` });
@@ -91,9 +92,9 @@ export async function detectStack(repoDir: string): Promise<StackDetection> {
 }
 
 async function readPackageJson(repoDir: string): Promise<PackageJson | null> {
-  const file = Bun.file(join(repoDir, "package.json"));
-  if (!(await file.exists())) return null;
-  const text = await file.text();
+  const path = join(repoDir, "package.json");
+  if (!(await runtime.exists(path))) return null;
+  const text = await runtime.readText(path);
   let parsed: unknown;
   try {
     parsed = JSON.parse(text) as unknown;
@@ -138,7 +139,7 @@ async function detectPackageManager(
     ["bun.lock", "bun"], ["bun.lockb", "bun"], ["pnpm-lock.yaml", "pnpm"],
     ["yarn.lock", "yarn"], ["package-lock.json", "npm"],
   ] as const) {
-    if (await Bun.file(join(repoDir, lockfile)).exists()) return manager;
+    if (await runtime.exists(join(repoDir, lockfile))) return manager;
   }
   if (hasPackageJson) return "npm";
   if (languages.includes("dotnet")) return "nuget";
