@@ -48,7 +48,8 @@
     "test": "bun test",
     "build": "bun scripts/build.ts",
     "typecheck": "tsc --noEmit",
-    "doctor": "bun bin/tldrx.ts doctor"
+    "doctor": "bun bin/tldrx.ts doctor",
+    "prepublishOnly": "bun run build"
   },
   "devDependencies": {
     "@types/bun": "^1.4.0",
