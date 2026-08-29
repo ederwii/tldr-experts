@@ -1,12 +1,16 @@
 /**
  * The three things the DoD gate reads out of `tldrx-work/<run>/03-plan/stories/<id>.md`.
  *
- * Story/epic file schemas are an open decision (spec §7), so this reads the two
- * fields the gate is specified against — `status:` and `repo:` — and the fenced
- * ```dod block, by line scanning rather than by assuming a frontmatter format.
+ * The story schema is now spec §2.13, but this stays a line scanner on purpose: a
+ * gate that only ran when the front matter parsed would let a malformed story
+ * write `status: done` unchecked. It reads the two fields the gate is specified
+ * against — `status:` and `repo:` — wherever they appear, and shares ONE ```dod
+ * parser with the §2.13 validator so the hook and the schema can never disagree
+ * about what the block contains.
  */
 
 import { runtime } from "../../core/runtime/index.ts";
+import { parseDodBlock } from "../../core/schemas/story.ts";
 
 export interface StoryFacts {
   readonly setsDone: boolean;
@@ -24,26 +28,19 @@ const FENCE_CLOSE_RE = /^\s*```+\s*$/;
 
 export function readStory(text: string): StoryFacts {
   const lines = text.split("\n");
+  const dod = parseDodBlock(text);
   let setsDone = false;
   let repo: string | null = null;
   let timeoutS: number | null = null;
-  let hasDodBlock = false;
-  const dodCommands: string[] = [];
   let inDod = false;
 
   for (const line of lines) {
     if (inDod) {
-      if (FENCE_CLOSE_RE.test(line)) {
-        inDod = false;
-        continue;
-      }
-      const command = line.trim();
-      if (command !== "" && !command.startsWith("#")) dodCommands.push(command);
+      if (FENCE_CLOSE_RE.test(line)) inDod = false;
       continue;
     }
     if (FENCE_OPEN_RE.test(line)) {
       inDod = true;
-      hasDodBlock = true;
       continue;
     }
     if (!setsDone && DONE_RE.test(line)) setsDone = true;
@@ -56,7 +53,7 @@ export function readStory(text: string): StoryFacts {
       if (m?.[1] !== undefined) timeoutS = Number(m[1]);
     }
   }
-  return { setsDone, repo, dodCommands, hasDodBlock, timeoutS };
+  return { setsDone, repo, dodCommands: dod.commands, hasDodBlock: dod.present, timeoutS };
 }
 
 export interface CommandResult {

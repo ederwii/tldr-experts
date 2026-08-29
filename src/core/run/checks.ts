@@ -7,7 +7,8 @@
  * is that it is not one.
  *
  * Implemented ids: `claim-sources` (the §2.8 handoff validator), `schema` (the
- * §2.2/§2.11 validators over the run's own files) and `cmd` (a workspace.yml
+ * §2.2/§2.11 validators over the run's own files), `plan` (the §2.13–§2.15
+ * epics/stories/waves validators, read together) and `cmd` (a workspace.yml
  * command, run for real). `[assumption]` — `no-reask`, `budget-gate` and `dod` are
  * PreToolUse write-time hooks with nothing to re-check at a gate, so they are
  * reported as skipped rather than silently counted as passes.
@@ -19,6 +20,7 @@ import { parseYaml } from "../yaml.ts";
 import { validateHandoff } from "../text/handoff.ts";
 import { validateRunBudget } from "../budget/RunBudget.ts";
 import { loadWorkspace, repoPath, toSrcContext } from "../../hooks/lib/workspace.ts";
+import { describePlanIssues, validatePlan } from "../plan/validatePlan.ts";
 import { validateRunFile } from "./RunFile.ts";
 import type { PlannedCheck, PlannedStage } from "./workflowPreset.ts";
 
@@ -56,6 +58,8 @@ export async function runCheck(check: PlannedCheck, ctx: CheckContext): Promise<
       return checkClaimSources(ctx);
     case "schema":
       return checkSchema(ctx);
+    case "plan":
+      return checkPlan(ctx);
     case "cmd":
       return await checkCommand(check, ctx);
     default:
@@ -83,9 +87,38 @@ function checkClaimSources(ctx: CheckContext): CheckOutcome {
     if (validation.unsourced.length > 0) {
       return { id: "claim-sources", status: "failed", detail: `${rel}: unsourced bullet(s) on line(s) ${validation.unsourced.join(", ")}` };
     }
+    if (validation.emptySections.length > 0) {
+      const named = validation.emptySections.map((s) => `${s.name} (L${String(s.line)})`).join(", ");
+      return {
+        id: "claim-sources",
+        status: "failed",
+        detail: `${rel}: section(s) with no list items — ${named}. Write \`- none [src: absent:<what you looked at>]\``,
+      };
+    }
     return { id: "claim-sources", status: "failed", detail: `${rel}: ${validation.unresolved[0]?.message ?? "unresolvable source"}` };
   }
   return { id: "claim-sources", status: "passed", detail: `${handoffs.length} handoff(s) sourced` };
+}
+
+/**
+ * The Plan phase's epics, stories and waves, read together (spec §2.13–§2.15).
+ * Skipped for any stage that does not declare `waves.yml` as an output — the check
+ * is listed on the Plan stage and would otherwise fail every other stage's gate.
+ */
+function checkPlan(ctx: CheckContext): CheckOutcome {
+  if (!ctx.stage.outputs.some((p) => p.endsWith("waves.yml"))) {
+    return { id: "plan", status: "skipped", detail: "the stage declares no waves.yml output" };
+  }
+  const planDir = join(ctx.runDir, ctx.stage.phase);
+  const report = validatePlan(planDir, loadWorkspace(ctx.root).commands);
+  if (!report.ok) {
+    return { id: "plan", status: "failed", detail: describePlanIssues(report.issues) };
+  }
+  return {
+    id: "plan",
+    status: "passed",
+    detail: `${report.epicCount} epic(s), ${report.storyCount} story(ies), ${report.waveCount} wave(s)`,
+  };
 }
 
 /** The run's own two schema files, revalidated off disk. */

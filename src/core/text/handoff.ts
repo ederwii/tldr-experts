@@ -1,10 +1,18 @@
 /**
  * `tldrx-work/<run>/<phase>/handoff.md` (spec §2.8).
  *
- * Four H2 sections, in order, and **every list item inside them — `- `, `1. ` or
- * `1) ` — ends with a `[src: …]` token**. This module splits the sections, finds the bullets, and
- * reports the offending line numbers — the claim-sources hook turns that report
- * into a deny message and nothing else.
+ * Four H2 sections, in order; **each contains at least one list item**; and
+ * **every list item inside them — `- `, `1. ` or `1) ` — ends with a `[src: …]`
+ * token**. This module splits the sections, finds the bullets, and reports the
+ * offending line numbers — the claim-sources hook turns that report into a deny
+ * message and nothing else.
+ *
+ * The "at least one item" rule is spec §2.8, and it is there because a prose-only
+ * section is how an unsourced claim gets written anyway: a paragraph carries no
+ * bullet for the checker to look at, so "Unknowns: none that we can see" used to
+ * validate clean. A section with genuinely nothing in it is written as
+ * `- none [src: absent:<what was looked at>]` — which names what was checked, and
+ * is a claim like any other.
  */
 import {
   parseSrcToken, resolveSrc, type SrcContext, type SrcRef, type SrcToken,
@@ -132,9 +140,18 @@ export interface HandoffIssue {
   readonly message: string;
 }
 
+/** A required section that is present but carries no list item. */
+export interface EmptySection {
+  readonly name: string;
+  /** 1-based line of the `## <name>` heading. */
+  readonly line: number;
+}
+
 export interface HandoffValidation {
   readonly ok: boolean;
   readonly missingSections: readonly string[];
+  /** Required sections present but holding only prose (spec §2.8). */
+  readonly emptySections: readonly EmptySection[];
   /** List items with no `[src: …]` token at all. */
   readonly unsourced: readonly number[];
   /** Bullets whose token is malformed, or cites something that does not resolve. */
@@ -148,6 +165,7 @@ export const MAX_BULLETS = 200;
 export function validateHandoff(text: string, ctx: SrcContext): HandoffValidation {
   const handoff = parseHandoff(text);
   const missing = missingSections(handoff);
+  const emptySections: EmptySection[] = [];
   const unsourced: number[] = [];
   const unresolved: HandoffIssue[] = [];
   let bulletCount = 0;
@@ -155,6 +173,9 @@ export function validateHandoff(text: string, ctx: SrcContext): HandoffValidatio
   const required = new Set<string>(HANDOFF_SECTIONS);
   for (const section of handoff.sections) {
     if (!required.has(section.name)) continue;
+    if (section.bullets.length === 0) {
+      emptySections.push({ name: section.name, line: section.headingLine });
+    }
     for (const bullet of section.bullets) {
       bulletCount++;
       if (bullet.token === null) {
@@ -176,8 +197,9 @@ export function validateHandoff(text: string, ctx: SrcContext): HandoffValidatio
     unresolved.push({ line: 0, message: `${bulletCount} bullets exceeds the ${MAX_BULLETS} cap` });
   }
   return {
-    ok: missing.length === 0 && unsourced.length === 0 && unresolved.length === 0,
+    ok: missing.length === 0 && emptySections.length === 0 && unsourced.length === 0 && unresolved.length === 0,
     missingSections: missing,
+    emptySections,
     unsourced,
     unresolved,
     bulletCount,
@@ -197,3 +219,8 @@ export function collectSrcRefs(handoff: Handoff): readonly SrcRef[] {
 
 export { parseSrcToken, classifySrc, resolveSrc, emptySrcContext } from "./srcToken.ts";
 export type { SrcContext, SrcRef, SrcToken, SrcKind, SrcParseError } from "./srcToken.ts";
+
+/** The line a genuinely empty section is written as (spec §2.8). */
+export function noneBullet(lookedAt: string): string {
+  return `- none [src: absent:${lookedAt}]`;
+}

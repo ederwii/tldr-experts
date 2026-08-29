@@ -227,13 +227,13 @@ const MINIMAL_HANDOFF = `# Handoff — 01-what / what — run X
 - No ranking store exists yet [src: absent:.tldrx/map/domains.md]
 
 ## Decisions
-_none yet_
+- none [src: absent:.tldrx/memory/facts.yml]
 
 ## Unknowns
-_none yet_
+- none [src: absent:.tldrx/memory/facts.yml]
 
 ## Evidence ledger
-_none yet_
+- none [src: absent:.tldrx/memory/facts.yml]
 `;
 
 const ROOT_QUESTION = `# Questions — 01-what — run X
@@ -378,13 +378,13 @@ describe("run-relative `[src: …]` — next, approve and the hook agree", () =>
       `${marker} The intent names the leaderboard [src: ${src}]`,
       "",
       "## Decisions",
-      "_none yet_",
+      "- none [src: absent:.tldrx/memory/facts.yml]",
       "",
       "## Unknowns",
-      "_none yet_",
+      "- none [src: absent:.tldrx/memory/facts.yml]",
       "",
       "## Evidence ledger",
-      "_none yet_",
+      "- none [src: absent:.tldrx/memory/facts.yml]",
       "",
     ].join("\n");
   }
@@ -416,16 +416,14 @@ describe("run-relative `[src: …]` — next, approve and the hook agree", () =>
     return outcome.status === "passed";
   }
 
-  async function verdicts(
-    src: string,
-    marker?: string,
+  async function verdictsOf(
+    content: string,
   ): Promise<{ hook: boolean; facilitator: boolean; approve: boolean }> {
     const ws = fresh();
     await tldrx(ws.root, "run", "new", "leaderboard");
     const runDir = onlyRunDir(ws.root);
     writeFileSync(join(runDir, "01-what", "intent.md"), "# Intent\n\nA leaderboard.\n", "utf8");
     const handoffFile = join(runDir, "01-what", "handoff.md");
-    const content = handoffCiting(src, marker);
 
     const hook = await hookVerdict(handoffFile, content);
     writeFileSync(handoffFile, content, "utf8");
@@ -434,6 +432,21 @@ describe("run-relative `[src: …]` — next, approve and the hook agree", () =>
     const approved = await tldrx(ws.root, "approve", "--note", "ok");
     return { hook, facilitator, approve: approved.code === EXIT_OK };
   }
+
+  async function verdicts(
+    src: string,
+    marker?: string,
+  ): Promise<{ hook: boolean; facilitator: boolean; approve: boolean }> {
+    return await verdictsOf(handoffCiting(src, marker));
+  }
+
+  test("all three refuse a checked section that holds only prose (spec §2.8)", async () => {
+    const prosey = handoffCiting("01-what/intent.md:1")
+      .replace("- none [src: absent:.tldrx/memory/facts.yml]\n\n## Unknowns", "- none [src: absent:.tldrx/memory/facts.yml]\n\n## Unknowns")
+      .replace(/## Unknowns\n- none \[src: absent:[^\]]*\]/, "## Unknowns\nNothing we could not answer from the map.");
+    expect(prosey).toContain("Nothing we could not answer");
+    expect(await verdictsOf(prosey)).toEqual({ hook: false, facilitator: false, approve: false });
+  });
 
   test("all three accept a bullet citing the run's own output", async () => {
     expect(await verdicts("01-what/intent.md:1")).toEqual({ hook: true, facilitator: true, approve: true });

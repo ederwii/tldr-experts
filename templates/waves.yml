@@ -1,0 +1,17 @@
+# Written to tldrx-work/<run>/03-plan/waves.yml. Spec §2.15.
+#
+# The execution order of the Plan, and the only file that says what may run at the
+# same time. Concept §9: "stories grouped by dependency; wave N+1 starts only when
+# wave N's epic branch is green", and "independent stories in the same wave run as
+# parallel sub-agents in separate worktrees".
+#
+# Both sentences make the same demand, and it is the rule the shape cannot enforce
+# on its own: every story's `depends_on` must land in an EARLIER wave. A dependency
+# inside the same wave is an error, not a warning — those two stories would be
+# handed to parallel agents that overwrite each other.
+#
+# File order IS execution order, so wave ids ascend. A story runs in exactly one wave.
+version: 1
+waves:
+  - {id: W1, stories: [S1, S2]}
+  - {id: W2, stories: [S3]}

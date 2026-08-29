@@ -123,6 +123,15 @@ export class RunStore {
     this.current = fn(structuredClone(this.current) as RunFile);
   }
 
+  /**
+   * The same, for `budget.yml`. `save()` re-derives every `spent_usd` from the run,
+   * so this is only ever a way to change *ceilings* — which is exactly what
+   * `tldrx budget raise` does, and the only hand-driven edit the file allows.
+   */
+  mutateBudget(fn: (budget: RunBudget) => RunBudget): void {
+    this.currentBudget = fn(structuredClone(this.currentBudget) as RunBudget);
+  }
+
   append(event: TldrxEvent): void {
     this.events.append(event);
   }

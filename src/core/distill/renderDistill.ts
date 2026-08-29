@@ -9,7 +9,7 @@
  * Nothing here invents a sentence. Every bullet is a claim that was in the source
  * folder, carrying the tag that says where it was.
  */
-import { HANDOFF_SECTIONS, MAX_BULLETS } from "../text/handoff.ts";
+import { HANDOFF_SECTIONS, MAX_BULLETS, noneBullet } from "../text/handoff.ts";
 import type { Conflict, DistillResult, ImportedClaim } from "./distill.ts";
 
 /** `[assumption]` — spec §6 names the two prose outputs but not which source feeds which. */
@@ -92,21 +92,27 @@ export function renderHandoff(input: HandoffInput): string {
     "",
     `## ${HANDOFF_SECTIONS[0]}`,
   ];
-  if (shown.length === 0) lines.push("_No claims were imported._");
+  // Spec §2.8: a checked section holds at least one list item, so "nothing here"
+  // is written as an item that names what was looked at — not as a paragraph.
+  if (shown.length === 0) lines.push(noneBullet(result.intentDir));
   for (const claim of shown) lines.push(bullet(claim));
   if (hidden > 0) {
     lines.push("", `_${hidden} further imported claim(s) are in 01-what/intent.md and 01-what/scope.md._`);
   }
 
   lines.push("", `## ${HANDOFF_SECTIONS[1]}`);
-  lines.push("_The distill copies claims; it decides nothing. Decisions belong to the What stage._");
+  lines.push(`- none — the distill copies claims and decides nothing; deciding is the What stage's job [src: absent:${result.intentDir}]`);
 
   lines.push("", `## ${HANDOFF_SECTIONS[2]}`);
-  if (unknowns.length === 0) lines.push("_Every declared What output has imported content._");
+  if (unknowns.length === 0) {
+    lines.push(`- none — every declared What output has imported content [src: absent:${result.intentDir}]`);
+  }
   for (const gap of unknowns) lines.push(gap);
 
   lines.push("", `## ${HANDOFF_SECTIONS[3]}`);
-  if (ledger.length === 0) lines.push("_No file on the §6 read list was present._");
+  if (ledger.length === 0) {
+    lines.push(`- none — no file on the spec §6 read list was present [src: absent:${result.intentDir}]`);
+  }
   for (const entry of ledger) lines.push(entry);
   if (result.droppedUnanswered > 0 || result.droppedConflicting > 0) {
     lines.push(

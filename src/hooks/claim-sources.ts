@@ -4,9 +4,11 @@
  * PreToolUse (Write|Edit) — the gate. PostToolUse (Write|Edit) — the twin, feedback only.
  *
  * Spec §4: "`tool_input.file_path` matches `tldrx-work/**\/*.md` … parse the four
- * handoff sections; each `- ` line must end with a valid `src` token (§2.8);
- * `file` sources must resolve." A claim without a source is rejected by a hook,
- * not by a prose rule (concept §1.1).
+ * handoff sections; each must hold at least one list item, and each list item must
+ * end with a valid `src` token (§2.8); `file` sources must resolve." A claim
+ * without a source is rejected by a hook, not by a prose rule (concept §1.1) — and
+ * a section with no claims at all is rejected the same way, because a paragraph
+ * saying "nothing found" is exactly how an unchecked claim used to get written.
  *
  * Fails OPEN: any internal error allows the write and says so on stderr.
  */
@@ -14,7 +16,9 @@ import { runHook, deny, postContext, allow } from "./lib/decide.ts";
 import { readPayload, filePathOf, isWriteOrEdit } from "./lib/payload.ts";
 import { wouldBeContent } from "./lib/wouldBe.ts";
 import { locateWork, loadWorkspace, toSrcContext } from "./lib/workspace.ts";
-import { claimSourcesDeny, claimSourcesUnresolvedDeny } from "./lib/messages.ts";
+import {
+  claimSourcesDeny, claimSourcesEmptySectionDeny, claimSourcesUnresolvedDeny,
+} from "./lib/messages.ts";
 import { isHandoff, validateHandoff } from "../core/text/handoff.ts";
 
 await runHook("claim-sources", async () => {
@@ -43,6 +47,9 @@ await runHook("claim-sources", async () => {
   const relPath = `tldrx-work/${location.run}/${location.relative}`;
   const parts: string[] = [];
   if (report.unsourced.length > 0) parts.push(claimSourcesDeny(relPath, report.unsourced));
+  if (report.emptySections.length > 0) {
+    parts.push(claimSourcesEmptySectionDeny(relPath, [...report.emptySections]));
+  }
   if (report.unresolved.length > 0) parts.push(claimSourcesUnresolvedDeny(relPath, report.unresolved));
   if (parts.length === 0) return; // missing sections alone: the file is simply not a handoff yet
 

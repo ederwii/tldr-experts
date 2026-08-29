@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { openBlocks, parseQuestions } from "../text/questions.ts";
 import { remaining } from "../budget/wouldExceed.ts";
 import type { RunBudget } from "../budget/RunBudget.ts";
+import { renderAttempts, stageAttempts, type StageAttempts } from "./attempts.ts";
 import { isTerminal, stageAt, type RunFile, type RunPhase, type RunStage } from "./RunFile.ts";
 
 export const BAR_CELLS = 5;
@@ -48,6 +49,8 @@ export interface RunStatusView {
   readonly cursor: { readonly phase: string; readonly stage: string; readonly task: string | null };
   readonly phases: readonly PhaseProgress[];
   readonly budget: { readonly spent_usd: number; readonly ceiling_usd: number; readonly remaining_usd: number };
+  /** Per-attempt cost for the cursor stage, from `agent.result` events. */
+  readonly attempts: StageAttempts;
   readonly waiting: Waiting;
 }
 
@@ -67,6 +70,7 @@ export function buildStatus(run: RunFile, budget: RunBudget, runDir: string): Ru
       ceiling_usd: run.budget.ceiling_usd,
       remaining_usd: remaining(budget),
     },
+    attempts: stageAttempts(runDir, run.cursor.phase, run.cursor.stage),
     waiting: whatIsWaiting(run, runDir),
   };
 }
@@ -195,7 +199,11 @@ export function renderStatus(view: RunStatusView): string {
     "",
     `budget  $${view.budget.spent_usd.toFixed(2)} spent of $${view.budget.ceiling_usd.toFixed(2)} ceiling ` +
       `($${view.budget.remaining_usd.toFixed(2)} left)`,
-    `waiting ${view.waiting.message}`,
   );
+  // What the CURSOR stage cost, attempt by attempt. A retry is the moment this
+  // matters, and `cost_usd` alone cannot tell one $2.60 try from two $1.30 ones.
+  const attempts = renderAttempts(view.attempts);
+  if (attempts !== null) lines.push(`${view.cursor.stage.padEnd(7)} ${attempts}`);
+  lines.push(`waiting ${view.waiting.message}`);
   return lines.join("\n");
 }

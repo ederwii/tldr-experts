@@ -13,6 +13,7 @@ const TEMPLATE_KINDS: ReadonlyArray<readonly [string, FileKind]> = [
   ["competencies.yml", "competencies"],
   ["process.yml", "process"],
   ["env.yml", "env"],
+  ["waves.yml", "waves"],
 ];
 
 function issueText(kind: FileKind, input: unknown): string {
@@ -21,9 +22,10 @@ function issueText(kind: FileKind, input: unknown): string {
 
 describe("the registry", () => {
   test("covers every declared file kind", () => {
-    expect([...FILE_KINDS].sort()).toEqual(
-      ["budget", "competencies", "env", "facts", "process", "run", "stage", "workflow", "workspace"],
-    );
+    expect([...FILE_KINDS].sort()).toEqual([
+      "budget", "competencies", "env", "epic", "facts", "process", "run", "stage",
+      "story", "waves", "workflow", "workspace",
+    ]);
   });
 });
 

@@ -38,11 +38,12 @@
 ## Evidence ledger
 
 > Every source cited above, once, with what it proved. This is what the next stage
-> and the reviewer read instead of re-deriving the work.
+> and the reviewer read instead of re-deriving the work. **List items, not a table**
+> — this section is checked exactly like the other three, and a table holds no
+> list items for the gate to check.
 
-| # | Source | Kind | What it establishes |
-|---|--------|------|---------------------|
-| 1 | `<path:line | url | Q-id>` | file / doc / answer / command output | … |
+- … what this file establishes … `[src: <repo>:<path>:<line>]`
+- … what this command proved … `[src: $ <command> → exit 0]`
 
 ## Outputs written
 
@@ -59,6 +60,7 @@ Nothing advances until this is recorded in `run.yml` and `events.jsonl`.
 ## Rules
 
 - Every bullet under Findings / Decisions / Unknowns / Evidence ledger is ONE line and ENDS with a source token. A bullet without one is refused by the `claim-sources` gate and the whole stage fails.
+- Each of Findings / Decisions / Unknowns / Evidence ledger must hold at least ONE list item; a section that is genuinely empty is written as `- none [src: absent:<what you looked at>]`, and a prose-only section is refused by the `claim-sources` gate.
 - Source token grammar (exact): `[src: <one or more sources separated by "; ">]` where a source is ONE of:
   - `<repo>:<path>:<line>` or `<repo>:<path>:<start>-<end>` — a file with ONE line or ONE range. Never a whole file, never a comma list (`file.md:7,21` is invalid: write two sources or a range).
   - `F<n>` — a fact id from `.tldrx/memory/facts.yml` (cite the id, never the file).

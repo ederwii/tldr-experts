@@ -167,6 +167,36 @@ describe("claim-sources (PreToolUse Write|Edit)", () => {
     );
   });
 
+  test("denies a checked section that holds only prose, and names the fix", async () => {
+    // Spec §2.8: each of the four sections must carry at least one list item.
+    // A paragraph is exactly how an unchecked claim used to get written.
+    const prosey = GOOD_HANDOFF.replace(
+      /## Unknowns\n(?:- .*\n)+/,
+      "## Unknowns\nNothing surfaced that the map could not answer.\n",
+    );
+    const run = await hook("claim-sources", {
+      hook_event_name: "PreToolUse", tool_name: "Write",
+      tool_input: { file_path: handoffPath(), content: prosey },
+    });
+    const denied = denialText(run);
+    expect(denied).toContain("checked section(s)");
+    expect(denied).toContain('"Unknowns"');
+    expect(denied).toContain("- none [src: absent:<what you looked at>]");
+  });
+
+  test("allows the same section once it says `- none [src: absent:…]`", async () => {
+    const named = GOOD_HANDOFF.replace(
+      /## Unknowns\n(?:- .*\n)+/,
+      "## Unknowns\n- none [src: absent:.tldrx/memory/facts.yml]\n",
+    );
+    const run = await hook("claim-sources", {
+      hook_event_name: "PreToolUse", tool_name: "Write",
+      tool_input: { file_path: handoffPath(), content: named },
+    });
+    expect(run.stdout).toBe("");
+    expect(run.code).toBe(0);
+  });
+
   test("judges the would-be content of an Edit, not what is on disk", async () => {
     const path = handoffPath();
     writeFileSync(path, GOOD_HANDOFF, "utf8");
@@ -515,9 +545,13 @@ describe("budget-gate (PreToolUse Bash)", () => {
       hook_event_name: "PreToolUse", tool_name: "Bash", cwd: workspace().root,
       tool_input: { command: "tldrx next 260828-leaderboard" },
     });
+    // The remedy is the command that performs it, with the shortfall already
+    // computed and rounded UP — the pilot's hand-edit under-shot and the retry
+    // was refused a second time.
     expect(denial(run)).toBe(
       '[tldrx] budget-gate: refusing to start stage "contracts" — phase 02-how has $0.61 left of $7.00 and ' +
-      "the stage estimate is $3.00. Raise phases[02-how].ceiling_usd in budget.yml, lower budget_usd in " +
+      "the stage estimate is $3.00. Run `tldrx budget raise 02-how 2.39 --run 260828-leaderboard` " +
+      "(add `--take-from <phase>` to move the money instead of adding it), lower budget_usd in " +
       ".tldrx/stages/contracts/stage.yml, or set on_exceed: warn.",
     );
   });

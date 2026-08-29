@@ -6,7 +6,7 @@ import {
   detectAnswered, openBlocks, validateQuestions,
 } from "../src/core/text/questions.ts";
 import {
-  parseHandoff, validateHandoff, isHandoff, missingSections, HANDOFF_SECTIONS,
+  parseHandoff, validateHandoff, isHandoff, missingSections, noneBullet, HANDOFF_SECTIONS,
 } from "../src/core/text/handoff.ts";
 import {
   classifySrc, parseSrcToken, emptySrcContext, resolveSrc, type SrcContext,
@@ -214,6 +214,38 @@ describe("handoff.md (spec §2.8)", () => {
     expect(validateHandoff(partial, CTX).missingSections).toEqual(["Evidence ledger"]);
   });
 
+  test("a checked section with no list items is an error, and is named", () => {
+    // The pilot's shape: a section that reads fine and carries nothing checkable.
+    const prose = HANDOFF.replace(
+      /## Unknowns\n(?:- .*\n)+/,
+      "## Unknowns\nNothing surfaced that we could not answer from the map.\n",
+    );
+    const report = validateHandoff(prose, CTX);
+    expect(report.ok).toBe(false);
+    expect(report.unsourced).toEqual([]);
+    expect(report.emptySections.map((e) => e.name)).toEqual(["Unknowns"]);
+    expect(report.emptySections[0]?.line).toBeGreaterThan(0);
+  });
+
+  test("`- none [src: absent:…]` is how an empty section is written", () => {
+    const filled = HANDOFF.replace(
+      /## Unknowns\n(?:- .*\n)+/,
+      `## Unknowns\n${noneBullet(".tldrx/memory/facts.yml")}\n`,
+    );
+    expect(validateHandoff(filled, CTX)).toMatchObject({ ok: true, emptySections: [] });
+  });
+
+  test("every one of the four sections is checked for items, not just Unknowns", () => {
+    const empty = [
+      "# Handoff — 02-how / contracts — run X", "",
+      "## Findings", "prose only", "",
+      "## Decisions", "prose only", "",
+      "## Unknowns", "prose only", "",
+      "## Evidence ledger", "prose only", "",
+    ].join("\n");
+    expect(validateHandoff(empty, CTX).emptySections.map((e) => e.name)).toEqual([...HANDOFF_SECTIONS]);
+  });
+
   test("stays well inside the 50 ms budget on a 256 KB handoff", () => {
     const bullet = "- Hunt completion already emits a HuntCompleted domain event [src: api:src/Hunt.cs:8]\n";
     const body = bullet.repeat(Math.ceil((256 * 1024) / bullet.length));
@@ -283,13 +315,13 @@ describe("a bare `path:line` resolves against three bases (spec §2.8)", () => {
       "- The intent names the leaderboard [src: 01-what/intent.md:1]",
       "",
       "## Decisions",
-      "_none yet_",
+      "- none [src: absent:.tldrx/memory/facts.yml]",
       "",
       "## Unknowns",
-      "_none yet_",
+      "- none [src: absent:.tldrx/memory/facts.yml]",
       "",
       "## Evidence ledger",
-      "_none yet_",
+      "- none [src: absent:.tldrx/memory/facts.yml]",
       "",
     ].join("\n");
     expect(validateHandoff(handoff, RUN_CTX)).toMatchObject({ ok: true, unresolved: [] });
@@ -309,13 +341,13 @@ describe("wrapped bullets (spec §2.8)", () => {
       ...findings,
       "",
       "## Decisions",
-      "_none yet_",
+      "- none [src: absent:.tldrx/memory/facts.yml]",
       "",
       "## Unknowns",
-      "_none yet_",
+      "- none [src: absent:.tldrx/memory/facts.yml]",
       "",
       "## Evidence ledger",
-      "_none yet_",
+      "- none [src: absent:.tldrx/memory/facts.yml]",
       "",
     ].join("\n");
   }
@@ -325,7 +357,7 @@ describe("wrapped bullets (spec §2.8)", () => {
       "- A claim long enough that its citation soft-wrapped onto the next line",
       "  [src: api:src/Hunt.cs:8]",
     ), CTX);
-    expect(report).toMatchObject({ ok: true, unsourced: [], unresolved: [], bulletCount: 1 });
+    expect(report).toMatchObject({ ok: true, unsourced: [], unresolved: [], bulletCount: 4 });
   });
 
   test("the continuation is joined, so a mid-bullet wrap still parses", () => {
@@ -372,13 +404,13 @@ describe("ordered list items are checked like bullets (spec §2.8)", () => {
       ...findings,
       "",
       "## Decisions",
-      "_none yet_",
+      "- none [src: absent:.tldrx/memory/facts.yml]",
       "",
       "## Unknowns",
-      "_none yet_",
+      "- none [src: absent:.tldrx/memory/facts.yml]",
       "",
       "## Evidence ledger",
-      "_none yet_",
+      "- none [src: absent:.tldrx/memory/facts.yml]",
       "",
     ].join("\n");
   }
@@ -388,7 +420,7 @@ describe("ordered list items are checked like bullets (spec §2.8)", () => {
       "1. Hunt completion emits a domain event [src: api:src/Hunt.cs:8]",
       "2) The lab SDK is generated [src: F019]",
     ), CTX);
-    expect(report).toMatchObject({ ok: true, unsourced: [], unresolved: [], bulletCount: 2 });
+    expect(report).toMatchObject({ ok: true, unsourced: [], unresolved: [], bulletCount: 5 });
   });
 
   test("a numbered item with no token is unsourced, and its line is named", () => {
@@ -427,7 +459,7 @@ describe("ordered list items are checked like bullets (spec §2.8)", () => {
       "   persistence, and the Score board.",
       "   [src: F019; api:src/Hunt.cs:8]",
     ), CTX);
-    expect(report).toMatchObject({ ok: true, bulletCount: 1 });
+    expect(report).toMatchObject({ ok: true, bulletCount: 4 });
   });
 
   test("an indented digit run is a wrapped line, not a new item", () => {

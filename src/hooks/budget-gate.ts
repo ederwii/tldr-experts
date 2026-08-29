@@ -23,6 +23,7 @@ import { budgetGateDeny } from "./lib/messages.ts";
 import { currentActor, nowRfc3339 } from "./lib/actor.ts";
 import { loadRunBudget } from "../core/budget/loadBudget.ts";
 import { wouldExceed } from "../core/budget/wouldExceed.ts";
+import { raiseCommand, shortBy } from "../core/budget/budgetView.ts";
 import { EventLog } from "../core/events/EventLog.ts";
 import { parseYaml } from "../core/yaml.ts";
 import { PROJECT_WORK_DIR } from "../core/paths.ts";
@@ -70,7 +71,10 @@ await runHook("budget-gate", async () => {
     },
   });
 
-  deny(budgetGateDeny(view.cursor.stage, view.cursor.phase, decision.remaining, decision.ceiling, estimate));
+  deny(budgetGateDeny(
+    view.cursor.stage, view.cursor.phase, decision.remaining, decision.ceiling, estimate,
+    raiseCommand(view.run, view.cursor.phase, shortBy(estimate, decision.remaining)),
+  ));
 });
 
 /** `--run <id>`, else the run the cwd sits inside, else the newest non-terminal one. */

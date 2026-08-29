@@ -8,7 +8,7 @@
  * Nothing here invents a sentence. Every Finding is a line that exists in a file
  * on disk, carrying the token that says which line of which file.
  */
-import { HANDOFF_SECTIONS, MAX_BULLETS } from "../text/handoff.ts";
+import { HANDOFF_SECTIONS, MAX_BULLETS, noneBullet } from "../text/handoff.ts";
 import { uncoveredSections, coveringHeading, EXPECTED_SECTIONS } from "./seedCoverage.ts";
 import type { SeedClaim, SeedHeading } from "./seedClaims.ts";
 import type { SeedSet } from "./collectSeed.ts";
@@ -106,7 +106,11 @@ export function renderSeedHandoff(input: SeedHandoffInput): string {
     "",
     `## ${HANDOFF_SECTIONS[0]}`,
   ];
-  if (shown.length === 0) lines.push("_The seed documents hold no heading, bullet or paragraph._");
+  // Spec §2.8: a checked section holds at least one list item, so "nothing here"
+  // is an item naming what was read — not a paragraph the checker cannot check.
+  if (shown.length === 0) {
+    lines.push(`- none — the seed documents hold no heading, bullet or paragraph [src: absent:${indexPath}]`);
+  }
   for (const claim of shown) lines.push(`- ${claim.text} [src: ${claim.src}]`);
   if (hidden > 0) {
     lines.push("", `_${hidden} further seed claim(s) were not listed; the documents are inlined into this stage's prompt._`);
@@ -114,6 +118,7 @@ export function renderSeedHandoff(input: SeedHandoffInput): string {
 
   lines.push("", `## ${HANDOFF_SECTIONS[1]}`, ...decisions);
   lines.push("", `## ${HANDOFF_SECTIONS[2]}`, ...unknowns);
+  if (ledger.length === 0) ledger.push(noneBullet(indexPath));
   lines.push("", `## ${HANDOFF_SECTIONS[3]}`, ...ledger);
   if (seed.warnings.length > 0) {
     lines.push("", `_${seed.warnings.length} warning(s) from the import are listed in ${indexPath}._`);

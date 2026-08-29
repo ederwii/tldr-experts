@@ -20,6 +20,7 @@ import { isTerminal, type RunFile, type RunPhase, type RunStage, type RunTask } 
 import { runChecks } from "../run/checks.ts";
 import { PresetError, type PlannedStage } from "../run/workflowPreset.ts";
 import { remaining } from "../budget/wouldExceed.ts";
+import { raiseCommand, shortBy } from "../budget/budgetView.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
 import { factsPath, loadWorkspace } from "../../hooks/lib/workspace.ts";
 import type { TldrxEvent } from "../events/Event.ts";
@@ -241,11 +242,16 @@ async function runStage(
       estimate_usd: stage.budget_usd,
       ceiling_usd: store.budget.phases.find((p) => p.id === phaseId)?.ceiling_usd ?? store.budget.ceiling_usd,
     }));
+    // Name the command, not the field. The pilot's hand-edit of `ceiling_usd`
+    // under-shot the estimate and the retry was refused a second time.
+    const fix = raiseCommand(store.runId, phaseId, shortBy(stage.budget_usd, phaseRemaining));
     return out(EXIT_REFUSED, [
       ...notes,
       `[tldrx] budget: refusing to start stage "${stageId}" — phase ${phaseId} has ` +
         `$${phaseRemaining.toFixed(2)} left and the stage estimate is $${stage.budget_usd.toFixed(2)}.`,
-      `Raise phases[${phaseId}].ceiling_usd in budget.yml, lower budget_usd in the stage, or set on_exceed: warn.`,
+      `Run \`${fix}\` (add \`--take-from <phase>\` to move the money instead of adding it), ` +
+        `lower budget_usd in the stage, or set on_exceed: warn.`,
+      `See the whole picture first: \`tldrx budget show --run ${store.runId}\`.`,
     ]);
   }
   warnOnce(store, options, phaseId, stageId, stage.budget_usd, phaseRemaining, notes);

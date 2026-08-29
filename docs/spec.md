@@ -32,7 +32,7 @@ TypeScript on Bun; host Claude Code. Covers the v0 skeleton and the schema shape
 │  ├─ .lock [g] · .agent/ [g]        # single-writer guard; raw `claude -p` json + transcripts
 │  ├─ 01-what/  handoff.md questions.md intent.md scope.md success-metrics.md [c]
 │  ├─ 02-how/   handoff.md questions.md design.md contracts.md risks.md test-strategy.md [c]
-│  ├─ 03-plan/  handoff.md waves.yml epics/<id>.md stories/<id>.md [c]
+│  ├─ 03-plan/  handoff.md waves.yml §2.15 · epics/<id>.md §2.14 · stories/<id>.md §2.13 [c]
 │  ├─ 04-build/ handoff.md log/<story-id>.md [c]
 │  └─ 05-watch/ handoff.md watchers/<feature>.md [c]
 └─ <repo-a>/ <repo-b>/ …             # sibling product repos; init writes nothing into them
@@ -368,7 +368,8 @@ per block.
 ### 2.8 `tldrx-work/<run>/<phase>/handoff.md` + the `src` grammar
 
 One handoff per stage: what was found, decided, still unknown, and the ledger a reviewer can re-run. **Every bullet in
-all four sections ends with a `[src: …]` token.**
+all four sections ends with a `[src: …]` token**, and **each of the four sections holds at least one list item** — a
+section with genuinely nothing in it is written as `- none [src: absent:<what was looked at>]`, never as prose.
 
 ```markdown
 # Handoff — 02-how / contracts — run 260828-leaderboard
@@ -391,6 +392,13 @@ Stage: contracts · Expert: architect · Model: sonnet · Cost: $2.61 of $3.00 c
 - Vendor rate limits confirmed [src: https://developers.example.com/limits]
 ```
 
+A section with nothing in it still carries one item, and that item names what was checked:
+
+```markdown
+## Unknowns
+- none [src: absent:.tldrx/memory/facts.yml]
+```
+
 ```
 token  := "[src: " src ("; " src)* "]"
 src    := file | doc | ans | fact | cmd | graph | absent
@@ -403,7 +411,9 @@ graph  := "graph:" nodeid                          # a graphify node id
 absent := "absent:" path                           # looked here, found nothing
 ```
 
-**Validation.** The four sections present in that order; **every list item** inside them ends with a valid token —
+**Validation.** The four sections present in that order; each holding **at least one list item** — a section that is
+present but carries only prose is an error, because a paragraph offers the checker nothing to check and "no unknowns
+that we can see" is exactly the claim that most needs a source; **every list item** inside them ends with a valid token —
 `- item`, `1. item` and `1) item` all count, and an item runs to the next line that starts at column 0, so a
 soft-wrapped citation on an indented continuation line still counts. An ordered marker is only a marker at column 0
 (`…global since` / `  2019. That has not changed` is one wrapped item, not two). `file` paths exist with the line in
@@ -530,6 +540,124 @@ source: {who: alan, when: 2026-08-28T16:40:00Z, run: init, q: Q2}
 **Validation.** Enums; `sprint_length_days` required iff `methodology: scrum`; `ticket_tool.project` required unless
 `kind: none`; `approvers` non-empty.
 
+### 2.13 `tldrx-work/<run>/03-plan/stories/<id>.md`
+
+The unit the Build phase picks up cold: one repo, one branch, one Definition of Done a hook can re-run. The
+machine-read half is a YAML front-matter block; the body is prose plus the fenced ```dod block, which is executed
+rather than read.
+
+````markdown
+---
+version: 1
+id: S3
+epic: E1
+title: "Leaderboard read model"
+repo: lab
+status: todo
+depends_on: [S1]
+touches: ["src/features/leaderboard/", "src/services/generated/"]
+acceptance:
+  - "Top-50 ranks render from the materialised view, newest hunt first"
+  - "A hunt completed while the page is open moves the player within one refresh"
+test_plan:
+  - "Unit: rank ordering with ties, empty table, single player"
+  - "Integration: HuntCompleted refreshes the view"
+evidence: []
+---
+
+# S3 · Leaderboard read model
+
+## Context
+Why this story exists, sourced. [src: 02-how/contracts.md:14]
+
+## Definition of done
+
+```dod
+npm run test
+npm run lint
+```
+
+## Evidence
+Filled by Build, one bullet per proof. [src: $ npm run test → exit 0]
+````
+
+| Field | Type | Req | Meaning |
+|---|---|---|---|
+| `version` | `1` | y | Spec §0: unknown version ⇒ exit 1 |
+| `id` | `^S\d{1,4}$` | y | Story id; **must equal the file name** (`S3` ⇒ `S3.md`) |
+| `epic` | `^E\d{1,4}$` | y | The epic whose branch this story merges into; that epic must list this story back |
+| `title` | str ≤512 | y | One line, human |
+| `repo` | `^[a-z0-9-]{1,32}$` | y | A `workspace.yml` repo name — the worktree's repo and the DoD's cwd |
+| `status` | `todo\|in_progress\|review\|done\|blocked` | y | The line `dod-gate` watches for `done` |
+| `depends_on` | `S<n>[]` (≤64, unique) | y | Stories that must be done first; may not contain this story. `waves.yml` must place every one of them in an earlier wave |
+| `touches` | rel path[] (≥1, ≤128) | y | Files/dirs this story is expected to change; no `..`. Two stories in one wave touching the same path is a plan smell, not a schema error |
+| `acceptance` | str[] (≥1, ≤64) | y | What must be true for a human to accept it |
+| `test_plan` | str[] (≥1, ≤64) | y | How it will be proven, before it is written |
+| `evidence` | str[] (≤64) | y | Filled by Build. **Required non-empty when `status: done`** — done means proven, not asserted |
+| ` ```dod ` block | fenced, ≥1 command | y | Each line must equal a `workspace.yml` command **verbatim**; `dod-gate` re-runs all of them from `repo` and every one must exit `0` |
+
+**Validation.** Front matter present and parseable; keys and enums as above; `id` matches the file name; `depends_on`
+free of self-reference and duplicates; every ` ```dod ` command in `workspace.yml` (skipped when there are no commands to
+check against, same `[assumption]` as a `cmd` source). `[assumption]` — the wave brief names the five story states and
+is silent on granularity caps, so the list caps above are chosen in the spirit of §0's bounded-file rule.
+
+### 2.14 `tldrx-work/<run>/03-plan/epics/<id>.md`
+
+A branch and a list of stories. Concept §9: `epic/<epic>` ← `story/<id>` worktrees; a story merges to its epic on
+green, and the epic merges to main after integration tests and a human gate.
+
+```markdown
+---
+version: 1
+id: E1
+title: "Player leaderboard"
+repos: [api, lab]
+stories: [S1, S2, S3]
+branch: epic/leaderboard
+status: todo
+---
+
+# E1 · Player leaderboard
+```
+
+| Field | Type | Req | Meaning |
+|---|---|---|---|
+| `version` | `1` | y | As §0 |
+| `id` | `^E\d{1,4}$` | y | Epic id; must equal the file name |
+| `title` | str ≤512 | y | One line, human |
+| `repos` | repo name[] (≥1, unique) | y | Every repo its stories touch — an epic may span repos, a story may not |
+| `stories` | `S<n>[]` (≥1, unique) | y | The stories on this branch; each must have a file, and each must name this epic back |
+| `branch` | `^epic/[a-z0-9][a-z0-9-]{0,48}$` | y | Cut from the repo's `default_branch`; story worktrees branch off it |
+| `status` | same enum as §2.13 | y | `[assumption]` — an epic reuses the story states rather than inventing a second vocabulary |
+
+**Validation.** As above, plus: a story belongs to exactly one epic, and the story ↔ epic reference agrees in both
+directions.
+
+### 2.15 `tldrx-work/<run>/03-plan/waves.yml`
+
+The execution order, and the only file that says what may run at the same time.
+
+```yaml
+version: 1
+waves:
+  - {id: W1, stories: [S1, S2]}
+  - {id: W2, stories: [S3]}
+```
+
+| Field | Type | Req | Meaning |
+|---|---|---|---|
+| `version` | `1` | y | As §0 |
+| `waves[].id` | `^W\d{1,3}$` | y | Unique, and **ascending in file order** — the file order is the execution order |
+| `waves[].stories` | `S<n>[]` (≥1, ≤32) | y | Run in parallel, one worktree each; a story appears in exactly one wave |
+
+**Validation.** Shape as above (≤32 waves, ≤200 scheduled stories); every scheduled story has a file, and every story
+file is scheduled; and the rule the shape cannot enforce alone — **every story's `depends_on` must be in an EARLIER
+wave**. A dependency in the *same* wave is an error, not a warning: those two stories would be handed to parallel
+agents that overwrite each other. Concept §9: "wave N+1 starts only when wave N's epic branch is green."
+
+**Where it is enforced.** `tldrx approve` re-runs the `plan` check at the Plan gate, which reads all three artefacts
+together — the only place the cross-file rules can be checked, since each file on its own is well formed.
+
 ## 3. CLI surface
 
 Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not found · `4` awaiting human · `5` agent failed.
@@ -544,6 +672,8 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx answer <Qid> <text>` | `questions.md`, `facts.yml` | `questions.md`, `facts.yml`, `events.jsonl` | 0,1,3 |
 | `tldrx approve [<run>] [--note]` | `run.yml`, stage outputs, stage checks | `run.yml` gate, `events.jsonl` | 0,2,3 |
 | `tldrx reject [<run>] --note <text>` | `run.yml` | `run.yml` gate, `events.jsonl`, stage status ⇒ `ready` | 0,3 |
+| `tldrx budget show [<run>] [--run <id>] [--json]` | `run.yml`, `budget.yml` | nothing (stdout) | 0,1,3 |
+| `tldrx budget raise <phase> <usd> [--run <id>] [--take-from <phase>]` | `run.yml`, `budget.yml` | `budget.yml` ceilings, `run.yml` ceiling mirror | 0,1,3 |
 | `tldrx map --refresh` | `workspace.yml`, repos, `graphify-out/` | `map/**`, `graphify-out/`, `events.jsonl` | 0,1 |
 | `tldrx map --check` | `map/**` citations, filesystem | `cache/map-drift.json` (stdout report) | 0,1 |
 | `tldrx expert list` | `experts/*/competencies.yml` | nothing (stdout star chart) | 0 |
@@ -567,7 +697,7 @@ disk). All but `DoD-gate` finish in <50 ms.
 
 | Hook | Event | Trigger | Decision logic | Effect |
 |---|---|---|---|---|
-| `claim-sources` | PreToolUse (`Write\|Edit`) | `tool_input.file_path` matches `tldrx-work/**/*.md` | Compute the would-be content; parse the four handoff sections; each list item must end with a valid `src` token (§2.8); `file` sources must resolve against the workspace root, the run dir, or a named repo | Denies (JSON) listing offending line numbers; a PostToolUse twin re-checks and feeds back only |
+| `claim-sources` | PreToolUse (`Write\|Edit`) | `tool_input.file_path` matches `tldrx-work/**/*.md` | Compute the would-be content; parse the four handoff sections; each must hold at least one list item, and each list item must end with a valid `src` token (§2.8); `file` sources must resolve against the workspace root, the run dir, or a named repo | Denies (JSON) listing offending line numbers; a PostToolUse twin re-checks and feeds back only |
 | `no-re-ask` | PreToolUse (`Write\|Edit`) | `tool_input.file_path` matches `tldrx-work/**/questions.md` | Tokenise each new question heading + `area`; compare against non-retired `facts.yml` rows; Jaccard ≥ 0.6 on ≥4-char tokens ⇒ hit `[assumption]` | Denies the write, names the matching fact |
 | `answer-capture` | PostToolUse + FileChanged | `tldrx-work/**/questions.md` | Find blocks with `status: open` and a non-empty `[Answer]:` capture | Never blocks; writes footer + `facts.yml` + `question.answered`; echoes one line to stdout as context |
 | `DoD-gate` | PreToolUse (`Write\|Edit`) | would-be content of `tldrx-work/**/stories/*.md` sets `status: done` | Re-run every command in the story's fenced ```dod block, in its repo, with `stage.yml timeout_s`; all must exit 0 | Denies if any command fails or the block is missing (this hook is not <50 ms by design) |
@@ -588,9 +718,17 @@ If the fact is stale, set its `retired: {at, by, reason}` in .tldrx/memory/facts
 Command output tail: 4 failing tests in src/features/leaderboard/__tests__/rank.test.ts.
 Fix the code or the story's dod block; done means proven, not asserted.
 [tldrx] budget-gate: refusing to start stage "contracts" — phase 02-how has $0.61 left of $7.00 and the stage
-estimate is $3.00. Raise phases[02-how].ceiling_usd in budget.yml, lower budget_usd in
-.tldrx/stages/contracts/stage.yml, or set on_exceed: warn.
+estimate is $3.00. Run `tldrx budget raise 02-how 2.39 --run 260828-leaderboard` (add `--take-from <phase>` to move
+the money instead of adding it), lower budget_usd in .tldrx/stages/contracts/stage.yml, or set on_exceed: warn.
+[tldrx] claim-sources: 1 checked section(s) in tldrx-work/260828-leaderboard/02-how/handoff.md contain no list
+items — "Unknowns" (L18). Findings/Decisions/Unknowns/Evidence ledger must each hold at least one sourced item;
+prose alone is not a claim anything can check. If there is genuinely nothing, say so as an item:
+`- none [src: absent:<what you looked at>]`.
 ```
+
+The budget-gate message names the **command** rather than the field it edits. Measured, 2026-08-29 pilot: told to
+"raise phases[02-how].ceiling_usd", the operator hand-edited it to a number that did not cover the estimate, and the
+retry was refused a second time. `tldrx budget raise` computes the shortfall and rounds it **up** to the cent.
 
 Statusline renderer uses `model.display_name`, `cost.total_cost_usd`, `context_window.used_percentage`,
 `worktree.branch`, `session_id` from the statusLine JSON (Appendix A) plus `run`, `cursor`, phase progress and
@@ -708,8 +846,6 @@ only that a document is Markdown or plain text. Passing both is refused — they
 ## 7. Open decisions
 
 - Whether `.tldrx/` is one root install or also allowed per sub-repo simultaneously (spec assumes root-only in v0).
-- Story/epic file schemas (`stories/<id>.md`, `epics/<id>.md`, `waves.yml`) — v1 Execute, not specified here. The DoD
-  gate reads `status:`, `repo:` and the fenced ```dod block by line scanning precisely because the shape is not settled.
 - Conflict policy when a new answer contradicts a fact (auto-supersede vs. always ask). v0 always asks: `--from` turns a
   contradiction into a question and `FactsStore.supersede` is only ever called by hand.
 - Retro-proposed stages: acceptance UX and whether they may alter shipped `workflows/*.yml`. `retro` writes the proposals
@@ -717,7 +853,12 @@ only that a document is Markdown or plain text. Passing both is refused — they
 - Ticket adapter direction (mirror-only vs. two-way) and which of Jira/GitHub ships first.
 - Multi-approver / enterprise gate packs: out of scope for v0, shape undecided.
 
-**Closed since the first draft.** Nested `claude -p` — measured 2026-08-29 (macOS, Claude Code 2.1.x): it works, and the
+**Closed since the first draft.** Story/epic/wave file schemas are §2.13–§2.15 (2026-08-30). `dod-gate` still reads
+`status:`, `repo:` and the fenced ` ```dod ` block by **line scanning** rather than through the schema, on purpose: a
+gate that only ran when the front matter parsed would let a malformed story write `status: done` unchecked. The two
+share one ` ```dod ` parser so they cannot disagree about what the block contains.
+
+Nested `claude -p` — measured 2026-08-29 (macOS, Claude Code 2.1.x): it works, and the
 ceiling was the real constraint, not the nesting. A cold session pays ~10–26k cache-creation tokens before its first
 reply, so any `--max-budget-usd` under about $0.25 fails as `error_max_budget_usd` before work starts. At $1.00 the same
 call returns `pong` for $0.222; a real `tldrx next --max-usd 0.10` on a one-stage fixture closed at $0.06 on haiku.
