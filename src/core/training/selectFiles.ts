@@ -126,7 +126,7 @@ export async function selectFiles(options: SelectOptions): Promise<FileSelection
       const lowerPath = file.path.toLowerCase();
       const inPath = keywords.filter((word) => lowerPath.includes(word));
       if (inPath.length > 0) {
-        score += 3 * inPath.length;
+        score += 3 * weigh(inPath, options.areaId);
         why.push(`path matches ${inPath.join(", ")}`);
       }
       const inCommunity = graph.files.has(`${repo.name}:${file.path}`);
@@ -136,7 +136,7 @@ export async function selectFiles(options: SelectOptions): Promise<FileSelection
       }
       const hits = file.size <= MAX_SCAN_BYTES ? contentHits(join(dir, file.path), keywords) : [];
       if (hits.length > 0) {
-        score += hits.length;
+        score += weigh(hits, options.areaId);
         why.push(`content mentions ${hits.join(", ")}`);
       }
 
@@ -280,30 +280,45 @@ export function readCommunities(
       notes.push(`${repo}: graph present, no community or cluster field (\`--no-cluster\` extraction) — file selection used the map and the grep only`);
       continue;
     }
-    const matched = communityFiles(text, keywords);
-    if (matched.length === 0) {
+    // The string scan above is a cheap pre-filter, not a finding: the word can
+    // appear in a node label. Only the parse can say whether the graph really
+    // carries communities, and the note says which of the two happened.
+    const found = communityFiles(text, keywords);
+    if (!found.hasCommunities) {
+      notes.push(`${repo}: graph present, but no community or cluster FIELD after parsing (the word appears only in node labels) — file selection used the map and the grep only`);
+      continue;
+    }
+    if (found.files.length === 0) {
       notes.push(`${repo}: graph has communities, none whose name matches ${keywords.slice(0, 4).join("/")}`);
       continue;
     }
-    for (const file of matched) files.add(`${repo}:${file}`);
-    notes.push(`${repo}: ${String(matched.length)} file(s) from matching graphify communities`);
+    for (const file of found.files) files.add(`${repo}:${file}`);
+    notes.push(`${repo}: ${String(found.files.length)} file(s) from matching graphify communities`);
   }
   return { files, notes };
 }
 
-function communityFiles(text: string, keywords: readonly string[]): readonly string[] {
+interface CommunityScan {
+  /** True only when the parsed graph really carries a community/cluster field. */
+  readonly hasCommunities: boolean;
+  readonly files: readonly string[];
+}
+
+export function communityFiles(text: string, keywords: readonly string[]): CommunityScan {
+  const none: CommunityScan = { hasCommunities: false, files: [] };
   let doc: Record<string, unknown>;
   try {
     const parsed: unknown = JSON.parse(text);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return [];
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return none;
     doc = parsed as Record<string, unknown>;
   } catch {
-    return [];
+    return none;
   }
 
   const nodes = Array.isArray(doc.nodes) ? (doc.nodes as Record<string, unknown>[]) : [];
   const sourceById = new Map<string, string>();
   const matched = new Set<string>();
+  let hasCommunities = false;
 
   for (const node of nodes) {
     const id = typeof node.id === "string" ? node.id : null;
@@ -311,10 +326,13 @@ function communityFiles(text: string, keywords: readonly string[]): readonly str
     if (id !== null && source !== null) sourceById.set(id, source);
     const label = typeof node.community === "string" ? node.community
       : typeof node.cluster === "string" ? node.cluster : null;
-    if (label !== null && source !== null && matches(label, keywords)) matched.add(source);
+    if (label === null) continue;
+    hasCommunities = true;
+    if (source !== null && matches(label, keywords)) matched.add(source);
   }
 
   const communities = Array.isArray(doc.communities) ? (doc.communities as Record<string, unknown>[]) : [];
+  if (communities.length > 0) hasCommunities = true;
   for (const community of communities) {
     const label = typeof community.label === "string" ? community.label
       : typeof community.name === "string" ? community.name
@@ -328,7 +346,19 @@ function communityFiles(text: string, keywords: readonly string[]): readonly str
       if (source !== undefined) matched.add(source);
     }
   }
-  return [...matched].sort();
+  return { hasCommunities, files: [...matched].sort() };
+}
+
+/**
+ * The area id counts double.
+ *
+ * It is the word the operator typed; the rest are the title's, and a title like
+ * "typescript language, build and test tooling" contributes `build` and `test`,
+ * which match half a repo. Without this, an `oauth` area would rank a test file
+ * above the token exchange because the title happened to say "and test".
+ */
+function weigh(matched: readonly string[], areaId: string): number {
+  return matched.reduce((total, word) => total + (word === areaId.toLowerCase() ? 2 : 1), 0);
 }
 
 function matches(label: string, keywords: readonly string[]): boolean {
