@@ -1,7 +1,8 @@
 # tldr-experts
 
 **Status: alpha** — the v0 loop (What → How → Plan, hooks, distill, seed, budgets) is released; the Build and Watch phases, the live dashboard and expert training are landing wave by wave (see `docs/ROADMAP.md`; released versions in `CHANGELOG.md`). expert training are v1.** Every command in the table below is implemented and
-verified by running it. Nothing here prints success for work it did not do: a
+
+Every command in the table below is implemented and verified by running it. Nothing here prints success for work it did not do: a
 command that cannot do the thing exits non-zero and says which thing.
 
 A lightweight, file-based AI development workflow. Open source, tool-agnostic in
