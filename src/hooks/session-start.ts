@@ -15,8 +15,12 @@ import { runHook, sessionContext, allow } from "./lib/decide.ts";
 import { readPayload } from "./lib/payload.ts";
 import { findWorkspaceRoot } from "./lib/workspace.ts";
 import { openQuestions, runSnapshot, type RunSnapshot } from "../core/statusline/runSnapshot.ts";
+import { openRunViews } from "./lib/runFile.ts";
 
 const MAX_LINES = 3;
+
+/** A SessionStart block is ambient context, not a report. Eight runs is plenty. */
+const MAX_OPEN_LISTED = 8;
 
 await runHook("session-start", async () => {
   const payload = await readPayload();
@@ -26,8 +30,34 @@ await runHook("session-start", async () => {
   const snapshot = runSnapshot(root);
   if (snapshot === null) return;
 
-  sessionContext(renderStatus(snapshot).join("\n"));
+  sessionContext([...renderOpenRuns(root, snapshot), ...renderStatus(snapshot)].join("\n"));
 });
+
+/**
+ * Nothing at all when one run is open — that is the ordinary case and the three
+ * lines below already describe it. When several are, every one of them is named
+ * BEFORE the newest-run block, so a session that starts in the wrong run finds
+ * out here rather than at the first refusal.
+ *
+ * Read through the tolerant reader, never `RunStore`: this hook must not go quiet
+ * because one unrelated run.yml stopped validating.
+ */
+function renderOpenRuns(root: string, newest: RunSnapshot): readonly string[] {
+  if (newest.openCount < 2) return [];
+  const open = openRunViews(root).slice(0, MAX_OPEN_LISTED);
+  const lines = [
+    `tldrx: ${String(newest.openCount)} runs are open — pass a run id to next/answer/approve/…`,
+  ];
+  for (const view of open) {
+    const cursor = view.cursor === null ? "?" : `${view.cursor.phase}/${view.cursor.stage}`;
+    const mark = view.run === newest.run ? "  (newest)" : "";
+    lines.push(`tldrx:   ${view.run} · ${view.status || "unknown"} · ${cursor}${mark}`);
+  }
+  if (newest.openCount > open.length) {
+    lines.push(`tldrx:   … and ${String(newest.openCount - open.length)} more — \`tldrx run status\``);
+  }
+  return lines;
+}
 
 /**
  * `[assumption]` — the spec asks for "a 3-line 'where we are'" without fixing the

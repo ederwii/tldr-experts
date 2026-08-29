@@ -223,7 +223,10 @@ describe("tldrx run new --from", () => {
     const after = readFileSync(factsFile, "utf8");
 
     const second = await tldrx(ws.root, "run", "new", "leaderboard-again", "--from", FIXTURE_AIDLC_INTENT);
-    expect(second.stderr).toBe("");
+    // The only thing on stderr is the second-run notice — the first run is still open.
+    expect(second.stderr).toBe(
+      "note: 1 other run(s) open — pass a run id to next/answer/approve/… from now on\n",
+    );
     expect(second.code).toBe(EXIT_OK);
     expect(second.stdout).toContain("0 new fact(s)");
     expect(second.stdout).toContain(`${FIXTURE_ANSWERS} already known`);
