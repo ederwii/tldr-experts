@@ -50,7 +50,7 @@ describe("every generated handoff satisfies §2.8, even with nothing to say", ()
       stageId: "what",
       phase: "01-what",
       at: "2026-08-30T00:00:00Z",
-      seed: { source: "requirements.md", isDirectory: false, documents: [], skipped: [], warnings: [] },
+      seed: { source: "requirements.md", sources: ["requirements.md"], isDirectory: false, documents: [], skipped: [], warnings: [] },
       claims: [],
       headings: [],
     });

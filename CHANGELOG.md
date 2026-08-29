@@ -241,6 +241,65 @@ moment `competencies.yml` does.
   framework from a knowledge file the framework already validated, so a bad row there is
   a bug, and a bug that writes itself into the star chart is a bug nobody finds.
   A hand-written `run` row that really is a command is accepted and counts, as before.
+### Seed triage — a big seed is several runs, not one expensive one
+
+- **`tldrx seed triage <path>` counts a seed before anyone pays for it.** Free,
+  offline, no LLM: it collects the documents with exactly the `--seed` rules and
+  writes `inventory.md` + `inventory.json` — per document, its size in tokens, its
+  headings, which other seed documents it links to *or names by filename*, its
+  `Status:` line, its open markers (`TODO`/`TBD`/`open question`/`??`), and whether
+  it is **code-derived**. That last flag is the only judgement in the file and it
+  resolves before it counts: a document is code-derived when ≥ 8 distinct path-like,
+  non-documentation tokens it cites are **real files** under the workspace root or a
+  repo in `workspace.yml`. Citing `src/Foo.cs` proves nothing; citing eight paths
+  that all exist means the code says the same thing and the model can read it
+  instead. Ends in one verdict line that names the next command. Threshold:
+  `--threshold-tokens`, else `seed_triage.threshold_tokens` in `workspace.yml`
+  (new, optional, validated), else 20,000.
+- **`--propose` is one cheap model pass and creates nothing.** One sub-agent, effort
+  `low`, `--max-usd 1.00`, spawned the way `next` and `expert train` spawn theirs —
+  same `--json-schema`, same `--prepare`/`--commit` handshake, same bundle. The
+  prompt carries the inventory and the documents under a 120 KB budget: everything
+  whole if it fits, otherwise the small ones whole plus **complete heading lists and
+  a 2 KB prefix** for the rest, with every truncation named and byte-counted, because
+  a model that thinks it read a 152 KB design document and read 2 KB of it will
+  propose a split with great confidence. The answer is validated against *this*
+  workspace before a byte is written — scope against the workflows on disk, seeds
+  against the inventory, slugs against `run new`'s own regex, `depends_on` for
+  cycles, and every `why[].src` against a `seed:<rel>#<heading>` / `seed:<rel>:<line>`
+  grammar that is deliberately **not** part of §2.8 (widening the handoff's `[src: …]`
+  rule to cover documents no run has yet would loosen the one check that keeps
+  handoffs honest). Failure is whole: exit `5`, no `split.yml`, raw answer kept.
+- **`tldrx seed apply <split.yml>` is the gate, and it is a separate command on
+  purpose.** "The model proposed it" and "we are doing it" must not be the same
+  event. Apply refuses anything that is not `status: proposed`, revalidates the file
+  a human was invited to edit, and creates each run in topological order through the
+  same `createRun` that `tldrx run new` calls. `--dry-run` prints the exact
+  `tldrx run new …` lines. If a run directory already exists it **stops there**,
+  exit `1`, naming the collision *and* the runs already created and left in place —
+  partial application is a real state and pretending otherwise is how people lose
+  work.
+- **`--seed` is repeatable** (`--seed a.md --seed docs/`): merged, deduped, re-sorted,
+  with the 50-file cap applied to the merged set rather than per argument. One
+  occurrence is byte-for-byte what it always was. This is what lets apply hand each
+  run its own subset.
+- **`run new --seed` hints, on stderr.** Over the threshold or over 10 files it adds
+  one line naming `tldrx seed triage`. stderr, never stdout — a chat bridge parses
+  stdout, and a note is not a result.
+- **`run.yml` gains an optional `triage: {split, depends_on}` block**, written only by
+  `seed apply`. Absent everywhere else, so an untriaged `run.yml` is byte-identical to
+  what it was.
+- Measured on a real design folder (`~/aparece-v2/docs/domain-design`, 2026-08-29
+  16:25 local): `seed: 31 files, ~66k tokens — above the 20k threshold`. Both sides
+  of the code-derived heuristic fired correctly on it. The 152 KB legacy inventory
+  document cites **294** distinct path-like tokens and **0** of them resolve — that
+  repo is a rewrite and those paths belong to the system it replaced — so it is
+  *not* flagged; a rule that counted citations instead of resolving them would have
+  called it code-derived and been wrong. `ADR-D005-ORDERING.md`, written against the
+  current tree, cites 12 and **8 resolve** (`src/Aparece.Platform/Outbox/OutboxMessage.cs`
+  and friends), so it *is*. An earlier reading the same afternoon said 24 files /
+  ~44k tokens; the folder gained seven ADRs between the two runs, which is what a
+  live design folder does and why the verdict is printed rather than remembered.
 
 ## 0.2.0 — 2026-08-29
 

@@ -74,8 +74,15 @@ export function emitRunYaml(run: RunFile): string {
       `task: ${yamlScalar(run.cursor.task)}}`,
     `budget: {ceiling_usd: ${money(run.budget.ceiling_usd)}, spent_usd: ${money(run.budget.spent_usd)}, ` +
       `per_agent_max_usd: ${money(run.budget.per_agent_max_usd)}}`,
-    "phases:",
   ];
+  // Optional §6.2 provenance. Emitted only when it is there, so a run.yml written
+  // by `run new` is byte-identical to the one it wrote before triage existed.
+  if (run.triage !== undefined) {
+    lines.push(
+      `triage: {split: ${yamlScalar(run.triage.split)}, depends_on: ${inlineList(run.triage.depends_on)}}`,
+    );
+  }
+  lines.push("phases:");
   for (const phase of run.phases) {
     lines.push(`  - id: ${yamlScalar(phase.id)}`);
     lines.push(`    status: ${yamlScalar(phase.status)}`);

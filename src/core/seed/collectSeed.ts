@@ -48,8 +48,10 @@ export interface SkippedSeed {
 }
 
 export interface SeedSet {
-  /** What `--seed` named, workspace-relative. */
+  /** What `--seed` named, workspace-relative. Several become one comma-joined line. */
   readonly source: string;
+  /** Every `--seed` argument, workspace-relative, in the order they were passed. */
+  readonly sources: readonly string[];
   readonly isDirectory: boolean;
   readonly documents: readonly SeedDocument[];
   readonly skipped: readonly SkippedSeed[];
@@ -108,7 +110,7 @@ function fromFile(abs: string, rel: string): SeedSet {
   }
   const document = read(abs, rel);
   if (document === null) throw new SeedError(`--seed: ${rel} is larger than ${MAX_SEED_BYTES} bytes`);
-  return { source: rel, isDirectory: false, documents: [document], skipped: [], warnings: [] };
+  return { source: rel, sources: [rel], isDirectory: false, documents: [document], skipped: [], warnings: [] };
 }
 
 function fromDirectory(abs: string, rel: string): SeedSet {
@@ -152,7 +154,54 @@ function fromDirectory(abs: string, rel: string): SeedSet {
       + `${SEED_EXTENSIONS.join(" and ")} only; convert them first`,
     );
   }
-  return { source: rel, isDirectory: true, documents, skipped, warnings };
+  return { source: rel, sources: [rel], isDirectory: true, documents, skipped, warnings };
+}
+
+/**
+ * `--seed a.md --seed docs/` — several arguments, one seed set.
+ *
+ * ONE argument is `collectSeed` verbatim, byte for byte: the repeatable form is
+ * additive, and a workspace that never passes the flag twice must not be able to
+ * tell it exists. Several are collected in argument order, merged, deduped by
+ * path (naming a file and the directory holding it is a normal way to say "these
+ * and that one"), and re-sorted by path so two runs of the same command produce
+ * the same list. The 50-file cap applies to the MERGED set, not per argument —
+ * otherwise `--seed` five times would quietly raise a documented bound.
+ */
+export function collectSeeds(root: string, seedPaths: readonly string[]): SeedSet {
+  if (seedPaths.length === 0) throw new SeedError("--seed: no path given");
+  const first = seedPaths[0] ?? "";
+  if (seedPaths.length === 1) return collectSeed(root, first);
+
+  const documents: SeedDocument[] = [];
+  const skipped: SkippedSeed[] = [];
+  const warnings: string[] = [];
+  const sources: string[] = [];
+  const seen = new Set<string>();
+  let anyDirectory = false;
+
+  for (const path of seedPaths) {
+    const set = collectSeed(root, path);
+    sources.push(set.source);
+    anyDirectory = anyDirectory || set.isDirectory;
+    for (const document of set.documents) {
+      if (seen.has(document.rel)) continue;
+      seen.add(document.rel);
+      documents.push(document);
+    }
+    for (const entry of set.skipped) skipped.push(entry);
+    for (const warning of set.warnings) warnings.push(warning);
+  }
+
+  documents.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
+  const kept = documents.slice(0, MAX_SEED_FILES);
+  for (const dropped of documents.slice(MAX_SEED_FILES)) {
+    const entry = { rel: dropped.rel, bytes: dropped.bytes, reason: `over the ${MAX_SEED_FILES}-file cap` };
+    skipped.push(entry);
+    warnings.push(`skipped ${entry.rel} (${entry.bytes} bytes) — ${entry.reason}`);
+  }
+
+  return { source: sources.join(", "), sources, isDirectory: anyDirectory, documents: kept, skipped, warnings };
 }
 
 /**

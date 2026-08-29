@@ -1,6 +1,6 @@
 /** Schema for `.tldrx/workspace.yml` — what `tldrx init` detected. */
 import {
-  asDocument, requireArray, requireEnum, requireKeys, requireString,
+  asDocument, requireArray, requireEnum, requireKeys, requireNumber, requireString,
   result, isRecord, type ValidationIssue, type ValidationResult,
 } from "./validation.ts";
 
@@ -15,6 +15,17 @@ export interface DetectedRepo {
   readonly commands?: Readonly<Record<string, string>>;
 }
 
+/**
+ * `seed_triage:` — optional tuning for `tldrx seed triage` (spec §6.2).
+ *
+ * Additive and absent from everything `tldrx init` writes: a workspace that never
+ * sets it gets the built-in 20,000-token threshold, and every reader that never
+ * heard of the key is unaffected.
+ */
+export interface SeedTriageSettings {
+  readonly threshold_tokens?: number;
+}
+
 export interface Workspace {
   readonly schema_version: number;
   readonly mode: WorkspaceMode;
@@ -22,6 +33,7 @@ export interface Workspace {
   readonly repos: readonly DetectedRepo[];
   readonly detected_at?: string | null;
   readonly mcp_servers?: readonly string[];
+  readonly seed_triage?: SeedTriageSettings;
 }
 
 export function validateWorkspace(input: unknown): ValidationResult {
@@ -42,6 +54,18 @@ export function validateWorkspace(input: unknown): ValidationResult {
       }
       requireKeys(repo, ["name", "path"], path, issues);
     });
+  }
+
+  if (doc.seed_triage !== undefined) {
+    if (isRecord(doc.seed_triage)) {
+      const tokens = doc.seed_triage.threshold_tokens;
+      requireNumber(tokens, "seed_triage.threshold_tokens", issues);
+      if (typeof tokens === "number" && (!Number.isFinite(tokens) || tokens <= 0)) {
+        issues.push({ path: "seed_triage.threshold_tokens", message: "must be a positive number of tokens" });
+      }
+    } else {
+      issues.push({ path: "seed_triage", message: "expected a mapping" });
+    }
   }
   return result(issues);
 }
