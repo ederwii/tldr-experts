@@ -42,6 +42,10 @@ export interface WorkspaceOptions {
   readonly budgetUsd?: number;
   readonly slug?: string;
   readonly facts?: string;
+  /** The workflow's `gates:` block — stage id -> `human | auto`. Omitted ⇒ no block. */
+  readonly gates?: Readonly<Record<string, string>>;
+  /** `run new --gates <value>`, exercised through `createRun` exactly as the CLI does. */
+  readonly gatesFlag?: string;
   /** Extra files, keyed by path relative to the workspace root. */
   readonly files?: Readonly<Record<string, string>>;
 }
@@ -123,6 +127,7 @@ export function makeFacilitatorWorkspace(options: WorkspaceOptions): Facilitator
     slug: options.slug ?? "demo",
     scope: options.scope,
     budgetUsd: options.budgetUsd,
+    gates: options.gatesFlag,
     actor: "alan",
     now: new Date("2026-08-28T09:00:00Z"),
   });
@@ -142,12 +147,16 @@ function workflowYaml(options: WorkspaceOptions): string {
     return `  - {id: ${stage.id}, phase: "${stage.phase}", budget_usd: ${String(stage.budgetUsd)}${skip}}`;
   });
   const total = options.stages.reduce((sum, s) => sum + s.budgetUsd, 0);
+  const gates = options.gates === undefined
+    ? []
+    : [`gates: {${Object.entries(options.gates).map(([k, v]) => `${k}: ${v}`).join(", ")}}`];
   return [
     "version: 1",
     `name: ${options.scope}`,
     `title: "Generated fixture scope"`,
     "depth: minimal",
     `default_budget_usd: ${String(options.budgetUsd ?? total)}`,
+    ...gates,
     "stages:",
     ...rows,
     "",
