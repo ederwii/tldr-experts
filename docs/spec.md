@@ -798,10 +798,12 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 |---|---|---|---|
 | `tldrx init [--stack <a,b>]` | cwd tree, git dirs, package/build files, `env.yml` | `workspace.yml` (incl. `mode: greenfield`), `map/**`, `conventions/**`, `experts/*/` (always a `product`, one `<lang>-stack` per detected **or declared** language), `facts.yml`, `.gitignore`, `CLAUDE.md` pointer | 0,1 |
 | `tldrx doctor` | `env.yml`, `workspace.yml`, `.tldrx/stages/**`, `.claude/settings.json` | `env.yml.result`, `cache/doctor.json` | 0,1 |
+| `tldrx install --claude [--project\|--user] [--skill-only] [--no-hooks] [--no-statusline] [--force-statusline] [--uninstall] [--dry-run]` | `plugin/skills/tldrx/SKILL.md`, the target `.claude/settings.json` | `.claude/skills/tldrx/SKILL.md` (marked `<!-- tldrx-managed -->`), `.claude/settings.json` (the §4 hooks as `tldrx hook <name>` + `statusLine`), `settings.json.bak-tldrx-<ts>` | 0,1 |
 | `tldrx run new [--from <path>\|--seed <path>] [--scope <s>] [--budget <usd>]` | `workflows/<s>.yml`, `workspace.yml`, `facts.yml`, the `--from` source (§6) or the `--seed` documents (§6.1) | `tldrx-work/<run>/{run.yml,budget.yml,events.jsonl,01-what/*}`; `--seed` also writes `01-what/seed-index.md` and declares the documents as What inputs | 0,1 |
 | `tldrx run status [<run>]` | `run.yml`, `events.jsonl` | nothing (stdout) | 0,3 |
 | `tldrx next [<run>] [--dry-run]` | `run.yml`, `stage.yml`, `stage.md`, `expert.md`, declared inputs | stage outputs, `run.yml`, `events.jsonl` | 0,2,4,5 |
 | `tldrx answer <Qid> <text>` | `questions.md`, `facts.yml` | `questions.md`, `facts.yml`, `events.jsonl` | 0,1,3 |
+| `tldrx interview [--run <id>\|--init] [--yes-to-defaults]` | the cursor phase's `questions.md` (or `.tldrx/init-questions.md`), `run.yml` | the same three files `answer` writes, one per answer recorded | 0,1,3 |
 | `tldrx approve [<run>] [--note]` | `run.yml`, stage outputs, stage checks | `run.yml` gate, `events.jsonl` | 0,2,3 |
 | `tldrx reject [<run>] --note <text>` | `run.yml` | `run.yml` gate, `events.jsonl`, stage status ⇒ `ready` | 0,3 |
 | `tldrx budget show [<run>] [--run <id>] [--json]` | `run.yml`, `budget.yml` | nothing (stdout) | 0,1,3 |
@@ -816,6 +818,8 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx watch check <feature>` | one card, the files it cites | nothing (stdout report) | 0,1,3 |
 | `tldrx replay <run>` | `events.jsonl`, handoffs | nothing (stdout narrative) | 0,3 |
 | `tldrx retro <run>` | `run.yml`, `events.jsonl`, handoffs | `retro.md`, `stages/proposed/**`, `practices.md` proposals | 0,3 |
+| `tldrx hook <name>` | stdin (the hook payload) | whatever the hook writes — stdout, stderr and the exit code are the script's, unchanged | the script's |
+| `tldrx statusline` | stdin (the statusLine payload) | one line on stdout | 0 |
 
 ## 4. Hooks (Claude Code)
 
@@ -828,6 +832,8 @@ Stop adds `last_assistant_message`. **Only PreToolUse can block**, by printing
 (exit 0). PostToolUse can only feed back (`additionalContext` / `systemMessage`). Consequence: every gating hook below
 is PreToolUse and validates the **would-be** file (Write: `content`; Edit: `old_string→new_string` applied to the file on
 disk). All but `DoD-gate` finish in <50 ms.
+
+**Two ways the same six scripts get wired.** The plugin spawns them by path (`bun ${CLAUDE_PLUGIN_ROOT}/../src/hooks/<name>.ts`), because it has to work for someone who cloned the repo and installed nothing. A `settings.json` written by `tldrx install --claude` (§3) cannot use that variable and must not hard-code an absolute path into a committed file, so it goes through the CLI: `tldrx hook <name>` and `tldrx statusline`, which resolve `dist/hooks/<name>.js` or `src/hooks/<name>.ts` and pass stdin, stdout, stderr and the exit code through unchanged. Same scripts, same matchers, same decisions.
 
 | Hook | Event | Trigger | Decision logic | Effect |
 |---|---|---|---|---|

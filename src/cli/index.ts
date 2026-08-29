@@ -11,6 +11,7 @@ import type { Command } from "./Command.ts";
 import { EXIT_NOT_IMPLEMENTED, EXIT_OK } from "./exitCodes.ts";
 
 import { initCommand } from "./commands/init.ts";
+import { installCommand } from "./commands/install.ts";
 import { doctorCommand } from "./commands/doctor.ts";
 import { runCommand } from "./commands/run.ts";
 import { nextCommand } from "./commands/next.ts";
@@ -24,16 +25,20 @@ import { dashboardCommand } from "./commands/dashboard.ts";
 import { replayCommand } from "./commands/replay.ts";
 import { retroCommand } from "./commands/retro.ts";
 import { watchCommand } from "./commands/watch.ts";
+import { interviewCommand } from "./commands/interview.ts";
+import { hookCommand, statuslineCommand } from "./commands/hook.ts";
 import { versionCommand } from "./commands/version.ts";
 import { makeHelpCommand, renderCommandHelp } from "./commands/help.ts";
 
 /** Commands in the order `tldrx --help` lists them (the shape of the loop). */
 export const COMMANDS: readonly Command[] = [
   initCommand,
+  installCommand,
   doctorCommand,
   runCommand,
   nextCommand,
   answerCommand,
+  interviewCommand,
   approveCommand,
   rejectCommand,
   budgetCommand,
@@ -43,6 +48,8 @@ export const COMMANDS: readonly Command[] = [
   replayCommand,
   retroCommand,
   watchCommand,
+  hookCommand,
+  statuslineCommand,
 ];
 
 const helpCommand = makeHelpCommand(() => COMMANDS);
