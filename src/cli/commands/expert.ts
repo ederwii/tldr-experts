@@ -19,7 +19,7 @@ import type { EffortLevel } from "../../core/schemas/stage.ts";
 import { isTrainingMode, runTraining, type TrainingRunMode } from "../../core/training/index.ts";
 import { loadWorkspaceFile } from "../../core/init/loadWorkspaceFile.ts";
 import {
-  createExpert, expertListJson, loadExpert, loadExperts,
+  createExpert, evidenceWarnings, expertListJson, loadExpert, loadExperts,
   readExpertDocument, renderExpertList, renderTrainPrompt, resolveWorkspaceRoot,
   type TrainRepo,
 } from "../../core/experts/index.ts";
@@ -60,6 +60,10 @@ function listExperts(argv: readonly string[]): number {
   const experts = loadExperts(root);
   const output = argv.includes("--json") ? expertListJson(experts) : renderExpertList(experts);
   process.stdout.write(`${output}\n`);
+  // Unknown-kind rows go to stderr rather than into the table, so they survive
+  // `--json` (whose stdout must stay parseable) and a redirect to a file. A row
+  // the tool refused to count is the one thing a level cannot show you.
+  for (const warning of experts.flatMap(evidenceWarnings)) process.stderr.write(`${warning}\n`);
   return EXIT_OK;
 }
 
@@ -171,6 +175,7 @@ async function train(argv: readonly string[]): Promise<number> {
     at: nowRfc3339(),
   });
 
+  for (const warning of outcome.warnings ?? []) process.stderr.write(`${warning}\n`);
   const text = `${outcome.lines.join("\n")}\n`;
   if (outcome.code === EXIT_OK) process.stdout.write(text);
   else process.stderr.write(prefix(text));

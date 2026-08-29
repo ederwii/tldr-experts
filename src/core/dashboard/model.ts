@@ -19,7 +19,7 @@
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
-import { MAX_LEVEL, loadExperts, driftWarnings, type ExpertRecord } from "../experts/index.ts";
+import { MAX_LEVEL, loadExperts, driftWarnings, evidenceWarnings, type ExpertRecord } from "../experts/index.ts";
 import { listRuns, loadPhaseArtefacts, loadRun, type LoadedRun } from "../replay/index.ts";
 import { openBlocks, parseQuestions } from "../text/index.ts";
 import { renderMarkdown } from "../markdown/index.ts";
@@ -154,7 +154,11 @@ export interface ExpertModel {
   readonly status: string;
   readonly lastTrained: string | null;
   readonly areas: readonly AreaModel[];
-  /** Stored-vs-computed level disagreements, already worded for a reader. */
+  /**
+   * Stored-vs-computed level disagreements and evidence rows no reader could
+   * count, already worded for a reader. The page has no other channel — a
+   * dashboard that drops a row without a line is as silent as the reader was.
+   */
   readonly warnings: readonly string[];
   readonly error: string | null;
 }
@@ -390,7 +394,7 @@ function toExpertModel(expert: ExpertRecord): ExpertModel {
       newestEvidence: area.newestEvidence,
       trainPrompt: area.trainPrompt,
     })),
-    warnings: driftWarnings(expert),
+    warnings: [...driftWarnings(expert), ...evidenceWarnings(expert)],
     error: expert.error,
   };
 }

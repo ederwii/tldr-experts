@@ -7,6 +7,7 @@
  * measurement.
  */
 import { starChart } from "./starChart.ts";
+import { unknownKindWarnings } from "./readEvidenceRows.ts";
 import type { ExpertRecord } from "./ExpertRecord.ts";
 
 const HEADERS = ["expert", "status", "last_trained", "areas", "evidence", "levels"] as const;
@@ -28,6 +29,18 @@ export function driftWarnings(expert: ExpertRecord): readonly string[] {
       `warning: ${expert.name}/${area.id} — competencies.yml stores level ${area.storedLevel}, `
       + `evidence computes ${area.level}; showing the computed level (spec §2.6).`,
   );
+}
+
+/**
+ * One line per area that declared evidence nobody could count.
+ *
+ * Kept apart from `driftWarnings` because the two say different things: drift is
+ * "the number on disk is stale", an ignored row is "this file contains data the
+ * tool refused". Both must reach a human — a dropped row silently lowers a level,
+ * which is the failure this whole module exists to prevent.
+ */
+export function evidenceWarnings(expert: ExpertRecord): readonly string[] {
+  return expert.areas.flatMap((area) => unknownKindWarnings(expert.name, area.id, area.ignored));
 }
 
 export function renderExpertList(experts: readonly ExpertRecord[]): string {

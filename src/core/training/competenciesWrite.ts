@@ -14,8 +14,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { stringifyYaml, parseYaml } from "../yaml.ts";
-import { competencyLevel, EVIDENCE_KINDS, type CompetencyEvidence, type EvidenceKind } from "../init/competencyLevel.ts";
+import { competencyLevel, type CompetencyEvidence } from "../init/competencyLevel.ts";
 import { COMPETENCIES_FILE, expertDir } from "../experts/loadExperts.ts";
+import { readEvidenceRows, unknownKindWarnings } from "../experts/readEvidenceRows.ts";
 import { mergeEvidence } from "./knowledgeFile.ts";
 
 const HEADER = "# Written by `tldrx expert train` (spec §2.6). `level` is computed, never hand-set.\n";
@@ -37,6 +38,13 @@ export interface CompetenciesWrite {
   readonly levelAfter: number;
   readonly evidenceCount: number;
   readonly dropped: number;
+  /**
+   * Rows already in the file that this write could not count, one line per
+   * unknown kind per area. Training reports them: a merge that quietly discards
+   * half an area's evidence and then prints a level is the same silent failure
+   * `expert list` had.
+   */
+  readonly warnings: readonly string[];
 }
 
 export class CompetenciesError extends Error {}
@@ -55,11 +63,14 @@ export function writeCompetencies(options: WriteCompetenciesOptions): Competenci
   const areas = Array.isArray(doc.areas) ? [...(doc.areas as unknown[])] : [];
 
   let write: CompetenciesWrite | null = null;
+  const warnings: string[] = [];
   const next = areas.map((raw) => {
     if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return raw;
     const area = { ...(raw as Record<string, unknown>) };
     const id = str(area.id) !== "" ? str(area.id) : str(area.area);
-    const existing = readEvidence(area.evidence);
+    const rows = readEvidenceRows(area.evidence);
+    const existing = rows.evidence;
+    warnings.push(...unknownKindWarnings(options.expert, id, rows.ignored));
 
     if (id === options.areaId) {
       const merged = mergeEvidence(existing, options.evidence, options.now);
@@ -72,6 +83,7 @@ export function writeCompetencies(options: WriteCompetenciesOptions): Competenci
         levelAfter: merged.levelAfter,
         evidenceCount: merged.evidence.length,
         dropped: merged.dropped,
+        warnings: [],
       };
       return area;
     }
@@ -92,7 +104,7 @@ export function writeCompetencies(options: WriteCompetenciesOptions): Competenci
 
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${headerOf(text)}${stringifyYaml(doc)}`, "utf8");
-  return write;
+  return { ...(write as CompetenciesWrite), warnings };
 }
 
 /** Keep whatever comment the file opened with; write ours when it had none. */
@@ -101,19 +113,13 @@ function headerOf(text: string): string {
   return first.startsWith("#") ? `${first}\n` : HEADER;
 }
 
+/**
+ * Kept as the narrow "just the rows" view for callers that have nowhere to put a
+ * warning. Everything that CAN report uses `readEvidenceRows` directly — this
+ * function is where the silent drop lived, and the tally is the fix.
+ */
 export function readEvidence(input: unknown): readonly CompetencyEvidence[] {
-  if (!Array.isArray(input)) return [];
-  const out: CompetencyEvidence[] = [];
-  for (const raw of input as unknown[]) {
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) continue;
-    const row = raw as Record<string, unknown>;
-    const kind = str(row.kind);
-    const src = str(row.src);
-    const at = str(row.at);
-    if (src === "" || at === "" || !(EVIDENCE_KINDS as readonly string[]).includes(kind)) continue;
-    out.push({ kind: kind as EvidenceKind, src, at });
-  }
-  return out;
+  return readEvidenceRows(input).evidence;
 }
 
 function str(value: unknown): string {

@@ -3,9 +3,10 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { competencyLevel, type CompetencyEvidence, type EvidenceKind } from "../src/core/init/competencyLevel.ts";
 import {
-  createExpert, driftWarnings, evidenceNote, loadExpert, loadExperts, readExpertDocument,
-  renderExpertList, renderTrainPrompt, stars, starChartLine,
+  createExpert, driftWarnings, evidenceNote, evidenceWarnings, loadExpert, loadExperts,
+  readEvidenceRows, readExpertDocument, renderExpertList, renderTrainPrompt, stars, starChartLine,
 } from "../src/core/experts/index.ts";
+import { writeCompetencies } from "../src/core/training/competenciesWrite.ts";
 import { parseYaml } from "../src/core/yaml.ts";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { noSpawnEnv } from "./fixtures/noSpawnPath.ts";
@@ -78,6 +79,134 @@ describe("the §2.6 level formula", () => {
   test("distinct-source cap: ten citations of one line are worth one source", () => {
     expect(competencyLevel(evidence("code", 10, 0, true), NOW)).toBe(1);
     expect(competencyLevel(evidence("code", 10, 0, false), NOW)).toBe(4);
+  });
+});
+
+/** Rewrite one area's evidence in a throwaway workspace copy. */
+function withEvidence(root: string, expert: string, area: string, rows: readonly string[]): void {
+  const path = join(root, ".tldrx", "experts", expert, "competencies.yml");
+  writeFileSync(
+    path,
+    [
+      "version: 1",
+      `expert: ${expert}`,
+      "status: in-use",
+      "last_trained: 2026-08-20T11:00:00Z",
+      "areas:",
+      `  - id: ${area}`,
+      `    title: "${area}"`,
+      "    level: 0",
+      "    evidence:",
+      ...rows.map((row) => `      - ${row}`),
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+}
+
+describe("the `test` evidence kind", () => {
+  test("weighs the same as code — a test read or run is a direct observation", () => {
+    expect(competencyLevel(evidence("test", 2, 0), NOW)).toBe(2);
+    expect(competencyLevel(evidence("test", 4, 0), NOW)).toBe(3);
+    // Same W as the same number of `code` rows.
+    expect(competencyLevel(evidence("test", 6, 0), NOW)).toBe(competencyLevel(evidence("code", 6, 0), NOW));
+  });
+
+  test("readEvidenceRows keeps it, and tallies only the kinds it cannot place", () => {
+    const rows = readEvidenceRows([
+      { kind: "test", src: "api:tests/A.cs:1", at: "2026-08-29" },
+      { kind: "code", src: "api:src/A.cs:1", at: "2026-08-29" },
+      { kind: "bogus", src: "api:src/B.cs:1", at: "2026-08-29" },
+      { kind: "bogus", src: "api:src/C.cs:1", at: "2026-08-29" },
+      { kind: "sketch", src: "api:src/D.cs:1", at: "2026-08-29" },
+      // Malformed rather than misclassified: no `src`. Not an unknown-kind report.
+      { kind: "nope", at: "2026-08-29" },
+    ]);
+    expect(rows.evidence.map((item) => item.kind)).toEqual(["test", "code"]);
+    expect(rows.ignored).toEqual([{ kind: "bogus", count: 2 }, { kind: "sketch", count: 1 }]);
+  });
+
+  test("`expert list` counts a test row and reports unknown kinds on stderr", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      withEvidence(workspace.root, "lab-ui", "scoreboard-ui", [
+        `{kind: code, src: "lab:src/A.tsx:1", at: ${daysAgo(1)}}`,
+        `{kind: test, src: "lab:src/A.test.tsx:1", at: ${daysAgo(1)}}`,
+        `{kind: sketch, src: "lab:src/B.tsx:1", at: ${daysAgo(1)}}`,
+      ]);
+      const run = await tldrx("expert", "list", "--root", workspace.root);
+      expect(run.code).toBe(EXIT_OK);
+      // 2 of 3 rows count; the third is named rather than dropped in silence.
+      expect(run.stdout).toContain("scoreboard-ui  ★★☆☆☆ 2  (2 evidence");
+      expect(run.stderr).toBe(
+        "warning: lab-ui/scoreboard-ui: 1 evidence row(s) ignored — "
+        + "unknown kind 'sketch' (allowed: code, run, test, doc, answer)\n",
+      );
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("`expert list --json` keeps stdout parseable and still warns on stderr", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      withEvidence(workspace.root, "lab-ui", "scoreboard-ui", [
+        `{kind: sketch, src: "lab:src/B.tsx:1", at: ${daysAgo(1)}}`,
+        `{kind: sketch, src: "lab:src/C.tsx:1", at: ${daysAgo(1)}}`,
+      ]);
+      const run = await tldrx("expert", "list", "--root", workspace.root, "--json");
+      expect(run.code).toBe(EXIT_OK);
+      expect(() => JSON.parse(run.stdout)).not.toThrow();
+      expect(run.stderr).toContain("2 evidence row(s) ignored — unknown kind 'sketch'");
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("evidenceWarnings is one line per unknown kind per area", () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      withEvidence(workspace.root, "lab-ui", "scoreboard-ui", [
+        `{kind: sketch, src: "lab:src/B.tsx:1", at: ${daysAgo(1)}}`,
+        `{kind: hunch, src: "lab:src/C.tsx:1", at: ${daysAgo(1)}}`,
+      ]);
+      const warnings = evidenceWarnings(loadExpert(workspace.root, "lab-ui", NOW));
+      expect(warnings).toHaveLength(2);
+      expect(warnings[0]).toBe(
+        "warning: lab-ui/scoreboard-ui: 1 evidence row(s) ignored — "
+        + "unknown kind 'sketch' (allowed: code, run, test, doc, answer)",
+      );
+      expect(warnings[1]).toContain("unknown kind 'hunch'");
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("training's merge returns the same warning instead of dropping rows quietly", () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      withEvidence(workspace.root, "lab-ui", "scoreboard-ui", [
+        `{kind: sketch, src: "lab:src/B.tsx:1", at: ${daysAgo(1)}}`,
+      ]);
+      const written = writeCompetencies({
+        root: workspace.root,
+        expert: "lab-ui",
+        areaId: "scoreboard-ui",
+        evidence: [{ kind: "test", src: "lab:src/A.test.tsx:1", at: daysAgo(1) }],
+        status: "in-use",
+        lastTrained: "2026-09-01T00:00:00Z",
+        now: NOW,
+      });
+      expect(written.warnings).toEqual([
+        "warning: lab-ui/scoreboard-ui: 1 evidence row(s) ignored — "
+        + "unknown kind 'sketch' (allowed: code, run, test, doc, answer)",
+      ]);
+      // The `test` row it was handed is real evidence, not another dropped row.
+      expect(written.evidenceCount).toBe(1);
+      expect(written.levelAfter).toBe(1);
+    } finally {
+      workspace.dispose();
+    }
   });
 });
 

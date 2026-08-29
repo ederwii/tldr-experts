@@ -326,16 +326,23 @@ areas:
 | `areas[].id` / `.title` | slug / str | y | Competency area (`oauth`, `google-maps-sdk`, …) |
 | `areas[].level` | int 0–5 | y | **Computed**; a hand-edited value is overwritten on next write |
 | `areas[].train_prompt` | str | y | Copy-paste command shown in the dashboard |
-| `areas[].evidence[].{kind,src,at}` | `code\|run\|doc\|answer` / src token (§2.8) / `YYYY-MM-DD` | y | Evidence class, citation (must satisfy the grammar), date produced |
+| `areas[].evidence[].{kind,src,at}` | `code\|run\|test\|doc\|answer` / src token (§2.8) / `YYYY-MM-DD` | y | Evidence class, citation (must satisfy the grammar), date produced |
 
 **Level formula** (deterministic, integer table). Per evidence item aged `d` days: `recency = 1.0 (d≤30) · 0.6 (≤90) ·
-0.3 (≤365) · 0.1 (else)`; `weight = code 1.0 · run 1.0 · answer 0.8 · doc 0.5`; `W = Σ recency·weight`.
+0.3 (≤365) · 0.1 (else)`; `weight = code 1.0 · run 1.0 · test 1.0 · answer 0.8 · doc 0.5`; `W = Σ recency·weight`.
 `level = 0 if W<0.5 · 1 if <1.5 · 2 if <3 · 3 if <6 · 4 if <12 · else 5`. **Staleness cap:** newest evidence older than
 180 d ⇒ `level = min(level, 2)`. **Distinct-source cap:** `level ≤ count(distinct src)`.
 
 **Validation.** `level` equals the formula output (recomputed at write; mismatch rejected); every `src` matches the
 grammar; ≤60 areas, ≤50 evidence items per area. Every area's level is recomputed on **every** write, not only the
 trained one — that is what makes a hand-edited number temporary.
+
+**An unrecognised `kind` is refused out loud.** A row whose `kind` is not one of the five is not counted — but every
+reader that drops one says so, on stderr or as a dashboard warning line, in one shape:
+`warning: <expert>/<area>: N evidence row(s) ignored — unknown kind '<x>' (allowed: code, run, test, doc, answer)`.
+Measured 2026-08-29: an in-session training wrote two `kind: test` rows, both were dropped without a message, and
+`expert list` printed 15 evidence over a file holding 17. A reader that silently discards data makes every count
+downstream of it a claim rather than a measurement.
 
 **Where evidence comes from.** Only `tldrx expert train` writes it, and it is DERIVED from a knowledge file's
 citations rather than asserted by the sub-agent that wrote them:
@@ -344,6 +351,7 @@ citations rather than asserted by the sub-agent that wrote them:
 |---|---|---|
 | `code` | the knowledge file cites a line in a repo | the FIRST citation of that file, `repo:path:line` — one row per distinct **file**, so twelve readings of one file are worth one row and the §2.6 distinct-source cap stays meaningful |
 | `run` | `from-runs-<area>.md` cites a past run's handoff or retro | `tldrx-work/<run>/<file>:<line>` |
+| `test` | a knowledge file cites a test that was read or run | `repo:path:line`, or `$ cmd → exit n` for a test run |
 | `answer` | either file cites a recorded fact | `F<n>` |
 | `doc` | the knowledge file cites an `https://` URL | the URL |
 

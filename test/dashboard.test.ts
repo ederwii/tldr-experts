@@ -129,6 +129,37 @@ describe("the dashboard model", () => {
     expect(model.live).toBe(false);
   });
 
+  test("an unknown evidence kind reaches the page as a warning line, not silence", () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      writeFileSync(
+        join(workspace.root, ".tldrx", "experts", "lab-ui", "competencies.yml"),
+        [
+          "version: 1",
+          "expert: lab-ui",
+          "status: in-use",
+          "last_trained: 2026-08-20T11:00:00Z",
+          "areas:",
+          "  - id: scoreboard-ui",
+          '    title: "scoreboard-ui"',
+          "    level: 0",
+          "    evidence:",
+          '      - {kind: sketch, src: "lab:src/B.tsx:1", at: 2026-08-30}',
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const built = buildModel(workspace.root, GENERATED_AT, { now: VIEWS_NOW });
+      const labUi = built.experts.find((expert) => expert.name === "lab-ui")!;
+      expect(labUi.warnings).toContain(
+        "warning: lab-ui/scoreboard-ui: 1 evidence row(s) ignored — "
+        + "unknown kind 'sketch' (allowed: code, run, test, doc, answer)",
+      );
+    } finally {
+      workspace.dispose();
+    }
+  });
+
   test("a run with no Plan artefacts carries `plan: null`", () => {
     expect(model.runs[0]!.plan).toBeNull();
   });
