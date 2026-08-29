@@ -1,6 +1,6 @@
 # tldr-experts
 
-[![npm](https://img.shields.io/npm/v/tldrx?label=npm%20tldrx)](https://www.npmjs.com/package/tldrx) [![ci](https://github.com/ederwii/tldr-experts/actions/workflows/ci.yml/badge.svg)](https://github.com/ederwii/tldr-experts/actions/workflows/ci.yml) ![status](https://img.shields.io/badge/status-alpha-orange)
+[![npm](https://img.shields.io/npm/v/%40ederwii%2Ftldrx?label=npm%20%40ederwii%2Ftldrx)](https://www.npmjs.com/package/@ederwii/tldrx) [![ci](https://github.com/ederwii/tldr-experts/actions/workflows/ci.yml/badge.svg)](https://github.com/ederwii/tldr-experts/actions/workflows/ci.yml) ![status](https://img.shields.io/badge/status-alpha-orange)
 
 **Status: alpha** — the v0 loop (What → How → Plan, hooks, distill, seed, budgets) is released; the Build and Watch phases, the live dashboard and expert training are landing wave by wave (see `docs/ROADMAP.md`; released versions in `CHANGELOG.md`). expert training are v1.** Every command in the table below is implemented and
 
@@ -18,7 +18,7 @@ design, piloted on Claude Code.
 ## Quick start
 
 ```bash
-npm i -g tldrx                 # or, without installing: npx tldrx doctor
+npm i -g @ederwii/tldrx        # the command is `tldrx`; without installing: npx @ederwii/tldrx doctor
 tldrx doctor                   # check the local environment first — it is the authority
 
 cd your-project
@@ -257,8 +257,9 @@ change it freely before anything ships.
 
 ## Releases and status tags
 
-Install name is **`tldrx`** (the package was published as `tldr-experts` for 0.0.1–0.2.0 and is
-deprecated under that name; the brand and repo stay `tldr-experts`).
+Install name is **`@ederwii/tldrx`**; the command it installs is `tldrx`. (0.0.1–0.2.0 were first
+published as `tldr-experts` and then unpublished; unscoped `tldrx` is refused by npm's name-similarity
+rule, so the package lives under the maintainer scope. The brand and repo stay `tldr-experts`.)
 
 | Version | Date | Status | Contains |
 |---|---|---|---|
@@ -284,5 +285,5 @@ tokens, no OTP; provenance attached automatically). Bump `version` in `package.j
 commit, then `git tag v<version> && git push origin v<version>`. `.github/workflows/publish.yml`
 runs typecheck, tests, build, checks the tag matches the version, and publishes. One-time
 setup on npmjs.com: package → Settings → Trusted Publisher → GitHub Actions (`ederwii` /
-`tldr-experts` / `publish.yml`, configured on the npm package **`tldrx`**). The very first publish of a new package name is done by a
+`tldr-experts` / `publish.yml`, configured on the npm package **`@ederwii/tldrx`**). The very first publish of a new package name is done by a
 human with 2FA (`npm publish --access public --otp=<code>`).
