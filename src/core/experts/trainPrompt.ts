@@ -15,6 +15,7 @@
  * there is no training template in `templates/` to read.
  */
 import { evidenceNote, stars } from "./starChart.ts";
+import { EVIDENCE_KINDS, EVIDENCE_KIND_MEANINGS } from "../init/competencyLevel.ts";
 import { section } from "./expertDocument.ts";
 import type { AreaRecord, ExpertRecord } from "./ExpertRecord.ts";
 import type { ExpertDocument } from "./expertDocument.ts";
@@ -71,6 +72,12 @@ export function renderTrainPrompt(input: TrainPromptInput): string {
     `- \`${knowledgePath}\` — one H2 per finding, every bullet ending in a \`[src: …]\` token (spec §2.8).`,
     `- Add one \`evidence\` entry per finding to \`.tldrx/experts/${expert.name}/competencies.yml\` `
       + `under area \`${area.id}\`: \`{kind, src, at}\`. Do NOT write \`level\` — it is computed (spec §2.6).`,
+    "- `kind` is one of these five. Anything else is dropped when the file is read,",
+    "  and the level drops with it:",
+    ...EVIDENCE_KINDS.map((kind) => `  - \`${kind}\` — ${EVIDENCE_KIND_MEANINGS[kind]}`),
+    `- When the evidence is written, run \`tldrx expert recompute ${expert.name}\`. \`level\` only moves`,
+    "  when something writes it, and this session is not that something — without it the file",
+    "  keeps the old number and every reader warns about the disagreement.",
     "",
     "## Rules",
     "",

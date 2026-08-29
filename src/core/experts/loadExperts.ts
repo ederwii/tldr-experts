@@ -18,7 +18,9 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { parseYaml } from "../yaml.ts";
 import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
-import { competencyLevel, EVIDENCE_KINDS, type CompetencyEvidence, type EvidenceKind } from "../init/competencyLevel.ts";
+import { competencyLevel } from "../init/competencyLevel.ts";
+import { readEvidenceRows } from "./readEvidenceRows.ts";
+import type { CompetencyEvidence } from "../init/competencyLevel.ts";
 import type { AreaRecord, ExpertRecord } from "./ExpertRecord.ts";
 
 export const EXPERTS_DIRNAME = "experts";
@@ -84,9 +86,7 @@ function toArea(expert: string, input: unknown, now: Date): AreaRecord | null {
   const id = str(raw.id) !== "" ? str(raw.id) : str(raw.area);
   if (id === "") return null;
 
-  const evidence = Array.isArray(raw.evidence)
-    ? (raw.evidence as unknown[]).map(toEvidence).filter((item): item is CompetencyEvidence => item !== null)
-    : [];
+  const { evidence, ignored } = readEvidenceRows(raw.evidence);
 
   return {
     id,
@@ -97,19 +97,9 @@ function toArea(expert: string, input: unknown, now: Date): AreaRecord | null {
       ? str(raw.train_prompt)
       : `tldrx expert train ${expert} --area ${id} --mode light`,
     evidence,
+    ignored,
     newestEvidence: newestDate(evidence),
   };
-}
-
-function toEvidence(input: unknown): CompetencyEvidence | null {
-  if (typeof input !== "object" || input === null || Array.isArray(input)) return null;
-  const raw = input as Record<string, unknown>;
-  const kind = str(raw.kind);
-  const src = str(raw.src);
-  const at = str(raw.at);
-  if (src === "" || at === "") return null;
-  if (!(EVIDENCE_KINDS as readonly string[]).includes(kind)) return null;
-  return { kind: kind as EvidenceKind, src, at };
 }
 
 function newestDate(evidence: readonly CompetencyEvidence[]): string | null {

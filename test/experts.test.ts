@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { competencyLevel, type CompetencyEvidence, type EvidenceKind } from "../src/core/init/competencyLevel.ts";
 import {
-  createExpert, driftWarnings, evidenceNote, loadExpert, loadExperts, readExpertDocument,
-  renderExpertList, renderTrainPrompt, stars, starChartLine,
+  createExpert, driftWarnings, evidenceNote, evidenceWarnings, loadExpert, loadExperts,
+  readEvidenceRows, readExpertDocument, renderExpertList, renderTrainPrompt, stars, starChartLine,
 } from "../src/core/experts/index.ts";
+import { writeCompetencies } from "../src/core/training/competenciesWrite.ts";
+import { EXIT_NOT_FOUND } from "../src/cli/exitCodes.ts";
 import { parseYaml } from "../src/core/yaml.ts";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { noSpawnEnv } from "./fixtures/noSpawnPath.ts";
@@ -78,6 +80,134 @@ describe("the §2.6 level formula", () => {
   test("distinct-source cap: ten citations of one line are worth one source", () => {
     expect(competencyLevel(evidence("code", 10, 0, true), NOW)).toBe(1);
     expect(competencyLevel(evidence("code", 10, 0, false), NOW)).toBe(4);
+  });
+});
+
+/** Rewrite one area's evidence in a throwaway workspace copy. */
+function withEvidence(root: string, expert: string, area: string, rows: readonly string[]): void {
+  const path = join(root, ".tldrx", "experts", expert, "competencies.yml");
+  writeFileSync(
+    path,
+    [
+      "version: 1",
+      `expert: ${expert}`,
+      "status: in-use",
+      "last_trained: 2026-08-20T11:00:00Z",
+      "areas:",
+      `  - id: ${area}`,
+      `    title: "${area}"`,
+      "    level: 0",
+      "    evidence:",
+      ...rows.map((row) => `      - ${row}`),
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+}
+
+describe("the `test` evidence kind", () => {
+  test("weighs the same as code — a test read or run is a direct observation", () => {
+    expect(competencyLevel(evidence("test", 2, 0), NOW)).toBe(2);
+    expect(competencyLevel(evidence("test", 4, 0), NOW)).toBe(3);
+    // Same W as the same number of `code` rows.
+    expect(competencyLevel(evidence("test", 6, 0), NOW)).toBe(competencyLevel(evidence("code", 6, 0), NOW));
+  });
+
+  test("readEvidenceRows keeps it, and tallies only the kinds it cannot place", () => {
+    const rows = readEvidenceRows([
+      { kind: "test", src: "api:tests/A.cs:1", at: "2026-08-29" },
+      { kind: "code", src: "api:src/A.cs:1", at: "2026-08-29" },
+      { kind: "bogus", src: "api:src/B.cs:1", at: "2026-08-29" },
+      { kind: "bogus", src: "api:src/C.cs:1", at: "2026-08-29" },
+      { kind: "sketch", src: "api:src/D.cs:1", at: "2026-08-29" },
+      // Malformed rather than misclassified: no `src`. Not an unknown-kind report.
+      { kind: "nope", at: "2026-08-29" },
+    ]);
+    expect(rows.evidence.map((item) => item.kind)).toEqual(["test", "code"]);
+    expect(rows.ignored).toEqual([{ kind: "bogus", count: 2 }, { kind: "sketch", count: 1 }]);
+  });
+
+  test("`expert list` counts a test row and reports unknown kinds on stderr", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      withEvidence(workspace.root, "lab-ui", "scoreboard-ui", [
+        `{kind: code, src: "lab:src/A.tsx:1", at: ${daysAgo(1)}}`,
+        `{kind: test, src: "lab:src/A.test.tsx:1", at: ${daysAgo(1)}}`,
+        `{kind: sketch, src: "lab:src/B.tsx:1", at: ${daysAgo(1)}}`,
+      ]);
+      const run = await tldrx("expert", "list", "--root", workspace.root);
+      expect(run.code).toBe(EXIT_OK);
+      // 2 of 3 rows count; the third is named rather than dropped in silence.
+      expect(run.stdout).toContain("scoreboard-ui  ★★☆☆☆ 2  (2 evidence");
+      expect(run.stderr).toBe(
+        "warning: lab-ui/scoreboard-ui: 1 evidence row(s) ignored — "
+        + "unknown kind 'sketch' (allowed: code, run, test, doc, answer)\n",
+      );
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("`expert list --json` keeps stdout parseable and still warns on stderr", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      withEvidence(workspace.root, "lab-ui", "scoreboard-ui", [
+        `{kind: sketch, src: "lab:src/B.tsx:1", at: ${daysAgo(1)}}`,
+        `{kind: sketch, src: "lab:src/C.tsx:1", at: ${daysAgo(1)}}`,
+      ]);
+      const run = await tldrx("expert", "list", "--root", workspace.root, "--json");
+      expect(run.code).toBe(EXIT_OK);
+      expect(() => JSON.parse(run.stdout)).not.toThrow();
+      expect(run.stderr).toContain("2 evidence row(s) ignored — unknown kind 'sketch'");
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("evidenceWarnings is one line per unknown kind per area", () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      withEvidence(workspace.root, "lab-ui", "scoreboard-ui", [
+        `{kind: sketch, src: "lab:src/B.tsx:1", at: ${daysAgo(1)}}`,
+        `{kind: hunch, src: "lab:src/C.tsx:1", at: ${daysAgo(1)}}`,
+      ]);
+      const warnings = evidenceWarnings(loadExpert(workspace.root, "lab-ui", NOW));
+      expect(warnings).toHaveLength(2);
+      expect(warnings[0]).toBe(
+        "warning: lab-ui/scoreboard-ui: 1 evidence row(s) ignored — "
+        + "unknown kind 'sketch' (allowed: code, run, test, doc, answer)",
+      );
+      expect(warnings[1]).toContain("unknown kind 'hunch'");
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("training's merge returns the same warning instead of dropping rows quietly", () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      withEvidence(workspace.root, "lab-ui", "scoreboard-ui", [
+        `{kind: sketch, src: "lab:src/B.tsx:1", at: ${daysAgo(1)}}`,
+      ]);
+      const written = writeCompetencies({
+        root: workspace.root,
+        expert: "lab-ui",
+        areaId: "scoreboard-ui",
+        evidence: [{ kind: "test", src: "lab:src/A.test.tsx:1", at: daysAgo(1) }],
+        status: "in-use",
+        lastTrained: "2026-09-01T00:00:00Z",
+        now: NOW,
+      });
+      expect(written.warnings).toEqual([
+        "warning: lab-ui/scoreboard-ui: 1 evidence row(s) ignored — "
+        + "unknown kind 'sketch' (allowed: code, run, test, doc, answer)",
+      ]);
+      // The `test` row it was handed is real evidence, not another dropped row.
+      expect(written.evidenceCount).toBe(1);
+      expect(written.levelAfter).toBe(1);
+    } finally {
+      workspace.dispose();
+    }
   });
 });
 
@@ -213,6 +343,111 @@ describe("expert create", () => {
   });
 });
 
+describe("expert recompute", () => {
+  test("settles the level an in-session training left behind, and says what moved", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      // The fixture's lab-ui stores 5 over one piece of evidence, which computes 1.
+      const run = await tldrx("expert", "recompute", "lab-ui", "--root", workspace.root);
+      expect(run.code).toBe(EXIT_OK);
+      expect(run.stdout).toBe("lab-ui/scoreboard-ui: level 5 → 1 (1 evidence)\n");
+
+      // The warning it was the remedy for is gone, because the file agrees now.
+      const after = loadExpert(workspace.root, "lab-ui", VIEWS_NOW);
+      expect(after.drifted).toHaveLength(0);
+      expect(after.areas[0]!.storedLevel).toBe(1);
+      // Not a training run: status and last_trained are untouched.
+      expect(after.status).toBe("created");
+      expect(after.lastTrained).toBeNull();
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("is idempotent — the second run writes nothing, byte-identical", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      const path = join(workspace.root, ".tldrx", "experts", "lab-ui", "competencies.yml");
+      await tldrx("expert", "recompute", "lab-ui", "--root", workspace.root);
+      const first = readFileSync(path, "utf8");
+
+      const again = await tldrx("expert", "recompute", "lab-ui", "--root", workspace.root, "--json");
+      expect(again.code).toBe(EXIT_OK);
+      expect(readFileSync(path, "utf8")).toBe(first);
+      const parsed = JSON.parse(again.stdout) as { written: boolean; areas: { changed: boolean }[] }[];
+      expect(parsed[0]!.written).toBe(false);
+      expect(parsed[0]!.areas[0]!.changed).toBe(false);
+      expect(again.stdout).toContain('"level_after": 1');
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("with no name it recomputes every expert, one line per area", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      const run = await tldrx("expert", "recompute", "--root", workspace.root);
+      expect(run.code).toBe(EXIT_OK);
+      expect(run.stdout).toBe([
+        "dotnet-stack/ef-core: level 2 unchanged (4 evidence)",
+        "dotnet-stack/legacy-soap: level 0 unchanged (4 evidence)",
+        "lab-ui/scoreboard-ui: level 5 → 1 (1 evidence)",
+        "",
+      ].join("\n"));
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("an unknown expert is exit 3, naming the ones that exist", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      const run = await tldrx("expert", "recompute", "nope", "--root", workspace.root);
+      expect(run.code).toBe(EXIT_NOT_FOUND);
+      expect(run.stderr).toContain("no expert 'nope'");
+      expect(run.stderr).toContain("dotnet-stack, lab-ui");
+      expect(run.stdout).toBe("");
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("it reports unknown evidence kinds on stderr like every other reader", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      withEvidence(workspace.root, "lab-ui", "scoreboard-ui", [
+        `{kind: code, src: "lab:src/A.tsx:1", at: ${daysAgo(1)}}`,
+        `{kind: sketch, src: "lab:src/B.tsx:1", at: ${daysAgo(1)}}`,
+      ]);
+      const run = await tldrx("expert", "recompute", "lab-ui", "--root", workspace.root);
+      expect(run.code).toBe(EXIT_OK);
+      expect(run.stdout).toBe("lab-ui/scoreboard-ui: level 0 → 1 (1 evidence)\n");
+      expect(run.stderr).toContain("1 evidence row(s) ignored — unknown kind 'sketch'");
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("the drift warning names the command that fixes it", () => {
+    const warnings = driftWarnings(loadExpert(VIEWS_FIXTURE, "lab-ui", VIEWS_NOW));
+    expect(warnings[0]).toContain("Run `tldrx expert recompute lab-ui` to settle it.");
+  });
+
+  test("the printed prompt tells the session to run it when it is done", () => {
+    const expert = loadExpert(VIEWS_FIXTURE, "dotnet-stack", VIEWS_NOW);
+    const prompt = renderTrainPrompt({
+      expert,
+      document: readExpertDocument(VIEWS_FIXTURE, "dotnet-stack"),
+      area: expert.areas[0]!,
+      mode: "light",
+      repos: [],
+    });
+    expect(prompt).toContain("run `tldrx expert recompute dotnet-stack`");
+    // and it lists the kinds it may write, which is what BUG 2 was about
+    expect(prompt).toContain("- `test` — a test you ran or read");
+  });
+});
+
 describe("expert train --print-prompt", () => {
   test("the prompt is deterministic and names the expert, area, mode and repos", () => {
     const expert = loadExpert(VIEWS_FIXTURE, "dotnet-stack", VIEWS_NOW);
@@ -255,6 +490,51 @@ describe("expert train --print-prompt", () => {
     );
     expect(run.code).toBe(EXIT_OK);
     expect(run.stdout).toContain("# Train `dotnet-stack` — area `ef-core` (light mode)");
+  });
+
+  // The regression: `repos()` handed `loadWorkspaceFile` the `.tldrx/` directory,
+  // which joins `.tldrx/workspace.yml` onto it — so every prompt on every real
+  // workspace said "none declared". The fixture declares api + lab.
+  test("the CLI names every repo workspace.yml declares", async () => {
+    const run = await tldrx(
+      "expert", "train", "dotnet-stack", "--area", "ef-core", "--print-prompt", "--root", VIEWS_FIXTURE,
+    );
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).toContain("- `api` at `api`");
+    expect(run.stdout).toContain("- `lab` at `lab`");
+    expect(run.stdout).not.toContain("none declared");
+    expect(run.stderr).toBe("");
+  });
+
+  test("`none declared` only when repos: [] is genuinely empty — and no warning", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      const path = join(workspace.root, ".tldrx", "workspace.yml");
+      writeFileSync(path, "version: 1\nroot: \".\"\nrepos: []\n", "utf8");
+      const run = await tldrx(
+        "expert", "train", "dotnet-stack", "--area", "ef-core", "--print-prompt", "--root", workspace.root,
+      );
+      expect(run.code).toBe(EXIT_OK);
+      expect(run.stdout).toContain("none declared in `.tldrx/workspace.yml`");
+      expect(run.stderr).toBe("");
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("an unreadable workspace.yml warns on stderr instead of failing silently", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      rmSync(join(workspace.root, ".tldrx", "workspace.yml"));
+      const run = await tldrx(
+        "expert", "train", "dotnet-stack", "--area", "ef-core", "--print-prompt", "--root", workspace.root,
+      );
+      expect(run.code).toBe(EXIT_OK);
+      expect(run.stdout).toContain("none declared in `.tldrx/workspace.yml`");
+      expect(run.stderr).toContain("warning: could not read .tldrx/workspace.yml:");
+    } finally {
+      workspace.dispose();
+    }
   });
 
   // Without `--print-prompt`, training RUNS (wave 7). This asserts it through the

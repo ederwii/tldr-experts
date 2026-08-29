@@ -72,6 +72,13 @@ export interface TrainOutcome {
   readonly code: number;
   readonly lines: readonly string[];
   readonly costUsd: number;
+  /**
+   * Lines the CLI must put on stderr whatever the exit code — today, evidence
+   * rows already in `competencies.yml` that this write could not count. They are
+   * not part of `lines` because `lines` is the result, and these are a complaint
+   * about the input.
+   */
+  readonly warnings?: readonly string[];
 }
 
 export async function runTraining(options: TrainOptions): Promise<TrainOutcome> {
@@ -320,6 +327,7 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
   return {
     code: EXIT_OK,
     costUsd,
+    warnings: written.warnings,
     lines: [
       `trained ${options.expert}/${area.id} (${options.mode}) — $${costUsd.toFixed(2)} of $${ceiling.toFixed(2)}`,
       ...counts.map((line) => `  ${line}`),

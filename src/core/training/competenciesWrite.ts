@@ -10,12 +10,18 @@
  *   - the document keeps its shape. The file is parsed, mutated and re-emitted
  *     rather than regenerated, so a team that added a key to it does not lose it
  *     to a training run.
+ *
+ * `tldrx expert recompute` lives here rather than beside the CLI on purpose: it
+ * must produce a file byte-identical to the one training produces, so it shares
+ * the reader (`readDocument`), the serializer (`serialize`) and the level
+ * function line for line. Two writers of one file is how the shapes diverge.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { stringifyYaml, parseYaml } from "../yaml.ts";
-import { competencyLevel, EVIDENCE_KINDS, type CompetencyEvidence, type EvidenceKind } from "../init/competencyLevel.ts";
+import { competencyLevel, type CompetencyEvidence } from "../init/competencyLevel.ts";
 import { COMPETENCIES_FILE, expertDir } from "../experts/loadExperts.ts";
+import { readEvidenceRows, unknownKindWarnings } from "../experts/readEvidenceRows.ts";
 import { mergeEvidence } from "./knowledgeFile.ts";
 
 const HEADER = "# Written by `tldrx expert train` (spec §2.6). `level` is computed, never hand-set.\n";
@@ -37,13 +43,27 @@ export interface CompetenciesWrite {
   readonly levelAfter: number;
   readonly evidenceCount: number;
   readonly dropped: number;
+  /**
+   * Rows already in the file that this write could not count, one line per
+   * unknown kind per area. Training reports them: a merge that quietly discards
+   * half an area's evidence and then prints a level is the same silent failure
+   * `expert list` had.
+   */
+  readonly warnings: readonly string[];
 }
 
 export class CompetenciesError extends Error {}
 
-export function writeCompetencies(options: WriteCompetenciesOptions): CompetenciesWrite {
-  const dir = expertDir(options.root, options.expert);
-  const path = join(dir, COMPETENCIES_FILE);
+interface LoadedCompetencies {
+  readonly path: string;
+  /** The file exactly as it was on disk, so a no-op write can be detected. */
+  readonly text: string;
+  readonly doc: Record<string, unknown>;
+  readonly areas: readonly unknown[];
+}
+
+function readDocument(root: string, expert: string): LoadedCompetencies {
+  const path = join(expertDir(root, expert), COMPETENCIES_FILE);
   if (!existsSync(path)) throw new CompetenciesError(`${path} is missing — \`tldrx expert create\` writes it`);
 
   const text = readFileSync(path, "utf8");
@@ -52,14 +72,32 @@ export function writeCompetencies(options: WriteCompetenciesOptions): Competenci
     throw new CompetenciesError(`${path} is not a mapping`);
   }
   const doc = { ...(parsed as Record<string, unknown>) };
-  const areas = Array.isArray(doc.areas) ? [...(doc.areas as unknown[])] : [];
+  return { path, text, doc, areas: Array.isArray(doc.areas) ? [...(doc.areas as unknown[])] : [] };
+}
+
+/** The one serializer. Both writers go through it, so both produce the same bytes. */
+function serialize(loaded: LoadedCompetencies, doc: Record<string, unknown>): string {
+  return `${headerOf(loaded.text)}${stringifyYaml(doc)}`;
+}
+
+/** `id:`, or the v0 draft's `area:` — the same fallback the reader uses. */
+function areaId(area: Record<string, unknown>): string {
+  return str(area.id) !== "" ? str(area.id) : str(area.area);
+}
+
+export function writeCompetencies(options: WriteCompetenciesOptions): CompetenciesWrite {
+  const loaded = readDocument(options.root, options.expert);
+  const { path, doc, areas } = loaded;
 
   let write: CompetenciesWrite | null = null;
+  const warnings: string[] = [];
   const next = areas.map((raw) => {
     if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return raw;
     const area = { ...(raw as Record<string, unknown>) };
-    const id = str(area.id) !== "" ? str(area.id) : str(area.area);
-    const existing = readEvidence(area.evidence);
+    const id = areaId(area);
+    const rows = readEvidenceRows(area.evidence);
+    const existing = rows.evidence;
+    warnings.push(...unknownKindWarnings(options.expert, id, rows.ignored));
 
     if (id === options.areaId) {
       const merged = mergeEvidence(existing, options.evidence, options.now);
@@ -72,6 +110,7 @@ export function writeCompetencies(options: WriteCompetenciesOptions): Competenci
         levelAfter: merged.levelAfter,
         evidenceCount: merged.evidence.length,
         dropped: merged.dropped,
+        warnings: [],
       };
       return area;
     }
@@ -91,8 +130,79 @@ export function writeCompetencies(options: WriteCompetenciesOptions): Competenci
   doc.last_trained = options.lastTrained;
 
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${headerOf(text)}${stringifyYaml(doc)}`, "utf8");
-  return write;
+  writeFileSync(path, serialize(loaded, doc), "utf8");
+  return { ...(write as CompetenciesWrite), warnings };
+}
+
+export interface RecomputeOptions {
+  readonly root: string;
+  readonly expert: string;
+  readonly now: Date;
+}
+
+export interface RecomputedArea {
+  readonly id: string;
+  /** The number that was on disk, or null when the file declared none. */
+  readonly levelBefore: number | null;
+  readonly levelAfter: number;
+  readonly evidenceCount: number;
+  readonly changed: boolean;
+}
+
+export interface CompetenciesRecompute {
+  readonly path: string;
+  /** False when the serialized document was byte-identical — nothing was written. */
+  readonly written: boolean;
+  readonly areas: readonly RecomputedArea[];
+  readonly warnings: readonly string[];
+}
+
+/**
+ * Recompute `level` for every area of one expert and write it back.
+ *
+ * The gap this closes: only the headless/`--commit` training path ever wrote a
+ * level. A human who pasted the printed prompt into their own session ended with
+ * `level: 0` on disk while the formula computed 5, and `expert list` and the
+ * dashboard warned about the disagreement forever with no command to settle it.
+ *
+ * `status` and `last_trained` are deliberately untouched — this recomputes an
+ * arithmetic result from evidence that is already on disk; it is not a training
+ * run and must not claim to be one. Idempotent: a second run re-serializes to the
+ * same bytes and writes nothing at all.
+ */
+export function recomputeCompetencies(options: RecomputeOptions): CompetenciesRecompute {
+  const loaded = readDocument(options.root, options.expert);
+  const { path, doc, areas } = loaded;
+
+  const recomputed: RecomputedArea[] = [];
+  const warnings: string[] = [];
+
+  doc.areas = areas.map((raw) => {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return raw;
+    const area = { ...(raw as Record<string, unknown>) };
+    const id = areaId(area);
+    const rows = readEvidenceRows(area.evidence);
+    warnings.push(...unknownKindWarnings(options.expert, id, rows.ignored));
+
+    const levelBefore = typeof area.level === "number" ? area.level : null;
+    const levelAfter = competencyLevel(rows.evidence, options.now);
+    area.level = levelAfter;
+    recomputed.push({
+      id,
+      levelBefore,
+      levelAfter,
+      evidenceCount: rows.evidence.length,
+      changed: levelBefore !== levelAfter,
+    });
+    return area;
+  });
+
+  const next = serialize(loaded, doc);
+  if (next === loaded.text) return { path, written: false, areas: recomputed, warnings };
+
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, next, "utf8");
+  return { path, written: true, areas: recomputed, warnings };
 }
 
 /** Keep whatever comment the file opened with; write ours when it had none. */
@@ -101,19 +211,13 @@ function headerOf(text: string): string {
   return first.startsWith("#") ? `${first}\n` : HEADER;
 }
 
+/**
+ * Kept as the narrow "just the rows" view for callers that have nowhere to put a
+ * warning. Everything that CAN report uses `readEvidenceRows` directly — this
+ * function is where the silent drop lived, and the tally is the fix.
+ */
 export function readEvidence(input: unknown): readonly CompetencyEvidence[] {
-  if (!Array.isArray(input)) return [];
-  const out: CompetencyEvidence[] = [];
-  for (const raw of input as unknown[]) {
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) continue;
-    const row = raw as Record<string, unknown>;
-    const kind = str(row.kind);
-    const src = str(row.src);
-    const at = str(row.at);
-    if (src === "" || at === "" || !(EVIDENCE_KINDS as readonly string[]).includes(kind)) continue;
-    out.push({ kind: kind as EvidenceKind, src, at });
-  }
-  return out;
+  return readEvidenceRows(input).evidence;
 }
 
 function str(value: unknown): string {

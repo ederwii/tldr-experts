@@ -1,5 +1,6 @@
 /** What `expert list` and the dashboard read out of `.tldrx/experts/<name>/`. */
 import type { CompetencyEvidence } from "../init/competencyLevel.ts";
+import type { IgnoredKind } from "./readEvidenceRows.ts";
 
 export const EXPERT_STATUSES = ["created", "training", "in-use", "inactive"] as const;
 export type ExpertStatus = (typeof EXPERT_STATUSES)[number];
@@ -13,6 +14,8 @@ export interface AreaRecord {
   readonly level: number;
   readonly trainPrompt: string;
   readonly evidence: readonly CompetencyEvidence[];
+  /** Rows the file declares that no reader could count, because their `kind` is unknown. */
+  readonly ignored: readonly IgnoredKind[];
   /** `YYYY-MM-DD` of the newest evidence item, or null when there is none. */
   readonly newestEvidence: string | null;
 }

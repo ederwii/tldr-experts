@@ -2,6 +2,48 @@
 
 ## 0.3.0 — unreleased
 
+### Three bugs an in-session training walked into
+
+All three were measured on a real workspace (2026-08-29) before they were fixed,
+and all three are the same shape: something the tool refused to do, silently.
+
+- **`--print-prompt` told everyone they had no repos.** `expert train … --print-prompt`
+  handed `loadWorkspaceFile` the `.tldrx/` directory, but that function joins
+  `.tldrx/workspace.yml` onto its argument — so it looked for
+  `<root>/.tldrx/.tldrx/workspace.yml`, threw, and a bare `catch` turned the failure
+  into an empty list. Every printed prompt on every real workspace said "none declared
+  in `.tldrx/workspace.yml` — run `tldrx init` first", including on workspaces with
+  repos declared. It now names them, `tldrx map` and `tldrx expert` agree about what
+  that function takes, and a genuine read failure prints
+  `warning: could not read .tldrx/workspace.yml: <reason>` on stderr instead of
+  disappearing. The headless training path never had the bug — it reads the file
+  through `loadWorkspace(root)`, which joins correctly.
+- **`kind: test` was dropped without a word.** The evidence kinds were `code`, `run`,
+  `doc`, `answer`; the train prompt said to write `{kind, src, at}` and never said
+  which kinds exist; a session wrote two `kind: test` rows for two test-file citations
+  and both vanished on read, so `expert list` printed 15 evidence over a file holding
+  17 and computed the level from the 15. **`test` is now a first-class kind at weight
+  1.0**, the same as `code` — a test read or run is a direct observation of behaviour.
+  The prompt now lists all five kinds with a one-line meaning each (rendered from a
+  total record, so adding a kind without explaining it will not compile). And an
+  unrecognised kind is never silent again: `expert list` (stderr, so it survives
+  `--json`), the dashboard model (a warning line) and training's merge all report
+  `warning: <expert>/<area>: N evidence row(s) ignored — unknown kind '<x>'
+  (allowed: code, run, test, doc, answer)`.
+- **`tldrx expert recompute [<name>] [--json]`** — new. Only the headless/`--commit`
+  training path ever wrote a `level`, so a human who pasted the printed prompt into
+  their own session (a supported path) ended with `level: 0` on disk while the §2.6
+  formula computed 5, and `expert list` and the dashboard warned about the
+  disagreement forever with nothing but a text editor to settle it. `recompute`
+  recomputes and writes `level` for every area of one expert, or of every expert when
+  no name is given, reusing the training path's reader and serializer so the file
+  shape is identical. One line per area — `name/area: level 0 → 5 (17 evidence)` or
+  `level 5 unchanged (17 evidence)`. Idempotent: a second run re-serializes to the
+  same bytes and writes nothing. It does **not** touch `status` or `last_trained` —
+  it is arithmetic over evidence already on disk, not a training run — and spawns
+  nothing. Exit `3` for an unknown expert. The drift warning now names it as the
+  remedy, and the printed prompt ends by telling the session to run it.
+
 - **`tldrx interview --init` now applies the two process answers.** They used to land in `facts.yml` and nowhere else, so a workspace could answer "GitHub Issues" and still have `ticket_tool.kind: none` on disk. The interview now writes `.tldrx/process.yml`: `methodology`, and `ticket_tool.kind` (`jira` / `github` / `linear` / `none`) — for GitHub it fills `ticket_tool.project` with `owner/repo` read from the git remote when it can, otherwise it prints a note; for Jira it prints a note to set the project key by hand; "other" leaves the file untouched. One summary line at the end says which happened — `process.yml: methodology=none, ticket_tool=github (owner/repo)` or `process.yml: unchanged`. The two process questions are reordered so option **A** is "None — …" for both, which makes `--yes-to-defaults` a real default there rather than a guess. It is still a guess on the ownership and dead-code questions, and it still answers for the human, so it stays a human's flag: the README and the `/tldrx` skill both now say not to pass it on somebody's behalf.
 - **Several runs can be open at once, and ambiguity is refused rather than guessed.** With more than one open run and no explicit id, every run-targeting command — `next`, `answer`, `approve`, `reject`, `budget`, `interview --run`, `tickets`, `watch`, `retro`, `replay`, `dashboard` — exits `2` and prints `tldrx <cmd>: N runs are open — pass one:` with one line per run. Selectors: positional `<run>` on `next` and `run status`, `--run <id>` on the rest. `tldrx run status` with several open prints a table of them all and exits `0`; `--json` returns `{ "runs": [...] }`, and the single-run shape is unchanged when exactly one is open. `tldrx run new` prints a notice when others are already open. Hooks never block on the ambiguity and the status line appends `(+N open)` — a refusal that reaches a `PreToolUse` decision would stop work the human never asked to stop. `tldrx tickets status` also validates `process.yml` **before** the no-run check, so a broken adapter config is reported as a config error rather than as "no run".
 - **Docs caught up with the code.** The `/tldrx` skill's "PRE-ALPHA — some commands are still stubs and exit 64" warning was false: `grep -rn "implemented: false" src/cli/commands/` comes back empty. It now says alpha, points at `tldrx --help` as the authority, and writes down three things a real session spent five minutes reverse-engineering out of `dist/tldrx.js`: exit `3` from `tldrx run status` means no run exists (ask the human, then `tldrx run new <slug> --scope <s>`, with the scope names listed) rather than invent one; init questions are answered with `tldrx interview --init`, which on a non-TTY stdin reads **one line per question** (`printf 'A\nB\nA\nA\n' | tldrx interview --init`, the letter picking the option at that position); and `--yes-to-defaults` answers for the human. The skill and the README also now say plainly that `.tldrx/` and `tldrx-work/` are **committed** — `tldrx init` gitignores exactly five machine-local paths (`.tldrx/graphify-out/`, `.tldrx/cache/`, `.tldrx/worktrees/`, `tldrx-work/*/.lock`, `tldrx-work/*/.agent/`) and everything else is the state. `tldrx install --claude` needed no change: it copies `plugin/skills/tldrx/SKILL.md` off disk at install time (`PLUGIN_DIR`, shipped via the `plugin` entry in `package.json` `files`), and `dist/` embeds no second copy.
