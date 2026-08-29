@@ -2,7 +2,7 @@
 
 ## 0.3.0 — unreleased
 
-- **Package renamed to `@ederwii/tldrx`** (`npm i -g @ederwii/tldrx`, command `tldrx`). Unscoped `tldrx` is refused by npm's name-similarity rule (`tsdx`, `thdax`); `tldr-experts` was unpublished. The GitHub repo and brand keep the name.
+- **Package renamed to `tldrex`** (`npm i -g tldrex`, command `tldrx`). Unscoped `tldrx` is refused by npm's name-similarity rule (`tsdx`, `thdax`); `tldr-experts` was unpublished. The GitHub repo and brand keep the name.
 - README: release table with status tags (`alpha`/`beta`/`stable` defined) and npm/CI badges.
 
 ## 0.2.0 — 2026-08-29

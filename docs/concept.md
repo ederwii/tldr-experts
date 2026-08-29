@@ -356,7 +356,7 @@ Enterprise concerns (compliance, change boards) are optional stage packs, never 
 
 ## v0.2 addendum — name, process model, ticket adapters (2026-08-28)
 
-**Name decided:** brand/repo `tldr-experts`, CLI `tldrx`; npm package `@ederwii/tldrx` (2026-08-29: unscoped `tldrx` is refused by npm's similarity rule, `tldr-experts` was unpublished; a scoped name bypasses the rule and the command stays `tldrx`). Framework dir `.tldrx/`, runs in `tldrx-work/`.
+**Name decided:** brand/repo `tldr-experts`, CLI `tldrx`; npm package `tldrex` (2026-08-29: unscoped `tldrx` is refused by npm's similarity rule — too close to `tsdx` — and `tldr-experts` was unpublished; the command stays `tldrx`). Framework dir `.tldrx/`, runs in `tldrx-work/`.
 
 ### Process model is data, not a rule (`.tldrx/process.yml`)
 Identified during the install interview (or `--process` flag), never assumed:

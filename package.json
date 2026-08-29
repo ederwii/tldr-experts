@@ -1,5 +1,5 @@
 {
-  "name": "@ederwii/tldrx",
+  "name": "tldrex",
   "version": "0.2.0",
   "description": "tldrx \u2014 the tldr-experts CLI: a lightweight, file-based AI development workflow. Alpha.",
   "license": "MIT",
