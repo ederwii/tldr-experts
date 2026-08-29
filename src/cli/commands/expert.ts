@@ -14,7 +14,9 @@ import { join } from "node:path";
 import type { Command } from "../Command.ts";
 import { EXIT_FAILED, EXIT_OK } from "../exitCodes.ts";
 import { boolFlag, numberFlag, parseArgs, stringFlag, UsageError, type ParsedArgs } from "../argv.ts";
+import { effortFlag } from "../effort.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
+import type { EffortLevel } from "../../core/schemas/stage.ts";
 import { isTrainingMode, runTraining, type TrainingRunMode } from "../../core/training/index.ts";
 import { PROJECT_FRAMEWORK_DIR } from "../../core/paths.ts";
 import { loadWorkspaceFile } from "../../core/init/loadWorkspaceFile.ts";
@@ -29,7 +31,7 @@ const USAGE = [
   "  tldrx expert list [--root <path>] [--json]",
   "  tldrx expert create <name> [--domain <slug>] [--stack <lang>] [--root <path>]",
   "  tldrx expert train <name> --area <area> [--mode light|full] [--max-usd <n>]",
-  "                                          [--model <m>] [--prepare|--commit] [--yolo] [--root <path>]",
+  "                                          [--model <m>] [--effort <level>] [--prepare|--commit] [--yolo] [--root <path>]",
   "  tldrx expert train <name> --area <area> [--mode light|full] --print-prompt [--root <path>]",
 ].join("\n");
 
@@ -39,7 +41,7 @@ export const expertCommand: Command = {
   usage: "tldrx expert list [--root <path>] [--json]\n" +
     "       tldrx expert create <name> [--domain <slug>] [--stack <lang>] [--root <path>]\n" +
     "       tldrx expert train <name> --area <area> [--mode light|full] [--max-usd <n>] [--model <m>]\n" +
-    "                                               [--prepare|--commit] [--yolo] [--print-prompt] [--root <path>]",
+    "                                               [--effort <level>] [--prepare|--commit] [--yolo] [--print-prompt] [--root <path>]",
   subcommands: ["list", "create", "train"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
@@ -89,7 +91,7 @@ async function create(argv: readonly string[]): Promise<number> {
   }
 }
 
-const TRAIN_VALUE_FLAGS = ["root", "area", "mode", "max-usd", "model"] as const;
+const TRAIN_VALUE_FLAGS = ["root", "area", "mode", "max-usd", "model", "effort"] as const;
 
 async function train(argv: readonly string[]): Promise<number> {
   let args: ParsedArgs;
@@ -148,8 +150,10 @@ async function train(argv: readonly string[]): Promise<number> {
   }
 
   let maxUsd: number | undefined;
+  let effort: EffortLevel | undefined;
   try {
     maxUsd = numberFlag(args, "max-usd");
+    effort = effortFlag(args);
   } catch (error) {
     process.stderr.write(`tldrx expert train: ${message(error)}\n`);
     return EXIT_FAILED;
@@ -163,6 +167,7 @@ async function train(argv: readonly string[]): Promise<number> {
     run: runMode,
     maxUsd,
     model: stringFlag(args, "model") ?? null,
+    effort,
     yolo: boolFlag(args, "yolo"),
     actor: currentActor(),
     at: nowRfc3339(),

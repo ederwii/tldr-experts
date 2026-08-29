@@ -19,7 +19,7 @@ import { competencyLevel } from "../src/core/init/competencyLevel.ts";
 import {
   runTraining, selectFiles, keywordsFor, mineRuns, relevantFacts, parseKnowledgeFile,
   codeEvidence, runEvidence, mergeEvidence, LIGHT_SHAPE, RUNS_SHAPE, TrainingLog,
-  trainingCacheDir, expertRepos, MIN_TRAIN_USD, DEFAULT_TRAIN_USD, withGutter,
+  trainingCacheDir, expertRepos, MIN_TRAIN_USD, DEFAULT_TRAIN_USD, DEFAULT_TRAIN_EFFORT, withGutter,
   type TrainOptions,
 } from "../src/core/training/index.ts";
 import { FactsStore } from "../src/core/facts/FactsStore.ts";
@@ -541,6 +541,59 @@ describe("the budget floor", () => {
     await train(ws);
     const argv = JSON.parse(readFileSync(argvLog, "utf8").trim()) as string[];
     expect(argv[argv.indexOf("--max-budget-usd") + 1]).toBe(DEFAULT_TRAIN_USD.toFixed(2));
+  });
+});
+
+// --- effort ------------------------------------------------------------------
+
+describe("--effort", () => {
+  function firstArgv(argvLog: string): readonly string[] {
+    return JSON.parse((readFileSync(argvLog, "utf8").trim().split("\n")[0]) ?? "[]") as string[];
+  }
+
+  test(`training defaults to --effort ${DEFAULT_TRAIN_EFFORT}`, async () => {
+    const ws = workspace();
+    fakeClaude(ws, [{ [KNOWLEDGE_REL]: knowledgeMd() }]);
+    const argvLog = join(ws.root, "argv.log");
+    process.env.FAKE_TRAIN_ARGV_LOG = argvLog;
+
+    await train(ws);
+    const argv = firstArgv(argvLog);
+    expect(argv[argv.indexOf("--effort") + 1]).toBe(DEFAULT_TRAIN_EFFORT);
+  });
+
+  test("--effort overrides that default", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [{ [KNOWLEDGE_REL]: knowledgeMd() }]);
+    const argvLog = join(ws.root, "argv.log");
+    process.env.FAKE_TRAIN_ARGV_LOG = argvLog;
+
+    await train(ws, { effort: "low" });
+    const argv = firstArgv(argvLog);
+    expect(argv[argv.indexOf("--effort") + 1]).toBe("low");
+  });
+
+  test("full mode spawns both sub-agents at the same effort", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [{ [KNOWLEDGE_REL]: knowledgeMd() }, { [FROM_RUNS_REL]: fromRunsMd() }]);
+    const argvLog = join(ws.root, "argv.log");
+    process.env.FAKE_TRAIN_ARGV_LOG = argvLog;
+
+    await train(ws, { mode: "full", maxUsd: 3, effort: "xhigh" });
+    const lines = readFileSync(argvLog, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]);
+    expect(lines).toHaveLength(2);
+    for (const argv of lines) expect(argv[argv.indexOf("--effort") + 1]).toBe("xhigh");
+  });
+
+  test("the effort is on every training.jsonl line, so cost can be compared per level later", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [{ [KNOWLEDGE_REL]: knowledgeMd() }]);
+
+    await train(ws, { effort: "low" });
+    const log = TrainingLog.forExpert(ws.expertDir).read();
+    const results = log.filter((event) => event.type === "agent.result");
+    expect(results.length).toBeGreaterThan(0);
+    for (const event of results) expect(event.payload.effort).toBe("low");
   });
 });
 

@@ -13,6 +13,9 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { buildClaudeArgs, allowedTools } from "../src/core/facilitator/spawnAgent.ts";
+import { EFFORT_LEVELS } from "../src/core/schemas/stage.ts";
+import { effortFlag } from "../src/cli/effort.ts";
+import { parseArgs, UsageError } from "../src/cli/argv.ts";
 import { ENVELOPE_SCHEMA } from "../src/core/facilitator/envelope.ts";
 import { evaluateSkipIf, SkipIfError } from "../src/core/facilitator/skipIf.ts";
 import { isAlive } from "../src/core/facilitator/Lock.ts";
@@ -440,6 +443,11 @@ describe("skip_if", () => {
 });
 
 describe("argv construction", () => {
+  const ARGV_BASE = {
+    prompt: "…", model: "sonnet", maxBudgetUsd: 3, workspaceCommands: ["npm run test"],
+    cwd: "/tmp", timeoutMs: 1000, yolo: false,
+  };
+
   test("--dangerously-skip-permissions appears only with --yolo", () => {
     const base = {
       prompt: "…", model: "sonnet", maxBudgetUsd: 3, workspaceCommands: ["npm run test"],
@@ -449,10 +457,92 @@ describe("argv construction", () => {
     expect(buildClaudeArgs({ ...base, yolo: true })).toContain("--dangerously-skip-permissions");
   });
 
+  test("--effort is absent unless the request sets one", () => {
+    expect(buildClaudeArgs(ARGV_BASE)).not.toContain("--effort");
+    expect(buildClaudeArgs({ ...ARGV_BASE, effort: null })).not.toContain("--effort");
+  });
+
+  for (const level of EFFORT_LEVELS) {
+    test(`--effort ${level} is passed as its own flag and value`, () => {
+      const argv = buildClaudeArgs({ ...ARGV_BASE, effort: level });
+      expect(argv[argv.indexOf("--effort") + 1]).toBe(level);
+    });
+  }
+
   test("the tool allowance is the file tools plus one Bash grant per workspace command", () => {
     expect(allowedTools(["npm run test", "dotnet build"])).toEqual([
       "Read", "Write", "Edit", "Glob", "Grep", "Bash(npm run test)", "Bash(dotnet build)",
     ]);
+  });
+});
+
+describe("--effort", () => {
+  /** The argv the fake `claude` was actually spawned with, for the first call. */
+  function spawnedArgv(argvLog: string): readonly string[] {
+    return JSON.parse((readFileSync(argvLog, "utf8").trim().split("\n")[0]) ?? "[]") as string[];
+  }
+
+  test("a stage's own `effort:` reaches the sub-agent", async () => {
+    const ws = workspace([{ ...(TWO_STAGE[0] as StageOptions), effort: "low" }, TWO_STAGE[1] as StageOptions]);
+    const argvLog = join(ws.root, "argv.log");
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS, FAKE_CLAUDE_ARGV_LOG: argvLog });
+
+    expect((await next(ws)).code).toBe(0);
+    const argv = spawnedArgv(argvLog);
+    expect(argv[argv.indexOf("--effort") + 1]).toBe("low");
+  });
+
+  test("a stage with no `effort:` spawns with no --effort flag at all", async () => {
+    const ws = workspace(TWO_STAGE);
+    const argvLog = join(ws.root, "argv.log");
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS, FAKE_CLAUDE_ARGV_LOG: argvLog });
+
+    expect((await next(ws)).code).toBe(0);
+    expect(spawnedArgv(argvLog)).not.toContain("--effort");
+  });
+
+  test("the CLI override wins over the stage default", async () => {
+    const ws = workspace([{ ...(TWO_STAGE[0] as StageOptions), effort: "low" }, TWO_STAGE[1] as StageOptions]);
+    const argvLog = join(ws.root, "argv.log");
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS, FAKE_CLAUDE_ARGV_LOG: argvLog });
+
+    expect((await next(ws, { effort: "xhigh" })).code).toBe(0);
+    const argv = spawnedArgv(argvLog);
+    expect(argv[argv.indexOf("--effort") + 1]).toBe("xhigh");
+    expect(argv).not.toContain("low");
+  });
+
+  test("the effort is recorded on agent.spawned and agent.result, so cost can be compared per level", async () => {
+    const ws = workspace([{ ...(TWO_STAGE[0] as StageOptions), effort: "low" }, TWO_STAGE[1] as StageOptions]);
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS, FAKE_CLAUDE_COST: "0.42" });
+
+    expect((await next(ws, { effort: "high" })).code).toBe(0);
+    const spawned = events(ws).find((e) => e.type === "agent.spawned");
+    const result = events(ws).find((e) => e.type === "agent.result");
+    expect(spawned?.payload).toMatchObject({ effort: "high" });
+    expect(result?.payload).toMatchObject({ effort: "high" });
+    expect(result?.cost_usd).toBe(0.42);
+  });
+
+  test("the CLI refuses a level that is not one of the five, before spawning anything", () => {
+    const parse = (value: string) => effortFlag(parseArgs(["--effort", value], ["effort"]));
+    expect(parse("low")).toBe("low");
+    expect(parse("max")).toBe("max");
+    expect(() => parse("turbo")).toThrow(UsageError);
+    expect(effortFlag(parseArgs([], ["effort"]))).toBeUndefined();
+  });
+
+  test("--prepare writes the effort into the bundle and says so", async () => {
+    const ws = workspace([{ ...(TWO_STAGE[0] as StageOptions), effort: "low" }, TWO_STAGE[1] as StageOptions]);
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS });
+
+    const outcome = await next(ws, { mode: "prepare" });
+    expect(outcome.code).toBe(0);
+    expect(outcome.lines.join("\n")).toContain("effort low");
+    const pending = JSON.parse(
+      readFileSync(join(ws.runDir, ".agent", "alpha", "pending.json"), "utf8"),
+    ) as { effort: string };
+    expect(pending.effort).toBe("low");
   });
 });
 

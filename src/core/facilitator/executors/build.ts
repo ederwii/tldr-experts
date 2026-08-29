@@ -152,6 +152,7 @@ class BuildSession {
       stage: this.ctx.stageId,
       expert: "developer",
       model: this.model(),
+      effort: this.ctx.effort,
       budget_usd: this.ctx.budgetUsd,
       max_budget_usd: cap,
       prompt: "prompt.md",
@@ -358,12 +359,14 @@ class BuildSession {
       story: story.planned.story.id,
       role: "developer",
       model: this.model(),
+      effort: this.ctx.effort,
       max_budget_usd: cap,
     }, 0, "developer");
 
     const agent = await spawnAgent({
       prompt: this.developerPrompt(story),
       model: this.model(),
+      effort: this.ctx.effort,
       maxBudgetUsd: cap,
       workspaceCommands: commands,
       tools: developerTools(commands),
@@ -449,6 +452,7 @@ class BuildSession {
       story: story.planned.story.id,
       role: "reviewer",
       model: this.model(),
+      effort: this.ctx.effort,
       max_budget_usd: cap,
     }, 0, "reviewer");
 
@@ -464,6 +468,7 @@ class BuildSession {
         dodResults: dod.map((r) => ({ command: r.command, exitCode: r.exitCode })),
       }),
       model: this.model(),
+      effort: this.ctx.effort,
       maxBudgetUsd: cap,
       workspaceCommands: [],
       tools: REVIEWER_TOOLS,

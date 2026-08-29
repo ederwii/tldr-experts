@@ -17,6 +17,7 @@ import {
 } from "../exitCodes.ts";
 import { boolFlag, numberFlag, parseArgs, stringFlag, UsageError } from "../argv.ts";
 import { workspaceRootFrom } from "../workspace.ts";
+import { effortFlag } from "../effort.ts";
 import { fail } from "../report.ts";
 import { runNext, type NextMode } from "../../core/facilitator/runNext.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
@@ -27,12 +28,12 @@ const INFORMATIONAL: readonly number[] = [EXIT_OK, EXIT_AWAITING_HUMAN];
 export const nextCommand: Command = {
   name: "next",
   summary: "Advance the active run to its next stage",
-  usage: "tldrx next [<run>] [--dry-run] [--prepare|--commit] [--model <m>] [--max-usd <n>] [--yolo] [--keep-worktrees] [--root <path>]",
+  usage: "tldrx next [<run>] [--dry-run] [--prepare|--commit] [--model <m>] [--effort <level>] [--max-usd <n>] [--yolo] [--keep-worktrees] [--root <path>]",
   subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     try {
-      const args = parseArgs(argv, ["run", "model", "max-usd", "root"]);
+      const args = parseArgs(argv, ["run", "model", "effort", "max-usd", "root"]);
       const root = workspaceRootFrom(args);
       const mode = resolveMode(args.flags.has("prepare"), args.flags.has("commit"));
       const runId = args.positionals[0] ?? stringFlag(args, "run");
@@ -43,6 +44,7 @@ export const nextCommand: Command = {
         dryRun: boolFlag(args, "dry-run"),
         mode,
         model: stringFlag(args, "model"),
+        effort: effortFlag(args),
         maxUsd: numberFlag(args, "max-usd"),
         yolo: boolFlag(args, "yolo"),
         keepWorktrees: boolFlag(args, "keep-worktrees"),

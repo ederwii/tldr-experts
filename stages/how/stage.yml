@@ -6,6 +6,12 @@ name: how
 title: How
 phase: 2
 model: opus
+# --effort for this stage's sub-agent (spec §2.3). The cost lever
+# `--max-budget-usd` is not: the budget flag only STOPS a turn already in flight.
+# `[assumption]` — How is where the thinking is. Every component must land on a
+# real path and every contract must survive contact with the code, so this is the
+# one stage where effort is bought deliberately rather than saved.
+effort: high
 budget_usd: 6
 
 inputs:

@@ -22,9 +22,10 @@ import { readExpertDocument } from "../experts/expertDocument.ts";
 import { agentDir } from "../facilitator/paths.ts";
 import { promptPath, readResult, writeBundle, writeRaw, PendingError, type PendingStage } from "../facilitator/pending.ts";
 import { spawnAgent } from "../facilitator/spawnAgent.ts";
+import type { EffortLevel } from "../schemas/stage.ts";
 import type { CompetencyEvidence } from "../init/competencyLevel.ts";
 import {
-  CODE_TASK, DEFAULT_TRAIN_USD, MIN_TRAIN_USD, RUNS_TASK,
+  CODE_TASK, DEFAULT_TRAIN_EFFORT, DEFAULT_TRAIN_USD, MIN_TRAIN_USD, RUNS_TASK,
   fromRunsRelPath, knowledgeRelPath, type TrainingMode, type TrainingTask,
 } from "./Training.ts";
 import {
@@ -57,6 +58,8 @@ export interface TrainOptions {
   readonly run: TrainingRunMode;
   readonly maxUsd?: number;
   readonly model?: string | null;
+  /** `--effort`. Undefined ⇒ `DEFAULT_TRAIN_EFFORT`. */
+  readonly effort?: EffortLevel | null;
   readonly yolo?: boolean;
   readonly actor: string;
   /** RFC3339 — `last_trained` and every log line. */
@@ -96,6 +99,7 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
     ]);
   }
   const share = round2(Math.max(MIN_TRAIN_USD, ceiling / agents));
+  const effort: EffortLevel = options.effort ?? DEFAULT_TRAIN_EFFORT;
 
   // --- the deterministic pre-pass ------------------------------------------
   const workspace = loadWorkspace(options.root);
@@ -138,7 +142,7 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
   if (options.run === "prepare") {
     const lines = [
       `prepared training for ${options.expert}/${area.id} (${options.mode}) — `
-        + `${String(prompts.length)} sub-agent(s), $${share.toFixed(2)} ceiling each`,
+        + `${String(prompts.length)} sub-agent(s), $${share.toFixed(2)} ceiling each, effort ${effort}`,
     ];
     for (const task of prompts) {
       const pending: PendingStage = {
@@ -148,6 +152,7 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
         stage: area.id,
         expert: options.expert,
         model: options.model ?? null,
+        effort,
         budget_usd: ceiling,
         max_budget_usd: share,
         prompt: relative(bundleRoot, promptPath(bundleRoot, task.key)),
@@ -199,6 +204,7 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
     const outcome = await spawnAgent({
       prompt: task.prompt,
       model: options.model ?? null,
+      effort,
       maxBudgetUsd: share,
       workspaceCommands: [...workspace.commands],
       yolo: options.yolo ?? false,
@@ -219,6 +225,7 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
       task: task.key,
       mode: options.mode,
       model: options.model ?? null,
+      effort,
       session_id: outcome.sessionId,
       max_budget_usd: share,
       outputs: outcome.envelope?.outputs ?? [],
@@ -239,6 +246,7 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
         task: task.key,
         mode: options.mode,
         model: task.model,
+        effort,
         session_id: task.sessionId,
         max_budget_usd: share,
         outputs: task.outputs,

@@ -41,6 +41,19 @@ export const DEFAULT_TRAIN_USD = 2.0;
  */
 export const MIN_TRAIN_USD = 0.25;
 
+/**
+ * `--effort` for a training sub-agent when the operator names none.
+ *
+ * `[assumption]` — nothing measures the quality/cost curve of training at each
+ * level yet. `medium` is taken because training is a READ-and-summarise job over
+ * a pre-selected, capped file set (≤40 files / 96 KB): the hard thinking was done
+ * by the deterministic pre-pass, so the sub-agent is not reasoning its way to the
+ * evidence, it is citing what it was handed. Revisit when `training.jsonl` holds
+ * runs at more than one level — which is why the level is now recorded on every
+ * line of it.
+ */
+export const DEFAULT_TRAIN_EFFORT = "medium" as const;
+
 /** How many candidate files may be inlined into one training prompt. */
 export const MAX_INLINE_FILES = 40;
 /** How many bytes of those files may be inlined. */

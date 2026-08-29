@@ -170,6 +170,7 @@ phase: 02-how
 experts: [architect]
 stack_experts: true
 model: sonnet
+effort: high
 budget_usd: 3.0
 timeout_s: 900
 dry_run_allowed: true
@@ -189,6 +190,7 @@ checks: [{id: claim-sources, on: post-write}, {id: schema, on: post-write},
 | `id` / `title` / `phase` | slug / str / `^0[1-5]-` | y | Identity and owning phase |
 | `experts` | slug[] | y | Expert folders loaded; empty ⇒ facilitator runs it inline |
 | `stack_experts` / `model` | bool / str | n (`true`) / y | Also load stack expertise for `run.repos`; per-stage model pin (Appendix A) |
+| `effort` | `low\|medium\|high\|xhigh\|max` | n (unset) | Passed to the sub-agent as `--effort`. **Unset ⇒ the flag is not passed at all** and the CLI uses its own default |
 | `budget_usd` | number >0 | y | Stage ceiling and the sub-agent's `--max-budget-usd` share |
 | `timeout_s` / `dry_run_allowed` | int >0 / bool | n (900 / `true`) | Wall clock for sub-agent and `cmd` checks `[assumption]`; `--dry-run` writes the handoff only |
 | `inputs.required` / `.optional` | path[] | y / n | **The only files the sub-agent gets**; `{repo}` expands per repo |
@@ -203,6 +205,20 @@ checks: [{id: claim-sources, on: post-write}, {id: schema, on: post-write},
 arbitrary shell from a stage file); expert folders are checked by `doctor`, not the write hook; ≤20 inputs,
 ≤10 outputs, ≤10 checks. The 20-input cap counts seed documents too — `run new --seed` stops declaring at 20, and the
 facilitator stops inlining at 20.
+
+**`effort` — the cost lever `budget_usd` is not.** `--max-budget-usd` STOPS a sub-agent after the turn it is already in;
+it cannot make a turn cheaper. Measured 2026-08-29: a 597 s training turn spent **$5.15 against a $1.50 ceiling** and
+was only then killed. `--effort` changes what the turn costs while it is being taken, which is the only lever that acts
+*before* the money is spent. So the two are set together and mean different things: `budget_usd` is what the stage may
+lose, `effort` is how hard it thinks per turn. The five levels are exactly what `claude --help` prints for `--effort`
+("Effort level for the current session (low, medium, high, xhigh, max)", read 2026-08-29); an unknown level is refused
+by the loader rather than dropped, because a silently-ignored `effort` spends at the default and looks like a saving.
+`tldrx next --effort <level>` and `tldrx expert train --effort <level>` override the stage file for one invocation, and
+the level chosen is written to `agent.spawned`/`agent.result` (and `training.jsonl`) beside the cost, so cost per level
+becomes a measurement rather than an argument. Shipped defaults — all `[assumption]`, none measured yet: what `medium`
+· how `high` · plan `medium` · build `high` · watch `low`, and `medium` for a training run. The rule behind them is
+that a stage which *reasons* (How, Build) buys effort and a stage which *transcribes* what an upstream pass already
+decided (Watch) does not.
 
 **`inputs.seed`.** A stage cannot name the run's seed documents: they differ per run. So it opts in
 (`inputs: {seed: true, …}`) and the facilitator reads the list off `run.yml` — the entries `run new --seed` added to

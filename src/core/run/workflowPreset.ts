@@ -17,6 +17,7 @@ import { parseYaml } from "../yaml.ts";
 import { isRecord } from "../schemas/validation.ts";
 import { PROJECT_FRAMEWORK_DIR, STAGES_DIR, WORKFLOWS_DIR } from "../paths.ts";
 import type { GateType } from "./RunFile.ts";
+import { EFFORT_LEVELS, isEffortLevel, type EffortLevel } from "../schemas/stage.ts";
 
 /** The five phase folders of spec §1, in order. A numeric `phase:` indexes this. */
 export const PHASE_IDS = ["01-what", "02-how", "03-plan", "04-build", "05-watch"] as const;
@@ -39,6 +40,8 @@ export interface PlannedStage {
   readonly title: string;
   readonly phase: string;
   readonly model: string | null;
+  /** `--effort` for this stage's sub-agent. Null ⇒ the flag is not passed at all. */
+  readonly effort: EffortLevel | null;
   readonly experts: readonly string[];
   readonly budget_usd: number;
   readonly timeout_s: number;
@@ -129,6 +132,7 @@ function loadStage(
     title: str(doc.title) ?? id,
     phase,
     model: str(doc.model),
+    effort: normaliseEffort(overrides.effort ?? doc.effort, path),
     experts,
     budget_usd: budget,
     timeout_s: typeof doc.timeout_s === "number" ? doc.timeout_s : DEFAULT_TIMEOUT_S,
@@ -140,6 +144,19 @@ function loadStage(
     questionsPath: normaliseQuestionsPath(doc.questions, phase),
     source: path,
   };
+}
+
+/**
+ * A typo here would silently spend at the CLI's default effort — which is exactly
+ * the cost the flag exists to control — so an unrecognised level is refused, not
+ * dropped. Absent stays absent: the flag is then never passed.
+ */
+function normaliseEffort(value: unknown, path: string): EffortLevel | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (!isEffortLevel(value)) {
+    throw new PresetError(`${path}: effort must be one of ${EFFORT_LEVELS.join(" | ")}, got ${JSON.stringify(value)}`);
+  }
+  return value;
 }
 
 function normalisePhase(value: unknown, index: number, path: string): string {

@@ -77,6 +77,7 @@ export async function watchExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
       const outcome = await spawnAgent({
         prompt: prompts[i] ?? "",
         model: ctx.model ?? ctx.spec.planned.model,
+        effort: ctx.effort,
         maxBudgetUsd: agentShare(ctx, features.length),
         workspaceCommands: [...loadWorkspace(ctx.root).commands],
         yolo: ctx.yolo,
@@ -168,6 +169,7 @@ function prepare(
       stage: ctx.stageId,
       expert: ctx.spec.planned.experts[0] ?? null,
       model: ctx.model ?? ctx.spec.planned.model,
+      effort: ctx.effort,
       budget_usd: ctx.budgetUsd,
       max_budget_usd: agentShare(ctx, features.length),
       prompt: relative(ctx.runDir, promptPath(ctx.runDir, key)),

@@ -6,6 +6,12 @@ name: what
 title: What
 phase: 1
 model: sonnet
+# --effort for this stage's sub-agent (spec §2.3). The cost lever
+# `--max-budget-usd` is not: the budget flag only STOPS a turn already in flight.
+# `[assumption]` — What is elicitation over a small, capped input set: read
+# the seeds, name what is in and out. Medium is the level that reads carefully
+# without paying to reason about a design it has not been asked for.
+effort: medium
 budget_usd: 4
 
 # `seed: true` — this stage ALSO receives the run's seed documents: the files

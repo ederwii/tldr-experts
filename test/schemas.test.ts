@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { FILE_KINDS, validate, type FileKind } from "../src/core/schemas/index.ts";
+import { EFFORT_LEVELS, FILE_KINDS, isEffortLevel, validate, type FileKind } from "../src/core/schemas/index.ts";
 import { readYamlFile } from "../src/core/yaml.ts";
 import { FRAMEWORK_ROOT, STAGES_DIR, TEMPLATES_DIR, WORKFLOWS_DIR } from "../src/core/paths.ts";
 
@@ -15,6 +15,12 @@ const TEMPLATE_KINDS: ReadonlyArray<readonly [string, FileKind]> = [
   ["env.yml", "env"],
   ["waves.yml", "waves"],
 ];
+
+/** The minimum a stage.yml must carry — every optional key deliberately absent. */
+const STAGE_DOC = {
+  name: "what", title: "What", phase: 1, inputs: [], outputs: [], experts: [],
+  model: "sonnet", budget_usd: 1, gate: { type: "human-approval" },
+} as const;
 
 function issueText(kind: FileKind, input: unknown): string {
   return validate(kind, input).issues.map((i) => `${i.path}: ${i.message}`).join("; ");
@@ -144,11 +150,44 @@ describe("validators reject bad enum values", () => {
     expect(check.issues.some((i) => i.path === "methodology")).toBe(true);
   });
 
+  test("stage effort outside the five --effort levels", () => {
+    const doc = {
+      ...STAGE_DOC, effort: "turbo",
+    };
+    const check = validate("stage", doc);
+    expect(check.ok).toBe(false);
+    expect(check.issues.some((i) => i.path === "effort")).toBe(true);
+  });
+
   test("competency level outside 0-5", () => {
     const doc = { schema_version: 0, expert: "e", areas: [{ area: "a", level: 9, evidence: [] }] };
     const check = validate("competencies", doc);
     expect(check.ok).toBe(false);
     expect(check.issues.some((i) => i.path === "areas[0].level")).toBe(true);
+  });
+});
+
+describe("stage effort is optional and enum-checked", () => {
+  test("a stage with no effort at all is valid — the flag is simply not passed", () => {
+    expect(issueText("stage", STAGE_DOC)).toBe("");
+  });
+
+  for (const level of EFFORT_LEVELS) {
+    test(`effort: ${level} is accepted`, () => {
+      expect(issueText("stage", { ...STAGE_DOC, effort: level })).toBe("");
+    });
+  }
+
+  test("the accepted set is exactly what `claude --help` prints for --effort", () => {
+    expect([...EFFORT_LEVELS]).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  });
+
+  test("every shipped stage declares an effort, and it is a legal level", async () => {
+    for (const file of [...new Bun.Glob("*/stage.yml").scanSync(STAGES_DIR)].sort()) {
+      const doc = (await readYamlFile(join(STAGES_DIR, file))) as { effort?: unknown };
+      expect({ file, effort: doc.effort }).toEqual({ file, effort: expect.any(String) });
+      expect({ file, legal: isEffortLevel(doc.effort) }).toEqual({ file, legal: true });
+    }
   });
 });
 

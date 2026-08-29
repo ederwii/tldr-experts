@@ -7,6 +7,25 @@ import {
 export const GATE_TYPES = ["human-approval", "checks-green", "none"] as const;
 export type GateType = (typeof GATE_TYPES)[number];
 
+/**
+ * `--effort <level>` on the Claude CLI — "Effort level for the current session".
+ * The five values are the ones `claude --help` prints on this machine (read
+ * 2026-08-29, verbatim: `low, medium, high, xhigh, max`); nothing else is
+ * accepted, for the same reason `spawnAgent` refuses a flag nobody has seen in
+ * `--help`.
+ *
+ * It is the cost lever `--max-budget-usd` is not: the budget flag STOPS a run
+ * after the turn it is already in (measured: a 597 s training turn spent $5.15
+ * against a $1.50 ceiling), so it cannot make a turn cheaper — only end it late.
+ * Effort changes what the turn costs in the first place.
+ */
+export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type EffortLevel = (typeof EFFORT_LEVELS)[number];
+
+export function isEffortLevel(value: unknown): value is EffortLevel {
+  return typeof value === "string" && (EFFORT_LEVELS as readonly string[]).includes(value);
+}
+
 export interface StageGate {
   readonly type: GateType;
   readonly requires?: readonly string[];
@@ -20,6 +39,8 @@ export interface Stage {
   readonly outputs: readonly string[];
   readonly experts: readonly string[];
   readonly model: string;
+  /** Optional; absent means the CLI's own default for the session. */
+  readonly effort?: EffortLevel;
   readonly budget_usd: number;
   readonly gate: StageGate;
   readonly checks?: readonly string[];
@@ -41,6 +62,9 @@ export function validateStage(input: unknown): ValidationResult {
   requireNumber(doc.phase, "phase", issues);
   requireString(doc.model, "model", issues);
   requireNumber(doc.budget_usd, "budget_usd", issues);
+  // Optional: `requireEnum` returns early on `undefined`, and `effort` is not in
+  // the required-key list above.
+  requireEnum(doc.effort, EFFORT_LEVELS, "effort", issues);
   requireArray(doc.inputs, "inputs", issues);
   requireArray(doc.outputs, "outputs", issues);
   requireArray(doc.experts, "experts", issues);

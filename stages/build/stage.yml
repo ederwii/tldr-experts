@@ -15,6 +15,11 @@ name: build
 title: Build
 phase: 4
 model: sonnet
+# --effort for this stage's sub-agent (spec §2.3). The cost lever
+# `--max-budget-usd` is not: the budget flag only STOPS a turn already in flight.
+# `[assumption]` — Build writes code that a DoD and a reviewer will judge. A cheap
+# turn here is not a saving: it is a `changes` verdict and a second, paid attempt.
+effort: high
 budget_usd: 9
 timeout_s: 1800
 # Branches and commits are not revertible by a flag, so a dry run is refused
