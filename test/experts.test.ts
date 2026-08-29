@@ -44,19 +44,27 @@ function evidence(kind: EvidenceKind, count: number, days: number, sameSrc = fal
   }));
 }
 
+/** One `run` row — a command actually executed, cited with the §2.8 `cmd` production. */
+function runRow(days: number, command = "bun test"): CompetencyEvidence {
+  return { kind: "run", src: `$ ${command} → exit 0`, at: daysAgo(days) };
+}
+
 describe("the §2.6 level formula", () => {
   test("no evidence is level 0 — an untrained expert says so", () => {
     expect(competencyLevel([], NOW)).toBe(0);
   });
 
-  // W thresholds: 0 if W<0.5 · 1 if <1.5 · 2 if <3 · 3 if <6 · 4 if <12 · else 5.
+  // W thresholds: 0 if W<0.5 · 1 if <1.5 · 2 if <3 · 3 if <6 · 4 if <20 · else 5.
+  // Rows without a `run` are additionally capped at 3 — see the run-gate block below.
   const table: readonly { readonly why: string; readonly items: CompetencyEvidence[]; readonly level: number }[] = [
     { why: "one fresh doc, W=0.5", items: evidence("doc", 1, 0), level: 1 },
     { why: "one fresh code, W=1.0", items: evidence("code", 1, 0), level: 1 },
     { why: "two fresh code, W=2.0", items: evidence("code", 2, 0), level: 2 },
     { why: "four fresh code, W=4.0", items: evidence("code", 4, 0), level: 3 },
-    { why: "six fresh code, W=6.0", items: evidence("code", 6, 0), level: 4 },
-    { why: "twelve fresh code, W=12.0", items: evidence("code", 12, 0), level: 5 },
+    { why: "six fresh code, W=6.0, but nothing was run", items: evidence("code", 6, 0), level: 3 },
+    { why: "twelve fresh code, W=12.0, but nothing was run", items: evidence("code", 12, 0), level: 3 },
+    { why: "six fresh code plus one run, W=7.0", items: [...evidence("code", 6, 0), runRow(0)], level: 4 },
+    { why: "twenty fresh code plus one run, W=21.0, two kinds", items: [...evidence("code", 20, 0), runRow(0)], level: 5 },
     { why: "recency band 31-90d halves and more (0.6)", items: evidence("code", 2, 31), level: 1 },
     { why: "recency band 91-365d (0.3): W=0.3 is below the first threshold", items: evidence("code", 1, 91), level: 0 },
     { why: "answer weight 0.8: two fresh answers, W=1.6", items: evidence("answer", 2, 0), level: 2 },
@@ -71,15 +79,53 @@ describe("the §2.6 level formula", () => {
   test("staleness cap: newest evidence older than 180d caps the level at 2", () => {
     // 40 code items would be W=4.0 at 0.1 recency -> level 3 without the cap.
     expect(competencyLevel(evidence("code", 40, 400), NOW)).toBe(2);
-    // And a W big enough for level 5 is still capped.
+    // And a W big enough for level 5 is still capped — with a `run` row or without one.
     expect(competencyLevel(evidence("code", 200, 400), NOW)).toBe(2);
-    // 180 days exactly is NOT stale.
-    expect(competencyLevel(evidence("code", 40, 180), NOW)).toBe(5);
+    expect(competencyLevel([...evidence("code", 200, 400), runRow(400)], NOW)).toBe(2);
+    // 180 days exactly is NOT stale: W=12.3 clears the fourth threshold and the run row
+    // clears the run cap, so the level lands at 4 rather than the stale 2.
+    expect(competencyLevel([...evidence("code", 40, 180), runRow(180)], NOW)).toBe(4);
   });
 
   test("distinct-source cap: ten citations of one line are worth one source", () => {
     expect(competencyLevel(evidence("code", 10, 0, true), NOW)).toBe(1);
-    expect(competencyLevel(evidence("code", 10, 0, false), NOW)).toBe(4);
+    expect(competencyLevel(evidence("code", 10, 0, false), NOW)).toBe(3);
+  });
+});
+
+describe("stars above 3 are earned by running something (spec §2.6)", () => {
+  const table: readonly { readonly why: string; readonly items: CompetencyEvidence[]; readonly level: number }[] = [
+    { why: "12 fresh code rows, nothing executed — the old ladder said 5",
+      items: evidence("code", 12, 0), level: 3 },
+    { why: "the same 12 plus one run row", items: [...evidence("code", 12, 0), runRow(0)], level: 4 },
+    { why: "20 fresh code plus one run: W=21, two kinds",
+      items: [...evidence("code", 20, 0), runRow(0)], level: 5 },
+    { why: "25 fresh code rows and still nothing executed", items: evidence("code", 25, 0), level: 3 },
+    { why: "one run row alone is necessary, not sufficient — W=1.0 is level 1",
+      items: [runRow(0)], level: 1 },
+    { why: "level 5 needs two kinds: 25 run rows are one kind, however heavy",
+      items: evidence("run", 25, 0), level: 4 },
+    { why: "the staleness cap outranks the run row", items: [...evidence("code", 200, 400), runRow(400)], level: 2 },
+    { why: "the source cap outranks everything: 25 readings of one line plus one run is two sources",
+      items: [...evidence("code", 25, 0, true), runRow(0)], level: 2 },
+  ];
+
+  for (const row of table) {
+    test(`${row.why} -> level ${row.level}`, () => {
+      expect(competencyLevel(row.items, NOW)).toBe(row.level);
+    });
+  }
+
+  test("a real read-only expert file computes 3, not 5", () => {
+    // The fixture is a verbatim copy of a user's competencies.yml (2026-08-29):
+    // 15 `code` + 2 `test` rows, all from one reading session, all distinct srcs.
+    const path = join(FRAMEWORK_ROOT, "test", "fixtures", "competencies", "read-only-expert.yml");
+    const doc = parseYaml(readFileSync(path, "utf8")) as { areas: { evidence: unknown }[] };
+    const rows = readEvidenceRows(doc.areas[0]!.evidence);
+    expect(rows.evidence).toHaveLength(17);
+    expect(rows.evidence.some((item) => item.kind === "run")).toBe(false);
+    expect(new Set(rows.evidence.map((item) => item.src)).size).toBe(17);
+    expect(competencyLevel(rows.evidence, NOW)).toBe(3);
   });
 });
 
