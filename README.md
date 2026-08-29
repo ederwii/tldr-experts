@@ -1,6 +1,6 @@
 # tldr-experts
 
-**Status: pre-alpha 0.0.1 — the v0 loop is complete; the Build/Watch phases and
+**Status: **alpha** — the v0 loop (What → How → Plan, hooks, distill, seed, budgets) is released; the Build and Watch phases, the live dashboard and expert training are landing wave by wave (see `docs/ROADMAP.md`; released versions in `CHANGELOG.md`).
 expert training are v1.** Every command in the table below is implemented and
 verified by running it. Nothing here prints success for work it did not do: a
 command that cannot do the thing exits non-zero and says which thing.

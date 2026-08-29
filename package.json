@@ -1,7 +1,7 @@
 {
   "name": "tldr-experts",
   "version": "0.1.0",
-  "description": "A lightweight, file-based AI development workflow framework. Pre-alpha.",
+  "description": "A lightweight, file-based AI development workflow framework. Alpha.",
   "license": "MIT",
   "author": "Alan Martinez",
   "repository": {
