@@ -1,0 +1,12 @@
+export { findWorkspaceRoot, resolveWorkspaceRoot } from "./workspaceRoot.ts";
+export { loadExperts, loadExpert, expertsDir, expertDir, COMPETENCIES_FILE, EXPERT_FILE, EXPERTS_DIRNAME } from "./loadExperts.ts";
+export { starChart, starChartLine, stars, evidenceNote, MAX_LEVEL } from "./starChart.ts";
+export { renderExpertList, expertListJson, driftWarnings } from "./renderExpertList.ts";
+export { createExpert, planAreas, renderExpertMarkdown, EXPERT_NAME_RE } from "./createExpert.ts";
+export { readExpertDocument, splitFrontMatter, section } from "./expertDocument.ts";
+export { renderTrainPrompt, isTrainMode, TRAIN_MODES } from "./trainPrompt.ts";
+export { EXPERT_STATUSES } from "./ExpertRecord.ts";
+export type { ExpertRecord, AreaRecord, ExpertStatus } from "./ExpertRecord.ts";
+export type { CreateExpertOptions, CreatedExpert } from "./createExpert.ts";
+export type { ExpertDocument } from "./expertDocument.ts";
+export type { TrainMode, TrainPromptInput, TrainRepo } from "./trainPrompt.ts";

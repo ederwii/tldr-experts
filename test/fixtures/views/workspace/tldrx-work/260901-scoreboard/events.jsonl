@@ -1,0 +1,21 @@
+{"ts":"2026-09-01T09:00:00Z","run":"260901-scoreboard","stage":null,"type":"run.created","actor":"facilitator","cost_usd":0,"payload":{"scope":"feature"}}
+{"ts":"2026-09-01T09:01:00Z","run":"260901-scoreboard","stage":null,"type":"phase.started","actor":"facilitator","cost_usd":0,"payload":{"phase":"01-what"}}
+{"ts":"2026-09-01T09:02:00Z","run":"260901-scoreboard","stage":"what","type":"stage.started","actor":"facilitator","cost_usd":0,"payload":{"phase":"01-what"}}
+{"ts":"2026-09-01T09:40:00Z","run":"260901-scoreboard","stage":"what","type":"question.asked","actor":"product","cost_usd":0,"payload":{"q":"Q1","question":"Are rankings per tenant or global?"}}
+{"ts":"2026-09-01T09:40:01Z","run":"260901-scoreboard","stage":"what","type":"question.asked","actor":"product","cost_usd":0,"payload":{"q":"Q2","question":"How far back does the scoreboard reach?"}}
+{"ts":"2026-09-01T09:40:02Z","run":"260901-scoreboard","stage":"what","type":"question.asked","actor":"product","cost_usd":0,"payload":{"q":"Q3","question":"Does the mobile app need paging beyond the top 50?"}}
+{"ts":"2026-09-01T10:12:00Z","run":"260901-scoreboard","stage":"what","type":"question.answered","actor":"alan","cost_usd":0,"payload":{"q":"Q1","answer":"Global, same as Places","fact":"F021"}}
+{"ts":"2026-09-01T10:12:01Z","run":"260901-scoreboard","stage":"what","type":"fact.added","actor":"hook:answer-capture","cost_usd":0,"payload":{"fact":"F021","q":"Q1"}}
+{"ts":"2026-09-01T10:30:00Z","run":"260901-scoreboard","stage":"what","type":"agent.result","actor":"product","cost_usd":1.6,"payload":{"phase":"01-what","task":"t1","model":"sonnet"}}
+{"ts":"2026-09-01T10:55:00Z","run":"260901-scoreboard","stage":"what","type":"agent.result","actor":"product","cost_usd":0.8,"payload":{"phase":"01-what","task":"t2","model":"sonnet"}}
+{"ts":"2026-09-01T10:56:00Z","run":"260901-scoreboard","stage":"what","type":"gate.requested","actor":"facilitator","cost_usd":0,"payload":{"phase":"01-what"}}
+{"ts":"2026-09-01T11:05:00Z","run":"260901-scoreboard","stage":"what","type":"gate.rejected","actor":"alan","cost_usd":0,"payload":{"note":"success metrics are not measurable — propose stage: success-metrics-review"}}
+{"ts":"2026-09-01T11:10:00Z","run":"260901-scoreboard","stage":"what","type":"stage.started","actor":"facilitator","cost_usd":0,"payload":{"phase":"01-what","retry":true}}
+{"ts":"2026-09-01T11:38:00Z","run":"260901-scoreboard","stage":"what","type":"gate.approved","actor":"alan","cost_usd":0,"payload":{"note":"good now"}}
+{"ts":"2026-09-01T11:40:00Z","run":"260901-scoreboard","stage":"what","type":"stage.done","actor":"facilitator","cost_usd":0,"payload":{"phase":"01-what"}}
+{"ts":"2026-09-01T11:41:00Z","run":"260901-scoreboard","stage":null,"type":"phase.done","actor":"facilitator","cost_usd":0,"payload":{"phase":"01-what"}}
+{"ts":"2026-09-01T13:00:00Z","run":"260901-scoreboard","stage":"how","type":"stage.started","actor":"facilitator","cost_usd":0,"payload":{"phase":"02-how"}}
+{"ts":"2026-09-01T14:10:00Z","run":"260901-scoreboard","stage":"how","type":"agent.result","actor":"architect","cost_usd":2.61,"payload":{"phase":"02-how","task":"t1","model":"sonnet"}}
+{"ts":"2026-09-01T14:12:00Z","run":"260901-scoreboard","stage":"how","type":"check.failed","actor":"hook:claim-sources","cost_usd":0,"payload":{"check":"claim-sources","detail":"2 unsourced bullets in 02-how/handoff.md"}}
+{"ts":"2026-09-01T14:14:00Z","run":"260901-scoreboard","stage":"how","type":"budget.warned","actor":"facilitator","cost_usd":0,"payload":{"message":"phase 02-how is at 87% of its $3.00 ceiling"}}
+{"ts":"2026-09-01T14:18:00Z","run":"260901-scoreboard","stage":"how","type":"gate.requested","actor":"facilitator","cost_usd":0,"payload":{"phase":"02-how"}}

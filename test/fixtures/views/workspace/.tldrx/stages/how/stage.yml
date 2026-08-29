@@ -1,0 +1,13 @@
+version: 1
+id: how
+title: "Design and contracts"
+phase: 02-how
+experts: [architect]
+model: sonnet
+budget_usd: 3.0
+inputs: {required: [], optional: []}
+outputs:
+  - {path: "02-how/handoff.md", sections: [Findings, Decisions, Unknowns, "Evidence ledger"]}
+questions: {path: "02-how/questions.md", max: 8}
+gate: {type: approve, approvers: 1}
+checks: [{id: schema, on: post-write}]

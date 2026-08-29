@@ -1,0 +1,13 @@
+version: 1
+id: what
+title: "Intent, scope and success metrics"
+phase: 01-what
+experts: [product]
+model: sonnet
+budget_usd: 1.0
+inputs: {required: [], optional: []}
+outputs:
+  - {path: "01-what/handoff.md", sections: [Findings, Decisions, Unknowns, "Evidence ledger"]}
+questions: {path: "01-what/questions.md", max: 2}
+gate: {type: approve, approvers: 1}
+checks: []
