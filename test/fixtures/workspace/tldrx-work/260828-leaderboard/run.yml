@@ -1,0 +1,28 @@
+version: 1
+run: 260828-leaderboard
+title: "Player leaderboard"
+scope: feature
+workflow: feature
+repos: [api, lab]
+created_at: 2026-08-28T09:04:00Z
+updated_at: 2026-08-28T14:31:52Z
+status: awaiting_gate
+cursor: {phase: 02-how, stage: contracts, task: null}
+budget: {ceiling_usd: 25.0, spent_usd: 3.75, per_agent_max_usd: 3.0}
+phases:
+  - id: 01-what
+    status: done
+    stages:
+      - {id: intent, status: done, expert: product, model: sonnet, budget_usd: 2.0, cost_usd: 1.14,
+         started_at: 2026-08-28T09:04:10Z, ended_at: 2026-08-28T09:19:44Z,
+         inputs: [], outputs: ["01-what/handoff.md"],
+         gate: {type: approve, status: approved, by: alan, at: 2026-08-28T09:41:02Z, note: ""},
+         tasks: []}
+  - id: 02-how
+    status: awaiting_gate
+    stages:
+      - {id: contracts, status: awaiting_gate, expert: architect, model: sonnet, budget_usd: 3.0, cost_usd: 2.61,
+         started_at: 2026-08-28T13:50:00Z, ended_at: 2026-08-28T14:31:40Z,
+         inputs: [], outputs: ["02-how/handoff.md"],
+         gate: {type: approve, status: pending, by: null, at: null, note: ""},
+         tasks: []}

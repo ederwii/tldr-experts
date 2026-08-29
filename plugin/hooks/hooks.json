@@ -1,9 +1,9 @@
 {
-  "description": "tldrx v0 — all hooks wired, all INERT. Every handler reads stdin, logs to stderr and exits 0 (allow). Shape verified from https://code.claude.com/docs/en/hooks.md: top-level `hooks` map keyed by event name, each entry { matcher?, hooks: [ { type, command, args?, timeout? } ] }. Exec form (`command` + `args`) and the ${CLAUDE_PLUGIN_ROOT} variable are both from that page. NOTE: the status line is NOT a hook event — it is the `statusLine` settings key, and a plugin settings.json only supports `agent` and `subagentStatusLine`. Wire it yourself; see plugin/README.md.",
+  "description": "tldrx v0 hooks — LIVE. Shape verified from https://code.claude.com/docs/en/hooks.md: top-level `hooks` map keyed by event name, each entry { matcher?, hooks: [ { type, command, args?, timeout? } ] }. Exec form (`command` + `args`) and ${CLAUDE_PLUGIN_ROOT} are from that page. Only PreToolUse can deny, and it denies by printing {\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"…\"}} and exiting 0 — never by an exit code. Every hook but DoD-gate fails OPEN. NOTE: the status line is NOT a hook event — it is the `statusLine` settings key, and a plugin settings.json only supports `agent` and `subagentStatusLine`. Wire it yourself; see plugin/README.md.",
   "hooks": {
-    "PostToolUse": [
+    "PreToolUse": [
       {
-        "_note": "claim-sources — concept §8: every Findings/Decisions bullet in tldrx-work/**/*.md must carry [src: …].",
+        "_note": "claim-sources (spec §4) — the gate. Denies a handoff under tldrx-work/ whose Findings/Decisions/Unknowns/Evidence-ledger bullets do not each end with a resolvable [src: …] token.",
         "matcher": "Write|Edit",
         "hooks": [
           {
@@ -15,21 +15,7 @@
         ]
       },
       {
-        "_note": "dod-gate — concept §8: a story is done only when this hook re-ran its command block with exit 0.",
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bun",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/../src/hooks/dod-gate.ts"],
-            "timeout": 600
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "_note": "no-reask — concept §1.2: reject a question whose subject already exists in memory/facts.yml.",
+        "_note": "no-re-ask (spec §4, concept §1.2) — denies a NEW open question in tldrx-work/**/questions.md whose subject already has a non-retired facts.yml row (Jaccard >= 0.6 on >=4-char tokens, same area).",
         "matcher": "Write|Edit",
         "hooks": [
           {
@@ -41,8 +27,20 @@
         ]
       },
       {
-        "_note": "budget-gate — concept §8: refuse a stage the run cannot afford; cap each sub-agent. TODO(verify): `Task` is the tool name the docs pages fetched for this skeleton never spell out for subagent spawns; confirm against the tools reference before this hook is allowed to block.",
-        "matcher": "Task",
+        "_note": "DoD-gate (spec §4, concept §8) — re-runs every command in a story's fenced ```dod block, in its repo, and denies unless each exits 0. This hook is not <50 ms by design, and it is the one hook that fails CLOSED.",
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/../src/hooks/dod-gate.ts"],
+            "timeout": 960
+          }
+        ]
+      },
+      {
+        "_note": "budget-gate (spec §4) — matcher is Bash, because the money is spent by `claude -p …` / `tldrx next`, which is a Bash command with the estimate in tool_input.command. The earlier `Task` matcher was a guess and is dropped: nothing in the verified docs says a subagent spawn arrives here with a budget to check.",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
@@ -53,9 +51,35 @@
         ]
       }
     ],
-    "UserPromptSubmit": [
+    "PostToolUse": [
       {
-        "_note": "answer-capture — concept §2/§13: capture interview answers to memory/facts.yml with provenance. UserPromptSubmit does not support a `matcher` (verified in the hooks event table).",
+        "_note": "answer-capture (spec §2.7/§4) — writes the answer footer, the facts.yml row and the question.answered event for every block that is `status: open` with a non-empty [Answer]:. Never blocks; echoes one line of additionalContext.",
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/../src/hooks/answer-capture.ts"],
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "_note": "claim-sources twin (spec §4: 'a PostToolUse twin re-checks and feeds back only'). Same script, same checks; on PostToolUse it can only report, so it emits additionalContext instead of a denial.",
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/../src/hooks/claim-sources.ts"],
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "FileChanged": [
+      {
+        "_note": "answer-capture again — a human editing questions.md in an editor never goes through Write/Edit. Matcher omitted: FileChanged's matcher support is not in the verified docs, so the script filters on the path itself.",
         "hooks": [
           {
             "type": "command",
@@ -68,7 +92,7 @@
     ],
     "SessionStart": [
       {
-        "_note": "session-start — concept §3: print one 'where we are' line. Matcher omitted so it fires for every start reason (startup, resume, clear, compact, fork).",
+        "_note": "session-start (concept §3) — up to three lines of 'where we are' from the newest non-terminal run.yml, injected as additionalContext. Matcher omitted so it fires for every start reason (startup, resume, clear, compact, fork).",
         "hooks": [
           {
             "type": "command",
