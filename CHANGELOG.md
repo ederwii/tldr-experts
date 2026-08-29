@@ -237,12 +237,17 @@ moment `competencies.yml` does.
 - **`run.yml` gains an optional `triage: {split, depends_on}` block**, written only by
   `seed apply`. Absent everywhere else, so an untriaged `run.yml` is byte-identical to
   what it was.
-- Measured on a real 24-document design folder (`~/aparece-v2/docs/domain-design`,
-  2026-08-29): `seed: 24 files, ~44k tokens — above the 20k threshold`. Its 152 KB
-  inventory document cites **294** distinct path-like tokens and **0** of them
-  resolve — the repo is a rewrite, the paths are the old system's — so it is *not*
-  flagged code-derived. The heuristic resolving before it counts is what stops that
-  from being a false positive.
+- Measured on a real design folder (`~/aparece-v2/docs/domain-design`, 2026-08-29
+  16:25 local): `seed: 31 files, ~66k tokens — above the 20k threshold`. Both sides
+  of the code-derived heuristic fired correctly on it. The 152 KB legacy inventory
+  document cites **294** distinct path-like tokens and **0** of them resolve — that
+  repo is a rewrite and those paths belong to the system it replaced — so it is
+  *not* flagged; a rule that counted citations instead of resolving them would have
+  called it code-derived and been wrong. `ADR-D005-ORDERING.md`, written against the
+  current tree, cites 12 and **8 resolve** (`src/Aparece.Platform/Outbox/OutboxMessage.cs`
+  and friends), so it *is*. An earlier reading the same afternoon said 24 files /
+  ~44k tokens; the folder gained seven ADRs between the two runs, which is what a
+  live design folder does and why the verdict is printed rather than remembered.
 
 ## 0.2.0 — 2026-08-29
 
