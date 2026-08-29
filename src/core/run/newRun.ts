@@ -269,7 +269,7 @@ export function createRun(options: NewRunOptions): NewRunOutcome {
       const handoffCheck = validateHandoff(handoff, srcCtx);
       if (!handoffCheck.ok) {
         throw new NewRunError(
-          `distilled handoff is invalid: ${describeHandoff(handoffCheck.missingSections, handoffCheck.unsourced, handoffCheck.unresolved)}`,
+          `distilled handoff is invalid: ${describeHandoff(handoffCheck.missingSections, handoffCheck.emptySections, handoffCheck.unsourced, handoffCheck.unresolved)}`,
         );
       }
 
@@ -481,10 +481,14 @@ function assertValid(what: string, validation: { ok: boolean; issues: readonly {
 
 function describeHandoff(
   missing: readonly string[],
+  empty: readonly { name: string; line: number }[],
   unsourced: readonly number[],
   unresolved: readonly { line: number; message: string }[],
 ): string {
   if (missing.length > 0) return `missing section(s) ${missing.join(", ")}`;
+  if (empty.length > 0) {
+    return `section(s) with no list items: ${empty.map((s) => `${s.name} (L${String(s.line)})`).join(", ")}`;
+  }
   if (unsourced.length > 0) return `unsourced bullet(s) on line(s) ${unsourced.join(", ")}`;
   return unresolved[0]?.message ?? "unknown problem";
 }

@@ -40,9 +40,12 @@
 
 ## Evidence ledger
 
-| # | Source | Kind | What it establishes |
-|---|--------|------|---------------------|
-| 1 | `<path:line \| url \| Q-id>` | file / doc / answer / command output | … |
+> Every source cited above, once, with what it proved. **List items, not a table**
+> — like the three sections above, this one is checked, and each of the four must
+> hold at least one item. Nothing to say? `- none [src: absent:<what you looked at>]`.
+
+- … what this file establishes … `[src: <repo>:<path>:<line>]`
+- … what this command proved … `[src: $ <command> → exit 0]`
 
 ## Confidence
 

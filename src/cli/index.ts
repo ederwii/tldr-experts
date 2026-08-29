@@ -16,6 +16,7 @@ import { runCommand } from "./commands/run.ts";
 import { nextCommand } from "./commands/next.ts";
 import { answerCommand } from "./commands/answer.ts";
 import { approveCommand } from "./commands/approve.ts";
+import { budgetCommand } from "./commands/budget.ts";
 import { rejectCommand } from "./commands/reject.ts";
 import { mapCommand } from "./commands/map.ts";
 import { expertCommand } from "./commands/expert.ts";
@@ -34,6 +35,7 @@ export const COMMANDS: readonly Command[] = [
   answerCommand,
   approveCommand,
   rejectCommand,
+  budgetCommand,
   mapCommand,
   expertCommand,
   dashboardCommand,

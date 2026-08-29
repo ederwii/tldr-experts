@@ -11,6 +11,8 @@ export type { WorkflowPreset, PlannedStage, PlannedCheck } from "./workflowPrese
 export { createRun, planBudget, NewRunError, SLUG_RE, yymmdd, rfc3339, titleFromSlug } from "./newRun.ts";
 export type { NewRunOptions, NewRunOutcome } from "./newRun.ts";
 export { buildStatus, renderStatus, whatIsWaiting, bar } from "./runStatus.ts";
+export { stageAttempts, renderAttempts } from "./attempts.ts";
+export type { StageAttempts } from "./attempts.ts";
 export type { RunStatusView, PhaseProgress, Waiting } from "./runStatus.ts";
 export { approve, reject, GateError } from "./gates.ts";
 export type { ApproveOutcome, RejectOutcome, GateContext } from "./gates.ts";

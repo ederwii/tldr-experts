@@ -12,9 +12,13 @@ import { validateCompetencies } from "./competencies.ts";
 import { validateEnv } from "./env.ts";
 import { validateProcess } from "./process.ts";
 import { validateBudget } from "./budget.ts";
+import { validateStory } from "./story.ts";
+import { validateEpic } from "./epic.ts";
+import { validateWaves } from "./waves.ts";
 
 export const FILE_KINDS = [
   "workspace", "run", "stage", "workflow", "facts", "competencies", "env", "process", "budget",
+  "story", "epic", "waves",
 ] as const;
 export type FileKind = (typeof FILE_KINDS)[number];
 
@@ -28,6 +32,9 @@ export const validators: Readonly<Record<FileKind, Validator>> = {
   env: validateEnv,
   process: validateProcess,
   budget: validateBudget,
+  story: validateStory,
+  epic: validateEpic,
+  waves: validateWaves,
 };
 
 export function validate(kind: FileKind, input: unknown) {
@@ -44,3 +51,18 @@ export type { CompetenciesFile, Competency } from "./competencies.ts";
 export type { EnvManifest, EnvTool } from "./env.ts";
 export type { ProcessModel, Methodology, TicketTool, StoryGranularity } from "./process.ts";
 export type { BudgetFile } from "./budget.ts";
+export {
+  validateStory, validateStoryDod, validateStoryFile, parseDodBlock, asStory, STORY_KEYS,
+} from "./story.ts";
+export type { Story, DodBlock, StoryFile } from "./story.ts";
+export { validateEpic, validateEpicFile, asEpic, EPIC_KEYS } from "./epic.ts";
+export type { Epic, EpicFile } from "./epic.ts";
+export { validateWaves, validateWaveOrder, asWavesFile, scheduleOf } from "./waves.ts";
+export type { Wave, WavesFile } from "./waves.ts";
+export {
+  PLAN_STATUSES, STORY_ID_RE, EPIC_ID_RE, WAVE_ID_RE, EPIC_BRANCH_RE, REPO_NAME_RE,
+  MAX_WAVES, MAX_PLAN_STORIES,
+} from "./planCommon.ts";
+export type { PlanStatus } from "./planCommon.ts";
+export { splitFrontMatter, parseFrontMatter } from "./frontMatter.ts";
+export type { FrontMatter, FrontMatterDoc } from "./frontMatter.ts";

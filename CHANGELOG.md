@@ -39,6 +39,43 @@ stage would have ideated from nothing.
   inline budget the index plus a labelled prefix is inlined and the prompt says
   what was cut. Input count is capped at §2.3's 20.
 
+**Plan/Build schemas (spec §2.13–§2.15).** `03-plan/stories/<id>.md`, `03-plan/epics/<id>.md` and
+`03-plan/waves.yml` now have a shape, templates and validators — the last of spec §7's schema open items.
+
+- Story front matter: `id` `epic` `title` `repo` `status` `depends_on` `touches` `acceptance` `test_plan` `evidence`,
+  plus the fenced `` ```dod `` block. **Every dod command must equal a `.tldrx/workspace.yml` command verbatim** — a story
+  is data, and data does not get to invent a shell command. **`status: done` requires `evidence`**: done means proven.
+- Epic front matter: `id` `title` `repos` `stories` `branch: epic/<slug>` `status`. A story belongs to exactly one
+  epic, and the story ↔ epic reference must agree in both directions.
+- `waves.yml`: `waves: [{id: W1, stories: [S1, S2]}, …]`, ids ascending because file order is execution order, and the
+  rule the shape cannot enforce alone — **every story's `depends_on` must be in an earlier wave**. A dependency inside
+  the *same* wave is an error, not a warning: those two stories would go to parallel agents that overwrite each other.
+- New `plan` gate check reads all three together at the Plan gate (`tldrx approve`), which is the only place the
+  cross-file rules can be checked. `dod-gate` keeps its line scanner — a gate that only ran when the front matter
+  parsed would let a malformed story write `status: done` unchecked — but now shares one `` ```dod `` parser with the schema.
+- Templates: `templates/story.md`, `templates/epic.md`, `templates/waves.yml`.
+
+**Budget UX.** Measured in the pilot: a retry was refused twice because the phase ceiling had been sized for exactly
+one attempt, and nothing put "what is left" next to "what the next stage costs".
+
+- `tldrx budget show [<run>] [--json]` — a phase table of ceiling, spent, remaining, the next stage and its own
+  estimate, and whether `tldrx next` would be blocked there.
+- `tldrx budget raise <phase> <usd> [--take-from <phase>]` — the one sanctioned edit to `budget.yml`, validated before
+  it writes: Σ phase ceilings ≤ run ceiling holds on the way out, a `--take-from` donor can never be cut below what it
+  has already spent, and the output says out loud whether the run ceiling grew or the money merely moved.
+- Both `budget.blocked` messages (the hook and `tldrx next`) now name **the exact command**, with the shortfall
+  computed and rounded **up** to the cent, instead of naming the field to hand-edit.
+- `run status` shows per-attempt cost for the cursor stage — `attempts: 2 · $1.39 + $1.21` — read from `agent.result`
+  events. A stage's total `cost_usd` cannot tell one $2.60 attempt from two $1.30 ones, and only the second says
+  whether a retry fits.
+
+**Checked sections must contain items (spec §2.8).** Findings / Decisions / Unknowns / Evidence ledger must each hold
+at least one list item; a section that is present but carries only prose is now a validation error. A genuinely empty
+section is written `- none [src: absent:<what was looked at>]`. This closes the way an unsourced claim used to get
+written anyway: a paragraph carries no bullet for the checker to look at, so "no unknowns that we can see" validated
+clean. The parser, the `claim-sources` hook, the facilitator's post-stage check and `tldrx approve` share one parser
+and all four now refuse it; the Evidence ledger in every shipped stage template is a list rather than a table.
+
 All notable changes to tldr-experts. Dates are the day the work landed on `main`.
 
 ## 0.0.2 — unreleased

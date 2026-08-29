@@ -88,7 +88,13 @@ terminal, in CI, or from a chat bridge, not here.
 6. **Say which you are in: measured, inferred, or assumed.** Never blur them.
 7. **Stop at gates.** You do not approve your own work.
 8. **Budget is an input.** If the stage costs more than remains, `next` refuses to
-   start it and exits 2. Report that; do not raise the ceiling to get past it.
+   start it and exits 2. Report that, with `tldrx budget show` for the whole
+   picture and the exact `tldrx budget raise …` command the refusal names — and
+   let the human decide. You do not raise a ceiling to get past a gate.
+9. **A checked section holds at least one item.** Findings, Decisions, Unknowns
+   and Evidence ledger each need one sourced list item. Nothing to report is
+   still an item: `- none [src: absent:<what you looked at>]`. A paragraph saying
+   "nothing found" is refused, because it gives the checker nothing to check.
 
 ## The loop, for orientation
 

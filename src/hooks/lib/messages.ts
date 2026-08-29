@@ -25,6 +25,24 @@ export function claimSourcesDeny(relPath: string, lines: readonly number[]): str
 }
 
 /**
+ * Spec §2.8: each of the four checked sections must contain at least one list
+ * item. Verbatim text for this one is written in the spec's voice. `[assumption]`
+ */
+export function claimSourcesEmptySectionDeny(
+  relPath: string,
+  sections: readonly { name: string; line: number }[],
+): string {
+  const list = sections.map((s) => `"${s.name}" (L${s.line})`).join(", ");
+  return (
+    `[tldrx] claim-sources: ${sections.length} checked section(s) in ${relPath} contain no list ` +
+    `items — ${list}.\n` +
+    "Findings/Decisions/Unknowns/Evidence ledger must each hold at least one sourced item; prose alone " +
+    "is not a claim anything can check. If there is genuinely nothing, say so as an item: " +
+    "`- none [src: absent:<what you looked at>]`."
+  );
+}
+
+/**
  * The spec gives no verbatim text for a source that parses but does not resolve,
  * so this one is written in its voice. `[assumption]`
  */
@@ -86,17 +104,27 @@ export function dodGateInternalErrorDeny(storyId: string, message: string): stri
   );
 }
 
+/**
+ * Spec §4's message, with its first remedy replaced by the command that performs it.
+ *
+ * The original said "Raise phases[<phase>].ceiling_usd in budget.yml" — true, and
+ * in the pilot it produced a hand-edit that under-shot the estimate, so the retry
+ * was refused a second time. `tldrx budget raise` computes the shortfall and
+ * rounds it up, so naming the command instead of the field is the fix.
+ */
 export function budgetGateDeny(
   stage: string,
   phase: string,
   left: number,
   ceiling: number,
   estimate: number,
+  fixCommand: string,
 ): string {
   return (
     `[tldrx] budget-gate: refusing to start stage "${stage}" — phase ${phase} has ${usd(left)} left of ` +
-    `${usd(ceiling)} and the stage estimate is ${usd(estimate)}. Raise phases[${phase}].ceiling_usd in ` +
-    `budget.yml, lower budget_usd in .tldrx/stages/${stage}/stage.yml, or set on_exceed: warn.`
+    `${usd(ceiling)} and the stage estimate is ${usd(estimate)}. Run \`${fixCommand}\` (add \`--take-from ` +
+    `<phase>\` to move the money instead of adding it), lower budget_usd in .tldrx/stages/${stage}/stage.yml, ` +
+    "or set on_exceed: warn."
   );
 }
 

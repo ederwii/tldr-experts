@@ -37,4 +37,5 @@ gate:
 
 checks:
   - claim-sources
+  - plan
   - budget-gate
