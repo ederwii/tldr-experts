@@ -27,7 +27,8 @@ export function driftWarnings(expert: ExpertRecord): readonly string[] {
   return expert.drifted.map(
     (area) =>
       `warning: ${expert.name}/${area.id} — competencies.yml stores level ${area.storedLevel}, `
-      + `evidence computes ${area.level}; showing the computed level (spec §2.6).`,
+      + `evidence computes ${area.level}; showing the computed level (spec §2.6). `
+      + `Run \`tldrx expert recompute ${expert.name}\` to settle it.`,
   );
 }
 

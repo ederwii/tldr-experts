@@ -22,8 +22,13 @@ export type { RunMine, MinedFile, MineOptions } from "./mineRuns.ts";
 export { codePrompt, runsPrompt, renderInlined, renderMined, renderFactRows, withGutter } from "./trainingPrompt.ts";
 export type { TrainingPromptInput } from "./trainingPrompt.ts";
 
-export { writeCompetencies, readEvidence, CompetenciesError } from "./competenciesWrite.ts";
-export type { WriteCompetenciesOptions, CompetenciesWrite } from "./competenciesWrite.ts";
+export { writeCompetencies, recomputeCompetencies, readEvidence, CompetenciesError } from "./competenciesWrite.ts";
+export type {
+  WriteCompetenciesOptions, CompetenciesWrite, RecomputeOptions, CompetenciesRecompute, RecomputedArea,
+} from "./competenciesWrite.ts";
+
+export { recomputeExperts, renderRecompute, recomputeJson, expertNames, ExpertNotFound } from "./recomputeExperts.ts";
+export type { RecomputeExpertsOptions, RecomputedExpert } from "./recomputeExperts.ts";
 
 export { TrainingLog, trainingLogPath, serializeTrainingEvent, validateTrainingEvent, TRAINING_EVENT_TYPES } from "./trainingLog.ts";
 export type { TrainingEvent, TrainingEventType } from "./trainingLog.ts";

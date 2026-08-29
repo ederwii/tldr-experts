@@ -8,15 +8,19 @@
  *
  * `--print-prompt` is unchanged and still costs nothing: it prints the
  * copy-paste prompt and spawns nothing, for a human who would rather drive the
- * session themselves.
+ * session themselves. `recompute` is that path's other half: it settles the level
+ * such a session leaves behind, without pretending a training run happened.
  */
 import type { Command } from "../Command.ts";
-import { EXIT_FAILED, EXIT_OK } from "../exitCodes.ts";
+import { EXIT_FAILED, EXIT_NOT_FOUND, EXIT_OK } from "../exitCodes.ts";
 import { boolFlag, numberFlag, parseArgs, stringFlag, UsageError, type ParsedArgs } from "../argv.ts";
 import { effortFlag } from "../effort.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
 import type { EffortLevel } from "../../core/schemas/stage.ts";
-import { isTrainingMode, runTraining, type TrainingRunMode } from "../../core/training/index.ts";
+import {
+  ExpertNotFound, isTrainingMode, recomputeExperts, recomputeJson, renderRecompute, runTraining,
+  type TrainingRunMode,
+} from "../../core/training/index.ts";
 import { loadWorkspaceFile } from "../../core/init/loadWorkspaceFile.ts";
 import {
   createExpert, evidenceWarnings, expertListJson, loadExpert, loadExperts,
@@ -31,6 +35,7 @@ const USAGE = [
   "  tldrx expert train <name> --area <area> [--mode light|full] [--max-usd <n>]",
   "                                          [--model <m>] [--effort <level>] [--prepare|--commit] [--yolo] [--root <path>]",
   "  tldrx expert train <name> --area <area> [--mode light|full] --print-prompt [--root <path>]",
+  "  tldrx expert recompute [<name>] [--root <path>] [--json]",
 ].join("\n");
 
 export const expertCommand: Command = {
@@ -39,8 +44,9 @@ export const expertCommand: Command = {
   usage: "tldrx expert list [--root <path>] [--json]\n" +
     "       tldrx expert create <name> [--domain <slug>] [--stack <lang>] [--root <path>]\n" +
     "       tldrx expert train <name> --area <area> [--mode light|full] [--max-usd <n>] [--model <m>]\n" +
-    "                                               [--effort <level>] [--prepare|--commit] [--yolo] [--print-prompt] [--root <path>]",
-  subcommands: ["list", "create", "train"],
+    "                                               [--effort <level>] [--prepare|--commit] [--yolo] [--print-prompt] [--root <path>]\n" +
+    "       tldrx expert recompute [<name>] [--root <path>] [--json]",
+  subcommands: ["list", "create", "train", "recompute"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const [sub, ...rest] = argv;
@@ -48,8 +54,9 @@ export const expertCommand: Command = {
       case "list": return listExperts(rest);
       case "create": return create(rest);
       case "train": return train(rest);
+      case "recompute": return recompute(rest);
       default:
-        process.stderr.write(`tldrx expert: expected list, create or train\n${USAGE}\n`);
+        process.stderr.write(`tldrx expert: expected list, create, train or recompute\n${USAGE}\n`);
         return EXIT_FAILED;
     }
   },
@@ -64,6 +71,30 @@ function listExperts(argv: readonly string[]): number {
   // `--json` (whose stdout must stay parseable) and a redirect to a file. A row
   // the tool refused to count is the one thing a level cannot show you.
   for (const warning of experts.flatMap(evidenceWarnings)) process.stderr.write(`${warning}\n`);
+  return EXIT_OK;
+}
+
+/**
+ * `recompute` writes a level and nothing else — no status, no `last_trained`, no
+ * money. It is the remedy the drift warning names, so a human who trained from
+ * `--print-prompt` has a command instead of a text editor.
+ */
+function recompute(argv: readonly string[]): number {
+  const root = resolveWorkspaceRoot(option(argv, "--root"));
+  let results;
+  try {
+    results = recomputeExperts({ root, expert: positional(argv), now: new Date() });
+  } catch (error) {
+    if (error instanceof ExpertNotFound) {
+      process.stderr.write(`tldrx expert recompute: ${error.message}\n`);
+      return EXIT_NOT_FOUND;
+    }
+    process.stderr.write(`tldrx expert recompute: ${message(error)}\n`);
+    return EXIT_FAILED;
+  }
+  const lines = argv.includes("--json") ? [recomputeJson(results)] : renderRecompute(results);
+  if (lines.length > 0) process.stdout.write(`${lines.join("\n")}\n`);
+  for (const warning of results.flatMap((result) => result.warnings)) process.stderr.write(`${warning}\n`);
   return EXIT_OK;
 }
 
