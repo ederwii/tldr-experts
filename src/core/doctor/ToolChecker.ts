@@ -7,6 +7,7 @@
  */
 import type { EnvTool } from "../schemas/env.ts";
 import { extractVersion, satisfiesMinimum } from "./version.ts";
+import { runtime } from "../runtime/index.ts";
 
 export type ToolStatus = "ok" | "outdated" | "missing" | "unparsed";
 
@@ -33,12 +34,10 @@ export class ToolChecker {
     let exitCode = 127;
 
     try {
-      const proc = Bun.spawn(["sh", "-c", tool.check], { stdout: "pipe", stderr: "pipe" });
-      [stdout, stderr] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-      ]);
-      exitCode = await proc.exited;
+      const probe = await runtime.spawn("sh", ["-c", tool.check]);
+      stdout = probe.stdout;
+      stderr = probe.stderr;
+      exitCode = probe.exitCode;
     } catch {
       exitCode = 127;
     }

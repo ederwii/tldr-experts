@@ -1,25 +1,31 @@
 /**
  * YAML access, in one place.
  *
- * Bun 1.3.14 ships `Bun.YAML.parse` / `Bun.YAML.stringify` natively, so the
- * framework carries ZERO runtime dependencies for its file format. If this ever
- * has to run off Bun, replace the two function bodies below and nothing else.
+ * Parsing and serialisation go through the runtime seam (`src/core/runtime/`):
+ * on Bun that is the native YAML implementation, on Node it is the `yaml` npm
+ * package inlined by the build. Nothing else in the framework touches YAML
+ * directly, so the host runtime is a detail of one folder.
  */
+import { readFileSync } from "node:fs";
+import { runtime } from "./runtime/index.ts";
 
 export function parseYaml(text: string): unknown {
-  return Bun.YAML.parse(text);
+  return runtime.parseYaml(text);
 }
 
 /**
  * Block style by default (indent 2): every YAML file this framework writes is
- * meant to be read and diffed by a human, and `Bun.YAML.stringify` with no
- * indent emits one flow-style line. Pass `indent: 0` for the compact form.
+ * meant to be read and diffed by a human. Pass `indent: 0` for the compact form.
  */
 export function stringifyYaml(value: unknown, indent = 2): string {
-  return indent > 0 ? Bun.YAML.stringify(value, null, indent) : Bun.YAML.stringify(value);
+  return runtime.stringifyYaml(value, indent);
 }
 
 export async function readYamlFile(path: string): Promise<unknown> {
-  const text = await Bun.file(path).text();
-  return parseYaml(text);
+  return parseYaml(await runtime.readText(path));
+}
+
+/** Sync twin, for the hooks — they have a 50 ms budget and no room to await. */
+export function readYamlFileSync(path: string): unknown {
+  return parseYaml(readFileSync(path, "utf8"));
 }

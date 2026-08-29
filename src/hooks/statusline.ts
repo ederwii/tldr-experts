@@ -13,13 +13,9 @@
  * Prints to stdout and always exits 0 — a status line must never break a session.
  */
 import { renderStatusLineFromText, NO_SESSION_DATA } from "../core/statusline/renderStatusLine.ts";
+import { runtime } from "../core/runtime/index.ts";
 
-let text = "";
-try {
-  text = await Bun.stdin.text();
-} catch {
-  text = "";
-}
+const text = await runtime.readStdin();
 
 try {
   process.stdout.write(renderStatusLineFromText(text) + "\n");

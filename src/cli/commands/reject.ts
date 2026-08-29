@@ -1,19 +1,54 @@
 /** `tldrx reject` — Request changes at the current gate
  *
- * Concept §2. Records the rejection and what was asked for; the stage re-runs with that as input.
+ * Spec §3, §5 "Failure path": the note is stored on the gate and the stage goes
+ * back to `ready`, so the next `next` re-runs it with the note as input. Nothing is
+ * deleted and no cost is refunded — money spent stays on the record.
  */
 import type { Command } from "../Command.ts";
-import { notImplemented } from "../notImplemented.ts";
+import { EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_OK } from "../exitCodes.ts";
+import { parseArgs, stringFlag, UsageError } from "../argv.ts";
+import { requireWorkspaceRoot } from "../workspace.ts";
+import { fail } from "../report.ts";
+import { RunStore } from "../../core/run/RunStore.ts";
+import { GateError, reject } from "../../core/run/gates.ts";
+import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
 
 export const rejectCommand: Command = {
   name: "reject",
   summary: "Request changes at the current gate",
-  usage: "tldrx reject [--note <text>]",
+  usage: "tldrx reject --note <text> [--run <id>]",
   subcommands: [],
-  implemented: false,
+  implemented: true,
   async run(argv: readonly string[]): Promise<number> {
-    const sub = argv[0];
-    const label = sub !== undefined && !sub.startsWith("-") ? `reject ${sub}` : "reject";
-    return notImplemented(label);
+    try {
+      const args = parseArgs(argv, ["run", "note"]);
+      const note = stringFlag(args, "note") ?? args.positionals.join(" ");
+      if (note.trim() === "") {
+        throw new UsageError('reject needs --note: `tldrx reject --note "what to change"`');
+      }
+      const root = requireWorkspaceRoot();
+      const wanted = stringFlag(args, "run");
+      const store = RunStore.find(root, wanted);
+      if (store === null) {
+        process.stderr.write(
+          `tldrx reject: ${wanted === undefined ? "no non-terminal run" : `no run '${wanted}'`} in tldrx-work/\n`,
+        );
+        return EXIT_NOT_FOUND;
+      }
+
+      const outcome = reject(store, {
+        root,
+        actor: currentActor(),
+        at: nowRfc3339(),
+        note,
+      });
+      process.stdout.write(
+        `rejected ${outcome.phase}/${outcome.stage} — back to \`ready\`\nnote: ${outcome.note}\n`,
+      );
+      return EXIT_OK;
+    } catch (error) {
+      if (error instanceof GateError) return fail("reject", error, EXIT_GATE_REFUSED);
+      return fail("reject", error);
+    }
   },
 };

@@ -5,6 +5,7 @@
  * one times out. It is NEVER run without the flag. Output lines are shaped
  * `name: <transport> - <status>`.
  */
+import { runtime } from "../runtime/index.ts";
 
 const ANSI_ESCAPE = /\[[0-9;]*m/g;
 const SERVER_LINE = /^([A-Za-z0-9._@/-]+):\s+(.+?)\s+-\s+(.+)$/;
@@ -44,14 +45,9 @@ export class McpProbe {
 
   async probe(): Promise<McpProbeResult> {
     try {
-      const proc = Bun.spawn(["claude", "mcp", "list"], { stdout: "pipe", stderr: "pipe" });
-      const timer = setTimeout(() => proc.kill(), this.timeoutMs);
-      const [stdout, stderr] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-      ]);
-      await proc.exited;
-      clearTimeout(timer);
+      const { stdout, stderr } = await runtime.spawn("claude", ["mcp", "list"], {
+        timeoutMs: this.timeoutMs,
+      });
 
       const servers = parseMcpList(stdout);
       if (servers.length === 0) {

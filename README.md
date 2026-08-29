@@ -34,9 +34,14 @@ tldrx retro                # close the run and keep what was learned
 | `tldrx run <new\|status>` | stub → exit 64 | |
 | `tldrx next` | stub → exit 64 | |
 | `tldrx answer` | stub → exit 64 | |
-| `tldrx approve` | stub → exit 64 | |
 | `tldrx reject` | stub → exit 64 | |
 | `tldrx map [--refresh\|--check]` | **implemented** | `--refresh` re-detects and rewrites `.tldrx/map/**`. `--check` resolves every `[src: <repo:>path:line]` citation in the map and the init handoff against the filesystem — exit `0` when they all land, `1` with the offending document, line and reason when they do not. Map providers: `graphify` when the binary is on PATH (runs only `graphify --version` and `graphify update <path> --no-cluster`, both documented, no LLM), otherwise `static` (file tree, manifests, 90-day `git log --numstat` churn, largest files). Which one ran is recorded as `provider:` in `workspace.yml`. |
+| `tldrx run new <slug>` | **implemented** | Seeds `tldrx-work/<yymmdd>-<slug>/` from `workflows/<scope>.yml` + each `stages/<id>/stage.yml`: `run.yml`, `budget.yml`, `events.jsonl` and the phase folders. Per-phase ceilings are proportional to the stages' `budget_usd`, scaled to `--budget` (or the preset default). Flags: `--title --scope --budget --repos --from`. Writes to a temp dir and renames, so a validation failure leaves nothing behind. Exit `0`/`1`. |
+| `tldrx run new --from <dir>` | **implemented** | The §6 AI-DLC distill. Reads only the listed files, turns every bullet/paragraph under a heading into a Finding tagged `[src: aidlc:<file>:<line>]` and every answered `## Q<n>.` block into a fact plus a Finding tagged `[src: aidlc:<file>#Q<n>]`. Unanswered blocks and ceremony stages are dropped; a claim contradicting a non-retired fact becomes a question in `01-what/questions.md`. Deterministic — no LLM, no network. |
+| `tldrx run status [<run>]` | **implemented** | Run id, scope, cursor, a progress bar per phase, budget spent/ceiling, and the pending question or gate. Newest non-terminal run when omitted. `--json` for the same view as data. Exit `0`/`3`. |
+| `tldrx answer <Qid> <text>` | **implemented** | The terminal half of `answer-capture`, sharing its code path (`src/core/answers/`): fills the `[Answer]:` slot, flips the status, writes the footer, appends the fact and the `question.answered` + `fact.added` events, and prints the fact id. Exit `0`/`1`/`3`. |
+| `tldrx approve` | **implemented** | Only when the cursor stage is `awaiting_gate`. **Re-runs** the stage's `checks` against what is on disk — `claim-sources` and `schema` via the validators, `cmd` for real (and only a command `workspace.yml` declares verbatim). On a pass: gate approved with `by`/`at`, stage `done`, cursor advances to the next stage as `ready`. Exit `2` naming the failing check otherwise. |
+| `tldrx reject --note <t>` | **implemented** | Records the note on the gate and sends the stage back to `ready`. Exit `0`/`2`/`3`. |
 | `tldrx expert <list\|create\|train>` | stub → exit 64 | |
 | `tldrx dashboard` | stub → exit 64 | |
 | `tldrx replay` | stub → exit 64 | |
@@ -55,15 +60,22 @@ Non-command pieces:
 | `budget-gate` hook | **implemented** | PreToolUse `Bash` on `claude -p …` / `tldrx next`. Denies when the cursor phase cannot afford the stage and `on_exceed: block`; appends `budget.blocked`. |
 | `session-start` hook | **implemented** | SessionStart. Up to three lines of "where we are" from the newest non-terminal `run.yml`; silent when there is no run. |
 | Hook failure policy | **implemented** | Every hook but `dod-gate` fails **open**: an internal error exits `0` and prints one `tldrx hook <name>: internal error, allowing — …` line to stderr. Only PreToolUse can deny, and it denies by printing `permissionDecision: deny` and exiting `0` — never by an exit code. |
+| Runtime seam | **implemented** | `src/core/runtime/` — `readStdin`, `spawn`, `readText/writeText/exists/readJson`, `parseYaml/stringifyYaml`, picked at import time by `typeof Bun`. Every other file in `src/` is runtime-agnostic; `grep -rn 'Bun\.' src \| grep -v src/core/runtime/` comes back empty, and a test asserts it. |
+| `RunStore` | **implemented** | The one write path for a run: loads and validates `run.yml` + `budget.yml`, recomputes stage costs, phase status, run status and the budget mirror on every save, and refuses to write either file if it would be invalid. `next` will reuse it unchanged. |
 | Text parsers + stores | **implemented** | `src/core/text/` (questions.md, handoff.md, the `src` grammar), `src/core/facts/`, `src/core/events/`, `src/core/budget/` — the schemas the hooks enforce. Validating a 256 KB handoff stays under 50 ms. |
-| 5 stages, 13 scopes, 10 templates | **shipped as data** | Nothing reads them yet except the tests. |
+| 5 stages, 13 scopes, 10 templates | **read by `run new`** | A scope preset plus its stage files seed the run. Both the draft shape the repo ships and the spec §2.3/§2.4 shape load; a workspace's own `.tldrx/workflows/` and `.tldrx/stages/` win over the shipped defaults. |
 | Plugin packaging | **loadable** | `claude --plugin-dir ./plugin` loads the skill and all six live hooks. `claude plugin validate ./plugin` exits `0` (two documented warnings). |
 
 ## Layout
 
 ```
 bin/tldrx.ts          entrypoint — parses nothing, decides nothing
+scripts/build.ts      bundles bin/ + src/hooks/ into dist/ for node
 src/cli/              command table + one file per command
+src/core/runtime/     the Bun/Node seam — the only place `Bun.` appears
+src/core/run/         run.yml, budget.yml, the run lifecycle and its gates
+src/core/distill/     the `--from` AI-DLC importer
+src/core/answers/     recording an answer — shared by the hook and the CLI
 src/core/doctor/      the one real subsystem
 src/core/schemas/     types + a tiny validate() per file kind
 src/core/statusline/  the status line renderer
@@ -77,13 +89,19 @@ env.yml               the manifest `tldrx doctor` runs
 
 Per project, the framework writes into `.tldrx/` (framework state) and
 `tldrx-work/<yymmdd>-<slug>/` (one folder per piece of work). `tldrx init` creates
-`.tldrx/`; `tldrx-work/` waits on `tldrx run new`.
+`.tldrx/`; `tldrx run new` creates the second.
 
 ## Requirements
 
 Run `tldrx doctor` — it is the authority, not this list.
 
-Required: **bun ≥ 1.3**, **node ≥ 18**, **git ≥ 2.30**, **claude ≥ 2.0**.
+**Runtime: Node ≥ 20 or Bun.** Bun builds; either one runs. `bun run build` bundles
+`bin/tldrx.ts` and every hook into `dist/` with `--target=node`, and `package.json`
+`bin` points at `dist/tldrx.js` — so an installed tldrx needs only Node. Developing
+against the sources with `bun bin/tldrx.ts …` keeps working exactly as before.
+
+Required: **bun ≥ 1.3** (to build), **node ≥ 20** (to run the build), **git ≥ 2.30**,
+**claude ≥ 2.0**.
 Optional: python3 ≥ 3.10 and graphify (the code map), gh (ticket adapter).
 
 The framework never installs anything. `doctor` prints the exact command for your OS
@@ -94,15 +112,29 @@ bun install
 bun run doctor
 bun test
 bun run typecheck
+bun run build      # -> dist/tldrx.js + dist/hooks/*.js, runnable by node
 ```
 
 ## Design notes
 
-**YAML: `Bun.YAML`, no dependency.** Bun 1.3.14 ships `Bun.YAML.parse` and
-`Bun.YAML.stringify` natively (verified with `bun -e` on 1.3.14 before choosing),
-so the `yaml` npm package was **not** added. The framework has zero runtime
-dependencies; `typescript` and `@types/bun` are dev-only. All YAML access goes
-through `src/core/yaml.ts` — if this ever has to run off Bun, that one file changes.
+**Bun to build, Node or Bun to run** (decided 2026-08-28). Every host capability
+that differs between the two runtimes — stdin, spawn, file IO, YAML — lives behind
+`src/core/runtime/`, which picks its implementation at import time from
+`typeof Bun`. Under Bun that is the native `Bun.YAML` / `Bun.spawn` / `Bun.file`;
+under Node it is `node:child_process`, `fs/promises` and the `yaml` npm package.
+
+`yaml` is a **devDependency on purpose**: `bun build --target=node` inlines it, so a
+published install still resolves zero runtime dependencies. Do not promote it to
+`dependencies` — that would reintroduce the install step the framework refuses to
+have. The invariant that keeps the seam honest is mechanical:
+
+```bash
+grep -rn 'Bun\.' src | grep -v src/core/runtime/    # must print nothing
+```
+
+`run.yml`, `budget.yml` and `facts.yml` are emitted by hand-written serialisers
+rather than a generic YAML writer, because the two runtimes disagree on layout and
+these files are committed and diffed. Same input, same bytes, either runtime.
 
 **Claude Code shapes are copied, not remembered.** Every plugin manifest field,
 hook event name, skill frontmatter key and statusLine field in this repo was taken

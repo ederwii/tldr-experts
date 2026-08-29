@@ -10,6 +10,7 @@
  *   cmd    := "$ " command " → exit " digit+
  *   graph  := "graph:" nodeid
  *   absent := "absent:" path
+ *   aidlc  := "aidlc:" path (":" line | "#" "Q" digit+)   # spec §6 `[assumption]`
  *
  * Everything here is string slicing plus a handful of tiny anchored regexes, so a
  * hook can validate a 256 KB handoff well inside its 50 ms budget (spec §0).
@@ -17,7 +18,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, normalize } from "node:path";
 
-export const SRC_KINDS = ["file", "doc", "answer", "fact", "cmd", "graph", "absent"] as const;
+export const SRC_KINDS = ["file", "doc", "answer", "fact", "cmd", "graph", "absent", "aidlc"] as const;
 export type SrcKind = (typeof SRC_KINDS)[number];
 
 export type SrcRef =
@@ -27,7 +28,8 @@ export type SrcRef =
   | { readonly kind: "fact"; readonly raw: string; readonly id: string }
   | { readonly kind: "cmd"; readonly raw: string; readonly command: string; readonly exitCode: number }
   | { readonly kind: "graph"; readonly raw: string; readonly node: string }
-  | { readonly kind: "absent"; readonly raw: string; readonly path: string };
+  | { readonly kind: "absent"; readonly raw: string; readonly path: string }
+  | { readonly kind: "aidlc"; readonly raw: string; readonly path: string; readonly line: number | null; readonly q: string | null };
 
 export interface SrcParseError {
   readonly raw: string;
@@ -61,6 +63,9 @@ const ANSWER_RE = /^Q\d{1,6}$/;
 const FACT_RE = /^F\d{3,6}$/;
 const CMD_RE = /^\$ (.+) → exit (\d{1,3})$/;
 const TRAILING_TOKEN_RE = /\[src: ([^\]]*)\]$/;
+/** `aidlc:<file>:<line>` (prose) or `aidlc:<file>#Q<n>` (an answered question). */
+const AIDLC_LINE_RE = /^(.+):(\d{1,9})$/;
+const AIDLC_Q_RE = /^(.+)#(Q\d{1,6})$/;
 
 /**
  * The `[src: …]` token a line ends with, or null when there is none.
@@ -110,6 +115,7 @@ export function classifySrc(src: string, repos?: ReadonlySet<string>): SrcRef | 
     if (node === "" || /\s/.test(node)) return { raw, message: "`graph:` needs a non-empty node id" };
     return { kind: "graph", raw, node };
   }
+  if (raw.startsWith("aidlc:")) return parseAidlcSrc(raw);
   if (raw.startsWith("absent:")) {
     const path = raw.slice("absent:".length);
     if (path === "") return { raw, message: "`absent:` needs a path" };
@@ -124,6 +130,31 @@ export function classifySrc(src: string, repos?: ReadonlySet<string>): SrcRef | 
     }
   }
   return parseFileSrc(raw, repos);
+}
+
+/**
+ * `aidlc:<file>:<line>` / `aidlc:<file>#Q<n>` — provenance for a `--from` distill
+ * (spec §6). `[assumption]`: the AI-DLC intent folder is OUTSIDE the workspace and
+ * may be gone by the time anyone reads the handoff, so an `aidlc` src is never
+ * resolved against the filesystem. It records where a claim came from; it is not
+ * a promise the file is still there.
+ */
+function parseAidlcSrc(raw: string): SrcRef | SrcParseError {
+  const rest = raw.slice("aidlc:".length);
+  if (rest === "") return { raw, message: "`aidlc:` needs a path" };
+  if (rest.includes("..")) return { raw, message: "`..` is not allowed in a source path" };
+
+  const question = AIDLC_Q_RE.exec(rest);
+  if (question !== null && question[1] !== undefined && question[2] !== undefined) {
+    return { kind: "aidlc", raw, path: question[1], line: null, q: question[2] };
+  }
+  const located = AIDLC_LINE_RE.exec(rest);
+  if (located !== null && located[1] !== undefined && located[2] !== undefined) {
+    const line = Number(located[2]);
+    if (line < 1) return { raw, message: "line numbers are 1-based" };
+    return { kind: "aidlc", raw, path: located[1], line, q: null };
+  }
+  return { raw, message: "expected `aidlc:<file>:<line>` or `aidlc:<file>#Q<n>`" };
 }
 
 /** `[repo ":"] path ":" line ["-" line]`, split from the right so paths may contain colons. */
