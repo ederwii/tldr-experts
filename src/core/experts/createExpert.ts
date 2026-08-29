@@ -18,6 +18,7 @@ import { TEMPLATES_DIR } from "../paths.ts";
 import { stringifyYaml } from "../yaml.ts";
 import { buildCompetenciesDocument, type AreaSeed } from "../init/competenciesDocument.ts";
 import { COMPETENCIES_FILE, EXPERT_FILE, expertDir } from "./loadExperts.ts";
+import { runtime } from "../runtime/index.ts";
 
 /** `[assumption]` The `repos[].name` grammar from spec §2.1, reused for expert folders. */
 export const EXPERT_NAME_RE = /^[a-z0-9-]{1,32}$/;
@@ -65,7 +66,7 @@ export async function createExpert(options: CreateExpertOptions): Promise<Create
 
   const areas = planAreas(options);
   const kind = (options.stack ?? "").trim() !== "" ? "stack" : "domain";
-  const template = await Bun.file(join(TEMPLATES_DIR, EXPERT_FILE)).text();
+  const template = await runtime.readText(join(TEMPLATES_DIR, EXPERT_FILE));
 
   mkdirSync(dir, { recursive: true });
   writeFileSync(expertPath, renderExpertMarkdown(template, options.name, kind, options.createdAt), "utf8");
