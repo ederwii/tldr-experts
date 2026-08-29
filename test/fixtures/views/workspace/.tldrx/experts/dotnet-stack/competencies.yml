@@ -1,0 +1,25 @@
+# Fixture competencies (spec §2.6). `level` is computed; the values here are what
+# the file happens to store, and the reader recomputes them.
+version: 1
+expert: dotnet-stack
+status: in-use
+last_trained: 2026-08-20T11:00:00Z
+areas:
+  - id: ef-core
+    title: "EF Core mapping and migrations"
+    level: 2
+    train_prompt: "tldrx expert train dotnet-stack --area ef-core --mode light"
+    evidence:
+      - {kind: code, src: "api:src/Persistence/AppDbContext.cs:41", at: 2026-08-20}
+      - {kind: run, src: "tldrx-work/260812-scores/04-build/log/S3.md", at: 2026-08-12}
+      - {kind: doc, src: "https://learn.microsoft.com/ef/core/modeling/", at: 2026-08-02}
+      - {kind: answer, src: "F007", at: 2026-07-28}
+  - id: legacy-soap
+    title: "The SOAP integration nobody has touched since 2024"
+    level: 0
+    train_prompt: "tldrx expert train dotnet-stack --area legacy-soap --mode full"
+    evidence:
+      - {kind: code, src: "api:src/Legacy/SoapClient.cs:12", at: 2024-03-04}
+      - {kind: code, src: "api:src/Legacy/SoapMapper.cs:88", at: 2024-03-05}
+      - {kind: run, src: "tldrx-work/240310-soap/04-build/log/S1.md", at: 2024-03-10}
+      - {kind: doc, src: "https://example.invalid/soap", at: 2024-02-01}

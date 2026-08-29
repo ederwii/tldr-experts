@@ -1,0 +1,28 @@
+version: 1
+run: 260901-scoreboard
+title: "Player scoreboard"
+scope: feature
+workflow: feature
+repos: [api, lab]
+created_at: 2026-09-01T09:00:00Z
+updated_at: 2026-09-01T14:20:00Z
+status: awaiting_gate
+cursor: {phase: 02-how, stage: how, task: null}
+budget: {ceiling_usd: 25.0, spent_usd: 5.01, per_agent_max_usd: 3.0}
+phases:
+  - id: 01-what
+    status: done
+    stages:
+      - {id: what, status: done, expert: product, model: sonnet, budget_usd: 1.0, cost_usd: 2.40,
+         started_at: 2026-09-01T09:02:00Z, ended_at: 2026-09-01T11:40:00Z,
+         inputs: [], outputs: ["01-what/handoff.md", "01-what/questions.md"],
+         gate: {type: approve, status: approved, by: alan, at: 2026-09-01T11:38:00Z, note: "good now"},
+         tasks: [{id: t1, status: done, expert: product, model: sonnet, cost_usd: 2.40, error: null}]}
+  - id: 02-how
+    status: awaiting_gate
+    stages:
+      - {id: how, status: awaiting_gate, expert: architect, model: sonnet, budget_usd: 3.0, cost_usd: 2.61,
+         started_at: 2026-09-01T13:00:00Z, ended_at: 2026-09-01T14:18:00Z,
+         inputs: ["01-what/handoff.md"], outputs: ["02-how/handoff.md"],
+         gate: {type: approve, status: pending, by: null, at: null, note: ""},
+         tasks: [{id: t1, status: done, expert: architect, model: sonnet, cost_usd: 2.61, error: null}]}

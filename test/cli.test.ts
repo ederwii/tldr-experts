@@ -71,17 +71,20 @@ describe("stub commands", () => {
     });
   }
 
+  // `expert train` without --print-prompt is a v1.1 stub by design (spec §6),
+  // so it is the stable example of a subcommand that exits 64.
   test("a subcommand is named in the notice", async () => {
-    const run = await tldrx("expert", "list");
+    const run = await tldrx("expert", "train", "foo", "--area", "bar");
     expect(run.code).toBe(EXIT_NOT_IMPLEMENTED);
-    expect(run.stderr.trim()).toBe("tldrx expert list: not implemented yet (v0 roadmap)");
+    expect(run.stderr.trim().startsWith("tldrx expert train:")).toBe(true);
   });
 
-  // `map --check` used to live here; map is implemented now, so this uses a
-  // command that is still a stub.
+  // `map --check` used to live here, then `dashboard --static`; both are
+  // implemented now, so this uses a command that is still a stub.
   test("a flag is not mistaken for a subcommand", async () => {
-    const run = await tldrx("dashboard", "--static");
-    expect(run.stderr.trim()).toBe("tldrx dashboard: not implemented yet (v0 roadmap)");
+    const run = await tldrx("expert", "train", "foo", "--area", "bar", "--mode", "light");
+    expect(run.stderr.trim().startsWith("tldrx expert train:")).toBe(true);
+    expect(run.stderr).not.toContain("--mode");
   });
 });
 

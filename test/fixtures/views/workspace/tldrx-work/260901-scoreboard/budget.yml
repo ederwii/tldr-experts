@@ -1,0 +1,11 @@
+version: 1
+run: 260901-scoreboard
+ceiling_usd: 25.0
+per_agent_max_usd: 3.0
+warn_at_pct: 80
+on_exceed: warn
+phases: [{id: 01-what, ceiling_usd: 4.0, spent_usd: 2.40},
+         {id: 02-how, ceiling_usd: 3.0, spent_usd: 2.61},
+         {id: 03-plan, ceiling_usd: 4.0, spent_usd: 0.0},
+         {id: 04-build, ceiling_usd: 12.0, spent_usd: 0.0},
+         {id: 05-watch, ceiling_usd: 2.0, spent_usd: 0.0}]

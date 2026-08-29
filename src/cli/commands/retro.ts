@@ -1,19 +1,77 @@
-/** `tldrx retro` — Close a run and capture what was learned
+/**
+ * `tldrx retro <run> [--apply]` — write `retro.md` (concept §13).
  *
- * Concept §13. Writes retro.md with three sections: what to remember (-> facts), how to work differently (-> practices.md), what stage to add or change (-> stages/proposed/). Proposed stages stay inert until accepted.
+ * Always writes exactly one file, `tldrx-work/<run>/retro.md`. `--apply` is the
+ * only thing that touches team memory, and it appends — it never rewrites what
+ * practices.md already says.
  */
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Command } from "../Command.ts";
-import { notImplemented } from "../notImplemented.ts";
+import { EXIT_FAILED, EXIT_NOT_FOUND, EXIT_OK } from "../exitCodes.ts";
+import { resolveWorkspaceRoot } from "../../core/experts/index.ts";
+import { listRuns, loadRun } from "../../core/replay/index.ts";
+import { applyPractices, buildRetro, RETRO_FILE } from "../../core/retro/index.ts";
 
 export const retroCommand: Command = {
   name: "retro",
   summary: "Close a run and capture what was learned",
-  usage: "tldrx retro [<run-id>]",
+  usage: "tldrx retro [<run-id>] [--apply] [--root <path>]",
   subcommands: [],
-  implemented: false,
+  implemented: true,
   async run(argv: readonly string[]): Promise<number> {
-    const sub = argv[0];
-    const label = sub !== undefined && !sub.startsWith("-") ? `retro ${sub}` : "retro";
-    return notImplemented(label);
+    const root = resolveWorkspaceRoot(option(argv, "--root"));
+    const id = positional(argv) ?? listRuns(root)[0] ?? null;
+    if (id === null) {
+      process.stderr.write("tldrx retro: no run id given and no runs found under tldrx-work/\n");
+      return EXIT_FAILED;
+    }
+
+    const loaded = loadRun(root, id);
+    if (loaded === null) {
+      process.stderr.write(`tldrx retro: run '${id}' not found under ${root}/tldrx-work\n`);
+      return EXIT_NOT_FOUND;
+    }
+
+    const report = buildRetro(loaded);
+    const path = join(loaded.dir, RETRO_FILE);
+    writeFileSync(path, report.markdown, "utf8");
+
+    const lines = [
+      `wrote ${path}`,
+      `  ${report.facts.length} fact(s) · ${report.practices.length} practice proposal(s) `
+        + `· ${report.stages.length} proposed stage(s)`,
+    ];
+
+    if (argv.includes("--apply")) {
+      const applied = applyPractices(root, id, report.practices);
+      lines.push(applied.appended
+        ? `  appended ${report.practices.length} proposal(s) to ${applied.path}`
+        : `  practices.md unchanged: ${applied.reason ?? "nothing to append"}`);
+    } else if (report.practices.length > 0) {
+      lines.push("  re-run with --apply to append the proposals to .tldrx/memory/practices.md");
+    }
+
+    process.stdout.write(`${lines.join("\n")}\n`);
+    return EXIT_OK;
   },
 };
+
+function positional(argv: readonly string[]): string | null {
+  for (let i = 0; i < argv.length; i++) {
+    const current = argv[i] ?? "";
+    if (current.startsWith("--")) {
+      if (current === "--root") i += 1;
+      continue;
+    }
+    return current;
+  }
+  return null;
+}
+
+function option(argv: readonly string[], name: string): string | null {
+  const at = argv.indexOf(name);
+  if (at === -1) return null;
+  const value = argv[at + 1];
+  return value === undefined || value.startsWith("--") ? null : value;
+}

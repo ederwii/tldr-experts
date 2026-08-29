@@ -1,0 +1,13 @@
+# Fixture competencies with a hand-edited level: the file claims 5, one evidence
+# item can never compute above 1 (distinct-source cap, spec §2.6).
+version: 1
+expert: lab-ui
+status: created
+last_trained: null
+areas:
+  - id: scoreboard-ui
+    title: "The scoreboard screen in the lab"
+    level: 5
+    train_prompt: "tldrx expert train lab-ui --area scoreboard-ui --mode light"
+    evidence:
+      - {kind: code, src: "lab:src/features/scoreboard/Board.tsx:18", at: 2026-08-30}

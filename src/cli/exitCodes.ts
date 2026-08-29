@@ -5,6 +5,9 @@ export const EXIT_OK = 0;
 /** A real check ran and something is wrong (e.g. doctor found a missing required tool). */
 export const EXIT_FAILED = 1;
 
+/** Spec §3: the thing asked for does not exist (an unknown run id, say). */
+export const EXIT_NOT_FOUND = 3;
+
 /**
  * The spec §3 exit table, for the commands that implement it:
  *   0 ok · 1 usage/schema error · 2 refused by a gate · 3 not found ·
@@ -14,7 +17,6 @@ export const EXIT_FAILED = 1;
  */
 export const EXIT_USAGE = 1;
 export const EXIT_GATE_REFUSED = 2;
-export const EXIT_NOT_FOUND = 3;
 export const EXIT_AWAITING_HUMAN = 4;
 export const EXIT_AGENT_FAILED = 5;
 
