@@ -20,6 +20,21 @@ export const PENDING_FILE = "pending.json";
 export const RESULT_FILE = "result.json";
 export const RAW_FILE = "result.raw.json";
 
+/** One expert the prompt loaded, and what it cost in bytes (spec §5). */
+export interface PendingExpert {
+  readonly name: string;
+  /** Why it loaded: named by the stage, a stack expert for the repos, or a domain match. */
+  readonly reason: "stage" | "stack" | "domain";
+  /** For `domain`: the cited path or repo it matched on. */
+  readonly match?: string;
+  readonly expert_md_bytes: number;
+  /** Bytes of `knowledge/*.md` content inlined — 0 for an expert never trained. */
+  readonly knowledge_bytes: number;
+  readonly knowledge_files: readonly string[];
+  /** True when the byte budget cut a knowledge file short. */
+  readonly truncated: boolean;
+}
+
 export interface PendingStage {
   readonly version: 1;
   readonly run: string;
@@ -36,6 +51,13 @@ export interface PendingStage {
   readonly sections: Readonly<Record<string, readonly string[]>>;
   readonly checks: readonly PlannedCheck[];
   readonly prepared_at: string;
+  /**
+   * Every expert whose `expert.md` and trained knowledge went into `prompt.md`.
+   * Written so the host session can see what the sub-agent was actually given —
+   * measured 2026-08-29, the bundle named one `expert` and said nothing about the
+   * other two the prompt contained, or about the knowledge in none of them.
+   */
+  readonly experts?: readonly PendingExpert[];
   /**
    * The story this bundle is for, when the stage runs story by story (the Build
    * executor's `--prepare`/`--commit` cycle). `--commit` reads it back to know

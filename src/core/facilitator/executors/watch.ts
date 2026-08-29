@@ -26,7 +26,8 @@ import { featureBrief, featureInputs, watcherRelPath } from "../../watch/watchPr
 import { describeWatcherIssues, parseWatcherCard, setWatcherStatus } from "../../watch/watcherFile.ts";
 import { renderWatchHandoff, type WrittenCard } from "../../watch/renderWatchHandoff.ts";
 import { WATCH_PHASE } from "../../watch/Watcher.ts";
-import { buildPrompt, loadExpertBodies, renderConventions, replaceSection, stackExpertNames } from "../prompt.ts";
+import { buildPrompt, renderConventions, replaceSection, stackExpertNames } from "../prompt.ts";
+import { loadExpertBundles } from "../../experts/expertBundle.ts";
 import { agentDir } from "../paths.ts";
 import { promptPath, readResult, writeBundle, writeRaw, PendingError, type PendingStage } from "../pending.ts";
 import { spawnAgent } from "../spawnAgent.ts";
@@ -218,10 +219,15 @@ async function featurePrompt(ctx: ExecutorContext, feature: Feature): Promise<st
   const diffs = await featureDiffs(ctx, feature);
   const facts = FactsStore.loadOrEmpty(factsPath(ctx.root)).facts;
   const stageMd = readOrEmpty(ctx.spec.planned.source.replace(/stage\.yml$/, "stage.md"));
-  const experts = [
-    ...ctx.spec.planned.experts,
-    ...(ctx.spec.stackExperts ? stackExpertNames(ctx.root, feature.repos) : []),
-  ];
+  const bundles = loadExpertBundles({
+    root: ctx.root,
+    staged: ctx.spec.planned.experts,
+    repos: feature.repos,
+    stackExperts: ctx.spec.stackExperts,
+    stackNames: stackExpertNames(ctx.root, feature.repos),
+    citedPaths: feature.stories.flatMap((done) => done.story.touches),
+    knowledgeBytes: ctx.spec.expertKnowledgeBytes,
+  });
   const body = buildPrompt({
     stageMd,
     values: {
@@ -232,7 +238,7 @@ async function featurePrompt(ctx: ExecutorContext, feature: Feature): Promise<st
       conventions: renderConventions(ctx.root, feature.repos),
       budget_usd: agentShare(ctx, 1).toFixed(2),
     },
-    experts: loadExpertBodies(ctx.root, experts),
+    experts: bundles.experts,
     inputs: featureInputs({ root: ctx.root, runDir: ctx.runDir, feature, diffs, facts }),
   });
   return replaceSection(body, "Feature", featureBrief(feature));

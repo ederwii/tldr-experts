@@ -337,8 +337,13 @@ describe("in-session mode", () => {
     // No fake claude on PATH at all: in-session mode must never spawn one.
     const prepared = await next(ws, { mode: "prepare" });
     expect(prepared.code).toBe(0);
-    expect(prepared.lines).toHaveLength(3);
-    expect(prepared.lines[2]).toContain("tldrx next --commit");
+    // One line per loaded expert, then the three instruction lines. The count is
+    // not asserted: what matters is that the instructions are all there and that
+    // the experts are named, not that the block is exactly N lines long.
+    expect(prepared.lines.join("\n")).toContain("expert product (stage)");
+    expect(prepared.lines.at(-1)).toContain("tldrx next --commit");
+    expect(prepared.lines.at(-2)).toContain("dispatch ONE sub-agent");
+    expect(prepared.lines.at(-3)).toContain("prepared 01-what/alpha");
 
     const agent = join(ws.runDir, ".agent", "alpha");
     expect(existsSync(join(agent, "prompt.md"))).toBe(true);
