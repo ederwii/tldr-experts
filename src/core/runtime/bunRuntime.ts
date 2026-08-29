@@ -26,6 +26,7 @@ export const bunRuntime: Runtime = {
     try {
       const proc = Bun.spawn([cmd, ...args], {
         cwd: opts.cwd,
+        env: opts.env as Record<string, string | undefined> | undefined,
         stdout: "pipe",
         stderr: "pipe",
         stdin: opts.stdin === undefined ? "ignore" : new TextEncoder().encode(opts.stdin),

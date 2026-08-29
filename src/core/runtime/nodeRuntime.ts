@@ -45,6 +45,7 @@ export const nodeRuntime: Runtime = {
 
       const child = nodeSpawn(cmd, [...args], {
         cwd: opts.cwd,
+        env: opts.env as NodeJS.ProcessEnv | undefined,
         stdio: [opts.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
         // Own process group, so the timeout below can kill the whole tree.
         detached: opts.timeoutMs !== undefined,

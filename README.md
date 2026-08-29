@@ -32,7 +32,9 @@ tldrx retro                # close the run and keep what was learned
 | `tldrx doctor` | **implemented** | Reads `env.yml`, runs each tool's `check` command, prints a table. Exit `0` when every required tool is present and meets its `min_version`, else `1`. `--mcp` also runs `claude mcp list` (slow — live health checks per server; off by default). |
 | `tldrx init` | **implemented** | Detects repos/stack/commands → `.tldrx/workspace.yml` (spec §2.1), builds `.tldrx/map/<repo>/{architecture,domains,conventions,commands,hotspots,gotchas}.md` + `map/workspace.md`, writes `.tldrx/init-handoff.md` (§2.8) and `.tldrx/init-questions.md` (§2.7, only real gaps), seeds experts at level 0 (§2.6), writes `conventions/`, `process.yml` (§2.12) and an empty `facts.yml`, and appends a marked block to `.gitignore` and `CLAUDE.md`. Deterministic: filesystem + `git` only, no LLM and no network. Re-running regenerates detection output and **keeps** `facts.yml`, `experts/`, `process.yml`, `conventions/*.md` and an answered questions file. Flags: `--root <path>` `--out <path>` `--no-interview` `--process <scrum\|kanban\|shape-up\|none>` `--mcp` `--provider <auto\|graphify\|static>`. Exit `0`/`1`. |
 | `tldrx run <new\|status>` | stub → exit 64 | |
-| `tldrx next` | stub → exit 64 | |
+| `tldrx next [<run>]` | **implemented** | The facilitator (spec §5). Takes `.lock` (a live pid refuses with `2`; a dead one demotes the crashed `running` stage back to `ready`), resolves the cursor, honours `awaiting_gate`/`awaiting_answer` (exit `4`), evaluates `skip_if`, refuses a stage the phase budget cannot cover (exit `2` + `budget.blocked`), checks required inputs exist (exit `1`), assembles the prompt, spawns one sub-agent, then re-reads every declared output **off disk**, re-runs the stage's `checks`, rolls the cost into `run.yml`+`budget.yml` and either requests the gate (exit `4`) or advances the cursor (exit `0`). A failure is exit `5`, and the cost is recorded, never refunded. Flags: `--dry-run --prepare --commit --model --max-usd --yolo`. |
+| `tldrx next --dry-run` | **implemented** | Runs the stage, keeps `handoff.md`, reverts every other declared output, records `stage.skipped`. Refused when the stage sets `dry_run_allowed: false`. |
+| `tldrx next --prepare` / `--commit` | **implemented** | In-session mode. `--prepare` writes `.agent/<stage>/{prompt.md,pending.json}` and prints three lines of instructions; `--commit` reads `.agent/<stage>/result.json` and continues down the identical validation path. |
 | `tldrx answer` | stub → exit 64 | |
 | `tldrx reject` | stub → exit 64 | |
 | `tldrx map [--refresh\|--check]` | **implemented** | `--refresh` re-detects and rewrites `.tldrx/map/**`. `--check` resolves every `[src: <repo:>path:line]` citation in the map and the init handoff against the filesystem — exit `0` when they all land, `1` with the offending document, line and reason when they do not. Map providers: `graphify` when the binary is on PATH (runs only `graphify --version` and `graphify update <path> --no-cluster`, both documented, no LLM), otherwise `static` (file tree, manifests, 90-day `git log --numstat` churn, largest files). Which one ran is recorded as `provider:` in `workspace.yml`. |
@@ -52,13 +54,13 @@ Non-command pieces:
 | Piece | Status | Notes |
 |---|---|---|
 | Schema validators (9 kinds) | **implemented** | Types plus a `validate()` that checks required keys and enums only. Tested against every shipped template, stage and workflow. |
-| `src/hooks/statusline.ts` | **implemented** | Renders `[tldrx] <model> ctx:<n>% $<cost>` from the documented `statusLine` payload; `[tldrx] no session data` when the fields are absent. |
+| `src/hooks/statusline.ts` | **implemented** | With a live run: `[tldrx] <run> · <PHASE> [▓▓░░░] <done>/<total> > <stage> — <expert> \| <model> ctx:<n>% $<session cost>/$<ceiling>` — the run half from `RunStore`, the model/context/cost half from the documented `statusLine` payload. Falls back to the short `[tldrx] <model> ctx:<n>% $<cost>` when there is no run, and to `[tldrx] no session data` when the payload fields are absent. Never throws, always exits 0. |
 | `claim-sources` hook | **implemented** | PreToolUse `Write\|Edit`. Parses the would-be handoff, denies when a bullet under Findings/Decisions/Unknowns/Evidence ledger has no `[src: …]` token or cites a file that does not resolve. A PostToolUse twin reports the same finding without blocking. |
 | `no-re-ask` hook | **implemented** | PreToolUse `Write\|Edit` on `questions.md`. Denies a *new* open question whose subject already has a non-retired `facts.yml` row (same `area`, Jaccard ≥ 0.6 on ≥4-char tokens) and names the fact. |
 | `answer-capture` hook | **implemented** | PostToolUse + FileChanged. Writes the answer footer, appends the fact (`kind: answer`, `source.q`) and the `question.answered` event, echoes `tldrx: recorded Q4 → F020`. Never blocks. |
 | `dod-gate` hook | **implemented** | PreToolUse `Write\|Edit` on `stories/*.md` that set `status: done`. Re-runs every command in the story's fenced ```` ```dod ```` block from its repo; each must exit 0. The one hook that fails **closed**. |
 | `budget-gate` hook | **implemented** | PreToolUse `Bash` on `claude -p …` / `tldrx next`. Denies when the cursor phase cannot afford the stage and `on_exceed: block`; appends `budget.blocked`. |
-| `session-start` hook | **implemented** | SessionStart. Up to three lines of "where we are" from the newest non-terminal `run.yml`; silent when there is no run. |
+| `session-start` hook | **implemented** | SessionStart. Up to three lines of "where we are" from the same `RunStore` snapshot the status line uses, so the two can never disagree; silent when there is no run. |
 | Hook failure policy | **implemented** | Every hook but `dod-gate` fails **open**: an internal error exits `0` and prints one `tldrx hook <name>: internal error, allowing — …` line to stderr. Only PreToolUse can deny, and it denies by printing `permissionDecision: deny` and exiting `0` — never by an exit code. |
 | Runtime seam | **implemented** | `src/core/runtime/` — `readStdin`, `spawn`, `readText/writeText/exists/readJson`, `parseYaml/stringifyYaml`, picked at import time by `typeof Bun`. Every other file in `src/` is runtime-agnostic; `grep -rn 'Bun\.' src \| grep -v src/core/runtime/` comes back empty, and a test asserts it. |
 | `RunStore` | **implemented** | The one write path for a run: loads and validates `run.yml` + `budget.yml`, recomputes stage costs, phase status, run status and the budget mirror on every save, and refuses to write either file if it would be invalid. `next` will reuse it unchanged. |
@@ -116,6 +118,28 @@ bun run build      # -> dist/tldrx.js + dist/hooks/*.js, runnable by node
 ```
 
 ## Design notes
+
+**Two execution modes, one code path.** `tldrx next` can do the work itself or
+supervise someone else doing it, and it judges both the same way. *Headless* —
+`tldrx next` — spawns `claude -p --output-format json --json-schema …` through the
+runtime seam, with `--allowedTools` limited to the file tools plus one
+`Bash(<command>)` grant per command `workspace.yml` declares, and
+`--dangerously-skip-permissions` only when you pass `--yolo`. *In-session* —
+`tldrx next --prepare` then `--commit` — writes the same prompt bundle to
+`tldrx-work/<run>/.agent/<stage>/` and lets the Claude Code session you are already
+in dispatch its own sub-agent, which is cheaper because that context is already
+warm. From "re-read the declared outputs off disk" onwards the two are literally
+the same function: same output validation, same `checks`, same cost roll-up, same
+gate. The agent's structured envelope (`{outputs, questions_asked, notes}`) is a
+report, never evidence — a file exists or it does not.
+
+Nesting was the open question and it is now measured (2026-08-29): `claude -p`
+runs fine from inside a Claude Code Bash tool. What bites is the ceiling, not the
+nesting — a cold session pays ~10–26k cache-creation tokens before its first
+reply, so a `--max-budget-usd` under about $0.25 fails as `error_max_budget_usd`
+before any work happens. `--prepare/--commit` survives because it is cheaper and
+because it still works where spawning is disallowed, not because spawning fails.
+
 
 **Bun to build, Node or Bun to run** (decided 2026-08-28). Every host capability
 that differs between the two runtimes — stdin, spawn, file IO, YAML — lives behind
