@@ -16,8 +16,10 @@
   **Experts trained by reading alone now cap at 3; run `tldrx expert recompute` to see
   the new levels.** The `--print-prompt` training prompt now says so and gives the row
   shape for a command — `{kind: run, src: "$ <cmd> → exit <n>", at: …}`, one row per
-  command with its exit code. The headless light-mode prompt says the opposite, and
-  honestly: it is a reading task that may not run anything, so it tops out at 3.
+  command with its exit code. (This entry originally ended "the headless light-mode
+  prompt says the opposite, and honestly: it is a reading task that may not run
+  anything, so it tops out at 3." That was not honest, it was a bug — see *Light-mode
+  training can reach level 4* below.)
 
 ### Three bugs an in-session training walked into
 
@@ -205,6 +207,40 @@ moment `competencies.yml` does.
 
 - **Package name stays `tldr-experts`**; it now installs two commands, `tldrx` and `tldr-experts`. (Unscoped `tldrx` as a package name is refused by npm's similarity rule; 0.0.1–0.2.0 were unpublished on 2026-08-29 and their numbers can never be reused, so this is the first version back on the registry.)
 - README: release table with status tags (`alpha`/`beta`/`stable` defined) and npm/CI badges.
+
+### Light-mode training can reach level 4
+
+- **A cited command is now a `run` evidence row.** `codeEvidence` mapped `file`→`code`,
+  `doc`→`doc` and `fact`→`answer` and dropped every `cmd` ref on the floor, so a
+  sub-agent that ran the suite and cited `[src: $ npm test → exit 0]` earned nothing for
+  it. Set against the run cap shipped above — no `kind: run` row means `level =
+  min(level, 3)` — that made `tldrx expert train --mode light` structurally incapable of
+  exceeding 3, whatever it measured. The ladder and the harness disagreed and the
+  harness was wrong: spec §2.6's "where evidence comes from" table has always said a
+  `run` row is written when a knowledge file cites a command that was executed. One row
+  per distinct command **and exit code**; a command `.tldrx/workspace.yml` does not
+  declare is rejected exactly as before, and takes the whole knowledge file with it.
+- **The training prompt no longer forbids what the tool allows.** It said "do not run
+  anything" while `allowedTools` already granted a `Bash(<command>)` for every command
+  in `workspace.yml` — the instruction won, so no training run ever executed anything.
+  It now names those commands verbatim (from the same list that becomes the grant, so
+  the two cannot drift), forbids everything else — no installs, no ad-hoc shell, no
+  product-code edits — and says that citing `[src: $ <cmd> → exit <n>]` is the only way
+  the expert earns a `run` row. Where `workspace.yml` declares no command there is no
+  `Bash` grant at all, and the prompt says so: no `run` row is reachable in that
+  workspace and level 3 is the honest ceiling.
+- **An evidence `src` is validated against its `kind`, both directions.** Nothing
+  checked before, so `{kind: run, src: "the tests pass"}` counted as a run — one row's
+  difference between level 3 and level 4. The §2.8 grammar now decides, through the same
+  `classifySrc` the `claim-sources` hook uses: `code`↔`file`, `run`↔`cmd` or a
+  `tldrx-work/…` artefact, `test`↔`file` or `cmd`, `doc`↔`https`, `answer`↔`F<n>`.
+  **Reading** warns and drops, through the channel unknown kinds already used —
+  `warning: <expert>/<area>: N evidence row(s) ignored — malformed src '<x>'` /
+  `— kind 'run' needs a … src` — because a `competencies.yml` may have been hand-edited.
+  **Writing** refuses outright (exit 1): everything reaching it was derived by the
+  framework from a knowledge file the framework already validated, so a bad row there is
+  a bug, and a bug that writes itself into the star chart is a bug nobody finds.
+  A hand-written `run` row that really is a command is accepted and counts, as before.
 
 ## 0.2.0 — 2026-08-29
 
