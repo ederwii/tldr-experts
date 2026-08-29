@@ -56,8 +56,10 @@ describe("tldrx --help", () => {
 describe("stub commands", () => {
   const stubs = COMMANDS.filter((c) => !c.implemented);
 
-  test("there is at least one stub, and doctor is not one of them", () => {
-    expect(stubs.length).toBeGreaterThan(0);
+  // v0 ships every command implemented; the generic stub list may be empty.
+  // What must hold: `doctor` is never a stub, and any stub that does exist
+  // honours the exit-64 contract (looped below).
+  test("doctor is never a stub", () => {
     expect(stubs.map((c) => c.name)).not.toContain("doctor");
   });
 
