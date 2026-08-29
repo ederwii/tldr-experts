@@ -9,26 +9,43 @@
  * stream to explain the missing two. A reader that silently discards data makes
  * every count downstream of it a claim rather than a measurement — so the rows it
  * refuses are tallied here and every caller reports them.
+ *
+ * Since 2026-08-29 it refuses two more shapes, through the same channel: a `src`
+ * that is not a §2.8 citation at all, and a `src` that is a citation of the wrong
+ * class for its `kind` (`{kind: run, src: "api:src/Thing.cs:1"}` — a file read,
+ * filed as a command executed). Nothing checked either before, so `kind: run` —
+ * the row the ladder gates levels 4 and 5 on — could be earned by typing the
+ * word. See `evidenceSrc.ts` for the class table.
  */
 import { isEvidenceKind, ALLOWED_KINDS, type CompetencyEvidence, type EvidenceKind } from "../init/competencyLevel.ts";
+import { checkEvidenceSrc, describeSrcProblem, type IgnoredReason } from "./evidenceSrc.ts";
 
-export interface IgnoredKind {
-  /** The unrecognised `kind:` value, verbatim (`""` when the key was missing). */
+export interface IgnoredRow {
+  readonly reason: IgnoredReason;
+  /** The row's `kind:` value, verbatim (`""` when the key was missing). */
   readonly kind: string;
+  /** The row's `src:` value, verbatim. `""` for `unknown-kind`, where it is beside the point. */
+  readonly src: string;
   readonly count: number;
 }
 
 export interface EvidenceRows {
   readonly evidence: readonly CompetencyEvidence[];
-  /** Otherwise well-formed rows refused for an unknown `kind`, tallied in first-seen order. */
-  readonly ignored: readonly IgnoredKind[];
+  /** Otherwise well-formed rows this reader refused, tallied in first-seen order. */
+  readonly ignored: readonly IgnoredRow[];
 }
 
 export function readEvidenceRows(input: unknown): EvidenceRows {
   if (!Array.isArray(input)) return { evidence: [], ignored: [] };
 
   const evidence: CompetencyEvidence[] = [];
-  const counts = new Map<string, number>();
+  const counts = new Map<string, IgnoredRow>();
+  const refuse = (reason: IgnoredReason, kind: string, src: string): void => {
+    // Keyed by what the message will say, so N rows with one complaint are one line.
+    const key = `${reason} ${reason === "unknown-kind" ? kind : `${kind} ${src}`}`;
+    const seen = counts.get(key);
+    counts.set(key, seen === undefined ? { reason, kind, src, count: 1 } : { ...seen, count: seen.count + 1 });
+  };
 
   for (const raw of input as unknown[]) {
     if (typeof raw !== "object" || raw === null || Array.isArray(raw)) continue;
@@ -40,27 +57,34 @@ export function readEvidenceRows(input: unknown): EvidenceRows {
     // row that would otherwise have counted is worth telling the operator about.
     if (src === "" || at === "") continue;
     if (!isEvidenceKind(kind)) {
-      counts.set(kind, (counts.get(kind) ?? 0) + 1);
+      refuse("unknown-kind", kind, "");
+      continue;
+    }
+    const problem = checkEvidenceSrc(kind, src);
+    if (problem !== null) {
+      refuse(problem.reason, kind, src);
       continue;
     }
     evidence.push({ kind: kind as EvidenceKind, src, at });
   }
 
-  const ignored = [...counts.entries()].map(([kind, count]) => ({ kind, count }));
-  return { evidence, ignored };
+  return { evidence, ignored: [...counts.values()] };
 }
 
-/** One line per unknown kind, in the shape `expert list`, the dashboard and training all print. */
-export function unknownKindWarnings(
+/** One line per refusal, in the shape `expert list`, the dashboard and training all print. */
+export function ignoredRowWarnings(
   expert: string,
   area: string,
-  ignored: readonly IgnoredKind[],
+  ignored: readonly IgnoredRow[],
 ): readonly string[] {
   return ignored.map(
-    (row) =>
-      `warning: ${expert}/${area}: ${String(row.count)} evidence row(s) ignored — `
-      + `unknown kind '${row.kind}' (allowed: ${ALLOWED_KINDS})`,
+    (row) => `warning: ${expert}/${area}: ${String(row.count)} evidence row(s) ignored — ${explain(row)}`,
   );
+}
+
+function explain(row: IgnoredRow): string {
+  if (row.reason === "unknown-kind") return `unknown kind '${row.kind}' (allowed: ${ALLOWED_KINDS})`;
+  return describeSrcProblem(row.kind as EvidenceKind, row.src, { reason: row.reason });
 }
 
 function str(value: unknown): string {

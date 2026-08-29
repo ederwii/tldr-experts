@@ -7,7 +7,7 @@
  * measurement.
  */
 import { starChart } from "./starChart.ts";
-import { unknownKindWarnings } from "./readEvidenceRows.ts";
+import { ignoredRowWarnings } from "./readEvidenceRows.ts";
 import type { ExpertRecord } from "./ExpertRecord.ts";
 
 const HEADERS = ["expert", "status", "last_trained", "areas", "evidence", "levels"] as const;
@@ -38,10 +38,12 @@ export function driftWarnings(expert: ExpertRecord): readonly string[] {
  * Kept apart from `driftWarnings` because the two say different things: drift is
  * "the number on disk is stale", an ignored row is "this file contains data the
  * tool refused". Both must reach a human — a dropped row silently lowers a level,
- * which is the failure this whole module exists to prevent.
+ * which is the failure this whole module exists to prevent. Three refusals reach
+ * here: an unknown `kind`, a `src` that is not a §2.8 citation, and a `src` whose
+ * class does not match its `kind`.
  */
 export function evidenceWarnings(expert: ExpertRecord): readonly string[] {
-  return expert.areas.flatMap((area) => unknownKindWarnings(expert.name, area.id, area.ignored));
+  return expert.areas.flatMap((area) => ignoredRowWarnings(expert.name, area.id, area.ignored));
 }
 
 export function renderExpertList(experts: readonly ExpertRecord[]): string {

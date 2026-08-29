@@ -314,7 +314,7 @@ areas:
   - {id: ef-core, title: "EF Core mapping and migrations", level: 3,
      train_prompt: "tldrx expert train dotnet-stack --area ef-core --mode light",
      evidence: [{kind: code, src: "api:src/Scavtopia.Infrastructure/Persistence/AppDbContext.cs:41", at: 2026-08-20},
-                {kind: run, src: "tldrx-work/260812-scores/04-build/log/S3.md", at: 2026-08-12},
+                {kind: run, src: "tldrx-work/260812-scores/04-build/log/S3.md:9", at: 2026-08-12},
                 {kind: doc, src: "https://learn.microsoft.com/ef/core/modeling/", at: 2026-06-02},
                 {kind: answer, src: "F019", at: 2026-08-14}]}
 ```

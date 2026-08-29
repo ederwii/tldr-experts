@@ -1,12 +1,20 @@
 /**
  * Writing `competencies.yml` back after a training run (spec §2.6).
  *
- * Three rules, all of them the spec's:
+ * Four rules, all of them the spec's:
  *
  *   - `level` is COMPUTED. Every area's level is recomputed on this write, not
  *     just the trained one — "a hand-edited value is overwritten on the next
  *     write" is the sentence that makes the star chart a measurement.
  *   - evidence is deduped by `src` and capped at 50 per area.
+ *   - every incoming row's `src` matches the §2.6/§2.8 grammar for its `kind`,
+ *     and a row that does not is REFUSED rather than warned about. This is the
+ *     one asymmetry with the reader: `readEvidenceRows` warns and drops, because
+ *     it is reading a file a human may have edited, while everything reaching
+ *     THIS function was derived by `codeEvidence`/`runEvidence` from a knowledge
+ *     file the framework already validated. A bad row here is not bad input, it
+ *     is a bug in the harness, and a bug that writes itself into the star chart
+ *     is a bug nobody finds.
  *   - the document keeps its shape. The file is parsed, mutated and re-emitted
  *     rather than regenerated, so a team that added a key to it does not lose it
  *     to a training run.
@@ -21,7 +29,8 @@ import { dirname, join } from "node:path";
 import { stringifyYaml, parseYaml } from "../yaml.ts";
 import { competencyLevel, type CompetencyEvidence } from "../init/competencyLevel.ts";
 import { COMPETENCIES_FILE, expertDir } from "../experts/loadExperts.ts";
-import { readEvidenceRows, unknownKindWarnings } from "../experts/readEvidenceRows.ts";
+import { readEvidenceRows, ignoredRowWarnings } from "../experts/readEvidenceRows.ts";
+import { checkEvidenceSrc, describeSrcProblem } from "../experts/evidenceSrc.ts";
 import { mergeEvidence } from "./knowledgeFile.ts";
 
 const HEADER = "# Written by `tldrx expert train` (spec §2.6). `level` is computed, never hand-set.\n";
@@ -86,6 +95,7 @@ function areaId(area: Record<string, unknown>): string {
 }
 
 export function writeCompetencies(options: WriteCompetenciesOptions): CompetenciesWrite {
+  rejectBadEvidence(options.expert, options.areaId, options.evidence);
   const loaded = readDocument(options.root, options.expert);
   const { path, doc, areas } = loaded;
 
@@ -97,7 +107,7 @@ export function writeCompetencies(options: WriteCompetenciesOptions): Competenci
     const id = areaId(area);
     const rows = readEvidenceRows(area.evidence);
     const existing = rows.evidence;
-    warnings.push(...unknownKindWarnings(options.expert, id, rows.ignored));
+    warnings.push(...ignoredRowWarnings(options.expert, id, rows.ignored));
 
     if (id === options.areaId) {
       const merged = mergeEvidence(existing, options.evidence, options.now);
@@ -132,6 +142,27 @@ export function writeCompetencies(options: WriteCompetenciesOptions): Competenci
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, serialize(loaded, doc), "utf8");
   return { ...(write as CompetenciesWrite), warnings };
+}
+
+/**
+ * Refuse to write a row whose `src` is not a citation of its `kind`.
+ *
+ * Thrown, not warned: these rows come from the harness. Writing one would put a
+ * number on the star chart that nothing supports — and for `kind: run` it would
+ * put it two rungs up, since §2.6 caps a runless area at 3.
+ */
+function rejectBadEvidence(
+  expert: string,
+  areaId: string,
+  evidence: readonly CompetencyEvidence[],
+): void {
+  for (const row of evidence) {
+    const problem = checkEvidenceSrc(row.kind, row.src);
+    if (problem === null) continue;
+    throw new CompetenciesError(
+      `${expert}/${areaId}: refusing to write evidence — ${describeSrcProblem(row.kind, row.src, problem)}`,
+    );
+  }
 }
 
 export interface RecomputeOptions {
@@ -182,7 +213,7 @@ export function recomputeCompetencies(options: RecomputeOptions): CompetenciesRe
     const area = { ...(raw as Record<string, unknown>) };
     const id = areaId(area);
     const rows = readEvidenceRows(area.evidence);
-    warnings.push(...unknownKindWarnings(options.expert, id, rows.ignored));
+    warnings.push(...ignoredRowWarnings(options.expert, id, rows.ignored));
 
     const levelBefore = typeof area.level === "number" ? area.level : null;
     const levelAfter = competencyLevel(rows.evidence, options.now);
