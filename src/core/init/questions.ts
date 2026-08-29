@@ -14,6 +14,7 @@ import { srcToken } from "../map/srcToken.ts";
 import { gapSrc } from "../detect/gapSrc.ts";
 import { isGreenfield } from "../detect/greenfield.ts";
 import { STACK_CHOICES } from "./stackChoices.ts";
+import type { Methodology, TicketTool } from "../schemas/process.ts";
 import type { DetectedWorkspace } from "../detect/types.ts";
 import type { McpServer } from "../doctor/McpProbe.ts";
 
@@ -40,6 +41,46 @@ export interface QuestionInput {
   /** True when `--stack` already settled the intended stack. */
   readonly stackGiven?: boolean;
 }
+
+/**
+ * The two process questions, and what each offered option settles in
+ * `.tldrx/process.yml`.
+ *
+ * The tables are the single source of truth for BOTH directions: `planQuestions`
+ * renders the labels, and `applyProcessAnswers` maps a recorded answer back to a
+ * `methodology:` / `ticket_tool.kind:` value. Keeping them in one place is what
+ * stops the rendered wording and the mapping from drifting apart.
+ *
+ * `None` is deliberately option **A** in both. `--yes-to-defaults` takes option A
+ * (`interview/reply.ts`), and the default a machine picks must be the one that
+ * commits the team to nothing — a real user was handed `scrum` + `jira` by a flag
+ * whose whole point was "do not decide for me". `other` stays last: it is free
+ * text, so it maps to nothing and leaves the file alone.
+ */
+export const METHODOLOGY_QUESTION = "How does this team plan work?";
+export const TICKET_QUESTION = "Which ticket tool should stories mirror out to?";
+
+export interface ProcessChoice<T> {
+  readonly label: string;
+  /** The `process.yml` value this option settles, or `null` for free text. */
+  readonly value: T | null;
+}
+
+export const METHODOLOGY_CHOICES: readonly ProcessChoice<Methodology>[] = [
+  { label: "None — a plain ordered list of stories", value: "none" },
+  { label: "Scrum — fixed-length sprints", value: "scrum" },
+  { label: "Kanban — continuous flow with a WIP limit", value: "kanban" },
+  { label: "Shape Up — appetite-driven cycles", value: "shape-up" },
+  { label: "other — write it below", value: null },
+];
+
+export const TICKET_CHOICES: readonly ProcessChoice<TicketTool>[] = [
+  { label: "None — files are the only record", value: "none" },
+  { label: "Jira — write the project key below", value: "jira" },
+  { label: "GitHub Issues", value: "github" },
+  { label: "Linear", value: "linear" },
+  { label: "other — write it below", value: null },
+];
 
 /** The gaps, in a fixed order so question ids are stable across runs. */
 export function planQuestions(input: QuestionInput): Question[] {
@@ -78,23 +119,17 @@ export function planQuestions(input: QuestionInput): Question[] {
   if (!input.processGiven) {
     questions.push({
       area: "process",
-      question: "How does this team plan work?",
+      question: METHODOLOGY_QUESTION,
       why: "no process model is recorded and none was passed with --process",
       whySrc: "absent:.tldrx/process.yml",
-      options: [
-        "Scrum — fixed-length sprints",
-        "Kanban — continuous flow with a WIP limit",
-        "Shape Up — appetite-driven cycles",
-        "None — a plain ordered list of stories",
-        "other — write it below",
-      ],
+      options: METHODOLOGY_CHOICES.map((choice) => choice.label),
     });
     questions.push({
       area: "process",
-      question: "Which ticket tool should stories mirror out to?",
+      question: TICKET_QUESTION,
       why: ticketWhy(input.mcpServers),
       whySrc: "absent:.tldrx/process.yml",
-      options: [...ticketOptions(input.mcpServers), "None — files are the only record", "other — write it below"],
+      options: ticketOptions(input.mcpServers),
     });
   }
 
@@ -167,12 +202,17 @@ function ticketWhy(servers: readonly McpServer[]): string {
     : `an MCP server for ${suggestion} is connected, which is a suggestion and not a decision`;
 }
 
+/**
+ * The offered labels, in table order, with the MCP hint appended to the one it
+ * points at. The hint is a suffix and never a reorder: `--yes-to-defaults` must
+ * keep landing on `None`, whatever happens to be connected.
+ */
 function ticketOptions(servers: readonly McpServer[]): string[] {
   const suggestion = suggestTicketTool(servers);
-  const options = ["Jira — write the project key below", "GitHub Issues", "Linear"];
-  if (suggestion === null) return options;
-  return options.map((option) =>
-    option.toLowerCase().startsWith(suggestion) ? `${option} (MCP server connected)` : option);
+  return TICKET_CHOICES.map(({ label }) =>
+    suggestion !== null && label.toLowerCase().startsWith(suggestion)
+      ? `${label} (MCP server connected)`
+      : label);
 }
 
 /** Which ticket tool the connected MCP servers hint at. Suggestion only (concept v0.2). */

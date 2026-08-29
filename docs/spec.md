@@ -610,6 +610,24 @@ source: {who: alan, when: 2026-08-28T16:40:00Z, run: init, q: Q2}
 **Validation.** Enums; `sprint_length_days` required iff `methodology: scrum`; `ticket_tool.project` required unless
 `kind: none`; `approvers` non-empty.
 
+**Where the values come from.** The install interview (§2.7, `.tldrx/init-questions.md`) asks two `area: process`
+questions, and `tldrx interview --init` applies their answers to this file — recording them only as facts would leave
+`tldrx tickets` (§5.1) reading `kind: none` after a human had said otherwise. `None` is option **A** in both, because
+`--yes-to-defaults` takes option A and a default a machine picks must commit the team to nothing.
+
+| Answer | Written |
+|---|---|
+| `None` / `Scrum` / `Kanban` / `Shape Up` | `methodology: none\|scrum\|kanban\|shape-up`, plus `cadence.sprint_length_days` (scrum) or `cadence.wip_limit` (kanban) when that key is still null |
+| `None` / `Jira` / `GitHub Issues` / `Linear` | `ticket_tool.kind` |
+| `GitHub Issues` | `ticket_tool.project` = `owner/repo`, parsed from `git remote get-url origin` of the root, else of the first `workspace.yml` repo with a GitHub remote. No GitHub remote ⇒ `project` is left unset and a note says so |
+| `Jira` | `ticket_tool.project` is **not** guessed; a note names the key to set |
+| `other` / free text | nothing is written; the answer stays a fact and a note names the key to set by hand |
+
+Every other key, the file's key order and its leading comment header survive; nothing is written when the bytes would
+not change, so re-answering the same way is a no-op. `[assumption]` — `kind: jira` is applied with `project` still
+null, which the validation rule above rejects. Refusing the answer the human just gave is worse: the note says which
+key to fill and `tldrx tickets sync` refuses by name until it is filled.
+
 **`ticket_tool.sync`, in full** — this is the field `tldrx tickets` (§5.1) acts on, and it has exactly two values:
 
 | Value | Out | In | Never |
@@ -835,7 +853,7 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx run status [<run>]` | `run.yml`, `events.jsonl` | nothing (stdout) | 0,3 |
 | `tldrx next [<run>] [--dry-run]` | `run.yml`, `stage.yml`, `stage.md`, `expert.md`, declared inputs | stage outputs, `run.yml`, `events.jsonl` | 0,2,4,5 |
 | `tldrx answer <Qid> <text>` | `questions.md`, `facts.yml` | `questions.md`, `facts.yml`, `events.jsonl` | 0,1,3 |
-| `tldrx interview [--run <id>\|--init] [--yes-to-defaults]` | the cursor phase's `questions.md` (or `.tldrx/init-questions.md`), `run.yml` | the same three files `answer` writes, one per answer recorded | 0,1,3 |
+| `tldrx interview [--run <id>\|--init] [--yes-to-defaults]` | the cursor phase's `questions.md` (or `.tldrx/init-questions.md`), `run.yml`, `.tldrx/process.yml`, `workspace.yml`, `git remote get-url origin` | the same three files `answer` writes, one per answer recorded; with `--init`, also `.tldrx/process.yml` (§2.12) when a process answer settles `methodology` or `ticket_tool.kind` | 0,1,3 |
 | `tldrx approve [<run>] [--note]` | `run.yml`, stage outputs, stage checks | `run.yml` gate, `events.jsonl` | 0,2,3 |
 | `tldrx reject [<run>] --note <text>` | `run.yml` | `run.yml` gate, `events.jsonl`, stage status ⇒ `ready` | 0,3 |
 | `tldrx budget show [<run>] [--run <id>] [--json]` | `run.yml`, `budget.yml` | nothing (stdout) | 0,1,3 |

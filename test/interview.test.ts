@@ -19,6 +19,11 @@ import { EventLog } from "../src/core/events/EventLog.ts";
 import { interpret, defaultReply } from "../src/core/interview/reply.ts";
 import { splitLines } from "../src/core/interview/lineReader.ts";
 import { WORKSPACE_YML, EMPTY_FACTS } from "./fixtures/tempRunWorkspace.ts";
+import { initQuestionsFile, letterFor } from "./fixtures/initQuestions.ts";
+import { buildProcessDocument, PROCESS_HEADER } from "../src/core/init/processDocument.ts";
+import { endWithNewline } from "../src/core/init/writeFile.ts";
+import { stringifyYaml } from "../src/core/yaml.ts";
+import { readTicketToolConfig } from "../src/core/adapters/processConfig.ts";
 
 const BIN = join(FRAMEWORK_ROOT, "bin", "tldrx.ts");
 
@@ -269,6 +274,124 @@ describe("tldrx interview", () => {
     const run = await tldrx(root, ["interview", "--init", "--run", "260101-x"], "");
     expect(run.code).toBe(1);
     expect(run.stderr).toContain("pass one");
+  });
+});
+
+/**
+ * The install interview does not just RECORD the two process answers, it applies
+ * them to `.tldrx/process.yml` — the file `tldrx tickets` reads. These drive the
+ * real binary end to end, so the `git` that resolves `owner/repo` is the real one,
+ * through the real spawn seam.
+ */
+describe("tldrx interview --init · process.yml", () => {
+  /** A workspace with the two real process questions open and an init-written process.yml. */
+  function initWorkspace(options: { process?: boolean } = {}): string {
+    const root = mkdtempSync(join(tmpdir(), "tldrx-interview-process-"));
+    temps.push(root);
+    mkdirSync(join(root, ".tldrx", "memory"), { recursive: true });
+    writeFileSync(join(root, ".tldrx", "workspace.yml"), WORKSPACE_YML, "utf8");
+    writeFileSync(join(root, ".tldrx", "memory", "facts.yml"), EMPTY_FACTS, "utf8");
+    writeFileSync(join(root, ".tldrx", "init-questions.md"), initQuestionsFile(), "utf8");
+    mkdirSync(join(root, "api"), { recursive: true });
+    mkdirSync(join(root, "lab"), { recursive: true });
+    if (options.process !== false) {
+      writeFileSync(join(root, ".tldrx", "process.yml"), endWithNewline(
+        PROCESS_HEADER + stringifyYaml(buildProcessDocument({
+          methodology: null, approver: "alan", when: "2026-08-29T09:00:00Z", questionId: "Q1",
+        })),
+      ), "utf8");
+    }
+    return root;
+  }
+
+  const KANBAN = "Kanban — continuous flow with a WIP limit";
+  const GITHUB = "GitHub Issues";
+  const JIRA = "Jira — write the project key below";
+
+  test("piped stdin applies both answers, and `git remote` supplies owner/repo", async () => {
+    const root = initWorkspace();
+    for (const argv of [
+      ["init", "-q"],
+      ["remote", "add", "origin", "git@github.com:ederwii/aparece-api.git"],
+    ]) {
+      const git = Bun.spawn(["git", ...argv], { cwd: root, stdout: "pipe", stderr: "pipe" });
+      expect(await git.exited).toBe(0);
+    }
+
+    const stdin = `${letterFor("Q1", KANBAN)}\n${letterFor("Q2", GITHUB)}\n`;
+    const run = await tldrx(root, ["interview", "--init"], stdin);
+    expect(run.stderr).toBe("");
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).toContain("process.yml: methodology=kanban, ticket_tool=github (ederwii/aparece-api)");
+
+    // The file the ticket mirror reads now says what the human said.
+    expect(readTicketToolConfig(root)).toMatchObject({ kind: "github", project: "ederwii/aparece-api" });
+    const text = readFileSync(join(root, ".tldrx", "process.yml"), "utf8");
+    expect(text).toContain("methodology: kanban");
+    expect(text.startsWith(PROCESS_HEADER)).toBe(true);
+
+    // ...and answering the same way again changes nothing.
+    const after = readFileSync(join(root, ".tldrx", "process.yml"), "utf8");
+    const again = await tldrx(root, ["interview", "--init"], stdin);
+    expect(again.code).toBe(EXIT_OK);
+    expect(readFileSync(join(root, ".tldrx", "process.yml"), "utf8")).toBe(after);
+  });
+
+  test("--yes-to-defaults lands on none/none — the default decides nothing", async () => {
+    const root = initWorkspace();
+    const before = readFileSync(join(root, ".tldrx", "process.yml"), "utf8");
+    const run = await tldrx(root, ["interview", "--yes-to-defaults", "--init"], "");
+    expect(run.code).toBe(EXIT_OK);
+
+    const answers = parseQuestions(readFileSync(join(root, ".tldrx", "init-questions.md"), "utf8"))
+      .blocks.map((block) => block.answer);
+    expect(answers).toEqual(["None — a plain ordered list of stories", "None — files are the only record"]);
+    expect(run.stdout).toContain("process.yml: unchanged");
+    expect(readFileSync(join(root, ".tldrx", "process.yml"), "utf8")).toBe(before);
+    expect(readTicketToolConfig(root)).toMatchObject({ kind: "none", project: null });
+  });
+
+  test("jira is applied without a project key, and the note names the key to set", async () => {
+    const root = initWorkspace();
+    const run = await tldrx(root, ["interview", "--init"], `s\n${letterFor("Q2", JIRA)}\n`);
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).toContain("process.yml: ticket_tool=jira");
+    expect(run.stdout).toContain("note: set ticket_tool.project (Jira project key) in .tldrx/process.yml");
+    expect(readTicketToolConfig(root)).toMatchObject({ kind: "jira", project: null });
+  });
+
+  test("free text leaves process.yml alone and says which key to set by hand", async () => {
+    const root = initWorkspace();
+    const before = readFileSync(join(root, ".tldrx", "process.yml"), "utf8");
+    const run = await tldrx(root, ["interview", "--init"], "six-week cycles\nour own spreadsheet\n");
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).toContain("process.yml: unchanged");
+    expect(run.stdout).toContain("Set `methodology:` in .tldrx/process.yml by hand");
+    expect(run.stdout).toContain("Set `ticket_tool.kind:` in .tldrx/process.yml by hand");
+    expect(readFileSync(join(root, ".tldrx", "process.yml"), "utf8")).toBe(before);
+    // The answers are still facts — only the FILE was left alone.
+    const facts = FactsStore.loadOrEmpty(join(root, ".tldrx", "memory", "facts.yml")).facts;
+    expect(facts.map((fact) => fact.area)).toEqual(["process", "process"]);
+  });
+
+  test("a missing process.yml is created from the answers", async () => {
+    const root = initWorkspace({ process: false });
+    expect(existsSync(join(root, ".tldrx", "process.yml"))).toBe(false);
+    const run = await tldrx(root, ["interview", "--init"], `${letterFor("Q1", KANBAN)}\n${letterFor("Q2", JIRA)}\n`);
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).toContain("process.yml (created): methodology=kanban, ticket_tool=jira");
+    expect(existsSync(join(root, ".tldrx", "process.yml"))).toBe(true);
+    expect(readTicketToolConfig(root).kind).toBe("jira");
+  });
+
+  test("a run's questions.md never touches process.yml", async () => {
+    const { root } = await workspaceWithRun();
+    writeFileSync(join(root, ".tldrx", "process.yml"), "methodology: none\nticket_tool: none\n", "utf8");
+    const run = await tldrx(root, ["interview"], "A\nq\n");
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).not.toContain("process.yml:");
+    expect(readFileSync(join(root, ".tldrx", "process.yml"), "utf8"))
+      .toBe("methodology: none\nticket_tool: none\n");
   });
 });
 

@@ -25,7 +25,11 @@ import { createLineReader } from "../../core/interview/lineReader.ts";
 import { renderNextSteps } from "../../core/interview/renderQuestion.ts";
 import { renderInterviewSummary, runInterview } from "../../core/interview/runInterview.ts";
 import { QUESTIONS_FILE } from "../../core/init/questions.ts";
-import type { CaptureContext } from "../../core/answers/captureAnswers.ts";
+import {
+  applyProcessAnswers, collectProcessAnswers, hasProcessAnswer, renderProcessApply,
+} from "../../core/init/processAnswers.ts";
+import { SpawnCommandRunner } from "../../core/detect/CommandRunner.ts";
+import type { CaptureContext, CapturedAnswer } from "../../core/answers/captureAnswers.ts";
 
 const VALUE_FLAGS = ["run", "root"] as const;
 
@@ -70,6 +74,7 @@ export const interviewCommand: Command = {
           out: (text) => process.stdout.write(text),
         });
         process.stdout.write(renderInterviewSummary(result));
+        if (init) await applyProcess(root, target.path, result.answered);
       } finally {
         reader.close();
       }
@@ -80,6 +85,29 @@ export const interviewCommand: Command = {
     }
   },
 };
+
+/**
+ * The install interview's two process answers are not just facts: they are the
+ * contents of `.tldrx/process.yml`, the file `tldrx tickets` reads. Recording them
+ * and leaving that file saying `none` would make the question decorative, so the
+ * answers are applied here, after they are recorded and through the same
+ * `CommandRunner` seam detection uses.
+ *
+ * Only `--init` reaches this: a run's `questions.md` asks about the work, not about
+ * how the team works.
+ */
+async function applyProcess(
+  root: string,
+  questionsPath: string,
+  answered: readonly CapturedAnswer[],
+): Promise<void> {
+  const answers = collectProcessAnswers(questionsPath, answered);
+  if (!hasProcessAnswer(answers)) return;
+  const applied = await applyProcessAnswers({
+    root, answers, runner: new SpawnCommandRunner(), when: nowRfc3339(),
+  });
+  process.stdout.write(renderProcessApply(applied));
+}
 
 /**
  * `.tldrx/init-questions.md`. `[assumption]` — init is not a run, but
