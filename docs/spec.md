@@ -605,6 +605,13 @@ sub-agent's *result envelope* is structured via `--json-schema` (`{outputs: [], 
 degrades, never installs. (c) Parallelism: v0 runs tasks sequentially; v1 runs independent stories of one wave in
 parallel, one worktree per story.
 
+**Two execution modes (same files, same validation).** *Headless*: `tldrx next` spawns `claude -p` itself — for
+terminals, CI and chat bridges. *In-session*: when the user is already inside Claude Code, the `/tldrx` skill runs
+`tldrx next --prepare` (writes the prompt bundle + declared inputs to `.agent/prompt.md`), Claude Code dispatches the
+sub-agent with its own Agent tool, then `tldrx next --commit` validates outputs, checks, cost and gates exactly as the
+headless path does. Whether a nested `claude -p` works from inside a Claude Code Bash tool is **unverified** — the
+in-session mode exists so the framework never depends on it.
+
 **Resume path.** State lives only in files, so resume = run `next` again: the cursor points at the first non-terminal
 stage, a `running` left by a crash is demoted to `ready` when `.lock` holds a dead pid, and partial outputs are
 overwritten (stages are idempotent by contract). A task that failed mid-stage may instead be resumed with
@@ -633,6 +640,8 @@ into the next prompt), or editing the stage inputs by hand and re-running.
   `/aidlc-ws/aidlc/spaces/default/intents/260823-scoring-leaderboard`; `docker cp` it to the host before `--from`.
 
 ## 7. Open decisions
+
+- Verify whether `claude -p` can be spawned from inside a Claude Code Bash tool (nested session); until then in-session mode uses `--prepare/--commit`.
 
 - Whether `.tldrx/` is one root install or also allowed per sub-repo simultaneously (spec assumes root-only in v0).
 - Story/epic file schemas (`stories/<id>.md`, `epics/<id>.md`, `waves.yml`) — v1 Execute, not specified here.
