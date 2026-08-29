@@ -163,7 +163,15 @@ they say to. Several runs will be open afterwards — every later command needs 
 5. **Verify from the source, not from your own output.** After a write, re-read it
    from disk. A sub-agent reporting "ok" is not evidence.
 6. **Say which you are in: measured, inferred, or assumed.** Never blur them.
-7. **Stop at gates.** You do not approve your own work.
+7. **Stop at gates.** You do not approve your own work. Some gates are `auto`
+   (`run.yml` `gates_policy:`, spec §5): those the *framework* closes, and only when
+   all five conditions hold — checks pass, no open question, spend inside both
+   ceilings, the stage did not fail, claim-sources clean — recorded with `by: auto`
+   and a note listing every value. Any of them failing drops back to the human gate.
+   You never close a gate yourself either way, and `/tldrx` in-session stays **one
+   stage per call**. When a run's remaining gates are mostly `auto` and nobody needs
+   to watch, say so and offer `tldrx run auto` — the headless loop that runs `next`
+   until something genuinely needs a person.
 8. **Budget is an input.** If the stage costs more than remains, `next` refuses to
    start it and exits 2. Report that, with `tldrx budget show` for the whole
    picture and the exact `tldrx budget raise …` command the refusal names — and

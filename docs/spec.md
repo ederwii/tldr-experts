@@ -112,6 +112,7 @@ updated_at: 2026-08-28T14:31:52Z
 status: awaiting_gate
 cursor: {phase: 02-how, stage: contracts, task: null}
 budget: {ceiling_usd: 25.0, spent_usd: 3.75, per_agent_max_usd: 3.0}
+gates_policy: {intent: human, contracts: auto, plan: human, build: auto, watch: human}
 phases:
   - id: 01-what
     status: done
@@ -151,12 +152,14 @@ stage at `cursor`, or `done` when every phase is terminal.
 | `stages[].id` / `.expert` / `.model` | slug / slug\|null / str | y | Stage file, expert folder, model pin |
 | `stages[].budget_usd` / `.cost_usd` / `.started_at` / `.ended_at` | number ≥0 / RFC3339\|null | y | Ceiling, actual from `total_cost_usd`, wall clock |
 | `stages[].inputs` / `.outputs` | rel path[] | y | Declared inputs; files produced |
-| `stages[].gate` | {type, status, by, at, note} | y | `type` `approve\|checks\|auto`; `status` `pending\|approved\|rejected\|n-a` |
+| `stages[].gate` | {type, status, by, at, note} | y | `type` `approve\|checks\|auto`; `status` `pending\|approved\|rejected\|n-a`; `by` is `auto` on a gate the facilitator closed |
+| `gates_policy` | {stage: `human\|auto`} | n | **Who** closes each gate. Resolved from §2.4 `gates:` and `run new --gates` at creation and frozen here, so the run keeps the policy it was opened with. Absent, or a stage it does not name ⇒ `human` |
 | `tasks[].id` / `.status` | `^t\d+$` / enum | y | One sub-agent invocation |
 | `tasks[].session_id` / `.error` | str\|null | y | Session from `claude -p --output-format json`; one-line reason when `failed` |
 
 **Validation.** Ids unique within parent; `cursor` resolves; ≤1 `running` stage (single-writer); `|spent_usd −
-Σ tasks.cost_usd| ≤ 0.01`; `started_at ≤ ended_at`; `approved` needs `by`+`at`; ≤5 phases, ≤40 stages, ≤200 tasks.
+Σ tasks.cost_usd| ≤ 0.01`; `started_at ≤ ended_at`; `approved` needs `by`+`at`; every `gates_policy` value is
+`human\|auto` and every key names a stage in the file; ≤5 phases, ≤40 stages, ≤200 tasks.
 
 ### 2.3 `.tldrx/stages/<slug>/stage.yml` + `stage.md`
 
@@ -267,7 +270,7 @@ name: bugfix
 title: "Fix a specific defect"
 depth: minimal
 default_budget_usd: 8.0
-gates: {collapse: false}
+gates: {reproduce: auto, root-cause: human, minimal-design: auto, plan-stories: human, build: auto, regression-watcher: human}
 questions: {suppress_areas: [market, ux]}
 dod: {add: ["A test failed before the fix and passes after [src: $ dotnet test → exit 0]"], remove: ["UX review sign-off"]}
 stages:
@@ -283,14 +286,33 @@ stages:
 |---|---|---|---|
 | `name` / `title` | slug / str | y | `name` = filename stem = `run.scope` |
 | `depth` | `minimal\|standard\|deep` | y | Investigation effort; budget multiplier 0.5 / 1.0 / 2.0 `[assumption]` |
-| `default_budget_usd` / `gates.collapse` | number >0 / bool | y / n (false) | Run ceiling when `run new` gives none; `true` ⇒ one gate at run end (hotfix) |
+| `default_budget_usd` | number >0 | y | Run ceiling when `run new` gives none |
+| `gates` | {stage: `human\|auto`} | n | Who closes each stage's gate. A stage the map does not name is `human`. The key `collapse` is **reserved** (`true` ⇒ one gate at run end; not implemented) and is skipped rather than read as a stage id |
 | `questions.suppress_areas` / `dod.add` / `dod.remove` | slug[] / str[] / str[] | n | Areas this scope must not ask about; deltas over the default DoD |
 | `stages[].id` / `.phase` | slug / `^0[1-5]-` | y | Stage folder; file order = execution order |
 | `stages[].budget_usd` | number >0 | n | Overrides `stage.yml` |
 | `stages[].skip_if` | str | n | `^(stories\|repos\|questions)(<=\|>=\|==\|<\|>)\d{1,4}$` `[assumption]` |
 
 **Validation.** `name` = filename stem; stage ids unique and present in `.tldrx/stages/`; Σ `budget_usd` ≤
-`default_budget_usd`; `skip_if` matches the pattern above; ≤40 stages.
+`default_budget_usd`; `skip_if` matches the pattern above; every `gates` key (other than `collapse`) names a stage
+this workflow lists and every value is `human\|auto`; ≤40 stages.
+
+**Shipped defaults.** Every scope keeps at least one human gate — the framework has no all-auto preset, and
+`--gates none` is the only way to get one.
+
+| Scope | what | how | plan | build | watch |
+|---|---|---|---|---|---|
+| `feature` `bugfix` `integration` `refactor` | human | auto | human | auto | human |
+| `performance` | human | auto | — | auto | human |
+| `docs` | auto | — | — | human | — |
+| `spike` | auto | human | — | — | — |
+| `prototype` | auto | auto | — | human | — |
+| `upgrade` | auto | — | auto | auto | human |
+| `hotfix` | auto | — | — | human | human |
+| `security-patch` | auto | auto | — | human | human |
+| `migration` | auto | auto | auto | human | human |
+
+`retro` runs no stage from `stages/`, so it has no gate to place.
 
 ### 2.5 `.tldrx/memory/facts.yml`
 
@@ -928,12 +950,13 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx init [--stack <a,b>]` | cwd tree, git dirs, package/build files, `env.yml` | `workspace.yml` (incl. `mode: greenfield`), `map/**`, `conventions/**`, `experts/*/` (always a `product`, one `<lang>-stack` per detected **or declared** language), `facts.yml`, `.gitignore`, `CLAUDE.md` pointer | 0,1 |
 | `tldrx doctor` | `env.yml`, `workspace.yml`, `.tldrx/stages/**`, `.claude/settings.json` | `env.yml.result`, `cache/doctor.json` | 0,1 |
 | `tldrx install --claude [--project\|--user] [--skill-only] [--no-hooks] [--no-statusline] [--force-statusline] [--uninstall] [--dry-run]` | `plugin/skills/tldrx/SKILL.md`, the target `.claude/settings.json` | `.claude/skills/tldrx/SKILL.md` (marked `<!-- tldrx-managed -->`), `.claude/settings.json` (the §4 hooks as `tldrx hook <name>` + `statusLine`), `settings.json.bak-tldrx-<ts>` | 0,1 |
-| `tldrx run new [--from <path>\|--seed <path> ...] [--scope <s>] [--budget <usd>]` | `workflows/<s>.yml`, `workspace.yml`, `facts.yml`, the `--from` source (§6) or the `--seed` documents (§6.1) | `tldrx-work/<run>/{run.yml,budget.yml,events.jsonl,01-what/*}`; `--seed` also writes `01-what/seed-index.md` and declares the documents as What inputs. **`--seed` is repeatable** (§6.2): every occurrence is collected, merged, deduped and re-sorted, and the §6.1 caps apply to the merged set; one occurrence behaves exactly as before. A seed over the threshold or over 10 files adds one **stderr** note naming `tldrx seed triage` | 0,1 |
+| `tldrx run new [--from <path>\|--seed <path> ...] [--scope <s>] [--budget <usd>] [--gates <a,b\|all\|none>]` | `workflows/<s>.yml`, `workspace.yml`, `facts.yml`, the `--from` source (§6) or the `--seed` documents (§6.1) | `tldrx-work/<run>/{run.yml,budget.yml,events.jsonl,01-what/*}` incl. the resolved `gates_policy`; `--seed` also writes `01-what/seed-index.md` and declares the documents as What inputs. **`--seed` is repeatable** (§6.2): every occurrence is collected, merged, deduped and re-sorted, and the §6.1 caps apply to the merged set; one occurrence behaves exactly as before. A seed over the threshold or over 10 files adds one **stderr** note naming `tldrx seed triage`. `--gates` LISTS THE HUMAN GATES (`all` = every stage human, `none` = every stage auto); an unknown stage is a usage error and no run is created | 0,1 |
 | `tldrx seed triage <path> [--out <dir>] [--json] [--threshold-tokens <n>]` | the `--seed` documents (§6.1 rules), `workspace.yml` (repos + `seed_triage.threshold_tokens`) | `<out>/inventory.md`, `<out>/inventory.json` (default `<out>` = `.tldrx/triage/<yymmdd>-<slug>/`) | 0,1,3 |
 | `tldrx seed triage <path> --propose [--model <m>] [--effort <l>] [--max-usd <n>] [--prepare\|--commit] [--yolo]` | the same, plus `workflows/*.yml` for the legal scopes | `<out>/{inventory.md,inventory.json,split.yml,split.md}`, `<out>/.agent/propose/*`; **never** a run | 0,1,2,5 |
 | `tldrx seed apply <split.yml> [--dry-run]` | `split.yml`, `inventory.json` beside it, `workflows/*.yml` | one `tldrx-work/<run>/` per proposed run (via `run new`'s own path) each with a `triage:` block, and `split.yml` rewritten to `status: applied` | 0,1,3 |
 | `tldrx run status [<run>]` | `run.yml`, `events.jsonl` | nothing (stdout) | 0,3 |
 | `tldrx next [<run>] [--dry-run]` | `run.yml`, `stage.yml`, `stage.md`, `expert.md`, declared inputs | stage outputs, `run.yml`, `events.jsonl` | 0,2,3,4,5 |
+| `tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <l>] [--yolo]` | everything `next` reads, once per stage | everything `next` writes | 0,1,2,3,4,5 |
 | `tldrx answer <Qid> <text> [--run <id>]` | `questions.md`, `facts.yml` | `questions.md`, `facts.yml`, `events.jsonl` | 0,1,2,3 |
 | `tldrx interview [--run <id>\|--init] [--yes-to-defaults]` | the cursor phase's `questions.md` (or `.tldrx/init-questions.md`), `run.yml`, `.tldrx/process.yml`, `workspace.yml`, `git remote get-url origin` | the same three files `answer` writes, one per answer recorded; with `--init`, also `.tldrx/process.yml` (§2.12) when a process answer settles `methodology` or `ticket_tool.kind` | 0,1,2,3 |
 | `tldrx approve [--run <id>] [--note]` | `run.yml`, stage outputs, stage checks | `run.yml` gate, `events.jsonl` | 0,2,3 |
@@ -1166,6 +1189,52 @@ knowledge bytes, and `truncated` when the budget bit — and `pending.json` carr
 An expert loaded with **zero** evidence in every area produces one **stderr** line, `note: expert <name> has no
 evidence — \`tldrx expert train <name> --area <area>\` before this stage would help`. It never blocks and never changes
 an exit code; stdout stays parseable for the host session.
+
+**Auto gates.** Every stage still ENDS at a gate: `gate.requested` is appended, the stage sits at
+`awaiting_gate`, and nothing is skipped. What §2.2's `gates_policy` decides is **who closes it**. `human` waits for
+`tldrx approve` — unchanged, exit `4`. `auto` lets the facilitator close it, and only when **all five** of these
+hold, measured off files that already exist:
+
+| # | Condition | Measured from |
+|---|---|---|
+| 1 | the stage's declared `checks` all pass | the outcomes `next` just produced |
+| 2 | zero open questions in that phase | `<phase>/questions.md`, blocks at `status: open` |
+| 3 | spend ≤ the stage ceiling AND the phase ceiling | `run.yml` `stages[].budget_usd`, `budget.yml` `phases[]` |
+| 4 | the stage did not end `failed` | `run.yml` `stages[].status` |
+| 5 | the §2.8 claim-sources validator reports nothing | the stage's `handoff.md` outputs |
+
+(5) overlaps (1) on purpose and is run **whether or not the stage listed `claim-sources` under `checks:`** — a
+stage file that forgot to list it must not thereby buy itself a cheaper gate. All five are evaluated even after one
+fails, because "which one stopped it" is the first question anybody asks.
+
+The approval goes through the SAME `approve` path a person uses: the checks are re-run off disk, `by: auto` and
+`at` land on the gate, the note records all five conditions with their measured values
+(`auto-gate: checks=claim-sources:passed; questions=0 open; budget=$0.42 of $6.00 stage, phase 01-what $0.42 of
+$6.00; status=awaiting_gate; claim-sources=passed`), and the existing `gate.approved` event is appended with `by`
+in its payload. No new event type. Any condition failing falls back to the human gate exactly as before — exit `4`
+— and the message names the condition and what it measured. An executor that FORCES `gate: approve` (Build) still
+forces the gate; the policy decides who signs it.
+
+`next` still runs exactly ONE stage per invocation. An auto-approved gate advances the cursor and stops; the loop
+is `run auto` below.
+
+**`tldrx run auto`** — the headless loop. It calls `next` repeatedly and its whole job is knowing when to stop: a
+human gate or an open question (`4`), a failure (`5`), a budget refusal (`2`), `--until <stage>` reached or the run
+finished (`0`). It holds no state — every iteration re-reads `run.yml` — so killing it leaves a run `tldrx next`
+picks up unchanged. One stdout line per stage, derived from the events the invocation appended:
+
+```
+01-what/what … done $1.21 · auto-approved
+02-how/how … done $2.60 · awaiting human gate
+03-plan/plan … skipped (skip_if: stories<=1)
+04-build/build … failed: check `plan` failed: story S2 has no dod block
+```
+
+`--max-usd` is a ceiling on THIS LOOP's total spend, on top of every stage's own, and is checked **between**
+stages: a turn already in flight is never cut off, so the loop can overshoot by at most one stage's share.
+`--until <stage>` stops **before** running that stage. Headless only — `--prepare`/`--commit` stay per stage,
+because they are a handshake with a host session and a loop that stopped after every `--prepare` would be `next`
+with extra words.
 
 **Decisions (2026-08-28).** (a) Stage artefacts are Markdown validated by hooks (human-readable handoffs); the
 sub-agent's *result envelope* is structured via `--json-schema` (`{outputs: [], questions_asked: [], notes: ""}`) so

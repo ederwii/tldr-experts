@@ -345,6 +345,62 @@ moment `competencies.yml` does.
   training run can see what the first one found instead of rediscovering it and
   writing a second copy of the same finding.
 
+### Auto gates: humans where judgement is needed, the harness everywhere else
+
+Every stage still ENDS at a gate — nothing is skipped, `gate.requested` is still
+appended, the run still stops. What is new is that a gate can say **who closes it**.
+
+- **Gate policy is data.** Each `workflows/<scope>.yml` carries `gates:` — stage id ->
+  `human | auto` — and `tldrx run new … --gates <stage,stage|all|none>` overrides it
+  (the list is the HUMAN gates; an unknown stage refuses to create the run). The
+  resolved map is frozen into `run.yml` as an additive optional `gates_policy:`, so a
+  run keeps the policy it was opened with even after the workflow file changes.
+  **Absence means `human` everywhere**: a `run.yml` from before this key, a workflow
+  with no `gates:` block, a stage the map does not name. Shipped defaults keep at least
+  one human gate in every scope — `feature` is what=human, how=auto, plan=human,
+  build=auto, watch=human; `docs` `spike` `prototype` `upgrade` are auto except their
+  last stage; `hotfix` `security-patch` `migration` add build=human. `--gates none` is
+  the only way to get an all-auto run, and it is a thing you type on purpose. Spec §2.4's
+  `gates.collapse` stays reserved and is skipped by the parser rather than read as a
+  stage id.
+- **An `auto` gate closes only when it can show its work.** Five conditions, all
+  measured off files that already exist: the stage's declared checks pass, the phase's
+  `questions.md` has no open block, the spend is inside both the stage ceiling and the
+  phase ceiling, the stage did not end `failed`, and the §2.8 claim-sources validator
+  reports nothing. That last one is run **whether or not the stage listed it under
+  `checks:`** — a stage file that forgot to list it must not thereby buy itself a
+  cheaper gate. All five are evaluated even after one fails, because "which one stopped
+  it" is the first question anybody asks. The approval goes through the SAME `approve`
+  path a person uses (checks re-run off disk), lands `by: auto` and `at` on the gate,
+  and writes a note carrying every value: `auto-gate: checks=claim-sources:passed;
+  questions=0 open; budget=$0.42 of $6.00 stage, phase 01-what $0.42 of $6.00;
+  status=awaiting_gate; claim-sources=passed`. The existing `gate.approved` event now
+  carries `by` in its payload; **no new event type was invented**. Any condition failing
+  falls back to the human gate exactly as before — exit 4 — and prints which one and
+  what it measured. `next` still runs exactly one stage per invocation.
+- **`tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>]
+  [--effort <level>] [--yolo]`** is the loop: `next`, over and over, until a human gate
+  or an open question (exit 4), a failure (exit 5), a budget refusal (exit 2), `--until`
+  reached or the run finished (exit 0). It holds no state — every iteration re-reads
+  `run.yml` — so killing it leaves a run `tldrx next` picks up unchanged. One stdout
+  line per stage, derived from the events each invocation appended rather than from the
+  cursor, so a `skip_if` stage gets its own line instead of being swallowed:
+  `01-what/what … done $1.21 · auto-approved`. `--max-usd` is a ceiling on the LOOP's
+  total spend on top of every stage's own, checked **between** stages — a turn already
+  in flight is never cut off, so it can overshoot by at most one stage's share, and the
+  message says so. `--until <stage>` stops **before** running that stage. Headless only:
+  `--prepare`/`--commit` stay per stage, because they are a handshake with a host
+  session and a loop that stopped after every `--prepare` would be `next` with extra
+  words.
+- **`tldrx run status` says who signs what.** A `gates` block on the terminal screen
+  (`gates   1 human, 1 auto` then one line per stage: `01-what/what  human  approved by
+  alan` / `02-how/how  auto  approved by auto`), printed for every run including an
+  all-`human` one — an answer that only appears once you have opted in is an answer
+  nobody finds. `--json` gains two additive keys, `gates_policy` (every stage filled in;
+  an old run.yml reports all `human`) and `gates` (one row per stage carrying `by`); every
+  existing key keeps its position. The dashboard model gains `gateBy` alongside the
+  unchanged `gate` string.
+
 ## 0.2.0 — 2026-08-29
 
 ### The Build phase executes

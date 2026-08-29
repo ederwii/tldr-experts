@@ -13,7 +13,8 @@ import { remaining } from "../budget/wouldExceed.ts";
 import type { RunBudget } from "../budget/RunBudget.ts";
 import { renderAttempts, stageAttempts, type StageAttempts } from "./attempts.ts";
 import { buildProgress, renderBuildProgress, renderStoryCosts, BUILD_PHASE, type BuildProgress } from "./buildProgress.ts";
-import { isTerminal, stageAt, type RunFile, type RunPhase, type RunStage } from "./RunFile.ts";
+import { gatePolicyFor, type GatePolicy, type GatesPolicy } from "./gatePolicy.ts";
+import { flatten, isTerminal, stageAt, type RunFile, type RunPhase, type RunStage } from "./RunFile.ts";
 
 export const BAR_CELLS = 5;
 
@@ -29,6 +30,19 @@ export interface PhaseProgress {
   readonly failure: string | null;
   readonly spent_usd: number;
   readonly ceiling_usd: number;
+}
+
+/** One stage's gate: who is meant to sign it, and who did (spec §2.2). */
+export interface GateRow {
+  readonly phase: string;
+  readonly stage: string;
+  /** `human` waits for `tldrx approve`; `auto` lets the facilitator close it. */
+  readonly policy: GatePolicy;
+  readonly type: string;
+  readonly status: string;
+  /** `auto` on a gate the facilitator closed, the operator's name on a human one. */
+  readonly by: string | null;
+  readonly at: string | null;
 }
 
 export type WaitingKind = "gate" | "answer" | "ready" | "done" | "blocked" | "failed";
@@ -59,6 +73,14 @@ export interface RunStatusView {
    */
   readonly build: BuildProgress | null;
   readonly waiting: Waiting;
+  /**
+   * The run's frozen gate policy (spec §2.2 `gates_policy`). ADDITIVE: a run.yml
+   * written before the key existed reports every stage as `human`, which is what
+   * it behaves as.
+   */
+  readonly gates_policy: GatesPolicy;
+  /** One row per stage, in execution order, carrying `by` on a closed gate. */
+  readonly gates: readonly GateRow[];
 }
 
 export function buildStatus(run: RunFile, budget: RunBudget, runDir: string): RunStatusView {
@@ -80,7 +102,30 @@ export function buildStatus(run: RunFile, budget: RunBudget, runDir: string): Ru
     attempts: stageAttempts(runDir, run.cursor.phase, run.cursor.stage),
     build: buildProgress(runDir),
     waiting: whatIsWaiting(run, runDir),
+    gates_policy: resolvedPolicy(run),
+    gates: gateRows(run),
   };
+}
+
+/** Every stage, never a gap: an absent `gates_policy` reads as `human` throughout. */
+function resolvedPolicy(run: RunFile): GatesPolicy {
+  const out: Record<string, GatePolicy> = {};
+  for (const entry of flatten(run)) {
+    out[entry.stage.id] = gatePolicyFor(run.gates_policy, entry.stage.id);
+  }
+  return out;
+}
+
+function gateRows(run: RunFile): readonly GateRow[] {
+  return flatten(run).map((entry) => ({
+    phase: entry.phase.id,
+    stage: entry.stage.id,
+    policy: gatePolicyFor(run.gates_policy, entry.stage.id),
+    type: entry.stage.gate.type,
+    status: entry.stage.gate.status,
+    by: entry.stage.gate.by,
+    at: entry.stage.gate.at,
+  }));
 }
 
 function progressOf(phase: RunPhase, budget: RunBudget): PhaseProgress {
@@ -224,6 +269,35 @@ export function renderStatus(view: RunStatusView): string {
   // matters, and `cost_usd` alone cannot tell one $2.60 try from two $1.30 ones.
   const attempts = renderAttempts(view.attempts);
   if (attempts !== null) lines.push(`${view.cursor.stage.padEnd(7)} ${attempts}`);
+  lines.push("", ...renderGates(view.gates));
   lines.push(`waiting ${view.waiting.message}`);
   return lines.join("\n");
+}
+
+/**
+ * Who signs each gate, and who signed the ones already closed.
+ *
+ * Printed for every run, including an all-`human` one: "which of these will stop
+ * for me" is the question `run auto` makes people ask, and an answer that only
+ * appears once you have opted in is an answer nobody finds.
+ */
+export function renderGates(rows: readonly GateRow[]): readonly string[] {
+  if (rows.length === 0) return [];
+  const where = rows.map((row) => `${row.phase}/${row.stage}`);
+  const width = Math.max(...where.map((w) => w.length));
+  const auto = rows.filter((row) => row.policy === "auto").length;
+  const lines = [
+    `gates   ${String(rows.length - auto)} human, ${String(auto)} auto`,
+  ];
+  rows.forEach((row, i) => {
+    lines.push(`  ${(where[i] ?? "").padEnd(width)}  ${row.policy.padEnd(5)}  ${describeGate(row)}`);
+  });
+  return lines;
+}
+
+function describeGate(row: GateRow): string {
+  if (row.status === "approved") return `approved by ${row.by ?? "?"}`;
+  if (row.status === "rejected") return `rejected by ${row.by ?? "?"}`;
+  if (row.status === "n-a") return `${row.type}: n-a`;
+  return `${row.type}: ${row.status}`;
 }

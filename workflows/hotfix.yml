@@ -12,6 +12,12 @@ stages: [what, build, watch]
 skips: [how, plan]
 depth: minimal
 default_budget_usd: 5
+# gates  — who closes each stage's gate: `human` waits for `tldrx approve`,
+#           `auto` lets the facilitator close it when the five spec §5 conditions
+#           hold (checks pass, no open question, spend within ceiling, the stage
+#           did not fail, claim-sources clean). Every stage still ENDS at a gate;
+#           this only says who signs it. A stage not named here is `human`.
+gates: {what: auto, build: human, watch: human}
 changes:
   - "What collapses to a ten-line handoff: symptom, blast radius, the one change."
   - "All gates collapse into one human approval."

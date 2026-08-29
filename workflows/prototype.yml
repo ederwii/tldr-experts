@@ -12,6 +12,12 @@ stages: [what, how, build]
 skips: [plan, watch]
 depth: minimal
 default_budget_usd: 12
+# gates  — who closes each stage's gate: `human` waits for `tldrx approve`,
+#           `auto` lets the facilitator close it when the five spec §5 conditions
+#           hold (checks pass, no open question, spend within ceiling, the stage
+#           did not fail, claim-sources clean). Every stage still ENDS at a gate;
+#           this only says who signs it. A stage not named here is `human`.
+gates: {what: auto, how: auto, build: human}
 changes:
   - "Conventions gate is OFF. Definition of Done drops the test requirement."
   - "Every artefact carries a NOT FOR PRODUCTION marker."

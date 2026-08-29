@@ -12,6 +12,12 @@ stages: [what, build]
 skips: [how, plan, watch]
 depth: light
 default_budget_usd: 6
+# gates  — who closes each stage's gate: `human` waits for `tldrx approve`,
+#           `auto` lets the facilitator close it when the five spec §5 conditions
+#           hold (checks pass, no open question, spend within ceiling, the stage
+#           did not fail, claim-sources clean). Every stage still ENDS at a gate;
+#           this only says who signs it. A stage not named here is `human`.
+gates: {what: auto, build: human}
 changes:
   - "Investigate, then write. The gate is a human actually reading it and saying it is right."
   - "Every claim in the docs carries the same source rule as a handoff."

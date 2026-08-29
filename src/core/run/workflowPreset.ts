@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { parseYaml } from "../yaml.ts";
 import { isRecord } from "../schemas/validation.ts";
 import { PROJECT_FRAMEWORK_DIR, STAGES_DIR, WORKFLOWS_DIR } from "../paths.ts";
+import { GatePolicyError, parseWorkflowGates, type GatesPolicy } from "./gatePolicy.ts";
 import type { GateType } from "./RunFile.ts";
 import { EFFORT_LEVELS, isEffortLevel, type EffortLevel } from "../schemas/stage.ts";
 
@@ -62,6 +63,12 @@ export interface WorkflowPreset {
   readonly depth: string;
   readonly defaultBudgetUsd: number;
   readonly stages: readonly PlannedStage[];
+  /**
+   * `gates:` — stage id -> `human | auto` (spec §2.4). Partial on purpose: a stage
+   * the file does not name keeps the `human` default, so adding a stage to a
+   * workflow can never silently hand its gate to the machine.
+   */
+  readonly gates: GatesPolicy;
   readonly source: string;
 }
 
@@ -104,7 +111,15 @@ export function loadWorkflowPreset(root: string, scope: string): WorkflowPreset 
     return loadStage(root, id, overrides, i);
   });
 
-  return { name, title, depth, defaultBudgetUsd, stages, source: path };
+  let gates: GatesPolicy;
+  try {
+    gates = parseWorkflowGates(doc.gates, stages.map((stage) => stage.id), path);
+  } catch (error) {
+    if (error instanceof GatePolicyError) throw new PresetError(error.message);
+    throw error;
+  }
+
+  return { name, title, depth, defaultBudgetUsd, stages, gates, source: path };
 }
 
 function loadStage(
