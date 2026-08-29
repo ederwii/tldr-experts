@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { competencyLevel, type CompetencyEvidence, type EvidenceKind } from "../src/core/init/competencyLevel.ts";
 import {
@@ -255,6 +255,51 @@ describe("expert train --print-prompt", () => {
     );
     expect(run.code).toBe(EXIT_OK);
     expect(run.stdout).toContain("# Train `dotnet-stack` — area `ef-core` (light mode)");
+  });
+
+  // The regression: `repos()` handed `loadWorkspaceFile` the `.tldrx/` directory,
+  // which joins `.tldrx/workspace.yml` onto it — so every prompt on every real
+  // workspace said "none declared". The fixture declares api + lab.
+  test("the CLI names every repo workspace.yml declares", async () => {
+    const run = await tldrx(
+      "expert", "train", "dotnet-stack", "--area", "ef-core", "--print-prompt", "--root", VIEWS_FIXTURE,
+    );
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).toContain("- `api` at `api`");
+    expect(run.stdout).toContain("- `lab` at `lab`");
+    expect(run.stdout).not.toContain("none declared");
+    expect(run.stderr).toBe("");
+  });
+
+  test("`none declared` only when repos: [] is genuinely empty — and no warning", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      const path = join(workspace.root, ".tldrx", "workspace.yml");
+      writeFileSync(path, "version: 1\nroot: \".\"\nrepos: []\n", "utf8");
+      const run = await tldrx(
+        "expert", "train", "dotnet-stack", "--area", "ef-core", "--print-prompt", "--root", workspace.root,
+      );
+      expect(run.code).toBe(EXIT_OK);
+      expect(run.stdout).toContain("none declared in `.tldrx/workspace.yml`");
+      expect(run.stderr).toBe("");
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("an unreadable workspace.yml warns on stderr instead of failing silently", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      rmSync(join(workspace.root, ".tldrx", "workspace.yml"));
+      const run = await tldrx(
+        "expert", "train", "dotnet-stack", "--area", "ef-core", "--print-prompt", "--root", workspace.root,
+      );
+      expect(run.code).toBe(EXIT_OK);
+      expect(run.stdout).toContain("none declared in `.tldrx/workspace.yml`");
+      expect(run.stderr).toContain("warning: could not read .tldrx/workspace.yml:");
+    } finally {
+      workspace.dispose();
+    }
   });
 
   // Without `--print-prompt`, training RUNS (wave 7). This asserts it through the

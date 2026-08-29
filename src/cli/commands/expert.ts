@@ -10,7 +10,6 @@
  * copy-paste prompt and spawns nothing, for a human who would rather drive the
  * session themselves.
  */
-import { join } from "node:path";
 import type { Command } from "../Command.ts";
 import { EXIT_FAILED, EXIT_OK } from "../exitCodes.ts";
 import { boolFlag, numberFlag, parseArgs, stringFlag, UsageError, type ParsedArgs } from "../argv.ts";
@@ -18,7 +17,6 @@ import { effortFlag } from "../effort.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
 import type { EffortLevel } from "../../core/schemas/stage.ts";
 import { isTrainingMode, runTraining, type TrainingRunMode } from "../../core/training/index.ts";
-import { PROJECT_FRAMEWORK_DIR } from "../../core/paths.ts";
 import { loadWorkspaceFile } from "../../core/init/loadWorkspaceFile.ts";
 import {
   createExpert, expertListJson, loadExpert, loadExperts,
@@ -195,11 +193,26 @@ function prefix(text: string): string {
     .join("\n");
 }
 
+/**
+ * The repos `--print-prompt` names.
+ *
+ * `loadWorkspaceFile` joins `.tldrx/workspace.yml` onto what it is handed
+ * (`loadWorkspaceFile.ts:21`), so it takes the workspace ROOT. Handing it
+ * `<root>/.tldrx` looked for `<root>/.tldrx/.tldrx/workspace.yml`, threw, and the
+ * `catch` turned every printed prompt into "none declared — run `tldrx init`
+ * first", on workspaces that declare repos (measured 2026-08-29). `tldrx map`
+ * has always passed the root (`map.ts:83,102`); both callers now agree.
+ *
+ * A failure stays non-fatal — the rest of the prompt is worth printing — but it
+ * is no longer silent: the reason goes to stderr, so "none declared" is never the
+ * only thing an operator is told.
+ */
 async function repos(root: string): Promise<readonly TrainRepo[]> {
   try {
-    const workspace = await loadWorkspaceFile(join(root, PROJECT_FRAMEWORK_DIR));
+    const workspace = await loadWorkspaceFile(root);
     return workspace.repos.map((repo) => ({ name: repo.name, path: repo.path }));
-  } catch {
+  } catch (error) {
+    process.stderr.write(`warning: could not read .tldrx/workspace.yml: ${message(error)}\n`);
     return [];
   }
 }
