@@ -22,6 +22,8 @@ const REPO_NAME_RE = /^[a-z0-9-]{1,32}$/;
 export function validateWorkspaceDocument(doc: WorkspaceDocument): ValidationResult {
   const issues: ValidationIssue[] = [...validate("workspace", {
     schema_version: doc.version,
+    // `greenfield` is a single-repo workspace with no code in it, so it projects
+    // onto the skeleton's `single` exactly as `single-repo` does.
     mode: doc.mode === "multi-repo" ? "multi" : "single",
     root: doc.root,
     repos: doc.repos,

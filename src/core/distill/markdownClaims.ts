@@ -27,10 +27,22 @@ const BULLET_RE = /^\s{0,6}(?:[-*+]|\d{1,3}[.)])\s+(\S.*)$/;
 const FENCE_RE = /^\s*(?:```|~~~)/;
 const GROUNDING_TAG_RE = /\[(?:Q\d{1,6}|desc|scope|memory)\]/g;
 
-export function extractProseClaims(text: string): readonly ProseClaim[] {
+export interface ProseOptions {
+  /**
+   * Heading to attribute content that appears BEFORE the first heading.
+   * AI-DLC artefacts always open with one, so `--from` leaves this unset and
+   * pre-heading prose is dropped as subject-less. A hand-written requirements
+   * document often does not, and dropping its first paragraph would lose the
+   * only sentence that says what the project is — so `--seed` passes the file
+   * name. `[assumption]`
+   */
+  readonly fallbackHeading?: string;
+}
+
+export function extractProseClaims(text: string, options: ProseOptions = {}): readonly ProseClaim[] {
   const lines = text.split("\n");
   const claims: ProseClaim[] = [];
-  let heading: string | null = null;
+  let heading: string | null = options.fallbackHeading ?? null;
   let inFence = false;
   /** The claim currently being accumulated — a bullet or a paragraph, same thing here. */
   let open: { line: number; parts: string[] } | null = null;

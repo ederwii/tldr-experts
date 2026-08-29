@@ -36,6 +36,40 @@ export async function singleRepoFixture(): Promise<Fixture> {
   return { root, cleanup: () => rm(root, { recursive: true, force: true }) };
 }
 
+/**
+ * A greenfield workspace: a real git repo holding documents and NO code file.
+ *
+ * This is the shape the measured gap came from (2026-08-29): a repo with nothing
+ * but `requirements.md`, where `init` used to seed zero experts and `run new` had
+ * no way to be handed the document.
+ */
+export async function greenfieldFixture(
+  files: Readonly<Record<string, string>> = { "requirements.md": REQUIREMENTS_MD },
+): Promise<Fixture> {
+  const root = await mkdtemp(join(tmpdir(), "tldrx-green-"));
+  for (const [rel, content] of Object.entries(files)) {
+    await mkdir(join(root, rel, ".."), { recursive: true });
+    await Bun.write(join(root, rel), content);
+  }
+  await gitInit(root);
+  await commitAll(root, "docs: requirements");
+  return { root, cleanup: () => rm(root, { recursive: true, force: true }) };
+}
+
+/** A small requirements document with a heading of each kind the seed looks for. */
+export const REQUIREMENTS_MD = `# Loyalty points — requirements
+
+## Purpose
+Players should earn points for completing hunts and see where they rank.
+
+## Must have
+- Points are awarded when a hunt is completed.
+- A leaderboard shows the top 50 players for the current month.
+
+## Out of scope
+- Cash prizes and any payment integration.
+`;
+
 /** A workspace root that is not a git repo and holds no git repos. */
 export async function emptyFixture(): Promise<Fixture> {
   const root = await mkdtemp(join(tmpdir(), "tldrx-empty-"));

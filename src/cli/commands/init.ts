@@ -14,13 +14,15 @@ import { SpawnCommandRunner } from "../../core/detect/CommandRunner.ts";
 import { frameworkVersion } from "../../core/frameworkVersion.ts";
 import { runInit } from "../../core/init/runInit.ts";
 import { isMethodology, isProviderPreference, type InitOptions, type ProviderPreference } from "../../core/init/InitOptions.ts";
+import { parseStackFlag } from "../../core/init/stackChoices.ts";
 import type { Methodology } from "../../core/schemas/process.ts";
 import type { InitReport } from "../../core/init/runInit.ts";
 
 export const initCommand: Command = {
   name: "init",
   summary: "Detect the workspace, build the code map, interview the gaps",
-  usage: "tldrx init [--root <path>] [--out <path>] [--no-interview] [--process <scrum|kanban|shape-up|none>] [--mcp] [--provider <auto|graphify|static>]",
+  usage: "tldrx init [--root <path>] [--out <path>] [--no-interview] [--process <scrum|kanban|shape-up|none>]\n"
+    + "                  [--stack <ts,dotnet,python,go,rust,…>] [--mcp] [--provider <auto|graphify|static>]",
   subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
@@ -53,6 +55,7 @@ export function parseInitArgs(argv: readonly string[]): InitOptions {
   let interview = true;
   let methodology: Methodology | null = null;
   let mcp = false;
+  let stack: string[] = [];
   let provider: ProviderPreference = "auto";
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -69,6 +72,13 @@ export function parseInitArgs(argv: readonly string[]): InitOptions {
         methodology = value;
         break;
       }
+      case "--stack": {
+        const value = requireValue(argv, ++i, "--stack");
+        const parsed = parseStackFlag(value);
+        if (parsed.length === 0) throw new Error(`--stack expects a comma-separated list, got '${value}'`);
+        stack = [...stack, ...parsed.filter((entry) => !stack.includes(entry))];
+        break;
+      }
       case "--provider": {
         const value = requireValue(argv, ++i, "--provider");
         if (!isProviderPreference(value)) throw new Error(`--provider expects auto|graphify|static, got '${value}'`);
@@ -78,7 +88,7 @@ export function parseInitArgs(argv: readonly string[]): InitOptions {
       default: throw new Error(`unknown option '${arg}'`);
     }
   }
-  return { root: resolve(root), out: resolve(out ?? root), interview, methodology, mcp, provider };
+  return { root: resolve(root), out: resolve(out ?? root), interview, methodology, mcp, stack, provider };
 }
 
 function requireValue(argv: readonly string[], index: number, flag: string): string {
@@ -89,9 +99,17 @@ function requireValue(argv: readonly string[], index: number, flag: string): str
 
 function renderReport(report: InitReport, options: InitOptions): string {
   const lines: string[] = [
-    `tldrx init — ${report.workspace.mode}, ${report.workspace.repos.length} repo(s) under ${options.root}`,
+    `tldrx init — ${report.greenfield ? "greenfield" : report.workspace.mode}, `
+      + `${report.workspace.repos.length} repo(s) under ${options.root}`,
     "",
   ];
+  if (report.greenfield) {
+    lines.push(
+      "  greenfield: no code file exists yet, so workspace.yml records `mode: greenfield`",
+      `  stack: ${options.stack.length > 0 ? options.stack.join(", ") + " (--stack)" : "not declared — see the interview"}`,
+      "",
+    );
+  }
   for (const repo of report.workspace.repos) {
     const stack = repo.stack.length > 0 ? repo.stack.join(", ") : "stack unknown";
     lines.push(`  ${repo.name.padEnd(20)} ${stack} · confidence ${repo.confidence} · branch ${repo.defaultBranch}`);

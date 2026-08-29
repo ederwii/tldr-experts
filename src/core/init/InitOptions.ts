@@ -24,6 +24,12 @@ export interface InitOptions {
   readonly methodology: Methodology | null;
   /** Run `claude mcp list` and record the result in `workspace.yml` (slow). */
   readonly mcp: boolean;
+  /**
+   * `--stack ts,dotnet` — the languages this project INTENDS to use, for a
+   * workspace with no code to detect them from. Each one seeds a `<lang>-stack`
+   * expert and suppresses the greenfield stack question. Empty means "ask".
+   */
+  readonly stack: readonly string[];
   readonly provider: ProviderPreference;
 }
 

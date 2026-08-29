@@ -1,11 +1,20 @@
 /**
  * Which experts `init` seeds (concept §4.5).
  *
- * One stack expert per language actually detected, one domain expert per
- * top-level source folder the map found, capped so a large monorepo does not
- * produce fifty stubs nobody trains. Frameworks become competency AREAS of the
- * language expert rather than experts of their own — react without typescript
- * is not a thing this workspace has.
+ * Three kinds, and the order below is the order they are written:
+ *
+ *  - **product**, always exactly one. Its domain is the project itself. It is
+ *    unconditional because the What stage names `product` as its expert
+ *    (`stages/what/stage.yml`), so a workspace without one hands that stage a
+ *    prompt with no expert body at all — measured on a greenfield workspace,
+ *    2026-08-29, where `init` seeded zero experts.
+ *  - **stack**, one per language actually detected, plus one per language the
+ *    operator DECLARED (`--stack`, or the greenfield interview answer) when there
+ *    is no code to detect it from. Frameworks become competency AREAS of the
+ *    language expert rather than experts of their own — react without typescript
+ *    is not a thing this workspace has.
+ *  - **domain**, one per top-level source folder the map found, capped so a large
+ *    monorepo does not produce fifty stubs nobody trains.
  */
 import { repoSlug } from "../detect/repoSlug.ts";
 import type { DetectedWorkspace } from "../detect/types.ts";
@@ -13,12 +22,15 @@ import type { MapFacts } from "../map/MapFacts.ts";
 import type { AreaSeed } from "./competenciesDocument.ts";
 
 export const MAX_DOMAIN_EXPERTS = 8;
+export const PRODUCT_EXPERT = "product";
 
 const LANGUAGES: readonly string[] = ["typescript", "javascript", "dotnet", "python", "go", "rust"];
 
+export type ExpertKind = "product" | "stack" | "domain";
+
 export interface ExpertPlan {
   readonly name: string;
-  readonly kind: "stack" | "domain";
+  readonly kind: ExpertKind;
   /** Repo names this expert speaks for. */
   readonly repos: readonly string[];
   /** Source folders, for domain experts. */
@@ -26,24 +38,48 @@ export interface ExpertPlan {
   readonly areas: readonly AreaSeed[];
 }
 
+export interface ExpertPlanOptions {
+  /**
+   * Languages the operator declared rather than the filesystem showed — the
+   * greenfield answer to "which stack will this project use?". Each one gets a
+   * `<lang>-stack` expert even though no manifest proves it yet.
+   */
+  readonly declaredLanguages?: readonly string[];
+  /** Slug of the project the product expert speaks for; defaults to the first repo. */
+  readonly project?: string;
+}
+
 export function planExperts(
   workspace: DetectedWorkspace,
   facts: readonly MapFacts[],
+  options: ExpertPlanOptions = {},
 ): ExpertPlan[] {
   const plans: ExpertPlan[] = [];
   const taken = new Set<string>();
+  const repoNames = workspace.repos.map((repo) => repo.name);
+  const project = options.project ?? repoNames[0] ?? "product";
 
-  for (const language of LANGUAGES) {
+  taken.add(PRODUCT_EXPERT);
+  plans.push({
+    name: PRODUCT_EXPERT,
+    kind: "product",
+    repos: repoNames,
+    folders: [],
+    areas: [{ id: project, title: `The ${project} product: what it is for and what counts as done` }],
+  });
+
+  for (const language of languagesOf(workspace, options.declaredLanguages ?? [])) {
     const repos = workspace.repos.filter((repo) => repo.languages.includes(language));
-    if (repos.length === 0) continue;
     const name = `${language}-stack`;
+    if (taken.has(name)) continue;
     taken.add(name);
     const frameworks = [...new Set(repos.flatMap((repo) =>
       repo.stack.filter((item) => !LANGUAGES.includes(item))))].sort();
     plans.push({
       name,
       kind: "stack",
-      repos: repos.map((repo) => repo.name),
+      // A declared language has no repo that proves it, so it speaks for all of them.
+      repos: repos.length > 0 ? repos.map((repo) => repo.name) : repoNames,
       folders: [],
       areas: [
         { id: language, title: `${language} language, build and test tooling` },
@@ -76,4 +112,18 @@ export function planExperts(
     }
   }
   return plans;
+}
+
+/**
+ * Detected languages first (in the fixed `LANGUAGES` order, so ids are stable),
+ * then declared ones the detection did not already find.
+ */
+function languagesOf(
+  workspace: DetectedWorkspace,
+  declared: readonly string[],
+): readonly string[] {
+  const found = LANGUAGES.filter((language) =>
+    workspace.repos.some((repo) => repo.languages.includes(language)));
+  const extra = declared.filter((language) => language !== "" && !found.includes(language));
+  return [...found, ...new Set(extra)];
 }

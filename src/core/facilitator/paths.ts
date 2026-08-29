@@ -6,6 +6,13 @@
  * which is which because to a human it is obvious, so the rule is written down
  * here once: anything starting with `.tldrx/` (or `tldrx-work/`) is workspace-
  * relative, everything else is run-relative. `[assumption]`
+ *
+ * A run's SEED documents (`run new --seed`) break that rule from the other side:
+ * `requirements.md` lives at the workspace root and is never copied into the run.
+ * So a path that is not workspace-prefixed falls back to the workspace root when
+ * it does not exist inside the run — the same "first existing base wins" order
+ * §2.8 already uses to resolve a bare `file` src. It can only make MORE paths
+ * resolve, never fewer.
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -23,7 +30,11 @@ export function isWorkspaceRelative(declared: string): boolean {
 }
 
 export function resolveDeclared(declared: string, ctx: PathContext): string {
-  return isWorkspaceRelative(declared) ? join(ctx.root, declared) : join(ctx.runDir, declared);
+  if (isWorkspaceRelative(declared)) return join(ctx.root, declared);
+  const inRun = join(ctx.runDir, declared);
+  if (existsSync(inRun)) return inRun;
+  const inWorkspace = join(ctx.root, declared);
+  return existsSync(inWorkspace) ? inWorkspace : inRun;
 }
 
 /**

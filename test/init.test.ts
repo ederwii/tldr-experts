@@ -18,7 +18,7 @@ const NOW = new Date("2026-08-28T12:00:00Z");
 
 function options(root: string, overrides: Partial<InitOptions> = {}): InitOptions {
   return {
-    root, out: root, interview: true, methodology: null, mcp: false, provider: "static", ...overrides,
+    root, out: root, interview: true, methodology: null, mcp: false, stack: [], provider: "static", ...overrides,
   };
 }
 
@@ -124,9 +124,10 @@ describe("tldrx init — multi-repo workspace", () => {
     }
   });
 
-  test("seeds one expert per language and per domain folder, all at level 0", async () => {
+  test("seeds a product expert, one per language and one per domain folder, all at level 0", async () => {
     expect(report.experts.map((expert) => expert.name).sort())
-      .toEqual(["api", "dotnet-stack", "features", "typescript-stack"]);
+      .toEqual(["api", "dotnet-stack", "features", "product", "typescript-stack"]);
+    expect(report.experts[0]?.kind).toBe("product");
 
     const document = await readYaml(join(fixture.root, ".tldrx/experts/typescript-stack/competencies.yml"));
     expect(document.version).toBe(1);
@@ -239,9 +240,10 @@ describe("tldrx init — options", () => {
 });
 
 describe("interview planning", () => {
-  const repo = (name: string, confidence: "high" | "low") => ({
+  const repo = (name: string, confidence: "high" | "low", codeFiles = 3) => ({
     name, path: name, absPath: `/tmp/${name}`, defaultBranch: "main", stack: [], languages: [],
-    packageManager: null, manifests: [], commands: { build: null, test: null, lint: null, typecheck: null, run: null },
+    packageManager: null, manifests: [], codeFiles,
+    commands: { build: null, test: null, lint: null, typecheck: null, run: null },
     ci: [], confidence, evidence: [],
   });
 

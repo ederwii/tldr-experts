@@ -10,8 +10,14 @@
  * `provider` and `root` are additions the spec table does not list: `provider`
  * because spec §5 decision (b) requires recording which map provider ran, and
  * `root` because `.tldrx/` may live outside the tree it describes.
+ *
+ * `mode` takes a third value the spec table does not list — `greenfield`, when the
+ * single repo holds no code file at all (`detect/greenfield.ts`). It is a
+ * specialisation of `single-repo`, and `validateEmitted.ts` projects it onto the
+ * skeleton's `single` so the shipped validator still runs. `[assumption]`
  */
 import { type DetectedRepo, type DetectedWorkspace } from "../detect/types.ts";
+import { workspaceMode } from "../detect/greenfield.ts";
 import type { McpServer } from "../doctor/McpProbe.ts";
 
 export interface WorkspaceRepoDocument {
@@ -58,7 +64,7 @@ export interface BuildWorkspaceInput {
 export function buildWorkspaceDocument(input: BuildWorkspaceInput): WorkspaceDocument {
   return {
     version: 1,
-    mode: input.workspace.mode,
+    mode: workspaceMode(input.workspace),
     root_is_repo: input.workspace.rootIsRepo,
     root: input.root,
     detected_at: input.detectedAt,

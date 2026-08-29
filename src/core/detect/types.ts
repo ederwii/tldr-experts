@@ -43,6 +43,8 @@ export interface DetectedRepo {
   readonly packageManager: string | null;
   /** Repo-relative build manifests that produced the stack; empty when none was found. */
   readonly manifests: readonly string[];
+  /** How many CODE files this repo holds (`detect/codeFiles.ts`); `0` ⇒ greenfield. */
+  readonly codeFiles: number;
   readonly commands: RepoCommands;
   readonly ci: readonly string[];
   readonly confidence: Confidence;

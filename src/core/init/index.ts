@@ -5,7 +5,8 @@ export { buildProcessDocument, type ProcessDocument } from "./processDocument.ts
 export { buildCompetenciesDocument, type CompetenciesDocument, type AreaSeed } from "./competenciesDocument.ts";
 export { buildFactsDocument, FACTS_FILE } from "./factsDocument.ts";
 export { competencyLevel, type CompetencyEvidence, type EvidenceKind } from "./competencyLevel.ts";
-export { planExperts, MAX_DOMAIN_EXPERTS, type ExpertPlan } from "./planExperts.ts";
+export { planExperts, MAX_DOMAIN_EXPERTS, PRODUCT_EXPERT, type ExpertPlan, type ExpertKind, type ExpertPlanOptions } from "./planExperts.ts";
+export { STACK_CHOICES, normaliseStack, parseStackFlag } from "./stackChoices.ts";
 export { seedExperts, EXPERTS_DIR } from "./seedExperts.ts";
 export { planQuestions, renderQuestions, suggestTicketTool, QUESTIONS_FILE, MAX_QUESTIONS, type Question } from "./questions.ts";
 export { renderInitHandoff } from "./handoff.ts";

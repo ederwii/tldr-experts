@@ -71,7 +71,7 @@ contracts:
 
 | Field | Type | Req | Meaning |
 |---|---|---|---|
-| `mode` / `root_is_repo` | `single-repo\|multi-repo` / bool | y | Detection outcome (child git repos ⇒ multi); is the root itself a repo |
+| `mode` / `root_is_repo` | `single-repo\|multi-repo\|greenfield` / bool | y | Detection outcome (child git repos ⇒ multi); **`greenfield`** = single-repo with ZERO code files, i.e. nothing built yet `[assumption]`; is the root itself a repo |
 | `detected_at` / `detected_by` | RFC3339 / str | y | Last detection, CLI version |
 | `repos[].name` | `^[a-z0-9-]{1,32}$` | y | Stable key used by `run.yml`, stories, `map/<repo>/` |
 | `repos[].path` | rel path | y | Inside root, no `..`; `.` in single-repo mode |
@@ -84,6 +84,16 @@ contracts:
 
 **Validation.** `name` unique; `path` exists, relative, inside root; enums as above; commands non-empty when non-null
 and free of `&& ; | > \`` (single argv, auditable); contract repos resolve; ≤64 repos, ≤128 contracts.
+
+**Greenfield.** `mode: greenfield` is a specialisation of `single-repo`, not a fourth workspace shape: one repo, no child
+repos, and **no code file** in it. "Code file" is decided by extension against one fixed set shared with the map
+(`src/core/detect/codeFiles.ts` — `.ts .tsx .js .jsx .mjs .cjs .cs .py .go .rs .java .kt .swift .rb .php .scala .c .h
+.cpp .hpp .sql .sh .razor .vue .svelte`), walked with the same bounded walk that skips `.git`, `node_modules`, build
+output and vendored trees. Docs, manifests, lockfiles and CI YAML are **not** code: a repo of nothing but
+`requirements.md` is greenfield. Consequences: `map/<repo>/architecture.md` says there is no architecture yet and cites
+`absent:<repo path>` rather than describing an empty tree; `init` asks which stack the project *will* use (or takes
+`--stack`); and the seeded stack experts come from that answer instead of from a manifest. `[assumption]` — the spec
+table above lists two modes; the third is additive and projects onto `single` for any reader that knows only two.
 
 ### 2.2 `tldrx-work/<run>/run.yml`
 
@@ -182,6 +192,7 @@ checks: [{id: claim-sources, on: post-write}, {id: schema, on: post-write},
 | `budget_usd` | number >0 | y | Stage ceiling and the sub-agent's `--max-budget-usd` share |
 | `timeout_s` / `dry_run_allowed` | int >0 / bool | n (900 / `true`) | Wall clock for sub-agent and `cmd` checks `[assumption]`; `--dry-run` writes the handoff only |
 | `inputs.required` / `.optional` | path[] | y / n | **The only files the sub-agent gets**; `{repo}` expands per repo |
+| `inputs.seed` | bool | n (`false`) | Also give this stage **the run's seed documents**, whatever `run new --seed` recorded for it in `run.yml` (§6.1) `[assumption]` |
 | `outputs[].path` / `.sections` | rel path / str[] | y | File written; H2 headings that must exist and be non-empty |
 | `questions` | {path, max} | n | Interview file and question cap |
 | `gate.type` / `.approvers` | `approve\|checks\|auto` / int ≥1 | y / n (1) | Human stop / checks only / no stop |
@@ -190,7 +201,17 @@ checks: [{id: claim-sources, on: post-write}, {id: schema, on: post-write},
 
 **Validation.** `id` = folder name; `budget_usd` ≤ the phase ceiling; `cmd` commands must match `workspace.yml` (no
 arbitrary shell from a stage file); expert folders are checked by `doctor`, not the write hook; ≤20 inputs,
-≤10 outputs, ≤10 checks.
+≤10 outputs, ≤10 checks. The 20-input cap counts seed documents too — `run new --seed` stops declaring at 20, and the
+facilitator stops inlining at 20.
+
+**`inputs.seed`.** A stage cannot name the run's seed documents: they differ per run. So it opts in
+(`inputs: {seed: true, …}`) and the facilitator reads the list off `run.yml` — the entries `run new --seed` added to
+that stage's `inputs` beyond what the stage file declares. An unseeded run simply has none, and the stage runs from its
+ordinary inputs. This replaces the What stage's old placeholder input, the literal string
+`"<free text, a PRD, any document, or a Jira epic>"`, which was prose no code could act on: measured 2026-08-29, a
+seeded What prompt inlined zero of the documents it was started from. `[assumption]` — the v0 skeleton validator still
+requires `inputs` to be an array (`src/core/schemas/stage.ts`), so the shipped `stages/what/stage.yml` writes the same
+flag as a top-level `seed: true` beside an array `inputs:`; the loader accepts both spellings.
 
 **`stage.md` required sections** (H2, in this order; concatenated into the sub-agent prompt): `## Role` ·
 `## Objective` (done-when, testable) · `## Inputs` (auto-rendered list — read nothing else) · `## Investigate` (ordered
@@ -515,9 +536,9 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 
 | Command | Reads | Writes | Exit |
 |---|---|---|---|
-| `tldrx init` | cwd tree, git dirs, package/build files, `env.yml` | `workspace.yml`, `map/**`, `conventions/**`, `experts/*/`, `facts.yml`, `.gitignore`, `CLAUDE.md` pointer | 0,1 |
+| `tldrx init [--stack <a,b>]` | cwd tree, git dirs, package/build files, `env.yml` | `workspace.yml` (incl. `mode: greenfield`), `map/**`, `conventions/**`, `experts/*/` (always a `product`, one `<lang>-stack` per detected **or declared** language), `facts.yml`, `.gitignore`, `CLAUDE.md` pointer | 0,1 |
 | `tldrx doctor` | `env.yml`, `workspace.yml`, `.tldrx/stages/**`, `.claude/settings.json` | `env.yml.result`, `cache/doctor.json` | 0,1 |
-| `tldrx run new [--from <path>] [--scope <s>] [--budget <usd>]` | `workflows/<s>.yml`, `workspace.yml`, `facts.yml`, `--from` source (§6) | `tldrx-work/<run>/{run.yml,budget.yml,events.jsonl,01-what/*}` | 0,1 |
+| `tldrx run new [--from <path>\|--seed <path>] [--scope <s>] [--budget <usd>]` | `workflows/<s>.yml`, `workspace.yml`, `facts.yml`, the `--from` source (§6) or the `--seed` documents (§6.1) | `tldrx-work/<run>/{run.yml,budget.yml,events.jsonl,01-what/*}`; `--seed` also writes `01-what/seed-index.md` and declares the documents as What inputs | 0,1 |
 | `tldrx run status [<run>]` | `run.yml`, `events.jsonl` | nothing (stdout) | 0,3 |
 | `tldrx next [<run>] [--dry-run]` | `run.yml`, `stage.yml`, `stage.md`, `expert.md`, declared inputs | stage outputs, `run.yml`, `events.jsonl` | 0,2,4,5 |
 | `tldrx answer <Qid> <text>` | `questions.md`, `facts.yml` | `questions.md`, `facts.yml`, `events.jsonl` | 0,1,3 |
@@ -650,6 +671,39 @@ into the next prompt), or editing the stage inputs by hand and re-running.
   The What stage then runs normally, asking only about the gaps.
 - **Pilot note:** the leaderboard intent lives inside the docker volume `brainer_brainer-aidlc` at
   `/aidlc-ws/aidlc/spaces/default/intents/260823-scoring-leaderboard`; `docker cp` it to the host before `--from`.
+
+## 6.1 `--seed` import (any document)
+
+`tldrx run new --seed <file|dir> [--scope feature]` is the generic sibling of `--from`: it knows nothing about AI-DLC,
+only that a document is Markdown or plain text. Passing both is refused — they write the same `01-what/handoff.md`.
+`[assumption]` — the spec had no generic importer; this is wave 4B.
+
+- **Read:** one `.md`/`.txt` file, or every `.md`/`.txt` under a directory, recursive and sorted by path (so two imports
+  of the same tree are byte-identical). Bounds: ≤50 files, ≤2 MB per file; the same bounded walk as the map skips
+  `.git`, `node_modules`, build output and vendored trees. Anything over a bound is **skipped and named** in
+  `seed-index.md`, the handoff's Evidence ledger and on stdout.
+- **Not read:** PDF, Word, and every other binary document. A named `.pdf` is an error saying so; ones found inside a
+  directory are counted in a warning. Extraction needs a parser, a dependency and a class of silent-corruption bugs
+  this framework does not want.
+- **Copies nothing.** The originals stay where the team keeps them. The seed path must resolve INSIDE the workspace
+  root (tried against the root, then the CWD — first existing wins), because the handoff cites it as
+  `[src: <path>:<line>]` and §2.8 resolves a bare `file` src against the root.
+- **Source tags:** `[src: <workspace-relative path>:<line>]` — the plain §2.8 `file` production, no prefix. A reviewer
+  opens the line the claim came from.
+- **Written:** `01-what/seed-index.md` (each document with size and line count, plus Skipped and Warnings sections) and
+  `01-what/handoff.md`: Findings = every bullet and paragraph under a heading, plus any heading with nothing under it
+  (a heading followed by a *deeper* heading is a container, not an empty section); Decisions = which of the four What
+  outputs the seed covers and under which heading; Unknowns = the ones it does not.
+- **Unknowns are deterministic.** Each What output (`intent.md`, `scope.md`, `success-metrics.md`,
+  `open-questions.md`) has a fixed heading pattern; an output is uncovered when no heading anywhere in the seed matches
+  it. Headings only — no prose is interpreted and no model is asked. `[assumption]` — the patterns.
+- **No facts are appended.** A document is stated content, not a human answering a question; §2.5 provenance would be a
+  lie. `--from` appends facts only for *answered* question blocks, and a seed has none.
+- **Declared inputs:** the documents and `seed-index.md` are added to the What stage's `inputs` in `run.yml`, capped at
+  §2.3's 20. The stage opts in with `inputs.seed: true`, and `tldrx next` inlines their content into `## Inputs` —
+  which is what makes "read nothing else" true rather than aspirational. Over a 64 KB inline budget `[assumption]`,
+  `seed-index.md` and a labelled prefix are inlined and the prompt states what was cut; nothing is presented as whole
+  when it is not.
 
 ## 7. Open decisions
 

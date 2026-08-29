@@ -10,7 +10,10 @@ import type { ExpertPlan } from "./planExperts.ts";
 export function renderExpert(plan: ExpertPlan, createdAt: string): string {
   const scope = plan.kind === "stack"
     ? `the ${plan.name.replace(/-stack$/, "")} stack across ${plan.repos.join(", ")}`
-    : `the \`${plan.folders.join("`, `")}\` area of ${plan.repos.join(", ")}`;
+    : plan.kind === "product"
+      ? `the product itself — what ${plan.repos.join(", ")} is for, who uses it, `
+        + "and what counts as done"
+      : `the \`${plan.folders.join("`, `")}\` area of ${plan.repos.join(", ")}`;
 
   return [
     "---",

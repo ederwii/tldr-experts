@@ -10,7 +10,10 @@
  * Re-runnable: detection output is regenerated, human-owned files are kept.
  */
 import { join, relative, resolve } from "node:path";
+import { basename } from "node:path";
 import { detectWorkspace } from "../detect/detectWorkspace.ts";
+import { isGreenfield } from "../detect/greenfield.ts";
+import { repoSlug } from "../detect/repoSlug.ts";
 import { toPosix } from "../detect/walk.ts";
 import { detectConventionSignals } from "../map/conventionSignals.ts";
 import { buildMap, type BuildMapResult } from "../map/buildMap.ts";
@@ -48,6 +51,8 @@ export interface InitDependencies {
 
 export interface InitReport {
   readonly workspace: DetectedWorkspace;
+  /** `workspace.yml mode: greenfield` — no code anywhere yet (`detect/greenfield.ts`). */
+  readonly greenfield: boolean;
   readonly map: BuildMapResult;
   readonly experts: readonly ExpertPlan[];
   readonly questions: readonly Question[];
@@ -83,9 +88,13 @@ export async function runInit(options: InitOptions, deps: InitDependencies): Pro
     workspace,
     processGiven: options.methodology !== null,
     mcpServers,
+    stackGiven: options.stack.length > 0,
   }) : [];
 
-  const experts = planExperts(workspace, map.facts);
+  const experts = planExperts(workspace, map.facts, {
+    declaredLanguages: options.stack,
+    project: repoSlug(basename(root)),
+  });
   await seedExperts({ outDir: out, plans: experts, createdAt: timestamp, log });
   await writeConventions(workspace, out, log);
   await writeProcess(options, deps, questions, timestamp, out, log);
@@ -109,6 +118,7 @@ export async function runInit(options: InitOptions, deps: InitDependencies): Pro
 
   return {
     workspace, map, experts, questions,
+    greenfield: isGreenfield(workspace),
     written: [...map.files, ...log.paths("written")],
     created: log.paths("created"),
     kept: log.paths("kept"),

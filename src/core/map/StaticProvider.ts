@@ -53,8 +53,19 @@ export class StaticProvider implements MapProvider {
     const bullets: MapBullet[] = [];
     const first = tree.sourceFiles[0];
 
+    // Greenfield (`detect/greenfield.ts` uses the same rule): there is no
+    // architecture yet, and the map says so with an `absent:` source instead of
+    // describing an empty tree as if it were a design.
     if (first === undefined) {
-      bullets.push({ text: "No source files were found in this repo", srcs: [`absent:${repo.path}`] });
+      bullets.push({
+        text: "Greenfield: no code file of any known extension exists in this repo yet — "
+          + "there is no architecture to describe, only one to decide",
+        srcs: [`absent:${repo.path}`],
+      });
+      bullets.push({
+        text: `${plural(tree.files.length, "non-code file")} present — docs, config and manifests only`,
+        srcs: [`absent:${repo.path}`],
+      });
       return bullets;
     }
     bullets.push({
