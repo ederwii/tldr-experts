@@ -35,14 +35,32 @@ export interface Handoff {
 const H2_RE = /^##\s+(.+?)\s*$/;
 /** A bullet: `- text`, tolerating up to three spaces of indent. [assumption] */
 const BULLET_RE = /^ {0,3}-\s+(\S.*)$/;
+/**
+ * A wrapped bullet's continuation: an indented, non-empty line that is not itself
+ * a bullet. Spec §2.8 says the bullet ends with a `[src: …]` token — a soft-wrapped
+ * bullet still does, just one line down, and treating that as an unsourced claim
+ * would punish line width rather than missing evidence. A bullet therefore runs to
+ * the next line that starts at column 0 (or to the next bullet).
+ */
+const CONTINUATION_RE = /^\s+\S/;
 
 export function parseHandoff(text: string): Handoff {
   const lines = text.split("\n");
   const sections: HandoffSection[] = [];
   const headings: string[] = [];
   let current: { name: string; headingLine: number; bullets: HandoffBullet[] } | null = null;
+  let pending: { line: number; parts: string[] } | null = null;
 
+  const flushBullet = (): void => {
+    if (pending === null) return;
+    if (current !== null) {
+      const joined = pending.parts.join(" ");
+      current.bullets.push({ line: pending.line, text: joined, token: parseSrcToken(joined) });
+    }
+    pending = null;
+  };
   const flush = (): void => {
+    flushBullet();
     if (current !== null) sections.push(current);
     current = null;
   };
@@ -63,8 +81,15 @@ export function parseHandoff(text: string): Handoff {
     if (current === null) continue;
     const bullet = BULLET_RE.exec(line);
     if (bullet !== null && bullet[1] !== undefined) {
-      current.bullets.push({ line: i + 1, text: bullet[1], token: parseSrcToken(line) });
+      flushBullet();
+      pending = { line: i + 1, parts: [bullet[1]] };
+      continue;
     }
+    if (pending !== null && CONTINUATION_RE.test(line)) {
+      pending.parts.push(line.trim());
+      continue;
+    }
+    flushBullet();
   }
   flush();
   return { sections, headings };

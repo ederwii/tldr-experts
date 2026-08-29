@@ -16,7 +16,7 @@
  * hook can validate a 256 KB handoff well inside its 50 ms budget (spec §0).
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { isAbsolute, join, normalize } from "node:path";
+import { isAbsolute, join, normalize, relative, sep } from "node:path";
 
 export const SRC_KINDS = ["file", "doc", "answer", "fact", "cmd", "graph", "absent", "aidlc"] as const;
 export type SrcKind = (typeof SRC_KINDS)[number];
@@ -45,16 +45,22 @@ export interface SrcToken {
 
 /** Context a `src` is resolved against. Everything is optional-by-emptiness. */
 export interface SrcContext {
-  /** Absolute workspace root; `file` paths without a repo prefix resolve here. [assumption] */
+  /** Absolute workspace root; the first base a bare `file` path resolves against. */
   readonly root: string;
   /** workspace.yml repo name -> path relative to the root. */
   readonly repos: ReadonlyMap<string, string>;
   /** Every non-null command string in workspace.yml — the only commands a `cmd` src may cite. */
   readonly commands: ReadonlySet<string>;
+  /**
+   * Absolute `tldrx-work/<run>/` directory of the handoff being validated, when the
+   * caller knows it — the second base a bare `file` path resolves against, so a
+   * sub-agent may cite its own run-relative outputs (`01-what/intent.md:1`).
+   */
+  readonly runDir?: string | null;
 }
 
-export function emptySrcContext(root: string): SrcContext {
-  return { root, repos: new Map(), commands: new Set() };
+export function emptySrcContext(root: string, runDir?: string | null): SrcContext {
+  return { root, repos: new Map(), commands: new Set(), runDir: runDir ?? null };
 }
 
 const LINE_RE = /^\d{1,9}$/;
@@ -209,20 +215,25 @@ const lineCountCache = new Map<string, number>();
 export function resolveSrc(ref: SrcRef, ctx: SrcContext, section: string): SrcResolution {
   switch (ref.kind) {
     case "file": {
-      const base = ref.repo === null ? ctx.root : join(ctx.root, ctx.repos.get(ref.repo) ?? "");
       if (ref.repo !== null && !ctx.repos.has(ref.repo)) {
         return { ok: false, message: `unknown repo \`${ref.repo}\` (not in workspace.yml)` };
       }
-      const abs = isAbsolute(ref.path) ? ref.path : normalize(join(base, ref.path));
-      if (!existsSync(abs) || !statSync(abs).isFile()) {
-        return { ok: false, resolved: abs, message: `no such file: ${ref.path}` };
+      const bases = fileBases(ref, ctx);
+      for (const base of bases) {
+        if (!existsSync(base.abs) || !statSync(base.abs).isFile()) continue;
+        const lines = countLines(base.abs);
+        const highest = ref.endLine ?? ref.startLine;
+        if (highest > lines) {
+          return { ok: false, resolved: base.abs, message: `${ref.path} has ${lines} line(s); cited line ${highest}` };
+        }
+        return { ok: true, resolved: base.abs };
       }
-      const lines = countLines(abs);
-      const highest = ref.endLine ?? ref.startLine;
-      if (highest > lines) {
-        return { ok: false, resolved: abs, message: `${ref.path} has ${lines} line(s); cited line ${highest}` };
-      }
-      return { ok: true, resolved: abs };
+      const tried = bases.map((b) => b.label).join(", ");
+      return {
+        ok: false,
+        resolved: bases[0]?.abs,
+        message: `no such file: ${ref.path} — tried ${tried}`,
+      };
     }
     case "cmd": {
       if (section !== "Evidence ledger") {
@@ -239,6 +250,69 @@ export function resolveSrc(ref: SrcRef, ctx: SrcContext, section: string): SrcRe
     default:
       return { ok: true };
   }
+}
+
+interface FileBase {
+  /** Human-readable name of the base, for the "tried …" half of a failure message. */
+  readonly label: string;
+  readonly abs: string;
+}
+
+/**
+ * The bases a `file` src is resolved against, in order — first existing wins (spec §2.8).
+ *
+ * A bare `path:line` is ambiguous by design: the sub-agent writing a handoff thinks
+ * run-relatively (`01-what/intent.md:1`) while the workspace thinks root-relatively
+ * (`.tldrx/memory/facts.yml:4`). Both are legal, so both are tried:
+ *
+ *   (a) the workspace root,
+ *   (b) the run directory of the handoff being validated (when the caller knows it),
+ *   (c) the repo dir, when the path starts with a known repo name + `/` — i.e.
+ *       `api/src/Hunt.cs` is accepted as a spelling of `api:src/Hunt.cs`.
+ *
+ * A repo-qualified `repo:path` and an absolute path each have exactly one base.
+ */
+function fileBases(
+  ref: Extract<SrcRef, { kind: "file" }>,
+  ctx: SrcContext,
+): readonly FileBase[] {
+  if (isAbsolute(ref.path)) {
+    return [{ label: "the absolute path as written", abs: normalize(ref.path) }];
+  }
+  if (ref.repo !== null) {
+    const rel = ctx.repos.get(ref.repo) ?? "";
+    return [{ label: repoLabel(ref.repo, rel), abs: normalize(join(ctx.root, rel, ref.path)) }];
+  }
+  const bases: FileBase[] = [
+    { label: "workspace root", abs: normalize(join(ctx.root, ref.path)) },
+  ];
+  const runDir = ctx.runDir ?? null;
+  if (runDir !== null && runDir !== "") {
+    bases.push({ label: `run dir ${displayPath(ctx.root, runDir)}`, abs: normalize(join(runDir, ref.path)) });
+  }
+  const slash = ref.path.indexOf("/");
+  if (slash > 0) {
+    const name = ref.path.slice(0, slash);
+    const rel = ctx.repos.get(name);
+    if (rel !== undefined) {
+      bases.push({
+        label: repoLabel(name, rel),
+        abs: normalize(join(ctx.root, rel, ref.path.slice(slash + 1))),
+      });
+    }
+  }
+  return bases;
+}
+
+function repoLabel(name: string, rel: string): string {
+  const at = rel === "" || rel === "." ? "workspace root" : rel;
+  return `repo \`${name}\` (${at})`;
+}
+
+/** Workspace-relative when it can be — an absolute temp path in a deny message is noise. */
+function displayPath(root: string, dir: string): string {
+  const rel = relative(root, dir);
+  return rel === "" || rel.startsWith("..") ? dir : rel.split(sep).join("/");
 }
 
 function countLines(path: string): number {

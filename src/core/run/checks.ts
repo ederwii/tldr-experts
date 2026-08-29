@@ -69,7 +69,7 @@ function checkClaimSources(ctx: CheckContext): CheckOutcome {
   if (handoffs.length === 0) {
     return { id: "claim-sources", status: "skipped", detail: "the stage declares no handoff.md output" };
   }
-  const srcCtx = toSrcContext(loadWorkspace(ctx.root));
+  const srcCtx = toSrcContext(loadWorkspace(ctx.root), ctx.runDir);
   for (const rel of handoffs) {
     const path = join(ctx.runDir, rel);
     if (!existsSync(path)) {

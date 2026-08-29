@@ -160,7 +160,7 @@ describe("claim-sources (PreToolUse Write|Edit)", () => {
     });
     expect(denial(run)).toBe(
       "[tldrx] claim-sources: 1 unresolvable source(s) in tldrx-work/260828-leaderboard/02-how/handoff.md.\n" +
-      "L4: [src: api:src/Nope.cs:8] — no such file: src/Nope.cs\n" +
+      "L4: [src: api:src/Nope.cs:8] — no such file: src/Nope.cs — tried repo `api` (api)\n" +
       "A cited file must exist with the line in range, a command must be one of workspace.yml's, and " +
       "`$ … → exit n` belongs only in the Evidence ledger. Fix the citation or delete the claim.",
     );

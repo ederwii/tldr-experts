@@ -206,7 +206,9 @@ export function createRun(options: NewRunOptions): NewRunOutcome {
         writtenOutputs,
       });
       write(temp, handoffPath, handoff, written);
-      const srcCtx = toSrcContext(workspace);
+      // `temp` IS the run dir until the atomic rename below, so run-relative
+      // citations in the distilled handoff resolve here too.
+      const srcCtx = toSrcContext(workspace, temp);
       const handoffCheck = validateHandoff(handoff, srcCtx);
       if (!handoffCheck.ok) {
         throw new NewRunError(

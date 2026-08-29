@@ -35,7 +35,9 @@ await runHook("claim-sources", async () => {
   if (!looksLikeHandoff) return;
 
   const workspace = loadWorkspace(location.root);
-  const report = validateHandoff(wouldBe.text, toSrcContext(workspace));
+  // The run dir comes from the touched path itself, so the hook resolves a bare
+  // `01-what/intent.md:1` exactly as `next` and `approve` later will.
+  const report = validateHandoff(wouldBe.text, toSrcContext(workspace, location.runDir));
   if (report.ok) return;
 
   const relPath = `tldrx-work/${location.run}/${location.relative}`;

@@ -382,8 +382,18 @@ graph  := "graph:" nodeid                          # a graphify node id
 absent := "absent:" path                           # looked here, found nothing
 ```
 
-**Validation.** The four sections present in that order; every `- ` line inside them ends with a valid token; `file`
-paths exist with the line in range; `cmd` tokens only in `Evidence ledger`; `doc` requires https; ≤200 bullets.
+**Validation.** The four sections present in that order; every `- ` bullet inside them ends with a valid token — a
+bullet runs to the next line that starts at column 0, so a soft-wrapped citation on an indented continuation line still
+counts; `file` paths exist with the line in range; `cmd` tokens only in `Evidence ledger`; `doc` requires https;
+≤200 bullets.
+
+**Resolving a `file` src.** A `repo:path` resolves inside that repo, and an absolute path is taken as written. A bare
+`path` is tried against three bases, in order — **first existing wins**: (a) the workspace root; (b) the run directory of
+the handoff being validated (`tldrx-work/<run>/`, so a stage may cite its own outputs as `01-what/intent.md:1`); (c) only
+when the path starts with a known repo name followed by `/`, that repo's directory with the name stripped —
+`api/src/Hunt.cs` is a spelling of `api:src/Hunt.cs`. The line range is checked against whichever file resolved, and a
+failure names every base it tried. `tldrx next`, `tldrx approve` and the `claim-sources` hook resolve identically: all
+three are handed the run directory of the file they are judging.
 
 ### 2.9 `tldrx-work/<run>/events.jsonl`
 
