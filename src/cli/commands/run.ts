@@ -92,6 +92,16 @@ function runNew(argv: readonly string[]): number {
     }
     lines.push(`next: tldrx run status ${outcome.runId}`);
     process.stdout.write(`${lines.join("\n")}\n`);
+
+    // Several open runs stay legal — each has its own budget.yml, events.jsonl
+    // and epic branch. What is no longer legal is guessing between them, so say
+    // so at the moment the second one appears rather than at the first refusal.
+    const others = RunStore.findOpen(root).filter((store) => store.runId !== outcome.runId).length;
+    if (others > 0) {
+      process.stderr.write(
+        `note: ${String(others)} other run(s) open — pass a run id to next/answer/approve/… from now on\n`,
+      );
+    }
     return EXIT_OK;
   } catch (error) {
     return fail("run new", error);
