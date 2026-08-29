@@ -10,8 +10,13 @@ export function parseYaml(text: string): unknown {
   return Bun.YAML.parse(text);
 }
 
-export function stringifyYaml(value: unknown): string {
-  return Bun.YAML.stringify(value);
+/**
+ * Block style by default (indent 2): every YAML file this framework writes is
+ * meant to be read and diffed by a human, and `Bun.YAML.stringify` with no
+ * indent emits one flow-style line. Pass `indent: 0` for the compact form.
+ */
+export function stringifyYaml(value: unknown, indent = 2): string {
+  return indent > 0 ? Bun.YAML.stringify(value, null, indent) : Bun.YAML.stringify(value);
 }
 
 export async function readYamlFile(path: string): Promise<unknown> {
