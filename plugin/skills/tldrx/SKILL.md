@@ -131,6 +131,21 @@ with several open prints a table of them all and exits `0` (`--json` returns
 and `tldrx run new` says so when others are already open. Hooks and the status line
 never block on this — the status line just shows `(+N open)`.
 
+## Big seed
+
+When `tldrx run new --seed` prints `note: seed is N files / ~T tokens — \`tldrx seed
+triage <path>\` can propose a split` on stderr, say so and offer triage: one run
+carrying that much seed pays for it at every stage. `tldrx seed triage <path>` is
+free and spawns nothing — run it and show the verdict line.
+
+`--propose` costs money (one sub-agent, `--max-usd 1.00` by default). **Never run it
+without telling the human the ceiling first**, and never raise `--max-usd` on their
+behalf. It writes `split.yml`/`split.md` and creates nothing.
+
+`tldrx seed apply <split.yml>` is the gate: it is what creates the runs, so the human
+reads `split.md` and decides. Show them `--dry-run` first, and do not apply until
+they say to. Several runs will be open afterwards — every later command needs an id.
+
 ## Rules you do not get to bend
 
 1. **Never hand-edit `run.yml` or `events.jsonl`.** They are written by the tools

@@ -189,6 +189,61 @@ moment `competencies.yml` does.
 - **Package name stays `tldr-experts`**; it now installs two commands, `tldrx` and `tldr-experts`. (Unscoped `tldrx` as a package name is refused by npm's similarity rule; 0.0.1–0.2.0 were unpublished on 2026-08-29 and their numbers can never be reused, so this is the first version back on the registry.)
 - README: release table with status tags (`alpha`/`beta`/`stable` defined) and npm/CI badges.
 
+### Seed triage — a big seed is several runs, not one expensive one
+
+- **`tldrx seed triage <path>` counts a seed before anyone pays for it.** Free,
+  offline, no LLM: it collects the documents with exactly the `--seed` rules and
+  writes `inventory.md` + `inventory.json` — per document, its size in tokens, its
+  headings, which other seed documents it links to *or names by filename*, its
+  `Status:` line, its open markers (`TODO`/`TBD`/`open question`/`??`), and whether
+  it is **code-derived**. That last flag is the only judgement in the file and it
+  resolves before it counts: a document is code-derived when ≥ 8 distinct path-like,
+  non-documentation tokens it cites are **real files** under the workspace root or a
+  repo in `workspace.yml`. Citing `src/Foo.cs` proves nothing; citing eight paths
+  that all exist means the code says the same thing and the model can read it
+  instead. Ends in one verdict line that names the next command. Threshold:
+  `--threshold-tokens`, else `seed_triage.threshold_tokens` in `workspace.yml`
+  (new, optional, validated), else 20,000.
+- **`--propose` is one cheap model pass and creates nothing.** One sub-agent, effort
+  `low`, `--max-usd 1.00`, spawned the way `next` and `expert train` spawn theirs —
+  same `--json-schema`, same `--prepare`/`--commit` handshake, same bundle. The
+  prompt carries the inventory and the documents under a 120 KB budget: everything
+  whole if it fits, otherwise the small ones whole plus **complete heading lists and
+  a 2 KB prefix** for the rest, with every truncation named and byte-counted, because
+  a model that thinks it read a 152 KB design document and read 2 KB of it will
+  propose a split with great confidence. The answer is validated against *this*
+  workspace before a byte is written — scope against the workflows on disk, seeds
+  against the inventory, slugs against `run new`'s own regex, `depends_on` for
+  cycles, and every `why[].src` against a `seed:<rel>#<heading>` / `seed:<rel>:<line>`
+  grammar that is deliberately **not** part of §2.8 (widening the handoff's `[src: …]`
+  rule to cover documents no run has yet would loosen the one check that keeps
+  handoffs honest). Failure is whole: exit `5`, no `split.yml`, raw answer kept.
+- **`tldrx seed apply <split.yml>` is the gate, and it is a separate command on
+  purpose.** "The model proposed it" and "we are doing it" must not be the same
+  event. Apply refuses anything that is not `status: proposed`, revalidates the file
+  a human was invited to edit, and creates each run in topological order through the
+  same `createRun` that `tldrx run new` calls. `--dry-run` prints the exact
+  `tldrx run new …` lines. If a run directory already exists it **stops there**,
+  exit `1`, naming the collision *and* the runs already created and left in place —
+  partial application is a real state and pretending otherwise is how people lose
+  work.
+- **`--seed` is repeatable** (`--seed a.md --seed docs/`): merged, deduped, re-sorted,
+  with the 50-file cap applied to the merged set rather than per argument. One
+  occurrence is byte-for-byte what it always was. This is what lets apply hand each
+  run its own subset.
+- **`run new --seed` hints, on stderr.** Over the threshold or over 10 files it adds
+  one line naming `tldrx seed triage`. stderr, never stdout — a chat bridge parses
+  stdout, and a note is not a result.
+- **`run.yml` gains an optional `triage: {split, depends_on}` block**, written only by
+  `seed apply`. Absent everywhere else, so an untriaged `run.yml` is byte-identical to
+  what it was.
+- Measured on a real 24-document design folder (`~/aparece-v2/docs/domain-design`,
+  2026-08-29): `seed: 24 files, ~44k tokens — above the 20k threshold`. Its 152 KB
+  inventory document cites **294** distinct path-like tokens and **0** of them
+  resolve — the repo is a rewrite, the paths are the old system's — so it is *not*
+  flagged code-derived. The heuristic resolving before it counts is what stops that
+  from being a false positive.
+
 ## 0.2.0 — 2026-08-29
 
 ### The Build phase executes

@@ -857,7 +857,10 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx init [--stack <a,b>]` | cwd tree, git dirs, package/build files, `env.yml` | `workspace.yml` (incl. `mode: greenfield`), `map/**`, `conventions/**`, `experts/*/` (always a `product`, one `<lang>-stack` per detected **or declared** language), `facts.yml`, `.gitignore`, `CLAUDE.md` pointer | 0,1 |
 | `tldrx doctor` | `env.yml`, `workspace.yml`, `.tldrx/stages/**`, `.claude/settings.json` | `env.yml.result`, `cache/doctor.json` | 0,1 |
 | `tldrx install --claude [--project\|--user] [--skill-only] [--no-hooks] [--no-statusline] [--force-statusline] [--uninstall] [--dry-run]` | `plugin/skills/tldrx/SKILL.md`, the target `.claude/settings.json` | `.claude/skills/tldrx/SKILL.md` (marked `<!-- tldrx-managed -->`), `.claude/settings.json` (the §4 hooks as `tldrx hook <name>` + `statusLine`), `settings.json.bak-tldrx-<ts>` | 0,1 |
-| `tldrx run new [--from <path>\|--seed <path>] [--scope <s>] [--budget <usd>]` | `workflows/<s>.yml`, `workspace.yml`, `facts.yml`, the `--from` source (§6) or the `--seed` documents (§6.1) | `tldrx-work/<run>/{run.yml,budget.yml,events.jsonl,01-what/*}`; `--seed` also writes `01-what/seed-index.md` and declares the documents as What inputs | 0,1 |
+| `tldrx run new [--from <path>\|--seed <path> ...] [--scope <s>] [--budget <usd>]` | `workflows/<s>.yml`, `workspace.yml`, `facts.yml`, the `--from` source (§6) or the `--seed` documents (§6.1) | `tldrx-work/<run>/{run.yml,budget.yml,events.jsonl,01-what/*}`; `--seed` also writes `01-what/seed-index.md` and declares the documents as What inputs. **`--seed` is repeatable** (§6.2): every occurrence is collected, merged, deduped and re-sorted, and the §6.1 caps apply to the merged set; one occurrence behaves exactly as before. A seed over the threshold or over 10 files adds one **stderr** note naming `tldrx seed triage` | 0,1 |
+| `tldrx seed triage <path> [--out <dir>] [--json] [--threshold-tokens <n>]` | the `--seed` documents (§6.1 rules), `workspace.yml` (repos + `seed_triage.threshold_tokens`) | `<out>/inventory.md`, `<out>/inventory.json` (default `<out>` = `.tldrx/triage/<yymmdd>-<slug>/`) | 0,1,3 |
+| `tldrx seed triage <path> --propose [--model <m>] [--effort <l>] [--max-usd <n>] [--prepare\|--commit] [--yolo]` | the same, plus `workflows/*.yml` for the legal scopes | `<out>/{inventory.md,inventory.json,split.yml,split.md}`, `<out>/.agent/propose/*`; **never** a run | 0,1,2,5 |
+| `tldrx seed apply <split.yml> [--dry-run]` | `split.yml`, `inventory.json` beside it, `workflows/*.yml` | one `tldrx-work/<run>/` per proposed run (via `run new`'s own path) each with a `triage:` block, and `split.yml` rewritten to `status: applied` | 0,1,3 |
 | `tldrx run status [<run>]` | `run.yml`, `events.jsonl` | nothing (stdout) | 0,3 |
 | `tldrx next [<run>] [--dry-run]` | `run.yml`, `stage.yml`, `stage.md`, `expert.md`, declared inputs | stage outputs, `run.yml`, `events.jsonl` | 0,2,3,4,5 |
 | `tldrx answer <Qid> <text> [--run <id>]` | `questions.md`, `facts.yml` | `questions.md`, `facts.yml`, `events.jsonl` | 0,1,2,3 |
@@ -1255,6 +1258,170 @@ only that a document is Markdown or plain text. Passing both is refused — they
   which is what makes "read nothing else" true rather than aspirational. Over a 64 KB inline budget `[assumption]`,
   `seed-index.md` and a labelled prefix are inlined and the prompt states what was cut; nothing is presented as whole
   when it is not.
+
+## 6.2 Seed triage (`tldrx seed triage` / `tldrx seed apply`)
+
+A seed can be too big for one run. `--seed docs/` on a 25-document design folder makes a single run that pays for
+44k tokens of context at every stage of a five-stage workflow, and produces one branch for what was several pieces of
+work. Triage is the answer: **count it, propose a split, let a human decide, then create the runs.** Three commands,
+and the boundaries between them are the design — the free one never spends, the paid one never creates, and the one
+that creates never asks a model. `[assumption]` — the spec had no triage; this is wave F.
+
+### The deterministic pass — `tldrx seed triage <path>`
+
+Free, offline, no LLM. Collects the seed with **exactly** the §6.1 rules (`.md`/`.txt`, ≤50 files, ≤2 MB each, depth 8,
+same skipped directories, same skip list) and writes `<out>/inventory.md` + `<out>/inventory.json`. Per document:
+
+| Field | How it is decided |
+|---|---|
+| `rel`, `bytes`, `lines` | off the file |
+| `tokens` | `ceil(bytes / 4)` — crude on purpose; it decides "split or not", and 15% either way never changes that |
+| `h1`, `h2` | lines matching `^# ` / `^## ` |
+| `references` | other seed documents this one points at: a Markdown link whose target resolves to one, **or** a bare mention of its filename |
+| `status` | the first `Status:` line's first word, lower-cased — `**Status:** Superseded by ADR-7` ⇒ `superseded` |
+| `open_markers` | occurrences of `TODO`, `TBD`, `open question` (case-insensitive) and `??` |
+| `code_derived` | distinct path-like, **non-documentation** tokens the document cites, and how many **resolve to a real file** under the workspace root or a repo in `workspace.yml`. `likely` at ≥ 8 `[assumption]` |
+
+`code_derived` is the only judgement, and it is conservative by construction: citing `src/Foo.cs` proves nothing, but
+citing eight paths that all exist is a document transcribing code a model can open for itself, and paying for it as
+seed is paying twice. Documentation extensions (`.md .txt .markdown .rst .adoc .pdf .doc .docx`) never count — a design
+doc linking its siblings is a *reference*, which is already its own column. At most 500 candidate tokens per document
+are examined, so the `stat()` cost is bounded.
+
+Then totals and one verdict line, which always names the next command:
+
+```
+seed: 25 files, ~44k tokens — above the 20k threshold; run `tldrx seed triage docs/domain-design --propose`
+seed: 3 files, ~2k tokens — under the 20k threshold; `tldrx run new --seed docs` will do
+```
+
+**Threshold.** `--threshold-tokens <n>` wins; else `seed_triage.threshold_tokens` in `.tldrx/workspace.yml` (additive,
+optional, validated as a positive number); else **20,000** `[assumption]`. `--out` defaults to
+`.tldrx/triage/<yymmdd>-<basename-slug>/`. `--json` puts `inventory.json`'s bytes on stdout.
+
+**The hint.** `tldrx run new --seed` prints one line on **stderr** — never stdout, which a chat bridge parses — when the
+collected seed is over the threshold **or** over 10 files `[assumption]`:
+
+```
+note: seed is 25 files / ~44k tokens — `tldrx seed triage docs/domain-design` can propose a split
+```
+
+### The model pass — `tldrx seed triage <path> --propose`
+
+ONE sub-agent, spawned exactly as §5 spawns a stage's: same `spawnAgent`, same `--json-schema`, same three execution
+modes over the same `.agent/<stage>/` bundle. Defaults: effort `low`, `--max-usd 1.00`, and **no `--model` flag at all**
+unless `--model` is given — the CLI's own default applies, which is what `tldrx next` leaves in place for a stage with
+no pin. Modes: headless spawns `claude -p`; `--prepare` writes `<out>/.agent/propose/{prompt.md,pending.json}` and
+stops; `--commit` reads that directory's `result.json`, taking the proposal from its `proposal` key.
+
+**The prompt** carries the inventory and the documents themselves, under a **120 KB** byte budget `[assumption]`. If
+everything fits, everything goes in whole. If not, a quarter of the budget is reserved for digests, small documents are
+inlined whole (ascending by size, so the budget buys the most documents it can), and each remaining document gets its
+**complete heading list** plus a 2 KB prefix while the reserve lasts. Every truncation is named in the prompt with its
+real byte count — a model that thinks it read a 152 KB document and read 2 KB of it will propose a split with great
+confidence.
+
+**The output**, validated before anything is written:
+
+```
+{ shared_context: [rel], exclude: [{path, reason}],
+  runs: [{slug, scope, goal, seeds: [rel], depends_on: [slug], size: "S"|"M"|"L", budget_usd, why: [{claim, src}]}],
+  questions: [{id, text, options?}] }
+```
+
+| Rule | Checked against |
+|---|---|
+| `scope` | the workflow stems on disk — `.tldrx/workflows/*.yml` + the shipped `workflows/*.yml`, the two places `run new` looks |
+| `seeds`, `shared_context`, `exclude[].path` | the inventory's rel paths, exactly |
+| `slug` | `^[a-z0-9][a-z0-9-]{0,39}$`, unique in the proposal (the same regex `run new` uses) |
+| `depends_on` | slugs in this proposal, no self-reference, **acyclic** |
+| `size`, `budget_usd` | `S\|M\|L`; a number > 0 |
+| `why[].src` | the `seed:` grammar below, naming a document in the inventory; a `:line` past the file's end is refused |
+| `questions[].id` | `^Q\d{1,6}$` |
+| count | ≤ 20 runs, ≥ 1 run, ≥ 1 `why` per run |
+
+Failure is **whole**: exit `5`, nothing written to `split.yml`, the raw answer kept at
+`<out>/.agent/propose/result.raw.json`. Half a split is worse than none, because the half that survived looks
+authoritative.
+
+#### The `seed:` src grammar
+
+```
+seedsrc := "seed:" rel ("#" heading | ":" line)
+```
+
+Used by `split.yml`'s `why[].src` and **nowhere else**. It is deliberately not part of §2.8: a handoff's `[src: …]` is
+resolved against files that exist inside a run, and a triage claim is about documents no run has yet. Widening §2.8 to
+cover that would loosen the one check that keeps handoffs honest. `#` is matched before `:`, so a heading may contain a
+colon.
+
+#### `<out>/split.yml`
+
+```yaml
+version: 1
+status: proposed          # proposed | applied — `apply` acts on `proposed` only
+source: docs/domain-design
+created_at: 2026-08-30T09:00:00Z
+shared_context: ["docs/domain-design/README.md"]
+exclude:
+  - {path: "docs/domain-design/SOURCE-INVENTORY.md", reason: "code-derived: 40 paths resolve under api/"}
+runs:
+  - slug: core-entities
+    scope: feature
+    goal: "Accounts, businesses and locations"
+    size: M
+    budget_usd: 25.00
+    seeds: ["docs/domain-design/docs/03-TENANCY.md"]
+    depends_on: []
+    why:
+      - {claim: "Tenancy bounds every other aggregate", src: "seed:docs/domain-design/docs/03-TENANCY.md#Accounts"}
+questions: [{id: Q1, text: "Which currency rounding rule?", options: ["banker's", "half-up"]}]
+```
+
+`split.md` is the same content for a human: a table of runs, dependencies as a list, the questions, and the excludes
+with their reasons.
+
+**Budget.** `--max-usd` is gated *before* the spawn (below a **$0.25** floor it is refused with exit `2`, because a
+cold `claude -p` pays 10–26k cache-creation tokens before its first reply) and reconciled *after* from the real
+`total_cost_usd`. As everywhere else in this framework: **`--max-budget-usd` is a stop-after-turn, not a cap.** It
+cannot end a turn already in flight, so a run can and does close above its ceiling; the reconciliation says so out
+loud. Size the prompt for what you are willing to lose.
+
+`--propose` **never creates a run.**
+
+### The gate — `tldrx seed apply <split.yml>`
+
+The human gate is that you ran this command. Refused unless `status: proposed`. The proposal is validated **again**
+here — `split.yml` is a file a human is invited to edit, and an edited scope or a hand-added cycle must be refused by
+the command that acts on it. The rel-path universe comes from `inventory.json` beside the split when it is there, and
+from the split's own paths when it is not.
+
+Runs are created in **topological order**, stable within a level (among runs whose dependencies are placed, the one
+listed first goes first), each through the same `createRun` `tldrx run new` calls, with `--scope`, `--budget` and
+`shared_context + seeds` as the repeated `--seed`. Each created `run.yml` gains one optional, additive block:
+
+```yaml
+triage: {split: ".tldrx/triage/260830-domain-design/split.yml", depends_on: ["core-entities"]}
+```
+
+Absent on every run `run new` creates, so an untriaged `run.yml` is byte-identical to what it was before this section
+existed. `run status` does not mention it.
+
+Output: one line per run —
+
+```
+created 260830-billing (feature, 4 seeds, depends on: core-entities)
+```
+
+— then `split.yml` is rewritten with `status: applied`, `applied_at` and `created_runs`. Because several runs are now
+open, §3.1's reminder goes to stderr.
+
+`--dry-run` prints the exact `tldrx run new …` lines, in order, and writes nothing (exit `0`).
+
+**Partial application is a real state and is said out loud.** If a run's directory already exists the apply stops
+there, exit `1`, naming the collision *and* the runs already created and left in place; `split.yml` stays `proposed`,
+because it describes work that has not all happened. Deleting those run dirs is the operator's call, not the tool's.
+
 
 ## 7. Open decisions
 
