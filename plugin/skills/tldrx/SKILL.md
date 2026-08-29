@@ -13,9 +13,9 @@ argument-hint: "[scope or description of the work]"
 
 # tldrx — the facilitator
 
-**PRE-ALPHA.** Some commands are still stubs and exit 64. Run `tldrx --help` and
-read the `*` markers before you promise anything. Never narrate progress a tool
-did not make.
+**Alpha.** Every command is implemented; nothing is a stub. `tldrx --help` is the
+authoritative surface — read it before you promise anything, and never narrate
+progress a tool did not make.
 
 ## What you are
 
@@ -61,13 +61,75 @@ off disk and re-runs the stage's checks regardless.
 | exit | meaning | what you do |
 |---|---|---|
 | 0 | stage done, cursor advanced | run `tldrx next --prepare` for the next stage |
-| 2 | refused — budget, or another `next` holds the lock | report it; do not retry blindly |
+| 2 | refused — budget, or another `next` holds the lock; or you left off the run id (see "Several runs open") | report it; do not retry blindly |
+| 3 | *(step 1, `tldrx run status`)* there is a workspace but **no run** | do NOT invent one — see below |
 | 4 | a human is needed | tell them `tldrx approve` (gate) or `tldrx answer <Qid> "…"` (question) |
 | 5 | the stage failed | report the reason verbatim; the cost is spent, not refunded |
+
+Exit `3` is `no non-terminal run in tldrx-work/`. Opening a run is a decision about
+what the work IS, so ask the human first, then run what they said:
+
+```
+tldrx run new <slug> --scope <s> [--seed <path>] [--budget <usd>]
+```
+
+`<s>` is a file stem in the project's `.tldrx/workflows/` or the shipped
+`workflows/`: `feature` `bugfix` `hotfix` `refactor` `docs` `spike` `prototype`
+`migration` `integration` `performance` `security-patch` `upgrade` `retro`.
+(`tldrx run status` with no `.tldrx/` at all is exit `1`, not `3` — that one needs
+`tldrx init`.)
 
 Headless mode (`tldrx next`, no flags) spawns `claude -p` itself. It works from
 inside a session (measured 2026-08-29) but pays for a cold context — use it in a
 terminal, in CI, or from a chat bridge, not here.
+
+## Init questions
+
+`tldrx init` writes the gaps it could not detect to `.tldrx/init-questions.md`.
+They are answered with `tldrx interview --init` — never by editing the file, which
+would skip the `facts.yml` row and the two events.
+
+```
+tldrx interview --init                            # interactive
+printf 'A\nB\nA\nA\n' | tldrx interview --init    # non-TTY: ONE LINE PER QUESTION
+```
+
+Piped stdin is read one line per question, in file order. A single letter `A`–`E`
+picks that option — the letter is the option's position in the block as the file
+lists it. Anything else is recorded as free text; an empty line or `s` skips; `q`
+stops; a letter with no option behind it is reported and skipped, never invented.
+Every unanswered question stays `status: open`.
+
+The two **process** questions also write `.tldrx/process.yml`: `methodology`, and
+`ticket_tool.kind` (`jira` / `github` / `linear` / `none`) — for GitHub the `owner/repo` is
+filled from the git remote when it can be read, otherwise a note says to set it by
+hand; for Jira a note says to set the project key by hand; answering "other" leaves
+the file untouched. The last line says which happened —
+`process.yml: methodology=none, ticket_tool=github (owner/repo)`, or
+`process.yml: unchanged`.
+
+**Never pass `--yes-to-defaults` on the human's behalf.** It answers EVERY question
+with its first option. That is safe for the two process questions (option A is
+"None") and a guess for the rest — ownership and dead code are facts about their
+project that you do not have.
+
+## Several runs open
+
+More than one run can be open at once. Then every run-targeting command — `next`,
+`answer`, `approve`, `reject`, `budget`, `interview --run`, `tickets`, `watch`,
+`retro`, `replay`, `dashboard` — **refuses with exit 2** rather than guessing, and
+lists the open runs on stderr:
+
+```
+tldrx <cmd>: N runs are open — pass one:
+```
+
+That exit 2 means "you forgot the id", not "something failed". Pass it: positional
+`<run>` on `next` and `run status`, `--run <id>` on the others. `tldrx run status`
+with several open prints a table of them all and exits `0` (`--json` returns
+`{ "runs": [...] }`; the single-run shape is unchanged when exactly one is open),
+and `tldrx run new` says so when others are already open. Hooks and the status line
+never block on this — the status line just shows `(+N open)`.
 
 ## Rules you do not get to bend
 
@@ -95,6 +157,10 @@ terminal, in CI, or from a chat bridge, not here.
    and Evidence ledger each need one sourced list item. Nothing to report is
    still an item: `- none [src: absent:<what you looked at>]`. A paragraph saying
    "nothing found" is refused, because it gives the checker nothing to check.
+10. **`.tldrx/` and `tldrx-work/` are committed** — the files ARE the state, so
+    they belong in git. `tldrx init` gitignores only the machine-local scratch:
+    `.tldrx/graphify-out/`, `.tldrx/cache/`, `.tldrx/worktrees/`,
+    `tldrx-work/*/.lock`, `tldrx-work/*/.agent/`. Everything else goes in.
 
 ## The loop, for orientation
 
