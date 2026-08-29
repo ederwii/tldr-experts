@@ -119,6 +119,9 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
     area,
     mode: options.mode,
     repos: repos.map((repo) => repo.name),
+    // The same list `spawnAgent` turns into `Bash(<command>)` grants below, so the
+    // prompt describes the permission the process actually hands over.
+    commands: [...workspace.commands],
     budgetUsd: share,
   };
 

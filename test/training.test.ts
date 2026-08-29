@@ -22,6 +22,7 @@ import {
   trainingCacheDir, expertRepos, MIN_TRAIN_USD, DEFAULT_TRAIN_USD, DEFAULT_TRAIN_EFFORT, withGutter,
   type TrainOptions,
 } from "../src/core/training/index.ts";
+import { allowedTools } from "../src/core/facilitator/spawnAgent.ts";
 import { FactsStore } from "../src/core/facts/FactsStore.ts";
 import { factsPath } from "../src/hooks/lib/workspace.ts";
 import {
@@ -303,8 +304,92 @@ describe("a cited command becomes evidence that something was executed", () => {
 
     const outcome = await train(ws);
     expect(outcome.code).toBe(0);
-    const evidence = areaOf(ws, AREA).evidence as { kind: string; src: string }[];
+    const evidence = areaOf(ws, AREA).evidence as { kind: string; src: string; at: string }[];
     expect(evidence).toContainEqual({ kind: "run", src: "$ true → exit 0", at: "2026-09-01" });
+  });
+});
+
+// --- what the sub-agent is told it may run -----------------------------------
+
+/**
+ * The prompt used to say "do not run anything" while `allowedTools` was already
+ * handing the sub-agent a `Bash(<command>)` for every command in
+ * `workspace.yml`. These tests hold the two halves together: whatever the prompt
+ * says about running is checked against the grant the argv actually carries.
+ */
+describe("the prompt and the tool grant say the same thing", () => {
+  /** A workspace.yml identical to the fixture's, with every command nulled out. */
+  const NO_COMMANDS = `version: 1
+mode: multi-repo
+root_is_repo: true
+detected_at: 2026-08-28T14:02:11Z
+detected_by: "tldrx 0.2.0"
+repos:
+  - name: api
+    path: api
+    default_branch: main
+    stack: [typescript]
+    package_manager: npm
+    commands: {build: null, test: null, lint: null, typecheck: null, run: null}
+    ci: []
+    confidence: high
+`;
+
+  async function promptOf(ws: TrainingWorkspace): Promise<string> {
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_TRAIN_PROMPT_DIR = promptDir;
+    await train(ws);
+    return readFileSync(join(promptDir, "prompt-0.md"), "utf8");
+  }
+
+  test("it names the declared commands, and forbids everything else", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [{ [KNOWLEDGE_REL]: knowledgeMd() }]);
+    const prompt = await promptOf(ws);
+
+    expect(prompt).toContain("You may run ONLY the commands `.tldrx/workspace.yml` declares");
+    expect(prompt).toContain("`true`");
+    expect(prompt).toContain("no installs");
+    expect(prompt).toContain("Do not modify product code");
+    // The old blanket ban is gone: it contradicted the grant and cost every
+    // training run its only route to a `run` row.
+    expect(prompt).not.toContain("do not run anything");
+  });
+
+  test("it says citing the command is the only way to earn a `run` row", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [{ [KNOWLEDGE_REL]: knowledgeMd() }]);
+    const prompt = await promptOf(ws);
+
+    expect(prompt).toContain("[src: $ <cmd> → exit <n>]");
+    expect(prompt).toContain("levels 4 and 5");
+    expect(prompt).toContain("Reading alone stops at level 3.");
+  });
+
+  test("with no declared command it says so, and that level 3 is the honest ceiling", async () => {
+    const ws = workspace({ files: { ".tldrx/workspace.yml": NO_COMMANDS } });
+    fakeClaude(ws, [{ [KNOWLEDGE_REL]: knowledgeMd() }]);
+    const prompt = await promptOf(ws);
+
+    expect(prompt).toContain("**Do not run anything.**");
+    expect(prompt).toContain("declares no command");
+    expect(prompt).toContain("This run cannot go past level 3, and that is correct.");
+    expect(prompt).not.toContain("You may run ONLY");
+  });
+
+  test("the argv grants exactly the base tools plus those commands, and nothing more", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [{ [KNOWLEDGE_REL]: knowledgeMd() }]);
+    const argvLog = join(ws.root, "argv.log");
+    process.env.FAKE_TRAIN_ARGV_LOG = argvLog;
+
+    await train(ws);
+    const argv = JSON.parse(readFileSync(argvLog, "utf8").trim()) as string[];
+    const granted = argv[argv.indexOf("--allowedTools") + 1] ?? "";
+    // Both repos declare `build: "true"` and `test: "true"`, so the flat set is
+    // one command — and the prompt above names that same one.
+    expect(granted).toBe(allowedTools(["true"]).join(","));
+    expect(granted).toBe("Read,Write,Edit,Glob,Grep,Bash(true)");
   });
 });
 
