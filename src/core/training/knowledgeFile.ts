@@ -156,6 +156,25 @@ export function describeKnowledgeIssues(issues: readonly KnowledgeIssue[], max =
  *
  * `absent:` cites nothing, so they produce nothing. A `doc` becomes `kind: doc`
  * and a fact `kind: answer`, matching the §2.6 example.
+ *
+ * **A `cmd` citation becomes `kind: run`, and it is the only way light mode can
+ * reach level 4.** Before 2026-08-29 this function dropped `cmd` refs on the
+ * floor: it mapped `file`, `doc` and `fact` and nothing else, so a sub-agent that
+ * ran `npm test` and cited `[src: $ npm test → exit 0]` earned no row for it. Set
+ * against the §2.6 run cap — no `kind: run` row means `level = min(level, 3)` —
+ * that made `tldrx expert train --mode light` structurally incapable of exceeding
+ * 3 no matter what the sub-agent measured. The rule and the code disagreed, and
+ * the code was wrong: §2.6's own "where evidence comes from" table has always
+ * said a `run` row is written when "a knowledge file cites a command that was
+ * executed", `src` = `$ <cmd> → exit <n>`.
+ *
+ * One row per distinct command+exit, deduped by the whole `src` — `$ npm test →
+ * exit 0` and `$ npm test → exit 1` are two different measurements of the same
+ * command and both are worth recording. Nothing here re-checks that the command
+ * is declared in `workspace.yml`: `parseKnowledgeFile` already resolved every ref
+ * through `resolveSrc`, which refuses an undeclared command outright (see
+ * `srcToken.ts` `resolveSrc` case "cmd"), and a file with one unresolvable source
+ * is rejected whole before any evidence is derived from it.
  */
 export function codeEvidence(refs: readonly SrcRef[], at: string): readonly CompetencyEvidence[] {
   const out: CompetencyEvidence[] = [];
@@ -178,6 +197,9 @@ export function codeEvidence(refs: readonly SrcRef[], at: string): readonly Comp
     }
     if (ref.kind === "doc") push("doc", ref.url);
     if (ref.kind === "fact") push("answer", ref.id);
+    // `raw` is `$ <command> → exit <n>` — command AND exit code, so the row is
+    // one measurement rather than one command.
+    if (ref.kind === "cmd") push("run", ref.raw);
   }
   return out;
 }

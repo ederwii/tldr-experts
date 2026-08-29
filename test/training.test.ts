@@ -224,6 +224,90 @@ describe("a knowledge file is accepted or rejected whole", () => {
   });
 });
 
+// --- a command that was run is a `run` row -----------------------------------
+
+/**
+ * The gap wave E left: the ladder gates level 4 on a `kind: run` row, and the
+ * light-mode path could not produce one, because `codeEvidence` mapped `file`,
+ * `doc` and `fact` and silently dropped every `cmd` ref. `--mode light` was
+ * therefore capped at 3 by construction, whatever the sub-agent measured.
+ *
+ * The fixture workspace declares `build: "true"` and `test: "true"`, so `true` is
+ * the only command a `cmd` src may name here — which is the point of the last
+ * test in this block.
+ */
+describe("a cited command becomes evidence that something was executed", () => {
+  test("`$ cmd → exit n` produces a `kind: run` row carrying the command and the exit code", () => {
+    const ws = workspace();
+    const ctx = toSrcContext(loadWorkspace(ws.root), null);
+    const parsed = parseKnowledgeFile(
+      knowledgeMd({ extraItem: "- The suite is green on this [src: $ true → exit 0]" }), ctx, LIGHT_SHAPE);
+    expect(parsed.ok).toBe(true);
+
+    const evidence = codeEvidence(parsed.refs, "2026-09-01");
+    expect(evidence).toContainEqual({ kind: "run", src: "$ true → exit 0", at: "2026-09-01" });
+  });
+
+  test("that row is what lifts a light run past the §2.6 run cap of 3", () => {
+    const ws = workspace();
+    const ctx = toSrcContext(loadWorkspace(ws.root), null);
+    const reading = parseKnowledgeFile(knowledgeMd(), ctx, LIGHT_SHAPE);
+    // Reading alone: two files, W = 2.0 -> thresholds say 2, and the run cap is
+    // not even reached. The cap bites once enough files are read to pass 6.
+    expect(codeEvidence(reading.refs, "2026-09-01").some((row) => row.kind === "run")).toBe(false);
+
+    const measured = parseKnowledgeFile(
+      knowledgeMd({ extraItem: "- The suite is green on this [src: $ true → exit 0]" }), ctx, LIGHT_SHAPE);
+    const rows = [
+      ...codeEvidence(measured.refs, "2026-09-01"),
+      // Six more files read, so the weight sum clears the level-4 threshold and
+      // only the run cap is left deciding.
+      ...Array.from({ length: 6 }, (_, i) => (
+        { kind: "code" as const, src: `api:src/f${String(i)}.ts:1`, at: "2026-09-01" }
+      )),
+    ];
+    expect(competencyLevel(rows, TRAIN_NOW)).toBe(4);
+    expect(competencyLevel(rows.filter((row) => row.kind !== "run"), TRAIN_NOW)).toBe(3);
+  });
+
+  test("one row per distinct command+exit — the same command twice is one row", () => {
+    const ws = workspace();
+    const ctx = toSrcContext(loadWorkspace(ws.root), null);
+    const twice = parseKnowledgeFile(knowledgeMd({
+      extraItem: "- Green here [src: $ true → exit 0]\n- And green here too [src: $ true → exit 0]",
+    }), ctx, LIGHT_SHAPE);
+    expect(codeEvidence(twice.refs, "2026-09-01").filter((row) => row.kind === "run")).toHaveLength(1);
+
+    const twoExits = parseKnowledgeFile(knowledgeMd({
+      extraItem: "- Green [src: $ true → exit 0]\n- Red on the empty code [src: $ true → exit 1]",
+    }), ctx, LIGHT_SHAPE);
+    const runs = codeEvidence(twoExits.refs, "2026-09-01").filter((row) => row.kind === "run");
+    expect(runs.map((row) => row.src).sort()).toEqual(["$ true → exit 0", "$ true → exit 1"]);
+  });
+
+  test("a command workspace.yml does not declare is still rejected, and takes the whole file", () => {
+    const ws = workspace();
+    const ctx = toSrcContext(loadWorkspace(ws.root), null);
+    const parsed = parseKnowledgeFile(
+      knowledgeMd({ extraItem: "- Invented [src: $ npm run invent → exit 0]" }), ctx, LIGHT_SHAPE);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.issues.map((issue) => issue.message).join(" "))
+      .toContain("is not one of workspace.yml's commands");
+  });
+
+  test("end to end: a light run that cites a command writes the `run` row to competencies.yml", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [{
+      [KNOWLEDGE_REL]: knowledgeMd({ extraItem: "- The suite is green on this [src: $ true → exit 0]" }),
+    }]);
+
+    const outcome = await train(ws);
+    expect(outcome.code).toBe(0);
+    const evidence = areaOf(ws, AREA).evidence as { kind: string; src: string }[];
+    expect(evidence).toContainEqual({ kind: "run", src: "$ true → exit 0", at: "2026-09-01" });
+  });
+});
+
 // --- light mode, end to end --------------------------------------------------
 
 describe("light training", () => {
