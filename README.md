@@ -393,7 +393,7 @@ reused, so the first version back on the registry is 0.3.0.
 
 | Version | Date | Status | Contains |
 |---|---|---|---|
-| 0.3.0 | unreleased | `alpha` | expert training with provenance (light/full), package renamed to `tldrx` |
+| 0.3.0 | unreleased | `alpha` | expert training with provenance (light/full), per-stage `effort`, `tldrx install --claude`, `tldrx interview`, ticket mirror (`tldrx tickets sync\|status`), measured budget semantics; installs `tldrx` + `tldr-experts` commands |
 | 0.2.0 | 2026-08-29 | `alpha` | Build executor (worktree + branch per story, epic branches, DoD gate, reviewer), Watch cards, live dashboard |
 | 0.1.0 | 2026-08-29 | `alpha` | greenfield `init --stack` + `run new --seed`, story/epic/waves schemas, `tldrx budget show\|raise`, sections must hold list items |
 | 0.0.2 | 2026-08-29 | `alpha` | pilot-driven fixes (source resolution, retry semantics, distill dedupe) |

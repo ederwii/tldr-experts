@@ -27,14 +27,14 @@ citation gate on the second attempt; both failures were framework bugs and are f
 - **Prose sections are not checked**: an Unknowns section written as a paragraph has no list
   items to validate — require items or check sentences.
 
-## v1.1 — experts that learn
+## v1.1 — experts that learn (shipped in 0.3.0: light/full training with provenance, computed levels; star chart reads real evidence)
 
 - `expert train --mode light|full` (targeted reverse-engineering; mining past runs), evidence
   written with provenance, competency levels recomputed from evidence (formula in spec §2.6).
 - Star chart from real evidence in the dashboard; "train me on X" prompts wired to it.
 - Stack expertise shared by every expert by default.
 
-## Adapters (opt-in, files stay the source of truth)
+## Adapters (opt-in, files stay the source of truth) — ticket mirror shipped in 0.3.0; chat channel not started
 
 - Ticket mirror (Jira / GitHub / Linear): epics and stories out, `external_status` in; never
   advances `run.yml`, never marks a story done.

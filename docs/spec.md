@@ -1150,6 +1150,8 @@ only that a document is Markdown or plain text. Passing both is refused — they
 
 ## 7. Open decisions
 
+- `process.yml` exists in two shapes: the nested §2.12 form that `init` writes and the flat draft in `templates/process.yml`; readers tolerate both. Reconcile to §2.12 (touches `init` and `test/schemas.test.ts`).
+
 - Whether `.tldrx/` is one root install or also allowed per sub-repo simultaneously (spec assumes root-only in v0).
 - Conflict policy when a new answer contradicts a fact (auto-supersede vs. always ask). v0 always asks: `--from` turns a
   contradiction into a question and `FactsStore.supersede` is only ever called by hand.
