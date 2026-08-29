@@ -1,0 +1,32 @@
+# schema: draft
+# Phase 5 of the loop. Concept §3 and §10.
+# Generated from what Build actually instrumented. If nothing was instrumented,
+# the watcher says so — an aspirational watcher is worse than no watcher.
+name: watch
+title: Watch
+phase: 5
+model: haiku
+budget_usd: 2
+
+inputs:
+  - "04-build/stories/<id>.md"
+  - "04-build/integration-test-log.md"
+  - ".tldrx/map/commands.md"
+
+outputs:
+  - "watchers/<feature>.md"
+  - "handoff.md"
+
+experts:
+  - operations
+
+gate:
+  type: human-approval
+  requires:
+    - "the signal that proves the feature works is named, and it exists"
+    - "the healthy baseline is a measured number, not a guess"
+    - "the query snippet is copy-pasteable and was run once"
+
+checks:
+  - claim-sources
+  - budget-gate

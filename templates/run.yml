@@ -1,0 +1,24 @@
+# schema: draft
+# Written to tldrx-work/<yymmdd>-<slug>/run.yml. Concept §5.
+#
+# THE execution path and the resume point. Together with events.jsonl this is the
+# dashboard's only data source. If it is not in here, it did not happen.
+schema_version: 0
+run_id: "260828-example-slug"
+scope: feature
+workflow: feature
+status: pending          # pending | running | awaiting-answer | awaiting-gate | blocked | done | abandoned
+budget_usd: 25
+created_at: null
+
+phases:
+  - id: "01-what"
+    stage: what
+    status: pending
+    expert: null
+    model: null
+    cost_usd: 0
+    started_at: null
+    ended_at: null
+    inputs: []
+    outputs: []

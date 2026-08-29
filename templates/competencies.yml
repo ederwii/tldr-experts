@@ -1,0 +1,14 @@
+# schema: draft
+# Written to .tldrx/experts/<name>/competencies.yml. Concept §6.
+#
+# `level` is COMPUTED from evidence count and recency. It is never self-declared
+# and an expert may not edit its own. The star chart in the dashboard is this file
+# rendered — nothing more.
+schema_version: 0
+expert: example-expert
+
+areas:
+  - area: "oauth"
+    level: 0                # 0-5, computed
+    evidence: []            # each entry cites a file:line, a doc URL, or a run id
+    last_trained: null

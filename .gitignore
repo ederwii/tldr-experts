@@ -1,0 +1,25 @@
+# dependencies
+node_modules/
+
+# framework runtime (machine-local, regenerated)
+.tldrx/runtime/
+.tldrx/cache/
+
+# per-run caches inside work folders
+tldrx-work/**/.cache/
+tldrx-work/**/*.tmp
+
+# build output
+dist/
+*.tsbuildinfo
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# local overrides
+.env
+.env.local
+.claude/settings.local.json

@@ -1,0 +1,17 @@
+# schema: draft
+# Written to tldrx-work/<run>/budget.yml. Concept §11.
+#
+# ceiling_usd is a refusal, not a warning: a stage whose estimate exceeds what
+# remains does not start. spent_usd is rolled up from events.jsonl — never typed
+# by hand, never estimated by an agent.
+schema_version: 0
+run: "260828-example-slug"
+ceiling_usd: 25
+spent_usd: 0
+
+per_phase_usd:
+  what: 4
+  how: 6
+  plan: 4
+  build: 9
+  watch: 2

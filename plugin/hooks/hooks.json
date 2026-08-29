@@ -1,0 +1,83 @@
+{
+  "description": "tldrx v0 — all hooks wired, all INERT. Every handler reads stdin, logs to stderr and exits 0 (allow). Shape verified from https://code.claude.com/docs/en/hooks.md: top-level `hooks` map keyed by event name, each entry { matcher?, hooks: [ { type, command, args?, timeout? } ] }. Exec form (`command` + `args`) and the ${CLAUDE_PLUGIN_ROOT} variable are both from that page. NOTE: the status line is NOT a hook event — it is the `statusLine` settings key, and a plugin settings.json only supports `agent` and `subagentStatusLine`. Wire it yourself; see plugin/README.md.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "_note": "claim-sources — concept §8: every Findings/Decisions bullet in tldrx-work/**/*.md must carry [src: …].",
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/../src/hooks/claim-sources.ts"],
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "_note": "dod-gate — concept §8: a story is done only when this hook re-ran its command block with exit 0.",
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/../src/hooks/dod-gate.ts"],
+            "timeout": 600
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "_note": "no-reask — concept §1.2: reject a question whose subject already exists in memory/facts.yml.",
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/../src/hooks/no-reask.ts"],
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "_note": "budget-gate — concept §8: refuse a stage the run cannot afford; cap each sub-agent. TODO(verify): `Task` is the tool name the docs pages fetched for this skeleton never spell out for subagent spawns; confirm against the tools reference before this hook is allowed to block.",
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/../src/hooks/budget-gate.ts"],
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "_note": "answer-capture — concept §2/§13: capture interview answers to memory/facts.yml with provenance. UserPromptSubmit does not support a `matcher` (verified in the hooks event table).",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/../src/hooks/answer-capture.ts"],
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "_note": "session-start — concept §3: print one 'where we are' line. Matcher omitted so it fires for every start reason (startup, resume, clear, compact, fork).",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/../src/hooks/session-start.ts"],
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

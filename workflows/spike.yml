@@ -1,0 +1,17 @@
+# schema: draft
+# A scope is a workflow preset (concept v0.1 addendum). It biases the facilitator:
+# which stages run, at what depth, on what budget. Adding a scope = adding one yml.
+# The facilitator never hard-codes a scope.
+#
+# stages  — run in this order; every name must be a folder under stages/
+# skips   — stages deliberately NOT run, so the omission is a decision on record
+# depth   — minimal | light | standard | deep
+name: spike
+description: "Answer one question. Time-boxed and budget-boxed."
+stages: [what, how]
+skips: [plan, build, watch]
+depth: light
+default_budget_usd: 6
+changes:
+  - "Output is a decision memo, not code. Any code written is thrown away."
+  - "The budget ceiling is the point. When it is spent, you write up what you know."

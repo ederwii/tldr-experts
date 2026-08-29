@@ -1,0 +1,18 @@
+# schema: draft
+# A scope is a workflow preset (concept v0.1 addendum). It biases the facilitator:
+# which stages run, at what depth, on what budget. Adding a scope = adding one yml.
+# The facilitator never hard-codes a scope.
+#
+# stages  — run in this order; every name must be a folder under stages/
+# skips   — stages deliberately NOT run, so the omission is a decision on record
+# depth   — minimal | light | standard | deep
+name: hotfix
+description: "Production is bleeding. Ship, then explain."
+stages: [what, build, watch]
+skips: [how, plan]
+depth: minimal
+default_budget_usd: 5
+changes:
+  - "What collapses to a ten-line handoff: symptom, blast radius, the one change."
+  - "All gates collapse into one human approval."
+  - "Retro is MANDATORY at close — this is the scope that skips the most and so owes the most."

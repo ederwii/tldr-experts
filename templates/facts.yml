@@ -1,0 +1,18 @@
+# schema: draft
+# Written to .tldrx/memory/facts.yml. Concept §1.2 and §13.
+#
+# Durable facts, reused across runs and across projects. Before any question is
+# posed, the facilitator greps this file. Re-asking something recorded here is a
+# TEST FAILURE of the framework, not a stylistic lapse.
+#
+# Every fact carries provenance. A fact without a source is not a fact.
+schema_version: 0
+
+facts:
+  - id: F001
+    fact: "Example: deploys to production are manual — CD is workflow_dispatch only."
+    source:
+      who: "alan"          # who said it, or which file it was read from
+      when: "2026-08-28"   # ISO date
+      run: "260828-example-slug"
+      q: "Q3"              # the question id this answered, when it came from an interview

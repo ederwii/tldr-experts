@@ -1,0 +1,38 @@
+# schema: draft
+# Phase 1 of the loop. Concept §3.
+# Accepts a phrase OR a document: Investigate reads the doc, extracts claims plus
+# gaps, and Interview asks about the gaps only.
+name: what
+title: What
+phase: 1
+model: sonnet
+budget_usd: 4
+
+inputs:
+  - "<free text, a PRD, any document, or a Jira epic>"
+  - ".tldrx/memory/facts.yml"
+  - ".tldrx/map/domains.md"
+
+outputs:
+  - "intent.md"
+  - "scope.md"
+  - "success-metrics.md"
+  - "open-questions.md"
+  - "handoff.md"
+  - "questions.md"
+
+experts:
+  - product
+  - domain
+
+gate:
+  type: human-approval
+  requires:
+    - "scope.md lists what is IN and what is OUT"
+    - "every success metric is measurable and names where it is measured"
+    - "every open question is genuinely absent from facts.yml"
+
+checks:
+  - claim-sources
+  - no-reask
+  - budget-gate

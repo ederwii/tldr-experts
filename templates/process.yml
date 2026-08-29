@@ -1,0 +1,24 @@
+# schema: draft
+# Written to .tldrx/process.yml. Concept v0.2 addendum.
+#
+# The process model is DATA, not a rule baked into the framework. It is identified
+# in the install interview (or passed with --process) and never assumed. The Plan
+# phase renders the same epics/stories/waves into whatever shape this file names:
+# sprints for scrum, a WIP-limited flow board for kanban, a plain ordered list for
+# none. Changing methodology means editing this file and nothing else.
+schema_version: 0
+
+methodology: none          # scrum | kanban | shape-up | none
+cadence: null              # e.g. "weekly"
+wip_limit: null            # kanban only
+sprint_length: null        # scrum only, e.g. "2w"
+
+ticket_tool: none          # jira | github | linear | none
+project_key: null
+board_id: null
+
+story_granularity: days    # hours | days
+approvers: []
+
+# Overrides layered on top of the framework defaults, not a replacement for them.
+definition_of_done: []

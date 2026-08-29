@@ -1,0 +1,18 @@
+# schema: draft
+# A scope is a workflow preset (concept v0.1 addendum). It biases the facilitator:
+# which stages run, at what depth, on what budget. Adding a scope = adding one yml.
+# The facilitator never hard-codes a scope.
+#
+# stages  — run in this order; every name must be a folder under stages/
+# skips   — stages deliberately NOT run, so the omission is a decision on record
+# depth   — minimal | light | standard | deep
+name: prototype
+description: "Throwaway. Explicitly not for production."
+stages: [what, how, build]
+skips: [plan, watch]
+depth: minimal
+default_budget_usd: 12
+changes:
+  - "Conventions gate is OFF. Definition of Done drops the test requirement."
+  - "Every artefact carries a NOT FOR PRODUCTION marker."
+  - "If it survives, it is re-run under the feature scope. It is not promoted in place."

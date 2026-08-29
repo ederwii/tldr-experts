@@ -1,0 +1,42 @@
+# schema: draft
+# Phase 2 of the loop. Concept §3.
+# Design must be placed on REAL files and modules from the code map — not on
+# hypothetical components.
+name: how
+title: How
+phase: 2
+model: opus
+budget_usd: 6
+
+inputs:
+  - "01-what/intent.md"
+  - "01-what/scope.md"
+  - "01-what/success-metrics.md"
+  - ".tldrx/map/architecture.md"
+  - ".tldrx/map/conventions.md"
+  - ".tldrx/memory/facts.yml"
+
+outputs:
+  - "design.md"
+  - "contracts.md"
+  - "risks.md"
+  - "test-strategy.md"
+  - "handoff.md"
+  - "questions.md"
+
+experts:
+  - architect
+  - domain
+  - stack
+
+gate:
+  type: human-approval
+  requires:
+    - "every component in design.md cites an existing path"
+    - "contracts.md names the APIs, DTOs and events that change"
+    - "any claim about an external API cites a doc URL fetched this run"
+
+checks:
+  - claim-sources
+  - no-reask
+  - budget-gate

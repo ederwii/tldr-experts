@@ -1,0 +1,17 @@
+# schema: draft
+# A scope is a workflow preset (concept v0.1 addendum). It biases the facilitator:
+# which stages run, at what depth, on what budget. Adding a scope = adding one yml.
+# The facilitator never hard-codes a scope.
+#
+# stages  — run in this order; every name must be a folder under stages/
+# skips   — stages deliberately NOT run, so the omission is a decision on record
+# depth   — minimal | light | standard | deep
+name: performance
+description: "Make something measurably faster."
+stages: [what, how, build, watch]
+skips: [plan]
+depth: standard
+default_budget_usd: 20
+changes:
+  - "What = a MEASURED baseline. No baseline, no scope — the run refuses to start."
+  - "Watch = the before/after comparison, on the same query, on the same data."

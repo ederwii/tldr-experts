@@ -1,0 +1,40 @@
+# schema: draft
+# Phase 4 of the loop. Concept §3 and §9.
+# Interview usually has zero questions here; the Gate is tests-green plus review.
+# Independent stories in one wave run as parallel sub-agents in separate worktrees.
+name: build
+title: Build
+phase: 4
+model: sonnet
+budget_usd: 9
+
+inputs:
+  - "03-plan/waves.yml"
+  - "03-plan/stories/<id>.md"
+  - ".tldrx/map/commands.md"
+  - ".tldrx/map/conventions.md"
+
+outputs:
+  - "stories/<id>.md (updated with evidence)"
+  - "<epic branch> + <story branches>"
+  - "integration-test-log.md"
+  - "handoff.md"
+
+experts:
+  - developer
+  - stack
+  - reviewer
+
+gate:
+  type: checks-green
+  requires:
+    - "acceptance criteria met, with evidence"
+    - "unit tests added and green"
+    - "lint, typecheck and the project's real build command all exit 0"
+    - "conventions check passes"
+    - "reviewer sub-agent sign-off recorded"
+
+checks:
+  - claim-sources
+  - dod-gate
+  - budget-gate
