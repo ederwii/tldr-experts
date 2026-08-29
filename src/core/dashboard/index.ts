@@ -4,9 +4,11 @@ export type {
   PlanModel, StoryModel, EpicModel, WaveModel, ExpertModel, AreaModel, FaqEntryModel, ModelOptions,
 } from "./model.ts";
 export {
-  renderDashboard, clientRenderer, dashApp, dashEscape, dashText, dashTitle, dashStarChart, dashStarPoints,
-  DASHBOARD_TITLE, APP_ELEMENT_ID,
+  renderDashboard, clientRenderer, dashModelJson, dashMain, dashEscape, dashText, dashTitle,
+  dashUsd, dashTone, dashRoute, dashPending, dashRadar, dashPanelId,
+  DASHBOARD_TITLE, APP_ELEMENT_ID, MODEL_ELEMENT_ID,
 } from "./render.ts";
+export type { DashUi, DashRoute, DashPending } from "./render.ts";
 export { writeStaticDashboard, DEFAULT_OUT_DIR, INDEX_FILE } from "./writeStatic.ts";
 export type { StaticExport } from "./writeStatic.ts";
 export { startDashboardServer, DEFAULT_PORT, LOOPBACK, DEBOUNCE_MS } from "./server.ts";

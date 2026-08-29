@@ -71,10 +71,12 @@ describe("tldrx dashboard (live)", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/html");
     const page = await response.text();
+    // The page ships the model as data and draws it in the browser.
     expect(page).toContain(VIEWS_RUN);
     expect(page).toContain("Player scoreboard");
+    expect(page).toContain('<script type="application/json" id="model-data">');
     // Live, so it carries the renderer and the listener.
-    expect(page).toContain("function dashApp(");
+    expect(page).toContain("function dashMain(");
     expect(page).toContain("EventSource");
   });
 

@@ -1,37 +1,77 @@
 import { describe, expect, test } from "bun:test";
 import {
-  buildModel, clientRenderer, dashApp, dashEscape, dashText, liveScript, renderDashboard,
-  DASHBOARD_JS,
+  buildModel, clientRenderer, dashEscape, dashMain, dashModelJson, dashRoute, dashText,
+  liveScript, renderDashboard, DASHBOARD_JS,
 } from "../src/core/dashboard/index.ts";
+import type { DashUi } from "../src/core/dashboard/index.ts";
 import { escapeHtml } from "../src/core/markdown/index.ts";
 import { money } from "../src/core/replay/index.ts";
 import { VIEWS_FIXTURE, VIEWS_NOW } from "./fixtures/views/tempViews.ts";
 
 /**
- * The live page and the static export must never be two templates.
+ * The typed renderer and the one that reaches the browser must never drift.
  *
- * `render.ts` is the only markup in the product, and the live page gets it by
- * serialising those functions (`clientRenderer()`). This file is the guard on
- * that: it evaluates the serialised source in a scope with NOTHING in it, feeds
- * it the model as it would arrive over the wire (a JSON round trip), and demands
- * byte-identical output. A template function that closes over a module constant,
- * or one that was added to the file but not to the serialised list, fails here
- * rather than as a blank page in someone's browser.
+ * `render.ts` is the only markup in the product. It is written in TypeScript so
+ * `tsc --strict` holds it to `DashboardModel`, and it reaches the page by
+ * serialising those functions (`clientRenderer()`). Nothing else renders — the
+ * server ships an empty `<main>` — so this file is the guard on the half that
+ * actually runs: it evaluates the serialised source in a scope with NOTHING in
+ * it, feeds it the model as it arrives over the wire (a JSON round trip), and
+ * demands byte-identical output against the typed original. A template function
+ * that closes over a module constant, or one added to the file but not to the
+ * serialised list, fails here rather than as a blank page in someone's browser.
  */
 const GENERATED_AT = "2026-09-02T08:00:00Z";
+const NOW_MS = VIEWS_NOW.getTime();
+const UI: DashUi = { status: "all", sort: "updated" };
 const staticModel = buildModel(VIEWS_FIXTURE, GENERATED_AT, { now: VIEWS_NOW });
 const liveModel = buildModel(VIEWS_FIXTURE, GENERATED_AT, { now: VIEWS_NOW, live: true });
 
+interface ClientRenderer {
+  readonly dashMain: (model: unknown, ui: unknown, route: unknown, nowMs: number) => string;
+  readonly dashRoute: (hash: string) => { view: string; id: string | null };
+  readonly dashTitle: (model: unknown) => string;
+  readonly dashNav: (model: unknown, view: string) => string;
+  readonly dashTopMeta: (model: unknown) => string;
+}
+
 /** The client renderer, evaluated exactly as the browser would evaluate it. */
-function evaluateClientRenderer(): (model: unknown) => string {
-  const factory = new Function(`${clientRenderer()}\nreturn dashApp;`) as () => (model: unknown) => string;
+function evaluateClientRenderer(): ClientRenderer {
+  const factory = new Function(
+    `${clientRenderer()}
+     return { dashMain: dashMain, dashRoute: dashRoute, dashTitle: dashTitle,
+              dashNav: dashNav, dashTopMeta: dashTopMeta };`,
+  ) as () => ClientRenderer;
   return factory();
 }
 
-describe("one renderer, two sides of the wire", () => {
-  test("the serialised renderer produces the same markup as the server's", () => {
-    const overTheWire: unknown = JSON.parse(JSON.stringify(liveModel));
-    expect(evaluateClientRenderer()(overTheWire)).toBe(dashApp(liveModel));
+/** The model as the page reads it back: JSON in, JSON out. */
+function overTheWire(model: unknown): unknown {
+  return JSON.parse(JSON.stringify(model));
+}
+
+const VIEWS = ["runs", "experts", "watchers", "faq"];
+
+describe("one renderer, two sides of the transpiler", () => {
+  test("the serialised renderer draws every view exactly as the typed one does", () => {
+    const client = evaluateClientRenderer();
+    const wire = overTheWire(liveModel);
+    for (const view of VIEWS) {
+      const route = { view, id: null };
+      expect(client.dashMain(wire, UI, route, NOW_MS)).toBe(dashMain(liveModel, UI, route, NOW_MS));
+    }
+    for (const run of liveModel.runs) {
+      const route = { view: "run", id: run.id };
+      expect(client.dashMain(wire, UI, route, NOW_MS)).toBe(dashMain(liveModel, UI, route, NOW_MS));
+    }
+  });
+
+  test("the chrome agrees too — the tab name, the meta line and the nav", () => {
+    const client = evaluateClientRenderer();
+    const wire = overTheWire(liveModel);
+    expect(client.dashTitle(wire)).toBe("tldrx dashboard — workspace");
+    expect(client.dashTopMeta(wire)).toContain("live");
+    expect(client.dashNav(wire, "runs")).toContain('aria-current="page"');
   });
 
   test("it carries no type annotation and no import into the browser", () => {
@@ -44,19 +84,79 @@ describe("one renderer, two sides of the wire", () => {
 
   test("every function it needs is in the serialised set", () => {
     // A missing entry shows up as a ReferenceError the moment the page renders.
-    expect(() => evaluateClientRenderer()(JSON.parse(JSON.stringify(staticModel)))).not.toThrow();
+    const client = evaluateClientRenderer();
+    const wire = overTheWire(staticModel);
+    for (const view of VIEWS) {
+      expect(() => client.dashMain(wire, UI, { view, id: null }, NOW_MS)).not.toThrow();
+    }
   });
 
-  test("the live page inlines that renderer and listens; the static page does neither", () => {
+  test("the runs filter is view state only — it never reaches the model", () => {
+    const client = evaluateClientRenderer();
+    const wire = overTheWire(liveModel);
+    const all = client.dashMain(wire, { status: "all", sort: "updated" }, { view: "runs", id: null }, NOW_MS);
+    const none = client.dashMain(wire, { status: "no-such-status", sort: "updated" }, { view: "runs", id: null }, NOW_MS);
+    expect(all).not.toBe(none);
+    expect(none).toContain("No runs with status");
+    expect(overTheWire(liveModel)).toEqual(overTheWire(liveModel));
+  });
+});
+
+describe("the hash router", () => {
+  test("reads a view, a run, and falls back to the runs list", () => {
+    expect(dashRoute("")).toEqual({ view: "runs", id: null });
+    expect(dashRoute("#/experts")).toEqual({ view: "experts", id: null });
+    expect(dashRoute("#/watchers")).toEqual({ view: "watchers", id: null });
+    expect(dashRoute("#/nonsense")).toEqual({ view: "runs", id: null });
+    expect(dashRoute("#/run/260901-scoreboard")).toEqual({ view: "run", id: "260901-scoreboard" });
+    expect(dashRoute("#/run/a%20b")).toEqual({ view: "run", id: "a b" });
+  });
+
+  test("the serialised copy routes the same way", () => {
+    const client = evaluateClientRenderer();
+    for (const hash of ["", "#/experts", "#/faq", "#/nonsense", "#/run/260901-scoreboard"]) {
+      expect(client.dashRoute(hash)).toEqual(dashRoute(hash));
+    }
+  });
+
+  test("an unknown run id says so rather than rendering nothing", () => {
+    const html = dashMain(liveModel, UI, { view: "run", id: "no-such-run" }, NOW_MS);
+    expect(html).toContain("Run not found");
+    expect(html).toContain('<a href="#/runs">Back to runs</a>');
+  });
+});
+
+describe("the embedded model", () => {
+  test("cannot close the script element that carries it", () => {
+    const json = dashModelJson(liveModel);
+    expect(json).not.toContain("<");
+    expect(json).toContain("\\u003c");
+    expect(JSON.parse(json)).toEqual(JSON.parse(JSON.stringify(liveModel)));
+  });
+
+  test("a handoff quoting </script> survives the round trip intact", () => {
+    const hostile = { ...liveModel, workspace: "</script><img src=x>" };
+    const json = dashModelJson(hostile);
+    expect(json).not.toContain("</script>");
+    expect((JSON.parse(json) as { workspace: string }).workspace).toBe("</script><img src=x>");
+  });
+
+  test("the page ships it, and the renderer, in both live and static", () => {
+    for (const page of [renderDashboard(liveModel), renderDashboard(staticModel)]) {
+      expect(page).toContain('<script type="application/json" id="model-data">');
+      expect(page).toContain("function dashMain(");
+      expect(page).toContain('<main id="main" class="shell" tabindex="-1"></main>');
+    }
+  });
+
+  test("only the live page watches; the static export has no network call at all", () => {
     const live = renderDashboard(liveModel);
-    expect(live).toContain("function dashApp(");
-    expect(live).toContain("new EventSource(\"/events\")");
+    expect(live).toContain('new EventSource("/events")');
     expect(live).toContain('fetch("/model.json"');
-    expect(live).toContain("Live and read-only");
 
     const still = renderDashboard(staticModel);
-    expect(still).not.toContain("function dashApp(");
     expect(still).not.toContain("EventSource");
+    expect(still).not.toContain("fetch(");
   });
 });
 
@@ -68,9 +168,13 @@ describe("the inlined scripts", () => {
     expect(() => new Function(`${clientRenderer()}\n${DASHBOARD_JS}\n${liveScript()}`)).not.toThrow();
   });
 
-  test("the filter script is re-callable, because the live page replaces the markup", () => {
-    expect(DASHBOARD_JS).toContain("function tldrxWireFilter()");
-    expect(liveScript()).toContain("tldrxWireFilter();");
+  test("the live script hands the new model to the page's own renderer", () => {
+    expect(DASHBOARD_JS).toContain("window.tldrxApply = function (model)");
+    expect(liveScript()).toContain("window.tldrxApply(model)");
+  });
+
+  test("it listens for the named event the server actually sends", () => {
+    expect(liveScript()).toContain('stream.addEventListener("reload", repaint)');
   });
 });
 
@@ -81,7 +185,7 @@ describe("the renderer's own escapers", () => {
     }
   });
 
-  test("dashText leaves quotes alone — a shell command in a <pre> should read like one", () => {
+  test("dashText leaves quotes alone — a shell command in a <code> should read like one", () => {
     expect(dashText(`tldrx answer Q2 "all time"`)).toBe(`tldrx answer Q2 "all time"`);
     expect(dashText("<b> & </b>")).toBe("&lt;b&gt; &amp; &lt;/b&gt;");
   });
@@ -89,10 +193,11 @@ describe("the renderer's own escapers", () => {
 
 describe("the renderer's money formatting", () => {
   test("agrees with replay's money()", () => {
-    const overTheWire = JSON.parse(JSON.stringify(liveModel)) as typeof liveModel;
-    for (const run of overTheWire.runs) {
-      expect(dashApp(overTheWire)).toContain(money(run.spentUsd));
-      expect(dashApp(overTheWire)).toContain(money(run.ceilingUsd));
+    const wire = JSON.parse(JSON.stringify(liveModel)) as typeof liveModel;
+    const runs = dashMain(wire, UI, { view: "runs", id: null }, NOW_MS);
+    for (const run of wire.runs) {
+      expect(runs).toContain(money(run.spentUsd));
+      expect(runs).toContain(money(run.ceilingUsd));
     }
     expect(money(null)).toBe("$?");
   });

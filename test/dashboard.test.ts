@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  buildModel, offlineHtml, renderDashboard, writeStaticDashboard,
+  buildModel, dashMain, dashRadar, offlineHtml, renderDashboard, writeStaticDashboard,
 } from "../src/core/dashboard/index.ts";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { EXIT_OK } from "../src/cli/exitCodes.ts";
@@ -160,10 +160,13 @@ describe("the dashboard model", () => {
       expect(found!.waves.map((w) => w.id)).toEqual(["W1", "W2"]);
       expect(found!.unreadable).toEqual([]);
 
-      const page = renderDashboard(built);
-      expect(page).toContain("Plan (03-plan)");
+      const page = dashMain(built, { status: "all", sort: "updated" },
+        { view: "run", id: built.runs[0]!.id }, VIEWS_NOW.getTime());
+      expect(page).toContain("03-plan · 2 stories");
       expect(page).toContain("<th>depends on</th>");
-      expect(page).toContain("branch <code>epic/leaderboard</code>");
+      expect(page).toContain('<span class="tag" style="margin-left:auto">epic/leaderboard</span>');
+      // Waves are shown in file order, because file order is execution order.
+      expect(page.indexOf(">W1<")).toBeLessThan(page.indexOf(">W2<"));
     } finally {
       workspace.dispose();
     }
@@ -172,7 +175,8 @@ describe("the dashboard model", () => {
   test("a workspace with no .tldrx/ says so instead of looking empty", () => {
     const empty = buildModel(join(FRAMEWORK_ROOT, "test", "fixtures"), GENERATED_AT, { now: VIEWS_NOW });
     expect(empty.workspaceFound).toBe(false);
-    const page = renderDashboard(empty);
+    const page = dashMain(empty, { status: "all", sort: "updated" },
+      { view: "runs", id: null }, VIEWS_NOW.getTime());
     expect(page).toContain("No workspace here");
     expect(page).toContain("tldrx init");
   });
@@ -196,66 +200,156 @@ describe("the static page", () => {
     for (const target of targets) expect(target.startsWith("#")).toBe(true);
   });
 
-  test("shows the run id, its status, its progress and what it is waiting on", () => {
-    expect(html).toContain(VIEWS_RUN);
-    expect(html).toContain("Player scoreboard");
-    expect(html).toContain("awaiting_gate");
-    expect(html).toContain("$5.01");
-    expect(html).toContain("$25.00");
-    expect(html).toContain("gate pending: how");
-    expect(html).toContain("1 of 2 stages terminal (50%)");
+  test("it carries the model it will draw, and the renderer that draws it", () => {
+    expect(html).toContain('<script type="application/json" id="model-data">');
+    expect(html).toContain("function dashMain(");
+    // The model rides as JSON, so the run is on the page as data, not as markup.
+    const json = html.split('id="model-data">')[1]?.split("</script>")[0] ?? "";
+    const shipped = JSON.parse(json) as typeof model;
+    expect(shipped).toEqual(JSON.parse(JSON.stringify(model)) as typeof model);
   });
 
-  test("the run detail carries the execution path as a table", () => {
-    expect(html).toContain("<th>phase</th>");
-    expect(html).toContain("<td><code>01-what</code></td>");
-    expect(html).toContain("<td>$2.61 / $3.00</td>");
-    expect(html).toContain("approve: pending");
-  });
-
-  test("the handoff is rendered through the markdown converter", () => {
-    expect(html).toContain("<h2>Findings</h2>");
-    expect(html).toContain("<li>Rankings are global rather than per tenant [src: Q1]</li>");
-  });
-
-  test("an external citation survives as visible text, not as a fetchable link", () => {
-    expect(html).toContain("https://developers.example.com/ranking");
-    expect(html).not.toContain('href="https://developers.example.com/ranking"');
-  });
-
-  test("open questions appear with their options and the command that answers them", () => {
-    expect(html).toContain("Open question Q2");
-    expect(html).toContain("<strong>B)</strong> Rolling 30 days");
-    expect(html).toContain('tldrx answer Q2 "your answer"');
-    // Q1 is answered, so it is not in the open list.
-    expect(html).not.toContain("Open question Q1");
-  });
-
-  test("experts show status, an inline SVG chart and the train prompts", () => {
-    expect(html).toContain("dotnet-stack");
-    expect(html).toContain("lab-ui");
-    expect(html).toContain("<svg viewBox=");
-    expect(html).toContain("<polygon points=");
-    expect(html).toContain("tldrx expert train lab-ui --area scoreboard-ui --mode light --print-prompt");
-    expect(html).toContain("stores level 5, evidence computes 1");
-  });
-
-  test("the FAQ hands over the copy-paste loop", () => {
-    for (const command of ["tldrx run new", "tldrx next", "tldrx answer", "tldrx approve", "tldrx reject", "tldrx replay"]) {
-      expect(html).toContain(command);
-    }
-  });
-
-  test("it is read-only: no form controls that submit or act, and it does not watch", () => {
-    expect(html).not.toContain("<button");
+  test("it is read-only: no form, no write path, and it does not watch", () => {
     expect(html).not.toContain("<form");
     expect(html).not.toContain("onclick");
     expect(html).not.toContain("fetch(");
     expect(html).not.toContain("EventSource");
+    expect(html).not.toContain("XMLHttpRequest");
+    expect(html).not.toContain("localStorage");
+    // Every button on the page copies text or filters the list. Nothing else.
+    for (const [, attributes] of html.matchAll(/<button([^>]*)>/g)) {
+      expect(attributes).toMatch(/data-(copy|filter|sort)=/);
+    }
   });
 
   test("it is deterministic for the same inputs", () => {
     expect(renderDashboard(buildModel(VIEWS_FIXTURE, GENERATED_AT, { now: VIEWS_NOW }))).toBe(html);
+  });
+});
+
+/**
+ * What a reader actually sees.
+ *
+ * The document ships an empty `<main>` and fills it in the browser, so these
+ * assertions run the page's own renderer over the same model rather than
+ * grepping the file. `dashboard-render.test.ts` separately proves the serialised
+ * copy of these functions renders byte-identically, so testing the typed ones
+ * here tests what ships.
+ */
+describe("the views it draws", () => {
+  const ui = { status: "all", sort: "updated" };
+  const nowMs = VIEWS_NOW.getTime();
+  const view = (name: string, id: string | null = null): string =>
+    dashMain(model, ui, { view: name, id }, nowMs);
+  const runs = view("runs");
+  const detail = view("run", VIEWS_RUN);
+
+  test("the runs list shows the run, its status, its progress and its spend", () => {
+    expect(runs).toContain(VIEWS_RUN);
+    expect(runs).toContain("Player scoreboard");
+    expect(runs).toContain("awaiting gate");
+    expect(runs).toContain("$5.01");
+    expect(runs).toContain("$25.00");
+    expect(runs).toContain("1/2 stages · 50%");
+  });
+
+  test("it names the one thing waiting on a human, and raises it as an alert", () => {
+    expect(runs).toContain('<span class="alert__kind">question</span>');
+    expect(runs).toContain("Q2 · How far back does the scoreboard reach?");
+    expect(runs).toContain("waiting on a human");
+    // A question outranks a gate: the run has both, and the question is the ask.
+    expect(runs).not.toContain("stage how is waiting at a gate");
+  });
+
+  test("a gate alone reads as the gate", () => {
+    const gateOnly = {
+      ...model,
+      runs: model.runs.map((run) => ({ ...run, pendingQuestion: null })),
+    };
+    expect(dashMain(gateOnly, ui, { view: "runs", id: null }, nowMs))
+      .toContain("stage how is waiting at a gate");
+  });
+
+  test("the run detail carries the execution path as a table", () => {
+    expect(detail).toContain("<th>phase</th>");
+    expect(detail).toContain('<td class="mono">how</td>');
+    expect(detail).toContain("$2.61");
+    expect(detail).toContain("$3.00");
+    expect(detail).toContain("approve: pending");
+    // The row waiting at a gate is marked, so the eye lands on it.
+    expect(detail).toContain('<tr data-wait="1">');
+  });
+
+  test("the handoff is rendered through the markdown converter, inline and unescaped", () => {
+    expect(detail).toContain("<h2>Findings</h2>");
+    expect(detail).toContain("<li>Rankings are global rather than per tenant [src: Q1]</li>");
+    // A stable panel id is what keeps an open handoff open across a re-render.
+    expect(detail).toContain(`id="ho-${VIEWS_RUN}-01-what"`);
+  });
+
+  test("an external citation survives as visible text, not as a fetchable link", () => {
+    expect(detail).toContain("https://developers.example.com/ranking");
+    expect(detail).not.toContain('href="https://developers.example.com/ranking"');
+  });
+
+  test("open questions appear with their options and the command that answers them", () => {
+    expect(detail).toContain('<span class="q__id">Q2</span>');
+    expect(detail).toContain('<span class="opt__letter">B</span><span>Rolling 30 days</span>');
+    expect(detail).toContain('tldrx answer Q2 "your answer"');
+    expect(detail).toContain('<span class="q__id">Q3</span>');
+    // Q1 is answered, so it is not in the open list.
+    expect(detail).not.toContain('<span class="q__id">Q1</span>');
+  });
+
+  test("a run with no plan says so rather than showing an empty table", () => {
+    expect(model.runs[0]!.plan).toBeNull();
+    expect(detail).toContain("The Plan phase has not written stories yet");
+  });
+
+  test("experts show the computed level, the evidence behind it, and a safe train command", () => {
+    const experts = view("experts");
+    expect(experts).toContain("dotnet-stack");
+    expect(experts).toContain("lab-ui");
+    expect(experts).toContain("stores level 5, evidence computes 1");
+    // The copied command prints the prompt; it never runs training.
+    expect(experts).toContain("tldrx expert train lab-ui --area scoreboard-ui --mode light --print-prompt");
+    expect(experts).toContain("1 evidence · newest 2026-08-30");
+    // The stored level is named as stored, never shown as the level.
+    expect(experts).toContain("stored 5 (not shown as level)");
+  });
+
+  test("the radar is drawn from the computed levels, and reads out in text", () => {
+    const expert = {
+      name: "wide", status: "in-use", lastTrained: null, warnings: [], error: null,
+      areas: ["a", "b", "c"].map((id, index) => ({
+        id, title: id, level: index, storedLevel: null,
+        evidenceCount: 0, newestEvidence: null, trainPrompt: `tldrx expert train wide --area ${id}`,
+      })),
+    };
+    const svg = dashRadar(expert, model.maxLevel);
+    expect(svg).toContain("<svg class=\"radar\"");
+    expect(svg).toContain("<polygon points=");
+    expect(svg).toContain('aria-label="wide competency: a 0 of 5, b 1 of 5, c 2 of 5"');
+  });
+
+  test("watchers says what is missing instead of inventing a card", () => {
+    const watchers = view("watchers");
+    expect(watchers).toContain("No watchers in this model.");
+    expect(watchers).toContain("has no <code>watchers</code> field yet");
+  });
+
+  test("the FAQ hands over the copy-paste loop", () => {
+    const faq = view("faq");
+    for (const command of ["tldrx run new", "tldrx next", "tldrx answer", "tldrx approve", "tldrx reject", "tldrx replay"]) {
+      expect(faq).toContain(command);
+    }
+  });
+
+  test("no workspace is a page that says so, not an empty one", () => {
+    const missing = { ...model, workspaceFound: false };
+    const page = dashMain(missing, ui, { view: "runs", id: null }, nowMs);
+    expect(page).toContain("No workspace here");
+    expect(page).toContain("tldrx init");
   });
 });
 

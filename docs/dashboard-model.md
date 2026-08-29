@@ -6,12 +6,23 @@ draws it. Those are two steps and two files, on purpose:
 | Step | File | What it does |
 |---|---|---|
 | read | `src/core/dashboard/model.ts` | files → `DashboardModel` |
-| draw | `src/core/dashboard/render.ts` | `DashboardModel` → HTML |
+| draw | `src/core/dashboard/render.ts` | `DashboardModel` → HTML, in the browser |
 
-`tldrx dashboard --static` runs both and writes the result. The live server runs
-both for `GET /`, serves the model alone at `GET /model.json`, and re-runs the
-draw step in the browser when a file changes — with the *same* functions, shipped
-into the page by `clientRenderer()`. There is exactly one template in the product.
+**The drawing happens client-side, and only client-side.** Both commands emit the
+same document: an empty `<main>`, the model inline in a
+`<script type="application/json" id="model-data">`, and the renderer beside it.
+`tldrx dashboard --static` writes that file and stops. The live server serves it
+at `GET /`, the model alone at `GET /model.json`, and pushes a `reload` when a
+file changes; the page re-fetches the model and redraws itself. There is exactly
+one template in the product and exactly one place it runs.
+
+`render.ts` is TypeScript so `tsc --strict` holds the markup to the types below —
+rename a field here and the build breaks rather than a panel silently going
+blank. It reaches the page through `Function.prototype.toString()`
+(`clientRenderer()`), which is why every `dash*` function is closure-free: it may
+touch nothing but its own arguments, its own locals and the others in the set.
+`test/dashboard-render.test.ts` evaluates that serialised source in an empty scope
+and demands it render byte-identically to the typed original.
 
 **This is the seam a redesign replaces.** Anyone rebuilding the rendering layer
 targets the shape below; nothing here needs the current markup, the current CSS,
@@ -121,4 +132,6 @@ GET /events      Server-Sent Events; one `reload` per debounced file change
 ```
 
 All three are GET, on `127.0.0.1` only. A `reload` event carries an ISO timestamp
-as its data and means "re-fetch `/model.json`" — nothing more.
+as its data and means "re-fetch `/model.json`" — nothing more. The page redraws in
+place: scroll position and any open handoff panel survive, because panel ids are
+derived from the run and the phase rather than from render order.

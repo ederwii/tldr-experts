@@ -180,8 +180,9 @@ query. Generated from what Execute actually instrumented — not aspirational.
 - Tiny Bun server: watches `tldrx-work/**` + `.tldrx/**`, serves a single-page UI, pushes
   changes over SSE → auto-refresh. No writes, no launch buttons.
 - Views: open runs + status/phase/budget; run detail (execution path from `run.yml`,
-  handoffs rendered, questions pending); experts (status + star chart + "train me"
-  prompts); FAQ / how-to with copy-paste prompts to start or continue any run.
+  handoffs rendered with their citations, questions pending); experts (status +
+  competency radar + "train me" prompts); watchers; FAQ / how-to with copy-paste
+  prompts to start or continue any run.
 - Static export (`fw dashboard --static`) for sharing a snapshot.
 
 ## 13. Learning loop
