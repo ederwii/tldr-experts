@@ -8,6 +8,7 @@
  */
 import { yamlScalar } from "../facts/emitFactsYaml.ts";
 import type { RunBudget } from "../budget/RunBudget.ts";
+import type { GatesPolicy } from "./gatePolicy.ts";
 import type { RunFile, RunGate, RunStage, RunTask } from "./RunFile.ts";
 
 function inlineList(values: readonly string[]): string {
@@ -16,6 +17,17 @@ function inlineList(values: readonly string[]): string {
 
 function money(n: number): string {
   return n.toFixed(2);
+}
+
+/**
+ * `gates_policy: {what: human, how: auto}` — one flow mapping, stage order kept.
+ *
+ * Emitted only when the run HAS a policy, so a fixture or a hand-written run.yml
+ * from before 0.3.0 round-trips byte-for-byte through a save.
+ */
+function gatesPolicy(policy: GatesPolicy): string {
+  const entries = Object.entries(policy).map(([id, value]) => `${yamlScalar(id)}: ${yamlScalar(value)}`);
+  return `{${entries.join(", ")}}`;
 }
 
 function gate(g: RunGate): string {
@@ -74,8 +86,11 @@ export function emitRunYaml(run: RunFile): string {
       `task: ${yamlScalar(run.cursor.task)}}`,
     `budget: {ceiling_usd: ${money(run.budget.ceiling_usd)}, spent_usd: ${money(run.budget.spent_usd)}, ` +
       `per_agent_max_usd: ${money(run.budget.per_agent_max_usd)}}`,
-    "phases:",
   ];
+  if (run.gates_policy !== undefined && Object.keys(run.gates_policy).length > 0) {
+    lines.push(`gates_policy: ${gatesPolicy(run.gates_policy)}`);
+  }
+  lines.push("phases:");
   for (const phase of run.phases) {
     lines.push(`  - id: ${yamlScalar(phase.id)}`);
     lines.push(`    status: ${yamlScalar(phase.status)}`);

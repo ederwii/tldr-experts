@@ -39,6 +39,7 @@ import { renderSeedHandoff, renderSeedIndex, SEED_INDEX } from "../seed/renderSe
 import { findDuplicate } from "../facts/findDuplicate.ts";
 import { renderHandoff, renderProse, renderQuestions, targetOf } from "../distill/renderDistill.ts";
 import { emitBudgetYaml, emitRunYaml } from "./emitRunYaml.ts";
+import { GatePolicyError, parseGatesFlag, resolveGatesPolicy, type GatesPolicy } from "./gatePolicy.ts";
 import { loadWorkflowPreset, MAX_STAGE_INPUTS, type PlannedStage, type WorkflowPreset } from "./workflowPreset.ts";
 import { deriveRunStatus, validateRunFile, type RunFile, type RunPhase, type RunStage } from "./RunFile.ts";
 
@@ -64,6 +65,13 @@ export interface NewRunOptions {
    * mystery. `[assumption]`
    */
   readonly seed?: string;
+  /**
+   * `--gates <stage,stage|all|none>` — the list is the HUMAN gates; everything
+   * else is `auto`. Overrides the workflow's own `gates:` wholesale rather than
+   * merging into it, because "these are the gates I want a person on" is one
+   * statement, not a patch.
+   */
+  readonly gates?: string;
   readonly actor: string;
   readonly now: Date;
 }
@@ -118,6 +126,15 @@ export function createRun(options: NewRunOptions): NewRunOutcome {
   const seedSet = options.seed === undefined ? null : collectSeed(options.root, options.seed);
 
   const preset = loadWorkflowPreset(options.root, options.scope);
+  const stageIds = preset.stages.map((stage) => stage.id);
+  let gatesPolicy: GatesPolicy;
+  try {
+    const override = options.gates === undefined ? null : parseGatesFlag(options.gates, stageIds);
+    gatesPolicy = resolveGatesPolicy(stageIds, preset.gates, override);
+  } catch (error) {
+    if (error instanceof GatePolicyError) throw new NewRunError(error.message);
+    throw error;
+  }
   const workspace = loadWorkspace(options.root);
   const repos = resolveRepos(options.repos, workspace.repos);
   const at = rfc3339(options.now);
@@ -151,6 +168,7 @@ export function createRun(options: NewRunOptions): NewRunOutcome {
       spent_usd: 0,
       per_agent_max_usd: budgetPlan.perAgentMax,
     },
+    gates_policy: gatesPolicy,
     phases,
   };
   const run: RunFile = { ...seed, status: deriveRunStatus(seed) };
@@ -201,6 +219,7 @@ export function createRun(options: NewRunOptions): NewRunOutcome {
       from: options.from ?? null,
       seed: options.seed ?? null,
       seed_documents: seedSet === null ? 0 : seedSet.documents.length,
+      human_gates: stageIds.filter((id) => gatesPolicy[id] === "human"),
     }));
 
     write(temp, "budget.yml", emitBudgetYaml(budget), written);

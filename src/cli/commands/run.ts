@@ -20,7 +20,7 @@ import { notFound } from "../resolveRun.ts";
 import { currentActor } from "../../hooks/lib/actor.ts";
 import { PROJECT_WORK_DIR } from "../../core/paths.ts";
 
-const VALUE_FLAGS = ["title", "scope", "budget", "repos", "from", "seed", "run", "root"];
+const VALUE_FLAGS = ["title", "scope", "budget", "repos", "from", "seed", "gates", "run", "root"];
 
 export const runCommand: Command = {
   name: "run",
@@ -60,6 +60,7 @@ function runNew(argv: readonly string[]): number {
       repos: listFlag(args, "repos"),
       from: stringFlag(args, "from"),
       seed: stringFlag(args, "seed"),
+      gates: stringFlag(args, "gates"),
       actor: currentActor(),
       now: new Date(),
     });

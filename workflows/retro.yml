@@ -12,6 +12,8 @@ stages: []
 skips: [what, how, plan, build, watch]
 depth: minimal
 default_budget_usd: 3
+# gates — retro runs no stage from stages/, so there is no stage gate to place.
+#         `tldrx retro <run-id>` is a command a human runs, not a stage.
 changes:
   - "Runs no stage from stages/. Driven by `tldrx retro <run-id>`, which reads events.jsonl."
   - "Proposes three things: facts to remember, practices to change, stages to add."

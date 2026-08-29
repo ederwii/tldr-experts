@@ -12,6 +12,12 @@ stages: [what, how, build, watch]
 skips: [plan]
 depth: minimal
 default_budget_usd: 10
+# gates  — who closes each stage's gate: `human` waits for `tldrx approve`,
+#           `auto` lets the facilitator close it when the five spec §5 conditions
+#           hold (checks pass, no open question, spend within ceiling, the stage
+#           did not fail, claim-sources clean). Every stage still ENDS at a gate;
+#           this only says who signs it. A stage not named here is `human`.
+gates: {what: auto, how: auto, build: human, watch: human}
 changes:
   - "What and How are compressed into one pass: CVE -> affected surface, via the code map."
   - "Build = patch. Watch = verify the surface is actually gone, not that the version string changed."

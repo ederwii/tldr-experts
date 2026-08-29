@@ -12,6 +12,12 @@ stages: [what, how, plan, build, watch]
 skips: []
 depth: light
 default_budget_usd: 10
+# gates  — who closes each stage's gate: `human` waits for `tldrx approve`,
+#           `auto` lets the facilitator close it when the five spec §5 conditions
+#           hold (checks pass, no open question, spend within ceiling, the stage
+#           did not fail, claim-sources clean). Every stage still ENDS at a gate;
+#           this only says who signs it. A stage not named here is `human`.
+gates: {what: human, how: auto, plan: human, build: auto, watch: human}
 changes:
   - "What = reproduce it, then find the root cause. A fix without a reproduction is a guess."
   - "How = the minimal change that removes the cause, not the symptom."

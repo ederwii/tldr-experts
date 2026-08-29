@@ -13,6 +13,7 @@ import {
   asDocument, isRecord, requireArray, requireEnum, requireKeys, requireNumber, requireString,
   result, type ValidationIssue, type ValidationResult,
 } from "../schemas/validation.ts";
+import { validateGatesPolicy, type GatesPolicy } from "./gatePolicy.ts";
 
 /** One enum, all three levels (spec §2.2). */
 export const STAGE_STATUSES = [
@@ -103,6 +104,12 @@ export interface RunFile {
   readonly status: StageStatus;
   readonly cursor: RunCursor;
   readonly budget: RunBudgetMirror;
+  /**
+   * Who approves each stage's gate (spec §2.2). ADDITIVE and optional: a run.yml
+   * written before this key existed has no policy, and `gatePolicyFor` reads that
+   * absence as `human` for every stage — exactly the behaviour it had.
+   */
+  readonly gates_policy?: GatesPolicy;
   readonly phases: readonly RunPhase[];
 }
 
@@ -206,6 +213,15 @@ export function validateRunFile(input: unknown): ValidationResult {
   if (phases.length > MAX_PHASES) {
     issues.push({ path: "phases", message: `${phases.length} phases exceeds the ${MAX_PHASES} cap` });
   }
+
+  const declaredStageIds: string[] = [];
+  for (const phase of phases) {
+    if (!isRecord(phase) || !Array.isArray(phase.stages)) continue;
+    for (const stage of phase.stages as unknown[]) {
+      if (isRecord(stage) && typeof stage.id === "string") declaredStageIds.push(stage.id);
+    }
+  }
+  validateGatesPolicy(doc.gates_policy, declaredStageIds, issues);
 
   let stageCount = 0;
   let taskCount = 0;
