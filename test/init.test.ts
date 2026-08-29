@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { parseYaml } from "../src/core/yaml.ts";
 import { validate } from "../src/core/schemas/index.ts";
@@ -10,6 +11,7 @@ import {
   validateProcessDocument, validateWorkspaceDocument, buildWorkspaceDocument,
   GITIGNORE_MARKERS, type InitOptions, type InitReport,
 } from "../src/core/init/index.ts";
+import { describeStageLoads, stageIds, stagesLoadingExperts } from "../src/core/experts/index.ts";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { emptyFixture, multiRepoFixture, singleRepoFixture, type Fixture } from "./init-fixture.ts";
 
@@ -417,5 +419,84 @@ describe("the CLI end to end", () => {
   test("map without a mode, and init with an unknown flag, are usage errors", async () => {
     expect((await tldrx("map")).code).toBe(1);
     expect((await tldrx("init", "--nope")).code).toBe(1);
+  });
+});
+
+// --- role experts ------------------------------------------------------------
+
+/**
+ * The gap wave I closed: the shipped stage files have always named `product`,
+ * `architect`, `delivery`, `developer` and `operations`, and `init` seeded only
+ * the first. Measured 2026-08-29 on `~/aparece-v2`, whose `.tldrx/experts/` held
+ * `product`, `dotnet-stack` and seven domain experts: four of the five stage
+ * names resolved to nothing on every run.
+ */
+describe("init seeds the role experts the stage files name", () => {
+  let fixture: Fixture;
+
+  beforeAll(async () => { fixture = await singleRepoFixture(); });
+  afterAll(async () => { await fixture.cleanup(); });
+
+  test("every name in a shipped stage's `experts:` has a folder after init", async () => {
+    await init(fixture.root);
+    const named = new Set<string>();
+    for (const stage of stageIds(fixture.root)) {
+      const path = join(FRAMEWORK_ROOT, "stages", stage, "stage.yml");
+      const doc = parseYaml(readFileSync(path, "utf8")) as { experts?: unknown };
+      for (const name of (doc.experts as string[] | undefined) ?? []) named.add(name);
+    }
+    expect(named.size).toBeGreaterThan(0);
+    for (const name of named) {
+      expect(existsSync(join(fixture.root, ".tldrx/experts", name, "expert.md"))).toBe(true);
+    }
+  });
+
+  test("`expert list` says which stage loads each role, by name", async () => {
+    await init(fixture.root);
+    const loads = stagesLoadingExperts(fixture.root);
+    expect(describeStageLoads(loads.get("product"))).toBe("loaded by: what (named)");
+    expect(describeStageLoads(loads.get("architect"))).toBe("loaded by: how (named), plan (named)");
+    expect(describeStageLoads(loads.get("delivery"))).toBe("loaded by: plan (named)");
+    expect(describeStageLoads(loads.get("developer"))).toBe("loaded by: build (named)");
+    expect(describeStageLoads(loads.get("operations"))).toBe("loaded by: watch (named)");
+  });
+
+  test("a role expert is `kind: role`, has one area at level 0, and an empty knowledge/", async () => {
+    await init(fixture.root);
+    const dir = join(fixture.root, ".tldrx/experts/architect");
+    const body = readFileSync(join(dir, "expert.md"), "utf8");
+    expect(body).toContain("kind: role");
+    expect(body).toContain("# architect");
+    // The body is the SHIPPED prose, not a generated stub — it is what a team edits.
+    expect(body).toContain("templates/experts/architect.md");
+    expect(body).toContain("## Role");
+
+    const competencies = await readYaml(join(dir, "competencies.yml"));
+    const areas = competencies.areas as Record<string, unknown>[];
+    expect(areas.map((area) => area.id)).toEqual(["architect"]);
+    expect(areas[0]?.level).toBe(0);
+    expect(areas[0]?.evidence).toEqual([]);
+    // `--mode full`, because light mode is refused for a role expert: a
+    // copy-pasteable command that exits 1 is worse than no command.
+    expect(areas[0]?.train_prompt).toBe("tldrx expert train architect --area architect --mode full");
+    expect(existsSync(join(dir, "knowledge"))).toBe(true);
+  });
+
+  test("re-running init adds a missing role and never overwrites an existing expert", async () => {
+    await init(fixture.root);
+    const dir = join(fixture.root, ".tldrx/experts");
+    // A workspace seeded before wave I: only `product`, and a team has edited it.
+    await rm(join(dir, "architect"), { recursive: true, force: true });
+    await rm(join(dir, "delivery"), { recursive: true, force: true });
+    const productPath = join(dir, "product", "expert.md");
+    const edited = `${readFileSync(productPath, "utf8")}\n## Our own section\n\n- hand written\n`;
+    writeFileSync(productPath, edited, "utf8");
+
+    const report = await init(fixture.root);
+    expect(existsSync(join(dir, "architect", "expert.md"))).toBe(true);
+    expect(existsSync(join(dir, "delivery", "expert.md"))).toBe(true);
+    expect(readFileSync(productPath, "utf8")).toBe(edited);
+    expect(report.created).toContain(".tldrx/experts/architect/expert.md");
+    expect(report.kept).toContain(".tldrx/experts/product/expert.md");
   });
 });

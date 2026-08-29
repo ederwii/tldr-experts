@@ -531,6 +531,92 @@ describe("expert create", () => {
       workspace.dispose();
     }
   });
+
+  // `--role` seeds exactly what `init` seeds for a role expert, from the same
+  // `templates/experts/<slug>.md`. The body IS the expert, so a `--role architect`
+  // that wrote the generic template would be a folder with the right name and
+  // none of the content.
+  test("--role seeds kind: role, the shipped body, and an empty knowledge/", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      const created = await createExpert({
+        root: workspace.root, name: "architect", role: "architect",
+        createdAt: "2026-09-02T10:00:00Z",
+      });
+      expect(created.kind).toBe("role");
+      expect(created.fromRoleTemplate).toBe(true);
+      expect(created.areas).toEqual(["architect"]);
+
+      const markdown = readFileSync(join(created.dir, "expert.md"), "utf8");
+      expect(markdown).toContain("kind: role");
+      expect(markdown).toContain("# architect");
+      expect(markdown).toContain("templates/experts/architect.md");
+      expect(markdown).toContain("## Role");
+      expect(markdown).toContain("## What to cite");
+      expect(existsSync(join(created.dir, "knowledge"))).toBe(true);
+
+      const expert = loadExpert(workspace.root, "architect", VIEWS_NOW);
+      expect(expert.areas[0]!.level).toBe(0);
+      // `--mode full`: light mode is refused for a role expert.
+      expect(expert.areas[0]!.trainPrompt)
+        .toBe("tldrx expert train architect --area architect --mode full");
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("--role names the expert, not the role: the H1 follows the name", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      const created = await createExpert({
+        root: workspace.root, name: "reviewer", role: "architect",
+        createdAt: "2026-09-02T10:00:00Z",
+      });
+      const markdown = readFileSync(join(created.dir, "expert.md"), "utf8");
+      expect(markdown).toContain("name: reviewer");
+      expect(markdown).toContain("\n# reviewer\n");
+      expect(markdown).not.toContain("\n# architect\n");
+      // The front matter's `# schema: draft` comment is not the title.
+      expect(markdown).toContain("# schema: draft");
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("--role with a slug the framework ships no template for falls back, and says so", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      const run = await tldrx(
+        "expert", "create", "secops", "--role", "security", "--root", workspace.root,
+      );
+      expect(run.code).toBe(EXIT_OK);
+      expect(run.stdout).toContain("generic body");
+      expect(run.stdout).toContain("templates/experts/security.md");
+      const markdown = readFileSync(
+        join(workspace.root, ".tldrx", "experts", "secops", "expert.md"), "utf8",
+      );
+      expect(markdown).toContain("kind: role");
+      expect(markdown).toContain("# secops");
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("--domain and --stack are untouched by --role", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      const created = await createExpert({
+        root: workspace.root, name: "ledger", domain: "billing", stack: "dotnet",
+        createdAt: "2026-09-02T10:00:00Z",
+      });
+      expect(created.kind).toBe("stack");
+      expect(created.fromRoleTemplate).toBe(false);
+      expect(created.areas).toEqual(["dotnet", "billing"]);
+      expect(readFileSync(join(created.dir, "expert.md"), "utf8")).toContain("kind: stack");
+    } finally {
+      workspace.dispose();
+    }
+  });
 });
 
 describe("expert recompute", () => {
