@@ -184,7 +184,8 @@ describe("tldrx run new --from", () => {
     expect(run.code).toBe(EXIT_OK);
     expect(run.stdout).toContain(`distilled ${FIXTURE_FILES} file(s)`);
     expect(run.stdout).toContain(`${FIXTURE_CLAIMS} finding(s)`);
-    expect(run.stdout).toContain(`${FIXTURE_ANSWERS} fact(s)`);
+    expect(run.stdout).toContain(`${FIXTURE_ANSWERS} new fact(s)`);
+    expect(run.stdout).toContain("0 already known");
 
     const runDir = onlyRunDir(ws.root);
     for (const name of ["intent.md", "scope.md", "handoff.md"]) {
@@ -204,6 +205,40 @@ describe("tldrx run new --from", () => {
     };
     expect(validateFactsFile(facts).issues).toEqual([]);
     expect(facts.facts).toHaveLength(FIXTURE_ANSWERS);
+  });
+
+  /**
+   * Measured before the fix: importing the same intent folder twice wrote F001–F027
+   * and then F028–F054 as exact copies. `distill` only drops claims that
+   * CONTRADICT a fact — identical text is agreement, and agreement was being
+   * appended as a brand-new row.
+   */
+  test("importing the same intent folder twice appends no second copy of any fact", async () => {
+    const ws = fresh();
+    const first = await tldrx(ws.root, "run", "new", "leaderboard", "--from", FIXTURE_AIDLC_INTENT);
+    expect(first.code).toBe(EXIT_OK);
+    expect(first.stdout).toContain(`${FIXTURE_ANSWERS} new fact(s)`);
+
+    const factsFile = join(ws.root, ".tldrx", "memory", "facts.yml");
+    const after = readFileSync(factsFile, "utf8");
+
+    const second = await tldrx(ws.root, "run", "new", "leaderboard-again", "--from", FIXTURE_AIDLC_INTENT);
+    expect(second.stderr).toBe("");
+    expect(second.code).toBe(EXIT_OK);
+    expect(second.stdout).toContain("0 new fact(s)");
+    expect(second.stdout).toContain(`${FIXTURE_ANSWERS} already known`);
+
+    // Byte-identical: no new rows, no renumbering, no rewrite.
+    expect(readFileSync(factsFile, "utf8")).toBe(after);
+
+    const facts = parseYaml(readFileSync(factsFile, "utf8")) as { facts: { id: string }[] };
+    expect(facts.facts).toHaveLength(FIXTURE_ANSWERS);
+
+    // ... and the second run logged no `fact.added` it did not make.
+    const runs = readdirSync(join(ws.root, "tldrx-work")).filter((n) => !n.startsWith("."));
+    const againDir = runs.find((n) => n.endsWith("-leaderboard-again")) ?? "";
+    const events = readFileSync(join(ws.root, "tldrx-work", againDir, "events.jsonl"), "utf8");
+    expect(events).not.toContain('"fact.added"');
   });
 
   test("every bullet in every distilled file ends with a valid src token", async () => {

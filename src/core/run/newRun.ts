@@ -33,6 +33,7 @@ import { parseQuestions, validateQuestions } from "../text/questions.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../hooks/lib/workspace.ts";
 import { validateRunBudget, type RunBudget } from "../budget/RunBudget.ts";
 import { distill, type DistillResult } from "../distill/distill.ts";
+import { findDuplicate } from "../facts/findDuplicate.ts";
 import { renderHandoff, renderProse, renderQuestions, targetOf } from "../distill/renderDistill.ts";
 import { emitBudgetYaml, emitRunYaml } from "./emitRunYaml.ts";
 import { loadWorkflowPreset, type PlannedStage, type WorkflowPreset } from "./workflowPreset.ts";
@@ -64,9 +65,25 @@ export interface NewRunOutcome {
   readonly ceilingUsd: number;
   readonly stageCount: number;
   readonly distill: DistillResult | null;
+  /** Facts the distill actually appended to `facts.yml`. */
+  readonly factsAppended: number;
+  /** Distilled facts that an existing non-retired fact already said. */
+  readonly factsReused: number;
   /** Every file written, relative to the run dir, in write order. */
   readonly files: readonly string[];
 }
+
+/**
+ * How close a distilled fact must be to an existing one to count as the SAME
+ * fact rather than a new one.
+ *
+ * Deliberately higher than the §4 re-ask threshold (0.6). 0.6 means "you already
+ * asked something like this"; here the question is "is this literally the fact we
+ * already recorded", and importing the same intent folder twice must answer yes.
+ * `distill` itself only drops claims that CONTRADICT a fact — identical text is
+ * agreement, and agreement used to be appended as a brand-new row.
+ */
+export const SAME_FACT_THRESHOLD = 0.9;
 
 export function createRun(options: NewRunOptions): NewRunOutcome {
   if (!SLUG_RE.test(options.slug)) {
@@ -141,6 +158,8 @@ export function createRun(options: NewRunOptions): NewRunOutcome {
   mkdirSync(temp, { recursive: true });
 
   const written: string[] = [];
+  const appendedFacts: string[] = [];
+  const reusedFacts: string[] = [];
   try {
     for (const phase of phases) mkdirSync(join(temp, phase.id), { recursive: true });
 
@@ -205,7 +224,15 @@ export function createRun(options: NewRunOptions): NewRunOutcome {
       }
 
       for (const fact of result.facts) {
+        // `active` is recomputed per call, so this also collapses two identical
+        // claims inside ONE import, not just a re-import of the same folder.
+        const already = findDuplicate(fact.fact, fact.area, factsStore.active, SAME_FACT_THRESHOLD);
+        if (already !== null) {
+          reusedFacts.push(already.fact.id);
+          continue;
+        }
         const appended = factsStore.append(fact);
+        appendedFacts.push(appended.id);
         events.append(event(at, runId, "fact.added", options.actor, {
           fact: appended.id,
           area: appended.area,
@@ -220,7 +247,7 @@ export function createRun(options: NewRunOptions): NewRunOutcome {
           score: Math.round(conflict.score * 100) / 100,
         }));
       }
-      if (result.facts.length > 0) {
+      if (appendedFacts.length > 0) {
         factsYaml = factsStore.toYaml();
         const factsCheck = validateFactsFile(parseYaml(factsYaml));
         if (!factsCheck.ok) {
@@ -248,6 +275,8 @@ export function createRun(options: NewRunOptions): NewRunOutcome {
     ceilingUsd: budgetPlan.ceiling,
     stageCount: preset.stages.length,
     distill: result,
+    factsAppended: appendedFacts.length,
+    factsReused: reusedFacts.length,
     files: written,
   };
 }

@@ -69,7 +69,8 @@ function runNew(argv: readonly string[]): number {
     if (result !== null) {
       lines.push(
         `distilled ${result.filesRead.length} file(s) from ${result.intentDir}: ` +
-          `${result.claims.length} finding(s), ${result.facts.length} fact(s), ` +
+          `${result.claims.length} finding(s), ${outcome.factsAppended} new fact(s), ` +
+          `${outcome.factsReused} already known, ` +
           `${result.conflicts.length} question(s), ` +
           `${result.droppedUnanswered + result.droppedConflicting} dropped ` +
           `(${result.droppedUnanswered} unanswered, ${result.droppedConflicting} conflicting)`,
