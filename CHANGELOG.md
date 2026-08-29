@@ -2,6 +2,90 @@
 
 ## 0.3.0 — unreleased
 
+### Expert training runs
+
+`tldrx expert train <name> --area <a> [--mode light|full]` used to print a prompt
+and exit `64`. It now runs, and the design is built around one rule: **a level
+moves because a file was cited, never because an agent said it learned
+something.**
+
+- **A deterministic pre-pass picks the files.** No model is asked what to read.
+  `.tldrx/map/<repo>/domains.md`, graphify communities when the graph has any, and
+  a bounded keyword grep over the expert's repos (the area id and the words of its
+  title) — capped at **40 files / 96 KB**, with everything over the cap listed by
+  name as "not read" so a sub-agent cannot describe a file it was never shown. The
+  grep and the graph decide whether a file is about the AREA; the map only
+  re-ranks what already matched.
+- **One sub-agent**, the expert plus its stack experts plus the conventions, reads
+  only what was inlined — with a line-number gutter, because a citation whose line
+  is outside its file is rejected — and writes
+  `.tldrx/experts/<name>/knowledge/<area>.md` with `## Invariants`,
+  `## Entry points`, `## Business rules`, `## Gotchas`, `## Sources`.
+- **The framework re-reads that file off disk** and validates it with the SAME
+  parser the `claim-sources` hook uses, so a knowledge file cannot pass here and be
+  denied on write. Every list item must end in a `[src: …]` token; `absent:` is a
+  legal finding ("I looked and there is nothing") and earns no evidence.
+- **Evidence is derived, not asserted:** one `code` row per **distinct cited
+  file** (twelve readings of one file are worth one row, which is what keeps the
+  §2.6 distinct-source cap meaningful), `doc` for an https URL, `answer` for
+  `F<n>`. Then every area's level is recomputed by the §2.6 formula — not just the
+  trained one — the expert goes to `status: in-use`, and `last_trained` is stamped.
+- **Rejection is whole.** One unsourced item, or one line past the end of its file,
+  and nothing is written: no evidence, no level change, no status change. Any
+  knowledge file that was already accepted is restored byte-for-byte, and the
+  rejected one is moved to `<area>.rejected.md` so it cannot be mistaken for
+  accepted knowledge. Exit `5`.
+- **`--mode full`** adds a second sub-agent that mines
+  `tldrx-work/**/{handoff,retro}.md` from runs whose repos overlap this expert's,
+  plus `facts.yml` rows matching its area or repos, into
+  `knowledge/from-runs-<area>.md` — `run` and `answer` evidence. **Claude Code
+  transcripts are deliberately out of scope:** they carry no citation anything can
+  re-resolve, so mining one would put an unfalsifiable claim into
+  `competencies.yml`.
+- **Money.** `--max-usd` (default `$2.00`) reaches the sub-agent as
+  `--max-budget-usd`, split between full mode's two agents. Below the **$0.25
+  floor** it refuses with exit `2` **before reading anything** — a cold `claude -p`
+  pays 10–26k cache-creation tokens before its first reply, so a ceiling under the
+  floor is a failed spawn, not a saving.
+- **`--prepare` / `--commit`**, the same handshake `tldrx next` has, so a Claude
+  Code session runs training without a nested spawn. One bundle per sub-agent under
+  `.tldrx/cache/training/<expert>/<area>/.agent/<task>/`.
+- **`--print-prompt` is unchanged.** It still prints the copy-paste prompt and
+  spawns nothing.
+
+### Measured: `--max-budget-usd` is a stop, not a cap
+
+Pilot smoke, 2026-08-29, `--max-usd 1.5` over mobile + scavtopia-lab: the sub-agent
+was killed with `error_max_budget_usd` ("Reached maximum budget ($1.5)") **after**
+`total_cost_usd: 5.15325`, on a single turn (597 s, 105,698 cache-creation +
+60,548 output tokens, 1M-context model). The flag ends a run once a turn's cost is
+known; it cannot end a turn already in flight. Size a training prompt for the money
+you are willing to lose, not the ceiling you passed. The pipeline itself held: a
+non-zero `claude` exit is a failed run, so nothing reached `competencies.yml`, the
+$5.15 was recorded in `training.jsonl`, and the knowledge file the agent had
+already finished writing was **quarantined** rather than left where an accepted one
+lives — it would in fact have validated (111 sourced items, 21 distinct files,
+level 5), which is exactly why leaving it there would have been the dangerous
+outcome.
+
+### `training.jsonl` (spec §2.6.1)
+
+Every run appends to `.tldrx/experts/<name>/training.jsonl`: §2.9's envelope shape
+— seven keys, closed `type` set, append-only enforced by byte length — with `run`
+replaced by `expert` and `stage` by `area`. `events.jsonl` is run-scoped and
+training outlives every run, so it gets its own ledger beside the expert. A
+REFUSED run still writes its `agent.result`: money spent is recorded whether or not
+the knowledge was kept.
+
+### Seen from outside
+
+`tldrx expert list` grows two columns — total **evidence** and the per-area
+**levels** — and `--json` grows `evidence_count`. The dashboard model needed no
+change: it already recomputes levels from evidence, so the star chart moves the
+moment `competencies.yml` does.
+
+### Packaging
+
 - **Package name stays `tldr-experts`**; it now installs two commands, `tldrx` and `tldr-experts`. (Unscoped `tldrx` as a package name is refused by npm's similarity rule; 0.0.1–0.2.0 were unpublished on 2026-08-29 and their numbers can never be reused, so this is the first version back on the registry.)
 - README: release table with status tags (`alpha`/`beta`/`stable` defined) and npm/CI badges.
 

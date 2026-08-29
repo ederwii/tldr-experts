@@ -1,17 +1,25 @@
 /**
- * `tldrx expert` — list, create, and print a training prompt.
+ * `tldrx expert` — list, create, and train.
  *
  * Concept §6. Experts are files. `list` recomputes every level from evidence
  * before printing it (spec §2.6), `create` refuses to overwrite one, and `train`
- * prints the prompt rather than pretending to run training, which is v1.1.
+ * RUNS: a deterministic pre-pass, one sub-agent, a knowledge file validated off
+ * disk, and only then a level that moved because a file was cited.
+ *
+ * `--print-prompt` is unchanged and still costs nothing: it prints the
+ * copy-paste prompt and spawns nothing, for a human who would rather drive the
+ * session themselves.
  */
 import { join } from "node:path";
 import type { Command } from "../Command.ts";
-import { EXIT_FAILED, EXIT_NOT_IMPLEMENTED, EXIT_OK } from "../exitCodes.ts";
+import { EXIT_FAILED, EXIT_OK } from "../exitCodes.ts";
+import { boolFlag, numberFlag, parseArgs, stringFlag, UsageError, type ParsedArgs } from "../argv.ts";
+import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
+import { isTrainingMode, runTraining, type TrainingRunMode } from "../../core/training/index.ts";
 import { PROJECT_FRAMEWORK_DIR } from "../../core/paths.ts";
 import { loadWorkspaceFile } from "../../core/init/loadWorkspaceFile.ts";
 import {
-  createExpert, expertListJson, isTrainMode, loadExpert, loadExperts,
+  createExpert, expertListJson, loadExpert, loadExperts,
   readExpertDocument, renderExpertList, renderTrainPrompt, resolveWorkspaceRoot,
   type TrainRepo,
 } from "../../core/experts/index.ts";
@@ -20,6 +28,8 @@ const USAGE = [
   "Usage:",
   "  tldrx expert list [--root <path>] [--json]",
   "  tldrx expert create <name> [--domain <slug>] [--stack <lang>] [--root <path>]",
+  "  tldrx expert train <name> --area <area> [--mode light|full] [--max-usd <n>]",
+  "                                          [--model <m>] [--prepare|--commit] [--yolo] [--root <path>]",
   "  tldrx expert train <name> --area <area> [--mode light|full] --print-prompt [--root <path>]",
 ].join("\n");
 
@@ -28,7 +38,8 @@ export const expertCommand: Command = {
   summary: "List or create experts, or print a training prompt",
   usage: "tldrx expert list [--root <path>] [--json]\n" +
     "       tldrx expert create <name> [--domain <slug>] [--stack <lang>] [--root <path>]\n" +
-    "       tldrx expert train <name> --area <area> [--mode light|full] --print-prompt [--root <path>]",
+    "       tldrx expert train <name> --area <area> [--mode light|full] [--max-usd <n>] [--model <m>]\n" +
+    "                                               [--prepare|--commit] [--yolo] [--print-prompt] [--root <path>]",
   subcommands: ["list", "create", "train"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
@@ -78,27 +89,30 @@ async function create(argv: readonly string[]): Promise<number> {
   }
 }
 
+const TRAIN_VALUE_FLAGS = ["root", "area", "mode", "max-usd", "model"] as const;
+
 async function train(argv: readonly string[]): Promise<number> {
-  if (!argv.includes("--print-prompt")) {
-    process.stderr.write(
-      "tldrx expert train: running training is v1.1 — use --print-prompt to get the prompt to paste\n",
-    );
-    return EXIT_NOT_IMPLEMENTED;
+  let args: ParsedArgs;
+  try {
+    args = parseArgs(argv, [...TRAIN_VALUE_FLAGS]);
+  } catch (error) {
+    process.stderr.write(`tldrx expert train: ${message(error)}\n`);
+    return EXIT_FAILED;
   }
 
-  const name = positional(argv);
-  const areaId = option(argv, "--area");
-  if (name === null || areaId === null) {
+  const name = args.positionals[0];
+  const areaId = stringFlag(args, "area");
+  if (name === undefined || areaId === undefined) {
     process.stderr.write(`tldrx expert train: a name and --area are required\n${USAGE}\n`);
     return EXIT_FAILED;
   }
-  const modeArg = option(argv, "--mode") ?? "light";
-  if (!isTrainMode(modeArg)) {
+  const modeArg = stringFlag(args, "mode") ?? "light";
+  if (!isTrainingMode(modeArg)) {
     process.stderr.write(`tldrx expert train: --mode must be light or full, got '${modeArg}'\n`);
     return EXIT_FAILED;
   }
 
-  const root = resolveWorkspaceRoot(option(argv, "--root"));
+  const root = resolveWorkspaceRoot(stringFlag(args, "root") ?? null);
   const expert = loadExpert(root, name);
   if (expert.error !== null) {
     process.stderr.write(`tldrx expert train: ${name}: ${expert.error}\n`);
@@ -111,14 +125,69 @@ async function train(argv: readonly string[]): Promise<number> {
     return EXIT_FAILED;
   }
 
-  process.stdout.write(renderTrainPrompt({
-    expert,
-    document: readExpertDocument(root, name),
-    area,
+  // `--print-prompt` is the v0 behaviour, kept byte-identical: print and spawn
+  // nothing. It is not a dry run of the real path — it is the prompt a human
+  // pastes into their own session.
+  if (boolFlag(args, "print-prompt")) {
+    process.stdout.write(renderTrainPrompt({
+      expert,
+      document: readExpertDocument(root, name),
+      area,
+      mode: modeArg,
+      repos: await repos(root),
+    }));
+    return EXIT_OK;
+  }
+
+  let runMode: TrainingRunMode;
+  try {
+    runMode = resolveRunMode(boolFlag(args, "prepare"), boolFlag(args, "commit"));
+  } catch (error) {
+    process.stderr.write(`tldrx expert train: ${message(error)}\n`);
+    return EXIT_FAILED;
+  }
+
+  let maxUsd: number | undefined;
+  try {
+    maxUsd = numberFlag(args, "max-usd");
+  } catch (error) {
+    process.stderr.write(`tldrx expert train: ${message(error)}\n`);
+    return EXIT_FAILED;
+  }
+
+  const outcome = await runTraining({
+    root,
+    expert: name,
+    area: areaId,
     mode: modeArg,
-    repos: await repos(root),
-  }));
-  return EXIT_OK;
+    run: runMode,
+    maxUsd,
+    model: stringFlag(args, "model") ?? null,
+    yolo: boolFlag(args, "yolo"),
+    actor: currentActor(),
+    at: nowRfc3339(),
+  });
+
+  const text = `${outcome.lines.join("\n")}\n`;
+  if (outcome.code === EXIT_OK) process.stdout.write(text);
+  else process.stderr.write(prefix(text));
+  return outcome.code;
+}
+
+function resolveRunMode(prepare: boolean, commit: boolean): TrainingRunMode {
+  if (prepare && commit) {
+    throw new UsageError("--prepare and --commit are two halves of one handshake, not both at once");
+  }
+  if (prepare) return "prepare";
+  if (commit) return "commit";
+  return "headless";
+}
+
+function prefix(text: string): string {
+  return text
+    .split("\n")
+    .map((line, i) => (line === "" ? line : i === 0 ? `tldrx expert train: ${line}` : `  ${line}`))
+    .join("\n");
 }
 
 async function repos(root: string): Promise<readonly TrainRepo[]> {

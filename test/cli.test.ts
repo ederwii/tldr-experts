@@ -3,8 +3,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { COMMANDS, lookup } from "../src/cli/index.ts";
-import { EXIT_NOT_IMPLEMENTED, EXIT_OK } from "../src/cli/exitCodes.ts";
+import { EXIT_FAILED, EXIT_NOT_IMPLEMENTED, EXIT_OK } from "../src/cli/exitCodes.ts";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
+import { noSpawnEnv } from "./fixtures/noSpawnPath.ts";
 
 const BIN = join(FRAMEWORK_ROOT, "bin", "tldrx.ts");
 
@@ -15,7 +16,7 @@ interface Run {
 }
 
 async function tldrxIn(cwd: string, ...args: string[]): Promise<Run> {
-  const proc = Bun.spawn(["bun", BIN, ...args], { stdout: "pipe", stderr: "pipe", cwd });
+  const proc = Bun.spawn(["bun", BIN, ...args], { stdout: "pipe", stderr: "pipe", cwd, env: noSpawnEnv() });
   const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
@@ -92,9 +93,12 @@ describe("stub commands", () => {
 
   // `expert train` without --print-prompt is a v1.1 stub by design (spec §6),
   // so it is the stable example of a subcommand that exits 64.
+  // `expert train` is implemented since wave 7, so this checks the message
+  // PREFIX on the error it now gives for an expert that does not exist — the
+  // property this test has always been about.
   test("a subcommand is named in the notice", async () => {
     const run = await tldrx("expert", "train", "foo", "--area", "bar");
-    expect(run.code).toBe(EXIT_NOT_IMPLEMENTED);
+    expect(run.code).toBe(EXIT_FAILED);
     expect(run.stderr.trim().startsWith("tldrx expert train:")).toBe(true);
   });
 

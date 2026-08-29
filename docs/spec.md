@@ -318,7 +318,53 @@ areas:
 180 d ⇒ `level = min(level, 2)`. **Distinct-source cap:** `level ≤ count(distinct src)`.
 
 **Validation.** `level` equals the formula output (recomputed at write; mismatch rejected); every `src` matches the
-grammar; ≤60 areas, ≤50 evidence items per area.
+grammar; ≤60 areas, ≤50 evidence items per area. Every area's level is recomputed on **every** write, not only the
+trained one — that is what makes a hand-edited number temporary.
+
+**Where evidence comes from.** Only `tldrx expert train` writes it, and it is DERIVED from a knowledge file's
+citations rather than asserted by the sub-agent that wrote them:
+
+| Kind | Written when | `src` |
+|---|---|---|
+| `code` | the knowledge file cites a line in a repo | the FIRST citation of that file, `repo:path:line` — one row per distinct **file**, so twelve readings of one file are worth one row and the §2.6 distinct-source cap stays meaningful |
+| `run` | `from-runs-<area>.md` cites a past run's handoff or retro | `tldrx-work/<run>/<file>:<line>` |
+| `answer` | either file cites a recorded fact | `F<n>` |
+| `doc` | the knowledge file cites an `https://` URL | the URL |
+
+`absent:` sources are legal in a knowledge file and produce **no** evidence: "I looked here and there is nothing" is a
+finding, not a measurement. A knowledge file is accepted or rejected **whole** — one unsourced item, or one cited line
+past the end of its file, and nothing is written: no evidence, no level change, no status change, and the file is moved
+to `<area>.rejected.md` so it cannot be mistaken for accepted knowledge.
+
+### 2.6.1 `.tldrx/experts/<name>/training.jsonl`
+
+The cost and provenance ledger of every training run, append-only, one JSON object per line. `[assumption]` — §2.9's
+`events.jsonl` is **run-scoped** (its envelope requires a `run` id, it lives inside `tldrx-work/<run>/`, and `run
+status` / `replay` / `retro` / the dashboard all read it as one run's history). Training belongs to an EXPERT and
+outlives every run, so it gets its own file beside the expert, with §2.9's exact envelope shape — seven keys, closed
+`type` set, append enforced by comparing file byte length before and after — and `run` replaced by `expert`, `stage` by
+`area`.
+
+```json
+{"ts":"2026-09-01T12:00:00Z","expert":"dotnet-stack","area":"ef-core","type":"agent.result","actor":"alan","cost_usd":1.02,"payload":{"task":"code","mode":"light","model":"sonnet","session_id":"…","max_budget_usd":2.00,"outputs":["knowledge/ef-core.md"],"usage":{"input_tokens":184203,"output_tokens":9114},"ok":true}}
+{"ts":"2026-09-01T12:00:00Z","expert":"dotnet-stack","area":"ef-core","type":"check.passed","actor":"alan","cost_usd":0,"payload":{"mode":"light","evidence_added":7,"evidence_total":7,"level_before":0,"level_after":3,"cost_usd":1.02}}
+```
+
+`type` ∈ `agent.spawned` `agent.result` `check.passed` `check.failed`. A run that is REFUSED still writes its
+`agent.result`: money spent is recorded whether or not the knowledge was kept (spec §5, "never rolls back cost").
+
+**`--max-budget-usd` is a stop, not a cap — measured.** Pilot smoke, 2026-08-29,
+`tldrx expert train typescript-stack --area typescript --mode light --max-usd 1.5` over
+mobile + scavtopia-lab: the sub-agent was killed with `subtype: error_max_budget_usd`,
+`errors: ["Reached maximum budget ($1.5)"]` — after `total_cost_usd: 5.15325` on a single
+turn (`num_turns: 1`, 597 s, 105,698 cache-creation + 60,548 output tokens on a 1M-context
+model). The flag ends the run once a turn's cost is known; it cannot end a turn already in
+flight, so on a large-context model the realised spend can exceed the ceiling several times
+over. Size a training prompt for the money you are willing to lose, not the ceiling you
+passed. The run itself behaved correctly: a non-zero `claude` exit is a failed run, so
+nothing reached `competencies.yml`, the ledger recorded the $5.15, and the knowledge file
+the agent had already written was quarantined rather than left where an accepted one lives
+(it would in fact have validated — 111 sourced items, 21 distinct files, level 5).
 
 ### 2.7 `tldrx-work/<run>/<phase>/questions.md`
 
@@ -756,7 +802,7 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx map --check` | `map/**` citations, filesystem | `cache/map-drift.json` (stdout report) | 0,1 |
 | `tldrx expert list` | `experts/*/competencies.yml` | nothing (stdout star chart) | 0 |
 | `tldrx expert create <name>` | `workspace.yml`, `map/**` | `experts/<name>/{expert.md,competencies.yml}` | 0,1 |
-| `tldrx expert train <name> [--area <a>] [--mode light\|full]` | `expert.md`, repo code, past runs | `knowledge/*.md`, `competencies.yml`, `events.jsonl` | 0,1,5 |
+| `tldrx expert train <name> --area <a> [--mode light\|full] [--max-usd <n>] [--model <m>] [--prepare\|--commit] [--print-prompt]` | `expert.md`, `competencies.yml`, `map/<repo>/domains.md`, `graphify-out/<repo>/graph.json`, repo code, `tldrx-work/**/{handoff,retro}.md`, `facts.yml` | `knowledge/<area>.md` (+ `knowledge/from-runs-<area>.md` in full mode), `competencies.yml`, `training.jsonl` (§2.6.1) | 0,1,2,3,5 |
 | `tldrx dashboard [--static]` | `tldrx-work/**`, `.tldrx/**` (watch) | nothing, or `dist/` with `--static` | 0,1 |
 | `tldrx watch list [--run <id>]` | `05-watch/watchers/*.md`, `workspace.yml` | nothing (stdout table) | 0,1,3 |
 | `tldrx watch check <feature>` | one card, the files it cites | nothing (stdout report) | 0,1,3 |

@@ -8,7 +8,8 @@ import {
 } from "../src/core/experts/index.ts";
 import { parseYaml } from "../src/core/yaml.ts";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
-import { EXIT_FAILED, EXIT_NOT_IMPLEMENTED, EXIT_OK } from "../src/cli/exitCodes.ts";
+import { noSpawnEnv } from "./fixtures/noSpawnPath.ts";
+import { EXIT_FAILED, EXIT_GATE_REFUSED, EXIT_OK } from "../src/cli/exitCodes.ts";
 import { makeViewsWorkspace, VIEWS_FIXTURE, VIEWS_NOW } from "./fixtures/views/tempViews.ts";
 
 const BIN = join(FRAMEWORK_ROOT, "bin", "tldrx.ts");
@@ -21,7 +22,7 @@ interface Run {
 }
 
 async function tldrx(...args: string[]): Promise<Run> {
-  const proc = Bun.spawn(["bun", BIN, ...args], { stdout: "pipe", stderr: "pipe", cwd: FRAMEWORK_ROOT });
+  const proc = Bun.spawn(["bun", BIN, ...args], { stdout: "pipe", stderr: "pipe", cwd: FRAMEWORK_ROOT, env: noSpawnEnv() });
   const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
@@ -256,11 +257,24 @@ describe("expert train --print-prompt", () => {
     expect(run.stdout).toContain("# Train `dotnet-stack` — area `ef-core` (light mode)");
   });
 
-  test("without --print-prompt it stays a stub and says v1.1", async () => {
-    const run = await tldrx("expert", "train", "dotnet-stack", "--area", "ef-core", "--root", VIEWS_FIXTURE);
-    expect(run.code).toBe(EXIT_NOT_IMPLEMENTED);
-    expect(run.stderr).toContain("v1.1");
+  // Without `--print-prompt`, training RUNS (wave 7). This asserts it through the
+  // ONE door that reaches a decision before any file is read and before anything
+  // is spawned — the budget floor — so the suite can never buy a real sub-agent.
+  test("without --print-prompt it runs, and the budget floor refuses below $0.25", async () => {
+    const run = await tldrx(
+      "expert", "train", "dotnet-stack", "--area", "ef-core", "--max-usd", "0.10", "--root", VIEWS_FIXTURE,
+    );
+    expect(run.code).toBe(EXIT_GATE_REFUSED);
+    expect(run.stderr).toContain("floor");
     expect(run.stdout).toBe("");
+  });
+
+  test("--prepare and --commit are refused together", async () => {
+    const run = await tldrx(
+      "expert", "train", "dotnet-stack", "--area", "ef-core", "--prepare", "--commit", "--root", VIEWS_FIXTURE,
+    );
+    expect(run.code).toBe(EXIT_FAILED);
+    expect(run.stderr).toContain("two halves of one handshake");
   });
 
   test("an unknown area is an error that lists the known ones", async () => {
