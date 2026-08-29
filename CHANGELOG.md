@@ -85,6 +85,47 @@ the knowledge was kept.
 change: it already recomputes levels from evidence, so the star chart moves the
 moment `competencies.yml` does.
 
+### Claude Code integration without the plugin
+
+- **`tldrx install --claude`** writes the facilitator into a real `.claude/` —
+  `--project` (default, refuses outside a git repo) or `--user`. It copies
+  `plugin/skills/tldrx/SKILL.md` to `.claude/skills/tldrx/SKILL.md` with
+  `disable-model-invocation: true` intact and a `<!-- tldrx-managed -->` marker, and
+  **merges** into `.claude/settings.json`: the six hooks as eight handlers on four
+  events (the same matchers and timeouts as `plugin/hooks/hooks.json`, each command
+  `tldrx hook <name>`) plus `statusLine: {type: "command", command: "tldrx statusline"}`.
+- **It is idempotent and reversible.** A second run leaves `settings.json` and
+  `SKILL.md` byte-identical; `--uninstall` removes exactly the entries it added and
+  restores the file byte-for-byte. `settings.json` is copied to
+  `settings.json.bak-tldrx-<ts>` before the first write, and a same-second second
+  backup gets a suffix rather than overwriting the first.
+- **It refuses rather than clobbers.** A `SKILL.md` without the marker is somebody
+  else's (exit `1`, nothing written). A `statusLine` that is not ours is left alone
+  and the command prints how to chain the two — `--force-statusline` is the
+  override. `permissions` is never touched, and no entry we did not write is edited.
+  Flags: `--skill-only` `--no-hooks` `--no-statusline` `--dry-run`.
+- **`tldrx hook <name>` and `tldrx statusline`** run one hook script —
+  `dist/hooks/<name>.js` when tldrx is running from `dist/`, `src/hooks/<name>.ts`
+  in a source checkout — passing stdin, stdout, stderr and the exit code through
+  unchanged. That is what lets a *committed* `settings.json` name a hook without an
+  absolute path. The plugin deliberately keeps `${CLAUDE_PLUGIN_ROOT}`, because it
+  has to work for someone who cloned the repo and installed nothing; both forms are
+  documented.
+
+### The Interview step, in a terminal
+
+- **`tldrx interview`** walks the open questions of the cursor phase's
+  `questions.md` (or `.tldrx/init-questions.md` with `--init`), showing each one's
+  `Why asked:` line and options, and reads a letter `A`–`E`, free text, `s` to skip
+  or `q` to stop. Every answer is recorded through the **same** `src/core/answers/`
+  path as `tldrx answer` and the `answer-capture` hook — footer, `facts.yml` row,
+  `question.answered` + `fact.added` — so the channel is interchangeable and the
+  record is not (spec §7: the questions file is the contract, not the channel).
+- **It never answers for you.** End of input, `s` and `q` all leave the question
+  `status: open`, and a letter the question does not offer is reported and skipped
+  rather than recorded as the literal letter. `--yes-to-defaults` takes option A.
+  Piped stdin works, one answer per line.
+
 ### Packaging
 
 - **Package name stays `tldr-experts`**; it now installs two commands, `tldrx` and `tldr-experts`. (Unscoped `tldrx` as a package name is refused by npm's similarity rule; 0.0.1–0.2.0 were unpublished on 2026-08-29 and their numbers can never be reused, so this is the first version back on the registry.)

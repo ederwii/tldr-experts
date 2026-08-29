@@ -8,6 +8,30 @@ claude --plugin-dir ./plugin
 
 Then type `/tldrx:tldrx`. (Plugin skills are always namespaced `/<plugin>:<skill>`.)
 
+## Or install it, and skip the flag
+
+`--plugin-dir` lasts one session and needs this checkout. For a project or a
+machine that should just have it:
+
+```bash
+tldrx install --claude          # ./.claude/   (this project; needs a git repo)
+tldrx install --claude --user   # ~/.claude/   (this machine)
+```
+
+That writes the same skill and the same six hooks into a real `.claude/`, plus the
+status line this plugin cannot install (see below). It is idempotent, it never
+touches `permissions`, and `--uninstall` takes exactly it back out. The README's
+[Claude Code integration](../README.md#claude-code-integration) section has the
+settings fragment it writes.
+
+**The two wirings differ in one thing only: how a hook is named.** The plugin
+spawns `bun ${CLAUDE_PLUGIN_ROOT}/../src/hooks/<name>.ts`, and it keeps doing that
+on purpose — a plugin must work for someone who cloned the repo and installed
+nothing, so it cannot depend on a global `tldrx`. The installed `settings.json`
+uses `tldrx hook <name>` instead, because that file gets committed and cloned onto
+a machine whose checkout is somewhere else, where an absolute path is simply wrong.
+Same scripts, same matchers, same timeouts, same decisions.
+
 ## What is wired
 
 | Path | What it is |
@@ -55,8 +79,11 @@ each one:
 
 `statusLine` is a **settings key**, not a hook event, and a plugin's own
 `settings.json` supports only `agent` and `subagentStatusLine` — so the plugin
-cannot install it for you. Add this to your `~/.claude/settings.json` or the
-project's `.claude/settings.json` yourself:
+cannot install it for you. `tldrx install --claude` can, because it writes the real
+settings file; it puts in `{"type": "command", "command": "tldrx statusline"}`, and
+leaves any status line that is not tldrx's alone. If you are loading the plugin
+instead, add this to your `~/.claude/settings.json` or the project's
+`.claude/settings.json` yourself:
 
 ```json
 {
