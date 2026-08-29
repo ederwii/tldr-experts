@@ -1,0 +1,67 @@
+# A REAL `competencies.yml`, copied verbatim from a user's workspace on 2026-08-29
+# (only this header added). It is the file that made the case for the run gate:
+# 15 `code` + 2 `test` rows, every one written the same afternoon by a single
+# reading session, no command ever executed — and the old ladder computed 5/5.
+# The stored `level: 5` below is left exactly as it was found; readers recompute.
+# Written by `tldrx init` (spec §2.6). `level` is computed, never hand-set.
+version: 1
+expert: aparece-api
+status: trained
+last_trained: 2026-08-29T20:03:35Z
+areas:
+  - id: aparece-api
+    title: The aparece-api domain in aparece-v2
+    level: 5
+    train_prompt: tldrx expert train aparece-api --area aparece-api --mode light
+    evidence:
+      - kind: code
+        src: aparece-v2:src/Aparece.Api/Program.cs:12
+        at: 2026-08-29T20:03:35Z
+      - kind: code
+        src: aparece-v2:src/Aparece.Api/Composition/ApareceApiBuilderExtensions.cs:39
+        at: 2026-08-29T20:03:35Z
+      - kind: code
+        src: aparece-v2:src/Aparece.Api/Composition/ApareceApiApplicationExtensions.cs:22
+        at: 2026-08-29T20:03:35Z
+      - kind: code
+        src: aparece-v2:src/Aparece.Api/Composition/ApareceApiBuilderExtensions.cs:63
+        at: 2026-08-29T20:03:35Z
+      - kind: test
+        src: aparece-v2:tests/Integration/Aparece.IntegrationTests/Api/Authorization/PermissionAuthorizationTests.cs:26
+        at: 2026-08-29T20:03:35Z
+      - kind: code
+        src: aparece-v2:src/Aparece.Api/Security/Authorization/PermissionPolicyProvider.cs:35
+        at: 2026-08-29T20:03:35Z
+      - kind: code
+        src: aparece-v2:src/Aparece.Api/Security/Authorization/PermissionAuthorizationHandler.cs:28
+        at: 2026-08-29T20:03:35Z
+      - kind: code
+        src: aparece-v2:src/Aparece.Api/Security/Authorization/RouteValueBusinessContextAccessor.cs:20
+        at: 2026-08-29T20:03:35Z
+      - kind: code
+        src: aparece-v2:src/Modules/Identity/Aparece.Modules.Identity.Infrastructure/IdentityModuleServiceCollectionExtensions.cs:23
+        at: 2026-08-29T20:03:35Z
+      - kind: code
+        src: aparece-v2:src/Aparece.Api/Security/JwtBearerOptionsSetup.cs:33
+        at: 2026-08-29T20:03:35Z
+      - kind: code
+        src: aparece-v2:src/Aparece.Api/Security/ApareceJwtBearerEvents.cs:57
+        at: 2026-08-29T20:03:35Z
+      - kind: test
+        src: aparece-v2:tests/Unit/Aparece.UnitTests/Api/Security/RoutingAwareAuthorizationResultHandlerTests.cs:27
+        at: 2026-08-29T20:03:35Z
+      - kind: code
+        src: aparece-v2:src/Aparece.Api/Composition/ApareceApiApplicationExtensions.cs:43
+        at: 2026-08-29T20:03:35Z
+      - kind: code
+        src: aparece-v2:src/Aparece.Api/Security/HttpContextCurrentUser.cs:28
+        at: 2026-08-29T20:03:35Z
+      - kind: code
+        src: aparece-v2:src/Aparece.Api/Aparece.Api.csproj:21
+        at: 2026-08-29T20:03:35Z
+      - kind: code
+        src: aparece-v2:src/Aparece.Api/appsettings.json:11
+        at: 2026-08-29T20:03:35Z
+      - kind: code
+        src: aparece-v2:src/Aparece.Api/Security/Authorization/PermissionPolicy.cs:29
+        at: 2026-08-29T20:03:35Z

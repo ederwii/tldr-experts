@@ -330,8 +330,35 @@ areas:
 
 **Level formula** (deterministic, integer table). Per evidence item aged `d` days: `recency = 1.0 (d≤30) · 0.6 (≤90) ·
 0.3 (≤365) · 0.1 (else)`; `weight = code 1.0 · run 1.0 · test 1.0 · answer 0.8 · doc 0.5`; `W = Σ recency·weight`.
-`level = 0 if W<0.5 · 1 if <1.5 · 2 if <3 · 3 if <6 · 4 if <12 · else 5`. **Staleness cap:** newest evidence older than
-180 d ⇒ `level = min(level, 2)`. **Distinct-source cap:** `level ≤ count(distinct src)`.
+
+The five steps run **in this order**, and the order is part of the rule:
+
+1. **Thresholds.** `level = 0 if W<0.5 · 1 if <1.5 · 2 if <3 · 3 if <6 · 4 if <20 · else 5`.
+2. **Staleness cap.** Newest evidence older than 180 d ⇒ `level = min(level, 2)`.
+3. **Run cap.** No `kind: run` row in the area ⇒ `level = min(level, 3)`.
+4. **Top-rung kinds check.** `level == 5` with fewer than 2 distinct `kind` values ⇒ `level = 4`.
+5. **Distinct-source cap.** `level ≤ count(distinct src)`.
+
+**Why the top two rungs are gated on a measurement.** Reading a file is evidence that code SAYS something; running a
+command is evidence that it DOES it. Measured 2026-08-29 on a real workspace: `aparece-api` held 15 `code` + 2 `test`
+rows, every one written the same afternoon by one reading session, nothing ever executed — and the ladder as it then
+stood computed **5/5**, the top of the chart, for an expert that had never run a thing in the repo it spoke for. So
+level 4 now requires at least one `run` row — a command actually executed, cited with the §2.8 `cmd` production
+`$ <cmd> → exit <n>` — and level 5 requires, on top of that, a body of work broad enough to span two evidence kinds
+and heavy enough to clear `W ≥ 20` (the fifth threshold, raised from 12 for the same reason: at 12 one afternoon of
+reading reached the ceiling).
+
+Worked example, all evidence fresh (recency 1.0), all `src` distinct:
+
+| Evidence | W | Thresholds | Stale? | Run cap | Kinds | Sources | **Level** |
+|---|---|---|---|---|---|---|---|
+| 15 `code` + 2 `test` | 17.0 | 4 | no | → **3** | 2 | 17 | **3** |
+| … plus one `run` (`$ dotnet test → exit 0`) | 18.0 | 4 | no | passes | 3 | 18 | **4** |
+| … plus one fresh `doc` and two more files read | 20.5 | 5 | no | passes | 4 | 21 | **5** |
+
+`run` is necessary, not sufficient: one `run` row alone is `W = 1.0`, which is level 1. And the caps still outrank it —
+a set whose newest row is 400 d old is 2 however many commands it ran, and 25 readings of one line plus one `run` is
+two distinct sources, so level 2.
 
 **Validation.** `level` equals the formula output (recomputed at write; mismatch rejected); every `src` matches the
 grammar; ≤60 areas, ≤50 evidence items per area. Every area's level is recomputed on **every** write, not only the
@@ -350,7 +377,7 @@ citations rather than asserted by the sub-agent that wrote them:
 | Kind | Written when | `src` |
 |---|---|---|
 | `code` | the knowledge file cites a line in a repo | the FIRST citation of that file, `repo:path:line` — one row per distinct **file**, so twelve readings of one file are worth one row and the §2.6 distinct-source cap stays meaningful |
-| `run` | `from-runs-<area>.md` cites a past run's handoff or retro | `tldrx-work/<run>/<file>:<line>` |
+| `run` | `from-runs-<area>.md` cites a past run's handoff or retro, or a knowledge file cites a command that was executed | `tldrx-work/<run>/<file>:<line>`, or `$ <cmd> → exit <n>` — one row per command, exit code included |
 | `test` | a knowledge file cites a test that was read or run | `repo:path:line`, or `$ cmd → exit n` for a test run |
 | `answer` | either file cites a recorded fact | `F<n>` |
 | `doc` | the knowledge file cites an `https://` URL | the URL |

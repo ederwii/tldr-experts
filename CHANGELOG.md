@@ -2,6 +2,23 @@
 
 ## 0.3.0 — unreleased
 
+### Stars are earned by measuring, not only by reading
+
+- **Level ladder: ≥4 needs a `run` evidence row, 5 needs two kinds + 20 weighted
+  (fifth threshold 12 → 20).** Measured 2026-08-29 on a real workspace: an expert
+  holding 15 `code` + 2 `test` rows — all written the same afternoon by one reading
+  session, no command ever executed — computed **5/5**. Reading is evidence that code
+  says something; only a run is evidence that it does it. The §2.6 formula now applies
+  five steps in a fixed order: thresholds `[0.5, 1.5, 3, 6, 20]` → staleness cap (≤2
+  when the newest row is over 180 d) → **run cap** (≤3 when the area has no `kind: run`
+  row) → **top-rung kinds check** (level 5 needs ≥2 distinct kinds, else 4) → distinct-
+  source cap. A `run` row is necessary, not sufficient: one alone is `W = 1.0`, level 1.
+  **Experts trained by reading alone now cap at 3; run `tldrx expert recompute` to see
+  the new levels.** The `--print-prompt` training prompt now says so and gives the row
+  shape for a command — `{kind: run, src: "$ <cmd> → exit <n>", at: …}`, one row per
+  command with its exit code. The headless light-mode prompt says the opposite, and
+  honestly: it is a reading task that may not run anything, so it tops out at 3.
+
 ### Three bugs an in-session training walked into
 
 All three were measured on a real workspace (2026-08-29) before they were fixed,

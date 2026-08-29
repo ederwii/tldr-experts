@@ -126,6 +126,9 @@ when a stage's `stage.yml` names it.
 - *Areas of expertise*: `competencies.yml` entries (e.g. `oauth`, `google-maps-sdk`).
   Level is **computed** from evidence count + recency, never self-declared. Star chart =
   this file rendered. Each area exposes a copy-paste "train me on X" prompt.
+  The top two rungs are earned by measuring, not only by reading: without a `run` row —
+  a command actually executed — an area caps at 3, and 5 additionally needs two evidence
+  kinds and `W ≥ 20` (spec §2.6).
 - *Stack expertise* (from install) is shared by every expert by default.
 
 ## 7. Facilitator and agents

@@ -75,6 +75,9 @@ export function renderTrainPrompt(input: TrainPromptInput): string {
     "- `kind` is one of these five. Anything else is dropped when the file is read,",
     "  and the level drops with it:",
     ...EVIDENCE_KINDS.map((kind) => `  - \`${kind}\` — ${EVIDENCE_KIND_MEANINGS[kind]}`),
+    "- Stars: without a `run` row the level caps at 3; level 5 needs two kinds and 20 weighted.",
+    "  Record every command you actually execute as `{kind: run, src: \"$ <cmd> → exit <n>\", at: …}`"
+      + " — build, tests, a script; one row per command, exit code included.",
     `- When the evidence is written, run \`tldrx expert recompute ${expert.name}\`. \`level\` only moves`,
     "  when something writes it, and this session is not that something — without it the file",
     "  keeps the old number and every reader warns about the disagreement.",
