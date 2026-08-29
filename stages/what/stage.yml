@@ -38,9 +38,12 @@ outputs:
   - "handoff.md"
   - "questions.md"
 
+# `domain` used to be listed here and was never an expert NAME — a `kind: domain`
+# expert is picked by the paths this run cites (spec §2.3, rule 3), which a stage
+# file written once for every workspace cannot know. Rules 2 and 3 still apply to
+# this stage; only the placeholder is gone.
 experts:
   - product
-  - domain
 
 gate:
   type: human-approval

@@ -4,15 +4,21 @@
  * Written once at init and then owned by the team — `init` re-runs never
  * overwrite it. The body says what this expert may cite, because an expert that
  * cites a variable name as evidence of behaviour is worse than no expert.
+ *
+ * ROLE experts do not normally come through here: `seedExperts` renders them from
+ * `templates/experts/<role>.md` so a team can edit the prose that ships. This is
+ * their fallback, for a role slug with no template file — a generic body is a
+ * worse expert than the shipped one, but it is a great deal better than a stage
+ * that loads nothing.
  */
 import type { ExpertPlan } from "./planExperts.ts";
 
 export function renderExpert(plan: ExpertPlan, createdAt: string): string {
   const scope = plan.kind === "stack"
     ? `the ${plan.name.replace(/-stack$/, "")} stack across ${plan.repos.join(", ")}`
-    : plan.kind === "product"
-      ? `the product itself — what ${plan.repos.join(", ")} is for, who uses it, `
-        + "and what counts as done"
+    : plan.kind === "role"
+      ? `the \`${plan.name}\` role across ${plan.repos.join(", ")} — the stage that names it, `
+        + "what it is accountable for, and what it must refuse"
       : `the \`${plan.folders.join("`, `")}\` area of ${plan.repos.join(", ")}`;
 
   return [

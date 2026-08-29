@@ -238,11 +238,17 @@ flag as a top-level `seed: true` beside an array `inputs:`; the loader accepts b
 appear in the prompt:
 
 1. **`experts:`** — every name in the list that has a folder. A name with no `.tldrx/experts/<name>/` is **reported**
-   (`expert <name> — NOT LOADED: no .tldrx/experts/<name>/ in this workspace`), not skipped in silence. This matters
-   because the SHIPPED stage files name `domain`, `stack`, `architect`, `delivery`, `operations` and `developer`, and
-   `tldrx init` seeds none of those: it seeds `product`, `<language>-stack`, and one expert per detected source folder
-   (`src/core/init/planExperts.ts`). Measured 2026-08-29 on a fixture: the What stage's `experts: [product, domain]`
-   loaded one of the two and said nothing about the other.
+   (`expert <name> — NOT LOADED: no .tldrx/experts/<name>/ in this workspace`), not skipped in silence. This mattered
+   because the SHIPPED stage files named `domain`, `stack`, `architect`, `delivery`, `operations` and `developer` and
+   `tldrx init` seeded none but `product`. Measured 2026-08-29 on a fixture: the What stage's `experts: [product,
+   domain]` loaded one of the two and said nothing about the other; and on `~/aparece-v2`, a real workspace,
+   `architect`, `delivery`, `developer` and `operations` had no folder at all. Both halves of that gap are closed —
+   `init` seeds the five **role experts** (below), and `domain`/`stack` are retired from the shipped lists. The two
+   retired names are still ACCEPTED in a forked or older stage file: they are ignored with one note,
+   `experts: domain/stack are selected by rule, not by name`, rather than reported missing on every run — a
+   NOT LOADED line an operator sees every time is a line they stop reading, and it is the line that matters when a
+   real name is misspelled. A workspace that really does have a `.tldrx/experts/domain/` folder loads it by name; only
+   a name with no folder can be legacy (`src/core/experts/selectExperts.ts`, `LEGACY_STAGE_EXPERTS`).
 2. **`stack_experts: true`** — `<language>-stack` for each language of each repo in `run.repos`.
 3. **Domain match `[assumption]`** — an expert whose `expert.md` declares `kind: domain` and whose front-matter
    `repos:` intersects `run.repos`, **or** whose `## Domain` bullets name a path containing one of the run's cited
@@ -253,6 +259,40 @@ appear in the prompt:
 
 An expert is never loaded twice however many rules pick it, and the first rule that picks it owns the reason recorded
 in `pending.json`.
+
+**Role experts.** Five names, seeded unconditionally by `tldrx init` and named by rule 1 of the shipped stage files:
+
+| Expert | Stage(s) that name it | Its subject |
+|---|---|---|
+| `product` | what | the problem, the scope's OUT list, measurable success |
+| `architect` | how, plan | design placed on real files, contracts, risk |
+| `delivery` | plan | stories a stranger could start, dependency waves, budget |
+| `developer` | build | one story, its DoD, the evidence it leaves |
+| `operations` | watch | what a shipped feature emits, and its healthy baseline |
+
+A role expert's front matter is `kind: role`, which keeps it out of rule 3: a role loads because a stage NAMED it and
+for no other reason. Its subject is the WORKFLOW rather than a folder of code — what its stage is accountable for, what
+it must refuse, what it may cite, what it hands to the next stage — so its body is not generated from detection, which
+knows nothing about any of that. It ships as an editable Markdown file at **`templates/experts/<role>.md`** and is
+copied into `.tldrx/experts/<role>/expert.md` once; the front matter (`name`, `kind`, `created_by`, `created_at`,
+`repos`) and the H1 are filled in, and every other byte of the prose is left alone, on the first `init` and on every one
+after it. Editing the template changes what future workspaces get; editing the copy changes this one.
+
+Seeding is **additive and idempotent**. Each file is offered to `createIfAbsent` on its own, so a workspace seeded
+before role experts existed gains the missing folders on the next `init` and keeps every `expert.md` and
+`competencies.yml` it already had, byte-for-byte. `tldrx expert create <name> --role <slug>` writes the same seed on
+demand and is open-world: a slug the framework ships no template for falls back to the generic `templates/expert.md`
+with `kind: role`, and the CLI says which of the two it used.
+
+A seeded role expert gets ONE competency area at level 0 with no evidence, named for the role — except `product`, which
+keeps the area id `init` has always given it, the project's own slug, because it is the one role whose subject has a
+real name this workspace knows. That area's `train_prompt` says `--mode full`, and so does §2.6's, because **light mode
+is refused for a role expert** (exit 1, nothing spawned, nothing spent). Light mode's whole pre-pass is a keyword grep
+over the expert's repos seeded from the area id, which is right for `checkout` and wrong for `architect`: either
+nothing scores and one paid sub-agent writes four `absent:` sections that earn no evidence, or something scores because
+it contains the word. `--mode full` on a role expert runs the runs pass ALONE — one sub-agent, the whole ceiling as its
+share — over `tldrx-work/<run>/**/{handoff,retro}.md`, which IS a role's domain. Full mode with no matching run is
+refused the same way, for the same reason (`src/core/training/roleTraining.ts`).
 
 **`stage.md` required sections** (H2, in this order; concatenated into the sub-agent prompt): `## Role` ·
 `## Objective` (done-when, testable) · `## Inputs` (auto-rendered list — read nothing else) · `## Investigate` (ordered

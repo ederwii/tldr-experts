@@ -16,6 +16,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runInit, type InitOptions, type InitReport } from "../src/core/init/index.ts";
 import { parseStackFlag, normaliseStack } from "../src/core/init/stackChoices.ts";
+import { ROLE_EXPERTS } from "../src/core/experts/roleExperts.ts";
 import { isGreenfield, workspaceMode, countCodeFiles, SpawnCommandRunner } from "../src/core/detect/index.ts";
 import { createRun, NewRunError } from "../src/core/run/newRun.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
@@ -91,25 +92,26 @@ describe("tldrx init — greenfield workspace", () => {
     expect(readYaml(join(fixture.root, ".tldrx/workspace.yml")).mode).toBe("single-repo");
   });
 
-  test("seeds a product expert even with nothing to detect, and stack experts from --stack", async () => {
+  test("seeds the role experts even with nothing to detect, and stack experts from --stack", async () => {
     const fixture = await greenfield();
     const report = await init(fixture.root, { stack: ["typescript", "dotnet"] });
 
-    expect(report.experts.map((expert) => expert.name)).toEqual(["product", "typescript-stack", "dotnet-stack"]);
-    expect(report.experts[0]?.kind).toBe("product");
+    expect(report.experts.map((expert) => expert.name))
+      .toEqual([...ROLE_EXPERTS, "typescript-stack", "dotnet-stack"]);
+    expect(report.experts[0]?.kind).toBe("role");
 
     const product = readFileSync(join(fixture.root, ".tldrx/experts/product/expert.md"), "utf8");
-    expect(product).toContain("kind: product");
-    expect(product).toContain("the product itself");
+    expect(product).toContain("kind: role");
+    expect(product).toContain("product voice of this workspace");
 
     const competencies = readYaml(join(fixture.root, ".tldrx/experts/typescript-stack/competencies.yml"));
     expect((competencies.areas as { id: string; level: number }[])[0]).toMatchObject({ id: "typescript", level: 0 });
   });
 
-  test("without --stack the product expert is still seeded, alone", async () => {
+  test("without --stack the role experts are still seeded, alone", async () => {
     const fixture = await greenfield();
     const report = await init(fixture.root);
-    expect(report.experts.map((expert) => expert.name)).toEqual(["product"]);
+    expect(report.experts.map((expert) => expert.name)).toEqual([...ROLE_EXPERTS]);
   });
 
   test("the interview asks for the stack and the requirements document", async () => {
@@ -134,7 +136,7 @@ describe("tldrx init — greenfield workspace", () => {
     const report = await init(fixture.root, { stack: ["go"] });
     expect(report.questions.map((question) => question.question))
       .not.toContain("Which stack will this project use?");
-    expect(report.experts.map((expert) => expert.name)).toEqual(["product", "go-stack"]);
+    expect(report.experts.map((expert) => expert.name)).toEqual([...ROLE_EXPERTS, "go-stack"]);
   });
 
   test("a repo WITH code asks neither greenfield question", async () => {

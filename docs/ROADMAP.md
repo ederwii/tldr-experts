@@ -33,6 +33,11 @@ citation gate on the second attempt; both failures were framework bugs and are f
   written with provenance, competency levels recomputed from evidence (formula in spec §2.6).
 - Star chart from real evidence in the dashboard; "train me on X" prompts wired to it.
 - Stack expertise shared by every expert by default.
+- **Role experts** (shipped in 0.3.0): `init` seeds `product`, `architect`, `delivery`,
+  `developer`, `operations` — the names the shipped stage files name — with `kind: role` and
+  an editable body at `templates/experts/<role>.md`. Their domain is the workflow, so they
+  train with `--mode full` (past runs) and light mode is refused. The old `domain`/`stack`
+  placeholders are retired from stage `experts:` lists.
 
 ## Adapters (opt-in, files stay the source of truth) — ticket mirror shipped in 0.3.0; chat channel not started
 

@@ -12,9 +12,20 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { EXPERT_FILE, expertDir, loadExpert } from "./loadExperts.ts";
 import { selectExperts, type ExpertReason, type SelectExpertsInput } from "./selectExperts.ts";
+import type { ExpertRecord } from "./ExpertRecord.ts";
 import {
   byteLength, DEFAULT_EXPERT_KNOWLEDGE_BYTES, loadExpertKnowledge, type KnowledgeFileView,
 } from "./expertKnowledge.ts";
+
+/**
+ * What `--prepare` says when a stage file still names `domain` or `stack`.
+ *
+ * Deliberately not phrased as a warning: nothing is wrong and nothing was
+ * dropped. The stage asked for something by a name, and the answer is that the
+ * framework decides that one by rule instead.
+ */
+export const LEGACY_NOTE =
+  "experts: domain/stack are selected by rule, not by name";
 
 export interface ExpertBundle {
   readonly name: string;
@@ -42,6 +53,8 @@ export interface ExpertBundleSet {
   readonly missing: readonly string[];
   /** Domain experts that matched but fell past `MAX_DOMAIN_SELECTED`. */
   readonly overflow: readonly string[];
+  /** Retired placeholder names a stage file still lists (`LEGACY_STAGE_EXPERTS`). */
+  readonly legacy: readonly string[];
 }
 
 export interface LoadBundlesInput extends SelectExpertsInput {
@@ -76,15 +89,32 @@ export function loadExpertBundles(input: LoadBundlesInput): ExpertBundleSet {
       files: knowledge.files,
       truncated: knowledge.truncated,
       hasEvidence: record.areas.some((area) => area.evidence.length > 0),
-      trainPrompt: trainPromptFor(record.name, record.areas[0]?.id ?? null),
+      trainPrompt: trainPromptFor(record),
     });
   }
 
-  return { experts, missing: selection.missing, overflow: selection.overflow };
+  return {
+    experts,
+    missing: selection.missing,
+    overflow: selection.overflow,
+    legacy: selection.legacy,
+  };
 }
 
-function trainPromptFor(name: string, area: string | null): string | null {
-  return area === null ? null : `tldrx expert train ${name} --area ${area}`;
+/**
+ * The command the stderr nudge tells an operator to run.
+ *
+ * Taken from `competencies.yml`'s own `train_prompt` when the file has one,
+ * because that string already carries the `--mode` this area needs — `full` for a
+ * role expert, whose light mode is refused (`training/roleTraining.ts`). Composing
+ * one here would drop the mode and hand the operator a command that exits 1.
+ */
+function trainPromptFor(record: ExpertRecord): string | null {
+  const area = record.areas[0];
+  if (area === undefined) return null;
+  return area.trainPrompt !== ""
+    ? area.trainPrompt
+    : `tldrx expert train ${record.name} --area ${area.id}`;
 }
 
 /** One line per expert for `--prepare` / `--dry-run`, so the operator sees what was loaded. */
@@ -102,6 +132,11 @@ export function describeBundles(set: ExpertBundleSet): readonly string[] {
   }
   for (const name of set.missing) {
     lines.push(`expert ${name} — NOT LOADED: no .tldrx/experts/${name}/ in this workspace`);
+  }
+  // One line however many of the two a forked stage file lists: it is one fact
+  // about the stage file, not a complaint per name.
+  if (set.legacy.length > 0) {
+    lines.push(LEGACY_NOTE);
   }
   if (set.overflow.length > 0) {
     lines.push(`experts not loaded (past the domain cap): ${set.overflow.join(", ")}`);

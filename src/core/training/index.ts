@@ -33,5 +33,7 @@ export type { RecomputeExpertsOptions, RecomputedExpert } from "./recomputeExper
 export { TrainingLog, trainingLogPath, serializeTrainingEvent, validateTrainingEvent, TRAINING_EVENT_TYPES } from "./trainingLog.ts";
 export type { TrainingEvent, TrainingEventType } from "./trainingLog.ts";
 
+export { isRoleExpertOnDisk, lightModeRefusal, nothingToMineRefusal } from "./roleTraining.ts";
+
 export { runTraining, expertRepos, trainingCacheDir, setExpertStatus, TRAIN_TIMEOUT_MS } from "./runTraining.ts";
 export type { TrainOptions, TrainOutcome, TrainingRunMode } from "./runTraining.ts";
