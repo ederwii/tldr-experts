@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 — unreleased
+## 0.2.0 — 2026-08-29
 
 ### The Build phase executes
 
@@ -62,9 +62,6 @@ A stage's budget is split by the sub-agents an executor actually runs:
 `min(stage budget ÷ stories, per_agent_max_usd, --max-usd)` for a developer, a
 quarter of that share for its reviewer. The budget gate guards *starting* a stage,
 so a mid-pipeline `--prepare` cycle is not charged the whole estimate again.
-
-## 0.3.0 — unreleased
-
 ### `tldrx dashboard` — a live, read-only local server
 
 `dashboard` without `--static` used to exit `64`. It now serves.
@@ -136,6 +133,7 @@ refuses to answer it aspirationally.
   re-computes its status, and **exits 1 when either fails**, so CI can see it. It
   catches both ways a card rots: the code moved under a citation, or somebody
   hand-edited `draft` to `verified`.
+
 
 ## 0.1.0 — 2026-08-29
 
