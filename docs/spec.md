@@ -496,7 +496,7 @@ Append-only audit log: with `run.yml` the dashboard's only data source, the cost
 **Type enum:** `run.created` `run.closed` `phase.started` `phase.done` `stage.started` `stage.done` `stage.failed`
 `stage.skipped` `task.started` `task.done` `agent.spawned` `agent.result` `question.asked` `question.answered`
 `gate.requested` `gate.approved` `gate.rejected` `check.passed` `check.failed` `budget.warned` `budget.blocked`
-`fact.added` `fact.retired` `map.refreshed` `error`. Closed set: an unknown type is a validation error.
+`fact.added` `fact.retired` `map.refreshed` `ticket.synced` `error`. Closed set: an unknown type is a validation error.
 
 ```json
 {"ts":"2026-08-28T14:29:58Z","run":"260828-leaderboard","stage":"contracts","type":"agent.result","actor":"architect","cost_usd":2.61,"payload":{"phase":"02-how","task":"t1","session_id":"1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d","model":"sonnet","outputs":["02-how/contracts.md"],"usage":{"input_tokens":184203,"output_tokens":9114}}}
@@ -609,6 +609,22 @@ source: {who: alan, when: 2026-08-28T16:40:00Z, run: init, q: Q2}
 
 **Validation.** Enums; `sprint_length_days` required iff `methodology: scrum`; `ticket_tool.project` required unless
 `kind: none`; `approvers` non-empty.
+
+**`ticket_tool.sync`, in full** — this is the field `tldrx tickets` (§5.1) acts on, and it has exactly two values:
+
+| Value | Out | In | Never |
+|---|---|---|---|
+| `mirror-out` (default) | Creates/updates one remote issue per epic and story; writes `external:` into the file | nothing at all | — |
+| `two-way` | The same push | Reads each issue's status and writes it, VERBATIM, to `external_status:` | advances `run.yml`, changes `status:`, marks anything done |
+
+"Two-way" is a deliberate misnomer for what a reader might expect: the second direction is **one opaque string into one
+front-matter key**, and no more. `external_status: Done` and `status: todo` in the same file is a legal, expected state —
+`tldrx tickets status` is the command that shows you the pair, and it is your job, not the adapter's, to decide which is
+right. `ticket_tool.project` is the GitHub `owner/repo` or the Jira project key; `kind: none` means the adapter never
+runs, and an absent `process.yml` means the same thing.
+
+`ticket_tool.kind: linear` is in the enum and has **no adapter in this build** — `tldrx tickets sync` exits `1` and says
+so rather than silently doing nothing.
 
 ### 2.13 `tldrx-work/<run>/03-plan/stories/<id>.md`
 
@@ -832,6 +848,8 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx dashboard [--static]` | `tldrx-work/**`, `.tldrx/**` (watch) | nothing, or `dist/` with `--static` | 0,1 |
 | `tldrx watch list [--run <id>]` | `05-watch/watchers/*.md`, `workspace.yml` | nothing (stdout table) | 0,1,3 |
 | `tldrx watch check <feature>` | one card, the files it cites | nothing (stdout report) | 0,1,3 |
+| `tldrx tickets sync [--run <id>] [--dry-run] [--provider github\|jira]` | `process.yml`, `run.yml`, `03-plan/{epics,stories}/*.md` | `external:` + `external_status:` in those files, `events.jsonl` (`ticket.synced`), the remote issues | 0,1,3 |
+| `tldrx tickets status [--run <id>]` | the same files | nothing (stdout table) | 0,1,3 |
 | `tldrx replay <run>` | `events.jsonl`, handoffs | nothing (stdout narrative) | 0,3 |
 | `tldrx retro <run>` | `run.yml`, `events.jsonl`, handoffs | `retro.md`, `stages/proposed/**`, `practices.md` proposals | 0,3 |
 | `tldrx hook <name>` | stdin (the hook payload) | whatever the hook writes — stdout, stderr and the exit code are the script's, unchanged | the script's |
@@ -1025,6 +1043,59 @@ overwritten (stages are idempotent by contract). A task that failed mid-stage ma
 **Failure path.** `stage.failed` never advances the cursor and never rolls back cost — money spent is recorded. The
 operator's options are `next` (retry, re-spending), `reject --note` (send the stage back to `ready` with the note fed
 into the next prompt), or editing the stage inputs by hand and re-running.
+
+### 5.1 Ticket mirror (`tldrx tickets`)
+
+The optional adapter from the concept's v0.2 addendum. It is **not part of the facilitator loop** — it is a separate
+command a human runs, it appears in no `stage.yml`, and `tldrx next` never calls it. That separation is the design:
+the loop cannot come to depend on a tracker being reachable.
+
+**The two guard-rails, and where each is enforced.**
+
+1. **Files are the source of truth.** `03-plan/epics/*.md` and `03-plan/stories/*.md` are mirrored *out*; the only
+   thing that comes back *in* is each issue's own status string, written to `external_status:`. Enforced in
+   `src/core/adapters/types.ts`: a provider is exactly `write(input, key)` and `readStatus(key)`. There is no method
+   that returns a `PlanStatus`, so remote state has no shape it could take on the way to a story's `status:` field.
+2. **Filing a ticket is never "done".** `applyExternal` rebuilds the front matter from the original lines and
+   **throws** if the patch would move the `status:` line — the mirror can write `external:` and `external_status:` and
+   nothing else. `run.yml` is opened read-only (`RunStore.save()` is never called), so the cursor, the gate and the
+   budget are unreachable from this command. Only the DoD hook marks a story done.
+
+**`tldrx tickets sync [--run <id>] [--dry-run] [--provider github|jira]`**
+
+Provider defaults to `process.yml ticket_tool.kind`; `none` (or no `process.yml`) exits `0` with "adapter disabled".
+For each epic and then each story, in id order:
+
+1. **Render.** Title is `<id> · <title>`. Body is the title, the story's `acceptance`, its `test_plan` (an epic mirrors
+   its `stories:` list instead `[assumption]`), the run-relative path of the file it came from, and a footer line:
+   `managed by tldrx — edits here are not read back`. Regenerated every sync, which is why the footer says so.
+2. **Create or update.** `external:` absent (or written by a different provider `[assumption]`) ⇒ create; otherwise
+   update the stored key. **Idempotent**: a second sync creates nothing and re-uses the key.
+3. **Pull, in `two-way` only.** The issue's status string, verbatim, into `external_status:`.
+4. **Record.** `external: {provider, key, url, synced_at}` `[assumption: field name]` into the front matter, and one
+   `ticket.synced` event (§2.9) per item — `stage: null`, `cost_usd: 0`, since no model ran and a mirror is not a stage.
+
+`--dry-run` prints the same plan and makes **zero** transport calls. A missing credential is caught before `03-plan/` is
+read, so a failed preflight leaves nothing half-written.
+
+**Providers.** GitHub goes through the `gh` CLI (`issue create` / `issue edit` / `issue view --json state,url,number`),
+so the adapter never handles a token — `gh` already holds the user's auth, and `owner/repo` comes from
+`ticket_tool.project`. Jira goes through REST v3 (`POST`/`PUT`/`GET /rest/api/3/issue`) with `JIRA_BASE_URL`,
+`JIRA_EMAIL` and `JIRA_API_TOKEN`; missing any of them is exit `1` naming all three, nothing written. Issue type is
+`Task` for a story and `Epic` for an epic `[assumption]`, and the body is posted as ADF paragraphs because v3's
+`description` is not a string.
+
+Both providers take their transport as an argument (`src/core/adapters/transport.ts`), which is how the suite exercises
+the real argv and the real REST shapes without a network: **no test in this repo makes an outbound call or spawns `gh`.**
+The HTTP transport is a thin wrapper over the global `fetch` rather than a new method on the §runtime seam, which
+offers `spawn` but no HTTP.
+
+**`tldrx tickets status [--run <id>]`**
+
+A table — id, kind, local `status`, `external_status`, remote key and url — with a marker column: `!=` when the two
+disagree, `..` when the item has never been synced. It reads two folders and prints. No transport, no write.
+Divergence is compared on **done-ness only** (`done`/`closed`/`resolved`/`complete`/`completed`/`shipped`
+`[assumption]`): a remote status string is free-form, and a finer comparison would be a mapping nobody configured.
 
 ## 6. `--from` distill (importing an AI-DLC intent folder)
 

@@ -16,6 +16,20 @@ export type TicketTool = (typeof TICKET_TOOLS)[number];
 export const STORY_GRANULARITIES = ["hours", "days"] as const;
 export type StoryGranularity = (typeof STORY_GRANULARITIES)[number];
 
+/**
+ * `ticket_tool.sync` (spec §2.12). The field was already written by
+ * `tldrx init` and read by nothing; the ticket mirror is the first thing that
+ * acts on it, so the vocabulary lives here with the rest of the process enums.
+ *
+ *  - `mirror-out` — epics and stories are pushed out to the tool, and nothing at
+ *    all is read back.
+ *  - `two-way` — the same push, plus each remote issue's status pulled into
+ *    `external_status`. It NEVER advances `run.yml` and never touches a story's
+ *    `status:`; the second direction is one opaque string, and that is all.
+ */
+export const TICKET_SYNC_MODES = ["mirror-out", "two-way"] as const;
+export type TicketSyncMode = (typeof TICKET_SYNC_MODES)[number];
+
 export interface ProcessModel {
   readonly schema_version: number;
   readonly methodology: Methodology;
