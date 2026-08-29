@@ -42,6 +42,37 @@ entangled with the reading layer.
   output, so a template function that closes over a module constant fails there
   instead of as a blank page in someone's browser.
 - `--static` is unchanged in what it shows, and gained the plan block.
+### Watch: one watcher card per shipped feature
+
+The phase that answers "how would anyone know this still works next month?" — and
+refuses to answer it aspirationally.
+
+- **`05-watch/watchers/<feature>.md`** (spec §2.16, `templates/watcher.md`): front
+  matter (`version`, `id`, `epic`, `title`, `stories`, `repos`, `status`) plus
+  `## Signal` · `## Where` · `## Healthy baseline` · `## Looks broken when` ·
+  `## Query` (fenced, copy-paste) · `## Sources`. Every list item in the first four
+  ends with a `[src: …]` token, checked by the **same parser `claim-sources` uses**.
+- **`status` is computed, never claimed.** `verified` only when no `absent:` source
+  remains under `## Signal`; otherwise `draft`, and the card says what to
+  instrument. The executor re-reads the card off disk and rewrites the line, so a
+  sub-agent that stamps its own work `verified` is overruled.
+- **The Watch executor** (`src/core/facilitator/executors/`, a map from phase id to
+  executor). A deterministic pre-pass groups **done** stories by epic — one feature
+  per epic, named after the epic's branch slug. Then one sub-agent per feature,
+  handed that epic's done stories, the **read-only diff of its branch against each
+  repo's `default_branch`** (through the runtime seam; nothing checks out or
+  fetches), the `observability`/`deploy` facts and the repos' `gotchas.md`, and
+  nothing else. The diff is what landed; `touches:` was written before the code
+  existed. `05-watch/handoff.md` is then written deterministically from the cards.
+- **No done stories is a result, not an error.** The stage completes, spawns
+  nothing, spends nothing, and its handoff reads `- none [src: absent:03-plan/stories]`.
+- **`--prepare`/`--commit` is per feature**: one
+  `.agent/<stage>/<feature>/{prompt.md,pending.json,result.json}` each.
+- **`tldrx watch list [--run <id>]`** — feature, status and Signal line per card.
+  **`tldrx watch check <feature>`** — re-resolves one card's citations and
+  re-computes its status, and **exits 1 when either fails**, so CI can see it. It
+  catches both ways a card rots: the code moved under a citation, or somebody
+  hand-edited `draft` to `verified`.
 
 ## 0.1.0 — 2026-08-29
 

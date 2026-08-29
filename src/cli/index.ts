@@ -23,6 +23,7 @@ import { expertCommand } from "./commands/expert.ts";
 import { dashboardCommand } from "./commands/dashboard.ts";
 import { replayCommand } from "./commands/replay.ts";
 import { retroCommand } from "./commands/retro.ts";
+import { watchCommand } from "./commands/watch.ts";
 import { versionCommand } from "./commands/version.ts";
 import { makeHelpCommand, renderCommandHelp } from "./commands/help.ts";
 
@@ -41,6 +42,7 @@ export const COMMANDS: readonly Command[] = [
   dashboardCommand,
   replayCommand,
   retroCommand,
+  watchCommand,
 ];
 
 const helpCommand = makeHelpCommand(() => COMMANDS);

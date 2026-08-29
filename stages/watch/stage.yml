@@ -1,21 +1,41 @@
 # schema: draft
-# Phase 5 of the loop. Concept §3 and §10.
+# Phase 5 of the loop. Concept §3 and §10; the card's schema is spec §2.16.
+#
 # Generated from what Build actually instrumented. If nothing was instrumented,
 # the watcher says so — an aspirational watcher is worse than no watcher.
+#
+# This stage is run by the WATCH EXECUTOR (src/core/facilitator/executors/watch.ts),
+# not by the default one-agent path: it spawns one sub-agent per shipped feature,
+# and how many features there are is a fact about the run rather than about the
+# stage. That is also why `watchers/<feature>.md` is NOT listed under `outputs:` —
+# a declared output is re-read from disk BY NAME (spec §5), and these have no name
+# until the pre-pass has grouped the done stories by epic. The executor validates
+# every card itself, with the same parser `claim-sources` uses, and stamps its
+# status: `verified` only when nothing under `## Signal` cites `absent:`.
 name: watch
 title: Watch
 phase: 5
 model: haiku
 budget_usd: 2
+timeout_s: 900
 
+# Read PER FEATURE by the executor rather than inlined wholesale: the done stories
+# of ONE epic, that epic's file, the read-only diff of its branch against the
+# repo's default branch, the `observability`/`deploy` facts, and the gotchas of the
+# repos it touched. One sub-agent never sees another feature's evidence.
+#
+# The draft array form on purpose (as in stages/what/stage.yml): the v0 skeleton
+# validator requires `inputs` to be an array, and a bare list is read as all
+# OPTIONAL — which is right here, since a run whose Plan produced nothing still has
+# a Watch stage to complete. `[assumption]`
 inputs:
-  - "04-build/stories/<id>.md"
-  - "04-build/integration-test-log.md"
-  - ".tldrx/map/commands.md"
+  - "03-plan/stories"
+  - "03-plan/epics"
+  - ".tldrx/map/{repo}/gotchas.md"
+  - ".tldrx/memory/facts.yml"
 
 outputs:
-  - "watchers/<feature>.md"
-  - "handoff.md"
+  - {path: "handoff.md", sections: [Findings, Decisions, Unknowns, "Evidence ledger"]}
 
 experts:
   - operations
@@ -26,6 +46,7 @@ gate:
     - "the signal that proves the feature works is named, and it exists"
     - "the healthy baseline is a measured number, not a guess"
     - "the query snippet is copy-pasteable and was run once"
+    - "every card that is still `draft` says what to instrument"
 
 checks:
   - claim-sources
