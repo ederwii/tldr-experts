@@ -363,6 +363,97 @@ describe("wrapped bullets (spec §2.8)", () => {
   });
 });
 
+describe("ordered list items are checked like bullets (spec §2.8)", () => {
+  function handoff(...findings: string[]): string {
+    return [
+      "# Handoff — 02-how / contracts — run 260828-leaderboard",
+      "",
+      "## Findings",
+      ...findings,
+      "",
+      "## Decisions",
+      "_none yet_",
+      "",
+      "## Unknowns",
+      "_none yet_",
+      "",
+      "## Evidence ledger",
+      "_none yet_",
+      "",
+    ].join("\n");
+  }
+
+  test("a numbered item with a valid token passes, for both `1.` and `1)`", () => {
+    const report = validateHandoff(handoff(
+      "1. Hunt completion emits a domain event [src: api:src/Hunt.cs:8]",
+      "2) The lab SDK is generated [src: F019]",
+    ), CTX);
+    expect(report).toMatchObject({ ok: true, unsourced: [], unresolved: [], bulletCount: 2 });
+  });
+
+  test("a numbered item with no token is unsourced, and its line is named", () => {
+    const report = validateHandoff(handoff(
+      "1. Hunt completion emits a domain event [src: api:src/Hunt.cs:8]",
+      "2. Ranking ties are broken by completion time",
+    ), CTX);
+    expect(report.ok).toBe(false);
+    expect(report.unsourced).toEqual([5]);
+  });
+
+  test("a numbered item's source must resolve, exactly like a bullet's", () => {
+    const report = validateHandoff(handoff("1. A claim [src: api:src/Nope.cs:1]"), CTX);
+    expect(report.unresolved[0]?.message).toContain("no such file: src/Nope.cs");
+  });
+
+  test("a mixed list counts every item, whichever marker it uses", () => {
+    const parsed = parseHandoff(handoff(
+      "- A dashed claim [src: F019]",
+      "1. A numbered claim [src: Q4]",
+      "- Another dashed claim [src: F019]",
+      "2) A paren-numbered claim [src: Q6]",
+    ));
+    expect(parsed.sections[0]?.bullets.map((b) => b.line)).toEqual([4, 5, 6, 7]);
+    expect(validateHandoff(handoff(
+      "- A dashed claim [src: F019]",
+      "1. A numbered claim with no source",
+      "- Another dashed claim [src: F019]",
+    ), CTX).unsourced).toEqual([5]);
+  });
+
+  test("a wrapped numbered item is joined before the token is looked for", () => {
+    // The pilot's shape: every Decisions item wraps, citation on the last line.
+    const report = validateHandoff(handoff(
+      "1. **Phase 1 boundary (measured).** In scope: the scoring engine, score-event",
+      "   persistence, and the Score board.",
+      "   [src: F019; api:src/Hunt.cs:8]",
+    ), CTX);
+    expect(report).toMatchObject({ ok: true, bulletCount: 1 });
+  });
+
+  test("an indented digit run is a wrapped line, not a new item", () => {
+    // An ordered marker only counts at column 0 — otherwise "…since\n  2019. That…"
+    // would be denied as an unsourced item, punishing line width.
+    const parsed = parseHandoff(handoff(
+      "- Ranking has been global since",
+      "  2019. That has not changed [src: F019]",
+    ));
+    expect(parsed.sections[0]?.bullets).toHaveLength(1);
+    expect(validateHandoff(handoff(
+      "- Ranking has been global since",
+      "  2019. That has not changed [src: F019]",
+    ), CTX).unsourced).toEqual([]);
+  });
+
+  test("a column-0 numbered item after a wrapped one is its own item", () => {
+    const parsed = parseHandoff(handoff(
+      "1. A claim that wraps",
+      "   onto a second line [src: F019]",
+      "2. The next claim [src: Q4]",
+    ));
+    expect(parsed.sections[0]?.bullets.map((b) => b.line)).toEqual([4, 6]);
+  });
+});
+
 describe("facts.yml (spec §2.5)", () => {
   test("loads the fixture and exposes non-retired rows", () => {
     const store = FactsStore.load(join(FIXTURE_WORKSPACE, ".tldrx", "memory", "facts.yml"));

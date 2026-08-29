@@ -370,12 +370,12 @@ describe("tldrx approve", () => {
  * write that the hook allows fails the gate that follows it.
  */
 describe("run-relative `[src: …]` — next, approve and the hook agree", () => {
-  function handoffCiting(src: string): string {
+  function handoffCiting(src: string, marker = "-"): string {
     return [
       "# Handoff — 01-what / what — run X",
       "",
       "## Findings",
-      `- The intent names the leaderboard [src: ${src}]`,
+      `${marker} The intent names the leaderboard [src: ${src}]`,
       "",
       "## Decisions",
       "_none yet_",
@@ -416,13 +416,16 @@ describe("run-relative `[src: …]` — next, approve and the hook agree", () =>
     return outcome.status === "passed";
   }
 
-  async function verdicts(src: string): Promise<{ hook: boolean; facilitator: boolean; approve: boolean }> {
+  async function verdicts(
+    src: string,
+    marker?: string,
+  ): Promise<{ hook: boolean; facilitator: boolean; approve: boolean }> {
     const ws = fresh();
     await tldrx(ws.root, "run", "new", "leaderboard");
     const runDir = onlyRunDir(ws.root);
     writeFileSync(join(runDir, "01-what", "intent.md"), "# Intent\n\nA leaderboard.\n", "utf8");
     const handoffFile = join(runDir, "01-what", "handoff.md");
-    const content = handoffCiting(src);
+    const content = handoffCiting(src, marker);
 
     const hook = await hookVerdict(handoffFile, content);
     writeFileSync(handoffFile, content, "utf8");
@@ -446,6 +449,11 @@ describe("run-relative `[src: …]` — next, approve and the hook agree", () =>
 
   test("all three reject a path that exists under no base", async () => {
     expect(await verdicts("01-what/nope.md:1")).toEqual({ hook: false, facilitator: false, approve: false });
+  });
+
+  test("all three hold a numbered item to the same rule as a bullet", async () => {
+    expect(await verdicts("01-what/intent.md:1", "1.")).toEqual({ hook: true, facilitator: true, approve: true });
+    expect(await verdicts("01-what/nope.md:1", "1.")).toEqual({ hook: false, facilitator: false, approve: false });
   });
 });
 
