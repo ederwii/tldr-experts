@@ -7,6 +7,11 @@ export type { EvidenceRows, IgnoredRow } from "./readEvidenceRows.ts";
 export { checkEvidenceSrc, describeSrcProblem, EXPECTED_SRC } from "./evidenceSrc.ts";
 export type { IgnoredReason, SrcProblem } from "./evidenceSrc.ts";
 export { createExpert, planAreas, renderExpertMarkdown, EXPERT_NAME_RE } from "./createExpert.ts";
+export {
+  ROLE_EXPERTS, ROLE_AREA_TITLES, ROLE_TEMPLATES_DIR, isRoleExpert, hasRoleTemplate,
+  roleTemplatePath, readRoleTemplate, renderRoleExpert,
+} from "./roleExperts.ts";
+export type { RoleRenderOptions } from "./roleExperts.ts";
 export { readExpertDocument, splitFrontMatter, section } from "./expertDocument.ts";
 export { renderTrainPrompt, isTrainMode, TRAIN_MODES } from "./trainPrompt.ts";
 export { EXPERT_STATUSES } from "./ExpertRecord.ts";

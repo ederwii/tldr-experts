@@ -10,9 +10,10 @@ repos: []
 
 # operations
 
-> A ROLE expert: seeded by `tldrx init` from `templates/experts/operations.md`, then
-> owned by you. Its subject is the Watch stage — whether a shipped feature can be
-> seen working. Edit this body — it is the whole of what the model is told it is.
+> A ROLE expert. Its body ships as `templates/experts/operations.md` and is
+> copied here once, then owned by you. Its subject is the Watch stage — whether
+> a shipped feature can be seen working. Edit this body — it is the whole of
+> what the model is told it is.
 
 ## Role
 

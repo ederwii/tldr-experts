@@ -10,9 +10,10 @@ repos: []
 
 # developer
 
-> A ROLE expert: seeded by `tldrx init` from `templates/experts/developer.md`, then
-> owned by you. Its subject is the Build stage — implementing ONE story in its own
-> worktree. Edit this body — it is the whole of what the model is told it is.
+> A ROLE expert. Its body ships as `templates/experts/developer.md` and is
+> copied here once, then owned by you. Its subject is the Build stage —
+> implementing ONE story in its own worktree. Edit this body — it is the whole
+> of what the model is told it is.
 
 ## Role
 

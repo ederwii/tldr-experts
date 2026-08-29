@@ -10,9 +10,10 @@ repos: []
 
 # architect
 
-> A ROLE expert: seeded by `tldrx init` from `templates/experts/architect.md`, then
-> owned by you. Its subject is the How stage and the shape of the change, not a
-> folder of code. Edit this body — it is the whole of what the model is told it is.
+> A ROLE expert. Its body ships as `templates/experts/architect.md` and is
+> copied here once, then owned by you. Its subject is the How stage and the
+> shape of the change, not a folder of code. Edit this body — it is the whole of
+> what the model is told it is.
 
 ## Role
 

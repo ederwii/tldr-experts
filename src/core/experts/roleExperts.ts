@@ -83,16 +83,34 @@ export async function readRoleTemplate(role: string): Promise<string | null> {
 }
 
 /**
- * Fill a role template's front matter. The BODY is left byte-for-byte alone — it
- * is the part a team edits, and a renderer that rewrote prose would silently undo
- * their edits on the next `init`.
+ * Fill a role template's front matter and its H1. The PROSE is left byte-for-byte
+ * alone — it is the part a team edits, and a renderer that rewrote it would
+ * silently undo their edits on the next `init`.
+ *
+ * The H1 is rewritten rather than left because the expert's NAME need not be the
+ * role's slug: `tldrx expert create reviewer --role architect` is a legitimate
+ * thing to want, and a folder called `reviewer` whose file opens `# architect` is
+ * a file about the wrong expert.
  */
 export function renderRoleExpert(template: string, options: RoleRenderOptions): string {
-  return template
+  // Front matter and body are rewritten separately: the front matter carries a
+  // `# schema: draft` comment, and an H1 rule loose enough to reach the body's
+  // title would rewrite that comment instead (it did, before this split).
+  const at = frontMatterEnd(template);
+  const head = template.slice(0, at)
     .replace(/^name:.*$/m, `name: ${options.name}`)
     .replace(/^kind:.*$/m, "kind: role")
     .replace(/^created_by:.*$/m, `created_by: "${options.createdBy}"`)
     .replace(/^created_at:.*$/m, `created_at: ${options.createdAt}`)
-    .replace(/^repos:.*$/m, `repos: [${options.repos.join(", ")}]`)
-    .replace(/^# <Expert name>$/m, `# ${options.name}`);
+    .replace(/^repos:.*$/m, `repos: [${options.repos.join(", ")}]`);
+  return head + template.slice(at).replace(/^#[ \t]+.*$/m, `# ${options.name}`);
+}
+
+/** Index just past the closing `---` of the front matter, or 0 when there is none. */
+function frontMatterEnd(text: string): number {
+  if (!text.startsWith("---\n")) return 0;
+  const close = text.indexOf("\n---", 3);
+  if (close === -1) return 0;
+  const newline = text.indexOf("\n", close + 1);
+  return newline === -1 ? text.length : newline + 1;
 }

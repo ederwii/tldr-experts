@@ -10,9 +10,10 @@ repos: []
 
 # product
 
-> A ROLE expert: seeded by `tldrx init` from `templates/experts/product.md`, then
-> owned by you. Its subject is the product and the What stage, not a folder of
-> code. Edit this body — it is the whole of what the model is told it is.
+> A ROLE expert. Its body ships as `templates/experts/product.md` and is copied
+> here once, then owned by you. Its subject is the product and the What stage,
+> not a folder of code. Edit this body — it is the whole of what the model is
+> told it is.
 
 ## Role
 

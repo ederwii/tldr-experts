@@ -25,13 +25,13 @@ import { loadWorkspaceFile } from "../../core/init/loadWorkspaceFile.ts";
 import {
   createExpert, evidenceWarnings, expertListJson, loadExpert, loadExperts,
   readExpertDocument, renderExpertList, renderTrainPrompt, resolveWorkspaceRoot,
-  stagesLoadingExperts, type TrainRepo,
+  stagesLoadingExperts, ROLE_EXPERTS, type TrainRepo,
 } from "../../core/experts/index.ts";
 
 const USAGE = [
   "Usage:",
   "  tldrx expert list [--root <path>] [--json]",
-  "  tldrx expert create <name> [--domain <slug>] [--stack <lang>] [--root <path>]",
+  "  tldrx expert create <name> [--role <slug>] [--domain <slug>] [--stack <lang>] [--root <path>]",
   "  tldrx expert train <name> --area <area> [--mode light|full] [--max-usd <n>]",
   "                                          [--model <m>] [--effort <level>] [--prepare|--commit] [--yolo] [--root <path>]",
   "  tldrx expert train <name> --area <area> [--mode light|full] --print-prompt [--root <path>]",
@@ -42,7 +42,7 @@ export const expertCommand: Command = {
   name: "expert",
   summary: "List or create experts, or print a training prompt",
   usage: "tldrx expert list [--root <path>] [--json]\n" +
-    "       tldrx expert create <name> [--domain <slug>] [--stack <lang>] [--root <path>]\n" +
+    "       tldrx expert create <name> [--role <slug>] [--domain <slug>] [--stack <lang>] [--root <path>]\n" +
     "       tldrx expert train <name> --area <area> [--mode light|full] [--max-usd <n>] [--model <m>]\n" +
     "                                               [--effort <level>] [--prepare|--commit] [--yolo] [--print-prompt] [--root <path>]\n" +
     "       tldrx expert recompute [<name>] [--root <path>] [--json]",
@@ -109,9 +109,11 @@ async function create(argv: readonly string[]): Promise<number> {
   }
   const root = resolveWorkspaceRoot(option(argv, "--root"));
   try {
+    const role = option(argv, "--role");
     const created = await createExpert({
       root,
       name,
+      role,
       domain: option(argv, "--domain"),
       stack: option(argv, "--stack"),
       createdAt: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
@@ -119,7 +121,18 @@ async function create(argv: readonly string[]): Promise<number> {
     const areas = created.areas.length === 0
       ? "no areas — every level starts at 0 because there is no evidence yet"
       : `areas: ${created.areas.join(", ")} (level 0 until training gives them evidence)`;
-    process.stdout.write(`created ${created.dir}\n  ${areas}\n`);
+    const lines = [`created ${created.dir}`, `  ${areas}`];
+    // Which body it got is the difference between a role expert and an empty
+    // folder wearing a role's name, so it is said rather than left to be opened.
+    if (role !== null) {
+      lines.push(created.fromRoleTemplate
+        ? `  kind: role, body from templates/experts/${role}.md — edit it there to change what ships`
+        : `  kind: role, generic body — the framework ships no templates/experts/${role}.md`
+          + ` (roles with one: ${ROLE_EXPERTS.join(", ")})`);
+      lines.push(`  train it with \`tldrx expert train ${name} --area ${role} --mode full\``
+        + " — light mode is refused for a role expert");
+    }
+    process.stdout.write(`${lines.join("\n")}\n`);
     return EXIT_OK;
   } catch (error) {
     process.stderr.write(`tldrx expert create: ${message(error)}\n`);
@@ -269,7 +282,7 @@ function positional(argv: readonly string[]): string | null {
   return null;
 }
 
-const TAKES_VALUE = new Set(["--root", "--domain", "--stack", "--area", "--mode"]);
+const TAKES_VALUE = new Set(["--root", "--role", "--domain", "--stack", "--area", "--mode"]);
 
 function option(argv: readonly string[], name: string): string | null {
   const at = argv.indexOf(name);
