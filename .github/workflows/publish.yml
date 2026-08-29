@@ -27,6 +27,8 @@ jobs:
       - run: bun run typecheck
       - run: bun test
       - run: bun run build
+      - name: release check (changelog dated, README row, plugin version)
+        run: bash scripts/release-check.sh --ci
       - name: version must match the tag (on tag pushes)
         if: startsWith(github.ref, 'refs/tags/v')
         run: |

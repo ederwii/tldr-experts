@@ -427,6 +427,9 @@ reason pay for `high` (How, Build).
 
 ## Releasing
 
+**One command: `scripts/release.sh X.Y.Z --tag alpha`.** It is the only sanctioned path — a Claude Code hook denies hand-made `git tag` / `npm publish`, and `publish.yml` re-runs the same checks. Checklist and judgement calls: `docs/RELEASING.md`.
+
+
 Releases are published by GitHub Actions through npm **trusted publishing** (OIDC — no
 tokens, no OTP; provenance attached automatically). Bump `version` in `package.json`,
 commit, then `git tag v<version> && git push origin v<version>`. `.github/workflows/publish.yml`
