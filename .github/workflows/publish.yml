@@ -32,4 +32,10 @@ jobs:
         run: |
           PKG=$(node -p "require('./package.json').version"); TAG="${GITHUB_REF_NAME#v}"
           [ "$PKG" = "$TAG" ] || { echo "package.json $PKG != tag $TAG"; exit 1; }
-      - run: npm publish --access public
+      - name: skip if this version is already on the registry
+        id: exists
+        run: |
+          V=$(node -p "require('./package.json').version")
+          if npm view "tldr-experts@$V" version >/dev/null 2>&1; then echo "skip=true" >> "$GITHUB_OUTPUT"; echo "tldr-experts@$V already published — skipping"; else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
+      - if: steps.exists.outputs.skip == 'false'
+        run: npm publish --access public
