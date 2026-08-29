@@ -12,6 +12,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { EXPERT_FILE, expertDir, loadExpert } from "./loadExperts.ts";
 import { selectExperts, type ExpertReason, type SelectExpertsInput } from "./selectExperts.ts";
+import type { ExpertRecord } from "./ExpertRecord.ts";
 import {
   byteLength, DEFAULT_EXPERT_KNOWLEDGE_BYTES, loadExpertKnowledge, type KnowledgeFileView,
 } from "./expertKnowledge.ts";
@@ -88,7 +89,7 @@ export function loadExpertBundles(input: LoadBundlesInput): ExpertBundleSet {
       files: knowledge.files,
       truncated: knowledge.truncated,
       hasEvidence: record.areas.some((area) => area.evidence.length > 0),
-      trainPrompt: trainPromptFor(record.name, record.areas[0]?.id ?? null),
+      trainPrompt: trainPromptFor(record),
     });
   }
 
@@ -100,8 +101,20 @@ export function loadExpertBundles(input: LoadBundlesInput): ExpertBundleSet {
   };
 }
 
-function trainPromptFor(name: string, area: string | null): string | null {
-  return area === null ? null : `tldrx expert train ${name} --area ${area}`;
+/**
+ * The command the stderr nudge tells an operator to run.
+ *
+ * Taken from `competencies.yml`'s own `train_prompt` when the file has one,
+ * because that string already carries the `--mode` this area needs — `full` for a
+ * role expert, whose light mode is refused (`training/roleTraining.ts`). Composing
+ * one here would drop the mode and hand the operator a command that exits 1.
+ */
+function trainPromptFor(record: ExpertRecord): string | null {
+  const area = record.areas[0];
+  if (area === undefined) return null;
+  return area.trainPrompt !== ""
+    ? area.trainPrompt
+    : `tldrx expert train ${record.name} --area ${area.id}`;
 }
 
 /** One line per expert for `--prepare` / `--dry-run`, so the operator sees what was loaded. */

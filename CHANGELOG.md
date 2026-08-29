@@ -345,6 +345,49 @@ moment `competencies.yml` does.
   training run can see what the first one found instead of rediscovering it and
   writing a second copy of the same finding.
 
+### The experts the stage files ask for now exist
+
+- **`tldrx init` seeds five ROLE experts: `product`, `architect`, `delivery`,
+  `developer`, `operations`.** These are the names the shipped stage files have
+  always listed, and `init` seeded only the first: measured 2026-08-29 on a real
+  workspace (`~/aparece-v2`), whose `.tldrx/experts/` held `product`,
+  `dotnet-stack` and seven domain experts, four of the five resolved to nothing
+  and every How, Plan, Build and Watch run printed `expert <name> — NOT LOADED`.
+  A role expert's subject is the WORKFLOW, not a folder — what its stage is
+  accountable for, what it must refuse, what it cites, what it hands over — so
+  its body ships as an editable file at **`templates/experts/<role>.md`** and is
+  copied in once, front matter and H1 filled, every other byte left alone.
+  `kind: role` keeps it out of the domain-match rule: a role loads because a
+  stage named it, and for no other reason. Seeding is additive — an existing
+  workspace gains the four new folders on the next `init` and keeps every
+  `expert.md` it already had, byte-for-byte.
+- **`tldrx expert create <name> --role <slug>`** writes the same seed on demand,
+  from the same template. A slug the framework ships no template for falls back
+  to the generic `templates/expert.md` with `kind: role`, and the CLI says which
+  of the two it used — "a role expert" and "an empty folder wearing a role's
+  name" are otherwise identical from the outside. `--domain` and `--stack` are
+  unchanged.
+- **The placeholders `domain` and `stack` are retired from the shipped
+  `experts:` lists.** Neither was ever an expert NAME: `stack_experts: true`
+  already loads `<lang>-stack` for the run's repos, and a `kind: domain` expert
+  is picked by the paths the run cites. A forked or older stage file that still
+  lists them keeps working and gets ONE note — `experts: domain/stack are
+  selected by rule, not by name` — instead of a NOT LOADED line on every stage
+  of every run. That line is the one that matters when a real name is
+  misspelled, and an operator who sees it every time stops reading it.
+- **`tldrx expert train <role> --mode light` is refused (exit 1) before anything
+  is spawned or spent.** Light mode's pre-pass is a keyword grep over the
+  expert's repos, seeded from the area id — right for `checkout`, wrong for
+  `architect`: either nothing scores and one paid sub-agent writes four
+  `absent:` sections that earn no evidence, or something scores because the file
+  happens to contain the word. `--mode full` on a role expert runs the runs pass
+  ALONE (one sub-agent, the whole ceiling as its share) over
+  `tldrx-work/<run>/**/{handoff,retro}.md`, which is the record of how this
+  workflow actually ran. Full mode with no matching run is refused the same way:
+  a sub-agent spawned to write `- none [src: absent:tldrx-work]` costs real
+  money to learn what the deterministic pre-pass already knew. A seeded role
+  area's `train_prompt` therefore says `--mode full`.
+
 ## 0.2.0 — 2026-08-29
 
 ### The Build phase executes
