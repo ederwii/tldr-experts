@@ -658,6 +658,84 @@ agents that overwrite each other. Concept §9: "wave N+1 starts only when wave N
 **Where it is enforced.** `tldrx approve` re-runs the `plan` check at the Plan gate, which reads all three artefacts
 together — the only place the cross-file rules can be checked, since each file on its own is well formed.
 
+### 2.16 `tldrx-work/<run>/05-watch/watchers/<feature>.md`
+
+One card per shipped feature: the signal that proves it works, where it is read, the healthy baseline, what broken looks
+like, and a copy-paste query. Concept §10: **generated from what Build actually instrumented — not aspirational.** A
+watcher describing a log line somebody meant to add is worse than no watcher, because it reads as coverage and the first
+person to trust it is on call.
+
+````markdown
+---
+version: 1
+id: leaderboard
+epic: E1
+title: "Player leaderboard"
+stories: [S1, S3]
+repos: [api, lab]
+status: draft
+---
+
+# leaderboard · Player leaderboard
+
+## Signal
+- `leaderboard.refreshed` is written on every refresh [src: api:src/Leaderboard/RefreshHandler.cs:64]
+- No counter exists for a refresh that finds zero rows — add one [src: absent:api/src/Leaderboard]
+
+## Where
+- Application Insights → `traces`, filtered to the message above [src: F014]
+
+## Healthy baseline
+- 12–40 refreshes/hour in business hours, measured 2026-08-29 [src: F015]
+
+## Looks broken when
+- Zero refreshes for 30 minutes while hunts are still completing [src: api:src/Leaderboard/RefreshHandler.cs:64]
+
+## Query
+
+```kql
+traces | where message == "leaderboard.refreshed" | summarize count() by bin(timestamp, 1h)
+```
+
+## Sources
+`RefreshHandler.cs:64` is the only place the event is emitted.
+````
+
+| Field | Type | Req | Meaning |
+|---|---|---|---|
+| `version` | `1` | y | Spec §0: unknown version ⇒ exit 1 |
+| `id` | `^[a-z0-9][a-z0-9-]{0,48}$` | y | Feature id; **must equal the file name** (`leaderboard` ⇒ `leaderboard.md`). Taken from the epic's `branch:` slug (`epic/leaderboard`), else the lowercased epic id |
+| `epic` | `^E\d{1,4}$` | y | The epic this feature was built on — one feature per epic (§2.14) |
+| `title` | str ≤512 | y | One line, human |
+| `stories` | `S<n>[]` (≥1, unique) | y | The **done** stories the card was written from (§2.13) |
+| `repos` | repo name[] (≥1, unique) | y | Every repo the feature touched |
+| `status` | `draft\|verified` | y | **Set by the framework, never by the model** — see below |
+| H2 sections | `Signal` · `Where` · `Healthy baseline` · `Looks broken when` · `Query` · `Sources` | y | In that order |
+
+**The four checked sections.** Every list item under `Signal`, `Where`, `Healthy baseline` and `Looks broken when` ends
+with a §2.8 `[src: …]` token, validated by the **same parser** `claim-sources` uses — a card checked by a second reader
+would drift from the rule the hook enforces, and the drift would show up as a card that passes `watch check` and is
+denied on write. Three source kinds carry the weight here: `<repo>:<path>:<line>` for a line in the code that was
+actually built, `F<n>` for a recorded fact, and `absent:<path>` for "the code emits nothing here". `[assumption]` — a
+`$ <cmd> → exit <n>` source is legal **anywhere on a card**, unlike in a handoff (§2.8 confines it to the Evidence
+ledger): a card has no claims/ledger split, every section on it is evidence about a running system, and "the baseline is
+40/hour `[src: $ … → exit 0]`" is the most honest form that claim takes.
+
+**`status` is computed, not claimed.** `verified` iff **no `absent:` source remains under `## Signal`**; otherwise
+`draft`, and the card says what to instrument. The executor re-reads the card off disk and rewrites the one line, so a
+sub-agent that stamps its own work `verified` changes nothing. `tldrx watch check <feature>` re-runs both halves — every
+citation still resolves, and the stamped status still equals the one the Signal sources earn — which is how a card
+hand-edited to `verified`, or one whose code has moved since, is caught months after the run closed.
+
+**`Query`** must hold a fenced block; a described query is not a copy-paste query. **`Sources`** is prose — each citation
+above, once, with what it establishes.
+
+**Validation.** Front matter present and parseable; keys, ids and enums as above; `id` equals the file name; the six
+sections present in order; each of the four checked sections holding at least one list item, and every item in them
+ending with a token that parses and resolves. Issues are reported in two kinds: `shape` (the card is malformed — the
+stage fails) and `source` (a citation does not resolve — usually the code moving under an old card, which is what
+`watch check` exists to find).
+
 ## 3. CLI surface
 
 Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not found · `4` awaiting human · `5` agent failed.
@@ -680,6 +758,8 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx expert create <name>` | `workspace.yml`, `map/**` | `experts/<name>/{expert.md,competencies.yml}` | 0,1 |
 | `tldrx expert train <name> [--area <a>] [--mode light\|full]` | `expert.md`, repo code, past runs | `knowledge/*.md`, `competencies.yml`, `events.jsonl` | 0,1,5 |
 | `tldrx dashboard [--static]` | `tldrx-work/**`, `.tldrx/**` (watch) | nothing, or `dist/` with `--static` | 0,1 |
+| `tldrx watch list [--run <id>]` | `05-watch/watchers/*.md`, `workspace.yml` | nothing (stdout table) | 0,1,3 |
+| `tldrx watch check <feature>` | one card, the files it cites | nothing (stdout report) | 0,1,3 |
 | `tldrx replay <run>` | `events.jsonl`, handoffs | nothing (stdout narrative) | 0,3 |
 | `tldrx retro <run>` | `run.yml`, `events.jsonl`, handoffs | `retro.md`, `stages/proposed/**`, `practices.md` proposals | 0,3 |
 
@@ -782,6 +862,40 @@ sub-agent with its own Agent tool, then `tldrx next --commit` validates outputs,
 headless path does. A nested `claude -p` from inside a Claude Code Bash tool is **verified working** (2026-08-29, see
 §7); the in-session mode exists because it is cheaper and because it is the only mode that survives where spawning is
 disallowed, not because spawning fails.
+
+**Stage executors.** Two phases are not shaped like "one sub-agent, one set of declared files", and for those the step
+between *prompt assembled* and *outputs validated* is replaced by a **stage executor**, chosen from a map keyed on the
+**phase id** (`src/core/facilitator/executors/`). A phase with no entry keeps the default path. Everything either side —
+the lock, the cursor, the budget gate, `run.yml`, the checks, the gate — stays in `next`, because an executor that could
+move the cursor would be a second facilitator.
+
+**Watch executor** (`05-watch`, spec §2.16). In order:
+
+1. **A deterministic pre-pass.** Read `03-plan/stories/*.md`, keep the ones at `status: done`, group them by their
+   `epic:`. One feature per epic, named after the epic's `branch:` slug. No model is asked which features shipped,
+   because the files already say — and a story at `done` is the only assertion in the workspace that something landed.
+2. **One sub-agent per feature**, operations expert plus the stack experts of that feature's repos, handed exactly four
+   things and nothing else: the done stories of that ONE epic (front matter `touches`, `evidence`), the **read-only diff
+   of the epic branch against each repo's `default_branch`** (through the runtime seam — `rev-parse`, `diff --stat`,
+   `--name-status`, `--unified`; nothing checks out or fetches), the non-retired facts tagged area `observability` or
+   `deploy`, and `.tldrx/map/<repo>/gotchas.md`. The diff is what landed; a story's `touches:` was written before the
+   code existed and is an intention. Where they disagree, the diff is the evidence. `[assumption]` — the patch is
+   truncated at 24 KB per repo and the prompt says so; a repo that cannot be diffed is stated as an absence, never as a
+   silent empty diff, which would read as "nothing was instrumented".
+3. **Validation and the status stamp**, done by the framework off disk: sections, tokens and citations via the shared
+   handoff parser, then `status: verified` written only when no `absent:` source remains under `## Signal`.
+4. **`05-watch/handoff.md`, written deterministically** — Findings are one line per card with its status, each sourced
+   `[src: 05-watch/watchers/<f>.md:1]`. The cards are the model's work; the handoff is arithmetic over them, because a
+   model asked to summarise its own cards is free to describe a `draft` one as coverage.
+
+`--prepare`/`--commit` is **per feature**: each gets its own `.agent/<stage>/<feature>/{prompt.md,pending.json,result.json}`,
+so the host session dispatches N sub-agents with the same isolation the headless path gives them. `[assumption]` — the
+agent ceiling is the stage share divided N ways with a **$0.25 floor**, because §7 measured a cold `claude -p` paying
+10–26k cache-creation tokens before its first reply: a share under that is a failed spawn, not a saving.
+
+**No done stories is a result, not an error.** The stage completes, spawns nothing, spends nothing, and writes a handoff
+whose four sections each read `- none [src: absent:03-plan/stories]`. `watchers/<feature>.md` is deliberately **not** in
+the stage's `outputs:` — a declared output is re-read by name (above), and these have no name until the pre-pass has run.
 
 **Resume path.** State lives only in files, so resume = run `next` again: the cursor points at the first non-terminal
 stage, a `running` left by a crash is demoted to `ready` when `.lock` holds a dead pid, and partial outputs are
