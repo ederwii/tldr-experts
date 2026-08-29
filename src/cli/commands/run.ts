@@ -11,7 +11,10 @@ import type { Command } from "../Command.ts";
 import { EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
 import { listFlag, numberFlag, parseArgs, stringFlag, UsageError, boolFlag } from "../argv.ts";
 import { workspaceRootFrom } from "../workspace.ts";
+import { effortFlag } from "../effort.ts";
 import { fail } from "../report.ts";
+import { runAuto } from "../../core/facilitator/runAuto.ts";
+import { nowRfc3339 } from "../../hooks/lib/actor.ts";
 import { createRun } from "../../core/run/newRun.ts";
 import { RunStore } from "../../core/run/RunStore.ts";
 import { buildStatus, renderStatus } from "../../core/run/runStatus.ts";
@@ -20,15 +23,20 @@ import { notFound } from "../resolveRun.ts";
 import { currentActor } from "../../hooks/lib/actor.ts";
 import { PROJECT_WORK_DIR } from "../../core/paths.ts";
 
-const VALUE_FLAGS = ["title", "scope", "budget", "repos", "from", "seed", "gates", "run", "root"];
+const VALUE_FLAGS = [
+  "title", "scope", "budget", "repos", "from", "seed", "gates", "run", "root",
+  "max-usd", "until", "model", "effort",
+];
 
 export const runCommand: Command = {
   name: "run",
   summary: "Create or inspect a piece of work",
   usage: "tldrx run new <slug> [--title <t>] [--scope <s>] [--budget <usd>] [--repos a,b]\n" +
-    "                  [--from <aidlc-intent-dir> | --seed <file|dir>] [--root <path>]\n" +
-    "       tldrx run status [<run>] [--json] [--root <path>]",
-  subcommands: ["new", "status"],
+    "                  [--from <aidlc-intent-dir> | --seed <file|dir>] [--gates <a,b|all|none>] [--root <path>]\n" +
+    "       tldrx run status [<run>] [--json] [--root <path>]\n" +
+    "       tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]\n" +
+    "                  [--yolo] [--root <path>]",
+  subcommands: ["new", "status", "auto"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const [sub, ...rest] = argv;
@@ -37,8 +45,10 @@ export const runCommand: Command = {
         return runNew(rest);
       case "status":
         return runStatus(rest);
+      case "auto":
+        return await runAutoLoop(rest);
       default:
-        process.stderr.write(`tldrx run: expected \`new\` or \`status\`\n${runCommand.usage}\n`);
+        process.stderr.write(`tldrx run: expected \`new\`, \`status\` or \`auto\`\n${runCommand.usage}\n`);
         return EXIT_USAGE;
     }
   },
@@ -106,6 +116,34 @@ function runNew(argv: readonly string[]): number {
     return EXIT_OK;
   } catch (error) {
     return fail("run new", error);
+  }
+}
+
+/**
+ * Every line goes to stdout as it happens — it is a progress log, and a loop that
+ * printed nothing for twenty minutes would be indistinguishable from a hang. The
+ * stop reason is the last line and the exit code carries it; nothing is repeated
+ * on stderr, so `run auto | tee` is the whole record.
+ */
+async function runAutoLoop(argv: readonly string[]): Promise<number> {
+  try {
+    const args = parseArgs(argv, VALUE_FLAGS);
+    const root = workspaceRootFrom(args);
+    const outcome = await runAuto({
+      root,
+      runId: args.positionals[0] ?? stringFlag(args, "run"),
+      maxUsd: numberFlag(args, "max-usd"),
+      until: stringFlag(args, "until"),
+      model: stringFlag(args, "model"),
+      effort: effortFlag(args),
+      yolo: boolFlag(args, "yolo"),
+      actor: currentActor(),
+      at: nowRfc3339(),
+      onLine: (line) => process.stdout.write(`${line}\n`),
+    });
+    return outcome.code;
+  } catch (error) {
+    return fail("run auto", error);
   }
 }
 
