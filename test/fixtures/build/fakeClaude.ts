@@ -1,0 +1,111 @@
+#!/usr/bin/env bun
+/**
+ * A fake `claude` for the Build executor's tests: it plays BOTH sub-agents.
+ *
+ * Which one it is playing is read off the prompt's first line — `# Build — story
+ * S1 …` is the developer, `# Review — story S1 …` is the reviewer — because that
+ * is the same thing the real model would key on, and it means a prompt that lost
+ * its heading fails the test instead of passing it quietly.
+ *
+ * As the developer it writes files into its CWD, which the executor has set to the
+ * story's worktree; it does NOT commit, so the "commit what the agent left behind"
+ * step is exercised for real. As the reviewer it returns a verdict from a per-story
+ * queue held in a state file, so `changes` then `approve` across two attempts (and
+ * across two processes, in the `--prepare`/`--commit` tests) is expressible.
+ */
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+
+const argv = process.argv.slice(2);
+const argvLog = process.env.FAKE_BUILD_ARGV_LOG;
+if (argvLog !== undefined && argvLog !== "") appendFileSync(argvLog, `${JSON.stringify(argv)}\n`);
+
+let prompt = "";
+for await (const chunk of process.stdin) prompt += String(chunk);
+
+const heading = prompt.split("\n")[0] ?? "";
+const role = heading.startsWith("# Review") ? "reviewer" : "developer";
+const storyId = /story (S\d+)/.exec(heading)?.[1] ?? "S?";
+
+const promptDir = process.env.FAKE_BUILD_PROMPT_DIR;
+if (promptDir !== undefined && promptDir !== "") {
+  mkdirSync(promptDir, { recursive: true });
+  const n = attemptCount(`prompt:${role}:${storyId}`);
+  writeFileSync(join(promptDir, `${role}-${storyId}-${String(n)}.md`), prompt, "utf8");
+}
+
+const cost = Number(process.env.FAKE_BUILD_COST ?? "0.10");
+const written: string[] = [];
+
+if (role === "developer") {
+  const plan = JSON.parse(process.env.FAKE_BUILD_WRITE ?? "{}") as Record<string, Record<string, string>>;
+  const attempt = attemptCount(`dev:${storyId}`);
+  const files = plan[`${storyId}#${String(attempt)}`] ?? plan[storyId] ?? {
+    [`${storyId.toLowerCase()}.txt`]: `${storyId} was here\n`,
+  };
+  for (const [rel, content] of Object.entries(files)) {
+    const path = join(process.cwd(), rel);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, content, "utf8");
+    written.push(rel);
+  }
+}
+
+const structured = role === "reviewer"
+  ? { verdict: nextVerdict(storyId), summary: `reviewed ${storyId}`, findings: verdictFindings(storyId) }
+  : { outputs: written, questions_asked: [], notes: `fake developer for ${storyId}` };
+
+process.stdout.write(
+  `${JSON.stringify({
+    type: "result",
+    subtype: process.env.FAKE_BUILD_IS_ERROR === "1" ? "error_during_execution" : "success",
+    is_error: process.env.FAKE_BUILD_IS_ERROR === "1",
+    result: `fake ${role} for ${storyId}`,
+    session_id: `fake-${role}-${storyId}`,
+    total_cost_usd: cost,
+    usage: { input_tokens: 100, output_tokens: 10 },
+    structured_output: structured,
+    errors: [],
+  })}\n`,
+);
+process.exit(process.env.FAKE_BUILD_IS_ERROR === "1" ? 1 : 0);
+
+/** Verdicts come from a per-story queue; the last one repeats once the queue runs dry. */
+function nextVerdict(id: string): string {
+  const queues = JSON.parse(process.env.FAKE_BUILD_VERDICTS ?? "{}") as Record<string, string[]>;
+  const queue = queues[id] ?? ["approve"];
+  const at = attemptCount(`review:${id}`) - 1;
+  return queue[Math.min(at, queue.length - 1)] ?? "approve";
+}
+
+function verdictFindings(id: string): string[] {
+  return nextVerdictPeek(id) === "changes" ? [`${id}: the acceptance criteria are not met yet`] : [];
+}
+
+function nextVerdictPeek(id: string): string {
+  const queues = JSON.parse(process.env.FAKE_BUILD_VERDICTS ?? "{}") as Record<string, string[]>;
+  const queue = queues[id] ?? ["approve"];
+  const at = attemptCount(`review:${id}`, false) - 1;
+  return queue[Math.min(at, queue.length - 1)] ?? "approve";
+}
+
+/** 1-based call count for `key`, persisted so it survives across processes. */
+function attemptCount(key: string, advance = true): number {
+  const path = process.env.FAKE_BUILD_STATE;
+  if (path === undefined || path === "") return 1;
+  let state: Record<string, number> = {};
+  if (existsSync(path)) {
+    try {
+      state = JSON.parse(readFileSync(path, "utf8")) as Record<string, number>;
+    } catch {
+      state = {};
+    }
+  }
+  const next = (state[key] ?? 0) + (advance ? 1 : 0);
+  if (advance) {
+    state[key] = next;
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify(state), "utf8");
+  }
+  return advance ? next : (state[key] ?? 1);
+}

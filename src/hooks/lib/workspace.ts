@@ -56,39 +56,66 @@ export interface WorkspaceContext {
   readonly repos: ReadonlyMap<string, string>;
   /** Every non-null command in workspace.yml — the only ones a `cmd` src may cite. */
   readonly commands: ReadonlySet<string>;
+  /**
+   * repo name -> that repo's own non-null commands, in `workspace.yml` order.
+   *
+   * The flat `commands` set answers "may this command be cited at all?"; the Build
+   * phase asks the narrower question "what may a sub-agent working in THIS repo
+   * run?", and hands exactly that list to `--allowedTools`.
+   */
+  readonly repoCommands: ReadonlyMap<string, readonly string[]>;
+  /** repo name -> `default_branch` — the base an epic branch is cut from (spec §2.1). */
+  readonly defaultBranches: ReadonlyMap<string, string>;
 }
 
 interface RawRepo {
   readonly name?: unknown;
   readonly path?: unknown;
   readonly commands?: unknown;
+  readonly default_branch?: unknown;
 }
+
+/** Spec §2.1 example; a repo whose `default_branch` is missing is assumed to use it. */
+export const FALLBACK_DEFAULT_BRANCH = "main";
 
 /** Read `.tldrx/workspace.yml`. A missing or unreadable file yields an empty context. */
 export function loadWorkspace(root: string): WorkspaceContext {
   const repos = new Map<string, string>();
   const commands = new Set<string>();
+  const repoCommands = new Map<string, readonly string[]>();
+  const defaultBranches = new Map<string, string>();
+  const empty = (): WorkspaceContext => ({ root, repos, commands, repoCommands, defaultBranches });
   const path = join(root, PROJECT_FRAMEWORK_DIR, "workspace.yml");
-  if (!existsSync(path)) return { root, repos, commands };
+  if (!existsSync(path)) return empty();
   let doc: unknown;
   try {
     doc = parseYaml(readFileSync(path, "utf8"));
   } catch {
-    return { root, repos, commands };
+    return empty();
   }
   const list = (doc as { repos?: unknown } | null)?.repos;
-  if (!Array.isArray(list)) return { root, repos, commands };
+  if (!Array.isArray(list)) return empty();
   for (const entry of list as RawRepo[]) {
     if (typeof entry?.name !== "string") continue;
     repos.set(entry.name, typeof entry.path === "string" ? entry.path : ".");
+    defaultBranches.set(
+      entry.name,
+      typeof entry.default_branch === "string" && entry.default_branch !== ""
+        ? entry.default_branch
+        : FALLBACK_DEFAULT_BRANCH,
+    );
+    const own: string[] = [];
     const cmds = entry.commands;
     if (cmds !== null && typeof cmds === "object") {
       for (const value of Object.values(cmds as Record<string, unknown>)) {
-        if (typeof value === "string" && value.trim() !== "") commands.add(value);
+        if (typeof value !== "string" || value.trim() === "") continue;
+        commands.add(value);
+        if (!own.includes(value)) own.push(value);
       }
     }
+    repoCommands.set(entry.name, own);
   }
-  return { root, repos, commands };
+  return empty();
 }
 
 /**

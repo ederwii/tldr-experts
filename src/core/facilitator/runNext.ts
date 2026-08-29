@@ -16,7 +16,7 @@ import { readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { PROJECT_WORK_DIR } from "../paths.ts";
 import { RunStore } from "../run/RunStore.ts";
-import { isTerminal, type RunFile, type RunPhase, type RunStage, type RunTask } from "../run/RunFile.ts";
+import { isTerminal, type GateType, type RunFile, type RunPhase, type RunStage, type RunTask } from "../run/RunFile.ts";
 import { runChecks } from "../run/checks.ts";
 import { PresetError, type PlannedStage } from "../run/workflowPreset.ts";
 import { remaining } from "../budget/wouldExceed.ts";
@@ -33,6 +33,7 @@ import {
 } from "./prompt.ts";
 import { spawnAgent } from "./spawnAgent.ts";
 import { validateOutputs, describeProblems } from "./validateOutputs.ts";
+import { executorFor, type ExecutorContext, type ExecutorOutcome, type StageExecutor } from "./executors/index.ts";
 import { promptPath, readResult, writeBundle, writeRaw, PendingError, type PendingStage } from "./pending.ts";
 import { capInputs, inlineInputs, type InlineResult } from "./seedInputs.ts";
 import { SEED_INDEX } from "../seed/renderSeed.ts";
@@ -49,6 +50,8 @@ export interface NextOptions {
   /** `--max-usd`, an extra cap on top of the stage share and per_agent_max_usd. */
   readonly maxUsd?: number;
   readonly yolo: boolean;
+  /** `--keep-worktrees`: the Build phase keeps its story worktrees after a story settles. */
+  readonly keepWorktrees?: boolean;
   readonly actor: string;
   readonly at: string;
 }
@@ -220,41 +223,23 @@ async function runStage(
   spec: StageSpec,
   notes: string[],
 ): Promise<NextOutcome> {
-  if (options.mode === "commit") return await commitStage(store, options, phaseId, stageId, spec, notes);
-
   if (options.dryRun && !spec.dryRunAllowed) {
     return out(EXIT_USAGE, [...notes, `stage '${stageId}' sets dry_run_allowed: false — refusing --dry-run`]);
   }
+
+  // The phase-specific half, when the phase has one (`executors/index.ts`). A
+  // phase with no executor keeps the single-agent path below, unchanged.
+  const executor = executorFor(phaseId);
+  if (executor !== null) return await runExecutor(store, options, phaseId, stageId, spec, notes, executor);
+
+  if (options.mode === "commit") return await commitStage(store, options, phaseId, stageId, spec, notes);
 
   const stage = requireStage(store, phaseId, stageId);
   const ctx: PathContext = { root: options.root, runDir: store.runDir };
 
   // --- budget gate (spec §5, §2.11) ---------------------------------------
-  // `[assumption]` — the stage ceiling compared against is run.yml's, not
-  // stage.yml's: `run new` scales every stage budget to the run's `--budget`, and
-  // budget.yml's phase ceilings are scaled the same way. Comparing a scaled
-  // ceiling against an unscaled stage file would refuse work it can afford.
-  const phaseRemaining = remaining(store.budget, phaseId);
-  if (phaseRemaining < stage.budget_usd && store.budget.on_exceed === "block") {
-    store.append(event(options, store.runId, stageId, "budget.blocked", {
-      phase: phaseId,
-      remaining_usd: phaseRemaining,
-      estimate_usd: stage.budget_usd,
-      ceiling_usd: store.budget.phases.find((p) => p.id === phaseId)?.ceiling_usd ?? store.budget.ceiling_usd,
-    }));
-    // Name the command, not the field. The pilot's hand-edit of `ceiling_usd`
-    // under-shot the estimate and the retry was refused a second time.
-    const fix = raiseCommand(store.runId, phaseId, shortBy(stage.budget_usd, phaseRemaining));
-    return out(EXIT_REFUSED, [
-      ...notes,
-      `[tldrx] budget: refusing to start stage "${stageId}" — phase ${phaseId} has ` +
-        `$${phaseRemaining.toFixed(2)} left and the stage estimate is $${stage.budget_usd.toFixed(2)}.`,
-      `Run \`${fix}\` (add \`--take-from <phase>\` to move the money instead of adding it), ` +
-        `lower budget_usd in the stage, or set on_exceed: warn.`,
-      `See the whole picture first: \`tldrx budget show --run ${store.runId}\`.`,
-    ]);
-  }
-  warnOnce(store, options, phaseId, stageId, stage.budget_usd, phaseRemaining, notes);
+  const refused = budgetRefusal(store, options, phaseId, stageId, notes);
+  if (refused !== null) return refused;
 
   // --- required inputs (spec §5: exit 1) ----------------------------------
   const required = expandAll(spec.requiredInputs, store.run.repos);
@@ -364,6 +349,173 @@ async function runStage(
   return await finishStage(store, options, phaseId, stageId, spec, notes);
 }
 
+/**
+ * Spec §5, §2.11: refuse a stage the phase budget cannot cover, and warn once when
+ * the phase is past `warn_at_pct`. Non-null means refuse with that outcome.
+ *
+ * `[assumption]` — the stage ceiling compared against is run.yml's, not
+ * stage.yml's: `run new` scales every stage budget to the run's `--budget`, and
+ * budget.yml's phase ceilings are scaled the same way. Comparing a scaled ceiling
+ * against an unscaled stage file would refuse work it can afford.
+ */
+function budgetRefusal(
+  store: RunStore,
+  options: NextOptions,
+  phaseId: string,
+  stageId: string,
+  notes: string[],
+): NextOutcome | null {
+  const stage = requireStage(store, phaseId, stageId);
+  const phaseRemaining = remaining(store.budget, phaseId);
+  if (phaseRemaining < stage.budget_usd && store.budget.on_exceed === "block") {
+    store.append(event(options, store.runId, stageId, "budget.blocked", {
+      phase: phaseId,
+      remaining_usd: phaseRemaining,
+      estimate_usd: stage.budget_usd,
+      ceiling_usd: store.budget.phases.find((p) => p.id === phaseId)?.ceiling_usd ?? store.budget.ceiling_usd,
+    }));
+    // Name the command, not the field. The pilot's hand-edit of `ceiling_usd`
+    // under-shot the estimate and the retry was refused a second time.
+    const fix = raiseCommand(store.runId, phaseId, shortBy(stage.budget_usd, phaseRemaining));
+    return out(EXIT_REFUSED, [
+      ...notes,
+      `[tldrx] budget: refusing to start stage "${stageId}" — phase ${phaseId} has ` +
+        `$${phaseRemaining.toFixed(2)} left and the stage estimate is $${stage.budget_usd.toFixed(2)}.`,
+      `Run \`${fix}\` (add \`--take-from <phase>\` to move the money instead of adding it), ` +
+        `lower budget_usd in the stage, or set on_exceed: warn.`,
+      `See the whole picture first: \`tldrx budget show --run ${store.runId}\`.`,
+    ]);
+  }
+  warnOnce(store, options, phaseId, stageId, stage.budget_usd, phaseRemaining, notes);
+  return null;
+}
+
+/**
+ * A phase that owns its own middle (`executors/index.ts`).
+ *
+ * Everything either side stays here: the budget gate, the required inputs, the
+ * `running` stamp, `run.yml`'s tasks, the declared outputs re-read off disk, the
+ * checks and the gate. The executor gets the step between "the stage may run" and
+ * "here is what it produced", and nothing else — an executor that could move the
+ * cursor would be a second facilitator.
+ */
+async function runExecutor(
+  store: RunStore,
+  options: NextOptions,
+  phaseId: string,
+  stageId: string,
+  spec: StageSpec,
+  notes: string[],
+  executor: StageExecutor,
+): Promise<NextOutcome> {
+  const ctx: PathContext = { root: options.root, runDir: store.runDir };
+
+  // A stage already `running` is mid-pipeline — a Build phase hands out one story
+  // per `--prepare`/`--commit` cycle — and re-charging the whole stage estimate
+  // against a phase it has already spent from would refuse the second cycle every
+  // time. Measured on the in-session fixture: cycle 2 refused with $7.60 of $8.00.
+  const started = requireStage(store, phaseId, stageId).status === "running";
+  if (options.mode !== "commit" && !started) {
+    const refused = budgetRefusal(store, options, phaseId, stageId, notes);
+    if (refused !== null) return refused;
+  }
+  if (options.mode !== "commit") {
+    const gaps = missing(expandAll(spec.requiredInputs, store.run.repos), ctx);
+    if (gaps.length > 0) {
+      return out(EXIT_USAGE, [
+        ...notes,
+        `stage '${stageId}' requires ${gaps.length} input(s) that do not exist: ${gaps.join(", ")}`,
+      ]);
+    }
+  }
+
+  const model = options.model ?? requireStage(store, phaseId, stageId).model ?? spec.planned.model;
+  if (!started) {
+    markRunning(store, phaseId, stageId, options.at);
+    store.append(event(options, store.runId, stageId, "stage.started", {
+      phase: phaseId,
+      model,
+      budget_usd: requireStage(store, phaseId, stageId).budget_usd,
+      mode: options.mode,
+      executor: phaseId,
+    }));
+    store.save();
+  }
+
+  const stage = requireStage(store, phaseId, stageId);
+  const executorCtx: ExecutorContext = {
+    root: options.root,
+    runId: store.runId,
+    runDir: store.runDir,
+    phaseId,
+    stageId,
+    spec,
+    repos: store.run.repos,
+    mode: options.mode,
+    model,
+    budgetUsd: stage.budget_usd,
+    maxBudgetUsd: agentCap(options, store, stage),
+    yolo: options.yolo,
+    at: options.at,
+    keepWorktrees: options.keepWorktrees === true,
+    agentCap: (share = 1) => agentCap(options, store, stage, share),
+    emit: (type, payload, costUsd = 0, actor = null) => {
+      store.append(event(options, store.runId, stageId, type, payload, costUsd, actor));
+    },
+  };
+
+  const outcome = await executor(executorCtx);
+  recordExecutorTasks(store, options, phaseId, stageId, spec, outcome);
+  store.save();
+
+  // A refusal is a precondition the operator can fix (spec §3 exit 2), not a
+  // failure: the stage goes back to `ready` so the next run picks it up cleanly.
+  if (outcome.refused === true) {
+    setStatus(store, phaseId, stageId, "ready");
+    store.save();
+    return out(EXIT_REFUSED, [...notes, ...outcome.lines]);
+  }
+  if (!outcome.ok) {
+    return failStage(store, options, phaseId, stageId, outcome.error ?? "the executor failed", notes);
+  }
+  if (outcome.awaiting) return out(EXIT_OK, [...notes, ...outcome.lines]);
+  return await finishStage(store, options, phaseId, stageId, spec, [...notes, ...outcome.lines], outcome.gate);
+}
+
+/** One `run.yml` task and one `agent.result` per sub-agent the executor ran. */
+function recordExecutorTasks(
+  store: RunStore,
+  options: NextOptions,
+  phaseId: string,
+  stageId: string,
+  spec: StageSpec,
+  outcome: ExecutorOutcome,
+): void {
+  for (const task of outcome.tasks) {
+    const id = nextTaskId(store, phaseId, stageId);
+    recordTask(store, phaseId, stageId, {
+      id,
+      status: task.error === null ? "done" : "failed",
+      expert: spec.planned.experts[0] ?? null,
+      model: task.model,
+      cost_usd: round2(task.costUsd),
+      error: task.error,
+      session_id: task.sessionId,
+      started_at: options.at,
+      ended_at: nowish(options),
+      outputs: task.outputs,
+    });
+    store.append(event(options, store.runId, stageId, "agent.result", {
+      phase: phaseId,
+      task: id,
+      key: task.key,
+      session_id: task.sessionId,
+      model: task.model,
+      outputs: task.outputs,
+    }, round2(task.costUsd)));
+  }
+}
+
 async function commitStage(
   store: RunStore,
   options: NextOptions,
@@ -424,6 +576,7 @@ async function finishStage(
   stageId: string,
   spec: StageSpec,
   notes: string[],
+  gateOverride?: GateType,
 ): Promise<NextOutcome> {
   const ctx: PathContext = { root: options.root, runDir: store.runDir };
   const outputs = expandAll(spec.planned.outputs, store.run.repos);
@@ -469,7 +622,11 @@ async function finishStage(
   const stage = requireStage(store, phaseId, stageId);
   const spent = round2(stage.tasks.reduce((sum, t) => sum + t.cost_usd, 0));
 
-  if (spec.planned.gateType === "approve") {
+  // An executor may FORCE a human gate whatever the stage file says. Build does:
+  // concept §9 ends it at "epic merges to main after integration tests + human
+  // gate", and a stage file spelling `gate: auto` would otherwise let a run walk
+  // past the one decision a person has to make.
+  if ((gateOverride ?? spec.planned.gateType) === "approve") {
     mapStage(store, phaseId, stageId, (s) => ({
       ...s,
       status: "awaiting_gate",
@@ -715,11 +872,15 @@ function advanceCursor(store: RunStore): { phase: string; stage: string } | null
 
 // --- odds and ends ---------------------------------------------------------
 
-/** `min(task share, per_agent_max_usd)` (spec §5), with `--max-usd` on top. */
-function agentCap(options: NextOptions, store: RunStore, stage: RunStage): number {
-  // `[assumption]` — v0 runs ONE task per stage (spec §5 decision (c): "v0 runs
-  // tasks sequentially"), so the task share is the whole stage budget.
-  const candidates = [stage.budget_usd, store.budget.per_agent_max_usd];
+/**
+ * `min(task share, per_agent_max_usd)` (spec §5), with `--max-usd` on top.
+ *
+ * `share` is the fraction of the stage budget ONE sub-agent gets: 1 for a stage
+ * that spawns one (spec §5 decision (c): "v0 runs tasks sequentially"), `1/n` for
+ * an executor that splits the stage — Build, between the stories of `waves.yml`.
+ */
+function agentCap(options: NextOptions, store: RunStore, stage: RunStage, share = 1): number {
+  const candidates = [stage.budget_usd * share, store.budget.per_agent_max_usd];
   if (options.maxUsd !== undefined) candidates.push(options.maxUsd);
   return round2(Math.min(...candidates));
 }
