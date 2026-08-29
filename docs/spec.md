@@ -382,8 +382,19 @@ graph  := "graph:" nodeid                          # a graphify node id
 absent := "absent:" path                           # looked here, found nothing
 ```
 
-**Validation.** The four sections present in that order; every `- ` line inside them ends with a valid token; `file`
-paths exist with the line in range; `cmd` tokens only in `Evidence ledger`; `doc` requires https; ≤200 bullets.
+**Validation.** The four sections present in that order; **every list item** inside them ends with a valid token —
+`- item`, `1. item` and `1) item` all count, and an item runs to the next line that starts at column 0, so a
+soft-wrapped citation on an indented continuation line still counts. An ordered marker is only a marker at column 0
+(`…global since` / `  2019. That has not changed` is one wrapped item, not two). `file` paths exist with the line in
+range; `cmd` tokens only in `Evidence ledger`; `doc` requires https; ≤200 items.
+
+**Resolving a `file` src.** A `repo:path` resolves inside that repo, and an absolute path is taken as written. A bare
+`path` is tried against three bases, in order — **first existing wins**: (a) the workspace root; (b) the run directory of
+the handoff being validated (`tldrx-work/<run>/`, so a stage may cite its own outputs as `01-what/intent.md:1`); (c) only
+when the path starts with a known repo name followed by `/`, that repo's directory with the name stripped —
+`api/src/Hunt.cs` is a spelling of `api:src/Hunt.cs`. The line range is checked against whichever file resolved, and a
+failure names every base it tried. `tldrx next`, `tldrx approve` and the `claim-sources` hook resolve identically: all
+three are handed the run directory of the file they are judging.
 
 ### 2.9 `tldrx-work/<run>/events.jsonl`
 
@@ -535,7 +546,7 @@ disk). All but `DoD-gate` finish in <50 ms.
 
 | Hook | Event | Trigger | Decision logic | Effect |
 |---|---|---|---|---|
-| `claim-sources` | PreToolUse (`Write\|Edit`) | `tool_input.file_path` matches `tldrx-work/**/*.md` | Compute the would-be content; parse the four handoff sections; each `- ` line must end with a valid `src` token (§2.8); `file` sources must resolve | Denies (JSON) listing offending line numbers; a PostToolUse twin re-checks and feeds back only |
+| `claim-sources` | PreToolUse (`Write\|Edit`) | `tool_input.file_path` matches `tldrx-work/**/*.md` | Compute the would-be content; parse the four handoff sections; each list item must end with a valid `src` token (§2.8); `file` sources must resolve against the workspace root, the run dir, or a named repo | Denies (JSON) listing offending line numbers; a PostToolUse twin re-checks and feeds back only |
 | `no-re-ask` | PreToolUse (`Write\|Edit`) | `tool_input.file_path` matches `tldrx-work/**/questions.md` | Tokenise each new question heading + `area`; compare against non-retired `facts.yml` rows; Jaccard ≥ 0.6 on ≥4-char tokens ⇒ hit `[assumption]` | Denies the write, names the matching fact |
 | `answer-capture` | PostToolUse + FileChanged | `tldrx-work/**/questions.md` | Find blocks with `status: open` and a non-empty `[Answer]:` capture | Never blocks; writes footer + `facts.yml` + `question.answered`; echoes one line to stdout as context |
 | `DoD-gate` | PreToolUse (`Write\|Edit`) | would-be content of `tldrx-work/**/stories/*.md` sets `status: done` | Re-run every command in the story's fenced ```dod block, in its repo, with `stage.yml timeout_s`; all must exit 0 | Denies if any command fails or the block is missing (this hook is not <50 ms by design) |

@@ -1,8 +1,8 @@
 /**
  * `tldrx-work/<run>/<phase>/handoff.md` (spec §2.8).
  *
- * Four H2 sections, in order, and **every `- ` bullet inside them ends with a
- * `[src: …]` token**. This module splits the sections, finds the bullets, and
+ * Four H2 sections, in order, and **every list item inside them — `- `, `1. ` or
+ * `1) ` — ends with a `[src: …]` token**. This module splits the sections, finds the bullets, and
  * reports the offending line numbers — the claim-sources hook turns that report
  * into a deny message and nothing else.
  */
@@ -33,16 +33,48 @@ export interface Handoff {
 }
 
 const H2_RE = /^##\s+(.+?)\s*$/;
-/** A bullet: `- text`, tolerating up to three spaces of indent. [assumption] */
-const BULLET_RE = /^ {0,3}-\s+(\S.*)$/;
+/**
+ * A list item. Both markers count: `- text` and `1. text` / `1) text`.
+ *
+ * Spec §2.8 says *every list item* in the four sections carries a `[src: …]`.
+ * Reading only `- ` let an ordered list smuggle unsourced claims past the check —
+ * the measured case being the pilot's Decisions section, 15 numbered claims that
+ * nothing validated.
+ *
+ * The two markers get different indent rules on purpose. A `- ` tolerates up to
+ * three spaces (CommonMark's rule for a top-level item) because an indented `- `
+ * is unambiguously a marker. An ordered marker must sit at column 0, because an
+ * indented digit run is far more often a wrapped line — "…global since\n  2019.
+ * That has not changed" — and reading that as a new, unsourced item would deny a
+ * handoff for its line width. Ordered items in a handoff start at column 0.
+ */
+const BULLET_RE = /^(?: {0,3}-|\d{1,9}[.)])\s+(\S.*)$/;
+/**
+ * A wrapped bullet's continuation: an indented, non-empty line that is not itself
+ * a bullet. Spec §2.8 says the bullet ends with a `[src: …]` token — a soft-wrapped
+ * bullet still does, just one line down, and treating that as an unsourced claim
+ * would punish line width rather than missing evidence. A bullet therefore runs to
+ * the next line that starts at column 0 (or to the next bullet).
+ */
+const CONTINUATION_RE = /^\s+\S/;
 
 export function parseHandoff(text: string): Handoff {
   const lines = text.split("\n");
   const sections: HandoffSection[] = [];
   const headings: string[] = [];
   let current: { name: string; headingLine: number; bullets: HandoffBullet[] } | null = null;
+  let pending: { line: number; parts: string[] } | null = null;
 
+  const flushBullet = (): void => {
+    if (pending === null) return;
+    if (current !== null) {
+      const joined = pending.parts.join(" ");
+      current.bullets.push({ line: pending.line, text: joined, token: parseSrcToken(joined) });
+    }
+    pending = null;
+  };
   const flush = (): void => {
+    flushBullet();
     if (current !== null) sections.push(current);
     current = null;
   };
@@ -63,8 +95,15 @@ export function parseHandoff(text: string): Handoff {
     if (current === null) continue;
     const bullet = BULLET_RE.exec(line);
     if (bullet !== null && bullet[1] !== undefined) {
-      current.bullets.push({ line: i + 1, text: bullet[1], token: parseSrcToken(line) });
+      flushBullet();
+      pending = { line: i + 1, parts: [bullet[1]] };
+      continue;
     }
+    if (pending !== null && CONTINUATION_RE.test(line)) {
+      pending.parts.push(line.trim());
+      continue;
+    }
+    flushBullet();
   }
   flush();
   return { sections, headings };
@@ -96,7 +135,7 @@ export interface HandoffIssue {
 export interface HandoffValidation {
   readonly ok: boolean;
   readonly missingSections: readonly string[];
-  /** Bullets with no `[src: …]` token at all. */
+  /** List items with no `[src: …]` token at all. */
   readonly unsourced: readonly number[];
   /** Bullets whose token is malformed, or cites something that does not resolve. */
   readonly unresolved: readonly HandoffIssue[];

@@ -91,8 +91,19 @@ export function loadWorkspace(root: string): WorkspaceContext {
   return { root, repos, commands };
 }
 
-export function toSrcContext(workspace: WorkspaceContext): SrcContext {
-  return { root: workspace.root, repos: workspace.repos, commands: workspace.commands };
+/**
+ * `runDir` is the absolute `tldrx-work/<run>/` folder of the handoff about to be
+ * validated. Passing it lets a bare `01-what/intent.md:1` resolve run-relatively
+ * as well as workspace-relatively (spec §2.8) — every caller that knows the run
+ * dir must pass it, or `next`, `approve` and the hook disagree about the same file.
+ */
+export function toSrcContext(workspace: WorkspaceContext, runDir?: string | null): SrcContext {
+  return {
+    root: workspace.root,
+    repos: workspace.repos,
+    commands: workspace.commands,
+    runDir: runDir ?? null,
+  };
 }
 
 /** Absolute path of a repo declared in workspace.yml, or null. */

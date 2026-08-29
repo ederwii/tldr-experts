@@ -11,6 +11,8 @@ import { RunStore } from "../src/core/run/RunStore.ts";
 import { validateEvent } from "../src/core/events/Event.ts";
 import { EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../src/cli/exitCodes.ts";
 import { gatedScope, makeRunWorkspace, type TempRunWorkspace } from "./fixtures/tempRunWorkspace.ts";
+import { loadWorkflowPreset } from "../src/core/run/workflowPreset.ts";
+import { runCheck } from "../src/core/run/checks.ts";
 
 const BIN = join(FRAMEWORK_ROOT, "bin", "tldrx.ts");
 
@@ -354,6 +356,104 @@ describe("tldrx approve", () => {
     const run = await tldrx(ws.root, "approve");
     expect(run.code).toBe(EXIT_GATE_REFUSED);
     expect(run.stderr).toContain("not one of .tldrx/workspace.yml's commands");
+  });
+});
+
+/**
+ * The measured pilot failure (2026-08-29): the `what` sub-agent cited its own
+ * outputs run-relatively (`[src: 01-what/intent.md:1]`) and the post-stage check
+ * rejected them, because the resolver only ever tried the workspace root.
+ *
+ * The three places that validate a handoff — the facilitator's post-stage check
+ * (`runNext.finishStage` → `runChecks`), `tldrx approve`'s re-check (`gates.approve`
+ * → `runChecks`), and the PreToolUse hook — must agree on the same bytes, or a
+ * write that the hook allows fails the gate that follows it.
+ */
+describe("run-relative `[src: …]` — next, approve and the hook agree", () => {
+  function handoffCiting(src: string, marker = "-"): string {
+    return [
+      "# Handoff — 01-what / what — run X",
+      "",
+      "## Findings",
+      `${marker} The intent names the leaderboard [src: ${src}]`,
+      "",
+      "## Decisions",
+      "_none yet_",
+      "",
+      "## Unknowns",
+      "_none yet_",
+      "",
+      "## Evidence ledger",
+      "_none yet_",
+      "",
+    ].join("\n");
+  }
+
+  async function hookVerdict(filePath: string, content: string): Promise<boolean> {
+    const proc = Bun.spawn(["bun", join(FRAMEWORK_ROOT, "src", "hooks", "claim-sources.ts")], {
+      stdin: new TextEncoder().encode(JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Write",
+        tool_input: { file_path: filePath, content },
+      })),
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, USER: "alan" },
+    });
+    const [stdout] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    return !stdout.includes('"permissionDecision":"deny"');
+  }
+
+  /** Exactly the call `runNext.finishStage` makes for the cursor stage. */
+  async function facilitatorVerdict(root: string, runDir: string): Promise<boolean> {
+    const stage = loadWorkflowPreset(root, "feature").stages[0];
+    expect(stage).toBeDefined();
+    const outcome = await runCheck({ id: "claim-sources", on: "post-write", repo: null, command: null, expect_exit: 0 }, {
+      root,
+      runDir,
+      stage: stage as NonNullable<typeof stage>,
+    });
+    return outcome.status === "passed";
+  }
+
+  async function verdicts(
+    src: string,
+    marker?: string,
+  ): Promise<{ hook: boolean; facilitator: boolean; approve: boolean }> {
+    const ws = fresh();
+    await tldrx(ws.root, "run", "new", "leaderboard");
+    const runDir = onlyRunDir(ws.root);
+    writeFileSync(join(runDir, "01-what", "intent.md"), "# Intent\n\nA leaderboard.\n", "utf8");
+    const handoffFile = join(runDir, "01-what", "handoff.md");
+    const content = handoffCiting(src, marker);
+
+    const hook = await hookVerdict(handoffFile, content);
+    writeFileSync(handoffFile, content, "utf8");
+    const facilitator = await facilitatorVerdict(ws.root, runDir);
+    parkAtGate(runDir);
+    const approved = await tldrx(ws.root, "approve", "--note", "ok");
+    return { hook, facilitator, approve: approved.code === EXIT_OK };
+  }
+
+  test("all three accept a bullet citing the run's own output", async () => {
+    expect(await verdicts("01-what/intent.md:1")).toEqual({ hook: true, facilitator: true, approve: true });
+  });
+
+  test("all three accept a workspace-relative path", async () => {
+    expect(await verdicts(".tldrx/memory/facts.yml:1")).toEqual({ hook: true, facilitator: true, approve: true });
+  });
+
+  test("all three reject an out-of-range line on a file that does resolve", async () => {
+    expect(await verdicts("01-what/intent.md:999")).toEqual({ hook: false, facilitator: false, approve: false });
+  });
+
+  test("all three reject a path that exists under no base", async () => {
+    expect(await verdicts("01-what/nope.md:1")).toEqual({ hook: false, facilitator: false, approve: false });
+  });
+
+  test("all three hold a numbered item to the same rule as a bullet", async () => {
+    expect(await verdicts("01-what/intent.md:1", "1.")).toEqual({ hook: true, facilitator: true, approve: true });
+    expect(await verdicts("01-what/nope.md:1", "1.")).toEqual({ hook: false, facilitator: false, approve: false });
   });
 });
 

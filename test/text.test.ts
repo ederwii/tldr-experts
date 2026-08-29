@@ -8,7 +8,9 @@ import {
 import {
   parseHandoff, validateHandoff, isHandoff, missingSections, HANDOFF_SECTIONS,
 } from "../src/core/text/handoff.ts";
-import { classifySrc, parseSrcToken, emptySrcContext, resolveSrc } from "../src/core/text/srcToken.ts";
+import {
+  classifySrc, parseSrcToken, emptySrcContext, resolveSrc, type SrcContext,
+} from "../src/core/text/srcToken.ts";
 import { FactsStore } from "../src/core/facts/FactsStore.ts";
 import { findDuplicate, jaccard, tokenize } from "../src/core/facts/findDuplicate.ts";
 import { emitFactsYaml } from "../src/core/facts/emitFactsYaml.ts";
@@ -195,7 +197,10 @@ describe("handoff.md (spec §2.8)", () => {
     const broken = HANDOFF.replace("api:src/Hunt.cs:8", "api:src/Nope.cs:8");
     const report = validateHandoff(broken, CTX);
     expect(report.unsourced).toEqual([]);
-    expect(report.unresolved).toEqual([{ line: 5, message: "[src: api:src/Nope.cs:8] — no such file: src/Nope.cs" }]);
+    expect(report.unresolved).toEqual([{
+      line: 5,
+      message: "[src: api:src/Nope.cs:8] — no such file: src/Nope.cs — tried repo `api` (api)",
+    }]);
   });
 
   test("a `$ cmd` outside the Evidence ledger is an error", () => {
@@ -217,6 +222,235 @@ describe("handoff.md (spec §2.8)", () => {
     const started = performance.now();
     validateHandoff(big, CTX);
     expect(performance.now() - started).toBeLessThan(50);
+  });
+});
+
+describe("a bare `path:line` resolves against three bases (spec §2.8)", () => {
+  /** The run dir the handoff lives in — base (b). */
+  const RUN_CTX = toSrcContext(loadWorkspace(FIXTURE_WORKSPACE), RUN_DIR);
+
+  function ref(src: string) {
+    const parsed = classifySrc(src);
+    expect(parsed).toMatchObject({ kind: "file" });
+    return parsed as never;
+  }
+
+  test("(a) the workspace root — a `.tldrx/…` path still resolves", () => {
+    expect(resolveSrc(ref(".tldrx/memory/facts.yml:1"), RUN_CTX, "Findings")).toMatchObject({ ok: true });
+  });
+
+  test("(b) the run dir — a sub-agent may cite its own outputs run-relatively", () => {
+    // The measured pilot failure: the resolver only ever tried the workspace root.
+    expect(resolveSrc(ref("01-what/intent.md:1"), CTX, "Findings").ok).toBe(false);
+    const resolution = resolveSrc(ref("01-what/intent.md:1"), RUN_CTX, "Findings");
+    expect(resolution.ok).toBe(true);
+    expect(resolution.resolved).toBe(join(RUN_DIR, "01-what", "intent.md"));
+  });
+
+  test("(c) a known repo name + `/` — the `repo:path` form spelled with a slash", () => {
+    // `hunt` lives at `api/`, so this only resolves if the repo name is stripped.
+    const nested: SrcContext = {
+      root: FIXTURE_WORKSPACE,
+      repos: new Map([["hunt", "api"]]),
+      commands: new Set(),
+      runDir: RUN_DIR,
+    };
+    const resolution = resolveSrc(ref("hunt/src/Hunt.cs:8"), nested, "Findings");
+    expect(resolution.ok).toBe(true);
+    expect(resolution.resolved).toBe(join(FIXTURE_WORKSPACE, "api", "src", "Hunt.cs"));
+  });
+
+  test("first existing base wins, and the line must be in range of THAT file", () => {
+    const resolution = resolveSrc(ref("01-what/intent.md:999"), RUN_CTX, "Findings");
+    expect(resolution.ok).toBe(false);
+    expect(resolution.message).toContain("cited line 999");
+  });
+
+  test("the failure names every base it tried", () => {
+    const resolution = resolveSrc(ref("api/src/Nope.cs:1"), RUN_CTX, "Findings");
+    expect(resolution.ok).toBe(false);
+    expect(resolution.message).toContain("no such file: api/src/Nope.cs");
+    expect(resolution.message).toContain("workspace root");
+    expect(resolution.message).toContain(`run dir tldrx-work/${FIXTURE_RUN}`);
+    expect(resolution.message).toContain("repo `api` (api)");
+  });
+
+  test("a handoff citing its own run's output validates against a run-aware context", () => {
+    const handoff = [
+      "# Handoff — 01-what / what — run 260828-leaderboard",
+      "",
+      "## Findings",
+      "- The intent names the leaderboard [src: 01-what/intent.md:1]",
+      "",
+      "## Decisions",
+      "_none yet_",
+      "",
+      "## Unknowns",
+      "_none yet_",
+      "",
+      "## Evidence ledger",
+      "_none yet_",
+      "",
+    ].join("\n");
+    expect(validateHandoff(handoff, RUN_CTX)).toMatchObject({ ok: true, unresolved: [] });
+    // …and without the run dir it is exactly the pilot's failure.
+    const blind = validateHandoff(handoff, CTX);
+    expect(blind.ok).toBe(false);
+    expect(blind.unresolved[0]?.message).toContain("no such file: 01-what/intent.md");
+  });
+});
+
+describe("wrapped bullets (spec §2.8)", () => {
+  function handoff(...findings: string[]): string {
+    return [
+      "# Handoff — 02-how / contracts — run 260828-leaderboard",
+      "",
+      "## Findings",
+      ...findings,
+      "",
+      "## Decisions",
+      "_none yet_",
+      "",
+      "## Unknowns",
+      "_none yet_",
+      "",
+      "## Evidence ledger",
+      "_none yet_",
+      "",
+    ].join("\n");
+  }
+
+  test("a `[src: …]` on an indented continuation line still sources the bullet", () => {
+    const report = validateHandoff(handoff(
+      "- A claim long enough that its citation soft-wrapped onto the next line",
+      "  [src: api:src/Hunt.cs:8]",
+    ), CTX);
+    expect(report).toMatchObject({ ok: true, unsourced: [], unresolved: [], bulletCount: 1 });
+  });
+
+  test("the continuation is joined, so a mid-bullet wrap still parses", () => {
+    const parsed = parseHandoff(handoff(
+      "- A claim that wraps",
+      "  across three",
+      "  lines [src: F019]",
+    ));
+    expect(parsed.sections[0]?.bullets).toHaveLength(1);
+    expect(parsed.sections[0]?.bullets[0]?.text).toBe("A claim that wraps across three lines [src: F019]");
+  });
+
+  test("a wrapped bullet with no token anywhere is reported on its FIRST line", () => {
+    const report = validateHandoff(handoff(
+      "- A claim that wraps",
+      "  and never cites anything",
+    ), CTX);
+    expect(report.unsourced).toEqual([4]);
+  });
+
+  test("a bullet ends at the next line that starts at column 0", () => {
+    const report = validateHandoff(handoff(
+      "- A claim with no citation",
+      "Loose prose that happens to end in a token [src: F019]",
+    ), CTX);
+    expect(report.unsourced).toEqual([4]);
+  });
+
+  test("a nested bullet is still its own bullet, not a continuation", () => {
+    const parsed = parseHandoff(handoff(
+      "- Outer claim [src: F019]",
+      "  - Inner claim [src: Q4]",
+    ));
+    expect(parsed.sections[0]?.bullets.map((b) => b.line)).toEqual([4, 5]);
+  });
+});
+
+describe("ordered list items are checked like bullets (spec §2.8)", () => {
+  function handoff(...findings: string[]): string {
+    return [
+      "# Handoff — 02-how / contracts — run 260828-leaderboard",
+      "",
+      "## Findings",
+      ...findings,
+      "",
+      "## Decisions",
+      "_none yet_",
+      "",
+      "## Unknowns",
+      "_none yet_",
+      "",
+      "## Evidence ledger",
+      "_none yet_",
+      "",
+    ].join("\n");
+  }
+
+  test("a numbered item with a valid token passes, for both `1.` and `1)`", () => {
+    const report = validateHandoff(handoff(
+      "1. Hunt completion emits a domain event [src: api:src/Hunt.cs:8]",
+      "2) The lab SDK is generated [src: F019]",
+    ), CTX);
+    expect(report).toMatchObject({ ok: true, unsourced: [], unresolved: [], bulletCount: 2 });
+  });
+
+  test("a numbered item with no token is unsourced, and its line is named", () => {
+    const report = validateHandoff(handoff(
+      "1. Hunt completion emits a domain event [src: api:src/Hunt.cs:8]",
+      "2. Ranking ties are broken by completion time",
+    ), CTX);
+    expect(report.ok).toBe(false);
+    expect(report.unsourced).toEqual([5]);
+  });
+
+  test("a numbered item's source must resolve, exactly like a bullet's", () => {
+    const report = validateHandoff(handoff("1. A claim [src: api:src/Nope.cs:1]"), CTX);
+    expect(report.unresolved[0]?.message).toContain("no such file: src/Nope.cs");
+  });
+
+  test("a mixed list counts every item, whichever marker it uses", () => {
+    const parsed = parseHandoff(handoff(
+      "- A dashed claim [src: F019]",
+      "1. A numbered claim [src: Q4]",
+      "- Another dashed claim [src: F019]",
+      "2) A paren-numbered claim [src: Q6]",
+    ));
+    expect(parsed.sections[0]?.bullets.map((b) => b.line)).toEqual([4, 5, 6, 7]);
+    expect(validateHandoff(handoff(
+      "- A dashed claim [src: F019]",
+      "1. A numbered claim with no source",
+      "- Another dashed claim [src: F019]",
+    ), CTX).unsourced).toEqual([5]);
+  });
+
+  test("a wrapped numbered item is joined before the token is looked for", () => {
+    // The pilot's shape: every Decisions item wraps, citation on the last line.
+    const report = validateHandoff(handoff(
+      "1. **Phase 1 boundary (measured).** In scope: the scoring engine, score-event",
+      "   persistence, and the Score board.",
+      "   [src: F019; api:src/Hunt.cs:8]",
+    ), CTX);
+    expect(report).toMatchObject({ ok: true, bulletCount: 1 });
+  });
+
+  test("an indented digit run is a wrapped line, not a new item", () => {
+    // An ordered marker only counts at column 0 — otherwise "…since\n  2019. That…"
+    // would be denied as an unsourced item, punishing line width.
+    const parsed = parseHandoff(handoff(
+      "- Ranking has been global since",
+      "  2019. That has not changed [src: F019]",
+    ));
+    expect(parsed.sections[0]?.bullets).toHaveLength(1);
+    expect(validateHandoff(handoff(
+      "- Ranking has been global since",
+      "  2019. That has not changed [src: F019]",
+    ), CTX).unsourced).toEqual([]);
+  });
+
+  test("a column-0 numbered item after a wrapped one is its own item", () => {
+    const parsed = parseHandoff(handoff(
+      "1. A claim that wraps",
+      "   onto a second line [src: F019]",
+      "2. The next claim [src: Q4]",
+    ));
+    expect(parsed.sections[0]?.bullets.map((b) => b.line)).toEqual([4, 6]);
   });
 });
 
