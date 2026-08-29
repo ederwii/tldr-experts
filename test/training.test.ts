@@ -386,6 +386,22 @@ describe("an invalid knowledge file changes nothing", () => {
     expect(competencies(ws).status).toBe("created");
   });
 
+  // Measured on the pilot 2026-08-29: a sub-agent killed by its own budget
+  // ceiling had ALREADY written a complete, valid knowledge file. The run
+  // failed, so that file must not sit where an accepted one would.
+  test("a failed sub-agent's file is quarantined, not left where an accepted one goes", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [{ [KNOWLEDGE_REL]: knowledgeMd() }]);
+    process.env.FAKE_TRAIN_IS_ERROR = "1";
+
+    const outcome = await train(ws);
+    expect(outcome.code).toBe(5);
+    expect(existsSync(join(ws.root, KNOWLEDGE_REL))).toBe(false);
+    expect(existsSync(join(ws.expertDir, "knowledge", `${AREA}.rejected.md`))).toBe(true);
+    expect(competencies(ws).status).toBe("created");
+    expect(areaOf(ws, AREA).evidence).toEqual([]);
+  });
+
   test("a knowledge file that was never written is exit 5, not a silent pass", async () => {
     const ws = workspace();
     fakeClaude(ws, [{}]);

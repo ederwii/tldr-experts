@@ -226,7 +226,7 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
       ok: outcome.ok,
     }));
     if (!outcome.ok) {
-      restore(previous);
+      rollback(previous);
       return fail(EXIT_AGENT_FAILED, [
         `${options.expert}/${area.id}: the ${task.key} sub-agent failed — ${outcome.error ?? "no result"}`,
         `  $${round2(outcome.costUsd).toFixed(2)} spent and recorded; nothing was written to competencies.yml`,
@@ -257,7 +257,7 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
     const abs = join(dir, task.output);
     const rel = `${PROJECT_FRAMEWORK_DIR}/experts/${options.expert}/${task.output}`;
     if (!existsSync(abs)) {
-      restore(previous);
+      rollback(previous);
       return reject(log, options, area.id, sum(tasks), [
         `${options.expert}/${area.id}: ${rel} was never written`,
         "  nothing was written to competencies.yml and the status is unchanged",
@@ -268,7 +268,7 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
     const parsed = parseKnowledgeFile(text, srcCtx, shape);
     if (!parsed.ok) {
       const kept = quarantine(abs);
-      restore(previous);
+      rollback(previous);
       return reject(log, options, area.id, sum(tasks), [
         `${options.expert}/${area.id}: ${rel} does not validate — ${String(parsed.issues.length)} problem(s)`,
         ...describeKnowledgeIssues(parsed.issues),
@@ -367,12 +367,25 @@ function quarantine(abs: string): string {
   return kept;
 }
 
-/** Put back whatever was on disk before the sub-agent ran. */
-function restore(previous: readonly { path: string; content: string | null }[]): void {
+/**
+ * Put the workspace back the way the sub-agent found it.
+ *
+ * A file that existed is restored byte-for-byte. A file that did NOT exist and
+ * now does is quarantined, not left — measured 2026-08-29 on the pilot: a
+ * sub-agent killed by its own budget ceiling had already written a complete,
+ * VALID knowledge file, and the old code left it at `knowledge/<area>.md` where
+ * the next reader would take it for accepted knowledge. The run failed, so the
+ * only honest state is "there is no accepted knowledge file, and here is what the
+ * failed run produced".
+ */
+function rollback(previous: readonly { path: string; content: string | null }[]): void {
   for (const entry of previous) {
-    if (entry.content === null) continue;
-    mkdirSync(join(entry.path, ".."), { recursive: true });
-    writeFileSync(entry.path, entry.content, "utf8");
+    if (entry.content !== null) {
+      mkdirSync(join(entry.path, ".."), { recursive: true });
+      writeFileSync(entry.path, entry.content, "utf8");
+      continue;
+    }
+    if (existsSync(entry.path)) quarantine(entry.path);
   }
 }
 

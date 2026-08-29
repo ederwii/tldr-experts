@@ -353,6 +353,19 @@ outlives every run, so it gets its own file beside the expert, with §2.9's exac
 `type` ∈ `agent.spawned` `agent.result` `check.passed` `check.failed`. A run that is REFUSED still writes its
 `agent.result`: money spent is recorded whether or not the knowledge was kept (spec §5, "never rolls back cost").
 
+**`--max-budget-usd` is a stop, not a cap — measured.** Pilot smoke, 2026-08-29,
+`tldrx expert train typescript-stack --area typescript --mode light --max-usd 1.5` over
+mobile + scavtopia-lab: the sub-agent was killed with `subtype: error_max_budget_usd`,
+`errors: ["Reached maximum budget ($1.5)"]` — after `total_cost_usd: 5.15325` on a single
+turn (`num_turns: 1`, 597 s, 105,698 cache-creation + 60,548 output tokens on a 1M-context
+model). The flag ends the run once a turn's cost is known; it cannot end a turn already in
+flight, so on a large-context model the realised spend can exceed the ceiling several times
+over. Size a training prompt for the money you are willing to lose, not the ceiling you
+passed. The run itself behaved correctly: a non-zero `claude` exit is a failed run, so
+nothing reached `competencies.yml`, the ledger recorded the $5.15, and the knowledge file
+the agent had already written was quarantined rather than left where an accepted one lives
+(it would in fact have validated — 111 sourced items, 21 distinct files, level 5).
+
 ### 2.7 `tldrx-work/<run>/<phase>/questions.md`
 
 The Interview artefact and human interface of the loop; only unknowns become questions. The file is the contract, the

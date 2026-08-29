@@ -53,6 +53,21 @@ something.**
 - **`--print-prompt` is unchanged.** It still prints the copy-paste prompt and
   spawns nothing.
 
+### Measured: `--max-budget-usd` is a stop, not a cap
+
+Pilot smoke, 2026-08-29, `--max-usd 1.5` over mobile + scavtopia-lab: the sub-agent
+was killed with `error_max_budget_usd` ("Reached maximum budget ($1.5)") **after**
+`total_cost_usd: 5.15325`, on a single turn (597 s, 105,698 cache-creation +
+60,548 output tokens, 1M-context model). The flag ends a run once a turn's cost is
+known; it cannot end a turn already in flight. Size a training prompt for the money
+you are willing to lose, not the ceiling you passed. The pipeline itself held: a
+non-zero `claude` exit is a failed run, so nothing reached `competencies.yml`, the
+$5.15 was recorded in `training.jsonl`, and the knowledge file the agent had
+already finished writing was **quarantined** rather than left where an accepted one
+lives — it would in fact have validated (111 sourced items, 21 distinct files,
+level 5), which is exactly why leaving it there would have been the dangerous
+outcome.
+
 ### `training.jsonl` (spec §2.6.1)
 
 Every run appends to `.tldrx/experts/<name>/training.jsonl`: §2.9's envelope shape
