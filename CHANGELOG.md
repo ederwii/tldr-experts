@@ -1,5 +1,68 @@
 # Changelog
 
+## 0.2.0 — unreleased
+
+### The Build phase executes
+
+`tldrx next` on `04-build` used to do what every other phase does: assemble one
+prompt, spawn one sub-agent, validate its files. That is the wrong shape for a
+phase whose work is a dozen agents in a dozen worktrees, so `04-build` now selects
+a **wave executor**.
+
+- **`waves.yml` is the schedule.** Wave by wave, story by story: resolve the
+  story's repo from `workspace.yml`, ensure `epic/<slug>` exists off the repo's
+  `default_branch`, open a worktree at `.tldrx/worktrees/<repo>/<story-id>` on
+  `story/<id>`, and spawn ONE developer sub-agent with its cwd inside it.
+- **Done means proven.** After the agent, the facilitator re-runs the story's
+  fenced ```dod block **in that worktree** — the same runner `dod-gate` uses — and
+  every command must exit 0. Then it commits anything the agent left uncommitted
+  as `feat(<story-id>): <title>`, merges `story/<id>` into the epic with
+  `--no-ff`, and hands the diff to a **read-only reviewer** (`Read`, `Grep`,
+  `Glob`, `Bash(git diff *)`). A story reaches `done` only on DoD green **and** an
+  approval, and its `evidence:` is written from what was measured: `$ <cmd> →
+  exit 0` per command, the commit sha, the review path.
+- **A failure costs one story, not the wave.** A red DoD or a merge conflict
+  blocks that story — the merge is aborted so the epic branch stays usable, and
+  the conflicting paths are recorded as its evidence — and the wave carries on.
+- **A reviewer's `changes` requeues the story once**, with the review rendered
+  under `## Previous attempt` in the next prompt. A second `changes` blocks it.
+- **Nothing ships.** No `git push` is run and no allowance grants one; no epic is
+  merged into a default branch. The phase ends at a human gate that lists the epic
+  branches ready to merge, per repo.
+- **Safety.** A repo with uncommitted changes is refused **before** anything is
+  cut, naming the files and the fix (exit `2`, the stage stays `ready`).
+  `--dry-run` is refused outright: branches and commits are not revertible by a
+  flag. Worktrees are removed when a story reaches `done` or `blocked`, unless
+  `--keep-worktrees`.
+- **`04-build/handoff.md` is generated, not asked for.** The executor holds the
+  exit codes and the merge results, so it writes the four §2.8 sections itself:
+  Findings cite `04-build/log/<story-id>.md`, the Evidence ledger is the dod
+  commands as `[src: $ <cmd> → exit <n>]`. One review log per story, always —
+  including a story blocked before a reviewer ran, so every citation resolves.
+- **`run status` grows a Build line:** `04-build  W1 [S1 done, S2 review]
+  W2 [S3 todo]` with per-story cost, read from the story files and the ledger.
+  A one-stage phase holding a dozen sub-agents cannot say anything with a
+  stage-level progress bar.
+- **In-session:** `--prepare` bundles the NEXT pending story into
+  `.agent/<stage>/<story-id>/` (one story per cycle) and `--commit` continues that
+  story's pipeline from the DoD step.
+
+### The executor plug-in point
+
+`src/core/facilitator/executors/` is a map from **phase id** to executor; a phase
+with no entry keeps the single-agent path. Everything either side — the lock, the
+cursor, the budget gate, `run.yml`'s tasks, the outputs re-read off disk, the
+checks and the gate — stays in `runNext.ts`, because an executor that could move
+the cursor would be a second facilitator. An executor may force a human gate
+(Build does) and may refuse without failing the stage (a dirty repo).
+
+### Money
+
+A stage's budget is split by the sub-agents an executor actually runs:
+`min(stage budget ÷ stories, per_agent_max_usd, --max-usd)` for a developer, a
+quarter of that share for its reviewer. The budget gate guards *starting* a stage,
+so a mid-pipeline `--prepare` cycle is not charged the whole estimate again.
+
 ## 0.3.0 — unreleased
 
 ### `tldrx dashboard` — a live, read-only local server

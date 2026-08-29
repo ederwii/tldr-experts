@@ -33,6 +33,12 @@ export interface PendingStage {
   readonly sections: Readonly<Record<string, readonly string[]>>;
   readonly checks: readonly PlannedCheck[];
   readonly prepared_at: string;
+  /**
+   * The story this bundle is for, when the stage runs story by story (the Build
+   * executor's `--prepare`/`--commit` cycle). `--commit` reads it back to know
+   * which story's pipeline to continue.
+   */
+  readonly story?: string;
 }
 
 /** What the in-session runner is expected to write back. */
@@ -69,6 +75,26 @@ export function pendingPath(runDir: string, stageId: string): string {
 
 export function resultPath(runDir: string, stageId: string): string {
   return join(agentDir(runDir, stageId), RESULT_FILE);
+}
+
+/** Read `pending.json` back — what `--prepare` said this cycle is for. */
+export function readPending(runDir: string, stageId: string): PendingStage {
+  const path = pendingPath(runDir, stageId);
+  if (!existsSync(path)) {
+    throw new PendingError(
+      `no ${PENDING_FILE} in ${agentDir(runDir, stageId)} — run \`tldrx next --prepare\` first`,
+    );
+  }
+  let doc: unknown;
+  try {
+    doc = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    throw new PendingError(`${path} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (typeof doc !== "object" || doc === null || Array.isArray(doc)) {
+    throw new PendingError(`${path} must be a JSON object`);
+  }
+  return doc as PendingStage;
 }
 
 /**

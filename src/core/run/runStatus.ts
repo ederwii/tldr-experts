@@ -12,6 +12,7 @@ import { openBlocks, parseQuestions } from "../text/questions.ts";
 import { remaining } from "../budget/wouldExceed.ts";
 import type { RunBudget } from "../budget/RunBudget.ts";
 import { renderAttempts, stageAttempts, type StageAttempts } from "./attempts.ts";
+import { buildProgress, renderBuildProgress, renderStoryCosts, BUILD_PHASE, type BuildProgress } from "./buildProgress.ts";
 import { isTerminal, stageAt, type RunFile, type RunPhase, type RunStage } from "./RunFile.ts";
 
 export const BAR_CELLS = 5;
@@ -51,6 +52,12 @@ export interface RunStatusView {
   readonly budget: { readonly spent_usd: number; readonly ceiling_usd: number; readonly remaining_usd: number };
   /** Per-attempt cost for the cursor stage, from `agent.result` events. */
   readonly attempts: StageAttempts;
+  /**
+   * The Build phase story by story — null for a run with no `03-plan/waves.yml`.
+   * A one-stage phase holding a dozen sub-agents needs its own view; the phase bar
+   * cannot move until every story is finished.
+   */
+  readonly build: BuildProgress | null;
   readonly waiting: Waiting;
 }
 
@@ -71,6 +78,7 @@ export function buildStatus(run: RunFile, budget: RunBudget, runDir: string): Ru
       remaining_usd: remaining(budget),
     },
     attempts: stageAttempts(runDir, run.cursor.phase, run.cursor.stage),
+    build: buildProgress(runDir),
     waiting: whatIsWaiting(run, runDir),
   };
 }
@@ -200,6 +208,18 @@ export function renderStatus(view: RunStatusView): string {
     `budget  $${view.budget.spent_usd.toFixed(2)} spent of $${view.budget.ceiling_usd.toFixed(2)} ceiling ` +
       `($${view.budget.remaining_usd.toFixed(2)} left)`,
   );
+  // The Build phase, story by story. Only when there is one: on a run parked in
+  // What, a "W1 [S1 todo]" line would be describing a plan nobody has written.
+  if (view.build !== null && view.build.total > 0) {
+    lines.push(
+      "",
+      `${BUILD_PHASE.padEnd(width)}  ${renderBuildProgress(view.build)}` +
+        `   ${String(view.build.done)}/${String(view.build.total)} stories done`,
+    );
+    const costs = renderStoryCosts(view.build);
+    if (costs !== null) lines.push(`${"".padEnd(width)}  ${costs}`);
+    lines.push("");
+  }
   // What the CURSOR stage cost, attempt by attempt. A retry is the moment this
   // matters, and `cost_usd` alone cannot tell one $2.60 try from two $1.30 ones.
   const attempts = renderAttempts(view.attempts);

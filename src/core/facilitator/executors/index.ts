@@ -20,9 +20,13 @@
  * carry the run, the stage spec, the mode and the money.
  */
 import { WATCH_PHASE } from "../../watch/Watcher.ts";
+import { BUILD_PHASE } from "../../build/plan.ts";
 import type { StageSpec } from "../stageSpec.ts";
 import type { NextMode } from "../runNext.ts";
+import type { GateType } from "../../run/RunFile.ts";
+import type { EventType } from "../../events/Event.ts";
 import { watchExecutor } from "./watch.ts";
+import { buildExecutor } from "./build.ts";
 
 /** One sub-agent's worth of accounting, for `run.yml`'s `tasks[]`. */
 export interface ExecutorTask {
@@ -54,6 +58,30 @@ export interface ExecutorContext {
   readonly maxBudgetUsd: number;
   readonly yolo: boolean;
   readonly at: string;
+  /** `--keep-worktrees` — Build keeps its story worktrees after a story settles. */
+  readonly keepWorktrees: boolean;
+  /**
+   * `min(stage budget × share, per_agent_max_usd, --max-usd)`, to the cent.
+   * `agentCap(1)` is `maxBudgetUsd`; an executor that splits the stage between N
+   * sub-agents asks for `agentCap(1 / N)` rather than dividing `maxBudgetUsd`,
+   * which has already been capped once. (wave5)
+   */
+  readonly agentCap: (share?: number) => number;
+  /**
+   * Append one event to `events.jsonl` **while the stage is still running**.
+   *
+   * `ExecutorOutcome.tasks` is enough accounting for a stage that finishes in one
+   * call. A Build stage does not: it can spend twenty minutes over a dozen
+   * sub-agents, and an operator watching `run status` needs the per-story ledger
+   * as it happens, not once at the end. `agent.result` is still emitted by
+   * `runNext` from `tasks`, so an executor must NOT emit that one itself. (wave5)
+   */
+  readonly emit: (
+    type: EventType,
+    payload: Record<string, unknown>,
+    costUsd?: number,
+    actor?: string | null,
+  ) => void;
 }
 
 export interface ExecutorOutcome {
@@ -71,6 +99,19 @@ export interface ExecutorOutcome {
   readonly lines: readonly string[];
   /** One line, for `stage.error`. Null when `ok`. */
   readonly error: string | null;
+  /**
+   * Force the gate type, whatever the stage file says. Build sets `approve`:
+   * concept §9 ends the phase at "epic merges to main after integration tests +
+   * human gate", and a stage file spelling `gate: auto` would otherwise let a run
+   * walk past the one decision a person has to make. (wave5)
+   */
+  readonly gate?: GateType;
+  /**
+   * The executor did nothing, and the stage must NOT be marked failed — a
+   * precondition the operator can fix (spec §3 exit 2, e.g. a dirty repo). The
+   * stage goes back to `ready` and `lines` says what to do. (wave5)
+   */
+  readonly refused?: boolean;
 }
 
 export type StageExecutor = (ctx: ExecutorContext) => Promise<ExecutorOutcome>;
@@ -81,7 +122,7 @@ export type StageExecutor = (ctx: ExecutorContext) => Promise<ExecutorOutcome>;
  * the phase folder is what spec §1 fixes, the stage slug is not.
  */
 export const EXECUTORS: ReadonlyMap<string, StageExecutor> = new Map<string, StageExecutor>([
-  // ["04-build", buildExecutor],  <- wave5/build's line lands here on merge.
+  [BUILD_PHASE, buildExecutor],
   [WATCH_PHASE, watchExecutor],
 ]);
 
@@ -90,3 +131,4 @@ export function executorFor(phaseId: string): StageExecutor | null {
 }
 
 export { watchExecutor } from "./watch.ts";
+export { buildExecutor } from "./build.ts";

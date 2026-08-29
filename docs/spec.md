@@ -869,6 +869,50 @@ between *prompt assembled* and *outputs validated* is replaced by a **stage exec
 the lock, the cursor, the budget gate, `run.yml`, the checks, the gate — stays in `next`, because an executor that could
 move the cursor would be a second facilitator.
 
+**Build executor** (`04-build`, concept §9). `waves.yml` is the schedule and a **story is the unit**; the pipeline over
+one story never varies:
+
+1. **Resolve and cut.** The story's `repo:` must be a `workspace.yml` name (a story is data, and data does not get to
+   name a directory); `epic/<slug>` is ensured off that repo's `default_branch`; a worktree is opened at
+   `.tldrx/worktrees/<repo>/<story-id>` on `story/<id>`, cut from the epic branch. Every git call goes through the
+   runtime seam with a cwd inside a declared repo, and there is deliberately **no `push` wrapper** anywhere in the phase.
+2. **One developer sub-agent**, cwd = that worktree, handed the story file, its epic's summary and the CONTENT of every
+   path the story `touches` (≤24 files, ≤64 KB `[assumption]`, missing paths named as "this story creates it").
+   `--allowedTools` is the file tools + `Bash(<each command THAT repo declares>)` + `Bash(git add *)` +
+   `Bash(git commit *)` — narrower than the default allowance, which is every repo's commands, and wider by exactly the
+   two verbs that make a commit. Its ceiling is `min(stage budget ÷ stories, per_agent_max_usd, --max-usd)`.
+3. **The Definition of Done, re-run by the facilitator** in that worktree, through the same runner `dod-gate` uses. All
+   commands must exit 0. Then anything still uncommitted is committed as `feat(<story-id>): <title>` — the agent may
+   have committed already, and either way the sha is read back with `rev-parse`.
+4. **Merge into the epic**, `git merge --no-ff` inside a worktree checked out on the epic branch. On conflict the merge
+   is **aborted** — so the epic branch is exactly as the previous story left it and the wave can continue — the
+   conflicting paths are read from `diff --diff-filter=U`, and the story is `blocked` with them as its `evidence:`.
+5. **A reviewer sub-agent**, read-only (`Read`, `Grep`, `Glob`, `Bash(git diff *)`), judging the story diff against the
+   acceptance criteria and the conventions. `[assumption]` — the brief says the reviewer writes
+   `04-build/log/<story-id>.md` and that its tools are read-only, which cannot both hold; the judgement is the model's
+   (returned through a `--json-schema` envelope: `verdict`, `summary`, `findings`) and the **log is written by the
+   executor**. A verdict that cannot be parsed is `changes`, never `approve`.
+6. **`done` requires DoD green AND `approve`**, and writes the proof into the story's own front matter: `$ <cmd> →
+   exit 0` per dod command, `commit <sha>`, and the review path. A `changes` verdict sets the story `review` and
+   requeues it **once**, with the review rendered under `## Previous attempt`; a second `changes` blocks it.
+
+**Blast radius is one story.** A red DoD, a merge conflict or a failed sub-agent blocks that story only; the epic
+carries on with the next, and so does the wave. **The phase never ships:** no epic is merged into a default branch, so
+the stage forces `gate: approve` whatever the stage file says, and the handoff lists the epic branches ready to merge
+per repo. `04-build/handoff.md` is written by the executor from what it measured — Findings cite
+`[src: 04-build/log/<story-id>.md:1]` (one log per story touched, so every citation resolves), the Evidence ledger is
+the dod commands as `[src: $ <cmd> → exit <n>]`.
+
+**Safety.** A repo with uncommitted changes on the branch an epic would be cut from is refused **before** anything is
+cut (exit `2`, the stage stays `ready`, the message names the files and the fix). `--dry-run` is refused outright, since
+§5's "revert non-handoff outputs" cannot honestly undo a branch. Worktrees are removed when a story reaches `done` or
+`blocked` — never on `review`, whose second attempt continues in the same tree — unless `--keep-worktrees`.
+
+`--prepare`/`--commit` is **per story**: `--prepare` bundles the next pending story into
+`.agent/<stage>/<story-id>/`, marks it `in_progress` (the file is how `--commit` finds it again), and stops; `--commit`
+picks that story's pipeline up at the DoD step and prepares nothing. Sequential in v1 — spec §5 decision (c) — but the
+order is already the parallel-safe one, because `waves.yml` guarantees a dependency is in an earlier wave.
+
 **Watch executor** (`05-watch`, spec §2.16). In order:
 
 1. **A deterministic pre-pass.** Read `03-plan/stories/*.md`, keep the ones at `status: done`, group them by their

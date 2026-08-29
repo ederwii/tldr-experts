@@ -1,73 +1,70 @@
 <!-- schema: draft -->
-<!-- Stage template: build (phase 4). Rendered into <record>/04-build/handoff.md. -->
+<!-- Stage template: build (phase 4). -->
+<!--
+  READ THIS FIRST: unlike every other stage, this file is NOT the prompt.
 
-# Build — handoff
+  `04-build` is run by the wave executor (spec §5, "Build executor"), which builds
+  its own per-story developer prompt and per-story reviewer prompt from the Plan
+  artefacts, and writes `04-build/handoff.md` itself. Editing this file changes the
+  documentation of the phase, not what the sub-agents are told. The prompts live in
+  `src/core/build/prompts.ts`; the pipeline lives in
+  `src/core/facilitator/executors/build.ts`.
+-->
 
-**Run:** `<run-id>` · **Stage:** `build` · **Expert(s):** `<from stage.yml>` · **Model:** `<from stage.yml>`
-**Spent:** `$<n>` of `$<budget_usd>`
+# Build — what the phase does
 
-> Write the code. Interview here usually has zero questions; the gate is tests green plus a reviewer sign-off. Nothing is done because an agent said so.
+## Role
 
----
+The facilitator is the contractor here, not an author. It hands each story to a
+developer sub-agent, proves the result, and merges it — and it writes the handoff
+from what it measured rather than asking anyone to summarise it.
 
-## Findings
+## Objective
 
-> What Investigate actually established. **Every bullet ends with a source.**
-> `[src: path/to/file.ts:42]` · `[src: https://…]` · `[src: Q7]`
-> A bullet you cannot source does not belong here — move it to Unknowns.
+Turn `03-plan/waves.yml` into merged code on epic branches, one story at a time,
+in wave order. Done-when: every scheduled story is `done` (DoD green, reviewer
+approved, evidence written into its front matter) or `blocked` with a reason a
+human can act on, and every epic branch is left ready to merge **by hand**.
 
-- Story <id>: implemented in <files>; `<command>` exits 0. `[src: …]`
-- Reviewer sub-agent raised <…>, resolved by <…>. `[src: …]`
+## Inputs
 
-## Decisions
+`03-plan/waves.yml`, `03-plan/stories/<id>.md`, `03-plan/epics/<id>.md`, the
+workspace conventions, and — per story — the content of every path its `touches`
+list names, read from that story's own worktree.
 
-> What was decided, and on the strength of what. Same rule: every bullet is sourced.
-> Label each one **measured** (it was run), **inferred** (mechanism plus evidence,
-> could be wrong) or **assumed** (nobody knows yet).
+## Investigate
 
-- Deviated from the plan at <…>, because <…>. `[src: …]`
+Per story, in `waves.yml` order:
 
-## Unknowns
+1. resolve the story's repo from `workspace.yml`, and refuse the whole phase if
+   that repo's tree is dirty;
+2. ensure `epic/<slug>` exists, cut from the repo's `default_branch`;
+3. open a worktree at `.tldrx/worktrees/<repo>/<story-id>` on `story/<id>`;
+4. spawn ONE developer sub-agent with cwd = that worktree.
 
-> Only these become questions. Before writing one, grep `.tldrx/memory/facts.yml`:
-> re-asking a recorded fact is a framework test failure, not a style choice.
-> Each unknown states who or what could answer it.
+## Produce
 
-- <…> could not be verified locally and needs a real environment. — *could be answered by:* `<person | file | command | doc>`
-
-## Evidence ledger
-
-> Every source cited above, once, with what it proved. This is what the next stage
-> and the reviewer read instead of re-deriving the work. **List items, not a table**
-> — this section is checked exactly like the other three, and a table holds no
-> list items for the gate to check.
-
-- … what this file establishes … `[src: <repo>:<path>:<line>]`
-- … what this command proved … `[src: $ <command> → exit 0]`
-
-## Outputs written
-
-- `stories/<id>.md` updated with evidence
-- story branches merged to the epic branch on green
-- `integration-test-log.md`
-
-## Gate
-
-Blocked on: **<human approval | checks green>**. Requirements are in `stage.yml`.
-Nothing advances until this is recorded in `run.yml` and `events.jsonl`.
+- `04-build/log/<story-id>.md` — the review log, one per story touched
+- `04-build/handoff.md` — Findings per story, Evidence ledger of dod commands
+- `03-plan/stories/<id>.md` — `status:` and `evidence:` written back
+- `epic/<slug>` branches, merged from `story/<id>`, **never pushed**
 
 ## Rules
 
-- Every bullet under Findings / Decisions / Unknowns / Evidence ledger is ONE line and ENDS with a source token. A bullet without one is refused by the `claim-sources` gate and the whole stage fails.
-- Each of Findings / Decisions / Unknowns / Evidence ledger must hold at least ONE list item; a section that is genuinely empty is written as `- none [src: absent:<what you looked at>]`, and a prose-only section is refused by the `claim-sources` gate.
-- Source token grammar (exact): `[src: <one or more sources separated by "; ">]` where a source is ONE of:
-  - `<repo>:<path>:<line>` or `<repo>:<path>:<start>-<end>` — a file with ONE line or ONE range. Never a whole file, never a comma list (`file.md:7,21` is invalid: write two sources or a range).
-  - `F<n>` — a fact id from `.tldrx/memory/facts.yml` (cite the id, never the file).
-  - `Q<n>` — a question from this run's questions.md.
-  - `https://…` — an external document (https only).
-  - `aidlc:<file>:<line>` / `aidlc:<file>#Q<n>` — an imported source, exactly as it already appears in intent.md/scope.md.
-  - `$ <command> → exit <n>` — only under Evidence ledger, only for commands listed in `.tldrx/workspace.yml`.
-  - `absent:<path>` — you looked there and found nothing.
-- Do not cite templates, expert files or directories (`.tldrx/experts/*` is not evidence).
-- Before asking a question, grep `.tldrx/memory/facts.yml`; if the answer is there, cite `F<n>` instead of asking.
-- Write only the declared outputs; do not add sections beyond the ones listed under Produce.
+- Done means proven: the ```dod block is re-run by the facilitator, in the story's
+  worktree, and every command must exit 0. A sub-agent's own "it works" is not
+  evidence and is never recorded as any.
+- A reviewer's `changes` requeues the story ONCE, with the review under
+  `## Previous attempt`. A second `changes` blocks it.
+- A DoD failure or a merge conflict blocks that story only — the wave carries on.
+- Nothing pushes. No epic is merged into a default branch.
+
+## Questions
+
+None. The Interview happened in What and How; a story that still needs a human
+answer is a Plan bug, and it surfaces here as `blocked`.
+
+## Stop
+
+At the gate. `tldrx approve` after merging the epic branches, or
+`tldrx reject --note "…"` to send the phase back.

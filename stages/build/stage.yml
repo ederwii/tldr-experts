@@ -1,40 +1,48 @@
 # schema: draft
-# Phase 4 of the loop. Concept §3 and §9.
-# Interview usually has zero questions here; the Gate is tests-green plus review.
-# Independent stories in one wave run as parallel sub-agents in separate worktrees.
+# Phase 4 of the loop. Concept §3 and §9; spec §5 "Build executor".
+#
+# This stage is NOT run by the default one-stage-one-agent path. `04-build` selects
+# the wave executor (src/core/facilitator/executors/build.ts), which reads
+# 03-plan/{waves.yml,stories/*.md,epics/*.md} and, story by story in wave order,
+# cuts the branch, opens the worktree, spawns ONE developer sub-agent in it, re-runs
+# the story's ```dod block, commits, merges into the epic branch, and spawns a
+# read-only reviewer. A story is `done` only when the DoD exited 0 and the reviewer
+# approved; its evidence is written back into the story's own front matter.
+#
+# `budget_usd` below is the WHOLE phase: the executor splits it by story count and
+# caps each share at budget.yml's `per_agent_max_usd`.
 name: build
 title: Build
 phase: 4
 model: sonnet
 budget_usd: 9
+timeout_s: 1800
+# Branches and commits are not revertible by a flag, so a dry run is refused
+# rather than half-honoured (spec §5, Build executor).
+dry_run_allowed: false
 
 inputs:
   - "03-plan/waves.yml"
-  - "03-plan/stories/<id>.md"
-  - ".tldrx/map/commands.md"
-  - ".tldrx/map/conventions.md"
+  - ".tldrx/conventions/shared.md"
+  - ".tldrx/memory/facts.yml"
 
+# The handoff is written by the executor, deterministically, from exit codes and
+# merge results it holds — no sub-agent is asked to summarise what it already knows.
+# `04-build/log/<story-id>.md` is written per story and cited by every Finding.
 outputs:
-  - "stories/<id>.md (updated with evidence)"
-  - "<epic branch> + <story branches>"
-  - "integration-test-log.md"
-  - "handoff.md"
+  - {path: "04-build/handoff.md", sections: [Findings, Decisions, Unknowns, "Evidence ledger"]}
 
 experts:
   - developer
-  - stack
-  - reviewer
 
 gate:
-  type: checks-green
+  type: human-approval
   requires:
-    - "acceptance criteria met, with evidence"
-    - "unit tests added and green"
-    - "lint, typecheck and the project's real build command all exit 0"
-    - "conventions check passes"
-    - "reviewer sub-agent sign-off recorded"
+    - "every scheduled story is `done` or `blocked`, with a review log for each"
+    - "each `done` story's dod commands exited 0, re-run by the facilitator"
+    - "each `done` story carries evidence: the commands, the commit sha, the review"
+    - "reviewer sub-agent sign-off recorded per story"
+    - "the epic branches are listed, unmerged — a human merges them, not the framework"
 
 checks:
   - claim-sources
-  - dod-gate
-  - budget-gate

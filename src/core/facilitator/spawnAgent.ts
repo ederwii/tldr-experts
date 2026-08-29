@@ -34,6 +34,18 @@ export interface AgentRequest {
   readonly timeoutMs: number;
   /** Overrides the child environment; defaults to the live `process.env`. */
   readonly env?: Readonly<Record<string, string | undefined>>;
+  /**
+   * The complete `--allowedTools` list, replacing base tools + workspace commands.
+   *
+   * The Build phase needs both a NARROWER allowance than the default (one repo's
+   * commands, not every repo's) and a WIDER one (`Bash(git add *)`), and a reviewer
+   * needs a read-only one. A caller that knows exactly what a sub-agent may do says
+   * so rather than describing it in commands. `[assumption]` — the spec never lists
+   * the sub-agent's tool allowance at all.
+   */
+  readonly tools?: readonly string[];
+  /** Replaces `ENVELOPE_SCHEMA` for a sub-agent that returns something else. */
+  readonly schema?: Readonly<Record<string, unknown>>;
 }
 
 export interface AgentOutcome {
@@ -45,6 +57,8 @@ export interface AgentOutcome {
   readonly costUsd: number;
   readonly usage: AgentUsage;
   readonly envelope: AgentEnvelope | null;
+  /** The raw `structured_output`, for a request that passed its own `schema`. */
+  readonly structured: unknown;
   readonly result: string;
   /** One line, suitable for `tasks[].error`. Null when the run succeeded. */
   readonly error: string | null;
@@ -60,8 +74,8 @@ export function buildClaudeArgs(request: AgentRequest): readonly string[] {
   const args: string[] = ["-p", "--output-format", "json"];
   if (request.model !== null && request.model !== "") args.push("--model", request.model);
   args.push("--max-budget-usd", formatUsd(request.maxBudgetUsd));
-  args.push("--json-schema", JSON.stringify(ENVELOPE_SCHEMA));
-  args.push("--allowedTools", allowedTools(request.workspaceCommands).join(","));
+  args.push("--json-schema", JSON.stringify(request.schema ?? ENVELOPE_SCHEMA));
+  args.push("--allowedTools", (request.tools ?? allowedTools(request.workspaceCommands)).join(","));
   if (request.yolo) args.push("--dangerously-skip-permissions");
   return args;
 }
@@ -99,7 +113,8 @@ export function interpret(
   const ok = exitCode === 0 && !isError && !timedOut && doc !== null;
 
   return {
-    ok, exitCode, timedOut, isError, sessionId, costUsd, usage, envelope, result,
+    ok, exitCode, timedOut, isError, sessionId, costUsd, usage, envelope,
+    structured: doc?.structured_output ?? null, result,
     error: ok ? null : describe(exitCode, doc, stderr, timedOut, stdout),
     raw: stdout,
   };

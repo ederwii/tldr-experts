@@ -18,3 +18,5 @@ export { approve, reject, GateError } from "./gates.ts";
 export type { ApproveOutcome, RejectOutcome, GateContext } from "./gates.ts";
 export { runChecks, runCheck, WRITE_TIME_ONLY } from "./checks.ts";
 export type { CheckOutcome, CheckStatus, CheckContext } from "./checks.ts";
+export { buildProgress, renderBuildProgress, renderStoryCosts, BUILD_PHASE } from "./buildProgress.ts";
+export type { BuildProgress, WaveProgress, StoryProgress } from "./buildProgress.ts";

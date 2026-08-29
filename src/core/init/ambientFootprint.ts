@@ -15,6 +15,9 @@ import type { WriteLog } from "./writeFile.ts";
 export const GITIGNORE_BODY = [
   ".tldrx/graphify-out/",
   ".tldrx/cache/",
+  // Build-phase story worktrees: real checkouts of branches that ARE committed.
+  // The trees themselves are machine-local scratch (spec §5, Build executor).
+  ".tldrx/worktrees/",
   "tldrx-work/*/.lock",
   "tldrx-work/*/.agent/",
 ].join("\n");

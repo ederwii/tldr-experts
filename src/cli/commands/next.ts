@@ -27,7 +27,7 @@ const INFORMATIONAL: readonly number[] = [EXIT_OK, EXIT_AWAITING_HUMAN];
 export const nextCommand: Command = {
   name: "next",
   summary: "Advance the active run to its next stage",
-  usage: "tldrx next [<run>] [--dry-run] [--prepare|--commit] [--model <m>] [--max-usd <n>] [--yolo] [--root <path>]",
+  usage: "tldrx next [<run>] [--dry-run] [--prepare|--commit] [--model <m>] [--max-usd <n>] [--yolo] [--keep-worktrees] [--root <path>]",
   subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
@@ -45,6 +45,7 @@ export const nextCommand: Command = {
         model: stringFlag(args, "model"),
         maxUsd: numberFlag(args, "max-usd"),
         yolo: boolFlag(args, "yolo"),
+        keepWorktrees: boolFlag(args, "keep-worktrees"),
         actor: currentActor(),
         at: nowRfc3339(),
       });

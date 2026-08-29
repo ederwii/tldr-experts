@@ -22,7 +22,10 @@ export type { AgentRequest, AgentOutcome } from "./spawnAgent.ts";
 export { validateOutputs, sectionBodies, describeProblems } from "./validateOutputs.ts";
 export type { OutputProblem } from "./validateOutputs.ts";
 export {
-  writeBundle, writeRaw, readResult, promptPath, pendingPath, resultPath, PendingError,
+  writeBundle, writeRaw, readResult, readPending, promptPath, pendingPath, resultPath, PendingError,
   PROMPT_FILE, PENDING_FILE, RESULT_FILE, RAW_FILE,
 } from "./pending.ts";
 export type { PendingStage, StageResult } from "./pending.ts";
+export { executorFor, EXECUTORS, buildExecutor, watchExecutor } from "./executors/index.ts";
+export type { ExecutorContext, ExecutorOutcome, ExecutorTask, StageExecutor } from "./executors/index.ts";
+export { developerTools, REVIEWER_TOOLS, MAX_ATTEMPTS, REVIEWER_SHARE, HANDOFF_REL } from "./executors/build.ts";
