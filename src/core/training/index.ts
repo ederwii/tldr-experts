@@ -16,7 +16,7 @@ export type { KnowledgeFile, KnowledgeIssue, KnowledgeShape, MergedEvidence } fr
 export { selectFiles, keywordsFor, readDomains, readCommunities, contentHits, MAX_KEYWORDS, MAX_SCANNED_FILES } from "./selectFiles.ts";
 export type { FileSelection, Candidate, InlinedFile, SelectOptions } from "./selectFiles.ts";
 
-export { mineRuns, relevantFacts, MAX_RUN_FILES, MAX_RUN_BYTES } from "./mineRuns.ts";
+export { mineRuns, relevantFacts, hasMinableFiles, MAX_RUN_FILES, MAX_RUN_BYTES } from "./mineRuns.ts";
 export type { RunMine, MinedFile, MineOptions } from "./mineRuns.ts";
 
 export { codePrompt, runsPrompt, renderInlined, renderMined, renderFactRows, withGutter } from "./trainingPrompt.ts";

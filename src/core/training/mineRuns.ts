@@ -131,6 +131,21 @@ export function relevantFacts(options: MineOptions): readonly Fact[] {
   });
 }
 
+/**
+ * Is there anything for full-mode training to read at all?
+ *
+ * The same walk `mineRuns` does, minus the per-expert repo filter — the question
+ * is "does this workspace have any handoff or retro on disk", which `tldrx status`
+ * asks BEFORE it offers a role expert's training command. Offering a command that
+ * `nothingToMineRefusal` will refuse is worse than saying there is nothing yet.
+ */
+export function hasMinableFiles(root: string): boolean {
+  for (const runDir of listRunDirs(root)) {
+    if (findMined(runDir, 0).length > 0) return true;
+  }
+  return false;
+}
+
 function findMined(dir: string, depth: number): readonly string[] {
   if (depth > MAX_DEPTH) return [];
   let entries: readonly string[];

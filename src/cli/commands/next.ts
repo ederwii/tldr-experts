@@ -21,6 +21,7 @@ import { effortFlag } from "../effort.ts";
 import { fail } from "../report.ts";
 import { runNext, type NextMode } from "../../core/facilitator/runNext.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
+import { buildWorkspaceStatus, renderWorkspaceStatus } from "../../core/status/index.ts";
 
 /** Codes whose report belongs on stdout: the run is fine, it just needs a human. */
 const INFORMATIONAL: readonly number[] = [EXIT_OK, EXIT_AWAITING_HUMAN];
@@ -51,6 +52,14 @@ export const nextCommand: Command = {
         actor: currentActor(),
         at: nowRfc3339(),
       });
+
+      // "There is no run" is the one refusal a human cannot act on from the
+      // message alone — it says what is missing, never what to do instead. The
+      // pending report is exactly that answer, and it costs a few file reads. The
+      // exit code is untouched: this is context in front of the same `3`.
+      if (outcome.code === EXIT_NOT_FOUND && runId === undefined) {
+        process.stdout.write(`${renderWorkspaceStatus(buildWorkspaceStatus(root))}\n\n`);
+      }
 
       const text = `${outcome.lines.join("\n")}\n`;
       if (INFORMATIONAL.includes(outcome.code)) process.stdout.write(text);
