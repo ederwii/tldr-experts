@@ -200,6 +200,47 @@ code.
   numbers, the reason each loaded and its knowledge file paths. An expert with zero evidence
   anywhere earns one **stderr** note naming its train command — never a block.
 
+**Knowledge that has to be worth something**
+
+- **A citation must sustain its claim, not only resolve.** Making every `src` resolvable is a
+  check on the citation and says nothing about the sentence. An **execution claim** now needs a
+  command src — `execution claim needs a '$ <cmd> → exit <n>' src, not a file line` — because a
+  real `knowledge/aparece-api.md` asserted `dotnet build` exit 0, "measured, exit code captured
+  unpiped", citing `.tldrx/workspace.yml:19`: the line that *declares* the command. It claimed
+  "78/78 passed, exit 0" citing a line of the test script. Every citation resolved; none was
+  evidence anything ran. The rule reads prose paragraphs as well as bullets, because that header
+  IS a paragraph and its tokens sit mid-line where a line-anchored parser never looks. Measured
+  after: 7 refusals on that file, 1 on `aparece-platform`, 0 on the third.
+- **Three warnings that cost a citation its evidence row without rejecting the file:**
+  `paraphrase` (the bullet is ≥ 90% a verbatim substring of the ±3-line neighbourhood of the
+  line it cites), `outside domain` (the path is outside the expert's own `## Domain` — and the
+  expert whose domain does contain it is named), and `duplicate src` (already on record for this
+  expert). None of them is a lie; they are ways of being worth nothing, and the honest response
+  is a level that does not move. Measured on the real corpus: 57 outside-domain and 7 duplicate
+  warnings across 248 bullets.
+- **`## Sources` earns nothing.** It was 41 of 107 bullets in one real knowledge file and 18 of
+  56 in another, every one re-citing a source cited above it. It is still validated like any
+  other section; it just derives no evidence, and `countFindings` stops counting it.
+- **A bullet may carry its own confidence** — ending in `(measured)` / `(inferred)` /
+  `(assumed)`, or leading with `*measured* —`, the other spelling the real corpus uses — parsed
+  onto the evidence row as `confidence:`. Both spellings are stripped before the execution rule
+  matches: inside the annotation the word is a LABEL, and refusing a file for obeying §2.3's own
+  "say which of measured / inferred / assumed each claim is" would be the rule being wrong.
+- **`tldrx expert list` warns on a shared citation** — `warning: shared citation <file:line> by
+  <a>,<b> — check for contradiction`, on stderr, when two experts cite one line with bullets
+  whose normalised texts differ. 16 files on the real workspace were cited by two trained
+  experts each and nothing compared what the two said. It resolves nothing on purpose: deciding
+  which expert is right is not something a deterministic tool can do.
+- **The Build executor writes `retro.md` as the run goes.** Role experts train from
+  `tldrx-work/<run>/**/{handoff,retro}.md` and nothing else, and all five sat at level 0 because
+  `retro.md` existed only when a human typed `tldrx retro`. Build now appends `## Build
+  feedback` as each story settles — every reviewer `changes` verdict and finding, every DoD
+  command that failed on the first attempt with its exit code, every merge conflict, and (read
+  back off `events.jsonl`, since they happen between invocations) every gate rejected and every
+  approval revoked, with its note and what it staled. Deterministic, deduped verbatim, every
+  bullet carrying a `[src: …]` into the review log or the events line. `tldrx retro` carries the
+  section forward instead of overwriting it.
+
 **Dashboard**
 
 - Redesigned, and it now draws in the browser: the model rides inline in a
@@ -233,14 +274,36 @@ code.
 
 ### Changed
 
-- **The level ladder: ≥4 needs a `run` evidence row, 5 needs two kinds and W ≥ 20** (fifth
-  threshold 12 → 20). Measured: an expert holding 15 `code` + 2 `test` rows, all written the
-  same afternoon by one reading session with no command ever executed, computed **5/5**.
-  Reading is evidence that code *says* something; only a run is evidence that it *does* it. The
-  §2.6 formula applies five steps in a fixed order — thresholds `[0.5, 1.5, 3, 6, 20]` →
-  staleness cap → run cap → top-rung kinds check → distinct-source cap. A `run` row is
-  necessary, not sufficient: one alone is `W = 1.0`, level 1. **Experts trained by reading
-  alone now cap at 3; run `tldrx expert recompute` to see the new levels.**
+- **The level ladder weighs findings, not files.** `W = Σ (recency × weight)` with
+  `recency = max(0.25, 1 - ageDays/365)`, `weight = code 1.0 · run 1.0 · test 1.0 · answer 0.8 ·
+  doc 0.5`, **× 2** when the row is `cross: true` (a finding tying two or more distinct files
+  together) and **× 0.5** when `confidence: assumed`. Thresholds `[0.5, 1.5, 3, 6, 20]` (the
+  fifth was 12), then three caps in order: no `kind: run` row ⇒ `min(level, 3)`; level 5 needs
+  ≥ 2 distinct kinds, else 4; `level ≤ count(distinct src)`. Three things changed here at once,
+  and **levels move: run `tldrx expert recompute` after upgrading.**
+  - *Reading alone now caps at 3.* Measured: an expert holding 15 `code` + 2 `test` rows, all
+    written the same afternoon by one reading session with no command ever executed, computed
+    **5/5**. Reading is evidence that code *says* something; only a run is evidence that it
+    *does* it. A `run` row is necessary, not sufficient: one alone is `W = 1.0`, level 1.
+  - *Recency decays continuously and the 180-day staleness cap is gone.* It was a cliff: an
+    expert trained on day 179 and the same expert on day 181 knew identical things and the
+    ladder reported 4 and 2. Knowledge fades; it does not expire on a Tuesday. One continuous
+    factor, floored at 0.25 so a year-old reading is worth a quarter of a fresh one rather than
+    nothing, replaces both the four-band table and the cap.
+  - *A cross-file finding counts double, an `assumed` one half.* `cross:` and `confidence:` are
+    additive `evidence[]` fields derived from the bullet, never asserted; a row written before
+    they existed carries neither and computes as it always did. A model can re-derive anything
+    one file says by reading it; what it cannot re-derive is the relationship between two.
+- **The training prompt asks for value, not coverage.** It used to say "Citing the same file
+  twelve times is worth one row; reading twelve files is worth twelve" — an accurate description
+  of the old formula, and a Goodhart instruction. Both prompts (the spawned one and
+  `--print-prompt`) now carry the same criterion word for word: a finding is something a model
+  could not re-derive by reading that one file once — cross-file contradictions, dead paths,
+  defaults that differ from their docstrings, absences written as a negative claim, measured
+  commands. Restating a docstring is not a finding.
+- **Light mode's file selection is bounded by `## Domain`.** Only files inside the expert's
+  declared folders are scored, read or inlined; every file inside them is a candidate even when
+  it greps for nothing. Bounding the input is cheaper than warning about the output.
 - **One shared knowledge budget, declared inputs first.** `inputs_max_bytes` (default 96 KB) is
   spent on every declared input in declaration order; the loaded experts then share
   `knowledge_max_bytes` (default 48 KB) **in total**, split by rank, never one budget each. The

@@ -111,7 +111,15 @@ export function writeCompetencies(options: WriteCompetenciesOptions): Competenci
 
     if (id === options.areaId) {
       const merged = mergeEvidence(existing, options.evidence, options.now);
-      area.evidence = merged.evidence.map((item) => ({ kind: item.kind, src: item.src, at: item.at }));
+      // `cross` and `confidence` are written only when set, so a row that has
+      // neither serialises byte-for-byte the way it always did (§2.6, additive).
+      area.evidence = merged.evidence.map((item) => ({
+        kind: item.kind,
+        src: item.src,
+        at: item.at,
+        ...(item.cross === true ? { cross: true } : {}),
+        ...(item.confidence === undefined ? {} : { confidence: item.confidence }),
+      }));
       area.level = merged.levelAfter;
       write = {
         path,

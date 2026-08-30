@@ -9,7 +9,7 @@ import { endsWithToken, isBullet } from "../src/core/map/index.ts";
 import {
   competencyLevel, planExperts, planQuestions, renderQuestions, runInit, upsertBlock,
   validateProcessDocument, validateWorkspaceDocument, buildWorkspaceDocument,
-  GITIGNORE_MARKERS, type InitOptions, type InitReport,
+  GITIGNORE_MARKERS, type CompetencyEvidence, type InitOptions, type InitReport,
 } from "../src/core/init/index.ts";
 import { describeStageLoads, stageIds, stagesLoadingExperts } from "../src/core/experts/index.ts";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
@@ -337,11 +337,18 @@ describe("competency levels (spec §2.6)", () => {
     expect(competencyLevel(fresh, now)).toBe(2);
   });
 
-  test("stale evidence is capped at 2 however much of it there is", () => {
-    const stale = Array.from({ length: 20 }, (_, index) => ({
-      kind: "code" as const, src: `a:x${index}.ts:1`, at: at(400),
-    }));
-    expect(competencyLevel(stale, now)).toBe(2);
+  test("age decays evidence continuously and floors it at a quarter", () => {
+    const rows = (days: number): CompetencyEvidence[] => [
+      ...Array.from({ length: 20 }, (_unused, index) => ({
+        kind: "code" as const, src: `a:x${index}.ts:1`, at: at(days),
+      })),
+      { kind: "run" as const, src: "$ bun test → exit 0", at: at(days) },
+    ];
+    // Fresh: W = 21.0, two kinds, 21 sources -> the top rung.
+    expect(competencyLevel(rows(0), now)).toBe(5);
+    // The same twenty-one rows 400 days later: every one is worth 0.25, W = 5.25.
+    // There is no cliff at 180 days any more — the work is worth less, not void.
+    expect(competencyLevel(rows(400), now)).toBe(3);
   });
 });
 

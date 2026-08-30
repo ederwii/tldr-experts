@@ -153,6 +153,28 @@ workspace. See [4 — Experts](04-experts.md#how-a-level-is-computed).
 are `code` `run` `test` `doc` `answer`. The warning goes to stderr, so it survives `--json` and
 a redirect.
 
+**`execution claim needs a '$ <cmd> → exit <n>' src, not a file line`.** A bullet asserting a
+result — "exit 0", "78/78 passed", "the build is green" — cited a file rather than the command.
+Citing the line of `workspace.yml` that *declares* the command is not evidence anything ran.
+Cite the run: `[src: $ dotnet build → exit 0]`.
+
+**A knowledge bullet was accepted but earned no evidence.** One of three warnings fired:
+`paraphrase` (the bullet is ≥ 90% a verbatim substring of the ±3 lines around what it cites),
+`outside domain` (the path is outside this expert's `## Domain` — the warning names the expert
+that does own it; train that one), or `duplicate src` (this expert already has that source on
+record, in any area). Bullets under `## Sources` earn nothing by design. See
+[4 — Experts](04-experts.md#what-earns-a-place-on-a-knowledge-file).
+
+**`warning: shared citation <file:line> by <a>,<b> — check for contradiction`.** Two experts
+cite the same line with bullets that say different things. It resolves nothing on purpose —
+deciding which expert is right is not something a deterministic tool can do. Read both and fix
+the one that is wrong.
+
+**Levels changed after upgrading and nobody trained anything.** Expected: the ladder's fifth
+threshold moved 12 → 20, the run cap was added, the 180-day staleness cap was replaced by
+continuous decay, and cross-file findings now weigh double. `tldrx expert recompute` writes the
+new numbers; `tldrx expert list` warns until you do.
+
 ## Build
 
 **A story is blocked with a red DoD or a merge conflict.** The wave carries on and the story is

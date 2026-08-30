@@ -87,6 +87,12 @@ an agent said it learned something.**
   keyword grep over the expert's repos (the area id and the words of its title) — capped at
   **40 files / 96 KB**, with everything over the cap listed by name as "not read", so a
   sub-agent cannot describe a file it was never shown.
+- **The expert's own `## Domain` is a hard boundary on that walk.** A file outside the declared
+  folders is never scored, never inlined, and is not even listed as "not read" — it was never a
+  candidate for this expert. Measured on a real workspace: the grep alone put 29% / 55% / 22% of
+  three trained experts' citations outside their own declared domain — knowledge filed under the
+  wrong name, written at full price. Bounding the input is cheaper than warning about the
+  output. An expert that declares no domain (a stack or whole-repo expert) is unbounded.
 - **One sub-agent** — the expert plus its stack experts plus the conventions — reads only
   what was inlined, with a line-number gutter (a citation whose line is outside its file is
   rejected), and writes `.tldrx/experts/<name>/knowledge/<area>.md` with `## Invariants`,
@@ -114,8 +120,13 @@ deliberately out of scope:** they carry no citation anything can re-resolve.
 
 On a **role expert**, `--mode light` is **refused** (exit 1) before anything is spawned or
 spent — the grep would either score nothing or score files for containing the word — and
-`--mode full` runs the runs pass alone. Full mode with no matching run is refused the same
-way.
+`--mode full` runs the runs pass alone. Full mode with no matching run is refused the same way.
+There is material to mine now: the Build executor appends `## Build feedback` to
+`tldrx-work/<run>/retro.md` as each story settles — every reviewer `changes` verdict and
+finding, every DoD command that failed on the first attempt with its exit code, every merge
+conflict, and every gate rejected or approval revoked with its note. Before that, `retro.md`
+existed only when a human typed `tldrx retro`, which is why all five role experts sat at level
+0. `tldrx retro` carries the section forward rather than overwriting it.
 
 Every run appends to `.tldrx/experts/<name>/training.jsonl` — the `events.jsonl` envelope
 with `run` replaced by `expert` and `stage` by `area`, because training outlives every run.
@@ -132,29 +143,78 @@ Money: `--max-usd` (default **$2.00**, split between full mode's two agents) rea
 sub-agent as `--max-budget-usd`. Below the **$0.25 floor** it refuses with exit `2` before
 reading anything. See [6 — Budgets and cost](06-budgets-and-cost.md).
 
+## What earns a place on a knowledge file
+
+Making every `src` resolvable is a check on the citation and says nothing about the sentence.
+Four more rules decide whether a bullet is worth anything.
+
+**An execution claim needs a command src.** A bullet asserting a result — "exit 0", "78/78
+passed", "the build is green" — must cite the command, `[src: $ dotnet build → exit 0]`. Citing
+the line of `workspace.yml` that *declares* that command is **refused**:
+`execution claim needs a '$ <cmd> → exit <n>' src, not a file line`. The rule reads prose
+paragraphs as well as bullets, because a knowledge file's header is a paragraph and its tokens
+sit mid-line where a line-anchored parser never looks. Measured on a real corpus: 7 refusals on
+one file, 1 on another, 0 on the third.
+
+**Three warnings cost a citation its evidence row without rejecting the file.** None of them is
+a lie; they are ways of being worth nothing, and the honest response is a level that does not
+move:
+
+| Warning | When | Note |
+|---|---|---|
+| `paraphrase` | the bullet is ≥ 90% a verbatim substring of the ±3-line neighbourhood of the line it cites | restating a docstring is not a finding |
+| `outside domain` | the path is outside this expert's own `## Domain` | the expert whose domain *does* contain it is named — train that one |
+| `duplicate src` | this `src` is already on record for this expert, in any area | one reading cannot be sold twice by moving it to a second area |
+
+Measured on the real corpus: 57 outside-domain and 7 duplicate warnings across 248 bullets.
+
+**`## Sources` earns nothing.** It was 41 of 107 bullets in one real knowledge file and 18 of 56
+in another, every one re-citing a source cited above it. It is still validated like any other
+section; it just derives no evidence and does not count as a finding.
+
+**A bullet may carry its own confidence.** End it with `(measured)` / `(inferred)` /
+`(assumed)`, or lead with `*measured* —`; it is parsed onto the evidence row as `confidence:`.
+Both spellings are stripped before the execution rule matches — inside the annotation the word
+is a label, not a claim.
+
+**What the prompt asks for.** A finding is something a model could not re-derive by reading that
+one file once: cross-file contradictions, dead paths, defaults that differ from their
+docstrings, absences written as a negative claim, measured commands.
+
 ## How a level is computed
 
 `level` is arithmetic over the evidence on disk, never self-declared; a hand-edited value is
 overwritten on the next write.
 
 ```
-recency = 1.0 (≤30 d) · 0.6 (≤90 d) · 0.3 (≤365 d) · 0.1 (else)
+recency = max(0.25, 1 - ageDays/365)              # continuous, no cliff
 weight  = code 1.0 · run 1.0 · test 1.0 · answer 0.8 · doc 0.5
+          × 2   when the row is `cross: true`     # a finding spanning ≥ 2 files
+          × 0.5 when `confidence: assumed`
 W       = Σ (recency × weight)
 level   = 0 if W<0.5 · 1 if <1.5 · 2 if <3 · 3 if <6 · 4 if <20 · else 5
 ```
 
-Then four caps, in this order:
+Then three caps, in this order:
 
-1. **staleness** — newest evidence older than 180 days ⇒ `min(level, 2)`
-2. **run cap** — no `kind: run` row at all ⇒ `min(level, 3)`
-3. **top-rung kinds** — level 5 needs ≥ 2 distinct evidence kinds, else 4
-4. **distinct sources** — `level ≤ count(distinct src)`
+1. **run cap** — no `kind: run` row at all ⇒ `min(level, 3)`
+2. **top-rung kinds** — level 5 needs ≥ 2 distinct evidence kinds, else 4
+3. **distinct sources** — `level ≤ count(distinct src)`
 
 **Stars above 3 are earned by measuring.** Reading is evidence that code *says* something;
 only a run is evidence that it *does* it. Measured 2026-08-29: an expert holding 15 `code` +
 2 `test` rows — all written the same afternoon by one reading session, no command ever
 executed — computed 5/5 under the old thresholds. It caps at 3 now.
+
+**Recency fades; it does not expire on a Tuesday.** There used to be a four-band recency table
+and a hard cap pinning any area whose newest row was over 180 days old at level 2 — a cliff, so
+an expert trained on day 179 and the same expert on day 181 knew identical things and the ladder
+reported 4 and 2. One continuous factor, floored at 0.25, replaced both.
+
+**A cross-file finding counts double.** `cross:` and `confidence:` are additive `evidence[]`
+fields derived from the bullet, never asserted; a row written before they existed carries
+neither and computes as it always did. A model can re-derive anything one file says by reading
+it; what it cannot re-derive is the relationship between two.
 
 A `run` row is necessary, not sufficient: one alone is `W = 1.0`, level 1. Where
 `workspace.yml` declares no command there is no `Bash` grant at all, the training prompt says
@@ -163,6 +223,12 @@ so, and level 3 is the honest ceiling in that workspace.
 An evidence row whose `kind` is not one of `code` `run` `test` `doc` `answer` is not counted,
 and never silently: one `warning: <expert>/<area>: N evidence row(s) ignored — unknown kind
 '<x>'` per unknown kind goes to **stderr**, so it survives `--json` and a redirect.
+
+`tldrx expert list` also warns when two experts cite the same `file:line` with bullets whose
+normalised texts differ — `warning: shared citation <file:line> by <a>,<b> — check for
+contradiction`, on stderr. It resolves nothing on purpose: deciding which expert is right is not
+something a deterministic tool can do. Measured: 16 files on a real workspace were cited by two
+trained experts each, and nothing compared what the two said.
 
 ## Looking at them
 

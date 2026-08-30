@@ -66,8 +66,10 @@ describe("the §2.6 level formula", () => {
     { why: "twelve fresh code, W=12.0, but nothing was run", items: evidence("code", 12, 0), level: 3 },
     { why: "six fresh code plus one run, W=7.0", items: [...evidence("code", 6, 0), runRow(0)], level: 4 },
     { why: "twenty fresh code plus one run, W=21.0, two kinds", items: [...evidence("code", 20, 0), runRow(0)], level: 5 },
-    { why: "recency band 31-90d halves and more (0.6)", items: evidence("code", 2, 31), level: 1 },
-    { why: "recency band 91-365d (0.3): W=0.3 is below the first threshold", items: evidence("code", 1, 91), level: 0 },
+    { why: "continuous decay at 31d (0.915): two rows are W=1.83", items: evidence("code", 2, 31), level: 2 },
+    { why: "continuous decay at 91d (0.751): one row clears the first threshold", items: evidence("code", 1, 91), level: 1 },
+    { why: "the decay floors at 0.25: one row a year old is W=0.25, below the first threshold",
+      items: evidence("code", 1, 400), level: 0 },
     { why: "answer weight 0.8: two fresh answers, W=1.6", items: evidence("answer", 2, 0), level: 2 },
   ];
 
@@ -77,15 +79,21 @@ describe("the §2.6 level formula", () => {
     });
   }
 
-  test("staleness cap: newest evidence older than 180d caps the level at 2", () => {
-    // 40 code items would be W=4.0 at 0.1 recency -> level 3 without the cap.
-    expect(competencyLevel(evidence("code", 40, 400), NOW)).toBe(2);
-    // And a W big enough for level 5 is still capped — with a `run` row or without one.
-    expect(competencyLevel(evidence("code", 200, 400), NOW)).toBe(2);
-    expect(competencyLevel([...evidence("code", 200, 400), runRow(400)], NOW)).toBe(2);
-    // 180 days exactly is NOT stale: W=12.3 clears the fourth threshold and the run row
-    // clears the run cap, so the level lands at 4 rather than the stale 2.
-    expect(competencyLevel([...evidence("code", 40, 180), runRow(180)], NOW)).toBe(4);
+  test("age is a slope, not a cliff: there is no 180-day step any more", () => {
+    // The old rule pinned any area whose newest row was over 180 days old at 2,
+    // so day 179 and day 181 reported 4 and 2 over identical knowledge. Now the
+    // recency factor is max(0.25, 1 - d/365) and nothing steps.
+    const body = (days: number): CompetencyEvidence[] => [...evidence("code", 8, days), runRow(days)];
+    expect(competencyLevel(body(0), NOW)).toBe(4); // W = 9.0
+    expect(competencyLevel(body(179), NOW)).toBe(3); // W = 4.59
+    expect(competencyLevel(body(181), NOW)).toBe(3); // W = 4.54 — one day is one day
+    expect(competencyLevel(body(400), NOW)).toBe(2); // W = 2.25, at the 0.25 floor
+
+    // A year-old body of work big enough to clear the thresholds still computes,
+    // rather than being pinned at 2 for its age alone.
+    expect(competencyLevel([...evidence("code", 200, 400), runRow(400)], NOW)).toBe(5);
+    // …and without a `run` row the run cap is what holds it, not its age.
+    expect(competencyLevel(evidence("code", 200, 400), NOW)).toBe(3);
   });
 
   test("distinct-source cap: ten citations of one line are worth one source", () => {
@@ -106,7 +114,8 @@ describe("stars above 3 are earned by running something (spec §2.6)", () => {
       items: [runRow(0)], level: 1 },
     { why: "level 5 needs two kinds: 25 run rows are one kind, however heavy",
       items: evidence("run", 25, 0), level: 4 },
-    { why: "the staleness cap outranks the run row", items: [...evidence("code", 200, 400), runRow(400)], level: 2 },
+    { why: "age decays the same body of work: 8 code + one run is 4 fresh and 2 a year old",
+      items: [...evidence("code", 8, 400), runRow(400)], level: 2 },
     { why: "the source cap outranks everything: 25 readings of one line plus one run is two sources",
       items: [...evidence("code", 25, 0, true), runRow(0)], level: 2 },
   ];
@@ -408,12 +417,14 @@ describe("expert list", () => {
 
     const dotnet = experts[0]!;
     const efCore = dotnet.areas.find((area) => area.id === "ef-core")!;
-    expect(efCore.storedLevel).toBe(2);
-    expect(efCore.level).toBe(2);
+    expect(efCore.storedLevel).toBe(3);
+    expect(efCore.level).toBe(3);
 
+    // Two and a half years old, and still a level: recency decays to a floor of
+    // 0.25 rather than falling off the 180-day cliff the ladder used to have.
     const soap = dotnet.areas.find((area) => area.id === "legacy-soap")!;
     expect(soap.evidence).toHaveLength(4);
-    expect(soap.level).toBe(0);
+    expect(soap.level).toBe(1);
     expect(soap.newestEvidence).toBe("2024-03-10");
   });
 
@@ -431,7 +442,7 @@ describe("expert list", () => {
 
   test("the star chart line carries the level, the count and the newest date", () => {
     const efCore = loadExpert(VIEWS_FIXTURE, "dotnet-stack", VIEWS_NOW).areas[0]!;
-    expect(starChartLine(efCore, 11)).toBe("ef-core      ★★☆☆☆ 2  (4 evidence, newest 2026-08-20)");
+    expect(starChartLine(efCore, 11)).toBe("ef-core      ★★★☆☆ 3  (4 evidence, newest 2026-08-20)");
     expect(stars(0)).toBe("☆☆☆☆☆");
     expect(stars(5)).toBe("★★★★★");
     expect(evidenceNote({ ...efCore, evidence: [], newestEvidence: null })).toBe("(no evidence)");
@@ -665,8 +676,8 @@ describe("expert recompute", () => {
       const run = await tldrx("expert", "recompute", "--root", workspace.root);
       expect(run.code).toBe(EXIT_OK);
       expect(run.stdout).toBe([
-        "dotnet-stack/ef-core: level 2 unchanged (4 evidence)",
-        "dotnet-stack/legacy-soap: level 0 unchanged (4 evidence)",
+        "dotnet-stack/ef-core: level 3 unchanged (4 evidence)",
+        "dotnet-stack/legacy-soap: level 1 unchanged (4 evidence)",
         "lab-ui/scoreboard-ui: level 5 → 1 (1 evidence)",
         "",
       ].join("\n"));
@@ -738,7 +749,7 @@ describe("expert train --print-prompt", () => {
 
     expect(prompt).toBe(renderTrainPrompt(input));
     expect(prompt).toContain("# Train `dotnet-stack` — area `ef-core` (light mode)");
-    expect(prompt).toContain("Level now: ★★☆☆☆ 2/5 (4 evidence, newest 2026-08-20)");
+    expect(prompt).toContain("Level now: ★★★☆☆ 3/5 (4 evidence, newest 2026-08-20)");
     expect(prompt).toContain("- `api` at `api`");
     expect(prompt).toContain("- `lab` at `lab`");
     expect(prompt).toContain(".tldrx/experts/dotnet-stack/knowledge/ef-core.md");

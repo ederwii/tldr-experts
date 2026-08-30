@@ -26,6 +26,7 @@ import { loadWorkspaceFile } from "../../core/init/loadWorkspaceFile.ts";
 import {
   createExpert, evidenceWarnings, expertListJson, loadExpert, loadExperts,
   readExpertDocument, renderExpertList, renderTrainPrompt, resolveWorkspaceRoot,
+  sharedCitations, sharedCitationWarnings,
   stagesLoadingExperts, ROLE_EXPERTS, type TrainRepo,
 } from "../../core/experts/index.ts";
 
@@ -77,6 +78,11 @@ function listExperts(argv: readonly string[]): number {
   // `--json` (whose stdout must stay parseable) and a redirect to a file. A row
   // the tool refused to count is the one thing a level cannot show you.
   for (const warning of experts.flatMap(evidenceWarnings)) process.stderr.write(`${warning}\n`);
+  // Two experts, one line, two different sentences. Reported, never resolved —
+  // deciding which of them is right is not a thing a deterministic tool can do.
+  for (const warning of sharedCitationWarnings(sharedCitations(root, experts))) {
+    process.stderr.write(`${warning}\n`);
+  }
   return EXIT_OK;
 }
 
