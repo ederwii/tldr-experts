@@ -72,6 +72,17 @@ export interface RunStage {
   readonly outputs: readonly string[];
   readonly gate: RunGate;
   readonly tasks: readonly RunTask[];
+  /**
+   * True when an EARLIER stage's gate was revoked (`tldrx reject --stage`) after
+   * this one had already run. ADDITIVE and optional: absent on every run written
+   * before revocation existed, and absent again the moment the stage re-runs.
+   *
+   * The stage's outputs are deliberately left on disk — money was spent producing
+   * them and they are often still 90% right — but they were derived from a
+   * decision that has since been withdrawn, and nothing may quietly treat them as
+   * current. `run status` says so; `next` re-runs the stage and clears the flag.
+   */
+  readonly stale?: boolean;
 }
 
 export interface RunPhase {
@@ -303,6 +314,9 @@ export function validateRunFile(input: unknown): ValidationResult {
       requireNumber(stage.cost_usd, `${path}.cost_usd`, issues);
       requireArray(stage.inputs, `${path}.inputs`, issues);
       requireArray(stage.outputs, `${path}.outputs`, issues);
+      if (stage.stale !== undefined && typeof stage.stale !== "boolean") {
+        issues.push({ path: `${path}.stale`, message: "expected true or false" });
+      }
       checkOrder(stage.started_at, stage.ended_at, path, issues);
       if (cursor !== null && cursor.phase === phaseId && cursor.stage === stageId) cursorResolves = true;
 

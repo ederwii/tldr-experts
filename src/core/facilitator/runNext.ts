@@ -969,6 +969,9 @@ function markRunning(store: RunStore, phaseId: string, stageId: string, at: stri
     status: "running",
     started_at: stage.started_at ?? at,
     ended_at: null,
+    // Running again is what un-stales a stage: the flag says "produced from a
+    // decision that was later withdrawn", and this turn is the redo.
+    stale: undefined,
   }));
 }
 

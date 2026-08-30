@@ -83,6 +83,7 @@ export function runItems(root: string): readonly PendingItem[] {
       details.push(`open questions: ${waiting.questions.join(", ")}`);
     }
     if (waiting.kind === "failed") details.push(waiting.message);
+    details.push(...machineSignedDetails(run));
     if (several) details.push("several runs are open, so every command here names its run id");
 
     return {
@@ -122,6 +123,41 @@ function unreadableItem(root: string): PendingItem | null {
     command: `tldrx run status ${first}`,
     details: broken,
   };
+}
+
+/** The actor an auto-signed gate records (`run/autoGate.ts` AUTO_GATE_ACTOR). */
+const AUTO = "auto";
+
+/**
+ * Which gates the machine signed, and which stages a revocation left behind.
+ *
+ * `by: auto` used to live only in run.yml, the event log and `run status` — three
+ * places nobody glances at (2026-08-29 audit, §B). A stage the facilitator
+ * approved is exactly the one worth a second look, so this report names them and
+ * hands over the command that takes one back.
+ */
+function machineSignedDetails(run: RunFile): readonly string[] {
+  const stages = run.phases.flatMap((phase) => phase.stages.map((stage) => ({ phase, stage })));
+  const auto = stages.filter((e) => e.stage.gate.status === "approved" && e.stage.gate.by === AUTO);
+  const stale = stages.filter((e) => e.stage.stale === true);
+  const details: string[] = [];
+  if (auto.length > 0) {
+    const named = auto.map((e) => `${e.phase.id}/${e.stage.id}`).join(", ");
+    const first = auto[0];
+    details.push(
+      `${auto.length} gate(s) signed \`by: auto\`, not by a person — ${named}. `
+      + `Take one back with \`tldrx reject --run ${run.run} `
+      + `--stage ${first?.phase.id ?? ""}/${first?.stage.id ?? ""} --note "<why>"\``,
+    );
+  }
+  if (stale.length > 0) {
+    details.push(
+      `${stale.length} stage(s) marked stale by a revoked approval — `
+      + `${stale.map((e) => `${e.phase.id}/${e.stage.id}`).join(", ")}. Their files are still on disk `
+      + "and were derived from a decision that has since been withdrawn.",
+    );
+  }
+  return details;
 }
 
 /** Waiting kinds a human can act on right now. `done` and `blocked` are not. */

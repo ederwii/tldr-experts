@@ -60,6 +60,9 @@ function stage(s: RunStage): string {
     `        outputs: ${inlineList(s.outputs)}`,
     `        gate: ${gate(s.gate)}`,
   ];
+  // Additive (§2.2): emitted only when true, so a run that never had a gate
+  // revoked round-trips byte-for-byte through a save.
+  if (s.stale === true) lines.push("        stale: true");
   if (s.tasks.length === 0) {
     lines.push("        tasks: []");
   } else {
