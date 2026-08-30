@@ -226,7 +226,7 @@ async function featurePrompt(ctx: ExecutorContext, feature: Feature): Promise<st
     stackExperts: ctx.spec.stackExperts,
     stackNames: stackExpertNames(ctx.root, feature.repos),
     citedPaths: feature.stories.flatMap((done) => done.story.touches),
-    knowledgeBytes: ctx.spec.expertKnowledgeBytes,
+    knowledgeBytes: ctx.spec.knowledgeMaxBytes,
   });
   const body = buildPrompt({
     stageMd,

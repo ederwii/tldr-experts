@@ -30,7 +30,7 @@ export {
 export type { ExpertReason, ExpertSelection, SelectedExpert, SelectExpertsInput } from "./selectExperts.ts";
 export {
   loadExpertKnowledge, readKnowledgeFiles, truncateAtHeading, countFindings, chartLines,
-  byteLength, DEFAULT_EXPERT_KNOWLEDGE_BYTES, KNOWLEDGE_DIRNAME,
+  byteLength, DEFAULT_KNOWLEDGE_MAX_BYTES, KNOWLEDGE_DIRNAME,
 } from "./expertKnowledge.ts";
 export type { ExpertKnowledge, KnowledgeFileView, KnowledgeOptions } from "./expertKnowledge.ts";
 export { loadExpertBundles, describeBundles, untrainedNotes, LEGACY_NOTE } from "./expertBundle.ts";

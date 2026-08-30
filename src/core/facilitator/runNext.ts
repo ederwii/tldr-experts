@@ -33,7 +33,7 @@ import { acquireLock, releaseLock } from "./Lock.ts";
 import { loadStageSpec, type StageSpec } from "./stageSpec.ts";
 import { countSkipInputs, evaluateSkipIf, openQuestionIds, SkipIfError } from "./skipIf.ts";
 import { agentDir, expandAll, missing, present, resolveDeclared, type PathContext } from "./paths.ts";
-import { buildPrompt, renderConventions, renderFacts, stackExpertNames } from "./prompt.ts";
+import { renderConventions, renderFacts, renderParts, stackExpertNames } from "./prompt.ts";
 import {
   describeBundles, loadExpertBundles, untrainedNotes, type ExpertBundleSet,
 } from "../experts/expertBundle.ts";
@@ -42,7 +42,12 @@ import type { EffortLevel } from "../schemas/stage.ts";
 import { validateOutputs, describeProblems } from "./validateOutputs.ts";
 import { executorFor, type ExecutorContext, type ExecutorOutcome, type StageExecutor } from "./executors/index.ts";
 import { promptPath, readResult, writeBundle, writeRaw, PendingError, type PendingStage } from "./pending.ts";
-import { capInputs, inlineInputs, type InlineResult } from "./seedInputs.ts";
+import { capInputs, describeTruncatedInputs, inlineInputs, type InlineResult } from "./seedInputs.ts";
+import {
+  buildLedger, questionsBytesOf, renderContextWarning, renderLedger, renderRefusal,
+  type ContextLedger,
+} from "./contextLedger.ts";
+import { byteLength } from "../experts/expertKnowledge.ts";
 import { SEED_INDEX } from "../seed/renderSeed.ts";
 
 export type NextMode = "headless" | "prepare" | "commit";
@@ -58,6 +63,10 @@ export interface NextOptions {
   readonly effort?: EffortLevel;
   /** `--max-usd`, an extra cap on top of the stage share and per_agent_max_usd. */
   readonly maxUsd?: number;
+  /** `--prompt-max-bytes`, overriding the stage's `prompt_max_bytes` for one run. */
+  readonly promptMaxBytes?: number;
+  /** `--max-reads`, overriding the stage's `max_reads` for one run. */
+  readonly maxReads?: number;
   readonly yolo: boolean;
   /** `--keep-worktrees`: the Build phase keeps its story worktrees after a story settles. */
   readonly keepWorktrees?: boolean;
@@ -286,13 +295,26 @@ async function runStage(
   const model = options.model ?? stage.model ?? spec.planned.model;
   const effort = options.effort ?? spec.planned.effort ?? null;
   const cap = agentCap(options, store, stage);
+  const maxReads = options.maxReads ?? spec.maxReads;
   const assembled = assemblePrompt(store, options, spec, stage, inputs, ctx, new Set(seed));
   const prompt = assembled.prompt;
   // What the experts contributed, said out loud in every mode. Before this was
   // reported, a stage could load three stub experts and nothing on any stream
   // distinguished that from three trained ones.
   notes.push(...describeBundles(assembled.bundles));
-  const advisories = untrainedNotes(assembled.bundles);
+  // The context ledger, in every mode: what the prompt is made of, before it is
+  // sent. `--prepare` and `--dry-run` also get the per-section breakdown.
+  const ledger = assembled.ledger;
+  notes.push(...assembled.truncatedNotes);
+  if (options.mode === "prepare" || options.dryRun) notes.push(...renderLedger(ledger));
+
+  // --- context gate (spec §5) ---------------------------------------------
+  // A refusal, not a warning, and BEFORE the money: over `prompt_max_bytes` the
+  // stage does not start. Nothing has been written or spent at this point.
+  if (ledger.overLimit) {
+    return out(EXIT_REFUSED, [...notes, ...renderRefusal(ledger, stageId)]);
+  }
+  const advisories = [...untrainedNotes(assembled.bundles), ...renderContextWarning(ledger)];
 
   const pending: PendingStage = {
     version: 1,
@@ -310,6 +332,19 @@ async function runStage(
     checks: spec.planned.checks,
     prepared_at: options.at,
     experts: bundleSummary(assembled.bundles),
+    context: {
+      total_bytes: ledger.totalBytes,
+      limit_bytes: ledger.limitBytes,
+      estimated_tokens: ledger.estimatedTokens,
+      stage_bytes: ledger.groups.stage,
+      questions_bytes: ledger.groups.questions,
+      inputs_bytes: ledger.groups.inputs,
+      expert_body_bytes: ledger.groups.expertBodies,
+      expert_knowledge_bytes: ledger.groups.expertKnowledge,
+      previous_attempt_bytes: ledger.groups.previousAttempt,
+      truncated_inputs: ledger.truncatedInputs.map((entry) => entry.path),
+    },
+    max_reads: maxReads,
   };
   writeBundle(store.runDir, stageId, prompt, pending);
 
@@ -834,6 +869,10 @@ function withNote(result: InlineResult): { inputs: InlineResult["inputs"]; input
 interface AssembledPrompt {
   readonly prompt: string;
   readonly bundles: ExpertBundleSet;
+  /** Every section, in bytes, measured off the same parts the prompt is joined from. */
+  readonly ledger: ContextLedger;
+  /** Declared inputs the shared byte budget could not fit whole. */
+  readonly truncatedNotes: readonly string[];
 }
 
 function assemblePrompt(
@@ -847,6 +886,7 @@ function assemblePrompt(
 ): AssembledPrompt {
   const stageMd = readStageMd(spec.planned);
   const facts = FactsStore.loadOrEmpty(factsPath(options.root));
+  const workspace = loadWorkspace(options.root);
   // The declared inputs ARE the run's cited paths at this point: they are what the
   // seed put on the stage and what the stage file names, and nothing else has been
   // read yet. A domain expert whose folder holds one of them ranks first.
@@ -857,11 +897,20 @@ function assemblePrompt(
     stackExperts: spec.stackExperts,
     stackNames: stackExpertNames(options.root, store.run.repos),
     citedPaths: inputs,
-    knowledgeBytes: spec.expertKnowledgeBytes,
+    workspaceRepoCount: workspace.repos.size,
+    knowledgeBytes: spec.knowledgeMaxBytes,
   });
-  const prompt = buildPrompt({
+  // Inputs are filled FIRST, out of their own shared ceiling; the experts share
+  // what `knowledge_max_bytes` allows between them afterwards (spec §2.3, §5).
+  const inlined = inlineInputs(inputs, {
+    ctx,
+    seed,
+    budgetBytes: spec.inputsMaxBytes,
+    exempt: new Set(inputs.filter((path) => path.endsWith(`/${SEED_INDEX}`))),
+  });
+  const parts = renderParts({
     stageMd,
-    previousAttempt: describePreviousAttempt(stage),
+    previousAttempt: describePreviousAttempt(stage, spec, ctx),
     values: {
       run: store.runId,
       repos: store.run.repos.length === 0 ? "(none)" : store.run.repos.join(", "),
@@ -871,13 +920,25 @@ function assemblePrompt(
       budget_usd: stage.budget_usd.toFixed(2),
     },
     experts: bundles.experts,
-    ...withNote(inlineInputs(inputs, {
-      ctx,
-      seed,
-      exempt: new Set(inputs.filter((path) => path.endsWith(`/${SEED_INDEX}`))),
-    })),
+    ...withNote(inlined),
   });
-  return { prompt, bundles };
+  const ledger = buildLedger({
+    parts,
+    inputBytes: inlined.inputs.map((input) => ({
+      path: input.path,
+      bytes: byteLength(input.content),
+    })),
+    truncatedInputs: inlined.truncated,
+    limitBytes: options.promptMaxBytes ?? spec.promptMaxBytes,
+    model: options.model ?? stage.model ?? spec.planned.model,
+    questionsBytes: questionsBytesOf(stageMd),
+  });
+  return {
+    prompt: parts.map((part) => part.text).join(""),
+    bundles,
+    ledger,
+    truncatedNotes: describeTruncatedInputs(inlined),
+  };
 }
 
 /**
@@ -888,7 +949,11 @@ function assemblePrompt(
  * an operator's rejection note. Either one means this is a retry, and the agent
  * is told so rather than being handed the original prompt as if nothing happened.
  */
-export function describePreviousAttempt(stage: RunStage): string {
+export function describePreviousAttempt(
+  stage: RunStage,
+  _spec?: StageSpec,
+  _ctx?: PathContext,
+): string {
   const lines: string[] = [];
   const failure = [...stage.tasks].reverse().find((task) => task.error !== null)?.error ?? null;
   if (failure !== null && failure.trim() !== "") {

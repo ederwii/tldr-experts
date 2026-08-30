@@ -34,12 +34,19 @@ import type { ExpertRecord } from "./ExpertRecord.ts";
 export const KNOWLEDGE_DIRNAME = "knowledge";
 
 /**
- * `[assumption]` 64 KB per expert. The Build executor already inlines "≤24 files,
- * ≤64 KB" of story context per sub-agent (spec §5), and an expert's accumulated
- * findings are the same kind of thing: reference material the agent reads once.
- * Overridable per stage — see `expert_knowledge_bytes` in `stage.yml` (§2.3).
+ * `[assumption]` 48 KB, shared by EVERY loaded expert (§2.3 `knowledge_max_bytes`).
+ *
+ * It was 64 KB PER EXPERT until wave N, which is how a nine-expert stage reached
+ * a measured 83,523 B of expert block against 72,283 B of the declared inputs it
+ * was actually asked to read (`~/aparece-v2`, 2026-08-29) — and, at the ceiling,
+ * 576 KB from twelve experts, past the context window of the model the Watch
+ * stage pins. A per-expert cap is not a cap: it scales with a number nobody set.
+ *
+ * 48 KB is chosen so that inputs (96 KB) + knowledge (48 KB) + a stage body and
+ * expert bodies sit under the 160 KB `prompt_max_bytes` default with room, not
+ * because 48 KB of findings has been measured to be the right amount.
  */
-export const DEFAULT_EXPERT_KNOWLEDGE_BYTES = 64 * 1024;
+export const DEFAULT_KNOWLEDGE_MAX_BYTES = 48 * 1024;
 
 export interface KnowledgeFileView {
   /** `loyalty` — the area the file was trained for. */
@@ -126,11 +133,12 @@ export interface KnowledgeOptions {
   readonly name: string;
   /** The expert's record, for the star chart. Omitted ⇒ no chart is rendered. */
   readonly record?: ExpertRecord | null;
+  /** This expert's SHARE of the stage's total knowledge budget, in bytes. */
   readonly budgetBytes?: number;
 }
 
 export function loadExpertKnowledge(options: KnowledgeOptions): ExpertKnowledge {
-  const budget = Math.max(0, options.budgetBytes ?? DEFAULT_EXPERT_KNOWLEDGE_BYTES);
+  const budget = Math.max(0, options.budgetBytes ?? DEFAULT_KNOWLEDGE_MAX_BYTES);
   const raw = readKnowledgeFiles(options.root, options.name);
   const chart = chartLines(options.record ?? null);
 

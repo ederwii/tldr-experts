@@ -357,7 +357,10 @@ describe("the seed inline budget", () => {
     // …and the second gets the 2994 bytes that were left, labelled as a prefix.
     expect(result.inputs[1]?.inlinedBytes).toBe(2994);
     expect(result.inputs[1]?.totalBytes).toBe(6006);
-    expect(result.note).toContain("larger than the 9000-byte inline budget");
-    expect(result.note).toContain("inlined only as far as the budget reached");
+    // Wave N: the note names the FILE and its size, and the key that fixes it —
+    // "some documents were truncated" is a sentence nobody can act on.
+    expect(result.note).toContain("truncated inputs: b.md (6,006 B, first 2,994 B only)");
+    expect(result.note).toContain("`inputs_max_bytes`");
+    expect(result.truncated).toEqual([{ path: "b.md", totalBytes: 6006, inlinedBytes: 2994 }]);
   });
 });

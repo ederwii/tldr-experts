@@ -35,6 +35,28 @@ export interface PendingExpert {
   readonly truncated: boolean;
 }
 
+/**
+ * The context ledger as `pending.json` carries it (wave N).
+ *
+ * `pending.json` already said how many bytes each expert contributed and nothing
+ * about the whole; the host session could see nine expert rows and still not know
+ * the prompt was 159,575 bytes. Flat numbers, one level deep, so the same object
+ * can be read straight out of the file by anything.
+ */
+export interface PendingContext {
+  readonly total_bytes: number;
+  readonly limit_bytes: number;
+  readonly estimated_tokens: number;
+  readonly stage_bytes: number;
+  readonly questions_bytes: number;
+  readonly inputs_bytes: number;
+  readonly expert_body_bytes: number;
+  readonly expert_knowledge_bytes: number;
+  readonly previous_attempt_bytes: number;
+  /** Declared inputs the shared inline budget could not fit whole. */
+  readonly truncated_inputs: readonly string[];
+}
+
 export interface PendingStage {
   readonly version: 1;
   readonly run: string;
@@ -58,6 +80,10 @@ export interface PendingStage {
    * other two the prompt contained, or about the knowledge in none of them.
    */
   readonly experts?: readonly PendingExpert[];
+  /** What the prompt is made of, in bytes (§5, "Context ledger"). */
+  readonly context?: PendingContext;
+  /** The `Read`/`Glob`/`Grep` ceiling this stage's sub-agent runs under. */
+  readonly max_reads?: number;
   /**
    * The story this bundle is for, when the stage runs story by story (the Build
    * executor's `--prepare`/`--commit` cycle). `--commit` reads it back to know

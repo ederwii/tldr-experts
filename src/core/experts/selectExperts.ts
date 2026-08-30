@@ -42,6 +42,12 @@ export interface SelectedExpert {
   readonly reason: ExpertReason;
   /** For `domain`: what it matched on, for the `--prepare` line and `expert list`. */
   readonly match?: string;
+  /**
+   * Whether this expert earns a share of the stage's knowledge budget (wave N).
+   * `false` means body only: nothing it declares intersects anything this stage
+   * cites. Absent is treated as `true` by every caller.
+   */
+  readonly relevant?: boolean;
 }
 
 export interface ExpertSelection {
@@ -70,6 +76,11 @@ export interface SelectExpertsInput {
    * shares a repo.
    */
   readonly citedPaths?: readonly string[];
+  /**
+   * How many repos `workspace.yml` declares. A repo match is only evidence in a
+   * workspace that HAS more than one repo (wave N); see `domainMatches`.
+   */
+  readonly workspaceRepoCount?: number;
 }
 
 /**
