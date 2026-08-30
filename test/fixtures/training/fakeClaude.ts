@@ -3,13 +3,14 @@
  * A fake `claude` for the training tests.
  *
  * Same contract as the facilitator's fake: read the prompt off stdin, write
- * canned files, print one `--output-format json` result object. The one addition
+ * canned files, print a result in whichever format was asked for. The one addition
  * is a CALL COUNTER on disk, because full-mode training spawns two sub-agents and
  * each must be able to write a different file — which is also the only way a test
  * can prove the second one ran at all.
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { claudeOutput } from "../fakeStream.ts";
 
 const argv = process.argv.slice(2);
 const argvLog = process.env.FAKE_TRAIN_ARGV_LOG;
@@ -44,17 +45,14 @@ for (const [rel, content] of Object.entries(files)) {
 
 const isError = process.env.FAKE_TRAIN_IS_ERROR === "1";
 const cost = Number(process.env.FAKE_TRAIN_COST ?? "0.37");
-process.stdout.write(
-  `${JSON.stringify({
-    type: "result",
-    subtype: isError ? "error_during_execution" : "success",
-    is_error: isError,
-    result: isError ? "" : "wrote the knowledge file",
-    session_id: `session-${String(call)}`,
-    total_cost_usd: cost,
-    usage: { input_tokens: 9001, output_tokens: 210 },
-    structured_output: { outputs: written, questions_asked: [], notes: "canned by the training fake" },
-    errors: isError ? ["fake failure: the sub-agent could not finish"] : [],
-  })}\n`,
-);
+process.stdout.write(claudeOutput(argv, {
+  isError,
+  result: isError ? "" : "wrote the knowledge file",
+  sessionId: `session-${String(call)}`,
+  costUsd: cost,
+  usage: { input_tokens: 9001, output_tokens: 210 },
+  structured: { outputs: written, questions_asked: [], notes: "canned by the training fake" },
+  errors: isError ? ["fake failure: the sub-agent could not finish"] : [],
+  tools: written.map((rel) => ({ name: "Write", input: { file_path: join(root, rel) }, result: "File written" })),
+}));
 process.exit(isError ? 1 : 0);

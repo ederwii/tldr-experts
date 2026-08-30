@@ -36,6 +36,20 @@ export interface SpawnOptions {
    * "spawn `claude` from PATH" is not reproducible without it.
    */
   readonly env?: Readonly<Record<string, string | undefined>>;
+  /**
+   * Called with each COMPLETE line of stdout as it arrives, newline stripped.
+   *
+   * Added for `--output-format stream-json` (wave K): a stage that takes four
+   * minutes must be able to say what it is doing while it does it, and a seam
+   * that only hands back the whole buffer at exit cannot. The full text is still
+   * accumulated and still returned in `SpawnResult.stdout` — this is an EXTRA
+   * view of the same bytes, never a replacement. Omitted = the buffered path,
+   * byte-for-byte as it was before this existed.
+   *
+   * A trailing partial line (no newline at EOF) is delivered when the stream
+   * closes, so a producer that forgets its last `\n` is not silently truncated.
+   */
+  readonly onStdoutLine?: (line: string) => void;
 }
 
 export interface SpawnResult {

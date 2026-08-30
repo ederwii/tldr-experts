@@ -386,7 +386,7 @@ describe("seed triage --propose", () => {
 
     // The spawn used the shared flags, with the split schema and a low effort.
     const argv = JSON.parse(readFileSync(argvLog, "utf8").trim()) as string[];
-    expect(argv.slice(0, 3)).toEqual(["-p", "--output-format", "json"]);
+    expect(argv.slice(0, 4)).toEqual(["-p", "--output-format", "stream-json", "--verbose"]);
     expect(argv).toContain("--json-schema");
     expect(argv[argv.indexOf("--effort") + 1]).toBe("low");
     expect(argv[argv.indexOf("--max-budget-usd") + 1]).toBe("1.00");

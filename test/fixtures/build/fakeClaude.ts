@@ -15,6 +15,7 @@
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { claudeOutput } from "../fakeStream.ts";
 
 const argv = process.argv.slice(2);
 const argvLog = process.env.FAKE_BUILD_ARGV_LOG;
@@ -55,19 +56,16 @@ const structured = role === "reviewer"
   ? { verdict: nextVerdict(storyId), summary: `reviewed ${storyId}`, findings: verdictFindings(storyId) }
   : { outputs: written, questions_asked: [], notes: `fake developer for ${storyId}` };
 
-process.stdout.write(
-  `${JSON.stringify({
-    type: "result",
-    subtype: process.env.FAKE_BUILD_IS_ERROR === "1" ? "error_during_execution" : "success",
-    is_error: process.env.FAKE_BUILD_IS_ERROR === "1",
-    result: `fake ${role} for ${storyId}`,
-    session_id: `fake-${role}-${storyId}`,
-    total_cost_usd: cost,
-    usage: { input_tokens: 100, output_tokens: 10 },
-    structured_output: structured,
-    errors: [],
-  })}\n`,
-);
+process.stdout.write(claudeOutput(argv, {
+  isError: process.env.FAKE_BUILD_IS_ERROR === "1",
+  result: `fake ${role} for ${storyId}`,
+  sessionId: `fake-${role}-${storyId}`,
+  costUsd: cost,
+  usage: { input_tokens: 100, output_tokens: 10 },
+  structured,
+  errors: [],
+  tools: written.map((rel) => ({ name: "Write", input: { file_path: rel }, result: "File written" })),
+}));
 process.exit(process.env.FAKE_BUILD_IS_ERROR === "1" ? 1 : 0);
 
 /** Verdicts come from a per-story queue; the last one repeats once the queue runs dry. */
