@@ -28,6 +28,25 @@ import type { PlannedEpic, PlannedStory } from "./plan.ts";
 export const MAX_TOUCHED_BYTES = 64 * 1024;
 export const MAX_TOUCHED_FILES = 24;
 
+/**
+ * The rule a real run needed on 2026-08-30, its second Build of the day.
+ *
+ * An acceptance criterion carried a literal grep — `` Pending `DECISIONS-NEEDED.md` # ``,
+ * backticks and all — and the markers it was meant to find had been written three
+ * different ways, so the criterion scored 0 against two files that between them
+ * still held five real markers. The criterion was DERIVED from the plan, which
+ * makes it data the story may not edit; it is not thereby evidence. Running it
+ * first is the whole fix: a pattern that finds nothing before the work starts is
+ * a broken pattern, not a finished job.
+ */
+export const VALIDATE_CRITERION_RULE: readonly string[] = [
+  "An acceptance criterion that embeds a literal command or pattern must be validated BEFORE",
+  "you edit: run it against the current tree first; if it reports zero while the goal says the",
+  "work exists, the criterion is broken — measure the real inventory, use that as your",
+  "completion test, and record the discrepancy in the handoff (the criterion text itself is",
+  "not yours to edit).",
+];
+
 export interface DeveloperPromptParts {
   readonly runId: string;
   readonly story: PlannedStory;
@@ -123,7 +142,8 @@ export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
     "1. Read the story and the inlined files above. They are the whole brief.",
     "2. Change only what the story's `touches` list names. A change outside it is a plan",
     "   deviation, and the reviewer will read it as one.",
-    "3. Write the tests the test plan promised, then the code that makes them pass.",
+    `3. ${VALIDATE_CRITERION_RULE.join("\n   ")}`,
+    "4. Write the tests the test plan promised, then the code that makes them pass.",
     "",
     "## Produce",
     "",

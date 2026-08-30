@@ -54,6 +54,16 @@
   and the two documents the goal named were in the dropped tail. Touched paths the story's
   `goal`, acceptance criteria, test plan or title NAME now sort first into the 64 KB; a brief
   that names nothing changes no order at all.
+- **The developer is told to run an acceptance criterion's embedded pattern BEFORE it
+  edits.** Found on a real run's second Build of 2026-08-30: a derived criterion carried a
+  literal grep (`` Pending `DECISIONS-NEEDED.md` # ``, backticks included) and the markers
+  it was meant to count had been written three different ways, so it reported 0 against two
+  files that still held five real markers — the in-session driver only caught it by
+  measuring the inventory by hand. The developer prompt's `## Investigate` list now carries
+  the rule verbatim: validate the pattern against the current tree first; a criterion that
+  reports zero while the goal says the work exists is broken, so measure the real inventory,
+  use THAT as the completion test, and record the discrepancy in the handoff. The criterion
+  text itself stays data the story may not edit. `stages/build/stage.md` says so too.
 - **The implicit story no longer `touches` tldrx's own state.** `touches` is derived from
   every repo path the What handoff cites, and a handoff cites state as evidence: measured
   2026-08-30, 13 touched paths of which three were `run.yml`, a `.tldrx/triage/**/split.yml`

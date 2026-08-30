@@ -839,7 +839,7 @@ describe("the price/context table (N7)", () => {
 // ---------------------------------------------------------------------------
 
 import {
-  buildDeveloperPrompt, orderTouches, MAX_TOUCHED_BYTES,
+  buildDeveloperPrompt, orderTouches, MAX_TOUCHED_BYTES, VALIDATE_CRITERION_RULE,
 } from "../src/core/build/prompts.ts";
 import { NOT_IN_WORKTREE } from "../src/core/facilitator/prompt.ts";
 import type { PlannedEpic, PlannedStory } from "../src/core/build/plan.ts";
@@ -962,6 +962,20 @@ describe("the developer prompt tells the truth about its inputs (N7)", () => {
     expect(incidental).toContain("AGENTS.md-LAST-LINE");
     expect(incidental).not.toContain("docs/10-domain.md-LAST-LINE");
     expect(incidental).not.toContain("docs/12-delivery.md-LAST-LINE");
+  });
+
+  test("the developer is told to run an embedded criterion before it edits anything", () => {
+    // A real criterion on 2026-08-30 embedded a literal grep whose markers had
+    // been written three ways: it scored 0 against two files that still held five
+    // real markers, and only a hand count caught it.
+    const text = developerPrompt(planned(["docs/guide.md"]), worktree({ "docs/guide.md": "# Guide\n" }));
+    expect(text).toContain(VALIDATE_CRITERION_RULE.join("\n   "));
+    expect(text).toContain("must be validated BEFORE");
+    expect(text).toContain("the criterion is broken — measure the real inventory");
+    expect(text).toContain("(the criterion text itself is");
+    // It sits in Investigate, before the step that writes anything.
+    expect(text.indexOf("must be validated BEFORE"))
+      .toBeLessThan(text.indexOf("Write the tests the test plan promised"));
   });
 
   test("orderTouches is stable and matches on the path or its file name", () => {
