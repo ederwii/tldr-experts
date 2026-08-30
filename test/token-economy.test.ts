@@ -287,3 +287,166 @@ describe("the context ledger and prompt_max_bytes (N2)", () => {
     expect((await prepare(other, { promptMaxBytes: 20_000 })).code).toBe(2);
   });
 });
+
+// --- relevance, not "same repo" (N4) ---------------------------------------
+
+import { mkdirSync, writeFileSync } from "node:fs";
+import {
+  countMatches, DIRECT_WEIGHT, GRAPH_HOPS, selectExperts,
+} from "../src/core/experts/selectExperts.ts";
+import { readExpertDomain } from "../src/core/experts/expertDomain.ts";
+import { nearbyPathsFor, graphPath } from "../src/core/experts/domainRank.ts";
+import { neighbourhoodPaths } from "../src/core/map/graphJson.ts";
+import { pathsIntersect } from "../src/core/experts/expertDomain.ts";
+import { knowledgeShares } from "../src/core/experts/expertBundle.ts";
+
+/** A `kind: domain` expert.md with a real `## Domain` section. */
+function domainExpertMd(name: string, repos: readonly string[], paths: readonly string[]): string {
+  return [
+    "---", `name: ${name}`, "kind: domain", "status: in-use",
+    `repos: [${repos.join(", ")}]`, "---", "", `# ${name}`, "", "## Domain", "",
+    ...paths.map((path) => `- \`${path}\``), "",
+  ].join("\n");
+}
+
+function withDomainExperts(
+  experts: Readonly<Record<string, readonly string[]>>,
+): FacilitatorWorkspace {
+  const files: Record<string, string> = {};
+  for (const [name, paths] of Object.entries(experts)) {
+    files[`.tldrx/experts/${name}/expert.md`] = domainExpertMd(name, ["api"], paths);
+  }
+  const made = makeFacilitatorWorkspace({
+    scope: "demo", budgetUsd: 10,
+    stages: [{
+      id: "alpha", phase: "01-what", budgetUsd: 6, gate: "auto",
+      outputs: [{ path: "01-what/handoff.md" }],
+      optional: ["api/src/Checkout/Cart.cs"],
+    }],
+    files: { ...files, "api/src/Checkout/Cart.cs": "// cart\n" },
+  });
+  open.push(made);
+  return made;
+}
+
+describe("expert relevance (N4)", () => {
+  test("a single-repo workspace never loads a domain expert by repo alone", () => {
+    const ws = withDomainExperts({ far: ["src/Billing"], near: ["src/Checkout"] });
+    const single = selectExperts({
+      root: ws.root, staged: [], repos: ["api"], stackExperts: false, stackNames: [],
+      citedPaths: ["api/src/Checkout/Cart.cs"], workspaceRepoCount: 1,
+    });
+    expect(single.experts.map((e) => e.name)).toEqual(["near"]);
+
+    // Two repos: `repos:` is evidence again, and `far` loads — body only.
+    const multi = selectExperts({
+      root: ws.root, staged: [], repos: ["api"], stackExperts: false, stackNames: [],
+      citedPaths: ["api/src/Checkout/Cart.cs"], workspaceRepoCount: 2,
+    });
+    expect(multi.experts.map((e) => e.name)).toEqual(["near", "far"]);
+    expect(multi.experts.find((e) => e.name === "far")?.relevant).toBe(false);
+    expect(multi.experts.find((e) => e.name === "near")?.relevant).toBe(true);
+  });
+
+  test("an omitted workspaceRepoCount keeps the old behaviour", () => {
+    const ws = withDomainExperts({ far: ["src/Billing"] });
+    const selection = selectExperts({
+      root: ws.root, staged: [], repos: ["api"], stackExperts: false, stackNames: [],
+      citedPaths: ["api/src/Checkout/Cart.cs"],
+    });
+    expect(selection.experts.map((e) => e.name)).toEqual(["far"]);
+  });
+
+  test("more cited paths inside a domain means a higher rank", () => {
+    const ws = withDomainExperts({ one: ["src/Checkout"], two: ["src/Checkout", "src/Cart"] });
+    const selection = selectExperts({
+      root: ws.root, staged: [], repos: ["api"], stackExperts: false, stackNames: [],
+      citedPaths: ["api/src/Checkout/Cart.cs", "api/src/Cart/Line.cs"],
+      workspaceRepoCount: 1,
+    });
+    expect(selection.experts.map((e) => e.name)).toEqual(["two", "one"]);
+  });
+
+  test("countMatches counts cited paths, not bullets", () => {
+    const ws = withDomainExperts({ two: ["src/Checkout", "src/Cart"] });
+    const declared = readExpertDomain(ws.root, "two");
+    expect(countMatches(declared, ["api/src/Checkout/a.cs", "api/src/Cart/b.cs"])).toBe(2);
+    expect(countMatches(declared, ["api/src/Billing/c.cs"])).toBe(0);
+    expect(DIRECT_WEIGHT).toBeGreaterThan(1);
+  });
+
+  test("a graph neighbour ranks below a direct match but above nothing", () => {
+    const ws = withDomainExperts({ direct: ["src/Checkout"], neighbour: ["src/Payments"] });
+    const selection = selectExperts({
+      root: ws.root, staged: [], repos: ["api"], stackExperts: false, stackNames: [],
+      citedPaths: ["api/src/Checkout/Cart.cs"],
+      nearbyPaths: new Set(["api/src/Payments/Charge.cs"]),
+      workspaceRepoCount: 1,
+    });
+    expect(selection.experts.map((e) => e.name)).toEqual(["direct", "neighbour"]);
+    expect(selection.experts[1]?.match).toContain(`within ${String(GRAPH_HOPS)} hops`);
+  });
+});
+
+describe("the k-hop neighbourhood (N4)", () => {
+  const GRAPH = {
+    nodes: [
+      { id: "a", source_file: "src/Checkout/Cart.cs" },
+      { id: "b", source_file: "src/Payments/Charge.cs" },
+      { id: "c", source_file: "src/Ledger/Entry.cs" },
+      { id: "d", source_file: "src/Faraway/Thing.cs" },
+    ],
+    links: [
+      { source: "a", target: "b", relation: "imports" },
+      { source: "b", target: "c", relation: "imports" },
+      { source: "c", target: "d", relation: "imports" },
+    ],
+  };
+
+  test("two hops reaches the neighbour's neighbour and stops", () => {
+    const near = neighbourhoodPaths(GRAPH, ["src/Checkout/Cart.cs"], 2, pathsIntersect);
+    expect([...near].sort()).toEqual([
+      "src/Checkout/Cart.cs", "src/Ledger/Entry.cs", "src/Payments/Charge.cs",
+    ]);
+  });
+
+  test("it is undirected — a target reaches its source", () => {
+    const near = neighbourhoodPaths(GRAPH, ["src/Ledger/Entry.cs"], 1, pathsIntersect);
+    expect(near.has("src/Payments/Charge.cs")).toBe(true);
+  });
+
+  test("no seed, no graph, or a broken graph is an empty set, never a throw", () => {
+    expect(neighbourhoodPaths(GRAPH, [], 2, pathsIntersect).size).toBe(0);
+    expect(neighbourhoodPaths(null, ["a"], 2, pathsIntersect).size).toBe(0);
+    expect(neighbourhoodPaths({ nodes: "nope" }, ["a"], 2, pathsIntersect).size).toBe(0);
+  });
+
+  test("nearbyPathsFor reads .tldrx/graphify-out/<repo>/graph.json, or gives up quietly", () => {
+    const ws = withDomainExperts({ near: ["src/Checkout"] });
+    expect(nearbyPathsFor(ws.root, ["api"], ["src/Checkout/Cart.cs"]).size).toBe(0);
+
+    const path = graphPath(ws.root, "api");
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, JSON.stringify(GRAPH), "utf8");
+    const near = nearbyPathsFor(ws.root, ["api"], ["src/Checkout/Cart.cs"]);
+    expect(near.has("src/Payments/Charge.cs")).toBe(true);
+
+    writeFileSync(path, "{ not json", "utf8");
+    expect(nearbyPathsFor(ws.root, ["api"], ["src/Checkout/Cart.cs"]).size).toBe(0);
+  });
+});
+
+describe("the shared knowledge budget is split by rank (N4)", () => {
+  test("the top expert gets the most and an irrelevant one gets nothing", () => {
+    const shares = knowledgeShares([true, true, true, false], 48_000);
+    expect(shares[3]).toBe(0);
+    expect(shares[0]).toBeGreaterThan(shares[1] ?? 0);
+    expect(shares[1]).toBeGreaterThan(shares[2] ?? 0);
+    expect(shares.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(48_000);
+  });
+
+  test("nothing eligible, or nothing to give, is all zeroes", () => {
+    expect(knowledgeShares([false, false], 48_000)).toEqual([0, 0]);
+    expect(knowledgeShares([true, true], 0)).toEqual([0, 0]);
+  });
+});

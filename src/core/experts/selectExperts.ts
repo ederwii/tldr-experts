@@ -81,6 +81,12 @@ export interface SelectExpertsInput {
    * workspace that HAS more than one repo (wave N); see `domainMatches`.
    */
   readonly workspaceRepoCount?: number;
+  /**
+   * Paths within `GRAPH_HOPS` links of a cited path in `graphify-out/graph.json`
+   * (`domainRank.ts`). Empty or absent ⇒ only direct path matches score, which is
+   * what a workspace with no graph gets.
+   */
+  readonly nearbyPaths?: ReadonlySet<string>;
 }
 
 /**
@@ -126,7 +132,9 @@ export function selectExperts(input: SelectExpertsInput): ExpertSelection {
       else missing.push(name);
       continue;
     }
-    experts.push({ name, reason: "stage" });
+    // A stage NAMED it. That is the strongest relevance signal there is, and a
+    // role expert has no `## Domain` paths to score.
+    experts.push({ name, reason: "stage", relevant: true });
   }
 
   if (input.stackExperts) {
@@ -134,7 +142,7 @@ export function selectExperts(input: SelectExpertsInput): ExpertSelection {
       if (seen.has(name)) continue;
       seen.add(name);
       if (!hasExpert(input.root, name)) continue;
-      experts.push({ name, reason: "stack" });
+      experts.push({ name, reason: "stack", relevant: true });
     }
   }
 
@@ -166,6 +174,38 @@ function hasExpert(root: string, name: string): boolean {
   return existsSync(`${expertsDir(root)}/${name}`);
 }
 
+/**
+ * Rule 3, ranked by RELEVANCE rather than by co-residence (wave N).
+ *
+ * Three things changed, and the first is the load-bearing one:
+ *
+ * 1. **A repo match is only evidence in a workspace that has more than one
+ *    repo.** In a single-repo workspace every domain expert shares the run's
+ *    repo, so `repos:` selects everybody and selects nothing. Measured
+ *    2026-08-29 on `~/aparece-v2` (`mode: single-repo`): eight of the nine
+ *    experts a What prompt loaded were there by repo alone, they contributed
+ *    52% of a 159,575-byte prompt, and not one of them had read a file the run
+ *    cited. `workspaceRepoCount` is what decides; when a caller does not say,
+ *    the old behaviour is kept, because a caller with no opinion must not have
+ *    one imposed.
+ * 2. **Rank is a score, not a bucket.** A direct path match — the expert's
+ *    `## Domain` naming a folder that contains a cited path — is worth
+ *    `DIRECT_WEIGHT`; being within `GRAPH_HOPS` links of one in `graph.json` is
+ *    worth 1. Scores add, so an expert that owns two cited paths outranks one
+ *    that owns one, deterministically.
+ * 3. **Zero score means body only.** An expert with no intersection at all still
+ *    loads when its repo qualifies (rule 3 is unchanged in a multi-repo
+ *    workspace) but earns none of the shared knowledge budget: `relevant: false`.
+ *    Its `expert.md` is ~1 KB; its knowledge was 25 KB.
+ */
+export const DIRECT_WEIGHT = 10;
+export const GRAPH_HOPS = 2;
+
+interface Scored {
+  readonly expert: SelectedExpert;
+  readonly score: number;
+}
+
 function domainMatches(
   input: SelectExpertsInput,
   seen: ReadonlySet<string>,
@@ -173,28 +213,57 @@ function domainMatches(
   if (input.repos.length === 0 && (input.citedPaths ?? []).length === 0) {
     return { picked: [], overflow: [] };
   }
-  const byPath: SelectedExpert[] = [];
-  const byRepo: SelectedExpert[] = [];
+  // A single-repo workspace cannot use `repos:` to tell experts apart, so it does
+  // not try. `undefined` means the caller did not say, and nothing changes.
+  const repoIsEvidence = (input.workspaceRepoCount ?? 2) >= 2;
+  const cited = input.citedPaths ?? [];
+  const nearby = input.nearbyPaths ?? new Set<string>();
+  const scored: Scored[] = [];
 
   for (const name of expertNames(input.root)) {
     if (seen.has(name)) continue;
     const declared = readExpertDomain(input.root, name);
     if (declared.kind !== "domain") continue;
 
-    const path = matchedPath(declared, input.citedPaths ?? []);
-    if (path !== null) {
-      byPath.push({ name, reason: "domain", match: path });
+    const direct = countMatches(declared, cited);
+    const near = direct > 0 ? 0 : countMatches(declared, [...nearby]);
+    const score = direct * DIRECT_WEIGHT + near;
+
+    if (score > 0) {
+      const match = direct > 0
+        ? matchedPath(declared, cited) ?? "path"
+        : `${String(near)} path(s) within ${String(GRAPH_HOPS)} hops in graph.json`;
+      scored.push({ expert: { name, reason: "domain", match, relevant: true }, score });
       continue;
     }
+    if (!repoIsEvidence) continue;
     const repo = declared.repos.find((r) => input.repos.includes(r));
-    if (repo !== undefined) byRepo.push({ name, reason: "domain", match: `repo ${repo}` });
+    if (repo !== undefined) {
+      scored.push({
+        expert: { name, reason: "domain", match: `repo ${repo}`, relevant: false },
+        score: 0,
+      });
+    }
   }
 
-  const ranked = [...byPath, ...byRepo];
+  // Score desc, then name asc: total, and identical on every machine.
+  const ranked = [...scored]
+    .sort((a, b) => b.score - a.score
+      || (a.expert.name < b.expert.name ? -1 : a.expert.name > b.expert.name ? 1 : 0))
+    .map((entry) => entry.expert);
   return {
     picked: ranked.slice(0, MAX_DOMAIN_SELECTED),
     overflow: ranked.slice(MAX_DOMAIN_SELECTED).map((item) => item.name),
   };
+}
+
+/** How many of `paths` this expert's declared domain contains. */
+export function countMatches(declared: ExpertDomain, paths: readonly string[]): number {
+  let count = 0;
+  for (const cited of paths) {
+    if (matchedPath(declared, [cited]) !== null) count += 1;
+  }
+  return count;
 }
 
 /**

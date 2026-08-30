@@ -38,3 +38,4 @@ export type { ExpertBundle, ExpertBundleSet, LoadBundlesInput } from "./expertBu
 export { stagesLoadingExperts, describeStageLoads, stageIds } from "./stageCoverage.ts";
 export type { StageLoad } from "./stageCoverage.ts";
 export type { StageLoads } from "./renderExpertList.ts";
+export { nearbyPathsFor, graphPath, MAX_GRAPH_BYTES } from "./domainRank.ts";

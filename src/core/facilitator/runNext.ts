@@ -37,6 +37,7 @@ import { renderConventions, renderFacts, renderParts, stackExpertNames } from ".
 import {
   describeBundles, loadExpertBundles, untrainedNotes, type ExpertBundleSet,
 } from "../experts/expertBundle.ts";
+import { nearbyPathsFor } from "../experts/domainRank.ts";
 import { spawnAgent } from "./spawnAgent.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
 import { validateOutputs, describeProblems } from "./validateOutputs.ts";
@@ -898,6 +899,7 @@ function assemblePrompt(
     stackNames: stackExpertNames(options.root, store.run.repos),
     citedPaths: inputs,
     workspaceRepoCount: workspace.repos.size,
+    nearbyPaths: nearbyPathsFor(options.root, store.run.repos, inputs),
     knowledgeBytes: spec.knowledgeMaxBytes,
   });
   // Inputs are filled FIRST, out of their own shared ceiling; the experts share
