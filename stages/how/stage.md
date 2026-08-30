@@ -54,8 +54,10 @@
 
 ## Gate
 
-Blocked on: **<human approval | checks green>**. Requirements are in `stage.yml`.
-Nothing advances until this is recorded in `run.yml` and `events.jsonl`.
+Blocked on: **<human approval | checks green>** — `stage.yml`'s `gate.type`. What is
+actually enforced is that file's `checks:` list, which `tldrx approve` re-runs against what
+is on disk before it will advance anything. Nothing advances until this is recorded in
+`run.yml` and `events.jsonl`.
 
 ## Rules
 
