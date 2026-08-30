@@ -807,3 +807,62 @@ describe("SIGINT during a headless `tldrx next`", () => {
     expect(again.lines.join("\n")).not.toContain("another next is running");
   }, 60_000);
 });
+
+// --- Q7: `map --refresh` leaves a trace --------------------------------------
+
+describe("tldrx map --refresh", () => {
+  test("emits map.refreshed against the newest open run, with provider and counts", async () => {
+    const ws = makeRunWorkspace();
+    try {
+      const runId = createRun({
+        root: ws.root, slug: "mapped", scope: "feature", actor: "alan",
+        now: new Date("2026-08-29T09:00:00Z"),
+      }).runId;
+      const runDir = join(ws.root, "tldrx-work", runId);
+      const before = EventLog.forRun(runDir).read().length;
+
+      const proc = Bun.spawn([process.execPath, join(FRAMEWORK_ROOT, "bin", "tldrx.ts"),
+        "map", "--refresh", "--root", ws.root, "--provider", "static"], {
+        cwd: ws.root, stdout: "pipe", stderr: "pipe", env: noSpawnEnv(),
+      });
+      const stdout = await new Response(proc.stdout).text();
+      const stderr = await new Response(proc.stderr).text();
+      expect(await proc.exited, stderr).toBe(0);
+      expect(stdout).toContain(`recorded map.refreshed against run ${runId}`);
+
+      const events = EventLog.forRun(runDir).read();
+      expect(events.length).toBe(before + 1);
+      const refreshed = events.at(-1)!;
+      expect(refreshed.type).toBe("map.refreshed");
+      expect(refreshed.stage).toBeNull();
+      expect(refreshed.cost_usd).toBe(0);
+      // The payload agrees with what the command printed: same document count,
+      // same provider list. This fixture's repos are not git repos, so the
+      // static provider contributes nothing — the event records that honestly
+      // rather than claiming a provider that did not run.
+      const printed = /— (\d+) documents via (.+)/.exec(stdout);
+      expect(printed, stdout).not.toBeNull();
+      expect(refreshed.payload.documents).toBe(Number(printed![1]));
+      const providers = refreshed.payload.providers as readonly string[];
+      expect(Array.isArray(providers)).toBe(true);
+      expect(providers.join(", ") || "no provider").toBe(printed![2]!.trim());
+    } finally {
+      ws.dispose();
+    }
+  }, 60_000);
+
+  test("with no open run there is nowhere to record it, and that is not an error", async () => {
+    const ws = makeRunWorkspace();
+    try {
+      const proc = Bun.spawn([process.execPath, join(FRAMEWORK_ROOT, "bin", "tldrx.ts"),
+        "map", "--refresh", "--root", ws.root, "--provider", "static"], {
+        cwd: ws.root, stdout: "pipe", stderr: "pipe", env: noSpawnEnv(),
+      });
+      const stdout = await new Response(proc.stdout).text();
+      expect(await proc.exited).toBe(0);
+      expect(stdout).not.toContain("map.refreshed");
+    } finally {
+      ws.dispose();
+    }
+  }, 60_000);
+});

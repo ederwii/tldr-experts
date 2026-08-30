@@ -698,6 +698,17 @@ places nothing read as one list.
   `build.epic_branch` (optional, additive), which is how its own next invocation
   tells its branch from someone else's.
 
+### `map --refresh` finally leaves a trace
+
+- **`map.refreshed` is emitted.** It has been in the §2.9 type enum and in the
+  replay renderer since v0 and nothing ever emitted it (measured 2026-08-29), so
+  the one command that rewrites every expert's evidence base left no record
+  anywhere — whether a claim in a handoff predated a refresh or came after it was
+  unanswerable. It now carries the providers that ran, the document count and the
+  repo count. The map is workspace-level and `events.jsonl` is per run, so it is
+  recorded against the newest OPEN run and the command SAYS which; with no open
+  run there is nowhere to put it, which is not an error.
+
 ## 0.2.0 — 2026-08-29
 
 ### The Build phase executes
