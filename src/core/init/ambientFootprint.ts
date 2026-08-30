@@ -20,6 +20,11 @@ export const GITIGNORE_BODY = [
   ".tldrx/worktrees/",
   "tldrx-work/*/.lock",
   "tldrx-work/*/.agent/",
+  // `tldrx install --claude` backs settings.json up before merging into it
+  // (installClaude.ts). The backup is a full copy of a file that may hold local
+  // env values, and it was the one thing the framework writes that nothing
+  // ignored (2026-08-29 audit, §D).
+  ".claude/settings.json.bak-tldrx-*",
 ].join("\n");
 
 export const CLAUDE_POINTER_BODY = [

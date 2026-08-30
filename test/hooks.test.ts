@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { FRAMEWORK_ROOT, PLUGIN_DIR } from "../src/core/paths.ts";
 import { parseHookInput } from "../src/core/hooks/passthrough.ts";
@@ -109,10 +110,10 @@ const BAD_HANDOFF = [
   "",
   "## Unknowns",
   "- Retention period for historical rankings [src: absent:.tldrx/memory/facts.yml]",
-  "- Whether mobile needs paging beyond top-50 [src: Q6]",
+  "- Whether mobile needs paging beyond top-50 [src: Q4]",
   "- Whether ranks are per tenant [src: Q5]",
-  "- Whether the view can be materialised concurrently [src: Q6]",
-  "- Whether the lab needs a new route [src: Q6]",
+  "- Whether the view can be materialised concurrently [src: Q4]",
+  "- Whether the lab needs a new route [src: Q4]",
   "- Whether old seasons are archived",
   "",
   "## Evidence ledger",
@@ -429,8 +430,14 @@ describe("answer-capture (PostToolUse + FileChanged)", () => {
   });
 });
 
-const FAILING_COMMAND =
-  'echo "4 failing tests in src/features/leaderboard/__tests__/rank.test.ts" >&2; exit 1';
+/**
+ * Every command in this block is DECLARED in the fixture's workspace.yml. Since
+ * 2026-08-29 the gate runs only what the workspace declared, argv-split with no
+ * shell, so an ad-hoc `echo … >&2; exit 1` is no longer runnable — and that is
+ * the point being tested, not an obstacle to it.
+ */
+const FAILING_COMMAND = "sh scripts/dod-fail.sh";
+const PASSING_COMMAND = "sh scripts/dod-ok.sh";
 
 function story(status: string, commands: readonly string[] | null, repo = "lab"): string {
   const lines = [
@@ -460,7 +467,7 @@ describe("DoD-gate (PreToolUse Write|Edit)", () => {
   test("allows `done` when every dod command exits 0", async () => {
     const run = await hook("dod-gate", {
       hook_event_name: "PreToolUse", tool_name: "Write",
-      tool_input: { file_path: storyPath(), content: story("done", ["echo dod-ok", "true"]) },
+      tool_input: { file_path: storyPath(), content: story("done", [PASSING_COMMAND, "true"]) },
     });
     expect(run.code).toBe(0);
     expect(run.stdout).toBe("");
@@ -469,7 +476,7 @@ describe("DoD-gate (PreToolUse Write|Edit)", () => {
   test("denies `done` when a dod command fails, quoting the output tail", async () => {
     const run = await hook("dod-gate", {
       hook_event_name: "PreToolUse", tool_name: "Write",
-      tool_input: { file_path: storyPath(), content: story("done", ["echo dod-ok", FAILING_COMMAND]) },
+      tool_input: { file_path: storyPath(), content: story("done", [PASSING_COMMAND, FAILING_COMMAND]) },
     });
     expect(denial(run)).toBe(
       `[tldrx] DoD-gate: story S3 cannot be marked done — \`${FAILING_COMMAND}\` in repo lab exited 1 (expected 0).\n` +
@@ -519,15 +526,38 @@ describe("DoD-gate (PreToolUse Write|Edit)", () => {
     expect(denialText(run)).toContain("timed out after 1s");
   }, 15_000);
 
-  test("times out even when the command leaves a child holding the pipes", async () => {
-    // `&` + `wait` forces a grandchild on every shell. Killing only `sh` leaves
-    // `sleep` alive with the gate's stdout pipe open, and the gate hangs.
+  test("a command that needs a shell is refused BEFORE anything spawns", async () => {
+    // Was: `sleep 30 & wait`, which forced a grandchild and proved the process
+    // tree got killed. That property now lives in test/runtime.test.ts, where it
+    // is tested directly — this gate no longer opens a shell at all, so a command
+    // carrying `&` never reaches one. The stronger statement is the refusal.
     const run = await hook("dod-gate", {
       hook_event_name: "PreToolUse", tool_name: "Write",
-      tool_input: { file_path: storyPath(), content: `timeout_s: 1\n${story("done", ["sleep 30 & wait"])}` },
+      tool_input: { file_path: storyPath(), content: story("done", ["sleep 30 & wait"]) },
     });
-    expect(denialText(run)).toContain("timed out after 1s");
+    expect(denialText(run)).toContain("refusing to RUN");
+    expect(denialText(run)).toContain("not one of .tldrx/workspace.yml's commands");
   }, 15_000);
+
+  test("an UNDECLARED command is refused, however harmless it looks", async () => {
+    const run = await hook("dod-gate", {
+      hook_event_name: "PreToolUse", tool_name: "Write",
+      tool_input: { file_path: storyPath(), content: story("done", ["echo hello"]) },
+    });
+    expect(denialText(run)).toContain("refusing to RUN `echo hello`");
+    expect(denialText(run)).toContain("a story is data, and data does not get to invent a command");
+  });
+
+  test("`dod: rm -rf ~` is DENIED and never runs — the audit's second finding", async () => {
+    const run = await hook("dod-gate", {
+      hook_event_name: "PreToolUse", tool_name: "Write",
+      tool_input: { file_path: storyPath(), content: story("done", ["rm -rf ~"]) },
+    });
+    expect(run.code).toBe(0);
+    expect(denialText(run)).toContain("refusing to RUN `rm -rf ~`");
+    // and the home directory is, self-evidently, still there
+    expect(existsSync(homedir())).toBe(true);
+  });
 });
 
 describe("budget-gate (PreToolUse Bash)", () => {
@@ -588,15 +618,68 @@ describe("budget-gate (PreToolUse Bash)", () => {
     expect(run.stdout).toBe("");
   });
 
-  test("fails open on an unreadable budget.yml", async () => {
+  test("fails CLOSED on an unreadable budget.yml", async () => {
+    // Was fail-OPEN until 2026-08-29 (`budget-gate.ts:14`): the one hook whose job
+    // is refusing to spend allowed every spawn it could not price. "Cannot read
+    // the budget" and "the budget is fine" are not the same answer.
     writeFileSync(join(workspace().runDir, "budget.yml"), "version: 1\nphases: 3\n", "utf8");
     const run = await hook("budget-gate", {
       hook_event_name: "PreToolUse", tool_name: "Bash", cwd: workspace().root,
       tool_input: { command: "tldrx next" },
     });
     expect(run.code).toBe(0);
+    expect(denialText(run)).toContain("could not read the budget it is supposed to enforce");
+    expect(denialText(run)).toContain("fails CLOSED");
+  });
+
+  // --- M6: the three spenders the gate could not see (2026-08-29 audit, §A) ---
+
+  test("`tldrx run auto` is gated — the command that can spend a whole run", async () => {
+    const run = await hook("budget-gate", {
+      hook_event_name: "PreToolUse", tool_name: "Bash", cwd: workspace().root,
+      tool_input: { command: `tldrx run auto --run ${FIXTURE_RUN}` },
+    });
+    expect(denialText(run)).toContain('refusing to start stage "contracts"');
+  });
+
+  test("`tldrx run auto --max-usd` is priced at the flag, not the stage", async () => {
+    const run = await hook("budget-gate", {
+      hook_event_name: "PreToolUse", tool_name: "Bash", cwd: workspace().root,
+      tool_input: { command: `tldrx run auto --run ${FIXTURE_RUN} --max-usd 25` },
+    });
+    expect(denialText(run)).toContain("the stage estimate is $25.00");
+  });
+
+  test("`tldrx expert train` is gated at its $2.00 default", async () => {
+    const run = await hook("budget-gate", {
+      hook_event_name: "PreToolUse", tool_name: "Bash", cwd: workspace().root,
+      tool_input: { command: `tldrx expert train architect --area api --run ${FIXTURE_RUN}` },
+    });
+    expect(denialText(run)).toContain("the stage estimate is $2.00");
+  });
+
+  test("`tldrx seed triage --propose` is gated at its $1.00 default", async () => {
+    const run = await hook("budget-gate", {
+      hook_event_name: "PreToolUse", tool_name: "Bash", cwd: workspace().root,
+      tool_input: { command: `tldrx seed triage docs/prd.md --propose --run ${FIXTURE_RUN}` },
+    });
+    expect(denialText(run)).toContain("the stage estimate is $1.00");
+  });
+
+  test("a command that spends nothing is still allowed", async () => {
+    const run = await hook("budget-gate", {
+      hook_event_name: "PreToolUse", tool_name: "Bash", cwd: workspace().root,
+      tool_input: { command: "tldrx run status" },
+    });
     expect(run.stdout).toBe("");
-    expect(run.stderr).toStartWith("tldrx hook budget-gate: internal error, allowing — ");
+  });
+
+  test("outside a tldrx workspace it allows — that is a correct negative, not a failure", async () => {
+    const run = await hook("budget-gate", {
+      hook_event_name: "PreToolUse", tool_name: "Bash", cwd: "/",
+      tool_input: { command: "tldrx run auto" },
+    });
+    expect(run.stdout).toBe("");
   });
 });
 

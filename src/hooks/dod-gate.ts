@@ -18,8 +18,10 @@ import { deny, allow, failOpen } from "./lib/decide.ts";
 import { readPayload, filePathOf, isWriteOrEdit } from "./lib/payload.ts";
 import { wouldBeContent } from "./lib/wouldBe.ts";
 import { locateWork, loadWorkspace, repoPath } from "./lib/workspace.ts";
-import { dodGateDeny, dodGateMissingBlockDeny, dodGateInternalErrorDeny } from "./lib/messages.ts";
-import { readStory, runDodCommand } from "./lib/story.ts";
+import {
+  dodGateDeny, dodGateMissingBlockDeny, dodGateInternalErrorDeny, dodGateRefusedCommandDeny,
+} from "./lib/messages.ts";
+import { DodCommandRefused, readStory, runDodCommand } from "./lib/story.ts";
 
 /** Spec §2.3: `timeout_s` defaults to 900. */
 const DEFAULT_TIMEOUT_S = 900;
@@ -63,7 +65,18 @@ try {
   const timeoutMs = (story.timeoutS ?? DEFAULT_TIMEOUT_S) * 1000;
 
   for (const command of story.dodCommands) {
-    const outcome = await runDodCommand(command, cwd, timeoutMs);
+    let outcome;
+    try {
+      // The allowlist is `workspace.yml`'s commands, consulted before anything is
+      // spawned. Refusing here rather than inside the loop's error handler keeps
+      // the deny message about the COMMAND rather than about the gate breaking.
+      outcome = await runDodCommand(command, cwd, timeoutMs, workspace.commands);
+    } catch (error) {
+      if (error instanceof DodCommandRefused) {
+        deny(dodGateRefusedCommandDeny(storyId, command, error.message));
+      }
+      throw error;
+    }
     if (outcome.timedOut) {
       deny(dodGateDeny(storyId, command, repoName === "" ? "(root)" : repoName, outcome.exitCode,
         `timed out after ${story.timeoutS ?? DEFAULT_TIMEOUT_S}s. ${outcome.tail}`));

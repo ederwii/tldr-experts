@@ -34,8 +34,22 @@ export interface RunSnapshot {
   readonly spentUsd: number;
   /** How many runs are open right now, this one included. Never 0. */
   readonly openCount: number;
+  /**
+   * Gates in this run signed by the facilitator rather than a person.
+   *
+   * On the line because the audit measured `by: auto` reaching `run.yml`, the
+   * event log and `run status` — and nothing the operator glances at. A stage the
+   * machine approved is exactly the one worth a second look, and
+   * `tldrx reject --stage <phase>/<stage>` takes it back.
+   */
+  readonly autoGates: number;
+  /** Stages marked `stale` by a revoked approval — their files are behind. */
+  readonly staleStages: number;
   readonly source: SnapshotSource;
 }
+
+/** The actor an auto-signed gate records, mirrored from `run/autoGate.ts`. */
+const AUTO = "auto";
 
 /** The newest OPEN run under `root`, or null when there is none. */
 export function runSnapshot(root: string): RunSnapshot | null {
@@ -80,6 +94,8 @@ function fromStore(root: string): RunSnapshot | null {
     ceilingUsd: run.budget.ceiling_usd,
     spentUsd: run.budget.spent_usd,
     openCount: open.length,
+    autoGates: stages.filter((s) => s.gate.status === "approved" && s.gate.by === AUTO).length,
+    staleStages: stages.filter((s) => s.stale === true).length,
     source: "run-store",
   };
 }
@@ -106,6 +122,11 @@ function fromTolerantRead(root: string): RunSnapshot | null {
     ceilingUsd: budget.ceiling_usd,
     spentUsd: budget.spent_usd,
     openCount: open.length,
+    // The tolerant reader does not parse gates. 0 here means "cannot see", and
+    // showing nothing is the honest rendering of that — never a claim that no
+    // gate was auto-signed.
+    autoGates: 0,
+    staleStages: 0,
     source: "tolerant",
   };
 }

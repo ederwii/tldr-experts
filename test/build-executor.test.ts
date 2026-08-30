@@ -387,8 +387,15 @@ describe("safety", () => {
 
     const calls = readFileSync(argvLog, "utf8").trim().split("\n").map((l) => JSON.parse(l) as string[]);
     const caps = calls.map((argv) => argv[argv.indexOf("--max-budget-usd") + 1]);
-    // Developer: min(8 / 2 stories, 3) = 3.00. Reviewer: a quarter of the share.
-    expect(caps).toEqual(["3.00", "1.00", "3.00", "1.00"]);
+    // The share is divided by the WORST CASE, not by the story count: 2 stories x
+    // MAX_ATTEMPTS(2) x (1 + REVIEWER_SHARE(0.25)) = 5 developer-shares, so the
+    // developer gets 8/5 = $1.60 and the reviewer a quarter of that, $0.40.
+    // Before 2026-08-29 it was 8/2 = $4.00 capped to $3.00, and 2 stories x 2
+    // attempts x ($3.00 + $0.75) could charge $15.00 against an $8.00 stage —
+    // the audit's "Build 2.5x su fase".
+    expect(caps).toEqual(["1.60", "0.40", "1.60", "0.40"]);
+    const total = caps.reduce((sum, c) => sum + Number(c), 0);
+    expect(total * 2).toBeLessThanOrEqual(8 + 0.001); // both attempts still fit
     // The developer's allowance names its own repo's command, and no git push.
     const devAllowance = calls[0]?.[calls[0].indexOf("--allowedTools") + 1] ?? "";
     expect(devAllowance).toContain("Bash(npm run test)");

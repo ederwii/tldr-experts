@@ -874,6 +874,121 @@ loads two experts, and contains ADR-D013 in full.
   and context windows live in one dated `[assumption]` file,
   `src/core/budget/modelPrices.ts`.
 
+### A gate that can be closed by silence is not a gate
+
+The 2026-08-29 gates/money/safety audit (`docs/audits/2026-08-29/gates-money-safety.md`)
+scored 6/10, and every item below is one of its measured findings. The engineering
+was sound — no shell in the adapters, no `push` wrapper, the dashboard on loopback,
+`install` never touching `permissions` — the failure was in what the barriers MEANT.
+
+- **`claim-sources` verifies six `src` kinds it used to wave through.** Measured
+  probe: a handoff citing `[src: F999]`, `[src: Q42]`, `[src: graph:i-made-this-up]`
+  and `[src: absent:ops/backup.yml]` to assert "we removed the auth check from
+  /admin" validated CLEAN, closed its own auto gate and advanced the cursor.
+  `resolveSrc` returned `ok` by default for `fact`, `answer`, `graph`, `doc`,
+  `absent` and `aidlc` — six of eight kinds were shields. Now `F<n>` must be a live
+  (non-retired) row in `facts.yml`, `Q<n>` a question this run actually asked,
+  `graph:<node>` a node in `graphify-out/graph.json` or a token named in
+  `.tldrx/map/`, and `absent:` may only source a NEGATIVE claim (`## Unknowns` is
+  exempt — that heading IS the negation, and it is the spec's own example). A third
+  outcome, **`unverified`**, sits between ok and refused for what cannot be checked
+  offline: an https doc no input/map/knowledge file cites, an `absent:` over a file
+  that exists, a `cmd` with no `workspace.yml` commands to check against. It never
+  fails a stage; it stops an auto gate. The repo's own fixture used the shield
+  pattern the audit named, and cites real files now.
+- **A `[src: …]` wrapped in backticks is a citation, not a missing one.** From the
+  same day's UX audit: `TRAILING_TOKEN_RE` was anchored to end-of-line, so
+  `` `[src: x]` ``, `[src: x].` and `([src: x])` all read as unsourced. A real
+  user's first `tldrx next` was refused with "9 unsourced bullet(s)" when all nine
+  carried citations; $0.40 spent to be told the work had no evidence. Closing
+  quotes, brackets and terminal punctuation after the `]` are now ignored; words
+  after it still are not. A line that TRIED to cite gets `malformed citation on
+  line N`, not `unsourced bullet` — the two need different advice.
+- **An auto gate can no longer be closed by silence.** Three ways it could be.
+  (a) condition 5 counted only refusals, so an unverifiable citation passed; it is
+  now zero refused AND zero unverified. (b) A stage that DECLARES `questions.md` as
+  an output and writes one the §2.7 parser cannot read had "0 open questions"
+  recorded as satisfied — a real stage wrote `### Q1 — …` / `**Answer:**`, copied
+  faithfully from this repo's own `templates/questions.md`, and the gate signed
+  itself over four unanswered questions. Unreadable or empty now falls to the human
+  gate naming the ids it could not see, and `next --commit` refuses the same file
+  with exit `5`. (c) `templates/questions.md` IS the grammar now, with one worked
+  example, and the grammar is inlined into every `stage.md` that may write
+  questions.
+- **New: `tldrx questions lint [--run <id>] [--fix]`.** Without `--fix` it names
+  every block the parser cannot see and exits `2`; with it, it converts the prose
+  form and **changes not one word** — title, `Why asked:`, every option and any
+  answer already typed come across verbatim, and an unlettered `- Other:` keeps its
+  text as the next letter. It does not invent the `[src: …]` token §2.7 wants on
+  `Why asked:`: a tool that manufactures a citation to satisfy a validator is
+  producing the exact thing the entry above exists to stop. It lists the blocks
+  that still need one instead.
+- **An approval can be revoked: `tldrx reject --stage <phase>/<stage> --note "…"`.**
+  Before this an approval was final — `approve()` moves the cursor in the same
+  transaction that signs the gate, and `reject` only ever looked at the cursor, so
+  the probe above met `REJECT REFUSED: nothing to reject: 02-how/beta is 'ready'`.
+  A machine that can sign but cannot be overruled is not a gate. Revoking sends the
+  stage back to `ready` with the note, moves the cursor to it, and appends one
+  **`gate.revoked`** (new event type) carrying `signed_by`. Later stages that had
+  run are marked **`stale: true`** (additive; cleared when the stage re-runs): their
+  outputs stay on disk — they cost money and are usually mostly right — but nothing
+  treats them as current. `--stage` is also the one verb allowed to reopen a
+  FINISHED run.
+- **`by: auto` is visible where people look.** It reached `run.yml`, the event log
+  and `run status`, and none of those is a glance. `tldrx status` now names every
+  auto-signed gate with the command that undoes it, and the status line carries
+  `auto:N` / `stale:N`.
+- **The DoD gate no longer runs an un-allowlisted command.** `runDodCommand` handed
+  the model's own string to `/bin/sh -c`, `dod-gate` never consulted an allowlist,
+  and the hook ships enabled by default as PreToolUse with a 960 s timeout: a story
+  saying `dod: rm -rf ~` ran it the moment someone marked the story done. A command
+  must now be byte-equal to a `workspace.yml` command and is spawned argv-split with
+  **no shell**; a bare metacharacter refuses (a quoted argument is fine, so a team
+  that wants `sh -c "…"` declares exactly that). The schema half moved with it: an
+  EMPTY `commands:` now refuses every dod entry instead of permitting anything. The
+  old rule reasoned by analogy with `resolveSrc`'s `cmd` source, and the analogy does
+  not hold — a citation describes something that already ran; a dod block is a list
+  of things about to be run as you.
+- **`--yolo` no longer reaches the reviewer.** `--dangerously-skip-permissions` was
+  passed to the read-only reviewer sub-agent, which was the one whose read-only-ness
+  was the point. The developer still gets it; that one is meant to write.
+- **`budget-gate` covers every spender, and fails CLOSED.** It matched
+  `^(claude -p|tldrx next)` only, so `tldrx run auto` — a loop of up to 96 stages,
+  the one command that can spend a whole run in one invocation — plus `expert train`
+  ($2.00 a call) and `seed triage --propose` ($1.00) walked straight past it. And it
+  allowed on every unreadable budget, which is fail-open on the hook whose entire job
+  is refusing to spend. Both fixed: the five commands are matched and priced
+  (`--max-usd` else the run ceiling for `run auto`; the documented defaults for the
+  other two), and an unreadable `run.yml`/`budget.yml` denies and names the file. It
+  still allows silently outside a workspace, or for a command that spends nothing.
+- **`budget raise` leaves a record.** It rewrote `budget.yml` and appended nothing at
+  all — the one sanctioned way to move a ceiling was the one act with no trace. New
+  event type **`budget.raised`**, with before/after for both ceilings, the actor, and
+  an optional `--note`.
+- **Unmetered is not zero.** An in-session `--commit` with no declared cost recorded
+  `$0.00`, so a run's ledger could read "$0.00 spent" after real money had gone. That
+  is a measurement, and a false one. Such a task is now `cost_usd: null` +
+  `metered: false` (both additive; a null cost without the flag is a schema error).
+  Sums treat it as nothing — the only honest arithmetic — and every report says so:
+  `budget show` and `run status` render `unmetered (in-session)` and call `spent` a
+  LOWER BOUND, and the auto gate's note names the uncounted turns. New:
+  `tldrx next --commit --cost-usd <n> [--tokens <n>]` so a host can declare it.
+- **`tickets sync` previews by default; `--apply` writes.** It is the only verb that
+  reaches a third party — it creates and edits issues in someone's tracker — and a
+  destructive default on the one networked command is backwards. `--provider` no
+  longer switches on a workspace set to `ticket_tool.kind: none`; it picks between
+  configured providers, and the config is not a flag's to override.
+- **Build cannot charge 2.5x its phase, and Watch's floor cannot exceed its
+  ceiling.** Build's shares are now divided by the worst case — stories x attempts x
+  (1 + reviewer share) — instead of by story count, so every cap it can hand out sums
+  inside the stage budget however the attempts fall. Watch refuses BEFORE spawning
+  when N features cannot each get the $0.25 spawn floor inside the ceiling, naming
+  the `budget raise` that fits: splitting further would just buy N failures.
+- **`.claude/settings.json.bak-tldrx-*` is ignored.** `install --claude` backs
+  settings.json up before merging into it; the backup is a full copy of a file that
+  may hold local values, and it was the one thing the framework writes that nothing
+  ignored. Now in the init gitignore block and in this repo's own.
+
 ## 0.2.0 — 2026-08-29
 
 ### The Build phase executes

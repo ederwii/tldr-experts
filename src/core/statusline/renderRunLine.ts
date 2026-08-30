@@ -23,10 +23,25 @@ export function renderRunLine(host: StatusLineHost, snapshot: RunSnapshot): stri
   const expert = snapshot.expert === null || snapshot.expert === "" ? "" : ` — ${snapshot.expert}`;
   return (
     `[tldrx] ${snapshot.run}${alsoOpen(snapshot.openCount)} · ${phase} [${bar(snapshot.done, snapshot.total)}] ` +
-    `${String(snapshot.done)}/${String(snapshot.total)} > ${stage}${expert} | ` +
+    `${String(snapshot.done)}/${String(snapshot.total)}${signedByMachine(snapshot)} > ${stage}${expert} | ` +
     `${host.modelName} ctx:${String(Math.floor(host.usedPercentage))}% ` +
     `${money(host.totalCostUsd)}/${money(snapshot.ceilingUsd)}`
   );
+}
+
+/**
+ * ` auto:2` when the facilitator signed gates in this run, ` stale:1` after an
+ * approval was revoked. Nothing at all when neither happened, so the ordinary
+ * line is byte-identical to what it always was.
+ *
+ * On the line because `by: auto` reached run.yml, the event log and `run status`
+ * and never the place an operator actually looks (2026-08-29 audit, §B).
+ */
+function signedByMachine(snapshot: RunSnapshot): string {
+  const parts: string[] = [];
+  if (snapshot.autoGates > 0) parts.push(`auto:${String(snapshot.autoGates)}`);
+  if (snapshot.staleStages > 0) parts.push(`stale:${String(snapshot.staleStages)}`);
+  return parts.length === 0 ? "" : ` ${parts.join(" ")}`;
 }
 
 /**

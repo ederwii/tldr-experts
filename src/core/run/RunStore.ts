@@ -293,7 +293,11 @@ export function rollUp(run: RunFile): RunFile {
   const phases = run.phases.map((phase) => {
     const stages = phase.stages.map((stage) => ({
       ...stage,
-      cost_usd: round(stage.tasks.reduce((sum, t) => sum + t.cost_usd, 0)),
+      // An unmetered task (`cost_usd: null`) contributes nothing. That makes the
+      // stage total a LOWER BOUND rather than a measurement, which is exactly
+      // what it is — `run status` and `budget show` say so rather than let the
+      // number read as complete.
+      cost_usd: round(stage.tasks.reduce((sum, t) => sum + (t.cost_usd ?? 0), 0)),
     }));
     const withStages: RunPhase = { ...phase, stages, status: "pending" };
     return { ...withStages, status: derivePhaseStatus(withStages) };

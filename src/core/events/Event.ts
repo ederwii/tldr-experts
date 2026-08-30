@@ -4,7 +4,14 @@ import {
   type ValidationIssue, type ValidationResult,
 } from "../schemas/validation.ts";
 
-/** Closed set — an unknown type is a validation error (spec §2.9). */
+/**
+ * Closed set — an unknown type is a validation error (spec §2.9).
+ *
+ * `gate.revoked` and `budget.raised` were added 2026-08-29. Both name a moment the
+ * log could not previously describe: an approval taken back (a signed gate is not
+ * final — see `revoke` in `run/gates.ts`), and a ceiling moved by hand (the audit
+ * measured `budget raise` rewriting budget.yml and appending nothing at all).
+ */
 export const EVENT_TYPES = [
   "run.created", "run.closed", "run.unlocked", "run.cancelled",
   "phase.started", "phase.done",
@@ -12,9 +19,9 @@ export const EVENT_TYPES = [
   "task.started", "task.done",
   "agent.spawned", "agent.result",
   "question.asked", "question.answered",
-  "gate.requested", "gate.approved", "gate.rejected",
+  "gate.requested", "gate.approved", "gate.rejected", "gate.revoked",
   "check.passed", "check.failed",
-  "budget.warned", "budget.blocked",
+  "budget.warned", "budget.blocked", "budget.raised",
   "fact.added", "fact.retired",
   "map.refreshed",
   "ticket.synced",

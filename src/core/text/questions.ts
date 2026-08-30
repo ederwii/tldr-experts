@@ -65,6 +65,30 @@ export interface QuestionsDoc {
 }
 
 const HEADING_RE = /^##\s+(Q\d{1,6})\s+·\s+(.+?)\s*$/;
+/**
+ * Anything that LOOKS like a question heading, at any H2–H4 depth and with any
+ * separator. The §2.7 parser reads exactly one shape; this one reads every shape
+ * an agent has actually written, so "your file has questions the parser cannot
+ * see" is a sentence the framework can say instead of silently finding none.
+ *
+ * Measured 2026-08-29: a real stage wrote `### Q1 — Where does state live?` and
+ * `**Answer:**`, copied from `templates/questions.md`, which did not match the
+ * parser it was written for. Four questions, zero parsed, gate auto-closed.
+ */
+const LOOSE_HEADING_RE = /^(#{2,4})\s*(Q\d{1,6})\b[ \t]*(.*)$/;
+/**
+ * The prose answer slot the old template taught. The emphasis markers sit on both
+ * sides of the colon (`**Answer:**`), so they are stripped on both sides — reading
+ * only the left pair captured a literal `**` as the answer and flipped an
+ * unanswered block to `answered`.
+ */
+const PROSE_ANSWER_RE = /^\s*\*{0,2}Answer\*{0,2}\s*:\*{0,2}\s*(.*)$/;
+/** `- **Other:** _______` — an option with no letter. It keeps its words. */
+const PROSE_OTHER_RE = /^\s*-\s*(?:\*\*)?Other(?:\*\*)?\s*:?(?:\*\*)?\s*(.*)$/i;
+/** The prose "why" line the old template taught. */
+const PROSE_WHY_RE = /^\s*\*?(?:Why it is being asked|Why asked)\*?:?\*?\s*(.*)$/;
+/** The prose option shape: `- **A)** text`. */
+const PROSE_OPTION_RE = /^\s*-\s*(?:\*\*)?([A-E])\)(?:\*\*)?\s*(.*)$/;
 const METADATA_RE = /^<!--\s*(.*?)\s*-->$/;
 const WHY_RE = /^Why asked:\s*(.*)$/;
 const OPTION_RE = /^-\s+([A-E])\)\s*(.*)$/;
@@ -215,6 +239,55 @@ export function renderQuestionBlock(block: QuestionBlock): string {
   return lines.join("\n");
 }
 
+export interface FixDefaults {
+  readonly area: string;
+  readonly askedBy: string;
+  readonly askedAt: string;
+}
+
+/**
+ * Rewrite one loose block into §2.7 grammar. **Not a word of the author's text is
+ * changed** — the title, the `Why asked:` sentence, every option and any answer
+ * already typed come across verbatim. What is added is the shape the parser
+ * needs: the `·` heading, the metadata comment, and the `[Answer]:` slot.
+ *
+ * §2.7 also requires `Why asked:` to end with a `[src: …]` token, and the prose
+ * form had no such rule — so a converted block usually has none. It is left
+ * WITHOUT one on purpose: this whole wave exists because citations that resolve
+ * to nothing were being accepted, and a tool that closes the gap by writing
+ * `[src: absent:tldrx questions lint --fix]` is producing exactly that. The
+ * missing citation is a real defect, `validateQuestions` names it, and
+ * `questions lint` says how many blocks need one — a person adds the source they
+ * actually had in mind.
+ */
+export function renderFixedBlock(block: LooseBlock, defaults: FixDefaults): string {
+  const status = block.answer === "" ? "open" : "answered";
+  const lines = [
+    `## ${block.id} · ${block.title === "" ? "(untitled — the prose form carried no question)" : block.title}`,
+    `<!-- id: ${block.id} | status: ${status} | area: ${defaults.area} | ` +
+      `asked_by: ${defaults.askedBy} | asked_at: ${defaults.askedAt} -->`,
+    block.why === ""
+      ? "Why asked: (the prose form carried no reason — add one, ending with a [src: …] token)"
+      : `Why asked: ${block.why}`,
+    "",
+  ];
+  const options = block.options.length >= 2
+    ? block.options
+    : [...block.options, ...FALLBACK_OPTIONS.slice(block.options.length)];
+  for (const option of options) lines.push(`- ${option.letter}) ${option.text}`);
+  lines.push("", block.answer === "" ? "[Answer]:" : `[Answer]: ${block.answer}`);
+  return lines.join("\n");
+}
+
+/**
+ * §2.7 requires 2–5 options. A prose block that offered fewer keeps the ones it
+ * had and is topped up with these, which say what they are.
+ */
+const FALLBACK_OPTIONS: readonly QuestionOption[] = [
+  { letter: "A", text: "(the prose form listed no options — write the first here)" },
+  { letter: "B", text: "other — write it below" },
+];
+
 /**
  * Spec §2.7: a block is answered iff its metadata says `status: open` **and** the
  * `[Answer]:` line has a non-empty capture.
@@ -249,6 +322,154 @@ export function replaceBlock(doc: QuestionsDoc, block: QuestionBlock): Questions
   return {
     ...doc,
     blocks: doc.blocks.map((b) => (b.id === block.id ? block : b)),
+  };
+}
+
+/**
+ * Headings that name a question the parser cannot read — `### Q1 — …`, `## Q1: …`,
+ * anything but `## Qn · Title`. Returns the ids, in file order, so a caller can
+ * say WHICH questions were lost.
+ */
+export function unreadableQuestionHeadings(text: string): readonly string[] {
+  const lost: string[] = [];
+  for (const line of text.split("\n")) {
+    const loose = LOOSE_HEADING_RE.exec(line);
+    if (loose === null || loose[2] === undefined) continue;
+    if (HEADING_RE.test(line)) continue;
+    lost.push(loose[2]);
+  }
+  return lost;
+}
+
+/** One block the linter could not read, and what it managed to salvage from it. */
+export interface LooseBlock {
+  readonly id: string;
+  /** 1-based line of the heading. */
+  readonly line: number;
+  readonly title: string;
+  readonly why: string;
+  readonly options: readonly QuestionOption[];
+  readonly answer: string;
+  /** The block's raw lines, heading first — everything `--fix` has to work with. */
+  readonly lines: readonly string[];
+}
+
+/**
+ * Read a questions.md written in the PROSE shape the old template taught, so
+ * `tldrx questions lint --fix` can convert it without changing a word of it.
+ * Anything already in §2.7 grammar is skipped: this only sees what the real
+ * parser could not.
+ */
+export function parseLooseQuestions(text: string): readonly LooseBlock[] {
+  const lines = text.replace(/\n$/, "").split("\n");
+  const blocks: LooseBlock[] = [];
+  let pending: { id: string; line: number; title: string; body: string[] } | null = null;
+
+  const close = (): void => {
+    if (pending === null) return;
+    blocks.push(toLoose(pending));
+    pending = null;
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    const loose = LOOSE_HEADING_RE.exec(line);
+    if (loose !== null && loose[2] !== undefined && !HEADING_RE.test(line)) {
+      close();
+      pending = { id: loose[2], line: i + 1, title: cleanTitle(loose[3] ?? ""), body: [line] };
+      continue;
+    }
+    // A well-formed heading ENDS a loose block: the two shapes may be mixed.
+    if (HEADING_RE.test(line)) {
+      close();
+      continue;
+    }
+    if (pending !== null) pending.body.push(line);
+  }
+  close();
+  return blocks;
+}
+
+function toLoose(pending: { id: string; line: number; title: string; body: readonly string[] }): LooseBlock {
+  let why = "";
+  let answer = "";
+  const options: QuestionOption[] = [];
+  const LETTERS = "ABCDE";
+  for (const line of pending.body) {
+    const option = PROSE_OPTION_RE.exec(line);
+    if (option !== null && option[1] !== undefined) {
+      options.push({ letter: option[1], text: stripEmphasis(option[2] ?? "") });
+      continue;
+    }
+    // An unlettered `- Other: ___` becomes the next letter, keeping its own words:
+    // dropping it would lose the escape hatch the question offered.
+    const other = PROSE_OTHER_RE.exec(line);
+    if (other !== null && options.length > 0 && options.length < LETTERS.length) {
+      options.push({ letter: LETTERS[options.length] ?? "E", text: `other — ${stripEmphasis(other[1] ?? "")}`.trim() });
+      continue;
+    }
+    const answered = PROSE_ANSWER_RE.exec(line);
+    if (answered !== null && answer === "") {
+      answer = (answered[1] ?? "").trim();
+      continue;
+    }
+    const asked = PROSE_WHY_RE.exec(line);
+    if (asked !== null && why === "") why = stripEmphasis(asked[1] ?? "");
+  }
+  return {
+    id: pending.id, line: pending.line, title: pending.title,
+    why, options, answer, lines: [...pending.body],
+  };
+}
+
+/** `— Where does state live?` / `: Where does state live?` -> the sentence. */
+function cleanTitle(rest: string): string {
+  return stripEmphasis(rest.replace(/^\s*[—–:·-]\s*/, ""));
+}
+
+function stripEmphasis(text: string): string {
+  return text.replace(/\*\*/g, "").replace(/^\*|\*$/g, "").trim();
+}
+
+export interface FixResult {
+  readonly text: string;
+  /** Ids converted from the prose form, in file order. */
+  readonly converted: readonly string[];
+  /**
+   * Converted ids whose `Why asked:` line still needs a `[src: …]` token — the
+   * prose form had no such rule, and this tool does not invent citations.
+   */
+  readonly needSource: readonly string[];
+}
+
+/**
+ * Rewrite every unreadable block in a whole file, leaving readable ones and all
+ * surrounding prose exactly as they are. Returns the same text when there is
+ * nothing to convert, so a caller can skip the write.
+ */
+export function fixQuestions(text: string, defaults: FixDefaults): FixResult {
+  const loose = parseLooseQuestions(text);
+  if (loose.length === 0) return { text, converted: [], needSource: [] };
+  const trailingNewline = text.endsWith("\n");
+  const lines = (trailingNewline ? text.slice(0, -1) : text).split("\n");
+  const spans = loose.map((block) => ({
+    block,
+    start: block.line - 1,
+    end: block.line - 1 + block.lines.length,
+  }));
+
+  const out: string[] = [];
+  let cursor = 0;
+  for (const span of spans) {
+    out.push(...lines.slice(cursor, span.start));
+    out.push(...renderFixedBlock(span.block, defaults).split("\n"));
+    cursor = span.end;
+  }
+  out.push(...lines.slice(cursor));
+  const body = out.join("\n");
+  return {
+    text: trailingNewline ? `${body}\n` : body,
+    converted: loose.map((b) => b.id),
+    needSource: loose.filter((b) => parseSrcToken(`Why asked: ${b.why}`) === null).map((b) => b.id),
   };
 }
 

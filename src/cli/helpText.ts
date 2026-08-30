@@ -397,6 +397,16 @@ const ENTRIES: readonly CommandHelp[] = [
         arg: "<n>",
         meaning: "How many Read/Glob/Grep calls the sub-agent may complete before it is stopped mid-turn. The brake --max-usd is not: it ends a turn that has already been paid for. Default: the stage's max_reads (120; 200 on build, 60 on watch).",
       },
+      {
+        name: "cost-usd",
+        arg: "<n>",
+        meaning: "--commit only: what the host session's sub-agent actually cost. An in-session turn has no meter of its own — it was billed to the host — so with nothing declared the task is recorded `cost_usd: null, metered: false` rather than $0.00, which would be a measurement and a false one.",
+      },
+      {
+        name: "tokens",
+        arg: "<n>",
+        meaning: "--commit only: tokens the host session used, recorded beside the declared cost. Optional.",
+      },
       yolo(),
       { name: "keep-worktrees", arg: null, meaning: "Leave the per-story worktrees on disk after the build stage finishes with them." },
       {
@@ -456,6 +466,35 @@ const ENTRIES: readonly CommandHelp[] = [
     ],
   },
   {
+    name: "questions",
+    description: "Check that this run's questions.md can be read by the \u00a72.7 parser.",
+    args: [{ name: "[<run>]", meaning: "A run id. Omit it and the one open run is used." }],
+    flags: [
+      runFlag(),
+      {
+        name: "fix",
+        arg: null,
+        meaning: "Rewrite the blocks the parser cannot see into the grammar, without changing a word: the title, the reason, every option and any answer already typed come across verbatim. What is added is the heading separator, the metadata comment and the [Answer]: slot.",
+        sub: "lint",
+      },
+      {
+        name: "area",
+        arg: "<a>",
+        meaning: "The area stamped on a block --fix has to write metadata for, when the prose form recorded none. Default: general.",
+        sub: "lint",
+      },
+      root(),
+    ],
+    examples: [
+      "tldrx questions lint",
+      "tldrx questions lint --run 260101-checkout --fix",
+    ],
+    exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
+    notes: [
+      "A heading that misses `## Qn \u00b7 Title` is not half-read, it is read as ABSENT — so everything downstream reports \"0 open questions\" and an auto gate signs itself over them. This names every block in that state and exits 2.",
+    ],
+  },
+  {
     name: "approve",
     description: "Approve the gate the run is sitting at.",
     args: [],
@@ -469,14 +508,22 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "reject",
-    description: "Send the current stage back with a note saying what has to change.",
+    description: "Send the current stage back with a note saying what has to change, or revoke an approval already given.",
     args: [],
     flags: [
       { name: "note", arg: "<text>", meaning: "What has to change. Required — a rejection with no reason is not actionable." },
+      {
+        name: "stage",
+        arg: "<phase>/<stage>",
+        meaning: "Revoke an approval already given, whoever signed it: the cursor moves back to that stage, one gate.revoked is appended carrying signed_by, and later stages that had run are marked stale — their files stay on disk and stop counting as current. Nothing is deleted and no cost is refunded. The one verb that may reopen a finished run.",
+      },
       runFlag(),
       root(),
     ],
-    examples: ['tldrx reject --note "contracts.md does not name the events"'],
+    examples: [
+      'tldrx reject --note "contracts.md does not name the events"',
+      'tldrx reject --stage 02-how/design --note "the auto gate signed over four open questions"',
+    ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
   },
   {
@@ -490,6 +537,7 @@ const ENTRIES: readonly CommandHelp[] = [
       runFlag(),
       json("the budget view", "show"),
       { name: "take-from", arg: "<phase>", meaning: "Move the money out of this phase instead of raising the run's total.", sub: "raise" },
+      { name: "note", arg: "<text>", meaning: "Why the ceiling moved. Recorded on the budget.raised event beside the before/after and the actor.", sub: "raise" },
       root(),
     ],
     examples: [
@@ -665,7 +713,13 @@ const ENTRIES: readonly CommandHelp[] = [
     args: [],
     flags: [
       runFlag(),
-      { name: "dry-run", arg: null, meaning: "Say what would be created or edited. Calls nothing and writes nothing.", sub: "sync" },
+      {
+        name: "apply",
+        arg: null,
+        meaning: "Actually create and edit issues. Without it `sync` previews and calls nothing — the one verb here that reaches a third party does not write by default.",
+        sub: "sync",
+      },
+      { name: "dry-run", arg: null, meaning: "The default, kept as an explicit alias for it: say what would be created or edited, call nothing, write nothing. Passing it also cancels an --apply on the same line.", sub: "sync" },
       {
         name: "provider",
         arg: "<kind>",
@@ -677,7 +731,8 @@ const ENTRIES: readonly CommandHelp[] = [
     ],
     examples: [
       "tldrx tickets status",
-      "tldrx tickets sync --dry-run",
+      "tldrx tickets sync",
+      "tldrx tickets sync --apply",
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
     notes: ["No --json: the sync report and the status table are prose, and a JSON shape nobody consumes is a promise this would then have to keep."],

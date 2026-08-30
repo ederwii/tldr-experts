@@ -43,6 +43,28 @@ export function claimSourcesEmptySectionDeny(
 }
 
 /**
+ * A bullet that DID cite something the parser could not read.
+ *
+ * Split out of `claimSourcesDeny` on 2026-08-29: a real user's first `tldrx next`
+ * was refused with "9 unsourced bullet(s)" when all nine carried a citation —
+ * they were wrapped in backticks. "You wrote no source" sent them looking for
+ * something already on the page. `[assumption]` on the wording; there is no
+ * verbatim spec text for this case.
+ */
+export function claimSourcesMalformedDeny(
+  relPath: string,
+  issues: readonly { line: number; message: string }[],
+): string {
+  const list = issues.map((i) => `L${i.line}`).join(", ");
+  return (
+    `[tldrx] claim-sources: ${issues.length} malformed citation(s) in ${relPath} — ${list}.\n` +
+    "The bullet cites a source but the token could not be read. The `[src: …]` token must be the LAST " +
+    "thing on the line: remove the backticks around it and any words after it. A closing quote, bracket " +
+    "or a final `.` after the `]` is fine."
+  );
+}
+
+/**
  * The spec gives no verbatim text for a source that parses but does not resolve,
  * so this one is written in its voice. `[assumption]`
  */
@@ -93,6 +115,23 @@ export function dodGateMissingBlockDeny(storyId: string, relPath: string): strin
     `[tldrx] DoD-gate: story ${storyId} cannot be marked done — no fenced \`\`\`dod block in ${relPath}.\n` +
     "Add the commands that prove it (test, lint, typecheck from map/commands.md) and let the gate re-run them; " +
     "done means proven, not asserted."
+  );
+}
+
+/**
+ * A dod command the gate will not run at all.
+ *
+ * Distinct from `dodGateDeny`, which reports a command that ran and failed. This
+ * one never ran: it is not in `workspace.yml`, or it needs a shell the gate does
+ * not open. `[assumption]` on the wording — the spec has no verbatim text for a
+ * refusal that did not exist until 2026-08-29.
+ */
+export function dodGateRefusedCommandDeny(storyId: string, command: string, why: string): string {
+  return (
+    `[tldrx] DoD-gate: story ${storyId} cannot be marked done — refusing to RUN \`${command}\`.\n` +
+    `${why}\n` +
+    "This gate executes its commands for real, as you. It runs only what the workspace declared, " +
+    "argv-split with no shell — a story is data, and data does not get to invent a command."
   );
 }
 

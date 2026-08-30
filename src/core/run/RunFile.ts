@@ -51,7 +51,24 @@ export interface RunTask {
   readonly status: StageStatus;
   readonly expert: string | null;
   readonly model: string | null;
-  readonly cost_usd: number;
+  /**
+   * What the turn cost — or `null` when nobody could say.
+   *
+   * `null` is the in-session case (spec §5, `--commit`): the sub-agent ran inside
+   * the host's own session, its usage was billed to that session, and unless the
+   * host DECLARES a number with `--cost-usd` there is none to record. That used to
+   * be written as `0`, which is a measurement, and a false one — a run's ledger
+   * added up to `$0.00 spent` after real money had been spent (2026-08-29 audit,
+   * §A). `null` says "unmetered"; every sum treats it as contributing nothing,
+   * which is the only honest arithmetic, and every REPORT says so out loud.
+   */
+  readonly cost_usd: number | null;
+  /**
+   * False when this task's cost is unmetered. ADDITIVE and optional: absent means
+   * metered, which is every task written before this existed and every headless
+   * spawn, where the envelope's `total_cost_usd` is a real reconciled number.
+   */
+  readonly metered?: boolean;
   readonly error: string | null;
   readonly session_id: string | null;
   readonly started_at: string | null;
@@ -65,6 +82,8 @@ export interface RunTask {
    * apart.
    */
   readonly stopped_by?: string | null;
+  /** Tokens the host declared with `--tokens`, when it knew them. */
+  readonly tokens?: number;
 }
 
 export interface RunStage {
@@ -80,6 +99,17 @@ export interface RunStage {
   readonly outputs: readonly string[];
   readonly gate: RunGate;
   readonly tasks: readonly RunTask[];
+  /**
+   * True when an EARLIER stage's gate was revoked (`tldrx reject --stage`) after
+   * this one had already run. ADDITIVE and optional: absent on every run written
+   * before revocation existed, and absent again the moment the stage re-runs.
+   *
+   * The stage's outputs are deliberately left on disk — money was spent producing
+   * them and they are often still 90% right — but they were derived from a
+   * decision that has since been withdrawn, and nothing may quietly treat them as
+   * current. `run status` says so; `next` re-runs the stage and clears the flag.
+   */
+  readonly stale?: boolean;
 }
 
 export interface RunPhase {
@@ -378,6 +408,9 @@ export function validateRunFile(input: unknown): ValidationResult {
       requireNumber(stage.cost_usd, `${path}.cost_usd`, issues);
       requireArray(stage.inputs, `${path}.inputs`, issues);
       requireArray(stage.outputs, `${path}.outputs`, issues);
+      if (stage.stale !== undefined && typeof stage.stale !== "boolean") {
+        issues.push({ path: `${path}.stale`, message: "expected true or false" });
+      }
       checkOrder(stage.started_at, stage.ended_at, path, issues);
       if (cursor !== null && cursor.phase === phaseId && cursor.stage === stageId) cursorResolves = true;
 
@@ -408,7 +441,16 @@ export function validateRunFile(input: unknown): ValidationResult {
           if (taskIds.has(taskId)) issues.push({ path: `${tp}.id`, message: `duplicate task id ${taskId}` });
           taskIds.add(taskId);
           requireEnum(task.status, STAGE_STATUSES, `${tp}.status`, issues);
-          requireNumber(task.cost_usd, `${tp}.cost_usd`, issues);
+          // `null` is legal and means unmetered (an in-session turn nobody costed).
+          // It contributes nothing to the total, which is why `budget.spent_usd`
+          // can be below what was really spent and why every report says so.
+          if (task.cost_usd !== null) requireNumber(task.cost_usd, `${tp}.cost_usd`, issues);
+          if (task.metered !== undefined && typeof task.metered !== "boolean") {
+            issues.push({ path: `${tp}.metered`, message: "expected true or false" });
+          }
+          if (task.cost_usd === null && task.metered !== false) {
+            issues.push({ path: `${tp}.metered`, message: "a null cost_usd must be marked `metered: false`" });
+          }
           if (typeof task.cost_usd === "number") spentFromTasks += task.cost_usd;
           checkOrder(task.started_at, task.ended_at, tp, issues);
         });

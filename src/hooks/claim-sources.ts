@@ -17,7 +17,8 @@ import { readPayload, filePathOf, isWriteOrEdit } from "./lib/payload.ts";
 import { wouldBeContent } from "./lib/wouldBe.ts";
 import { locateWork, loadWorkspace, toSrcContext } from "./lib/workspace.ts";
 import {
-  claimSourcesDeny, claimSourcesEmptySectionDeny, claimSourcesUnresolvedDeny,
+  claimSourcesDeny, claimSourcesEmptySectionDeny, claimSourcesMalformedDeny,
+  claimSourcesUnresolvedDeny,
 } from "./lib/messages.ts";
 import { isHandoff, validateHandoff } from "../core/text/handoff.ts";
 
@@ -47,6 +48,7 @@ await runHook("claim-sources", async () => {
   const relPath = `tldrx-work/${location.run}/${location.relative}`;
   const parts: string[] = [];
   if (report.unsourced.length > 0) parts.push(claimSourcesDeny(relPath, report.unsourced));
+  if (report.malformed.length > 0) parts.push(claimSourcesMalformedDeny(relPath, report.malformed));
   if (report.emptySections.length > 0) {
     parts.push(claimSourcesEmptySectionDeny(relPath, [...report.emptySections]));
   }

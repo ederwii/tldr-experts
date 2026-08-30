@@ -74,18 +74,33 @@ function checkClaimSources(ctx: CheckContext): CheckOutcome {
     return { id: "claim-sources", status: "skipped", detail: "the stage declares no handoff.md output" };
   }
   const srcCtx = toSrcContext(loadWorkspace(ctx.root), ctx.runDir);
+  // Counted, never fatal: an `unverified` citation passes the check and blocks the
+  // AUTO gate (spec §5, condition 5). The count is carried in `detail` because
+  // `CheckOutcome` is a three-state contract every other check shares.
+  let unverified = 0;
   for (const rel of handoffs) {
     const path = join(ctx.runDir, rel);
     if (!existsSync(path)) {
       return { id: "claim-sources", status: "failed", detail: `${rel} was declared but never written` };
     }
     const validation = validateHandoff(readFileSync(path, "utf8"), srcCtx);
-    if (validation.ok) continue;
+    if (validation.ok) {
+      unverified += validation.unverified.length;
+      continue;
+    }
     if (validation.missingSections.length > 0) {
       return { id: "claim-sources", status: "failed", detail: `${rel} is missing section(s) ${validation.missingSections.join(", ")}` };
     }
     if (validation.unsourced.length > 0) {
       return { id: "claim-sources", status: "failed", detail: `${rel}: unsourced bullet(s) on line(s) ${validation.unsourced.join(", ")}` };
+    }
+    if (validation.malformed.length > 0) {
+      const named = validation.malformed.map((m) => `L${m.line}`).join(", ");
+      return {
+        id: "claim-sources",
+        status: "failed",
+        detail: `${rel}: malformed citation(s) on ${named} — the [src: …] token must be last on the line`,
+      };
     }
     if (validation.emptySections.length > 0) {
       const named = validation.emptySections.map((s) => `${s.name} (L${String(s.line)})`).join(", ");
@@ -97,7 +112,20 @@ function checkClaimSources(ctx: CheckContext): CheckOutcome {
     }
     return { id: "claim-sources", status: "failed", detail: `${rel}: ${validation.unresolved[0]?.message ?? "unresolvable source"}` };
   }
-  return { id: "claim-sources", status: "passed", detail: `${handoffs.length} handoff(s) sourced` };
+  const tail = unverified === 0 ? "" : `, ${UNVERIFIED_PREFIX}${unverified}`;
+  return { id: "claim-sources", status: "passed", detail: `${handoffs.length} handoff(s) sourced${tail}` };
+}
+
+/** How an unverified count is written into `claim-sources`' detail, and read back out. */
+export const UNVERIFIED_PREFIX = "unverified: ";
+
+/** The number of unverified citations a `claim-sources` outcome reported, or 0. */
+export function unverifiedCount(outcome: CheckOutcome): number {
+  if (outcome.id !== "claim-sources") return 0;
+  const at = outcome.detail.indexOf(UNVERIFIED_PREFIX);
+  if (at === -1) return 0;
+  const parsed = Number.parseInt(outcome.detail.slice(at + UNVERIFIED_PREFIX.length), 10);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 /**

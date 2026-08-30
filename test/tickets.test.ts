@@ -213,7 +213,7 @@ describe("guard rail — files are the source of truth", () => {
     });
     // The remote is CLOSED. The story is still todo, and only external_status says so.
     expect(external.externalStatus).toBe("CLOSED");
-    expect(validateStoryFile(after).validation.ok).toBe(true);
+    expect(validateStoryFile(after, new Set(["npm run test"])).validation.ok).toBe(true);
   });
 
   test("a remote Done can never reach a story's status, even through applyExternal", () => {
@@ -224,7 +224,7 @@ describe("guard rail — files are the source of truth", () => {
     });
     expect(statusLine(patched)).toBe("status: todo");
     expect(readExternal(patched).externalStatus).toBe("Done");
-    expect(validateStoryFile(patched).validation.ok).toBe(true);
+    expect(validateStoryFile(patched, new Set(["npm run test"])).validation.ok).toBe(true);
   });
 
   test("applyExternal refuses a file with no front matter rather than inventing one", () => {

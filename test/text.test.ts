@@ -187,7 +187,9 @@ describe("handoff.md (spec §2.8)", () => {
   });
 
   test("reports the line number of every unsourced bullet", () => {
-    const broken = HANDOFF.replace(" [src: F019]", "").replace(" [src: Q6]", "");
+    const broken = HANDOFF
+      .replace(" [src: F019]", "")
+      .replace("- Whether mobile needs paging beyond top-50 [src: Q4]", "- Whether mobile needs paging beyond top-50");
     const report = validateHandoff(broken, CTX);
     expect(report.ok).toBe(false);
     expect(report.unsourced).toEqual([6, 14]);

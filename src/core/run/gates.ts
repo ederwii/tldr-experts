@@ -147,6 +147,140 @@ export function reject(store: RunStore, ctx: GateContext): RejectOutcome {
   return { stage: entry.stage.id, phase: entry.phase.id, note: ctx.note, from };
 }
 
+export interface RevokeOutcome {
+  readonly stage: string;
+  readonly phase: string;
+  readonly note: string;
+  /** Who had signed the gate being taken back — `auto` or a person. */
+  readonly signedBy: string;
+  /** When it was signed. */
+  readonly signedAt: string | null;
+  /** `<phase>/<stage>` of every later stage now marked stale. */
+  readonly staled: readonly string[];
+}
+
+/**
+ * `tldrx reject --stage <phase>/<stage>` — take an approval back.
+ *
+ * Before this, an approval was final. `approve()` moves the cursor in the same
+ * transaction that signs the gate (`gates.ts:63-77`) and `reject` only ever looked
+ * at the cursor, so the audit's probe — a wholly fabricated handoff that closed
+ * its own auto gate — met `REJECT REFUSED: nothing to reject: 02-how/beta is
+ * 'ready'`. A machine that can sign but cannot be overruled is not a gate.
+ *
+ * What it does, and deliberately does not do:
+ *
+ *   - the named stage goes back to `ready` with the note on its gate, and the
+ *     CURSOR moves back to it, so the next `tldrx next` re-runs it with the note
+ *     as input — identical to an ordinary rejection, one stage further back;
+ *   - every LATER stage that had already run is marked `stale: true`. Its outputs
+ *     stay on disk: they cost money, they are usually mostly right, and deleting
+ *     a reviewer's work to make a flag true is worse than the flag. What changes
+ *     is that nothing may treat them as current;
+ *   - no cost is refunded and no task is deleted. Money spent stays on the record
+ *     (spec §5).
+ *
+ * One `gate.revoked` event carries who signed the original, who took it back, and
+ * what went stale.
+ */
+export function revoke(store: RunStore, ctx: GateContext, target: string): RevokeOutcome {
+  if (ctx.note.trim() === "") {
+    throw new GateError("reject needs --note: a revocation without a reason is not actionable");
+  }
+  const entry = locate(store, target);
+  if (entry.stage.gate.status !== "approved") {
+    throw new GateError(
+      `cannot revoke ${entry.phase.id}/${entry.stage.id}: its gate is \`${entry.stage.gate.status}\`, not ` +
+        "`approved`. To send the CURRENT stage back, use `tldrx reject --note \"…\"` with no --stage.",
+    );
+  }
+  const signedBy = entry.stage.gate.by ?? "unknown";
+  const signedAt = entry.stage.gate.at;
+  const later = stagesAfter(store.run, entry.phase.id, entry.stage.id)
+    .filter((e) => e.stage.status !== "pending" || e.stage.tasks.length > 0)
+    .map((e) => `${e.phase.id}/${e.stage.id}`);
+
+  store.mutate((run) => {
+    const reset = mapStage(run, entry.phase.id, entry.stage.id, (stage) => ({
+      ...stage,
+      status: "ready",
+      ended_at: null,
+      stale: undefined,
+      gate: { ...stage.gate, status: "pending", by: null, at: null, note: ctx.note } satisfies RunGate,
+    }));
+    const stale = new Set(later);
+    return {
+      ...reset,
+      phases: reset.phases.map((phase) => ({
+        ...phase,
+        stages: phase.stages.map((stage) =>
+          stale.has(`${phase.id}/${stage.id}`) ? { ...stage, stale: true } : stage,
+        ),
+      })),
+      cursor: { phase: entry.phase.id, stage: entry.stage.id, task: null },
+    };
+  });
+
+  store.append(event(ctx.at, store.runId, entry.stage.id, "gate.revoked", ctx.actor, {
+    phase: entry.phase.id,
+    note: ctx.note,
+    signed_by: signedBy,
+    signed_at: signedAt,
+    staled: later,
+  }));
+  store.save();
+  return {
+    stage: entry.stage.id, phase: entry.phase.id, note: ctx.note,
+    signedBy, signedAt, staled: later,
+  };
+}
+
+/** `<phase>/<stage>`, or a bare stage id when it is unambiguous. */
+function locate(store: RunStore, target: string): { phase: RunPhase; stage: RunStage } {
+  const all = flattenEntries(store.run);
+  const slash = target.indexOf("/");
+  if (slash > 0) {
+    const phaseId = target.slice(0, slash);
+    const stageId = target.slice(slash + 1);
+    const found = all.find((e) => e.phase.id === phaseId && e.stage.id === stageId);
+    if (found === undefined) {
+      throw new GateError(`no stage ${target} in this run — it has ${describeStages(all)}`);
+    }
+    return found;
+  }
+  const matches = all.filter((e) => e.stage.id === target);
+  const only = matches[0];
+  if (only === undefined) {
+    throw new GateError(`no stage \`${target}\` in this run — it has ${describeStages(all)}`);
+  }
+  if (matches.length > 1) {
+    const named = matches.map((e) => `${e.phase.id}/${e.stage.id}`).join(", ");
+    throw new GateError(`\`${target}\` names ${matches.length} stages (${named}) — pass <phase>/<stage>`);
+  }
+  return only;
+}
+
+function describeStages(all: readonly { phase: RunPhase; stage: RunStage }[]): string {
+  return all.map((e) => `${e.phase.id}/${e.stage.id}`).join(", ");
+}
+
+function flattenEntries(run: RunFile): readonly { phase: RunPhase; stage: RunStage }[] {
+  const out: { phase: RunPhase; stage: RunStage }[] = [];
+  for (const phase of run.phases) for (const stage of phase.stages) out.push({ phase, stage });
+  return out;
+}
+
+/** Every stage after the named one, in execution order. */
+function stagesAfter(
+  run: RunFile,
+  phaseId: string,
+  stageId: string,
+): readonly { phase: RunPhase; stage: RunStage }[] {
+  const all = flattenEntries(run);
+  const at = all.findIndex((e) => e.phase.id === phaseId && e.stage.id === stageId);
+  return at === -1 ? [] : all.slice(at + 1);
+}
+
 // --- helpers ---------------------------------------------------------------
 
 function requireGate(store: RunStore, verb: string): { phase: RunPhase; stage: RunStage } {

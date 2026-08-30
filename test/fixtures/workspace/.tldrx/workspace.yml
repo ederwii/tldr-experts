@@ -17,7 +17,13 @@ repos:
     default_branch: main
     stack: [typescript, react]
     package_manager: npm
+    # The four extra keys exist for the DoD-gate tests, which re-run a story's dod
+    # block FOR REAL. Since 2026-08-29 the gate runs only what the workspace
+    # declared (argv-split, no shell), so a test command has to be declared like
+    # any other. `commands:` keys are free-form; only the values are the allowlist.
     commands: {build: "npm run build", test: "npm run test", lint: "npm run lint",
-               typecheck: "npm run typecheck", run: "npm run dev"}
+               typecheck: "npm run typecheck", run: "npm run dev",
+               dod_ok: "sh scripts/dod-ok.sh", dod_true: "true",
+               dod_fail: "sh scripts/dod-fail.sh", dod_slow: "sleep 30"}
     ci: []
     confidence: high
