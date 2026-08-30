@@ -501,7 +501,7 @@ describe("tldrx next, with a view", () => {
   test("plain mode says what the sub-agent did, on stderr, while off says nothing", async () => {
     const plain = await next(workspace(), "--ui", "plain");
     expect(plain.stderr).toContain("] — alpha · ");
-    expect(plain.stderr).toContain("] writing …/tldrx-work/260828-demo/01-what/handoff.md");
+    expect(plain.stderr).toMatch(/\] writing (…\/)?tldrx-work\/260828-demo\/01-what\/handoff\.md/); // the "…/" elision depends on how long the temp root is (macOS vs Linux)
     expect(plain.stderr).toContain("] $0.42 so far");
     expect(plain.stderr).not.toContain("\x1b");
 
