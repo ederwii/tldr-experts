@@ -63,8 +63,12 @@ export const PARAPHRASE_RATIO = 0.9;
 const CONFIDENCE_ANY_RE =
   /\((?:measured|inferred|assumed)\b[^)]*\)|(?:^|\s)[*_]{1,2}(?:measured|inferred|assumed)[^*_\n]{0,40}[*_]{1,2}\s*[—–:-]?/gi;
 const CONFIDENCE_TRAILING_RE = /\((measured|inferred|assumed)\b[^)]*\)\s*$/i;
-/** `*measured* —`, and the corpus's `*inferred, not measured* —` qualified form. */
-const CONFIDENCE_LEADING_RE = /^[*_]{1,2}(measured|inferred|assumed)[^*_\n]{0,40}[*_]{1,2}\s*[—–:-]?/i;
+/**
+ * `*measured* —`, and the corpus's `*inferred, not measured* —` qualified form.
+ * A leading list marker is tolerated so the same function reads a raw line and
+ * the marker-stripped text `parseHandoff` hands over.
+ */
+const CONFIDENCE_LEADING_RE = /^(?:[-*+]\s+)?[*_]{1,2}(measured|inferred|assumed)[^*_\n]{0,40}[*_]{1,2}\s*[—–:-]?/i;
 
 export const CONFIDENCE_VALUES = ["measured", "inferred", "assumed"] as const;
 export type Confidence = (typeof CONFIDENCE_VALUES)[number];
