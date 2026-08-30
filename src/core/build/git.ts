@@ -225,6 +225,21 @@ export async function mergeNoFf(cwd: string, branch: string, message: string): P
 }
 
 /** The diff a reviewer is asked to read: everything the story branch adds. */
+/**
+ * How many commits `head` carries that `base` does not.
+ *
+ * Used to answer one question — "has anything been built on this story branch
+ * yet?" — before a `--discard-pending` re-derives the plan the branch was cut
+ * for. A branch that does not exist has no commits on it, which is the same
+ * answer for the caller's purposes, so a failed `rev-list` is 0 and not a throw.
+ */
+export async function commitsBetween(cwd: string, base: string, head: string): Promise<number> {
+  const result = await git(["rev-list", "--count", `${base}..${head}`], cwd);
+  if (!result.ok) return 0;
+  const n = Number.parseInt(result.stdout.trim(), 10);
+  return Number.isFinite(n) ? n : 0;
+}
+
 export function diffCommand(base: string, branch: string): string {
   return `git diff ${base}...${branch}`;
 }

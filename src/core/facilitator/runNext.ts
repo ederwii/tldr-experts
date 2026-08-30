@@ -675,6 +675,7 @@ async function runExecutor(
     // `--parallel` beats the workflow's `<stage>: {parallel: N}`, which beats
     // `stage.yml`'s. Absent everywhere it is 1 — the sequential path, unchanged.
     parallel: options.parallel ?? spec.parallel ?? 1,
+    discardPending: options.discardPending === true,
     agentCap: (share = 1) => agentCap(options, store, stage, share),
     emit: (type, payload, costUsd = 0, actor = null) => {
       store.append(event(options, store.runId, stageId, type, payload, costUsd, actor));

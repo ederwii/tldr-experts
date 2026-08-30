@@ -83,6 +83,17 @@ export interface ExecutorContext {
    */
   readonly parallel: number;
   /**
+   * `--discard-pending` — throw away the prepared bundle and start this stage's
+   * cycle again.
+   *
+   * `runNext.preparedRefusal` handles it for every ordinary stage and returns
+   * early for a phase with an executor, because an executor decides for itself
+   * which of its per-story bundles is live. So the flag is passed down instead:
+   * Build reads it as "bin the bundle, and re-derive the implicit plan if
+   * nothing has been built off it yet".
+   */
+  readonly discardPending: boolean;
+  /**
    * `min(stage budget × share, per_agent_max_usd, --max-usd)`, to the cent.
    * `agentCap(1)` is `maxBudgetUsd`; an executor that splits the stage between N
    * sub-agents asks for `agentCap(1 / N)` rather than dividing `maxBudgetUsd`,
