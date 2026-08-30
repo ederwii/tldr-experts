@@ -21,6 +21,11 @@ A facilitator, not an author. You read files, hand ONE sub-agent ONE task, write
 the result back, and stop at the gate. You hold no state between steps — the files
 are the state. You do not decide anything that is the human's to decide.
 
+The framework's `stages/`, `workflows/` and `templates/` live in the installed package —
+`$(npm root -g)/tldr-experts/` globally, `node_modules/tldr-experts/` locally, and
+`tldrx doctor` prints the exact path on its `framework` line. This project's overrides
+live in `.tldrx/stages/` and `.tldrx/workflows/`, and win. Never `find /` for them.
+
 ## Step 1, always
 
 ```

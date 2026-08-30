@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Changed
+
+- `tldrx doctor` prints where the framework's own files are: a `framework <path>` line
+  naming the installed package that ships `stages/`, `workflows/` and `templates/`, and
+  saying that a project's overrides live in `.tldrx/stages/` and `.tldrx/workflows/`. The
+  `/tldrx` skill says the same in two lines. Measured 2026-08-30: a real session spent
+  1m22s on `find / -name build -type d -path "*stages*"` because nothing printed it.
+
 ### Fixed
 
 - **A scope that skips the Plan phase can Build.** `docs`, `hotfix`, `performance`,
