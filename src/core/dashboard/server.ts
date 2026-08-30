@@ -16,6 +16,14 @@
  * unshipped plans has no business on a LAN by default. It never writes: no route
  * accepts a body, and no code path here opens a file for writing.
  *
+ * Binding to loopback is necessary and not sufficient. Any page the developer
+ * happens to open can point a name it controls at 127.0.0.1 (DNS rebinding) and
+ * then read `/model.json` from our origin — the socket is loopback either way,
+ * because the browser makes the connection. What separates that request from a
+ * real one is the `Host` header, which carries the attacker's name rather than
+ * ours. So every request must name a loopback host (or the host we were asked to
+ * bind); anything else gets 403 before a route is chosen.
+ *
  * `[assumption]` `fs.watch(dir, { recursive: true })` is the watcher, with a
  * 500 ms mtime sweep as the fallback. Recursive watching is not available on
  * every platform/runtime pair (it landed late on Linux, and Bun's coverage is
@@ -34,6 +42,14 @@ import { EVENTS_PATH, MODEL_PATH, RELOAD_EVENT } from "./script.ts";
 
 export const DEFAULT_PORT = 4477;
 export const LOOPBACK = "127.0.0.1";
+/**
+ * Hostnames a loopback dashboard answers to, whatever port they carry.
+ *
+ * Only the NAME is checked, never the port: `ssh -L 5000:localhost:4477` and
+ * `docker run -p` both change the port a browser asks for and neither is an
+ * attack. The port is not what a rebinding page can forge; the name is.
+ */
+const LOOPBACK_HOSTNAMES: readonly string[] = ["127.0.0.1", "localhost", "::1"];
 /** Collapse a burst of writes — a stage finishing touches several files at once. */
 export const DEBOUNCE_MS = 300;
 const POLL_MS = 500;
@@ -72,7 +88,7 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
   const sockets = new Set<Socket>();
 
   const server = createServer((request, response) => {
-    handle(root, request, response, clients);
+    handle(root, host, request, response, clients);
   });
   // `server.close()` waits for open connections, and an idle keep-alive socket
   // or a parked SSE stream would make Ctrl-C hang. Track them, drop them on close.
@@ -121,12 +137,50 @@ function listen(server: Server, port: number, host: string): Promise<void> {
   });
 }
 
+/**
+ * The hostname inside a `Host` header, lowercased, port dropped, `null` if absent
+ * or unparseable. `[::1]:4477` → `::1`; `example.com` → `example.com`.
+ */
+export function hostnameOfHeader(header: string | undefined): string | null {
+  const value = (header ?? "").trim().toLowerCase();
+  if (value === "") return null;
+  if (value.startsWith("[")) {
+    const end = value.indexOf("]");
+    return end === -1 ? null : value.slice(1, end);
+  }
+  // More than one colon and no brackets is a bare IPv6 literal — RFC 3986 says
+  // it should be bracketed, but nothing forces a client to comply, and it cannot
+  // carry a port in that shape, so the whole value is the name.
+  if (value.split(":").length > 2) return value;
+  const name = value.split(":")[0] ?? "";
+  return name === "" ? null : name;
+}
+
+/** True when the request names us — a loopback host, or the host we bound to. */
+export function isAllowedHost(header: string | undefined, boundHost: string): boolean {
+  const name = hostnameOfHeader(header);
+  if (name === null) return false;
+  return LOOPBACK_HOSTNAMES.includes(name) || name === boundHost.toLowerCase();
+}
+
 function handle(
   root: string,
+  boundHost: string,
   request: IncomingMessage,
   response: ServerResponse,
   clients: Set<ServerResponse>,
 ): void {
+  // Before the method, before the route: a rebound name must not reach either.
+  if (!isAllowedHost(request.headers.host, boundHost)) {
+    text(
+      response,
+      403,
+      `refused: Host \`${request.headers.host ?? "(absent)"}\` is not this machine\n`
+      + `this dashboard answers to ${LOOPBACK_HOSTNAMES.join(", ")} only — reach it at `
+      + `http://${LOOPBACK}:<port>/\n`,
+    );
+    return;
+  }
   if (request.method !== "GET" && request.method !== "HEAD") {
     text(response, 405, "read-only: this server answers GET and nothing else\n");
     return;

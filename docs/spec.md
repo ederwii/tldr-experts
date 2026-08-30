@@ -1106,6 +1106,8 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx hook <name>` | stdin (the hook payload) | whatever the hook writes — stdout, stderr and the exit code are the script's, unchanged | the script's |
 | `tldrx statusline` | stdin (the statusLine payload) | one line on stdout | 0 |
 
+`tldrx dashboard` (live) binds loopback AND checks the `Host` header: a request whose host is not `127.0.0.1`, `localhost`, `::1` or the host it was explicitly bound to is answered `403` before a route is chosen. Loopback alone does not keep a browser out — a page can point a name it owns at `127.0.0.1` (DNS rebinding) and the socket still looks local. The port is not checked, so a tunnel or a container port map still works.
+
 ### 3.1 Several runs open at once
 
 `tldrx run new` allows a second open run on purpose — each carries its own
