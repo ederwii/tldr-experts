@@ -50,11 +50,21 @@ export const MIN_PARAPHRASE_CHARS = 40;
 export const PARAPHRASE_RATIO = 0.9;
 
 /**
- * A parenthesised confidence annotation, in either spelling the real corpus uses:
- * `(measured)` and `(measured: the two AddSingleton calls precede the builder)`.
+ * A confidence annotation, in every spelling the real corpus uses.
+ *
+ * Two, measured 2026-08-29 across the three trained files: a TRAILING
+ * parenthetical — `(measured)`, and `(measured: the two AddSingleton calls
+ * precede the builder)` — and a LEADING emphasised label, `- *measured* — The
+ * assembly depends on nothing else…`, which is how all 38 bullets of
+ * `aparece-platform-abstractions` are written. Both are the same instruction
+ * being obeyed (§2.3: "Say which of measured / inferred / assumed each claim
+ * is"), and missing the second spelling refused that whole file for it.
  */
-const CONFIDENCE_ANY_RE = /\((?:measured|inferred|assumed)\b[^)]*\)/gi;
+const CONFIDENCE_ANY_RE =
+  /\((?:measured|inferred|assumed)\b[^)]*\)|(?:^|\s)[*_]{1,2}(?:measured|inferred|assumed)[^*_\n]{0,40}[*_]{1,2}\s*[—–:-]?/gi;
 const CONFIDENCE_TRAILING_RE = /\((measured|inferred|assumed)\b[^)]*\)\s*$/i;
+/** `*measured* —`, and the corpus's `*inferred, not measured* —` qualified form. */
+const CONFIDENCE_LEADING_RE = /^[*_]{1,2}(measured|inferred|assumed)[^*_\n]{0,40}[*_]{1,2}\s*[—–:-]?/i;
 
 export const CONFIDENCE_VALUES = ["measured", "inferred", "assumed"] as const;
 export type Confidence = (typeof CONFIDENCE_VALUES)[number];
@@ -100,10 +110,13 @@ export function claimText(bulletText: string, token: string | null): string {
   return withoutToken.replace(CONFIDENCE_ANY_RE, " ").replace(/\s+/g, " ").trim();
 }
 
-/** `(measured)` / `(inferred: …)` immediately before the token, or null. */
+/**
+ * `(measured)` / `(inferred: …)` immediately before the token, or the leading
+ * `*measured* —` form. Null when the bullet carries neither.
+ */
 export function confidenceOf(bulletText: string, token: string | null): Confidence | null {
   const withoutToken = (token === null ? bulletText : bulletText.split(token).join(" ")).trim();
-  const match = CONFIDENCE_TRAILING_RE.exec(withoutToken);
+  const match = CONFIDENCE_TRAILING_RE.exec(withoutToken) ?? CONFIDENCE_LEADING_RE.exec(withoutToken);
   const word = match?.[1]?.toLowerCase() ?? "";
   return isConfidence(word) ? word : null;
 }

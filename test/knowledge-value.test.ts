@@ -172,6 +172,19 @@ describe("an execution claim needs a command, not a file line", () => {
     expect(executionClaim("78/78 passed")).toBe("78/78 passed");
     expect(executionClaim("the build is green")).toBe("build is green");
     expect(executionClaim("the build succeeded")).toBe("build succeeded");
+  });
+
+  test("the corpus's OTHER spelling of the label — `*measured* —` — is a label too", () => {
+    // All 56 bullets of the real `aparece-platform-abstractions.md` are written
+    // `- *measured* — <claim> [src: …]`, and 38 of them were refused by the first
+    // cut of this rule for obeying §2.3's "say which of measured/inferred/assumed".
+    const leading = "- *measured* — The assembly depends on nothing else in Aparece [src: a:b.cs:1]";
+    expect(executionClaim(claimText(leading, "[src: a:b.cs:1]"))).toBeNull();
+    expect(confidenceOf(leading, "[src: a:b.cs:1]")).toBe("measured");
+    // …including the qualified form the same file uses once.
+    const qualified = "- *inferred, not measured* — `Result` and `Result<T>` are unrelated [src: a:b.cs:1]";
+    expect(executionClaim(claimText(qualified, "[src: a:b.cs:1]"))).toBeNull();
+    expect(confidenceOf(qualified, "[src: a:b.cs:1]")).toBe("inferred");
     expect(executionClaim("the exchange refuses an empty code")).toBeNull();
   });
 });
