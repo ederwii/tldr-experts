@@ -433,7 +433,8 @@ facts:
 | Field | Type | Req | Meaning |
 |---|---|---|---|
 | `id` | `^F\d{3,6}$` | y | Immutable; cited as `[src: F019]` |
-| `fact` | str ≤300 | y | One assertion, present tense, no hedging |
+| `fact` | str ≤2000 | y | One assertion, present tense, no hedging |
+| `truncated` | bool\|absent | n | The text is the head of a longer answer, cut at the cap. Absent means "not known to be cut" |
 | `area` / `repos` | slug / slug[] | y | Matching key for the no-re-ask hook; scope (empty = workspace-wide) |
 | `kind` / `confidence` | `answer\|observed\|derived` / `measured\|inferred\|stated` | y | Human answer, check output or stage conclusion; evidence class |
 | `source.who` / `.when` | str / RFC3339 | y | Human id or expert slug; capture time |
@@ -442,7 +443,16 @@ facts:
 | `retired` | {at, by, reason}\|null | y | Ignored by no-re-ask, kept for replay |
 
 **Validation.** Ids unique and ascending; supersede links reciprocal and resolvable within this file; no fact both
-superseded and retired; ≤5000 facts (beyond that `tldrx` shards by `area`).
+superseded and retired; ≤5000 facts (beyond that `tldrx` shards by `area`). `truncated` is optional and additive: a row
+written before it existed still validates, and only a non-boolean value is an issue.
+
+**The cap was 300 until 2026-08-30.** `captureAnswers` writes a fact as `"<question> — <answer>"`, so 300 cut a real
+answer mid-clause: on the aparece run every one of six was cut, and four lost the very words — "Accepts ADR-D009 as
+written." — naming the document the answer settles, which is what the Build phase downstream matches on. 2000 is still
+a cap (a fact is one assertion, not a document) and the bound only moved outwards, so every file already on disk stays
+valid. When it still cuts, it cuts visibly: the text ends ` …` and the row carries `truncated: true`. The whole answer
+is never only here — `<phase>/questions.md` keeps it under `[Answer]:` — which is why §5's implicit plan quotes THAT
+and cites its line.
 
 ### 2.6 `.tldrx/experts/<name>/competencies.yml`
 
@@ -1713,10 +1723,12 @@ already wrote, into `04-build/implicit-plan.yml`:
 | Field | Where it comes from |
 |---|---|
 | `title` | `run.yml`'s `title:` |
-| `goal` | `01-what/handoff.md` § Decisions, bullets verbatim, `[src: …]` tokens kept — **minus** the What's own deliverable (below) — **plus** `Apply <fact> to the touched files [src: F<n>]`, one per answered fact of this run |
+| `goal` | With NO answered fact: `01-what/handoff.md` § Decisions, bullets verbatim, `[src: …]` tokens kept, **minus** the What's own deliverable (below). With answers: nothing but `Apply <the whole answer> to the touched files [src: F<n>; 01-what/questions.md:<line>]`, one per answered fact of this run |
 | `acceptance` | `01-what/success-metrics.md`'s list items, verbatim, same subtraction — **plus** the settled-documents criterion (below). Empty ⇒ `goal`; both empty ⇒ one line saying the title is the whole brief |
 | `notes` | the fact→document mapping that was derived, and every gap in it |
-| `touches` | the repo paths `01-what/handoff.md` CITES that exist inside a repo `workspace.yml` declares, first-cited order, ≤24. A citation with no repo prefix is skipped rather than guessed at |
+| `context` | the What's § Decisions, when the run HAS answers — background for the work, never instructions. Empty otherwise, because then they are the goal |
+| `touches` | the repo paths `01-what/handoff.md` CITES that exist inside a repo `workspace.yml` declares, first-cited order, **plus** the documents this run's answers settle by name (below), ≤24. A citation with no repo prefix is skipped rather than guessed at |
+| `inputs` | `01-what/questions.md`, when the run wrote one — inlined into the developer prompt, since a run artefact can never arrive through `touches` |
 | `repo` | the run repo those citations name most; ties and no citations fall back to `run.repos` order |
 | `dod` | the commands `workspace.yml` declares for the ROLES this scope calls for — `docs`: `lint`; `spike`/`prototype`: none; everything else: `build`, `test`. Looked up by the **key** the human wrote, never matched against the command text (`lint: dotnet format --verify-no-changes` has no "lint" in it) |
 | `budget_usd` | the Build stage's own ceiling, as scaled into `run.yml` |
@@ -1735,27 +1747,59 @@ has. So:
   that fired and its opening 90 characters — a filter whose mistakes are invisible is a filter nobody can correct,
   and with the drop on the record the rule can afford to be decisive. A bullet about `04-build/`, or about a file the
   story touches, matches no signal and survives.
-- **The answers become the work.** Every live fact in `.tldrx/memory/facts.yml` whose `source.run` is THIS run is an
-  answer a human gave at one of its gates. Each one adds `Apply <fact text> to the touched files [src: F<n>]` to
-  `goal`.
+- **The answers become the work, and they are the ONLY thing in `goal`.** Every live fact in
+  `.tldrx/memory/facts.yml` whose `source.run` is THIS run is an answer a human gave at one of its gates. Each one adds
+  `Apply <the whole answer> to the touched files [src: F<n>; 01-what/questions.md:<line of the [Answer]: slot>]`, and
+  with any such fact present the What's Decisions move out of `goal` into `context:`. Measured on the aparece run of
+  2026-08-30: those bullets read "Out of scope: selecting an answer on the owner's behalf … every relevant ADR is
+  status `proposed`", which is the opposite of the job the answers had just created, and they were the story's whole
+  stated goal. `context:` is rendered in the developer prompt under `## Context (from the What stage)`, after the
+  objective, labelled background and explicitly not a task; the prompt's plan note names the facts
+  (`… applies the run's answered decisions (F005–F010) …`) so the two lists cannot be confused.
+- **The bullet quotes the WHOLE answer**, read back from `01-what/questions.md`, not the row in `facts.yml` — a fact
+  is capped and a developer handed "Accepts ADR-D009 as writt" has a sentence that stops before it says anything. The
+  questions file is DECLARED as an input of the implicit story and inlined into the prompt (it cannot arrive through
+  `touches`, which resolves inside the story's worktree), and each bullet cites the line its words came from, so the
+  quote is checkable rather than trusted.
 - **`acceptance` gains the settled-documents criterion.** A fact *settles* a touched document when its text mentions
   that file's ADR id (`ADR-D008`, or the bare `D008`) or its `decision <n>` — a claim anyone can re-check by reading
-  the two strings. **A fact cut at §2.5's 300-char cap is matched against the full `[Answer]:` behind it**, read from
+  the two strings. **Every fact is matched against the full `[Answer]:` behind it as well as its own text**, read from
   `01-what/questions.md` by the fact's `source.q` or by the question block's footer `fact:` id. `captureAnswers`
-  builds a fact as `"<question> — <answer>"` and slices, so on the aparece run four of six lost the very clause naming
-  the ADR they settle: 2 of 6 mapped on the stored text, 6 of 6 with the answer. Both halves are matched, never the
-  answer alone — a fact carrying a key its answer does not must keep matching on it. The cap itself is unchanged: it
-  is spec §2.5, and the fallback needs no schema change to work on facts already on disk. The `goal` bullet still
-  quotes the fact verbatim, because the fact is what `[src: F<n>]` cites. A leading document number (`13-OPEN-DECISIONS.md`) is deliberately **not** a decision
-  number. With a mapping: ``every touched document whose decision is settled by a fact of this run no longer reads
+  builds a fact as `"<question> — <answer>"` and cuts at §2.5's cap, so on the aparece run four of six lost the very
+  clause naming the ADR they settle: 2 of 6 mapped on the stored text, 6 of 6 with the answer. Both halves are
+  matched, never the answer alone — a fact carrying a key its answer does not must keep matching on it — and the
+  concatenation is unconditional: gating it on "the stored text hit the cap" tied the mapping to the cap's exact
+  value, so raising §2.5's cap on 2026-08-30 would have switched the fallback off for every 300-char fact already on
+  disk. Adding the answer can never match less than the fact alone, so the gate bought nothing. A leading document
+  number (`13-OPEN-DECISIONS.md`) is deliberately **not** a decision number. With a mapping: ``every touched document whose decision is settled by a fact of this run no longer reads
   `Status: proposed` — `grep -c 'Status: proposed' <paths>` → 0 for the ones a fact decides [src: F<n>…]``, whose path
   list is COMPLETE or replaced wholesale by "the N documents listed under `notes:`" — a `(+1 more)` inside a command
   is something a person pastes, runs, and reads the wrong answer from. With
   anything left over — an unmapped file, an unmapped fact, or no mapping at all — it also (or only) gets the generic
   `apply every listed fact; leave a one-line note per file saying which fact changed it [src: F<n>…]`. `notes:` names
   every derived pair, every unmapped file and every unmapped fact, so a partial mapping is visible rather than implied.
+- **A document a fact settles joins `touches`, even when the What never cited it.** Measured on the aparece run of
+  2026-08-30: F010 decided ADR-D013 and the handoff never named the file, so `touches` left it out — and the developer
+  prompt says "A change outside `touches` is a plan deviation", so the run's one story could not do the thing the run
+  was for; the plan's own `notes:` said "F010 settle no touched document". The search is the SAME mapping rule read
+  backwards — a file whose name carries a decision key (`ADR-D013-*.md`, `decision-7.md`) that some fact of this run
+  names — looked for in the directories `touches` already holds, then breadth-first over the repo, capped at the same
+  ≤24 and never adding a document no fact names. Every addition is written into `notes:` as
+  `added <path> to touches: settled by F<n> (its text mentions \`<key>\`)`, and the acceptance grep then lists it like
+  any other mapped document.
 - **The developer prompt says where the story came from**: "Plan was skipped by the scope; this single story applies
   the run's answered decisions to the files it touches." No design document is going to say it, because none was written.
+
+**`tldrx next --prepare --discard-pending` DERIVES THE PLAN AGAIN.** The bundle is a rendering of the plan, so binning
+the bundle and keeping the plan re-hands the developer the same story — which is what a real operator got on
+2026-08-30, because `loadImplicitPlan` writes the file once and reads it forever after. On a Build stage running off
+an implicit plan the flag now: bins the bundle's `pending.json`, `result.json` and `result.raw.json` (the stale result
+is the one that matters — a later `--commit` would read it as this cycle's); re-derives `implicit-plan.yml` from the
+handoff, the metrics and the answers as they stand NOW; and prepares a fresh bundle. The run's own `epic/<slug>`
+branch and story worktree are REUSED, not re-cut and not refused: `run.yml`'s `build.epic_branch` says this run
+claimed them. It re-derives only while nothing has been built off the plan — `evidence: []`, a `status:` that is not
+`done`/`blocked`, and `git rev-list --count <epic>..<story>` = 0 — and when one of those fails it keeps the file and
+prints which one.
 
 The file is also the story's STATE: its top-level `status:` and `evidence:` are what the executor writes back, patched
 by the same two surgical edits a `stories/<id>.md` gets. The story then runs the ordinary pipeline — worktree,

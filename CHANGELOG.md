@@ -33,6 +33,42 @@
 
 ### Fixed
 
+- **A document your answer settles now joins the implicit story's `touches`.** Measured on a
+  real run, 2026-08-30: the run existed to settle six ADRs, the owner answered all six, and
+  the one thing the story could not edit was `ADR-D013-DELIVERY-ZONE-GEOMETRY.md` — the What
+  handoff never cited the file, `touches` is built from what the handoff cites, and the
+  developer prompt says a change outside `touches` is a plan deviation. The plan's own
+  `notes:` said so: "F010 settle no touched document". Build now reads the mapping rule
+  backwards as well — a file whose name carries a decision key (`ADR-D013-*.md`,
+  `decision-7.md`) that a fact of this run names is added, searched for beside the
+  already-touched files first and then across the repo, under the same ≤24 cap — and writes
+  `added <path> to touches: settled by F<n>` into `notes:`. A document no fact names is
+  never added.
+- **The developer gets the WHOLE answer.** `.tldrx/memory/facts.yml` capped a fact at 300
+  chars and `captureAnswers` writes one as `"<question> — <answer>"`, so on that same run all
+  six answers were cut and four lost the clause naming the ADR they settle — including the
+  words "Accepts ADR-D009 as written." The cap is now 2000 (spec §2.5; the bound only moved
+  outwards, so every facts.yml already on disk stays valid), a cut fact ends in ` …` and
+  carries `truncated: true`, `01-what/questions.md` is a declared input of the implicit story
+  and is inlined into the prompt, and each apply-bullet quotes the full `[Answer]:` text and
+  cites both the fact and the line it came from: `[src: F010; 01-what/questions.md:82]`.
+- **The implicit story's goal is the work, not the What's stale scoping.** With answered facts
+  the `goal:` list holds nothing but the apply-bullets, and the What handoff's Decisions move
+  to a `context:` list rendered under `## Context (from the What stage)` — after the objective,
+  labelled background, explicitly not a task. Before this, a run opened to get six decisions
+  answered told its developer, as its stated goal, "Out of scope: selecting an answer on the
+  owner's behalf … every relevant ADR is status `proposed`". The plan note now names the facts
+  the story is for (`… applies the run's answered decisions (F005–F010) …`). With no answers
+  nothing moves: the What's decisions are still the goal.
+- **`tldrx next --prepare --discard-pending` re-derives an implicit plan**, instead of
+  re-rendering the same story. The flag was handled only for stages with no executor, so on
+  Build it did nothing at all: `04-build/implicit-plan.yml` is written once and read forever
+  after, and re-preparing could not pick up a fix. It now bins the bundle's `pending.json`,
+  `result.json` and `result.raw.json`, derives the plan again from the handoff and the answers
+  as they stand, and prepares a fresh bundle — reusing this run's own epic branch and story
+  worktree rather than re-cutting or refusing them. It refuses to rewind a plan something has
+  been built off (recorded evidence, a settled story, or a commit on `story/<run>/S1` beyond
+  the epic) and prints which of those stopped it.
 - **The dirty-tree check ignores tldrx's own state (`tldrx-work/`, `.tldrx/`).** In a
   `root_is_repo: true` workspace the framework's state lives INSIDE the product repo, so
   Build refused the files it had just written itself. Measured 2026-08-30: `tldrx next
