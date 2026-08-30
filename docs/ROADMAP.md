@@ -39,6 +39,18 @@ citation gate on the second attempt; both failures were framework bugs and are f
   train with `--mode full` (past runs) and light mode is refused. The old `domain`/`stack`
   placeholders are retired from stage `experts:` lists.
 
+## v1.2 — one door in (shipped in 0.3.0)
+
+- **`tldrx status`**: everything pending in the workspace as one ordered list — init
+  questions, proposed splits (with their unanswered questions and the seed documents still
+  marked `proposed`), open runs with the command each needs and their `depends_on` order, and
+  experts a stage will load that have no evidence. A report: exit 0 whatever it finds.
+- **The `/tldrx` skill runs it first** and walks the items one at a time, asking the human
+  every decision that is theirs. The SessionStart hook shows the top of the same list, so a
+  session that opens on work which is not a run is no longer greeted with silence.
+- **`tldrx seed answer`**: a split's questions get somewhere to record the reply, and
+  `seed apply` warns about the ones still open.
+
 ## Adapters (opt-in, files stay the source of truth) — ticket mirror shipped in 0.3.0; chat channel not started
 
 - Ticket mirror (Jira / GitHub / Linear): epics and stories out, `external_status` in; never
