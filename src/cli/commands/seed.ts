@@ -21,6 +21,7 @@ import { effortFlag } from "../effort.ts";
 import { fail } from "../report.ts";
 import { runTriage, type TriageMode } from "../../core/seed/runTriage.ts";
 import { applySplit } from "../../core/seed/applySplit.ts";
+import { answerSplitQuestion } from "../../core/seed/answerSplitQuestion.ts";
 import { SeedError } from "../../core/seed/collectSeed.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
 
@@ -35,18 +36,21 @@ export const seedCommand: Command = {
   usage: "tldrx seed triage <path> [--out <dir>] [--json] [--threshold-tokens <n>] [--root <path>]\n" +
     "       tldrx seed triage <path> --propose [--model <m>] [--effort <level>] [--max-usd <n>]\n" +
     "                                          [--prepare|--commit] [--yolo] [--out <dir>] [--root <path>]\n" +
+    "       tldrx seed answer <split.yml> <Qid> \"<text>\" [--root <path>]\n" +
     "       tldrx seed apply <split.yml> [--dry-run] [--root <path>]",
-  subcommands: ["triage", "apply"],
+  subcommands: ["triage", "answer", "apply"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const [sub, ...rest] = argv;
     switch (sub) {
       case "triage":
         return triage(rest);
+      case "answer":
+        return answer(rest);
       case "apply":
         return apply(rest);
       default:
-        process.stderr.write(`tldrx seed: expected \`triage\` or \`apply\`\n${seedCommand.usage}\n`);
+        process.stderr.write(`tldrx seed: expected \`triage\`, \`answer\` or \`apply\`\n${seedCommand.usage}\n`);
         return EXIT_USAGE;
     }
   },
@@ -90,6 +94,36 @@ async function triage(argv: readonly string[]): Promise<number> {
     if (error instanceof UsageError) return fail("seed triage", error, EXIT_USAGE);
     if (error instanceof SeedError) return fail("seed triage", error, EXIT_USAGE);
     return fail("seed triage", error, codeFor(error));
+  }
+}
+
+/**
+ * `tldrx seed answer <split.yml> <Qid> "<text>"`.
+ *
+ * The answer is a positional, not a `--text` flag, so it reads the way
+ * `tldrx answer Q1 "…"` already does. Everything after the id is joined, so an
+ * unquoted multi-word answer records what was typed rather than its first word.
+ */
+function answer(argv: readonly string[]): number {
+  try {
+    const args = parseArgs(argv, VALUE_FLAGS);
+    const [splitPath, id, ...rest] = args.positionals;
+    if (splitPath === undefined || id === undefined || rest.length === 0) {
+      throw new UsageError('seed answer needs three things: `tldrx seed answer <split.yml> <Qid> "<text>"`');
+    }
+    const outcome = answerSplitQuestion({
+      root: workspaceRootFrom(args),
+      splitPath,
+      id,
+      text: rest.join(" "),
+    });
+    const text = `${outcome.lines.join("\n")}\n`;
+    if (INFORMATIONAL.includes(outcome.code)) process.stdout.write(text);
+    else process.stderr.write(prefix("seed answer", text));
+    return outcome.code;
+  } catch (error) {
+    if (error instanceof UsageError) return fail("seed answer", error, EXIT_USAGE);
+    return fail("seed answer", error, EXIT_USAGE);
   }
 }
 

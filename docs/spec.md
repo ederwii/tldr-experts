@@ -990,10 +990,12 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx init [--stack <a,b>]` | cwd tree, git dirs, package/build files, `env.yml` | `workspace.yml` (incl. `mode: greenfield`), `map/**`, `conventions/**`, `experts/*/` (always a `product`, one `<lang>-stack` per detected **or declared** language), `facts.yml`, `.gitignore`, `CLAUDE.md` pointer | 0,1 |
 | `tldrx doctor` | `env.yml`, `workspace.yml`, `.tldrx/stages/**`, `.claude/settings.json` | `env.yml.result`, `cache/doctor.json` | 0,1 |
 | `tldrx install --claude [--project\|--user] [--skill-only] [--no-hooks] [--no-statusline] [--force-statusline] [--uninstall] [--dry-run]` | `plugin/skills/tldrx/SKILL.md`, the target `.claude/settings.json` | `.claude/skills/tldrx/SKILL.md` (marked `<!-- tldrx-managed -->`), `.claude/settings.json` (the §4 hooks as `tldrx hook <name>` + `statusLine`), `settings.json.bak-tldrx-<ts>` | 0,1 |
+| `tldrx status [--json]` | `.tldrx/init-questions.md`, `.tldrx/triage/*/{split.yml,inventory.json}` and the seed documents those name, `tldrx-work/*/run.yml` (incl. `triage.depends_on`), `.tldrx/experts/**`, every `stage.yml` | nothing (stdout) | 0,3 |
 | `tldrx run new [--from <path>\|--seed <path> ...] [--scope <s>] [--budget <usd>] [--gates <a,b\|all\|none>]` | `workflows/<s>.yml`, `workspace.yml`, `facts.yml`, the `--from` source (§6) or the `--seed` documents (§6.1) | `tldrx-work/<run>/{run.yml,budget.yml,events.jsonl,01-what/*}` incl. the resolved `gates_policy`; `--seed` also writes `01-what/seed-index.md` and declares the documents as What inputs. **`--seed` is repeatable** (§6.2): every occurrence is collected, merged, deduped and re-sorted, and the §6.1 caps apply to the merged set; one occurrence behaves exactly as before. A seed over the threshold or over 10 files adds one **stderr** note naming `tldrx seed triage`. `--gates` LISTS THE HUMAN GATES (`all` = every stage human, `none` = every stage auto); an unknown stage is a usage error and no run is created | 0,1 |
 | `tldrx seed triage <path> [--out <dir>] [--json] [--threshold-tokens <n>]` | the `--seed` documents (§6.1 rules), `workspace.yml` (repos + `seed_triage.threshold_tokens`) | `<out>/inventory.md`, `<out>/inventory.json` (default `<out>` = `.tldrx/triage/<yymmdd>-<slug>/`) | 0,1,3 |
 | `tldrx seed triage <path> --propose [--model <m>] [--effort <l>] [--max-usd <n>] [--prepare\|--commit] [--yolo]` | the same, plus `workflows/*.yml` for the legal scopes | `<out>/{inventory.md,inventory.json,split.yml,split.md}`, `<out>/.agent/propose/*`; **never** a run | 0,1,2,5 |
-| `tldrx seed apply <split.yml> [--dry-run]` | `split.yml`, `inventory.json` beside it, `workflows/*.yml` | one `tldrx-work/<run>/` per proposed run (via `run new`'s own path) each with a `triage:` block, and `split.yml` rewritten to `status: applied` | 0,1,3 |
+| `tldrx seed answer <split.yml> <Qid> "<text>"` | `split.yml`, `inventory.json` beside it, `workflows/*.yml` | `split.yml` (that question's `answer:`), and `split.md` when it exists | 0,1,3 |
+| `tldrx seed apply <split.yml> [--dry-run]` | `split.yml`, `inventory.json` beside it, `workflows/*.yml` | one `tldrx-work/<run>/` per proposed run (via `run new`'s own path) each with a `triage:` block, and `split.yml` rewritten to `status: applied`. Questions with no `answer:` are listed on **stderr** as a warning — never a refusal | 0,1,3 |
 | `tldrx run status [<run>]` | `run.yml`, `events.jsonl` | nothing (stdout) | 0,3 |
 | `tldrx next [<run>] [--dry-run]` | `run.yml`, `stage.yml`, `stage.md`, `expert.md`, declared inputs | stage outputs, `run.yml`, `events.jsonl` | 0,2,3,4,5 |
 | `tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <l>] [--yolo]` | everything `next` reads, once per stage | everything `next` writes | 0,1,2,3,4,5 |
@@ -1092,6 +1094,47 @@ A consumer that reads a single run's JSON (`waiting.kind`, `waiting.questions`)
 therefore keeps working untouched as long as it passes a run id, and can detect
 the multi-run answer by the absence of a top-level `run`.
 
+### 3.2 `tldrx status` — what is pending in this workspace
+
+`run status` answers "where is this run". Nothing answered "what is waiting on me
+here", so a session that opened with no run could only ask the human what they
+wanted to do — while the answer sat on disk in four places nobody read as one
+list. `tldrx status` reads those four, in the order they block each other:
+
+| # | kind | source | the command it names |
+|---|---|---|---|
+| 1 | `init-questions` | open blocks in `.tldrx/init-questions.md` | `tldrx interview --init` |
+| 2 | `seed-split` | every `.tldrx/triage/*/split.yml` at `status: proposed` — its runs, its unanswered `questions`, the seed documents whose own `Status:` line still says `proposed`, and any seed file named `DECISIONS*.md` | `tldrx seed apply <path> --dry-run` |
+| 3 | `run` | `RunStore.findOpen`, plus one item for any run folder that does not validate | `tldrx next <id>` / `tldrx answer <Qid> "…" --run <id>` / `tldrx approve --run <id>` |
+| 4 | `expert` | experts `stageCoverage` says a stage will load, with zero evidence in every area | `tldrx expert train <name> --area <a> --mode <light\|full> --print-prompt` |
+| 5 | `none` | nothing pending | — |
+
+Each item renders as `[n] <one sentence> → <exact command>` with indented details,
+and `--json` returns `{root, pending, items[]}` where every item is
+`{kind, summary, command, details}` — the shape the `/tldrx` skill walks.
+
+Four rules the table cannot carry:
+
+- **Runs are dependency-aware.** `triage.depends_on` (§2.2) names sibling SLUGS;
+  each is matched to the newest run whose id ends `-<slug>`. A run whose dependency
+  is not `done` shows `blocked by <slug>` and is offered NO command, however loudly
+  its cursor says `ready`. The first run that is unblocked and actionable is marked
+  `← next`, and only that one is offered `tldrx run auto`.
+- **An ADR's status is read from the DOCUMENT**, not from `inventory.json`'s cached
+  `adrStatus`. The inventory supplies the document list — it is what the proposal
+  was made from — but a status cached at triage time would keep reporting a
+  decision as open for exactly as long as the decision took to make. A `Status:`
+  line is recognised with or without a leading list marker (`- Status: proposed`).
+- **A role expert with nothing to mine gets no command.** Role experts train in
+  `--mode full` from `tldrx-work/**/{handoff,retro}.md` (§2.6); with none on disk
+  the item says so and offers nothing, because a command the tool would refuse is
+  worse than an honest "not yet". Expert items are capped at five plus one
+  overflow row naming the rest.
+- **It is a report, so it exits 0 whatever it finds.** "Nothing pending" is a
+  complete answer. Exit `3` means there is no `.tldrx/` at all. Nothing is written,
+  nothing is spawned, no cursor moves. `tldrx next` with no run open prints this
+  report before its own exit-3 line, with the exit code unchanged.
+
 
 ## 4. Hooks (Claude Code)
 
@@ -1114,7 +1157,7 @@ disk). All but `DoD-gate` finish in <50 ms.
 | `answer-capture` | PostToolUse + FileChanged | `tldrx-work/**/questions.md` | Find blocks with `status: open` and a non-empty `[Answer]:` capture | Never blocks; writes footer + `facts.yml` + `question.answered`; echoes one line to stdout as context |
 | `DoD-gate` | PreToolUse (`Write\|Edit`) | would-be content of `tldrx-work/**/stories/*.md` sets `status: done` | Re-run every command in the story's fenced ```dod block, in its repo, with `stage.yml timeout_s`; all must exit 0 | Denies if any command fails or the block is missing (this hook is not <50 ms by design) |
 | `budget-gate` | PreToolUse (`Bash`) | `tool_input.command` matching `^(claude -p|tldrx next)` | `spent + estimate > phase ceiling` (or run ceiling) and `on_exceed: block` | Denies the spawn; appends `budget.blocked` |
-| `session-start-status` | SessionStart | always | Read the newest non-terminal `run.yml`; when several are open, list them all first | Never blocks; injects a 3-line "where we are" via `additionalContext` |
+| `session-start-status` | SessionStart | always | Read the newest non-terminal `run.yml`; when several are open, list them all first. Then build the `tldrx status` report (§3) | Never blocks; injects a 3-line "where we are" via `additionalContext`, then up to 3 lines of the pending report — a headline plus as many items as fit. Nothing pending AND no run ⇒ no output at all |
 | `statusline` | statusLine | always | Render from the statusLine JSON + `run.yml` | Output only |
 
 Exact block messages (`permissionDecisionReason`, verbatim):

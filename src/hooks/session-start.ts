@@ -3,8 +3,18 @@
  * tldrx hook: session-start
  * SessionStart — always fires, never blocks.
  *
- * Concept §3 (non-intrusive): the entire ambient footprint of a run is three lines
- * of "where we are", injected as `additionalContext`. No run ⇒ no output at all.
+ * Concept §3 (non-intrusive): the ambient footprint is three lines of "where we
+ * are" for the newest open run, plus — since wave J — up to three lines of the
+ * workspace pending report (`tldrx status`), injected as `additionalContext`.
+ *
+ * The second block is why a session can now open on work that is NOT a run. A
+ * proposed split nobody decided, four init questions nobody answered and five
+ * untrained experts are all pending work, and until this existed a workspace
+ * holding every one of them greeted its next session with silence.
+ *
+ * Nothing pending AND no run ⇒ still no output at all. The report block comes
+ * SECOND so the run lines a reader (or a test) already relies on stay the prefix
+ * they have always been.
  *
  * Reads the same `RunSnapshot` the status line does, so the two can never
  * disagree about which run is live or where its cursor is.
@@ -16,8 +26,12 @@ import { readPayload } from "./lib/payload.ts";
 import { findWorkspaceRoot } from "./lib/workspace.ts";
 import { openQuestions, runSnapshot, type RunSnapshot } from "../core/statusline/runSnapshot.ts";
 import { openRunViews } from "./lib/runFile.ts";
+import { buildWorkspaceStatus, sessionStartLines } from "../core/status/index.ts";
 
 const MAX_LINES = 3;
+
+/** Spec §4: the pending report gets its own three lines, never more. */
+const MAX_PENDING_LINES = 3;
 
 /** A SessionStart block is ambient context, not a report. Eight runs is plenty. */
 const MAX_OPEN_LISTED = 8;
@@ -27,11 +41,32 @@ await runHook("session-start", async () => {
   const root = findWorkspaceRoot(payload.cwd ?? process.cwd());
   if (root === null) return;
 
+  const pending = renderPending(root);
   const snapshot = runSnapshot(root);
-  if (snapshot === null) return;
+  if (snapshot === null) {
+    // No run, but there can still be work: init questions, a proposed split, an
+    // expert nobody trained. That is the case this hook used to be blind to.
+    if (pending.length > 0) sessionContext(pending.join("\n"));
+    return;
+  }
 
-  sessionContext([...renderOpenRuns(root, snapshot), ...renderStatus(snapshot)].join("\n"));
+  sessionContext(
+    [...renderOpenRuns(root, snapshot), ...renderStatus(snapshot), ...pending].join("\n"),
+  );
 });
+
+/**
+ * The pending report, capped. Wrapped: this block is an addition to a hook that
+ * already worked, and a broken `split.yml` must not cost a session the run lines
+ * it has always had.
+ */
+function renderPending(root: string): readonly string[] {
+  try {
+    return sessionStartLines(buildWorkspaceStatus(root), MAX_PENDING_LINES);
+  } catch {
+    return [];
+  }
+}
 
 /**
  * Nothing at all when one run is open — that is the ordinary case and the three

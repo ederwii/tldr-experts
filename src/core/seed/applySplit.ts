@@ -27,8 +27,9 @@ import { createRun, NewRunError } from "../run/newRun.ts";
 import { RunStore } from "../run/RunStore.ts";
 import { SeedError } from "./collectSeed.ts";
 import {
-  emitSplitYaml, knownScopes, readSplitFile, renderSplitMarkdown, topologicalOrder, validateProposal,
-  SplitError, SPLIT_MD, SPLIT_YML, type SplitFile, type SplitRun,
+  emitSplitYaml, isAnswered, knownScopes, readSplitFile, renderSplitMarkdown, topologicalOrder,
+  validateProposal, SplitError, SPLIT_MD, SPLIT_YML,
+  type SplitFile, type SplitQuestion, type SplitRun,
 } from "./splitFile.ts";
 
 const EXIT_OK = 0;
@@ -77,7 +78,7 @@ export function applySplit(options: ApplyOptions): ApplyOutcome {
   // is a file a human is invited to edit, and an edited scope or a hand-added
   // cycle must be refused by the command that acts on it.
   const validation = validateProposal(file, {
-    rels: universe(path, file),
+    rels: splitUniverse(path, file),
     scopes: knownScopes(options.root),
   });
   if (!validation.ok || validation.proposal === null) {
@@ -94,11 +95,13 @@ export function applySplit(options: ApplyOptions): ApplyOutcome {
   const shared = validation.proposal.shared_context;
   const splitRef = reference(options.root, path);
 
+  const unanswered = unansweredNote(validation.proposal.questions);
+
   if (options.dryRun === true) {
     return {
       code: EXIT_OK,
       created: [],
-      notes: [],
+      notes: unanswered,
       lines: [
         `dry run — ${String(ordered.length)} run(s) would be created, in this order, and nothing was written:`,
         ...ordered.map((run) => `  ${runNewLine(run, shared)}`),
@@ -129,7 +132,7 @@ export function applySplit(options: ApplyOptions): ApplyOutcome {
       return {
         code: EXIT_USAGE,
         created,
-        notes: openRunsNote(options.root),
+        notes: [...unanswered, ...openRunsNote(options.root)],
         lines: [
           `stopped at \`${run.slug}\`: ${reason}`,
           created.length === 0
@@ -159,7 +162,7 @@ export function applySplit(options: ApplyOptions): ApplyOutcome {
   return {
     code: EXIT_OK,
     created,
-    notes: openRunsNote(options.root),
+    notes: [...unanswered, ...openRunsNote(options.root)],
     lines: [
       ...ordered.map((run, i) =>
         `created ${created[i] ?? run.slug} (${run.scope}, `
@@ -199,7 +202,7 @@ export function runNewLine(run: SplitRun, shared: readonly string[]): string {
  * to "internally consistent"; `collectSeeds` still refuses a path that is not on
  * disk when the run is created, so nothing gets past on a missing file.
  */
-function universe(splitPath: string, file: SplitFile): ReadonlySet<string> {
+export function splitUniverse(splitPath: string, file: SplitFile): ReadonlySet<string> {
   const inventory = join(dirname(splitPath), "inventory.json");
   if (existsSync(inventory)) {
     try {
@@ -222,6 +225,26 @@ function universe(splitPath: string, file: SplitFile): ReadonlySet<string> {
 function reference(root: string, path: string): string {
   const rel = relative(root, path);
   return rel === "" || rel.startsWith("..") ? path : rel.split("\\").join("/");
+}
+
+/**
+ * The questions nobody answered, as a WARNING — never a refusal.
+ *
+ * A split's questions are the model saying "this changes what the runs should be
+ * and I could not decide it". Applying anyway is a legitimate choice (the answer
+ * may not change these runs), so this does not block. What it must not do is stay
+ * silent: the questions live inside a YAML file nobody re-opens after the first
+ * read, and until this line existed, applying a split was the last moment they
+ * could have mattered and the one moment nothing mentioned them.
+ */
+export function unansweredNote(questions: readonly SplitQuestion[]): readonly string[] {
+  const open = questions.filter((question) => !isAnswered(question));
+  if (open.length === 0) return [];
+  return [
+    `warning: ${String(open.length)} question(s) on this split are unanswered — applying anyway:`,
+    ...open.map((question) => `  ${question.id} ${question.text}`),
+    "  record a decision with `tldrx seed answer <split.yml> <Qid> \"<text>\"` (it does not block apply)",
+  ];
 }
 
 /**

@@ -14,6 +14,7 @@ import { initCommand } from "./commands/init.ts";
 import { installCommand } from "./commands/install.ts";
 import { doctorCommand } from "./commands/doctor.ts";
 import { runCommand } from "./commands/run.ts";
+import { statusCommand } from "./commands/status.ts";
 import { seedCommand } from "./commands/seed.ts";
 import { nextCommand } from "./commands/next.ts";
 import { answerCommand } from "./commands/answer.ts";
@@ -37,6 +38,7 @@ export const COMMANDS: readonly Command[] = [
   initCommand,
   installCommand,
   doctorCommand,
+  statusCommand,
   runCommand,
   seedCommand,
   nextCommand,

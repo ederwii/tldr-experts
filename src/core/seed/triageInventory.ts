@@ -162,20 +162,41 @@ export function headings(text: string, level: 1 | 2): readonly string[] {
 }
 
 /**
- * `Status: accepted`, `**Status:** Superseded by ADR-7`, `status : proposed`.
+ * `Status: accepted`, `**Status:** Superseded by ADR-7`, `status : proposed`,
+ * and — since wave J — `- Status: proposed — owner decision pending`.
+ *
+ * The leading list marker is not a nicety. Measured 2026-08-29 on `~/aparece-v2`:
+ * thirteen ADRs, every one of them writing its status as a bullet in the header
+ * block, and the inventory reported `adrStatus: null` for all thirteen. A field
+ * whose whole job is "is this document still current" answered "no idea" for the
+ * single most common way an ADR writes it.
  *
  * The first such line wins and only the first word of the value is kept: the
  * question this answers is "is this document still current", and
- * "superseded by ADR-7" and "superseded" are the same answer.
+ * "superseded by ADR-7" and "superseded" are the same answer. `statusLineOf`
+ * returns the line as well, for a report that must show a human what it read.
  */
-const STATUS_RE = /^\s*(?:\*\*|__)?\s*status\s*(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*([A-Za-z][A-Za-z-]*)/i;
+const STATUS_RE = /^\s*(?:[-*+]\s+)?(?:\*\*|__)?\s*status\s*(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*([A-Za-z][A-Za-z-]*)/i;
 
-export function statusOf(text: string): string | null {
+export interface StatusLine {
+  /** The value's first word, lower-cased — `proposed`, `accepted`, `superseded`. */
+  readonly status: string;
+  /** The whole line as written, trimmed. */
+  readonly line: string;
+}
+
+export function statusLineOf(text: string): StatusLine | null {
   for (const line of text.split("\n")) {
     const match = STATUS_RE.exec(line);
-    if (match !== null && match[1] !== undefined) return match[1].toLowerCase();
+    if (match !== null && match[1] !== undefined) {
+      return { status: match[1].toLowerCase(), line: line.trim() };
+    }
   }
   return null;
+}
+
+export function statusOf(text: string): string | null {
+  return statusLineOf(text)?.status ?? null;
 }
 
 const OPEN_MARKERS: readonly RegExp[] = [

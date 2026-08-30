@@ -443,6 +443,72 @@ appended, the run still stops. What is new is that a gate can say **who closes i
   money to learn what the deterministic pre-pass already knew. A seeded role
   area's `train_prompt` therefore says `--mode full`.
 
+### Open Claude Code, type `/tldrx`, and it already knows what is waiting
+
+The question this answers, in the owner's words: "can I just open Claude, type
+`/tldrx`, and have it find the pending work by itself and guide me through it?"
+The answer was no. With no run open, `tldrx run status` exits 3 and the skill could
+only ask "what do you want to open?" — while the pending work sat on disk in four
+places nothing read as one list.
+
+- **`tldrx status [--json]`** — one report of everything waiting on a human in this
+  workspace, in the order the sources block each other: open questions in
+  `.tldrx/init-questions.md`; every `.tldrx/triage/*/split.yml` still
+  `status: proposed`, with its runs, its unanswered `questions`, the seed documents
+  whose own `Status:` line still says `proposed` and any `DECISIONS*.md`; every open
+  run with the exact command it needs; and every expert a stage will load that has
+  zero evidence. Each item is `[n] <one sentence> → <exact command>`, and `--json`
+  gives `{root, pending, items[]}` with `{kind, summary, command, details}` per item.
+  Deterministic and read-only — no model, no network, nothing written — and it
+  **exits 0 whatever it finds**, because it is a report and "nothing pending" is a
+  complete answer. Exit `3` means only that there is no `.tldrx/` here.
+- **Runs are dependency-aware.** A run created by `tldrx seed apply` records
+  `triage.depends_on`; a run whose dependency is not `done` shows `blocked by
+  <slug>` and is offered NO command, however loudly its own cursor says `ready`. The
+  first run that is unblocked and actionable is marked `← next`, and only that one
+  is offered `tldrx run auto`.
+- **An ADR's status is read from the document, not from the cached inventory.** A
+  status recorded at triage time keeps reporting a decision as open for exactly as
+  long as the decision took to make. Related: **`statusOf` now recognises a bulleted
+  status line.** Measured 2026-08-29 on a real workspace — thirteen ADRs, every one
+  of them writing `- Status: proposed — owner decision pending`, and the inventory
+  reported `adrStatus: null` for all thirteen. The field whose whole job is "is this
+  document still current" answered "no idea" for the commonest form there is.
+- **A run folder that does not validate gets its own item.** `RunStore.findOpen`
+  skipping it is right for every command that ACTS on a run and wrong for a report
+  that promises "this is everything" — the alternative was printing `nothing
+  pending` at a workspace that visibly holds a run.
+- **`tldrx next` with no run open prints the report first**, then its unchanged
+  exit-3 line. That refusal always said what was missing and never what to do
+  instead.
+- **SessionStart says what is pending, not only where a run is.** The hook returned
+  early when there was no run, so a workspace holding a proposed split, four
+  unanswered setup questions and five untrained experts greeted its next session
+  with silence. It now appends up to three lines of the same report after the three
+  it always printed. Still non-blocking, still fails open; nothing pending AND no
+  run is still no output at all.
+- **The `/tldrx` skill is "status → guide".** Step 1 is always `tldrx status
+  --json`; it then walks the items one at a time, in order, in plain language,
+  asking when the decision is the human's (init answers, split edits, ADRs, gates,
+  questions) and acting when the step is mechanical (`seed apply --dry-run`,
+  `next --prepare` … `--commit`, `answer`, `approve`), re-running `tldrx status`
+  after each. It states the ceiling and asks before anything that spends. 199 → 149
+  lines.
+
+### A decision on a split proposal now has somewhere to live
+
+- **`tldrx seed answer <split.yml> <Qid> "<text>"`.** A split's runs could always be
+  edited and its exclusions deleted; its `questions:` were the one part with nowhere
+  to put the reply, so the answer lived in someone's head until `apply` created runs
+  that did not reflect it. The `answer:` key is additive and human-owned — the
+  propose schema still refuses it, so a model can never write one, while the
+  validator carries it through, because `apply` re-validates the file a human edited
+  and a validator that dropped the key would erase every recorded answer. The file
+  is parsed, validated and re-emitted whole rather than patched, so `emitSplitYaml`
+  stays the only writer of the format.
+- **`seed apply` lists unanswered questions on stderr.** A warning, never a refusal:
+  applying anyway is a legitimate call, staying silent about it is not.
+
 ## 0.2.0 — 2026-08-29
 
 ### The Build phase executes

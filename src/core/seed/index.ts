@@ -9,9 +9,9 @@ export {
 export { renderSeedIndex, renderSeedHandoff, SEED_INDEX, type SeedHandoffInput } from "./renderSeed.ts";
 export {
   buildInventory, estimateTokens, formatTokens, verdictLine, inventoryRels,
-  headings, statusOf, countOpenMarkers, referencesOf, codeDerivedOf, resolveBases,
+  headings, statusOf, statusLineOf, countOpenMarkers, referencesOf, codeDerivedOf, resolveBases,
   DEFAULT_THRESHOLD_TOKENS, DEFAULT_CODE_PATH_MIN,
-  type SeedInventory, type InventoryDocument, type CodeDerived,
+  type SeedInventory, type InventoryDocument, type CodeDerived, type StatusLine,
 } from "./triageInventory.ts";
 export {
   renderInventory, inventoryJson, INVENTORY_MD, INVENTORY_JSON,
@@ -19,7 +19,7 @@ export {
 export { parseSeedSrc, isSeedSrc, type SeedSrc } from "./triageSrc.ts";
 export {
   validateProposal, topologicalOrder, knownScopes, emitSplitYaml, renderSplitMarkdown, readSplitFile,
-  SplitError, SPLIT_SCHEMA, SPLIT_SIZES, SPLIT_YML, SPLIT_MD, MAX_SPLIT_RUNS,
+  isAnswered, SplitError, SPLIT_SCHEMA, SPLIT_SIZES, SPLIT_YML, SPLIT_MD, MAX_SPLIT_RUNS,
   type SplitFile, type SplitProposal, type SplitRun, type SplitWhy, type SplitQuestion, type SplitExclude,
 } from "./splitFile.ts";
 export {
@@ -31,4 +31,10 @@ export {
   DEFAULT_TRIAGE_USD, DEFAULT_TRIAGE_EFFORT, MIN_TRIAGE_USD,
   type TriageOptions, type TriageOutcome, type TriageMode,
 } from "./runTriage.ts";
-export { applySplit, seedsFor, runNewLine, type ApplyOptions, type ApplyOutcome } from "./applySplit.ts";
+export {
+  applySplit, seedsFor, runNewLine, splitUniverse, unansweredNote,
+  type ApplyOptions, type ApplyOutcome,
+} from "./applySplit.ts";
+export {
+  answerSplitQuestion, type AnswerSplitOptions, type AnswerSplitOutcome,
+} from "./answerSplitQuestion.ts";

@@ -182,8 +182,11 @@ describe("the session-start hook", () => {
     const context = (JSON.parse(stdout) as { hookSpecificOutput?: { additionalContext?: string } })
       .hookSpecificOutput?.additionalContext ?? "";
     const lines = context.split("\n");
-    expect(lines.length).toBeLessThanOrEqual(3);
+    // Three "where we are" lines, then up to three of the pending report (§4).
+    expect(lines.length).toBeLessThanOrEqual(6);
     expect(lines[0]).toBe(`tldrx: run ${ws.runId} — "Demo" (demo) · pending`);
     expect(lines[1]).toBe("tldrx: at 01-what / alpha — product · pending");
+    // The run block stays the PREFIX; the pending block only ever follows it.
+    expect(lines.filter((line) => line.startsWith("tldrx: 1 pending —")).length).toBe(1);
   });
 });
