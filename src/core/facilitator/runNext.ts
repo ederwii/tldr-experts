@@ -33,7 +33,7 @@ import { acquireLock, releaseLock } from "./Lock.ts";
 import { loadStageSpec, type StageSpec } from "./stageSpec.ts";
 import { countSkipInputs, evaluateSkipIf, openQuestionIds, SkipIfError } from "./skipIf.ts";
 import { agentDir, expandAll, missing, present, resolveDeclared, type PathContext } from "./paths.ts";
-import { renderConventions, renderFacts, renderParts, stackExpertNames } from "./prompt.ts";
+import { fenceFor, renderConventions, renderFacts, renderParts, stackExpertNames } from "./prompt.ts";
 import {
   describeBundles, loadExpertBundles, untrainedNotes, type ExpertBundleSet,
 } from "../experts/expertBundle.ts";
@@ -920,7 +920,10 @@ function assemblePrompt(
   });
   const parts = renderParts({
     stageMd,
-    previousAttempt: describePreviousAttempt(stage, spec, ctx),
+    previousAttempt: describePreviousAttempt(stage, {
+      outputs: expandAll(spec.planned.outputs, store.run.repos),
+      ctx,
+    }),
     values: {
       run: store.runId,
       repos: store.run.repos.length === 0 ? "(none)" : store.run.repos.join(", "),
@@ -955,14 +958,33 @@ function assemblePrompt(
  * What the last attempt at this stage left behind (spec §5, failure path: the
  * reject note is "fed into the next prompt").
  *
- * Two sources, both already on the stage: the error of its last failed task, and
- * an operator's rejection note. Either one means this is a retry, and the agent
- * is told so rather than being handed the original prompt as if nothing happened.
+ * Three sources now. Two were always here — the error of the last failed task and
+ * an operator's rejection note — and either one means this is a retry, so the
+ * agent is told so rather than handed the original prompt as if nothing happened.
+ *
+ * **The third is the work itself (wave N).** Measured 2026-08-29: attempt 2 got
+ * the error and the note and NOTHING ELSE, so a stage rejected over one missing
+ * section paid full price to write four documents again from a blank page, and
+ * whatever was right about the first draft was rewritten by a model that had
+ * never seen it. The declared outputs that exist on disk are now inlined under an
+ * explicit instruction to EDIT them, capped at `MAX_PREVIOUS_ATTEMPT_BYTES`.
+ *
+ * The cap is shared across the outputs and spent in declared order, and a file
+ * that does not fit is NAMED rather than silently dropped — the same rule the
+ * declared inputs follow, for the same reason.
  */
+export const MAX_PREVIOUS_ATTEMPT_BYTES = 32 * 1024;
+
+export interface PreviousAttemptOptions {
+  /** The stage's declared outputs, already `{repo}`-expanded. */
+  readonly outputs: readonly string[];
+  readonly ctx: PathContext;
+  readonly maxBytes?: number;
+}
+
 export function describePreviousAttempt(
   stage: RunStage,
-  _spec?: StageSpec,
-  _ctx?: PathContext,
+  options?: PreviousAttemptOptions,
 ): string {
   const lines: string[] = [];
   const failure = [...stage.tasks].reverse().find((task) => task.error !== null)?.error ?? null;
@@ -979,7 +1001,50 @@ export function describePreviousAttempt(
   }
   if (lines.length === 0) return "";
   lines.push("", "Fix what is described above. Everything else in this prompt still applies.");
+  if (options !== undefined) lines.push(...priorOutputs(options));
   return lines.join("\n");
+}
+
+function priorOutputs(options: PreviousAttemptOptions): readonly string[] {
+  const budget = options.maxBytes ?? MAX_PREVIOUS_ATTEMPT_BYTES;
+  const blocks: string[] = [];
+  const skipped: string[] = [];
+  let spent = 0;
+
+  for (const path of options.outputs) {
+    const abs = resolveDeclared(path, options.ctx);
+    const text = readOrEmpty(abs);
+    if (text.trim() === "") continue;
+    const size = Buffer.byteLength(text, "utf8");
+    if (spent + size > budget) {
+      skipped.push(`${path} (${size.toLocaleString("en-US")} B)`);
+      continue;
+    }
+    spent += size;
+    const fence = fenceFor(text);
+    blocks.push(`#### \`${path}\``, "", fence, text.replace(/\n$/, ""), fence, "");
+  }
+  if (blocks.length === 0 && skipped.length === 0) return [];
+
+  const out = [
+    "",
+    "### Previous attempt — edit, do not restart",
+    "",
+    "These files are on disk RIGHT NOW, exactly as the last attempt left them. They are",
+    "not a suggestion and they are not history: they are the draft you are being paid to",
+    "fix. Keep every part that is already correct, change what the note above says is",
+    "wrong, and write the files back. Starting from a blank page throws away work that",
+    "has already been paid for, and loses the parts nobody objected to.",
+    "",
+  ];
+  if (skipped.length > 0) {
+    out.push(
+      `_Not inlined (past the ${budget.toLocaleString("en-US")}-byte previous-attempt budget): `
+      + `${skipped.join(", ")}. They are on disk; read them before you rewrite them._`,
+      "",
+    );
+  }
+  return [...out, ...blocks];
 }
 
 /** `stage.md` sits beside the `stage.yml` the preset resolved. */

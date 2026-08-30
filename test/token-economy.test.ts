@@ -567,3 +567,91 @@ describe("max_reads (N5)", () => {
     expect(readsLabel(37, 0)).toBe("reads 37");
   });
 });
+
+// --- attempt reuse (N6) ----------------------------------------------------
+
+import {
+  describePreviousAttempt, MAX_PREVIOUS_ATTEMPT_BYTES,
+} from "../src/core/facilitator/runNext.ts";
+import type { RunStage } from "../src/core/run/RunFile.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+
+function rejectedStage(note: string): RunStage {
+  return {
+    id: "alpha", status: "ready", expert: null, model: null,
+    budget_usd: 1, cost_usd: 0, started_at: null, ended_at: null,
+    inputs: [], outputs: ["01-what/handoff.md", "01-what/intent.md"],
+    gate: { type: "approve", status: "rejected", by: "alan", at: null, note },
+    tasks: [],
+  } as unknown as RunStage;
+}
+
+describe("attempt reuse (N6)", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+    dirs.length = 0;
+  });
+
+  function scratch(files: Readonly<Record<string, string>>): { root: string; runDir: string } {
+    const root = mkdtempSync(join(tmpdir(), "tldrx-prev-"));
+    dirs.push(root);
+    const runDir = join(root, "tldrx-work", "260830-x");
+    for (const [rel, content] of Object.entries(files)) {
+      const path = join(runDir, rel);
+      mkdirSync(join(path, ".."), { recursive: true });
+      writeFileSync(path, content, "utf8");
+    }
+    return { root, runDir };
+  }
+
+  test("the refused outputs are inlined under an edit-do-not-restart instruction", () => {
+    const { root, runDir } = scratch({
+      "01-what/handoff.md": "# Handoff\n\n## Findings\n- a thing [src: F001]\n",
+      "01-what/intent.md": "# Intent\n\nShip the thing.\n",
+    });
+    const text = describePreviousAttempt(rejectedStage("scope.md lists nothing OUT"), {
+      outputs: ["01-what/handoff.md", "01-what/intent.md"],
+      ctx: { root, runDir },
+    });
+    expect(text).toContain("A human rejected the previous attempt");
+    expect(text).toContain("### Previous attempt — edit, do not restart");
+    expect(text).toContain("#### `01-what/handoff.md`");
+    expect(text).toContain("- a thing [src: F001]");
+    expect(text).toContain("Ship the thing.");
+  });
+
+  test("nothing is inlined on a first attempt — the section is not emitted at all", () => {
+    const { root, runDir } = scratch({ "01-what/handoff.md": "# Handoff\n" });
+    const first = { ...rejectedStage(""), gate: { type: "approve", status: "pending", by: null, at: null, note: "" } };
+    expect(describePreviousAttempt(first as unknown as RunStage, {
+      outputs: ["01-what/handoff.md"], ctx: { root, runDir },
+    })).toBe("");
+  });
+
+  test("a file past the budget is NAMED, never silently dropped", () => {
+    const { root, runDir } = scratch({
+      "01-what/handoff.md": `# Handoff\n\n${"x".repeat(200)}\n`,
+      "01-what/intent.md": `# Intent\n\n${"y".repeat(5000)}\n`,
+    });
+    const text = describePreviousAttempt(rejectedStage("try again"), {
+      outputs: ["01-what/handoff.md", "01-what/intent.md"],
+      ctx: { root, runDir },
+      maxBytes: 500,
+    });
+    expect(text).toContain("#### `01-what/handoff.md`");
+    expect(text).not.toContain("#### `01-what/intent.md`");
+    expect(text).toContain("Not inlined (past the 500-byte previous-attempt budget): 01-what/intent.md (5,011 B)");
+  });
+
+  test("missing and empty outputs are simply absent", () => {
+    const { root, runDir } = scratch({ "01-what/intent.md": "   \n" });
+    const text = describePreviousAttempt(rejectedStage("try again"), {
+      outputs: ["01-what/handoff.md", "01-what/intent.md"],
+      ctx: { root, runDir },
+    });
+    expect(text).not.toContain("### Previous attempt — edit, do not restart");
+    expect(MAX_PREVIOUS_ATTEMPT_BYTES).toBe(32 * 1024);
+  });
+});
