@@ -101,7 +101,10 @@ tldrx doctor [--mcp] [--json]
 
 `--mcp` also runs `claude mcp list` (slow: it live-health-checks every server). `--json`
 prints the check results; `mcp: null` there means NOT PROBED, which is a different claim from
-"no servers". Exits: `0` `1`.
+"no servers". It also runs `git check-ignore` over four paths that are committed state
+(`run.yml`, `events.jsonl`, a `04-build/log/` probe, `memory/facts.yml`) and names any
+`.gitignore` rule ignoring one, with its `file:line`. That is a warning: it never moves the
+exit code. Exits: `0` `1`.
 
 ## `tldrx status`
 

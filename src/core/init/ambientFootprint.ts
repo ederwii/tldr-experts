@@ -11,8 +11,31 @@ import { GITIGNORE_MARKERS, MARKDOWN_MARKERS, upsertBlock } from "./markerBlock.
 import { runtime } from "../runtime/index.ts";
 import type { WriteLog } from "./writeFile.ts";
 
+/**
+ * Re-includes first, then ignores.
+ *
+ * A project's own `.gitignore` is read BEFORE this block, and the last matching
+ * pattern wins, so any rule the project already had can swallow tldrx state.
+ * Measured 2026-08-30 on a real user's repo: the stock .NET `[Ll]og/` rule made
+ * `git check-ignore` claim `tldrx-work/<run>/04-build/log/S1.md` — the build's
+ * per-story review log, which spec §1 marks `[c]` committed — and the file was
+ * written, never committed, and never missed.
+ *
+ * `!tldrx-work/**` and `!.tldrx/**` undo that for everything below the two state
+ * roots. Both halves of each pair are needed: gitignore cannot re-include a file
+ * whose PARENT DIRECTORY is excluded, so `**` (which matches the directories too)
+ * is what lets git descend into `…/04-build/log/`, and the bare `!tldrx-work/`
+ * covers a rule that ate the root itself (`*-work/`).
+ */
+export const GITIGNORE_NEGATIONS = [
+  "!tldrx-work/",
+  "!tldrx-work/**",
+  "!.tldrx/",
+  "!.tldrx/**",
+] as const;
+
 /** Gitignored paths from spec §1: machine-local or regenerated state. */
-export const GITIGNORE_BODY = [
+export const GITIGNORE_IGNORES = [
   ".tldrx/graphify-out/",
   ".tldrx/cache/",
   // Build-phase story worktrees: real checkouts of branches that ARE committed.
@@ -25,6 +48,21 @@ export const GITIGNORE_BODY = [
   // env values, and it was the one thing the framework writes that nothing
   // ignored (2026-08-29 audit, §D).
   ".claude/settings.json.bak-tldrx-*",
+] as const;
+
+/**
+ * The whole managed block. ORDER IS THE POINT: the negations come first and the
+ * framework's own ignores after, because a later pattern beats an earlier one —
+ * put `.tldrx/cache/` above `!.tldrx/**` and the cache stops being ignored.
+ */
+export const GITIGNORE_BODY = [
+  "# tldrx state is committed (spec §1). These re-include it against a rule this",
+  "# project already had — a stock `[Ll]og/`, a `docs/`, a `*.yml` — which would",
+  "# otherwise swallow files like tldrx-work/<run>/04-build/log/<story>.md.",
+  ...GITIGNORE_NEGATIONS,
+  "",
+  "# Machine-local or regenerated. These come AFTER the negations, so they win.",
+  ...GITIGNORE_IGNORES,
 ].join("\n");
 
 export const CLAUDE_POINTER_BODY = [

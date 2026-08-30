@@ -2,6 +2,7 @@
 import { FRAMEWORK_ROOT } from "../paths.ts";
 import type { ToolCheckResult } from "./ToolChecker.ts";
 import type { McpProbeResult } from "./McpProbe.ts";
+import { describeRule, type GitignoreShadowResult } from "./gitignoreShadow.ts";
 
 const HEADERS = ["TOOL", "REQUIRED", "FOUND", "MIN", "STATUS", "INSTALL HINT"] as const;
 
@@ -17,6 +18,7 @@ export class DoctorReport {
     private readonly results: readonly ToolCheckResult[],
     private readonly mcp: McpProbeResult | null = null,
     private readonly legacyVersionFiles: readonly string[] | null = null,
+    private readonly gitignoreShadow: GitignoreShadowResult | null = null,
   ) {}
 
   /** True when every REQUIRED tool is present and at or above its min_version. */
@@ -63,6 +65,7 @@ export class DoctorReport {
     else lines.push("", "MCP servers not probed. Re-run with --mcp (may take 30s+; runs live health checks).");
 
     lines.push("", ...this.renderLegacyVersions());
+    lines.push("", ...this.renderGitignoreShadow());
 
     return lines.join("\n");
   }
@@ -79,6 +82,33 @@ export class DoctorReport {
       `Deprecated \`schema_version:\` in ${String(this.legacyVersionFiles.length)} file(s) — say \`version: 1\` instead:`,
       ...this.legacyVersionFiles.map((path) => `  ${path}`),
       "They still load today. Support goes after the next release.",
+    ];
+  }
+
+  /**
+   * Committed state a `.gitignore` rule is swallowing.
+   *
+   * A warning, never a blocker: `healthy` is about the TOOLS this machine has.
+   * But it is loud, because the failure it reports is silent — the file gets
+   * written, `git status` says nothing, and the teammate who clones never sees it.
+   */
+  private renderGitignoreShadow(): string[] {
+    const shadow = this.gitignoreShadow;
+    if (shadow === null) return ["State files vs .gitignore: no workspace here — nothing probed."];
+    if (!shadow.ran) {
+      return [`State files vs .gitignore: could not run \`git check-ignore\` (${shadow.error ?? "unknown error"})`];
+    }
+    if (shadow.shadowed.length === 0) {
+      return [`State files vs .gitignore: ${String(shadow.probed.length)} probed, none ignored. \u2713`];
+    }
+    const width = Math.max(...shadow.shadowed.map((s) => s.path.length));
+    const n = shadow.shadowed.length;
+    return [
+      `Gitignore shadow: ${String(n)} of ${String(shadow.probed.length)} probed state `
+        + `${n === 1 ? "paths is" : "paths are"} IGNORED. tldrx state is committed state (spec §1):`,
+      ...shadow.shadowed.map((s) => `  ${s.path.padEnd(width)}  ignored by  ${describeRule(s)}`),
+      "Re-run `tldrx init` to refresh the `# >>> tldrx >>>` block, whose negations re-include them,",
+      "or delete the rule. This does not change the exit code.",
     ];
   }
 
