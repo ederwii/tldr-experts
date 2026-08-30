@@ -378,7 +378,12 @@ async function runStage(
     model,
     effort,
     outputs: agent.envelope?.outputs ?? [],
-    usage: { input_tokens: agent.usage.input_tokens, output_tokens: agent.usage.output_tokens },
+    usage: {
+      input_tokens: agent.usage.input_tokens,
+      output_tokens: agent.usage.output_tokens,
+      cache_creation_input_tokens: agent.usage.cache_creation_input_tokens,
+      cache_read_input_tokens: agent.usage.cache_read_input_tokens,
+    },
   }, round2(agent.costUsd), stage.expert));
   store.save();
 

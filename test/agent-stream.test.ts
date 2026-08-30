@@ -217,3 +217,34 @@ describe("LineSplitter", () => {
     expect(seen).toEqual(["one", "two"]);
   });
 });
+
+describe("prompt-cache accounting (wave N)", () => {
+  test("the real result event's cache counters reach the cost event", () => {
+    const events = replay(TRANSCRIPT);
+    const final = [...events].reverse().find((e) => e.kind === "cost");
+    // Measured, not assumed: `usage.cache_creation_input_tokens: 25610` and
+    // `cache_read_input_tokens: 25106` are on line 13 of the real transcript.
+    expect(final).toMatchObject({
+      kind: "cost",
+      usd: REAL_COST,
+      cacheCreationTokens: 25610,
+      cacheReadTokens: 25106,
+    });
+  });
+
+  test("interpret() carries both counters onto the outcome's usage", () => {
+    const outcome = interpret(0, TRANSCRIPT, "", false);
+    expect(outcome.usage.cache_creation_input_tokens).toBe(25610);
+    expect(outcome.usage.cache_read_input_tokens).toBe(25106);
+  });
+
+  test("a usage object without the cache keys reports zero, never undefined", () => {
+    const outcome = interpret(0, legacyBlob(), "", false);
+    expect(outcome.usage).toEqual({
+      input_tokens: 10,
+      output_tokens: 2,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+    });
+  });
+});

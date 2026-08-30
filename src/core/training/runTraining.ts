@@ -261,7 +261,12 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
       session_id: outcome.sessionId,
       max_budget_usd: share,
       outputs: outcome.envelope?.outputs ?? [],
-      usage: { input_tokens: outcome.usage.input_tokens, output_tokens: outcome.usage.output_tokens },
+      usage: {
+        input_tokens: outcome.usage.input_tokens,
+        output_tokens: outcome.usage.output_tokens,
+        cache_creation_input_tokens: outcome.usage.cache_creation_input_tokens,
+        cache_read_input_tokens: outcome.usage.cache_read_input_tokens,
+      },
       ok: outcome.ok,
     }));
     if (!outcome.ok) {
