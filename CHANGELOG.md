@@ -597,6 +597,79 @@ places nothing read as one list.
   `signed by` column, and the section counts them the way the CLI does —
   "run.yml order · 1 human, 1 auto". Absence still reads as `human`.
 
+### The CLI stops being silent about its own surface
+
+- **`tldrx <command> --help` answers the question.** It printed the usage line
+  and stopped: no flag meanings, no allowed values, no examples, no exit codes.
+  `--scope <s>` did not say there are thirteen of them and the error for a wrong
+  one did not list them either. A new registry, `src/cli/helpText.ts`, carries a
+  one-line description, the positional arguments, every flag with its meaning and
+  — where the set is closed — its values, one or two real invocations, and the
+  exit codes that command can return with what each one means. Closed sets are
+  imported from where they are enforced (`EFFORT_LEVELS`, `UI_MODES`, and the
+  `workflows/*.yml` stems read off disk) rather than retyped, so a help screen
+  cannot offer a value the validator refuses. `tldrx --help` gains the same table
+  as a legend. `<cmd> --help` still needs no workspace.
+- **An unknown flag is refused instead of ignored.** `tldrx status --nope` exited
+  `0`: the parser recorded it, nothing asked for it, and the command ran with its
+  defaults having been told something it dropped. The guard lives in the
+  dispatcher, driven by the registry, so it covers the commands that never used
+  `parseArgs` (`replay`, `retro`, `map`, `init`) too, and it scans argv exactly
+  the way `parseArgs` does so a VALUE that looks like a flag is not mistaken for
+  one. `hook` and `statusline` forward their argv to a hook script and are judged
+  not at all. A test re-derives every flag each command READS from its source and
+  fails if the registry does not declare it.
+- **`--json` is supported or it is an error.** It had three behaviours:
+  supported, accepted-and-ignored (`doctor`, `watch list`, `tickets status`), and
+  refused (`map --check`). `doctor --json` and `watch list --json` now print the
+  data — both already had it structured and were throwing it away at the last
+  step — and everywhere else passing it is `1` with `--json is not supported by
+  <cmd>`. `doctor`'s `mcp: null` means NOT PROBED; "no servers" is a different
+  claim and does not share its shape. `watch list --json` is built from the same
+  `statusOf` the table uses, asserted by running both and matching them.
+- **`tldrx status` stops counting advice as work.** A freshly initialised
+  workspace printed seven numbered items, five of them seeded experts at level 0
+  repeating the same sentence, under a headline that made a new workspace read as
+  a stuck one. They collapse into one uncounted line under the blockers —
+  `Also: 3 expert(s) a stage will load have no evidence yet → tldrx expert list`
+  — with the trainable ones named and one runnable example. A role expert with no
+  handoff to mine is counted and named there and offered no command, because a
+  command the tool would refuse is worse than an honest "not yet".
+  `WorkspaceStatus.items` now means BLOCKERS and `pending` counts only those;
+  `--json` keeps `items` shape-identical and adds `advice` beside it.
+- **`init` points at the command that records the answer.** `init.ts` said "then
+  answer `.tldrx/init-questions.md`" and the file's own header said to write after
+  `[Answer]:`. Measured: the `answer-capture` hook returns early unless the path
+  has a `tldrx-work` segment (`answer-capture.ts:27-28` → `locateWork`), so a
+  hand-typed answer there records no fact, logs no event, and never reaches
+  `applyProcess`, which is what writes `.tldrx/process.yml`. Both now name
+  `tldrx interview --init`. The `[Answer]:` slot text stays — `captureAnswers`
+  and `tldrx answer` read and write it.
+- **Exit codes are visible from outside.** One table, defined in
+  `src/cli/exitCodes.ts`, printed by `tldrx --help`, listed per command by
+  `<cmd> --help`, and written once in the README (with a test that the three
+  agree). An unknown COMMAND now exits `1`, not `64`: `64` means "on the roadmap,
+  not built", which a mistyped word has no business claiming. It is reserved and
+  currently unreachable — no command in this build is a stub, and that is
+  asserted.
+- **`tldrx replay`'s usage stops requiring an id it does not require.** With no
+  id it narrates the newest run and refuses (exit `2`) only when several are
+  open, which is the rule every other run-taking command follows.
+- **`stages/how/stage.yml` loses its decorative `gate.requires:`.** Three
+  acceptance criteria that nothing read: `normaliseGate`
+  (`src/core/run/workflowPreset.ts:216-231`) reads only `.type`, `validateStage`
+  (`src/core/schemas/stage.ts:72-76`) checks only `gate.type`, and no other file
+  in the repo touches the key. The same dead key still sits in `what`, `plan`,
+  `build` and `watch`, and `StageGate.requires` is still declared and still
+  unread — out of this change's scope, and named here so it is not rediscovered.
+- **README and ROADMAP stop claiming a release that has not happened.** Every
+  published version was unpublished on 2026-08-29 (`npm view tldr-experts
+  version` → `E404 Unpublished`) and there is no `v0.3.0` tag, so both `npm i -g`
+  lines say so and keep the commands. ROADMAP's four "shipped in 0.3.0" become
+  "on main, unreleased (0.3.0 pending tag)". `dashboard` is off the README's
+  "refuses on ambiguity" list: it draws every run in the workspace, so it has no
+  single run to be ambiguous about.
+
 ## 0.2.0 — 2026-08-29
 
 ### The Build phase executes

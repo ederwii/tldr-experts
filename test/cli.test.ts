@@ -368,4 +368,12 @@ describe("<command> --help carries flags, values, examples and exit codes", () =
       expect(run.stdout).toContain(`${String(code).padEnd(2)}  ${meaning}`);
     }
   });
+
+  // The README table is the same table. It rots the moment they are two.
+  test("the README exit table is the one `exitCodes.ts` defines", () => {
+    const readme = readFileSync(join(FRAMEWORK_ROOT, "README.md"), "utf8");
+    for (const [code, meaning] of EXIT_MEANINGS) {
+      expect(readme).toContain(`| \`${String(code)}\` | ${meaning} |`);
+    }
+  });
 });

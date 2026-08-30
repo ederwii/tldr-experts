@@ -38,12 +38,14 @@ outputs:
 experts:
   - architect
 
+# `requires:` used to list three acceptance criteria here. Nothing read them:
+# `normaliseGate` (src/core/run/workflowPreset.ts:216-231) reads only `.type`,
+# `validateStage` (src/core/schemas/stage.ts:72-76) checks only `gate.type`, and
+# no other file in the repo touches the key. Three sentences a reviewer would
+# have to open this file to find, that no gate ever enforced, are worse than
+# none — the enforcement that IS real is the `checks:` list below.
 gate:
   type: human-approval
-  requires:
-    - "every component in design.md cites an existing path"
-    - "contracts.md names the APIs, DTOs and events that change"
-    - "any claim about an external API cites a doc URL fetched this run"
 
 checks:
   - claim-sources
