@@ -1,9 +1,15 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { COMMANDS, lookup } from "../src/cli/index.ts";
-import { EXIT_FAILED, EXIT_NOT_IMPLEMENTED, EXIT_OK } from "../src/cli/exitCodes.ts";
+import { flagNames } from "../src/cli/argv.ts";
+import { EXIT_FAILED, EXIT_NOT_IMPLEMENTED, EXIT_OK, EXIT_USAGE } from "../src/cli/exitCodes.ts";
+import {
+  declaredFlags, EXIT_MEANINGS, helpFor, HELP_ENTRIES, scopeValues, supportsJson,
+} from "../src/cli/helpText.ts";
+import { EFFORT_LEVELS } from "../src/core/schemas/stage.ts";
+import { UI_MODES } from "../src/core/ui/index.ts";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { noSpawnEnv } from "./fixtures/noSpawnPath.ts";
 
@@ -142,10 +148,224 @@ describe("<command> --help", () => {
 });
 
 describe("unknown commands", () => {
-  test("exit 64 and point at --help", async () => {
+  // Exit 1, not 64: a word that was never a command is a usage error. 64 means
+  // "on the roadmap, not built", which a typo has no business claiming.
+  test("exit 1 and point at --help", async () => {
     const run = await tldrx("definitely-not-a-command");
-    expect(run.code).toBe(EXIT_NOT_IMPLEMENTED);
+    expect(run.code).toBe(EXIT_USAGE);
     expect(run.stderr).toContain("unknown command 'definitely-not-a-command'");
     expect(run.stdout).toBe("");
+  });
+
+  test("64 is reserved: no command in this build is a stub, so nothing returns it", () => {
+    expect(COMMANDS.filter((command) => !command.implemented)).toEqual([]);
+    expect(EXIT_NOT_IMPLEMENTED).toBe(64);
+  });
+});
+
+// --- the help registry -------------------------------------------------------
+
+describe("helpText registry", () => {
+  test("every dispatchable command has an entry", () => {
+    for (const command of [...COMMANDS, lookup("version"), lookup("help")]) {
+      expect(helpFor(command?.name ?? "")).toBeDefined();
+    }
+  });
+
+  test("every entry declares at least exit 0, and only documented codes", () => {
+    for (const entry of HELP_ENTRIES) {
+      expect(entry.exits).toContain(0);
+      for (const code of entry.exits) expect(EXIT_MEANINGS.has(code)).toBe(true);
+    }
+  });
+
+  /**
+   * The invariant that keeps the guard honest: a flag the code READS but the
+   * registry does not declare would be rejected before the command ever saw it.
+   * So the flags are re-derived from the source — every `boolFlag`/`stringFlag`/…
+   * call, every `parseArgs` value list, every `argv.includes("--x")` — and each
+   * one must appear in the registry.
+   */
+  test("every flag a command reads is declared", () => {
+    const missing: string[] = [];
+    for (const [command, files] of SOURCE_OF) {
+      const declared = declaredFlags(command);
+      for (const flag of flagsReadBy(files)) {
+        if (!declared.has(flag)) missing.push(`${command}: --${flag}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test("--scope lists the workflow stems on disk, not a hard-coded list", () => {
+    const stems = readdirSync(join(FRAMEWORK_ROOT, "workflows"))
+      .filter((entry) => entry.endsWith(".yml"))
+      .map((entry) => entry.slice(0, -4))
+      .sort();
+    expect(scopeValues(FRAMEWORK_ROOT)).toEqual(stems);
+    expect(stems.length).toBeGreaterThan(0);
+  });
+});
+
+/** Which source files a command's flags can be read in. `hook.ts` holds two. */
+const SOURCE_OF: ReadonlyMap<string, readonly string[]> = new Map([
+  ...COMMANDS.filter((command) => command.name !== "statusline" && command.name !== "hook")
+    .map((command) => [command.name, [`${command.name}.ts`]] as const),
+  ["hook", ["hook.ts"]] as const,
+  ["statusline", ["hook.ts"]] as const,
+]);
+
+/**
+ * Every flag name the given command sources read, however they read it: through
+ * `argv.ts`'s accessors, through a `parseArgs` value list, through a bare
+ * `argv.includes("--x")`, through a `case "--x":`, and through the three shared
+ * helpers that read a fixed flag of their own (`workspaceRootFrom` → `--root`,
+ * `effortFlag` → `--effort`, `startUi` → `--ui`).
+ */
+function flagsReadBy(files: readonly string[]): ReadonlySet<string> {
+  const found = new Set<string>();
+  for (const file of files) {
+    const source = readFileSync(join(FRAMEWORK_ROOT, "src", "cli", "commands", file), "utf8");
+    for (const pattern of [
+      /(?:boolFlag|stringFlag|numberFlag|listFlag|repeatedFlag)\(\s*args\s*,\s*"([a-z0-9-]+)"/g,
+      /args\.flags\.(?:has|get)\("([a-z0-9-]+)"\)/g,
+      /(?:argv\.includes|option)\(\s*(?:argv,\s*)?"--([a-z0-9-]+)"/g,
+      /case "--([a-z0-9-]+)"/g,
+    ]) {
+      for (const match of source.matchAll(pattern)) if (match[1] !== undefined) found.add(match[1]);
+    }
+    // `parseArgs(argv, [...])` and the `VALUE_FLAGS` constants it is given.
+    for (const pattern of [
+      /parseArgs\(\s*\w+\s*,\s*\[([^\]]*)\]/g,
+      /VALUE_FLAGS\s*(?::[^=]*)?=\s*\[([^\]]*)\]/g,
+    ]) {
+      for (const match of source.matchAll(pattern)) {
+        for (const literal of (match[1] ?? "").matchAll(/"([a-z0-9-]+)"/g)) {
+          if (literal[1] !== undefined) found.add(literal[1]);
+        }
+      }
+    }
+    if (source.includes("workspaceRootFrom(")) found.add("root");
+    if (source.includes("effortFlag(")) found.add("effort");
+    if (source.includes("startUi(")) found.add("ui");
+  }
+  return found;
+}
+
+// --- unknown flags -----------------------------------------------------------
+
+describe("unknown flags", () => {
+  test("`tldrx status --nope` is refused, and says where to look", async () => {
+    const run = await tldrx("status", "--nope");
+    expect(run.code).toBe(EXIT_USAGE);
+    expect(run.stderr).toContain("unknown flag --nope (see `tldrx status --help`)");
+    expect(run.stdout).toBe("");
+  });
+
+  // The guard scans argv the same way `parseArgs` does, or it would refuse a
+  // VALUE that happens to look like a flag. Asserted directly, because the CLI
+  // path cannot distinguish "read the same way" from "happened to agree".
+  test("the scan mirrors parseArgs exactly", () => {
+    const takesValue = new Set(["root", "note"]);
+    expect(flagNames(["--root", "sub/dir", "--json"], takesValue)).toEqual(["root", "json"]);
+    expect(flagNames(["--note", "ship it", "Q1"], takesValue)).toEqual(["note"]);
+    expect(flagNames(["--root=sub/dir"], takesValue)).toEqual(["root"]);
+    // `parseArgs` refuses to swallow a value that starts with `--`, so a bare
+    // `--root --json` is two flags there and two flags here.
+    expect(flagNames(["--root", "--json"], takesValue)).toEqual(["root", "json"]);
+    expect(flagNames(["--", "positional"], takesValue)).toEqual([]);
+  });
+
+  test("`--flag=value` is checked by its name", async () => {
+    const run = await tldrx("status", "--nope=1");
+    expect(run.code).toBe(EXIT_USAGE);
+    expect(run.stderr).toContain("unknown flag --nope");
+  });
+
+  test("`hook` forwards its argv, so the guard does not judge it", async () => {
+    const run = await tldrx("hook", "not-a-hook", "--whatever");
+    // Refused for the hook NAME, not for the flag.
+    expect(run.stderr).toContain("no hook 'not-a-hook'");
+    expect(run.stderr).not.toContain("unknown flag");
+  });
+
+  test("every command answers --help rather than refusing a flag", async () => {
+    for (const command of COMMANDS) {
+      const run = await tldrx(command.name, "--help");
+      expect(run.code).toBe(EXIT_OK);
+      expect(run.stderr).toBe("");
+    }
+  });
+});
+
+// --- --json is supported or it is an error -----------------------------------
+
+describe("--json", () => {
+  const unsupported = COMMANDS.filter(
+    (command) => !supportsJson(command.name) && helpFor(command.name)?.passthrough !== true,
+  );
+
+  test("there is at least one of each kind, or this suite proves nothing", () => {
+    expect(unsupported.length).toBeGreaterThan(0);
+    expect(COMMANDS.some((command) => supportsJson(command.name))).toBe(true);
+  });
+
+  for (const command of unsupported) {
+    test(`\`tldrx ${command.name} --json\` is refused rather than ignored`, async () => {
+      const run = await tldrx(command.name, "--json");
+      expect(run.code).toBe(EXIT_USAGE);
+      expect(run.stderr).toContain(`--json is not supported by ${command.name}`);
+      expect(run.stdout).toBe("");
+    });
+
+    test(`\`tldrx ${command.name} --help\` says so`, async () => {
+      const run = await tldrx(command.name, "--help");
+      expect(run.stdout).toContain(`Not supported by \`${command.name}\``);
+    });
+  }
+});
+
+// --- what <command> --help now carries ---------------------------------------
+
+describe("<command> --help carries flags, values, examples and exit codes", () => {
+  test("`run --help` names every flag, its meaning and the 13 scopes", async () => {
+    const run = await tldrx("run", "--help");
+    expect(run.code).toBe(EXIT_OK);
+    for (const flag of ["--title", "--scope", "--budget", "--repos", "--from", "--seed", "--gates", "--until", "--yolo"]) {
+      expect(run.stdout).toContain(flag);
+    }
+    for (const scope of scopeValues(FRAMEWORK_ROOT)) expect(run.stdout).toContain(scope);
+    expect(run.stdout).toContain("Examples:");
+    expect(run.stdout).toContain("Exit codes:");
+    expect(run.stdout).toContain("4   awaiting a human");
+  });
+
+  test("`next --help` lists the effort and ui values the validators enforce", async () => {
+    const run = await tldrx("next", "--help");
+    expect(run.stdout).toContain(`one of: ${EFFORT_LEVELS.join(", ")}`);
+    expect(run.stdout).toContain(`one of: ${UI_MODES.join(", ")}`);
+  });
+
+  test("`expert --help` gives --mode its two values", async () => {
+    const run = await tldrx("expert", "--help");
+    expect(run.stdout).toContain("one of: light, full");
+  });
+
+  test("every command's help lists an exit table and every code in it is explained", async () => {
+    for (const command of COMMANDS) {
+      const run = await tldrx(command.name, "--help");
+      expect(run.stdout).toContain("Exit codes:");
+      for (const code of helpFor(command.name)?.exits ?? []) {
+        expect(run.stdout).toContain(EXIT_MEANINGS.get(code) ?? " ");
+      }
+    }
+  });
+
+  test("`tldrx --help` carries the exit-code legend", async () => {
+    const run = await tldrx("--help");
+    expect(run.stdout).toContain("Exit codes:");
+    for (const [code, meaning] of EXIT_MEANINGS) {
+      expect(run.stdout).toContain(`${String(code).padEnd(2)}  ${meaning}`);
+    }
   });
 });

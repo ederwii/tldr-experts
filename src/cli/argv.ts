@@ -89,3 +89,46 @@ export function listFlag(args: ParsedArgs, name: string): readonly string[] | un
   if (value === undefined) return undefined;
   return value.split(",").map((part) => part.trim()).filter((part) => part !== "");
 }
+
+/**
+ * Every `--flag` in argv, in order, with its value already accounted for.
+ *
+ * The same scan `parseArgs` does, minus the bookkeeping: `--flag=value` yields
+ * `flag`, and `--flag value` yields `flag` and skips the value when `flag` is one
+ * that takes one — so a VALUE that happens to look like a flag is never mistaken
+ * for one. A bare `--` yields nothing.
+ *
+ * It exists so the dispatcher can refuse a flag no command reads. Until it did,
+ * `tldrx status --nope` exited 0: the parser recorded `nope` and nothing ever
+ * asked for it, so a typo silently ran the command with its defaults.
+ */
+export function flagNames(argv: readonly string[], valueFlags: ReadonlySet<string>): readonly string[] {
+  const names: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i] ?? "";
+    if (!arg.startsWith("--")) continue;
+    const body = arg.slice(2);
+    if (body === "") continue;
+    const eq = body.indexOf("=");
+    if (eq !== -1) {
+      names.push(body.slice(0, eq));
+      continue;
+    }
+    names.push(body);
+    const next = argv[i + 1];
+    if (valueFlags.has(body) && next !== undefined && !next.startsWith("--")) i++;
+  }
+  return names;
+}
+
+/** The first flag in argv that `known` does not contain, or null when all are known. */
+export function firstUnknownFlag(
+  argv: readonly string[],
+  known: ReadonlySet<string>,
+  valueFlags: ReadonlySet<string>,
+): string | null {
+  for (const name of flagNames(argv, valueFlags)) {
+    if (!known.has(name)) return name;
+  }
+  return null;
+}

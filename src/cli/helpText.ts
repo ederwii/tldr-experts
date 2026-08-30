@@ -62,6 +62,13 @@ export interface CommandHelp {
   readonly exits: readonly number[];
   /** Anything the flag table cannot say in one line. */
   readonly notes?: readonly string[];
+  /**
+   * This command forwards its argv to something else, so the guard must not
+   * judge it. `hook` and `statusline` spawn a hook script with everything after
+   * the name (`hook.ts:51,66`); rejecting a flag they never read themselves would
+   * be the CLI refusing on a script's behalf.
+   */
+  readonly passthrough?: boolean;
 }
 
 // --- the exit table (spec §3) -----------------------------------------------
@@ -597,6 +604,8 @@ const ENTRIES: readonly CommandHelp[] = [
     flags: [],
     examples: ["echo '{}' | tldrx hook session-start"],
     exits: [EXIT_OK, EXIT_USAGE],
+    passthrough: true,
+    notes: ["Everything after the script name is forwarded to it unchanged, so this command judges no flags of its own."],
   },
   {
     name: "statusline",
@@ -605,6 +614,7 @@ const ENTRIES: readonly CommandHelp[] = [
     flags: [],
     examples: ["tldrx statusline"],
     exits: [EXIT_OK],
+    passthrough: true,
   },
   {
     name: "version",
@@ -653,6 +663,11 @@ export function declaredValueFlags(name: string): ReadonlySet<string> {
 
 export function supportsJson(name: string): boolean {
   return declaredFlags(name).has("json");
+}
+
+/** True when argv belongs to something else and this CLI must not judge it. */
+export function isPassthrough(name: string): boolean {
+  return helpFor(name)?.passthrough === true;
 }
 
 // --- rendering ---------------------------------------------------------------
