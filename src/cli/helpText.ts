@@ -269,10 +269,13 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "run",
-    description: "Create a piece of work, look at one, or drive one to its next human gate.",
+    description: "Create a piece of work, look at one, drive one to its next human gate, or get a stuck one moving again.",
     args: [
       { name: "<slug>", meaning: "run new: the short name. The id becomes <yymmdd>-<slug>." },
-      { name: "[<run>]", meaning: "run status / run auto: a run id. Omit it and the one open run is used." },
+      {
+        name: "[<run>]",
+        meaning: "run status / run auto / run unlock / run cancel: a run id. Omit it and the one open run is used.",
+      },
     ],
     flags: [
       { name: "title", arg: "<t>", meaning: "Human title for the run. Default: the slug.", sub: "new" },
@@ -302,16 +305,40 @@ const ENTRIES: readonly CommandHelp[] = [
       effort("auto"),
       yolo("auto"),
       ui("auto"),
+      { ...runFlag(), sub: "unlock" },
+      {
+        name: "force",
+        arg: null,
+        meaning: "Remove a .lock a LIVE process still holds. Without it a live pid is refused (exit 2): 'the pid was recycled' and 'a colleague is running the stage right now' look identical from here, and only one of them is safe.",
+        sub: "unlock",
+      },
+      { ...runFlag(), sub: "cancel" },
+      {
+        name: "note",
+        arg: "<text>",
+        meaning: "Why the run is being abandoned. Required — an empty note is a usage error (exit 1). Kept in the event log and in run.yml's cancelled:.",
+        sub: "cancel",
+      },
+      {
+        name: "force",
+        arg: null,
+        meaning: "Cancel a run that a live process still holds the .lock on, and release it. Without it a live pid is refused (exit 2) rather than closed out from under the process working on it.",
+        sub: "cancel",
+      },
       root(),
     ],
     examples: [
       "tldrx run new checkout-v2 --scope feature --budget 40",
       "tldrx run status --json",
       "tldrx run auto --max-usd 15 --until build",
+      "tldrx run unlock 260101-checkout --force",
+      'tldrx run cancel 260101-checkout --note "superseded by the v2 spec"',
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_AWAITING_HUMAN, EXIT_AGENT_FAILED],
     notes: [
       "`run status` with several runs open LISTS them and exits 0 — it is the screen you read to find the id every other command wants.",
+      "`run unlock` drops a .lock nobody is behind and puts the stage it stranded back to ready. It spends nothing and touches no stage output.",
+      "`run cancel` closes a run for good: cancelled is terminal, so `tldrx status` and every id-less command stop seeing it. Nothing is deleted — the stages, outputs, events and money spent stay on disk and `tldrx replay <id>` still reads them.",
     ],
   },
   {
@@ -358,6 +385,16 @@ const ENTRIES: readonly CommandHelp[] = [
       maxUsd(),
       yolo(),
       { name: "keep-worktrees", arg: null, meaning: "Leave the per-story worktrees on disk after the build stage finishes with them." },
+      {
+        name: "discard-pending",
+        arg: null,
+        meaning: "Bin an orphaned --prepare bundle and run the stage again. Without it a stage left running with a bundle on disk is refused (exit 2) rather than re-spawned, because that would throw away a sub-agent turn this run has already paid for.",
+      },
+      {
+        name: "reuse-epic",
+        arg: null,
+        meaning: "Let the build stage adopt an existing epic/<slug> branch this run did not cut. Without it a foreign epic branch is refused rather than stacked onto.",
+      },
       ui(),
       root(),
     ],
@@ -365,6 +402,7 @@ const ENTRIES: readonly CommandHelp[] = [
       "tldrx next",
       "tldrx next --dry-run",
       "tldrx next 260101-checkout --effort high --max-usd 8",
+      "tldrx next --discard-pending",
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_AWAITING_HUMAN, EXIT_AGENT_FAILED],
     notes: [
