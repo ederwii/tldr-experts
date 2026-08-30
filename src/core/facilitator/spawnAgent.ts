@@ -81,6 +81,12 @@ export interface AgentRequest {
    * Undefined or <= 0 leaves exploration uncapped, exactly as before.
    */
   readonly maxReads?: number;
+  /**
+   * Which concurrent unit this sub-agent is: a Build story id when a wave runs
+   * with `--parallel N`. Published with every event so a progress view can show
+   * one activity line per story instead of interleaving them into one.
+   */
+  readonly lane?: string;
 }
 
 export interface AgentOutcome {
@@ -130,7 +136,7 @@ export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
   const stream = new AgentStream();
   const publish = (event: AgentEvent): void => {
     request.onEvent?.(event);
-    emitAgentEvent(event);
+    emitAgentEvent(event, request.lane);
   };
 
   const cap = request.maxReads ?? 0;

@@ -40,6 +40,8 @@ export interface AutoOptions {
   readonly model?: string;
   readonly effort?: EffortLevel;
   readonly yolo: boolean;
+  /** `--parallel N`, passed through to every `next` the loop makes. */
+  readonly parallel?: number;
   readonly actor: string;
   readonly at: string;
   /** Called with each line as it happens, so a long loop is not silent. */
@@ -125,6 +127,7 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
       model: options.model,
       effort: options.effort,
       yolo: options.yolo,
+      parallel: options.parallel,
       actor: options.actor,
       at: options.at,
     });

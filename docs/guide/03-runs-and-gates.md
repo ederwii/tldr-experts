@@ -86,6 +86,34 @@ story gets its own worktree and branch, the DoD is re-run for real, the reviewer
 read-only, and the epic branch waits for you. If you would rather plan it yourself, write
 `03-plan/` — a real plan always wins over the implicit one.
 
+## Building a wave's stories at once
+
+```bash
+tldrx next --parallel 3          # or: tldrx run auto --parallel 3
+```
+
+A wave's stories are independent — `waves.yml` puts every dependency in an earlier
+wave — so they can run at the same time. `--parallel N` runs up to N of them
+concurrently, each in its own worktree on its own branch, and the live view gives
+each one its own column:
+
+```
+⠹ 0m42s S1 reading src/checkout/Cart.cs · S2 $ dotnet test    · $1.80/$9.00
+```
+
+What does **not** change: merges into the epic happen in the order `waves.yml`
+lists, after every story of the wave has finished, so the branch reads the same
+whatever order the machine got through them; a conflict still blocks one story and
+leaves the epic as it was; each sub-agent keeps its own budget share, so three at
+once costs what three in a row cost, sooner. A story that goes red does not cancel
+its siblings, but the wave ends `failed` and the next wave does not start — its
+stories may need what this one did not land. Ctrl-C kills every running sub-agent,
+not just the first.
+
+The default is 1, and at 1 nothing about the build is different from before. Set it
+per scope instead of per command with `build: {parallel: 3}` at the top of your
+`.tldrx/workflows/<scope>.yml`.
+
 ## Who closes a gate
 
 Every stage ends at a gate. What you choose is **who closes it**. `human` waits for

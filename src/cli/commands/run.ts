@@ -15,6 +15,7 @@ import { startUi } from "../ui.ts";
 import { effortFlag } from "../effort.ts";
 import { fail } from "../report.ts";
 import { runAuto } from "../../core/facilitator/runAuto.ts";
+import { parallelFlag } from "./next.ts";
 import { cancelRun, unlockRun } from "../../core/run/rescue.ts";
 import { nowRfc3339 } from "../../hooks/lib/actor.ts";
 import { createRun } from "../../core/run/newRun.ts";
@@ -36,7 +37,7 @@ const HINT_FILE_COUNT = 10;
 
 const VALUE_FLAGS = [
   "title", "scope", "budget", "repos", "from", "seed", "gates", "run", "root",
-  "max-usd", "until", "model", "effort", "ui", "note",
+  "max-usd", "until", "model", "effort", "ui", "note", "parallel",
 ];
 
 export const runCommand: Command = {
@@ -48,7 +49,7 @@ export const runCommand: Command = {
     "       tldrx run status [<run>] [--json] [--root <path>]\n" +
     "       tldrx run estimate [<run>] [--json] [--root <path>]\n" +
     "       tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]\n" +
-    "                  [--yolo] [--ui scene|compact|plain|off] [--root <path>]\n" +
+    "                  [--yolo] [--parallel <n>] [--ui scene|compact|plain|off] [--root <path>]\n" +
     "       tldrx run unlock [<run>] [--force] [--root <path>]\n" +
     "       tldrx run cancel [<run>] --note <text> [--force] [--root <path>]",
   subcommands: ["new", "status", "estimate", "auto", "unlock", "cancel"],
@@ -197,6 +198,7 @@ async function runAutoLoop(argv: readonly string[]): Promise<number> {
         model: stringFlag(args, "model"),
         effort: effortFlag(args),
         yolo: boolFlag(args, "yolo"),
+        parallel: parallelFlag(args),
         actor: currentActor(),
         at: nowRfc3339(),
         // Erase the view, let the stage line scroll past on stdout, repaint. A

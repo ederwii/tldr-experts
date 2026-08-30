@@ -75,6 +75,14 @@ export interface ExecutorContext {
    */
   readonly reuseEpic: boolean;
   /**
+   * `--parallel N` — how many stories of ONE wave may run at once (spec §5).
+   *
+   * 1 (the default) is the v1 path, story by story, unchanged. `waves.yml`
+   * already guarantees a dependency is in an earlier wave, so a wave's stories
+   * are independent by construction and the number is safe to raise.
+   */
+  readonly parallel: number;
+  /**
    * `min(stage budget × share, per_agent_max_usd, --max-usd)`, to the cent.
    * `agentCap(1)` is `maxBudgetUsd`; an executor that splits the stage between N
    * sub-agents asks for `agentCap(1 / N)` rather than dividing `maxBudgetUsd`,

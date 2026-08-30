@@ -371,6 +371,7 @@ stages:
 | `stages[].budget_usd` | number >0 | n | Overrides `stage.yml` |
 | `stages[].skip_if` | str | n | `^(stories\|repos\|questions)(<=\|>=\|==\|<\|>)\d{1,4}$` `[assumption]` |
 | `skips` | slug[] | n | Stages this scope deliberately does NOT run, so the omission is on record. **Read, not decorative:** Build asks it (below) |
+| `<stage>.parallel` | int ≥1 | n | How many units of that stage may run at once — for `build`, stories per wave (§5). `--parallel` overrides it; absent ⇒ `stage.yml`'s `parallel:`, then 1 |
 
 **Validation.** `name` = filename stem; stage ids unique and present in `.tldrx/stages/`; Σ `budget_usd` ≤
 `default_budget_usd`; `skip_if` matches the pattern above; every `gates` key (other than `collapse`) names a stage
@@ -1732,10 +1733,41 @@ Build's declared input `03-plan/waves.yml` is treated as satisfied by the implic
 `03-plan/` — that is the phase the scope skipped. **Every other missing input is still exit 1**: skipping Plan is not
 an excuse for a missing `.tldrx/conventions/shared.md`.
 
-`--prepare`/`--commit` is **per story**: `--prepare` bundles the next pending story into
-`.agent/<stage>/<story-id>/`, marks it `in_progress` (the file is how `--commit` finds it again), and stops; `--commit`
-picks that story's pipeline up at the DoD step and prepares nothing. Sequential in v1 — spec §5 decision (c) — but the
-order is already the parallel-safe one, because `waves.yml` guarantees a dependency is in an earlier wave.
+**Parallel within a wave — `--parallel N`, default 1 (2026-08-30).** `waves.yml` guarantees a dependency is in an
+EARLIER wave, so the stories of one wave are independent by construction and may run at once. The number is resolved
+`--parallel` > the workflow's `<stage>: {parallel: N}` (§2.4) > `stage.yml`'s `parallel:` > 1, refused rather than
+clamped at the CLI when it is not a whole number ≥ 1, and clamped in the executor to `[1, MAX_STORIES_PER_WAVE]`.
+`run auto --parallel N` passes it to every `next` it makes.
+
+At **N = 1 the executor takes the path it always did**, story by story — measured byte-identical on the event
+sequence, because "the default does not change" is not a claim to make loosely. Above 1 the wave runs in two halves:
+
+- **A, concurrently, ≤ N at a time**: worktree → developer → DoD → commit. A story that goes red does NOT cancel its
+  siblings — killing four running sub-agents because a fifth failed throws away turns already paid for.
+- **B, serially, in the wave's LISTED order**: merge → reviewer → `done`/`blocked`. Serial for the merge, and also for
+  the reviewer: a reviewer reads `git diff <epic>...<story>`, whose merge base MOVES every time another story merges
+  into that epic, so two concurrent reviewers would be judging diffs that changed under them.
+
+Consequences the implementation commits to: the epic's commit order is the file's order, not the finish order; a
+conflict takes the existing `--abort` path and blocks that story alone; a wave with any blocked story ends `failed`
+and the NEXT WAVE IS NOT STARTED, since its stories may depend on what this one did not land (the sequential path is
+unchanged here and still carries on — N = 1 is v1's behaviour, not a new rule); Ctrl-C/SIGTERM kills every live child,
+because `killAllChildren` signals the whole registry and each spawn registers its own pid.
+
+**The budget does not change.** `worstCaseShares` is already `stories × MAX_ATTEMPTS × (1 + REVIEWER_SHARE)` across
+the whole plan, so the sum of every cap the executor can hand out is ≤ the stage ceiling however the attempts fall —
+and however many of them are in flight at the same moment. Running concurrently spends the same money faster, never
+more of it.
+
+**One activity line per lane.** Every event a Build sub-agent publishes carries its story id as a `lane`, so the
+scene, the compact one-liner and `--ui plain` show `S1 reading … · S2 $ dotnet test …` rather than interleaving two
+streams into one. A lane disappears from the line when its agent finishes. With one lane — every run that did not ask
+for parallelism — the view is byte-for-byte what it was.
+
+`--prepare`/`--commit` is **per story** and stays sequential whatever `--parallel` says: `--prepare` bundles the next
+pending story into `.agent/<stage>/<story-id>/`, marks it `in_progress` (the file is how `--commit` finds it again),
+and stops; `--commit` picks that story's pipeline up at the DoD step and prepares nothing. The host session
+dispatches its own sub-agent, and this side has no way to know how many it is willing to run.
 
 **Watch executor** (`05-watch`, spec §2.16). In order:
 

@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Added
+
+- **`--parallel <n>` on `tldrx next` and `tldrx run auto`** — how many stories of ONE
+  build wave run at once. `waves.yml` already puts every dependency in an earlier wave, so
+  a wave's stories are independent by construction. Also settable per scope as
+  `build: {parallel: N}` at the top of a workflow, or per stage as `parallel:` in
+  `stage.yml`; the flag beats the workflow, which beats the stage file. **The default is 1
+  and at 1 the executor takes exactly the path it always did** — verified byte-identical on
+  the event sequence against `main`, not asserted. Above 1 the wave runs in two halves:
+  developer + DoD + commit concurrently, then merge + reviewer serially in the wave's
+  LISTED order, so the epic branch reads the same whatever order the machine finished in.
+  The reviewer half is serial for a reason and not only the merge: a reviewer reads
+  `git diff <epic>...<story>`, whose merge base moves every time another story merges into
+  that epic. A red story does not cancel its siblings, but the wave ends `failed` and the
+  next wave does not start. Ctrl-C/SIGTERM kills every live child, not the first.
+  Budgets are untouched: the stage ceiling was already divided by
+  `stories x attempts x (developer + reviewer)`, so N at once costs what N in a row cost.
+- The live view gives each running story its own column — `S1 reading … · S2 $ dotnet
+  test …` — in the scene, the compact one-liner and `--ui plain`. A lane leaves the line
+  when its sub-agent finishes. With nothing parallel the view is what it always was.
+
 ### Changed
 
 - `tldrx doctor` prints where the framework's own files are: a `framework <path>` line

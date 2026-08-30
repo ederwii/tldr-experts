@@ -131,6 +131,15 @@ output says which happened: the money moved, or the **run** ceiling grew.
 Ceilings are re-read from disk before every write, so a `budget raise` that lands while a
 stage is in flight is no longer silently reverted when that stage saves.
 
+## Running stories in parallel does not change the bill
+
+`--parallel N` (guide 3) changes when the money is spent, not how much. A Build
+stage divides its ceiling by `stories x 2 attempts x (developer + a quarter for the
+reviewer)` up front, so the sum of every sub-agent ceiling it can hand out is inside
+the stage ceiling however the attempts fall — and however many are in flight at once.
+Three developers running together each get the same share they would have got one at
+a time.
+
 ## The budget gate
 
 `budget-gate` is a PreToolUse hook on **every command that spends**: `claude -p …`,

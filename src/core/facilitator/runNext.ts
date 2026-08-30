@@ -92,6 +92,12 @@ export interface NextOptions {
   readonly discardPending?: boolean;
   /** `--reuse-epic`: let Build adopt an `epic/<slug>` branch this run did not cut. */
   readonly reuseEpic?: boolean;
+  /**
+   * `--parallel N`: how many stories of ONE Build wave may run at once.
+   * Overrides the workflow's `<stage>: {parallel: N}` and `stage.yml`'s.
+   * Undefined ⇒ whatever those say, and 1 if neither does.
+   */
+  readonly parallel?: number;
   readonly actor: string;
   readonly at: string;
 }
@@ -666,6 +672,9 @@ async function runExecutor(
     at: options.at,
     keepWorktrees: options.keepWorktrees === true,
     reuseEpic: options.reuseEpic === true,
+    // `--parallel` beats the workflow's `<stage>: {parallel: N}`, which beats
+    // `stage.yml`'s. Absent everywhere it is 1 — the sequential path, unchanged.
+    parallel: options.parallel ?? spec.parallel ?? 1,
     agentCap: (share = 1) => agentCap(options, store, stage, share),
     emit: (type, payload, costUsd = 0, actor = null) => {
       store.append(event(options, store.runId, stageId, type, payload, costUsd, actor));
