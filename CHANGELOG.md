@@ -597,6 +597,20 @@ places nothing read as one list.
   `signed by` column, and the section counts them the way the CLI does —
   "run.yml order · 1 human, 1 auto". Absence still reads as `human`.
 
+### A torn line no longer costs you the history
+
+- **`EventLog.read` skips an unparseable line instead of throwing.** Measured in
+  the 2026-08-29 resumability audit: `events.jsonl` is appended line by line, so a
+  process killed mid-write leaves half an object on the last line — and `read()`
+  ran that through a bare `JSON.parse`, so `tldrx replay` printed
+  "events.jsonl could not be read" and exit 0 for a ledger whose first four hundred
+  lines were perfectly good. Tolerant readers already existed in `run/attempts.ts`
+  and the Build executor; the shared one now agrees with them. Skips are counted,
+  not swallowed: `readAll()` returns `{events, lines, skipped}`, `read()` says
+  `1 line skipped (unparseable — a torn write)` once per file on stderr, and
+  `tldrx replay` prints the same note above the narrative. Line numbers now come
+  from the reader, so a torn line no longer shifts every `L<n>` after it.
+
 ## 0.2.0 — 2026-08-29
 
 ### The Build phase executes

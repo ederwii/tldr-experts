@@ -656,6 +656,12 @@ Append-only audit log: with `run.yml` the dashboard's only data source, the cost
 **Validation (appended line only).** One-line JSON ≤8 KB; exactly these seven keys; `type` in enum; append-only
 enforced by comparing file byte length before/after — a write that shortens the file is rejected.
 
+**Reading is tolerant, and says so.** A reader SKIPS any non-empty line that does not parse and keeps going — a
+process killed between the `{` and the `\n` leaves a torn last line, and one torn byte must not cost the other
+four hundred events. Skipped lines are COUNTED, never silent: `tldrx replay` prints `events.jsonl: 1 line skipped
+(unparseable — a torn write)` and the shared reader says the same once per file on stderr. Only the WRITE path
+validates; a reader that refused a bad line would be the same outage in a different place.
+
 ### 2.10 `.tldrx/env.yml`
 
 Tool manifest for `tldrx doctor`. The framework never installs anything: `doctor` probes, prints the exact install
