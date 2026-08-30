@@ -50,6 +50,17 @@ export interface SpawnOptions {
    * closes, so a producer that forgets its last `\n` is not silently truncated.
    */
   readonly onStdoutLine?: (line: string) => void;
+  /**
+   * Kill the child (and its group) when this aborts.
+   *
+   * Added for `max_reads` (wave N): the only way to stop a sub-agent that is
+   * reading the repository is to stop the PROCESS, and the decision to do so is
+   * made from the stdout stream while the process is still running. Same kill
+   * path as the timeout — `killProcessTree` — and the spawn still settles with
+   * whatever was read, so the partial transcript is not lost. Omitted = nothing
+   * about the spawn changes.
+   */
+  readonly signal?: AbortSignal;
 }
 
 export interface SpawnResult {

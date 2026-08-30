@@ -57,7 +57,13 @@ export type AgentEvent =
       readonly cacheReadTokens: number;
     }
   | { readonly kind: "done"; readonly ok: boolean; readonly structured: unknown; readonly costUsd: number }
-  | { readonly kind: "error"; readonly message: string };
+  | { readonly kind: "error"; readonly message: string }
+  /**
+   * How many `Read`/`Glob`/`Grep` calls have COMPLETED, against the stage's
+   * `max_reads` (0 = uncapped). Published by `spawnAgent`, which is the only
+   * place that knows the cap; the parser below never emits one.
+   */
+  | { readonly kind: "reads"; readonly count: number; readonly cap: number };
 
 /**
  * The tool the model calls to satisfy `--json-schema`. It is an implementation

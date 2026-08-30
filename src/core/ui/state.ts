@@ -26,6 +26,9 @@ export interface UiSnapshot {
   readonly speech: string | null;
   readonly spentUsd: number;
   readonly ceilingUsd: number;
+  /** Completed Read/Glob/Grep calls, and the stage's `max_reads` (0 = uncapped). */
+  readonly reads: number;
+  readonly readCap: number;
   readonly elapsedMs: number;
   readonly finished: boolean;
   readonly failed: boolean;
@@ -50,6 +53,8 @@ export class UiState {
   private speechAt = 0;
   private spentUsd = 0;
   private ceilingUsd: number;
+  private reads = 0;
+  private readCap = 0;
   private finished = false;
   private failed = false;
   private readonly root: string;
@@ -70,10 +75,17 @@ export class UiState {
     // open, whatever the last stream did or did not say before it ended.
     this.openTools = 0;
     this.finished = false;
+    // A new stage gets its own read allowance; carrying the last one's count
+    // forward would show a footer that is about a turn nobody is watching.
+    this.reads = 0;
   }
 
   setCeiling(usd: number): void {
     this.ceilingUsd = usd;
+  }
+
+  setReadCap(cap: number): void {
+    this.readCap = cap;
   }
 
   setWidth(width: number): void {
@@ -91,6 +103,7 @@ export class UiState {
         break;
       }
       case "cost": if (event.usd !== null && event.usd > 0) this.spentUsd += event.usd; break;
+      case "reads": this.reads = event.count; if (event.cap > 0) this.readCap = event.cap; break;
       case "done": this.finished = true; this.openTools = 0; if (!event.ok) this.failed = true; break;
       case "error": this.failed = true; break;
       default: break;
@@ -118,6 +131,8 @@ export class UiState {
       speech: this.speech !== null && now - this.speechAt < SPEECH_MS ? this.speech : null,
       spentUsd: this.spentUsd,
       ceilingUsd: this.ceilingUsd,
+      reads: this.reads,
+      readCap: this.readCap,
       elapsedMs: Math.max(0, now - this.startedAt),
       finished: this.finished,
       failed: this.failed,

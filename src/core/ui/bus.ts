@@ -19,6 +19,8 @@ export interface ProgressSink {
   onTitle?(title: string): void;
   /** The stage's own ceiling, for the footer's `$x.xx of $y.yy`. */
   onCeiling?(usd: number): void;
+  /** The stage's `max_reads`, for the footer's `reads 37/120`. 0 = uncapped. */
+  onReadCap?(cap: number): void;
 }
 
 let sink: ProgressSink | null = null;
@@ -60,6 +62,15 @@ export function setProgressCeiling(usd: number): void {
   if (sink === null) return;
   try {
     sink.onCeiling?.(usd);
+  } catch {
+    // See above.
+  }
+}
+
+export function setProgressReadCap(cap: number): void {
+  if (sink === null) return;
+  try {
+    sink.onReadCap?.(cap);
   } catch {
     // See above.
   }

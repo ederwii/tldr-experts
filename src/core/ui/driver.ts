@@ -54,6 +54,7 @@ export interface ProgressHandle extends ProgressSink {
   /** Declared non-optional here: a handle always implements the whole sink. */
   onTitle(title: string): void;
   onCeiling(usd: number): void;
+  onReadCap(cap: number): void;
   /** Erase the view, run `body`, and repaint. For a caller writing to stdout. */
   log(body: () => void): void;
   /** Idempotent. Leaves the last frame on screen and restores the cursor. */
@@ -154,6 +155,9 @@ export function startProgress(options: ProgressOptions): ProgressHandle {
     },
     onCeiling(usd: number): void {
       state.setCeiling(usd);
+    },
+    onReadCap(cap: number): void {
+      state.setReadCap(cap);
     },
     log(body: () => void): void {
       erase();

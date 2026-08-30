@@ -28,7 +28,7 @@ import { raiseCommand, shortBy } from "../budget/budgetView.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
 import { factsPath, loadWorkspace } from "../../hooks/lib/workspace.ts";
 import type { TldrxEvent } from "../events/Event.ts";
-import { setProgressCeiling, setProgressTitle } from "../ui/bus.ts";
+import { setProgressCeiling, setProgressReadCap, setProgressTitle } from "../ui/bus.ts";
 import { acquireLock, releaseLock } from "./Lock.ts";
 import { loadStageSpec, type StageSpec } from "./stageSpec.ts";
 import { countSkipInputs, evaluateSkipIf, openQuestionIds, SkipIfError } from "./skipIf.ts";
@@ -373,7 +373,7 @@ async function runStage(
   // --- headless spawn -----------------------------------------------------
   const taskId = nextTaskId(store, phaseId, stageId);
   // Tell whoever is watching what this turn is. No-op when nobody is.
-  announce(store.runId, stageId, taskId, cap);
+  announce(store.runId, stageId, taskId, cap, maxReads);
   store.append(event(options, store.runId, stageId, "agent.spawned", {
     phase: phaseId,
     task: taskId,
@@ -392,6 +392,7 @@ async function runStage(
     yolo: options.yolo,
     cwd: options.root,
     timeoutMs: spec.planned.timeout_s * 1000,
+    maxReads,
   });
   if (agent.raw !== "") writeRaw(store.runDir, stageId, agent.raw);
 
@@ -406,6 +407,10 @@ async function runStage(
     started_at: options.at,
     ended_at: nowish(options),
     outputs: agent.envelope?.outputs ?? [],
+    // Null on every ordinary attempt, so run.yml is byte-identical to before
+    // unless a cap actually bit. "It ran out of reads" and "it crashed" are
+    // different stories and the file has to be able to tell them apart.
+    stopped_by: agent.stoppedBy,
   });
   store.append(event(options, store.runId, stageId, "agent.result", {
     phase: phaseId,
@@ -414,6 +419,9 @@ async function runStage(
     model,
     effort,
     outputs: agent.envelope?.outputs ?? [],
+    reads: agent.reads,
+    max_reads: maxReads,
+    stopped_by: agent.stoppedBy,
     usage: {
       input_tokens: agent.usage.input_tokens,
       output_tokens: agent.usage.output_tokens,
@@ -1047,11 +1055,18 @@ function recordTask(store: RunStore, phaseId: string, stageId: string, task: Run
  * retry after `reject` is exactly what a person watching wants to know they are
  * looking at. Both calls are no-ops unless a driver is installed.
  */
-function announce(runId: string, stageId: string, taskId: string, ceilingUsd: number): void {
+function announce(
+  runId: string,
+  stageId: string,
+  taskId: string,
+  ceilingUsd: number,
+  maxReads = 0,
+): void {
   const attempt = Number(taskId.replace(/^t/, ""));
   const suffix = Number.isFinite(attempt) ? ` · attempt ${String(attempt)}` : "";
   setProgressTitle(`${stageId} · ${runId}${suffix}`);
   setProgressCeiling(ceilingUsd);
+  setProgressReadCap(maxReads);
 }
 
 function nextTaskId(store: RunStore, phaseId: string, stageId: string): string {

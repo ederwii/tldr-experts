@@ -48,9 +48,16 @@ export const nodeRuntime: Runtime = {
         cwd: opts.cwd,
         env: opts.env as NodeJS.ProcessEnv | undefined,
         stdio: [opts.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-        // Own process group, so the timeout below can kill the whole tree.
-        detached: opts.timeoutMs !== undefined,
+        // Own process group, so the timeout (or the abort) below can kill the
+        // whole tree rather than just the shell in front of it.
+        detached: opts.timeoutMs !== undefined || opts.signal !== undefined,
       });
+
+      const onAbort = (): void => { killProcessTree(child.pid, () => child.kill("SIGKILL")); };
+      if (opts.signal !== undefined) {
+        if (opts.signal.aborted) onAbort();
+        else opts.signal.addEventListener("abort", onAbort, { once: true });
+      }
 
       const timer =
         opts.timeoutMs === undefined
@@ -69,6 +76,7 @@ export const nodeRuntime: Runtime = {
         // newline must still be seen by the progress view, and after `resolve`
         // nobody is listening.
         splitter?.end();
+        opts.signal?.removeEventListener("abort", onAbort);
         if (timer !== null) clearTimeout(timer);
         if (graceTimer !== null) clearTimeout(graceTimer);
         resolve({ exitCode, stdout, stderr, timedOut });

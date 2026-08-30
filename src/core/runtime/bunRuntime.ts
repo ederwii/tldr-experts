@@ -31,9 +31,15 @@ export const bunRuntime: Runtime = {
         stdout: "pipe",
         stderr: "pipe",
         stdin: opts.stdin === undefined ? "ignore" : new TextEncoder().encode(opts.stdin),
-        // Own process group, so the timeout below can kill the whole tree.
-        detached: opts.timeoutMs !== undefined,
+        // Own process group, so the timeout (or the abort) below can kill the
+        // whole tree rather than just the shell in front of it.
+        detached: opts.timeoutMs !== undefined || opts.signal !== undefined,
       });
+      const onAbort = (): void => { killProcessTree(proc.pid, () => proc.kill(9)); };
+      if (opts.signal !== undefined) {
+        if (opts.signal.aborted) onAbort();
+        else opts.signal.addEventListener("abort", onAbort, { once: true });
+      }
       // Drain before awaiting exit: a child that fills the pipe buffer blocks on
       // write, and would never exit if nothing were reading.
       const collected: Promise<[string, string]> = Promise.all([
@@ -54,6 +60,7 @@ export const bunRuntime: Runtime = {
             }, opts.timeoutMs);
       const exitCode = await proc.exited;
       if (timer !== null) clearTimeout(timer);
+      opts.signal?.removeEventListener("abort", onAbort);
       // The process is gone; anything still holding its pipes is not ours to
       // wait for. Settle on what was read rather than hang. See killProcessTree.
       const [stdout, stderr] = await withinGrace(collected);

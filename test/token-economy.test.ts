@@ -450,3 +450,120 @@ describe("the shared knowledge budget is split by rank (N4)", () => {
     expect(knowledgeShares([true, true], 0)).toEqual([0, 0]);
   });
 });
+
+// --- the read cap (N5) -----------------------------------------------------
+
+import { RunStore } from "../src/core/run/RunStore.ts";
+import { EventLog } from "../src/core/events/EventLog.ts";
+import {
+  defaultMaxReads, isReadTool, readsLabel, STOPPED_BY_MAX_READS,
+} from "../src/core/facilitator/readCap.ts";
+import { UiState } from "../src/core/ui/state.ts";
+import { footer } from "../src/core/ui/scene.ts";
+
+const ORIGINAL_PATH = process.env.PATH ?? "";
+const FAKE_KEYS = [
+  "FAKE_CLAUDE_RUNDIR", "FAKE_CLAUDE_OUTPUTS", "FAKE_CLAUDE_READS", "FAKE_CLAUDE_HANG_MS",
+] as const;
+
+afterEach(() => {
+  process.env.PATH = ORIGINAL_PATH;
+  for (const key of FAKE_KEYS) delete process.env[key];
+});
+
+function readingWorkspace(maxReads: number): FacilitatorWorkspace {
+  const made = makeFacilitatorWorkspace({
+    scope: "demo", budgetUsd: 10,
+    stages: [{
+      id: "alpha", phase: "01-what", budgetUsd: 6, gate: "auto",
+      outputs: [{ path: "01-what/handoff.md" }],
+      maxReads, timeoutS: 30,
+    }],
+  });
+  open.push(made);
+  process.env.PATH = made.binDir;
+  process.env.FAKE_CLAUDE_RUNDIR = made.runDir;
+  process.env.FAKE_CLAUDE_OUTPUTS = JSON.stringify({ "01-what/handoff.md": "# h\n" });
+  return made;
+}
+
+describe("max_reads (N5)", () => {
+  test("only Read, Glob and Grep count", () => {
+    expect(["Read", "Glob", "Grep"].every(isReadTool)).toBe(true);
+    expect(["Write", "Edit", "Bash", "StructuredOutput"].some(isReadTool)).toBe(false);
+  });
+
+  test("the shipped defaults are per stage kind", () => {
+    expect(defaultMaxReads("what")).toBe(120);
+    expect(defaultMaxReads("how")).toBe(120);
+    expect(defaultMaxReads("plan")).toBe(120);
+    expect(defaultMaxReads("build")).toBe(200);
+    expect(defaultMaxReads("watch")).toBe(60);
+  });
+
+  test("the cap stops a live sub-agent and the stage fails with the reason", async () => {
+    const ws = readingWorkspace(3);
+    // The fake emits 20 reads and then sleeps 30 s. If the cap did not kill it,
+    // this test would take 30 s and the stage would succeed.
+    process.env.FAKE_CLAUDE_READS = "20";
+    process.env.FAKE_CLAUDE_HANG_MS = "30000";
+
+    const started = Date.now();
+    const outcome = await runNext({
+      root: ws.root, dryRun: false, mode: "headless", yolo: false,
+      actor: "alan", at: "2026-08-28T09:00:00Z",
+    });
+    expect(Date.now() - started).toBeLessThan(20_000);
+    expect(outcome.code).toBe(5);
+    expect(outcome.lines.join("\n")).toContain("max_reads is 3");
+
+    const store = RunStore.open(ws.runDir);
+    const task = store.run.phases[0]?.stages[0]?.tasks[0];
+    expect(task?.status).toBe("failed");
+    expect(task?.stopped_by).toBe(STOPPED_BY_MAX_READS);
+
+    const result = EventLog.forRun(ws.runDir).read().find((e) => e.type === "agent.result");
+    expect(result?.payload.stopped_by).toBe(STOPPED_BY_MAX_READS);
+    expect(result?.payload.max_reads).toBe(3);
+    expect(result?.payload.reads).toBe(3);
+  }, 40_000);
+
+  test("under the cap, nothing changes and stopped_by stays null", async () => {
+    const ws = readingWorkspace(50);
+    process.env.FAKE_CLAUDE_READS = "2";
+    process.env.FAKE_CLAUDE_HANG_MS = "0";
+
+    const outcome = await runNext({
+      root: ws.root, dryRun: false, mode: "headless", yolo: false,
+      actor: "alan", at: "2026-08-28T09:00:00Z",
+    });
+    expect(outcome.code).toBe(0);
+    const store = RunStore.open(ws.runDir);
+    const task = store.run.phases[0]?.stages[0]?.tasks[0];
+    expect(task?.status).toBe("done");
+    expect(task?.stopped_by ?? null).toBeNull();
+    const result = EventLog.forRun(ws.runDir).read().find((e) => e.type === "agent.result");
+    expect(result?.payload.reads).toBe(2);
+  }, 30_000);
+
+  test("--max-reads overrides the stage file", async () => {
+    const ws = readingWorkspace(500);
+    process.env.FAKE_CLAUDE_READS = "20";
+    process.env.FAKE_CLAUDE_HANG_MS = "30000";
+    const outcome = await runNext({
+      root: ws.root, dryRun: false, mode: "headless", yolo: false, maxReads: 2,
+      actor: "alan", at: "2026-08-28T09:00:00Z",
+    });
+    expect(outcome.code).toBe(5);
+    expect(outcome.lines.join("\n")).toContain("max_reads is 2");
+  }, 40_000);
+
+  test("the UI footer counts reads against the cap", () => {
+    const state = new UiState({ root: "/w", startedAt: 0, ceilingUsd: 6 });
+    state.setReadCap(120);
+    state.apply({ kind: "reads", count: 37, cap: 120 }, 0);
+    expect(footer(state.snapshot(0))).toContain("reads 37/120");
+    expect(readsLabel(37, 120)).toBe("reads 37/120");
+    expect(readsLabel(37, 0)).toBe("reads 37");
+  });
+});

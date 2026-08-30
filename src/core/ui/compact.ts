@@ -6,6 +6,7 @@
  */
 import type { UiSnapshot } from "./state.ts";
 import { clockFace } from "./summary.ts";
+import { readsLabel } from "../facilitator/readCap.ts";
 
 /** Braille dots. Ten frames at 4 fps is a two-and-a-half second cycle. */
 export const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
@@ -16,7 +17,8 @@ export function renderCompact(state: UiSnapshot, cols: number, tick: number): st
     ? `$${state.spentUsd.toFixed(2)}/$${state.ceilingUsd.toFixed(2)}`
     : `$${state.spentUsd.toFixed(2)}`;
   const head = `${mark} ${clockFace(state.elapsedMs)} `;
-  const tail = ` · ${money}`;
+  const reads = state.readCap > 0 ? ` · ${readsLabel(state.reads, state.readCap)}` : "";
+  const tail = `${reads} · ${money}`;
   const room = Math.max(8, cols - head.length - tail.length - 1);
   const activity = state.activity.length <= room
     ? state.activity
