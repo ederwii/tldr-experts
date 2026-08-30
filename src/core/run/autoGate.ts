@@ -24,9 +24,9 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { openBlocks, parseQuestions } from "../text/questions.ts";
+import { openBlocks, parseQuestions, unreadableQuestionHeadings } from "../text/questions.ts";
 import type { RunBudget } from "../budget/RunBudget.ts";
-import { runCheck, type CheckOutcome } from "./checks.ts";
+import { runCheck, unverifiedCount, type CheckOutcome } from "./checks.ts";
 import type { PlannedStage } from "./workflowPreset.ts";
 import type { RunStage } from "./RunFile.ts";
 
@@ -63,7 +63,7 @@ export interface AutoGateInput {
 export async function evaluateAutoGate(input: AutoGateInput): Promise<AutoGateVerdict> {
   const conditions: AutoGateCondition[] = [
     checksCondition(input.checks),
-    questionsCondition(input.runDir, input.phaseId),
+    questionsCondition(input.runDir, input.phaseId, input.planned),
     budgetCondition(input),
     statusCondition(input.stage),
     await claimSourcesCondition(input),
@@ -93,13 +93,68 @@ function checksCondition(checks: readonly CheckOutcome[]): AutoGateCondition {
   };
 }
 
-function questionsCondition(runDir: string, phaseId: string): AutoGateCondition {
-  const open = openQuestions(join(runDir, phaseId, "questions.md"));
+/**
+ * The reason an auto gate falls to a human when the stage was told to write
+ * questions and wrote a file the parser cannot read. Verbatim, because it is what
+ * the operator sees and what the tests assert.
+ */
+export const NO_PARSEABLE_QUESTIONS =
+  "questions.md has no parseable question (expected `## Qn · …` + metadata line) — see template";
+
+/**
+ * Zero open questions is only an ANSWER when the file could be read.
+ *
+ * Measured 2026-08-29: a stage that declares `questions.md` as an output wrote
+ * `### Q1 — …` with a `**Answer:**` line, following the shipped template rather
+ * than the parser's §2.7 grammar. The parser found zero blocks, "0 open" was
+ * recorded as satisfied, and the gate closed over four unanswered questions. An
+ * empty parse of a file the stage was told to write is silence, not consent.
+ */
+function questionsCondition(runDir: string, phaseId: string, planned: PlannedStage): AutoGateCondition {
+  const path = join(runDir, phaseId, "questions.md");
+  if (declaresQuestions(planned)) {
+    const unreadable = unreadableHeadings(path);
+    if (unreadable.length > 0) {
+      return { id: "questions", ok: false, detail: `${NO_PARSEABLE_QUESTIONS} (${unreadable.join(", ")})` };
+    }
+    if (!existsSync(path) || parsedBlocks(path) === 0) {
+      return { id: "questions", ok: false, detail: NO_PARSEABLE_QUESTIONS };
+    }
+  }
+  const open = openQuestions(path);
   return {
     id: "questions",
     ok: open.length === 0,
     detail: open.length === 0 ? "0 open" : `${String(open.length)} open (${open.join(", ")})`,
   };
+}
+
+/**
+ * True when `stage.yml outputs:` names a questions.md — i.e. the stage was told to
+ * PRODUCE one. Deliberately not `questions:`, which only caps how many a stage may
+ * ask: a stage that is merely allowed to ask and asks nothing is silent by right,
+ * while a stage told to write the file and writing one nothing can read is not.
+ */
+export function declaresQuestions(planned: PlannedStage): boolean {
+  return planned.outputs.some((path) => path.endsWith("questions.md"));
+}
+
+/** `## Qn` headings the §2.7 parser cannot read — wrong marker, wrong separator. */
+export function unreadableHeadings(path: string): readonly string[] {
+  if (!existsSync(path)) return [];
+  try {
+    return unreadableQuestionHeadings(readFileSync(path, "utf8"));
+  } catch {
+    return [];
+  }
+}
+
+function parsedBlocks(path: string): number {
+  try {
+    return parseQuestions(readFileSync(path, "utf8")).blocks.length;
+  } catch {
+    return 0;
+  }
 }
 
 /**
@@ -139,9 +194,23 @@ async function claimSourcesCondition(input: AutoGateInput): Promise<AutoGateCond
     { id: "claim-sources", on: "post-write", repo: null, command: null, expect_exit: 0 },
     { root: input.root, runDir: input.runDir, stage: input.planned },
   );
+  if (outcome.status === "failed") {
+    return { id: "claim-sources", ok: false, detail: `failed: ${outcome.detail}` };
+  }
+  // Zero refused AND zero unverified. A citation nothing could check is exactly
+  // the one a person should look at, and it is the only thing standing between
+  // an unfetched URL and an automatic signature.
+  const unchecked = unverifiedCount(outcome);
+  if (unchecked > 0) {
+    return {
+      id: "claim-sources",
+      ok: false,
+      detail: `${String(unchecked)} unverified citation(s) — ${outcome.detail}`,
+    };
+  }
   return {
     id: "claim-sources",
-    ok: outcome.status !== "failed",
+    ok: true,
     detail: outcome.status === "passed" ? "passed" : `${outcome.status}: ${outcome.detail}`,
   };
 }

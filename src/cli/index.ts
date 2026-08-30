@@ -29,6 +29,7 @@ import { retroCommand } from "./commands/retro.ts";
 import { watchCommand } from "./commands/watch.ts";
 import { ticketsCommand } from "./commands/tickets.ts";
 import { interviewCommand } from "./commands/interview.ts";
+import { questionsCommand } from "./commands/questions.ts";
 import { hookCommand, statuslineCommand } from "./commands/hook.ts";
 import { versionCommand } from "./commands/version.ts";
 import { makeHelpCommand, renderCommandHelp } from "./commands/help.ts";
@@ -44,6 +45,7 @@ export const COMMANDS: readonly Command[] = [
   nextCommand,
   answerCommand,
   interviewCommand,
+  questionsCommand,
   approveCommand,
   rejectCommand,
   budgetCommand,

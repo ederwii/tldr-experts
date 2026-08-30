@@ -70,5 +70,18 @@ Nothing advances until this is recorded in `run.yml` and `events.jsonl`.
   - `$ <command> → exit <n>` — only under Evidence ledger, only for commands listed in `.tldrx/workspace.yml`.
   - `absent:<path>` — you looked there and found nothing.
 - Do not cite templates, expert files or directories (`.tldrx/experts/*` is not evidence).
+- Questions go in `questions.md`, and its shape is a PARSER's, not a style. One regex reads a block — `^## (Q\d+) · (.+)$` — and a heading that misses it is not half-read, it is read as ABSENT: the gate then records "0 open questions" and signs itself over questions nobody answered. Write each one EXACTLY like this, `·` being U+00B7 MIDDLE DOT:
+  ```
+  ## Q1 · Where does leaderboard state live?
+  <!-- id: Q1 | status: open | area: data-model | asked_by: architect | asked_at: 2026-08-29T14:02:11Z -->
+  Why asked: no ranking store exists in the map [src: absent:.tldrx/map/api/domains.md]
+
+  - A) New Postgres table, recomputed on hunt completion
+  - B) Redis sorted set
+  - C) other — write it below
+
+  [Answer]:
+  ```
+  All five metadata keys are required; `Why asked:` must END with a `[src: …]` token; 2–5 options lettered A–E in order; exactly one empty `[Answer]:` slot. Ids ascend. Never write `### Qn — …`, `**Answer:**`, or the answered footer — the hook writes that. `tldrx questions lint` checks the file; `--fix` converts a file already written the wrong way.
 - Before asking a question, grep `.tldrx/memory/facts.yml`; if the answer is there, cite `F<n>` instead of asking.
 - Write only the declared outputs; do not add sections beyond the ones listed under Produce.

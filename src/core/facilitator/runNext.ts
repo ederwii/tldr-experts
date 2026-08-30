@@ -20,7 +20,7 @@ import { RunStore } from "../run/RunStore.ts";
 import { isTerminal, type GateType, type RunFile, type RunPhase, type RunStage, type RunTask } from "../run/RunFile.ts";
 import { runChecks } from "../run/checks.ts";
 import { approve } from "../run/gates.ts";
-import { AUTO_GATE_ACTOR, evaluateAutoGate } from "../run/autoGate.ts";
+import { AUTO_GATE_ACTOR, evaluateAutoGate, unreadableHeadings } from "../run/autoGate.ts";
 import { gatePolicyFor } from "../run/gatePolicy.ts";
 import { PresetError, type PlannedStage } from "../run/workflowPreset.ts";
 import { remaining } from "../budget/wouldExceed.ts";
@@ -603,6 +603,24 @@ async function commitStage(
   } catch (error) {
     if (error instanceof PendingError) return out(EXIT_USAGE, [...notes, error.message]);
     throw error;
+  }
+
+  // A questions.md the §2.7 parser cannot read is not "no questions" — it is a
+  // file nobody, including the gate, can see into. Refused HERE rather than at the
+  // gate because `--commit` is the last moment the host session that wrote it is
+  // still around to fix it. Measured 2026-08-29: an in-session stage wrote
+  // `### Q1 — …` / `**Answer:**` from the old template, and four questions
+  // vanished between the sub-agent and the run.
+  const unreadable = unreadableHeadings(join(store.runDir, phaseId, "questions.md"));
+  if (unreadable.length > 0) {
+    return out(EXIT_AGENT_FAILED, [
+      ...notes,
+      `${phaseId}/questions.md has ${unreadable.length} question(s) the parser cannot read `
+        + `(${unreadable.join(", ")}) — a heading must be \`## Qn · <title>\` with the `
+        + "`<!-- id: Qn | status: open | area: … | asked_by: … | asked_at: … -->` line under it.",
+      "As written they are invisible: the gate would read this file as \"0 open\" and sign itself.",
+      `Fix: \`tldrx questions lint --run ${store.runId} --fix\`, then \`tldrx next --commit\` again.`,
+    ]);
   }
 
   const taskId = nextTaskId(store, phaseId, stageId);
