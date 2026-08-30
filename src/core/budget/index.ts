@@ -9,11 +9,11 @@ export { raiseBudget, describeRaise, BudgetRaiseError, MIN_RAISE_USD, MAX_RAISE_
 export type { RaiseRequest, RaiseOutcome } from "./raiseBudget.ts";
 export {
   buildProgramCost, buildRunCost, renderProgramCost, renderRunCost, toAttempt, median,
-  outputTokensForStage,
+  outputTokensForStage, attemptTokensForStage,
 } from "./costView.ts";
 export type { CostAttempt, CostStage, CostRun, CostProgram, CostTokens } from "./costView.ts";
 export { estimateNextStage, renderEstimate, EstimateError } from "./estimateView.ts";
-export type { StageEstimate } from "./estimateView.ts";
+export type { StageEstimate, HistoryBasis } from "./estimateView.ts";
 export {
   MODEL_PRICES, priceFor, contextTokensFor, estimateTokensFromBytes,
   BYTES_PER_TOKEN, CACHE_READ_MULTIPLIER, CACHE_WRITE_MULTIPLIER, DEFAULT_CONTEXT_TOKENS,

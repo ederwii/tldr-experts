@@ -85,7 +85,9 @@ tldrx cost --json
 ```
 
 Read off `agent.result` events and nothing else — **no token count is ever multiplied by a
-price here**. All four token counters, including both prompt-cache halves.
+price here**. All four token counters, including both prompt-cache halves, on **every attempt
+line** as well as the stage and run totals — a stage that ran once still shows where its money
+went.
 
 Two rules it will not bend:
 
@@ -105,10 +107,33 @@ tldrx run estimate [<run>] [--json]
 ```
 
 It says so in its own output. The next stage's prompt is assembled by the same code `next`
-uses and weighed by the same context ledger — that half is **measured** bytes. The output
-half is the **median** output tokens of past attempts at that stage id in this workspace; with
-no history it prints no estimate rather than inventing one. Prices and context windows are a
-dated `[assumption]` in `src/core/budget/modelPrices.ts`.
+uses and weighed by the same context ledger — that half is **measured** bytes. The other three
+terms — **cache write, cache read and output** — are the **median** of each counter over past
+attempts at that stage id in this workspace, falling back to attempts at any stage and saying
+which sample it used; with no history at all it prints no estimate rather than inventing one.
+Prices, cache multipliers and context windows are a dated `[assumption]` in
+`src/core/budget/modelPrices.ts`.
+
+**Cache traffic is priced because that is where the money is.** Until 2026-08-30 the estimate
+multiplied input and output only. Measured on a real What stage: it said **$0.33**, the
+comparable real attempt cost **$1.70** — **5x** — and the attempt's ledger says why: 56 input
+· 29.0k output · **166.3k cache write** · **3,747.1k cache read**. The two cache columns were
+most of the bill and none of the formula, even though `agent.result` had recorded both since
+wave N. Priced at write **1.25x** and read **0.1x** an input token, the same fixture now
+estimates **$1.46**:
+
+```
+prompt 682 B ≈ 189 input tokens [measured bytes; ~3.6 B/token is an assumption]
+cache and output: medians of 1 past attempt(s) at `alpha` here
+input ~189 · cache write ~166k · cache read ~3,747k · output ~29k → ~$1.46
+ESTIMATE: $1.46 ($0.00 in + $0.42 cache write + $0.75 cache read + $0.29 out).
+```
+
+The input term and the cache-write term **overlap on a cold first turn** — bytes sent cold
+are billed as cache creation, not as fresh input — so a first attempt's total leans high by
+roughly the prompt. That is the safe direction for a ceiling, and it is stated rather than
+silently corrected: closing it needs a measurement of cache lifetime, which this repo does not
+have.
 
 ## Moving a ceiling
 

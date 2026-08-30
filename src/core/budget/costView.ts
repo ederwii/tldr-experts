@@ -164,17 +164,39 @@ export function toAttempt(event: TldrxEvent): CostAttempt | null {
   };
 }
 
-/** Output tokens of every past attempt at a stage with this id, across the workspace. */
-export function outputTokensForStage(root: string, stageId: string): readonly number[] {
-  const out: number[] = [];
+/**
+ * The token counters of every past attempt at a stage with this id, across the
+ * workspace — or, with `stageId` null, of every past attempt at ANY stage.
+ *
+ * All FOUR counters, not just output. `run estimate` needs the two cache halves
+ * as badly as it needs output: on a real What stage the ledger read 56 input,
+ * 29.0k output, 166.3k cache write and 3,747.1k cache read, so an estimate built
+ * on output alone was pricing a rounding error and calling it the bill.
+ *
+ * An attempt that reported no output tokens carries no usage worth a median —
+ * that is the in-session/unmetered path, where the host session held the meter —
+ * so it is left out of the sample rather than counted as a row of zeroes.
+ */
+export function attemptTokensForStage(
+  root: string, stageId: string | null,
+): readonly CostTokens[] {
+  const out: CostTokens[] = [];
   for (const dir of listRunDirs(root)) {
     for (const event of EventLog.forRun(dir).read()) {
       const attempt = toAttempt(event);
-      if (attempt === null || attempt.stage !== stageId) continue;
-      if (attempt.tokens.output > 0) out.push(attempt.tokens.output);
+      if (attempt === null) continue;
+      if (stageId !== null && attempt.stage !== stageId) continue;
+      if (attempt.tokens.output > 0) out.push(attempt.tokens);
     }
   }
-  return out.sort((a, b) => a - b);
+  return out;
+}
+
+/** Output tokens of every past attempt at a stage with this id, across the workspace. */
+export function outputTokensForStage(root: string, stageId: string): readonly number[] {
+  return attemptTokensForStage(root, stageId)
+    .map((t) => t.output)
+    .sort((a, b) => a - b);
 }
 
 /** The middle value, or the mean of the middle two. Null for an empty sample. */
@@ -201,13 +223,15 @@ export function renderRunCost(cost: CostRun): string {
       `  ${`${stage.phase}/${stage.stage}`.padEnd(width)}  ${pad(`$${stage.usd.toFixed(2)}`)}  `
       + `${plural(stage.attempts.length, "attempt")}${stage.unmetered ? " (some unmetered)" : ""}`,
     );
-    if (stage.attempts.length > 1) {
-      for (const attempt of stage.attempts) {
-        lines.push(
-          `  ${" ".repeat(width)}  ${pad(attempt.usd === null ? "—" : `$${attempt.usd.toFixed(2)}`)}  `
-          + `${attempt.task}${attempt.model === null ? "" : ` · ${attempt.model}`}`,
-        );
-      }
+    // Every attempt is expanded, not only the retried ones. Before this, a stage
+    // that ran once printed a dollar figure and nothing about where it went — and
+    // cache read is where it goes, so hiding the columns hid the answer.
+    for (const attempt of stage.attempts) {
+      lines.push(
+        `  ${" ".repeat(width)}  ${pad(attempt.usd === null ? "—" : `$${attempt.usd.toFixed(2)}`)}  `
+        + `${attempt.task}${attempt.model === null ? "" : ` · ${attempt.model}`}`
+        + `  ${tokenColumns(attempt.tokens)}`,
+      );
     }
   }
   if (cost.stages.length === 0) lines.push("  no agent.result events — nothing has been spent on this run.");
@@ -239,7 +263,12 @@ function unmeteredSuffix(count: number): string {
 }
 
 function tokenLine(t: CostTokens): string {
-  return `tokens: ${tokens(t.input)} in · ${tokens(t.output)} out · `
+  return `tokens: ${tokenColumns(t)}`;
+}
+
+/** The four counters in one column group — the same order at every level. */
+function tokenColumns(t: CostTokens): string {
+  return `${tokens(t.input)} in · ${tokens(t.output)} out · `
     + `${tokens(t.cacheCreation)} cache write · ${tokens(t.cacheRead)} cache read`;
 }
 
