@@ -7,6 +7,7 @@
  * references live inside function bodies, never at module scope.
  */
 import { killProcessTree } from "./killProcessTree.ts";
+import { LineSplitter } from "./lineSplitter.ts";
 import { OUTPUT_GRACE_MS } from "./outputGrace.ts";
 import type { Runtime, SpawnOptions, SpawnResult } from "./Runtime.ts";
 
@@ -36,7 +37,12 @@ export const bunRuntime: Runtime = {
       // Drain before awaiting exit: a child that fills the pipe buffer blocks on
       // write, and would never exit if nothing were reading.
       const collected: Promise<[string, string]> = Promise.all([
-        new Response(proc.stdout).text(),
+        // Only the line-callback path reads chunk by chunk. Without a callback
+        // this is the same one-shot read it always was, so nothing about the
+        // buffered behaviour is inferred from the streaming rewrite.
+        opts.onStdoutLine === undefined
+          ? new Response(proc.stdout).text()
+          : drainLines(proc.stdout, opts.onStdoutLine),
         new Response(proc.stderr).text(),
       ]);
       const timer =
@@ -95,4 +101,31 @@ function withinGrace(collected: Promise<[string, string]>): Promise<[string, str
       () => { clearTimeout(timer); resolve(["", ""]); },
     );
   });
+}
+
+/**
+ * Read a stream to the end, handing each complete line to `onLine` as it arrives
+ * and still returning the whole text. Both views come off the same bytes — the
+ * caller is never asked to choose between progress and a result.
+ */
+async function drainLines(stream: ReadableStream<Uint8Array>, onLine: (line: string) => void): Promise<string> {
+  const decoder = new TextDecoder();
+  const splitter = new LineSplitter(onLine);
+  let text = "";
+  const reader = stream.getReader();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+      text += chunk;
+      splitter.push(chunk);
+    }
+    const tail = decoder.decode();
+    if (tail !== "") { text += tail; splitter.push(tail); }
+  } finally {
+    splitter.end();
+    reader.releaseLock();
+  }
+  return text;
 }

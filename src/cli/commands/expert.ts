@@ -15,6 +15,7 @@ import type { Command } from "../Command.ts";
 import { EXIT_FAILED, EXIT_NOT_FOUND, EXIT_OK } from "../exitCodes.ts";
 import { boolFlag, numberFlag, parseArgs, stringFlag, UsageError, type ParsedArgs } from "../argv.ts";
 import { effortFlag } from "../effort.ts";
+import { startUi } from "../ui.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
 import type { EffortLevel } from "../../core/schemas/stage.ts";
 import {
@@ -32,8 +33,9 @@ const USAGE = [
   "Usage:",
   "  tldrx expert list [--root <path>] [--json]",
   "  tldrx expert create <name> [--role <slug>] [--domain <slug>] [--stack <lang>] [--root <path>]",
-  "  tldrx expert train <name> --area <area> [--mode light|full] [--max-usd <n>]",
-  "                                          [--model <m>] [--effort <level>] [--prepare|--commit] [--yolo] [--root <path>]",
+  "  tldrx expert train <name> --area <area> [--mode light|full] [--max-usd <n>] [--model <m>]",
+  "                                          [--effort <level>] [--prepare|--commit] [--yolo]",
+  "                                          [--ui scene|compact|plain|off] [--root <path>]",
   "  tldrx expert train <name> --area <area> [--mode light|full] --print-prompt [--root <path>]",
   "  tldrx expert recompute [<name>] [--root <path>] [--json]",
 ].join("\n");
@@ -44,7 +46,8 @@ export const expertCommand: Command = {
   usage: "tldrx expert list [--root <path>] [--json]\n" +
     "       tldrx expert create <name> [--role <slug>] [--domain <slug>] [--stack <lang>] [--root <path>]\n" +
     "       tldrx expert train <name> --area <area> [--mode light|full] [--max-usd <n>] [--model <m>]\n" +
-    "                                               [--effort <level>] [--prepare|--commit] [--yolo] [--print-prompt] [--root <path>]\n" +
+    "                                               [--effort <level>] [--prepare|--commit] [--yolo] [--print-prompt]\n" +
+    "                                               [--ui scene|compact|plain|off] [--root <path>]\n" +
     "       tldrx expert recompute [<name>] [--root <path>] [--json]",
   subcommands: ["list", "create", "train", "recompute"],
   implemented: true,
@@ -140,7 +143,7 @@ async function create(argv: readonly string[]): Promise<number> {
   }
 }
 
-const TRAIN_VALUE_FLAGS = ["root", "area", "mode", "max-usd", "model", "effort"] as const;
+const TRAIN_VALUE_FLAGS = ["root", "area", "mode", "max-usd", "model", "effort", "ui"] as const;
 
 async function train(argv: readonly string[]): Promise<number> {
   let args: ParsedArgs;
@@ -221,19 +224,38 @@ async function train(argv: readonly string[]): Promise<number> {
     return EXIT_FAILED;
   }
 
-  const outcome = await runTraining({
-    root,
-    expert: name,
-    area: areaId,
-    mode: modeArg,
-    run: runMode,
-    maxUsd,
-    model: stringFlag(args, "model") ?? null,
-    effort,
-    yolo: boolFlag(args, "yolo"),
-    actor: currentActor(),
-    at: nowRfc3339(),
-  });
+  // The complaint this answers, in the owner's words: "I ran `tldrx expert
+  // train …` and it sat frozen for minutes with zero feedback."
+  let ui;
+  try {
+    ui = startUi(args, {
+      root,
+      title: `train ${name}/${areaId} · ${modeArg}`,
+      spawns: runMode === "headless",
+    });
+  } catch (error) {
+    process.stderr.write(`tldrx expert train: ${message(error)}\n`);
+    return EXIT_FAILED;
+  }
+
+  let outcome;
+  try {
+    outcome = await runTraining({
+      root,
+      expert: name,
+      area: areaId,
+      mode: modeArg,
+      run: runMode,
+      maxUsd,
+      model: stringFlag(args, "model") ?? null,
+      effort,
+      yolo: boolFlag(args, "yolo"),
+      actor: currentActor(),
+      at: nowRfc3339(),
+    });
+  } finally {
+    ui.stop();
+  }
 
   for (const warning of outcome.warnings ?? []) process.stderr.write(`${warning}\n`);
   const text = `${outcome.lines.join("\n")}\n`;

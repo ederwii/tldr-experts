@@ -18,6 +18,7 @@ import {
 import { boolFlag, numberFlag, parseArgs, stringFlag, UsageError } from "../argv.ts";
 import { workspaceRootFrom } from "../workspace.ts";
 import { effortFlag } from "../effort.ts";
+import { startUi } from "../ui.ts";
 import { fail } from "../report.ts";
 import { runTriage, type TriageMode } from "../../core/seed/runTriage.ts";
 import { applySplit } from "../../core/seed/applySplit.ts";
@@ -25,7 +26,7 @@ import { answerSplitQuestion } from "../../core/seed/answerSplitQuestion.ts";
 import { SeedError } from "../../core/seed/collectSeed.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
 
-const VALUE_FLAGS = ["out", "threshold-tokens", "model", "effort", "max-usd", "root"];
+const VALUE_FLAGS = ["out", "threshold-tokens", "model", "effort", "max-usd", "root", "ui"];
 
 /** Codes whose report belongs on stdout: the command did what it said it would. */
 const INFORMATIONAL: readonly number[] = [EXIT_OK];
@@ -35,7 +36,8 @@ export const seedCommand: Command = {
   summary: "Triage a big seed into several runs, then create them",
   usage: "tldrx seed triage <path> [--out <dir>] [--json] [--threshold-tokens <n>] [--root <path>]\n" +
     "       tldrx seed triage <path> --propose [--model <m>] [--effort <level>] [--max-usd <n>]\n" +
-    "                                          [--prepare|--commit] [--yolo] [--out <dir>] [--root <path>]\n" +
+    "                                          [--ui scene|compact|plain|off] [--prepare|--commit]\n" +
+    "                                          [--yolo] [--out <dir>] [--root <path>]\n" +
     "       tldrx seed answer <split.yml> <Qid> \"<text>\" [--root <path>]\n" +
     "       tldrx seed apply <split.yml> [--dry-run] [--root <path>]",
   subcommands: ["triage", "answer", "apply"],
@@ -70,21 +72,29 @@ async function triage(argv: readonly string[]): Promise<number> {
       throw new UsageError("--prepare/--commit only mean something with --propose (the free pass spawns nothing)");
     }
 
-    const outcome = await runTriage({
-      root,
-      seedPath,
-      out: stringFlag(args, "out"),
-      json: boolFlag(args, "json"),
-      thresholdTokens: numberFlag(args, "threshold-tokens"),
-      propose,
-      mode,
-      model: stringFlag(args, "model") ?? null,
-      effort: effortFlag(args),
-      maxUsd: numberFlag(args, "max-usd"),
-      yolo: boolFlag(args, "yolo"),
-      at: nowRfc3339(),
-      now: new Date(),
-    });
+    // Only `--propose` in headless mode spawns anything; the free counting pass
+    // and the `--prepare`/`--commit` halves get an inert handle.
+    const ui = startUi(args, { root, title: `triage ${seedPath}`, spawns: propose && mode === "headless" });
+    let outcome;
+    try {
+      outcome = await runTriage({
+        root,
+        seedPath,
+        out: stringFlag(args, "out"),
+        json: boolFlag(args, "json"),
+        thresholdTokens: numberFlag(args, "threshold-tokens"),
+        propose,
+        mode,
+        model: stringFlag(args, "model") ?? null,
+        effort: effortFlag(args),
+        maxUsd: numberFlag(args, "max-usd"),
+        yolo: boolFlag(args, "yolo"),
+        at: nowRfc3339(),
+        now: new Date(),
+      });
+    } finally {
+      ui.stop();
+    }
 
     const text = `${outcome.lines.join("\n")}\n`;
     if (INFORMATIONAL.includes(outcome.code)) process.stdout.write(text);

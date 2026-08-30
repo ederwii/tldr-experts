@@ -2,19 +2,31 @@
  * Spawning one sub-agent (spec §5, headless mode).
  *
  * Every flag here was read out of `claude --help` before it was used —
- * `-p/--print`, `--output-format json`, `--json-schema`, `--model`,
+ * `-p/--print`, `--output-format`, `--json-schema`, `--model`,
  * `--max-budget-usd`, `--allowedTools`, `--dangerously-skip-permissions`
- * (2026-08-28), and `--effort <level>` (2026-08-29, whose help line reads
- * "Effort level for the current session (low, medium, high, xhigh, max)"). A
- * flag nobody has seen in `--help` does not go in this file.
+ * (2026-08-28), `--effort <level>` (2026-08-29, whose help line reads
+ * "Effort level for the current session (low, medium, high, xhigh, max)"), and
+ * `--verbose` (2026-08-29). A flag nobody has seen in `--help` does not go in
+ * this file.
+ *
+ * **`stream-json`, since wave K.** The format changed from `json` to
+ * `stream-json` so a waiting human can be told what the sub-agent is doing while
+ * it does it. Two measured facts, from one real call on `claude` 2.1.251:
+ * `--verbose` is REQUIRED (`stream-json` in print mode refuses without it, before
+ * spending anything), and `--json-schema` still works — the last `result` event
+ * carries `structured_output` exactly as the single-blob format did. So the
+ * validation path below is unchanged; only the transport is different, and
+ * `resolveResultDoc` reads either one.
  *
  * The prompt goes in on **stdin**, not as an argv element: a stage prompt is tens
  * of kilobytes with newlines and quotes in it, and an argv is neither the right
  * size nor the right shape for that.
  */
 import { runtime } from "../runtime/index.ts";
+import { emitAgentEvent } from "../ui/bus.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
-import { ENVELOPE_SCHEMA, parseClaudeJson, toEnvelope, toUsage, type AgentEnvelope, type AgentUsage } from "./envelope.ts";
+import { AgentStream, resolveResultDoc, type AgentEvent } from "./agentEvents.ts";
+import { ENVELOPE_SCHEMA, toEnvelope, toUsage, type AgentEnvelope, type AgentUsage, type ClaudeResultJson } from "./envelope.ts";
 
 export const CLAUDE_BIN = "claude";
 
@@ -55,6 +67,12 @@ export interface AgentRequest {
   readonly tools?: readonly string[];
   /** Replaces `ENVELOPE_SCHEMA` for a sub-agent that returns something else. */
   readonly schema?: Readonly<Record<string, unknown>>;
+  /**
+   * Every `AgentEvent` derived from the stream, as it arrives. The global
+   * progress bus (`core/ui/bus.ts`) gets the same events either way; this is the
+   * direct hook, for a caller that wants them without installing a sink.
+   */
+  readonly onEvent?: (event: AgentEvent) => void;
 }
 
 export interface AgentOutcome {
@@ -80,7 +98,10 @@ export function allowedTools(workspaceCommands: readonly string[]): readonly str
 }
 
 export function buildClaudeArgs(request: AgentRequest): readonly string[] {
-  const args: string[] = ["-p", "--output-format", "json"];
+  // `--verbose` is not optional here: measured 2026-08-29, `claude -p
+  // --output-format stream-json` without it exits with "When using --print,
+  // --output-format=stream-json requires --verbose" and spends $0.00.
+  const args: string[] = ["-p", "--output-format", "stream-json", "--verbose"];
   if (request.model !== null && request.model !== "") args.push("--model", request.model);
   if (request.effort !== null && request.effort !== undefined) args.push("--effort", request.effort);
   args.push("--max-budget-usd", formatUsd(request.maxBudgetUsd));
@@ -91,6 +112,14 @@ export function buildClaudeArgs(request: AgentRequest): readonly string[] {
 }
 
 export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
+  // The parser is attached ALWAYS, not only when someone is watching: a code path
+  // that runs solely with the UI on is a code path nothing tests. Publishing into
+  // an empty bus costs one null check per event.
+  const stream = new AgentStream();
+  const publish = (event: AgentEvent): void => {
+    request.onEvent?.(event);
+    emitAgentEvent(event);
+  };
   const spawned = await runtime.spawn(CLAUDE_BIN, buildClaudeArgs(request), {
     cwd: request.cwd,
     stdin: request.prompt,
@@ -98,8 +127,15 @@ export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
     // Explicit, live env: `claude` is resolved off PATH, and on Bun the default
     // child environment is the one captured at process start.
     env: request.env ?? { ...process.env },
+    onStdoutLine: (line) => {
+      for (const event of stream.push(line)) publish(event);
+    },
   });
-  return interpret(spawned.exitCode, spawned.stdout, spawned.stderr, spawned.timedOut);
+  const outcome = interpret(spawned.exitCode, spawned.stdout, spawned.stderr, spawned.timedOut);
+  // A process that died before its `result` event never emitted `done`. Say so,
+  // so the view stops on a failure rather than on a frozen last frame.
+  if (!outcome.ok && outcome.error !== null) publish({ kind: "error", message: outcome.error });
+  return outcome;
 }
 
 /**
@@ -113,7 +149,9 @@ export function interpret(
   stderr: string,
   timedOut: boolean,
 ): AgentOutcome {
-  const doc = parseClaudeJson(stdout);
+  // Either format: a whole-buffer object (`--output-format json`, pretty or not)
+  // or the last `type: "result"` line of a JSONL stream.
+  const doc = resolveResultDoc(stdout) as ClaudeResultJson | null;
   const isError = doc?.is_error === true;
   const sessionId = typeof doc?.session_id === "string" ? doc.session_id : null;
   const costUsd = typeof doc?.total_cost_usd === "number" ? doc.total_cost_usd : 0;
@@ -132,7 +170,7 @@ export function interpret(
 
 function describe(
   exitCode: number,
-  doc: ReturnType<typeof parseClaudeJson>,
+  doc: ClaudeResultJson | null,
   stderr: string,
   timedOut: boolean,
   stdout: string,
@@ -140,7 +178,7 @@ function describe(
   if (timedOut) return `claude timed out (killed after the stage's timeout_s)`;
   if (doc === null) {
     const tail = firstLine(stderr) || firstLine(stdout) || "(no output)";
-    return `claude exited ${exitCode} without parseable --output-format json: ${tail}`;
+    return `claude exited ${exitCode} without a parseable result event: ${tail}`;
   }
   const errors = Array.isArray(doc.errors) ? (doc.errors as unknown[]).filter((e) => typeof e === "string") : [];
   const reason = errors[0] ?? (typeof doc.subtype === "string" ? doc.subtype : "") ?? "";

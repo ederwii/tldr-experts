@@ -1326,6 +1326,26 @@ sub-agent's *result envelope* is structured via `--json-schema` (`{outputs: [], 
 degrades, never installs. (c) Parallelism: v0 runs tasks sequentially; v1 runs independent stories of one wave in
 parallel, one worktree per story.
 
+**Streaming and the progress view (2026-08-29).** The spawn is
+`claude -p --output-format stream-json --verbose` rather than `--output-format json`.
+Two things were measured on `claude` 2.1.251 before the change, on one real call:
+`--verbose` is REQUIRED with `stream-json` in print mode (without it the CLI refuses
+before spending anything), and `--json-schema` still works — the last `result` event
+carries `structured_output` byte-identically to what the single-blob format returned,
+so decision (a) above is untouched and `next` parses the envelope exactly as before.
+The JSONL is also read as it arrives and derived into a typed event stream (`start`,
+`tool`, `tool-done`, `text`, `question`, `cost`, `done`, `error`), from which a
+human-readable line is produced with NO extra model call: `reading src/Foo.cs`,
+`$ dotnet test → running`, `→ ok (12 s)`, `asked Q1: …`. Four commands render it —
+`next`, `run auto`, `expert train`, `seed triage --propose` — in one of three modes
+(`--ui scene|compact|plain|off`, or `TLDRX_UI`; `auto` by default: `scene` on a
+terminal at least 72x20, `compact` on a smaller one, `plain` in a pipe or under
+`NO_COLOR`/`CI`). Every byte of it goes to **stderr**; stdout is byte-identical with
+the view on and off, because that is what the chat bridge and every `--json` consumer
+read. A `result` cannot be resolved from a stream, or from a single blob an older
+`claude` printed, or from neither — in which case the run fails exactly as it did
+before, with the process's own first line of stderr in the message.
+
 **Two execution modes (same files, same validation).** *Headless*: `tldrx next` spawns `claude -p` itself — for
 terminals, CI and chat bridges. *In-session*: when the user is already inside Claude Code, the `/tldrx` skill runs
 `tldrx next --prepare` (writes the prompt bundle + declared inputs to `.agent/prompt.md`), Claude Code dispatches the

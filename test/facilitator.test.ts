@@ -146,7 +146,9 @@ describe("a stage that succeeds", () => {
 
     await next(ws);
     const argv = JSON.parse(readFileSync(argvLog, "utf8").trim()) as string[];
-    expect(argv.slice(0, 3)).toEqual(["-p", "--output-format", "json"]);
+    // wave K: the format is `stream-json`, and `--verbose` is not optional with it
+    // (measured — `claude -p --output-format stream-json` refuses without it).
+    expect(argv.slice(0, 4)).toEqual(["-p", "--output-format", "stream-json", "--verbose"]);
     expect(argv).toContain("--model");
     expect(argv).toContain("--max-budget-usd");
     expect(argv).toContain("--json-schema");

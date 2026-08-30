@@ -13,6 +13,7 @@ import { statSync } from "node:fs";
 import { dirname } from "node:path";
 import { parse as parseYamlText, stringify as stringifyYamlValue } from "yaml";
 import { killProcessTree } from "./killProcessTree.ts";
+import { LineSplitter } from "./lineSplitter.ts";
 import { OUTPUT_GRACE_MS } from "./outputGrace.ts";
 import type { Runtime, SpawnOptions, SpawnResult } from "./Runtime.ts";
 
@@ -59,15 +60,26 @@ export const nodeRuntime: Runtime = {
               killProcessTree(child.pid, () => child.kill("SIGKILL"));
             }, opts.timeoutMs);
 
+      const splitter = opts.onStdoutLine === undefined ? null : new LineSplitter(opts.onStdoutLine);
+
       const finish = (exitCode: number): void => {
         if (settled) return;
         settled = true;
+        // Deliver the tail BEFORE resolving: a producer whose last line has no
+        // newline must still be seen by the progress view, and after `resolve`
+        // nobody is listening.
+        splitter?.end();
         if (timer !== null) clearTimeout(timer);
         if (graceTimer !== null) clearTimeout(graceTimer);
         resolve({ exitCode, stdout, stderr, timedOut });
       };
 
-      child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
+      child.stdout?.on("data", (chunk: Buffer) => {
+        const text = chunk.toString("utf8");
+        stdout += text;
+        splitter?.push(text);
+      });
+      child.stdout?.on("end", () => splitter?.end());
       child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
       child.on("error", (error: Error) => {
         stderr += error.message;

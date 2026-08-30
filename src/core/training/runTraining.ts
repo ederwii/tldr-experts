@@ -22,6 +22,7 @@ import { readExpertDocument } from "../experts/expertDocument.ts";
 import { agentDir } from "../facilitator/paths.ts";
 import { promptPath, readResult, writeBundle, writeRaw, PendingError, type PendingStage } from "../facilitator/pending.ts";
 import { spawnAgent } from "../facilitator/spawnAgent.ts";
+import { setProgressCeiling, setProgressTitle } from "../ui/bus.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
 import type { CompetencyEvidence } from "../init/competencyLevel.ts";
 import {
@@ -230,6 +231,8 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
       continue;
     }
 
+    setProgressTitle(`train ${options.expert}/${area.id} · ${options.mode} · ${task.key}`);
+    setProgressCeiling(share);
     const outcome = await spawnAgent({
       prompt: task.prompt,
       model: options.model ?? null,
