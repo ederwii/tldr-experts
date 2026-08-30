@@ -17,6 +17,7 @@ import {
 } from "../exitCodes.ts";
 import { boolFlag, numberFlag, parseArgs, stringFlag, UsageError } from "../argv.ts";
 import { workspaceRootFrom } from "../workspace.ts";
+import { startUi } from "../ui.ts";
 import { effortFlag } from "../effort.ts";
 import { fail } from "../report.ts";
 import { runNext, type NextMode } from "../../core/facilitator/runNext.ts";
@@ -29,29 +30,41 @@ const INFORMATIONAL: readonly number[] = [EXIT_OK, EXIT_AWAITING_HUMAN];
 export const nextCommand: Command = {
   name: "next",
   summary: "Advance the active run to its next stage",
-  usage: "tldrx next [<run>] [--dry-run] [--prepare|--commit] [--model <m>] [--effort <level>] [--max-usd <n>] [--yolo] [--keep-worktrees] [--root <path>]",
+  usage: "tldrx next [<run>] [--dry-run] [--prepare|--commit] [--model <m>] [--effort <level>] [--max-usd <n>]\n"
+    + "                  [--yolo] [--keep-worktrees] [--ui scene|compact|plain|off] [--root <path>]",
   subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     try {
-      const args = parseArgs(argv, ["run", "model", "effort", "max-usd", "root"]);
+      const args = parseArgs(argv, ["run", "model", "effort", "max-usd", "root", "ui"]);
       const root = workspaceRootFrom(args);
       const mode = resolveMode(args.flags.has("prepare"), args.flags.has("commit"));
       const runId = args.positionals[0] ?? stringFlag(args, "run");
 
-      const outcome = await runNext({
-        root,
-        runId,
-        dryRun: boolFlag(args, "dry-run"),
-        mode,
-        model: stringFlag(args, "model"),
-        effort: effortFlag(args),
-        maxUsd: numberFlag(args, "max-usd"),
-        yolo: boolFlag(args, "yolo"),
-        keepWorktrees: boolFlag(args, "keep-worktrees"),
-        actor: currentActor(),
-        at: nowRfc3339(),
-      });
+      const dryRun = boolFlag(args, "dry-run");
+      // `--prepare`, `--commit` and `--dry-run` spawn nothing, so there is
+      // nothing to watch: the handle they get is inert.
+      const ui = startUi(args, { root, spawns: mode === "headless" && !dryRun });
+      let outcome;
+      try {
+        outcome = await runNext({
+          root,
+          runId,
+          dryRun,
+          mode,
+          model: stringFlag(args, "model"),
+          effort: effortFlag(args),
+          maxUsd: numberFlag(args, "max-usd"),
+          yolo: boolFlag(args, "yolo"),
+          keepWorktrees: boolFlag(args, "keep-worktrees"),
+          actor: currentActor(),
+          at: nowRfc3339(),
+        });
+      } finally {
+        // Before a single byte of the report is written, so the view never sits
+        // half-drawn under it — and on the throw path too.
+        ui.stop();
+      }
 
       // "There is no run" is the one refusal a human cannot act on from the
       // message alone — it says what is missing, never what to do instead. The

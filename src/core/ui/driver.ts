@@ -51,6 +51,9 @@ export interface ProgressOptions extends UiEnvironment {
 
 export interface ProgressHandle extends ProgressSink {
   readonly mode: UiMode;
+  /** Declared non-optional here: a handle always implements the whole sink. */
+  onTitle(title: string): void;
+  onCeiling(usd: number): void;
   /** Erase the view, run `body`, and repaint. For a caller writing to stdout. */
   log(body: () => void): void;
   /** Idempotent. Leaves the last frame on screen and restores the cursor. */

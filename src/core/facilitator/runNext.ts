@@ -28,6 +28,7 @@ import { raiseCommand, shortBy } from "../budget/budgetView.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
 import { factsPath, loadWorkspace } from "../../hooks/lib/workspace.ts";
 import type { TldrxEvent } from "../events/Event.ts";
+import { setProgressCeiling, setProgressTitle } from "../ui/bus.ts";
 import { acquireLock, releaseLock } from "./Lock.ts";
 import { loadStageSpec, type StageSpec } from "./stageSpec.ts";
 import { countSkipInputs, evaluateSkipIf, openQuestionIds, SkipIfError } from "./skipIf.ts";
@@ -335,6 +336,8 @@ async function runStage(
 
   // --- headless spawn -----------------------------------------------------
   const taskId = nextTaskId(store, phaseId, stageId);
+  // Tell whoever is watching what this turn is. No-op when nobody is.
+  announce(store.runId, stageId, taskId, cap);
   store.append(event(options, store.runId, stageId, "agent.spawned", {
     phase: phaseId,
     task: taskId,
@@ -503,6 +506,7 @@ async function runExecutor(
   }
 
   const stage = requireStage(store, phaseId, stageId);
+  announce(store.runId, stageId, nextTaskId(store, phaseId, stageId), agentCap(options, store, stage));
   const executorCtx: ExecutorContext = {
     root: options.root,
     runId: store.runId,
@@ -962,6 +966,20 @@ function skipStage(store: RunStore, options: NextOptions, phaseId: string, stage
 
 function recordTask(store: RunStore, phaseId: string, stageId: string, task: RunTask): void {
   mapStage(store, phaseId, stageId, (stage) => ({ ...stage, tasks: [...stage.tasks, task] }));
+}
+
+/**
+ * The progress view's heading and money bar for this turn.
+ *
+ * `t3` is the third task of this stage, which is the third attempt at it — a
+ * retry after `reject` is exactly what a person watching wants to know they are
+ * looking at. Both calls are no-ops unless a driver is installed.
+ */
+function announce(runId: string, stageId: string, taskId: string, ceilingUsd: number): void {
+  const attempt = Number(taskId.replace(/^t/, ""));
+  const suffix = Number.isFinite(attempt) ? ` · attempt ${String(attempt)}` : "";
+  setProgressTitle(`${stageId} · ${runId}${suffix}`);
+  setProgressCeiling(ceilingUsd);
 }
 
 function nextTaskId(store: RunStore, phaseId: string, stageId: string): string {

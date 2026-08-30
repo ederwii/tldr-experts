@@ -89,14 +89,36 @@ export function toolLine(name: string, target: string | null, root: string): str
   }
 }
 
-/** A path relative to the workspace when it is inside it, shortened when it is long. */
+/** How long a path may be before it is cut back to its last few segments. */
+const PATH_WIDTH = 44;
+
+/**
+ * A path relative to the workspace when it is inside it, shortened when it is long.
+ *
+ * A path too long to fit is cut at a SEGMENT boundary, not mid-name: `…/260828-
+ * demo/01-what/handoff.md` tells you what was written and `…8-demo/01-what/hand`
+ * does not, and the file name is the part that identifies the work.
+ */
 export function shortPath(path: string, root: string): string {
   let rel = path;
   if (root !== "" && rel.startsWith(`${root}/`)) rel = rel.slice(root.length + 1);
   if (rel.startsWith("./")) rel = rel.slice(2);
-  if (rel.length <= 44) return rel;
-  // Keep the tail: the file name is what identifies the work, not the mount point.
-  return `…${rel.slice(rel.length - 43)}`;
+  if (rel.length <= PATH_WIDTH) return rel;
+
+  const parts = rel.split("/").filter((part) => part !== "");
+  const kept: string[] = [];
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const part = parts[i] ?? "";
+    const width = [part, ...kept].join("/").length + 2;
+    if (kept.length > 0 && width > PATH_WIDTH) break;
+    kept.unshift(part);
+  }
+  const tail = kept.join("/");
+  // One segment that is itself longer than the budget: there is nothing to keep
+  // but its end.
+  return tail.length + 2 > PATH_WIDTH
+    ? `…${tail.slice(tail.length - (PATH_WIDTH - 1))}`
+    : `…/${tail}`;
 }
 
 /** One line of a command, whitespace collapsed. */

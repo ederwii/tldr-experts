@@ -11,6 +11,7 @@ import type { Command } from "../Command.ts";
 import { EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
 import { listFlag, numberFlag, parseArgs, repeatedFlag, stringFlag, UsageError, boolFlag } from "../argv.ts";
 import { workspaceRootFrom } from "../workspace.ts";
+import { startUi } from "../ui.ts";
 import { effortFlag } from "../effort.ts";
 import { fail } from "../report.ts";
 import { runAuto } from "../../core/facilitator/runAuto.ts";
@@ -33,7 +34,7 @@ const HINT_FILE_COUNT = 10;
 
 const VALUE_FLAGS = [
   "title", "scope", "budget", "repos", "from", "seed", "gates", "run", "root",
-  "max-usd", "until", "model", "effort",
+  "max-usd", "until", "model", "effort", "ui",
 ];
 
 export const runCommand: Command = {
@@ -44,7 +45,7 @@ export const runCommand: Command = {
     "                  [--root <path>]\n" +
     "       tldrx run status [<run>] [--json] [--root <path>]\n" +
     "       tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]\n" +
-    "                  [--yolo] [--root <path>]",
+    "                  [--yolo] [--ui scene|compact|plain|off] [--root <path>]",
   subcommands: ["new", "status", "auto"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
@@ -170,19 +171,28 @@ async function runAutoLoop(argv: readonly string[]): Promise<number> {
   try {
     const args = parseArgs(argv, VALUE_FLAGS);
     const root = workspaceRootFrom(args);
-    const outcome = await runAuto({
-      root,
-      runId: args.positionals[0] ?? stringFlag(args, "run"),
-      maxUsd: numberFlag(args, "max-usd"),
-      until: stringFlag(args, "until"),
-      model: stringFlag(args, "model"),
-      effort: effortFlag(args),
-      yolo: boolFlag(args, "yolo"),
-      actor: currentActor(),
-      at: nowRfc3339(),
-      onLine: (line) => process.stdout.write(`${line}\n`),
-    });
-    return outcome.code;
+    // The scene persists across the whole loop; `runNext` re-titles the
+    // blackboard at each stage boundary.
+    const ui = startUi(args, { root, title: "run auto" });
+    try {
+      const outcome = await runAuto({
+        root,
+        runId: args.positionals[0] ?? stringFlag(args, "run"),
+        maxUsd: numberFlag(args, "max-usd"),
+        until: stringFlag(args, "until"),
+        model: stringFlag(args, "model"),
+        effort: effortFlag(args),
+        yolo: boolFlag(args, "yolo"),
+        actor: currentActor(),
+        at: nowRfc3339(),
+        // Erase the view, let the stage line scroll past on stdout, repaint. A
+        // progress view that let stdout tear through it would lose both.
+        onLine: (line) => ui.log(() => process.stdout.write(`${line}\n`)),
+      });
+      return outcome.code;
+    } finally {
+      ui.stop();
+    }
   } catch (error) {
     return fail("run auto", error);
   }

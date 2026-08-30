@@ -24,6 +24,7 @@ import { loadWorkspace } from "../../hooks/lib/workspace.ts";
 import { agentDir } from "../facilitator/paths.ts";
 import { PendingError, resultPath, writeBundle, writeRaw, type PendingStage } from "../facilitator/pending.ts";
 import { spawnAgent } from "../facilitator/spawnAgent.ts";
+import { setProgressCeiling, setProgressTitle } from "../ui/bus.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
 import { yymmdd } from "../run/newRun.ts";
 import { collectSeed, type SeedSet } from "./collectSeed.ts";
@@ -211,6 +212,8 @@ async function propose(
       throw error;
     }
   } else {
+    setProgressTitle(`triage ${inventory.source}`);
+    setProgressCeiling(ceiling);
     const outcome = await spawnAgent({
       prompt,
       model: options.model ?? null,
