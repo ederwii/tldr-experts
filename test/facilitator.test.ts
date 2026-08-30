@@ -729,3 +729,141 @@ describe("after a failure", () => {
     expect(readFileSync(promptOut, "utf8")).not.toContain("## Previous attempt");
   });
 });
+
+/**
+ * The 2026-08-30 live failure, end to end.
+ *
+ * A stage whose `stage.yml` declares `stories/<id>.md` cannot name its outputs —
+ * Plan does not know how many stories there will be until it has written them.
+ * The first `feature`-scope run to reach Plan wrote one epic and seven stories and
+ * was refused with "`03-plan/stories/<id>.md` … does not exist on disk", because
+ * the shape went to `existsSync` verbatim. These run the whole facilitator, off
+ * the same fake `claude`, against the same seam.
+ */
+const PATTERN_STAGES: readonly StageOptions[] = [
+  {
+    id: "alpha", phase: "01-what", budgetUsd: 6, gate: "auto",
+    outputs: [
+      { path: "01-what/epics/<epic>.md" },
+      { path: "01-what/stories/<id>.md", sections: ["Acceptance"] },
+      { path: "01-what/handoff.md", sections: ["Findings", "Decisions", "Unknowns", "Evidence ledger"] },
+    ],
+  },
+  {
+    id: "beta", phase: "02-how", budgetUsd: 4, gate: "auto",
+    required: ["01-what/stories/<id>.md"],
+    outputs: [{ path: "02-how/handoff.md" }],
+  },
+];
+
+function storyFile(id: string): string {
+  return `# ${id}\n\n## Acceptance\n- the ${id} behaviour is proven by a test\n`;
+}
+
+const PLAN_OUTPUTS = JSON.stringify({
+  "01-what/epics/E1.md": "# E1 — the epic\n",
+  "01-what/stories/S1.md": storyFile("S1"),
+  "01-what/stories/S2.md": storyFile("S2"),
+  "01-what/stories/S3.md": storyFile("S3"),
+  "01-what/handoff.md": cannedHandoff(),
+});
+
+describe("a stage whose declared outputs are patterns", () => {
+  test("passes with one epic and three stories on disk", async () => {
+    const ws = workspace(PATTERN_STAGES);
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: PLAN_OUTPUTS });
+
+    const outcome = await next(ws);
+    expect(outcome.code).toBe(0);
+    expect(outcome.lines.join("\n")).not.toContain("does not exist on disk");
+
+    const store = RunStore.open(ws.runDir);
+    expect(store.run.phases[0]?.stages[0]?.status).toBe("done");
+    expect(store.run.cursor).toMatchObject({ phase: "02-how", stage: "beta" });
+  });
+
+  test("fails when the pattern matched nothing, and says `no file matches it`", async () => {
+    const ws = workspace(PATTERN_STAGES);
+    fakeClaude(ws, {
+      FAKE_CLAUDE_OUTPUTS: JSON.stringify({ "01-what/handoff.md": cannedHandoff() }),
+    });
+
+    const outcome = await next(ws);
+    expect(outcome.code).toBe(5);
+    const said = outcome.lines.join("\n");
+    expect(said).toContain("01-what/epics/<epic>.md was declared as an output but no file matches it on disk");
+    expect(said).toContain("01-what/stories/<id>.md was declared as an output but no file matches it on disk");
+    expect(said).not.toContain("does not exist on disk");
+  });
+
+  test("`sections:` binds every matched file, and the failure names the file not the shape", async () => {
+    const ws = workspace(PATTERN_STAGES);
+    fakeClaude(ws, {
+      FAKE_CLAUDE_OUTPUTS: JSON.stringify({
+        "01-what/epics/E1.md": "# E1\n",
+        "01-what/stories/S1.md": storyFile("S1"),
+        "01-what/stories/S2.md": "# S2 — no acceptance criteria at all\n",
+        "01-what/handoff.md": cannedHandoff(),
+      }),
+    });
+
+    const outcome = await next(ws);
+    expect(outcome.code).toBe(5);
+    const said = outcome.lines.join("\n");
+    expect(said).toContain("01-what/stories/S2.md is missing the required section `## Acceptance`");
+    expect(said).not.toContain("01-what/stories/S1.md is missing");
+    expect(said).not.toContain("<id>.md is missing");
+  });
+
+  test("the NEXT stage takes them as inputs: the gap check passes and the prompt gets the files", async () => {
+    const ws = workspace(PATTERN_STAGES);
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: PLAN_OUTPUTS });
+    expect((await next(ws)).code).toBe(0);
+
+    const promptOut = join(ws.root, "prompt.txt");
+    process.env.FAKE_CLAUDE_OUTPUTS = JSON.stringify({ "02-how/handoff.md": cannedHandoff() });
+    process.env.FAKE_CLAUDE_PROMPT_OUT = promptOut;
+    const beta = await next(ws);
+    expect(beta.code).toBe(0);
+
+    // Not a literal-path refusal, and not an empty inline either: the sub-agent is
+    // handed the three concrete stories, cited by their real names.
+    const prompt = readFileSync(promptOut, "utf8");
+    for (const id of ["S1", "S2", "S3"]) {
+      expect(prompt).toContain(`01-what/stories/${id}.md`);
+      expect(prompt).toContain(`the ${id} behaviour is proven by a test`);
+    }
+    expect(prompt).not.toContain("<id>.md");
+  });
+
+  test("a pattern input nothing satisfies is a usage refusal, reported AS THE PATTERN", async () => {
+    const ws = workspace([
+      { ...(PATTERN_STAGES[0] as StageOptions), outputs: [{ path: "01-what/handoff.md" }] },
+      PATTERN_STAGES[1] as StageOptions,
+    ]);
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: JSON.stringify({ "01-what/handoff.md": cannedHandoff() }) });
+    expect((await next(ws)).code).toBe(0);
+
+    process.env.FAKE_CLAUDE_OUTPUTS = JSON.stringify({ "02-how/handoff.md": cannedHandoff() });
+    const beta = await next(ws);
+    expect(beta.code).toBe(1);
+    expect(beta.lines.join("\n")).toContain("requires 1 input(s) that do not exist: 01-what/stories/<id>.md");
+  });
+
+  test("--dry-run reverts every file a pattern matched, and names them", async () => {
+    const ws = workspace(PATTERN_STAGES);
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: PLAN_OUTPUTS });
+
+    const outcome = await next(ws, { dryRun: true });
+    expect(outcome.code).toBe(0);
+    const said = outcome.lines.join("\n");
+    for (const id of ["S1", "S2", "S3"]) {
+      expect(said).toContain(`01-what/stories/${id}.md`);
+      expect(existsSync(join(ws.runDir, "01-what", "stories", `${id}.md`))).toBe(false);
+    }
+    expect(said).toContain("01-what/epics/E1.md");
+    expect(said).not.toContain("<id>.md");
+    // The handoff is the one thing a dry run keeps (spec §5).
+    expect(existsSync(join(ws.runDir, "01-what", "handoff.md"))).toBe(true);
+  });
+});

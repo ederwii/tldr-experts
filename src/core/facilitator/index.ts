@@ -8,8 +8,9 @@ export { evaluateSkipIf, countSkipInputs, openQuestionIds, phaseDirs, SkipIfErro
 export type { SkipCounts } from "./skipIf.ts";
 export {
   resolveDeclared, isWorkspaceRelative, expandRepos, expandAll, present, missing, agentDir,
+  isPattern, matchPattern, resolveMany, existsDeclared, expandPatterns,
 } from "./paths.ts";
-export type { PathContext } from "./paths.ts";
+export type { PathContext, ResolvedPath } from "./paths.ts";
 export {
   buildPrompt, substitute, replaceSection, renderInputs, fenceFor, renderFacts, renderConventions,
   loadExpertBodies, stackExpertNames, PLACEHOLDERS,

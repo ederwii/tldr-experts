@@ -33,6 +33,27 @@
 
 ### Fixed
 
+- **A stage whose declared outputs are a SHAPE no longer fails while the files sit next to
+  the error.** Found live 2026-08-30 by the first `feature`-scope run to reach Plan: the
+  stage wrote `03-plan/epics/E1.md` and `03-plan/stories/S1.md`..`S7.md`, and
+  `tldrx next --commit` refused it with "`03-plan/epics/<epic>.md` was declared as an output
+  but does not exist on disk; `03-plan/stories/<id>.md` was declared as an output but does
+  not exist on disk". Plan cannot name its outputs — it does not know how many stories there
+  will be until it has written them — so `stage.yml` declares the shape, and every
+  filesystem call was asking `existsSync` about a path with a literal `<id>` in it.
+  A declared path holding an angle-bracket token is now a **pattern**: it matches any file
+  in that directory with the pattern's fixed prefix and suffix, resolved against the run dir
+  and then the workspace root, in the same "first base wins" order everything else uses.
+  The fix is in `paths.ts`, at the seam, not in the validator: `present`/`missing` count a
+  pattern by its matches (so a stage taking `stories/<id>.md` as an INPUT gets past the gap
+  check), the prompt is handed the concrete files rather than the shape, the previous-attempt
+  inline shows every one of them, and `--dry-run` reverts each file it matched and names it.
+  `{repo}` expansion is untouched and still runs first, so `{repo}` and a token compose.
+  Plain paths behave exactly as before, down to the wording of their failure.
+- A pattern output that matches nothing now fails honestly — "`03-plan/stories/<id>.md` was
+  declared as an output but **no file matches it on disk**", rather than claiming a file
+  nobody ever named was looked for and not found. Its `sections:` contract binds **every**
+  matched file, and the failure names the concrete file that broke it, not the shape.
 - **`tldrx run estimate` prices cache traffic, which is where the money actually goes.**
   Measured 2026-08-30 on a real workspace: a What stage was estimated at **$0.33** and the
   one comparable real attempt cost **$1.70** — **5x**. That attempt's ledger says why: 56
