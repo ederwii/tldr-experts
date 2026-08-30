@@ -27,7 +27,7 @@ import type { EffortLevel } from "../schemas/stage.ts";
 import type { CompetencyEvidence } from "../init/competencyLevel.ts";
 import {
   CODE_TASK, DEFAULT_TRAIN_EFFORT, DEFAULT_TRAIN_USD, MIN_TRAIN_USD, RUNS_TASK,
-  fromRunsRelPath, knowledgeRelPath, type TrainingMode, type TrainingTask,
+  fromRunsRelPath, knowledgeRelPath, partialOf, type TrainingMode, type TrainingTask,
 } from "./Training.ts";
 import {
   LIGHT_SHAPE, RUNS_SHAPE, codeEvidence, describeKnowledgeIssues, parseKnowledgeFile, runEvidence,
@@ -137,7 +137,10 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
     budgetUsd: share,
   };
 
-  const prompts: { key: string; prompt: string; output: string }[] = [];
+  // `output` is where the sub-agent writes (`<area>.md.partial`); `final` is the
+  // name it earns by validating. Nothing half-written ever wears the final name,
+  // because `knowledge/*.md` is what gets inlined into later prompts.
+  const prompts: { key: string; prompt: string; output: string; final: string }[] = [];
   // The code pass is skipped for a role expert — not budgeted, not walked, not
   // spawned. `selectFiles` walks every repo, so skipping it is also why a role
   // training run starts instantly.
@@ -149,7 +152,10 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
       areaTitle: area.title,
     });
     prompts.push({
-      key: CODE_TASK, prompt: codePrompt(promptInput, selection), output: knowledgeRelPath(area.id),
+      key: CODE_TASK,
+      prompt: codePrompt(promptInput, selection),
+      output: partialOf(knowledgeRelPath(area.id)),
+      final: knowledgeRelPath(area.id),
     });
   }
   if (options.mode === "full") {
@@ -162,7 +168,12 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
     });
     const empty = nothingToMineRefusal(options.expert, area.id, mine.files.length, isRole);
     if (empty !== null) return fail(EXIT_USAGE, empty);
-    prompts.push({ key: RUNS_TASK, prompt: runsPrompt(promptInput, mine), output: fromRunsRelPath(area.id) });
+    prompts.push({
+      key: RUNS_TASK,
+      prompt: runsPrompt(promptInput, mine),
+      output: partialOf(fromRunsRelPath(area.id)),
+      final: fromRunsRelPath(area.id),
+    });
   }
 
   const bundleRoot = trainingCacheDir(options.root, options.expert, area.id);
@@ -205,9 +216,21 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
   }
 
   // Keep whatever was on disk, so a rejected run leaves the workspace as it was.
+  // A partial left by a run that crashed is scratch, not evidence: clear it
+  // before spawning. Otherwise a sub-agent that wrote nothing this time would be
+  // validated against last time's half-file and quietly pass.
+  // NOT on `--commit`: there the partial is what the host session's sub-agent
+  // just wrote, and it is the whole input to this half of the run.
+  if (options.run !== "commit") {
+    for (const task of prompts) rmSync(join(dir, task.output), { force: true });
+  }
+
+  // Snapshot the FINAL names — those are the accepted files a rejected run has to
+  // put back. The partials are scratch and are cleared on the way out either way.
   const previous = prompts.map((task) => ({
-    path: join(dir, task.output),
-    content: existsSync(join(dir, task.output)) ? readFileSync(join(dir, task.output), "utf8") : null,
+    path: join(dir, task.final),
+    partial: join(dir, task.output),
+    content: existsSync(join(dir, task.final)) ? readFileSync(join(dir, task.final), "utf8") : null,
   }));
 
   // --- the sub-agents ------------------------------------------------------
@@ -317,7 +340,14 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
       ]);
     }
     evidence.push(...(task.key === CODE_TASK ? codeEvidence(parsed.refs, at) : runEvidence(parsed.refs, at)));
-    counts.push(`${task.output}: ${[...parsed.items].map(([name, n]) => `${name} ${String(n)}`).join(", ")}`);
+    counts.push(`${task.final}: ${[...parsed.items].map(([name, n]) => `${name} ${String(n)}`).join(", ")}`);
+  }
+
+  // Every file validated. ONLY NOW does a partial earn the name that later
+  // prompts inline — the rename is the moment "the model wrote something" becomes
+  // "this expert knows something".
+  for (const task of prompts) {
+    renameSync(join(dir, task.output), join(dir, task.final));
   }
 
   // --- the level moves, on evidence ----------------------------------------
@@ -346,7 +376,7 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
     level_before: written.levelBefore,
     level_after: written.levelAfter,
     cost_usd: costUsd,
-    outputs: prompts.map((task) => task.output),
+    outputs: prompts.map((task) => task.final),
   }));
 
   return {
@@ -398,7 +428,7 @@ export function trainingCacheDir(root: string, expert: string, area: string): st
  * folder; deleted, the one record of what went wrong is gone. `[assumption]`
  */
 function quarantine(abs: string): string {
-  const kept = abs.replace(/\.md$/, ".rejected.md");
+  const kept = abs.replace(/\.md(\.partial)?$/, ".rejected.md");
   try {
     rmSync(kept, { force: true });
     renameSync(abs, kept);
@@ -419,8 +449,13 @@ function quarantine(abs: string): string {
  * only honest state is "there is no accepted knowledge file, and here is what the
  * failed run produced".
  */
-function rollback(previous: readonly { path: string; content: string | null }[]): void {
+function rollback(previous: readonly { path: string; partial: string; content: string | null }[]): void {
   for (const entry of previous) {
+    // A partial the failed run left behind is quarantined too. It could not have
+    // been inlined — `.md.partial` does not match `knowledge/*.md` — but the one
+    // record of what the run produced is worth keeping, under a name that says
+    // it was rejected.
+    if (existsSync(entry.partial)) quarantine(entry.partial);
     if (entry.content !== null) {
       mkdirSync(join(entry.path, ".."), { recursive: true });
       writeFileSync(entry.path, entry.content, "utf8");

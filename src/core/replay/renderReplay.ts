@@ -6,6 +6,7 @@
  * a stage with no events says so rather than being narrated from its status.
  */
 import { openBlocks, parseQuestions } from "../text/index.ts";
+import { skippedNote } from "../events/EventLog.ts";
 import { loadPhaseArtefacts, runLevelEvents, stageEvents, type LoadedRun, type NumberedEvent } from "./loadRun.ts";
 import type { RunStage } from "./RunDocument.ts";
 
@@ -24,6 +25,12 @@ export function renderReplay(loaded: LoadedRun): string {
 
   if (loaded.eventsError !== null) {
     out.push("", `_events.jsonl could not be read: ${loaded.eventsError}_`);
+  }
+  // A torn last line no longer takes the whole history down (see EventLog.readAll),
+  // but the history IS shorter than the file, and a replay that did not say so
+  // would be quietly incomplete.
+  if (loaded.eventsSkipped > 0) {
+    out.push("", `_events.jsonl: ${skippedNote(loaded.eventsSkipped)} (unparseable — a torn write)_`);
   }
 
   const runLevel = runLevelEvents(loaded);

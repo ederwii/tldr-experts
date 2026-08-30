@@ -15,6 +15,7 @@ import { startUi } from "../ui.ts";
 import { effortFlag } from "../effort.ts";
 import { fail } from "../report.ts";
 import { runAuto } from "../../core/facilitator/runAuto.ts";
+import { cancelRun, unlockRun } from "../../core/run/rescue.ts";
 import { nowRfc3339 } from "../../hooks/lib/actor.ts";
 import { createRun } from "../../core/run/newRun.ts";
 import { RunStore } from "../../core/run/RunStore.ts";
@@ -34,7 +35,7 @@ const HINT_FILE_COUNT = 10;
 
 const VALUE_FLAGS = [
   "title", "scope", "budget", "repos", "from", "seed", "gates", "run", "root",
-  "max-usd", "until", "model", "effort", "ui",
+  "max-usd", "until", "model", "effort", "ui", "note",
 ];
 
 export const runCommand: Command = {
@@ -45,8 +46,10 @@ export const runCommand: Command = {
     "                  [--root <path>]\n" +
     "       tldrx run status [<run>] [--json] [--root <path>]\n" +
     "       tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]\n" +
-    "                  [--yolo] [--ui scene|compact|plain|off] [--root <path>]",
-  subcommands: ["new", "status", "auto"],
+    "                  [--yolo] [--ui scene|compact|plain|off] [--root <path>]\n" +
+    "       tldrx run unlock [<run>] [--force] [--root <path>]\n" +
+    "       tldrx run cancel [<run>] --note <text> [--force] [--root <path>]",
+  subcommands: ["new", "status", "auto", "unlock", "cancel"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const [sub, ...rest] = argv;
@@ -57,8 +60,14 @@ export const runCommand: Command = {
         return runStatus(rest);
       case "auto":
         return await runAutoLoop(rest);
+      case "unlock":
+        return runUnlock(rest);
+      case "cancel":
+        return runCancel(rest);
       default:
-        process.stderr.write(`tldrx run: expected \`new\`, \`status\` or \`auto\`\n${runCommand.usage}\n`);
+        process.stderr.write(
+          `tldrx run: expected \`new\`, \`status\`, \`auto\`, \`unlock\` or \`cancel\`\n${runCommand.usage}\n`,
+        );
         return EXIT_USAGE;
     }
   },
@@ -231,5 +240,48 @@ function runStatus(argv: readonly string[]): number {
     return EXIT_OK;
   } catch (error) {
     return fail("run status", error);
+  }
+}
+
+/**
+ * Both rescue commands print to stdout on success and stderr on refusal, the
+ * same way `next` does — a refusal is not a result, and a script that pipes
+ * stdout should not have to filter one out of the other.
+ */
+function report(name: string, outcome: { code: number; lines: readonly string[] }): number {
+  const text = `${outcome.lines.join("\n")}\n`;
+  if (outcome.code === EXIT_OK) process.stdout.write(text);
+  else process.stderr.write(`tldrx ${name}: ${text}`);
+  return outcome.code;
+}
+
+function runUnlock(argv: readonly string[]): number {
+  try {
+    const args = parseArgs(argv, VALUE_FLAGS);
+    return report("run unlock", unlockRun({
+      root: workspaceRootFrom(args),
+      runId: args.positionals[0] ?? stringFlag(args, "run"),
+      force: boolFlag(args, "force"),
+      actor: currentActor(),
+      at: nowRfc3339(),
+    }));
+  } catch (error) {
+    return fail("run unlock", error);
+  }
+}
+
+function runCancel(argv: readonly string[]): number {
+  try {
+    const args = parseArgs(argv, VALUE_FLAGS);
+    return report("run cancel", cancelRun({
+      root: workspaceRootFrom(args),
+      runId: args.positionals[0] ?? stringFlag(args, "run"),
+      note: stringFlag(args, "note") ?? "",
+      force: boolFlag(args, "force"),
+      actor: currentActor(),
+      at: nowRfc3339(),
+    }));
+  } catch (error) {
+    return fail("run cancel", error);
   }
 }

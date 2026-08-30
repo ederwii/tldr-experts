@@ -10,6 +10,15 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFil
 import { dirname, join } from "node:path";
 import { MAX_LINE_BYTES, serializeEvent, validateEvent, type TldrxEvent } from "./Event.ts";
 
+/** What one read of the ledger found, including what it could not parse. */
+export interface EventReadResult {
+  readonly events: readonly TldrxEvent[];
+  /** 1-based line number of each event in `events`, same order. */
+  readonly lines: readonly number[];
+  /** Lines that were non-empty and did not parse — a torn write. */
+  readonly skipped: number;
+}
+
 export class EventLog {
   constructor(readonly path: string) {}
 
@@ -70,14 +79,65 @@ export class EventLog {
     writeFileSync(this.path, content, "utf8");
   }
 
-  read(): readonly TldrxEvent[] {
-    if (!existsSync(this.path)) return [];
-    const text = readFileSync(this.path, "utf8");
-    const events: TldrxEvent[] = [];
-    for (const line of text.split("\n")) {
-      if (line.trim() === "") continue;
-      events.push(JSON.parse(line) as TldrxEvent);
+  /**
+   * Every event, plus what could not be read.
+   *
+   * A JSONL file written by `appendFileSync` can be torn: the process dies
+   * between the `{` and the `\n` and the last line is half an object. Before
+   * 2026-08-29 `read()` ran that through a bare `JSON.parse` and threw, so ONE
+   * torn byte took the entire history down with it — `tldrx replay` printed
+   * "events.jsonl could not be read" and exit 0, for a file whose first 400 lines
+   * were perfectly good. Tolerant readers already existed elsewhere
+   * (`run/attempts.ts`, `executors/build.ts`); this makes the shared one agree
+   * with them.
+   *
+   * Skipping is COUNTED, never silent: the count comes back here, and `read()`
+   * says it once on stderr. A line that does not parse is still a lost event, and
+   * a reader who is not told has been handed a quietly shorter history.
+   */
+  readAll(): EventReadResult {
+    if (!existsSync(this.path)) return { events: [], lines: [], skipped: 0 };
+    let text: string;
+    try {
+      text = readFileSync(this.path, "utf8");
+    } catch {
+      return { events: [], lines: [], skipped: 0 };
     }
-    return events;
+    const events: TldrxEvent[] = [];
+    const lines: number[] = [];
+    let skipped = 0;
+    text.split("\n").forEach((line, index) => {
+      if (line.trim() === "") return;
+      try {
+        events.push(JSON.parse(line) as TldrxEvent);
+        lines.push(index + 1);
+      } catch {
+        skipped += 1;
+      }
+    });
+    return { events, lines, skipped };
+  }
+
+  /**
+   * The events, with a one-time stderr note when any line had to be skipped.
+   *
+   * "Once" is per path per process: a command that reads the same ledger three
+   * times says it once, and a torn line never becomes a wall of warnings.
+   */
+  read(): readonly TldrxEvent[] {
+    const result = this.readAll();
+    if (result.skipped > 0 && !WARNED.has(this.path)) {
+      WARNED.add(this.path);
+      process.stderr.write(`tldrx: ${this.path}: ${skippedNote(result.skipped)} (unparseable — a torn write)\n`);
+    }
+    return result.events;
   }
 }
+
+/** `1 line skipped` / `3 lines skipped` — one phrasing, for every reader. */
+export function skippedNote(skipped: number): string {
+  return `${String(skipped)} line${skipped === 1 ? "" : "s"} skipped`;
+}
+
+/** Paths already warned about in this process. See `read()`. */
+const WARNED = new Set<string>();

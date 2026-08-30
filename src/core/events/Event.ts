@@ -6,7 +6,7 @@ import {
 
 /** Closed set — an unknown type is a validation error (spec §2.9). */
 export const EVENT_TYPES = [
-  "run.created", "run.closed",
+  "run.created", "run.closed", "run.unlocked", "run.cancelled",
   "phase.started", "phase.done",
   "stage.started", "stage.done", "stage.failed", "stage.skipped",
   "task.started", "task.done",

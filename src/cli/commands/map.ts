@@ -12,7 +12,10 @@ import type { Command } from "../Command.ts";
 import { EXIT_FAILED, EXIT_OK } from "../exitCodes.ts";
 import { SpawnCommandRunner } from "../../core/detect/CommandRunner.ts";
 import { detectWorkspace } from "../../core/detect/detectWorkspace.ts";
-import { buildMap } from "../../core/map/buildMap.ts";
+import { buildMap, type BuildMapResult } from "../../core/map/buildMap.ts";
+import { EventLog } from "../../core/events/EventLog.ts";
+import { RunStore } from "../../core/run/RunStore.ts";
+import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
 import { checkCitations } from "../../core/map/checkCitations.ts";
 import { chooseProviders } from "../../core/init/runInit.ts";
 import { loadWorkspaceFile } from "../../core/init/loadWorkspaceFile.ts";
@@ -91,11 +94,49 @@ async function refresh(args: MapArgs): Promise<number> {
       runner,
     ),
   });
+  const recorded = recordRefresh(loaded.root, result);
   process.stdout.write(
     `tldrx map --refresh — ${result.files.length} documents via ${result.providers.join(", ") || "no provider"}\n`
-    + result.files.map((file) => `  ${file}\n`).join(""),
+    + result.files.map((file) => `  ${file}\n`).join("")
+    + (recorded === null ? "" : `  ${recorded}\n`),
   );
   return EXIT_OK;
+}
+
+/**
+ * Append `map.refreshed` (spec §2.9) to the newest open run's ledger.
+ *
+ * `map.refreshed` has been in the type enum and in the replay renderer since v0
+ * and NOTHING ever emitted it — measured 2026-08-29 — so the one command that
+ * rewrites every expert's evidence base left no trace anywhere. Whether a fact in
+ * a handoff predates a refresh or came after it was unanswerable.
+ *
+ * The map is workspace-level and `events.jsonl` is per run, so this records
+ * against the NEWEST OPEN run and says which — an event silently filed under a
+ * run the operator was not thinking about would be worse than none. With no open
+ * run there is nowhere to put it, and that is not an error: `map --refresh` on a
+ * fresh workspace is a normal first move.
+ */
+function recordRefresh(root: string, result: BuildMapResult): string | null {
+  const open = RunStore.findOpen(root);
+  const store = open[0];
+  if (store === undefined) return null;
+  const failure = EventLog.forRun(store.runDir).tryAppend({
+    ts: nowRfc3339(),
+    run: store.runId,
+    stage: null,
+    type: "map.refreshed",
+    actor: currentActor(),
+    cost_usd: 0,
+    payload: {
+      providers: [...result.providers],
+      documents: result.files.length,
+      repos: result.facts.length,
+    },
+  });
+  return failure === null
+    ? `recorded map.refreshed against run ${store.runId}`
+    : `could not record map.refreshed (${failure})`;
 }
 
 async function check(args: MapArgs): Promise<number> {

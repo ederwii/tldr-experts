@@ -186,6 +186,7 @@ function fixture(plan: Readonly<Record<string, string>> = defaultPlan()): Fixtur
       // wave5 added these three to ExecutorContext; `runNext` supplies them for
       // real. Here they are the identity: no worktrees, no split, no ledger.
       keepWorktrees: false,
+    reuseEpic: false,
       agentCap: (share = 1) => Math.round(2 * share * 100) / 100,
       emit: () => undefined,
     },

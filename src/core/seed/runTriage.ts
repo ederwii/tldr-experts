@@ -160,7 +160,14 @@ async function propose(
     proposalPath: mode === "prepare" ? `${where}/.agent/${PROPOSE_STAGE}/result.json` : undefined,
   });
 
-  if (mode === "prepare") {
+  // The bundle is written in BOTH modes, before anything is spawned.
+  //
+  // It used to be a `--prepare`-only artefact, so a headless `--propose` killed
+  // mid-turn left nothing but `inventory.*` and `tldrx status` said "nothing
+  // pending" — the operator's only move was to pay for the whole proposal again
+  // (2026-08-29 audit, §A). With the bundle on disk the interrupted attempt is
+  // visible, the prompt it paid for is re-readable, and `--commit` can finish it.
+  if (mode !== "commit") {
     const pending: PendingStage = {
       version: 1,
       run: `seed:${inventory.source}`,
@@ -178,6 +185,9 @@ async function propose(
       prepared_at: options.at,
     };
     writeBundle(outDir, PROPOSE_STAGE, prompt, pending);
+  }
+
+  if (mode === "prepare") {
     return {
       code: EXIT_OK,
       costUsd: 0,

@@ -55,7 +55,10 @@ export interface ProposedSplit {
   readonly file: SplitFile;
 }
 
-/** Every parseable `split.yml` under `.tldrx/triage/` at `status: proposed`, dir order. */
+/**
+ * Every parseable `split.yml` under `.tldrx/triage/` that still needs a human,
+ * dir order — `proposed` (nobody decided) and `applying` (apply stopped halfway).
+ */
 export function proposedSplits(root: string): readonly ProposedSplit[] {
   const triage = join(root, PROJECT_FRAMEWORK_DIR, TRIAGE_DIRNAME);
   let entries: string[];
@@ -71,7 +74,7 @@ export function proposedSplits(root: string): readonly ProposedSplit[] {
     try {
       if (!statSync(dir).isDirectory() || !existsSync(path)) continue;
       const file = readSplitFile(parseYaml(readFileSync(path, "utf8")));
-      if (file.status !== "proposed") continue;
+      if (file.status !== "proposed" && file.status !== "applying") continue;
       found.push({ path, rel: toRel(root, path), dir, file });
     } catch {
       // A split that does not parse is not pending work — it is a broken file.
@@ -125,6 +128,30 @@ function splitItem(root: string, split: ProposedSplit): PendingItem {
   details.push(
     `read ${toRel(root, join(split.dir, SPLIT_MD))}, edit ${split.rel} if you disagree, then apply it`,
   );
+
+  // A split caught mid-apply is a DIFFERENT problem from one nobody has decided:
+  // some runs exist, the rest do not, and the command to offer is not `--dry-run`.
+  if (file.status === "applying") {
+    const done = file.created_runs ?? [];
+    return {
+      kind: "seed-split",
+      summary: `\`tldrx seed apply ${split.rel}\` stopped at run ${String(done.length + 1)} of `
+        + `${String(file.runs.length)} — ${done.length === 0 ? "nothing" : `${String(done.length)} run(s)`} `
+        + "created, the rest were not",
+      command: `tldrx run status`,
+      details: [
+        done.length === 0
+          ? "no run was created before it stopped"
+          : `created and left in place: ${done.join(", ")}`,
+        // `created_runs` holds run IDS (`<yymmdd>-<slug>`); the proposal holds slugs.
+        `still to create: ${file.runs.map((run) => run.slug)
+          .filter((slug) => !done.some((id) => id === slug || id.endsWith(`-${slug}`)))
+          .join(", ")}`,
+        `remove those run dirs (or \`tldrx run cancel\` them), set ${split.rel} back to`
+          + " `status: proposed`, and apply again",
+      ],
+    };
+  }
 
   return {
     kind: "seed-split",

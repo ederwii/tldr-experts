@@ -76,6 +76,23 @@ export function fromRunsRelPath(area: string): string {
   return `${KNOWLEDGE_DIRNAME}/from-runs-${area}.md`;
 }
 
+export const PARTIAL_SUFFIX = ".partial";
+
+/**
+ * Where a training sub-agent actually writes: `<area>.md.partial`.
+ *
+ * A knowledge file is INLINED into every later prompt for its area, and the
+ * inliner globs `knowledge/*.md` (excluding `*.rejected.md`). So a training run
+ * killed halfway used to leave a torn, unvalidated file sitting at exactly the
+ * name that gets inlined — half a knowledge file, read as if it were whole
+ * (2026-08-29 audit). The sub-agent now writes the partial, and `expert train`
+ * renames it onto the real name only after the file has VALIDATED. `.md.partial`
+ * does not match `*.md`, so nothing half-written can ever be inlined.
+ */
+export function partialOf(rel: string): string {
+  return `${rel}${PARTIAL_SUFFIX}`;
+}
+
 /** What one sub-agent cost and produced, for the log and the CLI report. */
 export interface TrainingTask {
   readonly key: string;

@@ -6,13 +6,14 @@
  * status, run status, the budget mirror, `updated_at`) is recomputed in exactly one
  * place and both files are revalidated before either touches disk.
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { parseYaml } from "../yaml.ts";
 import { EventLog } from "../events/EventLog.ts";
 import type { TldrxEvent } from "../events/Event.ts";
 import { asRunBudget, validateRunBudget, type RunBudget } from "../budget/RunBudget.ts";
 import { listRunDirs } from "../../hooks/lib/workspace.ts";
+import { withWorkspaceLock, workspaceRootOfRunDir } from "../lock/workspaceLock.ts";
 import { nowRfc3339 } from "../../hooks/lib/actor.ts";
 import { emitBudgetYaml, emitRunYaml } from "./emitRunYaml.ts";
 import {
@@ -43,6 +44,11 @@ export interface CursorEntry {
 export class RunStore {
   private current: RunFile;
   private currentBudget: RunBudget;
+  /**
+   * Did anyone call `mutateBudget`? Only then may this store's CEILINGS win over
+   * whatever is on disk at save time — see `save()`.
+   */
+  private budgetMutated = false;
 
   private constructor(
     readonly runDir: string,
@@ -178,6 +184,7 @@ export class RunStore {
    */
   mutateBudget(fn: (budget: RunBudget) => RunBudget): void {
     this.currentBudget = fn(structuredClone(this.currentBudget) as RunBudget);
+    this.budgetMutated = true;
   }
 
   append(event: TldrxEvent): void {
@@ -187,26 +194,97 @@ export class RunStore {
   /**
    * Recompute everything derived, revalidate both files, then write. A validation
    * failure throws BEFORE the first byte lands, so a run is never left half-written.
+   *
+   * Three things this does that a plain `writeFileSync` pair did not, all from the
+   * 2026-08-29 resumability audit:
+   *
+   * 1. **Under `.tldrx/.lock`.** `budget.yml` is read-modified-written here and by
+   *    `budget raise`; without a lock those two interleave.
+   * 2. **Ceilings are re-read from disk.** This store may have loaded `budget.yml`
+   *    minutes ago. A `budget raise` that landed since is on disk and not in
+   *    memory, and writing our stale copy back silently reverted it (measured).
+   *    So unless THIS store deliberately changed the ceilings (`mutateBudget`,
+   *    which is what `raise` uses), the ceilings on disk win and we contribute
+   *    only the actuals we just rolled up.
+   * 3. **Temp + rename per file.** `renameSync` is atomic within a filesystem, so
+   *    a reader either sees the whole old file or the whole new one — never the
+   *    truncated middle of a `writeFileSync` that was killed. Same move `run new`
+   *    already made for the run directory (`newRun.ts`).
    */
   save(): void {
     const rolled = rollUp(this.current);
-    const budget = rollUpBudget(this.currentBudget, rolled);
 
     const runValidation = validateRunFile(rolled);
     if (!runValidation.ok) {
       const first = runValidation.issues[0];
       throw new RunStoreError(`refusing to write an invalid run.yml: ${first?.path ?? ""} ${first?.message ?? ""}`);
     }
-    const budgetValidation = validateRunBudget(budget);
-    if (!budgetValidation.ok) {
-      const first = budgetValidation.issues[0];
-      throw new RunStoreError(`refusing to write an invalid budget.yml: ${first?.path ?? ""} ${first?.message ?? ""}`);
-    }
 
-    writeFileSync(join(this.runDir, "budget.yml"), emitBudgetYaml(budget), "utf8");
-    writeFileSync(join(this.runDir, "run.yml"), emitRunYaml(rolled), "utf8");
-    this.current = rolled;
-    this.currentBudget = budget;
+    withWorkspaceLock(workspaceRootOfRunDir(this.runDir), () => {
+      const budget = rollUpBudget(this.ceilingsToWrite(), rolled);
+      const budgetValidation = validateRunBudget(budget);
+      if (!budgetValidation.ok) {
+        const first = budgetValidation.issues[0];
+        throw new RunStoreError(`refusing to write an invalid budget.yml: ${first?.path ?? ""} ${first?.message ?? ""}`);
+      }
+      writeAtomic(join(this.runDir, "budget.yml"), emitBudgetYaml(budget));
+      writeAtomic(join(this.runDir, "run.yml"), emitRunYaml(rolled));
+      this.current = rolled;
+      this.currentBudget = budget;
+      this.budgetMutated = false;
+    });
+  }
+
+  /**
+   * The ceilings this save should write: ours when we changed them on purpose,
+   * otherwise whatever is on disk right now. Falls back to the in-memory copy
+   * when the file is gone or does not parse — a save is not the place to fail
+   * over someone else's damage.
+   */
+  private ceilingsToWrite(): RunBudget {
+    if (this.budgetMutated) return this.currentBudget;
+    const path = join(this.runDir, "budget.yml");
+    if (!existsSync(path)) return this.currentBudget;
+    try {
+      const doc = parseYaml(readFileSync(path, "utf8"));
+      const validation = validateRunBudget(doc);
+      if (!validation.ok) return this.currentBudget;
+      const onDisk = asRunBudget(doc);
+      // Only CEILINGS come from disk. Actuals are ours: `rollUpBudget` overwrites
+      // every `spent_usd` from the run we are about to write.
+      return {
+        ...onDisk,
+        phases: this.currentBudget.phases.map((mine) => {
+          const theirs = onDisk.phases.find((p) => p.id === mine.id);
+          return theirs === undefined ? mine : { ...mine, ceiling_usd: theirs.ceiling_usd };
+        }),
+      };
+    } catch {
+      return this.currentBudget;
+    }
+  }
+}
+
+/**
+ * Write via a sibling temp file and `renameSync`.
+ *
+ * The temp name carries the pid so two processes writing the same file cannot
+ * collide on the temp itself, and it is removed on the failure path so a crashed
+ * write leaves no litter next to the real file.
+ */
+function writeAtomic(path: string, content: string): void {
+  const temp = `${path}.tmp-${String(process.pid)}`;
+  mkdirSync(dirname(path), { recursive: true });
+  try {
+    writeFileSync(temp, content, "utf8");
+    renameSync(temp, path);
+  } catch (error) {
+    try {
+      if (existsSync(temp)) rmSync(temp, { force: true });
+    } catch {
+      // Nothing to clean up, or not ours to clean up.
+    }
+    throw error;
   }
 }
 

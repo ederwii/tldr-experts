@@ -669,6 +669,142 @@ places nothing read as one list.
   "on main, unreleased (0.3.0 pending tag)". `dashboard` is off the README's
   "refuses on ambiguity" list: it draws every run in the workspace, so it has no
   single run to be ambiguous about.
+### A torn line no longer costs you the history
+
+- **`EventLog.read` skips an unparseable line instead of throwing.** Measured in
+  the 2026-08-29 resumability audit: `events.jsonl` is appended line by line, so a
+  process killed mid-write leaves half an object on the last line — and `read()`
+  ran that through a bare `JSON.parse`, so `tldrx replay` printed
+  "events.jsonl could not be read" and exit 0 for a ledger whose first four hundred
+  lines were perfectly good. Tolerant readers already existed in `run/attempts.ts`
+  and the Build executor; the shared one now agrees with them. Skips are counted,
+  not swallowed: `readAll()` returns `{events, lines, skipped}`, `read()` says
+  `1 line skipped (unparseable — a torn write)` once per file on stderr, and
+  `tldrx replay` prints the same note above the narrative. Line numbers now come
+  from the reader, so a torn line no longer shifts every `L<n>` after it.
+
+### The two files every run shares now have a lock over them
+
+- **`.tldrx/.lock`, held across the read-modify-write.** Measured 2026-08-29: two
+  processes appending to `.tldrx/memory/facts.yml` each computed the next id as
+  `max(id) + 1`, each got `F001`, and the second save erased the first fact
+  outright. The per-run `.lock` never covered this — it guards one run, and
+  `facts.yml` belongs to all of them. The new workspace lock is the same shape
+  (a pid file, `kill(pid, 0)` for staleness, a dead holder taken over) and is
+  re-entrant within a process, and `FactsStore.update(path, fn)` holds it across
+  load → append → save. A two-process test that provably overlaps now mints
+  `F001` and `F002`; with the lock disabled it mints `F001` twice. `tldrx run new`
+  holds the same lock across its WHOLE creation, because `--from` mints fact ids,
+  writes them into the run's `fact.added` events, and only then writes the file
+  back — a read-modify-write with a wide middle.
+- **`budget.yml` ceilings are re-read before every write.** A `budget raise` that
+  landed while a stage was in flight was silently reverted when that stage saved,
+  because the in-flight `RunStore` wrote back the ceilings it had read minutes
+  earlier. `RunStore.save` now takes the ceilings from disk unless this store
+  deliberately changed them (`mutateBudget`, which is what `raise` uses) and
+  contributes only the actuals it rolled up.
+- **`run.yml` and `budget.yml` are written temp + `rename`.** A `writeFileSync`
+  killed halfway left a truncated run file; a rename is atomic within a
+  filesystem, so a reader gets the whole old file or the whole new one. Same move
+  `run new` already made for the run directory.
+
+### `running` stopped meaning "ready", and a stuck run has a way out
+
+- **Two new waiting kinds, `running` and `prepared`.** A stage killed between
+  `tldrx next --prepare` and `--commit` is left `running` with NO lock — `--prepare`
+  releases it on purpose, because the host session runs the prompt. Every reader
+  called that `ready` and offered `tldrx next`, which re-spawned the stage and
+  binned a sub-agent turn the run had already paid for. `waitingFor` now separates
+  the three things `running` can mean: a live lock (`stage is running (pid N) —
+  wait, or \`tldrx run unlock <id>\` if it died`), an uncommitted bundle
+  (`a --prepare bundle is waiting — run the prompt and \`tldrx next --commit
+  <id>\`, or \`tldrx reject --run <id> --note …\` to discard`), and a crash with
+  neither. `tldrx run status`, `tldrx status` and the dashboard all follow, because
+  all three read the one derivation.
+- **`tldrx next` refuses to re-spawn over a bundle** (exit 2), naming all three
+  ways out; `--discard-pending` is the explicit "bin it and run it again". Phases
+  with an executor are exempt — Build stays `running` across cycles by design.
+- **`tldrx run unlock [<run>] [--force]`.** A `.lock` whose pid had been RECYCLED
+  by an unrelated process was permanent: `kill(pid, 0)` said alive, `next` exited
+  2 forever, and the fix was knowing to delete a gitignored file by hand. Unlock
+  removes a dead holder's lock, demotes `running` → `ready`, and appends
+  `run.unlocked`. A live holder needs `--force`.
+- **`tldrx run cancel [<run>] --note <text> [--force]`.** `cancelled` was a status
+  in the schema with nothing that could write it, so a run you had given up on
+  stayed open forever and made every id-less command ambiguous. Cancel closes it,
+  appends `run.cancelled`, and records the decision on the run
+  (`cancelled: {by, at, note}`, optional and additive) — which is what lets a
+  FAILED run be closed without overwriting the failure on its stages. Nothing is
+  deleted; `tldrx replay` still reads the whole thing.
+
+### Ctrl-C now stops the sub-agent, not just tldrx
+
+- **SIGINT/SIGTERM kill the agent's whole process tree, record the attempt, and
+  unlock.** Measured 2026-08-29: there was no signal handler on the run path at
+  all. A sub-agent is spawned detached (a timeout needs a process group to kill),
+  so the terminal's Ctrl-C never reached it — it kept running with `ppid 1`, kept
+  billing against its `--max-budget-usd`, and because a stage's cost is only
+  written after the spawn returns, not a cent of it appeared in `events.jsonl`.
+  The run was left `running` behind a `.lock` whose pid no longer existed.
+  `src/cli/signals.ts` (one line from `index.ts`) now kills the tree first, then
+  records a partial `agent.result` carrying `cost_usd: null` and
+  `stopped_by: "signal"` — unknown, said out loud, rather than a `$0.00` that
+  would read as free — demotes `running` → `ready`, releases the lock, restores
+  the terminal cursor and exits 130. A second signal exits at once.
+- **A `--prepare` bundle is left alone.** If nothing was spawned and an
+  uncommitted bundle is on disk, the stage stays `running` and the message points
+  at `tldrx next --commit`: that work is waiting for a human, not a process.
+- **`dashboard` and `watch` keep their own Ctrl-C.** With no sub-agent to kill and
+  no run to close, the handler stands aside and their exit-0 shutdown still wins.
+
+### Build branches and worktrees name their run
+
+- **`story/<run-id>/<story-id>`, and `.tldrx/worktrees/<repo>/<run-id>-<story-id>`.**
+  Measured 2026-08-29: four runs of one plan all cut `story/S1`. The second found
+  it already there, `git worktree add` checked it out as it stood, and one run's
+  commits landed on another's branch — and the fourth reused the third's LIVE
+  worktree, so two sub-agents were editing the same files at the same time.
+  Neither name can collide now.
+- **An `epic/<slug>` this run did not cut is refused** (exit 2, `refused` — the
+  stage goes back to `ready` and nothing is spent), unless `tldrx next
+  --reuse-epic`. The epic branch keeps its plain name on purpose — it is the unit
+  a team merges — so instead of making collision impossible this makes it
+  deliberate. What a run cut or adopted is recorded in `run.yml` as
+  `build.epic_branch` (optional, additive), which is how its own next invocation
+  tells its branch from someone else's.
+
+### `map --refresh` finally leaves a trace
+
+- **`map.refreshed` is emitted.** It has been in the §2.9 type enum and in the
+  replay renderer since v0 and nothing ever emitted it (measured 2026-08-29), so
+  the one command that rewrites every expert's evidence base left no record
+  anywhere — whether a claim in a handoff predated a refresh or came after it was
+  unanswerable. It now carries the providers that ran, the document count and the
+  repo count. The map is workspace-level and `events.jsonl` is per run, so it is
+  recorded against the newest OPEN run and the command SAYS which; with no open
+  run there is nowhere to put it, which is not an error.
+
+### A job stopped halfway now looks stopped halfway
+
+- **`seed apply` writes `status: applying` before the loop.** It creates N runs
+  one at a time; a crash at run 3 of 8 left `split.yml` still reading `proposed`,
+  so `tldrx status` said "nothing has been created yet" with three run
+  directories sitting next to it. The file now moves to `applying` before the
+  first run and grows `created_runs` after each one, and `tldrx status` reports
+  `tldrx seed apply … stopped at run 3 of 8` with what was created, what was not,
+  and how to reset it.
+- **`seed triage --propose` writes its `.agent/` bundle in headless mode too.**
+  It was a `--prepare`-only artefact, so an interrupted propose left nothing but
+  `inventory.*` and the only offer was to pay for the whole proposal again. The
+  prompt and `pending.json` are now on disk before anything is spawned.
+- **`expert train` writes `knowledge/<area>.md.partial` and renames on
+  validation.** A knowledge file is INLINED into every later prompt for its area
+  and the inliner globs `knowledge/*.md`, so a training run killed halfway left a
+  torn, unvalidated file at exactly the name that gets read as if it were whole.
+  The sub-agent now writes the partial; the framework renames it onto the real
+  name only after the file validates, and a leftover partial is quarantined as
+  `.rejected.md` rather than left. `.md.partial` never matches `*.md`, so nothing
+  half-written can be inlined at all.
 
 ## 0.2.0 — 2026-08-29
 

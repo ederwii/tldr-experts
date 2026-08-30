@@ -24,13 +24,14 @@ import { PROJECT_FRAMEWORK_DIR } from "../../paths.ts";
 import { factsPath, loadWorkspace, type WorkspaceContext } from "../../../hooks/lib/workspace.ts";
 import { runDodCommand } from "../../../hooks/lib/story.ts";
 import { FactsStore } from "../../facts/FactsStore.ts";
+import { RunStore } from "../../run/RunStore.ts";
 import { renderConventions, renderFacts, stackExpertNames } from "../prompt.ts";
 import { loadExpertBundles } from "../../experts/expertBundle.ts";
 import { agentDir } from "../paths.ts";
 import { spawnAgent, BASE_TOOLS } from "../spawnAgent.ts";
 import { PendingError, readResult, writeBundle, writeRaw, type PendingStage } from "../pending.ts";
 import {
-  addWorktree, commitAll, currentBranch, dirtyPaths, ensureBranch, firstLine, GitError, headSha,
+  addWorktree, branchExists, commitAll, currentBranch, dirtyPaths, ensureBranch, firstLine, GitError, headSha,
   isDirty, mergeNoFf, removeWorktree, repoDirOf,
 } from "../../build/git.ts";
 import {
@@ -73,13 +74,18 @@ export async function buildExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
   }
 
   const session = new BuildSession(ctx, workspace, plan);
+  // Every exit carries the epic branches this run claimed — including the failure
+  // paths. A run that cut `epic/x` and then fell over still cut it, and the next
+  // invocation must not refuse its own branch.
+  const withClaims = (outcome: ExecutorOutcome): ExecutorOutcome =>
+    session.claimedEpics.size === 0 ? outcome : { ...outcome, epicBranches: [...session.claimedEpics] };
   try {
-    if (ctx.mode === "prepare") return await session.prepare();
-    if (ctx.mode === "commit") return await session.commit();
-    return await session.runAll();
+    if (ctx.mode === "prepare") return withClaims(await session.prepare());
+    if (ctx.mode === "commit") return withClaims(await session.commit());
+    return withClaims(await session.runAll());
   } catch (error) {
     if (error instanceof GitError || error instanceof PlanLoadError) {
-      return failed(ctx, error.message, session.tasks);
+      return withClaims(failed(ctx, error.message, session.tasks));
     }
     throw error;
   }
@@ -105,6 +111,8 @@ class BuildSession {
   private readonly lines: string[] = [];
   /** Per-story reviewer verdicts seen in THIS process, for the requeue counter. */
   private readonly reviews = new Map<string, number>();
+  /** Epic branches this run cut or adopted; `runNext` writes them to run.yml. */
+  readonly claimedEpics = new Set<string>();
 
   constructor(
     private readonly ctx: ExecutorContext,
@@ -116,7 +124,7 @@ class BuildSession {
 
   /** Headless: every wave, every story, in order, then the handoff. */
   async runAll(): Promise<ExecutorOutcome> {
-    const refusal = await this.refuseOnDirtyRepos();
+    const refusal = await this.refuseOnDirtyRepos() ?? await this.refuseOnForeignEpic();
     if (refusal !== null) return refusal;
 
     for (const wave of this.plan.waves) {
@@ -140,7 +148,7 @@ class BuildSession {
   async prepare(): Promise<ExecutorOutcome> {
     const planned = this.nextPending();
     if (planned === null) return await this.finish();
-    const refusal = await this.refuseOnDirtyRepos();
+    const refusal = await this.refuseOnDirtyRepos() ?? await this.refuseOnForeignEpic();
     if (refusal !== null) return refusal;
 
     const story = await this.openStory(planned);
@@ -333,7 +341,15 @@ class BuildSession {
     if (await ensureBranch(repoDir, epicBranch, base)) {
       this.lines.push(`  · cut \`${epicBranch}\` from \`${base}\` in ${planned.story.repo}`);
     }
-    const branch = `story/${planned.story.id}`;
+    // Whatever happened above, this run is now working on that branch: say so in
+    // run.yml (`build.epic_branch`) so its NEXT invocation, and any other run,
+    // can tell "I cut this" from "this was already here".
+    this.claimedEpics.add(epicBranch);
+    // The run id is IN the branch name. Without it, four runs of the same plan
+    // all cut `story/S1` — the second found it already there, `addWorktree`
+    // checked it out as it stood, and one run's commits landed on another's
+    // branch (2026-08-29 audit, §B). `story/<run>/<story>` cannot collide.
+    const branch = `story/${this.ctx.runId}/${planned.story.id}`;
     const worktree = this.storyWorktree(planned);
     if (!existsSync(worktree)) {
       mkdirSync(join(worktree, ".."), { recursive: true });
@@ -712,6 +728,64 @@ class BuildSession {
   // --- helpers --------------------------------------------------------------
 
   /**
+   * An `epic/<slug>` that already exists and was NOT cut by this run.
+   *
+   * Story branches and worktrees now carry the run id, so they cannot collide.
+   * The epic branch deliberately does not — an epic is the unit a team merges,
+   * and `epic/260829-x-leaderboard` would be a worse name for it. So instead of
+   * making collision impossible, this makes it DELIBERATE: a branch this run's
+   * `build.epic_branch` does not claim is refused, and `--reuse-epic` is the word
+   * that says "yes, stack on it". Measured 2026-08-29: four runs piled onto one
+   * `epic/leaderboard` with nothing said.
+   *
+   * `commit` never asks: it continues a story whose epic was claimed at prepare.
+   */
+  private async refuseOnForeignEpic(): Promise<ExecutorOutcome | null> {
+    const claimed = new Set(this.claimedBranchesOnFile());
+    const seen = new Set<string>();
+    for (const planned of this.pendingStories()) {
+      const epic = this.plan.epics.get(planned.story.epic);
+      if (epic === undefined) continue;
+      const branch = epic.epic.branch;
+      const key = `${planned.story.repo}:${branch}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const repoDir = repoDirOf(this.workspace, planned.story.repo);
+      if (!(await branchExists(repoDir, branch))) continue;   // we are about to cut it
+      if (claimed.has(branch)) continue;                       // this run cut it earlier
+      if (this.ctx.reuseEpic) {
+        this.claimedEpics.add(branch);
+        this.lines.push(`  · adopting existing \`${branch}\` in ${planned.story.repo} (--reuse-epic)`);
+        continue;
+      }
+      return {
+        ok: false,
+        refused: true,
+        awaiting: false,
+        tasks: [],
+        costUsd: 0,
+        outputs: [],
+        lines: [
+          `[tldrx] build: \`${branch}\` already exists in ${planned.story.repo} and run ${this.ctx.runId} ` +
+            "did not cut it — refusing to stack this run's commits onto someone else's epic.",
+          "  either delete or rename that branch, or run `tldrx next --reuse-epic` to work on it deliberately.",
+        ],
+        error: `epic branch \`${branch}\` was not created by this run`,
+      };
+    }
+    return null;
+  }
+
+  /** `run.yml`'s `build.epic_branch`, or nothing when the file will not open. */
+  private claimedBranchesOnFile(): readonly string[] {
+    try {
+      return RunStore.open(this.ctx.runDir).run.build?.epic_branch ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
    * Spec §5, Build executor safety: a repo whose tree is dirty is refused BEFORE
    * anything is cut, because the epic branch is cut from that tree's branch and
    * `git worktree add` would carry the mess forward.
@@ -886,8 +960,18 @@ class BuildSession {
     return readFileSync(path, "utf8").trimEnd().split("\n").map((line) => `> ${line}`).join("\n");
   }
 
+  /**
+   * `.tldrx/worktrees/<repo>/<run>-<story>` — the run id is in the PATH too.
+   *
+   * Same collision, worse: the fourth run of one plan reused the third's LIVE
+   * worktree, so two sub-agents were editing the same files at the same time
+   * (2026-08-29 audit, §B). A path that names the run cannot be walked into.
+   */
   private storyWorktree(planned: PlannedStory): string {
-    return join(this.ctx.root, PROJECT_FRAMEWORK_DIR, WORKTREES, planned.story.repo, planned.story.id);
+    return join(
+      this.ctx.root, PROJECT_FRAMEWORK_DIR, WORKTREES,
+      planned.story.repo, `${this.ctx.runId}-${planned.story.id}`,
+    );
   }
 
   private async openEpicWorktree(story: StoryContext): Promise<string> {

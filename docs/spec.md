@@ -634,7 +634,7 @@ three are handed the run directory of the file they are judging.
 
 Append-only audit log: with `run.yml` the dashboard's only data source, the cost ledger, and the `replay`/`retro` input.
 
-**Type enum:** `run.created` `run.closed` `phase.started` `phase.done` `stage.started` `stage.done` `stage.failed`
+**Type enum:** `run.created` `run.closed` `run.unlocked` `run.cancelled` `phase.started` `phase.done` `stage.started` `stage.done` `stage.failed`
 `stage.skipped` `task.started` `task.done` `agent.spawned` `agent.result` `question.asked` `question.answered`
 `gate.requested` `gate.approved` `gate.rejected` `check.passed` `check.failed` `budget.warned` `budget.blocked`
 `fact.added` `fact.retired` `map.refreshed` `ticket.synced` `error`. Closed set: an unknown type is a validation error.
@@ -655,6 +655,12 @@ Append-only audit log: with `run.yml` the dashboard's only data source, the cost
 
 **Validation (appended line only).** One-line JSON ≤8 KB; exactly these seven keys; `type` in enum; append-only
 enforced by comparing file byte length before/after — a write that shortens the file is rejected.
+
+**Reading is tolerant, and says so.** A reader SKIPS any non-empty line that does not parse and keeps going — a
+process killed between the `{` and the `\n` leaves a torn last line, and one torn byte must not cost the other
+four hundred events. Skipped lines are COUNTED, never silent: `tldrx replay` prints `events.jsonl: 1 line skipped
+(unparseable — a torn write)` and the shared reader says the same once per file on stderr. Only the WRITE path
+validates; a reader that refused a bad line would be the same outage in a different place.
 
 ### 2.10 `.tldrx/env.yml`
 
@@ -1104,7 +1110,7 @@ list. `tldrx status` reads those four, in the order they block each other:
 | # | kind | source | the command it names |
 |---|---|---|---|
 | 1 | `init-questions` | open blocks in `.tldrx/init-questions.md` | `tldrx interview --init` |
-| 2 | `seed-split` | every `.tldrx/triage/*/split.yml` at `status: proposed` — its runs, its unanswered `questions`, the seed documents whose own `Status:` line still says `proposed`, and any seed file named `DECISIONS*.md` | `tldrx seed apply <path> --dry-run` |
+| 2 | `seed-split` | every `.tldrx/triage/*/split.yml` at `status: proposed` — its runs, its unanswered `questions`, the seed documents whose own `Status:` line still says `proposed`, and any seed file named `DECISIONS*.md`; **and every one at `status: applying`**, which is an apply that stopped partway: it names the runs it created, the ones it did not, and how to reset | `tldrx seed apply <path> --dry-run` |
 | 3 | `run` | `RunStore.findOpen`, plus one item for any run folder that does not validate | `tldrx next <id>` / `tldrx answer <Qid> "…" --run <id>` / `tldrx approve --run <id>` |
 | 4 | `expert` | experts `stageCoverage` says a stage will load, with zero evidence in every area | `tldrx expert train <name> --area <a> --mode <light\|full> --print-prompt` |
 | 5 | `none` | nothing pending | — |
@@ -1431,6 +1437,66 @@ agent ceiling is the stage share divided N ways with a **$0.25 floor**, because 
 **No done stories is a result, not an error.** The stage completes, spawns nothing, spends nothing, and writes a handoff
 whose four sections each read `- none [src: absent:03-plan/stories]`. `watchers/<feature>.md` is deliberately **not** in
 the stage's `outputs:` — a declared output is re-read by name (above), and these have no name until the pre-pass has run.
+
+**Two locks, and what each one guards.** `tldrx-work/<run>/.lock` is the single-writer guard on ONE run — a pid file,
+taken by `next`, stale when `kill(pid, 0)` says the holder is gone. `.tldrx/.lock` is the workspace lock, and it guards
+the files SEVERAL runs share: `.tldrx/memory/facts.yml` and each run's `budget.yml`. It is taken for the DURATION of a
+read-modify-write, not just the write — `facts.yml` mints its next id as `max(id) + 1` off the file, so two appenders
+that both read before either wrote would both mint `F001` and the second save would erase the first fact. Same pid
+rule, same stale rule, and re-entrant within a process. Both files are written temp + `rename`, so a reader sees the
+whole old file or the whole new one, never a truncated middle. And `budget.yml`'s **ceilings are re-read from disk
+before every write**: a writer that did not deliberately change them contributes only actuals, so a `budget raise` that
+lands while a stage is in flight is no longer reverted by that stage's save.
+
+**`running` is three states, not one.** A stage that says `running` means one of three different things, and every
+reader has to tell them apart or it will offer the wrong command:
+
+| On disk | What it is | What is offered |
+|---|---|---|
+| `.lock` held by a LIVE pid | a `next` is working right now | wait, or `tldrx run unlock <id>` if that pid is gone |
+| no lock, `.agent/<stage>/pending.json` | a `--prepare` bundle nobody committed | `tldrx next --commit <id>`, or `tldrx reject --run <id> --note …` |
+| no lock, no bundle | a crash between the `running` stamp and the spawn | `tldrx next` — it demotes to `ready` and re-runs |
+
+The middle row is the one cut with no lock behind it: `--prepare` releases the lock on purpose, because the host
+session — not `tldrx` — runs the prompt. `tldrx next` **refuses** (exit `2`) rather than re-spawn a stage in that
+state, because a re-spawn discards a sub-agent turn the run has already been billed for; `--discard-pending` is the
+explicit way to bin the bundle and run it again. A phase with an executor is exempt: it stays `running` across
+`--prepare`/`--commit` cycles by design (one story per cycle) and owns its own bundles.
+
+**Build branch and worktree names carry the run id.** A story branch is `story/<run-id>/<story-id>` and its worktree
+is `.tldrx/worktrees/<repo>/<run-id>-<story-id>`. Without the run id, four runs of one plan all cut `story/S1`; the
+second found it already there, `git worktree add` checked it out as it stood, and one run's commits landed on
+another's branch — and the fourth walked into the third's LIVE worktree, two sub-agents editing the same files
+(measured 2026-08-29). The **epic** branch stays `epic/<slug>`, because an epic is the unit a team merges and a run id
+in its name would be worse. Collision there is made DELIBERATE instead: a Build stage refuses to start when
+`epic/<slug>` already exists and this run's `run.yml` `build.epic_branch` (optional, additive, §2.2) does not claim
+it — `--reuse-epic` is the word that says "stack on it anyway", and either way the branch is recorded as claimed from
+then on, so the run's own second invocation is never refused its own branch.
+
+**Interrupt path (SIGINT / SIGTERM).** A sub-agent is spawned DETACHED — it has to be, or a timeout has no process
+group to kill — and a detached child never receives the terminal's Ctrl-C. So the CLI installs one handler
+(`src/cli/signals.ts`) and it does four things, in this order: **(1)** kill every spawned child's whole process tree,
+stopping the spend before anything else can fail; **(2)** record a PARTIAL `agent.result` on the attempt that was
+killed — the envelope's `cost_usd` is `0` because the schema requires a number, and the payload carries
+`cost_usd: null` with `stopped_by: "signal"`, because a turn cut in half has no knowable cost and writing `0` would
+be a claim; **(3)** demote the `running` stage back to `ready` and release the run's `.lock`; **(4)** exit `130`.
+A second signal during that exits immediately. A stage holding an uncommitted `--prepare` bundle is left `running` on
+purpose — that work is waiting for a human, not for a process. And a command that owns its own shutdown (`dashboard`,
+`watch`) keeps it: with no sub-agent to kill and no run to close, the handler stands aside.
+
+**Getting unstuck.** Two commands, neither of which spends anything:
+
+- **`tldrx run unlock [<run>] [--force]`** removes a `.lock` whose pid is dead, demotes any `running` stage back to
+  `ready`, and appends `run.unlocked`. A LIVE holder needs `--force` — "the pid was recycled" and "a colleague is
+  running the stage" look identical from here, and only one of them is safe. Without `--force` it exits `2` and names
+  the pid.
+- **`tldrx run cancel [<run>] --note <text> [--force]`** closes a run for good: every non-terminal stage becomes
+  `cancelled`, the decision is recorded on the run itself (`cancelled: {by, at, note}` — optional and additive, §2.2)
+  and `run.cancelled` is appended. It refuses while a live lock holds the run unless `--force`. The run-level field is
+  what makes the status `cancelled` even when every stage is already terminal — the run people most want to close is
+  one whose stage FAILED, and there is no way to say "cancelled" through its stages without overwriting that failure.
+  Nothing is deleted: stages, outputs, events and money spent stay on disk and `tldrx replay <id>` still reads them.
+  A `cancelled` run is finished (§3.1), so `tldrx status` and every id-less command stop seeing it.
 
 **Resume path.** State lives only in files, so resume = run `next` again: the cursor points at the first non-terminal
 stage, a `running` left by a crash is demoted to `ready` when `.lock` holds a dead pid, and partial outputs are

@@ -41,6 +41,8 @@ export interface LoadedRun {
   readonly events: readonly NumberedEvent[];
   /** Set when events.jsonl exists but could not be read. */
   readonly eventsError: string | null;
+  /** Non-empty lines of `events.jsonl` that did not parse (a torn write). */
+  readonly eventsSkipped: number;
 }
 
 export function workDir(root: string): string {
@@ -78,25 +80,27 @@ export function loadRun(root: string, id: string): LoadedRun | null {
     ? toBudgetDocument(parseYaml(readFileSync(budgetPath, "utf8")))
     : null;
 
-  const { events, error } = readEvents(dir);
-  return { root, dir, id, run, budget, events, eventsError: error };
+  const { events, error, skipped } = readEvents(dir);
+  return { root, dir, id, run, budget, events, eventsError: error, eventsSkipped: skipped };
 }
 
-function readEvents(dir: string): { events: readonly NumberedEvent[]; error: string | null } {
+/**
+ * `EventLog.readAll` carries the line number of every event it could parse, so a
+ * torn line no longer shifts every number after it — and the ones it had to skip
+ * are counted rather than thrown, which is what `renderReplay` prints.
+ */
+function readEvents(dir: string): { events: readonly NumberedEvent[]; error: string | null; skipped: number } {
   const path = join(dir, EVENTS_FILE);
-  if (!existsSync(path)) return { events: [], error: null };
+  if (!existsSync(path)) return { events: [], error: null, skipped: 0 };
   try {
-    const parsed = new EventLog(path).read();
-    const numbers: number[] = [];
-    readFileSync(path, "utf8").split("\n").forEach((line, index) => {
-      if (line.trim() !== "") numbers.push(index + 1);
-    });
+    const parsed = new EventLog(path).readAll();
     return {
-      events: parsed.map((event, index) => ({ line: numbers[index] ?? index + 1, event })),
+      events: parsed.events.map((event, index) => ({ line: parsed.lines[index] ?? index + 1, event })),
       error: null,
+      skipped: parsed.skipped,
     };
   } catch (error) {
-    return { events: [], error: error instanceof Error ? error.message : String(error) };
+    return { events: [], error: error instanceof Error ? error.message : String(error), skipped: 0 };
   }
 }
 
