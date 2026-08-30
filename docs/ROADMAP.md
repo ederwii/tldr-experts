@@ -3,7 +3,7 @@
 Source of truth for *what is next*. Facts about *what shipped* live in `CHANGELOG.md`;
 design rationale lives in `docs/concept.md`; open design questions in `docs/spec.md` §7.
 
-## v0 — the loop (shipped: 0.0.1 → 0.0.2, 2026-08-29; install name `tldr-experts`, commands `tldrx` / `tldr-experts`)
+## v0 — the loop (tagged: v0.0.1 → v0.2.0, all 2026-08-29; install name `tldr-experts`, commands `tldrx` / `tldr-experts`)
 
 `init` (detect → code map → handoff → interview → experts → conventions → process), `run new`
 (+ `--from` AI-DLC distill), `next` (headless `claude -p` and in-session `--prepare/--commit`),
@@ -15,39 +15,38 @@ npm trusted publishing.
 Validated on one real workspace (5 sibling repos): the What phase of a feature run passed the
 citation gate on the second attempt; both failures were framework bugs and are fixed.
 
-## v1 — execute and observe
+## v1 — execute and observe (on main, unreleased)
+
+Everything in this section is written and tested on main; none of it is tagged.
 
 - **Build phase for real**: waves from `waves.yml`, one worktree + branch per story, epic
   branches, DoD gate re-running the workspace's own test/lint/typecheck commands, reviewer pass.
 - **Watch phase**: `watchers/<feature>.md` generated from what Build actually instrumented.
-- **Story / epic / waves schemas** (spec §7).
+- **Story / epic / waves schemas** (spec §2.13–§2.15).
 - **Live dashboard** (`tldrx dashboard`): same renderer, file watcher + SSE, still read-only.
-- **Budget UX**: estimate vs. ceiling reconciliation so a retry is not blocked by its own first
-  attempt; per-attempt accounting in `run status`.
-- **Token economy** (shipped in 0.3.0): cache-friendly prompt order with both cache counters
-  recorded; one shared byte budget with declared inputs filled first; a context ledger and
-  `prompt_max_bytes` as a refusal; experts ranked by relevance rather than by sharing a repo;
-  `max_reads` as the brake `--max-budget-usd` is not; the refused draft handed to attempt 2;
-  `tldrx cost` and `tldrx run estimate`. Still open: **seam analysis** for `migration`/`refactor`
-  scopes (`workflows/migration.yml` promises it, nothing implements it — the k-hop walk added
-  here is the missing half), and **discovery by sampling** (centrality + churn, both already
-  computed) instead of by whole-repo reads.
-- **Prose sections are not checked**: an Unknowns section written as a paragraph has no list
-  items to validate — require items or check sentences.
+- **Budget UX**: `budget show` / `budget raise`, estimate vs. ceiling reconciliation so a retry
+  is not blocked by its own first attempt; per-attempt accounting in `run status`.
+- **Token economy**: cache-friendly prompt order with both cache counters recorded; one shared
+  byte budget with declared inputs filled first; a context ledger and `prompt_max_bytes` as a
+  refusal; experts ranked by relevance rather than by sharing a repo; `max_reads` as the brake
+  `--max-budget-usd` is not; the refused draft handed to attempt 2; `tldrx cost` and
+  `tldrx run estimate`.
+- **Prose sections are checked**: each of Findings / Decisions / Unknowns / Evidence ledger must
+  hold at least one sourced list item, and prose alone is refused by `claim-sources`.
 
-## v1.1 — experts that learn (on main, unreleased — 0.3.0 pending tag: light/full training with provenance, computed levels; star chart reads real evidence)
+## v1.1 — experts that learn (on main, unreleased: light/full training with provenance, computed levels; star chart reads real evidence)
 
 - `expert train --mode light|full` (targeted reverse-engineering; mining past runs), evidence
   written with provenance, competency levels recomputed from evidence (formula in spec §2.6).
 - Star chart from real evidence in the dashboard; "train me on X" prompts wired to it.
 - Stack expertise shared by every expert by default.
-- **Role experts** (on main, unreleased — 0.3.0 pending tag): `init` seeds `product`, `architect`, `delivery`,
+- **Role experts** (on main, unreleased): `init` seeds `product`, `architect`, `delivery`,
   `developer`, `operations` — the names the shipped stage files name — with `kind: role` and
   an editable body at `templates/experts/<role>.md`. Their domain is the workflow, so they
   train with `--mode full` (past runs) and light mode is refused. The old `domain`/`stack`
   placeholders are retired from stage `experts:` lists.
 
-## v1.2 — one door in (on main, unreleased — 0.3.0 pending tag)
+## v1.2 — one door in (on main, unreleased)
 
 - **`tldrx status`**: everything pending in the workspace as one ordered list — init
   questions, proposed splits (with their unanswered questions and the seed documents still
@@ -59,11 +58,29 @@ citation gate on the second attempt; both failures were framework bugs and are f
 - **`tldrx seed answer`**: a split's questions get somewhere to record the reply, and
   `seed apply` warns about the ones still open.
 
-## Adapters (opt-in, files stay the source of truth) — ticket mirror on main, unreleased (0.3.0 pending tag); chat channel not started
+## Adapters (opt-in, files stay the source of truth) — ticket mirror on main, unreleased; chat channel not started
 
-- Ticket mirror (Jira / GitHub / Linear): epics and stories out, `external_status` in; never
-  advances `run.yml`, never marks a story done.
-- Chat channel (Slack / Pumble): the questions file is the contract; the channel only delivers.
+- Ticket mirror: Jira and GitHub are implemented; `linear` is in `process.yml`'s enum with no
+  adapter behind it (`src/core/adapters/types.ts:17`). Epics and stories out, `external_status`
+  in; never advances `run.yml`, never marks a story done. `tickets sync` previews by default.
+- Chat channel (Slack / Pumble): NOT STARTED. The questions file is the contract; the channel
+  would only deliver.
+
+## Next — open, nothing written yet
+
+- **Seam analysis** for the `migration` / `refactor` scopes. `workflows/migration.yml` says What
+  is "an inventory plus a compatibility matrix, both derived from the code map"; nothing walks
+  the map to produce one. The k-hop walk is the missing half.
+- **Discovery by sampling** — pick reads by centrality + churn (both already computed by the
+  map) instead of reading whole repos.
+- **Parallel stories in Build.** Sequential on purpose today
+  (`src/core/facilitator/executors/build.ts:17-19`): `waves.yml` already guarantees a dependency
+  sits in an earlier wave, so the inner loop can become a fan-out without changing anything else.
+- **Multi-model.** `spawnAgent.ts:32` is `const CLAUDE_BIN = "claude"` with no provider seam, so
+  "which model" means "which Claude". A provider adapter behind that constant is the whole change.
+- **Evals.** Every test in the suite proves the HARNESS; not one measures whether a run
+  produces better software than a bare `claude -p`. Until that exists, "it has gates" is the
+  only claim on offer.
 
 ## Not planned
 
