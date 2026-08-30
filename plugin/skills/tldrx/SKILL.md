@@ -29,9 +29,10 @@ tldrx status --json
 
 It is free, deterministic, and exits 0 whatever it finds (exit 3 only means there
 is no `.tldrx/` here — then the answer is `tldrx init`). It returns
-`{root, pending, items[]}`, each item `{kind, summary, command, details}`, already
-in the order the items block each other. **That list is the agenda.** Do not ask
-"what would you like to do?" before you have read it.
+`{root, pending, items[], advice[]}`, each item `{kind, summary, command, details}`,
+already in the order the items block each other. `items` are the BLOCKERS and all
+`pending` counts; `advice` blocks nothing — relay it once, briefly. **That list is
+the agenda.** Do not ask "what would you like to do?" first.
 
 Then take item 1. One item at a time, in order. Say in one plain sentence what it
 is and why it matters — no jargon a first-time user would not have — then either
@@ -53,6 +54,9 @@ Never answer on their behalf, never pick a default, never "assume yes":
   `proposed`. Record decisions with `tldrx seed answer <split.yml> <Qid> "<text>"`;
   edit `split.yml` if they want different runs.
 - a gate, an answer, or any ADR/decision document — quote it and ask.
+- a gate `tldrx status` reports as signed `by: auto` that they disagree with. It signs
+  only when its five conditions hold and cannot judge whether a decision was RIGHT: quote
+  the note — it carries all five measured values — and ask before revoking.
 
 **You act** once they have said what they want — these are mechanical:
 
@@ -66,9 +70,11 @@ Never answer on their behalf, never pick a default, never "assume yes":
   a word. An unreadable file reads as "no questions" to everything downstream.
 - one stage of a run, via the in-session recipe below.
 - `tldrx expert train <name> --area <a> --mode <light|full> --print-prompt` — the
-  printed prompt costs nothing; running it is a spend, so see Money. An `expert`
-  item with an EMPTY `command` is not a task: a role expert trains from past runs'
-  handoffs and there are none yet. Say so and move on.
+  printed prompt costs nothing; running it is a spend, so see Money. The `expert`
+  entry arrives in `advice`, not `items`, and its `command` is always
+  `tldrx expert list`: it degrades a stage, it never blocks one. Its `details` name
+  the trainable experts and, separately, any role expert that has no past run to
+  mine — that one is not a task yet. Mention it once and carry on with `items`.
 
 ## When nothing is pending
 
@@ -110,10 +116,10 @@ it for a terminal, never run it from inside this one.
 | exit | meaning | what you do |
 |---|---|---|
 | 0 | done, cursor advanced | `tldrx status` again |
-| 2 | refused — budget, a held lock, or you left off the run id | report it; do not retry blindly |
+| 2 | refused — budget, a held lock, an uncommitted `--prepare` bundle, or you left off the run id | report it; do not retry blindly. A lock whose pid is dead clears with `tldrx run unlock <id>`; a run they have given up on closes with `tldrx run cancel <id> --note "<their reason>"` — both need their say-so first |
 | 3 | not found | `tldrx status` says what exists instead |
 | 4 | a human is needed | `tldrx approve` (gate) or `tldrx answer <Qid> "…"` (question) |
-| 5 | the stage failed | report the reason verbatim; the cost is spent, not refunded |
+| 5 | the stage failed | report the reason verbatim; the cost is spent, not refunded. If it names an unreadable `questions.md`, `tldrx questions lint --fix --run <id>` converts it without changing a word, then `--commit` again |
 
 **Several runs open**: every run-targeting command refuses with exit 2 rather than
 guessing, and lists the candidates. That means "you forgot the id", not "something
@@ -127,6 +133,11 @@ Before anything that spends: **state the ceiling and ask.** `tldrx next`,
 `seed triage` without `--propose` is free. Never raise `--max-usd` or run
 `tldrx budget raise` for them — a stage that costs more than remains exits 2 and
 names the exact command; report it and let them decide.
+
+Three free read-only commands answer what it will cost and what it did: `tldrx run
+estimate` (the only one that guesses, and says so), `tldrx cost [--all]` (per attempt —
+retries are where the money is) and `tldrx budget show`. Quote them, never the arithmetic;
+`cost` reports an in-session turn as UNMETERED unless step 4 declared `--cost-usd`.
 
 ## Rules you do not get to bend
 
