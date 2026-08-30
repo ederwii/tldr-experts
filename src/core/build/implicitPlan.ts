@@ -42,6 +42,7 @@ import type { Story } from "../schemas/story.ts";
 import type { Epic } from "../schemas/epic.ts";
 import { isRetired, MAX_FACT_CHARS, type Fact } from "../facts/Fact.ts";
 import { repoPath, type WorkspaceContext } from "../../hooks/lib/workspace.ts";
+import { PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../paths.ts";
 import { MAX_TOUCHED_FILES } from "./prompts.ts";
 import { applyPlanPatch, quote, type StoryPatch } from "./storyFile.ts";
 import { BUILD_PHASE, PLAN_PHASE, type BuildPlan, type PlannedEpic, type PlannedStory } from "./plan.ts";
@@ -92,6 +93,39 @@ export const QUESTIONS_REL = "01-what/questions.md";
 
 /** Spec §2.13's cap on a story's touched paths, narrowed to what a prompt inlines. */
 export const MAX_IMPLICIT_TOUCHES = MAX_TOUCHED_FILES;
+
+/**
+ * Directory names that make a path the framework's own state.
+ *
+ * `.agent/` is listed beside the two roots because a bundle is cited by its own
+ * relative path as often as by the full `tldrx-work/<run>/.agent/…` one.
+ */
+export const STATE_DIRS: readonly string[] = [PROJECT_WORK_DIR, PROJECT_FRAMEWORK_DIR, ".agent"];
+
+/**
+ * Is this path inside tldrx's own state?
+ *
+ * `touches` is built from what the What handoff CITES, and a handoff cites state
+ * as evidence: measured on the aparece run of 2026-08-30, 13 touched paths of
+ * which three were `run.yml`, `.tldrx/triage/**\/split.yml` and
+ * `.agent/**\/prompt.md`. The developer prompt inlines every touched path and
+ * tells the sub-agent that a change outside `touches` is a plan deviation — so
+ * those three read as an invitation to rewrite the run's own bookkeeping. A story
+ * writes product code and product documents; it never writes state.
+ *
+ * Segment-matched, not prefix-matched: in a `root_is_repo: true` workspace the
+ * state sits at the repo root, and in the multi-repo shape a citation can reach
+ * it through a subdirectory.
+ */
+export function isStatePath(path: string): boolean {
+  return path.split("/").some((segment) => STATE_DIRS.includes(segment));
+}
+
+/** One note per path the state filter removed, so an exclusion is never silent. */
+export function excludedNotes(paths: readonly string[]): readonly string[] {
+  return paths.map((path) =>
+    `excluded ${path} from touches: tldrx state is never story-writable`);
+}
 
 /**
  * How long ONE apply-bullet may be, which is not `MAX_ITEM_CHARS`.
@@ -240,9 +274,13 @@ export function implicitPlanContent(parts: ImplicitPlanParts): ImplicitPlanConte
 
   const cited = citedRepoPaths(handoff, parts.workspace);
   const repo = chooseRepo(parts.repos, cited);
-  const citedTouches = cited
-    .filter((entry) => entry.repo === repo)
-    .map((entry) => entry.path)
+  const inRepo = cited.filter((entry) => entry.repo === repo).map((entry) => entry.path);
+  // The handoff cites the run's own state as EVIDENCE; a story may never write
+  // it. Dropped here rather than at render time so nothing downstream — the
+  // prompt's inlining, `planFacts`, the fact-named search — ever sees them.
+  const excluded = inRepo.filter(isStatePath);
+  const citedTouches = inRepo
+    .filter((path) => !isStatePath(path))
     .slice(0, MAX_IMPLICIT_TOUCHES);
   const dod = dodCommandsFor(parts.scope, parts.workspace.commandRoles.get(repo));
 
@@ -319,7 +357,9 @@ export function implicitPlanContent(parts: ImplicitPlanParts): ImplicitPlanConte
       : dod.map((command) => `$ ${command} → exit 0`),
     touches,
     dod,
-    notes: cap([...addedNotes(added), ...factNotes(answered), ...droppedNotes(dropped)]),
+    notes: cap([
+      ...excludedNotes(excluded), ...addedNotes(added), ...factNotes(answered), ...droppedNotes(dropped),
+    ]),
     factIds: answered.facts.map((fact) => fact.id),
     inputs: index.lines.size > 0 ? [QUESTIONS_REL] : [],
     branch: epicBranchFor(parts.runId),

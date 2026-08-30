@@ -54,6 +54,14 @@
   and the two documents the goal named were in the dropped tail. Touched paths the story's
   `goal`, acceptance criteria, test plan or title NAME now sort first into the 64 KB; a brief
   that names nothing changes no order at all.
+- **The implicit story no longer `touches` tldrx's own state.** `touches` is derived from
+  every repo path the What handoff cites, and a handoff cites state as evidence: measured
+  2026-08-30, 13 touched paths of which three were `run.yml`, a `.tldrx/triage/**/split.yml`
+  and a `.agent/**/prompt.md`. The developer prompt inlines every touched path and calls a
+  change outside `touches` a plan deviation, so those three read as permission to rewrite
+  the run's own bookkeeping. Anything with `tldrx-work`, `.tldrx` or `.agent` as a path
+  segment is now dropped from `touches` and recorded in `notes:` as `excluded <path> from
+  touches: tldrx state is never story-writable`. Product documents are untouched.
 - **A document your answer settles now joins the implicit story's `touches`.** Measured on a
   real run, 2026-08-30: the run existed to settle six ADRs, the owner answered all six, and
   the one thing the story could not edit was `ADR-D013-DELIVERY-ZONE-GEOMETRY.md` — the What

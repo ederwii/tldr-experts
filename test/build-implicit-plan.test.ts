@@ -15,7 +15,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runNext, type NextOptions, type NextOutcome } from "../src/core/facilitator/runNext.ts";
 import { NOT_IN_WORKTREE } from "../src/core/facilitator/prompt.ts";
@@ -24,7 +24,8 @@ import {
   applyAcceptance, droppedNotes, epicBranchFor, implicitPlanContent, isWhatDeliverable, loadImplicitPlan, matchTextOf, planFacts,
   planIsSkipped, renderImplicitPlan, runFacts, satisfiedByImplicitPlan, updateImplicitPlan, wasTruncated,
   whatSignal, addedNotes, answerIndex, factRange, findDecisionDocuments, implicitPlanIsStale, implicitStoryNote,
-  touchesNamedByFacts, IMPLICIT_PLAN_REL, IMPLICIT_STORY_NOTE, MAX_IMPLICIT_TOUCHES,
+  touchesNamedByFacts, excludedNotes, isStatePath,
+  IMPLICIT_PLAN_REL, IMPLICIT_STORY_NOTE, MAX_IMPLICIT_TOUCHES,
 } from "../src/core/build/implicitPlan.ts";
 import { MAX_FACT_CHARS } from "../src/core/facts/Fact.ts";
 import { FactsStore } from "../src/core/facts/FactsStore.ts";
@@ -121,6 +122,37 @@ const IGNORED_HANDOFF = `<!-- schema: draft -->
 
 - \`notes/scratch.md:1\` names the version [src: app:notes/scratch.md:1]
 `;
+
+/** Cites one product document and three pieces of tldrx's own state. */
+const STATE_HANDOFF = `<!-- schema: draft -->
+
+# What — handoff
+
+## Findings
+
+- The guide is out of date [src: app:docs/guide.md:3]
+
+## Decisions
+
+- In scope: rewriting \`docs/guide.md\` § Install [src: app:docs/guide.md:3]
+
+## Unknowns
+
+- none [src: absent:docs/CHANGELOG.md]
+
+## Evidence ledger
+
+- The triage split is what scoped this run [src: app:.tldrx/triage/seed/split.yml:1]
+- The run's own record says the scope [src: app:tldrx-work/260829-old/run.yml:1]
+- The prompt the What stage was handed [src: app:.agent/alpha/prompt.md:1]
+`;
+
+/** State paths a handoff can cite as evidence and a story may never write. */
+const STATE_CITED = [
+  ".tldrx/triage/seed/split.yml",
+  "tldrx-work/260829-old/run.yml",
+  ".agent/alpha/prompt.md",
+] as const;
 
 const METRICS = `# Success metrics — docs run
 
@@ -285,6 +317,50 @@ describe("the derivations", () => {
     expect(chooseRepo(["a", "b"], cited)).toBe("b");
     expect(chooseRepo(["a", "b"], [])).toBe("a");
     expect(() => chooseRepo([], cited)).toThrow(/names no repo/);
+  });
+
+  test("tldrx's own state is cited as evidence, and never lands in `touches`", () => {
+    // Measured on the aparece run of 2026-08-30: 13 touched paths, three of them
+    // `run.yml`, a triage `split.yml` and an agent bundle's `prompt.md`. The
+    // developer prompt inlines every touched path and calls a change outside
+    // `touches` a plan deviation — so those three read as an invitation to
+    // rewrite the run's own bookkeeping.
+    const ws = workspace({ ...DOCS_RUN, rootIsRepo: true, whatHandoff: STATE_HANDOFF });
+    for (const rel of STATE_CITED) {
+      mkdirSync(join(ws.repoDir, rel, ".."), { recursive: true });
+      writeFileSync(join(ws.repoDir, rel), "version: 1\n", "utf8");
+    }
+    // Every one of them IS cited, and every one of them IS on disk: the filter is
+    // what keeps them out, not a missing file.
+    const cited = citedRepoPaths(STATE_HANDOFF, loadWorkspace(ws.root)).map((entry) => entry.path);
+    expect(cited).toEqual(["docs/guide.md", ...STATE_CITED]);
+
+    const content = implicitPlanContent({
+      runDir: ws.runDir, runId: ws.runId, runTitle: "A docs run", scope: "docs",
+      repos: [ws.repoName], workspace: loadWorkspace(ws.root), facts: [], budgetUsd: 8,
+    });
+    // The product document is kept; the three state paths are gone and noted.
+    expect(content.touches).toEqual(["docs/guide.md"]);
+    for (const rel of STATE_CITED) {
+      expect(content.notes).toContain(
+        `excluded ${rel} from touches: tldrx state is never story-writable`,
+      );
+    }
+    expect(block(renderImplicitPlan(content), "touches")).toBe('  touches:\n    - "docs/guide.md"');
+  });
+
+  test("a state path is one with a state directory in it, wherever it sits", () => {
+    expect(isStatePath("tldrx-work/260830-x/run.yml")).toBe(true);
+    expect(isStatePath(".tldrx/triage/seed/split.yml")).toBe(true);
+    expect(isStatePath(".agent/alpha/prompt.md")).toBe(true);
+    expect(isStatePath("tldrx-work/260830-x/.agent/alpha/prompt.md")).toBe(true);
+    // Segment-matched: a product document is not state because of its name.
+    expect(isStatePath("docs/guide.md")).toBe(false);
+    expect(isStatePath("docs/tldrx-workflow.md")).toBe(false);
+    expect(isStatePath("src/tldrx.ts")).toBe(false);
+    expect(excludedNotes(["tldrx-work/x/run.yml"])).toEqual([
+      "excluded tldrx-work/x/run.yml from touches: tldrx state is never story-writable",
+    ]);
   });
 
   test("`status:` and `evidence:` round-trip without touching the lists below them", () => {

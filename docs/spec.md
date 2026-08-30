@@ -1796,6 +1796,11 @@ has. So:
   ≤24 and never adding a document no fact names. Every addition is written into `notes:` as
   `added <path> to touches: settled by F<n> (its text mentions \`<key>\`)`, and the acceptance grep then lists it like
   any other mapped document.
+- **tldrx's own state never reaches `touches`.** A handoff cites `tldrx-work/…`, `.tldrx/…` and `.agent/…` as
+  EVIDENCE, and `touches` is built from what the handoff cites — so on the aparece run of 2026-08-30 three of thirteen
+  touched paths were `run.yml`, a triage `split.yml` and an agent bundle's `prompt.md`, handed to a sub-agent that is
+  told a change outside `touches` is a plan deviation. Any path with `tldrx-work`, `.tldrx` or `.agent` as one of its
+  segments is dropped, with `excluded <path> from touches: tldrx state is never story-writable` written into `notes:`.
 - **The developer prompt says where the story came from**: "Plan was skipped by the scope; this single story applies
   the run's answered decisions to the files it touches." No design document is going to say it, because none was written.
 
