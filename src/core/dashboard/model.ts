@@ -51,6 +51,14 @@ export interface StageRowModel {
    * `gate` keeps its exact old spelling, so nothing reading it has to change.
    */
   readonly gateBy: string | null;
+  /**
+   * Who is MEANT to sign it: `human` waits for `tldrx approve`, `auto` lets the
+   * facilitator close it when the §5 conditions hold (spec §2.2
+   * `gates_policy`). Absence reads as `human` everywhere, including on a
+   * run.yml written before the key existed — the safe default is the one that
+   * stops, and `gatePolicyFor` applies exactly the same rule.
+   */
+  readonly gatePolicy: string;
 }
 
 /**
@@ -339,6 +347,7 @@ export function toRunModel(
       budgetUsd: stage.budget_usd,
       gate: stage.gate === null ? null : `${stage.gate.type}: ${stage.gate.status}`,
       gateBy: stage.gate === null ? null : stage.gate.by,
+      gatePolicy: doc.gates_policy[stage.id] ?? "human",
     })),
   );
 

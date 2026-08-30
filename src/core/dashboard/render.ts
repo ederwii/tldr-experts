@@ -35,7 +35,7 @@
 import { DASHBOARD_CSS } from "./styles.ts";
 import { DASHBOARD_JS, liveScript } from "./script.ts";
 import type {
-  DashboardModel, ExpertModel, PhaseModel, QuestionModel, RunModel,
+  DashboardModel, ExpertModel, PhaseModel, QuestionModel, RunModel, StageRowModel,
 } from "./model.ts";
 
 export const DASHBOARD_TITLE = "tldrx dashboard";
@@ -607,6 +607,23 @@ export function dashRunView(model: DashboardModel, id: string, nowMs: number): s
   return parts.join("");
 }
 
+/**
+ * Who signs this gate, and who did.
+ *
+ * The policy is printed for every stage, `human` ones included: "which of these
+ * will stop for me" is the question `run auto` makes people ask, and an answer
+ * that only shows up once you have opted in is an answer nobody finds. `by` is
+ * the other half — wave G put it in the model and nothing ever drew it, so an
+ * `auto` gate that the facilitator closed looked identical to one a person
+ * signed.
+ */
+export function dashGateSigner(stage: StageRowModel): string {
+  const policy = `<span class="tag">${dashText(stage.gatePolicy)}</span>`;
+  if (stage.gate === null) return '<span class="faint">—</span>';
+  if (stage.gateBy === null) return policy;
+  return `${policy} <span class="signer">by ${dashText(stage.gateBy)}</span>`;
+}
+
 export function dashKv(key: string, value: string): string {
   return `<div><div class="kv__k">${dashText(key)}</div><div class="kv__v">${value}</div></div>`;
 }
@@ -629,14 +646,17 @@ export function dashPathSection(run: RunModel): string {
       + "</td>"
       + `<td>${stage.gate === null
         ? '<span class="faint">none</span>'
-        : dashChip(stage.gate, stage.gate, false)}</td></tr>`;
+        : dashChip(stage.gate, stage.gate, false)}</td>`
+      + `<td>${dashGateSigner(stage)}</td></tr>`;
   }).join("");
 
+  const auto = run.path.filter((stage) => stage.gatePolicy === "auto").length;
   return '<div class="section"><div class="section__title"><h2>Execution path</h2>'
-    + '<span class="eyebrow">run.yml order</span></div>'
+    + `<span class="eyebrow">run.yml order · ${String(run.path.length - auto)} human, `
+    + `${String(auto)} auto</span></div>`
     + '<div class="card card--flush"><div class="scroll-x"><table><thead><tr>'
     + "<th>phase</th><th>stage</th><th>status</th><th>expert</th><th>model</th><th>cost</th>"
-    + `<th>gate</th></tr></thead><tbody>${rows}</tbody></table></div></div></div>`;
+    + `<th>gate</th><th>signed by</th></tr></thead><tbody>${rows}</tbody></table></div></div></div>`;
 }
 
 /**
@@ -1009,7 +1029,7 @@ const TEMPLATE_FUNCTIONS = [
   dashRoute, dashWaiting, dashTitle, dashTopMeta, dashNav,
   dashMain, dashNoWorkspace,
   dashRunsView, dashRunRow, dashMeter,
-  dashRunView, dashKv, dashPathSection, dashHandoffsSection, dashPanelId, dashQuestion,
+  dashRunView, dashGateSigner, dashKv, dashPathSection, dashHandoffsSection, dashPanelId, dashQuestion,
   dashPlanSection,
   dashExpertsView, dashExpertCard, dashTrainCommand, dashRadar,
   dashWatchersView,

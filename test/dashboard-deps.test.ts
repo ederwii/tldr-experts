@@ -110,6 +110,7 @@ describe("dependencies, order and chains", () => {
       "chains[][]", "order[]",
       "runs[].dependsOn[]", "runs[].blockedBy[]", "runs[].runnable",
       "runs[].waiting.kind", "runs[].waiting.message", "runs[].waiting.questions[]",
+      "runs[].path[].gatePolicy", "runs[].path[].gateBy",
     ]) {
       expect(paths).toContain(field);
     }
@@ -232,5 +233,37 @@ describe("what the chain workspace draws", () => {
     const flat = { ...model, chains: [] };
     expect(dashMain(flat, ui, { view: "runs", id: null }, nowMs))
       .not.toContain("<h2>Dependency chain</h2>");
+  });
+});
+
+describe("who signs each gate", () => {
+  test("every stage carries its policy, absence reading as `human`", () => {
+    // The fixture's runs declare `gates_policy: {what: human, how: auto}`.
+    const stages = model.runs.find((run) => run.id === "260903-foxtrot")?.path ?? [];
+    expect(stages.map((stage) => `${stage.id}:${stage.gatePolicy}`))
+      .toEqual(["what:human", "how:auto"]);
+    // `views` declares no policy at all, so every stage there reads `human`.
+    const views = buildModel(
+      join(FRAMEWORK_ROOT, "test", "fixtures", "views", "workspace"),
+      GENERATED_AT, { now: NOW },
+    );
+    expect(views.runs[0]?.path.every((stage) => stage.gatePolicy === "human")).toBe(true);
+  });
+
+  test("the execution path draws the policy and who actually signed", () => {
+    const detail = dashMain(model, { status: "all", sort: "order" },
+      { view: "run", id: "260903-foxtrot" }, NOW.getTime());
+    expect(detail).toContain("<th>signed by</th>");
+    expect(detail).toContain("run.yml order · 1 human, 1 auto");
+    // A gate a person signed and one the facilitator closed no longer look alike.
+    expect(detail).toContain('<span class="tag">human</span> <span class="signer">by alan</span>');
+    expect(detail).toContain('<span class="tag">auto</span> <span class="signer">by auto</span>');
+  });
+
+  test("an unsigned gate shows the policy alone, not an empty cell", () => {
+    const detail = dashMain(model, { status: "all", sort: "order" },
+      { view: "run", id: "260903-alpha" }, NOW.getTime());
+    expect(detail).toContain('<span class="tag">human</span></td>');
+    expect(detail).not.toContain('class="signer"');
   });
 });

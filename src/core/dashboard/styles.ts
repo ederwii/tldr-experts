@@ -256,6 +256,8 @@ th{text-align:left;font-family:var(--font-mono);font-size:var(--text-2xs);font-w
 td{padding:10px var(--space-sm);border-bottom:1px solid var(--line-hairline);vertical-align:top}
 tbody tr:last-child td{border-bottom:0}
 tr[data-wait="1"] td{background:var(--st-wait-bg)}
+.signer{font-family:var(--font-mono);font-size:var(--text-2xs);color:var(--text-muted);
+  white-space:nowrap}
 
 /* attention summary: the three counts tldrx status opens with */
 .attn{display:flex;flex-wrap:wrap;gap:var(--space-xs);align-items:center;

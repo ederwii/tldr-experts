@@ -88,6 +88,7 @@ describe("the dashboard model", () => {
       "runs[].path[].expert",
       "runs[].path[].gate",
       "runs[].path[].gateBy",
+      "runs[].path[].gatePolicy",
       "runs[].path[].id",
       "runs[].path[].model",
       "runs[].path[].phase",
