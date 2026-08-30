@@ -67,6 +67,14 @@ export interface ExecutorContext {
   /** `--keep-worktrees` — Build keeps its story worktrees after a story settles. */
   readonly keepWorktrees: boolean;
   /**
+   * `--reuse-epic` — adopt an `epic/<slug>` branch this run did not create.
+   *
+   * Off by default: two runs stacking commits on one epic branch is how four
+   * runs ended up sharing `epic/leaderboard` (2026-08-29 audit, §B), and the
+   * fourth reused the third's live worktree. It has to be a deliberate word.
+   */
+  readonly reuseEpic: boolean;
+  /**
    * `min(stage budget × share, per_agent_max_usd, --max-usd)`, to the cent.
    * `agentCap(1)` is `maxBudgetUsd`; an executor that splits the stage between N
    * sub-agents asks for `agentCap(1 / N)` rather than dividing `maxBudgetUsd`,
@@ -103,6 +111,15 @@ export interface ExecutorOutcome {
   readonly outputs: readonly string[];
   /** Printed by `tldrx next`, in order. */
   readonly lines: readonly string[];
+  /**
+   * Epic branches this run now owns — cut by it, or adopted with `--reuse-epic`.
+   *
+   * `runNext` merges them into `run.yml`'s `build.epic_branch`, which is how the
+   * NEXT invocation tells "I cut this" from "someone else did". The executor
+   * cannot write run.yml itself: `runNext` saves its own store afterwards and
+   * would overwrite anything written behind its back.
+   */
+  readonly epicBranches?: readonly string[];
   /** One line, for `stage.error`. Null when `ok`. */
   readonly error: string | null;
   /**

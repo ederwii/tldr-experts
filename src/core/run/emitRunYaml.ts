@@ -94,6 +94,9 @@ export function emitRunYaml(run: RunFile): string {
       `triage: {split: ${yamlScalar(run.triage.split)}, depends_on: ${inlineList(run.triage.depends_on)}}`,
     );
   }
+  if (run.build !== undefined && run.build.epic_branch.length > 0) {
+    lines.push(`build: {epic_branch: ${inlineList(run.build.epic_branch)}}`);
+  }
   // Same rule as `triage`: emitted only when it is there, so a run.yml written
   // before `run cancel` existed round-trips byte-for-byte through a save.
   if (run.cancelled !== undefined) {

@@ -195,11 +195,13 @@ describe("the happy path: two stories, two waves", () => {
   test("worktrees are cleaned up, and kept with --keep-worktrees", async () => {
     const ws = workspace(TWO_WAVES);
     await next(ws);
-    expect(existsSync(join(ws.root, ".tldrx", "worktrees", "app", "S1"))).toBe(false);
+    // The run id is in the worktree path (wave Q): four runs of one plan used to
+    // share `.tldrx/worktrees/app/S1`, and the fourth walked into the third's.
+    expect(existsSync(join(ws.root, ".tldrx", "worktrees", "app", `${ws.runId}-S1`))).toBe(false);
 
     const kept = workspace(TWO_WAVES);
     await next(kept, { keepWorktrees: true });
-    expect(existsSync(join(kept.root, ".tldrx", "worktrees", "app", "S1"))).toBe(true);
+    expect(existsSync(join(kept.root, ".tldrx", "worktrees", "app", `${kept.runId}-S1`))).toBe(true);
   });
 });
 
@@ -236,9 +238,10 @@ describe("a story that cannot prove itself", () => {
       waves: [["S1"], ["S2"]],
       repoFiles: { "shared.txt": "base\n" },
     });
-    // A `story/S2` branch that already diverged from `main`, so its merge collides
-    // with what S1 puts on the epic branch.
-    execFileSync("git", ["checkout", "-q", "-b", "story/S2"], { cwd: ws.repoDir });
+    // A story branch that already diverged from `main`, so its merge collides
+    // with what S1 puts on the epic branch. The name carries the run id, because
+    // that is the branch the executor will check out (wave Q).
+    execFileSync("git", ["checkout", "-q", "-b", `story/${ws.runId}/S2`], { cwd: ws.repoDir });
     writeFileSync(join(ws.repoDir, "shared.txt"), "from S2\n", "utf8");
     execFileSync("git", ["commit", "-qam", "S2 diverges"], { cwd: ws.repoDir });
     execFileSync("git", ["checkout", "-q", "main"], { cwd: ws.repoDir });
@@ -323,7 +326,7 @@ describe("in-session mode", () => {
     expect(story(ws, "S1")).toContain("status: in_progress");
 
     // The host session's sub-agent: write the file into the story's worktree.
-    writeFileSync(join(ws.root, ".tldrx", "worktrees", "app", "S1", "s1.txt"), "S1 in-session\n", "utf8");
+    writeFileSync(join(ws.root, ".tldrx", "worktrees", "app", `${ws.runId}-S1`, "s1.txt"), "S1 in-session\n", "utf8");
     writeFileSync(
       join(ws.runDir, ".agent", "build", "S1", "result.json"),
       JSON.stringify({ outputs: ["s1.txt"], questions_asked: [], notes: "", cost_usd: 0.3 }),
@@ -339,7 +342,7 @@ describe("in-session mode", () => {
     // Second cycle: S2, then the gate.
     const second = await next(ws, { mode: "prepare" });
     expect(second.lines.join("\n")).toContain("prepared S2");
-    writeFileSync(join(ws.root, ".tldrx", "worktrees", "app", "S2", "s2.txt"), "S2 in-session\n", "utf8");
+    writeFileSync(join(ws.root, ".tldrx", "worktrees", "app", `${ws.runId}-S2`, "s2.txt"), "S2 in-session\n", "utf8");
     writeFileSync(
       join(ws.runDir, ".agent", "build", "S2", "result.json"),
       JSON.stringify({ outputs: ["s2.txt"], questions_asked: [], notes: "", cost_usd: 0.2 }),
@@ -423,5 +426,68 @@ describe("story front matter", () => {
     expect(again).toContain("status: blocked");
     expect(again).toContain("evidence: []");
     expect(again.split("\n").filter((l) => l.startsWith("evidence"))).toHaveLength(1);
+  });
+});
+
+// --- wave Q: branches and worktrees carry the run id, epics are claimed ------
+
+describe("branch and worktree names carry the run id", () => {
+  test("`story/<run>/<story>` is the branch, `<run>-<story>` the worktree", async () => {
+    const ws = workspace(TWO_WAVES);
+    await next(ws, { keepWorktrees: true });
+
+    const branches = git(ws, ["branch", "--list", "--format=%(refname:short)"]).split("\n");
+    expect(branches).toContain(`story/${ws.runId}/S1`);
+    expect(branches).toContain(`story/${ws.runId}/S2`);
+    // The un-prefixed names are gone: they are what four runs used to collide on.
+    expect(branches).not.toContain("story/S1");
+
+    expect(existsSync(join(ws.root, ".tldrx", "worktrees", "app", `${ws.runId}-S1`))).toBe(true);
+    expect(existsSync(join(ws.root, ".tldrx", "worktrees", "app", "S1"))).toBe(false);
+  });
+
+  test("the epic branch this run cut is recorded in run.yml", async () => {
+    const ws = workspace(TWO_WAVES);
+    await next(ws);
+    expect(RunStore.open(ws.runDir).run.build?.epic_branch).toEqual(["epic/e1"]);
+  });
+});
+
+describe("an epic branch this run did not cut", () => {
+  test("is refused, and the message names --reuse-epic", async () => {
+    const ws = workspace(TWO_WAVES);
+    // Somebody else's epic branch, already on the repo before this run starts.
+    execFileSync("git", ["branch", "epic/e1", "main"], { cwd: ws.repoDir });
+
+    const outcome = await next(ws);
+    expect(outcome.code).toBe(2);
+    const text = outcome.lines.join("\n");
+    expect(text).toContain("did not cut it");
+    expect(text).toContain("--reuse-epic");
+    // Refused, not failed: the stage goes back to ready and nothing was spent.
+    const store = RunStore.open(ws.runDir);
+    expect(store.run.phases.flatMap((p) => p.stages).find((s) => s.id === "build")?.status).toBe("ready");
+    expect(store.run.budget.spent_usd).toBe(0);
+    // And no story branch was cut behind the refusal.
+    expect(git(ws, ["branch", "--list", "--format=%(refname:short)"]).split("\n"))
+      .not.toContain(`story/${ws.runId}/S1`);
+  });
+
+  test("--reuse-epic adopts it, says so, and claims it from then on", async () => {
+    const ws = workspace(TWO_WAVES);
+    execFileSync("git", ["branch", "epic/e1", "main"], { cwd: ws.repoDir });
+
+    const outcome = await next(ws, { reuseEpic: true });
+    expect(outcome.lines.join("\n")).toContain("--reuse-epic");
+    expect(RunStore.open(ws.runDir).run.build?.epic_branch).toEqual(["epic/e1"]);
+  });
+
+  test("a run's SECOND invocation is not refused its own branch", async () => {
+    const ws = workspace(TWO_WAVES);
+    await next(ws);
+    expect(RunStore.open(ws.runDir).run.build?.epic_branch).toEqual(["epic/e1"]);
+    // `epic/e1` now exists. The same run must still be able to keep working.
+    const again = await next(ws);
+    expect(again.lines.join("\n")).not.toContain("did not cut it");
   });
 });

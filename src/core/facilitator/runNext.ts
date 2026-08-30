@@ -69,6 +69,8 @@ export interface NextOptions {
    * REFUSED (exit 2) rather than silently re-spawned — see `preparedRefusal`.
    */
   readonly discardPending?: boolean;
+  /** `--reuse-epic`: let Build adopt an `epic/<slug>` branch this run did not cut. */
+  readonly reuseEpic?: boolean;
   readonly actor: string;
   readonly at: string;
 }
@@ -452,6 +454,22 @@ async function runStage(
   return withStderr(await finishStage(store, options, phaseId, stageId, spec, notes), advisories);
 }
 
+/**
+ * Merge the epic branches an executor claimed into `run.yml` (`build.epic_branch`).
+ *
+ * Additive and idempotent. This is what lets the NEXT Build invocation tell an
+ * epic branch IT cut from one that was already on the repo — the check that keeps
+ * two runs from stacking commits on the same branch.
+ */
+function claimEpicBranches(store: RunStore, claimed: readonly string[] | undefined): void {
+  if (claimed === undefined || claimed.length === 0) return;
+  store.mutate((run) => {
+    const known = new Set(run.build?.epic_branch ?? []);
+    for (const branch of claimed) known.add(branch);
+    return { ...run, build: { epic_branch: [...known].sort() } };
+  });
+}
+
 /** Carry advisories out through an outcome another function already built. */
 function withStderr(outcome: NextOutcome, stderr: readonly string[]): NextOutcome {
   if (stderr.length === 0) return outcome;
@@ -584,6 +602,7 @@ async function runExecutor(
     yolo: options.yolo,
     at: options.at,
     keepWorktrees: options.keepWorktrees === true,
+    reuseEpic: options.reuseEpic === true,
     agentCap: (share = 1) => agentCap(options, store, stage, share),
     emit: (type, payload, costUsd = 0, actor = null) => {
       store.append(event(options, store.runId, stageId, type, payload, costUsd, actor));
@@ -591,6 +610,7 @@ async function runExecutor(
   };
 
   const outcome = await executor(executorCtx);
+  claimEpicBranches(store, outcome.epicBranches);
   recordExecutorTasks(store, options, phaseId, stageId, spec, outcome);
   store.save();
 

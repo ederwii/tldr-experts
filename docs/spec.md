@@ -1463,6 +1463,16 @@ state, because a re-spawn discards a sub-agent turn the run has already been bil
 explicit way to bin the bundle and run it again. A phase with an executor is exempt: it stays `running` across
 `--prepare`/`--commit` cycles by design (one story per cycle) and owns its own bundles.
 
+**Build branch and worktree names carry the run id.** A story branch is `story/<run-id>/<story-id>` and its worktree
+is `.tldrx/worktrees/<repo>/<run-id>-<story-id>`. Without the run id, four runs of one plan all cut `story/S1`; the
+second found it already there, `git worktree add` checked it out as it stood, and one run's commits landed on
+another's branch — and the fourth walked into the third's LIVE worktree, two sub-agents editing the same files
+(measured 2026-08-29). The **epic** branch stays `epic/<slug>`, because an epic is the unit a team merges and a run id
+in its name would be worse. Collision there is made DELIBERATE instead: a Build stage refuses to start when
+`epic/<slug>` already exists and this run's `run.yml` `build.epic_branch` (optional, additive, §2.2) does not claim
+it — `--reuse-epic` is the word that says "stack on it anyway", and either way the branch is recorded as claimed from
+then on, so the run's own second invocation is never refused its own branch.
+
 **Interrupt path (SIGINT / SIGTERM).** A sub-agent is spawned DETACHED — it has to be, or a timeout has no process
 group to kill — and a detached child never receives the terminal's Ctrl-C. So the CLI installs one handler
 (`src/cli/signals.ts`) and it does four things, in this order: **(1)** kill every spawned child's whole process tree,

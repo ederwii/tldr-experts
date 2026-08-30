@@ -682,6 +682,22 @@ places nothing read as one list.
 - **`dashboard` and `watch` keep their own Ctrl-C.** With no sub-agent to kill and
   no run to close, the handler stands aside and their exit-0 shutdown still wins.
 
+### Build branches and worktrees name their run
+
+- **`story/<run-id>/<story-id>`, and `.tldrx/worktrees/<repo>/<run-id>-<story-id>`.**
+  Measured 2026-08-29: four runs of one plan all cut `story/S1`. The second found
+  it already there, `git worktree add` checked it out as it stood, and one run's
+  commits landed on another's branch — and the fourth reused the third's LIVE
+  worktree, so two sub-agents were editing the same files at the same time.
+  Neither name can collide now.
+- **An `epic/<slug>` this run did not cut is refused** (exit 2, `refused` — the
+  stage goes back to `ready` and nothing is spent), unless `tldrx next
+  --reuse-epic`. The epic branch keeps its plain name on purpose — it is the unit
+  a team merges — so instead of making collision impossible this makes it
+  deliberate. What a run cut or adopted is recorded in `run.yml` as
+  `build.epic_branch` (optional, additive), which is how its own next invocation
+  tells its branch from someone else's.
+
 ## 0.2.0 — 2026-08-29
 
 ### The Build phase executes

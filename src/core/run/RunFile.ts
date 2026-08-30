@@ -126,6 +126,19 @@ export interface RunCancellation {
   readonly note: string;
 }
 
+/**
+ * What the Build phase has claimed on disk, so a later run can tell "I cut this"
+ * from "this was already here" (spec §5).
+ *
+ * `epic_branch` is a LIST because a run's plan can hold several epics; the key is
+ * named for what each entry is. Optional and additive: absent until a Build stage
+ * cuts or adopts an epic branch, and every reader that never heard of it is
+ * unaffected.
+ */
+export interface RunBuild {
+  readonly epic_branch: readonly string[];
+}
+
 export interface RunFile {
   readonly version: number;
   readonly run: string;
@@ -142,6 +155,8 @@ export interface RunFile {
   readonly triage?: RunTriage;
   /** Present only on a run closed by `tldrx run cancel`. */
   readonly cancelled?: RunCancellation;
+  /** Present only once a Build stage has cut or adopted an epic branch. */
+  readonly build?: RunBuild;
   /**
    * Who approves each stage's gate (spec §2.2). ADDITIVE and optional: a run.yml
    * written before this key existed has no policy, and `gatePolicyFor` reads that
@@ -250,6 +265,20 @@ export function validateRunFile(input: unknown): ValidationResult {
     requireNumber(doc.budget.per_agent_max_usd, "budget.per_agent_max_usd", issues);
   } else if (doc.budget !== undefined) {
     issues.push({ path: "budget", message: "expected a mapping" });
+  }
+
+  // Optional, additive: absent until a Build stage claims an epic branch.
+  if (doc.build !== undefined) {
+    if (isRecord(doc.build)) {
+      requireKeys(doc.build, ["epic_branch"], "build", issues);
+      if (requireArray(doc.build.epic_branch, "build.epic_branch", issues)) {
+        (doc.build.epic_branch as unknown[]).forEach((branch, i) => {
+          requireString(branch, `build.epic_branch[${i}]`, issues);
+        });
+      }
+    } else {
+      issues.push({ path: "build", message: "expected a mapping" });
+    }
   }
 
   // Optional, additive: absent unless `tldrx run cancel` closed this run.
