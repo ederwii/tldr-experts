@@ -56,10 +56,26 @@ export interface SplitExclude {
   readonly reason: string;
 }
 
+/**
+ * A question the proposal could not answer for itself.
+ *
+ * `answer` is ADDITIVE and human-owned: the model never writes it (`SPLIT_SCHEMA`
+ * still refuses the key), `tldrx seed answer` does. It exists because the
+ * questions were the one part of a split with nowhere to put the reply — the
+ * runs could be edited in place, the exclusions could be deleted, and the
+ * questions could only be read and then forgotten.
+ */
 export interface SplitQuestion {
   readonly id: string;
   readonly text: string;
   readonly options?: readonly string[];
+  /** What a human answered, recorded by `tldrx seed answer`. Absent = still open. */
+  readonly answer?: string;
+}
+
+/** Has this question been answered? The one definition every reader shares. */
+export function isAnswered(question: SplitQuestion): boolean {
+  return typeof question.answer === "string" && question.answer.trim() !== "";
 }
 
 /** Exactly what the model returns. */
@@ -245,8 +261,23 @@ export function validateProposal(input: unknown, ctx: SplitContext): SplitValida
     if (id !== null && !/^Q\d{1,6}$/.test(id)) issues.push(`${at}.id: expected Q<n>, got '${id}'`);
     const body = text(entry.text, `${at}.text`, issues);
     const options = entry.options === undefined ? undefined : stringList(entry.options, `${at}.options`, issues);
+    // `answer` is not in SPLIT_SCHEMA — the model cannot produce one. It is here
+    // because `seed apply` re-validates the file a HUMAN edited, and a validator
+    // that dropped the key would erase every recorded answer on apply.
+    let answer: string | undefined;
+    if (entry.answer !== undefined) {
+      if (typeof entry.answer !== "string" || entry.answer.trim() === "") {
+        issues.push(`${at}.answer: expected a non-empty string`);
+      } else {
+        answer = entry.answer;
+      }
+    }
     if (id !== null && body !== null) {
-      questions.push(options === undefined ? { id, text: body } : { id, text: body, options });
+      questions.push({
+        id, text: body,
+        ...(options === undefined ? {} : { options }),
+        ...(answer === undefined ? {} : { answer }),
+      });
     }
   }
 
@@ -363,7 +394,8 @@ export function emitSplitYaml(file: SplitFile): string {
     lines.push("questions:");
     for (const question of file.questions) {
       const options = question.options === undefined ? "" : `, options: ${inlineList(question.options)}`;
-      lines.push(`  - {id: ${yamlScalar(question.id)}, text: ${yamlScalar(question.text)}${options}}`);
+      const answer = question.answer === undefined ? "" : `, answer: ${yamlScalar(question.answer)}`;
+      lines.push(`  - {id: ${yamlScalar(question.id)}, text: ${yamlScalar(question.text)}${options}${answer}}`);
     }
   }
   return `${lines.join("\n")}\n`;
@@ -420,6 +452,7 @@ export function renderSplitMarkdown(file: SplitFile, outRel: string): string {
   for (const question of file.questions) {
     lines.push(`- **${question.id}** ${question.text}`);
     for (const option of question.options ?? []) lines.push(`  - ${option}`);
+    if (isAnswered(question)) lines.push(`  - **answered:** ${question.answer ?? ""}`);
   }
   lines.push("");
 

@@ -704,7 +704,7 @@ describe("tldrx seed, through the real binary", () => {
     const ws = workspace();
     const run = await tldrx(ws.root, "seed", "explode");
     expect(run.code).toBe(1);
-    expect(run.stderr).toContain("expected `triage` or `apply`");
+    expect(run.stderr).toContain("expected `triage`, `answer` or `apply`");
   });
 });
 
