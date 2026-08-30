@@ -39,6 +39,22 @@ export interface PlannedStory {
   /** Run-relative path, for citations. */
   readonly rel: string;
   readonly wave: string;
+  /**
+   * Background the developer is given AFTER the objective and clearly labelled
+   * as background — never as instructions. Only an implicit story has any: it is
+   * what the What stage decided, which is context for the work and not the work
+   * (`build/implicitPlan.ts`). A planned story's brief is the story.
+   */
+  readonly context?: readonly string[];
+  /**
+   * Files to inline in the developer prompt that are NOT in the story's repo —
+   * run artefacts such as `01-what/questions.md`, which holds the whole of every
+   * answer this story applies. `touches` cannot carry them: it is resolved
+   * inside the story's worktree.
+   */
+  readonly extraInputs?: readonly { readonly path: string; readonly content: string }[];
+  /** One line under Objective saying where this story came from. */
+  readonly note?: string;
 }
 
 export interface PlannedEpic {

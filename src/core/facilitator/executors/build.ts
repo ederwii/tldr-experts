@@ -30,7 +30,7 @@
  * changed under them. Serial B costs the reviewers' wall-clock and buys a review
  * that means something.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { PROJECT_FRAMEWORK_DIR } from "../../paths.ts";
 import { factsPath, loadWorkspace, type WorkspaceContext } from "../../../hooks/lib/workspace.ts";
@@ -40,19 +40,23 @@ import { RunStore } from "../../run/RunStore.ts";
 import { renderConventions, renderFacts, stackExpertNames } from "../prompt.ts";
 import { loadExpertBundles } from "../../experts/expertBundle.ts";
 import { agentDir } from "../paths.ts";
+import { preparedBundles } from "../../run/prepared.ts";
 import { spawnAgent, BASE_TOOLS } from "../spawnAgent.ts";
-import { PendingError, readResult, writeBundle, writeRaw, type PendingStage } from "../pending.ts";
 import {
-  addWorktree, branchExists, commitAll, currentBranch, dirtyPaths, ensureBranch, firstLine, GitError, headSha,
-  isDirty, mergeNoFf, partitionDirty, removeWorktree, repoDirOf, stateDirPrefixes,
+  PendingError, PENDING_FILE, RAW_FILE, RESULT_FILE, readResult, writeBundle, writeRaw, type PendingStage,
+} from "../pending.ts";
+import {
+  addWorktree, branchExists, commitAll, commitsBetween, currentBranch, dirtyPaths, ensureBranch, firstLine,
+  GitError, headSha, isDirty, mergeNoFf, partitionDirty, removeWorktree, repoDirOf, stateDirPrefixes,
 } from "../../build/git.ts";
 import {
   loadBuildPlan, PlanLoadError, BUILD_PHASE, LOG_DIR, PLAN_PHASE, WORKTREES,
   type BuildPlan, type BuildWave, type PlannedEpic, type PlannedStory,
 } from "../../build/plan.ts";
 import {
-  describeImplicitPlan, dodIsSatisfiedEmpty, implicitPlanContent, ImplicitPlanError, loadImplicitPlan,
-  planIsSkipped, updateImplicitPlan, IMPLICIT_PLAN_REL, IMPLICIT_STORY_NOTE,
+  describeImplicitPlan, discardImplicitPlan, dodIsSatisfiedEmpty, implicitPlanContent, implicitPlanIsStale,
+  implicitPlanPath, ImplicitPlanError, loadImplicitPlan, planIsSkipped, updateImplicitPlan,
+  IMPLICIT_PLAN_REL, IMPLICIT_STORY_ID, IMPLICIT_STORY_NOTE,
 } from "../../build/implicitPlan.ts";
 import { evidenceFor, updateStoryFront } from "../../build/storyFile.ts";
 import { buildDeveloperPrompt, buildReviewerPrompt, REVIEW_SCHEMA } from "../../build/prompts.ts";
@@ -138,8 +142,9 @@ export async function buildExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
   const workspace = loadWorkspace(ctx.root);
   let plan: BuildPlan;
   const opening: string[] = [];
+  if (ctx.mode === "prepare" && ctx.discardPending) opening.push(...discardBundles(ctx));
   try {
-    plan = openPlan(ctx, workspace, opening);
+    plan = await openPlan(ctx, workspace, opening);
   } catch (error) {
     if (error instanceof PlanLoadError || error instanceof ImplicitPlanError) {
       return failed(ctx, error.message, []);
@@ -177,7 +182,11 @@ export async function buildExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
  * A real plan always wins: if `03-plan/waves.yml` is there, it is executed, even
  * on a scope whose `skips:` names `plan`. Somebody wrote it on purpose.
  */
-function openPlan(ctx: ExecutorContext, workspace: WorkspaceContext, lines: string[]): BuildPlan {
+async function openPlan(
+  ctx: ExecutorContext,
+  workspace: WorkspaceContext,
+  lines: string[],
+): Promise<BuildPlan> {
   const wavesOnDisk = existsSync(join(ctx.runDir, PLAN_PHASE, "waves.yml"));
   if (!planIsSkipped(ctx.spec.skips) || wavesOnDisk) {
     return loadBuildPlan(join(ctx.runDir, PLAN_PHASE), workspace.commands);
@@ -194,9 +203,72 @@ function openPlan(ctx: ExecutorContext, workspace: WorkspaceContext, lines: stri
     facts: FactsStore.loadOrEmpty(factsPath(ctx.root)).facts,
     budgetUsd: ctx.budgetUsd,
   };
+  if (ctx.discardPending) await rederiveImplicitPlan(ctx, workspace, parts, lines);
   const plan = loadImplicitPlan(parts);
   lines.push(describeImplicitPlan(plan, implicitPlanContent(parts)));
   return plan;
+}
+
+/**
+ * `--discard-pending` on an implicit plan means "derive it again", not just
+ * "rewrite the prompt".
+ *
+ * The bundle is a rendering of the plan, so throwing the bundle away and keeping
+ * the plan re-hands the developer the same story — which is exactly what happened
+ * on the aparece run of 2026-08-30: the operator fixed nothing by re-preparing,
+ * because `loadImplicitPlan` writes the file once and reads it forever after.
+ *
+ * It is only safe while the story has produced NOTHING. Two conditions, both
+ * checked, both named when they refuse: the file records no evidence and is not
+ * settled (`implicitPlanIsStale`), and `git log <epic>..<story>` is empty. The
+ * branches and the worktree are deliberately NOT re-cut — they are this run's
+ * own, `run.yml` says so in `build.epic_branch`, and `openStory` adopts both.
+ */
+async function rederiveImplicitPlan(
+  ctx: ExecutorContext,
+  workspace: WorkspaceContext,
+  parts: Parameters<typeof loadImplicitPlan>[0],
+  lines: string[],
+): Promise<void> {
+  if (!existsSync(implicitPlanPath(ctx.runDir))) return;
+  const kept = (why: string): void => {
+    lines.push(`  · kept ${IMPLICIT_PLAN_REL} (--discard-pending re-derives only an unbuilt plan): ${why}`);
+  };
+
+  const blocker = implicitPlanIsStale(readFileSync(implicitPlanPath(ctx.runDir), "utf8"));
+  if (blocker !== null) {
+    kept(blocker);
+    return;
+  }
+  const content = implicitPlanContent(parts);
+  const storyBranch = `story/${ctx.runId}/${IMPLICIT_STORY_ID}`;
+  const commits = await commitsBetween(repoDirOf(workspace, content.repo), content.branch, storyBranch);
+  if (commits > 0) {
+    kept(`\`${storyBranch}\` carries ${String(commits)} commit(s) beyond \`${content.branch}\``);
+    return;
+  }
+  discardImplicitPlan(ctx.runDir);
+  lines.push(
+    `  · re-derived ${IMPLICIT_PLAN_REL} (--discard-pending; no evidence, and no commit on ` +
+    `\`${storyBranch}\` beyond \`${content.branch}\`)`,
+  );
+}
+
+/**
+ * Bin the prepared bundle(s) of this stage, the way `preparedRefusal` does for a
+ * stage with no executor.
+ *
+ * `result.json` is the one that matters: `writeBundle` overwrites `prompt.md` and
+ * `pending.json` on its own, but a stale result left by a killed session would be
+ * read by the NEXT `--commit` as if it described the story just prepared.
+ */
+function discardBundles(ctx: ExecutorContext): readonly string[] {
+  const lines: string[] = [];
+  for (const dir of preparedBundles(ctx.runDir, ctx.stageId)) {
+    for (const file of [PENDING_FILE, RESULT_FILE, RAW_FILE]) rmSync(join(dir, file), { force: true });
+    lines.push(`  · discarded the --prepare bundle in ${relative(ctx.root, dir)}/`);
+  }
+  return lines;
 }
 
 /** `run.yml`'s `title:`, or the run id when the file will not open. */
@@ -1236,7 +1308,9 @@ class BuildSession {
       facts: renderFacts(facts.facts, [repo]),
       experts: bundles.experts,
       budgetUsd: this.developerCap(),
-      planNote: this.plan.implicit ? IMPLICIT_STORY_NOTE : undefined,
+      // The implicit plan writes its own note, naming the facts this story is
+      // for; the constant is the fallback for a plan built before it did.
+      planNote: this.plan.implicit ? (story.planned.note ?? IMPLICIT_STORY_NOTE) : undefined,
       previousAttempt: story.previousAttempt,
     });
   }

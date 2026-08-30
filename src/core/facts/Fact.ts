@@ -8,8 +8,19 @@ export type FactConfidence = (typeof FACT_CONFIDENCES)[number];
 
 /** Spec §2.5: beyond this `tldrx` shards by `area`. */
 export const MAX_FACTS = 5000;
-/** Spec §2.5: `fact` is one assertion, ≤300 chars. */
-export const MAX_FACT_CHARS = 300;
+/**
+ * Spec §2.5: `fact` is one assertion, ≤2000 chars.
+ *
+ * It was 300, and 300 lost the sentence that mattered. `captureAnswers` writes a
+ * fact as `"<question> — <answer>"`, so on the aparece run of 2026-08-30 every
+ * one of the six answers was cut mid-clause and four of them lost the very words
+ * — "Accepts ADR-D009 as written." — that name the document the answer settles.
+ * The developer downstream never saw them.
+ *
+ * 2000 is still a cap: a fact is one assertion, not a document. Facts already on
+ * disk stay valid, because the bound only moved outwards.
+ */
+export const MAX_FACT_CHARS = 2000;
 
 export interface FactSource {
   readonly who: string;
@@ -35,6 +46,14 @@ export interface Fact {
   readonly supersedes: string | null;
   readonly superseded_by: string | null;
   readonly retired: FactRetirement | null;
+  /**
+   * True when `fact` is the head of a longer text, cut at `MAX_FACT_CHARS`.
+   *
+   * Additive and optional: every row written before this field existed is still
+   * valid, and its absence means "not known to be cut", never "whole". A reader
+   * that sees it knows to go to `01-what/questions.md` for the rest.
+   */
+  readonly truncated?: boolean;
 }
 
 export interface FactsFile {

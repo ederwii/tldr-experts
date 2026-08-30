@@ -22,9 +22,14 @@ import {
   answersByQuestion, chooseRepo, citedRepoPaths, decisionBullets, decisionKeysOf, dodCommandsFor, dodRolesFor,
   applyAcceptance, droppedNotes, epicBranchFor, implicitPlanContent, isWhatDeliverable, loadImplicitPlan, matchTextOf, planFacts,
   planIsSkipped, renderImplicitPlan, runFacts, satisfiedByImplicitPlan, updateImplicitPlan, wasTruncated,
-  whatSignal, IMPLICIT_PLAN_REL, IMPLICIT_STORY_NOTE,
+  whatSignal, addedNotes, answerIndex, factRange, findDecisionDocuments, implicitPlanIsStale, implicitStoryNote,
+  touchesNamedByFacts, IMPLICIT_PLAN_REL, IMPLICIT_STORY_NOTE, MAX_IMPLICIT_TOUCHES,
 } from "../src/core/build/implicitPlan.ts";
 import { MAX_FACT_CHARS } from "../src/core/facts/Fact.ts";
+import { FactsStore } from "../src/core/facts/FactsStore.ts";
+import { validateFactsFile } from "../src/core/facts/validateFactsFile.ts";
+import { captureAnswers, factTextFor, factWasTruncated, TRUNCATION_MARK } from "../src/core/answers/captureAnswers.ts";
+import { parseYaml } from "../src/core/yaml.ts";
 import type { Fact } from "../src/core/facts/Fact.ts";
 import { listItems } from "../src/core/text/handoff.ts";
 import { loadWorkflowPreset } from "../src/core/run/workflowPreset.ts";
@@ -690,17 +695,27 @@ describe("a fact whose text was cut at the 300-char cap", () => {
     expect(answersByQuestion(join(ws.root, "nowhere")).size).toBe(0);
   });
 
-  test("a truncated fact is matched against its answer too; an untruncated one is not touched", () => {
+  test("every fact is matched against its answer, cut or not — the cap is not the trigger", () => {
     const answers = new Map([["Q1", "…Accepts ADR-D008 as written."]]);
-    // `FactsStore.append` writes `slice(0, 299) + "…"`, so a cut fact is exactly
-    // MAX_FACT_CHARS long — and its ADR clause is the part that went missing.
+    // `FactsStore.append` writes `slice(0, MAX - 1) + "…"`, so a cut fact is
+    // exactly MAX_FACT_CHARS long — and its ADR clause is what went missing.
     const cut = fact("F002", `${"x".repeat(MAX_FACT_CHARS - 1)}…`, FIXTURE_RUN);
     expect(wasTruncated(cut.fact)).toBe(true);
     expect(matchTextOf({ ...cut, source: { ...cut.source, q: "Q1" } }, answers)).toContain("ADR-D008");
 
+    // It used to append the answer ONLY to a fact at the cap, which tied the
+    // mapping to the cap's exact value: raising it to 2000 would have switched
+    // the fallback off for every 300-char fact already on disk. Concatenating
+    // always cannot match less than the fact alone, so the gate bought nothing.
     const whole = fact("F004", "short and complete", FIXTURE_RUN);
     expect(wasTruncated(whole.fact)).toBe(false);
-    expect(matchTextOf({ ...whole, source: { ...whole.source, q: "Q1" } }, answers)).toBe("short and complete");
+    expect(matchTextOf({ ...whole, source: { ...whole.source, q: "Q1" } }, answers))
+      .toBe("short and complete\n…Accepts ADR-D008 as written.");
+
+    // A fact that already carries its whole answer is not doubled.
+    const same = fact("F005", "…Accepts ADR-D008 as written.", FIXTURE_RUN);
+    expect(matchTextOf({ ...same, source: { ...same.source, q: "Q1" } }, answers))
+      .toBe("…Accepts ADR-D008 as written.");
   });
 
   test("the mapping uses the answer, so a cut fact still settles its ADR", () => {
@@ -760,18 +775,25 @@ describe("a run whose questions have been answered", () => {
     expect(block(text, "goal")).not.toContain("one `questions.md` block per open ADR");
     expect(block(text, "acceptance")).not.toContain("### Q` blocks");
     expect(block(text, "notes")).toContain(
-      "dropped from goal as the What stage's own work (mentions questions.md): In scope: one `questions.md` block",
+      "dropped from context as the What stage's own work (mentions questions.md): " +
+      "In scope: one `questions.md` block",
     );
     expect(block(text, "notes")).toContain("dropped from acceptance as the What stage's own work");
     // The grep is a command a person pastes: it is complete or it is not given.
     expect(block(text, "acceptance")).not.toContain("more)`");
-    // What the What decided that is NOT about the questions file survives.
-    expect(block(text, "goal")).toContain("In scope: settling ADR-D008 and ADR-D011");
+    // What the What decided that is NOT about the questions file survives — as
+    // CONTEXT, because this run has answers and the answers are the work.
+    expect(block(text, "goal")).not.toContain("In scope: settling ADR-D008 and ADR-D011");
+    expect(block(text, "context")).toContain("In scope: settling ADR-D008 and ADR-D011");
     expect(block(text, "acceptance")).toContain("**Every ADR names its decision.**");
 
-    // (4) the developer is told where this story came from.
+    // (4) the developer is told where this story came from, which facts it is
+    // for, and that the What's decisions under `## Context` are background.
     const developer = readFileSync(join(promptDir, "developer-S1-1.md"), "utf8");
-    expect(developer).toContain(IMPLICIT_STORY_NOTE);
+    expect(developer).toContain(implicitStoryNote(["F002", "F003"]));
+    expect(developer).toContain("## Context (from the What stage)");
+    expect(developer).toContain("They are not");
+    expect(developer).toContain("- In scope: settling ADR-D008 and ADR-D011");
     expect(developer).toContain("Apply Do customers authenticate through the SSO provider?");
   }, 60_000);
 
@@ -804,5 +826,483 @@ describe("a run whose questions have been answered", () => {
     );
     expect(content.notes.join("\n")).toContain("no fact of this run mentions the ADR id or decision number");
     expect(content.notes.join("\n")).toContain("F009 settle no touched document by name");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F1 — a document a FACT names joins `touches`, even when the What never cited it.
+// ---------------------------------------------------------------------------
+
+/**
+ * The aparece shape, minimised: the What cites ADR-D008 and never mentions
+ * ADR-D013, whose decision the run's own answer to Q2 makes. The stored fact is
+ * cut before the clause that names it — which is how the real one looked.
+ */
+const ZONES_FACTS = `version: 1
+facts:
+  - id: F001
+    fact: "Do customers authenticate through the SSO provider? — A — outside it. Accepts ADR-D008 as written."
+    area: identity
+    repos: []
+    kind: answer
+    confidence: stated
+    source: {who: alan, when: "2026-08-29T09:30:00Z", run: "${FIXTURE_RUN}", q: Q1}
+    supersedes: null
+    superseded_by: null
+    retired: null
+  - id: F002
+    fact: "What shape is a delivery zone? — A — circle plus polygon, exclusions, explicit order, first match wins; containment in application code with no PostGIS and no spatial ind …"
+    area: delivery
+    repos: []
+    kind: answer
+    confidence: stated
+    source: {who: alan, when: "2026-08-29T09:31:00Z", run: "${FIXTURE_RUN}", q: Q2}
+    supersedes: null
+    superseded_by: null
+    retired: null
+`;
+
+const ZONES_QUESTIONS = `# Questions — ${FIXTURE_RUN}
+
+Answer in the slot.
+
+## Q1 · Do customers authenticate through the SSO provider?
+<!-- id: Q1 | status: answered | area: identity | asked_by: facilitator | asked_at: 2026-08-29T09:00:00Z -->
+
+[Answer]: A — outside it. Accepts ADR-D008 as written.
+
+<!-- answered_by: alan | answered_at: 2026-08-29T09:30:00Z | fact: F001 -->
+
+## Q2 · What shape is a delivery zone?
+<!-- id: Q2 | status: answered | area: delivery | asked_by: facilitator | asked_at: 2026-08-29T09:00:00Z -->
+
+[Answer]: A — circle plus polygon, exclusions, explicit order, first match wins; containment in application code with no PostGIS and no spatial index. Accepts ADR-D013 as written.
+
+<!-- answered_by: alan | answered_at: 2026-08-29T09:31:00Z | fact: F002 -->
+`;
+
+/** Cites ADR-D008. Says nothing at all about ADR-D013 — that is the whole point. */
+const ZONES_HANDOFF = `# What — handoff
+
+## Findings
+
+- ADR-D008 is still \`proposed\` [src: app:docs/adr/ADR-D008-AUTH.md:1]
+
+## Decisions
+
+- In scope: settling the open ADRs the owner answers [src: app:docs/adr/ADR-D008-AUTH.md:1]
+- Out of scope: choosing on the owner's behalf [src: app:README.md:1]
+
+## Unknowns
+
+- none [src: absent:docs/adr/ADR-D099.md]
+
+## Evidence ledger
+
+- ADR-D008 carries \`Status: proposed\` [src: app:docs/adr/ADR-D008-AUTH.md:1]
+`;
+
+const ZONES_RUN: BuildWorkspaceOptions = {
+  scope: "docs",
+  skips: ["how", "plan", "watch"],
+  plan: false,
+  stories: [],
+  epics: [],
+  waves: [],
+  whatHandoff: ZONES_HANDOFF,
+  successMetrics: "# Success metrics\n\n1. **Every answered ADR reads Accepted.**\n",
+  commands: { build: null, test: "npm run test", lint: "npm run lint", typecheck: null, run: null },
+  files: { ".tldrx/memory/facts.yml": ZONES_FACTS },
+  repoFiles: {
+    "docs/adr/ADR-D008-AUTH.md": "# ADR-D008 · Customer authentication\n\nStatus: proposed\n",
+    "docs/adr/ADR-D013-ZONES.md": "# ADR-D013 · Delivery zone geometry\n\nStatus: proposed\n",
+    "docs/adr/ADR-D099-UNANSWERED.md": "# ADR-D099 · Nobody asked\n\nStatus: proposed\n",
+    "package.json": `${JSON.stringify({
+      name: "app",
+      version: "0.0.0",
+      private: true,
+      scripts: { test: 'node -e "process.exit(0)"', lint: 'node -e "process.exit(0)"' },
+    }, null, 2)}\n`,
+  },
+};
+
+function zonesWorkspace(): BuildWorkspace {
+  const ws = workspace(ZONES_RUN);
+  writeFileSync(join(ws.runDir, "01-what", "questions.md"), ZONES_QUESTIONS, "utf8");
+  return ws;
+}
+
+describe("the documents this run's answers settle", () => {
+  test("a repo's decision documents are found, the touched directories first", () => {
+    const ws = zonesWorkspace();
+    const found = findDecisionDocuments(ws.repoDir, ["docs/adr"]);
+    expect(found).toEqual([
+      "docs/adr/ADR-D008-AUTH.md",
+      "docs/adr/ADR-D013-ZONES.md",
+      "docs/adr/ADR-D099-UNANSWERED.md",
+    ]);
+    // A file whose name carries no decision key is not a decision document.
+    expect(found).not.toContain("README.md");
+    expect(found).not.toContain("package.json");
+    expect(findDecisionDocuments(join(ws.root, "nowhere"), [])).toEqual([]);
+  });
+
+  test("only a document some fact actually names is added, and never one already touched", () => {
+    const ws = zonesWorkspace();
+    const facts = [
+      fact("F002", "zones are circles plus polygons", FIXTURE_RUN),
+    ];
+    const answers = new Map([["Q2", "first match wins. Accepts ADR-D013 as written."]]);
+    const parts = {
+      facts: facts.map((f) => ({ ...f, source: { ...f.source, q: "Q2" } })),
+      answers,
+      repoDir: ws.repoDir,
+      existing: ["docs/adr/ADR-D008-AUTH.md"],
+      limit: MAX_IMPLICIT_TOUCHES,
+    };
+    expect(touchesNamedByFacts(parts)).toEqual([
+      { path: "docs/adr/ADR-D013-ZONES.md", factId: "F002", key: "ADR-D013" },
+    ]);
+    // ADR-D099 exists and no fact names it, so it stays out.
+    expect(touchesNamedByFacts(parts).map((entry) => entry.path)).not.toContain("docs/adr/ADR-D099-UNANSWERED.md");
+    // Already touched -> nothing to add.
+    expect(touchesNamedByFacts({ ...parts, existing: ["docs/adr/ADR-D013-ZONES.md"] })).toEqual([]);
+    // No facts, or no room left, and the search does not even run.
+    expect(touchesNamedByFacts({ ...parts, facts: [] })).toEqual([]);
+    expect(touchesNamedByFacts({ ...parts, limit: 1 })).toEqual([]);
+
+    expect(addedNotes([{ path: "docs/adr/ADR-D013-ZONES.md", factId: "F002", key: "ADR-D013" }])).toEqual([
+      "added docs/adr/ADR-D013-ZONES.md to touches: settled by F002 (its text mentions `ADR-D013`)",
+    ]);
+  });
+
+  test("the ADR a cut fact settles reaches `touches`, and `notes:` says who put it there", async () => {
+    const ws = zonesWorkspace();
+    process.env.FAKE_BUILD_PROMPT_DIR = join(ws.root, "prompts");
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({
+      S1: {
+        "docs/adr/ADR-D008-AUTH.md": "# ADR-D008 · Customer authentication\n\nStatus: Accepted\n",
+        "docs/adr/ADR-D013-ZONES.md": "# ADR-D013 · Delivery zone geometry\n\nStatus: Accepted\n",
+      },
+    });
+
+    const outcome = await next(ws);
+    expect(outcome.code).toBe(4);
+    const text = plan(ws);
+
+    // The bug, gone: the handoff never cited ADR-D013 and it is touched anyway.
+    expect(ZONES_HANDOFF).not.toContain("ADR-D013");
+    expect(block(text, "touches")).toContain('    - "docs/adr/ADR-D013-ZONES.md"');
+    expect(block(text, "notes")).toContain(
+      "added docs/adr/ADR-D013-ZONES.md to touches: settled by F002 (its text mentions `ADR-D013`)",
+    );
+    // …and because it is touched, it is MAPPED — so the line that used to say
+    // the fact settles nothing is gone, and the grep names the file.
+    expect(block(text, "notes")).toContain("F002 settles docs/adr/ADR-D013-ZONES.md");
+    expect(block(text, "notes")).not.toContain("settle no touched document");
+    expect(block(text, "acceptance")).toContain("docs/adr/ADR-D013-ZONES.md");
+    // An ADR nobody answered is still nobody's business.
+    expect(text).not.toContain("ADR-D099");
+
+    // The developer was handed its CONTENT, which is what `touches` buys.
+    const developer = readFileSync(join(ws.root, "prompts", "developer-S1-1.md"), "utf8");
+    expect(developer).toContain("### `docs/adr/ADR-D013-ZONES.md`");
+    expect(developer).toContain("# ADR-D013 · Delivery zone geometry");
+  }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// F2 — the WHOLE answer reaches the developer.
+// ---------------------------------------------------------------------------
+
+describe("the whole answer, not the fact's first line", () => {
+  test("`01-what/questions.md` is a declared input, and the prompt inlines it", async () => {
+    const ws = zonesWorkspace();
+    process.env.FAKE_BUILD_PROMPT_DIR = join(ws.root, "prompts");
+    await next(ws);
+
+    expect(block(plan(ws), "inputs")).toContain('    - "01-what/questions.md"');
+    const developer = readFileSync(join(ws.root, "prompts", "developer-S1-1.md"), "utf8");
+    expect(developer).toContain("### `01-what/questions.md`");
+    expect(developer).toContain("Accepts ADR-D013 as written.");
+  }, 60_000);
+
+  test("a run with no questions.md declares no input and cites only the fact", () => {
+    const ws = workspace({ ...DOCS_RUN });
+    const content = implicitPlanContent({
+      runDir: ws.runDir, runId: ws.runId, runTitle: "A docs run", scope: "docs",
+      repos: [ws.repoName], workspace: loadWorkspace(ws.root),
+      facts: [fact("F009", "ship the guide rewrite", ws.runId)], budgetUsd: 8,
+    });
+    expect(content.inputs).toEqual([]);
+    expect(content.goal).toEqual(["Apply ship the guide rewrite to the touched files [src: F009]"]);
+    expect(renderImplicitPlan(content)).toContain("  inputs: []  # this run wrote no 01-what/questions.md");
+  });
+
+  test("the apply-bullet quotes the FULL answer and cites the line it was taken from", async () => {
+    const ws = zonesWorkspace();
+    await next(ws);
+    const goal = block(plan(ws), "goal");
+
+    // The fact row stops at "no spatial ind …". The bullet does not.
+    expect(goal).toContain("no PostGIS and no spatial index. Accepts ADR-D013 as written.");
+    expect(goal).not.toContain("no spatial ind …");
+    // Both sources, in one token: the fact, and where its words actually are.
+    expect(goal).toContain("[src: F002; 01-what/questions.md:15]");
+    expect(goal).toContain("[src: F001; 01-what/questions.md:8]");
+  }, 60_000);
+
+  test("`answerIndex` reads the answer, the restated fact and the [Answer]: line", () => {
+    const ws = zonesWorkspace();
+    const index = answerIndex(ws.runDir);
+    expect(index.answers.get("Q2")).toContain("Accepts ADR-D013 as written.");
+    expect(index.answers.get("F002")).toBe(index.answers.get("Q2"));
+    expect(index.restated.get("Q2")).toStartWith("What shape is a delivery zone? — A — circle plus polygon");
+    // 1-based, and it is the `[Answer]:` line rather than the heading.
+    expect(index.lines.get("Q2")).toBe(15);
+    expect(ZONES_QUESTIONS.split("\n")[14]).toStartWith("[Answer]: A — circle plus polygon");
+    expect(answerIndex(join(ws.root, "nowhere")).lines.size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F3 — the goal is the work; the What's decisions are context.
+// ---------------------------------------------------------------------------
+
+describe("goal is the work, context is the What", () => {
+  test("with answers, `goal` holds nothing but apply-bullets", () => {
+    const ws = zonesWorkspace();
+    const content = implicitPlanContent({
+      runDir: ws.runDir, runId: FIXTURE_RUN, runTitle: "Settle the ADRs", scope: "docs",
+      repos: [ws.repoName], workspace: loadWorkspace(ws.root),
+      facts: [fact("F002", "zones. Accepts ADR-D013 as written.", FIXTURE_RUN)], budgetUsd: 8,
+    });
+    expect(content.goal.every((item) => item.startsWith("Apply "))).toBe(true);
+    expect(content.goal.join("\n")).not.toContain("Out of scope: choosing on the owner's behalf");
+    expect(content.context.join("\n")).toContain("Out of scope: choosing on the owner's behalf");
+    expect(content.context.join("\n")).toContain("In scope: settling the open ADRs the owner answers");
+  });
+
+  test("with no answers, nothing moves: the What's decisions are still the goal", () => {
+    const ws = zonesWorkspace();
+    const content = implicitPlanContent({
+      runDir: ws.runDir, runId: FIXTURE_RUN, runTitle: "Settle the ADRs", scope: "docs",
+      repos: [ws.repoName], workspace: loadWorkspace(ws.root), facts: [], budgetUsd: 8,
+    });
+    expect(content.context).toEqual([]);
+    expect(content.goal.join("\n")).toContain("Out of scope: choosing on the owner's behalf");
+    expect(renderImplicitPlan(content))
+      .toContain("  context: []  # nothing to apply, so the What's decisions ARE the goal above");
+  });
+
+  test("the note names the facts, and a contiguous block is written as a range", () => {
+    expect(implicitStoryNote([])).toBe(IMPLICIT_STORY_NOTE);
+    expect(implicitStoryNote(["F005", "F006", "F007", "F008", "F009", "F010"])).toBe(
+      "Plan was skipped by the scope; this story applies the run's answered decisions (F005–F010) " +
+      "to the files listed under `touches`; the What's decisions below are background.",
+    );
+    expect(factRange(["F005", "F006"])).toBe("F005, F006");
+    expect(factRange(["F005", "F007", "F009"])).toBe("F005, F007, F009");
+    expect(factRange(["F005", "F006", "F007"])).toBe("F005–F007");
+  });
+
+  test("the developer prompt labels the context as background, after the objective", async () => {
+    const ws = zonesWorkspace();
+    process.env.FAKE_BUILD_PROMPT_DIR = join(ws.root, "prompts");
+    await next(ws);
+    const developer = readFileSync(join(ws.root, "prompts", "developer-S1-1.md"), "utf8");
+
+    expect(developer).toContain(implicitStoryNote(["F001", "F002"]));
+    expect(developer).toContain("## Context (from the What stage)");
+    expect(developer).toContain("They are not\ninstructions, and nothing in this section is a task.");
+    // Objective first, then context, then the Done-when list.
+    expect(developer.indexOf("## Objective")).toBeLessThan(developer.indexOf("## Context (from the What stage)"));
+    expect(developer.indexOf("## Context (from the What stage)"))
+      .toBeLessThan(developer.indexOf("Done-when, all of it testable:"));
+  }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// F4 — `--prepare --discard-pending` derives the plan again.
+// ---------------------------------------------------------------------------
+
+describe("re-preparing an implicit plan", () => {
+  test("--discard-pending bins the bundle AND re-derives the plan, reusing this run's branches", async () => {
+    const ws = zonesWorkspace();
+    const first = await next(ws, { mode: "prepare" });
+    expect(first.code).toBe(0);
+    expect(first.lines.join("\n")).toContain("prepared S1");
+    expect(plan(ws)).toContain("status: in_progress");
+    expect(existsSync(join(ws.runDir, ".agent", "build", "S1", "pending.json"))).toBe(true);
+    // A result the killed session left behind, which a later --commit would read.
+    writeFileSync(
+      join(ws.runDir, ".agent", "build", "S1", "result.json"),
+      JSON.stringify({ outputs: [], questions_asked: [], notes: "stale", cost_usd: 9 }),
+      "utf8",
+    );
+
+    // Something the What did not know: a third answer, naming a third ADR.
+    writeFileSync(
+      join(ws.root, ".tldrx", "memory", "facts.yml"),
+      ZONES_FACTS.replace(/\n$/, `
+  - id: F003
+    fact: "Is ADR-D099 in? — A — yes. Accepts ADR-D099 as written."
+    area: scope
+    repos: []
+    kind: answer
+    confidence: stated
+    source: {who: alan, when: "2026-08-29T09:32:00Z", run: "${FIXTURE_RUN}", q: Q3}
+    supersedes: null
+    superseded_by: null
+    retired: null
+`),
+      "utf8",
+    );
+
+    const again = await next(ws, { mode: "prepare", discardPending: true });
+    const said = again.lines.join("\n");
+    expect(again.code).toBe(0);
+    expect(said).toContain("discarded the --prepare bundle in");
+    expect(said).toContain("re-derived 04-build/implicit-plan.yml (--discard-pending;");
+    expect(said).toContain("prepared S1");
+    // (b) the plan is DIFFERENT: the new answer is in it, and so is its document.
+    expect(block(plan(ws), "goal")).toContain("[src: F003]");
+    expect(block(plan(ws), "touches")).toContain("ADR-D099-UNANSWERED.md");
+    // (a) the stale result is gone, so no --commit can read it as this cycle's.
+    expect(existsSync(join(ws.runDir, ".agent", "build", "S1", "result.json"))).toBe(false);
+    // (d) a fresh bundle, for this story, is on disk.
+    expect(existsSync(join(ws.runDir, ".agent", "build", "S1", "pending.json"))).toBe(true);
+    expect(readFileSync(join(ws.runDir, ".agent", "build", "S1", "prompt.md"), "utf8"))
+      .toContain("Accepts ADR-D099 as written.");
+    // (c) the epic branch this run cut is reused, not refused.
+    expect(said).not.toContain("refusing to stack this run's commits");
+    expect(git(ws, ["rev-parse", "--verify", `epic/${ws.runId}`])).not.toBe("");
+  }, 60_000);
+
+  test("a plan something has already been built off is KEPT, and the reason is said", async () => {
+    const ws = zonesWorkspace();
+    await next(ws, { mode: "prepare" });
+
+    // The developer's commit, on the story branch, before the session died.
+    const worktree = join(ws.root, ".tldrx", "worktrees", "app", `${ws.runId}-S1`);
+    writeFileSync(join(worktree, "docs", "adr", "ADR-D008-AUTH.md"), "Status: Accepted\n", "utf8");
+    execFileSync("git", ["add", "-A", "docs"], { cwd: worktree, stdio: ["ignore", "pipe", "pipe"] });
+    execFileSync("git", ["commit", "-m", "wip"], { cwd: worktree, stdio: ["ignore", "pipe", "pipe"] });
+
+    const again = await next(ws, { mode: "prepare", discardPending: true });
+    const said = again.lines.join("\n");
+    expect(said).toContain("kept 04-build/implicit-plan.yml (--discard-pending re-derives only an unbuilt plan):");
+    expect(said).toContain("carries 1 commit(s) beyond");
+    expect(said).toContain("prepared S1");
+  }, 60_000);
+
+  test("evidence, or a settled story, is the other half of the guard", () => {
+    expect(implicitPlanIsStale("status: todo\nevidence: []\n")).toBeNull();
+    expect(implicitPlanIsStale("status: in_progress\nevidence: []\n")).toBeNull();
+    expect(implicitPlanIsStale("status: done\nevidence: []\n")).toBe("the story is already `done`");
+    expect(implicitPlanIsStale("status: blocked\nevidence: []\n")).toBe("the story is already `blocked`");
+    expect(implicitPlanIsStale('status: todo\nevidence:\n  - "commit abc"\n'))
+      .toBe("the story has recorded evidence");
+  });
+
+  test("without the flag the plan on disk is left exactly as it is", async () => {
+    const ws = zonesWorkspace();
+    await next(ws, { mode: "prepare" });
+    const before = plan(ws);
+    writeFileSync(
+      join(ws.root, ".tldrx", "memory", "facts.yml"),
+      "version: 1\nfacts: []\n",
+      "utf8",
+    );
+    const again = await next(ws, { mode: "prepare" });
+    expect(again.lines.join("\n")).not.toContain("re-derived");
+    expect(plan(ws)).toBe(before);
+  }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// F2 (b)(c) — the cap that cut the sentence, and saying so when it still cuts.
+// ---------------------------------------------------------------------------
+
+describe("the fact cap, and what a cut fact says about itself", () => {
+  test("spec §2.5's cap is 2000, and the spec table says the same number", () => {
+    expect(MAX_FACT_CHARS).toBe(2000);
+    const spec = readFileSync(join(FRAMEWORK_ROOT, "docs", "spec.md"), "utf8");
+    expect(spec).toContain("| `fact` | str ≤2000 |");
+  });
+
+  test("under the cap nothing is marked; over it the text ends in ` …` and the row says truncated", () => {
+    expect(factWasTruncated("Q", "short")).toBe(false);
+    expect(factTextFor("Q", "short")).toBe("Q — short");
+
+    const long = "x".repeat(MAX_FACT_CHARS);
+    expect(factWasTruncated("Q", long)).toBe(true);
+    const cut = factTextFor("Q", long);
+    expect(cut.length).toBe(MAX_FACT_CHARS);
+    expect(cut).toEndWith(TRUNCATION_MARK);
+  });
+
+  test("`tldrx answer` records the mark and the flag, and a whole answer records neither", () => {
+    const ws = workspace(DOCS_RUN);
+    const path = join(ws.runDir, "01-what", "questions.md");
+    const long = `A — ${"long ".repeat(500)}end`;
+    writeFileSync(path, [
+      "# Questions",
+      "",
+      "## Q1 · A short one",
+      "<!-- id: Q1 | status: open | area: x | asked_by: facilitator | asked_at: 2026-08-29T09:00:00Z -->",
+      "",
+      "[Answer]: A — brief.",
+      "",
+      "## Q2 · A long one",
+      "<!-- id: Q2 | status: open | area: x | asked_by: facilitator | asked_at: 2026-08-29T09:00:00Z -->",
+      "",
+      `[Answer]: ${long}`,
+      "",
+    ].join("\n"), "utf8");
+
+    const captured = captureAnswers(path, {
+      root: ws.root, runDir: ws.runDir, run: ws.runId, actor: "alan", at: "2026-08-29T09:30:00Z",
+    });
+    expect(captured.map((row) => row.q)).toEqual(["Q1", "Q2"]);
+
+    const store = FactsStore.load(join(ws.root, ".tldrx", "memory", "facts.yml"));
+    const short = store.get("F001");
+    expect(short?.truncated).toBeUndefined();
+    expect(short?.fact).toBe("A short one — A — brief.");
+
+    const big = store.get("F002");
+    expect(big?.truncated).toBe(true);
+    expect(big?.fact).toEndWith(TRUNCATION_MARK);
+    expect(big?.fact.length).toBe(MAX_FACT_CHARS);
+    // The whole answer is still on disk, which is the point of the flag.
+    expect(answerIndex(ws.runDir).answers.get("F002")).toBe(long);
+
+    // The flag survives a round trip through the emitter and the validator.
+    const yaml = readFileSync(join(ws.root, ".tldrx", "memory", "facts.yml"), "utf8");
+    expect(yaml).toContain("    truncated: true");
+    expect(yaml.match(/truncated: true/g)).toHaveLength(1);
+    expect(validateFactsFile(parseYaml(yaml)).ok).toBe(true);
+  });
+
+  test("a row written before the field existed still validates; a wrong type does not", () => {
+    const row = (extra: string): string => `version: 1
+facts:
+  - id: F001
+    fact: "Q — A"
+    area: x
+    repos: []
+    kind: answer
+    confidence: stated
+    source: {who: alan, when: "2026-08-29T09:00:00Z", run: null, q: null}
+    supersedes: null
+    superseded_by: null
+    retired: null${extra}
+`;
+    expect(validateFactsFile(parseYaml(row(""))).ok).toBe(true);
+    expect(validateFactsFile(parseYaml(row("\n    truncated: true"))).ok).toBe(true);
+    const bad = validateFactsFile(parseYaml(row('\n    truncated: "yes"')));
+    expect(bad.ok).toBe(false);
+    expect(bad.issues[0]?.path).toBe("facts[0].truncated");
   });
 });

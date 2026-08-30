@@ -74,9 +74,10 @@ export class FactsStore {
 
   /** Append a new fact and return it, with the id the store assigned. */
   append(input: NewFact): Fact {
+    const cut = input.fact.length > MAX_FACT_CHARS;
     const fact: Fact = {
       id: this.nextId(),
-      fact: input.fact.length > MAX_FACT_CHARS ? `${input.fact.slice(0, MAX_FACT_CHARS - 1)}…` : input.fact,
+      fact: cut ? `${input.fact.slice(0, MAX_FACT_CHARS - 1)}…` : input.fact,
       area: input.area,
       repos: [...input.repos],
       kind: input.kind,
@@ -85,6 +86,8 @@ export class FactsStore {
       supersedes: input.supersedes ?? null,
       superseded_by: null,
       retired: input.retired ?? null,
+      // Either the caller already knows it cut the text, or this store just did.
+      ...(cut || input.truncated === true ? { truncated: true as const } : {}),
     };
     this.rows.push(fact);
     return fact;

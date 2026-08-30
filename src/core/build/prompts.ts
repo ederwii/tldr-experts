@@ -15,6 +15,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { SKIPPED_DIRS, toPosix } from "../detect/walk.ts";
+import { byteLength } from "../experts/expertKnowledge.ts";
 import { fenceFor, renderInputs, type PromptInput } from "../facilitator/prompt.ts";
 import { diffCommand } from "./git.ts";
 import type { PlannedEpic, PlannedStory } from "./plan.ts";
@@ -53,11 +54,19 @@ export interface DeveloperPromptParts {
 
 export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
   const { story } = parts.story;
+  const extra = parts.story.extraInputs ?? [];
+  // The extras come out of the same 64 KB the touched files draw on, and they go
+  // FIRST: a story that applies six answers is about the answers, so if anything
+  // has to be listed rather than inlined it is the eleventh touched file, never
+  // the file holding the words the story quotes.
+  const spent = extra.reduce((sum, input) => sum + byteLength(input.content), 0);
   const inputs: PromptInput[] = [
     { path: parts.story.rel, content: parts.story.text },
     { path: parts.epic.rel, content: epicSummary(parts.epic) },
-    ...touchedInputs(parts.worktree, story.touches),
+    ...extra,
+    ...touchedInputs(parts.worktree, story.touches, spent),
   ];
+  const context = (parts.story.context ?? []).filter((line) => line.trim() !== "");
 
   const lines = [
     `# Build — story ${story.id} — run ${parts.runId}`,
@@ -74,6 +83,16 @@ export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
     `    ${parts.worktree}`,
     "",
     ...((parts.planNote ?? "").trim() === "" ? [] : [(parts.planNote ?? "").trim(), ""]),
+    ...(context.length === 0 ? [] : [
+      "## Context (from the What stage)",
+      "",
+      "Background only. These are the scoping decisions taken BEFORE the questions above",
+      "were answered — they tell you what this run is and is not about. They are not",
+      "instructions, and nothing in this section is a task.",
+      "",
+      ...context.map((item) => `- ${item}`),
+      "",
+    ]),
     "Done-when, all of it testable:",
     "",
     ...story.acceptance.map((item) => `- ${item}`),
@@ -271,9 +290,13 @@ export function epicSummary(epic: PlannedEpic): string {
  * listed as such rather than silently dropped, so the agent can tell "new file"
  * from "I was not shown it".
  */
-export function touchedInputs(worktree: string, touches: readonly string[]): readonly PromptInput[] {
+export function touchedInputs(
+  worktree: string,
+  touches: readonly string[],
+  alreadySpent = 0,
+): readonly PromptInput[] {
   const inputs: PromptInput[] = [];
-  let spent = 0;
+  let spent = alreadySpent;
   for (const touch of touches) {
     for (const rel of expandTouch(worktree, touch)) {
       if (inputs.length >= MAX_TOUCHED_FILES) return inputs;

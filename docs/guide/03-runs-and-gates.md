@@ -81,13 +81,25 @@ implicit plan: Plan skipped by scope 'docs' — one story S1 (6 acceptance, 6 to
 ```
 
 If you have answered questions on this run, those answers are the work: each fact
-becomes an `Apply <the answer> to the touched files` goal, and the acceptance gains
-a check that every document one of your answers settles no longer reads
-`Status: proposed`. Bullets whose subject is the What stage's own
-work — anything naming `questions.md`, an `01-what/` path or a question id — are
-dropped, and the story's `notes:` says which ones and why, so you can put one back if
-the filter got it wrong. Where an answer cannot be matched to a file by its ADR id, the
-story says that too instead of guessing.
+becomes an `Apply <the answer> to the touched files` goal — quoting your WHOLE answer out
+of `01-what/questions.md`, which is inlined into the developer's prompt and cited by line —
+and the acceptance gains a check that every document one of your answers settles no longer
+reads `Status: proposed`. **A document your answer settles is added to `touches` even when
+the What never cited it**, so the story is allowed to edit the ADR it was opened to settle;
+`notes:` says `added <path> to touches: settled by F<n>`. With answers on record the goal is
+nothing but that work, and the What's Decisions move to a `context:` list the prompt labels
+background — before this, a run opened to settle six decisions handed its developer "Out of
+scope: selecting an answer on the owner's behalf" as its stated goal. Bullets whose subject
+is the What stage's own work — anything naming `questions.md`, an `01-what/` path or a
+question id — are dropped, and the story's `notes:` says which ones and why, so you can put
+one back if the filter got it wrong. Where an answer cannot be matched to a file by its ADR
+id, the story says that too instead of guessing.
+
+Changed your mind, or answered another question, after the bundle was written? `tldrx next
+--prepare --discard-pending` throws the bundle away **and derives the plan again** from the
+handoff and the answers as they stand now, reusing this run's epic branch and worktree. It
+refuses to rewind a plan something has already been built off — recorded evidence, or a
+commit on the story branch — and tells you which.
 
 `tldrx run status` says `plan: implicit (scope skips Plan)`, so you can always tell a
 synthesised plan from one you read and approved. Nothing else about the phase changes: the

@@ -415,7 +415,7 @@ const ENTRIES: readonly CommandHelp[] = [
       {
         name: "discard-pending",
         arg: null,
-        meaning: "Bin an orphaned --prepare bundle and run the stage again. Without it a stage left running with a bundle on disk is refused (exit 2) rather than re-spawned, because that would throw away a sub-agent turn this run has already paid for.",
+        meaning: "Bin an orphaned --prepare bundle and run the stage again. Without it a stage left running with a bundle on disk is refused (exit 2) rather than re-spawned, because that would throw away a sub-agent turn this run has already paid for. On a build stage running off an implicit plan (a scope that skips Plan) it also DERIVES THE PLAN AGAIN from the run's handoff and answers — but only while nothing has been built off it: a plan with recorded evidence, or whose story branch already carries a commit, is kept and the reason said.",
       },
       {
         name: "reuse-epic",

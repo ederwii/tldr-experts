@@ -41,12 +41,30 @@ export interface CapturedAnswer {
 }
 
 /**
+ * What a cut fact ends with, so "there is more of this" is readable and not
+ * inferred from the text stopping mid-word.
+ */
+export const TRUNCATION_MARK = " …";
+
+/**
  * `[assumption]` (inherited from the hook) — the spec stores the answer verbatim
  * but does not say what the fact reads. Taken: "<question> — <answer>", so the fact
  * carries the tokens a later re-ask is matched against.
+ *
+ * Over `MAX_FACT_CHARS` the text is cut and marked. It used to be cut silently, at
+ * 300, and a reader could not tell a short answer from a beheaded one: on the
+ * aparece run of 2026-08-30 four of six facts ended mid-clause and the clause that
+ * went missing was the one naming the ADR they settle.
  */
 export function factTextFor(title: string, answer: string): string {
-  return `${title} — ${answer}`.slice(0, MAX_FACT_CHARS);
+  const whole = `${title} — ${answer}`;
+  if (whole.length <= MAX_FACT_CHARS) return whole;
+  return `${whole.slice(0, MAX_FACT_CHARS - TRUNCATION_MARK.length)}${TRUNCATION_MARK}`;
+}
+
+/** Whether `factTextFor` had to cut — written onto the row as `truncated: true`. */
+export function factWasTruncated(title: string, answer: string): boolean {
+  return `${title} — ${answer}`.length > MAX_FACT_CHARS;
 }
 
 export function captureAnswers(questionsPath: string, ctx: CaptureContext): readonly CapturedAnswer[] {
@@ -64,8 +82,10 @@ export function captureAnswers(questionsPath: string, ctx: CaptureContext): read
   FactsStore.update(factsPath(ctx.root), (store) => {
     for (const block of answered) {
       const area = block.metadata?.area ?? "unscoped";
+      const truncated = factWasTruncated(block.title, block.answer);
       const fact = store.append({
         fact: factTextFor(block.title, block.answer),
+        ...(truncated ? { truncated: true as const } : {}),
         area,
         repos: [],
         kind: "answer",

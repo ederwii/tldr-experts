@@ -185,7 +185,7 @@ tldrx next [<run>] [--run <id>] [--dry-run] [--prepare|--commit] [--model <m>] [
 | `--tokens <n>` | `--commit` only: tokens the host used, recorded beside the declared cost |
 | `--yolo` | Let the sub-agent run without per-tool permission prompts. It still cannot push |
 | `--keep-worktrees` | Leave the per-story worktrees on disk after the build stage |
-| `--discard-pending` | Bin an orphaned `--prepare` bundle and run the stage again |
+| `--discard-pending` | Bin an orphaned `--prepare` bundle and run the stage again. On a build stage running off an implicit plan, also derives the plan again — unless something has been built off it |
 | `--reuse-epic` | Let the build stage adopt an existing `epic/<slug>` branch this run did not cut |
 | `--ui <mode>` | `auto` `scene` `compact` `plain` `off`. Every byte goes to stderr |
 
