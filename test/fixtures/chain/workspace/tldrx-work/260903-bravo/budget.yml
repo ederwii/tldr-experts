@@ -1,0 +1,8 @@
+version: 1
+run: 260903-bravo
+ceiling_usd: 20.0
+per_agent_max_usd: 6.0
+warn_at_pct: 80
+on_exceed: warn
+phases: [{id: 01-what, ceiling_usd: 8.0, spent_usd: 0.00},
+         {id: 02-how, ceiling_usd: 12.0, spent_usd: 0.00}]

@@ -21,6 +21,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { MAX_LEVEL, loadExperts, driftWarnings, evidenceWarnings, type ExpertRecord } from "../experts/index.ts";
 import { listRuns, loadPhaseArtefacts, loadRun, type LoadedRun } from "../replay/index.ts";
+import { waitingFor, type Waiting } from "../run/waiting.ts";
 import { openBlocks, parseQuestions } from "../text/index.ts";
 import { renderMarkdown } from "../markdown/index.ts";
 import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
@@ -49,6 +50,21 @@ export interface StageRowModel {
    * `gate` keeps its exact old spelling, so nothing reading it has to change.
    */
   readonly gateBy: string | null;
+}
+
+/**
+ * What ONE run is waiting on — the same record `tldrx run status --json` prints.
+ *
+ * Not derived here. `waitingFor` (`src/core/run/waiting.ts`) is the single
+ * derivation both screens call, so the page and the CLI cannot disagree about
+ * whether a run is at a gate, holding a question, failed, or simply ready.
+ */
+export interface WaitingModel {
+  /** `gate` | `answer` | `ready` | `done` | `blocked` | `failed`. */
+  readonly kind: string;
+  readonly message: string;
+  /** Open question ids in the cursor phase, when it is waiting on answers. */
+  readonly questions: readonly string[];
 }
 
 export interface QuestionOptionModel {
@@ -130,9 +146,20 @@ export interface RunModel {
   readonly stagesDone: number;
   /** 0–100, rounded. */
   readonly percent: number;
-  /** The gate the run is waiting on, if any. */
+  /** What this run is waiting on. The one field to read; the two below alias it. */
+  readonly waiting: WaitingModel;
+  /**
+   * The stage held at a gate, or null. DERIVED from `waiting`: non-null only
+   * when `waiting.kind === "gate"`. Kept for one release for templates that
+   * already read it — new code should read `waiting`.
+   */
   readonly pendingGate: string | null;
-  /** The first open question, `"<id> · <title>"`, if any. */
+  /**
+   * The question the run stopped for, `"<id> · <title>"`, or null. DERIVED from
+   * `waiting`: non-null only when `waiting.kind === "answer"`. Open questions in
+   * an already-approved phase still appear under `phases[].questions`; they are
+   * not what the run is waiting on.
+   */
   readonly pendingQuestion: string | null;
   /** The execution path, one row per stage, in run.yml order. */
   readonly path: readonly StageRowModel[];
@@ -223,8 +250,16 @@ export function buildModel(root: string, generatedAt: string, options: ModelOpti
   };
 }
 
-export function toRunModel(loaded: LoadedRun): RunModel {
+/**
+ * One run, as the page needs it.
+ *
+ * `waiting` is an argument rather than a second derivation so a caller that
+ * already computed it for the whole workspace does not pay for it twice; it
+ * falls back to the same shared function when nobody hands one in.
+ */
+export function toRunModel(loaded: LoadedRun, waiting?: Waiting): RunModel {
   const doc = loaded.run;
+  const waits = waiting ?? waitingFor(doc, loaded.dir);
 
   const phases: PhaseModel[] = doc.phases.map((phase) => {
     const artefacts = loadPhaseArtefacts(loaded, phase.id);
@@ -259,8 +294,15 @@ export function toRunModel(loaded: LoadedRun): RunModel {
   );
 
   const stages = doc.phases.flatMap((phase) => phase.stages);
-  const gate = stages.find((stage) => stage.gate !== null && stage.gate.status === "pending");
-  const question = phases.flatMap((phase) => phase.questions)[0];
+  const open = phases.flatMap((phase) => phase.questions);
+  // Both aliases are now DERIVED from `waiting`, never from the gate objects.
+  // The old `pendingGate` was "the first stage whose gate.status is pending" —
+  // which on a run nobody has started is EVERY stage, so a fresh run drew a red
+  // "waiting at a gate" card while `tldrx run status` called it `ready`.
+  const held = doc.cursor === null || waits.kind !== "gate" ? null : doc.cursor.stage;
+  const asked = waits.kind !== "answer"
+    ? undefined
+    : open.find((item) => item.id === waits.questions[0]) ?? open[0];
   const stagesTotal = stages.length;
   const stagesDone = stages.filter((stage) => TERMINAL.has(stage.status)).length;
 
@@ -278,8 +320,9 @@ export function toRunModel(loaded: LoadedRun): RunModel {
     stagesTotal,
     stagesDone,
     percent: stagesTotal === 0 ? 0 : Math.round((stagesDone / stagesTotal) * 100),
-    pendingGate: gate === undefined ? null : gate.id,
-    pendingQuestion: question === undefined ? null : `${question.id} · ${question.title}`,
+    waiting: { kind: waits.kind, message: waits.message, questions: waits.questions },
+    pendingGate: held,
+    pendingQuestion: asked === undefined ? null : `${asked.id} · ${asked.title}`,
     path,
     phases,
     plan: loadPlan(loaded),

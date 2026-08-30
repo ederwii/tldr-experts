@@ -52,6 +52,9 @@ describe("the dashboard model", () => {
     expect(JSON.parse(JSON.stringify(model))).toEqual(model);
   });
 
+  // `runs[].waiting.questions[]` is absent here only because this fixture's one
+  // run has no open block in its cursor phase — an empty array contributes no
+  // path. `dashboard-deps.test.ts` asserts it over a fixture that does.
   test("its field names are the contract a designer targets", () => {
     expect([...fieldPaths(model)].sort()).toEqual([
       "experts[].areas[].evidenceCount",
@@ -107,6 +110,8 @@ describe("the dashboard model", () => {
       "runs[].status",
       "runs[].title",
       "runs[].updatedAt",
+      "runs[].waiting.kind",
+      "runs[].waiting.message",
       "runs[].workflow",
       "workspace",
       "workspaceFound",
@@ -120,8 +125,12 @@ describe("the dashboard model", () => {
     expect(run.stagesTotal).toBe(2);
     expect(run.stagesDone).toBe(1);
     expect(run.percent).toBe(50);
+    // The run is parked at a gate, so that is what it is waiting on. Q2 and Q3
+    // are open in `01-what`, a phase that was already approved — still listed
+    // under `phases[].questions`, but not what stops the run.
+    expect(run.waiting.kind).toBe("gate");
     expect(run.pendingGate).toBe("how");
-    expect(run.pendingQuestion).toContain("Q2");
+    expect(run.pendingQuestion).toBeNull();
     expect(run.path.map((stage) => `${stage.phase}/${stage.id}`)).toEqual(["01-what/what", "02-how/how"]);
     expect(run.phases[0]!.handoffHtml).toContain("<h2>Findings</h2>");
     expect(run.phases[0]!.questions.map((question) => question.id)).toEqual(["Q2", "Q3"]);
@@ -286,20 +295,44 @@ describe("the views it draws", () => {
   });
 
   test("it names the one thing waiting on a human, and raises it as an alert", () => {
-    expect(runs).toContain('<span class="alert__kind">question</span>');
-    expect(runs).toContain("Q2 · How far back does the scoreboard reach?");
+    expect(runs).toContain('<span class="alert__kind">gate</span>');
+    expect(runs).toContain("stage how is waiting at a gate");
     expect(runs).toContain("waiting on a human");
-    // A question outranks a gate: the run has both, and the question is the ask.
-    expect(runs).not.toContain("stage how is waiting at a gate");
+    // Q2 is open, but in a phase that was already approved. The run is stopped
+    // at the gate on 02-how, which is what `tldrx run status` says too.
+    expect(runs).not.toContain('<span class="alert__kind">question</span>');
   });
 
-  test("a gate alone reads as the gate", () => {
-    const gateOnly = {
+  test("an open question the run actually stopped for reads as the question", () => {
+    const asked = {
       ...model,
-      runs: model.runs.map((run) => ({ ...run, pendingQuestion: null })),
+      runs: model.runs.map((run) => ({
+        ...run,
+        waiting: { kind: "answer", message: "1 open question(s)", questions: ["Q2"] },
+        pendingGate: null,
+        pendingQuestion: "Q2 · How far back does the scoreboard reach?",
+      })),
     };
-    expect(dashMain(gateOnly, ui, { view: "runs", id: null }, nowMs))
-      .toContain("stage how is waiting at a gate");
+    const page = dashMain(asked, ui, { view: "runs", id: null }, nowMs);
+    expect(page).toContain('<span class="alert__kind">question</span>');
+    expect(page).toContain("Q2 · How far back does the scoreboard reach?");
+    expect(page).not.toContain("stage how is waiting at a gate");
+  });
+
+  test("a run with nothing to sign says it is ready, with the command", () => {
+    const ready = {
+      ...model,
+      runs: model.runs.map((run) => ({
+        ...run,
+        waiting: { kind: "ready", message: "next up: 01-what/what (pending)", questions: [] },
+        pendingGate: null,
+        pendingQuestion: null,
+      })),
+    };
+    const page = dashMain(ready, ui, { view: "runs", id: null }, nowMs);
+    expect(page).toContain(`ready — <code>tldrx next ${VIEWS_RUN}</code>`);
+    // `ready` is a state of the work, not an ask: no alert card, no nav badge.
+    expect(page).not.toContain('class="alert__kind"');
   });
 
   test("the run detail carries the execution path as a table", () => {

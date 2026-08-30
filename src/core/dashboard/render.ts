@@ -232,13 +232,39 @@ export function dashCmd(text: string, id: string): string {
     + 'aria-label="Copy command to clipboard">copy</button></div>';
 }
 
-/** The one thing a run waits on, or null. A question outranks a gate. */
+/**
+ * The one thing a run waits on, when it waits on a HUMAN — or null.
+ *
+ * Read straight off `run.waiting`, which is `tldrx run status`'s own answer
+ * (`src/core/run/waiting.ts`). Three kinds raise a card: a gate to sign, a
+ * question to answer, a stage that failed. `ready` and `blocked` are states of
+ * the work, not asks, and a page that alerts on them alerts on everything.
+ */
 export function dashPending(run: RunModel): DashPending | null {
-  if (run.pendingQuestion !== null) return { kind: "question", text: run.pendingQuestion };
-  if (run.pendingGate !== null) {
-    return { kind: "gate", text: `stage ${run.pendingGate} is waiting at a gate` };
+  const kind = run.waiting.kind;
+  if (kind === "gate") {
+    return { kind: "gate", text: `stage ${run.pendingGate ?? "?"} is waiting at a gate` };
   }
+  if (kind === "answer") {
+    return { kind: "question", text: run.pendingQuestion ?? run.waiting.message };
+  }
+  if (kind === "failed") return { kind: "failed", text: run.waiting.message };
   return null;
+}
+
+/**
+ * The WAITING ON column: what this run needs, in the fewest words that are true.
+ *
+ * Every kind gets a line, not only the three that raise a card — "nothing" in a
+ * column headed "waiting on" is what made a `ready` run look finished.
+ */
+export function dashWaitingCell(run: RunModel): string {
+  const pending = dashPending(run);
+  if (pending !== null) return dashText(pending.text);
+  if (run.waiting.kind === "ready") {
+    return `<span class="nowrap">ready — <code>tldrx next ${dashText(run.id)}</code></span>`;
+  }
+  return `<span class="faint">nothing — ${dashText(dashWords(run.status))}</span>`;
 }
 
 /** `#/run/260829-x` → the run detail; anything unknown → the runs list. */
@@ -397,9 +423,7 @@ export function dashRunRow(run: RunModel, nowMs: number): string {
     + `<span class="faint">/ ${dashText(dashUsd(run.ceilingUsd))}</span></span>`
     + `${dashMeter(run.spentUsd, run.ceilingUsd)}</div>`
     + `<div class="runrow__wait"${pending === null ? "" : ' data-wait="1"'}>`
-    + (pending === null
-      ? `<span class="faint">nothing — ${dashText(dashWords(run.status))}</span>`
-      : dashText(pending.text))
+    + dashWaitingCell(run)
     + "</div></a>";
 }
 
@@ -874,7 +898,7 @@ export function dashFaqView(model: DashboardModel): string {
  */
 const TEMPLATE_FUNCTIONS = [
   dashText, dashEscape, dashUsd, dashPlural, dashWords, dashDateTime, dashAgo, dashTone,
-  dashChip, dashCmd, dashPending, dashRoute, dashWaiting, dashTitle, dashTopMeta, dashNav,
+  dashChip, dashCmd, dashPending, dashWaitingCell, dashRoute, dashWaiting, dashTitle, dashTopMeta, dashNav,
   dashMain, dashNoWorkspace,
   dashRunsView, dashRunRow, dashMeter,
   dashRunView, dashKv, dashPathSection, dashHandoffsSection, dashPanelId, dashQuestion,
