@@ -17,6 +17,12 @@ design, piloted on Claude Code.
 
 ## Start here
 
+> **Not on npm yet.** Every published version was unpublished on
+> 2026-08-29 (`npm view tldr-experts version` → `E404 Unpublished`), and there is
+> no `v0.3.0` tag yet, so the two `npm i -g` lines below will 404 until
+> `scripts/release.sh 0.3.0` is run. Until then: clone the repo and
+> `bun link`, or `bun <repo>/bin/tldrx.ts <command>`.
+
 ```bash
 npm i -g tldr-experts && cd your-project && tldrx init && tldrx install --claude
 ```
@@ -30,7 +36,7 @@ every decision that is yours and running only the steps that are mechanical.
 ## Quick start
 
 ```bash
-npm i -g tldr-experts          # installs the `tldrx` command (alias: `tldr-experts`); or: npx tldr-experts doctor
+npm i -g tldr-experts          # installs the `tldrx` command (alias: `tldr-experts`) — 404s until v0.3.0 is tagged and published
 tldrx doctor                   # check the local environment first — it is the authority
 
 cd your-project
@@ -200,8 +206,8 @@ a flag for a human in a hurry, not one an agent gets to pass on their behalf.
 
 More than one run can be open at once. When there is exactly one, nothing changes.
 When there are several, every run-targeting command — `next`, `answer`, `approve`,
-`reject`, `budget`, `interview --run`, `tickets`, `watch`, `retro`, `replay`,
-`dashboard` — **refuses rather than guessing**, exits `2`, and lists the open runs:
+`reject`, `budget`, `interview --run`, `tickets`, `watch`, `retro`, `replay` —
+**refuses rather than guessing**, exits `2`, and lists the open runs:
 
 ```
 tldrx next: 3 runs are open — pass one:
@@ -211,8 +217,31 @@ Exit `2` there means "you left off the id", not "it broke". Pass one: a position
 `<run>` on `next` and `run status`, `--run <id>` on the rest. `tldrx run status`
 with several open prints a table of them all and exits `0` — `--json` returns
 `{ "runs": [...] }`, and the single-run shape is unchanged when exactly one is open
-— and `tldrx run new` says so when it opens another. Hooks never block on the
-ambiguity, and the status line appends `(+N open)`.
+— and `tldrx run new` says so when it opens another. `tldrx dashboard` is not on
+that list and never was: it draws every run in the workspace, so it has no single
+run to be ambiguous about. Hooks never block on the ambiguity, and the status line
+appends `(+N open)`.
+
+## Exit codes
+
+One table, defined once in `src/cli/exitCodes.ts` and printed by `tldrx --help`.
+`tldrx <command> --help` lists the subset that command can return.
+
+| Code | Meaning |
+|---|---|
+| `0` | ok |
+| `1` | usage or schema error, or a check ran and failed |
+| `2` | refused: a gate said no, or several runs are open and it will not guess |
+| `3` | not found: no workspace, no run, no card by that name |
+| `4` | awaiting a human: the stage ran and stopped at its gate |
+| `5` | the sub-agent failed |
+| `64` | not implemented (reserved; no command in this build returns it) |
+
+`4` is the normal end of a successful `tldrx next`: the stage ran, wrote its
+outputs, and a person now has to approve. `1` covers both "you asked for something
+impossible" and "the check I ran said no", which are the same thing to a shell.
+An unknown command or an unknown flag is `1`; `64` is kept for a command that is
+genuinely not built, and there are none.
 
 ## Big seeds
 

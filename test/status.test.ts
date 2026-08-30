@@ -314,43 +314,65 @@ describe("item 3 — open runs", () => {
 
 // --- item 4: untrained experts ----------------------------------------------
 
-describe("item 4 — experts with no evidence", () => {
-  function withExpert(root: string, name: string, kind: string, area: string): void {
-    write(root, `.tldrx/experts/${name}/expert.md`, [
-      "---", `name: ${name}`, `kind: ${kind}`, "status: created", "repos: [api]", "---", "", `# ${name}`, "",
-    ].join("\n"));
-    write(root, `.tldrx/experts/${name}/competencies.yml`, [
-      "version: 1", `expert: ${name}`, "status: created", "last_trained: null", "areas:",
-      `  - id: ${area}`, `    title: "The ${area} area"`, "    level: 0",
-      `    train_prompt: tldrx expert train ${name} --area ${area} --mode light`,
-      "    evidence: []", "",
-    ].join("\n"));
-  }
+/** One seeded expert at level 0, with no evidence — what `tldrx init` writes. */
+function withExpert(root: string, name: string, kind: string, area: string): void {
+  write(root, `.tldrx/experts/${name}/expert.md`, [
+    "---", `name: ${name}`, `kind: ${kind}`, "status: created", "repos: [api]", "---", "", `# ${name}`, "",
+  ].join("\n"));
+  write(root, `.tldrx/experts/${name}/competencies.yml`, [
+    "version: 1", `expert: ${name}`, "status: created", "last_trained: null", "areas:",
+    `  - id: ${area}`, `    title: "The ${area} area"`, "    level: 0",
+    `    train_prompt: tldrx expert train ${name} --area ${area} --mode light`,
+    "    evidence: []", "",
+  ].join("\n"));
+}
 
-  test("a domain expert a stage will load is offered light-mode training", () => {
+describe("item 4 — experts with no evidence", () => {
+  // One line for the whole set, and NOT a blocker: a fresh `tldrx init` seeds a
+  // dozen experts at level 0, and counting them as work made a new workspace
+  // read as a stuck one.
+  test("every untrained expert collapses into ONE advice item, uncounted", () => {
     const root = fresh();
     withExpert(root, "product", "product", "shop");
-    const item = buildWorkspaceStatus(root).items.find((entry) => entry.summary.includes("product"));
-    expect(item?.kind).toBe("expert");
-    expect(item?.command).toBe("tldrx expert train product --area shop --mode light --print-prompt");
-    expect(item?.details.some((line) => line.startsWith("it is loaded by "))).toBe(true);
+    withExpert(root, "billing", "domain", "money");
+    const status = buildWorkspaceStatus(root);
+
+    expect(status.pending).toBe(0);
+    expect(status.items.map((item) => item.kind)).toEqual(["none"]);
+    expect(status.advice).toHaveLength(1);
+    expect(status.advice[0]?.kind).toBe("expert");
+    expect(status.advice[0]?.summary).toBe("2 expert(s) a stage will load have no evidence yet");
+    expect(status.advice[0]?.command).toBe("tldrx expert list");
+    expect(status.advice[0]?.details[0]).toBe("train the ones a stage will load: billing, product");
   });
 
-  test("a role expert with no handoff to mine is reported with NO command", () => {
+  test("the line carries one runnable train command as an example", () => {
+    const root = fresh();
+    withExpert(root, "product", "product", "shop");
+    const details = buildWorkspaceStatus(root).advice[0]?.details ?? [];
+    expect(details).toContain("e.g. tldrx expert train product --area shop --mode light --print-prompt");
+  });
+
+  // A command the tool would refuse is worse than an honest "not yet", so a role
+  // expert with nothing to mine is COUNTED and named, and never offered one.
+  test("a role expert with no handoff to mine is named, not listed as trainable", () => {
     const root = fresh();
     withExpert(root, "architect", "role", "architect");
-    const item = buildWorkspaceStatus(root).items.find((entry) => entry.summary.includes("architect"));
-    expect(item?.command).toBe("");
-    expect(item?.summary).toContain("nothing to mine yet");
+    const advice = buildWorkspaceStatus(root).advice[0];
+    expect(advice?.summary).toBe("1 expert(s) a stage will load have no evidence yet");
+    expect(advice?.details.some((line) => line.startsWith("train the ones a stage will load"))).toBe(false);
+    expect(advice?.details.some((line) => line.includes("architect is a role expert"))).toBe(true);
+    expect(advice?.details.some((line) => line.includes("this workspace has none yet"))).toBe(true);
   });
 
-  test("a role expert IS offered full-mode training once a handoff exists", () => {
+  test("a role expert becomes trainable once a handoff exists", () => {
     const root = fresh();
     withExpert(root, "architect", "role", "architect");
     createRun({ root, slug: "past", scope: "feature", actor: "alan", now: new Date("2026-08-20T09:00:00Z") });
     write(root, "tldrx-work/260820-past/01-what/handoff.md", "# Handoff\n");
-    const item = buildWorkspaceStatus(root).items.find((entry) => entry.summary.includes("architect"));
-    expect(item?.command).toBe("tldrx expert train architect --area architect --mode full --print-prompt");
+    const details = buildWorkspaceStatus(root).advice[0]?.details ?? [];
+    expect(details).toContain("train the ones a stage will load: architect");
+    expect(details).toContain("e.g. tldrx expert train architect --area architect --mode full --print-prompt");
   });
 
   test("an expert that already has evidence is not pending", () => {
@@ -382,8 +404,12 @@ describe("the report", () => {
       "    train_prompt: tldrx expert train product --area shop --mode light", "    evidence: []", "",
     ].join("\n"));
 
-    expect(buildWorkspaceStatus(root).items.map((item) => item.kind))
-      .toEqual(["init-questions", "seed-split", "run", "expert"]);
+    const status = buildWorkspaceStatus(root);
+    // Three BLOCKERS in the order they block each other; the expert line is
+    // advice and is not in the sequence at all.
+    expect(status.items.map((item) => item.kind)).toEqual(["init-questions", "seed-split", "run"]);
+    expect(status.pending).toBe(3);
+    expect(status.advice.map((item) => item.kind)).toEqual(["expert"]);
   });
 
   test("an idle workspace gets one `none` item and a pending count of zero", () => {
@@ -392,6 +418,7 @@ describe("the report", () => {
     expect(status.items.map((item) => item.kind)).toEqual(["none"]);
     expect(status.items[0]?.summary).toStartWith("nothing pending — open work with");
     expect(status.items[0]?.command).toBe("");
+    expect(status.advice).toEqual([]);
   });
 });
 
@@ -414,6 +441,32 @@ describe("tldrx status, through the real binary", () => {
     expect(run.stdout).toContain("nothing pending — open work with");
   });
 
+  // The header counts BLOCKERS. Untrained experts appear under them, once.
+  test("untrained experts do not inflate the `waiting on you` count", async () => {
+    const root = fresh();
+    withSplit(root);
+    withExpert(root, "product", "product", "shop");
+    withExpert(root, "billing", "domain", "money");
+    withExpert(root, "architect", "role", "architect");
+    const run = await tldrx(root, "status");
+
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).toContain("1 thing(s) waiting on you");
+    expect(run.stdout).not.toContain("[2]");
+    expect(run.stdout).toContain("Also: 3 expert(s) a stage will load have no evidence yet → tldrx expert list");
+    expect(run.stdout).toContain("train the ones a stage will load: billing, product");
+    expect(run.stdout).toContain("architect is a role expert");
+  });
+
+  test("the advice line shows even when nothing is blocking", async () => {
+    const root = fresh();
+    withExpert(root, "product", "product", "shop");
+    const run = await tldrx(root, "status");
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).toContain("nothing pending — open work with");
+    expect(run.stdout).toContain("Also: 1 expert(s) a stage will load have no evidence yet");
+  });
+
   test("--json carries {kind, summary, command, details} per item", async () => {
     const root = fresh();
     withSplit(root);
@@ -429,6 +482,36 @@ describe("tldrx status, through the real binary", () => {
     expect(parsed.root.endsWith(root.split("/").pop() ?? "")).toBe(true);
     expect(Object.keys(parsed.items[0] ?? {}).sort()).toEqual(["command", "details", "kind", "summary"]);
     expect(parsed.items[0]?.kind).toBe("seed-split");
+  });
+
+  // `items` keeps its old shape and its old meaning — blockers — so a consumer
+  // that walks it is unaffected; `advice` is added beside it.
+  test("--json keeps `items` for blockers and adds `advice`", async () => {
+    const root = fresh();
+    withSplit(root);
+    withExpert(root, "product", "product", "shop");
+    const run = await tldrx(root, "status", "--json");
+    const parsed = JSON.parse(run.stdout) as {
+      pending: number;
+      items: { kind: string }[];
+      advice: { kind: string; summary: string; command: string; details: string[] }[];
+    };
+    expect(parsed.pending).toBe(1);
+    expect(parsed.items.map((item) => item.kind)).toEqual(["seed-split"]);
+    expect(parsed.advice).toHaveLength(1);
+    expect(parsed.advice[0]?.kind).toBe("expert");
+    expect(parsed.advice[0]?.command).toBe("tldrx expert list");
+    expect(Object.keys(parsed.advice[0] ?? {}).sort()).toEqual(["command", "details", "kind", "summary"]);
+  });
+
+  // Three lines of ambient context is no place for a nudge.
+  test("the SessionStart block carries blockers only", () => {
+    const root = fresh();
+    withSplit(root);
+    withExpert(root, "product", "product", "shop");
+    const lines = sessionStartLines(buildWorkspaceStatus(root), 3);
+    expect(lines[0]).toStartWith("tldrx: 1 pending — ");
+    expect(lines.join("\n")).not.toContain("expert");
   });
 
   test("exits 3 when there is no .tldrx/ at all", async () => {

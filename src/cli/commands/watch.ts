@@ -8,13 +8,15 @@
  */
 import type { Command } from "../Command.ts";
 import { EXIT_FAILED, EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
-import { parseArgs, stringFlag, UsageError, type ParsedArgs } from "../argv.ts";
+import { boolFlag, parseArgs, stringFlag, UsageError, type ParsedArgs } from "../argv.ts";
 import { workspaceRootFrom } from "../workspace.ts";
 import { fail } from "../report.ts";
 import { RunStore } from "../../core/run/RunStore.ts";
 import { notFound, renderAmbiguous } from "../resolveRun.ts";
 import { listRunDirs, loadWorkspace, toSrcContext } from "../../hooks/lib/workspace.ts";
-import { checkCard, loadCards, renderWatchList, type LoadedCard } from "../../core/watch/index.ts";
+import {
+  checkCard, loadCards, renderWatchList, watchListJson, type LoadedCard,
+} from "../../core/watch/index.ts";
 import { PROJECT_WORK_DIR } from "../../core/paths.ts";
 
 const VALUE_FLAGS = ["run", "root"] as const;
@@ -22,7 +24,8 @@ const VALUE_FLAGS = ["run", "root"] as const;
 export const watchCommand: Command = {
   name: "watch",
   summary: "List and re-check the watcher cards a run produced",
-  usage: "tldrx watch <list|check> [<feature>] [--run <id>] [--root <path>]",
+  usage: "tldrx watch list [--json] [--run <id>] [--root <path>]\n"
+    + "       tldrx watch check <feature> [--run <id>] [--root <path>]",
   subcommands: ["list", "check"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
@@ -49,7 +52,11 @@ function list(args: ParsedArgs, rest: readonly string[]): number {
   if (rest.length > 0) throw new UsageError(`watch list takes no positional argument, got '${rest[0] ?? ""}'`);
   const loaded = open(args);
   if ("exit" in loaded) return loaded.exit;
-  process.stdout.write(renderWatchList(loaded.runId, loaded.cards));
+  process.stdout.write(
+    boolFlag(args, "json")
+      ? `${watchListJson(loaded.runId, loaded.cards)}\n`
+      : renderWatchList(loaded.runId, loaded.cards),
+  );
   return EXIT_OK;
 }
 

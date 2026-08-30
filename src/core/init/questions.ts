@@ -173,8 +173,10 @@ export function renderQuestions(questions: readonly Question[], askedAt: string)
     "# Questions — init — workspace install",
     "",
     "> Every question below exists because something could NOT be detected; the `Why asked:`",
-    "> line cites the gap. Answer any subset by writing after `[Answer]:` — unanswered",
-    "> questions stay open and the workspace still works.",
+    "> line cites the gap. Answer them with `tldrx interview --init`, which records each",
+    "> answer as a fact and writes `.tldrx/process.yml`. Typing after `[Answer]:` here fills",
+    "> the slot but records NEITHER — nothing watches this file. Answer any subset;",
+    "> unanswered questions stay open and the workspace still works.",
     "",
   ];
 

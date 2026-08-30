@@ -20,6 +20,9 @@ export interface DoctorOutcome {
   readonly exitCode: 0 | 1;
   readonly output: string;
   readonly results: readonly ToolCheckResult[];
+  /** Null when `--mcp` was not passed: "not probed" is not "none found". */
+  readonly mcp: McpProbeResult | null;
+  readonly healthy: boolean;
 }
 
 export async function runDoctor(options: DoctorOptions): Promise<DoctorOutcome> {
@@ -31,5 +34,11 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorOutcome> 
   if (options.mcp) mcp = await new McpProbe().probe();
 
   const report = new DoctorReport(results, mcp);
-  return { exitCode: report.healthy ? 0 : 1, output: report.render(), results };
+  return {
+    exitCode: report.healthy ? 0 : 1,
+    output: report.render(),
+    results,
+    mcp,
+    healthy: report.healthy,
+  };
 }

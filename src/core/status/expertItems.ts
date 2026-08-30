@@ -1,12 +1,18 @@
 /**
- * Item 4: experts a stage will load that have never been trained.
+ * The advice line: experts a stage will load that have never been trained.
  *
  * An untrained expert is not inert. `tldrx init` seeds a folder with a level-0
  * competency and an empty `knowledge/`, the stage that names it loads it anyway,
  * and inside the prompt a stub expert reads exactly like a trained one — the only
  * difference is that it has nothing to say (`expertBundle.ts`, `untrainedNotes`).
- * `tldrx next` already whispers this on stderr for the stage it is about to run;
- * here it is asked once for the whole workspace, before any stage runs.
+ * So it is worth saying once, for the whole workspace, before any stage runs.
+ *
+ * ONE item, and NOT a blocker. A fresh `tldrx init` seeds a dozen experts at
+ * level 0, and the first `tldrx status` used to open with "7 things waiting on
+ * you" of which five were experts and only one was actionable — the same five
+ * lines, five times, under a headline that made a new workspace look broken. An
+ * untrained expert degrades a stage's output; it does not stop one. It belongs
+ * beside the blockers, not among them, and it belongs on one line.
  *
  * Two rules come straight from the training code rather than being re-decided:
  *
@@ -14,8 +20,8 @@
  *     `tldrx expert list` prints, so this never nags about an expert nobody uses;
  *   - a ROLE expert trains in `--mode full` and only from past runs
  *     (`roleTraining.ts`). With no handoff on disk there is nothing to mine, so
- *     this reports the fact and offers NO command — a command the tool would
- *     refuse is worse than an honest "not yet".
+ *     it is COUNTED and named as waiting, never offered a command — a command the
+ *     tool would refuse is worse than an honest "not yet".
  */
 import { evidenceCount, loadExperts, stagesLoadingExperts } from "../experts/index.ts";
 import { readExpertDomain } from "../experts/expertDomain.ts";
@@ -24,13 +30,14 @@ import type { ExpertRecord } from "../experts/ExpertRecord.ts";
 import type { PendingItem } from "./PendingItem.ts";
 
 /**
- * `[assumption]` — a fresh `tldrx init` seeds a dozen experts and every one of
- * them starts at zero, so an uncapped list would BE the report. Five, then a
- * pointer at `tldrx expert list`, which is the screen for the whole set.
+ * How many trainable names the one line carries before it stops listing them.
+ * `tldrx expert list` is the screen for the whole set; this is a nudge, and a
+ * nudge that prints twelve names is a report nobody reads.
  */
-export const MAX_EXPERT_ITEMS = 5;
+export const MAX_EXPERT_NAMES = 5;
 
-export function expertItems(root: string): readonly PendingItem[] {
+/** At most one item, and never a blocker. Empty when every loaded expert has evidence. */
+export function expertAdvice(root: string): readonly PendingItem[] {
   const loads = stagesLoadingExperts(root);
   const untrained = loadExperts(root)
     .filter((expert) => expert.error === null)
@@ -42,66 +49,55 @@ export function expertItems(root: string): readonly PendingItem[] {
   // Asked once, not once per expert: it is a walk of `tldrx-work/`, and the
   // answer is the same for every role expert in the workspace.
   const minable = hasMinableFiles(root);
-  const items = untrained
-    .slice(0, MAX_EXPERT_ITEMS)
-    .map((expert) => expertItem(root, expert, loads.get(expert.name) ?? [], minable));
-
-  if (untrained.length > MAX_EXPERT_ITEMS) {
-    const rest = untrained.slice(MAX_EXPERT_ITEMS).map((expert) => expert.name);
-    items.push({
-      kind: "expert",
-      summary: `${String(rest.length)} more expert(s) a stage will load have no evidence either`,
-      command: "tldrx expert list",
-      details: [rest.join(", ")],
-    });
+  const trainable: string[] = [];
+  const waiting: string[] = [];
+  const arealess: string[] = [];
+  for (const expert of untrained) {
+    if (expert.areas[0] === undefined) arealess.push(expert.name);
+    else if (isRole(root, expert) && !minable) waiting.push(expert.name);
+    else trainable.push(expert.name);
   }
-  return items;
+
+  const details: string[] = [];
+  if (trainable.length > 0) {
+    const shown = trainable.slice(0, MAX_EXPERT_NAMES);
+    const more = trainable.length - shown.length;
+    details.push(
+      `train the ones a stage will load: ${shown.join(", ")}`
+      + (more === 0 ? "" : ` (and ${String(more)} more)`),
+    );
+    const first = untrained.find((expert) => expert.name === shown[0]);
+    const area = first?.areas[0];
+    if (first !== undefined && area !== undefined) {
+      const mode = isRole(root, first) ? "full" : "light";
+      details.push(`e.g. tldrx expert train ${first.name} --area ${area.id} --mode ${mode} --print-prompt`);
+    }
+  }
+  if (waiting.length > 0) {
+    details.push(
+      waiting.length === 1
+        ? `${waiting[0] ?? ""} is a role expert: it trains from past runs' handoffs, `
+          + "and this workspace has none yet"
+        : `${waiting.join(", ")} are role experts: they train from past runs' handoffs, `
+          + "and this workspace has none yet",
+    );
+  }
+  if (arealess.length > 0) {
+    details.push(
+      `${arealess.join(", ")} ${arealess.length === 1 ? "has" : "have"} no competency areas, `
+      + "so nothing can be trained into them yet",
+    );
+  }
+  details.push("an untrained expert reads like a trained one inside the prompt; it just has nothing to say");
+
+  return [{
+    kind: "expert",
+    summary: `${String(untrained.length)} expert(s) a stage will load have no evidence yet`,
+    command: "tldrx expert list",
+    details,
+  }];
 }
 
-function expertItem(
-  root: string,
-  expert: ExpertRecord,
-  loads: readonly { readonly stage: string }[],
-  minable: boolean,
-): PendingItem {
-  const stages = loads.map((load) => load.stage);
-  const where = `it is loaded by ${stages.join(", ")}`;
-  const area = expert.areas[0];
-  const isRole = readExpertDomain(root, expert.name).kind === "role";
-
-  if (area === undefined) {
-    return {
-      kind: "expert",
-      summary: `expert \`${expert.name}\` has no competency areas, so nothing can be trained into it`,
-      command: "",
-      details: [where, "give it an area in `.tldrx/experts/" + expert.name + "/competencies.yml` first"],
-    };
-  }
-
-  const details = [
-    where,
-    `area: ${area.id} — ${area.title}`,
-    "an untrained expert reads like a trained one inside the prompt; it just has nothing to say",
-  ];
-
-  if (isRole && !minable) {
-    details.push(
-      `\`${expert.name}\` is a role expert: it trains from past runs' handoffs, and this workspace has none yet`,
-    );
-    return {
-      kind: "expert",
-      summary: `expert \`${expert.name}\` has no evidence — nothing to mine yet, so it has to wait for a finished stage`,
-      command: "",
-      details,
-    };
-  }
-
-  const mode = isRole ? "full" : "light";
-  if (isRole) details.push("role experts train from `handoff.md`/`retro.md`, never from a grep of the code");
-  return {
-    kind: "expert",
-    summary: `expert \`${expert.name}\` will be loaded by a stage but has no evidence behind it yet`,
-    command: `tldrx expert train ${expert.name} --area ${area.id} --mode ${mode} --print-prompt`,
-    details,
-  };
+function isRole(root: string, expert: ExpertRecord): boolean {
+  return readExpertDomain(root, expert.name).kind === "role";
 }

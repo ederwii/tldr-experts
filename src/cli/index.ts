@@ -8,7 +8,9 @@
  * command what it does never needs a workspace, a run, or anything on disk.
  */
 import type { Command } from "./Command.ts";
-import { EXIT_NOT_IMPLEMENTED, EXIT_OK } from "./exitCodes.ts";
+import { EXIT_OK, EXIT_USAGE } from "./exitCodes.ts";
+import { firstUnknownFlag, flagNames } from "./argv.ts";
+import { declaredFlags, declaredValueFlags, isPassthrough, supportsJson } from "./helpText.ts";
 
 import { initCommand } from "./commands/init.ts";
 import { installCommand } from "./commands/install.ts";
@@ -82,14 +84,51 @@ export async function dispatch(argv: readonly string[]): Promise<number> {
 
   const command = lookup(name);
   if (!command) {
+    // Exit 1, not 64. A name that was never a command is a USAGE error, and 64
+    // means "implemented nowhere yet" — a promise about the roadmap that a
+    // mistyped word has no business making. No command in this build is a stub,
+    // so 64 is currently unreachable, which is the point of reserving it.
     process.stderr.write(`tldrx: unknown command '${name}'\nRun \`tldrx --help\` for the command list.\n`);
-    return EXIT_NOT_IMPLEMENTED;
+    return EXIT_USAGE;
   }
   if (command !== helpCommand && rest.some(isHelpFlag)) {
     process.stdout.write(`${renderCommandHelp(command)}\n`);
     return EXIT_OK;
   }
+  const refusal = flagRefusal(command.name, rest);
+  if (refusal !== null) {
+    process.stderr.write(refusal);
+    return EXIT_USAGE;
+  }
   return command.run(rest);
+}
+
+/**
+ * The line to print instead of running, when argv carries a flag this command
+ * cannot read — or `null` when every flag in it is one the command declares.
+ *
+ * Two refusals, because they are two different mistakes:
+ *
+ *   `--nope`   is a typo. Nothing reads it, so running would silently do
+ *              something other than what was asked.
+ *   `--json`   is a real flag this command has no JSON shape for. Accepting and
+ *              ignoring it — which is what happened until now — teaches a script
+ *              that the output is parseable when it is prose.
+ *
+ * `--help`/`-h` never reach here; the dispatcher answers them above.
+ */
+function flagRefusal(name: string, argv: readonly string[]): string | null {
+  if (isPassthrough(name)) return null;
+  const valueFlags = declaredValueFlags(name);
+  const known = new Set([...declaredFlags(name), "json", "help"]);
+  const unknown = firstUnknownFlag(argv, known, valueFlags);
+  if (unknown !== null) {
+    return `tldrx ${name}: unknown flag --${unknown} (see \`tldrx ${name} --help\`)\n`;
+  }
+  if (!supportsJson(name) && flagNames(argv, valueFlags).includes("json")) {
+    return `tldrx ${name}: --json is not supported by ${name} (see \`tldrx ${name} --help\`)\n`;
+  }
+  return null;
 }
 
 function isHelpFlag(arg: string): boolean {

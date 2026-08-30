@@ -20,8 +20,9 @@
  * plus the placeholder for an empty report.
  *
  * The order is not cosmetic. Init questions gate every later stage's facts; a
- * proposed split decides what the runs even ARE; a run is the work itself; an
- * untrained expert degrades a stage's quality but blocks nothing.
+ * proposed split decides what the runs even ARE; a run is the work itself. The
+ * fourth, `expert`, is the odd one out and is carried in `advice` rather than
+ * `items`: an untrained expert degrades a stage's quality and blocks nothing.
  */
 export type PendingKind = "init-questions" | "seed-split" | "run" | "expert" | "none";
 
@@ -37,8 +38,17 @@ export interface PendingItem {
 
 export interface WorkspaceStatus {
   readonly root: string;
-  /** Items in priority order. Never empty: an idle workspace gets one `none` item. */
+  /**
+   * The BLOCKERS, in priority order. Never empty: an idle workspace gets one
+   * `none` item. Something in here is stopping a run from moving.
+   */
   readonly items: readonly PendingItem[];
+  /**
+   * Things worth doing that block nothing — today, only the untrained-experts
+   * line. Kept apart from `items` and OUT of `pending`, because a headline that
+   * counts advice as work makes a workspace that is merely new look broken.
+   */
+  readonly advice: readonly PendingItem[];
   /** How many items are real pending work — `0` when the only item is `none`. */
   readonly pending: number;
 }

@@ -14,5 +14,7 @@ export type { RepoDiff, DiffRequest, RepoBase } from "./epicDiff.ts";
 export { featureInputs, featureBrief, renderWatchFacts, watcherRelPath, WATCH_FACT_AREAS } from "./watchPrompt.ts";
 export { renderWatchHandoff, NO_STORIES_SRC } from "./renderWatchHandoff.ts";
 export type { WrittenCard, HandoffContext } from "./renderWatchHandoff.ts";
-export { loadCards, renderWatchList, checkCard, statusOf, watchersDir } from "./watchViews.ts";
+export {
+  loadCards, renderWatchList, watchListJson, checkCard, statusOf, watchersDir,
+} from "./watchViews.ts";
 export type { LoadedCard, CheckReport } from "./watchViews.ts";

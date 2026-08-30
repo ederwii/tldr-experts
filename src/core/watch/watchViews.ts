@@ -73,6 +73,32 @@ export function renderWatchList(runId: string, cards: readonly LoadedCard[]): st
   return out.join("\n");
 }
 
+/**
+ * The same rows as `renderWatchList`, as data.
+ *
+ * `--json` was accepted and ignored here until now, which taught a script that
+ * the table was parseable. It is built from the same `statusOf` the table uses,
+ * so the two screens cannot disagree about a card's status.
+ */
+export function watchListJson(runId: string, cards: readonly LoadedCard[]): string {
+  return JSON.stringify(
+    {
+      run: runId,
+      cards: cards.map((loaded) => ({
+        id: loaded.id,
+        path: loaded.path,
+        status: statusOf(loaded),
+        valid: loaded.card.ok,
+        signal: loaded.card.signalLine,
+      })),
+      verified: cards.filter((card) => statusOf(card) === "verified").length,
+      invalid: cards.filter((card) => !card.card.ok).length,
+    },
+    null,
+    2,
+  );
+}
+
 /** What `list` shows: the stamped status, or `invalid` when the card does not parse. */
 export function statusOf(loaded: LoadedCard): string {
   if (loaded.card.watcher === null) return "invalid";

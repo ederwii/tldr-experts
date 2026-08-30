@@ -123,7 +123,18 @@ function renderReport(report: InitReport, options: InitOptions): string {
   );
   for (const path of report.created) lines.push(`  created  ${path}`);
   for (const path of report.kept) lines.push(`  kept     ${path}`);
-  lines.push("", "Next: read .tldrx/init-handoff.md, then answer .tldrx/init-questions.md.", "");
+  // The COMMAND, not the file. Filling `[Answer]:` in `.tldrx/init-questions.md`
+  // by hand records nothing: the `answer-capture` hook only fires on a path under
+  // `tldrx-work/` (`answer-capture.ts:27`, `locateWork` in `hooks/lib/workspace.ts:29`),
+  // and `--init` additionally writes `.tldrx/process.yml` from the two process
+  // answers (`interview.ts:101-112`). An editor gets neither.
+  lines.push(
+    "",
+    options.interview
+      ? "Next: read .tldrx/init-handoff.md, then run `tldrx interview --init` to answer the setup questions."
+      : "Next: read .tldrx/init-handoff.md. No questions were written (--no-interview).",
+    "",
+  );
   return lines.join("\n");
 }
 
