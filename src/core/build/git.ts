@@ -14,8 +14,9 @@
  * ends at a human gate, and nothing it runs may publish a branch.
  */
 import { existsSync } from "node:fs";
-import { relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { runtime } from "../runtime/index.ts";
+import { PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../paths.ts";
 import { repoPath, type WorkspaceContext } from "../../hooks/lib/workspace.ts";
 
 /** A git call is a local filesystem operation; a minute is already generous. */
@@ -68,8 +69,69 @@ export async function dirtyPaths(cwd: string): Promise<readonly string[]> {
   return result.stdout.split("\n").map((line) => line.trim()).filter((line) => line !== "");
 }
 
-export async function isDirty(cwd: string): Promise<boolean> {
-  return (await dirtyPaths(cwd)).length > 0;
+/**
+ * `tldrx-work/` and `.tldrx/` as paths relative to `repoDir` — empty when they
+ * are not inside it.
+ *
+ * In a `root_is_repo: true` workspace the framework's state lives INSIDE the
+ * product repo, so a dirty-tree check that counts every porcelain entry counts
+ * this very command's writes: `run.yml` and `events.jsonl` are rewritten on every
+ * `next`, `.lock` is the run lock, and `04-build/` is the plan just synthesised.
+ * Measured 2026-08-30: `tldrx next --prepare` refused its own four state files
+ * before it had touched a line of product code. A user's uncommitted answers under
+ * `tldrx-work/` blocked it the same way, and those are committed on the user's
+ * cadence — not as a precondition of Build.
+ *
+ * In the multi-repo shape the state sits at the workspace root and the repos are
+ * subdirectories, so `relative` escapes upward and nothing is excused: that shape
+ * behaves exactly as it always did.
+ */
+export function stateDirPrefixes(workspaceRoot: string, repoDir: string): readonly string[] {
+  const base = resolve(repoDir);
+  const prefixes: string[] = [];
+  for (const name of [PROJECT_WORK_DIR, PROJECT_FRAMEWORK_DIR]) {
+    const rel = relative(base, resolve(join(workspaceRoot, name)));
+    if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) continue;
+    prefixes.push(rel.split(sep).join("/"));
+  }
+  return prefixes;
+}
+
+/** The path a `git status --porcelain` entry names, minus its status letters. */
+export function porcelainPath(entry: string): string {
+  const at = entry.indexOf(" ");
+  const rest = at === -1 ? "" : entry.slice(at + 1).trim();
+  // `XY ORIG -> PATH` for a rename or copy: the destination is what it is now.
+  const arrow = rest.lastIndexOf(" -> ");
+  const path = arrow === -1 ? rest : rest.slice(arrow + 4);
+  return path.startsWith('"') && path.endsWith('"') && path.length > 1 ? path.slice(1, -1) : path;
+}
+
+export interface DirtySplit {
+  /** Entries the human owns — the only ones that may refuse a Build. */
+  readonly product: readonly string[];
+  /** Entries under `tldrx-work/` or `.tldrx/` — the framework's own writes. */
+  readonly state: readonly string[];
+}
+
+/** Split porcelain entries into product dirt and tldrx's own state files. */
+export function partitionDirty(entries: readonly string[], prefixes: readonly string[]): DirtySplit {
+  if (prefixes.length === 0) return { product: entries, state: [] };
+  const product: string[] = [];
+  const state: string[] = [];
+  for (const entry of entries) {
+    const path = porcelainPath(entry);
+    // An untracked directory arrives with a trailing slash (`?? 04-build/`), so
+    // the `${prefix}/` test catches it as well as a file below the prefix.
+    const isState = prefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+    (isState ? state : product).push(entry);
+  }
+  return { product, state };
+}
+
+/** Dirty for the caller's purposes: `ignore` holds prefixes that do not count. */
+export async function isDirty(cwd: string, ignore: readonly string[] = []): Promise<boolean> {
+  return partitionDirty(await dirtyPaths(cwd), ignore).product.length > 0;
 }
 
 export async function branchExists(cwd: string, branch: string): Promise<boolean> {
@@ -119,8 +181,16 @@ export async function removeWorktree(cwd: string, path: string): Promise<boolean
   return removed.ok;
 }
 
-export async function commitAll(cwd: string, message: string): Promise<GitResult> {
-  const staged = await git(["add", "-A"], cwd);
+/**
+ * Stage everything and commit it. `exclude` holds paths relative to `cwd` that the
+ * commit may never carry — the framework's own state dirs, which a story worktree
+ * ALSO has a checkout of whenever the workspace root is the repo. Without the
+ * pathspec a dod command that happens to run `tldrx` would sweep `tldrx-work/`
+ * into a story commit.
+ */
+export async function commitAll(cwd: string, message: string, exclude: readonly string[] = []): Promise<GitResult> {
+  const pathspec = exclude.length === 0 ? [] : ["--", ".", ...exclude.map((path) => `:(exclude)${path}`)];
+  const staged = await git(["add", "-A", ...pathspec], cwd);
   if (!staged.ok) return staged;
   return await git(["commit", "-m", message], cwd);
 }

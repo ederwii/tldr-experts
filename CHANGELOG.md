@@ -33,6 +33,20 @@
 
 ### Fixed
 
+- **The dirty-tree check ignores tldrx's own state (`tldrx-work/`, `.tldrx/`).** In a
+  `root_is_repo: true` workspace the framework's state lives INSIDE the product repo, so
+  Build refused the files it had just written itself. Measured 2026-08-30: `tldrx next
+  --prepare 260830-decisions-gate` exited 2 with `repo \`aparece-v2\` has 4 uncommitted
+  change(s) on \`main\``, and all four were tldrx's — `run.yml` and `events.jsonl` (rewritten
+  on every `next`), `.lock` (the run lock) and `04-build/` (the implicit plan written seconds
+  earlier). A user's uncommitted answers under `tldrx-work/` blocked it the same way, though
+  those are committed on the user's cadence, not as a precondition of Build. Product dirt
+  still refuses exactly as before — same message, same fix — and the message now lists only
+  product paths; when the only dirt was state, one line says how many files were excused. A
+  story commit excludes the same two paths by pathspec: a story worktree is a checkout of the
+  same repo, so `git add -A` could otherwise sweep the run folder into the diff a reviewer
+  reads (measured: it did). Multi-repo workspaces, whose state is a sibling of the repos
+  rather than inside them, are untouched.
 - **A scope that skips the Plan phase can Build.** `docs`, `hotfix`, `performance`,
   `prototype` and `security-patch` all list `build` in `stages:` and `plan` in `skips:`, and
   every one of them was a dead end: `stages/build/stage.yml` declares `03-plan/waves.yml` as

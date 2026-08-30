@@ -13,7 +13,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { executorFor, EXECUTORS } from "../src/core/facilitator/executors/index.ts";
@@ -25,6 +25,8 @@ import { RunStore } from "../src/core/run/RunStore.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { validateHandoff } from "../src/core/text/handoff.ts";
 import { loadWorkspace, toSrcContext } from "../src/hooks/lib/workspace.ts";
+import { partitionDirty, porcelainPath, stateDirPrefixes } from "../src/core/build/git.ts";
+import { PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../src/core/paths.ts";
 import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
 
 const ORIGINAL_PATH = process.env.PATH ?? "";
@@ -419,6 +421,52 @@ describe("in-session mode", () => {
   });
 });
 
+/** One story, one epic, one wave — enough to watch a single commit's contents. */
+const ONE_STORY: BuildWorkspaceOptions = {
+  stories: [{ id: "S1", epic: "E1", title: "First story" }],
+  epics: [{ id: "E1", stories: ["S1"], branch: "epic/e1" }],
+  waves: [["S1"]],
+};
+
+describe("what counts as dirt", () => {
+  test("the state dirs are excused only where they are actually inside the repo", () => {
+    // root_is_repo: the framework writes into the product repo.
+    expect(stateDirPrefixes("/w", "/w")).toEqual([PROJECT_WORK_DIR, PROJECT_FRAMEWORK_DIR]);
+    expect(stateDirPrefixes("/w", "/w/.")).toEqual([PROJECT_WORK_DIR, PROJECT_FRAMEWORK_DIR]);
+    // multi-repo: the state is a sibling of the repo, so nothing is excused and
+    // a repo's own `tldrx-work/` stays product dirt.
+    expect(stateDirPrefixes("/w", "/w/app")).toEqual([]);
+    expect(stateDirPrefixes("/w", "/elsewhere")).toEqual([]);
+  });
+
+  test("a porcelain entry is judged by its path — untracked dirs and renames included", () => {
+    const prefixes = [PROJECT_WORK_DIR, PROJECT_FRAMEWORK_DIR];
+    const split = partitionDirty([
+      "M tldrx-work/260830-decisions-gate/run.yml",
+      "M tldrx-work/260830-decisions-gate/events.jsonl",
+      "?? tldrx-work/260830-decisions-gate/.lock",
+      "?? tldrx-work/260830-decisions-gate/04-build/",
+      "M .tldrx/memory/facts.yml",
+      "M src/app.ts",
+      "?? tldrx-workshop/notes.md",
+      "R  src/old.ts -> src/new.ts",
+    ], prefixes);
+    expect(split.state).toHaveLength(5);
+    // `tldrx-workshop/` only SHARES a prefix — it is the human's directory.
+    expect(split.product).toEqual(["M src/app.ts", "?? tldrx-workshop/notes.md", "R  src/old.ts -> src/new.ts"]);
+    // With nothing to excuse, every entry is product dirt, exactly as before.
+    expect(partitionDirty(["M src/app.ts"], []).product).toEqual(["M src/app.ts"]);
+  });
+
+  test("porcelainPath strips the status letters, the rename arrow and the quotes", () => {
+    expect(porcelainPath("M src/app.ts")).toBe("src/app.ts");
+    expect(porcelainPath("?? 04-build/")).toBe("04-build/");
+    expect(porcelainPath("MM a b.txt")).toBe("a b.txt");
+    expect(porcelainPath("R  src/old.ts -> src/new.ts")).toBe("src/new.ts");
+    expect(porcelainPath('?? "tldrx-work/caf\u00e9.md"')).toBe("tldrx-work/caf\u00e9.md");
+  });
+});
+
 describe("safety", () => {
   test("a dirty repo is refused before anything is cut, and says what to do", async () => {
     const ws = workspace(TWO_WAVES);
@@ -432,6 +480,81 @@ describe("safety", () => {
     // Nothing was cut.
     expect(() => git(ws, ["rev-parse", "--verify", "epic/e1"])).toThrow();
     expect(story(ws, "S1")).toContain("status: todo");
+  });
+
+  /**
+   * The dirty-tree check must not count tldrx's OWN writes.
+   *
+   * Measured 2026-08-30 on a copy of a real `root_is_repo: true` workspace:
+   * `tldrx next --prepare` exited 2 with four "uncommitted changes" that were all
+   * its own — `run.yml` and `events.jsonl` are rewritten on every `next`, `.lock`
+   * is the run lock, and `04-build/` held the implicit plan written seconds
+   * earlier. The command refused itself, and a user's uncommitted answers under
+   * `tldrx-work/` did the same, though those are committed on the user's cadence.
+   */
+  test("single-repo: the framework's own state files do not refuse the Build that wrote them", async () => {
+    const ws = workspace({ ...TWO_WAVES, rootIsRepo: true });
+    // The exact shape that was measured: a modified run.yml and an untracked lock.
+    appendFileSync(join(ws.runDir, "run.yml"), "\n# touched by this very run\n", "utf8");
+    writeFileSync(join(ws.runDir, ".lock"), "held\n", "utf8");
+
+    const outcome = await next(ws);
+    const text = outcome.lines.join("\n");
+
+    expect(text).not.toContain("refusing to cut an epic branch");
+    expect(text).toContain("tldrx state file(s) in the dirty-tree check");
+    // Exit 4 = it ran and reached the human gate; the branch is really there.
+    expect(outcome.code).toBe(4);
+    expect(git(ws, ["rev-parse", "--verify", "epic/e1"])).not.toBe("");
+  }, 60_000);
+
+  test("single-repo: a product file still refuses, and the message names only it", async () => {
+    const ws = workspace({ ...TWO_WAVES, rootIsRepo: true });
+    writeFileSync(join(ws.repoDir, "README.md"), "# app\n\nuncommitted\n", "utf8");
+    writeFileSync(join(ws.runDir, ".lock"), "held\n", "utf8");
+
+    const outcome = await next(ws);
+    expect(outcome.code).toBe(2);
+    const text = outcome.lines.join("\n");
+    expect(text).toContain("1 uncommitted change(s)");
+    expect(text).toContain("README.md");
+    expect(text).not.toContain(PROJECT_WORK_DIR);
+    expect(text).not.toContain(PROJECT_FRAMEWORK_DIR);
+    expect(text).toContain("Commit or stash them");
+    expect(() => git(ws, ["rev-parse", "--verify", "epic/e1"])).toThrow();
+    expect(story(ws, "S1")).toContain("status: todo");
+  });
+
+  test("single-repo: a story commit never carries the framework's own state", async () => {
+    const ws = workspace({ ...ONE_STORY, rootIsRepo: true });
+    // A story worktree is a checkout of the SAME repo, so it holds `tldrx-work/`
+    // and `.tldrx/` too. `git add -A` would sweep anything written there into the
+    // story commit — and from there into the diff a reviewer is asked to read.
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({
+      S1: {
+        "s1.txt": "S1 was here\n",
+        [`${PROJECT_WORK_DIR}/${ws.runId}/leaked.md`]: "written into the run folder\n",
+        [`${PROJECT_FRAMEWORK_DIR}/leaked.txt`]: "written into the framework dir\n",
+      },
+    });
+
+    const outcome = await next(ws);
+    expect(outcome.code).toBe(4);
+    const changed = git(ws, ["diff", "--name-only", "main...epic/e1"]).split("\n").filter((l) => l !== "");
+    expect(changed).toEqual(["s1.txt"]);
+  }, 60_000);
+
+  test("multi-repo: a repo's own `tldrx-work/` is product dirt — that shape is untouched", async () => {
+    // The state lives at the workspace root and the repo is a subdirectory, so a
+    // `tldrx-work/` INSIDE the repo is the human's directory, not the framework's.
+    const ws = workspace(TWO_WAVES);
+    mkdirSync(join(ws.repoDir, PROJECT_WORK_DIR), { recursive: true });
+    writeFileSync(join(ws.repoDir, PROJECT_WORK_DIR, "notes.md"), "mine\n", "utf8");
+
+    const outcome = await next(ws);
+    expect(outcome.code).toBe(2);
+    expect(outcome.lines.join("\n")).toContain(PROJECT_WORK_DIR);
+    expect(() => git(ws, ["rev-parse", "--verify", "epic/e1"])).toThrow();
   });
 
   test("--dry-run is refused: branches and commits are not revertible by a flag", async () => {

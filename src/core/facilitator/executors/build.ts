@@ -44,7 +44,7 @@ import { spawnAgent, BASE_TOOLS } from "../spawnAgent.ts";
 import { PendingError, readResult, writeBundle, writeRaw, type PendingStage } from "../pending.ts";
 import {
   addWorktree, branchExists, commitAll, currentBranch, dirtyPaths, ensureBranch, firstLine, GitError, headSha,
-  isDirty, mergeNoFf, removeWorktree, repoDirOf,
+  isDirty, mergeNoFf, partitionDirty, removeWorktree, repoDirOf, stateDirPrefixes,
 } from "../../build/git.ts";
 import {
   loadBuildPlan, PlanLoadError, BUILD_PHASE, LOG_DIR, PLAN_PHASE, WORKTREES,
@@ -691,9 +691,15 @@ class BuildSession {
   }
 
   private async commitIfDirty(story: StoryContext): Promise<string | null> {
-    if (await isDirty(story.worktree)) {
+    // A story worktree is its own checkout, but of the SAME repo — so when the
+    // workspace root is the repo it holds `tldrx-work/` and `.tldrx/` too. Neither
+    // the "is there anything to commit" question nor the commit itself may include
+    // them: a run that swept its own state into a story commit would put the run
+    // log inside the diff a reviewer reads.
+    const state = stateDirPrefixes(this.workspace.root, story.repoDir);
+    if (await isDirty(story.worktree, state)) {
       const message = `feat(${story.planned.story.id}): ${story.planned.story.title}`;
-      const committed = await commitAll(story.worktree, message);
+      const committed = await commitAll(story.worktree, message, state);
       if (!committed.ok) {
         this.lines.push(
           `  · ${story.planned.story.id}: \`git commit\` failed — ` +
@@ -1093,15 +1099,25 @@ class BuildSession {
    * Spec §5, Build executor safety: a repo whose tree is dirty is refused BEFORE
    * anything is cut, because the epic branch is cut from that tree's branch and
    * `git worktree add` would carry the mess forward.
+   *
+   * PRODUCT dirt only. `tldrx-work/` and `.tldrx/` are the framework's own state,
+   * and in a `root_is_repo: true` workspace they sit inside the product repo — so
+   * counting them made this command refuse the files it had just written itself
+   * (`run.yml`, `events.jsonl`, `.lock`, the freshly synthesised `04-build/`), and
+   * made a user's uncommitted answers a precondition of Build. Product dirt still
+   * refuses exactly as before, with the same message and the same fix.
    */
   private async refuseOnDirtyRepos(): Promise<ExecutorOutcome | null> {
     const seen = new Set<string>();
+    let ignored = 0;
     for (const planned of this.pendingStories()) {
       const name = planned.story.repo;
       if (seen.has(name)) continue;
       seen.add(name);
       const dir = repoDirOf(this.workspace, name);
-      const dirty = await dirtyPaths(dir);
+      const split = partitionDirty(await dirtyPaths(dir), stateDirPrefixes(this.workspace.root, dir));
+      ignored += split.state.length;
+      const dirty = split.product;
       if (dirty.length === 0) continue;
       const branch = await currentBranch(dir);
       return {
@@ -1119,6 +1135,9 @@ class BuildSession {
         ],
         error: `repo \`${name}\` has uncommitted changes`,
       };
+    }
+    if (ignored > 0) {
+      this.lines.push(`  · ignoring ${String(ignored)} tldrx state file(s) in the dirty-tree check`);
     }
     return null;
   }

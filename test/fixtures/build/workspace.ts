@@ -69,6 +69,13 @@ export interface BuildWorkspaceOptions {
   /** Extra files in the workspace, keyed by path relative to the root. */
   readonly files?: Readonly<Record<string, string>>;
   readonly repoName?: string;
+  /**
+   * `root_is_repo: true` — the workspace root IS the product repo, so `.tldrx/`
+   * and `tldrx-work/` live inside it. The repo is `git init`ed LAST in this shape
+   * and everything committed, so the run starts from a clean tree and a test can
+   * dirty exactly the paths it means to.
+   */
+  readonly rootIsRepo?: boolean;
 }
 
 export interface BuildWorkspace {
@@ -86,7 +93,8 @@ export interface BuildWorkspace {
 export function makeBuildWorkspace(options: BuildWorkspaceOptions): BuildWorkspace {
   const root = mkdtempSync(join(tmpdir(), "tldrx-build-"));
   const repoName = options.repoName ?? "app";
-  const repoDir = join(root, repoName);
+  const rootIsRepo = options.rootIsRepo ?? false;
+  const repoDir = rootIsRepo ? root : join(root, repoName);
 
   // --- the repo -------------------------------------------------------------
   mkdirSync(repoDir, { recursive: true });
@@ -98,10 +106,10 @@ export function makeBuildWorkspace(options: BuildWorkspaceOptions): BuildWorkspa
   }, null, 2)}\n`);
   write(repoDir, "README.md", `# ${repoName}\n`);
   for (const [rel, content] of Object.entries(options.repoFiles ?? {})) write(repoDir, rel, content);
-  gitInit(repoDir);
+  if (!rootIsRepo) gitInit(repoDir);
 
   // --- the workspace --------------------------------------------------------
-  write(root, ".tldrx/workspace.yml", workspaceYaml(repoName, options.commands));
+  write(root, ".tldrx/workspace.yml", workspaceYaml(repoName, options.commands, rootIsRepo));
   write(root, ".tldrx/memory/facts.yml", "version: 1\nfacts: []\n");
   write(root, ".tldrx/conventions/shared.md", "# Shared conventions\n\n- Done means proven.\n");
   write(root, ".tldrx/experts/developer/expert.md", "# Developer\n\nSmall diffs, tests first.\n");
@@ -156,6 +164,15 @@ export function makeBuildWorkspace(options: BuildWorkspaceOptions): BuildWorkspa
     setPerAgentMax(outcome.runDir, options.perAgentMaxUsd);
   }
 
+  // Single-repo: the state written above is INSIDE the repo, so it is committed
+  // with everything else and the tree the executor meets is clean. The fixture's
+  // OWN scratch is gitignored — a real workspace does not carry `.fakebin/`, and
+  // leaving it untracked would be product dirt the tests never meant to create.
+  if (rootIsRepo) {
+    write(root, ".gitignore", [".fakebin/", "fake-state.json", "*.log", "prompts/", ""].join("\n"));
+    gitInit(repoDir);
+  }
+
   return {
     root,
     repoDir,
@@ -200,19 +217,23 @@ checks: [{id: claim-sources, on: post-write}]
 `;
 }
 
-function workspaceYaml(repo: string, commands?: Readonly<Record<string, string | null>>): string {
+function workspaceYaml(
+  repo: string,
+  commands?: Readonly<Record<string, string | null>>,
+  rootIsRepo = false,
+): string {
   const declared = commands ?? { build: null, test: "npm run test", lint: null, typecheck: null, run: null };
   const rendered = Object.entries(declared)
     .map(([key, value]) => `${key}: ${value === null ? "null" : JSON.stringify(value)}`)
     .join(", ");
   return `version: 1
 mode: single-repo
-root_is_repo: false
+root_is_repo: ${String(rootIsRepo)}
 detected_at: 2026-08-29T09:00:00Z
 detected_by: "tldrx test"
 repos:
   - name: ${repo}
-    path: ${repo}
+    path: ${rootIsRepo ? "." : repo}
     default_branch: main
     stack: [typescript]
     package_manager: npm
