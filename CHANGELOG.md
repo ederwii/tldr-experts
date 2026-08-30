@@ -509,6 +509,43 @@ places nothing read as one list.
 - **`seed apply` lists unanswered questions on stderr.** A warning, never a refusal:
   applying anyway is a legitimate call, staying silent about it is not.
 
+### Something to look at while it works
+
+- **`claude` is spawned with `--output-format stream-json --verbose`, and the JSONL
+  is parsed as it arrives.** Verified against ONE real, measured call
+  (`claude` 2.1.251, 2026-08-29, $0.0567426): `--verbose` is required — without it
+  `stream-json` in print mode refuses before spending anything — and `--json-schema`
+  coexists with it, the last `result` event carrying `structured_output` exactly as
+  the single-blob format did. So the validation path is unchanged; only the transport
+  is. `resolveResultDoc` reads EITHER format (whole-buffer JSON first, then the last
+  `type: "result"` line), so an older `claude` and a pretty-printed blob both still
+  work. The runtime seam grew `SpawnOptions.onStdoutLine` on both implementations;
+  the buffered read is untouched when no callback is passed.
+- **A progress view, on by default, on the four commands that make you wait.**
+  `tldrx next`, `tldrx run auto`, `tldrx expert train` and
+  `tldrx seed triage --propose` now show what the sub-agent is doing instead of
+  sitting silent for minutes. `scene` is a classroom — a blackboard with the last six
+  summaries, a wall clock whose hand is the elapsed second hand, a student who moves
+  while a tool runs, a teacher who blinks and repeats the model's first sentence;
+  `compact` is one line rewritten in place; `plain` is `[03:41] reading src/Foo.cs`.
+  `--ui scene|compact|plain|off` or `TLDRX_UI`, `auto` by default: scene on a terminal
+  at least 72x20, compact on a smaller one, plain in a pipe or under `NO_COLOR`/`CI`.
+  `--prepare`, `--commit` and `--dry-run` spawn nothing and show nothing.
+- **Every summary is free.** `reading src/Foo.cs`, `$ dotnet test → running` then
+  `→ ok (12 s)`, `grep "Outbox"`, `writing 01-what/handoff.md`, `asked Q1: …`,
+  `$0.42 so far · 3m10s` — all derived from bytes the sub-agent was already sending.
+  No second model call, no summary agent. The dollar figure is what has been
+  RECORDED, never an estimate: `claude` reports cost when a turn finishes, so a
+  single stage reads `$0.00` until its result lands and a `run auto` loop climbs
+  stage by stage.
+- **stdout is never written to, and the cursor always comes back.** Every progress
+  byte goes to stderr — asserted end-to-end, through the real CLI, by comparing
+  stdout with the view on and off. The cursor is restored on a normal exit, on a
+  thrown error and on Ctrl-C. The redraw itself is checked by replaying the driver's
+  escape stream through a terminal model and comparing the reconstructed screen with
+  the frame `render()` describes, which is the only way an off-by-one in a
+  cursor-up/clear-line loop shows up in a test.
+
 ## 0.2.0 — 2026-08-29
 
 ### The Build phase executes

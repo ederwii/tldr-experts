@@ -13,6 +13,7 @@ import { EXIT_USAGE } from "../src/cli/exitCodes.ts";
 import {
   cannedHandoff, cannedIntent, makeFacilitatorWorkspace, type FacilitatorWorkspace,
 } from "./fixtures/facilitator/workspace.ts";
+import { TinyTerminal } from "./fixtures/tinyTerminal.ts";
 import type { AgentEvent } from "../src/core/facilitator/agentEvents.ts";
 import { setProgressSink } from "../src/core/ui/bus.ts";
 import { renderCompact, SPINNER } from "../src/core/ui/compact.ts";
@@ -373,6 +374,39 @@ describe("the driver", () => {
       "[00:01] $0.42 so far · 1 s\n",
     ]);
     expect(out.join("")).not.toContain("\x1b");
+  });
+
+  /**
+   * The redraw is the one part of this that an assertion on the escape STRING
+   * cannot really check: cursor-ups and clear-lines can be individually correct
+   * and still land the block one row out. So the bytes are replayed through a
+   * terminal model and the SCREEN is compared with what `render` says it should
+   * be showing. This is the test that would catch an off-by-one.
+   */
+  test("replaying the escape stream reconstructs exactly the frame render() describes", () => {
+    const term = new TinyTerminal();
+    let handle: ReturnType<typeof startProgress> | null = null;
+    const stream: string[] = [];
+    handle = startProgress({
+      root: ROOT, isTty: true, cols: 80, rows: 24, env: {}, flag: "scene",
+      startedAt: T0, now: () => T0 + 221_000, write: (t) => { stream.push(t); term.write(t); },
+      schedule: () => null,
+    });
+    try {
+      handle.onTitle("what · 260829-tenancy · attempt 1");
+      for (const [event] of SCRIPT) handle.onEvent(event);
+      expect(term.cursorVisible).toBe(false);
+      expect(term.screen()).toEqual([...handle.frame()]);
+
+      // A stdout line scrolling past must leave the block intact underneath it.
+      handle.log(() => term.write("01-what/alpha … done $0.42\n"));
+      expect(term.screen()[0]).toBe("01-what/alpha … done $0.42");
+      expect(term.screen().slice(1)).toEqual([...handle.frame()]);
+    } finally {
+      handle.stop();
+    }
+    expect(term.cursorVisible).toBe(true);
+    setProgressSink(null);
   });
 
   test("`off` draws nothing and installs no sink", () => {
