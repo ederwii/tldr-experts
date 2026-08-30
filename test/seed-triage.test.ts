@@ -22,7 +22,9 @@ import { parseSeedSrc } from "../src/core/seed/triageSrc.ts";
 import { planInline, triagePrompt } from "../src/core/seed/triagePrompt.ts";
 import { knownScopes, topologicalOrder, validateProposal } from "../src/core/seed/splitFile.ts";
 import { runTriage, slugOf, triageOutDir, MIN_TRIAGE_USD } from "../src/core/seed/runTriage.ts";
-import { applySplit, runNewLine, seedsFor } from "../src/core/seed/applySplit.ts";
+import { applySplit, runNewLine, seedsFor, unansweredNote } from "../src/core/seed/applySplit.ts";
+import { answerSplitQuestion } from "../src/core/seed/answerSplitQuestion.ts";
+import { statusLineOf, statusOf } from "../src/core/seed/triageInventory.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { createRun } from "../src/core/run/newRun.ts";
 import { validateRunFile } from "../src/core/run/RunFile.ts";
@@ -684,6 +686,113 @@ describe("run new --seed", () => {
 
 // --- the CLI surface --------------------------------------------------------
 
+describe("a `Status:` line is read however the document writes it", () => {
+  test("a bulleted status is a status — the form every ADR in the wild uses", () => {
+    // Measured 2026-08-29 on `~/aparece-v2`: thirteen ADRs, every one writing its
+    // status as a bullet, and the inventory said `adrStatus: null` for all of them.
+    expect(statusOf("# ADR-1\n\n- Status: proposed — owner decision pending\n")).toBe("proposed");
+    expect(statusOf("* **Status:** Accepted\n")).toBe("accepted");
+    expect(statusLineOf("# ADR-1\n\n- Status: proposed — owner decision pending\n")?.line)
+      .toBe("- Status: proposed — owner decision pending");
+  });
+
+  test("the forms that already worked still do, and a non-status line is still not one", () => {
+    expect(statusOf("Status: accepted\n")).toBe("accepted");
+    expect(statusOf("**Status:** Superseded by ADR-7\n")).toBe("superseded");
+    expect(statusOf("The status of this document is unclear\n")).toBeNull();
+    expect(statusLineOf("no status here\n")).toBeNull();
+  });
+});
+
+describe("seed answer — a decision recorded beside the question", () => {
+  async function proposedSplit(ws: SeedWorkspace): Promise<string> {
+    fakeClaude(ws, goodProposal());
+    const outcome = await runTriage({
+      root: ws.root, seedPath: "docs", out: outDir(ws), propose: true, at: AT, now: NOW, timeoutMs: 20_000,
+    });
+    expect(outcome.code).toBe(0);
+    return join(outDir(ws), "split.yml");
+  }
+
+  function questionsOf(path: string): { id: string; answer?: string }[] {
+    return (parseYaml(readFileSync(path, "utf8")) as { questions: { id: string; answer?: string }[] }).questions;
+  }
+
+  test("records the answer in split.yml and in split.md", async () => {
+    const ws = workspace();
+    const path = await proposedSplit(ws);
+    const outcome = answerSplitQuestion({ root: ws.root, splitPath: path, id: "Q1", text: "banker's rounding" });
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.lines[0]).toContain("Q1 answered");
+    expect(questionsOf(path)[0]?.answer).toBe("banker's rounding");
+    expect(readFileSync(join(outDir(ws), "split.md"), "utf8")).toContain("**answered:** banker's rounding");
+    // The rest of the proposal survives the round trip untouched.
+    const file = parseYaml(readFileSync(path, "utf8")) as { status: string; runs: { slug: string }[] };
+    expect(file.status).toBe("proposed");
+    expect(file.runs.map((run) => run.slug)).toEqual(["billing", "tenancy"]);
+  });
+
+  test("an unknown question id is refused, and names the ones that exist", async () => {
+    const ws = workspace();
+    const path = await proposedSplit(ws);
+    const outcome = answerSplitQuestion({ root: ws.root, splitPath: path, id: "Q9", text: "whatever" });
+    expect(outcome.code).toBe(3);
+    expect(outcome.lines[0]).toContain("has no question 'Q9'");
+    expect(outcome.lines[1]).toContain("it asks: Q1");
+    expect(questionsOf(path)[0]?.answer).toBeUndefined();
+  });
+
+  test("an empty answer writes nothing", async () => {
+    const ws = workspace();
+    const path = await proposedSplit(ws);
+    expect(answerSplitQuestion({ root: ws.root, splitPath: path, id: "Q1", text: "   " }).code).toBe(1);
+    expect(questionsOf(path)[0]?.answer).toBeUndefined();
+  });
+
+  test("a missing file is exit 3", () => {
+    const ws = workspace();
+    const outcome = answerSplitQuestion({
+      root: ws.root, splitPath: join(ws.root, "nope.yml"), id: "Q1", text: "x",
+    });
+    expect(outcome.code).toBe(3);
+  });
+
+  test("an answered question survives `seed apply`, which re-validates and rewrites the file", async () => {
+    const ws = workspace();
+    const path = await proposedSplit(ws);
+    answerSplitQuestion({ root: ws.root, splitPath: path, id: "Q1", text: "half-up" });
+    const outcome = applySplit({ root: ws.root, splitPath: path, actor: "alan", now: NOW });
+    expect(outcome.code).toBe(0);
+    expect(questionsOf(path)[0]?.answer).toBe("half-up");
+  });
+
+  test("apply WARNS about unanswered questions and applies anyway", async () => {
+    const ws = workspace();
+    const path = await proposedSplit(ws);
+    const outcome = applySplit({ root: ws.root, splitPath: path, dryRun: true, actor: "alan", now: NOW });
+    expect(outcome.code).toBe(0);
+    const notes = outcome.notes.join("\n");
+    expect(notes).toContain("1 question(s) on this split are unanswered");
+    expect(notes).toContain("Q1 Which currency rounding rule?");
+    expect(notes).toContain("tldrx seed answer");
+  });
+
+  test("…and stops warning once the question is answered", async () => {
+    const ws = workspace();
+    const path = await proposedSplit(ws);
+    answerSplitQuestion({ root: ws.root, splitPath: path, id: "Q1", text: "half-up" });
+    const outcome = applySplit({ root: ws.root, splitPath: path, dryRun: true, actor: "alan", now: NOW });
+    expect(outcome.notes.join("\n")).not.toContain("unanswered");
+  });
+
+  test("unansweredNote is empty when there is nothing to warn about", () => {
+    expect(unansweredNote([])).toEqual([]);
+    expect(unansweredNote([{ id: "Q1", text: "?", answer: "yes" }])).toEqual([]);
+    expect(unansweredNote([{ id: "Q1", text: "?" }]).length).toBeGreaterThan(0);
+  });
+});
+
 describe("tldrx seed, through the real binary", () => {
   test("triage with no --propose spawns nothing and exits 0", async () => {
     const ws = workspace();
@@ -698,6 +807,13 @@ describe("tldrx seed, through the real binary", () => {
     const run = await tldrx(ws.root, "seed", "triage", "docs", "--prepare");
     expect(run.code).toBe(1);
     expect(run.stderr).toContain("--prepare/--commit only mean something with --propose");
+  });
+
+  test("seed answer needs all three arguments", async () => {
+    const ws = workspace();
+    const run = await tldrx(ws.root, "seed", "answer", "split.yml", "Q1");
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain("seed answer needs three things");
   });
 
   test("an unknown subcommand prints the usage and exits 1", async () => {
