@@ -73,7 +73,9 @@ export function isConfidence(value: string): value is Confidence {
 export const EXECUTION_CLAIM_PATTERNS: readonly RegExp[] = [
   /\bexit \d/i,
   /\b\d+\/\d+ (?:passed|pass)\b/i,
-  /\bbuild(?:s|ed)? (?:ok|green|succeeded)\b/i,
+  // An optional copula, because "the build is green" is how anybody writes it and
+  // `build green` is how nobody does.
+  /\bbuild(?:s|ed)?(?: (?:is|was|are|were))? (?:ok|green|succeeded)\b/i,
   /\bmeasured\b/i,
 ];
 

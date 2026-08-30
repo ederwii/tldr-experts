@@ -310,6 +310,56 @@ describe("the reviewer", () => {
   });
 });
 
+/**
+ * The feedback loop, closed at the Build end (wave O).
+ *
+ * A reviewer's `changes` verdict and a failed DoD command are the moments this
+ * team learned something, and until now they reached `events.jsonl` and a
+ * per-story log — neither of which any expert reads. `mineRuns` reads
+ * `handoff.md` and `retro.md`; so Build writes `retro.md` as it goes.
+ */
+describe("Build writes retro.md as it goes", () => {
+  function retro(ws: BuildWorkspace): string {
+    return readFileSync(join(ws.runDir, "retro.md"), "utf8");
+  }
+
+  test("a `changes` verdict and a first-attempt failure land in `## Build feedback`, sourced", async () => {
+    const ws = workspace({
+      stories: [{ id: "S1", epic: "E1", title: "First story" }],
+      epics: [{ id: "E1", stories: ["S1"], branch: "epic/e1" }],
+      waves: [["S1"]],
+    });
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes", "approve"] });
+
+    await next(ws);
+    expect(story(ws, "S1")).toContain("status: done");
+
+    const text = retro(ws);
+    expect(text).toContain("## Build feedback");
+    expect(text).toContain("`S1` — the reviewer asked for CHANGES on attempt 1");
+    expect(text).toContain("reviewer finding:");
+    // The citation points at a file that is really there, so a knowledge file
+    // mined from this retro inherits a `[src: …]` that still resolves.
+    expect(text).toContain(`[src: tldrx-work/${ws.runId}/04-build/log/S1.md:1]`);
+    expect(existsSync(join(ws.runDir, "04-build", "log", "S1.md"))).toBe(true);
+  });
+
+  test("a failed dod is written with its command and exit code", async () => {
+    const ws = workspace({ ...TWO_WAVES, testScript: 'node -e "process.exit(1)"' });
+    await next(ws);
+    const text = retro(ws);
+    expect(text).toContain("dod `npm run test` exited 1 on the first attempt");
+    expect(text).toContain("`S1`");
+    expect(text).toContain("`S2`");
+  });
+
+  test("a green run writes nothing — there is no push-back to record", async () => {
+    const ws = workspace(TWO_WAVES);
+    await next(ws);
+    expect(existsSync(join(ws.runDir, "retro.md"))).toBe(false);
+  });
+});
+
 describe("in-session mode", () => {
   test("--prepare bundles ONE story and --commit finishes its pipeline", async () => {
     const ws = workspace(TWO_WAVES);

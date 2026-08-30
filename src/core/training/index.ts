@@ -8,10 +8,20 @@ export type { TrainingMode, TrainingTask } from "./Training.ts";
 
 export {
   KNOWLEDGE_SECTIONS, KNOWLEDGE_CHECKED_SECTIONS, FROM_RUNS_SECTIONS, FROM_RUNS_CHECKED_SECTIONS,
-  LIGHT_SHAPE, RUNS_SHAPE, MAX_EVIDENCE_PER_AREA,
-  parseKnowledgeFile, describeKnowledgeIssues, codeEvidence, runEvidence, mergeEvidence,
+  LIGHT_SHAPE, RUNS_SHAPE, MAX_EVIDENCE_PER_AREA, RECAP_SECTION, EXECUTION_CLAIM_REFUSAL,
+  parseKnowledgeFile, proseExecutionIssues, describeKnowledgeIssues, knowledgeWarnings,
+  codeEvidence, runEvidence, mergeEvidence, emptyKnowledgeScope,
 } from "./knowledgeFile.ts";
-export type { KnowledgeFile, KnowledgeIssue, KnowledgeShape, MergedEvidence } from "./knowledgeFile.ts";
+export type {
+  KnowledgeFile, KnowledgeIssue, KnowledgeShape, KnowledgeBullet, KnowledgeScope, KnowledgeSeverity,
+  MergedEvidence,
+} from "./knowledgeFile.ts";
+export {
+  claimText, confidenceOf, executionClaim, isParaphrase, neighbourhood, normaliseClaim,
+  EXECUTION_CLAIM_PATTERNS, MIN_PARAPHRASE_CHARS, NEIGHBOURHOOD_RADIUS, PARAPHRASE_RATIO,
+} from "./claimCheck.ts";
+export type { Confidence } from "./claimCheck.ts";
+export { knowledgeScopeFor, allExpertDomains } from "./knowledgeScope.ts";
 
 export { selectFiles, keywordsFor, readDomains, readCommunities, contentHits, MAX_KEYWORDS, MAX_SCANNED_FILES } from "./selectFiles.ts";
 export type { FileSelection, Candidate, InlinedFile, SelectOptions } from "./selectFiles.ts";
