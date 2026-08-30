@@ -90,6 +90,10 @@ function splitItem(root: string, split: ProposedSplit): PendingItem {
   const open = file.questions.filter((question) => !isAnswered(question));
   const rels = seedDocuments(split.dir, file);
   const proposed = proposedDocs(root, split.dir, rels);
+  // `[assumption]` — a cheap, documented heuristic: a seed file whose NAME starts
+  // `DECISIONS` is where the package collects what it needs decided. It is a
+  // convention, not a schema, so it only ever ADDS a pointer to a real file; it
+  // never decides whether the split is pending and never suppresses anything.
   const decisions = rels.filter((rel) => /^DECISIONS.*\.md$/i.test(basename(rel)));
 
   const details: string[] = [
