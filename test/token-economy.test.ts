@@ -655,3 +655,148 @@ describe("attempt reuse (N6)", () => {
     expect(MAX_PREVIOUS_ATTEMPT_BYTES).toBe(32 * 1024);
   });
 });
+
+// --- tldrx cost and run estimate (N7) --------------------------------------
+
+import {
+  buildProgramCost, buildRunCost, median, outputTokensForStage, renderRunCost, toAttempt,
+} from "../src/core/budget/costView.ts";
+import { estimateNextStage, renderEstimate } from "../src/core/budget/estimateView.ts";
+import { priceFor, contextTokensFor, estimateTokensFromBytes } from "../src/core/budget/modelPrices.ts";
+import type { TldrxEvent } from "../src/core/events/Event.ts";
+
+function agentResult(
+  stage: string,
+  overrides: Partial<TldrxEvent> & { payload?: Record<string, unknown> } = {},
+): TldrxEvent {
+  return {
+    ts: "2026-08-29T00:00:00Z", run: "260830-x", stage, type: "agent.result",
+    actor: "alan", cost_usd: 0.42,
+    payload: {
+      phase: "01-what", task: "t1", model: "sonnet", outputs: [],
+      usage: {
+        input_tokens: 1000, output_tokens: 200,
+        cache_creation_input_tokens: 50, cache_read_input_tokens: 900,
+      },
+    },
+    ...overrides,
+  } as TldrxEvent;
+}
+
+describe("tldrx cost (N7)", () => {
+  test("one agent.result becomes one attempt, with all four token counters", () => {
+    const attempt = toAttempt(agentResult("what"));
+    expect(attempt).toMatchObject({
+      phase: "01-what", stage: "what", task: "t1", model: "sonnet", usd: 0.42,
+      tokens: { input: 1000, output: 200, cacheCreation: 50, cacheRead: 900 },
+    });
+  });
+
+  test("an unmetered attempt is null, never zero — both markers", () => {
+    expect(toAttempt(agentResult("what", { payload: { metered: false } }))?.usd).toBeNull();
+    expect(toAttempt(agentResult("what", { payload: { cost_usd: null } }))?.usd).toBeNull();
+    expect(toAttempt(agentResult("what"))?.usd).toBe(0.42);
+  });
+
+  test("any other event type is not an attempt", () => {
+    expect(toAttempt(agentResult("what", { type: "stage.done" }))).toBeNull();
+  });
+
+  test("attempts are not merged: a stage that failed twice shows both", () => {
+    const ws = readingWorkspace(50);
+    const log = EventLog.forRun(ws.runDir);
+    log.append(agentResult("alpha", { run: ws.runId }));
+    log.append(agentResult("alpha", {
+      run: ws.runId, cost_usd: 1.1, payload: { phase: "01-what", task: "t2", model: "sonnet" },
+    }));
+
+    const cost = buildRunCost(ws.runDir);
+    expect(cost?.stages[0]?.attempts.length).toBe(2);
+    expect(cost?.usd).toBeCloseTo(1.52, 2);
+    expect(cost?.tokens.cacheRead).toBe(900);
+    expect(renderRunCost(cost!)).toContain("2 attempts");
+  });
+
+  test("the program view adds every run in the workspace", () => {
+    const ws = readingWorkspace(50);
+    EventLog.forRun(ws.runDir).append(agentResult("alpha", { run: ws.runId }));
+    const program = buildProgramCost(ws.root);
+    expect(program.runs.length).toBeGreaterThanOrEqual(1);
+    expect(program.usd).toBeCloseTo(0.42, 2);
+  });
+
+  test("unmetered attempts are counted apart and never summed into the total", () => {
+    const ws = readingWorkspace(50);
+    const log = EventLog.forRun(ws.runDir);
+    log.append(agentResult("alpha", { run: ws.runId, cost_usd: 2, payload: { phase: "01-what", task: "t1", metered: false } }));
+    const cost = buildRunCost(ws.runDir);
+    expect(cost?.usd).toBe(0);
+    expect(cost?.unmeteredAttempts).toBe(1);
+    expect(renderRunCost(cost!)).toContain("UNMETERED");
+  });
+});
+
+describe("tldrx run estimate (N7)", () => {
+  test("the prompt half is measured off the same assembly next would build", () => {
+    const ws = seededWorkspace();
+    const estimate = estimateNextStage(ws.root, ws.runId);
+    expect(estimate.stage).toBe("alpha");
+    expect(estimate.promptBytes).toBe(estimate.ledger.totalBytes);
+    expect(estimate.promptTokens).toBe(estimateTokensFromBytes(estimate.promptBytes));
+  });
+
+  test("with no history there is no output estimate, and it says so", () => {
+    const ws = seededWorkspace();
+    const estimate = estimateNextStage(ws.root, ws.runId);
+    expect(estimate.medianOutputTokens).toBeNull();
+    expect(estimate.usd).toBeNull();
+    expect(renderEstimate(estimate)).toContain("no past attempt at a stage with this id");
+  });
+
+  test("with history it prices the median, and calls itself an estimate", () => {
+    const ws = seededWorkspace();
+    const log = EventLog.forRun(ws.runDir);
+    for (const out of [100, 300, 200]) {
+      log.append(agentResult("alpha", {
+        run: ws.runId,
+        payload: {
+          phase: "01-what", task: "t1", model: "sonnet",
+          usage: { input_tokens: 1, output_tokens: out },
+        },
+      }));
+    }
+    expect(outputTokensForStage(ws.root, "alpha")).toEqual([100, 200, 300]);
+
+    const estimate = estimateNextStage(ws.root, ws.runId);
+    expect(estimate.medianOutputTokens).toBe(200);
+    expect(estimate.sampleSize).toBe(3);
+    expect(estimate.usd).toBeGreaterThan(0);
+    const text = renderEstimate(estimate);
+    expect(text).toContain("ESTIMATE: $");
+    expect(text).toContain("[assumption] dated 2026-08-29");
+  });
+
+  test("median handles both parities and an empty sample", () => {
+    expect(median([])).toBeNull();
+    expect(median([5])).toBe(5);
+    expect(median([1, 2, 3, 4])).toBe(2.5);
+  });
+});
+
+describe("the price/context table (N7)", () => {
+  test("family names resolve, longest first, and unknown models return null", () => {
+    expect(priceFor("sonnet")?.id).toBe("sonnet");
+    expect(priceFor("claude-haiku-4-5-20251001")?.id).toBe("haiku");
+    expect(priceFor("opus[1m]")?.id).toBe("opus[1m]");
+    expect(priceFor("gpt-nothing")).toBeNull();
+    expect(priceFor(null)).toBeNull();
+  });
+
+  test("the 1m variants carry their own window and everything else the default", () => {
+    // Measured: `modelUsage["claude-haiku-4-5-20251001"].contextWindow` was
+    // 200000 on the real 2026-08-29 call (test/fixtures/agent/stream-json.jsonl).
+    expect(contextTokensFor("claude-haiku-4-5-20251001")).toBe(200_000);
+    expect(contextTokensFor("sonnet[1m]")).toBe(1_000_000);
+    expect(contextTokensFor("something-unknown")).toBe(200_000);
+  });
+});

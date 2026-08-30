@@ -286,13 +286,8 @@ async function runStage(
   }
 
   // --- prompt assembly ----------------------------------------------------
-  const optional = present(expandAll(spec.optionalInputs, store.run.repos), ctx);
   const seed = seedInputsOf(spec, stage, ctx);
-  const inputs = capInputs([
-    ...required,
-    ...optional.filter((p) => !required.includes(p)),
-    ...seed.filter((p) => !required.includes(p) && !optional.includes(p)),
-  ]);
+  const inputs = declaredInputsOf(store, spec, stage, ctx);
   const model = options.model ?? stage.model ?? spec.planned.model;
   const effort = options.effort ?? spec.planned.effort ?? null;
   const cap = agentCap(options, store, stage);
@@ -870,12 +865,42 @@ function seedInputsOf(spec: StageSpec, stage: RunStage, ctx: PathContext): reado
   return present(stage.inputs.filter((entry) => !fromStageFile.has(entry)), ctx);
 }
 
+/**
+ * The declared inputs a stage's prompt gets, in the order the budget spends on
+ * them: required, then the optional ones that exist, then the run's seed
+ * documents, capped at §2.3's 20.
+ *
+ * Extracted so `tldrx run estimate` can weigh the NEXT stage's prompt without
+ * running it, off exactly the list the facilitator would build — an estimator
+ * with its own idea of what the inputs are is an estimator that drifts.
+ */
+export function declaredInputsOf(
+  store: RunStore,
+  spec: StageSpec,
+  stage: RunStage,
+  ctx: PathContext,
+): readonly string[] {
+  const required = expandAll(spec.requiredInputs, store.run.repos);
+  const optional = present(expandAll(spec.optionalInputs, store.run.repos), ctx);
+  const seed = seedInputsOf(spec, stage, ctx);
+  return capInputs([
+    ...required,
+    ...optional.filter((p) => !required.includes(p)),
+    ...seed.filter((p) => !required.includes(p) && !optional.includes(p)),
+  ]);
+}
+
+/** The run's seed documents for a stage that asked for them — see below. */
+export function seedInputsFor(spec: StageSpec, stage: RunStage, ctx: PathContext): readonly string[] {
+  return seedInputsOf(spec, stage, ctx);
+}
+
 /** `inlineInputs` speaks `{inputs, note}`; `buildPrompt` speaks `{inputs, inputsNote}`. */
 function withNote(result: InlineResult): { inputs: InlineResult["inputs"]; inputsNote?: string } {
   return result.note === null ? { inputs: result.inputs } : { inputs: result.inputs, inputsNote: result.note };
 }
 
-interface AssembledPrompt {
+export interface AssembledPrompt {
   readonly prompt: string;
   readonly bundles: ExpertBundleSet;
   /** Every section, in bytes, measured off the same parts the prompt is joined from. */
@@ -884,7 +909,7 @@ interface AssembledPrompt {
   readonly truncatedNotes: readonly string[];
 }
 
-function assemblePrompt(
+export function assemblePrompt(
   store: RunStore,
   options: NextOptions,
   spec: StageSpec,
