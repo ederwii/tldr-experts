@@ -33,7 +33,9 @@ import { acquireLock, releaseLock } from "./Lock.ts";
 import { onInterrupt, stopInFlightRun } from "./interrupt.ts";
 import { loadStageSpec, type StageSpec } from "./stageSpec.ts";
 import { countSkipInputs, evaluateSkipIf, openQuestionIds, SkipIfError } from "./skipIf.ts";
-import { agentDir, expandAll, missing, present, resolveDeclared, type PathContext } from "./paths.ts";
+import {
+  agentDir, expandAll, expandPatterns, missing, present, resolveMany, type PathContext,
+} from "./paths.ts";
 import { fenceFor, renderConventions, renderFacts, renderParts, stackExpertNames } from "./prompt.ts";
 import {
   describeBundles, loadExpertBundles, untrainedNotes, type ExpertBundleSet,
@@ -1036,8 +1038,11 @@ export function declaredInputsOf(
   stage: RunStage,
   ctx: PathContext,
 ): readonly string[] {
-  const required = expandAll(spec.requiredInputs, store.run.repos);
-  const optional = present(expandAll(spec.optionalInputs, store.run.repos), ctx);
+  // Patterns are expanded to the CONCRETE files here, not left as `<id>.md`: the
+  // prompt inlines content, and there is no content behind a shape. The gap check
+  // above deliberately does the opposite — see `expandPatterns` in `paths.ts`.
+  const required = expandPatterns(expandAll(spec.requiredInputs, store.run.repos), ctx);
+  const optional = present(expandPatterns(expandAll(spec.optionalInputs, store.run.repos), ctx), ctx);
   const seed = seedInputsOf(spec, stage, ctx);
   return capInputs([
     ...required,
@@ -1192,9 +1197,11 @@ function priorOutputs(options: PreviousAttemptOptions): readonly string[] {
   const skipped: string[] = [];
   let spent = 0;
 
-  for (const path of options.outputs) {
-    const abs = resolveDeclared(path, options.ctx);
-    const text = readOrEmpty(abs);
+  // `resolveMany`, not `resolveDeclared`: a declared output can be a pattern, and
+  // the previous attempt's seven stories are exactly the draft this stage is
+  // being paid to fix rather than rewrite.
+  for (const { path, absolute } of options.outputs.flatMap((declared) => resolveMany(declared, options.ctx))) {
+    const text = readOrEmpty(absolute);
     if (text.trim() === "") continue;
     const size = Buffer.byteLength(text, "utf8");
     if (spent + size > budget) {
@@ -1372,8 +1379,12 @@ function revertNonHandoff(outputs: readonly string[], ctx: PathContext): readonl
   const dropped: string[] = [];
   for (const declared of outputs) {
     if (declared.endsWith("handoff.md")) continue;
-    rmSync(resolveDeclared(declared, ctx), { force: true });
-    dropped.push(declared);
+    // A pattern reverts every file it matched, and the line names them: "reverted
+    // 03-plan/stories/<id>.md" would leave the operator guessing what went.
+    for (const hit of resolveMany(declared, ctx)) {
+      rmSync(hit.absolute, { force: true });
+      dropped.push(hit.path);
+    }
   }
   return dropped;
 }

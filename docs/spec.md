@@ -266,6 +266,23 @@ seeded What prompt inlined zero of the documents it was started from. `[assumpti
 requires `inputs` to be an array (`src/core/schemas/stage.ts`), so the shipped `stages/what/stage.yml` writes the same
 flag as a top-level `seed: true` beside an array `inputs:`; the loader accepts both spellings.
 
+**Path patterns — `<token>` in a declared path.** A stage that cannot know its own filenames declares the SHAPE:
+Plan's `outputs:` carry `epics/<epic>.md` and `stories/<id>.md`, because how many stories there are is what the stage
+is being run to decide. A declared path holding an angle-bracket token is a **pattern**, and it matches any FILE in
+that directory with the pattern's fixed prefix and suffix (`stories/<id>.md` matches `stories/S1.md`, not
+`stories/notes.txt` and not a directory named `S1.md`). It is resolved against the same bases in the same order as any
+other declared path — the run dir first, then the workspace root — and the first base that matches anything wins. A
+token may appear in a directory segment, in which case the walk branches. Hidden entries are never swept in by a bare
+token. Applied everywhere a declared path meets the disk, not only at validation: **as an output**, a pattern is
+satisfied by ≥1 match and its `sections:` bind EVERY match, and zero matches fail as *"declared as an output but no
+file matches it on disk"* — never as "does not exist", which would name a file nobody declared; **as an input**, a
+pattern counts as present when ≥1 file matches (the §5 required-input gap is reported as the pattern, since the
+declaration is what went unanswered) and the prompt is handed the concrete files, not the shape; and `--dry-run`
+reverts every file a pattern matched. `{repo}` is NOT a pattern — it expands off `run.repos` before anything reads the
+disk (§2.3) — but the two compose: `{repo}` expands first and each result is then matched. Measured 2026-08-30: the
+first `feature` run to reach Plan wrote one epic and seven stories and was failed by a literal `existsSync` on
+`03-plan/stories/<id>.md`.
+
 **Which experts a stage actually loads.** Three rules, applied in this order, deduped, and the order is the order they
 appear in the prompt:
 
@@ -1432,7 +1449,8 @@ next(run, dry_run):
               --max-budget-usd <min(task_share, b.per_agent_max_usd)> <<< prompt + task)
      record(task, res.total_cost_usd, res.session_id, res.usage); append(agent.result, cost)
      if res.exit != 0 or res.is_error: goto FAIL
-  for out in sy.outputs: if !exists(out.path) or !has_sections(out): goto FAIL  # re-read from disk
+  for out in sy.outputs: if !exists(out.path) or !has_sections(out): goto FAIL  # re-read from disk;
+                                                                                # a <token> path matches ≥1 file (§2.3)
   for c in sy.checks: run(c); append(check.passed|check.failed); if failed: goto FAIL
   if dry_run: revert non-handoff outputs; append(stage.skipped); exit 0
   st.cost_usd = Σ tasks; roll_up(b); st.status = done
