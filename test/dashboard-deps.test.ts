@@ -9,7 +9,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { buildModel, dashMain } from "../src/core/dashboard/index.ts";
+import { buildModel, clientRenderer, dashMain } from "../src/core/dashboard/index.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { whatIsWaiting } from "../src/core/run/runStatus.ts";
 import { listRunDirs } from "../src/hooks/lib/workspace.ts";
@@ -265,5 +265,32 @@ describe("who signs each gate", () => {
       { view: "run", id: "260903-alpha" }, NOW.getTime());
     expect(detail).toContain('<span class="tag">human</span></td>');
     expect(detail).not.toContain('class="signer"');
+  });
+});
+
+/**
+ * The serialised renderer, over the chain workspace.
+ *
+ * `dashboard-render.test.ts` already proves the two copies agree — but only over
+ * the `views` fixture, whose one run has no dependencies, so `dashChains` returns
+ * early there and its body never reaches the empty scope. A new closure-free
+ * function is exactly the thing that looks fine in TypeScript and throws a
+ * `ReferenceError` in a browser, so it gets a workspace that walks its whole body.
+ */
+describe("the serialised renderer draws the chain workspace too", () => {
+  test("byte-identical to the typed original, evaluated in an empty scope", () => {
+    const factory = new Function(
+      `${clientRenderer()}\n return { dashMain: dashMain };`,
+    ) as () => { dashMain: (m: unknown, u: unknown, r: unknown, n: number) => string };
+    const client = factory();
+    const wire: unknown = JSON.parse(JSON.stringify(model));
+    for (const ui of [{ status: "all", sort: "order" }, { status: "all", sort: "updated" }]) {
+      const route = { view: "runs", id: null };
+      expect(client.dashMain(wire, ui, route, NOW.getTime()))
+        .toBe(dashMain(model, ui, route, NOW.getTime()));
+    }
+    const detail = { view: "run", id: "260903-foxtrot" };
+    expect(client.dashMain(wire, { status: "all", sort: "order" }, detail, NOW.getTime()))
+      .toBe(dashMain(model, { status: "all", sort: "order" }, detail, NOW.getTime()));
   });
 });
