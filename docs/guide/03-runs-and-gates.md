@@ -66,6 +66,26 @@ of every stage's own, checked **between** stages, so it can overshoot by at most
 share. `--until <stage>` stops **before** running that stage. Headless only: inside a Claude
 Code session `/tldrx` stays one stage per call.
 
+## A scope that skips Plan
+
+`docs`, `hotfix`, `performance`, `prototype` and `security-patch` do not run the Plan phase
+— they say so, in their workflow's `skips:` — and they still reach Build. When they do,
+Build writes the one story that decision implies into `04-build/implicit-plan.yml` and runs
+it: title from the run, goal from your What handoff's **Decisions** bullets, acceptance from
+`01-what/success-metrics.md`, touched files from the paths that handoff actually cites, and
+a Definition of Done built only from commands your `workspace.yml` declares (`docs` uses
+your `lint`; `spike` and `prototype` use nothing; the rest use `build` and `test`).
+
+```
+implicit plan: Plan skipped by scope 'docs' — one story S1 (6 acceptance, 6 touched path(s), dod: dotnet format --verify-no-changes)
+```
+
+`tldrx run status` says `plan: implicit (scope skips Plan)`, so you can always tell a
+synthesised plan from one you read and approved. Nothing else about the phase changes: the
+story gets its own worktree and branch, the DoD is re-run for real, the reviewer is
+read-only, and the epic branch waits for you. If you would rather plan it yourself, write
+`03-plan/` — a real plan always wins over the implicit one.
+
 ## Who closes a gate
 
 Every stage ends at a gate. What you choose is **who closes it**. `human` waits for

@@ -38,6 +38,10 @@ import {
   loadBuildPlan, PlanLoadError, BUILD_PHASE, LOG_DIR, PLAN_PHASE, WORKTREES,
   type BuildPlan, type PlannedEpic, type PlannedStory,
 } from "../../build/plan.ts";
+import {
+  describeImplicitPlan, dodIsSatisfiedEmpty, implicitPlanContent, ImplicitPlanError, loadImplicitPlan,
+  planIsSkipped, updateImplicitPlan, IMPLICIT_PLAN_REL,
+} from "../../build/implicitPlan.ts";
 import { evidenceFor, updateStoryFront } from "../../build/storyFile.ts";
 import { buildDeveloperPrompt, buildReviewerPrompt, REVIEW_SCHEMA } from "../../build/prompts.ts";
 import { parseReview, renderPreviousAttempt, renderReviewLog, type Review } from "../../build/review.ts";
@@ -69,14 +73,17 @@ export const REVIEWER_SHARE = 0.25;
 export async function buildExecutor(ctx: ExecutorContext): Promise<ExecutorOutcome> {
   const workspace = loadWorkspace(ctx.root);
   let plan: BuildPlan;
+  const opening: string[] = [];
   try {
-    plan = loadBuildPlan(join(ctx.runDir, PLAN_PHASE), workspace.commands);
+    plan = openPlan(ctx, workspace, opening);
   } catch (error) {
-    if (error instanceof PlanLoadError) return failed(ctx, error.message, []);
+    if (error instanceof PlanLoadError || error instanceof ImplicitPlanError) {
+      return failed(ctx, error.message, []);
+    }
     throw error;
   }
 
-  const session = new BuildSession(ctx, workspace, plan);
+  const session = new BuildSession(ctx, workspace, plan, opening);
   // Every exit carries the epic branches this run claimed — including the failure
   // paths. A run that cut `epic/x` and then fell over still cut it, and the next
   // invocation must not refuse its own branch.
@@ -91,6 +98,47 @@ export async function buildExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
       return withClaims(failed(ctx, error.message, session.tasks));
     }
     throw error;
+  }
+}
+
+/**
+ * `03-plan/`, or the plan a scope that skips Plan implies.
+ *
+ * The two are told apart from the WORKFLOW, not from the absence of a file: a
+ * `03-plan/` that has not been written yet and a `03-plan/` that is never going
+ * to be written are the same on disk and opposite in meaning, and only
+ * `skips: [… plan …]` distinguishes them (spec §2.4). A scope that plans and has
+ * not yet done so still gets the plain refusal it always got.
+ *
+ * A real plan always wins: if `03-plan/waves.yml` is there, it is executed, even
+ * on a scope whose `skips:` names `plan`. Somebody wrote it on purpose.
+ */
+function openPlan(ctx: ExecutorContext, workspace: WorkspaceContext, lines: string[]): BuildPlan {
+  const wavesOnDisk = existsSync(join(ctx.runDir, PLAN_PHASE, "waves.yml"));
+  if (!planIsSkipped(ctx.spec.skips) || wavesOnDisk) {
+    return loadBuildPlan(join(ctx.runDir, PLAN_PHASE), workspace.commands);
+  }
+  const parts = {
+    runDir: ctx.runDir,
+    runId: ctx.runId,
+    runTitle: runTitleOf(ctx),
+    scope: ctx.spec.scope,
+    repos: ctx.repos,
+    workspace,
+    budgetUsd: ctx.budgetUsd,
+  };
+  const plan = loadImplicitPlan(parts);
+  lines.push(describeImplicitPlan(plan, implicitPlanContent(parts)));
+  return plan;
+}
+
+/** `run.yml`'s `title:`, or the run id when the file will not open. */
+function runTitleOf(ctx: ExecutorContext): string {
+  try {
+    const title = RunStore.open(ctx.runDir).run.title.trim();
+    return title === "" ? ctx.runId : title;
+  } catch {
+    return ctx.runId;
   }
 }
 
@@ -121,7 +169,10 @@ class BuildSession {
     private readonly ctx: ExecutorContext,
     private readonly workspace: WorkspaceContext,
     private readonly plan: BuildPlan,
-  ) {}
+    opening: readonly string[] = [],
+  ) {
+    this.lines.push(...opening);
+  }
 
   // --- the three entry points ----------------------------------------------
 
@@ -196,6 +247,7 @@ class BuildSession {
       costUsd: 0,
       outputs: [],
       lines: [
+        ...this.lines,
         `prepared ${planned.story.id} · ${planned.story.title} — ${dir}/prompt.md ` +
           `($${cap.toFixed(2)} ceiling, attempt ${String(story.attempt)} of ${String(MAX_ATTEMPTS)})`,
         `dispatch ONE sub-agent with cwd ${relative(this.ctx.root, story.worktree)}`,
@@ -239,7 +291,7 @@ class BuildSession {
       awaiting: true,
       tasks: this.tasks,
       costUsd: this.spent(),
-      outputs: [...this.logPaths(), ...this.retroOutputs()],
+      outputs: [...this.logPaths(), ...this.planOutputs(), ...this.retroOutputs()],
       lines: [
         ...this.lines,
         `${planned.story.id} → \`${outcome?.status ?? "?"}\``,
@@ -279,8 +331,14 @@ class BuildSession {
   /** DoD → commit → merge → review → done/blocked. Shared by both modes. */
   private async pipelineFromDod(story: StoryContext, developerCost: number): Promise<void> {
     // (e) the Definition of Done, re-run in the story's own worktree.
+    //
+    // An EMPTY dod is the one case the two kinds of plan answer differently: a
+    // planned story that declares no command is a Plan bug and blocks, and an
+    // implicit one is the framework saying this scope has nothing to run
+    // (`dodIsSatisfiedEmpty`). Everything else — one red command — blocks either way.
     const dod = await this.runDod(story);
-    if (!dodGreen({ dod })) {
+    const green = dod.length === 0 ? dodIsSatisfiedEmpty(this.plan) : dodGreen({ dod });
+    if (!green) {
       const failing = dod.find((r) => r.exitCode !== 0 || r.timedOut);
       await this.block(
         story,
@@ -614,7 +672,9 @@ class BuildSession {
         ? [...outcome.conflicts.map((path) => `merge conflict: ${path}`), reviewRel]
         : undefined;
     this.setStoryStatus(story.planned, status, evidence);
-    this.updateEpicStatus(story.epic);
+    // An implicit epic IS the implicit story — one file, one `status:` — so
+    // writing the epic's status would immediately overwrite the story's.
+    if (!this.plan.implicit) this.updateEpicStatus(story.epic);
 
     this.ctx.emit("task.done", {
       phase: this.ctx.phaseId,
@@ -665,6 +725,11 @@ class BuildSession {
     appendBuildRetro(this.ctx.runDir, gateRetroLines(this.ctx.runDir, this.ctx.runId));
   }
 
+  /** The synthesised plan is an output of the phase that synthesised it. */
+  private planOutputs(): readonly string[] {
+    return this.plan.implicit ? [IMPLICIT_PLAN_REL] : [];
+  }
+
   /** `retro.md` is an output only when something was actually appended to it. */
   private retroOutputs(): readonly string[] {
     return existsSync(buildRetroPath(this.ctx.runDir)) ? [RETRO_REL] : [];
@@ -682,7 +747,7 @@ class BuildSession {
       awaiting: false,
       tasks: this.tasks,
       costUsd: this.spent(),
-      outputs: [...this.logPaths(), HANDOFF_REL, ...this.retroOutputs()],
+      outputs: [...this.logPaths(), HANDOFF_REL, ...this.planOutputs(), ...this.retroOutputs()],
       // Build always stops at a human: nothing here merges an epic to a default
       // branch, so somebody has to.
       gate: "approve",
@@ -708,6 +773,7 @@ class BuildSession {
       at: this.ctx.at,
       outcomes,
       epics: this.epicRows(),
+      storiesRel: this.plan.implicit ? IMPLICIT_PLAN_REL : null,
     }), "utf8");
   }
 
@@ -903,7 +969,13 @@ class BuildSession {
   }
 
   private setStoryStatus(planned: PlannedStory, status: PlanStatus, evidence?: readonly string[]): void {
-    writeFileSync(planned.path, updateStoryFront(readFileSync(planned.path, "utf8"), { status, evidence }), "utf8");
+    const text = readFileSync(planned.path, "utf8");
+    // An implicit plan has no `---` front matter: the whole file is the story's
+    // YAML, and `status:`/`evidence:` sit at its top level.
+    const patched = this.plan.implicit
+      ? updateImplicitPlan(text, { status, evidence })
+      : updateStoryFront(text, { status, evidence });
+    writeFileSync(planned.path, patched, "utf8");
   }
 
   /**

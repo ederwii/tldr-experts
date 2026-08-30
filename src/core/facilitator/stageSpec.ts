@@ -27,6 +27,17 @@ export const DEFAULT_DRY_RUN_ALLOWED = true;
 
 export interface StageSpec {
   readonly planned: PlannedStage;
+  /** The scope this stage was resolved through — `run.yml`'s `scope:`. */
+  readonly scope: string;
+  /**
+   * The scope's `skips:` list (spec §2.4), verbatim.
+   *
+   * Carried down to the executors because a phase can only know it was SKIPPED,
+   * as opposed to not-yet-run, by reading the workflow. Build asks: a scope that
+   * skips `plan` and still lists `build` gets an implicit plan rather than a
+   * refusal (`src/core/build/implicitPlan.ts`).
+   */
+  readonly skips: readonly string[];
   /** Must exist before the sub-agent is spawned; a gap is exit 1 (spec §5). */
   readonly requiredInputs: readonly string[];
   /** Passed only when present on disk. */
@@ -88,7 +99,13 @@ export function loadStageSpec(root: string, scope: string, stageId: string): Sta
   if (planned === undefined) {
     throw new PresetError(`stage '${stageId}' is not in workflow '${preset.name}' (${preset.source})`);
   }
-  return { planned, ...overlay(root, scope, stageId), ...inputSplit(root, stageId) };
+  return {
+    planned,
+    scope: preset.name,
+    skips: preset.skips,
+    ...overlay(root, scope, stageId),
+    ...inputSplit(root, stageId),
+  };
 }
 
 /** The stage ids of a scope, in execution order — used by `next` for guard rails. */

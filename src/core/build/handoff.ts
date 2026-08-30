@@ -33,6 +33,13 @@ export interface BuildHandoffParts {
   readonly at: string;
   readonly outcomes: readonly StoryOutcome[];
   readonly epics: readonly EpicSummaryRow[];
+  /**
+   * Run-relative path of the file the stories were read from and written back to,
+   * when it is NOT `03-plan/stories/<id>.md` — a scope that skips the Plan phase
+   * keeps both in one `04-build/implicit-plan.yml` (`build/implicitPlan.ts`).
+   * Absent or null means the ordinary per-story path.
+   */
+  readonly storiesRel?: string | null;
 }
 
 export function renderBuildHandoff(parts: BuildHandoffParts): string {
@@ -73,7 +80,8 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
     ...(parts.outcomes.length === 0
       ? ["- (nothing)"]
       : parts.outcomes.map((o) => `- \`${o.reviewRel}\` — the review log for ${o.id}`)),
-    ...done.map((o) => `- \`03-plan/stories/${o.id}.md\` — status \`done\`, evidence written`),
+    ...done.map((o) =>
+      `- \`${parts.storiesRel ?? `03-plan/stories/${o.id}.md`}\` — status \`done\`, evidence written`),
     "",
     "## Gate",
     "",

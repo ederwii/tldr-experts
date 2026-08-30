@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **A scope that skips the Plan phase can Build.** `docs`, `hotfix`, `performance`,
+  `prototype` and `security-patch` all list `build` in `stages:` and `plan` in `skips:`, and
+  every one of them was a dead end: `stages/build/stage.yml` declares `03-plan/waves.yml` as
+  an input and the executor's first act was to load `03-plan/`, so a real `docs` run parked
+  at `04-build (ready)` could only fail its own Build stage with `03-plan/ does not
+  validate — stories/: the Plan wrote no stories`. Build now writes the one story that
+  decision implies into `04-build/implicit-plan.yml`, deterministically and with no model
+  involved: title from `run.yml`, `goal` from `01-what/handoff.md` § Decisions verbatim
+  (`[src: …]` tokens kept), `acceptance` from `01-what/success-metrics.md`, `touches` from
+  the repo paths that handoff CITES and that exist (≤24, first-cited order, a citation with
+  no repo prefix skipped rather than guessed at), `dod` from the commands `workspace.yml`
+  declares for the roles the scope calls for, and `budget_usd` from the Build stage ceiling.
+  A real `03-plan/` always wins. `tldrx next` prints one line naming the reason, and
+  `tldrx run status` prints `plan: implicit (scope skips Plan)` so a synthesised plan never
+  reads like one a person approved.
+- **`skips:` in a workflow is read rather than decorative.** The schema declared the key and
+  the loader dropped it, so nothing could tell "the Plan phase has not run yet" from "no Plan
+  phase was ever going to run" — a distinction that cannot be made from disk, since both look
+  like an absent `03-plan/`. `WorkflowPreset.skips` now carries it down to `StageSpec`.
+- **A DoD command is looked up by its `workspace.yml` KEY, not by matching the command text.**
+  Measured on a real .NET workspace: `lint: dotnet format --verify-no-changes` has no "lint"
+  anywhere in the string, so a text match silently found nothing and would have handed a docs
+  run an empty Definition of Done. `WorkspaceContext.commandRoles` keeps the keys.
+- Build's declared `03-plan/…` inputs are treated as satisfied when the scope skips Plan, and
+  **only** those: every other missing input is still exit 1.
+
 ## 0.3.0 — 2026-08-30
 
 Every measurement below was taken on a real workspace on 2026-08-29 unless another date is

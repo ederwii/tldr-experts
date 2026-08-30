@@ -370,6 +370,7 @@ stages:
 | `stages[].id` / `.phase` | slug / `^0[1-5]-` | y | Stage folder; file order = execution order |
 | `stages[].budget_usd` | number >0 | n | Overrides `stage.yml` |
 | `stages[].skip_if` | str | n | `^(stories\|repos\|questions)(<=\|>=\|==\|<\|>)\d{1,4}$` `[assumption]` |
+| `skips` | slug[] | n | Stages this scope deliberately does NOT run, so the omission is on record. **Read, not decorative:** Build asks it (below) |
 
 **Validation.** `name` = filename stem; stage ids unique and present in `.tldrx/stages/`; Σ `budget_usd` ≤
 `default_budget_usd`; `skip_if` matches the pattern above; every `gates` key (other than `collapse`) names a stage
@@ -391,6 +392,13 @@ this workflow lists and every value is `human\|auto`; ≤40 stages.
 | `migration` | auto | auto | auto | human | human |
 
 `retro` runs no stage from `stages/`, so it has no gate to place.
+
+**`skips:` is read (2026-08-29).** It used to be declared by the schema and dropped by the loader, so "docs skips
+Plan" was a sentence in a file rather than a fact anything could act on — and five scopes (`docs`, `hotfix`,
+`performance`, `prototype`, `security-patch`) list `build` in `stages` and `plan` in `skips`, reached Build with no
+`03-plan/`, and could only fail their own Build stage. `WorkflowPreset.skips` now carries the list down to
+`StageSpec`, which is how Build tells "the Plan phase has not run YET" from "no Plan phase was ever going to run".
+The distinction cannot be made from disk: both look like an absent `03-plan/`.
 
 **`retro.md` has two writers (2026-08-29).** `tldrx retro` renders the document; the **Build executor** appends
 `## Build feedback` to it as each story settles, deterministically and with no model involved — every reviewer
@@ -1690,6 +1698,39 @@ the dod commands as `[src: $ <cmd> → exit <n>]`.
 cut (exit `2`, the stage stays `ready`, the message names the files and the fix). `--dry-run` is refused outright, since
 §5's "revert non-handoff outputs" cannot honestly undo a branch. Worktrees are removed when a story reaches `done` or
 `blocked` — never on `review`, whose second attempt continues in the same tree — unless `--keep-worktrees`.
+
+**The implicit plan — a scope that SKIPS Plan can still Build (2026-08-29).** When the run's workflow names `plan` in
+its `skips:` (§2.4) **and** there is no `03-plan/waves.yml` on disk, the executor synthesises one story rather than
+refusing. A real `03-plan/` always wins: if the file is there it is executed, whatever `skips:` says, because somebody
+wrote it on purpose. The synthesis is deterministic and asks no model — every line is copied from a file the run
+already wrote, into `04-build/implicit-plan.yml`:
+
+| Field | Where it comes from |
+|---|---|
+| `title` | `run.yml`'s `title:` |
+| `goal` | `01-what/handoff.md` § Decisions, bullets verbatim, `[src: …]` tokens kept |
+| `acceptance` | `01-what/success-metrics.md`'s list items, verbatim (empty ⇒ `goal`; both empty ⇒ one line saying the title is the whole brief) |
+| `touches` | the repo paths `01-what/handoff.md` CITES that exist inside a repo `workspace.yml` declares, first-cited order, ≤24. A citation with no repo prefix is skipped rather than guessed at |
+| `repo` | the run repo those citations name most; ties and no citations fall back to `run.repos` order |
+| `dod` | the commands `workspace.yml` declares for the ROLES this scope calls for — `docs`: `lint`; `spike`/`prototype`: none; everything else: `build`, `test`. Looked up by the **key** the human wrote, never matched against the command text (`lint: dotnet format --verify-no-changes` has no "lint" in it) |
+| `budget_usd` | the Build stage's own ceiling, as scaled into `run.yml` |
+| `branch` | `epic/<run-id slugged into `EPIC_BRANCH_RE`>` |
+
+The file is also the story's STATE: its top-level `status:` and `evidence:` are what the executor writes back, patched
+by the same two surgical edits a `stories/<id>.md` gets. The story then runs the ordinary pipeline — worktree,
+`story/<run>/S1` off the epic, developer, DoD, merge, read-only reviewer, human gate — because a docs edit is a code
+edit. One line goes to stdout (`implicit plan: Plan skipped by scope 'docs' — one story S1 (…)`) and `run status`
+prints `plan: implicit (scope skips Plan)`, so a synthesised plan never reads like one a person approved.
+
+**An implicit story with NO dod command is green.** A planned story with an empty ```dod block blocks — that is a Plan
+bug, and done means proven. An implicit one is the framework reporting accurately that this scope has nothing to run
+(`spike`/`prototype` declare no DoD by design; a `docs` repo may have no lint command), and failing it would move the
+dead end one step later instead of removing it. The reviewer still runs and the human gate still stands. `evidence:`
+is still real: the commit sha and the review log.
+
+Build's declared input `03-plan/waves.yml` is treated as satisfied by the implicit plan, and so is anything else under
+`03-plan/` — that is the phase the scope skipped. **Every other missing input is still exit 1**: skipping Plan is not
+an excuse for a missing `.tldrx/conventions/shared.md`.
 
 `--prepare`/`--commit` is **per story**: `--prepare` bundles the next pending story into
 `.agent/<stage>/<story-id>/`, marks it `in_progress` (the file is how `--commit` finds it again), and stops; `--commit`

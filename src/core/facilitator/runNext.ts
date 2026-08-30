@@ -43,6 +43,7 @@ import { spawnAgent } from "./spawnAgent.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
 import { validateOutputs, describeProblems } from "./validateOutputs.ts";
 import { executorFor, type ExecutorContext, type ExecutorOutcome, type StageExecutor } from "./executors/index.ts";
+import { planIsSkipped, satisfiedByImplicitPlan } from "../build/implicitPlan.ts";
 import { promptPath, readResult, writeBundle, writeRaw, PendingError, type PendingStage } from "./pending.ts";
 import { preparedBundles, PENDING_JSON } from "../run/prepared.ts";
 import { capInputs, describeTruncatedInputs, inlineInputs, type InlineResult } from "./seedInputs.ts";
@@ -614,7 +615,15 @@ async function runExecutor(
     if (refused !== null) return refused;
   }
   if (options.mode !== "commit") {
-    const gaps = missing(expandAll(spec.requiredInputs, store.run.repos), ctx);
+    // A scope that SKIPS the Plan phase still reaches Build, and Build declares
+    // `03-plan/waves.yml` as an input. Refusing it there would make `docs`,
+    // `hotfix`, `performance`, `prototype` and `security-patch` unable to build at
+    // all — so the executor's synthesised plan satisfies that one input, and only
+    // that one. Every other missing input is still exit 1: this excuses the phase
+    // that was skipped by decision, not the files nobody wrote by accident.
+    const skipsPlan = planIsSkipped(spec.skips);
+    const gaps = missing(expandAll(spec.requiredInputs, store.run.repos), ctx)
+      .filter((path) => !(skipsPlan && satisfiedByImplicitPlan(path)));
     if (gaps.length > 0) {
       return out(EXIT_USAGE, [
         ...notes,

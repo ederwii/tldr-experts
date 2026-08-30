@@ -58,6 +58,16 @@ export interface BuildPlan {
   readonly epics: ReadonlyMap<string, PlannedEpic>;
   readonly stories: ReadonlyMap<string, PlannedStory>;
   readonly storyCount: number;
+  /**
+   * True when nobody planned this: the scope SKIPS the Plan phase and the plan
+   * was synthesised from the What handoff (`build/implicitPlan.ts`). It changes
+   * exactly two things downstream — an empty Definition of Done is green rather
+   * than vacuously red, and the story's state is written back into the one
+   * `04-build/implicit-plan.yml` instead of a `stories/<id>.md`.
+   */
+  readonly implicit: boolean;
+  /** Run-relative path of the file this plan was read from — cited in messages. */
+  readonly source: string;
 }
 
 export class PlanLoadError extends Error {}
@@ -107,7 +117,11 @@ export function loadBuildPlan(planDir: string, allowed: ReadonlySet<string>): Bu
     waves.push({ id: wave.id, stories: loaded });
   }
 
-  return { waves, epics, stories, storyCount: stories.size };
+  return {
+    waves, epics, stories, storyCount: stories.size,
+    implicit: false,
+    source: `${PLAN_PHASE}/${WAVES_FILE}`,
+  };
 }
 
 function loadEpic(planDir: string, id: string): PlannedEpic {

@@ -64,6 +64,17 @@ export interface WorkflowPreset {
   readonly defaultBudgetUsd: number;
   readonly stages: readonly PlannedStage[];
   /**
+   * `skips:` — stages this scope deliberately does NOT run (spec §2.4).
+   *
+   * It used to be read by nothing: the schema declared the key
+   * (`src/core/schemas/workflow.ts:14`) and the loader dropped it, so "docs skips
+   * Plan" was a sentence in a file rather than a fact the facilitator could act
+   * on. Build now needs it — a scope that skips Plan still reaches Build, and has
+   * to be told the difference between "the Plan phase produced nothing yet" and
+   * "no Plan phase was ever going to run" (`build/implicitPlan.ts`).
+   */
+  readonly skips: readonly string[];
+  /**
    * `gates:` — stage id -> `human | auto` (spec §2.4). Partial on purpose: a stage
    * the file does not name keeps the `human` default, so adding a stage to a
    * workflow can never silently hand its gate to the machine.
@@ -119,7 +130,8 @@ export function loadWorkflowPreset(root: string, scope: string): WorkflowPreset 
     throw error;
   }
 
-  return { name, title, depth, defaultBudgetUsd, stages, gates, source: path };
+  const skips = Array.isArray(doc.skips) ? (doc.skips as unknown[]).filter(isString) : [];
+  return { name, title, depth, defaultBudgetUsd, stages, skips, gates, source: path };
 }
 
 function loadStage(
