@@ -1696,7 +1696,11 @@ per repo. `04-build/handoff.md` is written by the executor from what it measured
 the dod commands as `[src: $ <cmd> → exit <n>]`.
 
 **Safety.** A repo with uncommitted changes on the branch an epic would be cut from is refused **before** anything is
-cut (exit `2`, the stage stays `ready`, the message names the files and the fix). `--dry-run` is refused outright, since
+cut (exit `2`, the stage stays `ready`, the message names the files and the fix) — counting PRODUCT paths only, since
+under `root_is_repo: true` the framework's own `tldrx-work/` and `.tldrx/` live inside that repo and this very command
+rewrites them (`run.yml`, `events.jsonl`, `.lock`, the phase folder it just wrote), so the check would refuse itself and
+would make a user's uncommitted answers a precondition of Build; a story commit excludes those two paths by pathspec for
+the same reason, and the multi-repo shape, whose state is a sibling of the repos, is untouched. `--dry-run` is refused outright, since
 §5's "revert non-handoff outputs" cannot honestly undo a branch. Worktrees are removed when a story reaches `done` or
 `blocked` — never on `review`, whose second attempt continues in the same tree — unless `--keep-worktrees`.
 

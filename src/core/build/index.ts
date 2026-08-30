@@ -2,8 +2,9 @@
 export {
   git, repoDirOf, dirtyPaths, isDirty, branchExists, currentBranch, headSha, ensureBranch,
   addWorktree, removeWorktree, commitAll, mergeNoFf, diffCommand, firstLine, GitError, GIT_TIMEOUT_MS,
+  stateDirPrefixes, partitionDirty, porcelainPath,
 } from "./git.ts";
-export type { GitResult, MergeOutcome } from "./git.ts";
+export type { GitResult, MergeOutcome, DirtySplit } from "./git.ts";
 export { loadBuildPlan, inOrder, PlanLoadError } from "./plan.ts";
 export type { BuildPlan, BuildWave, PlannedStory, PlannedEpic } from "./plan.ts";
 export { updateStoryFront, applyPlanPatch, evidenceFor, quote, StoryWriteError } from "./storyFile.ts";

@@ -15,7 +15,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import {
@@ -32,7 +32,7 @@ import { buildProgress } from "../src/core/run/buildProgress.ts";
 import { buildStatus, renderStatus } from "../src/core/run/runStatus.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { loadWorkspace } from "../src/hooks/lib/workspace.ts";
-import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
+import { FRAMEWORK_ROOT, PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../src/core/paths.ts";
 import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
 
 const ORIGINAL_PATH = process.env.PATH ?? "";
@@ -329,6 +329,34 @@ describe("a docs run that reaches Build with no 03-plan/", () => {
     expect(developer).toContain(IMPLICIT_PLAN_REL);
     expect(developer).toContain("Old version.");
     expect(developer).toContain("- `npm run lint`");
+  }, 60_000);
+
+  /**
+   * The reported bug, end to end (2026-08-30). A docs run in a `root_is_repo: true`
+   * workspace synthesises its plan into `tldrx-work/<run>/04-build/` and rewrites
+   * `run.yml`/`events.jsonl` on the way — then the Build executor read those very
+   * files as a dirty tree and exited 2 before cutting anything. The framework's
+   * own state is not the human's uncommitted work.
+   */
+  test("single-repo: the run's own state does not refuse the Build it just planned", async () => {
+    const ws = workspace({ ...DOCS_RUN, rootIsRepo: true });
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({
+      S1: { "docs/guide.md": "# Guide\n\n## Install\n\nVersion 0.3.0.\n" },
+    });
+    appendFileSync(join(ws.runDir, "run.yml"), "\n# touched by this very run\n", "utf8");
+    writeFileSync(join(ws.runDir, ".lock"), "held\n", "utf8");
+
+    const outcome = await next(ws);
+    const said = outcome.lines.join("\n");
+    expect(said).not.toContain("refusing to cut an epic branch");
+    expect(outcome.code).toBe(4);
+    expect(said).toContain("✓ S1 → `done`");
+
+    // The story landed, and it carried the docs edit ONLY.
+    const changed = git(ws, ["diff", "--name-only", `main...epic/${ws.runId}`]).split("\n").filter((l) => l !== "");
+    expect(changed).toEqual(["docs/guide.md"]);
+    expect(changed.some((path) => path.startsWith(`${PROJECT_WORK_DIR}/`))).toBe(false);
+    expect(changed.some((path) => path.startsWith(`${PROJECT_FRAMEWORK_DIR}/`))).toBe(false);
   }, 60_000);
 
   test("`run status` says the plan is implicit", async () => {
