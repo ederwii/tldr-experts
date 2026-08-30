@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 — unreleased
+## 0.3.0 — 2026-08-30
 
 Every measurement below was taken on a real workspace on 2026-08-29 unless another date is
 given. A claim with no measurement behind it is marked `[assumption]` where it appears in the
