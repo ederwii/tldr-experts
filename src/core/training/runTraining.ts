@@ -30,8 +30,10 @@ import {
   fromRunsRelPath, knowledgeRelPath, partialOf, type TrainingMode, type TrainingTask,
 } from "./Training.ts";
 import {
-  LIGHT_SHAPE, RUNS_SHAPE, codeEvidence, describeKnowledgeIssues, parseKnowledgeFile, runEvidence,
+  LIGHT_SHAPE, RUNS_SHAPE, codeEvidence, describeKnowledgeIssues, knowledgeWarnings, parseKnowledgeFile,
+  runEvidence,
 } from "./knowledgeFile.ts";
+import { knowledgeScopeFor } from "./knowledgeScope.ts";
 import { selectFiles, keywordsFor } from "./selectFiles.ts";
 import { mineRuns } from "./mineRuns.ts";
 import { codePrompt, runsPrompt, type TrainingPromptInput } from "./trainingPrompt.ts";
@@ -124,6 +126,7 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
   const workspace = loadWorkspace(options.root);
   const repos = expertRepos(options.root, options.expert, workspace.repos);
   const document = readExpertDocument(options.root, options.expert);
+  const scope = knowledgeScopeFor(options.root, expert, area.id);
   const promptInput: TrainingPromptInput = {
     root: options.root,
     expert,
@@ -150,6 +153,10 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
       repos,
       areaId: area.id,
       areaTitle: area.title,
+      // Light mode inlines the expert's OWN folders and nothing else. Without
+      // this the grep ranks the whole workspace and the sub-agent writes
+      // knowledge it is then warned for, at full price.
+      domainPaths: scope.domainPaths,
     });
     prompts.push({
       key: CODE_TASK,
@@ -320,6 +327,7 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
   const evidence: CompetencyEvidence[] = [];
   const at = options.at.slice(0, 10);
   const counts: string[] = [];
+  const softWarnings: string[] = [];
 
   for (const task of prompts) {
     const abs = join(dir, task.output);
@@ -333,7 +341,7 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
     }
     const text = readFileSync(abs, "utf8");
     const shape = task.key === CODE_TASK ? LIGHT_SHAPE : RUNS_SHAPE;
-    const parsed = parseKnowledgeFile(text, srcCtx, shape);
+    const parsed = parseKnowledgeFile(text, srcCtx, shape, scope);
     if (!parsed.ok) {
       const kept = quarantine(abs);
       rollback(previous);
@@ -344,7 +352,12 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
         "  and the status is unchanged. An unsourced claim cannot become evidence.",
       ]);
     }
-    evidence.push(...(task.key === CODE_TASK ? codeEvidence(parsed.refs, at) : runEvidence(parsed.refs, at)));
+    evidence.push(...(task.key === CODE_TASK ? codeEvidence(parsed.bullets, at) : runEvidence(parsed.bullets, at)));
+    // Warnings never reject the file, and they must never be swallowed either: a
+    // bullet flagged `paraphrase`, `outside domain` or `duplicate src` is a bullet
+    // the level did NOT move for, and a training run that reported a level without
+    // saying that is the silent-drop failure §2.6 already fixed once.
+    softWarnings.push(...knowledgeWarnings(parsed));
     counts.push(`${task.final}: ${[...parsed.items].map(([name, n]) => `${name} ${String(n)}`).join(", ")}`);
   }
 
@@ -387,7 +400,7 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
   return {
     code: EXIT_OK,
     costUsd,
-    warnings: written.warnings,
+    warnings: [...softWarnings, ...written.warnings],
     lines: [
       `trained ${options.expert}/${area.id} (${options.mode}) — $${costUsd.toFixed(2)} of $${ceiling.toFixed(2)}`,
       ...counts.map((line) => `  ${line}`),

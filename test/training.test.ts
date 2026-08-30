@@ -206,7 +206,7 @@ describe("a knowledge file is accepted or rejected whole", () => {
     const ws = workspace();
     const ctx = toSrcContext(loadWorkspace(ws.root), null);
     const parsed = parseKnowledgeFile(knowledgeMd(), ctx, LIGHT_SHAPE);
-    const evidence = codeEvidence(parsed.refs, "2026-09-01");
+    const evidence = codeEvidence(parsed.bullets, "2026-09-01");
     expect(evidence.some((item) => item.src.startsWith("absent:"))).toBe(false);
   });
 
@@ -214,9 +214,9 @@ describe("a knowledge file is accepted or rejected whole", () => {
     const ws = workspace();
     const ctx = toSrcContext(loadWorkspace(ws.root), null);
     const twoLines = parseKnowledgeFile(knowledgeMd({ secondFile: false }), ctx, LIGHT_SHAPE);
-    expect(codeEvidence(twoLines.refs, "2026-09-01")).toHaveLength(1);
+    expect(codeEvidence(twoLines.bullets, "2026-09-01")).toHaveLength(1);
     const twoFiles = parseKnowledgeFile(knowledgeMd(), ctx, LIGHT_SHAPE);
-    expect(codeEvidence(twoFiles.refs, "2026-09-01")).toHaveLength(2);
+    expect(codeEvidence(twoFiles.bullets, "2026-09-01")).toHaveLength(2);
   });
 
   test("evidence merges by src, and the level is the formula's answer", () => {
@@ -253,7 +253,7 @@ describe("a cited command becomes evidence that something was executed", () => {
       knowledgeMd({ extraItem: "- The suite is green on this [src: $ true → exit 0]" }), ctx, LIGHT_SHAPE);
     expect(parsed.ok).toBe(true);
 
-    const evidence = codeEvidence(parsed.refs, "2026-09-01");
+    const evidence = codeEvidence(parsed.bullets, "2026-09-01");
     expect(evidence).toContainEqual({ kind: "run", src: "$ true → exit 0", at: "2026-09-01" });
   });
 
@@ -263,12 +263,12 @@ describe("a cited command becomes evidence that something was executed", () => {
     const reading = parseKnowledgeFile(knowledgeMd(), ctx, LIGHT_SHAPE);
     // Reading alone: two files, W = 2.0 -> thresholds say 2, and the run cap is
     // not even reached. The cap bites once enough files are read to pass 6.
-    expect(codeEvidence(reading.refs, "2026-09-01").some((row) => row.kind === "run")).toBe(false);
+    expect(codeEvidence(reading.bullets, "2026-09-01").some((row) => row.kind === "run")).toBe(false);
 
     const measured = parseKnowledgeFile(
       knowledgeMd({ extraItem: "- The suite is green on this [src: $ true → exit 0]" }), ctx, LIGHT_SHAPE);
     const rows = [
-      ...codeEvidence(measured.refs, "2026-09-01"),
+      ...codeEvidence(measured.bullets, "2026-09-01"),
       // Six more files read, so the weight sum clears the level-4 threshold and
       // only the run cap is left deciding.
       ...Array.from({ length: 6 }, (_, i) => (
@@ -285,12 +285,12 @@ describe("a cited command becomes evidence that something was executed", () => {
     const twice = parseKnowledgeFile(knowledgeMd({
       extraItem: "- Green here [src: $ true → exit 0]\n- And green here too [src: $ true → exit 0]",
     }), ctx, LIGHT_SHAPE);
-    expect(codeEvidence(twice.refs, "2026-09-01").filter((row) => row.kind === "run")).toHaveLength(1);
+    expect(codeEvidence(twice.bullets, "2026-09-01").filter((row) => row.kind === "run")).toHaveLength(1);
 
     const twoExits = parseKnowledgeFile(knowledgeMd({
       extraItem: "- Green [src: $ true → exit 0]\n- Red on the empty code [src: $ true → exit 1]",
     }), ctx, LIGHT_SHAPE);
-    const runs = codeEvidence(twoExits.refs, "2026-09-01").filter((row) => row.kind === "run");
+    const runs = codeEvidence(twoExits.bullets, "2026-09-01").filter((row) => row.kind === "run");
     expect(runs.map((row) => row.src).sort()).toEqual(["$ true → exit 0", "$ true → exit 1"]);
   });
 
@@ -674,7 +674,7 @@ describe("full training mines past runs as well", () => {
     );
     const parsed = parseKnowledgeFile(withRepoCite, ctx, RUNS_SHAPE);
     expect(parsed.ok).toBe(true);
-    const evidence = runEvidence(parsed.refs, "2026-09-01");
+    const evidence = runEvidence(parsed.bullets, "2026-09-01");
     expect(evidence.map((item) => item.kind).sort()).toEqual(["answer", "run", "run"]);
     expect(evidence.some((item) => item.src.startsWith("api:"))).toBe(false);
   });

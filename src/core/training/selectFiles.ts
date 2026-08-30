@@ -24,6 +24,7 @@ import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
 import { isCodeFile } from "../detect/codeFiles.ts";
 import { walkFiles } from "../detect/walk.ts";
 import { parseSrcToken } from "../text/srcToken.ts";
+import { pathsIntersect } from "../experts/expertDomain.ts";
 import { MAX_FILE_BYTES, MAX_INLINE_BYTES, MAX_INLINE_FILES } from "./Training.ts";
 
 /** How many files may be scanned per repo before the walk gives up and says so. */
@@ -85,6 +86,8 @@ export interface InlinedFile extends Candidate {
 export interface FileSelection {
   readonly keywords: readonly string[];
   readonly repos: readonly string[];
+  /** The `## Domain` paths that bounded the walk. Empty ⇒ the whole repo was in scope. */
+  readonly domainPaths: readonly string[];
   readonly inlined: readonly InlinedFile[];
   /** Ranked candidates the caps left out, by name — never silently dropped. */
   readonly notRead: readonly Candidate[];
@@ -101,10 +104,24 @@ export interface SelectOptions {
   readonly repos: readonly { readonly name: string; readonly path: string }[];
   readonly areaId: string;
   readonly areaTitle: string;
+  /**
+   * The expert's declared `## Domain` paths, repo-relative. When there are any,
+   * they are a HARD boundary: a file outside them is never scored and never
+   * inlined, however well it greps.
+   *
+   * The alternative was measured. On `~/aparece-v2` the grep alone put 29-55% of
+   * each expert's citations outside its own declared domain — knowledge filed
+   * under the wrong name, written at full price, and then warned about on the way
+   * back in (`knowledgeFile.ts`, `outside domain`). Bounding the INPUT is cheaper
+   * than warning about the output. An expert that declares no domain — a stack or
+   * a whole-repo expert — is unbounded, exactly as before.
+   */
+  readonly domainPaths?: readonly string[];
 }
 
 export async function selectFiles(options: SelectOptions): Promise<FileSelection> {
   const keywords = keywordsFor(options.areaId, options.areaTitle);
+  const domainPaths = options.domainPaths ?? [];
   const domain = readDomains(options.root, options.repos.map((repo) => repo.name));
   const graph = readCommunities(options.root, options.repos.map((repo) => repo.name), keywords);
 
@@ -119,6 +136,12 @@ export async function selectFiles(options: SelectOptions): Promise<FileSelection
     if (walked.length >= MAX_SCANNED_FILES) scanTruncated = true;
     for (const file of walked) {
       if (!isCodeFile(file.path)) continue;
+      // The domain boundary is applied BEFORE the file is scored or read: a file
+      // outside it cannot rank, cannot be inlined, and is not listed as "not
+      // read" either — it was never a candidate for this expert.
+      const inDomain = domainPaths.length === 0
+        || domainPaths.some((domain) => pathsIntersect(file.path, domain));
+      if (!inDomain) continue;
       scanned++;
       const why: string[] = [];
       let score = 0;
@@ -144,7 +167,16 @@ export async function selectFiles(options: SelectOptions): Promise<FileSelection
       // only re-ranks what already matched. Without that rule every file the map
       // happened to cite would be inlined for every area, and an `oauth` prompt
       // would carry the hunt engine.
-      if (inPath.length === 0 && hits.length === 0 && !inCommunity) continue;
+      //
+      // A DECLARED domain overrides that: inside it, every file is a candidate,
+      // because the boundary has already answered "is this about this area?" and
+      // an unmatched file inside the domain is the one the expert would otherwise
+      // never see. It ranks below every keyword hit, so the caps still bite in the
+      // right order.
+      if (inPath.length === 0 && hits.length === 0 && !inCommunity) {
+        if (domainPaths.length === 0) continue;
+        why.push("inside the declared `## Domain`");
+      }
 
       if (domain.cited.has(`${repo.name}:${file.path}`)) {
         score += 2;
@@ -185,6 +217,7 @@ export async function selectFiles(options: SelectOptions): Promise<FileSelection
   return {
     keywords,
     repos: options.repos.map((repo) => repo.name),
+    domainPaths,
     inlined,
     notRead,
     domainLines: domain.lines,

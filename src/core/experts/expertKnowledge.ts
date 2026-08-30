@@ -29,6 +29,7 @@ import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
 import { splitFrontMatter } from "./expertDocument.ts";
 import { expertDir, EXPERTS_DIRNAME } from "./loadExperts.ts";
 import { starChart } from "./starChart.ts";
+import { RECAP_SECTION } from "../training/knowledgeFile.ts";
 import type { ExpertRecord } from "./ExpertRecord.ts";
 
 export const KNOWLEDGE_DIRNAME = "knowledge";
@@ -219,10 +220,27 @@ export function truncateAtHeading(text: string, limit: number): string {
   return best;
 }
 
-/** A finding is a list item. Front matter and prose are neither cited nor counted. */
+/**
+ * A finding is a list item OUTSIDE `## Sources`. Front matter and prose are
+ * neither cited nor counted.
+ *
+ * The recap section is excluded for the same reason §2.6 stopped deriving
+ * evidence from it (`knowledgeFile.ts`): measured 2026-08-29, it was 41 of 107
+ * bullets in `aparece-platform` and 18 of 56 in `aparece-platform-abstractions`,
+ * and every one of them re-cited a source already cited above. Counting them made
+ * "12 findings" mean "8 findings and 4 restatements of them", and that number is
+ * what a truncation notice and a star chart are read off.
+ */
 export function countFindings(text: string): number {
   let count = 0;
+  let inRecap = false;
   for (const line of text.split("\n")) {
+    const heading = /^##\s+(.+?)\s*$/.exec(line);
+    if (heading !== null) {
+      inRecap = heading[1] === RECAP_SECTION;
+      continue;
+    }
+    if (inRecap) continue;
     if (/^\s*[-*]\s+\S/.test(line)) count++;
   }
   return count;
