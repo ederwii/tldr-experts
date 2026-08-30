@@ -55,43 +55,45 @@ export function captureAnswers(questionsPath: string, ctx: CaptureContext): read
   const answered = detectAnswered(doc.blocks);
   if (answered.length === 0) return [];
 
-  const store = FactsStore.loadOrEmpty(factsPath(ctx.root));
   const log = EventLog.forRun(ctx.runDir);
   const captured: CapturedAnswer[] = [];
 
-  for (const block of answered) {
-    const area = block.metadata?.area ?? "unscoped";
-    const fact = store.append({
-      fact: factTextFor(block.title, block.answer),
-      area,
-      repos: [],
-      kind: "answer",
-      confidence: "stated",
-      source: { who: ctx.actor, when: ctx.at, run: ctx.run, q: block.id },
-    });
-    doc = replaceBlock(doc, recordAnswer(block, { answered_by: ctx.actor, answered_at: ctx.at, fact: fact.id }));
-    log.tryAppend({
-      ts: ctx.at,
-      run: ctx.run,
-      stage: null,
-      type: "question.answered",
-      actor: ctx.actor,
-      cost_usd: 0,
-      payload: { q: block.id, answer: block.answer, fact: fact.id },
-    });
-    log.tryAppend({
-      ts: ctx.at,
-      run: ctx.run,
-      stage: null,
-      type: "fact.added",
-      actor: ctx.actor,
-      cost_usd: 0,
-      payload: { fact: fact.id, area: fact.area, kind: fact.kind, q: block.id },
-    });
-    captured.push({ q: block.id, fact: fact.id, answer: block.answer, area });
-  }
-
-  store.save();
+  // Load, append and save inside ONE workspace lock. `nextId()` is `max(id) + 1`
+  // off the file, so two `answer` commands racing each other used to mint the
+  // same `F001` and the second write erased the first fact (measured 2026-08-29).
+  FactsStore.update(factsPath(ctx.root), (store) => {
+    for (const block of answered) {
+      const area = block.metadata?.area ?? "unscoped";
+      const fact = store.append({
+        fact: factTextFor(block.title, block.answer),
+        area,
+        repos: [],
+        kind: "answer",
+        confidence: "stated",
+        source: { who: ctx.actor, when: ctx.at, run: ctx.run, q: block.id },
+      });
+      doc = replaceBlock(doc, recordAnswer(block, { answered_by: ctx.actor, answered_at: ctx.at, fact: fact.id }));
+      log.tryAppend({
+        ts: ctx.at,
+        run: ctx.run,
+        stage: null,
+        type: "question.answered",
+        actor: ctx.actor,
+        cost_usd: 0,
+        payload: { q: block.id, answer: block.answer, fact: fact.id },
+      });
+      log.tryAppend({
+        ts: ctx.at,
+        run: ctx.run,
+        stage: null,
+        type: "fact.added",
+        actor: ctx.actor,
+        cost_usd: 0,
+        payload: { fact: fact.id, area: fact.area, kind: fact.kind, q: block.id },
+      });
+      captured.push({ q: block.id, fact: fact.id, answer: block.answer, area });
+    }
+  });
   writeFileSync(questionsPath, serializeQuestions(doc), "utf8");
   return captured;
 }

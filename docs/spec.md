@@ -1438,6 +1438,16 @@ agent ceiling is the stage share divided N ways with a **$0.25 floor**, because 
 whose four sections each read `- none [src: absent:03-plan/stories]`. `watchers/<feature>.md` is deliberately **not** in
 the stage's `outputs:` — a declared output is re-read by name (above), and these have no name until the pre-pass has run.
 
+**Two locks, and what each one guards.** `tldrx-work/<run>/.lock` is the single-writer guard on ONE run — a pid file,
+taken by `next`, stale when `kill(pid, 0)` says the holder is gone. `.tldrx/.lock` is the workspace lock, and it guards
+the files SEVERAL runs share: `.tldrx/memory/facts.yml` and each run's `budget.yml`. It is taken for the DURATION of a
+read-modify-write, not just the write — `facts.yml` mints its next id as `max(id) + 1` off the file, so two appenders
+that both read before either wrote would both mint `F001` and the second save would erase the first fact. Same pid
+rule, same stale rule, and re-entrant within a process. Both files are written temp + `rename`, so a reader sees the
+whole old file or the whole new one, never a truncated middle. And `budget.yml`'s **ceilings are re-read from disk
+before every write**: a writer that did not deliberately change them contributes only actuals, so a `budget raise` that
+lands while a stage is in flight is no longer reverted by that stage's save.
+
 **Resume path.** State lives only in files, so resume = run `next` again: the cursor points at the first non-terminal
 stage, a `running` left by a crash is demoted to `ready` when `.lock` holds a dead pid, and partial outputs are
 overwritten (stages are idempotent by contract). A task that failed mid-stage may instead be resumed with

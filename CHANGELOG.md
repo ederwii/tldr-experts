@@ -611,6 +611,28 @@ places nothing read as one list.
   `tldrx replay` prints the same note above the narrative. Line numbers now come
   from the reader, so a torn line no longer shifts every `L<n>` after it.
 
+### The two files every run shares now have a lock over them
+
+- **`.tldrx/.lock`, held across the read-modify-write.** Measured 2026-08-29: two
+  processes appending to `.tldrx/memory/facts.yml` each computed the next id as
+  `max(id) + 1`, each got `F001`, and the second save erased the first fact
+  outright. The per-run `.lock` never covered this — it guards one run, and
+  `facts.yml` belongs to all of them. The new workspace lock is the same shape
+  (a pid file, `kill(pid, 0)` for staleness, a dead holder taken over) and is
+  re-entrant within a process, and `FactsStore.update(path, fn)` holds it across
+  load → append → save. A two-process test that provably overlaps now mints
+  `F001` and `F002`; with the lock disabled it mints `F001` twice.
+- **`budget.yml` ceilings are re-read before every write.** A `budget raise` that
+  landed while a stage was in flight was silently reverted when that stage saved,
+  because the in-flight `RunStore` wrote back the ceilings it had read minutes
+  earlier. `RunStore.save` now takes the ceilings from disk unless this store
+  deliberately changed them (`mutateBudget`, which is what `raise` uses) and
+  contributes only the actuals it rolled up.
+- **`run.yml` and `budget.yml` are written temp + `rename`.** A `writeFileSync`
+  killed halfway left a truncated run file; a rename is atomic within a
+  filesystem, so a reader gets the whole old file or the whole new one. Same move
+  `run new` already made for the run directory.
+
 ## 0.2.0 — 2026-08-29
 
 ### The Build phase executes

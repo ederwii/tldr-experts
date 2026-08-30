@@ -5,8 +5,10 @@
  * keeps the file valid — supersede writes BOTH ends of the link, so the
  * reciprocity rule can never be broken by going through this class.
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { parseYaml } from "../yaml.ts";
+import { withWorkspaceLock, workspaceRootOfFactsPath } from "../lock/workspaceLock.ts";
 import {
   formatFactId, factNumber, isRetired, MAX_FACT_CHARS,
   type Fact, type FactRetirement, type FactsFile, type NewFact,
@@ -129,9 +131,15 @@ export class FactsStore {
   }
 
   /**
-   * Rewrite the file. `[assumption]` — the whole document is re-emitted, so any
-   * hand-written comments below the header are lost. The spec calls facts.yml
-   * append-mostly and machine-owned; nothing in it says comments must survive.
+   * Rewrite the file, atomically, under the workspace lock. `[assumption]` — the
+   * whole document is re-emitted, so any hand-written comments below the header
+   * are lost. The spec calls facts.yml append-mostly and machine-owned; nothing
+   * in it says comments must survive.
+   *
+   * The lock here closes the WRITE half of the race. It does not close the
+   * read-modify-write half on its own — for that the load has to be inside the
+   * same lock, which is what `FactsStore.update` is for, and what every caller
+   * that appends should use.
    */
   save(path: string = this.path): void {
     const text = this.toYaml();
@@ -140,6 +148,46 @@ export class FactsStore {
       const first = validation.issues[0];
       throw new Error(`refusing to write an invalid facts.yml: ${first?.path ?? ""} ${first?.message ?? ""}`);
     }
-    writeFileSync(path, text, "utf8");
+    withWorkspaceLock(workspaceRootOfFactsPath(path), () => {
+      writeFactsAtomic(path, text);
+    });
+  }
+
+  /**
+   * Load → mutate → save, all inside ONE workspace lock.
+   *
+   * This is the only safe way to APPEND. `nextId()` is `max(id) + 1` read off the
+   * file, so two processes that load, then both append, both mint the same id and
+   * the second write erases the first fact entirely — measured 2026-08-29, two
+   * writers each minted `F001`. Holding the lock across the load makes the
+   * sequence a real read-modify-write.
+   *
+   * The callback's return value comes back to the caller, so an appender can hand
+   * out the fact it just created without reaching for the store again.
+   */
+  static update<T>(path: string, fn: (store: FactsStore) => T): T {
+    return withWorkspaceLock(workspaceRootOfFactsPath(path), () => {
+      const store = FactsStore.loadOrEmpty(path);
+      const value = fn(store);
+      store.save(path);
+      return value;
+    });
+  }
+}
+
+/** Temp + rename: a reader sees the whole old file or the whole new one. */
+function writeFactsAtomic(path: string, text: string): void {
+  const temp = `${path}.tmp-${String(process.pid)}`;
+  mkdirSync(dirname(path), { recursive: true });
+  try {
+    writeFileSync(temp, text, "utf8");
+    renameSync(temp, path);
+  } catch (error) {
+    try {
+      if (existsSync(temp)) rmSync(temp, { force: true });
+    } catch {
+      // Nothing to clean up, or not ours to clean up.
+    }
+    throw error;
   }
 }
