@@ -52,7 +52,7 @@ import {
 } from "../../build/plan.ts";
 import {
   describeImplicitPlan, dodIsSatisfiedEmpty, implicitPlanContent, ImplicitPlanError, loadImplicitPlan,
-  planIsSkipped, updateImplicitPlan, IMPLICIT_PLAN_REL,
+  planIsSkipped, updateImplicitPlan, IMPLICIT_PLAN_REL, IMPLICIT_STORY_NOTE,
 } from "../../build/implicitPlan.ts";
 import { evidenceFor, updateStoryFront } from "../../build/storyFile.ts";
 import { buildDeveloperPrompt, buildReviewerPrompt, REVIEW_SCHEMA } from "../../build/prompts.ts";
@@ -189,6 +189,9 @@ function openPlan(ctx: ExecutorContext, workspace: WorkspaceContext, lines: stri
     scope: ctx.spec.scope,
     repos: ctx.repos,
     workspace,
+    // The answers a human gave at this run's gates. They are what the one story
+    // has to APPLY — without them the plan would only restate what What decided.
+    facts: FactsStore.loadOrEmpty(factsPath(ctx.root)).facts,
     budgetUsd: ctx.budgetUsd,
   };
   const plan = loadImplicitPlan(parts);
@@ -1214,6 +1217,7 @@ class BuildSession {
       facts: renderFacts(facts.facts, [repo]),
       experts: bundles.experts,
       budgetUsd: this.developerCap(),
+      planNote: this.plan.implicit ? IMPLICIT_STORY_NOTE : undefined,
       previousAttempt: story.previousAttempt,
     });
   }

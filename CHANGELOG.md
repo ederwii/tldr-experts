@@ -47,7 +47,16 @@
   declares for the roles the scope calls for, and `budget_usd` from the Build stage ceiling.
   A real `03-plan/` always wins. `tldrx next` prints one line naming the reason, and
   `tldrx run status` prints `plan: implicit (scope skips Plan)` so a synthesised plan never
-  reads like one a person approved.
+  reads like one a person approved. The plan carries the work **forward**: bullets whose
+  subject is the What stage's own deliverable are dropped (detected by the literal
+  `questions.md` / `### Q` mentions), every live fact stamped with this run adds
+  `Apply <fact> to the touched files [src: F<n>]` to `goal`, and `acceptance` gains a check
+  that each document one of those facts settles — the fact's text mentions that file's ADR
+  id or decision number — no longer reads `Status: proposed`. A mapping that cannot be
+  derived is reported in the story's `notes:` and falls back to "apply every listed fact;
+  leave a one-line note per file saying which fact changed it", never to a guess. The
+  developer prompt states plainly that Plan was skipped and this story applies the run's
+  answered decisions.
 - **`skips:` in a workflow is read rather than decorative.** The schema declared the key and
   the loader dropped it, so nothing could tell "the Plan phase has not run yet" from "no Plan
   phase was ever going to run" — a distinction that cannot be made from disk, since both look

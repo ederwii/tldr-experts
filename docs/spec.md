@@ -1709,13 +1709,37 @@ already wrote, into `04-build/implicit-plan.yml`:
 | Field | Where it comes from |
 |---|---|
 | `title` | `run.yml`'s `title:` |
-| `goal` | `01-what/handoff.md` § Decisions, bullets verbatim, `[src: …]` tokens kept |
-| `acceptance` | `01-what/success-metrics.md`'s list items, verbatim (empty ⇒ `goal`; both empty ⇒ one line saying the title is the whole brief) |
+| `goal` | `01-what/handoff.md` § Decisions, bullets verbatim, `[src: …]` tokens kept — **minus** the What's own deliverable (below) — **plus** `Apply <fact> to the touched files [src: F<n>]`, one per answered fact of this run |
+| `acceptance` | `01-what/success-metrics.md`'s list items, verbatim, same subtraction — **plus** the settled-documents criterion (below). Empty ⇒ `goal`; both empty ⇒ one line saying the title is the whole brief |
+| `notes` | the fact→document mapping that was derived, and every gap in it |
 | `touches` | the repo paths `01-what/handoff.md` CITES that exist inside a repo `workspace.yml` declares, first-cited order, ≤24. A citation with no repo prefix is skipped rather than guessed at |
 | `repo` | the run repo those citations name most; ties and no citations fall back to `run.repos` order |
 | `dod` | the commands `workspace.yml` declares for the ROLES this scope calls for — `docs`: `lint`; `spike`/`prototype`: none; everything else: `build`, `test`. Looked up by the **key** the human wrote, never matched against the command text (`lint: dotnet format --verify-no-changes` has no "lint" in it) |
 | `budget_usd` | the Build stage's own ceiling, as scaled into `run.yml` |
 | `branch` | `epic/<run-id slugged into `EPIC_BRANCH_RE`>` |
+
+**The plan carries the work FORWARD.** Measured on the aparece run: the What handoff's Decisions and its success
+metrics describe what the WHAT stage had to produce — "one `questions.md` block per decision", "the question count
+matches the decision count". Copied straight into Build they would tell a developer to write a file the run already
+has. So:
+
+- **Bullets whose subject is the What's own deliverable are dropped** from `goal` and `acceptance`, detected by the
+  literal `questions.md` and `### Q` mentions. The rule errs towards KEEPING — a bullet about answers that never names
+  the file survives and shows up in the story where a person can strike it — because a rule that guessed at intent
+  would drop criteria somebody wrote on purpose.
+- **The answers become the work.** Every live fact in `.tldrx/memory/facts.yml` whose `source.run` is THIS run is an
+  answer a human gave at one of its gates. Each one adds `Apply <fact text> to the touched files [src: F<n>]` to
+  `goal`.
+- **`acceptance` gains the settled-documents criterion.** A fact *settles* a touched document when the fact's own text
+  mentions that file's ADR id (`ADR-D008`, or the bare `D008`) or its `decision <n>` — a claim anyone can re-check by
+  reading the two strings. A leading document number (`13-OPEN-DECISIONS.md`) is deliberately **not** a decision
+  number. With a mapping: ``every touched document whose decision is settled by a fact of this run no longer reads
+  `Status: proposed` — `grep -c 'Status: proposed' <paths>` → 0 for the ones a fact decides [src: F<n>…]``. With
+  anything left over — an unmapped file, an unmapped fact, or no mapping at all — it also (or only) gets the generic
+  `apply every listed fact; leave a one-line note per file saying which fact changed it [src: F<n>…]`. `notes:` names
+  every derived pair, every unmapped file and every unmapped fact, so a partial mapping is visible rather than implied.
+- **The developer prompt says where the story came from**: "Plan was skipped by the scope; this single story applies
+  the run's answered decisions to the files it touches." No design document is going to say it, because none was written.
 
 The file is also the story's STATE: its top-level `status:` and `evidence:` are what the executor writes back, patched
 by the same two surgical edits a `stories/<id>.md` gets. The story then runs the ordinary pipeline — worktree,

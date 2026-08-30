@@ -19,10 +19,11 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import {
-  chooseRepo, citedRepoPaths, decisionBullets, dodCommandsFor, dodRolesFor, epicBranchFor, implicitPlanContent,
-  loadImplicitPlan, planIsSkipped, renderImplicitPlan, satisfiedByImplicitPlan, updateImplicitPlan,
-  IMPLICIT_PLAN_REL,
+  chooseRepo, citedRepoPaths, decisionBullets, decisionKeysOf, dodCommandsFor, dodRolesFor, epicBranchFor,
+  implicitPlanContent, isWhatDeliverable, loadImplicitPlan, planFacts, planIsSkipped, renderImplicitPlan,
+  runFacts, satisfiedByImplicitPlan, updateImplicitPlan, IMPLICIT_PLAN_REL, IMPLICIT_STORY_NOTE,
 } from "../src/core/build/implicitPlan.ts";
+import type { Fact } from "../src/core/facts/Fact.ts";
 import { listItems } from "../src/core/text/handoff.ts";
 import { loadWorkflowPreset } from "../src/core/run/workflowPreset.ts";
 import { buildProgress } from "../src/core/run/buildProgress.ts";
@@ -243,7 +244,7 @@ describe("the derivations", () => {
     const ws = workspace(DOCS_RUN);
     const content = implicitPlanContent({
       runDir: ws.runDir, runId: ws.runId, runTitle: "A docs run", scope: "docs",
-      repos: [ws.repoName], workspace: loadWorkspace(ws.root), budgetUsd: 8,
+      repos: [ws.repoName], workspace: loadWorkspace(ws.root), facts: [], budgetUsd: 8,
     });
     const before = renderImplicitPlan(content);
     const after = updateImplicitPlan(before, { status: "done", evidence: ["$ npm run lint → exit 0", "commit abc"] });
@@ -381,7 +382,7 @@ describe("a docs run that reaches Build with no 03-plan/", () => {
     const ws = workspace({ ...DOCS_RUN, whatHandoff: undefined, successMetrics: undefined });
     const parts = {
       runDir: ws.runDir, runId: ws.runId, runTitle: "Fix the guide", scope: "docs",
-      repos: [ws.repoName], workspace: loadWorkspace(ws.root), budgetUsd: 8,
+      repos: [ws.repoName], workspace: loadWorkspace(ws.root), facts: [], budgetUsd: 8,
     };
     const built = loadImplicitPlan(parts);
     expect(built.implicit).toBe(true);
@@ -429,4 +430,233 @@ describe("a plan somebody actually wrote", () => {
     expect(existsSync(join(ws.runDir, IMPLICIT_PLAN_REL))).toBe(false);
     expect(readFileSync(join(ws.planDir, "stories", "S1.md"), "utf8")).toContain("status: done");
   }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// The plan carries the work FORWARD: the run's answered facts become the work.
+// ---------------------------------------------------------------------------
+
+/** The id `makeBuildWorkspace` mints, so a fixture fact can be stamped with it. */
+const FIXTURE_RUN = "260829-build";
+
+const ANSWERED_FACTS = `version: 1
+facts:
+  - id: F001
+    fact: "Who owns the repo? — I do"
+    area: ownership
+    repos: []
+    kind: answer
+    confidence: stated
+    source: {who: alan, when: "2026-08-28T09:00:00Z", run: init, q: Q1}
+    supersedes: null
+    superseded_by: null
+    retired: null
+  - id: F002
+    fact: "Do customers authenticate through the SSO provider? — A — outside it, via phone verification. Accepts ADR-D008 as written."
+    area: identity
+    repos: []
+    kind: answer
+    confidence: stated
+    source: {who: alan, when: "2026-08-29T09:30:00Z", run: "${FIXTURE_RUN}", q: Q1}
+    supersedes: null
+    superseded_by: null
+    retired: null
+  - id: F003
+    fact: "Is the entitlement subject the Account or the Business? — A — the Account, with the published contract unchanged. Accepts ADR-D011."
+    area: entitlements
+    repos: []
+    kind: answer
+    confidence: stated
+    source: {who: alan, when: "2026-08-29T09:31:00Z", run: "${FIXTURE_RUN}", q: Q2}
+    supersedes: null
+    superseded_by: null
+    retired: null
+`;
+
+const ADR_HANDOFF = `# What — handoff
+
+## Findings
+
+- Two ADRs are still \`proposed\` [src: app:docs/adr/ADR-D008-AUTH.md:1]
+
+## Decisions
+
+- In scope: one \`questions.md\` block per open ADR, each with the recommended option as A [src: app:docs/adr/ADR-D008-AUTH.md:1]
+- In scope: settling ADR-D008 and ADR-D011 [src: app:docs/adr/ADR-D011-ENTITLEMENTS.md:1]
+- Out of scope: the deployment ADRs [src: app:README.md:1]
+
+## Unknowns
+
+- none [src: absent:docs/adr/ADR-D099.md]
+
+## Evidence ledger
+
+- both ADRs carry \`Status: proposed\` [src: app:docs/adr/ADR-D008-AUTH.md:1]
+`;
+
+const ADR_METRICS = `# Success metrics
+
+1. **Question count matches ADR count.** \`01-what/questions.md\` holds exactly 2 \`### Q\` blocks.
+2. **Every ADR names its decision.** Each ADR's Decision section states the accepted option.
+`;
+
+const ANSWERED_RUN: BuildWorkspaceOptions = {
+  scope: "docs",
+  skips: ["how", "plan", "watch"],
+  plan: false,
+  stories: [],
+  epics: [],
+  waves: [],
+  whatHandoff: ADR_HANDOFF,
+  successMetrics: ADR_METRICS,
+  commands: { build: null, test: "npm run test", lint: "npm run lint", typecheck: null, run: null },
+  files: { ".tldrx/memory/facts.yml": ANSWERED_FACTS },
+  repoFiles: {
+    "docs/adr/ADR-D008-AUTH.md": "# ADR-D008 · Customer authentication\n\nStatus: proposed\n",
+    "docs/adr/ADR-D011-ENTITLEMENTS.md": "# ADR-D011 · Entitlement scope\n\nStatus: proposed\n",
+    "package.json": `${JSON.stringify({
+      name: "app",
+      version: "0.0.0",
+      private: true,
+      scripts: { test: 'node -e "process.exit(0)"', lint: 'node -e "process.exit(0)"' },
+    }, null, 2)}\n`,
+  },
+};
+
+function fact(id: string, text: string, run: string | null): Fact {
+  return {
+    id,
+    fact: text,
+    area: "x",
+    repos: [],
+    kind: "answer",
+    confidence: "stated",
+    source: { who: "alan", when: "2026-08-29T09:00:00Z", run, q: null },
+    supersedes: null,
+    superseded_by: null,
+    retired: null,
+  };
+}
+
+describe("which answers count, and which document each settles", () => {
+  test("only this run's live facts — not init's, not a retired one", () => {
+    const rows = [
+      fact("F001", "from init", "init"),
+      fact("F002", "from this run", FIXTURE_RUN),
+      { ...fact("F003", "retired", FIXTURE_RUN), retired: { at: "2026-08-29T10:00:00Z", by: "alan", reason: "wrong" } },
+    ];
+    expect(runFacts(rows, FIXTURE_RUN).map((f) => f.id)).toEqual(["F002"]);
+  });
+
+  test("a file's decision keys are its ADR id — never a leading document number", () => {
+    expect(decisionKeysOf("docs/adr/ADR-D008-CUSTOMER-AUTHENTICATION.md")).toEqual(["ADR-D008", "D008"]);
+    expect(decisionKeysOf("docs/decisions/decision-7.md")).toEqual(["decision 7"]);
+    // `13-` is a document number. Reading it as a decision number would let any
+    // fact that says "13" claim to settle this file.
+    expect(decisionKeysOf("docs/13-OPEN-DECISIONS.md")).toEqual([]);
+    expect(decisionKeysOf("README.md")).toEqual([]);
+  });
+
+  test("a mapping is only claimed when the fact's own text names the key, and the gaps are reported", () => {
+    const facts = [
+      fact("F002", "customers authenticate outside it. Accepts ADR-D008 as written.", FIXTURE_RUN),
+      fact("F004", "delivery zones are circles plus polygons", FIXTURE_RUN),
+    ];
+    const plan = planFacts(facts, ["docs/adr/ADR-D008-AUTH.md", "docs/adr/ADR-D013-ZONES.md", "README.md"]);
+    expect(plan.mappings).toEqual([{ factId: "F002", path: "docs/adr/ADR-D008-AUTH.md", key: "ADR-D008" }]);
+    expect(plan.unmappedPaths).toEqual(["docs/adr/ADR-D013-ZONES.md", "README.md"]);
+    expect(plan.unmappedFactIds).toEqual(["F004"]);
+  });
+
+  test("a bullet whose subject is the What's own deliverable is detected by its literal mentions", () => {
+    expect(isWhatDeliverable("In scope: one `questions.md` block per item")).toBe(true);
+    expect(isWhatDeliverable("`01-what/questions.md` contains exactly 6 `### Q` blocks")).toBe(true);
+    expect(isWhatDeliverable("Out of scope: selecting an answer on the owner's behalf")).toBe(false);
+    expect(isWhatDeliverable("settle ADR-D008 and ADR-D011")).toBe(false);
+  });
+});
+
+describe("a run whose questions have been answered", () => {
+  test("the goal gets one apply-bullet per fact, the acceptance gets the settled-documents check", async () => {
+    const ws = workspace(ANSWERED_RUN);
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({
+      S1: {
+        "docs/adr/ADR-D008-AUTH.md": "# ADR-D008 · Customer authentication\n\nStatus: Accepted\n",
+        "docs/adr/ADR-D011-ENTITLEMENTS.md": "# ADR-D011 · Entitlement scope\n\nStatus: Accepted\n",
+      },
+    });
+
+    const outcome = await next(ws);
+    expect(outcome.code).toBe(4);
+    expect(outcome.lines.join("\n")).toContain("applying F002, F003");
+
+    const text = plan(ws);
+
+    // (1) one apply-bullet per answered fact of THIS run, its text verbatim.
+    expect(text).toContain(
+      '    - "Apply Do customers authenticate through the SSO provider? — A — outside it, via phone ' +
+      'verification. Accepts ADR-D008 as written. to the touched files [src: F002]"',
+    );
+    expect(text).toContain("Accepts ADR-D011. to the touched files [src: F003]\"");
+    // init's fact is not this run's work.
+    expect(text).not.toContain("[src: F001]");
+
+    // (2) the settled-documents acceptance criterion, citing the mapping facts.
+    expect(text).toContain(
+      "every touched document whose decision is settled by a fact of this run no longer reads " +
+      "`Status: proposed` — `grep -c 'Status: proposed' docs/adr/ADR-D008-AUTH.md " +
+      "docs/adr/ADR-D011-ENTITLEMENTS.md` → 0 for the ones a fact decides [src: F002; F003]",
+    );
+    // README.md is touched and no fact names it, so the generic line is there too.
+    expect(text).toContain("apply every listed fact; leave a one-line note per file saying which fact changed it");
+    expect(text).toContain("  notes:");
+    expect(text).toContain("F002 settles docs/adr/ADR-D008-AUTH.md (its text mentions `ADR-D008`)");
+    expect(text).toContain("F003 settles docs/adr/ADR-D011-ENTITLEMENTS.md (its text mentions `ADR-D011`)");
+    expect(text).toContain("no fact of this run mentions the ADR id or decision number of 1 touched file(s)");
+
+    // (3) the What's own deliverable is gone from both lists.
+    expect(text).not.toContain("one `questions.md` block per open ADR");
+    expect(text).not.toContain("### Q` blocks");
+    // What the What decided that is NOT about questions.md survives.
+    expect(text).toContain("In scope: settling ADR-D008 and ADR-D011");
+    expect(text).toContain("**Every ADR names its decision.**");
+
+    // (4) the developer is told where this story came from.
+    const developer = readFileSync(join(promptDir, "developer-S1-1.md"), "utf8");
+    expect(developer).toContain(IMPLICIT_STORY_NOTE);
+    expect(developer).toContain("Apply Do customers authenticate through the SSO provider?");
+  }, 60_000);
+
+  test("a run that has answered nothing keeps the What's decisions and says there is nothing to apply", () => {
+    const ws = workspace(DOCS_RUN);
+    const content = implicitPlanContent({
+      runDir: ws.runDir, runId: ws.runId, runTitle: "A docs run", scope: "docs",
+      repos: [ws.repoName], workspace: loadWorkspace(ws.root), facts: [], budgetUsd: 8,
+    });
+    expect(content.factIds).toEqual([]);
+    expect(content.notes).toEqual([]);
+    expect(content.goal.every((bullet) => !bullet.startsWith("Apply "))).toBe(true);
+    expect(renderImplicitPlan(content)).toContain(
+      "  notes: []  # this run has answered no question, so there is nothing to apply",
+    );
+  });
+
+  test("with facts but no derivable mapping, only the generic acceptance is written — and it says so", () => {
+    const ws = workspace(DOCS_RUN);
+    const content = implicitPlanContent({
+      runDir: ws.runDir, runId: ws.runId, runTitle: "A docs run", scope: "docs",
+      repos: [ws.repoName], workspace: loadWorkspace(ws.root),
+      // Neither touched file (docs/guide.md, README.md) carries an ADR id.
+      facts: [fact("F009", "ship the guide rewrite", ws.runId)], budgetUsd: 8,
+    });
+    expect(content.goal.at(-1)).toBe("Apply ship the guide rewrite to the touched files [src: F009]");
+    expect(content.acceptance.filter((item) => item.includes("Status: proposed"))).toHaveLength(0);
+    expect(content.acceptance.at(-1)).toBe(
+      "apply every listed fact; leave a one-line note per file saying which fact changed it [src: F009]",
+    );
+    expect(content.notes.join("\n")).toContain("no fact of this run mentions the ADR id or decision number");
+    expect(content.notes.join("\n")).toContain("F009 settle no touched document by name");
+  });
 });
