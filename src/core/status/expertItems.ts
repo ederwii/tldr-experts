@@ -75,8 +75,11 @@ export function expertAdvice(root: string): readonly PendingItem[] {
   }
   if (waiting.length > 0) {
     details.push(
-      `${waiting.join(", ")} ${waiting.length === 1 ? "is a role expert" : "are role experts"}: `
-      + "they train from past runs' handoffs, and this workspace has none yet",
+      waiting.length === 1
+        ? `${waiting[0] ?? ""} is a role expert: it trains from past runs' handoffs, `
+          + "and this workspace has none yet"
+        : `${waiting.join(", ")} are role experts: they train from past runs' handoffs, `
+          + "and this workspace has none yet",
     );
   }
   if (arealess.length > 0) {
