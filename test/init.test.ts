@@ -104,6 +104,17 @@ describe("tldrx init — multi-repo workspace", () => {
     for (const bullet of text.split("\n").filter(isBullet)) expect(endsWithToken(bullet)).toBe(true);
   });
 
+  // Hand-editing this file records nothing: the `answer-capture` hook only fires
+  // under `tldrx-work/` (`locateWork`, `hooks/lib/workspace.ts:29`), and
+  // `interview --init` additionally writes `.tldrx/process.yml`.
+  test("init-questions.md points at the command, not at itself", async () => {
+    const text = await Bun.file(join(fixture.root, ".tldrx/init-questions.md")).text();
+    expect(text).toContain("Answer them with `tldrx interview --init`");
+    expect(text).toContain("records NEITHER");
+    // The parser's slot survives: `captureAnswers` reads it, `tldrx answer` writes it.
+    expect(text).toContain("[Answer]:");
+  });
+
   test("init-questions.md parses as §2.7 blocks and asks only about real gaps", async () => {
     const text = await Bun.file(join(fixture.root, ".tldrx/init-questions.md")).text();
     const headings = [...text.matchAll(/^## (Q\d+) · (.+)$/gm)];
@@ -419,6 +430,22 @@ describe("the CLI end to end", () => {
   test("map without a mode, and init with an unknown flag, are usage errors", async () => {
     expect((await tldrx("map")).code).toBe(1);
     expect((await tldrx("init", "--nope")).code).toBe(1);
+  });
+
+  // The `Next:` line has to name the COMMAND. Filling `[Answer]:` by hand records
+  // no fact (`answer-capture` fires only under `tldrx-work/`) and writes no
+  // `process.yml`, so "then answer .tldrx/init-questions.md" was an instruction
+  // to do the one thing that does not work.
+  test("the Next line names `tldrx interview --init`, and --no-interview says there is nothing to answer", async () => {
+    const withInterview = await tldrx("init", "--root", fixture.root, "--provider", "static");
+    expect(withInterview.code).toBe(0);
+    expect(withInterview.stdout)
+      .toContain("Next: read .tldrx/init-handoff.md, then run `tldrx interview --init` to answer the setup questions.");
+
+    const without = await tldrx("init", "--root", fixture.root, "--no-interview", "--provider", "static");
+    expect(without.code).toBe(0);
+    expect(without.stdout).toContain("No questions were written (--no-interview).");
+    expect(without.stdout).not.toContain("tldrx interview --init");
   });
 });
 
