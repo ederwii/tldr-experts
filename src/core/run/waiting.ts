@@ -22,10 +22,17 @@
  * phase's `questions.md`, for the open block ids. No model, no network, no write.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { openBlocks, parseQuestions } from "../text/questions.ts";
+import { isAlive, readLock } from "../facilitator/Lock.ts";
+import { hasPreparedBundle } from "./prepared.ts";
 
-export type WaitingKind = "gate" | "answer" | "ready" | "done" | "blocked" | "failed";
+export type WaitingKind =
+  | "gate" | "answer" | "ready" | "done" | "blocked" | "failed"
+  /** A live `next` holds the run's `.lock`. Nobody else may touch it. */
+  | "running"
+  /** A `--prepare` bundle is on disk and no process is holding the run. */
+  | "prepared";
 
 export interface Waiting {
   readonly kind: WaitingKind;
@@ -37,11 +44,13 @@ export interface Waiting {
 /**
  * The waiting kinds a human can act on right now.
  *
- * `done` is finished and `blocked` needs something else to move first, so
- * neither is a run you can be handed. `tldrx status` uses this to pick which run
+ * `done` is finished, `blocked` needs something else to move first, and
+ * `running` is already in someone's hands, so none of the three is a run you can
+ * be handed. `prepared` IS one: the bundle is written and it is waiting on a
+ * human to run the prompt and come back through `--commit`. `tldrx status` uses this to pick which run
  * wears `← next`, and the dashboard uses it for the same decision.
  */
-export const MOVABLE_KINDS: readonly WaitingKind[] = ["gate", "answer", "ready", "failed"];
+export const MOVABLE_KINDS: readonly WaitingKind[] = ["gate", "answer", "ready", "failed", "prepared"];
 
 export function isMovable(kind: WaitingKind): boolean {
   return MOVABLE_KINDS.includes(kind);
@@ -152,6 +161,37 @@ export function waitingFor(run: WaitingRun, runDir: string): Waiting {
         kind: "failed",
         message: `${entry.phase.id}/${entry.stage.id} FAILED${reason === null ? "" : `: ${reason}`} — ` +
           "retry: `tldrx next` · or: `tldrx reject --note \"…\"`",
+        questions: open,
+      };
+    }
+    // `running` is three different situations wearing one word, and calling all
+    // three `ready` was the audit's second finding: it offered `tldrx next`,
+    // which for an orphaned `--prepare` re-spawns the stage and bins work the
+    // run has already been billed for.
+    case "running": {
+      const holder = readLock(runDir);
+      if (holder !== null && isAlive(holder.pid)) {
+        return {
+          kind: "running",
+          message: `stage is running (pid ${String(holder.pid)}) — wait, or ` +
+            `\`tldrx run unlock ${basename(runDir)}\` if it died`,
+          questions: open,
+        };
+      }
+      if (hasPreparedBundle(runDir, entry.stage.id)) {
+        return {
+          kind: "prepared",
+          message: "a --prepare bundle is waiting — run the prompt and " +
+            `\`tldrx next --commit ${basename(runDir)}\`, or ` +
+            `\`tldrx reject --run ${basename(runDir)} --note …\` to discard`,
+          questions: open,
+        };
+      }
+      // No lock, no bundle: a crash between `markRunning` and the spawn. `next`
+      // demotes it back to `ready` on its next pass, so say what it will say.
+      return {
+        kind: "ready",
+        message: `next up: ${entry.phase.id}/${entry.stage.id} (running, but nothing holds it) — \`tldrx next\``,
         questions: open,
       };
     }

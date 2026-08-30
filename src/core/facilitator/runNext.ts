@@ -42,6 +42,7 @@ import type { EffortLevel } from "../schemas/stage.ts";
 import { validateOutputs, describeProblems } from "./validateOutputs.ts";
 import { executorFor, type ExecutorContext, type ExecutorOutcome, type StageExecutor } from "./executors/index.ts";
 import { promptPath, readResult, writeBundle, writeRaw, PendingError, type PendingStage } from "./pending.ts";
+import { preparedBundles, PENDING_JSON } from "../run/prepared.ts";
 import { capInputs, inlineInputs, type InlineResult } from "./seedInputs.ts";
 import { SEED_INDEX } from "../seed/renderSeed.ts";
 
@@ -61,6 +62,12 @@ export interface NextOptions {
   readonly yolo: boolean;
   /** `--keep-worktrees`: the Build phase keeps its story worktrees after a story settles. */
   readonly keepWorktrees?: boolean;
+  /**
+   * `--discard-pending`: throw away an orphaned `--prepare` bundle and run the
+   * stage again. Without it a stage left `running` with a bundle on disk is
+   * REFUSED (exit 2) rather than silently re-spawned — see `preparedRefusal`.
+   */
+  readonly discardPending?: boolean;
   readonly actor: string;
   readonly at: string;
 }
@@ -117,10 +124,57 @@ export async function runNext(options: NextOptions): Promise<NextOutcome> {
   const notes: string[] = [];
   try {
     if (lock.stale) notes.push(...demoteStaleRunning(store, lock.holder?.pid ?? 0));
+    const orphaned = preparedRefusal(store, options, notes);
+    if (orphaned !== null) return orphaned;
     return await advance(store, options, notes);
   } finally {
     releaseLock(store.runDir);
   }
+}
+
+/**
+ * The one cut with no `.lock` behind it: killed between `--prepare` and
+ * `--commit` (2026-08-29 audit, §A).
+ *
+ * `--prepare` writes the bundle, marks the stage `running` and releases the lock,
+ * because the host session — not this process — is going to run the prompt. If
+ * that session dies, the run is `running`, nothing holds it, and `tldrx next`
+ * used to walk straight past into `runStage` and SPAWN THE STAGE AGAIN, throwing
+ * away a sub-agent turn the run has already been billed for.
+ *
+ * So it refuses, and names all three ways out. `--commit` is exempt: that is the
+ * recovery path, not the mistake. `--discard-pending` is the explicit "yes,
+ * really, bin it".
+ */
+function preparedRefusal(store: RunStore, options: NextOptions, notes: string[]): NextOutcome | null {
+  if (options.mode === "commit") return null;
+  const entry = store.cursorEntry();
+  if (entry === null || entry.stage.status !== "running") return null;
+  // A phase with an executor stays `running` ACROSS cycles on purpose: the Build
+  // executor hands out one story per `--prepare`/`--commit` pair and re-prepares
+  // the same stage for the next one (`runExecutor`, `started`). Its bundles are
+  // per story and it decides which is live, so this refusal is not ours to make
+  // there — applying it broke `--prepare` at story 2 the first time it ran.
+  if (executorFor(entry.phase.id) !== null) return null;
+  const bundles = preparedBundles(store.runDir, entry.stage.id);
+  if (bundles.length === 0) return null;
+
+  const where = relative(options.root, agentDir(store.runDir, entry.stage.id));
+  if (options.discardPending === true) {
+    for (const dir of bundles) rmSync(join(dir, PENDING_JSON), { force: true });
+    setStatus(store, entry.phase.id, entry.stage.id, "ready");
+    store.save();
+    notes.push(`discarded the --prepare bundle in ${where}/ and demoted ${entry.phase.id}/${entry.stage.id} to ready`);
+    return null;
+  }
+  return out(EXIT_REFUSED, [
+    ...notes,
+    `${entry.phase.id}/${entry.stage.id} has a --prepare bundle waiting and nothing is holding the run —`,
+    `  refusing to run it again: that would discard a sub-agent turn this run has already paid for.`,
+    `  finish it:  run ${where}/prompt.md, write ${where}/result.json, then \`tldrx next --commit ${store.runId}\``,
+    `  drop it:    \`tldrx reject --run ${store.runId} --note "…"\``,
+    `  redo it:    \`tldrx next --discard-pending\` (throws the bundle away and runs the stage again)`,
+  ]);
 }
 
 /**

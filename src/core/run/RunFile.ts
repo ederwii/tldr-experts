@@ -108,6 +108,24 @@ export interface RunTriage {
   readonly depends_on: readonly string[];
 }
 
+/**
+ * Why this run was closed by hand (`tldrx run cancel`).
+ *
+ * Optional and ADDITIVE, exactly like `triage`: a run nobody cancelled has no
+ * `cancelled:` key at all and every reader that never heard of it is unaffected.
+ *
+ * It is a run-level field rather than a stage status because the run that most
+ * needs cancelling is one whose stage FAILED — and there is no way to say
+ * "cancelled" through the stages of such a run without overwriting the failure,
+ * which is history, not state. So the stages keep what happened to them and the
+ * run carries the decision.
+ */
+export interface RunCancellation {
+  readonly by: string;
+  readonly at: string;
+  readonly note: string;
+}
+
 export interface RunFile {
   readonly version: number;
   readonly run: string;
@@ -122,6 +140,8 @@ export interface RunFile {
   readonly budget: RunBudgetMirror;
   /** Present only on a run created by `tldrx seed apply`. */
   readonly triage?: RunTriage;
+  /** Present only on a run closed by `tldrx run cancel`. */
+  readonly cancelled?: RunCancellation;
   /**
    * Who approves each stage's gate (spec §2.2). ADDITIVE and optional: a run.yml
    * written before this key existed has no policy, and `gatePolicyFor` reads that
@@ -166,6 +186,12 @@ export function stageAt(run: RunFile, cursor: RunCursor): { phase: RunPhase; sta
  */
 export function deriveRunStatus(run: RunFile): StageStatus {
   const all = flatten(run);
+  // A cancellation is a DECISION, not a roll-up, so it is read before anything is
+  // derived. It has to come first: the run most often cancelled is one whose
+  // stage failed, and a failure checked first would make such a run impossible to
+  // close — it would stay `failed`, stay open, and keep appearing in every
+  // id-less command's ambiguity list forever.
+  if (run.cancelled !== undefined) return "cancelled";
   if (all.some((e) => e.stage.status === "failed")) return "failed";
   if (all.length > 0 && all.every((e) => isTerminal(e.stage.status))) return "done";
   return stageAt(run, run.cursor)?.stage.status ?? "pending";
@@ -224,6 +250,18 @@ export function validateRunFile(input: unknown): ValidationResult {
     requireNumber(doc.budget.per_agent_max_usd, "budget.per_agent_max_usd", issues);
   } else if (doc.budget !== undefined) {
     issues.push({ path: "budget", message: "expected a mapping" });
+  }
+
+  // Optional, additive: absent unless `tldrx run cancel` closed this run.
+  if (doc.cancelled !== undefined) {
+    if (isRecord(doc.cancelled)) {
+      requireKeys(doc.cancelled, ["by", "at", "note"], "cancelled", issues);
+      requireString(doc.cancelled.by, "cancelled.by", issues);
+      requireString(doc.cancelled.at, "cancelled.at", issues);
+      requireString(doc.cancelled.note, "cancelled.note", issues);
+    } else {
+      issues.push({ path: "cancelled", message: "expected a mapping" });
+    }
   }
 
   // Optional, additive (§6.2): absent on every run `run new` creates. Present it

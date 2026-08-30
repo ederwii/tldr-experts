@@ -31,7 +31,7 @@ export const nextCommand: Command = {
   name: "next",
   summary: "Advance the active run to its next stage",
   usage: "tldrx next [<run>] [--dry-run] [--prepare|--commit] [--model <m>] [--effort <level>] [--max-usd <n>]\n"
-    + "                  [--yolo] [--keep-worktrees] [--ui scene|compact|plain|off] [--root <path>]",
+    + "                  [--yolo] [--keep-worktrees] [--discard-pending] [--ui scene|compact|plain|off] [--root <path>]",
   subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
@@ -57,6 +57,7 @@ export const nextCommand: Command = {
           maxUsd: numberFlag(args, "max-usd"),
           yolo: boolFlag(args, "yolo"),
           keepWorktrees: boolFlag(args, "keep-worktrees"),
+          discardPending: boolFlag(args, "discard-pending"),
           actor: currentActor(),
           at: nowRfc3339(),
         });

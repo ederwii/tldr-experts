@@ -633,6 +633,35 @@ places nothing read as one list.
   filesystem, so a reader gets the whole old file or the whole new one. Same move
   `run new` already made for the run directory.
 
+### `running` stopped meaning "ready", and a stuck run has a way out
+
+- **Two new waiting kinds, `running` and `prepared`.** A stage killed between
+  `tldrx next --prepare` and `--commit` is left `running` with NO lock — `--prepare`
+  releases it on purpose, because the host session runs the prompt. Every reader
+  called that `ready` and offered `tldrx next`, which re-spawned the stage and
+  binned a sub-agent turn the run had already paid for. `waitingFor` now separates
+  the three things `running` can mean: a live lock (`stage is running (pid N) —
+  wait, or \`tldrx run unlock <id>\` if it died`), an uncommitted bundle
+  (`a --prepare bundle is waiting — run the prompt and \`tldrx next --commit
+  <id>\`, or \`tldrx reject --run <id> --note …\` to discard`), and a crash with
+  neither. `tldrx run status`, `tldrx status` and the dashboard all follow, because
+  all three read the one derivation.
+- **`tldrx next` refuses to re-spawn over a bundle** (exit 2), naming all three
+  ways out; `--discard-pending` is the explicit "bin it and run it again". Phases
+  with an executor are exempt — Build stays `running` across cycles by design.
+- **`tldrx run unlock [<run>] [--force]`.** A `.lock` whose pid had been RECYCLED
+  by an unrelated process was permanent: `kill(pid, 0)` said alive, `next` exited
+  2 forever, and the fix was knowing to delete a gitignored file by hand. Unlock
+  removes a dead holder's lock, demotes `running` → `ready`, and appends
+  `run.unlocked`. A live holder needs `--force`.
+- **`tldrx run cancel [<run>] --note <text> [--force]`.** `cancelled` was a status
+  in the schema with nothing that could write it, so a run you had given up on
+  stayed open forever and made every id-less command ambiguous. Cancel closes it,
+  appends `run.cancelled`, and records the decision on the run
+  (`cancelled: {by, at, note}`, optional and additive) — which is what lets a
+  FAILED run be closed without overwriting the failure on its stages. Nothing is
+  deleted; `tldrx replay` still reads the whole thing.
+
 ## 0.2.0 — 2026-08-29
 
 ### The Build phase executes

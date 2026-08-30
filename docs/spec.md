@@ -634,7 +634,7 @@ three are handed the run directory of the file they are judging.
 
 Append-only audit log: with `run.yml` the dashboard's only data source, the cost ledger, and the `replay`/`retro` input.
 
-**Type enum:** `run.created` `run.closed` `phase.started` `phase.done` `stage.started` `stage.done` `stage.failed`
+**Type enum:** `run.created` `run.closed` `run.unlocked` `run.cancelled` `phase.started` `phase.done` `stage.started` `stage.done` `stage.failed`
 `stage.skipped` `task.started` `task.done` `agent.spawned` `agent.result` `question.asked` `question.answered`
 `gate.requested` `gate.approved` `gate.rejected` `check.passed` `check.failed` `budget.warned` `budget.blocked`
 `fact.added` `fact.retired` `map.refreshed` `ticket.synced` `error`. Closed set: an unknown type is a validation error.
@@ -1447,6 +1447,35 @@ rule, same stale rule, and re-entrant within a process. Both files are written t
 whole old file or the whole new one, never a truncated middle. And `budget.yml`'s **ceilings are re-read from disk
 before every write**: a writer that did not deliberately change them contributes only actuals, so a `budget raise` that
 lands while a stage is in flight is no longer reverted by that stage's save.
+
+**`running` is three states, not one.** A stage that says `running` means one of three different things, and every
+reader has to tell them apart or it will offer the wrong command:
+
+| On disk | What it is | What is offered |
+|---|---|---|
+| `.lock` held by a LIVE pid | a `next` is working right now | wait, or `tldrx run unlock <id>` if that pid is gone |
+| no lock, `.agent/<stage>/pending.json` | a `--prepare` bundle nobody committed | `tldrx next --commit <id>`, or `tldrx reject --run <id> --note …` |
+| no lock, no bundle | a crash between the `running` stamp and the spawn | `tldrx next` — it demotes to `ready` and re-runs |
+
+The middle row is the one cut with no lock behind it: `--prepare` releases the lock on purpose, because the host
+session — not `tldrx` — runs the prompt. `tldrx next` **refuses** (exit `2`) rather than re-spawn a stage in that
+state, because a re-spawn discards a sub-agent turn the run has already been billed for; `--discard-pending` is the
+explicit way to bin the bundle and run it again. A phase with an executor is exempt: it stays `running` across
+`--prepare`/`--commit` cycles by design (one story per cycle) and owns its own bundles.
+
+**Getting unstuck.** Two commands, neither of which spends anything:
+
+- **`tldrx run unlock [<run>] [--force]`** removes a `.lock` whose pid is dead, demotes any `running` stage back to
+  `ready`, and appends `run.unlocked`. A LIVE holder needs `--force` — "the pid was recycled" and "a colleague is
+  running the stage" look identical from here, and only one of them is safe. Without `--force` it exits `2` and names
+  the pid.
+- **`tldrx run cancel [<run>] --note <text> [--force]`** closes a run for good: every non-terminal stage becomes
+  `cancelled`, the decision is recorded on the run itself (`cancelled: {by, at, note}` — optional and additive, §2.2)
+  and `run.cancelled` is appended. It refuses while a live lock holds the run unless `--force`. The run-level field is
+  what makes the status `cancelled` even when every stage is already terminal — the run people most want to close is
+  one whose stage FAILED, and there is no way to say "cancelled" through its stages without overwriting that failure.
+  Nothing is deleted: stages, outputs, events and money spent stay on disk and `tldrx replay <id>` still reads them.
+  A `cancelled` run is finished (§3.1), so `tldrx status` and every id-less command stop seeing it.
 
 **Resume path.** State lives only in files, so resume = run `next` again: the cursor points at the first non-terminal
 stage, a `running` left by a crash is demoted to `ready` when `.lock` holds a dead pid, and partial outputs are

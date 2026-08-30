@@ -94,6 +94,14 @@ export function emitRunYaml(run: RunFile): string {
       `triage: {split: ${yamlScalar(run.triage.split)}, depends_on: ${inlineList(run.triage.depends_on)}}`,
     );
   }
+  // Same rule as `triage`: emitted only when it is there, so a run.yml written
+  // before `run cancel` existed round-trips byte-for-byte through a save.
+  if (run.cancelled !== undefined) {
+    lines.push(
+      `cancelled: {by: ${yamlScalar(run.cancelled.by)}, at: ${yamlScalar(run.cancelled.at)}, ` +
+        `note: ${yamlScalar(run.cancelled.note)}}`,
+    );
+  }
   if (run.gates_policy !== undefined && Object.keys(run.gates_policy).length > 0) {
     lines.push(`gates_policy: ${gatesPolicy(run.gates_policy)}`);
   }
