@@ -601,16 +601,24 @@ describe("budget-gate (PreToolUse Bash)", () => {
 });
 
 describe("session-start (SessionStart)", () => {
-  test("injects at most three lines about the newest non-terminal run", async () => {
+  test("injects three lines about the newest run, then up to three of the pending report", async () => {
     const run = await hook("session-start", {
       hook_event_name: "SessionStart", source: "startup", cwd: workspace().root,
     });
     expect(run.code).toBe(0);
     const lines = (context(run) ?? "").split("\n");
-    expect(lines.length).toBeLessThanOrEqual(3);
+    // Spec §4: 3 for "where we are", 3 for `tldrx status`, never more.
+    expect(lines.length).toBeLessThanOrEqual(6);
+    // The run block is still the PREFIX and still byte-identical.
     expect(lines[0]).toBe('tldrx: run 260828-leaderboard — "Player leaderboard" (feature) · awaiting_gate');
     expect(lines[1]).toBe("tldrx: at 02-how / contracts — architect · awaiting_gate");
     expect(lines[2]).toBe("tldrx: 1 open question (Q4) · gate pending: `tldrx approve`");
+    // …and the pending block follows it. This fixture's run.yml deliberately
+    // fails §2.2 validation (see the tolerant-reader test in
+    // `facilitator-statusline.test.ts`), so what `tldrx status` has to report
+    // about it is exactly that it could not be read.
+    expect(lines[3]).toStartWith("tldrx: 1 pending — ");
+    expect(lines[4]).toContain("could not be read");
   });
 
   test("says nothing when there is no run", async () => {
@@ -626,13 +634,15 @@ describe("session-start (SessionStart)", () => {
     expect(run.stdout).toBe("");
   });
 
-  test("says nothing when every run is terminal", async () => {
+  test("drops the run block when every run is terminal", async () => {
     const path = join(workspace().runDir, "run.yml");
     writeFileSync(path, readFileSync(path, "utf8").replace("status: awaiting_gate\ncursor", "status: done\ncursor"), "utf8");
     const run = await hook("session-start", {
       hook_event_name: "SessionStart", source: "startup", cwd: workspace().root,
     });
-    expect(run.stdout).toBe("");
+    const lines = (context(run) ?? "").split("\n").filter((line) => line !== "");
+    expect(lines.some((line) => line.startsWith("tldrx: run "))).toBe(false);
+    expect(lines.some((line) => line.startsWith("tldrx: at "))).toBe(false);
   });
 
   test("fails open on an internal error", async () => {
