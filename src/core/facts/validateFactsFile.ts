@@ -5,7 +5,7 @@
  * file; no fact both superseded and retired; ≤5000 facts.
  */
 import {
-  asDocument, isRecord, requireArray, requireEnum, requireKeys, requireString, result,
+  asDocument, isRecord, requireArray, requireEnum, requireKeys, requireString, requireVersion, result,
   type ValidationIssue, type ValidationResult,
 } from "../schemas/validation.ts";
 import {
@@ -18,14 +18,13 @@ const Q_RE = /^Q\d{1,6}$/;
 
 export function validateFactsFile(input: unknown): ValidationResult {
   const issues: ValidationIssue[] = [];
+  const deprecations: string[] = [];
   const doc = asDocument(input, issues);
   if (!doc) return result(issues);
 
-  requireKeys(doc, ["version", "facts"], "", issues);
-  if (doc.version !== undefined && doc.version !== 1) {
-    issues.push({ path: "version", message: `unknown schema version ${String(doc.version)} (expected 1)` });
-  }
-  if (!requireArray(doc.facts, "facts", issues)) return result(issues);
+  requireVersion(doc, issues, deprecations);
+  requireKeys(doc, ["facts"], "", issues);
+  if (!requireArray(doc.facts, "facts", issues)) return result(issues, deprecations);
 
   const rows = doc.facts as unknown[];
   if (rows.length > MAX_FACTS) {
@@ -97,7 +96,7 @@ export function validateFactsFile(input: unknown): ValidationResult {
       }
     }
   }
-  return result(issues);
+  return result(issues, deprecations);
 }
 
 /** Narrow a validated document. Call `validateFactsFile` first. */

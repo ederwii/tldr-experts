@@ -14,6 +14,7 @@ import {
   type Fact, type FactRetirement, type FactsFile, type NewFact,
 } from "./Fact.ts";
 import { asFactsFile, validateFactsFile } from "./validateFactsFile.ts";
+import { noteDeprecations } from "../schemas/deprecationNotice.ts";
 import { emitFactsYaml } from "./emitFactsYaml.ts";
 import { findDuplicate, type DuplicateHit } from "./findDuplicate.ts";
 
@@ -38,6 +39,7 @@ export class FactsStore {
     const text = readFileSync(path, "utf8");
     const doc = parseYaml(text);
     const validation = validateFactsFile(doc);
+    noteDeprecations(path, validation);
     if (!validation.ok) {
       const first = validation.issues[0];
       throw new Error(`invalid facts.yml (${path}): ${first?.path ?? ""} ${first?.message ?? "schema error"}`);

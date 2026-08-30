@@ -6,7 +6,7 @@
 # TEST FAILURE of the framework, not a stylistic lapse.
 #
 # Every fact carries provenance. A fact without a source is not a fact.
-schema_version: 0
+version: 1
 
 facts:
   - id: F001

@@ -19,7 +19,7 @@ export function buildFactsDocument(): FactsDocument {
 }
 
 export function validateFactsDocument(doc: FactsDocument): ValidationResult {
-  return validate("facts", { schema_version: doc.version, facts: doc.facts });
+  return validate("facts", { version: doc.version, facts: doc.facts });
 }
 
 export const FACTS_HEADER = [

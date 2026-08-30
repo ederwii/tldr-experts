@@ -4,7 +4,7 @@
 # `level` is COMPUTED from evidence count and recency. It is never self-declared
 # and an expert may not edit its own. The star chart in the dashboard is this file
 # rendered — nothing more.
-schema_version: 0
+version: 1
 expert: example-expert
 
 areas:

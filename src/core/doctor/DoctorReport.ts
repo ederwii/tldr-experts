@@ -15,6 +15,7 @@ export class DoctorReport {
   constructor(
     private readonly results: readonly ToolCheckResult[],
     private readonly mcp: McpProbeResult | null = null,
+    private readonly legacyVersionFiles: readonly string[] | null = null,
   ) {}
 
   /** True when every REQUIRED tool is present and at or above its min_version. */
@@ -48,7 +49,24 @@ export class DoctorReport {
     if (this.mcp) lines.push("", ...this.renderMcp(this.mcp));
     else lines.push("", "MCP servers not probed. Re-run with --mcp (may take 30s+; runs live health checks).");
 
+    lines.push("", ...this.renderLegacyVersions());
+
     return lines.join("\n");
+  }
+
+  /**
+   * `schema_version:` still loads, and stops loading after the next release.
+   * A file on the old key is a warning, never a blocker: `healthy` is about the
+   * TOOLS this machine has, and renaming a key is not one of them.
+   */
+  private renderLegacyVersions(): string[] {
+    if (this.legacyVersionFiles === null) return ["Schema keys: no workspace here — nothing scanned."];
+    if (this.legacyVersionFiles.length === 0) return ["Schema keys: every file says `version: 1`. \u2713"];
+    return [
+      `Deprecated \`schema_version:\` in ${String(this.legacyVersionFiles.length)} file(s) — say \`version: 1\` instead:`,
+      ...this.legacyVersionFiles.map((path) => `  ${path}`),
+      "They still load today. Support goes after the next release.",
+    ];
   }
 
   private renderMcp(mcp: McpProbeResult): string[] {

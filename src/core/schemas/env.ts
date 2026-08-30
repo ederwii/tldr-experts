@@ -3,8 +3,8 @@
  * The framework never installs anything: `install` holds a hint string per OS.
  */
 import {
-  asDocument, requireArray, requireKeys, requireNumber, requireString,
-  result, isRecord, type ValidationIssue, type ValidationResult,
+  asDocument, requireArray, requireKeys, requireString,
+  requireVersion, result, isRecord, type ValidationIssue, type ValidationResult,
 } from "./validation.ts";
 
 export interface EnvTool {
@@ -17,17 +17,24 @@ export interface EnvTool {
 }
 
 export interface EnvManifest {
-  readonly schema_version: number;
+  /**
+   * `version: 1`. A file still saying `schema_version` loads and is reported;
+   * see `requireVersion` in `./validation.ts`.
+   */
+  readonly version: number;
+  /** @deprecated the pre-spec spelling of `version`. Accepted for one release. */
+  readonly schema_version?: number;
   readonly tools: readonly EnvTool[];
 }
 
 export function validateEnv(input: unknown): ValidationResult {
   const issues: ValidationIssue[] = [];
+  const deprecations: string[] = [];
   const doc = asDocument(input, issues);
   if (!doc) return result(issues);
 
-  requireKeys(doc, ["schema_version", "tools"], "", issues);
-  requireNumber(doc.schema_version, "schema_version", issues);
+  requireVersion(doc, issues, deprecations);
+  requireKeys(doc, ["tools"], "", issues);
 
   if (requireArray(doc.tools, "tools", issues)) {
     (doc.tools as unknown[]).forEach((tool, i) => {
@@ -47,5 +54,5 @@ export function validateEnv(input: unknown): ValidationResult {
       }
     });
   }
-  return result(issues);
+  return result(issues, deprecations);
 }

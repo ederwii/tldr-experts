@@ -3,10 +3,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseYaml } from "../yaml.ts";
 import { asRunBudget, validateRunBudget, type RunBudget } from "./RunBudget.ts";
+import { noteDeprecations } from "../schemas/deprecationNotice.ts";
 
 export function loadBudget(path: string): RunBudget {
   const doc = parseYaml(readFileSync(path, "utf8"));
   const validation = validateRunBudget(doc);
+  noteDeprecations(path, validation);
   if (!validation.ok) {
     const first = validation.issues[0];
     throw new Error(`invalid budget.yml (${path}): ${first?.path ?? ""} ${first?.message ?? "schema error"}`);

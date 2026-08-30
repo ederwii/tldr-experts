@@ -3,6 +3,7 @@
  * keys and enum membership only (concept §8, "Schema validation").
  */
 import type { Validator } from "./validation.ts";
+import { noteDeprecations } from "./deprecationNotice.ts";
 import { validateWorkspace } from "./workspace.ts";
 import { validateRun } from "./run.ts";
 import { validateStage } from "./stage.ts";
@@ -41,7 +42,26 @@ export function validate(kind: FileKind, input: unknown) {
   return validators[kind](input);
 }
 
+/**
+ * Validate a document that came from a named file, and SAY on stderr whatever it
+ * is still spelling the old way.
+ *
+ * The note carries the path because the validator cannot: `validate()` sees a
+ * parsed object and has no idea which of a workspace's files it came from, and
+ * "schema_version is deprecated" without a filename is a warning nobody can act
+ * on. One line per deprecation, stderr so it never pollutes a `--json` stdout.
+ */
+export function validateFile(kind: FileKind, input: unknown, file: string) {
+  const outcome = validate(kind, input);
+  noteDeprecations(file, outcome);
+  return outcome;
+}
+
 export type { ValidationIssue, ValidationResult, Validator } from "./validation.ts";
+export {
+  LEGACY_VERSION_KEY, LEGACY_VERSION_NOTE, SCHEMA_VERSION, VERSION_KEY, requireVersion,
+} from "./validation.ts";
+export { noteDeprecations, resetDeprecationNotices } from "./deprecationNotice.ts";
 export type { Workspace, DetectedRepo, WorkspaceMode } from "./workspace.ts";
 export type { Run, RunPhase, RunStatus } from "./run.ts";
 export type { Stage, StageGate, GateType, EffortLevel } from "./stage.ts";

@@ -5,7 +5,7 @@
  */
 import {
   asDocument, requireArray, requireKeys, requireNumber, requireString,
-  result, isRecord, type ValidationIssue, type ValidationResult,
+  requireVersion, result, isRecord, type ValidationIssue, type ValidationResult,
 } from "./validation.ts";
 
 export const COMPETENCY_LEVEL_MIN = 0;
@@ -19,17 +19,25 @@ export interface Competency {
 }
 
 export interface CompetenciesFile {
-  readonly schema_version: number;
+  /**
+   * `version: 1`. A file still saying `schema_version` loads and is reported;
+   * see `requireVersion` in `./validation.ts`.
+   */
+  readonly version: number;
+  /** @deprecated the pre-spec spelling of `version`. Accepted for one release. */
+  readonly schema_version?: number;
   readonly expert: string;
   readonly areas: readonly Competency[];
 }
 
 export function validateCompetencies(input: unknown): ValidationResult {
   const issues: ValidationIssue[] = [];
+  const deprecations: string[] = [];
   const doc = asDocument(input, issues);
   if (!doc) return result(issues);
 
-  requireKeys(doc, ["schema_version", "expert", "areas"], "", issues);
+  requireVersion(doc, issues, deprecations);
+  requireKeys(doc, ["expert", "areas"], "", issues);
   requireString(doc.expert, "expert", issues);
 
   if (requireArray(doc.areas, "areas", issues)) {
@@ -53,5 +61,5 @@ export function validateCompetencies(input: unknown): ValidationResult {
       requireArray(area.evidence, `${path}.evidence`, issues);
     });
   }
-  return result(issues);
+  return result(issues, deprecations);
 }

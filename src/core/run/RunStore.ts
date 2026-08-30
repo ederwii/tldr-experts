@@ -12,6 +12,7 @@ import { parseYaml } from "../yaml.ts";
 import { EventLog } from "../events/EventLog.ts";
 import type { TldrxEvent } from "../events/Event.ts";
 import { asRunBudget, validateRunBudget, type RunBudget } from "../budget/RunBudget.ts";
+import { noteDeprecations } from "../schemas/deprecationNotice.ts";
 import { listRunDirs } from "../../hooks/lib/workspace.ts";
 import { withWorkspaceLock, workspaceRootOfRunDir } from "../lock/workspaceLock.ts";
 import { nowRfc3339 } from "../../hooks/lib/actor.ts";
@@ -65,6 +66,7 @@ export class RunStore {
     if (!existsSync(runPath)) throw new RunStoreError(`no run.yml in ${runDir}`);
     const doc = parseYaml(readFileSync(runPath, "utf8"));
     const validation = validateRunFile(doc);
+    noteDeprecations(runPath, validation);
     if (!validation.ok) {
       const first = validation.issues[0];
       throw new RunStoreError(`invalid run.yml (${runPath}): ${first?.path ?? ""} ${first?.message ?? "schema error"}`);
@@ -73,6 +75,7 @@ export class RunStore {
     if (!existsSync(budgetPath)) throw new RunStoreError(`no budget.yml in ${runDir}`);
     const budgetDoc = parseYaml(readFileSync(budgetPath, "utf8"));
     const budgetValidation = validateRunBudget(budgetDoc);
+    noteDeprecations(budgetPath, budgetValidation);
     if (!budgetValidation.ok) {
       const first = budgetValidation.issues[0];
       throw new RunStoreError(`invalid budget.yml (${budgetPath}): ${first?.path ?? ""} ${first?.message ?? "schema error"}`);

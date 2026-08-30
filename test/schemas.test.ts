@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { EFFORT_LEVELS, FILE_KINDS, isEffortLevel, validate, type FileKind } from "../src/core/schemas/index.ts";
+import {
+  EFFORT_LEVELS, FILE_KINDS, LEGACY_VERSION_NOTE, isEffortLevel, validate, type FileKind,
+} from "../src/core/schemas/index.ts";
+import { validateRunFile } from "../src/core/run/RunFile.ts";
+import { validateRunBudget } from "../src/core/budget/RunBudget.ts";
+import { validateFactsFile } from "../src/core/facts/validateFactsFile.ts";
 import { readYamlFile } from "../src/core/yaml.ts";
 import { FRAMEWORK_ROOT, STAGES_DIR, TEMPLATES_DIR, WORKFLOWS_DIR } from "../src/core/paths.ts";
 
@@ -224,5 +229,95 @@ describe("validation is fast enough to run on every write", () => {
     for (let i = 0; i < 100; i++) for (const [kind, doc] of docs) validate(kind, doc);
     const perPass = (performance.now() - start) / 100;
     expect(perPass).toBeLessThan(50);
+  });
+});
+
+/**
+ * The version key, settled 2026-08-29.
+ *
+ * Spec §0 has always said `version: 1`. Seven skeleton validators asked for
+ * `schema_version` and seven templates printed `schema_version: 0`, while
+ * `tldrx init` had been writing `version: 1` the whole time — so the validators
+ * accepted only a spelling nothing on disk used, and rejected the tool's own
+ * output (measured against a real workspace: every workspace.yml, process.yml,
+ * competencies.yml, run.yml and budget.yml said `version: 1`). The spec wins;
+ * `schema_version` is tolerated for one release and reported.
+ */
+describe("version: 1, with schema_version tolerated for one release", () => {
+  /** Kind -> a document that is valid except for the version key. */
+  const BODIES: ReadonlyArray<readonly [FileKind, Record<string, unknown>]> = [
+    ["workspace", { mode: "single", root: ".", repos: [] }],
+    ["run", { run_id: "r", scope: "feature", workflow: "feature", status: "pending", budget_usd: 1, phases: [] }],
+    ["budget", { run: "r", ceiling_usd: 1, spent_usd: 0, per_phase_usd: {} }],
+    ["facts", { facts: [] }],
+    ["competencies", { expert: "e", areas: [] }],
+    ["env", { tools: [] }],
+    ["process", {
+      methodology: "none", ticket_tool: "none", story_granularity: "days",
+      approvers: ["a"], definition_of_done: [],
+    }],
+  ];
+
+  for (const [kind, body] of BODIES) {
+    test(`${kind}: version: 1 is accepted and raises nothing`, () => {
+      const outcome = validate(kind, { version: 1, ...body });
+      expect(issueText(kind, { version: 1, ...body })).toBe("");
+      expect(outcome.deprecations ?? []).toEqual([]);
+    });
+
+    test(`${kind}: schema_version still loads, and says so`, () => {
+      const outcome = validate(kind, { schema_version: 0, ...body });
+      expect(outcome.ok, issueText(kind, { schema_version: 0, ...body })).toBe(true);
+      expect(outcome.deprecations).toEqual([LEGACY_VERSION_NOTE]);
+    });
+
+    test(`${kind}: neither key is a missing-\`version\` error`, () => {
+      expect(issueText(kind, body)).toContain("version: missing required key `version`");
+    });
+
+    test(`${kind}: an unknown version is refused (spec §0)`, () => {
+      expect(issueText(kind, { version: 2, ...body })).toContain("version: unknown schema version 2");
+    });
+  }
+
+  test("the exact note is the one the audit asked for", () => {
+    expect(LEGACY_VERSION_NOTE).toBe("schema_version is deprecated — say version: 1");
+  });
+
+  /**
+   * The three validators a real workspace actually goes through. They never
+   * accepted `schema_version` at all, so a file copied from the old
+   * `templates/run.yml` did not load; that is what the tolerance is for.
+   */
+  test("the live run/budget/facts validators tolerate it too", () => {
+    const run = validateRunFile({
+      schema_version: 0, run: "260830-x", title: "t", scope: "feature", workflow: "feature",
+      repos: [], created_at: "2026-08-30T00:00:00Z", updated_at: "2026-08-30T00:00:00Z",
+      status: "pending", cursor: { phase: "01-what", stage: "what", task: null },
+      budget: { ceiling_usd: 1, spent_usd: 0 }, phases: [],
+    });
+    expect(run.deprecations).toEqual([LEGACY_VERSION_NOTE]);
+
+    const budget = validateRunBudget({
+      schema_version: 0, run: "260830-x", ceiling_usd: 1, per_agent_max_usd: 1,
+      on_exceed: "block", phases: [],
+    });
+    expect(budget.ok, budget.issues.map((i) => `${i.path}: ${i.message}`).join("; ")).toBe(true);
+    expect(budget.deprecations).toEqual([LEGACY_VERSION_NOTE]);
+
+    const facts = validateFactsFile({ schema_version: 0, facts: [] });
+    expect(facts.ok).toBe(true);
+    expect(facts.deprecations).toEqual([LEGACY_VERSION_NOTE]);
+  });
+
+  test("every shipped template and the framework env.yml open with `version: 1`", async () => {
+    for (const [file] of TEMPLATE_KINDS) {
+      const doc = (await readYamlFile(join(TEMPLATES_DIR, file))) as Record<string, unknown>;
+      expect(Object.keys(doc)[0], file).toBe("version");
+      expect(doc.version, file).toBe(1);
+    }
+    const env = (await readYamlFile(join(FRAMEWORK_ROOT, "env.yml"))) as Record<string, unknown>;
+    expect(Object.keys(env)[0]).toBe("version");
+    expect(env.version).toBe(1);
   });
 });

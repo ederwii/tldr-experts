@@ -6,10 +6,15 @@
  * `--mcp` additionally runs `claude mcp list` (slow: live health checks per server).
  * `--json` prints the same findings as data — the results were already structured,
  * so the table was the only reason a script could not read them.
+ *
+ * It also names any workspace file still opening with the deprecated
+ * `schema_version:` key. That is a warning and never changes the exit code: the
+ * exit code is about the TOOLS this machine has.
  */
 import type { Command } from "../Command.ts";
 import { EXIT_FAILED } from "../exitCodes.ts";
 import { runDoctor, type DoctorOutcome } from "../../core/doctor/runDoctor.ts";
+import { findWorkspaceRoot } from "../../hooks/lib/workspace.ts";
 
 export const doctorCommand: Command = {
   name: "doctor",
@@ -21,7 +26,7 @@ export const doctorCommand: Command = {
     const mcp = argv.includes("--mcp");
     const json = argv.includes("--json");
     try {
-      const outcome = await runDoctor({ mcp });
+      const outcome = await runDoctor({ mcp, root: findWorkspaceRoot(process.cwd()) });
       process.stdout.write(json ? `${doctorJson(outcome)}\n` : outcome.output + "\n");
       return outcome.exitCode;
     } catch (error) {
@@ -49,6 +54,7 @@ export function doctorJson(outcome: DoctorOutcome): string {
         purpose: result.purpose,
         installHint: result.status === "ok" ? null : result.installHint,
       })),
+      legacyVersionFiles: outcome.legacyVersionFiles,
       mcp: outcome.mcp === null
         ? null
         : {

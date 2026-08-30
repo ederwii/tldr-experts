@@ -4,7 +4,7 @@
 # ceiling_usd is a refusal, not a warning: a stage whose estimate exceeds what
 # remains does not start. spent_usd is rolled up from events.jsonl — never typed
 # by hand, never estimated by an agent.
-schema_version: 0
+version: 1
 run: "260828-example-slug"
 ceiling_usd: 25
 spent_usd: 0

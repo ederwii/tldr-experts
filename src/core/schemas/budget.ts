@@ -5,11 +5,17 @@
  */
 import {
   asDocument, requireKeys, requireNumber, requireRecord, requireString,
-  result, type ValidationIssue, type ValidationResult,
+  requireVersion, result, type ValidationIssue, type ValidationResult,
 } from "./validation.ts";
 
 export interface BudgetFile {
-  readonly schema_version: number;
+  /**
+   * `version: 1`. A file still saying `schema_version` loads and is reported;
+   * see `requireVersion` in `./validation.ts`.
+   */
+  readonly version: number;
+  /** @deprecated the pre-spec spelling of `version`. Accepted for one release. */
+  readonly schema_version?: number;
   readonly run: string;
   readonly ceiling_usd: number;
   readonly spent_usd: number;
@@ -18,10 +24,12 @@ export interface BudgetFile {
 
 export function validateBudget(input: unknown): ValidationResult {
   const issues: ValidationIssue[] = [];
+  const deprecations: string[] = [];
   const doc = asDocument(input, issues);
   if (!doc) return result(issues);
 
-  requireKeys(doc, ["schema_version", "run", "ceiling_usd", "spent_usd", "per_phase_usd"], "", issues);
+  requireVersion(doc, issues, deprecations);
+  requireKeys(doc, ["run", "ceiling_usd", "spent_usd", "per_phase_usd"], "", issues);
   requireString(doc.run, "run", issues);
   requireNumber(doc.ceiling_usd, "ceiling_usd", issues);
   requireNumber(doc.spent_usd, "spent_usd", issues);
@@ -31,5 +39,5 @@ export function validateBudget(input: unknown): ValidationResult {
       requireNumber(value, `per_phase_usd.${key}`, issues);
     }
   }
-  return result(issues);
+  return result(issues, deprecations);
 }

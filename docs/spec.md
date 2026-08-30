@@ -7,7 +7,13 @@ TypeScript on Bun; host Claude Code. Covers the v0 skeleton and the schema shape
   Appendix A are relied on; claims about hook stdin shape, matcher syntax or settings wiring beyond it are marked.
 - **Validation budget:** every schema is bounded so a Bun hook can read+parse+validate in <50 ms — one file, no
   cross-file resolution, no network, no globbing; ≤256 KB, ≤2000 nodes, nesting ≤6, anchored non-backtracking regexes.
-  `events.jsonl` validates only the appended line. Every schema's first key is `version: 1`; unknown version ⇒ exit 1.
+  `events.jsonl` validates only the appended line. Every DATA schema — the files a workspace or a run owns, listed in
+  §2 — opens with `version: 1`; an unknown version ⇒ exit 1. The stage and workflow libraries (`stages/*/stage.yml`,
+  `workflows/*.yml`) carry no version key: they are the framework's own configuration, versioned with the package.
+  **Deprecated:** `schema_version:` was the pre-spec spelling, and seven templates printed `schema_version: 0` while
+  `tldrx init` was already writing `version: 1`. A file still saying it LOADS for one more release, prints
+  `<file>: schema_version is deprecated — say version: 1` on stderr the first time it is read in a process, and is
+  listed by `tldrx doctor`. Nothing writes it any more.
 
 ## 1. Directory layout
 
@@ -1070,7 +1076,7 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | Command | Reads | Writes | Exit |
 |---|---|---|---|
 | `tldrx init [--stack <a,b>]` | cwd tree, git dirs, package/build files, `env.yml` | `workspace.yml` (incl. `mode: greenfield`), `map/**`, `conventions/**`, `experts/*/` (always a `product`, one `<lang>-stack` per detected **or declared** language), `facts.yml`, `.gitignore`, `CLAUDE.md` pointer | 0,1 |
-| `tldrx doctor` | `env.yml`, `workspace.yml`, `.tldrx/stages/**`, `.claude/settings.json` | `env.yml.result`, `cache/doctor.json` | 0,1 |
+| `tldrx doctor [--mcp] [--json]` | `env.yml`, `workspace.yml`, `.tldrx/stages/**`, `.claude/settings.json`, plus a shallow scan of `.tldrx/**` + `tldrx-work/*/{run,budget}.yml` for the deprecated `schema_version:` key | `env.yml.result`, `cache/doctor.json` | 0,1 |
 | `tldrx install --claude [--project\|--user] [--skill-only] [--no-hooks] [--no-statusline] [--force-statusline] [--uninstall] [--dry-run]` | `plugin/skills/tldrx/SKILL.md`, the target `.claude/settings.json` | `.claude/skills/tldrx/SKILL.md` (marked `<!-- tldrx-managed -->`), `.claude/settings.json` (the §4 hooks as `tldrx hook <name>` + `statusLine`), `settings.json.bak-tldrx-<ts>` | 0,1 |
 | `tldrx status [--json]` | `.tldrx/init-questions.md`, `.tldrx/triage/*/{split.yml,inventory.json}` and the seed documents those name, `tldrx-work/*/run.yml` (incl. `triage.depends_on`), `.tldrx/experts/**`, every `stage.yml` | nothing (stdout) | 0,3 |
 | `tldrx run new [--from <path>\|--seed <path> ...] [--scope <s>] [--budget <usd>] [--gates <a,b\|all\|none>]` | `workflows/<s>.yml`, `workspace.yml`, `facts.yml`, the `--from` source (§6) or the `--seed` documents (§6.1) | `tldrx-work/<run>/{run.yml,budget.yml,events.jsonl,01-what/*}` incl. the resolved `gates_policy`; `--seed` also writes `01-what/seed-index.md` and declares the documents as What inputs. **`--seed` is repeatable** (§6.2): every occurrence is collected, merged, deduped and re-sorted, and the §6.1 caps apply to the merged set; one occurrence behaves exactly as before. A seed over the threshold or over 10 files adds one **stderr** note naming `tldrx seed triage`. `--gates` LISTS THE HUMAN GATES (`all` = every stage human, `none` = every stage auto); an unknown stage is a usage error and no run is created | 0,1 |
