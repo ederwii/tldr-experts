@@ -94,6 +94,30 @@ describe("validators accept every shipped stage and workflow", () => {
     }
   });
 
+  /**
+   * `gate.requires:` was five stage files' worth of acceptance criteria that
+   * nothing read (2026-08-29): `normaliseGate` takes `.type`, `validateStage`
+   * checks `gate.type`, and the prompt ships `stage.md`, not `stage.yml`. It is
+   * deleted. Removed from the TYPE, not from the validator — a user's own stage
+   * library that still declares it keeps working, silently ignored, which is what
+   * the next test pins.
+   */
+  test("no shipped stage.yml still declares the dead `gate.requires`", async () => {
+    for (const file of stageFiles) {
+      const doc = (await readYamlFile(join(STAGES_DIR, file))) as { gate: Record<string, unknown> };
+      expect(Object.keys(doc.gate), file).toEqual(["type"]);
+    }
+  });
+
+  test("a stage.yml that still carries `gate.requires` validates anyway", () => {
+    const legacy = {
+      name: "x", title: "X", phase: 1, inputs: [], outputs: [], experts: [],
+      model: "sonnet", budget_usd: 1,
+      gate: { type: "human-approval", requires: ["something a human used to read"] },
+    };
+    expect(issueText("stage", legacy)).toBe("");
+  });
+
   test("every stage ships a stage.md template beside its stage.yml", async () => {
     for (const file of stageFiles) {
       const md = join(STAGES_DIR, file.replace("stage.yml", "stage.md"));
