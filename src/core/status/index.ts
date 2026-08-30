@@ -9,4 +9,4 @@ export {
   type ProposedSplit, type ProposedDoc,
 } from "./seedSplitItems.ts";
 export { runItems, slugOfRun, NEXT_MARK } from "./runItems.ts";
-export { expertItems, MAX_EXPERT_ITEMS } from "./expertItems.ts";
+export { expertAdvice, MAX_EXPERT_NAMES } from "./expertItems.ts";

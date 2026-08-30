@@ -5,6 +5,10 @@
  *   workspaceStatusJson    the `/tldrx` skill, which walks `items` in order
  *   sessionStartLines      the SessionStart hook, which gets three lines and no more
  *
+ * All three read `items` for the BLOCKERS. `advice` is rendered under them by the
+ * terminal view and carried beside them in the JSON; the SessionStart hook drops
+ * it entirely, because three lines of ambient context is no place for a nudge.
+ *
  * One shape per reader, all three built from the same `PendingItem[]`, so the
  * skill can never be guided through a list the terminal did not show.
  */
@@ -22,31 +26,51 @@ export function renderWorkspaceStatus(status: WorkspaceStatus): string {
   const lines = [`tldrx status · ${status.root}`];
   if (status.pending === 0) {
     lines.push("", status.items[0]?.summary ?? "nothing pending");
+    lines.push(...renderAdvice(status));
     return lines.join("\n");
   }
   lines.push(`${String(status.pending)} thing(s) waiting on you, in the order they block each other`);
   status.items.forEach((item, index) => {
     lines.push("", ...renderItem(item, index));
   });
+  lines.push(...renderAdvice(status));
   lines.push("", "Walk them one at a time: `/tldrx` in Claude Code, or run the command on the item you want.");
   return lines.join("\n");
 }
 
+/**
+ * The advice block: unnumbered, and headed `Also:` rather than `[n]`, because a
+ * number in the same sequence as the blockers is a claim that it is one.
+ */
+function renderAdvice(status: WorkspaceStatus): readonly string[] {
+  const lines: string[] = [];
+  for (const item of status.advice) {
+    lines.push("", item.command === "" ? `Also: ${item.summary}` : `Also: ${item.summary} → ${item.command}`);
+    for (const detail of item.details) lines.push(`    ${detail}`);
+  }
+  return lines;
+}
+
+/**
+ * `items` keeps exactly the shape it has always had, so a consumer that walks it
+ * is unaffected; `advice` is added beside it. A reader that ignores the new key
+ * sees blockers only, which is the correct list to be walked through.
+ */
 export function workspaceStatusJson(status: WorkspaceStatus): string {
   return JSON.stringify(
     {
       root: status.root,
       pending: status.pending,
-      items: status.items.map((item) => ({
-        kind: item.kind,
-        summary: item.summary,
-        command: item.command,
-        details: item.details,
-      })),
+      items: status.items.map(jsonItem),
+      advice: status.advice.map(jsonItem),
     },
     null,
     2,
   );
+}
+
+function jsonItem(item: PendingItem): Record<string, unknown> {
+  return { kind: item.kind, summary: item.summary, command: item.command, details: item.details };
 }
 
 /**
