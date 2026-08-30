@@ -60,6 +60,7 @@ function lint(argv: readonly string[]): number {
     const lines: string[] = [`questions lint · run ${store.runId} · ${files.length} file(s)`, ""];
     let unreadable = 0;
     let fixed = 0;
+    const needSource: string[] = [];
 
     for (const path of files) {
       const rel = path.slice(store.runDir.length + 1);
@@ -86,6 +87,7 @@ function lint(argv: readonly string[]): number {
       });
       writeFileSync(path, result.text, "utf8");
       fixed += result.converted.length;
+      needSource.push(...result.needSource);
       lines.push(`  FIX  ${rel} — converted ${result.converted.join(", ")} to the §2.7 grammar`);
     }
 
@@ -97,6 +99,16 @@ function lint(argv: readonly string[]): number {
         `Converted ${fixed} block(s). No wording was changed — the heading separator, the metadata `
         + "comment and the `[Answer]:` slot were added. Re-run without --fix to confirm.",
       );
+      if (needSource.length > 0) {
+        // Deliberately NOT invented. This whole change exists because citations
+        // that resolve to nothing were being accepted; a --fix that writes one to
+        // satisfy §2.7 would be manufacturing the exact thing being removed.
+        lines.push(
+          `${needSource.length} block(s) still need a source on their \`Why asked:\` line `
+          + `(${needSource.join(", ")}) — the prose form had no such rule, and this command does not `
+          + "invent citations. Add the one you actually had in mind.",
+        );
+      }
     } else {
       lines.push(
         `${unreadable} question(s) are invisible to the parser: an auto gate would read this file as `

@@ -591,7 +591,10 @@ was sound — no shell in the adapters, no `push` wrapper, the dashboard on loop
   every block the parser cannot see and exits `2`; with it, it converts the prose
   form and **changes not one word** — title, `Why asked:`, every option and any
   answer already typed come across verbatim, and an unlettered `- Other:` keeps its
-  text as the next letter.
+  text as the next letter. It does not invent the `[src: …]` token §2.7 wants on
+  `Why asked:`: a tool that manufactures a citation to satisfy a validator is
+  producing the exact thing the entry above exists to stop. It lists the blocks
+  that still need one instead.
 - **An approval can be revoked: `tldrx reject --stage <phase>/<stage> --note "…"`.**
   Before this an approval was final — `approve()` moves the cursor in the same
   transaction that signs the gate, and `reject` only ever looked at the cursor, so

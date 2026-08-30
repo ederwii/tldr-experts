@@ -202,6 +202,39 @@ describe("M2 · --fix converts without changing a word", () => {
     expect(fixed).toContain("You may answer any subset.");
   });
 
+  test("it does NOT invent a `[src: …]` for a converted `Why asked:` line", () => {
+    // §2.7 requires the token, the prose form had no such rule, and this whole
+    // wave exists because citations resolving to nothing were being accepted.
+    // Writing one here would manufacture the exact thing being removed.
+    const result = fixQuestions(PROSE_QUESTIONS, {
+      area: "domain", askedBy: "alan", askedAt: "2026-08-29T09:00:00Z",
+    });
+    expect(result.text).not.toContain("[src:");
+    expect(result.needSource).toEqual(["Q1", "Q2"]);
+  });
+
+  test("and `questions lint --fix` says how many still need one", async () => {
+    const ws = workspace([ASKER]);
+    writeFileSync(join(ws.runDir, "01-what", "questions.md"), PROSE_QUESTIONS, "utf8");
+    const printed = capture();
+    await questionsCommand.run(["lint", "--root", ws.root, "--fix"]);
+    const out = printed();
+    expect(out).toContain("2 block(s) still need a source");
+    expect(out).toContain("does not invent citations");
+  });
+
+  test("a `Why asked:` that already carried a token keeps it, and needs nothing", () => {
+    const withToken = PROSE_QUESTIONS.replace(
+      "*Why it is being asked:* no ranking store exists in the map",
+      "*Why it is being asked:* no ranking store exists [src: absent:.tldrx/map/api/domains.md]",
+    );
+    const result = fixQuestions(withToken, {
+      area: "domain", askedBy: "alan", askedAt: "2026-08-29T09:00:00Z",
+    });
+    expect(result.text).toContain("Why asked: no ranking store exists [src: absent:.tldrx/map/api/domains.md]");
+    expect(result.needSource).toEqual(["Q2"]);
+  });
+
   test("a file already in the grammar is returned untouched", () => {
     const result = fixQuestions(GRAMMAR_QUESTIONS, {
       area: "domain", askedBy: "alan", askedAt: "2026-08-29T09:00:00Z",

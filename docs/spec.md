@@ -583,7 +583,9 @@ recorded "0 open questions" as satisfied and signed itself over four unanswered 
 - **`tldrx questions lint [--run <id>] [--fix]`** reports every heading matching `#{2,4}\s*Q\d+` that the parser cannot
   read and exits `2`; `--fix` converts the prose form to the grammar **without changing a word** — title, `Why asked:`,
   every option and any answer already typed come across verbatim, and an unlettered `- Other:` keeps its text as the
-  next letter.
+  next letter. It does **not** invent the `[src: …]` token §2.7 wants on `Why asked:` — the prose form had no such
+  rule, and a tool that manufactures a citation to satisfy a validator is producing the exact thing §2.8 exists to
+  stop. The converted blocks that still need one are listed by id.
 - A stage whose `stage.yml outputs:` names a `questions.md` cannot close an **auto** gate over one that is unreadable or
   holds zero parseable blocks (§5, condition 2), and `tldrx next --commit` refuses such a file with exit `5`.
 

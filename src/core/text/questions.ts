@@ -251,9 +251,14 @@ export interface FixDefaults {
  * already typed come across verbatim. What is added is the shape the parser
  * needs: the `·` heading, the metadata comment, and the `[Answer]:` slot.
  *
- * A block with no `Why asked:` gets one that names the conversion, because §2.7
- * requires the line to end with a `[src: …]` token and inventing a citation would
- * be worse than admitting where the line came from.
+ * §2.7 also requires `Why asked:` to end with a `[src: …]` token, and the prose
+ * form had no such rule — so a converted block usually has none. It is left
+ * WITHOUT one on purpose: this whole wave exists because citations that resolve
+ * to nothing were being accepted, and a tool that closes the gap by writing
+ * `[src: absent:tldrx questions lint --fix]` is producing exactly that. The
+ * missing citation is a real defect, `validateQuestions` names it, and
+ * `questions lint` says how many blocks need one — a person adds the source they
+ * actually had in mind.
  */
 export function renderFixedBlock(block: LooseBlock, defaults: FixDefaults): string {
   const status = block.answer === "" ? "open" : "answered";
@@ -262,9 +267,8 @@ export function renderFixedBlock(block: LooseBlock, defaults: FixDefaults): stri
     `<!-- id: ${block.id} | status: ${status} | area: ${defaults.area} | ` +
       `asked_by: ${defaults.askedBy} | asked_at: ${defaults.askedAt} -->`,
     block.why === ""
-      ? "Why asked: converted from the prose question form; the original carried no reason " +
-        "[src: absent:tldrx questions lint --fix]"
-      : whyLine(block.why),
+      ? "Why asked: (the prose form carried no reason — add one, ending with a [src: …] token)"
+      : `Why asked: ${block.why}`,
     "",
   ];
   const options = block.options.length >= 2
@@ -283,13 +287,6 @@ const FALLBACK_OPTIONS: readonly QuestionOption[] = [
   { letter: "A", text: "(the prose form listed no options — write the first here)" },
   { letter: "B", text: "other — write it below" },
 ];
-
-/** `Why asked:` must end with a `[src: …]` token; one already there is kept. */
-function whyLine(why: string): string {
-  const text = `Why asked: ${why}`;
-  if (parseSrcToken(text) !== null) return text;
-  return `${text} [src: absent:tldrx questions lint --fix]`;
-}
 
 /**
  * Spec §2.7: a block is answered iff its metadata says `status: open` **and** the
@@ -437,6 +434,11 @@ export interface FixResult {
   readonly text: string;
   /** Ids converted from the prose form, in file order. */
   readonly converted: readonly string[];
+  /**
+   * Converted ids whose `Why asked:` line still needs a `[src: …]` token — the
+   * prose form had no such rule, and this tool does not invent citations.
+   */
+  readonly needSource: readonly string[];
 }
 
 /**
@@ -446,7 +448,7 @@ export interface FixResult {
  */
 export function fixQuestions(text: string, defaults: FixDefaults): FixResult {
   const loose = parseLooseQuestions(text);
-  if (loose.length === 0) return { text, converted: [] };
+  if (loose.length === 0) return { text, converted: [], needSource: [] };
   const trailingNewline = text.endsWith("\n");
   const lines = (trailingNewline ? text.slice(0, -1) : text).split("\n");
   const spans = loose.map((block) => ({
@@ -464,7 +466,11 @@ export function fixQuestions(text: string, defaults: FixDefaults): FixResult {
   }
   out.push(...lines.slice(cursor));
   const body = out.join("\n");
-  return { text: trailingNewline ? `${body}\n` : body, converted: loose.map((b) => b.id) };
+  return {
+    text: trailingNewline ? `${body}\n` : body,
+    converted: loose.map((b) => b.id),
+    needSource: loose.filter((b) => parseSrcToken(`Why asked: ${b.why}`) === null).map((b) => b.id),
+  };
 }
 
 export interface QuestionIssue {
