@@ -11,7 +11,8 @@
  * outputs from disk" step has something real to find.
  *
  * Every knob is an environment variable, so one script covers success, failure,
- * a missing section and a wrong cost without any test needing its own binary.
+ * a missing section, a wrong cost and a turn slow enough to interrupt, without
+ * any test needing its own binary.
  */
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -22,8 +23,21 @@ const argv = process.argv.slice(2);
 const argvLog = process.env.FAKE_CLAUDE_ARGV_LOG;
 if (argvLog !== undefined && argvLog !== "") appendFileSync(argvLog, `${JSON.stringify(argv)}\n`);
 
+// Announce ourselves BEFORE doing anything slow: the signal tests need a pid to
+// check is dead afterwards, and they must not race the sleep below.
+const pidFile = process.env.FAKE_CLAUDE_PID_FILE;
+if (pidFile !== undefined && pidFile !== "") {
+  mkdirSync(dirname(pidFile), { recursive: true });
+  writeFileSync(pidFile, String(process.pid), "utf8");
+}
+
 let prompt = "";
 for await (const chunk of process.stdin) prompt += String(chunk);
+
+// A deliberately slow turn, for the tests that interrupt one. Synchronous so the
+// process is genuinely busy rather than parked on an idle event loop.
+const sleepMs = Number(process.env.FAKE_CLAUDE_SLEEP_MS ?? "0");
+if (sleepMs > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, sleepMs);
 const promptOut = process.env.FAKE_CLAUDE_PROMPT_OUT;
 if (promptOut !== undefined && promptOut !== "") writeFileSync(promptOut, prompt, "utf8");
 

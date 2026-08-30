@@ -9,6 +9,7 @@
  */
 import type { Command } from "./Command.ts";
 import { EXIT_NOT_IMPLEMENTED, EXIT_OK } from "./exitCodes.ts";
+import { installSignalHandlers } from "./signals.ts";
 
 import { initCommand } from "./commands/init.ts";
 import { installCommand } from "./commands/install.ts";
@@ -76,6 +77,10 @@ export function lookup(name: string): Command | undefined {
 
 /** Dispatch argv (without node/bun and script path). Returns the exit code. */
 export async function dispatch(argv: readonly string[]): Promise<number> {
+  // Ctrl-C has to kill the sub-agent tree, record the attempt and drop the lock
+  // before it exits — see `signals.ts`. One line, on purpose.
+  installSignalHandlers();
+
   const [name, ...rest] = argv;
 
   if (name === undefined || name === "") return helpCommand.run([]);

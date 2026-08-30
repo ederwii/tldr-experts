@@ -6,6 +6,7 @@
  * `typeof Bun !== "undefined"`, so importing it under Node is inert — the `Bun`
  * references live inside function bodies, never at module scope.
  */
+import { registerChild, unregisterChild } from "./children.ts";
 import { killProcessTree } from "./killProcessTree.ts";
 import { LineSplitter } from "./lineSplitter.ts";
 import { OUTPUT_GRACE_MS } from "./outputGrace.ts";
@@ -31,9 +32,13 @@ export const bunRuntime: Runtime = {
         stdout: "pipe",
         stderr: "pipe",
         stdin: opts.stdin === undefined ? "ignore" : new TextEncoder().encode(opts.stdin),
-        // Own process group, so the timeout below can kill the whole tree.
+        // Own process group, so the timeout below — and the CLI's signal handler
+        // — can kill the whole tree. The cost of detaching is that the terminal's
+        // Ctrl-C no longer reaches this child on its own, which is precisely why
+        // it is registered below: `src/cli/signals.ts` kills it explicitly.
         detached: opts.timeoutMs !== undefined,
       });
+      registerChild(proc.pid);
       // Drain before awaiting exit: a child that fills the pipe buffer blocks on
       // write, and would never exit if nothing were reading.
       const collected: Promise<[string, string]> = Promise.all([
@@ -53,6 +58,7 @@ export const bunRuntime: Runtime = {
               killProcessTree(proc.pid, () => proc.kill(9));
             }, opts.timeoutMs);
       const exitCode = await proc.exited;
+      unregisterChild(proc.pid);
       if (timer !== null) clearTimeout(timer);
       // The process is gone; anything still holding its pipes is not ours to
       // wait for. Settle on what was read rather than hang. See killProcessTree.

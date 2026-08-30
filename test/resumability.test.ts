@@ -8,14 +8,14 @@
  * the fake fixture, and the signal tests send a real signal to a real `tldrx`
  * child process.
  */
-import { afterEach, describe, expect, test } from "bun:test";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { FactsStore } from "../src/core/facts/FactsStore.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { createRun } from "../src/core/run/newRun.ts";
 import { makeRunWorkspace } from "./fixtures/tempRunWorkspace.ts";
-import { noSpawnEnv } from "./fixtures/noSpawnPath.ts";
+import { noSpawnEnv, NO_CLAUDE_PATH } from "./fixtures/noSpawnPath.ts";
 import { cannedIntent, makeFacilitatorWorkspace, type FacilitatorWorkspace } from "./fixtures/facilitator/workspace.ts";
 import { isMovable, waitingFor } from "../src/core/run/waiting.ts";
 import { buildStatus, renderStatus } from "../src/core/run/runStatus.ts";
@@ -32,8 +32,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventLog, skippedNote } from "../src/core/events/EventLog.ts";
 import { EVENT_TYPES, validateEvent } from "../src/core/events/Event.ts";
+import { isAlive } from "../src/core/facilitator/Lock.ts";
 import { cancelRun, unlockRun } from "../src/core/run/rescue.ts";
 import type { TldrxEvent } from "../src/core/events/Event.ts";
+
+/**
+ * The real `claude` is on this machine's PATH. Every in-process `runNext` in this
+ * file is asserted to spawn nothing — but "asserted" is not "prevented", and a
+ * regression in one of those assertions would spend real money against a real
+ * model. So for the whole file, PATH's `claude` is a shim that exits 1. Child
+ * processes that need the FAKE claude set their own PATH explicitly.
+ */
+const REAL_PATH = process.env.PATH ?? "";
+beforeAll(() => { process.env.PATH = NO_CLAUDE_PATH; });
+afterAll(() => { process.env.PATH = REAL_PATH; });
 
 let temps: string[] = [];
 
@@ -682,4 +694,116 @@ describe("the CLI wiring, through the real binary", () => {
     expect(help.stdout).toContain("tldrx run unlock");
     expect(help.stdout).toContain("tldrx run cancel");
   }, 20_000);
+});
+
+// --- Q1: Ctrl-C kills the sub-agent, records the attempt, and drops the lock --
+
+describe("SIGINT during a headless `tldrx next`", () => {
+  const BIN = join(FRAMEWORK_ROOT, "bin", "tldrx.ts");
+
+  /**
+   * Start a real `tldrx next` against a real run, with a fake `claude` slow
+   * enough to still be running when the signal lands. Nothing here mocks the
+   * signal: a real SIGINT goes to a real child process.
+   */
+  async function interruptedNext(signal: "SIGINT" | "SIGTERM"): Promise<{
+    ws: FacilitatorWorkspace; code: number; stderr: string; agentPid: number;
+  }> {
+    const ws = oneStage();
+    const pidFile = join(ws.root, "claude.pid");
+    // `process.execPath` rather than "bun": PATH below holds ONLY the fake bin
+    // dir, so a name lookup would find neither bun nor the real claude.
+    const proc = Bun.spawn([process.execPath, BIN, "next", "--root", ws.root, "--ui", "off"], {
+      cwd: ws.root,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        ...process.env,
+        PATH: ws.binDir,
+        FAKE_CLAUDE_RUNDIR: ws.runDir,
+        FAKE_CLAUDE_OUTPUTS: JSON.stringify({ "01-what/intent.md": cannedIntent() }),
+        FAKE_CLAUDE_COST: "0.42",
+        FAKE_CLAUDE_PID_FILE: pidFile,
+        FAKE_CLAUDE_SLEEP_MS: "30000",
+      },
+    });
+
+    // Wait until the sub-agent is genuinely running before interrupting.
+    const deadline = Date.now() + 20_000;
+    while (!existsSync(pidFile) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    expect(existsSync(pidFile), "the fake claude never started").toBe(true);
+    const agentPid = Number(readFileSync(pidFile, "utf8").trim());
+    expect(isAlive(agentPid)).toBe(true);
+    // The facilitator writes `running` + the lock before it spawns, so both are
+    // already on disk by now.
+    expect(existsSync(join(ws.runDir, ".lock"))).toBe(true);
+
+    proc.kill(signal);
+    const stderr = await new Response(proc.stderr).text();
+    const code = await proc.exited;
+    return { ws, code, stderr, agentPid };
+  }
+
+  test("exits 130, kills the agent's process tree, records a partial result and unlocks", async () => {
+    const { ws, code, stderr, agentPid } = await interruptedNext("SIGINT");
+
+    // 4. the exit code
+    expect(code).toBe(130);
+    expect(stderr).toContain("SIGINT");
+    expect(stderr).toContain("killed 1 sub-agent process tree(s)");
+
+    // 1. the sub-agent is gone. Before this wave it survived with ppid 1, still
+    //    working and still billing.
+    let alive = isAlive(agentPid);
+    for (let i = 0; i < 40 && alive; i += 1) {
+      await new Promise((r) => setTimeout(r, 25));
+      alive = isAlive(agentPid);
+    }
+    expect(alive).toBe(false);
+
+    // 2. the attempt is on the record, with the cost marked unknowable.
+    const results = EventLog.forRun(ws.runDir).read().filter((e) => e.type === "agent.result");
+    expect(results).toHaveLength(1);
+    expect(results[0]!.payload).toMatchObject({ cost_usd: null, stopped_by: "signal", signal: "SIGINT" });
+    expect(results[0]!.payload.task).toBe("t1");
+    expect(results[0]!.cost_usd).toBe(0);
+
+    // 3. the lock is released and the stage is back where `next` can retry it.
+    expect(existsSync(join(ws.runDir, ".lock"))).toBe(false);
+    const store = RunStore.open(ws.runDir);
+    expect(store.run.phases[0]!.stages[0]!.status).toBe("ready");
+    const task = store.run.phases[0]!.stages[0]!.tasks.at(-1)!;
+    expect(task.status).toBe("failed");
+    expect(task.error).toContain("stopped by SIGINT");
+    expect(task.error).toContain("not knowable");
+  }, 60_000);
+
+  test("SIGTERM is handled the same way", async () => {
+    const { ws, code, agentPid } = await interruptedNext("SIGTERM");
+    expect(code).toBe(130);
+    let alive = isAlive(agentPid);
+    for (let i = 0; i < 40 && alive; i += 1) {
+      await new Promise((r) => setTimeout(r, 25));
+      alive = isAlive(agentPid);
+    }
+    expect(alive).toBe(false);
+    expect(existsSync(join(ws.runDir, ".lock"))).toBe(false);
+    expect(RunStore.open(ws.runDir).run.phases[0]!.stages[0]!.status).toBe("ready");
+  }, 60_000);
+
+  test("and the run is resumable: the stage runs again rather than being refused", async () => {
+    const { ws } = await interruptedNext("SIGINT");
+    // `--prepare` re-runs the facilitator's whole front half — lock, cursor,
+    // budget, inputs, prompt — and spawns NOTHING, so this proves the run is
+    // pickupable without going near a model.
+    const again = await runNext({
+      root: ws.root, dryRun: false, mode: "prepare", yolo: false,
+      actor: "alan", at: "2026-08-29T09:10:00Z",
+    });
+    expect(again.code).toBe(0);
+    expect(again.lines.join("\n")).toContain("prepared 01-what/alpha");
+    expect(again.lines.join("\n")).not.toContain("another next is running");
+  }, 60_000);
 });

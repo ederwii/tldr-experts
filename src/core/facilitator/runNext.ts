@@ -30,6 +30,7 @@ import { factsPath, loadWorkspace } from "../../hooks/lib/workspace.ts";
 import type { TldrxEvent } from "../events/Event.ts";
 import { setProgressCeiling, setProgressTitle } from "../ui/bus.ts";
 import { acquireLock, releaseLock } from "./Lock.ts";
+import { onInterrupt, stopInFlightRun } from "./interrupt.ts";
 import { loadStageSpec, type StageSpec } from "./stageSpec.ts";
 import { countSkipInputs, evaluateSkipIf, openQuestionIds, SkipIfError } from "./skipIf.ts";
 import { agentDir, expandAll, missing, present, resolveDeclared, type PathContext } from "./paths.ts";
@@ -121,6 +122,11 @@ export async function runNext(options: NextOptions): Promise<NextOutcome> {
     ]);
   }
 
+  // From here until the `finally`, this process owns the run — so from here until
+  // the `finally` it is also responsible for what a Ctrl-C leaves behind. The
+  // hook kills nothing itself: `src/cli/signals.ts` has already killed the child
+  // tree by the time it runs, and this closes the books on what was killed.
+  const forget = onInterrupt((context) => stopInFlightRun(store.runDir, context));
   const notes: string[] = [];
   try {
     if (lock.stale) notes.push(...demoteStaleRunning(store, lock.holder?.pid ?? 0));
@@ -128,6 +134,7 @@ export async function runNext(options: NextOptions): Promise<NextOutcome> {
     if (orphaned !== null) return orphaned;
     return await advance(store, options, notes);
   } finally {
+    forget();
     releaseLock(store.runDir);
   }
 }

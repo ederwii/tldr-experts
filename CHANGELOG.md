@@ -662,6 +662,26 @@ places nothing read as one list.
   FAILED run be closed without overwriting the failure on its stages. Nothing is
   deleted; `tldrx replay` still reads the whole thing.
 
+### Ctrl-C now stops the sub-agent, not just tldrx
+
+- **SIGINT/SIGTERM kill the agent's whole process tree, record the attempt, and
+  unlock.** Measured 2026-08-29: there was no signal handler on the run path at
+  all. A sub-agent is spawned detached (a timeout needs a process group to kill),
+  so the terminal's Ctrl-C never reached it — it kept running with `ppid 1`, kept
+  billing against its `--max-budget-usd`, and because a stage's cost is only
+  written after the spawn returns, not a cent of it appeared in `events.jsonl`.
+  The run was left `running` behind a `.lock` whose pid no longer existed.
+  `src/cli/signals.ts` (one line from `index.ts`) now kills the tree first, then
+  records a partial `agent.result` carrying `cost_usd: null` and
+  `stopped_by: "signal"` — unknown, said out loud, rather than a `$0.00` that
+  would read as free — demotes `running` → `ready`, releases the lock, restores
+  the terminal cursor and exits 130. A second signal exits at once.
+- **A `--prepare` bundle is left alone.** If nothing was spawned and an
+  uncommitted bundle is on disk, the stage stays `running` and the message points
+  at `tldrx next --commit`: that work is waiting for a human, not a process.
+- **`dashboard` and `watch` keep their own Ctrl-C.** With no sub-agent to kill and
+  no run to close, the handler stands aside and their exit-0 shutdown still wins.
+
 ## 0.2.0 — 2026-08-29
 
 ### The Build phase executes

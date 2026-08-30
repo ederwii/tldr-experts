@@ -1463,6 +1463,17 @@ state, because a re-spawn discards a sub-agent turn the run has already been bil
 explicit way to bin the bundle and run it again. A phase with an executor is exempt: it stays `running` across
 `--prepare`/`--commit` cycles by design (one story per cycle) and owns its own bundles.
 
+**Interrupt path (SIGINT / SIGTERM).** A sub-agent is spawned DETACHED — it has to be, or a timeout has no process
+group to kill — and a detached child never receives the terminal's Ctrl-C. So the CLI installs one handler
+(`src/cli/signals.ts`) and it does four things, in this order: **(1)** kill every spawned child's whole process tree,
+stopping the spend before anything else can fail; **(2)** record a PARTIAL `agent.result` on the attempt that was
+killed — the envelope's `cost_usd` is `0` because the schema requires a number, and the payload carries
+`cost_usd: null` with `stopped_by: "signal"`, because a turn cut in half has no knowable cost and writing `0` would
+be a claim; **(3)** demote the `running` stage back to `ready` and release the run's `.lock`; **(4)** exit `130`.
+A second signal during that exits immediately. A stage holding an uncommitted `--prepare` bundle is left `running` on
+purpose — that work is waiting for a human, not for a process. And a command that owns its own shutdown (`dashboard`,
+`watch`) keeps it: with no sub-agent to kill and no run to close, the handler stands aside.
+
 **Getting unstuck.** Two commands, neither of which spends anything:
 
 - **`tldrx run unlock [<run>] [--force]`** removes a `.lock` whose pid is dead, demotes any `running` stage back to

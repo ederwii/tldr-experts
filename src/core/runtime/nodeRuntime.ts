@@ -12,6 +12,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { dirname } from "node:path";
 import { parse as parseYamlText, stringify as stringifyYamlValue } from "yaml";
+import { registerChild, unregisterChild } from "./children.ts";
 import { killProcessTree } from "./killProcessTree.ts";
 import { LineSplitter } from "./lineSplitter.ts";
 import { OUTPUT_GRACE_MS } from "./outputGrace.ts";
@@ -48,9 +49,13 @@ export const nodeRuntime: Runtime = {
         cwd: opts.cwd,
         env: opts.env as NodeJS.ProcessEnv | undefined,
         stdio: [opts.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-        // Own process group, so the timeout below can kill the whole tree.
+        // Own process group, so the timeout below — and the CLI's signal handler
+        // — can kill the whole tree. The cost of detaching is that the terminal's
+        // Ctrl-C no longer reaches this child on its own, which is precisely why
+        // it is registered below: `src/cli/signals.ts` kills it explicitly.
         detached: opts.timeoutMs !== undefined,
       });
+      registerChild(child.pid);
 
       const timer =
         opts.timeoutMs === undefined
@@ -65,6 +70,7 @@ export const nodeRuntime: Runtime = {
       const finish = (exitCode: number): void => {
         if (settled) return;
         settled = true;
+        unregisterChild(child.pid);
         // Deliver the tail BEFORE resolving: a producer whose last line has no
         // newline must still be seen by the progress view, and after `resolve`
         // nobody is listening.
