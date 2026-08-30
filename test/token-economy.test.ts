@@ -694,10 +694,14 @@ describe("attempt reuse (N6)", () => {
 // --- tldrx cost and run estimate (N7) --------------------------------------
 
 import {
-  buildProgramCost, buildRunCost, median, outputTokensForStage, renderRunCost, toAttempt,
+  attemptTokensForStage, buildProgramCost, buildRunCost, median, outputTokensForStage,
+  renderRunCost, toAttempt,
 } from "../src/core/budget/costView.ts";
 import { estimateNextStage, renderEstimate } from "../src/core/budget/estimateView.ts";
-import { priceFor, contextTokensFor, estimateTokensFromBytes } from "../src/core/budget/modelPrices.ts";
+import {
+  priceFor, contextTokensFor, estimateTokensFromBytes,
+  CACHE_READ_MULTIPLIER, CACHE_WRITE_MULTIPLIER,
+} from "../src/core/budget/modelPrices.ts";
 import type { TldrxEvent } from "../src/core/events/Event.ts";
 
 function agentResult(
@@ -752,6 +756,17 @@ describe("tldrx cost (N7)", () => {
     expect(renderRunCost(cost!)).toContain("2 attempts");
   });
 
+  test("every attempt prints its own cache write / cache read columns", () => {
+    const ws = readingWorkspace(50);
+    EventLog.forRun(ws.runDir).append(agentResult("alpha", { run: ws.runId }));
+    const text = renderRunCost(buildRunCost(ws.runDir)!);
+    // A stage that ran ONCE still shows where its money went — cache read is
+    // the column the estimate was blind to, so `cost` must not hide it either.
+    expect(text).toContain("50 cache write");
+    expect(text).toContain("900 cache read");
+    expect(text.split("\n").filter((l) => l.includes("cache read")).length).toBeGreaterThan(1);
+  });
+
   test("the program view adds every run in the workspace", () => {
     const ws = readingWorkspace(50);
     EventLog.forRun(ws.runDir).append(agentResult("alpha", { run: ws.runId }));
@@ -784,8 +799,16 @@ describe("tldrx run estimate (N7)", () => {
     const ws = seededWorkspace();
     const estimate = estimateNextStage(ws.root, ws.runId);
     expect(estimate.medianOutputTokens).toBeNull();
+    expect(estimate.medianCacheWriteTokens).toBeNull();
+    expect(estimate.medianCacheReadTokens).toBeNull();
+    expect(estimate.historyBasis).toBe("none");
     expect(estimate.usd).toBeNull();
-    expect(renderEstimate(estimate)).toContain("no past attempt at a stage with this id");
+    const text = renderEstimate(estimate);
+    expect(text).toContain("no past attempt at a stage with this id");
+    // The input half stays measured, and the cache half says it has no data
+    // rather than quietly pricing a zero.
+    expect(text).toContain("cache traffic not modelled — first attempt of this kind");
+    expect(text).not.toContain("cache write ~");
   });
 
   test("with history it prices the median, and calls itself an estimate", () => {
@@ -809,6 +832,115 @@ describe("tldrx run estimate (N7)", () => {
     const text = renderEstimate(estimate);
     expect(text).toContain("ESTIMATE: $");
     expect(text).toContain("[assumption] dated 2026-08-29");
+  });
+
+  /**
+   * The 2026-08-30 bug, as a fixture. A real What stage was estimated at $0.33
+   * and cost $1.70 — 5x — because the formula priced input + output only. These
+   * are that attempt's four counters, and the point of the test is that the
+   * money is in the two columns the old formula could not see.
+   */
+  const REAL_LEDGER = {
+    input_tokens: 56, output_tokens: 29_000,
+    cache_creation_input_tokens: 166_300, cache_read_input_tokens: 3_747_100,
+  };
+
+  function withHistory(stage = "alpha", usage: Record<string, number> = REAL_LEDGER) {
+    const ws = seededWorkspace();
+    EventLog.forRun(ws.runDir).append(agentResult(stage, {
+      run: ws.runId,
+      payload: { phase: "01-what", task: "t1", model: "sonnet", usage },
+    }));
+    return ws;
+  }
+
+  test("cache write and cache read are priced, and are most of the bill", () => {
+    const ws = withHistory();
+    const estimate = estimateNextStage(ws.root, ws.runId);
+
+    expect(estimate.historyBasis).toBe("stage");
+    expect(estimate.medianCacheWriteTokens).toBe(166_300);
+    expect(estimate.medianCacheReadTokens).toBe(3_747_100);
+    expect(estimate.medianOutputTokens).toBe(29_000);
+
+    const price = priceFor(estimate.model);
+    expect(price).not.toBeNull();
+    const perM = (t: number, rate: number) => (t / 1_000_000) * rate;
+    const input = perM(estimate.promptTokens, price!.inputUsdPerMTok);
+    const write = perM(166_300, price!.inputUsdPerMTok * CACHE_WRITE_MULTIPLIER);
+    const read = perM(3_747_100, price!.inputUsdPerMTok * CACHE_READ_MULTIPLIER);
+    const out = perM(29_000, price!.outputUsdPerMTok);
+
+    expect(estimate.cacheWriteUsd).toBeCloseTo(write, 2);
+    expect(estimate.cacheReadUsd).toBeCloseTo(read, 2);
+    expect(estimate.usd).toBeCloseTo(input + write + read + out, 2);
+    // Cache traffic is the majority of the estimate, not a rounding term.
+    expect((write + read) / (estimate.usd ?? 1)).toBeGreaterThan(0.5);
+  });
+
+  test("the OLD input+output formula is pinned as WRONG — it under-counts several-fold", () => {
+    const ws = withHistory();
+    const estimate = estimateNextStage(ws.root, ws.runId);
+    const price = priceFor(estimate.model)!;
+
+    // Exactly what estimateView computed before this fix: input + output, no cache.
+    const oldFormula = (estimate.promptTokens / 1_000_000) * price.inputUsdPerMTok
+      + (29_000 / 1_000_000) * price.outputUsdPerMTok;
+
+    expect(estimate.usd).not.toBeCloseTo(oldFormula, 2);
+    expect(estimate.usd!).toBeGreaterThan(oldFormula * 3);
+  });
+
+  test("the breakdown names all four terms in tokens and ends in the total", () => {
+    const ws = withHistory();
+    const text = renderEstimate(estimateNextStage(ws.root, ws.runId));
+    expect(text).toContain("cache write ~166k");
+    expect(text).toContain("cache read ~3,747k");
+    expect(text).toContain("output ~29k");
+    expect(text).toMatch(/input ~\d[\d,]*k? · cache write ~166k · cache read ~3,747k · output ~29k → ~\$/);
+    expect(text).toContain("ESTIMATE: $");
+    expect(text).toContain("cache write");
+    expect(text).toContain("[assumption] dated 2026-08-29");
+  });
+
+  test("with no attempt at this stage it falls back to any stage, and says which", () => {
+    const ws = withHistory("beta");
+    const estimate = estimateNextStage(ws.root, ws.runId);
+    expect(estimate.historyBasis).toBe("workspace");
+    expect(estimate.medianCacheReadTokens).toBe(3_747_100);
+    const text = renderEstimate(estimate);
+    expect(text).toContain("no past attempt at `alpha`");
+    expect(text).toContain("at ANY stage here");
+    expect(text).toContain("a weaker basis, stated as one");
+  });
+
+  test("the same-stage sample wins over the workspace-wide one", () => {
+    const ws = seededWorkspace();
+    const log = EventLog.forRun(ws.runDir);
+    log.append(agentResult("alpha", {
+      run: ws.runId,
+      payload: { phase: "01-what", task: "t1", model: "sonnet", usage: REAL_LEDGER },
+    }));
+    log.append(agentResult("beta", {
+      run: ws.runId,
+      payload: {
+        phase: "01-what", task: "t1", model: "sonnet",
+        usage: { input_tokens: 1, output_tokens: 5, cache_creation_input_tokens: 7, cache_read_input_tokens: 9 },
+      },
+    }));
+    const estimate = estimateNextStage(ws.root, ws.runId);
+    expect(estimate.historyBasis).toBe("stage");
+    expect(estimate.sampleSize).toBe(1);
+    expect(estimate.medianCacheReadTokens).toBe(3_747_100);
+  });
+
+  test("attemptTokensForStage carries all four counters, and null means any stage", () => {
+    const ws = withHistory();
+    expect(attemptTokensForStage(ws.root, "alpha")).toEqual([
+      { input: 56, output: 29_000, cacheCreation: 166_300, cacheRead: 3_747_100 },
+    ]);
+    expect(attemptTokensForStage(ws.root, "nothing-by-this-name")).toEqual([]);
+    expect(attemptTokensForStage(ws.root, null).length).toBe(1);
   });
 
   test("median handles both parities and an empty sample", () => {

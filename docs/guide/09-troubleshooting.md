@@ -123,9 +123,11 @@ Declare it with `tldrx next --commit --cost-usd <n>` when you know it. `$0.00` w
 measurement, and a false one — never guess a number to make the report look tidy.
 
 **A stage cost more than `tldrx run estimate` said.** `estimate` is the one command that
-guesses and says so: the input half is measured bytes, the output half is the median of past
-attempts at that stage id, and prices are a dated `[assumption]`. `tldrx cost` is the measured
-answer.
+guesses and says so: the input half is measured bytes; cache write, cache read and output are
+medians of past attempts at that stage id (or, failing that, at any stage — it names which);
+and prices plus the cache multipliers are a dated `[assumption]`. `tldrx cost` is the measured
+answer. If the gap is several-fold, read the breakdown line: before 2026-08-30 cache traffic
+was not priced at all, which made a $1.70 stage estimate at $0.33.
 
 ## Stages and prompts
 

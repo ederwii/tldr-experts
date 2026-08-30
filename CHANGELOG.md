@@ -33,6 +33,27 @@
 
 ### Fixed
 
+- **`tldrx run estimate` prices cache traffic, which is where the money actually goes.**
+  Measured 2026-08-30 on a real workspace: a What stage was estimated at **$0.33** and the
+  one comparable real attempt cost **$1.70** — **5x**. That attempt's ledger says why: 56
+  input · 29.0k output · **166.3k cache write** · **3,747.1k cache read**. The estimate
+  multiplied input and output only, so it was adding up the two columns the money was not in.
+  Both cache counters had been on every `agent.result` since wave N and `modelPrices.ts` had
+  carried the multipliers the whole time — nothing needed new data, only arithmetic that used
+  it. The estimate now prices four terms: measured prompt tokens at the input rate, plus the
+  **median** cache write (**1.25x** input), cache read (**0.1x** input) and output of past
+  attempts at the same stage id, falling back to attempts at any stage and **naming which
+  sample it used**. It prints the breakdown —
+  `input ~189 · cache write ~166k · cache read ~3,747k · output ~29k → ~$1.46` — and keeps
+  saying "ESTIMATE" in words. With no history the old behaviour stands (it refuses to guess
+  the output half) and it now says `cache traffic not modelled — first attempt of this kind`
+  rather than pricing a silent zero. The input and cache-write terms overlap on a cold first
+  turn, so a first attempt leans high; that is stated in the output's own honesty line, not
+  corrected away.
+- **`tldrx cost` shows the cache write / cache read columns on every attempt line**, not only
+  on stage and run totals, and no longer hides them on a stage that ran once — previously an
+  attempt line carried cost, task and model and nothing about where the money went.
+
 - **tldrx state survives the project's own `.gitignore` rules, and `doctor` detects a rule
   that shadows it.** Found by a real user 2026-08-30: their repo carried the stock .NET
   `[Ll]og/` ignore, which swallowed `tldrx-work/<run>/04-build/log/S1.md` — the Build phase's
