@@ -11,8 +11,10 @@
  * authoritative.
  *
  * `status:` is the human gate. `proposed` is the only state `tldrx seed apply`
- * will act on, and apply rewrites it to `applied` with the run ids it created, so
- * running apply twice cannot create the same runs twice.
+ * will act on; apply moves it to `applying` before it creates anything and to
+ * `applied` — with the run ids it created — when the loop finishes, so running
+ * apply twice cannot create the same runs twice AND a crash in the middle is
+ * visible rather than invisible.
  */
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -28,7 +30,16 @@ export const SPLIT_MD = "split.md";
 export const SPLIT_SIZES = ["S", "M", "L"] as const;
 export type SplitSize = (typeof SPLIT_SIZES)[number];
 
-export const SPLIT_STATUSES = ["proposed", "applied"] as const;
+/**
+ * `applying` is the crash-visible middle.
+ *
+ * `seed apply` creates N runs in a loop, and a crash at run 3 of 8 used to leave
+ * `split.yml` still reading `proposed` — so `tldrx status` reported a split
+ * "nothing has been created yet" while three run directories sat next to it
+ * (measured 2026-08-29). The file now says `applying` for the duration and grows
+ * `created_runs` as it goes, so the half-done state is a state rather than a lie.
+ */
+export const SPLIT_STATUSES = ["proposed", "applying", "applied"] as const;
 export type SplitStatus = (typeof SPLIT_STATUSES)[number];
 
 /** Spec §2.2 caps a run at 40 stages; a split that proposes more runs than this is a mistake. */

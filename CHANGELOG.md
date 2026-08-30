@@ -709,6 +709,28 @@ places nothing read as one list.
   recorded against the newest OPEN run and the command SAYS which; with no open
   run there is nowhere to put it, which is not an error.
 
+### A job stopped halfway now looks stopped halfway
+
+- **`seed apply` writes `status: applying` before the loop.** It creates N runs
+  one at a time; a crash at run 3 of 8 left `split.yml` still reading `proposed`,
+  so `tldrx status` said "nothing has been created yet" with three run
+  directories sitting next to it. The file now moves to `applying` before the
+  first run and grows `created_runs` after each one, and `tldrx status` reports
+  `tldrx seed apply … stopped at run 3 of 8` with what was created, what was not,
+  and how to reset it.
+- **`seed triage --propose` writes its `.agent/` bundle in headless mode too.**
+  It was a `--prepare`-only artefact, so an interrupted propose left nothing but
+  `inventory.*` and the only offer was to pay for the whole proposal again. The
+  prompt and `pending.json` are now on disk before anything is spawned.
+- **`expert train` writes `knowledge/<area>.md.partial` and renames on
+  validation.** A knowledge file is INLINED into every later prompt for its area
+  and the inliner globs `knowledge/*.md`, so a training run killed halfway left a
+  torn, unvalidated file at exactly the name that gets read as if it were whole.
+  The sub-agent now writes the partial; the framework renames it onto the real
+  name only after the file validates, and a leftover partial is quarantined as
+  `.rejected.md` rather than left. `.md.partial` never matches `*.md`, so nothing
+  half-written can be inlined at all.
+
 ## 0.2.0 — 2026-08-29
 
 ### The Build phase executes

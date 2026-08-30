@@ -20,7 +20,7 @@ import { evidenceNote, stars } from "../experts/starChart.ts";
 import type { AreaRecord, ExpertRecord } from "../experts/ExpertRecord.ts";
 import type { Fact } from "../facts/Fact.ts";
 import { FROM_RUNS_SECTIONS, KNOWLEDGE_SECTIONS } from "./knowledgeFile.ts";
-import { fromRunsRelPath, knowledgeRelPath, type TrainingMode } from "./Training.ts";
+import { fromRunsRelPath, knowledgeRelPath, partialOf, type TrainingMode } from "./Training.ts";
 import type { FileSelection, InlinedFile } from "./selectFiles.ts";
 import type { MinedFile, RunMine } from "./mineRuns.ts";
 
@@ -43,7 +43,7 @@ export interface TrainingPromptInput {
 
 /** The light-mode prompt: read the selected code, write one knowledge file. */
 export function codePrompt(input: TrainingPromptInput, selection: FileSelection): string {
-  const rel = knowledgeRelPath(input.area.id);
+  const rel = partialOf(knowledgeRelPath(input.area.id));
   const target = `.tldrx/experts/${input.expert.name}/${rel}`;
 
   return [
@@ -111,7 +111,7 @@ export function codePrompt(input: TrainingPromptInput, selection: FileSelection)
 
 /** The full-mode second prompt: distil what past runs keep deciding. */
 export function runsPrompt(input: TrainingPromptInput, mine: RunMine): string {
-  const rel = fromRunsRelPath(input.area.id);
+  const rel = partialOf(fromRunsRelPath(input.area.id));
   const target = `.tldrx/experts/${input.expert.name}/${rel}`;
 
   return [

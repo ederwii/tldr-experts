@@ -110,7 +110,21 @@ export function applySplit(options: ApplyOptions): ApplyOutcome {
     };
   }
 
+  // `applying` BEFORE the first createRun, and `created_runs` rewritten after
+  // each one. A crash at run 3 of 8 then leaves a file that says exactly that,
+  // instead of one that still reads `proposed` next to three run directories.
   const created: string[] = [];
+  const stamp = (status: "applying" | "applied"): void => {
+    writeFileSync(path, emitSplitYaml({
+      ...file,
+      ...validation.proposal,
+      status,
+      applied_at: rfc3339(options.now),
+      created_runs: [...created],
+    }), "utf8");
+  };
+  stamp("applying");
+
   for (const run of ordered) {
     try {
       const outcome = createRun({
@@ -125,6 +139,7 @@ export function applySplit(options: ApplyOptions): ApplyOutcome {
         now: options.now,
       });
       created.push(outcome.runId);
+      stamp("applying");
     } catch (error) {
       const reason = error instanceof NewRunError || error instanceof SeedError
         ? error.message
@@ -136,12 +151,13 @@ export function applySplit(options: ApplyOptions): ApplyOutcome {
         lines: [
           `stopped at \`${run.slug}\`: ${reason}`,
           created.length === 0
-            ? `  nothing was created; ${SPLIT_YML} is still \`status: proposed\``
-            : `  ${String(created.length)} run(s) created before this one and LEFT IN PLACE: ${created.join(", ")}`,
+            ? `  nothing was created; ${SPLIT_YML} now reads \`status: applying\``
+            : `  ${String(created.length)} of ${String(ordered.length)} run(s) created before this one and `
+              + `LEFT IN PLACE: ${created.join(", ")}`,
           created.length === 0
-            ? "  fix the split (or the colliding directory) and apply again"
-            : `  ${SPLIT_YML} is still \`status: proposed\` — remove those run dirs, or delete the runs`
-              + " already created from the split, before applying again",
+            ? `  fix the split (or the colliding directory), set ${SPLIT_YML} back to \`status: proposed\`, and apply again`
+            : `  ${SPLIT_YML} records them under \`status: applying\` — remove those run dirs (or delete the runs),`
+              + " set it back to `status: proposed`, and apply again",
         ],
       };
     }

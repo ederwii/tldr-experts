@@ -16,6 +16,8 @@ import { RunStore } from "../src/core/run/RunStore.ts";
 import { createRun } from "../src/core/run/newRun.ts";
 import { makeRunWorkspace } from "./fixtures/tempRunWorkspace.ts";
 import { noSpawnEnv, NO_CLAUDE_PATH } from "./fixtures/noSpawnPath.ts";
+import { seedSplitItems } from "../src/core/status/seedSplitItems.ts";
+import { buildWorkspaceStatus, renderWorkspaceStatus } from "../src/core/status/index.ts";
 import { cannedIntent, makeFacilitatorWorkspace, type FacilitatorWorkspace } from "./fixtures/facilitator/workspace.ts";
 import { isMovable, waitingFor } from "../src/core/run/waiting.ts";
 import { buildStatus, renderStatus } from "../src/core/run/runStatus.ts";
@@ -865,4 +867,41 @@ describe("tldrx map --refresh", () => {
       ws.dispose();
     }
   }, 60_000);
+});
+
+// --- Q8: a job stopped halfway looks stopped halfway -------------------------
+
+describe("a half-applied split is visible in tldrx status", () => {
+  test("`applying` with the runs it did create, and status says where it stopped", () => {
+    const ws = makeRunWorkspace();
+    try {
+      const dir = join(ws.root, ".tldrx", "triage", "260829-docs");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "split.yml"), [
+        "version: 1",
+        "status: applying",
+        'source: "docs"',
+        'created_at: "2026-08-29T09:00:00Z"',
+        'applied_at: "2026-08-29T09:01:00Z"',
+        "created_runs: [260829-alpha]",
+        "shared_context: []",
+        "exclude: []",
+        "questions: []",
+        "runs:",
+        '  - {slug: alpha, goal: "first", scope: feature, size: S, budget_usd: 5, seeds: [], depends_on: [], why: "x [src: docs/a.md:1]"}',
+        '  - {slug: beta, goal: "second", scope: feature, size: S, budget_usd: 5, seeds: [], depends_on: [], why: "y [src: docs/a.md:2]"}',
+        "",
+      ].join("\n"), "utf8");
+
+      const items = seedSplitItems(ws.root);
+      expect(items).toHaveLength(1);
+      expect(items[0]!.summary).toContain("stopped at run 2 of 2");
+      expect(items[0]!.details.join("\n")).toContain("created and left in place: 260829-alpha");
+      expect(items[0]!.details.join("\n")).toContain("still to create: beta");
+      // And the whole-workspace report picks it up, so `tldrx status` shows it.
+      expect(renderWorkspaceStatus(buildWorkspaceStatus(ws.root))).toContain("stopped at run 2 of 2");
+    } finally {
+      ws.dispose();
+    }
+  });
 });

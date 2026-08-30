@@ -1110,7 +1110,7 @@ list. `tldrx status` reads those four, in the order they block each other:
 | # | kind | source | the command it names |
 |---|---|---|---|
 | 1 | `init-questions` | open blocks in `.tldrx/init-questions.md` | `tldrx interview --init` |
-| 2 | `seed-split` | every `.tldrx/triage/*/split.yml` at `status: proposed` — its runs, its unanswered `questions`, the seed documents whose own `Status:` line still says `proposed`, and any seed file named `DECISIONS*.md` | `tldrx seed apply <path> --dry-run` |
+| 2 | `seed-split` | every `.tldrx/triage/*/split.yml` at `status: proposed` — its runs, its unanswered `questions`, the seed documents whose own `Status:` line still says `proposed`, and any seed file named `DECISIONS*.md`; **and every one at `status: applying`**, which is an apply that stopped partway: it names the runs it created, the ones it did not, and how to reset | `tldrx seed apply <path> --dry-run` |
 | 3 | `run` | `RunStore.findOpen`, plus one item for any run folder that does not validate | `tldrx next <id>` / `tldrx answer <Qid> "…" --run <id>` / `tldrx approve --run <id>` |
 | 4 | `expert` | experts `stageCoverage` says a stage will load, with zero evidence in every area | `tldrx expert train <name> --area <a> --mode <light\|full> --print-prompt` |
 | 5 | `none` | nothing pending | — |

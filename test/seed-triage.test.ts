@@ -400,6 +400,22 @@ describe("seed triage --propose", () => {
     expect(prompt).toContain("Prices are integers in minor units.");
   });
 
+  test("the .agent bundle is on disk in headless mode too, so an interrupted propose is visible", async () => {
+    const ws = workspace();
+    fakeClaude(ws, goodProposal());
+    const outcome = await propose(ws);
+    expect(outcome.code).toBe(0);
+    // Not a `--prepare`-only artefact any more (wave Q): a headless propose killed
+    // mid-turn used to leave nothing but inventory.*, and the only offer was to
+    // pay for the whole proposal again.
+    const bundle = join(outDir(ws), ".agent", "propose");
+    expect(existsSync(join(bundle, "prompt.md"))).toBe(true);
+    expect(existsSync(join(bundle, "pending.json"))).toBe(true);
+    const pending = JSON.parse(readFileSync(join(bundle, "pending.json"), "utf8")) as Record<string, unknown>;
+    expect(pending.stage).toBe("propose");
+    expect(pending.prepared_at).toBe(AT);
+  });
+
   test("--model and --effort reach the sub-agent", async () => {
     const ws = workspace();
     const argvLog = join(ws.root, "argv.log");
@@ -591,8 +607,12 @@ describe("seed apply — the gate is that you ran it", () => {
     expect(outcome.lines[0]).toContain("tldrx-work/260830-billing already exists");
     expect(outcome.lines[1]).toContain("LEFT IN PLACE: 260830-tenancy");
     expect(existsSync(join(ws.root, "tldrx-work", "260830-tenancy"))).toBe(true);
-    // Not flipped: the split still describes work that has not all happened.
-    expect((parseYaml(readFileSync(path, "utf8")) as { status: string }).status).toBe("proposed");
+    // Not `applied` — the work did not all happen. And not `proposed` either, which
+    // is what it used to say while a run directory sat next to it: `applying`, with
+    // the run it DID create named, so `tldrx status` can report the half-done state.
+    const stopped = parseYaml(readFileSync(path, "utf8")) as { status: string; created_runs: string[] };
+    expect(stopped.status).toBe("applying");
+    expect(stopped.created_runs).toEqual(["260830-tenancy"]);
   });
 
   test("apply revalidates the file a human was invited to edit", async () => {
