@@ -154,12 +154,17 @@ stage at `cursor`, or `done` when every phase is terminal.
 | `stages[].inputs` / `.outputs` | rel path[] | y | Declared inputs; files produced |
 | `stages[].gate` | {type, status, by, at, note} | y | `type` `approve\|checks\|auto`; `status` `pending\|approved\|rejected\|n-a`; `by` is `auto` on a gate the facilitator closed |
 | `gates_policy` | {stage: `human\|auto`} | n | **Who** closes each gate. Resolved from §2.4 `gates:` and `run new --gates` at creation and frozen here, so the run keeps the policy it was opened with. Absent, or a stage it does not name ⇒ `human` |
+| `stages[].stale` | bool | n | **Additive.** `true` when an EARLIER stage's gate was revoked after this one ran (§5). Its outputs stay on disk; nothing may treat them as current. Cleared when the stage runs again; emitted only when `true` |
 | `tasks[].id` / `.status` | `^t\d+$` / enum | y | One sub-agent invocation |
+| `tasks[].cost_usd` | number ≥0 \| `null` | y | `null` = **unmetered**: an in-session `--commit` turn nobody declared a cost for. Contributes nothing to any sum, so `spent_usd` is then a LOWER BOUND, and every report says so |
+| `tasks[].metered` | bool | n | **Additive.** `false` iff `cost_usd` is `null`; absent means metered. The two always travel together, and a `null` cost without it is a schema error |
+| `tasks[].tokens` | number | n | **Additive.** What `tldrx next --commit --tokens <n>` declared, when the host knew |
 | `tasks[].session_id` / `.error` | str\|null | y | Session from `claude -p --output-format json`; one-line reason when `failed` |
 
 **Validation.** Ids unique within parent; `cursor` resolves; ≤1 `running` stage (single-writer); `|spent_usd −
-Σ tasks.cost_usd| ≤ 0.01`; `started_at ≤ ended_at`; `approved` needs `by`+`at`; every `gates_policy` value is
-`human\|auto` and every key names a stage in the file; ≤5 phases, ≤40 stages, ≤200 tasks.
+Σ tasks.cost_usd| ≤ 0.01` (a `null` cost contributes 0); `started_at ≤ ended_at`; `approved` needs `by`+`at`; a `null`
+`cost_usd` needs `metered: false`; every `gates_policy` value is `human\|auto` and every key names a stage in the file;
+≤5 phases, ≤40 stages, ≤200 tasks.
 
 ### 2.3 `.tldrx/stages/<slug>/stage.yml` + `stage.md`
 
@@ -1049,14 +1054,15 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx seed answer <split.yml> <Qid> "<text>"` | `split.yml`, `inventory.json` beside it, `workflows/*.yml` | `split.yml` (that question's `answer:`), and `split.md` when it exists | 0,1,3 |
 | `tldrx seed apply <split.yml> [--dry-run]` | `split.yml`, `inventory.json` beside it, `workflows/*.yml` | one `tldrx-work/<run>/` per proposed run (via `run new`'s own path) each with a `triage:` block, and `split.yml` rewritten to `status: applied`. Questions with no `answer:` are listed on **stderr** as a warning — never a refusal | 0,1,3 |
 | `tldrx run status [<run>]` | `run.yml`, `events.jsonl` | nothing (stdout) | 0,3 |
-| `tldrx next [<run>] [--dry-run]` | `run.yml`, `stage.yml`, `stage.md`, `expert.md`, declared inputs | stage outputs, `run.yml`, `events.jsonl` | 0,2,3,4,5 |
+| `tldrx next [<run>] [--dry-run] [--commit --cost-usd <n>] [--tokens <n>]` | `run.yml`, `stage.yml`, `stage.md`, `expert.md`, declared inputs | stage outputs, `run.yml`, `events.jsonl`. `--cost-usd` is the in-session turn's DECLARED cost (§2.2); with none the task is `cost_usd: null, metered: false`. Both flags are `--commit`-only — headless reconciles a real `total_cost_usd` and a flag must not overwrite a measurement | 0,2,3,4,5 |
 | `tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <l>] [--yolo]` | everything `next` reads, once per stage | everything `next` writes | 0,1,2,3,4,5 |
 | `tldrx answer <Qid> <text> [--run <id>]` | `questions.md`, `facts.yml` | `questions.md`, `facts.yml`, `events.jsonl` | 0,1,2,3 |
 | `tldrx interview [--run <id>\|--init] [--yes-to-defaults]` | the cursor phase's `questions.md` (or `.tldrx/init-questions.md`), `run.yml`, `.tldrx/process.yml`, `workspace.yml`, `git remote get-url origin` | the same three files `answer` writes, one per answer recorded; with `--init`, also `.tldrx/process.yml` (§2.12) when a process answer settles `methodology` or `ticket_tool.kind` | 0,1,2,3 |
 | `tldrx approve [--run <id>] [--note]` | `run.yml`, stage outputs, stage checks | `run.yml` gate, `events.jsonl` | 0,2,3 |
-| `tldrx reject [--run <id>] --note <text>` | `run.yml` | `run.yml` gate, `events.jsonl`, stage status ⇒ `ready` | 0,2,3 |
+| `tldrx reject [--run <id>] --note <text> [--stage <phase>/<stage>]` | `run.yml` | `run.yml` gate, `events.jsonl`, stage status ⇒ `ready`. With `--stage` it REVOKES an approval already given (§5): `gate.revoked`, the cursor moves back, later stages that had run are marked `stale: true`, nothing is deleted. `--stage` may target a FINISHED run | 0,2,3 |
+| `tldrx questions lint [--run <id>] [--fix] [--area <a>]` | every `<phase>/questions.md` in the run | nothing, or those files rewritten to the §2.7 grammar with `--fix` (no wording changed) | 0,2,3 |
 | `tldrx budget show [<run>] [--run <id>] [--json]` | `run.yml`, `budget.yml` | nothing (stdout) | 0,1,2,3 |
-| `tldrx budget raise <phase> <usd> [--run <id>] [--take-from <phase>]` | `run.yml`, `budget.yml` | `budget.yml` ceilings, `run.yml` ceiling mirror | 0,1,2,3 |
+| `tldrx budget raise <phase> <usd> [--run <id>] [--take-from <phase>] [--note <text>]` | `run.yml`, `budget.yml` | `budget.yml` ceilings, `run.yml` ceiling mirror, `events.jsonl` (`budget.raised`, with before/after/actor/note) | 0,1,2,3 |
 | `tldrx map --refresh` | `workspace.yml`, repos, `graphify-out/` | `map/**`, `graphify-out/`, `events.jsonl` | 0,1 |
 | `tldrx map --check` | `map/**` citations, filesystem | `cache/map-drift.json` (stdout report) | 0,1 |
 | `tldrx expert list` | `experts/*/competencies.yml` | nothing (stdout star chart) | 0 |
@@ -1066,7 +1072,7 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx dashboard [--static]` | `tldrx-work/**`, `.tldrx/**` (watch) | nothing, or `dist/` with `--static` | 0,1 |
 | `tldrx watch list [--run <id>]` | `05-watch/watchers/*.md`, `workspace.yml` | nothing (stdout table) | 0,1,2,3 |
 | `tldrx watch check <feature> [--run <id>]` | one card, the files it cites | nothing (stdout report) | 0,1,2,3 |
-| `tldrx tickets sync [--run <id>] [--dry-run] [--provider github\|jira]` | `process.yml`, `run.yml`, `03-plan/{epics,stories}/*.md` | `external:` + `external_status:` in those files, `events.jsonl` (`ticket.synced`), the remote issues | 0,1,2,3 |
+| `tldrx tickets sync [--run <id>] [--apply] [--provider github\|jira]` | `process.yml`, `run.yml`, `03-plan/{epics,stories}/*.md` | **Nothing without `--apply`** — preview is the default, because this is the one verb that reaches a third party. With it: `external:` + `external_status:` in those files, `events.jsonl` (`ticket.synced`), the remote issues. `--provider` picks between CONFIGURED providers and cannot switch on a workspace set to `kind: none` | 0,1,2,3 |
 | `tldrx tickets status [--run <id>]` | `process.yml` **first**, then the same files | nothing (stdout table) | 0,1,2,3 |
 | `tldrx replay [<run>]` | `events.jsonl`, handoffs | nothing (stdout narrative) | 0,1,2,3 |
 | `tldrx retro [<run>] [--apply]` | `run.yml`, `events.jsonl`, handoffs | `retro.md`, `stages/proposed/**`, `practices.md` proposals | 0,1,2,3 |
@@ -1200,6 +1206,12 @@ Stop adds `last_assistant_message`. **Only PreToolUse can block**, by printing
 is PreToolUse and validates the **would-be** file (Write: `content`; Edit: `old_string→new_string` applied to the file on
 disk). All but `DoD-gate` finish in <50 ms.
 
+**Two hooks fail CLOSED, not one (2026-08-29).** `DoD-gate` always did. `budget-gate` now does too, once it has
+identified the command as a spender inside a tldrx workspace: an unreadable `run.yml` or `budget.yml` DENIES and names
+the file. It used to allow on all of those, which is fail-open on the one hook whose entire job is refusing to spend —
+"cannot read the budget" and "the budget is fine" are not the same answer. It still allows silently when the command
+spends nothing or there is no `.tldrx/` at all: those are correct negatives, not failures.
+
 **Two ways the same six scripts get wired.** The plugin spawns them by path (`bun ${CLAUDE_PLUGIN_ROOT}/../src/hooks/<name>.ts`), because it has to work for someone who cloned the repo and installed nothing. A `settings.json` written by `tldrx install --claude` (§3) cannot use that variable and must not hard-code an absolute path into a committed file, so it goes through the CLI: `tldrx hook <name>` and `tldrx statusline`, which resolve `dist/hooks/<name>.js` or `src/hooks/<name>.ts` and pass stdin, stdout, stderr and the exit code through unchanged. Same scripts, same matchers, same decisions.
 
 | Hook | Event | Trigger | Decision logic | Effect |
@@ -1207,8 +1219,8 @@ disk). All but `DoD-gate` finish in <50 ms.
 | `claim-sources` | PreToolUse (`Write\|Edit`) | `tool_input.file_path` matches `tldrx-work/**/*.md` | Compute the would-be content; parse the four handoff sections; each must hold at least one list item, and each list item must end with a valid `src` token (§2.8); `file` sources must resolve against the workspace root, the run dir, or a named repo | Denies (JSON) listing offending line numbers; a PostToolUse twin re-checks and feeds back only |
 | `no-re-ask` | PreToolUse (`Write\|Edit`) | `tool_input.file_path` matches `tldrx-work/**/questions.md` | Tokenise each new question heading + `area`; compare against non-retired `facts.yml` rows; Jaccard ≥ 0.6 on ≥4-char tokens ⇒ hit `[assumption]` | Denies the write, names the matching fact |
 | `answer-capture` | PostToolUse + FileChanged | `tldrx-work/**/questions.md` | Find blocks with `status: open` and a non-empty `[Answer]:` capture | Never blocks; writes footer + `facts.yml` + `question.answered`; echoes one line to stdout as context |
-| `DoD-gate` | PreToolUse (`Write\|Edit`) | would-be content of `tldrx-work/**/stories/*.md` sets `status: done` | Re-run every command in the story's fenced ```dod block, in its repo, with `stage.yml timeout_s`; all must exit 0 | Denies if any command fails or the block is missing (this hook is not <50 ms by design) |
-| `budget-gate` | PreToolUse (`Bash`) | `tool_input.command` matching `^(claude -p|tldrx next)` | `spent + estimate > phase ceiling` (or run ceiling) and `on_exceed: block` | Denies the spawn; appends `budget.blocked` |
+| `DoD-gate` | PreToolUse (`Write\|Edit`) | would-be content of `tldrx-work/**/stories/*.md` sets `status: done` | Re-run every command in the story's fenced ```dod block, in its repo, with `stage.yml timeout_s`; all must exit 0. **Only a command byte-equal to a `workspace.yml` command runs, argv-split with no shell** | Denies if any command fails, is not on the allowlist, needs a shell, or the block is missing (this hook is not <50 ms by design) |
+| `budget-gate` | PreToolUse (`Bash`) | `tool_input.command` matching `^(claude -p\|tldrx next\|tldrx run auto\|tldrx expert train\|tldrx seed triage)` | `spent + estimate > phase ceiling` (or run ceiling) and `on_exceed: block`. Estimate: the stage ceiling for `next`; `--max-usd` else the run ceiling for `run auto`; $2.00 / $1.00 defaults for `train` / `triage` | Denies the spawn; appends `budget.blocked` |
 | `session-start-status` | SessionStart | always | Read the newest non-terminal `run.yml`; when several are open, list them all first. Then build the `tldrx status` report (§3) | Never blocks; injects a 3-line "where we are" via `additionalContext`, then up to 3 lines of the pending report — a headline plus as many items as fit. Nothing pending AND no run ⇒ no output at all |
 | `statusline` | statusLine | always | Render from the statusLine JSON + `run.yml` | Output only |
 

@@ -58,7 +58,12 @@ Never answer on their behalf, never pick a default, never "assume yes":
 
 - `tldrx seed apply <split.yml> --dry-run`, then the real apply when they say so.
 - `tldrx answer <Qid> "<what they said>" --run <id>` · `tldrx approve --run <id>`
-  after they said yes · `tldrx reject --run <id> --note "<their reason>"`.
+  after they said yes · `tldrx reject --run <id> --note "<their reason>"`, and
+  `tldrx reject --run <id> --stage <phase>/<stage> --note "…"` to take back an
+  approval already given (including one the harness signed `by: auto`).
+- `tldrx questions lint --run <id>` when a stage wrote a `questions.md`: it exits 2
+  if any block is invisible to the parser, and `--fix` converts it without changing
+  a word. An unreadable file reads as "no questions" to everything downstream.
 - one stage of a run, via the in-session recipe below.
 - `tldrx expert train <name> --area <a> --mode <light|full> --print-prompt` — the
   printed prompt costs nothing; running it is a spend, so see Money. An `expert`
@@ -82,7 +87,7 @@ pays for it at every stage.
 1  tldrx next --prepare [<run>]        # writes the prompt bundle; exits 0 and stops
 2  dispatch ONE sub-agent              # Agent tool, prompt = .agent/<stage>/prompt.md
 3  write .agent/<stage>/result.json    # {outputs, questions_asked, notes}
-4  tldrx next --commit [<run>]         # validates outputs + checks, rolls up cost, gates
+4  tldrx next --commit [<run>] --cost-usd <n>   # validates outputs + checks, rolls up cost, gates
 ```
 
 Step 1 names the bundle, the writable files and the finishing command. Step 2:
@@ -91,6 +96,11 @@ body, the experts and every declared input — and tell the sub-agent to write O
 the files `pending.json` lists, read nothing else, and end every bullet under
 Findings / Decisions / Unknowns / Evidence ledger with a `[src: …]` token. Step 4
 re-reads every output off disk and re-runs the checks whatever step 3 claimed.
+Pass `--cost-usd <n>` on step 4 when you know what the sub-agent cost: an in-session
+turn has no meter of its own, and without a declared number the task is recorded as
+`cost_usd: null, metered: false` — honest, but it makes the run's `spent` a lower
+bound rather than a total. Never guess one; omitting it is the correct move when you
+do not know.
 
 **One stage per `/tldrx` call.** When a run's remaining gates are mostly `auto`
 (`run.yml` `gates_policy:`) and nobody needs to watch, say so and offer
