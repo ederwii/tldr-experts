@@ -369,11 +369,13 @@ describe("<command> --help carries flags, values, examples and exit codes", () =
     }
   });
 
-  // The README table is the same table. It rots the moment they are two.
-  test("the README exit table is the one `exitCodes.ts` defines", () => {
-    const readme = readFileSync(join(FRAMEWORK_ROOT, "README.md"), "utf8");
+  // The written table is the same table. It rots the moment they are two.
+  // It lives in docs/guide/08-cli-reference.md, which is the page a reader lands
+  // on from the README; the README itself carries no second copy to drift from.
+  test("the CLI reference's exit table is the one `exitCodes.ts` defines", () => {
+    const reference = readFileSync(join(FRAMEWORK_ROOT, "docs/guide/08-cli-reference.md"), "utf8");
     for (const [code, meaning] of EXIT_MEANINGS) {
-      expect(readme).toContain(`| \`${String(code)}\` | ${meaning} |`);
+      expect(reference).toContain(`| \`${String(code)}\` | ${meaning} |`);
     }
   });
 });

@@ -1448,7 +1448,7 @@ parts of that block are in this exact order:
 ```
 
 This is a COST decision, not a layout one. A prompt cache keys on the longest PREFIX two calls share; a cache write
-is billed at 1.25x an input token and a cache read at 0.1x. Until wave N the experts were emitted LAST, behind the
+is billed at 1.25x an input token and a cache read at 0.1x. The experts used to be emitted LAST, behind the
 declared inputs — so the largest and most stable section of the prompt sat behind the section that changes at every
 stage, and paid the write price every time. Measured 2026-08-29 on `~/aparece-v2`: 159,575 B, of which 52% was expert
 bodies and knowledge and 45% declared inputs, in that order.
@@ -1472,7 +1472,7 @@ tokens, because the CLI's own system prompt, tool definitions and `CLAUDE.md` ar
 `~3.6 bytes/token` figure the context ledger prints applies to the tldrx prompt ALONE and under-states the billed
 input; it is an `[assumption]` for sizing, never for billing.
 
-**One budget, inputs first.** Two independent ceilings are not a ceiling. Until wave N the seed documents shared 64 KB
+**One budget, inputs first.** Two independent ceilings are not a ceiling. The seed documents used to share 64 KB
 and EACH loaded expert had its own 64 KB of trained knowledge, so they never competed: on `~/aparece-v2` the seed
 budget dropped `ADR-D013-DELIVERY-ZONE-GEOMETRY.md` (5,863 B) whole — the sixth of the six decisions the run existed
 to settle — while 70,923 B of unrequested expert knowledge went in untouched. There is now one allocation, in
@@ -1504,7 +1504,7 @@ unchanged), `agent.result` carries `reads`/`max_reads`/`stopped_by`, and the liv
 
 **Attempt reuse.** Attempt 2 after a rejection receives the declared outputs that exist on disk, inlined under
 `### Previous attempt — edit, do not restart`, capped at 32 KB shared across them, with anything past the cap named.
-Before wave N it received the error and the note and nothing else, so a stage rejected over one missing section paid
+It used to receive the error and the note and nothing else, so a stage rejected over one missing section paid
 full price to rewrite four documents from a blank page.
 
 **Order and budget.** Knowledge files come most-recently-trained first, by each file's own `trained_at:` front matter
@@ -1868,7 +1868,7 @@ Divergence is compared on **done-ness only** (`done`/`closed`/`resolved`/`comple
 
 `tldrx run new --seed <file|dir> [--scope feature]` is the generic sibling of `--from`: it knows nothing about AI-DLC,
 only that a document is Markdown or plain text. Passing both is refused — they write the same `01-what/handoff.md`.
-`[assumption]` — the spec had no generic importer; this is wave 4B.
+`[assumption]` — the concept doc described no generic importer, so the shape below is this spec's own.
 
 - **Read:** one `.md`/`.txt` file, or every `.md`/`.txt` under a directory, recursive and sorted by path (so two imports
   of the same tree are byte-identical). Bounds: ≤50 files, ≤2 MB per file; the same bounded walk as the map skips
@@ -1903,7 +1903,7 @@ A seed can be too big for one run. `--seed docs/` on a 25-document design folder
 44k tokens of context at every stage of a five-stage workflow, and produces one branch for what was several pieces of
 work. Triage is the answer: **count it, propose a split, let a human decide, then create the runs.** Three commands,
 and the boundaries between them are the design — the free one never spends, the paid one never creates, and the one
-that creates never asks a model. `[assumption]` — the spec had no triage; this is wave F.
+that creates never asks a model. `[assumption]` — the concept doc described no triage, so the shape below is this spec's own.
 
 ### The deterministic pass — `tldrx seed triage <path>`
 
@@ -2063,20 +2063,30 @@ because it describes work that has not all happened. Deleting those run dirs is 
 
 ## 7. Open decisions
 
-- `process.yml` exists in two shapes: the nested §2.12 form that `init` writes and the flat draft in `templates/process.yml`; readers tolerate both. Reconcile to §2.12 (touches `init` and `test/schemas.test.ts`).
+Still open, each with the line that proves it is:
 
+- `process.yml` exists in two shapes: the nested §2.12 form that `init` writes and the flat draft in
+  `templates/process.yml` (`ticket_tool: none`, `project_key`, `ticket_sync` as top-level keys); readers tolerate both.
+  Reconcile to §2.12 (touches `init` and `test/schemas.test.ts`).
 - Whether `.tldrx/` is one root install or also allowed per sub-repo simultaneously (spec assumes root-only in v0).
 - Conflict policy when a new answer contradicts a fact (auto-supersede vs. always ask). v0 always asks: `--from` turns a
-  contradiction into a question and `FactsStore.supersede` is only ever called by hand.
-- Retro-proposed stages: acceptance UX and whether they may alter shipped `workflows/*.yml`. `retro` writes the proposals
-  and `--apply` appends them to `practices.md`; nothing consumes them yet.
-- Ticket adapter direction (mirror-only vs. two-way) and which of Jira/GitHub ships first.
-- Multi-approver / enterprise gate packs: out of scope for v0, shape undecided.
+  contradiction into a question, and `FactsStore.supersede` (`src/core/facts/FactsStore.ts:97`) has no caller outside
+  `src/core/facts/` and its tests.
+- Retro-proposed stages: acceptance UX and whether they may alter shipped `workflows/*.yml`. `retro` writes the
+  proposals and `--apply` appends them to `.tldrx/memory/practices.md` (`src/core/retro/applyPractices.ts`); nothing in
+  `src/` reads that file back.
+- Multi-approver / enterprise gate packs: out of scope for v0, shape undecided. §5's gate policy is one signer per
+  stage, `human` or `auto`.
 
 **Closed since the first draft.** Story/epic/wave file schemas are §2.13–§2.15 (2026-08-30). `dod-gate` still reads
 `status:`, `repo:` and the fenced ` ```dod ` block by **line scanning** rather than through the schema, on purpose: a
 gate that only ran when the front matter parsed would let a malformed story write `status: done` unchecked. The two
 share one ` ```dod ` parser so they cannot disagree about what the block contains.
+
+Ticket adapter direction, and which of Jira/GitHub ships first: **both ship**, and the direction is a field. §2.12's
+`ticket_tool.sync` has exactly two values — `mirror-out` pushes and reads nothing back, `two-way` also pulls each
+issue's status string verbatim into `external_status:` and into nothing else. §5.1 is the command; `src/core/adapters/`
+holds a `gh`-CLI provider and a Jira REST v3 provider, each taking its transport as an argument.
 
 Nested `claude -p` — measured 2026-08-29 (macOS, Claude Code 2.1.x): it works, and the
 ceiling was the real constraint, not the nesting. A cold session pays ~10–26k cache-creation tokens before its first

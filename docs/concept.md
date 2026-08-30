@@ -175,7 +175,7 @@ query. Generated from what Execute actually instrumented — not aspirational.
 
 - `budget.yml` per run: ceiling per phase; actuals rolled up from `events.jsonl`.
 - Statusline (Claude Code native `statusLine`) rendering:
-  `[fw] <run> · <PHASE> [▓▓░░] 2/5 > <stage> — <expert> | <model> ctx:16% $4.92 / $25`
+  `[tldrx] <run> · <PHASE> [▓▓░░] 2/5 > <stage> — <expert> | <model> ctx:16% $4.92 / $25`
   All fields available natively: `model.display_name`, `cost.total_cost_usd`, `context_window.used_percentage`, `context_window.total_input/output_tokens`, `worktree.branch` (Appendix A).
 
 ## 12. Dashboard (read-only)
@@ -186,7 +186,7 @@ query. Generated from what Execute actually instrumented — not aspirational.
   handoffs rendered with their citations, questions pending); experts (status +
   competency radar + "train me" prompts); watchers; FAQ / how-to with copy-paste
   prompts to start or continue any run.
-- Static export (`fw dashboard --static`) for sharing a snapshot.
+- Static export (`tldrx dashboard --static`) for sharing a snapshot.
 
 ## 13. Learning loop
 
@@ -203,11 +203,11 @@ query. Generated from what Execute actually instrumented — not aspirational.
 
 ## 15. Extras worth adding (my additions)
 
-1. **Doc mode**: `fw doc <question>` — answer from `map/` + code with citations, no run.
-2. **Drift check**: `fw map --check` — flags map entries whose cited paths no longer exist.
+1. **Doc mode**: `tldrx doc <question>` — answer from `map/` + code with citations, no run.
+2. **Drift check**: `tldrx map --check` — flags map entries whose cited paths no longer exist.
 3. **Dry run**: any stage with `--dry-run` produces the handoff without writing decisions.
-4. **Replay**: `fw replay <run>` renders `events.jsonl` as a narrative (stakeholder view).
-5. **Import**: `fw run new --from <PRD|Jira epic|aidlc intent folder>` — the leaderboard
+4. **Replay**: `tldrx replay <run>` renders `events.jsonl` as a narrative (stakeholder view).
+5. **Import**: `tldrx run new --from <PRD|Jira epic|aidlc intent folder>` — the leaderboard
    ideation pack becomes the pilot's phase-1 input without redoing 38 questions.
 6. **Ticket sync (optional adapter)**: epics/stories mirrored to Jira/GitHub issues.
 7. **Session cost cap per sub-agent** as well as per phase (a runaway agent should not
@@ -215,7 +215,7 @@ query. Generated from what Execute actually instrumented — not aspirational.
 
 ## 16. Delivery slices
 
-- **v0 (skeleton)**: `fw init` (detect + map + handoff + interview), `run.yml` +
+- **v0 (skeleton)**: `tldrx init` (detect + map + handoff + interview), `run.yml` +
   `events.jsonl`, facilitator skill, phases 1–3, statusline, claim-sources hook, no-re-ask
   hook. Dashboard = static render.
 - **v1**: Execute with worktrees/epic branches/waves + DoD hook, Observe, budget gate,
@@ -223,14 +223,23 @@ query. Generated from what Execute actually instrumented — not aspirational.
 - **v1.1**: expert training (light/full), competencies + star chart, ticket adapter,
   chat channel adapter.
 
-## 17. Open questions (decision-changing)
+## 17. Open questions — all answered
 
-1. Repo name/location and license (new sibling repo outside scavtopia?).
-2. Pilot: dogfood on scavtopia (3 repos, Azure) with the leaderboard pack as the phase-1
-   input — or a smaller single-repo project first?
-3. Experts in v0 as "files only", training deferred to v1.1 — acceptable?
-4. Harness language: TypeScript on Bun (matches what you already run) — confirm.
-5. Interaction: terminal-only for v0; Pumble bridge as a later adapter — confirm.
+These were the decision-changing unknowns when this document was written on 2026-08-28. Every
+one of them was settled the same day, in the **v0.1 addendum § Decisions taken** below, and
+three have since been overtaken by shipped code. Kept as a record of what the answers were, not
+as a list of things to decide.
+
+| Question | Answer | Where |
+|---|---|---|
+| 1. Repo name/location and license | A new repo outside scavtopia; MIT | v0.1 addendum § Decisions taken; the name is settled in § Naming and again in the v0.2 addendum (brand `tldr-experts`, CLI `tldrx`) |
+| 2. Pilot: scavtopia, or a smaller single-repo project | Dogfood on scavtopia, with the leaderboard ideation pack **distilled** as the phase-1 input | v0.1 addendum § Decisions taken and § Pilot import without the noise |
+| 3. Experts files-only in v0, training deferred to v1.1 | Accepted then; **overtaken** — `tldrx expert train` runs, and a level moves only on derived evidence | v0.1 addendum § Decisions taken; `CHANGELOG.md` 0.3.0 § Added |
+| 4. Harness language | TypeScript on Bun; **since widened** — Bun builds, Node ≥ 20 or Bun runs, behind `src/core/runtime/` | v0.1 addendum § Decisions taken; `CHANGELOG.md` 0.2.0 |
+| 5. Terminal-only for v0, chat bridge later | Confirmed. Terminal and the Claude Code skill both ship; no chat bridge yet | v0.1 addendum § Decisions taken; `docs/ROADMAP.md` |
+
+The design questions that are actually still open live in **`docs/spec.md` §7**, with the line
+that proves each one open beside it.
 
 ---
 
@@ -255,7 +264,7 @@ query. Generated from what Execute actually instrumented — not aspirational.
 - Outputs `graphify-out/graph.json` (nodes/edges with `EXTRACTED|INFERRED|AMBIGUOUS` confidence), `GRAPH_REPORT.md`, `graph.html`.
 - Incremental `--update`, post-commit hook, `--watch`; multi-repo via `merge-graphs` (node tagged with `repo`).
 - Agent-callable: `--mcp` exposes `query_graph, get_neighbors, shortest_path, god_nodes, graph_stats`; `affected` gives reverse impact.
-- Does NOT produce: build/test commands, conventions/layer rules, domain boundaries, deploy reality → `fw init` still writes `map/*.md`. Query matching is substring-based (no synonyms). Extraction quality on this repo: not yet run.
+- Does NOT produce: build/test commands, conventions/layer rules, domain boundaries, deploy reality → `tldrx init` still writes `map/*.md`. Query matching is substring-based (no synonyms). Extraction quality on this repo: not yet run.
 
 **Context7**: declared by AI-DLC's shipped `.mcp.json` (`https://mcp.context7.com/mcp`), not installed in this workspace. Whether AI-DLC stages actually call it: not verified.
 
