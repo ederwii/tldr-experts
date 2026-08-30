@@ -26,6 +26,7 @@ import { PROJECT_WORK_DIR } from "../paths.ts";
 import { EventLog } from "../events/EventLog.ts";
 import type { TldrxEvent } from "../events/Event.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
+import { withWorkspaceLock } from "../lock/workspaceLock.ts";
 import { validateFactsFile } from "../facts/validateFactsFile.ts";
 import { parseYaml } from "../yaml.ts";
 import { validateHandoff } from "../text/handoff.ts";
@@ -113,7 +114,23 @@ export interface NewRunOutcome {
  */
 export const SAME_FACT_THRESHOLD = 0.9;
 
+/**
+ * Under the workspace lock, whole.
+ *
+ * `run new --from` LOADS `.tldrx/memory/facts.yml`, mints ids off it, writes
+ * those ids into the run's `fact.added` events, and only then writes the file
+ * back. That is a read-modify-write with a wide middle, and two of them
+ * interleaving both mint `F001` and the second erases the first fact (measured
+ * 2026-08-29). Holding the lock across the whole creation keeps the ids in the
+ * events and the ids in the file the same ids. Nothing here calls a model, so
+ * the section is milliseconds; the lock is re-entrant, so the `RunStore.save`
+ * and `FactsStore` writes nested inside it are unaffected.
+ */
 export function createRun(options: NewRunOptions): NewRunOutcome {
+  return withWorkspaceLock(options.root, () => createRunLocked(options));
+}
+
+function createRunLocked(options: NewRunOptions): NewRunOutcome {
   if (!SLUG_RE.test(options.slug)) {
     throw new NewRunError(`'${options.slug}' is not a slug — expected ^[a-z0-9][a-z0-9-]{0,39}$`);
   }

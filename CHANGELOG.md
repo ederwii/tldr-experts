@@ -621,7 +621,10 @@ places nothing read as one list.
   (a pid file, `kill(pid, 0)` for staleness, a dead holder taken over) and is
   re-entrant within a process, and `FactsStore.update(path, fn)` holds it across
   load → append → save. A two-process test that provably overlaps now mints
-  `F001` and `F002`; with the lock disabled it mints `F001` twice.
+  `F001` and `F002`; with the lock disabled it mints `F001` twice. `tldrx run new`
+  holds the same lock across its WHOLE creation, because `--from` mints fact ids,
+  writes them into the run's `fact.added` events, and only then writes the file
+  back — a read-modify-write with a wide middle.
 - **`budget.yml` ceilings are re-read before every write.** A `budget raise` that
   landed while a stage was in flight was silently reverted when that stage saved,
   because the in-flight `RunStore` wrote back the ceilings it had read minutes
