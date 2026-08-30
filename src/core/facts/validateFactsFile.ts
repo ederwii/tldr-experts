@@ -68,6 +68,12 @@ export function validateFactsFile(input: unknown): ValidationResult {
       issues.push({ path: `${path}.source`, message: "expected a mapping" });
     }
 
+    // Additive since 2026-08-30, so absence is fine and only a wrong TYPE is an
+    // issue: a row written before the field existed must keep validating.
+    if (row.truncated !== undefined && typeof row.truncated !== "boolean") {
+      issues.push({ path: `${path}.truncated`, message: "expected true, false or absent" });
+    }
+
     const superseded = typeof row.superseded_by === "string";
     const retired = isRecord(row.retired) && row.retired.at !== null && row.retired.at !== undefined;
     if (superseded && retired) {

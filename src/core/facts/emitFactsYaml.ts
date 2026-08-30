@@ -36,6 +36,9 @@ export function emitFact(fact: Fact, indent = "  "): string {
     `${inner}supersedes: ${yamlScalar(fact.supersedes)}`,
     `${inner}superseded_by: ${yamlScalar(fact.superseded_by)}`,
   ];
+  // Written only when it is true. A `truncated: false` on every row of a file
+  // whose facts are all whole is noise in a diff nobody asked for.
+  if (fact.truncated === true) lines.push(`${inner}truncated: true`);
   if (fact.retired === null) {
     lines.push(`${inner}retired: null`);
   } else {
