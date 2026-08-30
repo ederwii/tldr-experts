@@ -256,6 +256,30 @@ th{text-align:left;font-family:var(--font-mono);font-size:var(--text-2xs);font-w
 td{padding:10px var(--space-sm);border-bottom:1px solid var(--line-hairline);vertical-align:top}
 tbody tr:last-child td{border-bottom:0}
 tr[data-wait="1"] td{background:var(--st-wait-bg)}
+.signer{font-family:var(--font-mono);font-size:var(--text-2xs);color:var(--text-muted);
+  white-space:nowrap}
+
+/* attention summary: the three counts tldrx status opens with */
+.attn{display:flex;flex-wrap:wrap;gap:var(--space-xs);align-items:center;
+  font-family:var(--font-mono);font-size:var(--text-xs);margin-bottom:var(--space-md)}
+.attn__n{color:var(--text-muted)}
+.attn__n[data-st="active"]{color:var(--st-active);font-weight:var(--weight-semibold)}
+.attn__n[data-st="wait"]{color:var(--st-wait);font-weight:var(--weight-semibold)}
+.attn__sep{color:var(--text-faint)}
+.attn__cmd{background:var(--surface-sunken);border:1px solid var(--line-hairline);
+  border-radius:var(--radius-sm);padding:2px 6px;font-size:var(--text-2xs);color:var(--text-body)}
+
+/* dependency chain — one line per root-to-leaf path */
+.chain{display:flex;flex-wrap:wrap;gap:var(--space-2xs);align-items:center;
+  font-family:var(--font-mono);font-size:var(--text-xs);line-height:var(--leading-relaxed)}
+.chain + .chain{margin-top:var(--space-xs)}
+.chain__link{color:var(--text-muted);text-decoration:none;border-radius:var(--radius-sm);
+  padding:1px 5px;border:1px solid transparent}
+.chain__link:hover{border-color:var(--line-hairline);color:var(--text-body)}
+.chain__link[data-st="done"]{color:var(--st-done)}
+.chain__link[data-st="active"]{color:var(--text-on-accent);background:var(--surface-accent);
+  border-color:var(--surface-accent);font-weight:var(--weight-semibold)}
+.chain__arrow{color:var(--text-faint)}
 
 /* ============================================================
    RUNS LIST
@@ -281,6 +305,9 @@ tr[data-wait="1"] td{background:var(--st-wait-bg)}
 .runrow:last-child{border-bottom:0}
 .runrow:hover{background:var(--surface-sunken)}
 .runrow__id{font-family:var(--font-mono);font-size:var(--text-2xs);color:var(--text-faint);
+  letter-spacing:var(--tracking-wide)}
+.runrow__next{margin-left:var(--space-xs);padding:1px 6px;border-radius:var(--radius-pill);
+  background:var(--surface-accent);color:var(--text-on-accent);font-weight:var(--weight-bold);
   letter-spacing:var(--tracking-wide)}
 .runrow__title{font-size:var(--text-md);font-weight:var(--weight-semibold);color:var(--text-display);
   letter-spacing:var(--tracking-snug);margin-top:2px}

@@ -40,7 +40,8 @@ export const DASHBOARD_JS = `
 (function () {
   "use strict";
 
-  var state = { model: null, ui: { status: "all", sort: "updated" } };
+  // 'order' is the workspace's own answer to "what next" — see dashRunsView.
+  var state = { model: null, ui: { status: "all", sort: "order" } };
   var CITE = /\\[(src|assumption|inference|inferred):?\\s*([^\\]]*)\\]/gi;
 
   function readEmbeddedModel() {

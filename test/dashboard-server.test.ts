@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { startDashboardServer, type DashboardServer } from "../src/core/dashboard/index.ts";
+import {
+  DASHBOARD_MODEL_VERSION, startDashboardServer, type DashboardServer,
+} from "../src/core/dashboard/index.ts";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { makeViewsWorkspace, VIEWS_RUN, type TempViews } from "./fixtures/views/tempViews.ts";
 
@@ -88,7 +90,7 @@ describe("tldrx dashboard (live)", () => {
       modelVersion: number; live: boolean; workspaceFound: boolean;
       runs: { id: string; stagesTotal: number }[];
     };
-    expect(model.modelVersion).toBe(1);
+    expect(model.modelVersion).toBe(DASHBOARD_MODEL_VERSION);
     expect(model.live).toBe(true);
     expect(model.workspaceFound).toBe(true);
     expect(model.runs.map((run) => run.id)).toEqual([VIEWS_RUN]);
@@ -188,7 +190,7 @@ describe("the built CLI serves it under node", () => {
     const page = await (await fetch(`${url!}/`)).text();
     expect(page).toContain(VIEWS_RUN);
     const model = (await (await fetch(`${url!}/model.json`)).json()) as { modelVersion: number };
-    expect(model.modelVersion).toBe(1);
+    expect(model.modelVersion).toBe(DASHBOARD_MODEL_VERSION);
 
     proc.kill("SIGINT");
     expect(await proc.exited).toBe(0);

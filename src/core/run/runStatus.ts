@@ -6,15 +6,13 @@
  * blocking" line is derived from the cursor stage plus the open blocks in that
  * phase's questions.md.
  */
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { openBlocks, parseQuestions } from "../text/questions.ts";
 import { remaining } from "../budget/wouldExceed.ts";
 import type { RunBudget } from "../budget/RunBudget.ts";
 import { renderAttempts, stageAttempts, type StageAttempts } from "./attempts.ts";
 import { buildProgress, renderBuildProgress, renderStoryCosts, BUILD_PHASE, type BuildProgress } from "./buildProgress.ts";
 import { gatePolicyFor, type GatePolicy, type GatesPolicy } from "./gatePolicy.ts";
-import { flatten, isTerminal, stageAt, type RunFile, type RunPhase, type RunStage } from "./RunFile.ts";
+import { failureReason, waitingFor, type Waiting, type WaitingKind } from "./waiting.ts";
+import { flatten, isTerminal, type RunFile, type RunPhase } from "./RunFile.ts";
 
 export const BAR_CELLS = 5;
 
@@ -45,14 +43,11 @@ export interface GateRow {
   readonly at: string | null;
 }
 
-export type WaitingKind = "gate" | "answer" | "ready" | "done" | "blocked" | "failed";
-
-export interface Waiting {
-  readonly kind: WaitingKind;
-  readonly message: string;
-  /** Open question ids in the cursor phase, when the run is waiting on answers. */
-  readonly questions: readonly string[];
-}
+/**
+ * Re-exported so every existing `from "./runStatus.ts"` import keeps working.
+ * The derivation itself moved to `waiting.ts`, where the dashboard can reach it.
+ */
+export type { Waiting, WaitingKind };
 
 export interface RunStatusView {
   readonly run: string;
@@ -162,71 +157,12 @@ export function bar(done: number, total: number, failed = 0): string {
 }
 
 /**
- * Why a stage failed. `RunStage` has no `error` field (spec §2.2) — the reason is
- * recorded on the task that failed, so that is where this reads it from.
+ * What this run is waiting on. A `RunFile`-typed door onto the shared
+ * derivation — `waitingFor` in `waiting.ts` — which the dashboard model calls
+ * with its own document so the two screens cannot disagree.
  */
-function failureReason(stage: RunStage): string | null {
-  const error = [...stage.tasks].reverse().find((task) => task.error !== null)?.error ?? null;
-  return error === null || error.trim() === "" ? null : oneLine(error);
-}
-
-function oneLine(text: string): string {
-  return text.split("\n")[0]?.trim() ?? "";
-}
-
 export function whatIsWaiting(run: RunFile, runDir: string): Waiting {
-  const entry = stageAt(run, run.cursor);
-  if (entry === null) {
-    return { kind: "blocked", message: `cursor ${run.cursor.phase}/${run.cursor.stage} does not resolve to a stage`, questions: [] };
-  }
-  const open = openQuestionIds(join(runDir, run.cursor.phase, "questions.md"));
-
-  switch (entry.stage.status) {
-    case "awaiting_gate":
-      return {
-        kind: "gate",
-        message: `gate on ${entry.phase.id}/${entry.stage.id} — \`tldrx approve\` or \`tldrx reject --note "…"\``,
-        questions: open,
-      };
-    case "awaiting_answer":
-      return {
-        kind: "answer",
-        message: open.length === 0
-          ? `stage ${entry.stage.id} is waiting on an answer, but ${run.cursor.phase}/questions.md has no open block`
-          : `${open.length} open question(s) in ${run.cursor.phase}/questions.md — \`tldrx answer ${open[0] ?? "Q1"} "…"\``,
-        questions: open,
-      };
-    case "failed": {
-      const reason = failureReason(entry.stage);
-      return {
-        kind: "failed",
-        message: `${entry.phase.id}/${entry.stage.id} FAILED${reason === null ? "" : `: ${reason}`} — ` +
-          "retry: `tldrx next` · or: `tldrx reject --note \"…\"`",
-        questions: open,
-      };
-    }
-    case "done":
-    case "skipped":
-    case "cancelled":
-      return { kind: "done", message: "every stage is terminal — nothing is waiting", questions: open };
-    case "blocked":
-      return { kind: "blocked", message: `stage ${entry.stage.id} is blocked`, questions: open };
-    default:
-      return {
-        kind: "ready",
-        message: `next up: ${entry.phase.id}/${entry.stage.id} (${entry.stage.status}) — \`tldrx next\``,
-        questions: open,
-      };
-  }
-}
-
-function openQuestionIds(path: string): readonly string[] {
-  if (!existsSync(path)) return [];
-  try {
-    return openBlocks(parseQuestions(readFileSync(path, "utf8")).blocks).map((b) => b.id);
-  } catch {
-    return [];
-  }
+  return waitingFor(run, runDir);
 }
 
 /** The human rendering. `--json` prints `RunStatusView` instead. */

@@ -35,7 +35,7 @@
 import { DASHBOARD_CSS } from "./styles.ts";
 import { DASHBOARD_JS, liveScript } from "./script.ts";
 import type {
-  DashboardModel, ExpertModel, PhaseModel, QuestionModel, RunModel,
+  DashboardModel, ExpertModel, PhaseModel, QuestionModel, RunModel, StageRowModel,
 } from "./model.ts";
 
 export const DASHBOARD_TITLE = "tldrx dashboard";
@@ -232,13 +232,127 @@ export function dashCmd(text: string, id: string): string {
     + 'aria-label="Copy command to clipboard">copy</button></div>';
 }
 
-/** The one thing a run waits on, or null. A question outranks a gate. */
+/**
+ * The one thing a run waits on, when it waits on a HUMAN — or null.
+ *
+ * Read straight off `run.waiting`, which is `tldrx run status`'s own answer
+ * (`src/core/run/waiting.ts`). Three kinds raise a card: a gate to sign, a
+ * question to answer, a stage that failed. `ready` and `done` are states of the
+ * work, not asks, and a page that alerts on them alerts on everything.
+ *
+ * A run waiting behind a sibling raises nothing either, whatever its own stage
+ * says — the same call `tldrx status` makes when it prints no command for a
+ * blocked run. Its gate is real, but signing it is not the next move, and an
+ * alert that cannot be acted on is the noise that makes the others ignorable.
+ */
 export function dashPending(run: RunModel): DashPending | null {
-  if (run.pendingQuestion !== null) return { kind: "question", text: run.pendingQuestion };
-  if (run.pendingGate !== null) {
-    return { kind: "gate", text: `stage ${run.pendingGate} is waiting at a gate` };
+  if (run.blockedBy.length > 0) return null;
+  const kind = run.waiting.kind;
+  if (kind === "gate") {
+    return { kind: "gate", text: `stage ${run.pendingGate ?? "?"} is waiting at a gate` };
   }
+  if (kind === "answer") {
+    return { kind: "question", text: run.pendingQuestion ?? run.waiting.message };
+  }
+  if (kind === "failed") return { kind: "failed", text: run.waiting.message };
   return null;
+}
+
+/** `260903-alpha` → `alpha`. Dependencies were proposed as slugs; say slugs. */
+export function dashSlug(id: string): string {
+  const match = /^\d{6}-(.+)$/.exec(String(id));
+  return match === null ? String(id) : String(match[1]);
+}
+
+/**
+ * The WAITING ON column: what this run needs, in the fewest words that are true.
+ *
+ * Every kind gets a line, not only the three that raise a card — "nothing" in a
+ * column headed "waiting on" is what made a `ready` run look finished. A blocked
+ * run says what it is behind first, whatever its own stage says: a gate you
+ * cannot reach yet is not the thing to go and sign.
+ */
+export function dashWaitingCell(run: RunModel): string {
+  if (run.blockedBy.length > 0) {
+    return `<span class="nowrap">blocked by ${dashText(run.blockedBy.map(dashSlug).join(", "))}</span>`;
+  }
+  const pending = dashPending(run);
+  if (pending !== null) return dashText(pending.text);
+  if (run.waiting.kind === "ready") {
+    return `<span class="nowrap">ready — <code>tldrx next ${dashText(run.id)}</code></span>`;
+  }
+  return `<span class="faint">nothing — ${dashText(dashWords(run.status))}</span>`;
+}
+
+/** The first run in workspace order that a human could actually move, or "". */
+export function dashNextRun(model: DashboardModel): string {
+  for (const id of model.order) {
+    const run = model.runs.filter((candidate) => candidate.id === id)[0];
+    if (run !== undefined && run.runnable) return run.id;
+  }
+  return "";
+}
+
+/**
+ * The three counts `tldrx status` opens with, for runs: how many you could
+ * start, how many are waiting behind a sibling, how many are waiting on YOU.
+ *
+ * Disjoint by precedence — blocked, then waiting-on-you, then ready — so the
+ * numbers add up to the run count and nobody has to work out an overlap. Every
+ * one is read off the model; nothing here re-derives a state.
+ */
+export function dashAttention(model: DashboardModel): string {
+  let blocked = 0;
+  let human = 0;
+  let ready = 0;
+  let first = "";
+  for (const id of model.order) {
+    const run = model.runs.filter((candidate) => candidate.id === id)[0];
+    if (run === undefined) continue;
+    if (run.blockedBy.length > 0) { blocked++; continue; }
+    if (dashPending(run) !== null) { human++; continue; }
+    if (run.waiting.kind === "ready" && run.runnable) {
+      ready++;
+      if (first === "") first = run.id;
+    }
+  }
+  if (model.runs.length === 0) return "";
+  const command = first === ""
+    ? ""
+    : ` <code class="attn__cmd">tldrx next ${dashText(first)}</code>`;
+  return '<div class="attn"><span class="attn__n" data-st="'
+    + `${ready > 0 ? "active" : "idle"}">${dashText(dashPlural(ready, "run"))} ready</span>${command}`
+    + `<span class="attn__sep">·</span><span class="attn__n" data-st="idle">${String(blocked)} blocked</span>`
+    + `<span class="attn__sep">·</span><span class="attn__n" data-st="${human > 0 ? "wait" : "idle"}">`
+    + `${String(human)} waiting on you</span></div>`;
+}
+
+/**
+ * The dependency chains, as text: `alpha → bravo → charlie`.
+ *
+ * Every arrow is a real `depends_on` edge (`src/core/run/dependencies.ts`), so a
+ * fork prints one line per branch rather than one flattened list implying an
+ * order nobody asked for. A finished run is ticked; the one a human could pick
+ * up now is highlighted. Nothing is drawn when no run depends on another.
+ */
+export function dashChains(model: DashboardModel): string {
+  if (model.chains.length === 0) return "";
+  const next = dashNextRun(model);
+  const lines = model.chains.map((chain) => {
+    const links = chain.map((id) => {
+      const run = model.runs.filter((candidate) => candidate.id === id)[0];
+      const done = run !== undefined && run.status === "done";
+      const tone = done ? "done" : id === next ? "active" : "idle";
+      const tick = done ? "&#10003; " : "";
+      return `<a class="chain__link" data-st="${dashEscape(tone)}" `
+        + `href="#/run/${dashEscape(encodeURIComponent(id))}">${tick}${dashText(dashSlug(id))}</a>`;
+    });
+    return `<div class="chain">${links.join('<span class="chain__arrow">&rarr;</span>')}</div>`;
+  });
+  return '<div class="section" style="margin-top:0"><div class="section__title">'
+    + "<h2>Dependency chain</h2>"
+    + '<span class="eyebrow">run.yml triage.depends_on</span></div>'
+    + `<div class="card">${lines.join("")}</div></div>`;
 }
 
 /** `#/run/260829-x` → the run detail; anything unknown → the runs list. */
@@ -316,17 +430,28 @@ export function dashRunsView(model: DashboardModel, ui: DashUi, nowMs: number): 
   const statuses: string[] = [];
   for (const run of model.runs) if (statuses.indexOf(run.status) < 0) statuses.push(run.status);
 
+  // `order` is the workspace's own answer to "what should I do next" —
+  // topological on depends_on, runnable first — so it is the default. The other
+  // two remain: `updated` for "what moved", `id` for a stable list.
+  const rank = (run: RunModel): number => {
+    const at = model.order.indexOf(run.id);
+    return at < 0 ? model.order.length : at;
+  };
   const rows = model.runs
     .filter((run) => ui.status === "all" || run.status === ui.status)
     .slice()
     .sort((a, b) => (ui.sort === "updated"
       ? String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? ""))
-      : b.id.localeCompare(a.id)));
+      : ui.sort === "id"
+        ? b.id.localeCompare(a.id)
+        : rank(a) - rank(b)));
   const waiting = model.runs.filter((run) => dashPending(run) !== null);
+  const next = dashNextRun(model);
 
   const parts: string[] = [
     '<div class="viewhead"><h1>Runs</h1><p>Every fact here was read from files on disk at '
       + `${dashText(dashDateTime(model.generatedAt))}. Nothing on this page can change them.</p></div>`,
+    dashAttention(model),
   ];
 
   if (waiting.length > 0) {
@@ -346,7 +471,7 @@ export function dashRunsView(model: DashboardModel, ui: DashUi, nowMs: number): 
   const statusButtons = ["all"].concat(statuses).map((status) =>
     `<button class="fbtn" type="button" data-filter="${dashEscape(status)}" `
     + `aria-pressed="${ui.status === status ? "true" : "false"}">${dashText(dashWords(status))}</button>`);
-  const sortButtons = [["updated", "updated"], ["id", "run id"]].map((pair) =>
+  const sortButtons = [["order", "order"], ["updated", "updated"], ["id", "run id"]].map((pair) =>
     `<button class="fbtn" type="button" data-sort="${dashEscape(pair[0] ?? "")}" `
     + `aria-pressed="${ui.sort === pair[0] ? "true" : "false"}">${dashText(pair[1] ?? "")}</button>`);
   parts.push(
@@ -356,6 +481,7 @@ export function dashRunsView(model: DashboardModel, ui: DashUi, nowMs: number): 
       + sortButtons.join("")
       + "</div>",
   );
+  parts.push(dashChains(model));
 
   const list: string[] = [
     '<div class="card card--flush"><div class="runhead">'
@@ -366,14 +492,19 @@ export function dashRunsView(model: DashboardModel, ui: DashUi, nowMs: number): 
     list.push(`<div class="empty" style="border:0">No runs with status <strong>${
       dashText(dashWords(ui.status))}</strong>.</div>`);
   }
-  for (const run of rows) list.push(dashRunRow(run, nowMs));
+  for (const run of rows) list.push(dashRunRow(run, nowMs, run.id === next));
   list.push("</div>");
   parts.push(list.join(""));
   return parts.join("");
 }
 
-/** One row of the runs list: who, where, how far, how much, what it waits on. */
-export function dashRunRow(run: RunModel, nowMs: number): string {
+/**
+ * One row of the runs list: who, where, how far, how much, what it waits on.
+ *
+ * `isNext` marks the one run a human could pick up right now — the same
+ * `← next` marker `tldrx status` prints, so the two agree about where to start.
+ */
+export function dashRunRow(run: RunModel, nowMs: number, isNext: boolean): string {
   const pending = dashPending(run);
   const repos = run.repos.length === 0
     ? ""
@@ -384,7 +515,9 @@ export function dashRunRow(run: RunModel, nowMs: number): string {
     .join("");
 
   return `<a class="runrow" href="#/run/${dashEscape(encodeURIComponent(run.id))}">`
-    + `<div><div class="runrow__id">${dashText(run.id)}</div>`
+    + `<div><div class="runrow__id">${dashText(run.id)}`
+    + (isNext ? '<span class="runrow__next">&larr; next</span>' : "")
+    + "</div>"
     + `<div class="runrow__title">${dashText(run.title === "" ? "(untitled)" : run.title)}</div>`
     + `<div class="runrow__sub">${dashText((run.scope === "" ? "—" : run.scope) + repos + cursor)}</div></div>`
     + `<div class="runrow__cell">${dashChip(run.status, null, false)}`
@@ -397,9 +530,7 @@ export function dashRunRow(run: RunModel, nowMs: number): string {
     + `<span class="faint">/ ${dashText(dashUsd(run.ceilingUsd))}</span></span>`
     + `${dashMeter(run.spentUsd, run.ceilingUsd)}</div>`
     + `<div class="runrow__wait"${pending === null ? "" : ' data-wait="1"'}>`
-    + (pending === null
-      ? `<span class="faint">nothing — ${dashText(dashWords(run.status))}</span>`
-      : dashText(pending.text))
+    + dashWaitingCell(run)
     + "</div></a>";
 }
 
@@ -476,6 +607,23 @@ export function dashRunView(model: DashboardModel, id: string, nowMs: number): s
   return parts.join("");
 }
 
+/**
+ * Who signs this gate, and who did.
+ *
+ * The policy is printed for every stage, `human` ones included: "which of these
+ * will stop for me" is the question `run auto` makes people ask, and an answer
+ * that only shows up once you have opted in is an answer nobody finds. `by` is
+ * the other half — wave G put it in the model and nothing ever drew it, so an
+ * `auto` gate that the facilitator closed looked identical to one a person
+ * signed.
+ */
+export function dashGateSigner(stage: StageRowModel): string {
+  const policy = `<span class="tag">${dashText(stage.gatePolicy)}</span>`;
+  if (stage.gate === null) return '<span class="faint">—</span>';
+  if (stage.gateBy === null) return policy;
+  return `${policy} <span class="signer">by ${dashText(stage.gateBy)}</span>`;
+}
+
 export function dashKv(key: string, value: string): string {
   return `<div><div class="kv__k">${dashText(key)}</div><div class="kv__v">${value}</div></div>`;
 }
@@ -498,14 +646,17 @@ export function dashPathSection(run: RunModel): string {
       + "</td>"
       + `<td>${stage.gate === null
         ? '<span class="faint">none</span>'
-        : dashChip(stage.gate, stage.gate, false)}</td></tr>`;
+        : dashChip(stage.gate, stage.gate, false)}</td>`
+      + `<td>${dashGateSigner(stage)}</td></tr>`;
   }).join("");
 
+  const auto = run.path.filter((stage) => stage.gatePolicy === "auto").length;
   return '<div class="section"><div class="section__title"><h2>Execution path</h2>'
-    + '<span class="eyebrow">run.yml order</span></div>'
+    + `<span class="eyebrow">run.yml order · ${String(run.path.length - auto)} human, `
+    + `${String(auto)} auto</span></div>`
     + '<div class="card card--flush"><div class="scroll-x"><table><thead><tr>'
     + "<th>phase</th><th>stage</th><th>status</th><th>expert</th><th>model</th><th>cost</th>"
-    + `<th>gate</th></tr></thead><tbody>${rows}</tbody></table></div></div></div>`;
+    + `<th>gate</th><th>signed by</th></tr></thead><tbody>${rows}</tbody></table></div></div></div>`;
 }
 
 /**
@@ -874,10 +1025,11 @@ export function dashFaqView(model: DashboardModel): string {
  */
 const TEMPLATE_FUNCTIONS = [
   dashText, dashEscape, dashUsd, dashPlural, dashWords, dashDateTime, dashAgo, dashTone,
-  dashChip, dashCmd, dashPending, dashRoute, dashWaiting, dashTitle, dashTopMeta, dashNav,
+  dashChip, dashCmd, dashPending, dashSlug, dashWaitingCell, dashNextRun, dashAttention, dashChains,
+  dashRoute, dashWaiting, dashTitle, dashTopMeta, dashNav,
   dashMain, dashNoWorkspace,
   dashRunsView, dashRunRow, dashMeter,
-  dashRunView, dashKv, dashPathSection, dashHandoffsSection, dashPanelId, dashQuestion,
+  dashRunView, dashGateSigner, dashKv, dashPathSection, dashHandoffsSection, dashPanelId, dashQuestion,
   dashPlanSection,
   dashExpertsView, dashExpertCard, dashTrainCommand, dashRadar,
   dashWatchersView,

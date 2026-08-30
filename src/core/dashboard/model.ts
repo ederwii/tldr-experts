@@ -21,6 +21,8 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { MAX_LEVEL, loadExperts, driftWarnings, evidenceWarnings, type ExpertRecord } from "../experts/index.ts";
 import { listRuns, loadPhaseArtefacts, loadRun, type LoadedRun } from "../replay/index.ts";
+import { resolveDependencies, type DependencyInput, type ResolvedRun } from "../run/dependencies.ts";
+import { isMovable, waitingFor, type Waiting } from "../run/waiting.ts";
 import { openBlocks, parseQuestions } from "../text/index.ts";
 import { renderMarkdown } from "../markdown/index.ts";
 import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
@@ -30,8 +32,19 @@ import { validateEpicFile } from "../schemas/epic.ts";
 import { parseYaml } from "../yaml.ts";
 import { offlineHtml } from "./offlineHtml.ts";
 
-/** Bumped when a field is removed or changes meaning, never for an addition. */
-export const DASHBOARD_MODEL_VERSION = 1;
+/**
+ * Bumped when a field is removed or changes meaning, never for an addition.
+ *
+ * 1 → 2: `pendingQuestion` used to be "the first open question anywhere in the
+ * run" and is now "the question the run STOPPED for" — null while the run is at
+ * a gate, however many blocks are open in an already-approved phase.
+ * `pendingGate` kept its documented meaning but not its behaviour: it used to
+ * be the first stage whose gate object read `pending`, which on an untouched
+ * run is every stage. Both are aliases of `waiting` now. A consumer reading
+ * either gets different data than it did at v1, which is exactly what this
+ * number is for.
+ */
+export const DASHBOARD_MODEL_VERSION = 2;
 
 export interface StageRowModel {
   readonly phase: string;
@@ -49,6 +62,29 @@ export interface StageRowModel {
    * `gate` keeps its exact old spelling, so nothing reading it has to change.
    */
   readonly gateBy: string | null;
+  /**
+   * Who is MEANT to sign it: `human` waits for `tldrx approve`, `auto` lets the
+   * facilitator close it when the §5 conditions hold (spec §2.2
+   * `gates_policy`). Absence reads as `human` everywhere, including on a
+   * run.yml written before the key existed — the safe default is the one that
+   * stops, and `gatePolicyFor` applies exactly the same rule.
+   */
+  readonly gatePolicy: string;
+}
+
+/**
+ * What ONE run is waiting on — the same record `tldrx run status --json` prints.
+ *
+ * Not derived here. `waitingFor` (`src/core/run/waiting.ts`) is the single
+ * derivation both screens call, so the page and the CLI cannot disagree about
+ * whether a run is at a gate, holding a question, failed, or simply ready.
+ */
+export interface WaitingModel {
+  /** `gate` | `answer` | `ready` | `done` | `blocked` | `failed`. */
+  readonly kind: string;
+  readonly message: string;
+  /** Open question ids in the cursor phase, when it is waiting on answers. */
+  readonly questions: readonly string[];
 }
 
 export interface QuestionOptionModel {
@@ -130,10 +166,31 @@ export interface RunModel {
   readonly stagesDone: number;
   /** 0–100, rounded. */
   readonly percent: number;
-  /** The gate the run is waiting on, if any. */
+  /** What this run is waiting on. The one field to read; the two below alias it. */
+  readonly waiting: WaitingModel;
+  /**
+   * The stage held at a gate, or null. DERIVED from `waiting`: non-null only
+   * when `waiting.kind === "gate"`. Kept for one release for templates that
+   * already read it — new code should read `waiting`.
+   */
   readonly pendingGate: string | null;
-  /** The first open question, `"<id> · <title>"`, if any. */
+  /**
+   * The question the run stopped for, `"<id> · <title>"`, or null. DERIVED from
+   * `waiting`: non-null only when `waiting.kind === "answer"`. Open questions in
+   * an already-approved phase still appear under `phases[].questions`; they are
+   * not what the run is waiting on.
+   */
   readonly pendingQuestion: string | null;
+  /**
+   * Runs this one was proposed to follow (`run.yml` `triage.depends_on`),
+   * resolved from slugs to run ids. A slug with no run in this workspace keeps
+   * its raw slug — it was proposed to come first and it does not exist.
+   */
+  readonly dependsOn: readonly string[];
+  /** The subset of `dependsOn` that is not `done`. Empty means nothing blocks it. */
+  readonly blockedBy: readonly string[];
+  /** Nothing blocks it AND a human could move it right now. */
+  readonly runnable: boolean;
   /** The execution path, one row per stage, in run.yml order. */
   readonly path: readonly StageRowModel[];
   readonly phases: readonly PhaseModel[];
@@ -186,6 +243,19 @@ export interface DashboardModel {
   /** Highest competency level, so the renderer never has to know the constant. */
   readonly maxLevel: number;
   readonly runs: readonly RunModel[];
+  /**
+   * Every run id in the order a human should work through them: topological on
+   * `dependsOn`, runnable first, then newest-updated. The head is the run to do
+   * next. `runs` stays newest-first, so a renderer can offer either.
+   */
+  readonly order: readonly string[];
+  /**
+   * Root-to-leaf dependency paths, for an `A → B → C` rendering. Every arrow is
+   * a real `depends_on` edge, so a fork yields one chain per branch rather than
+   * one flattened list claiming an order nobody asked for. Chains of one are
+   * omitted and the list is capped (`MAX_CHAINS`).
+   */
+  readonly chains: readonly (readonly string[])[];
   readonly experts: readonly ExpertModel[];
   readonly faq: readonly FaqEntryModel[];
 }
@@ -204,11 +274,26 @@ export interface ModelOptions {
 /** Read the whole workspace into one JSON-serialisable model. */
 export function buildModel(root: string, generatedAt: string, options: ModelOptions = {}): DashboardModel {
   const now = options.now ?? new Date();
-  const runs: RunModel[] = [];
+
+  // Two passes, because "what blocks this run" is a fact about its SIBLINGS.
+  // Read every run first, resolve the whole graph once, then build each model
+  // knowing its place in it. `listRuns` is newest-first, which is the order
+  // `resolveDependencies` uses to settle a slug carried by two runs.
+  const loaded: LoadedRun[] = [];
   for (const id of listRuns(root)) {
-    const loaded = loadRun(root, id);
-    if (loaded !== null) runs.push(toRunModel(loaded));
+    const run = loadRun(root, id);
+    if (run !== null) loaded.push(run);
   }
+  const waiting = new Map(loaded.map((run) => [run.id, waitingFor(run.run, run.dir)]));
+  const graph = resolveDependencies(loaded.map((run): DependencyInput => ({
+    id: run.id,
+    status: run.run.status,
+    dependsOn: run.run.triage?.depends_on ?? [],
+    movable: isMovable(waiting.get(run.id)?.kind ?? "blocked"),
+    updatedAt: run.run.updated_at,
+  })));
+  const resolved = new Map(graph.runs.map((run) => [run.id, run]));
+
   return {
     modelVersion: DASHBOARD_MODEL_VERSION,
     generatedAt,
@@ -217,14 +302,32 @@ export function buildModel(root: string, generatedAt: string, options: ModelOpti
     workspaceFound: existsSync(join(root, PROJECT_FRAMEWORK_DIR)),
     live: options.live === true,
     maxLevel: MAX_LEVEL,
-    runs,
+    runs: loaded.map((run) => toRunModel(run, waiting.get(run.id), resolved.get(run.id))),
+    order: graph.order,
+    chains: graph.chains,
     experts: loadExperts(root, now).map(toExpertModel),
     faq: FAQ,
   };
 }
 
-export function toRunModel(loaded: LoadedRun): RunModel {
+/**
+ * One run, as the page needs it.
+ *
+ * `waiting` and `resolution` are arguments rather than second derivations so a
+ * caller that already computed them for the whole workspace does not pay twice.
+ * Both fall back to the honest answer for a run with no siblings: its own
+ * waiting derivation, and "nothing blocks it".
+ */
+export function toRunModel(
+  loaded: LoadedRun,
+  waiting?: Waiting,
+  resolution?: ResolvedRun,
+): RunModel {
   const doc = loaded.run;
+  const waits = waiting ?? waitingFor(doc, loaded.dir);
+  const depends = resolution ?? {
+    id: loaded.id, dependsOn: [], blockedBy: [], runnable: isMovable(waits.kind),
+  };
 
   const phases: PhaseModel[] = doc.phases.map((phase) => {
     const artefacts = loadPhaseArtefacts(loaded, phase.id);
@@ -255,12 +358,20 @@ export function toRunModel(loaded: LoadedRun): RunModel {
       budgetUsd: stage.budget_usd,
       gate: stage.gate === null ? null : `${stage.gate.type}: ${stage.gate.status}`,
       gateBy: stage.gate === null ? null : stage.gate.by,
+      gatePolicy: doc.gates_policy[stage.id] ?? "human",
     })),
   );
 
   const stages = doc.phases.flatMap((phase) => phase.stages);
-  const gate = stages.find((stage) => stage.gate !== null && stage.gate.status === "pending");
-  const question = phases.flatMap((phase) => phase.questions)[0];
+  const open = phases.flatMap((phase) => phase.questions);
+  // Both aliases are now DERIVED from `waiting`, never from the gate objects.
+  // The old `pendingGate` was "the first stage whose gate.status is pending" —
+  // which on a run nobody has started is EVERY stage, so a fresh run drew a red
+  // "waiting at a gate" card while `tldrx run status` called it `ready`.
+  const held = doc.cursor === null || waits.kind !== "gate" ? null : doc.cursor.stage;
+  const asked = waits.kind !== "answer"
+    ? undefined
+    : open.find((item) => item.id === waits.questions[0]) ?? open[0];
   const stagesTotal = stages.length;
   const stagesDone = stages.filter((stage) => TERMINAL.has(stage.status)).length;
 
@@ -278,8 +389,12 @@ export function toRunModel(loaded: LoadedRun): RunModel {
     stagesTotal,
     stagesDone,
     percent: stagesTotal === 0 ? 0 : Math.round((stagesDone / stagesTotal) * 100),
-    pendingGate: gate === undefined ? null : gate.id,
-    pendingQuestion: question === undefined ? null : `${question.id} · ${question.title}`,
+    waiting: { kind: waits.kind, message: waits.message, questions: waits.questions },
+    pendingGate: held,
+    pendingQuestion: asked === undefined ? null : `${asked.id} · ${asked.title}`,
+    dependsOn: depends.dependsOn,
+    blockedBy: depends.blockedBy,
+    runnable: depends.runnable,
     path,
     phases,
     plan: loadPlan(loaded),
