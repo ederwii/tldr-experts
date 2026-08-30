@@ -33,11 +33,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { listItems, parseHandoff } from "../text/handoff.ts";
+import { parseQuestions } from "../text/questions.ts";
 import { parseSrcToken } from "../text/srcToken.ts";
 import { MAX_ITEM_CHARS, MAX_LIST_ITEMS, type PlanStatus } from "../schemas/planCommon.ts";
 import type { Story } from "../schemas/story.ts";
 import type { Epic } from "../schemas/epic.ts";
-import { isRetired, type Fact } from "../facts/Fact.ts";
+import { isRetired, MAX_FACT_CHARS, type Fact } from "../facts/Fact.ts";
 import { repoPath, type WorkspaceContext } from "../../hooks/lib/workspace.ts";
 import { MAX_TOUCHED_FILES } from "./prompts.ts";
 import { applyPlanPatch, quote, type StoryPatch } from "./storyFile.ts";
@@ -60,6 +61,8 @@ export const IMPLICIT_STORY_NOTE =
 /** Where the What phase leaves the two documents the plan is synthesised from. */
 export const WHAT_HANDOFF_REL = "01-what/handoff.md";
 export const SUCCESS_METRICS_REL = "01-what/success-metrics.md";
+/** Where the whole answer lives when the fact row only kept its first 300 chars. */
+export const QUESTIONS_REL = "01-what/questions.md";
 
 /** Spec §2.13's cap on a story's touched paths, narrowed to what a prompt inlines. */
 export const MAX_IMPLICIT_TOUCHES = MAX_TOUCHED_FILES;
@@ -194,17 +197,25 @@ export function implicitPlanContent(parts: ImplicitPlanParts): ImplicitPlanConte
   // The answers a human gave at this run's gates, and which touched document each
   // one settles. This is the half that makes the plan about Build's work rather
   // than a transcript of What's.
-  const answered = planFacts(runFacts(parts.facts, parts.runId), touches);
+  const answered = planFacts(runFacts(parts.facts, parts.runId), touches, answersByQuestion(parts.runDir));
 
   // Everything the What stage said, MINUS the bullets whose subject was the What
   // stage's own output. `questions.md` has been written; telling a developer to
-  // write it is the one instruction that is certainly wrong here.
+  // write it is the one instruction that is certainly wrong here. What was
+  // dropped, and on which signal, goes into `notes:` — a filter whose mistakes
+  // are invisible is a filter nobody can correct.
+  const dropped: { where: string; bullet: string }[] = [];
+  const keep = (where: string) => (bullet: string): boolean => {
+    if (!isWhatDeliverable(bullet)) return true;
+    dropped.push({ where, bullet });
+    return false;
+  };
   const goal = cap([
-    ...decisionBullets(handoff).filter((bullet) => !isWhatDeliverable(bullet)),
+    ...decisionBullets(handoff).filter(keep("goal")),
     ...applyGoals(answered),
   ]);
   const acceptanceRaw = cap([
-    ...listItems(metrics).filter((item) => !isWhatDeliverable(item)),
+    ...listItems(metrics).filter(keep("acceptance")),
     ...applyAcceptance(answered),
   ]);
 
@@ -230,7 +241,7 @@ export function implicitPlanContent(parts: ImplicitPlanParts): ImplicitPlanConte
       : dod.map((command) => `$ ${command} → exit 0`),
     touches,
     dod,
-    notes: cap(factNotes(answered)),
+    notes: cap([...factNotes(answered), ...droppedNotes(dropped)]),
     factIds: answered.facts.map((fact) => fact.id),
     branch: epicBranchFor(parts.runId),
     budgetUsd: parts.budgetUsd,
@@ -397,16 +408,56 @@ export function runFacts(facts: readonly Fact[], runId: string): readonly Fact[]
 }
 
 /**
- * A bullet whose subject is the WHAT stage's own deliverable, not Build's work.
+ * Signals that a bullet's subject is the WHAT stage's own deliverable.
  *
- * Detected by the literal mentions — `questions.md` and `### Q` — because those
- * are the two ways this run's documents actually name the artefact, and a rule
- * that guessed at intent would drop criteria a human wrote on purpose. It errs
- * towards keeping: a bullet about answers that never names the file survives, and
- * shows up in the story where a person can strike it.
+ * Every one is a LITERAL the run's own documents actually use, never an
+ * inference about intent. Measured on the aparece run: the first three caught
+ * three of six bullets and left "Every question names what is blocked", "No
+ * recorded fact is re-asked" and "Gate passes" behind — three criteria about
+ * `01-what/questions.md`'s contents that never name the file. The last three
+ * signals are exactly what those three say instead.
+ *
+ * Whatever is dropped is written into the story's `notes:`, so a bullet this
+ * gets wrong is visible to the person reading the plan rather than gone.
+ */
+export const WHAT_SIGNALS: readonly { readonly name: string; readonly test: (bullet: string) => boolean }[] = [
+  { name: "questions.md", test: (b) => b.includes("questions.md") },
+  { name: "### Q", test: (b) => b.includes("### Q") },
+  // Any path inside the What phase: `01-what/handoff.md`, `01-what/scope.md`.
+  { name: "01-what/", test: (b) => b.includes("01-what/") },
+  // A question id of this run: `Q1`, `Q1–Q6`, `Q1, Q3, Q4`.
+  { name: "a question id", test: (b) => /\bQ\d{1,3}\b/.test(b) },
+  // "Every question names…", "each question's why-text", "the question count".
+  { name: "the run's questions", test: (b) => /\b(?:each|every|no|the)\s+(?:recorded\s+)?questions?\b/i.test(b) },
+];
+
+/**
+ * A bullet whose subject is the What stage's own deliverable, not Build's work.
+ *
+ * Errs towards dropping ONLY because `whatSignal` records what it dropped and
+ * why: a bullet about `04-build/`, or about a file the story touches, matches no
+ * signal and survives.
  */
 export function isWhatDeliverable(bullet: string): boolean {
-  return bullet.includes("questions.md") || bullet.includes("### Q");
+  return whatSignal(bullet) !== null;
+}
+
+/** Which signal fired, for the note. Null when the bullet is Build's work. */
+export function whatSignal(bullet: string): string | null {
+  return WHAT_SIGNALS.find((signal) => signal.test(bullet))?.name ?? null;
+}
+
+/** One note per dropped bullet, naming the signal and the bullet's opening. */
+export function droppedNotes(dropped: readonly { readonly where: string; readonly bullet: string }[]): readonly string[] {
+  return dropped.map((entry) =>
+    `dropped from ${entry.where} as the What stage's own work ` +
+    `(mentions ${whatSignal(entry.bullet) ?? "?"}): ${head(entry.bullet)}`);
+}
+
+/** Enough of a bullet to recognise it, without repeating the whole thing. */
+function head(bullet: string, max = 90): string {
+  const line = bullet.replace(/\s+/g, " ").trim();
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 
 /**
@@ -455,7 +506,53 @@ export interface FactPlan {
  * strings, which is the only kind of mapping worth writing into a plan. Where it
  * cannot be derived the plan SAYS SO rather than inventing a pairing.
  */
-export function planFacts(facts: readonly Fact[], touches: readonly string[]): FactPlan {
+export function wasTruncated(text: string): boolean {
+  return text.length >= MAX_FACT_CHARS;
+}
+
+/**
+ * The full answers, keyed by BOTH the question id and the fact id.
+ *
+ * `.tldrx/memory/facts.yml` caps a fact at 300 chars (spec §2.5), and
+ * `captureAnswers` builds it as `"<question> — <answer>"`, so a long answer is
+ * cut mid-sentence — on the aparece run, four of six lost the very clause that
+ * names the ADR they settle. `01-what/questions.md` still holds the whole thing
+ * under `[Answer]:`, and a question block's footer carries the fact id it
+ * produced, so either key finds it.
+ */
+export function answersByQuestion(runDir: string): ReadonlyMap<string, string> {
+  const out = new Map<string, string>();
+  const text = readOrEmpty(join(runDir, QUESTIONS_REL));
+  if (text === "") return out;
+  for (const block of parseQuestions(text).blocks) {
+    if (block.answer.trim() === "") continue;
+    out.set(block.id, block.answer);
+    const factId = block.footer?.fact ?? "";
+    if (factId !== "") out.set(factId, block.answer);
+  }
+  return out;
+}
+
+/**
+ * What a fact's mapping is matched against: its own text, plus the full answer
+ * behind it when that text was cut at the 300-char cap.
+ *
+ * Both halves, not the answer alone — a fact whose stored text carries a key the
+ * answer does not must keep matching on it. This is used ONLY for the mapping;
+ * the `goal` bullet still quotes the fact verbatim, because the fact is what
+ * `[src: F<n>]` cites.
+ */
+export function matchTextOf(fact: Fact, answers: ReadonlyMap<string, string>): string {
+  if (!wasTruncated(fact.fact)) return fact.fact;
+  const full = answers.get(fact.source.q ?? "") ?? answers.get(fact.id) ?? "";
+  return full === "" ? fact.fact : `${fact.fact}\n${full}`;
+}
+
+export function planFacts(
+  facts: readonly Fact[],
+  touches: readonly string[],
+  answers: ReadonlyMap<string, string> = new Map(),
+): FactPlan {
   const mappings: FactMapping[] = [];
   const mappedPaths = new Set<string>();
   const mappedFacts = new Set<string>();
@@ -467,7 +564,7 @@ export function planFacts(facts: readonly Fact[], touches: readonly string[]): F
   for (const path of touches) {
     for (const key of decisionKeysOf(path)) {
       for (const fact of facts) {
-        if (!fact.fact.toLowerCase().includes(key.toLowerCase())) continue;
+        if (!matchTextOf(fact, answers).toLowerCase().includes(key.toLowerCase())) continue;
         if (seen.has(`${fact.id}\u0000${path}`)) continue;
         seen.add(`${fact.id}\u0000${path}`);
         mappings.push({ factId: fact.id, path, key });
@@ -503,11 +600,17 @@ export function applyAcceptance(plan: FactPlan): readonly string[] {
   if (plan.mappings.length > 0) {
     const paths = [...new Set(plan.mappings.map((m) => m.path))];
     const ids = [...new Set(plan.mappings.map((m) => m.factId))];
-    out.push(
+    const say = (target: string): string =>
       "every touched document whose decision is settled by a fact of this run no longer reads " +
-      "`Status: proposed` — `grep -c 'Status: proposed' " + listPaths(paths) + "` → 0 for the ones " +
-      `a fact decides [src: ${ids.join("; ")}]`,
-    );
+      `\`Status: proposed\` — \`grep -c 'Status: proposed' ${target}\` → 0 for the ones ` +
+      `a fact decides [src: ${ids.join("; ")}]`;
+    // The command has to be COMPLETE or not given at all: a `(+1 more)` inside a
+    // grep is something a person pastes, runs, and reads the wrong answer from.
+    // Over the item cap, point at `notes:`, which lists every path in full.
+    const whole = say(paths.join(" "));
+    out.push(whole.length <= MAX_ITEM_CHARS
+      ? whole
+      : say(`<the ${String(paths.length)} documents listed under \`notes:\`>`));
   }
   if (plan.mappings.length === 0 || plan.unmappedPaths.length > 0 || plan.unmappedFactIds.length > 0) {
     out.push(
@@ -538,7 +641,10 @@ export function factNotes(plan: FactPlan): readonly string[] {
   return notes;
 }
 
-/** At most four paths, then a count. A bullet has to stay inside MAX_ITEM_CHARS. */
+/**
+ * At most four paths, then a count — for PROSE, where an abbreviation is fine.
+ * Never for a command: see `applyAcceptance`.
+ */
 function listPaths(paths: readonly string[]): string {
   const shown = paths.slice(0, 4);
   const rest = paths.length - shown.length;

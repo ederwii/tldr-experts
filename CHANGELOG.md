@@ -48,13 +48,20 @@
   A real `03-plan/` always wins. `tldrx next` prints one line naming the reason, and
   `tldrx run status` prints `plan: implicit (scope skips Plan)` so a synthesised plan never
   reads like one a person approved. The plan carries the work **forward**: bullets whose
-  subject is the What stage's own deliverable are dropped (detected by the literal
-  `questions.md` / `### Q` mentions), every live fact stamped with this run adds
+  subject is the What stage's own deliverable are dropped on five literal signals
+  (`questions.md`, `### Q`, an `01-what/` path, a question id, the run's-questions
+  vocabulary) with every drop and its signal recorded in the story's `notes:`, every
+  live fact stamped with this run adds
   `Apply <fact> to the touched files [src: F<n>]` to `goal`, and `acceptance` gains a check
   that each document one of those facts settles — the fact's text mentions that file's ADR
   id or decision number — no longer reads `Status: proposed`. A mapping that cannot be
   derived is reported in the story's `notes:` and falls back to "apply every listed fact;
-  leave a one-line note per file saying which fact changed it", never to a guess. The
+  leave a one-line note per file saying which fact changed it", never to a guess. A fact
+  cut at §2.5's 300-char cap is matched against the full `[Answer]:` behind it in
+  `01-what/questions.md`: measured on a real run, `captureAnswers` had sliced the ADR
+  clause off four of six facts, so 2 of 6 mapped on the stored text and 6 of 6 map with
+  the answer. The grep in that criterion is complete or names `notes:` wholesale — a
+  `(+1 more)` inside a command is something a person pastes and reads wrong. The
   developer prompt states plainly that Plan was skipped and this story applies the run's
   answered decisions.
 - **`skips:` in a workflow is read rather than decorative.** The schema declared the key and

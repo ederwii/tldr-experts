@@ -15,14 +15,16 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import {
-  chooseRepo, citedRepoPaths, decisionBullets, decisionKeysOf, dodCommandsFor, dodRolesFor, epicBranchFor,
-  implicitPlanContent, isWhatDeliverable, loadImplicitPlan, planFacts, planIsSkipped, renderImplicitPlan,
-  runFacts, satisfiedByImplicitPlan, updateImplicitPlan, IMPLICIT_PLAN_REL, IMPLICIT_STORY_NOTE,
+  answersByQuestion, chooseRepo, citedRepoPaths, decisionBullets, decisionKeysOf, dodCommandsFor, dodRolesFor,
+  applyAcceptance, droppedNotes, epicBranchFor, implicitPlanContent, isWhatDeliverable, loadImplicitPlan, matchTextOf, planFacts,
+  planIsSkipped, renderImplicitPlan, runFacts, satisfiedByImplicitPlan, updateImplicitPlan, wasTruncated,
+  whatSignal, IMPLICIT_PLAN_REL, IMPLICIT_STORY_NOTE,
 } from "../src/core/build/implicitPlan.ts";
+import { MAX_FACT_CHARS } from "../src/core/facts/Fact.ts";
 import type { Fact } from "../src/core/facts/Fact.ts";
 import { listItems } from "../src/core/text/handoff.ts";
 import { loadWorkflowPreset } from "../src/core/run/workflowPreset.ts";
@@ -127,6 +129,22 @@ function git(ws: BuildWorkspace, args: readonly string[]): string {
 
 function plan(ws: BuildWorkspace): string {
   return readFileSync(join(ws.runDir, IMPLICIT_PLAN_REL), "utf8");
+}
+
+/**
+ * One `  <key>:` block of the rendered story.
+ *
+ * `notes:` deliberately ECHOES the head of every bullet the What-deliverable
+ * filter dropped, so "gone from goal" cannot be asserted against the whole file
+ * — it would be satisfied by the note that says it was dropped.
+ */
+function block(text: string, key: string): string {
+  const lines = text.split("\n");
+  const at = lines.findIndex((line) => line.startsWith(`  ${key}:`));
+  if (at === -1) return "";
+  const out = [lines[at] ?? ""];
+  for (let i = at + 1; i < lines.length && (lines[i] ?? "").startsWith("    "); i++) out.push(lines[i] ?? "");
+  return out.join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -569,10 +587,103 @@ describe("which answers count, and which document each settles", () => {
   });
 
   test("a bullet whose subject is the What's own deliverable is detected by its literal mentions", () => {
-    expect(isWhatDeliverable("In scope: one `questions.md` block per item")).toBe(true);
-    expect(isWhatDeliverable("`01-what/questions.md` contains exactly 6 `### Q` blocks")).toBe(true);
-    expect(isWhatDeliverable("Out of scope: selecting an answer on the owner's behalf")).toBe(false);
-    expect(isWhatDeliverable("settle ADR-D008 and ADR-D011")).toBe(false);
+    expect(whatSignal("In scope: one `questions.md` block per item")).toBe("questions.md");
+    expect(whatSignal("it holds exactly 6 `### Q` blocks")).toBe("### Q");
+    // The three aparece survivors of the first three signals, in their own words.
+    expect(whatSignal(
+      "**Gate passes.** `01-what/handoff.md`'s four required sections each hold at least one sourced bullet.",
+    )).toBe("01-what/");
+    expect(whatSignal(
+      "**No recorded fact is re-asked.** None of Q1–Q6 duplicates the subject of F001 (planning process).",
+    )).toBe("a question id");
+    expect(whatSignal(
+      "**Every question names what is blocked.** Each question's *Why it is being asked* text states the stage(s).",
+    )).toBe("the run's questions");
+  });
+
+  test("Build's own work survives every signal", () => {
+    for (const bullet of [
+      "Out of scope: selecting an answer on the owner's behalf for any of the six",
+      "settle ADR-D008 and ADR-D011 in `docs/adr/`",
+      "`04-build/handoff.md` lists the epic branch ready to merge",
+      "every touched document no longer reads `Status: proposed`",
+      "each ADR's Decision section states the accepted option",
+      "`docs/domain-design/DECISIONS-NEEDED.md` is left as it is",
+    ]) {
+      expect(whatSignal(bullet), bullet).toBeNull();
+      expect(isWhatDeliverable(bullet)).toBe(false);
+    }
+  });
+
+  test("a grep too long for one bullet points at `notes:` rather than being cut mid-command", () => {
+    const many = Array.from({ length: 12 }, (_, i) =>
+      `docs/domain-design/docs/adr/ADR-D${String(100 + i)}-A-RATHER-LONG-DECISION-RECORD-NAME.md`);
+    const facts = many.map((_path, i) =>
+      fact(`F${String(100 + i)}`, `settled. Accepts ADR-D${String(100 + i)} as written.`, FIXTURE_RUN));
+    const line = applyAcceptance(planFacts(facts, many))[0] ?? "";
+    expect(line).toContain("`grep -c 'Status: proposed' <the 12 documents listed under `notes:`>`");
+    expect(line).not.toContain("more)");
+    expect(line.length).toBeLessThanOrEqual(512);
+  });
+
+  test("what the filter drops is written into the story, with the signal that fired", () => {
+    expect(droppedNotes([{ where: "acceptance", bullet: "**Gate passes.** `01-what/handoff.md` holds bullets." }]))
+      .toEqual([
+        "dropped from acceptance as the What stage's own work (mentions 01-what/): " +
+        "**Gate passes.** `01-what/handoff.md` holds bullets.",
+      ]);
+  });
+});
+
+describe("a fact whose text was cut at the 300-char cap", () => {
+  const QUESTIONS = `# Questions
+
+## Q1 · Where do customers authenticate?
+
+[Answer]: A — outside the SSO provider, via phone verification. Accepts ADR-D008 as written.
+
+<!-- answered_by: alan | answered_at: 2026-08-29T09:30:00Z | fact: F002 -->
+
+## Q2 · What shape is a zone?
+
+[Answer]: A — circle plus polygon, first match wins. Accepts ADR-D013 as written.
+
+<!-- answered_by: alan | answered_at: 2026-08-29T09:31:00Z | fact: F003 -->
+`;
+
+  test("the full `[Answer]:` is read back, keyed by both the question id and the fact id", () => {
+    const ws = workspace({ ...DOCS_RUN, files: { ...(DOCS_RUN.files ?? {}) } });
+    writeFileSync(join(ws.runDir, "01-what", "questions.md"), QUESTIONS, "utf8");
+    const answers = answersByQuestion(ws.runDir);
+    expect(answers.get("Q1")).toContain("Accepts ADR-D008 as written.");
+    expect(answers.get("F002")).toBe(answers.get("Q1"));
+    expect(answers.get("Q3")).toBeUndefined();
+    // A run with no questions.md is an empty map, not a throw.
+    expect(answersByQuestion(join(ws.root, "nowhere")).size).toBe(0);
+  });
+
+  test("a truncated fact is matched against its answer too; an untruncated one is not touched", () => {
+    const answers = new Map([["Q1", "…Accepts ADR-D008 as written."]]);
+    // `FactsStore.append` writes `slice(0, 299) + "…"`, so a cut fact is exactly
+    // MAX_FACT_CHARS long — and its ADR clause is the part that went missing.
+    const cut = fact("F002", `${"x".repeat(MAX_FACT_CHARS - 1)}…`, FIXTURE_RUN);
+    expect(wasTruncated(cut.fact)).toBe(true);
+    expect(matchTextOf({ ...cut, source: { ...cut.source, q: "Q1" } }, answers)).toContain("ADR-D008");
+
+    const whole = fact("F004", "short and complete", FIXTURE_RUN);
+    expect(wasTruncated(whole.fact)).toBe(false);
+    expect(matchTextOf({ ...whole, source: { ...whole.source, q: "Q1" } }, answers)).toBe("short and complete");
+  });
+
+  test("the mapping uses the answer, so a cut fact still settles its ADR", () => {
+    const cut = {
+      ...fact("F002", `Where do customers authenticate? — A — outside it${"x".repeat(MAX_FACT_CHARS)}`.slice(0, MAX_FACT_CHARS), FIXTURE_RUN),
+      source: { who: "alan", when: "2026-08-29T09:30:00Z", run: FIXTURE_RUN, q: "Q1" },
+    };
+    const answers = new Map([["Q1", "A — outside the SSO provider. Accepts ADR-D008 as written."]]);
+    expect(planFacts([cut], ["docs/adr/ADR-D008-AUTH.md"]).mappings).toEqual([]);
+    expect(planFacts([cut], ["docs/adr/ADR-D008-AUTH.md"], answers).mappings)
+      .toEqual([{ factId: "F002", path: "docs/adr/ADR-D008-AUTH.md", key: "ADR-D008" }]);
   });
 });
 
@@ -616,12 +727,19 @@ describe("a run whose questions have been answered", () => {
     expect(text).toContain("F003 settles docs/adr/ADR-D011-ENTITLEMENTS.md (its text mentions `ADR-D011`)");
     expect(text).toContain("no fact of this run mentions the ADR id or decision number of 1 touched file(s)");
 
-    // (3) the What's own deliverable is gone from both lists.
-    expect(text).not.toContain("one `questions.md` block per open ADR");
-    expect(text).not.toContain("### Q` blocks");
-    // What the What decided that is NOT about questions.md survives.
-    expect(text).toContain("In scope: settling ADR-D008 and ADR-D011");
-    expect(text).toContain("**Every ADR names its decision.**");
+    // (3) the What's own deliverable is gone from both lists — and the drop is
+    // ON THE RECORD in `notes:`, so a filter mistake is visible, not invisible.
+    expect(block(text, "goal")).not.toContain("one `questions.md` block per open ADR");
+    expect(block(text, "acceptance")).not.toContain("### Q` blocks");
+    expect(block(text, "notes")).toContain(
+      "dropped from goal as the What stage's own work (mentions questions.md): In scope: one `questions.md` block",
+    );
+    expect(block(text, "notes")).toContain("dropped from acceptance as the What stage's own work");
+    // The grep is a command a person pastes: it is complete or it is not given.
+    expect(block(text, "acceptance")).not.toContain("more)`");
+    // What the What decided that is NOT about the questions file survives.
+    expect(block(text, "goal")).toContain("In scope: settling ADR-D008 and ADR-D011");
+    expect(block(text, "acceptance")).toContain("**Every ADR names its decision.**");
 
     // (4) the developer is told where this story came from.
     const developer = readFileSync(join(promptDir, "developer-S1-1.md"), "utf8");

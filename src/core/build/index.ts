@@ -14,6 +14,7 @@ export {
   IMPLICIT_PLAN_REL, IMPLICIT_PLAN_FILE, IMPLICIT_STORY_ID, IMPLICIT_EPIC_ID, IMPLICIT_WAVE_ID,
   MAX_IMPLICIT_TOUCHES, PLAN_STAGE, WHAT_HANDOFF_REL, SUCCESS_METRICS_REL, IMPLICIT_STORY_NOTE,
   runFacts, planFacts, applyGoals, applyAcceptance, factNotes, decisionKeysOf, isWhatDeliverable,
+  whatSignal, droppedNotes, answersByQuestion, matchTextOf, wasTruncated, WHAT_SIGNALS, QUESTIONS_REL,
 } from "./implicitPlan.ts";
 export type {
   ImplicitPlanParts, ImplicitPlanContent, CitedPath, FactMapping, FactPlan,

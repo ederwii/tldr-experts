@@ -1723,18 +1723,30 @@ metrics describe what the WHAT stage had to produce — "one `questions.md` bloc
 matches the decision count". Copied straight into Build they would tell a developer to write a file the run already
 has. So:
 
-- **Bullets whose subject is the What's own deliverable are dropped** from `goal` and `acceptance`, detected by the
-  literal `questions.md` and `### Q` mentions. The rule errs towards KEEPING — a bullet about answers that never names
-  the file survives and shows up in the story where a person can strike it — because a rule that guessed at intent
-  would drop criteria somebody wrote on purpose.
+- **Bullets whose subject is the What's own deliverable are dropped** from `goal` and `acceptance`, on five LITERAL
+  signals — `questions.md`, `### Q`, any `01-what/` path, a question id (`Q1`, `Q1–Q6`), and the run's-questions
+  vocabulary (`every question …`, `each question's …`). Measured on the aparece run: the first two caught three of six
+  bullets and left three criteria about `01-what/questions.md`'s contents that never name the file; the other three
+  signals are exactly what those three say instead. **Every dropped bullet is written into `notes:`** with the signal
+  that fired and its opening 90 characters — a filter whose mistakes are invisible is a filter nobody can correct,
+  and with the drop on the record the rule can afford to be decisive. A bullet about `04-build/`, or about a file the
+  story touches, matches no signal and survives.
 - **The answers become the work.** Every live fact in `.tldrx/memory/facts.yml` whose `source.run` is THIS run is an
   answer a human gave at one of its gates. Each one adds `Apply <fact text> to the touched files [src: F<n>]` to
   `goal`.
-- **`acceptance` gains the settled-documents criterion.** A fact *settles* a touched document when the fact's own text
-  mentions that file's ADR id (`ADR-D008`, or the bare `D008`) or its `decision <n>` — a claim anyone can re-check by
-  reading the two strings. A leading document number (`13-OPEN-DECISIONS.md`) is deliberately **not** a decision
+- **`acceptance` gains the settled-documents criterion.** A fact *settles* a touched document when its text mentions
+  that file's ADR id (`ADR-D008`, or the bare `D008`) or its `decision <n>` — a claim anyone can re-check by reading
+  the two strings. **A fact cut at §2.5's 300-char cap is matched against the full `[Answer]:` behind it**, read from
+  `01-what/questions.md` by the fact's `source.q` or by the question block's footer `fact:` id. `captureAnswers`
+  builds a fact as `"<question> — <answer>"` and slices, so on the aparece run four of six lost the very clause naming
+  the ADR they settle: 2 of 6 mapped on the stored text, 6 of 6 with the answer. Both halves are matched, never the
+  answer alone — a fact carrying a key its answer does not must keep matching on it. The cap itself is unchanged: it
+  is spec §2.5, and the fallback needs no schema change to work on facts already on disk. The `goal` bullet still
+  quotes the fact verbatim, because the fact is what `[src: F<n>]` cites. A leading document number (`13-OPEN-DECISIONS.md`) is deliberately **not** a decision
   number. With a mapping: ``every touched document whose decision is settled by a fact of this run no longer reads
-  `Status: proposed` — `grep -c 'Status: proposed' <paths>` → 0 for the ones a fact decides [src: F<n>…]``. With
+  `Status: proposed` — `grep -c 'Status: proposed' <paths>` → 0 for the ones a fact decides [src: F<n>…]``, whose path
+  list is COMPLETE or replaced wholesale by "the N documents listed under `notes:`" — a `(+1 more)` inside a command
+  is something a person pastes, runs, and reads the wrong answer from. With
   anything left over — an unmapped file, an unmapped fact, or no mapping at all — it also (or only) gets the generic
   `apply every listed fact; leave a one-line note per file saying which fact changed it [src: F<n>…]`. `notes:` names
   every derived pair, every unmapped file and every unmapped fact, so a partial mapping is visible rather than implied.
