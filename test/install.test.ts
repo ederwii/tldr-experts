@@ -86,9 +86,15 @@ describe("tldrx install --claude --project", () => {
     const skill = readFileSync(skillPath(root), "utf8");
     expect(skill).toContain(SKILL_MARKER);
     expect(skill).toContain("disable-model-invocation: true");
-    // The body is the plugin's, not a paraphrase of it.
+    // The body is the plugin's, not a paraphrase of it. The heading is READ from
+    // the source rather than restated here: a test that hard-codes it keeps
+    // passing after the skill is rewritten, which is the drift it exists to catch.
     const source = readFileSync(join(PLUGIN_DIR, "skills", "tldrx", "SKILL.md"), "utf8");
-    expect(skill).toContain("# tldrx — the facilitator");
+    // …from the BODY: the front matter's comment lines also start with `# `.
+    const body = source.slice(source.indexOf("---", 3) + 3);
+    const heading = body.split("\n").find((line) => line.startsWith("# ")) ?? "";
+    expect(heading).toStartWith("# tldrx");
+    expect(skill).toContain(heading);
     expect(skill.length).toBeGreaterThan(source.length);
   });
 
