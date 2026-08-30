@@ -234,6 +234,41 @@ describe("one shared budget, inputs first (N3)", () => {
     expect(pending.context?.expert_knowledge_bytes).toBeGreaterThanOrEqual(inlined);
   });
 
+  test("the preamble counts what it inlined; it never claims a file the budget dropped", async () => {
+    // The contradiction this guards, measured on a real Build prompt 2026-08-30:
+    // 9 of 15 declared inputs inlined, 6 marked "It exists on disk", and the
+    // preamble above them still read "there is nothing to open and nothing else
+    // to find" — including for the two documents the run existed to edit.
+    const ws = seededWorkspace({ inputsMaxBytes: 40_000 });
+    expect((await prepare(ws)).code).toBe(0);
+    const { prompt } = bundle(ws);
+
+    expect(prompt).not.toContain("so there is nothing to open and nothing else to find");
+    expect(prompt).toContain("Inlined below: 8 of 13 declared inputs.");
+    expect(prompt).toContain(
+      "The rest exist on disk — READ them at the listed paths before relying on them; do not",
+    );
+
+    // The list names exactly the ones with NO content in the prompt.
+    const at = prompt.indexOf("guess: ");
+    const listed = prompt.slice(at, prompt.indexOf("\n", at));
+    expect(listed).toContain(ADR_D013);
+    expect(listed).toContain("seed/ADR-D009.md");
+    expect(listed).toContain("seed/ADR-D010.md");
+    // Inlined whole, or inlined as a labelled prefix: neither is "go and read it".
+    expect(listed).not.toContain("seed/README.md");
+    expect(listed).not.toContain("seed/ADR-D008.md");
+  });
+
+  test("with every input inlined the preamble is the flat sentence it always was", async () => {
+    const ws = seededWorkspace();
+    expect((await prepare(ws)).code).toBe(0);
+    const { prompt } = bundle(ws);
+    expect(prompt).toContain("These files are the ONLY ones you may read. Their full content is inlined below,");
+    expect(prompt).toContain("so there is nothing to open and nothing else to find.");
+    expect(prompt).not.toContain("Inlined below:");
+  });
+
   test("a declared input that still does not fit is named on stdout and on the page", async () => {
     const ws = seededWorkspace({ inputsMaxBytes: 40_000 });
     const outcome = await prepare(ws);
@@ -798,5 +833,159 @@ describe("the price/context table (N7)", () => {
     expect(contextTokensFor("claude-haiku-4-5-20251001")).toBe(200_000);
     expect(contextTokensFor("sonnet[1m]")).toBe(1_000_000);
     expect(contextTokensFor("something-unknown")).toBe(200_000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+import {
+  buildDeveloperPrompt, orderTouches, MAX_TOUCHED_BYTES, VALIDATE_CRITERION_RULE,
+} from "../src/core/build/prompts.ts";
+import { NOT_IN_WORKTREE } from "../src/core/facilitator/prompt.ts";
+import type { PlannedEpic, PlannedStory } from "../src/core/build/plan.ts";
+
+let worktrees: string[] = [];
+afterEach(() => {
+  for (const dir of worktrees) rmSync(dir, { recursive: true, force: true });
+  worktrees = [];
+});
+
+/** A throwaway directory standing in for a story's worktree. */
+function worktree(files: Readonly<Record<string, string>>): string {
+  const dir = mkdtempSync(join(tmpdir(), "tldrx-touches-"));
+  worktrees.push(dir);
+  for (const [rel, content] of Object.entries(files)) {
+    mkdirSync(join(dir, rel, ".."), { recursive: true });
+    writeFileSync(join(dir, rel), content, "utf8");
+  }
+  return dir;
+}
+
+const EPIC: PlannedEpic = {
+  epic: {
+    version: 1, id: "E1", title: "The decisions run", repos: ["app"],
+    stories: ["S1"], branch: "epic/260830-decisions", status: "todo",
+  },
+  text: "# E1\n",
+  path: "/nowhere/E1.md",
+  rel: "04-build/implicit-plan.yml",
+};
+
+function planned(touches: readonly string[], goal: readonly string[] = []): PlannedStory {
+  return {
+    story: {
+      version: 1, id: "S1", epic: "E1", title: "Settle what the owner answered",
+      repo: "app", status: "todo", depends_on: [], touches,
+      acceptance: ["no touched decision still reads Status: proposed"],
+      test_plan: ["$ npm run lint -> exit 0"],
+      evidence: [],
+    },
+    dod: { present: true, commands: ["npm run lint"] },
+    text: "# S1\n",
+    path: "/nowhere/S1.md",
+    rel: "04-build/implicit-plan.yml",
+    wave: "W1",
+    goal,
+  };
+}
+
+function developerPrompt(
+  story: PlannedStory,
+  dir: string,
+  notInWorktree?: ReadonlySet<string>,
+): string {
+  return buildDeveloperPrompt({
+    runId: "260830-decisions",
+    story,
+    epic: EPIC,
+    repoName: "app",
+    branch: "story/260830-decisions/S1",
+    epicBranch: "epic/260830-decisions",
+    worktree: dir,
+    commands: ["npm run lint"],
+    conventions: "_none_",
+    facts: "_none_",
+    experts: [],
+    budgetUsd: 4,
+    notInWorktree,
+  });
+}
+
+/** `bytes` bytes whose last line is findable. */
+function sized(name: string, bytes: number): string {
+  return document(name, bytes, `${name}-LAST-LINE`);
+}
+
+describe("the developer prompt tells the truth about its inputs (N7)", () => {
+  test("an input the worktree cannot read is flagged, not passed off as a new file", () => {
+    const dir = worktree({ "docs/guide.md": "# Guide\n" });
+    const text = developerPrompt(
+      planned(["docs/guide.md", "tldrx-work/260830-decisions/run.yml"]),
+      dir,
+      new Set(["tldrx-work/260830-decisions/run.yml"]),
+    );
+    expect(text).toContain(NOT_IN_WORKTREE);
+    expect(text).not.toContain("does not exist yet — this story creates it");
+    expect(text).toContain("Inlined below: 3 of 4 declared inputs.");
+    expect(text).toContain("tldrx-work/260830-decisions/run.yml (NOT in this worktree)");
+  });
+
+  test("a path that exists nowhere is still `this story creates it`", () => {
+    const dir = worktree({ "docs/guide.md": "# Guide\n" });
+    const text = developerPrompt(planned(["docs/guide.md", "docs/new.md"]), dir);
+    expect(text).toContain("does not exist yet — this story creates it");
+    expect(text).not.toContain(NOT_IN_WORKTREE);
+  });
+
+  test("touched docs the goal NAMES win the inline budget over an incidental citation", () => {
+    // The measured shape: `AGENTS.md` was cited once in passing and inlined; the
+    // two documents the goal named were in the tail and were not.
+    const dir = worktree({
+      "AGENTS.md": sized("AGENTS.md", 50_000),
+      "docs/10-domain.md": sized("docs/10-domain.md", 20_000),
+      "docs/12-delivery.md": sized("docs/12-delivery.md", 20_000),
+    });
+    const touches = ["AGENTS.md", "docs/10-domain.md", "docs/12-delivery.md"];
+    expect(50_000 + 20_000).toBeGreaterThan(MAX_TOUCHED_BYTES);
+
+    const goal = ["Apply F010 to `docs/10-domain.md` and `docs/12-delivery.md`"];
+    const named = developerPrompt(planned(touches, goal), dir);
+    expect(named).toContain("docs/10-domain.md-LAST-LINE");
+    expect(named).toContain("docs/12-delivery.md-LAST-LINE");
+    expect(named).not.toContain("AGENTS.md-LAST-LINE");
+    expect(named).toContain("guess: AGENTS.md");
+    expect(named).toContain("_Not inlined: 50000 bytes, past this stage's inline budget.");
+
+    // Same three files, a goal that names none of them: declaration order wins
+    // and the two documents are the ones that fall off.
+    const incidental = developerPrompt(planned(touches), dir);
+    expect(incidental).toContain("AGENTS.md-LAST-LINE");
+    expect(incidental).not.toContain("docs/10-domain.md-LAST-LINE");
+    expect(incidental).not.toContain("docs/12-delivery.md-LAST-LINE");
+  });
+
+  test("the developer is told to run an embedded criterion before it edits anything", () => {
+    // A real criterion on 2026-08-30 embedded a literal grep whose markers had
+    // been written three ways: it scored 0 against two files that still held five
+    // real markers, and only a hand count caught it.
+    const text = developerPrompt(planned(["docs/guide.md"]), worktree({ "docs/guide.md": "# Guide\n" }));
+    expect(text).toContain(VALIDATE_CRITERION_RULE.join("\n   "));
+    expect(text).toContain("must be validated BEFORE");
+    expect(text).toContain("the criterion is broken — measure the real inventory");
+    expect(text).toContain("(the criterion text itself is");
+    // It sits in Investigate, before the step that writes anything.
+    expect(text.indexOf("must be validated BEFORE"))
+      .toBeLessThan(text.indexOf("Write the tests the test plan promised"));
+  });
+
+  test("orderTouches is stable and matches on the path or its file name", () => {
+    const touches = ["AGENTS.md", "docs/10-domain.md", "docs/12-delivery.md"];
+    expect(orderTouches(touches, [])).toEqual(touches);
+    expect(orderTouches(touches, ["nothing here names a file"])).toEqual(touches);
+    expect(orderTouches(touches, ["settle docs/12-delivery.md"]))
+      .toEqual(["docs/12-delivery.md", "AGENTS.md", "docs/10-domain.md"]);
+    // The bare file name is how a bullet usually cites a document.
+    expect(orderTouches(touches, ["settle 10-domain.md and 12-delivery.md"]))
+      .toEqual(["docs/10-domain.md", "docs/12-delivery.md", "AGENTS.md"]);
   });
 });

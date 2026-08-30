@@ -56,6 +56,11 @@ Per story, in `waves.yml` order:
   evidence and is never recorded as any.
 - A reviewer's `changes` requeues the story ONCE, with the review under
   `## Previous attempt`. A second `changes` blocks it.
+- An acceptance criterion that embeds a literal command or pattern is validated BEFORE
+  the edit — run against the current tree first, and a criterion that reports zero while
+  the goal says the work exists is broken, so the real inventory becomes the completion
+  test and the discrepancy goes in the handoff (the criterion text is not the story's to
+  edit). The developer prompt carries this rule verbatim.
 - A DoD failure or a merge conflict blocks that story only — the wave carries on.
 - Nothing pushes. No epic is merged into a default branch.
 

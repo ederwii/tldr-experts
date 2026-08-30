@@ -28,6 +28,25 @@ import type { PlannedEpic, PlannedStory } from "./plan.ts";
 export const MAX_TOUCHED_BYTES = 64 * 1024;
 export const MAX_TOUCHED_FILES = 24;
 
+/**
+ * The rule a real run needed on 2026-08-30, its second Build of the day.
+ *
+ * An acceptance criterion carried a literal grep — `` Pending `DECISIONS-NEEDED.md` # ``,
+ * backticks and all — and the markers it was meant to find had been written three
+ * different ways, so the criterion scored 0 against two files that between them
+ * still held five real markers. The criterion was DERIVED from the plan, which
+ * makes it data the story may not edit; it is not thereby evidence. Running it
+ * first is the whole fix: a pattern that finds nothing before the work starts is
+ * a broken pattern, not a finished job.
+ */
+export const VALIDATE_CRITERION_RULE: readonly string[] = [
+  "An acceptance criterion that embeds a literal command or pattern must be validated BEFORE",
+  "you edit: run it against the current tree first; if it reports zero while the goal says the",
+  "work exists, the criterion is broken — measure the real inventory, use that as your",
+  "completion test, and record the discrepancy in the handoff (the criterion text itself is",
+  "not yours to edit).",
+];
+
 export interface DeveloperPromptParts {
   readonly runId: string;
   readonly story: PlannedStory;
@@ -50,6 +69,14 @@ export interface DeveloperPromptParts {
   readonly planNote?: string;
   /** A previous reviewer's `changes` verdict, rendered under `## Previous attempt`. */
   readonly previousAttempt?: string;
+  /**
+   * Touched paths that are NOT committed at the story branch's base, so the
+   * worktree has no copy (`build/git.ts` `pathAtRef`). They are flagged in the
+   * prompt rather than rendered as "this story creates it", which is what they
+   * used to look like: an uncommitted `01-what/` output or `run.yml` reads
+   * exactly like a new file when the only test is `existsSync` in the worktree.
+   */
+  readonly notInWorktree?: ReadonlySet<string>;
 }
 
 export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
@@ -64,7 +91,12 @@ export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
     { path: parts.story.rel, content: parts.story.text },
     { path: parts.epic.rel, content: epicSummary(parts.epic) },
     ...extra,
-    ...touchedInputs(parts.worktree, story.touches, spent),
+    ...touchedInputs(
+      parts.worktree,
+      orderTouches(story.touches, briefOf(parts)),
+      spent,
+      parts.notInWorktree,
+    ),
   ];
   const context = (parts.story.context ?? []).filter((line) => line.trim() !== "");
 
@@ -110,7 +142,8 @@ export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
     "1. Read the story and the inlined files above. They are the whole brief.",
     "2. Change only what the story's `touches` list names. A change outside it is a plan",
     "   deviation, and the reviewer will read it as one.",
-    "3. Write the tests the test plan promised, then the code that makes them pass.",
+    `3. ${VALIDATE_CRITERION_RULE.join("\n   ")}`,
+    "4. Write the tests the test plan promised, then the code that makes them pass.",
     "",
     "## Produce",
     "",
@@ -294,6 +327,7 @@ export function touchedInputs(
   worktree: string,
   touches: readonly string[],
   alreadySpent = 0,
+  notInWorktree: ReadonlySet<string> = new Set<string>(),
 ): readonly PromptInput[] {
   const inputs: PromptInput[] = [];
   let spent = alreadySpent;
@@ -310,10 +344,56 @@ export function touchedInputs(
       inputs.push({ path: rel, content: readFileSync(abs, "utf8") });
     }
     if (!existsSync(join(worktree, touch))) {
-      inputs.push({ path: touch, content: `(does not exist yet — this story creates it)\n` });
+      inputs.push(notInWorktree.has(touch)
+        ? { path: touch, content: "", inlinedBytes: 0, totalBytes: 0, notInWorktree: true }
+        : { path: touch, content: `(does not exist yet — this story creates it)\n` });
     }
   }
   return inputs;
+}
+
+/**
+ * The story's touched paths, the ones its own brief NAMES first.
+ *
+ * `touchedInputs` spends one 64 KB budget in list order, so the order IS which
+ * files get inlined. Measured on a real Build prompt, 2026-08-30: 15 declared
+ * inputs, 9 inlined, and the two documents the run existed to edit were in the
+ * tail — behind `AGENTS.md`, which the What handoff cited in passing. A path the
+ * goal or the acceptance criteria names is the work; a path something merely
+ * cited is context, and context is what a budget is for cutting.
+ *
+ * Stable within each half: a brief that names nothing changes no order at all.
+ */
+export function orderTouches(touches: readonly string[], brief: readonly string[]): readonly string[] {
+  const text = brief.join("\n").toLowerCase();
+  if (text.trim() === "") return touches;
+  const named: string[] = [];
+  const rest: string[] = [];
+  for (const touch of touches) (namesPath(text, touch) ? named : rest).push(touch);
+  return [...named, ...rest];
+}
+
+/** The whole path, or its file name — both are how a bullet cites a document. */
+function namesPath(lowerText: string, path: string): boolean {
+  const lower = path.toLowerCase();
+  if (lower === "") return false;
+  if (lowerText.includes(lower)) return true;
+  const base = lower.slice(lower.lastIndexOf("/") + 1);
+  return base !== "" && lowerText.includes(base);
+}
+
+/**
+ * What counts as the story NAMING a document: the goal, the acceptance criteria,
+ * the test plan and the title. NOT `context:`, which is the What stage's
+ * background — the very place an incidental citation comes from.
+ */
+function briefOf(parts: DeveloperPromptParts): readonly string[] {
+  return [
+    ...(parts.story.goal ?? []),
+    ...parts.story.story.acceptance,
+    ...parts.story.story.test_plan,
+    parts.story.story.title,
+  ];
 }
 
 /** One touched path -> the files under it, sorted, bounded, `.git` and friends skipped. */

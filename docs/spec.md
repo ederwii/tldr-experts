@@ -1510,6 +1510,15 @@ priority order:
 A declared input that still does not fit is NAMED — with its size and the key that raises the budget — on stdout, in
 `pending.json`, and on the page itself, because "some documents were truncated" is a sentence nobody can act on.
 
+**And the preamble says so.** `## Inputs` opens with "These files are the ONLY ones you may read … there is nothing to
+open and nothing else to find" only when every declared input actually reached the page; when the budget dropped one it
+opens instead with `Inlined below: <n> of <m> declared inputs`, tells the sub-agent to READ the rest at the paths listed
+there, and names them — a preamble that contradicts the blocks under it is believed over them. In the Build phase a
+touched path is additionally checked against the story branch (`git cat-file -e <branch>:<path>`): one that exists in the
+repo but is not committed there is flagged `NOT in this worktree — its content is only what the handoff quotes` with a
+matching stderr warning at `--prepare`, and the 64 KB touched-file budget is spent in priority order, the paths the
+story's `goal`, acceptance criteria, test plan or title NAME going in before the ones something merely cited.
+
 **The context ledger.** `--prepare` and `--dry-run` print bytes per section — stage (and its `## Questions`), each
 declared input, each expert's body and knowledge, the previous attempt — and `pending.json` carries the same numbers
 under `context:`. `prompt_max_bytes` (§2.3, default 163840) is a **refusal**: over it `next` exits `2` before a
@@ -1794,6 +1803,11 @@ has. So:
   ≤24 and never adding a document no fact names. Every addition is written into `notes:` as
   `added <path> to touches: settled by F<n> (its text mentions \`<key>\`)`, and the acceptance grep then lists it like
   any other mapped document.
+- **tldrx's own state never reaches `touches`.** A handoff cites `tldrx-work/…`, `.tldrx/…` and `.agent/…` as
+  EVIDENCE, and `touches` is built from what the handoff cites — so on the aparece run of 2026-08-30 three of thirteen
+  touched paths were `run.yml`, a triage `split.yml` and an agent bundle's `prompt.md`, handed to a sub-agent that is
+  told a change outside `touches` is a plan deviation. Any path with `tldrx-work`, `.tldrx` or `.agent` as one of its
+  segments is dropped, with `excluded <path> from touches: tldrx state is never story-writable` written into `notes:`.
 - **The developer prompt says where the story came from**: "Plan was skipped by the scope; this single story applies
   the run's answered decisions to the files it touches." No design document is going to say it, because none was written.
 

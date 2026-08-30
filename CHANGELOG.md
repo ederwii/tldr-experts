@@ -54,6 +54,45 @@
   so a `.git/info/exclude` or a nested `.gitignore` is named too. A warning: it never moves the
   exit code, which is about the tools this machine has. `--json` gains `gitignoreShadow`, where
   `null` means no workspace was scanned rather than nothing found.
+- **The `## Inputs` preamble no longer claims files the budget dropped.** Measured on a
+  real Build prompt, 2026-08-30: 9 of 15 declared inputs were inlined, the other 6 carried
+  "It exists on disk; do not guess at its content" — and the preamble above them still read
+  "Their full content is inlined below, so there is nothing to open and nothing else to
+  find." The two documents the run existed to edit were among the six. The preamble is now
+  conditional in every prompt that has one (stage prompts and the developer prompt share one
+  renderer): with everything inlined it is the sentence it always was; with anything dropped
+  it is `Inlined below: <n> of <m> declared inputs.` followed by "The rest exist on disk —
+  READ them at the listed paths before relying on them; do not guess: <list>".
+- **A touched path the story's worktree cannot read is flagged as such.** The developer works
+  in a worktree of the story branch, so a path that exists in the repo but is not committed
+  at that branch is unreadable there — and `existsSync(worktree/path)` called it a file the
+  story creates. Build now asks git (`git cat-file -e <branch>:<path>`) and marks it `NOT in
+  this worktree — its content is only what the handoff quotes`, plus one stderr line per
+  path: `warning: input <path> is not committed, so the story worktree cannot read it`. A
+  path that exists nowhere is still "does not exist yet — this story creates it".
+- **The story's own goal wins the developer prompt's inline budget.** `touches` was spent in
+  list order, so on that same run `AGENTS.md` — cited once in passing — was inlined whole
+  and the two documents the goal named were in the dropped tail. Touched paths the story's
+  `goal`, acceptance criteria, test plan or title NAME now sort first into the 64 KB; a brief
+  that names nothing changes no order at all.
+- **The developer is told to run an acceptance criterion's embedded pattern BEFORE it
+  edits.** Found on a real run's second Build of 2026-08-30: a derived criterion carried a
+  literal grep (`` Pending `DECISIONS-NEEDED.md` # ``, backticks included) and the markers
+  it was meant to count had been written three different ways, so it reported 0 against two
+  files that still held five real markers — the in-session driver only caught it by
+  measuring the inventory by hand. The developer prompt's `## Investigate` list now carries
+  the rule verbatim: validate the pattern against the current tree first; a criterion that
+  reports zero while the goal says the work exists is broken, so measure the real inventory,
+  use THAT as the completion test, and record the discrepancy in the handoff. The criterion
+  text itself stays data the story may not edit. `stages/build/stage.md` says so too.
+- **The implicit story no longer `touches` tldrx's own state.** `touches` is derived from
+  every repo path the What handoff cites, and a handoff cites state as evidence: measured
+  2026-08-30, 13 touched paths of which three were `run.yml`, a `.tldrx/triage/**/split.yml`
+  and a `.agent/**/prompt.md`. The developer prompt inlines every touched path and calls a
+  change outside `touches` a plan deviation, so those three read as permission to rewrite
+  the run's own bookkeeping. Anything with `tldrx-work`, `.tldrx` or `.agent` as a path
+  segment is now dropped from `touches` and recorded in `notes:` as `excluded <path> from
+  touches: tldrx state is never story-writable`. Product documents are untouched.
 - **A document your answer settles now joins the implicit story's `touches`.** Measured on a
   real run, 2026-08-30: the run existed to settle six ADRs, the owner answered all six, and
   the one thing the story could not edit was `ADR-D013-DELIVERY-ZONE-GEOMETRY.md` — the What

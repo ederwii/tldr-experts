@@ -138,6 +138,20 @@ export async function branchExists(cwd: string, branch: string): Promise<boolean
   return (await git(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], cwd)).ok;
 }
 
+/**
+ * Is `path` in the tree at `ref`? `git cat-file -e <ref>:<path>`, which answers
+ * for a blob and for a tree alike and needs no checkout.
+ *
+ * Asked of a story's `touches` before its prompt is written: the developer works
+ * in a worktree of the story branch, so a path that is not committed at that
+ * branch is a path the developer cannot open however clearly the prompt names it.
+ * A failed call is `false` — "I could not prove it is there", which is the answer
+ * that makes the prompt tell the truth.
+ */
+export async function pathAtRef(cwd: string, ref: string, path: string): Promise<boolean> {
+  return (await git(["cat-file", "-e", `${ref}:${path}`], cwd)).ok;
+}
+
 export async function currentBranch(cwd: string): Promise<string> {
   const result = await git(["rev-parse", "--abbrev-ref", "HEAD"], cwd);
   return result.ok ? result.stdout.trim() : "";

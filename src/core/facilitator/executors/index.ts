@@ -131,6 +131,12 @@ export interface ExecutorOutcome {
   /** Printed by `tldrx next`, in order. */
   readonly lines: readonly string[];
   /**
+   * Advisory lines for stderr — never a reason to stop, and kept off `lines` so
+   * `--prepare`'s stdout stays a machine-readable instruction for the host
+   * session. Today: a touched path the story's worktree cannot read.
+   */
+  readonly stderr?: readonly string[];
+  /**
    * Epic branches this run now owns — cut by it, or adopted with `--reuse-epic`.
    *
    * `runNext` merges them into `run.yml`'s `build.epic_branch`, which is how the

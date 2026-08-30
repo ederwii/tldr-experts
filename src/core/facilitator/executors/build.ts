@@ -47,7 +47,7 @@ import {
 } from "../pending.ts";
 import {
   addWorktree, branchExists, commitAll, commitsBetween, currentBranch, dirtyPaths, ensureBranch, firstLine,
-  GitError, headSha, isDirty, mergeNoFf, partitionDirty, removeWorktree, repoDirOf, stateDirPrefixes,
+  GitError, headSha, isDirty, mergeNoFf, partitionDirty, pathAtRef, removeWorktree, repoDirOf, stateDirPrefixes,
 } from "../../build/git.ts";
 import {
   loadBuildPlan, PlanLoadError, BUILD_PHASE, LOG_DIR, PLAN_PHASE, WORKTREES,
@@ -290,6 +290,13 @@ interface StoryContext {
   readonly epicBranch: string;
   readonly attempt: number;
   readonly previousAttempt: string;
+  /**
+   * Touched paths the story's worktree has no copy of because they are not
+   * committed at its branch — `01-what/` outputs and `run.yml` in a
+   * `root_is_repo` workspace, which the run writes and nobody commits on Build's
+   * cadence. The prompt says so; `existsSync` alone called them new files.
+   */
+  readonly notInWorktree: ReadonlySet<string>;
 }
 
 class BuildSession {
@@ -305,6 +312,8 @@ class BuildSession {
   readonly claimedEpics = new Set<string>();
   /** The single writer every state-changing step goes through (see `SerialQueue`). */
   private readonly writes = new SerialQueue();
+  /** stderr lines: advice for the operator, never a reason to stop. */
+  private readonly advisories: string[] = [];
   /** How many stories of one wave may be in flight at once. */
   private readonly lanes: number;
 
@@ -419,6 +428,7 @@ class BuildSession {
         `dispatch ONE sub-agent with cwd ${relative(this.ctx.root, story.worktree)}`,
         `then write {outputs, questions_asked, notes} to ${dir}/result.json and run \`tldrx next --commit\``,
       ],
+      stderr: [...this.advisories],
       error: null,
     };
   }
@@ -685,7 +695,37 @@ class BuildSession {
       epicBranch,
       attempt: Math.min(this.reviewAttempts(planned.story.id) + 1, MAX_ATTEMPTS),
       previousAttempt: this.previousAttemptText(planned.story.id),
+      notInWorktree: await this.unreadableTouches(planned, repoDir, branch),
     };
+  }
+
+  /**
+   * Touched paths that exist in the repo but are NOT in the tree at the story's
+   * branch, so the worktree cannot open them.
+   *
+   * A path that exists nowhere is left out: that one really is a file the story
+   * creates, and the prompt already says so. The difference is the whole point —
+   * "this story creates it" and "you were shown a quote of it and nothing more"
+   * are opposite instructions, and `existsSync(worktree/path)` cannot tell them
+   * apart.
+   */
+  private async unreadableTouches(
+    planned: PlannedStory,
+    repoDir: string,
+    branch: string,
+  ): Promise<ReadonlySet<string>> {
+    const out = new Set<string>();
+    for (const path of planned.story.touches) {
+      // A path that is nowhere in the repo is the ordinary "this story creates
+      // it", and cheap to rule out before a git call.
+      if (!existsSync(join(repoDir, path))) continue;
+      if (await pathAtRef(repoDir, branch, path)) continue;
+      out.add(path);
+      this.advisories.push(
+        `warning: input ${path} is not committed, so the story worktree cannot read it`,
+      );
+    }
+    return out;
   }
 
   /** (d) one developer sub-agent, cwd = the worktree. Returns its cost, or null. */
@@ -1023,6 +1063,7 @@ class BuildSession {
         ...this.lines,
         `wrote ${HANDOFF_REL}`,
       ],
+      stderr: [...this.advisories],
       error: null,
     };
   }
@@ -1312,6 +1353,7 @@ class BuildSession {
       // for; the constant is the fallback for a plan built before it did.
       planNote: this.plan.implicit ? (story.planned.note ?? IMPLICIT_STORY_NOTE) : undefined,
       previousAttempt: story.previousAttempt,
+      notInWorktree: story.notInWorktree,
     });
   }
 
