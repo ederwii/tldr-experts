@@ -11,7 +11,7 @@ Stage: contracts · Expert: architect · Model: sonnet · Cost: $2.61 of $3.00 c
 
 ## Unknowns
 - Retention period for historical rankings [src: absent:.tldrx/memory/facts.yml]
-- Whether mobile needs paging beyond top-50 [src: Q6]
+- Whether mobile needs paging beyond top-50 [src: Q4]
 
 ## Evidence ledger
 - Contract project builds clean [src: $ dotnet build → exit 0]

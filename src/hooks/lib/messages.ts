@@ -43,6 +43,28 @@ export function claimSourcesEmptySectionDeny(
 }
 
 /**
+ * A bullet that DID cite something the parser could not read.
+ *
+ * Split out of `claimSourcesDeny` on 2026-08-29: a real user's first `tldrx next`
+ * was refused with "9 unsourced bullet(s)" when all nine carried a citation —
+ * they were wrapped in backticks. "You wrote no source" sent them looking for
+ * something already on the page. `[assumption]` on the wording; there is no
+ * verbatim spec text for this case.
+ */
+export function claimSourcesMalformedDeny(
+  relPath: string,
+  issues: readonly { line: number; message: string }[],
+): string {
+  const list = issues.map((i) => `L${i.line}`).join(", ");
+  return (
+    `[tldrx] claim-sources: ${issues.length} malformed citation(s) in ${relPath} — ${list}.\n` +
+    "The bullet cites a source but the token could not be read. The `[src: …]` token must be the LAST " +
+    "thing on the line: remove the backticks around it and any words after it. A closing quote, bracket " +
+    "or a final `.` after the `]` is fine."
+  );
+}
+
+/**
  * The spec gives no verbatim text for a source that parses but does not resolve,
  * so this one is written in its voice. `[assumption]`
  */

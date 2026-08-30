@@ -209,22 +209,30 @@ function write(root: string, rel: string, content: string): void {
   writeFileSync(path, content, "utf8");
 }
 
-/** A handoff whose four sections all have content — enough to satisfy §2.3. */
+/**
+ * A handoff whose four sections all have content — enough to satisfy §2.3.
+ *
+ * Every citation here RESOLVES. It used to be three `[src: F001]` against a
+ * facts.yml holding no facts at all, which the 2026-08-29 audit named as the
+ * repo's own use of the shield pattern: the fixture proved the validator ran, not
+ * that it checked anything. `.tldrx/workspace.yml` exists in every fixture
+ * workspace, and `notes.md` exists in none of them.
+ */
 export function cannedHandoff(): string {
   return [
     "# Handoff",
     "",
     "## Findings",
-    "- The fixture ran [src: F001]",
+    "- The fixture workspace declares its repos [src: .tldrx/workspace.yml:1]",
     "",
     "## Decisions",
-    "- Proceed [src: F001]",
+    "- Proceed on the declared repos [src: .tldrx/workspace.yml:1]",
     "",
     "## Unknowns",
-    "- Nothing [src: absent:.tldrx/memory/facts.yml]",
+    "- none [src: absent:.tldrx/memory/notes.md]",
     "",
     "## Evidence ledger",
-    "- The fake agent wrote this file [src: F001]",
+    "- The fake agent wrote this file [src: .tldrx/workspace.yml:1]",
     "",
   ].join("\n");
 }

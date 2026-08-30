@@ -15,7 +15,7 @@
  * is a claim like any other.
  */
 import {
-  parseSrcToken, resolveSrc, type SrcContext, type SrcRef, type SrcToken,
+  hasSrcMarker, parseSrcToken, resolveSrc, type SrcContext, type SrcRef, type SrcToken,
 } from "./srcToken.ts";
 
 export const HANDOFF_SECTIONS = ["Findings", "Decisions", "Unknowns", "Evidence ledger"] as const;
@@ -152,10 +152,23 @@ export interface HandoffValidation {
   readonly missingSections: readonly string[];
   /** Required sections present but holding only prose (spec §2.8). */
   readonly emptySections: readonly EmptySection[];
-  /** List items with no `[src: …]` token at all. */
+  /** List items with no `[src:` marker at all — no citation was attempted. */
   readonly unsourced: readonly number[];
+  /**
+   * Items that DID try to cite (`[src:` is on the line) but whose token could not
+   * be read as one — backticks around it, words after it, a stray bracket. Split
+   * from `unsourced` because the fix is different and the old message sent a user
+   * hunting for a citation that was already there.
+   */
+  readonly malformed: readonly HandoffIssue[];
   /** Bullets whose token is malformed, or cites something that does not resolve. */
   readonly unresolved: readonly HandoffIssue[];
+  /**
+   * Citations that are well formed and could NOT be checked from disk (spec §2.8,
+   * `unverified`). These do not fail the stage; they are what an auto gate refuses
+   * to close over.
+   */
+  readonly unverified: readonly HandoffIssue[];
   readonly bulletCount: number;
 }
 
@@ -167,7 +180,9 @@ export function validateHandoff(text: string, ctx: SrcContext): HandoffValidatio
   const missing = missingSections(handoff);
   const emptySections: EmptySection[] = [];
   const unsourced: number[] = [];
+  const malformed: HandoffIssue[] = [];
   const unresolved: HandoffIssue[] = [];
+  const unverified: HandoffIssue[] = [];
   let bulletCount = 0;
 
   const required = new Set<string>(HANDOFF_SECTIONS);
@@ -179,17 +194,31 @@ export function validateHandoff(text: string, ctx: SrcContext): HandoffValidatio
     for (const bullet of section.bullets) {
       bulletCount++;
       if (bullet.token === null) {
-        unsourced.push(bullet.line);
+        if (hasSrcMarker(bullet.text)) {
+          malformed.push({
+            line: bullet.line,
+            message:
+              "malformed citation — the `[src: …]` token must be the last thing on the line " +
+              "(closing quotes, brackets and a final `.` are allowed after it, words are not)",
+          });
+        } else {
+          unsourced.push(bullet.line);
+        }
         continue;
       }
       for (const error of bullet.token.errors) {
         unresolved.push({ line: bullet.line, message: `[src: ${error.raw}] — ${error.message}` });
       }
+      // The claim is the bullet WITHOUT its citation. `absent:` reads this text to
+      // decide whether the claim is negative, and `[src: absent:…]` contains the
+      // word "absent" — leaving the token in would have every absence vouch for
+      // itself.
+      const claim = bullet.text.replace(bullet.token.raw, " ").trim();
       for (const ref of bullet.token.refs) {
-        const resolution = resolveSrc(ref, ctx, section.name);
-        if (!resolution.ok) {
-          unresolved.push({ line: bullet.line, message: `[src: ${ref.raw}] — ${resolution.message ?? "unresolvable"}` });
-        }
+        const resolution = resolveSrc(ref, ctx, section.name, claim);
+        const issue = { line: bullet.line, message: `[src: ${ref.raw}] — ${resolution.message ?? "unresolvable"}` };
+        if (resolution.outcome === "refused") unresolved.push(issue);
+        else if (resolution.outcome === "unverified") unverified.push(issue);
       }
     }
   }
@@ -197,11 +226,17 @@ export function validateHandoff(text: string, ctx: SrcContext): HandoffValidatio
     unresolved.push({ line: 0, message: `${bulletCount} bullets exceeds the ${MAX_BULLETS} cap` });
   }
   return {
-    ok: missing.length === 0 && emptySections.length === 0 && unsourced.length === 0 && unresolved.length === 0,
+    // `unverified` is deliberately NOT here: it does not fail the stage (spec §2.8),
+    // it stops an AUTO gate from closing (spec §5, condition 5).
+    ok:
+      missing.length === 0 && emptySections.length === 0 && unsourced.length === 0 &&
+      malformed.length === 0 && unresolved.length === 0,
     missingSections: missing,
     emptySections,
     unsourced,
+    malformed,
     unresolved,
+    unverified,
     bulletCount,
   };
 }
@@ -217,8 +252,8 @@ export function collectSrcRefs(handoff: Handoff): readonly SrcRef[] {
   return refs;
 }
 
-export { parseSrcToken, classifySrc, resolveSrc, emptySrcContext } from "./srcToken.ts";
-export type { SrcContext, SrcRef, SrcToken, SrcKind, SrcParseError } from "./srcToken.ts";
+export { parseSrcToken, classifySrc, resolveSrc, emptySrcContext, hasSrcMarker } from "./srcToken.ts";
+export type { SrcContext, SrcRef, SrcToken, SrcKind, SrcParseError, SrcOutcome } from "./srcToken.ts";
 
 /** The line a genuinely empty section is written as (spec §2.8). */
 export function noneBullet(lookedAt: string): string {
