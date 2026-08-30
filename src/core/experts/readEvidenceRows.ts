@@ -17,7 +17,10 @@
  * the row the ladder gates levels 4 and 5 on — could be earned by typing the
  * word. See `evidenceSrc.ts` for the class table.
  */
-import { isEvidenceKind, ALLOWED_KINDS, type CompetencyEvidence, type EvidenceKind } from "../init/competencyLevel.ts";
+import {
+  isEvidenceConfidence, isEvidenceKind, ALLOWED_KINDS,
+  type CompetencyEvidence, type EvidenceKind,
+} from "../init/competencyLevel.ts";
 import { checkEvidenceSrc, describeSrcProblem, type IgnoredReason } from "./evidenceSrc.ts";
 
 export interface IgnoredRow {
@@ -65,7 +68,17 @@ export function readEvidenceRows(input: unknown): EvidenceRows {
       refuse(problem.reason, kind, src);
       continue;
     }
-    evidence.push({ kind: kind as EvidenceKind, src, at });
+    // `cross` and `confidence` are ADDITIVE (§2.6): a row written before they
+    // existed simply carries neither, and an unrecognised confidence value is
+    // dropped rather than refused — it changes a weight, it is not a citation.
+    const confidence = str(row.confidence);
+    evidence.push({
+      kind: kind as EvidenceKind,
+      src,
+      at,
+      ...(row.cross === true ? { cross: true } : {}),
+      ...(isEvidenceConfidence(confidence) ? { confidence } : {}),
+    });
   }
 
   return { evidence, ignored: [...counts.values()] };
