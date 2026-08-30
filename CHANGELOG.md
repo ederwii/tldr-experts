@@ -33,6 +33,27 @@
 
 ### Fixed
 
+- **tldrx state survives the project's own `.gitignore` rules, and `doctor` detects a rule
+  that shadows it.** Found by a real user 2026-08-30: their repo carried the stock .NET
+  `[Ll]og/` ignore, which swallowed `tldrx-work/<run>/04-build/log/S1.md` — the Build phase's
+  per-story review log, which spec §1 marks committed and the handoff cites as
+  `[src: 04-build/log/<id>.md:1]`. Nothing errored; the file was written, `git status` stayed
+  quiet, and a teammate's clone never got it. `init`'s managed block only ever ADDED ignores,
+  so any pre-existing project rule (`log/`, `docs/`, a `*.yml` in a subdir) could hide state
+  and nothing noticed. The block now opens with `!tldrx-work/`, `!tldrx-work/**`, `!.tldrx/`
+  and `!.tldrx/**` — the bare pair and the `**` pair are both needed, because gitignore cannot
+  re-include a file whose parent directory is excluded — and the framework's own ignores follow
+  AFTER them, since a later pattern wins. Measured with `git check-ignore -v` against a repo
+  carrying `[Ll]og/`, not asserted from memory: the story log comes back not-ignored while the
+  product's `Logs/build.log`, `tldrx-work/*/.lock` and `.tldrx/cache/` stay ignored. Re-running
+  `init` upgrades a block written before this in place, markers and neighbouring rules kept.
+- **`tldrx doctor` now says when a rule outside that block is still hiding state.** It runs
+  `git check-ignore --verbose --no-index -z` over four paths that must be tracked — the newest
+  run's `run.yml` and `events.jsonl`, a synthetic `04-build/log/` probe, and
+  `.tldrx/memory/facts.yml` — and prints each offender with the rule's own `file:line:pattern`,
+  so a `.git/info/exclude` or a nested `.gitignore` is named too. A warning: it never moves the
+  exit code, which is about the tools this machine has. `--json` gains `gitignoreShadow`, where
+  `null` means no workspace was scanned rather than nothing found.
 - **A document your answer settles now joins the implicit story's `touches`.** Measured on a
   real run, 2026-08-30: the run existed to settle six ADRs, the owner answered all six, and
   the one thing the story could not edit was `ADR-D013-DELIVERY-ZONE-GEOMETRY.md` — the What

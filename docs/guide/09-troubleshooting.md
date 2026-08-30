@@ -14,6 +14,13 @@ Every entry here is a message the tool actually prints, and the move that clears
 is reported and never fatal. `doctor` prints the exact install command for your OS; the
 framework never installs anything itself.
 
+**`tldrx doctor` says `Gitignore shadow: N of 4 probed state paths are IGNORED`.** A rule in
+your project's own `.gitignore` is hiding files tldrx expects you to commit — classically a
+.NET repo's `[Ll]og/`, which swallows `tldrx-work/<run>/04-build/log/<story>.md`. The line
+names the rule as `<file>:<line>:<pattern>`. Re-run `tldrx init`: its managed block re-includes
+`tldrx-work/**` and `.tldrx/**`. If the rule lives somewhere `init` does not write — a nested
+`.gitignore`, `.git/info/exclude`, your global excludesfile — delete or narrow it there.
+
 **`<file>: schema_version is deprecated — say version: 1`.** The pre-spec spelling. The file
 still loads for one more release, the warning is printed once per process, and `tldrx doctor`
 lists every file still on the old key. Change `schema_version: 0` to `version: 1`.

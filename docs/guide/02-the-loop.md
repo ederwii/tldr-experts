@@ -162,6 +162,12 @@ tldrx-work/*/.lock        one live pid
 tldrx-work/*/.agent/      one in-flight prompt bundle
 ```
 
+The same block opens with `!tldrx-work/**` and `!.tldrx/**`, which re-include the state
+against a rule your project already had — a .NET repo's stock `[Ll]og/` ignores
+`tldrx-work/<run>/04-build/log/<story>.md`, and git says nothing while it does. The five
+lines above come after the negations, so they still win. `tldrx doctor` asks
+`git check-ignore` about four of these paths and names any rule still hiding one.
+
 ## Schema versions
 
 Every data schema — the files a workspace or a run owns — opens with `version: 1`.

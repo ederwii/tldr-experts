@@ -44,8 +44,13 @@ TypeScript on Bun; host Claude Code. Covers the v0 skeleton and the schema shape
 └─ <repo-a>/ <repo-b>/ …             # sibling product repos; init writes nothing into them
 ```
 
-`init` appends `.tldrx/graphify-out/`, `.tldrx/cache/`, `tldrx-work/*/.lock`, `tldrx-work/*/.agent/` to `.gitignore` inside an
-idempotent `# >>> tldrx >>>` … `# <<< tldrx <<<` block. Single-repo mode: same tree rooted at the repo, `map/self/`,
+`init` writes an idempotent `# >>> tldrx >>>` … `# <<< tldrx <<<` block into `.gitignore`, in this order: first the
+negations `!tldrx-work/`, `!tldrx-work/**`, `!.tldrx/`, `!.tldrx/**`, which re-include the `[c]` state above against a
+rule the project already had (a stock `[Ll]og/` swallows `04-build/log/<story-id>.md`, and nothing errors when it does);
+then `.tldrx/graphify-out/`, `.tldrx/cache/`, `.tldrx/worktrees/`, `tldrx-work/*/.lock`, `tldrx-work/*/.agent/` and
+`.claude/settings.json.bak-tldrx-*`, which must come AFTER the negations because a later pattern beats an earlier one.
+`tldrx doctor` asks `git check-ignore` about a sample of the `[c]` paths and names any rule still shadowing one — a
+warning, never a blocker. Single-repo mode: same tree rooted at the repo, `map/self/`,
 no `map/workspace.md`. Multi-repo: `repos` are the child git repos, never written to by the root install.
 
 ## 2. File schemas
@@ -1183,7 +1188,7 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | Command | Reads | Writes | Exit |
 |---|---|---|---|
 | `tldrx init [--stack <a,b>]` | cwd tree, git dirs, package/build files, `env.yml` | `workspace.yml` (incl. `mode: greenfield`), `map/**`, `conventions/**`, `experts/*/` (always a `product`, one `<lang>-stack` per detected **or declared** language), `facts.yml`, `.gitignore`, `CLAUDE.md` pointer | 0,1 |
-| `tldrx doctor [--mcp] [--json]` | `env.yml`, `workspace.yml`, `.tldrx/stages/**`, `.claude/settings.json`, plus a shallow scan of `.tldrx/**` + `tldrx-work/*/{run,budget}.yml` for the deprecated `schema_version:` key | `env.yml.result`, `cache/doctor.json` | 0,1 |
+| `tldrx doctor [--mcp] [--json]` | `env.yml`, `workspace.yml`, `.tldrx/stages/**`, `.claude/settings.json`, plus a shallow scan of `.tldrx/**` + `tldrx-work/*/{run,budget}.yml` for the deprecated `schema_version:` key, plus `git check-ignore` over four `[c]` state paths | `env.yml.result`, `cache/doctor.json` | 0,1 |
 | `tldrx install --claude [--project\|--user] [--skill-only] [--no-hooks] [--no-statusline] [--force-statusline] [--uninstall] [--dry-run]` | `plugin/skills/tldrx/SKILL.md`, the target `.claude/settings.json` | `.claude/skills/tldrx/SKILL.md` (marked `<!-- tldrx-managed -->`), `.claude/settings.json` (the §4 hooks as `tldrx hook <name>` + `statusLine`), `settings.json.bak-tldrx-<ts>` | 0,1 |
 | `tldrx status [--json]` | `.tldrx/init-questions.md`, `.tldrx/triage/*/{split.yml,inventory.json}` and the seed documents those name, `tldrx-work/*/run.yml` (incl. `triage.depends_on`), `.tldrx/experts/**`, every `stage.yml` | nothing (stdout) | 0,3 |
 | `tldrx run new [--from <path>\|--seed <path> ...] [--scope <s>] [--budget <usd>] [--gates <a,b\|all\|none>]` | `workflows/<s>.yml`, `workspace.yml`, `facts.yml`, the `--from` source (§6) or the `--seed` documents (§6.1) | `tldrx-work/<run>/{run.yml,budget.yml,events.jsonl,01-what/*}` incl. the resolved `gates_policy`; `--seed` also writes `01-what/seed-index.md` and declares the documents as What inputs. **`--seed` is repeatable** (§6.2): every occurrence is collected, merged, deduped and re-sorted, and the §6.1 caps apply to the merged set; one occurrence behaves exactly as before. A seed over the threshold or over 10 files adds one **stderr** note naming `tldrx seed triage`. `--gates` LISTS THE HUMAN GATES (`all` = every stage human, `none` = every stage auto); an unknown stage is a usage error and no run is created | 0,1 |
@@ -1703,7 +1708,9 @@ carries on with the next, and so does the wave. **The phase never ships:** no ep
 the stage forces `gate: approve` whatever the stage file says, and the handoff lists the epic branches ready to merge
 per repo. `04-build/handoff.md` is written by the executor from what it measured — Findings cite
 `[src: 04-build/log/<story-id>.md:1]` (one log per story touched, so every citation resolves), the Evidence ledger is
-the dod commands as `[src: $ <cmd> → exit <n>]`.
+the dod commands as `[src: $ <cmd> → exit <n>]`. **Those logs are committed state** (§1 `[c]`), which is why the `.gitignore`
+block re-includes `tldrx-work/**` before it ignores anything: a project rule that hides them costs the run its record of
+what the reviewer said, and says nothing while it does.
 
 **Safety.** A repo with uncommitted changes on the branch an epic would be cut from is refused **before** anything is
 cut (exit `2`, the stage stays `ready`, the message names the files and the fix) — counting PRODUCT paths only, since
