@@ -2,7 +2,8 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  DASHBOARD_MODEL_VERSION, startDashboardServer, type DashboardServer,
+  DASHBOARD_MODEL_VERSION, hostnameOfHeader, isAllowedHost, LOOPBACK,
+  startDashboardServer, type DashboardServer,
 } from "../src/core/dashboard/index.ts";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { makeViewsWorkspace, VIEWS_RUN, type TempViews } from "./fixtures/views/tempViews.ts";
@@ -140,6 +141,35 @@ describe("tldrx dashboard (live)", () => {
     }
   });
 
+  /**
+   * Gap 10 of the gates/money/safety audit (2026-08-29): loopback bind is not a
+   * boundary a browser respects. A page on `evil.example` can point that name at
+   * 127.0.0.1 and read `/model.json` from our origin; the socket looks local
+   * because the browser opened it. The `Host` header is the one part of such a
+   * request that still carries the attacker's name, so it is what we check.
+   */
+  test("a rebound Host is refused with 403 before any route runs", async () => {
+    for (const host of ["evil.example", "evil.example:1234", "attacker.localhost.evil.com"]) {
+      for (const path of ["/", "/model.json", "/events"]) {
+        const response = await fetch(`${server.url}${path}`, { headers: { host } });
+        expect(response.status, `${host} ${path}`).toBe(403);
+        const body = await response.text();
+        expect(body).toContain("is not this machine");
+        expect(body).not.toContain(VIEWS_RUN);
+      }
+    }
+    // Not a GET either — the Host check runs first, so this is 403, not 405.
+    const written = await fetch(`${server.url}/`, { method: "POST", body: "x", headers: { host: "evil.example" } });
+    expect(written.status).toBe(403);
+  });
+
+  test("the loopback names still work, on whatever port a tunnel gives them", async () => {
+    for (const host of [`127.0.0.1:${String(server.port)}`, "localhost", "localhost:5000", "[::1]:9", "127.0.0.1"]) {
+      const response = await fetch(`${server.url}/model.json`, { headers: { host } });
+      expect(response.status, host).toBe(200);
+    }
+  });
+
   test("close() releases the port", async () => {
     const first = await startDashboardServer({ root: workspace.root, port: 0, debounceMs: 20 });
     const port = first.port;
@@ -196,4 +226,40 @@ describe("the built CLI serves it under node", () => {
     expect(await proc.exited).toBe(0);
     await reader.cancel();
   }, 60_000);
+});
+
+/**
+ * The header parser on its own, including the shapes `fetch` will not produce:
+ * an absent `Host` (HTTP/1.0, or a hand-rolled socket) and a bracketed IPv6.
+ */
+describe("Host header parsing", () => {
+  test("the hostname is taken without its port, lowercased", () => {
+    expect(hostnameOfHeader("127.0.0.1:4477")).toBe("127.0.0.1");
+    expect(hostnameOfHeader("LocalHost:5000")).toBe("localhost");
+    expect(hostnameOfHeader("[::1]:4477")).toBe("::1");
+    expect(hostnameOfHeader("[::1]")).toBe("::1");
+    expect(hostnameOfHeader("::1")).toBe("::1"); // bare, as some clients send it
+    expect(hostnameOfHeader("evil.example")).toBe("evil.example");
+  });
+
+  test("absent, blank and unterminated headers parse to null and are refused", () => {
+    for (const header of [undefined, "", "   ", "[::1"]) {
+      expect(hostnameOfHeader(header)).toBeNull();
+      expect(isAllowedHost(header, LOOPBACK)).toBe(false);
+    }
+  });
+
+  test("the three loopback names pass; a lookalike does not", () => {
+    for (const name of ["127.0.0.1", "localhost", "::1", "[::1]:4477", "LOCALHOST:80"]) {
+      expect(isAllowedHost(name, LOOPBACK), name).toBe(true);
+    }
+    for (const name of ["localhost.evil.com", "127.0.0.1.evil.com", "0.0.0.0", "10.0.0.5"]) {
+      expect(isAllowedHost(name, LOOPBACK), name).toBe(false);
+    }
+  });
+
+  test("a server bound elsewhere on purpose still answers to that name", () => {
+    expect(isAllowedHost("dev.box.internal:4477", "dev.box.internal")).toBe(true);
+    expect(isAllowedHost("other.box.internal", "dev.box.internal")).toBe(false);
+  });
 });

@@ -32,13 +32,15 @@ experts:
   - delivery
   - architect
 
+# `requires:` used to list four acceptance criteria here. Nothing read them:
+# `normaliseGate` (src/core/run/workflowPreset.ts:216-231) reads only `.type`,
+# `validateStage` (src/core/schemas/stage.ts:72-76) checks only `gate.type`, the
+# prompt ships `stage.md` and never this file (src/core/facilitator/prompt.ts:101),
+# and no other file in the repo touches the key. Criteria no gate enforces and no
+# reader ever sees are worse than none — the enforcement that IS real is the
+# `checks:` list below.
 gate:
   type: human-approval
-  requires:
-    - "every story has acceptance criteria, a test plan and the files it touches"
-    - "every story carries a repo: field"
-    - "a story touching a cross-repo contract has spawned its dependent stories"
-    - "waves.yml is dependency-ordered and the total fits budget.yml"
 
 checks:
   - claim-sources

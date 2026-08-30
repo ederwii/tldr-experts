@@ -4,8 +4,10 @@
  * Two layers, on purpose:
  *  1. the SHIPPED validators in `src/core/schemas/` run against a projection of
  *     each document onto the shape they know (the v0 skeleton predates spec v0
- *     and still uses `schema_version` / `mode: single|multi`), so the existing
- *     registry really does check the data we write; `[assumption]`
+ *     and still says `mode: single|multi`), so the existing registry really does
+ *     check the data we write; `[assumption]`. The version key is no longer
+ *     projected: since 2026-08-29 the validators take `version: 1`, which is what
+ *     these documents have always carried and what `init` has always written.
  *  2. the spec §2.1 / §2.12 rules the skeleton does not encode yet — the repo
  *     name pattern, path containment, and the "single argv, auditable" rule for
  *     commands — are checked here.
@@ -21,7 +23,7 @@ const REPO_NAME_RE = /^[a-z0-9-]{1,32}$/;
 
 export function validateWorkspaceDocument(doc: WorkspaceDocument): ValidationResult {
   const issues: ValidationIssue[] = [...validate("workspace", {
-    schema_version: doc.version,
+    version: doc.version,
     // `greenfield` is a single-repo workspace with no code in it, so it projects
     // onto the skeleton's `single` exactly as `single-repo` does.
     mode: doc.mode === "multi-repo" ? "multi" : "single",
@@ -56,7 +58,7 @@ export function validateWorkspaceDocument(doc: WorkspaceDocument): ValidationRes
 
 export function validateProcessDocument(doc: ProcessDocument): ValidationResult {
   const issues: ValidationIssue[] = [...validate("process", {
-    schema_version: doc.version,
+    version: doc.version,
     methodology: doc.methodology,
     ticket_tool: doc.ticket_tool.kind,
     story_granularity: doc.story_granularity,
@@ -78,7 +80,7 @@ export function validateProcessDocument(doc: ProcessDocument): ValidationResult 
 
 export function validateCompetenciesDocument(doc: CompetenciesDocument): ValidationResult {
   return validate("competencies", {
-    schema_version: doc.version,
+    version: doc.version,
     expert: doc.expert,
     areas: doc.areas.map((area) => ({
       area: area.id,

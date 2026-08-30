@@ -1,7 +1,7 @@
 /** Schema for `.tldrx/workspace.yml` — what `tldrx init` detected. */
 import {
   asDocument, requireArray, requireEnum, requireKeys, requireNumber, requireString,
-  result, isRecord, type ValidationIssue, type ValidationResult,
+  requireVersion, result, isRecord, type ValidationIssue, type ValidationResult,
 } from "./validation.ts";
 
 export const WORKSPACE_MODES = ["single", "multi"] as const;
@@ -27,7 +27,13 @@ export interface SeedTriageSettings {
 }
 
 export interface Workspace {
-  readonly schema_version: number;
+  /**
+   * `version: 1`. A file still saying `schema_version` loads and is reported;
+   * see `requireVersion` in `./validation.ts`.
+   */
+  readonly version: number;
+  /** @deprecated the pre-spec spelling of `version`. Accepted for one release. */
+  readonly schema_version?: number;
   readonly mode: WorkspaceMode;
   readonly root: string;
   readonly repos: readonly DetectedRepo[];
@@ -38,10 +44,12 @@ export interface Workspace {
 
 export function validateWorkspace(input: unknown): ValidationResult {
   const issues: ValidationIssue[] = [];
+  const deprecations: string[] = [];
   const doc = asDocument(input, issues);
   if (!doc) return result(issues);
 
-  requireKeys(doc, ["schema_version", "mode", "root", "repos"], "", issues);
+  requireVersion(doc, issues, deprecations);
+  requireKeys(doc, ["mode", "root", "repos"], "", issues);
   requireEnum(doc.mode, WORKSPACE_MODES, "mode", issues);
   requireString(doc.root, "root", issues);
 
@@ -67,5 +75,5 @@ export function validateWorkspace(input: unknown): ValidationResult {
       issues.push({ path: "seed_triage", message: "expected a mapping" });
     }
   }
-  return result(issues);
+  return result(issues, deprecations);
 }

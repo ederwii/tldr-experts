@@ -46,13 +46,15 @@ outputs:
 experts:
   - operations
 
+# `requires:` used to list four acceptance criteria here. Nothing read them:
+# `normaliseGate` (src/core/run/workflowPreset.ts:216-231) reads only `.type`,
+# `validateStage` (src/core/schemas/stage.ts:72-76) checks only `gate.type`, the
+# prompt ships `stage.md` and never this file (src/core/facilitator/prompt.ts:101),
+# and no other file in the repo touches the key. Criteria no gate enforces and no
+# reader ever sees are worse than none — the enforcement that IS real is the
+# `checks:` list below.
 gate:
   type: human-approval
-  requires:
-    - "the signal that proves the feature works is named, and it exists"
-    - "the healthy baseline is a measured number, not a guess"
-    - "the query snippet is copy-pasteable and was run once"
-    - "every card that is still `draft` says what to instrument"
 
 checks:
   - claim-sources

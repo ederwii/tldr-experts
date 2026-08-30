@@ -11,7 +11,10 @@ export {
 export type { DashUi, DashRoute, DashPending } from "./render.ts";
 export { writeStaticDashboard, DEFAULT_OUT_DIR, INDEX_FILE } from "./writeStatic.ts";
 export type { StaticExport } from "./writeStatic.ts";
-export { startDashboardServer, DEFAULT_PORT, LOOPBACK, DEBOUNCE_MS } from "./server.ts";
+export {
+  startDashboardServer, hostnameOfHeader, isAllowedHost,
+  DEFAULT_PORT, LOOPBACK, DEBOUNCE_MS,
+} from "./server.ts";
 export type { DashboardServer, DashboardServerOptions } from "./server.ts";
 export { offlineHtml } from "./offlineHtml.ts";
 export { DASHBOARD_CSS } from "./styles.ts";

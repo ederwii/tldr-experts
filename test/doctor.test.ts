@@ -6,6 +6,11 @@ import { loadEnvManifest } from "../src/core/doctor/loadEnvManifest.ts";
 import { parseMcpList } from "../src/core/doctor/McpProbe.ts";
 import { compareVersions, extractVersion, satisfiesMinimum } from "../src/core/doctor/version.ts";
 import type { ToolCheckResult } from "../src/core/doctor/ToolChecker.ts";
+import { findLegacyVersionFiles } from "../src/core/doctor/legacyVersionKeys.ts";
+import { noteDeprecations, resetDeprecationNotices, validate } from "../src/core/schemas/index.ts";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 describe("env manifest", () => {
   test("the framework's own env.yml loads and validates", async () => {
@@ -149,5 +154,123 @@ describe("tldrx doctor --json", () => {
     const outcome = await runDoctor({ mcp: false });
     expect(outcome.mcp).toBeNull();
     expect((JSON.parse(doctorJson(outcome)) as { mcp: unknown }).mcp).toBeNull();
+  });
+});
+
+/**
+ * The deprecated version key, and how a workspace finds out (2026-08-29).
+ *
+ * `schema_version:` still loads for one release; this is the report that tells a
+ * team what to rename before it stops. Warning only — `healthy` is about the
+ * TOOLS this machine has, and a key spelling is not one of them.
+ */
+describe("doctor reports files still on `schema_version:`", () => {
+  function workspace(files: Readonly<Record<string, string>>): { root: string; dispose(): void } {
+    const root = mkdtempSync(join(tmpdir(), "tldrx-legacy-key-"));
+    for (const [rel, body] of Object.entries(files)) {
+      mkdirSync(join(root, rel, ".."), { recursive: true });
+      writeFileSync(join(root, rel), body, "utf8");
+    }
+    return { root, dispose: () => rmSync(root, { recursive: true, force: true }) };
+  }
+
+  const MODERN = "version: 1\nmode: single\nroot: .\nrepos: []\n";
+  const LEGACY = "schema_version: 0\nmode: single\nroot: .\nrepos: []\n";
+
+  test("it names each one, workspace-relative and sorted", () => {
+    const ws = workspace({
+      ".tldrx/workspace.yml": LEGACY,
+      ".tldrx/process.yml": "schema_version: 0\nmethodology: none\n",
+      ".tldrx/experts/api/competencies.yml": "schema_version: 0\nexpert: api\nareas: []\n",
+      "tldrx-work/260830-x/run.yml": "schema_version: 0\nrun: 260830-x\n",
+      "tldrx-work/260830-x/budget.yml": "version: 1\nrun: 260830-x\n",
+    });
+    try {
+      expect(findLegacyVersionFiles(ws.root)).toEqual([
+        ".tldrx/experts/api/competencies.yml",
+        ".tldrx/process.yml",
+        ".tldrx/workspace.yml",
+        "tldrx-work/260830-x/run.yml",
+      ]);
+    } finally {
+      ws.dispose();
+    }
+  });
+
+  test("a file carrying BOTH keys is already correct — `version` is what is read", () => {
+    const ws = workspace({ ".tldrx/workspace.yml": `version: 1\nschema_${"version"}: 0\nmode: single\n` });
+    try {
+      expect(findLegacyVersionFiles(ws.root)).toEqual([]);
+    } finally {
+      ws.dispose();
+    }
+  });
+
+  test("a modern workspace reports clean, and the finding never changes the exit code", async () => {
+    const ws = workspace({ ".tldrx/workspace.yml": MODERN });
+    try {
+      expect(findLegacyVersionFiles(ws.root)).toEqual([]);
+      const clean = await runDoctor({ mcp: false, root: ws.root });
+      expect(clean.output).toContain("every file says `version: 1`");
+
+      writeFileSync(join(ws.root, ".tldrx", "workspace.yml"), LEGACY, "utf8");
+      const dirty = await runDoctor({ mcp: false, root: ws.root });
+      expect(dirty.output).toContain("Deprecated `schema_version:` in 1 file(s)");
+      expect(dirty.output).toContain(".tldrx/workspace.yml");
+      expect(dirty.exitCode).toBe(clean.exitCode);
+      expect(dirty.healthy).toBe(clean.healthy);
+      expect(JSON.parse(doctorJson(dirty)).legacyVersionFiles).toEqual([".tldrx/workspace.yml"]);
+    } finally {
+      ws.dispose();
+    }
+  }, 60_000);
+
+  test("outside a workspace the report says NOT SCANNED, not `nothing found`", async () => {
+    const outcome = await runDoctor({ mcp: false });
+    expect(outcome.legacyVersionFiles).toBeNull();
+    expect(outcome.output).toContain("no workspace here");
+  }, 30_000);
+});
+
+/** The stderr line a loader prints, once per file per process. */
+describe("the schema_version stderr notice", () => {
+  test("`<file>: schema_version is deprecated — say version: 1`, and not twice", () => {
+    resetDeprecationNotices();
+    const written: string[] = [];
+    const original = process.stderr.write.bind(process.stderr);
+    (process.stderr as { write: unknown }).write = (chunk: string): boolean => {
+      written.push(String(chunk));
+      return true;
+    };
+    try {
+      const legacy = validate("workspace", { schema_version: 0, mode: "single", root: ".", repos: [] });
+      noteDeprecations("/w/.tldrx/workspace.yml", legacy);
+      noteDeprecations("/w/.tldrx/workspace.yml", legacy);
+      noteDeprecations("/w/.tldrx/process.yml", legacy);
+    } finally {
+      (process.stderr as { write: unknown }).write = original;
+    }
+    expect(written).toEqual([
+      "/w/.tldrx/workspace.yml: schema_version is deprecated — say version: 1\n",
+      "/w/.tldrx/process.yml: schema_version is deprecated — say version: 1\n",
+    ]);
+  });
+
+  test("a `version: 1` file says nothing", () => {
+    resetDeprecationNotices();
+    const written: string[] = [];
+    const original = process.stderr.write.bind(process.stderr);
+    (process.stderr as { write: unknown }).write = (chunk: string): boolean => {
+      written.push(String(chunk));
+      return true;
+    };
+    try {
+      noteDeprecations("/w/.tldrx/workspace.yml", validate("workspace", {
+        version: 1, mode: "single", root: ".", repos: [],
+      }));
+    } finally {
+      (process.stderr as { write: unknown }).write = original;
+    }
+    expect(written).toEqual([]);
   });
 });

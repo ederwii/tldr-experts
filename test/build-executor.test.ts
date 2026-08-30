@@ -73,8 +73,22 @@ const TWO_WAVES: BuildWorkspaceOptions = {
   waves: [["S1"], ["S2"]],
 };
 
+/**
+ * `git` in the fixture repo, with stderr CAPTURED rather than inherited.
+ *
+ * `execFileSync` sends the child's stderr to ours unless told otherwise, so the
+ * two `expect(() => git(ws, ["rev-parse", "--verify", ...])).toThrow()` lines
+ * below — the ones that prove no branch was cut — printed
+ * `fatal: Needed a single revision` on every `bun test` run. The assertion is
+ * the non-zero exit, not the message; piping keeps the exit (and puts the
+ * message on `error.stderr`, so a genuinely unexpected failure still reports).
+ */
 function git(ws: BuildWorkspace, args: readonly string[]): string {
-  return execFileSync("git", [...args], { cwd: ws.repoDir, encoding: "utf8" }).trim();
+  return execFileSync("git", [...args], {
+    cwd: ws.repoDir,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
 }
 
 function story(ws: BuildWorkspace, id: string): string {

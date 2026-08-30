@@ -989,6 +989,52 @@ was sound — no shell in the adapters, no `push` wrapper, the dashboard on loop
   may hold local values, and it was the one thing the framework writes that nothing
   ignored. Now in the init gitignore block and in this repo's own.
 
+### One bundle both runtimes read the same way, and the version key the spec always meant
+
+- **`bun dist/tldrx.js` printed `Â·` where `node dist/tldrx.js` printed `·`.** The
+  bundle was correct UTF-8 all along (`c2 b7` at the byte offset); the `// @bun`
+  header that `bun build` emits tells the Bun *runtime* "already transpiled, load
+  raw", and on bun 1.3.14 that raw path decodes the file byte-per-character, so
+  every non-ASCII source literal came out double-encoded (`c3 82 c2 b7`) in
+  `run status`, the statusline and `questions lint --fix`. `scripts/build.ts` now
+  strips the marker from every emitted file, and `cmp` on the two runs is exit 0.
+  Costs the Node path nothing and the Bun path one transpile — measured ~4 ms over
+  ten `--version` runs. A test runs the built bundle under both and compares bytes.
+- **The dashboard checks `Host`.** Binding loopback is necessary, not sufficient: a
+  page on a name the attacker owns can point it at 127.0.0.1 and read `/model.json`
+  from our origin, because the browser opens the socket and it is local either way.
+  A request that does not name `127.0.0.1`, `localhost`, `::1` or the host we were
+  told to bind now gets 403 before the method check and before a route is chosen.
+  Only the name is compared, never the port, so `ssh -L` and container port maps
+  keep working. (Gates/money/safety audit, gap 10.)
+- **`version: 1` is the key; `schema_version:` is deprecated for one release.** The
+  spec said `version: 1` from the first draft and `tldrx init` has always written
+  it — measured on a real workspace: workspace.yml, process.yml, every
+  competencies.yml and every `tldrx-work/*/{run,budget}.yml` say `version: 1`. Yet
+  seven skeleton validators demanded `schema_version` and seven templates printed
+  `schema_version: 0`, so the shipped validators rejected the tool's own output (5
+  of 5 real files failed on that key; 0 do now). One `requireVersion` is the rule
+  everywhere, including the three live validators that had never accepted the
+  legacy spelling at all. A file still on the old key LOADS, prints
+  `<file>: schema_version is deprecated — say version: 1` on stderr once per
+  process, and is listed by `tldrx doctor` — a warning that never moves the exit
+  code. `templates/*.yml` and the framework's `env.yml` now say `version: 1`.
+- **`gate.requires:` deleted from the four remaining stage files, and from the
+  type.** Sixteen acceptance sentences that no gate enforced and no agent ever
+  read: `normaliseGate` takes `.type`, `validateStage` checks `gate.type`, and the
+  prompt ships `stage.md`, never `stage.yml`. Removed from `StageGate` only — the
+  validator never inspected the key, so a stage library that still declares it
+  keeps validating.
+- **`bun test` no longer prints `fatal: Needed a single revision` twice.**
+  `execFileSync` inherits the child's stderr; the two assertions that prove Build
+  cut no branch leaked git's complaint into every run. The assertions are
+  unchanged and still rest on the exit code.
+- **`docs/ROADMAP.md` says what is actually true today**: nothing claims 0.3.0
+  shipped (the last tag is v0.2.0), v1 is labelled on-main-unreleased with its
+  bullets corrected against the code, and a new "Next — open" section names seam
+  analysis, discovery sampling, parallel stories, multi-model and evals with the
+  line that proves each is open.
+
 ## 0.2.0 — 2026-08-29
 
 ### The Build phase executes

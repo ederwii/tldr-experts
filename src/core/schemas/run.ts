@@ -1,7 +1,7 @@
 /** Schema for `tldrx-work/<run>/run.yml` — THE execution path and resume point. */
 import {
   asDocument, requireArray, requireEnum, requireKeys, requireNumber, requireString,
-  result, isRecord, type ValidationIssue, type ValidationResult,
+  requireVersion, result, isRecord, type ValidationIssue, type ValidationResult,
 } from "./validation.ts";
 
 export const RUN_STATUSES = [
@@ -23,7 +23,13 @@ export interface RunPhase {
 }
 
 export interface Run {
-  readonly schema_version: number;
+  /**
+   * `version: 1`. A file still saying `schema_version` loads and is reported;
+   * see `requireVersion` in `./validation.ts`.
+   */
+  readonly version: number;
+  /** @deprecated the pre-spec spelling of `version`. Accepted for one release. */
+  readonly schema_version?: number;
   readonly run_id: string;
   readonly scope: string;
   readonly workflow: string;
@@ -35,10 +41,12 @@ export interface Run {
 
 export function validateRun(input: unknown): ValidationResult {
   const issues: ValidationIssue[] = [];
+  const deprecations: string[] = [];
   const doc = asDocument(input, issues);
   if (!doc) return result(issues);
 
-  requireKeys(doc, ["schema_version", "run_id", "scope", "workflow", "status", "budget_usd", "phases"], "", issues);
+  requireVersion(doc, issues, deprecations);
+  requireKeys(doc, ["run_id", "scope", "workflow", "status", "budget_usd", "phases"], "", issues);
   requireString(doc.run_id, "run_id", issues);
   requireString(doc.scope, "scope", issues);
   requireString(doc.workflow, "workflow", issues);
@@ -56,5 +64,5 @@ export function validateRun(input: unknown): ValidationResult {
       requireEnum(phase.status, RUN_STATUSES, `${path}.status`, issues);
     });
   }
-  return result(issues);
+  return result(issues, deprecations);
 }

@@ -11,7 +11,7 @@
  */
 import {
   asDocument, isRecord, requireArray, requireEnum, requireKeys, requireNumber, requireString,
-  result, type ValidationIssue, type ValidationResult,
+  requireVersion, result, type ValidationIssue, type ValidationResult,
 } from "../schemas/validation.ts";
 import { validateGatesPolicy, type GatesPolicy } from "./gatePolicy.ts";
 
@@ -261,18 +261,17 @@ export function derivePhaseStatus(phase: RunPhase): StageStatus {
 
 export function validateRunFile(input: unknown): ValidationResult {
   const issues: ValidationIssue[] = [];
+  const deprecations: string[] = [];
   const doc = asDocument(input, issues);
   if (!doc) return result(issues);
 
+  requireVersion(doc, issues, deprecations);
   requireKeys(
     doc,
-    ["version", "run", "title", "scope", "workflow", "repos", "created_at", "updated_at", "status", "cursor", "budget", "phases"],
+    ["run", "title", "scope", "workflow", "repos", "created_at", "updated_at", "status", "cursor", "budget", "phases"],
     "",
     issues,
   );
-  if (doc.version !== undefined && doc.version !== 1) {
-    issues.push({ path: "version", message: `unknown schema version ${String(doc.version)} (expected 1)` });
-  }
   if (typeof doc.run !== "string" || !RUN_ID_RE.test(doc.run)) {
     issues.push({ path: "run", message: "run id must match ^\\d{6}-[a-z0-9-]{1,40}$" });
   }
@@ -347,7 +346,7 @@ export function validateRunFile(input: unknown): ValidationResult {
     }
   }
 
-  if (!requireArray(doc.phases, "phases", issues)) return result(issues);
+  if (!requireArray(doc.phases, "phases", issues)) return result(issues, deprecations);
   const phases = doc.phases as unknown[];
   if (phases.length > MAX_PHASES) {
     issues.push({ path: "phases", message: `${phases.length} phases exceeds the ${MAX_PHASES} cap` });
@@ -472,7 +471,7 @@ export function validateRunFile(input: unknown): ValidationResult {
       });
     }
   }
-  return result(issues);
+  return result(issues, deprecations);
 }
 
 function checkOrder(started: unknown, ended: unknown, path: string, issues: ValidationIssue[]): void {

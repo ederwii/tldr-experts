@@ -26,9 +26,19 @@ export function isEffortLevel(value: unknown): value is EffortLevel {
   return typeof value === "string" && (EFFORT_LEVELS as readonly string[]).includes(value);
 }
 
+/**
+ * A gate is its `type` and nothing else.
+ *
+ * `requires:` (a list of acceptance sentences) lived here until 2026-08-29 and
+ * was read by nobody: `normaliseGate` (`run/workflowPreset.ts:216-231`) takes
+ * `.type`, `validateStage` below checks `gate.type`, and the agent prompt ships
+ * `stage.md`, never `stage.yml` (`facilitator/prompt.ts:101`). Dropping the field
+ * does not break a stage library that still declares it — unknown keys are
+ * ignored here, as they always have been — it just stops the type pretending
+ * something consumes them. Real enforcement is `checks:`.
+ */
 export interface StageGate {
   readonly type: GateType;
-  readonly requires?: readonly string[];
 }
 
 export interface Stage {

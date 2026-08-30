@@ -37,6 +37,27 @@ async function run(cmd: readonly string[], stdin?: string): Promise<Ran> {
   return { code: await proc.exited, stdout, stderr };
 }
 
+/** Same spawn, but the streams come back as raw bytes — the encoding IS the assertion. */
+async function runBytes(cmd: readonly string[]): Promise<Uint8Array> {
+  const proc = Bun.spawn([...cmd], { cwd: FRAMEWORK_ROOT, stdout: "pipe", stderr: "pipe" });
+  const [stdout] = await Promise.all([new Response(proc.stdout).arrayBuffer(), proc.exited]);
+  return new Uint8Array(stdout);
+}
+
+/** The first line of `bytes` that holds a MIDDOT, as bytes; `null` if there is none. */
+function middotLine(bytes: Uint8Array): Uint8Array | null {
+  let start = 0;
+  for (let i = 0; i <= bytes.length; i += 1) {
+    if (i !== bytes.length && bytes[i] !== 0x0a) continue;
+    const line = bytes.subarray(start, i);
+    if (line.some((b, j) => b === 0xc2 && line[j + 1] === 0xb7)) return line;
+    start = i + 1;
+  }
+  return null;
+}
+
+const hasNode = Bun.which("node") !== null;
+
 /** Trimmed from the official statusLine example payload (docs § "Available data"). */
 const STATUSLINE_PAYLOAD = JSON.stringify({
   cwd: FRAMEWORK_ROOT,
@@ -149,6 +170,57 @@ describe("running the build under node", () => {
     expect([0, 1]).toContain(ran.code); // 1 when an optional tool is missing — still a real parse
     expect(ran.stdout).toContain("bun");
   });
+});
+
+/**
+ * Regression: `// @bun` made bun read our own bundle as latin-1 (measured
+ * 2026-08-29, bun 1.3.14). The marker means "already transpiled, load raw", and
+ * that raw path decoded the file byte-per-character, so `·` — `c2 b7` in the
+ * bundle, which is correct UTF-8 — reached stdout as `c3 82 c2 b7` (`Â·`) in
+ * `run status`, the statusline and `questions lint --fix`. Node, which ignores
+ * the comment, printed `c2 b7` from the same file. One bundle, two runtimes: the
+ * bytes have to match, so `scripts/build.ts` strips the marker.
+ */
+describe("non-ASCII survives both runtimes", () => {
+  test("no emitted file carries Bun's `// @bun` raw-load marker", () => {
+    const files = [
+      join(DIST, "tldrx.js"),
+      ...readdirSync(join(DIST, "hooks")).map((n) => join(DIST, "hooks", n)),
+    ];
+    for (const file of files) {
+      const lines = readFileSync(file, "utf8").split("\n");
+      expect([lines[0], lines[1]], file).not.toContain("// @bun");
+    }
+  });
+
+  test("`dist/tldrx.js status` prints `·` as the same bytes under bun and under node", async () => {
+    const fixture = await singleRepoFixture();
+    const out = await mkdtemp(join(tmpdir(), "tldrx-encoding-"));
+    try {
+      const init = await run([
+        "bun", join(DIST, "tldrx.js"), "init",
+        "--no-interview", "--provider", "static", "--root", fixture.root, "--out", out,
+      ]);
+      expect(init.stderr, init.stderr).toBe("");
+      expect(init.code).toBe(0);
+
+      const underBun = middotLine(await runBytes(["bun", join(DIST, "tldrx.js"), "status", "--root", out]));
+      expect(underBun).not.toBeNull();
+      // `c3 82` is the `Â` of a double-encode; correct output cannot contain it.
+      expect([...underBun!].some((b, i) => b === 0xc3 && underBun![i + 1] === 0x82)).toBe(false);
+
+      if (!hasNode) {
+        process.stderr.write("build.test: `node` not on PATH — the bun/node byte comparison was SKIPPED\n");
+        return;
+      }
+      const underNode = middotLine(await runBytes(["node", join(DIST, "tldrx.js"), "status", "--root", out]));
+      expect(underNode).not.toBeNull();
+      expect([...underBun!]).toEqual([...underNode!]);
+    } finally {
+      await fixture.cleanup();
+      await rm(out, { recursive: true, force: true });
+    }
+  }, 120_000);
 });
 
 describe("the runtime seam invariant", () => {

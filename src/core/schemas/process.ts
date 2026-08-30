@@ -4,7 +4,7 @@
  */
 import {
   asDocument, requireArray, requireEnum, requireKeys,
-  result, type ValidationIssue, type ValidationResult,
+  requireVersion, result, type ValidationIssue, type ValidationResult,
 } from "./validation.ts";
 
 export const METHODOLOGIES = ["scrum", "kanban", "shape-up", "none"] as const;
@@ -31,7 +31,13 @@ export const TICKET_SYNC_MODES = ["mirror-out", "two-way"] as const;
 export type TicketSyncMode = (typeof TICKET_SYNC_MODES)[number];
 
 export interface ProcessModel {
-  readonly schema_version: number;
+  /**
+   * `version: 1`. A file still saying `schema_version` loads and is reported;
+   * see `requireVersion` in `./validation.ts`.
+   */
+  readonly version: number;
+  /** @deprecated the pre-spec spelling of `version`. Accepted for one release. */
+  readonly schema_version?: number;
   readonly methodology: Methodology;
   readonly ticket_tool: TicketTool;
   readonly story_granularity: StoryGranularity;
@@ -46,12 +52,14 @@ export interface ProcessModel {
 
 export function validateProcess(input: unknown): ValidationResult {
   const issues: ValidationIssue[] = [];
+  const deprecations: string[] = [];
   const doc = asDocument(input, issues);
   if (!doc) return result(issues);
 
+  requireVersion(doc, issues, deprecations);
   requireKeys(
     doc,
-    ["schema_version", "methodology", "ticket_tool", "story_granularity", "approvers", "definition_of_done"],
+    ["methodology", "ticket_tool", "story_granularity", "approvers", "definition_of_done"],
     "",
     issues,
   );
@@ -60,5 +68,5 @@ export function validateProcess(input: unknown): ValidationResult {
   requireEnum(doc.story_granularity, STORY_GRANULARITIES, "story_granularity", issues);
   requireArray(doc.approvers, "approvers", issues);
   requireArray(doc.definition_of_done, "definition_of_done", issues);
-  return result(issues);
+  return result(issues, deprecations);
 }

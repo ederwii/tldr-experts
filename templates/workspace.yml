@@ -6,7 +6,7 @@
 # mode: multi   — cwd contains child dirs that are git repos; those are the repos.
 #                 One .tldrx/ at the root, always. Shared: memory/, experts/,
 #                 stages/, workflows/. Per repo: map/<repo>/, conventions/<repo>.md.
-schema_version: 0
+version: 1
 mode: single
 root: "."
 detected_at: null

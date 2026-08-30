@@ -3,7 +3,7 @@
 #
 # THE execution path and the resume point. Together with events.jsonl this is the
 # dashboard's only data source. If it is not in here, it did not happen.
-schema_version: 0
+version: 1
 run_id: "260828-example-slug"
 scope: feature
 workflow: feature

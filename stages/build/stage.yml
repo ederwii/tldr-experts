@@ -40,14 +40,15 @@ outputs:
 experts:
   - developer
 
+# `requires:` used to list five acceptance criteria here. Nothing read them:
+# `normaliseGate` (src/core/run/workflowPreset.ts:216-231) reads only `.type`,
+# `validateStage` (src/core/schemas/stage.ts:72-76) checks only `gate.type`, the
+# prompt ships `stage.md` and never this file (src/core/facilitator/prompt.ts:101),
+# and no other file in the repo touches the key. Criteria no gate enforces and no
+# reader ever sees are worse than none — the enforcement that IS real is the
+# `checks:` list below.
 gate:
   type: human-approval
-  requires:
-    - "every scheduled story is `done` or `blocked`, with a review log for each"
-    - "each `done` story's dod commands exited 0, re-run by the facilitator"
-    - "each `done` story carries evidence: the commands, the commit sha, the review"
-    - "reviewer sub-agent sign-off recorded per story"
-    - "the epic branches are listed, unmerged — a human merges them, not the framework"
 
 checks:
   - claim-sources

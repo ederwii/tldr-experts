@@ -1,7 +1,7 @@
 /** `tldrx-work/<run>/budget.yml` (spec §2.11) — the ceiling the facilitator refuses to exceed. */
 import {
   asDocument, isRecord, requireArray, requireEnum, requireKeys, requireNumber, requireString,
-  result, type ValidationIssue, type ValidationResult,
+  requireVersion, result, type ValidationIssue, type ValidationResult,
 } from "../schemas/validation.ts";
 
 export const ON_EXCEED = ["block", "warn"] as const;
@@ -29,13 +29,12 @@ export interface RunBudget {
 
 export function validateRunBudget(input: unknown): ValidationResult {
   const issues: ValidationIssue[] = [];
+  const deprecations: string[] = [];
   const doc = asDocument(input, issues);
   if (!doc) return result(issues);
 
-  requireKeys(doc, ["version", "run", "ceiling_usd", "per_agent_max_usd", "on_exceed", "phases"], "", issues);
-  if (doc.version !== undefined && doc.version !== 1) {
-    issues.push({ path: "version", message: `unknown schema version ${String(doc.version)} (expected 1)` });
-  }
+  requireVersion(doc, issues, deprecations);
+  requireKeys(doc, ["run", "ceiling_usd", "per_agent_max_usd", "on_exceed", "phases"], "", issues);
   requireString(doc.run, "run", issues);
   requireNumber(doc.ceiling_usd, "ceiling_usd", issues);
   requireNumber(doc.per_agent_max_usd, "per_agent_max_usd", issues);
@@ -47,7 +46,7 @@ export function validateRunBudget(input: unknown): ValidationResult {
       issues.push({ path: "warn_at_pct", message: "expected 1–99" });
     }
   }
-  if (!requireArray(doc.phases, "phases", issues)) return result(issues);
+  if (!requireArray(doc.phases, "phases", issues)) return result(issues, deprecations);
 
   const phases = doc.phases as unknown[];
   if (phases.length > MAX_PHASES) {
@@ -69,7 +68,7 @@ export function validateRunBudget(input: unknown): ValidationResult {
   if (typeof doc.ceiling_usd === "number" && sum > doc.ceiling_usd + 1e-9) {
     issues.push({ path: "phases", message: `phase ceilings sum to ${sum} > ceiling_usd ${doc.ceiling_usd}` });
   }
-  return result(issues);
+  return result(issues, deprecations);
 }
 
 export function asRunBudget(input: unknown): RunBudget {

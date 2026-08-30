@@ -2,10 +2,11 @@
  * `.tldrx/workspace.yml`, shaped by spec §2.1.
  *
  * Note the drift from the v0 skeleton validator in `src/core/schemas/workspace.ts`:
- * the spec says `version: 1` and `mode: single-repo|multi-repo`, the skeleton
- * says `schema_version` and `single|multi`. The spec is the source of truth for
- * what is written; `validateEmitted.ts` projects the document onto the skeleton
- * shape so the shipped validator still runs against the same data. `[assumption]`
+ * the spec says `mode: single-repo|multi-repo`, the skeleton says
+ * `single|multi`. The spec is the source of truth for what is written;
+ * `validateEmitted.ts` projects the document onto the skeleton shape so the
+ * shipped validator still runs against the same data. `[assumption]` The version
+ * key no longer drifts: since 2026-08-29 both say `version: 1`.
  *
  * `provider` and `root` are additions the spec table does not list: `provider`
  * because spec §5 decision (b) requires recording which map provider ran, and
