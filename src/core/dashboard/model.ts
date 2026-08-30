@@ -32,8 +32,19 @@ import { validateEpicFile } from "../schemas/epic.ts";
 import { parseYaml } from "../yaml.ts";
 import { offlineHtml } from "./offlineHtml.ts";
 
-/** Bumped when a field is removed or changes meaning, never for an addition. */
-export const DASHBOARD_MODEL_VERSION = 1;
+/**
+ * Bumped when a field is removed or changes meaning, never for an addition.
+ *
+ * 1 → 2: `pendingQuestion` used to be "the first open question anywhere in the
+ * run" and is now "the question the run STOPPED for" — null while the run is at
+ * a gate, however many blocks are open in an already-approved phase.
+ * `pendingGate` kept its documented meaning but not its behaviour: it used to
+ * be the first stage whose gate object read `pending`, which on an untouched
+ * run is every stage. Both are aliases of `waiting` now. A consumer reading
+ * either gets different data than it did at v1, which is exactly what this
+ * number is for.
+ */
+export const DASHBOARD_MODEL_VERSION = 2;
 
 export interface StageRowModel {
   readonly phase: string;

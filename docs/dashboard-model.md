@@ -48,7 +48,7 @@ of it.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `modelVersion` | number | `1` today. |
+| `modelVersion` | number | `2` today. `1 → 2`: `pendingQuestion` and `pendingGate` became aliases of `waiting` and no longer report an open question, or a gate object, that the run is not actually stopped on. |
 | `generatedAt` | string | ISO-8601, to the second, when the files were read. |
 | `root` | string | Absolute path of the workspace that was read. |
 | `workspace` | string | Its basename — what the page calls itself. |
@@ -56,8 +56,20 @@ of it.
 | `live` | boolean | `true` when the watching server produced it, `false` for a static export. |
 | `maxLevel` | number | Highest competency level (spec §2.6), so a renderer never hard-codes it. |
 | `runs` | `Run[]` | Newest first (run ids are date-prefixed). |
+| `order` | `string[]` | Every run id in the order a human should work through them — topological on `dependsOn`, runnable first, then newest-updated. The head is the run to do next. `runs` stays newest-first, so a renderer can offer either. |
+| `chains` | `string[][]` | Root-to-leaf dependency paths, for an `A → B → C` rendering. |
 | `experts` | `Expert[]` | Alphabetical. |
 | `faq` | `FaqEntry[]` | The how-to, as data. |
+
+### `chains`
+
+Every arrow is a real `depends_on` edge, so a fork prints **one chain per
+branch** rather than one flattened topological order implying a sequence nobody
+asked for. Chains of one are omitted (a run with no dependants and no
+dependencies is not a chain), and the list is capped at `MAX_CHAINS` so a dense
+graph cannot blow the page up. A dependency that names a slug with no run in
+this workspace is not an edge, so its dependent appears as a root — `blockedBy`
+still carries the slug, which is where that fact belongs.
 
 ## `Run`
 
@@ -73,18 +85,53 @@ of it.
 | `spentUsd` / `ceilingUsd` | number \| null | Dollars. Format them; the model does not. |
 | `stagesTotal` / `stagesDone` | number | `done`/`failed`/`skipped`/`cancelled` count as done. |
 | `percent` | number | 0–100, rounded. |
-| `pendingGate` | string \| null | Stage id of the gate the run waits on. |
-| `pendingQuestion` | string \| null | `"<Qid> · <title>"` of the first open question. |
+| `waiting` | `Waiting` | **What this run is waiting on.** The one field to read. |
+| `pendingGate` | string \| null | Stage id of the gate the run waits on. **Derived alias** of `waiting` — see below. |
+| `pendingQuestion` | string \| null | `"<Qid> · <title>"` of the question the run stopped for. **Derived alias** of `waiting`. |
+| `dependsOn` | `string[]` | Runs this one was proposed to follow (`run.yml` `triage.depends_on`), resolved from slugs to run ids. A slug with no run in this workspace keeps its raw slug. |
+| `blockedBy` | `string[]` | The subset of `dependsOn` that is not `done`. Empty means nothing blocks it. |
+| `runnable` | boolean | Nothing blocks it **and** a human could move it right now. |
 | `path` | `Stage[]` | The execution path, in `run.yml` order. |
 | `phases` | `Phase[]` | Per phase: its handoff and its open questions. |
 | `plan` | `Plan` \| null | Stories, epics and waves, when the Plan phase wrote them. |
 | `filter` | string | Lowercased haystack for a text filter over the run list. |
 
+### `Waiting`
+
+`kind` — one of `gate` | `answer` | `ready` | `done` | `blocked` | `failed` —
+plus `message` (a whole sentence, already worded for a reader, carrying the
+command to run) and `questions` (open question ids in the cursor phase, when it
+is waiting on answers).
+
+**This is `tldrx run status`'s own answer, not a second derivation.** Both
+screens call `waitingFor` in `src/core/run/waiting.ts`, so the page cannot
+disagree with the CLI about what a run needs. It is derived from the STATUS of
+the stage the cursor sits on, never from the gate objects: `awaiting_gate` is
+the status a stage wears while a gate holds it, and a `gate.status: pending` on
+a stage nobody has run yet is just the initial value of a field. Reading the
+gates instead is what made a brand-new run render as "waiting at a gate".
+
+`pendingGate` is non-null only when `kind` is `gate`; `pendingQuestion` only
+when `kind` is `answer`. They are kept for one release for templates that
+already read them — **new code should read `waiting`.** Open questions in a
+phase that was already approved still appear under `phases[].questions`; they
+are simply not what the run is waiting on.
+
+Suggested rendering: `gate`, `answer` and `failed` are the three kinds that
+raise an attention card. `ready` is a state of the work, not an ask. A run with
+a non-empty `blockedBy` should say what it is behind whatever its own kind says
+— a gate you cannot reach yet is not the next move.
+
 ### `Stage` (a row of `run.path`)
 
 `phase`, `id`, `status`, `expert` (string \| null), `model` (string \| null),
-`costUsd` (number), `budgetUsd` (number \| null), `gate` (string \| null, e.g.
-`"approve: pending"`).
+`costUsd` (number), `budgetUsd` (number \| null — the stage's own ceiling from
+`run.yml` `stage.budget_usd`; the model does not read `budget.yml`, whose
+ceilings are per phase), `gate` (string \| null, e.g. `"approve: pending"`),
+`gateBy` (string \| null — `auto` when the facilitator closed it, the operator's
+name when a person did, null while it is open), and `gatePolicy` (`"human"` |
+`"auto"` — who is MEANT to sign it, spec §2.2 `gates_policy`; absence reads as
+`human`).
 
 ### `Phase`
 

@@ -509,6 +509,58 @@ places nothing read as one list.
 - **`seed apply` lists unanswered questions on stderr.** A warning, never a refusal:
   applying anyway is a legitimate call, staying silent about it is not.
 
+### The dashboard stopped disagreeing with the CLI
+
+- **A run nobody has started is `ready`, not "waiting at a gate".** The model
+  derived `pendingGate` from the stage GATE OBJECTS — the first stage whose
+  `gate.status` is `pending` — which on a fresh run is every stage, because
+  `pending` is the value the field is born with. Measured on a real workspace of
+  eight freshly applied runs: the page drew **8 red "stage what is waiting at a
+  gate / waiting on a human" cards** while `tldrx run status --json` said
+  `waiting: {kind: "ready"}` for all eight. The derivation moved to
+  `src/core/run/waiting.ts`, typed structurally so both the strict `RunFile` and
+  the dashboard's tolerantly-read `RunDocument` can call it, and the page now
+  carries `runs[].waiting` — the CLI's own `{kind, message, questions}`. Same
+  workspace after: **0 cards**, 0 mismatches across all eight runs.
+  `pendingGate`/`pendingQuestion` survive one release as documented aliases,
+  non-null only for `gate` / `answer` respectively. A test asserts kind AND
+  message parity, run by run, over a fixture covering every waiting kind.
+- **Only a gate, a question or a failure raises an alert.** `ready` now reads
+  "ready — `tldrx next <id>`" in the WAITING ON column instead of the blank
+  "nothing" that made a startable run look finished; a run waiting behind a
+  sibling raises nothing at all, which is the call `tldrx status` already made
+  when it printed no command for a blocked run.
+
+### The dashboard knows what has to come first
+
+- **`triage.depends_on` reaches the page.** Wave J taught `tldrx status` that a
+  run whose dependency has not finished is not the one to work on; the dashboard
+  had none of it and listed eight runs newest-first with no hint that seven
+  could not start. The rules moved to `src/core/run/dependencies.ts` — one pure
+  function, no imports — and `status/runItems.ts` was rewritten onto it rather
+  than a second copy being written. Runs gain `dependsOn` (slugs resolved to run
+  ids), `blockedBy` (the ones not `done`) and `runnable`; the workspace gains
+  `order` (topological, runnable first, then newest-updated) and `chains`.
+- **ORDER is the default sort, and there is a dependency chain block.** The
+  first runnable run wears the same `← next` marker the CLI prints, a blocked
+  run says `blocked by <slug>`, and the chains draw as text with done runs
+  ticked and the runnable one highlighted. Chains are root-to-leaf PATHS, not a
+  flattened topological order, so every arrow is a real edge and a fork prints
+  one line per branch.
+- **An attention line mirrors `tldrx status`.** On the eight-run workspace:
+  `1 run ready (tldrx next 260830-decisions-gate) · 7 blocked · 0 waiting on
+  you`. Counted off the model, disjoint by construction.
+
+### A gate now says who signs it, and who did
+
+- **`gates_policy` and `gate.by` are drawn.** Wave G resolved the policy into
+  `run.yml` and put the closer in the model as `gateBy`; `render.ts` never drew
+  either, so a gate the facilitator closed and one a person signed looked
+  identical on the page, and "which of these will stop for me" had no answer
+  anywhere on it. Stage rows carry `gatePolicy`, the execution path gains a
+  `signed by` column, and the section counts them the way the CLI does —
+  "run.yml order · 1 human, 1 auto". Absence still reads as `human`.
+
 ## 0.2.0 — 2026-08-29
 
 ### The Build phase executes
