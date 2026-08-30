@@ -634,7 +634,7 @@ const ENTRIES: readonly CommandHelp[] = [
       "tldrx expert train billing --area money --mode light --print-prompt",
       "tldrx expert recompute --json",
     ],
-    exits: [EXIT_OK, EXIT_USAGE, EXIT_NOT_FOUND],
+    exits: [0, 1, 2, 3, 5],
   },
   {
     name: "dashboard",
