@@ -67,9 +67,20 @@ export function renderTrainPrompt(input: TrainPromptInput): string {
     "",
     ...steps(mode, area.id),
     "",
+    "## What counts as a finding",
+    "",
+    ...FINDING_CRITERION,
+    "",
     "## What to write",
     "",
     `- \`${knowledgePath}\` — one H2 per finding, every bullet ending in a \`[src: …]\` token (spec §2.8).`,
+    "- End each bullet with `(measured)`, `(inferred)` or `(assumed)` BEFORE its `[src: …]` token.",
+    "  It is parsed onto the evidence row as `confidence:`; `assumed` is weighed at half (spec §2.6).",
+    "- A bullet citing two or more DISTINCT files is worth double (`cross: true`, spec §2.6) —",
+    "  a cross-file finding is the one a reader cannot re-derive from any single file.",
+    "- A claim about a RESULT — \"exit 0\", \"78/78 passed\", \"the build is green\" — must carry a",
+    "  `` [src: $ <cmd> → exit <n>] `` src. The line of `workspace.yml` that DECLARES a command is",
+    "  not evidence that it ran, and a knowledge file is refused for citing one that way.",
     `- Add one \`evidence\` entry per finding to \`.tldrx/experts/${expert.name}/competencies.yml\` `
       + `under area \`${area.id}\`: \`{kind, src, at}\`. Do NOT write \`level\` — it is computed (spec §2.6).`,
     "- `kind` is one of these five. Anything else is dropped when the file is read,",
@@ -95,6 +106,24 @@ export function renderTrainPrompt(input: TrainPromptInput): string {
   return lines.join("\n");
 }
 
+/**
+ * The value criterion, shared word-for-word with the spawning prompt
+ * (`training/trainingPrompt.ts`). Two prompts asking for two different things is
+ * how `--print-prompt` and the headless path end up producing different files.
+ */
+const FINDING_CRITERION: readonly string[] = [
+  "A finding is something a model could not re-derive by reading that one file once:",
+  "",
+  "- a contradiction ACROSS files — a default that differs from the docstring describing it, a",
+  "  caller passing a key the callee never registers, two paths that disagree about an order;",
+  "- a dead path — code nothing reaches, a branch no call site can take, a guard with no caller;",
+  "- an ABSENCE, written as a negative claim with an `absent:` source;",
+  "- a measured command, cited as `$ <cmd> → exit <n>`.",
+  "",
+  "Restating a docstring, a comment or a variable name in other words is not a finding, however",
+  "correct it is: the framework flags it as a paraphrase and derives no evidence from it.",
+];
+
 const DEFAULT_RULES: readonly string[] = [
   "- Cite code as `repo:path:line`, docs as an `https://` URL fetched fresh, prior answers as `F<n>`.",
   "- Never cite a variable name, a docstring or a UI label as evidence of behaviour.",
@@ -107,11 +136,12 @@ function steps(mode: TrainMode, area: string): readonly string[] {
     `1. Locate every entry point, invariant and business rule for \`${area}\` in the repos above.`,
     "2. Read the code before the docs; read the docs before memory.",
     "3. Record each finding with its `file:line`, and note what you looked for and did NOT find.",
+    "4. Prefer a claim that ties two files together to two claims about one file each.",
   ];
   if (mode === "light") return light;
   return [
     ...light,
-    `4. Mine past runs under \`tldrx-work/\` for decisions about \`${area}\` that recurred.`,
-    "5. Propose the recurring ones as practices; they stay proposals until a human accepts them.",
+    `5. Mine past runs under \`tldrx-work/\` for decisions about \`${area}\` that recurred.`,
+    "6. Propose the recurring ones as practices; they stay proposals until a human accepts them.",
   ];
 }

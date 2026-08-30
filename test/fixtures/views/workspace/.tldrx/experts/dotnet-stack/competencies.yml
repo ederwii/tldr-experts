@@ -7,7 +7,7 @@ last_trained: 2026-08-20T11:00:00Z
 areas:
   - id: ef-core
     title: "EF Core mapping and migrations"
-    level: 2
+    level: 3
     train_prompt: "tldrx expert train dotnet-stack --area ef-core --mode light"
     evidence:
       - {kind: code, src: "api:src/Persistence/AppDbContext.cs:41", at: 2026-08-20}
@@ -16,7 +16,7 @@ areas:
       - {kind: answer, src: "F007", at: 2026-07-28}
   - id: legacy-soap
     title: "The SOAP integration nobody has touched since 2024"
-    level: 0
+    level: 1
     train_prompt: "tldrx expert train dotnet-stack --area legacy-soap --mode full"
     evidence:
       - {kind: code, src: "api:src/Legacy/SoapClient.cs:12", at: 2024-03-04}

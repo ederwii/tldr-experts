@@ -59,7 +59,10 @@ export function codePrompt(input: TrainingPromptInput, selection: FileSelection)
     "- **Entry points** — where control enters this area from outside it.",
     "- **Business rules** — the decisions the code makes, in the terms the business uses.",
     "- **Gotchas** — what would mislead the next reader, and the line that proves it.",
-    "- **Sources** — prose. One line per citation above, saying what it establishes.",
+    "- **Sources** — prose. One line per citation above, saying what it establishes. It is a recap:",
+    "  it earns no evidence and no level, so do not pad it and do not put a finding there.",
+    "",
+    ...FINDING_CRITERION,
     "",
     `Every list item in the file ends with a \`[src: …]\` token. The four claim sections must`,
     "each hold at least one item. The token forms you may use here:",
@@ -70,17 +73,35 @@ export function codePrompt(input: TrainingPromptInput, selection: FileSelection)
     "  finding and it is how a section with nothing in it is written. It earns no evidence.",
     "- `[src: F<n>]` — a fact already on record. `[src: https://…]` — a doc you fetched fresh.",
     "",
+    "**End every bullet with `(measured)`, `(inferred)` or `(assumed)` before its `[src: …]` token.**",
+    "`(measured)` = you read the literal line or ran the command; `(inferred)` = a mechanism plus",
+    "evidence, and you name the mechanism; `(assumed)` = you have not checked, and the framework",
+    "halves what the row is worth. The annotation is parsed, recorded on the evidence row and",
+    "weighed (§2.6); a bullet with none is read as unlabelled, not as measured.",
+    "",
     "**The file is validated off disk and accepted or rejected whole.** One unsourced item,",
     "one line number outside its file, and nothing is kept: no knowledge file, no evidence, no",
     "level change. Write fewer claims rather than softer sources.",
+    "",
+    "**A claim about a RESULT needs a command, not a file line.** \"exit 0\", \"78/78 passed\",",
+    "\"the build is green\", or the word \"measured\" used in the sentence itself — any of those in a",
+    "bullet or a paragraph must carry a `` [src: $ <cmd> → exit <n>] `` src. Citing the line of",
+    "`workspace.yml` that DECLARES the command is not evidence that it ran, and the file is",
+    "refused for it.",
     "",
     "## How this becomes a level",
     "",
     `Each DISTINCT file you cite becomes one \`{kind: code, src, at}\` row under area`,
     `\`${input.area.id}\` in \`competencies.yml\`, and the level is recomputed from those rows by`,
     "the spec §2.6 formula. You do not write the level and you do not write the evidence — the",
-    "framework derives both from what you cited. Citing the same file twelve times is worth one",
-    "row; reading twelve files is worth twelve.",
+    "framework derives both from what you cited.",
+    "",
+    "**A bullet citing two or more DISTINCT files counts double** (§2.6 `cross`), because that is",
+    "the finding a reader cannot re-derive from any one file. A bullet the framework judges a",
+    "paraphrase of the line it cites counts nothing, and so does a citation outside this expert's",
+    "`## Domain` or one it already has on record from another area. Breadth of files is not the",
+    "target and never was: twelve shallow bullets over twelve files is worth less here than three",
+    "that tie files together, and it is the shape this prompt used to ask for by mistake.",
     "",
     ...ceiling(input),
     "",
@@ -90,6 +111,7 @@ export function codePrompt(input: TrainingPromptInput, selection: FileSelection)
     `over ${describeRepos(selection.repos)}, ranked by the map, the graph and a grep.`,
     `${String(selection.scanned)} code file(s) were scored${selection.scanTruncated ? " (the walk hit its cap, so the scan is partial)" : ""}.`,
     "",
+    ...domainBoundaryNote(selection),
     ...notReadNote(selection),
     ...graphNote(selection),
     ...domainNote(selection),
@@ -283,6 +305,43 @@ function expertBodies(input: TrainingPromptInput): readonly string[] {
     const tail = knowledge === "" ? "" : `\n${knowledge}\n`;
     return `\n---\n\n<!-- expert: ${expert.name} -->\n${expert.body.trimEnd()}\n${tail}`;
   });
+}
+
+/**
+ * What makes a bullet worth writing — the criterion the old prompt did not have.
+ *
+ * It used to reward file breadth outright ("reading twelve files is worth
+ * twelve"), which is a Goodhart recipe and the audit found the expected result: a
+ * third of the corpus was verbatim paraphrase of docstrings, one bullet per file,
+ * spread wide. The replacement is a test a writer can apply to their own sentence
+ * before writing it, and it is deliberately negative — it says what does NOT count.
+ */
+const FINDING_CRITERION: readonly string[] = [
+  "**What counts as a finding.** A finding is something a model could not re-derive by reading",
+  "that one file once. Concretely, these do:",
+  "",
+  "- a contradiction ACROSS files — a default that differs from the docstring that describes it,",
+  "  a caller passing a key the callee never registers, two paths that disagree about an order;",
+  "- a dead path — code nothing reaches, a branch no call site can take, a guard with no caller;",
+  "- an ABSENCE, written with a negative claim and an `absent:` source — \"there is no",
+  "  `UseHttpsRedirection` anywhere in this pipeline\" is a finding; you looked, and it is not there;",
+  "- a measured command, cited as `` [src: $ <cmd> → exit <n>] ``.",
+  "",
+  "These do not: restating a docstring, a comment or a variable name in other words; naming a",
+  "file's obvious purpose; \"X is registered in DI\" with no consequence attached. If the sentence",
+  "is true of the line and adds nothing to it, the next reader gains nothing from it either — and",
+  "the framework will flag it as a paraphrase and derive no evidence from it.",
+];
+
+function domainBoundaryNote(selection: FileSelection): readonly string[] {
+  if (selection.domainPaths.length === 0) return [];
+  return [
+    `**Domain boundary** — this expert declares ${selection.domainPaths.map((path) => `\`${path}\``).join(", ")}`,
+    "in its `## Domain`, so only files inside it were scored and inlined. A citation outside it",
+    "earns this expert no evidence (it belongs to whichever expert owns that folder), so do not",
+    "reach for one.",
+    "",
+  ];
 }
 
 function describeRepos(repos: readonly string[]): string {

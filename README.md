@@ -161,6 +161,16 @@ because in a single-repo workspace it selects everybody). Experts are ranked by 
 split by rank, and an expert with no intersection contributes its body and no knowledge at all. `tldrx next --prepare`
 prints what each one contributed in bytes; `tldrx expert list` prints which stages load each expert.
 
+What earns a place on those files is narrower than "a true sentence with a citation". A citation must **sustain** its
+claim, not only resolve: a bullet that asserts a result — "exit 0", "78/78 passed", "the build is green" — must cite
+the command (`[src: $ dotnet build → exit 0]`), and citing the line of `workspace.yml` that *declares* that command is
+refused, because it is not evidence anything ran. Three softer rules cost a citation its evidence row without
+rejecting the file: a bullet that restates the line it cites (`paraphrase`), a citation outside the expert's own
+`## Domain` (`outside domain` — naming the expert that does own it), and a `src` this expert already has on record
+(`duplicate src`). `## Sources` is a recap and earns nothing. The level formula matches: a bullet tying **two or more
+distinct files** together is worth double, an `(assumed)` bullet half, and recency now decays continuously instead of
+falling off a 180-day cliff — so run `tldrx expert recompute` after upgrading to see where your levels land.
+
 Five of those experts are **role experts**, and `tldrx init` seeds all five: `product` (What), `architect` (How and
 Plan), `delivery` (Plan), `developer` (Build) and `operations` (Watch) — the names the shipped stage files have always
 listed. A role expert's subject is the workflow rather than a folder of code: what its stage is accountable for, what it

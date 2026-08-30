@@ -43,10 +43,13 @@ import { buildDeveloperPrompt, buildReviewerPrompt, REVIEW_SCHEMA } from "../../
 import { parseReview, renderPreviousAttempt, renderReviewLog, type Review } from "../../build/review.ts";
 import { dodGreen, type DodResult, type StoryOutcome } from "../../build/outcome.ts";
 import { renderBuildHandoff, type EpicSummaryRow } from "../../build/handoff.ts";
+import { appendBuildRetro, buildRetroPath, gateRetroLines, storyRetroLines } from "../../build/retroLog.ts";
 import type { PlanStatus } from "../../schemas/planCommon.ts";
 import type { ExecutorContext, ExecutorOutcome, ExecutorTask } from "./index.ts";
 
 export const HANDOFF_REL = `${BUILD_PHASE}/handoff.md`;
+/** Run-relative, and the path `mineRuns` looks for — see `build/retroLog.ts`. */
+export const RETRO_REL = "retro.md";
 
 /**
  * A story gets one developer attempt, plus one more if the reviewer asks for
@@ -126,6 +129,7 @@ class BuildSession {
   async runAll(): Promise<ExecutorOutcome> {
     const refusal = await this.refuseOnDirtyRepos() ?? await this.refuseOnForeignEpic();
     if (refusal !== null) return refusal;
+    this.recordGateFeedback();
 
     for (const wave of this.plan.waves) {
       for (const planned of wave.stories) {
@@ -203,6 +207,7 @@ class BuildSession {
 
   /** In-session: continue the prepared story from the DoD step. */
   async commit(): Promise<ExecutorOutcome> {
+    this.recordGateFeedback();
     const planned = this.inProgress();
     if (planned === null) {
       return failed(this.ctx, "no story is `in_progress` — run `tldrx next --prepare` first", []);
@@ -234,7 +239,7 @@ class BuildSession {
       awaiting: true,
       tasks: this.tasks,
       costUsd: this.spent(),
-      outputs: this.logPaths(),
+      outputs: [...this.logPaths(), ...this.retroOutputs()],
       lines: [
         ...this.lines,
         `${planned.story.id} → \`${outcome?.status ?? "?"}\``,
@@ -597,6 +602,7 @@ class BuildSession {
     };
     this.outcomes.set(id, outcome);
     this.writeLog(outcome);
+    this.recordStoryFeedback(outcome);
 
     // Evidence is REQUIRED of a done story (spec §2.13) and useful on a blocked
     // one: the conflicting paths are exactly what the human who unblocks it needs,
@@ -634,6 +640,36 @@ class BuildSession {
     writeFileSync(join(dir, `${outcome.id}.md`), renderReviewLog(outcome), "utf8");
   }
 
+  /**
+   * The story's own push-back, appended to `retro.md` as it settles.
+   *
+   * This is the only place a reviewer's `changes` verdict and a first-attempt DoD
+   * failure become something a ROLE expert can ever read: `mineRuns` reads
+   * `handoff.md` and `retro.md`, and until now `retro.md` existed only when a
+   * human typed `tldrx retro`. Measured 2026-08-29: all five role experts sat at
+   * level 0 with nothing to mine.
+   */
+  private recordStoryFeedback(outcome: StoryOutcome): void {
+    appendBuildRetro(this.ctx.runDir, storyRetroLines(outcome, this.ctx.runId));
+  }
+
+  /**
+   * Gate rejections and revocations, recovered from `events.jsonl`.
+   *
+   * They happen BETWEEN invocations — `tldrx reject` is a separate command — so
+   * they are read at the top of the next Build run rather than emitted where they
+   * occur. Appending is deduped verbatim, so re-running over the same log adds
+   * nothing.
+   */
+  private recordGateFeedback(): void {
+    appendBuildRetro(this.ctx.runDir, gateRetroLines(this.ctx.runDir, this.ctx.runId));
+  }
+
+  /** `retro.md` is an output only when something was actually appended to it. */
+  private retroOutputs(): readonly string[] {
+    return existsSync(buildRetroPath(this.ctx.runDir)) ? [RETRO_REL] : [];
+  }
+
   // --- the end of the phase -------------------------------------------------
 
   private async finish(): Promise<ExecutorOutcome> {
@@ -646,7 +682,7 @@ class BuildSession {
       awaiting: false,
       tasks: this.tasks,
       costUsd: this.spent(),
-      outputs: [...this.logPaths(), HANDOFF_REL],
+      outputs: [...this.logPaths(), HANDOFF_REL, ...this.retroOutputs()],
       // Build always stops at a human: nothing here merges an epic to a default
       // branch, so somebody has to.
       gate: "approve",

@@ -39,3 +39,6 @@ export { stagesLoadingExperts, describeStageLoads, stageIds } from "./stageCover
 export type { StageLoad } from "./stageCoverage.ts";
 export type { StageLoads } from "./renderExpertList.ts";
 export { nearbyPathsFor, graphPath, MAX_GRAPH_BYTES } from "./domainRank.ts";
+export {
+  sharedCitations, sharedCitationWarnings, type SharedCitation,
+} from "./sharedCitations.ts";
