@@ -14,7 +14,7 @@ import { listRuns, loadRun, renderReplay } from "../../core/replay/index.ts";
 export const replayCommand: Command = {
   name: "replay",
   summary: "Render a run's events.jsonl as a narrative",
-  usage: "tldrx replay <run-id> [--root <path>]",
+  usage: "tldrx replay [<run-id>] [--root <path>]",
   subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
