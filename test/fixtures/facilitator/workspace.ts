@@ -30,8 +30,16 @@ export interface StageOptions {
   readonly dryRunAllowed?: boolean;
   readonly timeoutS?: number;
   readonly experts?: readonly string[];
-  /** `expert_knowledge_bytes:` — the per-expert trained-knowledge ceiling (§2.3). */
+  /** `expert_knowledge_bytes:` — the retired spelling, now read as the TOTAL (§2.3). */
   readonly expertKnowledgeBytes?: number;
+  /** `knowledge_max_bytes:` — the total trained-knowledge ceiling, shared (§2.3). */
+  readonly knowledgeMaxBytes?: number;
+  /** `inputs_max_bytes:` — the shared ceiling on declared-input content (§2.3). */
+  readonly inputsMaxBytes?: number;
+  /** `prompt_max_bytes:` — the whole-prompt refusal ceiling (§2.3, §5). */
+  readonly promptMaxBytes?: number;
+  /** `max_reads:` — the Read/Glob/Grep ceiling for this stage's sub-agent (§5). */
+  readonly maxReads?: number;
   /** The stage's own `effort:`. Omitted ⇒ the stage file carries no effort at all. */
   readonly effort?: string;
   /** Body of `stage.md`. Defaults to one that uses every placeholder. */
@@ -174,9 +182,11 @@ function stageYaml(stage: StageOptions): string {
     `phase: ${stage.phase}`,
     `experts: [${(stage.experts ?? ["product"]).join(", ")}]`,
     "stack_experts: true",
-    ...(stage.expertKnowledgeBytes === undefined
-      ? []
-      : [`expert_knowledge_bytes: ${String(stage.expertKnowledgeBytes)}`]),
+    ...numberKey("expert_knowledge_bytes", stage.expertKnowledgeBytes),
+    ...numberKey("knowledge_max_bytes", stage.knowledgeMaxBytes),
+    ...numberKey("inputs_max_bytes", stage.inputsMaxBytes),
+    ...numberKey("prompt_max_bytes", stage.promptMaxBytes),
+    ...numberKey("max_reads", stage.maxReads),
     "model: sonnet",
     ...(stage.effort === undefined ? [] : [`effort: ${stage.effort}`]),
     `budget_usd: ${String(stage.budgetUsd)}`,
@@ -197,6 +207,10 @@ function stageYaml(stage: StageOptions): string {
   lines.push(`checks: ${stage.checks ?? "[]"}`);
   lines.push("");
   return lines.join("\n");
+}
+
+function numberKey(key: string, value: number | undefined): readonly string[] {
+  return value === undefined ? [] : [`${key}: ${String(value)}`];
 }
 
 function list(values: readonly string[]): string {

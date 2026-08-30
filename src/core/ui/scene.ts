@@ -15,6 +15,7 @@
  * `compact` (see `mode.ts`); this file assumes it was called above that.
  */
 import type { UiSnapshot } from "./state.ts";
+import { readsLabel } from "../facilitator/readCap.ts";
 import { clockFace } from "./summary.ts";
 
 export const MIN_SCENE_COLS = 72;
@@ -183,12 +184,15 @@ export function classroom(state: UiSnapshot, tick: number, cols: number): readon
   return rows;
 }
 
-/** `$0.42 of $6.00 · Ctrl-C stops after this turn`. */
+/** `$0.42 of $6.00 · reads 37/120 · Ctrl-C stops after this turn`. */
 export function footer(state: UiSnapshot): string {
   const spent = `$${state.spentUsd.toFixed(2)}`;
   const money = state.ceilingUsd > 0 ? `${spent} of $${state.ceilingUsd.toFixed(2)}` : `${spent} spent`;
   const hint = state.failed ? "failed" : state.finished ? "done" : "Ctrl-C stops after this turn";
-  return `  ${money} · ${hint}`;
+  // The read cap is the brake `--max-budget-usd` is not, so it is on screen while
+  // it is being spent, not only in the report after it ran out.
+  const reads = state.readCap > 0 ? ` · ${readsLabel(state.reads, state.readCap)}` : "";
+  return `  ${money}${reads} · ${hint}`;
 }
 
 function replaceAt(row: string, index: number, glyph: string): string {

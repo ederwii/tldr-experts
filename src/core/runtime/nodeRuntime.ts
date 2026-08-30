@@ -12,8 +12,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { dirname } from "node:path";
 import { parse as parseYamlText, stringify as stringifyYamlValue } from "yaml";
-import { registerChild, unregisterChild } from "./children.ts";
-import { killProcessTree } from "./killProcessTree.ts";
+import { killChildTree, registerChild, unregisterChild } from "./children.ts";
 import { LineSplitter } from "./lineSplitter.ts";
 import { OUTPUT_GRACE_MS } from "./outputGrace.ts";
 import type { Runtime, SpawnOptions, SpawnResult } from "./Runtime.ts";
@@ -49,20 +48,29 @@ export const nodeRuntime: Runtime = {
         cwd: opts.cwd,
         env: opts.env as NodeJS.ProcessEnv | undefined,
         stdio: [opts.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-        // Own process group, so the timeout below — and the CLI's signal handler
-        // — can kill the whole tree. The cost of detaching is that the terminal's
+        // Own process group, so the timeout (or the `max_reads` abort) below —
+        // and the CLI's signal handler — can kill the whole tree rather than just
+        // the shell in front of it. The cost of detaching is that the terminal's
         // Ctrl-C no longer reaches this child on its own, which is precisely why
         // it is registered below: `src/cli/signals.ts` kills it explicitly.
-        detached: opts.timeoutMs !== undefined,
+        detached: opts.timeoutMs !== undefined || opts.signal !== undefined,
       });
       registerChild(child.pid);
+
+      // `killChildTree`, not a bare `killProcessTree`: an abort-killed child must
+      // leave the registry too, or Ctrl-C would signal a pid that is already gone.
+      const onAbort = (): void => { killChildTree(child.pid, () => child.kill("SIGKILL")); };
+      if (opts.signal !== undefined) {
+        if (opts.signal.aborted) onAbort();
+        else opts.signal.addEventListener("abort", onAbort, { once: true });
+      }
 
       const timer =
         opts.timeoutMs === undefined
           ? null
           : setTimeout(() => {
               timedOut = true;
-              killProcessTree(child.pid, () => child.kill("SIGKILL"));
+              killChildTree(child.pid, () => child.kill("SIGKILL"));
             }, opts.timeoutMs);
 
       const splitter = opts.onStdoutLine === undefined ? null : new LineSplitter(opts.onStdoutLine);
@@ -75,6 +83,7 @@ export const nodeRuntime: Runtime = {
         // newline must still be seen by the progress view, and after `resolve`
         // nobody is listening.
         splitter?.end();
+        opts.signal?.removeEventListener("abort", onAbort);
         if (timer !== null) clearTimeout(timer);
         if (graceTimer !== null) clearTimeout(graceTimer);
         resolve({ exitCode, stdout, stderr, timedOut });

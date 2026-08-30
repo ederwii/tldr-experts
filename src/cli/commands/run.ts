@@ -26,6 +26,7 @@ import { currentActor } from "../../hooks/lib/actor.ts";
 import { PROJECT_WORK_DIR } from "../../core/paths.ts";
 import { loadWorkspace } from "../../hooks/lib/workspace.ts";
 import { estimateTokens, formatTokens, DEFAULT_THRESHOLD_TOKENS } from "../../core/seed/triageInventory.ts";
+import { estimateNextStage, renderEstimate, EstimateError } from "../../core/budget/estimateView.ts";
 
 /**
  * Spec §6.2: over this many documents a seed is worth triaging even when it is
@@ -45,11 +46,12 @@ export const runCommand: Command = {
     "                  [--from <aidlc-intent-dir> | --seed <file|dir> ...] [--gates <a,b|all|none>]\n" +
     "                  [--root <path>]\n" +
     "       tldrx run status [<run>] [--json] [--root <path>]\n" +
+    "       tldrx run estimate [<run>] [--json] [--root <path>]\n" +
     "       tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]\n" +
     "                  [--yolo] [--ui scene|compact|plain|off] [--root <path>]\n" +
     "       tldrx run unlock [<run>] [--force] [--root <path>]\n" +
     "       tldrx run cancel [<run>] --note <text> [--force] [--root <path>]",
-  subcommands: ["new", "status", "auto", "unlock", "cancel"],
+  subcommands: ["new", "status", "estimate", "auto", "unlock", "cancel"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const [sub, ...rest] = argv;
@@ -58,6 +60,8 @@ export const runCommand: Command = {
         return runNew(rest);
       case "status":
         return runStatus(rest);
+      case "estimate":
+        return runEstimate(rest);
       case "auto":
         return await runAutoLoop(rest);
       case "unlock":
@@ -66,7 +70,8 @@ export const runCommand: Command = {
         return runCancel(rest);
       default:
         process.stderr.write(
-          `tldrx run: expected \`new\`, \`status\`, \`auto\`, \`unlock\` or \`cancel\`\n${runCommand.usage}\n`,
+          `tldrx run: expected \`new\`, \`status\`, \`estimate\`, \`auto\`, \`unlock\` or \`cancel\`\n`
+            + `${runCommand.usage}\n`,
         );
         return EXIT_USAGE;
     }
@@ -204,6 +209,33 @@ async function runAutoLoop(argv: readonly string[]): Promise<number> {
     }
   } catch (error) {
     return fail("run auto", error);
+  }
+}
+
+/**
+ * `tldrx run estimate` — what the NEXT stage is likely to cost.
+ *
+ * Separate from `tldrx cost` on purpose, and separate from `budget show`: one
+ * reports what WAS charged, one reports what a ceiling ALLOWS, and this one is
+ * the only one of the three that guesses. It says so in its own output.
+ */
+function runEstimate(argv: readonly string[]): number {
+  try {
+    const args = parseArgs(argv, VALUE_FLAGS);
+    const root = workspaceRootFrom(args);
+    const estimate = estimateNextStage(root, args.positionals[0] ?? stringFlag(args, "run"));
+    process.stdout.write(
+      boolFlag(args, "json")
+        ? `${JSON.stringify(estimate, null, 2)}\n`
+        : `${renderEstimate(estimate)}\n`,
+    );
+    return EXIT_OK;
+  } catch (error) {
+    if (error instanceof EstimateError) {
+      process.stderr.write(`tldrx run estimate: ${error.message}\n`);
+      return EXIT_NOT_FOUND;
+    }
+    return fail("run estimate", error);
   }
 }
 

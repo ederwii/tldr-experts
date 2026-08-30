@@ -86,9 +86,9 @@ describe("summaries", () => {
   });
 
   test("a dollar figure is only claimed once one has arrived", () => {
-    expect(summarize({ kind: "cost", usd: null, inputTokens: 9, outputTokens: 1 }, ctx)).toBeNull();
-    expect(summarize({ kind: "cost", usd: 0, inputTokens: 9, outputTokens: 1 }, ctx)).toBeNull();
-    expect(summarize({ kind: "cost", usd: 0.42, inputTokens: 9, outputTokens: 1 }, ctx))
+    expect(summarize({ kind: "cost", usd: null, inputTokens: 9, outputTokens: 1, cacheCreationTokens: 0, cacheReadTokens: 0 }, ctx)).toBeNull();
+    expect(summarize({ kind: "cost", usd: 0, inputTokens: 9, outputTokens: 1, cacheCreationTokens: 0, cacheReadTokens: 0 }, ctx)).toBeNull();
+    expect(summarize({ kind: "cost", usd: 0.42, inputTokens: 9, outputTokens: 1, cacheCreationTokens: 0, cacheReadTokens: 0 }, ctx))
       .toBe("$0.42 so far · 3m10s");
   });
 
@@ -139,8 +139,8 @@ describe("state", () => {
     expect(state.snapshot(T0 + 200).speech).toBe("Reading the schema.");
     expect(state.snapshot(T0 + 100_000).speech).toBeNull();
 
-    state.apply({ kind: "cost", usd: 1.21, inputTokens: 0, outputTokens: 0 }, T0);
-    state.apply({ kind: "cost", usd: 0.4, inputTokens: 0, outputTokens: 0 }, T0);
+    state.apply({ kind: "cost", usd: 1.21, inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, T0);
+    state.apply({ kind: "cost", usd: 0.4, inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, T0);
     expect(state.snapshot(T0).spentUsd).toBeCloseTo(1.61, 5);
   });
 
@@ -213,7 +213,7 @@ describe("the scene", () => {
 
   test("the footer names the failure rather than pretending it finished", () => {
     const state = scripted();
-    state.apply({ kind: "cost", usd: 0.42, inputTokens: 0, outputTokens: 0 }, T0 + 5000);
+    state.apply({ kind: "cost", usd: 0.42, inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, T0 + 5000);
     state.apply({ kind: "done", ok: false, structured: null, costUsd: 0.42 }, T0 + 5000);
     const frame = renderScene(state.snapshot(T0 + 5000), { cols: 80, rows: 24, tick: 0 });
     expect(frame[frame.length - 1]).toBe("  $0.42 of $6.00 · failed");
@@ -366,7 +366,7 @@ describe("the driver", () => {
     const { out } = withDriver({ flag: "plain", isTty: false }, (handle) => {
       handle.onTitle("what · 260829-tenancy · attempt 1");
       handle.onEvent({ kind: "tool", id: "a", name: "Read", target: `${ROOT}/api/src/Outbox.cs` });
-      handle.onEvent({ kind: "cost", usd: 0.42, inputTokens: 1, outputTokens: 1 });
+      handle.onEvent({ kind: "cost", usd: 0.42, inputTokens: 1, outputTokens: 1, cacheCreationTokens: 0, cacheReadTokens: 0 });
     });
     expect(out).toEqual([
       "[00:01] — what · 260829-tenancy · attempt 1\n",

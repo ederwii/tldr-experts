@@ -14,7 +14,7 @@ import { EXPERT_FILE, expertDir, loadExpert } from "./loadExperts.ts";
 import { selectExperts, type ExpertReason, type SelectExpertsInput } from "./selectExperts.ts";
 import type { ExpertRecord } from "./ExpertRecord.ts";
 import {
-  byteLength, DEFAULT_EXPERT_KNOWLEDGE_BYTES, loadExpertKnowledge, type KnowledgeFileView,
+  byteLength, DEFAULT_KNOWLEDGE_MAX_BYTES, loadExpertKnowledge, type KnowledgeFileView,
 } from "./expertKnowledge.ts";
 
 /**
@@ -32,6 +32,8 @@ export interface ExpertBundle {
   readonly reason: ExpertReason;
   /** What a `domain` selection matched on. */
   readonly match?: string;
+  /** Bytes of the shared knowledge budget this expert was given. */
+  readonly knowledgeAllowance: number;
   /** `expert.md`, verbatim. */
   readonly body: string;
   readonly bodyBytes: number;
@@ -58,30 +60,73 @@ export interface ExpertBundleSet {
 }
 
 export interface LoadBundlesInput extends SelectExpertsInput {
-  /** Per-expert knowledge ceiling. Defaults to `DEFAULT_EXPERT_KNOWLEDGE_BYTES`. */
+  /**
+   * The TOTAL trained-knowledge ceiling shared by every loaded expert
+   * (§2.3 `knowledge_max_bytes`). Defaults to `DEFAULT_KNOWLEDGE_MAX_BYTES`.
+   */
   readonly knowledgeBytes?: number;
+}
+
+/**
+ * How the shared knowledge budget is split (wave N).
+ *
+ * Weights are harmonic in RANK — `1/(i+1)`, normalised — so the expert the run's
+ * cited paths actually point at gets the largest slice and the ninth one gets a
+ * ninth of the first's. Whatever an expert does not spend carries FORWARD to the
+ * next, so a top-ranked expert with 2 KB of knowledge does not strand the budget.
+ *
+ * An expert with a relevance score of zero — nothing it declares intersects
+ * anything this stage cites — gets NO knowledge at all, only its `expert.md`
+ * body. That is the measured problem this exists for: on `~/aparece-v2`, eight of
+ * nine experts loaded because they shared a repo with the run, and 52% of a
+ * 159,575-byte prompt was their knowledge.
+ */
+export function knowledgeShares(
+  eligible: readonly boolean[],
+  totalBytes: number,
+): readonly number[] {
+  const ranks: number[] = [];
+  eligible.forEach((ok, i) => { if (ok) ranks.push(i); });
+  if (ranks.length === 0 || totalBytes <= 0) return eligible.map(() => 0);
+  const weights = ranks.map((_, position) => 1 / (position + 1));
+  const sum = weights.reduce((total, w) => total + w, 0);
+  const shares = eligible.map(() => 0);
+  ranks.forEach((index, position) => {
+    shares[index] = Math.floor((totalBytes * (weights[position] ?? 0)) / sum);
+  });
+  return shares;
 }
 
 export function loadExpertBundles(input: LoadBundlesInput): ExpertBundleSet {
   const selection = selectExperts(input);
-  const budget = input.knowledgeBytes ?? DEFAULT_EXPERT_KNOWLEDGE_BYTES;
+  const total = input.knowledgeBytes ?? DEFAULT_KNOWLEDGE_MAX_BYTES;
+  const shares = knowledgeShares(
+    selection.experts.map((chosen) => chosen.relevant !== false),
+    total,
+  );
   const experts: ExpertBundle[] = [];
+  // Carried forward, never re-divided: the arithmetic stays one pass and the
+  // result does not depend on how many experts happened to be cheap.
+  let carry = 0;
 
-  for (const chosen of selection.experts) {
+  for (const [index, chosen] of selection.experts.entries()) {
     const path = join(expertDir(input.root, chosen.name), EXPERT_FILE);
     if (!existsSync(path)) continue;
     const body = readFileSync(path, "utf8");
     const record = loadExpert(input.root, chosen.name);
+    const allowance = (shares[index] ?? 0) + carry;
     const knowledge = loadExpertKnowledge({
       root: input.root,
       name: chosen.name,
       record,
-      budgetBytes: budget,
+      budgetBytes: allowance,
     });
+    carry = Math.max(0, allowance - knowledge.inlinedBytes);
     experts.push({
       name: chosen.name,
       reason: chosen.reason,
       ...(chosen.match === undefined ? {} : { match: chosen.match }),
+      knowledgeAllowance: allowance,
       body,
       bodyBytes: byteLength(body),
       knowledge: knowledge.text,
@@ -122,9 +167,12 @@ export function describeBundles(set: ExpertBundleSet): readonly string[] {
   const lines: string[] = [];
   if (set.experts.length === 0) lines.push("experts: none loaded");
   for (const expert of set.experts) {
-    const files = expert.files.length === 0
-      ? "no knowledge"
-      : `knowledge ${bytes(expert.knowledgeBytes)} over ${plural(expert.files.length, "area")}`;
+    const files = expert.knowledgeAllowance === 0
+      ? "no knowledge (body only — nothing it declares intersects this stage)"
+      : expert.files.length === 0
+        ? "no knowledge"
+        : `knowledge ${bytes(expert.knowledgeBytes)} of ${bytes(expert.knowledgeAllowance)}`
+          + ` over ${plural(expert.files.length, "area")}`;
     lines.push(
       `expert ${expert.name} (${expert.reason}${expert.match === undefined ? "" : `: ${expert.match}`})`
       + ` — expert.md ${bytes(expert.bodyBytes)}, ${files}${expert.truncated ? ", truncated" : ""}`,

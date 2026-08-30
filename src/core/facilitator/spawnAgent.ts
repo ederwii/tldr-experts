@@ -26,6 +26,7 @@ import { runtime } from "../runtime/index.ts";
 import { emitAgentEvent } from "../ui/bus.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
 import { AgentStream, resolveResultDoc, type AgentEvent } from "./agentEvents.ts";
+import { isReadTool, readCapError, STOPPED_BY_MAX_READS } from "./readCap.ts";
 import { ENVELOPE_SCHEMA, toEnvelope, toUsage, type AgentEnvelope, type AgentUsage, type ClaudeResultJson } from "./envelope.ts";
 
 export const CLAUDE_BIN = "claude";
@@ -73,6 +74,13 @@ export interface AgentRequest {
    * direct hook, for a caller that wants them without installing a sink.
    */
   readonly onEvent?: (event: AgentEvent) => void;
+  /**
+   * Stop the sub-agent after this many COMPLETED `Read`/`Glob`/`Grep` calls
+   * (spec §5, `max_reads`). Counting completions rather than starts is what makes
+   * "stop after the current tool" true rather than "stop in the middle of one".
+   * Undefined or <= 0 leaves exploration uncapped, exactly as before.
+   */
+  readonly maxReads?: number;
 }
 
 export interface AgentOutcome {
@@ -91,6 +99,10 @@ export interface AgentOutcome {
   readonly error: string | null;
   /** Raw stdout, persisted to `.agent/<stage>/result.raw.json` for the audit trail. */
   readonly raw: string;
+  /** Completed `Read`/`Glob`/`Grep` calls seen on the stream. */
+  readonly reads: number;
+  /** `"max_reads"` when the read cap stopped this run, else null. */
+  readonly stoppedBy: string | null;
 }
 
 export function allowedTools(workspaceCommands: readonly string[]): readonly string[] {
@@ -120,21 +132,54 @@ export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
     request.onEvent?.(event);
     emitAgentEvent(event);
   };
+
+  const cap = request.maxReads ?? 0;
+  const controller = new AbortController();
+  let reads = 0;
+  let capped = false;
+
   const spawned = await runtime.spawn(CLAUDE_BIN, buildClaudeArgs(request), {
     cwd: request.cwd,
     stdin: request.prompt,
     timeoutMs: request.timeoutMs,
+    ...(cap > 0 ? { signal: controller.signal } : {}),
     // Explicit, live env: `claude` is resolved off PATH, and on Bun the default
     // child environment is the one captured at process start.
     env: request.env ?? { ...process.env },
     onStdoutLine: (line) => {
-      for (const event of stream.push(line)) publish(event);
+      for (const event of stream.push(line)) {
+        // Counted on COMPLETION, so the kill lands between tools rather than
+        // inside one, and a read whose result never arrived is not charged.
+        if (event.kind === "tool-done" && isReadTool(event.name)) {
+          reads += 1;
+          publish({ kind: "reads", count: reads, cap });
+          if (cap > 0 && reads >= cap && !capped) {
+            capped = true;
+            publish({ kind: "error", message: readCapError(reads, cap) });
+            controller.abort();
+          }
+        }
+        publish(event);
+      }
     },
   });
-  const outcome = interpret(spawned.exitCode, spawned.stdout, spawned.stderr, spawned.timedOut);
+
+  const interpreted = interpret(spawned.exitCode, spawned.stdout, spawned.stderr, spawned.timedOut);
+  const outcome: AgentOutcome = capped
+    ? {
+      ...interpreted,
+      ok: false,
+      reads,
+      stoppedBy: STOPPED_BY_MAX_READS,
+      // The cap is the reason, whatever the dying process said on its way out.
+      error: readCapError(reads, cap),
+    }
+    : { ...interpreted, reads, stoppedBy: null };
   // A process that died before its `result` event never emitted `done`. Say so,
   // so the view stops on a failure rather than on a frozen last frame.
-  if (!outcome.ok && outcome.error !== null) publish({ kind: "error", message: outcome.error });
+  if (!outcome.ok && outcome.error !== null && !capped) {
+    publish({ kind: "error", message: outcome.error });
+  }
   return outcome;
 }
 
@@ -165,6 +210,8 @@ export function interpret(
     structured: doc?.structured_output ?? null, result,
     error: ok ? null : describe(exitCode, doc, stderr, timedOut, stdout),
     raw: stdout,
+    reads: 0,
+    stoppedBy: null,
   };
 }
 

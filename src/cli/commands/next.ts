@@ -31,12 +31,16 @@ export const nextCommand: Command = {
   name: "next",
   summary: "Advance the active run to its next stage",
   usage: "tldrx next [<run>] [--dry-run] [--prepare|--commit] [--model <m>] [--effort <level>] [--max-usd <n>]\n"
-    + "                  [--yolo] [--keep-worktrees] [--discard-pending] [--reuse-epic] [--ui scene|compact|plain|off] [--root <path>]",
+    + "                  [--prompt-max-bytes <n>] [--max-reads <n>]\n"
+    + "                  [--yolo] [--keep-worktrees] [--discard-pending] [--reuse-epic]\n"
+    + "                  [--ui scene|compact|plain|off] [--root <path>]",
   subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     try {
-      const args = parseArgs(argv, ["run", "model", "effort", "max-usd", "root", "ui"]);
+      const args = parseArgs(argv, [
+        "run", "model", "effort", "max-usd", "prompt-max-bytes", "max-reads", "root", "ui",
+      ]);
       const root = workspaceRootFrom(args);
       const mode = resolveMode(args.flags.has("prepare"), args.flags.has("commit"));
       const runId = args.positionals[0] ?? stringFlag(args, "run");
@@ -55,6 +59,8 @@ export const nextCommand: Command = {
           model: stringFlag(args, "model"),
           effort: effortFlag(args),
           maxUsd: numberFlag(args, "max-usd"),
+          promptMaxBytes: numberFlag(args, "prompt-max-bytes"),
+          maxReads: numberFlag(args, "max-reads"),
           yolo: boolFlag(args, "yolo"),
           keepWorktrees: boolFlag(args, "keep-worktrees"),
           discardPending: boolFlag(args, "discard-pending"),

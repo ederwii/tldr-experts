@@ -341,7 +341,9 @@ describe("visibility", () => {
     });
     const outcome = await prepare(ws);
     const text = outcome.lines.join("\n");
-    expect(text).toMatch(/expert product \(stage\) — expert\.md \d+ B, knowledge \d+ B over 1 area/);
+    expect(text).toMatch(
+      /expert product \(stage\) — expert\.md \d+ B, knowledge \d+ B of [\d.]+ KB over 1 area/,
+    );
 
     const [expert] = pendingExperts(ws);
     expect(expert?.name).toBe("product");

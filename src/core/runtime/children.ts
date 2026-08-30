@@ -32,6 +32,23 @@ export function liveChildren(): readonly number[] {
 }
 
 /**
+ * Kill ONE registered child and everything it started, and drop it from the
+ * registry in the same breath.
+ *
+ * Every deliberate kill goes through here — the spawn timeout and the `max_reads`
+ * abort (wave N) alike — so that a child killed early is never left in `live` for
+ * `killAllChildren` to signal a second time at Ctrl-C. The normal exit path still
+ * calls `unregisterChild` when the process settles; this is that same drop, taken
+ * at the moment the kill is issued rather than at the moment it lands.
+ *
+ * Never throws.
+ */
+export function killChildTree(pid: number | undefined, killChild: () => void): void {
+  killProcessTree(pid, killChild);
+  unregisterChild(pid);
+}
+
+/**
  * Kill every live child AND everything it started, best effort. Returns how many
  * pids it tried, so the caller can tell "there was a sub-agent in flight" from
  * "there was nothing running" — a distinction the interrupt path needs to decide

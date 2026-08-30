@@ -43,6 +43,20 @@ export interface ClaudeResultJson {
 export interface AgentUsage {
   readonly input_tokens: number;
   readonly output_tokens: number;
+  /**
+   * Prompt-cache accounting, both measured off the `result` event of one real
+   * call (`test/fixtures/agent/stream-json.jsonl:13`, `claude` 2.1.251,
+   * 2026-08-29): `cache_creation_input_tokens: 25610`,
+   * `cache_read_input_tokens: 25106`.
+   *
+   * They are the whole reason prompt ORDER matters. A cache WRITE is billed at
+   * 1.25x an input token and a cache READ at 0.1x, so a prompt whose big stable
+   * blocks sit at the front is read back on the next turn instead of re-written.
+   * Before wave N these two numbers were parsed away and never recorded, which
+   * made "did the reorder help?" an argument rather than a measurement.
+   */
+  readonly cache_creation_input_tokens: number;
+  readonly cache_read_input_tokens: number;
 }
 
 export function parseClaudeJson(text: string): ClaudeResultJson | null {
@@ -70,14 +84,32 @@ export function toEnvelope(value: unknown): AgentEnvelope | null {
  * Spec §2.9 caps event payloads at 4 KB and nesting at 3, and its own example
  * records exactly two usage numbers. So the full `usage` object is narrowed here
  * rather than at the event, which is where it would be a validation failure.
+ *
+ * Wave N added the two cache counters to that narrowing. They are four numbers
+ * rather than two, still one flat object, and still far inside the 4 KB payload
+ * cap — and without them the cost of a re-sent prefix cannot be told from the
+ * cost of a cached one.
  */
 export function toUsage(value: unknown): AgentUsage {
-  if (typeof value !== "object" || value === null) return { input_tokens: 0, output_tokens: 0 };
+  if (typeof value !== "object" || value === null) return EMPTY_USAGE;
   const doc = value as Record<string, unknown>;
   return {
-    input_tokens: typeof doc.input_tokens === "number" ? doc.input_tokens : 0,
-    output_tokens: typeof doc.output_tokens === "number" ? doc.output_tokens : 0,
+    input_tokens: number(doc.input_tokens),
+    output_tokens: number(doc.output_tokens),
+    cache_creation_input_tokens: number(doc.cache_creation_input_tokens),
+    cache_read_input_tokens: number(doc.cache_read_input_tokens),
   };
+}
+
+export const EMPTY_USAGE: AgentUsage = {
+  input_tokens: 0,
+  output_tokens: 0,
+  cache_creation_input_tokens: 0,
+  cache_read_input_tokens: 0,
+};
+
+function number(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function stringArray(value: unknown): string[] | null {

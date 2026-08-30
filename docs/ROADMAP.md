@@ -24,6 +24,14 @@ citation gate on the second attempt; both failures were framework bugs and are f
 - **Live dashboard** (`tldrx dashboard`): same renderer, file watcher + SSE, still read-only.
 - **Budget UX**: estimate vs. ceiling reconciliation so a retry is not blocked by its own first
   attempt; per-attempt accounting in `run status`.
+- **Token economy** (shipped in 0.3.0): cache-friendly prompt order with both cache counters
+  recorded; one shared byte budget with declared inputs filled first; a context ledger and
+  `prompt_max_bytes` as a refusal; experts ranked by relevance rather than by sharing a repo;
+  `max_reads` as the brake `--max-budget-usd` is not; the refused draft handed to attempt 2;
+  `tldrx cost` and `tldrx run estimate`. Still open: **seam analysis** for `migration`/`refactor`
+  scopes (`workflows/migration.yml` promises it, nothing implements it — the k-hop walk added
+  here is the missing half), and **discovery by sampling** (centrality + churn, both already
+  computed) instead of by whole-repo reads.
 - **Prose sections are not checked**: an Unknowns section written as a paragraph has no list
   items to validate — require items or check sentences.
 

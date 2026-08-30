@@ -42,9 +42,28 @@ export type AgentEvent =
   | { readonly kind: "tool-done"; readonly id: string | null; readonly name: string; readonly ok: boolean; readonly ms: number | null }
   | { readonly kind: "text"; readonly text: string }
   | { readonly kind: "question"; readonly index: number; readonly text: string }
-  | { readonly kind: "cost"; readonly usd: number | null; readonly inputTokens: number; readonly outputTokens: number }
+  /**
+   * Tokens (every assistant turn) and dollars (the final `result` only).
+   * `cacheCreationTokens`/`cacheReadTokens` are the prompt-cache halves, read off
+   * the same `usage` object — a write costs 1.25x an input token and a read 0.1x,
+   * so which of the two a turn did is the difference the reorder is measured by.
+   */
+  | {
+      readonly kind: "cost";
+      readonly usd: number | null;
+      readonly inputTokens: number;
+      readonly outputTokens: number;
+      readonly cacheCreationTokens: number;
+      readonly cacheReadTokens: number;
+    }
   | { readonly kind: "done"; readonly ok: boolean; readonly structured: unknown; readonly costUsd: number }
-  | { readonly kind: "error"; readonly message: string };
+  | { readonly kind: "error"; readonly message: string }
+  /**
+   * How many `Read`/`Glob`/`Grep` calls have COMPLETED, against the stage's
+   * `max_reads` (0 = uncapped). Published by `spawnAgent`, which is the only
+   * place that knows the cap; the parser below never emits one.
+   */
+  | { readonly kind: "reads"; readonly count: number; readonly cap: number };
 
 /**
  * The tool the model calls to satisfy `--json-schema`. It is an implementation
@@ -163,6 +182,8 @@ export class AgentStream {
         usd: null,
         inputTokens: num(usage.input_tokens),
         outputTokens: num(usage.output_tokens),
+        cacheCreationTokens: num(usage.cache_creation_input_tokens),
+        cacheReadTokens: num(usage.cache_read_input_tokens),
       });
     }
     return events;
@@ -204,6 +225,8 @@ export class AgentStream {
       usd: cost,
       inputTokens: num(usage?.input_tokens),
       outputTokens: num(usage?.output_tokens),
+      cacheCreationTokens: num(usage?.cache_creation_input_tokens),
+      cacheReadTokens: num(usage?.cache_read_input_tokens),
     });
 
     const ok = doc.is_error !== true;

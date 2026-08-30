@@ -172,7 +172,10 @@ title: "API, DTO and event contracts"
 phase: 02-how
 experts: [architect]
 stack_experts: true
-expert_knowledge_bytes: 65536
+knowledge_max_bytes: 49152
+inputs_max_bytes: 98304
+prompt_max_bytes: 163840
+max_reads: 120
 model: sonnet
 effort: high
 budget_usd: 3.0
@@ -194,7 +197,10 @@ checks: [{id: claim-sources, on: post-write}, {id: schema, on: post-write},
 | `id` / `title` / `phase` | slug / str / `^0[1-5]-` | y | Identity and owning phase |
 | `experts` | slug[] | y | Expert folders loaded; empty ⇒ facilitator runs it inline |
 | `stack_experts` / `model` | bool / str | n (`true`) / y | Also load stack expertise for `run.repos`; per-stage model pin (Appendix A) |
-| `expert_knowledge_bytes` | int ≥0 | n (65536) | Per-expert ceiling on inlined **trained knowledge** (§5, "Expert composition"). The only knob: there is deliberately no workspace-wide default to override, because a Watch card and a Build story want different amounts and one number cannot be right for both |
+| `knowledge_max_bytes` | int ≥0 | n (49152) | **Total** ceiling on inlined **trained knowledge**, shared by every loaded expert (§5, "Expert composition"). The retired `expert_knowledge_bytes` is still read, as the same total. Per stage and nowhere else: a Watch card and a Build story want different amounts and one workspace-wide number cannot be right for both |
+| `inputs_max_bytes` | int ≥0 | n (98304) | Shared ceiling on the CONTENT of every declared input, spent in declaration order and filled BEFORE the experts get anything (§5, "One budget, inputs first") |
+| `prompt_max_bytes` | int ≥0 | n (163840) | The whole prompt's ceiling. Over it the stage is **refused** (exit 2) before a sub-agent is spawned (§5, "The context ledger"). `--prompt-max-bytes <n>` overrides it for one invocation |
+| `max_reads` | int ≥0 | n (120 · build 200 · watch 60) | How many `Read`/`Glob`/`Grep` calls the sub-agent may complete before it is stopped (§5, "The read cap"). `--max-reads <n>` overrides it for one invocation |
 | `effort` | `low\|medium\|high\|xhigh\|max` | n (unset) | Passed to the sub-agent as `--effort`. **Unset ⇒ the flag is not passed at all** and the CLI uses its own default |
 | `budget_usd` | number >0 | y | Stage ceiling and the sub-agent's `--max-budget-usd` share |
 | `timeout_s` / `dry_run_allowed` | int >0 / bool | n (900 / `true`) | Wall clock for sub-agent and `cmd` checks `[assumption]`; `--dry-run` writes the handoff only |
@@ -250,12 +256,23 @@ appear in the prompt:
    real name is misspelled. A workspace that really does have a `.tldrx/experts/domain/` folder loads it by name; only
    a name with no folder can be legacy (`src/core/experts/selectExperts.ts`, `LEGACY_STAGE_EXPERTS`).
 2. **`stack_experts: true`** — `<language>-stack` for each language of each repo in `run.repos`.
-3. **Domain match `[assumption]`** — an expert whose `expert.md` declares `kind: domain` and whose front-matter
-   `repos:` intersects `run.repos`, **or** whose `## Domain` bullets name a path containing one of the run's cited
-   paths (its declared inputs and seed documents; for the Build and Watch executors, the story's `touches:`). Path
-   matches rank above repo matches, then name order; capped at **8** — the same cap `init` puts on seeded domain
-   experts — with the overflow named rather than dropped. This rule exists because a stage file is written once for
-   every workspace and cannot know that THIS one has a `checkout` domain expert that has read the code the run touches.
+3. **Domain match `[assumption]`** — an expert whose `expert.md` declares `kind: domain` and whose `## Domain`
+   bullets name a path containing one of the run's cited paths (its declared inputs and seed documents; for the Build
+   and Watch executors, the story's `touches:`), **or** whose path is within **2 hops** of a cited one in
+   `graphify-out/<repo>/graph.json`, **or** — only in a workspace that declares **two or more repos** — whose
+   front-matter `repos:` intersects `run.repos`. This rule exists because a stage file is written once for every
+   workspace and cannot know that THIS one has a `checkout` domain expert that has read the code the run touches.
+
+   Rank is a **score**: a direct path match is worth 10, a graph neighbour 1, and scores add, so an expert that owns
+   two cited paths outranks one that owns one. Ties break by name; capped at **8** — the same cap `init` puts on
+   seeded domain experts — with the overflow named rather than dropped. An expert whose score is **0** loads (where
+   the repo rule still applies) but is marked `relevant: false` and earns **none** of the shared knowledge budget:
+   its `expert.md` body only.
+
+   The repo half is conditional because measurement said so. On `~/aparece-v2` (`mode: single-repo`, 2026-08-29) a
+   What prompt loaded nine experts, **eight of them by `repos:` alone**; they contributed 52% of 159,575 bytes and
+   not one had read a file the run cited. In a single-repo workspace `repos:` selects everybody, which is the same as
+   selecting nobody — it just costs more. After the change the same prompt loads two experts and is 85,676 bytes.
 
 An expert is never loaded twice however many rules pick it, and the first rule that picks it owns the reason recorded
 in `pending.json`.
@@ -1003,7 +1020,9 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx seed answer <split.yml> <Qid> "<text>"` | `split.yml`, `inventory.json` beside it, `workflows/*.yml` | `split.yml` (that question's `answer:`), and `split.md` when it exists | 0,1,3 |
 | `tldrx seed apply <split.yml> [--dry-run]` | `split.yml`, `inventory.json` beside it, `workflows/*.yml` | one `tldrx-work/<run>/` per proposed run (via `run new`'s own path) each with a `triage:` block, and `split.yml` rewritten to `status: applied`. Questions with no `answer:` are listed on **stderr** as a warning — never a refusal | 0,1,3 |
 | `tldrx run status [<run>]` | `run.yml`, `events.jsonl` | nothing (stdout) | 0,3 |
-| `tldrx next [<run>] [--dry-run]` | `run.yml`, `stage.yml`, `stage.md`, `expert.md`, declared inputs | stage outputs, `run.yml`, `events.jsonl` | 0,2,3,4,5 |
+| `tldrx next [<run>] [--dry-run] [--prompt-max-bytes <n>] [--max-reads <n>]` | `run.yml`, `stage.yml`, `stage.md`, `expert.md`, declared inputs, `graphify-out/<repo>/graph.json` | stage outputs, `run.yml`, `events.jsonl` | 0,2,3,4,5 |
+| `tldrx cost [<run>] [--run <id>] [--all] [--json]` | every run's `events.jsonl` (+ `run.yml` for the title) | nothing (stdout) | 0,1,3 |
+| `tldrx run estimate [<run>] [--json]` | everything `next --prepare` reads, plus every run's `events.jsonl` for output history | nothing (stdout) | 0,1,3 |
 | `tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <l>] [--yolo]` | everything `next` reads, once per stage | everything `next` writes | 0,1,2,3,4,5 |
 | `tldrx answer <Qid> <text> [--run <id>]` | `questions.md`, `facts.yml` | `questions.md`, `facts.yml`, `events.jsonl` | 0,1,2,3 |
 | `tldrx interview [--run <id>\|--init] [--yes-to-defaults]` | the cursor phase's `questions.md` (or `.tldrx/init-questions.md`), `run.yml`, `.tldrx/process.yml`, `workspace.yml`, `git remote get-url origin` | the same three files `answer` writes, one per answer recorded; with `--init`, also `.tldrx/process.yml` (§2.12) when a process answer settles `methodology` or `ticket_tool.kind` | 0,1,2,3 |
@@ -1255,11 +1274,83 @@ parts of that block are in this exact order:
 <that file's BODY, front matter stripped>
 ```
 
+**Prompt order — most stable first.** The pieces are concatenated in exactly this order:
+
+```
+<stage.md, substituted, with `## Inputs` and `## Previous attempt` CUT OUT>
+<expert block 1> … <expert block N>
+## Inputs
+<the declared inputs' content>
+## Previous attempt
+<the retry note, and the refused outputs>
+```
+
+This is a COST decision, not a layout one. A prompt cache keys on the longest PREFIX two calls share; a cache write
+is billed at 1.25x an input token and a cache read at 0.1x. Until wave N the experts were emitted LAST, behind the
+declared inputs — so the largest and most stable section of the prompt sat behind the section that changes at every
+stage, and paid the write price every time. Measured 2026-08-29 on `~/aparece-v2`: 159,575 B, of which 52% was expert
+bodies and knowledge and 45% declared inputs, in that order.
+
+**Measured 2026-08-29, two real `claude` 2.1.251 calls, back to back, same 40,715-byte prompt, `--model haiku`,
+separate processes and separate sessions:**
+
+| Call | `cache_creation_input_tokens` | `cache_read_input_tokens` | `total_cost_usd` |
+|---|---|---|---|
+| 1 | 37,059 | 0 | $0.074982 |
+| 2 | 0 | 37,059 | $0.004550 |
+
+So `claude -p` caches **across processes**, not only within a session, and the second call cost **16.5x less** than
+the first. That is what makes the order worth changing: `run auto`, a retry, and every later stage of the same run
+re-send a prefix that is now read rather than written. `[assumption]` — the cache's lifetime is not measured here,
+only that a second call moments later hit it.
+
+Both counters are recorded on `agent.result` beside `input_tokens` and `output_tokens`, so the claim above stays a
+measurement rather than an argument. Note the ratio while reading them: 40,715 prompt bytes billed as 37,059 cached
+tokens, because the CLI's own system prompt, tool definitions and `CLAUDE.md` are in the cached prefix too. The
+`~3.6 bytes/token` figure the context ledger prints applies to the tldrx prompt ALONE and under-states the billed
+input; it is an `[assumption]` for sizing, never for billing.
+
+**One budget, inputs first.** Two independent ceilings are not a ceiling. Until wave N the seed documents shared 64 KB
+and EACH loaded expert had its own 64 KB of trained knowledge, so they never competed: on `~/aparece-v2` the seed
+budget dropped `ADR-D013-DELIVERY-ZONE-GEOMETRY.md` (5,863 B) whole — the sixth of the six decisions the run existed
+to settle — while 70,923 B of unrequested expert knowledge went in untouched. There is now one allocation, in
+priority order:
+
+1. the **declared inputs** are filled first, in declaration order (required, then present optional, then the run's
+   seed), out of `inputs_max_bytes` (§2.3, default 98304). `seed-index.md` is exempt.
+2. the **experts** then share `knowledge_max_bytes` (§2.3, default 49152) between them, split by rank and never per
+   expert, with whatever one does not spend carried forward to the next.
+
+A declared input that still does not fit is NAMED — with its size and the key that raises the budget — on stdout, in
+`pending.json`, and on the page itself, because "some documents were truncated" is a sentence nobody can act on.
+
+**The context ledger.** `--prepare` and `--dry-run` print bytes per section — stage (and its `## Questions`), each
+declared input, each expert's body and knowledge, the previous attempt — and `pending.json` carries the same numbers
+under `context:`. `prompt_max_bytes` (§2.3, default 163840) is a **refusal**: over it `next` exits `2` before a
+sub-agent is spawned, names the biggest sections, and prints the key or command that shrinks each one — the same
+shape as the §2.11 money gate. The model's context window is only ever a **stderr warning** at 80%, never a refusal,
+because both the window and the bytes-per-token ratio are `[assumption]` (`src/core/budget/modelPrices.ts`) and
+refusing on two stacked assumptions blocks work the framework could have done.
+
+**The read cap.** `--max-budget-usd` STOPS a sub-agent after the turn it is already in (measured: $5.15 against a
+$1.50 ceiling); `--effort` changes what a turn costs but not how many there are. Neither bounds EXPLORATION, and the
+sub-agent holds `Read`, `Glob` and `Grep`. `max_reads` (§2.3) does: completed `Read`/`Glob`/`Grep` calls are counted
+off the stream that is already arriving — no second model call, no extra tokens — and at the ceiling the process tree
+is killed. Counting completions is what makes the stop land after the current tool rather than inside one. The
+attempt records `stopped_by: max_reads` in `run.yml` (written ONLY when a cap bit, so an ordinary run.yml is
+unchanged), `agent.result` carries `reads`/`max_reads`/`stopped_by`, and the live view shows `reads 37/120`.
+
+**Attempt reuse.** Attempt 2 after a rejection receives the declared outputs that exist on disk, inlined under
+`### Previous attempt — edit, do not restart`, capped at 32 KB shared across them, with anything past the cap named.
+Before wave N it received the error and the note and nothing else, so a stage rejected over one missing section paid
+full price to rewrite four documents from a blank page.
+
 **Order and budget.** Knowledge files come most-recently-trained first, by each file's own `trained_at:` front matter
 — never an mtime, because a `git clone` rewrites every mtime in the tree and an order that changes when you clone the
 repo is not an order; files with no `trained_at` sort last by name, so the sequence is total. The running total is
-capped at `expert_knowledge_bytes` **per expert** (§2.3, default 65536), counting knowledge-file bytes only, not the
-framing prose. When a file does not fit, it is cut at an **H2 boundary** and the cut is declared on the page:
+capped at `knowledge_max_bytes` **in total across every loaded expert** (§2.3, default 49152), counting
+knowledge-file bytes only, not the framing prose. The total is split by relevance rank — harmonically, so the top
+expert gets the largest slice — and an expert scored `relevant: false` gets none of it. When a file does not fit, it is cut at an **H2 boundary** and the cut is declared on the page:
 `… N more findings in .tldrx/experts/<name>/knowledge/<area>.md`. When not even its first section fits, nothing of it
 is inlined and the marker says so with the file's size. There is no partial section, because half a `## Gotchas` reads
 to the next reader as a whole one, and no partial bullet, because a bullet without its `[src: …]` is a claim with its

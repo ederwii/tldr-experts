@@ -6,8 +6,7 @@
  * `typeof Bun !== "undefined"`, so importing it under Node is inert — the `Bun`
  * references live inside function bodies, never at module scope.
  */
-import { registerChild, unregisterChild } from "./children.ts";
-import { killProcessTree } from "./killProcessTree.ts";
+import { killChildTree, registerChild, unregisterChild } from "./children.ts";
 import { LineSplitter } from "./lineSplitter.ts";
 import { OUTPUT_GRACE_MS } from "./outputGrace.ts";
 import type { Runtime, SpawnOptions, SpawnResult } from "./Runtime.ts";
@@ -32,13 +31,21 @@ export const bunRuntime: Runtime = {
         stdout: "pipe",
         stderr: "pipe",
         stdin: opts.stdin === undefined ? "ignore" : new TextEncoder().encode(opts.stdin),
-        // Own process group, so the timeout below — and the CLI's signal handler
-        // — can kill the whole tree. The cost of detaching is that the terminal's
+        // Own process group, so the timeout (or the `max_reads` abort) below —
+        // and the CLI's signal handler — can kill the whole tree rather than just
+        // the shell in front of it. The cost of detaching is that the terminal's
         // Ctrl-C no longer reaches this child on its own, which is precisely why
         // it is registered below: `src/cli/signals.ts` kills it explicitly.
-        detached: opts.timeoutMs !== undefined,
+        detached: opts.timeoutMs !== undefined || opts.signal !== undefined,
       });
       registerChild(proc.pid);
+      // `killChildTree`, not a bare `killProcessTree`: an abort-killed child must
+      // leave the registry too, or Ctrl-C would signal a pid that is already gone.
+      const onAbort = (): void => { killChildTree(proc.pid, () => proc.kill(9)); };
+      if (opts.signal !== undefined) {
+        if (opts.signal.aborted) onAbort();
+        else opts.signal.addEventListener("abort", onAbort, { once: true });
+      }
       // Drain before awaiting exit: a child that fills the pipe buffer blocks on
       // write, and would never exit if nothing were reading.
       const collected: Promise<[string, string]> = Promise.all([
@@ -55,11 +62,12 @@ export const bunRuntime: Runtime = {
           ? null
           : setTimeout(() => {
               timedOut = true;
-              killProcessTree(proc.pid, () => proc.kill(9));
+              killChildTree(proc.pid, () => proc.kill(9));
             }, opts.timeoutMs);
       const exitCode = await proc.exited;
       unregisterChild(proc.pid);
       if (timer !== null) clearTimeout(timer);
+      opts.signal?.removeEventListener("abort", onAbort);
       // The process is gone; anything still holding its pipes is not ours to
       // wait for. Settle on what was read rather than hang. See killProcessTree.
       const [stdout, stderr] = await withinGrace(collected);

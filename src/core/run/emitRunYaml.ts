@@ -42,6 +42,11 @@ function task(t: RunTask, indent: string): string {
       `model: ${yamlScalar(t.model)}, cost_usd: ${money(t.cost_usd)},`,
     `${inner}error: ${yamlScalar(t.error)}, session_id: ${yamlScalar(t.session_id)},`,
     `${inner}started_at: ${yamlScalar(t.started_at)}, ended_at: ${yamlScalar(t.ended_at)},`,
+    // Written only when a limit stopped the attempt: every existing run.yml stays
+    // byte-identical, and the key's presence is itself the signal.
+    ...(t.stopped_by === undefined || t.stopped_by === null
+      ? []
+      : [`${inner}stopped_by: ${yamlScalar(t.stopped_by)},`]),
     `${inner}outputs: ${inlineList(t.outputs)}}`,
   ].join("\n");
 }

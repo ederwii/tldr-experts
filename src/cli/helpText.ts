@@ -274,7 +274,7 @@ const ENTRIES: readonly CommandHelp[] = [
       { name: "<slug>", meaning: "run new: the short name. The id becomes <yymmdd>-<slug>." },
       {
         name: "[<run>]",
-        meaning: "run status / run auto / run unlock / run cancel: a run id. Omit it and the one open run is used.",
+        meaning: "run status / run estimate / run auto / run unlock / run cancel: a run id. Omit it and the one open run is used.",
       },
     ],
     flags: [
@@ -298,6 +298,8 @@ const ENTRIES: readonly CommandHelp[] = [
       },
       json("the run view", "status"),
       { ...runFlag(), sub: "status" },
+      json("the estimate", "estimate"),
+      { ...runFlag(), sub: "estimate" },
       { ...runFlag(), sub: "auto" },
       maxUsd("auto"),
       { name: "until", arg: "<stage>", meaning: "Stop the loop before this stage rather than at the first human gate.", sub: "auto" },
@@ -330,6 +332,7 @@ const ENTRIES: readonly CommandHelp[] = [
     examples: [
       "tldrx run new checkout-v2 --scope feature --budget 40",
       "tldrx run status --json",
+      "tldrx run estimate",
       "tldrx run auto --max-usd 15 --until build",
       "tldrx run unlock 260101-checkout --force",
       'tldrx run cancel 260101-checkout --note "superseded by the v2 spec"',
@@ -337,6 +340,7 @@ const ENTRIES: readonly CommandHelp[] = [
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_AWAITING_HUMAN, EXIT_AGENT_FAILED],
     notes: [
       "`run status` with several runs open LISTS them and exits 0 — it is the screen you read to find the id every other command wants.",
+      "`run estimate` is the one command here that GUESSES, and it says so in its own output. The input half is measured — the next stage's prompt, assembled by the same code `next` uses and weighed by the same context ledger. The output half is the median output tokens of past attempts at that stage id, and with no history it prints no estimate rather than inventing one. For what was actually spent, use `tldrx cost`.",
       "`run unlock` drops a .lock nobody is behind and puts the stage it stranded back to ready. It spends nothing and touches no stage output.",
       "`run cancel` closes a run for good: cancelled is terminal, so `tldrx status` and every id-less command stop seeing it. Nothing is deleted — the stages, outputs, events and money spent stay on disk and `tldrx replay <id>` still reads them.",
     ],
@@ -383,6 +387,16 @@ const ENTRIES: readonly CommandHelp[] = [
       model(),
       effort(),
       maxUsd(),
+      {
+        name: "prompt-max-bytes",
+        arg: "<n>",
+        meaning: "Ceiling on the ASSEMBLED PROMPT for this run. Over it the stage is refused (exit 2) with the biggest sections named — before a cent is spent, which is the difference between this and --max-usd. Default: the stage's prompt_max_bytes, else 160 KB.",
+      },
+      {
+        name: "max-reads",
+        arg: "<n>",
+        meaning: "How many Read/Glob/Grep calls the sub-agent may complete before it is stopped mid-turn. The brake --max-usd is not: it ends a turn that has already been paid for. Default: the stage's max_reads (120; 200 on build, 60 on watch).",
+      },
       yolo(),
       { name: "keep-worktrees", arg: null, meaning: "Leave the per-story worktrees on disk after the build stage finishes with them." },
       {
@@ -403,10 +417,12 @@ const ENTRIES: readonly CommandHelp[] = [
       "tldrx next --dry-run",
       "tldrx next 260101-checkout --effort high --max-usd 8",
       "tldrx next --discard-pending",
+      "tldrx next --prompt-max-bytes 120000 --max-reads 60",
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_AWAITING_HUMAN, EXIT_AGENT_FAILED],
     notes: [
       "Exit 4 is the normal end of a successful stage: it ran, it wrote its outputs, and a person now has to approve.",
+      "--prepare and --dry-run print the CONTEXT LEDGER: bytes per section of the prompt, the total against prompt_max_bytes, and any declared input that had to be truncated. `tldrx run estimate` prints the same ledger with a price on it.",
     ],
   },
   {
@@ -481,6 +497,37 @@ const ENTRIES: readonly CommandHelp[] = [
       "tldrx budget raise 04-build 25 --take-from 02-how",
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
+  },
+  {
+    name: "cost",
+    description: "What the work actually cost — per attempt, per stage, per run.",
+    args: [
+      {
+        name: "[<run>]",
+        meaning: "A run id. Omit it and the one open run is used; several open runs is a refusal, never a guess. Ignored with --all.",
+      },
+    ],
+    flags: [
+      runFlag(),
+      {
+        name: "all",
+        arg: null,
+        meaning: "Every run in the workspace, finished ones included, with the workspace total. The run argument is ignored.",
+      },
+      json("the cost breakdown"),
+      root(),
+    ],
+    examples: [
+      "tldrx cost",
+      "tldrx cost --all",
+      "tldrx cost 260101-checkout --json",
+    ],
+    exits: [EXIT_OK, EXIT_USAGE, EXIT_NOT_FOUND],
+    notes: [
+      "Read off `agent.result` events and nothing else: every dollar printed here is one the Claude CLI reported. No token count is ever multiplied by a price — `tldrx run estimate` is the command allowed to guess, and it says ESTIMATE in words.",
+      "Attempts are never merged. A stage that failed twice cost three turns, and that retry is usually the money you are looking for.",
+      "Work this process never saw a cost for is reported as UNMETERED rather than summed as $0.00 — a missing number and a free turn are not the same claim.",
+    ],
   },
   {
     name: "map",

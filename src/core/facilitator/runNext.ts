@@ -28,23 +28,29 @@ import { raiseCommand, shortBy } from "../budget/budgetView.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
 import { factsPath, loadWorkspace } from "../../hooks/lib/workspace.ts";
 import type { TldrxEvent } from "../events/Event.ts";
-import { setProgressCeiling, setProgressTitle } from "../ui/bus.ts";
+import { setProgressCeiling, setProgressReadCap, setProgressTitle } from "../ui/bus.ts";
 import { acquireLock, releaseLock } from "./Lock.ts";
 import { onInterrupt, stopInFlightRun } from "./interrupt.ts";
 import { loadStageSpec, type StageSpec } from "./stageSpec.ts";
 import { countSkipInputs, evaluateSkipIf, openQuestionIds, SkipIfError } from "./skipIf.ts";
 import { agentDir, expandAll, missing, present, resolveDeclared, type PathContext } from "./paths.ts";
-import { buildPrompt, renderConventions, renderFacts, stackExpertNames } from "./prompt.ts";
+import { fenceFor, renderConventions, renderFacts, renderParts, stackExpertNames } from "./prompt.ts";
 import {
   describeBundles, loadExpertBundles, untrainedNotes, type ExpertBundleSet,
 } from "../experts/expertBundle.ts";
+import { nearbyPathsFor } from "../experts/domainRank.ts";
 import { spawnAgent } from "./spawnAgent.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
 import { validateOutputs, describeProblems } from "./validateOutputs.ts";
 import { executorFor, type ExecutorContext, type ExecutorOutcome, type StageExecutor } from "./executors/index.ts";
 import { promptPath, readResult, writeBundle, writeRaw, PendingError, type PendingStage } from "./pending.ts";
 import { preparedBundles, PENDING_JSON } from "../run/prepared.ts";
-import { capInputs, inlineInputs, type InlineResult } from "./seedInputs.ts";
+import { capInputs, describeTruncatedInputs, inlineInputs, type InlineResult } from "./seedInputs.ts";
+import {
+  buildLedger, questionsBytesOf, renderContextWarning, renderLedger, renderRefusal,
+  type ContextLedger,
+} from "./contextLedger.ts";
+import { byteLength } from "../experts/expertKnowledge.ts";
 import { SEED_INDEX } from "../seed/renderSeed.ts";
 
 export type NextMode = "headless" | "prepare" | "commit";
@@ -60,6 +66,10 @@ export interface NextOptions {
   readonly effort?: EffortLevel;
   /** `--max-usd`, an extra cap on top of the stage share and per_agent_max_usd. */
   readonly maxUsd?: number;
+  /** `--prompt-max-bytes`, overriding the stage's `prompt_max_bytes` for one run. */
+  readonly promptMaxBytes?: number;
+  /** `--max-reads`, overriding the stage's `max_reads` for one run. */
+  readonly maxReads?: number;
   readonly yolo: boolean;
   /** `--keep-worktrees`: the Build phase keeps its story worktrees after a story settles. */
   readonly keepWorktrees?: boolean;
@@ -339,23 +349,31 @@ async function runStage(
   }
 
   // --- prompt assembly ----------------------------------------------------
-  const optional = present(expandAll(spec.optionalInputs, store.run.repos), ctx);
   const seed = seedInputsOf(spec, stage, ctx);
-  const inputs = capInputs([
-    ...required,
-    ...optional.filter((p) => !required.includes(p)),
-    ...seed.filter((p) => !required.includes(p) && !optional.includes(p)),
-  ]);
+  const inputs = declaredInputsOf(store, spec, stage, ctx);
   const model = options.model ?? stage.model ?? spec.planned.model;
   const effort = options.effort ?? spec.planned.effort ?? null;
   const cap = agentCap(options, store, stage);
+  const maxReads = options.maxReads ?? spec.maxReads;
   const assembled = assemblePrompt(store, options, spec, stage, inputs, ctx, new Set(seed));
   const prompt = assembled.prompt;
   // What the experts contributed, said out loud in every mode. Before this was
   // reported, a stage could load three stub experts and nothing on any stream
   // distinguished that from three trained ones.
   notes.push(...describeBundles(assembled.bundles));
-  const advisories = untrainedNotes(assembled.bundles);
+  // The context ledger, in every mode: what the prompt is made of, before it is
+  // sent. `--prepare` and `--dry-run` also get the per-section breakdown.
+  const ledger = assembled.ledger;
+  notes.push(...assembled.truncatedNotes);
+  if (options.mode === "prepare" || options.dryRun) notes.push(...renderLedger(ledger));
+
+  // --- context gate (spec §5) ---------------------------------------------
+  // A refusal, not a warning, and BEFORE the money: over `prompt_max_bytes` the
+  // stage does not start. Nothing has been written or spent at this point.
+  if (ledger.overLimit) {
+    return out(EXIT_REFUSED, [...notes, ...renderRefusal(ledger, stageId)]);
+  }
+  const advisories = [...untrainedNotes(assembled.bundles), ...renderContextWarning(ledger)];
 
   const pending: PendingStage = {
     version: 1,
@@ -373,6 +391,19 @@ async function runStage(
     checks: spec.planned.checks,
     prepared_at: options.at,
     experts: bundleSummary(assembled.bundles),
+    context: {
+      total_bytes: ledger.totalBytes,
+      limit_bytes: ledger.limitBytes,
+      estimated_tokens: ledger.estimatedTokens,
+      stage_bytes: ledger.groups.stage,
+      questions_bytes: ledger.groups.questions,
+      inputs_bytes: ledger.groups.inputs,
+      expert_body_bytes: ledger.groups.expertBodies,
+      expert_knowledge_bytes: ledger.groups.expertKnowledge,
+      previous_attempt_bytes: ledger.groups.previousAttempt,
+      truncated_inputs: ledger.truncatedInputs.map((entry) => entry.path),
+    },
+    max_reads: maxReads,
   };
   writeBundle(store.runDir, stageId, prompt, pending);
 
@@ -400,7 +431,7 @@ async function runStage(
   // --- headless spawn -----------------------------------------------------
   const taskId = nextTaskId(store, phaseId, stageId);
   // Tell whoever is watching what this turn is. No-op when nobody is.
-  announce(store.runId, stageId, taskId, cap);
+  announce(store.runId, stageId, taskId, cap, maxReads);
   store.append(event(options, store.runId, stageId, "agent.spawned", {
     phase: phaseId,
     task: taskId,
@@ -419,6 +450,7 @@ async function runStage(
     yolo: options.yolo,
     cwd: options.root,
     timeoutMs: spec.planned.timeout_s * 1000,
+    maxReads,
   });
   if (agent.raw !== "") writeRaw(store.runDir, stageId, agent.raw);
 
@@ -433,6 +465,10 @@ async function runStage(
     started_at: options.at,
     ended_at: nowish(options),
     outputs: agent.envelope?.outputs ?? [],
+    // Null on every ordinary attempt, so run.yml is byte-identical to before
+    // unless a cap actually bit. "It ran out of reads" and "it crashed" are
+    // different stories and the file has to be able to tell them apart.
+    stopped_by: agent.stoppedBy,
   });
   store.append(event(options, store.runId, stageId, "agent.result", {
     phase: phaseId,
@@ -441,7 +477,15 @@ async function runStage(
     model,
     effort,
     outputs: agent.envelope?.outputs ?? [],
-    usage: { input_tokens: agent.usage.input_tokens, output_tokens: agent.usage.output_tokens },
+    reads: agent.reads,
+    max_reads: maxReads,
+    stopped_by: agent.stoppedBy,
+    usage: {
+      input_tokens: agent.usage.input_tokens,
+      output_tokens: agent.usage.output_tokens,
+      cache_creation_input_tokens: agent.usage.cache_creation_input_tokens,
+      cache_read_input_tokens: agent.usage.cache_read_input_tokens,
+    },
   }, round2(agent.costUsd), stage.expert));
   store.save();
 
@@ -902,17 +946,51 @@ function seedInputsOf(spec: StageSpec, stage: RunStage, ctx: PathContext): reado
   return present(stage.inputs.filter((entry) => !fromStageFile.has(entry)), ctx);
 }
 
+/**
+ * The declared inputs a stage's prompt gets, in the order the budget spends on
+ * them: required, then the optional ones that exist, then the run's seed
+ * documents, capped at §2.3's 20.
+ *
+ * Extracted so `tldrx run estimate` can weigh the NEXT stage's prompt without
+ * running it, off exactly the list the facilitator would build — an estimator
+ * with its own idea of what the inputs are is an estimator that drifts.
+ */
+export function declaredInputsOf(
+  store: RunStore,
+  spec: StageSpec,
+  stage: RunStage,
+  ctx: PathContext,
+): readonly string[] {
+  const required = expandAll(spec.requiredInputs, store.run.repos);
+  const optional = present(expandAll(spec.optionalInputs, store.run.repos), ctx);
+  const seed = seedInputsOf(spec, stage, ctx);
+  return capInputs([
+    ...required,
+    ...optional.filter((p) => !required.includes(p)),
+    ...seed.filter((p) => !required.includes(p) && !optional.includes(p)),
+  ]);
+}
+
+/** The run's seed documents for a stage that asked for them — see below. */
+export function seedInputsFor(spec: StageSpec, stage: RunStage, ctx: PathContext): readonly string[] {
+  return seedInputsOf(spec, stage, ctx);
+}
+
 /** `inlineInputs` speaks `{inputs, note}`; `buildPrompt` speaks `{inputs, inputsNote}`. */
 function withNote(result: InlineResult): { inputs: InlineResult["inputs"]; inputsNote?: string } {
   return result.note === null ? { inputs: result.inputs } : { inputs: result.inputs, inputsNote: result.note };
 }
 
-interface AssembledPrompt {
+export interface AssembledPrompt {
   readonly prompt: string;
   readonly bundles: ExpertBundleSet;
+  /** Every section, in bytes, measured off the same parts the prompt is joined from. */
+  readonly ledger: ContextLedger;
+  /** Declared inputs the shared byte budget could not fit whole. */
+  readonly truncatedNotes: readonly string[];
 }
 
-function assemblePrompt(
+export function assemblePrompt(
   store: RunStore,
   options: NextOptions,
   spec: StageSpec,
@@ -923,6 +1001,7 @@ function assemblePrompt(
 ): AssembledPrompt {
   const stageMd = readStageMd(spec.planned);
   const facts = FactsStore.loadOrEmpty(factsPath(options.root));
+  const workspace = loadWorkspace(options.root);
   // The declared inputs ARE the run's cited paths at this point: they are what the
   // seed put on the stage and what the stage file names, and nothing else has been
   // read yet. A domain expert whose folder holds one of them ranks first.
@@ -933,11 +1012,24 @@ function assemblePrompt(
     stackExperts: spec.stackExperts,
     stackNames: stackExpertNames(options.root, store.run.repos),
     citedPaths: inputs,
-    knowledgeBytes: spec.expertKnowledgeBytes,
+    workspaceRepoCount: workspace.repos.size,
+    nearbyPaths: nearbyPathsFor(options.root, store.run.repos, inputs),
+    knowledgeBytes: spec.knowledgeMaxBytes,
   });
-  const prompt = buildPrompt({
+  // Inputs are filled FIRST, out of their own shared ceiling; the experts share
+  // what `knowledge_max_bytes` allows between them afterwards (spec §2.3, §5).
+  const inlined = inlineInputs(inputs, {
+    ctx,
+    seed,
+    budgetBytes: spec.inputsMaxBytes,
+    exempt: new Set(inputs.filter((path) => path.endsWith(`/${SEED_INDEX}`))),
+  });
+  const parts = renderParts({
     stageMd,
-    previousAttempt: describePreviousAttempt(stage),
+    previousAttempt: describePreviousAttempt(stage, {
+      outputs: expandAll(spec.planned.outputs, store.run.repos),
+      ctx,
+    }),
     values: {
       run: store.runId,
       repos: store.run.repos.length === 0 ? "(none)" : store.run.repos.join(", "),
@@ -947,24 +1039,59 @@ function assemblePrompt(
       budget_usd: stage.budget_usd.toFixed(2),
     },
     experts: bundles.experts,
-    ...withNote(inlineInputs(inputs, {
-      ctx,
-      seed,
-      exempt: new Set(inputs.filter((path) => path.endsWith(`/${SEED_INDEX}`))),
-    })),
+    ...withNote(inlined),
   });
-  return { prompt, bundles };
+  const ledger = buildLedger({
+    parts,
+    inputBytes: inlined.inputs.map((input) => ({
+      path: input.path,
+      bytes: byteLength(input.content),
+    })),
+    truncatedInputs: inlined.truncated,
+    limitBytes: options.promptMaxBytes ?? spec.promptMaxBytes,
+    model: options.model ?? stage.model ?? spec.planned.model,
+    questionsBytes: questionsBytesOf(stageMd),
+  });
+  return {
+    prompt: parts.map((part) => part.text).join(""),
+    bundles,
+    ledger,
+    truncatedNotes: describeTruncatedInputs(inlined),
+  };
 }
 
 /**
  * What the last attempt at this stage left behind (spec §5, failure path: the
  * reject note is "fed into the next prompt").
  *
- * Two sources, both already on the stage: the error of its last failed task, and
- * an operator's rejection note. Either one means this is a retry, and the agent
- * is told so rather than being handed the original prompt as if nothing happened.
+ * Three sources now. Two were always here — the error of the last failed task and
+ * an operator's rejection note — and either one means this is a retry, so the
+ * agent is told so rather than handed the original prompt as if nothing happened.
+ *
+ * **The third is the work itself (wave N).** Measured 2026-08-29: attempt 2 got
+ * the error and the note and NOTHING ELSE, so a stage rejected over one missing
+ * section paid full price to write four documents again from a blank page, and
+ * whatever was right about the first draft was rewritten by a model that had
+ * never seen it. The declared outputs that exist on disk are now inlined under an
+ * explicit instruction to EDIT them, capped at `MAX_PREVIOUS_ATTEMPT_BYTES`.
+ *
+ * The cap is shared across the outputs and spent in declared order, and a file
+ * that does not fit is NAMED rather than silently dropped — the same rule the
+ * declared inputs follow, for the same reason.
  */
-export function describePreviousAttempt(stage: RunStage): string {
+export const MAX_PREVIOUS_ATTEMPT_BYTES = 32 * 1024;
+
+export interface PreviousAttemptOptions {
+  /** The stage's declared outputs, already `{repo}`-expanded. */
+  readonly outputs: readonly string[];
+  readonly ctx: PathContext;
+  readonly maxBytes?: number;
+}
+
+export function describePreviousAttempt(
+  stage: RunStage,
+  options?: PreviousAttemptOptions,
+): string {
   const lines: string[] = [];
   const failure = [...stage.tasks].reverse().find((task) => task.error !== null)?.error ?? null;
   if (failure !== null && failure.trim() !== "") {
@@ -980,7 +1107,50 @@ export function describePreviousAttempt(stage: RunStage): string {
   }
   if (lines.length === 0) return "";
   lines.push("", "Fix what is described above. Everything else in this prompt still applies.");
+  if (options !== undefined) lines.push(...priorOutputs(options));
   return lines.join("\n");
+}
+
+function priorOutputs(options: PreviousAttemptOptions): readonly string[] {
+  const budget = options.maxBytes ?? MAX_PREVIOUS_ATTEMPT_BYTES;
+  const blocks: string[] = [];
+  const skipped: string[] = [];
+  let spent = 0;
+
+  for (const path of options.outputs) {
+    const abs = resolveDeclared(path, options.ctx);
+    const text = readOrEmpty(abs);
+    if (text.trim() === "") continue;
+    const size = Buffer.byteLength(text, "utf8");
+    if (spent + size > budget) {
+      skipped.push(`${path} (${size.toLocaleString("en-US")} B)`);
+      continue;
+    }
+    spent += size;
+    const fence = fenceFor(text);
+    blocks.push(`#### \`${path}\``, "", fence, text.replace(/\n$/, ""), fence, "");
+  }
+  if (blocks.length === 0 && skipped.length === 0) return [];
+
+  const out = [
+    "",
+    "### Previous attempt — edit, do not restart",
+    "",
+    "These files are on disk RIGHT NOW, exactly as the last attempt left them. They are",
+    "not a suggestion and they are not history: they are the draft you are being paid to",
+    "fix. Keep every part that is already correct, change what the note above says is",
+    "wrong, and write the files back. Starting from a blank page throws away work that",
+    "has already been paid for, and loses the parts nobody objected to.",
+    "",
+  ];
+  if (skipped.length > 0) {
+    out.push(
+      `_Not inlined (past the ${budget.toLocaleString("en-US")}-byte previous-attempt budget): `
+      + `${skipped.join(", ")}. They are on disk; read them before you rewrite them._`,
+      "",
+    );
+  }
+  return [...out, ...blocks];
 }
 
 /** `stage.md` sits beside the `stage.yml` the preset resolved. */
@@ -1056,11 +1226,18 @@ function recordTask(store: RunStore, phaseId: string, stageId: string, task: Run
  * retry after `reject` is exactly what a person watching wants to know they are
  * looking at. Both calls are no-ops unless a driver is installed.
  */
-function announce(runId: string, stageId: string, taskId: string, ceilingUsd: number): void {
+function announce(
+  runId: string,
+  stageId: string,
+  taskId: string,
+  ceilingUsd: number,
+  maxReads = 0,
+): void {
   const attempt = Number(taskId.replace(/^t/, ""));
   const suffix = Number.isFinite(attempt) ? ` · attempt ${String(attempt)}` : "";
   setProgressTitle(`${stageId} · ${runId}${suffix}`);
   setProgressCeiling(ceilingUsd);
+  setProgressReadCap(maxReads);
 }
 
 function nextTaskId(store: RunStore, phaseId: string, stageId: string): string {

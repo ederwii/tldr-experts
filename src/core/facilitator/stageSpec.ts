@@ -16,7 +16,10 @@ import { isRecord } from "../schemas/validation.ts";
 import {
   loadWorkflowPreset, stagePath, workflowPath, PresetError, type PlannedStage, type WorkflowPreset,
 } from "../run/workflowPreset.ts";
-import { DEFAULT_EXPERT_KNOWLEDGE_BYTES } from "../experts/expertKnowledge.ts";
+import { DEFAULT_KNOWLEDGE_MAX_BYTES } from "../experts/expertKnowledge.ts";
+import { DEFAULT_INPUTS_MAX_BYTES } from "./seedInputs.ts";
+import { DEFAULT_PROMPT_MAX_BYTES } from "./contextLedger.ts";
+import { defaultMaxReads } from "./readCap.ts";
 
 /** Spec §2.3 default when `stage.yml` is silent. */
 export const DEFAULT_STACK_EXPERTS = true;
@@ -41,13 +44,38 @@ export interface StageSpec {
   readonly seedInputs: boolean;
   readonly stackExperts: boolean;
   /**
-   * `expert_knowledge_bytes:` — how much of each loaded expert's TRAINED KNOWLEDGE
-   * this stage inlines (spec §2.3, §5). Per-stage and nowhere else: a Watch card
-   * wants a page of gotchas and a Build story wants everything the expert knows
-   * about the files it is editing, and a single workspace-wide number could not be
-   * right for both. Absent or unusable ⇒ `DEFAULT_EXPERT_KNOWLEDGE_BYTES` (64 KB).
+   * `knowledge_max_bytes:` — how much TRAINED KNOWLEDGE this stage inlines in
+   * TOTAL, shared by every loaded expert (spec §2.3, §5). Per-stage and nowhere
+   * else: a Watch card wants a page of gotchas and a Build story wants everything
+   * the expert knows about the files it is editing, and a single workspace-wide
+   * number could not be right for both.
+   *
+   * The retired `expert_knowledge_bytes:` is still read, as the same TOTAL. It
+   * used to be a per-expert ceiling, which is how nine experts turned a 64 KB
+   * number into 83,523 measured bytes; a fork that still sets it gets the number
+   * it wrote, applied the way a ceiling has to be applied to be one.
+   * Absent or unusable ⇒ `DEFAULT_KNOWLEDGE_MAX_BYTES` (48 KB).
    */
-  readonly expertKnowledgeBytes: number;
+  readonly knowledgeMaxBytes: number;
+  /**
+   * `inputs_max_bytes:` — the shared ceiling on the CONTENT of every declared
+   * input (§2.3). Filled before the experts get anything, because an input the
+   * stage declared outranks reference material nobody asked for.
+   * Absent or unusable ⇒ `DEFAULT_INPUTS_MAX_BYTES` (96 KB).
+   */
+  readonly inputsMaxBytes: number;
+  /**
+   * `prompt_max_bytes:` — the whole prompt's ceiling (§2.3, §5). Over it the stage
+   * is REFUSED before a sub-agent is spawned, with the biggest sections named.
+   * Absent or unusable ⇒ `DEFAULT_PROMPT_MAX_BYTES` (160 KB).
+   */
+  readonly promptMaxBytes: number;
+  /**
+   * `max_reads:` — how many `Read`/`Glob`/`Grep` calls the sub-agent may make
+   * before it is stopped (§5). The real brake: `--max-budget-usd` only stops a
+   * turn already in flight. Absent ⇒ the per-stage default (`readCap.ts`).
+   */
+  readonly maxReads: number;
   readonly dryRunAllowed: boolean;
   /** From the WORKFLOW entry (spec §2.4), not from stage.yml. */
   readonly skipIf: string | null;
@@ -74,7 +102,10 @@ function overlay(
   stageId: string,
 ): {
   stackExperts: boolean;
-  expertKnowledgeBytes: number;
+  knowledgeMaxBytes: number;
+  inputsMaxBytes: number;
+  promptMaxBytes: number;
+  maxReads: number;
   dryRunAllowed: boolean;
   skipIf: string | null;
   questionsMax: number | null;
@@ -94,12 +125,12 @@ function overlay(
     stackExperts: isRecord(stageDoc) && typeof stageDoc.stack_experts === "boolean"
       ? stageDoc.stack_experts
       : DEFAULT_STACK_EXPERTS,
-    expertKnowledgeBytes: isRecord(stageDoc)
-      && typeof stageDoc.expert_knowledge_bytes === "number"
-      && Number.isFinite(stageDoc.expert_knowledge_bytes)
-      && stageDoc.expert_knowledge_bytes >= 0
-      ? Math.trunc(stageDoc.expert_knowledge_bytes)
-      : DEFAULT_EXPERT_KNOWLEDGE_BYTES,
+    knowledgeMaxBytes: byteKey(stageDoc, "knowledge_max_bytes")
+      ?? byteKey(stageDoc, "expert_knowledge_bytes")
+      ?? DEFAULT_KNOWLEDGE_MAX_BYTES,
+    inputsMaxBytes: byteKey(stageDoc, "inputs_max_bytes") ?? DEFAULT_INPUTS_MAX_BYTES,
+    promptMaxBytes: byteKey(stageDoc, "prompt_max_bytes") ?? DEFAULT_PROMPT_MAX_BYTES,
+    maxReads: byteKey(stageDoc, "max_reads") ?? defaultMaxReads(stageId),
     dryRunAllowed: isRecord(stageDoc) && typeof stageDoc.dry_run_allowed === "boolean"
       ? stageDoc.dry_run_allowed
       : DEFAULT_DRY_RUN_ALLOWED,
@@ -129,6 +160,18 @@ function inputSplit(
     };
   }
   return { requiredInputs: [], optionalInputs: strings(inputs), seedInputs: topLevelSeed };
+}
+
+/**
+ * A non-negative integer key off `stage.yml`, or null when it is absent or is
+ * anything a byte count cannot be. Null rather than the default, so a caller can
+ * fall through to a second spelling before it gives up.
+ */
+function byteKey(doc: unknown, key: string): number | null {
+  if (!isRecord(doc)) return null;
+  const value = doc[key];
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
+  return Math.trunc(value);
 }
 
 function readDoc(path: string | null): unknown {

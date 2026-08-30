@@ -57,6 +57,14 @@ export interface RunTask {
   readonly started_at: string | null;
   readonly ended_at: string | null;
   readonly outputs: readonly string[];
+  /**
+   * Why the attempt stopped, when a LIMIT stopped it rather than the model
+   * finishing: `"max_reads"` today (spec §5). Null or absent on every ordinary
+   * attempt, so `run.yml` is unchanged unless a cap actually bit — "it ran out of
+   * reads" and "it crashed" are different stories and the file must tell them
+   * apart.
+   */
+  readonly stopped_by?: string | null;
 }
 
 export interface RunStage {

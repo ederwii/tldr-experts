@@ -30,7 +30,7 @@ export {
 export type { ExpertReason, ExpertSelection, SelectedExpert, SelectExpertsInput } from "./selectExperts.ts";
 export {
   loadExpertKnowledge, readKnowledgeFiles, truncateAtHeading, countFindings, chartLines,
-  byteLength, DEFAULT_EXPERT_KNOWLEDGE_BYTES, KNOWLEDGE_DIRNAME,
+  byteLength, DEFAULT_KNOWLEDGE_MAX_BYTES, KNOWLEDGE_DIRNAME,
 } from "./expertKnowledge.ts";
 export type { ExpertKnowledge, KnowledgeFileView, KnowledgeOptions } from "./expertKnowledge.ts";
 export { loadExpertBundles, describeBundles, untrainedNotes, LEGACY_NOTE } from "./expertBundle.ts";
@@ -38,3 +38,4 @@ export type { ExpertBundle, ExpertBundleSet, LoadBundlesInput } from "./expertBu
 export { stagesLoadingExperts, describeStageLoads, stageIds } from "./stageCoverage.ts";
 export type { StageLoad } from "./stageCoverage.ts";
 export type { StageLoads } from "./renderExpertList.ts";
+export { nearbyPathsFor, graphPath, MAX_GRAPH_BYTES } from "./domainRank.ts";

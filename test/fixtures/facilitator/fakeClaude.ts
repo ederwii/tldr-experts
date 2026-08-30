@@ -16,7 +16,7 @@
  */
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { claudeOutput, type FakeTool } from "../fakeStream.ts";
+import { claudeOutput, toolPairLines, type FakeResult, type FakeTool } from "../fakeStream.ts";
 
 const argv = process.argv.slice(2);
 
@@ -62,6 +62,35 @@ const tools: FakeTool[] = written.map((rel) => ({
   input: { file_path: join(base, rel) },
   result: "File written",
 }));
+
+const spec: FakeResult = {
+  isError,
+  result: isError ? "" : "wrote the declared outputs",
+  sessionId,
+  costUsd: cost,
+  usage: { input_tokens: 1234, output_tokens: 56 },
+  structured: { outputs: written, questions_asked: [], notes: "canned by fakeClaude" },
+  errors: isError ? ["fake failure: the stage could not be completed"] : [],
+  say: process.env.FAKE_CLAUDE_SAY,
+  tools,
+};
+
+// `FAKE_CLAUDE_READS=n` emits n completed `Read` calls, ONE FLUSHED LINE AT A
+// TIME, before the rest of the transcript — and then waits. That is what makes a
+// live kill testable: a fake that prints everything in one write has already
+// exited by the time anything could stop it.
+const slowReads = Number(process.env.FAKE_CLAUDE_READS ?? "0");
+if (Number.isFinite(slowReads) && slowReads > 0) {
+  const hangMs = Number(process.env.FAKE_CLAUDE_HANG_MS ?? "5000");
+  for (let i = 0; i < slowReads; i++) {
+    for (const line of toolPairLines(spec, { name: "Read", input: { file_path: `/x/${String(i)}.md` } }, i,
+      new Date(Date.parse("2026-08-29T12:00:00.000Z") + i * 10).toISOString())) {
+      process.stdout.write(`${line}\n`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  await new Promise((resolve) => setTimeout(resolve, hangMs));
+}
 
 process.stdout.write(claudeOutput(argv, {
   isError,

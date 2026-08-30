@@ -15,5 +15,5 @@ export const runtime: Runtime = onBun ? bunRuntime : nodeRuntime;
 
 export { bunRuntime } from "./bunRuntime.ts";
 export { nodeRuntime } from "./nodeRuntime.ts";
-export { killAllChildren, liveChildren, registerChild, unregisterChild } from "./children.ts";
+export { killAllChildren, killChildTree, liveChildren, registerChild, unregisterChild } from "./children.ts";
 export type { Runtime, SpawnOptions, SpawnResult } from "./Runtime.ts";

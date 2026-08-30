@@ -57,6 +57,10 @@ export function summarize(event: AgentEvent, ctx: SummaryContext): string | null
       // The cost line immediately before this one already says it finished and
       // what it cost. A second "done" would be the same fact twice.
       return null;
+    case "reads":
+      // Counting is a footer fact, not a scrollback line: one row per Read would
+      // push everything else off a six-line window.
+      return null;
     case "error":
       return cut(`error: ${event.message}`, width);
     default:

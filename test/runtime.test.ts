@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { bunRuntime, nodeRuntime, type Runtime } from "../src/core/runtime/index.ts";
+import { bunRuntime, liveChildren, nodeRuntime, type Runtime } from "../src/core/runtime/index.ts";
 
 /**
  * The seam is only worth having if both halves behave the same, so every test
@@ -18,6 +18,19 @@ const IMPLEMENTATIONS: readonly (readonly [string, Runtime])[] = [
   ["bunRuntime", bunRuntime],
   ["nodeRuntime", nodeRuntime],
 ];
+
+/** The pids the registry has gained since `before` — this spawn's, and nothing else's. */
+function added(before: ReadonlySet<number>): readonly number[] {
+  return liveChildren().filter((pid) => !before.has(pid));
+}
+
+/** Poll until `ready()`, or give up after `limitMs` and let the assertion say so. */
+async function until(ready: () => boolean, limitMs = 2_000): Promise<void> {
+  const deadline = Date.now() + limitMs;
+  while (!ready() && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
 
 const scratch = mkdtempSync(join(tmpdir(), "tldrx-runtime-"));
 afterAll(() => { rmSync(scratch, { recursive: true, force: true }); });
@@ -69,6 +82,69 @@ for (const [name, runtime] of IMPLEMENTATIONS) {
       expect(result.stdout.trim()).toBe("quick");
       expect(result.exitCode).toBe(0);
     });
+
+    /**
+     * The seam between wave Q and wave N. Q registers every spawned child so the
+     * CLI's signal handler knows what to kill; N kills a child MID-TURN when the
+     * `max_reads` cap bites. Both deliberate kills go through `killChildTree`,
+     * which drops the pid IN THE SAME BREATH as it signals it.
+     *
+     * The assertion is deliberately taken BETWEEN the abort and the settle. A
+     * bare `killProcessTree` would also leave an empty registry once the process
+     * finally settled — the spawn unregisters on exit regardless — so a check
+     * taken afterwards proves nothing. The window this closes is the one between
+     * the kill and the exit: a Ctrl-C landing in it would have `killAllChildren`
+     * signal a pid that is already dead, and which the OS may since have handed
+     * to something else.
+     *
+     * The registry is global, so these track the ONE pid this spawn added rather
+     * than counting the set: another spawn settling elsewhere is not this bug.
+     */
+    test("an abort drops the child from the registry at the kill, not at the settle", async () => {
+      const before = new Set(liveChildren());
+      const controller = new AbortController();
+      const spawned = runtime.spawn("/bin/sh", ["-c", "sleep 30 & wait"], { signal: controller.signal });
+      await until(() => added(before).length === 1);
+      const pid = added(before)[0];
+
+      const started = Date.now();
+      controller.abort();
+      // Synchronous with the abort: nothing is awaited between these two lines.
+      expect(liveChildren()).not.toContain(pid);
+
+      const result = await spawned;
+      expect(Date.now() - started).toBeLessThan(4_000);
+      // Aborted is not timed out: the caller stopped it, the clock did not.
+      expect(result.timedOut).toBe(false);
+      expect(typeof result.stdout).toBe("string");
+      expect(liveChildren()).not.toContain(pid);
+    }, 10_000);
+
+    test("a timeout drops it the same way, and still reports timedOut", async () => {
+      const before = new Set(liveChildren());
+      const spawned = runtime.spawn("/bin/sh", ["-c", "sleep 30 & wait"], { timeoutMs: 2_000 });
+      await until(() => added(before).length === 1);
+      const pid = added(before)[0];
+
+      const result = await spawned;
+      expect(result.timedOut).toBe(true);
+      expect(liveChildren()).not.toContain(pid);
+    }, 10_000);
+
+    // The ordering hazard the resolution created: the child is registered BEFORE
+    // an already-aborted signal is checked, so the immediate kill has a pid to
+    // drop. Registered after, this would leak the pid for the process's lifetime.
+    test("a signal already aborted before the spawn leaks nothing", async () => {
+      const before = new Set(liveChildren());
+      const started = Date.now();
+      const spawned = runtime.spawn("/bin/sh", ["-c", "sleep 30 & wait"], { signal: AbortSignal.abort() });
+      expect(added(before)).toEqual([]);
+
+      const result = await spawned;
+      expect(Date.now() - started).toBeLessThan(4_000);
+      expect(typeof result.stdout).toBe("string");
+      expect(added(before)).toEqual([]);
+    }, 10_000);
   });
 
   describe(`${name} filesystem`, () => {

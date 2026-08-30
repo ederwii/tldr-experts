@@ -126,6 +126,38 @@ export function claudeOutput(argv: readonly string[], spec: FakeResult): string 
   return `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`;
 }
 
+/**
+ * The two JSONL lines for one completed tool call, ready to print on their own.
+ *
+ * Exported so a fake can emit tools SLOWLY, one flushed line at a time, which is
+ * the only way to test something that reacts to the stream while the process is
+ * still running — `max_reads` kills a live child, and a fake that prints its
+ * whole transcript in one write has already exited before anyone could.
+ */
+export function toolPairLines(
+  spec: FakeResult,
+  tool: FakeTool,
+  index: number,
+  timestamp: string,
+): readonly string[] {
+  const id = `toolu_slow${String(index).padStart(4, "0")}`;
+  return [
+    JSON.stringify(assistant(
+      [{ type: "tool_use", id, name: tool.name, input: tool.input, caller: { type: "direct" } }],
+      timestamp,
+      spec,
+    )),
+    JSON.stringify({
+      type: "user",
+      message: { role: "user", content: [{ tool_use_id: id, type: "tool_result", content: tool.result ?? "ok" }] },
+      parent_tool_use_id: null,
+      session_id: spec.sessionId,
+      timestamp,
+      tool_use_result: { type: "text", content: tool.result ?? "ok" },
+    }),
+  ];
+}
+
 function assistant(content: readonly unknown[], timestamp: string, spec: FakeResult): unknown {
   return {
     type: "assistant",

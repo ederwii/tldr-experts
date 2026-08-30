@@ -7,6 +7,26 @@
  * a template plus permission to go find things. Its `## Inputs` section carries
  * the CONTENT of the declared inputs and nothing else, so "read nothing else" is
  * a statement about what is physically in the prompt rather than a request.
+ *
+ * **Order is a cost decision, not a layout one (wave N).** A prompt cache keys on
+ * the longest PREFIX two calls share: a cache write is billed at 1.25x an input
+ * token and a cache read at 0.1x, so whatever is stable belongs at the front and
+ * whatever changes belongs at the back. Measured 2026-08-29 on `~/aparece-v2`,
+ * the What prompt was 159,575 B of which 52% was expert bodies + trained
+ * knowledge — the most stable material in the document — and it was emitted LAST,
+ * behind 45% of declared inputs that change at every stage. So the order is now:
+ *
+ *   1. `stage.md`            the stage's own rules; one file, per stage
+ *   2. expert blocks         `expert.md` + trained knowledge; the big stable mass
+ *   3. `## Inputs`           the declared inputs' content; per stage
+ *   4. `## Previous attempt` the retry note and the refused outputs; per attempt
+ *
+ * strictly most-stable to least-stable. `## Inputs` and `## Previous attempt` are
+ * CUT out of `stage.md` wherever its author put them and re-emitted at the tail,
+ * so a spec-shaped stage file with `## Inputs` in the middle produces exactly one
+ * of that heading and it is at the end. Nothing is duplicated and nothing that a
+ * stage author wrote under those two headings survived before either: the old
+ * assembly replaced their bodies outright.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -58,19 +78,66 @@ export interface PromptParts {
   readonly previousAttempt?: string;
 }
 
+export const INPUTS_HEADING = "Inputs";
+export const PREVIOUS_ATTEMPT_HEADING = "Previous attempt";
+
 export function buildPrompt(parts: PromptParts): string {
-  const substituted = substitute(parts.stageMd, parts.values);
-  const withInputs = replaceSection(substituted, "Inputs", renderInputs(parts.inputs, parts.inputsNote));
-  const previous = (parts.previousAttempt ?? "").trim();
-  const withPrevious = previous === ""
-    ? withInputs
-    : replaceSection(withInputs, "Previous attempt", previous);
-  const experts = parts.experts.map((expert) => {
+  return renderParts(parts).map((part) => part.text).join("");
+}
+
+/**
+ * The prompt as its ordered pieces, so `assemblePrompt` can weigh each one
+ * without re-deriving where the boundaries are. Concatenated, this IS the prompt:
+ * `buildPrompt` is one `join("")` over it, and the context ledger measures the
+ * same array. One assembly, two readers — a ledger computed from a second,
+ * parallel notion of "section" would drift the first time either changed.
+ */
+export function renderParts(parts: PromptParts): readonly PromptPart[] {
+  const substituted = cutSection(
+    cutSection(substitute(parts.stageMd, parts.values), INPUTS_HEADING),
+    PREVIOUS_ATTEMPT_HEADING,
+  );
+  const out: PromptPart[] = [
+    { kind: "stage", name: "stage.md", text: `${substituted.trimEnd()}\n` },
+  ];
+
+  for (const expert of parts.experts) {
+    out.push({
+      kind: "expert-body",
+      name: expert.name,
+      text: `\n---\n\n<!-- expert: ${expert.name} -->\n${expert.body.trimEnd()}\n`,
+    });
     const knowledge = (expert.knowledge ?? "").trim();
-    const tail = knowledge === "" ? "" : `\n\n${knowledge}\n`;
-    return `\n\n---\n\n<!-- expert: ${expert.name} -->\n${expert.body.trimEnd()}\n${tail}`;
+    if (knowledge !== "") {
+      out.push({ kind: "expert-knowledge", name: expert.name, text: `\n${knowledge}\n` });
+    }
+  }
+
+  out.push({
+    kind: "inputs",
+    name: INPUTS_HEADING,
+    text: `\n## ${INPUTS_HEADING}\n\n${renderInputs(parts.inputs, parts.inputsNote).trimEnd()}\n`,
   });
-  return `${withPrevious.trimEnd()}\n${experts.join("")}`;
+
+  const previous = (parts.previousAttempt ?? "").trim();
+  if (previous !== "") {
+    out.push({
+      kind: "previous-attempt",
+      name: PREVIOUS_ATTEMPT_HEADING,
+      text: `\n## ${PREVIOUS_ATTEMPT_HEADING}\n\n${previous}\n`,
+    });
+  }
+  return out;
+}
+
+export type PromptPartKind =
+  | "stage" | "expert-body" | "expert-knowledge" | "inputs" | "previous-attempt";
+
+export interface PromptPart {
+  readonly kind: PromptPartKind;
+  /** `stage.md`, an expert name, or the heading — what the ledger prints. */
+  readonly name: string;
+  readonly text: string;
 }
 
 /** Every `{{name}}` we own; anything else is left alone rather than blanked. */
@@ -99,6 +166,28 @@ export function replaceSection(markdown: string, heading: string, body: string):
   const head = lines.slice(0, start + 1);
   const tail = lines.slice(end);
   return [...head, "", body.trimEnd(), "", ...tail].join("\n");
+}
+
+/**
+ * Remove an H2 section — heading and body — and return what is left.
+ *
+ * The inverse of `replaceSection` for the two headings the facilitator OWNS.
+ * A stage author who wrote prose under `## Inputs` never had it survive: the old
+ * assembly replaced that body with the rendered inputs. Cutting it and re-emitting
+ * the section at the tail loses exactly the same bytes and gains a stable prefix.
+ */
+export function cutSection(markdown: string, heading: string): string {
+  const lines = markdown.split("\n");
+  const start = lines.findIndex((line) => line.trim() === `## ${heading}`);
+  if (start === -1) return markdown;
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if ((lines[i] ?? "").startsWith("## ")) {
+      end = i;
+      break;
+    }
+  }
+  return [...lines.slice(0, start), ...lines.slice(end)].join("\n");
 }
 
 export function renderInputs(inputs: readonly PromptInput[], note?: string): string {

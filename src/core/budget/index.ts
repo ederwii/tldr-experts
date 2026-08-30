@@ -7,3 +7,15 @@ export { buildBudgetView, renderBudget, raiseCommand, shortBy, usd } from "./bud
 export type { BudgetView, BudgetPhaseView } from "./budgetView.ts";
 export { raiseBudget, describeRaise, BudgetRaiseError, MIN_RAISE_USD, MAX_RAISE_USD } from "./raiseBudget.ts";
 export type { RaiseRequest, RaiseOutcome } from "./raiseBudget.ts";
+export {
+  buildProgramCost, buildRunCost, renderProgramCost, renderRunCost, toAttempt, median,
+  outputTokensForStage,
+} from "./costView.ts";
+export type { CostAttempt, CostStage, CostRun, CostProgram, CostTokens } from "./costView.ts";
+export { estimateNextStage, renderEstimate, EstimateError } from "./estimateView.ts";
+export type { StageEstimate } from "./estimateView.ts";
+export {
+  MODEL_PRICES, priceFor, contextTokensFor, estimateTokensFromBytes,
+  BYTES_PER_TOKEN, CACHE_READ_MULTIPLIER, CACHE_WRITE_MULTIPLIER, DEFAULT_CONTEXT_TOKENS,
+} from "./modelPrices.ts";
+export type { ModelPrice } from "./modelPrices.ts";

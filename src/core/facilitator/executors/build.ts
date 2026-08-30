@@ -892,7 +892,7 @@ class BuildSession {
       stackExperts: this.ctx.spec.stackExperts,
       stackNames: stackExpertNames(this.ctx.root, [repo]),
       citedPaths: story.planned.story.touches,
-      knowledgeBytes: this.ctx.spec.expertKnowledgeBytes,
+      knowledgeBytes: this.ctx.spec.knowledgeMaxBytes,
     });
     return buildDeveloperPrompt({
       runId: this.ctx.runId,
