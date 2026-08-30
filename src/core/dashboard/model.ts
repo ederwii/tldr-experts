@@ -21,7 +21,8 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { MAX_LEVEL, loadExperts, driftWarnings, evidenceWarnings, type ExpertRecord } from "../experts/index.ts";
 import { listRuns, loadPhaseArtefacts, loadRun, type LoadedRun } from "../replay/index.ts";
-import { waitingFor, type Waiting } from "../run/waiting.ts";
+import { resolveDependencies, type DependencyInput, type ResolvedRun } from "../run/dependencies.ts";
+import { isMovable, waitingFor, type Waiting } from "../run/waiting.ts";
 import { openBlocks, parseQuestions } from "../text/index.ts";
 import { renderMarkdown } from "../markdown/index.ts";
 import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
@@ -161,6 +162,16 @@ export interface RunModel {
    * not what the run is waiting on.
    */
   readonly pendingQuestion: string | null;
+  /**
+   * Runs this one was proposed to follow (`run.yml` `triage.depends_on`),
+   * resolved from slugs to run ids. A slug with no run in this workspace keeps
+   * its raw slug — it was proposed to come first and it does not exist.
+   */
+  readonly dependsOn: readonly string[];
+  /** The subset of `dependsOn` that is not `done`. Empty means nothing blocks it. */
+  readonly blockedBy: readonly string[];
+  /** Nothing blocks it AND a human could move it right now. */
+  readonly runnable: boolean;
   /** The execution path, one row per stage, in run.yml order. */
   readonly path: readonly StageRowModel[];
   readonly phases: readonly PhaseModel[];
@@ -213,6 +224,19 @@ export interface DashboardModel {
   /** Highest competency level, so the renderer never has to know the constant. */
   readonly maxLevel: number;
   readonly runs: readonly RunModel[];
+  /**
+   * Every run id in the order a human should work through them: topological on
+   * `dependsOn`, runnable first, then newest-updated. The head is the run to do
+   * next. `runs` stays newest-first, so a renderer can offer either.
+   */
+  readonly order: readonly string[];
+  /**
+   * Root-to-leaf dependency paths, for an `A → B → C` rendering. Every arrow is
+   * a real `depends_on` edge, so a fork yields one chain per branch rather than
+   * one flattened list claiming an order nobody asked for. Chains of one are
+   * omitted and the list is capped (`MAX_CHAINS`).
+   */
+  readonly chains: readonly (readonly string[])[];
   readonly experts: readonly ExpertModel[];
   readonly faq: readonly FaqEntryModel[];
 }
@@ -231,11 +255,26 @@ export interface ModelOptions {
 /** Read the whole workspace into one JSON-serialisable model. */
 export function buildModel(root: string, generatedAt: string, options: ModelOptions = {}): DashboardModel {
   const now = options.now ?? new Date();
-  const runs: RunModel[] = [];
+
+  // Two passes, because "what blocks this run" is a fact about its SIBLINGS.
+  // Read every run first, resolve the whole graph once, then build each model
+  // knowing its place in it. `listRuns` is newest-first, which is the order
+  // `resolveDependencies` uses to settle a slug carried by two runs.
+  const loaded: LoadedRun[] = [];
   for (const id of listRuns(root)) {
-    const loaded = loadRun(root, id);
-    if (loaded !== null) runs.push(toRunModel(loaded));
+    const run = loadRun(root, id);
+    if (run !== null) loaded.push(run);
   }
+  const waiting = new Map(loaded.map((run) => [run.id, waitingFor(run.run, run.dir)]));
+  const graph = resolveDependencies(loaded.map((run): DependencyInput => ({
+    id: run.id,
+    status: run.run.status,
+    dependsOn: run.run.triage?.depends_on ?? [],
+    movable: isMovable(waiting.get(run.id)?.kind ?? "blocked"),
+    updatedAt: run.run.updated_at,
+  })));
+  const resolved = new Map(graph.runs.map((run) => [run.id, run]));
+
   return {
     modelVersion: DASHBOARD_MODEL_VERSION,
     generatedAt,
@@ -244,7 +283,9 @@ export function buildModel(root: string, generatedAt: string, options: ModelOpti
     workspaceFound: existsSync(join(root, PROJECT_FRAMEWORK_DIR)),
     live: options.live === true,
     maxLevel: MAX_LEVEL,
-    runs,
+    runs: loaded.map((run) => toRunModel(run, waiting.get(run.id), resolved.get(run.id))),
+    order: graph.order,
+    chains: graph.chains,
     experts: loadExperts(root, now).map(toExpertModel),
     faq: FAQ,
   };
@@ -253,13 +294,21 @@ export function buildModel(root: string, generatedAt: string, options: ModelOpti
 /**
  * One run, as the page needs it.
  *
- * `waiting` is an argument rather than a second derivation so a caller that
- * already computed it for the whole workspace does not pay for it twice; it
- * falls back to the same shared function when nobody hands one in.
+ * `waiting` and `resolution` are arguments rather than second derivations so a
+ * caller that already computed them for the whole workspace does not pay twice.
+ * Both fall back to the honest answer for a run with no siblings: its own
+ * waiting derivation, and "nothing blocks it".
  */
-export function toRunModel(loaded: LoadedRun, waiting?: Waiting): RunModel {
+export function toRunModel(
+  loaded: LoadedRun,
+  waiting?: Waiting,
+  resolution?: ResolvedRun,
+): RunModel {
   const doc = loaded.run;
   const waits = waiting ?? waitingFor(doc, loaded.dir);
+  const depends = resolution ?? {
+    id: loaded.id, dependsOn: [], blockedBy: [], runnable: isMovable(waits.kind),
+  };
 
   const phases: PhaseModel[] = doc.phases.map((phase) => {
     const artefacts = loadPhaseArtefacts(loaded, phase.id);
@@ -323,6 +372,9 @@ export function toRunModel(loaded: LoadedRun, waiting?: Waiting): RunModel {
     waiting: { kind: waits.kind, message: waits.message, questions: waits.questions },
     pendingGate: held,
     pendingQuestion: asked === undefined ? null : `${asked.id} · ${asked.title}`,
+    dependsOn: depends.dependsOn,
+    blockedBy: depends.blockedBy,
+    runnable: depends.runnable,
     path,
     phases,
     plan: loadPlan(loaded),

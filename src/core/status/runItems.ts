@@ -20,30 +20,41 @@ import { basename } from "node:path";
 import { listRunDirs } from "../../hooks/lib/workspace.ts";
 import { PROJECT_WORK_DIR } from "../paths.ts";
 import { RunStore } from "../run/RunStore.ts";
+import { resolveDependencies, slugOfRun, type DependencyInput } from "../run/dependencies.ts";
 import { whatIsWaiting, type Waiting } from "../run/runStatus.ts";
+import { isMovable } from "../run/waiting.ts";
 import type { RunFile } from "../run/RunFile.ts";
 import type { PendingItem } from "./PendingItem.ts";
 
 /** The marker on the first run a human could actually move. */
 export const NEXT_MARK = "← next";
 
-/** `260829-decisions-gate` → `decisions-gate`; anything else keeps its whole id. */
-export function slugOfRun(runId: string): string {
-  return /^\d{6}-(.+)$/.exec(runId)?.[1] ?? runId;
-}
+export { slugOfRun };
 
-/** Every run on disk that parses: slug -> its status, newest run per slug. */
-function statusBySlug(root: string): ReadonlyMap<string, string> {
-  const out = new Map<string, string>();
+/**
+ * Every run on disk that parses, as the dependency resolver wants it.
+ *
+ * ALL of them, not only the open ones: a dependency satisfied by a finished run
+ * has to read as satisfied. `listRunDirs` is newest-first, which is the order
+ * `resolveDependencies` uses to break a slug collision.
+ */
+function dependencyInputs(root: string): readonly DependencyInput[] {
+  const out: DependencyInput[] = [];
   for (const dir of listRunDirs(root)) {
-    let run: RunFile;
+    let store: RunStore;
     try {
-      run = RunStore.open(dir).run;
+      store = RunStore.open(dir);
     } catch {
       continue;
     }
-    const slug = slugOfRun(run.run === "" ? basename(dir) : run.run);
-    if (!out.has(slug)) out.set(slug, run.status);
+    const run = store.run;
+    out.push({
+      id: run.run === "" ? basename(dir) : run.run,
+      status: run.status,
+      dependsOn: run.triage?.depends_on ?? [],
+      movable: isMovable(whatIsWaiting(run, store.runDir).kind),
+      updatedAt: run.updated_at,
+    });
   }
   return out;
 }
@@ -52,15 +63,20 @@ export function runItems(root: string): readonly PendingItem[] {
   const open = RunStore.findOpen(root);
   const unreadable = unreadableItem(root);
   if (open.length === 0) return unreadable === null ? [] : [unreadable];
-  const statuses = statusBySlug(root);
+  const inputs = dependencyInputs(root);
+  const known = new Set(inputs.map((input) => input.id));
+  const statuses = new Map(inputs.map((input) => [input.id, input.status]));
+  const resolved = new Map(resolveDependencies(inputs).runs.map((run) => [run.id, run]));
   const several = open.length > 1;
   let markedNext = false;
 
   const items: PendingItem[] = open.map((store) => {
     const run = store.run;
     const waiting = whatIsWaiting(run, store.runDir);
-    const blocked = (run.triage?.depends_on ?? []).filter((slug) => statuses.get(slug) !== "done");
-    const runnable = blocked.length === 0 && MOVABLE.includes(waiting.kind);
+    // `blockedBy` carries run ids; the reader was proposed SLUGS, so say slugs.
+    const blockedIds = resolved.get(run.run)?.blockedBy ?? [];
+    const blocked = blockedIds.map(slugOfRun);
+    const runnable = resolved.get(run.run)?.runnable ?? isMovable(waiting.kind);
     const isNext = runnable && !markedNext;
     if (isNext) markedNext = true;
 
@@ -72,9 +88,11 @@ export function runItems(root: string): readonly PendingItem[] {
       );
     }
     details.push(`at ${run.cursor.phase} / ${run.cursor.stage} · run status ${run.status} · waiting: ${waiting.kind}`);
-    for (const slug of blocked) {
-      const status = statuses.get(slug);
-      details.push(`blocked by ${slug} — ${status === undefined ? "no run exists for it" : `it is ${status}`}`);
+    for (const id of blockedIds) {
+      const status = known.has(id) ? statuses.get(id) : undefined;
+      details.push(
+        `blocked by ${slugOfRun(id)} — ${status === undefined ? "no run exists for it" : `it is ${status}`}`,
+      );
     }
     if (waiting.kind === "gate") {
       details.push(`disagree instead: \`tldrx reject --run ${run.run} --note "<why>"\``);
@@ -123,9 +141,6 @@ function unreadableItem(root: string): PendingItem | null {
     details: broken,
   };
 }
-
-/** Waiting kinds a human can act on right now. `done` and `blocked` are not. */
-const MOVABLE: readonly Waiting["kind"][] = ["gate", "answer", "ready", "failed"];
 
 function summaryOf(run: RunFile, waiting: Waiting, blocked: readonly string[]): string {
   const what = run.title === "" ? run.run : `${run.run} ("${run.title}")`;

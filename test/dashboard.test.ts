@@ -52,9 +52,11 @@ describe("the dashboard model", () => {
     expect(JSON.parse(JSON.stringify(model))).toEqual(model);
   });
 
-  // `runs[].waiting.questions[]` is absent here only because this fixture's one
-  // run has no open block in its cursor phase — an empty array contributes no
-  // path. `dashboard-deps.test.ts` asserts it over a fixture that does.
+  // Empty arrays contribute no path, so `chains[][]`, `runs[].dependsOn[]`,
+  // `runs[].blockedBy[]` and `runs[].waiting.questions[]` are absent HERE only
+  // because this fixture's one run has no siblings and no open block in its
+  // cursor phase. `dashboard-deps.test.ts` asserts all four over a fixture that
+  // does have them — the two lists together are the whole contract.
   test("its field names are the contract a designer targets", () => {
     expect([...fieldPaths(model)].sort()).toEqual([
       "experts[].areas[].evidenceCount",
@@ -75,6 +77,7 @@ describe("the dashboard model", () => {
       "live",
       "maxLevel",
       "modelVersion",
+      "order[]",
       "root",
       "runs[].ceilingUsd",
       "runs[].cursor",
@@ -103,6 +106,7 @@ describe("the dashboard model", () => {
       "runs[].phases[].status",
       "runs[].plan",
       "runs[].repos[]",
+      "runs[].runnable",
       "runs[].scope",
       "runs[].spentUsd",
       "runs[].stagesDone",

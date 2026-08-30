@@ -56,6 +56,14 @@ export interface RunCursor {
   readonly task: string | null;
 }
 
+/** Where this run came from, when `tldrx seed apply` created it (spec §2.2). */
+export interface RunTriage {
+  /** Workspace-relative path of the `split.yml` this run came out of. */
+  readonly split: string;
+  /** SLUGS of the sibling runs this one was proposed to follow. */
+  readonly depends_on: readonly string[];
+}
+
 export interface RunDocument {
   readonly run: string;
   readonly title: string;
@@ -68,6 +76,14 @@ export interface RunDocument {
   readonly cursor: RunCursor | null;
   readonly ceiling_usd: number | null;
   readonly spent_usd: number | null;
+  /** Absent on a run `tldrx run new` created — it depends on nothing. */
+  readonly triage: RunTriage | null;
+  /**
+   * Stage id -> `human` | `auto` (spec §2.2 `gates_policy`). An absent key, or a
+   * run.yml written before the key existed, reads as `human` — the same default
+   * `gatePolicyFor` applies, spelled here so a reader never has to know it.
+   */
+  readonly gates_policy: Readonly<Record<string, string>>;
   readonly phases: readonly RunPhase[];
 }
 
@@ -113,6 +129,8 @@ export function toRunDocument(input: unknown, fallbackId: string): RunDocument |
       : { phase: str(cursor.phase), stage: str(cursor.stage), task: nullableStr(cursor.task) },
     ceiling_usd: num(budget?.ceiling_usd) ?? num(doc.budget_usd),
     spent_usd: num(budget?.spent_usd),
+    triage: toTriage(doc.triage),
+    gates_policy: toGatesPolicy(doc.gates_policy),
     phases: array(doc.phases).map(toPhase).filter((phase): phase is RunPhase => phase !== null),
   };
 }
@@ -134,6 +152,23 @@ export function toBudgetDocument(input: unknown): BudgetDocument | null {
         spent_usd: num(phase.spent_usd),
       })),
   };
+}
+
+function toTriage(input: unknown): RunTriage | null {
+  const triage = record(input);
+  if (triage === null) return null;
+  return { split: str(triage.split), depends_on: strings(triage.depends_on) };
+}
+
+/** Read tolerantly: a value that is not `human` or `auto` is dropped, not shown. */
+function toGatesPolicy(input: unknown): Readonly<Record<string, string>> {
+  const policy = record(input);
+  if (policy === null) return {};
+  const out: Record<string, string> = {};
+  for (const [stage, value] of Object.entries(policy)) {
+    if (value === "human" || value === "auto") out[stage] = value;
+  }
+  return out;
 }
 
 function toPhase(input: unknown): RunPhase | null {
