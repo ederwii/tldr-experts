@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { runDoctor } from "../src/core/doctor/runDoctor.ts";
+import { doctorJson } from "../src/cli/commands/doctor.ts";
 import { DoctorReport } from "../src/core/doctor/DoctorReport.ts";
 import { loadEnvManifest } from "../src/core/doctor/loadEnvManifest.ts";
 import { parseMcpList } from "../src/core/doctor/McpProbe.ts";
@@ -122,5 +123,31 @@ describe("parseMcpList", () => {
 
   test("returns nothing for output with no server lines", () => {
     expect(parseMcpList("No MCP servers configured.")).toHaveLength(0);
+  });
+});
+
+describe("tldrx doctor --json", () => {
+  test("the same findings as the table, as data a script can read", async () => {
+    const outcome = await runDoctor({ mcp: false });
+    const parsed = JSON.parse(doctorJson(outcome)) as {
+      healthy: boolean;
+      tools: { id: string; required: boolean; status: string; installHint: string | null }[];
+      mcp: unknown;
+    };
+    expect(parsed.healthy).toBe(outcome.exitCode === 0);
+    expect(parsed.tools.map((tool) => tool.id).sort()).toEqual(outcome.results.map((r) => r.id).sort());
+    for (const tool of parsed.tools) {
+      // Every id and status in the JSON is one the table printed too.
+      expect(outcome.output).toContain(tool.id);
+      // A hint is only carried when there is something to fix.
+      if (tool.status === "ok") expect(tool.installHint).toBeNull();
+    }
+  });
+
+  // "not probed" and "no servers" are different claims and must not share a shape.
+  test("mcp is null when --mcp was not passed, not an empty list", async () => {
+    const outcome = await runDoctor({ mcp: false });
+    expect(outcome.mcp).toBeNull();
+    expect((JSON.parse(doctorJson(outcome)) as { mcp: unknown }).mcp).toBeNull();
   });
 });

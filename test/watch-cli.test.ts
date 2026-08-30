@@ -111,6 +111,36 @@ describe("tldrx watch list", () => {
     expect(run.stdout).toContain(ws.runId);
   });
 
+  test("--json carries the same rows the table shows", async () => {
+    const ws = withCard();
+    const run = await tldrx(ws.root, "watch", "list", "--json");
+    expect(run.code).toBe(EXIT_OK);
+    const parsed = JSON.parse(run.stdout) as {
+      run: string;
+      cards: { id: string; path: string; status: string; valid: boolean; signal: string | null }[];
+      verified: number;
+      invalid: number;
+    };
+    expect(parsed.run).toBe(ws.runId);
+    expect(parsed.cards).toHaveLength(1);
+    expect(parsed.cards[0]?.id).toBe("leaderboard");
+    expect(parsed.cards[0]?.status).toBe("verified");
+    expect(parsed.cards[0]?.valid).toBe(true);
+    expect(parsed.cards[0]?.signal).toContain("leaderboard.refreshed");
+    expect(parsed.verified).toBe(1);
+    expect(parsed.invalid).toBe(0);
+  });
+
+  // The table and the JSON are built from one `statusOf`, so they cannot disagree.
+  test("the JSON status is the status the table printed", async () => {
+    const ws = withCard("api:src/Leaderboard.cs:400");
+    const table = await tldrx(ws.root, "watch", "list");
+    const json = await tldrx(ws.root, "watch", "list", "--json");
+    const status = (JSON.parse(json.stdout) as { cards: { status: string }[] }).cards[0]?.status ?? "";
+    expect(status).not.toBe("");
+    expect(table.stdout).toContain(status);
+  });
+
   test("an unknown run is 3, not a silent empty table", async () => {
     const ws = withCard();
     const run = await tldrx(ws.root, "watch", "list", "--run", "260101-nope");
