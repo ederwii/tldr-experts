@@ -203,6 +203,16 @@ checks: [{id: claim-sources, on: post-write}, {id: schema, on: post-write},
 | `experts` | slug[] | y | Expert folders loaded; empty ⇒ facilitator runs it inline |
 | `stack_experts` / `model` | bool / str | n (`true`) / y | Also load stack expertise for `run.repos`; per-stage model pin (Appendix A) |
 | `knowledge_max_bytes` | int ≥0 | n (49152) | **Total** ceiling on inlined **trained knowledge**, shared by every loaded expert (§5, "Expert composition"). The retired `expert_knowledge_bytes` is still read, as the same total. Per stage and nowhere else: a Watch card and a Build story want different amounts and one workspace-wide number cannot be right for both |
+
+**What training is asked to put in that budget (2026-08-29).** The prompt `tldrx expert train` spawns — and the one
+`--print-prompt` renders — states one criterion, and it is the same sentence in both: *a finding is something a model
+could not re-derive by reading that one file once*. Cross-file contradictions, dead paths, defaults that differ from
+their docstrings, absences written as a negative claim with an `absent:` source, and measured commands. Restating a
+docstring is not a finding. The prompt used to say the opposite — "Citing the same file twelve times is worth one
+row; reading twelve files is worth twelve" — which described the old formula accurately and taught the wrong thing;
+§2.6 now weighs a cross-file finding double and derives nothing from a paraphrase. Light mode's file selection is
+bounded by the expert's own `## Domain`: only files inside it are scored, read or inlined, so the run stops paying
+for files whose citations §2.6 would refuse to count.
 | `inputs_max_bytes` | int ≥0 | n (98304) | Shared ceiling on the CONTENT of every declared input, spent in declaration order and filled BEFORE the experts get anything (§5, "One budget, inputs first") |
 | `prompt_max_bytes` | int ≥0 | n (163840) | The whole prompt's ceiling. Over it the stage is **refused** (exit 2) before a sub-agent is spawned (§5, "The context ledger"). `--prompt-max-bytes <n>` overrides it for one invocation |
 | `max_reads` | int ≥0 | n (120 · build 200 · watch 60) | How many `Read`/`Glob`/`Grep` calls the sub-agent may complete before it is stopped (§5, "The read cap"). `--max-reads <n>` overrides it for one invocation |
@@ -376,6 +386,18 @@ this workflow lists and every value is `human\|auto`; ≤40 stages.
 
 `retro` runs no stage from `stages/`, so it has no gate to place.
 
+**`retro.md` has two writers (2026-08-29).** `tldrx retro` renders the document; the **Build executor** appends
+`## Build feedback` to it as each story settles, deterministically and with no model involved — every reviewer
+`changes` verdict, every DoD command that failed on the first attempt, every merge conflict, and (read back off
+`events.jsonl` at the top of the next Build run, since they happen between invocations) every gate a person rejected
+and every approval revoked, with its note and what it staled. Appends are deduped verbatim, so re-running converges;
+`tldrx retro` carries the section forward rather than overwriting it. Every bullet cites the story's review log or
+the `events.jsonl` line, so a knowledge file mined from it inherits a citation that still resolves.
+
+This is the only path by which a gate reaches an expert. Role experts train from
+`tldrx-work/<run>/**/{handoff,retro}.md` and nothing else (§2.6); measured 2026-08-29, all five sat at level 0
+because `retro.md` existed only when a human happened to type `tldrx retro`.
+
 ### 2.5 `.tldrx/memory/facts.yml`
 
 Durable, provenanced answers, read before any question is posed. Append-mostly: superseded or retired, never edited.
@@ -419,7 +441,8 @@ last_trained: 2026-08-20T11:00:00Z
 areas:
   - {id: ef-core, title: "EF Core mapping and migrations", level: 3,
      train_prompt: "tldrx expert train dotnet-stack --area ef-core --mode light",
-     evidence: [{kind: code, src: "api:src/Scavtopia.Infrastructure/Persistence/AppDbContext.cs:41", at: 2026-08-20},
+     evidence: [{kind: code, src: "api:src/Scavtopia.Infrastructure/Persistence/AppDbContext.cs:41", at: 2026-08-20,
+                 cross: true, confidence: inferred},
                 {kind: run, src: "tldrx-work/260812-scores/04-build/log/S3.md:9", at: 2026-08-12},
                 {kind: doc, src: "https://learn.microsoft.com/ef/core/modeling/", at: 2026-06-02},
                 {kind: answer, src: "F019", at: 2026-08-14}]}
@@ -433,17 +456,33 @@ areas:
 | `areas[].level` | int 0–5 | y | **Computed**; a hand-edited value is overwritten on next write |
 | `areas[].train_prompt` | str | y | Copy-paste command shown in the dashboard |
 | `areas[].evidence[].{kind,src,at}` | `code\|run\|test\|doc\|answer` / src token (§2.8) / `YYYY-MM-DD` | y | Evidence class, citation (must satisfy the grammar), date produced |
+| `areas[].evidence[].cross` | bool | n | The bullet this row came from cited **two or more distinct files**. Weighs double |
+| `areas[].evidence[].confidence` | `measured\|inferred\|assumed` | n | The bullet's own annotation. `assumed` weighs half |
 
-**Level formula** (deterministic, integer table). Per evidence item aged `d` days: `recency = 1.0 (d≤30) · 0.6 (≤90) ·
-0.3 (≤365) · 0.1 (else)`; `weight = code 1.0 · run 1.0 · test 1.0 · answer 0.8 · doc 0.5`; `W = Σ recency·weight`.
+**Level formula** (deterministic, integer table). Per evidence item aged `d` days:
+`recency = max(0.25, 1 - d/365)`; `weight = code 1.0 · run 1.0 · test 1.0 · answer 0.8 · doc 0.5`, **× 2 when the row
+is `cross: true`** and **× 0.5 when it is `confidence: assumed`**; `W = Σ recency·weight`.
 
-The five steps run **in this order**, and the order is part of the rule:
+The four steps run **in this order**, and the order is part of the rule:
 
 1. **Thresholds.** `level = 0 if W<0.5 · 1 if <1.5 · 2 if <3 · 3 if <6 · 4 if <20 · else 5`.
-2. **Staleness cap.** Newest evidence older than 180 d ⇒ `level = min(level, 2)`.
-3. **Run cap.** No `kind: run` row in the area ⇒ `level = min(level, 3)`.
-4. **Top-rung kinds check.** `level == 5` with fewer than 2 distinct `kind` values ⇒ `level = 4`.
-5. **Distinct-source cap.** `level ≤ count(distinct src)`.
+2. **Run cap.** No `kind: run` row in the area ⇒ `level = min(level, 3)`.
+3. **Top-rung kinds check.** `level == 5` with fewer than 2 distinct `kind` values ⇒ `level = 4`.
+4. **Distinct-source cap.** `level ≤ count(distinct src)`.
+
+**Why recency decays instead of stepping (2026-08-29).** There used to be a fifth step, a staleness cap that pinned
+any area whose newest row was over 180 days old at level 2, and a four-band recency table underneath it. Both were
+cliffs: an expert trained on day 179 and the same expert on day 181 knew identical things and the ladder reported 4
+and 2. Knowledge fades; it does not expire on a Tuesday. One continuous factor replaces both, floored at 0.25 so a
+year-old reading is worth a quarter of a fresh one rather than nothing.
+
+**Why a cross-file finding counts double.** Breadth of FILES was the only thing the old formula measured, and the
+training prompt said so in as many words ("reading twelve files is worth twelve") — a Goodhart instruction that got
+the expected result. A model can re-derive anything a single file says by reading that file. What it cannot re-derive
+is the relationship between two of them: a default that contradicts its docstring, a caller passing a key the callee
+never registers, a path nothing reaches. A row derived from a bullet citing two or more distinct files is that kind
+of finding, and it is the only shape of evidence weighted above its kind. `confidence: assumed` is the mirror image:
+a hypothesis with a citation attached is half a row.
 
 **Why the top two rungs are gated on a measurement.** Reading a file is evidence that code SAYS something; running a
 command is evidence that it DOES it. Measured 2026-08-29 on a real workspace: `aparece-api` held 15 `code` + 2 `test`
@@ -456,19 +495,26 @@ reading reached the ceiling).
 
 Worked example, all evidence fresh (recency 1.0), all `src` distinct:
 
-| Evidence | W | Thresholds | Stale? | Run cap | Kinds | Sources | **Level** |
-|---|---|---|---|---|---|---|---|
-| 15 `code` + 2 `test` | 17.0 | 4 | no | → **3** | 2 | 17 | **3** |
-| … plus one `run` (`$ dotnet test → exit 0`) | 18.0 | 4 | no | passes | 3 | 18 | **4** |
-| … plus one fresh `doc` and two more files read | 20.5 | 5 | no | passes | 4 | 21 | **5** |
+| Evidence | W | Thresholds | Run cap | Kinds | Sources | **Level** |
+|---|---|---|---|---|---|---|
+| 15 `code` + 2 `test` | 17.0 | 4 | → **3** | 2 | 17 | **3** |
+| … plus one `run` (`$ dotnet test → exit 0`) | 18.0 | 4 | passes | 3 | 18 | **4** |
+| … plus one fresh `doc` and two more files read | 20.5 | 5 | passes | 4 | 21 | **5** |
+| 8 `code` + 1 `run`, all 400 d old (recency 0.25) | 2.25 | 2 | passes | 2 | 9 | **2** |
 
 `run` is necessary, not sufficient: one `run` row alone is `W = 1.0`, which is level 1. And the caps still outrank it —
-a set whose newest row is 400 d old is 2 however many commands it ran, and 25 readings of one line plus one `run` is
-two distinct sources, so level 2.
+25 readings of one line plus one `run` is two distinct sources, so level 2.
 
 **Validation.** `level` equals the formula output (recomputed at write; mismatch rejected); every `src` matches the
 grammar; ≤60 areas, ≤50 evidence items per area. Every area's level is recomputed on **every** write, not only the
 trained one — that is what makes a hand-edited number temporary.
+
+**Contradiction guard.** `tldrx expert list` also prints one **stderr** line per `file:line` that two or more experts
+cite with bullets whose normalised texts differ:
+`warning: shared citation <file:line> by <a>,<b> — check for contradiction`. It resolves nothing, deliberately —
+deciding which expert is right is not something a deterministic tool can do, and guessing would be worse than the
+silence it replaces. Identical sentences are agreement, not contradiction, and are not reported. Measured 2026-08-29:
+16 files on one workspace were cited by two trained experts each and nothing anywhere compared what the two said.
 
 **An unrecognised `kind`, or a `src` that does not fit its `kind`, is refused out loud.** Three refusals, one channel —
 stderr or a dashboard warning line, always in the shape `warning: <expert>/<area>: N evidence row(s) ignored — <why>`:
@@ -511,9 +557,43 @@ holds every area of it at level 3. Full mode additionally mints `run` rows from 
 past runs (`tldrx-work/<run>/<file>:<line>`) — decisions that were made while something was actually being built.
 
 `absent:` sources are legal in a knowledge file and produce **no** evidence: "I looked here and there is nothing" is a
-finding, not a measurement. A knowledge file is accepted or rejected **whole** — one unsourced item, or one cited line
-past the end of its file, and nothing is written: no evidence, no level change, no status change, and the file is moved
-to `<area>.rejected.md` so it cannot be mistaken for accepted knowledge.
+finding, not a measurement. A knowledge file is accepted or rejected **whole** — one unsourced item, one cited line
+past the end of its file, or one execution claim sourced to a file (below), and nothing is written: no evidence, no
+level change, no status change, and the file is moved to `<area>.rejected.md` so it cannot be mistaken for accepted
+knowledge.
+
+**A citation must SUSTAIN the claim, not only resolve (2026-08-29).** §2.8's resolver answers "does this line exist";
+it cannot answer "is this line evidence for that sentence". Four rules close the gap. One is a **refusal**, and it
+rejects the file:
+
+| Rule | Message | When |
+|---|---|---|
+| execution claim | `execution claim needs a '$ <cmd> → exit <n>' src, not a file line` | the claim asserts a RESULT — `exit <n>`, `N/M passed`, "the build is green", or the word "measured" in the sentence itself — and no `cmd` src is attached |
+
+Three are **warnings**: they cost that citation its evidence row and leave the file accepted, because none of them is
+a lie — they are ways of being worth nothing, and the honest response to worth nothing is a level that does not move:
+
+| Rule | Message contains | When |
+|---|---|---|
+| paraphrase | `paraphrase` | the bullet is ≥90% a verbatim substring of the ±3-line neighbourhood of the line it cites, normalised |
+| domain | `outside domain` | the cited path is outside the expert's own `## Domain`; the expert whose domain does contain it is named |
+| dedup | `duplicate src` | the same `src` is already on record in this expert, here or in another of its areas |
+
+And `## Sources` derives **no** evidence at all. It is a recap — one line per citation already made above — so counting
+it buys a second row for one reading. Measured 2026-08-29 on a real corpus: it was 41 of 107 bullets in one trained
+file and 18 of 56 in another, every one of them re-citing something cited above.
+
+**Why the execution rule exists, measured.** The header of a real `knowledge/aparece-api.md` asserts ``dotnet build``
+exit 0, "measured, exit code captured unpiped", citing `.tldrx/workspace.yml:19` — the line that DECLARES
+`build: dotnet build`. It claims "78/78 passed, exit 0" citing a line of the test script. Every citation resolves.
+None of them is evidence that anything ran. The rule is applied to prose paragraphs as well as bullets, because that
+header is a paragraph and its tokens sit mid-line, where a line-anchored parser never looks.
+
+**The confidence annotation.** A bullet may carry `(measured)` / `(inferred)` / `(assumed)` before its token, or the
+leading `*measured* —` form; both spellings appear in the real corpus and both are parsed onto the row as
+`confidence:`. The annotation is stripped before the execution rule matches — inside it the word is a LABEL, and
+refusing a file for obeying §2.3's "say which of measured / inferred / assumed each claim is" would be the rule being
+wrong, not the file.
 
 ### 2.6.1 `.tldrx/experts/<name>/training.jsonl`
 
@@ -689,6 +769,14 @@ closed its own auto gate and advanced the cursor (measured probe, 2026-08-29).
 `## Unknowns` is exempt from the `absent:` negative-claim rule, because that heading IS the negation: the example above
 (`- Retention period for historical rankings [src: absent:…]`) reads as a positive noun phrase and means "we do not
 know it".
+
+**Resolving is not sustaining.** Every outcome above is a fact about the CITATION. Whether the citation supports the
+SENTENCE is a separate question, and §2.6 answers it for knowledge files: a claim that asserts a result needs the
+`cmd` production and is refused with a `file` line under it, a bullet that restates the line it cites earns no
+evidence, and a citation outside the expert's declared `## Domain` earns none for that expert. Handoffs are not
+subject to those rules today — `claim-sources` still judges a handoff bullet on resolution alone — and that asymmetry
+is deliberate for now: a knowledge file becomes a LEVEL, which is a number other stages read as authority, while a
+handoff is read by a person at a gate.
 
 **Resolving a `file` src.** A `repo:path` resolves inside that repo, and an absolute path is taken as written. A bare
 `path` is tried against three bases, in order — **first existing wins**: (a) the workspace root; (b) the run directory of
@@ -1092,7 +1180,7 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx budget raise <phase> <usd> [--run <id>] [--take-from <phase>] [--note <text>]` | `run.yml`, `budget.yml` | `budget.yml` ceilings, `run.yml` ceiling mirror, `events.jsonl` (`budget.raised`, with before/after/actor/note) | 0,1,2,3 |
 | `tldrx map --refresh` | `workspace.yml`, repos, `graphify-out/` | `map/**`, `graphify-out/`, `events.jsonl` | 0,1 |
 | `tldrx map --check` | `map/**` citations, filesystem | `cache/map-drift.json` (stdout report) | 0,1 |
-| `tldrx expert list` | `experts/*/competencies.yml` | nothing (stdout star chart) | 0 |
+| `tldrx expert list` | `experts/*/competencies.yml`, `experts/*/knowledge/*.md` | nothing (stdout star chart; stderr warnings) | 0 |
 | `tldrx expert create <name>` | `workspace.yml`, `map/**` | `experts/<name>/{expert.md,competencies.yml}` | 0,1 |
 | `tldrx expert train <name> --area <a> [--mode light\|full] [--max-usd <n>] [--model <m>] [--prepare\|--commit] [--print-prompt]` | `expert.md`, `competencies.yml`, `map/<repo>/domains.md`, `graphify-out/<repo>/graph.json`, repo code, `tldrx-work/**/{handoff,retro}.md`, `facts.yml` | `knowledge/<area>.md` (+ `knowledge/from-runs-<area>.md` in full mode), `competencies.yml`, `training.jsonl` (§2.6.1) | 0,1,2,3,5 |
 | `tldrx expert recompute [<name>] [--json]` | `experts/*/competencies.yml` | `competencies.yml` (`areas[].level` only) | 0,1,3 |
@@ -1102,7 +1190,7 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx tickets sync [--run <id>] [--apply] [--provider github\|jira]` | `process.yml`, `run.yml`, `03-plan/{epics,stories}/*.md` | **Nothing without `--apply`** — preview is the default, because this is the one verb that reaches a third party. With it: `external:` + `external_status:` in those files, `events.jsonl` (`ticket.synced`), the remote issues. `--provider` picks between CONFIGURED providers and cannot switch on a workspace set to `kind: none` | 0,1,2,3 |
 | `tldrx tickets status [--run <id>]` | `process.yml` **first**, then the same files | nothing (stdout table) | 0,1,2,3 |
 | `tldrx replay [<run>]` | `events.jsonl`, handoffs | nothing (stdout narrative) | 0,1,2,3 |
-| `tldrx retro [<run>] [--apply]` | `run.yml`, `events.jsonl`, handoffs | `retro.md`, `stages/proposed/**`, `practices.md` proposals | 0,1,2,3 |
+| `tldrx retro [<run>] [--apply]` | `run.yml`, `events.jsonl`, handoffs, the Build executor's `## Build feedback` section | `retro.md`, `stages/proposed/**`, `practices.md` proposals | 0,1,2,3 |
 | `tldrx hook <name>` | stdin (the hook payload) | whatever the hook writes — stdout, stderr and the exit code are the script's, unchanged | the script's |
 | `tldrx statusline` | stdin (the statusLine payload) | one line on stdout | 0 |
 
@@ -1424,7 +1512,8 @@ citation torn off. The knowledge file's own front matter is dropped and its `tra
 `---` fence inside the prompt is one of the expert separators above, and a boundary that means two things is not one.
 
 **Why the citations are stated to be reusable.** A knowledge file is accepted whole or not at all (§2.6), and
-acceptance means every `[src: …]` on it resolved against a real file. So they are proof already, and the block says
+acceptance means every `[src: …]` on it resolved against a real file — and, since 2026-08-29, that no bullet on it
+claims a result it cannot source to a command (§2.6, "a citation must SUSTAIN the claim"). So they are proof already, and the block says
 so — otherwise a sub-agent that may only read its declared inputs would either re-derive what it was just handed or
 decline to cite it. Measured 2026-08-29 before this existed: a prepared What prompt on a workspace with a trained,
 level-3 expert was 1,493 bytes and contained zero of that expert's 646 bytes of findings, zero stars, and not one

@@ -989,6 +989,85 @@ was sound — no shell in the adapters, no `push` wrapper, the dashboard on loop
   may hold local values, and it was the one thing the framework writes that nothing
   ignored. Now in the init gitignore block and in this repo's own.
 
+### A citation has to sustain its claim, not only resolve
+
+Everything below was measured against the three knowledge files a real training run
+produced on a real workspace (`~/aparece-v2`, 2026-08-29). Wave M made every `src`
+resolvable; that is a check on the citation and says nothing about the sentence.
+
+- **An execution claim needs a command src, and a file line under one is refused:**
+  `execution claim needs a '$ <cmd> → exit <n>' src, not a file line`. The header of
+  the real `knowledge/aparece-api.md` asserts `` dotnet build `` exit 0, "measured,
+  exit code captured unpiped", citing `.tldrx/workspace.yml:19` — the line that
+  DECLARES `build: dotnet build`. It claims "78/78 passed, exit 0" citing a line of
+  the test script. Every citation resolves; none is evidence anything ran. The rule
+  reads prose paragraphs as well as bullets, because that header IS a paragraph and
+  its tokens sit mid-line where a line-anchored parser never looks. Measured after:
+  7 refusals on that file, 1 on `aparece-platform`, 0 on the third.
+- **Three warnings that cost a citation its evidence without rejecting the file:**
+  `paraphrase` (the bullet is ≥90% a verbatim substring of the ±3-line neighbourhood
+  of the line it cites), `outside domain` (the path is outside the expert's own
+  `## Domain` — and the expert whose domain does contain it is named), and
+  `duplicate src` (already on record for this expert). None of them is a lie; they
+  are ways of being worth nothing, and the honest response is a level that does not
+  move. Measured on the real corpus: 57 outside-domain and 7 duplicate warnings
+  across 248 bullets.
+- **`## Sources` earns nothing.** It was 41 of 107 bullets in one real file and 18 of
+  56 in another, every one re-citing a source cited above it. It is still validated
+  like any other section; it just derives no evidence, and `countFindings` stops
+  counting it as a finding.
+- **A bullet may end in `(measured)` / `(inferred)` / `(assumed)`** — or lead with
+  `*measured* —`, the other spelling the real corpus uses — and it is parsed onto the
+  evidence row as `confidence:`. Both spellings are stripped before the execution rule
+  matches: inside the annotation the word is a LABEL, and refusing a file for obeying
+  §2.3's own "say which of measured / inferred / assumed each claim is" would be the
+  rule being wrong, not the file.
+- **Light mode's file selection is bounded by `## Domain`.** Only files inside the
+  expert's declared folders are scored, read or inlined; every file inside them is a
+  candidate even when it greps for nothing. Bounding the input is cheaper than warning
+  about the output.
+
+### The ladder weighs findings, not files
+
+- **Recency decays continuously — `max(0.25, 1 - ageDays/365)` — and the 180-day
+  staleness cap is gone.** It was a cliff: an expert trained on day 179 and the same
+  expert on day 181 knew identical things and the ladder reported 4 and 2. Knowledge
+  fades; it does not expire on a Tuesday. The four remaining steps are thresholds →
+  run cap → top-rung kinds → distinct-source cap. **Levels move on this change: run
+  `tldrx expert recompute` to see the new numbers.**
+- **A cross-file finding weighs double, an `assumed` one weighs half.** Both are
+  additive `evidence[]` fields (`cross: true`, `confidence:`) derived from the bullet,
+  never asserted; a row written before they existed carries neither and computes as it
+  always did. A model can re-derive anything one file says by reading it; what it
+  cannot re-derive is the relationship between two.
+- **The training prompt asks for value, not coverage.** It used to say "Citing the
+  same file twelve times is worth one row; reading twelve files is worth twelve" — an
+  accurate description of the old formula and a Goodhart instruction. Both prompts (the
+  spawned one and `--print-prompt`) now carry the same criterion word for word: a
+  finding is something a model could not re-derive by reading that one file once —
+  cross-file contradictions, dead paths, defaults that differ from their docstrings,
+  absences written as a negative claim, measured commands. Restating a docstring is
+  not a finding.
+
+### The gates finally reach the experts
+
+- **The Build executor writes `retro.md` as the run goes.** Role experts train from
+  `tldrx-work/<run>/**/{handoff,retro}.md` and nothing else, and all five sat at
+  level 0 because `retro.md` existed only when a human typed `tldrx retro`. Build now
+  appends `## Build feedback` as each story settles — every reviewer `changes` verdict
+  and finding, every DoD command that failed on the first attempt with its exit code,
+  every merge conflict, and (read back off `events.jsonl`, since they happen between
+  invocations) every gate rejected and every approval revoked, with its note and what
+  it staled. Deterministic, deduped verbatim, every bullet carrying a `[src: …]` into
+  the review log or the events line. `tldrx retro` carries the section forward instead
+  of overwriting it.
+- **`tldrx expert list` warns on a shared citation:**
+  `warning: shared citation <file:line> by <a>,<b> — check for contradiction`, on
+  stderr, when two experts cite one line with bullets whose normalised texts differ.
+  16 files on the real workspace were cited by two trained experts each and nothing
+  compared what the two said. It resolves nothing on purpose — deciding which expert
+  is right is not something a deterministic tool can do.
+
 ## 0.2.0 — 2026-08-29
 
 ### The Build phase executes
