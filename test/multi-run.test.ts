@@ -54,7 +54,11 @@ afterEach(() => {
 
 /** A workspace with `slugs.length` runs, all open, created oldest first. */
 function withRuns(...slugs: readonly string[]): { root: string; ids: readonly string[] } {
-  workspace = makeRunWorkspace();
+  workspace = makeRunWorkspace({
+    files: {
+      ".tldrx/process.yml": "version: 1\nticket_tool: {kind: github, project: acme/lab, sync: one-way}\n",
+    },
+  });
   const root = workspace.root;
   const ids = slugs.map((slug, i) =>
     createRun({
@@ -143,7 +147,10 @@ const AMBIGUOUS_COMMANDS: readonly (readonly [string, readonly string[]])[] = [
   ["tldrx budget", ["budget", "show"]],
   ["tldrx budget", ["budget", "raise", "01-what", "1"]],
   ["tldrx tickets", ["tickets", "status"]],
-  ["tldrx tickets", ["tickets", "sync", "--dry-run", "--provider", "github"]],
+  // `--provider` no longer switches the adapter ON (M8) — it picks between
+  // configured ones — so this workspace declares github in process.yml and the
+  // command reaches the run resolution it is here to test.
+  ["tldrx tickets", ["tickets", "sync", "--provider", "github"]],
   ["tldrx watch", ["watch", "list"]],
   ["tldrx interview", ["interview"]],
   ["tldrx retro", ["retro"]],
@@ -220,6 +227,9 @@ const SINGLE_RUN_KEYS = [
   // Added deliberately in 0.3.0 (wave G, gate policy). Everything above keeps its
   // position, so a consumer reading `run` or `waiting.kind` is untouched.
   "gates_policy", "gates",
+  // Wave M: how many turns nobody costed, so `budget.spent_usd` is not read as a
+  // total when it is a lower bound. Appended for the same reason.
+  "unmetered_tasks",
 ];
 
 describe("tldrx run status with several runs open", () => {

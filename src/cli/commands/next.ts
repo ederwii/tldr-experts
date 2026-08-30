@@ -31,17 +31,33 @@ export const nextCommand: Command = {
   name: "next",
   summary: "Advance the active run to its next stage",
   usage: "tldrx next [<run>] [--dry-run] [--prepare|--commit] [--model <m>] [--effort <level>] [--max-usd <n>]\n"
-    + "                  [--yolo] [--keep-worktrees] [--ui scene|compact|plain|off] [--root <path>]",
+    + "                  [--cost-usd <n>] [--tokens <n>] [--yolo] [--keep-worktrees]\n"
+    + "                  [--ui scene|compact|plain|off] [--root <path>]",
   subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     try {
-      const args = parseArgs(argv, ["run", "model", "effort", "max-usd", "root", "ui"]);
+      const args = parseArgs(argv, ["run", "model", "effort", "max-usd", "cost-usd", "tokens", "root", "ui"]);
       const root = workspaceRootFrom(args);
       const mode = resolveMode(args.flags.has("prepare"), args.flags.has("commit"));
       const runId = args.positionals[0] ?? stringFlag(args, "run");
 
       const dryRun = boolFlag(args, "dry-run");
+      // `--cost-usd` is how the HOST declares what an in-session turn cost. It has
+      // no meaning anywhere else: headless reconciles the envelope's real
+      // `total_cost_usd`, and letting a flag overwrite a measurement would be the
+      // exact inversion of what this is for.
+      const costUsd = numberFlag(args, "cost-usd");
+      if (costUsd !== undefined && mode !== "commit") {
+        throw new UsageError("--cost-usd only applies to `tldrx next --commit`: it declares what the host session's sub-agent cost");
+      }
+      if (costUsd !== undefined && costUsd < 0) {
+        throw new UsageError("--cost-usd must be >= 0");
+      }
+      const tokens = numberFlag(args, "tokens");
+      if (tokens !== undefined && mode !== "commit") {
+        throw new UsageError("--tokens only applies to `tldrx next --commit`");
+      }
       // `--prepare`, `--commit` and `--dry-run` spawn nothing, so there is
       // nothing to watch: the handle they get is inert.
       const ui = startUi(args, { root, spawns: mode === "headless" && !dryRun });
@@ -55,6 +71,8 @@ export const nextCommand: Command = {
           model: stringFlag(args, "model"),
           effort: effortFlag(args),
           maxUsd: numberFlag(args, "max-usd"),
+          costUsd,
+          tokens,
           yolo: boolFlag(args, "yolo"),
           keepWorktrees: boolFlag(args, "keep-worktrees"),
           actor: currentActor(),

@@ -138,9 +138,16 @@ export function parseDodBlock(text: string): DodBlock {
 /**
  * Every dod command must be a `workspace.yml` command, verbatim.
  *
- * `[assumption]` — with no workspace.yml commands to check against (no file, or an
- * empty one) the membership rule is skipped, exactly as `resolveSrc` skips it for
- * a `cmd` source: a checker must not invent a rule it has no data for.
+ * The old `[assumption]` here was that an EMPTY allowlist means "skip the rule",
+ * by analogy with `resolveSrc`'s `cmd` source. The 2026-08-29 audit measured what
+ * that analogy costs: `dod-gate` is installed as a default PreToolUse hook with a
+ * 960 s timeout and runs each command through `/bin/sh -c`, so in a workspace with
+ * no `commands:` — a fresh `tldrx init`, a repo whose detection found none — a
+ * story saying `dod: rm -rf ~` was legal at plan time and executed at done time.
+ *
+ * An empty allowlist now REFUSES every command instead. The two cases are not
+ * alike: a `cmd` citation is a claim about something that already ran, and this
+ * is a list of things about to be run as the user.
  */
 export function validateStoryDod(
   dod: DodBlock,
@@ -156,7 +163,12 @@ export function validateStoryDod(
     issues.push({ path: base, message: "the ```dod block is empty — done means proven, not asserted" });
     return issues;
   }
-  if (allowed.size === 0) return issues;
+  if (allowed.size === 0) {
+    dod.commands.forEach((command, i) => {
+      issues.push({ path: `${base}[${i}]`, message: noAllowlistMessage(command) });
+    });
+    return issues;
+  }
   dod.commands.forEach((command, i) => {
     if (allowed.has(command)) return;
     issues.push({
@@ -165,6 +177,13 @@ export function validateStoryDod(
     });
   });
   return issues;
+}
+
+/** Shared by the schema and the hook, so the two never word the refusal differently. */
+export function noAllowlistMessage(command: string): string {
+  return `\`${command}\` cannot be allowed: .tldrx/workspace.yml declares no commands, so there is `
+    + "nothing to check it against. Add the command under the repo's `commands:` — a dod block is run "
+    + "for real, as you, and an empty allowlist is not a permit.";
 }
 
 export interface StoryFile {

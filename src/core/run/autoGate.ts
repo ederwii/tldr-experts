@@ -164,7 +164,8 @@ function parsedBlocks(path: string): number {
  * is not a gate the machine gets to close.
  */
 function budgetCondition(input: AutoGateInput): AutoGateCondition {
-  const spent = round2(input.stage.tasks.reduce((sum, task) => sum + task.cost_usd, 0));
+  const spent = round2(input.stage.tasks.reduce((sum, task) => sum + (task.cost_usd ?? 0), 0));
+  const unmetered = input.stage.tasks.filter((task) => task.cost_usd === null).length;
   const phase = input.budget.phases.find((entry) => entry.id === input.phaseId);
   const phaseSpent = phase === undefined ? 0 : phase.spent_usd;
   const phaseCeiling = phase === undefined ? 0 : phase.ceiling_usd;
@@ -173,10 +174,16 @@ function budgetCondition(input: AutoGateInput): AutoGateCondition {
   const phasePart = phase === undefined
     ? `phase ${input.phaseId} not in budget.yml`
     : `phase ${input.phaseId} $${phaseSpent.toFixed(2)} of $${phaseCeiling.toFixed(2)}`;
+  // An unmetered turn is NAMED in the note and does not, on its own, refuse the
+  // gate. Deliberate, and documented in spec §5: in-session is the mode where the
+  // host is already watching its own spend, and blocking every auto gate on the
+  // absence of a number the host chose not to pass would make `--commit`
+  // unusable. What it must never do is read as "$0.00 — under ceiling, verified".
+  const meterPart = unmetered === 0 ? "" : `, ${String(unmetered)} unmetered task(s) not counted`;
   return {
     id: "budget",
     ok: stageOk && phaseOk,
-    detail: `$${spent.toFixed(2)} of $${input.stage.budget_usd.toFixed(2)} stage, ${phasePart}`,
+    detail: `$${spent.toFixed(2)} of $${input.stage.budget_usd.toFixed(2)} stage, ${phasePart}${meterPart}`,
   };
 }
 

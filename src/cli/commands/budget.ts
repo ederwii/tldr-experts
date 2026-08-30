@@ -16,15 +16,16 @@ import { fail } from "../report.ts";
 import { isResolved, resolveRunOrExplain, type RunOrExit } from "../resolveRun.ts";
 import { buildBudgetView, renderBudget } from "../../core/budget/budgetView.ts";
 import { describeRaise, raiseBudget } from "../../core/budget/raiseBudget.ts";
+import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
 
-const VALUE_FLAGS = ["run", "root", "take-from"];
+const VALUE_FLAGS = ["run", "root", "take-from", "note"];
 
 export const budgetCommand: Command = {
   name: "budget",
   summary: "Show what the run may still spend, or raise a phase ceiling",
   usage:
     "tldrx budget show [--run <id>] [--json] [--root <path>]\n" +
-    "       tldrx budget raise <phase> <usd> [--run <id>] [--take-from <phase>] [--root <path>]",
+    "       tldrx budget raise <phase> <usd> [--run <id>] [--take-from <phase>] [--note <text>] [--root <path>]",
   subcommands: ["show", "raise"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
@@ -81,6 +82,29 @@ function budgetRaise(argv: readonly string[]): number {
     });
     store.mutateBudget(() => outcome.budget);
     store.mutate((run) => ({ ...run, budget: { ...run.budget, ceiling_usd: outcome.runCeilingAfter } }));
+
+    // Before/after, who, and why — appended BEFORE the save, so a raise that
+    // fails validation leaves no event claiming it happened. Until 2026-08-29
+    // `budget raise` rewrote budget.yml and appended nothing at all (audit §E):
+    // the one sanctioned way to move a ceiling was the one act with no record.
+    store.append({
+      ts: nowRfc3339(),
+      run: store.runId,
+      stage: null,
+      type: "budget.raised",
+      actor: currentActor(),
+      cost_usd: 0,
+      payload: {
+        phase: outcome.phaseId,
+        amount_usd: outcome.amountUsd,
+        take_from: outcome.takeFrom,
+        phase_ceiling_before: outcome.phaseCeilingBefore,
+        phase_ceiling_after: outcome.phaseCeilingAfter,
+        run_ceiling_before: outcome.runCeilingBefore,
+        run_ceiling_after: outcome.runCeilingAfter,
+        note: stringFlag(args, "note") ?? "",
+      },
+    });
     store.save();
 
     const view = buildBudgetView(store.run, store.budget);

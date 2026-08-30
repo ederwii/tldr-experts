@@ -22,7 +22,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { PROJECT_FRAMEWORK_DIR } from "../../paths.ts";
 import { factsPath, loadWorkspace, type WorkspaceContext } from "../../../hooks/lib/workspace.ts";
-import { runDodCommand } from "../../../hooks/lib/story.ts";
+import { DodCommandRefused, runDodCommand } from "../../../hooks/lib/story.ts";
 import { FactsStore } from "../../facts/FactsStore.ts";
 import { renderConventions, renderFacts, stackExpertNames } from "../prompt.ts";
 import { loadExpertBundles } from "../../experts/expertBundle.ts";
@@ -393,7 +393,16 @@ class BuildSession {
     const timeoutMs = this.ctx.spec.planned.timeout_s * 1000;
     const results: DodResult[] = [];
     for (const command of story.planned.dod.commands) {
-      const outcome = await runDodCommand(command, story.worktree, timeoutMs);
+      // Same allowlist the hook uses, same refusal. The Build executor runs a dod
+      // block in a worktree for real; an undeclared command is a failed check
+      // here, not a spawn.
+      let outcome;
+      try {
+        outcome = await runDodCommand(command, story.worktree, timeoutMs, this.workspace.commands);
+      } catch (error) {
+        if (!(error instanceof DodCommandRefused)) throw error;
+        outcome = { command, exitCode: 126, timedOut: false, tail: error.message };
+      }
       const result: DodResult = {
         command,
         exitCode: outcome.timedOut ? 124 : outcome.exitCode,
@@ -474,7 +483,12 @@ class BuildSession {
       workspaceCommands: [],
       tools: REVIEWER_TOOLS,
       schema: REVIEW_SCHEMA,
-      yolo: this.ctx.yolo,
+      // NOT `this.ctx.yolo`. `--yolo` is `--dangerously-skip-permissions`
+      // (spawnAgent.ts:89), and handing it to the read-only reviewer took away the
+      // one thing making it read-only — an agent asked to judge a diff was given a
+      // permission-free shell to do it with (2026-08-29 audit, §C). The developer
+      // still gets it: that one is meant to write.
+      yolo: false,
       cwd: story.worktree,
       timeoutMs: this.ctx.spec.planned.timeout_s * 1000,
     });
@@ -845,12 +859,30 @@ class BuildSession {
     return this.workspace.repoCommands.get(repo) ?? [];
   }
 
+  /**
+   * The developer's share, clamped so the phase cannot be overrun.
+   *
+   * Measured 2026-08-29: a story's spend was `developer (1/N) + reviewer (0.25/N)`
+   * and the whole pipeline could run TWICE (`MAX_ATTEMPTS`), so N stories could
+   * charge 2.5x the stage ceiling — the audit's "Build 2.5x su fase". The shares
+   * are now divided by that worst case up front, so N stories × 2 attempts ×
+   * (dev + reviewer) fits inside the stage budget however the attempts fall.
+   */
   private developerCap(): number {
-    return this.ctx.agentCap(1 / Math.max(this.plan.storyCount, 1));
+    return this.ctx.agentCap(1 / this.worstCaseShares());
   }
 
   private reviewerCap(): number {
-    return this.ctx.agentCap(REVIEWER_SHARE / Math.max(this.plan.storyCount, 1));
+    return this.ctx.agentCap(REVIEWER_SHARE / this.worstCaseShares());
+  }
+
+  /**
+   * How many developer-shares the phase can be asked for at worst:
+   * `stories × attempts × (1 + REVIEWER_SHARE)`. Dividing by this makes the sum
+   * of every cap the executor can hand out ≤ the stage ceiling.
+   */
+  private worstCaseShares(): number {
+    return Math.max(this.plan.storyCount, 1) * MAX_ATTEMPTS * (1 + REVIEWER_SHARE);
   }
 
   private spent(): number {

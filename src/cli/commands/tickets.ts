@@ -35,6 +35,9 @@ import {
 
 const VALUE_FLAGS = ["run", "root", "provider"];
 
+/** Kept as a no-op alias so an existing `--dry-run` in a script still means preview. */
+const LEGACY_DRY_RUN = "dry-run";
+
 /** How the config file is named on screen, matching `disabledMessage` below. */
 const PROCESS_YML = ".tldrx/process.yml";
 
@@ -42,7 +45,7 @@ export const ticketsCommand: Command = {
   name: "tickets",
   summary: "Mirror the plan's epics and stories to a ticket tool (files stay the source of truth)",
   usage:
-    "tldrx tickets sync [--run <id>] [--dry-run] [--provider github|jira] [--root <path>]\n"
+    "tldrx tickets sync [--run <id>] [--apply] [--provider github|jira] [--root <path>]\n"
     + "       tldrx tickets status [--run <id>] [--root <path>]",
   subcommands: ["sync", "status"],
   implemented: true,
@@ -81,12 +84,18 @@ async function ticketsSync(argv: readonly string[]): Promise<number> {
     // Resolved before anything is read from 03-plan/ and before any write.
     const provider = buildProvider(kind, config);
 
+    // `--apply` is required to write. `sync` is the only command in the tool that
+    // reaches a third party — it creates and edits issues in someone's tracker —
+    // and it defaulted to doing that for real (audit §C: "`--dry-run` NO es
+    // default"). A destructive default on the one networked verb is backwards:
+    // preview is now the default and the write is the flag.
+    const apply = boolFlag(args, "apply") && !boolFlag(args, LEGACY_DRY_RUN);
     const outcome = await syncTickets({
       planDir: join(store.runDir, PLAN_PHASE),
       runId: store.runId,
       provider,
       sync: config.sync,
-      dryRun: boolFlag(args, "dry-run"),
+      dryRun: !apply,
       now: nowRfc3339,
     });
 
@@ -171,12 +180,28 @@ function describeTicketTool(config: TicketToolConfig): readonly string[] {
 
 // --- wiring -----------------------------------------------------------------
 
-/** `--provider` wins over `process.yml`; `null` means the adapter is off. */
+/**
+ * `--provider` chooses BETWEEN configured providers; it does not turn the adapter
+ * on. `null` means the adapter is off.
+ *
+ * Until 2026-08-29 the flag was read first and returned unconditionally, so
+ * `--provider github` in a workspace whose `process.yml` says `ticket_tool.kind:
+ * none` created live GitHub issues — the one setting that means "this workspace
+ * does not mirror tickets" was the one a flag could walk past (audit §C, and spec
+ * §3's table already said `none` exits 0 "adapter disabled").
+ */
 function resolveKind(args: ParsedArgs, config: TicketToolConfig): "github" | "jira" | null {
   const flag = stringFlag(args, "provider");
   if (flag !== undefined) {
     if (!isTicketProviderKind(flag)) {
       throw new UsageError(`--provider expects github or jira, got '${flag}'`);
+    }
+    if (config.kind === "none") {
+      throw new UsageError(
+        `--provider ${flag} cannot enable an adapter this workspace turned off: `
+        + `${PROCESS_YML} has ticket_tool.kind: none. Set it to ${flag} there — the flag picks between `
+        + "configured providers, it is not a switch.",
+      );
     }
     return flag;
   }
@@ -258,8 +283,8 @@ function renderSync(
   outcome: SyncOutcome,
 ): string {
   const head = outcome.dryRun
-    ? `tickets sync --dry-run · run ${runId} · ${provider.kind} (${config.project ?? "?"}) · nothing was called`
-    : `tickets sync · run ${runId} · ${provider.kind} (${config.project ?? "?"}) · sync ${config.sync}`;
+    ? `tickets sync (preview) · run ${runId} · ${provider.kind} (${config.project ?? "?"}) · nothing was called`
+    : `tickets sync --apply · run ${runId} · ${provider.kind} (${config.project ?? "?"}) · sync ${config.sync}`;
   const lines = [head, ""];
 
   if (outcome.results.length === 0) {
@@ -277,7 +302,8 @@ function renderSync(
     "",
     `${outcome.created} to create · ${outcome.updated} to update`,
     outcome.dryRun
-      ? "Dry run: no issue was created or edited, and no file was changed."
+      ? "Preview: no issue was created or edited, and no file was changed. "
+        + "Re-run with `--apply` to write to the tracker."
       : "Files are the source of truth: only `external` and `external_status` were written. "
         + "No story status changed, and the run did not advance.",
   );

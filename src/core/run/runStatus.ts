@@ -10,6 +10,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { openBlocks, parseQuestions } from "../text/questions.ts";
 import { remaining } from "../budget/wouldExceed.ts";
+import { countUnmetered, unmeteredNote } from "../budget/budgetView.ts";
 import type { RunBudget } from "../budget/RunBudget.ts";
 import { renderAttempts, stageAttempts, type StageAttempts } from "./attempts.ts";
 import { buildProgress, renderBuildProgress, renderStoryCosts, BUILD_PHASE, type BuildProgress } from "./buildProgress.ts";
@@ -64,6 +65,13 @@ export interface RunStatusView {
   readonly cursor: { readonly phase: string; readonly stage: string; readonly task: string | null };
   readonly phases: readonly PhaseProgress[];
   readonly budget: { readonly spent_usd: number; readonly ceiling_usd: number; readonly remaining_usd: number };
+  /**
+   * Turns whose cost was never declared (in-session `--commit` with no
+   * `--cost-usd`). With any of these, `spent_usd` is a LOWER BOUND. Reported
+   * rather than folded in, because $0.00 and "nobody measured it" are different
+   * facts and only one of them is a measurement.
+   */
+  readonly unmetered_tasks: number;
   /** Per-attempt cost for the cursor stage, from `agent.result` events. */
   readonly attempts: StageAttempts;
   /**
@@ -104,6 +112,9 @@ export function buildStatus(run: RunFile, budget: RunBudget, runDir: string): Ru
     waiting: whatIsWaiting(run, runDir),
     gates_policy: resolvedPolicy(run),
     gates: gateRows(run),
+    // Appended, never inserted: `--json` consumers read this object by key order
+    // in at least one test, and every key above keeps its position.
+    unmetered_tasks: countUnmetered(run),
   };
 }
 
@@ -251,8 +262,10 @@ export function renderStatus(view: RunStatusView): string {
   lines.push(
     "",
     `budget  $${view.budget.spent_usd.toFixed(2)} spent of $${view.budget.ceiling_usd.toFixed(2)} ceiling ` +
-      `($${view.budget.remaining_usd.toFixed(2)} left)`,
+      `($${view.budget.remaining_usd.toFixed(2)} left)` +
+      (view.unmetered_tasks === 0 ? "" : ` · ${String(view.unmetered_tasks)} unmetered (in-session)`),
   );
+  if (view.unmetered_tasks > 0) lines.push(`        ${unmeteredNote(view.unmetered_tasks)}`);
   // The Build phase, story by story. Only when there is one: on a run parked in
   // What, a "W1 [S1 todo]" line would be describing a plan nobody has written.
   if (view.build !== null && view.build.total > 0) {

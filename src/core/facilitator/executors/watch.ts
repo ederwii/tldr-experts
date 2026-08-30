@@ -64,6 +64,16 @@ export async function watchExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
     };
   }
 
+  // Before a single prompt is assembled, let alone spawned: if every feature
+  // cannot get the floor inside the stage ceiling, refuse and say by how much.
+  const overrun = floorOverrun(ctx, features.length);
+  if (overrun !== null) {
+    return {
+      ok: false, awaiting: false, tasks: [], costUsd: 0, outputs: [],
+      lines: [overrun], error: null, refused: true,
+    };
+  }
+
   const prompts = await Promise.all(features.map((feature) => featurePrompt(ctx, feature)));
 
   if (ctx.mode === "prepare") return prepare(ctx, features, prompts);
@@ -294,9 +304,40 @@ function taskKey(ctx: ExecutorContext, feature: Feature): string {
   return join(ctx.stageId, feature.id);
 }
 
+/**
+ * The per-feature ceiling — a share of the stage budget, with a floor.
+ *
+ * The floor is real (a spawn under ~$0.25 fails before it works) but it used to be
+ * applied blind: with N features and a small stage ceiling, `N × MIN_AGENT_USD`
+ * could exceed the ceiling the floor was supposed to sit inside, and the phase
+ * quietly overran (audit §A, `watch.ts:298`). `fitsFloor` below is the check that
+ * catches it BEFORE anything spawns; this function keeps the floor for the case
+ * where it does fit.
+ */
 function agentShare(ctx: ExecutorContext, features: number): number {
   const share = features <= 1 ? ctx.maxBudgetUsd : ctx.maxBudgetUsd / features;
   return round2(Math.max(MIN_AGENT_USD, share));
+}
+
+/**
+ * Can N features each get the floor without the stage ceiling being overrun?
+ *
+ * Null when they can. A string when they cannot — the refusal, naming the numbers
+ * and the command that fixes it, so the operator is not left to work out how much
+ * to add.
+ */
+export function floorOverrun(ctx: ExecutorContext, features: number): string | null {
+  const needed = round2(features * MIN_AGENT_USD);
+  if (needed <= ctx.budgetUsd + 0.001) return null;
+  const short = round2(Math.ceil((needed - ctx.budgetUsd) * 100) / 100);
+  return (
+    `${ctx.phaseId}/${ctx.stageId} refuses to start: ${features} feature(s) need at least `
+    + `$${MIN_AGENT_USD.toFixed(2)} each ($${needed.toFixed(2)} in total) and the stage ceiling is `
+    + `$${ctx.budgetUsd.toFixed(2)}. A spawn under the floor fails as \`error_max_budget_usd\` before it `
+    + `does any work, so splitting it further would just buy N failures. `
+    + `Run \`tldrx budget raise ${ctx.phaseId} ${short.toFixed(2)}\` (add \`--take-from <phase>\` to move `
+    + "the money instead of adding it), or ship fewer features in one run."
+  );
 }
 
 function round2(n: number): number {

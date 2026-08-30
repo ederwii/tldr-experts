@@ -23,3 +23,7 @@ dist/
 .env
 .env.local
 .claude/settings.local.json
+
+# `tldrx install --claude` backs settings.json up before merging into it.
+# The framework's own repo needs the same line it writes into a user's workspace.
+.claude/settings.json.bak-tldrx-*

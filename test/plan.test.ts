@@ -88,12 +88,18 @@ describe("front matter (spec §2.13)", () => {
 });
 
 describe("story schema (spec §2.13)", () => {
-  test("the shipped template validates", () => {
+  test("the shipped template validates against a workspace that declares its commands", () => {
     const text = readFileSync(join(TEMPLATES_DIR, "story.md"), "utf8");
-    const report = validateStoryFile(text);
+    const report = validateStoryFile(text, new Set(["npm run test", "npm run lint"]));
     expect(messages(report.validation.issues)).toBe("");
     expect(report.story?.id).toBe("S1");
     expect(report.dod.commands).toEqual(["npm run test", "npm run lint"]);
+  });
+
+  test("the same template is REFUSED where the workspace declares no commands", () => {
+    const text = readFileSync(join(TEMPLATES_DIR, "story.md"), "utf8");
+    const report = validateStoryFile(text);
+    expect(messages(report.validation.issues)).toContain("an empty allowlist is not a permit");
   });
 
   test("a complete story validates", () => {
@@ -159,8 +165,13 @@ describe("the ```dod block", () => {
     expect(validateStoryDod(parseDodBlock("```dod\nnpm run test\n```"), allowed)).toEqual([]);
   });
 
-  test("with no workspace commands to check against, membership is not invented", () => {
-    expect(validateStoryDod(parseDodBlock("```dod\nnpm run test\n```"), new Set())).toEqual([]);
+  test("an EMPTY allowlist refuses every command — it is not a permit", () => {
+    // Was the opposite until 2026-08-29: an empty `commands:` skipped the rule by
+    // analogy with `resolveSrc`'s `cmd` source. The analogy does not hold — a
+    // `cmd` citation describes something that already ran; a dod block is a list
+    // of things about to be run as the user, by a hook installed by default.
+    const issues = validateStoryDod(parseDodBlock("```dod\nrm -rf ~\n```"), new Set());
+    expect(messages(issues)).toContain("an empty allowlist is not a permit");
   });
 
   test("a missing block is an error — the gate would have nothing to re-run", () => {

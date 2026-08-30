@@ -28,9 +28,39 @@ import { EventLog } from "../core/events/EventLog.ts";
 import { parseYaml } from "../core/yaml.ts";
 import { PROJECT_WORK_DIR } from "../core/paths.ts";
 
-const SPAWN_RE = /^(claude -p|tldrx next)\b/;
+/**
+ * Every command that can spend money, not just the two the spec first listed.
+ *
+ * The 2026-08-29 audit measured the gap: `^(claude -p|tldrx next)` covered the
+ * single-stage spawn and nothing else, so `tldrx run auto` (a loop of up to 96
+ * stages), `tldrx expert train` ($2.00 a call) and `tldrx seed triage --propose`
+ * ($1.00) walked straight past a gate whose whole job is refusing work the run
+ * cannot afford. `run auto` is the worst of the three: the one command that can
+ * spend an entire run's budget in one invocation was the one nothing checked.
+ */
+const SPAWN_RE = /^(claude -p|tldrx next|tldrx run auto|tldrx expert train|tldrx seed triage)\b/;
 const RUN_ARG_RE = /--run[= ]([\w.-]+)/;
 
+/** The default ceiling each non-`next` spender uses when it is given no flag. */
+const DEFAULT_TRAIN_USD = 2.0;
+const DEFAULT_TRIAGE_USD = 1.0;
+const MAX_USD_RE = /--max-usd[= ]([0-9]+(?:\.[0-9]+)?)/;
+const MAX_BUDGET_RE = /--max-budget-usd[= ]([0-9]+(?:\.[0-9]+)?)/;
+
+/**
+ * This hook is the one exception to spec §4's "every hook but DoD-gate fails
+ * OPEN", and the exception is deliberate.
+ *
+ * It used to `return` — allow — on every unreadable thing: no run, no budget.yml,
+ * no cursor, an estimate it could not compute (`budget-gate.ts:14,31`). That is
+ * fail-open on the one hook whose entire job is refusing to SPEND, so the failure
+ * mode was "cannot read the budget ⇒ spend anyway". Now, once a command has been
+ * identified as a spender inside a tldrx workspace, an unreadable budget DENIES
+ * and says which file it could not read.
+ *
+ * It still allows when the command is not a spender, or when there is no `.tldrx/`
+ * at all — those are not failures, they are correct negatives.
+ */
 await runHook("budget-gate", async () => {
   const payload = await readPayload();
   if (payload.tool_name !== "Bash") return;
@@ -39,16 +69,41 @@ await runHook("budget-gate", async () => {
 
   const cwd = payload.cwd ?? process.cwd();
   const root = findWorkspaceRoot(cwd);
-  if (root === null) return;
+  if (root === null) return; // not a tldrx workspace; nothing to gate against
 
-  const view = resolveRun(root, cwd, command);
-  if (view === null || view.cursor === null) return;
+  // From here the hook is committed: this command spends, inside a tldrx
+  // workspace. Any throw below is a budget it could not read, and that DENIES.
+  let view: RunView | null;
+  try {
+    view = resolveRun(root, cwd, command);
+  } catch (error) {
+    failClosed(command, error instanceof Error ? error.message : String(error));
+  }
+  if (view === null) {
+    // `expert train` and `seed triage` legitimately run with no run open: they
+    // spend against no phase ceiling and there is nothing here to check them
+    // against. Say so on stderr rather than pretending a check happened.
+    if (/^tldrx (expert train|seed triage)\b/.test(command)) {
+      process.stderr.write(
+        "tldrx hook budget-gate: no run to charge this against — "
+        + `\`${command.slice(0, 60)}\` spends outside any run's budget.yml\n`,
+      );
+      return;
+    }
+    failClosed(command, `no readable run under ${PROJECT_WORK_DIR}/`);
+  }
+  if (view.cursor === null) failClosed(command, `${view.dir}/run.yml has no cursor`);
 
-  const budget = loadRunBudget(view.dir);
-  if (budget === null) return;
+  let budget;
+  try {
+    budget = loadRunBudget(view.dir);
+  } catch (error) {
+    failClosed(command, error instanceof Error ? error.message : String(error));
+  }
+  if (budget === null) failClosed(command, `${view.dir}/budget.yml is missing or unreadable`);
 
   const stage = cursorStage(view);
-  const estimate = stage?.budget_usd ?? stageBudgetFromLibrary(root, view.cursor.stage) ?? 0;
+  const estimate = estimateFor(command, stage?.budget_usd ?? stageBudgetFromLibrary(root, view.cursor.stage));
   if (estimate <= 0) return; // nothing declared to spend; nothing to refuse
 
   const decision = wouldExceed(budget, view.cursor.phase, estimate);
@@ -76,6 +131,42 @@ await runHook("budget-gate", async () => {
     raiseCommand(view.run, view.cursor.phase, shortBy(estimate, decision.remaining)),
   ));
 });
+
+/**
+ * What this invocation could spend, by command.
+ *
+ * `next` is one stage's ceiling — what it always was. The three the gate could not
+ * see before have their own numbers: `run auto` is bounded by `--max-usd` when the
+ * operator gave one and otherwise by the WHOLE run ceiling (it is a loop of up to
+ * 96 stages), and `expert train` / `seed triage` have documented per-call defaults
+ * their own flags override.
+ */
+function estimateFor(command: string, stageBudget: number | null): number {
+  const flagged = Number(MAX_USD_RE.exec(command)?.[1] ?? MAX_BUDGET_RE.exec(command)?.[1] ?? NaN);
+  if (/^tldrx run auto\b/.test(command)) {
+    return Number.isFinite(flagged) ? flagged : (stageBudget ?? 0);
+  }
+  if (/^tldrx expert train\b/.test(command)) {
+    return Number.isFinite(flagged) ? flagged : DEFAULT_TRAIN_USD;
+  }
+  if (/^tldrx seed triage\b/.test(command)) {
+    return Number.isFinite(flagged) ? flagged : DEFAULT_TRIAGE_USD;
+  }
+  return stageBudget ?? 0;
+}
+
+/**
+ * Deny, naming what could not be read. Never called before the command has been
+ * identified as a spender inside a tldrx workspace.
+ */
+function failClosed(command: string, why: string): never {
+  deny(
+    `[tldrx] budget-gate: refusing \`${command.slice(0, 80)}\` — this gate could not read the budget `
+    + `it is supposed to enforce (${why}).\n`
+    + "It fails CLOSED: a spend nothing can check is exactly the one that must not start. Fix the run's "
+    + "budget.yml, or pass `--run <id>` so the gate knows which run to charge.",
+  );
+}
 
 /** `--run <id>`, else the run the cwd sits inside, else the newest non-terminal one. */
 function resolveRun(root: string, cwd: string, command: string): RunView | null {

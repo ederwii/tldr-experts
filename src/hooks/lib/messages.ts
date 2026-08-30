@@ -118,6 +118,23 @@ export function dodGateMissingBlockDeny(storyId: string, relPath: string): strin
   );
 }
 
+/**
+ * A dod command the gate will not run at all.
+ *
+ * Distinct from `dodGateDeny`, which reports a command that ran and failed. This
+ * one never ran: it is not in `workspace.yml`, or it needs a shell the gate does
+ * not open. `[assumption]` on the wording — the spec has no verbatim text for a
+ * refusal that did not exist until 2026-08-29.
+ */
+export function dodGateRefusedCommandDeny(storyId: string, command: string, why: string): string {
+  return (
+    `[tldrx] DoD-gate: story ${storyId} cannot be marked done — refusing to RUN \`${command}\`.\n` +
+    `${why}\n` +
+    "This gate executes its commands for real, as you. It runs only what the workspace declared, " +
+    "argv-split with no shell — a story is data, and data does not get to invent a command."
+  );
+}
+
 /** DoD-gate is the one hook that fails CLOSED (spec §4). `[assumption]` on the wording. */
 export function dodGateInternalErrorDeny(storyId: string, message: string): string {
   return (

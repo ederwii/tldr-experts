@@ -37,9 +37,16 @@ function gate(g: RunGate): string {
 
 function task(t: RunTask, indent: string): string {
   const inner = `${indent}   `;
+  // `cost_usd: null` + `metered: false` is the unmetered in-session turn. Both
+  // keys are written together so a reader never has to infer one from the other,
+  // and `metered:` is omitted entirely for an ordinary metered task so a run.yml
+  // written before this existed round-trips byte-for-byte.
+  const cost = t.cost_usd === null ? "null" : money(t.cost_usd);
+  const metered = t.metered === false ? ", metered: false" : "";
+  const tokens = t.tokens === undefined ? "" : `, tokens: ${String(t.tokens)}`;
   return [
     `${indent} - {id: ${yamlScalar(t.id)}, status: ${yamlScalar(t.status)}, expert: ${yamlScalar(t.expert)}, ` +
-      `model: ${yamlScalar(t.model)}, cost_usd: ${money(t.cost_usd)},`,
+      `model: ${yamlScalar(t.model)}, cost_usd: ${cost}${metered}${tokens},`,
     `${inner}error: ${yamlScalar(t.error)}, session_id: ${yamlScalar(t.session_id)},`,
     `${inner}started_at: ${yamlScalar(t.started_at)}, ended_at: ${yamlScalar(t.ended_at)},`,
     `${inner}outputs: ${inlineList(t.outputs)}}`,

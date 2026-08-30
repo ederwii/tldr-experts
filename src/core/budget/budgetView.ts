@@ -42,6 +42,14 @@ export interface BudgetView {
   readonly blocked: BudgetPhaseView | null;
   /** The exact command that unblocks it, or null when nothing is blocked. */
   readonly fix_command: string | null;
+  /**
+   * Turns whose cost nobody declared (`cost_usd: null`, in-session).
+   *
+   * `spent_usd` is a sum of what WAS measured, so with any of these it is a lower
+   * bound and not a total. Reporting it as a total is how a ledger came to read
+   * "$0.00 spent" after real money had gone (2026-08-29 audit, §A).
+   */
+  readonly unmetered_tasks: number;
 }
 
 export function buildBudgetView(run: RunFile, budget: RunBudget): BudgetView {
@@ -75,7 +83,22 @@ export function buildBudgetView(run: RunFile, budget: RunBudget): BudgetView {
     phases,
     blocked,
     fix_command: blocked === null ? null : raiseCommand(run.run, blocked.id, blocked.short_by_usd),
+    unmetered_tasks: countUnmetered(run),
   };
+}
+
+/** In-session turns nobody costed. See `BudgetView.unmetered_tasks`. */
+export function countUnmetered(run: RunFile): number {
+  return run.phases
+    .flatMap((phase) => phase.stages)
+    .flatMap((stage) => stage.tasks)
+    .filter((task) => task.cost_usd === null).length;
+}
+
+/** The one sentence every report uses for an unmetered total. */
+export function unmeteredNote(count: number): string {
+  return `${count} turn(s) are unmetered (in-session): their cost was never declared, so `
+    + "`spent` is a LOWER BOUND, not a total. `tldrx next --commit --cost-usd <n>` records one.";
 }
 
 /** The command that makes the refused stage affordable. Printed, never run. */
@@ -104,8 +127,11 @@ export function renderBudget(view: BudgetView): string {
   const stageWidth = Math.max(...view.phases.map((p) => (p.next_stage ?? "—").length), 10);
   const lines = [
     `${view.run} · ${view.title}`,
-    `ceiling ${usd(view.ceiling_usd)} · spent ${usd(view.spent_usd)} · left ${usd(view.remaining_usd)} · ` +
+    `ceiling ${usd(view.ceiling_usd)} · spent ${usd(view.spent_usd)}` +
+      (view.unmetered_tasks === 0 ? "" : ` (+${String(view.unmetered_tasks)} unmetered)`) +
+      ` · left ${usd(view.remaining_usd)} · ` +
       `per-agent max ${usd(view.per_agent_max_usd)} · on_exceed ${view.on_exceed}`,
+    ...(view.unmetered_tasks === 0 ? [] : [unmeteredNote(view.unmetered_tasks)]),
     "",
     `  ${"phase".padEnd(width)}  ${pad("ceiling")}  ${pad("spent")}  ${pad("left")}  ` +
       `${"next stage".padEnd(stageWidth)}  ${pad("est.")}  next`,
