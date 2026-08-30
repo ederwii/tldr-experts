@@ -546,6 +546,74 @@ places nothing read as one list.
   the frame `render()` describes, which is the only way an off-by-one in a
   cursor-up/clear-line loop shows up in a test.
 
+### The token economy — what a prompt costs, and who decided
+
+Measured 2026-08-29 on `~/aparece-v2`, run `260830-decisions-gate`, stage `01-what/what`:
+one prepared prompt was **159,575 bytes**. 45% was declared inputs, 52% was expert
+bodies and trained knowledge, and eight of the nine experts had loaded because they
+shared a repo with the run — not one of them had read a file the run cited. The
+64 KB seed budget had dropped `ADR-D013-DELIVERY-ZONE-GEOMETRY.md` (5,863 B) whole,
+the sixth of the six decisions the run existed to settle, while 70,923 B of
+unrequested knowledge went in untouched. The same prompt is now **85,676 bytes**,
+loads two experts, and contains ADR-D013 in full.
+
+- **Cache-friendly prompt order.** The pieces are now emitted most-stable to
+  least-stable: `stage.md`, expert blocks, `## Inputs`, `## Previous attempt`. Both
+  facilitator-owned sections are cut out of `stage.md` wherever its author put them
+  and re-emitted at the tail, so a spec-shaped stage file yields exactly one
+  `## Inputs`, at the end. **Measured, two real `claude` 2.1.251 calls, same
+  40,715-byte prompt, separate processes and separate sessions:** call 1 wrote
+  37,059 cache tokens, read 0, cost **$0.074982**; call 2 wrote 0, read 37,059, cost
+  **$0.004550** — 16.5x less. `claude -p` caches across processes, not only within a
+  session, which is what makes the order worth changing for `run auto` and retries.
+  `cache_creation_input_tokens` and `cache_read_input_tokens` are now parsed,
+  published on the `cost` event and written to `agent.result`, so this stays a
+  measurement.
+- **One shared budget, declared inputs first.** `inputs_max_bytes` (stage.yml,
+  default 96 KB) is spent on every declared input in declaration order; the experts
+  then share `knowledge_max_bytes` (default 48 KB) **in total**, split by rank,
+  never one budget each. The retired `expert_knowledge_bytes` is still read, as the
+  same total — a per-expert cap scales with a number nobody set, which is how 64 KB
+  became 83,523 measured bytes and, at twelve experts, would pass the context window
+  of the model the Watch stage pins. An input that still does not fit is named, with
+  its size and the key that fixes it, on stdout AND on the page.
+- **A context ledger, and `prompt_max_bytes` as a refusal.** `--prepare` and
+  `--dry-run` print bytes per section and `pending.json` carries the same under
+  `context:`. Over `prompt_max_bytes` (default 160 KB, `--prompt-max-bytes` to
+  override) the stage exits **2** before anything spawns, naming the biggest sections
+  and the key or command that shrinks each. The model's context window is only ever a
+  stderr warning at 80%: both it and the bytes-per-token ratio are `[assumption]`,
+  and refusing on two stacked assumptions blocks work the framework could have done.
+- **Experts load by relevance, not by co-residence.** A `repos:` match is only
+  evidence in a workspace that declares two or more repos. Rank is a score — a direct
+  `## Domain` path match is worth 10, a path within 2 hops of a cited one in
+  `graphify-out/<repo>/graph.json` is worth 1, and scores add. Score 0 means body
+  only, no knowledge. The graph walk is undirected, bounded, and degrades to an empty
+  set on a missing or unparseable graph (measured on the 5,091,949-byte aparece
+  graph: 298 neighbour paths in 14 ms).
+- **`max_reads` — the brake `--max-budget-usd` is not.** Completed `Read`/`Glob`/
+  `Grep` calls are counted off the stream that is already arriving (no second model
+  call, no extra tokens) and the process tree is killed at the ceiling: 120 for
+  what/how/plan, 200 build, 60 watch, `--max-reads` to override. Counting completions
+  is what makes the stop land after the current tool rather than inside one. The
+  attempt records `stopped_by: max_reads` — written only when a cap bit, so an
+  ordinary `run.yml` is unchanged — `agent.result` carries `reads`/`max_reads`/
+  `stopped_by`, and the live view shows `reads 37/120`.
+- **Attempt 2 gets the refused draft.** The declared outputs that exist on disk are
+  inlined under `### Previous attempt — edit, do not restart`, capped at 32 KB shared
+  across them, anything past it named. Before this, a stage rejected over one missing
+  section paid full price to rewrite four documents from a blank page.
+- **`tldrx cost [<run>|--all] [--json]`** adds up what was actually charged, per
+  attempt, per stage, per run — every dollar one the CLI reported, nothing multiplied
+  by a price here. Attempts are never merged; unmetered work is counted apart and
+  reported as unknown rather than summed as $0.00.
+- **`tldrx run estimate [<run>]`** is the one command that guesses, and says so: the
+  next stage's prompt is assembled by the same code `next` uses and weighed by the
+  same ledger (measured), and the output half is the median output tokens of past
+  attempts at that stage id in this workspace (with no history, no estimate). Prices
+  and context windows live in one dated `[assumption]` file,
+  `src/core/budget/modelPrices.ts`.
+
 ## 0.2.0 — 2026-08-29
 
 ### The Build phase executes
