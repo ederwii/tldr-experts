@@ -14,9 +14,21 @@
  * ever merged into a default branch — the phase ends at a human gate that lists
  * the epic branches waiting.
  *
- * Sequential in v1 (spec §5 decision (c)). The ORDER is already the parallel-safe
- * one — `waves.yml` guarantees a dependency is in an earlier wave — so making the
- * inner loop a fan-out later changes nothing else here.
+ * **Parallel within a wave (`--parallel N`, default 1).** `waves.yml` guarantees a
+ * dependency is in an EARLIER wave, so the stories of one wave are independent by
+ * construction and may run at once. At `N = 1` the executor takes exactly the
+ * path it always did, story by story — byte-identical, because "the default must
+ * not change" is not a thing to be argued about after the fact. Above 1 the wave
+ * splits in two halves:
+ *
+ *   A. concurrently, up to N at a time: worktree → developer → DoD → commit
+ *   B. serially, in the wave's LISTED order: merge → reviewer → done/blocked
+ *
+ * Half B is serial on purpose, and not only for the merge. A reviewer reads
+ * `git diff <epic>...<story>`, whose merge base MOVES every time another story
+ * merges into that epic — two concurrent reviewers would be judging diffs that
+ * changed under them. Serial B costs the reviewers' wall-clock and buys a review
+ * that means something.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -36,15 +48,19 @@ import {
 } from "../../build/git.ts";
 import {
   loadBuildPlan, PlanLoadError, BUILD_PHASE, LOG_DIR, PLAN_PHASE, WORKTREES,
-  type BuildPlan, type PlannedEpic, type PlannedStory,
+  type BuildPlan, type BuildWave, type PlannedEpic, type PlannedStory,
 } from "../../build/plan.ts";
+import {
+  describeImplicitPlan, dodIsSatisfiedEmpty, implicitPlanContent, ImplicitPlanError, loadImplicitPlan,
+  planIsSkipped, updateImplicitPlan, IMPLICIT_PLAN_REL, IMPLICIT_STORY_NOTE,
+} from "../../build/implicitPlan.ts";
 import { evidenceFor, updateStoryFront } from "../../build/storyFile.ts";
 import { buildDeveloperPrompt, buildReviewerPrompt, REVIEW_SCHEMA } from "../../build/prompts.ts";
 import { parseReview, renderPreviousAttempt, renderReviewLog, type Review } from "../../build/review.ts";
 import { dodGreen, type DodResult, type StoryOutcome } from "../../build/outcome.ts";
 import { renderBuildHandoff, type EpicSummaryRow } from "../../build/handoff.ts";
 import { appendBuildRetro, buildRetroPath, gateRetroLines, storyRetroLines } from "../../build/retroLog.ts";
-import type { PlanStatus } from "../../schemas/planCommon.ts";
+import { MAX_STORIES_PER_WAVE, type PlanStatus } from "../../schemas/planCommon.ts";
 import type { ExecutorContext, ExecutorOutcome, ExecutorTask } from "./index.ts";
 
 export const HANDOFF_REL = `${BUILD_PHASE}/handoff.md`;
@@ -66,17 +82,72 @@ export const MAX_ATTEMPTS = 2;
  */
 export const REVIEWER_SHARE = 0.25;
 
+/**
+ * The default degree of parallelism inside a wave: one story at a time.
+ *
+ * Spec §5 decision (c) shipped v1 sequential, and this stays the default so a
+ * workspace that says nothing keeps the behaviour it has been running.
+ */
+export const DEFAULT_PARALLEL = 1;
+
+/**
+ * Whatever this run may do at once inside a wave, clamped to something sane.
+ *
+ * The ceiling is `MAX_STORIES_PER_WAVE`, since a number above it can never be
+ * reached; the floor is 1, because "0 lanes" is not a slower build, it is a
+ * build that never starts.
+ */
+export function clampParallel(requested: number | undefined): number {
+  if (requested === undefined || !Number.isFinite(requested)) return DEFAULT_PARALLEL;
+  return Math.max(1, Math.min(MAX_STORIES_PER_WAVE, Math.trunc(requested)));
+}
+
+/**
+ * One writer, in order, for everything that touches disk or `run.yml`.
+ *
+ * Concurrency here is between AWAITS, not between threads: two stories' pipelines
+ * interleave only where one of them yields. That is enough to interleave a
+ * sequence of writes — `git worktree add` in the shared repo, a story-file patch,
+ * an `events.jsonl` append — into each other's middles. Every such sequence is
+ * run through this chain, so the executor stays what it has always been: a single
+ * writer holding the run lock.
+ */
+class SerialQueue {
+  private tail: Promise<unknown> = Promise.resolve();
+
+  run<T>(work: () => Promise<T> | T): Promise<T> {
+    const next = this.tail.then(work, work);
+    // A rejection must not poison the queue: the next caller waits for this one
+    // to SETTLE, and gets its own error rather than a stranger's.
+    this.tail = next.then(() => undefined, () => undefined);
+    return next;
+  }
+}
+
+/** What half A of a parallel wave produced for one story. */
+interface StoryHalf {
+  readonly story: StoryContext;
+  readonly cost: number;
+  readonly dod: readonly DodResult[];
+  readonly commit: string | null;
+  /** Non-null when the story is already lost: half B blocks it and stops. */
+  readonly failure: string | null;
+}
+
 export async function buildExecutor(ctx: ExecutorContext): Promise<ExecutorOutcome> {
   const workspace = loadWorkspace(ctx.root);
   let plan: BuildPlan;
+  const opening: string[] = [];
   try {
-    plan = loadBuildPlan(join(ctx.runDir, PLAN_PHASE), workspace.commands);
+    plan = openPlan(ctx, workspace, opening);
   } catch (error) {
-    if (error instanceof PlanLoadError) return failed(ctx, error.message, []);
+    if (error instanceof PlanLoadError || error instanceof ImplicitPlanError) {
+      return failed(ctx, error.message, []);
+    }
     throw error;
   }
 
-  const session = new BuildSession(ctx, workspace, plan);
+  const session = new BuildSession(ctx, workspace, plan, opening);
   // Every exit carries the epic branches this run claimed — including the failure
   // paths. A run that cut `epic/x` and then fell over still cut it, and the next
   // invocation must not refuse its own branch.
@@ -91,6 +162,50 @@ export async function buildExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
       return withClaims(failed(ctx, error.message, session.tasks));
     }
     throw error;
+  }
+}
+
+/**
+ * `03-plan/`, or the plan a scope that skips Plan implies.
+ *
+ * The two are told apart from the WORKFLOW, not from the absence of a file: a
+ * `03-plan/` that has not been written yet and a `03-plan/` that is never going
+ * to be written are the same on disk and opposite in meaning, and only
+ * `skips: [… plan …]` distinguishes them (spec §2.4). A scope that plans and has
+ * not yet done so still gets the plain refusal it always got.
+ *
+ * A real plan always wins: if `03-plan/waves.yml` is there, it is executed, even
+ * on a scope whose `skips:` names `plan`. Somebody wrote it on purpose.
+ */
+function openPlan(ctx: ExecutorContext, workspace: WorkspaceContext, lines: string[]): BuildPlan {
+  const wavesOnDisk = existsSync(join(ctx.runDir, PLAN_PHASE, "waves.yml"));
+  if (!planIsSkipped(ctx.spec.skips) || wavesOnDisk) {
+    return loadBuildPlan(join(ctx.runDir, PLAN_PHASE), workspace.commands);
+  }
+  const parts = {
+    runDir: ctx.runDir,
+    runId: ctx.runId,
+    runTitle: runTitleOf(ctx),
+    scope: ctx.spec.scope,
+    repos: ctx.repos,
+    workspace,
+    // The answers a human gave at this run's gates. They are what the one story
+    // has to APPLY — without them the plan would only restate what What decided.
+    facts: FactsStore.loadOrEmpty(factsPath(ctx.root)).facts,
+    budgetUsd: ctx.budgetUsd,
+  };
+  const plan = loadImplicitPlan(parts);
+  lines.push(describeImplicitPlan(plan, implicitPlanContent(parts)));
+  return plan;
+}
+
+/** `run.yml`'s `title:`, or the run id when the file will not open. */
+function runTitleOf(ctx: ExecutorContext): string {
+  try {
+    const title = RunStore.open(ctx.runDir).run.title.trim();
+    return title === "" ? ctx.runId : title;
+  } catch {
+    return ctx.runId;
   }
 }
 
@@ -116,12 +231,20 @@ class BuildSession {
   private readonly reviews = new Map<string, number>();
   /** Epic branches this run cut or adopted; `runNext` writes them to run.yml. */
   readonly claimedEpics = new Set<string>();
+  /** The single writer every state-changing step goes through (see `SerialQueue`). */
+  private readonly writes = new SerialQueue();
+  /** How many stories of one wave may be in flight at once. */
+  private readonly lanes: number;
 
   constructor(
     private readonly ctx: ExecutorContext,
     private readonly workspace: WorkspaceContext,
     private readonly plan: BuildPlan,
-  ) {}
+    opening: readonly string[] = [],
+  ) {
+    this.lines.push(...opening);
+    this.lanes = clampParallel(ctx.parallel);
+  }
 
   // --- the three entry points ----------------------------------------------
 
@@ -132,13 +255,35 @@ class BuildSession {
     this.recordGateFeedback();
 
     for (const wave of this.plan.waves) {
+      const pending: PlannedStory[] = [];
       for (const planned of wave.stories) {
         const status = this.statusOf(planned);
         if (status === "done" || status === "blocked") {
           this.lines.push(`  · ${planned.story.id} is already \`${status}\` — left alone`);
           continue;
         }
-        await this.driveStory(planned);
+        pending.push(planned);
+      }
+      if (pending.length === 0) continue;
+
+      if (this.lanes === 1) {
+        // The v1 path, untouched. One story, start to finish, then the next.
+        for (const planned of pending) await this.driveStory(planned);
+        continue;
+      }
+      this.lines.push(
+        `  · ${wave.id}: ${String(pending.length)} story(ies), ${String(Math.min(this.lanes, pending.length))} at a time`,
+      );
+      await this.driveWave(wave, pending);
+      // Only the parallel path stops here. Wave N+1 fanning out over code wave N
+      // failed to produce is how one red story becomes N of them; the sequential
+      // path has always carried on and is left exactly as it was.
+      if (this.waveFailed(wave)) {
+        this.lines.push(
+          `  · ${wave.id} ended \`failed\` — the next wave was not started ` +
+          "(its stories may depend on what this one did not land)",
+        );
+        break;
       }
     }
     return await this.finish();
@@ -196,6 +341,7 @@ class BuildSession {
       costUsd: 0,
       outputs: [],
       lines: [
+        ...this.lines,
         `prepared ${planned.story.id} · ${planned.story.title} — ${dir}/prompt.md ` +
           `($${cap.toFixed(2)} ceiling, attempt ${String(story.attempt)} of ${String(MAX_ATTEMPTS)})`,
         `dispatch ONE sub-agent with cwd ${relative(this.ctx.root, story.worktree)}`,
@@ -239,7 +385,7 @@ class BuildSession {
       awaiting: true,
       tasks: this.tasks,
       costUsd: this.spent(),
-      outputs: [...this.logPaths(), ...this.retroOutputs()],
+      outputs: [...this.logPaths(), ...this.planOutputs(), ...this.retroOutputs()],
       lines: [
         ...this.lines,
         `${planned.story.id} → \`${outcome?.status ?? "?"}\``,
@@ -254,7 +400,67 @@ class BuildSession {
   /** One story, with its at-most-one requeue after a `changes` verdict. */
   private async driveStory(planned: PlannedStory): Promise<void> {
     for (let i = 0; i < MAX_ATTEMPTS; i++) {
-      const story = await this.openStory(planned);
+      await this.settleHalf(await this.buildHalf(planned));
+      if (this.outcomes.get(planned.story.id)?.status !== "review") return;
+      this.lines.push(`  · ${planned.story.id}: reviewer asked for changes — requeued once`);
+    }
+  }
+
+  /**
+   * One wave, N stories at a time (`--parallel N`, N > 1).
+   *
+   * Half A fans out; half B walks the wave's LISTED order, whatever order the
+   * fan-out finished in. The requeue rule is unchanged and still at most one
+   * extra attempt per story — it is applied to the whole wave rather than to one
+   * story, so a second round is another fan-out.
+   */
+  private async driveWave(wave: BuildWave, pending: readonly PlannedStory[]): Promise<void> {
+    let queue = [...pending];
+    for (let round = 0; round < MAX_ATTEMPTS && queue.length > 0; round++) {
+      const halves = await this.fanOut(queue);
+      // The merge order is the file's, not the finish order. Two runs of the same
+      // wave must produce the same epic branch, whatever the machine was doing.
+      for (const planned of wave.stories) {
+        const half = halves.get(planned.story.id);
+        if (half === undefined) continue;
+        await this.settleHalf(half);
+      }
+      const requeued = wave.stories.filter((p) =>
+        halves.has(p.story.id) && this.outcomes.get(p.story.id)?.status === "review");
+      for (const planned of requeued) {
+        this.lines.push(`  · ${planned.story.id}: reviewer asked for changes — requeued once`);
+      }
+      queue = requeued;
+    }
+  }
+
+  /**
+   * Half A over a queue of stories, at most `lanes` in flight.
+   *
+   * A story that fails does NOT cancel its siblings: the whole point of a wave is
+   * that its stories are independent, and killing four running sub-agents because
+   * a fifth went red would throw away turns that have already been paid for.
+   */
+  private async fanOut(queue: readonly PlannedStory[]): Promise<Map<string, StoryHalf>> {
+    const halves = new Map<string, StoryHalf>();
+    let cursor = 0;
+    const lane = async (): Promise<void> => {
+      for (;;) {
+        const planned = queue[cursor++];
+        if (planned === undefined) return;
+        halves.set(planned.story.id, await this.buildHalf(planned));
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(this.lanes, queue.length) }, lane));
+    return halves;
+  }
+
+  /** Half A for one story: worktree → developer → DoD → commit. */
+  private async buildHalf(planned: PlannedStory): Promise<StoryHalf> {
+    // (a)(b)(c) touch the SHARED repo — `git branch`, `git worktree add` — so they
+    // go through the one writer even though the sub-agent below does not.
+    const story = await this.writes.run(() => this.openStory(planned));
+    await this.writes.run(() => {
       this.ctx.emit("task.started", {
         phase: this.ctx.phaseId,
         story: planned.story.id,
@@ -264,47 +470,55 @@ class BuildSession {
         attempt: story.attempt,
       });
       this.setStoryStatus(planned, "in_progress");
+    });
 
-      const spent = await this.spawnDeveloper(story);
-      if (spent === null) {
-        await this.block(story, "the developer sub-agent failed", 0);
-        return;
-      }
-      await this.pipelineFromDod(story, spent);
-      if (this.outcomes.get(planned.story.id)?.status !== "review") return;
-      this.lines.push(`  · ${planned.story.id}: reviewer asked for changes — requeued once`);
+    const spent = await this.spawnDeveloper(story);
+    if (spent === null) {
+      return { story, cost: 0, dod: [], commit: null, failure: "the developer sub-agent failed" };
     }
-  }
 
-  /** DoD → commit → merge → review → done/blocked. Shared by both modes. */
-  private async pipelineFromDod(story: StoryContext, developerCost: number): Promise<void> {
     // (e) the Definition of Done, re-run in the story's own worktree.
+    //
+    // An EMPTY dod is the one case the two kinds of plan answer differently: a
+    // planned story that declares no command is a Plan bug and blocks, and an
+    // implicit one is the framework saying this scope has nothing to run
+    // (`dodIsSatisfiedEmpty`). Everything else — one red command — blocks either way.
     const dod = await this.runDod(story);
-    if (!dodGreen({ dod })) {
+    const green = dod.length === 0 ? dodIsSatisfiedEmpty(this.plan) : dodGreen({ dod });
+    if (!green) {
       const failing = dod.find((r) => r.exitCode !== 0 || r.timedOut);
-      await this.block(
+      return {
         story,
-        failing === undefined
+        cost: spent,
+        dod,
+        commit: null,
+        failure: failing === undefined
           ? "the story declares no dod commands, so nothing could prove it"
           : `\`${failing.command}\` exited ${String(failing.exitCode)} in repo ${story.planned.story.repo}` +
             `${failing.timedOut ? " (timed out)" : ""} — ${failing.tail}`,
-        developerCost,
-        dod,
-      );
-      return;
+      };
     }
 
     // (e) commit whatever the agent left behind, if it did not commit itself.
-    const commit = await this.commitIfDirty(story);
+    const commit = await this.writes.run(() => this.commitIfDirty(story));
     if (commit === null) {
-      await this.block(story, "the working tree could not be committed", developerCost, dod);
+      return { story, cost: spent, dod, commit: null, failure: "the working tree could not be committed" };
+    }
+    return { story, cost: spent, dod, commit, failure: null };
+  }
+
+  /** Half B for one story: merge → review → done/blocked. Always serial. */
+  private async settleHalf(half: StoryHalf): Promise<void> {
+    const { story, dod, commit } = half;
+    if (half.failure !== null) {
+      await this.block(story, half.failure, half.cost, dod);
       return;
     }
 
     // (f) merge into the epic. A conflict blocks the story; the wave carries on.
     const merge = await this.mergeIntoEpic(story);
     if (!merge.ok) {
-      await this.block(story, `merge into \`${story.epicBranch}\` failed: ${merge.detail}`, developerCost, dod, {
+      await this.block(story, `merge into \`${story.epicBranch}\` failed: ${merge.detail}`, half.cost, dod, {
         commit,
         conflicts: merge.conflicts,
       });
@@ -314,7 +528,7 @@ class BuildSession {
 
     // (g) the reviewer.
     const review = await this.spawnReviewer(story, dod);
-    const cost = round2(developerCost + review.cost);
+    const cost = round2(half.cost + review.cost);
     const requeue = review.review.verdict === "changes" && story.attempt < MAX_ATTEMPTS;
     if (review.review.verdict === "changes") {
       await this.settle(story, requeue ? "review" : "blocked", {
@@ -330,6 +544,36 @@ class BuildSession {
     await this.settle(story, "done", {
       dod, commit, merged: true, verdict: "approve", review: review.review, cost, reason: null,
     });
+  }
+
+  /** True when any story of this wave settled at `blocked`. */
+  private waveFailed(wave: BuildWave): boolean {
+    return wave.stories.some((planned) => this.statusOf(planned) === "blocked");
+  }
+
+  /** DoD → commit → merge → review → done/blocked, for the `--commit` cycle. */
+  private async pipelineFromDod(story: StoryContext, developerCost: number): Promise<void> {
+    const dod = await this.runDod(story);
+    const green = dod.length === 0 ? dodIsSatisfiedEmpty(this.plan) : dodGreen({ dod });
+    if (!green) {
+      const failing = dod.find((r) => r.exitCode !== 0 || r.timedOut);
+      await this.block(
+        story,
+        failing === undefined
+          ? "the story declares no dod commands, so nothing could prove it"
+          : `\`${failing.command}\` exited ${String(failing.exitCode)} in repo ${story.planned.story.repo}` +
+            `${failing.timedOut ? " (timed out)" : ""} — ${failing.tail}`,
+        developerCost,
+        dod,
+      );
+      return;
+    }
+    const commit = await this.commitIfDirty(story);
+    if (commit === null) {
+      await this.block(story, "the working tree could not be committed", developerCost, dod);
+      return;
+    }
+    await this.settleHalf({ story, cost: developerCost, dod, commit, failure: null });
   }
 
   // --- steps ----------------------------------------------------------------
@@ -395,6 +639,7 @@ class BuildSession {
       yolo: this.ctx.yolo,
       cwd: story.worktree,
       timeoutMs: this.ctx.spec.planned.timeout_s * 1000,
+      lane: this.lane(story),
     });
     if (agent.raw !== "") writeRaw(this.ctx.runDir, this.bundleKey(story.planned.story.id), agent.raw);
 
@@ -512,6 +757,7 @@ class BuildSession {
       yolo: false,
       cwd: story.worktree,
       timeoutMs: this.ctx.spec.planned.timeout_s * 1000,
+      lane: this.lane(story),
     });
 
     // A reviewer that did not finish has not approved anything.
@@ -614,7 +860,9 @@ class BuildSession {
         ? [...outcome.conflicts.map((path) => `merge conflict: ${path}`), reviewRel]
         : undefined;
     this.setStoryStatus(story.planned, status, evidence);
-    this.updateEpicStatus(story.epic);
+    // An implicit epic IS the implicit story — one file, one `status:` — so
+    // writing the epic's status would immediately overwrite the story's.
+    if (!this.plan.implicit) this.updateEpicStatus(story.epic);
 
     this.ctx.emit("task.done", {
       phase: this.ctx.phaseId,
@@ -665,6 +913,11 @@ class BuildSession {
     appendBuildRetro(this.ctx.runDir, gateRetroLines(this.ctx.runDir, this.ctx.runId));
   }
 
+  /** The synthesised plan is an output of the phase that synthesised it. */
+  private planOutputs(): readonly string[] {
+    return this.plan.implicit ? [IMPLICIT_PLAN_REL] : [];
+  }
+
   /** `retro.md` is an output only when something was actually appended to it. */
   private retroOutputs(): readonly string[] {
     return existsSync(buildRetroPath(this.ctx.runDir)) ? [RETRO_REL] : [];
@@ -682,7 +935,7 @@ class BuildSession {
       awaiting: false,
       tasks: this.tasks,
       costUsd: this.spent(),
-      outputs: [...this.logPaths(), HANDOFF_REL, ...this.retroOutputs()],
+      outputs: [...this.logPaths(), HANDOFF_REL, ...this.planOutputs(), ...this.retroOutputs()],
       // Build always stops at a human: nothing here merges an epic to a default
       // branch, so somebody has to.
       gate: "approve",
@@ -708,6 +961,7 @@ class BuildSession {
       at: this.ctx.at,
       outcomes,
       epics: this.epicRows(),
+      storiesRel: this.plan.implicit ? IMPLICIT_PLAN_REL : null,
     }), "utf8");
   }
 
@@ -903,7 +1157,13 @@ class BuildSession {
   }
 
   private setStoryStatus(planned: PlannedStory, status: PlanStatus, evidence?: readonly string[]): void {
-    writeFileSync(planned.path, updateStoryFront(readFileSync(planned.path, "utf8"), { status, evidence }), "utf8");
+    const text = readFileSync(planned.path, "utf8");
+    // An implicit plan has no `---` front matter: the whole file is the story's
+    // YAML, and `status:`/`evidence:` sit at its top level.
+    const patched = this.plan.implicit
+      ? updateImplicitPlan(text, { status, evidence })
+      : updateStoryFront(text, { status, evidence });
+    writeFileSync(planned.path, patched, "utf8");
   }
 
   /**
@@ -957,8 +1217,20 @@ class BuildSession {
       facts: renderFacts(facts.facts, [repo]),
       experts: bundles.experts,
       budgetUsd: this.developerCap(),
+      planNote: this.plan.implicit ? IMPLICIT_STORY_NOTE : undefined,
       previousAttempt: story.previousAttempt,
     });
+  }
+
+  /**
+   * Which activity line this sub-agent's events belong on.
+   *
+   * Only when several are actually in flight. With one lane there is nothing to
+   * disambiguate, and prefixing every summary with `S1 ` would be noise plus a
+   * changed screen for every run that never asked for parallelism.
+   */
+  private lane(story: StoryContext): string | undefined {
+    return this.lanes > 1 ? story.planned.story.id : undefined;
   }
 
   private model(): string | null {

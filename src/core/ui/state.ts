@@ -18,7 +18,13 @@ export interface UiSnapshot {
   readonly title: string;
   /** Oldest first. At most `RING_CAPACITY`. */
   readonly lines: readonly string[];
-  /** The most recent line, for the compact one-liner. */
+  /**
+   * The most recent line, for the compact one-liner.
+   *
+   * With several lanes live (a Build wave at `--parallel N`) it is one entry per
+   * lane, joined with ` · `: `S1 reading src/a.ts · S2 $ dotnet test`. With one
+   * lane, or none, it is exactly what it always was — the last summary line.
+   */
   readonly activity: string;
   /** True while at least one tool is open — the student's arm moves. */
   readonly busy: boolean;
@@ -48,6 +54,8 @@ export class UiState {
   private title: string;
   private readonly ring: string[] = [];
   private activity = "waiting for the agent";
+  /** lane -> its own latest activity line, in first-seen order. */
+  private readonly lanes = new Map<string, string>();
   private openTools = 0;
   private speech: string | null = null;
   private speechAt = 0;
@@ -71,6 +79,9 @@ export class UiState {
 
   setTitle(title: string): void {
     this.title = title;
+    // A new stage's lanes are not the last stage's. Clearing here is the same
+    // decision `openTools` and `reads` already make one line down.
+    this.lanes.clear();
     // A new stage starts its own turn: the previous stage's tools are not still
     // open, whatever the last stream did or did not say before it ended.
     this.openTools = 0;
@@ -92,8 +103,13 @@ export class UiState {
     this.width = Math.max(24, width);
   }
 
-  /** Apply one event. Returns the summary lines it produced (usually 0 or 1). */
-  apply(event: AgentEvent, now: number): readonly string[] {
+  /**
+   * Apply one event. Returns the summary lines it produced (usually 0 or 1).
+   *
+   * `lane` names the concurrent unit it came from — a Build story id under
+   * `--parallel N`. Omitted, everything behaves as it did before lanes existed.
+   */
+  apply(event: AgentEvent, now: number, lane?: string): readonly string[] {
     switch (event.kind) {
       case "tool": this.openTools += 1; break;
       case "tool-done": this.openTools = Math.max(0, this.openTools - 1); break;
@@ -109,24 +125,34 @@ export class UiState {
       default: break;
     }
 
+    // A lane that finished stops taking a column: with three stories and two
+    // lanes, the compact line must show what is RUNNING, not everything that ever
+    // ran in this wave. BEFORE the early return below — `summarize` deliberately
+    // produces no line for `done`, so a cleanup after it would never run.
+    if (lane !== undefined && (event.kind === "done" || event.kind === "error")) this.lanes.delete(lane);
+
     const line = summarize(event, {
       root: this.root,
       elapsedMs: Math.max(0, now - this.startedAt),
       width: this.width,
     });
     if (line === null) return [];
-    this.ring.push(line);
+    const shown = lane === undefined ? line : `${lane} ${line.trimStart()}`;
+    this.ring.push(shown);
     while (this.ring.length > RING_CAPACITY) this.ring.shift();
     // An indented "→ ok" is the tail of the line above it, not a new activity.
-    if (!line.startsWith("  ")) this.activity = line;
-    return [line];
+    if (!line.startsWith("  ")) {
+      if (lane === undefined) this.activity = line;
+      else this.lanes.set(lane, `${lane} ${line}`);
+    }
+    return [shown];
   }
 
   snapshot(now: number): UiSnapshot {
     return {
       title: this.title,
       lines: [...this.ring],
-      activity: this.activity,
+      activity: this.lanes.size === 0 ? this.activity : [...this.lanes.values()].join(" · "),
       busy: this.openTools > 0,
       speech: this.speech !== null && now - this.speechAt < SPEECH_MS ? this.speech : null,
       spentUsd: this.spentUsd,

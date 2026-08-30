@@ -1,4 +1,5 @@
 /** Renders the `tldrx doctor` table. Pure string building — no I/O, no exits. */
+import { FRAMEWORK_ROOT } from "../paths.ts";
 import type { ToolCheckResult } from "./ToolChecker.ts";
 import type { McpProbeResult } from "./McpProbe.ts";
 
@@ -37,7 +38,19 @@ export class DoctorReport {
       r.status === "ok" ? "" : r.installHint,
     ]);
 
-    const lines: string[] = ["tldrx doctor — local environment", "", this.table(rows), ""];
+    // Where the framework's OWN files are, said once, in the one command whose
+    // job is "what does this machine actually have". Measured 2026-08-30: a real
+    // session spent 1m22s on `find / -name build -type d -path "*stages*"`
+    // looking for `stages/build/`, because nothing printed the answer.
+    const lines: string[] = [
+      "tldrx doctor — local environment",
+      "",
+      `framework  ${FRAMEWORK_ROOT}  (stages/, workflows/, templates/ ship here; `
+        + "a project's overrides live in .tldrx/stages/ and .tldrx/workflows/)",
+      "",
+      this.table(rows),
+      "",
+    ];
 
     if (this.blockers.length === 0) {
       lines.push("All required tools present. ✓");

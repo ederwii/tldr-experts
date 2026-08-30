@@ -64,6 +64,20 @@ export interface WorkspaceContext {
    * run?", and hands exactly that list to `--allowedTools`.
    */
   readonly repoCommands: ReadonlyMap<string, readonly string[]>;
+  /**
+   * repo name -> that repo's `commands:` map, KEYS INTACT: `{build: "dotnet
+   * build", lint: "dotnet format --verify-no-changes", …}`.
+   *
+   * `repoCommands` above drops the keys, which is right for an allowlist — "may
+   * this string be run?" does not care what it is called. It is wrong for anyone
+   * asking "which of these is the lint command?": the answer is the key the human
+   * wrote in `workspace.yml`, and reading it out of the command TEXT is a guess.
+   * Measured 2026-08-29 on a real .NET workspace: `lint: dotnet format
+   * --verify-no-changes` has no "lint" in it, so a text match found nothing and a
+   * docs run was given an empty Definition of Done it should have had a command
+   * for (`build/implicitPlan.ts`).
+   */
+  readonly commandRoles: ReadonlyMap<string, ReadonlyMap<string, string>>;
   /** repo name -> `default_branch` — the base an epic branch is cut from (spec §2.1). */
   readonly defaultBranches: ReadonlyMap<string, string>;
   /**
@@ -90,10 +104,11 @@ export function loadWorkspace(root: string): WorkspaceContext {
   const repos = new Map<string, string>();
   const commands = new Set<string>();
   const repoCommands = new Map<string, readonly string[]>();
+  const commandRoles = new Map<string, ReadonlyMap<string, string>>();
   const defaultBranches = new Map<string, string>();
   let seedTriageThresholdTokens: number | null = null;
   const empty = (): WorkspaceContext => ({
-    root, repos, commands, repoCommands, defaultBranches, seedTriageThresholdTokens,
+    root, repos, commands, repoCommands, commandRoles, defaultBranches, seedTriageThresholdTokens,
   });
   const path = join(root, PROJECT_FRAMEWORK_DIR, "workspace.yml");
   if (!existsSync(path)) return empty();
@@ -122,15 +137,18 @@ export function loadWorkspace(root: string): WorkspaceContext {
         : FALLBACK_DEFAULT_BRANCH,
     );
     const own: string[] = [];
+    const roles = new Map<string, string>();
     const cmds = entry.commands;
     if (cmds !== null && typeof cmds === "object") {
-      for (const value of Object.values(cmds as Record<string, unknown>)) {
+      for (const [role, value] of Object.entries(cmds as Record<string, unknown>)) {
         if (typeof value !== "string" || value.trim() === "") continue;
         commands.add(value);
+        roles.set(role, value);
         if (!own.includes(value)) own.push(value);
       }
     }
     repoCommands.set(entry.name, own);
+    commandRoles.set(entry.name, roles);
   }
   return empty();
 }

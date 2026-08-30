@@ -66,6 +66,63 @@ of every stage's own, checked **between** stages, so it can overshoot by at most
 share. `--until <stage>` stops **before** running that stage. Headless only: inside a Claude
 Code session `/tldrx` stays one stage per call.
 
+## A scope that skips Plan
+
+`docs`, `hotfix`, `performance`, `prototype` and `security-patch` do not run the Plan phase
+— they say so, in their workflow's `skips:` — and they still reach Build. When they do,
+Build writes the one story that decision implies into `04-build/implicit-plan.yml` and runs
+it: title from the run, goal from your What handoff's **Decisions** bullets, acceptance from
+`01-what/success-metrics.md`, touched files from the paths that handoff actually cites, and
+a Definition of Done built only from commands your `workspace.yml` declares (`docs` uses
+your `lint`; `spike` and `prototype` use nothing; the rest use `build` and `test`).
+
+```
+implicit plan: Plan skipped by scope 'docs' — one story S1 (6 acceptance, 6 touched path(s), dod: dotnet format --verify-no-changes)
+```
+
+If you have answered questions on this run, those answers are the work: each fact
+becomes an `Apply <the answer> to the touched files` goal, and the acceptance gains
+a check that every document one of your answers settles no longer reads
+`Status: proposed`. Bullets whose subject is the What stage's own
+work — anything naming `questions.md`, an `01-what/` path or a question id — are
+dropped, and the story's `notes:` says which ones and why, so you can put one back if
+the filter got it wrong. Where an answer cannot be matched to a file by its ADR id, the
+story says that too instead of guessing.
+
+`tldrx run status` says `plan: implicit (scope skips Plan)`, so you can always tell a
+synthesised plan from one you read and approved. Nothing else about the phase changes: the
+story gets its own worktree and branch, the DoD is re-run for real, the reviewer is
+read-only, and the epic branch waits for you. If you would rather plan it yourself, write
+`03-plan/` — a real plan always wins over the implicit one.
+
+## Building a wave's stories at once
+
+```bash
+tldrx next --parallel 3          # or: tldrx run auto --parallel 3
+```
+
+A wave's stories are independent — `waves.yml` puts every dependency in an earlier
+wave — so they can run at the same time. `--parallel N` runs up to N of them
+concurrently, each in its own worktree on its own branch, and the live view gives
+each one its own column:
+
+```
+⠹ 0m42s S1 reading src/checkout/Cart.cs · S2 $ dotnet test    · $1.80/$9.00
+```
+
+What does **not** change: merges into the epic happen in the order `waves.yml`
+lists, after every story of the wave has finished, so the branch reads the same
+whatever order the machine got through them; a conflict still blocks one story and
+leaves the epic as it was; each sub-agent keeps its own budget share, so three at
+once costs what three in a row cost, sooner. A story that goes red does not cancel
+its siblings, but the wave ends `failed` and the next wave does not start — its
+stories may need what this one did not land. Ctrl-C kills every running sub-agent,
+not just the first.
+
+The default is 1, and at 1 nothing about the build is different from before. Set it
+per scope instead of per command with `build: {parallel: 3}` at the top of your
+`.tldrx/workflows/<scope>.yml`.
+
 ## Who closes a gate
 
 Every stage ends at a gate. What you choose is **who closes it**. `human` waits for

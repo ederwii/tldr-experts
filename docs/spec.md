@@ -370,6 +370,8 @@ stages:
 | `stages[].id` / `.phase` | slug / `^0[1-5]-` | y | Stage folder; file order = execution order |
 | `stages[].budget_usd` | number >0 | n | Overrides `stage.yml` |
 | `stages[].skip_if` | str | n | `^(stories\|repos\|questions)(<=\|>=\|==\|<\|>)\d{1,4}$` `[assumption]` |
+| `skips` | slug[] | n | Stages this scope deliberately does NOT run, so the omission is on record. **Read, not decorative:** Build asks it (below) |
+| `<stage>.parallel` | int ≥1 | n | How many units of that stage may run at once — for `build`, stories per wave (§5). `--parallel` overrides it; absent ⇒ `stage.yml`'s `parallel:`, then 1 |
 
 **Validation.** `name` = filename stem; stage ids unique and present in `.tldrx/stages/`; Σ `budget_usd` ≤
 `default_budget_usd`; `skip_if` matches the pattern above; every `gates` key (other than `collapse`) names a stage
@@ -391,6 +393,13 @@ this workflow lists and every value is `human\|auto`; ≤40 stages.
 | `migration` | auto | auto | auto | human | human |
 
 `retro` runs no stage from `stages/`, so it has no gate to place.
+
+**`skips:` is read (2026-08-29).** It used to be declared by the schema and dropped by the loader, so "docs skips
+Plan" was a sentence in a file rather than a fact anything could act on — and five scopes (`docs`, `hotfix`,
+`performance`, `prototype`, `security-patch`) list `build` in `stages` and `plan` in `skips`, reached Build with no
+`03-plan/`, and could only fail their own Build stage. `WorkflowPreset.skips` now carries the list down to
+`StageSpec`, which is how Build tells "the Plan phase has not run YET" from "no Plan phase was ever going to run".
+The distinction cannot be made from disk: both look like an absent `03-plan/`.
 
 **`retro.md` has two writers (2026-08-29).** `tldrx retro` renders the document; the **Build executor** appends
 `## Build feedback` to it as each story settles, deterministically and with no model involved — every reviewer
@@ -1691,10 +1700,110 @@ cut (exit `2`, the stage stays `ready`, the message names the files and the fix)
 §5's "revert non-handoff outputs" cannot honestly undo a branch. Worktrees are removed when a story reaches `done` or
 `blocked` — never on `review`, whose second attempt continues in the same tree — unless `--keep-worktrees`.
 
-`--prepare`/`--commit` is **per story**: `--prepare` bundles the next pending story into
-`.agent/<stage>/<story-id>/`, marks it `in_progress` (the file is how `--commit` finds it again), and stops; `--commit`
-picks that story's pipeline up at the DoD step and prepares nothing. Sequential in v1 — spec §5 decision (c) — but the
-order is already the parallel-safe one, because `waves.yml` guarantees a dependency is in an earlier wave.
+**The implicit plan — a scope that SKIPS Plan can still Build (2026-08-29).** When the run's workflow names `plan` in
+its `skips:` (§2.4) **and** there is no `03-plan/waves.yml` on disk, the executor synthesises one story rather than
+refusing. A real `03-plan/` always wins: if the file is there it is executed, whatever `skips:` says, because somebody
+wrote it on purpose. The synthesis is deterministic and asks no model — every line is copied from a file the run
+already wrote, into `04-build/implicit-plan.yml`:
+
+| Field | Where it comes from |
+|---|---|
+| `title` | `run.yml`'s `title:` |
+| `goal` | `01-what/handoff.md` § Decisions, bullets verbatim, `[src: …]` tokens kept — **minus** the What's own deliverable (below) — **plus** `Apply <fact> to the touched files [src: F<n>]`, one per answered fact of this run |
+| `acceptance` | `01-what/success-metrics.md`'s list items, verbatim, same subtraction — **plus** the settled-documents criterion (below). Empty ⇒ `goal`; both empty ⇒ one line saying the title is the whole brief |
+| `notes` | the fact→document mapping that was derived, and every gap in it |
+| `touches` | the repo paths `01-what/handoff.md` CITES that exist inside a repo `workspace.yml` declares, first-cited order, ≤24. A citation with no repo prefix is skipped rather than guessed at |
+| `repo` | the run repo those citations name most; ties and no citations fall back to `run.repos` order |
+| `dod` | the commands `workspace.yml` declares for the ROLES this scope calls for — `docs`: `lint`; `spike`/`prototype`: none; everything else: `build`, `test`. Looked up by the **key** the human wrote, never matched against the command text (`lint: dotnet format --verify-no-changes` has no "lint" in it) |
+| `budget_usd` | the Build stage's own ceiling, as scaled into `run.yml` |
+| `branch` | `epic/<run-id slugged into `EPIC_BRANCH_RE`>` |
+
+**The plan carries the work FORWARD.** Measured on the aparece run: the What handoff's Decisions and its success
+metrics describe what the WHAT stage had to produce — "one `questions.md` block per decision", "the question count
+matches the decision count". Copied straight into Build they would tell a developer to write a file the run already
+has. So:
+
+- **Bullets whose subject is the What's own deliverable are dropped** from `goal` and `acceptance`, on five LITERAL
+  signals — `questions.md`, `### Q`, any `01-what/` path, a question id (`Q1`, `Q1–Q6`), and the run's-questions
+  vocabulary (`every question …`, `each question's …`). Measured on the aparece run: the first two caught three of six
+  bullets and left three criteria about `01-what/questions.md`'s contents that never name the file; the other three
+  signals are exactly what those three say instead. **Every dropped bullet is written into `notes:`** with the signal
+  that fired and its opening 90 characters — a filter whose mistakes are invisible is a filter nobody can correct,
+  and with the drop on the record the rule can afford to be decisive. A bullet about `04-build/`, or about a file the
+  story touches, matches no signal and survives.
+- **The answers become the work.** Every live fact in `.tldrx/memory/facts.yml` whose `source.run` is THIS run is an
+  answer a human gave at one of its gates. Each one adds `Apply <fact text> to the touched files [src: F<n>]` to
+  `goal`.
+- **`acceptance` gains the settled-documents criterion.** A fact *settles* a touched document when its text mentions
+  that file's ADR id (`ADR-D008`, or the bare `D008`) or its `decision <n>` — a claim anyone can re-check by reading
+  the two strings. **A fact cut at §2.5's 300-char cap is matched against the full `[Answer]:` behind it**, read from
+  `01-what/questions.md` by the fact's `source.q` or by the question block's footer `fact:` id. `captureAnswers`
+  builds a fact as `"<question> — <answer>"` and slices, so on the aparece run four of six lost the very clause naming
+  the ADR they settle: 2 of 6 mapped on the stored text, 6 of 6 with the answer. Both halves are matched, never the
+  answer alone — a fact carrying a key its answer does not must keep matching on it. The cap itself is unchanged: it
+  is spec §2.5, and the fallback needs no schema change to work on facts already on disk. The `goal` bullet still
+  quotes the fact verbatim, because the fact is what `[src: F<n>]` cites. A leading document number (`13-OPEN-DECISIONS.md`) is deliberately **not** a decision
+  number. With a mapping: ``every touched document whose decision is settled by a fact of this run no longer reads
+  `Status: proposed` — `grep -c 'Status: proposed' <paths>` → 0 for the ones a fact decides [src: F<n>…]``, whose path
+  list is COMPLETE or replaced wholesale by "the N documents listed under `notes:`" — a `(+1 more)` inside a command
+  is something a person pastes, runs, and reads the wrong answer from. With
+  anything left over — an unmapped file, an unmapped fact, or no mapping at all — it also (or only) gets the generic
+  `apply every listed fact; leave a one-line note per file saying which fact changed it [src: F<n>…]`. `notes:` names
+  every derived pair, every unmapped file and every unmapped fact, so a partial mapping is visible rather than implied.
+- **The developer prompt says where the story came from**: "Plan was skipped by the scope; this single story applies
+  the run's answered decisions to the files it touches." No design document is going to say it, because none was written.
+
+The file is also the story's STATE: its top-level `status:` and `evidence:` are what the executor writes back, patched
+by the same two surgical edits a `stories/<id>.md` gets. The story then runs the ordinary pipeline — worktree,
+`story/<run>/S1` off the epic, developer, DoD, merge, read-only reviewer, human gate — because a docs edit is a code
+edit. One line goes to stdout (`implicit plan: Plan skipped by scope 'docs' — one story S1 (…)`) and `run status`
+prints `plan: implicit (scope skips Plan)`, so a synthesised plan never reads like one a person approved.
+
+**An implicit story with NO dod command is green.** A planned story with an empty ```dod block blocks — that is a Plan
+bug, and done means proven. An implicit one is the framework reporting accurately that this scope has nothing to run
+(`spike`/`prototype` declare no DoD by design; a `docs` repo may have no lint command), and failing it would move the
+dead end one step later instead of removing it. The reviewer still runs and the human gate still stands. `evidence:`
+is still real: the commit sha and the review log.
+
+Build's declared input `03-plan/waves.yml` is treated as satisfied by the implicit plan, and so is anything else under
+`03-plan/` — that is the phase the scope skipped. **Every other missing input is still exit 1**: skipping Plan is not
+an excuse for a missing `.tldrx/conventions/shared.md`.
+
+**Parallel within a wave — `--parallel N`, default 1 (2026-08-30).** `waves.yml` guarantees a dependency is in an
+EARLIER wave, so the stories of one wave are independent by construction and may run at once. The number is resolved
+`--parallel` > the workflow's `<stage>: {parallel: N}` (§2.4) > `stage.yml`'s `parallel:` > 1, refused rather than
+clamped at the CLI when it is not a whole number ≥ 1, and clamped in the executor to `[1, MAX_STORIES_PER_WAVE]`.
+`run auto --parallel N` passes it to every `next` it makes.
+
+At **N = 1 the executor takes the path it always did**, story by story — measured byte-identical on the event
+sequence, because "the default does not change" is not a claim to make loosely. Above 1 the wave runs in two halves:
+
+- **A, concurrently, ≤ N at a time**: worktree → developer → DoD → commit. A story that goes red does NOT cancel its
+  siblings — killing four running sub-agents because a fifth failed throws away turns already paid for.
+- **B, serially, in the wave's LISTED order**: merge → reviewer → `done`/`blocked`. Serial for the merge, and also for
+  the reviewer: a reviewer reads `git diff <epic>...<story>`, whose merge base MOVES every time another story merges
+  into that epic, so two concurrent reviewers would be judging diffs that changed under them.
+
+Consequences the implementation commits to: the epic's commit order is the file's order, not the finish order; a
+conflict takes the existing `--abort` path and blocks that story alone; a wave with any blocked story ends `failed`
+and the NEXT WAVE IS NOT STARTED, since its stories may depend on what this one did not land (the sequential path is
+unchanged here and still carries on — N = 1 is v1's behaviour, not a new rule); Ctrl-C/SIGTERM kills every live child,
+because `killAllChildren` signals the whole registry and each spawn registers its own pid.
+
+**The budget does not change.** `worstCaseShares` is already `stories × MAX_ATTEMPTS × (1 + REVIEWER_SHARE)` across
+the whole plan, so the sum of every cap the executor can hand out is ≤ the stage ceiling however the attempts fall —
+and however many of them are in flight at the same moment. Running concurrently spends the same money faster, never
+more of it.
+
+**One activity line per lane.** Every event a Build sub-agent publishes carries its story id as a `lane`, so the
+scene, the compact one-liner and `--ui plain` show `S1 reading … · S2 $ dotnet test …` rather than interleaving two
+streams into one. A lane disappears from the line when its agent finishes. With one lane — every run that did not ask
+for parallelism — the view is byte-for-byte what it was.
+
+`--prepare`/`--commit` is **per story** and stays sequential whatever `--parallel` says: `--prepare` bundles the next
+pending story into `.agent/<stage>/<story-id>/`, marks it `in_progress` (the file is how `--commit` finds it again),
+and stops; `--commit` picks that story's pipeline up at the DoD step and prepares nothing. The host session
+dispatches its own sub-agent, and this side has no way to know how many it is willing to run.
 
 **Watch executor** (`05-watch`, spec §2.16). In order:
 

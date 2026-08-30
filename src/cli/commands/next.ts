@@ -32,7 +32,7 @@ export const nextCommand: Command = {
   summary: "Advance the active run to its next stage",
   usage: "tldrx next [<run>] [--dry-run] [--prepare|--commit] [--model <m>] [--effort <level>] [--max-usd <n>]\n"
     + "                  [--prompt-max-bytes <n>] [--max-reads <n>] [--cost-usd <n>] [--tokens <n>]\n"
-    + "                  [--yolo] [--keep-worktrees] [--discard-pending] [--reuse-epic]\n"
+    + "                  [--yolo] [--keep-worktrees] [--discard-pending] [--reuse-epic] [--parallel <n>]\n"
     + "                  [--ui scene|compact|plain|off] [--root <path>]",
   subcommands: [],
   implemented: true,
@@ -40,7 +40,7 @@ export const nextCommand: Command = {
     try {
       const args = parseArgs(argv, [
         "run", "model", "effort", "max-usd", "prompt-max-bytes", "max-reads",
-        "cost-usd", "tokens", "root", "ui",
+        "cost-usd", "tokens", "root", "ui", "parallel",
       ]);
       const root = workspaceRootFrom(args);
       const mode = resolveMode(args.flags.has("prepare"), args.flags.has("commit"));
@@ -83,6 +83,7 @@ export const nextCommand: Command = {
           keepWorktrees: boolFlag(args, "keep-worktrees"),
           discardPending: boolFlag(args, "discard-pending"),
           reuseEpic: boolFlag(args, "reuse-epic"),
+          parallel: parallelFlag(args),
           actor: currentActor(),
           at: nowRfc3339(),
         });
@@ -113,6 +114,20 @@ export const nextCommand: Command = {
     }
   },
 };
+
+/**
+ * `--parallel <n>`, refused rather than clamped when it is not a positive whole
+ * number. A `--parallel 0` that quietly became 1 would be a flag that lied about
+ * what it did; a `--parallel 2.5` is a typo, not an instruction.
+ */
+export function parallelFlag(args: Parameters<typeof numberFlag>[0]): number | undefined {
+  const value = numberFlag(args, "parallel");
+  if (value === undefined) return undefined;
+  if (!Number.isInteger(value) || value < 1) {
+    throw new UsageError("--parallel must be a whole number >= 1 (1 runs one story at a time, which is the default)");
+  }
+  return value;
+}
 
 function resolveMode(prepare: boolean, commit: boolean): NextMode {
   if (prepare && commit) throw new UsageError("--prepare and --commit are two halves of one handshake, not both at once");

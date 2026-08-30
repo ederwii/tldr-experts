@@ -40,6 +40,13 @@ export interface DeveloperPromptParts {
   readonly facts: string;
   readonly experts: readonly { readonly name: string; readonly body: string }[];
   readonly budgetUsd: number;
+  /**
+   * One line under Objective saying where this story came from, when it did not
+   * come from a Plan phase. An implicit story (`build/implicitPlan.ts`) is the
+   * whole of Build for its run, and a developer handed one needs to know that:
+   * the goal list is decisions somebody has already made, not a design to follow.
+   */
+  readonly planNote?: string;
   /** A previous reviewer's `changes` verdict, rendered under `## Previous attempt`. */
   readonly previousAttempt?: string;
 }
@@ -66,6 +73,7 @@ export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
     "",
     `    ${parts.worktree}`,
     "",
+    ...((parts.planNote ?? "").trim() === "" ? [] : [(parts.planNote ?? "").trim(), ""]),
     "Done-when, all of it testable:",
     "",
     ...story.acceptance.map((item) => `- ${item}`),

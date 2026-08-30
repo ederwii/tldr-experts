@@ -27,6 +27,17 @@ export const DEFAULT_DRY_RUN_ALLOWED = true;
 
 export interface StageSpec {
   readonly planned: PlannedStage;
+  /** The scope this stage was resolved through — `run.yml`'s `scope:`. */
+  readonly scope: string;
+  /**
+   * The scope's `skips:` list (spec §2.4), verbatim.
+   *
+   * Carried down to the executors because a phase can only know it was SKIPPED,
+   * as opposed to not-yet-run, by reading the workflow. Build asks: a scope that
+   * skips `plan` and still lists `build` gets an implicit plan rather than a
+   * refusal (`src/core/build/implicitPlan.ts`).
+   */
+  readonly skips: readonly string[];
   /** Must exist before the sub-agent is spawned; a gap is exit 1 (spec §5). */
   readonly requiredInputs: readonly string[];
   /** Passed only when present on disk. */
@@ -76,6 +87,13 @@ export interface StageSpec {
    * turn already in flight. Absent ⇒ the per-stage default (`readCap.ts`).
    */
   readonly maxReads: number;
+  /**
+   * How many units of work this stage may run at once. Build reads it as stories
+   * per wave (spec §5). Two spellings, workflow first: `build: {parallel: N}` at
+   * the top of `<scope>.yml` — this scope's answer — then `parallel: N` in
+   * `stage.yml`, the framework's. `--parallel` overrides both. Null ⇒ 1.
+   */
+  readonly parallel: number | null;
   readonly dryRunAllowed: boolean;
   /** From the WORKFLOW entry (spec §2.4), not from stage.yml. */
   readonly skipIf: string | null;
@@ -88,7 +106,13 @@ export function loadStageSpec(root: string, scope: string, stageId: string): Sta
   if (planned === undefined) {
     throw new PresetError(`stage '${stageId}' is not in workflow '${preset.name}' (${preset.source})`);
   }
-  return { planned, ...overlay(root, scope, stageId), ...inputSplit(root, stageId) };
+  return {
+    planned,
+    scope: preset.name,
+    skips: preset.skips,
+    ...overlay(root, scope, stageId),
+    ...inputSplit(root, stageId),
+  };
 }
 
 /** The stage ids of a scope, in execution order — used by `next` for guard rails. */
@@ -106,6 +130,7 @@ function overlay(
   inputsMaxBytes: number;
   promptMaxBytes: number;
   maxReads: number;
+  parallel: number | null;
   dryRunAllowed: boolean;
   skipIf: string | null;
   questionsMax: number | null;
@@ -131,6 +156,7 @@ function overlay(
     inputsMaxBytes: byteKey(stageDoc, "inputs_max_bytes") ?? DEFAULT_INPUTS_MAX_BYTES,
     promptMaxBytes: byteKey(stageDoc, "prompt_max_bytes") ?? DEFAULT_PROMPT_MAX_BYTES,
     maxReads: byteKey(stageDoc, "max_reads") ?? defaultMaxReads(stageId),
+    parallel: parallelKey(workflowDoc, stageId) ?? byteKey(stageDoc, "parallel"),
     dryRunAllowed: isRecord(stageDoc) && typeof stageDoc.dry_run_allowed === "boolean"
       ? stageDoc.dry_run_allowed
       : DEFAULT_DRY_RUN_ALLOWED,
@@ -160,6 +186,17 @@ function inputSplit(
     };
   }
   return { requiredInputs: [], optionalInputs: strings(inputs), seedInputs: topLevelSeed };
+}
+
+/**
+ * `<stage>: {parallel: N}` at the top of the workflow — this scope's own answer
+ * for how wide that stage may fan out. Keyed on the stage id, so `build:
+ * {parallel: 3}` is read by `build` and nothing else.
+ */
+function parallelKey(workflowDoc: unknown, stageId: string): number | null {
+  if (!isRecord(workflowDoc)) return null;
+  const entry = workflowDoc[stageId];
+  return isRecord(entry) ? byteKey(entry, "parallel") : null;
 }
 
 /**

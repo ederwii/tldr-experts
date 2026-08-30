@@ -14,7 +14,13 @@
 import type { AgentEvent } from "../facilitator/agentEvents.ts";
 
 export interface ProgressSink {
-  onEvent(event: AgentEvent): void;
+  /**
+   * `lane` names the concurrent unit the event came from — a Build story id when
+   * a wave is running with `--parallel N`, undefined when there is only one thing
+   * running. Optional and additive: a sink that ignores it behaves exactly as it
+   * did when nothing was ever parallel.
+   */
+  onEvent(event: AgentEvent, lane?: string): void;
   /** The blackboard heading: `what · 260829-tenancy · attempt 1`. */
   onTitle?(title: string): void;
   /** The stage's own ceiling, for the footer's `$x.xx of $y.yy`. */
@@ -40,10 +46,10 @@ export function progressActive(): boolean {
  * Publish one event. A throwing sink must never fail a stage — a progress view
  * is not allowed to be the reason money was spent for nothing.
  */
-export function emitAgentEvent(event: AgentEvent): void {
+export function emitAgentEvent(event: AgentEvent, lane?: string): void {
   if (sink === null) return;
   try {
-    sink.onEvent(event);
+    sink.onEvent(event, lane);
   } catch {
     // A broken renderer is a cosmetic problem. Keep running.
   }

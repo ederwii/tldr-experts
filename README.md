@@ -59,6 +59,13 @@ and says which one and what it measured.
 | `security-patch` | auto | auto | — | human | human |
 | `migration` | auto | auto | auto | human | human |
 
+`--parallel <n>` on `next` / `run auto` builds that many of a wave's stories at once
+(merges still land in the wave's listed order; default 1 is unchanged).
+
+A scope with `—` under `plan` does not run the Plan phase, and Build writes the one story that
+decision implies (`04-build/implicit-plan.yml`) from your What handoff rather than refusing;
+`run status` says `plan: implicit (scope skips Plan)`. A `03-plan/` you write yourself always wins.
+
 Those are the shipped defaults, and every scope keeps at least one human gate. Override per run with
 `--gates <stage,stage>` — **the list is the human gates** — or `--gates all|none`. When the machine
 signs something it should not have, `tldrx reject --stage <phase>/<stage> --note "…"` revokes it, moves

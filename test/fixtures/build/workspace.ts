@@ -48,6 +48,18 @@ export interface BuildWorkspaceOptions {
   readonly epics: readonly EpicSpec[];
   /** Wave id -> story ids, in execution order. */
   readonly waves: readonly (readonly string[])[];
+  /** The workflow (and `run.yml` scope) this run is opened under. */
+  readonly scope?: string;
+  /** The workflow's `skips:` — `["plan"]` is what makes Build synthesise a plan. */
+  readonly skips?: readonly string[];
+  /** False writes no `03-plan/` at all, the way a Plan-skipping scope leaves it. */
+  readonly plan?: boolean;
+  /** `01-what/handoff.md`, when the test needs one to synthesise from. */
+  readonly whatHandoff?: string;
+  /** `01-what/success-metrics.md`, likewise. */
+  readonly successMetrics?: string;
+  /** The repo's `commands:` map. Default: test only, everything else null. */
+  readonly commands?: Readonly<Record<string, string | null>>;
   readonly budgetUsd?: number;
   readonly perAgentMaxUsd?: number;
   /** The `test` script the fixture repo's package.json gets. Default: passes. */
@@ -89,11 +101,12 @@ export function makeBuildWorkspace(options: BuildWorkspaceOptions): BuildWorkspa
   gitInit(repoDir);
 
   // --- the workspace --------------------------------------------------------
-  write(root, ".tldrx/workspace.yml", workspaceYaml(repoName));
+  write(root, ".tldrx/workspace.yml", workspaceYaml(repoName, options.commands));
   write(root, ".tldrx/memory/facts.yml", "version: 1\nfacts: []\n");
   write(root, ".tldrx/conventions/shared.md", "# Shared conventions\n\n- Done means proven.\n");
   write(root, ".tldrx/experts/developer/expert.md", "# Developer\n\nSmall diffs, tests first.\n");
-  write(root, ".tldrx/workflows/build-only.yml", WORKFLOW);
+  const scope = options.scope ?? "build-only";
+  write(root, `.tldrx/workflows/${scope}.yml`, workflowYaml(scope, options.skips ?? []));
   write(root, ".tldrx/stages/build/stage.yml", stageYaml(options.budgetUsd ?? 8));
   write(root, ".tldrx/stages/build/stage.md", "# Build\n\n## Role\nThe wave executor runs this stage.\n");
   for (const [rel, content] of Object.entries(options.files ?? {})) write(root, rel, content);
@@ -109,24 +122,34 @@ export function makeBuildWorkspace(options: BuildWorkspaceOptions): BuildWorkspa
   const outcome = createRun({
     root,
     slug: "build",
-    scope: "build-only",
+    scope,
     budgetUsd: options.budgetUsd ?? 8,
     repos: [repoName],
     actor: "alan",
     now: new Date("2026-08-29T09:00:00Z"),
   });
 
+  // --- 01-what, when the test wants something to synthesise a plan from -------
+  if (options.whatHandoff !== undefined) {
+    write(outcome.runDir, "01-what/handoff.md", options.whatHandoff);
+  }
+  if (options.successMetrics !== undefined) {
+    write(outcome.runDir, "01-what/success-metrics.md", options.successMetrics);
+  }
+
   // --- 03-plan --------------------------------------------------------------
   const planDir = join(outcome.runDir, "03-plan");
-  mkdirSync(join(planDir, "stories"), { recursive: true });
-  mkdirSync(join(planDir, "epics"), { recursive: true });
-  for (const story of options.stories) {
-    write(planDir, `stories/${story.id}.md`, storyMarkdown(story, repoName));
+  if (options.plan !== false) {
+    mkdirSync(join(planDir, "stories"), { recursive: true });
+    mkdirSync(join(planDir, "epics"), { recursive: true });
+    for (const story of options.stories) {
+      write(planDir, `stories/${story.id}.md`, storyMarkdown(story, repoName));
+    }
+    for (const epic of options.epics) {
+      write(planDir, `epics/${epic.id}.md`, epicMarkdown(epic, repoName));
+    }
+    write(planDir, "waves.yml", wavesYaml(options.waves));
   }
-  for (const epic of options.epics) {
-    write(planDir, `epics/${epic.id}.md`, epicMarkdown(epic, repoName));
-  }
-  write(planDir, "waves.yml", wavesYaml(options.waves));
 
   // The run's budget mirror must allow the per-agent cap the tests assert on.
   if (options.perAgentMaxUsd !== undefined) {
@@ -146,14 +169,17 @@ export function makeBuildWorkspace(options: BuildWorkspaceOptions): BuildWorkspa
   };
 }
 
-const WORKFLOW = `version: 1
-name: build-only
+function workflowYaml(scope: string, skips: readonly string[]): string {
+  return `version: 1
+name: ${scope}
 title: "One Build stage, for the executor's tests"
 depth: minimal
 default_budget_usd: 8
+skips: [${skips.join(", ")}]
 stages:
   - {id: build, phase: "04-build", budget_usd: 8}
 `;
+}
 
 function stageYaml(budgetUsd: number): string {
   return `version: 1
@@ -174,7 +200,11 @@ checks: [{id: claim-sources, on: post-write}]
 `;
 }
 
-function workspaceYaml(repo: string): string {
+function workspaceYaml(repo: string, commands?: Readonly<Record<string, string | null>>): string {
+  const declared = commands ?? { build: null, test: "npm run test", lint: null, typecheck: null, run: null };
+  const rendered = Object.entries(declared)
+    .map(([key, value]) => `${key}: ${value === null ? "null" : JSON.stringify(value)}`)
+    .join(", ");
   return `version: 1
 mode: single-repo
 root_is_repo: false
@@ -186,7 +216,7 @@ repos:
     default_branch: main
     stack: [typescript]
     package_manager: npm
-    commands: {build: null, test: "npm run test", lint: null, typecheck: null, run: null}
+    commands: {${rendered}}
     ci: []
     confidence: high
 `;

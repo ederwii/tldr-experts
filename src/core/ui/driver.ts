@@ -136,9 +136,9 @@ export function startProgress(options: ProgressOptions): ProgressHandle {
 
   const handle: ProgressHandle = {
     mode,
-    onEvent(event: AgentEvent): void {
+    onEvent(event: AgentEvent, lane?: string): void {
       const at = now();
-      const lines = state.apply(event, at);
+      const lines = state.apply(event, at, lane);
       if (mode === "plain") {
         const elapsed = state.snapshot(at).elapsedMs;
         for (const line of lines) write(`${plainLine(elapsed, line)}\n`);

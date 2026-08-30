@@ -32,10 +32,24 @@ export function updateStoryFront(text: string, patch: StoryPatch): string {
   if (!split.present) {
     throw new StoryWriteError("the story has no `---` front matter to update");
   }
-  let lines = split.raw.split("\n");
+  const lines = applyPlanPatch(split.raw.split("\n"), patch);
+  return [FENCE, ...lines, FENCE, split.body].join("\n");
+}
+
+/**
+ * The same two surgical edits, over a bare block of YAML lines.
+ *
+ * Split out because a run whose scope SKIPPED the Plan phase has no
+ * `stories/<id>.md` to hold front matter: its state lives in
+ * `04-build/implicit-plan.yml`, which is YAML all the way down
+ * (`src/core/build/implicitPlan.ts`). One writer, so the two documents cannot
+ * disagree about what `status: done` plus an `evidence:` list looks like.
+ */
+export function applyPlanPatch(input: readonly string[], patch: StoryPatch): string[] {
+  let lines = [...input];
   if (patch.status !== undefined) lines = replaceStatus(lines, patch.status);
   if (patch.evidence !== undefined) lines = replaceEvidence(lines, patch.evidence);
-  return [FENCE, ...lines, FENCE, split.body].join("\n");
+  return lines;
 }
 
 function replaceStatus(lines: readonly string[], status: PlanStatus): string[] {

@@ -7,7 +7,7 @@ export type {
   QuestionsDoc, QuestionBlock, QuestionMetadata, QuestionOption, AnswerFooter, QuestionIssue, QuestionStatus,
 } from "./questions.ts";
 export {
-  parseHandoff, validateHandoff, isHandoff, missingSections, collectSrcRefs, noneBullet,
+  parseHandoff, validateHandoff, isHandoff, missingSections, collectSrcRefs, noneBullet, listItems,
   HANDOFF_SECTIONS, MAX_BULLETS,
 } from "./handoff.ts";
 export type {

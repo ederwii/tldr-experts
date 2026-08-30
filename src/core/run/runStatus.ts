@@ -205,8 +205,12 @@ export function renderStatus(view: RunStatusView): string {
   // The Build phase, story by story. Only when there is one: on a run parked in
   // What, a "W1 [S1 todo]" line would be describing a plan nobody has written.
   if (view.build !== null && view.build.total > 0) {
+    lines.push("");
+    // Say where the plan came from when nobody wrote it. A synthesised plan reads
+    // exactly like an approved one on this screen otherwise, and only one of the
+    // two passed a human gate.
+    if (view.build.implicit) lines.push(`${"plan".padEnd(width)}  implicit (scope skips Plan)`);
     lines.push(
-      "",
       `${BUILD_PHASE.padEnd(width)}  ${renderBuildProgress(view.build)}` +
         `   ${String(view.build.done)}/${String(view.build.total)} stories done`,
     );

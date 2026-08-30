@@ -16,6 +16,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseYaml } from "../yaml.ts";
 import { asWavesFile, validateWaves } from "../schemas/waves.ts";
+import { IMPLICIT_PLAN_FILE } from "../build/implicitPlan.ts";
 import type { TldrxEvent } from "../events/Event.ts";
 
 export const PLAN_DIR = "03-plan";
@@ -37,17 +38,33 @@ export interface BuildProgress {
   readonly done: number;
   readonly total: number;
   readonly cost_usd: number;
+  /**
+   * True when this plan was synthesised by Build because the scope SKIPS the
+   * Plan phase (`build/implicitPlan.ts`). `run status` says so out loud: "one
+   * story, W1 [S1 todo]" is otherwise indistinguishable from a plan a human read
+   * and approved, and only one of those two happened.
+   */
+  readonly implicit: boolean;
 }
 
 const STATUS_RE = /^status\s*:\s*(\w+)\s*$/m;
 
-/** Null when the run has no plan to build — every phase but Build, and Build before Plan. */
+/**
+ * Null when the run has no plan to build — every phase but Build, and Build
+ * before Plan.
+ *
+ * Two files can hold one: `03-plan/waves.yml` when the Plan phase ran, and
+ * `04-build/implicit-plan.yml` when the scope skipped it. The real plan wins.
+ */
 export function buildProgress(runDir: string): BuildProgress | null {
   const wavesPath = join(runDir, PLAN_DIR, "waves.yml");
-  if (!existsSync(wavesPath)) return null;
+  const implicitPath = join(runDir, BUILD_PHASE, IMPLICIT_PLAN_FILE);
+  const implicit = !existsSync(wavesPath) && existsSync(implicitPath);
+  const path = implicit ? implicitPath : wavesPath;
+  if (!existsSync(path)) return null;
   let doc: unknown;
   try {
-    doc = parseYaml(readFileSync(wavesPath, "utf8"));
+    doc = parseYaml(readFileSync(path, "utf8"));
   } catch {
     return null;
   }
@@ -62,7 +79,7 @@ export function buildProgress(runDir: string): BuildProgress | null {
   for (const wave of asWavesFile(doc).waves) {
     const stories: StoryProgress[] = [];
     for (const id of wave.stories) {
-      const status = statusOf(runDir, id);
+      const status = implicit ? implicitStatus(implicitPath) : statusOf(runDir, id);
       const spent = costs.get(id) ?? 0;
       stories.push({ id, status, cost_usd: spent });
       total += 1;
@@ -71,7 +88,7 @@ export function buildProgress(runDir: string): BuildProgress | null {
     }
     waves.push({ id: wave.id, stories });
   }
-  return { waves, done, total, cost_usd: round(cost) };
+  return { waves, done, total, cost_usd: round(cost), implicit };
 }
 
 /** `W1 [S1 done, S2 review] W2 [S3 todo]` — the shape the spec's example asks for. */
@@ -88,6 +105,18 @@ export function renderStoryCosts(progress: BuildProgress): string | null {
     .filter((story) => story.cost_usd > 0);
   if (spent.length === 0) return null;
   return spent.map((story) => `${story.id} $${story.cost_usd.toFixed(2)}`).join(" · ");
+}
+
+/**
+ * The implicit plan's own top-level `status:`. One file, one story, so the story
+ * id is not part of the lookup — `IMPLICIT_STORY_ID` is the only one there is.
+ */
+function implicitStatus(path: string): string {
+  try {
+    return STATUS_RE.exec(readFileSync(path, "utf8"))?.[1] ?? "todo";
+  } catch {
+    return "todo";
+  }
 }
 
 function statusOf(runDir: string, id: string): string {

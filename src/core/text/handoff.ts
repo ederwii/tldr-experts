@@ -117,6 +117,44 @@ export function parseHandoff(text: string): Handoff {
   return { sections, headings };
 }
 
+/**
+ * Every list item in a document, wherever it sits — no H2 sections required.
+ *
+ * `parseHandoff` above answers "what is in the four required sections"; this one
+ * answers "what did this file assert, as items", for a document that is a list
+ * and not a handoff — `01-what/success-metrics.md`, whose items are numbered and
+ * sit under a single H1.
+ *
+ * It shares `BULLET_RE` and `CONTINUATION_RE` with the parser above on purpose:
+ * two readers of "what is a bullet" would drift, and the whole reason this lives
+ * here rather than beside its caller is that the rule has exactly one home.
+ * Wrapped items are joined the same way, so an item keeps its trailing
+ * `[src: …]` token whatever the line width was.
+ */
+export function listItems(text: string): readonly string[] {
+  const items: string[] = [];
+  let pending: string[] | null = null;
+  const flush = (): void => {
+    if (pending !== null) items.push(pending.join(" "));
+    pending = null;
+  };
+  for (const line of text.split("\n")) {
+    const bullet = BULLET_RE.exec(line);
+    if (bullet !== null && bullet[1] !== undefined) {
+      flush();
+      pending = [bullet[1]];
+      continue;
+    }
+    if (pending !== null && CONTINUATION_RE.test(line)) {
+      pending.push(line.trim());
+      continue;
+    }
+    flush();
+  }
+  flush();
+  return items;
+}
+
 /** True when the four required sections are all present, in order. */
 export function isHandoff(text: string): boolean {
   return missingSections(parseHandoff(text)).length === 0;

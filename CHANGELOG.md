@@ -1,5 +1,80 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`--parallel <n>` on `tldrx next` and `tldrx run auto`** — how many stories of ONE
+  build wave run at once. `waves.yml` already puts every dependency in an earlier wave, so
+  a wave's stories are independent by construction. Also settable per scope as
+  `build: {parallel: N}` at the top of a workflow, or per stage as `parallel:` in
+  `stage.yml`; the flag beats the workflow, which beats the stage file. **The default is 1
+  and at 1 the executor takes exactly the path it always did** — verified byte-identical on
+  the event sequence against `main`, not asserted. Above 1 the wave runs in two halves:
+  developer + DoD + commit concurrently, then merge + reviewer serially in the wave's
+  LISTED order, so the epic branch reads the same whatever order the machine finished in.
+  The reviewer half is serial for a reason and not only the merge: a reviewer reads
+  `git diff <epic>...<story>`, whose merge base moves every time another story merges into
+  that epic. A red story does not cancel its siblings, but the wave ends `failed` and the
+  next wave does not start. Ctrl-C/SIGTERM kills every live child, not the first.
+  Budgets are untouched: the stage ceiling was already divided by
+  `stories x attempts x (developer + reviewer)`, so N at once costs what N in a row cost.
+- The live view gives each running story its own column — `S1 reading … · S2 $ dotnet
+  test …` — in the scene, the compact one-liner and `--ui plain`. A lane leaves the line
+  when its sub-agent finishes. With nothing parallel the view is what it always was.
+
+### Changed
+
+- `tldrx doctor` prints where the framework's own files are: a `framework <path>` line
+  naming the installed package that ships `stages/`, `workflows/` and `templates/`, and
+  saying that a project's overrides live in `.tldrx/stages/` and `.tldrx/workflows/`. The
+  `/tldrx` skill says the same in two lines. Measured 2026-08-30: a real session spent
+  1m22s on `find / -name build -type d -path "*stages*"` because nothing printed it.
+
+### Fixed
+
+- **A scope that skips the Plan phase can Build.** `docs`, `hotfix`, `performance`,
+  `prototype` and `security-patch` all list `build` in `stages:` and `plan` in `skips:`, and
+  every one of them was a dead end: `stages/build/stage.yml` declares `03-plan/waves.yml` as
+  an input and the executor's first act was to load `03-plan/`, so a real `docs` run parked
+  at `04-build (ready)` could only fail its own Build stage with `03-plan/ does not
+  validate — stories/: the Plan wrote no stories`. Build now writes the one story that
+  decision implies into `04-build/implicit-plan.yml`, deterministically and with no model
+  involved: title from `run.yml`, `goal` from `01-what/handoff.md` § Decisions verbatim
+  (`[src: …]` tokens kept), `acceptance` from `01-what/success-metrics.md`, `touches` from
+  the repo paths that handoff CITES and that exist (≤24, first-cited order, a citation with
+  no repo prefix skipped rather than guessed at), `dod` from the commands `workspace.yml`
+  declares for the roles the scope calls for, and `budget_usd` from the Build stage ceiling.
+  A real `03-plan/` always wins. `tldrx next` prints one line naming the reason, and
+  `tldrx run status` prints `plan: implicit (scope skips Plan)` so a synthesised plan never
+  reads like one a person approved. The plan carries the work **forward**: bullets whose
+  subject is the What stage's own deliverable are dropped on five literal signals
+  (`questions.md`, `### Q`, an `01-what/` path, a question id, the run's-questions
+  vocabulary) with every drop and its signal recorded in the story's `notes:`, every
+  live fact stamped with this run adds
+  `Apply <fact> to the touched files [src: F<n>]` to `goal`, and `acceptance` gains a check
+  that each document one of those facts settles — the fact's text mentions that file's ADR
+  id or decision number — no longer reads `Status: proposed`. A mapping that cannot be
+  derived is reported in the story's `notes:` and falls back to "apply every listed fact;
+  leave a one-line note per file saying which fact changed it", never to a guess. A fact
+  cut at §2.5's 300-char cap is matched against the full `[Answer]:` behind it in
+  `01-what/questions.md`: measured on a real run, `captureAnswers` had sliced the ADR
+  clause off four of six facts, so 2 of 6 mapped on the stored text and 6 of 6 map with
+  the answer. The grep in that criterion is complete or names `notes:` wholesale — a
+  `(+1 more)` inside a command is something a person pastes and reads wrong. The
+  developer prompt states plainly that Plan was skipped and this story applies the run's
+  answered decisions.
+- **`skips:` in a workflow is read rather than decorative.** The schema declared the key and
+  the loader dropped it, so nothing could tell "the Plan phase has not run yet" from "no Plan
+  phase was ever going to run" — a distinction that cannot be made from disk, since both look
+  like an absent `03-plan/`. `WorkflowPreset.skips` now carries it down to `StageSpec`.
+- **A DoD command is looked up by its `workspace.yml` KEY, not by matching the command text.**
+  Measured on a real .NET workspace: `lint: dotnet format --verify-no-changes` has no "lint"
+  anywhere in the string, so a text match silently found nothing and would have handed a docs
+  run an empty Definition of Done. `WorkspaceContext.commandRoles` keeps the keys.
+- Build's declared `03-plan/…` inputs are treated as satisfied when the scope skips Plan, and
+  **only** those: every other missing input is still exit 1.
+
 ## 0.3.0 — 2026-08-30
 
 Every measurement below was taken on a real workspace on 2026-08-29 unless another date is

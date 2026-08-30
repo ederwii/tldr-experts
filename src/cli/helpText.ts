@@ -303,6 +303,7 @@ const ENTRIES: readonly CommandHelp[] = [
       { ...runFlag(), sub: "auto" },
       maxUsd("auto"),
       { name: "until", arg: "<stage>", meaning: "Stop the loop before this stage rather than at the first human gate.", sub: "auto" },
+      { name: "parallel", arg: "<n>", meaning: "How many stories of ONE build wave run at once. `waves.yml` already guarantees a dependency is in an earlier wave, so a wave's stories are independent by construction. Merges into the epic still happen in the wave's listed order, after every story of that wave has finished, and each sub-agent keeps its own budget share. Default 1: one story at a time, exactly as before. Overrides the workflow's `build: {parallel: N}` and stage.yml's `parallel:`.", sub: "auto" },
       model("auto"),
       effort("auto"),
       yolo("auto"),
@@ -334,6 +335,7 @@ const ENTRIES: readonly CommandHelp[] = [
       "tldrx run status --json",
       "tldrx run estimate",
       "tldrx run auto --max-usd 15 --until build",
+      "tldrx run auto --parallel 3",
       "tldrx run unlock 260101-checkout --force",
       'tldrx run cancel 260101-checkout --note "superseded by the v2 spec"',
     ],
@@ -409,6 +411,7 @@ const ENTRIES: readonly CommandHelp[] = [
       },
       yolo(),
       { name: "keep-worktrees", arg: null, meaning: "Leave the per-story worktrees on disk after the build stage finishes with them." },
+      { name: "parallel", arg: "<n>", meaning: "How many stories of ONE build wave run at once. `waves.yml` already guarantees a dependency is in an earlier wave, so a wave's stories are independent by construction. Merges into the epic still happen in the wave's listed order, after every story of that wave has finished, and each sub-agent keeps its own budget share. Default 1: one story at a time, exactly as before. Overrides the workflow's `build: {parallel: N}` and stage.yml's `parallel:`." },
       {
         name: "discard-pending",
         arg: null,
@@ -428,6 +431,7 @@ const ENTRIES: readonly CommandHelp[] = [
       "tldrx next 260101-checkout --effort high --max-usd 8",
       "tldrx next --discard-pending",
       "tldrx next --prompt-max-bytes 120000 --max-reads 60",
+      "tldrx next --parallel 3",
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_AWAITING_HUMAN, EXIT_AGENT_FAILED],
     notes: [
