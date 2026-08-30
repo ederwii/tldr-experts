@@ -437,6 +437,7 @@ export function loadImplicitPlan(parts: ImplicitPlanParts): BuildPlan {
     context: content.context,
     extraInputs,
     note: implicitStoryNote(content.factIds),
+    goal: content.goal,
   };
   const plannedEpic: PlannedEpic = { epic, text, path, rel: IMPLICIT_PLAN_REL };
 

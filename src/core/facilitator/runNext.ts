@@ -697,8 +697,12 @@ async function runExecutor(
   if (!outcome.ok) {
     return failStage(store, options, phaseId, stageId, outcome.error ?? "the executor failed", notes);
   }
-  if (outcome.awaiting) return out(EXIT_OK, [...notes, ...outcome.lines]);
-  return await finishStage(store, options, phaseId, stageId, spec, [...notes, ...outcome.lines], outcome.gate);
+  const advisories = outcome.stderr ?? [];
+  if (outcome.awaiting) return out(EXIT_OK, [...notes, ...outcome.lines], advisories);
+  return withStderr(
+    await finishStage(store, options, phaseId, stageId, spec, [...notes, ...outcome.lines], outcome.gate),
+    advisories,
+  );
 }
 
 /** One `run.yml` task and one `agent.result` per sub-agent the executor ran. */

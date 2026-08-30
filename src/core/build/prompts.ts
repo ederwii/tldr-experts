@@ -50,6 +50,14 @@ export interface DeveloperPromptParts {
   readonly planNote?: string;
   /** A previous reviewer's `changes` verdict, rendered under `## Previous attempt`. */
   readonly previousAttempt?: string;
+  /**
+   * Touched paths that are NOT committed at the story branch's base, so the
+   * worktree has no copy (`build/git.ts` `pathAtRef`). They are flagged in the
+   * prompt rather than rendered as "this story creates it", which is what they
+   * used to look like: an uncommitted `01-what/` output or `run.yml` reads
+   * exactly like a new file when the only test is `existsSync` in the worktree.
+   */
+  readonly notInWorktree?: ReadonlySet<string>;
 }
 
 export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
@@ -64,7 +72,12 @@ export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
     { path: parts.story.rel, content: parts.story.text },
     { path: parts.epic.rel, content: epicSummary(parts.epic) },
     ...extra,
-    ...touchedInputs(parts.worktree, story.touches, spent),
+    ...touchedInputs(
+      parts.worktree,
+      orderTouches(story.touches, briefOf(parts)),
+      spent,
+      parts.notInWorktree,
+    ),
   ];
   const context = (parts.story.context ?? []).filter((line) => line.trim() !== "");
 
@@ -294,6 +307,7 @@ export function touchedInputs(
   worktree: string,
   touches: readonly string[],
   alreadySpent = 0,
+  notInWorktree: ReadonlySet<string> = new Set<string>(),
 ): readonly PromptInput[] {
   const inputs: PromptInput[] = [];
   let spent = alreadySpent;
@@ -310,10 +324,56 @@ export function touchedInputs(
       inputs.push({ path: rel, content: readFileSync(abs, "utf8") });
     }
     if (!existsSync(join(worktree, touch))) {
-      inputs.push({ path: touch, content: `(does not exist yet — this story creates it)\n` });
+      inputs.push(notInWorktree.has(touch)
+        ? { path: touch, content: "", inlinedBytes: 0, totalBytes: 0, notInWorktree: true }
+        : { path: touch, content: `(does not exist yet — this story creates it)\n` });
     }
   }
   return inputs;
+}
+
+/**
+ * The story's touched paths, the ones its own brief NAMES first.
+ *
+ * `touchedInputs` spends one 64 KB budget in list order, so the order IS which
+ * files get inlined. Measured on a real Build prompt, 2026-08-30: 15 declared
+ * inputs, 9 inlined, and the two documents the run existed to edit were in the
+ * tail — behind `AGENTS.md`, which the What handoff cited in passing. A path the
+ * goal or the acceptance criteria names is the work; a path something merely
+ * cited is context, and context is what a budget is for cutting.
+ *
+ * Stable within each half: a brief that names nothing changes no order at all.
+ */
+export function orderTouches(touches: readonly string[], brief: readonly string[]): readonly string[] {
+  const text = brief.join("\n").toLowerCase();
+  if (text.trim() === "") return touches;
+  const named: string[] = [];
+  const rest: string[] = [];
+  for (const touch of touches) (namesPath(text, touch) ? named : rest).push(touch);
+  return [...named, ...rest];
+}
+
+/** The whole path, or its file name — both are how a bullet cites a document. */
+function namesPath(lowerText: string, path: string): boolean {
+  const lower = path.toLowerCase();
+  if (lower === "") return false;
+  if (lowerText.includes(lower)) return true;
+  const base = lower.slice(lower.lastIndexOf("/") + 1);
+  return base !== "" && lowerText.includes(base);
+}
+
+/**
+ * What counts as the story NAMING a document: the goal, the acceptance criteria,
+ * the test plan and the title. NOT `context:`, which is the What stage's
+ * background — the very place an incidental citation comes from.
+ */
+function briefOf(parts: DeveloperPromptParts): readonly string[] {
+  return [
+    ...(parts.story.goal ?? []),
+    ...parts.story.story.acceptance,
+    ...parts.story.story.test_plan,
+    parts.story.story.title,
+  ];
 }
 
 /** One touched path -> the files under it, sorted, bounded, `.git` and friends skipped. */

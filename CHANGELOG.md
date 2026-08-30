@@ -33,6 +33,27 @@
 
 ### Fixed
 
+- **The `## Inputs` preamble no longer claims files the budget dropped.** Measured on a
+  real Build prompt, 2026-08-30: 9 of 15 declared inputs were inlined, the other 6 carried
+  "It exists on disk; do not guess at its content" — and the preamble above them still read
+  "Their full content is inlined below, so there is nothing to open and nothing else to
+  find." The two documents the run existed to edit were among the six. The preamble is now
+  conditional in every prompt that has one (stage prompts and the developer prompt share one
+  renderer): with everything inlined it is the sentence it always was; with anything dropped
+  it is `Inlined below: <n> of <m> declared inputs.` followed by "The rest exist on disk —
+  READ them at the listed paths before relying on them; do not guess: <list>".
+- **A touched path the story's worktree cannot read is flagged as such.** The developer works
+  in a worktree of the story branch, so a path that exists in the repo but is not committed
+  at that branch is unreadable there — and `existsSync(worktree/path)` called it a file the
+  story creates. Build now asks git (`git cat-file -e <branch>:<path>`) and marks it `NOT in
+  this worktree — its content is only what the handoff quotes`, plus one stderr line per
+  path: `warning: input <path> is not committed, so the story worktree cannot read it`. A
+  path that exists nowhere is still "does not exist yet — this story creates it".
+- **The story's own goal wins the developer prompt's inline budget.** `touches` was spent in
+  list order, so on that same run `AGENTS.md` — cited once in passing — was inlined whole
+  and the two documents the goal named were in the dropped tail. Touched paths the story's
+  `goal`, acceptance criteria, test plan or title NAME now sort first into the 64 KB; a brief
+  that names nothing changes no order at all.
 - **A document your answer settles now joins the implicit story's `touches`.** Measured on a
   real run, 2026-08-30: the run existed to settle six ADRs, the owner answered all six, and
   the one thing the story could not edit was `ADR-D013-DELIVERY-ZONE-GEOMETRY.md` — the What

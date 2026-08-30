@@ -55,6 +55,14 @@ export interface PlannedStory {
   readonly extraInputs?: readonly { readonly path: string; readonly content: string }[];
   /** One line under Objective saying where this story came from. */
   readonly note?: string;
+  /**
+   * The story's statement of the WORK, when it has one distinct from its
+   * acceptance criteria. Only an implicit story does: `goal:` is what the run's
+   * answers settle (`build/implicitPlan.ts`). It is not rendered as a section —
+   * the whole file is inlined as the story — but it decides which touched paths
+   * win the developer prompt's inline budget (`build/prompts.ts` `orderTouches`).
+   */
+  readonly goal?: readonly string[];
 }
 
 export interface PlannedEpic {

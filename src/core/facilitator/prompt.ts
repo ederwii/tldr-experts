@@ -50,6 +50,26 @@ export interface PromptInput {
    */
   readonly inlinedBytes?: number;
   readonly totalBytes?: number;
+  /**
+   * Build only: the path is not tracked at the story branch's base, so the
+   * worktree the sub-agent works in has no copy of it and no amount of reading
+   * will produce one. Different from "the budget dropped it" in the one way that
+   * matters to the agent: "read it at that path" is advice it cannot take.
+   */
+  readonly notInWorktree?: boolean;
+}
+
+/**
+ * True when NOTHING of this input's content is in the prompt.
+ *
+ * The one predicate behind the `## Inputs` preamble and the per-file block, so
+ * the header's count and the blocks below it cannot disagree — which is exactly
+ * the bug: a prompt that inlined 9 of 15 declared inputs still opened with "their
+ * full content is inlined below, so there is nothing to open".
+ */
+export function isNotInlined(input: PromptInput): boolean {
+  if (input.notInWorktree === true) return true;
+  return input.totalBytes !== undefined && (input.inlinedBytes ?? 0) === 0;
 }
 
 export interface PromptParts {
@@ -194,21 +214,21 @@ export function renderInputs(inputs: readonly PromptInput[], note?: string): str
   if (inputs.length === 0) {
     return "_No input files are declared for this stage. Do not go looking for others._";
   }
-  const out = [
-    "These files are the ONLY ones you may read. Their full content is inlined below,",
-    "so there is nothing to open and nothing else to find.",
-    "",
-  ];
+  const out = [...preamble(inputs)];
   const trimmed = (note ?? "").trim();
   if (trimmed !== "") out.push(`**${trimmed}**`, "");
 
   for (const input of inputs) {
     const fence = fenceFor(input.content);
     out.push(`### \`${input.path}\``, "");
+    if (input.notInWorktree === true) {
+      out.push(`_${NOT_IN_WORKTREE} It is not committed at this branch's base, so the path above cannot be opened here._`, "");
+      continue;
+    }
     if (input.totalBytes !== undefined && (input.inlinedBytes ?? 0) === 0) {
       out.push(
         `_Not inlined: ${input.totalBytes} bytes, past this stage's inline budget. `
-        + "It exists on disk; do not guess at its content._",
+        + "It exists on disk; READ it at the path above before relying on it — do not guess._",
         "",
       );
       continue;
@@ -222,6 +242,40 @@ export function renderInputs(inputs: readonly PromptInput[], note?: string): str
     out.push(`${fence}`, input.content.replace(/\n$/, ""), `${fence}`, "");
   }
   return out.join("\n");
+}
+
+/** The flag on an input the story's own worktree has no copy of. */
+export const NOT_IN_WORKTREE =
+  "NOT in this worktree — its content is only what the handoff quotes.";
+
+/**
+ * The two sentences `## Inputs` can open with, and the rule for which.
+ *
+ * "Their full content is inlined below, so there is nothing to open and nothing
+ * else to find" is TRUE only when it is true. Measured on a real Build prompt,
+ * 2026-08-30: 9 of 15 declared inputs were inlined, the other 6 carried "It
+ * exists on disk; do not guess at its content" — and the two documents the run
+ * existed to edit were among the six. The preamble and the blocks below it
+ * contradicted each other, and the preamble is the one the agent believed.
+ */
+export function preamble(inputs: readonly PromptInput[]): readonly string[] {
+  const missing = inputs.filter(isNotInlined);
+  if (missing.length === 0) {
+    return [
+      "These files are the ONLY ones you may read. Their full content is inlined below,",
+      "so there is nothing to open and nothing else to find.",
+      "",
+    ];
+  }
+  const listed = missing
+    .map((input) => `${input.path}${input.notInWorktree === true ? " (NOT in this worktree)" : ""}`)
+    .join(", ");
+  return [
+    `Inlined below: ${String(inputs.length - missing.length)} of ${String(inputs.length)} declared inputs.`,
+    "The rest exist on disk — READ them at the listed paths before relying on them; do not",
+    `guess: ${listed}`,
+    "",
+  ];
 }
 
 /** A fence long enough that the file's own backticks cannot close it. */

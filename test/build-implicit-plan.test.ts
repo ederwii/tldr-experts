@@ -17,7 +17,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
+import { runNext, type NextOptions, type NextOutcome } from "../src/core/facilitator/runNext.ts";
+import { NOT_IN_WORKTREE } from "../src/core/facilitator/prompt.ts";
 import {
   answersByQuestion, chooseRepo, citedRepoPaths, decisionBullets, decisionKeysOf, dodCommandsFor, dodRolesFor,
   applyAcceptance, droppedNotes, epicBranchFor, implicitPlanContent, isWhatDeliverable, loadImplicitPlan, matchTextOf, planFacts,
@@ -62,7 +63,7 @@ function workspace(options: BuildWorkspaceOptions): BuildWorkspace {
   return made;
 }
 
-function next(ws: BuildWorkspace, overrides: Partial<NextOptions> = {}): Promise<{ code: number; lines: readonly string[] }> {
+function next(ws: BuildWorkspace, overrides: Partial<NextOptions> = {}): Promise<NextOutcome> {
   return runNext({
     root: ws.root,
     dryRun: false,
@@ -96,6 +97,29 @@ const HANDOFF = `<!-- schema: draft -->
 ## Evidence ledger
 
 - \`docs/guide.md:3\` is the paragraph both decisions are about [src: app:docs/guide.md:3]
+`;
+
+/** Cites one committed path and one gitignored one, both inside the repo. */
+const IGNORED_HANDOFF = `<!-- schema: draft -->
+
+# What — handoff
+
+## Findings
+
+- The guide is out of date [src: app:docs/guide.md:3]
+
+## Decisions
+
+- In scope: rewriting \`docs/guide.md\` § Install [src: app:docs/guide.md:3]
+- The version we settled on is the one in the scratch note [src: app:notes/scratch.md:1]
+
+## Unknowns
+
+- none [src: absent:docs/CHANGELOG.md]
+
+## Evidence ledger
+
+- \`notes/scratch.md:1\` names the version [src: app:notes/scratch.md:1]
 `;
 
 const METRICS = `# Success metrics — docs run
@@ -427,6 +451,41 @@ describe("a docs run that reaches Build with no 03-plan/", () => {
 
     const developer = readFileSync(join(promptDir, "developer-S1-1.md"), "utf8");
     expect(developer).toContain("touches: []  # 01-what/handoff.md cites no path inside a declared repo");
+  }, 60_000);
+
+  test("a cited path the worktree cannot read is flagged in the prompt and warned about", async () => {
+    // `notes/` is gitignored, so `notes/scratch.md` is on disk (the handoff can
+    // cite it, and `citedRepoPaths` keeps it) but is NOT in the tree the story
+    // worktree checks out. Before this, `existsSync(worktree/path)` was the only
+    // test and the prompt called it a file the story creates.
+    const ws = workspace({
+      ...DOCS_RUN,
+      whatHandoff: IGNORED_HANDOFF,
+      repoFiles: {
+        ...DOCS_RUN.repoFiles,
+        ".gitignore": "notes/\n",
+        "notes/scratch.md": "# scratch\n\nVersion 0.3.0\n",
+      },
+    });
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({
+      S1: { "docs/guide.md": "# Guide\n\n## Install\n\nVersion 0.3.0.\n" },
+    });
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+
+    const outcome = await next(ws);
+    expect(outcome.code).toBe(4);
+    expect((outcome.stderr ?? []).join("\n")).toContain(
+      "warning: input notes/scratch.md is not committed, so the story worktree cannot read it",
+    );
+    // The committed one is not warned about.
+    expect((outcome.stderr ?? []).join("\n")).not.toContain("docs/guide.md is not committed");
+
+    const developer = readFileSync(join(promptDir, "developer-S1-1.md"), "utf8");
+    expect(developer).toContain(NOT_IN_WORKTREE);
+    expect(developer).toContain("notes/scratch.md (NOT in this worktree)");
+    expect(developer).not.toContain("does not exist yet — this story creates it");
+    expect(developer).toContain("Inlined below: 3 of 4 declared inputs.");
   }, 60_000);
 
   test("a run with no What handoff at all still plans, and says the title is the whole brief", () => {
