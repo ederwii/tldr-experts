@@ -143,6 +143,13 @@ function bullet(item: NumberedEvent): string | null {
       return `${prefix}story ${text(payload.story) || "?"} REOPENED by ${actor}`
         + ` — back to \`${text(payload.to_status) || "todo"}\` from \`${text(payload.from_status) || "?"}\``
         + `${note(payload.note)}`;
+    // The one event in the set that records tldrx moving a ref (design §F.2). A
+    // narrative that showed a story's diff base change with nothing in between
+    // would read as the framework editing the operator's git state behind them.
+    case "story.base_fastforwarded":
+      return `${prefix}story ${text(payload.story) || "?"}'s base fast-forwarded to`
+        + ` \`${text(payload.base) || "?"}\` — ${text(payload.from) || "?"} → ${text(payload.to) || "?"}`
+        + ` (${String(payload.commits ?? "?")} commit(s))`;
     case "check.failed": return `${prefix}check failed: ${checkName(payload)}${note(payload.detail)}`;
     case "budget.warned": return `${prefix}budget warning: ${text(payload.message) || `${money(cost_usd)} spent`}`;
     case "budget.blocked": return `${prefix}budget BLOCKED: ${text(payload.message) || "the spawn was refused"}`;

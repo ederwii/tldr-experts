@@ -50,9 +50,9 @@ import {
   dispatchNotesRecord, type PendingReview, type PendingStage,
 } from "../pending.ts";
 import {
-  addWorktree, branchExists, commitAll, commitsBetween, currentBranch, diffCommand, dirtyPaths, ensureBranch,
-  firstLine, GitError, headSha, isDirty, mergeNoFf, partitionDirty, pathAtRef, removeWorktree, repoDirOf,
-  stateDirPrefixes,
+  addWorktree, baseStateOf, branchExists, commitAll, commitsBetween, currentBranch, diffCommand, dirtyPaths,
+  ensureBranch, fastForward, firstLine, GitError, headSha, isDirty, mergeNoFf, partitionDirty, pathAtRef,
+  removeWorktree, repoDirOf, stateDirPrefixes,
 } from "../../build/git.ts";
 import {
   loadBuildPlan, PlanLoadError, BUILD_PHASE, LOG_DIR, PLAN_PHASE, WORKTREES,
@@ -555,7 +555,9 @@ class BuildSession {
     }
 
     this.noteIfReopened(planned, this.statusOf(planned));
-    const story = await this.openStory(planned);
+    // `true`: a developer is about to be dispatched onto this branch, so it is
+    // one of the two openings that may bring the base up to the epic tip (§F.2).
+    const story = await this.openStory(planned, true);
     const cap = this.developerCap(planned.story.id);
     const key = this.bundleKey(planned.story.id);
     const notes = this.dispatchNotesFor(planned.story.id);
@@ -961,7 +963,9 @@ class BuildSession {
     const before = this.statusOf(planned);
     // (a)(b)(c) touch the SHARED repo — `git branch`, `git worktree add` — so they
     // go through the one writer even though the sub-agent below does not.
-    const story = await this.writes.run(() => this.openStory(planned));
+    // `true`: same reason as `prepare()` — the headless developer is dispatched
+    // onto this branch a few lines below (§F.2).
+    const story = await this.writes.run(() => this.openStory(planned, true));
     await this.writes.run(() => {
       this.ctx.emit("task.started", {
         phase: this.ctx.phaseId,
@@ -1456,8 +1460,22 @@ class BuildSession {
 
   // --- steps ----------------------------------------------------------------
 
-  /** (a)(b)(c): repo, epic branch, story worktree. */
-  private async openStory(planned: PlannedStory): Promise<StoryContext> {
+  /**
+   * (a)(b)(c): repo, epic branch, story worktree.
+   *
+   * `refreshBase` is true on the two paths that are about to put a DEVELOPER on
+   * this branch — `prepare()` and `buildHalf()` — and false everywhere else.
+   * Design §F.2 says the staleness check belongs "inside `openStory`, which is
+   * the one place a worktree is opened", and it does; the flag is about which
+   * openings may MOVE the branch. The review paths (`prepareReview`,
+   * `commitReview`, `rereview`) open a story whose work is already merged into
+   * the epic, so a fast-forward there would drag other stories' commits onto a
+   * branch whose whole meaning is "what this story built", to no end: nobody is
+   * about to compile against that base. `commit()` opens a worktree a developer
+   * has just written into, which the dirty guard would refuse anyway — the flag
+   * saves the warning as well as the move.
+   */
+  private async openStory(planned: PlannedStory, refreshBase = false): Promise<StoryContext> {
     const epic = this.plan.epics.get(planned.story.epic);
     if (epic === undefined) {
       throw new PlanLoadError(`${planned.story.id} names epic ${planned.story.epic}, which did not load`);
@@ -1482,6 +1500,9 @@ class BuildSession {
       mkdirSync(join(worktree, ".."), { recursive: true });
       await addWorktree(repoDir, worktree, branch, epicBranch);
     }
+    // The worktree has to exist first: a fast-forward is a checkout, and this is
+    // the one place a story's worktree is opened.
+    if (refreshBase) await this.refreshStoryBase(planned, repoDir, worktree, branch, epicBranch);
     return {
       planned,
       epic,
@@ -1493,6 +1514,110 @@ class BuildSession {
       previousAttempt: this.previousAttemptText(planned.story.id),
       notInWorktree: await this.unreadableTouches(planned, repoDir, branch),
     };
+  }
+
+  /**
+   * A story's branch, brought up to its epic's tip before a developer is
+   * dispatched onto it — or the precise reason it was left exactly where it is.
+   *
+   * The live case, notes §11 on `260830-tenancy-identity-customers`: `story
+   * reopen` keeps the branch by design, and S3's branch still sat at the S1-era
+   * epic tip while the epic had since gained S2 and S5. S3's handlers needed S2's
+   * contract, so a dispatch on that base would not have compiled. The host
+   * fast-forwarded by hand before dispatching; this is that move, automated, and
+   * only in the case where it is a move and not a decision.
+   *
+   * Three shapes, and only the first changes anything:
+   *
+   *   - **behind, and the worktree is clean** — the branch is an ancestor of the
+   *     epic tip, so `git merge --ff-only` is the entire operation: no commit
+   *     written, no history rewritten, and it refuses rather than inventing a
+   *     merge. Measured atomic-or-nothing (see `fastForward`).
+   *   - **diverged** — commits on both sides. Warn with both counts and both
+   *     shas, change NOTHING, and let the dispatch proceed on the old base. This
+   *     is the second live case: a dead spawn had left a partial commit on a
+   *     stale base, no fast-forward was possible, and the host preserved the
+   *     partial on a backup branch and re-pointed the story branch BY HAND. That
+   *     is a decision — which of the two histories survives — and the framework
+   *     does not get to make it. **Never a rebase**: rewriting a branch a
+   *     developer already committed to is the class of move the
+   *     run-id-in-branch-name fix exists to prevent (2026-08-29 audit §B).
+   *   - **the worktree is dirty** — left alone whatever the topology says. A
+   *     dirty tree is the operator's, not ours.
+   *
+   * An `up to date` branch is silent and emits nothing: this path is byte-for-byte
+   * what it was before design §F.2 whenever there was nothing to say.
+   */
+  private async refreshStoryBase(
+    planned: PlannedStory,
+    repoDir: string,
+    worktree: string,
+    branch: string,
+    epicBranch: string,
+  ): Promise<void> {
+    const id = planned.story.id;
+    const base = await baseStateOf(repoDir, branch, epicBranch);
+    if (base.state === "current") return;
+
+    const where = relative(this.ctx.root, worktree) || worktree;
+    if (base.state === "diverged") {
+      this.lines.push(
+        `  · ${id}: \`${branch}\` (${base.branchSha}) has DIVERGED from \`${epicBranch}\` `
+        + `(${base.baseSha}) — ${String(base.ahead)} commit(s) the epic lacks, `
+        + `${String(base.behind)} the story lacks`,
+        `  · ${id}: nothing was changed — tldrx never rebases a branch a developer has committed to. `
+        + `In ${where}: \`git merge ${epicBranch}\`, or preserve the divergent commit(s) on a backup `
+        + `branch and re-point \`${branch}\` at \`${epicBranch}\` by hand`,
+        `  · ${id}: the dispatch below is on the OLD base (${base.branchSha}), `
+        + `${String(base.behind)} commit(s) behind \`${epicBranch}\``,
+      );
+      return;
+    }
+
+    // A story worktree is its own checkout of the SAME repo, so in a
+    // `root_is_repo` workspace it holds `tldrx-work/` and `.tldrx/` too. Neither
+    // counts as the operator's dirt — the same split `commitIfDirty` makes, from
+    // the same prefixes.
+    const state = stateDirPrefixes(this.workspace.root, repoDir);
+    const dirty = partitionDirty(await dirtyPaths(worktree), state).product;
+    if (dirty.length > 0) {
+      this.lines.push(
+        `  · ${id}: \`${branch}\` (${base.branchSha}) is ${String(base.behind)} commit(s) behind `
+        + `\`${epicBranch}\` (${base.baseSha}), but its worktree has ${String(dirty.length)} `
+        + "uncommitted change(s) — left alone; a dirty tree is the operator's",
+        `  · ${id}: ${dirty.slice(0, 5).join(", ")}`
+        + `${dirty.length > 5 ? `, +${String(dirty.length - 5)} more` : ""} in ${where}`,
+      );
+      return;
+    }
+
+    const moved = await fastForward(worktree, epicBranch);
+    if (!moved.ok) {
+      // `--ff-only` is atomic-or-nothing, so there is nothing to repair: the
+      // branch is still at `from` and the dispatch proceeds on it. What would be
+      // wrong is a silent one.
+      this.lines.push(
+        `  · ${id}: \`git merge --ff-only ${epicBranch}\` failed in ${where} — `
+        + `${firstLine(moved.stderr) || firstLine(moved.stdout) || `exit ${String(moved.exitCode)}`}`,
+        `  · ${id}: \`${branch}\` was left at ${base.branchSha}, `
+        + `${String(base.behind)} commit(s) behind \`${epicBranch}\``,
+      );
+      return;
+    }
+    this.lines.push(
+      `  · ${id}: fast-forwarded \`${branch}\` to \`${epicBranch}\` — `
+      + `${String(base.behind)} commit(s), ${base.branchSha} → ${base.baseSha}`,
+    );
+    this.ctx.emit("story.base_fastforwarded", {
+      phase: this.ctx.phaseId,
+      story: id,
+      repo: planned.story.repo,
+      branch,
+      base: epicBranch,
+      from: base.branchSha,
+      to: base.baseSha,
+      commits: base.behind,
+    });
   }
 
   /**
