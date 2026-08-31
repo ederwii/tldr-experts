@@ -4,6 +4,43 @@
 
 ### Added
 
+- **`tldrx story reopen <id> --note "<why>"`** — one Build story, given another run of
+  developer attempts, by a person. The third verb of the family that landed 2026-08-30 and
+  the only one a HUMAN signs: the other two stop the machine reading a transport failure
+  as a judgement, and this one is for when the machine read the run correctly and the
+  owner disagrees. Found on `260830-tenancy-identity-customers`, where story S3 sat
+  `blocked` after two GENUINE `changes` verdicts (its developers ran and committed nothing;
+  both reviewers correctly refused an empty diff) — no rescue applied and none should have,
+  but S3 gates wave 3 and the owner had decided it ships. The only reopening verb was
+  `tldrx reject --stage`, which acts on a STAGE, and hand-editing `run.yml` or a story file
+  is forbidden by design.
+  - **The note is required** — a reopen with no reason is not actionable — and one
+    `story.reopened` is appended carrying the actor, the note, the status the story came
+    from, its wave, and how many verdicts the closed run of attempts consumed.
+  - **The story goes back to `todo` and its attempt counter restarts at 1 of 2.** Nothing
+    is erased to make that true: `story.reopened` is a RESET BOUNDARY that
+    `readReviewLedger` reads, so verdicts before it stop counting while every event stays
+    in `events.jsonl` for `replay`, `cost` and `retro`. The full reset is the honest
+    choice precisely because the history survives it — "you get two more turns" is what
+    overruling a block means, and a half-reset would be a number nobody could explain from
+    the record.
+  - **It runs no agent, spends nothing, deletes nothing and refunds nothing.** The story's
+    BRANCH is what carries the last developer's commits forward and it is untouched; the
+    worktree is left exactly as the build left it (kept at `review`, already removed for a
+    `blocked` story) and is reopened from the branch when the next turn needs it.
+  - **It does not make the stage runnable, and does not pretend to.** Sending a stage back
+    is `reject`'s own signed decision, so the output names the command that fits where the
+    Build stage actually is: `tldrx next` when it is ready, `tldrx reject --note` at a
+    pending gate, `tldrx reject --stage` over a signed one.
+  - Refuses with exit 2, saying why: an id the plan does not have (naming the ones it
+    does); a `done` story, because undoing finished work is a decision about the stage and
+    belongs to `reject --stage`; a `todo` story, which is already pending; and a missing
+    `--note`. An unknown run id is still exit 3.
+  - `tldrx replay` narrates it (`story S3 REOPENED by alan — back to \`todo\` from
+    \`blocked\` — "…"`), and the Build stage says so in one line, with the note, when it
+    picks the story up. A reopened story is byte-identical on disk to a never-started one,
+    and a narrative that showed two `changes` verdicts and then a third developer turn with
+    nothing in between would read as the framework losing count.
 - **`--parallel <n>` on `tldrx next` and `tldrx run auto`** — how many stories of ONE
   build wave run at once. `waves.yml` already puts every dependency in an earlier wave, so
   a wave's stories are independent by construction. Also settable per scope as

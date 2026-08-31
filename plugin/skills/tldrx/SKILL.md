@@ -62,6 +62,9 @@ Never answer on their behalf, never pick a default, never "assume yes":
 - a gate `tldrx status` reports as signed `by: auto` that they disagree with. It signs
   only when its five conditions hold and cannot judge whether a decision was RIGHT: quote
   the note — it carries all five measured values — and ask before revoking.
+- a Build story left `blocked` that they want built anyway. Two reviewers judged the diff
+  and were not necessarily wrong; overruling them costs another two turns and is theirs to
+  decide. Quote `04-build/log/<id>.md` — it says what each verdict was and why — and ask.
 
 **You act** once they have said what they want — these are mechanical:
 
@@ -70,6 +73,11 @@ Never answer on their behalf, never pick a default, never "assume yes":
   after they said yes · `tldrx reject --run <id> --note "<their reason>"`, and
   `tldrx reject --run <id> --stage <phase>/<stage> --note "…"` to take back an
   approval already given (including one the harness signed `by: auto`).
+- `tldrx story reopen <id> --run <id> --note "<their reason>"` once they have said a
+  blocked story must be built anyway: it puts that one story back to `todo` and restarts
+  its attempt counter at 1 of 2, keeping every earlier attempt on the record. It does NOT
+  send the stage back — if the Build stage is at its gate, `tldrx reject` does that first,
+  and the reopen's own output names which one applies.
 - `tldrx questions lint --run <id>` when a stage wrote a `questions.md`: it exits 2
   if any block is invisible to the parser, and `--fix` converts it without changing
   a word. An unreadable file reads as "no questions" to everything downstream.

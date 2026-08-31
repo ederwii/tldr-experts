@@ -839,7 +839,7 @@ Append-only audit log: with `run.yml` the dashboard's only data source, the cost
 
 **Type enum:** `run.created` `run.closed` `run.unlocked` `run.cancelled` `phase.started` `phase.done` `stage.started` `stage.done` `stage.failed`
 `stage.skipped` `task.started` `task.done` `agent.spawned` `agent.result` `question.asked` `question.answered`
-`gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `check.passed` `check.failed` `budget.warned`
+`gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `story.reopened` `check.passed` `check.failed` `budget.warned`
 `budget.blocked` `budget.raised` `fact.added` `fact.retired` `map.refreshed` `ticket.synced` `error`. Closed set: an
 unknown type is a validation error.
 
@@ -849,6 +849,14 @@ payload carries `signed_by` — `auto` or a person — plus the `staled` list. `
 which until then rewrote `budget.yml` and appended nothing at all: the one sanctioned way to move a ceiling was the one
 act with no record. Its payload carries `phase`, `amount_usd`, `take_from`, before/after for both the phase and the run
 ceiling, and the operator's `--note`.
+
+**`story.reopened` was added 2026-08-30.** It is `tldrx story reopen <id> --note "…"` — a person giving ONE Build story
+another run of developer attempts (§5, "Reopening a story"). Its payload carries `story`, `wave`, `from_status`,
+`to_status`, `verdicts` (how many the closed run of attempts consumed) and the `note`; `stage` on the envelope is
+`null`, because the operator acted outside a stage run. It is also the one event in the enum that is a **reset
+boundary**: the Build executor's review ledger restarts every count at it, so verdicts recorded before it stop counting
+against the reopened story. Nothing is rewritten to achieve that — the earlier events are all still in the file and
+still read by `replay`, `cost` and `retro`.
 
 ```json
 {"ts":"2026-08-28T14:29:58Z","run":"260828-leaderboard","stage":"contracts","type":"agent.result","actor":"architect","cost_usd":2.61,"payload":{"phase":"02-how","task":"t1","session_id":"1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d","model":"sonnet","outputs":["02-how/contracts.md"],"usage":{"input_tokens":184203,"output_tokens":9114}}}
@@ -1222,6 +1230,7 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx interview [--run <id>\|--init] [--yes-to-defaults]` | the cursor phase's `questions.md` (or `.tldrx/init-questions.md`), `run.yml`, `.tldrx/process.yml`, `workspace.yml`, `git remote get-url origin` | the same three files `answer` writes, one per answer recorded; with `--init`, also `.tldrx/process.yml` (§2.12) when a process answer settles `methodology` or `ticket_tool.kind` | 0,1,2,3 |
 | `tldrx approve [--run <id>] [--note]` | `run.yml`, stage outputs, stage checks | `run.yml` gate, `events.jsonl` | 0,2,3 |
 | `tldrx reject [--run <id>] --note <text> [--stage <phase>/<stage>]` | `run.yml` | `run.yml` gate, `events.jsonl`, stage status ⇒ `ready`. With `--stage` it REVOKES an approval already given (§5): `gate.revoked`, the cursor moves back, later stages that had run are marked `stale: true`, nothing is deleted. `--stage` may target a FINISHED run | 0,2,3 |
+| `tldrx story reopen <id> [--run <id>] --note <text>` | `03-plan/waves.yml` + `03-plan/stories/<id>.md` (or `04-build/implicit-plan.yml`), `events.jsonl` | that story file's `status:` ⇒ `todo`, `events.jsonl` (`story.reopened`). Nothing else: no agent, no cost, no stage moved, no worktree or branch touched. Refuses (2) an unknown story id, a `done` story (that is `reject --stage`), a `todo` story, and a missing `--note` | 0,1,2,3 |
 | `tldrx questions lint [--run <id>] [--fix] [--area <a>]` | every `<phase>/questions.md` in the run | nothing, or those files rewritten to the §2.7 grammar with `--fix` (no wording changed) | 0,2,3 |
 | `tldrx budget show [<run>] [--run <id>] [--json]` | `run.yml`, `budget.yml` | nothing (stdout) | 0,1,2,3 |
 | `tldrx budget raise <phase> <usd> [--run <id>] [--take-from <phase>] [--note <text>]` | `run.yml`, `budget.yml` | `budget.yml` ceilings, `run.yml` ceiling mirror, `events.jsonl` (`budget.raised`, with before/after/actor/note) | 0,1,2,3 |
@@ -1634,6 +1643,18 @@ treat them as current; running a stage again clears its own flag. No cost is ref
 is also the one verb allowed to target a run that has already FINISHED, because reopening one is its whole purpose.
 Before this, `approve()` moved the cursor in the same transaction that signed the gate and `reject` only ever looked at
 the cursor, so a fabricated handoff that auto-approved itself could not be undone at all (measured, 2026-08-29).
+
+**Reopening a story.** `tldrx story reopen <id> --note "…"` gives ONE Build story another run of developer attempts.
+`reject --stage` is the STAGE-level move and cannot express this: a story that two reviewers refused is `blocked`,
+which is terminal for the rest of the run, and an owner who has decided it ships anyway had no verb at all (measured
+2026-08-30 on `260830-tenancy-identity-customers`, story S3 — two genuine `changes` verdicts, both attempts really
+consumed, and S3 gates wave 3). The note is required. The story's `status:` goes to `todo`, one `story.reopened` is
+appended with the actor, the note, the prior status and the verdict count it closes, and **the attempt counter restarts
+at 1 of `MAX_ATTEMPTS`** because `readReviewLedger` treats the event as a reset boundary. Nothing is erased: every
+earlier attempt stays in `events.jsonl`. It runs no agent, spends nothing, deletes nothing, refunds nothing and moves
+no stage — the story's branch, which carries the last developer's commits, is untouched, and sending the Build stage
+back remains `reject`'s own signed decision. Reopenable states are `blocked`, `review` and `in_progress`; `done`
+refuses, because undoing finished work is a decision about the stage.
 
 **`by: auto` where people look.** An auto-signed gate is named in `tldrx status` — with the `tldrx reject --stage …`
 that undoes it — and the status line carries `auto:N` and `stale:N`. It reached `run.yml`, the event log and

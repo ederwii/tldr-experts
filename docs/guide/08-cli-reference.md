@@ -275,6 +275,24 @@ approval already given, whoever signed it: the cursor moves back, `gate.revoked`
 carrying `signed_by`, and later stages that had run are marked `stale`. Nothing is deleted and
 no cost is refunded. It is the one verb that may reopen a finished run. Exits: `0` `1` `2` `3`.
 
+## `tldrx story`
+
+Give one Build story another run of attempts.
+
+```
+tldrx story reopen <id> --note <text> [--run <id>] [--root <path>]
+```
+
+`--note` is required — a reopen with no reason is not actionable. The story goes back to
+`todo`, its attempt counter restarts at 1 of 2, and one `story.reopened` is appended carrying
+the actor, the note, the status it came from and how many verdicts the closed run of attempts
+consumed. Nothing is erased to make the reset true: `story.reopened` is a boundary the review
+ledger reads, and every earlier attempt stays in `events.jsonl`. It runs no agent, spends
+nothing, deletes nothing and refunds nothing — the story's branch, which carries the last
+developer's commits, is untouched. It does NOT send the stage back; the output names the
+`reject` that does. Refuses (`2`) an unknown story id, a `done` story (that is
+`reject --stage`), a `todo` story, and a missing `--note`. Exits: `0` `1` `2` `3`.
+
 ## `tldrx budget`
 
 ```

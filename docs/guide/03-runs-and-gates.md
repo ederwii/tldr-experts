@@ -213,6 +213,42 @@ as current. Nothing is deleted and no cost is refunded. It is the one verb that 
 a FINISHED run. `tldrx status` names every gate signed `by: auto` and the status line
 carries `auto:N` / `stale:N`.
 
+### Giving one story another go
+
+```
+$ tldrx story reopen S3 --note "it gates wave 3 (S4, S6) and the owner has decided it ships"
+reopened S3 in 260830-tenancy-identity-customers — `blocked` → `todo` (W2)
+```
+
+`reject --stage` works on a STAGE. Sometimes what you disagree with is one story. A story
+that a reviewer refused twice is `blocked`, which is terminal for the rest of the run — and
+that is usually right, but not when the story gates a whole wave and you have decided it
+ships anyway. `tldrx story reopen <id> --note "<why>"` is the sanctioned way to say so; the
+files are the state, and hand-editing `run.yml` or `03-plan/stories/<id>.md` is not a move
+the framework supports.
+
+The note is **required** — a reopen with no reason is not actionable — and one
+`story.reopened` is appended carrying who signed it, the note, the status the story came
+from, and how many verdicts the run of attempts you are closing consumed. The story goes
+back to `todo` and **its attempt counter restarts at 1 of 2**. Nothing is erased to make
+that true: the reopen event is a boundary the review ledger reads, so the old verdicts stop
+counting while staying in `events.jsonl` for `replay`, `cost` and `retro`. When the story
+runs again the Build stage says so in one line, with your note.
+
+It runs no agent, spends nothing, deletes nothing and refunds nothing. The story's *branch*
+carries the last developer's commits forward and is untouched, so the next turn starts on
+top of them.
+
+It does **not** send the stage back — that is `reject`'s own signed decision, and one verb
+quietly performing another's is how a gate stops meaning anything. The output names the
+command that fits: `tldrx next` when the Build stage is ready, `tldrx reject --note "…"`
+when it is sitting at a gate, `tldrx reject --stage 04-build/build --note "…"` when that
+gate is already signed.
+
+It refuses (exit `2`) an id the plan does not have, naming the ones it does; a `done` story,
+because undoing finished work is a decision about the stage and belongs to `reject --stage`;
+a `todo` story, which is already pending; and a missing `--note`.
+
 ## Several runs open at once
 
 When there is exactly one open run, nothing changes. When there are several, every

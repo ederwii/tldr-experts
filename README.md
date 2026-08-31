@@ -69,8 +69,10 @@ decision implies (`04-build/implicit-plan.yml`) from your What handoff rather th
 Those are the shipped defaults, and every scope keeps at least one human gate. Override per run with
 `--gates <stage,stage>` — **the list is the human gates** — or `--gates all|none`. When the machine
 signs something it should not have, `tldrx reject --stage <phase>/<stage> --note "…"` revokes it, moves
-the cursor back and marks the later stages `stale`. What an auto gate cannot do:
-[`docs/guide/03-runs-and-gates.md`](docs/guide/03-runs-and-gates.md).
+the cursor back and marks the later stages `stale`. When it is one BUILD STORY you disagree with — a
+story two reviewers refused, which is terminal for the rest of the run —
+`tldrx story reopen <id> --note "…"` gives that one story another run of attempts and nothing else.
+What an auto gate cannot do: [`docs/guide/03-runs-and-gates.md`](docs/guide/03-runs-and-gates.md).
 
 ## What you see while it runs
 
