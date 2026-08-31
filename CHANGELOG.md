@@ -4,6 +4,48 @@
 
 ### Added
 
+- **Decision cards — the shape an interrupt takes when a run stops for a person.** Measured
+  2026-08-30: an unattended run stopped on two owner questions, and the host did NOT show the
+  owner the dashboard or the `2 open question(s) in 01-what/questions.md` line the framework
+  actually prints. It hand-composed, in chat, the question, the options and a recommendation
+  with one line of why. The owner answered both in seconds. The card is what made the
+  interrupt cheap; hand-composing it is what the framework was making the host pay for.
+
+  ```
+  DECISION — 260830-tenancy · 01-what/what
+  Q2 · Should an existing customer's tenant be inferred or asked for?
+    Why asked: no tenant column on the customer aggregate [src: absent:api:src/.../Customer.cs]
+    A) infer from the invoice email domain — no new UI, wrong for resellers
+    B) ask once at first login — one screen, correct for everyone
+    C) other — write it below
+  Recommends B — one screen, correct for everyone [src: 01-what/handoff.md:22]
+    tldrx answer Q2 "…" --run 260830-tenancy
+  ```
+  - **Pure rendering of things that already exist.** The question, its `Why asked:` line and
+    its lettered options come out of `questions.md` through the **§2.7 parser** — the
+    questions grammar is not touched, and a block the parser cannot read does not appear on a
+    card any more than it appears anywhere else. The `Recommends` line comes out of the
+    evidence note's optional `recommend: [{q, option, why, src}]` array, which the evidence
+    grammar already validates.
+  - **A question with no recommendation gets no line.** Never a manufactured one and never a
+    placeholder: the whole value of that line is that an agent stood behind it with a
+    citation.
+  - **One renderer, three surfaces.** `tldrx run auto --gate-agent` at the stop;
+    `tldrx next`'s agent-gate fallthrough, where the card is **appended** to the fallthrough
+    list so nothing that reads those lines today loses a byte; and `tldrx status`, where a run
+    waiting on answers now shows the card rather than `open questions: Q1, Q2`.
+  - **A card per fallthrough kind.** Budget and boundary get their own card over the same
+    frame — the measured fact, then the commands (`widen the scope …` / `approve` / `reject`
+    for a boundary; the phase's two numbers plus `budget show` for a budget event) — and every
+    other reason an agent gate fell through is carried as one gate card naming its reasons.
+  - **`--gate-agent` is rendering only.** It does not upgrade any stage to
+    `gates_policy: agent`: a run keeps the policy it was opened with, and a flag that could
+    raise one at stop time would make the frozen policy decorative. On an
+    `attended_by: host` run it changes nothing — `run auto` is still refused at exit `1`
+    before the event log is opened, and nothing spawns.
+  - **Nothing else moves.** `tldrx answer`, `questions.md`, the live dashboard and every exit
+    code are unchanged, and `run auto` without the flag prints exactly the block it always did.
+
 - **`preconditions:` on a stage — the check that runs before the money does.** A stage may
   declare operational facts that must hold before it is worth dispatching at all:
 

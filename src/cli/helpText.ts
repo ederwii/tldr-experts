@@ -328,6 +328,12 @@ const ENTRIES: readonly CommandHelp[] = [
       maxUsd("auto"),
       { name: "until", arg: "<stage>", meaning: "Stop the loop before this stage rather than at the first human gate.", sub: "auto" },
       { name: "parallel", arg: "<n>", meaning: "How many stories of ONE build wave run at once. `waves.yml` already guarantees a dependency is in an earlier wave, so a wave's stories are independent by construction. Merges into the epic still happen in the wave's listed order, after every story of that wave has finished, and each sub-agent keeps its own budget share. Default 1: one story at a time, exactly as before. Overrides the workflow's `build: {parallel: N}` and stage.yml's `parallel:`.", sub: "auto" },
+      {
+        name: "gate-agent",
+        arg: null,
+        meaning: "When the loop stops for a person, print a DECISION CARD instead of the ordinary status block: the question, its options, the agent's recommendation if an evidence note carried one, and the one command to type. Rendering only \u2014 it never upgrades a stage to `gates_policy: agent`, which is frozen at `run new`.",
+        sub: "auto",
+      },
       model("auto"),
       effort("auto"),
       yolo("auto"),

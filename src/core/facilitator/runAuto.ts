@@ -28,6 +28,8 @@ import { PROJECT_WORK_DIR } from "../paths.ts";
 import { AUTO_GATE_ACTOR } from "../run/autoGate.ts";
 import { flatten, isAttendedByHost } from "../run/RunFile.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
+import { cardForTriggers, questionsCard, type CardContext } from "../run/decisionCards.ts";
+import { decisionHeader, renderDecisionCard } from "../ui/decisionCard.ts";
 import { runNext, type NextOutcome } from "./runNext.ts";
 
 export interface AutoOptions {
@@ -44,6 +46,17 @@ export interface AutoOptions {
   readonly parallel?: number;
   readonly actor: string;
   readonly at: string;
+  /**
+   * `--gate-agent`: when this loop stops for a person, print a DECISION CARD
+   * instead of the ordinary status block (design §F.3).
+   *
+   * It changes rendering and nothing else. In particular it does NOT upgrade any
+   * stage to `gates_policy: agent` — a policy is what a run was opened with
+   * (§A.7), and a flag that could raise one at stop time would make the frozen
+   * policy decorative. What it says is "this loop is driving agent gates; when one
+   * falls to me, show me the decision, not the dashboard."
+   */
+  readonly gateAgent?: boolean;
   /** Called with each line as it happens, so a long loop is not silent. */
   readonly onLine?: (line: string) => void;
 }
@@ -52,6 +65,7 @@ const EXIT_OK = 0;
 const EXIT_USAGE = 1;
 const EXIT_REFUSED = 2;
 const EXIT_NOT_FOUND = 3;
+const EXIT_AWAITING_HUMAN = 4;
 
 /**
  * §2.2 caps a run at 40 stages, and a stage can legitimately be visited twice (a
@@ -148,7 +162,7 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
     for (const line of stageLines(fresh, cursorBefore, outcome)) say(line);
 
     if (outcome.code !== EXIT_OK) {
-      for (const line of outcome.lines) say(`  ${line}`);
+      for (const line of stopLines(options, runDir, runId, outcome)) say(line);
       return { code: outcome.code, lines };
     }
     // Exit 0 with nothing appended and the cursor unmoved would loop forever on a
@@ -162,6 +176,59 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
   }
   say(`stopped after ${String(MAX_ITERATIONS)} iterations — run \`tldrx run status ${runId}\``);
   return { code: EXIT_USAGE, lines };
+}
+
+/**
+ * What the loop prints where it STOPPED.
+ *
+ * Without `--gate-agent` this is exactly what it always was: `next`'s own lines,
+ * indented by two. With it, and only on exit `4` — *awaiting human* — the block is
+ * replaced by a decision card (design §F.3): the question, its options, the
+ * agent's recommendation if a note carried one, and the one command to type.
+ *
+ * `next` cards its OWN agent-gate fallthrough, so a card already in the outcome is
+ * relayed rather than drawn twice. Two frames around one decision is worse than
+ * none: a reader has to work out whether they are the same decision.
+ */
+function stopLines(
+  options: AutoOptions,
+  runDir: string,
+  runId: string,
+  outcome: NextOutcome,
+): readonly string[] {
+  const indented = outcome.lines.map((line) => `  ${line}`);
+  if (options.gateAgent !== true || outcome.code !== EXIT_AWAITING_HUMAN) return indented;
+  if (outcome.lines.some((line) => line.startsWith("DECISION — "))) return indented;
+
+  const ctx = cursorContext(runDir, runId);
+  if (ctx === null) return indented;
+  const questions = questionsCard(ctx);
+  if (questions !== null) return renderDecisionCard(questions);
+  // No open question: frame what `next` actually said, so `--gate-agent` always
+  // hands over a card and never silently degrades to the block it replaced.
+  const card = cardForTriggers(ctx, [{ trigger: "gate", detail: "" }]);
+  if (card === null) return indented;
+  return [
+    decisionHeader(card),
+    "Gate — this run stopped for a person",
+    ...outcome.lines.map((line) => `  ${line}`),
+    ...card.commands.map((command) => `  ${command}`),
+  ];
+}
+
+/** Where the run is now, re-read off disk. Null when run.yml stopped parsing. */
+function cursorContext(runDir: string, runId: string): CardContext | null {
+  try {
+    const store = RunStore.open(runDir);
+    return {
+      runDir: store.runDir,
+      runId,
+      phaseId: store.run.cursor.phase,
+      stageId: store.run.cursor.stage,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**
