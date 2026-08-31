@@ -417,14 +417,13 @@ class BuildSession {
 
     // The reviewer is the FRAMEWORK's sub-agent in both modes — only the
     // developer is delegated to the host session — so a story waiting on nothing
-    // but a re-review is finished here and now rather than handed out as a
-    // second developer attempt. That hand-out is exactly what this path did on
-    // 2026-08-30: `task.started … attempt: 2, mode: prepare`, for a story whose
-    // diff nobody had ever read.
-    // An errored review produced no `changes` verdict, so no developer attempt is
-    // owed and none is offered. A bundle a previous version of this code ALREADY
-    // handed out is not stranded by that: `tldrx next --commit` still reads its
-    // `result.json` and runs the full pipeline over it, exactly as before.
+    // but a re-review is finished here and now. An errored review produced no
+    // `changes` verdict, so no developer attempt is owed and none is offered:
+    // handing one out is exactly what this path did on 2026-08-30
+    // (`task.started … attempt: 2, mode: prepare`, for a diff nobody had read).
+    // A bundle a previous version of this code already handed out is not
+    // stranded by that — `tldrx next --commit` still reads its `result.json` and
+    // runs the full pipeline over it, exactly as before.
     const resume = this.resumableReview(planned);
     if (resume !== null) return await this.prepareRereview(planned, resume);
 
