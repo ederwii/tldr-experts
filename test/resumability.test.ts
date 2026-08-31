@@ -271,7 +271,11 @@ process.stdout.write(id);
         fact: "one", area: "demo", repos: [], kind: "answer", confidence: "stated",
         source: { who: "alan", when: "2026-08-29T09:00:00Z", run: "260829-demo", q: "Q1" },
       }));
-      expect(readdirSync(join(ws.root, ".tldrx", "memory"))).toEqual(["facts.yml"]);
+      const beside = readdirSync(join(ws.root, ".tldrx", "memory")).sort();
+      expect(beside.filter((name) => name.includes(".tmp-"))).toEqual([]);
+      // `facts.yml.bak` IS expected: every atomic save keeps the version it
+      // replaced, so there is always one step back from a bad write.
+      expect(beside).toEqual(["facts.yml", "facts.yml.bak"]);
     } finally {
       ws.dispose();
     }
