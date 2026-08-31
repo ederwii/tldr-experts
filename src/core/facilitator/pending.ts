@@ -157,6 +157,39 @@ export interface PendingStage {
   readonly result_schema?: Readonly<Record<string, unknown>>;
   /** What a reviewer bundle is judging: the diff refs and the DoD already re-run. */
   readonly review?: PendingReview;
+  /**
+   * The fix list this developer bundle is a round OF (design §B.4) — absent on
+   * every bundle that is not one, so an ordinary `--prepare` is the bundle it
+   * always was.
+   */
+  readonly fixlist?: PendingFixlist;
+  /**
+   * The `session_id` the PRIOR turn on this story reported, so the host can
+   * resume that sub-agent rather than pay to rebuild its context.
+   *
+   * The framework resumes NOTHING itself, and the key is deliberately named for
+   * what it is: `spawnAgent` has no `--resume` and gaining one is not this
+   * chunk's business. What the framework can do is remember the id it was handed
+   * and give it back — the host's own session tooling is what knows whether it is
+   * still resumable. `null` when the previous turn declared none.
+   */
+  readonly resume_session?: string | null;
+}
+
+/**
+ * The fix-list round a developer bundle is answering.
+ *
+ * `path` is run-dir relative and points at the committed artifact, not at a copy:
+ * the file is the state, a host edits it to close findings, and a bundle carrying
+ * a snapshot of it would go stale the first time somebody did.
+ */
+export interface PendingFixlist {
+  readonly path: string;
+  readonly round: number;
+  /** Every finding in the file. */
+  readonly findings: number;
+  /** The ones still `fix-now` and unresolved — the work this round is for. */
+  readonly open: number;
 }
 
 /**

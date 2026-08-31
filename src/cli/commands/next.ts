@@ -30,7 +30,8 @@ const INFORMATIONAL: readonly number[] = [EXIT_OK, EXIT_AWAITING_HUMAN];
 export const nextCommand: Command = {
   name: "next",
   summary: "Advance the active run to its next stage",
-  usage: "tldrx next [<run>] [--dry-run] [--prepare|--commit] [--review] [--model <m>] [--effort <level>]\n"
+  usage: "tldrx next [<run>] [--dry-run] [--prepare|--commit] [--review] [--fixlist <path>]\n"
+    + "                  [--model <m>] [--effort <level>]\n"
     + "                  [--max-usd <n>] [--prompt-max-bytes <n>] [--max-reads <n>] [--cost-usd <n>] [--tokens <n>]\n"
     + "                  [--yolo] [--keep-worktrees] [--discard-pending] [--reuse-epic] [--parallel <n>]\n"
     + "                  [--ui scene|compact|plain|off] [--root <path>]",
@@ -40,7 +41,7 @@ export const nextCommand: Command = {
     try {
       const args = parseArgs(argv, [
         "run", "model", "effort", "max-usd", "prompt-max-bytes", "max-reads",
-        "cost-usd", "tokens", "root", "ui", "parallel",
+        "cost-usd", "tokens", "root", "ui", "parallel", "fixlist",
       ]);
       const root = workspaceRootFrom(args);
       const mode = resolveMode(args.flags.has("prepare"), args.flags.has("commit"));
@@ -73,6 +74,18 @@ export const nextCommand: Command = {
           + "reviewer bundle, then `tldrx next --commit --review` to settle its verdict",
         );
       }
+      // `--fixlist <path>` routes a reviewer's fix list back to the AUTHOR, which
+      // is a `--prepare` and only a `--prepare`. On `--commit` there is no bundle
+      // left to shape, and headless has no host to route anything to — a flag that
+      // was quietly ignored on two of three modes would be a flag nobody could
+      // trust on the third.
+      const fixlist = stringFlag(args, "fixlist");
+      if (fixlist !== undefined && mode !== "prepare") {
+        throw new UsageError(
+          "--fixlist applies to `tldrx next --prepare`: it re-prepares the story's DEVELOPER bundle "
+          + "around a reviewer's fix list (04-build/fixlist/<story>-<n>.md)",
+        );
+      }
       // `--prepare` and `--commit` spawn nothing, so there is nothing to watch:
       // the handle they get is inert. `--dry-run` DOES spawn — it runs the stage
       // and reverts the non-handoff outputs afterwards (measured 2026-08-30: one
@@ -87,6 +100,7 @@ export const nextCommand: Command = {
           dryRun,
           mode,
           review,
+          fixlist,
           model: stringFlag(args, "model"),
           effort: effortFlag(args),
           maxUsd: numberFlag(args, "max-usd"),

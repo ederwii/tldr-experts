@@ -86,7 +86,12 @@ if (role === "developer" && !failing) {
 const structured = failing
   ? null
   : role === "reviewer"
-    ? { verdict: nextVerdict(storyId), summary: `reviewed ${storyId}`, findings: verdictFindings(storyId) }
+    ? {
+        verdict: nextVerdict(storyId),
+        summary: `reviewed ${storyId}`,
+        findings: verdictFindings(storyId),
+        ...fixlistFor(storyId),
+      }
     : { outputs: written, questions_asked: [], notes: `fake developer for ${storyId}` };
 
 if (liveMarker !== null && liveDir !== undefined) {
@@ -183,6 +188,21 @@ function nextVerdict(id: string): string {
   const queue = queues[id] ?? ["approve"];
   const at = attemptCount(`review:${id}`) - 1;
   return queue[Math.min(at, queue.length - 1)] ?? "approve";
+}
+
+/**
+ * `FAKE_BUILD_FIXLIST` — the `fixlist[]` this reviewer returns, per story, when
+ * its queued verdict is `fixlist`. `{"S1": [{finding, disposition, …}]}`.
+ *
+ * Absent, a `fixlist` verdict comes back with NO array, which is exactly the
+ * fail-closed case worth being able to produce: `parseReview` must read that as
+ * `changes`.
+ */
+function fixlistFor(id: string): Record<string, unknown> {
+  if (nextVerdictPeek(id) !== "fixlist") return {};
+  const map = JSON.parse(process.env.FAKE_BUILD_FIXLIST ?? "{}") as Record<string, unknown>;
+  const rows = map[id];
+  return rows === undefined ? {} : { fixlist: rows };
 }
 
 function verdictFindings(id: string): string[] {

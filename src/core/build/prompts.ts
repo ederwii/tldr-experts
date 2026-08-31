@@ -77,6 +77,17 @@ export interface DeveloperPromptParts {
   /** A previous reviewer's `changes` verdict, rendered under `## Previous attempt`. */
   readonly previousAttempt?: string;
   /**
+   * The rendered body of `## Fix list` — a reviewer that SIGNED this story and
+   * attached numbered findings (`build/fixlist.ts`), routed back here by
+   * `tldrx next --prepare --fixlist`.
+   *
+   * A sibling of `previousAttempt`, not a replacement: the two are different
+   * verdicts. `changes` means the diff was faulted and the story is owed another
+   * attempt; a fix list means it was SIGNED and there is work beside it. In
+   * practice only one of the two is ever non-empty for a given attempt.
+   */
+  readonly fixlist?: string;
+  /**
    * Touched paths that are NOT committed at the story branch's base, so the
    * worktree has no copy (`build/git.ts` `pathAtRef`). They are flagged in the
    * prompt rather than rendered as "this story creates it", which is what they
@@ -183,6 +194,11 @@ export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
     "",
   ];
 
+  const fixlist = (parts.fixlist ?? "").trim();
+  if (fixlist !== "") {
+    lines.push("## Fix list", "", fixlist, "");
+  }
+
   const previous = (parts.previousAttempt ?? "").trim();
   if (previous !== "") {
     lines.push(
@@ -231,6 +247,18 @@ export interface ReviewerPromptParts {
   readonly worktree: string;
   readonly conventions: string;
   readonly dodResults: readonly { readonly command: string; readonly exitCode: number }[];
+  /**
+   * Is the third verdict still on the table for this story? (design §B.4)
+   *
+   * False once a fix-list round has been spent: the bound is one per story, so a
+   * second `fixlist` is refused by the executor and read as `changes`. A prompt
+   * that offered a verdict the framework would then refuse would be inviting the
+   * reviewer to waste its turn, so the option is withdrawn in the prompt too.
+   *
+   * Absent means available — a stage rendering this prompt before the bound
+   * existed asked for the same thing it asks for now.
+   */
+  readonly fixlistAvailable?: boolean;
 }
 
 /**
@@ -292,6 +320,7 @@ export function buildReviewerPrompt(parts: ReviewerPromptParts): string {
     "",
     "- `verdict` — `approve` when every acceptance criterion is met by the diff and the",
     "  conventions hold; `changes` when anything is missing, wrong or unconventional.",
+    ...verdictLines(parts.fixlistAvailable !== false),
     "- `summary` — one or two sentences a human can act on.",
     "- `findings` — one line per thing you want changed. Empty on `approve`.",
     "",
@@ -310,13 +339,67 @@ export function buildReviewerPrompt(parts: ReviewerPromptParts): string {
   return lines.join("\n");
 }
 
-/** The reviewer's envelope, passed verbatim to `claude --json-schema`. */
+/**
+ * The `fixlist` bullet — or the sentence saying why it is not offered.
+ *
+ * Both spellings are deliberate. A reviewer told nothing about the third verdict
+ * would return `approve` over defects it had found (that is the failure this
+ * whole feature is named after); a reviewer offered a verdict the executor is
+ * about to refuse would waste its turn on one.
+ */
+function verdictLines(available: boolean): readonly string[] {
+  if (!available) {
+    return [
+      "  (`fixlist` is NOT available on this story — its one fix-list round is already spent,",
+      "  so this review is a full one: `approve` or `changes`.)",
+    ];
+  }
+  return [
+    "- `fixlist` — you would sign, AND you found defects the acceptance criteria never",
+    "  covered. Costs the story no attempt, and there is exactly one such round. Every",
+    "  finding goes in `fixlist[]` with a `disposition`: `fix-now` (this story's own",
+    "  correctness — it blocks `done`), `defer-with-log` (real, but somebody else's call),",
+    "  `out-of-scope`, or `refuted`. A `refuted` finding MUST carry an `[src: …]` citation",
+    "  proving it wrong, in `where` or `detail` — your verdict is a claim like any other.",
+    "  Put anything the author must NOT do about a finding in its `do_not` list.",
+  ];
+}
+
+/**
+ * The reviewer's envelope, passed verbatim to `claude --json-schema` — and
+ * written into the reviewer bundle so a host answering by hand is answering the
+ * same question.
+ *
+ * `fixlist` is the third verdict and `fixlist[]` is what makes it one: a verdict
+ * that says "signed, and here are three defects" is worth nothing without the
+ * three defects in a shape the executor can write an artifact from. It is
+ * OPTIONAL in the schema because the other two verdicts do not carry it, and
+ * `parseReview` is where its absence under `verdict: "fixlist"` is refused —
+ * fail-closed, to `changes`.
+ */
 export const REVIEW_SCHEMA = {
   type: "object",
   properties: {
-    verdict: { type: "string", enum: ["approve", "changes"] },
+    verdict: { type: "string", enum: ["approve", "changes", "fixlist"] },
     summary: { type: "string" },
     findings: { type: "array", items: { type: "string" } },
+    fixlist: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          n: { type: "integer" },
+          severity: { type: "string" },
+          finding: { type: "string" },
+          where: { type: "string" },
+          disposition: { type: "string", enum: ["fix-now", "defer-with-log", "refuted", "out-of-scope"] },
+          detail: { type: "string" },
+          do_not: { type: "array", items: { type: "string" } },
+        },
+        required: ["finding", "disposition"],
+        additionalProperties: false,
+      },
+    },
   },
   required: ["verdict", "summary", "findings"],
   additionalProperties: false,

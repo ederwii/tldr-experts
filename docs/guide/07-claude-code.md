@@ -186,6 +186,57 @@ Everything downstream is the ordinary path: `approve` finishes the story with it
 `changes` requeues it once and blocks it the second time, and an envelope that cannot be read
 is `changes` — never `approve`. A review you never write costs the story no attempt at all.
 
+### When you would sign and still have findings
+
+The verdict for that is `fixlist`, and it exists because the other two throw the findings away.
+Measured 2026-08-31 on a real story: the reviewer signed — every acceptance criterion met, zero
+scope violations — and named three real defects the criteria never covered. `approve` loses
+them; `changes` spends the story's one requeue on a diff nobody faulted.
+
+Write it like any other verdict, with the findings beside it:
+
+```json
+{
+  "verdict": "fixlist",
+  "summary": "signed — every criterion is met, and three defects the criteria never covered",
+  "findings": [],
+  "fixlist": [
+    {"n": 1, "severity": "high", "finding": "Concurrent double-confirm mints two sessions",
+     "where": "`src/Auth/ConfirmOtp.cs:74` [src: lab:src/Auth/ConfirmOtp.cs:74]",
+     "disposition": "fix-now",
+     "detail": "Two requests carrying the same code both mint a session.",
+     "do_not": ["add a lockout policy; that is a product decision (see 3)"]},
+    {"n": 3, "severity": "medium", "finding": "No OTP attempt limiter",
+     "disposition": "defer-with-log", "detail": "A lockout policy is a product call."}
+  ]
+}
+```
+
+What happens next:
+
+- The framework writes **`04-build/fixlist/<story>-1.md`** — numbered findings, each with its
+  `Disposition:` and a `Resolved: no` — and the story parks at `review` having spent **no
+  attempt**. `defer-with-log` findings are appended to `retro.md` on the way past.
+- The next **`tldrx next --prepare`** carries that file back to the author: the open findings
+  land under `## Fix list` in the developer prompt with their `Do NOT` lines verbatim, and
+  `pending.json` gains `fixlist: {…}` plus `resume_session` — the prior turn's `session_id`, so
+  you can resume that sub-agent instead of paying to rebuild its context. The framework resumes
+  nothing itself; it hands you the id it recorded. `--fixlist <path>` names a different file.
+- **You disposition it.** A `fix-now` finding keeps the story out of `done`: an `approve` over
+  an open one settles `blocked` and names it. Close each in the file as the fix lands
+  (`Resolved: yes`) or re-route its `Disposition:`. That edit is yours — the author works in a
+  story worktree of another repo and its own prompt forbids writing outside it.
+- **There is exactly one such round.** A second `fixlist` on the same story is refused out loud
+  and read as `changes`, which costs the attempt the first one did not — and the second
+  reviewer's prompt says the verdict is unavailable rather than offering one that would be
+  refused.
+
+Two rules are worth knowing before you use it. `refuted` is the one disposition that
+contradicts its own finding, so it **must** carry an `[src: …]` citation proving the finding
+wrong — a reviewer's verdict is a claim like any other. And a `fixlist` verdict whose
+`fixlist[]` is missing, empty or unreadable is `changes`, not a free round: fail-closed, the
+same rule the rest of the envelope has.
+
 ## The hooks
 
 | Hook | Event | What it does |

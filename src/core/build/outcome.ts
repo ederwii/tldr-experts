@@ -22,8 +22,17 @@ import type { PlanStatus } from "../schemas/planCommon.ts";
  *
  * Fail-closed is right — an unfinished review is never an approval. Inventing the
  * verdict is not.
+ *
+ * `fixlist` is the fifth, and it is the one the OTHER four could not express: a
+ * reviewer that signed and still has findings. Measured 2026-08-31 on story S5 of
+ * `260830-tenancy-identity-customers` — every acceptance criterion met, zero
+ * scope violations, and three real correctness/security defects the criteria
+ * never covered. `approve` discards them; `changes` spends the story's one
+ * requeue on a diff nobody faulted. So `fixlist` settles the story at `review`,
+ * spends NO attempt, and is bounded at one round (`MAX_FIXLIST_ROUNDS`) — a free
+ * round that could be taken twice is a story that never has to settle.
  */
-export type Verdict = "approve" | "changes" | "n-a" | "error";
+export type Verdict = "approve" | "changes" | "n-a" | "error" | "fixlist";
 
 export interface DodResult {
   readonly command: string;
