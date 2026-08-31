@@ -22,7 +22,8 @@ import { loadRunView, newestActiveRun, cursorStage, type RunView } from "./lib/r
 import { budgetGateDeny } from "./lib/messages.ts";
 import { currentActor, nowRfc3339 } from "./lib/actor.ts";
 import { loadRunBudget } from "../core/budget/loadBudget.ts";
-import { isHostTokens } from "../core/budget/RunBudget.ts";
+import { economyFor, isHostTokens } from "../core/budget/RunBudget.ts";
+import { remainingWork } from "../core/budget/remainingWork.ts";
 import { wouldExceed } from "../core/budget/wouldExceed.ts";
 import { raiseCommand, shortBy } from "../core/budget/budgetView.ts";
 import { EventLog } from "../core/events/EventLog.ts";
@@ -104,7 +105,22 @@ await runHook("budget-gate", async () => {
   if (budget === null) failClosed(command, `${view.dir}/budget.yml is missing or unreadable`);
 
   const stage = cursorStage(view);
-  const estimate = estimateFor(command, stage?.budget_usd ?? stageBudgetFromLibrary(root, view.cursor.stage));
+  const declared = stage?.budget_usd ?? stageBudgetFromLibrary(root, view.cursor.stage);
+  // Not the stage's price — what is LEFT to dispatch under it. On a Build stage
+  // whose plan is on disk this shrinks as stories settle; everywhere else it IS
+  // the declared price and this hook behaves exactly as it did (design §E.2).
+  // Reading files is safe here: `remainingWork` is TOTAL — an unreadable plan
+  // comes back as the declared price, which is what this hook used before.
+  const work = declared === null ? null : remainingWork({
+    runDir: view.dir,
+    phaseId: view.cursor.phase,
+    stageBudgetUsd: declared,
+    stageSpentUsd: stage?.cost_usd ?? 0,
+    perAgentMaxUsd: budget.per_agent_max_usd,
+    maxUsd: null,
+    economy: economyFor(budget, view.cursor.phase),
+  });
+  const estimate = estimateFor(command, work === null ? null : work.usd);
   if (estimate <= 0) return; // nothing declared to spend; nothing to refuse
 
   // A ceiling that is not in dollars cannot deny a dollar spend (design §E.2).

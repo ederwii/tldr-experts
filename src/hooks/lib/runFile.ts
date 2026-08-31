@@ -23,6 +23,8 @@ export interface RunStage {
   readonly status: string;
   readonly expert: string | null;
   readonly budget_usd: number | null;
+  /** What the stage has metered so far — the reviewer floor's own clamp needs it. */
+  readonly cost_usd: number | null;
 }
 
 export interface RunPhaseView {
@@ -73,6 +75,7 @@ export function loadRunView(runDir: string): RunView | null {
             status: str(s?.status),
             expert: typeof s?.expert === "string" ? s.expert : null,
             budget_usd: typeof s?.budget_usd === "number" ? s.budget_usd : null,
+            cost_usd: typeof s?.cost_usd === "number" ? s.cost_usd : null,
           });
         }
       }

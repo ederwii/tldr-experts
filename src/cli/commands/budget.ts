@@ -49,7 +49,7 @@ function budgetShow(argv: readonly string[]): number {
     if (!isResolved(resolved)) return resolved.exit;
     const store = resolved.store;
 
-    const view = buildBudgetView(store.run, store.budget);
+    const view = buildBudgetView(store.run, store.budget, store.runDir);
     process.stdout.write(
       boolFlag(args, "json") ? `${JSON.stringify(view, null, 2)}\n` : `${renderBudget(view)}\n`,
     );
@@ -107,7 +107,7 @@ function budgetRaise(argv: readonly string[]): number {
     });
     store.save();
 
-    const view = buildBudgetView(store.run, store.budget);
+    const view = buildBudgetView(store.run, store.budget, store.runDir);
     const lines = [describeRaise(outcome)];
     lines.push(
       view.blocked === null

@@ -252,6 +252,49 @@ a time. (The reviewer floor above is the one deliberate exception to that sum: i
 lift a small stage's worst case past its ceiling, and the budget gate is what stops a
 stage that actually runs out.)
 
+## What "the estimate" means, once a stage has started
+
+For most stages the estimate is the stage's own `budget_usd`. For a **Build stage with a
+plan on disk** it is the work that is LEFT: the sum of the caps the executor would actually
+hand out for the stories that have not settled — per-story prices, developer and reviewer
+shares, the reviewer floor, and the attempts each story still has.
+
+Measured 2026-08-31 on `260830-tenancy-identity-customers`: four of seven stories done, one
+mid-attempt-2, two blocked. The stage was priced at **$18.00** and the brake kept demanding
+all of it, refusing the stage twice and costing the host two `budget raise --take-from`
+moves for money nothing was going to spend. The real remaining work was **$2.50** — one
+developer share and one reviewer floor.
+
+The refusal shows its arithmetic, so the number can be argued with:
+
+```
+[tldrx] budget: refusing to start stage "build" — phase 04-build has $0.40 left and the
+remaining work is $2.50.
+remaining work: S4 dev $1.50 + reviewer $1.00 = $2.50
+4 of 7 stories done; the stage's static estimate is $18.00.
+S6, S7 are blocked and cost $0.00 here — the executor dispatches a blocked story only after
+`tldrx story reopen`, which would raise this.
+```
+
+`tldrx budget show`'s **est.** column uses the same computation, and prints the same
+breakdown under the table, so the two can never tell you different numbers.
+
+Four things are worth knowing about it:
+
+- **`blocked` costs $0.** The executor will not dispatch a blocked story on its own; only
+  `tldrx story reopen` puts it back in the queue, and doing so legitimately raises this
+  figure again. The blocked ids are named rather than silently dropped.
+- **A story at `review` has already paid its current developer turn.** Only a `changes`
+  verdict buys another one.
+- **It can only ever NARROW.** The figure is capped at the stage's own `budget_usd`, so this
+  brake can never refuse more often than it did before it learned to count.
+- **Under `economy: host-tokens`** the developer turns cost $0 — the host session pays for
+  them — while the reviewer floors stay, because outside attended mode a metered reviewer is
+  still spawned.
+
+With no plan on disk, and outside the Build phase, the estimate is `budget_usd` and every
+path behaves exactly as it always did.
+
 ## The budget gate
 
 `budget-gate` is a PreToolUse hook on **every command that spends**: `claude -p …`,

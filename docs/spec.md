@@ -1526,7 +1526,7 @@ spends nothing or there is no `.tldrx/` at all: those are correct negatives, not
 | `no-re-ask` | PreToolUse (`Write\|Edit`) | `tool_input.file_path` matches `tldrx-work/**/questions.md` | Tokenise each new question heading + `area`; compare against non-retired `facts.yml` rows; Jaccard ≥ 0.6 on ≥4-char tokens ⇒ hit `[assumption]` | Denies the write, names the matching fact |
 | `answer-capture` | PostToolUse + FileChanged | `tldrx-work/**/questions.md` | Find blocks with `status: open` and a non-empty `[Answer]:` capture | Never blocks; writes footer + `facts.yml` + `question.answered`; echoes one line to stdout as context |
 | `DoD-gate` | PreToolUse (`Write\|Edit`) | would-be content of `tldrx-work/**/stories/*.md` sets `status: done` | Re-run every command in the story's fenced ```dod block, in its repo, with `stage.yml timeout_s`; all must exit 0. **Only a command byte-equal to a `workspace.yml` command runs, argv-split with no shell** | Denies if any command fails, is not on the allowlist, needs a shell, or the block is missing (this hook is not <50 ms by design) |
-| `budget-gate` | PreToolUse (`Bash`) | `tool_input.command` matching `^(claude -p\|tldrx next\|tldrx run auto\|tldrx expert train\|tldrx seed triage)` | `spent + estimate > phase ceiling` (or run ceiling) and `on_exceed: block`. Estimate: the stage ceiling for `next`; `--max-usd` else the run ceiling for `run auto`; $2.00 / $1.00 defaults for `train` / `triage` | Denies the spawn; appends `budget.blocked` |
+| `budget-gate` | PreToolUse (`Bash`) | `tool_input.command` matching `^(claude -p\|tldrx next\|tldrx run auto\|tldrx expert train\|tldrx seed triage)` | `spent + estimate > phase ceiling` (or run ceiling) and `on_exceed: block`. Estimate: the **remaining work** for `next` (below); `--max-usd` else the same figure for `run auto`; $2.00 / $1.00 defaults for `train` / `triage` | Denies the spawn; appends `budget.blocked` |
 | `session-start-status` | SessionStart | always | Read the newest non-terminal `run.yml`; when several are open, list them all first. Then build the `tldrx status` report (§3) | Never blocks; injects a 3-line "where we are" via `additionalContext`, then up to 3 lines of the pending report — a headline plus as many items as fit. Nothing pending AND no run ⇒ no output at all |
 | `statusline` | statusLine | always | Render from the statusLine JSON + `run.yml` | Output only |
 
@@ -1550,6 +1550,24 @@ items — "Unknowns" (L18). Findings/Decisions/Unknowns/Evidence ledger must eac
 prose alone is not a claim anything can check. If there is genuinely nothing, say so as an item:
 `- none [src: absent:<what you looked at>]`.
 ```
+
+**The estimate is the REMAINING work, not the stage's price (2026-08-31).** For a Build stage with a plan on disk,
+the figure both this hook and `tldrx next`'s own brake compare against is `Σ` over the stories that have not settled of
+the caps the executor would actually hand out — the `03-plan/budget.yml` price run through the same scale/share
+arithmetic, the developer and reviewer shares, `REVIEWER_FLOOR_USD`, and the attempts each story has left. Everywhere
+else — outside Build, and for a Build stage with no plan — it is `stage.budget_usd`, unchanged.
+
+Measured on `260830-tenancy-identity-customers`: four of seven stories done, one mid-attempt-2, two blocked. The stage
+was priced at **$18.00**; the brake demanded all $18.00 on every cycle and refused twice, and the host raised the
+ceiling twice for money nothing was going to spend. The remaining work was **$2.50**.
+
+Four rules, each load-bearing: a `blocked` story costs $0 (only `tldrx story reopen` — a human decision — re-queues it,
+and doing so raises the figure again, which the message says); a story at `review` has already paid the developer turn
+under review; under `economy: host-tokens` the developer turns are $0 and the reviewer floors are not; and the result is
+**capped at `stage.budget_usd`**, so this is strictly a NARROWING and can never refuse more often than it used to.
+`budget.blocked` carries `estimate_basis: plan|static` and, on the plan basis, `static_estimate_usd`, `stories_done` and
+`stories_total`. The refusal prints the sum term by term — `remaining work: S4 dev $1.50 + reviewer $1.00 = $2.50` — and
+`tldrx budget show`'s `est.` column is computed by the same function, so the two cannot disagree.
 
 The budget-gate message names the **command** rather than the field it edits. Measured, 2026-08-29 pilot: told to
 "raise phases[02-how].ceiling_usd", the operator hand-edited it to a number that did not cover the estimate, and the
