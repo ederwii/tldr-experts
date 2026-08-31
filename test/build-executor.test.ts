@@ -723,6 +723,27 @@ describe("reading a review off the ledger", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  test("an attempt that started and ran nothing does not erase the DoD before it", () => {
+    // The live run's own event order (2026-08-30): S1's three commands went
+    // green, its reviewer died, and then a `--prepare` recorded a `task.started`
+    // for an attempt 2 that never ran. Resetting on `task.started` alone left the
+    // resumed reviewer with no DoD results and the log claiming the story
+    // declares none.
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-ledger-"));
+    const rows = [
+      { type: "task.started", payload: { story: "S1", attempt: 1 } },
+      { type: "check.passed", payload: { story: "S1", check: "dod", command: "dotnet build", exit_code: 0, detail: "" } },
+      { type: "check.passed", payload: { story: "S1", check: "dod", command: "dotnet test", exit_code: 0, detail: "" } },
+      { type: "check.failed", payload: { story: "S1", check: "review", verdict: "error", detail: "claude exited 1" } },
+      { type: "task.done", payload: { story: "S1", status: "review", commit: "dc5c67a" } },
+      { type: "task.started", payload: { story: "S1", attempt: 2, mode: "prepare" } },
+    ];
+    writeFileSync(join(dir, "events.jsonl"), `${rows.map((r) => JSON.stringify(r)).join("\n")}\n`, "utf8");
+
+    expect(readReviewLedger(dir, "S1").dod.map((r) => r.command)).toEqual(["dotnet build", "dotnet test"]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   test("a later real verdict clears an earlier error", () => {
     const dir = mkdtempSync(join(tmpdir(), "tldrx-ledger-"));
     const rows = [

@@ -1774,7 +1774,7 @@ export interface ReviewLedger {
   readonly erroredWith: string | null;
   /** The story commit the last `task.done` recorded — the diff already merged. */
   readonly commit: string | null;
-  /** The DoD results of the story's most recent developer attempt. */
+  /** The DoD results of the last developer attempt that actually ran one. */
   readonly dod: readonly DodResult[];
 }
 
@@ -1787,7 +1787,12 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
   let verdicts = 0;
   let erroredWith: string | null = null;
   let commit: string | null = null;
+  // `dod` is the last attempt that got as far as running its DoD; `current` is
+  // what THIS attempt has run so far. An attempt that was started and produced
+  // nothing must not erase the proof of the one before it — measured on the live
+  // run, where the wrongly-prepared "attempt 2" left S1 with no DoD at all.
   let dod: DodResult[] = [];
+  let current: DodResult[] = [];
 
   for (const line of readFileSync(path, "utf8").split("\n")) {
     if (line.trim() === "") continue;
@@ -1801,9 +1806,12 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     const payload = event.payload ?? {};
     if (payload.story !== storyId) continue;
 
-    // A new attempt starts a new DoD run; only the latest one describes the diff
-    // that is on the branch now.
-    if (event.type === "task.started") dod = [];
+    // A new attempt starts a new DoD run; only the latest one that RAN describes
+    // the diff on the branch now.
+    if (event.type === "task.started") {
+      if (current.length > 0) dod = current;
+      current = [];
+    }
     if (event.type === "task.done" && typeof payload.commit === "string" && payload.commit !== "") {
       commit = payload.commit;
     }
@@ -1811,7 +1819,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
 
     if (payload.check === "dod" && typeof payload.command === "string") {
       const exitCode = typeof payload.exit_code === "number" ? payload.exit_code : 0;
-      dod.push({
+      current.push({
         command: payload.command,
         exitCode,
         timedOut: exitCode === 124,
@@ -1830,7 +1838,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     verdicts++;
     erroredWith = null;
   }
-  return { verdicts, erroredWith, commit, dod };
+  return { verdicts, erroredWith, commit, dod: current.length > 0 ? current : dod };
 }
 
 /**

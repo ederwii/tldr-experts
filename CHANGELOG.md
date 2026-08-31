@@ -51,7 +51,8 @@
   to redo. Both doors do it: the headless path and `tldrx next --prepare`, which used to
   hand the host session a full "attempt 2" developer bundle. The commit and the DoD results
   come back out of `events.jsonl`, so the resumed reviewer sees the same proof the first one
-  did. Runs recorded by the OLD code resume too — a `verdict: "changes"` whose `detail` is
+  did — including on the live run, where a `task.started` for the attempt that was never owed
+  sits AFTER the DoD it did not run, and must not erase it. Runs recorded by the OLD code resume too — a `verdict: "changes"` whose `detail` is
   one of the framework's own transport errors is read as the failure it was, including a
   story already left at `in_progress` by a wrongly-prepared attempt 2.
 - **The Build executor reads `03-plan/budget.yml`.** The Plan writes a per-story price map,
