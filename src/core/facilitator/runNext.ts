@@ -53,7 +53,7 @@ import {
   promptPath, readResult, writeBundle, writeRaw, PendingError,
   dispatchNotesRecord, type PendingStage,
 } from "./pending.ts";
-import { preparedBundles, PENDING_JSON } from "../run/prepared.ts";
+import { hasReviewBundle, preparedBundles, PENDING_JSON } from "../run/prepared.ts";
 import { capInputs, describeTruncatedInputs, inlineInputs, type InlineResult } from "./seedInputs.ts";
 import {
   buildLedger, questionsBytesOf, renderContextWarning, renderLedger, renderRefusal,
@@ -69,6 +69,14 @@ export interface NextOptions {
   readonly runId?: string;
   readonly dryRun: boolean;
   readonly mode: NextMode;
+  /**
+   * `--review` — this half of the handshake is for the story's REVIEWER, not its
+   * developer (design §B.3).
+   *
+   * Only ever true beside `--prepare` or `--commit`; the CLI refuses it on a bare
+   * `tldrx next`. Phases with no reviewer ignore it.
+   */
+  readonly review?: boolean;
   /** `--model`, overriding the stage pin. */
   readonly model?: string;
   /** `--effort`, overriding the stage's `effort:`. Undefined ⇒ the stage decides. */
@@ -605,6 +613,13 @@ function bundleSummary(set: ExpertBundleSet): PendingStage["experts"] {
  * stage actually is, because "use --prepare" on a stage whose bundle is already
  * out is the wrong half of the handshake.
  *
+ * THREE halves, not two, since the reviewer became delegable (design §B.3). A
+ * Build stage holding a reviewer bundle is `running` exactly like one holding a
+ * developer bundle, so `--commit` alone used to be named for both — and on the
+ * review it is the wrong door: it reads the DEVELOPER's `result.json` and re-runs
+ * a pipeline that has already merged. The review bundle is checked first because
+ * it is the more specific fact.
+ *
  * `--dry-run` is refused with everything else: it is `mode: "headless"`, it
  * spawns a real sub-agent and bills for it, and only reverts the FILES afterwards.
  */
@@ -617,10 +632,13 @@ function attendedRefusal(
 ): NextOutcome | null {
   if (!isAttendedByHost(store.run) || options.mode !== "headless") return null;
   const running = requireStage(store, phaseId, stageId).status === "running";
-  const half = running ? "--commit" : "--prepare";
-  const waiting = running
-    ? "has a bundle out and is waiting for its result"
-    : "is waiting on a host turn";
+  const reviewing = hasReviewBundle(store.runDir, stageId);
+  const half = reviewing ? "--commit --review" : running ? "--commit" : "--prepare";
+  const waiting = reviewing
+    ? "has a REVIEW bundle out and is waiting for its verdict"
+    : running
+      ? "has a bundle out and is waiting for its result"
+      : "is waiting on a host turn";
   return out(EXIT_AWAITING_HUMAN, [
     ...notes,
     `${store.runId} is attended_by: host — the framework does not spawn on this run.`,
@@ -797,6 +815,7 @@ async function runExecutor(
     // `stage.yml`'s. Absent everywhere it is 1 — the sequential path, unchanged.
     parallel: options.parallel ?? spec.parallel ?? 1,
     discardPending: options.discardPending === true,
+    review: options.review === true,
     attendedByHost: isAttendedByHost(store.run),
     agentCap: (share = 1) => agentCap(options, store, stage, share),
     emit: (type, payload, costUsd = 0, actor = null) => {
@@ -838,12 +857,18 @@ function recordExecutorTasks(
 ): void {
   for (const task of outcome.tasks) {
     const id = nextTaskId(store, phaseId, stageId);
+    // An unmetered task is a HOST turn: nothing here watched it, so `$0.00` would
+    // be a measurement and a false one. Same spelling `commitStage` uses for the
+    // single-agent in-session path — `cost_usd: null` plus `metered: false`.
+    const metered = task.metered !== false;
     recordTask(store, phaseId, stageId, {
       id,
       status: task.error === null ? "done" : "failed",
       expert: spec.planned.experts[0] ?? null,
       model: task.model,
-      cost_usd: round2(task.costUsd),
+      cost_usd: metered ? round2(task.costUsd) : null,
+      ...(metered ? {} : { metered: false }),
+      ...(task.tokens === undefined ? {} : { tokens: task.tokens }),
       error: task.error,
       session_id: task.sessionId,
       started_at: options.at,
@@ -858,7 +883,9 @@ function recordExecutorTasks(
       model: task.model,
       effort: options.effort ?? spec.planned.effort ?? null,
       outputs: task.outputs,
-    }, round2(task.costUsd)));
+      ...(metered ? {} : { mode: "in-session", metered: false }),
+      ...(task.tokens === undefined ? {} : { tokens: task.tokens }),
+    }, metered ? round2(task.costUsd) : 0));
   }
 }
 

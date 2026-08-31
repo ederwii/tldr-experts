@@ -135,6 +135,56 @@ export interface PendingStage {
    * which story's pipeline to continue.
    */
   readonly story?: string;
+  /**
+   * WHICH sub-agent this bundle is for, when a stage delegates more than one
+   * (design §B.3). Absent means what it has always meant: the one agent the
+   * stage runs — the developer, on a Build story.
+   *
+   * The host reads it to know which contract applies, because the two roles want
+   * different things back: a developer writes `{outputs, questions_asked, notes}`,
+   * a reviewer writes the `REVIEW_SCHEMA` envelope in `result_schema` below.
+   */
+  readonly role?: "developer" | "reviewer";
+  /**
+   * The JSON schema the result envelope must satisfy, verbatim — today only the
+   * reviewer's `REVIEW_SCHEMA`.
+   *
+   * Written into the bundle so the host knows the envelope shape without reading
+   * the framework's source. It is the SAME object handed to `claude --json-schema`
+   * on the spawned path, so a host review and a spawned one are answering the
+   * same question.
+   */
+  readonly result_schema?: Readonly<Record<string, unknown>>;
+  /** What a reviewer bundle is judging: the diff refs and the DoD already re-run. */
+  readonly review?: PendingReview;
+}
+
+/**
+ * The reviewer bundle's own facts — everything a host needs to dispatch the
+ * review without re-deriving it from the run.
+ *
+ * `commit` and `dod` are RECOVERED, not re-measured: the story's diff was
+ * committed and merged in an earlier cycle and its DoD went green then. Handing
+ * the host the shas and the exit codes off the ledger is what makes a re-review
+ * cost one turn instead of a whole rebuild.
+ */
+export interface PendingReview {
+  readonly story: string;
+  readonly repo: string;
+  readonly branch: string;
+  readonly epic_branch: string;
+  /** The exact command that produces the diff under review. */
+  readonly diff: string;
+  /** The merged story commit the verdict is about. */
+  readonly commit: string;
+  readonly attempt: number;
+  readonly max_attempts: number;
+  /** Run-root-relative cwd the reviewer runs in. */
+  readonly worktree: string;
+  /** The Definition of Done the facilitator already re-ran — do not re-run it. */
+  readonly dod: readonly { readonly command: string; readonly exit_code: number }[];
+  /** Why this review is being asked for again, when it is. */
+  readonly resumed_from?: string;
 }
 
 /** What the in-session runner is expected to write back. */
@@ -194,10 +244,15 @@ export function readPending(runDir: string, stageId: string): PendingStage {
 }
 
 /**
- * Read `result.json`. Throws with the path in the message rather than guessing at
- * a default — a commit with no result is an operator mistake worth naming.
+ * `result.json` as the raw object the host wrote.
+ *
+ * Split out of `readResult` because two envelopes now come back through this
+ * door and only one of them is a `StageResult`: a reviewer's is the
+ * `REVIEW_SCHEMA` shape, and narrowing it is `parseReview`'s job, not this
+ * file's. What is shared is the part that must fail the same way for both —
+ * absent, unparseable, or not an object.
  */
-export function readResult(runDir: string, stageId: string): StageResult {
+export function readResultObject(runDir: string, stageId: string): Record<string, unknown> {
   const path = resultPath(runDir, stageId);
   if (!existsSync(path)) {
     throw new PendingError(
@@ -213,7 +268,15 @@ export function readResult(runDir: string, stageId: string): StageResult {
   if (typeof doc !== "object" || doc === null || Array.isArray(doc)) {
     throw new PendingError(`${path} must be a JSON object`);
   }
-  const row = doc as Record<string, unknown>;
+  return doc as Record<string, unknown>;
+}
+
+/**
+ * Read `result.json`. Throws with the path in the message rather than guessing at
+ * a default — a commit with no result is an operator mistake worth naming.
+ */
+export function readResult(runDir: string, stageId: string): StageResult {
+  const row = readResultObject(runDir, stageId);
   return {
     outputs: strings(row.outputs),
     questions_asked: strings(row.questions_asked),

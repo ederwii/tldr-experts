@@ -4,6 +4,52 @@
 
 ### Added
 
+- **`tldrx next --prepare --review` / `--commit --review` — the reviewer is the second
+  delegable role.** A Build story has two sub-agents and only the developer was ever
+  delegable; the reviewer was the FRAMEWORK's spawn in both modes, which on a host-driven
+  run buys a second reading of a diff the host is already reading, and a bill nobody
+  budgeted. Now it rides the same handshake, one directory down:
+  `.agent/<stage>/<story>/review/{prompt.md,pending.json,result.json}` — nested so a
+  reviewer bundle can never be read as a developer one.
+  - **`--prepare --review` writes the bundle and spawns nothing.** `prompt.md` is what a
+    spawned reviewer would have been sent, from the same renderer. `pending.json` carries
+    `role: reviewer`, `result_schema` (the reviewer's `--json-schema` envelope, verbatim,
+    so the host needs no source to know the shape), and a `review:` block with the diff
+    command, the merged commit, the attempt and the **DoD results recovered from
+    `events.jsonl`** — the DoD is not re-run, and the prompt says so.
+  - **`--commit --review` settles it through the existing seam.** The envelope goes through
+    the same `parseReview` with the same fail-closed rule (unreadable ⇒ `changes`, never
+    `approve`) and the same `reviewAndSettle`: `approve` ⇒ `done` with its evidence,
+    `changes` ⇒ one requeue then `blocked`, `MAX_ATTEMPTS` and the requeue counter
+    untouched. A host that never writes `result.json` has produced no verdict and spends
+    no attempt.
+  - **The trail says whose review it was.** No `agent.spawned`; a `task.started` with
+    `role: reviewer, mode: prepare` instead. The `check: review` event carries
+    `source: host` (written only for a host review, so the spawned path's payload is
+    unchanged byte for byte), and the task row is `cost_usd: null, metered: false` unless
+    the envelope declares `cost_usd` / `tokens`.
+  - **On `attended_by: host` the framework never calls `spawnReviewer` at all.** Half B
+    merges the story and hands the review over, so a full attended story cycle emits zero
+    `agent.spawned`. Outside attended mode `--review` is opt-in and the headless reviewer
+    is unchanged.
+
+### Changed
+
+- **`tldrx next --prepare` on a story awaiting review now writes the reviewer bundle
+  instead of spawning a reviewer.** It used to spawn a metered one — which is the single
+  thing `--prepare` exists not to do. Measured 2026-08-31 on the live
+  `260830-tenancy-identity-customers`: story S3's reviewer died at its $1.00 cap, the
+  story parked at `review`, and the `--prepare` that was supposed to rescue it spawned a
+  replacement that a two-minute host timeout then killed mid-read. The story is still
+  parked at `review` afterwards, its attempt still unspent, and the verdict is the host's
+  to write. Headless `tldrx next` still re-runs the review by spawning, unchanged.
+- **`tldrx next`'s `attended_by: host` refusal names `--commit --review`** when the stage
+  is holding a reviewer bundle. It named `--commit`, which is the wrong half: that door
+  reads the DEVELOPER's `result.json` and re-runs a pipeline that has already merged.
+- **`--discard-pending` bins the reviewer bundle too**, alongside the developer bundles it
+  already binned — a stale review `result.json` would otherwise be read by the next
+  `--commit --review` as a verdict on work it never saw.
+
 - **`tldrx init` says what it is doing while it does it** — a live line per step, in the
   same `--ui scene|compact|plain|off` view family as the agent progress view, on stderr.
   It used to print NOTHING until it was finished. Measured 2026-08-30 on a five-repo

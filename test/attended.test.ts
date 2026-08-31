@@ -592,6 +592,7 @@ function executorContext(ws: BuildWorkspace, phaseId: string, stageId: string): 
     reuseEpic: false,
     parallel: 1,
     discardPending: false,
+    review: false,
     attendedByHost: true,
     agentCap: () => 2,
     emit: () => undefined,

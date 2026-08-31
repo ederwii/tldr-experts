@@ -43,15 +43,16 @@ import { agentDir } from "../paths.ts";
 import {
   describeDispatchNotes, loadDispatchNotes, type DispatchNotes,
 } from "../dispatchNotes.ts";
-import { preparedBundles } from "../../run/prepared.ts";
+import { preparedBundles, reviewBundles, REVIEW_DIR } from "../../run/prepared.ts";
 import { spawnAgent, BASE_TOOLS } from "../spawnAgent.ts";
 import {
-  PendingError, PENDING_FILE, RAW_FILE, RESULT_FILE, readResult, writeBundle, writeRaw,
-  dispatchNotesRecord, type PendingStage,
+  PendingError, PENDING_FILE, RAW_FILE, RESULT_FILE, readResult, readResultObject, writeBundle, writeRaw,
+  dispatchNotesRecord, type PendingReview, type PendingStage,
 } from "../pending.ts";
 import {
-  addWorktree, branchExists, commitAll, commitsBetween, currentBranch, dirtyPaths, ensureBranch, firstLine,
-  GitError, headSha, isDirty, mergeNoFf, partitionDirty, pathAtRef, removeWorktree, repoDirOf, stateDirPrefixes,
+  addWorktree, branchExists, commitAll, commitsBetween, currentBranch, diffCommand, dirtyPaths, ensureBranch,
+  firstLine, GitError, headSha, isDirty, mergeNoFf, partitionDirty, pathAtRef, removeWorktree, repoDirOf,
+  stateDirPrefixes,
 } from "../../build/git.ts";
 import {
   loadBuildPlan, PlanLoadError, BUILD_PHASE, LOG_DIR, PLAN_PHASE, WORKTREES,
@@ -162,6 +163,23 @@ interface ResumableReview {
   readonly error: string;
 }
 
+/**
+ * A story whose REVIEW is the only thing outstanding, and everything a reviewer
+ * needs to do it — recovered from the run's own ledger, never re-measured.
+ *
+ * The superset of `ResumableReview`: that one is the narrow "the last reviewer
+ * died" case, this one also covers "the review was handed to the host and has
+ * not come back", which is what a reviewer bundle on disk means.
+ */
+interface ReviewWork {
+  /** The merged story commit the verdict is about. */
+  readonly commit: string;
+  /** The DoD results of the attempt that produced it. */
+  readonly dod: readonly DodResult[];
+  /** Why the review is outstanding, in the words the operator reads. */
+  readonly why: string;
+}
+
 /** What half A of a parallel wave produced for one story. */
 interface StoryHalf {
   readonly story: StoryContext;
@@ -233,8 +251,15 @@ export async function buildExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
   const withClaims = (outcome: ExecutorOutcome): ExecutorOutcome =>
     session.claimedEpics.size === 0 ? outcome : { ...outcome, epicBranches: [...session.claimedEpics] };
   try {
-    if (ctx.mode === "prepare") return withClaims(await session.prepare());
-    if (ctx.mode === "commit") return withClaims(await session.commit());
+    // `--review` names the second delegable role. It rides the SAME two doors —
+    // there is one handshake, and a reviewer that needed its own would be a
+    // second contract for the host to get wrong (design §B.3).
+    if (ctx.mode === "prepare") {
+      return withClaims(ctx.review ? await session.prepareReviewOnly() : await session.prepare());
+    }
+    if (ctx.mode === "commit") {
+      return withClaims(ctx.review ? await session.commitReview() : await session.commit());
+    }
     return withClaims(await session.runAll());
   } catch (error) {
     if (error instanceof GitError || error instanceof PlanLoadError) {
@@ -344,6 +369,14 @@ function discardBundles(ctx: ExecutorContext): readonly string[] {
     // binned, and the operator who wrote it did not ask for it back.
     for (const file of [PENDING_FILE, RESULT_FILE, RAW_FILE]) rmSync(join(dir, file), { force: true });
     lines.push(`  · discarded the --prepare bundle in ${relative(ctx.root, dir)}/`);
+  }
+  // The reviewer half lives a level down (`<story>/review/`), so `preparedBundles`
+  // does not see it — deliberately, so `preparedRefusal` cannot read one as a
+  // developer bundle. It still has to be binnable: a stale review `result.json`
+  // is read by the next `--commit --review` as a verdict on work it never saw.
+  for (const dir of reviewBundles(ctx.runDir, ctx.stageId)) {
+    for (const file of [PENDING_FILE, RESULT_FILE, RAW_FILE]) rmSync(join(dir, file), { force: true });
+    lines.push(`  · discarded the reviewer bundle in ${relative(ctx.root, dir)}/`);
   }
   return lines;
 }
@@ -477,17 +510,22 @@ class BuildSession {
     const refusal = await this.refuseOnDirtyRepos() ?? await this.refuseOnForeignEpic();
     if (refusal !== null) return refusal;
 
-    // The reviewer is the FRAMEWORK's sub-agent in both modes — only the
-    // developer is delegated to the host session — so a story waiting on nothing
-    // but a re-review is finished here and now. An errored review produced no
-    // `changes` verdict, so no developer attempt is owed and none is offered:
-    // handing one out is exactly what this path did on 2026-08-30
-    // (`task.started … attempt: 2, mode: prepare`, for a diff nobody had read).
-    // A bundle a previous version of this code already handed out is not
-    // stranded by that — `tldrx next --commit` still reads its `result.json` and
-    // runs the full pipeline over it, exactly as before.
-    const resume = this.resumableReview(planned);
-    if (resume !== null) return await this.prepareRereview(planned, resume);
+    // A story waiting on nothing but a REVIEW gets its reviewer bundle written
+    // here, and nothing is spawned — exactly like every other `--prepare`.
+    //
+    // Two histories reach this line. An errored review produced no `changes`
+    // verdict, so no developer attempt is owed and none is offered: handing one
+    // out is what this path did on 2026-08-30 (`task.started … attempt: 2,
+    // mode: prepare`, for a diff nobody had read). And a review already handed to
+    // the host is re-offered rather than re-decided.
+    //
+    // Until 2026-08-31 this path SPAWNED a metered reviewer under `--prepare`,
+    // which is the one thing `--prepare` is supposed never to do: on the live
+    // `260830-tenancy-identity-customers` a host timeout killed that spawn
+    // mid-read and the story sat at `review` with the money gone. `--prepare`
+    // writes a bundle; who dispatches it is the host's business.
+    const review = this.reviewWorkFor(planned);
+    if (review !== null) return await this.prepareReview(planned, review);
 
     this.noteIfReopened(planned, this.statusOf(planned));
     const story = await this.openStory(planned);
@@ -545,9 +583,143 @@ class BuildSession {
     };
   }
 
-  /** The in-session answer to a story waiting on a review: run the review. */
-  private async prepareRereview(planned: PlannedStory, resume: ResumableReview): Promise<ExecutorOutcome> {
-    await this.rereview(planned, resume);
+  /**
+   * `tldrx next --prepare --review`: the reviewer bundle for the story at the
+   * cursor, asked for by name.
+   *
+   * Bare `--prepare` already routes here on its own when a story is waiting on a
+   * review (`reviewWorkFor`), so this is the explicit spelling rather than a
+   * second behaviour — and the one that says something useful when the story is
+   * NOT waiting on a review, instead of quietly preparing a developer.
+   */
+  async prepareReviewOnly(): Promise<ExecutorOutcome> {
+    const planned = this.nextPending();
+    if (planned === null) return await this.finish();
+    const refusal = await this.refuseOnDirtyRepos() ?? await this.refuseOnForeignEpic();
+    if (refusal !== null) return refusal;
+
+    const work = this.reviewWorkFor(planned) ?? this.reviewWorkFromLedger(planned);
+    if (work === null) {
+      return failed(
+        this.ctx,
+        `${planned.story.id} has no merged commit to review — a story is reviewed after its developer turn, `
+        + "not instead of one. Run `tldrx next --prepare` for the developer half first.",
+        [],
+      );
+    }
+    return await this.prepareReview(planned, work);
+  }
+
+  /**
+   * Write the reviewer bundle for a story whose review is outstanding, and STOP.
+   *
+   * Nothing is spawned, nothing is settled and no money moves: this is the same
+   * contract `--prepare` has for the developer, applied to the second role. The
+   * bundle carries the prompt a spawned reviewer would have been given — the same
+   * `buildReviewerPrompt`, byte for byte — plus the diff refs, the DoD recovered
+   * from the ledger, and the envelope schema `--commit --review` will parse.
+   */
+  private async prepareReview(planned: PlannedStory, work: ReviewWork): Promise<ExecutorOutcome> {
+    const story = await this.openStory(planned);
+    // `null`, not `0`: this invocation did not watch the merge happen, so it
+    // knows the story merged and does not know what the merge carried.
+    this.noteMerged(story, null);
+    this.lines.push(
+      `  · ${planned.story.id}: ${work.why} — preparing the REVIEW only; `
+      + `\`${work.commit}\` is already merged into \`${story.epicBranch}\``,
+    );
+    const key = this.writeReviewBundle(story, work);
+    // The story file is the state: `review` is where a story waiting on a verdict
+    // lives, and it is what `--commit --review` looks for. A story left
+    // `in_progress` by a developer bundle that was never owed is moved back here.
+    this.setStoryStatus(planned, "review");
+    this.ctx.emit("task.started", {
+      phase: this.ctx.phaseId,
+      story: planned.story.id,
+      wave: planned.wave,
+      repo: planned.story.repo,
+      branch: story.branch,
+      attempt: story.attempt,
+      role: "reviewer",
+      mode: "prepare",
+      resumed: "review",
+    });
+
+    const dir = relative(this.ctx.root, agentDir(this.ctx.runDir, key));
+    return {
+      ok: true,
+      awaiting: true,
+      tasks: this.tasks,
+      costUsd: this.spent(),
+      outputs: [...this.logPaths(), ...this.planOutputs(), ...this.retroOutputs()],
+      lines: [
+        ...this.lines,
+        `prepared the REVIEW of ${planned.story.id} · ${planned.story.title} — ${dir}/prompt.md `
+          + `(read-only, attempt ${String(story.attempt)} of ${String(MAX_ATTEMPTS)})`,
+        `dispatch ONE read-only sub-agent with cwd ${relative(this.ctx.root, story.worktree)}`,
+        `then write {verdict, summary, findings} to ${dir}/result.json and run `
+          + "`tldrx next --commit --review`",
+      ],
+      stderr: [...this.advisories],
+      error: null,
+    };
+  }
+
+  /**
+   * `tldrx next --commit --review`: the host's verdict, through the SAME seam a
+   * spawned reviewer's goes through.
+   *
+   * `parseReview` narrows the envelope with its existing fail-closed rule — an
+   * envelope this cannot read is `changes`, never `approve` — and `reviewAndSettle`
+   * decides the story's fate exactly as it does after a spawn. One review, one
+   * economy: no `agent.spawned` is emitted and no cent is metered.
+   */
+  async commitReview(): Promise<ExecutorOutcome> {
+    this.recordGateFeedback();
+    const planned = this.awaitingReview();
+    if (planned === null) {
+      return failed(
+        this.ctx,
+        "no reviewer bundle is out — run `tldrx next --prepare --review` first",
+        [],
+      );
+    }
+    const key = this.reviewBundleKey(planned.story.id);
+    let envelope: Record<string, unknown>;
+    try {
+      envelope = readResultObject(this.ctx.runDir, key);
+    } catch (error) {
+      if (error instanceof PendingError) return failed(this.ctx, error.message, []);
+      throw error;
+    }
+    const work = this.reviewWorkFromBundle(planned.story.id) ?? this.reviewWorkFromLedger(planned);
+    if (work === null) {
+      return failed(
+        this.ctx,
+        `${planned.story.id} has no merged commit on the bundle or the ledger — `
+        + "there is nothing this verdict is about",
+        [],
+      );
+    }
+
+    const story = await this.openStory(planned);
+    this.noteMerged(story, null);
+    const review = parseReview(envelope, summaryOf(envelope));
+    this.recordReview(story, review, {
+      costUsd: numberOf(envelope.cost_usd) ?? 0,
+      sessionId: typeof envelope.session_id === "string" ? envelope.session_id : null,
+      // Billed to the HOST session, not metered here. `cost_usd: null` +
+      // `metered: false` is the same spelling every other host turn gets.
+      metered: numberOf(envelope.cost_usd) !== undefined,
+      tokens: numberOf(envelope.tokens),
+      source: "host",
+    });
+    await this.reviewAndSettle(story, work.dod, work.commit, 0, null, review);
+    // A settled handshake leaves the LOG, not the bundle: the bundle's presence
+    // is what says "a review is outstanding", and one left behind would offer a
+    // verdict that has already been counted.
+    this.clearReviewBundle(key);
+
     if (this.nextPending() === null) return await this.finish();
     const outcome = this.outcomes.get(planned.story.id);
     return {
@@ -558,7 +730,7 @@ class BuildSession {
       outputs: [...this.logPaths(), ...this.planOutputs(), ...this.retroOutputs()],
       lines: [
         ...this.lines,
-        `${planned.story.id} → \`${outcome?.status ?? "?"}\` (review only — no developer attempt was owed)`,
+        `${planned.story.id} → \`${outcome?.status ?? "?"}\` (host review, unmetered)`,
         `${this.nextPending()?.story.id ?? "?"} is next — run \`tldrx next --prepare\``,
       ],
       stderr: [...this.advisories],
@@ -591,7 +763,22 @@ class BuildSession {
       error: null,
       outputs: result.outputs,
     });
-    await this.pipelineFromDod(story, round2(result.cost_usd ?? 0));
+    const route = await this.pipelineFromDod(story, round2(result.cost_usd ?? 0));
+    // On an attended run the story is merged and its review is now the host's:
+    // the bundle is out, nothing is settled, and the next command is the review
+    // half — not `--prepare` for the story after this one.
+    if (route === "handed-off") {
+      return {
+        ok: true,
+        awaiting: true,
+        tasks: this.tasks,
+        costUsd: this.spent(),
+        outputs: [...this.logPaths(), ...this.planOutputs(), ...this.retroOutputs()],
+        lines: [...this.lines],
+        stderr: [...this.advisories],
+        error: null,
+      };
+    }
 
     if (this.nextPending() === null) return await this.finish();
     const outcome = this.outcomes.get(planned.story.id);
@@ -777,26 +964,32 @@ class BuildSession {
     return { story, cost: spent, dod, commit, failure: null, developerError: null, before };
   }
 
-  /** Half B for one story: merge → review → done/blocked. Always serial. */
-  private async settleHalf(half: StoryHalf): Promise<void> {
+  /**
+   * Half B for one story: merge → review → done/blocked. Always serial.
+   *
+   * Returns `handed-off` when the review was written into a bundle for the host
+   * instead of spawned — the story is merged and parked at `review`, and the
+   * caller must say so rather than reporting a settled outcome it does not have.
+   */
+  private async settleHalf(half: StoryHalf): Promise<ReviewRoute> {
     const { story, dod, commit } = half;
     // A developer that FAILED comes first, because it is the one case where half
     // A produced no information at all. The story goes back to where it was, its
     // attempt unspent — see `parkDeveloperFailure`.
     if (half.developerError !== null) {
       await this.parkDeveloperFailure(story, half.developerError, half.cost, half.before);
-      return;
+      return "settled";
     }
     if (half.failure !== null) {
       await this.block(story, half.failure, half.cost, dod);
-      return;
+      return "settled";
     }
     // `buildHalf` sets `failure` whenever it has no commit, so this is
     // unreachable — but the reviewer path needs a sha it can hand forward, and a
     // narrowing the compiler can see beats one it has to be told about.
     if (commit === null) {
       await this.block(story, "the story produced no commit to review", half.cost, dod);
-      return;
+      return "settled";
     }
 
     // (f) merge into the epic. A conflict blocks the story; the wave carries on.
@@ -811,12 +1004,12 @@ class BuildSession {
         commit,
         conflicts: merge.conflicts,
       });
-      return;
+      return "settled";
     }
     this.noteMerged(story, carried);
 
     // (g)(h) the reviewer, and whatever it decides.
-    await this.reviewAndSettle(story, dod, commit, half.cost, carried);
+    return await this.reviewAndSettle(story, dod, commit, half.cost, carried);
   }
 
   /**
@@ -835,36 +1028,90 @@ class BuildSession {
     commit: string,
     priorCost: number,
     carried: number | null,
-  ): Promise<void> {
-    const review = await this.spawnReviewer(story, dod);
-    const cost = round2(priorCost + review.cost);
+    supplied?: Review,
+  ): Promise<ReviewRoute> {
+    // The HOST's review, already parsed and already recorded by `commitReview`.
+    // It reaches the same three branches below by the same rules — that is the
+    // whole point of injecting it here rather than settling it somewhere else.
+    if (supplied === undefined && this.ctx.attendedByHost) {
+      await this.handOffReview(story, dod, commit, priorCost, carried);
+      return "handed-off";
+    }
+    const outcome = supplied === undefined
+      ? await this.spawnReviewer(story, dod)
+      : { review: supplied, cost: 0 };
+    const review = outcome.review;
+    const cost = round2(priorCost + outcome.cost);
 
     // A reviewer that FAILED said nothing about the diff. The story parks at
     // `review` — pending, worktree kept, requeue counter untouched — and the next
     // `tldrx next` re-runs the REVIEW, not the developer.
-    if (review.review.verdict === "error") {
+    if (review.verdict === "error") {
       await this.settle(story, "review", {
-        dod, commit, merged: true, carried, verdict: "error", review: review.review, cost,
-        reason: `the reviewer FAILED and returned no verdict — ${review.review.summary}`,
+        dod, commit, merged: true, carried, verdict: "error", review, cost,
+        reason: `the reviewer FAILED and returned no verdict — ${review.summary}`,
       });
-      return;
+      return "settled";
     }
 
-    const requeue = review.review.verdict === "changes" && story.attempt < MAX_ATTEMPTS;
-    if (review.review.verdict === "changes") {
+    const requeue = review.verdict === "changes" && story.attempt < MAX_ATTEMPTS;
+    if (review.verdict === "changes") {
       await this.settle(story, requeue ? "review" : "blocked", {
-        dod, commit, merged: true, carried, verdict: "changes", review: review.review, cost,
+        dod, commit, merged: true, carried, verdict: "changes", review, cost,
         reason: requeue
-          ? `the reviewer asked for changes: ${review.review.summary}`
-          : `the reviewer asked for changes twice: ${review.review.summary}`,
+          ? `the reviewer asked for changes: ${review.summary}`
+          : `the reviewer asked for changes twice: ${review.summary}`,
       });
-      return;
+      return "settled";
     }
 
     // (h) done — DoD green AND the reviewer approved. Write the evidence.
     await this.settle(story, "done", {
-      dod, commit, merged: true, carried, verdict: "approve", review: review.review, cost, reason: null,
+      dod, commit, merged: true, carried, verdict: "approve", review, cost, reason: null,
     });
+    return "settled";
+  }
+
+  /**
+   * `attended_by: host` and the pipeline has reached the reviewer: write the
+   * reviewer bundle and stop, instead of spawning one.
+   *
+   * This is the "one review, one economy" half of design §B.3. On an attended run
+   * the host is already reading this diff; the framework spawning its own $0.26
+   * reader beside it buys a second opinion nobody asked for and a bill nobody
+   * budgeted. The story parks at `review` with its worktree kept, exactly where
+   * an errored review parks it, and `--commit --review` picks it up.
+   */
+  private async handOffReview(
+    story: StoryContext,
+    dod: readonly DodResult[],
+    commit: string,
+    priorCost: number,
+    carried: number | null,
+  ): Promise<void> {
+    const key = this.writeReviewBundle(story, {
+      commit, dod, why: "the run is `attended_by: host`, so the framework does not spawn a reviewer",
+    });
+    this.setStoryStatus(story.planned, "review");
+    this.ctx.emit("task.started", {
+      phase: this.ctx.phaseId,
+      story: story.planned.story.id,
+      wave: story.planned.wave,
+      repo: story.planned.story.repo,
+      branch: story.branch,
+      attempt: story.attempt,
+      role: "reviewer",
+      mode: "prepare",
+    });
+    const dir = relative(this.ctx.root, agentDir(this.ctx.runDir, key));
+    this.lines.push(
+      `  · ${story.planned.story.id} merged into \`${story.epicBranch}\` `
+      + `($${priorCost.toFixed(2)} so far${carried === null ? "" : `, ${String(carried)} commit(s) carried`}) — `
+      + "its review is the host's",
+      `prepared the REVIEW of ${story.planned.story.id} — ${dir}/prompt.md (read-only, nothing spawned)`,
+      `dispatch ONE read-only sub-agent with cwd ${relative(this.ctx.root, story.worktree)}`,
+      `then write {verdict, summary, findings} to ${dir}/result.json and run \`tldrx next --commit --review\``,
+    );
   }
 
   /**
@@ -960,7 +1207,7 @@ class BuildSession {
   }
 
   /** DoD → commit → merge → review → done/blocked, for the `--commit` cycle. */
-  private async pipelineFromDod(story: StoryContext, developerCost: number): Promise<void> {
+  private async pipelineFromDod(story: StoryContext, developerCost: number): Promise<ReviewRoute> {
     const dod = await this.runDod(story);
     const green = dod.length === 0 ? dodIsSatisfiedEmpty(this.plan) : dodGreen({ dod });
     if (!green) {
@@ -974,19 +1221,19 @@ class BuildSession {
         developerCost,
         dod,
       );
-      return;
+      return "settled";
     }
     const commit = await this.commitIfDirty(story);
     if (commit === null) {
       await this.block(story, "the working tree could not be committed", developerCost, dod);
-      return;
+      return "settled";
     }
     // `developerError` is null on this path by construction: the developer was
     // the HOST's sub-agent, not ours, and `--commit` only runs once it has left a
     // `result.json` behind. A host whose agent died writes no result and this
     // method is never reached. `before` is `in_progress` — what `--prepare` set —
     // and is unused, since nothing here can park.
-    await this.settleHalf({
+    return await this.settleHalf({
       story, cost: developerCost, dod, commit,
       failure: null, developerError: null, before: "in_progress",
     });
@@ -1208,16 +1455,7 @@ class BuildSession {
     }, 0, "reviewer");
 
     const agent = await spawnAgent({
-      prompt: buildReviewerPrompt({
-        runId: this.ctx.runId,
-        story: story.planned,
-        repoName: story.planned.story.repo,
-        branch: story.branch,
-        epicBranch: story.epicBranch,
-        worktree: story.worktree,
-        conventions: renderConventions(this.ctx.root, [story.planned.story.repo]),
-        dodResults: dod.map((r) => ({ command: r.command, exitCode: r.exitCode })),
-      }),
+      prompt: this.reviewerPrompt(story, dod),
       model: this.model(),
       effort: this.ctx.effort,
       maxBudgetUsd: cap,
@@ -1243,13 +1481,70 @@ class BuildSession {
     // (2026-08-30); `reviewerFailed` records the corpse as a corpse.
     const review = agent.ok ? parseReview(agent.structured, agent.result) : reviewerFailed(agent.error);
 
-    this.tasks.push({
-      key: story.planned.story.id,
-      model: this.model(),
+    this.recordReview(story, review, {
       costUsd: round2(agent.costUsd),
       sessionId: agent.sessionId,
       error: agent.error,
+      metered: true,
+      source: "agent",
+    });
+    return { review, cost: round2(agent.costUsd) };
+  }
+
+  /**
+   * The reviewer's prompt — ONE renderer, whichever door the review comes
+   * through.
+   *
+   * A host review that judged a different brief from the one a spawn would have
+   * been given is not the same review, and the bundle's whole claim is that it
+   * is. Sharing the call is how that stays true without a test having to keep
+   * two copies in step.
+   */
+  private reviewerPrompt(story: StoryContext, dod: readonly DodResult[]): string {
+    return buildReviewerPrompt({
+      runId: this.ctx.runId,
+      story: story.planned,
+      repoName: story.planned.story.repo,
+      branch: story.branch,
+      epicBranch: story.epicBranch,
+      worktree: story.worktree,
+      conventions: renderConventions(this.ctx.root, [story.planned.story.repo]),
+      dodResults: dod.map((r) => ({ command: r.command, exitCode: r.exitCode })),
+    });
+  }
+
+  /**
+   * One verdict, recorded — the ledger line, the requeue counter and the task
+   * row — whether a spawn produced it or a host did.
+   *
+   * Extracted from `spawnReviewer` when the reviewer became delegable, and the
+   * extraction is the point: attempt accounting must not depend on which door a
+   * verdict came through. `if (verdict !== "error")` moved WITH the parse, so a
+   * host review counts a verdict exactly as a spawned one does, and a host that
+   * never writes `result.json` has produced no verdict and spends no attempt.
+   */
+  private recordReview(
+    story: StoryContext,
+    review: Review,
+    task: {
+      costUsd: number;
+      sessionId: string | null;
+      error?: string | null;
+      /** False ⇒ the turn was billed to the host session; `run.yml` records no dollars. */
+      metered: boolean;
+      tokens?: number;
+      source: "agent" | "host";
+    },
+  ): void {
+    this.tasks.push({
+      key: story.planned.story.id,
+      model: task.metered ? this.model() : null,
+      costUsd: task.costUsd,
+      sessionId: task.sessionId,
+      error: task.error ?? null,
       outputs: [],
+      ...(task.metered ? {} : { metered: false }),
+      ...(task.tokens === undefined ? {} : { tokens: task.tokens }),
     });
     const id = story.planned.story.id;
     // The requeue counter counts VERDICTS. An errored review consumed a turn's
@@ -1258,15 +1553,21 @@ class BuildSession {
     // The reviewer IS a check: `approve` is the pass, `changes` and `error` the
     // two failures. `verdict` is what tells a ledger which one it is reading, and
     // `detail` on an errored review is the ERROR, verbatim.
+    //
+    // `source: "host"` is written ONLY for a host review — a reader can tell one
+    // from a spawn's without joining it back to an `agent.spawned` that, for a
+    // host, is deliberately absent. The spawned payload keeps its exact shape:
+    // absence of the key means what it has always meant, and the ordinary path's
+    // event sequence is unchanged byte for byte.
     this.ctx.emit(review.verdict === "approve" ? "check.passed" : "check.failed", {
       phase: this.ctx.phaseId,
       check: "review",
       story: id,
       verdict: review.verdict,
       attempt: story.attempt,
+      ...(task.source === "host" ? { source: "host" } : {}),
       detail: review.summary,
     });
-    return { review, cost: round2(agent.costUsd) };
   }
 
   // --- settling a story -----------------------------------------------------
@@ -1883,6 +2184,167 @@ class BuildSession {
     return join(this.ctx.stageId, storyId);
   }
 
+  /**
+   * `.agent/<stage>/<story>/review/` — the reviewer's own bundle, one level below
+   * the developer's.
+   *
+   * Nested rather than suffixed so `preparedBundles` (which walks exactly one
+   * level) cannot read a reviewer bundle as a developer one. Two roles, two
+   * directories, no flag to get wrong.
+   */
+  private reviewBundleKey(storyId: string): string {
+    return join(this.ctx.stageId, storyId, REVIEW_DIR);
+  }
+
+  /** Is a reviewer bundle out for this story? Its presence IS the state. */
+  private reviewBundleOut(storyId: string): boolean {
+    return existsSync(join(agentDir(this.ctx.runDir, this.reviewBundleKey(storyId)), PENDING_FILE));
+  }
+
+  /**
+   * Write the reviewer bundle: the prompt a spawn would have been given, plus the
+   * facts that make it dispatchable — the diff refs, the merged commit, the DoD
+   * already re-run, and the envelope schema `--commit --review` will parse.
+   *
+   * No cap is spent and no meter starts. `max_budget_usd` is still recorded,
+   * because the host is entitled to know what the framework would have paid for
+   * this read — but it is a number to compare against, not one to enforce here.
+   */
+  private writeReviewBundle(story: StoryContext, work: ReviewWork): string {
+    const id = story.planned.story.id;
+    const key = this.reviewBundleKey(id);
+    const review: PendingReview = {
+      story: id,
+      repo: story.planned.story.repo,
+      branch: story.branch,
+      epic_branch: story.epicBranch,
+      diff: diffCommand(story.epicBranch, story.branch),
+      commit: work.commit,
+      attempt: story.attempt,
+      max_attempts: MAX_ATTEMPTS,
+      worktree: relative(this.ctx.root, story.worktree),
+      dod: work.dod.map((r) => ({ command: r.command, exit_code: r.exitCode })),
+      resumed_from: work.why,
+    };
+    const pending: PendingStage = {
+      version: 1,
+      run: this.ctx.runId,
+      phase: this.ctx.phaseId,
+      stage: this.ctx.stageId,
+      expert: "reviewer",
+      model: this.model(),
+      effort: this.ctx.effort,
+      budget_usd: this.ctx.budgetUsd,
+      max_budget_usd: this.reviewerCap(id),
+      prompt: "prompt.md",
+      outputs: [],
+      sections: {},
+      // The story's own dod is re-run by the executor, never by the reviewer —
+      // the prompt says so in as many words. The stage's checks are the gate's.
+      checks: [],
+      prepared_at: this.ctx.at,
+      story: id,
+      role: "reviewer",
+      result_schema: REVIEW_SCHEMA,
+      review,
+    };
+    // An answer already sitting here is NOT binned. `--prepare` overwrites the
+    // prompt and the pending record and leaves `result.json` exactly as the
+    // developer half does — a turn somebody has already paid for is not this
+    // command's to throw away (`preparedRefusal`'s rule). It is said out loud
+    // instead, because a stale answer read as a fresh verdict is the other half
+    // of that hazard and `--discard-pending` is the door for it.
+    const answered = existsSync(join(agentDir(this.ctx.runDir, key), RESULT_FILE));
+    writeBundle(this.ctx.runDir, key, this.reviewerPrompt(story, work.dod), pending);
+    if (answered) {
+      this.lines.push(
+        `  · ${id}: a ${RESULT_FILE} was already in the reviewer bundle and was KEPT — `
+        + "settle it with `tldrx next --commit --review`, or bin it with `--discard-pending`",
+      );
+    }
+    return key;
+  }
+
+  /** A settled handshake leaves the log, not the bundle. */
+  private clearReviewBundle(key: string): void {
+    const dir = agentDir(this.ctx.runDir, key);
+    for (const file of [PENDING_FILE, RESULT_FILE, RAW_FILE]) rmSync(join(dir, file), { force: true });
+  }
+
+  /**
+   * Is this story waiting on nothing but a REVIEW — and if so, what does the
+   * reviewer need?
+   *
+   * Two histories, one answer. `resumableReview` is the narrow "the last reviewer
+   * died" case that landed on 2026-08-30. The second is a review this framework
+   * already handed to the host: the bundle on disk is the record of that, and it
+   * is removed the moment `--commit --review` counts a verdict, so its presence
+   * is exact rather than a guess about the ledger's shape.
+   *
+   * A story whose reviewer asked for CHANGES is deliberately NOT here: that one
+   * is owed a developer attempt, its bundle was cleared when the verdict was
+   * counted, and `prepare()` hands it a developer exactly as it always did.
+   */
+  private reviewWorkFor(planned: PlannedStory): ReviewWork | null {
+    const resume = this.resumableReview(planned);
+    if (resume !== null) {
+      return { commit: resume.commit, dod: resume.dod, why: `the previous reviewer FAILED (${resume.error})` };
+    }
+    if (!this.reviewBundleOut(planned.story.id)) return null;
+    return this.reviewWorkFromBundle(planned.story.id) ?? this.reviewWorkFromLedger(planned);
+  }
+
+  /**
+   * The bundle's own account of what it is a review OF.
+   *
+   * Read in preference to the ledger, and not as a convenience: a story handed
+   * over mid-pipeline has NOT settled, so no `task.done` records its commit yet
+   * and the ledger genuinely does not know it. The bundle does — it was written
+   * from the merge that had just happened. The contract handed to the host is the
+   * contract read back from it.
+   */
+  private reviewWorkFromBundle(storyId: string): ReviewWork | null {
+    const path = join(agentDir(this.ctx.runDir, this.reviewBundleKey(storyId)), PENDING_FILE);
+    if (!existsSync(path)) return null;
+    let doc: PendingStage;
+    try {
+      doc = JSON.parse(readFileSync(path, "utf8")) as PendingStage;
+    } catch {
+      return null;
+    }
+    const review = doc.review;
+    if (review === undefined || typeof review.commit !== "string" || review.commit === "") return null;
+    return {
+      commit: review.commit,
+      dod: (review.dod ?? []).map((r) => ({
+        command: r.command, exitCode: r.exit_code, timedOut: r.exit_code === 124, tail: "",
+      })),
+      why: review.resumed_from ?? "its review is outstanding",
+    };
+  }
+
+  /**
+   * The same facts, read off the ledger with no opinion about whether a review is
+   * OWED — for the paths where the operator has already said so by typing
+   * `--review`, or where a bundle is being settled.
+   */
+  private reviewWorkFromLedger(planned: PlannedStory): ReviewWork | null {
+    const status = this.statusOf(planned);
+    if (status !== "review" && status !== "in_progress") return null;
+    const ledger = readReviewLedger(this.ctx.runDir, planned.story.id);
+    if (ledger.commit === null) return null;
+    return {
+      commit: ledger.commit,
+      dod: ledger.dod,
+      why: "its review is outstanding",
+    };
+  }
+
+  /** The story whose reviewer bundle is out, if any. */
+  private awaitingReview(): PlannedStory | null {
+    return this.pendingStories().find((p) => this.reviewBundleOut(p.story.id)) ?? null;
+  }
+
   /** How many reviewers have already JUDGED this story, from the ledger. */
   private reviewAttempts(storyId: string): number {
     return this.reviews.get(storyId) ?? readReviewLedger(this.ctx.runDir, storyId).verdicts;
@@ -2017,6 +2479,25 @@ export function developerTools(repoCommands: readonly string[]): readonly string
 
 /** The reviewer reads and nothing else. */
 export const REVIEWER_TOOLS: readonly string[] = ["Read", "Grep", "Glob", "Bash(git diff *)"];
+
+/**
+ * What half B did with the review: judged it, or handed it to the host.
+ *
+ * `handed-off` is not a failure and not an outcome — the story is merged and
+ * parked at `review` with a bundle out, and the caller has to say that rather
+ * than report a settled status it does not have.
+ */
+type ReviewRoute = "settled" | "handed-off";
+
+/** A host envelope's own `summary`, as `parseReview`'s fallback text. */
+function summaryOf(envelope: Record<string, unknown>): string {
+  return typeof envelope.summary === "string" ? envelope.summary : "";
+}
+
+/** A finite number from an envelope field, or null. Never a coerced `0`. */
+function numberOf(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
 
 /**
  * What `events.jsonl` already says about one story, for the questions a fresh

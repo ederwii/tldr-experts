@@ -154,6 +154,38 @@ On an attended run:
 session that has forgotten which mode it is in can see it without asking. Everything else is
 unchanged — the bundle, `result.json`, `--cost-usd`/`--tokens`, the lock, the cursor, the gates.
 
+### The review is a turn too
+
+A Build story has two sub-agents, and the second one is a reviewer reading the story's diff. On
+an attended run that review is yours as well — the framework spawning its own reader beside a
+session that is already reading the diff is two reviews for one review, and a bill nobody
+budgeted (measured 2026-08-30: the host's deeper review had already finished before the
+framework's $0.26 one even started).
+
+So the reviewer rides the same handshake, one directory down:
+
+```
+tldrx next --commit                 # DoD, commit, merge — then the review bundle is written
+                                    # into .agent/<stage>/<story>/review/ and it STOPS
+#   … you dispatch one read-only sub-agent with that prompt.md …
+tldrx next --commit --review        # its {verdict, summary, findings} settles the story
+```
+
+`--prepare --review` writes that bundle on demand, and a bare `--prepare` writes it by itself
+whenever a story is waiting on a review — including the case this exists for: a story stuck at
+`review` because the framework's own reviewer died at its cap. That path used to spawn a
+replacement reviewer under `--prepare`, which is the one thing `--prepare` must never do.
+
+What the bundle hands you: the reviewer's `prompt.md` (the same one a spawn gets), the diff
+command and the merged commit, the DoD results already re-run by the framework — do not re-run
+them — and `result_schema`, the exact envelope your sub-agent must return. Write it to
+`review/result.json`, optionally with `cost_usd` / `tokens` beside it; without a `cost_usd` the
+turn is recorded `cost_usd: null, metered: false`, which is what a host-billed turn is.
+
+Everything downstream is the ordinary path: `approve` finishes the story with its evidence,
+`changes` requeues it once and blocks it the second time, and an envelope that cannot be read
+is `changes` — never `approve`. A review you never write costs the story no attempt at all.
+
 ## The hooks
 
 | Hook | Event | What it does |

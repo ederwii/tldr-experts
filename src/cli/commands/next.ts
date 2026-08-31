@@ -30,8 +30,8 @@ const INFORMATIONAL: readonly number[] = [EXIT_OK, EXIT_AWAITING_HUMAN];
 export const nextCommand: Command = {
   name: "next",
   summary: "Advance the active run to its next stage",
-  usage: "tldrx next [<run>] [--dry-run] [--prepare|--commit] [--model <m>] [--effort <level>] [--max-usd <n>]\n"
-    + "                  [--prompt-max-bytes <n>] [--max-reads <n>] [--cost-usd <n>] [--tokens <n>]\n"
+  usage: "tldrx next [<run>] [--dry-run] [--prepare|--commit] [--review] [--model <m>] [--effort <level>]\n"
+    + "                  [--max-usd <n>] [--prompt-max-bytes <n>] [--max-reads <n>] [--cost-usd <n>] [--tokens <n>]\n"
     + "                  [--yolo] [--keep-worktrees] [--discard-pending] [--reuse-epic] [--parallel <n>]\n"
     + "                  [--ui scene|compact|plain|off] [--root <path>]",
   subcommands: [],
@@ -62,6 +62,17 @@ export const nextCommand: Command = {
       if (tokens !== undefined && mode !== "commit") {
         throw new UsageError("--tokens only applies to `tldrx next --commit`");
       }
+      // `--review` names WHICH half of a Build story the handshake is for, so it
+      // is meaningless without a half. Refused rather than ignored: a bare
+      // `tldrx next --review` that silently ran the whole headless pipeline is
+      // the exact mistake the flag exists to make impossible.
+      const review = boolFlag(args, "review");
+      if (review && mode === "headless") {
+        throw new UsageError(
+          "--review is a modifier on the in-session handshake: use `tldrx next --prepare --review` to write the "
+          + "reviewer bundle, then `tldrx next --commit --review` to settle its verdict",
+        );
+      }
       // `--prepare` and `--commit` spawn nothing, so there is nothing to watch:
       // the handle they get is inert. `--dry-run` DOES spawn — it runs the stage
       // and reverts the non-handoff outputs afterwards (measured 2026-08-30: one
@@ -75,6 +86,7 @@ export const nextCommand: Command = {
           runId,
           dryRun,
           mode,
+          review,
           model: stringFlag(args, "model"),
           effort: effortFlag(args),
           maxUsd: numberFlag(args, "max-usd"),

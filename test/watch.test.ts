@@ -189,6 +189,7 @@ function fixture(plan: Readonly<Record<string, string>> = defaultPlan()): Fixtur
       parallel: 1,
       reuseEpic: false,
       discardPending: false,
+      review: false,
       attendedByHost: false,
       agentCap: (share = 1) => Math.round(2 * share * 100) / 100,
       emit: () => undefined,
