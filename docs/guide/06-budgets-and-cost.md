@@ -98,7 +98,10 @@ Two rules it will not bend:
   host session and has no meter of its own, so with nothing declared the task is recorded
   `cost_usd: null, metered: false` and `budget show` / `run status` call `spent` a **lower
   bound**. Declare it with `tldrx next --commit --cost-usd <n> [--tokens <n>]` when you know
-  it; never guess one.
+  it; never guess one. A declared `--tokens` figure prints as
+  `~342.5k declared (host session)` — its own notation, kept apart from the four measured
+  counters, because the four zeroes it used to print said "this turn used no tokens" about a
+  turn that used 342,527 of them.
 
 ## The one command that guesses
 

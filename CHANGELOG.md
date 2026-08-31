@@ -66,6 +66,12 @@
   what the stage has left and by `per_agent_max_usd`. A reviewer that cannot finish reading
   the diff approves nothing and blocks nothing — it converts the entire developer turn
   beside it into a story stuck at `review`, which is what $0.26 did on 2026-08-30.
+- **`tldrx cost` no longer prints `0 in · 0 out · 0 cache write · 0 cache read` for a turn
+  the host declared tokens for.** `tldrx next --commit --tokens 342527` writes that number
+  onto the task row and the `agent.result` payload, and the cost view ignored it. It now
+  renders as `~342.5k declared (host session)`, kept apart from the four measured counters
+  rather than folded into them: nobody measured those, and four zeroes claim the turn used
+  no tokens.
 - **A stage whose declared outputs are a SHAPE no longer fails while the files sit next to
   the error.** Found live 2026-08-30 by the first `feature`-scope run to reach Plan: the
   stage wrote `03-plan/epics/E1.md` and `03-plan/stories/S1.md`..`S7.md`, and
