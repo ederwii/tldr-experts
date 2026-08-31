@@ -19,18 +19,26 @@
  *   1. `stage.md`            the stage's own rules; one file, per stage
  *   2. expert blocks         `expert.md` + trained knowledge; the big stable mass
  *   3. `## Inputs`           the declared inputs' content; per stage
- *   4. `## Previous attempt` the retry note and the refused outputs; per attempt
+ *   4. `## Dispatch notes`   the host's own context for THIS cycle; per cycle
+ *   5. `## Previous attempt` the retry note and the refused outputs; per attempt
  *
- * strictly most-stable to least-stable. `## Inputs` and `## Previous attempt` are
- * CUT out of `stage.md` wherever its author put them and re-emitted at the tail,
- * so a spec-shaped stage file with `## Inputs` in the middle produces exactly one
- * of that heading and it is at the end. Nothing is duplicated and nothing that a
- * stage author wrote under those two headings survived before either: the old
+ * strictly most-stable to least-stable. The dispatch-notes slot
+ * (`facilitator/dispatchNotes.ts`) is the most volatile thing in the document —
+ * a human writes it between one cycle and the next — so it goes behind the
+ * inputs and never ahead of the expert blocks, where it would pay the
+ * cache-WRITE price on the largest stable section of every stage.
+ *
+ * All three of `## Inputs`, `## Dispatch notes` and `## Previous attempt` are CUT
+ * out of `stage.md` wherever its author put them and re-emitted at the tail, so a
+ * spec-shaped stage file with `## Inputs` in the middle produces exactly one of
+ * that heading and it is at the end. Nothing is duplicated and nothing that a
+ * stage author wrote under those headings survived before either: the old
  * assembly replaced their bodies outright.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
+import { DISPATCH_NOTES_HEADING } from "./dispatchNotes.ts";
 import { isRetired, type Fact } from "../facts/Fact.ts";
 import { stackExpertNames } from "../experts/stackExperts.ts";
 
@@ -91,6 +99,12 @@ export interface PromptParts {
   /** Prepended to `## Inputs` when something was cut to fit (see `seedInputs.ts`). */
   readonly inputsNote?: string;
   /**
+   * The rendered body of `## Dispatch notes` — the host's own context for this
+   * cycle, already read and capped by `loadDispatchNotes`. Empty when the
+   * operator left no file, and then no section is emitted at all.
+   */
+  readonly dispatchNotes?: string;
+  /**
    * Why this stage is being run again — a previous failure, an operator's reject
    * note, or both. Empty on a first attempt, and then no section is emitted at
    * all: a heading saying "nothing went wrong last time" is noise in every prompt.
@@ -100,6 +114,7 @@ export interface PromptParts {
 
 export const INPUTS_HEADING = "Inputs";
 export const PREVIOUS_ATTEMPT_HEADING = "Previous attempt";
+export { DISPATCH_NOTES_HEADING };
 
 export function buildPrompt(parts: PromptParts): string {
   return renderParts(parts).map((part) => part.text).join("");
@@ -114,7 +129,10 @@ export function buildPrompt(parts: PromptParts): string {
  */
 export function renderParts(parts: PromptParts): readonly PromptPart[] {
   const substituted = cutSection(
-    cutSection(substitute(parts.stageMd, parts.values), INPUTS_HEADING),
+    cutSection(
+      cutSection(substitute(parts.stageMd, parts.values), INPUTS_HEADING),
+      DISPATCH_NOTES_HEADING,
+    ),
     PREVIOUS_ATTEMPT_HEADING,
   );
   const out: PromptPart[] = [
@@ -139,6 +157,18 @@ export function renderParts(parts: PromptParts): readonly PromptPart[] {
     text: `\n## ${INPUTS_HEADING}\n\n${renderInputs(parts.inputs, parts.inputsNote).trimEnd()}\n`,
   });
 
+  // Between `## Inputs` and `## Previous attempt` (spec §5). Never substituted:
+  // `{{run}}` inside a host's note is the host's own text, not a placeholder the
+  // facilitator owns, and this section is context rather than configuration.
+  const dispatch = (parts.dispatchNotes ?? "").trim();
+  if (dispatch !== "") {
+    out.push({
+      kind: "dispatch-notes",
+      name: DISPATCH_NOTES_HEADING,
+      text: `\n## ${DISPATCH_NOTES_HEADING}\n\n${dispatch}\n`,
+    });
+  }
+
   const previous = (parts.previousAttempt ?? "").trim();
   if (previous !== "") {
     out.push({
@@ -151,7 +181,7 @@ export function renderParts(parts: PromptParts): readonly PromptPart[] {
 }
 
 export type PromptPartKind =
-  | "stage" | "expert-body" | "expert-knowledge" | "inputs" | "previous-attempt";
+  | "stage" | "expert-body" | "expert-knowledge" | "inputs" | "dispatch-notes" | "previous-attempt";
 
 export interface PromptPart {
   readonly kind: PromptPartKind;

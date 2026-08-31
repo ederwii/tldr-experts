@@ -52,6 +52,8 @@ export interface LedgerGroups {
   readonly experts: number;
   readonly expertBodies: number;
   readonly expertKnowledge: number;
+  /** The host's own `## Dispatch notes` section — 0 when it left no file. */
+  readonly dispatchNotes: number;
   readonly previousAttempt: number;
   /** The `## Questions` section of `stage.md`, counted out of the stage total. */
   readonly questions: number;
@@ -90,6 +92,7 @@ export function buildLedger(input: LedgerInput): ContextLedger {
   let inputs = 0;
   let expertBodies = 0;
   let expertKnowledge = 0;
+  let dispatchNotes = 0;
   let previousAttempt = 0;
 
   for (const part of input.parts) {
@@ -105,6 +108,12 @@ export function buildLedger(input: LedgerInput): ContextLedger {
         break;
       case "expert-knowledge":
         expertKnowledge += bytes;
+        rows.push({ kind: part.kind, name: part.name, bytes });
+        break;
+      case "dispatch-notes":
+        // Counted inside `prompt_max_bytes` like everything else: a slot the
+        // framework does not read is still a slot the model is billed for.
+        dispatchNotes += bytes;
         rows.push({ kind: part.kind, name: part.name, bytes });
         break;
       case "previous-attempt":
@@ -124,7 +133,7 @@ export function buildLedger(input: LedgerInput): ContextLedger {
     }
   }
 
-  const totalBytes = stage + inputs + expertBodies + expertKnowledge + previousAttempt;
+  const totalBytes = stage + inputs + expertBodies + expertKnowledge + dispatchNotes + previousAttempt;
   const estimatedTokens = estimateTokensFromBytes(totalBytes);
   const contextTokens = contextTokensFor(input.model);
   const contextPct = contextTokens === 0 ? 0 : (estimatedTokens / contextTokens) * 100;
@@ -138,6 +147,7 @@ export function buildLedger(input: LedgerInput): ContextLedger {
       experts: expertBodies + expertKnowledge,
       expertBodies,
       expertKnowledge,
+      dispatchNotes,
       previousAttempt,
       questions: input.questionsBytes ?? 0,
     },
@@ -177,6 +187,7 @@ export function renderLedger(ledger: ContextLedger, maxRows = 8): readonly strin
     `  stage ${bytes(g.stage)}${g.questions === 0 ? "" : ` (questions ${bytes(g.questions)})`}`
       + ` · inputs ${bytes(g.inputs)} · experts ${bytes(g.experts)}`
       + ` (bodies ${bytes(g.expertBodies)}, knowledge ${bytes(g.expertKnowledge)})`
+      + (g.dispatchNotes === 0 ? "" : ` · dispatch notes ${bytes(g.dispatchNotes)}`)
       + (g.previousAttempt === 0 ? "" : ` · previous attempt ${bytes(g.previousAttempt)}`),
   ];
   const biggest = [...ledger.rows]
@@ -239,6 +250,7 @@ function label(row: LedgerRow): string {
     case "inputs": return `input ${row.name}`;
     case "expert-body": return `expert ${row.name} body`;
     case "expert-knowledge": return `expert ${row.name} knowledge`;
+    case "dispatch-notes": return "dispatch notes";
     case "previous-attempt": return "previous attempt";
   }
 }

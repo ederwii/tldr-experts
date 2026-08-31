@@ -37,6 +37,43 @@
   and the uncoloured path stays byte-for-byte deterministic in a test. `FORCE_COLOR` beats
   `NO_COLOR` beats `CI` beats the stream.
 
+- **The dispatch-notes slot** — `.agent/<stage>/dispatch-notes.md`, and for a Build story
+  `.agent/<stage>/<story>/dispatch-notes.md`: the one place a HOST can add context to a
+  prompt the framework generated. Measured over one full run of
+  `260830-tenancy-identity-customers`, 2026-08-30, EVERY stage needed host-added context the
+  bundle lacked — a deferred decision at What, non-inlined seed docs and a staleness warning
+  at How, the owner's answers at Plan, "Docker is up" at Build — and the host had exactly two
+  places to put any of it, neither of which is one: `stage.md` is the framework's file,
+  shared by every run of that workflow, and an edit to `prompt.md` is thrown away by the next
+  `--prepare`.
+  - **Rendered under `## Dispatch notes`, between `## Inputs` and `## Previous attempt`.**
+    Behind the expert blocks on purpose: the slot is the most volatile thing in the document
+    — a human writes it between one cycle and the next — and a per-cycle file ahead of the
+    largest stable section would pay the cache-WRITE price on every stage. The same position
+    in the Build developer prompt, directly under `## Inputs`, because that is where the
+    brief ends and `## Investigate` step 1 tells the developer the files above ARE the brief.
+  - **Absent ⇒ nothing changes, byte for byte.** No section, no `dispatch_notes` key in
+    `pending.json`, `0 B` in the context ledger. Asserted by adding the file, re-preparing,
+    removing it, re-preparing, and comparing the two prompts byte for byte.
+  - **Capped at 8 KB, and never free.** The stage's file and the story's file feed ONE slot,
+    spent stage-file-first, so neither can quietly double the budget; the overflow is named
+    in the prompt, on stdout, and in `pending.json`
+    (`dispatch_notes: {bytes, truncated, max_bytes, sources[]}`). The rendered section's
+    bytes are charged to the context ledger and count against `prompt_max_bytes` like
+    everything else — asserted with a ceiling the prompt clears without notes and breaks
+    with them. The byte cut never splits a character in half.
+  - **Context, never configuration.** The framework does not parse it, does not substitute
+    `{{placeholders}}` in it, does not require `[src: …]` tokens on it, and it cannot change
+    a declared input, an output, a check or a cap. The section says all of that to the
+    sub-agent in its own preamble, because a note that reads like an instruction is otherwise
+    indistinguishable from the stage's own rules.
+  - **Survives `--discard-pending`.** The flag bins `pending.json`, `result.json` and
+    `result.raw.json`; the notes are an INPUT to the rendering that is about to be redone,
+    not an output of the one being binned.
+  - **Per-cycle scratch, deliberately.** `.agent/` is gitignored, and that is the whole
+    point: a caveat that must outlive the cycle is a FACT, and `.tldrx/memory/facts.yml` is
+    the durable channel that already reaches every prompt with attribution behind it. Two
+    durable channels for the same thing would make neither authoritative.
 - **`tldrx story reopen <id> --note "<why>"`** — one Build story, given another run of
   developer attempts, by a person. The third verb of the family that landed 2026-08-30 and
   the only one a HUMAN signs: the other two stop the machine reading a transport failure

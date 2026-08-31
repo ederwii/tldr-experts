@@ -40,10 +40,14 @@ import { RunStore } from "../../run/RunStore.ts";
 import { renderConventions, renderFacts, stackExpertNames } from "../prompt.ts";
 import { loadExpertBundles } from "../../experts/expertBundle.ts";
 import { agentDir } from "../paths.ts";
+import {
+  describeDispatchNotes, loadDispatchNotes, type DispatchNotes,
+} from "../dispatchNotes.ts";
 import { preparedBundles } from "../../run/prepared.ts";
 import { spawnAgent, BASE_TOOLS } from "../spawnAgent.ts";
 import {
-  PendingError, PENDING_FILE, RAW_FILE, RESULT_FILE, readResult, writeBundle, writeRaw, type PendingStage,
+  PendingError, PENDING_FILE, RAW_FILE, RESULT_FILE, readResult, writeBundle, writeRaw,
+  dispatchNotesRecord, type PendingStage,
 } from "../pending.ts";
 import {
   addWorktree, branchExists, commitAll, commitsBetween, currentBranch, dirtyPaths, ensureBranch, firstLine,
@@ -307,6 +311,9 @@ async function rederiveImplicitPlan(
 function discardBundles(ctx: ExecutorContext): readonly string[] {
   const lines: string[] = [];
   for (const dir of preparedBundles(ctx.runDir, ctx.stageId)) {
+    // `dispatch-notes.md` is deliberately NOT in this list. It is an INPUT to the
+    // rendering `--prepare` is about to redo, not an output of the one being
+    // binned, and the operator who wrote it did not ask for it back.
     for (const file of [PENDING_FILE, RESULT_FILE, RAW_FILE]) rmSync(join(dir, file), { force: true });
     lines.push(`  · discarded the --prepare bundle in ${relative(ctx.root, dir)}/`);
   }
@@ -458,6 +465,8 @@ class BuildSession {
     const story = await this.openStory(planned);
     const cap = this.developerCap(planned.story.id);
     const key = this.bundleKey(planned.story.id);
+    const notes = this.dispatchNotesFor(planned.story.id);
+    this.lines.push(...describeDispatchNotes(notes));
     const pending: PendingStage = {
       version: 1,
       run: this.ctx.runId,
@@ -474,6 +483,7 @@ class BuildSession {
       checks: this.ctx.spec.planned.checks,
       prepared_at: this.ctx.at,
       story: planned.story.id,
+      ...dispatchNotesRecord(notes),
     };
     writeBundle(this.ctx.runDir, key, this.developerPrompt(story), pending);
     // The story file is the state: `in_progress` is how `--commit` finds it again.
@@ -1712,7 +1722,19 @@ class BuildSession {
       planNote: this.plan.implicit ? (story.planned.note ?? IMPLICIT_STORY_NOTE) : undefined,
       previousAttempt: story.previousAttempt,
       notInWorktree: story.notInWorktree,
+      dispatchNotes: this.dispatchNotesFor(story.planned.story.id).body,
     });
+  }
+
+  /**
+   * The host's own context for this cycle, stage-level file first (spec §5).
+   *
+   * Both files feed ONE 8 KB slot, spent in that order: a note the operator left
+   * for the whole Build stage ("Docker is up") is read before the one they left
+   * for this story, and neither can quietly double the budget.
+   */
+  private dispatchNotesFor(storyId: string): DispatchNotes {
+    return loadDispatchNotes(this.ctx.runDir, [this.ctx.stageId, this.bundleKey(storyId)]);
   }
 
   /**

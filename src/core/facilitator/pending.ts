@@ -12,6 +12,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { agentDir } from "./paths.ts";
+import type { DispatchNotes } from "./dispatchNotes.ts";
 import type { PlannedCheck } from "../run/workflowPreset.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
 
@@ -52,9 +53,47 @@ export interface PendingContext {
   readonly inputs_bytes: number;
   readonly expert_body_bytes: number;
   readonly expert_knowledge_bytes: number;
+  /** The host's `## Dispatch notes` section — 0 when the operator left no file. */
+  readonly dispatch_notes_bytes: number;
   readonly previous_attempt_bytes: number;
   /** Declared inputs the shared inline budget could not fit whole. */
   readonly truncated_inputs: readonly string[];
+}
+
+/**
+ * The dispatch-notes slot as `pending.json` records it.
+ *
+ * Separate from `context:` on purpose, and not a duplicate of it. `context` is
+ * the LEDGER — its groups must sum to `total_bytes`, and only the stages that
+ * build a ledger have one. This is the slot's own record: which files fed it and
+ * whether the cap cut anything, written by every bundle that renders the section,
+ * including the Build executor's per-story bundles, which carry no ledger.
+ */
+export interface PendingDispatchNotes {
+  /** Bytes of host-written note CONTENT inlined — what the 8 KB cap is spent from. */
+  readonly bytes: number;
+  readonly truncated: boolean;
+  readonly max_bytes: number;
+  /** Run-dir relative paths, in render order: the stage's file before a story's. */
+  readonly sources: readonly string[];
+}
+
+/**
+ * `pending.json`'s `dispatch_notes` key — and NOTHING when the operator left no
+ * file, so a bundle nobody added context to is the bundle it always was.
+ */
+export function dispatchNotesRecord(
+  notes: DispatchNotes,
+): { dispatch_notes?: PendingDispatchNotes } {
+  if (notes.sources.length === 0) return {};
+  return {
+    dispatch_notes: {
+      bytes: notes.inlinedBytes,
+      truncated: notes.truncated,
+      max_bytes: notes.maxBytes,
+      sources: notes.sources.map((source) => source.rel),
+    },
+  };
 }
 
 export interface PendingStage {
@@ -82,6 +121,12 @@ export interface PendingStage {
   readonly experts?: readonly PendingExpert[];
   /** What the prompt is made of, in bytes (§5, "Context ledger"). */
   readonly context?: PendingContext;
+  /**
+   * The host's own context for this cycle, when it left a `dispatch-notes.md`
+   * beside `prompt.md`. Absent when it did not — so an unchanged bundle stays an
+   * unchanged bundle, byte for byte.
+   */
+  readonly dispatch_notes?: PendingDispatchNotes;
   /** The `Read`/`Glob`/`Grep` ceiling this stage's sub-agent runs under. */
   readonly max_reads?: number;
   /**

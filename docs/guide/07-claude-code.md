@@ -90,6 +90,32 @@ spends, and it never closes a gate itself.
 block nothing (today, only the untrained-experts line), kept out of `pending` because a
 headline that counts advice as work makes a workspace that is merely new look broken.
 
+## Adding your own context to a prompt
+
+Every so often the bundle is missing something only you know: a decision that was deferred, a
+seed doc that did not get inlined, an answer the owner gave in chat, or "Docker is up". Write
+it into `tldrx-work/<run>/.agent/<stage>/dispatch-notes.md`, beside `prompt.md`, and the next
+`--prepare` renders it into the prompt under `## Dispatch notes`. For a Build story the
+per-story file is `.agent/<stage>/<story>/dispatch-notes.md`, and when both exist the stage's
+file is rendered first.
+
+The two places you might reach for instead are both wrong: `stage.md` belongs to the
+framework and is shared by every run of that workflow, and an edit to `prompt.md` is thrown
+away by the next `--prepare`.
+
+Three things to know about it:
+
+- **It is context, not configuration.** Nothing in it can change your declared inputs, your
+  outputs, the checks, or a budget. The section says so to the sub-agent, in as many words.
+- **It is capped at 8 KB**, shared across both files. Over that it is cut, and the cut is
+  named in the prompt, on stdout and in `pending.json`.
+- **It is per-cycle scratch.** `.agent/` is gitignored, and the file survives
+  `--discard-pending` but nothing else. Anything that should outlive this cycle belongs in
+  `.tldrx/memory/facts.yml` (`tldrx facts add`), which reaches *every* prompt with
+  attribution behind it.
+
+Leave the file out and the prompt is byte-identical to what it always was.
+
 **One stage per `/tldrx` call.** When a run's remaining gates are mostly `auto` and nobody
 needs to watch, `tldrx run auto <id>` is the headless loop — but it spawns its own sessions,
 so it belongs in a terminal, not inside the session.

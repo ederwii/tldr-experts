@@ -37,6 +37,7 @@ import {
   agentDir, expandAll, expandPatterns, missing, present, resolveMany, type PathContext,
 } from "./paths.ts";
 import { fenceFor, renderConventions, renderFacts, renderParts, stackExpertNames } from "./prompt.ts";
+import { describeDispatchNotes, loadDispatchNotes, type DispatchNotes } from "./dispatchNotes.ts";
 import {
   describeBundles, loadExpertBundles, untrainedNotes, type ExpertBundleSet,
 } from "../experts/expertBundle.ts";
@@ -46,7 +47,10 @@ import type { EffortLevel } from "../schemas/stage.ts";
 import { validateOutputs, describeProblems } from "./validateOutputs.ts";
 import { executorFor, type ExecutorContext, type ExecutorOutcome, type StageExecutor } from "./executors/index.ts";
 import { planIsSkipped, satisfiedByImplicitPlan } from "../build/implicitPlan.ts";
-import { promptPath, readResult, writeBundle, writeRaw, PendingError, type PendingStage } from "./pending.ts";
+import {
+  promptPath, readResult, writeBundle, writeRaw, PendingError,
+  dispatchNotesRecord, type PendingStage,
+} from "./pending.ts";
 import { preparedBundles, PENDING_JSON } from "../run/prepared.ts";
 import { capInputs, describeTruncatedInputs, inlineInputs, type InlineResult } from "./seedInputs.ts";
 import {
@@ -384,6 +388,7 @@ async function runStage(
   // sent. `--prepare` and `--dry-run` also get the per-section breakdown.
   const ledger = assembled.ledger;
   notes.push(...assembled.truncatedNotes);
+  notes.push(...describeDispatchNotes(assembled.dispatchNotes));
   if (options.mode === "prepare" || options.dryRun) notes.push(...renderLedger(ledger));
 
   // --- context gate (spec §5) ---------------------------------------------
@@ -419,9 +424,11 @@ async function runStage(
       inputs_bytes: ledger.groups.inputs,
       expert_body_bytes: ledger.groups.expertBodies,
       expert_knowledge_bytes: ledger.groups.expertKnowledge,
+      dispatch_notes_bytes: ledger.groups.dispatchNotes,
       previous_attempt_bytes: ledger.groups.previousAttempt,
       truncated_inputs: ledger.truncatedInputs.map((entry) => entry.path),
     },
+    ...dispatchNotesRecord(assembled.dispatchNotes),
     max_reads: maxReads,
   };
   writeBundle(store.runDir, stageId, prompt, pending);
@@ -1068,6 +1075,8 @@ export interface AssembledPrompt {
   readonly ledger: ContextLedger;
   /** Declared inputs the shared byte budget could not fit whole. */
   readonly truncatedNotes: readonly string[];
+  /** The host's own context for this cycle, already read and capped. */
+  readonly dispatchNotes: DispatchNotes;
 }
 
 export function assemblePrompt(
@@ -1104,8 +1113,13 @@ export function assemblePrompt(
     budgetBytes: spec.inputsMaxBytes,
     exempt: new Set(inputs.filter((path) => path.endsWith(`/${SEED_INDEX}`))),
   });
+  // The host's own context for this cycle (spec §5). Read here, with the rest of
+  // the prompt's material, so every mode sees the same document: a note left for
+  // a headless stage is as much a caveat as one left for a prepared bundle.
+  const dispatchNotes = loadDispatchNotes(store.runDir, [stage.id]);
   const parts = renderParts({
     stageMd,
+    dispatchNotes: dispatchNotes.body,
     previousAttempt: describePreviousAttempt(stage, {
       outputs: expandAll(spec.planned.outputs, store.run.repos),
       ctx,
@@ -1137,6 +1151,7 @@ export function assemblePrompt(
     bundles,
     ledger,
     truncatedNotes: describeTruncatedInputs(inlined),
+    dispatchNotes,
   };
 }
 
