@@ -38,17 +38,18 @@ import {
   fromRunsRelPath, knowledgeRelPath, partialOf, type TrainingMode, type TrainingTask,
 } from "./Training.ts";
 import {
-  LIGHT_SHAPE, RUNS_SHAPE, codeEvidence, describeKnowledgeIssues, knowledgeErrors, knowledgeWarnings,
-  parseKnowledgeFile, runEvidence,
-  type KnowledgeFile, type KnowledgeScope, type KnowledgeShape,
+  LIGHT_SHAPE, RUNS_SHAPE, codeEvidence, describeKnowledgeIssue, describeKnowledgeIssues,
+  knowledgeErrors, knowledgeWarnings, parseKnowledgeFile, runEvidence,
+  type KnowledgeFile, type KnowledgeIssue, type KnowledgeScope, type KnowledgeShape,
 } from "./knowledgeFile.ts";
 import { knowledgeScopeFor } from "./knowledgeScope.ts";
 import { selectFiles, keywordsFor } from "./selectFiles.ts";
 import { mineRuns } from "./mineRuns.ts";
-import { codePrompt, repairPrompt, runsPrompt, type TrainingPromptInput } from "./trainingPrompt.ts";
+import { codePrompt, outputPath, repairPrompt, runsPrompt, type TrainingPromptInput } from "./trainingPrompt.ts";
+import { describeStrayRecovery, findStrayWrite, recoverStrayWrite } from "./strayWrite.ts";
 import { CompetenciesError, writeCompetencies } from "./competenciesWrite.ts";
 import { isRoleExpertOnDisk, lightModeRefusal, nothingToMineRefusal } from "./roleTraining.ts";
-import { TrainingLog, type TrainingEvent } from "./trainingLog.ts";
+import { MAX_PAYLOAD_BYTES, TrainingLog, type TrainingEvent } from "./trainingLog.ts";
 
 export type TrainingRunMode = "headless" | "prepare" | "commit";
 
@@ -342,14 +343,35 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
   // an extra sub-agent that spends money silently is exactly the thing the
   // operator has no way to audit.
   const repairs: string[] = [];
+  // Same rule for the stray-write probe: a file that had to be rescued out of
+  // another git repo is not a detail to keep to ourselves — the operator has a
+  // foreign `git status` to clean up either way.
+  const recovered: string[] = [];
 
   for (const task of prompts) {
     const abs = join(dir, task.output);
     const rel = `${PROJECT_FRAMEWORK_DIR}/experts/${options.expert}/${task.output}`;
+
+    // The file is missing from where it was asked for. Before calling that "never
+    // written" — the verdict that cost a real run $1.23 on 2026-08-31 for a file
+    // that was sitting complete inside another repo — look where a RELATIVE write
+    // by a sub-agent that `cd`'d would have put it. Recovery happens here, above
+    // the repair round, so a recovered file that turns out to be invalid can still
+    // be repaired like any other.
+    let stray = null;
+    if (!existsSync(abs)) {
+      stray = findStrayWrite({ root: options.root, repos, expert: options.expert, output: task.output });
+      if (stray !== null) recovered.push(...describeStrayRecovery(options.root, recoverStrayWrite(stray, abs), rel));
+    }
     if (!existsSync(abs)) {
       rollback(previous);
       return reject(log, options, area.id, sum(tasks), [
         `${options.expert}/${area.id}: ${rel} was never written`,
+        ...recovered,
+        ...(stray !== null ? [] : [
+          `  no copy of it was found under any declared repo root either (${repos.map((repo) => repo.name).join(", ") || "none"}) —`,
+          "  a sub-agent that `cd`s and writes a relative path lands one there, and this run did not",
+        ]),
         "  nothing was written to competencies.yml and the status is unchanged",
       ]);
     }
@@ -382,16 +404,28 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
     }
 
     if (!parsed.ok) {
-      const kept = quarantine(abs);
+      // Every problem, in full, in two durable places — because the terminal is
+      // neither. Measured 2026-08-31: a $1.02 run failed on 12 problems, five of
+      // which reached stdout and none of which reached `training.jsonl`, so the
+      // ledger said "12 problem(s)" and the only record of WHICH twelve was in a
+      // scrollback nobody had captured.
+      const problems = orderedProblems(parsed.issues);
+      const kept = quarantine(abs, rejectionHeader({
+        options, areaId: area.id, problems,
+        errors: knowledgeErrors(parsed).length,
+        costUsd: sum(tasks),
+      }));
       rollback(previous);
       return reject(log, options, area.id, sum(tasks), [
         `${options.expert}/${area.id}: ${rel} does not validate — `
           + `${String(knowledgeErrors(parsed).length)} problem(s)`,
         ...describeKnowledgeIssues(parsed.issues),
+        ...recovered,
         ...repairs,
-        `  the file was moved to ${relative(options.root, kept)}; nothing was written to competencies.yml`,
+        `  the file was moved to ${relative(options.root, kept)}, which now carries all `
+          + `${String(problems.length)} problem(s) in its header; nothing was written to competencies.yml`,
         "  and the status is unchanged. An unsourced claim cannot become evidence.",
-      ]);
+      ], { task: task.key, problems, errors: knowledgeErrors(parsed).length });
     }
     evidence.push(...(task.key === CODE_TASK ? codeEvidence(parsed.bullets, at) : runEvidence(parsed.bullets, at)));
     // Warnings never reject the file, and they must never be swallowed either: a
@@ -444,6 +478,7 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
     warnings: [...softWarnings, ...written.warnings],
     lines: [
       `trained ${options.expert}/${area.id} (${options.mode}) — $${costUsd.toFixed(2)} of $${ceiling.toFixed(2)}`,
+      ...recovered,
       ...repairs,
       ...counts.map((line) => `  ${line}`),
       `  evidence: +${String(written.added.length)} row(s), ${String(written.evidenceCount)} total`
@@ -522,7 +557,10 @@ async function repairRound(input: RepairRoundInput): Promise<RepairRoundOutcome>
   const { options, task } = input;
   const errors = knowledgeErrors(input.rejected);
   const abs = join(input.dir, task.output);
-  const target = `${PROJECT_FRAMEWORK_DIR}/experts/${options.expert}/${task.output}`;
+  // Absolute, for the same reason the first prompt's target is (`strayWrite.ts`):
+  // a repair turn that `cd`s to re-run a gate must not be able to rewrite the file
+  // into whichever repo it landed in.
+  const target = outputPath(options.root, options.expert, task.output);
 
   input.log.append(record(options, input.areaId, "check.failed", 0, {
     mode: options.mode,
@@ -530,6 +568,13 @@ async function repairRound(input: RepairRoundInput): Promise<RepairRoundOutcome>
     reason: `${String(errors.length)} problem(s) — sending them back to the trainer`,
     cost_usd: input.spentUsd,
     repair: "attempted",
+    errors: errors.length,
+    problems_total: input.rejected.issues.length,
+    // The list the trainer is about to be shown, on the ledger as well as in the
+    // prompt. Without it the only durable record of a first-round failure that was
+    // then repaired is a count, and "what did the repair actually fix" is exactly
+    // the question a later reader has.
+    ...fitProblems(orderedProblems(input.rejected.issues)),
   }));
 
   if (input.budgetUsd < MIN_TRAIN_USD) {
@@ -650,16 +695,67 @@ export function trainingCacheDir(root: string, expert: string, area: string): st
  * A rejected knowledge file is moved aside rather than deleted or left in place.
  * Left in place it reads as accepted knowledge to the next person who opens the
  * folder; deleted, the one record of what went wrong is gone. `[assumption]`
+ *
+ * **With a header, when the verdict is known.** The file kept the bytes and threw
+ * away the reason — a maintainer opening `<area>.rejected.md` a day later could
+ * see a knowledge file that looks fine and no statement of what was wrong with
+ * it, because the problem list only ever existed on stdout. The header is
+ * prepended rather than written beside it so that the two cannot be separated by
+ * a copy, and it is plain Markdown so `cat` and a renderer say the same thing.
+ * `rollback` quarantines without one: there the run died before any verdict
+ * existed, and inventing a header for it would be inventing the reason.
  */
-function quarantine(abs: string): string {
+function quarantine(abs: string, header: readonly string[] = []): string {
   const kept = abs.replace(/\.md(\.partial)?$/, ".rejected.md");
   try {
+    const body = header.length === 0 ? null : `${header.join("\n")}\n${readFileSync(abs, "utf8")}`;
     rmSync(kept, { force: true });
     renameSync(abs, kept);
+    if (body !== null) writeFileSync(kept, body, "utf8");
   } catch {
     return abs;
   }
   return kept;
+}
+
+interface RejectionHeaderInput {
+  readonly options: TrainOptions;
+  readonly areaId: string;
+  /** Every issue, errors and warnings alike, already rendered one per line. */
+  readonly problems: readonly string[];
+  /** How many of them are fatal — the count the headline reports. */
+  readonly errors: number;
+  readonly costUsd: number;
+}
+
+/**
+ * The block prepended to `<area>.rejected.md`: what was refused, when, why, and
+ * what it cost. Every problem, uncapped — this file has no size budget and the
+ * whole point of it is to be the copy the terminal is not.
+ *
+ * The problems are indented four spaces rather than fenced, because the rejected
+ * file below may itself open a fence and a header that could collide with it
+ * would be a header that sometimes swallows the evidence.
+ */
+function rejectionHeader(input: RejectionHeaderInput): readonly string[] {
+  const { options } = input;
+  const warnings = input.problems.length - input.errors;
+  return [
+    "# REJECTED — `tldrx expert train`",
+    "",
+    `\`${options.expert}/${input.areaId}\` · ${options.mode} mode · ${options.at} · `
+      + `$${input.costUsd.toFixed(2)} spent · ${String(input.errors)} error(s)`
+      + (warnings > 0 ? `, ${String(warnings)} warning(s)` : ""),
+    "",
+    "This file did not validate, so nothing was written to `competencies.yml` and the level did not",
+    "move. The bytes below the rule are exactly what the trainer wrote. Only the error lines are why",
+    "it was refused; a `warning:` line costs that one bullet its evidence row and nothing more.",
+    "",
+    ...input.problems.map((problem) => `    ${problem.trimStart()}`),
+    "",
+    "---",
+    "",
+  ];
 }
 
 /**
@@ -715,19 +811,79 @@ function record(
   return { ts: options.at, expert: options.expert, area, type, actor: options.actor, cost_usd: costUsd, payload };
 }
 
+/**
+ * Every issue as one line, errors first.
+ *
+ * The order is the same one `describeKnowledgeIssues` prints in and it is chosen
+ * for the same reason: the reader's question is always "which of these is why
+ * nothing was kept?", and it is answered by the lines above the warnings. It
+ * matters more here than on a terminal, because this list is what gets TRUNCATED
+ * to fit a ledger payload.
+ */
+function orderedProblems(issues: readonly KnowledgeIssue[]): readonly string[] {
+  return [
+    ...issues.filter((issue) => issue.severity === "error"),
+    ...issues.filter((issue) => issue.severity !== "error"),
+  ].map((issue) => describeKnowledgeIssue(issue));
+}
+
+/** The validator's verdict, for the ledger. Absent when the file never existed. */
+interface RejectDetail {
+  readonly task: string;
+  /** Every issue, one rendered line each — errors first, as the validator ordered them. */
+  readonly problems: readonly string[];
+  readonly errors: number;
+}
+
 function reject(
   log: TrainingLog,
   options: TrainOptions,
   area: string,
   costUsd: number,
   lines: readonly string[],
+  detail?: RejectDetail,
 ): TrainOutcome {
   log.append(record(options, area, "check.failed", 0, {
     mode: options.mode,
     reason: lines[0] ?? "the knowledge file did not validate",
     cost_usd: costUsd,
+    ...(detail === undefined ? {} : {
+      task: detail.task,
+      errors: detail.errors,
+      problems_total: detail.problems.length,
+      ...fitProblems(detail.problems),
+    }),
   }));
   return { code: EXIT_AGENT_FAILED, lines, costUsd };
+}
+
+/**
+ * As many problem lines as `MAX_PAYLOAD_BYTES` will hold, plus the count of the
+ * ones that did not fit.
+ *
+ * `TrainingLog.append` THROWS on an oversize payload rather than truncating it,
+ * which is the right call for a ledger and the wrong outcome for a rejection: a
+ * file with two hundred unsourced bullets would take the whole `check.failed`
+ * record down with it and the run would lose its cost line as well as its
+ * reasons. So the list is fitted here, from the front, and `orderedProblems` has
+ * already put the errors there — a truncation that dropped the fatal lines and
+ * kept the warnings would be worse than no list at all. The full, uncapped list
+ * is always in `<area>.rejected.md`.
+ */
+function fitProblems(problems: readonly string[]): Record<string, unknown> {
+  // Everything else on a check.failed payload — mode, reason, cost, task, counts
+  // — is small and bounded; a kilobyte of headroom covers it several times over.
+  const budget = MAX_PAYLOAD_BYTES - 1024;
+  const kept: string[] = [];
+  let used = 0;
+  for (const problem of problems) {
+    const cost = Buffer.byteLength(JSON.stringify(problem), "utf8") + 1;
+    if (used + cost > budget) break;
+    kept.push(problem.trimStart());
+    used += cost;
+  }
+  const omitted = problems.length - kept.length;
+  return omitted === 0 ? { problems: kept } : { problems: kept, problems_omitted: omitted };
 }
 
 function fail(code: number, lines: readonly string[], costUsd = 0): TrainOutcome {

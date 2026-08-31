@@ -22,11 +22,13 @@ import {
   trainingCacheDir, expertRepos, MIN_TRAIN_USD, DEFAULT_TRAIN_USD, DEFAULT_TRAIN_EFFORT, withGutter,
   isRoleExpertOnDisk, lightModeRefusal, nothingToMineRefusal,
   describeKnowledgeIssues, knowledgeErrors, knowledgeWarnings, executionClaimRule, repairPrompt,
-  emptyKnowledgeScope,
+  emptyKnowledgeScope, recapSectionRule, outputPath, MAX_PAYLOAD_BYTES,
+  findStrayWrite, recoverStrayWrite, describeStrayRecovery,
   type TrainOptions,
 } from "../src/core/training/index.ts";
 import { allowedTools } from "../src/core/facilitator/spawnAgent.ts";
 import { FactsStore } from "../src/core/facts/FactsStore.ts";
+import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { factsPath } from "../src/hooks/lib/workspace.ts";
 import {
   makeTrainingWorkspace, knowledgeMd, fromRunsMd, AREA, EXPERT, TRAIN_AT, TRAIN_NOW,
@@ -439,7 +441,8 @@ describe("light training", () => {
     await train(ws);
     const prompt = readFileSync(join(promptDir, "prompt-0.md"), "utf8");
     expect(prompt).toContain("api:src/auth/oauth.ts");
-    expect(prompt).toContain(`Write exactly ONE file: \`${KNOWLEDGE_WRITE}\``);
+    // ABSOLUTE since 2026-08-31 — see the cwd describe below for why.
+    expect(prompt).toContain(`Write exactly ONE file: \`${join(ws.root, KNOWLEDGE_WRITE)}\``);
     // The expert's own body travels with the prompt.
     expect(prompt).toContain(`<!-- expert: ${EXPERT} -->`);
   });
@@ -1361,5 +1364,418 @@ describe("training a role expert", () => {
     expect(isRoleExpertOnDisk(ws.root, ROLE)).toBe(true);
     expect(isRoleExpertOnDisk(ws.root, EXPERT)).toBe(false);
     expect(isRoleExpertOnDisk(ws.root, "no-such-expert")).toBe(false);
+  });
+});
+
+// --- the cwd bug -------------------------------------------------------------
+
+/**
+ * Where a sub-agent that `cd`'d into the `api` repo and then wrote the RELATIVE
+ * path would actually land. This is the measured failure of 2026-08-31, reduced
+ * to a fixture: the path is the one the old prompt asked for, resolved against
+ * the wrong root.
+ */
+const STRAY_WRITE = `api/${KNOWLEDGE_WRITE}`;
+
+describe("the output path is absolute, so a `cd` cannot relocate the write", () => {
+  test("the prompt names the absolute path, and says why it is absolute", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [{ [KNOWLEDGE_WRITE]: knowledgeMd() }]);
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_TRAIN_PROMPT_DIR = promptDir;
+
+    await train(ws);
+    const prompt = readFileSync(join(promptDir, "prompt-0.md"), "utf8");
+    expect(prompt).toContain(`Write exactly ONE file: \`${join(ws.root, KNOWLEDGE_WRITE)}\``);
+    expect(prompt).toContain("That path is ABSOLUTE");
+    expect(prompt).toContain("a relative path then resolves against THAT repo");
+    // The bare workspace-relative form is exactly what a `cd` relocates, so it
+    // must not be the string the sub-agent is told to write.
+    expect(prompt).not.toContain(`Write exactly ONE file: \`${KNOWLEDGE_WRITE}\``);
+  });
+
+  test("the runs prompt carries the same absolute target", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [{ [KNOWLEDGE_WRITE]: knowledgeMd() }, { [FROM_RUNS_WRITE]: fromRunsMd() }]);
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_TRAIN_PROMPT_DIR = promptDir;
+
+    await train(ws, { mode: "full", maxUsd: 3 });
+    const prompt = readFileSync(join(promptDir, "prompt-1.md"), "utf8");
+    expect(prompt).toContain(`Write exactly ONE file: \`${join(ws.root, FROM_RUNS_WRITE)}\``);
+    expect(prompt).toContain("That path is ABSOLUTE");
+  });
+
+  test("the repair round sends the trainer back to the absolute path too", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [
+      { [KNOWLEDGE_WRITE]: knowledgeMd({ extraItem: EXECUTION_CLAIM_ITEM }) },
+      { [KNOWLEDGE_WRITE]: knowledgeMd() },
+    ]);
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_TRAIN_PROMPT_DIR = promptDir;
+
+    await train(ws);
+    const repair = readFileSync(join(promptDir, "prompt-1.md"), "utf8");
+    expect(repair).toContain("REPAIR ROUND");
+    expect(repair).toContain(`You already wrote \`${join(ws.root, KNOWLEDGE_WRITE)}\``);
+  });
+
+  test("`outputPath` is the one place that spelling lives", () => {
+    expect(outputPath("/w", EXPERT, `knowledge/${AREA}.md.partial`))
+      .toBe(`/w/.tldrx/experts/${EXPERT}/knowledge/${AREA}.md.partial`);
+  });
+});
+
+/**
+ * The recovery half. Measured 2026-08-31: `mcp` was rejected as "never written"
+ * while 9,567 bytes of finished knowledge sat in `whiteboard/.tldrx/`, the
+ * missing-file branch returned BEFORE the repair round, and $1.23 bought nothing.
+ */
+describe("a knowledge file written into the wrong repo is found, not written off", () => {
+  test("it is moved back, validated, and the run passes on it", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [{ [STRAY_WRITE]: knowledgeMd() }]);
+
+    const outcome = await train(ws);
+    expect(outcome.code).toBe(0);
+    expect(existsSync(join(ws.root, KNOWLEDGE_REL))).toBe(true);
+    expect(existsSync(join(ws.root, STRAY_WRITE))).toBe(false);
+    expect((areaOf(ws, AREA).evidence as unknown[]).length).toBeGreaterThan(0);
+  });
+
+  test("the note is honest: it names the stray path and the repo it landed in", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [{ [STRAY_WRITE]: knowledgeMd() }]);
+
+    const outcome = await train(ws);
+    const text = outcome.lines.join("\n");
+    expect(text).toContain("recovered:");
+    expect(text).toContain(STRAY_WRITE);
+    expect(text).toContain("inside the `api` repo");
+  });
+
+  test("the empty `.tldrx/` tree it created in that repo comes out with it", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [{ [STRAY_WRITE]: knowledgeMd() }]);
+
+    await train(ws);
+    expect(existsSync(join(ws.root, "api", ".tldrx"))).toBe(false);
+  });
+
+  test("recovery is not a pass: the same validator still judges the file", async () => {
+    const ws = workspace();
+    // $0.50 ceiling against a $0.37 turn leaves $0.13 — under the floor, so no
+    // repair round runs and the first verdict is the final one.
+    fakeClaude(ws, [{ [STRAY_WRITE]: knowledgeMd({ extraItem: "- Tokens never expire" }) }]);
+
+    const outcome = await train(ws, { maxUsd: 0.5 });
+    expect(outcome.code).toBe(5);
+    const text = outcome.lines.join("\n");
+    expect(text).toContain("recovered:");
+    expect(text).toContain("does not validate");
+    expect(existsSync(join(ws.expertDir, "knowledge", `${AREA}.rejected.md`))).toBe(true);
+  });
+
+  test("a recovered file can still be repaired — the probe runs before the repair round", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [
+      { [STRAY_WRITE]: knowledgeMd({ extraItem: EXECUTION_CLAIM_ITEM }) },
+      { [KNOWLEDGE_WRITE]: knowledgeMd() },
+    ]);
+
+    const outcome = await train(ws);
+    expect(outcome.code).toBe(0);
+    const text = outcome.lines.join("\n");
+    expect(text).toContain("recovered:");
+    expect(text).toContain("repairing:");
+  });
+
+  test("with no stray anywhere the verdict is unchanged, and it says where it looked", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [{}]);
+
+    const outcome = await train(ws);
+    expect(outcome.code).toBe(5);
+    const text = outcome.lines.join("\n");
+    expect(text).toContain("was never written");
+    expect(text).toContain("no copy of it was found under any declared repo root either (api)");
+    expect(text).not.toContain("recovered:");
+  });
+
+  test("a repo carrying its own workspace.yml is never harvested", () => {
+    const ws = workspace({
+      files: {
+        [STRAY_WRITE]: knowledgeMd(),
+        "api/.tldrx/workspace.yml": "version: 1\nrepos: []\n",
+      },
+    });
+    expect(findStrayWrite({
+      root: ws.root,
+      repos: [{ name: "api", path: "api" }],
+      expert: EXPERT,
+      output: `knowledge/${AREA}.md.partial`,
+    })).toBeNull();
+  });
+
+  test("a repo that IS the workspace root is skipped — that is the path already checked", () => {
+    const ws = workspace({ files: { [KNOWLEDGE_WRITE]: knowledgeMd() } });
+    expect(findStrayWrite({
+      root: ws.root,
+      repos: [{ name: "root", path: "." }],
+      expert: EXPERT,
+      output: `knowledge/${AREA}.md.partial`,
+    })).toBeNull();
+  });
+
+  test("a directory holding anything else is LEFT in place and named, never emptied", () => {
+    const ws = workspace({
+      files: {
+        [STRAY_WRITE]: knowledgeMd(),
+        [`api/.tldrx/experts/${EXPERT}/notes.md`]: "somebody else's file\n",
+      },
+    });
+    const stray = findStrayWrite({
+      root: ws.root,
+      repos: [{ name: "api", path: "api" }],
+      expert: EXPERT,
+      output: `knowledge/${AREA}.md.partial`,
+    });
+    expect(stray).not.toBeNull();
+
+    const recovery = recoverStrayWrite(stray!, join(ws.root, KNOWLEDGE_WRITE));
+    expect(recovery.recovered).toBe(true);
+    expect(recovery.leftBehind).toBe(join(ws.root, "api", ".tldrx", "experts", EXPERT));
+    expect(existsSync(join(ws.root, "api", ".tldrx", "experts", EXPERT, "notes.md"))).toBe(true);
+    expect(describeStrayRecovery(ws.root, recovery, KNOWLEDGE_REL).join("\n")).toContain("LEFT in place");
+  });
+});
+
+// --- the rejection detail ----------------------------------------------------
+
+/**
+ * Measured 2026-08-31: `components` failed on 12 problems for $1.02. Five of them
+ * reached stdout, none of them reached `training.jsonl` (which recorded the
+ * string "12 problem(s)" and nothing else), and the `.rejected.md` file kept the
+ * bytes without keeping the reason. Anyone who had not captured stdout could not
+ * tell why the run failed.
+ */
+describe("a rejection is recorded with its reasons, not only its count", () => {
+  const UNSOURCED = "- Tokens never expire";
+
+  async function reject(ws: TrainingWorkspace, extraItem = UNSOURCED) {
+    fakeClaude(ws, [{ [KNOWLEDGE_WRITE]: knowledgeMd({ extraItem }) }]);
+    return train(ws, { maxUsd: 0.5 });
+  }
+
+  function lastFailure(ws: TrainingWorkspace) {
+    const failed = TrainingLog.forExpert(ws.expertDir).read().filter((event) => event.type === "check.failed");
+    const last = failed[failed.length - 1];
+    if (last === undefined) throw new Error("no check.failed on the ledger");
+    return last;
+  }
+
+  test("training.jsonl carries the full problem list", async () => {
+    const ws = workspace();
+    const outcome = await reject(ws);
+    expect(outcome.code).toBe(5);
+
+    const payload = lastFailure(ws).payload;
+    const problems = payload.problems as string[];
+    expect(Array.isArray(problems)).toBe(true);
+    expect(problems.join("\n")).toContain("no `[src: …]` token");
+    expect(payload.problems_total).toBe(problems.length);
+    expect(payload.errors).toBe(1);
+    expect(payload.task).toBe("code");
+    // The count that used to be the whole record is still there.
+    expect(String(payload.reason)).toContain("1 problem(s)");
+  });
+
+  test("the repair round's own check.failed carries what was sent back", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [
+      { [KNOWLEDGE_WRITE]: knowledgeMd({ extraItem: EXECUTION_CLAIM_ITEM }) },
+      { [KNOWLEDGE_WRITE]: knowledgeMd() },
+    ]);
+    await train(ws);
+
+    const failed = TrainingLog.forExpert(ws.expertDir).read().filter((event) => event.type === "check.failed");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]?.payload.repair).toBe("attempted");
+    expect((failed[0]?.payload.problems as string[]).join("\n")).toContain("execution claim needs a");
+  });
+
+  test("errors come first in the persisted list — a truncation must not drop the fatal lines", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [{
+      [KNOWLEDGE_WRITE]: knowledgeMd({ extraItem: [EXECUTION_CLAIM_ITEM, DUPLICATE_ITEM].join("\n") }),
+    }]);
+    await train(ws, { maxUsd: 0.5 });
+
+    const problems = lastFailure(ws).payload.problems as string[];
+    expect(problems.length).toBeGreaterThan(1);
+    expect(problems[0]).toContain("execution claim needs a");
+    expect(problems[0]).not.toContain("warning:");
+    expect(problems[problems.length - 1]).toContain("warning:");
+    // And the file says the same thing in the same order. (Matched on the two
+    // problem messages, not on the word `warning:` — the header's own prose
+    // explains what a warning is, above the list.)
+    const kept = readFileSync(join(ws.expertDir, "knowledge", `${AREA}.rejected.md`), "utf8");
+    expect(kept.indexOf("execution claim needs a")).toBeLessThan(kept.indexOf("duplicate src"));
+  });
+
+  test("`<area>.rejected.md` opens with the verdict, above the bytes as written", async () => {
+    const ws = workspace();
+    await reject(ws);
+
+    const kept = readFileSync(join(ws.expertDir, "knowledge", `${AREA}.rejected.md`), "utf8");
+    expect(kept.startsWith("# REJECTED — `tldrx expert train`")).toBe(true);
+    expect(kept).toContain(`\`${EXPERT}/${AREA}\``);
+    expect(kept).toContain("$0.37 spent");
+    expect(kept).toContain("1 error(s)");
+    expect(kept).toContain("no `[src: …]` token");
+    // The header is a header: the trainer's own bytes follow it, unaltered.
+    const body = kept.slice(kept.indexOf("\n---\n\n") + "\n---\n\n".length);
+    expect(body).toBe(knowledgeMd({ extraItem: UNSOURCED }));
+  });
+
+  test("a quarantine with no verdict gets no header — a failed spawn has no reasons to state", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [{ [KNOWLEDGE_WRITE]: knowledgeMd() }]);
+    process.env.FAKE_TRAIN_IS_ERROR = "1";
+
+    await train(ws);
+    const kept = readFileSync(join(ws.expertDir, "knowledge", `${AREA}.rejected.md`), "utf8");
+    expect(kept).toBe(knowledgeMd());
+  });
+
+  test("hundreds of problems trim the ledger line instead of throwing it away", async () => {
+    const ws = workspace();
+    const many = Array.from({ length: 200 }, (_, i) => `- unsourced claim number ${String(i)}`).join("\n");
+    const outcome = await reject(ws, many);
+    expect(outcome.code).toBe(5);
+
+    const payload = lastFailure(ws).payload;
+    const problems = payload.problems as string[];
+    expect(payload.problems_total).toBe(200);
+    expect(problems.length).toBeLessThan(200);
+    expect(payload.problems_omitted).toBe(200 - problems.length);
+    // The ledger's own limit is respected rather than hit — an append that throws
+    // takes the cost record down with the reasons.
+    expect(Buffer.byteLength(JSON.stringify(payload), "utf8")).toBeLessThanOrEqual(MAX_PAYLOAD_BYTES);
+    // And the uncapped list is still somewhere: the quarantined file.
+    const kept = readFileSync(join(ws.expertDir, "knowledge", `${AREA}.rejected.md`), "utf8");
+    expect(kept).toContain("unsourced claim number 199");
+  });
+});
+
+// --- the exit code -----------------------------------------------------------
+
+/**
+ * F1 of the 2026-08-31 report: every one of ten invocations returned shell exit 0,
+ * including three that failed their check, so no script, CI job or agent driving
+ * `tldrx expert train` could detect a failure. That was measured on the previous
+ * build; this pins the CURRENT one through the real process, because
+ * `runTraining` returning 5 and the process exiting 5 are two different claims.
+ */
+describe("a failed training is a nonzero PROCESS exit", () => {
+  const BIN = join(FRAMEWORK_ROOT, "bin", "tldrx.ts");
+
+  interface CliRun { readonly code: number; readonly stdout: string; readonly stderr: string }
+
+  async function trainViaCli(ws: TrainingWorkspace, plans: readonly Record<string, string>[]): Promise<CliRun> {
+    const proc = Bun.spawn(
+      [
+        process.execPath, BIN, "expert", "train", EXPERT,
+        "--area", AREA, "--root", ws.root, "--ui", "off", "--max-usd", "0.5",
+      ],
+      {
+        cwd: ws.root,
+        stdout: "pipe",
+        stderr: "pipe",
+        env: {
+          ...process.env,
+          PATH: `${ws.binDir}:${ORIGINAL_PATH}`,
+          FAKE_TRAIN_ROOT: ws.root,
+          FAKE_TRAIN_STATE: ws.statePath,
+          FAKE_TRAIN_OUTPUTS: JSON.stringify(plans),
+          FAKE_TRAIN_COST: "0.37",
+        },
+      },
+    );
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    return { code: await proc.exited, stdout, stderr };
+  }
+
+  test("a knowledge file that does not validate exits 5, not 0", async () => {
+    const ws = workspace();
+    const run = await trainViaCli(ws, [{ [KNOWLEDGE_WRITE]: knowledgeMd({ extraItem: "- Tokens never expire" }) }]);
+
+    expect(run.code).not.toBe(0);
+    expect(run.code).toBe(5);
+    expect(run.stderr).toContain("does not validate");
+    // Nothing that reads like success went to stdout either.
+    expect(run.stdout).not.toContain("trained");
+  }, 60_000);
+
+  test("a knowledge file that was never written exits 5 too", async () => {
+    const ws = workspace();
+    const run = await trainViaCli(ws, [{}]);
+
+    expect(run.code).toBe(5);
+    expect(run.stderr).toContain("was never written");
+  }, 60_000);
+
+  test("and a training that passes is still exit 0 on the same path", async () => {
+    const ws = workspace();
+    const run = await trainViaCli(ws, [{ [KNOWLEDGE_WRITE]: knowledgeMd() }]);
+
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain(`trained ${EXPERT}/${AREA}`);
+  }, 60_000);
+});
+
+// --- the recap section -------------------------------------------------------
+
+/**
+ * The other shape the 2026-08-31 batch kept failing on. `components` was rejected
+ * with 12 problems and the four the report prints are one mistake four times:
+ * `L34 Sources: no [src: …] token`, `L35`, `L36`, `L37` — the recap written as a
+ * bulleted list. The rule was already in the prompt as a section description; it
+ * needed to be there as a refused example.
+ */
+describe("`## Sources` is taught as prose, with the refused shape shown", () => {
+  test("the rule names the collision and shows both shapes", () => {
+    const text = recapSectionRule().join("\n");
+    expect(text).toContain("`## Sources` is PROSE");
+    expect(text).toContain("does not exempt the recap");
+    expect(text).toContain("- api:src/auth/oauth.ts — the exchange itself");
+  });
+
+  test("an unsourced recap bullet really does reject the whole file", () => {
+    const ws = workspace();
+    const ctx = toSrcContext(loadWorkspace(ws.root), null);
+    const withBulletRecap = knowledgeMd().replace(
+      "`api:src/auth/oauth.ts` is the exchange; `api:src/auth/token.ts` is where the result lands.",
+      "- api:src/auth/oauth.ts — the exchange",
+    );
+    const parsed = parseKnowledgeFile(withBulletRecap, ctx, LIGHT_SHAPE, emptyKnowledgeScope(EXPERT));
+    expect(parsed.ok).toBe(false);
+    expect(knowledgeErrors(parsed)[0]?.section).toBe("Sources");
+  });
+
+  test("both training prompts carry it", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [{ [KNOWLEDGE_WRITE]: knowledgeMd() }, { [FROM_RUNS_WRITE]: fromRunsMd() }]);
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_TRAIN_PROMPT_DIR = promptDir;
+
+    await train(ws, { mode: "full", maxUsd: 3 });
+    for (const file of ["prompt-0.md", "prompt-1.md"]) {
+      expect(readFileSync(join(promptDir, file), "utf8")).toContain("`## Sources` is PROSE");
+    }
   });
 });

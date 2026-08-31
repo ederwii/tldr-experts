@@ -12,6 +12,8 @@
  * cited line exists in the file, so a gutter is the difference between a citation
  * that points at the invariant and one that merely lands inside the right file.
  */
+import { join } from "node:path";
+import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
 import { fenceFor, loadExpertBodies, renderConventions, stackExpertNames } from "../facilitator/prompt.ts";
 import { loadExpertKnowledge } from "../experts/expertKnowledge.ts";
 import { loadExpert } from "../experts/loadExperts.ts";
@@ -44,14 +46,14 @@ export interface TrainingPromptInput {
 /** The light-mode prompt: read the selected code, write one knowledge file. */
 export function codePrompt(input: TrainingPromptInput, selection: FileSelection): string {
   const rel = partialOf(knowledgeRelPath(input.area.id));
-  const target = `.tldrx/experts/${input.expert.name}/${rel}`;
+  const target = outputPath(input.root, input.expert.name, rel);
 
   return [
     ...header(input, "targeted reverse-engineering"),
     "",
     "## What to produce",
     "",
-    `Write exactly ONE file: \`${target}\`. Do not write, edit or delete anything else.`,
+    ...writeTargetRule(target),
     "",
     `These H2 sections, in this order: ${KNOWLEDGE_SECTIONS.map((s) => `\`## ${s}\``).join(" · ")}.`,
     "",
@@ -72,6 +74,8 @@ export function codePrompt(input: TrainingPromptInput, selection: FileSelection)
     "- `[src: absent:<what you looked at>]` — you looked and there is nothing. This is a real",
     "  finding and it is how a section with nothing in it is written. It earns no evidence.",
     "- `[src: F<n>]` — a fact already on record. `[src: https://…]` — a doc you fetched fresh.",
+    "",
+    ...recapSectionRule(),
     "",
     "**End every bullet with `(measured)`, `(inferred)` or `(assumed)` before its `[src: …]` token.**",
     "`(measured)` = you read the literal line or ran the command; `(inferred)` = a mechanism plus",
@@ -130,14 +134,14 @@ export function codePrompt(input: TrainingPromptInput, selection: FileSelection)
 /** The full-mode second prompt: distil what past runs keep deciding. */
 export function runsPrompt(input: TrainingPromptInput, mine: RunMine): string {
   const rel = partialOf(fromRunsRelPath(input.area.id));
-  const target = `.tldrx/experts/${input.expert.name}/${rel}`;
+  const target = outputPath(input.root, input.expert.name, rel);
 
   return [
     ...header(input, "mining past runs"),
     "",
     "## What to produce",
     "",
-    `Write exactly ONE file: \`${target}\`. Do not write, edit or delete anything else.`,
+    ...writeTargetRule(target),
     "",
     `These H2 sections, in this order: ${FROM_RUNS_SECTIONS.map((s) => `\`## ${s}\``).join(" · ")}.`,
     "",
@@ -156,6 +160,8 @@ export function runsPrompt(input: TrainingPromptInput, mine: RunMine): string {
     "- `[src: F<n>]` — a fact already on record.",
     "",
     "`[src: absent:<what you looked at>]` is legal and earns no evidence.",
+    "",
+    ...recapSectionRule(),
     "",
     ...executionClaimRule(input.commands),
     "",
@@ -188,6 +194,42 @@ export function runsPrompt(input: TrainingPromptInput, mine: RunMine): string {
     "",
     ...expertBodies(input),
   ].join("\n");
+}
+
+// --- where the file goes ----------------------------------------------------
+
+/**
+ * The ABSOLUTE path a training sub-agent writes to.
+ *
+ * `.tldrx/experts/<name>/…` used to be stated repo-relative, which is the form
+ * every other document in this framework uses and is exactly why it was wrong
+ * here. Measured 2026-08-31 on a five-repo workspace: a trainer ran
+ * `cd <workspace>/whiteboard` to execute that repo's declared gate, then wrote
+ * the relative path it had been given. The path resolved against the repo it had
+ * `cd`'d into, 9.5 KB of finished work landed in an unrelated git repo, the
+ * validator found nothing where it had asked for something, and the run was
+ * rejected as "never written" — $1.23 for a file that existed the whole time, and
+ * a `?? .tldrx/` left in somebody else's `git status`.
+ *
+ * An absolute path cannot be relocated by a `cd`, which is the entire fix.
+ * `strayWrite.ts` is the other half: recovery for the write that lands wrong
+ * anyway.
+ */
+export function outputPath(root: string, expert: string, rel: string): string {
+  return join(root, PROJECT_FRAMEWORK_DIR, "experts", expert, rel);
+}
+
+/** "Write exactly ONE file", and why the path is spelled out in full. */
+export function writeTargetRule(target: string): readonly string[] {
+  return [
+    `Write exactly ONE file: \`${target}\`. Do not write, edit or delete anything else.`,
+    "",
+    "**That path is ABSOLUTE, and you must write it exactly as written — never a `.tldrx/…` path",
+    "relative to your shell's current directory.** If you `cd` into a repo to run its gate command,",
+    "a relative path then resolves against THAT repo: the file lands inside an unrelated git repo,",
+    "this framework looks for it here, does not find it, and throws the whole paid run away. That",
+    "is measured, not hypothetical. `cd` as much as you need to; write to the absolute path above.",
+  ];
 }
 
 // --- the one rule that rejects whole files ----------------------------------
@@ -269,6 +311,56 @@ export function executionClaimRule(commands: readonly string[]): readonly string
     "runs, so it can never trip this rule. It is the word loose in your own prose (\"the timeout is",
     "measured at startup\") that reads as a claim about an execution. Keep it in the annotation,",
     "out of the sentence.",
+  ];
+}
+
+/**
+ * "`## Sources` is prose" — restated as a counter-example, because stating it as
+ * a section description did not work either.
+ *
+ * Measured 2026-08-31 on a ten-expert batch: `components` was rejected with 12
+ * problems and the four the report shows are all the same one — `L34 Sources: no
+ * [src: …] token`, `L35`, `L36`, `L37`. The trainer had written the recap as a
+ * bulleted list of prose lines. The prompt already said "**Sources** — prose",
+ * and a writer who reads that as a style note rather than as a hard grammar rule
+ * writes bullets, because bullets are what the other four sections take.
+ *
+ * The rule it collides with is stated one paragraph away and is genuinely
+ * file-wide: `parseKnowledgeFile` requires a `[src: …]` token on every list item
+ * in EVERY declared section, recap included, and an unsourced one is an `error`
+ * that rejects the file whole. So the recap is the one section where the section
+ * description and the grammar have to be read together, and the cheapest way to
+ * make that happen is to show the refused shape next to the accepted one — the
+ * same move `executionClaimRule` makes, for the same reason.
+ *
+ * `[assumption]` — one counter-example, not a general softening. Whether an
+ * unsourced recap bullet should be a warning rather than an error is a real
+ * question and is NOT settled here; this only makes the existing rule teachable.
+ */
+export function recapSectionRule(): readonly string[] {
+  return [
+    "**`## Sources` is PROSE — a bullet there is judged exactly like every other bullet.**",
+    "",
+    "The `[src: …]` rule above is file-wide. It does not exempt the recap: a `- ` line anywhere in",
+    "the file with no token is an ERROR and rejects the whole file, however good the four claim",
+    "sections above it are. Write the recap as sentences:",
+    "",
+    "```",
+    "`api:src/auth/oauth.ts` is the exchange itself; `api:src/auth/token.ts` is where the result",
+    "lands. Nothing in either file reads the refresh path.",
+    "```",
+    "",
+    "Never this:",
+    "",
+    "```",
+    "- api:src/auth/oauth.ts — the exchange itself",
+    "- api:src/auth/token.ts — where the result lands",
+    "```",
+    "",
+    "Measured 2026-08-31: a run wrote four lines of that second shape and lost a complete,",
+    "otherwise-sound knowledge file to them. If you would rather bullet the recap, every bullet",
+    "needs its own `[src: …]` token like everywhere else — but prose is shorter, earns exactly the",
+    "same nothing, and cannot be refused for this.",
   ];
 }
 
