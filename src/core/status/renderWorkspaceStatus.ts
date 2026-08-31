@@ -18,7 +18,9 @@ import { isPending, type PendingItem, type WorkspaceStatus } from "./PendingItem
 export function renderItem(item: PendingItem, index: number): readonly string[] {
   const head = `[${String(index + 1)}] ${item.summary}`;
   const lines = [item.command === "" ? head : `${head} → ${item.command}`];
-  for (const detail of item.details) lines.push(`    ${detail}`);
+  // A blank detail line stays blank: a decision card separates its questions with
+  // one, and four spaces of trailing whitespace is not an indent, it is lint.
+  for (const detail of item.details) lines.push(detail === "" ? "" : `    ${detail}`);
   return lines;
 }
 

@@ -22,6 +22,8 @@ import { PROJECT_WORK_DIR } from "../paths.ts";
 import { RunStore } from "../run/RunStore.ts";
 import { resolveDependencies, slugOfRun, type DependencyInput } from "../run/dependencies.ts";
 import { whatIsWaiting, type Waiting } from "../run/runStatus.ts";
+import { questionsCard } from "../run/decisionCards.ts";
+import { renderDecisionCard } from "../ui/decisionCard.ts";
 import { isMovable } from "../run/waiting.ts";
 import type { RunFile } from "../run/RunFile.ts";
 import type { PendingItem } from "./PendingItem.ts";
@@ -97,8 +99,20 @@ export function runItems(root: string): readonly PendingItem[] {
     if (waiting.kind === "gate") {
       details.push(`disagree instead: \`tldrx reject --run ${run.run} --note "<why>"\``);
     }
-    if (waiting.kind === "answer" && waiting.questions.length > 1) {
-      details.push(`open questions: ${waiting.questions.join(", ")}`);
+    // A run stopped on questions gets the DECISION CARD (design §F.3), not a list
+    // of ids. Measured 2026-08-30: a host that showed an owner the question, the
+    // options and a recommendation got both answers back in seconds; `Q1, Q2` is
+    // a prompt to go and open a file. The ids are still there — they are the card's
+    // own headings — so nothing a reader had before is lost.
+    if (waiting.kind === "answer") {
+      const card = questionsCard({
+        runDir: store.runDir,
+        runId: run.run,
+        phaseId: run.cursor.phase,
+        stageId: run.cursor.stage,
+      });
+      if (card === null) details.push(`open questions: ${waiting.questions.join(", ")}`);
+      else details.push(...renderDecisionCard(card));
     }
     if (waiting.kind === "failed") details.push(waiting.message);
     details.push(...machineSignedDetails(run));

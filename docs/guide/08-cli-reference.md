@@ -150,7 +150,7 @@ tldrx run attend   <host|--none> [<run>] [--run <id>]
 tldrx run status   [<run>] [--json] [--run <id>]
 tldrx run estimate [<run>] [--json] [--run <id>]
 tldrx run auto     [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]
-                          [--yolo] [--ui <mode>]
+                          [--yolo] [--gate-agent] [--ui <mode>]
 tldrx run unlock   [<run>] [--force]
 tldrx run cancel   [<run>] --note <text> [--force]
 ```
@@ -195,7 +195,9 @@ what was actually spent, use `tldrx cost`.
 **`auto`** loops `next` until a human gate or open question (`4`), a failure (`5`), a budget
 refusal (`2`), `--until` reached or the run finished (`0`). `--max-usd` is a ceiling on the
 LOOP's spend, checked between stages. Headless only — which is why it is refused outright
-(exit `1`) on a run marked `attended_by: host`.
+(exit `1`) on a run marked `attended_by: host`. `--gate-agent` prints a **decision card** at
+the stop instead of the ordinary status block (guide 03); it is rendering only and never
+upgrades a stage's gate policy.
 
 **`unlock`** drops a `.lock` nobody is behind and puts the stage it stranded back to `ready`.
 It spends nothing and touches no stage output. A live pid needs `--force`.

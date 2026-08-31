@@ -52,7 +52,8 @@ export const runCommand: Command = {
     "       tldrx run status [<run>] [--json] [--root <path>]\n" +
     "       tldrx run estimate [<run>] [--json] [--root <path>]\n" +
     "       tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]\n" +
-    "                  [--yolo] [--parallel <n>] [--ui scene|compact|plain|off] [--root <path>]\n" +
+    "                  [--yolo] [--parallel <n>] [--gate-agent] [--ui scene|compact|plain|off]\n" +
+    "                  [--root <path>]\n" +
     "       tldrx run unlock [<run>] [--force] [--root <path>]\n" +
     "       tldrx run cancel [<run>] --note <text> [--force] [--root <path>]",
   subcommands: ["new", "attend", "status", "estimate", "auto", "unlock", "cancel"],
@@ -266,6 +267,7 @@ async function runAutoLoop(argv: readonly string[]): Promise<number> {
         effort: effortFlag(args),
         yolo: boolFlag(args, "yolo"),
         parallel: parallelFlag(args),
+        gateAgent: boolFlag(args, "gate-agent"),
         actor: currentActor(),
         at: nowRfc3339(),
         // Erase the view, let the stage line scroll past on stdout, repaint. A

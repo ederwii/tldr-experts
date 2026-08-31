@@ -66,6 +66,10 @@ of every stage's own, checked **between** stages, so it can overshoot by at most
 share. `--until <stage>` stops **before** running that stage. Headless only: inside a Claude
 Code session `/tldrx` stays one stage per call.
 
+`--gate-agent` changes what the loop prints where it stops: a **decision card** (below)
+instead of the ordinary status block. It changes nothing else — in particular it does not
+upgrade any stage to `gates_policy: agent`, which is frozen at `run new`.
+
 ## A scope that skips Plan
 
 `docs`, `hotfix`, `performance`, `prototype` and `security-patch` do not run the Plan phase
@@ -324,6 +328,67 @@ that could upgrade one at approve time would make the frozen policy decorative.
 And you can always overrule it. `tldrx approve` with no flag on an agent-gated stage works
 exactly as it does anywhere else, is recorded as you, and carries no `evidence` key: an
 agent gate is one an agent MAY close, never one a person may not.
+
+### Decision cards — what the interrupt looks like
+
+When a run stops for a person, the useful thing to hand over is the **decision**, not a
+dashboard. `tldrx run auto --gate-agent` prints a card:
+
+```
+$ tldrx run auto --gate-agent 260830-tenancy
+01-what/what … awaiting answers: 2 open question(s) in 01-what/questions.md (Q1, Q2)
+DECISION — 260830-tenancy · 01-what/what
+Q1 · Should hunts a player abandoned count toward the leaderboard?
+  Why asked: no rule for abandoned hunts exists in memory [src: absent:.tldrx/memory/facts.yml]
+  A) count them — simplest, but rewards quitting early
+  B) drop them — matches how players talk about their score
+  C) other — write it below
+  tldrx answer Q1 "…" --run 260830-tenancy
+
+Q2 · Should an existing customer's tenant be inferred or asked for?
+  Why asked: no tenant column on the customer aggregate [src: absent:api:src/Places/Place.cs]
+  A) infer from the invoice email domain — no new UI, wrong for resellers
+  B) ask once at first login — one screen, correct for everyone
+  C) other — write it below
+Recommends B — one screen, correct for everyone [src: 01-what/handoff.md:22]
+  tldrx answer Q2 "…" --run 260830-tenancy
+```
+
+It is a **pure rendering** of things that already exist. The question, its `Why asked:` line
+and its lettered options come out of `questions.md` through the §2.7 parser — the questions
+grammar is not changed by any of this, and a block the parser cannot read does not appear on
+a card any more than it appears anywhere else. The `Recommends` line comes out of the
+evidence note's optional `recommend:` array:
+
+```yaml
+recommend:
+  - {q: Q2, option: "B", why: "one screen, correct for everyone", src: "01-what/handoff.md:22"}
+```
+
+**A question with no recommendation gets no line.** The value of that line is that an agent
+stood behind it with a citation; a manufactured one is worse than none. Q1 above had none.
+
+The same card shows up in three places, from one renderer:
+
+| Where | When |
+|---|---|
+| `tldrx run auto --gate-agent` | the loop stops for a person |
+| `tldrx next`, on an agent gate | open questions, a boundary or a budget event fell the gate through |
+| `tldrx status` | a run is waiting on answers |
+
+Budget and boundary fallthroughs get their own card over the same frame — the measured fact,
+then the commands:
+
+```
+DECISION — 260830-tenancy · 04-build/build
+Boundary — the epic changed paths nobody scoped
+  13 changed path(s), 2 outside the surface: api:src/Billing/Invoice.cs, api:src/Billing/Ledger.cs
+  widen the scope: add the path to a story's `touches:`, or cite it in a handoff, then re-run the stage
+  tldrx approve --run 260830-tenancy
+  tldrx reject --run 260830-tenancy --note "<why>"
+```
+
+`tldrx answer`, `questions.md`, the live dashboard and every exit code are unchanged.
 
 ### Taking an approval back
 

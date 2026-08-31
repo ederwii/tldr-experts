@@ -1,9 +1,14 @@
 /**
- * The progress view: what a person sees while a sub-agent is working.
+ * The progress view: what a person sees while a sub-agent is working — and, in
+ * `decisionCard.ts`, what a person sees when the run stops and hands them a
+ * decision.
  *
  * Nothing in `src/core/` outside this folder renders anything. The rest of the
  * framework publishes `AgentEvent`s to `bus.ts`; the CLI decides whether anyone
- * is watching and installs a driver if so.
+ * is watching and installs a driver if so. The card is the one renderer here that
+ * is not driven by the bus: it is called directly, it takes data and returns
+ * lines, and it touches no file — `src/core/run/decisionCards.ts` is the half that
+ * gathers what it prints.
  */
 export { setProgressSink, setProgressTitle, setProgressCeiling, emitAgentEvent, progressActive } from "./bus.ts";
 export type { ProgressSink } from "./bus.ts";
@@ -21,6 +26,12 @@ export type { CampusInput } from "./campus.ts";
 export { startSteps, silentSteps, SLOW_STEP_MS, HEARTBEAT_MS } from "./steps.ts";
 export type { StepReporter, StepRun, StepOptions } from "./steps.ts";
 export { plainLine } from "./plain.ts";
+export {
+  renderDecisionCard, renderQuestion, renderRecommendation, decisionHeader, DECISION_KINDS,
+} from "./decisionCard.ts";
+export type {
+  DecisionCard, DecisionKind, DecisionOption, DecisionQuestion, DecisionRecommendation,
+} from "./decisionCard.ts";
 export { UiState, RING_CAPACITY, SPEECH_MS } from "./state.ts";
 export type { UiSnapshot, UiStateOptions } from "./state.ts";
 export { summarize, toolLine, shortPath, command, duration, clockFace, firstSentence, shortModel, SLOW_TOOL_MS } from "./summary.ts";

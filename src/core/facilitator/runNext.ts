@@ -22,6 +22,8 @@ import { runChecks, runPrecondition, type PreconditionOutcome } from "../run/che
 import { approve } from "../run/gates.ts";
 import { AUTO_GATE_ACTOR, evaluateAutoGate, unreadableHeadings } from "../run/autoGate.ts";
 import { describeAgentFallthroughs, evaluateAgentGate } from "../run/agentGate.ts";
+import { cardForTriggers, type Money } from "../run/decisionCards.ts";
+import { renderDecisionCard } from "../ui/decisionCard.ts";
 import { gatePolicyFor } from "../run/gatePolicy.ts";
 import { PresetError, type PlannedStage } from "../run/workflowPreset.ts";
 import { isHostTokens } from "../budget/RunBudget.ts";
@@ -1187,6 +1189,21 @@ async function finishStage(
           `gate pending: tldrx approve`,
         ]);
       }
+      // The interrupt surface (design §F.3). The fallthrough list above says what
+      // the machine measured; the card says what the PERSON has to decide, in the
+      // shape a host hand-composed in chat on 2026-08-30 and an owner answered in
+      // seconds. Appended, never substituted: nothing that reads these lines today
+      // loses a byte, and a fallthrough the card cannot shape still reports itself.
+      const card = cardForTriggers(
+        {
+          runDir: store.runDir,
+          runId: store.runId,
+          phaseId,
+          stageId,
+        },
+        agent.fallthroughs,
+        phaseMoney(store, phaseId),
+      );
       return out(EXIT_AWAITING_HUMAN, [
         ...notes,
         doneLine,
@@ -1194,6 +1211,7 @@ async function finishStage(
           + "this gate falls to a person:",
         ...describeAgentFallthroughs(agent.fallthroughs),
         `gate pending: tldrx approve`,
+        ...(card === null ? [] : ["", ...renderDecisionCard(card)]),
       ]);
     }
     if (policy === "auto") {
@@ -1776,6 +1794,18 @@ function nowish(options: NextOptions): string {
 function oneLine(text: string, max = 220): string {
   const line = text.split("\n")[0]?.trim() ?? "";
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+}
+
+/**
+ * The phase's two numbers, straight off `budget.yml`, for a budget decision card.
+ *
+ * Null when the phase has no row: a card that printed `$0.00 of $0.00` would be
+ * stating a measurement nobody made.
+ */
+function phaseMoney(store: RunStore, phaseId: string): Money | null {
+  const phase = store.budget.phases.find((entry) => entry.id === phaseId);
+  if (phase === undefined) return null;
+  return { spentUsd: phase.spent_usd, ceilingUsd: phase.ceiling_usd };
 }
 
 function round2(n: number): number {
