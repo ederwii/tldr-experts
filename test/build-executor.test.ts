@@ -31,9 +31,13 @@ import { RunStore } from "../src/core/run/RunStore.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { validateHandoff } from "../src/core/text/handoff.ts";
 import { loadWorkspace, toSrcContext } from "../src/hooks/lib/workspace.ts";
-import { partitionDirty, porcelainPath, stateDirPrefixes } from "../src/core/build/git.ts";
+import {
+  assertWorktreeOn, GitError, partitionDirty, porcelainPath, stateDirPrefixes, WorktreeBranchMismatchError,
+} from "../src/core/build/git.ts";
 import { PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../src/core/paths.ts";
-import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
+import {
+  addBuildRun, makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions,
+} from "./fixtures/build/workspace.ts";
 
 const ORIGINAL_PATH = process.env.PATH ?? "";
 const FAKE_KEYS = [
@@ -228,6 +232,110 @@ describe("the happy path: two stories, two waves", () => {
     const kept = workspace(TWO_WAVES);
     await next(kept, { keepWorktrees: true });
     expect(existsSync(join(kept.root, ".tldrx", "worktrees", "app", `${kept.runId}-S1`))).toBe(true);
+  });
+});
+
+/**
+ * The EPIC worktree — the one a story merges IN (issue #40).
+ *
+ * The story worktree above got the run id in its path after the 2026-08-29 audit;
+ * this one did not, and it is the worse half, because the collision here is a
+ * merge. `_epic-E1` was a path two runs both computed — every plan names its first
+ * epic `E1` — so the second run's `existsSync` hit the first's directory,
+ * `addWorktree` was skipped, and `git merge --no-ff` ran inside a checkout of
+ * ANOTHER run's epic branch while every line printed the branch the story meant to
+ * reach. Three stories reported "merged" onto an epic that stayed empty
+ * (measured live 2026-08-31).
+ *
+ * Two things are pinned here, because the fix is two things: the path cannot
+ * collide, and a reuse that is on the wrong branch REFUSES instead of merging.
+ */
+describe("the epic worktree", () => {
+  test("a second run on the same workspace gets its own epic worktree, and merges onto its OWN epic branch", async () => {
+    const ws = workspace({
+      stories: [{ id: "S1", epic: "E1", title: "First story" }],
+      epics: [{ id: "E1", stories: ["S1"], branch: "epic/one" }],
+      waves: [["S1"]],
+    });
+    // `--keep-worktrees` is how the live shape was set up: a finished run's
+    // `_epic-…` directory was still on disk when the next run started. `4` is a
+    // green build awaiting its gate, the same code every passing story returns.
+    expect((await next(ws, { keepWorktrees: true })).code).toBe(4);
+    expect(story(ws, "S1")).toContain("status: done");
+
+    // Run two: same workspace, same repo, same epic ID, different epic branch.
+    const second = addBuildRun(ws, {
+      stories: [{ id: "S1", epic: "E1", title: "First story again" }],
+      epics: [{ id: "E1", stories: ["S1"], branch: "epic/two" }],
+      waves: [["S1"]],
+    });
+    expect((await next(ws, { runId: second.runId, keepWorktrees: true })).code).toBe(4);
+    expect(readFileSync(join(second.planDir, "stories", "S1.md"), "utf8")).toContain("status: done");
+
+    // The BYTES, first, because the handoff line was never the thing that was
+    // wrong: run two's merge is on run two's branch, and run one's branch carries
+    // exactly the one merge it made itself. That count is what goes to 2 when a
+    // foreign run merges into it — the whole bug, in one number.
+    expect(git(ws, ["log", "epic/two", "--oneline"])).toContain("merge(S1)");
+    expect(git(ws, ["log", "epic/one", "--oneline"]).split("\n").filter((l) => l.includes("merge(S1)")))
+      .toHaveLength(1);
+    expect(git(ws, ["rev-parse", "epic/one"])).not.toBe(git(ws, ["rev-parse", "epic/two"]));
+
+    // …and the path shape that makes it impossible in the first place.
+    const firstPath = join(ws.root, ".tldrx", "worktrees", "app", `_epic-${ws.runId}-E1`);
+    const secondPath = join(ws.root, ".tldrx", "worktrees", "app", `_epic-${second.runId}-E1`);
+    expect(secondPath).not.toBe(firstPath);
+    expect(existsSync(firstPath)).toBe(true);
+    expect(existsSync(secondPath)).toBe(true);
+  });
+
+  test("an epic worktree on the WRONG branch is refused by name, and nothing is merged", async () => {
+    const ws = workspace({
+      stories: [{ id: "S1", epic: "E1", title: "First story" }],
+      epics: [{ id: "E1", stories: ["S1"], branch: "epic/one" }],
+      waves: [["S1"]],
+    });
+    // Somebody else's worktree, sitting exactly where this run's would go. Path
+    // scoping should make this unreachable; the invariant is what makes it
+    // survivable if it ever becomes reachable again.
+    const path = join(ws.root, ".tldrx", "worktrees", "app", `_epic-${ws.runId}-E1`);
+    mkdirSync(join(path, ".."), { recursive: true });
+    execFileSync("git", ["branch", "epic/somebody-else"], { cwd: ws.repoDir, stdio: "pipe" });
+    execFileSync("git", ["worktree", "add", path, "epic/somebody-else"], { cwd: ws.repoDir, stdio: "pipe" });
+
+    const outcome = await next(ws);
+    expect(outcome.code).toBe(5);
+    const said = outcome.lines.join("\n");
+    expect(said).toContain("epic/somebody-else");   // where the worktree actually is
+    expect(said).toContain("epic/one");             // where the story meant to merge
+    expect(said).toContain(path);                   // and which directory to go look at
+
+    // The refusal is the point: neither branch moved a byte.
+    expect(git(ws, ["rev-parse", "epic/somebody-else"])).toBe(git(ws, ["rev-parse", "main"]));
+    expect(git(ws, ["log", "epic/one", "--oneline"])).not.toContain("merge(S1)");
+  });
+
+  test("`assertWorktreeOn` throws its own class, naming both branches and the path", async () => {
+    const ws = workspace({
+      stories: [{ id: "S1", epic: "E1", title: "First story" }],
+      epics: [{ id: "E1", stories: ["S1"], branch: "epic/one" }],
+      waves: [["S1"]],
+    });
+    const path = join(ws.root, "elsewhere");
+    execFileSync("git", ["branch", "epic/somebody-else"], { cwd: ws.repoDir, stdio: "pipe" });
+    execFileSync("git", ["worktree", "add", path, "epic/somebody-else"], { cwd: ws.repoDir, stdio: "pipe" });
+
+    // On the branch it claims to be on: silence, and no throw.
+    expect(await assertWorktreeOn(path, "epic/somebody-else")).toBeUndefined();
+
+    const thrown = await assertWorktreeOn(path, "epic/one", "epic worktree").then(() => null, (e: unknown) => e);
+    expect(thrown).toBeInstanceOf(WorktreeBranchMismatchError);
+    expect(thrown).toBeInstanceOf(GitError);
+    const message = (thrown as Error).message;
+    expect(message).toContain("`epic/somebody-else`");
+    expect(message).toContain("`epic/one`");
+    expect(message).toContain(path);
+    expect(message).toContain("epic worktree");
   });
 });
 

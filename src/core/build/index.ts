@@ -3,6 +3,7 @@ export {
   git, repoDirOf, dirtyPaths, isDirty, branchExists, currentBranch, headSha, ensureBranch,
   addWorktree, removeWorktree, commitAll, mergeNoFf, diffCommand, firstLine, GitError, GIT_TIMEOUT_MS,
   stateDirPrefixes, partitionDirty, porcelainPath, shaOf, baseStateOf, fastForward, commitsBetween,
+  assertWorktreeOn, WorktreeBranchMismatchError,
 } from "./git.ts";
 export type { GitResult, MergeOutcome, DirtySplit, BaseState, BaseStaleness } from "./git.ts";
 export { loadBuildPlan, inOrder, PlanLoadError } from "./plan.ts";

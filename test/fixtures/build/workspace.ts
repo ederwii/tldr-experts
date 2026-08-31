@@ -193,6 +193,54 @@ export function makeBuildWorkspace(options: BuildWorkspaceOptions): BuildWorkspa
   };
 }
 
+/** A SECOND run's `03-plan/`, for a test about two runs sharing one workspace. */
+export interface SecondRunOptions {
+  readonly stories: readonly StorySpec[];
+  readonly epics: readonly EpicSpec[];
+  readonly waves: readonly (readonly string[])[];
+  /** The run slug, which is also half its id. Must differ from the first run's. */
+  readonly slug?: string;
+  readonly budgetUsd?: number;
+  /** A LATER day than the first run's, so the ids differ and the order is stable. */
+  readonly now?: Date;
+}
+
+/**
+ * Open another run in an EXISTING build workspace, with its own `03-plan/`.
+ *
+ * The shape the cross-run bugs live in: two runs, one workspace, one repo, and a
+ * plan that — as every plan does — calls its first epic `E1`. `makeBuildWorkspace`
+ * gives each test its own temp root and exactly one run, which is what makes those
+ * bugs invisible to it. The second run here is a real `createRun`, so it gets its
+ * own `run.yml`, `budget.yml` and `events.jsonl`, and `runNext({runId})` drives it.
+ */
+export function addBuildRun(ws: BuildWorkspace, options: SecondRunOptions): {
+  readonly runId: string;
+  readonly runDir: string;
+  readonly planDir: string;
+} {
+  const outcome = createRun({
+    root: ws.root,
+    slug: options.slug ?? "second",
+    scope: "build-only",
+    budgetUsd: options.budgetUsd ?? 8,
+    repos: [ws.repoName],
+    actor: "alan",
+    now: options.now ?? new Date("2026-08-30T09:00:00Z"),
+  });
+  const planDir = join(outcome.runDir, "03-plan");
+  mkdirSync(join(planDir, "stories"), { recursive: true });
+  mkdirSync(join(planDir, "epics"), { recursive: true });
+  for (const story of options.stories) {
+    write(planDir, `stories/${story.id}.md`, storyMarkdown(story, ws.repoName));
+  }
+  for (const epic of options.epics) {
+    write(planDir, `epics/${epic.id}.md`, epicMarkdown(epic, ws.repoName));
+  }
+  write(planDir, "waves.yml", wavesYaml(options.waves));
+  return { runId: outcome.runId, runDir: outcome.runDir, planDir };
+}
+
 function workflowYaml(scope: string, skips: readonly string[]): string {
   return `version: 1
 name: ${scope}

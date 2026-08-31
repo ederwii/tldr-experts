@@ -198,6 +198,42 @@ export async function addWorktree(cwd: string, path: string, branch: string, bas
   }
 }
 
+/**
+ * A worktree that is NOT on the branch its caller is about to write to.
+ *
+ * Its own class because the one thing that must never happen here is a silent
+ * recovery: the caller may not re-point the worktree, may not merge anyway, and
+ * may not fall back to a fresh path. It is a `GitError`, so the Build executor's
+ * existing handler turns it into a failed stage with this message rather than an
+ * unhandled crash — loud, and still nothing merged.
+ */
+export class WorktreeBranchMismatchError extends GitError {}
+
+/**
+ * Refuse to reuse `path` unless it is checked out on exactly `branch`.
+ *
+ * The invariant behind every reuse of an epic worktree (issue #40). A path that
+ * two runs could both compute — `_epic-E1`, before the run id went into it — made
+ * `git merge --no-ff` run inside a worktree belonging to a DIFFERENT run, and
+ * every progress line rendered the branch the story MEANT to merge into, so three
+ * stories reported "merged into epic/hardening-d1" while the commits landed on a
+ * closed run's `epic/d1-tenancy-identity-customers` (measured 2026-08-31). Naming
+ * the run in the path prevents that collision; this check makes it impossible to
+ * repeat silently even if some future path ever collides again.
+ *
+ * The message names BOTH branches and the path on purpose: the operator's next
+ * move is `git -C <path> status`, and a mismatch this class can see is one a
+ * human has to adjudicate.
+ */
+export async function assertWorktreeOn(path: string, branch: string, what = "worktree"): Promise<void> {
+  const on = await currentBranch(path);
+  if (on === branch) return;
+  throw new WorktreeBranchMismatchError(
+    `${what} ${path} is checked out on \`${on === "" ? "(no branch)" : on}\`, not \`${branch}\` — `
+    + "refusing to touch it, because a merge here would land on another run's branch",
+  );
+}
+
 /** Best effort: a worktree that will not go away is a warning, never a failure. */
 export async function removeWorktree(cwd: string, path: string): Promise<boolean> {
   if (!existsSync(path)) return true;
