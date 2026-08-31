@@ -683,6 +683,66 @@ none of these behaves byte-identically to the release before them.
 
 ### Fixed
 
+- **A trainer that `cd`s no longer writes its knowledge file into a different git repo.**
+  Measured 2026-08-31 on `~/scavtopia` (five repos, ten `expert train --mode light` runs): the
+  `mcp` run was rejected with `mcp.md.partial was never written`, and the file had been written —
+  46 lines, 9,567 bytes, complete and usable — to
+  `whiteboard/.tldrx/experts/mcp/knowledge/mcp.md.partial`. The sub-agent ran
+  `cd <workspace>/whiteboard` to execute that repo's declared gate command, then wrote the
+  RELATIVE path the prompt had given it, and the path resolved against the repo it had `cd`'d
+  into. Three costs from the one bug: **$1.23 charged for work that was finished and then
+  orphaned**, a parasitic `.tldrx/` tree left inside an unrelated git repo (`git -C whiteboard
+  status` → `?? .tldrx/`), and **no repair round possible** — the missing-file branch returns
+  before the repair check, so this failure mode was unrecoverable by construction even with
+  budget left. Fixed at both ends.
+  - **Prevention: the prompt now states an ABSOLUTE output path**, workspace-root-resolved, and
+    says why — "If you `cd` into a repo to run its gate command, a relative path then resolves
+    against THAT repo … and throws the whole paid run away. That is measured, not hypothetical."
+    Both training prompts carry it, and so does the repair round's target, for the same reason.
+  - **Recovery: when the file is missing, the declared repo roots are probed** for the stray
+    relative write before "never written" is said. A file found there is moved back and validated
+    exactly as if it had landed correctly — recovery is not a pass, the same `parseKnowledgeFile`
+    still judges it, and a recovered file that fails can still be repaired because the probe runs
+    ABOVE the repair round.
+  - **The note is honest and names the mess.** `recovered: the trainer wrote to
+    whiteboard/.tldrx/… , inside the `whiteboard` repo — a relative `.tldrx/…` path resolves
+    against whatever directory it had `cd`'d into.` The empty parasitic directories are removed
+    on the way out; a directory holding anything else is **left in place and named**, with the
+    `git -C <repo> status` to run, because a tool that deletes inside a repo it was never asked
+    to touch is a worse bug than the one it is fixing. A repo carrying its own
+    `.tldrx/workspace.yml` is skipped entirely — that file may belong to a nested workspace, and
+    taking it would be theft rather than recovery.
+  - When no stray is found the verdict is unchanged and now says where it looked.
+
+- **A rejected training run records WHICH problems, not just how many.**
+  Measured 2026-08-31: `components` failed with 12 problems for $1.02, and `training.jsonl` — the
+  durable record — held only the string `"…does not validate — 12 problem(s)"`. The twelve went
+  to stdout, where five of them were printed and the rest elided as `(+7 more)`. Anyone who had
+  not captured stdout, which is anyone running this normally, could not tell why a $1.02 run
+  failed. The list is now persisted twice.
+  - **On the ledger**: `check.failed.payload` carries `problems` (the rendered per-problem
+    lines), `problems_total`, `errors`, and `task`. The list is fitted to the record's 4 KB
+    payload cap and reports `problems_omitted` when it does not fit — an append that THROWS on
+    an oversize payload would take the cost line down with the reasons, which is the opposite of
+    the point. The repair round's own `check.failed` carries what it sent back, so "what did the
+    repair actually fix" is answerable later.
+  - **In the file**: `<area>.rejected.md` now opens with a `# REJECTED` header — expert/area,
+    mode, timestamp, dollars spent, error and warning counts, and every problem, uncapped —
+    above the trainer's bytes exactly as written, separated by a rule. A quarantine with no
+    verdict (a sub-agent that died, a rollback) gets no header: there were no reasons to state
+    and inventing them would be inventing the reason.
+
+- **`## Sources` is now taught as prose with the refused shape shown.** Same batch: four of the
+  five problems the `components` report printed are one mistake four times — `L34 Sources: no
+  [src: …] token`, `L35`, `L36`, `L37`. The trainer had written the recap as a bulleted list.
+  The prompt already said "**Sources** — prose", and a writer who reads that as a style note
+  writes bullets, because bullets are what the other four sections take. The rule it collides
+  with is genuinely file-wide — `parseKnowledgeFile` requires a `[src: …]` token on EVERY list
+  item in every declared section, recap included, and an unsourced one is an error that rejects
+  the file whole. Both prompts now show the accepted prose next to the refused bullets, the same
+  move the execution-claim rule makes. Whether an unsourced recap bullet should be a warning
+  rather than an error is a real question and is deliberately NOT settled here.
+
 - **A rejected knowledge file gets ONE repair round before the money is thrown away.**
   Measured 2026-08-30 on `~/scavtopia`: `tldrx expert train dotnet-stack --area dotnet --mode
   light` spent **$1.69**, the trainer wrote `knowledge/dotnet.md.partial`, and the validator
@@ -1014,6 +1074,19 @@ none of these behaves byte-identically to the release before them.
   **only** those: every other missing input is still exit 1.
 
 ### Verified, not changed
+
+- **`tldrx expert train` already exits nonzero when a training fails.** The 2026-08-31 batch
+  report measured shell `EXIT=0` on all ten invocations, including the three that failed their
+  check — but nine of those ten ran on a build that predates this one (`dist/tldrx.js` was
+  rewritten mid-batch at 05:40Z). On the current source the code path is intact:
+  `runTraining` returns `EXIT_AGENT_FAILED` (5), `expert train` returns `outcome.code`,
+  `dispatch` returns it, and `bin/tldrx.ts` does `process.exit(await dispatch(...))`. Now pinned
+  by three tests that drive the REAL CLI as a subprocess with a fake `claude` on PATH and assert
+  the PROCESS exit code — one for a file that does not validate, one for a file that was never
+  written, one for the passing case — because "`runTraining` returns 5" and "the process exits
+  5" are two different claims. Falsified before being trusted: making `expert train` return
+  `EXIT_OK` breaks two of the three.
+
 
 - **The walk already skips vendored and generated trees**, and always did: `SKIPPED_DIRS`
   in `detect/walk.ts` covers `node_modules`, `dist`, `build`, `out`, `bin`, `obj`,

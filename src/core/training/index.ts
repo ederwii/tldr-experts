@@ -31,7 +31,8 @@ export { mineRuns, relevantFacts, hasMinableFiles, MAX_RUN_FILES, MAX_RUN_BYTES 
 export type { RunMine, MinedFile, MineOptions } from "./mineRuns.ts";
 
 export {
-  codePrompt, runsPrompt, repairPrompt, executionClaimRule,
+  codePrompt, runsPrompt, repairPrompt, executionClaimRule, recapSectionRule,
+  outputPath, writeTargetRule,
   renderInlined, renderMined, renderFactRows, withGutter,
 } from "./trainingPrompt.ts";
 export type { TrainingPromptInput, RepairPromptParts } from "./trainingPrompt.ts";
@@ -44,10 +45,16 @@ export type {
 export { recomputeExperts, renderRecompute, recomputeJson, expertNames, ExpertNotFound } from "./recomputeExperts.ts";
 export type { RecomputeExpertsOptions, RecomputedExpert } from "./recomputeExperts.ts";
 
-export { TrainingLog, trainingLogPath, serializeTrainingEvent, validateTrainingEvent, TRAINING_EVENT_TYPES } from "./trainingLog.ts";
+export {
+  TrainingLog, trainingLogPath, serializeTrainingEvent, validateTrainingEvent, TRAINING_EVENT_TYPES,
+  MAX_PAYLOAD_BYTES, MAX_LINE_BYTES,
+} from "./trainingLog.ts";
 export type { TrainingEvent, TrainingEventType } from "./trainingLog.ts";
 
 export { isRoleExpertOnDisk, lightModeRefusal, nothingToMineRefusal } from "./roleTraining.ts";
+
+export { findStrayWrite, recoverStrayWrite, describeStrayRecovery } from "./strayWrite.ts";
+export type { StrayProbe, StrayWrite, StrayRecovery } from "./strayWrite.ts";
 
 export { runTraining, expertRepos, trainingCacheDir, setExpertStatus, TRAIN_TIMEOUT_MS } from "./runTraining.ts";
 export type { TrainOptions, TrainOutcome, TrainingRunMode } from "./runTraining.ts";
