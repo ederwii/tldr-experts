@@ -1,6 +1,6 @@
 /**
- * The six conditions an `auto` gate must satisfy before the facilitator closes it
- * (spec §5, "auto gates").
+ * The seven conditions an `auto` gate must satisfy before the facilitator closes
+ * it (spec §5, "auto gates").
  *
  * The point of an auto gate is NOT to skip the gate. The stage still ends at one,
  * `gate.requested` is still appended, and the approval still goes through
@@ -14,14 +14,20 @@
  *   5. `claim-sources` — the §2.8 handoff validator, run whether or not the stage
  *                        declared it as a check
  *   6. `stories`       — for a Build stage: every story in the plan reached `done`
+ *   7. `boundary`      — for a Build stage: the epic branch changed nothing the
+ *                        run did not declare it would touch
  *
  * (5) overlaps (1) deliberately. `claim-sources` is the one validator that decides
  * whether the artefact a human would have READ is sourced at all, and a stage file
  * that forgot to list it must not thereby buy itself a cheaper gate.
  *
- * Every condition is evaluated even after one fails: the note records all six
- * with their values, because "which of the six stopped it" is the first question
- * anybody asks and a short-circuit would answer it with silence.
+ * (6) and (7) are the two that ask about the WORK rather than the artefact: did
+ * it finish, and was it the work we scoped. Both are `n/a` outside Build, where
+ * there is no plan to have finished and no epic branch to diff.
+ *
+ * Every condition is evaluated even after one fails: the note records all seven
+ * with their values, because "which of the seven stopped it" is the first
+ * question anybody asks and a short-circuit would answer it with silence.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -29,6 +35,7 @@ import { openBlocks, parseQuestions, unreadableQuestionHeadings } from "../text/
 import { isHostTokens, type RunBudget } from "../budget/RunBudget.ts";
 import { runCheck, unverifiedCount, type CheckOutcome } from "./checks.ts";
 import { buildProgress, BUILD_PHASE } from "./buildProgress.ts";
+import { evaluateBoundary } from "./boundary.ts";
 import type { PlannedStage } from "./workflowPreset.ts";
 import type { RunStage } from "./RunFile.ts";
 
@@ -45,7 +52,7 @@ export interface AutoGateCondition {
 export interface AutoGateVerdict {
   readonly ok: boolean;
   readonly conditions: readonly AutoGateCondition[];
-  /** The note recorded on the gate: all six conditions and their values. */
+  /** The note recorded on the gate: all seven conditions and their values. */
   readonly note: string;
   /** Only the conditions that failed, for the "why not" line. Empty when `ok`. */
   readonly why: string;
@@ -70,6 +77,7 @@ export async function evaluateAutoGate(input: AutoGateInput): Promise<AutoGateVe
     statusCondition(input.stage),
     await claimSourcesCondition(input),
     storiesCondition(input),
+    await boundaryCondition(input),
   ];
   const failed = conditions.filter((condition) => !condition.ok);
   return {
@@ -279,6 +287,22 @@ function storiesCondition(input: AutoGateInput): AutoGateCondition {
     ok: false,
     detail: `${counted} — ${named.join(", ")}${rest > 0 ? `, +${String(rest)} more` : ""}; ${UNFINISHED_STORIES}`,
   };
+}
+
+/**
+ * Condition 7 — the work stayed inside the surface the run declared.
+ *
+ * The derivation, the diff and every honest `n/a` live in `boundary.ts`; this is
+ * the adapter that gives the verdict an `id`. Kept thin on purpose: the shape of
+ * a condition is this file's business and how a boundary is measured is not.
+ */
+async function boundaryCondition(input: AutoGateInput): Promise<AutoGateCondition> {
+  const verdict = await evaluateBoundary({
+    root: input.root,
+    runDir: input.runDir,
+    phaseId: input.phaseId,
+  });
+  return { id: "boundary", ...verdict };
 }
 
 function openQuestions(path: string): readonly string[] {

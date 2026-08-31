@@ -1725,7 +1725,7 @@ an exit code; stdout stays parseable for the host session.
 
 **Auto gates.** Every stage still ENDS at a gate: `gate.requested` is appended, the stage sits at
 `awaiting_gate`, and nothing is skipped. What §2.2's `gates_policy` decides is **who closes it**. `human` waits for
-`tldrx approve` — unchanged, exit `4`. `auto` lets the facilitator close it, and only when **all six** of these
+`tldrx approve` — unchanged, exit `4`. `auto` lets the facilitator close it, and only when **all seven** of these
 hold, measured off files that already exist:
 
 | # | Condition | Measured from |
@@ -1736,6 +1736,7 @@ hold, measured off files that already exist:
 | 4 | the stage did not end `failed` | `run.yml` `stages[].status` |
 | 5 | the §2.8 validator reports **zero refused AND zero unverified** | the stage's `handoff.md` outputs |
 | 6 | **Build only:** every story in the plan is `done` | `03-plan/stories/<id>.md` `status:`, or the implicit plan |
+| 7 | **Build only:** the epic branch changed nothing outside the declared surface | `git diff --name-only <default_branch>...<epic_branch>` vs the What/How `file:` citations + the plan's `touches:` |
 
 (6) was added on 2026-08-30, and it is the one condition about what the stage was FOR rather than about its
 artefact. Measured on run `260830-tenancy-identity-customers`: six of seven stories settled `blocked`, the epic
@@ -1745,6 +1746,27 @@ was true and the stage had not been built. A HUMAN may still approve over blocke
 shipping is a judgement, and it is theirs. Outside the Build phase the condition is measured as `n/a` and always
 holds — `03-plan/waves.yml` exists while the Plan stage is gating too, and every story is `todo` at that moment by
 design.
+
+**(7) `boundary`** was added on 2026-08-31 and is the other condition about the WORK rather than the artefact: was
+this the work we scoped? The **surface** is the union of every `file:`-kind `[src: …]` citation in
+`01-what/handoff.md` and `02-how/handoff.md` (§2.8's grammar, the same tokenizer) and every `touches:` entry of every
+story under `03-plan/stories/` — or of `04-build/implicit-plan.yml` when the scope skipped Plan (§2.13). A directory
+entry covers everything beneath it, which is how a story declares the files it is about to create and the forced
+companions (a lockfile, a generated client) that come with them. The **measurement** is
+`git diff --name-only <default_branch>...<epic_branch>`, once per repo the plan's epics name, through the Build
+phase's existing git seam: nothing is checked out, fetched or written. Every changed path outside the surface is
+NAMED — at most eight, then `+N more` — never reduced to a count, and the condition fails with
+`work outside the declared surface is a boundary change — a human decides whether to widen the scope`. Measured
+2026-08-30 on run `260830-tenancy-identity-customers`: the host ran exactly this check by hand at every gate, because
+the framework ran it nowhere.
+
+The condition deliberately does **not** judge whether the change was right, does not read the diff, and does not fail
+on a path a story declared and did not touch — under-delivery is what the DoD and the reviewer are for. Paths with a
+`tldrx-work/`, `.tldrx/` or `.agent/` segment are excluded from BOTH sides (the `isStatePath` filter §2.13's implicit
+plan already applies): tldrx's own state is never a boundary question, and in a `root_is_repo: true` workspace it sits
+inside the product repo. It never refuses on an absence — outside Build, with no epic branch cut, with no repo on
+disk, with no plan, or on a run that declared no surface at all, it is measured as `n/a` **with the reason in the
+note**, because a condition that could not measure must not report that it measured zero.
 
 Two of the others were tightened on 2026-08-29, both because an auto gate could be closed by SILENCE:
 
@@ -1791,13 +1813,14 @@ that undoes it — and the status line carries `auto:N` and `stale:N`. It reache
 `run status` before this, and none of those is a glance.
 
 (5) overlaps (1) on purpose and is run **whether or not the stage listed `claim-sources` under `checks:`** — a
-stage file that forgot to list it must not thereby buy itself a cheaper gate. All six are evaluated even after one
+stage file that forgot to list it must not thereby buy itself a cheaper gate. All seven are evaluated even after one
 fails, because "which one stopped it" is the first question anybody asks.
 
 The approval goes through the SAME `approve` path a person uses: the checks are re-run off disk, `by: auto` and
-`at` land on the gate, the note records all six conditions with their measured values
+`at` land on the gate, the note records all seven conditions with their measured values
 (`auto-gate: checks=claim-sources:passed; questions=0 open; budget=$0.42 of $6.00 stage, phase 01-what $0.42 of
-$6.00; status=awaiting_gate; claim-sources=passed; stories=n/a (not a build stage)`), and the existing
+$6.00; status=awaiting_gate; claim-sources=passed; stories=n/a (not a build stage); boundary=n/a (not a build
+stage)`), and the existing
 `gate.approved` event is appended with `by`
 in its payload. No new event type. Any condition failing falls back to the human gate exactly as before — exit `4`
 — and the message names the condition and what it measured. An executor that FORCES `gate: approve` (Build) still
