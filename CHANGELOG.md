@@ -33,6 +33,46 @@
 
 ### Fixed
 
+- **A reviewer that FAILED is no longer recorded as a reviewer that asked for changes.**
+  Found live 2026-08-30 by the first `feature`-scope run to reach Build: the headless
+  reviewer of a 39-file, +1879-line story was given $0.26, died mid-read with
+  `Reached maximum budget ($0.26)`, and the executor wrote that transport error down as
+  `verdict: "changes"`. That single line spent the story's one requeue, sent a fresh
+  developer at code nobody had faulted, and would have blocked the story after a second
+  reviewer hit the same wall — with **zero review ever performed**. A failed reviewer now
+  settles the story at `review` with `verdict: "error"`: the attempt counter is untouched
+  (only a real verdict spends it), the `check.failed` event carries the error as its
+  `detail` plus `verdict: "error"` so no ledger counts it as changes-requested, and every
+  operator-facing line, the review log and `retro.md` all say the reviewer **FAILED**.
+  Fail-closed is unchanged — an unfinished review is still never an approval. Inventing the
+  verdict is what stopped.
+- **`tldrx next` on a story whose review errored re-runs only the REVIEW.** The diff is
+  already committed and merged and its DoD went green, so there is nothing for a developer
+  to redo. Both doors do it: the headless path and `tldrx next --prepare`, which used to
+  hand the host session a full "attempt 2" developer bundle. The commit and the DoD results
+  come back out of `events.jsonl`, so the resumed reviewer sees the same proof the first one
+  did — including on the live run, where a `task.started` for the attempt that was never owed
+  sits AFTER the DoD it did not run, and must not erase it. Runs recorded by the OLD code resume too — a `verdict: "changes"` whose `detail` is
+  one of the framework's own transport errors is read as the failure it was, including a
+  story already left at `in_progress` by a wrongly-prepared attempt 2.
+- **The Build executor reads `03-plan/budget.yml`.** The Plan writes a per-story price map,
+  the Plan gate validates it, and until now **nothing read it**: the executor split its
+  stage into equal shares, so the story priced at $4.75 and the one priced at $0.75 both got
+  $1.03. A priced story now gets `price / (attempts x (developer + reviewer))` as its
+  developer ceiling and a quarter of that as its reviewer's; an unpriced one keeps the
+  uniform share; prices adding up to more than the stage are scaled down proportionally. A
+  `budget.yml` that will not parse or validate is an advisory on stderr, never a refused
+  build.
+- **A reviewer is never given less than $1.00.** Whatever the arithmetic says, clamped by
+  what the stage has left and by `per_agent_max_usd`. A reviewer that cannot finish reading
+  the diff approves nothing and blocks nothing — it converts the entire developer turn
+  beside it into a story stuck at `review`, which is what $0.26 did on 2026-08-30.
+- **`tldrx cost` no longer prints `0 in · 0 out · 0 cache write · 0 cache read` for a turn
+  the host declared tokens for.** `tldrx next --commit --tokens 342527` writes that number
+  onto the task row and the `agent.result` payload, and the cost view ignored it. It now
+  renders as `~342.5k declared (host session)`, kept apart from the four measured counters
+  rather than folded into them: nobody measured those, and four zeroes claim the turn used
+  no tokens.
 - **A stage whose declared outputs are a SHAPE no longer fails while the files sit next to
   the error.** Found live 2026-08-30 by the first `feature`-scope run to reach Plan: the
   stage wrote `03-plan/epics/E1.md` and `03-plan/stories/S1.md`..`S7.md`, and

@@ -7,6 +7,9 @@
  * is the same thing the real model would key on, and it means a prompt that lost
  * its heading fails the test instead of passing it quietly.
  *
+ * `FAKE_BUILD_FAIL` narrows failure to one role, one story, one attempt — see
+ * `shouldFail` at the bottom. `FAKE_BUILD_IS_ERROR=1` still fails everything.
+ *
  * As the developer it writes files into its CWD, which the executor has set to the
  * story's worktree; it does NOT commit, so the "commit what the agent left behind"
  * step is exercised for real. As the reviewer it returns a verdict from a per-story
@@ -60,9 +63,10 @@ if (promptDir !== undefined && promptDir !== "") {
 }
 
 const cost = Number(process.env.FAKE_BUILD_COST ?? "0.10");
+const failing = shouldFail();
 const written: string[] = [];
 
-if (role === "developer") {
+if (role === "developer" && !failing) {
   const plan = JSON.parse(process.env.FAKE_BUILD_WRITE ?? "{}") as Record<string, Record<string, string>>;
   const attempt = attemptCount(`dev:${storyId}`);
   const files = plan[`${storyId}#${String(attempt)}`] ?? plan[storyId] ?? {
@@ -76,9 +80,14 @@ if (role === "developer") {
   }
 }
 
-const structured = role === "reviewer"
-  ? { verdict: nextVerdict(storyId), summary: `reviewed ${storyId}`, findings: verdictFindings(storyId) }
-  : { outputs: written, questions_asked: [], notes: `fake developer for ${storyId}` };
+// A failing instance produces NOTHING — no verdict, no envelope. That is the
+// point: `Reached maximum budget` kills the process mid-turn, and a fake that
+// still returned a verdict on the way out would be testing the wrong thing.
+const structured = failing
+  ? null
+  : role === "reviewer"
+    ? { verdict: nextVerdict(storyId), summary: `reviewed ${storyId}`, findings: verdictFindings(storyId) }
+    : { outputs: written, questions_asked: [], notes: `fake developer for ${storyId}` };
 
 if (liveMarker !== null && liveDir !== undefined) {
   note(liveDir, { story: storyId, role, event: "end", live: liveCount(liveDir) });
@@ -86,16 +95,54 @@ if (liveMarker !== null && liveDir !== undefined) {
 }
 
 process.stdout.write(claudeOutput(argv, {
-  isError: process.env.FAKE_BUILD_IS_ERROR === "1",
+  isError: failing,
   result: `fake ${role} for ${storyId}`,
   sessionId: `fake-${role}-${storyId}`,
   costUsd: cost,
   usage: { input_tokens: 100, output_tokens: 10 },
   structured,
-  errors: [],
+  errors: failing ? [failureReason(argv)] : [],
   tools: written.map((rel) => ({ name: "Write", input: { file_path: rel }, result: "File written" })),
 }));
-process.exit(process.env.FAKE_BUILD_IS_ERROR === "1" ? 1 : 0);
+process.exit(failing ? 1 : 0);
+
+/**
+ * Should THIS instance die?
+ *
+ * `FAKE_BUILD_IS_ERROR=1` fails every sub-agent, as it always did.
+ * `FAKE_BUILD_FAIL` is the narrow one, a comma-separated list of selectors:
+ *
+ *   reviewer          every reviewer
+ *   reviewer:S1       every reviewer of S1
+ *   reviewer:S1#1     the FIRST reviewer of S1, and no later one
+ *
+ * The third form is what the review-error tests are made of: a reviewer that
+ * dies once and then works is the only way to prove the story picked its review
+ * back up rather than restarting its developer.
+ */
+function shouldFail(): boolean {
+  if (process.env.FAKE_BUILD_IS_ERROR === "1") return true;
+  const selectors = (process.env.FAKE_BUILD_FAIL ?? "").split(",").map((s) => s.trim()).filter((s) => s !== "");
+  if (selectors.length === 0) return false;
+  // Counted once per process, before any selector is read, so a list of two
+  // selectors does not advance the counter twice.
+  const nth = attemptCount(`fail:${role}:${storyId}`);
+  return selectors.some((selector) => {
+    const [head = "", attempt = ""] = selector.split("#");
+    const [wantRole = "", wantStory = ""] = head.split(":");
+    if (wantRole !== role) return false;
+    if (wantStory !== "" && wantStory !== storyId) return false;
+    return attempt === "" || Number(attempt) === nth;
+  });
+}
+
+/** The real CLI's words for the failure this fake is standing in for. */
+function failureReason(args: readonly string[]): string {
+  const custom = process.env.FAKE_BUILD_FAIL_REASON;
+  if (custom !== undefined && custom !== "") return custom;
+  const cap = args[args.indexOf("--max-budget-usd") + 1] ?? "0.00";
+  return `Reached maximum budget ($${cap})`;
+}
 
 /**
  * `FAKE_BUILD_SLEEP_MS` — a number for every story, or `{"S1": 300}` per story.

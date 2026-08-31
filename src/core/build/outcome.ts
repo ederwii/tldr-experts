@@ -7,7 +7,23 @@
  */
 import type { PlanStatus } from "../schemas/planCommon.ts";
 
-export type Verdict = "approve" | "changes" | "n-a";
+/**
+ * What the reviewer said — and, for `error`, that it never got to say anything.
+ *
+ * `approve` and `changes` are VERDICTS: a person's judgement of the diff,
+ * delivered. `n-a` is "no reviewer ran for this story". `error` is the fourth
+ * case, and it exists because it used to be recorded as the second: a reviewer
+ * that died mid-read — spawn failure, timeout, exhausted `--max-budget-usd` —
+ * was written down as `changes`, which consumed the story's one requeue and sent
+ * a fresh developer at code nobody had faulted. Measured 2026-08-30 on run
+ * `260830-tenancy-identity-customers`: a $0.26 reviewer on a 39-file, +1879-line
+ * diff exited with `Reached maximum budget ($0.26)` and the story was reported
+ * as "the reviewer asked for changes".
+ *
+ * Fail-closed is right — an unfinished review is never an approval. Inventing the
+ * verdict is not.
+ */
+export type Verdict = "approve" | "changes" | "n-a" | "error";
 
 export interface DodResult {
   readonly command: string;
@@ -25,7 +41,13 @@ export interface StoryOutcome {
   readonly epic: string;
   readonly epicBranch: string;
   readonly branch: string;
-  /** `done`, `blocked`, or `review` when it is waiting for its second attempt. */
+  /**
+   * `done`, `blocked`, or `review` when it is waiting for something more.
+   *
+   * `review` carries two different situations, told apart by `verdict`: a
+   * `changes` verdict means the DEVELOPER is owed another attempt, and an `error`
+   * means only the REVIEW is missing — the diff is merged and its DoD was green.
+   */
   readonly status: PlanStatus;
   /** How many developer attempts this story took (1 or 2). */
   readonly attempts: number;

@@ -17,6 +17,12 @@
  *    session spent the money and `result.json` carried no `cost_usd` — is a
  *    stage whose cost is UNKNOWN. Adding 0 for it would report a total that is
  *    quietly wrong and looks precise. It gets its own count and its own line.
+ *    The same rule applies one level down, to the TOKENS: an unmetered attempt
+ *    has no `usage` block, and printing `0 in · 0 out · 0 cache write · 0 cache
+ *    read` for it says "we measured nothing" in the notation of "nothing
+ *    happened". When the host declared a figure with `--tokens` that number is
+ *    real and is shown as what it is — declared, not measured, and never summed
+ *    into the four measured counters.
  *  - **Attempts are not merged.** A stage that failed twice cost three times,
  *    and the retry is exactly the money an operator is trying to find.
  */
@@ -41,6 +47,13 @@ export interface CostAttempt {
   /** Null when this attempt reported no cost — see "unmetered" above. */
   readonly usd: number | null;
   readonly tokens: CostTokens;
+  /**
+   * Tokens the HOST declared with `tldrx next --commit --tokens <n>`, for a turn
+   * this process never metered. One undifferentiated total, not four counters —
+   * that is all the host knows — so it is kept apart from `tokens` rather than
+   * folded into it.
+   */
+  readonly declaredTokens: number | null;
 }
 
 export interface CostStage {
@@ -49,6 +62,8 @@ export interface CostStage {
   readonly attempts: readonly CostAttempt[];
   readonly usd: number;
   readonly tokens: CostTokens;
+  /** Declared totals of this stage's unmetered attempts, added up. */
+  readonly declaredTokens: number;
   /** True when at least one attempt of this stage reported no cost. */
   readonly unmetered: boolean;
 }
@@ -58,6 +73,7 @@ export interface CostRun {
   readonly title: string;
   readonly usd: number;
   readonly tokens: CostTokens;
+  readonly declaredTokens: number;
   readonly stages: readonly CostStage[];
   /** Attempts with no cost figure. Counted, never summed into `usd`. */
   readonly unmeteredAttempts: number;
@@ -67,6 +83,7 @@ export interface CostProgram {
   readonly runs: readonly CostRun[];
   readonly usd: number;
   readonly tokens: CostTokens;
+  readonly declaredTokens: number;
   readonly unmeteredAttempts: number;
 }
 
@@ -83,6 +100,7 @@ export function buildProgramCost(root: string): CostProgram {
     runs,
     usd: round(runs.reduce((sum, run) => sum + run.usd, 0)),
     tokens: sumTokens(runs.map((run) => run.tokens)),
+    declaredTokens: runs.reduce((sum, run) => sum + run.declaredTokens, 0),
     unmeteredAttempts: runs.reduce((sum, run) => sum + run.unmeteredAttempts, 0),
   };
 }
@@ -123,6 +141,7 @@ export function buildRunCost(runDir: string): CostRun | null {
       attempts: list,
       usd: round(list.reduce((sum, a) => sum + (a.usd ?? 0), 0)),
       tokens: sumTokens(list.map((a) => a.tokens)),
+      declaredTokens: list.reduce((sum, a) => sum + (a.declaredTokens ?? 0), 0),
       unmetered: list.some((a) => a.usd === null),
     });
   }
@@ -132,6 +151,7 @@ export function buildRunCost(runDir: string): CostRun | null {
     title,
     usd: round(stages.reduce((sum, s) => sum + s.usd, 0)),
     tokens: sumTokens(stages.map((s) => s.tokens)),
+    declaredTokens: stages.reduce((sum, s) => sum + s.declaredTokens, 0),
     stages,
     unmeteredAttempts: attempts.filter((a) => a.usd === null).length,
   };
@@ -155,6 +175,9 @@ export function toAttempt(event: TldrxEvent): CostAttempt | null {
     task: str(payload.task) ?? "",
     model: str(payload.model),
     usd: metered ? event.cost_usd : null,
+    // `--commit --tokens <n>` writes this onto both the task row and the
+    // `agent.result` payload; it is the only token figure an unmetered turn has.
+    declaredTokens: num(payload.tokens) > 0 ? num(payload.tokens) : null,
     tokens: {
       input: num(usage?.input_tokens),
       output: num(usage?.output_tokens),
@@ -214,7 +237,7 @@ export function renderRunCost(cost: CostRun): string {
     `$${cost.usd.toFixed(2)} over ${plural(cost.stages.length, "stage")}, `
       + `${plural(cost.stages.reduce((n, s) => n + s.attempts.length, 0), "attempt")}`
       + unmeteredSuffix(cost.unmeteredAttempts),
-    tokenLine(cost.tokens),
+    tokenLine(cost.tokens, cost.declaredTokens),
     "",
   ];
   const width = Math.max(...cost.stages.map((s) => `${s.phase}/${s.stage}`.length), 5);
@@ -230,7 +253,7 @@ export function renderRunCost(cost: CostRun): string {
       lines.push(
         `  ${" ".repeat(width)}  ${pad(attempt.usd === null ? "—" : `$${attempt.usd.toFixed(2)}`)}  `
         + `${attempt.task}${attempt.model === null ? "" : ` · ${attempt.model}`}`
-        + `  ${tokenColumns(attempt.tokens)}`,
+        + `  ${tokenColumns(attempt.tokens, attempt.declaredTokens ?? 0)}`,
       );
     }
   }
@@ -242,7 +265,7 @@ export function renderProgramCost(program: CostProgram): string {
   const lines = [
     `${plural(program.runs.length, "run")} in this workspace · $${program.usd.toFixed(2)}`
       + unmeteredSuffix(program.unmeteredAttempts),
-    tokenLine(program.tokens),
+    tokenLine(program.tokens, program.declaredTokens),
     "",
   ];
   const width = Math.max(...program.runs.map((r) => r.run.length), 3);
@@ -262,14 +285,30 @@ function unmeteredSuffix(count: number): string {
     : ` · ${plural(count, "attempt")} UNMETERED (cost unknown, not counted above)`;
 }
 
-function tokenLine(t: CostTokens): string {
-  return `tokens: ${tokenColumns(t)}`;
+function tokenLine(t: CostTokens, declared = 0): string {
+  return `tokens: ${tokenColumns(t, declared)}`;
 }
 
-/** The four counters in one column group — the same order at every level. */
-function tokenColumns(t: CostTokens): string {
-  return `${tokens(t.input)} in · ${tokens(t.output)} out · `
+/**
+ * The four counters in one column group — the same order at every level — plus
+ * whatever the host DECLARED for turns this process could not meter.
+ *
+ * An attempt with nothing but a declared figure prints the declared figure
+ * alone. Printing `0 in · 0 out · 0 cache write · 0 cache read` beside a run.yml
+ * that says `tokens: 342527` is not a rounding error, it is the wrong claim:
+ * four zeroes read as "this turn used no tokens" when what happened is that the
+ * host session used 342.5k of them and this process never saw the meter.
+ */
+function tokenColumns(t: CostTokens, declared = 0): string {
+  const measured = `${tokens(t.input)} in · ${tokens(t.output)} out · `
     + `${tokens(t.cacheCreation)} cache write · ${tokens(t.cacheRead)} cache read`;
+  if (declared <= 0) return measured;
+  const label = `~${tokens(declared)} declared (host session)`;
+  return isZero(t) ? label : `${measured} · ${label}`;
+}
+
+function isZero(t: CostTokens): boolean {
+  return t.input === 0 && t.output === 0 && t.cacheCreation === 0 && t.cacheRead === 0;
 }
 
 function sumTokens(all: readonly CostTokens[]): CostTokens {

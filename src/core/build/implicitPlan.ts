@@ -488,6 +488,10 @@ export function loadImplicitPlan(parts: ImplicitPlanParts): BuildPlan {
     storyCount: 1,
     implicit: true,
     source: IMPLICIT_PLAN_REL,
+    // Nobody planned this run, so nobody priced its one story: the executor falls
+    // back to the uniform share, which for a single story is the whole stage.
+    prices: new Map(),
+    priceIssue: null,
   };
 }
 

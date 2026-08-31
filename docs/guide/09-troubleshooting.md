@@ -190,6 +190,15 @@ new numbers; `tldrx expert list` warns until you do.
 blocked with its evidence recorded (the failing command and its exit code, or the conflicting
 paths, with the merge aborted). Fix it and re-run the stage.
 
+**A story sits at `review` and the log says the reviewer FAILED.** That is not a request for
+changes — the reviewer never returned a verdict at all (a spawn error, a timeout, or its
+`--max-budget-usd` running out mid-read). The story's diff is already committed and merged,
+its DoD went green, and the only thing missing is the review. So the attempt counter is NOT
+spent, and the next `tldrx next` (or `tldrx next --prepare`) re-runs **only the review** —
+never a second developer turn. If it keeps dying at the same ceiling, the reviewer is too
+poor for the diff: price the story higher in `03-plan/budget.yml`, or raise the stage with
+`tldrx budget raise 04-build <n>`.
+
 **`refused: an epic/<slug> branch exists that this run did not cut`, exit 2.** The epic branch
 keeps its plain name on purpose — it is the unit a team merges — so instead of making collision
 impossible, adopting one is made deliberate: `tldrx next --reuse-epic`.

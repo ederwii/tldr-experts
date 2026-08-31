@@ -13,6 +13,7 @@ import { validateEpic, validateEpicFile } from "../src/core/schemas/epic.ts";
 import { asWavesFile, validateWaveOrder, validateWaves } from "../src/core/schemas/waves.ts";
 import { splitFrontMatter } from "../src/core/schemas/frontMatter.ts";
 import { validatePlan } from "../src/core/plan/validatePlan.ts";
+import { loadPlanPrices, type PlannedStory } from "../src/core/build/plan.ts";
 import { runCheck } from "../src/core/run/checks.ts";
 import { loadWorkflowPreset } from "../src/core/run/workflowPreset.ts";
 import { makeRunWorkspace, type TempRunWorkspace } from "./fixtures/tempRunWorkspace.ts";
@@ -369,5 +370,94 @@ describe("the `plan` gate check (spec §2.15)", () => {
     const { root, runDir } = setUp({ "waves.yml": WAVES });
     const outcome = await runCheck(CHECK, { root, runDir, stage: stageSpec(root, "what") });
     expect(outcome).toMatchObject({ id: "plan", status: "skipped" });
+  });
+});
+
+/**
+ * `03-plan/budget.yml` as an INPUT to the Build executor's caps (2026-08-30).
+ *
+ * The file was already authored, already validated and already gated. What did
+ * not exist was anything that read it: on `260830-tenancy-identity-customers`
+ * Delivery priced S1 at $4.75 and S2 at $0.75 and both got the same $1.03.
+ */
+describe("the plan's per-story prices", () => {
+  let dirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+    dirs = [];
+  });
+
+  /** A `03-plan/` holding just the budget file; the stories are faked by id. */
+  function planDir(body: string | null): string {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-prices-"));
+    dirs.push(dir);
+    if (body !== null) writeFileSync(join(dir, "budget.yml"), body, "utf8");
+    return dir;
+  }
+
+  function scheduled(...ids: readonly string[]): ReadonlyMap<string, PlannedStory> {
+    return new Map(ids.map((id) => [id, {} as PlannedStory]));
+  }
+
+  const LIVE = [
+    "version: 1",
+    'run: "260830-tenancy-identity-customers"',
+    "ceiling_usd: 18.00",
+    "spent_usd: 0.00",
+    "per_phase_usd:",
+    "  S1: 4.75",
+    "  S2: 0.75",
+    "  S7: 1.00",
+    "",
+  ].join("\n");
+
+  test("reads `per_phase_usd`, keyed by story id", () => {
+    const { prices, issue } = loadPlanPrices(planDir(LIVE), scheduled("S1", "S2", "S7"));
+    expect([...prices]).toEqual([["S1", 4.75], ["S2", 0.75], ["S7", 1.0]]);
+    expect(issue).toBeNull();
+  });
+
+  test("no file is no prices and no complaint — the uniform share still applies", () => {
+    const { prices, issue } = loadPlanPrices(planDir(null), scheduled("S1"));
+    expect(prices.size).toBe(0);
+    expect(issue).toBeNull();
+  });
+
+  test("a file that does not validate is reported, never thrown", () => {
+    const { prices, issue } = loadPlanPrices(planDir('version: 1\nrun: "r"\n'), scheduled("S1"));
+    expect(prices.size).toBe(0);
+    expect(issue).toContain("03-plan/budget.yml was ignored");
+    expect(issue).toContain("story caps fall back to an equal share");
+  });
+
+  test("a price for a story nobody scheduled is skipped and named", () => {
+    const { prices, issue } = loadPlanPrices(planDir(LIVE), scheduled("S1"));
+    expect([...prices]).toEqual([["S1", 4.75]]);
+    expect(issue).toContain("S2 (not scheduled)");
+    expect(issue).toContain("S7 (not scheduled)");
+  });
+
+  test("a zero or negative price is not a price", () => {
+    const body = [
+      "version: 1", 'run: "r"', "ceiling_usd: 8.00", "spent_usd: 0.00",
+      "per_phase_usd:", "  S1: 0", "  S2: -1", "  S3: 2.50", "",
+    ].join("\n");
+    const { prices, issue } = loadPlanPrices(planDir(body), scheduled("S1", "S2", "S3"));
+    expect([...prices]).toEqual([["S3", 2.5]]);
+    expect(issue).toContain("S1 (0)");
+    expect(issue).toContain("S2 (-1)");
+  });
+
+  test("the run-root budget.yml's PHASE keys are ignored, not mistaken for stories", () => {
+    // The two files share a schema. `per_phase_usd: {01-what: 8}` is legal and
+    // prices no story, and reading it as one would be worse than reading nothing.
+    const body = [
+      "version: 1", 'run: "r"', "ceiling_usd: 50.00", "spent_usd: 0.00",
+      "per_phase_usd:", '  "01-what": 8.00', '  "04-build": 18.00', "",
+    ].join("\n");
+    const { prices, issue } = loadPlanPrices(planDir(body), scheduled("S1"));
+    expect(prices.size).toBe(0);
+    expect(issue).toBeNull();
   });
 });

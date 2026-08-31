@@ -1,9 +1,11 @@
 /**
  * The reviewer's verdict, and the log it becomes.
  *
- * Two rules, both fail-closed:
+ * Three rules, all fail-closed:
  *   - a verdict that cannot be read is `changes`, never `approve` — an unparseable
  *     review is not a sign-off;
+ *   - a reviewer that never RAN produced no verdict at all, and gets `error`
+ *     rather than a `changes` invented on its behalf (`reviewerFailed`);
  *   - the log is written by the executor from the envelope, not by the reviewer,
  *     because the reviewer holds no write tool (see `prompts.ts`).
  *
@@ -40,6 +42,47 @@ export function parseReview(structured: unknown, fallback: string): Review {
   return { verdict, summary, findings };
 }
 
+/** What `reviewerFailed` says when the spawn layer had nothing to say. */
+export const REVIEWER_FAILED = "the reviewer sub-agent failed";
+
+/**
+ * The reviewer FAILED: a spawn error, a timeout, an exhausted budget, a killed
+ * process. There is no verdict here to record, so none is invented.
+ *
+ * This is the distinction the executor used to lose. `parseReview` is for a
+ * reviewer that ANSWERED and whose answer is unreadable — that one is `changes`,
+ * fail-closed, and correctly consumes the story's requeue. This one is for a
+ * reviewer that never answered, and it must not.
+ */
+export function reviewerFailed(error: string | null | undefined): Review {
+  const text = (error ?? "").trim();
+  return { verdict: "error", summary: text === "" ? REVIEWER_FAILED : text, findings: [] };
+}
+
+/**
+ * Does a recorded review `detail` read as a TRANSPORT failure rather than a
+ * verdict? COMPAT ONLY.
+ *
+ * A run recorded before `verdict: "error"` existed wrote a reviewer crash as
+ * `verdict: "changes"` with the spawn layer's own error string as its detail.
+ * Measured 2026-08-30 in `260830-tenancy-identity-customers/events.jsonl`:
+ *
+ *   {"check":"review","story":"S1","verdict":"changes",
+ *    "detail":"claude exited 1 with is_error=true: Reached maximum budget ($0.26)"}
+ *
+ * Every string this can match is produced by the framework itself — `describe()`
+ * in `spawnAgent.ts`, `readCapError` in `readCap.ts`, or `REVIEWER_FAILED` here —
+ * never by a model, because a model's summary goes through `parseReview`. A NEW
+ * run never reaches this function: it reads `verdict: "error"` off the event.
+ */
+export function looksLikeReviewerError(detail: string): boolean {
+  const text = detail.trim();
+  return text === REVIEWER_FAILED
+    || text.startsWith("claude exited ")
+    || text.startsWith("claude timed out")
+    || text.startsWith("stopped after ");
+}
+
 /** `04-build/log/<story-id>.md`. Line 1 is the heading, which is what handoffs cite. */
 export function renderReviewLog(outcome: StoryOutcome): string {
   const lines = [
@@ -63,7 +106,7 @@ export function renderReviewLog(outcome: StoryOutcome): string {
     "",
     "## Summary",
     "",
-    outcome.reviewSummary === "" ? "_No reviewer ran for this story._" : outcome.reviewSummary,
+    ...summaryLines(outcome),
     "",
     "## Findings",
     "",
@@ -87,6 +130,23 @@ export function renderReviewLog(outcome: StoryOutcome): string {
     lines.push("## Why it is not done", "", outcome.reason, "");
   }
   return lines.join("\n");
+}
+
+/**
+ * The Summary section: what the reviewer said, or — when it FAILED — that it
+ * failed and with what, in those words. "The reviewer asked for changes" over a
+ * transport error is the sentence this whole file exists to stop printing.
+ */
+function summaryLines(outcome: StoryOutcome): readonly string[] {
+  if (outcome.verdict === "error") {
+    return [
+      "**The reviewer FAILED and returned no verdict.** This is not a request for changes:",
+      "nothing about the diff was judged. The error it died with:",
+      "",
+      `> ${outcome.reviewSummary === "" ? REVIEWER_FAILED : outcome.reviewSummary}`,
+    ];
+  }
+  return [outcome.reviewSummary === "" ? "_No reviewer ran for this story._" : outcome.reviewSummary];
 }
 
 /**

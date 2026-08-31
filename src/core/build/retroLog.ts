@@ -52,8 +52,8 @@ export function buildRetroPath(runDir: string): string {
 }
 
 /**
- * One story's bullets: the reviewer's `changes` verdict, and every DoD command
- * that failed on the FIRST attempt.
+ * One story's bullets: the reviewer's `changes` verdict (or its FAILURE to
+ * return one), and every DoD command that failed on the FIRST attempt.
  *
  * "On the first attempt" is the interesting one and it is why `attempts` is read
  * rather than the final status. A command that failed, was fixed and then passed
@@ -72,6 +72,15 @@ export function storyRetroLines(outcome: StoryOutcome, runId: string): readonly 
     for (const finding of outcome.reviewFindings) {
       lines.push(`- \`${outcome.id}\` — reviewer finding: ${oneLine(finding)} ${src}`);
     }
+  }
+
+  // A reviewer that FAILED is push-back too, and of the most expensive kind: the
+  // developer's turn is already paid for and nothing has judged it.
+  if (outcome.verdict === "error") {
+    lines.push(
+      `- \`${outcome.id}\` — the reviewer FAILED and returned no verdict on attempt `
+      + `${String(outcome.attempts)}: ${oneLine(outcome.reviewSummary)} ${src}`,
+    );
   }
 
   if (outcome.attempts === 1 && !dodGreen(outcome)) {

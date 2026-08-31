@@ -775,6 +775,51 @@ describe("tldrx cost (N7)", () => {
     expect(program.usd).toBeCloseTo(0.42, 2);
   });
 
+  /**
+   * Declared tokens, since 2026-08-30.
+   *
+   * `tldrx next --commit --tokens 342527` writes that number onto the task row
+   * AND the `agent.result` payload — and `tldrx cost` printed
+   * `0 in · 0 out · 0 cache write · 0 cache read` beside it. Four zeroes are not
+   * "unmeasured", they are "nothing happened", and they were the wrong claim
+   * about a turn that burned 342.5k tokens in the host's own session.
+   */
+  test("a host-declared --tokens figure is carried onto the attempt", () => {
+    const attempt = toAttempt(agentResult("plan", {
+      cost_usd: 0,
+      payload: { phase: "03-plan", task: "t1", model: "sonnet", metered: false, tokens: 342527 },
+    }));
+    expect(attempt?.usd).toBeNull();
+    expect(attempt?.declaredTokens).toBe(342527);
+    // It is NOT folded into the four measured counters: nobody measured those.
+    expect(attempt?.tokens).toEqual({ input: 0, output: 0, cacheCreation: 0, cacheRead: 0 });
+    // And an ordinary metered attempt declares nothing.
+    expect(toAttempt(agentResult("what"))?.declaredTokens).toBeNull();
+  });
+
+  test("`tldrx cost` renders declared tokens instead of a row of zeroes", () => {
+    const ws = readingWorkspace(50);
+    EventLog.forRun(ws.runDir).append(agentResult("alpha", {
+      run: ws.runId,
+      cost_usd: 0,
+      payload: { phase: "01-what", task: "t1", model: "sonnet", metered: false, tokens: 342527 },
+    }));
+
+    const cost = buildRunCost(ws.runDir);
+    expect(cost?.declaredTokens).toBe(342527);
+    const text = renderRunCost(cost!);
+    expect(text).toContain("~342.5k declared (host session)");
+    expect(text).not.toContain("0 in · 0 out · 0 cache write · 0 cache read");
+  });
+
+  test("a measured attempt still prints its four counters, declared or not", () => {
+    const ws = readingWorkspace(50);
+    EventLog.forRun(ws.runDir).append(agentResult("alpha", { run: ws.runId }));
+    const text = renderRunCost(buildRunCost(ws.runDir)!);
+    expect(text).toContain("1.0k in · 200 out · 50 cache write · 900 cache read");
+    expect(text).not.toContain("declared (host session)");
+  });
+
   test("unmetered attempts are counted apart and never summed into the total", () => {
     const ws = readingWorkspace(50);
     const log = EventLog.forRun(ws.runDir);
