@@ -95,9 +95,11 @@ headline that counts advice as work makes a workspace that is merely new look br
 Every so often the bundle is missing something only you know: a decision that was deferred, a
 seed doc that did not get inlined, an answer the owner gave in chat, or "Docker is up". Write
 it into `tldrx-work/<run>/.agent/<stage>/dispatch-notes.md`, beside `prompt.md`, and the next
-`--prepare` renders it into the prompt under `## Dispatch notes`. For a Build story the
-per-story file is `.agent/<stage>/<story>/dispatch-notes.md`, and when both exist the stage's
-file is rendered first.
+run of that stage renders it into the prompt under `## Dispatch notes`, between `## Inputs`
+and `## Previous attempt`. **Every mode reads it**, not only `--prepare`: a note left for a
+headless stage is as much a caveat as one left for a bundle you dispatch yourself. For a
+Build story the per-story file is `.agent/<stage>/<story>/dispatch-notes.md`, and when both
+exist the stage's file is rendered first.
 
 The two places you might reach for instead are both wrong: `stage.md` belongs to the
 framework and is shared by every run of that workflow, and an edit to `prompt.md` is thrown
@@ -107,8 +109,12 @@ Three things to know about it:
 
 - **It is context, not configuration.** Nothing in it can change your declared inputs, your
   outputs, the checks, or a budget. The section says so to the sub-agent, in as many words.
-- **It is capped at 8 KB**, shared across both files. Over that it is cut, and the cut is
-  named in the prompt, on stdout and in `pending.json`.
+- **It is capped at 8 KB** (8,192 B), one budget shared across both files and spent
+  stage-first. Over that it is cut, and the cut is named in the prompt, on stdout
+  (`cut at the 8,192 B dispatch-notes cap — …`) and in `pending.json`'s
+  `dispatch_notes: {bytes, truncated, max_bytes, sources}`. It counts against
+  `prompt_max_bytes` like every other section, and shows in the context ledger as
+  `dispatch notes`.
 - **It is per-cycle scratch.** `.agent/` is gitignored, and the file survives
   `--discard-pending` but nothing else. Anything that should outlive this cycle belongs in
   `.tldrx/memory/facts.yml` (`tldrx facts add`), which reaches *every* prompt with
@@ -119,6 +125,10 @@ Leave the file out and the prompt is byte-identical to what it always was.
 **One stage per `/tldrx` call.** When a run's remaining gates are mostly `auto` and nobody
 needs to watch, `tldrx run auto <id>` is the headless loop — but it spawns its own sessions,
 so it belongs in a terminal, not inside the session.
+
+Everything on this page is one session's half of the story. The whole shape — who may sign
+what, the four fallthroughs, and one story's cycle end to end — is
+[10 — Unattended mode](10-unattended-mode.md).
 
 ## Attended mode — a run this session is driving
 
@@ -214,18 +224,25 @@ Write it like any other verdict, with the findings beside it:
 
 What happens next:
 
-- The framework writes **`04-build/fixlist/<story>-1.md`** — numbered findings, each with its
-  `Disposition:` and a `Resolved: no` — and the story parks at `review` having spent **no
-  attempt**. `defer-with-log` findings are appended to `retro.md` on the way past.
+- The framework writes **`04-build/fixlist/<story>-<round>.md`** — one
+  `## <n> · <finding>␣␣[<severity>]` section per finding (two spaces before the bracket), each
+  carrying a `Where:`, a `Disposition: **<value>**` and a `Resolved: no` — and the story parks
+  at `review` having spent **no attempt**. `defer-with-log` findings are appended to
+  `retro.md`'s `## Build feedback` on the way past.
 - The next **`tldrx next --prepare`** carries that file back to the author: the open findings
   land under `## Fix list` in the developer prompt with their `Do NOT` lines verbatim, and
-  `pending.json` gains `fixlist: {…}` plus `resume_session` — the prior turn's `session_id`, so
-  you can resume that sub-agent instead of paying to rebuild its context. The framework resumes
-  nothing itself; it hands you the id it recorded. `--fixlist <path>` names a different file.
+  `pending.json` gains `fixlist: {path, round, findings, open}` plus `resume_session` — the
+  prior turn's `session_id`, so you can resume that sub-agent instead of paying to rebuild its
+  context. Both keys appear **only** on a fix-list round; an ordinary developer `--prepare` has
+  neither. The framework resumes nothing itself; it hands you the id it recorded.
+  `--fixlist <path>` names a different file, and refuses one that is not this story's.
 - **You disposition it.** A `fix-now` finding keeps the story out of `done`: an `approve` over
   an open one settles `blocked` and names it. Close each in the file as the fix lands
-  (`Resolved: yes`) or re-route its `Disposition:`. That edit is yours — the author works in a
-  story worktree of another repo and its own prompt forbids writing outside it.
+  (`Resolved: yes`) or re-route its `Disposition:` — **keep the value bolded**
+  (`Disposition: **defer-with-log**`), because that is how the file is read back: a line
+  without the asterisks drops its finding rather than half-reading it. That edit is yours — the
+  author works in a story worktree of another repo and its own prompt forbids writing outside
+  it.
 - **There is exactly one such round.** A second `fixlist` on the same story is refused out loud
   and read as `changes`, which costs the attempt the first one did not — and the second
   reviewer's prompt says the verdict is unavailable rather than offering one that would be

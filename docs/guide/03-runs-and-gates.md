@@ -147,7 +147,7 @@ Every stage ends at a gate. What you choose is **who closes it**. Three answers:
 |---|---|---|
 | `human` | you type `tldrx approve` | your name |
 | `auto` | seven measured conditions hold | `by: auto` |
-| `agent` | those seven, **plus** no budget decision in the stage's window, **plus** an evidence note that signs | the note's `by:`, with `role: agent` |
+| `agent` | those seven, **plus** no budget decision in the stage's window, **plus** an evidence note that signs | the note's `by:`, with `gate.evidence` beside it and `role: agent` on the event |
 
 `human` waits for `tldrx approve`; `auto` lets the harness close it — but only when all seven conditions hold:
 the stage's checks pass, its phase has no open question, the spend is inside both the stage
@@ -173,7 +173,10 @@ The shipped defaults — every scope keeps at least one human gate:
 | `security-patch` | auto | auto | — | human | human |
 | `migration` | auto | auto | auto | human | human |
 
-No shipped scope uses `agent`: it arrives by choice, never by default.
+No shipped scope uses `agent`: it arrives by choice, never by default. The three sections
+below are the reference for it; the end-to-end narrative — how an `agent` gate fits with a run
+the framework never spawns on, and what one story's cycle looks like from `--prepare` to signed
+gate — is [10 — Unattended mode](10-unattended-mode.md).
 
 Override per run with `tldrx run new … --gates <stage,stage>` — **the list is the human
 gates** — or `--gates all` / `--gates none`. An entry may name its policy outright:
@@ -215,6 +218,8 @@ branch was auto-approved, twice.
 epic branch — `git diff --name-only <default_branch>...<epic_branch>` — against the surface
 the run declared: every `file:` citation in `01-what/handoff.md` and `02-how/handoff.md`,
 plus every `touches:` entry in the plan (a directory entry covers everything beneath it).
+A `file:` citation that named no repo widens **every** repo's surface, deliberately: a
+handoff that cited `src/Auth/Otp.cs` without saying which repo did not thereby scope one.
 A changed path outside that surface refuses the gate and is **named**, up to eight of them
 before `+N more`. Work nobody scoped may well be the right work — a module story that had to
 change a Platform file usually is — but widening a boundary is a decision, and it is yours.
@@ -290,7 +295,10 @@ approved 03-plan/plan (claim-sources:passed)
 cursor → 04-build/build (ready)
 ```
 
-Both doors do the same thing. The checks are re-run off disk. The note is **copied into the
+Both doors record the same thing — they differ only in what `gate.note` says, because
+`tldrx next` has the seven measured conditions to hand and `approve --as-agent` does not, so
+the first writes `agent-gate: <seven conditions>; evidence=…` and the second writes
+`agent-gate: evidence=…`. The checks are re-run off disk. The note is **copied into the
 run tree** at `<phase>/gate-evidence/<stage>.md`, which is committed — a gate whose evidence
 lives only in a gitignored directory is a gate nobody can audit from a clone. `gate.by`
 records the note's `by:`, `gate.evidence` records its counts and the path, and one ordinary
@@ -368,16 +376,17 @@ recommend:
 **A question with no recommendation gets no line.** The value of that line is that an agent
 stood behind it with a citation; a manufactured one is worse than none. Q1 above had none.
 
-The same card shows up in three places, from one renderer:
+The same card shows up in three places, from one renderer — but **where it sits differs**:
 
-| Where | When |
-|---|---|
-| `tldrx run auto --gate-agent` | the loop stops for a person |
-| `tldrx next`, on an agent gate | open questions, a boundary or a budget event fell the gate through |
-| `tldrx status` | a run is waiting on answers |
+| Where | When | Placement |
+|---|---|---|
+| `tldrx run auto --gate-agent` | the loop stops for a person | **replaces** the ordinary stop block |
+| `tldrx next`, on an agent gate | a question, a boundary or a budget event fell the gate through | **appended** below `gate pending: tldrx approve`, after a blank line, so nothing that reads those lines loses a byte |
+| `tldrx status` | a run is waiting on answers | in place of `open questions: Q1, Q2` |
 
-Budget and boundary fallthroughs get their own card over the same frame — the measured fact,
-then the commands:
+There are four card kinds and they are chosen in this order — `questions`, then `boundary`,
+then `budget`, then a plain `gate` card for anything else. The last three carry a headline, the
+measured fact, and the commands that settle them:
 
 ```
 DECISION — 260830-tenancy · 04-build/build
@@ -388,7 +397,24 @@ Boundary — the epic changed paths nobody scoped
   tldrx reject --run 260830-tenancy --note "<why>"
 ```
 
-`tldrx answer`, `questions.md`, the live dashboard and every exit code are unchanged.
+```
+DECISION — 260830-tenancy · 04-build/build
+Budget — a person moved the ceiling while this stage ran
+  $6.20 spent of $8.00
+  1 budget event(s) in this stage's window (budget.raised at 2026-08-30T21:04:11Z) — a ceiling a
+  person moved to let this stage through is not a ceiling the machine that was blocked may then
+  sign off against
+  tldrx budget show --run 260830-tenancy
+  tldrx approve --run 260830-tenancy
+  tldrx reject --run 260830-tenancy --note "<why>"
+```
+
+The `gate` card is the fallback: `Gate — N reason(s) an agent gate could not close this`, one
+`<trigger>: <detail>` line each, then approve and reject.
+
+`tldrx answer`, `questions.md`, the live dashboard and every exit code are unchanged —
+`--gate-agent` is rendering, and it never upgrades a stage to `gates_policy: agent`, which is
+frozen at `run new`.
 
 ### Taking an approval back
 
@@ -402,7 +428,7 @@ moves back to that stage, one `gate.revoked` is appended carrying `signed_by`, a
 stages that had run are marked `stale: true` — their files stay on disk, they stop counting
 as current. Nothing is deleted and no cost is refunded. It is the one verb that may reopen
 a FINISHED run. `tldrx status` names every gate signed `by: auto` and the status line
-carries `auto:N` / `stale:N`.
+carries `att` / `auto:N` / `stale:N`, in that order and only when each is true.
 
 ### Giving one story another go
 

@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+**Unattended mode.** Twelve of the entries below are one feature: a run a **host session**
+drives end to end, and a gate an **agent** may close over a check it wrote down. `attended_by: host`
+stops the framework spawning on a run at all; `economy: host-tokens` stops a ceiling that is not
+dollars from buying a metered spawn; the dispatch-notes slot gives the host the one place to add
+what the bundle cannot know; `next --prepare/--commit --review` makes the Build reviewer the
+second delegable role, so one review is done once; the `fixlist` verdict gives a review that
+SIGNS somewhere to put its findings, for one bounded round that costs no attempt;
+`gates_policy: agent` closes a gate on the seven auto conditions **plus** a boundary check, a
+budget-event check and a validated evidence note, and falls through to a person on a question, a
+moved ceiling, work nobody scoped, or its own refusal — rendered as a decision card rather than
+a dashboard. Three smaller pieces stop a turn being wasted before it starts: `preconditions:`
+on a stage, a story branch fast-forwarded onto its epic before dispatch, and a budget brake that
+counts the work that is LEFT rather than the price the stage was written at. Two measurements
+from 2026-08-30 are the whole argument: **$9.95** of spawns that died on caps a Plan agent had
+priced in host tokens, and a framework reviewer that spawned beside a host already reading the
+same diff. New chapter: `docs/guide/10-unattended-mode.md`. Every part is additive — a run with
+none of these behaves byte-identically to the release before them.
+
 ### Added
 
 - **A story branch that has fallen behind its epic is fast-forwarded before a developer is

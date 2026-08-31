@@ -36,10 +36,11 @@ TypeScript on Bun; host Claude Code. Covers the v0 skeleton and the schema shape
 ├─ tldrx-work/<yymmdd>-<slug>/          # one run
 │  ├─ run.yml §2.2 [c] · budget.yml §2.11 [c] · events.jsonl §2.9 [c] · retro.md [c]
 │  ├─ .lock [g] · .agent/ [g]        # single-writer guard; raw `claude -p` json + transcripts
+│  ├─ <phase>/  gate-evidence/<stage>.md [c]   # the §2.17 note an `agent` gate was closed over
 │  ├─ 01-what/  handoff.md questions.md intent.md scope.md success-metrics.md [c]
 │  ├─ 02-how/   handoff.md questions.md design.md contracts.md risks.md test-strategy.md [c]
 │  ├─ 03-plan/  handoff.md waves.yml §2.15 · epics/<id>.md §2.14 · stories/<id>.md §2.13 [c]
-│  ├─ 04-build/ handoff.md log/<story-id>.md fixlist/<story-id>-<n>.md [c]
+│  ├─ 04-build/ handoff.md log/<story-id>.md fixlist/<story-id>-<round>.md [c]
 │  └─ 05-watch/ handoff.md watchers/<feature>.md [c]
 └─ <repo-a>/ <repo-b>/ …             # sibling product repos; init writes nothing into them
 ```
@@ -243,7 +244,7 @@ for files whose citations §2.6 would refuse to count.
 | `gate.type` / `.approvers` | `approve\|checks\|auto` / int ≥1 | y / n (1) | Human stop / checks only / no stop |
 | `checks[].id` / `.on` | `claim-sources\|schema\|cmd\|dod` / `pre-write\|post-write` | y | Built-in check id and when it runs |
 | `checks[].repo` / `.command` / `.expect_exit` | slug / str / int | y for `cmd` | Command must equal a `workspace.yml` command verbatim |
-| `preconditions[].id` / `.repo` / `.command` / `.expect_exit` | slug / slug / str / int | n (≤10) | An OPERATIONAL fact that must hold **before** the stage is dispatched (§5). Same verbatim-allowlist rule as a `cmd` check; **refused at load** if the command is not one `workspace.yml` declares |
+| `preconditions[].id` / `.repo` / `.command` / `.expect_exit` | str / str / str / int | the LIST is n (≤10); within an entry `id` `repo` `command` are **required** and `expect_exit` is optional, **default `0`** | An OPERATIONAL fact that must hold **before** the stage is dispatched (§5). Same verbatim-allowlist rule as a `cmd` check; **refused at load** if the command is not one `workspace.yml` declares. `id` and `repo` are validated as strings, not as slugs |
 
 **Validation.** `id` = folder name; `budget_usd` ≤ the phase ceiling; `cmd` **and `preconditions`** commands must match
 `workspace.yml` (no arbitrary shell from a stage file) — one comparison, one function, shared with a story's
@@ -877,6 +878,9 @@ which until then rewrote `budget.yml` and appended nothing at all: the one sanct
 act with no record. Its payload carries `phase`, `amount_usd`, `take_from`, before/after for both the phase and the run
 ceiling, and the operator's `--note`.
 
+**`run.created` carries `attended_by`** when `run new --attended-by host` set it, beside the fields it already carried;
+absent on every other run, so an ordinary `run.created` is what it was.
+
 **`run.attended` was added 2026-08-30.** It is `tldrx run attend`, flipping §2.2's `attended_by` on an open run. Its
 payload carries `attended_by` (the new value, `host` or `null`) and `was` (the old one); `stage` on the envelope is
 `null` and `cost_usd` is `0`, because the operator acted outside a stage run and it spends nothing. A no-op — setting
@@ -1339,9 +1343,11 @@ order, each holding a list item · every list item sourced and resolving · `cit
 `resolved + refuted <= sampled` · not `sampled: 0` while `of > 0` — "I checked none of them" is not a check ·
 `verdict: sign` · `gate:` equal to the stage at the cursor.
 
-**`tldrx gate template`** writes the blank form, filling only what a tool can COUNT — the gate, the time,
-`citations.of`, `touches.audited` — and leaving every judgement blank. It writes no `[src: …]` anywhere, and what it
-writes deliberately does **not** validate: a template that parsed clean out of the box would be a signature nobody had
+**`tldrx gate template`** writes the blank form, filling only what a tool can COUNT or already knows — `version`,
+`gate`, `role: agent`, `by` (the current actor, which becomes `gate.by` if the note is signed), `at`, `citations.of`,
+`touches.audited`, and empty `caveats` / `recommend` — and leaving `verdict` and `diff_vs_stories` blank. It writes no
+citation of its own (the literal string `[src: …]` appears once, inside the italic guidance under `## Read`, never as a
+list item), and what it writes deliberately does **not** validate: a template that parsed clean out of the box would be a signature nobody had
 to earn. It spends nothing, spawns nothing, approves nothing and moves no cursor.
 
 ## 3. CLI surface
@@ -1354,20 +1360,20 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx doctor [--mcp] [--json]` | `env.yml`, `workspace.yml`, `.tldrx/stages/**`, `.claude/settings.json`, plus a shallow scan of `.tldrx/**` + `tldrx-work/*/{run,budget}.yml` for the deprecated `schema_version:` key, plus `git check-ignore` over four `[c]` state paths | `env.yml.result`, `cache/doctor.json` | 0,1 |
 | `tldrx install --claude [--project\|--user] [--skill-only] [--no-hooks] [--no-statusline] [--force-statusline] [--uninstall] [--dry-run]` | `plugin/skills/tldrx/SKILL.md`, the target `.claude/settings.json` | `.claude/skills/tldrx/SKILL.md` (marked `<!-- tldrx-managed -->`), `.claude/settings.json` (the §4 hooks as `tldrx hook <name>` + `statusLine`), `settings.json.bak-tldrx-<ts>` | 0,1 |
 | `tldrx status [--json]` | `.tldrx/init-questions.md`, `.tldrx/triage/*/{split.yml,inventory.json}` and the seed documents those name, `tldrx-work/*/run.yml` (incl. `triage.depends_on`), `.tldrx/experts/**`, every `stage.yml` | nothing (stdout) | 0,3 |
-| `tldrx run new [--from <path>\|--seed <path> ...] [--scope <s>] [--budget <usd>] [--gates <a,b\|all\|none>]` | `workflows/<s>.yml`, `workspace.yml`, `facts.yml`, the `--from` source (§6) or the `--seed` documents (§6.1) | `tldrx-work/<run>/{run.yml,budget.yml,events.jsonl,01-what/*}` incl. the resolved `gates_policy`; `--seed` also writes `01-what/seed-index.md` and declares the documents as What inputs. **`--seed` is repeatable** (§6.2): every occurrence is collected, merged, deduped and re-sorted, and the §6.1 caps apply to the merged set; one occurrence behaves exactly as before. A seed over the threshold or over 10 files adds one **stderr** note naming `tldrx seed triage`. `--gates` LISTS THE HUMAN GATES (`all` = every stage human, `none` = every stage auto); an entry may be QUALIFIED as `<stage>:<policy>` (`plan:agent`) and a bare entry still means `human`, so every existing invocation means what it meant; an unknown stage or an unknown policy is a usage error and no run is created. `--attended-by host` freezes §2.2's `attended_by` into the run: the framework will not spawn on it. Any other value is a usage error and no run is created | 0,1 |
+| `tldrx run new [--from <path>\|--seed <path> ...] [--scope <s>] [--budget <usd>] [--gates <a,b\|a:agent\|all\|none>] [--attended-by host]` | `workflows/<s>.yml`, `workspace.yml`, `facts.yml`, the `--from` source (§6) or the `--seed` documents (§6.1) | `tldrx-work/<run>/{run.yml,budget.yml,events.jsonl,01-what/*}` incl. the resolved `gates_policy`; `--seed` also writes `01-what/seed-index.md` and declares the documents as What inputs. **`--seed` is repeatable** (§6.2): every occurrence is collected, merged, deduped and re-sorted, and the §6.1 caps apply to the merged set; one occurrence behaves exactly as before. A seed over the threshold or over 10 files adds one **stderr** note naming `tldrx seed triage`. `--gates` LISTS THE HUMAN GATES (`all` = every stage human, `none` = every stage auto); an entry may be QUALIFIED as `<stage>:<policy>` (`plan:agent`) and a bare entry still means `human`, so every existing invocation means what it meant; an unknown stage or an unknown policy is a usage error and no run is created. `--attended-by host` freezes §2.2's `attended_by` into the run: the framework will not spawn on it. Any other value is a usage error and no run is created | 0,1 |
 | `tldrx seed triage <path> [--out <dir>] [--json] [--threshold-tokens <n>]` | the `--seed` documents (§6.1 rules), `workspace.yml` (repos + `seed_triage.threshold_tokens`) | `<out>/inventory.md`, `<out>/inventory.json` (default `<out>` = `.tldrx/triage/<yymmdd>-<slug>/`) | 0,1,3 |
 | `tldrx seed triage <path> --propose [--model <m>] [--effort <l>] [--max-usd <n>] [--prepare\|--commit] [--yolo]` | the same, plus `workflows/*.yml` for the legal scopes | `<out>/{inventory.md,inventory.json,split.yml,split.md}`, `<out>/.agent/propose/*`; **never** a run | 0,1,2,5 |
 | `tldrx seed answer <split.yml> <Qid> "<text>"` | `split.yml`, `inventory.json` beside it, `workflows/*.yml` | `split.yml` (that question's `answer:`), and `split.md` when it exists | 0,1,3 |
 | `tldrx seed apply <split.yml> [--dry-run]` | `split.yml`, `inventory.json` beside it, `workflows/*.yml` | one `tldrx-work/<run>/` per proposed run (via `run new`'s own path) each with a `triage:` block, and `split.yml` rewritten to `status: applied`. Questions with no `answer:` are listed on **stderr** as a warning — never a refusal | 0,1,3 |
 | `tldrx run attend <host\|--none> [<run>]` | `run.yml` | `run.yml`'s `attended_by` (§2.2), `events.jsonl` (`run.attended`, carrying the new value and the old). Nothing else: no agent, no cost, no stage moved, no branch touched. `--none` REMOVES the key rather than blanking it — `null` is not a legal value. A direction is required and is never guessed (exit 1); setting what is already set is a silent no-op; a `done` or `cancelled` run is refused (exit 2) | 0,1,2,3 |
 | `tldrx run status [<run>]` | `run.yml`, `events.jsonl` | nothing (stdout) | 0,3 |
-| `tldrx next [<run>] [--dry-run] [--prompt-max-bytes <n>] [--max-reads <n>] [--commit --cost-usd <n>] [--tokens <n>]` | `run.yml`, `stage.yml`, `stage.md`, `expert.md`, declared inputs, `graphify-out/<repo>/graph.json` | stage outputs, `run.yml`, `events.jsonl`. `--cost-usd` is the in-session turn's DECLARED cost (§2.2); with none the task is `cost_usd: null, metered: false`. Both flags are `--commit`-only — headless reconciles a real `total_cost_usd` and a flag must not overwrite a measurement. On a run marked `attended_by: host` (§2.2) the headless mode — `--dry-run` included, which spawns for real and only reverts the files — is refused with **exit 4** before the budget gate, before an input is read and before a prompt is assembled; the message names the exact half of the handshake the stage is waiting for | 0,2,3,4,5 |
+| `tldrx next [<run>] [--dry-run] [--prepare\|--commit] [--review] [--fixlist <path>] [--parallel <n>] [--prompt-max-bytes <n>] [--max-reads <n>] [--commit --cost-usd <n>] [--tokens <n>]` | `run.yml`, `stage.yml`, `stage.md`, `expert.md`, declared inputs, `graphify-out/<repo>/graph.json` | stage outputs, `run.yml`, `events.jsonl`. `--cost-usd` is the in-session turn's DECLARED cost (§2.2); with none the task is `cost_usd: null, metered: false`. Both flags are `--commit`-only — headless reconciles a real `total_cost_usd` and a flag must not overwrite a measurement. On a run marked `attended_by: host` (§2.2) the headless mode — `--dry-run` included, which spawns for real and only reverts the files — is refused with **exit 4** before the budget gate, before an input is read and before a prompt is assembled; the message names the exact half of the handshake the stage is waiting for | 0,2,3,4,5 |
 | `tldrx cost [<run>] [--run <id>] [--all] [--json]` | every run's `events.jsonl` (+ `run.yml` for the title) | nothing (stdout) | 0,1,3 |
 | `tldrx run estimate [<run>] [--json]` | everything `next --prepare` reads, plus every run's `events.jsonl` for cache-write / cache-read / output history | nothing (stdout) | 0,1,3 |
-| `tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <l>] [--yolo]` | everything `next` reads, once per stage | everything `next` writes. Refused with **exit 1** on a run marked `attended_by: host`, before the event log is opened so nothing is written: this loop's whole job is calling `next` headless, and on such a run that is a refusal | 0,1,2,3,4,5 |
+| `tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <l>] [--parallel <n>] [--gate-agent] [--yolo]` | everything `next` reads, once per stage | everything `next` writes. Refused with **exit 1** on a run marked `attended_by: host`, before the event log is opened so nothing is written: this loop's whole job is calling `next` headless, and on such a run that is a refusal. `--gate-agent` is RENDERING ONLY (§5, "Decision cards"): when the loop stops for a person at exit 4 it prints a decision card in place of the ordinary stop block, and it never upgrades a stage's frozen `gates_policy` | 0,1,2,3,4,5 |
 | `tldrx answer <Qid> <text> [--run <id>]` | `questions.md`, `facts.yml` | `questions.md`, `facts.yml`, `events.jsonl` | 0,1,2,3 |
 | `tldrx interview [--run <id>\|--init] [--yes-to-defaults]` | the cursor phase's `questions.md` (or `.tldrx/init-questions.md`), `run.yml`, `.tldrx/process.yml`, `workspace.yml`, `git remote get-url origin` | the same three files `answer` writes, one per answer recorded; with `--init`, also `.tldrx/process.yml` (§2.12) when a process answer settles `methodology` or `ticket_tool.kind` | 0,1,2,3 |
-| `tldrx approve [--run <id>] [--note] [--as-agent] [--evidence <path>]` | `run.yml`, stage outputs, stage checks; with `--as-agent` also `.agent/<stage>/evidence.md` (§2.17) | `run.yml` gate, `events.jsonl`; with `--as-agent` also `<phase>/gate-evidence/<stage>.md` and `gate.evidence`. `--as-agent` is refused (1) unless the stage's policy is `agent`; a broken note is 2, a note whose verdict is not `sign` is 4, and nothing is signed in either case | 0,1,2,3,4 |
+| `tldrx approve [--run <id>] [--note] [--as-agent] [--evidence <path>]` | `run.yml`, stage outputs, stage checks; with `--as-agent` also `.agent/<stage>/evidence.md` (§2.17) | `run.yml` gate, `events.jsonl`; with `--as-agent` also `<phase>/gate-evidence/<stage>.md` and `gate.evidence`. `--as-agent` is refused (1) unless the stage's policy is `agent`; `--evidence` without `--as-agent` is refused (1) — a note nobody signs with is not evidence for anything; a broken note is 2, a note whose verdict is not `sign` is 4, and nothing is signed in either case | 0,1,2,3,4 |
 | `tldrx gate template [--run <id>] [--force]` | `run.yml`, the cursor stage's declared outputs, `03-plan/stories/<id>.md` or `04-build/implicit-plan.yml` | `.agent/<stage>/evidence.md` (§2.17). Nothing else: no gate, no cursor, no event, no cost. An existing note is left alone (exit 2) unless `--force` | 0,1,2,3 |
 | `tldrx reject [--run <id>] --note <text> [--stage <phase>/<stage>]` | `run.yml` | `run.yml` gate, `events.jsonl`, stage status ⇒ `ready`. With `--stage` it REVOKES an approval already given (§5): `gate.revoked`, the cursor moves back, later stages that had run are marked `stale: true`, nothing is deleted. `--stage` may target a FINISHED run | 0,2,3 |
 | `tldrx story reopen <id> [--run <id>] --note <text>` | `03-plan/waves.yml` + `03-plan/stories/<id>.md` (or `04-build/implicit-plan.yml`), `events.jsonl` | that story file's `status:` ⇒ `todo`, `events.jsonl` (`story.reopened`). Nothing else: no agent, no cost, no stage moved, no worktree or branch touched. Refuses (2) an unknown story id, a `done` story (that is `reject --stage`), a `todo` story, and a missing `--note` | 0,1,2,3 |
@@ -1584,6 +1590,8 @@ Statusline renderer uses `model.display_name`, `cost.total_cost_usd`, `context_w
 `worktree.branch`, `session_id` from the statusLine JSON (Appendix A) plus `run`, `cursor`, phase progress and
 `budget.ceiling_usd` from `run.yml`, and prints:
 `[tldrx] 260828-leaderboard · 02-HOW [▓▓░░░] 2/5 > contracts — architect | Sonnet ctx:16% $3.75/$25`
+Up to three markers sit between the stage count and the `>`, in this order and only when each is true: **`att`** (the
+run is `attended_by: host`), `auto:N` and `stale:N`.
 
 With several runs open (§3.1) the status line still shows ONE run — the newest open one — with a marker for the
 others: `[tldrx] 260828-leaderboard (+1 open) · 02-HOW …`. No hook refuses on ambiguity. `claim-sources`,
@@ -1604,6 +1612,7 @@ next(run, dry_run):
   if st.status == awaiting_answer: exit 4 if unanswered(questions.md) else st.status = ready
   sy = load_validate(.tldrx/stages/<st.id>/stage.yml)
   if sy.skip_if holds: append(stage.skipped); advance_cursor(); return next(run, dry_run)
+  if r.attended_by == host and mode == headless: exit 4   # §2.2; FIRST, before every line below
   if b.economy(st.phase) == host-tokens and mode == headless: exit 2   # §2.11: that ceiling is not dollars
   for p in sy.preconditions:                       # §2.3; skipped entirely on --commit
      res = sh(argv(p.command), cwd=repo(p.repo))   # allowlisted verbatim, never a shell
@@ -1615,6 +1624,7 @@ next(run, dry_run):
   inputs = sy.inputs.required + present(sy.inputs.optional)          # ONLY these files
   prompt = render(stage.md, {run, repos, inputs, facts: grep(facts.yml, sy.area/r.repos), conventions,
            budget_usd}) + concat(expert_block(e) for e in select_experts(sy, r))
+           + dispatch_notes(.agent/<st.id>/dispatch-notes.md, +/<story>/ on build)   # §5 prompt order
   st.status = running; write(run.yml); append(stage.started)
   for task in tasks_of(sy):                        # 1 per output group; parallel iff independent
      append(agent.spawned)
@@ -1729,8 +1739,9 @@ fact, and `.tldrx/memory/facts.yml` is the durable channel that already reaches 
 behind it.
 
 **The context ledger.** `--prepare` and `--dry-run` print bytes per section — stage (and its `## Questions`), each
-declared input, each expert's body and knowledge, the previous attempt — and `pending.json` carries the same numbers
-under `context:`. `prompt_max_bytes` (§2.3, default 163840) is a **refusal**: over it `next` exits `2` before a
+declared input, each expert's body and knowledge, the dispatch notes, the previous attempt — and `pending.json` carries
+the same numbers under `context:` (the dispatch-notes row is `dispatch_notes_bytes`, and reads `0 B` when the file is
+absent). `prompt_max_bytes` (§2.3, default 163840) is a **refusal**: over it `next` exits `2` before a
 sub-agent is spawned, names the biggest sections, and prints the key or command that shrinks each one — the same
 shape as the §2.11 money gate. The model's context window is only ever a **stderr warning** at 80%, never a refusal,
 because both the window and the bytes-per-token ratio are `[assumption]` (`src/core/budget/modelPrices.ts`) and
@@ -1864,6 +1875,28 @@ exit `2` ("fix the file"); a **refusing** note is exit `4` ("a person decides").
 agent-gated stage with no flag at all: that is an override, it is recorded as a person, and an agent gate is one an
 agent MAY close, never one a person may not.
 
+**Decision cards.** When a run stops for a person, the interrupt may be rendered as a CARD rather than as the ordinary
+stop block: the decision, its options, an agent's recommendation if one was offered, and the command that settles it.
+It is **rendering only** — no exit code, no gate, no question and no grammar changes, and `--gate-agent` never upgrades
+a stage's frozen `gates_policy`.
+
+Four kinds, chosen in this precedence: `questions` · `boundary` · `budget` · `gate`. A `questions` card is built from
+the §2.7 parser's own blocks (id, title, the `Why asked:` line with its `src`, the lettered options) plus, per
+question, the optional `recommend: [{q, option, why, src}]` entry of the §2.17 evidence note. **A question with no
+recommendation renders without that line** — never a manufactured one, because the whole value of the line is that an
+agent stood behind it with a citation. The other three kinds render a headline, measured detail lines and the commands
+that settle them; `boundary` leads with widening the scope, `budget` leads with `tldrx budget show`.
+
+The frame: `DECISION — <run> · <phase>/<stage>` on its own line; a question as `<Qid> · <title>` at column 0 with its
+`Why asked:`, its options and its `tldrx answer` command indented two spaces; the `Recommends <Letter> — <why>
+[src: …]` line at **column 0**, deliberately, so it does not read as one of the options. Questions are separated by a
+blank line.
+
+Three surfaces, one renderer, and they differ in placement: `tldrx run auto --gate-agent` **replaces** the stop block
+with the card at exit 4; `tldrx next` on an agent-gate fallthrough **appends** it below `gate pending: tldrx approve`
+after a blank line, so nothing that reads those lines today loses a byte; and `tldrx status` shows it for a run whose
+`waiting` is an answer.
+
 **The budget condition and unmetered turns.** An in-session `--commit` with no declared cost records
 `cost_usd: null, metered: false` (§2.2), and such a turn contributes nothing to any sum. The auto gate's note NAMES
 them (`…, 2 unmetered task(s) not counted`) but does **not** refuse on that alone: in-session is the mode where the
@@ -1892,7 +1925,7 @@ back remains `reject`'s own signed decision. Reopenable states are `blocked`, `r
 refuses, because undoing finished work is a decision about the stage.
 
 **`by: auto` where people look.** An auto-signed gate is named in `tldrx status` — with the `tldrx reject --stage …`
-that undoes it — and the status line carries `auto:N` and `stale:N`. It reached `run.yml`, the event log and
+that undoes it — and the status line carries `att`, `auto:N` and `stale:N`. It reached `run.yml`, the event log and
 `run status` before this, and none of those is a glance.
 
 (5) overlaps (1) on purpose and is run **whether or not the stage listed `claim-sources` under `checks:`** — a
@@ -2245,8 +2278,12 @@ already reading the diff. Outside attended mode the headless reviewer is unchang
 
 **The fix list — `04-build/fixlist/<story-id>-<round>.md` `[c]`.** The artefact of the third verdict, written by the
 EXECUTOR from the envelope (the reviewer holds no write tool, the same reason the review log is written here). Its
-shape: a heading, the round's own facts (verdict, attempt, diff command, commit), then one `## <n> · <finding>
-[<severity>]` section per finding carrying `Where:`, `Disposition:` and `Resolved:`.
+shape: a heading, the round's own facts (verdict, attempt, diff command, commit), then one
+`## <n> · <finding>␣␣[<severity>]` section per finding — **two spaces** before the bracket — carrying `Where:`
+(the literal `(not stated)` when the envelope gave none), `Disposition:` and `Resolved:`. The disposition is written
+and **read back bolded**: `Disposition: **fix-now**`. A host editing the file closes a finding with `Resolved: yes` or
+re-routes it by changing the value between those asterisks; a `Disposition:` line without them does not parse, and the
+finding it belongs to is dropped rather than half-read.
 
 - **Four dispositions**, and each is a decision somebody made rather than a fact about the code: `fix-now` (this
   story's own correctness), `defer-with-log` (real, somebody else's call), `refuted` (the reviewer was wrong),
