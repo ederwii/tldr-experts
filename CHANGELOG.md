@@ -4,6 +4,37 @@
 
 ### Added
 
+- **`preconditions:` on a stage — the check that runs before the money does.** A stage may
+  declare operational facts that must hold before it is worth dispatching at all:
+
+  ```yaml
+  preconditions:
+    - {id: docker, repo: api, command: "docker compose ps", expect_exit: 0}
+  ```
+
+  The grounding is measured, 2026-08-30: before dispatching a Build story the host checked
+  the Docker daemon and the .NET SDK **by hand**, because a story has two attempts, an agent
+  cannot debug its way out of a daemon that is down, and the whole turn would have been spent
+  proving it. That check took about a second and protected an attempt worth dollars.
+  - **Same allowlist rule as a `cmd` check and a story's `` ```dod `` block — and now literally the
+    same function.** Only a command byte-equal to one `.tldrx/workspace.yml` declares runs,
+    argv-split, never through a shell. The comparison and both refusal sentences moved to
+    `schemas/commandAllowlist.ts`, so the three sites can no longer drift into three readings
+    of one rule. It is enforced **at load**: a stage naming an undeclared command never
+    becomes a runnable stage, so `tldrx run new` over it refuses too.
+  - **Red ⇒ refused, exit `2`, having spent nothing.** The id and the command's own exit code
+    are named, the stage is left exactly where it was (`ready`), no bundle is written and
+    nothing is spawned. The list stops at the first red one.
+  - **`--prepare` runs them no less than headless** — a bundle written for a host whose Docker
+    is down is the same wasted attempt as a spawn into one. `--commit` never runs them: it
+    settles a turn that already happened.
+  - **Every run is on the record**: one `check.passed` / `check.failed` event with
+    `kind: precondition`, carrying the repo, the command, the exit code and the duration, and
+    one operator line — `· precondition: docker compose ps → exit 0 (1.2s)`.
+  - **A stage that declares none is byte-identical**: no event, no line, no shipped stage file
+    changed. `[assumption]` — per stage, not per story; a per-story precondition is a real
+    want and is deliberately not designed here.
+
 - **`tldrx next --prepare --review` / `--commit --review` — the reviewer is the second
   delegable role.** A Build story has two sub-agents and only the developer was ever
   delegable; the reviewer was the FRAMEWORK's spawn in both modes, which on a host-driven

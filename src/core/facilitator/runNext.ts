@@ -18,7 +18,7 @@ import { PROJECT_WORK_DIR } from "../paths.ts";
 import { ambiguousRunLines } from "../run/openRuns.ts";
 import { RunStore } from "../run/RunStore.ts";
 import { isAttendedByHost, isTerminal, type GateType, type RunFile, type RunPhase, type RunStage, type RunTask } from "../run/RunFile.ts";
-import { runChecks } from "../run/checks.ts";
+import { runChecks, runPrecondition, type PreconditionOutcome } from "../run/checks.ts";
 import { approve } from "../run/gates.ts";
 import { AUTO_GATE_ACTOR, evaluateAutoGate, unreadableHeadings } from "../run/autoGate.ts";
 import { describeAgentFallthroughs, evaluateAgentGate } from "../run/agentGate.ts";
@@ -384,6 +384,12 @@ async function runStage(
   const mismatch = economyRefusal(store, options, phaseId, notes);
   if (mismatch !== null) return mismatch;
 
+  // --- preconditions (design §F.1) -----------------------------------------
+  // Before the executor, before the bundle, before the spawn. A stage that
+  // declares none does not reach a line of this.
+  const red = await preconditionRefusal(store, options, phaseId, stageId, spec, notes);
+  if (red !== null) return red;
+
   // The phase-specific half, when the phase has one (`executors/index.ts`). A
   // phase with no executor keeps the single-agent path below, unchanged.
   const executor = executorFor(phaseId);
@@ -649,6 +655,78 @@ function attendedRefusal(
       : []),
     `  (to hand the whole run back to the framework: tldrx run attend --none ${store.runId})`,
   ]);
+}
+
+/**
+ * `preconditions:` — the operational facts a dispatch is only worth making if they
+ * hold (design §F.1, spec §2.3).
+ *
+ * The grounding is measured: on 2026-08-30 a host checked the Docker daemon and
+ * the .NET SDK BY HAND before dispatching a Build story, because a dead daemon
+ * does not fail the story — it fails the ATTEMPT, and a story has two. An agent
+ * cannot debug its way out of an environment that is down, so the whole turn is
+ * spent proving something the operator could have read in 1.2 seconds.
+ *
+ * So they run here: after the stage is known to be runnable and before ANYTHING
+ * is written or spawned. Both dispatching modes are covered, deliberately —
+ * `--prepare` no less than headless, because a bundle written for a host whose
+ * Docker is down is the same wasted attempt as a spawn into one. `--commit` is
+ * excluded: it settles work that already happened, and re-checking the daemon
+ * cannot change what a finished turn produced.
+ *
+ * A red precondition is `refused`, not `failed`: exit 2 with the command and its
+ * exit code named, the stage left exactly where it was (`ready`), nothing spent.
+ * That is the outcome an operator can fix and re-run, which is the whole point.
+ */
+async function preconditionRefusal(
+  store: RunStore,
+  options: NextOptions,
+  phaseId: string,
+  stageId: string,
+  spec: StageSpec,
+  notes: string[],
+): Promise<NextOutcome | null> {
+  // `--commit` settles a turn the host already took. Nothing is dispatched, so
+  // there is nothing to protect and no line to print.
+  if (options.mode === "commit") return null;
+  const preconditions = spec.planned.preconditions;
+  // The byte-identical path: a stage with none emits no event and no note.
+  if (preconditions.length === 0) return null;
+
+  const ctx = { root: options.root, runDir: store.runDir, stage: spec.planned };
+  for (const precondition of preconditions) {
+    const ran = await runPrecondition(precondition, ctx);
+    store.append(event(options, store.runId, stageId, ran.ok ? "check.passed" : "check.failed", {
+      phase: phaseId,
+      check: precondition.id,
+      kind: "precondition",
+      repo: precondition.repo,
+      command: precondition.command,
+      exit_code: ran.exitCode,
+      ms: ran.ms,
+      status: ran.ok ? "passed" : "failed",
+      detail: ran.detail,
+    }));
+    notes.push(preconditionLine(ran));
+    if (ran.ok) continue;
+    // No `store.save()`: nothing here mutated `run.yml` or `budget.yml`, and
+    // "nothing was spent" in the message below is only true if it is also
+    // literally true of the files. The events are already on disk — `append`
+    // writes the line, `save` does not.
+    return out(EXIT_REFUSED, [
+      ...notes,
+      `refusing to dispatch ${phaseId}/${stageId} — precondition \`${precondition.id}\` is red.`,
+      `  ${ran.detail}`,
+      `Fix it and run the same command again: the stage is still \`ready\` and nothing was spent.`,
+    ]);
+  }
+  return null;
+}
+
+/** `· precondition: docker info → exit 0 (1.2s)` — one line per run, green or red. */
+function preconditionLine(ran: PreconditionOutcome): string {
+  const exit = ran.exitCode === null ? "no exit code" : `exit ${ran.exitCode}`;
+  return `· precondition: ${ran.command} → ${exit} (${(ran.ms / 1000).toFixed(1)}s)`;
 }
 
 /**

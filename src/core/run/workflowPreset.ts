@@ -18,7 +18,9 @@ import { isRecord } from "../schemas/validation.ts";
 import { PROJECT_FRAMEWORK_DIR, STAGES_DIR, WORKFLOWS_DIR } from "../paths.ts";
 import { GatePolicyError, parseWorkflowGates, type GatesPolicy } from "./gatePolicy.ts";
 import type { GateType } from "./RunFile.ts";
-import { EFFORT_LEVELS, isEffortLevel, type EffortLevel } from "../schemas/stage.ts";
+import { EFFORT_LEVELS, isEffortLevel, MAX_PRECONDITIONS, type EffortLevel } from "../schemas/stage.ts";
+import { allowlistIssue } from "../schemas/commandAllowlist.ts";
+import { loadWorkspace } from "../../hooks/lib/workspace.ts";
 
 /** The five phase folders of spec §1, in order. A numeric `phase:` indexes this. */
 export const PHASE_IDS = ["01-what", "02-how", "03-plan", "04-build", "05-watch"] as const;
@@ -33,6 +35,19 @@ export interface PlannedCheck {
   readonly on: string;
   readonly repo: string | null;
   readonly command: string | null;
+  readonly expect_exit: number;
+}
+
+/**
+ * A `preconditions:` entry, already checked against the workspace allowlist
+ * (design §F.1). `repo` and `command` are non-null here, unlike `PlannedCheck`'s:
+ * a precondition with either missing is refused at load rather than carried to
+ * the call site as a failure waiting to happen.
+ */
+export interface PlannedPrecondition {
+  readonly id: string;
+  readonly repo: string;
+  readonly command: string;
   readonly expect_exit: number;
 }
 
@@ -52,6 +67,8 @@ export interface PlannedStage {
   readonly sections: ReadonlyMap<string, readonly string[]>;
   readonly gateType: GateType;
   readonly checks: readonly PlannedCheck[];
+  /** Empty for every stage that declares none, which is every shipped stage. */
+  readonly preconditions: readonly PlannedPrecondition[];
   readonly questionsPath: string | null;
   /** Where this stage.yml was read from — cited in errors. */
   readonly source: string;
@@ -115,11 +132,24 @@ export function loadWorkflowPreset(root: string, scope: string): WorkflowPreset 
   const entries = Array.isArray(doc.stages) ? (doc.stages as unknown[]) : [];
   if (entries.length === 0) throw new PresetError(`${path}: the preset lists no stages`);
 
+  // Read at most ONCE for the whole preset, and only if a stage actually declares
+  // a precondition — `loadWorkflowPreset` is on the status line's path and no
+  // shipped stage declares one, so the common case must stay a no-op.
+  //
+  // Checked at LOAD, not at run time: a stage naming a command `workspace.yml`
+  // does not declare must never become a `PlannedStage`, because by the time
+  // anything holds one of those the decision to run it has already been taken.
+  let allowed: ReadonlySet<string> | null = null;
+  const allowedCommands = (): ReadonlySet<string> => {
+    if (allowed === null) allowed = loadWorkspace(root).commands;
+    return allowed;
+  };
+
   const stages = entries.map((entry, i) => {
     const id = typeof entry === "string" ? entry : isRecord(entry) ? str(entry.id) : null;
     if (id === null || id === "") throw new PresetError(`${path}: stages[${i}] has no stage id`);
     const overrides = isRecord(entry) ? entry : {};
-    return loadStage(root, id, overrides, i);
+    return loadStage(root, id, overrides, i, allowedCommands);
   });
 
   let gates: GatesPolicy;
@@ -139,6 +169,7 @@ function loadStage(
   id: string,
   overrides: Record<string, unknown>,
   index: number,
+  allowedCommands: () => ReadonlySet<string>,
 ): PlannedStage {
   const path = stagePath(root, id);
   if (path === null) throw new PresetError(`stage '${id}' has no stage.yml in .tldrx/stages/ or the shipped stages/`);
@@ -168,6 +199,7 @@ function loadStage(
     sections,
     gateType: normaliseGate(doc.gate),
     checks: normaliseChecks(doc.checks),
+    preconditions: normalisePreconditions(doc.preconditions, path, allowedCommands),
     questionsPath: normaliseQuestionsPath(doc.questions, phase),
     source: path,
   };
@@ -262,6 +294,54 @@ function normaliseChecks(value: unknown): PlannedCheck[] {
     });
   }
   return checks;
+}
+
+/**
+ * Design §F.1, and the one line of it that matters: **refused at load.**
+ *
+ * A precondition is a command run as the user, before anything else, on every
+ * dispatch. So an unparseable one, or one naming a command `.tldrx/workspace.yml`
+ * does not declare, is a `PresetError` here — the same refusal shape a bad
+ * `effort:` gets, for the same reason. Deferring it to run time would mean the
+ * refusal arrives after the operator already believed the stage was runnable, and
+ * a safety rule that fires late is a safety rule that gets argued with.
+ *
+ * The comparison itself is `allowlistIssue` — the same function the story dod
+ * block and the `cmd` check call, not a second reading of the same sentence.
+ */
+function normalisePreconditions(
+  value: unknown,
+  path: string,
+  allowed: () => ReadonlySet<string>,
+): PlannedPrecondition[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    throw new PresetError(`${path}: preconditions must be a list of {id, repo, command} entries`);
+  }
+  const entries = value as unknown[];
+  if (entries.length > MAX_PRECONDITIONS) {
+    throw new PresetError(`${path}: ${entries.length} preconditions exceeds the cap of ${MAX_PRECONDITIONS}`);
+  }
+  const preconditions: PlannedPrecondition[] = [];
+  entries.forEach((entry, i) => {
+    const where = `${path}: preconditions[${i}]`;
+    if (!isRecord(entry)) throw new PresetError(`${where} must be a mapping of {id, repo, command}`);
+    const id = str(entry.id);
+    const repo = str(entry.repo);
+    const command = str(entry.command);
+    if (id === null) throw new PresetError(`${where} has no \`id\``);
+    if (repo === null) throw new PresetError(`${where} (${id}) has no \`repo\``);
+    if (command === null) throw new PresetError(`${where} (${id}) has no \`command\``);
+    const refusal = allowlistIssue(command, allowed(), "stage");
+    if (refusal !== null) throw new PresetError(`${where} (${id}): ${refusal}`);
+    preconditions.push({
+      id,
+      repo,
+      command,
+      expect_exit: typeof entry.expect_exit === "number" ? entry.expect_exit : 0,
+    });
+  });
+  return preconditions;
 }
 
 function normaliseQuestionsPath(value: unknown, phase: string): string | null {
