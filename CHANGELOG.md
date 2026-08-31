@@ -217,7 +217,7 @@
 - **The gate evidence note** — `.agent/<stage>/evidence.md`, plus `tldrx gate template` to
   write the blank form. This is the artefact half of the `agent` gate (design §A): a third
   answer to "who closes a gate", between `human` (waits) and `auto` (the harness signs when
-  six measured conditions hold). Measured 2026-08-30 on
+  seven measured conditions hold). Measured 2026-08-30 on
   `260830-tenancy-identity-customers`: the host ran a defined checklist at every gate and
   typed `approve --note "<evidence>"` by hand, into a free-text field where nothing validated
   it and `replay` could not render it. There was no value meaning *"an agent checked it,
@@ -258,6 +258,46 @@
   - `validateEvidence(text, srcContext, {gate})` is the function `approve --as-agent` will
     call before it records anything. Nothing in this change signs a gate, reads a
     `gates_policy`, or writes into the run tree: the artefact layer lands first, on purpose.
+
+- **Auto-gate condition 7, `boundary` — the stage stayed inside the surface the run declared.**
+  The other six ask whether the artefact is sound and whether the work finished. None of them
+  asks the question a reviewer asks first: *is this the work we scoped?* Measured 2026-08-30
+  on `260830-tenancy-identity-customers` — the host ran this check BY HAND at every gate,
+  because the framework ran it nowhere ("touches outside What boundary is NOT checked
+  anywhere"), and that run's own S3 review surfaced the shape it was worried about: a
+  Platform-layer file edited by a module story.
+  - **The surface** is the union of every `file:`-kind `[src: …]` citation in
+    `01-what/handoff.md` and `02-how/handoff.md`, and every `touches:` entry of every story
+    under `03-plan/stories/` — or of `04-build/implicit-plan.yml` when the scope skipped Plan.
+    A directory entry covers everything beneath it, which is how a story declares the files it
+    is about to create and the forced companions (a lockfile, a generated client) that come
+    with them. The citation half reuses `citedRepoPaths`, the derivation the implicit plan
+    already builds `touches:` from — the same §2.8 tokenizer, not a second one.
+  - **The measurement** is `git diff --name-only <default_branch>...<epic_branch>`, once per
+    repo the plan's epics name, through the Build phase's existing git seam. Nothing is
+    checked out, fetched or written, and the epic's own `branch:` is what is diffed — the ref
+    `openStory` actually cut, not one re-derived here.
+  - **Offending paths are NAMED**, up to eight then `+N more`, prefixed with their repo:
+    `boundary=2 changed path(s), 1 outside the surface: app:platform/Auth.cs; work outside the
+    declared surface is a boundary change — a human decides whether to widen the scope`.
+    "1 path outside the surface" is not something anybody can act on.
+  - **A human may still approve over it**, and that is the whole point: widening a boundary is
+    a decision, and the framework has no basis for making it. Work nobody scoped is often the
+    right work.
+  - **It never refuses on an absence.** Outside Build, with no epic branch cut yet, with no
+    repo on disk, with no plan, or on a run whose What cited no repo path at all, it is `n/a`
+    **with the reason in the note** — a condition that could not measure must not report that
+    it measured zero. Same shape as condition 6's `n/a (not a build stage)`.
+  - **`tldrx-work/`, `.tldrx/` and `.agent/` are excluded from BOTH sides**, through the same
+    `isStatePath` filter the implicit-plan derivation already applies. A handoff cites the
+    run's own state as evidence, and in a `root_is_repo: true` workspace the state sits inside
+    the product repo — neither is a boundary question.
+  - **A bare citation widens the surface rather than shrinking it.** `file := [repo ":"] path
+    ":" line` makes the repo prefix optional, and `citedRepoPaths` skips the bare form because
+    it feeds a developer prompt, where a wrong guess puts another repo's file in front of an
+    agent. Here the risk is inverted — an unattributable citation would manufacture a false
+    refusal — so a bare path is admitted to every repo's surface. A check that refuses wrongly
+    is a check that gets turned off.
 
 ### Changed
 

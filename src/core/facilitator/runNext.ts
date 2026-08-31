@@ -1033,7 +1033,7 @@ async function finishStage(
       `${phaseId}/${stageId} done — ${costLine} (${checkSummary})`;
 
     // The gate is now REQUESTED either way. Who closes it is the policy's call —
-    // and an `auto` policy only closes it when all six §5 conditions hold.
+    // and an `auto` policy only closes it when all seven §5 conditions hold.
     if (gatePolicyFor(store.run.gates_policy, stageId) === "auto") {
       const verdict = await evaluateAutoGate({
         root: options.root,

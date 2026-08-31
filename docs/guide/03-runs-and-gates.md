@@ -138,13 +138,14 @@ per scope instead of per command with `build: {parallel: 3}` at the top of your
 ## Who closes a gate
 
 Every stage ends at a gate. What you choose is **who closes it**. `human` waits for
-`tldrx approve`; `auto` lets the harness close it — but only when all six conditions hold:
+`tldrx approve`; `auto` lets the harness close it — but only when all seven conditions hold:
 the stage's checks pass, its phase has no open question, the spend is inside both the stage
 and the phase ceiling, the stage did not fail, the claim-sources validator reports
 nothing (zero refused **and** zero unverified), and — on a Build stage — every story in the
-plan reached `done`. Any one of them failing falls straight back
+plan reached `done` **and** the epic branch changed nothing the run did not declare it would
+touch. Any one of them failing falls straight back
 to the human gate and says which one and what it measured. The approval is recorded through
-the same path a person's is, with `by: auto` and a note carrying all six values, so
+the same path a person's is, with `by: auto` and a note carrying all seven values, so
 `tldrx run status` and `events.jsonl` read identically either way.
 
 The shipped defaults — every scope keeps at least one human gate:
@@ -170,13 +171,13 @@ everywhere.
 ### What an auto gate cannot do
 
 An auto gate is a gate the harness may sign when it can show its work. It is not a claim
-that the work is good, and there are exactly four things it cannot do.
+that the work is good, and there are exactly five things it cannot do.
 
 **It cannot judge whether a decision was right.** It checks that every claim carries a
 citation and that every citation resolves — that `[src: F019]` names a live fact, that
 `[src: Q4]` is a question this run really asked, that `graph:api.Hunt` is a node in the
 graph, that `absent:` supports a negative claim and not a positive one. It does not read
-the design. A perfectly sourced bad idea passes all six conditions.
+the design. A perfectly sourced bad idea passes all seven conditions.
 
 **It cannot verify what it cannot reach.** A `doc` citation is never fetched — a gate that
 opened a socket would be a different kind of thing — so an https URL nothing in the
@@ -195,13 +196,28 @@ your project, and the harness has no basis for making it for you. Before 2026-08
 it silently: a build with six of seven stories blocked and one story's work on the epic
 branch was auto-approved, twice.
 
+**It cannot widen the scope.** The `boundary` condition compares what actually landed on the
+epic branch — `git diff --name-only <default_branch>...<epic_branch>` — against the surface
+the run declared: every `file:` citation in `01-what/handoff.md` and `02-how/handoff.md`,
+plus every `touches:` entry in the plan (a directory entry covers everything beneath it).
+A changed path outside that surface refuses the gate and is **named**, up to eight of them
+before `+N more`. Work nobody scoped may well be the right work — a module story that had to
+change a Platform file usually is — but widening a boundary is a decision, and it is yours.
+Approve over it and the reason lives in your note.
+
+It never refuses on an absence: no epic branch cut yet, no repo on disk, no plan, or a run
+whose What cited no repo path at all each read as `n/a` with the reason spelled out, because
+a condition that could not measure must not pretend it measured zero. `tldrx-work/`,
+`.tldrx/` and `.agent/` paths are excluded from both sides — the framework's own state is
+never a boundary question.
+
 So: keep at least one human gate per scope (the table above does), read the note — it
-records all six conditions with their measured values — and when the machine signs
+records all seven conditions with their measured values — and when the machine signs
 something it should not have, take it back.
 
 ### Writing down the check an agent made
 
-An auto gate signs with six measured conditions and no words. A person signs with
+An auto gate signs with seven measured conditions and no words. A person signs with
 `--note "<whatever they typed>"`, which nothing validates and `replay` cannot render. There
 is a third thing an agent can do — check something, **show its work**, and be accountable
 for the check — and it needs somewhere to put the work.
