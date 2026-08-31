@@ -1312,6 +1312,27 @@ describe("a developer that FAILED is not an attempt", () => {
     expect(story(ws, "S1")).toContain("status: done");
   }, 60_000);
 
+  test("`--prepare` picks up an OLD-code `blocked` story too", async () => {
+    // The in-session door onto the same migration: the live run is parked at
+    // `blocked`, and a host session driving `--prepare`/`--commit` has to be
+    // offered the turn its spawn never got, not told the stage is finished.
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_COST = "0";
+    process.env.FAKE_BUILD_FAIL_REASON = DIED;
+    process.env.FAKE_BUILD_FAIL = "developer:S1#1";
+
+    await next(ws);
+    rewriteAsOldCode(ws, "S1");
+
+    reenter(ws, "old record, in session");
+    const prepared = await next(ws, { mode: "prepare", at: "2026-08-29T10:05:00Z" });
+
+    const said = prepared.lines.join("\n");
+    expect(said).toContain("prepared S1");
+    expect(said).toContain("attempt 1 of 2");
+    expect(story(ws, "S1")).toContain("status: in_progress");
+  }, 60_000);
+
   /**
    * Rewrite the run into the pre-2026-08-30 spelling: drop the `developer` check
    * this executor now writes, and put the story back at `blocked` where the old
