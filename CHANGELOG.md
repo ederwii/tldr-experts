@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.1 — unreleased
 
 **Unattended mode.** Twelve of the entries below are one feature: a run a **host session**
 drives end to end, and a gate an **agent** may close over a check it wrote down. `attended_by: host`
