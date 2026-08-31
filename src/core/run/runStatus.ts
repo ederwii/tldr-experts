@@ -249,9 +249,14 @@ export function renderGates(rows: readonly GateRow[]): readonly string[] {
   if (rows.length === 0) return [];
   const where = rows.map((row) => `${row.phase}/${row.stage}`);
   const width = Math.max(...where.map((w) => w.length));
+  // Counted per policy rather than as "human and the rest": a third value read as
+  // a human gate would over-report the number of stages that actually stop.
   const auto = rows.filter((row) => row.policy === "auto").length;
+  const agent = rows.filter((row) => row.policy === "agent").length;
+  const human = rows.length - auto - agent;
   const lines = [
-    `gates   ${String(rows.length - auto)} human, ${String(auto)} auto`,
+    `gates   ${String(human)} human, ${String(auto)} auto`
+      + (agent === 0 ? "" : `, ${String(agent)} agent`),
   ];
   rows.forEach((row, i) => {
     lines.push(`  ${(where[i] ?? "").padEnd(width)}  ${row.policy.padEnd(5)}  ${describeGate(row)}`);

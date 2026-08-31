@@ -9,7 +9,7 @@
 import { yamlScalar } from "../facts/emitFactsYaml.ts";
 import { DEFAULT_ECONOMY, type RunBudget } from "../budget/RunBudget.ts";
 import type { GatesPolicy } from "./gatePolicy.ts";
-import type { RunFile, RunGate, RunStage, RunTask } from "./RunFile.ts";
+import type { RunFile, RunGate, RunGateEvidence, RunStage, RunTask } from "./RunFile.ts";
 
 function inlineList(values: readonly string[]): string {
   return `[${values.map((v) => yamlScalar(v)).join(", ")}]`;
@@ -30,9 +30,30 @@ function gatesPolicy(policy: GatesPolicy): string {
   return `{${entries.join(", ")}}`;
 }
 
+/**
+ * `evidence: {path, role, verdict, sampled, of, resolved, refuted, outside_surface}`
+ * — what an `agent` gate was signed over (design §A.5).
+ *
+ * Emitted only when the gate HAS it, which is only ever an agent-closed gate, so
+ * every other gate — human, auto, pending, rejected — round-trips byte-for-byte
+ * through a save exactly as it did before this key existed.
+ */
+function gateEvidence(e: RunGateEvidence): string {
+  return `{path: ${yamlScalar(e.path)}, role: ${yamlScalar(e.role)}, verdict: ${yamlScalar(e.verdict)}, ` +
+    `sampled: ${String(e.sampled)}, of: ${String(e.of)}, resolved: ${String(e.resolved)}, ` +
+    `refuted: ${String(e.refuted)}, outside_surface: ${String(e.outside_surface)}}`;
+}
+
+/**
+ * The gate mapping. It carried exactly five keys until `evidence` arrived — and a
+ * sixth one held in memory but not written here would be DROPPED by the next
+ * save, silently, which is the failure this emitter has to be extended for rather
+ * than worked around.
+ */
 function gate(g: RunGate): string {
+  const evidence = g.evidence === undefined ? "" : `, evidence: ${gateEvidence(g.evidence)}`;
   return `{type: ${yamlScalar(g.type)}, status: ${yamlScalar(g.status)}, by: ${yamlScalar(g.by)}, ` +
-    `at: ${yamlScalar(g.at)}, note: ${yamlScalar(g.note)}}`;
+    `at: ${yamlScalar(g.at)}, note: ${yamlScalar(g.note)}${evidence}}`;
 }
 
 function task(t: RunTask, indent: string): string {

@@ -9,19 +9,43 @@
  * Both write through `RunStore`, so the cursor, phase statuses, run status and the
  * budget mirror stay derived rather than hand-maintained.
  */
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { TldrxEvent } from "../events/Event.ts";
+import { gateEvidenceRelPath } from "../text/evidence.ts";
 import { runChecks, type CheckOutcome } from "./checks.ts";
 import { loadWorkflowPreset, PresetError, type PlannedStage } from "./workflowPreset.ts";
 import type { RunStore } from "./RunStore.ts";
-import type { RunFile, RunGate, RunPhase, RunStage } from "./RunFile.ts";
+import type { RunFile, RunGate, RunGateEvidence, RunPhase, RunStage } from "./RunFile.ts";
 
 export class GateError extends Error {}
+
+/**
+ * The evidence an `agent` gate is closed over (design §A.5), handed to `approve`
+ * already validated.
+ *
+ * `approve` does two things with it and neither is a judgement: it COPIES the
+ * note into the run tree, where it is committed and auditable from a clone, and
+ * it records the headline counts on the gate. Whether the note is any good was
+ * settled before it got here — by `agentGate.ts` at `next`, or by
+ * `approve --as-agent` at the CLI — because a validator that ran inside the
+ * write path would be a second one, and the looser of two would win the argument
+ * at exactly the moment a gate is being signed.
+ */
+export interface GateEvidenceInput {
+  /** The note's bytes, verbatim. Copied, never rewritten. */
+  readonly text: string;
+  /** What goes on `gate.evidence`; `path` is `approve`'s to decide. */
+  readonly record: Omit<RunGateEvidence, "path">;
+}
 
 export interface GateContext {
   readonly root: string;
   readonly actor: string;
   readonly at: string;
   readonly note: string;
+  /** Present only when an `agent` policy is closing this gate. */
+  readonly evidence?: GateEvidenceInput;
 }
 
 export interface ApproveOutcome {
@@ -34,6 +58,8 @@ export interface ApproveOutcome {
   /** Where the cursor ended up, or null when the run is finished. */
   readonly advancedTo: { readonly phase: string; readonly stage: string } | null;
   readonly runDone: boolean;
+  /** Run-relative path of the committed evidence copy, when one was made. */
+  readonly evidencePath: string | null;
 }
 
 export async function approve(store: RunStore, ctx: GateContext): Promise<ApproveOutcome> {
@@ -56,9 +82,16 @@ export async function approve(store: RunStore, ctx: GateContext): Promise<Approv
   if (failed !== null) {
     return {
       ok: false, stage: entry.stage.id, phase: entry.phase.id, checks, failed,
-      advancedTo: null, runDone: false,
+      advancedTo: null, runDone: false, evidencePath: null,
     };
   }
+
+  // The run-tree copy is written BEFORE the gate is signed, so a gate that says
+  // it rests on evidence always has the evidence beside it. A failure to write it
+  // throws, and nothing is approved.
+  const evidence = ctx.evidence === undefined
+    ? null
+    : copyEvidence(store.runDir, entry.phase.id, entry.stage.id, ctx.evidence);
 
   const next = store.nextEntry();
   store.mutate((run) =>
@@ -66,7 +99,14 @@ export async function approve(store: RunStore, ctx: GateContext): Promise<Approv
       ...stage,
       status: "done",
       ended_at: stage.ended_at ?? ctx.at,
-      gate: { ...stage.gate, status: "approved", by: ctx.actor, at: ctx.at, note: ctx.note } satisfies RunGate,
+      gate: {
+        ...stage.gate,
+        status: "approved",
+        by: ctx.actor,
+        at: ctx.at,
+        note: ctx.note,
+        ...(evidence === null ? {} : { evidence }),
+      } satisfies RunGate,
     })),
   );
   if (next !== null) {
@@ -86,6 +126,10 @@ export async function approve(store: RunStore, ctx: GateContext): Promise<Approv
     by: ctx.actor,
     note: ctx.note,
     checks: checks.map((c) => `${c.id}:${c.status}`),
+    // Additive, and only on an agent-closed gate: the event stream carries `by`
+    // already, and `by: fable` alone cannot tell a person from an agent that
+    // happens to be called fable. The role and the path can.
+    ...(evidence === null ? {} : { role: evidence.role, evidence: evidence.path }),
   }));
   store.append(event(ctx.at, store.runId, entry.stage.id, "stage.done", ctx.actor, { phase: entry.phase.id }));
   store.save();
@@ -98,7 +142,27 @@ export async function approve(store: RunStore, ctx: GateContext): Promise<Approv
     ok: true, stage: entry.stage.id, phase: entry.phase.id, checks, failed: null,
     advancedTo: next === null ? null : { phase: next.phase.id, stage: next.stage.id },
     runDone,
+    evidencePath: evidence === null ? null : evidence.path,
   };
+}
+
+/**
+ * Write `<phase>/gate-evidence/<stage>.md` and return the record that points at
+ * it. The scratch note under `.agent/` stays exactly where the agent left it —
+ * this is a copy, not a move, because a gitignored original is still the thing
+ * the next `--prepare` cycle is allowed to overwrite.
+ */
+function copyEvidence(
+  runDir: string,
+  phaseId: string,
+  stageId: string,
+  input: GateEvidenceInput,
+): RunGateEvidence {
+  const rel = gateEvidenceRelPath(phaseId, stageId);
+  const absolute = join(runDir, ...rel.split("/"));
+  mkdirSync(dirname(absolute), { recursive: true });
+  writeFileSync(absolute, input.text, "utf8");
+  return { path: rel, ...input.record };
 }
 
 export interface RejectOutcome {

@@ -6,9 +6,13 @@
  * a stage with no events says so rather than being narrated from its status.
  */
 import { openBlocks, parseQuestions } from "../text/index.ts";
+import { parseEvidence } from "../text/evidence.ts";
 import { skippedNote } from "../events/EventLog.ts";
-import { loadPhaseArtefacts, runLevelEvents, stageEvents, type LoadedRun, type NumberedEvent } from "./loadRun.ts";
-import type { RunStage } from "./RunDocument.ts";
+import {
+  loadGateEvidence, loadPhaseArtefacts, runLevelEvents, stageEvents,
+  type LoadedRun, type NumberedEvent,
+} from "./loadRun.ts";
+import type { RunPhase, RunStage } from "./RunDocument.ts";
 
 export function renderReplay(loaded: LoadedRun): string {
   const run = loaded.run;
@@ -53,6 +57,7 @@ export function renderReplay(loaded: LoadedRun): string {
         const line = bullet(item);
         if (line !== null) out.push(line);
       }
+      out.push(...gateEvidenceLines(loaded, phase, stage));
       out.push(`- Cost: ${money(stageCost(stage, events))}${stage.budget_usd === null ? "" : ` of ${money(stage.budget_usd)} ceiling`}`);
     }
   }
@@ -147,6 +152,49 @@ function bullet(item: NumberedEvent): string | null {
     case "error": return `${prefix}error: ${text(payload.message) || "no message recorded"}`;
     default: return null;
   }
+}
+
+/**
+ * Who checked what, on a gate an agent closed (design §A.5).
+ *
+ * Rendered from the note's FRONT MATTER and from `run.yml`, never from the note's
+ * prose — a narrative built by re-reading somebody's paragraphs is a narrative
+ * that changes when they rephrase them. `run.yml` carries the pointer and the
+ * headline counts; the three numbers a reader wants that it does not carry —
+ * files read, paths audited, diff vs stories — come from the committed copy.
+ *
+ * A note that has gone missing is SAID to be missing. The gate still happened,
+ * the counts run.yml recorded still stand, and pretending the evidence is there
+ * would be worse than a short line.
+ */
+function gateEvidenceLines(loaded: LoadedRun, phase: RunPhase, stage: RunStage): readonly string[] {
+  const evidence = stage.gate?.evidence ?? null;
+  if (evidence === null) return [];
+  const gate = `${phase.id}/${stage.id}`;
+  const by = stage.gate?.by ?? "?";
+  const head = `- ${gate} ${evidence.verdict.toUpperCase()} by ${by} (${evidence.role})`;
+
+  const text = loadGateEvidence(loaded, evidence.path);
+  const front = text === null ? null : parseEvidence(text).front;
+  const sampled = `spot-checked ${count(evidence.sampled)} of ${count(evidence.of)} citations `
+    + `(${count(evidence.resolved)} resolved)`;
+  if (front === null) {
+    return [
+      `${head} — ${sampled}, ${count(evidence.outside_surface)} touched path(s) outside the surface`,
+      `  → ${evidence.path} _(not in this run tree — the note it was signed over is missing)_`,
+    ];
+  }
+  return [
+    `${head} — read ${String(front.read.length)} files, ${sampled},`,
+    `  audited ${String(front.touches.audited)} touched paths `
+      + `(${String(front.touches.outside_surface)} outside the surface), `
+      + `diff vs stories: ${front.diff_vs_stories}`,
+    `  → ${evidence.path}`,
+  ];
+}
+
+function count(value: number | null): string {
+  return value === null ? "?" : String(value);
 }
 
 function checkName(payload: Readonly<Record<string, unknown>>): string {

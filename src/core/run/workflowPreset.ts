@@ -75,9 +75,9 @@ export interface WorkflowPreset {
    */
   readonly skips: readonly string[];
   /**
-   * `gates:` — stage id -> `human | auto` (spec §2.4). Partial on purpose: a stage
-   * the file does not name keeps the `human` default, so adding a stage to a
-   * workflow can never silently hand its gate to the machine.
+   * `gates:` — stage id -> `human | auto | agent` (spec §2.4). Partial on purpose:
+   * a stage the file does not name keeps the `human` default, so adding a stage to
+   * a workflow can never silently hand its gate to the machine.
    */
   readonly gates: GatesPolicy;
   readonly source: string;

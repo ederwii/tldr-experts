@@ -14,6 +14,9 @@ import {
   requireVersion, result, type ValidationIssue, type ValidationResult,
 } from "../schemas/validation.ts";
 import { validateGatesPolicy, type GatesPolicy } from "./gatePolicy.ts";
+import {
+  EVIDENCE_ROLES, EVIDENCE_VERDICTS, type EvidenceRole, type EvidenceVerdict,
+} from "../text/evidence.ts";
 
 /** One enum, all three levels (spec §2.2). */
 export const STAGE_STATUSES = [
@@ -48,12 +51,40 @@ export const MAX_PHASES = 5;
 export const MAX_STAGES = 40;
 export const MAX_TASKS = 200;
 
+/**
+ * What an `agent` gate was signed over (design §A.5), recorded on the gate itself.
+ *
+ * The headline counts, plus a pointer at the note they came from — the COMMITTED
+ * copy under `<phase>/gate-evidence/<stage>.md`, not the gitignored scratch file
+ * the agent wrote. A gate whose evidence lives only in `.agent/` is a gate nobody
+ * can audit from a clone.
+ *
+ * ADDITIVE and optional. Every `run.yml` written before this — and every gate a
+ * person or the facilitator closes — has no `evidence` key at all, and the
+ * validator has never rejected an unknown key inside `gate:` (measured: a run.yml
+ * carrying this block validates against the reader that predates it), so the two
+ * directions cross without a shim.
+ */
+export interface RunGateEvidence {
+  /** Run-relative path of the committed copy. */
+  readonly path: string;
+  readonly role: EvidenceRole;
+  readonly verdict: EvidenceVerdict;
+  readonly sampled: number;
+  readonly of: number;
+  readonly resolved: number;
+  readonly refuted: number;
+  readonly outside_surface: number;
+}
+
 export interface RunGate {
   readonly type: GateType;
   readonly status: GateStatus;
   readonly by: string | null;
   readonly at: string | null;
   readonly note: string;
+  /** Present only on a gate an `agent` policy closed (design §A.5). */
+  readonly evidence?: RunGateEvidence;
 }
 
 export interface RunTask {
@@ -460,6 +491,7 @@ export function validateRunFile(input: unknown): ValidationResult {
         if (gate.status === "approved" && (typeof gate.by !== "string" || typeof gate.at !== "string")) {
           issues.push({ path: `${path}.gate`, message: "an approved gate needs both `by` and `at`" });
         }
+        validateGateEvidence(gate.evidence, `${path}.gate.evidence`, issues);
       } else if (stage.gate !== undefined) {
         issues.push({ path: `${path}.gate`, message: "expected a mapping" });
       }
@@ -526,4 +558,29 @@ function round(n: number): number {
 /** Narrow a validated document. Call `validateRunFile` first. */
 export function asRunFile(input: unknown): RunFile {
   return input as RunFile;
+}
+
+/** Keys of `gate.evidence`, in the order they are emitted. */
+export const GATE_EVIDENCE_KEYS = [
+  "path", "role", "verdict", "sampled", "of", "resolved", "refuted", "outside_surface",
+] as const;
+
+/**
+ * `gate.evidence`, when it is there. Absent is legal and means what it always
+ * meant; present it must be complete, because a half-written record of what a
+ * signature rested on is worse than none.
+ */
+function validateGateEvidence(value: unknown, base: string, issues: ValidationIssue[]): void {
+  if (value === undefined || value === null) return;
+  if (!isRecord(value)) {
+    issues.push({ path: base, message: "expected a mapping" });
+    return;
+  }
+  requireKeys(value, GATE_EVIDENCE_KEYS, base, issues);
+  requireString(value.path, `${base}.path`, issues);
+  requireEnum(value.role, EVIDENCE_ROLES, `${base}.role`, issues);
+  requireEnum(value.verdict, EVIDENCE_VERDICTS, `${base}.verdict`, issues);
+  for (const key of ["sampled", "of", "resolved", "refuted", "outside_surface"] as const) {
+    requireNumber(value[key], `${base}.${key}`, issues);
+  }
 }

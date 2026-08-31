@@ -29,7 +29,7 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../paths.ts";
-import { EVIDENCE_FILE } from "../text/evidence.ts";
+import { EVIDENCE_FILE, gateEvidenceRelPath } from "../text/evidence.ts";
 
 const REPO_TOKEN = "{repo}";
 
@@ -238,4 +238,16 @@ export function agentDir(runDir: string, stageId: string): string {
  */
 export function evidencePath(runDir: string, stageId: string): string {
   return join(agentDir(runDir, stageId), EVIDENCE_FILE);
+}
+
+/**
+ * `<run>/<phase>/gate-evidence/<stage>.md` — the COMMITTED copy of the note an
+ * `agent` gate was closed over (design §A.5).
+ *
+ * The scratch original lives under `.agent/`, which is gitignored; this is the
+ * one a reviewer finds in a clone six weeks later, which is the only kind of
+ * evidence a gate can actually rest on.
+ */
+export function gateEvidencePath(runDir: string, phaseId: string, stageId: string): string {
+  return join(runDir, ...gateEvidenceRelPath(phaseId, stageId).split("/"));
 }

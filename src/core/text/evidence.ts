@@ -38,6 +38,20 @@ export const EVIDENCE_VERSION = 1;
 export const EVIDENCE_FILE = "evidence.md";
 
 /**
+ * Where the COMMITTED copy goes: `<phase>/gate-evidence/<stage>.md`.
+ *
+ * `.agent/` is gitignored by spec §1, so the note an agent writes is scratch. The
+ * record a gate rests on cannot be — `approve --as-agent` copies it here, and this
+ * is the path `run.yml`'s `gate.evidence.path` points at.
+ */
+export const GATE_EVIDENCE_DIR = "gate-evidence";
+
+/** `<phase>/gate-evidence/<stage>.md`, run-relative, POSIX separators. */
+export function gateEvidenceRelPath(phaseId: string, stageId: string): string {
+  return `${phaseId}/${GATE_EVIDENCE_DIR}/${stageId}.md`;
+}
+
+/**
  * Three, not two (design §10). A reviewer can meet every acceptance criterion and
  * still have found three real defects nobody wrote a criterion for; binary
  * SIGN/REFUSE has nowhere to put those. Only `sign` closes an agent gate — the

@@ -144,7 +144,7 @@ session or back, or get a stuck one moving again.
 
 ```
 tldrx run new <slug> [--title <t>] [--scope <s>] [--budget <usd>] [--repos a,b]
-                     [--from <dir> | --seed <file|dir> …] [--gates <a,b|all|none>]
+                     [--from <dir> | --seed <file|dir> …] [--gates <a,b|a:agent|all|none>]
                      [--attended-by host]
 tldrx run attend   <host|--none> [<run>] [--run <id>]
 tldrx run status   [<run>] [--json] [--run <id>]
@@ -159,7 +159,8 @@ tldrx run cancel   [<run>] --note <text> [--force]
 `hotfix` `integration` `migration` `performance` `prototype` `refactor` `retro`
 `security-patch` `spike` `upgrade` (default `feature`). `--budget <usd>` defaults to the
 preset's `default_budget_usd`. `--from` and `--seed` are mutually exclusive; **`--seed` is
-repeatable**. `--gates` names the HUMAN gates and overrides the workflow's `gates:` wholesale.
+repeatable**. `--gates` names the HUMAN gates and overrides the workflow's `gates:` wholesale; an entry may
+be qualified as `<stage>:<policy>` (`plan:agent`), and a bare entry still means `human`.
 `--attended-by host` opens the run in **attended mode**: a host session does the turns and
 the framework never spawns on it (see below). Any other value is exit `1` and no run is made.
 
@@ -301,10 +302,25 @@ Approve the gate the run is sitting at. Re-runs the stage's `checks` against wha
 first; exit `2` names the failing check.
 
 ```
-tldrx approve [--note <text>] [--run <id>] [--root <path>]
+tldrx approve [--note <text>] [--as-agent] [--evidence <path>] [--run <id>] [--root <path>]
 ```
 
-Exits: `0` `1` `2` `3`.
+`--as-agent` signs an `agent` gate with the evidence note at `.agent/<stage>/evidence.md`
+(spec §2.17), or at `--evidence <path>`. The note is validated by the same §2.8 machinery
+`claim-sources` runs before anything is recorded; then the gate records the note's `by:` as
+the actor, `gate.evidence` carries its counts, and the note is copied to
+`<phase>/gate-evidence/<stage>.md`, where it is committed.
+
+Two refusals, and they mean different things. Exit **`2`** is "this note is broken" — fix
+the file, nothing was signed. Exit **`4`** is "a person decides": the note parsed perfectly
+and its verdict is `refuse` or `sign-with-fixlist`. Exit **`1`** is `--as-agent` on a stage
+whose policy is not `agent`; a run keeps the policy it was opened with, and a flag that could
+upgrade one at approve time would make the frozen policy decorative.
+
+A person may always approve an agent-gated stage with no flag at all. That is an override, it
+is recorded as a person, and the gate carries no `evidence` key.
+
+Exits: `0` `1` `2` `3` `4`.
 
 ## `tldrx gate`
 

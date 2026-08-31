@@ -64,10 +64,11 @@ export interface StageRowModel {
   readonly gateBy: string | null;
   /**
    * Who is MEANT to sign it: `human` waits for `tldrx approve`, `auto` lets the
-   * facilitator close it when the §5 conditions hold (spec §2.2
-   * `gates_policy`). Absence reads as `human` everywhere, including on a
-   * run.yml written before the key existed — the safe default is the one that
-   * stops, and `gatePolicyFor` applies exactly the same rule.
+   * facilitator close it when the §5 conditions hold, `agent` lets a sub-agent
+   * close it over a validated evidence note (spec §2.2 `gates_policy`). Absence
+   * reads as `human` everywhere, including on a run.yml written before the key
+   * existed — the safe default is the one that stops, and `gatePolicyFor` applies
+   * exactly the same rule.
    */
   readonly gatePolicy: string;
 }

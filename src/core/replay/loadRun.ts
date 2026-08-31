@@ -113,6 +113,24 @@ export function loadPhaseArtefacts(loaded: LoadedRun, phase: string): PhaseArtef
   return { phase, handoff: read(HANDOFF_FILE), questions: read(QUESTIONS_FILE) };
 }
 
+/**
+ * The COMMITTED evidence note a gate points at, when it is there.
+ *
+ * `gate.evidence.path` is run-relative by construction, and a path that escapes
+ * the run directory is refused rather than read: a viewer must never be steerable
+ * into printing a file outside the run it was asked about.
+ */
+export function loadGateEvidence(loaded: LoadedRun, relPath: string): string | null {
+  if (relPath === "" || relPath.includes("..") || relPath.startsWith("/")) return null;
+  const path = join(loaded.dir, ...relPath.split("/"));
+  if (!existsSync(path)) return null;
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
 /** Events belonging to one stage, in file order. */
 export function stageEvents(loaded: LoadedRun, stage: string): readonly NumberedEvent[] {
   return loaded.events.filter((item) => item.event.stage === stage);
