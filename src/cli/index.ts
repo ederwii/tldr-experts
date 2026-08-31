@@ -25,6 +25,7 @@ import { approveCommand } from "./commands/approve.ts";
 import { budgetCommand } from "./commands/budget.ts";
 import { costCommand } from "./commands/cost.ts";
 import { rejectCommand } from "./commands/reject.ts";
+import { gateCommand } from "./commands/gate.ts";
 import { storyCommand } from "./commands/story.ts";
 import { mapCommand } from "./commands/map.ts";
 import { expertCommand } from "./commands/expert.ts";
@@ -53,6 +54,7 @@ export const COMMANDS: readonly Command[] = [
   questionsCommand,
   approveCommand,
   rejectCommand,
+  gateCommand,
   storyCommand,
   budgetCommand,
   costCommand,

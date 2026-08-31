@@ -1240,6 +1240,80 @@ ending with a token that parses and resolves. Issues are reported in two kinds: 
 stage fails) and `source` (a citation does not resolve — usually the code moving under an old card, which is what
 `watch check` exists to find).
 
+### 2.17 `tldrx-work/<run>/.agent/<stage>/evidence.md`
+
+The gate **evidence note**: the artefact an `agent` gate is closed over. Front matter is the machine half (what
+`run status` and `replay` read); the body is the human half (what the §2.8 rule validates) — the §2.13 story pattern,
+reused rather than reinvented. Scratch, beside `prompt.md`, and therefore gitignored (§1); the copy that gets committed
+is the one `approve` makes into the run tree, because a gate whose evidence lives only in a gitignored directory is a
+gate nobody can audit from a clone.
+
+````markdown
+---
+version: 1
+gate: 03-plan/plan
+role: agent
+by: fable
+at: 2026-08-30T22:14:03Z
+verdict: sign                 # sign | sign-with-fixlist | refuse
+read: ["03-plan/waves.yml", "03-plan/epics/E1.md", "03-plan/stories/S1.md"]
+citations: {sampled: 7, of: 34, resolved: 7, refuted: 0}
+touches: {audited: 13, outside_surface: 0, new_areas: ["src/features/tenancy/"]}
+diff_vs_stories: matches      # matches | diverges | n-a
+caveats: ["read-only mandate — no DoD command was run by this reviewer"]
+recommend: []
+---
+
+# Gate evidence — 03-plan/plan
+
+## Read
+- every story file and `waves.yml` [src: 03-plan/waves.yml:1]
+
+## Citations checked
+- 7 of 34 spot-checked, 7 resolved, 0 refuted [src: 03-plan/stories/S3.md:14]
+
+## Touches audited
+- 13 touched paths, all inside the What-cited surface [src: 01-what/handoff.md:12]
+
+## Verdict
+- SIGN — every dependency is in an earlier wave [src: $ tldrx questions lint --run 260830-tenancy → exit 0]
+````
+
+| Field | Type | Req | Meaning |
+|---|---|---|---|
+| `version` | `1` | y | Spec §0: unknown version ⇒ exit 1 |
+| `gate` | `<phase>/<stage>` | y | The gate this note is evidence for. A note naming another stage is refused — that is a note pasted from somewhere else |
+| `role` | `agent` | y | What KIND of signature this is. `by:` says who; a reader tells a person, the facilitator (`by: auto`) and an agent apart with one field each |
+| `by` | str | y | The actor |
+| `at` | RFC3339 | y | When it was written |
+| `verdict` | `sign\|sign-with-fixlist\|refuse` | y | **Only `sign` closes the gate.** The other two are the note saying a human decides |
+| `read` | str[] | y | The files actually opened |
+| `citations` | `{sampled, of, resolved, refuted}` | y | Whole numbers ≥ 0. The spot-check, and what it found |
+| `touches` | `{audited, outside_surface, new_areas[]}` | y | The touched-path audit |
+| `diff_vs_stories` | `matches\|diverges\|n-a` | y | `n-a` outside Build, where there is no story set to diff against |
+| `caveats` | str[] | n | What the reviewer's mandate stopped it checking. Defaults to `[]` |
+| `recommend` | `{q, option, why, src}[]` | n | A recommendation per open question, for a decision card. Defaults to `[]`; never invented |
+| H2 sections | `Read` · `Citations checked` · `Touches audited` · `Verdict` | y | In that order, each with **at least one list item** |
+
+**Every list item ends with a valid §2.8 `[src: …]` token that resolves**, checked by the **same** tokenizer, the same
+resolver and the same section rule `claim-sources` runs — never a second reader, which would drift, and the looser of the
+two would win the argument at exactly the moment a gate is being signed. A checklist whose own claims are unsourced is
+what §2.8 exists to refuse, and an evidence note is a claim about a claim.
+
+**`unverified` refuses here**, unlike in a handoff. A citation nothing could check does not fail a stage (§2.8) but it is
+exactly what stops an AUTO gate closing (§5, condition 5); an agent gate is strictly stronger than an auto gate, never a
+cheaper one, so it cannot rest on a source nobody was able to verify.
+
+**Validation** (each with its own message): front matter present, parseable and complete · the four sections present, in
+order, each holding a list item · every list item sourced and resolving · `citations.sampled <= citations.of` and
+`resolved + refuted <= sampled` · not `sampled: 0` while `of > 0` — "I checked none of them" is not a check ·
+`verdict: sign` · `gate:` equal to the stage at the cursor.
+
+**`tldrx gate template`** writes the blank form, filling only what a tool can COUNT — the gate, the time,
+`citations.of`, `touches.audited` — and leaving every judgement blank. It writes no `[src: …]` anywhere, and what it
+writes deliberately does **not** validate: a template that parsed clean out of the box would be a signature nobody had
+to earn. It spends nothing, spawns nothing, approves nothing and moves no cursor.
+
 ## 3. CLI surface
 
 Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not found · `4` awaiting human · `5` agent failed.
@@ -1264,6 +1338,7 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx answer <Qid> <text> [--run <id>]` | `questions.md`, `facts.yml` | `questions.md`, `facts.yml`, `events.jsonl` | 0,1,2,3 |
 | `tldrx interview [--run <id>\|--init] [--yes-to-defaults]` | the cursor phase's `questions.md` (or `.tldrx/init-questions.md`), `run.yml`, `.tldrx/process.yml`, `workspace.yml`, `git remote get-url origin` | the same three files `answer` writes, one per answer recorded; with `--init`, also `.tldrx/process.yml` (§2.12) when a process answer settles `methodology` or `ticket_tool.kind` | 0,1,2,3 |
 | `tldrx approve [--run <id>] [--note]` | `run.yml`, stage outputs, stage checks | `run.yml` gate, `events.jsonl` | 0,2,3 |
+| `tldrx gate template [--run <id>] [--force]` | `run.yml`, the cursor stage's declared outputs, `03-plan/stories/<id>.md` or `04-build/implicit-plan.yml` | `.agent/<stage>/evidence.md` (§2.17). Nothing else: no gate, no cursor, no event, no cost. An existing note is left alone (exit 2) unless `--force` | 0,1,2,3 |
 | `tldrx reject [--run <id>] --note <text> [--stage <phase>/<stage>]` | `run.yml` | `run.yml` gate, `events.jsonl`, stage status ⇒ `ready`. With `--stage` it REVOKES an approval already given (§5): `gate.revoked`, the cursor moves back, later stages that had run are marked `stale: true`, nothing is deleted. `--stage` may target a FINISHED run | 0,2,3 |
 | `tldrx story reopen <id> [--run <id>] --note <text>` | `03-plan/waves.yml` + `03-plan/stories/<id>.md` (or `04-build/implicit-plan.yml`), `events.jsonl` | that story file's `status:` ⇒ `todo`, `events.jsonl` (`story.reopened`). Nothing else: no agent, no cost, no stage moved, no worktree or branch touched. Refuses (2) an unknown story id, a `done` story (that is `reject --stage`), a `todo` story, and a missing `--note` | 0,1,2,3 |
 | `tldrx questions lint [--run <id>] [--fix] [--area <a>]` | every `<phase>/questions.md` in the run | nothing, or those files rewritten to the §2.7 grammar with `--fix` (no wording changed) | 0,2,3 |

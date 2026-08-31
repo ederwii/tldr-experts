@@ -29,6 +29,7 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../paths.ts";
+import { EVIDENCE_FILE } from "../text/evidence.ts";
 
 const REPO_TOKEN = "{repo}";
 
@@ -224,4 +225,17 @@ function toPosix(path: string): string {
 /** `tldrx-work/<run>/.agent/<stage>/` — raw agent traffic, gitignored (spec §1). */
 export function agentDir(runDir: string, stageId: string): string {
   return join(runDir, ".agent", stageId);
+}
+
+/**
+ * `.agent/<stage>/evidence.md` — where an agent WRITES its gate evidence note
+ * (design §A.5), beside `prompt.md`.
+ *
+ * Scratch, and deliberately so: the copy that gets committed is the one
+ * `approve --as-agent` makes into `<phase>/gate-evidence/<stage>.md`. A gate whose
+ * evidence lives only in a gitignored directory is a gate nobody can audit from a
+ * clone.
+ */
+export function evidencePath(runDir: string, stageId: string): string {
+  return join(agentDir(runDir, stageId), EVIDENCE_FILE);
 }
