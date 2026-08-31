@@ -144,8 +144,11 @@ describe("running the build under node", () => {
     const fixture = await singleRepoFixture();
     const out = await mkdtemp(join(tmpdir(), "tldrx-node-init-"));
     try {
+      // `--quiet` because this test is about the SEAM, not the view: init's live
+      // step lines are a legitimate stderr write (spec: every progress byte goes
+      // to stderr), and asserting an empty stderr is how we notice a real one.
       const init = await run([
-        "node", join(DIST, "tldrx.js"), "init",
+        "node", join(DIST, "tldrx.js"), "init", "--quiet",
         "--no-interview", "--provider", "static", "--root", fixture.root, "--out", out,
       ]);
       expect(init.stderr, init.stderr).toBe("");
@@ -198,7 +201,7 @@ describe("non-ASCII survives both runtimes", () => {
     const out = await mkdtemp(join(tmpdir(), "tldrx-encoding-"));
     try {
       const init = await run([
-        "bun", join(DIST, "tldrx.js"), "init",
+        "bun", join(DIST, "tldrx.js"), "init", "--quiet",
         "--no-interview", "--provider", "static", "--root", fixture.root, "--out", out,
       ]);
       expect(init.stderr, init.stderr).toBe("");

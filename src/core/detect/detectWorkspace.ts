@@ -18,7 +18,25 @@ import type { CommandRunner } from "./CommandRunner.ts";
 import type { DetectedRepo, DetectedWorkspace, Evidence } from "./types.ts";
 import { basename } from "node:path";
 
-export async function detectWorkspace(root: string, runner: CommandRunner): Promise<DetectedWorkspace> {
+/**
+ * Optional progress callbacks.
+ *
+ * Detection is the first thing `tldrx init` does and, on a workspace with a big
+ * repo in it, the walk behind `countCodeFiles` is not instant. A caller that has
+ * a person waiting on it can say which repo is being read; a caller that has not
+ * passes nothing and this file behaves exactly as it did before.
+ */
+export interface DetectProgress {
+  /** The repo's slug, before anything about it has been read. */
+  readonly repoStart?: (name: string) => void;
+  readonly repoDone?: (repo: DetectedRepo) => void;
+}
+
+export async function detectWorkspace(
+  root: string,
+  runner: CommandRunner,
+  progress: DetectProgress = {},
+): Promise<DetectedWorkspace> {
   const { mode, rootIsRepo, repoDirs } = await findRepos(root);
   const evidence: Evidence[] = [
     {
@@ -39,6 +57,7 @@ export async function detectWorkspace(root: string, runner: CommandRunner): Prom
     const absPath = dir === "." ? root : join(root, dir);
     const name = uniqueSlug(repoSlug(dir === "." ? basename(root) : dir), taken);
     taken.add(name);
+    progress.repoStart?.(name);
 
     const stack = await detectStack(absPath);
     const commands = await detectCommands(absPath, stack);
@@ -64,7 +83,7 @@ export async function detectWorkspace(root: string, runner: CommandRunner): Prom
       });
     }
 
-    repos.push({
+    const detected: DetectedRepo = {
       name,
       path: dir === "." ? "." : toPosix(dir),
       absPath,
@@ -78,7 +97,9 @@ export async function detectWorkspace(root: string, runner: CommandRunner): Prom
       ci,
       confidence: scoreConfidence(commands.commands, stack.manifests.length),
       evidence: repoEvidence,
-    });
+    };
+    repos.push(detected);
+    progress.repoDone?.(detected);
   }
 
   return { mode, rootIsRepo, root, repos, evidence };

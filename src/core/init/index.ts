@@ -1,4 +1,4 @@
-export { runInit, chooseProviders, rfc3339, WORKSPACE_FILE, PROCESS_FILE, HANDOFF_FILE, type InitReport, type InitDependencies } from "./runInit.ts";
+export { runInit, chooseProviders, rfc3339, describeRepo, countCommands, WORKSPACE_FILE, PROCESS_FILE, HANDOFF_FILE, type InitReport, type InitDependencies } from "./runInit.ts";
 export { PROVIDER_PREFERENCES, isMethodology, isProviderPreference, type InitOptions, type ProviderPreference } from "./InitOptions.ts";
 export { buildWorkspaceDocument, type WorkspaceDocument, type WorkspaceRepoDocument } from "./workspaceDocument.ts";
 export { buildProcessDocument, type ProcessDocument } from "./processDocument.ts";

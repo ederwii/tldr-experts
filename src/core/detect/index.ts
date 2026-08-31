@@ -1,4 +1,4 @@
-export { detectWorkspace } from "./detectWorkspace.ts";
+export { detectWorkspace, type DetectProgress } from "./detectWorkspace.ts";
 export { findRepos, isGitRepo, type FoundRepos } from "./findRepos.ts";
 export { detectStack, type StackDetection, type PackageJson } from "./stack.ts";
 export { detectCommands, isSingleArgvCommand, type DetectedCommands } from "./commands.ts";

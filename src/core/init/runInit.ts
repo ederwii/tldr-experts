@@ -20,6 +20,8 @@ import { buildMap, type BuildMapResult } from "../map/buildMap.ts";
 import { GraphifyProvider } from "../map/GraphifyProvider.ts";
 import { StaticProvider } from "../map/StaticProvider.ts";
 import { McpProbe, type McpServer } from "../doctor/McpProbe.ts";
+import { plural } from "../map/plural.ts";
+import { silentSteps, type StepReporter } from "../ui/steps.ts";
 import { stringifyYaml } from "../yaml.ts";
 import { CONVENTIONS_DIR, renderRepoConventions, renderSharedConventions } from "./conventions.ts";
 import { FACTS_FILE, FACTS_HEADER, buildFactsDocument, validateFactsDocument } from "./factsDocument.ts";
@@ -35,7 +37,8 @@ import { writeAmbientFootprint } from "./ambientFootprint.ts";
 import { WriteLog } from "./writeFile.ts";
 import type { CommandRunner } from "../detect/CommandRunner.ts";
 import type { MapProvider } from "../map/Provider.ts";
-import type { DetectedWorkspace } from "../detect/types.ts";
+import type { DetectedRepo, DetectedWorkspace } from "../detect/types.ts";
+import { COMMAND_SLOTS } from "../detect/types.ts";
 import type { InitOptions } from "./InitOptions.ts";
 
 export const WORKSPACE_FILE = ".tldrx/workspace.yml";
@@ -48,6 +51,12 @@ export interface InitDependencies {
   readonly now: Date;
   /** Injected so tests never spawn `claude mcp list`. */
   readonly probeMcp?: () => Promise<readonly McpServer[]>;
+  /**
+   * Where the live per-step lines go. Omitted means `silentSteps()` — which is
+   * what every test and every non-interactive caller wants, and what the CLI
+   * installs for `--quiet` and `--ui off`.
+   */
+  readonly steps?: StepReporter;
 }
 
 export interface InitReport {
@@ -65,48 +74,96 @@ export interface InitReport {
 export async function runInit(options: InitOptions, deps: InitDependencies): Promise<InitReport> {
   const root = resolve(options.root);
   const out = resolve(options.out);
-  const workspace = await detectWorkspace(root, deps.runner);
+  const steps = deps.steps ?? silentSteps();
+
+  const detecting = steps.begin("detecting repos");
+  const workspace = await detectWorkspace(root, deps.runner, {
+    repoStart: (name) => { detecting.tick(name); },
+    repoDone: (repo) => { detecting.note(describeRepo(repo)); },
+  });
 
   if (workspace.repos.length === 0) {
+    detecting.fail(`no git repo at ${root}`);
     throw new Error(
       `no git repo at ${root}: init needs the root to be a repo, or to contain child repos.\n`
       + "Run `git init` at the root (a docs-only root is fine) and try again.",
     );
   }
+  detecting.done(
+    `${workspace.mode} — ${plural(workspace.repos.length, "repo")}: `
+    + workspace.repos.map((repo) => repo.name).join(", "),
+  );
 
   const log = new WriteLog();
   const timestamp = rfc3339(deps.now);
-  const mcpServers = options.mcp ? await probe(deps) : [];
+  const mcpServers = await probeServers(options, deps, steps);
 
+  // Where the wall time goes. Measured 2026-08-30 on a five-repo workspace:
+  // 36.0 s with `--provider auto` (graphify runs once per repo) against 1.3 s
+  // with `--provider static` — so ~97% of an `init` is this one loop, and it is
+  // the reason the whole command used to look hung.
+  const mapping = steps.begin("building the code map");
   const map = await buildMap({
     workspace,
     workspaceDir: out,
     providers: chooseProviders(options, deps.runner),
+    progress: {
+      repoStart: (repo) => { mapping.tick(`${repo}…`); },
+      repoDone: (repo, provider, documents) => {
+        mapping.note(`${repo} — ${plural(documents, "document")} via ${provider}`);
+      },
+      repoSkipped: (repo) => { mapping.note(`${repo} — no provider available, skipped`); },
+    },
   });
-  await writeWorkspaceFile({ workspace, root, out, map, mcpServers, timestamp, deps, log });
+  mapping.done(
+    `${plural(map.files.length, "map document")} via ${map.providers.join(", ") || "no provider"}`,
+  );
 
+  const writingWorkspace = steps.begin(`writing ${WORKSPACE_FILE}`);
+  await writeWorkspaceFile({ workspace, root, out, map, mcpServers, timestamp, deps, log });
+  writingWorkspace.done(
+    `${WORKSPACE_FILE} — ${plural(workspace.repos.length, "repo")}, `
+    + `${plural(countCommands(workspace), "gate command")}`,
+  );
+
+  const planning = steps.begin("planning the interview");
   const questions = options.interview ? planQuestions({
     workspace,
     processGiven: options.methodology !== null,
     mcpServers,
     stackGiven: options.stack.length > 0,
   }) : [];
+  planning.done(options.interview
+    ? `${plural(questions.length, "question")} detection could not answer`
+    : "skipped (--no-interview)");
 
+  const seeding = steps.begin("seeding experts");
   const experts = planExperts(workspace, map.facts, {
     declaredLanguages: options.stack,
     project: repoSlug(basename(root)),
   });
+  for (const plan of experts) seeding.tick(plan.name);
   await seedExperts({ outDir: out, plans: experts, createdAt: timestamp, log });
-  await writeConventions(workspace, out, log);
+  seeding.done(`${plural(experts.length, "expert")} at level 0`);
+
+  const conventions = steps.begin("reading conventions");
+  await writeConventions(workspace, out, log, (repo) => { conventions.tick(repo); });
+  conventions.done(`${plural(workspace.repos.length + 1, "convention file")} under ${CONVENTIONS_DIR}/`);
+
+  const recording = steps.begin("writing the process and facts files");
   await writeProcess(options, deps, questions, timestamp, out, log);
   await writeFacts(out, log);
+  recording.done(`${PROCESS_FILE}, ${FACTS_FILE}`);
 
   if (options.interview) {
-    await log.createIfAbsent(
+    const asking = steps.begin(`writing ${QUESTIONS_FILE}`);
+    const outcome = await log.createIfAbsent(
       join(out, QUESTIONS_FILE), QUESTIONS_FILE, renderQuestions(questions, timestamp),
     );
+    asking.done(`${QUESTIONS_FILE} — ${outcome}`);
   }
 
+  const handing = steps.begin(`writing ${HANDOFF_FILE}`);
   await log.overwrite(join(out, HANDOFF_FILE), HANDOFF_FILE, renderInitHandoff({
     workspace, map, experts, questions,
     detectedAt: timestamp,
@@ -114,8 +171,11 @@ export async function runInit(options: InitOptions, deps: InitDependencies): Pro
     methodologyGiven: options.methodology,
     kept: log.paths("kept"),
   }));
+  handing.done(HANDOFF_FILE);
 
+  const ambient = steps.begin("updating .gitignore and CLAUDE.md");
   await writeAmbientFootprint(out, log);
+  ambient.done(".gitignore, CLAUDE.md — one marked block each");
 
   return {
     workspace, map, experts, questions,
@@ -169,11 +229,13 @@ async function writeConventions(
   workspace: DetectedWorkspace,
   out: string,
   log: WriteLog,
+  onRepo: (repo: string) => void = () => undefined,
 ): Promise<void> {
   await log.createIfAbsent(
     join(out, CONVENTIONS_DIR, "shared.md"), `${CONVENTIONS_DIR}/shared.md`, renderSharedConventions(),
   );
   for (const repo of workspace.repos) {
+    onRepo(repo.name);
     const signals = await detectConventionSignals(repo.absPath);
     await log.createIfAbsent(
       join(out, CONVENTIONS_DIR, `${repo.name}.md`), `${CONVENTIONS_DIR}/${repo.name}.md`,
@@ -211,10 +273,46 @@ async function writeFacts(out: string, log: WriteLog): Promise<void> {
   await log.createIfAbsent(join(out, FACTS_FILE), FACTS_FILE, FACTS_HEADER + stringifyYaml(document));
 }
 
+/**
+ * `--mcp` only. It health-checks every configured server, so it is the one
+ * optional step that can be slower than the map — and the only one a person can
+ * turn off by not asking for it.
+ */
+async function probeServers(
+  options: InitOptions,
+  deps: InitDependencies,
+  steps: StepReporter,
+): Promise<readonly McpServer[]> {
+  if (!options.mcp) return [];
+  const step = steps.begin("probing MCP servers");
+  const servers = await probe(deps);
+  step.done(`${plural(servers.length, "MCP server")} configured`);
+  return servers;
+}
+
 async function probe(deps: InitDependencies): Promise<readonly McpServer[]> {
   if (deps.probeMcp !== undefined) return deps.probeMcp();
   const result = await new McpProbe().probe();
   return result.servers;
+}
+
+/** `mobile — typescript, react, expo · medium confidence · main`. */
+export function describeRepo(repo: DetectedRepo): string {
+  const stack = repo.stack.length > 0 ? repo.stack.join(", ") : "stack unknown";
+  return `${repo.name} — ${stack} · ${repo.confidence} confidence · ${repo.defaultBranch}`;
+}
+
+/**
+ * How many of the five command slots detection actually filled, across every
+ * repo. This is the number that decides whether a DoD gate can run at all, so
+ * it is worth saying out loud next to the file that records it.
+ */
+export function countCommands(workspace: DetectedWorkspace): number {
+  let filled = 0;
+  for (const repo of workspace.repos) {
+    for (const slot of COMMAND_SLOTS) if (repo.commands[slot] !== null) filled += 1;
+  }
+  return filled;
 }
 
 

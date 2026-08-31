@@ -4,6 +4,39 @@
 
 ### Added
 
+- **`tldrx init` says what it is doing while it does it** — a live line per step, in the
+  same `--ui scene|compact|plain|off` view family as the agent progress view, on stderr.
+  It used to print NOTHING until it was finished. Measured 2026-08-30 on a five-repo
+  workspace: **36.0 s of total silence** with the default `--provider auto` against
+  **1.3 s** with `--provider static` — so ~97% of the wait is `graphify update` running
+  once per repo inside `buildMap`, and the command looked hung for all of it.
+  - **Ten steps announce themselves**: detecting repos, building the code map, writing
+    `workspace.yml`, planning the interview, seeding experts, reading conventions, writing
+    `process.yml`/`facts.yml`, `init-questions.md`, `init-handoff.md`, and the `.gitignore`
+    + `CLAUDE.md` blocks. `--mcp` adds an eleventh, because it health-checks every server.
+  - **The slow ones name the repo they are inside.** `detecting repos` reports each repo
+    with its stack, confidence and default branch as detection finishes it; the map step
+    reports `<repo> — 6 documents via graphify` per repo. The wait is now legible instead
+    of merely long.
+  - **A terminal gets a spinner, colour and an in-place rewrite; a pipe gets plain lines.**
+    A finished step is printed once and never touched again, so it survives in scrollback
+    after the command exits — a step list is a HISTORY, not a picture of a moment, which is
+    why this is not `ui/driver.ts` with a different renderer. In `plain` a step still open
+    after 5 s says `still <label> — 12 s`, because there is no spinner there to prove the
+    process is alive.
+  - **A schoolhouse** (`core/ui/campus.ts`) is painted above the steps in `scene` mode,
+    drawn in the same hand as the classroom the agent view renders — `init` is the survey
+    that happens before the school opens.
+  - **`--quiet`** turns the live view off and keeps the report. **`--ui <mode>`** works on
+    `init` exactly as it does on `next`, `run auto` and `expert train`, and a bad value is
+    a usage error raised before any work is done.
+- **`core/ui/color.ts`** — the framework's first ANSI palette, resolved per STREAM rather
+  than per process. `tldrx init > report.txt` on a terminal has a piped stdout and a TTY
+  stderr: the live lines are still worth colouring and the file must still be plain text.
+  `palette(false)` is the identity for every ink, so a renderer never branches on colour
+  and the uncoloured path stays byte-for-byte deterministic in a test. `FORCE_COLOR` beats
+  `NO_COLOR` beats `CI` beats the stream.
+
 - **`tldrx story reopen <id> --note "<why>"`** — one Build story, given another run of
   developer attempts, by a person. The third verb of the family that landed 2026-08-30 and
   the only one a HUMAN signs: the other two stop the machine reading a transport failure
@@ -61,6 +94,17 @@
   when its sub-agent finishes. With nothing parallel the view is what it always was.
 
 ### Changed
+
+- **The init report is coloured and carries a roll-up.** Repo names, confidence
+  (green/yellow/red), the counts and the `created`/`kept` verbs are inked, and a new
+  `files N written · N created · N kept` line answers "how much of this run was
+  regenerated, how much is new, and how much was mine and left alone" without reading the
+  per-file list. `stripAnsi(coloured) === uncoloured`, asserted.
+- `detectWorkspace` and `buildMap` take optional progress callbacks. Both default to
+  doing nothing, so `tldrx map` and every other existing caller behave exactly as before.
+- `tldrx init` now writes progress bytes to stderr like every other long-running command,
+  so the two `build.test.ts` cases that spawn it to exercise the node seam pass `--quiet`.
+  Their `stderr === ""` assertion is how a REAL warning gets noticed, and it still is.
 
 - `tldrx doctor` prints where the framework's own files are: a `framework <path>` line
   naming the installed package that ships `stages/`, `workflows/` and `templates/`, and
@@ -343,6 +387,17 @@
   run an empty Definition of Done. `WorkspaceContext.commandRoles` keeps the keys.
 - Build's declared `03-plan/…` inputs are treated as satisfied when the scope skips Plan, and
   **only** those: every other missing input is still exit 1.
+
+### Verified, not changed
+
+- **The walk already skips vendored and generated trees**, and always did: `SKIPPED_DIRS`
+  in `detect/walk.ts` covers `node_modules`, `dist`, `build`, `out`, `bin`, `obj`,
+  `target`, `.venv`, `Pods`, `.next`, `.expo`, `coverage` and more, plus every
+  dot-directory below the root, and it is honoured by `walkFiles` (so by `countCodeFiles`
+  and `readSourceTree`) and by `findRepos`. There are now tests that say so: a fixture with
+  a `.ts` file planted in each of those trees, and a real git repo inside `node_modules`
+  that must not be reported as a workspace member. The slow part of `init` was never the
+  walk — it is `graphify update`, once per repo.
 
 ## 0.3.0 — 2026-08-30
 

@@ -17,12 +17,29 @@ import type { DetectedWorkspace } from "../detect/types.ts";
 export const MAP_DIR = ".tldrx/map";
 export const GRAPHIFY_OUT_DIR = ".tldrx/graphify-out";
 
+/**
+ * Optional progress callbacks.
+ *
+ * This loop is where `tldrx init` spends nearly all of its wall time — measured
+ * 2026-08-30 on a five-repo workspace, 36.0 s in total with `--provider auto`
+ * against 1.3 s with `--provider static`, because `graphify update` runs once
+ * per repo. A caller with a person waiting on it says which repo is in the
+ * provider right now; a caller without one passes nothing.
+ */
+export interface MapProgress {
+  readonly repoStart?: (repo: string) => void;
+  readonly repoDone?: (repo: string, provider: string, documents: number) => void;
+  /** No provider reported available for this repo, so nothing was written. */
+  readonly repoSkipped?: (repo: string) => void;
+}
+
 export interface BuildMapOptions {
   readonly workspace: DetectedWorkspace;
   /** Absolute directory that holds `.tldrx/`. */
   readonly workspaceDir: string;
   /** Preference order; the first available provider wins per repo. */
   readonly providers: readonly MapProvider[];
+  readonly progress?: MapProgress;
 }
 
 export interface BuildMapResult {
@@ -37,14 +54,19 @@ export async function buildMap(options: BuildMapOptions): Promise<BuildMapResult
   const facts: MapFacts[] = [];
   const files: string[] = [];
 
+  const progress = options.progress ?? {};
   for (const repo of options.workspace.repos) {
     const context: MapContext = {
       repo,
       outDir: join(options.workspaceDir, GRAPHIFY_OUT_DIR, repo.name),
       root: options.workspace.root,
     };
+    progress.repoStart?.(repo.name);
     const provider = await firstAvailable(options.providers, context);
-    if (provider === null) continue;
+    if (provider === null) {
+      progress.repoSkipped?.(repo.name);
+      continue;
+    }
 
     const collected = await provider.collect(context);
     facts.push(collected);
@@ -56,6 +78,7 @@ export async function buildMap(options: BuildMapOptions): Promise<BuildMapResult
       await runtime.writeText(path, renderMapDoc(collected, doc));
       files.push(`${MAP_DIR}/${repo.name}/${doc}.md`);
     }
+    progress.repoDone?.(repo.name, collected.provider, MAP_DOCS.length);
   }
 
   if (options.workspace.mode === "multi-repo") {

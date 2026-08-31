@@ -53,6 +53,7 @@ anywhere.
 ```
 tldrx init [--root <path>] [--out <path>] [--no-interview] [--process <name>]
            [--stack <a,b,…>] [--mcp] [--provider <name>]
+           [--ui scene|compact|plain|off] [--quiet]
 ```
 
 | Flag | Meaning |
@@ -64,8 +65,23 @@ tldrx init [--root <path>] [--out <path>] [--no-interview] [--process <name>]
 | `--stack <a,b,…>` | Declare the stack instead of detecting it, e.g. `ts,dotnet,python` |
 | `--mcp` | Also ask `claude mcp list` which servers are configured. Slower: it health-checks each one |
 | `--provider <name>` | Map provider. One of: `auto` `graphify` `static`. `auto` picks graphify when it is on PATH |
+| `--ui <mode>` | What to show while it works. One of: `auto` `scene` `compact` `plain` `off`. `TLDRX_UI` sets it too |
+| `--quiet` | No live progress. The report at the end is still printed |
 
 Exits: `0` `1`.
+
+### What you see while it runs
+
+`init` reports every step as it happens, on stderr — detecting repos, building the code map,
+writing each file — with the repo it is inside named as it goes. On a terminal that is one
+line with a spinner, rewritten in place and left in your scrollback once the step is done; in
+a pipe or a CI job it is plain lines with no escape codes.
+
+**Where the time goes.** Nearly all of it is the code map, because `graphify update` runs once
+per repo. Measured on a five-repo workspace: **36.0 s** with `--provider auto` against
+**1.3 s** with `--provider static`. `--provider static` is much faster and still cites every
+claim it makes; `--provider auto` buys you graph-derived structure for the wait.
+
 
 ## `tldrx install --claude`
 
