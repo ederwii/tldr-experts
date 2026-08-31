@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **The docs now say, at the top of both places a reader starts, that `run attend host` is a LOCK
+  and `run auto` is an ENGINE.** Grounding: on 2026-08-31 the framework's own author — who had read
+  the chapter — ran `tldrx run attend host <run>` expecting it to drive the whole run by itself,
+  and then asked whether `attend` and `auto` compose. They do not, and the code has always said so
+  (`runAuto.ts:108` refuses `run auto` on an attended run at exit `1`, before the event log is
+  opened; `runNext.ts:659` exits `4` on a bare `next` and names the `--prepare` command). The docs
+  took too long to say it.
+  - **README gains "Trying it: three ways to run"**, immediately after Quick start: a three-row
+    table of who executes each turn, what a turn costs, and where each mode stops; one scenario
+    line each (`run auto` for a small run you would watch anyway and for CI/cron — the only mode
+    with no session behind it; `attend host` when a session is already open and cost or quality
+    matters; `attend host` + a mandate for overnight); and the two-command recipe with a verbatim
+    example **mandate prompt**.
+  - **`docs/guide/10-unattended-mode.md` leads with the same disambiguation** — a blockquoted
+    lock-vs-engine table above the chapter's opening paragraph, so a skimmer cannot make that
+    mistake — and gains a `### The mandate` section carrying the prompt verbatim, tying its four
+    legitimate interrupts back to the `questions` / `budget-event` / `boundary` fallthroughs the
+    framework already enforces, and to the fact that no `git push` wrapper exists in the Build
+    executor (`src/core/build/git.ts:13`) and the developer prompt says "Do not push"
+    (`src/core/build/prompts.ts:180`).
+  - **`tldrx run --help` says it too.** `run` had notes for `status`, `estimate`, `unlock` and
+    `cancel` and none for the pair that actually confuses people. It now leads with one note per
+    mode — "a LOCK, not an engine" / "an ENGINE, not a lock", each naming the other's refusal — and
+    the `<host|--none>` argument line says the framework will not spawn on the run again. Help text
+    only; no behaviour, no flag and no exit code moved.
+
 ## 0.3.1 — 2026-08-31
 
 **Unattended mode.** Twelve of the entries below are one feature: a run a **host session**

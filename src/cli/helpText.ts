@@ -285,7 +285,7 @@ const ENTRIES: readonly CommandHelp[] = [
         name: "[<run>]",
         meaning: "run attend / run status / run estimate / run auto / run unlock / run cancel: a run id. Omit it and the one open run is used.",
       },
-      { name: "<host|--none>", meaning: "run attend: which way to flip it. `host` hands the run to a host session; `--none` hands it back." },
+      { name: "<host|--none>", meaning: "run attend: which way to flip it. `host` hands the run to a host session and the framework will not spawn on it again; `--none` hands it back." },
     ],
     flags: [
       { name: "title", arg: "<t>", meaning: "Human title for the run. Default: the slug.", sub: "new" },
@@ -374,6 +374,8 @@ const ENTRIES: readonly CommandHelp[] = [
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_AWAITING_HUMAN, EXIT_AGENT_FAILED],
     notes: [
+      "`run attend host` is a LOCK, not an engine. It sets one field, spends nothing, runs no stage and touches no branch \u2014 and from then on THE FRAMEWORK WILL NOT SPAWN on that run: every turn is a `tldrx next --prepare` / `tldrx next --commit` handshake with the session driving it, the Build reviewer included. `run attend --none` hands it back.",
+      "`run auto` is an ENGINE, not a lock. It calls `next` HEADLESS over and over, so THE FRAMEWORK spawns a metered sub-agent stage after stage, and it stops at the first thing it may not decide: a human gate or an open question (4), a stage failure (5), a phase ceiling or this loop's own --max-usd (2). It is REFUSED ON AN ATTENDED RUN (exit 1, before the event log is opened) \u2014 a lock and an engine are alternatives, never layers.",
       "`run status` with several runs open LISTS them and exits 0 — it is the screen you read to find the id every other command wants.",
       "`run estimate` is the one command here that GUESSES, and it says so in its own output. The input half is measured — the next stage's prompt, assembled by the same code `next` uses and weighed by the same context ledger. The output half is the median output tokens of past attempts at that stage id, and with no history it prints no estimate rather than inventing one. For what was actually spent, use `tldrx cost`.",
       "`run unlock` drops a .lock nobody is behind and puts the stage it stranded back to ready. It spends nothing and touches no stage output.",
