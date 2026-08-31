@@ -1,5 +1,17 @@
 # 10 — Unattended mode
 
+> **`attend` is a lock. `auto` is an engine. They do not compose.**
+>
+> | | `tldrx run attend host` | `tldrx run auto` |
+> |---|---|---|
+> | what it is | a LOCK: it sets one field, runs nothing, and the framework never spawns on that run again | an ENGINE: a headless loop in which the FRAMEWORK spawns a metered sub-agent, stage after stage |
+> | who executes each turn | your host session, through `tldrx next --prepare` / `--commit` | the framework, until something needs a person — a gate, a question, a failure, a ceiling |
+> | with the other one | `tldrx run auto` on it is refused, exit `1` | refused on an attended run, exit `1`, before the event log is opened |
+>
+> Running a whole run unattended *and* keeping the checking is the first column plus a session you
+> have given a **mandate** ([the recipe](#the-mandate)). There is no flag for it: the mandate is a
+> prompt you write.
+
 The rest of this guide describes a framework that spawns its own sub-agents and stops when a
 person is needed. This chapter describes the other way round: a **host session** — a Claude
 Code conversation, or any agent with a tool surface — doing every turn, and the framework
@@ -62,6 +74,50 @@ $ tldrx run attend host 260830-tenancy
 touches no branch: it sets one field and appends one `run.attended` event. A direction is
 required and never guessed (exit `1`), setting what is already set is a silent no-op, and a
 `done` or `cancelled` run is refused (exit `2`).
+
+### The mandate
+
+`attend host` is the lock. What actually runs the run to its last gate is the session on the other
+side of the handshake, and what makes that session trustworthy is a **mandate you write in prose**.
+There is no keyword and no flag: the framework enforces that it will not spawn, and the mandate is
+what tells your session what to do with the run it has just been handed.
+
+The strongest form names all four things a person still owns, so the session knows exactly which
+interrupts are legitimate:
+
+```bash
+tldrx run new payments --scope feature --budget 25 \
+  --attended-by host --gates what:agent,plan:agent,build:agent,watch:agent
+```
+
+> Act as my unattended verification gate on run `260101-payments`, until it reaches its last gate.
+>
+> Drive every stage yourself — `tldrx next --prepare 260101-payments`, then
+> `tldrx next --commit 260101-payments` — dispatching your own sub-agents for the turns. The
+> framework must never spawn.
+>
+> For every build story, run an INDEPENDENT adversarial review through the `--review` handshake:
+> `tldrx next --prepare --review`, one read-only sub-agent over the diff, then
+> `tldrx next --commit --review`. Its job is to find what the developer got wrong, not to agree
+> with it.
+>
+> Approve a gate only after you have checked it yourself — that the citations resolve, that every
+> touched path is one this run declared, and that the diff matches the stories it claims to
+> implement — and write that check down as evidence: `tldrx gate template`, fill it in, then
+> `tldrx approve --as-agent`.
+>
+> Interrupt me ONLY for a new product decision, a budget-ceiling raise, or work that has to go
+> outside the declared boundary. Everything else you decide, and log.
+>
+> Never push. The final merge is mine.
+
+The four interrupts in that last paragraph are not a style choice — they are the right-hand column
+of [The one insight](#the-one-insight), and the framework independently falls through to a person
+on the first three whatever the prompt says (`questions`, `budget-event`, `boundary`; see
+[The four fallthroughs](#the-four-fallthroughs)). The mandate makes the session agree with the
+machine rather than fight it. The fourth, the merge, the framework never does at all: there is no
+`git push` wrapper in the Build executor, and the developer prompt says **"Do not push"** in as many
+words.
 
 For the third switch, `economy: host-tokens` on a phase, see
 [6 — Budgets and cost](06-budgets-and-cost.md). The short version: a ceiling the Plan wrote

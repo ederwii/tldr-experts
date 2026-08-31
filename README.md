@@ -39,6 +39,65 @@ tldrx run auto            # `next`, over and over, until something actually need
 dependencies, so an installed `tldrx` needs only Node; Bun builds it. Full walkthrough:
 [`docs/guide/01-quick-start.md`](docs/guide/01-quick-start.md).
 
+## Trying it: three ways to run
+
+`tldrx run auto` and `tldrx run attend host` read like two speeds of the same thing. They are
+opposites and they do not compose. **`auto` is an engine, not a lock**: a headless loop in which
+the *framework* spawns a metered sub-agent, stage after stage. **`attend host` is a lock, not an
+engine**: it sets one field, spends nothing and runs no stage, and from then on the framework never
+spawns on that run — every turn is a `--prepare` / `--commit` handshake with a session you drive.
+`run auto` on an attended run is refused outright (exit `1`); a bare `tldrx next` there exits `4`
+and names the `--prepare` command instead.
+
+| | who executes each turn | what a turn costs | where it stops |
+|---|---|---|---|
+| `tldrx run auto` | the framework — `claude -p`, spawned stage after stage | metered per spawn, rolled up by `tldrx cost` | the first human gate or open question (`4`), stage failure (`5`), ceiling (`2`) |
+| `tldrx run attend host`, driven from a session | your session's own sub-agents | host-billed; the framework records `cost_usd: null, metered: false` | every turn — `--prepare` writes the bundle, `--commit` settles it |
+| the same, under a **mandate** | your session's own sub-agents | host-billed | a new product decision, a ceiling raise, a boundary exit — nothing else |
+
+- **A small run you were going to watch anyway** → `run auto`. One command, and it stops the moment it needs you.
+- **A Claude Code session already open, and you care about cost or quality** → `run attend host`, driven from it: the context is warm, the turns are host-billed, and the framework writes the Build reviewer's bundle rather than spawning a second reader beside one you are already paying for.
+- **Overnight, hands off, and you still want the adversarial check** → `run attend host` plus a mandate, below.
+- **CI or cron** → `run auto`. It is the only one of the three with no session behind it.
+
+### Overnight, with the checking kept
+
+Two commands and a prompt. There is no keyword for this: the mandate is prose you write.
+
+```bash
+tldrx run new payments --scope feature --budget 25 \
+  --attended-by host --gates what:agent,plan:agent,build:agent,watch:agent
+tldrx run attend host 260101-payments      # or flip a run that is already open
+```
+
+`--gates` **replaces the workflow's gates wholesale**, and a stage you leave out of the list becomes
+`auto` — so name every gate you want signed. Then, in the session, the mandate:
+
+> Act as my unattended verification gate on run `260101-payments`, until it reaches its last gate.
+>
+> Drive every stage yourself — `tldrx next --prepare 260101-payments`, then
+> `tldrx next --commit 260101-payments` — dispatching your own sub-agents for the turns. The
+> framework must never spawn.
+>
+> For every build story, run an INDEPENDENT adversarial review through the `--review` handshake:
+> `tldrx next --prepare --review`, one read-only sub-agent over the diff, then
+> `tldrx next --commit --review`. Its job is to find what the developer got wrong, not to agree
+> with it.
+>
+> Approve a gate only after you have checked it yourself — that the citations resolve, that every
+> touched path is one this run declared, and that the diff matches the stories it claims to
+> implement — and write that check down as evidence: `tldrx gate template`, fill it in, then
+> `tldrx approve --as-agent`.
+>
+> Interrupt me ONLY for a new product decision, a budget-ceiling raise, or work that has to go
+> outside the declared boundary. Everything else you decide, and log.
+>
+> Never push. The final merge is mine.
+
+The whole chapter — the three switches, what "never spawns" is enforced by, the review handshake,
+the fix list, the evidence note and the four fallthroughs:
+[10 Unattended mode](docs/guide/10-unattended-mode.md).
+
 ## How much human is in the loop
 
 Every stage ends at a gate; what you choose is **who closes it**. `human` waits for `tldrx approve`.
