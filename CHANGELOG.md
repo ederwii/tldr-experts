@@ -4,6 +4,43 @@
 
 ### Added
 
+- **`economy: metered-usd | host-tokens` on `budget.yml`** — a price gets a currency, and a
+  headless spawn under a ceiling that is not money is refused before it spends. Measured
+  2026-08-30 on `260830-tenancy-identity-customers`: the Plan agent priced the run assuming
+  HOST-billed sub-agents — turns the host session pays for, which this process never meters
+  and which are ~free to the run — and the executor then enforced those figures as dollar
+  ceilings on METERED spawns. Six spawns of six died on `Reached maximum budget`, each
+  having spent real money to get there: **$9.95**, for nothing. The money model was a single
+  scalar with no unit on it and no way to say *"this number is not dollars."*
+  - **One optional key, three places**: the run level of `budget.yml`, any `phases[]` entry
+    of it (which overrides the run), and the root of `03-plan/budget.yml`, so a Plan agent
+    can say which economy it was pricing in. Resolution is phase-then-run.
+  - **`tldrx next` refuses a headless spawn on a `host-tokens` phase — exit 2, above prompt
+    assembly, before a byte is written or a cent is spent.** The message names the number,
+    the unit, and both ways out (`tldrx next --prepare`, or re-label and re-price the
+    phase). `--prepare` / `--commit` are untouched: the in-session handshake is exactly
+    where a host-billed turn belongs.
+  - **The two are never converted into one another.** There is no exchange rate here and
+    inventing one would be a guess about a price. The budget-gate hook does not deny on such
+    a phase (there is no dollar ceiling to enforce, and it says so on stderr), the auto
+    gate's money condition reads `n/a (host-tokens economy)` rather than comparing a spend
+    in dollars to a ceiling in tokens, and `tldrx run estimate` prices the stage in TOKENS
+    with no dollar figure at all.
+  - **A `03-plan/budget.yml` priced in `host-tokens` contributes no story caps.** Its
+    numbers are not dollars, so the Build executor falls back to the uniform share it used
+    before plan prices were read at all — and says so on stderr, through the advisory seam
+    that already existed for an unusable plan budget.
+  - **An unknown value is REFUSED, never defaulted to dollars** — a unit nothing here
+    understands is not one it may quietly read as money. An empty `economy:` key, and an
+    absent one, both mean `metered-usd`.
+  - **`tldrx budget raise` no longer erases what it rewrites past.** The label round-trips
+    through the same emitter the raise goes through; a raise that dropped it would turn a
+    token budget back into dollars silently, from the one command an operator reaches for
+    when a ceiling binds.
+  - **Absent label ⇒ byte-identical behaviour**, asserted: an unlabelled `budget.yml` emits
+    no `economy:` line, an unlabelled headless stage still spawns, and every existing budget
+    test passes untouched.
+
 - **`tldrx story reopen <id> --note "<why>"`** — one Build story, given another run of
   developer attempts, by a person. The third verb of the family that landed 2026-08-30 and
   the only one a HUMAN signs: the other two stop the machine reading a transport failure
@@ -61,6 +98,14 @@
   when its sub-agent finishes. With nothing parallel the view is what it always was.
 
 ### Changed
+
+- **`tldrx cost` is organised by ECONOMY, and prints no grand total.** `STAGE · ECONOMY ·
+  MEASURED · DECLARED`, one footer per economy, and a third line for attempts that reported
+  neither — no row spans both columns and nothing adds a dollar to a token. A footer that
+  printed `$1.70` under a run which had also burned 1.5M host tokens is the sentence the
+  label exists to stop. `--json` carries `economy` on every stage row and the set of
+  economies on the run. Attempt lines are unchanged, all four token counters included, and a
+  declared `--tokens` figure past a million now reads `~1.2M` rather than `~1200.0k`.
 
 - `tldrx doctor` prints where the framework's own files are: a `framework <path>` line
   naming the installed package that ships `stages/`, `workflows/` and `templates/`, and

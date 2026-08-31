@@ -4,6 +4,11 @@
 # ceiling_usd is a refusal, not a warning: a stage whose estimate exceeds what
 # remains does not start. spent_usd is rolled up from events.jsonl — never typed
 # by hand, never estimated by an agent.
+#
+# `economy:` is optional and says what these numbers are DENOMINATED IN:
+#   metered-usd  (the default) dollars a spawn may spend
+#   host-tokens  a host-session token allowance — not money, never a spawn cap
+# Leave it out and everything behaves as it always has. See spec §2.11.
 version: 1
 run: "260828-example-slug"
 ceiling_usd: 25

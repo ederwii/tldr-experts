@@ -588,7 +588,7 @@ const ENTRIES: readonly CommandHelp[] = [
       {
         name: "all",
         arg: null,
-        meaning: "Every run in the workspace, finished ones included, with the workspace total. The run argument is ignored.",
+        meaning: "Every run in the workspace, finished ones included, totalled per economy. The run argument is ignored.",
       },
       json("the cost breakdown"),
       root(),

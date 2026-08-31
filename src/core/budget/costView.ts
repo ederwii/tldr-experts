@@ -25,12 +25,20 @@
  *    into the four measured counters.
  *  - **Attempts are not merged.** A stage that failed twice cost three times,
  *    and the retry is exactly the money an operator is trying to find.
+ *  - **Two economies never add up.** Since 2026-08-30 a phase may be priced in
+ *    `host-tokens` rather than `metered-usd` (spec §2.11), and the two have no
+ *    exchange rate. So the economy is the ORGANISING AXIS here — a column on
+ *    every row and a footer of its own — and there is NO GRAND TOTAL. A footer
+ *    that printed `$1.70` under a run which also burned 1.5M host tokens is the
+ *    exact sentence the label exists to stop.
  */
 import { basename } from "node:path";
 import { EventLog } from "../events/EventLog.ts";
 import type { TldrxEvent } from "../events/Event.ts";
 import { listRunDirs } from "../../hooks/lib/workspace.ts";
 import { RunStore } from "../run/RunStore.ts";
+import { economyFor, DEFAULT_ECONOMY, type Economy, type RunBudget } from "./RunBudget.ts";
+import { loadRunBudget } from "./loadBudget.ts";
 
 export interface CostTokens {
   readonly input: number;
@@ -59,6 +67,8 @@ export interface CostAttempt {
 export interface CostStage {
   readonly phase: string;
   readonly stage: string;
+  /** What this stage's phase is priced in — `budget.yml`, phase-then-run. */
+  readonly economy: Economy;
   readonly attempts: readonly CostAttempt[];
   readonly usd: number;
   readonly tokens: CostTokens;
@@ -71,6 +81,8 @@ export interface CostStage {
 export interface CostRun {
   readonly run: string;
   readonly title: string;
+  /** Every distinct economy this run's stages were priced in, in table order. */
+  readonly economies: readonly Economy[];
   readonly usd: number;
   readonly tokens: CostTokens;
   readonly declaredTokens: number;
@@ -81,6 +93,7 @@ export interface CostRun {
 
 export interface CostProgram {
   readonly runs: readonly CostRun[];
+  readonly economies: readonly Economy[];
   readonly usd: number;
   readonly tokens: CostTokens;
   readonly declaredTokens: number;
@@ -98,6 +111,7 @@ export function buildProgramCost(root: string): CostProgram {
   }
   return {
     runs,
+    economies: distinctEconomies(runs.flatMap((run) => run.economies)),
     usd: round(runs.reduce((sum, run) => sum + run.usd, 0)),
     tokens: sumTokens(runs.map((run) => run.tokens)),
     declaredTokens: runs.reduce((sum, run) => sum + run.declaredTokens, 0),
@@ -131,6 +145,11 @@ export function buildRunCost(runDir: string): CostRun | null {
     else list.push(attempt);
   }
 
+  // Fail-soft on purpose: `cost` reports what was spent and must not become the
+  // command that refuses to print a ledger because a ceiling file has a typo in
+  // it. An unreadable budget.yml means every row falls back to the default.
+  const budget = readBudget(runDir);
+
   const stages: CostStage[] = [];
   for (const [, list] of byStage) {
     const first = list[0];
@@ -138,6 +157,7 @@ export function buildRunCost(runDir: string): CostRun | null {
     stages.push({
       phase: first.phase,
       stage: first.stage,
+      economy: economyFor(budget, first.phase),
       attempts: list,
       usd: round(list.reduce((sum, a) => sum + (a.usd ?? 0), 0)),
       tokens: sumTokens(list.map((a) => a.tokens)),
@@ -149,6 +169,7 @@ export function buildRunCost(runDir: string): CostRun | null {
   return {
     run: runId,
     title,
+    economies: distinctEconomies(stages.map((stage) => stage.economy)),
     usd: round(stages.reduce((sum, s) => sum + s.usd, 0)),
     tokens: sumTokens(stages.map((s) => s.tokens)),
     declaredTokens: stages.reduce((sum, s) => sum + s.declaredTokens, 0),
@@ -231,63 +252,138 @@ export function median(values: readonly number[]): number | null {
   return ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2;
 }
 
+/**
+ * The run ledger, with the ECONOMY as its axis.
+ *
+ * Two columns that never mix — MEASURED is dollars this process saw the CLI
+ * report, DECLARED is host-session tokens somebody typed with `--tokens` — and
+ * two footers, one per economy. There is deliberately no grand total: adding a
+ * dollar to a token needs an exchange rate nobody here has, and the last time
+ * this file implied one it read `$1.70` over a run that had spent 1.5M host
+ * tokens.
+ */
 export function renderRunCost(cost: CostRun): string {
   const lines = [
     `${cost.run}${cost.title === "" ? "" : ` · ${cost.title}`}`,
-    `$${cost.usd.toFixed(2)} over ${plural(cost.stages.length, "stage")}, `
-      + `${plural(cost.stages.reduce((n, s) => n + s.attempts.length, 0), "attempt")}`
-      + unmeteredSuffix(cost.unmeteredAttempts),
-    tokenLine(cost.tokens, cost.declaredTokens),
     "",
   ];
-  const width = Math.max(...cost.stages.map((s) => `${s.phase}/${s.stage}`.length), 5);
+  const width = Math.max(...cost.stages.map((s) => `${s.phase}/${s.stage}`.length), "STAGE".length);
+  lines.push(
+    `  ${"STAGE".padEnd(width)}  ${"ECONOMY".padEnd(ECONOMY_WIDTH)}  `
+    + `${padCell("MEASURED")}  DECLARED`,
+  );
   for (const stage of cost.stages) {
     lines.push(
-      `  ${`${stage.phase}/${stage.stage}`.padEnd(width)}  ${pad(`$${stage.usd.toFixed(2)}`)}  `
-      + `${plural(stage.attempts.length, "attempt")}${stage.unmetered ? " (some unmetered)" : ""}`,
+      `  ${`${stage.phase}/${stage.stage}`.padEnd(width)}  ${stage.economy.padEnd(ECONOMY_WIDTH)}  `
+      + `${padCell(stage.usd === 0 && stage.unmetered ? DASH : `$${stage.usd.toFixed(2)}`)}  `
+      + `${stage.declaredTokens > 0 ? `~${bigTokens(stage.declaredTokens)} tokens (host session)` : DASH}`,
     );
     // Every attempt is expanded, not only the retried ones. Before this, a stage
     // that ran once printed a dollar figure and nothing about where it went — and
     // cache read is where it goes, so hiding the columns hid the answer.
     for (const attempt of stage.attempts) {
       lines.push(
-        `  ${" ".repeat(width)}  ${pad(attempt.usd === null ? "—" : `$${attempt.usd.toFixed(2)}`)}  `
+        `  ${" ".repeat(width)}  ${" ".repeat(ECONOMY_WIDTH)}  `
+        + `${padCell(attempt.usd === null ? DASH : `$${attempt.usd.toFixed(2)}`)}  `
         + `${attempt.task}${attempt.model === null ? "" : ` · ${attempt.model}`}`
         + `  ${tokenColumns(attempt.tokens, attempt.declaredTokens ?? 0)}`,
       );
     }
   }
-  if (cost.stages.length === 0) lines.push("  no agent.result events — nothing has been spent on this run.");
+  if (cost.stages.length === 0) {
+    lines.push("  no agent.result events — nothing has been spent on this run.");
+    return lines.join("\n");
+  }
+  lines.push("", ...footers(cost.stages.flatMap((stage) => stage.attempts)));
   return lines.join("\n");
 }
 
 export function renderProgramCost(program: CostProgram): string {
   const lines = [
-    `${plural(program.runs.length, "run")} in this workspace · $${program.usd.toFixed(2)}`
-      + unmeteredSuffix(program.unmeteredAttempts),
-    tokenLine(program.tokens, program.declaredTokens),
+    `${plural(program.runs.length, "run")} in this workspace`,
     "",
   ];
-  const width = Math.max(...program.runs.map((r) => r.run.length), 3);
+  const width = Math.max(...program.runs.map((r) => r.run.length), "RUN".length);
+  lines.push(
+    `  ${"RUN".padEnd(width)}  ${"ECONOMY".padEnd(ECONOMY_WIDTH)}  ${padCell("MEASURED")}  DECLARED`,
+  );
   for (const run of program.runs) {
     lines.push(
-      `  ${run.run.padEnd(width)}  ${pad(`$${run.usd.toFixed(2)}`)}  `
-      + `${plural(run.stages.length, "stage")}${run.unmeteredAttempts > 0 ? " (some unmetered)" : ""}`,
+      `  ${run.run.padEnd(width)}  ${economyCell(run.economies).padEnd(ECONOMY_WIDTH)}  `
+      + `${padCell(run.usd === 0 && run.unmeteredAttempts > 0 ? DASH : `$${run.usd.toFixed(2)}`)}  `
+      + `${run.declaredTokens > 0 ? `~${bigTokens(run.declaredTokens)} tokens (host session)` : DASH}`,
     );
   }
-  if (program.runs.length === 0) lines.push("  no runs under tldrx-work/.");
+  if (program.runs.length === 0) {
+    lines.push("  no runs under tldrx-work/.");
+    return lines.join("\n");
+  }
+  lines.push("", ...footers(program.runs.flatMap((run) => run.stages).flatMap((stage) => stage.attempts)));
   return lines.join("\n");
 }
 
-function unmeteredSuffix(count: number): string {
-  return count === 0
-    ? ""
-    : ` · ${plural(count, "attempt")} UNMETERED (cost unknown, not counted above)`;
+/**
+ * One footer per economy, and a third line for work that reported NEITHER.
+ *
+ * The three are computed off the attempts, not off the labels: a label says what
+ * a ceiling was denominated in, and these say what actually happened. A run
+ * labelled `host-tokens` whose stages somehow reported dollars still shows those
+ * dollars, on the metered line, where they can be argued with.
+ */
+function footers(attempts: readonly CostAttempt[]): readonly string[] {
+  const metered = attempts.filter((a) => a.usd !== null);
+  const declared = attempts.filter((a) => (a.declaredTokens ?? 0) > 0);
+  const silent = attempts.filter((a) => a.usd === null && (a.declaredTokens ?? 0) <= 0);
+  const lines: string[] = [];
+  lines.push(
+    `  metered      ${metered.length === 0
+      ? "nothing this process metered"
+      : `$${round(metered.reduce((sum, a) => sum + (a.usd ?? 0), 0)).toFixed(2)} over ${plural(metered.length, "attempt")}`}`,
+  );
+  // The four counters the dollars were charged against, rolled up. Cache read is
+  // where the money actually goes — an estimate blind to it priced a real What
+  // stage at $0.33 against a $1.70 bill — so the total keeps its columns.
+  const measured = sumTokens(metered.map((a) => a.tokens));
+  if (!isZero(measured)) lines.push(`               ${tokenColumns(measured)}`);
+  if (declared.length > 0) {
+    lines.push(
+      `  host-billed  ~${bigTokens(declared.reduce((sum, a) => sum + (a.declaredTokens ?? 0), 0))} tokens `
+      + `declared over ${plural(declared.length, "attempt")} — no dollar figure; this process metered none of it`,
+    );
+  }
+  if (silent.length > 0) {
+    lines.push(
+      `  unmetered    ${plural(silent.length, "attempt")} UNMETERED — no cost figure and no declared tokens; `
+      + "cost unknown, and never counted as zero",
+    );
+  }
+  lines.push("  (no total: two economies, no exchange rate — see spec §2.11)");
+  return lines;
 }
 
-function tokenLine(t: CostTokens, declared = 0): string {
-  return `tokens: ${tokenColumns(t, declared)}`;
+/** The economy cell for a row that summarises several stages. */
+function economyCell(economies: readonly Economy[]): string {
+  if (economies.length === 0) return DEFAULT_ECONOMY;
+  return economies.length === 1 ? (economies[0] ?? DEFAULT_ECONOMY) : "mixed";
 }
+
+/** Distinct, in the fixed order the label enum declares — never sample order. */
+function distinctEconomies(all: readonly Economy[]): readonly Economy[] {
+  const seen = new Set(all);
+  return (["metered-usd", "host-tokens"] as const).filter((economy) => seen.has(economy));
+}
+
+/** budget.yml, or null when there is none or it will not load. Never throws. */
+function readBudget(runDir: string): RunBudget | null {
+  try {
+    return loadRunBudget(runDir);
+  } catch {
+    return null;
+  }
+}
+
+const ECONOMY_WIDTH = 12;
+const DASH = "—";
 
 /**
  * The four counters in one column group — the same order at every level — plus
@@ -300,10 +396,10 @@ function tokenLine(t: CostTokens, declared = 0): string {
  * host session used 342.5k of them and this process never saw the meter.
  */
 function tokenColumns(t: CostTokens, declared = 0): string {
-  const measured = `${tokens(t.input)} in · ${tokens(t.output)} out · `
-    + `${tokens(t.cacheCreation)} cache write · ${tokens(t.cacheRead)} cache read`;
+  const measured = `${bigTokens(t.input)} in · ${bigTokens(t.output)} out · `
+    + `${bigTokens(t.cacheCreation)} cache write · ${bigTokens(t.cacheRead)} cache read`;
   if (declared <= 0) return measured;
-  const label = `~${tokens(declared)} declared (host session)`;
+  const label = `~${bigTokens(declared)} declared (host session)`;
   return isZero(t) ? label : `${measured} · ${label}`;
 }
 
@@ -338,11 +434,16 @@ function round(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-function pad(text: string): string {
-  return text.padStart(9);
+function padCell(text: string): string {
+  return text.padEnd(11);
 }
 
-function tokens(count: number): string {
+/**
+ * `~342.5k`, `~1.5M`. Thousands stop being readable somewhere around a million,
+ * and a host session's declared total is routinely past it.
+ */
+function bigTokens(count: number): string {
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
   return count < 1000 ? String(count) : `${(count / 1000).toFixed(1)}k`;
 }
 

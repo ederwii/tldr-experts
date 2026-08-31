@@ -202,6 +202,20 @@ export function loadPlanPrices(
     };
   }
 
+  // A plan priced in `host-tokens` priced something that is NOT dollars, so its
+  // numbers may not become `--max-budget-usd` on a metered spawn — that exact
+  // substitution is what cost $9.95 on 2026-08-30 (design §E.1). Dropping the
+  // prices falls the executor back to the uniform dollar share it used before the
+  // Plan's prices were read at all, which is the conservative direction; what it
+  // must never do is silently spend a token figure as money.
+  const declared = (doc as { economy?: unknown }).economy;
+  if (declared === "host-tokens") {
+    return {
+      prices: empty,
+      issue: budgetIgnored("it is priced in `host-tokens`, and those numbers are not dollars a spawn may spend"),
+    };
+  }
+
   const perPhase = (doc as { per_phase_usd?: Record<string, unknown> }).per_phase_usd ?? {};
   const prices = new Map<string, number>();
   const skipped: string[] = [];
