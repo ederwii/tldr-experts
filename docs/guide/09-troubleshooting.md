@@ -137,6 +137,18 @@ cent is spent, and it names the biggest sections and the key that shrinks each: 
 `prompt_max_bytes` deliberately. `tldrx next --prepare` prints the same ledger without
 spawning.
 
+**Exit 2, "refusing to dispatch <phase>/<stage> — precondition `<id>` is red".** The stage
+declared a `preconditions:` entry and the command came back with the wrong exit code. Nothing
+was written and nothing was spawned: fix the environment (start the daemon, install the SDK)
+and run the same command again. `--prepare` is refused the same way — a bundle written for a
+host whose Docker is down is the same wasted attempt as a spawn into one. `--commit` never
+re-checks: it settles a turn that already happened.
+
+**A `preconditions:` command is refused when the stage LOADS.** Same rule as `dod` below: only
+a command **byte-equal** to one in `.tldrx/workspace.yml` runs, argv-split with no shell. The
+refusal is at load rather than at run time, so a stage naming an undeclared command cannot open
+a run at all.
+
 **A declared input was truncated.** `inputs_max_bytes` ran out. The message names the file and
 its size. Either raise the key or split the seed with `tldrx seed triage`.
 

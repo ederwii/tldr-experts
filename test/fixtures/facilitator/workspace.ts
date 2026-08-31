@@ -26,6 +26,12 @@ export interface StageOptions {
   readonly outputs?: readonly { readonly path: string; readonly sections?: readonly string[] }[];
   /** Raw YAML for `checks:`, e.g. `[{id: cmd, on: post-write, repo: api, command: "true"}]`. */
   readonly checks?: string;
+  /**
+   * Raw YAML for `preconditions:`, e.g. `[{id: docker, repo: api, command: "true"}]`.
+   * Omitted ⇒ the key is absent from stage.yml entirely, which is the shape every
+   * shipped stage has and the one the byte-identical tests are asserted against.
+   */
+  readonly preconditions?: string;
   readonly skipIf?: string;
   readonly dryRunAllowed?: boolean;
   readonly timeoutS?: number;
@@ -205,6 +211,7 @@ function stageYaml(stage: StageOptions): string {
   lines.push(`questions: {path: "${stage.phase}/questions.md", max: 8}`);
   lines.push(`gate: {type: ${stage.gate ?? "auto"}, approvers: 1}`);
   lines.push(`checks: ${stage.checks ?? "[]"}`);
+  if (stage.preconditions !== undefined) lines.push(`preconditions: ${stage.preconditions}`);
   lines.push("");
   return lines.join("\n");
 }

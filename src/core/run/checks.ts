@@ -22,7 +22,8 @@ import { validateRunBudget } from "../budget/RunBudget.ts";
 import { loadWorkspace, repoPath, toSrcContext } from "../../hooks/lib/workspace.ts";
 import { describePlanIssues, validatePlan } from "../plan/validatePlan.ts";
 import { validateRunFile } from "./RunFile.ts";
-import type { PlannedCheck, PlannedStage } from "./workflowPreset.ts";
+import { allowlistIssue } from "../schemas/commandAllowlist.ts";
+import type { PlannedCheck, PlannedPrecondition, PlannedStage } from "./workflowPreset.ts";
 
 export const WRITE_TIME_ONLY: readonly string[] = ["no-reask", "budget-gate", "dod"];
 
@@ -176,34 +177,86 @@ async function checkCommand(check: PlannedCheck, ctx: CheckContext): Promise<Che
   if (check.command === null || check.repo === null) {
     return { id: "cmd", status: "failed", detail: "a `cmd` check needs both `repo` and `command`" };
   }
-  const workspace = loadWorkspace(ctx.root);
-  if (!workspace.commands.has(check.command)) {
-    return {
-      id: "cmd",
-      status: "failed",
-      detail: `\`${check.command}\` is not one of .tldrx/workspace.yml's commands — a stage may not invent one`,
-    };
-  }
-  const cwd = repoPath(workspace, check.repo);
-  if (cwd === null) {
-    return { id: "cmd", status: "failed", detail: `unknown repo \`${check.repo}\` (not in workspace.yml)` };
-  }
-  const argv = check.command.split(/\s+/).filter((part) => part !== "");
-  const head = argv[0];
-  if (head === undefined) return { id: "cmd", status: "failed", detail: "empty command" };
+  const ran = await runAllowlisted(check.command, check.repo, check.expect_exit, ctx);
+  return { id: "cmd", status: ran.ok ? "passed" : "failed", detail: ran.detail };
+}
 
-  const outcome = await runtime.spawn(head, argv.slice(1), { cwd, timeoutMs: ctx.stage.timeout_s * 1000 });
-  if (outcome.timedOut) {
-    return { id: "cmd", status: "failed", detail: `\`${check.command}\` in ${check.repo} timed out after ${ctx.stage.timeout_s}s` };
+/** What one allowlisted command did: the two things a caller reports, plus how long. */
+export interface CommandRun {
+  readonly ok: boolean;
+  /** `null` when the command timed out or was never allowed to start. */
+  readonly exitCode: number | null;
+  readonly ms: number;
+  readonly detail: string;
+}
+
+/**
+ * Run ONE `workspace.yml` command in ONE repo and say what it did.
+ *
+ * Both callers that run a command out of a stage file land here — the `cmd` check
+ * above, which runs AFTER the stage, and `runPrecondition` below, which runs
+ * before it. They share this body on purpose: the allowlist comparison, the
+ * argv-split-never-a-shell rule and the timeout are the safety properties, and a
+ * second copy of them is a second place for one of the three to go missing.
+ */
+async function runAllowlisted(
+  command: string,
+  repo: string,
+  expectExit: number,
+  ctx: CheckContext,
+): Promise<CommandRun> {
+  const workspace = loadWorkspace(ctx.root);
+  const refusal = allowlistIssue(command, workspace.commands, "stage");
+  if (refusal !== null) return { ok: false, exitCode: null, ms: 0, detail: refusal };
+  const cwd = repoPath(workspace, repo);
+  if (cwd === null) {
+    return { ok: false, exitCode: null, ms: 0, detail: `unknown repo \`${repo}\` (not in workspace.yml)` };
   }
-  if (outcome.exitCode !== check.expect_exit) {
+  const argv = command.split(/\s+/).filter((part) => part !== "");
+  const head = argv[0];
+  if (head === undefined) return { ok: false, exitCode: null, ms: 0, detail: "empty command" };
+
+  const started = Date.now();
+  const outcome = await runtime.spawn(head, argv.slice(1), { cwd, timeoutMs: ctx.stage.timeout_s * 1000 });
+  const ms = Date.now() - started;
+  if (outcome.timedOut) {
+    return { ok: false, exitCode: null, ms, detail: `\`${command}\` in ${repo} timed out after ${ctx.stage.timeout_s}s` };
+  }
+  if (outcome.exitCode !== expectExit) {
     return {
-      id: "cmd",
-      status: "failed",
-      detail: `\`${check.command}\` in ${check.repo} exited ${outcome.exitCode} (expected ${check.expect_exit}) — ${lastLine(outcome.stdout, outcome.stderr)}`,
+      ok: false,
+      exitCode: outcome.exitCode,
+      ms,
+      detail: `\`${command}\` in ${repo} exited ${outcome.exitCode} (expected ${expectExit}) — ${lastLine(outcome.stdout, outcome.stderr)}`,
     };
   }
-  return { id: "cmd", status: "passed", detail: `\`${check.command}\` in ${check.repo} exited ${outcome.exitCode}` };
+  return { ok: true, exitCode: outcome.exitCode, ms, detail: `\`${command}\` in ${repo} exited ${outcome.exitCode}` };
+}
+
+/** One precondition's result — `CommandRun` plus the id and command that produced it. */
+export interface PreconditionOutcome extends CommandRun {
+  readonly id: string;
+  readonly repo: string;
+  readonly command: string;
+}
+
+/**
+ * Design §F.1: an operational precondition, run BEFORE a bundle is written and
+ * before anything is spawned.
+ *
+ * It is the `cmd` check's own body (`runAllowlisted`) pointed at the other end of
+ * the stage. The reason it is not literally `runCheck({id: "cmd", …})` is that
+ * `runCheck` dispatches on `check.id` and a precondition's id is its NAME
+ * (`docker`, `sdk`) — the thing the operator line and the exit-2 message have to
+ * say back. The command-running half, which is the half with the safety
+ * properties in it, is shared exactly.
+ */
+export async function runPrecondition(
+  precondition: PlannedPrecondition,
+  ctx: CheckContext,
+): Promise<PreconditionOutcome> {
+  const ran = await runAllowlisted(precondition.command, precondition.repo, precondition.expect_exit, ctx);
+  return { ...ran, id: precondition.id, repo: precondition.repo, command: precondition.command };
 }
 
 function lastLine(stdout: string, stderr: string, max = 160): string {

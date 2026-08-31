@@ -211,6 +211,7 @@ questions: {path: "02-how/questions.md", max: 8}
 gate: {type: approve, approvers: 1}
 checks: [{id: claim-sources, on: post-write}, {id: schema, on: post-write},
          {id: cmd, on: post-write, repo: api, command: "dotnet build", expect_exit: 0}]
+preconditions: [{id: docker, repo: api, command: "docker compose ps", expect_exit: 0}]
 ```
 
 | Field | Type | Req | Meaning |
@@ -242,11 +243,32 @@ for files whose citations §2.6 would refuse to count.
 | `gate.type` / `.approvers` | `approve\|checks\|auto` / int ≥1 | y / n (1) | Human stop / checks only / no stop |
 | `checks[].id` / `.on` | `claim-sources\|schema\|cmd\|dod` / `pre-write\|post-write` | y | Built-in check id and when it runs |
 | `checks[].repo` / `.command` / `.expect_exit` | slug / str / int | y for `cmd` | Command must equal a `workspace.yml` command verbatim |
+| `preconditions[].id` / `.repo` / `.command` / `.expect_exit` | slug / slug / str / int | n (≤10) | An OPERATIONAL fact that must hold **before** the stage is dispatched (§5). Same verbatim-allowlist rule as a `cmd` check; **refused at load** if the command is not one `workspace.yml` declares |
 
-**Validation.** `id` = folder name; `budget_usd` ≤ the phase ceiling; `cmd` commands must match `workspace.yml` (no
-arbitrary shell from a stage file); expert folders are checked by `doctor`, not the write hook; ≤20 inputs,
-≤10 outputs, ≤10 checks. The 20-input cap counts seed documents too — `run new --seed` stops declaring at 20, and the
+**Validation.** `id` = folder name; `budget_usd` ≤ the phase ceiling; `cmd` **and `preconditions`** commands must match
+`workspace.yml` (no arbitrary shell from a stage file) — one comparison, one function, shared with a story's
+`` ```dod `` block; expert folders are checked by `doctor`, not the write hook; ≤20 inputs,
+≤10 outputs, ≤10 checks, ≤10 preconditions. The 20-input cap counts seed documents too — `run new --seed` stops declaring at 20, and the
 facilitator stops inlining at 20.
+
+**`preconditions:` — the check that runs before the money does.** `checks:` and `preconditions:` are the same shape
+under the same allowlist rule, and differ only in WHEN. A check runs after the stage produced something and judges the
+output; a precondition runs before a byte is written or a cent is spent and judges the ENVIRONMENT. The grounding is
+measured, 2026-08-30: a host hand-checked the Docker daemon and the .NET SDK before dispatching a Build story, because
+a story has two attempts, an agent cannot debug its way out of a daemon that is down, and the whole turn would have
+been spent proving it. That check took about a second.
+
+A red precondition is **refused**, not failed: exit `2`, the id and the command's own exit code named, the stage left
+exactly as it was (`ready`), nothing written and nothing spawned. The list stops at the first red one — the ones after
+it never run. They fire on `--prepare` no less than headless (a bundle written for a host whose Docker is down is the
+same wasted attempt) and never on `--commit`, which settles a turn that already happened. Each run appends one event —
+`check.passed` / `check.failed` with `kind: precondition`, carrying the command, its exit code and its duration — and
+prints one operator line: `· precondition: docker compose ps → exit 0 (1.2s)`. A stage declaring none emits neither.
+
+The allowlist half is enforced **at load**: a stage whose precondition names a command `.tldrx/workspace.yml` does not
+declare never becomes a runnable stage, so `tldrx run new` over it refuses too. `[assumption]` — preconditions are per
+STAGE, not per story. A per-story precondition (one story needs Postgres, another does not) is a real want and is
+deliberately not designed here; it can be added later as story front matter without changing this shape.
 
 **`effort` — the cost lever `budget_usd` is not.** `--max-budget-usd` STOPS a sub-agent after the turn it is already in;
 it cannot make a turn cheaper. Measured 2026-08-29: a 597 s training turn spent **$5.15 against a $1.50 ceiling** and
@@ -1558,6 +1580,10 @@ next(run, dry_run):
   sy = load_validate(.tldrx/stages/<st.id>/stage.yml)
   if sy.skip_if holds: append(stage.skipped); advance_cursor(); return next(run, dry_run)
   if b.economy(st.phase) == host-tokens and mode == headless: exit 2   # §2.11: that ceiling is not dollars
+  for p in sy.preconditions:                       # §2.3; skipped entirely on --commit
+     res = sh(argv(p.command), cwd=repo(p.repo))   # allowlisted verbatim, never a shell
+     append(check.passed|check.failed, kind=precondition)
+     if res.exit != p.expect_exit: exit 2          # REFUSED: nothing written, nothing spawned, st.status unchanged
   if b.economy(st.phase) == host-tokens: append(budget.warned once); skip the money gate
   elif b.phase(st).remaining < sy.budget_usd and b.on_exceed == block: append(budget.blocked); exit 2
   if any(!exists(i) for i in sy.inputs.required): exit 1

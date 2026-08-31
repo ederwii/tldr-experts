@@ -22,6 +22,7 @@ import {
   requirePattern, requireStringList, requireText, requireVersion1, type PlanStatus,
 } from "./planCommon.ts";
 import { parseFrontMatter } from "./frontMatter.ts";
+import { allowlistIssue } from "./commandAllowlist.ts";
 
 export interface Story {
   readonly version: number;
@@ -163,28 +164,19 @@ export function validateStoryDod(
     issues.push({ path: base, message: "the ```dod block is empty — done means proven, not asserted" });
     return issues;
   }
-  if (allowed.size === 0) {
-    dod.commands.forEach((command, i) => {
-      issues.push({ path: `${base}[${i}]`, message: noAllowlistMessage(command) });
-    });
-    return issues;
-  }
   dod.commands.forEach((command, i) => {
-    if (allowed.has(command)) return;
-    issues.push({
-      path: `${base}[${i}]`,
-      message: `\`${command}\` is not one of .tldrx/workspace.yml's commands — a story may not invent one`,
-    });
+    const message = allowlistIssue(command, allowed, "story");
+    if (message !== null) issues.push({ path: `${base}[${i}]`, message });
   });
   return issues;
 }
 
-/** Shared by the schema and the hook, so the two never word the refusal differently. */
-export function noAllowlistMessage(command: string): string {
-  return `\`${command}\` cannot be allowed: .tldrx/workspace.yml declares no commands, so there is `
-    + "nothing to check it against. Add the command under the repo's `commands:` — a dod block is run "
-    + "for real, as you, and an empty allowlist is not a permit.";
-}
+/**
+ * Re-exported so the hook and the schema keep importing it from one place. The
+ * rule itself moved to `commandAllowlist.ts` when a stage's `preconditions:`
+ * became the third data file that names a command to run (design §F.1).
+ */
+export { noAllowlistMessage } from "./commandAllowlist.ts";
 
 export interface StoryFile {
   readonly story: Story | null;

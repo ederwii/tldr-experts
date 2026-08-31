@@ -41,6 +41,33 @@ export interface StageGate {
   readonly type: GateType;
 }
 
+/**
+ * `preconditions:` — an OPERATIONAL fact that must hold before the stage is worth
+ * dispatching at all (design §F.1).
+ *
+ * The grounding is measured, not hypothetical: on 2026-08-30 a host hand-checked
+ * the Docker daemon and the .NET SDK before dispatching a Build story, precisely
+ * because a dead daemon would have burned one of that story's two attempts on an
+ * environment problem no amount of re-prompting fixes.
+ *
+ * It is the same shape and the SAME allowlist rule as a `cmd` check — only a
+ * command byte-equal to one `.tldrx/workspace.yml` declares may run, argv-split,
+ * never through a shell (`schemas/commandAllowlist.ts`). That constraint is the
+ * whole reason this is safe to put in a stage file. The difference from `checks:`
+ * is only WHEN: a check runs after the stage produced something, a precondition
+ * runs before a byte is written or a cent is spent.
+ */
+export interface StagePrecondition {
+  /** The operator-facing name — `docker`, `sdk`. What the refusal says back. */
+  readonly id: string;
+  /** A `workspace.yml` repo name; the command runs in its directory. */
+  readonly repo: string;
+  /** Byte-equal to a `workspace.yml` command. */
+  readonly command: string;
+  /** Default 0. */
+  readonly expect_exit?: number;
+}
+
 export interface Stage {
   readonly name: string;
   readonly title: string;
@@ -54,7 +81,14 @@ export interface Stage {
   readonly budget_usd: number;
   readonly gate: StageGate;
   readonly checks?: readonly string[];
+  readonly preconditions?: readonly StagePrecondition[];
 }
+
+/**
+ * Spec §2.3 caps `checks:` at 10; a precondition is a command run as the user
+ * before every dispatch, so it gets the same ceiling for the same reason.
+ */
+export const MAX_PRECONDITIONS = 10;
 
 export function validateStage(input: unknown): ValidationResult {
   const issues: ValidationIssue[] = [];
@@ -84,5 +118,32 @@ export function validateStage(input: unknown): ValidationResult {
     requireKeys(gate, ["type"], "gate", issues);
     requireEnum(gate.type, GATE_TYPES, "gate.type", issues);
   }
+  validatePreconditions(doc.preconditions, issues);
   return result(issues);
+}
+
+/**
+ * SHAPE only. The allowlist half of the rule — "byte-equal to a `workspace.yml`
+ * command" — cannot be checked here: `validateStage` is handed a parsed document
+ * and has no workspace to compare against. It is enforced where the workspace IS
+ * in hand, at preset load (`run/workflowPreset.ts`), and a stage whose
+ * precondition names an undeclared command never loads.
+ */
+function validatePreconditions(value: unknown, issues: ValidationIssue[]): void {
+  if (value === undefined || value === null) return;
+  if (!requireArray(value, "preconditions", issues)) return;
+  const list = value as readonly unknown[];
+  if (list.length > MAX_PRECONDITIONS) {
+    issues.push({ path: "preconditions", message: `${list.length} entries exceeds the cap of ${MAX_PRECONDITIONS}` });
+  }
+  list.forEach((entry, i) => {
+    const base = `preconditions[${i}]`;
+    if (!requireRecord(entry, base, issues)) return;
+    const row = entry as Record<string, unknown>;
+    requireKeys(row, ["id", "repo", "command"], base, issues);
+    requireString(row.id, `${base}.id`, issues);
+    requireString(row.repo, `${base}.repo`, issues);
+    requireString(row.command, `${base}.command`, issues);
+    if (row.expect_exit !== undefined) requireNumber(row.expect_exit, `${base}.expect_exit`, issues);
+  });
 }
