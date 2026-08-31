@@ -94,6 +94,17 @@ export interface ExecutorContext {
    */
   readonly discardPending: boolean;
   /**
+   * `run.yml`'s `attended_by: host` (spec §2.2) — a host session is driving this
+   * run and the framework does not spawn on it.
+   *
+   * `runNext` has already refused `mode: "headless"` by the time an executor is
+   * called, so this is the second of three layers, not the first: it exists
+   * because an executor is the part of `next` a phase may REPLACE, and a fork's
+   * executor that never heard of attended mode would otherwise spawn happily.
+   * The third is `spawnAgent`'s own guard, which cannot be bypassed at all.
+   */
+  readonly attendedByHost: boolean;
+  /**
    * `min(stage budget × share, per_agent_max_usd, --max-usd)`, to the cent.
    * `agentCap(1)` is `maxBudgetUsd`; an executor that splits the stage between N
    * sub-agents asks for `agentCap(1 / N)` rather than dividing `maxBudgetUsd`,

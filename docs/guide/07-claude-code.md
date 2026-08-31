@@ -94,6 +94,40 @@ headline that counts advice as work makes a workspace that is merely new look br
 needs to watch, `tldrx run auto <id>` is the headless loop — but it spawns its own sessions,
 so it belongs in a terminal, not inside the session.
 
+## Attended mode — a run this session is driving
+
+`--prepare`/`--commit` is a decision per invocation. **`attended_by: host`** is the same
+decision made once, about the run:
+
+```
+tldrx run new checkout-v2 --scope feature --attended-by host   # from the start
+tldrx run attend host                                          # or later, on an open run
+tldrx run attend --none                                        # and back again
+```
+
+It is worth setting the moment a host session starts doing the turns, because the failure it
+prevents is expensive and silent. Measured 2026-08-30: a bare `tldrx next` on a Build stage
+ran the whole remaining plan — every wave, every story — as paid spawns when the host wanted
+one re-review, and six of six of those spawns then died on `Reached maximum budget` at caps a
+Plan agent had written assuming host-billed sub-agents. $9.95, nothing delivered.
+
+On an attended run:
+
+- **`tldrx next` with no `--prepare`/`--commit` exits `4`** and names the exact command the
+  stage is waiting for. Nothing is billed, nothing is written. `4` and not `2` because the run
+  is not refusing the work — it is waiting on you, the same shape as waiting at a gate.
+- **`--dry-run` is refused with it.** `--dry-run` is headless: it spawns a real sub-agent and
+  the turn is billed, and only the FILES are reverted afterwards. `--prepare` is the flag that
+  spawns nothing.
+- **`tldrx run auto` is refused** at exit `1`, before it writes anything.
+- **Nothing can reach a spawn.** Each executor exposes prepare/commit only, and `spawnAgent`
+  itself throws on an attended run. Three layers, because "nothing spawns" is a promise about
+  money and one `if` is not a promise.
+
+`tldrx run status` prints `attended: host` and the status line carries an `att` marker, so a
+session that has forgotten which mode it is in can see it without asking. Everything else is
+unchanged — the bundle, `result.json`, `--cost-usd`/`--tokens`, the lock, the cursor, the gates.
+
 ## The hooks
 
 | Hook | Event | What it does |
@@ -137,6 +171,11 @@ With a live run it prints:
 ```
 [tldrx] <run> · <PHASE> [▓▓░░░] <done>/<total> > <stage> — <expert> | <model> ctx:<n>% $<session cost>/$<ceiling>
 ```
+
+Three markers can appear after the stage count, and only when they are true: **`att`** (the
+run is `attended_by: host` — the framework will not spawn on it), **`auto:N`** (N gates the
+facilitator signed rather than a person) and **`stale:N`** (stages whose approval was revoked).
+With none of them the line is exactly what it always was.
 
 The run half comes from `RunStore`, the model/context/cost half from the documented
 `statusLine` payload. It falls back to `[tldrx] <model> ctx:<n>% $<cost>` when there is no

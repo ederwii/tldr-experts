@@ -230,6 +230,9 @@ const SINGLE_RUN_KEYS = [
   // Wave M: how many turns nobody costed, so `budget.spent_usd` is not read as a
   // total when it is a lower bound. Appended for the same reason.
   "unmetered_tasks",
+  // `attended_by` (§2.2): null on an ordinary run, `host` when a host session is
+  // driving it. Appended, not inserted, for the third time and the same reason.
+  "attended_by",
 ];
 
 describe("tldrx run status with several runs open", () => {

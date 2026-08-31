@@ -143,7 +143,7 @@ describe("<command> --help", () => {
 
   test("subcommands are listed when the command takes them", async () => {
     const run = await tldrxIn(foreign, "run", "--help");
-    expect(run.stdout).toContain("Subcommands: new, status");
+    expect(run.stdout).toContain("Subcommands: new, attend, status");
   });
 });
 

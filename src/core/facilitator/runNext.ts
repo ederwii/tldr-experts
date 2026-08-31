@@ -17,7 +17,7 @@ import { join, relative } from "node:path";
 import { PROJECT_WORK_DIR } from "../paths.ts";
 import { ambiguousRunLines } from "../run/openRuns.ts";
 import { RunStore } from "../run/RunStore.ts";
-import { isTerminal, type GateType, type RunFile, type RunPhase, type RunStage, type RunTask } from "../run/RunFile.ts";
+import { isAttendedByHost, isTerminal, type GateType, type RunFile, type RunPhase, type RunStage, type RunTask } from "../run/RunFile.ts";
 import { runChecks } from "../run/checks.ts";
 import { approve } from "../run/gates.ts";
 import { AUTO_GATE_ACTOR, evaluateAutoGate, unreadableHeadings } from "../run/autoGate.ts";
@@ -42,6 +42,7 @@ import {
 } from "../experts/expertBundle.ts";
 import { nearbyPathsFor } from "../experts/domainRank.ts";
 import { spawnAgent } from "./spawnAgent.ts";
+import { withAttendedGuard } from "./attended.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
 import { validateOutputs, describeProblems } from "./validateOutputs.ts";
 import { executorFor, type ExecutorContext, type ExecutorOutcome, type StageExecutor } from "./executors/index.ts";
@@ -163,7 +164,13 @@ export async function runNext(options: NextOptions): Promise<NextOutcome> {
     if (lock.stale) notes.push(...demoteStaleRunning(store, lock.holder?.pid ?? 0));
     const orphaned = preparedRefusal(store, options, notes);
     if (orphaned !== null) return orphaned;
-    return await advance(store, options, notes);
+    // Armed for the whole of `advance`, disarmed however it leaves. The refusals
+    // below are the ones an operator reads; this is the wall behind them, and it
+    // covers the Build fan-out's spawns too because they happen inside this call.
+    return await withAttendedGuard(
+      isAttendedByHost(store.run) ? store.runId : null,
+      () => advance(store, options, notes),
+    );
   } finally {
     forget();
     releaseLock(store.runDir);
@@ -339,6 +346,19 @@ async function runStage(
   spec: StageSpec,
   notes: string[],
 ): Promise<NextOutcome> {
+  // `attended_by: host` (spec §2.2): the run is being driven by a host session,
+  // so the framework does not spawn on it. First thing in `runStage`, which is
+  // before the budget gate, before an input is read, before a prompt is
+  // assembled and before an executor is chosen — nothing is billed and nothing
+  // is written for this stage.
+  //
+  // Deliberately here rather than at the top of `runNext`: `advance` walks past
+  // terminal stages and evaluates `skip_if` first, and those are free. Refusing
+  // ahead of them would name a stage the run is no longer on, which is the one
+  // thing this message exists to get right.
+  const attended = attendedRefusal(store, options, phaseId, stageId, notes);
+  if (attended !== null) return attended;
+
   if (options.dryRun && !spec.dryRunAllowed) {
     return out(EXIT_USAGE, [...notes, `stage '${stageId}' sets dry_run_allowed: false — refusing --dry-run`]);
   }
@@ -561,6 +581,42 @@ function bundleSummary(set: ExpertBundleSet): PendingStage["experts"] {
  * budget.yml's phase ceilings are scaled the same way. Comparing a scaled ceiling
  * against an unscaled stage file would refuse work it can afford.
  */
+/**
+ * Exit `4` on a bare `tldrx next` over a run marked `attended_by: host`.
+ *
+ * Four, not two: the run is not refusing the work, it is waiting on the host to
+ * do a turn — the same shape as waiting at a gate, and the code `run auto`
+ * already stops cleanly on. The message names the exact command for where the
+ * stage actually is, because "use --prepare" on a stage whose bundle is already
+ * out is the wrong half of the handshake.
+ *
+ * `--dry-run` is refused with everything else: it is `mode: "headless"`, it
+ * spawns a real sub-agent and bills for it, and only reverts the FILES afterwards.
+ */
+function attendedRefusal(
+  store: RunStore,
+  options: NextOptions,
+  phaseId: string,
+  stageId: string,
+  notes: string[],
+): NextOutcome | null {
+  if (!isAttendedByHost(store.run) || options.mode !== "headless") return null;
+  const running = requireStage(store, phaseId, stageId).status === "running";
+  const half = running ? "--commit" : "--prepare";
+  const waiting = running
+    ? "has a bundle out and is waiting for its result"
+    : "is waiting on a host turn";
+  return out(EXIT_AWAITING_HUMAN, [
+    ...notes,
+    `${store.runId} is attended_by: host — the framework does not spawn on this run.`,
+    `  ${phaseId}/${stageId} ${waiting}: tldrx next ${half} ${store.runId}`,
+    ...(options.dryRun
+      ? ["  (--dry-run is headless too: it spawns a real sub-agent and only reverts the files afterwards)"]
+      : []),
+    `  (to hand the whole run back to the framework: tldrx run attend --none ${store.runId})`,
+  ]);
+}
+
 function budgetRefusal(
   store: RunStore,
   options: NextOptions,
@@ -678,6 +734,7 @@ async function runExecutor(
     // `stage.yml`'s. Absent everywhere it is 1 — the sequential path, unchanged.
     parallel: options.parallel ?? spec.parallel ?? 1,
     discardPending: options.discardPending === true,
+    attendedByHost: isAttendedByHost(store.run),
     agentCap: (share = 1) => agentCap(options, store, stage, share),
     emit: (type, payload, costUsd = 0, actor = null) => {
       store.append(event(options, store.runId, stageId, type, payload, costUsd, actor));

@@ -23,6 +23,7 @@
  * size nor the right shape for that.
  */
 import { runtime } from "../runtime/index.ts";
+import { assertNoAttendedSpawn } from "./attended.ts";
 import { emitAgentEvent } from "../ui/bus.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
 import { AgentStream, resolveResultDoc, type AgentEvent } from "./agentEvents.ts";
@@ -130,6 +131,11 @@ export function buildClaudeArgs(request: AgentRequest): readonly string[] {
 }
 
 export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
+  // Before the parser, before the argv, before a byte of prompt goes anywhere: a
+  // run marked `attended_by: host` never spawns, and the one place that cannot be
+  // forgotten is the spawn itself (`facilitator/attended.ts`). No-op on every
+  // ordinary run, where the guard is not armed.
+  assertNoAttendedSpawn("spawnAgent");
   // The parser is attached ALWAYS, not only when someone is watching: a code path
   // that runs solely with the UI on is a code path nothing tests. Publishing into
   // an empty bus costs one null check per event.

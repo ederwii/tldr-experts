@@ -43,7 +43,7 @@ import { emitBudgetYaml, emitRunYaml } from "./emitRunYaml.ts";
 import { GatePolicyError, parseGatesFlag, resolveGatesPolicy, type GatesPolicy } from "./gatePolicy.ts";
 import { loadWorkflowPreset, MAX_STAGE_INPUTS, type PlannedStage, type WorkflowPreset } from "./workflowPreset.ts";
 import {
-  deriveRunStatus, validateRunFile, type RunFile, type RunPhase, type RunStage, type RunTriage,
+  deriveRunStatus, validateRunFile, type AttendedBy, type RunFile, type RunPhase, type RunStage, type RunTriage,
 } from "./RunFile.ts";
 
 export class NewRunError extends Error {}
@@ -81,6 +81,14 @@ export interface NewRunOptions {
    * statement, not a patch.
    */
   readonly gates?: string;
+  /**
+   * `--attended-by host` — open the run with a host session driving it (§2.2).
+   *
+   * A property of the RUN, frozen here the way `gates_policy` is, because
+   * "nobody spawns on this one" is a statement about the piece of work and not
+   * about one invocation. `tldrx run attend` flips it afterwards.
+   */
+  readonly attendedBy?: AttendedBy;
   readonly actor: string;
   readonly now: Date;
 }
@@ -197,6 +205,10 @@ function createRunLocked(options: NewRunOptions): NewRunOutcome {
       per_agent_max_usd: budgetPlan.perAgentMax,
     },
     ...(options.triage === undefined ? {} : { triage: options.triage }),
+    // Spread rather than `attended_by: options.attendedBy` so an ordinary run
+    // carries no such key at all and its run.yml is byte-identical to the one
+    // `run new` wrote before this existed.
+    ...(options.attendedBy === undefined ? {} : { attended_by: options.attendedBy }),
     gates_policy: gatesPolicy,
     phases,
   };
@@ -250,6 +262,9 @@ function createRunLocked(options: NewRunOptions): NewRunOutcome {
       seeds: seedPaths,
       seed_documents: seedSet === null ? 0 : seedSet.documents.length,
       human_gates: stageIds.filter((id) => gatesPolicy[id] === "human"),
+      // Same rule: absent on an ordinary run, so `run.created`'s payload is
+      // byte-identical to what it was.
+      ...(options.attendedBy === undefined ? {} : { attended_by: options.attendedBy }),
     }));
 
     write(temp, "budget.yml", emitBudgetYaml(budget), written);

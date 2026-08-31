@@ -180,7 +180,35 @@ interface StoryHalf {
   readonly before: PlanStatus;
 }
 
+/**
+ * `attended_by: host` and a headless invocation: refuse, spawn nothing.
+ *
+ * `refused: true` rather than a failure — the stage goes back to `ready` and the
+ * operator fixes it by using the other half of the handshake (spec §3 exit 2).
+ * `runNext` refuses this before an executor is reached, so reaching here means a
+ * caller that is not `runNext`; the outcome is still the right one.
+ */
+function attendedRefusal(ctx: ExecutorContext): ExecutorOutcome {
+  return {
+    ok: false,
+    awaiting: false,
+    tasks: [],
+    costUsd: 0,
+    outputs: [],
+    lines: [
+      `${ctx.runId} is attended_by: host — ${ctx.phaseId}/${ctx.stageId} does not run headless.`,
+      `  hand it a turn instead: tldrx next --prepare ${ctx.runId}`,
+    ],
+    error: null,
+    refused: true,
+  };
+}
+
 export async function buildExecutor(ctx: ExecutorContext): Promise<ExecutorOutcome> {
+  // Before the workspace is even loaded: a host-driven run never runs the whole
+  // remaining plan as paid spawns, which is exactly what one bare `tldrx next`
+  // on a Build stage did (measured 2026-08-30).
+  if (ctx.attendedByHost && ctx.mode === "headless") return attendedRefusal(ctx);
   const workspace = loadWorkspace(ctx.root);
   let plan: BuildPlan;
   const opening: string[] = [];

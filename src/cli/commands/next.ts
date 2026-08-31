@@ -62,8 +62,11 @@ export const nextCommand: Command = {
       if (tokens !== undefined && mode !== "commit") {
         throw new UsageError("--tokens only applies to `tldrx next --commit`");
       }
-      // `--prepare`, `--commit` and `--dry-run` spawn nothing, so there is
-      // nothing to watch: the handle they get is inert.
+      // `--prepare` and `--commit` spawn nothing, so there is nothing to watch:
+      // the handle they get is inert. `--dry-run` DOES spawn — it runs the stage
+      // and reverts the non-handoff outputs afterwards (measured 2026-08-30: one
+      // `agent.spawned`, one `agent.result`, the cost on the ledger) — but its
+      // view is deliberately quiet, because the run is a rehearsal.
       const ui = startUi(args, { root, spawns: mode === "headless" && !dryRun });
       let outcome;
       try {

@@ -124,6 +124,7 @@ status: awaiting_gate
 cursor: {phase: 02-how, stage: contracts, task: null}
 budget: {ceiling_usd: 25.0, spent_usd: 3.75, per_agent_max_usd: 3.0}
 gates_policy: {intent: human, contracts: auto, plan: human, build: auto, watch: human}
+# attended_by: host      # optional; absent means the framework may spawn
 phases:
   - id: 01-what
     status: done
@@ -164,6 +165,7 @@ stage at `cursor`, or `done` when every phase is terminal.
 | `stages[].budget_usd` / `.cost_usd` / `.started_at` / `.ended_at` | number ≥0 / RFC3339\|null | y | Ceiling, actual from `total_cost_usd`, wall clock |
 | `stages[].inputs` / `.outputs` | rel path[] | y | Declared inputs; files produced |
 | `stages[].gate` | {type, status, by, at, note} | y | `type` `approve\|checks\|auto`; `status` `pending\|approved\|rejected\|n-a`; `by` is `auto` on a gate the facilitator closed |
+| `attended_by` | `host` | n | **Additive.** Who DRIVES the run. Absent (the default, and every run.yml written before this key) ⇒ the framework may spawn. `host` ⇒ a host session is doing the turns: `tldrx next` refuses the headless mode with exit 4 naming the `--prepare` command, every executor exposes prepare/commit only, `run auto` is refused at the CLI (exit 1), and no run path can reach `spawnAgent`. Set at creation with `run new --attended-by host` or flipped later with `run attend`; emitted only when set |
 | `gates_policy` | {stage: `human\|auto`} | n | **Who** closes each gate. Resolved from §2.4 `gates:` and `run new --gates` at creation and frozen here, so the run keeps the policy it was opened with. Absent, or a stage it does not name ⇒ `human` |
 | `stages[].stale` | bool | n | **Additive.** `true` when an EARLIER stage's gate was revoked after this one ran (§5). Its outputs stay on disk; nothing may treat them as current. Cleared when the stage runs again; emitted only when `true` |
 | `tasks[].id` / `.status` | `^t\d+$` / enum | y | One sub-agent invocation |
@@ -175,6 +177,8 @@ stage at `cursor`, or `done` when every phase is terminal.
 **Validation.** Ids unique within parent; `cursor` resolves; ≤1 `running` stage (single-writer); `|spent_usd −
 Σ tasks.cost_usd| ≤ 0.01` (a `null` cost contributes 0); `started_at ≤ ended_at`; `approved` needs `by`+`at`; a `null`
 `cost_usd` needs `metered: false`; every `gates_policy` value is `human\|auto` and every key names a stage in the file;
+`attended_by`, when present, is `host` — a value the reader does not understand is a schema error, never a silent
+downgrade to "spawn anyway";
 ≤5 phases, ≤40 stages, ≤200 tasks.
 
 ### 2.3 `.tldrx/stages/<slug>/stage.yml` + `stage.md`
@@ -837,7 +841,7 @@ three are handed the run directory of the file they are judging.
 
 Append-only audit log: with `run.yml` the dashboard's only data source, the cost ledger, and the `replay`/`retro` input.
 
-**Type enum:** `run.created` `run.closed` `run.unlocked` `run.cancelled` `phase.started` `phase.done` `stage.started` `stage.done` `stage.failed`
+**Type enum:** `run.created` `run.closed` `run.unlocked` `run.cancelled` `run.attended` `phase.started` `phase.done` `stage.started` `stage.done` `stage.failed`
 `stage.skipped` `task.started` `task.done` `agent.spawned` `agent.result` `question.asked` `question.answered`
 `gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `story.reopened` `check.passed` `check.failed` `budget.warned`
 `budget.blocked` `budget.raised` `fact.added` `fact.retired` `map.refreshed` `ticket.synced` `error`. Closed set: an
@@ -849,6 +853,11 @@ payload carries `signed_by` — `auto` or a person — plus the `staled` list. `
 which until then rewrote `budget.yml` and appended nothing at all: the one sanctioned way to move a ceiling was the one
 act with no record. Its payload carries `phase`, `amount_usd`, `take_from`, before/after for both the phase and the run
 ceiling, and the operator's `--note`.
+
+**`run.attended` was added 2026-08-30.** It is `tldrx run attend`, flipping §2.2's `attended_by` on an open run. Its
+payload carries `attended_by` (the new value, `host` or `null`) and `was` (the old one); `stage` on the envelope is
+`null` and `cost_usd` is `0`, because the operator acted outside a stage run and it spends nothing. A no-op — setting
+what is already set — appends NOTHING: a decision nobody made does not belong in the log.
 
 **`story.reopened` was added 2026-08-30.** It is `tldrx story reopen <id> --note "…"` — a person giving ONE Build story
 another run of developer attempts (§5, "Reopening a story"). Its payload carries `story`, `wave`, `from_status`,
@@ -1216,16 +1225,17 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx doctor [--mcp] [--json]` | `env.yml`, `workspace.yml`, `.tldrx/stages/**`, `.claude/settings.json`, plus a shallow scan of `.tldrx/**` + `tldrx-work/*/{run,budget}.yml` for the deprecated `schema_version:` key, plus `git check-ignore` over four `[c]` state paths | `env.yml.result`, `cache/doctor.json` | 0,1 |
 | `tldrx install --claude [--project\|--user] [--skill-only] [--no-hooks] [--no-statusline] [--force-statusline] [--uninstall] [--dry-run]` | `plugin/skills/tldrx/SKILL.md`, the target `.claude/settings.json` | `.claude/skills/tldrx/SKILL.md` (marked `<!-- tldrx-managed -->`), `.claude/settings.json` (the §4 hooks as `tldrx hook <name>` + `statusLine`), `settings.json.bak-tldrx-<ts>` | 0,1 |
 | `tldrx status [--json]` | `.tldrx/init-questions.md`, `.tldrx/triage/*/{split.yml,inventory.json}` and the seed documents those name, `tldrx-work/*/run.yml` (incl. `triage.depends_on`), `.tldrx/experts/**`, every `stage.yml` | nothing (stdout) | 0,3 |
-| `tldrx run new [--from <path>\|--seed <path> ...] [--scope <s>] [--budget <usd>] [--gates <a,b\|all\|none>]` | `workflows/<s>.yml`, `workspace.yml`, `facts.yml`, the `--from` source (§6) or the `--seed` documents (§6.1) | `tldrx-work/<run>/{run.yml,budget.yml,events.jsonl,01-what/*}` incl. the resolved `gates_policy`; `--seed` also writes `01-what/seed-index.md` and declares the documents as What inputs. **`--seed` is repeatable** (§6.2): every occurrence is collected, merged, deduped and re-sorted, and the §6.1 caps apply to the merged set; one occurrence behaves exactly as before. A seed over the threshold or over 10 files adds one **stderr** note naming `tldrx seed triage`. `--gates` LISTS THE HUMAN GATES (`all` = every stage human, `none` = every stage auto); an unknown stage is a usage error and no run is created | 0,1 |
+| `tldrx run new [--from <path>\|--seed <path> ...] [--scope <s>] [--budget <usd>] [--gates <a,b\|all\|none>]` | `workflows/<s>.yml`, `workspace.yml`, `facts.yml`, the `--from` source (§6) or the `--seed` documents (§6.1) | `tldrx-work/<run>/{run.yml,budget.yml,events.jsonl,01-what/*}` incl. the resolved `gates_policy`; `--seed` also writes `01-what/seed-index.md` and declares the documents as What inputs. **`--seed` is repeatable** (§6.2): every occurrence is collected, merged, deduped and re-sorted, and the §6.1 caps apply to the merged set; one occurrence behaves exactly as before. A seed over the threshold or over 10 files adds one **stderr** note naming `tldrx seed triage`. `--gates` LISTS THE HUMAN GATES (`all` = every stage human, `none` = every stage auto); an unknown stage is a usage error and no run is created. `--attended-by host` freezes §2.2's `attended_by` into the run: the framework will not spawn on it. Any other value is a usage error and no run is created | 0,1 |
 | `tldrx seed triage <path> [--out <dir>] [--json] [--threshold-tokens <n>]` | the `--seed` documents (§6.1 rules), `workspace.yml` (repos + `seed_triage.threshold_tokens`) | `<out>/inventory.md`, `<out>/inventory.json` (default `<out>` = `.tldrx/triage/<yymmdd>-<slug>/`) | 0,1,3 |
 | `tldrx seed triage <path> --propose [--model <m>] [--effort <l>] [--max-usd <n>] [--prepare\|--commit] [--yolo]` | the same, plus `workflows/*.yml` for the legal scopes | `<out>/{inventory.md,inventory.json,split.yml,split.md}`, `<out>/.agent/propose/*`; **never** a run | 0,1,2,5 |
 | `tldrx seed answer <split.yml> <Qid> "<text>"` | `split.yml`, `inventory.json` beside it, `workflows/*.yml` | `split.yml` (that question's `answer:`), and `split.md` when it exists | 0,1,3 |
 | `tldrx seed apply <split.yml> [--dry-run]` | `split.yml`, `inventory.json` beside it, `workflows/*.yml` | one `tldrx-work/<run>/` per proposed run (via `run new`'s own path) each with a `triage:` block, and `split.yml` rewritten to `status: applied`. Questions with no `answer:` are listed on **stderr** as a warning — never a refusal | 0,1,3 |
+| `tldrx run attend <host\|--none> [<run>]` | `run.yml` | `run.yml`'s `attended_by` (§2.2), `events.jsonl` (`run.attended`, carrying the new value and the old). Nothing else: no agent, no cost, no stage moved, no branch touched. `--none` REMOVES the key rather than blanking it — `null` is not a legal value. A direction is required and is never guessed (exit 1); setting what is already set is a silent no-op; a `done` or `cancelled` run is refused (exit 2) | 0,1,2,3 |
 | `tldrx run status [<run>]` | `run.yml`, `events.jsonl` | nothing (stdout) | 0,3 |
-| `tldrx next [<run>] [--dry-run] [--prompt-max-bytes <n>] [--max-reads <n>] [--commit --cost-usd <n>] [--tokens <n>]` | `run.yml`, `stage.yml`, `stage.md`, `expert.md`, declared inputs, `graphify-out/<repo>/graph.json` | stage outputs, `run.yml`, `events.jsonl`. `--cost-usd` is the in-session turn's DECLARED cost (§2.2); with none the task is `cost_usd: null, metered: false`. Both flags are `--commit`-only — headless reconciles a real `total_cost_usd` and a flag must not overwrite a measurement | 0,2,3,4,5 |
+| `tldrx next [<run>] [--dry-run] [--prompt-max-bytes <n>] [--max-reads <n>] [--commit --cost-usd <n>] [--tokens <n>]` | `run.yml`, `stage.yml`, `stage.md`, `expert.md`, declared inputs, `graphify-out/<repo>/graph.json` | stage outputs, `run.yml`, `events.jsonl`. `--cost-usd` is the in-session turn's DECLARED cost (§2.2); with none the task is `cost_usd: null, metered: false`. Both flags are `--commit`-only — headless reconciles a real `total_cost_usd` and a flag must not overwrite a measurement. On a run marked `attended_by: host` (§2.2) the headless mode — `--dry-run` included, which spawns for real and only reverts the files — is refused with **exit 4** before the budget gate, before an input is read and before a prompt is assembled; the message names the exact half of the handshake the stage is waiting for | 0,2,3,4,5 |
 | `tldrx cost [<run>] [--run <id>] [--all] [--json]` | every run's `events.jsonl` (+ `run.yml` for the title) | nothing (stdout) | 0,1,3 |
 | `tldrx run estimate [<run>] [--json]` | everything `next --prepare` reads, plus every run's `events.jsonl` for cache-write / cache-read / output history | nothing (stdout) | 0,1,3 |
-| `tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <l>] [--yolo]` | everything `next` reads, once per stage | everything `next` writes | 0,1,2,3,4,5 |
+| `tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <l>] [--yolo]` | everything `next` reads, once per stage | everything `next` writes. Refused with **exit 1** on a run marked `attended_by: host`, before the event log is opened so nothing is written: this loop's whole job is calling `next` headless, and on such a run that is a refusal | 0,1,2,3,4,5 |
 | `tldrx answer <Qid> <text> [--run <id>]` | `questions.md`, `facts.yml` | `questions.md`, `facts.yml`, `events.jsonl` | 0,1,2,3 |
 | `tldrx interview [--run <id>\|--init] [--yes-to-defaults]` | the cursor phase's `questions.md` (or `.tldrx/init-questions.md`), `run.yml`, `.tldrx/process.yml`, `workspace.yml`, `git remote get-url origin` | the same three files `answer` writes, one per answer recorded; with `--init`, also `.tldrx/process.yml` (§2.12) when a process answer settles `methodology` or `ticket_tool.kind` | 0,1,2,3 |
 | `tldrx approve [--run <id>] [--note]` | `run.yml`, stage outputs, stage checks | `run.yml` gate, `events.jsonl` | 0,2,3 |

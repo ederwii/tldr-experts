@@ -21,7 +21,7 @@ import {
  * against the reopened story without a single byte of history being rewritten.
  */
 export const EVENT_TYPES = [
-  "run.created", "run.closed", "run.unlocked", "run.cancelled",
+  "run.created", "run.closed", "run.unlocked", "run.cancelled", "run.attended",
   "phase.started", "phase.done",
   "stage.started", "stage.done", "stage.failed", "stage.skipped",
   "task.started", "task.done",

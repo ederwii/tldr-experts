@@ -4,6 +4,53 @@
 
 ### Added
 
+- **`attended_by: host` — a run a host session drives, that the framework never spawns on.**
+  One optional top-level key in `run.yml`, set at creation with `tldrx run new --attended-by host`
+  or flipped later with `tldrx run attend host` / `tldrx run attend --none`. The finding it is
+  built for is one sentence of field notes from 2026-08-30: a bare `tldrx next` on a Build stage
+  runs the WHOLE remaining headless pipeline — every wave, every story, as paid spawns — when the
+  host wanted one re-review. Six of six of those spawns then died on `Reached maximum budget` at
+  caps a Plan agent had authored assuming host-billed sub-agents. $9.95, nothing delivered. The
+  affordance was missing at the RUN level: `--prepare`/`--commit` is a decision per invocation,
+  and nothing on the run could say "this one is being driven by a host session".
+  - **A bare `tldrx next` exits `4` and names the exact command** the stage is waiting for —
+    `--prepare` when it is ready, `--commit` when a bundle is already out. Four, not two: the run
+    is not refusing the work, it is waiting on the host to take a turn, which is the same shape as
+    waiting at a gate and the code `run auto` already stops cleanly on. The refusal is the first
+    thing in `runStage` — ahead of the budget gate, ahead of reading an input, ahead of assembling
+    a prompt — so nothing is billed and nothing is written.
+  - **`--dry-run` is refused with it, and the message says why.** `--dry-run` is `mode: headless`:
+    it spawns a real sub-agent and the turn is billed, and only the non-handoff FILES are reverted
+    afterwards. That is measured, not read — one `agent.spawned`, one `agent.result`, the cost on
+    the ledger. The CLI reference said "Spawns nothing, writes nothing" and a comment in
+    `next.ts` said the same; both were wrong and both are corrected here.
+  - **`tldrx run auto` is refused at exit `1`**, before the event log is opened, so nothing is
+    written. A loop whose whole job is calling `next` headless has nothing to do on a run where
+    `next` headless is a refusal.
+  - **Three layers, because "nothing spawns" is a promise about money.** `runNext` refuses; every
+    executor (`build`, `watch`) refuses a headless context with `refused: true`, so the stage goes
+    back to `ready` rather than being marked failed; and `spawnAgent` itself throws while an
+    attended run is in flight. The third is what makes "no run path can reach a spawn" a property
+    rather than a claim about three `if`s — a fourth call site is always one merge away.
+  - **`tldrx run attend` is deliberately small**: it sets one field, appends one `run.attended`
+    event carrying the new value and the old, and touches no stage, no output, no branch and no
+    money. `--none` REMOVES the key rather than blanking it, because `attended_by: null` is not a
+    legal value. A direction is required and never guessed (exit `1`); setting what is already set
+    appends nothing, since a decision nobody made does not belong in the log; a `done` or
+    `cancelled` run is refused (exit `2`).
+  - **`tldrx run status` prints `attended: host`** and the status line gains an `att` marker
+    beside `auto:N` / `stale:N`, leading them because it is the one that changes what `tldrx next`
+    will do. `--json` gains `attended_by`, appended after `unmetered_tasks` so every existing key
+    keeps its position.
+  - **Additive, and asserted as such.** Absent — which is every run.yml written before this — the
+    framework may spawn and every path is what it was: the two-stage headless fixture's event
+    sequence is asserted against the one captured from `main` at `dae1d07`, event for event, and
+    an ordinary run.yml never mentions the key. A value the reader does not understand is a schema
+    error rather than a silent downgrade to "spawn anyway"; `requireKeys` ignores unknown top-level
+    keys, so an older binary reading a run.yml with `attended_by` still validates it — but it will
+    DROP the key on its next save, since `emitRunYaml` only writes what it knows.
+  - Out of scope on purpose: `tldrx expert train` and `tldrx seed triage --propose` spawn outside a
+    run and are untouched. `attended_by` is a property of a run.
 - **`tldrx story reopen <id> --note "<why>"`** — one Build story, given another run of
   developer attempts, by a person. The third verb of the family that landed 2026-08-30 and
   the only one a HUMAN signs: the other two stop the machine reading a transport failure

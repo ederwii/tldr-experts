@@ -30,6 +30,16 @@ export type GateType = (typeof GATE_TYPES)[number];
 export const GATE_STATUSES = ["pending", "approved", "rejected", "n-a"] as const;
 export type GateStatus = (typeof GATE_STATUSES)[number];
 
+/**
+ * Who drives this run (spec §2.2, `attended_by`).
+ *
+ * One legal value today, and the enum exists so a second one is a schema change
+ * rather than a string comparison somewhere. `host` means a host session is doing
+ * the turns: the framework writes bundles and judges results, and never spawns.
+ */
+export const ATTENDED_BY = ["host"] as const;
+export type AttendedBy = (typeof ATTENDED_BY)[number];
+
 export const RUN_ID_RE = /^\d{6}-[a-z0-9-]{1,40}$/;
 export const PHASE_ID_RE = /^0[1-5]-[a-z]+$/;
 
@@ -201,6 +211,20 @@ export interface RunFile {
    * absence as `human` for every stage — exactly the behaviour it had.
    */
   readonly gates_policy?: GatesPolicy;
+  /**
+   * Who drives the turns. ADDITIVE and optional: absent — the default, and every
+   * run.yml written before this key existed — means the framework may spawn, and
+   * every path behaves exactly as it did.
+   *
+   * `host` says a host session is doing the work. `tldrx next` then refuses the
+   * headless mode outright (exit 4, naming the `--prepare` command), `run auto`
+   * refuses at the CLI, and no run path can reach `spawnAgent` — the guard in
+   * `facilitator/attended.ts` is what makes that last one enforced rather than
+   * merely arranged. The affordance was missing at the RUN level: `--prepare` is
+   * per invocation, and one bare `tldrx next` on a Build stage ran the whole
+   * remaining plan as paid spawns (measured 2026-08-30, $9.95 of headless deaths).
+   */
+  readonly attended_by?: AttendedBy;
   readonly phases: readonly RunPhase[];
 }
 
@@ -218,6 +242,16 @@ export function isTerminal(status: string): boolean {
  */
 export function isFinished(status: string): boolean {
   return status === "done" || status === "cancelled";
+}
+
+/**
+ * Is a host session driving this run? The one question every refusal asks.
+ *
+ * A function rather than `run.attended_by === "host"` at six call sites, so the
+ * day a second value exists there is one place that decides what it means.
+ */
+export function isAttendedByHost(run: RunFile): boolean {
+  return run.attended_by === "host";
 }
 
 /** Every stage in execution order, paired with its phase. */
@@ -345,6 +379,11 @@ export function validateRunFile(input: unknown): ValidationResult {
       issues.push({ path: "triage", message: "expected a mapping" });
     }
   }
+
+  // Optional, additive: absent means the framework may spawn. Present it must be
+  // a value this binary understands — a policy the reader cannot honour is not a
+  // policy it may quietly downgrade to "spawn anyway".
+  if (doc.attended_by !== undefined) requireEnum(doc.attended_by, ATTENDED_BY, "attended_by", issues);
 
   if (!requireArray(doc.phases, "phases", issues)) return result(issues, deprecations);
   const phases = doc.phases as unknown[];
