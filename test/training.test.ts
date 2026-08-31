@@ -21,6 +21,8 @@ import {
   codeEvidence, runEvidence, mergeEvidence, LIGHT_SHAPE, RUNS_SHAPE, TrainingLog,
   trainingCacheDir, expertRepos, MIN_TRAIN_USD, DEFAULT_TRAIN_USD, DEFAULT_TRAIN_EFFORT, withGutter,
   isRoleExpertOnDisk, lightModeRefusal, nothingToMineRefusal,
+  describeKnowledgeIssues, knowledgeErrors, knowledgeWarnings, executionClaimRule, repairPrompt,
+  emptyKnowledgeScope,
   type TrainOptions,
 } from "../src/core/training/index.ts";
 import { allowedTools } from "../src/core/facilitator/spawnAgent.ts";
@@ -603,6 +605,322 @@ describe("an invalid knowledge file changes nothing", () => {
     const outcome = await train(ws);
     expect(outcome.code).toBe(5);
     expect(outcome.lines.join("\n")).toContain("was never written");
+  });
+});
+
+// --- severity: what actually rejects a file ---------------------------------
+
+/**
+ * The bullet that cost a real run $1.69 on 2026-08-30: an execution claim
+ * (`exits 0`) sourced by a FILE line. `dotnet-stack` wrote two of these and the
+ * whole knowledge file was binned for them.
+ */
+const EXECUTION_CLAIM_ITEM =
+  "- Running `true` in this repo gives exit 0, so the path is proven (measured) [src: api:src/auth/oauth.ts:1]";
+/**
+ * A src the file has already cited. This is the OTHER line in that run's report,
+ * and the one the operator read as a third reason for the rejection. It is not a
+ * reason for anything: it is a warning, and it costs this bullet its evidence row.
+ */
+const DUPLICATE_ITEM =
+  "- The empty-code guard is the only thing between an empty string and a network call "
+  + "(inferred) [src: api:src/auth/oauth.ts:7]";
+
+describe("severity: a duplicate src is never a reason to throw a file away", () => {
+  function parse(text: string, ws: TrainingWorkspace) {
+    return parseKnowledgeFile(
+      text,
+      toSrcContext(loadWorkspace(ws.root), null),
+      LIGHT_SHAPE,
+      emptyKnowledgeScope(EXPERT),
+    );
+  }
+
+  test("a file whose only fault is a duplicate src still validates", () => {
+    const ws = workspace();
+    const parsed = parse(knowledgeMd({ extraItem: DUPLICATE_ITEM }), ws);
+
+    expect(parsed.ok).toBe(true);
+    expect(knowledgeErrors(parsed)).toEqual([]);
+    expect(knowledgeWarnings(parsed).join("\n")).toContain("duplicate src");
+  });
+
+  test("`duplicate src` is a warning on the runs shape too, so the two paths agree", () => {
+    const ws = workspace();
+    const twice = [
+      `# ${AREA} — from past runs`,
+      "",
+      "## Recurring decisions",
+      "",
+      "- Token storage stays in-process rather than growing a store [src: tldrx-work/260820-oauth/02-how/handoff.md:12]",
+      "- The same handoff line, cited a second time for a second decision [src: tldrx-work/260820-oauth/02-how/handoff.md:12]",
+      "",
+      "## Recurring patterns",
+      "",
+      "- The token store is read before the exchange is touched [src: tldrx-work/260820-oauth/retro.md:4]",
+      "",
+      "## Sources",
+      "",
+      "One handoff and one retro, from run 260820-oauth.",
+      "",
+    ].join("\n");
+    const parsed = parseKnowledgeFile(
+      twice,
+      toSrcContext(loadWorkspace(ws.root), null),
+      RUNS_SHAPE,
+      emptyKnowledgeScope(EXPERT),
+    );
+
+    expect(parsed.ok).toBe(true);
+    expect(parsed.issues.filter((issue) => issue.message.includes("duplicate src")).map((issue) => issue.severity))
+      .toEqual(["warning"]);
+  });
+
+  test("the report says which lines are fatal, and the headline counts only those", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [{ [KNOWLEDGE_WRITE]: knowledgeMd({ extraItem: [EXECUTION_CLAIM_ITEM, DUPLICATE_ITEM].join("\n") }) }]);
+
+    const outcome = await train(ws, { maxUsd: 0.5 });
+    const report = outcome.lines.join("\n");
+    // ONE error, so one problem — even though the reader is shown two lines.
+    expect(report).toContain("does not validate — 1 problem(s)");
+    expect(report).toContain("execution claim needs a");
+    expect(report).toContain("warning: [src: api:src/auth/oauth.ts:7] — duplicate src");
+  });
+
+  test("errors are listed before warnings, so the fatal lines are the ones on top", () => {
+    const ws = workspace();
+    const parsed = parse(knowledgeMd({ extraItem: [DUPLICATE_ITEM, EXECUTION_CLAIM_ITEM].join("\n") }), ws);
+    const described = describeKnowledgeIssues(parsed.issues);
+
+    expect(described[0]).toContain("execution claim needs a");
+    expect(described[0]).not.toContain("warning:");
+    expect(described[1]).toContain("warning:");
+  });
+});
+
+// --- the repair round --------------------------------------------------------
+
+describe("one repair round before the money is thrown away", () => {
+  /** Call 0 writes the rejected file; call 1 is the repair turn. */
+  function failThenFix(ws: TrainingWorkspace, cost = "0.37"): void {
+    fakeClaude(ws, [
+      { [KNOWLEDGE_WRITE]: knowledgeMd({ extraItem: EXECUTION_CLAIM_ITEM }) },
+      { [KNOWLEDGE_WRITE]: knowledgeMd() },
+    ], cost);
+  }
+
+  function spawns(ws: TrainingWorkspace): number {
+    return existsSync(ws.statePath) ? Number(readFileSync(ws.statePath, "utf8")) : 0;
+  }
+
+  test("a rejected file is sent back once, repaired, and accepted on the same run", async () => {
+    const ws = workspace();
+    failThenFix(ws);
+
+    const outcome = await train(ws);
+    expect(outcome.code).toBe(0);
+    expect(spawns(ws)).toBe(2);
+    // The repaired file wears the name later prompts inline; nothing is quarantined.
+    expect(existsSync(join(ws.root, KNOWLEDGE_REL))).toBe(true);
+    expect(existsSync(join(ws.expertDir, "knowledge", `${AREA}.rejected.md`))).toBe(false);
+
+    const area = areaOf(ws, AREA);
+    expect(area.level).toBe(2);
+    expect((area.evidence as unknown[]).length).toBeGreaterThan(0);
+    expect(competencies(ws).status).toBe("in-use");
+  });
+
+  test("the operator is told the money is being defended, by name and by count", async () => {
+    const ws = workspace();
+    failThenFix(ws);
+
+    const report = (await train(ws)).lines.join("\n");
+    expect(report).toContain("repairing: 1 problem(s) sent back to the trainer");
+    expect(report).toContain("one round, $1.63 of the ceiling left");
+    expect(report).toContain("repaired: the second file validates");
+  });
+
+  test("a second failure still rejects: one round is all there is", async () => {
+    const ws = workspace();
+    // Both turns write the same bad file — the fake clamps to the last plan.
+    fakeClaude(ws, [{ [KNOWLEDGE_WRITE]: knowledgeMd({ extraItem: EXECUTION_CLAIM_ITEM }) }]);
+
+    const outcome = await train(ws);
+    expect(outcome.code).toBe(5);
+    expect(spawns(ws)).toBe(2);
+    expect(outcome.lines.join("\n")).toContain("the repaired file does not validate either");
+
+    const area = areaOf(ws, AREA);
+    expect(area.evidence).toEqual([]);
+    expect(area.level).toBe(0);
+    expect(competencies(ws).status).toBe("created");
+    expect(existsSync(join(ws.root, KNOWLEDGE_REL))).toBe(false);
+    expect(existsSync(join(ws.expertDir, "knowledge", `${AREA}.rejected.md`))).toBe(true);
+  });
+
+  test("the repair turn is paid out of --max-usd, not added on top of it", async () => {
+    const ws = workspace();
+    failThenFix(ws);
+    const argvLog = join(ws.root, "argv.log");
+    process.env.FAKE_TRAIN_ARGV_LOG = argvLog;
+
+    const outcome = await train(ws);
+    // Both turns are in the total, and the total is inside the ceiling.
+    expect(outcome.costUsd).toBe(0.74);
+    expect(outcome.costUsd).toBeLessThanOrEqual(DEFAULT_TRAIN_USD);
+    expect(outcome.lines[0]).toContain(`$0.74 of $${DEFAULT_TRAIN_USD.toFixed(2)}`);
+
+    // The repair turn's own ceiling is what is LEFT, not another full share.
+    const argv = readFileSync(argvLog, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]);
+    expect(argv).toHaveLength(2);
+    expect(argv[0]?.[argv[0].indexOf("--max-budget-usd") + 1]).toBe("2.00");
+    expect(argv[1]?.[argv[1].indexOf("--max-budget-usd") + 1]).toBe("1.63");
+  });
+
+  test("the repair turn is on the ledger as a repair, with what it was sent", async () => {
+    const ws = workspace();
+    failThenFix(ws);
+    await train(ws);
+
+    const log = TrainingLog.forExpert(ws.expertDir).read();
+    const results = log.filter((event) => event.type === "agent.result");
+    expect(results.map((event) => event.payload.task)).toEqual(["code", "code:repair"]);
+    expect(results[1]?.payload.repair).toBe(true);
+    expect(results[1]?.payload.problems_sent).toBe(1);
+    expect(results[1]?.cost_usd).toBe(0.37);
+    // The first verdict is recorded too — the check DID fail before it was repaired.
+    expect(log.filter((event) => event.type === "check.failed")).toHaveLength(1);
+    expect(log.some((event) => event.type === "check.passed")).toBe(true);
+  });
+
+  test("no room under the ceiling means no repair round, and it says so", async () => {
+    const ws = workspace();
+    // $1.90 of a $2.00 ceiling leaves $0.10 — under the floor a cold spawn needs.
+    fakeClaude(ws, [{ [KNOWLEDGE_WRITE]: knowledgeMd({ extraItem: EXECUTION_CLAIM_ITEM }) }], "1.90");
+
+    const outcome = await train(ws);
+    expect(outcome.code).toBe(5);
+    expect(spawns(ws)).toBe(1);
+    expect(outcome.lines.join("\n")).toContain("no repair round: $0.10 left of the ceiling");
+    expect(outcome.costUsd).toBe(1.9);
+  });
+
+  test("the repair prompt carries the verdict, the rejected bytes, and the original inputs", async () => {
+    const ws = workspace();
+    failThenFix(ws);
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_TRAIN_PROMPT_DIR = promptDir;
+
+    await train(ws);
+    const first = readFileSync(join(promptDir, "prompt-0.md"), "utf8");
+    const repair = readFileSync(join(promptDir, "prompt-1.md"), "utf8");
+
+    expect(repair).toContain("REPAIR ROUND");
+    expect(repair).toContain("execution claim needs a");
+    expect(repair).toContain(EXECUTION_CLAIM_ITEM.slice(2, 40));
+    // The inlined selection is still there: a citation cannot be fixed against a
+    // file the sub-agent can no longer see.
+    expect(repair.startsWith(first)).toBe(true);
+  });
+
+  test("a file whose only fault is a duplicate src is accepted, and never repaired", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [{ [KNOWLEDGE_WRITE]: knowledgeMd({ extraItem: DUPLICATE_ITEM }) }]);
+
+    const outcome = await train(ws);
+    expect(outcome.code).toBe(0);
+    expect(spawns(ws)).toBe(1);
+    expect(outcome.lines.join("\n")).not.toContain("repairing:");
+    expect((outcome.warnings ?? []).join("\n")).toContain("duplicate src");
+    expect(competencies(ws).status).toBe("in-use");
+  });
+
+  test("a sub-agent that never wrote the file is not repaired — there is no verdict to send", async () => {
+    const ws = workspace();
+    fakeClaude(ws, [{}]);
+
+    const outcome = await train(ws);
+    expect(outcome.code).toBe(5);
+    expect(spawns(ws)).toBe(1);
+    expect(outcome.lines.join("\n")).toContain("was never written");
+  });
+
+  test("`--commit` repairs nothing: that sub-agent belongs to the host session", async () => {
+    const ws = workspace();
+    await train(ws, { run: "prepare" });
+    const cache = trainingCacheDir(ws.root, EXPERT, AREA);
+    mkdirSync(join(ws.expertDir, "knowledge"), { recursive: true });
+    writeFileSync(join(ws.root, KNOWLEDGE_WRITE), knowledgeMd({ extraItem: EXECUTION_CLAIM_ITEM }), "utf8");
+    writeFileSync(
+      join(cache, ".agent", "code", "result.json"),
+      JSON.stringify({ outputs: [KNOWLEDGE_WRITE], questions_asked: [], notes: "", cost_usd: 0.4, session_id: "s1" }),
+      "utf8",
+    );
+    fakeClaude(ws, [{ [KNOWLEDGE_WRITE]: knowledgeMd() }]);
+
+    const outcome = await train(ws, { run: "commit" });
+    expect(outcome.code).toBe(5);
+    expect(spawns(ws)).toBe(0);
+    expect(outcome.lines.join("\n")).not.toContain("repairing:");
+  });
+});
+
+// --- the grammar the trainer has to know ------------------------------------
+
+describe("the execution-claim rule is taught, not merely asserted", () => {
+  test("the rule names the literal shapes, and shows a conforming and a refused line", () => {
+    const rule = executionClaimRule(["npm test"]).join("\n");
+    expect(rule).toContain("[src: $ <cmd> → exit <n>]");
+    expect(rule).toContain("Write this:");
+    expect(rule).toContain("Never this:");
+    expect(rule).toContain("[src: $ npm test → exit 0]");
+    expect(rule).toContain(".tldrx/workspace.yml:19");
+    // The trap the failing trainer was never told about.
+    expect(rule).toContain("stripped before the check");
+  });
+
+  test("with no declared command the only exit offered is not making the claim", () => {
+    const rule = executionClaimRule([]).join("\n");
+    expect(rule).toContain("exactly one way out: do not make");
+    expect(rule).not.toContain("Two ways out");
+  });
+
+  test("both training prompts carry it — the checker judges both files by it", async () => {
+    const ws = workspace();
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_TRAIN_PROMPT_DIR = promptDir;
+    fakeClaude(ws, [{ [KNOWLEDGE_WRITE]: knowledgeMd() }, { [FROM_RUNS_WRITE]: fromRunsMd() }]);
+
+    await train(ws, { mode: "full", maxUsd: 3 });
+    for (const name of ["prompt-0.md", "prompt-1.md"]) {
+      const prompt = readFileSync(join(promptDir, name), "utf8");
+      expect(prompt).toContain("A claim about a RESULT needs a COMMAND");
+      expect(prompt).toContain("Never this:");
+    }
+  });
+
+  test("the repair prompt separates what rejected the file from what only warned", () => {
+    const ws = workspace();
+    const text = knowledgeMd({ extraItem: [EXECUTION_CLAIM_ITEM, DUPLICATE_ITEM].join("\n") });
+    const parsed = parseKnowledgeFile(
+      text,
+      toSrcContext(loadWorkspace(ws.root), null),
+      LIGHT_SHAPE,
+      emptyKnowledgeScope(EXPERT),
+    );
+    const prompt = repairPrompt("ORIGINAL PROMPT", {
+      target: KNOWLEDGE_WRITE,
+      rejected: text,
+      issues: parsed.issues,
+      budgetUsd: 1.63,
+    });
+
+    expect(prompt.startsWith("ORIGINAL PROMPT")).toBe(true);
+    expect(prompt).toContain("## What rejected it (1)");
+    expect(prompt).toContain("## Warnings (1) — NOT why it was rejected");
+    expect(prompt).toContain("$1.63 left of this run's ceiling");
+    expect(prompt).toContain("Deleting an offending bullet is a legal fix");
   });
 });
 
