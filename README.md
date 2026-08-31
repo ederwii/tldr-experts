@@ -175,6 +175,7 @@ back on the registry is 0.3.0.
 
 | Version | Date | Status | Contains |
 |---|---|---|---|
+| 0.3.1 | unreleased | `main` | Unattended mode (gates_policy agent, review handshake, fixlist, decision cards, dual economy), 6 contact fixes from the first feature-scope runs, colored init, training repair round |
 | 0.3.0 | 2026-08-30 | `alpha` | expert training with provenance, auto gates with an undo, `tldrx status`, seed triage, the token economy (context ledger, `max_reads`, `cost`, `estimate`), `install --claude`, `interview`, the ticket mirror, `--help` with flags and exit codes |
 | 0.2.0 | 2026-08-29 | `alpha` | Build executor (worktree + branch per story, epic branches, DoD gate, reviewer), Watch cards, live dashboard |
 | 0.1.0 | 2026-08-29 | `alpha` | greenfield `init --stack` + `run new --seed`, story/epic/waves schemas, `tldrx budget show\|raise`, sections must hold list items |
