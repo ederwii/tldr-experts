@@ -24,8 +24,11 @@ import { AUTO_GATE_ACTOR, evaluateAutoGate, unreadableHeadings } from "../run/au
 import { describeAgentFallthroughs, evaluateAgentGate } from "../run/agentGate.ts";
 import { gatePolicyFor } from "../run/gatePolicy.ts";
 import { PresetError, type PlannedStage } from "../run/workflowPreset.ts";
-import { isHostTokens } from "../budget/RunBudget.ts";
+import { economyFor, isHostTokens } from "../budget/RunBudget.ts";
 import { remaining } from "../budget/wouldExceed.ts";
+import {
+  remainingWork, renderRemainingWork, remainingWorkContext, type RemainingWork,
+} from "../budget/remainingWork.ts";
 import { raiseCommand, shortBy } from "../budget/budgetView.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../hooks/lib/workspace.ts";
@@ -786,27 +789,66 @@ function budgetRefusal(
     hostTokensNote(store, options, phaseId, stageId, notes);
     return null;
   }
-  if (phaseRemaining < stage.budget_usd && store.budget.on_exceed === "block") {
+  // What is still to be DISPATCHED, not what the stage was priced at. On a Build
+  // stage with a plan on disk this is the sum of the caps the executor would
+  // actually hand out for the stories that are left; everywhere else it is
+  // `stage.budget_usd`, exactly as it always was (design §E.2).
+  const work = stageRemainingWork(store, options, phaseId, stage);
+  const estimate = work.usd;
+  if (phaseRemaining < estimate && store.budget.on_exceed === "block") {
     store.append(event(options, store.runId, stageId, "budget.blocked", {
       phase: phaseId,
       remaining_usd: phaseRemaining,
-      estimate_usd: stage.budget_usd,
+      estimate_usd: estimate,
+      estimate_basis: work.basis,
+      ...(work.basis === "plan"
+        ? { static_estimate_usd: work.staticUsd, stories_done: work.done, stories_total: work.total }
+        : {}),
       ceiling_usd: store.budget.phases.find((p) => p.id === phaseId)?.ceiling_usd ?? store.budget.ceiling_usd,
     }));
     // Name the command, not the field. The pilot's hand-edit of `ceiling_usd`
     // under-shot the estimate and the retry was refused a second time.
-    const fix = raiseCommand(store.runId, phaseId, shortBy(stage.budget_usd, phaseRemaining));
+    const fix = raiseCommand(store.runId, phaseId, shortBy(estimate, phaseRemaining));
     return out(EXIT_REFUSED, [
       ...notes,
       `[tldrx] budget: refusing to start stage "${stageId}" — phase ${phaseId} has ` +
-        `$${phaseRemaining.toFixed(2)} left and the stage estimate is $${stage.budget_usd.toFixed(2)}.`,
+        `$${phaseRemaining.toFixed(2)} left and ${work.basis === "plan"
+          ? `the remaining work is $${estimate.toFixed(2)}`
+          : `the stage estimate is $${estimate.toFixed(2)}`}.`,
+      ...(work.basis === "plan"
+        ? [renderRemainingWork(work), ...remainingWorkContext(work)]
+        : []),
       `Run \`${fix}\` (add \`--take-from <phase>\` to move the money instead of adding it), ` +
         `lower budget_usd in the stage, or set on_exceed: warn.`,
       `See the whole picture first: \`tldrx budget show --run ${store.runId}\`.`,
     ]);
   }
-  warnOnce(store, options, phaseId, stageId, stage.budget_usd, phaseRemaining, notes);
+  warnOnce(store, options, phaseId, stageId, estimate, phaseRemaining, notes);
   return null;
+}
+
+/**
+ * The estimate the brake compares against.
+ *
+ * `budget/budgetView.ts` calls the same `remainingWork` with the same inputs for
+ * `budget show`'s `est.` column, deliberately: an operator told "$2.50" by the
+ * refusal and "$18.00" by `budget show` would rightly trust neither.
+ */
+function stageRemainingWork(
+  store: RunStore,
+  options: NextOptions,
+  phaseId: string,
+  stage: RunStage,
+): RemainingWork {
+  return remainingWork({
+    runDir: store.runDir,
+    phaseId,
+    stageBudgetUsd: stage.budget_usd,
+    stageSpentUsd: stage.cost_usd,
+    perAgentMaxUsd: store.budget.per_agent_max_usd,
+    maxUsd: options.maxUsd ?? null,
+    economy: economyFor(store.budget, phaseId),
+  });
 }
 
 /**

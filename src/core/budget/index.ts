@@ -8,6 +8,11 @@ export {
 export type { RunBudget, BudgetPhase, OnExceed, Economy } from "./RunBudget.ts";
 export { buildBudgetView, renderBudget, raiseCommand, shortBy, usd } from "./budgetView.ts";
 export type { BudgetView, BudgetPhaseView } from "./budgetView.ts";
+export {
+  remainingWork, renderRemainingWork, remainingWorkContext, reviewVerdictsByStory,
+  MAX_ATTEMPTS, REVIEWER_SHARE, REVIEWER_FLOOR_USD,
+} from "./remainingWork.ts";
+export type { RemainingWork, RemainingStory, RemainingWorkInput } from "./remainingWork.ts";
 export { raiseBudget, describeRaise, BudgetRaiseError, MIN_RAISE_USD, MAX_RAISE_USD } from "./raiseBudget.ts";
 export type { RaiseRequest, RaiseOutcome } from "./raiseBudget.ts";
 export {

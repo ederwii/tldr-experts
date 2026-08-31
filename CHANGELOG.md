@@ -4,6 +4,41 @@
 
 ### Added
 
+- **The budget brake counts the work that is LEFT, not the price the stage was written at.**
+  Measured 2026-08-31 on `260830-tenancy-identity-customers`: four of seven stories done, one
+  mid-attempt-2, two blocked, and the entire remaining metered cost a developer share and a
+  reviewer floor — **$2.50**. The brake compared the phase's remaining dollars against
+  `stage.budget_usd`, **$18.00**, a number written before a single story ran and never
+  revised. It refused the stage twice and the host ran `budget raise --take-from` twice, for
+  money nothing was going to spend.
+
+  For a Build stage with a plan on disk, `tldrx next`'s refusal, the `budget-gate` hook and
+  `tldrx budget show`'s `est.` column now all use one figure computed by one function: `Σ`
+  over the unsettled stories of the caps the executor would actually hand out — the
+  `03-plan/budget.yml` price through the same scale/share arithmetic, the developer and
+  reviewer shares, the `$1.00` reviewer floor, and the attempts each story has left.
+  - **The refusal shows its arithmetic**: `remaining work: S4 dev $1.50 + reviewer $1.00 =
+    $2.50`, under a line naming how many stories are done and what the stage's static
+    estimate was. A number an operator cannot take apart is one they cannot argue with, and
+    `$18.00` cited nothing.
+  - **`blocked` costs $0.00**, and the blocked ids are named rather than quietly dropped: the
+    executor dispatches a blocked story only after `tldrx story reopen`, which is a human
+    decision and which legitimately raises the figure again.
+  - **A story at `review` has already paid the developer turn under review.** Only a `changes`
+    verdict buys another one.
+  - **Under `economy: host-tokens` the developer turns are $0.00** — the host session pays for
+    them — while the reviewer floors stay, because outside attended mode `reviewAndSettle`
+    still spawns a metered reviewer and that floor is real money.
+  - **It can only NARROW.** The figure is capped at `stage.budget_usd`, so this brake can
+    never refuse more often than it did before; the reviewer floor can otherwise lift a naive
+    sum past the ceiling. Asserted in both directions, across a spread of plan shapes, because
+    a brake that loosened by accident is the failure to fear here.
+  - **`budget.blocked` gains `estimate_basis: plan|static`** and, on the plan basis,
+    `static_estimate_usd`, `stories_done` and `stories_total`.
+  - **With no plan on disk, and outside Build, every path is byte-identical**, wording
+    included: the estimate is `budget_usd` and the message still reads `the stage estimate
+    is $X`.
+
 - **`preconditions:` on a stage — the check that runs before the money does.** A stage may
   declare operational facts that must hold before it is worth dispatching at all:
 

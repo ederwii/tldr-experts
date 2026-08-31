@@ -10,7 +10,8 @@
  * things the operator could try.
  */
 import { isTerminal, type RunFile, type RunStage } from "../run/RunFile.ts";
-import type { RunBudget } from "./RunBudget.ts";
+import { economyFor, type RunBudget } from "./RunBudget.ts";
+import { remainingWork, renderRemainingWork } from "./remainingWork.ts";
 import { totalSpent, wouldExceed } from "./wouldExceed.ts";
 
 export interface BudgetPhaseView {
@@ -20,8 +21,21 @@ export interface BudgetPhaseView {
   readonly remaining_usd: number;
   /** The next stage this phase would run, or null when every stage is terminal. */
   readonly next_stage: string | null;
-  /** That stage's declared `budget_usd` — what `next` is about to try to spend. */
+  /**
+   * What `next` is about to try to spend.
+   *
+   * `static` — the stage's declared `budget_usd`, which is what this column has
+   * always been. `plan` — a Build stage with a plan on disk, where the number is
+   * the sum of the caps the executor would hand out for the stories that are
+   * LEFT (design §E.2). The brake compares against the same figure, computed by
+   * the same function, so the two can never disagree.
+   */
   readonly next_estimate_usd: number;
+  readonly next_estimate_basis: "plan" | "static";
+  /** The declared `budget_usd`, kept alongside so the narrowing is visible. */
+  readonly next_estimate_static_usd: number;
+  /** `S4 dev $1.50 + reviewer $1.00 = $2.50`, or null on the static basis. */
+  readonly next_estimate_detail: string | null;
   /** True when `next` would be refused here and `on_exceed: block`. */
   readonly blocked: boolean;
   /** What the ceiling is short by, rounded up to the cent. `0` when it is not. */
@@ -52,11 +66,28 @@ export interface BudgetView {
   readonly unmetered_tasks: number;
 }
 
-export function buildBudgetView(run: RunFile, budget: RunBudget): BudgetView {
+/**
+ * `runDir` is optional and its absence is not a degraded mode — it is the pre-4C
+ * behaviour, exactly: with no run directory to read stories from, every estimate
+ * is the stage's declared `budget_usd` and every field below is what it was.
+ */
+export function buildBudgetView(run: RunFile, budget: RunBudget, runDir?: string): BudgetView {
   const phases = budget.phases.map((phase) => {
     const runPhase = run.phases.find((p) => p.id === phase.id);
     const next = runPhase === undefined ? null : nextStageOf(runPhase.stages);
-    const estimate = next?.budget_usd ?? 0;
+    const staticEstimate = next?.budget_usd ?? 0;
+    const work = runDir === undefined || next === null
+      ? null
+      : remainingWork({
+        runDir,
+        phaseId: phase.id,
+        stageBudgetUsd: staticEstimate,
+        stageSpentUsd: next.cost_usd,
+        perAgentMaxUsd: budget.per_agent_max_usd,
+        maxUsd: null,
+        economy: economyFor(budget, phase.id),
+      });
+    const estimate = work === null ? staticEstimate : work.usd;
     const decision = wouldExceed(budget, phase.id, estimate);
     return {
       id: phase.id,
@@ -65,6 +96,9 @@ export function buildBudgetView(run: RunFile, budget: RunBudget): BudgetView {
       remaining_usd: round(phase.ceiling_usd - phase.spent_usd),
       next_stage: next?.id ?? null,
       next_estimate_usd: estimate,
+      next_estimate_basis: work?.basis ?? "static",
+      next_estimate_static_usd: staticEstimate,
+      next_estimate_detail: work === null || work.basis === "static" ? null : renderRemainingWork(work),
       blocked: next !== null && decision.blocked,
       short_by_usd: next === null || !decision.exceeds ? 0 : shortBy(estimate, decision.remaining),
       is_cursor: phase.id === run.cursor.phase,
@@ -144,6 +178,15 @@ export function renderBudget(view: BudgetView): string {
         `${pad(phase.next_stage === null ? "—" : usd(phase.next_estimate_usd))}  ` +
         `${phase.next_stage === null ? "—" : phase.blocked ? "BLOCKED" : "ok"}`,
     );
+  }
+  // Where the est. column is no longer the stage's own price, show the sum: a
+  // number an operator cannot take apart is a number they cannot argue with, and
+  // the $18-that-was-really-$2.50 refusal is exactly that failure.
+  for (const phase of view.phases) {
+    if (phase.next_estimate_detail !== null) {
+      lines.push(`  ${phase.id}: ${phase.next_estimate_detail} `
+        + `(stage estimate ${usd(phase.next_estimate_static_usd)})`);
+    }
   }
   const blocked = view.blocked;
   if (blocked === null) {

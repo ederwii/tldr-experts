@@ -180,8 +180,11 @@ export function loadBuildPlan(planDir: string, allowed: ReadonlySet<string>): Bu
  * reason comes back as a line for the operator.
  */
 export function loadPlanPrices(
+  // Structural, not `ReadonlyMap<string, PlannedStory>`: this only ever asks
+  // "is this id scheduled?", and the remaining-work estimate (§E, budget brake)
+  // has the ids without having loaded and validated every story file.
   planDir: string,
-  stories: ReadonlyMap<string, PlannedStory>,
+  stories: { has(id: string): boolean },
 ): { prices: ReadonlyMap<string, number>; issue: string | null } {
   const empty = new Map<string, number>();
   const path = join(planDir, PLAN_BUDGET_FILE);
