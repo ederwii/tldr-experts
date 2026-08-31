@@ -163,6 +163,9 @@ a guess about a price — which is the whole reason the label exists. `tldrx bud
 rewrites `budget.yml` and the label survives the rewrite; a raise that erased it would turn
 a token budget back into dollars silently.
 
+The economy is one half of driving a run from a host session; the other half is the run mode
+itself — see [10 — Unattended mode](10-unattended-mode.md).
+
 ## The one command that guesses
 
 ```bash
@@ -274,10 +277,16 @@ remaining work: S4 dev $1.50 + reviewer $1.00 = $2.50
 4 of 7 stories done; the stage's static estimate is $18.00.
 S6, S7 are blocked and cost $0.00 here — the executor dispatches a blocked story only after
 `tldrx story reopen`, which would raise this.
+Run `tldrx budget raise 04-build 2.10 --run <id>` (add `--take-from <phase>` to move the money
+instead of adding it), lower budget_usd in the stage, or set on_exceed: warn.
+See the whole picture first: `tldrx budget show --run <id>`.
 ```
 
+The last two lines close every budget refusal, remaining-work-aware or not.
+
 `tldrx budget show`'s **est.** column uses the same computation, and prints the same
-breakdown under the table, so the two can never tell you different numbers.
+breakdown under the table — suffixed `(stage estimate $18.00)`, so the narrowed figure and the
+one it narrowed from sit on the same line — and the two can never tell you different numbers.
 
 Four things are worth knowing about it:
 

@@ -68,6 +68,27 @@ id-less command stop seeing it, and nothing is deleted.
 
 ## Gates and citations
 
+**`<run> is attended_by: host — the framework does not spawn on this run.`, exit 4.** Not a
+failure: the run is waiting on you to take a turn. The second line names the exact half of the
+handshake the stage wants — `--prepare`, `--commit`, or `--commit --review` when a reviewer
+bundle is out. Nothing was billed and nothing was written. To hand the whole run back to the
+framework: `tldrx run attend --none <run>`. `tldrx run auto` on such a run is exit `1`
+instead, because a loop over spawns has nothing to do here.
+
+**`agent gate not taken — N reason(s), this gate falls to a person`, exit 4.** An `agent` gate
+ran its checks and one of them says a person decides. Each reason is labelled: `questions` (a
+decision nobody has made), `budget-event` (a ceiling somebody moved while the stage ran),
+`boundary` (the epic touched paths nobody scoped), `refusal` (the note's own verdict is
+`refuse` or `sign-with-fixlist`), `condition` (one of the seven went red) and `evidence` (the
+note is missing or broken). Read the reason, then `tldrx approve` as yourself if you decide to
+ship over it. See [10 — Unattended mode](10-unattended-mode.md).
+
+**`tldrx approve --as-agent` exits 2 vs exits 4 — they mean different things.** `2` is "this
+note is broken": the message lists every problem with its line, and nothing was signed — fix
+the file. `4` is "a person decides": the note parsed perfectly and its verdict is not `sign`.
+Exit `1` is `--as-agent` on a stage whose policy is not `agent`, or `--evidence` with no
+`--as-agent` at all.
+
 **`N unsourced bullet(s)`.** Every bullet under Findings / Decisions / Unknowns / Evidence
 ledger must end in a `[src: …]` token, and each of those four sections must hold at least one
 list item — a genuinely empty one is written `- none [src: absent:<what you looked at>]`, and
@@ -100,6 +121,12 @@ see and exits `2`; `tldrx questions lint --fix` converts the prose form
 --commit` refuses such a file with exit `5`.
 
 ## Money
+
+**`tldrx next` exits 2, "refusing to spawn — <phase> is priced in `host-tokens`".** The phase
+carries `economy: host-tokens` (guide 06) and this invocation is headless, so the ceiling on it
+is not a number of dollars a spawn may spend. Nothing was billed. Either run the stage
+in-session (`tldrx next --prepare`), or re-price the phase in `metered-usd`. The two units are
+never converted.
 
 **`tldrx next` exits 2 with a `tldrx budget raise …` command in the message.** The cursor
 phase cannot afford the stage's estimate. The command in the message already has the shortfall
@@ -229,7 +256,7 @@ no reviewer is read as the errored spawn it was, and `tldrx next` says
 again`. A story blocked by a red DoD, a merge conflict or two `changes` verdicts is left
 exactly where it is.
 
-**`S3: fast-forwarded story/… to epic/… — 2 commit(s), abc1234 → def5678`.** Not a problem —
+**`· S3: fast-forwarded \`story/…/S3\` to \`epic/…\` — 2 commit(s), abc1234 → def5678`.** Not a problem —
 a note that tldrx moved a ref. A story branch is kept across a reopen and across a requeued
 attempt, so it regularly sits at a tip the epic has moved past; before a developer is
 dispatched onto it, a branch that is a clean ancestor of the epic tip is fast-forwarded onto
@@ -238,18 +265,24 @@ had added, on a base that predated it — it would not have compiled. Only the o
 dispatch a developer move anything (the headless pipeline and `tldrx next --prepare`); the
 review and `--commit` openings measure nothing and move nothing.
 
-**`S3: story/… has DIVERGED from epic/… — 1 commit(s) the epic lacks, 3 the story lacks`.**
-Commits on both sides, so there is no fast-forward. **Nothing was changed, and the dispatch
-proceeds on the old base** — the line after it names that base and how far behind it is. This
-is a decision, not a default: tldrx never rebases a branch a developer has already committed
-to. Your two options are in the message — `git merge <epic>` inside the story's worktree, or
-preserve the divergent commits on a backup branch (`git branch backup/<story> <sha>`) and
-re-point the story branch at the epic tip by hand. The usual cause is a dead spawn that
-committed partial work on a base the epic has since passed.
+**`· S3: \`story/…\` (abc1234) has DIVERGED from \`epic/…\` (def5678) — 1 commit(s) the epic
+lacks, 3 the story lacks`.** Commits on both sides, so there is no fast-forward. **Nothing was
+changed, and the dispatch proceeds on the old base** — the third line names that base and how
+far behind it is. This is a decision, not a default: tldrx never rebases a branch a developer
+has already committed to. The message gives you two options: `git merge <epic>` inside the
+named worktree, or preserve the divergent commits on a backup branch and re-point the story
+branch at the epic tip by hand. The usual cause is a dead spawn that committed partial work on
+a base the epic has since passed.
 
-**`S3: story/… is 3 commit(s) behind epic/…, but its worktree has 2 uncommitted change(s)`.**
-Left alone, deliberately: a dirty tree is yours, not the framework's. Commit or stash in the
-named worktree and run `tldrx next --prepare` again, and the fast-forward happens then.
+**`· S3: \`story/…\` (abc1234) is 3 commit(s) behind \`epic/…\` (def5678), but its worktree has
+2 uncommitted change(s) — left alone; a dirty tree is the operator's`.** Exactly that. The next
+line names up to five of the changed paths. Commit or stash in the named worktree and run
+`tldrx next --prepare` again, and the fast-forward happens then.
+
+**`· S3: \`git merge --ff-only epic/…\` failed in <worktree> — <git's first line>`.** The
+fast-forward was attempted and git refused it — a file in the way is the usual cause. It is
+atomic-or-nothing, so nothing needs repairing: the second line says the branch was left where
+it was and how far behind. Clear whatever git named and run `tldrx next --prepare` again.
 
 **`auto gate not taken — stories=1 of 7 done — S2:blocked, …`.** A Build stage does not sign
 its own gate while any story is unfinished. Approve it yourself if half the epic is what you
@@ -260,6 +293,17 @@ keeps its plain name on purpose — it is the unit a team merges — so instead 
 impossible, adopting one is made deliberate: `tldrx next --reuse-epic`.
 
 **The build stage refuses before cutting anything.** The repo is dirty. Commit or stash first.
+
+**`· S5: a SECOND fix-list round was refused — the bound is 1 per story`.** A story gets one
+`fixlist` round, and it is spent. This review was read as `changes` instead, which costs the
+attempt the free round did not. Nothing is lost: the findings are appended to the review's own
+list.
+
+**A story sits at `blocked` and the reason says `N fix-list finding(s) are still `fix-now``.**
+A story cannot reach `done` while a finding is open, and the check is against the FILE, not the
+envelope that produced it. Open `04-build/fixlist/<story>-<round>.md`, close each one with
+`Resolved: yes` as the fix lands or re-route its `Disposition:` (the value must stay bolded —
+`Disposition: **defer-with-log**`), then `tldrx story reopen <id>`.
 
 **A `dod` command is refused.** Only a command **byte-equal** to one in
 `.tldrx/workspace.yml` runs at all, argv-split with no shell. This hook executes strings a

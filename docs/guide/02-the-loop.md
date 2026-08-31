@@ -40,8 +40,9 @@ The keys a stage may set, and what they do:
 | `prompt_max_bytes` | 160 KB | Over it the stage is **refused** (exit 2) before anything spawns |
 | `max_reads` | 120 (200 build, 60 watch) | Completed `Read`/`Glob`/`Grep` calls before the sub-agent is stopped |
 | `dry_run_allowed` | `true` | `false` refuses `tldrx next --dry-run` on this stage |
-| `gate.type` | required | `human-approval` \| `checks-green` \| `none` |
+| `gate.type` | required | `approve` \| `checks` \| `auto` |
 | `checks` | none | The list that is actually enforced, re-run off disk by `tldrx approve` |
+| `preconditions` | none (≤10) | `{id, repo, command, expect_exit}` — an operational fact checked **before** the stage is dispatched. Same allowlist rule as a `cmd` check; `expect_exit` defaults to `0`. A red one is exit `2` before anything is spent ([10 — Unattended mode](10-unattended-mode.md)) |
 
 `expert_knowledge_bytes:` is the retired spelling of `knowledge_max_bytes` and is still
 read, as the same **total**. `skip_if` and `questions.max` come from the workflow entry
@@ -62,6 +63,10 @@ or a chat bridge.
 bundle to `tldrx-work/<run>/.agent/<stage>/` and lets the Claude Code session you are
 already in dispatch its own sub-agent. Cheaper, because that context is already warm, and
 it works where spawning is disallowed.
+
+That is a decision per invocation. A whole run can be pinned to it — `attended_by: host`,
+where the framework never spawns at all and every turn, the Build reviewer included, is the
+host session's. See [10 — Unattended mode](10-unattended-mode.md).
 
 From "re-read the declared outputs off disk" onwards the two are literally the same
 function: same output validation, same `checks`, same cost roll-up, same gate. The agent's

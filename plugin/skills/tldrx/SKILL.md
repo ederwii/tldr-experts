@@ -60,8 +60,8 @@ Never answer on their behalf, never pick a default, never "assume yes":
   edit `split.yml` if they want different runs.
 - a gate, an answer, or any ADR/decision document — quote it and ask.
 - a gate `tldrx status` reports as signed `by: auto` that they disagree with. It signs
-  only when its five conditions hold and cannot judge whether a decision was RIGHT: quote
-  the note — it carries all five measured values — and ask before revoking.
+  only when its seven conditions hold and cannot judge whether a decision was RIGHT: quote
+  the note — it carries all seven measured values — and ask before revoking.
 - a Build story left `blocked` that they want built anyway. Two reviewers judged the diff
   and were not necessarily wrong; overruling them costs another two turns and is theirs to
   decide. Quote `04-build/log/<id>.md` — it says what each verdict was and why — and ask.
@@ -165,7 +165,7 @@ retries are where the money is) and `tldrx budget show`. Quote them, never the a
    from disk. A sub-agent reporting "ok" is not evidence.
 6. **Say which you are in: measured, inferred, or assumed.** Never blur them.
 7. **Stop at gates.** You never close one — not even an `auto` gate, which the
-   framework closes itself and only when all five of its conditions hold.
+   framework closes itself and only when all seven of its conditions hold.
 8. **A checked section holds at least one item.** Nothing to report is still an
    item: `- none [src: absent:<what you looked at>]`. Prose is refused.
 9. **`.tldrx/` and `tldrx-work/` are committed** — the files ARE the state. `init`

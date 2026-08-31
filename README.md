@@ -42,10 +42,17 @@ dependencies, so an installed `tldrx` needs only Node; Bun builds it. Full walkt
 ## How much human is in the loop
 
 Every stage ends at a gate; what you choose is **who closes it**. `human` waits for `tldrx approve`.
-`auto` lets the harness close it, and only when all five conditions hold: the stage's checks pass, its
-phase has no open question, the spend is inside both the stage and phase ceilings, the stage did not
-fail, and the claim-sources validator reports nothing. Any one failing falls back to the human gate
-and says which one and what it measured.
+`auto` lets the harness close it, and only when all **seven** conditions hold: the stage's checks pass,
+its phase has no open question, the spend is inside both the stage and phase ceilings, the stage did not
+fail, the claim-sources validator reports nothing — and, on a Build stage, every story in the plan
+reached `done` **and** the epic branch changed nothing the run never declared it would touch. Any one
+failing falls back to the human gate and says which one and what it measured.
+
+`agent` is the third policy, and the strongest: those same seven, plus no budget decision taken while
+the stage ran, plus a validated **evidence note** the agent signed — a checklist whose own bullets each
+carry a `[src: …]` that resolves. It arrives by choice (`--gates plan:agent`), never by default, and it
+falls through to a person on an open question, a moved ceiling, work outside the declared boundary, or
+its own refusal. See [10 Unattended mode](docs/guide/10-unattended-mode.md).
 
 | Scope | what | how | plan | build | watch |
 |---|---|---|---|---|---|
@@ -152,7 +159,9 @@ The guide, in `docs/guide/`: [1 Quick start](docs/guide/01-quick-start.md) ·
 [5 Seeds and triage](docs/guide/05-seeds-and-triage.md) (`--seed`, `--from`, splitting a big seed) ·
 [6 Budgets and cost](docs/guide/06-budgets-and-cost.md) · [7 Claude Code](docs/guide/07-claude-code.md) (plugin, hooks, `/tldrx`) ·
 [8 CLI reference](docs/guide/08-cli-reference.md) (every command, flag and exit code) ·
-[9 Troubleshooting](docs/guide/09-troubleshooting.md) (every refusal, and the move that clears it).
+[9 Troubleshooting](docs/guide/09-troubleshooting.md) (every refusal, and the move that clears it) ·
+[10 Unattended mode](docs/guide/10-unattended-mode.md) (`attended_by: host`, `gates_policy: agent`, the
+review handshake, the fix list, decision cards).
 Design docs: [`docs/concept.md`](docs/concept.md) (why) · [`docs/spec.md`](docs/spec.md) (the schemas, and §7's
 open decisions) · [`docs/ROADMAP.md`](docs/ROADMAP.md) (next) · [`CHANGELOG.md`](CHANGELOG.md) (shipped) ·
 [`docs/dashboard-model.md`](docs/dashboard-model.md).

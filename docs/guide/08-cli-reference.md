@@ -150,7 +150,7 @@ tldrx run attend   <host|--none> [<run>] [--run <id>]
 tldrx run status   [<run>] [--json] [--run <id>]
 tldrx run estimate [<run>] [--json] [--run <id>]
 tldrx run auto     [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]
-                          [--yolo] [--gate-agent] [--ui <mode>]
+                          [--parallel <n>] [--yolo] [--gate-agent] [--ui <mode>]
 tldrx run unlock   [<run>] [--force]
 tldrx run cancel   [<run>] --note <text> [--force]
 ```
@@ -214,7 +214,8 @@ Run the run's next stage and stop at its gate. Exit `4` is the normal end of a s
 stage.
 
 ```
-tldrx next [<run>] [--run <id>] [--dry-run] [--prepare|--commit] [--model <m>] [--effort <level>]
+tldrx next [<run>] [--run <id>] [--dry-run] [--prepare|--commit] [--review] [--fixlist <path>]
+           [--parallel <n>] [--model <m>] [--effort <level>]
            [--max-usd <n>] [--prompt-max-bytes <n>] [--max-reads <n>] [--cost-usd <n>]
            [--tokens <n>] [--yolo] [--keep-worktrees] [--discard-pending] [--reuse-epic]
            [--ui <mode>] [--root <path>]
@@ -225,6 +226,9 @@ tldrx next [<run>] [--run <id>] [--dry-run] [--prepare|--commit] [--model <m>] [
 | `--dry-run` | Run the stage and REVERT its non-handoff outputs afterwards. It is headless: it spawns a real sub-agent and the turn is billed (measured 2026-08-30 — one `agent.spawned`, one `agent.result`, the cost on the ledger). Use `--prepare` for the thing that spawns nothing |
 | `--prepare` | Write the prompt bundle and stop, spawning nothing |
 | `--commit` | Record the result of a `--prepare` cycle run by hand. Spawns nothing |
+| `--review` | With `--prepare`/`--commit`, addresses the story's **reviewer** half instead of its developer half: the bundle is one directory down, at `.agent/<stage>/<story>/review/`. Spawns nothing ([10 — Unattended mode](10-unattended-mode.md)) |
+| `--fixlist <path>` | With `--prepare`, re-prepares the AUTHOR's bundle carrying that fix list's open findings under `## Fix list`. Omit it and the latest round on disk with anything still open is carried by itself |
+| `--parallel <n>` | How many stories of ONE wave to build at a time. Merges still land in the wave's listed order; default `1` |
 | `--model <m>` | Passed through to `claude --model`. Default: the stage's own `model:` |
 | `--effort <level>` | `low` `medium` `high` `xhigh` `max`. The cost lever `--max-usd` is not |
 | `--max-usd <n>` | Stop after the turn that crosses this. A ceiling on the run, not a brake on the turn in flight |
@@ -308,7 +312,8 @@ tldrx approve [--note <text>] [--as-agent] [--evidence <path>] [--run <id>] [--r
 ```
 
 `--as-agent` signs an `agent` gate with the evidence note at `.agent/<stage>/evidence.md`
-(spec §2.17), or at `--evidence <path>`. The note is validated by the same §2.8 machinery
+(spec §2.17), or at `--evidence <path>`. `--evidence` on its own is exit `1` — a note nobody
+signs with is not evidence for anything. The note is validated by the same §2.8 machinery
 `claim-sources` runs before anything is recorded; then the gate records the note's `by:` as
 the actor, `gate.evidence` carries its counts, and the note is copied to
 `<phase>/gate-evidence/<stage>.md`, where it is committed.
