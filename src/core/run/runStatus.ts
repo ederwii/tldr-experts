@@ -13,7 +13,7 @@ import { renderAttempts, stageAttempts, type StageAttempts } from "./attempts.ts
 import { buildProgress, renderBuildProgress, renderStoryCosts, BUILD_PHASE, type BuildProgress } from "./buildProgress.ts";
 import { gatePolicyFor, type GatePolicy, type GatesPolicy } from "./gatePolicy.ts";
 import { failureReason, waitingFor, type Waiting, type WaitingKind } from "./waiting.ts";
-import { flatten, isTerminal, type RunFile, type RunPhase } from "./RunFile.ts";
+import { flatten, isTerminal, type AttendedBy, type RunFile, type RunPhase } from "./RunFile.ts";
 
 export const BAR_CELLS = 5;
 
@@ -84,6 +84,14 @@ export interface RunStatusView {
   readonly gates_policy: GatesPolicy;
   /** One row per stage, in execution order, carrying `by` on a closed gate. */
   readonly gates: readonly GateRow[];
+  /**
+   * `run.yml`'s `attended_by` (§2.2), or null when the framework may spawn.
+   *
+   * On this screen because it changes what every OTHER line on it means: a run
+   * that will not spawn is not a run that is stuck, and `waiting` reads the same
+   * either way.
+   */
+  readonly attended_by: AttendedBy | null;
 }
 
 export function buildStatus(run: RunFile, budget: RunBudget, runDir: string): RunStatusView {
@@ -110,6 +118,7 @@ export function buildStatus(run: RunFile, budget: RunBudget, runDir: string): Ru
     // Appended, never inserted: `--json` consumers read this object by key order
     // in at least one test, and every key above keeps its position.
     unmetered_tasks: countUnmetered(run),
+    attended_by: run.attended_by ?? null,
   };
 }
 
@@ -181,7 +190,9 @@ export function renderStatus(view: RunStatusView): string {
   const width = Math.max(...view.phases.map((p) => p.id.length), 7);
   const lines = [
     `${view.run} · ${view.title}`,
-    `scope ${view.scope} · workflow ${view.workflow} · repos ${view.repos.length === 0 ? "(none)" : view.repos.join(", ")} · status ${view.status}`,
+    `scope ${view.scope} · workflow ${view.workflow} · repos ${view.repos.length === 0 ? "(none)" : view.repos.join(", ")} · status ${view.status}` +
+      // Only when set, so an ordinary run's screen is byte-identical to before.
+      (view.attended_by === null ? "" : ` · attended: ${view.attended_by}`),
     `cursor ${view.cursor.phase} / ${view.cursor.stage}`,
     "",
   ];

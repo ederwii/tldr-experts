@@ -120,6 +120,12 @@ export function emitRunYaml(run: RunFile): string {
         `note: ${yamlScalar(run.cancelled.note)}}`,
     );
   }
+  // Same rule again: emitted only when set, so a run.yml written before
+  // `attended_by` existed — which is every run.yml written before 0.3.0 — round-
+  // trips byte-for-byte through a save.
+  if (run.attended_by !== undefined) {
+    lines.push(`attended_by: ${yamlScalar(run.attended_by)}`);
+  }
   if (run.gates_policy !== undefined && Object.keys(run.gates_policy).length > 0) {
     lines.push(`gates_policy: ${gatesPolicy(run.gates_policy)}`);
   }

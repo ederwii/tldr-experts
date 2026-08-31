@@ -26,7 +26,7 @@ import { ambiguousRunLines } from "../run/openRuns.ts";
 import { RunStore } from "../run/RunStore.ts";
 import { PROJECT_WORK_DIR } from "../paths.ts";
 import { AUTO_GATE_ACTOR } from "../run/autoGate.ts";
-import { flatten } from "../run/RunFile.ts";
+import { flatten, isAttendedByHost } from "../run/RunFile.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
 import { runNext, type NextOutcome } from "./runNext.ts";
 
@@ -83,6 +83,19 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
   }
   const runDir = resolution.store.runDir;
   const runId = resolution.store.runId;
+
+  // `attended_by: host` (spec §2.2). Exit 1, a USAGE error, and before the event
+  // log is even opened so nothing is written: this loop's whole job is calling
+  // `next` headless over and over, and on this run `next` headless is a refusal.
+  // Not exit 4 — a run waiting on a host turn is `next`'s answer to give, and a
+  // loop that reported "awaiting human" would invite a retry that can never
+  // succeed. The command is wrong for this run, which is what 1 means.
+  if (isAttendedByHost(resolution.store.run)) {
+    say(`${runId} is attended_by: host — \`run auto\` is a loop over spawns and this run does not spawn.`);
+    say(`  drive it a turn at a time: tldrx next --prepare ${runId}`);
+    say(`  or hand the run back to the framework: tldrx run attend --none ${runId}`);
+    return { code: EXIT_USAGE, lines };
+  }
 
   if (options.until !== undefined) {
     const known = flatten(resolution.store.run).map((entry) => entry.stage.id);

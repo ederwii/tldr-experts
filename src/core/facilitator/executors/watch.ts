@@ -44,7 +44,34 @@ export const HANDOFF_REL = `${WATCH_PHASE}/handoff.md`;
  */
 export const MIN_AGENT_USD = 0.25;
 
+/**
+ * `attended_by: host` and a headless invocation: refuse, spawn nothing.
+ *
+ * `refused: true` rather than a failure — the stage goes back to `ready` and the
+ * operator fixes it by using the other half of the handshake (spec §3 exit 2).
+ * `runNext` refuses this before an executor is reached; this is the second layer,
+ * for the day a fork replaces the Watch phase with an executor of its own.
+ */
+function attendedRefusal(ctx: ExecutorContext): ExecutorOutcome {
+  return {
+    ok: false,
+    awaiting: false,
+    tasks: [],
+    costUsd: 0,
+    outputs: [],
+    lines: [
+      `${ctx.runId} is attended_by: host — ${ctx.phaseId}/${ctx.stageId} does not run headless.`,
+      `  hand it a turn instead: tldrx next --prepare ${ctx.runId}`,
+    ],
+    error: null,
+    refused: true,
+  };
+}
+
 export async function watchExecutor(ctx: ExecutorContext): Promise<ExecutorOutcome> {
+  // Before a feature is collected and long before a prompt: a host-driven run
+  // never spawns one sub-agent per shipped feature behind the host's back.
+  if (ctx.attendedByHost && ctx.mode === "headless") return attendedRefusal(ctx);
   const features = collectFeatures(ctx.runDir);
 
   if (features.length === 0) {

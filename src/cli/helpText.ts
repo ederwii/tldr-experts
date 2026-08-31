@@ -278,13 +278,14 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "run",
-    description: "Create a piece of work, look at one, drive one to its next human gate, or get a stuck one moving again.",
+    description: "Create a piece of work, look at one, drive one to its next human gate, hand it to a host session or back, or get a stuck one moving again.",
     args: [
       { name: "<slug>", meaning: "run new: the short name. The id becomes <yymmdd>-<slug>." },
       {
         name: "[<run>]",
-        meaning: "run status / run estimate / run auto / run unlock / run cancel: a run id. Omit it and the one open run is used.",
+        meaning: "run attend / run status / run estimate / run auto / run unlock / run cancel: a run id. Omit it and the one open run is used.",
       },
+      { name: "<host|--none>", meaning: "run attend: which way to flip it. `host` hands the run to a host session; `--none` hands it back." },
     ],
     flags: [
       { name: "title", arg: "<t>", meaning: "Human title for the run. Default: the slug.", sub: "new" },
@@ -305,6 +306,20 @@ const ENTRIES: readonly CommandHelp[] = [
         meaning: "Which stages a PERSON approves; every other gate closes automatically. Overrides the workflow's gates: wholesale.",
         sub: "new",
       },
+      {
+        name: "attended-by",
+        arg: "<host>",
+        meaning: "Open the run with a host session driving it: the framework writes prompt bundles and judges results, and never spawns. `tldrx next` then refuses the headless mode (exit 4) and names the --prepare command; `run auto` is refused outright. Absent (the default) the framework may spawn, exactly as before.",
+        values: ["host"],
+        sub: "new",
+      },
+      {
+        name: "none",
+        arg: null,
+        meaning: "Hand the run back to the framework: it may spawn on it again. The opposite direction to `tldrx run attend host`.",
+        sub: "attend",
+      },
+      { ...runFlag(), sub: "attend" },
       json("the run view", "status"),
       { ...runFlag(), sub: "status" },
       json("the estimate", "estimate"),
@@ -341,6 +356,9 @@ const ENTRIES: readonly CommandHelp[] = [
     ],
     examples: [
       "tldrx run new checkout-v2 --scope feature --budget 40",
+      "tldrx run new checkout-v2 --attended-by host",
+      "tldrx run attend host 260101-checkout",
+      "tldrx run attend --none 260101-checkout",
       "tldrx run status --json",
       "tldrx run estimate",
       "tldrx run auto --max-usd 15 --until build",

@@ -139,12 +139,14 @@ the header — they degrade a stage, they do not block one. Exits: `0` `1` `3`.
 
 ## `tldrx run`
 
-Create a piece of work, look at one, drive one to its next human gate, or get a stuck one
-moving again.
+Create a piece of work, look at one, drive one to its next human gate, hand it to a host
+session or back, or get a stuck one moving again.
 
 ```
 tldrx run new <slug> [--title <t>] [--scope <s>] [--budget <usd>] [--repos a,b]
                      [--from <dir> | --seed <file|dir> …] [--gates <a,b|all|none>]
+                     [--attended-by host]
+tldrx run attend   <host|--none> [<run>] [--run <id>]
 tldrx run status   [<run>] [--json] [--run <id>]
 tldrx run estimate [<run>] [--json] [--run <id>]
 tldrx run auto     [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]
@@ -158,6 +160,30 @@ tldrx run cancel   [<run>] --note <text> [--force]
 `security-patch` `spike` `upgrade` (default `feature`). `--budget <usd>` defaults to the
 preset's `default_budget_usd`. `--from` and `--seed` are mutually exclusive; **`--seed` is
 repeatable**. `--gates` names the HUMAN gates and overrides the workflow's `gates:` wholesale.
+`--attended-by host` opens the run in **attended mode**: a host session does the turns and
+the framework never spawns on it (see below). Any other value is exit `1` and no run is made.
+
+**`attend`** flips that on a run that is already open. `tldrx run attend host` hands the run
+to a host session; `tldrx run attend --none` hands it back. It runs no agent, spends nothing,
+moves no stage and touches no branch — it sets one field and appends one `run.attended` event.
+A direction is required and never guessed (exit `1`), setting what is already set is a silent
+no-op, and a `done` or `cancelled` run is refused (exit `2`).
+
+**Attended mode** (`attended_by: host` in `run.yml`) exists for one measured failure: a bare
+`tldrx next` on a Build stage runs the WHOLE remaining pipeline — every wave, every story, as
+paid spawns — when the host wanted one turn. On such a run:
+
+- `tldrx next` with no `--prepare`/`--commit` exits **`4`** and names the exact command the
+  stage is waiting for. Nothing is billed and nothing is written. `--dry-run` is refused with
+  it, because `--dry-run` is headless: it spawns for real and only reverts the FILES.
+- `tldrx run auto` is refused at exit **`1`** before the event log is even opened.
+- Every stage executor exposes prepare/commit only, and `spawnAgent` itself throws if any path
+  reaches it — three layers, because "nothing spawns" is a promise about money.
+- `tldrx run status` prints `attended: host`, and the status line carries an `att` marker.
+
+Everything else is untouched: the prepare/commit contract, `pending.json`/`result.json`,
+`--cost-usd`/`--tokens`, the lock, the cursor and the gates all behave exactly as they do on
+an ordinary run.
 
 **`status`** with several runs open LISTS them and exits `0` — it is the screen you read to
 find the id every other command wants.
@@ -167,7 +193,8 @@ what was actually spent, use `tldrx cost`.
 
 **`auto`** loops `next` until a human gate or open question (`4`), a failure (`5`), a budget
 refusal (`2`), `--until` reached or the run finished (`0`). `--max-usd` is a ceiling on the
-LOOP's spend, checked between stages. Headless only.
+LOOP's spend, checked between stages. Headless only — which is why it is refused outright
+(exit `1`) on a run marked `attended_by: host`.
 
 **`unlock`** drops a `.lock` nobody is behind and puts the stage it stranded back to `ready`.
 It spends nothing and touches no stage output. A live pid needs `--force`.
@@ -192,7 +219,7 @@ tldrx next [<run>] [--run <id>] [--dry-run] [--prepare|--commit] [--model <m>] [
 
 | Flag | Meaning |
 |---|---|
-| `--dry-run` | Say which stage would run, with its inputs and budget. Spawns nothing, writes nothing |
+| `--dry-run` | Run the stage and REVERT its non-handoff outputs afterwards. It is headless: it spawns a real sub-agent and the turn is billed (measured 2026-08-30 — one `agent.spawned`, one `agent.result`, the cost on the ledger). Use `--prepare` for the thing that spawns nothing |
 | `--prepare` | Write the prompt bundle and stop, spawning nothing |
 | `--commit` | Record the result of a `--prepare` cycle run by hand. Spawns nothing |
 | `--model <m>` | Passed through to `claude --model`. Default: the stage's own `model:` |
@@ -208,7 +235,9 @@ tldrx next [<run>] [--run <id>] [--dry-run] [--prepare|--commit] [--model <m>] [
 | `--reuse-epic` | Let the build stage adopt an existing `epic/<slug>` branch this run did not cut |
 | `--ui <mode>` | `auto` `scene` `compact` `plain` `off`. Every byte goes to stderr |
 
-`--prepare` and `--dry-run` print the CONTEXT LEDGER. Exits: `0` `1` `2` `3` `4` `5`.
+`--prepare` and `--dry-run` print the CONTEXT LEDGER. On a run marked `attended_by: host`
+every headless invocation — `--dry-run` included — is refused at exit `4`, naming the half of
+the handshake the stage is waiting for. Exits: `0` `1` `2` `3` `4` `5`.
 
 ## `tldrx seed`
 

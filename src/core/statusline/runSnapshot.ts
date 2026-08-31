@@ -11,7 +11,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { RunStore } from "../run/RunStore.ts";
-import { isTerminal } from "../run/RunFile.ts";
+import { isAttendedByHost, isTerminal } from "../run/RunFile.ts";
 import { openRunViews, cursorStage } from "../../hooks/lib/runFile.ts";
 import { openQuestionIds, phaseDirs } from "../facilitator/skipIf.ts";
 
@@ -45,6 +45,14 @@ export interface RunSnapshot {
   readonly autoGates: number;
   /** Stages marked `stale` by a revoked approval — their files are behind. */
   readonly staleStages: number;
+  /**
+   * `attended_by: host` — a host session is driving this run and the framework
+   * does not spawn on it.
+   *
+   * On the line for the same reason `auto:N` is: the operator who most needs to
+   * know is the one about to type `tldrx next` and wonder why nothing happened.
+   */
+  readonly attendedByHost: boolean;
   readonly source: SnapshotSource;
 }
 
@@ -96,6 +104,7 @@ function fromStore(root: string): RunSnapshot | null {
     openCount: open.length,
     autoGates: stages.filter((s) => s.gate.status === "approved" && s.gate.by === AUTO).length,
     staleStages: stages.filter((s) => s.stale === true).length,
+    attendedByHost: isAttendedByHost(run),
     source: "run-store",
   };
 }
@@ -127,6 +136,9 @@ function fromTolerantRead(root: string): RunSnapshot | null {
     // gate was auto-signed.
     autoGates: 0,
     staleStages: 0,
+    // Same rule as `autoGates`: the tolerant reader does not parse it, and false
+    // here means "cannot see", never a claim that the run is unattended.
+    attendedByHost: false,
     source: "tolerant",
   };
 }

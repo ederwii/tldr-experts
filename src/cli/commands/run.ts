@@ -15,6 +15,8 @@ import { startUi } from "../ui.ts";
 import { effortFlag } from "../effort.ts";
 import { fail } from "../report.ts";
 import { runAuto } from "../../core/facilitator/runAuto.ts";
+import { attendRun } from "../../core/run/attend.ts";
+import { ATTENDED_BY, type AttendedBy } from "../../core/run/RunFile.ts";
 import { parallelFlag } from "./next.ts";
 import { cancelRun, unlockRun } from "../../core/run/rescue.ts";
 import { nowRfc3339 } from "../../hooks/lib/actor.ts";
@@ -37,7 +39,7 @@ const HINT_FILE_COUNT = 10;
 
 const VALUE_FLAGS = [
   "title", "scope", "budget", "repos", "from", "seed", "gates", "run", "root",
-  "max-usd", "until", "model", "effort", "ui", "note", "parallel",
+  "max-usd", "until", "model", "effort", "ui", "note", "parallel", "attended-by",
 ];
 
 export const runCommand: Command = {
@@ -45,20 +47,23 @@ export const runCommand: Command = {
   summary: "Create, inspect or auto-run a piece of work",
   usage: "tldrx run new <slug> [--title <t>] [--scope <s>] [--budget <usd>] [--repos a,b]\n" +
     "                  [--from <aidlc-intent-dir> | --seed <file|dir> ...] [--gates <a,b|all|none>]\n" +
-    "                  [--root <path>]\n" +
+    "                  [--attended-by host] [--root <path>]\n" +
+    "       tldrx run attend <host|--none> [<run>] [--root <path>]\n" +
     "       tldrx run status [<run>] [--json] [--root <path>]\n" +
     "       tldrx run estimate [<run>] [--json] [--root <path>]\n" +
     "       tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]\n" +
     "                  [--yolo] [--parallel <n>] [--ui scene|compact|plain|off] [--root <path>]\n" +
     "       tldrx run unlock [<run>] [--force] [--root <path>]\n" +
     "       tldrx run cancel [<run>] --note <text> [--force] [--root <path>]",
-  subcommands: ["new", "status", "estimate", "auto", "unlock", "cancel"],
+  subcommands: ["new", "attend", "status", "estimate", "auto", "unlock", "cancel"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const [sub, ...rest] = argv;
     switch (sub) {
       case "new":
         return runNew(rest);
+      case "attend":
+        return runAttend(rest);
       case "status":
         return runStatus(rest);
       case "estimate":
@@ -71,7 +76,7 @@ export const runCommand: Command = {
         return runCancel(rest);
       default:
         process.stderr.write(
-          `tldrx run: expected \`new\`, \`status\`, \`estimate\`, \`auto\`, \`unlock\` or \`cancel\`\n`
+          `tldrx run: expected \`new\`, \`attend\`, \`status\`, \`estimate\`, \`auto\`, \`unlock\` or \`cancel\`\n`
             + `${runCommand.usage}\n`,
         );
         return EXIT_USAGE;
@@ -99,6 +104,7 @@ function runNew(argv: readonly string[]): number {
       from: stringFlag(args, "from"),
       seed: seeds.length === 0 ? undefined : seeds.length === 1 ? seeds[0] : seeds,
       gates: stringFlag(args, "gates"),
+      attendedBy: attendedByFlag(args),
       actor: currentActor(),
       now: new Date(),
     });
@@ -174,6 +180,67 @@ function seedHint(
     `note: seed is ${String(seed.documents.length)} files / ${formatTokens(tokens)} tokens — `
     + `\`tldrx seed triage ${seed.sources[0] ?? seeds[0] ?? ""}\` can propose a split`,
   ];
+}
+
+/**
+ * `--attended-by <value>` — refused rather than coerced when it is not `host`.
+ *
+ * One legal value today (§2.2), and a typo that silently opened an ORDINARY run
+ * would be the worst possible failure of this flag: the operator would think
+ * nothing spawns, and everything would.
+ */
+function attendedByFlag(args: Parameters<typeof stringFlag>[0]): AttendedBy | undefined {
+  const value = stringFlag(args, "attended-by");
+  if (value === undefined) return undefined;
+  if (!(ATTENDED_BY as readonly string[]).includes(value)) {
+    throw new UsageError(`--attended-by must be one of ${ATTENDED_BY.join(" | ")} (got '${value}')`);
+  }
+  return value as AttendedBy;
+}
+
+/**
+ * `tldrx run attend host|none [<run>]`, with `--none` accepted in place of the
+ * word because that is how the design spells it.
+ *
+ * The direction is a REQUIRED positional rather than a flag-or-default: "attend"
+ * with nothing after it could plausibly mean either direction, and guessing which
+ * would be guessing about whether a run is allowed to spend money.
+ */
+function runAttend(argv: readonly string[]): number {
+  try {
+    const args = parseArgs(argv, VALUE_FLAGS);
+    const none = boolFlag(args, "none");
+    const word = args.positionals[0];
+    let attendedBy: AttendedBy | null;
+    let positionalRun: string | undefined;
+    if (none) {
+      if (word === "host") {
+        throw new UsageError("run attend: `host` and `--none` are opposite directions — pass one");
+      }
+      attendedBy = null;
+      positionalRun = word === "none" ? args.positionals[1] : word;
+    } else if (word === "host") {
+      attendedBy = "host";
+      positionalRun = args.positionals[1];
+    } else if (word === "none") {
+      attendedBy = null;
+      positionalRun = args.positionals[1];
+    } else {
+      throw new UsageError(
+        "run attend needs a direction: `tldrx run attend host` hands the run to a host session, "
+        + "`tldrx run attend --none` hands it back to the framework",
+      );
+    }
+    return report("run attend", attendRun({
+      root: workspaceRootFrom(args),
+      runId: positionalRun ?? stringFlag(args, "run"),
+      attendedBy,
+      actor: currentActor(),
+      at: nowRfc3339(),
+    }));
+  } catch (error) {
+    return fail("run attend", error);
+  }
 }
 
 /**
