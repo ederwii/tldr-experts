@@ -621,7 +621,7 @@ describe("retro.md carries the gates back to the experts", () => {
       id: "S1", title: "First story", wave: "w1", repo: "api", epic: "E1",
       epicBranch: "epic/e1", branch: "story/S1", status: "review", attempts: 1,
       dod: [{ command: "npm run test", exitCode: 1, timedOut: false, tail: "1 failing" }],
-      commit: null, merged: false, conflicts: [], verdict: "changes",
+      commit: null, merged: false, carried: null, conflicts: [], verdict: "changes", developerError: null,
       reviewSummary: "the acceptance criteria are not met yet", reviewFindings: ["no test for the empty code"],
       reviewRel: "04-build/log/S1.md", reason: null, cost_usd: 0.4, ...overrides,
     };

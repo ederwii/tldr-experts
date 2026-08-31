@@ -52,8 +52,9 @@ export function buildRetroPath(runDir: string): string {
 }
 
 /**
- * One story's bullets: the reviewer's `changes` verdict (or its FAILURE to
- * return one), and every DoD command that failed on the FIRST attempt.
+ * One story's bullets: a developer that FAILED, the reviewer's `changes` verdict
+ * (or its FAILURE to return one), and every DoD command that failed on the FIRST
+ * attempt.
  *
  * "On the first attempt" is the interesting one and it is why `attempts` is read
  * rather than the final status. A command that failed, was fixed and then passed
@@ -72,6 +73,17 @@ export function storyRetroLines(outcome: StoryOutcome, runId: string): readonly 
     for (const finding of outcome.reviewFindings) {
       lines.push(`- \`${outcome.id}\` — reviewer finding: ${oneLine(finding)} ${src}`);
     }
+  }
+
+  // A developer that FAILED is the loudest push-back of all: the story bought a
+  // turn and got nothing, and the number the team has to change is a budget, not
+  // a line of code. It is deliberately NOT filed as a reviewer verdict — nobody
+  // judged anything here.
+  if (outcome.developerError !== null) {
+    lines.push(
+      `- \`${outcome.id}\` — the developer FAILED and produced no work on attempt `
+      + `${String(outcome.attempts)}: ${oneLine(outcome.developerError)} ${src}`,
+    );
   }
 
   // A reviewer that FAILED is push-back too, and of the most expensive kind: the

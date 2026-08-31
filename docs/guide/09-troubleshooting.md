@@ -199,6 +199,28 @@ never a second developer turn. If it keeps dying at the same ceiling, the review
 poor for the diff: price the story higher in `03-plan/budget.yml`, or raise the stage with
 `tldrx budget raise 04-build <n>`.
 
+**A story went back to `todo` (or `review`) and the log says the DEVELOPER failed.** Same
+shape, other half of the pipeline: the developer sub-agent never delivered — a spawn error, a
+timeout, or `--max-budget-usd` running out before it wrote anything. A turn that never ran is
+not an attempt, so the story is put back exactly where it was, its attempt number unspent and
+its worktree kept, and the next `tldrx next` (or `tldrx next --prepare`) offers it again as a
+fresh developer run at the SAME attempt number. Before 2026-08-30 it was recorded as
+`blocked`, which is terminal in-run: one errored spawn ended the story. If it keeps dying at
+the same ceiling, price the story higher in `03-plan/budget.yml` or raise the stage with
+`tldrx budget raise 04-build <n>`. A developer that RAN and produced work its DoD faulted is
+a different thing and still blocks.
+
+**A run from before 2026-08-30 has stories `blocked` that never really ran.** They are picked
+back up automatically: a `blocked` story whose last attempt recorded no commit, no check and
+no reviewer is read as the errored spawn it was, and `tldrx next` says
+`S2 was blocked by a developer that FAILED (…) — that was never an attempt, so it is offered
+again`. A story blocked by a red DoD, a merge conflict or two `changes` verdicts is left
+exactly where it is.
+
+**`auto gate not taken — stories=1 of 7 done — S2:blocked, …`.** A Build stage does not sign
+its own gate while any story is unfinished. Approve it yourself if half the epic is what you
+mean to ship (`tldrx approve --note "…"`), or fix the stories and run the stage again.
+
 **`refused: an epic/<slug> branch exists that this run did not cut`, exit 2.** The epic branch
 keeps its plain name on purpose — it is the unit a team merges — so instead of making collision
 impossible, adopting one is made deliberate: `tldrx next --reuse-epic`.

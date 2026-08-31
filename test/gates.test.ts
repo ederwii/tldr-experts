@@ -332,7 +332,7 @@ describe("an auto gate that holds", () => {
   });
 });
 
-describe("the five auto-gate conditions, one at a time", () => {
+describe("the six auto-gate conditions, one at a time", () => {
   /** The pieces `evaluateAutoGate` needs, from a real run, with one knob turned. */
   function inputs(ws: FacilitatorWorkspace, overrides: Record<string, unknown> = {}): never {
     const store = RunStore.open(ws.runDir);
@@ -358,8 +358,8 @@ describe("the five auto-gate conditions, one at a time", () => {
     }));
     expect(verdict.ok).toBe(false);
     expect(verdict.why).toContain("checks=cmd:failed");
-    // and the other four still measured, in the note
-    expect(verdict.conditions).toHaveLength(5);
+    // and the other five still measured, in the note
+    expect(verdict.conditions).toHaveLength(6);
     expect(verdict.note).toContain("questions=0 open");
   });
 
@@ -409,14 +409,17 @@ describe("the five auto-gate conditions, one at a time", () => {
     expect(verdict.conditions[0]).toMatchObject({ id: "checks", ok: true, detail: "none declared" });
   });
 
-  test("all five holding is the only way through", async () => {
+  test("all six holding is the only way through", async () => {
     const ws = workspace([ALPHA], { gates: { alpha: "auto" } });
     writeFileSync(join(ws.runDir, "01-what", "handoff.md"), cannedHandoff(), "utf8");
     const verdict = await evaluateAutoGate(inputs(ws));
     expect(verdict.ok).toBe(true);
     expect(verdict.why).toBe("");
     expect(verdict.conditions.map((c) => c.id))
-      .toEqual(["checks", "questions", "budget", "status", "claim-sources"]);
+      .toEqual(["checks", "questions", "budget", "status", "claim-sources", "stories"]);
+    // `stories` is a Build condition; every other phase measures it as n/a rather
+    // than skipping it, so the note always says all six.
+    expect(verdict.note).toContain("stories=n/a (not a build stage)");
   });
 });
 

@@ -33,6 +33,46 @@
 
 ### Fixed
 
+- **A developer that FAILED is no longer recorded as a consumed attempt.** The
+  developer-side sibling of the reviewer fix below, found by the same run on 2026-08-30.
+  Five developer spawns on `260830-tenancy-identity-customers` died with
+  `Reached maximum budget ($0.30 | $0.40 | $0.50 | $0.90 | $1.50)` before delivering
+  anything the pipeline could see, and every one was settled as the story `blocked` —
+  terminal in-run — so six of seven stories were reported as tried and failed when five of
+  them had never been tried. A failed developer spawn now puts the story back at the status
+  it held BEFORE the attempt (`todo`, or `review` when a reviewer had asked for changes),
+  keeps its worktree, spends no attempt, and stops the in-process loop rather than buying
+  the same error twice. Its `check.failed` carries `check: "developer"`,
+  `status: "error"` and the error verbatim as `detail`; the review log, the operator line
+  and `retro.md` all say the developer **FAILED**, never that anything was reviewed. The
+  next `tldrx next` — headless or `--prepare` — offers the story again as a fresh developer
+  run at the **same attempt number**. A developer that RAN and produced work its DoD faulted
+  is a different thing entirely and still blocks, unchanged, as do two `changes` verdicts.
+- **Runs recorded by the old code pick those stories back up.** A `blocked` story whose last
+  attempt recorded no commit, no check of any kind and no reviewer — the only trace the old
+  code left, the error itself having gone to `run.yml` alone — is read as the errored spawn
+  it was and offered again, with `S2 was blocked by a developer that FAILED (…) — that was
+  never an attempt, so it is offered again`. It is paired with the story's own plan, because
+  a story with an empty dod block blocks with exactly the same event shape and that block is
+  a plan bug. Measured read-only against the live run: `tldrx next --prepare` now offers
+  **S2** and, after it, S5, S4, S6 and S7 — while S3, which was blocked by two genuine
+  `changes` verdicts, stays blocked.
+- **The auto gate will not sign a Build stage whose stories are not all `done`.** Its five
+  conditions were all about the ARTEFACT — citations, questions, money, status — and none of
+  them looked at what the stage was for. On the live run all five held while six of seven
+  stories sat `blocked` and the epic branch carried one story's work, and the gate signed the
+  stage, then signed it again after a human revoked it. A sixth condition now reads the story
+  statuses where they live, refuses with `stories=1 of 7 done — S2:blocked, S3:blocked, …`
+  and falls through to the human gate. A person may still approve over blocked stories —
+  what is worth shipping is their judgement — and outside the Build phase the condition is
+  measured as `n/a` and always holds.
+- **A merge that moved nothing is no longer called "merged".** `git merge --no-ff` of a
+  branch that is already an ancestor exits 0 and says "Already up to date", and the handoff's
+  Gate section rendered that as landed work: on the live run it read
+  `(S1, S3, S5, S4, S7 merged)` when the epic tip carried only S1's commits. The executor now
+  counts what the merge is about to move BEFORE it moves it — afterwards it cannot, because a
+  merged branch is an ancestor either way — and the Gate line, the story Finding and the
+  review log all say “added nothing — identical to `epic/x`” for a count of zero.
 - **A reviewer that FAILED is no longer recorded as a reviewer that asked for changes.**
   Found live 2026-08-30 by the first `feature`-scope run to reach Build: the headless
   reviewer of a 39-file, +1879-line story was given $0.26, died mid-read with

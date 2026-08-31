@@ -1,5 +1,5 @@
 /**
- * The five conditions an `auto` gate must satisfy before the facilitator closes it
+ * The six conditions an `auto` gate must satisfy before the facilitator closes it
  * (spec §5, "auto gates").
  *
  * The point of an auto gate is NOT to skip the gate. The stage still ends at one,
@@ -13,13 +13,14 @@
  *   4. `status`        — the stage did not end `failed`
  *   5. `claim-sources` — the §2.8 handoff validator, run whether or not the stage
  *                        declared it as a check
+ *   6. `stories`       — for a Build stage: every story in the plan reached `done`
  *
  * (5) overlaps (1) deliberately. `claim-sources` is the one validator that decides
  * whether the artefact a human would have READ is sourced at all, and a stage file
  * that forgot to list it must not thereby buy itself a cheaper gate.
  *
- * Every condition is evaluated even after one fails: the note records all five
- * with their values, because "which of the five stopped it" is the first question
+ * Every condition is evaluated even after one fails: the note records all six
+ * with their values, because "which of the six stopped it" is the first question
  * anybody asks and a short-circuit would answer it with silence.
  */
 import { existsSync, readFileSync } from "node:fs";
@@ -27,6 +28,7 @@ import { join } from "node:path";
 import { openBlocks, parseQuestions, unreadableQuestionHeadings } from "../text/questions.ts";
 import type { RunBudget } from "../budget/RunBudget.ts";
 import { runCheck, unverifiedCount, type CheckOutcome } from "./checks.ts";
+import { buildProgress, BUILD_PHASE } from "./buildProgress.ts";
 import type { PlannedStage } from "./workflowPreset.ts";
 import type { RunStage } from "./RunFile.ts";
 
@@ -43,7 +45,7 @@ export interface AutoGateCondition {
 export interface AutoGateVerdict {
   readonly ok: boolean;
   readonly conditions: readonly AutoGateCondition[];
-  /** The note recorded on the gate: all five conditions and their values. */
+  /** The note recorded on the gate: all six conditions and their values. */
   readonly note: string;
   /** Only the conditions that failed, for the "why not" line. Empty when `ok`. */
   readonly why: string;
@@ -67,6 +69,7 @@ export async function evaluateAutoGate(input: AutoGateInput): Promise<AutoGateVe
     budgetCondition(input),
     statusCondition(input.stage),
     await claimSourcesCondition(input),
+    storiesCondition(input),
   ];
   const failed = conditions.filter((condition) => !condition.ok);
   return {
@@ -219,6 +222,54 @@ async function claimSourcesCondition(input: AutoGateInput): Promise<AutoGateCond
     id: "claim-sources",
     ok: true,
     detail: outcome.status === "passed" ? "passed" : `${outcome.status}: ${outcome.detail}`,
+  };
+}
+
+/**
+ * The line a Build stage's auto gate is refused on, verbatim. It is what the
+ * operator reads and what the tests assert.
+ */
+export const UNFINISHED_STORIES =
+  "a build stage self-signs only when every story is `done` — a human decides whether to ship over these";
+
+/** At most this many story ids are named before the detail says "+N more". */
+const NAMED_STORIES = 8;
+
+/**
+ * A Build stage does not sign its own gate over stories that are not `done`.
+ *
+ * The other five conditions are all about the ARTEFACT: are its citations real,
+ * are its questions answered, did it stay inside its money. None of them looks at
+ * what the stage was for. Measured 2026-08-30 on run
+ * `260830-tenancy-identity-customers`: six of seven stories settled `blocked`
+ * with zero commits between them, the epic tip carried one story's work, and the
+ * auto gate signed the stage — twice, re-signing after a human revoked it —
+ * because `claim-sources` passed, `questions` was empty and the spend was under
+ * the ceiling. Every measured condition was true and the stage had not been built.
+ *
+ * A HUMAN may still approve over blocked stories; that is a judgement about what
+ * is worth shipping, and it is theirs. The machine has no basis for it.
+ *
+ * Read where the state actually lives — the story files, via `buildProgress` —
+ * and only for the Build phase: `03-plan/waves.yml` exists while the PLAN stage
+ * is gating too, and every story is `todo` at that moment by design.
+ */
+function storiesCondition(input: AutoGateInput): AutoGateCondition {
+  if (input.phaseId !== BUILD_PHASE) return { id: "stories", ok: true, detail: "n/a (not a build stage)" };
+  const progress = buildProgress(input.runDir);
+  if (progress === null) return { id: "stories", ok: true, detail: "n/a (no plan to build)" };
+
+  const stories = progress.waves.flatMap((wave) => wave.stories);
+  const counted = `${String(progress.done)} of ${String(progress.total)} done`;
+  const unfinished = stories.filter((story) => story.status !== "done");
+  if (unfinished.length === 0) return { id: "stories", ok: true, detail: counted };
+
+  const named = unfinished.slice(0, NAMED_STORIES).map((story) => `${story.id}:${story.status}`);
+  const rest = unfinished.length - named.length;
+  return {
+    id: "stories",
+    ok: false,
+    detail: `${counted} — ${named.join(", ")}${rest > 0 ? `, +${String(rest)} more` : ""}; ${UNFINISHED_STORIES}`,
   };
 }
 

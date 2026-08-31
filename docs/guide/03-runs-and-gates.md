@@ -138,12 +138,13 @@ per scope instead of per command with `build: {parallel: 3}` at the top of your
 ## Who closes a gate
 
 Every stage ends at a gate. What you choose is **who closes it**. `human` waits for
-`tldrx approve`; `auto` lets the harness close it — but only when all five conditions hold:
+`tldrx approve`; `auto` lets the harness close it — but only when all six conditions hold:
 the stage's checks pass, its phase has no open question, the spend is inside both the stage
-and the phase ceiling, the stage did not fail, and the claim-sources validator reports
-nothing (zero refused **and** zero unverified). Any one of them failing falls straight back
+and the phase ceiling, the stage did not fail, the claim-sources validator reports
+nothing (zero refused **and** zero unverified), and — on a Build stage — every story in the
+plan reached `done`. Any one of them failing falls straight back
 to the human gate and says which one and what it measured. The approval is recorded through
-the same path a person's is, with `by: auto` and a note carrying all five values, so
+the same path a person's is, with `by: auto` and a note carrying all six values, so
 `tldrx run status` and `events.jsonl` read identically either way.
 
 The shipped defaults — every scope keeps at least one human gate:
@@ -169,13 +170,13 @@ everywhere.
 ### What an auto gate cannot do
 
 An auto gate is a gate the harness may sign when it can show its work. It is not a claim
-that the work is good, and there are exactly three things it cannot do.
+that the work is good, and there are exactly four things it cannot do.
 
 **It cannot judge whether a decision was right.** It checks that every claim carries a
 citation and that every citation resolves — that `[src: F019]` names a live fact, that
 `[src: Q4]` is a question this run really asked, that `graph:api.Hunt` is a node in the
 graph, that `absent:` supports a negative claim and not a positive one. It does not read
-the design. A perfectly sourced bad idea passes all five conditions.
+the design. A perfectly sourced bad idea passes all six conditions.
 
 **It cannot verify what it cannot reach.** A `doc` citation is never fetched — a gate that
 opened a socket would be a different kind of thing — so an https URL nothing in the
@@ -187,8 +188,15 @@ write a `questions.md` and wrote one nothing can parse used to satisfy "zero ope
 questions". Now it does not. But a stage that was never asked to ask anything, and asks
 nothing, is still silent by right.
 
+**It cannot decide that unfinished work is worth shipping.** A Build stage whose stories are
+not all `done` falls to a human, naming the stories and their statuses. You may well approve
+it anyway — half an epic is often the right thing to merge — but that is a judgement about
+your project, and the harness has no basis for making it for you. Before 2026-08-30 it made
+it silently: a build with six of seven stories blocked and one story's work on the epic
+branch was auto-approved, twice.
+
 So: keep at least one human gate per scope (the table above does), read the note — it
-records all five conditions with their measured values — and when the machine signs
+records all six conditions with their measured values — and when the machine signs
 something it should not have, take it back.
 
 ### Taking an approval back
