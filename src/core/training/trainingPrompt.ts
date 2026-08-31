@@ -19,7 +19,7 @@ import { section, type ExpertDocument } from "../experts/expertDocument.ts";
 import { evidenceNote, stars } from "../experts/starChart.ts";
 import type { AreaRecord, ExpertRecord } from "../experts/ExpertRecord.ts";
 import type { Fact } from "../facts/Fact.ts";
-import { FROM_RUNS_SECTIONS, KNOWLEDGE_SECTIONS } from "./knowledgeFile.ts";
+import { describeKnowledgeIssue, FROM_RUNS_SECTIONS, KNOWLEDGE_SECTIONS, type KnowledgeIssue } from "./knowledgeFile.ts";
 import { fromRunsRelPath, knowledgeRelPath, partialOf, type TrainingMode } from "./Training.ts";
 import type { FileSelection, InlinedFile } from "./selectFiles.ts";
 import type { MinedFile, RunMine } from "./mineRuns.ts";
@@ -83,11 +83,7 @@ export function codePrompt(input: TrainingPromptInput, selection: FileSelection)
     "one line number outside its file, and nothing is kept: no knowledge file, no evidence, no",
     "level change. Write fewer claims rather than softer sources.",
     "",
-    "**A claim about a RESULT needs a command, not a file line.** \"exit 0\", \"78/78 passed\",",
-    "\"the build is green\", or the word \"measured\" used in the sentence itself — any of those in a",
-    "bullet or a paragraph must carry a `` [src: $ <cmd> → exit <n>] `` src. Citing the line of",
-    "`workspace.yml` that DECLARES the command is not evidence that it ran, and the file is",
-    "refused for it.",
+    ...executionClaimRule(input.commands),
     "",
     "## How this becomes a level",
     "",
@@ -161,6 +157,8 @@ export function runsPrompt(input: TrainingPromptInput, mine: RunMine): string {
     "",
     "`[src: absent:<what you looked at>]` is legal and earns no evidence.",
     "",
+    ...executionClaimRule(input.commands),
+    "",
     "**Out of scope, deliberately:** Claude Code transcripts. They carry no citation a reader",
     "can re-resolve, so nothing mined from one may enter this file.",
     "",
@@ -189,6 +187,178 @@ export function runsPrompt(input: TrainingPromptInput, mine: RunMine): string {
     "once.",
     "",
     ...expertBodies(input),
+  ].join("\n");
+}
+
+// --- the one rule that rejects whole files ----------------------------------
+
+/**
+ * "A result needs a command" — stated with an example and a counter-example,
+ * because stating it flatly did not work.
+ *
+ * Measured 2026-08-30, a real `expert train dotnet-stack --area dotnet --mode
+ * light` on `~/scavtopia`: $1.69 spent, one knowledge file written, and the file
+ * refused on TWO bullets that asserted an execution and cited a file line. The
+ * prompt did carry the rule — one paragraph, no example — and the trainer still
+ * did not know what a conforming line looked like. A rule whose whole cost is a
+ * rejected file is worth four more lines of prompt.
+ *
+ * Three things this says that the paragraph did not:
+ *
+ *   1. the exact literal shapes the checker looks for, so a writer can scan their
+ *      own sentence for them rather than guess at "a claim about a result";
+ *   2. one conforming line and one refused line, side by side, and WHY the refused
+ *      one is refused — a `workspace.yml` line declares a command, it is not a
+ *      record of running it;
+ *   3. that **not making the claim** is the other legal way out. The trainer that
+ *      failed had no command to run in reach of the sentence it was writing, so
+ *      "run it and cite it" was not actionable advice and "say something else"
+ *      was the only move available. A prompt that offers one exit teaches a
+ *      writer to go through the wall.
+ *
+ * And the `(measured)` trap is named: §2.3 asks every bullet to be annotated
+ * `(measured)` / `(inferred)` / `(assumed)`, and `\bmeasured\b` is one of the
+ * patterns. `claimCheck.ts` strips the ANNOTATION before matching, so the two
+ * instructions do not actually collide — but nothing told the writer that, and a
+ * writer who half-guesses at it writes worse bullets in both directions.
+ */
+export function executionClaimRule(commands: readonly string[]): readonly string[] {
+  const example = commands[0] ?? "npm test";
+  return [
+    "**A claim about a RESULT needs a COMMAND, not a file line — this one rejects the whole file.**",
+    "",
+    "The checker looks for four literal shapes in your sentence: `exit <n>`, `<n>/<n> passed`,",
+    "`build is green` / `build succeeded` / `build ok`, and the bare word **measured** standing in",
+    "the sentence itself. Any of those, in a bullet OR in a paragraph, with no",
+    "`` [src: $ <cmd> → exit <n>] `` on the line, and the file is refused whole — not that bullet,",
+    "the file, and every other finding you wrote with it.",
+    "",
+    "Write this:",
+    "",
+    "```",
+    `- The suite still covers the empty-input branch (measured) [src: $ ${example} → exit 0]`,
+    "```",
+    "",
+    "Never this:",
+    "",
+    "```",
+    `- \`${example}\` exits 0 on this repo (measured) [src: api:.tldrx/workspace.yml:19]`,
+    "- 78/78 tests pass (measured) [src: api:scripts/test.sh:105]",
+    "```",
+    "",
+    "Line 19 of `workspace.yml` DECLARES the command and line 105 of the script IS the script.",
+    "Neither is a record of anything having run, and a citation that merely resolves is not a",
+    "citation that sustains the sentence above it.",
+    "",
+    ...(commands.length === 0
+      ? [
+        "**You hold no `Bash` tool in this workspace, so there is exactly one way out: do not make",
+        "the claim.** Rewrite the bullet to say what the CODE does rather than what a run produced —",
+        "\"the empty-code guard throws before any request is made [src: api:src/auth/oauth.ts:7]\" needs",
+        "no command, is worth more as a finding, and cannot be refused for this.",
+      ]
+      : [
+        "**Two ways out, and only two.** Either RUN one of the declared commands and cite it as",
+        "`` [src: $ <cmd> → exit <n>] `` with the exit code you actually saw, or **do not make the",
+        "claim**: rewrite the bullet to say what the CODE does rather than what a run produced.",
+        "\"The empty-code guard throws before any request is made [src: api:src/auth/oauth.ts:7]\" needs",
+        "no command and is worth more as a finding anyway.",
+      ]),
+    "",
+    "**The trailing `(measured)` annotation is fine and expected** — it is stripped before the check",
+    "runs, so it can never trip this rule. It is the word loose in your own prose (\"the timeout is",
+    "measured at startup\") that reads as a claim about an execution. Keep it in the annotation,",
+    "out of the sentence.",
+  ];
+}
+
+// --- the repair round -------------------------------------------------------
+
+export interface RepairPromptParts {
+  /** `.tldrx/experts/<name>/knowledge/<area>.md.partial` — the same file as before. */
+  readonly target: string;
+  /** The rejected file, verbatim off disk. */
+  readonly rejected: string;
+  /** Every issue the validator raised, errors and warnings alike. */
+  readonly issues: readonly KnowledgeIssue[];
+  /** What is left of the run's ceiling for this one turn. */
+  readonly budgetUsd: number;
+}
+
+/**
+ * One more turn at the SAME file, given the exact problems the validator found.
+ *
+ * **Built by appending to the original prompt rather than replacing it**, for
+ * three reasons and one of them is money. (1) The rejected file's citations point
+ * into files that were INLINED in that prompt and nowhere else — a compact repair
+ * prompt would ask a sub-agent to fix a line number it can no longer see, and it
+ * would either guess or go reading outside the deterministic selection, which is
+ * the one thing training does not allow. (2) The prefix is byte-identical, so the
+ * repair turn reads the cache the first turn paid to create instead of paying for
+ * it twice. (3) The rules it broke are already stated above; restating them in
+ * different words in a second document is how two grammars start to drift.
+ *
+ * `[assumption]` — a FRESH spawn, not a resumed session. `spawnAgent` has no
+ * `--resume` (`buildClaudeArgs` builds every arg from scratch and the file's own
+ * rule is that a flag nobody has read in `--help` does not go in it), and the
+ * session id is captured for the ledger only. A resumed session would carry the
+ * first turn's reasoning; a fresh one carries the first turn's OUTPUT, which is
+ * the thing that has to change, plus the checker's verdict on it. Revisit if
+ * `--resume` is ever plumbed through for the Build fix loop.
+ */
+export function repairPrompt(original: string, parts: RepairPromptParts): string {
+  const errors = parts.issues.filter((issue) => issue.severity === "error");
+  const warnings = parts.issues.filter((issue) => issue.severity !== "error");
+  const numbered = withGutter(parts.rejected);
+  const fence = fenceFor(numbered);
+
+  return [
+    original,
+    "",
+    "---",
+    "",
+    "# REPAIR ROUND — the file you just wrote was REJECTED",
+    "",
+    `You already wrote \`${parts.target}\`. The framework re-read it off disk and it did not`,
+    "validate, so NOTHING was kept: no knowledge file, no evidence row, no level change. This is",
+    `your one repair turn, on the $${parts.budgetUsd.toFixed(2)} left of this run's ceiling. If the`,
+    "file does not validate this time the run is rejected for good and the money is gone.",
+    "",
+    `## What rejected it (${String(errors.length)})`,
+    "",
+    ...errors.map((issue) => describeKnowledgeIssue(issue)),
+    "",
+    ...(warnings.length === 0 ? [] : [
+      `## Warnings (${String(warnings.length)}) — NOT why it was rejected`,
+      "",
+      ...warnings.map((issue) => describeKnowledgeIssue(issue)),
+      "",
+      "Each of these costs that one bullet its evidence row and nothing else. Fixing them is worth",
+      "doing where it is cheap and is never worth breaking a good bullet for. Do not delete a",
+      "finding to silence a warning.",
+      "",
+    ]),
+    "## What you wrote",
+    "",
+    "The gutter numbers are the `L<n>` numbers above.",
+    "",
+    fence,
+    numbered,
+    fence,
+    "",
+    "## What to do now",
+    "",
+    "1. **Fix every error listed above.** Re-read the rule it names in the sections above this one;",
+    "   they have not changed and the checker has not changed.",
+    "2. **Deleting an offending bullet is a legal fix, and it beats inventing a source for it.** A",
+    "   file with one fewer finding is worth an entire level more than a file that is thrown away.",
+    "3. **Write the WHOLE file again** to the same path. It is read fresh off disk and validated",
+    "   whole, so an edit that leaves one old line in place fails in exactly the same way.",
+    "4. **Keep every finding you do not have to lose.** A bullet whose only problem is its source",
+    "   is repaired by fixing the source, or by rewriting the claim until the source it already",
+    "   has is enough to sustain it.",
+    "5. Change nothing else. One file, same path, same sections, same grammar.",
+    "",
   ].join("\n");
 }
 

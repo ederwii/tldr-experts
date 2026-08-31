@@ -9,7 +9,8 @@ export type { TrainingMode, TrainingTask } from "./Training.ts";
 export {
   KNOWLEDGE_SECTIONS, KNOWLEDGE_CHECKED_SECTIONS, FROM_RUNS_SECTIONS, FROM_RUNS_CHECKED_SECTIONS,
   LIGHT_SHAPE, RUNS_SHAPE, MAX_EVIDENCE_PER_AREA, RECAP_SECTION, EXECUTION_CLAIM_REFUSAL,
-  parseKnowledgeFile, proseExecutionIssues, describeKnowledgeIssues, knowledgeWarnings,
+  parseKnowledgeFile, proseExecutionIssues, describeKnowledgeIssues, describeKnowledgeIssue,
+  knowledgeErrors, knowledgeWarnings,
   codeEvidence, runEvidence, mergeEvidence, emptyKnowledgeScope,
 } from "./knowledgeFile.ts";
 export type {
@@ -29,8 +30,11 @@ export type { FileSelection, Candidate, InlinedFile, SelectOptions } from "./sel
 export { mineRuns, relevantFacts, hasMinableFiles, MAX_RUN_FILES, MAX_RUN_BYTES } from "./mineRuns.ts";
 export type { RunMine, MinedFile, MineOptions } from "./mineRuns.ts";
 
-export { codePrompt, runsPrompt, renderInlined, renderMined, renderFactRows, withGutter } from "./trainingPrompt.ts";
-export type { TrainingPromptInput } from "./trainingPrompt.ts";
+export {
+  codePrompt, runsPrompt, repairPrompt, executionClaimRule,
+  renderInlined, renderMined, renderFactRows, withGutter,
+} from "./trainingPrompt.ts";
+export type { TrainingPromptInput, RepairPromptParts } from "./trainingPrompt.ts";
 
 export { writeCompetencies, recomputeCompetencies, readEvidence, CompetenciesError } from "./competenciesWrite.ts";
 export type {

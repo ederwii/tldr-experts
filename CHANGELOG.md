@@ -242,6 +242,62 @@
 
 ### Fixed
 
+- **A rejected knowledge file gets ONE repair round before the money is thrown away.**
+  Measured 2026-08-30 on `~/scavtopia`: `tldrx expert train dotnet-stack --area dotnet --mode
+  light` spent **$1.69**, the trainer wrote `knowledge/dotnet.md.partial`, and the validator
+  refused it for **two** bullets that asserted an execution (`exit 0`) and cited a file line.
+  The file went to `dotnet.rejected.md`, nothing reached `competencies.yml`, the status did not
+  move — $1.69 for zero evidence, over a mistake the checker could name in one line and the
+  writer could have fixed in one edit. `expert train` now hands those exact problems back to the
+  same trainer for one more turn before anything is quarantined.
+  - **A fresh spawn carrying the ORIGINAL prompt**, not a resumed session: `spawnAgent` has no
+    `--resume` and the session id is captured for the ledger only. Appending to the original
+    prompt is what keeps the repair possible at all — the citations to be fixed point into files
+    that were inlined in that prompt and nowhere else — and the byte-identical prefix reads the
+    cache the first turn paid to create. The appended `# REPAIR ROUND` section carries the
+    numbered verdict, the rejected file with a line-number gutter whose numbers are the `L<n>`
+    numbers in the verdict, and the reminder that deleting an offending bullet is a legal fix.
+  - **One round, and the gate does not move.** The repaired file goes through the same
+    `parseKnowledgeFile`, same shape, same scope. A second failure rejects exactly as the first
+    used to, quarantines the same way, and returns the same exit `5`. An unsourced claim still
+    cannot become evidence; it has simply been told once that it is unsourced.
+  - **Paid out of `--max-usd`, never on top of it.** The repair turn's ceiling is
+    `min(this sub-agent's share, whatever is left of the run's ceiling)`. Below the `$0.25`
+    floor it does not spawn and says so — a cold `claude -p` that dies on
+    `error_max_budget_usd` before its first reply costs money and produces nothing.
+  - **The operator is told while it happens**, so an extra sub-agent never spends silently:
+    `repairing: 3 problem(s) sent back to the trainer — one round, $0.31 of the ceiling left`,
+    then either `repaired: the second file validates` or `the repaired file does not validate
+    either (2 problem(s)) — one round is all there is`. Both turns land in `training.jsonl`; the
+    repair as `task: "code:repair"`, `repair: true`, with the number of problems it was sent.
+  - Not on `--commit`: there the sub-agent belongs to the host session and this process spawned
+    nothing, so repairing is running `--commit` again. Not for a file that was never written —
+    there is no verdict to send back.
+
+- **The execution-claim rule is now TAUGHT, with an example and a counter-example.** The same
+  $1.69 run is the evidence that stating it once in a paragraph does not work. Both training
+  prompts — the spawned one and `--print-prompt` — now give the four literal shapes the checker
+  looks for (`exit <n>`, `<n>/<n> passed`, `build is green`, and the bare word `measured` in the
+  sentence itself), one conforming line, one refused line, and why the refused one is refused: a
+  `workspace.yml` line DECLARES a command and is not a record of running it. Two further gaps
+  closed: **not making the claim** is named as the other legal answer (the trainer that failed
+  had no command in reach of the sentence it was writing, so "run it and cite it" was not
+  actionable), and the `(measured)` **annotation** is explicitly exempted — §2.3 asks for it on
+  every bullet, `\bmeasured\b` is one of the patterns, and nothing had ever told a writer that
+  `claimCheck` strips the annotation before it looks. The runs-mode prompt never stated the rule
+  at all, though the validator has always applied it to both files; it does now.
+
+- **`duplicate src` is documented as non-fatal, and the rejection report stops implying
+  otherwise.** It always was a warning — one call site, one `severity: "warning"`, one validation
+  path for both shapes — but the report did not say which lines were fatal and the headline
+  counted warnings as problems, so the same $1.69 run read as "3 problems" when only 2 rejected
+  it and the third was a duplicate that costs one bullet its evidence row. `describeKnowledgeIssues`
+  now lists errors first, prefixes warnings with `warning:` exactly as `knowledgeWarnings` does,
+  and the headline counts errors only (new `knowledgeErrors`). The reason it is a warning is
+  recorded where the message is emitted: "earns no second row" is a statement about scoring, not
+  about honesty, and throwing away every other finding in a file over a repeated citation is not
+  rigour.
+
 - **A developer that FAILED is no longer recorded as a consumed attempt.** The
   developer-side sibling of the reviewer fix below, found by the same run on 2026-08-30.
   Five developer spawns on `260830-tenancy-identity-customers` died with

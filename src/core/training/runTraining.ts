@@ -11,6 +11,13 @@
  * itself; `--prepare` writes the prompt bundle and stops; `--commit` picks the
  * same validation path up from the host session's `result.json`. From "re-read
  * the knowledge file off disk" onwards they are literally the same code.
+ *
+ * **One repair round sits between validation and rejection** (`repairRound`,
+ * 2026-08-30). A headless run whose knowledge file does not validate hands the
+ * validator's exact problems back to the trainer for one more turn, paid out of
+ * the same `--max-usd`, before anything is quarantined. The gate itself does not
+ * move: the second file is judged by the same `parseKnowledgeFile`, and a second
+ * failure rejects exactly as the first one used to.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -24,19 +31,21 @@ import { promptPath, readResult, writeBundle, writeRaw, PendingError, type Pendi
 import { spawnAgent } from "../facilitator/spawnAgent.ts";
 import { setProgressCeiling, setProgressTitle } from "../ui/bus.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
+import type { SrcContext } from "../text/srcToken.ts";
 import type { CompetencyEvidence } from "../init/competencyLevel.ts";
 import {
   CODE_TASK, DEFAULT_TRAIN_EFFORT, DEFAULT_TRAIN_USD, MIN_TRAIN_USD, RUNS_TASK,
   fromRunsRelPath, knowledgeRelPath, partialOf, type TrainingMode, type TrainingTask,
 } from "./Training.ts";
 import {
-  LIGHT_SHAPE, RUNS_SHAPE, codeEvidence, describeKnowledgeIssues, knowledgeWarnings, parseKnowledgeFile,
-  runEvidence,
+  LIGHT_SHAPE, RUNS_SHAPE, codeEvidence, describeKnowledgeIssues, knowledgeErrors, knowledgeWarnings,
+  parseKnowledgeFile, runEvidence,
+  type KnowledgeFile, type KnowledgeScope, type KnowledgeShape,
 } from "./knowledgeFile.ts";
 import { knowledgeScopeFor } from "./knowledgeScope.ts";
 import { selectFiles, keywordsFor } from "./selectFiles.ts";
 import { mineRuns } from "./mineRuns.ts";
-import { codePrompt, runsPrompt, type TrainingPromptInput } from "./trainingPrompt.ts";
+import { codePrompt, repairPrompt, runsPrompt, type TrainingPromptInput } from "./trainingPrompt.ts";
 import { CompetenciesError, writeCompetencies } from "./competenciesWrite.ts";
 import { isRoleExpertOnDisk, lightModeRefusal, nothingToMineRefusal } from "./roleTraining.ts";
 import { TrainingLog, type TrainingEvent } from "./trainingLog.ts";
@@ -329,6 +338,11 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
   const counts: string[] = [];
   const softWarnings: string[] = [];
 
+  // Whatever the repair round did or refused to do, said out loud in the result:
+  // an extra sub-agent that spends money silently is exactly the thing the
+  // operator has no way to audit.
+  const repairs: string[] = [];
+
   for (const task of prompts) {
     const abs = join(dir, task.output);
     const rel = `${PROJECT_FRAMEWORK_DIR}/experts/${options.expert}/${task.output}`;
@@ -341,13 +355,40 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
     }
     const text = readFileSync(abs, "utf8");
     const shape = task.key === CODE_TASK ? LIGHT_SHAPE : RUNS_SHAPE;
-    const parsed = parseKnowledgeFile(text, srcCtx, shape, scope);
+    let parsed = parseKnowledgeFile(text, srcCtx, shape, scope);
+
+    // ONE repair round, before anything is thrown away. The trust layer is
+    // untouched by it — the repaired file goes through the SAME validator and an
+    // unsourced claim still cannot become evidence — but a run that spent real
+    // money and produced a file wrong in two places should be told what the two
+    // places are before its whole output is binned.
+    // Never on `--commit`: there the sub-agent belongs to the HOST session and
+    // this process spawned nothing, so spawning a repair here would be the one
+    // `claude -p` the operator did not ask for. The in-session path repairs by
+    // running `--commit` again after fixing the file, which is what it already is.
+    if (!parsed.ok && options.run === "headless") {
+      const round = await repairRound({
+        options, areaId: area.id, dir, log, effort, srcCtx, scope, shape,
+        commands: [...workspace.commands],
+        task,
+        rejected: parsed,
+        rejectedText: text,
+        spentUsd: sum(tasks),
+        budgetUsd: round2(Math.min(share, ceiling - sum(tasks))),
+      });
+      repairs.push(...round.lines);
+      if (round.spend !== null) tasks.push(round.spend);
+      if (round.parsed !== null) parsed = round.parsed;
+    }
+
     if (!parsed.ok) {
       const kept = quarantine(abs);
       rollback(previous);
       return reject(log, options, area.id, sum(tasks), [
-        `${options.expert}/${area.id}: ${rel} does not validate — ${String(parsed.issues.length)} problem(s)`,
+        `${options.expert}/${area.id}: ${rel} does not validate — `
+          + `${String(knowledgeErrors(parsed).length)} problem(s)`,
         ...describeKnowledgeIssues(parsed.issues),
+        ...repairs,
         `  the file was moved to ${relative(options.root, kept)}; nothing was written to competencies.yml`,
         "  and the status is unchanged. An unsourced claim cannot become evidence.",
       ]);
@@ -403,6 +444,7 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
     warnings: [...softWarnings, ...written.warnings],
     lines: [
       `trained ${options.expert}/${area.id} (${options.mode}) — $${costUsd.toFixed(2)} of $${ceiling.toFixed(2)}`,
+      ...repairs,
       ...counts.map((line) => `  ${line}`),
       `  evidence: +${String(written.added.length)} row(s), ${String(written.evidenceCount)} total`
         + (written.dropped > 0 ? ` (${String(written.dropped)} oldest dropped at the 50-row cap)` : ""),
@@ -410,6 +452,170 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
       `  status in-use · last_trained ${options.at}`,
       `  ledger: ${relative(options.root, log.path)}`,
     ],
+  };
+}
+
+// --- the repair round --------------------------------------------------------
+
+interface RepairRoundInput {
+  readonly options: TrainOptions;
+  readonly areaId: string;
+  readonly dir: string;
+  readonly log: TrainingLog;
+  readonly effort: EffortLevel;
+  readonly srcCtx: SrcContext;
+  readonly scope: KnowledgeScope;
+  readonly shape: KnowledgeShape;
+  readonly commands: readonly string[];
+  readonly task: { readonly key: string; readonly prompt: string; readonly output: string };
+  /** The verdict that started this: the parse that failed. */
+  readonly rejected: KnowledgeFile;
+  /** The rejected file's bytes, so the trainer is shown what it actually wrote. */
+  readonly rejectedText: string;
+  /** Spent by this run so far, for the ledger line. */
+  readonly spentUsd: number;
+  /** What this one turn may spend — already clamped to the run's remaining ceiling. */
+  readonly budgetUsd: number;
+}
+
+interface RepairRoundOutcome {
+  /** For the CLI, whichever way it went — including "no repair round, and why". */
+  readonly lines: readonly string[];
+  /** The repair sub-agent's cost record, or null when nothing was spawned. */
+  readonly spend: TrainingTask | null;
+  /** The RE-validated file, or null when there is nothing new to judge. */
+  readonly parsed: KnowledgeFile | null;
+}
+
+/**
+ * One more turn at a rejected knowledge file, with the validator's exact problems
+ * handed back to the trainer.
+ *
+ * Why this exists, measured 2026-08-30: a real `expert train dotnet-stack --area
+ * dotnet --mode light` spent $1.69, wrote a knowledge file, and had it refused on
+ * two bullets that asserted an execution and cited a file line. Nothing reached
+ * `competencies.yml`, the status did not move, and the operator paid $1.69 for
+ * zero evidence — over a mistake the checker could describe in one line and the
+ * writer could have fixed in one edit. Throwing the whole file away without ever
+ * telling its author what was wrong with it is not rigour; it is just expensive.
+ *
+ * **What this does NOT do is soften the gate.** The repaired file goes through
+ * `parseKnowledgeFile` again, with the same shape and the same scope, and it is
+ * accepted only if it passes on its own terms. A second failure rejects exactly
+ * as the first one used to. An unsourced claim still cannot become evidence — it
+ * has simply been told, once, that it is unsourced.
+ *
+ * **One round, and never more.** Two rounds is a loop, a loop with a model in it
+ * is a budget with no bottom, and the second failure carries information the
+ * first does not: the trainer was shown the rule and still could not satisfy it,
+ * which is a fact about the file rather than about the prompt.
+ *
+ * **The turn is paid for out of `--max-usd`, and refuses when there is nothing
+ * left.** The ceiling is `min(this sub-agent's share, whatever is left of the
+ * whole run's ceiling)`, so a repair can never push a run past the number the
+ * operator typed. Under `MIN_TRAIN_USD` it does not spawn at all and says so:
+ * a cold `claude -p` that dies on `error_max_budget_usd` before its first reply
+ * costs money and produces nothing, which is the failure this whole file exists
+ * to stop repeating.
+ */
+async function repairRound(input: RepairRoundInput): Promise<RepairRoundOutcome> {
+  const { options, task } = input;
+  const errors = knowledgeErrors(input.rejected);
+  const abs = join(input.dir, task.output);
+  const target = `${PROJECT_FRAMEWORK_DIR}/experts/${options.expert}/${task.output}`;
+
+  input.log.append(record(options, input.areaId, "check.failed", 0, {
+    mode: options.mode,
+    task: task.key,
+    reason: `${String(errors.length)} problem(s) — sending them back to the trainer`,
+    cost_usd: input.spentUsd,
+    repair: "attempted",
+  }));
+
+  if (input.budgetUsd < MIN_TRAIN_USD) {
+    return {
+      lines: [
+        `  no repair round: $${input.budgetUsd.toFixed(2)} left of the ceiling, under the `
+          + `$${MIN_TRAIN_USD.toFixed(2)} floor — raise --max-usd and the ${String(errors.length)} `
+          + "problem(s) above would have been sent back to the trainer",
+      ],
+      spend: null,
+      parsed: null,
+    };
+  }
+
+  setProgressTitle(`train ${options.expert}/${input.areaId} · ${options.mode} · ${task.key} repair`);
+  setProgressCeiling(input.budgetUsd);
+  const outcome = await spawnAgent({
+    prompt: repairPrompt(task.prompt, {
+      target,
+      rejected: input.rejectedText,
+      issues: input.rejected.issues,
+      budgetUsd: input.budgetUsd,
+    }),
+    model: options.model ?? null,
+    effort: input.effort,
+    maxBudgetUsd: input.budgetUsd,
+    workspaceCommands: [...input.commands],
+    yolo: options.yolo ?? false,
+    cwd: options.root,
+    timeoutMs: options.timeoutMs ?? TRAIN_TIMEOUT_MS,
+  });
+
+  const spend: TrainingTask = {
+    key: `${task.key}:repair`,
+    model: options.model ?? null,
+    costUsd: round2(outcome.costUsd),
+    sessionId: outcome.sessionId,
+    error: outcome.error,
+    outputs: outcome.envelope?.outputs ?? [],
+  };
+  input.log.append(record(options, input.areaId, "agent.result", spend.costUsd, {
+    task: spend.key,
+    repair: true,
+    mode: options.mode,
+    model: spend.model,
+    effort: input.effort,
+    session_id: outcome.sessionId,
+    max_budget_usd: input.budgetUsd,
+    outputs: spend.outputs,
+    problems_sent: errors.length,
+    ok: outcome.ok,
+  }));
+
+  const opened = `  repairing: ${String(errors.length)} problem(s) sent back to the trainer — `
+    + `one round, $${input.budgetUsd.toFixed(2)} of the ceiling left`;
+
+  if (!outcome.ok) {
+    return {
+      lines: [opened, `  the repair sub-agent failed — ${outcome.error ?? "no result"}`],
+      spend,
+      parsed: null,
+    };
+  }
+  // A repair that deleted the file leaves no record of what the run produced, and
+  // the rejected bytes are that record. Put them back and judge them again: the
+  // verdict is unchanged and the quarantined file still says what went wrong.
+  if (!existsSync(abs)) {
+    writeFileSync(abs, input.rejectedText, "utf8");
+    return {
+      lines: [opened, "  the repair sub-agent removed the file instead of rewriting it"],
+      spend,
+      parsed: null,
+    };
+  }
+
+  const parsed = parseKnowledgeFile(readFileSync(abs, "utf8"), input.srcCtx, input.shape, input.scope);
+  const left = knowledgeErrors(parsed).length;
+  return {
+    lines: [
+      opened,
+      parsed.ok
+        ? `  repaired: the second file validates, and $${spend.costUsd.toFixed(2)} bought the evidence below`
+        : `  the repaired file does not validate either (${String(left)} problem(s)) — one round is all there is`,
+    ],
+    spend,
+    parsed,
   };
 }
 

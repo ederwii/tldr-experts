@@ -106,12 +106,30 @@ an agent said it learned something.**
   `F<n>`. An evidence `src` is validated against its `kind` both directions through the same
   `classifySrc` the hook uses, so `{kind: run, src: "the tests pass"}` no longer counts as a
   run.
-- **Rejection is whole.** One unsourced item, or one line past the end of its file, and
-  nothing is written: no evidence, no level change, no status change. Any knowledge file
-  already accepted is restored byte-for-byte, and the rejected one is moved to
+- **One repair round comes first.** When the file does not validate, the validator's exact
+  problems are handed back to the SAME trainer for one more turn — a fresh `claude -p` carrying
+  the original prompt (so the inlined files it must cite are still in front of it), the rejected
+  file with a line-number gutter, and the numbered verdict. The output says so while it happens:
+  `repairing: 3 problem(s) sent back to the trainer — one round, $0.31 of the ceiling left`.
+  The repair turn is paid out of the same `--max-usd`: its ceiling is whatever is left of the
+  run's, and under the `$0.25` floor it does not spawn at all and says why. **One round only** —
+  a second failure rejects exactly as the first used to, and the repaired file is judged by the
+  same validator, so the gate has not moved. Not on `--commit`: there the sub-agent belongs to
+  the host session, and repairing is running `--commit` again.
+- **Rejection is whole.** One unsourced item, or one line past the end of its file, and after
+  the repair round nothing is written: no evidence, no level change, no status change. Any
+  knowledge file already accepted is restored byte-for-byte, and the rejected one is moved to
   `<area>.rejected.md`. Exit `5`. Mid-run the sub-agent writes `<area>.md.partial`, which is
   renamed onto the real name only after the file validates — `.md.partial` never matches
   `*.md`, so nothing half-written can be inlined.
+- **Errors reject; warnings do not, and the report now says which is which.** Only four things
+  are fatal: a missing H2, a checked section with no list item, an item with no `[src: …]` or one
+  that does not resolve, and an execution claim ("exit 0", "78/78 passed", "the build is green",
+  the bare word "measured") citing a file line instead of a `` $ <cmd> → exit <n> `` command.
+  `paraphrase`, `outside domain` and **`duplicate src` are warnings on every shape** — each costs
+  that one bullet its evidence row and nothing else, because "it earns no second row" is a
+  statement about scoring, not about honesty. The headline counts errors only, and warning lines
+  carry the word `warning:`.
 
 `--mode full` adds a second sub-agent that mines `tldrx-work/**/{handoff,retro}.md` from
 runs whose repos overlap this expert's, plus matching `facts.yml` rows, into

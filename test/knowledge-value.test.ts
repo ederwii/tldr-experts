@@ -539,7 +539,13 @@ describe("the training prompts ask for findings rather than file coverage", () =
     expect(prompt).toContain("A bullet citing two or more DISTINCT files counts double");
     expect(prompt).toContain("restating a docstring");
     expect(prompt).toContain("(measured)");
-    expect(prompt).toContain("A claim about a RESULT needs a command, not a file line");
+    // The rule that refused a real $1.69 run is now TAUGHT: the literal shapes, a
+    // conforming line, a refused line, and the `(measured)` annotation trap.
+    expect(prompt).toContain("A claim about a RESULT needs a COMMAND, not a file line");
+    expect(prompt).toContain("Write this:");
+    expect(prompt).toContain("Never this:");
+    expect(prompt).toContain(".tldrx/workspace.yml:19");
+    expect(prompt).toContain("stripped before the check");
     // …and it names the boundary the pre-pass actually applied.
     expect(prompt).toContain("Domain boundary");
     expect(prompt).toContain("`src/auth`");
@@ -559,7 +565,11 @@ describe("the training prompts ask for findings rather than file coverage", () =
     expect(printed).not.toContain("reading twelve files is worth twelve");
     expect(printed).toContain("worth double (`cross: true`, spec §2.6)");
     expect(printed).toContain("`(measured)`, `(inferred)` or `(assumed)`");
-    expect(printed).toContain("not evidence that it ran");
+    // Both prompts show the same counter-example: a `workspace.yml` line DECLARES a
+    // command, which is not a record of running it.
+    expect(printed).toContain("is not a record of running it");
+    expect(printed).toContain("[src: $ npm test → exit 0]");
+    expect(printed).toContain("refused WHOLE");
   });
 });
 

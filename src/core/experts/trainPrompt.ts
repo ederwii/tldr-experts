@@ -78,9 +78,18 @@ export function renderTrainPrompt(input: TrainPromptInput): string {
     "  It is parsed onto the evidence row as `confidence:`; `assumed` is weighed at half (spec §2.6).",
     "- A bullet citing two or more DISTINCT files is worth double (`cross: true`, spec §2.6) —",
     "  a cross-file finding is the one a reader cannot re-derive from any single file.",
-    "- A claim about a RESULT — \"exit 0\", \"78/78 passed\", \"the build is green\" — must carry a",
-    "  `` [src: $ <cmd> → exit <n>] `` src. The line of `workspace.yml` that DECLARES a command is",
-    "  not evidence that it ran, and a knowledge file is refused for citing one that way.",
+    // Stated with both lines side by side since 2026-08-30: a real run was refused
+    // for exactly this and the one-line form had not told its writer what a
+    // conforming citation looks like. `training/trainingPrompt.ts` teaches the
+    // same rule at length to the SPAWNED sub-agent; keep the two saying one thing.
+    "- A claim about a RESULT — \"exit 0\", \"78/78 passed\", \"the build is green\", or the bare word",
+    "  \"measured\" standing in the sentence itself — must carry a `` [src: $ <cmd> → exit <n>] `` src,",
+    "  and the file is refused WHOLE for one that does not. Write",
+    "  `` - The suite covers the empty-input branch (measured) [src: $ npm test → exit 0] ``; never",
+    "  `` - npm test exits 0 here [src: api:.tldrx/workspace.yml:19] ``, because line 19 DECLARES the",
+    "  command and is not a record of running it. Not running it is the other legal answer: say what",
+    "  the CODE does instead, and the claim needs no command. The trailing `(measured)` annotation is",
+    "  stripped before the check and can never trip this.",
     `- Add one \`evidence\` entry per finding to \`.tldrx/experts/${expert.name}/competencies.yml\` `
       + `under area \`${area.id}\`: \`{kind, src, at}\`. Do NOT write \`level\` — it is computed (spec §2.6).`,
     "- `kind` is one of these five. Anything else is dropped when the file is read,",

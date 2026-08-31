@@ -323,7 +323,24 @@ function outsideDomain(ref: SrcRef, scope: KnowledgeScope | undefined): string |
     + `${scope.domainPaths.map((path) => `\`${path}\``).join(", ")}, so this citation earns it no evidence${hint}`;
 }
 
-/** `duplicate src — …`, or null when this `src` is new to the expert. */
+/**
+ * `duplicate src — …`, or null when this `src` is new to the expert.
+ *
+ * **This is a `warning` and it is deliberately never an `error`**, on both the
+ * light and the runs shape — there is one validation path (`parseKnowledgeFile`)
+ * and this function has one caller, which pushes `severity: "warning"`. The
+ * sentence says it plainly: "earns no second row" is a statement about SCORING,
+ * not about honesty. Citing a line twice is not a false claim; it is a claim the
+ * expert has already been paid for, and the honest response to that is a row that
+ * does not appear, not a file that is thrown away along with every other finding
+ * in it.
+ *
+ * Recorded because a real operator read it the other way (2026-08-30): a run that
+ * failed on two execution claims reported "3 problem(s)" with a duplicate-src
+ * line among them, and the duplicate looked like a third reason for the
+ * rejection. It never was. The severity was already right; the REPORT was not
+ * saying which lines were fatal, and `describeKnowledgeIssues` now does.
+ */
 function duplicateSrc(ref: SrcRef, scope: KnowledgeScope | undefined, seenHere: ReadonlySet<string>): string | null {
   const already = seenHere.has(ref.raw) || (scope?.seenSrc.has(ref.raw) ?? false);
   if (!already) return null;
@@ -412,13 +429,42 @@ function paragraphIssues(paragraph: string, line: number, section: string): read
   return issues;
 }
 
-/** One line per issue, for a CLI report. */
+/**
+ * The issues that REJECT the file. Everything else is a warning and costs the
+ * bullet its evidence row only.
+ *
+ * Exported because two callers must count the same thing the parser counted: the
+ * CLI, whose "N problem(s)" headline used to include warnings and so overstated
+ * why a file was thrown away, and the repair round, which may only send back
+ * problems that are actually worth another turn of the trainer's time.
+ */
+export function knowledgeErrors(file: KnowledgeFile): readonly KnowledgeIssue[] {
+  return file.issues.filter((issue) => issue.severity === "error");
+}
+
+/**
+ * One line per issue, for a CLI report — with the severity said out loud.
+ *
+ * Errors are listed first and warnings second, because the reader's question is
+ * always "which of these is why nothing was kept?" and the answer is "the ones
+ * above the warnings". A warning line carries the word `warning:` in the same
+ * place `knowledgeWarnings` puts it, so the same line reads the same way whether
+ * the file was accepted or rejected.
+ */
 export function describeKnowledgeIssues(issues: readonly KnowledgeIssue[], max = 5): readonly string[] {
-  const shown = issues.slice(0, max).map(
-    (issue) => `  L${String(issue.line)} ${issue.section}: ${issue.message}`,
-  );
-  const rest = issues.length - shown.length;
+  const ordered = [
+    ...issues.filter((issue) => issue.severity === "error"),
+    ...issues.filter((issue) => issue.severity !== "error"),
+  ];
+  const shown = ordered.slice(0, max).map((issue) => describeKnowledgeIssue(issue));
+  const rest = ordered.length - shown.length;
   return rest > 0 ? [...shown, `  (+${String(rest)} more)`] : shown;
+}
+
+/** `  L12 Sources: warning: …` for a warning, `  L10 Gotchas: …` for an error. */
+export function describeKnowledgeIssue(issue: KnowledgeIssue): string {
+  const mark = issue.severity === "warning" ? "warning: " : "";
+  return `  L${String(issue.line)} ${issue.section}: ${mark}${issue.message}`;
 }
 
 /** The warnings a caller must print even when the file was accepted. */
