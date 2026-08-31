@@ -214,6 +214,51 @@
   test …` — in the scene, the compact one-liner and `--ui plain`. A lane leaves the line
   when its sub-agent finishes. With nothing parallel the view is what it always was.
 
+- **The gate evidence note** — `.agent/<stage>/evidence.md`, plus `tldrx gate template` to
+  write the blank form. This is the artefact half of the `agent` gate (design §A): a third
+  answer to "who closes a gate", between `human` (waits) and `auto` (the harness signs when
+  six measured conditions hold). Measured 2026-08-30 on
+  `260830-tenancy-identity-customers`: the host ran a defined checklist at every gate and
+  typed `approve --note "<evidence>"` by hand, into a free-text field where nothing validated
+  it and `replay` could not render it. There was no value meaning *"an agent checked it,
+  showed its work, and is accountable for the check"*, so there was nowhere to put the check.
+  - **Front matter is the machine half, the body is the human half** — the §2.13 story
+    pattern, reused rather than reinvented. Required keys: `version gate role by at verdict
+    read citations touches diff_vs_stories`; `caveats` and `recommend` are optional and
+    default to `[]`. Four H2 sections in order — `Read` · `Citations checked` ·
+    `Touches audited` · `Verdict` — each with at least one list item.
+  - **Every bullet goes through the EXISTING §2.8 resolver.** Not a second grammar and not a
+    second checker: `srcToken.ts` tokenizes and resolves, and the section rule is
+    `handoff.ts`'s, lifted into a shared `validateSections` that `validateHandoff` now calls
+    too. Two readers of "is this bullet sourced" drift, and the looser one would win the
+    argument at exactly the moment a gate is being signed. A checklist whose own claims are
+    unsourced is what `claim-sources` exists to refuse, and an evidence note is a claim about
+    a claim.
+  - **`unverified` REFUSES here, unlike in a handoff.** A citation nothing could check does
+    not fail a stage (spec §2.8) but it is precisely what stops an AUTO gate closing (spec
+    §5, condition 5). An agent gate is strictly stronger than an auto gate, never a cheaper
+    one, so a `doc:` URL nothing in the workspace names cannot be what a signature rests on.
+  - **Seven refusals, each with its own message and its own `kind`**, so a caller routes on
+    the reason rather than on a string: unreadable or incomplete front matter · a missing
+    section or one holding only prose · a bullet with no `src` token or one that does not
+    resolve · `sampled > of` or `resolved + refuted > sampled` · `sampled: 0` with citations
+    on record · a verdict that is not `sign` · a `gate:` naming a stage other than the one at
+    the cursor. `verdict` is the kind that means "a person decides" rather than "this note is
+    broken" — `sign-with-fixlist` and `refuse` fall to a human by design, and the verdict
+    space is three because a reviewer can meet every acceptance criterion and still have
+    found three real defects nobody wrote a criterion for.
+  - **`tldrx gate template` fills what a tool can COUNT and leaves every judgement blank**:
+    the gate at the cursor, the time, how many citations the §2.8 resolver found across the
+    stage's declared outputs (patterns like `03-plan/stories/<id>.md` included), and how many
+    touched paths the plan declares. The blank form deliberately does not validate — a
+    template that parsed clean out of the box would be a signature nobody had to earn — and
+    it writes no `[src: …]` anywhere, the same rule `questions lint --fix` follows. It spends
+    nothing, spawns nothing, approves nothing and moves no cursor; an evidence note already on
+    disk is left alone (exit `2`) unless `--force` says otherwise.
+  - `validateEvidence(text, srcContext, {gate})` is the function `approve --as-agent` will
+    call before it records anything. Nothing in this change signs a gate, reads a
+    `gates_policy`, or writes into the run tree: the artefact layer lands first, on purpose.
+
 ### Changed
 
 - **The init report is coloured and carries a roll-up.** Repo names, confidence

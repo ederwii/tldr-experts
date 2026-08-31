@@ -538,6 +538,30 @@ const ENTRIES: readonly CommandHelp[] = [
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
   },
   {
+    name: "gate",
+    description: "Write the skeleton evidence note an agent gate is closed over.",
+    args: [{ name: "[<run>]", meaning: "A run id. Omit it and the one open run is used." }],
+    flags: [
+      runFlag(),
+      {
+        name: "force",
+        arg: null,
+        meaning: "Replace an evidence.md that is already on disk. Without it an existing note is left alone and the command exits 2 \u2014 a written note is the artefact a gate rests on, and a blank form is not worth destroying it for.",
+        sub: "template",
+      },
+      root(),
+    ],
+    examples: [
+      "tldrx gate template",
+      "tldrx gate template --run 260101-checkout",
+    ],
+    exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
+    notes: [
+      "It writes `.agent/<stage>/evidence.md` with the MEASURED fields filled \u2014 the gate at the cursor, the time, how many citations the \u00a72.8 resolver found in this stage's outputs, and how many touched paths the plan declares \u2014 and every judgement blank. The blank form deliberately does not validate: a template that parsed clean out of the box would be a signature nobody had to earn.",
+      "Non-signing. It spends nothing, spawns nothing, approves nothing and moves no cursor.",
+    ],
+  },
+  {
     name: "reject",
     description: "Send the current stage back with a note saying what has to change, or revoke an approval already given.",
     args: [],

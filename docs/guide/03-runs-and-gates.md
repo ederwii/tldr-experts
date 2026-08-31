@@ -199,6 +199,50 @@ So: keep at least one human gate per scope (the table above does), read the note
 records all six conditions with their measured values — and when the machine signs
 something it should not have, take it back.
 
+### Writing down the check an agent made
+
+An auto gate signs with six measured conditions and no words. A person signs with
+`--note "<whatever they typed>"`, which nothing validates and `replay` cannot render. There
+is a third thing an agent can do — check something, **show its work**, and be accountable
+for the check — and it needs somewhere to put the work.
+
+That place is the **evidence note**, `.agent/<stage>/evidence.md` (spec §2.17). Write the
+blank form with:
+
+```
+$ tldrx gate template
+wrote tldrx-work/260830-tenancy/.agent/plan/evidence.md
+
+Front matter: `gate`, `at`, `citations.of` (34) and `touches.audited` (13) are filled from
+disk. `verdict` and `diff_vs_stories` are blank and must be answered.
+…
+```
+
+The command fills only what a tool can COUNT — which gate, when, how many citations exist in
+this stage's outputs, how many touched paths the plan declares — and leaves every judgement
+blank. It writes no citations of its own, and what it writes deliberately does **not**
+validate. A template that parsed clean out of the box would be a signature nobody had to
+earn.
+
+What you fill in is four sections — `Read`, `Citations checked`, `Touches audited`,
+`Verdict` — and **every bullet in them ends with a `[src: …]` token that resolves**, checked
+by the same validator `claim-sources` runs on a handoff. A checklist whose own claims are
+unsourced is the thing that rule exists to refuse, and an evidence note is a claim about a
+claim. One rule is stricter here than on a handoff: a citation nothing could **check** —
+an https URL the workspace never names, an `absent:` over a file that exists — refuses the
+note outright, because a gate closed by an agent has to be stronger than one closed by the
+harness, never cheaper.
+
+Three verdicts, not two: `sign`, `sign-with-fixlist`, `refuse`. Only `sign` could ever close
+a gate; the other two are the note saying a person decides. That is not a hedge — a reviewer
+can meet every acceptance criterion and still have found three real defects nobody wrote a
+criterion for, and binary SIGN/REFUSE has nowhere to put those.
+
+The note is a written record today, and today nothing signs a gate with it: `tldrx approve`
+records what you type, exactly as it always has, and `gates_policy` is still `human` or
+`auto`. `tldrx gate template` spends nothing, spawns nothing, approves nothing and moves no
+cursor.
+
 ### Taking an approval back
 
 ```

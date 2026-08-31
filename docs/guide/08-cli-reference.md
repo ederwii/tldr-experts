@@ -306,6 +306,23 @@ tldrx approve [--note <text>] [--run <id>] [--root <path>]
 
 Exits: `0` `1` `2` `3`.
 
+## `tldrx gate`
+
+Write the skeleton evidence note an agent gate is closed over (spec §2.17).
+
+```
+tldrx gate template [<run>] [--run <id>] [--force] [--root <path>]
+```
+
+It writes `.agent/<stage>/evidence.md` with the measured fields filled — the gate at the
+cursor, the time, how many citations the §2.8 resolver found in this stage's outputs, how
+many touched paths the plan declares — and every judgement blank, then prints what each of
+the four sections has to contain. The blank form does **not** validate, on purpose. An
+evidence note already on disk is left alone (exit `2`) unless you pass `--force`.
+
+Non-signing: it spends nothing, spawns nothing, approves nothing and moves no cursor.
+Exits: `0` `1` `2` `3`.
+
 ## `tldrx reject`
 
 Send the current stage back with a note saying what has to change, or revoke an approval

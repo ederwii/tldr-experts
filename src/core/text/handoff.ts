@@ -160,14 +160,24 @@ export function isHandoff(text: string): boolean {
   return missingSections(parseHandoff(text)).length === 0;
 }
 
-/** The required sections that are absent or out of order. */
-export function missingSections(handoff: Handoff): readonly string[] {
+/**
+ * The required sections that are absent or out of order.
+ *
+ * `required` is a parameter rather than a constant because the four-section rule
+ * is not the only place it applies: a gate evidence note (design §A.5) declares
+ * its own four, in its own order, and reads them with this same function. The
+ * default keeps every existing caller reading exactly the handoff's four.
+ */
+export function missingSections(
+  handoff: Handoff,
+  required: readonly string[] = HANDOFF_SECTIONS,
+): readonly string[] {
   const present = handoff.headings;
   const missing: string[] = [];
   let cursor = 0;
-  for (const required of HANDOFF_SECTIONS) {
-    const at = present.indexOf(required, cursor);
-    if (at === -1) missing.push(required);
+  for (const name of required) {
+    const at = present.indexOf(name, cursor);
+    if (at === -1) missing.push(name);
     else cursor = at + 1;
   }
   return missing;
@@ -210,12 +220,47 @@ export interface HandoffValidation {
   readonly bulletCount: number;
 }
 
+/**
+ * What `validateSections` measured over one document's required sections. The
+ * handoff's own report is this plus `missingSections` and an `ok`; an evidence
+ * note's report is this plus its front-matter findings.
+ */
+export interface SectionReport {
+  /** Required sections present but holding only prose (spec §2.8). */
+  readonly emptySections: readonly EmptySection[];
+  /** Lines of list items with no `[src:` marker at all — no citation was attempted. */
+  readonly unsourced: readonly number[];
+  readonly malformed: readonly HandoffIssue[];
+  readonly unresolved: readonly HandoffIssue[];
+  readonly unverified: readonly HandoffIssue[];
+  readonly bulletCount: number;
+}
+
 /** Cap from spec §2.8; beyond it the handoff is a document, not a handoff. */
 export const MAX_BULLETS = 200;
 
-export function validateHandoff(text: string, ctx: SrcContext): HandoffValidation {
-  const handoff = parseHandoff(text);
-  const missing = missingSections(handoff);
+/**
+ * The half of the §2.8 rule that is about SECTIONS and their bullets, over any
+ * set of required headings.
+ *
+ * Split out of `validateHandoff` because the handoff is no longer the only
+ * document the rule governs. A gate evidence note (design §A.5) puts the same
+ * rule on its own four sections — "a checklist whose own claims are unsourced is
+ * the thing `claim-sources` exists to refuse, and an evidence note is a claim
+ * about a claim". The one thing that must not happen is a SECOND implementation
+ * of "is this bullet sourced": two readers of that question drift, and the looser
+ * one would win the argument at exactly the moment a gate is being signed.
+ *
+ * `lineOffset` is added to every line number reported, for a document whose
+ * sections begin partway down the file — an evidence note's body sits under its
+ * YAML front matter. A handoff starts at line 1 and passes 0.
+ */
+export function validateSections(
+  handoff: Handoff,
+  required: readonly string[],
+  ctx: SrcContext,
+  lineOffset = 0,
+): SectionReport {
   const emptySections: EmptySection[] = [];
   const unsourced: number[] = [];
   const malformed: HandoffIssue[] = [];
@@ -223,29 +268,30 @@ export function validateHandoff(text: string, ctx: SrcContext): HandoffValidatio
   const unverified: HandoffIssue[] = [];
   let bulletCount = 0;
 
-  const required = new Set<string>(HANDOFF_SECTIONS);
+  const wanted = new Set<string>(required);
   for (const section of handoff.sections) {
-    if (!required.has(section.name)) continue;
+    if (!wanted.has(section.name)) continue;
     if (section.bullets.length === 0) {
-      emptySections.push({ name: section.name, line: section.headingLine });
+      emptySections.push({ name: section.name, line: section.headingLine + lineOffset });
     }
     for (const bullet of section.bullets) {
       bulletCount++;
+      const line = bullet.line + lineOffset;
       if (bullet.token === null) {
         if (hasSrcMarker(bullet.text)) {
           malformed.push({
-            line: bullet.line,
+            line,
             message:
               "malformed citation — the `[src: …]` token must be the last thing on the line " +
               "(closing quotes, brackets and a final `.` are allowed after it, words are not)",
           });
         } else {
-          unsourced.push(bullet.line);
+          unsourced.push(line);
         }
         continue;
       }
       for (const error of bullet.token.errors) {
-        unresolved.push({ line: bullet.line, message: `[src: ${error.raw}] — ${error.message}` });
+        unresolved.push({ line, message: `[src: ${error.raw}] — ${error.message}` });
       }
       // The claim is the bullet WITHOUT its citation. `absent:` reads this text to
       // decide whether the claim is negative, and `[src: absent:…]` contains the
@@ -254,28 +300,36 @@ export function validateHandoff(text: string, ctx: SrcContext): HandoffValidatio
       const claim = bullet.text.replace(bullet.token.raw, " ").trim();
       for (const ref of bullet.token.refs) {
         const resolution = resolveSrc(ref, ctx, section.name, claim);
-        const issue = { line: bullet.line, message: `[src: ${ref.raw}] — ${resolution.message ?? "unresolvable"}` };
+        const issue = { line, message: `[src: ${ref.raw}] — ${resolution.message ?? "unresolvable"}` };
         if (resolution.outcome === "refused") unresolved.push(issue);
         else if (resolution.outcome === "unverified") unverified.push(issue);
       }
     }
   }
-  if (bulletCount > MAX_BULLETS) {
-    unresolved.push({ line: 0, message: `${bulletCount} bullets exceeds the ${MAX_BULLETS} cap` });
+  return { emptySections, unsourced, malformed, unresolved, unverified, bulletCount };
+}
+
+export function validateHandoff(text: string, ctx: SrcContext): HandoffValidation {
+  const handoff = parseHandoff(text);
+  const missing = missingSections(handoff);
+  const report = validateSections(handoff, HANDOFF_SECTIONS, ctx);
+  const unresolved = [...report.unresolved];
+  if (report.bulletCount > MAX_BULLETS) {
+    unresolved.push({ line: 0, message: `${report.bulletCount} bullets exceeds the ${MAX_BULLETS} cap` });
   }
   return {
     // `unverified` is deliberately NOT here: it does not fail the stage (spec §2.8),
     // it stops an AUTO gate from closing (spec §5, condition 5).
     ok:
-      missing.length === 0 && emptySections.length === 0 && unsourced.length === 0 &&
-      malformed.length === 0 && unresolved.length === 0,
+      missing.length === 0 && report.emptySections.length === 0 && report.unsourced.length === 0 &&
+      report.malformed.length === 0 && unresolved.length === 0,
     missingSections: missing,
-    emptySections,
-    unsourced,
-    malformed,
+    emptySections: report.emptySections,
+    unsourced: report.unsourced,
+    malformed: report.malformed,
     unresolved,
-    unverified,
-    bulletCount,
+    unverified: report.unverified,
+    bulletCount: report.bulletCount,
   };
 }
 
