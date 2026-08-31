@@ -62,6 +62,12 @@ export interface BuildWorkspaceOptions {
   readonly commands?: Readonly<Record<string, string | null>>;
   readonly budgetUsd?: number;
   readonly perAgentMaxUsd?: number;
+  /**
+   * `--gates <stages|all|none>` — which stages a HUMAN must sign. `"none"` makes
+   * the build stage `auto`, which is the only way to exercise the auto gate's
+   * own conditions end to end.
+   */
+  readonly gates?: string;
   /** The `test` script the fixture repo's package.json gets. Default: passes. */
   readonly testScript?: string;
   /** Extra files inside the repo, keyed by path relative to the repo. */
@@ -133,6 +139,7 @@ export function makeBuildWorkspace(options: BuildWorkspaceOptions): BuildWorkspa
     scope,
     budgetUsd: options.budgetUsd ?? 8,
     repos: [repoName],
+    gates: options.gates,
     actor: "alan",
     now: new Date("2026-08-29T09:00:00Z"),
   });

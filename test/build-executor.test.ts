@@ -22,7 +22,8 @@ import {
   buildExecutor, developerTools, readReviewLedger, REVIEWER_TOOLS,
 } from "../src/core/facilitator/executors/build.ts";
 import { looksLikeReviewerError, reviewerFailed } from "../src/core/build/review.ts";
-import { reject } from "../src/core/run/gates.ts";
+import { UNFINISHED_STORIES } from "../src/core/run/autoGate.ts";
+import { approve, reject } from "../src/core/run/gates.ts";
 import { updateStoryFront, evidenceFor } from "../src/core/build/storyFile.ts";
 import { renderBuildProgress, buildProgress } from "../src/core/run/buildProgress.ts";
 import { buildStatus, renderStatus } from "../src/core/run/runStatus.ts";
@@ -1122,4 +1123,352 @@ describe("an epic branch this run did not cut", () => {
     const again = await next(ws);
     expect(again.lines.join("\n")).not.toContain("did not cut it");
   });
+});
+
+/**
+ * A developer that FAILED is not an attempt (2026-08-30) — the developer-side
+ * sibling of the reviewer fix above, found by the same run.
+ *
+ * Measured on `260830-tenancy-identity-customers`: five developer spawns died
+ * with `Reached maximum budget ($0.30 | $0.40 | $0.50 | $0.90 | $1.50)` having
+ * written nothing — zero commits on any of the five story branches — and every
+ * one was recorded as a story `blocked`. `blocked` is terminal in-run, so a spawn
+ * that never ran ended the story, and the phase reported six of seven stories as
+ * tried and failed when six of them had never been tried at all.
+ *
+ * The line these tests draw: did the spawn ERROR, or did it deliver work that was
+ * then judged. The second still blocks, exactly as before.
+ */
+describe("a developer that FAILED is not an attempt", () => {
+  const ONE: BuildWorkspaceOptions = {
+    stories: [{ id: "S1", epic: "E1", title: "First story" }],
+    epics: [{ id: "E1", stories: ["S1"], branch: "epic/e1" }],
+    waves: [["S1"]],
+  };
+
+  /** The live failure, word for word — S2's developer on 2026-08-30. */
+  const DIED = "Reached maximum budget ($0.3)";
+  const SPAWN_ERROR = `claude exited 1 with is_error=true: ${DIED}`;
+
+  function reenter(ws: BuildWorkspace, note: string): void {
+    reject(RunStore.open(ws.runDir), { root: ws.root, actor: "alan", at: "2026-08-29T10:00:00Z", note });
+  }
+
+  function developerChecks(ws: BuildWorkspace): readonly Record<string, unknown>[] {
+    return events(ws).filter((e) => e.payload.check === "developer").map((e) => e.payload);
+  }
+
+  test("the story goes back where it was, and the ledger says the DEVELOPER failed", async () => {
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_FAIL_REASON = DIED;
+    process.env.FAKE_BUILD_FAIL = "developer";
+
+    const outcome = await next(ws);
+
+    // Not `blocked`. `todo` is where the story was before a spawn that produced
+    // nothing, and a turn that never ran may not move it.
+    expect(story(ws, "S1")).toContain("status: todo");
+    expect(story(ws, "S1")).not.toContain("status: blocked");
+    expect(developerChecks(ws)).toEqual([{
+      phase: "04-build",
+      check: "developer",
+      story: "S1",
+      status: "error",
+      attempt: 1,
+      // The ERROR, verbatim: the one thing that tells a reader the turn never ran.
+      detail: SPAWN_ERROR,
+    }]);
+    const said = outcome.lines.join("\n");
+    expect(said).toContain("the developer FAILED and produced no work");
+    expect(said).toContain(DIED);
+  });
+
+  test("the attempt is not consumed: no verdict is recorded and no second spawn follows", async () => {
+    const ws = workspace(ONE);
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+    process.env.FAKE_BUILD_FAIL_REASON = DIED;
+    process.env.FAKE_BUILD_FAIL = "developer";
+
+    await next(ws);
+
+    // ONE developer prompt, and no reviewer at all — there was nothing to review.
+    expect(readdirSync(promptDir)).toEqual(["developer-S1-1.md"]);
+    expect(events(ws).filter((e) => e.type === "task.started").map((e) => e.payload.attempt)).toEqual([1]);
+    const ledger = readReviewLedger(ws.runDir, "S1");
+    expect(ledger.verdicts).toBe(0);
+    expect(ledger.developerErroredWith).toBe(SPAWN_ERROR);
+  });
+
+  test("the worktree survives and nothing was merged into the epic", async () => {
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_FAIL_REASON = DIED;
+    process.env.FAKE_BUILD_FAIL = "developer";
+
+    await next(ws);
+
+    expect(existsSync(join(ws.root, ".tldrx", "worktrees", "app", `${ws.runId}-S1`))).toBe(true);
+    expect(git(ws, ["rev-parse", "epic/e1"])).toBe(git(ws, ["rev-parse", "main"]));
+  });
+
+  test("the log and the retro both say the DEVELOPER failed, never that it was reviewed", async () => {
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_FAIL_REASON = DIED;
+    process.env.FAKE_BUILD_FAIL = "developer";
+
+    await next(ws);
+
+    const log = readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8");
+    expect(log).toContain(`- Developer: **FAILED** — ${SPAWN_ERROR}`);
+    expect(log).toContain("The developer FAILED and produced no work");
+    expect(log).not.toContain("asked for changes");
+
+    const retro = readFileSync(join(ws.runDir, "retro.md"), "utf8");
+    expect(retro).toContain("`S1` — the developer FAILED and produced no work on attempt 1");
+  });
+
+  test("`tldrx next` again re-runs the developer at the SAME attempt number", async () => {
+    const ws = workspace(ONE);
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+    process.env.FAKE_BUILD_COST = "0";
+    process.env.FAKE_BUILD_FAIL_REASON = DIED;
+    // The FIRST developer of S1 dies; every later one works.
+    process.env.FAKE_BUILD_FAIL = "developer:S1#1";
+
+    await next(ws);
+    expect(story(ws, "S1")).toContain("status: todo");
+
+    reenter(ws, "the developer died");
+    await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    expect(story(ws, "S1")).toContain("status: done");
+    // Two developer turns, and BOTH were attempt 1 — the first one never ran.
+    expect(readdirSync(promptDir).filter((n) => n.startsWith("developer-")).sort())
+      .toEqual(["developer-S1-1.md", "developer-S1-2.md"]);
+    expect(events(ws).filter((e) => e.type === "task.started").map((e) => e.payload.attempt))
+      .toEqual([1, 1]);
+  }, 60_000);
+
+  test("`--prepare` offers the story again as a fresh developer bundle", async () => {
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_COST = "0";
+    process.env.FAKE_BUILD_FAIL_REASON = DIED;
+    process.env.FAKE_BUILD_FAIL = "developer";
+
+    await next(ws);
+    reenter(ws, "the developer died");
+    const prepared = await next(ws, { mode: "prepare", at: "2026-08-29T10:05:00Z" });
+
+    const said = prepared.lines.join("\n");
+    expect(said).toContain("prepared S1");
+    expect(said).toContain("attempt 1 of 2");
+    expect(said).toContain("dispatch ONE sub-agent");
+  }, 60_000);
+
+  test("a developer that RAN and failed its DoD still blocks — the fix is narrow", async () => {
+    const ws = workspace({ ...ONE, testScript: 'node -e "process.exit(1)"' });
+
+    await next(ws);
+
+    expect(story(ws, "S1")).toContain("status: blocked");
+    // No developer check at all: the spawn was fine, the story was not.
+    expect(developerChecks(ws)).toEqual([]);
+    expect(readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8"))
+      .not.toContain("The developer FAILED");
+  });
+
+  test("a story blocked by a failed DoD is NOT re-offered on the next invocation", async () => {
+    const ws = workspace({ ...ONE, testScript: 'node -e "process.exit(1)"' });
+    process.env.FAKE_BUILD_COST = "0";
+
+    await next(ws);
+    reenter(ws, "look again");
+    const again = await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    expect(again.lines.join("\n")).toContain("S1 is already `blocked` — left alone");
+    expect(again.lines.join("\n")).not.toContain("offered again");
+  }, 60_000);
+
+  test("a run recorded by the OLD code re-offers the story its spawn never got", async () => {
+    // The live shape: `blocked`, verdict `n-a`, no commit, no check of any kind,
+    // and the error only in `run.yml`. Nothing in `events.jsonl` said "developer".
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_COST = "0";
+    process.env.FAKE_BUILD_FAIL_REASON = DIED;
+    process.env.FAKE_BUILD_FAIL = "developer:S1#1";
+
+    await next(ws);
+    rewriteAsOldCode(ws, "S1");
+    expect(readReviewLedger(ws.runDir, "S1")).toMatchObject({
+      developerErroredWith: null,
+      blockedWithNothingRun: true,
+    });
+
+    reenter(ws, "old record");
+    const again = await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    expect(again.lines.join("\n")).toContain("was `blocked` by a developer that FAILED");
+    expect(story(ws, "S1")).toContain("status: done");
+  }, 60_000);
+
+  test("`--prepare` picks up an OLD-code `blocked` story too", async () => {
+    // The in-session door onto the same migration: the live run is parked at
+    // `blocked`, and a host session driving `--prepare`/`--commit` has to be
+    // offered the turn its spawn never got, not told the stage is finished.
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_COST = "0";
+    process.env.FAKE_BUILD_FAIL_REASON = DIED;
+    process.env.FAKE_BUILD_FAIL = "developer:S1#1";
+
+    await next(ws);
+    rewriteAsOldCode(ws, "S1");
+
+    reenter(ws, "old record, in session");
+    const prepared = await next(ws, { mode: "prepare", at: "2026-08-29T10:05:00Z" });
+
+    const said = prepared.lines.join("\n");
+    expect(said).toContain("prepared S1");
+    expect(said).toContain("attempt 1 of 2");
+    expect(story(ws, "S1")).toContain("status: in_progress");
+  }, 60_000);
+
+  /**
+   * Rewrite the run into the pre-2026-08-30 spelling: drop the `developer` check
+   * this executor now writes, and put the story back at `blocked` where the old
+   * code left it.
+   */
+  function rewriteAsOldCode(ws: BuildWorkspace, storyId: string): void {
+    const path = join(ws.runDir, "events.jsonl");
+    const kept: string[] = [];
+    for (const line of readFileSync(path, "utf8").split("\n")) {
+      if (line.trim() === "") continue;
+      const event = JSON.parse(line) as { type?: string; payload?: Record<string, unknown> };
+      const payload = event.payload ?? {};
+      if (event.type === "check.failed" && payload.check === "developer" && payload.story === storyId) continue;
+      if (event.type === "task.done" && payload.story === storyId) payload.status = "blocked";
+      kept.push(JSON.stringify(event));
+    }
+    writeFileSync(path, `${kept.join("\n")}\n`, "utf8");
+    const storyPath = join(ws.planDir, "stories", `${storyId}.md`);
+    writeFileSync(storyPath, readFileSync(storyPath, "utf8").replace(/^status: .*$/m, "status: blocked"), "utf8");
+  }
+});
+
+/**
+ * The auto gate does not sign a Build stage over stories that are not `done`
+ * (2026-08-30).
+ *
+ * Its other five conditions are all about the ARTEFACT — citations, questions,
+ * money, status — and none of them looks at what the stage was for. On
+ * `260830-tenancy-identity-customers` all five held while six of seven stories
+ * sat `blocked` with zero commits, and the gate signed the stage twice, the
+ * second time after a human had revoked it.
+ */
+describe("the auto gate and unfinished stories", () => {
+  const ONE_AUTO: BuildWorkspaceOptions = {
+    stories: [{ id: "S1", epic: "E1", title: "First story" }],
+    epics: [{ id: "E1", stories: ["S1"], branch: "epic/e1" }],
+    waves: [["S1"]],
+    gates: "none",
+  };
+
+  test("it signs a stage whose every story is `done`", async () => {
+    const ws = workspace(ONE_AUTO);
+
+    const outcome = await next(ws);
+
+    expect(outcome.lines.join("\n")).toContain("auto-approved");
+    expect(outcome.lines.join("\n")).toContain("stories=1 of 1 done");
+    expect(RunStore.open(ws.runDir).run.phases.flatMap((p) => p.stages)[0]?.gate.by).toBe("auto");
+  }, 60_000);
+
+  test("it refuses a stage with a story that is not done, and names the story", async () => {
+    const ws = workspace(ONE_AUTO);
+    process.env.FAKE_BUILD_FAIL_REASON = "Reached maximum budget ($0.3)";
+    process.env.FAKE_BUILD_FAIL = "developer";
+
+    const outcome = await next(ws);
+
+    expect(outcome.code).toBe(4);
+    const said = outcome.lines.join("\n");
+    expect(said).toContain("auto gate not taken");
+    expect(said).toContain("stories=0 of 1 done — S1:todo");
+    expect(said).toContain(UNFINISHED_STORIES);
+    // The gate is REQUESTED and still pending: a human decides, not the machine.
+    const stage = RunStore.open(ws.runDir).run.phases.flatMap((p) => p.stages)[0];
+    expect(stage?.gate.status).toBe("pending");
+    expect(stage?.gate.by).toBeNull();
+  }, 60_000);
+
+  test("a blocked story refuses it too — the condition is `done`, not `attempted`", async () => {
+    const ws = workspace({ ...ONE_AUTO, testScript: 'node -e "process.exit(1)"' });
+
+    const outcome = await next(ws);
+
+    expect(outcome.lines.join("\n")).toContain("stories=0 of 1 done — S1:blocked");
+    expect(RunStore.open(ws.runDir).run.phases.flatMap((p) => p.stages)[0]?.gate.status).toBe("pending");
+  }, 60_000);
+
+  test("a HUMAN may still approve over an unfinished story — the machine may not", async () => {
+    // The whole point of the condition. Shipping an epic with a blocked story in
+    // it is a judgement about what is worth shipping, and a person is allowed to
+    // make it; the harness has no basis for making it on their behalf.
+    const ws = workspace({ ...ONE_AUTO, testScript: 'node -e "process.exit(1)"' });
+    await next(ws);
+    expect(story(ws, "S1")).toContain("status: blocked");
+
+    const signed = await approve(RunStore.open(ws.runDir), {
+      root: ws.root, actor: "alan", at: "2026-08-29T10:05:00Z", note: "shipping without S1 on purpose",
+    });
+
+    expect(signed.ok).toBe(true);
+    const stage = RunStore.open(ws.runDir).run.phases.flatMap((p) => p.stages)[0];
+    expect(stage?.gate.status).toBe("approved");
+    expect(stage?.gate.by).toBe("alan");
+  }, 60_000);
+});
+
+/**
+ * A merge that moved nothing is not a merge (2026-08-30).
+ *
+ * `git merge --no-ff` of a branch that is already an ancestor exits 0 and says
+ * "Already up to date". The handoff rendered that as "merged", and on
+ * `260830-tenancy-identity-customers` its Gate section read
+ * "(S1, S3, S5, S4, S7 merged)" when the epic tip carried only S1's work.
+ */
+describe("honest merge rendering", () => {
+  const ONE_EMPTY: BuildWorkspaceOptions = {
+    stories: [{ id: "S1", epic: "E1", title: "First story" }],
+    epics: [{ id: "E1", stories: ["S1"], branch: "epic/e1" }],
+    waves: [["S1"]],
+  };
+
+  test("a story whose branch stays identical to the epic is not reported as merged", async () => {
+    const ws = workspace(ONE_EMPTY);
+    // A developer that writes nothing: the branch ends where it started.
+    process.env.FAKE_BUILD_WRITE = JSON.stringify({ S1: {} });
+
+    await next(ws);
+
+    expect(git(ws, ["rev-parse", "epic/e1"])).toBe(git(ws, ["rev-parse", "main"]));
+    const handoff = readFileSync(join(ws.runDir, "04-build", "handoff.md"), "utf8");
+    expect(handoff).toContain("S1 added nothing — identical to `epic/e1`");
+    expect(handoff).not.toContain("S1 merged");
+    expect(handoff).toContain("its branch is identical to `epic/e1`: nothing was merged");
+    expect(readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8"))
+      .toContain("nothing to merge — identical to the epic");
+  }, 60_000);
+
+  test("a story that really merged still says merged", async () => {
+    const ws = workspace(TWO_WAVES);
+
+    await next(ws);
+
+    const handoff = readFileSync(join(ws.runDir, "04-build", "handoff.md"), "utf8");
+    expect(handoff).toContain("(S1, S2 merged)");
+    expect(handoff).not.toContain("added nothing");
+    expect(readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8"))
+      .toContain("→ `epic/e1` (merged)");
+  }, 60_000);
 });

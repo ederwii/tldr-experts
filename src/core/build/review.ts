@@ -77,8 +77,25 @@ export function reviewerFailed(error: string | null | undefined): Review {
  */
 export function looksLikeReviewerError(detail: string): boolean {
   const text = detail.trim();
-  return text === REVIEWER_FAILED
-    || text.startsWith("claude exited ")
+  return text === REVIEWER_FAILED || looksLikeSpawnError(text);
+}
+
+/**
+ * Does this string come from the SPAWN layer rather than from a model?
+ *
+ * The three prefixes are the framework's own words for "the sub-agent did not
+ * finish": `describe()` in `spawnAgent.ts` (`claude exited …`, `claude timed
+ * out …`) and `readCapError` in `readCap.ts` (`stopped after N reads …`). A
+ * model never writes any of them — its own summary reaches disk through
+ * `parseReview` or through an envelope.
+ *
+ * Split out of `looksLikeReviewerError` so the sentence that is about REVIEWS —
+ * its own fallback summary — is visibly separate from the three that are about
+ * the spawn layer and belong to no role in particular.
+ */
+function looksLikeSpawnError(detail: string): boolean {
+  const text = detail.trim();
+  return text.startsWith("claude exited ")
     || text.startsWith("claude timed out")
     || text.startsWith("stopped after ");
 }
@@ -92,8 +109,9 @@ export function renderReviewLog(outcome: StoryOutcome): string {
     `- Story status: \`${outcome.status}\``,
     `- Attempt: ${String(outcome.attempts)}`,
     `- Repo: \`${outcome.repo}\` · wave ${outcome.wave} · epic ${outcome.epic}`,
-    `- Branch: \`${outcome.branch}\` → \`${outcome.epicBranch}\` (${outcome.merged ? "merged" : "not merged"})`,
+    `- Branch: \`${outcome.branch}\` → \`${outcome.epicBranch}\` (${mergeWord(outcome)})`,
     `- Commit: ${outcome.commit ?? "(none)"}`,
+    ...(outcome.developerError === null ? [] : [`- Developer: **FAILED** — ${outcome.developerError}`]),
     "",
     "## Definition of done",
     "",
@@ -133,11 +151,35 @@ export function renderReviewLog(outcome: StoryOutcome): string {
 }
 
 /**
- * The Summary section: what the reviewer said, or — when it FAILED — that it
- * failed and with what, in those words. "The reviewer asked for changes" over a
- * transport error is the sentence this whole file exists to stop printing.
+ * `merged`, `not merged`, or the third case that used to be spelled as the
+ * first: a merge of a branch that was already an ancestor of the epic. Git
+ * exits 0 and moves nothing, and calling that "merged" is how a handoff came to
+ * list four stories as merged when their branches were byte-identical to the
+ * epic (2026-08-30).
+ */
+function mergeWord(outcome: StoryOutcome): string {
+  if (!outcome.merged) return "not merged";
+  return outcome.carried === 0 ? "nothing to merge — identical to the epic" : "merged";
+}
+
+/**
+ * The Summary section: what the reviewer said, or — when one of the two
+ * sub-agents FAILED — that it failed and with what, in those words. "The
+ * reviewer asked for changes" over a transport error is the sentence this whole
+ * file exists to stop printing.
  */
 function summaryLines(outcome: StoryOutcome): readonly string[] {
+  // The developer never delivered, so there was nothing for a reviewer to read.
+  // Saying "no reviewer ran" alone would be true and useless: what happened is
+  // that the turn before it died, and with what.
+  if (outcome.developerError !== null) {
+    return [
+      "**The developer FAILED and produced no work.** No reviewer ran, because there was",
+      "nothing to review. The error it died with:",
+      "",
+      `> ${outcome.developerError}`,
+    ];
+  }
   if (outcome.verdict === "error") {
     return [
       "**The reviewer FAILED and returned no verdict.** This is not a request for changes:",

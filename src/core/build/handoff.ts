@@ -18,7 +18,18 @@ export interface EpicSummaryRow {
   readonly id: string;
   readonly branch: string;
   readonly repos: readonly string[];
+  /** Stories whose merge actually moved commits onto the epic branch. */
   readonly merged: readonly string[];
+  /**
+   * Stories whose branch was already identical to the epic, so `git merge`
+   * exited 0 and moved nothing.
+   *
+   * They are listed apart from `merged` because a reader of this section is
+   * deciding what to ship, and "S3, S4, S5, S7 merged" told them four stories
+   * had landed when the epic tip carried one (run
+   * `260830-tenancy-identity-customers`, 2026-08-30).
+   */
+  readonly emptyMerges?: readonly string[];
   readonly defaultBranches: readonly string[];
   /** Run-relative path of `03-plan/epics/<id>.md`. */
   readonly rel: string;
@@ -94,19 +105,42 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
       : parts.epics.map(
           (e) =>
             `- \`${e.branch}\` in ${e.repos.join(", ")} → \`${e.defaultBranches.join(", ")}\` ` +
-            `(${e.merged.length === 0 ? "no story merged" : `${e.merged.join(", ")} merged`})`,
+            `(${mergeSummary(e)})`,
         )),
     "",
   ];
   return lines.join("\n");
 }
 
+/**
+ * What actually landed on this epic branch, in the parentheses a human reads
+ * before deciding whether to merge it.
+ *
+ * A no-op merge is named as one. `git merge --no-ff` of a branch that is already
+ * an ancestor exits 0 and moves nothing, and the old rendering — one flat list
+ * ending in "merged" — reported four such branches as landed work on
+ * `260830-tenancy-identity-customers`.
+ */
+function mergeSummary(epic: EpicSummaryRow): string {
+  const empty = epic.emptyMerges ?? [];
+  const parts: string[] = [];
+  if (epic.merged.length > 0) parts.push(`${epic.merged.join(", ")} merged`);
+  if (empty.length > 0) {
+    parts.push(`${empty.join(", ")} added nothing — identical to \`${epic.branch}\``);
+  }
+  return parts.length === 0 ? "no story merged" : parts.join("; ");
+}
+
 function finding(outcome: StoryOutcome): string {
   const where = `repo \`${outcome.repo}\`, \`${outcome.branch}\``;
-  const head =
-    outcome.status === "done"
-      ? `done — ${where}, merged into \`${outcome.epicBranch}\` at ${outcome.commit ?? "(no commit)"}`
-      : `${outcome.status} — ${where}: ${outcome.reason ?? "see the review"}`;
+  const landed = outcome.carried === 0
+    // Green, and it moved nothing. Both halves are true and the second is the
+    // one a reader would otherwise supply wrongly from the word "merged".
+    ? `done — ${where}, but its branch is identical to \`${outcome.epicBranch}\`: nothing was merged`
+    : `done — ${where}, merged into \`${outcome.epicBranch}\` at ${outcome.commit ?? "(no commit)"}`;
+  const head = outcome.status === "done"
+    ? landed
+    : `${outcome.status} — ${where}: ${outcome.reason ?? "see the review"}`;
   return `- ${outcome.id} · ${outcome.title} — ${head} [src: ${outcome.reviewRel}:1]`;
 }
 

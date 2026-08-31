@@ -63,7 +63,7 @@ import { buildDeveloperPrompt, buildReviewerPrompt, REVIEW_SCHEMA } from "../../
 import {
   looksLikeReviewerError, parseReview, renderPreviousAttempt, renderReviewLog, reviewerFailed, type Review,
 } from "../../build/review.ts";
-import { dodGreen, type DodResult, type StoryOutcome } from "../../build/outcome.ts";
+import { DEVELOPER_FAILED, dodGreen, type DodResult, type StoryOutcome } from "../../build/outcome.ts";
 import { renderBuildHandoff, type EpicSummaryRow } from "../../build/handoff.ts";
 import { appendBuildRetro, buildRetroPath, gateRetroLines, storyRetroLines } from "../../build/retroLog.ts";
 import { MAX_STORIES_PER_WAVE, type PlanStatus } from "../../schemas/planCommon.ts";
@@ -166,6 +166,18 @@ interface StoryHalf {
   readonly commit: string | null;
   /** Non-null when the story is already lost: half B blocks it and stops. */
   readonly failure: string | null;
+  /**
+   * Non-null when the DEVELOPER sub-agent itself failed — spawn error, timeout,
+   * exhausted budget — and delivered nothing. Half B parks the story instead of
+   * blocking it: a turn that never ran is not an attempt.
+   */
+  readonly developerError: string | null;
+  /**
+   * The story's status BEFORE this attempt started, so a developer failure can
+   * put it back. `todo` for a first attempt, `review` for one the reviewer
+   * requeued, `blocked` for a story rescued from a previous run's spawn error.
+   */
+  readonly before: PlanStatus;
 }
 
 export async function buildExecutor(ctx: ExecutorContext): Promise<ExecutorOutcome> {
@@ -334,7 +346,12 @@ class BuildSession {
   readonly tasks: ExecutorTask[] = [];
   private readonly outcomes = new Map<string, StoryOutcome>();
   private readonly epicWorktrees = new Map<string, string>();
-  private readonly merged = new Map<string, string[]>();
+  /**
+   * Per epic branch, the stories merged into it and what each merge CARRIED —
+   * `0` for a branch that was already identical to the epic, `null` when an
+   * earlier invocation did the merging.
+   */
+  private readonly merged = new Map<string, { id: string; carried: number | null }[]>();
   private readonly lines: string[] = [];
   /** Per-story reviewer verdicts seen in THIS process, for the requeue counter. */
   private readonly reviews = new Map<string, number>();
@@ -373,6 +390,15 @@ class BuildSession {
       const pending: PlannedStory[] = [];
       for (const planned of wave.stories) {
         const status = this.statusOf(planned);
+        const rescued = status === "blocked" ? this.blockedByFailedDeveloper(planned) : null;
+        if (rescued !== null) {
+          this.lines.push(
+            `  · ${planned.story.id} was \`blocked\` by a developer that FAILED (${rescued}) — `
+            + "that was never an attempt, so it is offered again",
+          );
+          pending.push(planned);
+          continue;
+        }
         if (status === "done" || status === "blocked") {
           this.lines.push(`  · ${planned.story.id} is already \`${status}\` — left alone`);
           continue;
@@ -560,6 +586,11 @@ class BuildSession {
     for (let i = 0; i < MAX_ATTEMPTS; i++) {
       await this.settleHalf(await this.buildHalf(planned));
       const outcome = this.outcomes.get(planned.story.id);
+      // The developer never ran, so the story is back where it started and its
+      // attempt is unspent. Spawning it again inside the same process, under the
+      // same ceiling, would buy the same error twice — the operator raises a cap
+      // (or the plan's price) between invocations, and that is the fix.
+      if (outcome !== undefined && outcome.developerError !== null) return;
       if (outcome?.status !== "review") return;
       // Only a real `changes` verdict buys another developer attempt. An errored
       // review leaves the story parked for the NEXT invocation's review-only
@@ -639,6 +670,10 @@ class BuildSession {
 
   /** Half A for one story: worktree → developer → DoD → commit. */
   private async buildHalf(planned: PlannedStory): Promise<StoryHalf> {
+    // Read BEFORE `setStoryStatus` below overwrites it. A developer that dies
+    // without delivering must leave the story exactly where it found it, and
+    // "where it found it" stops being readable one line from here.
+    const before = this.statusOf(planned);
     // (a)(b)(c) touch the SHARED repo — `git branch`, `git worktree add` — so they
     // go through the one writer even though the sub-agent below does not.
     const story = await this.writes.run(() => this.openStory(planned));
@@ -654,10 +689,18 @@ class BuildSession {
       this.setStoryStatus(planned, "in_progress");
     });
 
-    const spent = await this.spawnDeveloper(story);
-    if (spent === null) {
-      return { story, cost: 0, dod: [], commit: null, failure: "the developer sub-agent failed" };
+    // A developer that FAILED is a TRANSPORT outcome, not a story that could not
+    // be built: the sub-agent never wrote a line, so nothing about the work has
+    // been learned and nothing about it may be settled. `failure` stays null —
+    // that field blocks the story — and `developerError` parks it instead.
+    const developer = await this.spawnDeveloper(story);
+    if (developer.error !== null) {
+      return {
+        story, cost: developer.cost, dod: [], commit: null,
+        failure: null, developerError: developer.error, before,
+      };
     }
+    const spent = developer.cost;
 
     // (e) the Definition of Done, re-run in the story's own worktree.
     //
@@ -678,20 +721,32 @@ class BuildSession {
           ? "the story declares no dod commands, so nothing could prove it"
           : `\`${failing.command}\` exited ${String(failing.exitCode)} in repo ${story.planned.story.repo}` +
             `${failing.timedOut ? " (timed out)" : ""} — ${failing.tail}`,
+        developerError: null,
+        before,
       };
     }
 
     // (e) commit whatever the agent left behind, if it did not commit itself.
     const commit = await this.writes.run(() => this.commitIfDirty(story));
     if (commit === null) {
-      return { story, cost: spent, dod, commit: null, failure: "the working tree could not be committed" };
+      return {
+        story, cost: spent, dod, commit: null,
+        failure: "the working tree could not be committed", developerError: null, before,
+      };
     }
-    return { story, cost: spent, dod, commit, failure: null };
+    return { story, cost: spent, dod, commit, failure: null, developerError: null, before };
   }
 
   /** Half B for one story: merge → review → done/blocked. Always serial. */
   private async settleHalf(half: StoryHalf): Promise<void> {
     const { story, dod, commit } = half;
+    // A developer that FAILED comes first, because it is the one case where half
+    // A produced no information at all. The story goes back to where it was, its
+    // attempt unspent — see `parkDeveloperFailure`.
+    if (half.developerError !== null) {
+      await this.parkDeveloperFailure(story, half.developerError, half.cost, half.before);
+      return;
+    }
     if (half.failure !== null) {
       await this.block(story, half.failure, half.cost, dod);
       return;
@@ -705,6 +760,11 @@ class BuildSession {
     }
 
     // (f) merge into the epic. A conflict blocks the story; the wave carries on.
+    //
+    // How much the merge is about to MOVE is measured first, because afterwards
+    // it cannot be: once the story branch is an ancestor of the epic, `git diff
+    // <epic>...<story>` is empty whether it carried thirty commits or none.
+    const carried = await commitsBetween(story.repoDir, story.epicBranch, story.branch);
     const merge = await this.mergeIntoEpic(story);
     if (!merge.ok) {
       await this.block(story, `merge into \`${story.epicBranch}\` failed: ${merge.detail}`, half.cost, dod, {
@@ -713,10 +773,10 @@ class BuildSession {
       });
       return;
     }
-    this.noteMerged(story);
+    this.noteMerged(story, carried);
 
     // (g)(h) the reviewer, and whatever it decides.
-    await this.reviewAndSettle(story, dod, commit, half.cost);
+    await this.reviewAndSettle(story, dod, commit, half.cost, carried);
   }
 
   /**
@@ -734,6 +794,7 @@ class BuildSession {
     dod: readonly DodResult[],
     commit: string,
     priorCost: number,
+    carried: number | null,
   ): Promise<void> {
     const review = await this.spawnReviewer(story, dod);
     const cost = round2(priorCost + review.cost);
@@ -743,7 +804,7 @@ class BuildSession {
     // `tldrx next` re-runs the REVIEW, not the developer.
     if (review.review.verdict === "error") {
       await this.settle(story, "review", {
-        dod, commit, merged: true, verdict: "error", review: review.review, cost,
+        dod, commit, merged: true, carried, verdict: "error", review: review.review, cost,
         reason: `the reviewer FAILED and returned no verdict — ${review.review.summary}`,
       });
       return;
@@ -752,7 +813,7 @@ class BuildSession {
     const requeue = review.review.verdict === "changes" && story.attempt < MAX_ATTEMPTS;
     if (review.review.verdict === "changes") {
       await this.settle(story, requeue ? "review" : "blocked", {
-        dod, commit, merged: true, verdict: "changes", review: review.review, cost,
+        dod, commit, merged: true, carried, verdict: "changes", review: review.review, cost,
         reason: requeue
           ? `the reviewer asked for changes: ${review.review.summary}`
           : `the reviewer asked for changes twice: ${review.review.summary}`,
@@ -762,7 +823,42 @@ class BuildSession {
 
     // (h) done — DoD green AND the reviewer approved. Write the evidence.
     await this.settle(story, "done", {
-      dod, commit, merged: true, verdict: "approve", review: review.review, cost, reason: null,
+      dod, commit, merged: true, carried, verdict: "approve", review: review.review, cost, reason: null,
+    });
+  }
+
+  /**
+   * The developer FAILED, so the story goes back exactly where it was.
+   *
+   * This is the developer-side sibling of the reviewer's `verdict: "error"`, and
+   * it exists for the same reason. Measured on `260830-tenancy-identity-customers`
+   * (2026-08-30): five developer spawns died with `Reached maximum budget (…)`
+   * having written nothing — zero commits on any of the five story branches — and
+   * every one of them was recorded as a story `blocked` at attempt N. `blocked`
+   * is terminal in-run, so one errored spawn ended the story, and the epic
+   * shipped one story's work with six stories reported as tried and failed.
+   *
+   * What a failed spawn is allowed to change: the money it spent (recorded), the
+   * ledger line saying it died (recorded), and the log and retro saying so in
+   * those words. What it is NOT allowed to change: the story's status, its
+   * attempt number, its worktree, or the reader's impression that the work was
+   * judged. A developer that RAN and produced work the DoD faulted is a different
+   * thing entirely and still blocks, unchanged.
+   */
+  private async parkDeveloperFailure(
+    story: StoryContext,
+    error: string,
+    cost: number,
+    before: PlanStatus,
+  ): Promise<void> {
+    await this.settle(story, before, {
+      dod: [], commit: null, merged: false, carried: null,
+      verdict: "n-a",
+      review: { verdict: "n-a", summary: "", findings: [] },
+      developerError: error,
+      keepWorktree: true,
+      cost,
+      reason: `the developer FAILED and produced no work — ${error}`,
     });
   }
 
@@ -788,12 +884,14 @@ class BuildSession {
         resumed: "review",
       });
     });
-    this.noteMerged(story);
+    // `null`, not `0`: this invocation did not watch the merge happen, so it
+    // knows the story merged and does not know what the merge carried.
+    this.noteMerged(story, null);
     this.lines.push(
       `  · ${planned.story.id}: the previous reviewer FAILED (${resume.error}) — `
       + `re-running the REVIEW only; \`${resume.commit}\` is already merged into \`${story.epicBranch}\``,
     );
-    await this.reviewAndSettle(story, resume.dod, resume.commit, 0);
+    await this.reviewAndSettle(story, resume.dod, resume.commit, 0, null);
   }
 
   /** True when any story of this wave settled at `blocked`. */
@@ -823,7 +921,15 @@ class BuildSession {
       await this.block(story, "the working tree could not be committed", developerCost, dod);
       return;
     }
-    await this.settleHalf({ story, cost: developerCost, dod, commit, failure: null });
+    // `developerError` is null on this path by construction: the developer was
+    // the HOST's sub-agent, not ours, and `--commit` only runs once it has left a
+    // `result.json` behind. A host whose agent died writes no result and this
+    // method is never reached. `before` is `in_progress` — what `--prepare` set —
+    // and is unused, since nothing here can park.
+    await this.settleHalf({
+      story, cost: developerCost, dod, commit,
+      failure: null, developerError: null, before: "in_progress",
+    });
   }
 
   // --- steps ----------------------------------------------------------------
@@ -896,8 +1002,14 @@ class BuildSession {
     return out;
   }
 
-  /** (d) one developer sub-agent, cwd = the worktree. Returns its cost, or null. */
-  private async spawnDeveloper(story: StoryContext): Promise<number | null> {
+  /**
+   * (d) one developer sub-agent, cwd = the worktree.
+   *
+   * Returns what it spent and — when it FAILED — what it died with, verbatim.
+   * The two are separate on purpose: an errored spawn still costs money, and the
+   * money is the operator's clue about why it errored.
+   */
+  private async spawnDeveloper(story: StoryContext): Promise<{ cost: number; error: string | null }> {
     const cap = this.developerCap(story.planned.story.id);
     const commands = this.repoCommands(story.planned.story.repo);
     this.ctx.emit("agent.spawned", {
@@ -931,7 +1043,24 @@ class BuildSession {
       error: agent.error,
       outputs: agent.envelope?.outputs ?? [],
     });
-    return agent.ok ? round2(agent.costUsd) : null;
+    if (agent.ok) return { cost: round2(agent.costUsd), error: null };
+
+    // The developer IS a check, and this is the one outcome it can have that
+    // nothing downstream may read as work. `status: "error"` and the error as
+    // `detail` are the developer-side spelling of the reviewer's
+    // `verdict: "error"` — a ledger must be able to tell "the turn never ran"
+    // from "the turn ran and the story failed", and until 2026-08-30 the only
+    // record of the difference was a `run.yml` task nobody joined back.
+    const error = (agent.error ?? "").trim() === "" ? DEVELOPER_FAILED : (agent.error ?? "").trim();
+    this.ctx.emit("check.failed", {
+      phase: this.ctx.phaseId,
+      check: "developer",
+      story: story.planned.story.id,
+      status: "error",
+      attempt: story.attempt,
+      detail: error,
+    });
+    return { cost: round2(agent.costUsd), error };
   }
 
   /** (e) the story's ```dod block, in the worktree, via the gate's own runner. */
@@ -1093,6 +1222,7 @@ class BuildSession {
       dod,
       commit: extra.commit ?? null,
       merged: false,
+      carried: null,
       conflicts: extra.conflicts ?? [],
       verdict: "n-a",
       review: { verdict: "n-a", summary: "", findings: [] },
@@ -1108,9 +1238,19 @@ class BuildSession {
       dod: readonly DodResult[];
       commit: string | null;
       merged: boolean;
+      /** Commits the merge moved: `0` for a no-op, `null` when not measured. */
+      carried: number | null;
       conflicts?: readonly string[];
       verdict: StoryOutcome["verdict"];
       review: Review;
+      /** Non-null only when the developer sub-agent never delivered. */
+      developerError?: string | null;
+      /**
+       * Keep the story's worktree even though it did not settle at `review`.
+       * True for a developer failure: the story is going to be attempted again
+       * from exactly here, and re-cutting the tree buys nothing.
+       */
+      keepWorktree?: boolean;
       cost: number;
       reason: string | null;
     },
@@ -1130,8 +1270,10 @@ class BuildSession {
       dod: parts.dod,
       commit: parts.commit,
       merged: parts.merged,
+      carried: parts.carried,
       conflicts: parts.conflicts ?? [],
       verdict: parts.verdict,
+      developerError: parts.developerError ?? null,
       reviewSummary: parts.review.summary,
       reviewFindings: parts.review.findings,
       reviewRel,
@@ -1166,8 +1308,9 @@ class BuildSession {
       attempt: story.attempt,
     });
     // Worktrees survive a `review` on purpose: the second attempt continues in
-    // the same tree rather than re-cutting the branch it just wrote.
-    if (status !== "review") await this.cleanUp(story);
+    // the same tree rather than re-cutting the branch it just wrote. A parked
+    // developer failure keeps its tree for the same reason.
+    if (status !== "review" && parts.keepWorktree !== true) await this.cleanUp(story);
     this.lines.push(
       `  ${status === "done" ? "✓" : "·"} ${id} → \`${status}\`` +
         (parts.reason === null ? "" : ` (${parts.reason})`),
@@ -1295,8 +1438,10 @@ class BuildSession {
       dod: [],
       commit: null,
       merged: status === "done",
+      carried: null,
       conflicts: [],
       verdict: status === "done" ? "approve" : "n-a",
+      developerError: null,
       reviewSummary: "settled by an earlier `tldrx next`",
       reviewFindings: [],
       reviewRel: `${BUILD_PHASE}/${LOG_DIR}/${planned.story.id}.md`,
@@ -1310,11 +1455,17 @@ class BuildSession {
   private epicRows(): readonly EpicSummaryRow[] {
     const rows: EpicSummaryRow[] = [];
     for (const [id, epic] of this.plan.epics) {
+      const merges = this.merged.get(epic.epic.branch) ?? [];
       rows.push({
         id,
         branch: epic.epic.branch,
         repos: epic.epic.repos,
-        merged: this.merged.get(epic.epic.branch) ?? [],
+        // A merge that moved nothing is not listed with the ones that did. The
+        // Gate section is what a human reads before merging an epic by hand, and
+        // "S3, S4, S5, S7 merged" over four identical branches is the sentence
+        // this split exists to stop writing (2026-08-30).
+        merged: merges.filter((row) => row.carried !== 0).map((row) => row.id),
+        emptyMerges: merges.filter((row) => row.carried === 0).map((row) => row.id),
         defaultBranches: epic.epic.repos.map((repo) => this.workspace.defaultBranches.get(repo) ?? "main"),
         rel: epic.rel,
       });
@@ -1434,7 +1585,11 @@ class BuildSession {
     for (const wave of this.plan.waves) {
       for (const planned of wave.stories) {
         const status = this.statusOf(planned);
-        if (status === "done" || status === "blocked") continue;
+        if (status === "done") continue;
+        // `blocked` is terminal in-run — unless what blocked it was a developer
+        // that never ran, in which case the story was never really attempted and
+        // is owed the turn it did not get.
+        if (status === "blocked" && this.blockedByFailedDeveloper(planned) === null) continue;
         rows.push(planned);
       }
     }
@@ -1490,9 +1645,16 @@ class BuildSession {
     writeFileSync(epic.path, updateStoryFront(readFileSync(epic.path, "utf8"), { status }), "utf8");
   }
 
-  private noteMerged(story: StoryContext): void {
+  /**
+   * Record that this story's branch went onto its epic, and WHAT the merge
+   * moved: a count, or `null` when this invocation did not watch it happen.
+   */
+  private noteMerged(story: StoryContext, carried: number | null): void {
     const list = this.merged.get(story.epicBranch) ?? [];
-    if (!list.includes(story.planned.story.id)) list.push(story.planned.story.id);
+    const id = story.planned.story.id;
+    const at = list.findIndex((row) => row.id === id);
+    if (at === -1) list.push({ id, carried });
+    else list[at] = { id, carried };
     this.merged.set(story.epicBranch, list);
   }
 
@@ -1655,6 +1817,32 @@ class BuildSession {
   }
 
   /**
+   * Was this story's `blocked` caused by a developer that never RAN?
+   *
+   * Returns the error it died with, or null when the block was earned. This is
+   * the migration for Fix 1, and it exists because `blocked` is terminal in-run:
+   * a run recorded by the old code has stories parked there that were never
+   * really attempted, and nothing would ever offer them again.
+   *
+   * Two recorded shapes, because two eras — see `readReviewLedger`. The old one
+   * is only trusted when the story DECLARES dod commands and none ran: a story
+   * with an empty dod block blocks with exactly the same event shape (no commit,
+   * no check, no reviewer), and that block is a plan bug the developer had
+   * nothing to do with.
+   *
+   * `this.outcomes` is consulted first so a story THIS process just settled is
+   * read from its own outcome rather than from a log line it has not written yet.
+   */
+  private blockedByFailedDeveloper(planned: PlannedStory): string | null {
+    const fresh = this.outcomes.get(planned.story.id);
+    if (fresh !== undefined) return fresh.developerError;
+    const ledger = readReviewLedger(this.ctx.runDir, planned.story.id);
+    if (ledger.developerErroredWith !== null) return ledger.developerErroredWith;
+    if (ledger.blockedWithNothingRun && planned.dod.commands.length > 0) return DEVELOPER_FAILED;
+    return null;
+  }
+
+  /**
    * Is this story waiting on nothing but a review that FAILED?
    *
    * Three things have to hold, and all three are read off disk so a fresh process
@@ -1759,9 +1947,9 @@ export function developerTools(repoCommands: readonly string[]): readonly string
 export const REVIEWER_TOOLS: readonly string[] = ["Read", "Grep", "Glob", "Bash(git diff *)"];
 
 /**
- * What `events.jsonl` already says about one story, for the two questions a
- * fresh process cannot answer from memory: how many times has it really been
- * REVIEWED, and is it waiting on a review that FAILED?
+ * What `events.jsonl` already says about one story, for the questions a fresh
+ * process cannot answer from memory: how many times has it really been REVIEWED,
+ * is it waiting on a review that FAILED, and did its last DEVELOPER ever run?
  */
 export interface ReviewLedger {
   /**
@@ -1775,17 +1963,58 @@ export interface ReviewLedger {
   readonly commit: string | null;
   /** The DoD results of the last developer attempt that actually ran one. */
   readonly dod: readonly DodResult[];
+  /**
+   * The error the LAST developer died with, when it died and nothing has run
+   * since — read off the `check: "developer"` event this executor writes.
+   */
+  readonly developerErroredWith: string | null;
+  /**
+   * COMPAT: the story's last attempt was blocked having produced nothing the
+   * PIPELINE recorded — no commit at `task.done`, no check of any kind, no
+   * reviewer spawned.
+   *
+   * A run recorded before `check: "developer"` existed wrote an errored
+   * developer spawn exactly like this and left no other trace in
+   * `events.jsonl`; the error itself went only to `run.yml`'s task row.
+   * Measured 2026-08-30 in `260830-tenancy-identity-customers`, five times:
+   *
+   *   {"type":"task.started","payload":{"story":"S2","attempt":1}}
+   *   {"type":"agent.spawned","payload":{"story":"S2","role":"developer"}}
+   *   {"type":"task.done","payload":{"story":"S2","status":"blocked",
+   *                                  "verdict":"n-a","commit":null}}
+   *
+   * "Nothing the pipeline recorded" is the careful phrasing, and the same run is
+   * why: two of those five story branches (S4, S5) DO carry a commit the dying
+   * developer made with its own `git commit` before the budget bit. Nothing ran
+   * a DoD over it, nothing merged it and nothing read it — which is exactly why
+   * the story is owed the attempt again rather than blocked on it.
+   *
+   * It is NOT on its own proof of a failed spawn — a story with an empty dod
+   * block blocks identically — so the caller pairs it with the story's own plan.
+   */
+  readonly blockedWithNothingRun: boolean;
 }
 
-/** Everything `resumableReview` and the requeue counter need, in one pass. */
+/** Everything the two resume paths and the requeue counter need, in one pass. */
 export function readReviewLedger(runDir: string, storyId: string): ReviewLedger {
   const path = join(runDir, "events.jsonl");
-  const empty: ReviewLedger = { verdicts: 0, erroredWith: null, commit: null, dod: [] };
+  const empty: ReviewLedger = {
+    verdicts: 0, erroredWith: null, commit: null, dod: [],
+    developerErroredWith: null, blockedWithNothingRun: false,
+  };
   if (!existsSync(path)) return empty;
 
   let verdicts = 0;
   let erroredWith: string | null = null;
   let commit: string | null = null;
+  // The three the DEVELOPER side needs, all scoped to the story's LAST attempt:
+  // what its developer died with, whether ANY check ran under it, and whether a
+  // reviewer was ever spawned. Together they separate "the turn never happened"
+  // from every other way a story blocks.
+  let developerErroredWith: string | null = null;
+  let ranACheck = false;
+  let sawReviewer = false;
+  let blockedWithNothingRun = false;
   // `dod` is the last attempt that got as far as running its DoD; `current` is
   // what THIS attempt has run so far. An attempt that was started and produced
   // nothing must not erase the proof of the one before it — measured on the live
@@ -1810,11 +2039,38 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     if (event.type === "task.started") {
       if (current.length > 0) dod = current;
       current = [];
+      // Everything the developer side asks is about the LAST attempt, so every
+      // attempt starts the question again. An attempt that RUNS clears the
+      // failure the one before it recorded.
+      developerErroredWith = null;
+      ranACheck = false;
+      sawReviewer = false;
+      blockedWithNothingRun = false;
     }
-    if (event.type === "task.done" && typeof payload.commit === "string" && payload.commit !== "") {
-      commit = payload.commit;
+    if (event.type === "agent.spawned" && payload.role === "reviewer") sawReviewer = true;
+    if (event.type === "task.done") {
+      if (typeof payload.commit === "string" && payload.commit !== "") commit = payload.commit;
+      // The COMPAT shape, decided at the moment the attempt ended: blocked with
+      // nothing to show for itself and nothing that could have judged it.
+      blockedWithNothingRun = payload.status === "blocked"
+        && payload.verdict === "n-a"
+        && (payload.commit === null || payload.commit === undefined || payload.commit === "")
+        && !ranACheck
+        && !sawReviewer;
     }
     if (event.type !== "check.passed" && event.type !== "check.failed") continue;
+
+    // The developer's own check, and the only outcome it has is `error` — a
+    // developer that RAN is judged by its DoD and its reviewer, never by this.
+    // It is deliberately not counted as a check that RAN: the record of a spawn
+    // that never happened is not evidence that something happened.
+    if (payload.check === "developer") {
+      developerErroredWith = typeof payload.detail === "string" && payload.detail.trim() !== ""
+        ? payload.detail.trim()
+        : DEVELOPER_FAILED;
+      continue;
+    }
+    ranACheck = true;
 
     if (payload.check === "dod" && typeof payload.command === "string") {
       const exitCode = typeof payload.exit_code === "number" ? payload.exit_code : 0;
@@ -1837,7 +2093,14 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     verdicts++;
     erroredWith = null;
   }
-  return { verdicts, erroredWith, commit, dod: current.length > 0 ? current : dod };
+  return {
+    verdicts,
+    erroredWith,
+    commit,
+    dod: current.length > 0 ? current : dod,
+    developerErroredWith,
+    blockedWithNothingRun,
+  };
 }
 
 /**

@@ -1586,7 +1586,7 @@ an exit code; stdout stays parseable for the host session.
 
 **Auto gates.** Every stage still ENDS at a gate: `gate.requested` is appended, the stage sits at
 `awaiting_gate`, and nothing is skipped. What §2.2's `gates_policy` decides is **who closes it**. `human` waits for
-`tldrx approve` — unchanged, exit `4`. `auto` lets the facilitator close it, and only when **all five** of these
+`tldrx approve` — unchanged, exit `4`. `auto` lets the facilitator close it, and only when **all six** of these
 hold, measured off files that already exist:
 
 | # | Condition | Measured from |
@@ -1596,8 +1596,18 @@ hold, measured off files that already exist:
 | 3 | spend ≤ the stage ceiling AND the phase ceiling | `run.yml` `stages[].budget_usd`, `budget.yml` `phases[]` |
 | 4 | the stage did not end `failed` | `run.yml` `stages[].status` |
 | 5 | the §2.8 validator reports **zero refused AND zero unverified** | the stage's `handoff.md` outputs |
+| 6 | **Build only:** every story in the plan is `done` | `03-plan/stories/<id>.md` `status:`, or the implicit plan |
 
-Two of those were tightened on 2026-08-29, both because an auto gate could be closed by SILENCE:
+(6) was added on 2026-08-30, and it is the one condition about what the stage was FOR rather than about its
+artefact. Measured on run `260830-tenancy-identity-customers`: six of seven stories settled `blocked`, the epic
+branch carried one story's work, and the gate signed the stage — then signed it again after a human revoked it —
+because `claim-sources` passed, `questions` was empty and the spend was under the ceiling. Every measured condition
+was true and the stage had not been built. A HUMAN may still approve over blocked stories: deciding what is worth
+shipping is a judgement, and it is theirs. Outside the Build phase the condition is measured as `n/a` and always
+holds — `03-plan/waves.yml` exists while the Plan stage is gating too, and every story is `todo` at that moment by
+design.
+
+Two of the others were tightened on 2026-08-29, both because an auto gate could be closed by SILENCE:
 
 - **(2) "zero open" is only an answer when the file was readable.** When the stage's `stage.yml outputs:` names a
   `questions.md`, a file the §2.7 parser cannot read — or one that parses to zero blocks — does NOT satisfy the
@@ -1630,13 +1640,14 @@ that undoes it — and the status line carries `auto:N` and `stale:N`. It reache
 `run status` before this, and none of those is a glance.
 
 (5) overlaps (1) on purpose and is run **whether or not the stage listed `claim-sources` under `checks:`** — a
-stage file that forgot to list it must not thereby buy itself a cheaper gate. All five are evaluated even after one
+stage file that forgot to list it must not thereby buy itself a cheaper gate. All six are evaluated even after one
 fails, because "which one stopped it" is the first question anybody asks.
 
 The approval goes through the SAME `approve` path a person uses: the checks are re-run off disk, `by: auto` and
-`at` land on the gate, the note records all five conditions with their measured values
+`at` land on the gate, the note records all six conditions with their measured values
 (`auto-gate: checks=claim-sources:passed; questions=0 open; budget=$0.42 of $6.00 stage, phase 01-what $0.42 of
-$6.00; status=awaiting_gate; claim-sources=passed`), and the existing `gate.approved` event is appended with `by`
+$6.00; status=awaiting_gate; claim-sources=passed; stories=n/a (not a build stage)`), and the existing
+`gate.approved` event is appended with `by`
 in its payload. No new event type. Any condition failing falls back to the human gate exactly as before — exit `4`
 — and the message names the condition and what it measured. An executor that FORCES `gate: approve` (Build) still
 forces the gate; the policy decides who signs it.
@@ -1715,12 +1726,24 @@ one story never varies:
    `--allowedTools` is the file tools + `Bash(<each command THAT repo declares>)` + `Bash(git add *)` +
    `Bash(git commit *)` — narrower than the default allowance, which is every repo's commands, and wider by exactly the
    two verbs that make a commit. Its ceiling is `min(stage budget ÷ stories, per_agent_max_usd, --max-usd)`.
+   A developer that **FAILED** — a spawn error, a timeout, an exhausted `--max-budget-usd` — delivered nothing, and a
+   turn that never ran is not an attempt: the story is put back at the status it held BEFORE the attempt (`todo`, or
+   `review` when a reviewer had asked for changes), its attempt number unspent and its worktree kept, and the next
+   `tldrx next` — headless or `--prepare` — offers it again as a fresh developer run at the same attempt number. Its
+   `check.failed` carries `check: "developer"`, `status: "error"` and the error as `detail`. Measured 2026-08-30 on
+   `260830-tenancy-identity-customers`: five spawns died on `Reached maximum budget (…)` and each was recorded as the
+   story `blocked` — terminal in-run — so six of seven stories were reported as tried and failed when five of them had
+   never been tried. A developer that RAN and produced work its DoD faulted is a different thing and still blocks.
 3. **The Definition of Done, re-run by the facilitator** in that worktree, through the same runner `dod-gate` uses. All
    commands must exit 0. Then anything still uncommitted is committed as `feat(<story-id>): <title>` — the agent may
    have committed already, and either way the sha is read back with `rev-parse`.
 4. **Merge into the epic**, `git merge --no-ff` inside a worktree checked out on the epic branch. On conflict the merge
    is **aborted** — so the epic branch is exactly as the previous story left it and the wave can continue — the
    conflicting paths are read from `diff --diff-filter=U`, and the story is `blocked` with them as its `evidence:`.
+   How many commits the merge is about to move is counted BEFORE it happens (`rev-list --count <epic>..<story>`),
+   because afterwards it cannot be: a merged story branch is an ancestor of the epic either way. A count of **0** is a
+   merge that moved nothing — git exits 0 and says "Already up to date" — and the handoff says so rather than calling
+   it merged (measured 2026-08-30: a Gate section listed four such branches as merged work).
 5. **A reviewer sub-agent**, read-only (`Read`, `Grep`, `Glob`, `Bash(git diff *)`), judging the story diff against the
    acceptance criteria and the conventions. `[assumption]` — the brief says the reviewer writes
    `04-build/log/<story-id>.md` and that its tools are read-only, which cannot both hold; the judgement is the model's
