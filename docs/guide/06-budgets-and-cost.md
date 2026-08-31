@@ -80,7 +80,7 @@ cost, so cost-per-effort is measurable rather than arguable.
 
 ```bash
 tldrx cost                    # this run: per attempt, per stage, per run
-tldrx cost --all              # every run in the workspace, with the workspace total
+tldrx cost --all              # every run in the workspace, per economy
 tldrx cost --json
 ```
 
@@ -89,7 +89,23 @@ price here**. All four token counters, including both prompt-cache halves, on **
 line** as well as the stage and run totals — a stage that ran once still shows where its money
 went.
 
-Two rules it will not bend:
+`tldrx cost` is organised **by economy**, because two economies do not add up:
+
+```
+  STAGE           ECONOMY       MEASURED     DECLARED
+  01-what/what    metered-usd   $1.70        —
+  03-plan/plan    host-tokens   —            ~342.5k tokens (host session)
+  04-build/build  host-tokens   —            ~1.2M tokens (host session)
+
+  metered      $1.70 over 1 attempt
+  host-billed  ~1.5M tokens declared over 2 attempts — no dollar figure; this process metered none of it
+  (no total: two economies, no exchange rate — see spec §2.11)
+```
+
+No row spans both columns, and **there is no grand total**. A footer that printed `$1.70`
+under a run which had also burned 1.5M host tokens is the sentence the label exists to stop.
+
+Three rules it will not bend:
 
 - **Attempts are never merged.** A stage that failed twice cost three turns, and that retry
   is usually exactly the money you are looking for.
@@ -102,6 +118,50 @@ Two rules it will not bend:
   `~342.5k declared (host session)` — its own notation, kept apart from the four measured
   counters, because the four zeroes it used to print said "this turn used no tokens" about a
   turn that used 342,527 of them.
+
+## Two economies, and why a price needs a currency
+
+A number in `budget.yml` used to have no unit on it. On 2026-08-30 that cost **$9.95**: a
+Plan agent priced a run assuming HOST-billed sub-agents — turns the host session pays for,
+which tldrx never meters and which are ~free to the run — and the executor then enforced
+those figures as dollar ceilings on metered spawns. Six spawns of six died on
+`Reached maximum budget`, each having spent real money to get there.
+
+So a price gets a currency. `budget.yml` takes one optional key, at the run level and per
+phase, and `03-plan/budget.yml` takes the same key at its root:
+
+```yaml
+ceiling_usd: 25.0
+economy: metered-usd              # metered-usd (the default) | host-tokens
+phases:
+  - {id: 01-what,  ceiling_usd: 4.0, spent_usd: 1.14}
+  - {id: 04-build, ceiling_usd: 8.0, spent_usd: 0.0, economy: host-tokens}
+```
+
+`metered-usd` means dollars a spawn may spend, which is what every file already meant.
+`host-tokens` means a budget in units nobody in this process meters — a host-session token
+allowance, not money.
+
+**Leave it out and nothing changes.** Absence is `metered-usd`, and every path behaves
+exactly as it did before the label existed.
+
+**With `host-tokens` on a phase:**
+
+- `tldrx next` **refuses a headless spawn on that phase, exit 2, before it spends a cent**.
+  The message names the number, the unit and both ways out.
+- `tldrx next --prepare` / `--commit` run normally — the in-session handshake is where a
+  host-billed turn belongs, and the run says once, on stderr, that no dollar ceiling was
+  enforced.
+- The auto gate's money condition reads `n/a (host-tokens economy)` instead of comparing a
+  spend in dollars to a ceiling in tokens.
+- `tldrx run estimate` prices the stage in TOKENS and prints no dollar figure.
+- A `03-plan/budget.yml` labelled `host-tokens` contributes **no** story caps: its numbers
+  are not dollars, so the executor falls back to the uniform share and says so.
+
+The two are **never converted**. There is no exchange rate here, and inventing one would be
+a guess about a price — which is the whole reason the label exists. `tldrx budget raise`
+rewrites `budget.yml` and the label survives the rewrite; a raise that erased it would turn
+a token budget back into dollars silently.
 
 ## The one command that guesses
 
@@ -168,7 +228,8 @@ reviewer))`, and its reviewer a quarter of that. A story the plan did not price 
 to an equal share of the stage. If the prices add up to more than the stage was given they
 are scaled down proportionally, so the ratio the plan decided survives and the total cannot
 escape the ceiling. A `budget.yml` that will not parse or validate is an advisory on stderr
-and an equal split — never a refused build.
+and an equal split — never a refused build. So is one labelled `economy: host-tokens`: those
+numbers are not dollars, so they never become `--max-budget-usd` on a spawn.
 
 Until 2026-08-30 nothing read that file, and a seven-story plan that priced one story at
 $4.75 and another at $0.75 handed both the same $1.03.
@@ -197,6 +258,10 @@ stage that actually runs out.)
 `tldrx next`, `tldrx run auto`, `tldrx expert train`, `tldrx seed triage`. It denies when the
 cursor phase cannot afford the estimate and appends `budget.blocked`. The denial names the
 exact `tldrx budget raise` command, shortfall included.
+
+On a phase priced in `host-tokens` it never denies — there is no dollar ceiling there to
+enforce — and says so on stderr. The refusal that matters for such a phase is `tldrx next`'s
+own, which stops the headless spawn outright rather than measuring it against the wrong unit.
 
 It **fails CLOSED**: once the command is known to be a spender inside a tldrx workspace, an
 unreadable `run.yml` or `budget.yml` denies and says which one. "Cannot read the budget" is

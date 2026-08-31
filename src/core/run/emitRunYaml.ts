@@ -7,7 +7,7 @@
  * under Bun are byte-identical, so a diff only ever shows what actually changed.
  */
 import { yamlScalar } from "../facts/emitFactsYaml.ts";
-import type { RunBudget } from "../budget/RunBudget.ts";
+import { DEFAULT_ECONOMY, type RunBudget } from "../budget/RunBudget.ts";
 import type { GatesPolicy } from "./gatePolicy.ts";
 import type { RunFile, RunGate, RunStage, RunTask } from "./RunFile.ts";
 
@@ -153,12 +153,19 @@ export function emitBudgetYaml(budget: RunBudget): string {
     `per_agent_max_usd: ${money(budget.per_agent_max_usd)}`,
     `warn_at_pct: ${budget.warn_at_pct}`,
     `on_exceed: ${yamlScalar(budget.on_exceed)}`,
+    // Emitted only when it is not the default. `budget raise` rewrites this file
+    // through this emitter, so a label that did not round-trip would be ERASED by
+    // the one command an operator reaches for when a ceiling binds — and the
+    // erasure would turn a token budget back into dollars silently. Skipping the
+    // default line keeps a file with no label byte-identical to what it was.
+    ...(budget.economy === DEFAULT_ECONOMY ? [] : [`economy: ${yamlScalar(budget.economy)}`]),
     "phases:",
   ];
   for (const phase of budget.phases) {
+    const economy = phase.economy === null ? "" : `, economy: ${yamlScalar(phase.economy)}`;
     lines.push(
       `  - {id: ${yamlScalar(phase.id)}, ceiling_usd: ${money(phase.ceiling_usd)}, ` +
-        `spent_usd: ${money(phase.spent_usd)}}`,
+        `spent_usd: ${money(phase.spent_usd)}${economy}}`,
     );
   }
   return `${lines.join("\n")}\n`;

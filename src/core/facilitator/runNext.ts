@@ -23,6 +23,7 @@ import { approve } from "../run/gates.ts";
 import { AUTO_GATE_ACTOR, evaluateAutoGate, unreadableHeadings } from "../run/autoGate.ts";
 import { gatePolicyFor } from "../run/gatePolicy.ts";
 import { PresetError, type PlannedStage } from "../run/workflowPreset.ts";
+import { isHostTokens } from "../budget/RunBudget.ts";
 import { remaining } from "../budget/wouldExceed.ts";
 import { raiseCommand, shortBy } from "../budget/budgetView.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
@@ -367,6 +368,13 @@ async function runStage(
     return out(EXIT_USAGE, [...notes, `stage '${stageId}' sets dry_run_allowed: false — refusing --dry-run`]);
   }
 
+  // --- economy gate (spec §2.11, design §E.2) ------------------------------
+  // BEFORE the executor, before the prompt, before the budget arithmetic: the
+  // first thing checked about a headless invocation is whether the ceiling it is
+  // about to spawn under is denominated in money at all.
+  const mismatch = economyRefusal(store, options, phaseId, notes);
+  if (mismatch !== null) return mismatch;
+
   // The phase-specific half, when the phase has one (`executors/index.ts`). A
   // phase with no executor keeps the single-agent path below, unchanged.
   const executor = executorFor(phaseId);
@@ -624,6 +632,45 @@ function attendedRefusal(
   ]);
 }
 
+/**
+ * The refusal that would have saved the $9.95 (design §E.2).
+ *
+ * A phase priced in `host-tokens` carries a number that is NOT dollars — it is a
+ * host-session token allowance somebody wrote down for turns this process does
+ * not meter. A headless invocation is about to derive `--max-budget-usd` from
+ * that number and hand it to a metered `claude -p`. On
+ * `260830-tenancy-identity-customers` that is exactly what happened, six times,
+ * and six spawns died on `Reached maximum budget` having each spent real money
+ * reaching it.
+ *
+ * So it refuses, exit 2, here — before the executor, before prompt assembly,
+ * before a byte is written and before a cent is spent. `--prepare` and
+ * `--commit` are untouched: those are the in-session paths, where the host holds
+ * the meter and the token figure means what it says.
+ *
+ * The economy is never CONVERTED. There is no exchange rate between a metered
+ * dollar and a host token, and inventing one would be a guess about a price —
+ * which is the whole reason the label exists.
+ */
+function economyRefusal(
+  store: RunStore,
+  options: NextOptions,
+  phaseId: string,
+  notes: string[],
+): NextOutcome | null {
+  if (options.mode !== "headless") return null;
+  if (!isHostTokens(store.budget, phaseId)) return null;
+  const phase = store.budget.phases.find((entry) => entry.id === phaseId);
+  const ceiling = phase?.ceiling_usd ?? store.budget.ceiling_usd;
+  return out(EXIT_REFUSED, [
+    ...notes,
+    `refusing to spawn — ${phaseId} is priced in \`host-tokens\` `
+      + `($${ceiling.toFixed(2)} is not dollars a spawn may`,
+    "spend) and this invocation is headless. Either run it in-session (tldrx next --prepare), or set the",
+    `phase to \`economy: metered-usd\` and re-price it (tldrx budget raise ${phaseId} <usd>).`,
+  ]);
+}
+
 function budgetRefusal(
   store: RunStore,
   options: NextOptions,
@@ -633,6 +680,15 @@ function budgetRefusal(
 ): NextOutcome | null {
   const stage = requireStage(store, phaseId, stageId);
   const phaseRemaining = remaining(store.budget, phaseId);
+  // Under `host-tokens` the arithmetic is between two numbers in different units,
+  // so it is not arithmetic — it is a category error, and it must never BLOCK
+  // (design §E.2). It still says so out loud, once, as a `budget.warned`: an
+  // in-session phase whose ceiling nothing here can enforce is a fact an operator
+  // should read, not a silence.
+  if (isHostTokens(store.budget, phaseId)) {
+    hostTokensNote(store, options, phaseId, stageId, notes);
+    return null;
+  }
   if (phaseRemaining < stage.budget_usd && store.budget.on_exceed === "block") {
     store.append(event(options, store.runId, stageId, "budget.blocked", {
       phase: phaseId,
@@ -1462,6 +1518,30 @@ function revertNonHandoff(outputs: readonly string[], ctx: PathContext): readonl
 }
 
 /** Spec §2.11 `warn_at_pct`: "emits `budget.warned` once per phase". */
+/**
+ * The one line a `host-tokens` phase gets in place of a dollar refusal, appended
+ * once per phase (the same "once" `warnOnce` means, and for the same reason: a
+ * per-stage repeat of a phase-level fact is noise).
+ */
+function hostTokensNote(
+  store: RunStore,
+  options: NextOptions,
+  phaseId: string,
+  stageId: string,
+  notes: string[],
+): void {
+  notes.push(
+    `budget: phase ${phaseId} is priced in \`host-tokens\` — this process meters none of it, `
+      + "so no dollar ceiling was enforced here",
+  );
+  if (alreadyWarned(store, phaseId)) return;
+  store.append(event(options, store.runId, stageId, "budget.warned", {
+    phase: phaseId,
+    economy: "host-tokens",
+    reason: "ceiling is not denominated in USD; no dollar gate applied",
+  }));
+}
+
 function warnOnce(
   store: RunStore,
   options: NextOptions,

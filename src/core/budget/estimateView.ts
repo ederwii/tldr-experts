@@ -39,6 +39,7 @@ import { loadStageSpec } from "../facilitator/stageSpec.ts";
 import { assemblePrompt, declaredInputsOf, seedInputsFor } from "../facilitator/runNext.ts";
 import type { ContextLedger } from "../facilitator/contextLedger.ts";
 import { attemptTokensForStage, median } from "./costView.ts";
+import { economyFor, type Economy } from "./RunBudget.ts";
 import {
   estimateTokensFromBytes, priceFor, BYTES_PER_TOKEN,
   CACHE_READ_MULTIPLIER, CACHE_WRITE_MULTIPLIER,
@@ -63,6 +64,12 @@ export interface StageEstimate {
   readonly medianCacheReadTokens: number | null;
   readonly historyBasis: HistoryBasis;
   readonly sampleSize: number;
+  /**
+   * What this stage's phase is priced in (spec §2.11). Under `host-tokens` every
+   * USD field below is null — the tokens are estimated exactly as before and are
+   * simply never converted, because there is no rate to convert them at.
+   */
+  readonly economy: Economy;
   /** Null when the model has no priced row, or there is no history. */
   readonly usd: number | null;
   readonly inputUsd: number | null;
@@ -137,8 +144,13 @@ export function estimateNextStage(root: string, runId?: string): StageEstimate {
     ? null
     : perMTok(medianOutput, price.outputUsdPerMTok);
 
-  const complete = inputUsd !== null && cacheWriteUsd !== null
+  // A `host-tokens` phase is not priced in dollars, so this command does not
+  // produce one for it (design §E.2). The token medians are the estimate; the
+  // conversion is the guess, and it is the guess the label exists to refuse.
+  const economy = economyFor(store.budget, phaseId);
+  const complete = economy === "metered-usd" && inputUsd !== null && cacheWriteUsd !== null
     && cacheReadUsd !== null && outputUsd !== null;
+  const priced = economy === "metered-usd";
 
   return {
     run: store.run.run,
@@ -153,13 +165,14 @@ export function estimateNextStage(root: string, runId?: string): StageEstimate {
     medianCacheReadTokens: medianCacheRead,
     historyBasis: basis,
     sampleSize: history.length,
+    economy,
     usd: complete
       ? round((inputUsd ?? 0) + (cacheWriteUsd ?? 0) + (cacheReadUsd ?? 0) + (outputUsd ?? 0))
       : null,
-    inputUsd: inputUsd === null ? null : round(inputUsd),
-    cacheWriteUsd: cacheWriteUsd === null ? null : round(cacheWriteUsd),
-    cacheReadUsd: cacheReadUsd === null ? null : round(cacheReadUsd),
-    outputUsd: outputUsd === null ? null : round(outputUsd),
+    inputUsd: priced && inputUsd !== null ? round(inputUsd) : null,
+    cacheWriteUsd: priced && cacheWriteUsd !== null ? round(cacheWriteUsd) : null,
+    cacheReadUsd: priced && cacheReadUsd !== null ? round(cacheReadUsd) : null,
+    outputUsd: priced && outputUsd !== null ? round(outputUsd) : null,
   };
 }
 
@@ -180,7 +193,17 @@ export function renderEstimate(estimate: StageEstimate): string {
   } else {
     lines.push(basisLine(estimate), breakdown(estimate));
   }
-  if (estimate.usd === null) {
+  if (estimate.economy === "host-tokens") {
+    lines.push(
+      `ESTIMATE: ${ktok(estimate.promptTokens)} input `
+      + `+ ${ktok(estimate.medianCacheWriteTokens ?? 0)} cache write `
+      + `+ ${ktok(estimate.medianCacheReadTokens ?? 0)} cache read `
+      + `+ ${ktok(estimate.medianOutputTokens ?? 0)} out TOKENS. `
+      + "This phase is priced in `host-tokens`, so there is no dollar figure here and none is "
+      + "computed: the turn is billed to the host session, which this process does not meter. "
+      + "Converting would need an exchange rate nobody here has.",
+    );
+  } else if (estimate.usd === null) {
     lines.push(
       `ESTIMATE: unavailable — ${estimate.historyBasis === "none"
         ? "no output history"

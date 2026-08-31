@@ -943,10 +943,35 @@ phases: [{id: 01-what, ceiling_usd: 4.0, spent_usd: 1.14}, {id: 02-how, ceiling_
 | `per_agent_max_usd` | number >0 | y | Passed as `--max-budget-usd` per sub-agent (Appendix A) |
 | `warn_at_pct` | int 1–99 | n (80) | Emits `budget.warned` once per phase `[assumption]` |
 | `on_exceed` | `block\|warn` | y | `block` ⇒ the budget-gate hook denies the spawn |
+| `economy` | `metered-usd\|host-tokens` | n (`metered-usd`) | **What the numbers here are denominated in.** Run level; a phase may override it |
 | `phases[].{id,ceiling_usd,spent_usd}` | slug / number ≥0 | y | Per-phase ceiling and rolled-up actual |
+| `phases[].economy` | `metered-usd\|host-tokens` | n (inherit) | This phase's own economy |
 
 **Validation.** Σ phase ceilings ≤ `ceiling_usd`; every phase id appears in `run.yml`; `spent_usd ≤ ceiling_usd` per
-phase unless `on_exceed: warn`; ≤5 phases.
+phase unless `on_exceed: warn`; ≤5 phases. An `economy` naming a value this reader does not know is REFUSED, never
+defaulted to dollars — a unit nothing here understands is not one it may quietly read as money. Absence, and an empty
+`economy:` key, both mean `metered-usd`.
+
+**The two economies.** Measured 2026-08-30 on `260830-tenancy-identity-customers`: the Plan agent priced the run
+assuming HOST-billed sub-agents — turns the host session pays for, which this process never meters and which are
+~free to the run — and the executor then enforced those figures as dollar ceilings on METERED spawns. Six spawns of
+six died on `Reached maximum budget`, each having spent real money to get there: **$9.95**. The money model was a
+single scalar with no unit on it and had no way to say *"this number is not dollars."* Now it does:
+
+| | `metered-usd` (the default) | `host-tokens` |
+|---|---|---|
+| the number means | dollars a spawn may spend | a host-billed budget in units nobody here meters |
+| `--max-budget-usd` on a spawn | the cap, as today | **never derived from it** |
+| `tldrx next` headless | spawns | **refuses, exit 2, before spending** (§5) |
+| `tldrx next --prepare` / `--commit` | runs | runs — this is where a host-billed turn belongs |
+| budget-gate hook | denies on `spent + estimate > ceiling` | never denies; says so on stderr |
+| auto-gate condition 3 | as today | `n/a (host-tokens economy)`, recorded in the note |
+| `run.yml` `spent_usd` | Σ metered costs | stays 0 — an in-session turn reports no cost to roll up |
+| `tldrx run estimate` | priced in USD | priced in TOKENS, labelled, never converted |
+
+The two are **never converted into one another**. There is no exchange rate here, and inventing one would be a guess
+about a price — which is the whole reason the label exists. `tldrx budget raise` rewrites this file through the same
+emitter, and the label round-trips: a raise that erased it would turn a token budget back into dollars silently.
 
 **Budget semantics — measured 2026-08-29.** `claude -p --max-budget-usd` is a *stop after the current turn*, not a
 hard cap: a single long turn ran 597 s and spent **$5.15 against a $1.50 ceiling** (`error_max_budget_usd`, 105 k
@@ -1456,7 +1481,9 @@ next(run, dry_run):
   if st.status == awaiting_answer: exit 4 if unanswered(questions.md) else st.status = ready
   sy = load_validate(.tldrx/stages/<st.id>/stage.yml)
   if sy.skip_if holds: append(stage.skipped); advance_cursor(); return next(run, dry_run)
-  if b.phase(st).remaining < sy.budget_usd and b.on_exceed == block: append(budget.blocked); exit 2
+  if b.economy(st.phase) == host-tokens and mode == headless: exit 2   # §2.11: that ceiling is not dollars
+  if b.economy(st.phase) == host-tokens: append(budget.warned once); skip the money gate
+  elif b.phase(st).remaining < sy.budget_usd and b.on_exceed == block: append(budget.blocked); exit 2
   if any(!exists(i) for i in sy.inputs.required): exit 1
   inputs = sy.inputs.required + present(sy.inputs.optional)          # ONLY these files
   prompt = render(stage.md, {run, repos, inputs, facts: grep(facts.yml, sy.area/r.repos), conventions,
@@ -1630,7 +1657,7 @@ hold, measured off files that already exist:
 |---|---|---|
 | 1 | the stage's declared `checks` all pass | the outcomes `next` just produced |
 | 2 | zero open questions in that phase, **and the file could be read** | `<phase>/questions.md`, blocks at `status: open` |
-| 3 | spend ≤ the stage ceiling AND the phase ceiling | `run.yml` `stages[].budget_usd`, `budget.yml` `phases[]` |
+| 3 | spend ≤ the stage ceiling AND the phase ceiling — or `n/a (host-tokens economy)` when the phase is not priced in dollars (§2.11) | `run.yml` `stages[].budget_usd`, `budget.yml` `phases[]`, `budget.yml` `economy` |
 | 4 | the stage did not end `failed` | `run.yml` `stages[].status` |
 | 5 | the §2.8 validator reports **zero refused AND zero unverified** | the stage's `handoff.md` outputs |
 | 6 | **Build only:** every story in the plan is `done` | `03-plan/stories/<id>.md` `status:`, or the implicit plan |
@@ -1962,6 +1989,12 @@ and however many of them are in flight at the same moment. Running concurrently 
 more of it.
 
 **Per-story prices, since 2026-08-30.** That uniform share is the FALLBACK. When
+`03-plan/budget.yml` takes the same optional `economy:` key at its root, so a Plan agent can say which economy it
+was pricing in — the thing 2026-08-30's Plan agent could not say and was then held to. A plan priced in
+`host-tokens` contributes **no** dollar caps: its numbers are not dollars, the executor falls back to the uniform
+share it used before plan prices were read at all, and it says so in one line rather than spending a token figure as
+money.
+
 `03-plan/budget.yml` prices a story in its `per_phase_usd:` map — which the Plan writes and the Plan gate validates,
 and which nothing read until this date — that story's developer cap is `price ÷ (MAX_ATTEMPTS × (1 + REVIEWER_SHARE))`
 and its reviewer's a `REVIEWER_SHARE` of that. Prices summing to more than the stage are scaled down proportionally, so

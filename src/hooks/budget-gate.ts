@@ -22,6 +22,7 @@ import { loadRunView, newestActiveRun, cursorStage, type RunView } from "./lib/r
 import { budgetGateDeny } from "./lib/messages.ts";
 import { currentActor, nowRfc3339 } from "./lib/actor.ts";
 import { loadRunBudget } from "../core/budget/loadBudget.ts";
+import { isHostTokens } from "../core/budget/RunBudget.ts";
 import { wouldExceed } from "../core/budget/wouldExceed.ts";
 import { raiseCommand, shortBy } from "../core/budget/budgetView.ts";
 import { EventLog } from "../core/events/EventLog.ts";
@@ -105,6 +106,18 @@ await runHook("budget-gate", async () => {
   const stage = cursorStage(view);
   const estimate = estimateFor(command, stage?.budget_usd ?? stageBudgetFromLibrary(root, view.cursor.stage));
   if (estimate <= 0) return; // nothing declared to spend; nothing to refuse
+
+  // A ceiling that is not in dollars cannot deny a dollar spend (design §E.2).
+  // The hook says so on stderr and allows: the refusal that matters for a
+  // `host-tokens` phase is `tldrx next`'s own, which stops the spawn outright
+  // rather than measuring it against the wrong unit.
+  if (isHostTokens(budget, view.cursor.phase)) {
+    process.stderr.write(
+      `tldrx hook budget-gate: ${view.cursor.phase} is priced in \`host-tokens\` — `
+      + "no dollar ceiling to enforce here; `tldrx next` refuses a headless spawn on it.\n",
+    );
+    return;
+  }
 
   const decision = wouldExceed(budget, view.cursor.phase, estimate);
   if (!decision.blocked) return;

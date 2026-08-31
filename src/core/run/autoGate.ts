@@ -26,7 +26,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { openBlocks, parseQuestions, unreadableQuestionHeadings } from "../text/questions.ts";
-import type { RunBudget } from "../budget/RunBudget.ts";
+import { isHostTokens, type RunBudget } from "../budget/RunBudget.ts";
 import { runCheck, unverifiedCount, type CheckOutcome } from "./checks.ts";
 import { buildProgress, BUILD_PHASE } from "./buildProgress.ts";
 import type { PlannedStage } from "./workflowPreset.ts";
@@ -167,6 +167,14 @@ function parsedBlocks(path: string): number {
  * is not a gate the machine gets to close.
  */
 function budgetCondition(input: AutoGateInput): AutoGateCondition {
+  // A phase priced in `host-tokens` has no dollar ceiling for this to check
+  // against, and the honest answer is `n/a` — not a comparison between a spend
+  // in dollars and a ceiling in tokens, which would be true or false for reasons
+  // that have nothing to do with money (design §E.2). The label is what the note
+  // records, so a reader can see WHY the condition abstained.
+  if (isHostTokens(input.budget, input.phaseId)) {
+    return { id: "budget", ok: true, detail: "n/a (host-tokens economy)" };
+  }
   const spent = round2(input.stage.tasks.reduce((sum, task) => sum + (task.cost_usd ?? 0), 0));
   const unmetered = input.stage.tasks.filter((task) => task.cost_usd === null).length;
   const phase = input.budget.phases.find((entry) => entry.id === input.phaseId);
