@@ -1725,10 +1725,17 @@ one story never varies:
    acceptance criteria and the conventions. `[assumption]` — the brief says the reviewer writes
    `04-build/log/<story-id>.md` and that its tools are read-only, which cannot both hold; the judgement is the model's
    (returned through a `--json-schema` envelope: `verdict`, `summary`, `findings`) and the **log is written by the
-   executor**. A verdict that cannot be parsed is `changes`, never `approve`.
+   executor**. A verdict that cannot be parsed is `changes`, never `approve` — the reviewer ANSWERED and its answer is
+   unreadable. A reviewer that never answered at all is different and is recorded as `verdict: "error"`: a spawn
+   failure, a timeout or an exhausted `--max-budget-usd` is a transport outcome, not a judgement of the diff, and
+   writing one down as `changes` spends a requeue on code nobody faulted (measured 2026-08-30, $0.26 died mid-read on a
+   39-file story). Its `check.failed` carries the error as `detail` so a ledger can tell the two apart.
 6. **`done` requires DoD green AND `approve`**, and writes the proof into the story's own front matter: `$ <cmd> →
    exit 0` per dod command, `commit <sha>`, and the review path. A `changes` verdict sets the story `review` and
-   requeues it **once**, with the review rendered under `## Previous attempt`; a second `changes` blocks it.
+   requeues it **once**, with the review rendered under `## Previous attempt`; a second `changes` blocks it. An
+   `error` verdict also parks the story at `review` but spends **no** attempt: the diff is committed, merged and
+   DoD-green, so the next `tldrx next` — headless or `--prepare` — re-runs the **review alone**, recovering the commit
+   and the DoD results from `events.jsonl`. Only a real verdict consumes the requeue.
 
 **Blast radius is one story.** A red DoD, a merge conflict or a failed sub-agent blocks that story only; the epic
 carries on with the next, and so does the wave. **The phase never ships:** no epic is merged into a default branch, so

@@ -33,6 +33,27 @@
 
 ### Fixed
 
+- **A reviewer that FAILED is no longer recorded as a reviewer that asked for changes.**
+  Found live 2026-08-30 by the first `feature`-scope run to reach Build: the headless
+  reviewer of a 39-file, +1879-line story was given $0.26, died mid-read with
+  `Reached maximum budget ($0.26)`, and the executor wrote that transport error down as
+  `verdict: "changes"`. That single line spent the story's one requeue, sent a fresh
+  developer at code nobody had faulted, and would have blocked the story after a second
+  reviewer hit the same wall — with **zero review ever performed**. A failed reviewer now
+  settles the story at `review` with `verdict: "error"`: the attempt counter is untouched
+  (only a real verdict spends it), the `check.failed` event carries the error as its
+  `detail` plus `verdict: "error"` so no ledger counts it as changes-requested, and every
+  operator-facing line, the review log and `retro.md` all say the reviewer **FAILED**.
+  Fail-closed is unchanged — an unfinished review is still never an approval. Inventing the
+  verdict is what stopped.
+- **`tldrx next` on a story whose review errored re-runs only the REVIEW.** The diff is
+  already committed and merged and its DoD went green, so there is nothing for a developer
+  to redo. Both doors do it: the headless path and `tldrx next --prepare`, which used to
+  hand the host session a full "attempt 2" developer bundle. The commit and the DoD results
+  come back out of `events.jsonl`, so the resumed reviewer sees the same proof the first one
+  did. Runs recorded by the OLD code resume too — a `verdict: "changes"` whose `detail` is
+  one of the framework's own transport errors is read as the failure it was, including a
+  story already left at `in_progress` by a wrongly-prepared attempt 2.
 - **A stage whose declared outputs are a SHAPE no longer fails while the files sit next to
   the error.** Found live 2026-08-30 by the first `feature`-scope run to reach Plan: the
   stage wrote `03-plan/epics/E1.md` and `03-plan/stories/S1.md`..`S7.md`, and

@@ -60,7 +60,9 @@ import {
 } from "../../build/implicitPlan.ts";
 import { evidenceFor, updateStoryFront } from "../../build/storyFile.ts";
 import { buildDeveloperPrompt, buildReviewerPrompt, REVIEW_SCHEMA } from "../../build/prompts.ts";
-import { parseReview, renderPreviousAttempt, renderReviewLog, type Review } from "../../build/review.ts";
+import {
+  looksLikeReviewerError, parseReview, renderPreviousAttempt, renderReviewLog, reviewerFailed, type Review,
+} from "../../build/review.ts";
 import { dodGreen, type DodResult, type StoryOutcome } from "../../build/outcome.ts";
 import { renderBuildHandoff, type EpicSummaryRow } from "../../build/handoff.ts";
 import { appendBuildRetro, buildRetroPath, gateRetroLines, storyRetroLines } from "../../build/retroLog.ts";
@@ -85,6 +87,7 @@ export const MAX_ATTEMPTS = 2;
  * the phase's cost.
  */
 export const REVIEWER_SHARE = 0.25;
+
 
 /**
  * The default degree of parallelism inside a wave: one story at a time.
@@ -126,6 +129,19 @@ class SerialQueue {
     this.tail = next.then(() => undefined, () => undefined);
     return next;
   }
+}
+
+/**
+ * A story that needs its REVIEW re-run and nothing else: the developer half is
+ * done, its DoD was green, and the commit is already merged into the epic.
+ */
+interface ResumableReview {
+  /** The merged story commit, from the ledger's `task.done`. */
+  readonly commit: string;
+  /** The DoD results of the attempt that produced it, from the ledger. */
+  readonly dod: readonly DodResult[];
+  /** What the reviewer died with — quoted to the operator, never as a verdict. */
+  readonly error: string;
 }
 
 /** What half A of a parallel wave produced for one story. */
@@ -381,6 +397,19 @@ class BuildSession {
     const refusal = await this.refuseOnDirtyRepos() ?? await this.refuseOnForeignEpic();
     if (refusal !== null) return refusal;
 
+    // The reviewer is the FRAMEWORK's sub-agent in both modes — only the
+    // developer is delegated to the host session — so a story waiting on nothing
+    // but a re-review is finished here and now rather than handed out as a
+    // second developer attempt. That hand-out is exactly what this path did on
+    // 2026-08-30: `task.started … attempt: 2, mode: prepare`, for a story whose
+    // diff nobody had ever read.
+    // An errored review produced no `changes` verdict, so no developer attempt is
+    // owed and none is offered. A bundle a previous version of this code ALREADY
+    // handed out is not stranded by that: `tldrx next --commit` still reads its
+    // `result.json` and runs the full pipeline over it, exactly as before.
+    const resume = this.resumableReview(planned);
+    if (resume !== null) return await this.prepareRereview(planned, resume);
+
     const story = await this.openStory(planned);
     const cap = this.developerCap();
     const key = this.bundleKey(planned.story.id);
@@ -427,6 +456,27 @@ class BuildSession {
           `($${cap.toFixed(2)} ceiling, attempt ${String(story.attempt)} of ${String(MAX_ATTEMPTS)})`,
         `dispatch ONE sub-agent with cwd ${relative(this.ctx.root, story.worktree)}`,
         `then write {outputs, questions_asked, notes} to ${dir}/result.json and run \`tldrx next --commit\``,
+      ],
+      stderr: [...this.advisories],
+      error: null,
+    };
+  }
+
+  /** The in-session answer to a story waiting on a review: run the review. */
+  private async prepareRereview(planned: PlannedStory, resume: ResumableReview): Promise<ExecutorOutcome> {
+    await this.rereview(planned, resume);
+    if (this.nextPending() === null) return await this.finish();
+    const outcome = this.outcomes.get(planned.story.id);
+    return {
+      ok: true,
+      awaiting: true,
+      tasks: this.tasks,
+      costUsd: this.spent(),
+      outputs: [...this.logPaths(), ...this.planOutputs(), ...this.retroOutputs()],
+      lines: [
+        ...this.lines,
+        `${planned.story.id} → \`${outcome?.status ?? "?"}\` (review only — no developer attempt was owed)`,
+        `${this.nextPending()?.story.id ?? "?"} is next — run \`tldrx next --prepare\``,
       ],
       stderr: [...this.advisories],
       error: null,
@@ -481,9 +531,24 @@ class BuildSession {
 
   /** One story, with its at-most-one requeue after a `changes` verdict. */
   private async driveStory(planned: PlannedStory): Promise<void> {
+    // A story whose LAST review ERRORED is not owed a developer: its diff is
+    // committed and merged, and its DoD went green. What is missing is the
+    // review. Re-running the developer would throw away work nobody faulted and
+    // charge for it twice.
+    const resume = this.resumableReview(planned);
+    if (resume !== null) {
+      await this.rereview(planned, resume);
+      return;
+    }
     for (let i = 0; i < MAX_ATTEMPTS; i++) {
       await this.settleHalf(await this.buildHalf(planned));
-      if (this.outcomes.get(planned.story.id)?.status !== "review") return;
+      const outcome = this.outcomes.get(planned.story.id);
+      if (outcome?.status !== "review") return;
+      // Only a real `changes` verdict buys another developer attempt. An errored
+      // review leaves the story parked for the NEXT invocation's review-only
+      // path — retrying the same reviewer under the same ceiling in the same
+      // process would just buy the same error twice.
+      if (outcome.verdict === "error") return;
       this.lines.push(`  · ${planned.story.id}: reviewer asked for changes — requeued once`);
     }
   }
@@ -497,6 +562,20 @@ class BuildSession {
    * story, so a second round is another fan-out.
    */
   private async driveWave(wave: BuildWave, pending: readonly PlannedStory[]): Promise<void> {
+    // Stories waiting only on a REVIEW never enter the fan-out: half A is what
+    // the lanes are for, and theirs is already done and merged. They are settled
+    // first, serially, exactly as half B always runs.
+    const queue: PlannedStory[] = [];
+    for (const planned of pending) {
+      const resume = this.resumableReview(planned);
+      if (resume === null) queue.push(planned);
+      else await this.rereview(planned, resume);
+    }
+    await this.driveWaveHalves(wave, queue);
+  }
+
+  /** The fan-out proper: half A concurrently, half B in the wave's listed order. */
+  private async driveWaveHalves(wave: BuildWave, pending: readonly PlannedStory[]): Promise<void> {
     let queue = [...pending];
     for (let round = 0; round < MAX_ATTEMPTS && queue.length > 0; round++) {
       const halves = await this.fanOut(queue);
@@ -507,8 +586,12 @@ class BuildSession {
         if (half === undefined) continue;
         await this.settleHalf(half);
       }
+      // `review` + `changes` is the only requeue. `review` + `error` means the
+      // reviewer never judged the diff, and a second developer attempt is the one
+      // thing that must NOT follow it.
       const requeued = wave.stories.filter((p) =>
-        halves.has(p.story.id) && this.outcomes.get(p.story.id)?.status === "review");
+        halves.has(p.story.id) && this.outcomes.get(p.story.id)?.status === "review"
+        && this.outcomes.get(p.story.id)?.verdict === "changes");
       for (const planned of requeued) {
         this.lines.push(`  · ${planned.story.id}: reviewer asked for changes — requeued once`);
       }
@@ -596,6 +679,13 @@ class BuildSession {
       await this.block(story, half.failure, half.cost, dod);
       return;
     }
+    // `buildHalf` sets `failure` whenever it has no commit, so this is
+    // unreachable — but the reviewer path needs a sha it can hand forward, and a
+    // narrowing the compiler can see beats one it has to be told about.
+    if (commit === null) {
+      await this.block(story, "the story produced no commit to review", half.cost, dod);
+      return;
+    }
 
     // (f) merge into the epic. A conflict blocks the story; the wave carries on.
     const merge = await this.mergeIntoEpic(story);
@@ -608,9 +698,40 @@ class BuildSession {
     }
     this.noteMerged(story);
 
-    // (g) the reviewer.
+    // (g)(h) the reviewer, and whatever it decides.
+    await this.reviewAndSettle(story, dod, commit, half.cost);
+  }
+
+  /**
+   * (g)(h): the reviewer over an already-merged diff, and the story's fate.
+   *
+   * Split out of `settleHalf` because it is reachable two ways — after a fresh
+   * developer attempt, and on its own for a story whose previous review ERRORED.
+   * The second entry is the whole point: everything before this line (worktree,
+   * developer, DoD, commit, merge) already happened and is not repeatable
+   * cheaply, and a review that never returned a verdict is not a reason to redo
+   * any of it.
+   */
+  private async reviewAndSettle(
+    story: StoryContext,
+    dod: readonly DodResult[],
+    commit: string,
+    priorCost: number,
+  ): Promise<void> {
     const review = await this.spawnReviewer(story, dod);
-    const cost = round2(half.cost + review.cost);
+    const cost = round2(priorCost + review.cost);
+
+    // A reviewer that FAILED said nothing about the diff. The story parks at
+    // `review` — pending, worktree kept, requeue counter untouched — and the next
+    // `tldrx next` re-runs the REVIEW, not the developer.
+    if (review.review.verdict === "error") {
+      await this.settle(story, "review", {
+        dod, commit, merged: true, verdict: "error", review: review.review, cost,
+        reason: `the reviewer FAILED and returned no verdict — ${review.review.summary}`,
+      });
+      return;
+    }
+
     const requeue = review.review.verdict === "changes" && story.attempt < MAX_ATTEMPTS;
     if (review.review.verdict === "changes") {
       await this.settle(story, requeue ? "review" : "blocked", {
@@ -626,6 +747,36 @@ class BuildSession {
     await this.settle(story, "done", {
       dod, commit, merged: true, verdict: "approve", review: review.review, cost, reason: null,
     });
+  }
+
+  /**
+   * Re-run ONLY the review of a story whose last reviewer errored.
+   *
+   * The commit and the DoD results come from the run's own ledger, not from a
+   * second developer turn: `events.jsonl` recorded which commit was merged and
+   * which `dod` commands exited what, and those facts have not changed. Nothing
+   * is re-merged either — `task.done` said `merged`, and merging a branch that is
+   * already an ancestor is at best a no-op.
+   */
+  private async rereview(planned: PlannedStory, resume: ResumableReview): Promise<void> {
+    const story = await this.writes.run(() => this.openStory(planned));
+    await this.writes.run(() => {
+      this.ctx.emit("task.started", {
+        phase: this.ctx.phaseId,
+        story: planned.story.id,
+        wave: planned.wave,
+        repo: planned.story.repo,
+        branch: story.branch,
+        attempt: story.attempt,
+        resumed: "review",
+      });
+    });
+    this.noteMerged(story);
+    this.lines.push(
+      `  · ${planned.story.id}: the previous reviewer FAILED (${resume.error}) — `
+      + `re-running the REVIEW only; \`${resume.commit}\` is already merged into \`${story.epicBranch}\``,
+    );
+    await this.reviewAndSettle(story, resume.dod, resume.commit, 0);
   }
 
   /** True when any story of this wave settled at `blocked`. */
@@ -878,10 +1029,13 @@ class BuildSession {
       lane: this.lane(story),
     });
 
-    // A reviewer that did not finish has not approved anything.
-    const review = agent.ok
-      ? parseReview(agent.structured, agent.result)
-      : { verdict: "changes" as const, summary: agent.error ?? "the reviewer sub-agent failed", findings: [] };
+    // A reviewer that did not finish has not approved anything — and has not
+    // asked for changes either. `agent.ok === false` is a TRANSPORT outcome (the
+    // spawn failed, the process timed out, `--max-budget-usd` bit), and the one
+    // thing it is not is a judgement of the diff. Fabricating `changes` here is
+    // what spent story S1's single requeue on a reviewer that died mid-read
+    // (2026-08-30); `reviewerFailed` records the corpse as a corpse.
+    const review = agent.ok ? parseReview(agent.structured, agent.result) : reviewerFailed(agent.error);
 
     this.tasks.push({
       key: story.planned.story.id,
@@ -892,9 +1046,12 @@ class BuildSession {
       outputs: [],
     });
     const id = story.planned.story.id;
-    this.reviews.set(id, (this.reviews.get(id) ?? 0) + 1);
-    // The reviewer IS a check: `approve` is the pass, `changes` the failure. That
-    // makes a requeued story visible in the ledger as the failed check it was.
+    // The requeue counter counts VERDICTS. An errored review consumed a turn's
+    // money but produced no judgement, so it may not consume an attempt as well.
+    if (review.verdict !== "error") this.reviews.set(id, (this.reviews.get(id) ?? 0) + 1);
+    // The reviewer IS a check: `approve` is the pass, `changes` and `error` the
+    // two failures. `verdict` is what tells a ledger which one it is reading, and
+    // `detail` on an errored review is the ERROR, verbatim.
     this.ctx.emit(review.verdict === "approve" ? "check.passed" : "check.failed", {
       phase: this.ctx.phaseId,
       check: "review",
@@ -1415,9 +1572,33 @@ class BuildSession {
     return join(this.ctx.stageId, storyId);
   }
 
-  /** How many reviewers have already judged this story, from the ledger. */
+  /** How many reviewers have already JUDGED this story, from the ledger. */
   private reviewAttempts(storyId: string): number {
-    return this.reviews.get(storyId) ?? countReviews(this.ctx.runDir, storyId);
+    return this.reviews.get(storyId) ?? readReviewLedger(this.ctx.runDir, storyId).verdicts;
+  }
+
+  /**
+   * Is this story waiting on nothing but a review that FAILED?
+   *
+   * Three things have to hold, and all three are read off disk so a fresh process
+   * reaches the same answer: the story is not settled, the last review in the
+   * ledger errored (nothing has judged it since), and a commit was merged. Miss
+   * any one and this returns null and the ordinary pipeline runs.
+   *
+   * `in_progress` counts as well as `review`, and that is not a nicety: on the
+   * run that found this bug the in-session path had already handed the host a
+   * developer bundle for "attempt 2", which set the story to `in_progress`. That
+   * attempt was never owed and this is where it stops being offered.
+   */
+  private resumableReview(planned: PlannedStory): ResumableReview | null {
+    const status = this.statusOf(planned);
+    if (status !== "review" && status !== "in_progress") return null;
+    // Once THIS process has settled the story, its own outcome is the truth.
+    const fresh = this.outcomes.get(planned.story.id);
+    if (fresh !== undefined && fresh.verdict !== "error") return null;
+    const ledger = readReviewLedger(this.ctx.runDir, planned.story.id);
+    if (ledger.erroredWith === null || ledger.commit === null) return null;
+    return { commit: ledger.commit, dod: ledger.dod, error: ledger.erroredWith };
   }
 
   /** The last `changes` verdict, rendered for the next prompt's Previous attempt. */
@@ -1500,22 +1681,91 @@ export function developerTools(repoCommands: readonly string[]): readonly string
 /** The reviewer reads and nothing else. */
 export const REVIEWER_TOOLS: readonly string[] = ["Read", "Grep", "Glob", "Bash(git diff *)"];
 
-/** Reviewer verdicts already in the ledger for a story — the requeue counter. */
-function countReviews(runDir: string, storyId: string): number {
+/**
+ * What `events.jsonl` already says about one story, for the two questions a
+ * fresh process cannot answer from memory: how many times has it really been
+ * REVIEWED, and is it waiting on a review that FAILED?
+ */
+export interface ReviewLedger {
+  /**
+   * Real verdicts — `approve` or `changes`. This is the requeue counter, and an
+   * errored review is deliberately not one of them.
+   */
+  readonly verdicts: number;
+  /** The error of the LAST review, when it errored and nothing judged it since. */
+  readonly erroredWith: string | null;
+  /** The story commit the last `task.done` recorded — the diff already merged. */
+  readonly commit: string | null;
+  /** The DoD results of the story's most recent developer attempt. */
+  readonly dod: readonly DodResult[];
+}
+
+/** Everything `resumableReview` and the requeue counter need, in one pass. */
+export function readReviewLedger(runDir: string, storyId: string): ReviewLedger {
   const path = join(runDir, "events.jsonl");
-  if (!existsSync(path)) return 0;
-  let count = 0;
+  const empty: ReviewLedger = { verdicts: 0, erroredWith: null, commit: null, dod: [] };
+  if (!existsSync(path)) return empty;
+
+  let verdicts = 0;
+  let erroredWith: string | null = null;
+  let commit: string | null = null;
+  let dod: DodResult[] = [];
+
   for (const line of readFileSync(path, "utf8").split("\n")) {
     if (line.trim() === "") continue;
+    let event: { type?: string; payload?: Record<string, unknown> };
     try {
-      const event = JSON.parse(line) as { type?: string; payload?: Record<string, unknown> };
-      if (event.type !== "check.passed" && event.type !== "check.failed") continue;
-      if (event.payload?.check === "review" && event.payload.story === storyId) count++;
+      event = JSON.parse(line) as typeof event;
     } catch {
       // A half-written last line is not a reason to lose the count.
+      continue;
     }
+    const payload = event.payload ?? {};
+    if (payload.story !== storyId) continue;
+
+    // A new attempt starts a new DoD run; only the latest one describes the diff
+    // that is on the branch now.
+    if (event.type === "task.started") dod = [];
+    if (event.type === "task.done" && typeof payload.commit === "string" && payload.commit !== "") {
+      commit = payload.commit;
+    }
+    if (event.type !== "check.passed" && event.type !== "check.failed") continue;
+
+    if (payload.check === "dod" && typeof payload.command === "string") {
+      const exitCode = typeof payload.exit_code === "number" ? payload.exit_code : 0;
+      dod.push({
+        command: payload.command,
+        exitCode,
+        timedOut: exitCode === 124,
+        tail: typeof payload.detail === "string" ? payload.detail : "",
+      });
+      continue;
+    }
+    if (payload.check !== "review") continue;
+
+    if (reviewEventErrored(payload)) {
+      erroredWith = typeof payload.detail === "string" && payload.detail.trim() !== ""
+        ? payload.detail.trim()
+        : "the reviewer sub-agent failed";
+      continue;
+    }
+    verdicts++;
+    erroredWith = null;
   }
-  return count;
+  return { verdicts, erroredWith, commit, dod };
+}
+
+/**
+ * Did this recorded review event describe a reviewer that FAILED?
+ *
+ * Two shapes, because two eras. A run written by this code says so:
+ * `verdict: "error"`. A run written before it existed said `verdict: "changes"`
+ * and put the spawn layer's error in `detail` — see `looksLikeReviewerError`.
+ */
+function reviewEventErrored(payload: Record<string, unknown>): boolean {
+  if (payload.verdict === "error") return true;
+  if (payload.verdict !== "changes") return false;
+  return typeof payload.detail === "string" && looksLikeReviewerError(payload.detail);
 }
 
 function isPlanStatus(value: string | undefined): value is PlanStatus {

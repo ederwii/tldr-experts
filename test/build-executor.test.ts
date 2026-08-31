@@ -13,11 +13,16 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { executorFor, EXECUTORS } from "../src/core/facilitator/executors/index.ts";
-import { buildExecutor, developerTools, REVIEWER_TOOLS } from "../src/core/facilitator/executors/build.ts";
+import {
+  buildExecutor, developerTools, readReviewLedger, REVIEWER_TOOLS,
+} from "../src/core/facilitator/executors/build.ts";
+import { looksLikeReviewerError, reviewerFailed } from "../src/core/build/review.ts";
+import { reject } from "../src/core/run/gates.ts";
 import { updateStoryFront, evidenceFor } from "../src/core/build/storyFile.ts";
 import { renderBuildProgress, buildProgress } from "../src/core/run/buildProgress.ts";
 import { buildStatus, renderStatus } from "../src/core/run/runStatus.ts";
@@ -33,6 +38,7 @@ const ORIGINAL_PATH = process.env.PATH ?? "";
 const FAKE_KEYS = [
   "FAKE_BUILD_WRITE", "FAKE_BUILD_VERDICTS", "FAKE_BUILD_COST", "FAKE_BUILD_STATE",
   "FAKE_BUILD_ARGV_LOG", "FAKE_BUILD_PROMPT_DIR", "FAKE_BUILD_IS_ERROR",
+  "FAKE_BUILD_FAIL", "FAKE_BUILD_FAIL_REASON",
 ] as const;
 
 let open: BuildWorkspace[] = [];
@@ -53,7 +59,10 @@ function workspace(options: BuildWorkspaceOptions): BuildWorkspace {
   return made;
 }
 
-function next(ws: BuildWorkspace, overrides: Partial<NextOptions> = {}): Promise<{ code: number; lines: readonly string[] }> {
+function next(
+  ws: BuildWorkspace,
+  overrides: Partial<NextOptions> = {},
+): Promise<{ code: number; lines: readonly string[]; stderr?: readonly string[] }> {
   return runNext({
     root: ws.root,
     dryRun: false,
@@ -323,6 +332,330 @@ describe("the reviewer", () => {
       .toContain("asked for changes twice");
     expect(events(ws).filter((e) => e.payload.check === "review").map((e) => e.payload.verdict))
       .toEqual(["changes", "changes"]);
+  });
+});
+
+/**
+ * A reviewer that FAILED is not a verdict (2026-08-30).
+ *
+ * Measured on run `260830-tenancy-identity-customers`: the headless reviewer of a
+ * 39-file, +1879-line story was given $0.26, died mid-read with
+ * `Reached maximum budget ($0.26)`, and the executor wrote that corpse down as
+ * `verdict: "changes"`. That single line cost the story its only requeue, sent a
+ * fresh developer at code nobody had faulted, and would have blocked S1 after a
+ * second reviewer hit the same wall — with zero review ever performed.
+ *
+ * Fail-closed is right: an unfinished review is not an approval. Inventing the
+ * verdict is not, and these tests are the difference.
+ */
+describe("a reviewer that FAILED is not a verdict", () => {
+  const ONE_STORY: BuildWorkspaceOptions = {
+    stories: [{ id: "S1", epic: "E1", title: "First story" }],
+    epics: [{ id: "E1", stories: ["S1"], branch: "epic/e1" }],
+    waves: [["S1"]],
+  };
+
+  /** The live failure, word for word (2026-08-30). */
+  const DIED = "Reached maximum budget ($0.26)";
+
+  function reviewEvents(ws: BuildWorkspace): readonly Record<string, unknown>[] {
+    return events(ws).filter((e) => e.payload.check === "review").map((e) => e.payload);
+  }
+
+  /**
+   * The operator's own move between invocations: send the finished stage back
+   * (`tldrx reject`) so `tldrx next` runs the Build executor again.
+   *
+   * Every test that re-enters also pins `FAKE_BUILD_COST` to zero. Not for
+   * tidiness — the budget gate refuses to START a stage whose estimate no longer
+   * fits what the phase has left, and in this fixture the stage's estimate IS the
+   * phase ceiling, so any recorded spend makes the second invocation unaffordable
+   * before it reaches a line of executor code.
+   */
+  function reenter(ws: BuildWorkspace, note: string): void {
+    reject(RunStore.open(ws.runDir), { root: ws.root, actor: "alan", at: "2026-08-29T10:00:00Z", note });
+  }
+
+  test("it settles at `review` with verdict `error`, and the ledger says so", async () => {
+    const ws = workspace(ONE_STORY);
+    process.env.FAKE_BUILD_FAIL_REASON = DIED;
+    process.env.FAKE_BUILD_FAIL = "reviewer";
+
+    const outcome = await next(ws);
+
+    // Not `blocked`, not `done`: the diff is merged and unjudged.
+    expect(story(ws, "S1")).toContain("status: review");
+    expect(reviewEvents(ws)).toEqual([{
+      phase: "04-build",
+      check: "review",
+      story: "S1",
+      verdict: "error",
+      attempt: 1,
+      // `detail` is the ERROR, verbatim — that is what a ledger needs to tell a
+      // transport failure from a reviewer with an opinion.
+      detail: `claude exited 1 with is_error=true: ${DIED}`,
+    }]);
+    // And the operator is told the reviewer FAILED, never that it asked for changes.
+    const said = outcome.lines.join("\n");
+    expect(said).toContain("the reviewer FAILED and returned no verdict");
+    expect(said).not.toContain("asked for changes");
+  });
+
+  test("the requeue is NOT consumed: no second developer attempt is started", async () => {
+    const ws = workspace(ONE_STORY);
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+    process.env.FAKE_BUILD_FAIL_REASON = DIED;
+    process.env.FAKE_BUILD_FAIL = "reviewer";
+
+    await next(ws);
+
+    // Exactly one developer prompt was ever written. The old code wrote two.
+    expect(readdirSync(promptDir).filter((n) => n.startsWith("developer-"))).toEqual(["developer-S1-1.md"]);
+    // And nothing in the ledger claims a second attempt was started.
+    const starts = events(ws).filter((e) => e.type === "task.started").map((e) => e.payload.attempt);
+    expect(starts).toEqual([1]);
+  });
+
+  test("the story's worktree survives, and the diff stays merged into the epic", async () => {
+    const ws = workspace(ONE_STORY);
+    process.env.FAKE_BUILD_FAIL_REASON = DIED;
+    process.env.FAKE_BUILD_FAIL = "reviewer";
+
+    await next(ws);
+
+    expect(git(ws, ["show", "epic/e1:s1.txt"])).toContain("S1 was here");
+    expect(existsSync(join(ws.root, ".tldrx", "worktrees", "app", `${ws.runId}-S1`))).toBe(true);
+  });
+
+  test("the log and the retro both say FAILED, not `changes`", async () => {
+    const ws = workspace(ONE_STORY);
+    process.env.FAKE_BUILD_FAIL_REASON = DIED;
+    process.env.FAKE_BUILD_FAIL = "reviewer";
+
+    await next(ws);
+
+    const log = readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8");
+    expect(log).toContain("- Verdict: **error**");
+    expect(log).toContain("The reviewer FAILED and returned no verdict");
+    expect(log).toContain("Reached maximum budget");
+    expect(log).not.toContain("asked for changes");
+
+    const retro = readFileSync(join(ws.runDir, "retro.md"), "utf8");
+    expect(retro).toContain("`S1` — the reviewer FAILED and returned no verdict on attempt 1");
+    expect(retro).not.toContain("asked for CHANGES");
+  });
+
+  test("`tldrx next` again re-runs ONLY the review — no second developer turn", async () => {
+    const ws = workspace(ONE_STORY);
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+    // The FIRST reviewer of S1 dies; every later one works.
+    process.env.FAKE_BUILD_COST = "0";
+    process.env.FAKE_BUILD_FAIL_REASON = DIED;
+    process.env.FAKE_BUILD_FAIL = "reviewer:S1#1";
+
+    await next(ws);
+    expect(story(ws, "S1")).toContain("status: review");
+
+    // The operator's move: send the stage back and run it again.
+    reenter(ws, "the reviewer died");
+    const again = await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    expect(story(ws, "S1")).toContain("status: done");
+    expect(again.lines.join("\n")).toContain("re-running the REVIEW only");
+    // ONE developer prompt across BOTH invocations. That is the whole fix.
+    expect(readdirSync(promptDir).filter((n) => n.startsWith("developer-"))).toEqual(["developer-S1-1.md"]);
+    expect(readdirSync(promptDir).filter((n) => n.startsWith("reviewer-")).sort())
+      .toEqual(["reviewer-S1-1.md", "reviewer-S1-2.md"]);
+    // The re-review is attempt 1, because no verdict was ever spent on S1.
+    expect(reviewEvents(ws).map((p) => [p.verdict, p.attempt]))
+      .toEqual([["error", 1], ["approve", 1]]);
+  }, 60_000);
+
+  test("the resumed review sees the DoD the ledger recorded, not an empty one", async () => {
+    const ws = workspace(ONE_STORY);
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+    process.env.FAKE_BUILD_COST = "0";
+    process.env.FAKE_BUILD_FAIL_REASON = DIED;
+    process.env.FAKE_BUILD_FAIL = "reviewer:S1#1";
+
+    await next(ws);
+    reenter(ws, "again");
+    await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    // The second reviewer's prompt still carries the story's proof, recovered
+    // from `events.jsonl` — the DoD was not re-run and was not lost either.
+    const second = readFileSync(join(promptDir, "reviewer-S1-2.md"), "utf8");
+    expect(second).toContain("npm run test");
+    expect(readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8"))
+      .toContain("`npm run test` → exit 0");
+  }, 60_000);
+
+  test("--prepare re-runs the review instead of handing out a developer bundle", async () => {
+    // The live shape, start to finish: the whole story goes through the
+    // in-session doors, its reviewer dies, and the NEXT --prepare is the moment
+    // the old code said `task.started … attempt: 2, mode: prepare` for work
+    // nobody had asked for.
+    const ws = workspace(TWO_WAVES);
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+    process.env.FAKE_BUILD_COST = "0";
+    process.env.FAKE_BUILD_FAIL_REASON = DIED;
+    process.env.FAKE_BUILD_FAIL = "reviewer:S1#1";
+
+    expect((await next(ws, { mode: "prepare" })).lines.join("\n")).toContain("prepared S1");
+    writeFileSync(join(ws.root, ".tldrx", "worktrees", "app", `${ws.runId}-S1`, "s1.txt"), "S1 in-session\n", "utf8");
+    writeFileSync(
+      join(ws.runDir, ".agent", "build", "S1", "result.json"),
+      JSON.stringify({ outputs: ["s1.txt"], questions_asked: [], notes: "", cost_usd: 0 }),
+      "utf8",
+    );
+
+    const committed = await next(ws, { mode: "commit", at: "2026-08-29T09:30:00Z" });
+    expect(committed.lines.join("\n")).toContain("S1 → `review`");
+    expect(story(ws, "S1")).toContain("status: review");
+
+    const prepared = await next(ws, { mode: "prepare", at: "2026-08-29T10:05:00Z" });
+
+    const said = prepared.lines.join("\n");
+    expect(said).toContain("re-running the REVIEW only");
+    expect(said).toContain("review only — no developer attempt was owed");
+    expect(said).toContain("S2 is next");
+    // The two sentences the old path printed here, and must not print again.
+    expect(said).not.toContain("prepared S1");
+    expect(said).not.toContain("dispatch ONE sub-agent");
+    expect(story(ws, "S1")).toContain("status: done");
+    // The reviewer ran a second time; the developer did not.
+    expect(readdirSync(promptDir).sort()).toEqual(["reviewer-S1-1.md", "reviewer-S1-2.md"]);
+  }, 60_000);
+
+  test("a run recorded by the OLD code still resumes at the review", async () => {
+    // The shape measured on 2026-08-30: an errored reviewer written down as
+    // `verdict: "changes"` with the spawn error as its detail. This is the only
+    // path that reads it, and it is why `looksLikeReviewerError` exists.
+    const ws = workspace(ONE_STORY);
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+    process.env.FAKE_BUILD_COST = "0";
+    process.env.FAKE_BUILD_FAIL_REASON = DIED;
+    process.env.FAKE_BUILD_FAIL = "reviewer:S1#1";
+
+    await next(ws);
+    rewriteVerdictAsOldCode(ws);
+    expect(readReviewLedger(ws.runDir, "S1")).toMatchObject({ verdicts: 0, erroredWith: expect.any(String) });
+
+    reenter(ws, "old record");
+    const again = await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    expect(again.lines.join("\n")).toContain("re-running the REVIEW only");
+    expect(story(ws, "S1")).toContain("status: done");
+    expect(readdirSync(promptDir).filter((n) => n.startsWith("developer-"))).toEqual(["developer-S1-1.md"]);
+  }, 60_000);
+
+  test("a story left `in_progress` by a wrongly-prepared attempt 2 still resumes at the review", async () => {
+    // Exactly the live run's state: `--prepare` had already handed the host a
+    // developer bundle for an attempt that was never owed, which set the story
+    // to `in_progress`. The resume must look past that.
+    const ws = workspace(ONE_STORY);
+    process.env.FAKE_BUILD_COST = "0";
+    process.env.FAKE_BUILD_FAIL_REASON = DIED;
+    process.env.FAKE_BUILD_FAIL = "reviewer:S1#1";
+
+    await next(ws);
+    rewriteVerdictAsOldCode(ws);
+    const path = join(ws.planDir, "stories", "S1.md");
+    writeFileSync(path, readFileSync(path, "utf8").replace("status: review", "status: in_progress"), "utf8");
+
+    reenter(ws, "live shape");
+    const again = await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    expect(again.lines.join("\n")).toContain("re-running the REVIEW only");
+    expect(story(ws, "S1")).toContain("status: done");
+  }, 60_000);
+
+  test("a genuine `changes` still consumes the requeue — the fix is narrow", async () => {
+    const ws = workspace(ONE_STORY);
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes", "changes"] });
+
+    await next(ws);
+
+    expect(story(ws, "S1")).toContain("status: blocked");
+    expect(reviewEvents(ws).map((p) => p.verdict)).toEqual(["changes", "changes"]);
+  }, 60_000);
+
+  /** Rewrite the run's own review event into the pre-2026-08-30 spelling. */
+  function rewriteVerdictAsOldCode(ws: BuildWorkspace): void {
+    const path = join(ws.runDir, "events.jsonl");
+    const rewritten = readFileSync(path, "utf8")
+      .split("\n")
+      .map((line) => (line.includes('"check":"review"') ? line.replaceAll('"verdict":"error"', '"verdict":"changes"') : line))
+      .join("\n");
+    writeFileSync(path, rewritten, "utf8");
+  }
+});
+
+describe("reading a review off the ledger", () => {
+  test("`reviewerFailed` never produces a verdict, and never an empty summary", () => {
+    expect(reviewerFailed("Reached maximum budget ($0.26)"))
+      .toEqual({ verdict: "error", summary: "Reached maximum budget ($0.26)", findings: [] });
+    expect(reviewerFailed(null).summary).toBe("the reviewer sub-agent failed");
+    expect(reviewerFailed("  ").verdict).toBe("error");
+  });
+
+  test("`looksLikeReviewerError` catches every string the framework itself writes", () => {
+    for (const detail of [
+      "claude exited 1 with is_error=true: Reached maximum budget ($0.26)",
+      "claude exited 2 without a parseable result event: (no output)",
+      "claude timed out (killed after the stage's timeout_s)",
+      "stopped after 200 reads: the stage's max_reads is 200. Raise `max_reads` …",
+      "the reviewer sub-agent failed",
+    ]) {
+      expect(looksLikeReviewerError(detail)).toBe(true);
+    }
+    // A model's own summary is a VERDICT and must never be mistaken for one.
+    for (const summary of [
+      "the acceptance criteria are not met yet",
+      "changes requested with no comment",
+      "the migration is missing a down step",
+    ]) {
+      expect(looksLikeReviewerError(summary)).toBe(false);
+    }
+  });
+
+  test("the ledger counts verdicts, not turns, and remembers the merged commit", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-ledger-"));
+    const rows = [
+      { type: "task.started", payload: { story: "S1", attempt: 1 } },
+      { type: "check.passed", payload: { story: "S1", check: "dod", command: "npm run test", exit_code: 0, detail: "" } },
+      { type: "check.failed", payload: { story: "S1", check: "review", verdict: "error", detail: "claude timed out (…)" } },
+      { type: "task.done", payload: { story: "S1", status: "review", commit: "abc1234" } },
+      { type: "check.failed", payload: { story: "S2", check: "review", verdict: "changes", detail: "not yet" } },
+    ];
+    writeFileSync(join(dir, "events.jsonl"), `${rows.map((r) => JSON.stringify(r)).join("\n")}\n`, "utf8");
+
+    const s1 = readReviewLedger(dir, "S1");
+    expect(s1.verdicts).toBe(0);              // an errored review is not a verdict
+    expect(s1.erroredWith).toBe("claude timed out (…)");
+    expect(s1.commit).toBe("abc1234");
+    expect(s1.dod).toEqual([{ command: "npm run test", exitCode: 0, timedOut: false, tail: "" }]);
+
+    const s2 = readReviewLedger(dir, "S2");
+    expect(s2.verdicts).toBe(1);              // a real `changes` is
+    expect(s2.erroredWith).toBeNull();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("a later real verdict clears an earlier error", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-ledger-"));
+    const rows = [
+      { type: "check.failed", payload: { story: "S1", check: "review", verdict: "error", detail: "claude exited 1" } },
+      { type: "check.passed", payload: { story: "S1", check: "review", verdict: "approve", detail: "looks good" } },
+    ];
+    writeFileSync(join(dir, "events.jsonl"), `${rows.map((r) => JSON.stringify(r)).join("\n")}\n`, "utf8");
+    expect(readReviewLedger(dir, "S1")).toMatchObject({ verdicts: 1, erroredWith: null });
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 
