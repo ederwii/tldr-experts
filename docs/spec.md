@@ -2015,7 +2015,8 @@ one story never varies:
 
 1. **Resolve and cut.** The story's `repo:` must be a `workspace.yml` name (a story is data, and data does not get to
    name a directory); `epic/<slug>` is ensured off that repo's `default_branch`; a worktree is opened at
-   `.tldrx/worktrees/<repo>/<story-id>` on `story/<id>`, cut from the epic branch. Every git call goes through the
+   `.tldrx/worktrees/<repo>/<run-id>-<story-id>` on `story/<run-id>/<id>`, cut from the epic branch (both names carry
+   the run id — see the paragraph on run-scoped names below). Every git call goes through the
    runtime seam with a cwd inside a declared repo, and there is deliberately **no `push` wrapper** anywhere in the phase.
 
    **A branch that already exists is checked out as it stands — and then measured against the epic tip (2026-08-31).**
@@ -2379,6 +2380,16 @@ in its name would be worse. Collision there is made DELIBERATE instead: a Build 
 `epic/<slug>` already exists and this run's `run.yml` `build.epic_branch` (optional, additive, §2.2) does not claim
 it — `--reuse-epic` is the word that says "stack on it anyway", and either way the branch is recorded as claimed from
 then on, so the run's own second invocation is never refused its own branch.
+
+The epic **worktree** is a different object from the epic branch, and it carries the run id for the same reason the
+story worktree does: it is `.tldrx/worktrees/<repo>/_epic-<run-id>-<epic-id>`. It was `_epic-<epic-id>` until
+2026-08-31, and since every plan names its first epic `E1`, two runs computed the same path — the second found the
+first's directory, skipped `git worktree add`, and ran `git merge --no-ff` inside a checkout of ANOTHER run's epic
+branch. It never failed: every progress line renders the story's own `epic_branch`, so three stories reported
+"merged into `epic/hardening-d1`" while that branch stayed empty and the commits landed on a closed run's epic. On
+top of the path, **every reuse of an epic worktree asserts its checked-out branch is the story's epic branch** and
+refuses by name when it is not (§5, `WorktreeBranchMismatchError`); it never re-points the worktree and never merges
+anyway. The path makes the collision impossible, the assertion makes it impossible to repeat silently.
 
 **Interrupt path (SIGINT / SIGTERM).** A sub-agent is spawned DETACHED — it has to be, or a timeout has no process
 group to kill — and a detached child never receives the terminal's Ctrl-C. So the CLI installs one handler

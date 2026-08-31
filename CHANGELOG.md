@@ -37,6 +37,31 @@
 
 ### Fixed
 
+- **A second run's stories no longer merge into ANOTHER run's epic branch.** Measured live
+  2026-08-31 on two concurrent runs: `260831-hardening-d1` reported S1, S2 and S6 all
+  "merged into `epic/hardening-d1` (N commits carried)", and `epic/hardening-d1` was still
+  sitting at its base with **zero** story commits — all three merges had landed on
+  `epic/d1-tenancy-identity-customers`, a CLOSED previous run's branch. Nothing failed; the
+  run closed green with an empty epic, and it surfaced only because a later story measured
+  `git merge-base` and found the dependency it had been promised was missing.
+  - **The cause was one missing run id.** `openEpicWorktree` built the epic worktree's disk
+    path as `_epic-<epic id>`, and every plan names its first epic `E1`. The second run's
+    `existsSync` therefore hit the FIRST run's directory, `addWorktree` was skipped, and
+    `git merge --no-ff` ran inside a checkout of a foreign epic branch. The in-memory map was
+    keyed correctly (`repo:epicBranch`) — only the path collided, and only across processes.
+    Every progress line renders `story.epicBranch`, so the messages were right about where the
+    merge was *meant* to go for as long as the bytes went somewhere else.
+  - **The path now carries the run**: `_epic-<run id>-<epic id>`, the same shape the STORY
+    worktree was given after the 2026-08-29 audit found the identical class of bug one level
+    down. That fix never reached the epic worktree, which is the worse half — a story worktree
+    collision means two sub-agents editing one file, an epic worktree collision is a merge.
+  - **And a reuse on the wrong branch now refuses.** Every reuse of an epic worktree — the
+    remembered path and the one found on disk — asserts its checked-out branch is the story's
+    epic branch first (`assertWorktreeOn`, `core/build/git.ts`). A mismatch throws
+    `WorktreeBranchMismatchError` naming both branches and the directory, and fails the stage.
+    It never re-points the worktree and never merges anyway. Path scoping makes the collision
+    impossible; this makes it impossible to repeat *silently*.
+
 - **A `--note` with a blank line in it no longer destroys `run.yml`.** Measured 2026-08-31 on the
   live `260829-scoring-leaderboard` run: `tldrx reject --note "<two paragraphs>"` wrote the note
   into the gate's flow mapping with LITERAL newlines inside a double-quoted scalar, which is not

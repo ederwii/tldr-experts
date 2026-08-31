@@ -50,8 +50,8 @@ import {
   dispatchNotesRecord, type PendingReview, type PendingStage,
 } from "../pending.ts";
 import {
-  addWorktree, baseStateOf, branchExists, commitAll, commitsBetween, currentBranch, diffCommand, dirtyPaths,
-  ensureBranch, fastForward, firstLine, GitError, headSha, isDirty, mergeNoFf, partitionDirty, pathAtRef,
+  addWorktree, assertWorktreeOn, baseStateOf, branchExists, commitAll, commitsBetween, currentBranch, diffCommand,
+  dirtyPaths, ensureBranch, fastForward, firstLine, GitError, headSha, isDirty, mergeNoFf, partitionDirty, pathAtRef,
   removeWorktree, repoDirOf, stateDirPrefixes,
 } from "../../build/git.ts";
 import {
@@ -2853,15 +2853,39 @@ class BuildSession {
     );
   }
 
+  /**
+   * `.tldrx/worktrees/<repo>/_epic-<run>-<epic>` — the run id is in THIS path too.
+   *
+   * Same collision as the story worktree above, and worse in kind, because this
+   * is the worktree a story MERGES in. Every plan names its first epic `E1`, so
+   * `_epic-E1` was a path two runs both computed: the second run's `existsSync`
+   * hit the first run's live worktree, `addWorktree` was skipped, and
+   * `git merge --no-ff` ran inside a checkout of ANOTHER run's epic branch. It
+   * never failed — `commitsBetween` and every handoff line render
+   * `story.epicBranch`, so three stories reported "merged into
+   * `epic/hardening-d1`" while the commits landed on a closed run's
+   * `epic/d1-tenancy-identity-customers` and the run closed with an empty epic
+   * (issue #40, measured 2026-08-31).
+   *
+   * Both halves are load-bearing. The path makes the collision impossible; the
+   * `assertWorktreeOn` on EVERY reuse — the remembered path and the one found on
+   * disk — makes it impossible to repeat SILENTLY. A mismatch refuses; it never
+   * re-points the worktree and never merges anyway.
+   */
   private async openEpicWorktree(story: StoryContext): Promise<string> {
     const key = `${story.planned.story.repo}:${story.epicBranch}`;
     const known = this.epicWorktrees.get(key);
-    if (known !== undefined && existsSync(known)) return known;
+    if (known !== undefined && existsSync(known)) {
+      await assertWorktreeOn(known, story.epicBranch, "epic worktree");
+      return known;
+    }
     const path = join(
       this.ctx.root, PROJECT_FRAMEWORK_DIR, WORKTREES,
-      story.planned.story.repo, `_epic-${story.planned.story.epic}`,
+      story.planned.story.repo, `_epic-${this.ctx.runId}-${story.planned.story.epic}`,
     );
-    if (!existsSync(path)) {
+    if (existsSync(path)) {
+      await assertWorktreeOn(path, story.epicBranch, "epic worktree");
+    } else {
       mkdirSync(join(path, ".."), { recursive: true });
       const base = this.workspace.defaultBranches.get(story.planned.story.repo) ?? "main";
       await addWorktree(story.repoDir, path, story.epicBranch, base);
