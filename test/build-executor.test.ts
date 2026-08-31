@@ -697,7 +697,13 @@ describe("a reviewer that FAILED is not a verdict", () => {
 describe("reading a review off the ledger", () => {
   test("`reviewerFailed` never produces a verdict, and never an empty summary", () => {
     expect(reviewerFailed("Reached maximum budget ($0.26)"))
-      .toEqual({ verdict: "error", summary: "Reached maximum budget ($0.26)", findings: [] });
+      .toEqual({
+        verdict: "error",
+        summary: "Reached maximum budget ($0.26)",
+        findings: [],
+        fixlist: [],
+        fixlistProblems: [],
+      });
     expect(reviewerFailed(null).summary).toBe("the reviewer sub-agent failed");
     expect(reviewerFailed("  ").verdict).toBe("error");
   });

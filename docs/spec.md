@@ -39,7 +39,7 @@ TypeScript on Bun; host Claude Code. Covers the v0 skeleton and the schema shape
 │  ├─ 01-what/  handoff.md questions.md intent.md scope.md success-metrics.md [c]
 │  ├─ 02-how/   handoff.md questions.md design.md contracts.md risks.md test-strategy.md [c]
 │  ├─ 03-plan/  handoff.md waves.yml §2.15 · epics/<id>.md §2.14 · stories/<id>.md §2.13 [c]
-│  ├─ 04-build/ handoff.md log/<story-id>.md [c]
+│  ├─ 04-build/ handoff.md log/<story-id>.md fixlist/<story-id>-<n>.md [c]
 │  └─ 05-watch/ handoff.md watchers/<feature>.md [c]
 └─ <repo-a>/ <repo-b>/ …             # sibling product repos; init writes nothing into them
 ```
@@ -1120,7 +1120,7 @@ Filled by Build, one bullet per proof. [src: $ npm run test → exit 0]
 | `touches` | rel path[] (≥1, ≤128) | y | Files/dirs this story is expected to change; no `..`. Two stories in one wave touching the same path is a plan smell, not a schema error |
 | `acceptance` | str[] (≥1, ≤64) | y | What must be true for a human to accept it |
 | `test_plan` | str[] (≥1, ≤64) | y | How it will be proven, before it is written |
-| `evidence` | str[] (≤64) | y | Filled by Build. **Required non-empty when `status: done`** — done means proven, not asserted |
+| `evidence` | str[] (≤64) | y | Filled by Build. **Required non-empty when `status: done`** — done means proven, not asserted. May cite `04-build/fixlist/<id>-<n>.md` beside the review log when the story went through a fix-list round |
 | ` ```dod ` block | fenced, ≥1 command | y | Each line must equal a `workspace.yml` command **verbatim**; `dod-gate` re-runs all of them from `repo` and every one must exit `0` |
 
 **Validation.** Front matter present and parseable; keys and enums as above; `id` matches the file name; `depends_on`
@@ -1985,12 +1985,20 @@ one story never varies:
    failure, a timeout or an exhausted `--max-budget-usd` is a transport outcome, not a judgement of the diff, and
    writing one down as `changes` spends a requeue on code nobody faulted (measured 2026-08-30, $0.26 died mid-read on a
    39-file story). Its `check.failed` carries the error as `detail` so a ledger can tell the two apart.
+   A third verdict, **`fixlist`**, is the one the other two could not express: the reviewer would SIGN and it found
+   defects the acceptance criteria never covered (measured 2026-08-31 on S5 of `260830-tenancy-identity-customers` —
+   every criterion met, zero scope violations, and a concurrent double-confirm minting two sessions). It is granted
+   only when the envelope carries a readable `fixlist[]` — `{n, severity, finding, where, disposition, detail,
+   do_not[]}` — and a declared one this cannot read falls to `changes` like any other unreadable envelope, because an
+   unreadable review must not buy a free round. See "the fix list" below.
 6. **`done` requires DoD green AND `approve`**, and writes the proof into the story's own front matter: `$ <cmd> →
    exit 0` per dod command, `commit <sha>`, and the review path. A `changes` verdict sets the story `review` and
    requeues it **once**, with the review rendered under `## Previous attempt`; a second `changes` blocks it. An
    `error` verdict also parks the story at `review` but spends **no** attempt: the diff is committed, merged and
    DoD-green, so the next `tldrx next` re-runs the **review alone**, recovering the commit and the DoD results from
-   `events.jsonl`. Only a real verdict consumes the requeue. Headless re-runs it by spawning; `--prepare` writes the
+   `events.jsonl`. A `fixlist` verdict likewise parks it at `review` and spends **no** attempt — nothing about the diff
+   was faulted — and writes `04-build/fixlist/<story-id>-<round>.md` beside it. Only a verdict that FAULTED the diff
+   consumes the requeue. Headless re-runs it by spawning; `--prepare` writes the
    reviewer bundle for the host and stops (see "the second delegable role" below).
 
 **Blast radius is one story.** A red DoD, a merge conflict or a failed sub-agent blocks that story only; the epic
@@ -2192,6 +2200,37 @@ spawns is not a `--prepare` (measured 2026-08-31: the re-review path spawned a m
 a host timeout killed it mid-read). And on a run marked **`attended_by: host`** the executor never calls the reviewer
 spawn at all: half B merges the story and hands the review over, so one review is done once, by the session that is
 already reading the diff. Outside attended mode the headless reviewer is unchanged and `--review` is opt-in.
+
+**The fix list — `04-build/fixlist/<story-id>-<round>.md` `[c]`.** The artefact of the third verdict, written by the
+EXECUTOR from the envelope (the reviewer holds no write tool, the same reason the review log is written here). Its
+shape: a heading, the round's own facts (verdict, attempt, diff command, commit), then one `## <n> · <finding>
+[<severity>]` section per finding carrying `Where:`, `Disposition:` and `Resolved:`.
+
+- **Four dispositions**, and each is a decision somebody made rather than a fact about the code: `fix-now` (this
+  story's own correctness), `defer-with-log` (real, somebody else's call), `refuted` (the reviewer was wrong),
+  `out-of-scope`. A **`refuted` finding must carry a `[src: …]`** in its `where` or `detail`, in the §2.8 grammar and
+  through the §2.8 parser — a reviewer's verdict is a claim like every other one, and tonight's host disproved one by
+  grepping both sides before acting on it. A fix list with a `refuted` finding and no citation is refused whole, and
+  the verdict falls to `changes`.
+- **A disposition ROUTES a finding; `Resolved:` CLOSES it.** Two questions, two fields. `defer-with-log` findings are
+  appended to `retro.md`'s `## Build feedback` as they are written — the existing second writer with its existing
+  verbatim dedup — so a deferred defect reaches the owner through a channel that already exists.
+- **One round per story** (`MAX_FIXLIST_ROUNDS`, reset by `story reopen` like every other count in the review ledger).
+  A free round that could be taken twice is a story that never has to settle, so a second `fixlist` is refused out
+  loud and read as `changes` — which costs the attempt the first one did not — and the SECOND reviewer's prompt
+  withdraws the verdict rather than offering one the executor would refuse.
+- **A story cannot settle `done` while a `fix-now` finding is open.** It settles `blocked` instead, and the reason
+  names the file, the finding's number and its heading. The check is against the FILE, not the envelope that produced
+  it: the file is the state, and a host closes a finding there by writing `Resolved: yes` or re-routing its
+  `Disposition:`.
+- **The router: `tldrx next --prepare --fixlist <path>`.** Re-prepares the AUTHOR's bundle with the open findings under
+  `## Fix list` in the developer prompt — numbered, with their `Do NOT` lines verbatim — and carries the prior turn's
+  `session_id` in `pending.json` as `resume_session` so the host can resume that sub-agent rather than pay to rebuild
+  its context. **The framework resumes nothing itself**: `spawnAgent` has no `--resume`, and the key is a fact handed
+  back to the party that can act on it. `pending.json` also gains `fixlist: {path, round, findings, open}`. Omit the
+  flag and the latest round on disk with anything still open is carried by itself, the same courtesy `--prepare`
+  already extends to a story waiting on a review; the flag is for naming a different file, and it refuses one that is
+  not this story's.
 
 **Watch executor** (`05-watch`, spec §2.16). In order:
 

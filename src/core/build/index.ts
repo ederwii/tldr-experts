@@ -30,5 +30,11 @@ export { parseReview, renderReviewLog, renderPreviousAttempt } from "./review.ts
 export type { Review } from "./review.ts";
 export { dodGreen, describeOutcome } from "./outcome.ts";
 export type { StoryOutcome, DodResult, Verdict } from "./outcome.ts";
+export {
+  parseFixFindings, parseFixlistFile, renderFixlist, renderFixlistSection, writeFixlist,
+  fixlistRounds, fixlistRel, fixlistStory, latestFixlist, readFixlistAt, openFindings, isOpen,
+  fixlistRetroLines, DISPOSITIONS, FIXLIST_DIR, MAX_FIXLIST_ROUNDS,
+} from "./fixlist.ts";
+export type { FixFinding, Disposition, FixlistParts, FixlistOnDisk, ParsedFixlist } from "./fixlist.ts";
 export { renderBuildHandoff } from "./handoff.ts";
 export type { BuildHandoffParts, EpicSummaryRow } from "./handoff.ts";

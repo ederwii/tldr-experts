@@ -34,6 +34,55 @@
   - **A stage that declares none is byte-identical**: no event, no line, no shipped stage file
     changed. `[assumption]` — per stage, not per story; a per-story precondition is a real
     want and is deliberately not designed here.
+- **The `fixlist` verdict, its artifact and its router — the review that SIGNS and still has
+  findings.** Measured 2026-08-31, driving `260830-tenancy-identity-customers` by hand: the
+  reviewer signed story S5 — every acceptance criterion met, zero scope violations — and in the
+  same breath named three real correctness/security defects the criteria never covered (a
+  concurrent double-confirm minting two sessions, a non-atomic confirm, a false security comment
+  beside a non-constant-time compare). S1 and S3 went the same way that night. Binary
+  `approve`/`changes` has nowhere to put those: `approve` throws them away, `changes` spends the
+  story's one requeue on a diff nobody faulted. So all three loops were run in chat — number the
+  findings, decide fix-now vs defer-with-log, route them to the author, re-verify — and none of
+  it reached a file. This is that loop, as a verdict and an artifact.
+  - **`fixlist` settles the story at `review` and spends NO attempt.** The requeue counter counts
+    verdicts that FAULTED the diff, and a signature is not one. `04-build/fixlist/<story>-<n>.md`
+    is written beside it by the EXECUTOR, never by the reviewer — which holds no write tool, the
+    same reason the review log is written there. Numbered `## <n> · <finding> [<severity>]`
+    sections, each with `Where:`, `Disposition:` and `Resolved:`.
+  - **A disposition ROUTES a finding; `Resolved:` CLOSES it.** Two questions, two fields, because
+    one field cannot answer the first once the second is true. `fix-now` · `defer-with-log` ·
+    `refuted` · `out-of-scope`, and **`refuted` must carry an `[src: …]`** in its `where` or
+    `detail`, through the §2.8 grammar and the §2.8 parser — a reviewer's verdict is a claim like
+    every other, and that night's host disproved one by grepping both sides before acting on it.
+    A fix list with an uncited `refuted` is refused whole and the verdict falls to `changes`.
+  - **The router: `tldrx next --prepare --fixlist <path>`.** The open findings land under
+    `## Fix list` in the DEVELOPER's prompt, numbered, with their `Do NOT` lines verbatim — a
+    bound the reviewer put on a fix is worth as much as the fix. `pending.json` gains
+    `fixlist: {path, round, findings, open}` and `resume_session`, the prior turn's `session_id`,
+    so the host can resume that sub-agent rather than pay to rebuild its context. **The framework
+    resumes nothing itself** — `spawnAgent` has no `--resume` — so the bundle carries the fix list
+    and the merged commit and hands the id back to the party that can act on it. Omit the flag and
+    the latest still-open round is carried by itself, the same courtesy `--prepare` already
+    extends to a story waiting on a review.
+  - **One round per story, and the second is refused out loud.** A free round that could be taken
+    twice is a story that never has to settle. A second `fixlist` is read as `changes` — which
+    costs the attempt the first one did not — the refusal names the round already on disk, and the
+    SECOND reviewer's prompt withdraws the verdict rather than offering one the executor would
+    then refuse. `story reopen` resets the count with every other one in the review ledger.
+  - **A story cannot settle `done` over an open `fix-now`.** An `approve` there settles `blocked`
+    and the reason names the file, the finding's number and its heading, plus the two ways to
+    close it. The check reads the FILE, not the envelope that produced it: the file is the state,
+    and a host closes a finding by writing `Resolved: yes` in it or re-routing its `Disposition:`.
+    That edit is the host's — §B.2's third role — because the author works in a story worktree of
+    another repo and its own prompt forbids writing outside it.
+  - **Fail-closed, unchanged and asserted.** A `verdict: "fixlist"` whose `fixlist[]` is missing,
+    empty or unreadable is `changes`, never a free round and never `approve`. Both economies reach
+    the same code: the host writes the envelope into the review bundle, or a spawned reviewer
+    returns it — `REVIEW_SCHEMA` gained the verdict and the optional array, and `parseReview`
+    narrows both.
+  - `defer-with-log` findings are appended to `retro.md`'s `## Build feedback` as the artifact is
+    written — the existing second writer with its existing verbatim dedup — so a deferred defect
+    reaches the owner through a channel that already exists rather than a new one.
 
 - **`tldrx next --prepare --review` / `--commit --review` — the reviewer is the second
   delegable role.** A Build story has two sub-agents and only the developer was ever

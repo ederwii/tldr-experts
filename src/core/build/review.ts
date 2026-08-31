@@ -15,31 +15,72 @@
  * a handoff the claim-sources check rejects.
  */
 import { isRecord } from "../schemas/validation.ts";
+import { parseFixFindings, type FixFinding } from "./fixlist.ts";
 import type { StoryOutcome, Verdict } from "./outcome.ts";
 
 export interface Review {
   readonly verdict: Verdict;
   readonly summary: string;
   readonly findings: readonly string[];
+  /**
+   * The numbered findings of a `fixlist` verdict — empty on every other one.
+   *
+   * Structured, not prose, because the executor writes the artifact from them and
+   * the artifact is read back at settle time to answer "is anything still open?".
+   */
+  readonly fixlist: readonly FixFinding[];
+  /**
+   * Why a DECLARED fix list was refused, when one was. Non-empty only on a review
+   * whose `verdict` was `fixlist` on the wire and is `changes` in this object —
+   * so the executor can say what happened instead of silently downgrading it.
+   */
+  readonly fixlistProblems: readonly string[];
 }
 
-/** The `structured_output` of a reviewer run, narrowed. Anything odd is `changes`. */
+/**
+ * The `structured_output` of a reviewer run, narrowed. Anything odd is `changes`.
+ *
+ * `fixlist` joins the enum and does NOT weaken that rule — it tightens it. The
+ * verdict is only granted when the envelope carries a `fixlist[]` this can read
+ * whole: an unreadable envelope must not buy a free round, which is the one thing
+ * a malformed review could otherwise get out of the third verdict. Everything it
+ * could not read comes back on `fixlistProblems`, so the downgrade is said out
+ * loud rather than performed silently.
+ */
 export function parseReview(structured: unknown, fallback: string): Review {
   if (!isRecord(structured)) {
     return {
       verdict: "changes",
       summary: fallback.trim() === "" ? "the reviewer returned no envelope" : fallback.trim(),
       findings: [],
+      fixlist: [],
+      fixlistProblems: [],
     };
   }
-  const verdict = structured.verdict === "approve" ? "approve" : "changes";
+  const declared = structured.verdict;
+  const parsed = declared === "fixlist" ? parseFixFindings(structured.fixlist) : null;
+  const verdict: Verdict = declared === "approve"
+    ? "approve"
+    : parsed !== null && parsed.problems.length === 0
+      ? "fixlist"
+      : "changes";
   const summary = typeof structured.summary === "string" && structured.summary.trim() !== ""
     ? structured.summary.trim()
-    : verdict === "approve" ? "approved with no comment" : "changes requested with no comment";
+    : verdict === "approve"
+      ? "approved with no comment"
+      : verdict === "fixlist"
+        ? "signed with a fix list and no comment"
+        : "changes requested with no comment";
   const findings = Array.isArray(structured.findings)
     ? (structured.findings as unknown[]).filter((f): f is string => typeof f === "string" && f.trim() !== "")
     : [];
-  return { verdict, summary, findings };
+  return {
+    verdict,
+    summary,
+    findings,
+    fixlist: verdict === "fixlist" ? (parsed?.findings ?? []) : [],
+    fixlistProblems: verdict === "fixlist" ? [] : (parsed?.problems ?? []),
+  };
 }
 
 /** What `reviewerFailed` says when the spawn layer had nothing to say. */
@@ -56,7 +97,13 @@ export const REVIEWER_FAILED = "the reviewer sub-agent failed";
  */
 export function reviewerFailed(error: string | null | undefined): Review {
   const text = (error ?? "").trim();
-  return { verdict: "error", summary: text === "" ? REVIEWER_FAILED : text, findings: [] };
+  return {
+    verdict: "error",
+    summary: text === "" ? REVIEWER_FAILED : text,
+    findings: [],
+    fixlist: [],
+    fixlistProblems: [],
+  };
 }
 
 /**

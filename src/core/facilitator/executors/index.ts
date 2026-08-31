@@ -116,6 +116,17 @@ export interface ExecutorContext {
    */
   readonly review: boolean;
   /**
+   * `--fixlist <path>` — re-prepare the AUTHOR's bundle around a fix list
+   * (design §B.4, "the router").
+   *
+   * The path of a `04-build/fixlist/<story>-<n>.md`, absolute or relative to the
+   * workspace root or the run dir. Absent means "route the latest one on disk if
+   * there is one", which is what a bare `--prepare` after a `fixlist` verdict
+   * does — the same courtesy `--prepare` already extends to a story waiting on a
+   * review. The flag is for naming a DIFFERENT file, and for saying so out loud.
+   */
+  readonly fixlist?: string;
+  /**
    * `run.yml`'s `attended_by: host` (spec §2.2) — a host session is driving this
    * run and the framework does not spawn on it.
    *

@@ -31,7 +31,7 @@
  * that means something.
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import { PROJECT_FRAMEWORK_DIR } from "../../paths.ts";
 import { factsPath, loadWorkspace, type WorkspaceContext } from "../../../hooks/lib/workspace.ts";
 import { DodCommandRefused, runDodCommand } from "../../../hooks/lib/story.ts";
@@ -69,6 +69,10 @@ import {
   looksLikeReviewerError, parseReview, renderPreviousAttempt, renderReviewLog, reviewerFailed, type Review,
 } from "../../build/review.ts";
 import { DEVELOPER_FAILED, dodGreen, type DodResult, type StoryOutcome } from "../../build/outcome.ts";
+import {
+  fixlistRel, fixlistRetroLines, latestFixlist, MAX_FIXLIST_ROUNDS, openFindings, readFixlistAt,
+  renderFixlistSection, writeFixlist, type FixlistOnDisk,
+} from "../../build/fixlist.ts";
 import { renderBuildHandoff, type EpicSummaryRow } from "../../build/handoff.ts";
 import { appendBuildRetro, buildRetroPath, gateRetroLines, storyRetroLines } from "../../build/retroLog.ts";
 import { MAX_STORIES_PER_WAVE, type PlanStatus } from "../../schemas/planCommon.ts";
@@ -423,6 +427,17 @@ class BuildSession {
   private readonly lines: string[] = [];
   /** Per-story reviewer verdicts seen in THIS process, for the requeue counter. */
   private readonly reviews = new Map<string, number>();
+
+  /**
+   * Fix-list rounds this process has granted, per story — the bound's own
+   * counter, deliberately NOT the requeue one.
+   *
+   * A `fixlist` verdict spends no attempt, so it must not touch `reviews`; and it
+   * is bounded at `MAX_FIXLIST_ROUNDS`, so it must be counted somewhere. Read
+   * through `fixlistRoundsSpent`, which falls back to the ledger for a fresh
+   * process — a bound a restart forgets is not a bound.
+   */
+  private readonly fixlists = new Map<string, number>();
   /** Epic branches this run cut or adopted; `runNext` writes them to run.yml. */
   readonly claimedEpics = new Set<string>();
   /** The single writer every state-changing step goes through (see `SerialQueue`). */
@@ -527,12 +542,27 @@ class BuildSession {
     const review = this.reviewWorkFor(planned);
     if (review !== null) return await this.prepareReview(planned, review);
 
+    // The fix-list ROUTER (design §B.4). `--fixlist <path>` names one explicitly;
+    // absent, the latest round on disk is carried by itself — the same courtesy
+    // `--prepare` already extends to a story waiting on a review, and for the
+    // same reason: handing an author a bundle that omits the findings it is
+    // being re-dispatched over is the mistake, not the convenience.
+    let fixlist: FixlistOnDisk | null;
+    try {
+      fixlist = this.fixlistFor(planned.story.id);
+    } catch (error) {
+      return failed(this.ctx, error instanceof Error ? error.message : String(error), []);
+    }
+
     this.noteIfReopened(planned, this.statusOf(planned));
     const story = await this.openStory(planned);
     const cap = this.developerCap(planned.story.id);
     const key = this.bundleKey(planned.story.id);
     const notes = this.dispatchNotesFor(planned.story.id);
     this.lines.push(...describeDispatchNotes(notes));
+    // Read BEFORE the bundle is rewritten: `writeBundle` leaves `result.json`
+    // alone, so the id is still the PRIOR turn's, which is the one worth resuming.
+    const resume = this.resumeSessionFor(planned.story.id);
     const pending: PendingStage = {
       version: 1,
       run: this.ctx.runId,
@@ -550,8 +580,31 @@ class BuildSession {
       prepared_at: this.ctx.at,
       story: planned.story.id,
       ...dispatchNotesRecord(notes),
+      ...(fixlist === null ? {} : {
+        fixlist: {
+          path: fixlist.rel,
+          round: fixlist.round,
+          findings: fixlist.findings.length,
+          open: openFindings(fixlist.findings).length,
+        },
+        resume_session: resume,
+      }),
     };
-    writeBundle(this.ctx.runDir, key, this.developerPrompt(story), pending);
+    writeBundle(this.ctx.runDir, key, this.developerPrompt(story, fixlist), pending);
+    if (fixlist !== null) {
+      this.lines.push(
+        `  · ${planned.story.id}: routing ${fixlist.rel} back to the author — `
+        + `${String(openFindings(fixlist.findings).length)} of ${String(fixlist.findings.length)} `
+        + "finding(s) still `fix-now`; this round spent no attempt",
+        resume === null
+          ? `  · ${planned.story.id}: no prior session_id on record — the bundle carries the fix list `
+            + "and the merged commit instead"
+          : `  · ${planned.story.id}: the prior author's session was \`${resume}\` — resume it if your `
+            + "tooling can; the framework resumes nothing itself",
+        `  · ${planned.story.id}: close each finding in ${fixlist.rel} as it lands `
+          + "(`Resolved: yes`) or re-route its `Disposition:` — an open `fix-now` blocks `done`",
+      );
+    }
     // The story file is the state: `in_progress` is how `--commit` finds it again.
     this.setStoryStatus(planned, "in_progress");
     this.ctx.emit("task.started", {
@@ -704,7 +757,7 @@ class BuildSession {
 
     const story = await this.openStory(planned);
     this.noteMerged(story, null);
-    const review = parseReview(envelope, summaryOf(envelope));
+    const review = this.narrowFixlist(planned.story.id, parseReview(envelope, summaryOf(envelope)));
     this.recordReview(story, review, {
       costUsd: numberOf(envelope.cost_usd) ?? 0,
       sessionId: typeof envelope.session_id === "string" ? envelope.session_id : null,
@@ -824,6 +877,11 @@ class BuildSession {
       // path — retrying the same reviewer under the same ceiling in the same
       // process would just buy the same error twice.
       if (outcome.verdict === "error") return;
+      // A fix list is a SIGNATURE with findings attached, not a fault: nothing
+      // about the diff was rejected, so a second developer attempt is not owed —
+      // and the routing it IS owed needs a host (`--prepare --fixlist`), which a
+      // headless invocation does not have. The story parks with its artifact.
+      if (outcome.verdict === "fixlist") return;
       this.lines.push(`  · ${planned.story.id}: reviewer asked for changes — requeued once`);
     }
   }
@@ -1054,6 +1112,23 @@ class BuildSession {
       return "settled";
     }
 
+    // The THIRD verdict: signed, and with findings the acceptance criteria never
+    // covered (design §B.4). The story parks at `review` with a fix list beside
+    // it, exactly where an errored review parks it — and for the same reason:
+    // nothing about the diff was faulted, so nothing is owed a second developer
+    // attempt. `recordReview` has already declined to count it against the
+    // requeue counter; here it is declined against the story's fate too.
+    if (review.verdict === "fixlist") {
+      const rel = this.writeFixlistFor(story, review, commit);
+      const open = openFindings(review.fixlist).length;
+      await this.settle(story, "review", {
+        dod, commit, merged: true, carried, verdict: "fixlist", review, cost,
+        reason: `the reviewer SIGNED with a fix list — ${String(review.fixlist.length)} finding(s), `
+          + `${String(open)} to fix now (${rel})`,
+      });
+      return "settled";
+    }
+
     const requeue = review.verdict === "changes" && story.attempt < MAX_ATTEMPTS;
     if (review.verdict === "changes") {
       await this.settle(story, requeue ? "review" : "blocked", {
@@ -1065,11 +1140,151 @@ class BuildSession {
       return "settled";
     }
 
+    // A story may not reach `done` over a finding somebody wrote down and nobody
+    // dispositioned. The check is against the FILE, not against the envelope that
+    // produced it, because the file is the state: a host closes a finding by
+    // writing one word in it, and the whole point of the artifact is that the
+    // decision outlives the turn that raised it.
+    const open = this.openFixNow(story.planned.story.id);
+    if (open !== null) {
+      // Not `block()`: that one is for a story nothing judged, and it would
+      // record `verdict: n-a` and `not merged` over a diff a reviewer APPROVED
+      // and a merge that happened. The story is blocked on the fix list and on
+      // nothing else, and the log has to say exactly that.
+      await this.settle(story, "blocked", {
+        dod, commit, merged: true, carried, verdict: "approve", review, cost, reason: open,
+      });
+      return "settled";
+    }
+
     // (h) done — DoD green AND the reviewer approved. Write the evidence.
     await this.settle(story, "done", {
       dod, commit, merged: true, carried, verdict: "approve", review, cost, reason: null,
     });
     return "settled";
+  }
+
+  /**
+   * Write `04-build/fixlist/<story>-<n>.md`, and route what it says.
+   *
+   * The executor writes it, never the reviewer — the same rule `renderReviewLog`
+   * follows, and for the same reason: `REVIEWER_TOOLS` is `Read`, `Grep`, `Glob`
+   * and `Bash(git diff *)`, so the role that found the defects holds no pen.
+   *
+   * `defer-with-log` findings go on to `retro.md`'s `## Build feedback` — the
+   * existing second writer with the existing verbatim dedup — because a defect
+   * the team decided not to fix yet is exactly the push-back that section carries
+   * to a role expert, and it should reach the owner through a channel that
+   * already exists rather than a new one.
+   */
+  private writeFixlistFor(story: StoryContext, review: Review, commit: string): string {
+    const id = story.planned.story.id;
+    // Allocated by `narrowFixlist`, which is the only thing that may grant one.
+    const round = this.fixlists.get(id) ?? MAX_FIXLIST_ROUNDS;
+    const rel = writeFixlist(this.ctx.runDir, BUILD_PHASE, {
+      storyId: id,
+      title: story.planned.story.title,
+      round,
+      attempt: story.attempt,
+      maxAttempts: MAX_ATTEMPTS,
+      diff: diffCommand(story.epicBranch, story.branch),
+      commit,
+      summary: review.summary,
+      findings: review.fixlist,
+    });
+    appendBuildRetro(
+      this.ctx.runDir,
+      fixlistRetroLines(id, this.ctx.runId, rel, review.fixlist),
+    );
+    this.lines.push(
+      `  · ${id}: fix list written — ${rel} `
+      + `(${String(openFindings(review.fixlist).length)} to fix now; this round spent no attempt)`,
+    );
+    return rel;
+  }
+
+  /**
+   * The reason a story may not settle `done`, or null when nothing is open.
+   *
+   * Names the file, the finding's number and its heading — the three things the
+   * person who has to close it needs — and then the two ways to close it, because
+   * a refusal that does not say what to do next is a trap rather than a gate.
+   */
+  private openFixNow(storyId: string): string | null {
+    const fixlist = latestFixlist(this.ctx.runDir, BUILD_PHASE, storyId);
+    if (fixlist === null) return null;
+    const open = openFindings(fixlist.findings);
+    const first = open[0];
+    if (first === undefined) return null;
+    return `${String(open.length)} fix-list finding(s) are still \`fix-now\` in ${fixlist.rel} — `
+      + `#${String(first.n)} · ${first.finding}. `
+      + "Close each one there (`Resolved: yes`) or re-route its `Disposition:`, "
+      + `then \`tldrx story reopen ${storyId}\``;
+  }
+
+  /**
+   * How many fix-list rounds this story has already been granted.
+   *
+   * This process first, then the ledger — the same two-source shape
+   * `reviewAttempts` uses, and for the same reason: a bound that a fresh `tldrx
+   * next` forgets is not a bound, and a story settled inside THIS invocation has
+   * not written its event to a file this can re-read yet.
+   */
+  private fixlistRoundsSpent(storyId: string): number {
+    return this.fixlists.get(storyId) ?? readReviewLedger(this.ctx.runDir, storyId).fixlistRounds;
+  }
+
+  /**
+   * The bound, applied to a verdict before anything records it (design §B.4).
+   *
+   * One fix-list round per story. A second `fixlist` is refused and read as
+   * `changes` — the fail-closed direction, and the honest one: the reviewer asked
+   * for a free round it does not have, and what it actually said was "this diff
+   * is not finished". Refused HERE, between the parse and `recordReview`, so the
+   * downgraded verdict is the one that lands on the requeue counter, the ledger
+   * line and the story's fate alike.
+   *
+   * A declared fix list `parseReview` could not read has already fallen to
+   * `changes` by the time this runs; its reasons come through on
+   * `fixlistProblems` and are said out loud rather than swallowed.
+   */
+  private narrowFixlist(storyId: string, review: Review): Review {
+    for (const problem of review.fixlistProblems) {
+      this.lines.push(`  · ${storyId}: the reviewer's fix list was REFUSED — ${problem}`);
+    }
+    if (review.fixlistProblems.length > 0) {
+      this.lines.push(
+        `  · ${storyId}: an unreadable fix list does not buy a free round — read as \`changes\``,
+      );
+    }
+    if (review.verdict !== "fixlist") return review;
+    const spent = this.fixlistRoundsSpent(storyId);
+    if (spent < MAX_FIXLIST_ROUNDS) {
+      // The round is ALLOCATED here, where it is granted — not counted off the
+      // ledger later. `recordReview` writes the `verdict: fixlist` event between
+      // this and the artifact, so a later re-count would read this very round as
+      // one already spent and number the file `-2`.
+      this.fixlists.set(storyId, spent + 1);
+      return review;
+    }
+    const previous = latestFixlist(this.ctx.runDir, BUILD_PHASE, storyId);
+    this.lines.push(
+      `  · ${storyId}: a SECOND fix-list round was refused — the bound is `
+      + `${String(MAX_FIXLIST_ROUNDS)} per story`
+      + (previous === null ? "" : ` (round ${String(previous.round)} is ${previous.rel})`)
+      + ", so this review is a full one and its verdict is read as `changes`",
+    );
+    return {
+      ...review,
+      verdict: "changes",
+      summary: `a second fix-list round was refused (the bound is ${String(MAX_FIXLIST_ROUNDS)} `
+        + `per story): ${review.summary}`,
+      findings: [
+        ...review.findings,
+        ...review.fixlist.map((f) => `${String(f.n)}. ${f.finding} [${f.severity}]`),
+      ],
+      fixlist: [],
+    };
   }
 
   /**
@@ -1141,7 +1356,7 @@ class BuildSession {
     await this.settle(story, before, {
       dod: [], commit: null, merged: false, carried: null,
       verdict: "n-a",
-      review: { verdict: "n-a", summary: "", findings: [] },
+      review: { verdict: "n-a", summary: "", findings: [], fixlist: [], fixlistProblems: [] },
       developerError: error,
       keepWorktree: true,
       cost,
@@ -1479,7 +1694,12 @@ class BuildSession {
     // thing it is not is a judgement of the diff. Fabricating `changes` here is
     // what spent story S1's single requeue on a reviewer that died mid-read
     // (2026-08-30); `reviewerFailed` records the corpse as a corpse.
-    const review = agent.ok ? parseReview(agent.structured, agent.result) : reviewerFailed(agent.error);
+    const parsed = agent.ok ? parseReview(agent.structured, agent.result) : reviewerFailed(agent.error);
+    // The bound is applied between the parse and the record, so a refused second
+    // fix-list round reaches the requeue counter, the ledger line and the story's
+    // fate as the ONE verdict it was downgraded to — not as a fix list here and a
+    // `changes` three lines later.
+    const review = this.narrowFixlist(story.planned.story.id, parsed);
 
     this.recordReview(story, review, {
       costUsd: round2(agent.costUsd),
@@ -1510,6 +1730,11 @@ class BuildSession {
       worktree: story.worktree,
       conventions: renderConventions(this.ctx.root, [story.planned.story.repo]),
       dodResults: dod.map((r) => ({ command: r.command, exitCode: r.exitCode })),
+      // Withdrawn once the story's one round is spent, so the prompt never offers
+      // a verdict `narrowFixlist` is about to refuse. Computed the same way on
+      // both doors, which is what keeps the bundle's prompt byte-identical to the
+      // one a spawn would have sent.
+      fixlistAvailable: this.fixlistRoundsSpent(story.planned.story.id) < MAX_FIXLIST_ROUNDS,
     });
   }
 
@@ -1547,9 +1772,14 @@ class BuildSession {
       ...(task.tokens === undefined ? {} : { tokens: task.tokens }),
     });
     const id = story.planned.story.id;
-    // The requeue counter counts VERDICTS. An errored review consumed a turn's
-    // money but produced no judgement, so it may not consume an attempt as well.
-    if (review.verdict !== "error") this.reviews.set(id, (this.reviews.get(id) ?? 0) + 1);
+    // The requeue counter counts VERDICTS THAT COST AN ATTEMPT — two of the five
+    // do not. An errored review consumed a turn's money but produced no
+    // judgement. A `fixlist` produced a judgement and it was a SIGNATURE: the
+    // diff was not faulted, so no second developer attempt is owed for it, and
+    // the round it does buy is bounded by `narrowFixlist` instead.
+    if (review.verdict !== "error" && review.verdict !== "fixlist") {
+      this.reviews.set(id, (this.reviews.get(id) ?? 0) + 1);
+    }
     // The reviewer IS a check: `approve` is the pass, `changes` and `error` the
     // two failures. `verdict` is what tells a ledger which one it is reading, and
     // `detail` on an errored review is the ERROR, verbatim.
@@ -1586,7 +1816,7 @@ class BuildSession {
       carried: null,
       conflicts: extra.conflicts ?? [],
       verdict: "n-a",
-      review: { verdict: "n-a", summary: "", findings: [] },
+      review: { verdict: "n-a", summary: "", findings: [], fixlist: [], fixlistProblems: [] },
       cost,
       reason,
     });
@@ -2019,7 +2249,7 @@ class BuildSession {
     this.merged.set(story.epicBranch, list);
   }
 
-  private developerPrompt(story: StoryContext): string {
+  private developerPrompt(story: StoryContext, fixlist: FixlistOnDisk | null = null): string {
     const repo = story.planned.story.repo;
     const facts = FactsStore.loadOrEmpty(factsPath(this.ctx.root));
     // The story's `touches:` is exactly the list of paths this sub-agent will
@@ -2052,7 +2282,74 @@ class BuildSession {
       previousAttempt: story.previousAttempt,
       notInWorktree: story.notInWorktree,
       dispatchNotes: this.dispatchNotesFor(story.planned.story.id).body,
+      ...(fixlist === null
+        ? {}
+        : { fixlist: renderFixlistSection(fixlist.rel, fixlist.findings) }),
     });
+  }
+
+  /**
+   * The fix list this `--prepare` is a round of, or null.
+   *
+   * Two doors, one answer. `--fixlist <path>` names a file and is REFUSED loudly
+   * when it is not one, is not this story's, or is not there — a flag that
+   * silently prepared an ordinary bundle would be worse than no flag, because the
+   * operator would believe the findings had been carried. With no flag, the
+   * latest round on disk is carried by itself, and only while something in it is
+   * still open: a fix list every finding of which has been dispositioned away
+   * from `fix-now` is finished, and re-rendering it into the next attempt would
+   * be asking for work somebody already decided not to do.
+   */
+  private fixlistFor(storyId: string): FixlistOnDisk | null {
+    const named = this.ctx.fixlist;
+    if (named === undefined) {
+      const latest = latestFixlist(this.ctx.runDir, BUILD_PHASE, storyId);
+      return latest !== null && openFindings(latest.findings).length > 0 ? latest : null;
+    }
+    for (const base of [this.ctx.root, this.ctx.runDir, process.cwd()]) {
+      const path = isAbsolute(named) ? named : join(base, named);
+      const read = readFixlistAt(path, relative(this.ctx.runDir, path));
+      if (read !== null) return this.checkFixlistStory(read, storyId, named);
+      if (isAbsolute(named)) break;
+    }
+    throw new Error(
+      `--fixlist ${named}: no readable fix list there. A fix list is `
+      + `${fixlistRel(BUILD_PHASE, storyId, 1)} in the run tree, with numbered `
+      + "`## N · <finding>` headings and a `Disposition:` line each",
+    );
+  }
+
+  /** A fix list is one STORY's. Routing another's into this bundle is not a typo worth honouring. */
+  private checkFixlistStory(read: FixlistOnDisk, storyId: string, named: string): FixlistOnDisk {
+    const path = read.rel;
+    const base = path.slice(path.lastIndexOf("/") + 1);
+    if (base !== "" && !base.startsWith(`${storyId}-`)) {
+      throw new Error(
+        `--fixlist ${named} is not ${storyId}'s fix list (it is \`${base}\`) — `
+        + `the story at the cursor is ${storyId}`,
+      );
+    }
+    return read;
+  }
+
+  /**
+   * The `session_id` the PRIOR turn on this story reported, or null.
+   *
+   * Read off the developer bundle's own `result.json`, which `--commit` leaves
+   * exactly where it found it. The framework resumes nothing itself — `spawnAgent`
+   * has no `--resume` — so this is a fact handed BACK to the host, which is the
+   * only party here that can act on it. Null is an honest answer and says so in
+   * the prepared lines.
+   */
+  private resumeSessionFor(storyId: string): string | null {
+    const path = join(agentDir(this.ctx.runDir, this.bundleKey(storyId)), RESULT_FILE);
+    if (!existsSync(path)) return null;
+    try {
+      const doc = JSON.parse(readFileSync(path, "utf8")) as { session_id?: unknown };
+      return typeof doc.session_id === "string" && doc.session_id !== "" ? doc.session_id : null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -2408,6 +2705,8 @@ class BuildSession {
         verdict: "changes",
         summary: outcome.reviewSummary,
         findings: outcome.reviewFindings,
+        fixlist: [],
+        fixlistProblems: [],
       });
     }
     const path = join(this.ctx.runDir, BUILD_PHASE, LOG_DIR, `${storyId}.md`);
@@ -2510,6 +2809,18 @@ export interface ReviewLedger {
    * errored review is deliberately not one of them.
    */
   readonly verdicts: number;
+  /**
+   * Fix-list rounds this story has been GRANTED (design §B.4) — the bound's
+   * counter.
+   *
+   * Deliberately separate from `verdicts`: a `fixlist` is a real verdict that
+   * costs no attempt, so counting it there would spend the requeue it exists not
+   * to spend, and not counting it anywhere would make the one-round bound
+   * unenforceable across processes. Reset by `story.reopened` like every other
+   * count here — a person who reopens a story hands it a fresh run of attempts,
+   * and a fresh fix-list round with them.
+   */
+  readonly fixlistRounds: number;
   /** The error of the LAST review, when it errored and nothing judged it since. */
   readonly erroredWith: string | null;
   /** The story commit the last `task.done` recorded — the diff already merged. */
@@ -2562,12 +2873,13 @@ export interface ReviewLedger {
 export function readReviewLedger(runDir: string, storyId: string): ReviewLedger {
   const path = join(runDir, "events.jsonl");
   const empty: ReviewLedger = {
-    verdicts: 0, erroredWith: null, commit: null, dod: [],
+    verdicts: 0, fixlistRounds: 0, erroredWith: null, commit: null, dod: [],
     developerErroredWith: null, blockedWithNothingRun: false, reopened: null,
   };
   if (!existsSync(path)) return empty;
 
   let verdicts = 0;
+  let fixlistRounds = 0;
   let erroredWith: string | null = null;
   let commit: string | null = null;
   // The three the DEVELOPER side needs, all scoped to the story's LAST attempt:
@@ -2607,6 +2919,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     // `cost` and `retro`, and the reopen event itself records the count it reset.
     if (event.type === "story.reopened") {
       verdicts = 0;
+      fixlistRounds = 0;
       erroredWith = null;
       commit = null;
       dod = [];
@@ -2679,11 +2992,20 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
         : "the reviewer sub-agent failed";
       continue;
     }
+    // A fix list is a verdict that spent no attempt. It clears the errored-review
+    // flag like any other judgement — something DID read the diff — and it is
+    // counted only against its own bound.
+    if (payload.verdict === "fixlist") {
+      fixlistRounds++;
+      erroredWith = null;
+      continue;
+    }
     verdicts++;
     erroredWith = null;
   }
   return {
     verdicts,
+    fixlistRounds,
     erroredWith,
     commit,
     dod: current.length > 0 ? current : dod,

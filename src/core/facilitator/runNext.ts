@@ -78,6 +78,11 @@ export interface NextOptions {
    * `tldrx next`. Phases with no reviewer ignore it.
    */
   readonly review?: boolean;
+  /**
+   * `--fixlist <path>` — the fix-list artifact this `--prepare` is a round of
+   * (design §B.4). Carried straight to the executor; nothing here reads it.
+   */
+  readonly fixlist?: string;
   /** `--model`, overriding the stage pin. */
   readonly model?: string;
   /** `--effort`, overriding the stage's `effort:`. Undefined ⇒ the stage decides. */
@@ -895,6 +900,7 @@ async function runExecutor(
     parallel: options.parallel ?? spec.parallel ?? 1,
     discardPending: options.discardPending === true,
     review: options.review === true,
+    ...(options.fixlist === undefined ? {} : { fixlist: options.fixlist }),
     attendedByHost: isAttendedByHost(store.run),
     agentCap: (share = 1) => agentCap(options, store, stage, share),
     emit: (type, payload, costUsd = 0, actor = null) => {
