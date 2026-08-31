@@ -10,7 +10,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { EventLog, type TldrxEvent } from "../events/index.ts";
-import { parseYaml } from "../yaml.ts";
+import { parseYamlRepairing } from "../yaml.ts";
 import { PROJECT_WORK_DIR } from "../paths.ts";
 import { toBudgetDocument, toRunDocument, type BudgetDocument, type RunDocument } from "./RunDocument.ts";
 
@@ -66,22 +66,63 @@ export function listRuns(root: string): readonly string[] {
     .reverse();
 }
 
-/** null when the run folder or its run.yml does not exist — the caller exits 3. */
-export function loadRun(root: string, id: string): LoadedRun | null {
+/**
+ * One run, or the honest reason there isn't one.
+ *
+ * `missing` and `unreadable` are different facts and the views act on them
+ * differently: a run that is not there is a 3, a run whose `run.yml` does not
+ * parse is a run the operator HAS and needs told about. Collapsing the two — or
+ * throwing, which is what this did until 2026-08-31 — is how one corrupt file
+ * took down `tldrx dashboard` for a whole workspace: the raw `YAMLParseError`
+ * escaped `buildModel`, killed the server, and every other run went with it.
+ */
+export type RunLoad =
+  | { readonly kind: "ok"; readonly run: LoadedRun }
+  | { readonly kind: "missing" }
+  | { readonly kind: "unreadable"; readonly dir: string; readonly error: string };
+
+export function loadRunResult(root: string, id: string): RunLoad {
   const dir = runDir(root, id);
   const runPath = join(dir, RUN_FILE);
-  if (!existsSync(runPath)) return null;
+  if (!existsSync(runPath)) return { kind: "missing" };
 
-  const run = toRunDocument(parseYaml(readFileSync(runPath, "utf8")), id);
-  if (run === null) return null;
+  let doc: unknown;
+  try {
+    doc = parseYamlRepairing(readFileSync(runPath, "utf8")).doc;
+  } catch (error) {
+    return { kind: "unreadable", dir, error: error instanceof Error ? error.message : String(error) };
+  }
+  const run = toRunDocument(doc, id);
+  if (run === null) return { kind: "missing" };
 
+  // A broken budget.yml must not cost the run either: the views treat a missing
+  // budget as `null` already, so an unreadable one becomes the same null rather
+  // than an exception thrown through a page that was rendering fine.
   const budgetPath = join(dir, BUDGET_FILE);
-  const budget = existsSync(budgetPath)
-    ? toBudgetDocument(parseYaml(readFileSync(budgetPath, "utf8")))
-    : null;
+  let budget: BudgetDocument | null = null;
+  if (existsSync(budgetPath)) {
+    try {
+      budget = toBudgetDocument(parseYamlRepairing(readFileSync(budgetPath, "utf8")).doc);
+    } catch {
+      budget = null;
+    }
+  }
 
   const { events, error, skipped } = readEvents(dir);
-  return { root, dir, id, run, budget, events, eventsError: error, eventsSkipped: skipped };
+  return {
+    kind: "ok",
+    run: { root, dir, id, run, budget, events, eventsError: error, eventsSkipped: skipped },
+  };
+}
+
+/**
+ * null when the run folder, its run.yml, or a readable run.yml does not exist —
+ * the caller exits 3. Callers that must TELL the operator which of those it was
+ * use `loadRunResult`.
+ */
+export function loadRun(root: string, id: string): LoadedRun | null {
+  const result = loadRunResult(root, id);
+  return result.kind === "ok" ? result.run : null;
 }
 
 /**

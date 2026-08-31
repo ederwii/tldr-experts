@@ -5,8 +5,7 @@
  * keeps the file valid — supersede writes BOTH ends of the link, so the
  * reciprocity rule can never be broken by going through this class.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import { parseYaml } from "../yaml.ts";
 import { withWorkspaceLock, workspaceRootOfFactsPath } from "../lock/workspaceLock.ts";
 import {
@@ -17,6 +16,7 @@ import { asFactsFile, validateFactsFile } from "./validateFactsFile.ts";
 import { noteDeprecations } from "../schemas/deprecationNotice.ts";
 import { emitFactsYaml } from "./emitFactsYaml.ts";
 import { findDuplicate, type DuplicateHit } from "./findDuplicate.ts";
+import { writeAtomic } from "../fs/writeAtomic.ts";
 
 /** Header comment written above a facts.yml this store creates from nothing. */
 const NEW_FILE_HEADER =
@@ -154,7 +154,7 @@ export class FactsStore {
       throw new Error(`refusing to write an invalid facts.yml: ${first?.path ?? ""} ${first?.message ?? ""}`);
     }
     withWorkspaceLock(workspaceRootOfFactsPath(path), () => {
-      writeFactsAtomic(path, text);
+      writeAtomic(path, text);
     });
   }
 
@@ -180,19 +180,3 @@ export class FactsStore {
   }
 }
 
-/** Temp + rename: a reader sees the whole old file or the whole new one. */
-function writeFactsAtomic(path: string, text: string): void {
-  const temp = `${path}.tmp-${String(process.pid)}`;
-  mkdirSync(dirname(path), { recursive: true });
-  try {
-    writeFileSync(temp, text, "utf8");
-    renameSync(temp, path);
-  } catch (error) {
-    try {
-      if (existsSync(temp)) rmSync(temp, { force: true });
-    } catch {
-      // Nothing to clean up, or not ours to clean up.
-    }
-    throw error;
-  }
-}

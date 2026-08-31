@@ -311,6 +311,31 @@ model wrote, as you, so the allowlist is the whole control: an empty `commands:`
 nothing, and a command needing a shell must be declared as exactly that
 (`sh -c "…"`), not shelled on its behalf.
 
+## A state file will not parse
+
+**`tldrx <cmd>: …/run.yml does not parse: …`, exit 1.** Every command on a run reads
+`run.yml` first, so one broken file stops all of them. The message names the file, quotes
+the parser, and points at `run.yml.bak` — the version the last save replaced. **Copying it
+back is your decision, not the tool's**: the backup is one save old, and that save may be
+the work you wanted. Diff the two before you choose, and reach for a hand-edit when the
+backup predates something you need.
+
+**It says it repaired something.** `tldrx: …: run.yml held text broken across lines by an
+emitter bug since fixed.` Earlier versions wrote a `--note` containing a blank line into
+`run.yml` without escaping the newlines, which made the file unparseable. The note is
+recovered whole, the file is rewritten correctly, and the broken bytes are kept as
+`run.yml.bak`. Nothing else about the run changes, and it only ever happens once per file.
+
+**A run is missing from `tldrx status` or shows as `unreadable` on the dashboard.** A run
+whose `run.yml` does not parse cannot be acted on, so the verbs skip it — but the reports
+that promise to show everything name it instead of dropping it. Run
+`tldrx run status <id>` on it for the full diagnosis.
+
+**Every save keeps one step back.** `run.yml`, `budget.yml` and `facts.yml` are written to a
+temp file and renamed, and the version being replaced is copied to `<file>.bak` first. The
+`.bak` files are gitignored by the block `tldrx init` writes: git already holds the history
+of the committed state, and the backup is for the working copy.
+
 ## Other
 
 **`tldrx replay` says a line was skipped.** `events.jsonl` is appended line by line, so a

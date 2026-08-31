@@ -20,7 +20,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { MAX_LEVEL, loadExperts, driftWarnings, evidenceWarnings, type ExpertRecord } from "../experts/index.ts";
-import { listRuns, loadPhaseArtefacts, loadRun, type LoadedRun } from "../replay/index.ts";
+import { listRuns, loadPhaseArtefacts, loadRunResult, type LoadedRun } from "../replay/index.ts";
 import { resolveDependencies, type DependencyInput, type ResolvedRun } from "../run/dependencies.ts";
 import { isMovable, waitingFor, type Waiting } from "../run/waiting.ts";
 import { openBlocks, parseQuestions } from "../text/index.ts";
@@ -232,6 +232,13 @@ export interface FaqEntryModel {
   readonly commands: readonly string[];
 }
 
+/** A run folder that exists but whose `run.yml` could not be parsed. */
+export interface UnreadableRun {
+  readonly id: string;
+  /** The parser's own words, verbatim. */
+  readonly error: string;
+}
+
 export interface DashboardModel {
   readonly modelVersion: number;
   readonly generatedAt: string;
@@ -244,6 +251,12 @@ export interface DashboardModel {
   /** Highest competency level, so the renderer never has to know the constant. */
   readonly maxLevel: number;
   readonly runs: readonly RunModel[];
+  /**
+   * Run folders whose `run.yml` is on disk but does not parse. Named rather than
+   * skipped: a run the operator can see in `tldrx-work/` and cannot see here is
+   * a page telling a lie by omission.
+   */
+  readonly unreadable: readonly UnreadableRun[];
   /**
    * Every run id in the order a human should work through them: topological on
    * `dependsOn`, runnable first, then newest-updated. The head is the run to do
@@ -281,9 +294,14 @@ export function buildModel(root: string, generatedAt: string, options: ModelOpti
   // knowing its place in it. `listRuns` is newest-first, which is the order
   // `resolveDependencies` uses to settle a slug carried by two runs.
   const loaded: LoadedRun[] = [];
+  const unreadable: UnreadableRun[] = [];
   for (const id of listRuns(root)) {
-    const run = loadRun(root, id);
-    if (run !== null) loaded.push(run);
+    // One corrupt run.yml used to throw straight through here and kill the
+    // server (measured 2026-08-31). A run that cannot be read is now a row on
+    // the page, not the end of the page.
+    const result = loadRunResult(root, id);
+    if (result.kind === "ok") loaded.push(result.run);
+    else if (result.kind === "unreadable") unreadable.push({ id, error: result.error });
   }
   const waiting = new Map(loaded.map((run) => [run.id, waitingFor(run.run, run.dir)]));
   const graph = resolveDependencies(loaded.map((run): DependencyInput => ({
@@ -304,6 +322,7 @@ export function buildModel(root: string, generatedAt: string, options: ModelOpti
     live: options.live === true,
     maxLevel: MAX_LEVEL,
     runs: loaded.map((run) => toRunModel(run, waiting.get(run.id), resolved.get(run.id))),
+    unreadable,
     order: graph.order,
     chains: graph.chains,
     experts: loadExperts(root, now).map(toExpertModel),

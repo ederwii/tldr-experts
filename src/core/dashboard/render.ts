@@ -452,6 +452,7 @@ export function dashRunsView(model: DashboardModel, ui: DashUi, nowMs: number): 
     '<div class="viewhead"><h1>Runs</h1><p>Every fact here was read from files on disk at '
       + `${dashText(dashDateTime(model.generatedAt))}. Nothing on this page can change them.</p></div>`,
     dashAttention(model),
+    dashUnreadable(model),
   ];
 
   if (waiting.length > 0) {
@@ -496,6 +497,34 @@ export function dashRunsView(model: DashboardModel, ui: DashUi, nowMs: number): 
   list.push("</div>");
   parts.push(list.join(""));
   return parts.join("");
+}
+
+/**
+ * The runs that are on disk and could not be read.
+ *
+ * Loudly, and with the parser's own words: until 2026-08-31 one unparseable
+ * `run.yml` threw through `buildModel` and killed the server, so the operator's
+ * evidence that anything was wrong was a stack trace and a dead page. Silently
+ * dropping the run instead would have been worse — a dashboard that renders
+ * cleanly while a run is missing from it is a page that lies.
+ *
+ * The remedy on offer is a command that prints the full diagnosis, not a button
+ * that repairs anything: `tldrx run status <id>` names the file, the parse error
+ * and the backup beside it.
+ */
+export function dashUnreadable(model: DashboardModel): string {
+  if (model.unreadable.length === 0) return "";
+  const rows = model.unreadable.map((run) =>
+    '<div class="alert"><span class="alert__kind">unreadable</span>'
+    + `<span><strong>${dashText(run.id)}</strong> — ${dashText(dashFirstLine(run.error))}`
+    + '<br><span class="faint mono" style="font-size:var(--text-2xs)">'
+    + `${dashText(`tldrx run status ${run.id}`)}</span></span></div>`);
+  return `<div class="stack stack--sm" style="margin-bottom:var(--space-lg)">${rows.join("")}</div>`;
+}
+
+/** Parser errors carry a caret diagram on later lines; the headline is enough here. */
+export function dashFirstLine(message: string): string {
+  return message.split("\n")[0] ?? message;
 }
 
 /**
@@ -1028,7 +1057,7 @@ const TEMPLATE_FUNCTIONS = [
   dashChip, dashCmd, dashPending, dashSlug, dashWaitingCell, dashNextRun, dashAttention, dashChains,
   dashRoute, dashWaiting, dashTitle, dashTopMeta, dashNav,
   dashMain, dashNoWorkspace,
-  dashRunsView, dashRunRow, dashMeter,
+  dashRunsView, dashUnreadable, dashFirstLine, dashRunRow, dashMeter,
   dashRunView, dashGateSigner, dashKv, dashPathSection, dashHandoffsSection, dashPanelId, dashQuestion,
   dashPlanSection,
   dashExpertsView, dashExpertCard, dashTrainCommand, dashRadar,

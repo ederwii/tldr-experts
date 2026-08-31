@@ -11,11 +11,59 @@ import type { Fact, FactsFile } from "./Fact.ts";
 const PLAIN_SAFE = /^[A-Za-z][A-Za-z0-9_./-]*$/;
 const YAML_KEYWORDS = new Set(["true", "false", "null", "yes", "no", "on", "off", "~"]);
 
+/**
+ * A high surrogate with no low after it, or a low with no high before it.
+ *
+ * Not reachable from a terminal — argv is UTF-8 — but reachable from a string
+ * sliced through the middle of an emoji, and `JSON.stringify` renders one as a
+ * bare `\ud800` escape that Bun's native YAML parser then REFUSES (measured; the
+ * `yaml` package accepts it). Replaced with U+FFFD, which is what encoding the
+ * file as UTF-8 would do to it anyway — the byte is already not text.
+ */
+const LONE_HIGH_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g;
+const LONE_LOW_SURROGATE = /(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+/**
+ * One string → one YAML scalar. **Every** free-text field this framework writes
+ * into YAML goes through here: gate notes, task errors, cancellation and
+ * rejection reasons, evidence paths, fact text, split goals.
+ *
+ * ## Why `JSON.stringify`
+ *
+ * It used to be `"` + escape `\` and `"` + `"`, and that escaped nothing else —
+ * so a newline inside a note was written as a LITERAL newline inside a
+ * double-quoted flow scalar. Inside `gate: {…, note: "…"}` that is not YAML at
+ * all, and the file stopped parsing: measured 2026-08-31 on a live run, where
+ * `tldrx reject --note "<two paragraphs>"` produced `Missing closing " quote`
+ * from the `yaml` package and `Unexpected character` from Bun's, and every
+ * subsequent command on that run failed.
+ *
+ * JSON's string grammar is a strict subset of YAML 1.2's double-quoted scalar,
+ * so `JSON.stringify` is a correct YAML emitter for this one job, and it is the
+ * escaping this repo already trusted for the same purpose in
+ * `adapters/external.ts` and `build/storyFile.ts`. Two properties earned it the
+ * job over hand-rolled escaping:
+ *
+ * 1. **It round-trips.** Newlines, tabs, CR, NUL and friends come back
+ *    byte-identical through BOTH parsers behind the runtime seam — Bun's
+ *    native one and the `yaml` package — including inside a flow mapping.
+ * 2. **It changes nothing that already worked.** Over every code point from
+ *    U+0020 to U+FFFF, `JSON.stringify` and the old escaping produce the SAME
+ *    bytes (measured: 63,456 checked, 0 differ). Control characters are the only
+ *    inputs whose output moves — and those were the corrupt ones. So every
+ *    run.yml, budget.yml, facts.yml and split.yml already on disk still
+ *    round-trips byte-for-byte through a save.
+ *
+ * The plain-scalar fast path is kept ahead of it so the common case — an id, a
+ * status, a slug — stays unquoted and the files stay readable.
+ */
 export function yamlScalar(value: string | number | null): string {
   if (value === null) return "null";
   if (typeof value === "number") return String(value);
   if (PLAIN_SAFE.test(value) && !YAML_KEYWORDS.has(value.toLowerCase())) return value;
-  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  return JSON.stringify(
+    value.replace(LONE_HIGH_SURROGATE, "�").replace(LONE_LOW_SURROGATE, "�"),
+  );
 }
 
 function inlineList(values: readonly string[]): string {

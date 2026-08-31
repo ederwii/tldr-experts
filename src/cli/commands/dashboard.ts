@@ -46,9 +46,15 @@ function exportStatic(args: ReturnType<typeof parseArgs>, root: string): number 
   const outDir = out === undefined ? join(root, DEFAULT_OUT_DIR) : isAbsolute(out) ? out : join(root, out);
   try {
     const written = writeStaticDashboard(root, outDir, stamp());
+    // A run folder that did not parse is named here rather than quietly missing
+    // from the count: "0 run(s)" at a workspace that visibly holds one is a lie.
+    const unreadable = written.unreadable === 0
+      ? ""
+      : `, ${String(written.unreadable)} unreadable`;
     process.stdout.write(
       `wrote ${written.path} (${String(written.bytes)} bytes)\n`
-        + `  ${String(written.runs)} run(s), ${String(written.experts)} expert(s), no external requests\n`,
+        + `  ${String(written.runs)} run(s)${unreadable}, ${String(written.experts)} expert(s), `
+        + "no external requests\n",
     );
     return EXIT_OK;
   } catch (error) {

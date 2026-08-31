@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A `--note` with a blank line in it no longer destroys `run.yml`.** Measured 2026-08-31 on the
+  live `260829-scoring-leaderboard` run: `tldrx reject --note "<two paragraphs>"` wrote the note
+  into the gate's flow mapping with LITERAL newlines inside a double-quoted scalar, which is not
+  YAML — the `yaml` package answered `Missing closing " quote at line 57` and Bun's parser
+  `Unexpected character` — and from that moment **every** command on the run failed. There was no
+  repair verb, so the operator had to hand-edit a file the docs forbid editing, and the next save
+  re-emitted the same string and broke it again at the same line, taking `run.yml.bak` with it.
+  Four changes, each closing one part of the loop:
+  - **The emitter escapes, at the one place every field goes through.** `yamlScalar`
+    (`core/facts/emitFactsYaml.ts`) escaped `\` and `"` and nothing else; it now emits via
+    `JSON.stringify`, whose string grammar is a strict subset of YAML 1.2's double-quoted scalar —
+    the escaping this repo already trusted in `adapters/external.ts` and `build/storyFile.ts`.
+    Because every YAML this framework hand-emits routes strings through that one helper, the fix
+    reaches **all** of them at once: gate notes (`approve`, `reject`, `revoke`), `cancelled.note`,
+    task `error` and `stopped_by`, gate `evidence`, run `title`/`scope`, `facts.yml` fact text and
+    retirement reasons, and `split.yml` goals, claims, questions and answers. Verified against
+    **both** parsers behind the runtime seam. Existing files do not churn: over every code point
+    from U+0020 to U+FFFF the new escaping and the old produce identical bytes (63,456 checked, 0
+    differ), so only the values that were already corrupt change shape.
+  - **A file already broken this way heals itself on load.** `parseYamlRepairing` (`core/yaml.ts`)
+    re-escapes raw control characters trapped inside a double-quoted scalar, re-parses, and accepts
+    the result only if it parses — otherwise the parser's ORIGINAL error is thrown, because a
+    repair that cannot be verified is not offered. `RunStore.open` then rewrites the mended file
+    through the fixed emitter and says so on stderr. A one-time hand repair was never enough: the
+    old emitter re-corrupted the file on the next save, so `emit(load(x))` had to be made stable.
+  - **Every state write keeps one step back.** `RunStore` and `FactsStore` had grown a
+    byte-identical private copy of temp-plus-rename each; both now call one
+    `core/fs/writeAtomic.ts`, which additionally copies the version it is about to replace to
+    `<file>.bak`. Atomicity only ever guaranteed a WHOLE file, never a good one. The copy is taken
+    before the rename, so the live file is never absent for an instant and a torn backup can only
+    ever cost a backup. `tldrx init` now adds `tldrx-work/*/*.bak` and `.tldrx/memory/*.bak` to the
+    managed `.gitignore` block.
+  - **A `run.yml` beyond mechanical repair fails honestly, and takes nothing else down with it.**
+    The error names the file, quotes the parser verbatim, says that every command on the run reads
+    that file first, and points at `run.yml.bak` — while stating plainly that using it is a MANUAL
+    decision tldrx will not make. Separately, one corrupt `run.yml` used to throw a raw
+    `YAMLParseError` out of `buildModel` and kill `tldrx dashboard` for the whole workspace;
+    `loadRunResult` (`core/replay/loadRun.ts`) now distinguishes missing from unreadable, and the
+    dashboard lists the run as **unreadable** with the parse error beside it and renders every
+    other run as normal.
+
 ### Changed
 
 - **The docs now say, at the top of both places a reader starts, that `run attend host` is a LOCK

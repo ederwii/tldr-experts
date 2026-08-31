@@ -9,6 +9,10 @@ node_modules/
 tldrx-work/**/.cache/
 tldrx-work/**/*.tmp
 
+# the previous version of a state file, kept by every atomic save
+tldrx-work/**/*.bak
+.tldrx/memory/*.bak
+
 # build output
 dist/
 *.tsbuildinfo

@@ -19,6 +19,8 @@ export interface StaticExport {
   readonly bytes: number;
   readonly runs: number;
   readonly experts: number;
+  /** Run folders on disk whose `run.yml` did not parse — counted, never hidden. */
+  readonly unreadable: number;
 }
 
 export function writeStaticDashboard(
@@ -37,5 +39,6 @@ export function writeStaticDashboard(
     bytes: Buffer.byteLength(html, "utf8"),
     runs: model.runs.length,
     experts: model.experts.length,
+    unreadable: model.unreadable.length,
   };
 }

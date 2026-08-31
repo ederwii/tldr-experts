@@ -43,6 +43,12 @@ export const GITIGNORE_IGNORES = [
   ".tldrx/worktrees/",
   "tldrx-work/*/.lock",
   "tldrx-work/*/.agent/",
+  // Every atomic save keeps the version it replaced (`core/fs/writeAtomic.ts`).
+  // It is a recovery aid for the working copy, not history — git already holds
+  // the history of these files, and committing the backups would put a second
+  // copy of run.yml in every diff.
+  "tldrx-work/*/*.bak",
+  ".tldrx/memory/*.bak",
   // `tldrx install --claude` backs settings.json up before merging into it
   // (installClaude.ts). The backup is a full copy of a file that may hold local
   // env values, and it was the one thing the framework writes that nothing
