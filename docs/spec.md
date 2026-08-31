@@ -1490,10 +1490,12 @@ parts of that block are in this exact order:
 **Prompt order — most stable first.** The pieces are concatenated in exactly this order:
 
 ```
-<stage.md, substituted, with `## Inputs` and `## Previous attempt` CUT OUT>
+<stage.md, substituted, with `## Inputs`, `## Dispatch notes` and `## Previous attempt` CUT OUT>
 <expert block 1> … <expert block N>
 ## Inputs
 <the declared inputs' content>
+## Dispatch notes
+<the host's own context for this cycle — omitted when there is none>
 ## Previous attempt
 <the retry note, and the refused outputs>
 ```
@@ -1545,6 +1547,22 @@ touched path is additionally checked against the story branch (`git cat-file -e 
 repo but is not committed there is flagged `NOT in this worktree — its content is only what the handoff quotes` with a
 matching stderr warning at `--prepare`, and the 64 KB touched-file budget is spent in priority order, the paths the
 story's `goal`, acceptance criteria, test plan or title NAME going in before the ones something merely cited.
+
+**The dispatch-notes slot.** `.agent/<stage>/dispatch-notes.md` — and for a Build story
+`.agent/<stage>/<story>/dispatch-notes.md` — is the one place a HOST may add context to a prompt the framework
+generated. It is rendered under `## Dispatch notes`, between `## Inputs` and `## Previous attempt`, and omitted
+entirely when the file does not exist: an absent file leaves the prompt byte-identical. The two files feed **one**
+slot, capped at **8 KB** shared between them and spent stage-file-first, with any overflow named in the prompt, on
+stdout and in `pending.json` (`dispatch_notes: {bytes, truncated, max_bytes, sources[]}`); the rendered section's
+bytes are charged to the context ledger and count against `prompt_max_bytes` like everything else.
+
+It is **context, never configuration**: the framework does not parse it, does not substitute `{{placeholders}}` in
+it, does not require `[src: …]` tokens on it, and it may not change a declared input, an output, a check or a cap.
+It survives `--discard-pending` — the flag bins `pending.json`, `result.json` and `result.raw.json`, and the notes
+are an INPUT to the rendering that is about to be redone rather than an output of the one being binned. It lives in
+`.agent/`, which is gitignored (§1), because it is **per-cycle** scratch: a caveat that must outlive the cycle is a
+fact, and `.tldrx/memory/facts.yml` is the durable channel that already reaches every prompt with attribution
+behind it.
 
 **The context ledger.** `--prepare` and `--dry-run` print bytes per section — stage (and its `## Questions`), each
 declared input, each expert's body and knowledge, the previous attempt — and `pending.json` carries the same numbers

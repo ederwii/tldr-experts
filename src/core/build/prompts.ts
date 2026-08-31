@@ -61,6 +61,13 @@ export interface DeveloperPromptParts {
   readonly experts: readonly { readonly name: string; readonly body: string }[];
   readonly budgetUsd: number;
   /**
+   * The rendered body of `## Dispatch notes` — the host's own context for this
+   * cycle (`facilitator/dispatchNotes.ts`), already read and capped. Emitted
+   * between `## Inputs` and everything that follows it, and omitted entirely
+   * when the operator left no file.
+   */
+  readonly dispatchNotes?: string;
+  /**
    * One line under Objective saying where this story came from, when it did not
    * come from a Plan phase. An implicit story (`build/implicitPlan.ts`) is the
    * whole of Build for its run, and a developer handed one needs to know that:
@@ -137,6 +144,7 @@ export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
     "",
     renderInputs(inputs),
     "",
+    ...dispatchNotesSection(parts.dispatchNotes),
     "## Investigate",
     "",
     "1. Read the story and the inlined files above. They are the whole brief.",
@@ -199,6 +207,19 @@ export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
     (expert) => `\n---\n\n<!-- expert: ${expert.name} -->\n${expert.body.trimEnd()}\n`,
   );
   return `${lines.join("\n").trimEnd()}\n${experts.join("")}`;
+}
+
+/**
+ * `## Dispatch notes`, or nothing at all.
+ *
+ * It sits directly under `## Inputs` because that is where the brief ends: step 1
+ * of `## Investigate` tells the developer the inlined files above ARE the whole
+ * brief, and a caveat about them that arrived after that sentence would be a
+ * caveat it had already been told to disregard.
+ */
+function dispatchNotesSection(body: string | undefined): readonly string[] {
+  const text = (body ?? "").trim();
+  return text === "" ? [] : ["## Dispatch notes", "", text, ""];
 }
 
 export interface ReviewerPromptParts {
