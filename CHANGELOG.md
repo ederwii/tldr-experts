@@ -260,6 +260,69 @@
   test …` — in the scene, the compact one-liner and `--ui plain`. A lane leaves the line
   when its sub-agent finishes. With nothing parallel the view is what it always was.
 
+- **`gates_policy: agent` — a gate an agent may close, over a check it wrote down.** The third
+  answer to "who closes a gate", beside `human` (waits) and `auto` (the harness signs when seven
+  measured conditions hold). Measured 2026-08-30 on `260830-tenancy-identity-customers`: the host
+  ran a defined checklist at every gate and typed it into `approve --note "<free text>"`, where
+  nothing validated it, `replay` could not render it, and `run.yml` recorded a person's name for a
+  check a sub-agent had made. The evidence note (above) was the artefact; this is the gate.
+  - **Strictly stronger than an auto gate, never a cheaper one.** Three things, not one: every
+    one of the seven `auto` conditions unchanged and unweakened (including the `boundary`
+    condition landed alongside it), PLUS no budget decision in this stage's window, PLUS an
+    evidence note that parses, sources every bullet, and whose verdict is `sign`.
+  - **The budget requirement is an EVENT, not an arithmetic.** A `budget.raised` or
+    `budget.blocked` in `events.jsonl` at or after the stage's `started_at` falls the gate to a
+    person even when the spend is comfortably under the ceiling. Condition 3 already compares
+    numbers; what it cannot see is that somebody *raised* the ceiling to let this stage through,
+    and a decision made to unblock a stage may not then be signed off by the machine that was
+    blocked. Asserted in both directions on one fixture: the same gate closes without the event
+    and falls through with it, with nothing else changed.
+  - **The same door, so the trail reads the same.** A closing agent gate goes through `approve`:
+    the checks are re-run off disk, `gate.by` records the note's `by:`, one ordinary
+    `gate.approved` is appended, and the cursor advances. `AUTO_GATE_ACTOR` is untouched —
+    `by: auto` still means "the facilitator closed it with no note but its own conditions".
+  - **The note is COPIED into the run tree**, at `<phase>/gate-evidence/<stage>.md`, and that
+    copy is what `gate.evidence.path` points at. `.agent/` is gitignored by spec §1, and a gate
+    whose evidence lives only in a gitignored directory is a gate nobody can audit from a clone.
+    A copy, not a move: the scratch original stays where the agent left it.
+  - **Four fallthroughs are named in their own right**, because a person's next move differs for
+    each: `questions` (a decision nobody has made), `budget-event` (a ceiling somebody moved),
+    `boundary` (work nobody scoped) and `refusal` (the note's verdict is `refuse` or
+    `sign-with-fixlist` — the agent doing its job, not failing at it). Any other failing condition
+    reports as `condition`, a missing or broken note as `evidence`. Each is tested in isolation:
+    a report that fired three at once would not answer "which of these stopped it", which is the
+    first question anybody asks.
+  - **`tldrx approve --as-agent [--evidence <path>]`** is the same decision taken by hand, and it
+    splits the two refusals apart by exit code. **Exit 2** is "this note is broken" — fix the
+    file, nothing was signed. **Exit 4** is "a person decides": the note parsed perfectly and its
+    verdict is not `sign`. **Exit 1** is `--as-agent` on a stage whose policy is not `agent`: a
+    run keeps the policy it was opened with, and a flag that could upgrade one at approve time
+    would make the frozen policy decorative.
+  - **A person may always overrule it.** A plain `tldrx approve` on an agent-gated stage works
+    exactly as it does anywhere else, is recorded as the person, and writes no `evidence` key. An
+    agent gate is one an agent MAY close, never one a person may not.
+  - **`tldrx replay` renders the check**, not just the signature: who signed, how many files they
+    read, how many citations they spot-checked and what those resolved to, how many touched paths
+    they audited and how many were outside the surface, and the path to the note. Rendered from
+    the note's FRONT MATTER and from `run.yml` — never from its prose, which would change the
+    narrative every time somebody rephrased a sentence. A note that has gone missing is SAID to
+    be missing rather than invented, and the counts `run.yml` recorded still stand.
+  - **`--gates` gains a qualified form**: `--gates plan:agent,build:agent`. A bare entry still
+    means `human`, so every invocation anybody has already typed means exactly what it meant. An
+    unknown policy is its own usage error, distinct from an unknown stage.
+  - **Additive, and asserted as such.** No shipped scope uses `agent`; it arrives via
+    `--gates`, or a fork's own workflow file, and never by default. An absent `gates_policy`
+    entry still reads as `human`. A gate with no `evidence` emits no key at all, so every
+    `run.yml` written before this round-trips byte-for-byte through a save — asserted by
+    comparing the emitter's output against the file on disk. The gate mapping never rejected an
+    unknown key (measured against the reader that predates this), so a `run.yml` carrying
+    `gate.evidence` still validates on an older binary; a `gates_policy` naming `agent` there
+    fails loudly instead, which is the right failure — a policy the reader does not understand is
+    not one it may downgrade to "sign it anyway".
+  - **The emitter had to be extended, not worked around.** `emitRunYaml`'s `gate()` wrote exactly
+    five keys as a flow mapping, so a sixth held in memory would have been dropped, silently, by
+    the next save. 47 new tests.
+
 - **The gate evidence note** — `.agent/<stage>/evidence.md`, plus `tldrx gate template` to
   write the blank form. This is the artefact half of the `agent` gate (design §A): a third
   answer to "who closes a gate", between `human` (waits) and `auto` (the harness signs when

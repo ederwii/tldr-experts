@@ -21,13 +21,14 @@ import { isAttendedByHost, isTerminal, type GateType, type RunFile, type RunPhas
 import { runChecks } from "../run/checks.ts";
 import { approve } from "../run/gates.ts";
 import { AUTO_GATE_ACTOR, evaluateAutoGate, unreadableHeadings } from "../run/autoGate.ts";
+import { describeAgentFallthroughs, evaluateAgentGate } from "../run/agentGate.ts";
 import { gatePolicyFor } from "../run/gatePolicy.ts";
 import { PresetError, type PlannedStage } from "../run/workflowPreset.ts";
 import { isHostTokens } from "../budget/RunBudget.ts";
 import { remaining } from "../budget/wouldExceed.ts";
 import { raiseCommand, shortBy } from "../budget/budgetView.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
-import { factsPath, loadWorkspace } from "../../hooks/lib/workspace.ts";
+import { factsPath, loadWorkspace, toSrcContext } from "../../hooks/lib/workspace.ts";
 import type { TldrxEvent } from "../events/Event.ts";
 import { setProgressCeiling, setProgressReadCap, setProgressTitle } from "../ui/bus.ts";
 import { acquireLock, releaseLock } from "./Lock.ts";
@@ -35,7 +36,7 @@ import { onInterrupt, stopInFlightRun } from "./interrupt.ts";
 import { loadStageSpec, type StageSpec } from "./stageSpec.ts";
 import { countSkipInputs, evaluateSkipIf, openQuestionIds, SkipIfError } from "./skipIf.ts";
 import {
-  agentDir, expandAll, expandPatterns, missing, present, resolveMany, type PathContext,
+  agentDir, evidencePath, expandAll, expandPatterns, missing, present, resolveMany, type PathContext,
 } from "./paths.ts";
 import { fenceFor, renderConventions, renderFacts, renderParts, stackExpertNames } from "./prompt.ts";
 import { describeDispatchNotes, loadDispatchNotes, type DispatchNotes } from "./dispatchNotes.ts";
@@ -1059,9 +1060,65 @@ async function finishStage(
     const doneLine =
       `${phaseId}/${stageId} done — ${costLine} (${checkSummary})`;
 
-    // The gate is now REQUESTED either way. Who closes it is the policy's call —
-    // and an `auto` policy only closes it when all seven §5 conditions hold.
-    if (gatePolicyFor(store.run.gates_policy, stageId) === "auto") {
+    // The gate is now REQUESTED either way. Who closes it is the policy's call.
+    // An `agent` policy is the strongest of the three: all seven auto conditions,
+    // no budget event in the window, AND a structured evidence note that signs.
+    const policy = gatePolicyFor(store.run.gates_policy, stageId);
+    if (policy === "agent") {
+      const agent = await evaluateAgentGate({
+        root: options.root,
+        runDir: store.runDir,
+        phaseId,
+        stage: requireStage(store, phaseId, stageId),
+        planned: spec.planned,
+        budget: store.budget,
+        checks,
+        gate: `${phaseId}/${stageId}`,
+        evidencePath: evidencePath(store.runDir, stageId),
+        srcCtx: toSrcContext(loadWorkspace(options.root), store.runDir),
+        events: store.events.read(),
+      });
+      if (agent.ok && agent.actor !== null && agent.record !== null && agent.text !== null) {
+        // The SAME door a person and the facilitator use: `approve` re-runs the
+        // checks off disk, copies the note into the run tree, records
+        // `by`/`at`/`note`/`evidence`, appends gate.approved + stage.done and
+        // advances the cursor. A refusal there is a refusal here.
+        const approved = await approve(store, {
+          root: options.root,
+          actor: agent.actor,
+          at: nowish(options),
+          note: agent.note,
+          evidence: { text: agent.text, record: agent.record },
+        });
+        if (approved.ok) {
+          return out(EXIT_OK, [
+            ...notes,
+            `${doneLine} · agent-approved by ${agent.actor}`,
+            `  ${agent.note}`,
+            `  evidence → ${approved.evidencePath ?? ""}`,
+            approved.advancedTo === null
+              ? `run ${store.runId} is finished`
+              : `cursor → ${approved.advancedTo.phase}/${approved.advancedTo.stage} (ready)`,
+          ]);
+        }
+        return out(EXIT_AWAITING_HUMAN, [
+          ...notes,
+          doneLine,
+          `agent gate not taken — approve re-ran the checks and \`${approved.failed?.id ?? "unknown"}\` `
+            + `failed: ${approved.failed?.detail ?? ""}`,
+          `gate pending: tldrx approve`,
+        ]);
+      }
+      return out(EXIT_AWAITING_HUMAN, [
+        ...notes,
+        doneLine,
+        `agent gate not taken — ${String(agent.fallthroughs.length)} reason(s), `
+          + "this gate falls to a person:",
+        ...describeAgentFallthroughs(agent.fallthroughs),
+        `gate pending: tldrx approve`,
+      ]);
+    }
+    if (policy === "auto") {
       const verdict = await evaluateAutoGate({
         root: options.root,
         runDir: store.runDir,

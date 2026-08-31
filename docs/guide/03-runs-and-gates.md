@@ -137,8 +137,15 @@ per scope instead of per command with `build: {parallel: 3}` at the top of your
 
 ## Who closes a gate
 
-Every stage ends at a gate. What you choose is **who closes it**. `human` waits for
-`tldrx approve`; `auto` lets the harness close it — but only when all seven conditions hold:
+Every stage ends at a gate. What you choose is **who closes it**. Three answers:
+
+| Policy | Closes when | Recorded as |
+|---|---|---|
+| `human` | you type `tldrx approve` | your name |
+| `auto` | seven measured conditions hold | `by: auto` |
+| `agent` | those seven, **plus** no budget decision in the stage's window, **plus** an evidence note that signs | the note's `by:`, with `role: agent` |
+
+`human` waits for `tldrx approve`; `auto` lets the harness close it — but only when all seven conditions hold:
 the stage's checks pass, its phase has no open question, the spend is inside both the stage
 and the phase ceiling, the stage did not fail, the claim-sources validator reports
 nothing (zero refused **and** zero unverified), and — on a Build stage — every story in the
@@ -162,8 +169,12 @@ The shipped defaults — every scope keeps at least one human gate:
 | `security-patch` | auto | auto | — | human | human |
 | `migration` | auto | auto | auto | human | human |
 
+No shipped scope uses `agent`: it arrives by choice, never by default.
+
 Override per run with `tldrx run new … --gates <stage,stage>` — **the list is the human
-gates** — or `--gates all` / `--gates none`. It is frozen into `run.yml` as `gates_policy:`
+gates** — or `--gates all` / `--gates none`. An entry may name its policy outright:
+`--gates plan:agent,build:agent`. A bare entry still means `human`, so every invocation you
+have already typed means what it meant. It is frozen into `run.yml` as `gates_policy:`
 at creation, so a run keeps the policy it was opened with even after the workflow file
 changes. A `run.yml` from before 0.3.0, or a workflow with no `gates:` block, is `human`
 everywhere.
@@ -254,10 +265,65 @@ a gate; the other two are the note saying a person decides. That is not a hedge 
 can meet every acceptance criterion and still have found three real defects nobody wrote a
 criterion for, and binary SIGN/REFUSE has nowhere to put those.
 
-The note is a written record today, and today nothing signs a gate with it: `tldrx approve`
-records what you type, exactly as it always has, and `gates_policy` is still `human` or
-`auto`. `tldrx gate template` spends nothing, spawns nothing, approves nothing and moves no
-cursor.
+`tldrx gate template` itself spends nothing, spawns nothing, approves nothing and moves no
+cursor. Signing with the note is the next section.
+
+### Signing with it: `gates_policy: agent`
+
+Open the run with the gate you want an agent to close:
+
+```
+$ tldrx run new tenancy --scope feature --gates plan:agent
+```
+
+Then the agent writes `.agent/plan/evidence.md` and either the framework closes the gate on
+the next `tldrx next`, or the agent signs by hand:
+
+```
+$ tldrx approve --as-agent
+approved 03-plan/plan (claim-sources:passed)
+  signed by fable (agent) — evidence → 03-plan/gate-evidence/plan.md
+cursor → 04-build/build (ready)
+```
+
+Both doors do the same thing. The checks are re-run off disk. The note is **copied into the
+run tree** at `<phase>/gate-evidence/<stage>.md`, which is committed — a gate whose evidence
+lives only in a gitignored directory is a gate nobody can audit from a clone. `gate.by`
+records the note's `by:`, `gate.evidence` records its counts and the path, and one ordinary
+`gate.approved` is appended. `tldrx replay` then renders the check itself:
+
+```
+- 03-plan/plan SIGN by fable (agent) — read 9 files, spot-checked 7 of 34 citations (7 resolved),
+  audited 13 touched paths (0 outside the surface), diff vs stories: matches
+  → 03-plan/gate-evidence/plan.md
+```
+
+### What an agent gate cannot do
+
+Everything an auto gate cannot do, because it runs every one of those conditions unchanged —
+plus two more it deliberately refuses:
+
+**It cannot sign after somebody moved the money.** A `budget.raised` or a `budget.blocked` in
+`events.jsonl` since the stage started falls the gate to a person, even when the spend is
+comfortably under the ceiling. Condition 3 compares numbers; what it cannot see is that a
+person *raised* the ceiling to let this stage through, and a decision made to unblock a stage
+may not then be signed off by the machine that was blocked.
+
+**It cannot sign over its own doubt.** `verdict: refuse` and `verdict: sign-with-fixlist`
+fall to a person, by design. A reviewer that met every acceptance criterion and still found
+three real defects has done its job; the gate is where that lands on somebody who can decide.
+
+`tldrx next` exits `4` for any of these and names each reason with its own label —
+`questions`, `budget-event`, `boundary`, `refusal` for the four that are decisions, and
+`condition` or `evidence` for a condition that went red or a note that is missing or broken.
+`tldrx approve --as-agent` splits the same two apart by exit code: **2** is "this note is
+broken, fix the file", **4** is "a person decides". It is refused outright (exit 1) on a
+stage whose policy is not `agent` — a run keeps the policy it was opened with, and a flag
+that could upgrade one at approve time would make the frozen policy decorative.
+
+And you can always overrule it. `tldrx approve` with no flag on an agent-gated stage works
+exactly as it does anywhere else, is recorded as you, and carries no `evidence` key: an
+agent gate is one an agent MAY close, never one a person may not.
 
 ### Taking an approval back
 

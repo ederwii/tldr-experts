@@ -302,8 +302,8 @@ const ENTRIES: readonly CommandHelp[] = [
       { name: "seed", arg: "<file|dir>", meaning: "Import a document, or a directory of them, as the run's seed.", sub: "new", repeatable: true },
       {
         name: "gates",
-        arg: "<a,b|all|none>",
-        meaning: "Which stages a PERSON approves; every other gate closes automatically. Overrides the workflow's gates: wholesale.",
+        arg: "<a,b|a:agent|all|none>",
+        meaning: "Which stages a PERSON approves; every other gate closes automatically. A qualified entry names the policy outright \u2014 `plan:agent` is a gate an agent may close over an evidence note. Overrides the workflow's gates: wholesale.",
         sub: "new",
       },
       {
@@ -539,10 +539,27 @@ const ENTRIES: readonly CommandHelp[] = [
     flags: [
       runFlag(),
       { name: "note", arg: "<text>", meaning: "What you are approving and why. Kept in the event log." },
+      {
+        name: "as-agent",
+        arg: null,
+        meaning: "Sign an `agent` gate with the evidence note at `.agent/<stage>/evidence.md`. The note is validated by the \u00a72.8 machinery first, the gate records the note's `by:` as the actor, and the note is copied to `<phase>/gate-evidence/<stage>.md` where it is committed. Refused (exit 1) on a stage whose policy is not `agent`.",
+      },
+      {
+        name: "evidence",
+        arg: "<path>",
+        meaning: "Read the evidence note from here instead of `.agent/<stage>/evidence.md`. Only means something with --as-agent.",
+      },
       root(),
     ],
-    examples: ['tldrx approve --note "design lands on real paths"'],
-    exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
+    examples: [
+      'tldrx approve --note "design lands on real paths"',
+      "tldrx approve --as-agent",
+    ],
+    exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_AWAITING_HUMAN],
+    notes: [
+      "A person may always approve an agent-gated stage with no flag at all. That is an override, it is recorded as a person, and it is the point of the split: an agent gate is one an agent MAY close, never one a person may not.",
+      "--as-agent has two refusals and they mean different things. Exit 2 is \"this note is broken\" \u2014 fix the file. Exit 4 is \"a person decides\": the note parsed perfectly and its verdict is `refuse` or `sign-with-fixlist`, which is the agent doing its job.",
+    ],
   },
   {
     name: "gate",

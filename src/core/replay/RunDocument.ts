@@ -14,12 +14,26 @@
  * `loadRun.ts`.
  */
 
+/** `gate.evidence` (spec §2.2, design §A.5), read as tolerantly as the rest. */
+export interface RunGateEvidence {
+  readonly path: string;
+  readonly role: string;
+  readonly verdict: string;
+  readonly sampled: number | null;
+  readonly of: number | null;
+  readonly resolved: number | null;
+  readonly refuted: number | null;
+  readonly outside_surface: number | null;
+}
+
 export interface RunGate {
   readonly type: string;
   readonly status: string;
   readonly by: string | null;
   readonly at: string | null;
   readonly note: string;
+  /** Present only on a gate an `agent` policy closed. */
+  readonly evidence: RunGateEvidence | null;
 }
 
 export interface RunTask {
@@ -79,9 +93,9 @@ export interface RunDocument {
   /** Absent on a run `tldrx run new` created — it depends on nothing. */
   readonly triage: RunTriage | null;
   /**
-   * Stage id -> `human` | `auto` (spec §2.2 `gates_policy`). An absent key, or a
-   * run.yml written before the key existed, reads as `human` — the same default
-   * `gatePolicyFor` applies, spelled here so a reader never has to know it.
+   * Stage id -> `human` | `auto` | `agent` (spec §2.2 `gates_policy`). An absent
+   * key, or a run.yml written before the key existed, reads as `human` — the same
+   * default `gatePolicyFor` applies, spelled here so a reader never has to know it.
    */
   readonly gates_policy: Readonly<Record<string, string>>;
   readonly phases: readonly RunPhase[];
@@ -160,15 +174,33 @@ function toTriage(input: unknown): RunTriage | null {
   return { split: str(triage.split), depends_on: strings(triage.depends_on) };
 }
 
-/** Read tolerantly: a value that is not `human` or `auto` is dropped, not shown. */
+/** Read tolerantly: a value outside the three policies is dropped, not shown. */
+const READABLE_POLICIES: readonly string[] = ["human", "auto", "agent"];
+
 function toGatesPolicy(input: unknown): Readonly<Record<string, string>> {
   const policy = record(input);
   if (policy === null) return {};
   const out: Record<string, string> = {};
   for (const [stage, value] of Object.entries(policy)) {
-    if (value === "human" || value === "auto") out[stage] = value;
+    if (typeof value === "string" && READABLE_POLICIES.includes(value)) out[stage] = value;
   }
   return out;
+}
+
+/** Absent on every gate but an agent-closed one, which is most gates ever written. */
+function toGateEvidence(input: unknown): RunGateEvidence | null {
+  const evidence = record(input);
+  if (evidence === null) return null;
+  return {
+    path: str(evidence.path),
+    role: str(evidence.role),
+    verdict: str(evidence.verdict),
+    sampled: num(evidence.sampled),
+    of: num(evidence.of),
+    resolved: num(evidence.resolved),
+    refuted: num(evidence.refuted),
+    outside_surface: num(evidence.outside_surface),
+  };
 }
 
 function toPhase(input: unknown): RunPhase | null {
@@ -204,6 +236,7 @@ function toStage(input: unknown): RunStage | null {
           by: nullableStr(gate.by),
           at: nullableStr(gate.at),
           note: str(gate.note),
+          evidence: toGateEvidence(gate.evidence),
         },
     tasks: array(stage.tasks)
       .map(record)

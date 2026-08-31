@@ -1,12 +1,18 @@
 /**
- * Who approves a stage's gate: a person, or the harness (spec §2.2 `gates_policy`,
- * §2.4 `gates:`, §5 "auto gates").
+ * Who approves a stage's gate: a person, the harness, or an agent that showed its
+ * work (spec §2.2 `gates_policy`, §2.4 `gates:`, §5 "who closes a gate").
  *
  * Every stage still ENDS at a gate — that is not negotiable and nothing here
  * changes it. What is negotiable is who closes it. A `human` gate waits for
  * `tldrx approve`; an `auto` gate is closed by the facilitator, but only when the
- * five §5 conditions all hold, and it is recorded through the same `approve` path
+ * seven §5 conditions all hold, and it is recorded through the same `approve` path
  * with `by: auto` so the trail reads identically.
+ *
+ * An `agent` gate is the third: every `auto` condition, unweakened, PLUS a
+ * structured evidence note whose verdict is `sign` (design §A). It is strictly
+ * stronger than an auto gate, never a cheaper one — the extra requirement is a
+ * file somebody has to have written and be accountable for, and the gate records
+ * that person's name in `by:` rather than `auto`.
  *
  * The policy is DATA: a workflow file says it, `run new --gates` overrides it, and
  * the resolved map is frozen into `run.yml` at creation. A run therefore keeps the
@@ -18,7 +24,7 @@
  */
 import { isRecord, type ValidationIssue } from "../schemas/validation.ts";
 
-export const GATE_POLICIES = ["human", "auto"] as const;
+export const GATE_POLICIES = ["human", "auto", "agent"] as const;
 export type GatePolicy = (typeof GATE_POLICIES)[number];
 
 /** Stage id -> who approves it. */
@@ -45,6 +51,9 @@ export function isGatePolicy(value: unknown): value is GatePolicy {
  * A key naming no stage is refused rather than ignored: a typo'd stage id would
  * otherwise silently leave that stage on the human default, which is the one
  * failure mode nobody would notice until the twelfth run.
+ *
+ * `agent` is accepted here exactly as `human` and `auto` are — the values are one
+ * list, checked in one place, so a third policy is data rather than a branch.
  */
 export function parseWorkflowGates(
   value: unknown,
@@ -53,7 +62,7 @@ export function parseWorkflowGates(
 ): GatesPolicy {
   if (value === undefined || value === null) return {};
   if (!isRecord(value)) {
-    throw new GatePolicyError(`${source}: gates must be a mapping of stage id -> human | auto`);
+    throw new GatePolicyError(`${source}: gates must be a mapping of stage id -> ${GATE_POLICIES.join(" | ")}`);
   }
   const known = new Set(stageIds);
   const out: Record<string, GatePolicy> = {};
@@ -75,7 +84,12 @@ export function parseWorkflowGates(
 }
 
 /**
- * `--gates <stage,stage|all|none>` — the LIST is the human gates.
+ * `--gates <entry,entry|all|none>` — the LIST is the non-`auto` gates.
+ *
+ * A bare entry (`plan`) is a HUMAN gate, which is what the flag has always meant
+ * and what every existing invocation keeps meaning. A qualified entry
+ * (`plan:agent`) names the policy outright, which is the only way to ask for the
+ * third one from the command line — a workflow file is the other (design §A.7).
  *
  * `all` is every stage human (the pre-0.3 behaviour, spelled out); `none` is every
  * stage auto. An empty value is refused rather than read as `none`: `--gates ""`
@@ -86,23 +100,42 @@ export function parseGatesFlag(raw: string, stageIds: readonly string[]): GatesP
   const value = raw.trim();
   if (value === "") {
     throw new GatePolicyError(
-      `--gates needs a value: a comma-separated list of the HUMAN gates, or \`all\`, or \`none\``,
+      `--gates needs a value: a comma-separated list of the HUMAN gates (\`plan\`) or of qualified `
+        + `gates (\`plan:agent\`), or \`all\`, or \`none\``,
     );
   }
   if (value === "all") return everyStage(stageIds, "human");
   if (value === "none") return everyStage(stageIds, "auto");
 
-  const wanted = value.split(",").map((part) => part.trim()).filter((part) => part !== "");
+  const entries = value.split(",").map((part) => part.trim()).filter((part) => part !== "");
   const known = new Set(stageIds);
-  const unknown = wanted.filter((id) => !known.has(id));
-  if (unknown.length > 0) {
+  const named = new Map<string, GatePolicy>();
+  const unknownStages: string[] = [];
+  for (const entry of entries) {
+    // `plan:agent`. Split on the FIRST colon only: a stage id may not contain one
+    // (it is refused below as unknown either way), and the policy never does.
+    const colon = entry.indexOf(":");
+    const id = colon === -1 ? entry : entry.slice(0, colon).trim();
+    const policy = colon === -1 ? "human" : entry.slice(colon + 1).trim();
+    if (!known.has(id)) {
+      unknownStages.push(id);
+      continue;
+    }
+    if (!isGatePolicy(policy)) {
+      throw new GatePolicyError(
+        `--gates: \`${entry}\` names the policy \`${policy}\`, which is not one of `
+          + `${GATE_POLICIES.join(" | ")}. A bare \`${id}\` means \`human\`.`,
+      );
+    }
+    named.set(id, policy);
+  }
+  if (unknownStages.length > 0) {
     throw new GatePolicyError(
-      `--gates: ${unknown.join(", ")} is not a stage of this workflow (${stageIds.join(", ")})`,
+      `--gates: ${unknownStages.join(", ")} is not a stage of this workflow (${stageIds.join(", ")})`,
     );
   }
-  const human = new Set(wanted);
   const out: Record<string, GatePolicy> = {};
-  for (const id of stageIds) out[id] = human.has(id) ? "human" : "auto";
+  for (const id of stageIds) out[id] = named.get(id) ?? "auto";
   return out;
 }
 
@@ -144,7 +177,10 @@ export function validateGatesPolicy(
 ): void {
   if (value === undefined || value === null) return;
   if (!isRecord(value)) {
-    issues.push({ path: "gates_policy", message: "expected a mapping of stage id -> human | auto" });
+    issues.push({
+      path: "gates_policy",
+      message: `expected a mapping of stage id -> ${GATE_POLICIES.join(" | ")}`,
+    });
     return;
   }
   const known = new Set(stageIds);
