@@ -204,14 +204,23 @@ const ENTRIES: readonly CommandHelp[] = [
         meaning: "Which map provider to use. auto picks graphify when it is on PATH, else static.",
         values: ["auto", "graphify", "static"],
       },
+      {
+        name: "ui",
+        arg: "<mode>",
+        meaning: "What to show while it works; every byte of it goes to stderr. Default: auto. TLDRX_UI sets it too.",
+        values: UI_MODES,
+      },
+      { name: "quiet", arg: null, meaning: "No live progress. The report at the end is still printed." },
     ],
     examples: [
       "tldrx init",
       "tldrx init --process scrum --stack ts,dotnet",
+      "tldrx init --quiet",
     ],
     exits: [EXIT_OK, EXIT_USAGE],
     notes: [
       "Deterministic and offline: filesystem and git only. No model runs and nothing is sent anywhere.",
+      "Most of the wait is the code map: `graphify update` runs once per repo. `--provider static` is much faster and still cites every claim.",
     ],
   },
   {

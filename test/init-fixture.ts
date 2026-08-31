@@ -70,6 +70,26 @@ Players should earn points for completing hunts and see where they rank.
 - Cash prizes and any payment integration.
 `;
 
+/**
+ * A single repo with the trees a walk must never enter: vendored dependencies,
+ * build output, and a nested git repo inside `node_modules`.
+ *
+ * Every one of these holds a `.ts`/`.cs` file, so a walk that failed to skip
+ * them would be visible as a code-file count rather than only as a slow run.
+ */
+export async function noisyRepoFixture(): Promise<Fixture> {
+  const root = await mkdtemp(join(tmpdir(), "tldrx-noisy-"));
+  await makeNodeRepo(root);
+  for (const dir of ["node_modules/left-pad", "dist", "bin/Debug", "obj", ".venv/lib"]) {
+    await mkdir(join(root, dir), { recursive: true });
+    await Bun.write(join(root, dir, "vendored.ts"), "export const vendored = 1;\n");
+  }
+  // A real git repo where a repo has no business being: `findRepos` must not
+  // report `node_modules/left-pad` as a workspace member.
+  await gitInit(join(root, "node_modules", "left-pad"));
+  return { root, cleanup: () => rm(root, { recursive: true, force: true }) };
+}
+
 /** A workspace root that is not a git repo and holds no git repos. */
 export async function emptyFixture(): Promise<Fixture> {
   const root = await mkdtemp(join(tmpdir(), "tldrx-empty-"));

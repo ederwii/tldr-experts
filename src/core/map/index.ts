@@ -1,4 +1,4 @@
-export { buildMap, MAP_DIR, GRAPHIFY_OUT_DIR, type BuildMapOptions, type BuildMapResult } from "./buildMap.ts";
+export { buildMap, MAP_DIR, GRAPHIFY_OUT_DIR, type BuildMapOptions, type BuildMapResult, type MapProgress } from "./buildMap.ts";
 export { checkCitations, citedDocuments, HANDOFF_FILE, type CheckOptions, type CheckResult, type CitationProblem } from "./checkCitations.ts";
 export { StaticProvider, cite } from "./StaticProvider.ts";
 export { GraphifyProvider, GRAPH_FILE, GRAPHIFY_SRC } from "./GraphifyProvider.ts";
