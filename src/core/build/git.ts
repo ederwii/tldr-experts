@@ -158,7 +158,18 @@ export async function currentBranch(cwd: string): Promise<string> {
 }
 
 export async function headSha(cwd: string): Promise<string> {
-  const result = await git(["rev-parse", "--short", "HEAD"], cwd);
+  return await shaOf(cwd, "HEAD");
+}
+
+/**
+ * The short sha `ref` resolves to, or `""` when it resolves to nothing.
+ *
+ * `""` rather than a throw for the same reason `commitsBetween` returns 0: every
+ * caller here is composing an operator line, and a branch that is not there yet
+ * has no sha to name. A caller that needs the difference asks `branchExists`.
+ */
+export async function shaOf(cwd: string, ref: string): Promise<string> {
+  const result = await git(["rev-parse", "--short", ref], cwd);
   return result.ok ? result.stdout.trim() : "";
 }
 
@@ -252,6 +263,66 @@ export async function commitsBetween(cwd: string, base: string, head: string): P
   if (!result.ok) return 0;
   const n = Number.parseInt(result.stdout.trim(), 10);
   return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * Where a story branch stands against the branch it was cut from.
+ *
+ * `current` covers "identical" and "ahead of the base and nothing else", because
+ * both mean the same thing to the caller: there is nothing on the base this
+ * branch has not already got.
+ */
+export type BaseStaleness = "current" | "behind" | "diverged";
+
+export interface BaseState {
+  readonly state: BaseStaleness;
+  /** Commits `branch` carries that `base` does not. */
+  readonly ahead: number;
+  /** Commits `base` carries that `branch` does not. */
+  readonly behind: number;
+  /** Short shas, for the operator line. `""` when the ref does not resolve. */
+  readonly branchSha: string;
+  readonly baseSha: string;
+}
+
+/**
+ * Measure `branch` against `base` in both directions, and say which of the three
+ * shapes it is.
+ *
+ * Both numbers come from `commitsBetween`, which is already the one place this
+ * repo counts commits, so `behind === 0` here means exactly what
+ * `git merge-base --is-ancestor base branch` means and no second notion of
+ * ancestry enters the codebase.
+ */
+export async function baseStateOf(cwd: string, branch: string, base: string): Promise<BaseState> {
+  const ahead = await commitsBetween(cwd, base, branch);
+  const behind = await commitsBetween(cwd, branch, base);
+  return {
+    state: behind === 0 ? "current" : ahead === 0 ? "behind" : "diverged",
+    ahead,
+    behind,
+    branchSha: await shaOf(cwd, branch),
+    baseSha: await shaOf(cwd, base),
+  };
+}
+
+/**
+ * `git merge --ff-only <onto>` in `cwd` — advance the checked-out branch to
+ * `onto`, and refuse rather than create a merge commit.
+ *
+ * **Never a rebase.** Rewriting a branch a developer has already committed to is
+ * the class of move the run-id-in-branch-name fix exists to prevent (2026-08-29
+ * audit §B), and a fast-forward writes no commit at all: it moves a ref and
+ * checks out the tree already recorded at the other end.
+ *
+ * Measured 2026-08-31 against a real repo, which is what §I.5 of the design asked
+ * for: with an untracked file in the way, `--ff-only` exits 1, prints
+ * `Aborting`, and leaves HEAD on the ORIGINAL commit with the file untouched. It
+ * is atomic-or-nothing, so a failed call needs no repair — only a line saying it
+ * did not happen.
+ */
+export async function fastForward(cwd: string, onto: string): Promise<GitResult> {
+  return await git(["merge", "--ff-only", onto], cwd);
 }
 
 export function diffCommand(base: string, branch: string): string {

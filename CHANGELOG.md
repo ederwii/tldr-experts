@@ -4,6 +4,49 @@
 
 ### Added
 
+- **A story branch that has fallen behind its epic is fast-forwarded before a developer is
+  dispatched onto it.** Measured 2026-08-30 on `260830-tenancy-identity-customers`: S3 was
+  reopened, `story reopen` keeps its branch by design, and that branch still sat at the S1-era
+  epic tip while the epic had since gained S2 and S5. S3's handlers needed S2's contract, so a
+  dispatch on that base would not have compiled. The host fast-forwarded by hand before
+  dispatching. That is the one case this automates.
+
+  ```
+  · S3: fast-forwarded `story/260830-tenancy/S3` to `epic/tenancy` — 2 commit(s), b5a2474 → ae9c8dd
+  ```
+  - **Where.** Inside `openStory`, which is the one place a story worktree is opened, and only
+    on the two openings that are about to put a DEVELOPER on the branch: the headless pipeline
+    and `tldrx next --prepare`. The review openings (`--prepare --review`, `--commit --review`,
+    an errored review re-run) and `--commit` measure nothing and move nothing — a fast-forward
+    there would drag other stories' commits onto a branch whose whole meaning is "what this
+    story built", for a base nobody is about to compile against.
+  - **The requeue case, which fires far more often than the reopen one.** A `changes` verdict
+    merges the story into its epic and then hands it a second attempt; before this, attempt 2
+    was dispatched onto attempt 1's base. It now starts on the current epic tip.
+  - **A diverged branch is warned about, never resolved.** Commits on both sides is the second
+    live case — a dead spawn's partial commit on a stale base, where no fast-forward existed
+    and the host preserved the partial on a backup branch and re-pointed the story branch by
+    hand. Which of two histories survives is a decision, so the framework does not make it: it
+    names both counts, both shas, and the two options, changes nothing, and lets the dispatch
+    proceed on the old base — saying, in as many words, which base that is.
+  - **A dirty worktree is left alone**, whatever the topology says. It is the operator's.
+  - **Never a rebase.** Rewriting a branch a developer has already committed to is the class of
+    move the run-id-in-branch-name fix (2026-08-29 audit §B) exists to prevent. The only write
+    is `git merge --ff-only`, which refuses rather than inventing a merge commit. Measured
+    2026-08-31 against a real repository, which is what the design asked to verify before
+    building: blocked by a file in the way it exits non-zero and leaves HEAD and the file
+    exactly as they were — atomic-or-nothing, so a failed fast-forward needs no repair, only a
+    line saying it did not happen.
+  - **`story.base_fastforwarded`** joins the closed §2.9 event set — the only event in it that
+    records tldrx moving a ref. It carries `story`, `repo`, `branch`, `base`, `from`, `to` and
+    `commits`, `tldrx replay` narrates it, and it is appended ONLY when the ref actually moved:
+    a divergent or dirty branch produces a warning and no event, because nothing happened.
+  - **An up-to-date branch is silent** and emits nothing, so a run with nothing to say about
+    its bases is what it was before.
+  - `tldrx story reopen` is unchanged: it still runs no git command, spends nothing and touches
+    no branch. The detection belongs where a worktree is being opened anyway and where the
+    operator is about to dispatch.
+
 - **Decision cards — the shape an interrupt takes when a run stops for a person.** Measured
   2026-08-30: an unattended run stopped on two owner questions, and the host did NOT show the
   owner the dashboard or the `2 open question(s) in 01-what/questions.md` line the framework

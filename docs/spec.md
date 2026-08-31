@@ -866,7 +866,7 @@ Append-only audit log: with `run.yml` the dashboard's only data source, the cost
 
 **Type enum:** `run.created` `run.closed` `run.unlocked` `run.cancelled` `run.attended` `phase.started` `phase.done` `stage.started` `stage.done` `stage.failed`
 `stage.skipped` `task.started` `task.done` `agent.spawned` `agent.result` `question.asked` `question.answered`
-`gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `story.reopened` `check.passed` `check.failed` `budget.warned`
+`gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `story.reopened` `story.base_fastforwarded` `check.passed` `check.failed` `budget.warned`
 `budget.blocked` `budget.raised` `fact.added` `fact.retired` `map.refreshed` `ticket.synced` `error`. Closed set: an
 unknown type is a validation error.
 
@@ -889,6 +889,13 @@ another run of developer attempts (§5, "Reopening a story"). Its payload carrie
 boundary**: the Build executor's review ledger restarts every count at it, so verdicts recorded before it stop counting
 against the reopened story. Nothing is rewritten to achieve that — the earlier events are all still in the file and
 still read by `replay`, `cost` and `retro`.
+
+**`story.base_fastforwarded` was added 2026-08-31.** It is the only event in the enum that records tldrx **moving a
+ref**: a story branch that sat behind its epic tip, brought up to it before a developer was dispatched onto it (§5,
+"Resolve and cut"). Its payload carries `phase`, `story`, `repo`, `branch`, `base` (the epic branch), `from` and `to`
+(short shas) and `commits` (how many the move carried). It is appended ONLY when the ref actually moved — a divergent
+or dirty branch is warned about on stdout and changed by nothing, so it has no event, because nothing happened. A
+branch tldrx moves without saying so would be the framework editing the operator's git state silently.
 
 ```json
 {"ts":"2026-08-28T14:29:58Z","run":"260828-leaderboard","stage":"contracts","type":"agent.result","actor":"architect","cost_usd":2.61,"payload":{"phase":"02-how","task":"t1","session_id":"1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d","model":"sonnet","outputs":["02-how/contracts.md"],"usage":{"input_tokens":184203,"output_tokens":9114}}}
@@ -1953,6 +1960,23 @@ one story never varies:
    name a directory); `epic/<slug>` is ensured off that repo's `default_branch`; a worktree is opened at
    `.tldrx/worktrees/<repo>/<story-id>` on `story/<id>`, cut from the epic branch. Every git call goes through the
    runtime seam with a cwd inside a declared repo, and there is deliberately **no `push` wrapper** anywhere in the phase.
+
+   **A branch that already exists is checked out as it stands — and then measured against the epic tip (2026-08-31).**
+   `story reopen` keeps a branch by design, and a requeued attempt keeps one too, so a story is regularly opened onto a
+   base the epic has moved past. Only the opening that is about to put a DEVELOPER on the branch may move it — the
+   headless pipeline and `--prepare`; the review and `--commit` openings measure nothing and move nothing. Three states:
+
+   | State | What happens |
+   |---|---|
+   | the branch is an ancestor of the epic tip and the worktree is clean | **fast-forwarded** (`git merge --ff-only`), one line naming both shas and the count, and one `story.base_fastforwarded` (§2.9) |
+   | commits on both sides | **warn, change nothing** — both counts, both shas, and the operator's two options (merge in the worktree, or preserve the divergent commits on a backup branch and re-point). The dispatch proceeds on the old base and the line says so |
+   | the worktree is dirty | **warn, change nothing** — a dirty tree is the operator's |
+   | already at the tip | silent, and no event |
+
+   **Never a rebase.** Rewriting a branch a developer has already committed to is the class of move the
+   run-id-in-branch-name rule exists to prevent, and which of two divergent histories survives is a decision, not a
+   default. Measured 2026-08-31: `git merge --ff-only` blocked by a file in the way exits non-zero and leaves HEAD and
+   the file exactly as they were, so a failed fast-forward needs no repair — only a line saying it did not happen.
 2. **One developer sub-agent**, cwd = that worktree, handed the story file, its epic's summary and the CONTENT of every
    path the story `touches` (≤24 files, ≤64 KB `[assumption]`, missing paths named as "this story creates it").
    `--allowedTools` is the file tools + `Bash(<each command THAT repo declares>)` + `Bash(git add *)` +

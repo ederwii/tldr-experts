@@ -19,6 +19,16 @@ import {
  * operator's note. It is also a boundary the ledger reads — see `readReviewLedger`
  * in `facilitator/executors/build.ts` — so verdicts before it stop counting
  * against the reopened story without a single byte of history being rewritten.
+ *
+ * `story.base_fastforwarded` was added 2026-08-31, and is the only event in this
+ * set that records tldrx MOVING A REF. Design §F.2: a story branch that sits
+ * behind its epic tip is fast-forwarded before a developer is dispatched onto it,
+ * and a moved branch that left no line in the log would be the framework
+ * rewriting the operator's git state silently. Its payload carries the story, the
+ * repo, both branch names and both shas (`from`, `to`) plus how many commits the
+ * move carried. It is emitted ONLY when the ref actually moved: a divergent or
+ * dirty branch is warned about on stdout and changed by nothing, so it has no
+ * event, because nothing happened.
  */
 export const EVENT_TYPES = [
   "run.created", "run.closed", "run.unlocked", "run.cancelled", "run.attended",
@@ -28,7 +38,7 @@ export const EVENT_TYPES = [
   "agent.spawned", "agent.result",
   "question.asked", "question.answered",
   "gate.requested", "gate.approved", "gate.rejected", "gate.revoked",
-  "story.reopened",
+  "story.reopened", "story.base_fastforwarded",
   "check.passed", "check.failed",
   "budget.warned", "budget.blocked", "budget.raised",
   "fact.added", "fact.retired",

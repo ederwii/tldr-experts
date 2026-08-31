@@ -229,6 +229,28 @@ no reviewer is read as the errored spawn it was, and `tldrx next` says
 again`. A story blocked by a red DoD, a merge conflict or two `changes` verdicts is left
 exactly where it is.
 
+**`S3: fast-forwarded story/… to epic/… — 2 commit(s), abc1234 → def5678`.** Not a problem —
+a note that tldrx moved a ref. A story branch is kept across a reopen and across a requeued
+attempt, so it regularly sits at a tip the epic has moved past; before a developer is
+dispatched onto it, a branch that is a clean ancestor of the epic tip is fast-forwarded onto
+it. The live case it is for: a reopened story whose handlers needed a contract a LATER story
+had added, on a base that predated it — it would not have compiled. Only the openings that
+dispatch a developer move anything (the headless pipeline and `tldrx next --prepare`); the
+review and `--commit` openings measure nothing and move nothing.
+
+**`S3: story/… has DIVERGED from epic/… — 1 commit(s) the epic lacks, 3 the story lacks`.**
+Commits on both sides, so there is no fast-forward. **Nothing was changed, and the dispatch
+proceeds on the old base** — the line after it names that base and how far behind it is. This
+is a decision, not a default: tldrx never rebases a branch a developer has already committed
+to. Your two options are in the message — `git merge <epic>` inside the story's worktree, or
+preserve the divergent commits on a backup branch (`git branch backup/<story> <sha>`) and
+re-point the story branch at the epic tip by hand. The usual cause is a dead spawn that
+committed partial work on a base the epic has since passed.
+
+**`S3: story/… is 3 commit(s) behind epic/…, but its worktree has 2 uncommitted change(s)`.**
+Left alone, deliberately: a dirty tree is yours, not the framework's. Commit or stash in the
+named worktree and run `tldrx next --prepare` again, and the fast-forward happens then.
+
 **`auto gate not taken — stories=1 of 7 done — S2:blocked, …`.** A Build stage does not sign
 its own gate while any story is unfinished. Approve it yourself if half the epic is what you
 mean to ship (`tldrx approve --note "…"`), or fix the stories and run the stage again.
