@@ -494,9 +494,24 @@ const ENTRIES: readonly CommandHelp[] = [
       { name: "<Qid>", meaning: "The question id, e.g. Q3." },
       { name: "<text>", meaning: "The answer. Quote it if it has spaces." },
     ],
-    flags: [runFlag(), root()],
-    examples: ['tldrx answer Q3 "Redis sorted set, one key per tenant"'],
+    flags: [
+      {
+        name: "supersede",
+        arg: null,
+        meaning: "REVERSE a decision this question already recorded. Only valid on an ANSWERED question. The old fact keeps its text and gains superseded_by; a new fact carries this answer with the same area and repos; the block keeps its original [Answer]: line and gains a superseding one plus a footer. Everything that FEEDS a decision \u2014 no-re-ask, every {{facts}} block, the training miner, the implicit plan \u2014 then reads the new fact and not the old one. Without it, answering an answered question is refused, because an answer is recorded once.",
+      },
+      runFlag(),
+      root(),
+    ],
+    examples: [
+      'tldrx answer Q3 "Redis sorted set, one key per tenant"',
+      'tldrx answer Q3 "Postgres table after all \u2014 the contention risk was refuted" --supersede',
+    ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_NOT_FOUND],
+    notes: [
+      "A second reversal supersedes the SECOND answer, not the first: the chain is walked to its head, so `--supersede` can be used as many times as an owner changes their mind and facts.yml stays a single-link reciprocal chain.",
+      "Nothing is erased. `tldrx replay` renders the reversal as its own line (`fact.superseded`), `tldrx retro` still lists the old fact and labels it `(superseded by F<n>)`, and the words originally typed stay in questions.md.",
+    ],
   },
   {
     name: "interview",

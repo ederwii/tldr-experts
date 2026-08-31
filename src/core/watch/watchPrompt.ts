@@ -12,7 +12,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
-import { isRetired, type Fact } from "../facts/Fact.ts";
+import { isLive, type Fact } from "../facts/Fact.ts";
 import type { PromptInput } from "../facilitator/prompt.ts";
 import { MAX_STAGE_INPUTS } from "../run/workflowPreset.ts";
 import { renderDiffs, type RepoDiff } from "./epicDiff.ts";
@@ -66,17 +66,17 @@ export function featureInputs(options: FeatureInputsOptions): readonly PromptInp
 /**
  * `{{facts}}` for this stage, narrowed to the two areas that can carry a signal.
  * A fact scoped to no repo is workspace-wide and always applies (same rule as
- * `prompt.ts`); a retired one never does.
+ * `prompt.ts`); a retired or superseded one never does.
  */
 export function renderWatchFacts(facts: readonly Fact[], repos: readonly string[]): string {
   const areas = new Set<string>(WATCH_FACT_AREAS);
   const relevant = facts.filter(
-    (fact) => !isRetired(fact)
+    (fact) => isLive(fact)
       && areas.has(fact.area)
       && (fact.repos.length === 0 || fact.repos.some((r) => repos.includes(r))),
   );
   if (relevant.length === 0) {
-    return `_No non-retired fact is tagged ${WATCH_FACT_AREAS.join(" or ")} for these repos. `
+    return `_No live fact is tagged ${WATCH_FACT_AREAS.join(" or ")} for these repos. `
       + "Cite `absent:.tldrx/memory/facts.yml` rather than inventing where a signal is read._";
   }
   return relevant.map((fact) => `- [${fact.id}] ${fact.fact} (${fact.area} · ${fact.confidence})`).join("\n");

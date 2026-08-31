@@ -694,7 +694,7 @@ export function renderMined(files: readonly MinedFile[]): string {
 
 export function renderFactRows(facts: readonly Fact[]): string {
   if (facts.length === 0) {
-    return "_No non-retired fact matches this area or these repos. Cite `absent:.tldrx/memory/facts.yml`\n"
+    return "_No live fact matches this area or these repos. Cite `absent:.tldrx/memory/facts.yml`\n"
       + "rather than inventing what the team decided._";
   }
   return facts.map((fact) => `- [${fact.id}] ${fact.fact} (${fact.area} · ${fact.confidence})`).join("\n");

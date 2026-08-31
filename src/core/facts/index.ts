@@ -5,6 +5,6 @@ export { findDuplicate, jaccard, tokenize, DEFAULT_JACCARD_THRESHOLD, MIN_TOKEN_
 export type { DuplicateHit } from "./findDuplicate.ts";
 export {
   FACT_KINDS, FACT_CONFIDENCES, MAX_FACTS, MAX_FACT_CHARS,
-  isRetired, factNumber, formatFactId,
+  isRetired, isSuperseded, isLive, factNumber, formatFactId,
 } from "./Fact.ts";
 export type { Fact, FactsFile, FactKind, FactConfidence, FactSource, FactRetirement, NewFact } from "./Fact.ts";

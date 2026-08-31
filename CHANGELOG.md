@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### Added
+
+- **`tldrx answer <Qn> "…" --supersede` — the verb for reversing a decision already on record.**
+  Found live 2026-08-31: an owner reversed an answered decision after the risk behind it was
+  refuted, and `tldrx answer` refused ("Q1 is not an open question") because an answer is
+  recorded once. `superseded_by` had been in the §2.5 schema since the first draft with **no
+  command that wrote it**, so the only route was a hand edit of `facts.yml` — and a hand edit
+  that left `superseded_by: null` left the reversed decision inside `FactsStore.active`, which
+  every stage reads as never-re-ask truth. The next run would have reinstated the call the owner
+  had just taken back.
+  - **The verb.** Valid only on an ANSWERED question (on an open one it exits `1` and says to
+    answer it normally; without the flag an answered one still exits `3`, now naming
+    `--supersede`). It appends a new fact carrying the whole new answer with the same `area` and
+    `repos` and ordinary provenance, sets the old fact's `superseded_by` and the new one's
+    `supersedes` — both halves, through `FactsStore.supersede`, under the workspace lock, so the
+    reciprocity rule cannot be broken — and never edits a byte of the old fact's text. Reversing
+    twice supersedes the SECOND fact: the chain is walked to its head, so it stays single-link.
+  - **The questions block is appended to, not rewritten.** The original `[Answer]:` line and its
+    footer stand; a superseding answer line and a `reanswered_by | reanswered_at | fact |
+    supersedes` footer go under them. `status:` stays `answered`, because it is.
+  - **Every reader that feeds a decision now skips a superseded fact.** This was half the work
+    and none of it was new code: `superseded_by` had a writer for the first time, and six readers
+    had been filtering on retirement alone. `isLive` (`core/facts/Fact.ts`) is now the one
+    predicate behind `FactsStore.active` (no-re-ask, `tldrx run new --from` de-duplication),
+    `findDuplicate`, `renderFacts` (the `{{facts}}` section of **every** prepared prompt),
+    `renderWatchFacts`, `runFacts` (the implicit plan's "this run's answers") and `relevantFacts`
+    (the training miner). One test had pinned the old behaviour in words — "a
+    superseded-but-not-retired row stays visible" — and that was the bug, not the rule.
+  - **History readers still show it, labelled.** `tldrx replay` renders the new `fact.superseded`
+    event as its own line — the one moment the workspace's durable memory changes its mind was
+    the one moment replay could not narrate — and `tldrx retro` lists the old fact with
+    `(superseded by F<n>)` beside it.
+
 ### Fixed
 
 - **A `--note` with a blank line in it no longer destroys `run.yml`.** Measured 2026-08-31 on the

@@ -340,6 +340,36 @@ describe("no-re-ask (PreToolUse Write|Edit)", () => {
     expect(run.stdout).toBe("");
   });
 
+  /**
+   * The half of `--supersede` that matters most. A fact whose `superseded_by` is
+   * set is what the workspace USED to believe, and never-re-ask is about what it
+   * believes now — so re-asking a question a superseded fact answers is legal,
+   * and must be, or an owner who reverses a decision can never have the question
+   * put to them again.
+   */
+  test("a superseded fact stops blocking", async () => {
+    const path = join(workspace().root, ".tldrx", "memory", "facts.yml");
+    const store = FactsStore.load(path);
+    store.supersede("F019", {
+      fact: "Backend deploys are fully automatic on merge — deploy.yml now triggers on push.",
+      area: "deploy",
+      repos: ["api", "lab"],
+      kind: "answer",
+      confidence: "stated",
+      source: { who: "alan", when: "2026-08-31T09:00:00Z", run: "260831-envs", q: "Q1" },
+    });
+    store.save();
+    const run = await hook("no-reask", {
+      hook_event_name: "PreToolUse", tool_name: "Write",
+      tool_input: { file_path: questionsPath(), content: questionsWith("Q7", RE_ASKED_TITLE, "deploy") },
+    });
+    expect(run.code).toBe(0);
+    // stderr too: the hook fails OPEN, so "allowed" alone would also be what a
+    // crash looks like, and this test would pass for the wrong reason.
+    expect(run.stderr).toBe("");
+    expect(run.stdout).toBe("");
+  });
+
   test("fails open when facts.yml cannot be read", async () => {
     writeFileSync(join(workspace().root, ".tldrx", "memory", "facts.yml"), "version: 1\nfacts: not-a-list\n", "utf8");
     const run = await hook("no-reask", {

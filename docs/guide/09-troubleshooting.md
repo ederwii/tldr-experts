@@ -98,7 +98,7 @@ a prose-only section is refused.
 *tried* to cite and the token could not be parsed. A token wrapped in backticks or brackets,
 or followed by a full stop, is fine; words after the `]` are not.
 
-**A citation resolves to nothing.** `F<n>` must be a live (non-retired) row in `facts.yml`,
+**A citation resolves to nothing.** `F<n>` must be a live (neither retired nor superseded) row in `facts.yml`,
 `Q<n>` a question this run actually asked, `graph:<node>` a node in the graph or a token named
 in `.tldrx/map/`, and `absent:` may only source a **negative** claim. `tldrx map --check`
 re-resolves every citation in the map and the init handoff.

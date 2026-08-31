@@ -4,8 +4,11 @@
  * PreToolUse (Write|Edit) on `tldrx-work/**\/questions.md`.
  *
  * Concept §1.2: "Re-asking a known fact is a *test failure* of the framework."
- * Spec §4: tokenise each NEW question heading + `area`, compare against non-retired
- * `facts.yml` rows, Jaccard ≥ 0.6 on ≥4-char tokens ⇒ deny and name the fact.
+ * Spec §4: tokenise each NEW question heading + `area`, compare against LIVE
+ * `facts.yml` rows — neither retired nor SUPERSEDED — Jaccard ≥ 0.6 on ≥4-char
+ * tokens ⇒ deny and name the fact. A fact an owner has reversed with `tldrx
+ * answer --supersede` is what the workspace used to believe, so re-asking the
+ * question it answers is legal, and must be.
  *
  * Only questions that are new to the file are checked — re-writing a question the
  * file already carries is an edit, not an ask.

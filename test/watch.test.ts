@@ -23,9 +23,10 @@ import { validateHandoff } from "../src/core/text/handoff.ts";
 import { clearSrcCaches } from "../src/core/text/srcToken.ts";
 import { loadWorkspace, toSrcContext } from "../src/hooks/lib/workspace.ts";
 import {
-  checkCard, collectFeatures, loadCards, parseWatcherCard, queryBlock, renderWatchList,
+  checkCard, collectFeatures, loadCards, parseWatcherCard, queryBlock, renderWatchFacts, renderWatchList,
   setWatcherStatus, watcherRelPath, WATCH_PHASE,
 } from "../src/core/watch/index.ts";
+import type { Fact } from "../src/core/facts/Fact.ts";
 import { makeFacilitatorWorkspace, type FacilitatorWorkspace } from "./fixtures/facilitator/workspace.ts";
 
 const ORIGINAL_PATH = process.env.PATH ?? "";
@@ -551,5 +552,35 @@ describe("the executor registry", () => {
     expect(executorFor(WATCH_PHASE)).toBe(watchExecutor);
     expect(executorFor("01-what")).toBeNull();
     expect(EXECUTORS.has(WATCH_PHASE)).toBe(true);
+  });
+});
+
+/**
+ * The Watch stage inlines `{{facts}}` as a declared input, so the same rule holds
+ * here as in every other prompt: a superseded fact is what the workspace used to
+ * believe, and a watcher told where a signal "is read" by a reversed decision
+ * will cite a query nobody runs any more.
+ */
+describe("renderWatchFacts skips superseded facts", () => {
+  function deployFact(id: string, text: string, supersededBy: string | null): Fact {
+    return {
+      id, fact: text, area: "deploy", repos: ["api"], kind: "answer", confidence: "stated",
+      source: { who: "alan", when: "2026-08-31T09:00:00Z", run: "260831-x", q: "Q1" },
+      supersedes: null, superseded_by: supersededBy, retired: null,
+    };
+  }
+
+  test("the superseding fact is rendered and the one it replaced is not", () => {
+    const rendered = renderWatchFacts([
+      deployFact("F001", "Deploys are manual via workflow_dispatch.", "F002"),
+      deployFact("F002", "Deploys run automatically on merge.", null),
+    ], ["api"]);
+    expect(rendered).toContain("[F002] Deploys run automatically on merge.");
+    expect(rendered).not.toContain("F001");
+  });
+
+  test("when every matching fact is superseded, the section says there is none", () => {
+    const rendered = renderWatchFacts([deployFact("F001", "Deploys are manual.", "F002")], ["api"]);
+    expect(rendered).toContain("No live fact is tagged");
   });
 });

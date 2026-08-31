@@ -49,7 +49,7 @@ export function buildRetro(loaded: LoadedRun): RetroReport {
     "",
     ...(facts.length === 0
       ? ["No facts were recorded during this run."]
-      : facts.map((fact) => `- ${fact.id} — ${fact.text}${fact.retired ? " (retired)" : ""} ${fact.src}`)),
+      : facts.map((fact) => `- ${fact.id} — ${fact.text}${factState(fact)} ${fact.src}`)),
     "",
     `## ${RETRO_SECTIONS[1]}`,
     "",
@@ -78,4 +78,16 @@ function carryBuildSection(dir: string): string {
   } catch {
     return "";
   }
+}
+
+/**
+ * ` (retired)` / ` (superseded by F019)` / nothing.
+ *
+ * The retro is the one place a fact that is no longer current still belongs on
+ * the page — it is what this run decided at the time. It is labelled so a reader
+ * never has to guess which of two rows the workspace still believes.
+ */
+function factState(fact: RunFact): string {
+  if (fact.supersededBy !== null) return ` (superseded by ${fact.supersededBy})`;
+  return fact.retired ? " (retired)" : "";
 }

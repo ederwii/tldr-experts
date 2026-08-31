@@ -956,6 +956,23 @@ describe("full training mines past runs as well", () => {
     expect(kept.map((fact) => fact.id)).toEqual(["F001"]);
   });
 
+  /**
+   * Training computes a defensible LEVEL out of what it mines, and a superseded
+   * answer would both inflate the count and put a reversed decision into the
+   * knowledge file as though it were current.
+   */
+  test("a superseded fact is not mined", () => {
+    const ws = workspace();
+    const live = FactsStore.loadOrEmpty(factsPath(ws.root)).facts;
+    expect(live.map((fact) => fact.id)).toContain("F001");
+    const reversed = live.map((fact) => (fact.id === "F001" ? { ...fact, superseded_by: "F900" } : fact));
+    const kept = relevantFacts({
+      root: ws.root, repos: ["api"], areaId: AREA,
+      keywords: keywordsFor(AREA, "OAuth authorisation code exchange"), facts: reversed,
+    });
+    expect(kept.map((fact) => fact.id)).not.toContain("F001");
+  });
+
   test("both files are written, and run/answer evidence lands beside the code rows", async () => {
     const ws = workspace();
     fakeClaude(ws, [

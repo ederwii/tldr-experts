@@ -734,6 +734,20 @@ describe("which answers count, and which document each settles", () => {
     expect(runFacts(rows, FIXTURE_RUN).map((f) => f.id)).toEqual(["F002"]);
   });
 
+  /**
+   * A run that reversed one of its own answers produced BOTH rows with its own
+   * run id on them. Planning off both would build the story to a decision the
+   * owner has already taken back, so the implicit plan reads the head of the
+   * chain and nothing behind it.
+   */
+  test("a superseded answer is not one of this run's answers any more", () => {
+    const rows = [
+      { ...fact("F001", "state lives in Postgres", FIXTURE_RUN), superseded_by: "F002" },
+      { ...fact("F002", "state lives in Redis", FIXTURE_RUN), supersedes: "F001" },
+    ];
+    expect(runFacts(rows, FIXTURE_RUN).map((f) => f.id)).toEqual(["F002"]);
+  });
+
   test("a file's decision keys are its ADR id — never a leading document number", () => {
     expect(decisionKeysOf("docs/adr/ADR-D008-CUSTOMER-AUTHENTICATION.md")).toEqual(["ADR-D008", "D008"]);
     expect(decisionKeysOf("docs/decisions/decision-7.md")).toEqual(["decision 7"]);

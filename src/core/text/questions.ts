@@ -36,6 +36,28 @@ export interface AnswerFooter {
   readonly fact: string;
 }
 
+/**
+ * The footer `tldrx answer <Qn> "…" --supersede` appends when an owner reverses a
+ * decision this block already recorded.
+ *
+ * Same grammar as `AnswerFooter` — an HTML comment of `key: value` pairs, pipe
+ * separated — and deliberately NOT the same keys, so the §2.7 parser reads it as
+ * neither the metadata line (no `id:`) nor the answer footer (no `answered_by:`)
+ * and the block's original footer keeps pointing at the fact it originally wrote.
+ * History is appended to, never rewritten: the `[Answer]:` slot still holds the
+ * words the owner typed the first time.
+ */
+export interface SupersessionFooter {
+  /** Who reversed it. Mirrors `answered_by`. */
+  readonly reanswered_by: string;
+  /** When. Mirrors `answered_at`. */
+  readonly reanswered_at: string;
+  /** The NEW fact's id. Mirrors `fact`. */
+  readonly fact: string;
+  /** The fact it replaced — the same word `facts.yml` uses for this link. */
+  readonly supersedes: string;
+}
+
 export interface QuestionBlock {
   readonly id: string;
   readonly title: string;
@@ -95,6 +117,7 @@ const OPTION_RE = /^-\s+([A-E])\)\s*(.*)$/;
 const ANSWER_RE = /^\[Answer\]:[ \t]*(\S.*)$/;
 const ANSWER_SLOT_RE = /^\[Answer\]:/;
 const FOOTER_KEYS = ["answered_by", "answered_at", "fact"] as const;
+const SUPERSESSION_KEYS = ["reanswered_by", "reanswered_at", "fact", "supersedes"] as const;
 
 export function parseQuestions(text: string): QuestionsDoc {
   const trailingNewline = text.endsWith("\n");
@@ -315,6 +338,38 @@ export function recordAnswer(block: QuestionBlock, footer: AnswerFooter): Questi
   lines.splice(insertAt, 0, footerLine);
   const metadata = block.metadata === null ? null : { ...block.metadata, status: "answered" };
   return { ...block, lines, metadata, footer };
+}
+
+/**
+ * Append the new answer and its supersession footer to an ALREADY answered block,
+ * changing nothing that is already there. Returns a new block; the input is
+ * untouched.
+ *
+ * Two lines go on: the superseding answer, labelled with the fact it replaces so
+ * a reader of the file alone can tell which of the two is live, and the footer.
+ * The `[Answer]:` slot is left exactly as it was — `status:` stays `answered`,
+ * because it is, and the original words stay on the page, because an owner
+ * reversing a call is a second decision and not an erasure of the first.
+ *
+ * The pair is inserted after the LAST comment line the block already carries, so
+ * a second reversal lands under the first and the block reads in time order.
+ */
+export function recordSupersession(
+  block: QuestionBlock,
+  answer: string,
+  footer: SupersessionFooter,
+): QuestionBlock {
+  const lines = [...block.lines];
+  let insertAt = block.answerIndex >= 0 ? block.answerIndex : lines.length - 1;
+  for (let i = lines.length - 1; i > insertAt; i--) {
+    if (METADATA_RE.test(lines[i] ?? "")) {
+      insertAt = i;
+      break;
+    }
+  }
+  const footerLine = `<!-- ${SUPERSESSION_KEYS.map((k) => `${k}: ${footer[k]}`).join(" | ")} -->`;
+  lines.splice(insertAt + 1, 0, `[Answer superseding ${footer.supersedes}]: ${answer}`, footerLine);
+  return { ...block, lines };
 }
 
 /** Replace a block in a document by id, keeping every other byte. */

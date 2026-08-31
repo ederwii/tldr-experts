@@ -14,10 +14,10 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { EventLog } from "../events/EventLog.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
-import { MAX_FACT_CHARS } from "../facts/Fact.ts";
+import { isRetired, MAX_FACT_CHARS } from "../facts/Fact.ts";
 import {
-  detectAnswered, parseQuestions, recordAnswer, replaceBlock, serializeQuestions,
-  type QuestionsDoc,
+  detectAnswered, parseQuestions, recordAnswer, recordSupersession, replaceBlock,
+  serializeQuestions, type QuestionsDoc,
 } from "../text/questions.ts";
 import { factsPath } from "../../hooks/lib/workspace.ts";
 
@@ -36,6 +36,17 @@ export interface CaptureContext {
 export interface CapturedAnswer {
   readonly q: string;
   readonly fact: string;
+  readonly answer: string;
+  readonly area: string;
+}
+
+/** What one `--supersede` did, for the caller to print. */
+export interface SupersededAnswer {
+  readonly q: string;
+  /** The fact the new answer wrote. */
+  readonly fact: string;
+  /** The fact it replaced — the head of the chain the block's footer names. */
+  readonly supersedes: string;
   readonly answer: string;
   readonly area: string;
 }
@@ -116,6 +127,96 @@ export function captureAnswers(questionsPath: string, ctx: CaptureContext): read
   });
   writeFileSync(questionsPath, serializeQuestions(doc), "utf8");
   return captured;
+}
+
+/**
+ * Reverse a decision this question already recorded (spec §2.5's supersede link).
+ *
+ * The gap this closes, measured 2026-08-31 on a live run: an owner reversed an
+ * answered decision after the risk behind it was refuted, `tldrx answer` refused
+ * ("Q1 is not an open question"), and `superseded_by` — in the schema since the
+ * first draft — had no command that wrote it. The only way through was a hand
+ * edit, and a hand edit that left `superseded_by: null` would have left the stale
+ * decision in `FactsStore.active`, where facts are never-re-ask truth: every
+ * later stage would have reinstated the call the owner had just reversed.
+ *
+ * Nothing is erased. The old fact keeps its text and gains `superseded_by`; the
+ * `[Answer]:` slot keeps the words typed the first time and the block gains a
+ * footer; the log gains `fact.added` for the new row and `fact.superseded` for
+ * the reversal.
+ *
+ * The block's footer names the fact the FIRST answer wrote, so the chain is
+ * walked to its head before superseding — a second reversal supersedes the
+ * second answer, not the first.
+ */
+export function supersedeAnswer(
+  questionsPath: string,
+  qid: string,
+  text: string,
+  ctx: CaptureContext,
+): SupersededAnswer {
+  if (!existsSync(questionsPath)) throw new AnswerError(`no questions file at ${questionsPath}`);
+  const answer = text.trim();
+  if (answer === "") throw new AnswerError("a superseding answer cannot be empty");
+
+  const doc = parseQuestions(readFileSync(questionsPath, "utf8"));
+  const block = doc.blocks.find((b) => b.id === qid);
+  if (block === undefined) throw new AnswerError(`${qid} is not in ${questionsPath}`);
+  if (block.metadata?.status !== "answered") {
+    throw new AnswerError(
+      `${qid} is \`${block.metadata?.status ?? "unknown"}\`, not answered — nothing to supersede. `
+      + "Answer it normally: `tldrx answer " + qid + ' "…"`',
+    );
+  }
+  const recorded = block.footer?.fact ?? "";
+  if (recorded === "") {
+    throw new AnswerError(
+      `${qid} is answered but its footer names no fact, so there is nothing to supersede. `
+      + "Record the reversal in `.tldrx/memory/facts.yml` by hand, or re-run the stage.",
+    );
+  }
+
+  const area = block.metadata.area === "" ? "unscoped" : block.metadata.area;
+  const truncated = factWasTruncated(block.title, answer);
+
+  const result = FactsStore.update(factsPath(ctx.root), (store): SupersededAnswer => {
+    const head = store.headOf(recorded);
+    if (head === undefined) {
+      throw new AnswerError(`${qid} names fact ${recorded}, which is not in .tldrx/memory/facts.yml`);
+    }
+    if (isRetired(head)) {
+      throw new AnswerError(`${head.id} is retired; a retired fact is not superseded`);
+    }
+    const fact = store.supersede(head.id, {
+      fact: factTextFor(block.title, answer),
+      ...(truncated ? { truncated: true as const } : {}),
+      area,
+      repos: [...head.repos],
+      kind: "answer",
+      confidence: "stated",
+      source: { who: ctx.actor, when: ctx.at, run: ctx.run, q: block.id },
+    });
+    return { q: block.id, fact: fact.id, supersedes: head.id, answer, area };
+  });
+
+  const updated = replaceBlock(doc, recordSupersession(block, answer, {
+    reanswered_by: ctx.actor,
+    reanswered_at: ctx.at,
+    fact: result.fact,
+    supersedes: result.supersedes,
+  }));
+  writeFileSync(questionsPath, serializeQuestions(updated), "utf8");
+
+  const log = EventLog.forRun(ctx.runDir);
+  log.tryAppend({
+    ts: ctx.at, run: ctx.run, stage: null, type: "fact.added", actor: ctx.actor, cost_usd: 0,
+    payload: { fact: result.fact, area: result.area, kind: "answer", q: block.id },
+  });
+  log.tryAppend({
+    ts: ctx.at, run: ctx.run, stage: null, type: "fact.superseded", actor: ctx.actor, cost_usd: 0,
+    payload: { q: block.id, fact: result.fact, supersedes: result.supersedes, answer },
+  });
+  return result;
 }
 
 /**

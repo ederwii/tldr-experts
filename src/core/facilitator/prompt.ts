@@ -39,7 +39,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
 import { DISPATCH_NOTES_HEADING } from "./dispatchNotes.ts";
-import { isRetired, type Fact } from "../facts/Fact.ts";
+import { isLive, type Fact } from "../facts/Fact.ts";
 import { stackExpertNames } from "../experts/stackExperts.ts";
 
 export { stackExpertNames };
@@ -319,12 +319,14 @@ export function fenceFor(content: string): string {
 
 /**
  * `{{facts}}` — spec §5 renders `grep(facts.yml, sy.area/r.repos)`. A stage has no
- * `area` field in either shape, so the filter is the repo half only: a non-retired
- * fact scoped to a repo in this run, or scoped to none at all (workspace-wide).
+ * `area` field in either shape, so the filter is the repo half only: a LIVE fact
+ * (neither retired nor superseded) scoped to a repo in this run, or scoped to none
+ * at all (workspace-wide). A superseded fact is what the workspace used to
+ * believe; putting it in a prompt is handing a sub-agent a reversed decision.
  */
 export function renderFacts(facts: readonly Fact[], repos: readonly string[]): string {
   const relevant = facts.filter(
-    (fact) => !isRetired(fact) && (fact.repos.length === 0 || fact.repos.some((r) => repos.includes(r))),
+    (fact) => isLive(fact) && (fact.repos.length === 0 || fact.repos.some((r) => repos.includes(r))),
   );
   if (relevant.length === 0) return "_No recorded facts match this run's repos._";
   return relevant

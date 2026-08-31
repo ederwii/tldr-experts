@@ -40,7 +40,7 @@ import { parseSrcToken } from "../text/srcToken.ts";
 import { MAX_ITEM_CHARS, MAX_LIST_ITEMS, type PlanStatus } from "../schemas/planCommon.ts";
 import type { Story } from "../schemas/story.ts";
 import type { Epic } from "../schemas/epic.ts";
-import { isRetired, MAX_FACT_CHARS, type Fact } from "../facts/Fact.ts";
+import { isLive, MAX_FACT_CHARS, type Fact } from "../facts/Fact.ts";
 import { repoPath, type WorkspaceContext } from "../../hooks/lib/workspace.ts";
 import { PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../paths.ts";
 import { MAX_TOUCHED_FILES } from "./prompts.ts";
@@ -565,11 +565,12 @@ export function decisionBullets(handoffText: string): readonly string[] {
  * The facts THIS run produced: answers a human gave at its gates.
  *
  * Keyed on `source.run`, which is the run id every `tldrx answer` stamps. A
- * retired fact is not an answer any more and is left out — the same rule the
- * no-re-ask hook applies.
+ * retired or superseded fact is not the answer any more and is left out — the
+ * same rule the no-re-ask hook applies. A run that reversed one of its own
+ * answers must plan off the reversal, not off both halves of it.
  */
 export function runFacts(facts: readonly Fact[], runId: string): readonly Fact[] {
-  return facts.filter((fact) => !isRetired(fact) && fact.source.run === runId);
+  return facts.filter((fact) => isLive(fact) && fact.source.run === runId);
 }
 
 /**
