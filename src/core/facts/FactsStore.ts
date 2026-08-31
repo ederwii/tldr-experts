@@ -9,7 +9,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { parseYaml } from "../yaml.ts";
 import { withWorkspaceLock, workspaceRootOfFactsPath } from "../lock/workspaceLock.ts";
 import {
-  formatFactId, factNumber, isRetired, MAX_FACT_CHARS,
+  formatFactId, factNumber, isLive, isRetired, MAX_FACT_CHARS,
   type Fact, type FactRetirement, type FactsFile, type NewFact,
 } from "./Fact.ts";
 import { asFactsFile, validateFactsFile } from "./validateFactsFile.ts";
@@ -58,9 +58,16 @@ export class FactsStore {
     return this.rows;
   }
 
-  /** Everything the no-re-ask hook is allowed to match against. */
+  /**
+   * Everything the no-re-ask hook is allowed to match against.
+   *
+   * Live means neither retired NOR superseded. It filtered on retirement alone
+   * until 2026-08-31, which was safe only while nothing wrote `superseded_by` —
+   * `tldrx answer --supersede` does, so a reversed decision that stayed in
+   * `active` would be re-served as never-re-ask truth.
+   */
   get active(): readonly Fact[] {
-    return this.rows.filter((f) => !isRetired(f));
+    return this.rows.filter(isLive);
   }
 
   get(id: string): Fact | undefined {
@@ -97,6 +104,26 @@ export class FactsStore {
    * Append `input` as the replacement for `oldId`, writing both halves of the link.
    * Spec §2.5: the chain is single-link and reciprocal.
    */
+  /**
+   * The current end of `id`'s supersession chain — `id` itself when nothing has
+   * replaced it, and `undefined` when `id` is not in the file.
+   *
+   * A second reversal of the same question names the fact the FIRST answer wrote
+   * (that is the id the question's footer carries), and superseding an already
+   * superseded fact is refused. Walking the chain makes reversal repeatable
+   * without any caller having to remember the intermediate ids. `validateFactsFile`
+   * enforces reciprocity, so the chain cannot fork; the step cap only guards
+   * against a hand-edited file that made one loop.
+   */
+  headOf(id: string): Fact | undefined {
+    let fact = this.get(id);
+    for (let step = 0; fact !== undefined && fact.superseded_by !== null; step++) {
+      if (step >= this.rows.length) return undefined;
+      fact = this.get(fact.superseded_by);
+    }
+    return fact;
+  }
+
   supersede(oldId: string, input: NewFact): Fact {
     const index = this.rows.findIndex((f) => f.id === oldId);
     if (index === -1) throw new Error(`cannot supersede ${oldId}: no such fact`);

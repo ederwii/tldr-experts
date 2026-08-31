@@ -18,6 +18,15 @@ export interface RunFact {
   /** `[src: F021]` when it is in facts.yml, else the events.jsonl line. */
   readonly src: string;
   readonly retired: boolean;
+  /**
+   * The fact that replaced this one, or null.
+   *
+   * A retro is HISTORY, so a superseded fact is shown rather than filtered — but
+   * shown labelled. A run that reversed one of its own answers produced both
+   * rows, and a retro that listed them side by side with nothing to tell them
+   * apart would read as the run having decided two contradictory things.
+   */
+  readonly supersededBy: string | null;
 }
 
 export function factsPath(root: string): string {
@@ -31,6 +40,7 @@ export function factsFromRun(loaded: LoadedRun): readonly RunFact[] {
     text: fact.fact,
     src: `[src: ${fact.id}]`,
     retired: isRetired(fact),
+    supersededBy: fact.superseded_by,
   }));
   const seen = new Set(found.map((fact) => fact.id));
 
@@ -44,6 +54,7 @@ export function factsFromRun(loaded: LoadedRun): readonly RunFact[] {
       text: str(event.payload.text) || `recorded by ${event.actor}; not present in facts.yml`,
       src: `[src: tldrx-work/${loaded.id}/events.jsonl:${line}]`,
       retired: false,
+      supersededBy: null,
     });
   }
   return found;

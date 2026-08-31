@@ -489,8 +489,14 @@ facts:
 | `kind` / `confidence` | `answer\|observed\|derived` / `measured\|inferred\|stated` | y | Human answer, check output or stage conclusion; evidence class |
 | `source.who` / `.when` | str / RFC3339 | y | Human id or expert slug; capture time |
 | `source.run` / `.q` | run id\|`init` / `^Q\d+$`\|null | y | Where learned; originating question |
-| `supersedes` / `superseded_by` | fact id\|null | y | Single-link chain, reciprocal |
+| `supersedes` / `superseded_by` | fact id\|null | y | Single-link chain, reciprocal. Written by `tldrx answer <Qn> "…" --supersede` (§3), which walks to the head of the chain, so repeated reversal stays single-link |
 | `retired` | {at, by, reason}\|null | y | Ignored by no-re-ask, kept for replay |
+
+**Live means neither retired nor superseded.** `isLive` (`src/core/facts/Fact.ts`) is the predicate EVERY reader that
+feeds a decision filters on: the no-re-ask hook, `findDuplicate`, the `{{facts}}` section of every prepared prompt,
+the Watch stage's facts input, the implicit plan's "this run's answers", and the training miner. History readers —
+`tldrx replay`, `tldrx retro` — deliberately do not: a superseded fact is SHOWN there, labelled `(superseded by F<n>)`.
+Until 2026-08-31 every reader filtered on retirement alone, which was safe only while nothing wrote `superseded_by`.
 
 **Validation.** Ids unique and ascending; supersede links reciprocal and resolvable within this file; no fact both
 superseded and retired; ≤5000 facts (beyond that `tldrx` shards by `area`). `truncated` is optional and additive: a row
@@ -868,7 +874,7 @@ Append-only audit log: with `run.yml` the dashboard's only data source, the cost
 **Type enum:** `run.created` `run.closed` `run.unlocked` `run.cancelled` `run.attended` `phase.started` `phase.done` `stage.started` `stage.done` `stage.failed`
 `stage.skipped` `task.started` `task.done` `agent.spawned` `agent.result` `question.asked` `question.answered`
 `gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `story.reopened` `story.base_fastforwarded` `check.passed` `check.failed` `budget.warned`
-`budget.blocked` `budget.raised` `fact.added` `fact.retired` `map.refreshed` `ticket.synced` `error`. Closed set: an
+`budget.blocked` `budget.raised` `fact.added` `fact.retired` `fact.superseded` `map.refreshed` `ticket.synced` `error`. Closed set: an
 unknown type is a validation error.
 
 **`gate.revoked` and `budget.raised` were added 2026-08-29.** Both name a moment the log could not previously describe.
@@ -1371,7 +1377,7 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx cost [<run>] [--run <id>] [--all] [--json]` | every run's `events.jsonl` (+ `run.yml` for the title) | nothing (stdout) | 0,1,3 |
 | `tldrx run estimate [<run>] [--json]` | everything `next --prepare` reads, plus every run's `events.jsonl` for cache-write / cache-read / output history | nothing (stdout) | 0,1,3 |
 | `tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <l>] [--parallel <n>] [--gate-agent] [--yolo]` | everything `next` reads, once per stage | everything `next` writes. Refused with **exit 1** on a run marked `attended_by: host`, before the event log is opened so nothing is written: this loop's whole job is calling `next` headless, and on such a run that is a refusal. `--gate-agent` is RENDERING ONLY (§5, "Decision cards"): when the loop stops for a person at exit 4 it prints a decision card in place of the ordinary stop block, and it never upgrades a stage's frozen `gates_policy` | 0,1,2,3,4,5 |
-| `tldrx answer <Qid> <text> [--run <id>]` | `questions.md`, `facts.yml` | `questions.md`, `facts.yml`, `events.jsonl` | 0,1,2,3 |
+| `tldrx answer <Qid> <text> [--supersede] [--run <id>]` | `questions.md`, `facts.yml` | `questions.md`, `facts.yml`, `events.jsonl`. `--supersede` is the only writer of `superseded_by`: valid only on an **answered** question, it appends a fact carrying the new answer, sets the old fact's `superseded_by`, appends a superseding `[Answer …]:` line plus a footer to the block, and appends `fact.added` + `fact.superseded`. Without it an answered question is refused (3); with it an **open** one is refused (1) | 0,1,2,3 |
 | `tldrx interview [--run <id>\|--init] [--yes-to-defaults]` | the cursor phase's `questions.md` (or `.tldrx/init-questions.md`), `run.yml`, `.tldrx/process.yml`, `workspace.yml`, `git remote get-url origin` | the same three files `answer` writes, one per answer recorded; with `--init`, also `.tldrx/process.yml` (§2.12) when a process answer settles `methodology` or `ticket_tool.kind` | 0,1,2,3 |
 | `tldrx approve [--run <id>] [--note] [--as-agent] [--evidence <path>]` | `run.yml`, stage outputs, stage checks; with `--as-agent` also `.agent/<stage>/evidence.md` (§2.17) | `run.yml` gate, `events.jsonl`; with `--as-agent` also `<phase>/gate-evidence/<stage>.md` and `gate.evidence`. `--as-agent` is refused (1) unless the stage's policy is `agent`; `--evidence` without `--as-agent` is refused (1) — a note nobody signs with is not evidence for anything; a broken note is 2, a note whose verdict is not `sign` is 4, and nothing is signed in either case | 0,1,2,3,4 |
 | `tldrx gate template [--run <id>] [--force]` | `run.yml`, the cursor stage's declared outputs, `03-plan/stories/<id>.md` or `04-build/implicit-plan.yml` | `.agent/<stage>/evidence.md` (§2.17). Nothing else: no gate, no cursor, no event, no cost. An existing note is left alone (exit 2) unless `--force` | 0,1,2,3 |
@@ -1536,7 +1542,7 @@ spends nothing or there is no `.tldrx/` at all: those are correct negatives, not
 | Hook | Event | Trigger | Decision logic | Effect |
 |---|---|---|---|---|
 | `claim-sources` | PreToolUse (`Write\|Edit`) | `tool_input.file_path` matches `tldrx-work/**/*.md` | Compute the would-be content; parse the four handoff sections; each must hold at least one list item, and each list item must end with a valid `src` token (§2.8); `file` sources must resolve against the workspace root, the run dir, or a named repo | Denies (JSON) listing offending line numbers; a PostToolUse twin re-checks and feeds back only |
-| `no-re-ask` | PreToolUse (`Write\|Edit`) | `tool_input.file_path` matches `tldrx-work/**/questions.md` | Tokenise each new question heading + `area`; compare against non-retired `facts.yml` rows; Jaccard ≥ 0.6 on ≥4-char tokens ⇒ hit `[assumption]` | Denies the write, names the matching fact |
+| `no-re-ask` | PreToolUse (`Write\|Edit`) | `tool_input.file_path` matches `tldrx-work/**/questions.md` | Tokenise each new question heading + `area`; compare against LIVE `facts.yml` rows (neither retired nor superseded); Jaccard ≥ 0.6 on ≥4-char tokens ⇒ hit `[assumption]` | Denies the write, names the matching fact |
 | `answer-capture` | PostToolUse + FileChanged | `tldrx-work/**/questions.md` | Find blocks with `status: open` and a non-empty `[Answer]:` capture | Never blocks; writes footer + `facts.yml` + `question.answered`; echoes one line to stdout as context |
 | `DoD-gate` | PreToolUse (`Write\|Edit`) | would-be content of `tldrx-work/**/stories/*.md` sets `status: done` | Re-run every command in the story's fenced ```dod block, in its repo, with `stage.yml timeout_s`; all must exit 0. **Only a command byte-equal to a `workspace.yml` command runs, argv-split with no shell** | Denies if any command fails, is not on the allowlist, needs a shell, or the block is missing (this hook is not <50 ms by design) |
 | `budget-gate` | PreToolUse (`Bash`) | `tool_input.command` matching `^(claude -p\|tldrx next\|tldrx run auto\|tldrx expert train\|tldrx seed triage)` | `spent + estimate > phase ceiling` (or run ceiling) and `on_exceed: block`. Estimate: the **remaining work** for `next` (below); `--max-usd` else the same figure for `run auto`; $2.00 / $1.00 defaults for `train` / `triage` | Denies the spawn; appends `budget.blocked` |
@@ -2684,9 +2690,10 @@ Still open, each with the line that proves it is:
   `templates/process.yml` (`ticket_tool: none`, `project_key`, `ticket_sync` as top-level keys); readers tolerate both.
   Reconcile to §2.12 (touches `init` and `test/schemas.test.ts`).
 - Whether `.tldrx/` is one root install or also allowed per sub-repo simultaneously (spec assumes root-only in v0).
-- Conflict policy when a new answer contradicts a fact (auto-supersede vs. always ask). v0 always asks: `--from` turns a
-  contradiction into a question, and `FactsStore.supersede` (`src/core/facts/FactsStore.ts:97`) has no caller outside
-  `src/core/facts/` and its tests.
+- Conflict policy when a new answer contradicts a fact **detected by the tool** (auto-supersede vs. always ask). v0
+  always asks: `--from` turns a contradiction into a question. What is settled since 2026-08-31 is the case where a
+  PERSON reverses their own recorded decision — `tldrx answer <Qn> "…" --supersede` (§3) is the caller
+  `FactsStore.supersede` used to lack.
 - Retro-proposed stages: acceptance UX and whether they may alter shipped `workflows/*.yml`. `retro` writes the
   proposals and `--apply` appends them to `.tldrx/memory/practices.md` (`src/core/retro/applyPractices.ts`); nothing in
   `src/` reads that file back.

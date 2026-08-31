@@ -6,7 +6,7 @@
  * lower-cased alphanumeric runs of ≥4 characters, retired facts are ignored, and
  * when several facts hit, the highest id (the newest) wins.
  */
-import { isRetired, type Fact } from "./Fact.ts";
+import { isLive, type Fact } from "./Fact.ts";
 
 export const DEFAULT_JACCARD_THRESHOLD = 0.6;
 export const MIN_TOKEN_LENGTH = 4;
@@ -50,7 +50,7 @@ export function findDuplicate(
   let best: DuplicateHit | null = null;
   for (const fact of facts) {
     if (fact.area !== area) continue;
-    if (isRetired(fact)) continue;
+    if (!isLive(fact)) continue;
     const score = jaccard(asked, tokenize(fact.fact));
     if (score < threshold) continue;
     if (best === null || score > best.score || (score === best.score && fact.id > best.fact.id)) {

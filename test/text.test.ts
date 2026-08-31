@@ -12,6 +12,7 @@ import {
   classifySrc, parseSrcToken, emptySrcContext, resolveSrc, type SrcContext,
 } from "../src/core/text/srcToken.ts";
 import { FactsStore } from "../src/core/facts/FactsStore.ts";
+import { isLive, isRetired, isSuperseded, type Fact } from "../src/core/facts/Fact.ts";
 import { findDuplicate, jaccard, tokenize } from "../src/core/facts/findDuplicate.ts";
 import { emitFactsYaml } from "../src/core/facts/emitFactsYaml.ts";
 import { validateFactsFile } from "../src/core/facts/validateFactsFile.ts";
@@ -553,8 +554,13 @@ describe("facts.yml (spec §2.5)", () => {
     const store = FactsStore.load(join(FIXTURE_WORKSPACE, ".tldrx", "memory", "facts.yml"));
     store.retire("F019", { at: "2026-08-29T09:00:00Z", by: "alan", reason: "no longer true" });
     expect(store.facts).toHaveLength(2);
-    // Spec §2.5: no-re-ask ignores RETIRED rows. A superseded-but-not-retired row stays visible.
-    expect(store.active.map((f) => f.id)).toEqual(["F007"]);
+    // This line used to read `.toEqual(["F007"])` — "a superseded-but-not-retired
+    // row stays visible" — and that was the bug, not the rule. F007 is superseded
+    // BY F019: it is what the workspace used to believe. Retiring F019 does not
+    // promote F007 back to current, it leaves the workspace with nothing live to
+    // say about deploys, which is the honest answer. `active` is now
+    // neither-retired-nor-superseded (`isLive`).
+    expect(store.active.map((f) => f.id)).toEqual([]);
     expect(() => store.retire("F007", { at: "x", by: "y", reason: "z" })).toThrow(/superseded/);
   });
 
@@ -608,6 +614,54 @@ describe("findDuplicate (Jaccard ≥ 0.6 on ≥4-char tokens)", () => {
       "Does the backend deploy via workflow dispatch, and does lab auto deploy on merge?",
       "deploy", store.active,
     )).toBeNull();
+  });
+
+  /**
+   * The fixture's F007 is superseded BY F019 and says nearly the same thing. It
+   * was reachable through `findDuplicate` until 2026-08-31 — the filter was
+   * retirement only — which meant a reversed decision could still deny a
+   * question. Passing `store.facts` (everything, unfiltered) proves the skip is
+   * in `findDuplicate` itself and not only in `active`.
+   */
+  test("superseded facts are invisible, even when the caller passes every row", () => {
+    const store = FactsStore.load(join(FIXTURE_WORKSPACE, ".tldrx", "memory", "facts.yml"));
+    expect(store.get("F007")?.superseded_by).toBe("F019");
+    const hit = findDuplicate(
+      "Is backend CD manual, with deploy.yml on workflow dispatch only?",
+      "deploy", store.facts,
+    );
+    expect(hit?.fact.id).not.toBe("F007");
+  });
+});
+
+/**
+ * `isLive` is the predicate every consumer of facts filters on, and the reason it
+ * exists: `superseded_by` sat in the §2.5 schema with no writer, so every reader
+ * in `src/` filtered on retirement alone. The day `tldrx answer --supersede`
+ * started writing the link, a reader that only knew about retirement became a
+ * reader that serves reversed decisions.
+ */
+describe("isLive / isSuperseded (spec §2.5)", () => {
+  const store = FactsStore.load(join(FIXTURE_WORKSPACE, ".tldrx", "memory", "facts.yml"));
+
+  test("a superseded fact is not live, and is not in `active`", () => {
+    const old = store.get("F007");
+    expect(old).toBeDefined();
+    expect(isSuperseded(old as Fact)).toBe(true);
+    expect(isRetired(old as Fact)).toBe(false);
+    expect(isLive(old as Fact)).toBe(false);
+    expect(store.active.map((f) => f.id)).not.toContain("F007");
+    expect(store.active.map((f) => f.id)).toContain("F019");
+  });
+
+  test("`facts` still carries it — history is filtered at the reader, not deleted", () => {
+    expect(store.facts.map((f) => f.id)).toContain("F007");
+  });
+
+  test("headOf walks the chain to the row nothing has replaced", () => {
+    expect(store.headOf("F007")?.id).toBe("F019");
+    expect(store.headOf("F019")?.id).toBe("F019");
+    expect(store.headOf("F999")).toBeUndefined();
   });
 });
 

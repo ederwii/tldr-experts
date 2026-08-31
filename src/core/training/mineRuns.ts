@@ -21,7 +21,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { PROJECT_WORK_DIR } from "../paths.ts";
 import { parseYaml } from "../yaml.ts";
-import { isRetired, type Fact } from "../facts/Fact.ts";
+import { isLive, type Fact } from "../facts/Fact.ts";
 import { listRunDirs } from "../../hooks/lib/workspace.ts";
 
 /** `[assumption]` — the brief caps light mode at 40 files / 96 KB and says nothing
@@ -124,7 +124,7 @@ export function mineRuns(options: MineOptions): RunMine {
 export function relevantFacts(options: MineOptions): readonly Fact[] {
   const words = new Set<string>([options.areaId, ...options.keywords]);
   return options.facts.filter((fact) => {
-    if (isRetired(fact)) return false;
+    if (!isLive(fact)) return false;
     const area = fact.area.toLowerCase();
     if ([...words].some((word) => area.includes(word) || word.includes(area))) return true;
     return fact.repos.some((repo) => options.repos.includes(repo));

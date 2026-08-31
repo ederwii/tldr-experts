@@ -155,6 +155,13 @@ function bullet(item: NumberedEvent): string | null {
     case "budget.blocked": return `${prefix}budget BLOCKED: ${text(payload.message) || "the spawn was refused"}`;
     case "fact.added": return `${prefix}fact ${text(payload.fact) || text(payload.id) || "recorded"} added`;
     case "fact.retired": return `${prefix}fact ${text(payload.fact) || text(payload.id) || ""} retired`.trimEnd();
+    // The one moment the workspace's durable memory changes its mind. A narrative
+    // that showed two contradictory `fact.added` lines and nothing between them
+    // would read as the run having decided both.
+    case "fact.superseded":
+      return `${prefix}fact ${text(payload.supersedes) || "?"} SUPERSEDED by `
+        + `${text(payload.fact) || "?"} (${q || "a question"}), ${actor}: `
+        + `${text(payload.answer) || "no answer recorded"}`;
     case "map.refreshed": return `${prefix}map refreshed`;
     case "error": return `${prefix}error: ${text(payload.message) || "no message recorded"}`;
     default: return null;

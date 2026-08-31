@@ -69,6 +69,35 @@ export function isRetired(fact: Fact): boolean {
   return fact.retired !== null && fact.retired.at !== null;
 }
 
+/**
+ * A fact a later answer replaced. Its text is still true OF THE MOMENT it was
+ * recorded, which is why supersession never edits it — but it is no longer what
+ * the workspace believes, so nothing that FEEDS a decision may read it.
+ */
+export function isSuperseded(fact: Fact): boolean {
+  return fact.superseded_by !== null;
+}
+
+/**
+ * The one predicate every consumer of facts should filter on.
+ *
+ * Measured 2026-08-31: `superseded_by` was in the §2.5 schema from the first
+ * draft and no command wrote it, so every reader in `src/` filtered on
+ * `isRetired` alone. The day an owner reversed an answered decision, the reversal
+ * had to be hand-edited into facts.yml — and had the old row kept
+ * `superseded_by: null`, the no-re-ask hook, every `{{facts}}` block and the
+ * training miner would have gone on serving the reversed decision as
+ * never-re-ask truth. Retirement and supersession are two ways for a fact to stop
+ * being current; a reader that only knows one of them is a reader with a hole in
+ * it.
+ *
+ * History readers — `tldrx replay`, `tldrx retro` — deliberately do NOT use this:
+ * a superseded fact is shown, labelled with what replaced it.
+ */
+export function isLive(fact: Fact): boolean {
+  return !isRetired(fact) && !isSuperseded(fact);
+}
+
 export function factNumber(id: string): number {
   return Number.parseInt(id.slice(1), 10);
 }

@@ -268,10 +268,47 @@ runs and **never asks a model**. Exits: `0` `1` `2` `3` `5`.
 Answer one open question from the command line, recording it as a fact.
 
 ```
-tldrx answer <Qid> <text> [--run <id>] [--root <path>]
+tldrx answer <Qid> <text> [--supersede] [--run <id>] [--root <path>]
 ```
 
 Exits: `0` `1` `3`.
+
+### Reversing a decision — `--supersede`
+
+An answer is recorded once, so answering an already answered question is refused. `--supersede`
+is the way through when the reason for the original answer stops holding — a risk gets refuted,
+a benchmark comes back, an owner changes their mind:
+
+```
+tldrx answer Q3 "Redis sorted set — the load test refuted the contention risk" --supersede
+```
+
+It is only valid on an **answered** question (on an open one it exits `1` and tells you to
+answer it normally). What it does:
+
+- appends a **new fact** carrying the whole new answer, with the same `area` and `repos` and
+  ordinary provenance (`who`, `when`, `run`, `q`);
+- sets the old fact's `superseded_by` to the new id — and `supersedes` on the new one, so the
+  §2.5 chain stays reciprocal. **The old fact's text is never edited.**
+- appends to the question block: the superseding answer and its footer. The original
+  `[Answer]:` line stays exactly where it was;
+- appends `fact.added` and `fact.superseded` to `events.jsonl`.
+
+**Every reader that feeds a decision then skips the old fact** — the no-re-ask hook, the
+`{{facts}}` section of every prepared prompt, the Watch stage's facts input, the implicit plan
+and the training miner all filter on *live* (neither retired nor superseded). Re-asking a
+question a superseded fact answers is therefore legal, which is the point: an owner who
+reverses a call must be able to be asked again.
+
+**Nothing is erased.** `tldrx replay` renders the reversal as its own line, `tldrx retro` still
+lists the old fact and labels it `(superseded by F<n>)`, and the words originally typed stay in
+`questions.md`.
+
+Reversing twice supersedes the *second* fact, not the first: the chain is walked to its head.
+
+Superseding is not retiring. Retire a fact when it should never have been recorded or has gone
+stale with no replacement (`retired: {at, by, reason}`, by hand); supersede it when a *different*
+answer is now the right one.
 
 ## `tldrx interview`
 

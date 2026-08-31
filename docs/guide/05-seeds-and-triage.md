@@ -32,7 +32,7 @@ tldrx run new payments --from ~/project/aidlc/intents/260821-feature
 `--from` reads only the listed files, turns every bullet/paragraph under a heading into a
 Finding tagged `[src: aidlc:<file>:<line>]` and every answered `## Q<n>.` block into a fact
 plus a Finding tagged `[src: aidlc:<file>#Q<n>]`. Unanswered blocks and ceremony stages are
-dropped; a claim contradicting a non-retired fact becomes a question in
+dropped; a claim contradicting a live fact becomes a question in
 `01-what/questions.md`. A claim that **agrees** with a fact already held (same area, Jaccard
 ≥ 0.9) reuses it rather than appending a second copy, so importing the same folder twice
 leaves `facts.yml` byte-identical. Deterministic — no LLM, no network.

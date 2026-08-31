@@ -333,6 +333,52 @@ describe("--dry-run", () => {
   });
 });
 
+/**
+ * The `{{facts}}` section of a prepared prompt — the widest-reaching reader of
+ * `facts.yml` there is, since every stage of every run gets one.
+ *
+ * A superseded fact is what the workspace USED to believe. Putting it on the page
+ * hands a sub-agent a decision its owner has already reversed, and the sub-agent
+ * has no way to tell which of the two rows is current. Until 2026-08-31 the
+ * filter here was retirement only.
+ */
+describe("{{facts}} in a prepared prompt", () => {
+  const REVERSED = `version: 1
+facts:
+  - id: F001
+    fact: "Leaderboard state lives in a new Postgres table."
+    area: data-model
+    repos: [api]
+    kind: answer
+    confidence: stated
+    source: {who: alan, when: "2026-08-30T09:00:00Z", run: 260830-x, q: Q1}
+    supersedes: null
+    superseded_by: F002
+    retired: null
+  - id: F002
+    fact: "Leaderboard state lives in a Redis sorted set."
+    area: data-model
+    repos: [api]
+    kind: answer
+    confidence: stated
+    source: {who: alan, when: "2026-08-31T09:00:00Z", run: 260830-x, q: Q1}
+    supersedes: F001
+    superseded_by: null
+    retired: null
+`;
+
+  test("renders the superseding fact and NOT the one it replaced", async () => {
+    const ws = workspace(TWO_STAGE, { facts: REVERSED });
+    const prepared = await next(ws, { mode: "prepare" });
+    expect(prepared.code).toBe(0);
+
+    const prompt = readFileSync(join(ws.runDir, ".agent", "alpha", "prompt.md"), "utf8");
+    expect(prompt).toContain("[F002] Leaderboard state lives in a Redis sorted set.");
+    expect(prompt).not.toContain("F001");
+    expect(prompt).not.toContain("new Postgres table");
+  });
+});
+
 describe("in-session mode", () => {
   test("--prepare writes the bundle and stops; --commit picks it up from a hand-written result.json", async () => {
     const ws = workspace(TWO_STAGE);

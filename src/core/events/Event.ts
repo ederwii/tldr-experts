@@ -20,6 +20,16 @@ import {
  * in `facilitator/executors/build.ts` — so verdicts before it stop counting
  * against the reopened story without a single byte of history being rewritten.
  *
+ * `fact.superseded` was added 2026-08-31, alongside `tldrx answer <Qn> "…"
+ * --supersede`. `superseded_by` had been in the §2.5 schema since the first draft
+ * with no command that wrote it, so an owner reversing an answered decision had
+ * to hand-edit `facts.yml` and the log recorded nothing at all — the one moment
+ * where a run's durable memory changes its mind was the one moment `tldrx replay`
+ * could not narrate. Its payload carries the question, the new fact, the fact it
+ * replaced and the superseding answer. The new row also gets the ordinary
+ * `fact.added` before it, so "every row in facts.yml has a `fact.added` event"
+ * stays true — `factsFromRun` relies on exactly that.
+ *
  * `story.base_fastforwarded` was added 2026-08-31, and is the only event in this
  * set that records tldrx MOVING A REF. Design §F.2: a story branch that sits
  * behind its epic tip is fast-forwarded before a developer is dispatched onto it,
@@ -41,7 +51,7 @@ export const EVENT_TYPES = [
   "story.reopened", "story.base_fastforwarded",
   "check.passed", "check.failed",
   "budget.warned", "budget.blocked", "budget.raised",
-  "fact.added", "fact.retired",
+  "fact.added", "fact.retired", "fact.superseded",
   "map.refreshed",
   "ticket.synced",
   "error",

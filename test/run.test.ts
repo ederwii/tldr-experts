@@ -593,6 +593,180 @@ Why asked: no ranking store exists in the map [src: absent:.tldrx/map/domains.md
     const run = await tldrx(ws.root, "answer", "Q1");
     expect(run.code).toBe(EXIT_USAGE);
   });
+
+  test("answering an answered question names the way through", async () => {
+    const ws = fresh();
+    await tldrx(ws.root, "run", "new", "leaderboard");
+    const runDir = onlyRunDir(ws.root);
+    writeFileSync(join(runDir, "01-what", "questions.md"), QUESTIONS, "utf8");
+    await tldrx(ws.root, "answer", "Q1", "A");
+    const again = await tldrx(ws.root, "answer", "Q1", "B");
+    expect(again.code).toBe(EXIT_NOT_FOUND);
+    expect(again.stderr).toContain("--supersede");
+  });
+});
+
+/**
+ * `tldrx answer <Qn> "…" --supersede` — an owner REVERSING a recorded decision.
+ *
+ * The gap, measured 2026-08-31 on a live run: the risk behind an answered
+ * decision was refuted, the owner reversed the call, and `tldrx answer` refused
+ * because the question was no longer open. `superseded_by` had been in the §2.5
+ * schema from the first draft and NO command wrote it, so the only route was a
+ * hand edit — and a hand edit that left `superseded_by: null` left the reversed
+ * decision inside `FactsStore.active`, which every stage reads as never-re-ask
+ * truth. The verb writes both halves of the link so that cannot happen.
+ */
+describe("tldrx answer --supersede", () => {
+  const QUESTIONS = `# Questions — 01-what — run X
+
+## Q1 · Where does leaderboard state live?
+<!-- id: Q1 | status: open | area: data-model | asked_by: product | asked_at: 2026-08-28T14:02:11Z -->
+Why asked: no ranking store exists in the map [src: absent:.tldrx/map/domains.md]
+
+- A) New Postgres table
+- B) Redis sorted set
+
+[Answer]:
+`;
+
+  interface FactRow {
+    readonly id: string;
+    readonly fact: string;
+    readonly area: string;
+    readonly supersedes: string | null;
+    readonly superseded_by: string | null;
+    readonly source: { q: string; run: string; who: string };
+  }
+
+  function facts(root: string): readonly FactRow[] {
+    const doc = parseYaml(readFileSync(join(root, ".tldrx", "memory", "facts.yml"), "utf8"));
+    expect(validateFactsFile(doc).issues).toEqual([]);
+    return (doc as { facts: FactRow[] }).facts;
+  }
+
+  async function answered(): Promise<{ root: string; runDir: string; questions: string }> {
+    const ws = fresh();
+    await tldrx(ws.root, "run", "new", "leaderboard");
+    const runDir = onlyRunDir(ws.root);
+    const questions = join(runDir, "01-what", "questions.md");
+    writeFileSync(questions, QUESTIONS, "utf8");
+    const first = await tldrx(ws.root, "answer", "Q1", "A", "—", "a new Postgres table");
+    expect(first.code).toBe(EXIT_OK);
+    return { root: ws.root, runDir, questions };
+  }
+
+  test("writes a new fact, links the old one, and leaves the old text alone", async () => {
+    const ws = await answered();
+    const run = await tldrx(ws.root, "answer", "Q1", "B — Redis, the contention risk was refuted", "--supersede");
+    expect(run.stderr).toBe("");
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).toMatch(/Q1 superseded → F\d{3,6} replaces F\d{3,6} \(area data-model\)/);
+
+    const rows = facts(ws.root);
+    expect(rows).toHaveLength(2);
+    const [old, fresh_] = rows as [FactRow, FactRow];
+    // The old row keeps every byte of its text — history is appended to, not edited.
+    expect(old.fact).toContain("a new Postgres table");
+    expect(old.superseded_by).toBe(fresh_.id);
+    expect(old.supersedes).toBeNull();
+    // The new row carries the WHOLE new answer, the same area, and normal provenance.
+    expect(fresh_.fact).toContain("B — Redis, the contention risk was refuted");
+    expect(fresh_.area).toBe("data-model");
+    expect(fresh_.supersedes).toBe(old.id);
+    expect(fresh_.superseded_by).toBeNull();
+    expect(fresh_.source.q).toBe("Q1");
+    expect(fresh_.source.run).toMatch(/leaderboard$/);
+
+    // The block gains a footer; the original [Answer]: line and its footer stand.
+    const written = readFileSync(ws.questions, "utf8");
+    expect(written).toContain("[Answer]: A — a new Postgres table");
+    expect(written).toContain(`fact: ${old.id} -->`);
+    expect(written).toContain(`[Answer superseding ${old.id}]: B — Redis, the contention risk was refuted`);
+    expect(written).toContain(`reanswered_by:`);
+    expect(written).toContain(`| fact: ${fresh_.id} | supersedes: ${old.id} -->`);
+    expect(written).toContain("status: answered");
+
+    // `fact.added` for the new row keeps "every row has one" true; `fact.superseded`
+    // is the reversal itself.
+    const log = events(ws.runDir);
+    expect(log.filter((e) => e.type === "fact.added")).toHaveLength(2);
+    const reversal = log.filter((e) => e.type === "fact.superseded");
+    expect(reversal).toHaveLength(1);
+    expect(reversal[0]?.payload).toMatchObject({ q: "Q1", fact: fresh_.id, supersedes: old.id });
+  });
+
+  test("a second reversal supersedes the SECOND fact, not the first", async () => {
+    const ws = await answered();
+    await tldrx(ws.root, "answer", "Q1", "B — Redis", "--supersede");
+    const again = await tldrx(ws.root, "answer", "Q1", "A after all — Redis eviction loses the board", "--supersede");
+    expect(again.code).toBe(EXIT_OK);
+
+    const rows = facts(ws.root);
+    expect(rows.map((r) => r.superseded_by)).toEqual([rows[1]?.id ?? "", rows[2]?.id ?? "", null]);
+    expect(rows.map((r) => r.supersedes)).toEqual([null, rows[0]?.id ?? "", rows[1]?.id ?? ""]);
+  });
+
+  test("--supersede on an OPEN question is refused — there is nothing to supersede", async () => {
+    const ws = fresh();
+    await tldrx(ws.root, "run", "new", "leaderboard");
+    const runDir = onlyRunDir(ws.root);
+    writeFileSync(join(runDir, "01-what", "questions.md"), QUESTIONS, "utf8");
+
+    const run = await tldrx(ws.root, "answer", "Q1", "B", "--supersede");
+    expect(run.code).toBe(EXIT_USAGE);
+    expect(run.stdout).toBe("");
+    expect(run.stderr).toContain("Q1 is open — nothing to supersede");
+    // Nothing was written: no fact, and the slot is still empty.
+    expect(facts(ws.root)).toHaveLength(0);
+    expect(readFileSync(join(runDir, "01-what", "questions.md"), "utf8")).toContain("[Answer]:\n");
+  });
+
+  test("an unknown question id exits 3", async () => {
+    const ws = await answered();
+    const run = await tldrx(ws.root, "answer", "Q9", "anything", "--supersede");
+    expect(run.code).toBe(EXIT_NOT_FOUND);
+    expect(run.stdout).toBe("");
+  });
+
+  test("a supersession with no text is a usage error", async () => {
+    const ws = await answered();
+    const run = await tldrx(ws.root, "answer", "Q1", "--supersede");
+    expect(run.code).toBe(EXIT_USAGE);
+    expect(facts(ws.root)).toHaveLength(1);
+  });
+
+  /**
+   * The emitter that broke `run.yml` on 2026-08-31 is the one that writes fact
+   * text, so a multi-paragraph reversal is exactly the input that used to write
+   * literal newlines into a double-quoted flow scalar. It must survive the round
+   * trip through both parsers behind the runtime seam, which `validateFactsFile`
+   * on a re-read of the file proves.
+   */
+  test("a multi-paragraph answer round-trips through the emitter", async () => {
+    const ws = await answered();
+    const prose = "Redis sorted set.\n\nThe load test refuted the write-contention risk: 12k writes/s\n"
+      + "at p99 4ms, with a \"hot key\" fanned across 16 shards.";
+    const run = await tldrx(ws.root, "answer", "Q1", prose, "--supersede");
+    expect(run.stderr).toBe("");
+    expect(run.code).toBe(EXIT_OK);
+
+    // Re-read from disk, through the real validator: the file still parses.
+    const rows = facts(ws.root);
+    expect(rows).toHaveLength(2);
+    expect(rows[1]?.fact).toContain(prose);
+    // And the run is still usable — a broken facts.yml would take the next command down.
+    expect((await tldrx(ws.root, "status")).code).toBe(EXIT_OK);
+  });
+
+  test("tldrx replay narrates the reversal", async () => {
+    const ws = await answered();
+    await tldrx(ws.root, "answer", "Q1", "B — Redis, the contention risk was refuted", "--supersede");
+    const replay = await tldrx(ws.root, "replay");
+    expect(replay.code).toBe(EXIT_OK);
+    expect(replay.stdout).toMatch(/fact F\d{3,6} SUPERSEDED by F\d{3,6} \(Q1\)/);
+    expect(replay.stdout).toContain("the contention risk was refuted");
+  });
 });
 
 /**
