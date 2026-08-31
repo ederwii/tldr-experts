@@ -18,6 +18,8 @@ import { validateStoryFile } from "../schemas/story.ts";
 import { validateEpicFile } from "../schemas/epic.ts";
 import type { Story, DodBlock } from "../schemas/story.ts";
 import type { Epic } from "../schemas/epic.ts";
+import { validateBudget } from "../schemas/budget.ts";
+import { STORY_ID_RE } from "../schemas/planCommon.ts";
 import { describePlanIssues, validatePlan, EPICS_DIR, STORIES_DIR, WAVES_FILE } from "../plan/validatePlan.ts";
 
 /** The phase folder this executor owns (spec §1). The registry keys on it. */
@@ -28,6 +30,8 @@ export const PLAN_PHASE = "03-plan";
 export const LOG_DIR = "log";
 /** Story worktrees live under the framework dir, which `init` gitignores. */
 export const WORKTREES = "worktrees";
+/** What the Plan phase priced each story at — `03-plan/budget.yml` (spec §2.11). */
+export const PLAN_BUDGET_FILE = "budget.yml";
 
 export interface PlannedStory {
   readonly story: Story;
@@ -92,6 +96,20 @@ export interface BuildPlan {
   readonly implicit: boolean;
   /** Run-relative path of the file this plan was read from — cited in messages. */
   readonly source: string;
+  /**
+   * What the Plan priced each story at, story id -> USD, from
+   * `03-plan/budget.yml`'s `per_phase_usd`. Empty when the Plan wrote no budget,
+   * when the file does not validate, or for an implicit plan (nobody priced it).
+   *
+   * This is the whole point of the Plan writing a budget: until 2026-08-30 the
+   * file was authored, validated and read by NOTHING, so the Build executor split
+   * its stage ceiling into equal shares regardless — and on
+   * `260830-tenancy-identity-customers` handed the story Delivery had priced at
+   * $4.75 exactly the same $1.03 as the one priced at $0.75.
+   */
+  readonly prices: ReadonlyMap<string, number>;
+  /** One line for the operator when a `budget.yml` was there but unusable. */
+  readonly priceIssue: string | null;
 }
 
 export class PlanLoadError extends Error {}
@@ -141,11 +159,86 @@ export function loadBuildPlan(planDir: string, allowed: ReadonlySet<string>): Bu
     waves.push({ id: wave.id, stories: loaded });
   }
 
+  const priced = loadPlanPrices(planDir, stories);
   return {
     waves, epics, stories, storyCount: stories.size,
     implicit: false,
     source: `${PLAN_PHASE}/${WAVES_FILE}`,
+    prices: priced.prices,
+    priceIssue: priced.issue,
   };
+}
+
+/**
+ * `03-plan/budget.yml`'s `per_phase_usd`, narrowed to entries that name a story
+ * this plan actually schedules and carry a positive amount.
+ *
+ * Never throws and never refuses the plan. A price is an OPTIMISATION — it makes
+ * the executor's caps match what Delivery decided each story is worth — and a
+ * plan whose budget file is missing or malformed must still build, on the uniform
+ * shares it has always used. What it must not do is stay silent about it, so the
+ * reason comes back as a line for the operator.
+ */
+export function loadPlanPrices(
+  planDir: string,
+  stories: ReadonlyMap<string, PlannedStory>,
+): { prices: ReadonlyMap<string, number>; issue: string | null } {
+  const empty = new Map<string, number>();
+  const path = join(planDir, PLAN_BUDGET_FILE);
+  if (!existsSync(path)) return { prices: empty, issue: null };
+
+  let doc: unknown;
+  try {
+    doc = parseYaml(readFileSync(path, "utf8"));
+  } catch (error) {
+    return { prices: empty, issue: budgetIgnored(`it does not parse (${String(error)})`) };
+  }
+  const validation = validateBudget(doc);
+  if (!validation.ok) {
+    const first = validation.issues[0];
+    return {
+      prices: empty,
+      issue: budgetIgnored(`it does not validate (${first?.path ?? ""} ${first?.message ?? "schema error"})`),
+    };
+  }
+
+  const perPhase = (doc as { per_phase_usd?: Record<string, unknown> }).per_phase_usd ?? {};
+  const prices = new Map<string, number>();
+  const skipped: string[] = [];
+  for (const [key, value] of Object.entries(perPhase)) {
+    // A `per_phase_usd` keyed by PHASE rather than story is the run-root
+    // budget.yml's shape and perfectly legal; it just prices nothing here.
+    if (!STORY_ID_RE.test(key)) continue;
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+      skipped.push(`${key} (${String(value)})`);
+      continue;
+    }
+    if (!stories.has(key)) {
+      skipped.push(`${key} (not scheduled)`);
+      continue;
+    }
+    prices.set(key, value);
+  }
+  if (prices.size === 0) {
+    return {
+      prices: empty,
+      issue: skipped.length === 0
+        ? null
+        : budgetIgnored(`no usable story price in it — skipped ${skipped.join(", ")}`),
+    };
+  }
+  return {
+    prices,
+    issue: skipped.length === 0
+      ? null
+      : `note: ${PLAN_PHASE}/${PLAN_BUDGET_FILE} priced ${String(prices.size)} story(ies); `
+        + `skipped ${skipped.join(", ")}`,
+  };
+}
+
+function budgetIgnored(why: string): string {
+  return `warning: ${PLAN_PHASE}/${PLAN_BUDGET_FILE} was ignored because ${why} — `
+    + "story caps fall back to an equal share of the stage ceiling";
 }
 
 function loadEpic(planDir: string, id: string): PlannedEpic {

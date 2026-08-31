@@ -336,6 +336,82 @@ describe("the reviewer", () => {
 });
 
 /**
+ * The Plan's own prices decide the caps (2026-08-30).
+ *
+ * `03-plan/budget.yml` is authored by Delivery, validated by the Plan gate, and
+ * was until now read by NOTHING. On run `260830-tenancy-identity-customers` it
+ * priced S1 at $4.75 and S2 at $0.75, and the executor handed both the same
+ * $1.03 — because it split the stage into equal shares and never opened the file.
+ */
+describe("story caps come from 03-plan/budget.yml when it has them", () => {
+  /** Every `--max-budget-usd` the fake `claude` was called with, in order. */
+  async function caps(ws: BuildWorkspace, overrides: Partial<NextOptions> = {}): Promise<string[]> {
+    const argvLog = join(ws.root, "argv.log");
+    process.env.FAKE_BUILD_ARGV_LOG = argvLog;
+    await next(ws, overrides);
+    return readFileSync(argvLog, "utf8").trim().split("\n")
+      .map((line) => JSON.parse(line) as string[])
+      .map((argv) => argv[argv.indexOf("--max-budget-usd") + 1] ?? "");
+  }
+
+  function priceStories(ws: BuildWorkspace, prices: Record<string, number>): void {
+    writeFileSync(join(ws.planDir, "budget.yml"), [
+      "version: 1",
+      `run: "${ws.runId}"`,
+      "ceiling_usd: 8.00",
+      "spent_usd: 0.00",
+      "per_phase_usd:",
+      ...Object.entries(prices).map(([id, usd]) => `  ${id}: ${usd.toFixed(2)}`),
+      "",
+    ].join("\n"), "utf8");
+  }
+
+  test("an expensive story gets more than a cheap one, priced by the plan", async () => {
+    const ws = workspace({ ...TWO_WAVES, budgetUsd: 8, perAgentMaxUsd: 8 });
+    priceStories(ws, { S1: 5.0, S2: 1.0 });
+
+    // developer = price / (MAX_ATTEMPTS x (1 + REVIEWER_SHARE)) = price / 2.5.
+    // S1: 5.00/2.5 = $2.00. S2: 1.00/2.5 = $0.40. Both reviewers derive under a
+    // dollar and are lifted to REVIEWER_FLOOR_USD.
+    expect(await caps(ws)).toEqual(["2.00", "1.00", "0.40", "1.00"]);
+  }, 60_000);
+
+  test("prices that add up to more than the stage are scaled down, keeping the ratio", async () => {
+    const ws = workspace({ ...TWO_WAVES, budgetUsd: 8, perAgentMaxUsd: 8 });
+    // $24 of stories priced into an $8 stage: scale 1/3, and S1 stays 3x S2.
+    priceStories(ws, { S1: 18.0, S2: 6.0 });
+
+    const seen = await caps(ws);
+    expect([seen[0], seen[2]]).toEqual(["2.40", "0.80"]);
+    expect(Number(seen[0]) / Number(seen[2])).toBeCloseTo(3, 5);
+  }, 60_000);
+
+  test("a story the plan did not price falls back to the uniform share", async () => {
+    const ws = workspace({ ...TWO_WAVES, budgetUsd: 8, perAgentMaxUsd: 8 });
+    priceStories(ws, { S1: 5.0 });
+    // S2 is unpriced: 8 / (2 stories x 2 attempts x 1.25) = $1.60, as before.
+    const seen = await caps(ws);
+    expect([seen[0], seen[2]]).toEqual(["2.00", "1.60"]);
+  }, 60_000);
+
+  test("a budget.yml that does not validate is an advisory, never a refusal", async () => {
+    const ws = workspace({ ...TWO_WAVES, budgetUsd: 8, perAgentMaxUsd: 8 });
+    writeFileSync(join(ws.planDir, "budget.yml"), "version: 1\nrun: \"nope\"\n", "utf8");
+
+    const argvLog = join(ws.root, "argv.log");
+    process.env.FAKE_BUILD_ARGV_LOG = argvLog;
+    const outcome = await next(ws);
+
+    expect(outcome.code).toBe(4);                       // the build still ran
+    expect((outcome.stderr ?? []).join("\n")).toContain("03-plan/budget.yml was ignored");
+    const seen = readFileSync(argvLog, "utf8").trim().split("\n")
+      .map((line) => JSON.parse(line) as string[])
+      .map((argv) => argv[argv.indexOf("--max-budget-usd") + 1] ?? "");
+    expect([seen[0], seen[2]]).toEqual(["1.60", "1.60"]);   // the uniform share
+  }, 60_000);
+});
+
+/**
  * A reviewer that FAILED is not a verdict (2026-08-30).
  *
  * Measured on run `260830-tenancy-identity-customers`: the headless reviewer of a
@@ -909,13 +985,21 @@ describe("safety", () => {
     const caps = calls.map((argv) => argv[argv.indexOf("--max-budget-usd") + 1]);
     // The share is divided by the WORST CASE, not by the story count: 2 stories x
     // MAX_ATTEMPTS(2) x (1 + REVIEWER_SHARE(0.25)) = 5 developer-shares, so the
-    // developer gets 8/5 = $1.60 and the reviewer a quarter of that, $0.40.
-    // Before 2026-08-29 it was 8/2 = $4.00 capped to $3.00, and 2 stories x 2
-    // attempts x ($3.00 + $0.75) could charge $15.00 against an $8.00 stage —
-    // the audit's "Build 2.5x su fase".
-    expect(caps).toEqual(["1.60", "0.40", "1.60", "0.40"]);
+    // developer gets 8/5 = $1.60. Before 2026-08-29 it was 8/2 = $4.00 capped to
+    // $3.00, and 2 stories x 2 attempts x ($3.00 + $0.75) could charge $15.00
+    // against an $8.00 stage — the audit's "Build 2.5x su fase".
+    //
+    // The reviewer's derived quarter-share is $0.40, and it is raised to
+    // REVIEWER_FLOOR_USD. That is deliberate and it is the 2026-08-30 lesson: a
+    // $0.26 reviewer died mid-read on a 39-file diff and the framework recorded
+    // the corpse as "changes". A quarter of a share buys no review on anything
+    // real, and an unread diff wastes the whole developer turn beside it.
+    expect(caps).toEqual(["1.60", "1.00", "1.60", "1.00"]);
+    // What THIS pass hands out still fits the stage; the floor is the one place
+    // the strict "x MAX_ATTEMPTS also fits" arithmetic is knowingly given up,
+    // and budget.yml's own gate is what stops a stage that actually runs out.
     const total = caps.reduce((sum, c) => sum + Number(c), 0);
-    expect(total * 2).toBeLessThanOrEqual(8 + 0.001); // both attempts still fit
+    expect(total).toBeLessThanOrEqual(8 + 0.001);
     // The developer's allowance names its own repo's command, and no git push.
     const devAllowance = calls[0]?.[calls[0].indexOf("--allowedTools") + 1] ?? "";
     expect(devAllowance).toContain("Bash(npm run test)");

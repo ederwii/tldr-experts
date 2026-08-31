@@ -88,6 +88,20 @@ export const MAX_ATTEMPTS = 2;
  */
 export const REVIEWER_SHARE = 0.25;
 
+/**
+ * The least a reviewer may be given, whatever the arithmetic says.
+ *
+ * Measured 2026-08-30, run `260830-tenancy-identity-customers`: the uniform split
+ * handed the reviewer of a 39-file, +1879-line story $0.26, and it died mid-read
+ * with `Reached maximum budget ($0.26)`. A reviewer that cannot finish reading
+ * the diff approves nothing, blocks nothing and judges nothing — it converts the
+ * developer's spend into a story stuck at `review`. A floor is the cheapest thing
+ * that makes a review mean something, and it is deliberately traded against the
+ * strict "every worst-case cap sums inside the stage ceiling" arithmetic below:
+ * the worst case only materialises when reviewers keep asking for changes, and
+ * `budget.yml`'s own gate is what actually stops a stage that runs out.
+ */
+export const REVIEWER_FLOOR_USD = 1.00;
 
 /**
  * The default degree of parallelism inside a wave: one story at a time.
@@ -341,6 +355,10 @@ class BuildSession {
   ) {
     this.lines.push(...opening);
     this.lanes = clampParallel(ctx.parallel);
+    // A `03-plan/budget.yml` that could not be used is stderr, not a refusal: the
+    // caps fall back to the uniform share and the build carries on, but nobody
+    // gets to think the Plan's prices were honoured when they were not.
+    if (plan.priceIssue !== null) this.advisories.push(plan.priceIssue);
   }
 
   // --- the three entry points ----------------------------------------------
@@ -411,7 +429,7 @@ class BuildSession {
     if (resume !== null) return await this.prepareRereview(planned, resume);
 
     const story = await this.openStory(planned);
-    const cap = this.developerCap();
+    const cap = this.developerCap(planned.story.id);
     const key = this.bundleKey(planned.story.id);
     const pending: PendingStage = {
       version: 1,
@@ -881,7 +899,7 @@ class BuildSession {
 
   /** (d) one developer sub-agent, cwd = the worktree. Returns its cost, or null. */
   private async spawnDeveloper(story: StoryContext): Promise<number | null> {
-    const cap = this.developerCap();
+    const cap = this.developerCap(story.planned.story.id);
     const commands = this.repoCommands(story.planned.story.repo);
     this.ctx.emit("agent.spawned", {
       phase: this.ctx.phaseId,
@@ -991,7 +1009,7 @@ class BuildSession {
     story: StoryContext,
     dod: readonly DodResult[],
   ): Promise<{ review: Review; cost: number }> {
-    const cap = this.reviewerCap();
+    const cap = this.reviewerCap(story.planned.story.id);
     this.ctx.emit("agent.spawned", {
       phase: this.ctx.phaseId,
       story: story.planned.story.id,
@@ -1505,7 +1523,7 @@ class BuildSession {
       conventions: renderConventions(this.ctx.root, [repo]),
       facts: renderFacts(facts.facts, [repo]),
       experts: bundles.experts,
-      budgetUsd: this.developerCap(),
+      budgetUsd: this.developerCap(story.planned.story.id),
       // The implicit plan writes its own note, naming the facts this story is
       // for; the constant is the fallback for a plan built before it did.
       planNote: this.plan.implicit ? (story.planned.note ?? IMPLICIT_STORY_NOTE) : undefined,
@@ -1534,26 +1552,86 @@ class BuildSession {
   }
 
   /**
-   * The developer's share, clamped so the phase cannot be overrun.
+   * The developer's ceiling for ONE story.
    *
-   * Measured 2026-08-29: a story's spend was `developer (1/N) + reviewer (0.25/N)`
-   * and the whole pipeline could run TWICE (`MAX_ATTEMPTS`), so N stories could
-   * charge 2.5x the stage ceiling — the audit's "Build 2.5x su fase". The shares
-   * are now divided by that worst case up front, so N stories × 2 attempts ×
-   * (dev + reviewer) fits inside the stage budget however the attempts fall.
+   * Two sources, in order.
+   *
+   * **The Plan's own price**, when `03-plan/budget.yml` gave this story one. That
+   * file is Delivery pricing each story against the stage ceiling, and until
+   * 2026-08-30 it was read by nothing: on
+   * `260830-tenancy-identity-customers` the executor handed $1.03 to the story
+   * priced at $4.75 and the same $1.03 to the one priced at $0.75. The price is
+   * divided by the worst case that ONE story can be asked for —
+   * `MAX_ATTEMPTS × (1 + REVIEWER_SHARE)` — so a story that runs twice, developer
+   * and reviewer both, stays inside what it was priced at.
+   *
+   * **A uniform share**, otherwise, exactly as before. Measured 2026-08-29: a
+   * story's spend was `developer (1/N) + reviewer (0.25/N)` and the whole pipeline
+   * could run TWICE, so N stories could charge 2.5x the stage ceiling — the
+   * audit's "Build 2.5x su fase". Dividing by the worst case up front fixes that,
+   * and a plan with no prices still gets it.
    */
-  private developerCap(): number {
-    return this.ctx.agentCap(1 / this.worstCaseShares());
+  private developerCap(storyId?: string): number {
+    const price = this.priceOf(storyId);
+    if (price === null) return this.ctx.agentCap(1 / this.worstCaseShares());
+    return this.ctx.agentCap(this.shareOf(price / (MAX_ATTEMPTS * (1 + REVIEWER_SHARE))));
   }
 
-  private reviewerCap(): number {
-    return this.ctx.agentCap(REVIEWER_SHARE / this.worstCaseShares());
+  /**
+   * The reviewer's ceiling for ONE story: its derived quarter-share, never below
+   * `REVIEWER_FLOOR_USD`, never above what the stage has left or what
+   * `per_agent_max_usd` / `--max-usd` allow.
+   *
+   * The floor is the fix for the failure that produced this code: $0.26 cannot
+   * read a 39-file diff, and a reviewer that runs out mid-read costs the whole
+   * developer turn it was supposed to judge (`REVIEWER_FLOOR_USD`).
+   */
+  private reviewerCap(storyId?: string): number {
+    const price = this.priceOf(storyId);
+    const derived = price === null
+      ? this.ctx.agentCap(REVIEWER_SHARE / this.worstCaseShares())
+      : this.ctx.agentCap(this.shareOf(price * REVIEWER_SHARE / (MAX_ATTEMPTS * (1 + REVIEWER_SHARE))));
+    const floor = Math.min(REVIEWER_FLOOR_USD, Math.max(this.ctx.budgetUsd - this.spent(), 0));
+    return round2(Math.min(Math.max(derived, floor), this.ctx.maxBudgetUsd));
+  }
+
+  /**
+   * What the Plan priced this story at, scaled to fit the stage — or null when it
+   * priced nothing, so the uniform share applies.
+   */
+  private priceOf(storyId: string | undefined): number | null {
+    if (storyId === undefined) return null;
+    const price = this.plan.prices.get(storyId);
+    if (price === undefined || !Number.isFinite(price) || price <= 0) return null;
+    return price * this.priceScale();
+  }
+
+  /**
+   * ≤ 1: what every declared price is multiplied by so the priced stories cannot
+   * add up to more than the stage was given.
+   *
+   * A Plan that prices $22 of stories into an $18 stage is not refused — it is
+   * scaled down proportionally, which keeps the RATIO Delivery decided (the
+   * useful half) without letting the total escape the ceiling.
+   */
+  private priceScale(): number {
+    if (this.ctx.budgetUsd <= 0) return 1;
+    let sum = 0;
+    for (const price of this.plan.prices.values()) {
+      if (Number.isFinite(price) && price > 0) sum += price;
+    }
+    return sum <= this.ctx.budgetUsd ? 1 : this.ctx.budgetUsd / sum;
+  }
+
+  /** Dollars expressed as the fraction of the stage budget `agentCap` wants. */
+  private shareOf(usd: number): number {
+    return this.ctx.budgetUsd <= 0 ? 1 : usd / this.ctx.budgetUsd;
   }
 
   /**
    * How many developer-shares the phase can be asked for at worst:
    * `stories × attempts × (1 + REVIEWER_SHARE)`. Dividing by this makes the sum
-   * of every cap the executor can hand out ≤ the stage ceiling.
+   * of every uniform cap the executor can hand out ≤ the stage ceiling.
    */
   private worstCaseShares(): number {
     return Math.max(this.plan.storyCount, 1) * MAX_ATTEMPTS * (1 + REVIEWER_SHARE);

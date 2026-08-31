@@ -54,6 +54,18 @@
   did. Runs recorded by the OLD code resume too — a `verdict: "changes"` whose `detail` is
   one of the framework's own transport errors is read as the failure it was, including a
   story already left at `in_progress` by a wrongly-prepared attempt 2.
+- **The Build executor reads `03-plan/budget.yml`.** The Plan writes a per-story price map,
+  the Plan gate validates it, and until now **nothing read it**: the executor split its
+  stage into equal shares, so the story priced at $4.75 and the one priced at $0.75 both got
+  $1.03. A priced story now gets `price / (attempts x (developer + reviewer))` as its
+  developer ceiling and a quarter of that as its reviewer's; an unpriced one keeps the
+  uniform share; prices adding up to more than the stage are scaled down proportionally. A
+  `budget.yml` that will not parse or validate is an advisory on stderr, never a refused
+  build.
+- **A reviewer is never given less than $1.00.** Whatever the arithmetic says, clamped by
+  what the stage has left and by `per_agent_max_usd`. A reviewer that cannot finish reading
+  the diff approves nothing and blocks nothing — it converts the entire developer turn
+  beside it into a story stuck at `review`, which is what $0.26 did on 2026-08-30.
 - **A stage whose declared outputs are a SHAPE no longer fails while the files sit next to
   the error.** Found live 2026-08-30 by the first `feature`-scope run to reach Plan: the
   stage wrote `03-plan/epics/E1.md` and `03-plan/stories/S1.md`..`S7.md`, and

@@ -21,7 +21,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
-import { clampParallel, DEFAULT_PARALLEL } from "../src/core/facilitator/executors/build.ts";
+import { clampParallel, DEFAULT_PARALLEL, REVIEWER_FLOOR_USD } from "../src/core/facilitator/executors/build.ts";
 import { parallelFlag } from "../src/cli/commands/next.ts";
 import { parseArgs, UsageError } from "../src/cli/argv.ts";
 import { declaredFlags, declaredValueFlags } from "../src/cli/helpText.ts";
@@ -274,11 +274,14 @@ describe("N = 2 over three stories in one wave", () => {
     expect(caps.length).toBe(6);           // three developers, three reviewers
     expect(new Set(caps).size).toBe(2);    // one developer share, one reviewer share
     // `worstCaseShares` = stories x attempts x (1 + REVIEWER_SHARE) = 3 x 2 x 1.25,
-    // so the whole worst case fits: 3 stories, 2 attempts each, dev + reviewer.
+    // so the developer share is 9/7.5 = $1.20. The reviewer's derived $0.30 is
+    // raised to REVIEWER_FLOOR_USD: a reviewer under a dollar does not finish
+    // reading a real diff (measured 2026-08-30, $0.26 died mid-read).
     const stage = RunStore.open(ws.runDir).run.phases[0]?.stages[0];
-    const worstCase = caps.reduce((sum, cap) => sum + cap, 0) * 2;
-    expect(worstCase).toBeLessThanOrEqual(stage?.budget_usd ?? 0);
-    // And what this invocation actually handed out is comfortably inside it.
+    expect(caps.filter((cap) => cap === 1.2).length).toBe(3);
+    expect(caps.filter((cap) => cap === REVIEWER_FLOOR_USD).length).toBe(3);
+    // What this invocation hands out is inside the ceiling. The floor knowingly
+    // gives up the stricter "and again on every retry" version of that property.
     expect(caps.reduce((sum, cap) => sum + cap, 0)).toBeLessThanOrEqual(stage?.budget_usd ?? 0);
   }, 90_000);
 });

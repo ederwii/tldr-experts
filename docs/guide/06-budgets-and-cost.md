@@ -156,6 +156,27 @@ output says which happened: the money moved, or the **run** ceiling grew.
 Ceilings are re-read from disk before every write, so a `budget raise` that lands while a
 stage is in flight is no longer silently reverted when that stage saves.
 
+## The Plan prices its own stories
+
+`03-plan/budget.yml` is written by the Plan phase: a `per_phase_usd:` map from story id to
+dollars, inside the Build stage's ceiling. The Build executor reads it. A story the plan
+priced gets a developer ceiling of `price / (2 attempts x (developer + a quarter for the
+reviewer))`, and its reviewer a quarter of that. A story the plan did not price falls back
+to an equal share of the stage. If the prices add up to more than the stage was given they
+are scaled down proportionally, so the ratio the plan decided survives and the total cannot
+escape the ceiling. A `budget.yml` that will not parse or validate is an advisory on stderr
+and an equal split — never a refused build.
+
+Until 2026-08-30 nothing read that file, and a seven-story plan that priced one story at
+$4.75 and another at $0.75 handed both the same $1.03.
+
+**The reviewer has a floor of $1.00.** Whatever the arithmetic says, a reviewer is given at
+least that (clamped by what the stage has left and by `per_agent_max_usd`). Measured the
+same day: a $0.26 reviewer on a 39-file, +1879-line diff exited with
+`Reached maximum budget ($0.26)` before finishing the read. A reviewer that cannot read the
+diff approves nothing and blocks nothing — it converts the whole developer turn beside it
+into a story stuck at `review`.
+
 ## Running stories in parallel does not change the bill
 
 `--parallel N` (guide 3) changes when the money is spent, not how much. A Build
@@ -163,7 +184,9 @@ stage divides its ceiling by `stories x 2 attempts x (developer + a quarter for 
 reviewer)` up front, so the sum of every sub-agent ceiling it can hand out is inside
 the stage ceiling however the attempts fall — and however many are in flight at once.
 Three developers running together each get the same share they would have got one at
-a time.
+a time. (The reviewer floor above is the one deliberate exception to that sum: it can
+lift a small stage's worst case past its ceiling, and the budget gate is what stops a
+stage that actually runs out.)
 
 ## The budget gate
 

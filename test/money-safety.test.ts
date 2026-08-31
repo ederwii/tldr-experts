@@ -22,7 +22,7 @@ import { createRun } from "../src/core/run/newRun.ts";
 import { buildBudgetView, renderBudget, countUnmetered } from "../src/core/budget/budgetView.ts";
 import { buildStatus, renderStatus } from "../src/core/run/runStatus.ts";
 import { MIN_AGENT_USD, floorOverrun } from "../src/core/facilitator/executors/watch.ts";
-import { MAX_ATTEMPTS, REVIEWER_SHARE } from "../src/core/facilitator/executors/build.ts";
+import { MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE } from "../src/core/facilitator/executors/build.ts";
 import { validateRunFile } from "../src/core/run/RunFile.ts";
 import { emitRunYaml } from "../src/core/run/emitRunYaml.ts";
 import { parseYaml } from "../src/core/yaml.ts";
@@ -236,6 +236,32 @@ describe("M9 · a phase ceiling is a ceiling", () => {
     const reviewer = stageCeiling * (REVIEWER_SHARE / worstCase);
     const total = stories * MAX_ATTEMPTS * (dev + reviewer);
     expect(total).toBeLessThanOrEqual(stageCeiling + 0.001);
+  });
+
+  /**
+   * The live case, in numbers, so the trade is written down where it can be read
+   * back: run `260830-tenancy-identity-customers`, 7 stories, a $18.00 Build
+   * stage, and `03-plan/budget.yml` pricing S1 at $4.75.
+   */
+  test("the priced split gives S1 what the plan said it was worth", () => {
+    const stage = 18;
+    const prices = { S1: 4.75, S2: 0.75, S3: 3.25, S4: 3.75, S5: 2.25, S6: 1.25, S7: 1.0 };
+    const total = Object.values(prices).reduce((sum, p) => sum + p, 0);
+    expect(total).toBe(17);
+    expect(total).toBeLessThanOrEqual(stage);           // nothing is scaled down
+
+    const dev = prices.S1 / (MAX_ATTEMPTS * (1 + REVIEWER_SHARE));
+    expect(dev).toBeCloseTo(1.9, 5);
+    // The derived reviewer share is $0.475 — under the floor, and under what a
+    // 39-file diff costs to read. The measured failure was $0.26.
+    expect(dev * REVIEWER_SHARE).toBeCloseTo(0.475, 5);
+    expect(Math.max(dev * REVIEWER_SHARE, REVIEWER_FLOOR_USD)).toBe(1.0);
+
+    // What the old uniform split handed the same story: $1.03 and $0.26, the
+    // same as the story priced at $0.75.
+    const uniform = stage / (7 * MAX_ATTEMPTS * (1 + REVIEWER_SHARE));
+    expect(uniform).toBeCloseTo(1.028571, 5);
+    expect(uniform * REVIEWER_SHARE).toBeCloseTo(0.257143, 5);
   });
 
   test("the OLD arithmetic is what overran — 2.5x, as measured", () => {

@@ -1889,6 +1889,17 @@ the whole plan, so the sum of every cap the executor can hand out is ≤ the sta
 and however many of them are in flight at the same moment. Running concurrently spends the same money faster, never
 more of it.
 
+**Per-story prices, since 2026-08-30.** That uniform share is the FALLBACK. When
+`03-plan/budget.yml` prices a story in its `per_phase_usd:` map — which the Plan writes and the Plan gate validates,
+and which nothing read until this date — that story's developer cap is `price ÷ (MAX_ATTEMPTS × (1 + REVIEWER_SHARE))`
+and its reviewer's a `REVIEWER_SHARE` of that. Prices summing to more than the stage are scaled down proportionally, so
+the plan's ratio survives and the total cannot escape the ceiling; an unparseable or invalid file is an advisory on
+stderr and the uniform split. Measured before it: a seven-story plan pricing S1 at $4.75 and S2 at $0.75 gave both
+$1.03. **The reviewer also has a floor** (`REVIEWER_FLOOR_USD`, $1.00), clamped by what the stage has left and by
+`per_agent_max_usd`. The floor is the one place the "every worst case sums inside the ceiling" property is knowingly
+given up: a reviewer that cannot finish reading the diff judges nothing and wastes the developer turn beside it, and
+`budget.yml`'s gate is what actually stops a stage that runs out.
+
 **One activity line per lane.** Every event a Build sub-agent publishes carries its story id as a `lane`, so the
 scene, the compact one-liner and `--ui plain` show `S1 reading … · S2 $ dotnet test …` rather than interleaving two
 streams into one. A lane disappears from the line when its agent finishes. With one lane — every run that did not ask
