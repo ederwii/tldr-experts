@@ -11,6 +11,14 @@ import {
  * log could not previously describe: an approval taken back (a signed gate is not
  * final — see `revoke` in `run/gates.ts`), and a ceiling moved by hand (the audit
  * measured `budget raise` rewriting budget.yml and appending nothing at all).
+ *
+ * `story.reopened` was added 2026-08-30 for the same reason, one level down: a
+ * person deciding that ONE Build story gets another run of attempts (`tldrx story
+ * reopen`, `run/reopenStory.ts`). Its payload carries the story, the status it
+ * came from, how many verdicts the closed run of attempts consumed, and the
+ * operator's note. It is also a boundary the ledger reads — see `readReviewLedger`
+ * in `facilitator/executors/build.ts` — so verdicts before it stop counting
+ * against the reopened story without a single byte of history being rewritten.
  */
 export const EVENT_TYPES = [
   "run.created", "run.closed", "run.unlocked", "run.cancelled",
@@ -20,6 +28,7 @@ export const EVENT_TYPES = [
   "agent.spawned", "agent.result",
   "question.asked", "question.answered",
   "gate.requested", "gate.approved", "gate.rejected", "gate.revoked",
+  "story.reopened",
   "check.passed", "check.failed",
   "budget.warned", "budget.blocked", "budget.raised",
   "fact.added", "fact.retired",

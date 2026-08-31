@@ -531,6 +531,30 @@ const ENTRIES: readonly CommandHelp[] = [
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
   },
   {
+    name: "story",
+    description: "Give one Build story another run of attempts, signed with a note.",
+    args: [{ name: "<id>", meaning: "The story id, e.g. S3." }],
+    flags: [
+      {
+        name: "note",
+        arg: "<text>",
+        meaning: "Why this story must be built anyway. Required \u2014 a reopen with no reason is not actionable. It is recorded on the story.reopened event and printed by the Build stage when the story runs again.",
+      },
+      runFlag(),
+      root(),
+    ],
+    examples: [
+      'tldrx story reopen S3 --note "it gates wave 3 (S4, S6) and the owner has decided it ships"',
+    ],
+    exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
+    notes: [
+      "Reopenable states are `blocked`, `review` and `in_progress`. A `done` story refuses: undoing finished work is a decision about the STAGE, so it is `tldrx reject --stage <phase>/<stage>`. A `todo` story refuses too \u2014 it is already pending.",
+      "The story goes back to `todo` and its attempt counter restarts at 1 of 2. Nothing is erased to make that true: `story.reopened` is a reset boundary the review ledger reads, every earlier attempt stays in events.jsonl, and the event records how many verdicts the closed run consumed.",
+      "It runs no agent, spends nothing, deletes nothing and refunds nothing. The story's branch is kept \u2014 that is what carries the last developer's commits forward \u2014 and its worktree is left exactly as the build left it, to be reopened from the branch if the build had removed it.",
+      "It does NOT make the stage runnable. If the Build stage is at its gate, `tldrx reject --note \"\u2026\"` sends it back to `ready` first; if the gate is already signed, `tldrx reject --stage` takes that back.",
+    ],
+  },
+  {
     name: "budget",
     description: "What the run may still spend, and where to move a ceiling from.",
     args: [

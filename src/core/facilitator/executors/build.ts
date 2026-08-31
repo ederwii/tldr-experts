@@ -403,6 +403,7 @@ class BuildSession {
           this.lines.push(`  · ${planned.story.id} is already \`${status}\` — left alone`);
           continue;
         }
+        this.noteIfReopened(planned, status);
         pending.push(planned);
       }
       if (pending.length === 0) continue;
@@ -453,6 +454,7 @@ class BuildSession {
     const resume = this.resumableReview(planned);
     if (resume !== null) return await this.prepareRereview(planned, resume);
 
+    this.noteIfReopened(planned, this.statusOf(planned));
     const story = await this.openStory(planned);
     const cap = this.developerCap(planned.story.id);
     const key = this.bundleKey(planned.story.id);
@@ -892,6 +894,26 @@ class BuildSession {
       + `re-running the REVIEW only; \`${resume.commit}\` is already merged into \`${story.epicBranch}\``,
     );
     await this.reviewAndSettle(story, resume.dod, resume.commit, 0, null);
+  }
+
+  /**
+   * One line when a story is pending because a PERSON put it back there.
+   *
+   * A reopened story is indistinguishable from a never-started one on disk —
+   * both are `status: todo` — and that is by design: the reset is REAL, and the
+   * pipeline that runs it must not special-case it. What would be wrong is the
+   * operator reading `S3 · attempt 1 of 2` over a story two reviewers already
+   * refused and thinking the framework had forgotten. The event remembers; this
+   * says so out loud, with the note the person signed it with.
+   */
+  private noteIfReopened(planned: PlannedStory, status: PlanStatus): void {
+    if (status !== "todo") return;
+    const ledger = readReviewLedger(this.ctx.runDir, planned.story.id);
+    if (ledger.reopened === null) return;
+    this.lines.push(
+      `  · ${planned.story.id} was reopened by ${ledger.reopened.actor} (${ledger.reopened.note}) — `
+      + `the verdicts before that do not count against it, so it runs as attempt 1 of ${String(MAX_ATTEMPTS)}`,
+    );
   }
 
   /** True when any story of this wave settled at `blocked`. */
@@ -1993,6 +2015,16 @@ export interface ReviewLedger {
    * block blocks identically — so the caller pairs it with the story's own plan.
    */
   readonly blockedWithNothingRun: boolean;
+  /**
+   * The last `story.reopened` — a person giving this story another run of
+   * attempts (`tldrx story reopen`, `run/reopenStory.ts`) — or null.
+   *
+   * It is a RESET BOUNDARY, not a field with a reader: every count above starts
+   * again at it, so a verdict recorded before a reopen does not spend an attempt
+   * of the reopened story. Nothing is erased to achieve that. The events are all
+   * still in the log; this reads the last boundary in it.
+   */
+  readonly reopened: { readonly at: string; readonly actor: string; readonly note: string } | null;
 }
 
 /** Everything the two resume paths and the requeue counter need, in one pass. */
@@ -2000,7 +2032,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
   const path = join(runDir, "events.jsonl");
   const empty: ReviewLedger = {
     verdicts: 0, erroredWith: null, commit: null, dod: [],
-    developerErroredWith: null, blockedWithNothingRun: false,
+    developerErroredWith: null, blockedWithNothingRun: false, reopened: null,
   };
   if (!existsSync(path)) return empty;
 
@@ -2021,10 +2053,11 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
   // run, where the wrongly-prepared "attempt 2" left S1 with no DoD at all.
   let dod: DodResult[] = [];
   let current: DodResult[] = [];
+  let reopened: ReviewLedger["reopened"] = null;
 
   for (const line of readFileSync(path, "utf8").split("\n")) {
     if (line.trim() === "") continue;
-    let event: { type?: string; payload?: Record<string, unknown> };
+    let event: { ts?: string; actor?: string; type?: string; payload?: Record<string, unknown> };
     try {
       event = JSON.parse(line) as typeof event;
     } catch {
@@ -2033,6 +2066,31 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     }
     const payload = event.payload ?? {};
     if (payload.story !== storyId) continue;
+
+    // A person reopened the story: everything before this line belongs to a run
+    // of attempts an owner has closed by hand, and none of it counts against the
+    // one starting here. This is the only branch that resets `verdicts` — the
+    // requeue counter — and it is deliberately the only one that can, because it
+    // is the only one a human signs (`run/reopenStory.ts`). Nothing is erased:
+    // the events it steps over are still in this file and still read by `replay`,
+    // `cost` and `retro`, and the reopen event itself records the count it reset.
+    if (event.type === "story.reopened") {
+      verdicts = 0;
+      erroredWith = null;
+      commit = null;
+      dod = [];
+      current = [];
+      developerErroredWith = null;
+      ranACheck = false;
+      sawReviewer = false;
+      blockedWithNothingRun = false;
+      reopened = {
+        at: typeof event.ts === "string" ? event.ts : "",
+        actor: typeof event.actor === "string" ? event.actor : "",
+        note: typeof payload.note === "string" ? payload.note : "",
+      };
+      continue;
+    }
 
     // A new attempt starts a new DoD run; only the latest one that RAN describes
     // the diff on the branch now.
@@ -2100,6 +2158,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     dod: current.length > 0 ? current : dod,
     developerErroredWith,
     blockedWithNothingRun,
+    reopened,
   };
 }
 

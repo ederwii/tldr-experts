@@ -130,6 +130,14 @@ function bullet(item: NumberedEvent): string | null {
     case "gate.requested": return `${prefix}gate requested`;
     case "gate.approved": return `${prefix}gate APPROVED by ${actor}${note(payload.note)}`;
     case "gate.rejected": return `${prefix}gate REJECTED by ${actor}${note(payload.note)}`;
+    // A person overruling a block is the one thing in the log that explains why a
+    // story's attempt counter went backwards. A narrative that showed the two
+    // `changes` verdicts and then a third developer turn, with nothing in between,
+    // would read as the framework losing count.
+    case "story.reopened":
+      return `${prefix}story ${text(payload.story) || "?"} REOPENED by ${actor}`
+        + ` — back to \`${text(payload.to_status) || "todo"}\` from \`${text(payload.from_status) || "?"}\``
+        + `${note(payload.note)}`;
     case "check.failed": return `${prefix}check failed: ${checkName(payload)}${note(payload.detail)}`;
     case "budget.warned": return `${prefix}budget warning: ${text(payload.message) || `${money(cost_usd)} spent`}`;
     case "budget.blocked": return `${prefix}budget BLOCKED: ${text(payload.message) || "the spawn was refused"}`;
