@@ -39,6 +39,18 @@ export interface ExecutorTask {
   readonly error: string | null;
   /** Run-relative paths the task wrote. */
   readonly outputs: readonly string[];
+  /**
+   * False when this turn was billed to the HOST session rather than metered here
+   * (design §B.3): `run.yml` records `cost_usd: null, metered: false` instead of
+   * a `$0.00` that reads as a measurement and is a false one.
+   *
+   * Absent means metered, which is what every task was before a role became
+   * delegable. Same three-value contract `commitStage` already uses for the
+   * single-agent in-session path — one meaning, one spelling.
+   */
+  readonly metered?: boolean;
+  /** `--tokens`-style declaration for an unmetered turn, when the host gave one. */
+  readonly tokens?: number;
 }
 
 export interface ExecutorContext {
@@ -93,6 +105,16 @@ export interface ExecutorContext {
    * nothing has been built off it yet".
    */
   readonly discardPending: boolean;
+  /**
+   * `--review` — this `--prepare`/`--commit` cycle is for the story's REVIEWER
+   * (design §B.3), not its developer.
+   *
+   * The reviewer is the second delegable role and it goes through the SAME
+   * handshake: `--prepare --review` writes `.agent/<stage>/<story>/review/`,
+   * `--commit --review` reads its `result.json` as a `REVIEW_SCHEMA` envelope and
+   * settles the story. An executor with one role ignores it.
+   */
+  readonly review: boolean;
   /**
    * `run.yml`'s `attended_by: host` (spec §2.2) — a host session is driving this
    * run and the framework does not spawn on it.

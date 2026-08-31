@@ -963,7 +963,7 @@ single scalar with no unit on it and had no way to say *"this number is not doll
 | the number means | dollars a spawn may spend | a host-billed budget in units nobody here meters |
 | `--max-budget-usd` on a spawn | the cap, as today | **never derived from it** |
 | `tldrx next` headless | spawns | **refuses, exit 2, before spending** (§5) |
-| `tldrx next --prepare` / `--commit` | runs | runs — this is where a host-billed turn belongs |
+| `tldrx next --prepare` / `--commit` (incl. `--review`) | runs | runs — this is where a host-billed turn belongs |
 | budget-gate hook | denies on `spent + estimate > ceiling` | never denies; says so on stderr |
 | auto-gate condition 3 | as today | `n/a (host-tokens economy)`, recorded in the note |
 | `run.yml` `spent_usd` | Σ metered costs | stays 0 — an in-session turn reports no cost to roll up |
@@ -1908,8 +1908,9 @@ one story never varies:
    exit 0` per dod command, `commit <sha>`, and the review path. A `changes` verdict sets the story `review` and
    requeues it **once**, with the review rendered under `## Previous attempt`; a second `changes` blocks it. An
    `error` verdict also parks the story at `review` but spends **no** attempt: the diff is committed, merged and
-   DoD-green, so the next `tldrx next` — headless or `--prepare` — re-runs the **review alone**, recovering the commit
-   and the DoD results from `events.jsonl`. Only a real verdict consumes the requeue.
+   DoD-green, so the next `tldrx next` re-runs the **review alone**, recovering the commit and the DoD results from
+   `events.jsonl`. Only a real verdict consumes the requeue. Headless re-runs it by spawning; `--prepare` writes the
+   reviewer bundle for the host and stops (see "the second delegable role" below).
 
 **Blast radius is one story.** A red DoD, a merge conflict or a failed sub-agent blocks that story only; the epic
 carries on with the next, and so does the wave. **The phase never ships:** no epic is merged into a default branch, so
@@ -2089,6 +2090,27 @@ for parallelism — the view is byte-for-byte what it was.
 pending story into `.agent/<stage>/<story-id>/`, marks it `in_progress` (the file is how `--commit` finds it again),
 and stops; `--commit` picks that story's pipeline up at the DoD step and prepares nothing. The host session
 dispatches its own sub-agent, and this side has no way to know how many it is willing to run.
+
+**The REVIEWER is the second delegable role: `next --prepare --review` / `--commit --review`.** Same handshake, one
+directory down — `.agent/<stage>/<story-id>/review/{prompt.md,pending.json,result.json}`, nested so a reviewer bundle
+can never be read as a developer one. `--prepare --review` writes the prompt a spawned reviewer would have been sent
+(the same renderer), plus `role: reviewer`, `result_schema` (the reviewer's `--json-schema` envelope, verbatim, so the
+host needs no source to know the shape) and a `review:` block carrying the diff command, the merged commit, the
+attempt and the **DoD results recovered from `events.jsonl`** — and it **spawns nothing**. `--commit --review` reads
+that `result.json` as the envelope, narrows it with the SAME fail-closed parser (unreadable ⇒ `changes`, never
+`approve`), and settles the story through the same code a spawned verdict goes through: `approve` ⇒ `done`, `changes`
+⇒ one requeue then `blocked`, attempt accounting untouched. A host that never writes `result.json` has produced no
+verdict and spends no attempt. The turn is recorded `cost_usd: null, metered: false` (a `cost_usd`/`tokens` in the
+envelope declares it), the `check: review` event carries `source: host`, and **no `agent.spawned` is emitted** — a
+`task.started` with `role: reviewer, mode: prepare` is. A settled handshake removes the bundle; its presence is what
+says a review is outstanding, and `--discard-pending` bins it like any other.
+
+Two things route into it without the flag. A story **waiting on a review** — its last reviewer errored, or its review
+is already out with the host — gets its reviewer bundle from a bare `tldrx next --prepare`, because a `--prepare` that
+spawns is not a `--prepare` (measured 2026-08-31: the re-review path spawned a metered reviewer under `--prepare` and
+a host timeout killed it mid-read). And on a run marked **`attended_by: host`** the executor never calls the reviewer
+spawn at all: half B merges the story and hands the review over, so one review is done once, by the session that is
+already reading the diff. Outside attended mode the headless reviewer is unchanged and `--review` is opt-in.
 
 **Watch executor** (`05-watch`, spec §2.16). In order:
 

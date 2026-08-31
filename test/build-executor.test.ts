@@ -570,11 +570,15 @@ describe("a reviewer that FAILED is not a verdict", () => {
       .toContain("`npm run test` → exit 0");
   }, 60_000);
 
-  test("--prepare re-runs the review instead of handing out a developer bundle", async () => {
+  test("--prepare writes the REVIEWER bundle instead of handing out a developer bundle", async () => {
     // The live shape, start to finish: the whole story goes through the
     // in-session doors, its reviewer dies, and the NEXT --prepare is the moment
     // the old code said `task.started … attempt: 2, mode: prepare` for work
     // nobody had asked for.
+    //
+    // Since 2026-08-31 it does not spawn a replacement reviewer either: a
+    // `--prepare` that spawns is the one thing `--prepare` must never be, and on
+    // the live run a host timeout killed exactly that spawn mid-read.
     const ws = workspace(TWO_WAVES);
     const promptDir = join(ws.root, "prompts");
     process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
@@ -597,15 +601,32 @@ describe("a reviewer that FAILED is not a verdict", () => {
     const prepared = await next(ws, { mode: "prepare", at: "2026-08-29T10:05:00Z" });
 
     const said = prepared.lines.join("\n");
-    expect(said).toContain("re-running the REVIEW only");
-    expect(said).toContain("review only — no developer attempt was owed");
-    expect(said).toContain("S2 is next");
+    expect(said).toContain("the previous reviewer FAILED");
+    expect(said).toContain("preparing the REVIEW only");
+    expect(said).toContain("prepared the REVIEW of S1");
+    expect(said).toContain("tldrx next --commit --review");
     // The two sentences the old path printed here, and must not print again.
-    expect(said).not.toContain("prepared S1");
+    expect(said).not.toContain("prepared S1 ·");
     expect(said).not.toContain("dispatch ONE sub-agent");
+    // Parked, not settled: the verdict is the host's to write.
+    expect(story(ws, "S1")).toContain("status: review");
+    // And NOTHING was spawned by the prepare. The developer was the HOST's, so it
+    // left no spawn prompt at all; the only spawn this run ever made is the one
+    // reviewer that died inside `--commit`.
+    expect(readdirSync(promptDir).sort()).toEqual(["reviewer-S1-1.md"]);
+
+    // The host answers, and the same seam settles it.
+    writeFileSync(
+      join(ws.runDir, ".agent", "build", "S1", "review", "result.json"),
+      JSON.stringify({ verdict: "approve", summary: "read the diff by hand", findings: [] }),
+      "utf8",
+    );
+    const settled = await next(ws, { mode: "commit", review: true, at: "2026-08-29T10:20:00Z" });
+    expect(settled.lines.join("\n")).toContain("S1 → `done` (host review, unmetered)");
+    expect(settled.lines.join("\n")).toContain("S2 is next");
     expect(story(ws, "S1")).toContain("status: done");
-    // The reviewer ran a second time; the developer did not.
-    expect(readdirSync(promptDir).sort()).toEqual(["reviewer-S1-1.md", "reviewer-S1-2.md"]);
+    // Still one spawn for the whole story: the host's review replaced the second.
+    expect(readdirSync(promptDir).sort()).toEqual(["reviewer-S1-1.md"]);
   }, 60_000);
 
   test("a run recorded by the OLD code still resumes at the review", async () => {

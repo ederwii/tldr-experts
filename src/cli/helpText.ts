@@ -413,6 +413,11 @@ const ENTRIES: readonly CommandHelp[] = [
       { name: "dry-run", arg: null, meaning: "Say which stage would run, with its inputs and budget. Spawns nothing and writes nothing." },
       prepare(),
       commit(),
+      {
+        name: "review",
+        arg: null,
+        meaning: "--prepare/--commit only: this half of the handshake is for the story's REVIEWER, not its developer. --prepare --review writes the reviewer bundle (prompt, diff refs, the DoD already re-run, and the result schema) into .agent/<stage>/<story>/review/ and spawns nothing; --commit --review reads that bundle's result.json as the {verdict, summary, findings} envelope and settles the story by the same rules a spawned review does. Bare --prepare already routes here on its own when a story is waiting on a review.",
+      },
       model(),
       effort(),
       maxUsd(),
@@ -459,6 +464,8 @@ const ENTRIES: readonly CommandHelp[] = [
       "tldrx next --discard-pending",
       "tldrx next --prompt-max-bytes 120000 --max-reads 60",
       "tldrx next --parallel 3",
+      "tldrx next --prepare --review",
+      "tldrx next --commit --review",
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_AWAITING_HUMAN, EXIT_AGENT_FAILED],
     notes: [
