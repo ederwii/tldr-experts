@@ -186,6 +186,28 @@ at creation, so a run keeps the policy it was opened with even after the workflo
 changes. A `run.yml` from before 0.3.0, or a workflow with no `gates:` block, is `human`
 everywhere.
 
+### Moving a frozen policy: `tldrx run gates set`
+
+Frozen is the right default and it is not being taken back. What it left with no door at all
+is a run opened BEFORE the `agent` policy existed: it can never use `approve --as-agent`, and
+`run.yml` is hand-edit-forbidden, so the only remaining move was to abandon the run and open
+a new one. `tldrx run gates set` is that door, and the ONLY sanctioned one:
+
+```
+$ tldrx run gates set plan:agent --note "predates the agent policy; the pilot signs with evidence"
+```
+
+One stage per invocation (a comma list is refused — a second change would ride along on the
+first one's note), the policy named outright (a bare `plan` is refused here even though it
+means `human` under `--gates`, because a signature must not rest on a default), and a no-op
+is refused rather than recorded. It changes who may CLOSE a gate from then on; gates already
+signed are untouched.
+
+**`--note` is required.** The change is human-signed exactly like `story reopen`: it appends
+one `gate.policy_changed` event carrying the **actor**, the moment, your **note** and the
+old→new value. That event is the entire audit trail for the one gate mutation nobody would
+otherwise go looking for, which is why the framework will not record the change without it.
+
 ### What an auto gate cannot do
 
 An auto gate is a gate the harness may sign when it can show its work. It is not a claim
@@ -414,7 +436,8 @@ The `gate` card is the fallback: `Gate — N reason(s) an agent gate could not c
 
 `tldrx answer`, `questions.md`, the live dashboard and every exit code are unchanged —
 `--gate-agent` is rendering, and it never upgrades a stage to `gates_policy: agent`, which is
-frozen at `run new`.
+frozen at `run new`. To actually move it on an open run, see
+[Moving a frozen policy](#moving-a-frozen-policy-tldrx-run-gates-set).
 
 ### Taking an approval back
 

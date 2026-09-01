@@ -45,8 +45,8 @@ export const ticketsCommand: Command = {
   name: "tickets",
   summary: "Mirror the plan's epics and stories to a ticket tool (files stay the source of truth)",
   usage:
-    "tldrx tickets sync [--run <id>] [--apply] [--provider github|jira] [--root <path>]\n"
-    + "       tldrx tickets status [--run <id>] [--root <path>]",
+    "tldrx tickets sync [<run>] [--run <id>] [--apply] [--provider github|jira] [--root <path>]\n"
+    + "       tldrx tickets status [<run>] [--run <id>] [--root <path>]",
   subcommands: ["sync", "status"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {

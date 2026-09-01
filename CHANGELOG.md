@@ -165,6 +165,42 @@
 
 ### Fixed
 
+- **`tickets sync`, `tickets status` and `budget show` took a run id as a positional that neither
+  their `usage` nor their `--help` declared (#53).** Measured at `7ac298c`:
+  `tldrx tickets status zzz-positional-probe` and `tldrx budget show zzz-positional-probe` both reach the
+  run resolver and exit `3` with `no run 'zzz-positional-probe'`, so both forms have always been
+  supported. The mechanism is the same in each: the subcommand word is consumed by the dispatcher
+  (`tickets.ts:53`, `budget.ts:32`) before `stringFlag(args, "run") ?? args.positionals[0]` runs
+  (`tickets.ts:246`, `budget.ts:48`), so `positionals[0]` is a run id by then.
+  - **The capability is DECLARED, not removed.** `usage` now reads `tldrx tickets sync [<run>] …`,
+    `tldrx tickets status [<run>] …` and `tldrx budget show [<run>] …`, and both help entries gain the
+    `[<run>]` arg every other run-scoped command already carries. Nothing about what the CLI accepts
+    changed.
+  - **This is the axis #51's guard cannot see.** That guard compares the registry to the usage; here the
+    registry itself was narrower than the code, and where both are silent both are green. The new check
+    in `test/cli.test.ts` is a hand-written list — nothing derives a positional from source — but its
+    BEHAVIOURAL half spawns the real CLI against a throwaway workspace, so it also goes red if the
+    capability is ever removed, which is the direction a tidy-up of the arg parsing would break it in.
+
+- **`tldrx run gates set` was documented nowhere in `docs/` (#54).** `grep -rn "gates set" docs/` returned
+  nothing at `7ac298c`, so the CLI reference — the page a reader lands on from the README — described
+  seven of `tldrx run`'s eight subcommands. It matters more than an ordinary docs gap because `gates set`
+  is the ONLY sanctioned way to move a `gates_policy` that `run new` froze, and the situation it exists for
+  (a run opened before the `agent` policy existed, which can otherwise never use `approve --as-agent`) is
+  one an operator hits mid-run and searches the docs for. What they found was "abandon the run".
+  - Documented in all three places the question gets asked from: the `tldrx run` usage block and a new
+    prose entry in `docs/guide/08-cli-reference.md`; a **Moving a frozen policy** section in
+    `docs/guide/03-runs-and-gates.md`, right under the paragraph that explains the freeze, with the
+    `--gate-agent` disclaimer further down now linking to it; and `docs/spec.md`, both in §2.2's
+    `gates_policy` row and as its own §CLI row (exits `0,1,2,3`, each measured).
+  - Every copy carries the two facts a usage line cannot: **`--note` is mandatory**, and the change
+    appends one **`gate.policy_changed`** event with the actor, the moment, the note and the old→new
+    value — the whole audit trail for a mutation nobody would otherwise go looking for.
+  - Guarded: `test/cli.test.ts` now asserts the CLI reference names every subcommand in
+    `runCommand.subcommands`, plus `gate.policy_changed` by name. Scoped to `run` on purpose —
+    `plan sync-dod` has no section on that page at all (a separate gap, unfiled), and `hook`'s seven
+    scripts are deliberately documented as one `<script>` slot.
+
 - **The epic file duplicated every story's status, and nothing ever updated the copy (#50).**
   Measured on `260829-scoring-leaderboard` (2026-09-01): `03-plan/epics/E1.md` listed S1, S2 and S3 as
   `todo` in its `## Stories` table while `03-plan/stories/S1.md` said `done` (merged at `0a50660`,

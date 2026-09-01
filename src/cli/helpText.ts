@@ -764,6 +764,7 @@ const ENTRIES: readonly CommandHelp[] = [
     name: "budget",
     description: "What the run may still spend, and where to move a ceiling from.",
     args: [
+      { name: "[<run>]", meaning: "budget show: a run id. Omit it and the one open run is used." },
       { name: "<phase>", meaning: "budget raise: the phase whose ceiling goes up, e.g. 04-build." },
       {
         name: "<usd>",
@@ -950,7 +951,7 @@ const ENTRIES: readonly CommandHelp[] = [
   {
     name: "tickets",
     description: "Mirror the plan's epics and stories to a ticket tool. The files stay the source of truth.",
-    args: [],
+    args: [{ name: "[<run>]", meaning: "A run id. Omit it and the one open run is used." }],
     flags: [
       runFlag(),
       {
