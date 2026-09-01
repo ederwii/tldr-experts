@@ -22,7 +22,7 @@ import { knownScopes } from "../core/seed/splitFile.ts";
 import { EFFORT_LEVELS } from "../core/schemas/stage.ts";
 import { UI_MODES } from "../core/ui/index.ts";
 import {
-  EXIT_AGENT_FAILED, EXIT_AWAITING_HUMAN, EXIT_GATE_REFUSED, EXIT_NOT_FOUND,
+  EXIT_AGENT_FAILED, EXIT_AWAITING_HUMAN, EXIT_FAILED, EXIT_GATE_REFUSED, EXIT_NOT_FOUND,
   EXIT_NOT_IMPLEMENTED, EXIT_OK, EXIT_USAGE,
 } from "./exitCodes.ts";
 
@@ -243,6 +243,26 @@ const ENTRIES: readonly CommandHelp[] = [
       "tldrx install --claude --user --dry-run",
     ],
     exits: [EXIT_OK, EXIT_USAGE],
+  },
+  {
+    name: "update",
+    description: "Update tldrx to the latest published version, and print the CHANGELOG between the two.",
+    args: [],
+    flags: [
+      { name: "dry-run", arg: null, meaning: "Print the exact `npm` command and install nothing." },
+    ],
+    examples: [
+      "tldrx update",
+      "tldrx update --dry-run",
+    ],
+    exits: [EXIT_OK, EXIT_FAILED],
+    notes: [
+      "It is `npm i -g tldr-experts@latest` and nothing more clever \u2014 the same command you would type, run for you.",
+      "The version it reports is READ BACK from what npm installed (`$(npm root -g)/tldr-experts/package.json`), never assumed: this process is the OLD build and has no way to know what the new one is. If that read fails it says so and prints no changelog.",
+      "The changelog delta comes from the CHANGELOG.md that shipped with the version just installed, so the text you read is the text that came with the code now on disk.",
+      "On any invocation, a cached one-line notice tells you when a newer version exists. The registry is never called on the hot path: the check runs in a detached child after the output, caches its answer under `~/.tldrx/` for a day, and the NEXT invocation reads the cache. It is silent on any network failure, and never appears in `--json` output or during hook execution.",
+      "Opt out with `TLDRX_UPDATE_CHECK=off` for one shell, or `update_check: off` in `~/.tldrx/config.yml` for the machine.",
+    ],
   },
   {
     name: "doctor",
@@ -735,7 +755,7 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "ship",
-    description: "Open a pull request from the run's epic branch, with the run's handoff as the body.",
+    description: "Open a pull request from the run's epic branch \u2014 one per repo the branch is in \u2014 with the run's handoff as the body.",
     args: [{ name: "[<run>]", meaning: "A run id. Omit it and the one open run is used." }],
     flags: [
       {
@@ -746,7 +766,7 @@ const ENTRIES: readonly CommandHelp[] = [
       {
         name: "repo",
         arg: "<name>",
-        meaning: "Which repo of the workspace the branch lives in. Only needed when more than one repo has a branch by that name.",
+        meaning: "Ship to ONE repo only. Without it, a branch that exists in several repos gets one PR in each.",
       },
       {
         name: "base",
@@ -769,6 +789,8 @@ const ENTRIES: readonly CommandHelp[] = [
       "The body is the LAST phase handoff the run has on disk \u2014 `04-build/handoff.md` on a run that built something \u2014 sent to `gh` as a file, never as an argument, so a long handoff cannot overflow an argv limit.",
       "It is read-only about the run: no event, no gate, no cursor. To mirror the plan's epics and stories to a ticket tool, `tldrx tickets sync` is the verb that does that, and it stays separate.",
       "It refuses cleanly, in a sentence, when there is no epic branch, no handoff, no remote, no `gh` on PATH, or when several epic branches leave the choice open.",
+      "When the branch exists in SEVERAL repos \u2014 the normal shape of a chained multi-repo run, whose epics share one integration branch \u2014 it opens one PR per repo: the same handoff as the body, the repo name in the title, and every URL listed at the end. `--repo` narrows it to one.",
+      "A partial failure names both sides: the PRs that were opened, with their URLs, and the repos that failed, with the reason. Run it again to retry the rest \u2014 a repo whose PR is already open is skipped, so re-running opens nothing twice.",
     ],
   },
   {

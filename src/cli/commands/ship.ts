@@ -20,7 +20,7 @@ const VALUE_FLAGS = ["run", "root", "branch", "repo", "base"];
 
 export const shipCommand: Command = {
   name: "ship",
-  summary: "Open a PR from the run's epic branch, with its handoff as the body",
+  summary: "Open a PR from the run's epic branch (one per repo), handoff as the body",
   usage: "tldrx ship [<run>] [--branch <name>] [--repo <name>] [--base <branch>]\n"
     + "                  [--draft] [--dry-run] [--run <id>] [--root <path>]",
   subcommands: [],

@@ -48,6 +48,7 @@ Ctrl-C on a spawning command exits `130`.
 |---|---|
 | `TLDRX_UI` | The progress view, same values as `--ui`. The flag wins where both are given. |
 | `TLDRX_CLAUDE_BIN` | Which binary a sub-agent spawn executes. Default `claude`, taken off `PATH`. |
+| `TLDRX_UPDATE_CHECK` | `off` (also `0`, `false`, `no`, `never`) silences the new-version notice. |
 
 `TLDRX_CLAUDE_BIN` replaces the executable **name only** — the arguments are still Claude
 Code's (`-p --output-format stream-json --verbose --json-schema …`), so whatever it points at
@@ -120,6 +121,46 @@ tldrx install --claude [--project|--user] [--skill-only] [--no-hooks] [--no-stat
 | `--dry-run` | Print what would be written or removed. Writes nothing |
 
 Exits: `0` `1`.
+
+## `tldrx update`
+
+Update tldrx to the latest published version and print the CHANGELOG between the two.
+
+```
+tldrx update [--dry-run]
+```
+
+| Flag | Meaning |
+|---|---|
+| `--dry-run` | Print the exact `npm` command and install nothing |
+
+Exits: `0` `1`.
+
+It is `npm i -g tldr-experts@latest`, run for you. The version it reports is **read back**
+from what npm installed (`$(npm root -g)/tldr-experts/package.json`), never assumed — the
+process printing the line is the OLD build. The changelog delta comes from the `CHANGELOG.md`
+that shipped with the version now on disk.
+
+### The new-version notice
+
+Any invocation may print one line, on stderr, after the command's own output:
+
+```
+tldr-experts 0.5.0 available (you have 0.4.0) — tldrx update
+```
+
+It never delays a command. The registry is called in a **detached child** after the output,
+which caches its answer in `~/.tldrx/version-check.json` for a day; the next invocation reads
+that file and nothing else. Any network failure is silent. The line never appears in `--json`
+output, during `tldrx hook` / `tldrx statusline`, when stdout is not a terminal, or in CI.
+
+Opt out with `TLDRX_UPDATE_CHECK=off` for one shell, or for the machine:
+
+```yaml
+# ~/.tldrx/config.yml
+version: 1
+update_check: off
+```
 
 ## `tldrx doctor`
 

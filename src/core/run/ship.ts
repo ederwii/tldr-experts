@@ -12,8 +12,35 @@
  * ## What it does, and the three things it will not do
  *
  * It reads the epic branch off `run.yml` (`build.epic_branch`, written by the
- * Build executor), finds the repo that branch lives in, takes the LAST phase
- * handoff on disk as the body, and runs one `gh pr create`. That is all.
+ * Build executor), finds the repo (or repos) that branch lives in, takes the LAST
+ * phase handoff on disk as the body, and runs one `gh pr create` per repo.
+ *
+ * ## One branch, several repos (issue #66)
+ *
+ * Since #57 a chained multi-repo run cuts ONE integration branch, `epic/<run-id>`,
+ * with the same name in every repo of the run — so the lookup finds it in more than
+ * one, every time, by construction. It used to refuse with `pass one: --repo <name>`,
+ * which made the last step of every such run "type the same command once per repo
+ * and remember which ones already went through". The owner's decision (2026-09-01,
+ * on the issue) is that it opens one PR per repo automatically: the same handoff as
+ * the body, the repo name in the title, and the list of URLs at the end.
+ *
+ * Three properties that shape the code below:
+ *
+ *   **One repo is byte-identical.** The common case takes the path it always took
+ *   — same title, same four lines, and not one extra process. The `gh pr list`
+ *   probe exists for re-runnability across several repos and never runs when there
+ *   is only one.
+ *
+ *   **A partial failure is reported, not swallowed.** PR 2 of 3 failing still opens
+ *   PR 3, and the output names every repo on both sides. Exit `2`, because the verb
+ *   did not do all of what was asked — but the PRs that were opened are named, so
+ *   nobody has to go looking.
+ *
+ *   **Re-running is safe.** Before creating, each repo is asked whether an open PR
+ *   for this branch already exists (`gh pr list --head`); one that has is skipped
+ *   and listed. So the fix for a partial failure is `tldrx ship` again, and nothing
+ *   else.
  *
  * **It never pushes.** `core/build/git.ts` has no `git push` wrapper on purpose —
  * spec §5, "the phase ends at a human gate, and nothing it runs may publish a
@@ -154,45 +181,36 @@ export async function shipRun(options: ShipOptions): Promise<ShipOutcome> {
     ]);
   }
 
-  const repo = await findRepo(options, store, branch);
-  if ("code" in repo) return repo;
+  const repos = await findRepos(options, store, branch);
+  if ("code" in repos) return repos;
 
-  const remotes = await listRemotes(options.transport, repo.dir);
-  const remote = remotes.includes("origin") ? "origin" : remotes.length === 1 ? remotes[0] : null;
-  if (remote === undefined || remote === null) {
-    return refuse([
-      remotes.length === 0
-        ? `\`${repo.name}\` has no git remote, so there is nowhere to open a PR`
-        : `\`${repo.name}\` has ${String(remotes.length)} remotes and none is called \`origin\` `
-          + `(${remotes.join(", ")}) — this verb will not pick one`,
-      remotes.length === 0
-        ? "  add one (`git remote add origin <url>`) and push the branch, then try again."
-        : "  rename one to `origin`, or open the PR by hand.",
-    ]);
+  const only = repos[0];
+  if (repos.length === 1 && only !== undefined) {
+    return await shipOne(options, store, branch, only, handoff);
   }
+  return await shipMany(options, store, branch, repos, handoff);
+}
 
-  // The branch must ALREADY be on the remote. tldrx does not publish branches.
-  const onRemote = await options.transport.run(
-    "git", ["ls-remote", "--heads", remote, branch], repo.dir,
-  );
-  if (onRemote.exitCode !== 0 || onRemote.stdout.trim() === "") {
-    return refuse([
-      `\`${branch}\` is not on \`${remote}\`, and tldrx does not publish branches`,
-      `  push it yourself, then run this again:`,
-      `    git -C ${repo.dir} push -u ${remote} ${branch}`,
-      "  (spec §5: nothing the framework runs may publish a branch — that decision is yours.)",
-    ]);
-  }
+/**
+ * One repo — the path this verb has always taken, unchanged down to the wording.
+ *
+ * Kept whole rather than expressed as `shipMany` with a list of one: the four lines
+ * it prints are what an operator's eye and more than one test are keyed on, and a
+ * "unified" renderer that agrees with them today would be free to stop agreeing
+ * with them tomorrow. `test/ship-multi-repo.test.ts` asserts them as exact strings.
+ */
+async function shipOne(
+  options: ShipOptions,
+  store: RunStore,
+  branch: string,
+  repo: ShipRepo,
+  handoff: Handoff,
+): Promise<ShipOutcome> {
+  const prepared = await prepareRepo(options, repo, branch);
+  if (!prepared.ok) return refuse(prepared.lines);
+  const base = prepared.base;
 
-  const base = options.base ?? loadWorkspace(options.root).defaultBranches.get(repo.name) ?? FALLBACK_DEFAULT_BRANCH;
-  const args = [
-    "pr", "create",
-    "--head", branch,
-    "--base", base,
-    "--title", store.run.title,
-    "--body-file", handoff.path,
-    ...(options.draft === true ? ["--draft"] : []),
-  ];
+  const args = createArgs(branch, base, store.run.title, handoff.path, options.draft === true);
   const command = `gh ${args.map(quote).join(" ")}`;
 
   if (options.dryRun === true) {
@@ -230,6 +248,254 @@ export async function shipRun(options: ShipOptions): Promise<ShipOutcome> {
   };
 }
 
+/** What happened in ONE repo. The list of these is the output (issue #66). */
+interface RepoOutcome {
+  readonly repo: ShipRepo;
+  readonly kind: "opened" | "existing" | "would" | "failed";
+  readonly url?: string;
+  /** The `gh pr create` that ran, or would. Printed for `--dry-run` and for failures. */
+  readonly command?: string;
+  readonly base?: string;
+  /** A failure's own sentences — the same ones one repo would have been refused with. */
+  readonly detail?: readonly string[];
+}
+
+/**
+ * Several repos sharing one branch name: one PR each, in the run's repo order.
+ *
+ * No repo's problem stops another's PR. A repo that cannot be shipped to — no
+ * remote, an unpushed branch, a `gh` that refused — is recorded and the loop moves
+ * on, because the alternative (abort on the first failure) leaves the operator with
+ * a half-shipped run and no statement of which half.
+ */
+async function shipMany(
+  options: ShipOptions,
+  store: RunStore,
+  branch: string,
+  repos: readonly ShipRepo[],
+  handoff: Handoff,
+): Promise<ShipOutcome> {
+  const results: RepoOutcome[] = [];
+  for (const repo of repos) {
+    const prepared = await prepareRepo(options, repo, branch);
+    if (!prepared.ok) {
+      results.push({ repo, kind: "failed", detail: prepared.lines });
+      continue;
+    }
+    // The repo name goes IN the title, so three tabs of the same PR are tellable apart.
+    const title = `${store.run.title} (${repo.name})`;
+    const args = createArgs(branch, prepared.base, title, handoff.path, options.draft === true);
+    const command = `gh ${args.map(quote).join(" ")}`;
+
+    if (options.dryRun === true) {
+      results.push({ repo, kind: "would", base: prepared.base, command });
+      continue;
+    }
+
+    // Re-runnability: a repo whose PR is already open is skipped, never asked for a
+    // second one. `gh pr create` would refuse it anyway — but as a FAILURE, which
+    // would make re-running after a partial failure look worse than the first try.
+    const already = await openPrFor(options, repo, branch);
+    if (already !== null) {
+      results.push({ repo, kind: "existing", url: already, base: prepared.base });
+      continue;
+    }
+
+    const created = await options.transport.run(GH_BIN, args, repo.dir);
+    if (created.exitCode !== 0) {
+      results.push({
+        repo,
+        kind: "failed",
+        command,
+        detail: [
+          `\`gh pr create\` failed (exit ${String(created.exitCode)}) — no PR was opened`,
+          ...(firstLine(created.stderr) === "" ? [] : [`  ${firstLine(created.stderr)}`]),
+          `  the command, to run by hand: ${command}`,
+        ],
+      });
+      continue;
+    }
+    results.push({
+      repo,
+      kind: "opened",
+      base: prepared.base,
+      url: lastUrl(created.stdout) ?? lastUrl(created.stderr) ?? undefined,
+    });
+  }
+  return renderMany(store, branch, handoff, results, options.dryRun === true);
+}
+
+/**
+ * The multi-repo report: a head line with the counts, one line per repo, and what a
+ * partial failure should do next.
+ *
+ * Repo order, not grouped by outcome: the operator asked for these repos in this
+ * order and two runs of the same command must read the same way.
+ */
+function renderMany(
+  store: RunStore,
+  branch: string,
+  handoff: Handoff,
+  results: readonly RepoOutcome[],
+  dryRun: boolean,
+): ShipOutcome {
+  const width = Math.max(...results.map((result) => result.repo.name.length), 1);
+  const pad = (name: string): string => name.padEnd(width);
+  const gap = " ".repeat(width);
+  const opened = results.filter((result) => result.kind === "opened");
+  const existing = results.filter((result) => result.kind === "existing");
+  const failed = results.filter((result) => result.kind === "failed");
+  const total = String(results.length);
+  const names = results.map((result) => result.repo.name).join(", ");
+  const body = `  body: ${handoff.rel}, the same one in every repo`;
+
+  if (dryRun) {
+    return {
+      code: EXIT_OK,
+      lines: [
+        `would open ${total} PRs for ${store.runId} from \`${branch}\` (${names})`,
+        `  body: ${handoff.rel} (${String(handoff.bytes)} B), the same one in every repo`,
+        ...results.flatMap((result) => result.kind === "failed"
+          ? [`  ${pad(result.repo.name)}  cannot: ${result.detail?.[0] ?? ""}`]
+          : [
+            `  ${pad(result.repo.name)}  into \`${result.base ?? ""}\` (cwd ${result.repo.dir})`,
+            `  ${gap}  ${result.command ?? ""}`,
+          ]),
+        "  --dry-run: nothing was created.",
+      ],
+    };
+  }
+
+  const head = failed.length === 0
+    ? `opened ${String(opened.length)} of ${total} PRs for ${store.runId} from \`${branch}\` (${names})`
+      + (existing.length === 0 ? "" : ` — ${String(existing.length)} already open`)
+    : `opened ${String(opened.length)} of ${total} PRs for ${store.runId} from \`${branch}\` (${names})`
+      + ` — ${String(failed.length)} repo${failed.length === 1 ? "" : "s"} failed`;
+
+  const rows = results.flatMap((result) => {
+    const name = pad(result.repo.name);
+    if (result.kind === "opened") return [`  ${name}  ${result.url ?? "gh printed no URL"}`];
+    if (result.kind === "existing") return [`  ${name}  already open: ${result.url ?? ""}`];
+    return [
+      `  ${name}  FAILED: ${result.detail?.[0] ?? ""}`,
+      ...(result.detail ?? []).slice(1).map((line) => `  ${gap}  ${line.trimStart()}`),
+    ];
+  });
+
+  const standing = opened.length + existing.length;
+  const tail = failed.length === 0
+    ? [
+      body,
+      `  next: \`tldrx tickets sync --run ${store.runId}\` mirrors the plan's epics and stories, `
+        + "if this workspace configures a ticket tool.",
+    ]
+    : [
+      body,
+      `  the ${String(standing)} PR${standing === 1 ? "" : "s"} above ${standing === 1 ? "is" : "are"} open. `
+        + "Run `tldrx ship` again to retry the rest — a repo whose PR is already open is skipped, "
+        + "so re-running opens nothing twice.",
+    ];
+
+  return { code: failed.length === 0 ? EXIT_OK : EXIT_REFUSED, lines: [head, ...rows, ...tail] };
+}
+
+/** The `gh pr create` argv. Identical for one repo and for many but the title. */
+function createArgs(
+  branch: string,
+  base: string,
+  title: string,
+  bodyFile: string,
+  draft: boolean,
+): readonly string[] {
+  return [
+    "pr", "create",
+    "--head", branch,
+    "--base", base,
+    "--title", title,
+    "--body-file", bodyFile,
+    ...(draft ? ["--draft"] : []),
+  ];
+}
+
+interface Prepared {
+  readonly ok: true;
+  readonly remote: string;
+  readonly base: string;
+}
+
+/**
+ * Everything that must be true of ONE repo before a PR can be opened in it, and the
+ * refusal sentences for when it is not.
+ *
+ * The lines are shared on purpose: they are what a single-repo run is refused with,
+ * and what a multi-repo run reports beside the repo's name. Two spellings of "the
+ * branch is not on origin" would be two pieces of advice for one problem.
+ */
+async function prepareRepo(
+  options: ShipOptions,
+  repo: ShipRepo,
+  branch: string,
+): Promise<Prepared | { readonly ok: false; readonly lines: readonly string[] }> {
+  const remotes = await listRemotes(options.transport, repo.dir);
+  const remote = remotes.includes("origin") ? "origin" : remotes.length === 1 ? remotes[0] : null;
+  if (remote === undefined || remote === null) {
+    return {
+      ok: false,
+      lines: [
+        remotes.length === 0
+          ? `\`${repo.name}\` has no git remote, so there is nowhere to open a PR`
+          : `\`${repo.name}\` has ${String(remotes.length)} remotes and none is called \`origin\` `
+            + `(${remotes.join(", ")}) — this verb will not pick one`,
+        remotes.length === 0
+          ? "  add one (`git remote add origin <url>`) and push the branch, then try again."
+          : "  rename one to `origin`, or open the PR by hand.",
+      ],
+    };
+  }
+
+  // The branch must ALREADY be on the remote. tldrx does not publish branches.
+  const onRemote = await options.transport.run("git", ["ls-remote", "--heads", remote, branch], repo.dir);
+  if (onRemote.exitCode !== 0 || onRemote.stdout.trim() === "") {
+    return {
+      ok: false,
+      lines: [
+        `\`${branch}\` is not on \`${remote}\`, and tldrx does not publish branches`,
+        `  push it yourself, then run this again:`,
+        `    git -C ${repo.dir} push -u ${remote} ${branch}`,
+        "  (spec §5: nothing the framework runs may publish a branch — that decision is yours.)",
+      ],
+    };
+  }
+
+  const base = options.base
+    ?? loadWorkspace(options.root).defaultBranches.get(repo.name)
+    ?? FALLBACK_DEFAULT_BRANCH;
+  return { ok: true, remote, base };
+}
+
+/**
+ * The URL of an OPEN PR for this branch in this repo, or null.
+ *
+ * `gh` failing, and `gh` printing something that is not the JSON it was asked for,
+ * both answer null: "I could not tell" must behave like "there is none", so that a
+ * transient `gh` problem can never silently turn a real ship into a skip.
+ */
+async function openPrFor(options: ShipOptions, repo: ShipRepo, branch: string): Promise<string | null> {
+  const listed = await options.transport.run(
+    GH_BIN, ["pr", "list", "--head", branch, "--state", "open", "--json", "url", "--limit", "1"], repo.dir,
+  );
+  if (listed.exitCode !== 0) return null;
+  let rows: unknown;
+  try {
+    rows = JSON.parse(listed.stdout);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(rows)) return null;
+  const url = (rows[0] as { url?: unknown } | undefined)?.url;
+  return typeof url === "string" && url !== "" ? url : null;
+}
+
 /** Which of the run's epic branches to ship. Never a guess between several. */
 function pickBranch(claimed: readonly string[], wanted?: string): string | ShipOutcome {
   const asked = wanted?.trim() ?? "";
@@ -260,19 +526,24 @@ interface ShipRepo {
 }
 
 /**
- * The repo the epic branch lives in.
+ * EVERY repo of the run whose branch this is, in the run's declared order.
  *
  * `run.yml` records the branch NAME and not its repo (`RunBuild.epic_branch` is a
  * list of strings), so it is looked up: the run's declared repos are asked, in
- * order, whether they have a ref by that name. Exactly one is an answer; zero and
- * several are both refusals, because picking either way would open a PR in a repo
- * nobody named.
+ * order, whether they have a ref by that name. Zero is still a refusal — a branch
+ * nobody has is not a PR anybody can open.
+ *
+ * SEVERAL used to be a refusal too ("pass one: --repo"). Since #57 that is the
+ * NORMAL shape of a chained multi-repo run — one integration branch, the same name
+ * in every repo — so the answer is now the list, and `shipMany` opens one PR in
+ * each (issue #66, owner decision 2026-09-01). `--repo` still narrows it to one,
+ * which is the escape hatch for the operator who wants exactly one of them.
  */
-async function findRepo(
+async function findRepos(
   options: ShipOptions,
   store: RunStore,
   branch: string,
-): Promise<ShipRepo | ShipOutcome> {
+): Promise<readonly ShipRepo[] | ShipOutcome> {
   const workspace = loadWorkspace(options.root);
   const declared = store.run.repos.length > 0 ? store.run.repos : [...workspace.repos.keys()];
   const wanted = options.repo?.trim() ?? "";
@@ -291,28 +562,21 @@ async function findRepo(
     if (rel === undefined) continue;
     const dir = resolve(options.root, rel);
     if (!existsSync(dir)) continue;
-    if (wanted !== "") return { name, dir };
+    if (wanted !== "") return [{ name, dir }];
     const has = await options.transport.run(
       "git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], dir,
     );
     if (has.exitCode === 0) found.push({ name, dir });
   }
 
-  const only = found[0];
-  if (only === undefined) {
+  if (found.length === 0) {
     return refuse([
       `no repo of this workspace has a branch \`${branch}\``,
       `  looked in ${names.join(", ") || "no repo at all"}`,
       "  the branch may have been deleted, or it may live in a repo workspace.yml does not name.",
     ]);
   }
-  if (found.length > 1) {
-    return refuse([
-      `\`${branch}\` exists in ${String(found.length)} repos (${found.map((r) => r.name).join(", ")})`,
-      `  pass one: \`tldrx ship --repo ${only.name}\``,
-    ]);
-  }
-  return only;
+  return found;
 }
 
 interface Handoff {

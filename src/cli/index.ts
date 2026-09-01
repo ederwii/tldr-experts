@@ -7,15 +7,21 @@
  * `--help` is answered here rather than inside each command, so that asking a
  * command what it does never needs a workspace, a run, or anything on disk.
  */
+import { homedir } from "node:os";
 import type { Command } from "./Command.ts";
 import { EXIT_OK, EXIT_USAGE } from "./exitCodes.ts";
 import { firstUnknownFlag, flagNames } from "./argv.ts";
 import { declaredFlags, declaredValueFlags, isPassthrough, supportsJson } from "./helpText.ts";
 import { installSignalHandlers } from "./signals.ts";
 import { learnAgentMain, LEARN_AGENT_ARGV0 } from "../core/learn/learnAgent.ts";
+import { frameworkVersion } from "../core/frameworkVersion.ts";
+import {
+  announceVersion, fetchRegistryText, VERSION_CHECK_ARGV0, versionCheckOnce,
+} from "../core/update/notice.ts";
 
 import { initCommand } from "./commands/init.ts";
 import { installCommand } from "./commands/install.ts";
+import { updateCommand } from "./commands/update.ts";
 import { doctorCommand } from "./commands/doctor.ts";
 import { runCommand } from "./commands/run.ts";
 import { statusCommand } from "./commands/status.ts";
@@ -50,6 +56,7 @@ import { makeHelpCommand, renderCommandHelp } from "./commands/help.ts";
 export const COMMANDS: readonly Command[] = [
   initCommand,
   installCommand,
+  updateCommand,
   doctorCommand,
   learnCommand,
   statusCommand,
@@ -114,6 +121,19 @@ export async function dispatch(argv: readonly string[]): Promise<number> {
   // does not list it: nothing but the sandbox's shim ever types it.
   if (name === LEARN_AGENT_ARGV0) return learnAgentMain(rest);
 
+  // Likewise not a command: the DETACHED child that `announceVersion` spawns after a
+  // command has finished printing (issue #62). It makes the one registry call, writes
+  // `~/.tldrx/version-check.json` for the next invocation, and exits 0 whatever
+  // happened — a version check that can fail loudly is worse than no version check.
+  if (name === VERSION_CHECK_ARGV0) {
+    await versionCheckOnce({
+      home: process.env.HOME ?? process.env.USERPROFILE ?? homedir(),
+      now: new Date(),
+      fetchText: fetchRegistryText,
+    });
+    return EXIT_OK;
+  }
+
   const command = lookup(name);
   if (!command) {
     // Exit 1, not 64. A name that was never a command is a USAGE error, and 64
@@ -132,7 +152,20 @@ export async function dispatch(argv: readonly string[]): Promise<number> {
     process.stderr.write(refusal);
     return EXIT_USAGE;
   }
-  return command.run(rest);
+  const code = await command.run(rest);
+  // AFTER the output, never before it, and never for `--help` (answered above) —
+  // the notice is a line the operator reads once the thing they asked for is done.
+  await announceVersion(
+    {
+      command: command.name,
+      argv: rest,
+      isTty: process.stdout.isTTY === true,
+      env: process.env,
+      home: process.env.HOME ?? process.env.USERPROFILE ?? homedir(),
+    },
+    frameworkVersion,
+  );
+  return code;
 }
 
 /**

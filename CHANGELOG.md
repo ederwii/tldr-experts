@@ -213,6 +213,56 @@
   every command: `hook`'s seven scripts are a deliberate spelling, and `note` and `ship` have the
   same gap #55 was about (filed separately).
 
+- **`tldrx update`, and a one-line notice when a newer version exists (#62, owner decision
+  2026-09-01: on by default, with an opt-out).** The owner installed 0.4.0 on a second machine and
+  found there was no way to ask the tool to update itself, and no way to be told a newer one existed.
+  - **`tldrx update` is `npm i -g tldr-experts@latest`, run for you**, plus the part a wrapper does
+    not give you: the CHANGELOG between the version you had and the version you now have.
+  - **The new version is READ BACK from what npm installed** —
+    `$(npm root -g)/tldr-experts/package.json`, with the delta taken from the `CHANGELOG.md` beside
+    it. The process printing that line is the OLD build and cannot know what the new one is; when the
+    read-back fails it says so and prints no changelog rather than inventing one.
+  - **The notice never touches the network on the hot path.** A command reads
+    `~/.tldrx/version-check.json` and nothing else. The registry call happens in a DETACHED child
+    (`stdio: "ignore"`, `unref()`) spawned after the output is written, and its answer is for the
+    NEXT invocation. Cached for 24 h; silent on any network failure, on a body that is not the JSON
+    it asked for, and on a home directory it cannot write.
+  - **Never in `--json`, never during a hook, never off a terminal.** `tldrx hook` and
+    `tldrx statusline` are suppressed by name (spec §0: a hook is deterministic), `--json` anywhere
+    in argv is suppressed, a non-TTY stdout is suppressed, and so is CI. The line itself goes to
+    stderr, so no command's stdout changes shape.
+  - One line, in the issue's own wording: `tldr-experts 0.5.0 available (you have 0.4.0) — tldrx
+    update`. Asserted as an exact string, because "roughly this sentence" is how one line becomes
+    three.
+  - **Opt out** with `TLDRX_UPDATE_CHECK=off` for a shell (spelled like `TLDRX_UI` and
+    `TLDRX_CLAUDE_BIN`; `0`, `false`, `no` and `never` also work), or `update_check: off` in
+    `~/.tldrx/config.yml` for the machine. A config file that does not parse is not an opt-out and
+    not a crash.
+
+### Changed
+
+- **`tldrx ship` opens one PR PER REPO when the branch is in more than one (#66, owner decision
+  2026-09-01).** Since #57 a chained multi-repo run cuts ONE integration branch, `epic/<run-id>`,
+  with the same name in every repo — so `ship` found it in several, every time, by construction, and
+  refused with `pass one: --repo <name>`. The last step of every such run was typing the same command
+  once per repo and remembering which ones had already gone through.
+  - Same handoff as the body of every PR, the repo name in the title, and every URL listed at the
+    end. Each PR opens against **that repo's own** `default_branch`.
+  - **One repo is byte-identical**, down to the four lines it prints and the number of processes it
+    spawns: the `gh pr list` probe below exists for the multi-repo case and never runs when there is
+    only one. The single-repo lines are asserted as exact strings, not substrings — "we did not
+    change the common case" is not a claim a `toContain` can make.
+  - **A partial failure names both sides.** PR 2 of 3 failing still opens PR 3, and the report lists
+    the repos that succeeded with their URLs and the repos that failed with the reason (exit `2`).
+    Aborting on the first failure would leave a half-shipped run and no statement of which half.
+  - **Re-running is safe.** Before creating, each repo is asked whether an open PR for the branch
+    already exists (`gh pr list --head`); one that has is skipped and listed. So the fix for a
+    partial failure is `tldrx ship` again and nothing else. A `gh` that fails or answers with
+    non-JSON is treated as "there is none", so a transient error can never silently turn a real ship
+    into a skip.
+  - `--repo` still narrows to exactly one, and `ship` still never pushes: an unpushed branch in one
+    repo is that repo's failure line, naming its `git push`, while the other repos' PRs still open.
+
 ## 0.4.0 — 2026-09-01
 
 ### Changed
