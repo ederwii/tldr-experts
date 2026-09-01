@@ -8,7 +8,7 @@
  * the fake fixture, and the signal tests send a real signal to a real `tldrx`
  * child process.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { FactsStore } from "../src/core/facts/FactsStore.ts";
@@ -37,6 +37,13 @@ import { EVENT_TYPES, validateEvent } from "../src/core/events/Event.ts";
 import { isAlive } from "../src/core/facilitator/Lock.ts";
 import { cancelRun, unlockRun } from "../src/core/run/rescue.ts";
 import type { TldrxEvent } from "../src/core/events/Event.ts";
+import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
+
+// Every test in this file spawns a REAL process — git, `bun`, the CLI. Process cost is a
+// property of the machine, not of the code, so bun's fixed 5000 ms default measures the box:
+// on an untouched tree, tests here timed out while the same files passed alone (#43). The
+// budget scales with measured load; the assertions are untouched, and a hang is still caught.
+setDefaultTimeout(spawnTestTimeout());
 
 /**
  * The real `claude` is on this machine's PATH. Every in-process `runNext` in this

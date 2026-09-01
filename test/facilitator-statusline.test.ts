@@ -6,7 +6,7 @@
  * check the join, the exact §4 rendering, and — the part that actually matters
  * for a hook — that neither half can take the status line down.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
@@ -15,6 +15,13 @@ import { runSnapshot } from "../src/core/statusline/runSnapshot.ts";
 import { NO_SESSION_DATA } from "../src/core/statusline/renderStatusLine.ts";
 import { makeFacilitatorWorkspace, type FacilitatorWorkspace } from "./fixtures/facilitator/workspace.ts";
 import { makeWorkspace, type TempWorkspace } from "./fixtures/tempWorkspace.ts";
+import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
+
+// Every test in this file spawns a REAL process — git, `bun`, the CLI. Process cost is a
+// property of the machine, not of the code, so bun's fixed 5000 ms default measures the box:
+// on an untouched tree, tests here timed out while the same files passed alone (#43). The
+// budget scales with measured load; the assertions are untouched, and a hang is still caught.
+setDefaultTimeout(spawnTestTimeout());
 
 /** The documented statusLine payload (code.claude.com/docs/en/statusline). */
 function payload(root: string): Record<string, unknown> {

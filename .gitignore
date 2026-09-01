@@ -17,6 +17,10 @@ tldrx-work/**/*.bak
 dist/
 *.tsbuildinfo
 
+# `npm pack` / `npm publish --dry-run` output. Untracked, but merge-wave.sh refuses on
+# ANY porcelain line, so one stray pack used to block the NEXT agent's merge (#45).
+*.tgz
+
 # editor / OS
 .DS_Store
 .idea/

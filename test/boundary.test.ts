@@ -13,7 +13,7 @@
  * audited "did the stage touch anything nobody scoped" BY HAND at every gate,
  * because nothing in the framework asked.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
@@ -22,6 +22,13 @@ import { approve } from "../src/core/run/gates.ts";
 import { evaluateBoundary, deriveSurface, epicTargets, inSurface, normalisePath, unqualifiedCitedPaths, OUTSIDE_SURFACE } from "../src/core/run/boundary.ts";
 import { loadWorkspace } from "../src/hooks/lib/workspace.ts";
 import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
+import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
+
+// Every test in this file spawns a REAL process — git, `bun`, the CLI. Process cost is a
+// property of the machine, not of the code, so bun's fixed 5000 ms default measures the box:
+// on an untouched tree, tests here timed out while the same files passed alone (#43). The
+// budget scales with measured load; the assertions are untouched, and a hang is still caught.
+setDefaultTimeout(spawnTestTimeout());
 
 const ORIGINAL_PATH = process.env.PATH ?? "";
 const FAKE_KEYS = ["FAKE_BUILD_WRITE", "FAKE_BUILD_STATE", "FAKE_BUILD_COST"] as const;

@@ -6,7 +6,7 @@
  * Every frame here is a pure function of `(snapshot, cols, rows, tick)`, so
  * there is not one timer in this file.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { EXIT_USAGE } from "../src/cli/exitCodes.ts";
@@ -23,6 +23,13 @@ import { plainLine } from "../src/core/ui/plain.ts";
 import { renderScene, MIN_SCENE_COLS, MIN_SCENE_ROWS } from "../src/core/ui/scene.ts";
 import { UiState, RING_CAPACITY } from "../src/core/ui/state.ts";
 import { summarize, shortPath, command, duration, clockFace, firstSentence } from "../src/core/ui/summary.ts";
+import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
+
+// Every test in this file spawns a REAL process — git, `bun`, the CLI. Process cost is a
+// property of the machine, not of the code, so bun's fixed 5000 ms default measures the box:
+// on an untouched tree, tests here timed out while the same files passed alone (#43). The
+// budget scales with measured load; the assertions are untouched, and a hang is still caught.
+setDefaultTimeout(spawnTestTimeout());
 
 /** A fixed epoch, so every elapsed time in this file is a subtraction. */
 const T0 = 1_756_468_800_000;

@@ -60,6 +60,72 @@
 
 ### Fixed
 
+- **The merge itself is now serialised, and a gate can no longer describe a tree it is not pushing
+  (#44).** `scripts/merge-wave.sh` merges, gates and pushes in ONE shared checkout and took no lock.
+  Measured on the pre-fix script with two concurrent invocations against a real sandbox repo: run A
+  gated `7afcc0e` (its own merge) at `typecheck` and `fadc923` (the OTHER run's merge, landed
+  mid-gate) at `build`, then printed `OK fadc923 … pushed`. Both runs reported the same sha and
+  both exited 0 — a green report over a tree neither had finished gating. With a red change in the
+  other branch the same interleaving hands agent A a `FAIL build=1` for code it never wrote, which
+  is what was actually observed live 2026-08-31 (`2184` tests counted where the branch had `2181`).
+  - **A lock, held from before the dirty-tree check through the push.** `mkdir` on
+    `.git/merge-wave.lock` — atomic on macOS and Linux, where `flock(1)` is not on stock macOS, and
+    in `git rev-parse --git-common-dir` so the lock can never be dirt in the tree it guards — and
+    not `$R/.git`, which in a linked worktree is a FILE that `mkdir` can never turn into a lock. A second invocation WAITS,
+    saying so on stderr (`merge-wave: waiting for another merge in this checkout (owner: …)`) so the
+    single summary line on stdout stays a single line. Waiting is bounded (`MW_LOCK_WAIT_S`, default
+    3600 → exit `6`), and a lock whose owner is a dead pid on this host, or older than
+    `MW_LOCK_STALE_S`, is broken open — after re-reading the owner line, so two waiters cannot tear
+    down a lock a third has just taken. An interrupted run hands the lock back on its way out: an
+    untrapped signal kills bash WITHOUT running its `EXIT` trap, so `INT` and `TERM` are trapped too. No
+    path through the wait loop is free of the budget, including the break-open one: a lock that
+    cannot be created or removed now fails in under a second instead of spinning forever.
+  - **And an assertion that does not depend on the lock.** Between the last gate and the push, HEAD
+    must still be the commit the gates ran against; if it moved, nothing is pushed and the script
+    exits `5` saying which sha it gated and which one is there now. The lock prevents the race; this
+    makes pushing an ungated HEAD impossible even for someone who bypasses the lock. The pre-fix
+    script, given the same mid-gate commit, pushed it and reported `OK`.
+  - **It pushes the commit it gated, not the `main` ref.** `git push origin main` publishes
+    `refs/heads/main` whatever HEAD is — and a red gate leaves `main` sitting on an ungated merge
+    commit by design, so the next run from a detached or repaired HEAD would have published THAT.
+    The push is `HEAD:main` now, and a pre-flight refuses (exit `7`) when the gated commit is not a
+    fast-forward of `origin/main` rather than letting the server's rejection be the first news.
+  - Gate logs moved from the fixed `/tmp/mw-*.log` to a per-invocation `${TMPDIR}/mw-<pid>/`, and the
+    FAIL lines name the directory. Two runs in two clones on one box shared those files.
+
+- **The test suite no longer goes red because the machine was busy (#43).** On an untouched
+  `origin/main`, `bun test` reported `2155 pass · 5 fail` while the same two files alone reported
+  `91 pass · 0 fail`: four tests that spawn a REAL `git` expiring on bun's 5000 ms default, and one
+  50 ms performance budget measured at 66.4 ms, with three `tldrx` runs and two other agents sharing
+  the box. Because `merge-wave.sh` refuses to push on any test failure, that red is indistinguishable
+  from a regression at the exact moment a merge is decided, and the natural response — re-run until
+  green — is how a real regression eventually gets pushed.
+  - **The clock moved; no assertion did.** `test/fixtures/machineLoad.ts` measures the machine
+    (1-minute run-queue per core, floored at 1 and capped at 8) and hands out budgets from it. All
+    **42** test files that spawn a real process — `git`, `bun`, the CLI — now open with
+    `setDefaultTimeout(spawnTestTimeout())`: 30 s idle, scaled by load, still a hang detector. How
+    long a process takes to start is a property of the machine, not of the code, so a fixed budget on
+    such a test measures the box. A test enumerates those files and fails if a new one skips the
+    budget. Serialising the suite would not have helped: `bun test` already runs files sequentially
+    in one process (verified — a `setDefaultTimeout` in one file does not reach the next, and a 5.5 s
+    test in that next file still expired at 5000 ms). The contention is other processes on the box,
+    which only a load-aware budget can see.
+  - **The first version of that list was a `grep -l`, and it lied.** It returned 14 files and silently
+    omitted `cli.test.ts`, whose "every command's help lists an exit table" then timed out at 5004 ms
+    on the merge that was fixing timeouts. Cause: one stray NUL byte at `test/cli.test.ts:366` makes
+    the file `data` to `file(1)`, and grep drops binary files under `-I` without a word. The list is
+    built by READING every file now, and `cli.test.ts` is asserted to be in it. Filed as #47.
+  - **The one real performance budget keeps its teeth.** `handoff` on 256 KB is now the floor of
+    three runs against `perfBudgetMs(50)`, which on an idle machine is 50 — the identical assertion.
+    A stall inflates some runs and never the floor, and a function that genuinely takes 120 ms still
+    fails, which is itself a test.
+
+- **`npm pack` output no longer refuses the next agent's merge (#45).** `tldr-experts-<version>.tgz`
+  was not ignored, and the dirty-tree guard refuses on ANY porcelain line, untracked included — so a
+  pack artifact left by a release check blocked the merge of whoever came next, someone who did not
+  create the file and could not know whether deleting it was safe. `*.tgz` is ignored now. The guard
+  is deliberately unchanged: an untracked file is still dirt, and a test holds it to that.
+
 - **`claim-sources` reports every problem it found, over every declared `.md` output — and a
   `file` src resolves against this run's epic worktree.** Four issues, one code path (#33, #34,
   #23, #16), all four measured on the 2026-08-30/31 unattended pilot runs.
