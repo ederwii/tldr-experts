@@ -50,6 +50,43 @@
   - `--all` is refused (exit `1`) alongside a `<run-id>` or `--apply`, before a file is opened: each
     asks for the opposite of what `--all` does.
 
+- **Evals v1 — five golden-transcript evals, one per stage (#26, owner decision 2026-09-01: small
+  v1 now).** The suite proved the harness; nothing proved a STAGE. `test/evals/` now runs each of
+  What, How, Plan, Build and Watch through the real facilitator against the scripted stand-in agent
+  and asserts that stage's output CONTRACT. About 5 seconds on top of `bun test`.
+  - **One stage at a time, not a chain.** Stages are sequential — Plan cannot run until How's gate
+    is signed — so playing four stages to reach the fifth would make every eval depend on the ones
+    before it, and a regression in What would turn all five red without any of them saying why.
+    Each eval instead opens its own run on a workflow preset holding exactly one stage, which needs
+    no new code: `workflowPath` already prefers `.tldrx/workflows/<scope>.yml` over the shipped
+    presets, and `normalisePhase` already takes the phase folder from the stage's own `phase:`
+    rather than from its position. Whatever the stage genuinely reads — a plan for Build, a done
+    story for Watch — is seeded onto the disk by the scenario.
+  - **Built on `learn`'s machinery, not beside it.** The stand-in `claude`
+    (`src/core/learn/agentScript.ts`, `learnAgent.ts`) and the toy-repo sandbox are reused as they
+    are; the real CLI is unreachable by the same two doors `learn` closes. No production code
+    changed for this.
+  - **Contract, not snapshot.** Nothing compares bytes. The evals assert what the FRAMEWORK
+    computes: the declared outputs read back off `gate.requested`, the `checks:` outcomes and their
+    computed detail (`checkPlan`'s branch-model line), the artifacts re-parsed with the framework's
+    OWN validators (`validateQuestions`, `parseWatcherCard`), and the side effects a stage exists
+    for — a branch cut, the story's `dod` block re-run and its exit code recorded, a `--no-ff` merge
+    into the epic branch with `main` untouched, and a watcher card's status COMPUTED as `verified`
+    when the scenario's front matter claimed `draft`.
+  - **A check that is `skipped` for any reason other than being write-time-only now fails an eval.**
+    `runCheck` falls through to `unknown check id '<x>'`, which is what a renamed or deleted check
+    looks like from outside — and it would otherwise read as a pass.
+  - **`EVALS` is load-bearing, not bookkeeping.** A coverage test asserts it names every stage
+    under `stages/`, so a sixth stage shipping without an eval turns the suite red and says which
+    one is missing.
+  - **Every eval was watched failing before it was trusted.** One sabotage each, listed with its
+    symptom in `test/evals/README.md`; the Plan one is the shape to aim for — nothing crashed, every
+    count still matched, and dropping a cross-epic `depends_on` was still caught because the derived
+    branch model changed. The same file says how to add a sixth eval, and what v1 deliberately does
+    not cover: failure paths, the agent gate, attended runs, and prompt QUALITY, which needs a real
+    model and a judge.
+
+
 ## 0.4.0 — 2026-09-01
 
 ### Changed
