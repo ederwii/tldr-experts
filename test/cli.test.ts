@@ -399,16 +399,21 @@ describe("<command> --help carries flags, values, examples and exit codes", () =
    * same reason. The scoped list is what makes the gap a red test rather than a
    * note: it is widened one command at a time, as each one's section is written.
    *
-   * Still NOT generalised over every command, and the reasons are measured at
-   * `28d4a56`: `hook`'s seven scripts are documented as the one `<script>` slot
-   * that USAGE_SPELLINGS already records as a deliberate spelling, and `note` and
-   * `ship` have no section on this page either (the same gap as #55, filed
-   * separately). A generalised assertion would go red for those three and say
-   * nothing about the two it is here to hold.
+   * #72 widened it again, to `note` and `ship`. Both were implemented, both were in
+   * COMMANDS, both rendered `--help`, and neither had a line on the page a reader
+   * lands on from the README — `ship` being the command that opens the PR at the
+   * end of a run. Neither takes a subcommand, so for those two this assertion is
+   * exactly the heading check, which is the half that was missing.
+   *
+   * Still NOT generalised over every command, and the reason is measured at
+   * `28d4a56` and still true: `hook`'s seven scripts are documented as the one
+   * `<script>` slot that USAGE_SPELLINGS already records as a deliberate spelling,
+   * so a generalised assertion would go red for `hook` and say nothing about the
+   * four it is here to hold.
    */
-  const DOCUMENTED_SUBCOMMANDS = ["run", "plan"] as const;
+  const DOCUMENTED_SUBCOMMANDS = ["run", "plan", "note", "ship"] as const;
 
-  test("the CLI reference documents every subcommand of `run` and `plan` (#54, #55)", () => {
+  test("the CLI reference documents every subcommand of `run`, `plan`, `note` and `ship` (#54, #55, #72)", () => {
     const reference = readFileSync(join(FRAMEWORK_ROOT, "docs/guide/08-cli-reference.md"), "utf8");
     for (const name of DOCUMENTED_SUBCOMMANDS) {
       const command = COMMANDS.find((entry) => entry.name === name);

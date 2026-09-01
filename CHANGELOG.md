@@ -4,6 +4,21 @@
 
 ### Added
 
+- **`tldrx plan schema` — the story/epic/waves contract, printed for a human (#71).** #48 deleted
+  `templates/story.md` and `templates/epic.md`, rightly: nothing read them, so nothing kept them
+  honest. But they were answering a real question — what shape does a story file take? — and after
+  #48 the only reader of the generated contract was `checkContracts.ts`, which splices it into the
+  Plan stage's prompt. The shape existed for the agent and not for the person writing a story by
+  hand, reviewing one an agent wrote, or debugging a `plan` check refusal.
+  - **The same bytes the agent gets.** `plan schema` renders `renderPlanSchemaContract()` verbatim,
+    generated from the validators the check runs, so it cannot become the second source of truth
+    the templates were. `--story`, `--epic` and `--waves` print one example on its own; at most one
+    of them, because two would make the answer ambiguous. A test copies the printed story example
+    straight into `validateStoryFile` and asserts it comes back clean.
+  - **The one verb in `plan` that resolves nothing.** No workspace, no run, no disk, no spend — the
+    question comes before any of that exists, and is often asked from outside a workspace entirely.
+
+
 - **`tldrx drive [--attended|--unattended]` — the host/driver mandate, shipped (#63).** Every elite
   run of 2026-08-31/09-01 was driven by a session carrying a hand-written playbook, and that playbook
   was the framework's real quality floor. It lived in the owner's chat pastes, so a third party
@@ -167,6 +182,53 @@
 
 ### Fixed
 
+- **`merge-wave.sh` no longer leaves a conflicted tree behind, wedging every queued sibling (#76).**
+  On a merge conflict the script exited `2` **without** `git merge --abort`, and the `EXIT` trap
+  then released the lock. The conflicted index survived that handover, so the next queued
+  invocation acquired the lock, failed its dirty-tree guard and exited `1` `FAIL dirty tree` having
+  merged nothing — and so did every one after it, until a human ran the abort by hand. Observed
+  live 2026-09-01 by two agents: a sibling's abandoned merge left `UU CHANGELOG.md` plus 14 staged
+  paths in the shared checkout, and cluster L's first merge-wave returned `1` with nothing merged.
+  Under the concurrent multi-cluster pattern, one conflict wedged every other cluster.
+  - **Collect, then abort** — the order `mergeNoFf` already uses one directory over
+    (`src/core/build/git.ts:314-326`). The agent still learns exactly which files conflicted and
+    still has to rebase and retry; the checkout it hands back is the one it was given. This is the
+    same class of hazard the lock was written for: state from one invocation leaking into the next.
+  - **The refusal now names what is dirty.** `FAIL dirty tree` alone accused the caller of leaving
+    junk in their own checkout when, inside the lock, the likeliest cause is another run's residue
+    in the shared one. It now says so and lists the paths.
+  - Proved by a repro that runs the real script against a real conflicting merge and asserts
+    `git status --porcelain` is empty afterwards, `MERGE_HEAD` is gone, `HEAD` has not moved, the
+    lock is released, and a second invocation merges instead of being refused.
+
+- **The built-CLI dashboard test no longer gates a stale `dist/` (#73).** `beforeAll` read
+  `if (existsSync(DIST)) return`, so the tests ran against whatever `dist/tldrx.js` happened to be
+  lying around — locally, a build from before the working-tree changes the run was checking.
+  Measured 2026-09-01 while fixing #60: the guard served a binary built at 14:43, and the model
+  version assertion read `Expected: 3, Received: 2`. That is the lucky direction; the same staleness
+  hiding a regression is silent, and `bun run build` is a separate later step in both
+  `scripts/merge-wave.sh` and CI. CI was safe only by accident — a fresh checkout has no `dist/` —
+  which means the guard only ever applied where it did harm.
+  - **Always rebuild, and the number is the reason.** `bun scripts/build.ts` costs 199 ms cold and
+    55–59 ms warm on the reference machine (3 runs, 2026-09-01) against a ~420 s suite: under 0.05%.
+    A stamp of `src/` would cost more to keep honest than it saves, and `test/build.test.ts:78`
+    already built unconditionally — this file was the exception.
+  - A new assertion pins the property rather than the mechanism: `dist/tldrx.js` may not predate the
+    newest file under `src/`, `scripts/build.ts` or `package.json`.
+
+- **`tldrx drive` fills the mandate's `<run>` in (#75).** The mandate's every command read
+  `tldrx next --prepare <run>`, and the header told the reader to find-replace — 7 occurrences
+  unattended, 5 attended (measured; the issue estimated ~8), by hand, at the exact moment somebody
+  is trying to start a run. One occurrence missed sends a session at the wrong run.
+  - **An id, or the one open run.** `tldrx drive --unattended <run>` or `--run <id>` (the positional
+    wins, `ship`'s order) substitutes **textually and never validates** — an id naming no run is the
+    operator's typo to notice, and the command stays the one thing in the CLI that runs anywhere.
+    With no id, the ONE open run of the current workspace is used.
+  - **It refuses to guess between two.** Where `RunStore.resolve` would call it ambiguous, drive
+    declines to substitute, leaves `<run>` standing and names the ids on stderr — a mandate silently
+    aimed at the wrong run is the bug being fixed, not a smaller version of it. No workspace, no
+    runs, an unreadable `tldrx-work/`: all keep the placeholder and still exit `0`.
+
 - **`tldrx status` no longer calls a RUNNING run "cannot start yet" (#60).** Verbatim from
   aparece-v2, 2026-09-01: `run 260830-ordering-inventory (…) cannot start yet — it was proposed to
   follow money-and-payments` / `at 04-build / build · run status running · waiting: prepared` /
@@ -301,6 +363,18 @@
     save writes exactly what it always wrote.
 
 ### Changed
+
+- **`docs/guide/08-cli-reference.md` documents `note` and `ship` (#72).** Every command in `COMMANDS`
+  had a `## tldrx <cmd>` heading except three; #55 wrote `plan`'s, and these are the other two —
+  `ship` being the command that opens the PR at the end of a run, and `note` how an operator records
+  something against a stage. `DOCUMENTED_SUBCOMMANDS` in `test/cli.test.ts` grew to cover them, which
+  is what keeps each of these gaps a red test rather than a note. Only `hook` is left out, and
+  deliberately: its seven scripts are documented as the one `<script>` slot `USAGE_SPELLINGS` already
+  records as a spelling.
+
+- **`tldrx watch`'s one-line summary says checklist.** It read "List and re-check the watcher cards a
+  run produced", which described half of what `watch check` is for and disagreed with the `--help`
+  text #65 updated.
 
 - **`tldrx ship` opens one PR PER REPO when the branch is in more than one (#66, owner decision
   2026-09-01).** Since #57 a chained multi-repo run cuts ONE integration branch, `epic/<run-id>`,
