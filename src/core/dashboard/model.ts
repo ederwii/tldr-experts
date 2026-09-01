@@ -21,7 +21,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { MAX_LEVEL, loadExperts, driftWarnings, evidenceWarnings, type ExpertRecord } from "../experts/index.ts";
 import { listRuns, loadPhaseArtefacts, loadRunResult, type LoadedRun } from "../replay/index.ts";
-import { resolveDependencies, type DependencyInput, type ResolvedRun } from "../run/dependencies.ts";
+import { hasStarted, resolveDependencies, type DependencyInput, type ResolvedRun } from "../run/dependencies.ts";
 import { isMovable, waitingFor, type Waiting } from "../run/waiting.ts";
 import { openBlocks, parseQuestions } from "../text/index.ts";
 import { renderMarkdown } from "../markdown/index.ts";
@@ -43,8 +43,15 @@ import { offlineHtml } from "./offlineHtml.ts";
  * run is every stage. Both are aliases of `waiting` now. A consumer reading
  * either gets different data than it did at v1, which is exactly what this
  * number is for.
+ *
+ * **v3 (#60).** `runnable` changed for one shape: a run that has STARTED and was
+ * proposed to follow a sibling that has not finished. It read `false`, because
+ * `blockedBy` alone decided; it now reads `true`, because a proposal recorded
+ * before either run existed cannot un-start a run that is running. `blockedBy`
+ * itself is unchanged and still lists those siblings — the new `started` field is
+ * what says whether they still hold anything back.
  */
-export const DASHBOARD_MODEL_VERSION = 2;
+export const DASHBOARD_MODEL_VERSION = 3;
 
 export interface StageRowModel {
   readonly phase: string;
@@ -188,9 +195,18 @@ export interface RunModel {
    * its raw slug — it was proposed to come first and it does not exist.
    */
   readonly dependsOn: readonly string[];
-  /** The subset of `dependsOn` that is not `done`. Empty means nothing blocks it. */
+  /**
+   * The subset of `dependsOn` that is not `done`.
+   *
+   * A fact about the PROPOSAL, not a verdict on this run: read it with `started`
+   * (#60). A run that has begun is not held back by an order proposed before it
+   * existed, and a cell that renders this as "blocked by" without checking is
+   * making the claim the issue was filed about.
+   */
   readonly blockedBy: readonly string[];
-  /** Nothing blocks it AND a human could move it right now. */
+  /** This run has left `pending` — work has observably begun (#60). */
+  readonly started: boolean;
+  /** A human could move it right now, and nothing that still applies blocks it. */
   readonly runnable: boolean;
   /** The execution path, one row per stage, in run.yml order. */
   readonly path: readonly StageRowModel[];
@@ -345,8 +361,12 @@ export function toRunModel(
 ): RunModel {
   const doc = loaded.run;
   const waits = waiting ?? waitingFor(doc, loaded.dir);
-  const depends = resolution ?? {
-    id: loaded.id, dependsOn: [], blockedBy: [], runnable: isMovable(waits.kind),
+  const depends: ResolvedRun = resolution ?? {
+    id: loaded.id,
+    dependsOn: [],
+    blockedBy: [],
+    started: hasStarted(doc.status),
+    runnable: isMovable(waits.kind),
   };
 
   const phases: PhaseModel[] = doc.phases.map((phase) => {
@@ -414,6 +434,7 @@ export function toRunModel(
     pendingQuestion: asked === undefined ? null : `${asked.id} · ${asked.title}`,
     dependsOn: depends.dependsOn,
     blockedBy: depends.blockedBy,
+    started: depends.started,
     runnable: depends.runnable,
     path,
     phases,

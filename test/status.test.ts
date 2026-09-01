@@ -274,6 +274,86 @@ describe("item 3 — open runs", () => {
     expect(after?.command).toBe(`tldrx next ${ids[1] ?? ""}`);
   });
 
+  /**
+   * #60. Verbatim from `tldrx status` on aparece-v2, 2026-09-01:
+   *
+   *   [1] run 260830-ordering-inventory ("Deliver stages D5 and D6…") cannot start yet
+   *       — it was proposed to follow money-and-payments
+   *       at 04-build / build · run status running · waiting: prepared
+   *       blocked by money-and-payments — it is pending
+   *
+   * The run was RUNNING at 04-build, with a story bundle out and S1 verified
+   * minutes earlier. The proposed-ordering metadata was out-ranking observed
+   * state: the header said "cannot start yet", "blocked by" named a run that had
+   * merely been PROPOSED to precede it, and the same hint had taken `← next`
+   * away from the only run with work actually in flight.
+   *
+   * `triage.depends_on` is a proposal a split wrote before either run existed. It
+   * cannot un-start a run that has started, so once a run leaves `pending` its own
+   * state is the headline and the proposal is a footnote. "Blocked by" is kept for
+   * a run that really cannot move.
+   */
+  test("a RUNNING run renders as running, not `cannot start yet` (#60)", () => {
+    const root = fresh();
+    const ids = withRuns(
+      root,
+      { slug: "money-and-payments" },
+      { slug: "ordering-inventory", dependsOn: ["money-and-payments"] },
+    );
+    const store = RunStore.find(root, ids[1] ?? "");
+    if (store === null) throw new Error("no dependent run");
+    store.mutate((run) => ({
+      ...run,
+      phases: run.phases.map((phase, index) => (index === 0
+        ? {
+          ...phase,
+          stages: phase.stages.map((stage, at) =>
+            (at === 0 ? { ...stage, status: "running" as const } : stage)),
+        }
+        : phase)),
+    }));
+    store.save();
+    // The live shape exactly: `running` at the cursor with a --prepare bundle on
+    // disk, which is what `waiting: prepared` is.
+    const stageId = store.run.cursor.stage;
+    mkdirSync(join(store.runDir, ".agent", stageId), { recursive: true });
+    writeFileSync(join(store.runDir, ".agent", stageId, "pending.json"), "{}\n", "utf8");
+    expect(RunStore.open(store.runDir).run.status).toBe("running");
+
+    const items = buildWorkspaceStatus(root).items;
+    const started = items.find((item) => item.summary.includes(ids[1] ?? ""));
+
+    // The headline is the run's own state…
+    expect(started?.summary).not.toContain("cannot start yet");
+    expect(started?.summary).toContain("has a --prepare bundle waiting");
+    expect(started?.details).toContain(
+      `at ${store.run.cursor.phase} / ${stageId} · run status running · waiting: prepared`,
+    );
+    // …the proposal is a secondary line, and NOT a claim that it is blocked.
+    expect(started?.details).toContain("proposed to follow money-and-payments — started anyway");
+    expect(started?.details.some((line) => line.startsWith("blocked by"))).toBe(false);
+    // …and `← next` goes to the run with work in flight, not to the one that was
+    // only proposed to come first.
+    expect(started?.details[0]).toStartWith("← next — ");
+    const proposed = items.find((item) => item.summary.includes(ids[0] ?? ""));
+    expect(proposed?.details.some((line) => line.startsWith("← next"))).toBe(false);
+  });
+
+  /**
+   * The other half of #60, and the reason the fix is not "stop reading
+   * depends_on": a run that has NOT started is still held by the proposal, still
+   * says so in those words, and is still offered no command. Unchanged.
+   */
+  test("a run that has not started is still held by the proposed order (#60)", () => {
+    const root = fresh();
+    const ids = withRuns(root, { slug: "first" }, { slug: "second", dependsOn: ["first"] });
+    const item = buildWorkspaceStatus(root).items.find((entry) => entry.summary.includes(ids[1] ?? ""));
+    expect(RunStore.open(RunStore.find(root, ids[1] ?? "")?.runDir ?? "").run.status).toBe("pending");
+    expect(item?.summary).toContain("cannot start yet");
+    expect(item?.details.some((line) => line.startsWith("blocked by first — it is"))).toBe(true);
+    expect(item?.command).toBe("");
+  });
+
   test("a dependency with no run at all counts as unfinished", () => {
     const root = fresh();
     withRuns(root, { slug: "orphan", dependsOn: ["never-created"] });

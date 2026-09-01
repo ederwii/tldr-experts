@@ -1035,6 +1035,10 @@ async function runExecutor(
     review: options.review === true,
     ...(options.fixlist === undefined ? {} : { fixlist: options.fixlist }),
     attendedByHost: isAttendedByHost(store.run),
+    // #68: the host's `--commit --cost-usd/--tokens` declaration, so an executor
+    // can attach it the way `commitStage` does for a single-agent stage.
+    costUsd: options.costUsd ?? null,
+    tokens: options.tokens ?? null,
     agentCap: (share = 1) => agentCap(options, store, stage, share),
     emit: (type, payload, costUsd = 0, actor = null) => {
       store.append(event(options, store.runId, stageId, type, payload, costUsd, actor));

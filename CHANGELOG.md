@@ -140,6 +140,79 @@
     model and a judge.
 
 
+### Fixed
+
+- **`tldrx status` no longer calls a RUNNING run "cannot start yet" (#60).** Verbatim from
+  aparece-v2, 2026-09-01: `run 260830-ordering-inventory (…) cannot start yet — it was proposed to
+  follow money-and-payments` / `at 04-build / build · run status running · waiting: prepared` /
+  `blocked by money-and-payments — it is pending`. The run was building, with S1 verified minutes
+  earlier. `triage.depends_on` is an order a split PROPOSED before either run existed, and it was
+  out-ranking what the run was observably doing.
+  - **Observed state outranks proposed order.** One rule, in the resolver both screens read
+    (`src/core/run/dependencies.ts`): a run that has left `pending` has started, and a proposal
+    cannot un-start it. `hasStarted` is the one definition — `pending` is the only status a run that
+    has never run a stage can wear, because runs are created with every stage `pending` and every
+    path to any other value goes through a stage that was `running`.
+  - **The proposal becomes a footnote, not the headline.** A started run renders its own cursor and
+    waiting kind, gains back the command it was denied, and carries
+    `proposed to follow <run> — started anyway` as a secondary line. `blocked by` is now reserved
+    for a run that really cannot move — one that has not started. A run that has NOT started is
+    unchanged: same words, same withheld command.
+  - **It gets the `← next` slot back.** The ordering hint had demoted the only run with work in
+    flight and pointed the owner at the sibling that had not begun. `runnable` is now
+    `movable && (started || nothing outstanding)`.
+  - **`prepared` and `running` get their own summary lines.** Both used to fall through to
+    "is blocked at <phase>/<stage>" — the same wrong word, one layer down.
+  - **The dashboard was making the identical claim** about the same shape and is fixed with it:
+    fixture run `charlie` is `awaiting_gate` behind a `pending` sibling, and the page said
+    "blocked by bravo" while suppressing the gate alert for a signature a person could give right
+    then. `DASHBOARD_MODEL_VERSION` → **3**: `blockedBy` is unchanged and still records the
+    proposal, the new `runs[].started` says whether it still holds anything back, and `runnable`
+    reads `true` for that one shape where it read `false`.
+
+- **A cost/token declaration on a story commit now attaches to the build task (#68).** Measured on
+  two live runs: the leaderboard host declared $2.25 on a story commit and `tldrx cost` kept
+  04-build at $0.00 — "the declaration didn't attach to the build task the way it did for
+  what/how/plan" — and ordering 260830 showed the same shape. The run's recorded build spend was a
+  floor, budget arithmetic ran blind on the most expensive phase, and ~8M host tokens were invisible.
+  - **The seam, not the accounting.** `ExecutorContext` never carried `--cost-usd`/`--tokens`, so
+    Build's `commit()` could only read the envelope's own `cost_usd` and wrote
+    `round2(result.cost_usd ?? 0)` — a METERED `$0.00`. It now resolves
+    `options.costUsd ?? result.cost_usd`, which is exactly what `commitStage` does for what/how/plan,
+    and the declared tokens ride onto the task row and the `agent.result` payload the cost report
+    reads. The reviewer half (`--commit --review`) takes the same precedence.
+  - **Nothing declared is UNMETERED, not $0.00.** `cost_usd: null` + `metered: false`, the spelling
+    every other host turn already gets, because `$0.00` is a measurement and a false one.
+  - **Backward-safe.** A declaration is never allowed to overwrite a measurement — an envelope that
+    reports its own cost still wins over nothing declared — and no recorded zero is rewritten. Only
+    new declarations attach.
+
+- **`onStderrLine` on the runtime seam, so progress prints before the verdict it produced (#67).**
+  `SpawnOptions` had `onStdoutLine` and nothing for the other stream, so stderr — where every tldrx
+  UI writes its progress — could only be handed back as one string at exit. `tldrx learn` printed
+  `01-what/what done — $0.31 of $4.00` and only THEN the `[00:00] writing …` lines that produced it.
+  - Implemented in **both** `bunRuntime.ts` and `nodeRuntime.ts`, with the same contract
+    `onStdoutLine` already has: the full text still accumulates in `SpawnResult.stderr`, a trailing
+    partial line is delivered at close, and omitting the callback leaves the buffered path
+    byte-for-byte as it was. Node gets its own `LineSplitter` per stream — one shared buffer would
+    splice a half-written stdout line onto the front of a stderr line.
+  - **The learn workaround is deleted**, per the instructions it carried since phase 1:
+    `realStepRunner` passes the callback and `playChapter` no longer writes `result.stderr` after the
+    step. Measured by playing chapter 2 by hand on both checkouts: the summary was at line 107 with
+    its progress lines at 109-124, and is now at 123 with them at 105-121.
+  - The tests turn on TIMING, not content: a buffered implementation could hand the same lines to the
+    same callback by splitting at exit, so the line is required to arrive while the spawn's promise
+    is still pending.
+
+- **`tldrx plan` has a section in the CLI reference (#55).** `docs/guide/08-cli-reference.md` had no
+  `## tldrx plan` heading at all, so `sync-dod` — the one mechanical repair for stories whose dod
+  block a `workspace.yml` edit orphaned — was undocumented. The section states the four per-line
+  outcomes, the git-history ancestry, the `.md.bak`, and that it runs no agent and moves no cursor.
+  The #54 docs-coverage test is widened from `run` to `run` and `plan`, and now also asserts the
+  heading rather than a passing mention. It is still a scoped list rather than a generalisation over
+  every command: `hook`'s seven scripts are a deliberate spelling, and `note` and `ship` have the
+  same gap #55 was about (filed separately).
+
 ## 0.4.0 — 2026-09-01
 
 ### Changed

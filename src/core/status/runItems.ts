@@ -20,7 +20,7 @@ import { basename } from "node:path";
 import { listRunDirs } from "../../hooks/lib/workspace.ts";
 import { PROJECT_WORK_DIR } from "../paths.ts";
 import { RunStore } from "../run/RunStore.ts";
-import { resolveDependencies, slugOfRun, type DependencyInput } from "../run/dependencies.ts";
+import { hasStarted, resolveDependencies, slugOfRun, type DependencyInput } from "../run/dependencies.ts";
 import { whatIsWaiting, type Waiting } from "../run/runStatus.ts";
 import { questionsCard } from "../run/decisionCards.ts";
 import { renderDecisionCard } from "../ui/decisionCard.ts";
@@ -75,10 +75,18 @@ export function runItems(root: string): readonly PendingItem[] {
   const items: PendingItem[] = open.map((store) => {
     const run = store.run;
     const waiting = whatIsWaiting(run, store.runDir);
+    const resolution = resolved.get(run.run);
     // `blockedBy` carries run ids; the reader was proposed SLUGS, so say slugs.
-    const blockedIds = resolved.get(run.run)?.blockedBy ?? [];
+    const blockedIds = resolution?.blockedBy ?? [];
     const blocked = blockedIds.map(slugOfRun);
-    const runnable = resolved.get(run.run)?.runnable ?? isMovable(waiting.kind);
+    // #60: `depends_on` is an order a split PROPOSED before either run existed,
+    // so it governs a run that has not started and nothing else. A run that HAS
+    // started is reported on its own cursor and waiting kind, and the proposal
+    // drops to a note — the live report said "cannot start yet" and "blocked by"
+    // about a run that was running at 04-build with stories in flight.
+    const started = resolution?.started ?? hasStarted(run.status);
+    const heldBack = !started && blocked.length > 0;
+    const runnable = resolution?.runnable ?? isMovable(waiting.kind);
     const isNext = runnable && !markedNext;
     if (isNext) markedNext = true;
 
@@ -90,11 +98,17 @@ export function runItems(root: string): readonly PendingItem[] {
       );
     }
     details.push(`at ${run.cursor.phase} / ${run.cursor.stage} · run status ${run.status} · waiting: ${waiting.kind}`);
-    for (const id of blockedIds) {
-      const status = known.has(id) ? statuses.get(id) : undefined;
-      details.push(
-        `blocked by ${slugOfRun(id)} — ${status === undefined ? "no run exists for it" : `it is ${status}`}`,
-      );
+    // "blocked by" is reserved for a run that really cannot move (#60). A started
+    // run gets the same information as one sentence that does not claim it is stuck.
+    if (heldBack) {
+      for (const id of blockedIds) {
+        const status = known.has(id) ? statuses.get(id) : undefined;
+        details.push(
+          `blocked by ${slugOfRun(id)} — ${status === undefined ? "no run exists for it" : `it is ${status}`}`,
+        );
+      }
+    } else if (blocked.length > 0) {
+      details.push(`proposed to follow ${blocked.join(", ")} — started anyway`);
     }
     if (waiting.kind === "gate") {
       details.push(`disagree instead: \`tldrx reject --run ${run.run} --note "<why>"\``);
@@ -120,8 +134,8 @@ export function runItems(root: string): readonly PendingItem[] {
 
     return {
       kind: "run" as const,
-      summary: summaryOf(run, waiting, blocked),
-      command: blocked.length > 0 ? "" : commandFor(run, waiting),
+      summary: summaryOf(run, waiting, heldBack ? blocked : []),
+      command: heldBack ? "" : commandFor(run, waiting),
       details,
     };
   });
@@ -192,6 +206,11 @@ function machineSignedDetails(run: RunFile): readonly string[] {
   return details;
 }
 
+/**
+ * `blocked` here is the proposal ONLY when it still holds the run back (#60) —
+ * the caller passes an empty list for a run that has started, whatever its
+ * `depends_on` says.
+ */
 function summaryOf(run: RunFile, waiting: Waiting, blocked: readonly string[]): string {
   const what = run.title === "" ? run.run : `${run.run} ("${run.title}")`;
   if (blocked.length > 0) {
@@ -208,6 +227,14 @@ function summaryOf(run: RunFile, waiting: Waiting, blocked: readonly string[]): 
       return `run ${what} is ready to run its next stage`;
     case "done":
       return `run ${what} has no stage left to run but is still open`;
+    // The two kinds a RUNNING run wears. Both used to fall through to "is blocked
+    // at", which is the same wrong word #60 was filed about: a bundle waiting on
+    // the host, and a stage another process is holding, are states of work in
+    // flight, not blockers.
+    case "prepared":
+      return `run ${what} has a --prepare bundle waiting for the host session to run it`;
+    case "running":
+      return `run ${what} is running ${run.cursor.phase}/${run.cursor.stage} right now`;
     default:
       return `run ${what} is blocked at ${run.cursor.phase}/${run.cursor.stage}`;
   }
