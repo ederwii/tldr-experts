@@ -30,6 +30,25 @@ import {
  * `fact.added` before it, so "every row in facts.yml has a `fact.added` event"
  * stays true — `factsFromRun` relies on exactly that.
  *
+ * `gate.policy_changed` was added 2026-08-31 (issue #14), for `tldrx run gates
+ * set`. `gates_policy` is frozen at `run new` by design, and until this there was
+ * no signed way to move it afterwards at all — a run opened before the `agent`
+ * policy existed could never use it. Its payload carries the phase, who signed
+ * it, the old and the new policy, and the operator's note. It says nothing about
+ * gates already closed: the policy governs who may CLOSE a gate, and a signed one
+ * is not re-opened by it.
+ *
+ * `operator_note` was added 2026-08-31 (issue #46), and is the only event in this
+ * set that is not a report of something the framework DID. It is an operator
+ * annotation: a person saying, at the moment it happened, what they did outside
+ * the tool — a delegated resync, a hand-merge, a thing they want the next reader
+ * to know. Before it, the only carriers were a future gate note (late, and keyed
+ * to the wrong decision) or a `reject` (destructive), and a measured session
+ * ended up hanging a maintenance note off an unrelated `story.reopened`. Its
+ * payload carries the text and, when the note was keyed to one, the phase; the
+ * envelope's `stage` carries the stage or null. It mutates nothing — see
+ * `run/operatorNote.ts`.
+ *
  * `story.base_fastforwarded` was added 2026-08-31, and is the only event in this
  * set that records tldrx MOVING A REF. Design §F.2: a story branch that sits
  * behind its epic tip is fast-forwarded before a developer is dispatched onto it,
@@ -47,8 +66,9 @@ export const EVENT_TYPES = [
   "task.started", "task.done",
   "agent.spawned", "agent.result",
   "question.asked", "question.answered",
-  "gate.requested", "gate.approved", "gate.rejected", "gate.revoked",
+  "gate.requested", "gate.approved", "gate.rejected", "gate.revoked", "gate.policy_changed",
   "story.reopened", "story.base_fastforwarded",
+  "operator_note",
   "check.passed", "check.failed",
   "budget.warned", "budget.blocked", "budget.raised",
   "fact.added", "fact.retired", "fact.superseded",

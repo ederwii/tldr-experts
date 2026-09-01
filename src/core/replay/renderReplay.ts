@@ -150,6 +150,18 @@ function bullet(item: NumberedEvent): string | null {
       return `${prefix}story ${text(payload.story) || "?"}'s base fast-forwarded to`
         + ` \`${text(payload.base) || "?"}\` — ${text(payload.from) || "?"} → ${text(payload.to) || "?"}`
         + ` (${String(payload.commits ?? "?")} commit(s))`;
+    // The only line in the narrative a PERSON wrote about themselves. It is
+    // rendered in place, at its own timestamp, which is the entire point of the
+    // event existing (issue #46) — the alternatives it replaced were a note
+    // hanging off a later gate and a note hanging off an unrelated reopen.
+    // Who may close a gate is the one property of a run that changes what every
+    // LATER gate line in this narrative means. A policy that moved with nothing
+    // in between would read as the framework having changed its own rules.
+    case "gate.policy_changed":
+      return `${prefix}gate policy \`${text(payload.from) || "?"}\` \u2192 \`${text(payload.to) || "?"}\``
+        + ` by ${actor}${note(payload.note)}`;
+    case "operator_note":
+      return `${prefix}NOTE by ${actor}: ${text(payload.note) || "(empty)"}`;
     case "check.failed": return `${prefix}check failed: ${checkName(payload)}${note(payload.detail)}`;
     case "budget.warned": return `${prefix}budget warning: ${text(payload.message) || `${money(cost_usd)} spent`}`;
     case "budget.blocked": return `${prefix}budget BLOCKED: ${text(payload.message) || "the spawn was refused"}`;

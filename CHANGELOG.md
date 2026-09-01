@@ -4,6 +4,58 @@
 
 ### Added
 
+- **`tldrx note <run> [--stage <id>] "text"` — an honest carrier for an operator annotation, at the
+  moment it happened (#46).** Measured on `260829-scoring-leaderboard` (2026-09-01): a host performed an
+  owner-delegated mechanical resync of eight story dod blocks, was asked to note it in the run log, and
+  could not — `events.jsonl` is append-only and tool-owned, so the only carriers were a FUTURE gate note
+  (late, and keyed to a decision the note is not about) or a `reject` (destructive). The session ended up
+  hanging the context off an unrelated `story.reopened`.
+  - **One event, and nothing else.** It appends a single `operator_note` line carrying actor, timestamp,
+    optional stage and the text. It does not go through `RunStore.save()`, which would rewrite `updated_at`
+    and re-derive every status for an annotation that changed no state: `test/operator-note.test.ts`
+    compares `run.yml` and `budget.yml` **byte for byte** across the call, because "safe to reach for
+    mid-run" is the whole of what makes the verb usable.
+  - **Every refusal writes nothing.** An unknown run (exit 3), a stage this run does not have (exit 2), an
+    empty note (exit 1) and a lone argument that turns out to name a run all refuse before the log is
+    opened. The last one is the trap worth naming: `tldrx note 260829-x` is a half-typed command, not a
+    note whose entire content is a run id, and recording it would be the one outcome nobody wanted.
+  - **Visible afterwards.** `tldrx run status` prints the last three (with `tldrx replay` named when there
+    are more), `--json` carries them as `operator_notes`, and `tldrx replay` narrates every one in place.
+
+- **`tldrx run gates set <stage>:<policy> --note "…"` — the signed upgrade path for a frozen
+  `gates_policy` (#14).** The policy is resolved at `run new` and frozen into `run.yml` by design, and that
+  default is not taken back here. What it left with no door at all, found on the 2026-08-30/31 unattended
+  pilots: a run created BEFORE the `agent` policy existed can never use `approve --as-agent`, and `run.yml`
+  is hand-edit-forbidden (spec §1) — so the only move was to abandon the run.
+  - **Built like `story reopen`, because it is the same kind of act:** a person overruling state the machine
+    is holding. A `--note` is required; ONE stage per invocation (a list would let a second change ride on
+    the first one's signature); the entry must be QUALIFIED, because under `--gates` a bare `plan` means
+    `human` and a signature must not rest on a default; and a no-op is refused rather than recorded.
+  - **One `gate.policy_changed` event** carries the phase, who signed it, the old and the new value, and the
+    note. A run with no `gates_policy:` at all gets the FULL map written — every stage explicitly, with the
+    one change applied — because a partial map would quietly claim its other stages had been decided too.
+  - It changes who may CLOSE a gate from then on. Gates already signed are untouched, and nothing re-reads
+    the policy of a closed one.
+
+- **`tldrx ship` — open a PR from the run's epic branch, with the handoff as the body (#15).** The loop
+  ended at "merge by hand": a finished epic sat on `epic/<slug>`, the document explaining it sat in
+  `<run>/<phase>/handoff.md`, and nothing carried either one to a PR.
+  - **It never pushes.** `core/build/git.ts` has no `git push` wrapper on purpose (spec §5), and this verb
+    keeps that rule rather than being the exception to it: a branch the remote has not seen is a refusal
+    that names the exact `git -C … push -u` command. Publishing a branch is a decision, and it stays the
+    operator's.
+  - **It never writes to the run** — no event, no gate, no cursor, no money — and it does not mirror
+    tickets: `tldrx tickets sync` already is that verb, holds the `process.yml` contract and appends
+    `ticket.synced`. A second, thinner mirror inside `ship` would give the workspace two answers to "is this
+    story mirrored", so `ship` names it as the next step instead.
+  - **Clean refusals, in a sentence:** no epic branch, no handoff, no `gh`, no remote, an unpushed branch,
+    several epic branches with no `--branch`, a branch the run did not cut. The body goes to `gh` as
+    `--body-file`, never as an argument, so a long handoff cannot overflow an argv limit.
+  - Both external binaries go through one narrow transport that takes a cwd — the same idea as
+    `adapters/transport.ts`, and the only way to ASSERT the argument shape of a command the suite must not
+    run. The unit tests drive a recording fake; the one end-to-end test puts a STUB `gh` first on PATH in a
+    throwaway workspace with a throwaway bare `origin`. The real `gh` is never invoked by a test.
+
 - **`TLDRX_CLAUDE_BIN` — point the sub-agent spawn at a different binary (#27, minimal slice).**
   `spawnAgent` hardcoded `claude`, so a pinned install, a wrapper that adds a proxy or credentials,
   and a stand-in in a sandbox all required patching source. The variable replaces the executable
@@ -505,6 +557,20 @@
     mode — "a LOCK, not an engine" / "an ENGINE, not a lock", each naming the other's refusal — and
     the `<host|--none>` argument line says the framework will not spawn on the run again. Help text
     only; no behaviour, no flag and no exit code moved.
+
+- **`tldrx run estimate` is remaining-work aware (#21).** It priced the next stage from token medians while
+  the budget brake separately computed what that stage still had to pay for — two models, one question, and
+  the one people read was the one that never shrank. A Build stage with five of six stories done was still
+  quoted the number the Plan wrote before any of them ran, which is the figure that made a pilot operator
+  move money twice for work the run could already afford.
+  - It now calls **the same `remainingWork()`** the brake and `budget show`'s `est.` column call, with the
+    same inputs, and reports it beside the token estimate: done stories excluded, blocked ones named, the
+    arithmetic shown. A test asserts the two numbers are identical rather than merely similar.
+  - It also rolls the run up: `still to run: N stage(s) … $X priced`, with terminal stages excluded and the
+    cursor stage narrowed by the plan when the plan knew better. `--json` carries both as `remaining` and
+    `runRemaining`.
+  - The token half is untouched. The input side is still measured off the same assembly `next` builds, and
+    the cache/output medians still say which sample they came from — that half was never the complaint.
 
 ## 0.3.1 — 2026-08-31
 

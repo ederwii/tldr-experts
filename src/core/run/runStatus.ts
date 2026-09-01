@@ -14,6 +14,7 @@ import { buildProgress, renderBuildProgress, renderStoryCosts, BUILD_PHASE, type
 import { gatePolicyFor, type GatePolicy, type GatesPolicy } from "./gatePolicy.ts";
 import { failureReason, waitingFor, type Waiting, type WaitingKind } from "./waiting.ts";
 import { flatten, isTerminal, type AttendedBy, type RunFile, type RunPhase } from "./RunFile.ts";
+import { operatorNotes, type OperatorNote } from "./operatorNote.ts";
 
 export const BAR_CELLS = 5;
 
@@ -92,6 +93,17 @@ export interface RunStatusView {
    * either way.
    */
   readonly attended_by: AttendedBy | null;
+  /**
+   * What a PERSON wrote on this run's log with `tldrx note` (issue #46), newest
+   * last. Appended, never inserted: `--json` consumers read this object by key
+   * order in at least one test.
+   *
+   * On this screen because the moment a note matters most is the one where
+   * somebody else picks the run up: "the dod blocks were resynced by hand" is
+   * exactly the sentence that stops the next reader re-deriving it. `tldrx
+   * replay` shows every note in place; this shows the last few.
+   */
+  readonly operator_notes: readonly OperatorNote[];
 }
 
 export function buildStatus(run: RunFile, budget: RunBudget, runDir: string): RunStatusView {
@@ -119,6 +131,7 @@ export function buildStatus(run: RunFile, budget: RunBudget, runDir: string): Ru
     // in at least one test, and every key above keeps its position.
     unmetered_tasks: countUnmetered(run),
     attended_by: run.attended_by ?? null,
+    operator_notes: operatorNotes(runDir),
   };
 }
 
@@ -234,6 +247,7 @@ export function renderStatus(view: RunStatusView): string {
   const attempts = renderAttempts(view.attempts);
   if (attempts !== null) lines.push(`${view.cursor.stage.padEnd(7)} ${attempts}`);
   lines.push("", ...renderGates(view.gates));
+  lines.push(...renderOperatorNotes(view.operator_notes));
   lines.push(`waiting ${view.waiting.message}`);
   return lines.join("\n");
 }
@@ -269,4 +283,29 @@ function describeGate(row: GateRow): string {
   if (row.status === "rejected") return `rejected by ${row.by ?? "?"}`;
   if (row.status === "n-a") return `${row.type}: n-a`;
   return `${row.type}: ${row.status}`;
+}
+
+/**
+ * The last few operator notes, or nothing at all.
+ *
+ * Capped rather than complete: this screen is read to answer "where is the run",
+ * and a run somebody has annotated forty times must not push the `waiting` line
+ * off the terminal. `tldrx replay <run>` is the complete record and is named here
+ * when there are more, so the cap can never read as "that is all of them".
+ */
+export const NOTES_SHOWN = 3;
+
+export function renderOperatorNotes(notes: readonly OperatorNote[]): readonly string[] {
+  if (notes.length === 0) return [];
+  const shown = notes.slice(-NOTES_SHOWN);
+  const hidden = notes.length - shown.length;
+  const lines = [
+    "",
+    `notes   ${String(notes.length)} operator note(s)`
+      + (hidden === 0 ? "" : `, last ${String(shown.length)} shown \u2014 \`tldrx replay\` has them all`),
+  ];
+  for (const note of shown) {
+    lines.push(`  ${note.ts} ${note.actor}${note.stage === null ? "" : ` \u00b7 ${note.stage}`}: ${note.note}`);
+  }
+  return lines;
 }

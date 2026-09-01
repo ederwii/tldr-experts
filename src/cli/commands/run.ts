@@ -21,6 +21,7 @@ import { parallelFlag } from "./next.ts";
 import { cancelRun, unlockRun } from "../../core/run/rescue.ts";
 import { nowRfc3339 } from "../../hooks/lib/actor.ts";
 import { createRun } from "../../core/run/newRun.ts";
+import { setGatePolicy } from "../../core/run/setGatePolicy.ts";
 import { RunStore } from "../../core/run/RunStore.ts";
 import { buildStatus, renderStatus } from "../../core/run/runStatus.ts";
 import { openRunRows, renderOpenRuns } from "../../core/run/openRuns.ts";
@@ -54,9 +55,10 @@ export const runCommand: Command = {
     "       tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]\n" +
     "                  [--yolo] [--parallel <n>] [--gate-agent] [--ui scene|compact|plain|off]\n" +
     "                  [--root <path>]\n" +
+    "       tldrx run gates set <stage>:<human|auto|agent> --note <text> [--run <id>] [--root <path>]\n" +
     "       tldrx run unlock [<run>] [--force] [--root <path>]\n" +
     "       tldrx run cancel [<run>] --note <text> [--force] [--root <path>]",
-  subcommands: ["new", "attend", "status", "estimate", "auto", "unlock", "cancel"],
+  subcommands: ["new", "attend", "status", "estimate", "gates", "auto", "unlock", "cancel"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const [sub, ...rest] = argv;
@@ -69,6 +71,8 @@ export const runCommand: Command = {
         return runStatus(rest);
       case "estimate":
         return runEstimate(rest);
+      case "gates":
+        return runGates(rest);
       case "auto":
         return await runAutoLoop(rest);
       case "unlock":
@@ -77,8 +81,8 @@ export const runCommand: Command = {
         return runCancel(rest);
       default:
         process.stderr.write(
-          `tldrx run: expected \`new\`, \`attend\`, \`status\`, \`estimate\`, \`auto\`, \`unlock\` or \`cancel\`\n`
-            + `${runCommand.usage}\n`,
+          `tldrx run: expected \`new\`, \`attend\`, \`status\`, \`estimate\`, \`gates\`, \`auto\`, \`unlock\` `
+            + `or \`cancel\`\n${runCommand.usage}\n`,
         );
         return EXIT_USAGE;
     }
@@ -370,6 +374,38 @@ function runUnlock(argv: readonly string[]): number {
     }));
   } catch (error) {
     return fail("run unlock", error);
+  }
+}
+
+/**
+ * `tldrx run gates set <stage>:<policy> --note "…"` (issue #14).
+ *
+ * One subcommand today, and the verb is spelled out rather than implied: `run
+ * gates plan:agent` would read as a query on a bad day, and this is a signature.
+ * A bare `run gates` therefore prints usage rather than guessing that `set` was
+ * meant — the whole point of the note is that nobody arrives here by accident.
+ */
+function runGates(argv: readonly string[]): number {
+  const [sub, ...rest] = argv;
+  if (sub !== "set") {
+    process.stderr.write(
+      "tldrx run gates: expected `set`\n"
+      + '       tldrx run gates set <stage>:<human|auto|agent> --note "why" [--run <id>]\n',
+    );
+    return EXIT_USAGE;
+  }
+  try {
+    const args = parseArgs(rest, VALUE_FLAGS);
+    return report("run gates set", setGatePolicy({
+      root: workspaceRootFrom(args),
+      entry: args.positionals[0] ?? "",
+      note: stringFlag(args, "note") ?? "",
+      runId: stringFlag(args, "run"),
+      actor: currentActor(),
+      at: nowRfc3339(),
+    }));
+  } catch (error) {
+    return fail("run gates set", error);
   }
 }
 

@@ -27,6 +27,8 @@ import { costCommand } from "./commands/cost.ts";
 import { rejectCommand } from "./commands/reject.ts";
 import { gateCommand } from "./commands/gate.ts";
 import { storyCommand } from "./commands/story.ts";
+import { noteCommand } from "./commands/note.ts";
+import { shipCommand } from "./commands/ship.ts";
 import { planCommand } from "./commands/plan.ts";
 import { mapCommand } from "./commands/map.ts";
 import { expertCommand } from "./commands/expert.ts";
@@ -57,6 +59,7 @@ export const COMMANDS: readonly Command[] = [
   rejectCommand,
   gateCommand,
   storyCommand,
+  noteCommand,
   planCommand,
   budgetCommand,
   costCommand,
@@ -67,6 +70,7 @@ export const COMMANDS: readonly Command[] = [
   retroCommand,
   watchCommand,
   ticketsCommand,
+  shipCommand,
   hookCommand,
   statuslineCommand,
 ];
