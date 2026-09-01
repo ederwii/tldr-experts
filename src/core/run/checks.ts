@@ -23,7 +23,7 @@ import {
 } from "../text/handoff.ts";
 import { validateRunBudget } from "../budget/RunBudget.ts";
 import { loadWorkspace, repoPath, toSrcContext } from "../../hooks/lib/workspace.ts";
-import { describePlanIssues, validatePlan } from "../plan/validatePlan.ts";
+import { describePlanIssues, validatePlan, writesPlanArtefacts } from "../plan/validatePlan.ts";
 import { validateRunFile } from "./RunFile.ts";
 import { resolveMany, type PathContext } from "../facilitator/paths.ts";
 import { allowlistIssue } from "../schemas/commandAllowlist.ts";
@@ -223,7 +223,7 @@ export function unverifiedCount(outcome: CheckOutcome): number {
  * is listed on the Plan stage and would otherwise fail every other stage's gate.
  */
 function checkPlan(ctx: CheckContext): CheckOutcome {
-  if (!ctx.stage.outputs.some((p) => p.endsWith("waves.yml"))) {
+  if (!writesPlanArtefacts(ctx.stage.outputs)) {
     return { id: "plan", status: "skipped", detail: "the stage declares no waves.yml output" };
   }
   const planDir = join(ctx.runDir, ctx.stage.phase);
