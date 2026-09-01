@@ -55,6 +55,7 @@
     `adapters/transport.ts`, and the only way to ASSERT the argument shape of a command the suite must not
     run. The unit tests drive a recording fake; the one end-to-end test puts a STUB `gh` first on PATH in a
     throwaway workspace with a throwaway bare `origin`. The real `gh` is never invoked by a test.
+
 - **`TLDRX_CLAUDE_BIN` — point the sub-agent spawn at a different binary (#27, minimal slice).**
   `spawnAgent` hardcoded `claude`, so a pinned install, a wrapper that adds a proxy or credentials,
   and a stand-in in a sandbox all required patching source. The variable replaces the executable
