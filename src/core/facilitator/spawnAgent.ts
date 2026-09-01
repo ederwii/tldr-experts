@@ -30,7 +30,30 @@ import { AgentStream, resolveResultDoc, type AgentEvent } from "./agentEvents.ts
 import { isReadTool, readCapError, STOPPED_BY_MAX_READS } from "./readCap.ts";
 import { ENVELOPE_SCHEMA, toEnvelope, toUsage, type AgentEnvelope, type AgentUsage, type ClaudeResultJson } from "./envelope.ts";
 
+/** The provider this file speaks to, when nobody says otherwise. */
 export const CLAUDE_BIN = "claude";
+
+/**
+ * Which binary the sub-agent spawn actually executes (#27, minimal slice).
+ *
+ * `TLDRX_CLAUDE_BIN` replaces the executable NAME and nothing else — the argv below is
+ * still `claude`'s argv, so a stand-in has to speak `-p --output-format stream-json
+ * --json-schema`. That buys the cases people actually hit today: a pinned install, a
+ * wrapper that adds credentials or a proxy, a stub in a sandbox. It is not the provider
+ * abstraction #27 asks for, and it is not pretending to be one.
+ *
+ * Read on every call rather than captured at import: a test that sets the variable and a
+ * process that exports it late must both be obeyed, and a module-load snapshot obeys
+ * neither. Blank or whitespace means UNSET — an exported-but-empty var is how a shell
+ * says "no value", and spawning `""` would be a worse answer than the default.
+ *
+ * `tldrx doctor` is deliberately NOT covered: it checks `claude --version` because
+ * `env.yml` declares that string, and rewriting a manifest command is the provider
+ * layer's job, not this variable's.
+ */
+export function claudeBin(): string {
+  return process.env.TLDRX_CLAUDE_BIN?.trim() || CLAUDE_BIN;
+}
 
 /**
  * `[assumption]` — the spec never lists the sub-agent's tool allowance. Taken: the
@@ -147,7 +170,7 @@ export const SCHEMA_PLACEHOLDER = "<envelope-schema>";
 export function describeSpawn(request: AgentRequest): string {
   const args = buildClaudeArgs(request);
   const shown = args.map((arg, i) => (args[i - 1] === "--json-schema" ? SCHEMA_PLACEHOLDER : arg));
-  return `${CLAUDE_BIN} ${shown.map(shellQuote).join(" ")}`;
+  return `${claudeBin()} ${shown.map(shellQuote).join(" ")}`;
 }
 
 /** Quote an argv element only when it needs it, so the common case stays readable. */
@@ -175,7 +198,7 @@ export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
   let reads = 0;
   let capped = false;
 
-  const spawned = await runtime.spawn(CLAUDE_BIN, buildClaudeArgs(request), {
+  const spawned = await runtime.spawn(claudeBin(), buildClaudeArgs(request), {
     cwd: request.cwd,
     stdin: request.prompt,
     timeoutMs: request.timeoutMs,

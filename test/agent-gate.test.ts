@@ -432,7 +432,8 @@ describe("the four fallthroughs, one at a time", () => {
     expect(outcome.code).toBe(4);
     const said = outcome.lines.join("\n");
     expect(said).toContain("agent gate not taken");
-    expect(said).toContain("questions: questions=1 open (Q1)");
+    // The trigger is printed by the renderer; the detail no longer repeats it (gh #25).
+    expect(said).toContain("questions: 1 open (Q1)");
     expect(stageOf(ws.runDir)?.gate.status).toBe("pending");
     expect(stageOf(ws.runDir)?.gate.evidence).toBeUndefined();
   });
@@ -525,7 +526,8 @@ describe("the four fallthroughs, one at a time", () => {
     const said = outcome.lines.join("\n");
     expect(said).toContain("agent gate not taken");
     // named as its OWN trigger, with the offending path spelled out
-    expect(said).toContain("boundary: boundary=");
+    expect(said).toContain("boundary: ");
+    expect(said).not.toContain("boundary: boundary=");
     expect(said).toContain("1 outside the surface: app:platform/Auth.cs");
     expect(RunStore.open(made.runDir).run.phases.flatMap((p) => p.stages)[0]?.gate.status).toBe("pending");
   }, 60_000);

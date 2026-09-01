@@ -358,11 +358,26 @@ export async function evaluateBoundary(input: BoundaryInput): Promise<BoundaryVe
   if (targets.length === 0) return { ok: true, detail: "n/a (no plan naming an epic branch)" };
 
   const surface = deriveSurface(input.runDir, workspace);
+  // `BoundarySurface.excluded` promises an exclusion is "never silent", and until
+  // this line nothing read it: a `touches:` entry naming `.tldrx/` or `.agent/` was
+  // dropped from the surface without appearing in any output an operator sees.
+  // Appended to every verdict that HAS a surface, green and red alike — an exclusion
+  // is not a failure, it is a fact about what was measured (gh #25).
+  const excludedPart = surface.excluded.length === 0
+    ? ""
+    : `; ${String(surface.excluded.length)} state path(s) excluded from the surface: `
+      + surface.excluded.slice(0, NAMED_PATHS).join(", ")
+      + (surface.excluded.length > NAMED_PATHS
+        ? `, +${String(surface.excluded.length - NAMED_PATHS)} more`
+        : "");
   if (surface.cited + surface.declared === 0) {
     // Nothing declared a surface, so everything is outside one and nothing is.
     // Refusing here would refuse every run whose What cited no repo path, which
     // is a fact about the handoff, not about this stage's work.
-    return { ok: true, detail: "n/a (the run declares no surface: no cited path, no `touches:`)" };
+    return {
+      ok: true,
+      detail: `n/a (the run declares no surface: no cited path, no \`touches:\`)${excludedPart}`,
+    };
   }
 
   const repos: RepoBoundary[] = [];
@@ -387,7 +402,7 @@ export async function evaluateBoundary(input: BoundaryInput): Promise<BoundaryVe
   const measured = repos.filter((repo) => repo.changed !== null);
   if (measured.length === 0) {
     const why = repos.map((repo) => repo.reason ?? "unavailable").join("; ");
-    return { ok: true, detail: `n/a (nothing could be diffed: ${why})` };
+    return { ok: true, detail: `n/a (nothing could be diffed: ${why})${excludedPart}` };
   }
 
   const audited = measured.reduce((sum, repo) => sum + (repo.changed?.length ?? 0), 0);
@@ -401,7 +416,7 @@ export async function evaluateBoundary(input: BoundaryInput): Promise<BoundaryVe
   if (outside.length === 0) {
     return {
       ok: true,
-      detail: `${String(audited)} changed path(s), 0 outside the surface (${range})${unreadPart}`,
+      detail: `${String(audited)} changed path(s), 0 outside the surface (${range})${unreadPart}${excludedPart}`,
     };
   }
   const named = outside.slice(0, NAMED_PATHS);
@@ -411,7 +426,7 @@ export async function evaluateBoundary(input: BoundaryInput): Promise<BoundaryVe
     detail:
       `${String(audited)} changed path(s), ${String(outside.length)} outside the surface: `
       + `${named.join(", ")}${rest > 0 ? `, +${String(rest)} more` : ""}`
-      + `${unreadPart}; ${OUTSIDE_SURFACE}`,
+      + `${unreadPart}${excludedPart}; ${OUTSIDE_SURFACE}`,
   };
 }
 

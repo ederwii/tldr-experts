@@ -17,12 +17,12 @@
  * last link breaks. Neither can be fixed by editing prose.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseYaml } from "../src/core/yaml.ts";
 import { parseFrontMatter } from "../src/core/schemas/frontMatter.ts";
-import { STORY_KEYS, validateStoryFile } from "../src/core/schemas/story.ts";
+import { parseDodBlock, STORY_KEYS, validateStoryFile } from "../src/core/schemas/story.ts";
 import { EPIC_KEYS, validateEpicFile } from "../src/core/schemas/epic.ts";
 import { validateWaves } from "../src/core/schemas/waves.ts";
 import {
@@ -30,6 +30,7 @@ import {
   MAX_TOUCHES, MAX_WAVES, PLAN_STATUSES,
 } from "../src/core/schemas/planCommon.ts";
 import { validatePlan } from "../src/core/plan/validatePlan.ts";
+import { TEMPLATES_DIR } from "../src/core/paths.ts";
 import {
   PLAN_CONTRACT_HEADING, planContractExamples, renderPlanSchemaContract,
 } from "../src/core/plan/schemaContract.ts";
@@ -141,5 +142,64 @@ describe("the contract cannot drift from the schema", () => {
   test("no H2 inside it — every section scanner ends a section on `## `", () => {
     const offenders = renderPlanSchemaContract().split("\n").filter((line) => line.startsWith("## "));
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("the shipped templates are held to the same contract (#48)", () => {
+  /**
+   * `templates/story.md` and `templates/epic.md` state the Plan front-matter schema, are
+   * shipped in the npm package (`package.json` → `files`), and NOTHING in `src/` reads
+   * either one. They are a second copy of a contract whose first copy is computed from
+   * `STORY_KEYS` / `EPIC_KEYS`, and they were correct only by luck: add a required key
+   * and `schemaContract.ts` stops compiling — `Record<StoryKey, Field>` sees to that —
+   * while these two say nothing at all. A human then opens the template, writes a story
+   * the check refuses, and the framework looks broken.
+   *
+   * This is the guard half of #48, not the packaging half. Whether these files should be
+   * generated from `planContractExamples()` or deleted outright is the owner's call, and
+   * deleting a shipped file is not a decision a drift test gets to make. Until then they
+   * go red the moment they disagree with the schema.
+   *
+   * The dod commands are read out of each template rather than asserted against a
+   * workspace: a template has no `workspace.yml` to be verbatim against, and #48 is about
+   * the FRONT MATTER. What is checked is that the block exists and parses.
+   */
+  const read = (name: string): string => readFileSync(join(TEMPLATES_DIR, name), "utf8");
+
+  test("templates/story.md validates through the same `validateStoryFile` the check runs", () => {
+    const text = read("story.md");
+    const dod = parseDodBlock(parseFrontMatter(text).frontMatter.body);
+    expect(dod.present).toBe(true);
+    expect(dod.commands.length).toBeGreaterThan(0);
+
+    const parsed = validateStoryFile(text, new Set(dod.commands));
+    expect(parsed.validation.issues).toEqual([]);
+    expect(parsed.story).not.toBeNull();
+  });
+
+  test("templates/story.md's keys ARE `STORY_KEYS`, in order — no extra, none missing", () => {
+    expect(keysOf(read("story.md"))).toEqual([...STORY_KEYS]);
+  });
+
+  test("templates/epic.md validates through the same `validateEpicFile` the check runs", () => {
+    const parsed = validateEpicFile(read("epic.md"));
+    expect(parsed.validation.issues).toEqual([]);
+    expect(parsed.epic).not.toBeNull();
+  });
+
+  test("templates/epic.md's keys ARE `EPIC_KEYS`, in order", () => {
+    expect(keysOf(read("epic.md"))).toEqual([...EPIC_KEYS]);
+  });
+
+  /**
+   * The `status:` line in both templates carries the enum as a trailing comment. That
+   * comment is prose — the validator never reads it — so it is exactly the kind of copy
+   * that goes stale silently and then teaches a reader a status that does not exist.
+   */
+  test("the enum each template spells out beside `status:` is the real `PLAN_STATUSES`", () => {
+    for (const name of ["story.md", "epic.md"]) {
+      const line = read(name).split("\n").find((l) => l.trimStart().startsWith("status:"));
+      expect(`${name}: ${line ?? "NO status: LINE"}`).toContain(PLAN_STATUSES.join(" | "));
+    }
   });
 });

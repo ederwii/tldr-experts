@@ -18,7 +18,7 @@ export {
 export type { PromptParts, Placeholder } from "./prompt.ts";
 export { ENVELOPE_SCHEMA, parseClaudeJson, toEnvelope, toUsage } from "./envelope.ts";
 export type { AgentEnvelope, AgentUsage, ClaudeResultJson } from "./envelope.ts";
-export { spawnAgent, buildClaudeArgs, allowedTools, interpret, formatUsd, BASE_TOOLS, CLAUDE_BIN } from "./spawnAgent.ts";
+export { spawnAgent, buildClaudeArgs, allowedTools, interpret, formatUsd, BASE_TOOLS, CLAUDE_BIN, claudeBin } from "./spawnAgent.ts";
 export { AgentStream, detectStreamFormat, resolveResultDoc, toolTarget, STRUCTURED_OUTPUT_TOOL } from "./agentEvents.ts";
 export type { AgentEvent, StreamFormat } from "./agentEvents.ts";
 export type { AgentRequest, AgentOutcome } from "./spawnAgent.ts";

@@ -42,6 +42,21 @@ Ctrl-C on a spawning command exits `130`.
   elsewhere.
 - **stdout is data, stderr is progress and notes.** The progress view never touches stdout.
 
+## Environment variables
+
+| Variable | What it does |
+|---|---|
+| `TLDRX_UI` | The progress view, same values as `--ui`. The flag wins where both are given. |
+| `TLDRX_CLAUDE_BIN` | Which binary a sub-agent spawn executes. Default `claude`, taken off `PATH`. |
+
+`TLDRX_CLAUDE_BIN` replaces the executable **name only** — the arguments are still Claude
+Code's (`-p --output-format stream-json --verbose --json-schema …`), so whatever it points at
+has to speak them. It is for a pinned install, a wrapper that adds a proxy or credentials, or
+a stand-in in a sandbox; it is not a provider switch. Blank or whitespace counts as unset.
+`tldrx run --dry-run` prints the command it would run, so it is also how you check the
+variable took. `tldrx doctor` is not affected: it checks `claude --version` because `env.yml`
+declares that, and that stays true of the tool this framework is built on.
+
 ---
 
 ## `tldrx init`

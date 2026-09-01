@@ -47,6 +47,28 @@ const PACKAGE_JSON = JSON.stringify({
   scripts: { typecheck: "bash gate.sh typecheck", build: "bash gate.sh build" },
 }, null, 2);
 
+/**
+ * Every git command the sandbox builds itself with runs under an `init.defaultBranch`
+ * that is deliberately NOT `main` (#49).
+ *
+ * This file's repos are all named `main`, and a runner whose default branch is `master`
+ * is the difference between green on macOS and red on CI: the bare repo's HEAD points at
+ * a ref that never exists, a clone that does not ASK for a branch checks out nothing, and
+ * the next `git push origin main` dies with `src refspec main does not match any` —
+ * five lines away from the cause. That is the real CI failure of 2026-09-01 (run
+ * 33459567355, sha 064279e), and it was invisible here because the host happened to
+ * default to `main`.
+ *
+ * So the hostile default is pinned rather than inherited. Anything in this sandbox that
+ * still infers a branch name now fails on every machine, not one in twenty runs.
+ */
+const HOSTILE_GIT_ENV = {
+  ...process.env,
+  GIT_CONFIG_COUNT: "1",
+  GIT_CONFIG_KEY_0: "init.defaultBranch",
+  GIT_CONFIG_VALUE_0: "trunk",
+};
+
 type Sandbox = { dir: string; main: string; originGit: string; git: (...a: string[]) => string };
 
 let open: Sandbox[] = [];
@@ -61,13 +83,13 @@ function sandbox(): Sandbox {
   const main = join(dir, "main");
   const originGit = join(dir, "origin.git");
   const run = (cwd: string, ...args: string[]) =>
-    execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+    execFileSync("git", args, { cwd, encoding: "utf8", env: HOSTILE_GIT_ENV }).trim();
   // `-b main` and `--branch main` are not decoration: a runner whose `init.defaultBranch`
   // is `master` gives the bare repo a HEAD pointing at a ref that never exists, and the
   // clone below then has no local `main` at all. That is exactly how this file passed on
   // macOS and failed on CI.
-  execFileSync("git", ["init", "-q", "--bare", "-b", "main", originGit]);
-  execFileSync("git", ["init", "-q", "-b", "main", main]);
+  execFileSync("git", ["init", "-q", "--bare", "-b", "main", originGit], { env: HOSTILE_GIT_ENV });
+  execFileSync("git", ["init", "-q", "-b", "main", main], { env: HOSTILE_GIT_ENV });
   for (const cfg of [["user.email", "fixture@example.com"], ["user.name", "Fixture"], ["commit.gpgsign", "false"]]) {
     run(main, "config", cfg[0]!, cfg[1]!);
   }
@@ -135,6 +157,11 @@ async function waitUntil(predicate: () => boolean, budgetMs: number, what: strin
 }
 
 const lockDir = (sb: Sandbox) => join(sb.main, ".git", "merge-wave.lock");
+
+/** The branch a clone actually checked out — `""` when it checked out nothing at all. */
+function cloneBranch(cwd: string): string {
+  return execFileSync("git", ["branch", "--show-current"], { cwd, encoding: "utf8", env: HOSTILE_GIT_ENV }).trim();
+}
 
 /** Run from `cwd` instead of the main checkout — used for the linked-worktree case. */
 function invokeFrom(cwd: string, sb: Sandbox, branch: string, env: Record<string, string> = {}): Invocation {
@@ -291,7 +318,10 @@ describe("what gets pushed is what was gated (#44)", () => {
     const sb = sandbox();
     // Someone else's commit lands on origin/main while this checkout knows nothing of it.
     const clone = join(sb.dir, "other");
-    execFileSync("git", ["clone", "-q", "--branch", "main", sb.originGit, clone]);
+    execFileSync("git", ["clone", "-q", "--branch", "main", sb.originGit, clone], { env: HOSTILE_GIT_ENV });
+    // Said out loud, because the alternative is the failure five lines down (#49): a clone
+    // with no local `main` does not complain, it just pushes nothing under that name.
+    expect(cloneBranch(clone)).toBe("main");
     for (const cfg of [["user.email", "o@example.com"], ["user.name", "Other"]]) {
       execFileSync("git", ["config", cfg[0]!, cfg[1]!], { cwd: clone });
     }
@@ -347,5 +377,96 @@ describe("the dirty-tree guard and the pack artifact (#45)", () => {
     const { code, stdout } = await invoke(sb, "wave-a").done;
     expect(code).toBe(1);
     expect(stdout).toContain("FAIL dirty tree");
+  });
+});
+
+describe("the sandbox does not inherit the host's default branch (#49)", () => {
+  /**
+   * CI run 33459567355 (sha 064279e) failed here — `git push -q origin main` →
+   * `src refspec main does not match any` — while macOS stayed green, because macOS
+   * happened to default to `main` and the runner did not. The treatment landed in
+   * f1ffe56 (`-b main` on both inits, `--branch main` on the clone), but nothing
+   * exercised it: on a main-defaulting host, removing the treatment changes nothing.
+   *
+   * These two tests are the exercise. They build the sandbox's repo shapes by hand under
+   * an explicitly hostile default, so the mechanism is pinned on every machine: untreated
+   * is the exact CI error, treated is a clone on `main`. Measured 2026-08-31 on git
+   * 2.50.1 — untreated reproduces the failure verbatim.
+   */
+  const hostile = (extra: Record<string, string> = {}) => ({ ...HOSTILE_GIT_ENV, ...extra });
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync("git", args, { cwd, encoding: "utf8", env: hostile() }).trim();
+
+  /** A bare origin carrying `refs/heads/main`, built with or without the `-b main` treatment. */
+  function origin(dir: string, treated: boolean): string {
+    const bare = join(dir, "origin.git");
+    const seed = join(dir, "seed");
+    execFileSync("git", ["init", "-q", "--bare", ...(treated ? ["-b", "main"] : []), bare], { env: hostile() });
+    execFileSync("git", ["init", "-q", "-b", "main", seed], { env: hostile() });
+    for (const cfg of [["user.email", "s@example.com"], ["user.name", "Seed"], ["commit.gpgsign", "false"]]) {
+      git(seed, "config", cfg[0]!, cfg[1]!);
+    }
+    writeFileSync(join(seed, "a.txt"), "seed\n");
+    git(seed, "add", "-A");
+    git(seed, "commit", "-q", "-m", "seed");
+    git(seed, "remote", "add", "origin", bare);
+    git(seed, "push", "-q", "origin", "main");
+    return bare;
+  }
+
+  test("untreated, a clone checks out nothing and the push dies exactly as CI reported", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-defaultbranch-"));
+    try {
+      const bare = origin(dir, false);
+      expect(git(dir, "--git-dir", bare, "symbolic-ref", "HEAD")).toBe("refs/heads/trunk");
+
+      const clone = join(dir, "other");
+      execFileSync("git", ["clone", "-q", bare, clone], { env: hostile(), stdio: "ignore" });
+      // The whole bug: the clone followed the origin's HEAD onto an UNBORN `trunk`, so it
+      // has no commits, no local `main`, and not one word of complaint about either.
+      expect(cloneBranch(clone)).toBe("trunk");
+      expect(git(clone, "branch", "--list")).toBe("");
+
+      let stderr = "";
+      try {
+        execFileSync("git", ["push", "-q", "origin", "main"], { cwd: clone, env: hostile(), stdio: "pipe" });
+        throw new Error("expected the push to fail");
+      } catch (err) {
+        stderr = String((err as { stderr?: Buffer }).stderr ?? "");
+      }
+      expect(stderr).toContain("src refspec main does not match any");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("treated, the clone is on `main` and the push lands", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-defaultbranch-"));
+    try {
+      const bare = origin(dir, true);
+      expect(git(dir, "--git-dir", bare, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
+
+      const clone = join(dir, "other");
+      execFileSync("git", ["clone", "-q", "--branch", "main", bare, clone], { env: hostile() });
+      expect(cloneBranch(clone)).toBe("main");
+
+      for (const cfg of [["user.email", "o@example.com"], ["user.name", "Other"], ["commit.gpgsign", "false"]]) {
+        git(clone, "config", cfg[0]!, cfg[1]!);
+      }
+      git(clone, "commit", "-q", "--allow-empty", "-m", "someone else's work");
+      git(clone, "push", "-q", "origin", "main");
+      expect(git(dir, "--git-dir", bare, "log", "--format=%s", "-1", "main")).toBe("someone else's work");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the sandbox itself is built under the hostile default, so the treatment is live", () => {
+    const sb = sandbox();
+    expect(execFileSync("git", ["config", "--get", "init.defaultBranch"],
+      { cwd: sb.main, encoding: "utf8", env: HOSTILE_GIT_ENV }).trim()).toBe("trunk");
+    expect(cloneBranch(sb.main)).toBe("main");
+    expect(execFileSync("git", ["--git-dir", sb.originGit, "symbolic-ref", "HEAD"],
+      { encoding: "utf8", env: HOSTILE_GIT_ENV }).trim()).toBe("refs/heads/main");
   });
 });

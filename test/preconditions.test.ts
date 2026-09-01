@@ -332,7 +332,9 @@ describe("a red precondition refuses the stage, having spent nothing", () => {
     const text = outcome.lines.join("\n");
     expect(text).toContain("refusing to dispatch 01-what/alpha — precondition `docker` is red.");
     expect(text).toContain("`false` in api exited 1 (expected 0)");
-    expect(text).toContain("the stage is still `ready` and nothing was spent");
+    // `pending` is what run.yml holds at the cursor before dispatch. The refusal now
+    // reports the status it MEASURED rather than asserting `ready` (gh #25).
+    expect(text).toContain("the stage is still `pending` and nothing was spent");
 
     // Nothing spawned — the binary was never reached, not merely unlogged.
     expect(existsSync(log)).toBe(false);

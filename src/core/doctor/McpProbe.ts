@@ -6,6 +6,7 @@
  * `name: <transport> - <status>`.
  */
 import { runtime } from "../runtime/index.ts";
+import { claudeBin } from "../facilitator/spawnAgent.ts";
 
 const ANSI_ESCAPE = /\[[0-9;]*m/g;
 const SERVER_LINE = /^([A-Za-z0-9._@/-]+):\s+(.+?)\s+-\s+(.+)$/;
@@ -45,7 +46,7 @@ export class McpProbe {
 
   async probe(): Promise<McpProbeResult> {
     try {
-      const { stdout, stderr } = await runtime.spawn("claude", ["mcp", "list"], {
+      const { stdout, stderr } = await runtime.spawn(claudeBin(), ["mcp", "list"], {
         timeoutMs: this.timeoutMs,
       });
 

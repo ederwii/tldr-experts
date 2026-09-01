@@ -708,7 +708,7 @@ function loadMapTokens(root: string): ReadonlySet<string> | null {
  * knowledge. A `doc` src that appears in none of them is `unverified`.
  */
 function loadDeclaredUrls(ctx: SrcContext): ReadonlySet<string> {
-  const key = `${ctx.root} ${ctx.runDir ?? ""}`;
+  const key = `${ctx.root}\0${ctx.runDir ?? ""}`;
   const cached = urlCache.get(key);
   if (cached !== undefined) return cached;
   const urls = new Set<string>();

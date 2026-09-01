@@ -760,7 +760,10 @@ async function preconditionRefusal(
       ...notes,
       `refusing to dispatch ${phaseId}/${stageId} — precondition \`${precondition.id}\` is red.`,
       `  ${ran.detail}`,
-      `Fix it and run the same command again: the stage is still \`ready\` and nothing was spent.`,
+      // The status is READ, not asserted. `next` re-runs a `failed` stage — that is
+      // the retry — and this line used to tell the operator `ready` regardless, a
+      // claim the file did not hold (gh #25). Unchanged when the stage IS ready.
+      `Fix it and run the same command again: the stage is still \`${stageStatusOf(store, phaseId, stageId)}\` and nothing was spent.`,
     ]);
   }
   return null;
@@ -1659,6 +1662,14 @@ function mapStage(
         : { ...phase, stages: phase.stages.map((stage) => (stage.id === stageId ? fn(stage) : stage)) },
     ),
   }));
+}
+
+/** One stage's status as `run.yml` currently holds it, or `unchanged` when it is not there. */
+function stageStatusOf(store: RunStore, phaseId: string, stageId: string): string {
+  const stage = store.run.phases
+    .find((phase: RunPhase) => phase.id === phaseId)?.stages
+    .find((entry) => entry.id === stageId);
+  return stage?.status ?? "unchanged";
 }
 
 function setStatus(store: RunStore, phaseId: string, stageId: string, status: RunStage["status"]): void {
