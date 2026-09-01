@@ -139,6 +139,31 @@
     not cover: failure paths, the agent gate, attended runs, and prompt QUALITY, which needs a real
     model and a judge.
 
+- **`tldrx story reopen <id> --for-fix --note "<defect>"` — a sanctioned fix round on a `done` story
+  (#58, owner decision 2026-09-01).** Measured on `260829-scoring-leaderboard`: S11's adversarial
+  review found a real defect (linkEmail succeeds, setDisplayName fails, the account is permanently
+  linked and the score never claimable). It was accepted, small and well understood — and the story
+  was already `done`, so the only choices were rejecting the whole Build stage, which destroys
+  fourteen good stories' closure, or fixing it outside the story machinery, which leaves an
+  epic-level commit with no story provenance. `done` → fix round was the missing arc.
+  - **No attempt is consumed.** The mechanism is the one that was already there: `story.reopened` is a
+    reset boundary the review ledger reads, so the approve that closed the story stops counting and
+    the fix runs as attempt 1 of 2 — with both turns available to it.
+  - **The same DoD and the same reviewer.** The story goes back to `todo` and the Build pipeline picks
+    it up unchanged; a fix a reviewer refuses twice blocks, exactly as the original would have.
+    Nothing is waved through because a human asked for it.
+  - **It cannot relitigate scope.** The `--note` names a defect, and `status:` is the ONLY line the
+    verb moves on the story file — the acceptance criteria the reviewer will judge against are the
+    ones that were already there.
+  - **One open fix round per story.** It opens on a `story.reopened` carrying the new `reason: fix`
+    and closes when the story is `done` again; a second `--for-fix` while one is open is refused,
+    naming who opened it and with which defect. The bound is read from `events.jsonl`
+    (`ReviewLedger.fixRound`), so it holds across processes.
+  - Refused when the story is **not** `done` (an unfinished story is the plain verb's job), when
+    `--note` is missing, and on that second round. `reason` is written on every `story.reopened` now —
+    `fix` or `attempts` — and an event without it predates the key and is an `attempts` reopen, the
+    only kind that existed.
+  - The plain verb's `done` refusal now points at `--for-fix` beside `reject --stage`.
 
 ### Fixed
 
@@ -238,6 +263,42 @@
     `TLDRX_CLAUDE_BIN`; `0`, `false`, `no` and `never` also work), or `update_check: off` in
     `~/.tldrx/config.yml` for the machine. A config file that does not parse is not an opt-out and
     not a crash.
+
+- **`budget.yml` no longer adds host tokens to dollars (#61, owner decision 2026-09-01).**
+  `validateRunBudget` summed EVERY phase ceiling and compared the total to `ceiling_usd` — but since
+  the `economy:` label landed, a phase priced in `host-tokens` carries a host-session token allowance
+  and not money. A realistic allowance therefore made a valid file invalid
+  (`phase ceilings sum to 200018 > ceiling_usd 25`), and it did so in the one check that fails
+  **closed**: `RunStore.open` threw, and the budget-gate hook then denied every spawn on the run.
+  - **Separate ceilings, per economy.** `ceiling_usd` stays dollars-only and a new optional
+    `ceiling_host_tokens` — at the run level and per phase — is the host-token allowance. The two are
+    never added and never converted: there is no exchange rate here, and inventing one would be a
+    guess about a price, which is the whole reason the label exists.
+  - **The sum runs once per economy.** Σ the `metered-usd` phases against `ceiling_usd`; Σ the
+    `host-tokens` phases against `ceiling_host_tokens`. The dollar half is byte-identical arithmetic
+    with the same refusal in the same words.
+  - **Additive, and absence changes nothing.** With no `ceiling_host_tokens` declared, the token sum
+    has nothing to compare against and is not checked — deliberately the lax side, since the only
+    other number on the run is dollars. The compat bar is the live `260830-ordering-inventory`
+    budget.yml, mid-Build in another workspace while this was written and asserted verbatim in
+    `test/economy.test.ts`: it validates, its phase sum of exactly 62.00 against a 62.00 ceiling still
+    passes, one cent more is still refused in the same words, and every phase still reads
+    `metered-usd` with no token ceiling.
+  - `hostTokenCeiling` (f353d8d, #22b) prefers the new field and **still falls back to `ceiling_usd`**,
+    because the files written before it existed put the allowance in that one unlabelled scalar and
+    they are still on disk. The emitter round-trips both, so `budget raise` cannot erase a token
+    ceiling it rewrites past.
+  - The workaround the issue documented is gone: `test/hooks.test.ts` and `test/economy.test.ts` no
+    longer raise the run ceiling to `60000`/`100000` — dollar figures that meant nothing — to let a
+    token phase validate.
+  - **`RunStore.ceilingsToWrite` now carries a phase's `economy` and `ceiling_host_tokens` from disk**
+    beside its `ceiling_usd`. That seam re-reads CEILINGS before every save so a raise landing
+    mid-stage is not clobbered by the copy the process opened with — and a phase's ceiling is three
+    fields, not one. Preserving the number without the label would have been the worse half of both:
+    a token allowance kept on a phase this reader had been told is priced in dollars, where
+    `hostTokenCeiling` can no longer see it. For a file with no labels and no token ceilings — every
+    budget.yml on disk today, the live one included — all three are identical on both sides and the
+    save writes exactly what it always wrote.
 
 ### Changed
 

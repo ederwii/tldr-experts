@@ -225,11 +225,16 @@ function createRunLocked(options: NewRunOptions): NewRunOutcome {
     // A new run is priced in dollars unless somebody says otherwise; the label is
     // hand-set (or set by the Plan) on a file that already exists (§E.2).
     economy: DEFAULT_ECONOMY,
+    // No host-token allowance: a metered run has none to declare (#61).
+    ceiling_host_tokens: null,
     phases: phases.map((p) => ({
       id: p.id,
       ceiling_usd: budgetPlan.perPhase.get(p.id) ?? 0,
       spent_usd: 0,
       economy: null,
+      // Same reason (#61): a new run prices in dollars, so it declares no token
+      // allowance. Null, not 0 — 0 would be a ceiling nothing could ever fit.
+      ceiling_host_tokens: null,
     })),
   };
 

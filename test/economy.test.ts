@@ -22,9 +22,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import {
-  asRunBudget, economyFor, isHostTokens, validateRunBudget,
+  asRunBudget, economyFor, hostTokenCeiling, isHostTokens, validateRunBudget,
   DEFAULT_ECONOMY, type RunBudget,
 } from "../src/core/budget/RunBudget.ts";
+import { wouldExceedHostTokens } from "../src/core/budget/wouldExceed.ts";
 import { validateBudget } from "../src/core/schemas/budget.ts";
 import {
   isAttendedByHostView, loadRunView, renderRunEconomies, runSpend,
@@ -228,8 +229,8 @@ describe("the economy label (§E.2)", () => {
     const mixed = budget({
       economy: "host-tokens",
       phases: [
-        { id: "01-what", ceiling_usd: 4, spent_usd: 0, economy: "metered-usd" },
-        { id: "04-build", ceiling_usd: 8, spent_usd: 0, economy: null },
+        { id: "01-what", ceiling_usd: 4, spent_usd: 0, economy: "metered-usd", ceiling_host_tokens: null },
+        { id: "04-build", ceiling_usd: 8, spent_usd: 0, economy: null, ceiling_host_tokens: null },
       ],
     });
     expect(economyFor(mixed, "01-what")).toBe("metered-usd");
@@ -247,8 +248,8 @@ describe("the economy label (§E.2)", () => {
     const before = budget({
       economy: "host-tokens",
       phases: [
-        { id: "01-what", ceiling_usd: 4, spent_usd: 0, economy: null },
-        { id: "04-build", ceiling_usd: 8, spent_usd: 0, economy: "metered-usd" },
+        { id: "01-what", ceiling_usd: 4, spent_usd: 0, economy: null, ceiling_host_tokens: null },
+        { id: "04-build", ceiling_usd: 8, spent_usd: 0, economy: "metered-usd", ceiling_host_tokens: null },
       ],
     });
     const after = raiseBudget(before, { phaseId: "04-build", amountUsd: 2 }).budget;
@@ -323,11 +324,13 @@ describe("the host-token ceiling (#22b, `tldrx next`)", () => {
 
   function tokenCeiling(ws: FacilitatorWorkspace, tokens: number, optIn: boolean): void {
     const path = join(ws.runDir, "budget.yml");
+    // The run's `ceiling_usd` is NOT touched (#61, fixed): the token allowance has
+    // its own field and its own sum, so pricing one phase in tokens no longer
+    // blows a dollar ceiling it was never measured against.
     let text = readFileSync(path, "utf8")
-      .replace(/^ceiling_usd: .*$/m, "ceiling_usd: 100000")
       .split("\n")
       .map((line) => /id: "?01-what"?,/.test(line)
-        ? line.replace(/ceiling_usd: [0-9.]+/, `ceiling_usd: ${String(tokens)}`).replace(/}\s*$/, ", economy: host-tokens}")
+        ? line.replace(/}\s*$/, `, economy: host-tokens, ceiling_host_tokens: ${String(tokens)}}`)
         : line)
       .join("\n");
     if (optIn) text = text.replace("phases:", "on_host_tokens_exceed: block\nphases:");
@@ -770,5 +773,257 @@ phases:
     expect(note).toContain("12000 host tokens");
     expect(note).toContain("1 unmetered turn");
     expect(note).toContain("attended_by: host");
+  });
+});
+
+/**
+ * SEPARATE CEILINGS PER ECONOMY (#61, owner decision 2026-09-01).
+ *
+ * The measurement in the issue: `validateRunBudget` summed EVERY phase ceiling
+ * and compared the total to `ceiling_usd`, so a phase priced in `host-tokens` —
+ * a number the module's own doc comment says is "not dollars" — was added to
+ * dollars by the one function in the file that fails CLOSED. A realistic token
+ * allowance made a valid file invalid, `RunStore.open` threw on it, and the
+ * budget-gate hook then denied every spawn on the run.
+ *
+ * The fix is not a bigger number. Dollars and host tokens are never added and
+ * never converted, so each economy gets its OWN run ceiling and its own sum:
+ * `ceiling_usd` stays dollars-only and `ceiling_host_tokens` is the token
+ * allowance. Both new fields are additive and optional — the compat bar below is
+ * the live `260830-ordering-inventory` file, mid-Build in another workspace while
+ * this was written.
+ */
+describe("separate ceilings per economy (#61)", () => {
+  /** A run's dollar phases, summing to 18 of a 25 ceiling. */
+  function metered(): Record<string, unknown> {
+    return {
+      version: 1, run: "260830-x", ceiling_usd: 25, per_agent_max_usd: 4, on_exceed: "block",
+      phases: [
+        { id: "01-what", ceiling_usd: 4, spent_usd: 0 },
+        { id: "04-build", ceiling_usd: 8, spent_usd: 0 },
+        { id: "05-watch", ceiling_usd: 6, spent_usd: 0 },
+      ],
+    };
+  }
+
+  test("a host-tokens phase is not added to the dollar ceiling — the issue's own file", () => {
+    // Verbatim from #61: a 200 000-token phase under a $25 run ceiling.
+    const doc = metered();
+    (doc.phases as Record<string, unknown>[]).push(
+      { id: "02-how", ceiling_usd: 200_000, spent_usd: 0, economy: "host-tokens" },
+    );
+    const report = validateRunBudget(doc);
+    expect(report.ok).toBe(true);
+    expect(report.issues.map((i) => i.message).join(" ")).not.toContain("200018");
+  });
+
+  test("the same phase priced in the token FIELD validates too", () => {
+    const doc = metered();
+    (doc.phases as Record<string, unknown>[]).push({
+      id: "02-how", ceiling_usd: 0, spent_usd: 0,
+      economy: "host-tokens", ceiling_host_tokens: 200_000,
+    });
+    expect(validateRunBudget(doc).ok).toBe(true);
+  });
+
+  test("the DOLLAR sum is untouched — same arithmetic, same words", () => {
+    const doc = metered();
+    (doc.phases as Record<string, unknown>[]).push({ id: "02-how", ceiling_usd: 8, spent_usd: 0 });
+    const report = validateRunBudget(doc);
+    expect(report.ok).toBe(false);
+    expect(report.issues.find((i) => i.path === "phases")?.message)
+      .toBe("phase ceilings sum to 26 > ceiling_usd 25");
+  });
+
+  /**
+   * A run-level `ceiling_host_tokens` is what makes the token sum checkable at
+   * all. Its message names the TOKEN field: a refusal that said `ceiling_usd`
+   * over a token total would be the same category error one level down.
+   */
+  test("the TOKEN sum is checked against `ceiling_host_tokens`, in tokens", () => {
+    const doc = {
+      version: 1, run: "r", ceiling_usd: 25, ceiling_host_tokens: 150_000,
+      per_agent_max_usd: 4, on_exceed: "block", economy: "host-tokens",
+      phases: [
+        { id: "01-what", ceiling_usd: 0, spent_usd: 0, ceiling_host_tokens: 120_000 },
+        { id: "02-how", ceiling_usd: 0, spent_usd: 0, ceiling_host_tokens: 80_000 },
+      ],
+    };
+    const report = validateRunBudget(doc);
+    expect(report.ok).toBe(false);
+    const said = report.issues.find((i) => i.path === "phases")?.message ?? "";
+    expect(said).toContain("200000");
+    expect(said).toContain("ceiling_host_tokens 150000");
+    expect(said).not.toContain("ceiling_usd");
+  });
+
+  test("under its own token ceiling it validates, whatever the dollar ceiling says", () => {
+    const doc = {
+      version: 1, run: "r", ceiling_usd: 1, ceiling_host_tokens: 500_000,
+      per_agent_max_usd: 4, on_exceed: "block", economy: "host-tokens",
+      phases: [{ id: "01-what", ceiling_usd: 0, spent_usd: 0, ceiling_host_tokens: 400_000 }],
+    };
+    expect(validateRunBudget(doc).ok).toBe(true);
+  });
+
+  test("no `ceiling_host_tokens` declared means the token sum has nothing to bind it", () => {
+    const doc = {
+      version: 1, run: "r", ceiling_usd: 25, per_agent_max_usd: 4, on_exceed: "block",
+      economy: "host-tokens",
+      phases: [{ id: "01-what", ceiling_usd: 999_999, spent_usd: 0 }],
+    };
+    expect(validateRunBudget(doc).ok).toBe(true);
+  });
+
+  test("a token ceiling that is not a number is refused, at the run and at a phase", () => {
+    const run = { ...metered(), ceiling_host_tokens: "lots" };
+    expect(validateRunBudget(run).issues.some((i) => i.path === "ceiling_host_tokens")).toBe(true);
+    const doc = metered();
+    (doc.phases as Record<string, unknown>[])[0] = {
+      id: "01-what", ceiling_usd: 4, spent_usd: 0, economy: "host-tokens", ceiling_host_tokens: "lots",
+    };
+    expect(validateRunBudget(doc).issues.some((i) => i.path === "phases[0].ceiling_host_tokens")).toBe(true);
+  });
+
+  // --- what reads the ceiling ----------------------------------------------
+
+  test("`hostTokenCeiling` prefers the token field and falls back to `ceiling_usd`", () => {
+    const written = asRunBudget({
+      version: 1, run: "r", ceiling_usd: 25, ceiling_host_tokens: 90_000,
+      per_agent_max_usd: 4, on_exceed: "block", economy: "host-tokens",
+      phases: [
+        { id: "01-what", ceiling_usd: 4, spent_usd: 0, ceiling_host_tokens: 10_000 },
+        { id: "02-how", ceiling_usd: 7, spent_usd: 0 },
+      ],
+    });
+    // The new field wins where it is written.
+    expect(hostTokenCeiling(written, "01-what")).toBe(10_000);
+    // COMPAT: a phase written before the field existed put the tokens in
+    // `ceiling_usd`, and f353d8d read it there. It still does.
+    expect(hostTokenCeiling(written, "02-how")).toBe(7);
+    // The run level, same rule.
+    expect(hostTokenCeiling(written, null)).toBe(90_000);
+    expect(hostTokenCeiling(asRunBudget({ ...budget(), economy: "host-tokens" }), null)).toBe(25);
+    // A metered phase has no token ceiling to read, whatever is written on it.
+    expect(hostTokenCeiling(budget(), "01-what")).toBeNull();
+  });
+
+  test("`wouldExceedHostTokens` judges against the token field", () => {
+    const b = asRunBudget({
+      version: 1, run: "r", ceiling_usd: 25, per_agent_max_usd: 4, on_exceed: "block",
+      phases: [{ id: "01-what", ceiling_usd: 4, spent_usd: 0, economy: "host-tokens", ceiling_host_tokens: 10_000 }],
+    });
+    expect(wouldExceedHostTokens(b, "01-what", 12_000)?.ceiling).toBe(10_000);
+    expect(wouldExceedHostTokens(b, "01-what", 12_000)?.over).toBe(true);
+    expect(wouldExceedHostTokens(b, "01-what", 9_000)?.over).toBe(false);
+  });
+
+  // --- the round trip -------------------------------------------------------
+
+  test("`budget raise` does not erase a token ceiling it rewrites past", () => {
+    const before = asRunBudget({
+      version: 1, run: "r", ceiling_usd: 25, ceiling_host_tokens: 90_000,
+      per_agent_max_usd: 4, on_exceed: "block", economy: "host-tokens",
+      phases: [
+        { id: "01-what", ceiling_usd: 4, spent_usd: 0, ceiling_host_tokens: 10_000 },
+        { id: "04-build", ceiling_usd: 8, spent_usd: 0, economy: "metered-usd", ceiling_host_tokens: null },
+      ],
+    });
+    const text = emitBudgetYaml(raiseBudget(before, { phaseId: "04-build", amountUsd: 2 }).budget);
+    expect(text).toContain("ceiling_host_tokens: 90000");
+    expect(text).toContain("ceiling_host_tokens: 10000");
+    expect(validateRunBudget(parseYaml(text)).ok).toBe(true);
+    const reread = asRunBudget(parseYaml(text));
+    expect(hostTokenCeiling(reread, "01-what")).toBe(10_000);
+    expect(reread.phases.find((p) => p.id === "04-build")?.ceiling_usd).toBe(10);
+  });
+
+  test("a budget with no token ceiling emits no token line — byte-identical output", () => {
+    const text = emitBudgetYaml(budget());
+    expect(text).not.toContain("ceiling_host_tokens");
+    expect(validateRunBudget(parseYaml(text)).ok).toBe(true);
+  });
+
+  // --- the compat bar -------------------------------------------------------
+
+  /**
+   * `tldrx-work/260830-ordering-inventory/budget.yml`, copied VERBATIM on
+   * 2026-09-01 out of `~/aparece-v2` while that run sat mid-Build. It is the file
+   * this change is not allowed to move: every phase metered, no label, no new
+   * key, and a phase sum of exactly 62.00 against a 62.00 ceiling — the boundary
+   * case, where an arithmetic change of any kind would show.
+   */
+  const LIVE = [
+    "# tldrx-work/<run>/budget.yml — the ceiling the facilitator refuses to exceed (spec §2.11).",
+    "# Actuals are rolled up from run.yml task costs; never typed by hand.",
+    "version: 1",
+    'run: "260830-ordering-inventory"',
+    "ceiling_usd: 62.00",
+    "per_agent_max_usd: 18.00",
+    "warn_at_pct: 80",
+    "on_exceed: block",
+    "phases:",
+    '  - {id: "01-what", ceiling_usd: 8.00, spent_usd: 2.10}',
+    '  - {id: "02-how", ceiling_usd: 12.00, spent_usd: 8.00}',
+    '  - {id: "03-plan", ceiling_usd: 8.00, spent_usd: 3.20}',
+    '  - {id: "04-build", ceiling_usd: 30.00, spent_usd: 0.00}',
+    '  - {id: "05-watch", ceiling_usd: 4.00, spent_usd: 0.00}',
+    "",
+  ].join("\n");
+
+  /**
+   * `RunStore.ceilingsToWrite` re-reads CEILINGS from disk before every save, so a
+   * `budget raise` (or a hand-edit) that lands while a stage runs is not clobbered
+   * by the copy the process opened with. A phase's host-token allowance IS a
+   * ceiling, and so is the label that makes it readable: a token number whose
+   * `economy:` was reverted to dollars on the next save is worse than not
+   * surviving at all, because `hostTokenCeiling` would stop seeing it.
+   */
+  test("a phase's token ceiling and its label survive a save that did not change them", () => {
+    const ws = workspace();
+    const path = join(ws.runDir, "budget.yml");
+    // Opened FIRST, so the in-memory copy predates the edit — which is the whole
+    // race this seam exists for.
+    const store = RunStore.open(ws.runDir);
+    writeFileSync(path, readFileSync(path, "utf8").split("\n").map((line) =>
+      /id: "?01-what"?,/.test(line)
+        ? line.replace(/}\s*$/, ", economy: host-tokens, ceiling_host_tokens: 250000}")
+        : line).join("\n"), "utf8");
+
+    store.save();
+
+    const reread = RunStore.open(ws.runDir).budget;
+    expect(economyFor(reread, "01-what")).toBe("host-tokens");
+    expect(hostTokenCeiling(reread, "01-what")).toBe(250_000);
+  });
+
+  test("the LIVE mid-Build budget.yml still validates, at exactly its ceiling", () => {
+    const doc = parseYaml(LIVE);
+    const report = validateRunBudget(doc);
+    expect(report.issues).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+
+  test("it behaves identically: metered everywhere, no token ceiling to read", () => {
+    const b = asRunBudget(parseYaml(LIVE));
+    expect(b.economy).toBe("metered-usd");
+    expect(b.ceiling_host_tokens).toBeNull();
+    for (const phase of b.phases) {
+      expect(economyFor(b, phase.id)).toBe("metered-usd");
+      expect(isHostTokens(b, phase.id)).toBe(false);
+      expect(hostTokenCeiling(b, phase.id)).toBeNull();
+      expect(phase.ceiling_host_tokens).toBeNull();
+    }
+    expect(hostTokenCeiling(b, null)).toBeNull();
+    expect(wouldExceedHostTokens(b, "04-build", 999_999)).toBeNull();
+  });
+
+  test("one cent over is still refused, in the words it was always refused in", () => {
+    const doc = parseYaml(LIVE) as Record<string, unknown>;
+    (doc.phases as Record<string, unknown>[])[4] = { id: "05-watch", ceiling_usd: 4.01, spent_usd: 0 };
+    const report = validateRunBudget(doc);
+    expect(report.ok).toBe(false);
+    expect(report.issues.find((i) => i.path === "phases")?.message)
+      .toContain("> ceiling_usd 62");
   });
 });

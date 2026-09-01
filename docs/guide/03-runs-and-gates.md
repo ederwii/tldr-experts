@@ -486,8 +486,39 @@ when it is sitting at a gate, `tldrx reject --stage 04-build/build --note "…"`
 gate is already signed.
 
 It refuses (exit `2`) an id the plan does not have, naming the ones it does; a `done` story,
-because undoing finished work is a decision about the stage and belongs to `reject --stage`;
-a `todo` story, which is already pending; and a missing `--note`.
+because undoing finished work is a decision about the stage and belongs to `reject --stage`
+— or, for one named defect in it, to `--for-fix` below; a `todo` story, which is already
+pending; and a missing `--note`.
+
+### A fix round on a story that is already done
+
+```
+$ tldrx story reopen S11 --for-fix --note "linkEmail succeeds then setDisplayName fails: account linked, score never claimable"
+reopened S11 in 260829-scoring-leaderboard — `done` → `todo` (W3), as a fix round
+```
+
+The case: a reviewer finds a real defect in a story that is already `done`. It is accepted,
+small and well understood — and until 2026-09-01 it had no sanctioned path. Rejecting the
+whole Build stage destroys fourteen other stories' closure; fixing it outside the story
+machinery leaves an epic-level commit with no story provenance.
+
+`--for-fix` is that path, and it is deliberately narrow:
+
+- **No attempt is consumed.** The verdict that closed the story stops counting, so the fix
+  runs as attempt 1 of 2 — with both turns available to it, not one.
+- **The fix passes the same DoD and the same reviewer.** A fix round ends the way the story
+  did, or it does not end. Nothing is waved through because a human asked for it.
+- **The `--note` names the defect**, and one `story.reopened` carries it with
+  `reason: fix`.
+- **The scope is frozen.** The story's acceptance criteria are not touched — `status:` is
+  the only line this verb moves — so a fix round cannot become a renegotiation of what the
+  story was for.
+- **One at a time.** The round opens on that event and closes when the story is `done`
+  again; a second `--for-fix` while one is open is refused, naming who opened it and with
+  which defect.
+
+It refuses (exit `2`) a story that is **not** `done` — an unfinished story is the plain
+reopen's job — a missing `--note`, and a story that already has a fix round open.
 
 ## Several runs open at once
 

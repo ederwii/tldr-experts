@@ -304,6 +304,12 @@ impossible, adopting one is made deliberate: `tldrx next --reuse-epic`.
 attempt the free round did not. Nothing is lost: the findings are appended to the review's own
 list.
 
+**A reviewer found a real defect in a story that is already `done`.** Do not reject the Build
+stage for it — that takes back every other story's closure too. `tldrx story reopen <id>
+--for-fix --note "<the defect>"` opens a fix round: no attempt is consumed, the fix passes the
+same DoD and the same reviewer, and the story's acceptance criteria do not move. One round per
+story at a time; it closes when the story is `done` again.
+
 **A story sits at `blocked` and the reason says `N fix-list finding(s) are still `fix-now``.**
 A story cannot reach `done` while a finding is open, and the check is against the FILE, not the
 envelope that produced it. Open `04-build/fixlist/<story>-<round>.md`, close each one with

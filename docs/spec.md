@@ -900,8 +900,12 @@ what is already set — appends NOTHING: a decision nobody made does not belong 
 
 **`story.reopened` was added 2026-08-30.** It is `tldrx story reopen <id> --note "…"` — a person giving ONE Build story
 another run of developer attempts (§5, "Reopening a story"). Its payload carries `story`, `wave`, `from_status`,
-`to_status`, `verdicts` (how many the closed run of attempts consumed) and the `note`; `stage` on the envelope is
-`null`, because the operator acted outside a stage run. It is also the one event in the enum that is a **reset
+`to_status`, `verdicts` (how many the closed run of attempts consumed), `reason` and the `note`; `stage` on the envelope is
+`null`, because the operator acted outside a stage run. **`reason` was added 2026-09-01 (#61's sibling, #58)**: `fix` for
+a FIX ROUND — `--for-fix`, a `done` story reopened to land one named defect, consuming no attempt and passing the same
+DoD and the same reviewer — and `attempts` for the original verb. An event with no `reason` predates the key and is an
+`attempts` reopen, the only kind that existed. A fix round opens on that event and closes when the story is `done`
+again; one story may have exactly one open at a time. It is also the one event in the enum that is a **reset
 boundary**: the Build executor's review ledger restarts every count at it, so verdicts recorded before it stop counting
 against the reopened story. Nothing is rewritten to achieve that — the earlier events are all still in the file and
 still read by `replay`, `cost` and `retro`.
@@ -990,13 +994,24 @@ phases: [{id: 01-what, ceiling_usd: 4.0, spent_usd: 1.14}, {id: 02-how, ceiling_
 | `warn_at_pct` | int 1–99 | n (80) | Emits `budget.warned` once per phase `[assumption]` |
 | `on_exceed` | `block\|warn` | y | `block` ⇒ the budget-gate hook denies the spawn |
 | `economy` | `metered-usd\|host-tokens` | n (`metered-usd`) | **What the numbers here are denominated in.** Run level; a phase may override it |
+| `on_host_tokens_exceed` | `warn\|block` | n (`warn`) | What crossing a HOST-TOKEN ceiling does. `block` is the explicit opt-in |
+| `ceiling_host_tokens` | number ≥0 | n | **The run's host-token allowance** — the ceiling `ceiling_usd` is not. Separate economy, separate ceiling |
 | `phases[].{id,ceiling_usd,spent_usd}` | slug / number ≥0 | y | Per-phase ceiling and rolled-up actual |
 | `phases[].economy` | `metered-usd\|host-tokens` | n (inherit) | This phase's own economy |
+| `phases[].ceiling_host_tokens` | number ≥0 | n | This phase's host-token allowance, read only under `economy: host-tokens` |
 
-**Validation.** Σ phase ceilings ≤ `ceiling_usd`; every phase id appears in `run.yml`; `spent_usd ≤ ceiling_usd` per
-phase unless `on_exceed: warn`; ≤5 phases. An `economy` naming a value this reader does not know is REFUSED, never
-defaulted to dollars — a unit nothing here understands is not one it may quietly read as money. Absence, and an empty
-`economy:` key, both mean `metered-usd`.
+**Validation.** Every phase id appears in `run.yml`; `spent_usd ≤ ceiling_usd` per phase unless `on_exceed: warn`; ≤5
+phases. An `economy` naming a value this reader does not know is REFUSED, never defaulted to dollars — a unit nothing
+here understands is not one it may quietly read as money. Absence, and an empty `economy:` key, both mean
+`metered-usd`.
+
+**The phase-ceiling sum runs ONCE PER ECONOMY (#61, 2026-09-01).** Σ ceilings of the `metered-usd` phases ≤
+`ceiling_usd`; Σ host-token allowances of the `host-tokens` phases ≤ `ceiling_host_tokens`. Dollars and host tokens are
+never added and never converted — there is no exchange rate here, and inventing one would be a guess about a price. The
+token sum is checked only when `ceiling_host_tokens` is declared: a file that names no token allowance has said nothing
+to compare a token total against, and the other number on the run is dollars. Under `economy: host-tokens` a phase's
+allowance is `ceiling_host_tokens` when it has one and `ceiling_usd` otherwise — the compat reading, for files written
+before the field existed, where the one unlabelled scalar WAS the token allowance.
 
 **The two economies.** Measured 2026-08-30 on `260830-tenancy-identity-customers`: the Plan agent priced the run
 assuming HOST-billed sub-agents — turns the host session pays for, which this process never meters and which are
@@ -1397,7 +1412,7 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx approve [--run <id>] [--note] [--as-agent] [--evidence <path>]` | `run.yml`, stage outputs, stage checks; with `--as-agent` also `.agent/<stage>/evidence.md` (§2.17) | `run.yml` gate, `events.jsonl`; with `--as-agent` also `<phase>/gate-evidence/<stage>.md` and `gate.evidence`. `--as-agent` is refused (1) unless the stage's policy is `agent`; `--evidence` without `--as-agent` is refused (1) — a note nobody signs with is not evidence for anything; a broken note is 2, a note whose verdict is not `sign` is 4, and nothing is signed in either case | 0,1,2,3,4 |
 | `tldrx gate template [--run <id>] [--force]` | `run.yml`, the cursor stage's declared outputs, `03-plan/stories/<id>.md` or `04-build/implicit-plan.yml` | `.agent/<stage>/evidence.md` (§2.17). Nothing else: no gate, no cursor, no event, no cost. An existing note is left alone (exit 2) unless `--force` | 0,1,2,3 |
 | `tldrx reject [--run <id>] --note <text> [--stage <phase>/<stage>]` | `run.yml` | `run.yml` gate, `events.jsonl`, stage status ⇒ `ready`. With `--stage` it REVOKES an approval already given (§5): `gate.revoked`, the cursor moves back, later stages that had run are marked `stale: true`, nothing is deleted. `--stage` may target a FINISHED run | 0,2,3 |
-| `tldrx story reopen <id> [--run <id>] --note <text>` | `03-plan/waves.yml` + `03-plan/stories/<id>.md` (or `04-build/implicit-plan.yml`), `events.jsonl` | that story file's `status:` ⇒ `todo`, `events.jsonl` (`story.reopened`). Nothing else: no agent, no cost, no stage moved, no worktree or branch touched. Refuses (2) an unknown story id, a `done` story (that is `reject --stage`), a `todo` story, and a missing `--note` | 0,1,2,3 |
+| `tldrx story reopen <id> [--run <id>] --note <text> [--for-fix]` | `03-plan/waves.yml` + `03-plan/stories/<id>.md` (or `04-build/implicit-plan.yml`), `events.jsonl` | that story file's `status:` ⇒ `todo`, `events.jsonl` (`story.reopened`). Nothing else: no agent, no cost, no stage moved, no worktree or branch touched, and no line of the story but `status:`. Refuses (2) an unknown story id, a `done` story (that is `reject --stage`, or `--for-fix`), a `todo` story, and a missing `--note`. With `--for-fix` it opens a FIX ROUND on a `done` story instead (`reason: fix`, no attempt consumed, same DoD + reviewer), refusing (2) a story that is NOT done, a missing `--note`, and a story that already has a fix round open | 0,1,2,3 |
 | `tldrx questions lint [--run <id>] [--fix] [--area <a>]` | every `<phase>/questions.md` in the run | nothing, or those files rewritten to the §2.7 grammar with `--fix` (no wording changed) | 0,2,3 |
 | `tldrx budget show [<run>] [--run <id>] [--json]` | `run.yml`, `budget.yml` | nothing (stdout) | 0,1,2,3 |
 | `tldrx budget raise <phase> <usd> [--run <id>] [--take-from <phase>] [--note <text>]` | `run.yml`, `budget.yml` | `budget.yml` ceilings, `run.yml` ceiling mirror, `events.jsonl` (`budget.raised`, with before/after/actor/note) | 0,1,2,3 |

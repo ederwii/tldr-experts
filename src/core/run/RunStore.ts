@@ -297,11 +297,24 @@ export class RunStore {
       const onDisk = asRunBudget(doc);
       // Only CEILINGS come from disk. Actuals are ours: `rollUpBudget` overwrites
       // every `spent_usd` from the run we are about to write.
+      //
+      // A phase's ceiling is THREE fields, not one (#61): the dollar figure, the
+      // host-token allowance, and the `economy:` that says which of them governs.
+      // Taking the number without the label would be the worse half of both — a
+      // token allowance preserved into a phase this reader has been told is
+      // priced in dollars, where `hostTokenCeiling` can no longer see it. For a
+      // file with no labels and no token ceilings, every one of the three is
+      // identical on both sides and this is the same object it always was.
       return {
         ...onDisk,
         phases: this.currentBudget.phases.map((mine) => {
           const theirs = onDisk.phases.find((p) => p.id === mine.id);
-          return theirs === undefined ? mine : { ...mine, ceiling_usd: theirs.ceiling_usd };
+          return theirs === undefined ? mine : {
+            ...mine,
+            ceiling_usd: theirs.ceiling_usd,
+            ceiling_host_tokens: theirs.ceiling_host_tokens,
+            economy: theirs.economy,
+          };
         }),
       };
     } catch {
