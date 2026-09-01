@@ -21,6 +21,7 @@ import type { Epic } from "../schemas/epic.ts";
 import { validateBudget } from "../schemas/budget.ts";
 import { STORY_ID_RE } from "../schemas/planCommon.ts";
 import { describePlanIssues, validatePlan, EPICS_DIR, STORIES_DIR, WAVES_FILE } from "../plan/validatePlan.ts";
+import { PROJECT_WORKTREES_DIR } from "../paths.ts";
 
 /** The phase folder this executor owns (spec §1). The registry keys on it. */
 export const BUILD_PHASE = "04-build";
@@ -28,8 +29,12 @@ export const BUILD_PHASE = "04-build";
 export const PLAN_PHASE = "03-plan";
 /** One review log per story, cited by every Finding in the handoff. */
 export const LOG_DIR = "log";
-/** Story worktrees live under the framework dir, which `init` gitignores. */
-export const WORKTREES = "worktrees";
+/**
+ * Story worktrees live under the framework dir, which `init` gitignores.
+ * Re-exported from `core/paths.ts`, which is also what the §2.8 src resolver
+ * reads to find this run's epic worktrees (issue #16) — one literal, two readers.
+ */
+export const WORKTREES = PROJECT_WORKTREES_DIR;
 /** What the Plan phase priced each story at — `03-plan/budget.yml` (spec §2.11). */
 export const PLAN_BUDGET_FILE = "budget.yml";
 

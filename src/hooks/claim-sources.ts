@@ -10,6 +10,14 @@
  * a section with no claims at all is rejected the same way, because a paragraph
  * saying "nothing found" is exactly how an unchecked claim used to get written.
  *
+ * **Two rules, not one** (issue #34). A HANDOFF carries the four-section contract:
+ * every bullet is a claim and every claim is sourced. Every OTHER markdown file
+ * under `tldrx-work/` carries only the second half of that — a bullet may be
+ * prose, but a `[src: …]` it does write must parse and must resolve. Until
+ * 2026-08-31 the hook returned early for those files entirely, so the identical
+ * violation was refused in `handoff.md` and waved through in `design.md` beside
+ * it, to be discovered at the gate after a full paid pass had been spent.
+ *
  * Fails OPEN: any internal error allows the write and says so on stderr.
  */
 import { runHook, deny, postContext, allow } from "./lib/decide.ts";
@@ -20,7 +28,7 @@ import {
   claimSourcesDeny, claimSourcesEmptySectionDeny, claimSourcesMalformedDeny,
   claimSourcesUnresolvedDeny,
 } from "./lib/messages.ts";
-import { isHandoff, validateHandoff } from "../core/text/handoff.ts";
+import { isHandoff, validateCitations, validateHandoff } from "../core/text/handoff.ts";
 
 await runHook("claim-sources", async () => {
   const payload = await readPayload();
@@ -34,25 +42,28 @@ await runHook("claim-sources", async () => {
   const wouldBe = wouldBeContent(payload, filePath);
   if (wouldBe.kind !== "content") return;
 
-  // Only handoffs carry the four-section contract. Everything else under
-  // tldrx-work/ is free prose and this hook has no opinion about it.
-  const looksLikeHandoff = filePath.endsWith("handoff.md") || isHandoff(wouldBe.text);
-  if (!looksLikeHandoff) return;
-
   const workspace = loadWorkspace(location.root);
   // The run dir comes from the touched path itself, so the hook resolves a bare
   // `01-what/intent.md:1` exactly as `next` and `approve` later will.
-  const report = validateHandoff(wouldBe.text, toSrcContext(workspace, location.runDir));
-  if (report.ok) return;
-
+  const srcCtx = toSrcContext(workspace, location.runDir);
   const relPath = `tldrx-work/${location.run}/${location.relative}`;
   const parts: string[] = [];
-  if (report.unsourced.length > 0) parts.push(claimSourcesDeny(relPath, report.unsourced));
-  if (report.malformed.length > 0) parts.push(claimSourcesMalformedDeny(relPath, report.malformed));
-  if (report.emptySections.length > 0) {
-    parts.push(claimSourcesEmptySectionDeny(relPath, [...report.emptySections]));
+
+  const looksLikeHandoff = filePath.endsWith("handoff.md") || isHandoff(wouldBe.text);
+  if (looksLikeHandoff) {
+    const report = validateHandoff(wouldBe.text, srcCtx);
+    if (report.ok) return;
+    if (report.unsourced.length > 0) parts.push(claimSourcesDeny(relPath, report.unsourced));
+    if (report.malformed.length > 0) parts.push(claimSourcesMalformedDeny(relPath, report.malformed));
+    if (report.emptySections.length > 0) {
+      parts.push(claimSourcesEmptySectionDeny(relPath, [...report.emptySections]));
+    }
+    if (report.unresolved.length > 0) parts.push(claimSourcesUnresolvedDeny(relPath, report.unresolved));
+  } else {
+    const report = validateCitations(wouldBe.text, srcCtx);
+    if (report.malformed.length > 0) parts.push(claimSourcesMalformedDeny(relPath, report.malformed));
+    if (report.unresolved.length > 0) parts.push(claimSourcesUnresolvedDeny(relPath, report.unresolved));
   }
-  if (report.unresolved.length > 0) parts.push(claimSourcesUnresolvedDeny(relPath, report.unresolved));
   if (parts.length === 0) return; // missing sections alone: the file is simply not a handoff yet
 
   const message = parts.join("\n");

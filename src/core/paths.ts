@@ -41,3 +41,30 @@ export const PLUGIN_DIR: string = join(FRAMEWORK_ROOT, "plugin");
 /** Names of the per-project directories the framework writes into. */
 export const PROJECT_FRAMEWORK_DIR = ".tldrx";
 export const PROJECT_WORK_DIR = "tldrx-work";
+
+/**
+ * `.tldrx/worktrees/` — where the Build phase opens its story and epic worktrees.
+ * `init` gitignores it; it holds real checkouts, never framework state.
+ */
+export const PROJECT_WORKTREES_DIR = "worktrees";
+
+/**
+ * The prefix that tells an EPIC worktree apart from a story's.
+ *
+ * The convention has exactly one home because two readers of it disagree the
+ * moment either moves: the Build executor WRITES the directory
+ * (`facilitator/executors/build.ts`), and the §2.8 src resolver READS it, so that
+ * a handoff written at Watch time can cite code that is committed on the epic
+ * branch and deliberately not merged (issue #16).
+ */
+export const EPIC_WORKTREE_PREFIX = "_epic-";
+
+/** `_epic-<run>-<epic>` — the run id is in the name so two runs cannot collide (issue #40). */
+export function epicWorktreeName(runId: string, epicId: string): string {
+  return `${EPIC_WORKTREE_PREFIX}${runId}-${epicId}`;
+}
+
+/** Is this directory name an epic worktree belonging to THIS run, and no other? */
+export function isEpicWorktreeOf(name: string, runId: string): boolean {
+  return name.startsWith(`${EPIC_WORKTREE_PREFIX}${runId}-`);
+}

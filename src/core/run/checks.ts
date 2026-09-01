@@ -17,11 +17,15 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runtime } from "../runtime/index.ts";
 import { parseYaml } from "../yaml.ts";
-import { validateHandoff } from "../text/handoff.ts";
+import {
+  isHandoff, validateCitations, validateHandoff,
+  type CitationReport, type HandoffValidation,
+} from "../text/handoff.ts";
 import { validateRunBudget } from "../budget/RunBudget.ts";
 import { loadWorkspace, repoPath, toSrcContext } from "../../hooks/lib/workspace.ts";
 import { describePlanIssues, validatePlan } from "../plan/validatePlan.ts";
 import { validateRunFile } from "./RunFile.ts";
+import { resolveMany, type PathContext } from "../facilitator/paths.ts";
 import { allowlistIssue } from "../schemas/commandAllowlist.ts";
 import type { PlannedCheck, PlannedPrecondition, PlannedStage } from "./workflowPreset.ts";
 
@@ -68,53 +72,137 @@ export async function runCheck(check: PlannedCheck, ctx: CheckContext): Promise<
   }
 }
 
-/** Every handoff this stage declared must parse and have a source on every bullet. */
+/**
+ * Every `.md` output this stage declared, read with the §2.8 grammar — and every
+ * problem found in all of them reported at once.
+ *
+ * Two failures of the old body, both measured live 2026-08-31:
+ *
+ *   **It looked at one file** (issue #34). The filter was
+ *   `endsWith("handoff.md")`, so a citation that refuses a stage when it is
+ *   written in the handoff passed in silence when it was written in `design.md`
+ *   or `scope.md` beside it. Every declared `.md` is read now: the four-section
+ *   rule for the ones that ARE handoffs, and `validateCitations` — "a citation
+ *   you wrote must be true" — for the ones that are not.
+ *
+ *   **It reported one problem** (issue #33). Each category returned on its first
+ *   hit and `unresolved` reported only `[0]`, so a 226-bullet cap breach sat
+ *   invisible behind one bad file path: fixing the visible one and re-running
+ *   would have bought the next one at the price of a full paid pass. The report is
+ *   a per-file, per-category summary now — the same convention the training
+ *   validator uses, and the reason it is a SUMMARY rather than a dump is that a
+ *   detail line ends up inside one-line renderings (`autoGate`, `next`), so 226
+ *   line numbers would drown the one sentence that matters.
+ */
 function checkClaimSources(ctx: CheckContext): CheckOutcome {
-  const handoffs = ctx.stage.outputs.filter((p) => p.endsWith("handoff.md"));
-  if (handoffs.length === 0) {
-    return { id: "claim-sources", status: "skipped", detail: "the stage declares no handoff.md output" };
+  const declared = ctx.stage.outputs.filter((p) => p.endsWith(".md"));
+  if (declared.length === 0) {
+    return { id: "claim-sources", status: "skipped", detail: "the stage declares no .md output" };
   }
   const srcCtx = toSrcContext(loadWorkspace(ctx.root), ctx.runDir);
+  const pathCtx: PathContext = { root: ctx.root, runDir: ctx.runDir };
+  const failures: string[] = [];
   // Counted, never fatal: an `unverified` citation passes the check and blocks the
   // AUTO gate (spec §5, condition 5). The count is carried in `detail` because
   // `CheckOutcome` is a three-state contract every other check shares.
   let unverified = 0;
-  for (const rel of handoffs) {
-    const path = join(ctx.runDir, rel);
-    if (!existsSync(path)) {
-      return { id: "claim-sources", status: "failed", detail: `${rel} was declared but never written` };
-    }
-    const validation = validateHandoff(readFileSync(path, "utf8"), srcCtx);
-    if (validation.ok) {
-      unverified += validation.unverified.length;
+  let handoffs = 0;
+  let others = 0;
+
+  for (const rel of declared) {
+    // A handoff is the one output whose ABSENCE is a failure: the stage's whole
+    // record is in it. Anything else the stage declared and did not write is the
+    // `--commit` gap check's business, not this one's — refusing a stage here for
+    // an unwritten `questions.md` would fail every stage that had nothing to ask.
+    const isHandoffOutput = rel.endsWith("handoff.md");
+    const hits = resolveMany(rel, pathCtx);
+    if (hits.length === 0 && isHandoffOutput) {
+      failures.push(`${rel} was declared but never written`);
       continue;
     }
-    if (validation.missingSections.length > 0) {
-      return { id: "claim-sources", status: "failed", detail: `${rel} is missing section(s) ${validation.missingSections.join(", ")}` };
+    for (const hit of hits) {
+      if (!existsSync(hit.absolute)) {
+        if (isHandoffOutput) failures.push(`${hit.path} was declared but never written`);
+        continue;
+      }
+      const text = readFileSync(hit.absolute, "utf8");
+      if (isHandoffOutput || isHandoff(text)) {
+        handoffs++;
+        const validation = validateHandoff(text, srcCtx);
+        unverified += validation.unverified.length;
+        failures.push(...describeHandoff(hit.path, validation));
+        continue;
+      }
+      others++;
+      const report = validateCitations(text, srcCtx);
+      unverified += report.unverified.length;
+      failures.push(...describeCitations(hit.path, report));
     }
-    if (validation.unsourced.length > 0) {
-      return { id: "claim-sources", status: "failed", detail: `${rel}: unsourced bullet(s) on line(s) ${validation.unsourced.join(", ")}` };
-    }
-    if (validation.malformed.length > 0) {
-      const named = validation.malformed.map((m) => `L${m.line}`).join(", ");
-      return {
-        id: "claim-sources",
-        status: "failed",
-        detail: `${rel}: malformed citation(s) on ${named} — the [src: …] token must be last on the line`,
-      };
-    }
-    if (validation.emptySections.length > 0) {
-      const named = validation.emptySections.map((s) => `${s.name} (L${String(s.line)})`).join(", ");
-      return {
-        id: "claim-sources",
-        status: "failed",
-        detail: `${rel}: section(s) with no list items — ${named}. Write \`- none [src: absent:<what you looked at>]\``,
-      };
-    }
-    return { id: "claim-sources", status: "failed", detail: `${rel}: ${validation.unresolved[0]?.message ?? "unresolvable source"}` };
+  }
+
+  if (failures.length > 0) {
+    return { id: "claim-sources", status: "failed", detail: failures.join(" · ") };
   }
   const tail = unverified === 0 ? "" : `, ${UNVERIFIED_PREFIX}${unverified}`;
-  return { id: "claim-sources", status: "passed", detail: `${handoffs.length} handoff(s) sourced${tail}` };
+  const cited = others === 0 ? "" : ` + ${others} cited output(s)`;
+  return { id: "claim-sources", status: "passed", detail: `${handoffs} handoff(s) sourced${cited}${tail}` };
+}
+
+/** How many of one category are named before the rest become a count. */
+const MAX_NAMED = 6;
+
+function some(issues: readonly string[]): string {
+  const shown = issues.slice(0, MAX_NAMED).join(", ");
+  const rest = issues.length - Math.min(issues.length, MAX_NAMED);
+  return rest > 0 ? `${shown} (+${String(rest)} more)` : shown;
+}
+
+/** One phrase per category that has anything in it — never just the first. */
+function describeHandoff(rel: string, validation: HandoffValidation): readonly string[] {
+  if (validation.ok) return [];
+  const parts: string[] = [];
+  if (validation.missingSections.length > 0) {
+    parts.push(`missing section(s) ${validation.missingSections.join(", ")}`);
+  }
+  if (validation.unsourced.length > 0) {
+    parts.push(`${String(validation.unsourced.length)} unsourced bullet(s) on `
+      + `line(s) ${some(validation.unsourced.map(String))}`);
+  }
+  if (validation.malformed.length > 0) {
+    parts.push(`${String(validation.malformed.length)} malformed citation(s) on `
+      + `${some(validation.malformed.map((m) => `L${String(m.line)}`))} — `
+      + "the [src: …] token must be last on the line");
+  }
+  if (validation.emptySections.length > 0) {
+    parts.push(`section(s) with no list items — `
+      + `${some(validation.emptySections.map((s) => `${s.name} (L${String(s.line)})`))}. `
+      + "Write `- none [src: absent:<what you looked at>]`");
+  }
+  parts.push(...unresolvedPhrase(validation.unresolved));
+  return parts.length === 0 ? [] : [`${rel}: ${parts.join("; ")}`];
+}
+
+function describeCitations(rel: string, report: CitationReport): readonly string[] {
+  const parts: string[] = [];
+  if (report.malformed.length > 0) {
+    parts.push(`${String(report.malformed.length)} malformed citation(s) on `
+      + `${some(report.malformed.map((m) => `L${String(m.line)}`))} — `
+      + "the [src: …] token must be last on the line");
+  }
+  parts.push(...unresolvedPhrase(report.unresolved));
+  return parts.length === 0 ? [] : [`${rel}: ${parts.join("; ")}`];
+}
+
+/**
+ * File-level problems FIRST. `validateHandoff` appends the bullet-cap breach to
+ * `unresolved` with line 0, so a file with 226 bullets and one bad path put the
+ * cap behind 200-odd citations — exactly the failure issue #33 was filed for.
+ */
+function unresolvedPhrase(issues: readonly { line: number; message: string }[]): readonly string[] {
+  if (issues.length === 0) return [];
+  const ordered = [...issues.filter((i) => i.line === 0), ...issues.filter((i) => i.line !== 0)];
+  const named = ordered.map((i) => (i.line === 0 ? i.message : `L${String(i.line)}: ${i.message}`));
+  return [`${String(issues.length)} unresolvable source(s) — ${some(named)}`];
 }
 
 /** How an unverified count is written into `claim-sources`' detail, and read back out. */
