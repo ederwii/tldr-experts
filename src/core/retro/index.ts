@@ -7,3 +7,8 @@ export { applyPractices, practicesPath, PRACTICES_FILE } from "./applyPractices.
 export type { ApplyResult } from "./applyPractices.ts";
 export { renderProposal, eventSrc } from "./Proposal.ts";
 export type { Proposal } from "./Proposal.ts";
+export {
+  classify, mineAll, mineRun, FINDING_CLASSES,
+} from "./findings.ts";
+export type { AllRetro, ClassTrend, FindingClass, FindingKind, MinedFinding } from "./findings.ts";
+export { renderTrends } from "./renderTrends.ts";

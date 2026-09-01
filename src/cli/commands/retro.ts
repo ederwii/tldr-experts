@@ -4,26 +4,54 @@
  * Always writes exactly one file, `tldrx-work/<run>/retro.md`. `--apply` is the
  * only thing that touches team memory, and it appends — it never rewrites what
  * practices.md already says.
+ *
+ * `--all` is the other direction and the opposite kind of command (#64): it reads
+ * EVERY run in the workspace and writes nothing at all. The two are refused
+ * together rather than composed, because they disagree about the two things that
+ * matter — how many runs are in scope, and whether anything is written.
  */
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Command } from "../Command.ts";
-import { EXIT_FAILED, EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_OK } from "../exitCodes.ts";
+import { EXIT_FAILED, EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
 import { RunStore } from "../../core/run/RunStore.ts";
 import { renderAmbiguous } from "../resolveRun.ts";
 import { resolveWorkspaceRoot } from "../../core/experts/index.ts";
 import { listRuns, loadRun } from "../../core/replay/index.ts";
-import { applyPractices, buildRetro, RETRO_FILE } from "../../core/retro/index.ts";
+import { applyPractices, buildRetro, mineAll, renderTrends, RETRO_FILE } from "../../core/retro/index.ts";
 
 export const retroCommand: Command = {
   name: "retro",
   summary: "Close a run and capture what was learned",
-  usage: "tldrx retro [<run-id>] [--apply] [--root <path>]",
+  usage: "tldrx retro [<run-id>] [--apply] [--root <path>]\n"
+    + "tldrx retro --all [--root <path>]",
   subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const root = resolveWorkspaceRoot(option(argv, "--root"));
     const named = positional(argv);
+
+    if (argv.includes("--all")) {
+      // Both refusals happen before a single file is opened. `--all --apply` in
+      // particular must not append half a practices.md and then complain.
+      if (argv.includes("--apply")) {
+        process.stderr.write(
+          "tldrx retro: --all and --apply do not compose — --all is a reader across every run"
+          + " and writes nothing; --apply appends one run's proposals to practices.md.\n",
+        );
+        return EXIT_USAGE;
+      }
+      if (named !== null) {
+        process.stderr.write(
+          `tldrx retro: --all reads every run, so naming one ('${named}') asks for two`
+          + " different things. Drop the id, or drop --all.\n",
+        );
+        return EXIT_USAGE;
+      }
+      process.stdout.write(`${renderTrends(mineAll(root))}\n`);
+      return EXIT_OK;
+    }
+
     // With no id and several runs open there is no defensible default: retro
     // writes a file INTO one of them. Named run, else today's fallback (the
     // newest run of any status — a retro is usually written for a finished one).

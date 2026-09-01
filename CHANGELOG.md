@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.5.0 — unreleased
+
+### Added
+
+- **`tldrx drive [--attended|--unattended]` — the host/driver mandate, shipped (#63).** Every elite
+  run of 2026-08-31/09-01 was driven by a session carrying a hand-written playbook, and that playbook
+  was the framework's real quality floor. It lived in the owner's chat pastes, so a third party
+  inherited the CLI and rediscovered the discipline — or did not. It is now plain text the package
+  prints, versioned with the package, for a human to paste into the driving session or read before
+  they start.
+  - **What it carries**: the three-role protocol (developer sub-agent → a FRESH adversarial reviewer,
+    never the author → the host verifying BOTH in the code, not in their reports); evidence
+    discipline (measured / inferred / assumed labelled in the same sentence as the claim, exit codes
+    never read through a pipe, verification from the source, remote shas via `git ls-remote`);
+    parking product questions with what the docs already decide, because an open question is never a
+    licence to ship an unguarded write; review calibration by stakes, so a security-bearing story
+    gets the strongest reviewer; and budget honesty — declare a turn once, state a floor when the
+    records are incomplete.
+  - **Two modes, one spine.** The disciplines are identical — they are about how a claim is made,
+    not about who is watching. What differs is the GATE (`--unattended` signs over a validated
+    evidence note with `tldrx approve --as-agent`; `--attended` never signs and hands the decision
+    over) and DRIVING (who spawns). Each mode is bounded at 120 lines, asserted by a test: a mandate
+    long enough to skim is one nobody follows.
+  - **A mode is required and never guessed** (exit `1`), the same refusal `tldrx run attend` makes.
+    Handing an attended session the unattended text tells it to sign gates that were never its to
+    sign. It needs no workspace, opens no run, spawns nothing and writes nothing.
+
+- **`tldrx retro --all` — cross-run mining of what keeps catching you (#64).** Each run left gold
+  nobody aggregated: a reviewer's verdict and findings in `04-build/log/<story>.md`, a fix list with
+  a disposition per finding, `retro.md`'s `## Build feedback`, and the reason a person typed when
+  they reopened a story. Across the first six real runs the same finding CLASSES kept coming back,
+  and nothing read more than one run at a time.
+  - **A trends table**: finding class × count × how many runs it appeared in × one example with the
+    `[src: …]` that lets a reader go and check it.
+  - **Seven classes, in a documented precedence**: `test-cannot-fail`, `missing-negative-control`,
+    `unreachable-structure`, `stale-comment`, `authorization-not-widened`, `schema-drift`, `other`.
+    Classification is ordered keyword rules over the finding text — no model, no scoring, no
+    threshold — so the same tree always produces the same table and a rule that misfires can be
+    pointed at. The rules are tested against fixtures in the shape the real artefacts carry.
+  - **Zero new state.** It writes nothing anywhere: no `retro.md`, no `practices.md`, no cache.
+    A test asserts the workspace is byte-identical across the call.
+  - **Absence is never an error.** A run with no Build phase, no retro, no events log or an
+    unreadable one contributes what it has and is still counted; an empty workspace is an empty
+    answer at exit `0`. A repeat of one finding WITHIN a run is collapsed (`retro.md` quotes the fix
+    list verbatim); the same finding in two runs is two occurrences, which is the point. A `refuted`
+    fix-list finding is read and dropped — ranking a class by disproven findings would make the
+    table a report on the reviewer.
+  - `--all` is refused (exit `1`) alongside a `<run-id>` or `--apply`, before a file is opened: each
+    asks for the opposite of what `--all` does.
+
 ## 0.4.0 — 2026-09-01
 
 ### Changed
