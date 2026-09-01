@@ -21,6 +21,11 @@ tldrx init                # detect repos, map the code, write .tldrx/, ask only 
 tldrx install --claude    # write the skill, hooks and status line into ./.claude/
 ```
 
+Later: **`tldrx update`** pulls the newest published version and prints the CHANGELOG between the
+one you had and the one you now have. Any command will tell you, in one line, when there is a newer
+one — off the hot path, cached for a day, silent when it cannot reach the registry, and never in
+`--json` output or during a hook. Turn it off with `TLDRX_UPDATE_CHECK=off`.
+
 **Never used it before?** `tldrx learn` teaches the loop by running it: eight chapters, ~15 minutes,
 in a throwaway sandbox with a toy repo and a stand-in agent. Every command in it is the real one —
 `init`, `run new`, `next`, `approve`, a Build that cuts a branch and runs a real DoD — so nothing it

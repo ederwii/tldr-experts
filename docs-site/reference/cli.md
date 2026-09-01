@@ -32,6 +32,7 @@ tldrx approve --note "…"    # sign the gate; the checks are re-run first
 | `tldrx interview --init` | Answer the setup questions in the terminal. |
 | `tldrx install --claude` | Write the `/tldrx` skill, hooks and status line into `.claude/`. |
 | `tldrx learn` | The playable sandbox tutorial. No key, no network, $0.00. |
+| `tldrx update` | `npm i -g tldr-experts@latest`, plus the CHANGELOG between the version you had and the one you now have. Any command tells you, in one line, when a newer one exists — off the hot path, cached, silent on failure, never in `--json` or a hook. `TLDRX_UPDATE_CHECK=off` turns it off. |
 | `tldrx status` | Everything in this workspace waiting on a human, and the command for each. |
 
 ## Driving a run
@@ -80,7 +81,7 @@ tldrx approve --note "…"    # sign the gate; the checks are re-run first
 | `tldrx retro` | Close a run and capture what was learned. |
 | `tldrx retro --all` | Read-only across EVERY run: which finding classes keep catching you, with counts and one cited example each. Writes nothing. |
 | `tldrx drive --attended \| --unattended` | Print the session mandate for driving a run — the three-role protocol, evidence discipline, parking, review calibration and budget honesty. Needs no workspace. |
-| `tldrx ship` | Open a PR from the epic branch, with the handoff as the body. |
+| `tldrx ship` | Open a PR from the epic branch, with the handoff as the body — one PR per repo when the branch is in several, listed at the end. Re-running skips a repo whose PR is already open. |
 | `tldrx tickets` | Mirror epics and stories to a ticket tool. Files stay the source of truth. |
 | `tldrx note <run> "…"` | Record one operator annotation, changing nothing else. |
 
