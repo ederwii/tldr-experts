@@ -15,7 +15,7 @@
  *    refused;
  *  - a fixture whose remaining work genuinely does not fit still IS.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -35,6 +35,13 @@ import { asRunFile, type RunFile } from "../src/core/run/RunFile.ts";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { parseYaml } from "../src/core/yaml.ts";
 import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
+import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
+
+// Every test in this file spawns a REAL process — git, `bun`, the CLI. Process cost is a
+// property of the machine, not of the code, so bun's fixed 5000 ms default measures the box:
+// on an untouched tree, tests here timed out while the same files passed alone (#43). The
+// budget scales with measured load; the assertions are untouched, and a hang is still caught.
+setDefaultTimeout(spawnTestTimeout());
 
 // --- a plan on disk, and nothing else ---------------------------------------
 

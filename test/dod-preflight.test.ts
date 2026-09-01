@@ -15,7 +15,7 @@
  * halts Build by name. Every test below runs the real pipeline against a real git
  * repo — only the two sub-agents are faked.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,6 +31,13 @@ import {
 import {
   makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions,
 } from "./fixtures/build/workspace.ts";
+import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
+
+// Every test in this file spawns a REAL process — git, `bun`, the CLI. Process cost is a
+// property of the machine, not of the code, so bun's fixed 5000 ms default measures the box:
+// on an untouched tree, tests here timed out while the same files passed alone (#43). The
+// budget scales with measured load; the assertions are untouched, and a hang is still caught.
+setDefaultTimeout(spawnTestTimeout());
 
 /** Where the run keeps what it learned about the base tree (files are the state). */
 const PREFLIGHT_REL = "04-build/preflight.yml";

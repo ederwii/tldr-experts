@@ -11,7 +11,7 @@
  * the framework's own ignores must come AFTER the negations, are both facts about
  * git that only git can confirm.
  */
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,6 +33,13 @@ import {
   probePaths,
   LOG_PROBE_NAME,
 } from "../src/core/doctor/gitignoreShadow.ts";
+import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
+
+// Every test in this file spawns a REAL process — git, `bun`, the CLI. Process cost is a
+// property of the machine, not of the code, so bun's fixed 5000 ms default measures the box:
+// on an untouched tree, tests here timed out while the same files passed alone (#43). The
+// budget scales with measured load; the assertions are untouched, and a hang is still caught.
+setDefaultTimeout(spawnTestTimeout());
 
 /** The stock .NET rules, verbatim — this is the pair that produced the bug. */
 const DOTNET_RULES = "[Ll]og/\n[Ll]ogs/\n";

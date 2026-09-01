@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
@@ -14,6 +14,13 @@ import {
 import { describeStageLoads, stageIds, stagesLoadingExperts } from "../src/core/experts/index.ts";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { emptyFixture, multiRepoFixture, singleRepoFixture, type Fixture } from "./init-fixture.ts";
+import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
+
+// Every test in this file spawns a REAL process — git, `bun`, the CLI. Process cost is a
+// property of the machine, not of the code, so bun's fixed 5000 ms default measures the box:
+// on an untouched tree, tests here timed out while the same files passed alone (#43). The
+// budget scales with measured load; the assertions are untouched, and a hang is still caught.
+setDefaultTimeout(spawnTestTimeout());
 
 const runner = new SpawnCommandRunner();
 const NOW = new Date("2026-08-28T12:00:00Z");

@@ -10,7 +10,7 @@
  * ONLY one on PATH for the duration, so a test that forgot to set it up gets a
  * failed spawn rather than a real, billed session.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseYaml } from "../src/core/yaml.ts";
@@ -36,6 +36,13 @@ import {
   makeSeedWorkspace, goodProposal, CODE_FILES,
   type SeedWorkspace, type SeedWorkspaceOptions,
 } from "./fixtures/seed/workspace.ts";
+import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
+
+// Every test in this file spawns a REAL process — git, `bun`, the CLI. Process cost is a
+// property of the machine, not of the code, so bun's fixed 5000 ms default measures the box:
+// on an untouched tree, tests here timed out while the same files passed alone (#43). The
+// budget scales with measured load; the assertions are untouched, and a hang is still caught.
+setDefaultTimeout(spawnTestTimeout());
 
 const BIN = join(FRAMEWORK_ROOT, "bin", "tldrx.ts");
 const ORIGINAL_PATH = process.env.PATH ?? "";

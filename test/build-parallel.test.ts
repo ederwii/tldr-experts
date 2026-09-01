@@ -16,7 +16,7 @@
  * is how many markers existed at that moment. That is what the processes saw, and
  * it reproduces on a CI box that is ten times slower than this one.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -31,6 +31,13 @@ import { RunStore } from "../src/core/run/RunStore.ts";
 import { UiState } from "../src/core/ui/state.ts";
 import { renderCompact } from "../src/core/ui/compact.ts";
 import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
+import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
+
+// Every test in this file spawns a REAL process — git, `bun`, the CLI. Process cost is a
+// property of the machine, not of the code, so bun's fixed 5000 ms default measures the box:
+// on an untouched tree, tests here timed out while the same files passed alone (#43). The
+// budget scales with measured load; the assertions are untouched, and a hang is still caught.
+setDefaultTimeout(spawnTestTimeout());
 
 const ORIGINAL_PATH = process.env.PATH ?? "";
 const FAKE_KEYS = [

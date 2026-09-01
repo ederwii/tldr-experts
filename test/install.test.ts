@@ -7,7 +7,7 @@
  * `settings.json` and `SKILL.md` unchanged, and `--uninstall` puts the file back
  * exactly as it was found.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,13 @@ import { HOOK_SCRIPTS, MANAGED_HOOKS, STATUSLINE_COMMAND } from "../src/core/ins
 import { SKILL_MARKER } from "../src/core/install/skillFile.ts";
 import { handlersOf, type ClaudeSettings } from "../src/core/install/ClaudeSettings.ts";
 import { makeWorkspace, type TempWorkspace } from "./fixtures/tempWorkspace.ts";
+import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
+
+// Every test in this file spawns a REAL process — git, `bun`, the CLI. Process cost is a
+// property of the machine, not of the code, so bun's fixed 5000 ms default measures the box:
+// on an untouched tree, tests here timed out while the same files passed alone (#43). The
+// budget scales with measured load; the assertions are untouched, and a hang is still caught.
+setDefaultTimeout(spawnTestTimeout());
 
 const BIN = join(FRAMEWORK_ROOT, "bin", "tldrx.ts");
 
