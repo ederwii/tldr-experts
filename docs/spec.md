@@ -1282,6 +1282,7 @@ traces | where message == "leaderboard.refreshed" | summarize count() by bin(tim
 | `title` | str ≤512 | y | One line, human |
 | `stories` | `S<n>[]` (≥1, unique) | y | The **done** stories the card was written from (§2.13) |
 | `repos` | repo name[] (≥1, unique) | y | Every repo the feature touched |
+| `owner` | str ≤512 | **n** | Who to ask about this feature. The default for its items; an item may override with `(owner: <name>)`. Absent ⇒ `watch check` names the repo the item's citation points at, as it always did |
 | `status` | `draft\|verified` | y | **Set by the framework, never by the model** — see below |
 | H2 sections | `Signal` · `Where` · `Healthy baseline` · `Looks broken when` · `Query` · `Sources` | y | In that order |
 
@@ -1293,6 +1294,17 @@ actually built, `F<n>` for a recorded fact, and `absent:<path>` for "the code em
 `$ <cmd> → exit <n>` source is legal **anywhere on a card**, unlike in a handoff (§2.8 confines it to the Evidence
 ledger): a card has no claims/ledger split, every section on it is evidence about a running system, and "the baseline is
 40/hour `[src: $ … → exit 0]`" is the most honest form that claim takes.
+
+**An owner is optional and never invented (gh #70).** `watch check` used to answer "who owns this signal" by deriving
+a repo from the item's own citation — `[src: api:src/Leaderboard.cs:64]` → `api` — which answers *which repo emits it*
+rather than *who gets paged when it stops*. A card may now say: the front-matter `owner:` above, or `(owner: <name>)` on
+an individual item, written **before** its `[src: …]` token because §2.8 makes that token the last thing on the line.
+Resolution is item → card → repo-derived, and the printed line says which of the three it is showing. Both forms are
+optional and validated only when present, so every card written before this key existed still validates and still prints
+exactly what it printed before. The Watch prompt inlines `ownership` facts (§2.5) for the same reason the rest of the
+card is inlined: a sub-agent asked for a name with no source for one would invent it. `(owner: )` with an empty name is
+a **shape** issue, not an absence — it is a card that tried to name somebody and lost the name, and falling through to
+the repo would be the exact substitution this rule exists to stop.
 
 **`status` is computed, not claimed.** `verified` iff **no `absent:` source remains under `## Signal`**; otherwise
 `draft`, and the card says what to instrument. The executor re-reads the card off disk and rewrites the one line, so a
@@ -1414,6 +1426,7 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx reject [--run <id>] --note <text> [--stage <phase>/<stage>]` | `run.yml` | `run.yml` gate, `events.jsonl`, stage status ⇒ `ready`. With `--stage` it REVOKES an approval already given (§5): `gate.revoked`, the cursor moves back, later stages that had run are marked `stale: true`, nothing is deleted. `--stage` may target a FINISHED run | 0,2,3 |
 | `tldrx story reopen <id> [--run <id>] --note <text> [--for-fix]` | `03-plan/waves.yml` + `03-plan/stories/<id>.md` (or `04-build/implicit-plan.yml`), `events.jsonl` | that story file's `status:` ⇒ `todo`, `events.jsonl` (`story.reopened`). Nothing else: no agent, no cost, no stage moved, no worktree or branch touched, and no line of the story but `status:`. Refuses (2) an unknown story id, a `done` story (that is `reject --stage`, or `--for-fix`), a `todo` story, and a missing `--note`. With `--for-fix` it opens a FIX ROUND on a `done` story instead (`reason: fix`, no attempt consumed, same DoD + reviewer), refusing (2) a story that is NOT done, a missing `--note`, and a story that already has a fix round open | 0,1,2,3 |
 | `tldrx questions lint [--run <id>] [--fix] [--area <a>]` | every `<phase>/questions.md` in the run | nothing, or those files rewritten to the §2.7 grammar with `--fix` (no wording changed) | 0,2,3 |
+| `tldrx questions cards [<run>] [--run <id>]` | every `<phase>/questions.md` in the run | **nothing** (stdout cards). One printable decision card per OPEN question: two lines of context, the block's own `Why asked:` note verbatim with its `[src: …]` — flagged when it cites nothing, and named as absent when there is no note — and the block's lettered options, or a `NEEDS OPTIONS` marker when it has none, since manufacturing them would answer the question in the act of asking it. Answers still flow through `tldrx answer`, whose command every card prints. No open question is a sentence and an exit 0 | 0,1,3 |
 | `tldrx budget show [<run>] [--run <id>] [--json]` | `run.yml`, `budget.yml` | nothing (stdout) | 0,1,2,3 |
 | `tldrx budget raise <phase> <usd> [--run <id>] [--take-from <phase>] [--note <text>]` | `run.yml`, `budget.yml` | `budget.yml` ceilings, `run.yml` ceiling mirror, `events.jsonl` (`budget.raised`, with before/after/actor/note) | 0,1,2,3 |
 | `tldrx map --refresh` | `workspace.yml`, repos, `graphify-out/` | `map/**`, `graphify-out/`, `events.jsonl` | 0,1 |
@@ -1425,6 +1438,7 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx dashboard [--static]` | `tldrx-work/**`, `.tldrx/**` (watch) | nothing, or `dist/` with `--static` | 0,1 |
 | `tldrx watch list [--run <id>]` | `05-watch/watchers/*.md`, `workspace.yml` | nothing (stdout table) | 0,1,2,3 |
 | `tldrx watch check <feature> [--run <id>]` | one card, the files it cites | nothing (stdout report) | 0,1,2,3 |
+| `tldrx watch arm [--interval <s>] [--timeout <s>] [--branch <b>] [--repo <r>] [--run <id>]` | `run.yml` (`build.epic_branch`), `workspace.yml`, `gh pr view <branch> --json state,mergedAt` per repo, then everything `watch check` reads | **nothing** (stdout: the `watch check` checklist, once every PR for the branch has merged). A BOUNDED FOREGROUND poller, not a daemon: three independent bounds — the `--timeout` deadline (default 3600s, max 86400), the `--interval` floor (default 60s; under 10 REFUSED rather than clamped) and a poll cap that holds if the clock does not move. It never pushes, opens or merges anything, and never offers `--execute`. No epic branch, no PR for the branch, and a PR CLOSED without merging are refusals (2); an expired window is 4, with the command that re-arms it | 0,1,2,3,4 |
 | `tldrx tickets sync [--run <id>] [--apply] [--provider github\|jira]` | `process.yml`, `run.yml`, `03-plan/{epics,stories}/*.md` | **Nothing without `--apply`** — preview is the default, because this is the one verb that reaches a third party. With it: `external:` + `external_status:` in those files, `events.jsonl` (`ticket.synced`), the remote issues. `--provider` picks between CONFIGURED providers and cannot switch on a workspace set to `kind: none` | 0,1,2,3 |
 | `tldrx tickets status [--run <id>]` | `process.yml` **first**, then the same files | nothing (stdout table) | 0,1,2,3 |
 | `tldrx replay [<run>]` | `events.jsonl`, handoffs | nothing (stdout narrative) | 0,1,2,3 |

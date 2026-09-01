@@ -1,4 +1,15 @@
-/** `tldrx questions lint` — is this run's questions.md readable by the parser?
+/** `tldrx questions` — is this run's questions.md readable, and what does it ASK?
+ *
+ * Two verbs over one file, and they answer different halves of the same failure.
+ *
+ * `lint` is the machine's half: can the §2.7 parser see these blocks at all.
+ * `cards` (gh #59) is the person's half: the open questions rendered as printable
+ * decision cards, because a question counted in a summary is not a question
+ * anybody has been ASKED. Measured 2026-09-01 — an owner looked at a run with
+ * four parked questions and said "cuales preguntas? no las veo?". Both existed.
+ *
+ * `cards` reads and prints. It answers nothing: `tldrx answer` is still the only
+ * way a decision is recorded, and every card prints the exact line to type.
  *
  * The whole §2.7 loop rests on one regex, `^## (Q\d+) · (.+)$`, and a file that
  * misses it is not half-read — it is read as EMPTY. Measured 2026-08-29: a stage
@@ -22,25 +33,59 @@ import { isResolved, resolveRunOrExplain } from "../resolveRun.ts";
 import {
   fixQuestions, parseLooseQuestions, parseQuestions, unreadableQuestionHeadings,
 } from "../../core/text/questions.ts";
+import {
+  collectQuestionCards, countQuestionFiles, noOpenQuestions, renderQuestionCards,
+} from "../../core/run/questionCards.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
 
 const VALUE_FLAGS = ["run", "root", "area"];
 
 export const questionsCommand: Command = {
   name: "questions",
-  summary: "Check that this run's questions.md can be read by the §2.7 parser",
-  usage: "tldrx questions lint [<run>] [--run <id>] [--fix] [--area <a>] [--root <path>]",
-  subcommands: ["lint"],
+  summary: "Read this run's open questions as decision cards, or check the file parses",
+  usage: "tldrx questions cards [<run>] [--run <id>] [--root <path>]\n"
+    + "       tldrx questions lint  [<run>] [--run <id>] [--fix] [--area <a>] [--root <path>]",
+  subcommands: ["lint", "cards"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const [sub, ...rest] = argv;
-    if (sub !== "lint") {
-      process.stderr.write(`tldrx questions: expected \`lint\`\n${questionsCommand.usage}\n`);
-      return EXIT_USAGE;
-    }
-    return Promise.resolve(lint(rest));
+    if (sub === "lint") return Promise.resolve(lint(rest));
+    if (sub === "cards") return Promise.resolve(cards(rest));
+    process.stderr.write(
+      `tldrx questions: expected \`cards\` or \`lint\`, got \`${sub ?? ""}\`\n${questionsCommand.usage}\n`,
+    );
+    return Promise.resolve(EXIT_USAGE);
   },
 };
+
+/**
+ * The open questions, as cards.
+ *
+ * Always exit 0 when the run resolves — including with nothing open. This is a
+ * presentation verb, not a gate: "no open question" is the answer, not a failure,
+ * and a non-zero exit here would put a red line under a run that is doing fine.
+ * `questions lint` is the verb that exits 2, and it exits 2 over a file the
+ * parser cannot READ, which is a different claim entirely.
+ */
+function cards(argv: readonly string[]): number {
+  try {
+    const args = parseArgs(argv, VALUE_FLAGS);
+    const root = workspaceRootFrom(args);
+    const resolved = resolveRunOrExplain("tldrx questions", root, stringFlag(args, "run") ?? args.positionals[0]);
+    if (!isResolved(resolved)) return resolved.exit;
+    const store = resolved.store;
+
+    const collected = collectQuestionCards(store.runDir, store.runId);
+    process.stdout.write(
+      collected.length === 0
+        ? noOpenQuestions(store.runId, countQuestionFiles(store.runDir))
+        : renderQuestionCards(store.runId, collected),
+    );
+    return EXIT_OK;
+  } catch (error) {
+    return fail("questions cards", error);
+  }
+}
 
 function lint(argv: readonly string[]): number {
   try {

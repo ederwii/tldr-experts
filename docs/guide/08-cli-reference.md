@@ -431,13 +431,28 @@ only way to answer the INIT questions**: editing the file by hand fills the slot
 no fact and writes no `process.yml`. `--yes-to-defaults` takes the first option of every
 question that offers one. Piped stdin is one answer per line. Exits: `0` `1` `2` `3`.
 
-## `tldrx questions lint`
+## `tldrx questions`
 
-Check that this run's `questions.md` can be read by the §2.7 parser.
+Read this run's open questions as decision cards, or check that the file the §2.7 parser
+reads is one it can see.
 
 ```
-tldrx questions lint [<run>] [--run <id>] [--fix] [--area <a>] [--root <path>]
+tldrx questions cards [<run>] [--run <id>] [--root <path>]
+tldrx questions lint  [<run>] [--run <id>] [--fix] [--area <a>] [--root <path>]
 ```
+
+`cards` (#59) renders each OPEN question as a printable decision card: two lines of context
+(which run and file it is parked in, who asked it, when, in what area), the question's own
+`Why asked:` note **verbatim** with its `[src: …]` — the slot for what the binding docs
+already decide — and the file's lettered options. A note that cites nothing is flagged as
+somebody's recollection; a question parked with no note says so; and a question with no
+options gets a loud `NEEDS OPTIONS` marker rather than a manufactured A/B/C, because
+inventing the choices would be answering the question in the act of asking it.
+
+It **reads only**. Answers still flow through `tldrx answer`, and every card prints the exact
+line to type. No open question is a sentence and an exit `0` — and "this run parked nothing"
+and "everything here is answered" are different sentences, because they send a reader to
+different places.
 
 A heading that misses `## Qn · Title` is not half-read, it is read as ABSENT — so everything
 downstream reports "0 open questions" and an auto gate signs itself over them. This names
@@ -823,6 +838,8 @@ Exits: `0` `1` `2` `3`.
 ```
 tldrx watch list  [--json] [--run <id>] [--root <path>]
 tldrx watch check [<feature>] [--execute] [--run <id>] [--root <path>]
+tldrx watch arm   [--interval <s>] [--timeout <s>] [--branch <name>] [--repo <name>]
+                  [--run <id>] [--root <path>]
 ```
 
 `check` is the post-merge checklist (#65). It prints each card's `## Signal` items as a
@@ -841,7 +858,28 @@ under `## Where`.
 with the card — a check that reported rot on stdout and exited `0` would be invisible to CI.
 `3` for an unknown feature (naming the ones that exist), for a run whose Watch stage never
 ran, and for a Watch stage that wrote no card; those last two are different sentences because
-they need different actions. Exits: `0` `1` `2` `3`.
+they need different actions.
+
+**An owner may be a person.** With nothing declared, the owner printed beside a Signal item is
+DERIVED from that item's own citation — `[src: api:src/Leaderboard.cs:64]` → `api` — which
+answers "which repo emits this" rather than "who gets paged". Since #70 a card may say: an
+optional front-matter `owner:`, or `(owner: <name>)` on an individual item, written before its
+`[src: …]` token. Resolution is item → card → repo-derived, and the printed line says which it
+is showing. Both forms are optional; a card that declares neither reads exactly as it did
+before.
+
+`arm` (#69) is `check` with a trigger in front of it: a **bounded foreground poller**, not a
+daemon. It reads the branch Build cut (`build.epic_branch` in `run.yml` — the same list
+`tldrx ship` picks from), asks `gh pr view <branch> --json state,mergedAt` in every repo of the
+run that has the branch, and prints the `check` checklist the moment they have all merged. It
+never pushes, opens or merges anything, and `--execute` is not offered: an hour-old poller must
+not start running build commands the instant a merge lands.
+
+Three bounds hold it: `--timeout <s>` (default 3600, max 86400), `--interval <s>` (default 60;
+under 10 is REFUSED rather than quietly raised), and a poll cap that holds even if the clock
+does not move. No epic branch, no PR for the branch, and a PR `CLOSED` without merging are all
+refusals with a sentence in them (`2`); a window that expires with the PR still open exits `4`
+and prints the command that re-arms it. Exits: `0` `1` `2` `3` `4`.
 
 ## `tldrx tickets`
 

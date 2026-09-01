@@ -64,6 +64,10 @@ these H2 sections, in order:
   never as prose.
 - Do not cite a file you were not given. If it is not inlined above, you have not read it.
 - Do not describe a signal you would add. The card records what the code emits today.
+- `owner:` is OPTIONAL. Name a person or team only when a fact tagged `ownership` above says
+  so — in the front matter when one name covers the card, or as `(owner: <name>)` before an
+  item's `[src: …]` token when items differ. Never invent one and never put a repo name
+  there: the framework already derives the repo from your citation.
 
 Facts on record:
 

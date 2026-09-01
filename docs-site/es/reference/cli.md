@@ -54,6 +54,7 @@ tldrx approve --note "…"    # sign the gate; the checks are re-run first
 | `tldrx reject --note "…"` | Regresa la etapa; `--stage <phase>/<stage>` revoca una firma ya dada. |
 | `tldrx gate template` | Escribe el esqueleto de la nota de evidencia sobre la que firma una compuerta agent. |
 | `tldrx run gates set <stage>:<policy> --note "…"` | La única manera sancionada de cambiar la política de compuertas después de `run new`. |
+| `tldrx questions cards` | Las preguntas ABIERTAS del run como tarjetas de decisión imprimibles: contexto, lo que los documentos ya deciden, las opciones. Solo lee. |
 | `tldrx answer <Qid> "…"` | Registra una respuesta como hecho numerado. `--supersede` revierte una. |
 | `tldrx interview` | Contesta en la terminal las preguntas abiertas de un run. |
 | `tldrx story reopen <id> --note "…"` | Le da a una story de Build otra tanda de intentos. |
@@ -74,6 +75,7 @@ tldrx approve --note "…"    # sign the gate; the checks are re-run first
 | `tldrx expert list \| create \| train \| recompute` | Ver [Expertos](/es/guides/experts). |
 | `tldrx seed triage` / `seed apply` | Parte un documento grande en varios runs. |
 | `tldrx watch list \| check <feature>` | Las tarjetas de vigilancia que produjo un run, revisadas contra el código de hoy. |
+| `tldrx watch arm` | Espera a que el PR del run se mergee y entonces imprime esa checklist. Un poller acotado en primer plano sobre `gh pr view`, no un demonio. |
 | `tldrx plan sync-dod` | Repara los DoD de las stories después de editar `workspace.yml`. |
 | `tldrx dashboard` | Mira el workspace en vivo en el navegador, o exporta una página estática. |
 | `tldrx replay [<run>]` | El log de eventos del run, contado como historia. |

@@ -24,11 +24,21 @@ import { WATCHERS_DIR, WATCH_PHASE, WATCHER_SECTIONS } from "./Watcher.ts";
  * The `area:` values (§2.5) a Watch prompt draws facts from. A fact outside them is
  * noise here: this stage is not deciding architecture, it is finding a signal.
  *
- * `[assumption]` — the wave brief names the two areas; nothing in the workspace
- * enforces an area vocabulary, so a team that tags its facts `ops` instead will
- * see none of them, and the prompt says `absent:` rather than pretending.
+ * `ownership` joins the two for gh #70. The card may now name WHO owns a signal,
+ * and the only ledger in this framework that names owners is the one it deferred
+ * to a person: `tldrx init` parks "Who owns `<repo>`?" as an `ownership` question
+ * (`init/questions.ts:152`) and the answer lands in `.tldrx/memory/facts.yml`. A
+ * stage asked for an owner with no ownership fact inlined has no honest source
+ * for one, and an agent with no source invents — so the area is inlined, and the
+ * brief below says the name may come from nowhere else.
+ *
+ * `[assumption]` — the wave brief names the first two areas; nothing in the
+ * workspace enforces an area vocabulary, so a team that tags its facts `ops`
+ * instead will see none of them, and the prompt says `absent:` rather than
+ * pretending. A workspace with no ownership fact simply writes no `owner:`, and
+ * `watch check` falls back to the repo exactly as it did before #70.
  */
-export const WATCH_FACT_AREAS = ["observability", "deploy"] as const;
+export const WATCH_FACT_AREAS = ["observability", "deploy", "ownership"] as const;
 
 export interface FeatureInputsOptions {
   readonly root: string;
@@ -123,6 +133,17 @@ export function featureBrief(feature: Feature): string {
     "  describe a signal that would be nice to have as though it exists.",
     "- **Query** is one fenced block, copy-pasteable in whatever place **Where** names.",
     "- **Sources** is prose: each citation above, once, with what it establishes.",
+    "",
+    "Owner (optional, gh #70). A Signal item may name WHO to ask about it, as `(owner: <name>)`",
+    "placed BEFORE its `[src: …]` token — the token is still the last thing on the line:",
+    "",
+    "    - `checkout.completed` is written on every order (owner: alice) [src: api:src/Checkout.cs:88]",
+    "",
+    "Write it ONLY from an `ownership` fact inlined above, and write the SAME name that fact uses.",
+    "Put it in the front matter as `owner: <name>` when one name covers every item on the card, or on",
+    "the individual items when they differ. Do not invent a name, do not put a repo name there (the",
+    "framework already derives that from your citation), and leave it off entirely when no fact says.",
+    "An `(owner: )` with nothing in it is refused — it loses the name it was trying to write.",
     "",
     "Leave `status: draft`. The framework sets it: a card is stamped `verified` only when nothing",
     "under **Signal** cites `absent:`. Writing `verified` yourself changes nothing and will be overwritten.",

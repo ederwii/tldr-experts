@@ -11,6 +11,9 @@ epic: E1                     # the epic this feature was built on
 title: "Player leaderboard"
 stories: [S1, S3]            # the DONE stories the card was written from
 repos: [api, lab]
+owner: platform-oncall       # OPTIONAL — who to ask, from an `ownership` fact. Omit it entirely
+                             # when nothing on record says; `watch check` then names the repo
+                             # your citation points at, which is what it always did.
 status: draft                # draft | verified — verified only when Signal has no `absent:` source
 ---
 
@@ -20,6 +23,10 @@ status: draft                # draft | verified — verified only when Signal ha
 > Where, Healthy baseline and Looks broken when ends with a [src: …] token, and
 > that token points at the BUILT code — `<repo>:<path>:<line>` — at an `F<n>` fact,
 > or, when the code emits nothing at all, at `absent:<what you looked at>`.
+>
+> An item may name its own owner as `(owner: <name>)` BEFORE the token, overriding
+> the front matter's. Optional, and only ever a name an `ownership` fact gave you —
+> `(owner: )` with nothing in it is refused, because it is a name that got lost.
 
 ## Signal
 
@@ -27,7 +34,7 @@ status: draft                # draft | verified — verified only when Signal ha
 > X" — the line that is in the code, at the line it is on.
 
 - `leaderboard.refreshed` is written on every view refresh [src: api:src/Leaderboard/RefreshHandler.cs:64]
-- No counter exists for a refresh that finds zero rows — add one before this is watchable [src: absent:api/src/Leaderboard]
+- No counter exists for a refresh that finds zero rows — add one (owner: alice) [src: absent:api/src/Leaderboard]
 
 ## Where
 

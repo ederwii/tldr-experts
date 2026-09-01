@@ -165,6 +165,17 @@ export function cardForTriggers(
 
 // --- reading -----------------------------------------------------------------
 
+/**
+ * The one thing a person types to answer a question.
+ *
+ * Exported because gh #59's `questions cards` prints the same line on its own
+ * card, and two spellings of the command a person is told to run is exactly the
+ * kind of drift that ends with somebody typing a flag the CLI does not take.
+ */
+export function answerCommand(questionId: string, runId: string): string {
+  return `tldrx answer ${questionId} "…" --run ${runId}`;
+}
+
 function toQuestion(
   block: QuestionBlock,
   runId: string,
@@ -177,7 +188,7 @@ function toQuestion(
     whyAsked: block.whyAsked,
     options: block.options.map(firstLine),
     recommendation: recommended === undefined ? null : toRecommendation(recommended),
-    answerCommand: `tldrx answer ${block.id} "…" --run ${runId}`,
+    answerCommand: answerCommand(block.id, runId),
   };
 }
 

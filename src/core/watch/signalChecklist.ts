@@ -15,12 +15,22 @@
  *
  * ## What is an owner here
  *
- * The watcher schema has no `owner:` key (`WATCHER_KEYS` in `Watcher.ts`), and
- * inventing one would mean a key nothing writes, read by nobody — the defect
- * `schemaContract.ts:20` and gh #48 are both about. So the owner is DERIVED from
- * the item's own citation: `[src: api:src/Leaderboard.cs:64]` says the signal is
- * emitted by `api`, and `api` is who to ask. An item sourced at a fact or a URL
- * has no repo, and says so rather than borrowing the card's.
+ * Three answers, in this order, and the printed line says WHICH one it is showing
+ * — because "alice" and "api" answer different questions and a reader who cannot
+ * tell them apart is worse off than one who only ever saw the repo.
+ *
+ *   1. the item's own `(owner: <name>)` annotation (`itemOwner.ts`, gh #70);
+ *   2. the card's optional front-matter `owner:` — the same name for every item
+ *      on the card, which is the ordinary case for a feature one team runs;
+ *   3. DERIVED from the item's own citation: `[src: api:src/Leaderboard.cs:64]`
+ *      says the signal is emitted by `api`, and `api` is who to ask.
+ *
+ * (3) was the whole of v1 and stays the fallback. It is a repo, not a person, and
+ * naming it as an owner was the gap gh #70 was filed about — but the fix for that
+ * is an OPTIONAL name somebody actually wrote, never a required key the stage
+ * would have to invent a value for (the defect `schemaContract.ts:20` and gh #48
+ * are both about). An item sourced at a fact or a URL has no repo, and with
+ * nothing declared it says nothing rather than borrowing the card's.
  *
  * ## What may be RUN
  *
@@ -51,6 +61,7 @@ import { parseHandoff, type HandoffBullet } from "../text/handoff.ts";
 import type { SrcContext } from "../text/srcToken.ts";
 import { runDeclaredCommand, type CommandRun } from "../run/checks.ts";
 import { WATCHERS_DIR, WATCH_PHASE, WATCHER_SIGNAL_SECTION } from "./Watcher.ts";
+import { itemOwner } from "./itemOwner.ts";
 import { queryBlock } from "./watcherFile.ts";
 import { checkCard, statusOf, type CheckReport, type LoadedCard } from "./watchViews.ts";
 
@@ -67,6 +78,10 @@ export interface RunnableSignal {
   readonly repo: string;
 }
 
+/** Where a printed owner came from. `repo` is v1's derivation; `none` is silence. */
+export const OWNER_SOURCES = ["item", "card", "repo", "none"] as const;
+export type OwnerSource = (typeof OWNER_SOURCES)[number];
+
 /** One item under `## Signal`, as something a person can go and check. */
 export interface SignalItem {
   /** 1-based within its card — the number printed in the checkbox. */
@@ -75,6 +90,14 @@ export interface SignalItem {
   readonly text: string;
   /** The repos this item's own sources name. Empty when it cites none. */
   readonly owners: readonly string[];
+  /**
+   * The name somebody WROTE (#70) — the item's annotation, else the card's
+   * front matter. Null when neither declared one, which is when `owners` is the
+   * answer instead.
+   */
+  readonly declaredOwner: string | null;
+  /** Which of the three answers this item's owner line is showing. */
+  readonly ownerSource: OwnerSource;
   /** `absent:` paths under this item — what is NOT instrumented. */
   readonly absent: readonly string[];
   /** Null unless the item cites a command this workspace declares. */
@@ -148,7 +171,7 @@ export function cardChecklist(loaded: LoadedCard, ctx: SrcContext): CardChecklis
   const watcher = loaded.card.watcher;
   const repos = watcher?.repos ?? [];
   const signals = (sections.get(WATCHER_SIGNAL_SECTION) ?? [])
-    .map((bullet, index) => signalItem(bullet, index + 1, repos, ctx));
+    .map((bullet, index) => signalItem(bullet, index + 1, repos, ctx, watcher?.owner ?? null));
 
   return {
     id: loaded.id,
@@ -176,6 +199,7 @@ function signalItem(
   n: number,
   cardRepos: readonly string[],
   ctx: SrcContext,
+  cardOwner: string | null,
 ): SignalItem {
   const refs = bullet.token?.refs ?? [];
   const owners: string[] = [];
@@ -192,13 +216,24 @@ function signalItem(
     if (ctx.repos.has(head) && !owners.includes(head)) owners.push(head);
   }
 
+  // Item first, then the card, then nothing — the derived repos in `owners` are
+  // rendered only when neither named anybody. A malformed annotation is reported
+  // by `parseWatcherCard` and declares nobody here, so a lost name can never be
+  // quietly replaced by the repo that happens to emit the signal.
+  const named = itemOwner(bullet.text).owner;
+  const declared = named ?? cardOwner;
+  const ownerSource: OwnerSource = named !== null
+    ? "item"
+    : cardOwner !== null ? "card" : owners.length > 0 ? "repo" : "none";
+  const base = { n, text: bullet.text, owners, absent, declaredOwner: declared, ownerSource };
+
   const cmd = refs.find((ref) => ref.kind === "cmd");
   if (cmd === undefined || cmd.kind !== "cmd") {
-    return { n, text: bullet.text, owners, absent, runnable: null, printOnly: null };
+    return { ...base, runnable: null, printOnly: null };
   }
   if (!ctx.commands.has(cmd.command)) {
     return {
-      n, text: bullet.text, owners, absent, runnable: null,
+      ...base, runnable: null,
       printOnly: `\`${cmd.command}\` is not one of workspace.yml's commands — print only`,
     };
   }
@@ -209,13 +244,13 @@ function signalItem(
   const repo = owners[0] ?? (cardRepos.length === 1 ? cardRepos[0] : undefined);
   if (repo === undefined) {
     return {
-      n, text: bullet.text, owners, absent, runnable: null,
+      ...base, runnable: null,
       printOnly: `the card names ${String(cardRepos.length)} repos and this item names none`
         + " — which repo to run it in is a guess, so it is print only",
     };
   }
   return {
-    n, text: bullet.text, owners, absent,
+    ...base,
     runnable: { command: cmd.command, expectExit: cmd.exitCode, repo },
     printOnly: null,
   };
@@ -341,7 +376,8 @@ function cardBlock(list: CardChecklist, runs: SignalRuns): readonly string[] {
 function signalLines(list: CardChecklist, item: SignalItem, runs: SignalRuns): readonly string[] {
   const box = item.absent.length > 0 ? "[!]" : "[ ]";
   const out = [`    ${String(item.n)}. ${box} ${item.text}`];
-  if (item.owners.length > 0) out.push(`${ITEM_INDENT}owner: ${item.owners.join(", ")}`);
+  const owner = ownerLine(item);
+  if (owner !== null) out.push(`${ITEM_INDENT}${owner}`);
   for (const path of item.absent) {
     out.push(`${ITEM_INDENT}NOT INSTRUMENTED — the card cites absent:${path}, nothing to check`);
   }
@@ -364,6 +400,23 @@ function signalLines(list: CardChecklist, item: SignalItem, runs: SignalRuns): r
     if (!run.ok) out.push(`${ITEM_INDENT}${run.detail}`);
   }
   return out;
+}
+
+/**
+ * The one `owner:` line an item gets, or null when nothing can say who owns it.
+ *
+ * A DECLARED name says where it was declared, because a reader deciding whom to
+ * page needs to know whether a human wrote that word or the framework derived it.
+ * The derived form is left byte-identical to what `watch check` printed before
+ * #70 — a card that declares nothing must read exactly as it did yesterday.
+ */
+function ownerLine(item: SignalItem): string | null {
+  if (item.declaredOwner !== null) {
+    const where = item.ownerSource === "item" ? "declared on the item" : "declared on the card";
+    return `owner: ${item.declaredOwner} (${where})`;
+  }
+  if (item.owners.length > 0) return `owner: ${item.owners.join(", ")}`;
+  return null;
 }
 
 function section(title: string, items: readonly string[]): readonly string[] {

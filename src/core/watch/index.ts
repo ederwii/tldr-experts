@@ -1,7 +1,9 @@
 export {
   WATCH_PHASE, WATCHERS_DIR, WATCHER_SECTIONS, WATCHER_CHECKED_SECTIONS, WATCHER_SIGNAL_SECTION,
-  WATCHER_STATUSES, WATCHER_KEYS, FEATURE_ID_RE, validateWatcher, asWatcher,
+  WATCHER_STATUSES, WATCHER_KEYS, WATCHER_OPTIONAL_KEYS, FEATURE_ID_RE, validateWatcher, asWatcher,
 } from "./Watcher.ts";
+export { itemOwner, MAX_OWNER_CHARS } from "./itemOwner.ts";
+export type { ItemOwner } from "./itemOwner.ts";
 export type { Watcher, WatcherStatus, WatcherSectionName } from "./Watcher.ts";
 export {
   parseWatcherCard, queryBlock, setWatcherStatus, describeWatcherIssues,
@@ -19,9 +21,13 @@ export {
 } from "./watchViews.ts";
 export type { LoadedCard, CheckReport } from "./watchViews.ts";
 export {
-  cardChecklist, cardQuery, checklistOk, executeSignals, nothingToCheck, renderChecklist,
-  runKey, SIGNAL_TIMEOUT_S,
+  cardChecklist, cardQuery, checklistOk, executeSignals, nothingToCheck, OWNER_SOURCES,
+  renderChecklist, runKey, SIGNAL_TIMEOUT_S,
 } from "./signalChecklist.ts";
 export type {
-  CardChecklist, CardQuery, RunnableSignal, SignalItem, SignalRuns,
+  CardChecklist, CardQuery, OwnerSource, RunnableSignal, SignalItem, SignalRuns,
 } from "./signalChecklist.ts";
+export {
+  armRun, DEFAULT_INTERVAL_S, DEFAULT_TIMEOUT_S, MAX_POLLS, MAX_TIMEOUT_S, MIN_INTERVAL_S,
+} from "./arm.ts";
+export type { ArmOptions, ArmOutcome, PrState } from "./arm.ts";
