@@ -109,4 +109,5 @@ if git rev-parse --verify -q origin/main >/dev/null; then
   }
 fi
 git push -q origin HEAD:main || { echo "FAIL push"; exit 4; }
+rm -rf "$LOGS"   # a green run's logs are noise; every FAIL above names the directory it kept
 echo "OK $(git rev-parse --short HEAD) $TESTS 0 fail · typecheck/build/seam clean · pushed"
