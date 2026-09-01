@@ -132,21 +132,62 @@ export function parseHandoff(text: string): Handoff {
  * `[src: …]` token whatever the line width was.
  */
 export function listItems(text: string): readonly string[] {
-  const items: string[] = [];
-  let pending: string[] | null = null;
+  return parseItems(text).map((item) => item.text);
+}
+
+/** One list item anywhere in a document, with what a resolver needs to judge it. */
+export interface DocumentItem {
+  /** 1-based line number in the file. */
+  readonly line: number;
+  /** The item, wrapped continuation lines joined, marker removed. */
+  readonly text: string;
+  /** The nearest H2 heading above it, or `""` before the first one. */
+  readonly section: string;
+  readonly token: SrcToken | null;
+}
+
+/**
+ * Every list item in a document, with its line and the H2 it sits under.
+ *
+ * `parseHandoff` answers "what is in the four required sections", which is the
+ * §2.8 handoff rule; this answers "what did this file assert, as items, and
+ * where" — the question a stage's OTHER declared outputs raise (issue #34).
+ * `design.md` has no required sections and never will, but a `[src: …]` it does
+ * write is a citation like any other, and until now nothing read it.
+ *
+ * It shares `BULLET_RE`, `CONTINUATION_RE` and `H2_RE` with the parser above for
+ * the reason the comment there gives: two readers of "what is a bullet" drift,
+ * and the looser one wins the argument at exactly the wrong moment. `section` is
+ * carried because the §2.8 resolver's verdict depends on it — `$ … → exit n` is
+ * legal in an `Evidence ledger` and nowhere else, whatever file it appears in.
+ */
+export function parseItems(text: string): readonly DocumentItem[] {
+  const items: DocumentItem[] = [];
+  let section = "";
+  let pending: { line: number; parts: string[]; section: string } | null = null;
   const flush = (): void => {
-    if (pending !== null) items.push(pending.join(" "));
+    if (pending === null) return;
+    const joined = pending.parts.join(" ");
+    items.push({ line: pending.line, text: joined, section: pending.section, token: parseSrcToken(joined) });
     pending = null;
   };
-  for (const line of text.split("\n")) {
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    const heading = H2_RE.exec(line);
+    if (heading !== null && heading[1] !== undefined) {
+      flush();
+      section = heading[1];
+      continue;
+    }
     const bullet = BULLET_RE.exec(line);
     if (bullet !== null && bullet[1] !== undefined) {
       flush();
-      pending = [bullet[1]];
+      pending = { line: i + 1, parts: [bullet[1]], section };
       continue;
     }
     if (pending !== null && CONTINUATION_RE.test(line)) {
-      pending.push(line.trim());
+      pending.parts.push(line.trim());
       continue;
     }
     flush();
@@ -331,6 +372,65 @@ export function validateHandoff(text: string, ctx: SrcContext): HandoffValidatio
     unverified: report.unverified,
     bulletCount: report.bulletCount,
   };
+}
+
+/** What `validateCitations` measured over a document that is not a handoff. */
+export interface CitationReport {
+  readonly malformed: readonly HandoffIssue[];
+  readonly unresolved: readonly HandoffIssue[];
+  readonly unverified: readonly HandoffIssue[];
+  /** How many list items attempted a citation at all. */
+  readonly cited: number;
+}
+
+/**
+ * The §2.8 grammar over a document that is NOT a handoff (issue #34).
+ *
+ * `claim-sources` used to filter its stage's outputs down to `handoff.md`, so the
+ * same violation refused the stage in one file and passed silently in the file
+ * beside it — measured live 2026-08-31, where a pass-3 violation was caught only
+ * because it happened to be written in the handoff. Every declared `.md` output
+ * is checked now, and this is the rule applied to the ones that have no required
+ * sections to check.
+ *
+ * It judges CITATIONS, not claims. A `design.md` bullet that cites nothing is
+ * prose, and prose in a design document is not the thing §2.8 exists to refuse —
+ * the four-section "every bullet is sourced" rule stays exactly where it was, on
+ * the handoff. What is refused here is a citation that was WRITTEN and is not
+ * true: a token nothing can parse, a file that is not there, a `$ … → exit n`
+ * outside an Evidence ledger. That asymmetry is the deliberate one; the accidental
+ * one — a whole file nothing looked at — is what this closes.
+ */
+export function validateCitations(text: string, ctx: SrcContext): CitationReport {
+  const malformed: HandoffIssue[] = [];
+  const unresolved: HandoffIssue[] = [];
+  const unverified: HandoffIssue[] = [];
+  let cited = 0;
+  for (const item of parseItems(text)) {
+    if (item.token === null) {
+      if (!hasSrcMarker(item.text)) continue;
+      cited++;
+      malformed.push({
+        line: item.line,
+        message:
+          "malformed citation — the `[src: …]` token must be the last thing on the line " +
+          "(closing quotes, brackets and a final `.` are allowed after it, words are not)",
+      });
+      continue;
+    }
+    cited++;
+    for (const error of item.token.errors) {
+      unresolved.push({ line: item.line, message: `[src: ${error.raw}] — ${error.message}` });
+    }
+    const claim = item.text.replace(item.token.raw, " ").trim();
+    for (const ref of item.token.refs) {
+      const resolution = resolveSrc(ref, ctx, item.section, claim);
+      const issue = { line: item.line, message: `[src: ${ref.raw}] — ${resolution.message ?? "unresolvable"}` };
+      if (resolution.outcome === "refused") unresolved.push(issue);
+      else if (resolution.outcome === "unverified") unverified.push(issue);
+    }
+  }
+  return { malformed, unresolved, unverified, cited };
 }
 
 /** Every `src` cited anywhere in the handoff — used by `replay` and the ledger. */

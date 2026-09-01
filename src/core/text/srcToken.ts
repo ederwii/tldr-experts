@@ -59,10 +59,36 @@ export interface SrcContext {
    * sub-agent may cite its own run-relative outputs (`01-what/intent.md:1`).
    */
   readonly runDir?: string | null;
+  /**
+   * This run's epic worktrees, tried BEFORE the working tree by a `file` src
+   * (issue #16).
+   *
+   * The Build phase commits onto an epic branch and deliberately does not merge
+   * it: the phase ends at a human gate and nothing it runs pushes or fast-forwards
+   * `main`. A Watch stage then writes a handoff ABOUT that work, and every
+   * `repo:src/…` citation in it named a file the working tree does not have yet —
+   * so the stage's own evidence was refused for being true. The epic's checkout is
+   * a real directory on disk (`.tldrx/worktrees/<repo>/_epic-<run>-<epic>`), so the
+   * fix is a base, not a new kind of source: the citation is spelled exactly as it
+   * always was, and it is looked for in this run's epic checkout first and in the
+   * working tree after.
+   *
+   * Empty when the run has no epic worktree on disk, which is every stage before
+   * Build and every run whose worktrees have been cleaned up.
+   */
+  readonly epicWorktrees?: readonly EpicWorktree[];
+}
+
+/** One epic checkout a `file` src may resolve against. */
+export interface EpicWorktree {
+  /** The `workspace.yml` repo it is a checkout OF. */
+  readonly repo: string;
+  /** Absolute path of the worktree directory. */
+  readonly dir: string;
 }
 
 export function emptySrcContext(root: string, runDir?: string | null): SrcContext {
-  return { root, repos: new Map(), commands: new Set(), runDir: runDir ?? null };
+  return { root, repos: new Map(), commands: new Set(), runDir: runDir ?? null, epicWorktrees: [] };
 }
 
 const LINE_RE = /^\d{1,9}$/;
@@ -292,15 +318,25 @@ export function resolveSrc(ref: SrcRef, ctx: SrcContext, section: string, claim 
         return refused(`unknown repo \`${ref.repo}\` (not in workspace.yml)`);
       }
       const bases = fileBases(ref, ctx);
+      // Every base is tried, and a base where the file EXISTS but is too short no
+      // longer ends the search. Since issue #16 added the epic worktree ahead of
+      // the working tree, stopping at the first existing copy would refuse a
+      // citation that resolves perfectly well one base later — a file truncated on
+      // the epic branch would deny a claim about the line it still has on `main`.
+      // The short copy is remembered so the failure message stays the precise one
+      // when NO base can carry the line.
+      let short: SrcResolution | null = null;
       for (const base of bases) {
         if (!existsSync(base.abs) || !statSync(base.abs).isFile()) continue;
         const lines = countLines(base.abs);
         const highest = ref.endLine ?? ref.startLine;
         if (highest > lines) {
-          return refused(`${ref.path} has ${lines} line(s); cited line ${highest}`, base.abs);
+          short ??= refused(`${ref.path} has ${lines} line(s); cited line ${highest}`, base.abs);
+          continue;
         }
         return { ok: true, outcome: "ok", resolved: base.abs };
       }
+      if (short !== null) return short;
       const tried = bases.map((b) => b.label).join(", ");
       return refused(`no such file: ${ref.path} — tried ${tried}`, bases[0]?.abs);
     }
@@ -451,12 +487,17 @@ interface FileBase {
  * run-relatively (`01-what/intent.md:1`) while the workspace thinks root-relatively
  * (`.tldrx/memory/facts.yml:4`). Both are legal, so both are tried:
  *
- *   (a) the workspace root,
- *   (b) the run directory of the handoff being validated (when the caller knows it),
- *   (c) the repo dir, when the path starts with a known repo name + `/` — i.e.
+ *   (a) this run's epic worktree for the repo, when there is one (issue #16),
+ *   (b) the workspace root,
+ *   (c) the run directory of the handoff being validated (when the caller knows it),
+ *   (d) the repo dir, when the path starts with a known repo name + `/` — i.e.
  *       `api/src/Hunt.cs` is accepted as a spelling of `api:src/Hunt.cs`.
  *
- * A repo-qualified `repo:path` and an absolute path each have exactly one base.
+ * (a) comes first because the epic branch is the code the run is ABOUT: at Watch
+ * time the working tree is deliberately behind it, and "the file is not on `main`
+ * yet" is the expected state rather than a bad citation. A repo-qualified
+ * `repo:path` and an absolute path still resolve to exactly one place in the
+ * working tree; the epic worktree adds one more, never a different repo's.
  */
 function fileBases(
   ref: Extract<SrcRef, { kind: "file" }>,
@@ -467,25 +508,40 @@ function fileBases(
   }
   if (ref.repo !== null) {
     const rel = ctx.repos.get(ref.repo) ?? "";
-    return [{ label: repoLabel(ref.repo, rel), abs: normalize(join(ctx.root, rel, ref.path)) }];
+    return [
+      ...epicBases(ctx, ref.repo, ref.path),
+      { label: repoLabel(ref.repo, rel), abs: normalize(join(ctx.root, rel, ref.path)) },
+    ];
   }
-  const bases: FileBase[] = [
-    { label: "workspace root", abs: normalize(join(ctx.root, ref.path)) },
-  ];
+  const bases: FileBase[] = [];
+  const slash = ref.path.indexOf("/");
+  const named = slash > 0 ? ref.path.slice(0, slash) : "";
+  const rel = named === "" ? undefined : ctx.repos.get(named);
+  if (rel !== undefined) bases.push(...epicBases(ctx, named, ref.path.slice(slash + 1)));
+  bases.push({ label: "workspace root", abs: normalize(join(ctx.root, ref.path)) });
   const runDir = ctx.runDir ?? null;
   if (runDir !== null && runDir !== "") {
     bases.push({ label: `run dir ${displayPath(ctx.root, runDir)}`, abs: normalize(join(runDir, ref.path)) });
   }
-  const slash = ref.path.indexOf("/");
-  if (slash > 0) {
-    const name = ref.path.slice(0, slash);
-    const rel = ctx.repos.get(name);
-    if (rel !== undefined) {
-      bases.push({
-        label: repoLabel(name, rel),
-        abs: normalize(join(ctx.root, rel, ref.path.slice(slash + 1))),
-      });
-    }
+  if (rel !== undefined) {
+    bases.push({
+      label: repoLabel(named, rel),
+      abs: normalize(join(ctx.root, rel, ref.path.slice(slash + 1))),
+    });
+  }
+  return bases;
+}
+
+/** This run's epic checkouts of ONE repo, as bases for a path inside that repo. */
+function epicBases(ctx: SrcContext, repo: string, path: string): readonly FileBase[] {
+  const trees = ctx.epicWorktrees ?? [];
+  const bases: FileBase[] = [];
+  for (const tree of trees) {
+    if (tree.repo !== repo) continue;
+    bases.push({
+      label: `epic worktree ${displayPath(ctx.root, tree.dir)}`,
+      abs: normalize(join(tree.dir, path)),
+    });
   }
   return bases;
 }

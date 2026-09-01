@@ -37,6 +37,47 @@
 
 ### Fixed
 
+- **`claim-sources` reports every problem it found, over every declared `.md` output — and a
+  `file` src resolves against this run's epic worktree.** Four issues, one code path (#33, #34,
+  #23, #16), all four measured on the 2026-08-30/31 unattended pilot runs.
+  - **It reported ONE problem** (#33). `checkClaimSources` returned on the first file, the first
+    category and `unresolved[0]`, so a 226-bullet cap breach sat invisible behind a single bad
+    file path: fixing the visible one and re-running would have bought the next one at the price
+    of a full paid pass. Every file and every category is reported now, as a per-file summary
+    (`<file>: 3 unsourced bullet(s) on line(s) …; 2 unresolvable source(s) — …`), with file-level
+    problems such as the cap breach listed FIRST so 200 line numbers cannot bury them. Up to six
+    of a category are named and the rest become `(+N more)` — the same convention
+    `describeKnowledgeIssues` uses, and necessary because a check's `detail` is rendered inside
+    one-line summaries (`autoGate`, `next`).
+  - **It looked at ONE file** (#34). The filter was `endsWith("handoff.md")`, so the identical
+    violation refused the stage when it was written in `handoff.md` and passed in silence when it
+    was written in `design.md`, `contracts.md` or `scope.md` beside it — the pilot's pass-3
+    violation was caught only because it happened to be in the handoff. Every declared `.md`
+    output is read now, by both the gate check and the write-time hook: the four-section rule for
+    the files that ARE handoffs, and `validateCitations` for the ones that are not. That second
+    rule is deliberately narrower — a bullet with no citation is prose, but a `[src: …]` that WAS
+    written must parse, must resolve, and must obey `$ … → exit n` belonging only to an
+    `Evidence ledger`. A declared non-handoff output that was never written is still not a
+    failure; that is the `--commit` gap check's job.
+  - **The execution-claim validator reads the verb** (#23). `\bexit \d` missed "exits 0", which
+    is how a trainer writing normal English says it, so the claim slipped through the grammar the
+    rule exists to enforce while "exit 0" three words away was refused. Conjugation, an optional
+    "with", and the `code`/`status` spellings all match now; the digit is still required, so "the
+    exit path is documented" and "the exchange refuses an empty code" stay prose.
+  - **A `file` src resolves against this run's epic worktree** (#16). The Build phase commits
+    onto an epic branch and deliberately does not merge it, so a Watch-stage handoff ABOUT that
+    work had every `repo:src/…` citation refused for naming code the working tree does not have
+    yet — the stage's own evidence was rejected for being true. `.tldrx/worktrees/<repo>/_epic-<run>-<epic>`
+    is now a resolution base, tried before the working tree, for both the hook and the gate; the
+    path convention has one home (`core/paths.ts`) that the Build executor writes and the §2.8
+    resolver reads. Resolution also no longer stops at the first base where the file EXISTS but
+    is too short — a file truncated on the epic branch would otherwise deny a claim about the
+    line it still has on `main`. **Still open** (commented on #16): the epic worktree is removed
+    at the end of Build unless `--keep-worktrees`, so the default Watch stage has no tree on disk
+    to resolve against. Closing that means reading blobs out of the epic branch inside a hook
+    whose budget is 50 ms, or keeping epic worktrees for the life of the run — a design call, not
+    a mechanical one.
+
 - **A second run's stories no longer merge into ANOTHER run's epic branch.** Measured live
   2026-08-31 on two concurrent runs: `260831-hardening-d1` reported S1, S2 and S6 all
   "merged into `epic/hardening-d1` (N commits carried)", and `epic/hardening-d1` was still

@@ -6,10 +6,12 @@
  * no cross-file resolution beyond workspace.yml (spec §0).
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { parseYaml } from "../../core/yaml.ts";
-import { PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../../core/paths.ts";
-import type { SrcContext } from "../../core/text/srcToken.ts";
+import {
+  PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR, PROJECT_WORKTREES_DIR, isEpicWorktreeOf,
+} from "../../core/paths.ts";
+import type { EpicWorktree, SrcContext } from "../../core/text/srcToken.ts";
 
 export interface WorkLocation {
   /** Workspace root — the parent of `tldrx-work/`. */
@@ -165,7 +167,52 @@ export function toSrcContext(workspace: WorkspaceContext, runDir?: string | null
     repos: workspace.repos,
     commands: workspace.commands,
     runDir: runDir ?? null,
+    epicWorktrees: epicWorktreesOf(workspace, runDir ?? null),
   };
+}
+
+/**
+ * The epic checkouts THIS run has on disk (issue #16).
+ *
+ * A run id, not a branch name, is the key: `.tldrx/worktrees/<repo>/_epic-<run>-…`
+ * carries the run in the path precisely so two runs' epics cannot be confused
+ * (issue #40), and reading the directory rather than `run.yml` means the answer is
+ * "a tree that is really there", which is the only thing a base can be. A run with
+ * no Build phase, or one whose worktrees have been cleaned up, gets an empty list
+ * and resolves exactly as it always did.
+ *
+ * One `readdir` per repo, and only when the caller knows the run — the write-time
+ * hook's budget is 50 ms (spec §0) and this is the cheapest question that answers
+ * it: no git call, no process, no walk below the first level.
+ */
+export function epicWorktreesOf(
+  workspace: WorkspaceContext,
+  runDir: string | null,
+): readonly EpicWorktree[] {
+  if (runDir === null || runDir === "") return [];
+  const runId = basename(runDir);
+  if (runId === "") return [];
+  const trees: EpicWorktree[] = [];
+  for (const repo of workspace.repos.keys()) {
+    const dir = join(workspace.root, PROJECT_FRAMEWORK_DIR, PROJECT_WORKTREES_DIR, repo);
+    if (!existsSync(dir)) continue;
+    let entries: readonly string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const name of entries.slice().sort()) {
+      if (!isEpicWorktreeOf(name, runId)) continue;
+      const abs = join(dir, name);
+      try {
+        if (statSync(abs).isDirectory()) trees.push({ repo, dir: abs });
+      } catch {
+        // A worktree that vanished between readdir and stat is simply not a base.
+      }
+    }
+  }
+  return trees;
 }
 
 /** Absolute path of a repo declared in workspace.yml, or null. */

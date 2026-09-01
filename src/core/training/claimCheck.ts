@@ -83,9 +83,17 @@ export function isConfidence(value: string): value is Confidence {
  * Deliberately few and deliberately literal. A cleverer classifier would be a
  * model, and a model is exactly what must not decide whether a claim needs a
  * measurement — the point of this file is that the rule is checkable.
+ *
+ * The first pattern reads the VERB, not just the noun. `\bexit \d` was the whole
+ * of it until issue #23: a trainer writing "`dotnet build` exits 0" — normal
+ * English, and how the 2026-08-30/31 pilot runs actually wrote it — slipped
+ * through the grammar this file exists to enforce, while "exit 0" three words
+ * away was refused. Conjugation, an optional "with", and the "code"/"status"
+ * spellings are all the same assertion. The DIGIT is still required, so "the exit
+ * path is documented" and "the exchange refuses an empty code" stay prose.
  */
 export const EXECUTION_CLAIM_PATTERNS: readonly RegExp[] = [
-  /\bexit \d/i,
+  /\bexit(?:s|ed|ing)?(?: with)?(?: (?:code|status))? \d/i,
   /\b\d+\/\d+ (?:passed|pass)\b/i,
   // An optional copula, because "the build is green" is how anybody writes it and
   // `build green` is how nobody does.

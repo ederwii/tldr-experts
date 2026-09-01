@@ -222,12 +222,52 @@ describe("claim-sources (PreToolUse Write|Edit)", () => {
     expect(run.stdout).toBe("");
   });
 
-  test("ignores markdown under tldrx-work that is not a handoff", async () => {
+  test("an UNCITED bullet in markdown that is not a handoff is left alone", async () => {
+    // The four-section "every bullet is sourced" rule is the handoff's, and only
+    // the handoff's. Prose in a design document is prose.
     const run = await hook("claim-sources", {
       hook_event_name: "PreToolUse", tool_name: "Write",
       tool_input: {
         file_path: join(workspace().runDir, "02-how", "design.md"),
         content: "# Design\n\n## Notes\n- a bullet with no source at all\n",
+      },
+    });
+    expect(run.stdout).toBe("");
+  });
+
+  test("a citation that does NOT resolve is denied in design.md too (issue #34)", async () => {
+    const run = await hook("claim-sources", {
+      hook_event_name: "PreToolUse", tool_name: "Write",
+      tool_input: {
+        file_path: join(workspace().runDir, "02-how", "design.md"),
+        content: "# Design\n\n## Notes\n- the view is refreshed [src: api:src/Nope.cs:8]\n",
+      },
+    });
+    const denied = denialText(run);
+    expect(denied).toContain("unresolvable source(s)");
+    expect(denied).toContain("02-how/design.md");
+    expect(denied).toContain("src/Nope.cs");
+  });
+
+  test("a malformed token is denied in a non-handoff output too (issue #34)", async () => {
+    const run = await hook("claim-sources", {
+      hook_event_name: "PreToolUse", tool_name: "Write",
+      tool_input: {
+        file_path: join(workspace().runDir, "01-what", "scope.md"),
+        content: "# Scope\n\n- in scope: ranking `[src: api:src/Hunt.cs:1]` for now\n",
+      },
+    });
+    const denied = denialText(run);
+    expect(denied).toContain("malformed citation(s)");
+    expect(denied).toContain("01-what/scope.md");
+  });
+
+  test("a resolving citation in a non-handoff output is allowed", async () => {
+    const run = await hook("claim-sources", {
+      hook_event_name: "PreToolUse", tool_name: "Write",
+      tool_input: {
+        file_path: join(workspace().runDir, "02-how", "design.md"),
+        content: "# Design\n\n## Notes\n- the event already exists [src: api:src/Hunt.cs:8]\n",
       },
     });
     expect(run.stdout).toBe("");

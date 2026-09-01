@@ -32,7 +32,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
-import { PROJECT_FRAMEWORK_DIR } from "../../paths.ts";
+import { PROJECT_FRAMEWORK_DIR, epicWorktreeName } from "../../paths.ts";
 import { factsPath, loadWorkspace, type WorkspaceContext } from "../../../hooks/lib/workspace.ts";
 import { DodCommandRefused, runDodCommand } from "../../../hooks/lib/story.ts";
 import { FactsStore } from "../../facts/FactsStore.ts";
@@ -2881,7 +2881,7 @@ class BuildSession {
     }
     const path = join(
       this.ctx.root, PROJECT_FRAMEWORK_DIR, WORKTREES,
-      story.planned.story.repo, `_epic-${this.ctx.runId}-${story.planned.story.epic}`,
+      story.planned.story.repo, epicWorktreeName(this.ctx.runId, story.planned.story.epic),
     );
     if (existsSync(path)) {
       await assertWorktreeOn(path, story.epicBranch, "epic worktree");
