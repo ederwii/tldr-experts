@@ -261,6 +261,38 @@ describe("the economy label (§E.2)", () => {
     expect(reread.phases.find((p) => p.id === "04-build")?.ceiling_usd).toBe(10);
   });
 
+  /**
+   * The same hazard, for the #22 opt-in (owner decision 2026-09-01).
+   *
+   * `on_host_tokens_exceed: block` is the ONLY thing that makes a token ceiling
+   * stop anything. An operator who sets it and then runs `tldrx budget raise`
+   * would have had it erased by the rewrite — the enforcement silently downgraded
+   * to a note, which is worse than never having offered the key.
+   */
+  test("`budget raise` does not erase `on_host_tokens_exceed` either", () => {
+    const before = budget({ economy: "host-tokens", on_host_tokens_exceed: "block" });
+    const after = raiseBudget(before, { phaseId: "04-build", amountUsd: 2 }).budget;
+    const text = emitBudgetYaml(after);
+
+    expect(text).toContain("on_host_tokens_exceed: block");
+    expect(validateRunBudget(parseYaml(text)).ok).toBe(true);
+    expect(asRunBudget(parseYaml(text)).on_host_tokens_exceed).toBe("block");
+  });
+
+  test("the default `warn` emits no line — a file without the key stays byte-identical", () => {
+    const text = emitBudgetYaml(budget());
+    expect(text).not.toContain("on_host_tokens_exceed");
+    expect(asRunBudget(parseYaml(text)).on_host_tokens_exceed).toBe("warn");
+  });
+
+  test("a value this reader does not understand is REFUSED, never defaulted", () => {
+    const doc = parseYaml(emitBudgetYaml(budget())) as Record<string, unknown>;
+    doc.on_host_tokens_exceed = "explode";
+    const report = validateRunBudget(doc);
+    expect(report.ok).toBe(false);
+    expect(report.issues.map((i) => i.path)).toContain("on_host_tokens_exceed");
+  });
+
   test("`03-plan/budget.yml` takes the same label, and rejects a value it does not know", () => {
     const base = { version: 1, run: "r", ceiling_usd: 20, spent_usd: 0, per_phase_usd: { S1: 4.75 } };
     expect(validateBudget({ ...base, economy: "host-tokens" }).ok).toBe(true);

@@ -315,6 +315,39 @@ describe("the economy label", () => {
     expect(remainingWorkContext(host).join("\n")).toContain("host-tokens");
   });
 
+  /**
+   * #22(c), owner decision 2026-09-01. Attendedness and the phase economy were
+   * independent, so an attended run on a `metered-usd` phase still counted
+   * developer turns the HOST pays for — an over-estimate of real money that the
+   * brake and `run estimate` both reported. Attended ⇒ host economy for the
+   * developer share, mirroring `economy: host-tokens` exactly.
+   */
+  test("an attended run zeroes the developer turns the same way (#22c)", () => {
+    const dir = planDir(fixture);
+    const metered = remainingWork({ ...BASE, runDir: dir });
+    const attended = remainingWork({ ...BASE, runDir: dir, attended: true });
+
+    expect(attended.stories.every((s) => s.developerCapUsd === 0)).toBe(true);
+    // Same reason the host-tokens case keeps them: a reviewer floor is metered.
+    expect(attended.stories.every((s) => s.reviewerCapUsd === REVIEWER_FLOOR_USD)).toBe(true);
+    expect(attended.usd).toBe(4);
+    expect(attended.usd).toBeLessThan(metered.usd);
+    expect(remainingWorkContext(attended).join("\n")).toContain("attended");
+  });
+
+  test("attended and host-tokens together are the same answer, not a double discount", () => {
+    const dir = planDir(fixture);
+    const both = remainingWork({ ...BASE, runDir: dir, economy: "host-tokens", attended: true });
+    expect(both.usd).toBe(4);
+    expect(both.stories.every((s) => s.developerCapUsd === 0)).toBe(true);
+  });
+
+  test("an UNattended metered run is untouched — the developer share is still counted", () => {
+    const dir = planDir(fixture);
+    expect(remainingWork({ ...BASE, runDir: dir, attended: false }))
+      .toEqual(remainingWork({ ...BASE, runDir: dir }));
+  });
+
   test("a plan priced in `host-tokens` contributes no story prices — the uniform share applies", () => {
     // `loadPlanPrices` refuses that file; the point here is that the refusal
     // reaches this computation rather than being routed around it.
@@ -343,7 +376,7 @@ describe("what does not change", () => {
     const work = remainingWork({ ...BASE, runDir: empty });
     expect(work).toEqual({
       basis: "static", usd: 18, rawUsd: 18, staticUsd: 18, clamped: false,
-      economy: "metered-usd", stories: [], done: 0, total: 0, blocked: [],
+      economy: "metered-usd", attended: false, stories: [], done: 0, total: 0, blocked: [],
     });
     expect(renderRemainingWork(work)).toBe("stage estimate $18.00");
     expect(remainingWorkContext(work)).toEqual([]);

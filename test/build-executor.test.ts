@@ -32,7 +32,8 @@ import { EventLog } from "../src/core/events/EventLog.ts";
 import { validateHandoff } from "../src/core/text/handoff.ts";
 import { loadWorkspace, toSrcContext } from "../src/hooks/lib/workspace.ts";
 import {
-  assertWorktreeOn, GitError, partitionDirty, porcelainPath, stateDirPrefixes, WorktreeBranchMismatchError,
+  assertWorktreeOn, cleanUpRunEpicWorktrees, GitError, partitionDirty, porcelainPath, stateDirPrefixes,
+  WorktreeBranchMismatchError,
 } from "../src/core/build/git.ts";
 import { PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../src/core/paths.ts";
 import {
@@ -358,6 +359,153 @@ describe("the epic worktree", () => {
     expect(message).toContain(path);
     expect(message).toContain("epic worktree");
   });
+});
+
+/**
+ * The epic worktree lives for the RUN's lifetime, not the Build stage's (#16).
+ *
+ * The owner's decision of 2026-09-01, option (a) on issue #16. The shipped half of
+ * #16 made a `file` src resolve against `.tldrx/worktrees/<repo>/_epic-<run>-<epic>`
+ * before the working tree — but `BuildSession.finish()` removed that directory
+ * before the Build handoff was even written, so unless the operator had typed
+ * `--keep-worktrees` the later Watch stage had nothing to resolve against and the
+ * fix bit only under a flag. Cleanup therefore moves to run CLOSE.
+ *
+ * `--keep-worktrees` keeps the meaning it always had, one scope wider: survive even
+ * that. The story worktrees are untouched by this — they are still removed the
+ * moment a story settles (`cleanUp`), which is what the retention test above pins.
+ */
+describe("the epic worktree lives for the run's lifetime (#16)", () => {
+  function epicPath(ws: BuildWorkspace, runId = ws.runId): string {
+    return join(ws.root, PROJECT_FRAMEWORK_DIR, "worktrees", "app", `_epic-${runId}-E1`);
+  }
+
+  test("Build finishing does NOT remove it — the run is still open", async () => {
+    const ws = workspace(TWO_WAVES);
+
+    const outcome = await next(ws);
+
+    // `4` is a green build parked at its gate: the stage is over, the RUN is not.
+    expect(outcome.code).toBe(4);
+    expect(RunStore.open(ws.runDir).run.status).not.toBe("done");
+    expect(existsSync(epicPath(ws))).toBe(true);
+  }, 60_000);
+
+  /**
+   * The end-to-end half the shipped fix could not reach.
+   *
+   * Not a hand-made directory: a REAL build, whose fake developer wrote `s1.txt`
+   * into its story worktree and whose merge carried it onto `epic/e1` and nowhere
+   * else. The file is provably absent from the working tree, so if the citation
+   * resolves it resolved against the epic checkout — and it does so with no flag,
+   * which is the whole of the decision.
+   */
+  test("a Watch-time citation of epic-only code resolves BY DEFAULT — no --keep-worktrees", async () => {
+    const ws = workspace(TWO_WAVES);
+    await next(ws);
+
+    // The premise, stated as a negative: this file is on the epic branch only.
+    expect(git(ws, ["diff", "--name-only", "main...epic/e1"]).split("\n")).toContain("s1.txt");
+    expect(existsSync(join(ws.repoDir, "s1.txt"))).toBe(false);
+
+    const ctx = toSrcContext(loadWorkspace(ws.root), ws.runDir);
+    expect((ctx.epicWorktrees ?? []).map((t) => t.repo)).toContain("app");
+
+    const text = [
+      "## Findings", "", "- the story landed on the epic [src: app:s1.txt:1]", "",
+      "## Decisions", "", "- none [src: 04-build/handoff.md:1]", "",
+      "## Unknowns", "", "- none", "",
+      "## Evidence ledger", "", "- built [src: $ npm run test → exit 0]", "",
+    ].join("\n");
+    expect(validateHandoff(text, ctx).unresolved).toEqual([]);
+  }, 60_000);
+
+  test("the run closing removes it", async () => {
+    const ws = workspace({ ...TWO_WAVES, gates: "none" });
+
+    await next(ws);
+
+    expect(RunStore.open(ws.runDir).run.status).toBe("done");
+    expect(existsSync(epicPath(ws))).toBe(false);
+  }, 60_000);
+
+  test("--keep-worktrees survives the run close too", async () => {
+    const ws = workspace({ ...TWO_WAVES, gates: "none" });
+
+    await next(ws, { keepWorktrees: true });
+
+    expect(RunStore.open(ws.runDir).run.status).toBe("done");
+    expect(existsSync(epicPath(ws))).toBe(true);
+  }, 60_000);
+
+  /**
+   * Cancelling is closing. Without this the change would TRADE one leak for
+   * another: today a cancelled run's epic checkout is already gone, because Build
+   * removed it on the way past.
+   */
+  test("cancelling the run removes it as well", async () => {
+    const ws = workspace(TWO_WAVES);
+    await next(ws);
+    expect(existsSync(epicPath(ws))).toBe(true);
+
+    const removed = await cleanUpRunEpicWorktrees(ws.root, ws.runDir);
+
+    expect(removed).toEqual([epicPath(ws)]);
+    expect(existsSync(epicPath(ws))).toBe(false);
+  }, 60_000);
+
+  /**
+   * The ordinary human path, and the one with no `--keep-worktrees` flag on it:
+   * `tldrx next` parks at the gate, `tldrx approve` signs it and the run closes.
+   * A rule that lived only in `tldrx next` would leak every run closed this way.
+   */
+  test("closing the run by signing its last gate removes it too", async () => {
+    const ws = workspace(TWO_WAVES);
+    expect((await next(ws)).code).toBe(4);
+    expect(existsSync(epicPath(ws))).toBe(true);
+
+    const signed = await approve(RunStore.open(ws.runDir), {
+      root: ws.root, actor: "alan", at: "2026-09-01T10:00:00Z", note: "ship it",
+    });
+
+    expect(signed.ok).toBe(true);
+    expect(signed.runDone).toBe(true);
+    expect(existsSync(epicPath(ws))).toBe(false);
+  }, 60_000);
+
+  /**
+   * `--keep-worktrees` is typed on the `tldrx next` that BUILDS; the run is closed
+   * later by `tldrx approve`, a different command that never sees the flag. The
+   * intent is remembered on the run (`keep_worktrees:`) precisely so this works —
+   * without it the flag would mean "survive run close" only when the run happened
+   * to close the one way that still had the argv.
+   */
+  test("a --keep-worktrees typed on the BUILD is honoured by the approve that closes the run", async () => {
+    const ws = workspace(TWO_WAVES);
+    await next(ws, { keepWorktrees: true });
+    expect(RunStore.open(ws.runDir).run.keep_worktrees).toBe(true);
+    // On disk, not just in memory: the close happens in another process.
+    expect(readFileSync(join(ws.runDir, "run.yml"), "utf8")).toContain("keep_worktrees: true");
+
+    const signed = await approve(RunStore.open(ws.runDir), {
+      root: ws.root, actor: "alan", at: "2026-09-01T10:00:00Z", note: "ship it",
+    });
+
+    expect(signed.runDone).toBe(true);
+    expect(existsSync(epicPath(ws))).toBe(true);
+  }, 60_000);
+
+  test("it never touches ANOTHER run's epic worktree", async () => {
+    const ws = workspace(TWO_WAVES);
+    await next(ws);
+    const foreign = epicPath(ws, "260101-someone-else");
+    mkdirSync(foreign, { recursive: true });
+
+    await cleanUpRunEpicWorktrees(ws.root, ws.runDir);
+
+    expect(existsSync(epicPath(ws))).toBe(false);
+    expect(existsSync(foreign)).toBe(true);
+  }, 60_000);
 });
 
 describe("a story that cannot prove itself", () => {

@@ -1,7 +1,8 @@
 /** The Build phase's machinery. The pipeline that drives it is `facilitator/executors/build.ts`. */
 export {
   git, repoDirOf, dirtyPaths, isDirty, branchExists, currentBranch, headSha, ensureBranch,
-  addWorktree, removeWorktree, commitAll, mergeNoFf, diffCommand, firstLine, GitError, GIT_TIMEOUT_MS,
+  addWorktree, removeWorktree, cleanUpRunEpicWorktrees, commitAll, mergeNoFf, diffCommand,
+  firstLine, GitError, GIT_TIMEOUT_MS,
   stateDirPrefixes, partitionDirty, porcelainPath, shaOf, baseStateOf, fastForward, commitsBetween,
   assertWorktreeOn, WorktreeBranchMismatchError,
 } from "./git.ts";

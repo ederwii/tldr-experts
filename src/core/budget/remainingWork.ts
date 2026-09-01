@@ -119,6 +119,14 @@ export interface RemainingWork {
   readonly staticUsd: number;
   readonly clamped: boolean;
   readonly economy: Economy;
+  /**
+   * `attended_by: host` on the run this was measured for (issue #22, owner
+   * decision 2026-09-01, policy (c)). Carried on the result because the developer
+   * share is zeroed for the same REASON as under `host-tokens` — the host session
+   * pays for those turns — and a reader told "$0.00 developer" is owed which of
+   * the two facts put it there.
+   */
+  readonly attended: boolean;
   /** Only the stories that still cost something, richest first. */
   readonly stories: readonly RemainingStory[];
   readonly done: number;
@@ -138,6 +146,16 @@ export interface RemainingWorkInput {
   /** `--max-usd`, when the operator gave one. */
   readonly maxUsd?: number | null;
   readonly economy?: Economy;
+  /**
+   * `attended_by: host` — a host session drives this run and nothing here spawns
+   * (issue #22 (c)). Absent means false, which is what every caller meant before
+   * this field existed.
+   *
+   * Passed IN, exactly the way `economy` is, rather than read off `run.yml` here:
+   * this module is loaded by the PreToolUse hook on a 50 ms budget and stays out
+   * of `RunStore` on purpose.
+   */
+  readonly attended?: boolean;
 }
 
 /**
@@ -168,6 +186,7 @@ function staticOnly(input: RemainingWorkInput): RemainingWork {
     staticUsd: input.stageBudgetUsd,
     clamped: false,
     economy: input.economy ?? DEFAULT_ECONOMY,
+    attended: input.attended === true,
     stories: [],
     done: 0,
     total: 0,
@@ -177,6 +196,13 @@ function staticOnly(input: RemainingWorkInput): RemainingWork {
 
 function measure(input: RemainingWorkInput): RemainingWork {
   const economy = input.economy ?? DEFAULT_ECONOMY;
+  // Attended ⇒ host economy for the DEVELOPER share (issue #22 (c)). The two were
+  // independent, so an attended run on a `metered-usd` phase still counted turns
+  // the host pays for — money this framework will never spend, over-estimated on
+  // the brake and in `run estimate` alike. The reviewer floor is untouched for the
+  // same reason `host-tokens` leaves it: outside attended mode it is real money,
+  // and this is the safe direction when it is not.
+  const hostPaysDeveloper = economy === "host-tokens" || input.attended === true;
   const fallback: RemainingWork = {
     basis: "static",
     usd: input.stageBudgetUsd,
@@ -184,6 +210,7 @@ function measure(input: RemainingWorkInput): RemainingWork {
     staticUsd: input.stageBudgetUsd,
     clamped: false,
     economy,
+    attended: input.attended === true,
     stories: [],
     done: 0,
     total: 0,
@@ -225,7 +252,7 @@ function measure(input: RemainingWorkInput): RemainingWork {
     // The developer turn of the attempt now under review is already spent: the
     // diff is on the branch and only a `changes` verdict buys another one.
     const developerTurns = Math.max(attemptsLeft - (story.status === "review" ? 1 : 0), 0);
-    const developerCapUsd = economy === "host-tokens" ? 0 : caps.developer(story.id);
+    const developerCapUsd = hostPaysDeveloper ? 0 : caps.developer(story.id);
     const reviewerCapUsd = caps.reviewer(story.id);
     const usd = round2(developerCapUsd * developerTurns + reviewerCapUsd * attemptsLeft);
     if (usd <= 0 && developerTurns === 0 && attemptsLeft === 0) continue;
@@ -250,6 +277,7 @@ function measure(input: RemainingWorkInput): RemainingWork {
     staticUsd: input.stageBudgetUsd,
     clamped,
     economy,
+    attended: input.attended === true,
     stories,
     done: progress.done,
     total: progress.total,
@@ -302,9 +330,12 @@ export function remainingWorkContext(work: RemainingWork): string[] {
       + "capped at the static estimate so this brake can never refuse more often than it used to.",
     );
   }
-  if (work.economy === "host-tokens") {
+  if (work.economy === "host-tokens" || work.attended) {
+    const why = work.economy === "host-tokens"
+      ? "this phase is priced in `host-tokens`"
+      : "this run is attended_by: host";
     lines.push(
-      "developer turns cost $0.00 here: this phase is priced in `host-tokens` and the host session pays "
+      `developer turns cost $0.00 here: ${why} and the host session pays `
       + "for them. The reviewer floors are still metered dollars.",
     );
   }

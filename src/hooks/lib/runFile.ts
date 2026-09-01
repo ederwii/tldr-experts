@@ -173,6 +173,29 @@ export function runSpend(view: RunView): RunSpend {
 }
 
 /**
+ * Declared host tokens in ONE phase, or across the run when `phaseId` is null
+ * (issue #22).
+ *
+ * `runSpend` answers for the whole run, which is the right scope for a note that
+ * says what has been spent. A CEILING is per phase, though — every other budget
+ * decision in this framework is — so the number judged against it has to be the
+ * phase's own, or a run with five phases would cross the first phase's allowance
+ * on the fifth phase's tokens.
+ */
+export function hostTokensIn(view: RunView, phaseId: string | null): number {
+  let tokens = 0;
+  for (const phase of view.phases) {
+    if (phaseId !== null && phase.id !== phaseId) continue;
+    for (const stage of phase.stages) {
+      for (const task of stage.tasks) {
+        if (task.tokens !== null) tokens += task.tokens;
+      }
+    }
+  }
+  return tokens;
+}
+
+/**
  * One line saying that the dollar figure is not the whole spend — or null when it
  * is, in which case nothing is printed and every existing message is unchanged.
  *

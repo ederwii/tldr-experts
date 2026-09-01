@@ -803,8 +803,16 @@ describe("budget-gate (PreToolUse Bash)", () => {
     expect(run.stderr).toContain("1 unmetered turn");
   });
 
+  /**
+   * Unattended, deliberately. This test was written with `withHostTask(true)` and
+   * asserted a DENY on an attended run; the owner's decision of 2026-09-01 (#22a)
+   * is that an attended run is never denied on metered dollars, so the deny it
+   * measures now has to come from a run the framework really would spawn on. What
+   * it is FOR is unchanged and is still pinned: when host tokens were spent, the
+   * refusal says the dollar figure is metered spend only.
+   */
   test("the deny says the dollar figure is METERED spend only when it is", async () => {
-    withHostTask(true);
+    withHostTask(false);
     const run = await hook("budget-gate", {
       hook_event_name: "PreToolUse", tool_name: "Bash", cwd: workspace().root,
       tool_input: { command: "tldrx next 260828-leaderboard" },
@@ -812,15 +820,134 @@ describe("budget-gate (PreToolUse Bash)", () => {
     const said = denialText(run);
     expect(said).toContain('refusing to start stage "contracts"');
     expect(said).toContain("12000 host tokens");
-    expect(said).toContain("attended_by: host");
+    expect(said).not.toContain("attended_by: host");
 
     const blocked = EventLog.forRun(workspace().runDir).read().filter((e) => e.type === "budget.blocked");
     expect(blocked[0]?.payload).toMatchObject({
       economy: "metered-usd",
-      attended_by: "host",
+      attended_by: null,
       host_tokens: 12_000,
       unmetered_tasks: 1,
     });
+  });
+
+  /**
+   * #22(a), owner decision 2026-09-01.
+   *
+   * `tldrx next` on an `attended_by: host` run exits 4 and spawns nothing, so the
+   * dollar estimate this hook was denying against is spend that provably will not
+   * happen. It INFORMS instead — both economies, exactly as already wired — and
+   * allows. The event it writes says `budget.warned`, because nothing was blocked
+   * and an audit trail that records a block that did not happen is a lie.
+   */
+  test("an attended run is INFORMED, never denied, on metered dollars (#22a)", async () => {
+    withHostTask(true);
+    const run = await hook("budget-gate", {
+      hook_event_name: "PreToolUse", tool_name: "Bash", cwd: workspace().root,
+      tool_input: { command: "tldrx next 260828-leaderboard" },
+    });
+
+    expect(run.stdout).toBe("");                       // no deny envelope at all
+    expect(run.stderr).toContain("attended_by: host");
+    expect(run.stderr).toContain("12000 host tokens");
+    // The dollar facts are still SAID — informing is the whole point.
+    expect(run.stderr).toContain("$0.61");
+    expect(run.stderr).toContain("$3.00");
+
+    const log = EventLog.forRun(workspace().runDir).read();
+    expect(log.filter((e) => e.type === "budget.blocked")).toHaveLength(0);
+    const warned = log.filter((e) => e.type === "budget.warned");
+    expect(warned).toHaveLength(1);
+    expect(warned[0]?.payload).toMatchObject({
+      phase: "02-how", attended_by: "host", estimate_usd: 3, host_tokens: 12_000,
+    });
+  });
+
+  /**
+   * #22(b), owner decision 2026-09-01.
+   *
+   * Under `economy: host-tokens` the phase's ceiling number is a host-session
+   * TOKEN allowance, not dollars (`budget/RunBudget.ts`) — so `declared tokens vs
+   * that ceiling` is the one comparison in this file whose two sides share a unit.
+   * It is now computable (`runSpend().hostTokens`, wired at bb6204b) and it warns.
+   * It does NOT deny: enforcement is opt-in, below.
+   */
+  function hostCeiling(tokens: number, extra = ""): void {
+    const path = join(workspace().runDir, "budget.yml");
+    const text = readFileSync(path, "utf8")
+      // The phase ceiling IS the token allowance under `host-tokens`. The run
+      // ceiling is raised with it only to keep `Σ phase ceilings ≤ ceiling_usd`
+      // satisfied — that validator sums the two economies as if they shared a
+      // unit, which is a pre-existing wart and not what this test is about.
+      .replace("ceiling_usd: 25.0", "ceiling_usd: 60000")
+      .replace(
+        "{id: 02-how, ceiling_usd: 7.0, spent_usd: 6.39}",
+        `{id: 02-how, ceiling_usd: ${String(tokens)}, spent_usd: 0, economy: host-tokens}`,
+      )
+      // Before `phases:`, not after it: `phases:` is a multi-line flow sequence
+      // and is the last key in the file.
+      .replace("phases: [", `${extra}phases: [`);
+    writeFileSync(path, text, "utf8");
+  }
+
+  test("declared tokens OVER the host ceiling warn, and still allow (#22b)", async () => {
+    hostCeiling(10_000);          // the run has declared 12 000
+    withHostTask(false);
+    const run = await hook("budget-gate", {
+      hook_event_name: "PreToolUse", tool_name: "Bash", cwd: workspace().root,
+      tool_input: { command: "tldrx next 260828-leaderboard" },
+    });
+
+    expect(run.stdout).toBe("");                        // allowed
+    expect(run.stderr).toContain("12000");
+    expect(run.stderr).toContain("10000");
+    expect(run.stderr).toMatch(/over|exceed/i);
+    const warned = EventLog.forRun(workspace().runDir).read().filter((e) => e.type === "budget.warned");
+    expect(warned).toHaveLength(1);
+    expect(warned[0]?.payload).toMatchObject({
+      phase: "02-how", economy: "host-tokens", host_tokens: 12_000, ceiling_tokens: 10_000,
+    });
+  });
+
+  test("declared tokens UNDER the host ceiling say nothing new (#22b)", async () => {
+    hostCeiling(50_000);
+    withHostTask(false);
+    const run = await hook("budget-gate", {
+      hook_event_name: "PreToolUse", tool_name: "Bash", cwd: workspace().root,
+      tool_input: { command: "tldrx next 260828-leaderboard" },
+    });
+    expect(run.stdout).toBe("");
+    expect(run.stderr).not.toMatch(/over its host-token ceiling/i);
+    expect(EventLog.forRun(workspace().runDir).read().filter((e) => e.type === "budget.warned")).toHaveLength(0);
+  });
+
+  test("`on_host_tokens_exceed: block` is the explicit opt-in that DENIES (#22b)", async () => {
+    hostCeiling(10_000, "on_host_tokens_exceed: block\n");
+    withHostTask(false);
+    const run = await hook("budget-gate", {
+      hook_event_name: "PreToolUse", tool_name: "Bash", cwd: workspace().root,
+      tool_input: { command: "tldrx next 260828-leaderboard" },
+    });
+
+    const said = denialText(run);
+    expect(said).toContain("host-token");
+    expect(said).toContain("12000");
+    expect(said).toContain("10000");
+    // Never a dollar remedy for a token ceiling: `budget raise` moves money.
+    expect(said).not.toContain("budget raise");
+    const blocked = EventLog.forRun(workspace().runDir).read().filter((e) => e.type === "budget.blocked");
+    expect(blocked[0]?.payload).toMatchObject({ economy: "host-tokens", ceiling_tokens: 10_000 });
+  });
+
+  test("the opt-in still never denies an ATTENDED run (#22a beats #22b)", async () => {
+    hostCeiling(10_000, "on_host_tokens_exceed: block\n");
+    withHostTask(true);
+    const run = await hook("budget-gate", {
+      hook_event_name: "PreToolUse", tool_name: "Bash", cwd: workspace().root,
+      tool_input: { command: "tldrx next 260828-leaderboard" },
+    });
+    expect(run.stdout).toBe("");
+    expect(run.stderr).toContain("attended_by: host");
   });
 
   test("an ordinary metered run's deny is byte-identical to what it always was", async () => {

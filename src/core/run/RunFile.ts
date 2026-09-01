@@ -256,6 +256,21 @@ export interface RunFile {
    * remaining plan as paid spawns (measured 2026-08-30, $9.95 of headless deaths).
    */
   readonly attended_by?: AttendedBy;
+  /**
+   * `--keep-worktrees`, remembered (issue #16, owner decision 2026-09-01).
+   *
+   * ADDITIVE and optional: absent — every run.yml written before this key
+   * existed — means "clean the epic worktrees up when the run closes", which is
+   * the decided default and the behaviour every such run already had.
+   *
+   * It is on the RUN rather than left in `argv` because the flag is typed on the
+   * `tldrx next` that BUILDS and the run is usually closed by a different command
+   * in a different process — `tldrx approve` signing the last gate, or
+   * `tldrx run cancel` days later. A flag those never see cannot be honoured by
+   * them, and "survive even run close" is exactly what the flag was decided to
+   * mean, so the intent is recorded once, where every close path can read it.
+   */
+  readonly keep_worktrees?: boolean;
   readonly phases: readonly RunPhase[];
 }
 
@@ -415,6 +430,13 @@ export function validateRunFile(input: unknown): ValidationResult {
   // a value this binary understands — a policy the reader cannot honour is not a
   // policy it may quietly downgrade to "spawn anyway".
   if (doc.attended_by !== undefined) requireEnum(doc.attended_by, ATTENDED_BY, "attended_by", issues);
+
+  // Optional, additive: absent means "clean up at run close". Present it must be
+  // a real boolean — a `keep_worktrees: "yes"` that silently read as false would
+  // delete the checkouts the operator asked to keep.
+  if (doc.keep_worktrees !== undefined && typeof doc.keep_worktrees !== "boolean") {
+    issues.push({ path: "keep_worktrees", message: `expected a boolean, got ${typeof doc.keep_worktrees}` });
+  }
 
   if (!requireArray(doc.phases, "phases", issues)) return result(issues, deprecations);
   const phases = doc.phases as unknown[];

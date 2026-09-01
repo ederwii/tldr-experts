@@ -7,7 +7,7 @@
  * under Bun are byte-identical, so a diff only ever shows what actually changed.
  */
 import { yamlScalar } from "../facts/emitFactsYaml.ts";
-import { DEFAULT_ECONOMY, type RunBudget } from "../budget/RunBudget.ts";
+import { DEFAULT_ECONOMY, type RunBudget, DEFAULT_ON_HOST_TOKENS_EXCEED } from "../budget/RunBudget.ts";
 import type { GatesPolicy } from "./gatePolicy.ts";
 import type { RunFile, RunGate, RunGateEvidence, RunStage, RunTask } from "./RunFile.ts";
 
@@ -147,6 +147,11 @@ export function emitRunYaml(run: RunFile): string {
   if (run.attended_by !== undefined) {
     lines.push(`attended_by: ${yamlScalar(run.attended_by)}`);
   }
+  // Emitted only when TRUE: `keep_worktrees: false` and an absent key mean the
+  // same thing, and writing the noisy half would change every run.yml on disk.
+  if (run.keep_worktrees === true) {
+    lines.push("keep_worktrees: true");
+  }
   if (run.gates_policy !== undefined && Object.keys(run.gates_policy).length > 0) {
     lines.push(`gates_policy: ${gatesPolicy(run.gates_policy)}`);
   }
@@ -180,6 +185,14 @@ export function emitBudgetYaml(budget: RunBudget): string {
     // erasure would turn a token budget back into dollars silently. Skipping the
     // default line keeps a file with no label byte-identical to what it was.
     ...(budget.economy === DEFAULT_ECONOMY ? [] : [`economy: ${yamlScalar(budget.economy)}`]),
+    // Same rule, same reason (issue #22): `on_host_tokens_exceed: block` is the
+    // ONLY thing that makes a token ceiling stop anything, and `budget raise`
+    // rewrites this file through here. A key that did not round-trip would be
+    // erased by the one command an operator reaches for when a ceiling binds —
+    // silently downgrading their enforcement to a note.
+    ...(budget.on_host_tokens_exceed === DEFAULT_ON_HOST_TOKENS_EXCEED
+      ? []
+      : [`on_host_tokens_exceed: ${yamlScalar(budget.on_host_tokens_exceed)}`]),
     "phases:",
   ];
   for (const phase of budget.phases) {
