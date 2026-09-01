@@ -102,7 +102,7 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
     "",
     ...(parts.epics.length === 0
       ? ["- (no epic branch was written)"]
-      : parts.epics.map(
+      : gateRows(parts.epics).map(
           (e) =>
             `- \`${e.branch}\` in ${e.repos.join(", ")} → \`${e.defaultBranches.join(", ")}\` ` +
             `(${mergeSummary(e)})`,
@@ -110,6 +110,39 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
     "",
   ];
   return lines.join("\n");
+}
+
+/**
+ * One Gate row per BRANCH, not per epic (issue #57).
+ *
+ * A run whose epics form a dependency chain merges every story into one
+ * integration branch, so the per-epic rows all name the same branch. Listing it
+ * three times, each with a third of the stories, tells a reader deciding what to
+ * merge that there are three things to merge. Grouping is a no-op under
+ * `per-epic`, where every epic has a branch of its own.
+ */
+function gateRows(epics: readonly EpicSummaryRow[]): readonly EpicSummaryRow[] {
+  const byBranch = new Map<string, EpicSummaryRow>();
+  for (const epic of epics) {
+    const seen = byBranch.get(epic.branch);
+    if (seen === undefined) {
+      byBranch.set(epic.branch, epic);
+      continue;
+    }
+    byBranch.set(epic.branch, {
+      ...seen,
+      id: `${seen.id}, ${epic.id}`,
+      repos: unique([...seen.repos, ...epic.repos]),
+      merged: unique([...seen.merged, ...epic.merged]),
+      emptyMerges: unique([...(seen.emptyMerges ?? []), ...(epic.emptyMerges ?? [])]),
+      defaultBranches: unique([...seen.defaultBranches, ...epic.defaultBranches]),
+    });
+  }
+  return [...byBranch.values()];
+}
+
+function unique(items: readonly string[]): readonly string[] {
+  return [...new Set(items)];
 }
 
 /**
@@ -151,6 +184,16 @@ function decisions(parts: BuildHandoffParts): readonly string[] {
     rows.push(
       `- ${epic.id} is built on \`${epic.branch}\` and left unmerged for a human ` +
         `[src: ${epic.rel}:1]`,
+    );
+  }
+  // Said out loud, once, rather than left to be inferred from three rows that
+  // happen to name the same branch (issue #57).
+  const shared = gateRows(parts.epics).filter((row) => row.id.includes(", "));
+  for (const row of shared) {
+    rows.push(
+      `- ${row.id} form a dependency chain, so they share the one integration branch ` +
+        `\`${row.branch}\` — the epics are labels here, not branches ` +
+        `[src: ${parts.epics.find((e) => e.branch === row.branch)?.rel ?? row.rel}:1]`,
     );
   }
   if (anchor !== null) {

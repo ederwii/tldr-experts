@@ -1177,11 +1177,19 @@ status: todo
 | `title` | str ≤512 | y | One line, human |
 | `repos` | repo name[] (≥1, unique) | y | Every repo its stories touch — an epic may span repos, a story may not |
 | `stories` | `S<n>[]` (≥1, unique) | y | The stories on this branch; each must have a file, and each must name this epic back |
-| `branch` | `^epic/[a-z0-9][a-z0-9-]{0,48}$` | y | Cut from the repo's `default_branch`; story worktrees branch off it |
+| `branch` | `^epic/[a-z0-9][a-z0-9-]{0,48}$` | y | Cut from the repo's `default_branch`; story worktrees branch off it. **Ignored when the run's epics form a dependency chain** — see below |
 | `status` | same enum as §2.13 | y | `[assumption]` — an epic reuses the story states rather than inventing a second vocabulary |
 
 **Validation.** As above, plus: a story belongs to exactly one epic, and the story ↔ epic reference agrees in both
 directions.
+
+**Branch model (issue #57, owner decision 2026-09-01, option (a)).** If any story's `depends_on` names a story in
+ANOTHER epic, the epics form a dependency chain and the run cuts ONE integration branch — `epic/<run-id>`, forced into
+the same `^epic/…$` shape — into which every story merges; the epics remain labels and groupings and their own
+`branch:` is not cut. Otherwise it is one branch per epic, exactly as the table says. The `plan` check states which,
+in its passing detail, so the branch model is known before Build starts. The Build executor records what it used in
+`run.yml` (`build.branch_model: per-epic | integration`, additive and optional); a run whose `run.yml` names branches
+but no model predates the key and stays `per-epic`, so it resumes on the branches it already cut.
 
 ### 2.15 `tldrx-work/<run>/03-plan/waves.yml`
 

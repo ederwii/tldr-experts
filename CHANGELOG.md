@@ -4,6 +4,43 @@
 
 ### Changed
 
+- **Dependent epics share ONE integration branch (#57, owner decision 2026-09-01, option (a)).**
+  One-branch-per-epic assumes the epics are independent. Run `260829-scoring-leaderboard` planned
+  E2 (the API) with E3 and E4 (mobile) consuming it, and a downstream story's base — cut from its
+  own epic branch, itself cut from `main` — could not see the upstream epic's merged work. It broke
+  twice, and both times the host fast-forwarded the EPIC branches by hand: cross-epic surgery done
+  with a feature built for stale STORY bases (design §F.2), which collapses branches the owner may
+  have meant to merge separately. A run whose epics form a dependency chain now cuts a single
+  integration branch and the epics become labels.
+  - **Detected at PLAN time, from what the plan already says.** A story whose `depends_on` names a
+    story in another epic IS the chain. `validatePlan` reports the cross-epic edges it read
+    (`PlanReport.epicChain`, deduplicated per epic pair), and the `plan` gate check states the branch
+    model in its passing detail — `epics form a chain (E3→E2, E4→E2) → single integration branch
+    \`epic/<run-id>\`` or `independent epics → one branch each`. The owner never discovers it
+    mid-Build, which is the half of #57 that was not about branches at all.
+  - **`epic/<run-id>`, not a new namespace.** `EPIC_BRANCH_RE`, `watch`'s feature-slug extraction,
+    `ship`, `boundary` and the `--reuse-epic` guard are all keyed on the `epic/` prefix; an
+    `integration/…` branch would have changed every one of them to buy a word. The run id IS in the
+    name — unlike an ordinary epic branch, which is deliberately unscoped because an epic is the unit
+    a team merges — because an integration branch belongs to one run by definition.
+  - **One run-scoped epic worktree**, `_epic-<run>-integration`, because git will not check one branch
+    out in two worktrees. It is picked up by the `_epic-<run>-` prefix that the §2.8 src resolver and
+    the run-close cleanup (#16) already enumerate, so the lifetime decision from that change holds.
+  - **Backward-safe by an ABSENT key.** The Build executor records what it used in `run.yml`
+    (`build.branch_model: per-epic | integration`, additive and optional). A run.yml that names
+    branches and no model predates the key — the three closed runs, and any run mid-flight — and stays
+    `per-epic`, so it resumes on the branches it already cut rather than being re-pointed at one that
+    was never cut. A model, once written, is never rewritten.
+  - **Nothing else moved.** The dirty-tree refusal, the foreign-epic refusal and `--reuse-epic`, the
+    gated HEAD, `git merge --no-ff` into the epic worktree, and the story-base fast-forward all behave
+    exactly as before; only WHICH branch they name changes. `tldrx ship` needed no change: a chained
+    run claims one branch, so it opens one PR with no `--branch`, and an unchained multi-epic run still
+    asks which.
+  - The acceptance test is the leaderboard shape, passing: S1 in E1 writes a file, S2 in E2 depends on
+    it, and S2's worktree holds that file with **no `story.base_fastforwarded` event** — the base was
+    right when the developer was dispatched, not repaired afterwards. Red before the change (`Expected:
+    true, Received: false`).
+
 - **An epic worktree now lives for the RUN's lifetime, not the Build stage's (#16, owner decision
   2026-09-01, option (a)).** The shipped half of #16 made a `file` src resolve against
   `.tldrx/worktrees/<repo>/_epic-<run>-<epic>` before the working tree — and then `BuildSession.finish()`

@@ -160,6 +160,13 @@ when a stage's `stage.yml` names it.
   branch is green.
 - Branching: `epic/<epic>` ← `story/<id>` worktrees. Story merges to epic on green; epic
   merges to main after integration tests + human gate.
+- **When the epics DEPEND on each other, the run cuts one branch, not one per epic**
+  (issue #57, owner decision 2026-09-01). A story whose `depends_on` names a story in
+  another epic makes that dependency a fact about the branch graph: cut per epic, its base
+  is the default branch and it cannot see the upstream epic's merged work. So a run whose
+  epics form a chain uses a single integration branch `epic/<run-id>`, and the epics stay
+  as labels and groupings. Independent epics are unchanged: one branch each. The Plan gate
+  says which of the two the run will use, so it is never discovered mid-Build.
 - Definition of Done per story: AC met with evidence, unit tests added and green, lint +
   typecheck green, conventions check, reviewer sub-agent sign-off, `stories/<id>.md` updated.
 - Parallelism: independent stories in the same wave run as parallel sub-agents in separate

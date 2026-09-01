@@ -131,7 +131,13 @@ export function emitRunYaml(run: RunFile): string {
     );
   }
   if (run.build !== undefined && run.build.epic_branch.length > 0) {
-    lines.push(`build: {epic_branch: ${inlineList(run.build.epic_branch)}}`);
+    // Same rule as `triage`: the optional key is emitted only when it is set, so
+    // a run.yml written before `branch_model` existed (issue #57) round-trips
+    // byte-for-byte through a save.
+    const model = run.build.branch_model === undefined
+      ? ""
+      : `, branch_model: ${yamlScalar(run.build.branch_model)}`;
+    lines.push(`build: {epic_branch: ${inlineList(run.build.epic_branch)}${model}}`);
   }
   // Same rule as `triage`: emitted only when it is there, so a run.yml written
   // before `run cancel` existed round-trips byte-for-byte through a save.

@@ -19,6 +19,7 @@ import type { ValidationIssue } from "../schemas/validation.ts";
 import { validateStoryFile } from "../schemas/story.ts";
 import { validateEpicFile } from "../schemas/epic.ts";
 import { asWavesFile, validateWaveOrder, validateWaves } from "../schemas/waves.ts";
+import { detectEpicChain, type EpicDependencyEdge } from "./branchModel.ts";
 
 export const WAVES_FILE = "waves.yml";
 export const STORIES_DIR = "stories";
@@ -46,6 +47,17 @@ export interface PlanReport {
   readonly storyCount: number;
   readonly epicCount: number;
   readonly waveCount: number;
+  /**
+   * Every cross-epic dependency the stories declare (issue #57), deduplicated per
+   * epic pair. Non-empty means the epics form a CHAIN, and the run cuts one
+   * integration branch instead of one branch per epic.
+   *
+   * Reported rather than refused: the Plan is legal either way, and which branch
+   * model follows from it is what the `plan` gate check has to SAY. Computed from
+   * the story front matter, so it is filled on every path out of this function —
+   * including the ones that give up before `waves.yml`.
+   */
+  readonly epicChain: readonly EpicDependencyEdge[];
 }
 
 /**
@@ -65,6 +77,8 @@ export function validatePlan(planDir: string, allowed: ReadonlySet<string> = new
   const storyFiles = markdownIn(join(planDir, STORIES_DIR));
   const epicFiles = markdownIn(join(planDir, EPICS_DIR));
   const dependsOn = new Map<string, readonly string[]>();
+  // story id -> its `epic:`, for the cross-epic chain (issue #57).
+  const epicOfStory = new Map<string, string>();
   const storyIds = new Set<string>();
   const epicIds = new Set<string>();
   // id-from-file-name -> why that file cannot answer to it. A reference to an id
@@ -94,7 +108,11 @@ export function validatePlan(planDir: string, allowed: ReadonlySet<string> = new
     }
     storyIds.add(story.id);
     dependsOn.set(story.id, story.depends_on);
+    epicOfStory.set(story.id, story.epic);
   }
+  // Read once, from the same story front matter the Build executor reads, so the
+  // gate check and the branch it later cuts cannot disagree (issue #57).
+  const epicChain = detectEpicChain(epicOfStory, dependsOn);
 
   if (epicFiles.length === 0) {
     add(`${EPICS_DIR}/`, [{ path: "", message: "the Plan wrote no epics — a story with no epic has no branch to merge into" }]);
@@ -152,7 +170,7 @@ export function validatePlan(planDir: string, allowed: ReadonlySet<string> = new
   const wavesPath = join(planDir, WAVES_FILE);
   if (!existsSync(wavesPath)) {
     add(WAVES_FILE, [{ path: "", message: "missing — without it nothing knows what may run in parallel" }]);
-    return report(issues, storyIds.size, epicIds.size, 0);
+    return report(issues, storyIds.size, epicIds.size, 0, epicChain);
   }
 
   let doc: unknown;
@@ -160,11 +178,11 @@ export function validatePlan(planDir: string, allowed: ReadonlySet<string> = new
     doc = parseYaml(readFileSync(wavesPath, "utf8"));
   } catch (error) {
     add(WAVES_FILE, [{ path: "", message: `is not valid YAML: ${first(error)}` }]);
-    return report(issues, storyIds.size, epicIds.size, 0);
+    return report(issues, storyIds.size, epicIds.size, 0, epicChain);
   }
   const shape = validateWaves(doc);
   add(WAVES_FILE, shape.issues);
-  if (!shape.ok) return report(issues, storyIds.size, epicIds.size, 0);
+  if (!shape.ok) return report(issues, storyIds.size, epicIds.size, 0, epicChain);
 
   const waves = asWavesFile(doc);
   const scheduled = new Set<string>();
@@ -185,7 +203,7 @@ export function validatePlan(planDir: string, allowed: ReadonlySet<string> = new
   }
   add(WAVES_FILE, validateWaveOrder(waves, dependsOn));
 
-  return report(issues, storyIds.size, epicIds.size, waves.waves.length);
+  return report(issues, storyIds.size, epicIds.size, waves.waves.length, epicChain);
 }
 
 /** One line, ready for a check `detail` or a deny message. */
@@ -218,8 +236,14 @@ export function writesPlanArtefacts(outputs: readonly string[]): boolean {
   return outputs.some((path) => path.endsWith(WAVES_FILE));
 }
 
-function report(issues: readonly PlanIssue[], storyCount: number, epicCount: number, waveCount: number): PlanReport {
-  return { ok: issues.length === 0, issues, storyCount, epicCount, waveCount };
+function report(
+  issues: readonly PlanIssue[],
+  storyCount: number,
+  epicCount: number,
+  waveCount: number,
+  epicChain: readonly EpicDependencyEdge[],
+): PlanReport {
+  return { ok: issues.length === 0, issues, storyCount, epicCount, waveCount, epicChain };
 }
 
 function markdownIn(dir: string): readonly string[] {

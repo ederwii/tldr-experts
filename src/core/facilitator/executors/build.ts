@@ -34,6 +34,10 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { isAbsolute, join, relative } from "node:path";
 import { PROJECT_FRAMEWORK_DIR, epicWorktreeName } from "../../paths.ts";
 import {
+  branchModelFor, branchModelOfKind, describeBranchModel, detectEpicChain,
+  epicBranchOf, epicWorktreeSlotOf, type BranchModel, type BranchModelKind,
+} from "../../plan/branchModel.ts";
+import {
   FALLBACK_DEFAULT_BRANCH, factsPath, loadWorkspace, type WorkspaceContext,
 } from "../../../hooks/lib/workspace.ts";
 import { DodCommandRefused, runDodCommand } from "../../../hooks/lib/story.ts";
@@ -259,7 +263,16 @@ export async function buildExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
   // paths. A run that cut `epic/x` and then fell over still cut it, and the next
   // invocation must not refuse its own branch.
   const withClaims = (outcome: ExecutorOutcome): ExecutorOutcome =>
-    session.claimedEpics.size === 0 ? outcome : { ...outcome, epicBranches: [...session.claimedEpics] };
+    session.claimedEpics.size === 0
+      ? outcome
+      : {
+          ...outcome,
+          epicBranches: [...session.claimedEpics],
+          // The model goes with the branches, in the same write (issue #57): a
+          // run.yml that named a branch without saying which model chose it is
+          // what the next invocation would have to guess at.
+          branchModel: session.branchModel.kind,
+        };
   try {
     // `--review` names the second delegable role. It rides the SAME two doors —
     // there is one handshake, and a reviewer that needed its own would be a
@@ -470,6 +483,19 @@ class BuildSession {
   private readonly fixlists = new Map<string, number>();
   /** Epic branches this run cut or adopted; `runNext` writes them to run.yml. */
   readonly claimedEpics = new Set<string>();
+  /**
+   * One branch per epic, or ONE branch for the run (issue #57).
+   *
+   * Resolved once, at construction, from three sources in this order:
+   *
+   *   1. `run.yml`'s `build.branch_model` — what this run already recorded.
+   *      A run does not get to change its mind about branches it has cut.
+   *   2. A non-empty `build.epic_branch` with NO model: a run that entered Build
+   *      before the key existed. It stays `per-epic`, whatever its plan says, so
+   *      the three closed runs and any in-flight one replay identically.
+   *   3. The plan's own cross-epic dependencies.
+   */
+  readonly branchModel: BranchModel;
   /** The single writer every state-changing step goes through (see `SerialQueue`). */
   private readonly writes = new SerialQueue();
   /** stderr lines: advice for the operator, never a reason to stop. */
@@ -494,6 +520,10 @@ class BuildSession {
   ) {
     this.lines.push(...opening);
     this.lanes = clampParallel(ctx.parallel);
+    this.branchModel = this.resolveBranchModel();
+    if (this.branchModel.kind === "integration") {
+      this.lines.push(`  · ${describeBranchModel(this.branchModel)}`);
+    }
     // A `03-plan/budget.yml` that could not be used is stderr, not a refusal: the
     // caps fall back to the uniform share and the build carries on, but nobody
     // gets to think the Plan's prices were honoured when they were not.
@@ -1542,7 +1572,11 @@ class BuildSession {
     }
     const repoDir = repoDirOf(this.workspace, planned.story.repo);
     const base = this.workspace.defaultBranches.get(planned.story.repo) ?? "main";
-    const epicBranch = epic.epic.branch;
+    // The epic's own `branch:` under `per-epic`; the run's ONE integration branch
+    // when the epics form a dependency chain (issue #57). Every other line of
+    // this method — the cut, the claim, the worktree, the merge — is unchanged:
+    // only WHICH branch it names moves.
+    const epicBranch = epicBranchOf(this.branchModel, epic.epic.branch);
     if (await ensureBranch(repoDir, epicBranch, base)) {
       this.lines.push(`  · cut \`${epicBranch}\` from \`${base}\` in ${planned.story.repo}`);
     }
@@ -2222,7 +2256,7 @@ class BuildSession {
       wave: planned.wave,
       repo: planned.story.repo,
       epic: planned.story.epic,
-      epicBranch: epic?.epic.branch ?? "",
+      epicBranch: epic === undefined ? "" : epicBranchOf(this.branchModel, epic.epic.branch),
       branch: `story/${planned.story.id}`,
       status,
       attempts: Math.max(this.reviewAttempts(planned.story.id), 1),
@@ -2246,10 +2280,15 @@ class BuildSession {
   private epicRows(): readonly EpicSummaryRow[] {
     const rows: EpicSummaryRow[] = [];
     for (const [id, epic] of this.plan.epics) {
-      const merges = this.merged.get(epic.epic.branch) ?? [];
+      const branch = epicBranchOf(this.branchModel, epic.epic.branch);
+      // Attributed to the EPIC, not to the branch. Under `per-epic` the two are
+      // the same set; under the integration model one branch carries every epic's
+      // stories, and a row that claimed all of them for each epic would be false.
+      const merges = (this.merged.get(branch) ?? [])
+        .filter((row) => this.plan.stories.get(row.id)?.story.epic === id);
       rows.push({
         id,
-        branch: epic.epic.branch,
+        branch,
         repos: epic.epic.repos,
         // A merge that moved nothing is not listed with the ones that did. The
         // Gate section is what a human reads before merging an epic by hand, and
@@ -2285,7 +2324,7 @@ class BuildSession {
     for (const planned of this.pendingStories()) {
       const epic = this.plan.epics.get(planned.story.epic);
       if (epic === undefined) continue;
-      const branch = epic.epic.branch;
+      const branch = epicBranchOf(this.branchModel, epic.epic.branch);
       const key = `${planned.story.repo}:${branch}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -2317,11 +2356,48 @@ class BuildSession {
 
   /** `run.yml`'s `build.epic_branch`, or nothing when the file will not open. */
   private claimedBranchesOnFile(): readonly string[] {
+    return this.buildOnFile().epic_branch;
+  }
+
+  /** `run.yml`'s whole `build:` block, or an empty one when the file will not open. */
+  private buildOnFile(): { epic_branch: readonly string[]; branch_model?: BranchModelKind } {
     try {
-      return RunStore.open(this.ctx.runDir).run.build?.epic_branch ?? [];
+      return RunStore.open(this.ctx.runDir).run.build ?? { epic_branch: [] };
     } catch {
-      return [];
+      return { epic_branch: [] };
     }
+  }
+
+  /**
+   * One branch per epic, or ONE for the run — issue #57, owner decision (a).
+   *
+   * The chain is read from the SAME story front matter `validatePlan` reads, so
+   * the branch the Plan gate announced is the branch this cuts. What can override
+   * it is the run's own history, and only in the safe direction: a run that has
+   * already recorded a model keeps it, and a run that cut branches before the key
+   * existed is treated as `per-epic` rather than re-pointed at a branch that was
+   * never cut.
+   */
+  private resolveBranchModel(): BranchModel {
+    const epicOf = new Map<string, string>();
+    const dependsOn = new Map<string, readonly string[]>();
+    for (const [id, planned] of this.plan.stories) {
+      epicOf.set(id, planned.story.epic);
+      dependsOn.set(id, planned.story.depends_on);
+    }
+    const chain = detectEpicChain(epicOf, dependsOn);
+    const fromPlan = branchModelFor(this.ctx.runId, chain);
+
+    const onFile = this.buildOnFile();
+    if (onFile.branch_model !== undefined) {
+      return { ...branchModelOfKind(onFile.branch_model, this.ctx.runId), chain };
+    }
+    if (onFile.epic_branch.length > 0) {
+      // A run that entered Build before `branch_model` existed. Its stories are
+      // already on branches it cut; re-deciding now would strand them.
+      return { kind: "per-epic", integrationBranch: null, chain };
+    }
+    return fromPlan;
   }
 
   /**
@@ -3087,7 +3163,10 @@ class BuildSession {
     }
     const path = join(
       this.ctx.root, PROJECT_FRAMEWORK_DIR, WORKTREES,
-      story.planned.story.repo, epicWorktreeName(this.ctx.runId, story.planned.story.epic),
+      story.planned.story.repo,
+      // Under the integration model every epic shares one branch, and git will
+      // not check one branch out in two worktrees — so they share one slot too.
+      epicWorktreeName(this.ctx.runId, epicWorktreeSlotOf(this.branchModel, story.planned.story.epic)),
     );
     if (existsSync(path)) {
       await assertWorktreeOn(path, story.epicBranch, "epic worktree");
