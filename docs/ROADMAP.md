@@ -90,9 +90,11 @@ Everything in this section is written and tested on main; none of it is tagged.
   sits in an earlier wave, so the inner loop can become a fan-out without changing anything else.
 - **Multi-model.** `spawnAgent.ts:32` is `const CLAUDE_BIN = "claude"` with no provider seam, so
   "which model" means "which Claude". A provider adapter behind that constant is the whole change.
-- **Evals.** Every test in the suite proves the HARNESS; not one measures whether a run
-  produces better software than a bare `claude -p`. Until that exists, "it has gates" is the
-  only claim on offer.
+- **Outcome evals.** `test/evals/` (v1, #26) now proves each STAGE's output contract — the
+  artifacts, the checks, the parsers, the side effects — against a scripted stand-in. What it
+  still does not measure is whether a run produces better software than a bare `claude -p`:
+  that needs a real model and a judge, and until it exists "it has gates" is the only claim on
+  offer.
 
 ## Not planned
 
