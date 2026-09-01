@@ -115,6 +115,40 @@ export function stagePath(root: string, id: string): string | null {
   return existsSync(shipped) ? shipped : null;
 }
 
+/** A stage that resolves to no `stage.md` at all — see `stageMdPath`. */
+export class StageBodyError extends Error {}
+
+/**
+ * `stage.md` for the stage whose `stage.yml` was resolved to `source`.
+ *
+ * The override wins per FILE, not per directory. Before this, `stage.md` was read
+ * by string-substituting `stage.yml` in the resolved path, so creating
+ * `.tldrx/stages/plan/stage.yml` to tune one key moved the BODY lookup into a
+ * directory that had none — and the miss was read as an empty body. Measured on
+ * the 260829-scoring-leaderboard driver session (2026-08-31): the context ledger
+ * printed `stage 1 B` where it had been 4.9 KB, and the sub-agent would have been
+ * dispatched with the inputs, the experts and the rejection note but no
+ * instructions at all. Nothing refused; it was caught by an operator reading the
+ * ledger line by line (gh #39).
+ *
+ * So: fall back to the packaged body, and when there is none anywhere, REFUSE by
+ * name. A stage body is the whole instruction set — running the stage without one
+ * spends real money to produce something plausible built on nothing, which is the
+ * one outcome worse than stopping.
+ */
+export function stageMdPath(id: string, source: string): string {
+  const beside = source.replace(/stage\.yml$/, "stage.md");
+  if (existsSync(beside)) return beside;
+  const shipped = join(STAGES_DIR, id, "stage.md");
+  if (existsSync(shipped)) return shipped;
+  const looked = beside === shipped ? beside : `${beside}, not at ${shipped}`;
+  throw new StageBodyError(
+    `stage '${id}' has no stage.md: not at ${looked}. A stage body is the sub-agent's whole `
+    + "instruction set, so this stage cannot run. Copy the packaged stages/<id>/stage.md beside "
+    + "the stage.yml, or write one there.",
+  );
+}
+
 export class PresetError extends Error {}
 
 export function loadWorkflowPreset(root: string, scope: string): WorkflowPreset {

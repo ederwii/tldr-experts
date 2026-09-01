@@ -689,7 +689,10 @@ const ENTRIES: readonly CommandHelp[] = [
     description: "What the run may still spend, and where to move a ceiling from.",
     args: [
       { name: "<phase>", meaning: "budget raise: the phase whose ceiling goes up, e.g. 04-build." },
-      { name: "<usd>", meaning: "budget raise: the new ceiling for that phase." },
+      {
+        name: "<usd>",
+        meaning: "budget raise: how much to ADD to that phase's ceiling \u2014 a delta, not a new ceiling. `raise 04-build 5` turns a $20 ceiling into $25.",
+      },
     ],
     flags: [
       runFlag(),
@@ -703,6 +706,9 @@ const ENTRIES: readonly CommandHelp[] = [
       "tldrx budget raise 04-build 25 --take-from 02-how",
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
+    notes: [
+      "`raise` ADDS. `raise 04-build 25` on a phase already ceilinged at $10 leaves it at $35, not $25 \u2014 the amount is a delta, and the run ceiling grows with it unless --take-from moves the money. `budget show` prints the exact command, already sized to the shortfall, when a stage is blocked; pasting that is the way to raise without doing the arithmetic.",
+    ],
   },
   {
     name: "cost",

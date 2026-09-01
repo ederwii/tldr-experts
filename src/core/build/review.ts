@@ -35,7 +35,26 @@ export interface Review {
    * so the executor can say what happened instead of silently downgrading it.
    */
   readonly fixlistProblems: readonly string[];
+  /**
+   * The verdict this could not read, named — or null when it read one.
+   *
+   * The fixlist sibling of `fixlistProblems`, and it exists for the same reason.
+   * Measured on `260831-hardening-d1` / S1 (2026-08-31): two verdict grammars
+   * coexist — gate evidence is `sign | sign-with-fixlist | refuse`, a story review
+   * is `approve | fixlist | changes` — and the host-facing hint named neither. The
+   * host wrote `sign`; this fail-closed it to `changes` and said NOTHING, so a
+   * clean fix-list verification round read as a second `changes`, the story went
+   * `blocked`, and it cost a `story reopen` to record the verdict that had been
+   * meant all along.
+   *
+   * Fail-closed is right and is unchanged. Silent is the part that was wrong.
+   */
+  readonly verdictProblem: string | null;
 }
+
+/** The story-review grammar. NOT the gate-evidence one — see `verdictProblem`. */
+export const VERDICT_WORDS = ["approve", "fixlist", "changes"] as const;
+const VERDICT_ENUM = VERDICT_WORDS.join("|");
 
 /**
  * The `structured_output` of a reviewer run, narrowed. Anything odd is `changes`.
@@ -55,6 +74,9 @@ export function parseReview(structured: unknown, fallback: string): Review {
       findings: [],
       fixlist: [],
       fixlistProblems: [],
+      // No envelope at all is already said in the summary; naming a verdict that
+      // was never on the wire would be a second sentence for one fault.
+      verdictProblem: null,
     };
   }
   const declared = structured.verdict;
@@ -71,16 +93,82 @@ export function parseReview(structured: unknown, fallback: string): Review {
       : verdict === "fixlist"
         ? "signed with a fix list and no comment"
         : "changes requested with no comment";
-  const findings = Array.isArray(structured.findings)
-    ? (structured.findings as unknown[]).filter((f): f is string => typeof f === "string" && f.trim() !== "")
-    : [];
+  // A DECLARED `fixlist` that fell to `changes` is already reported on
+  // `fixlistProblems`; reporting it twice would read as two different faults.
+  const verdictProblem = declared === "fixlist" ? null : unreadableVerdict(declared);
+  const findings = [
+    ...readFindings(structured.findings),
+    ...(verdictProblem === null ? [] : [verdictProblem]),
+  ];
   return {
     verdict,
     summary,
     findings,
     fixlist: verdict === "fixlist" ? (parsed?.findings ?? []) : [],
     fixlistProblems: verdict === "fixlist" ? [] : (parsed?.problems ?? []),
+    verdictProblem,
   };
+}
+
+/** The sentence for a verdict outside the enum, or null for one inside it. */
+function unreadableVerdict(declared: unknown): string | null {
+  if (typeof declared === "string" && (VERDICT_WORDS as readonly string[]).includes(declared)) return null;
+  const said = typeof declared === "string" && declared.trim() !== ""
+    ? `\`${declared.trim()}\``
+    : "(the envelope declared none)";
+  return `the reviewer's verdict ${said} is not ${VERDICT_ENUM} — recorded as \`changes\``;
+}
+
+/**
+ * Every finding the envelope carried, as text. Nothing is dropped in silence.
+ *
+ * `findings` was `filter(typeof f === "string")`, which threw away the rich ones:
+ * on `260831-hardening-d1` the attempt-1 adversarial reviewer wrote seven
+ * `{severity, file, line, claim, evidence, fix}` objects and the recorded review
+ * kept ZERO of them. The verdict survived; the evidence it rested on did not.
+ */
+function readFindings(value: unknown): readonly string[] {
+  if (value === null || value === undefined) return [];
+  const items = Array.isArray(value) ? (value as unknown[]) : [value];
+  const out: string[] = [];
+  for (const item of items) {
+    const text = renderFinding(item);
+    if (text !== null) out.push(text);
+  }
+  return out;
+}
+
+/** One finding as one line: `[severity] file:line — claim · evidence: … · fix: …`. */
+function renderFinding(value: unknown): string | null {
+  if (typeof value === "string") return value.trim() === "" ? null : value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (!isRecord(value)) return null;
+  const parts: string[] = [];
+  const severity = text(value.severity);
+  if (severity !== null) parts.push(`[${severity}]`);
+  const where = locationOf(value);
+  if (where !== null) parts.push(where);
+  const claim = text(value.claim) ?? text(value.finding) ?? text(value.text)
+    ?? text(value.message) ?? text(value.title);
+  if (claim !== null) parts.push(parts.length === 0 ? claim : `— ${claim}`);
+  const evidence = text(value.evidence);
+  if (evidence !== null) parts.push(`· evidence: ${evidence}`);
+  const fix = text(value.fix);
+  if (fix !== null) parts.push(`· fix: ${fix}`);
+  // Nothing this knows how to name: keep the object whole rather than lose it.
+  // An unreadable finding in the log beats a finding that is not in the log.
+  return parts.length === 0 ? JSON.stringify(value) : parts.join(" ");
+}
+
+function locationOf(value: Record<string, unknown>): string | null {
+  const file = text(value.file) ?? text(value.where) ?? text(value.path);
+  const line = typeof value.line === "number" ? String(value.line) : text(value.line);
+  if (file === null) return line === null ? null : `line ${line}`;
+  return line === null ? file : `${file}:${line}`;
+}
+
+function text(value: unknown): string | null {
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
 }
 
 /** What `reviewerFailed` says when the spawn layer had nothing to say. */
@@ -96,13 +184,15 @@ export const REVIEWER_FAILED = "the reviewer sub-agent failed";
  * reviewer that never answered, and it must not.
  */
 export function reviewerFailed(error: string | null | undefined): Review {
-  const text = (error ?? "").trim();
+  const said = (error ?? "").trim();
   return {
     verdict: "error",
-    summary: text === "" ? REVIEWER_FAILED : text,
+    summary: said === "" ? REVIEWER_FAILED : said,
     findings: [],
     fixlist: [],
     fixlistProblems: [],
+    // A reviewer that never answered declared no verdict to misread.
+    verdictProblem: null,
   };
 }
 

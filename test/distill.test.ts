@@ -9,7 +9,7 @@ import { parseQuestions, validateQuestions } from "../src/core/text/questions.ts
 import { validateFactsFile } from "../src/core/facts/validateFactsFile.ts";
 import { collectReadFiles } from "../src/core/distill/readList.ts";
 import { extractProseClaims } from "../src/core/distill/markdownClaims.ts";
-import { parseAidlcQuestions } from "../src/core/distill/aidlcQuestions.ts";
+import { answerText, parseAidlcQuestions, type AidlcQuestion } from "../src/core/distill/aidlcQuestions.ts";
 import { distill } from "../src/core/distill/distill.ts";
 import { EXIT_OK } from "../src/cli/exitCodes.ts";
 import { FIXTURE_AIDLC_INTENT, makeRunWorkspace, type TempRunWorkspace } from "./fixtures/tempRunWorkspace.ts";
@@ -317,5 +317,82 @@ facts:
     await tldrx(b.root, "run", "new", "one", "--from", FIXTURE_AIDLC_INTENT);
     const second = readFileSync(join(onlyRunDir(b.root), "01-what", "intent.md"), "utf8");
     expect(second).toBe(first);
+  });
+});
+
+/**
+ * gh #18 — the import stored an answer as the bare letter the AI-DLC file carried
+ * ("… — C"), which is a POINTER at a lettered option in a source file the import
+ * does not own. Two facts became unreadable after aidlc was uninstalled and the
+ * file went with it (2026-08-30/31 pilots). The interview flow already resolves a
+ * letter to the option's own words before recording (`interview/reply.ts:32-37`);
+ * the import path is brought to the same rule.
+ */
+describe("an imported answer carries its own words, not a letter (#18)", () => {
+  test("`[Answer]: C` records the option's text, not the letter", () => {
+    const q1 = distill(FIXTURE_AIDLC_INTENT, NO_FACTS).claims.find((c) => c.q === "Q1");
+    expect(q1).toBeDefined();
+    // The fixture's C: "Not sure which events exist — treat all scoring inputs as
+    // "to verify against the backend" during design."
+    expect(q1?.text).toContain("Not sure which events exist");
+    expect(q1?.text.endsWith("— C")).toBe(false);
+  });
+
+  test("no imported fact is a bare letter pointing at the source", () => {
+    const facts = distill(FIXTURE_AIDLC_INTENT, NO_FACTS).facts;
+    expect(facts.length).toBeGreaterThan(0);
+    const dangling = facts.map((f) => f.fact).filter((text) => /—\s*[A-Za-z][.):]?\s*$/.test(text));
+    expect(dangling).toEqual([]);
+  });
+
+  test("the letter is still named, so the answer is traceable to the option", () => {
+    const q2 = distill(FIXTURE_AIDLC_INTENT, NO_FACTS).claims.find((c) => c.q === "Q2");
+    // Q2's answer is A: "Yes — add scoring as new domain entities …"
+    expect(q2?.text).toContain("add scoring as new domain entities");
+  });
+});
+
+describe("resolving an AI-DLC lettered answer (#18)", () => {
+  const DOC = [
+    "## Q1. Which store?",
+    "",
+    "- A. Postgres, because it is already deployed.",
+    "- B. SQLite, because the box is one machine.",
+    "- X. Other (please specify)",
+    "",
+    "[Answer]: B",
+    "",
+    "## Q2. What next?",
+    "",
+    "- A. Ship it.",
+    "",
+    "[Answer]: Write the migration first, then ship.",
+    "",
+    "## Q3. Unlettered?",
+    "",
+    "[Answer]: D",
+    "",
+  ].join("\n");
+
+  test("a letter resolves to the option's whole line", () => {
+    const q1 = parseAidlcQuestions(DOC)[0];
+    expect(answerText(q1 as AidlcQuestion)).toBe("SQLite, because the box is one machine.");
+  });
+
+  test("free text is recorded verbatim — nothing is looked up", () => {
+    const q2 = parseAidlcQuestions(DOC)[1];
+    expect(answerText(q2 as AidlcQuestion)).toBe("Write the migration first, then ship.");
+  });
+
+  test("a letter with no option behind it stays as it was typed — nothing is invented", () => {
+    const q3 = parseAidlcQuestions(DOC)[2];
+    expect(answerText(q3 as AidlcQuestion)).toBe("D");
+  });
+
+  test("`E.g.` in a bullet is prose, not an option E", () => {
+    const doc = "## Q1. Why?\n\n- E.g. this is prose, not a lettered option.\n- A. The real option.\n\n[Answer]: E\n";
+    const q = parseAidlcQuestions(doc)[0];
+    expect(q?.options.map((o) => o.letter)).toEqual(["A"]);
+    expect(answerText(q as AidlcQuestion)).toBe("E");
   });
 });

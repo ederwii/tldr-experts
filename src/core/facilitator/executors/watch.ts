@@ -18,6 +18,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { stageMdPath } from "../../run/workflowPreset.ts";
 import { FactsStore } from "../../facts/FactsStore.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../../hooks/lib/workspace.ts";
 import { collectFeatures, PLAN_PHASE, type Feature } from "../../watch/features.ts";
@@ -255,7 +256,8 @@ function collectResults(
 async function featurePrompt(ctx: ExecutorContext, feature: Feature): Promise<string> {
   const diffs = await featureDiffs(ctx, feature);
   const facts = FactsStore.loadOrEmpty(factsPath(ctx.root)).facts;
-  const stageMd = readOrEmpty(ctx.spec.planned.source.replace(/stage\.yml$/, "stage.md"));
+  // Per-file resolution, and a refusal rather than an empty body (gh #39).
+  const stageMd = readFileSync(stageMdPath(ctx.spec.planned.id, ctx.spec.planned.source), "utf8");
   const bundles = loadExpertBundles({
     root: ctx.root,
     staged: ctx.spec.planned.experts,
@@ -369,12 +371,4 @@ export function floorOverrun(ctx: ExecutorContext, features: number): string | n
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
-}
-
-function readOrEmpty(path: string): string {
-  try {
-    return readFileSync(path, "utf8");
-  } catch {
-    return "";
-  }
 }

@@ -12,7 +12,7 @@ import { findDuplicate, type DuplicateHit } from "../facts/findDuplicate.ts";
 import type { Fact, NewFact } from "../facts/Fact.ts";
 import { areaOf, collectReadFiles, slugify } from "./readList.ts";
 import { extractProseClaims } from "./markdownClaims.ts";
-import { isAnswered, parseAidlcQuestions } from "./aidlcQuestions.ts";
+import { answerText, isAnswered, parseAidlcQuestions } from "./aidlcQuestions.ts";
 
 export const CONFLICT_THRESHOLD = 0.6;
 
@@ -25,6 +25,18 @@ export interface ImportedClaim {
   readonly file: string;
   /** The AI-DLC question id when this claim came from an answer, else null. */
   readonly q: string | null;
+  /**
+   * What the conflict check compares — the QUESTION for an answer, the claim
+   * itself for prose.
+   *
+   * Split from `text` when answers stopped being stored as a bare letter (gh #18).
+   * `findDuplicate` is Jaccard over ≥4-char tokens, so it is length-sensitive:
+   * against a recorded fact, "… backend? — B, a separate service" scored 0.78
+   * while the same answer written out in full scored ~0.22 and the contradiction
+   * went undetected. The question is what the two facts disagree ABOUT, and it is
+   * what `hooks/no-reask.ts:54` already matches on.
+   */
+  readonly match: string;
 }
 
 export interface Conflict {
@@ -89,11 +101,14 @@ export function distill(intentDir: string, ctx: DistillContext): DistillResult {
           continue;
         }
         const claim: ImportedClaim = {
-          text: `${question.title} — ${question.answer}`,
+          // `answerText`, not `question.answer`: a bare option letter is a pointer
+          // into a file this import does not own, and the fact outlives it (gh #18).
+          text: `${question.title} — ${answerText(question)}`,
           area: areaOf(file.rel),
           src: `aidlc:${file.rel}#${question.id}`,
           file: file.rel,
           q: question.id,
+          match: question.title,
         };
         if (!keep(claim)) continue;
         claims.push(claim);
@@ -115,6 +130,7 @@ export function distill(intentDir: string, ctx: DistillContext): DistillResult {
           src: `aidlc:${file.rel}:${prose.line}`,
           file: file.rel,
           q: null,
+          match: prose.text,
         };
         if (!keep(claim)) continue;
         claims.push(claim);
@@ -142,7 +158,7 @@ export function distill(intentDir: string, ctx: DistillContext): DistillResult {
  * Identical text is agreement, not contradiction — it is imported and left alone.
  */
 export function conflictOf(claim: ImportedClaim, facts: readonly Fact[]): DuplicateHit | null {
-  const hit = findDuplicate(claim.text, claim.area, facts, CONFLICT_THRESHOLD);
+  const hit = findDuplicate(claim.match, claim.area, facts, CONFLICT_THRESHOLD);
   if (hit === null) return null;
   return hit.fact.fact.trim() === claim.text.trim() ? null : hit;
 }

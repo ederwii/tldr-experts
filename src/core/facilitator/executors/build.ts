@@ -755,8 +755,9 @@ class BuildSession {
         `prepared the REVIEW of ${planned.story.id} · ${planned.story.title} — ${dir}/prompt.md `
           + `(read-only, attempt ${String(story.attempt)} of ${String(MAX_ATTEMPTS)})`,
         `dispatch ONE read-only sub-agent with cwd ${relative(this.ctx.root, story.worktree)}`,
-        `then write {verdict, summary, findings} to ${dir}/result.json and run `
-          + "`tldrx next --commit --review`",
+        `then write {verdict, summary, findings} to ${dir}/result.json `
+          + "— verdict is one of approve | fixlist | changes, NOT the `sign`/`refuse` gate "
+          + "vocabulary — and run `tldrx next --commit --review`",
       ],
       stderr: [...this.advisories],
       error: null,
@@ -1305,6 +1306,11 @@ class BuildSession {
    * `fixlistProblems` and are said out loud rather than swallowed.
    */
   private narrowFixlist(storyId: string, review: Review): Review {
+    // Printed HERE because both doors — a spawned reviewer and a host's
+    // `--commit --review` — reach the record through this one call (gh #36).
+    if (review.verdictProblem !== null) {
+      this.lines.push(`  · ${storyId}: ${review.verdictProblem}`);
+    }
     for (const problem of review.fixlistProblems) {
       this.lines.push(`  · ${storyId}: the reviewer's fix list was REFUSED — ${problem}`);
     }
@@ -1381,7 +1387,9 @@ class BuildSession {
       + "its review is the host's",
       `prepared the REVIEW of ${story.planned.story.id} — ${dir}/prompt.md (read-only, nothing spawned)`,
       `dispatch ONE read-only sub-agent with cwd ${relative(this.ctx.root, story.worktree)}`,
-      `then write {verdict, summary, findings} to ${dir}/result.json and run \`tldrx next --commit --review\``,
+      `then write {verdict, summary, findings} to ${dir}/result.json `
+      + "— verdict is one of approve | fixlist | changes, NOT the `sign`/`refuse` gate "
+      + "vocabulary — and run `tldrx next --commit --review`",
     );
   }
 
@@ -1412,7 +1420,7 @@ class BuildSession {
     await this.settle(story, before, {
       dod: [], commit: null, merged: false, carried: null,
       verdict: "n-a",
-      review: { verdict: "n-a", summary: "", findings: [], fixlist: [], fixlistProblems: [] },
+      review: { verdict: "n-a", summary: "", findings: [], fixlist: [], fixlistProblems: [], verdictProblem: null },
       developerError: error,
       keepWorktree: true,
       cost,
@@ -2004,7 +2012,7 @@ class BuildSession {
       carried: null,
       conflicts: extra.conflicts ?? [],
       verdict: "n-a",
-      review: { verdict: "n-a", summary: "", findings: [], fixlist: [], fixlistProblems: [] },
+      review: { verdict: "n-a", summary: "", findings: [], fixlist: [], fixlistProblems: [], verdictProblem: null },
       cost,
       reason,
     });
@@ -3025,6 +3033,7 @@ class BuildSession {
         findings: outcome.reviewFindings,
         fixlist: [],
         fixlistProblems: [],
+        verdictProblem: null,
       });
     }
     const path = join(this.ctx.runDir, BUILD_PHASE, LOG_DIR, `${storyId}.md`);

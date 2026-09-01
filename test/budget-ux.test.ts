@@ -10,6 +10,7 @@ import { describeRaise, raiseBudget, BudgetRaiseError } from "../src/core/budget
 import { renderAttempts, stageAttempts } from "../src/core/run/attempts.ts";
 import { asRunFile, type RunFile } from "../src/core/run/RunFile.ts";
 import { makeRunWorkspace, type TempRunWorkspace } from "./fixtures/tempRunWorkspace.ts";
+import { helpFor } from "../src/cli/helpText.ts";
 
 const BIN = join(FRAMEWORK_ROOT, "bin", "tldrx.ts");
 
@@ -282,5 +283,34 @@ describe("the CLI", () => {
     const status = await tldrx(ws.root, "run", "status");
     expect(status.code).toBe(EXIT_OK);
     expect(status.stdout).toContain("attempts: 2 · $1.39 + $1.21");
+  });
+});
+
+/**
+ * gh #32 — the help said `<usd>` was "the new ceiling"; `raiseBudget` adds it to
+ * the one already there (`raiseBudget.ts:83`, `ceiling_usd + amount`). An operator
+ * reading the help and typing the number they wanted as a ceiling over-raised:
+ * measured live on the scavtopia leaderboard run, a "$5.40 new ceiling" command
+ * would have set $8.00. The arithmetic is what live runs depend on, so the WORDS
+ * move, not the code.
+ */
+describe("budget raise: <usd> is a delta, and the help says so (#32)", () => {
+  test("the <usd> arg is not described as the new ceiling", () => {
+    const usd = helpFor("budget")?.args.find((arg) => arg.name === "<usd>");
+    expect(usd).toBeDefined();
+    expect(usd?.meaning).not.toContain("the new ceiling");
+  });
+
+  test("the <usd> arg names the addition, and says what it is NOT", () => {
+    const meaning = helpFor("budget")?.args.find((arg) => arg.name === "<usd>")?.meaning ?? "";
+    expect(meaning.toLowerCase()).toContain("add");
+    expect(meaning.toLowerCase()).toContain("not a new ceiling");
+  });
+
+  test("the words match the arithmetic: the issue's own 2.60 + 5.40 = 8.00", () => {
+    const before = { ...BUDGET, phases: BUDGET.phases.map((p) => ({ ...p, ceiling_usd: 2.6, spent_usd: 0 })) };
+    const outcome = raiseBudget(before, { phaseId: "02-how", amountUsd: 5.4 });
+    expect(outcome.phaseCeilingBefore).toBe(2.6);
+    expect(outcome.phaseCeilingAfter).toBe(8);
   });
 });

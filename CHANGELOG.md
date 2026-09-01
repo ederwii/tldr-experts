@@ -123,6 +123,70 @@
     red on the base too halts the build with the same workspace-config error rather than blocking the story and
     consuming its attempt. A command the gate declined to run is recorded `unmeasured` and excuses nothing.
 
+- **The review handshake no longer swallows an unrecognized verdict, nor drops structured
+  findings.** Measured on `260831-hardening-d1` / S1 (2026-08-31). Two verdict grammars coexist
+  — gate evidence is `sign | sign-with-fixlist | refuse`, a story review is
+  `approve | fixlist | changes` — and the host-facing hint named neither, saying only "write
+  {verdict, summary, findings}". The host wrote `sign`. `parseReview` fail-closed it to `changes`,
+  correctly and **silently**: a clean fix-list verification round read as a second `changes`, the
+  story went `blocked`, and a `story reopen` cycle was the only way to record the verdict that
+  had been meant all along. Separately, `findings` was filtered with `typeof f === "string"`, so
+  the attempt-1 adversarial reviewer's seven `{severity, file, line, claim, evidence, fix}`
+  objects were dropped whole — the verdict survived, the evidence it rested on did not.
+  - **The contract is now stated where the host reads it.** Both `--commit --review` hints name
+    the enum: `verdict is one of approve | fixlist | changes, NOT the `sign`/`refuse` gate
+    vocabulary`.
+  - **The downgrade is announced.** Fail-closed is unchanged — an unreadable verdict is still
+    `changes`, never `approve` — but a verdict outside the enum now comes back on
+    `Review.verdictProblem` ("the reviewer's verdict `sign` is not approve|fixlist|changes —
+    recorded as `changes`"), is printed by the executor on the one path both doors pass through,
+    and rides in `findings` so the review log and the next attempt's `## Previous attempt` both
+    carry it. A DECLARED `fixlist` that fell short is untouched: `fixlistProblems` already says
+    that one out loud, and two sentences for one downgrade would read as two faults.
+  - **Structured findings are rendered, never dropped.** An object becomes
+    `[severity] file:line — claim · evidence: … · fix: …`; a shape nothing recognizes is kept as
+    JSON; a `findings` that is not an array is kept as one finding. An unreadable finding in the
+    log beats a finding that is not in the log.
+
+- **A project stage override that supplies only `stage.yml` no longer swaps the stage body for an
+  empty one.** Reported from the 260829-scoring-leaderboard driver session (2026-08-31) and
+  reproduced here: `stage.md` was resolved by string-substituting `stage.yml` in the path the
+  preset had already picked, so creating `.tldrx/stages/plan/stage.yml` to tune one key moved the
+  BODY lookup into a directory that had none — and the miss was read as an empty string. The
+  context ledger printed `stage 1 B` where it had been 4.9 KB; the sub-agent would have been
+  dispatched with the inputs, the experts and the rejection note and **zero** stage instructions,
+  and nothing refused. `stageMdPath` now resolves per FILE, not per directory: the override's own
+  `stage.md` wins, else the packaged one is inherited, and a stage with no body anywhere is a
+  named `StageBodyError` rather than a silent empty prompt. Both readers — `next --prepare` and
+  the Watch executor — go through it.
+
+- **`approve --as-agent`'s refusal now names the route that works on the run in front of you.**
+  It pointed only at `--gates <stage>:agent`, which is chosen at `run new` and frozen there — so
+  the one suggestion meant recreating a run already in flight. It now leads with the delegated
+  approve: read the agent's evidence note yourself and sign as you, `tldrx approve --note
+  "delegated: <agent> reviewed this, evidence at <path>"`, which keeps the gate's policy and puts
+  the provenance on the record. Found across the 2026-08-30/31 unattended pilots.
+
+- **`budget raise <phase> <usd>` help said `<usd>` was "the new ceiling"; the source adds it.**
+  `raiseBudget` computes `ceiling_usd + amount` (`raiseBudget.ts:83`), so an operator following
+  the help over-raised — measured live on the scavtopia leaderboard run, a "$5.40 new ceiling"
+  command would have set $8.00. The arithmetic is what live runs depend on and is untouched; the
+  words move. `<usd>` is now "how much to ADD to that phase's ceiling — a delta, not a new
+  ceiling", with a note spelling out the $10 + $25 = $35 case and pointing at `budget show`, which
+  already prints the correctly-sized command.
+
+- **`tldrx run new --from` stores an imported answer's own words, not a letter pointing at a file
+  it does not own.** AI-DLC records a chosen option as `[Answer]: C`, and the import stored
+  "<question> — C" verbatim; two facts became unreadable once aidlc was uninstalled and the source
+  file went with it (2026-08-30/31 pilots). The interview flow has always resolved a letter to the
+  option's text before recording (`interview/reply.ts:32-37`), and the import now does the same:
+  `parseAidlcQuestions` reads the lettered options (uppercase, and a space required after the
+  punctuation, so `- E.g. …` stays prose) and `answerText` resolves the answer against them; a
+  letter with no option behind it is stored as typed rather than invented. Conflict detection is
+  unchanged by the longer text: it keys on the QUESTION, as `hooks/no-reask.ts:54` already does,
+  because `findDuplicate` is Jaccard over tokens and therefore length-sensitive — the same
+  contradiction scored 0.78 against a bare letter and ~0.22 against the answer written out.
+
 - **A second run's stories no longer merge into ANOTHER run's epic branch.** Measured live
   2026-08-31 on two concurrent runs: `260831-hardening-d1` reported S1, S2 and S6 all
   "merged into `epic/hardening-d1` (N commits carried)", and `epic/hardening-d1` was still

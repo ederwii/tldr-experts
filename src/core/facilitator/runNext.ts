@@ -25,7 +25,7 @@ import { describeAgentFallthroughs, evaluateAgentGate } from "../run/agentGate.t
 import { cardForTriggers, type Money } from "../run/decisionCards.ts";
 import { renderDecisionCard } from "../ui/decisionCard.ts";
 import { gatePolicyFor } from "../run/gatePolicy.ts";
-import { PresetError, type PlannedStage } from "../run/workflowPreset.ts";
+import { PresetError, stageMdPath, type PlannedStage } from "../run/workflowPreset.ts";
 import { economyFor, isHostTokens } from "../budget/RunBudget.ts";
 import { remaining } from "../budget/wouldExceed.ts";
 import {
@@ -1591,10 +1591,14 @@ function priorOutputs(options: PreviousAttemptOptions): readonly string[] {
   return [...out, ...blocks];
 }
 
-/** `stage.md` sits beside the `stage.yml` the preset resolved. */
+/**
+ * The stage body: the override's own `stage.md`, else the packaged one.
+ *
+ * NOT `readOrEmpty`. A missing body used to be an empty string, and an empty
+ * string dispatches (gh #39) — `stageMdPath` refuses instead, by name.
+ */
 function readStageMd(planned: PlannedStage): string {
-  const path = planned.source.replace(/stage\.yml$/, "stage.md");
-  return readOrEmpty(path);
+  return readFileSync(stageMdPath(planned.id, planned.source), "utf8");
 }
 
 function readOrEmpty(path: string): string {
