@@ -176,7 +176,8 @@ paid spawns — when the host wanted one turn. On such a run:
 
 - `tldrx next` with no `--prepare`/`--commit` exits **`4`** and names the exact command the
   stage is waiting for. Nothing is billed and nothing is written. `--dry-run` is refused with
-  it, because `--dry-run` is headless: it spawns for real and only reverts the FILES.
+  it, because it is headless too — it spawns nothing (issue #17), but it describes a dispatch
+  this run never makes.
 - `tldrx run auto` is refused at exit **`1`** before the event log is even opened.
 - Every stage executor exposes prepare/commit only, and `spawnAgent` itself throws if any path
   reaches it — three layers, because "nothing spawns" is a promise about money.
@@ -223,7 +224,7 @@ tldrx next [<run>] [--run <id>] [--dry-run] [--prepare|--commit] [--review] [--f
 
 | Flag | Meaning |
 |---|---|
-| `--dry-run` | Run the stage and REVERT its non-handoff outputs afterwards. It is headless: it spawns a real sub-agent and the turn is billed (measured 2026-08-30 — one `agent.spawned`, one `agent.result`, the cost on the ledger). Use `--prepare` for the thing that spawns nothing |
+| `--dry-run` | Show what WOULD be dispatched — the expert bundle, the context ledger, the prompt size, the declared outputs and the exact `claude -p` argv — then stop. **Spawns nothing, writes nothing, spends nothing.** Until issue #17 it ran the stage for real and reverted the non-handoff files afterwards, which cost $0.42 on the 2026-08-30 pilot |
 | `--prepare` | Write the prompt bundle and stop, spawning nothing |
 | `--commit` | Record the result of a `--prepare` cycle run by hand. Spawns nothing |
 | `--review` | With `--prepare`/`--commit`, addresses the story's **reviewer** half instead of its developer half: the bundle is one directory down, at `.agent/<stage>/<story>/review/`. Spawns nothing ([10 — Unattended mode](10-unattended-mode.md)) |

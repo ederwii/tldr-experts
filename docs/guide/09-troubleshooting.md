@@ -171,6 +171,11 @@ and run the same command again. `--prepare` is refused the same way — a bundle
 host whose Docker is down is the same wasted attempt as a spawn into one. `--commit` never
 re-checks: it settles a turn that already happened.
 
+**Exit 2, "precondition `<id>`: `<command>` … timed out".** Preconditions run on their own
+clock — 60 s by default, never the stage's `timeout_s` — so a hung command costs a minute
+rather than the stage's whole timeout. Fix what it is waiting for, or give that one precondition
+a `timeout_s: <n>` of its own.
+
 **A `preconditions:` command is refused when the stage LOADS.** Same rule as `dod` below: only
 a command **byte-equal** to one in `.tldrx/workspace.yml` runs, argv-split with no shell. The
 refusal is at load rather than at run time, so a stage naming an undeclared command cannot open

@@ -236,7 +236,7 @@ for files whose citations §2.6 would refuse to count.
 | `max_reads` | int ≥0 | n (120 · build 200 · watch 60) | How many `Read`/`Glob`/`Grep` calls the sub-agent may complete before it is stopped (§5, "The read cap"). `--max-reads <n>` overrides it for one invocation |
 | `effort` | `low\|medium\|high\|xhigh\|max` | n (unset) | Passed to the sub-agent as `--effort`. **Unset ⇒ the flag is not passed at all** and the CLI uses its own default |
 | `budget_usd` | number >0 | y | Stage ceiling and the sub-agent's `--max-budget-usd` share |
-| `timeout_s` / `dry_run_allowed` | int >0 / bool | n (900 / `true`) | Wall clock for sub-agent and `cmd` checks `[assumption]`; `--dry-run` writes the handoff only |
+| `timeout_s` / `dry_run_allowed` | int >0 / bool | n (900 / `true`) | Wall clock for sub-agent and `cmd` checks `[assumption]`; `dry_run_allowed: false` refuses `--dry-run` on this stage |
 | `inputs.required` / `.optional` | path[] | y / n | **The only files the sub-agent gets**; `{repo}` expands per repo |
 | `inputs.seed` | bool | n (`false`) | Also give this stage **the run's seed documents**, whatever `run new --seed` recorded for it in `run.yml` (§6.1) `[assumption]` |
 | `outputs[].path` / `.sections` | rel path / str[] | y | File written; H2 headings that must exist and be non-empty |
@@ -244,7 +244,7 @@ for files whose citations §2.6 would refuse to count.
 | `gate.type` / `.approvers` | `approve\|checks\|auto` / int ≥1 | y / n (1) | Human stop / checks only / no stop |
 | `checks[].id` / `.on` | `claim-sources\|schema\|cmd\|dod` / `pre-write\|post-write` | y | Built-in check id and when it runs |
 | `checks[].repo` / `.command` / `.expect_exit` | slug / str / int | y for `cmd` | Command must equal a `workspace.yml` command verbatim |
-| `preconditions[].id` / `.repo` / `.command` / `.expect_exit` | str / str / str / int | the LIST is n (≤10); within an entry `id` `repo` `command` are **required** and `expect_exit` is optional, **default `0`** | An OPERATIONAL fact that must hold **before** the stage is dispatched (§5). Same verbatim-allowlist rule as a `cmd` check; **refused at load** if the command is not one `workspace.yml` declares. `id` and `repo` are validated as strings, not as slugs |
+| `preconditions[].id` / `.repo` / `.command` / `.expect_exit` / `.timeout_s` | str / str / str / int / int >0 | the LIST is n (≤10); within an entry `id` `repo` `command` are **required**, `expect_exit` is optional (**default `0`**) and `timeout_s` is optional (**default 60**, NOT the stage's `timeout_s`) | An OPERATIONAL fact that must hold **before** the stage is dispatched (§5). Same verbatim-allowlist rule as a `cmd` check; **refused at load** if the command is not one `workspace.yml` declares, or if `timeout_s` is not a number >0. `id` and `repo` are validated as strings, not as slugs |
 
 **Validation.** `id` = folder name; `budget_usd` ≤ the phase ceiling; `cmd` **and `preconditions`** commands must match
 `workspace.yml` (no arbitrary shell from a stage file) — one comparison, one function, shared with a story's
@@ -265,6 +265,12 @@ it never run. They fire on `--prepare` no less than headless (a bundle written f
 same wasted attempt) and never on `--commit`, which settles a turn that already happened. Each run appends one event —
 `check.passed` / `check.failed` with `kind: precondition`, carrying the command, its exit code and its duration — and
 prints one operator line: `· precondition: docker compose ps → exit 0 (1.2s)`. A stage declaring none emits neither.
+
+**Its own clock (issue #20).** A precondition is killed after `timeout_s` seconds — its own if it declares one,
+otherwise **60**. It never inherits the stage's `timeout_s`, which ships at 900 and reaches 1800 on Build: a single hung
+`docker info` could then hold a run for half an hour, which is the exact waste this feature exists to prevent, moved
+from the attempt to the guard in front of it. A timeout is a red precondition like any other — exit `2`, nothing spent —
+and its message names the precondition, its own timeout, and the knob that changes it.
 
 The allowlist half is enforced **at load**: a stage whose precondition names a command `.tldrx/workspace.yml` does not
 declare never becomes a runnable stage, so `tldrx run new` over it refuses too. `[assumption]` — preconditions are per
@@ -306,7 +312,7 @@ satisfied by ≥1 match and its `sections:` bind EVERY match, and zero matches f
 file matches it on disk"* — never as "does not exist", which would name a file nobody declared; **as an input**, a
 pattern counts as present when ≥1 file matches (the §5 required-input gap is reported as the pattern, since the
 declaration is what went unanswered) and the prompt is handed the concrete files, not the shape; and `--dry-run`
-reverts every file a pattern matched. `{repo}` is NOT a pattern — it expands off `run.repos` before anything reads the
+names the declared pattern, since on a dry run no file exists yet to resolve it against. `{repo}` is NOT a pattern — it expands off `run.repos` before anything reads the
 disk (§2.3) — but the two compose: `{repo}` expands first and each result is then matched. Measured 2026-08-30: the
 first `feature` run to reach Plan wrote one epic and seven stories and was failed by a literal `existsSync` on
 `03-plan/stories/<id>.md`.
@@ -1004,7 +1010,7 @@ single scalar with no unit on it and had no way to say *"this number is not doll
 | `--max-budget-usd` on a spawn | the cap, as today | **never derived from it** |
 | `tldrx next` headless | spawns | **refuses, exit 2, before spending** (§5) |
 | `tldrx next --prepare` / `--commit` (incl. `--review`) | runs | runs — this is where a host-billed turn belongs |
-| budget-gate hook | denies on `spent + estimate > ceiling` | never denies; says so on stderr |
+| budget-gate hook | denies on `spent + estimate > ceiling` | never denies; says so on stderr, **with the token spend** |
 | auto-gate condition 3 | as today | `n/a (host-tokens economy)`, recorded in the note |
 | `run.yml` `spent_usd` | Σ metered costs | stays 0 — an in-session turn reports no cost to roll up |
 | `tldrx run estimate` | priced in USD | priced in TOKENS, labelled, never converted |
@@ -1373,7 +1379,7 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx seed apply <split.yml> [--dry-run]` | `split.yml`, `inventory.json` beside it, `workflows/*.yml` | one `tldrx-work/<run>/` per proposed run (via `run new`'s own path) each with a `triage:` block, and `split.yml` rewritten to `status: applied`. Questions with no `answer:` are listed on **stderr** as a warning — never a refusal | 0,1,3 |
 | `tldrx run attend <host\|--none> [<run>]` | `run.yml` | `run.yml`'s `attended_by` (§2.2), `events.jsonl` (`run.attended`, carrying the new value and the old). Nothing else: no agent, no cost, no stage moved, no branch touched. `--none` REMOVES the key rather than blanking it — `null` is not a legal value. A direction is required and is never guessed (exit 1); setting what is already set is a silent no-op; a `done` or `cancelled` run is refused (exit 2) | 0,1,2,3 |
 | `tldrx run status [<run>]` | `run.yml`, `events.jsonl` | nothing (stdout) | 0,3 |
-| `tldrx next [<run>] [--dry-run] [--prepare\|--commit] [--review] [--fixlist <path>] [--parallel <n>] [--prompt-max-bytes <n>] [--max-reads <n>] [--commit --cost-usd <n>] [--tokens <n>]` | `run.yml`, `stage.yml`, `stage.md`, `expert.md`, declared inputs, `graphify-out/<repo>/graph.json` | stage outputs, `run.yml`, `events.jsonl`. `--cost-usd` is the in-session turn's DECLARED cost (§2.2); with none the task is `cost_usd: null, metered: false`. Both flags are `--commit`-only — headless reconciles a real `total_cost_usd` and a flag must not overwrite a measurement. On a run marked `attended_by: host` (§2.2) the headless mode — `--dry-run` included, which spawns for real and only reverts the files — is refused with **exit 4** before the budget gate, before an input is read and before a prompt is assembled; the message names the exact half of the handshake the stage is waiting for | 0,2,3,4,5 |
+| `tldrx next [<run>] [--dry-run] [--prepare\|--commit] [--review] [--fixlist <path>] [--parallel <n>] [--prompt-max-bytes <n>] [--max-reads <n>] [--commit --cost-usd <n>] [--tokens <n>]` | `run.yml`, `stage.yml`, `stage.md`, `expert.md`, declared inputs, `graphify-out/<repo>/graph.json` | stage outputs, `run.yml`, `events.jsonl`. `--cost-usd` is the in-session turn's DECLARED cost (§2.2); with none the task is `cost_usd: null, metered: false`. Both flags are `--commit`-only — headless reconciles a real `total_cost_usd` and a flag must not overwrite a measurement. On a run marked `attended_by: host` (§2.2) the headless mode — `--dry-run` included, which spawns nothing (issue #17) but describes a dispatch this run never makes — is refused with **exit 4** before the budget gate, before an input is read and before a prompt is assembled; the message names the exact half of the handshake the stage is waiting for | 0,2,3,4,5 |
 | `tldrx cost [<run>] [--run <id>] [--all] [--json]` | every run's `events.jsonl` (+ `run.yml` for the title) | nothing (stdout) | 0,1,3 |
 | `tldrx run estimate [<run>] [--json]` | everything `next --prepare` reads, plus every run's `events.jsonl` for cache-write / cache-read / output history | nothing (stdout) | 0,1,3 |
 | `tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <l>] [--parallel <n>] [--gate-agent] [--yolo]` | everything `next` reads, once per stage | everything `next` writes. Refused with **exit 1** on a run marked `attended_by: host`, before the event log is opened so nothing is written: this loop's whole job is calling `next` headless, and on such a run that is a refusal. `--gate-agent` is RENDERING ONLY (§5, "Decision cards"): when the loop stops for a person at exit 4 it prints a decision card in place of the ordinary stop block, and it never upgrades a stage's frozen `gates_policy` | 0,1,2,3,4,5 |
@@ -1588,6 +1594,21 @@ under review; under `economy: host-tokens` the developer turns are $0 and the re
 `stories_total`. The refusal prints the sum term by term — `remaining work: S4 dev $1.50 + reviewer $1.00 = $2.50` — and
 `tldrx budget show`'s `est.` column is computed by the same function, so the two cannot disagree.
 
+**Both economies, and who is driving (issue #22).** The hook reads its run through the tolerant reader
+(`hooks/lib/runFile.ts`), and that reader skipped `tasks[]` and `attended_by:` entirely — so a run whose turns a host
+session paid for reported `$0.00` metered and nothing else, and neither the hook nor the status line could tell "nobody
+spent anything" from "I did not look". The view now carries `attended_by`, and each task's `cost_usd` / `metered` /
+`tokens`, from which `runSpend` derives the metered dollars, the declared host tokens and the count of turns nobody
+costed.
+
+What that changes is what the gate SAYS, never what it decides. A dollar ceiling still governs dollars only, the two
+currencies are still never converted, and a plain metered run's refusal is byte-identical to what it always was. When
+there IS a second currency or an uncosted turn, one line is appended — *"spend so far: $0.00 metered + 12000 host tokens
++ 1 unmetered turn (attended_by: host …). The dollar figure is METERED spend only"* — and `budget.blocked` records
+`economy`, `attended_by`, `metered_usd`, `host_tokens` and `unmetered_tasks` beside the dollar figures. Whether an
+attended run should be gated differently, or a host-token ceiling enforced at all, is a POLICY question and is
+deliberately not answered here.
+
 The budget-gate message names the **command** rather than the field it edits. Measured, 2026-08-29 pilot: told to
 "raise phases[02-how].ceiling_usd", the operator hand-edited it to a number that did not cover the estimate, and the
 retry was refused a second time. `tldrx budget raise` computes the shortfall and rounds it **up** to the cent.
@@ -1621,7 +1642,9 @@ next(run, dry_run):
   if r.attended_by == host and mode == headless: exit 4   # §2.2; FIRST, before every line below
   if b.economy(st.phase) == host-tokens and mode == headless: exit 2   # §2.11: that ceiling is not dollars
   for p in sy.preconditions:                       # §2.3; skipped entirely on --commit
-     res = sh(argv(p.command), cwd=repo(p.repo))   # allowlisted verbatim, never a shell
+     res = sh(argv(p.command), cwd=repo(p.repo), timeout=p.timeout_s or 60)
+                                                   # allowlisted verbatim, never a shell;
+                                                   # its OWN clock, never sy.timeout_s (issue #20)
      append(check.passed|check.failed, kind=precondition)
      if res.exit != p.expect_exit: exit 2          # REFUSED: nothing written, nothing spawned, st.status unchanged
   if b.economy(st.phase) == host-tokens: append(budget.warned once); skip the money gate
@@ -1631,6 +1654,8 @@ next(run, dry_run):
   prompt = render(stage.md, {run, repos, inputs, facts: grep(facts.yml, sy.area/r.repos), conventions,
            budget_usd}) + concat(expert_block(e) for e in select_experts(sy, r))
            + dispatch_notes(.agent/<st.id>/dispatch-notes.md, +/<story>/ on build)   # §5 prompt order
+  if dry_run: print(bundle, prompt bytes, declared outputs, the claude argv); exit 0
+                                                   # SPAWNS NOTHING, WRITES NOTHING (issue #17)
   st.status = running; write(run.yml); append(stage.started)
   for task in tasks_of(sy):                        # 1 per output group; parallel iff independent
      append(agent.spawned)
@@ -1641,7 +1666,6 @@ next(run, dry_run):
   for out in sy.outputs: if !exists(out.path) or !has_sections(out): goto FAIL  # re-read from disk;
                                                                                 # a <token> path matches ≥1 file (§2.3)
   for c in sy.checks: run(c); append(check.passed|check.failed); if failed: goto FAIL
-  if dry_run: revert non-handoff outputs; append(stage.skipped); exit 0
   st.cost_usd = Σ tasks; roll_up(b); st.status = done
   if sy.gate.type == approve: st.status = awaiting_gate; append(gate.requested); write; exit 4
   advance_cursor(); write(run.yml); append(stage.done); exit 0
@@ -2109,8 +2133,8 @@ cut (exit `2`, the stage stays `ready`, the message names the files and the fix)
 under `root_is_repo: true` the framework's own `tldrx-work/` and `.tldrx/` live inside that repo and this very command
 rewrites them (`run.yml`, `events.jsonl`, `.lock`, the phase folder it just wrote), so the check would refuse itself and
 would make a user's uncommitted answers a precondition of Build; a story commit excludes those two paths by pathspec for
-the same reason, and the multi-repo shape, whose state is a sibling of the repos, is untouched. `--dry-run` is refused outright, since
-§5's "revert non-handoff outputs" cannot honestly undo a branch. Worktrees are removed when a story reaches `done` or
+the same reason, and the multi-repo shape, whose state is a sibling of the repos, is untouched. `--dry-run` is refused outright (`dry_run_allowed: false`), since a
+stage that cuts branches and fans out per-story sub-agents has no ONE dispatch to describe. Worktrees are removed when a story reaches `done` or
 `blocked` — never on `review`, whose second attempt continues in the same tree — unless `--keep-worktrees`.
 
 **The implicit plan — a scope that SKIPS Plan can still Build (2026-08-29).** When the run's workflow names `plan` in

@@ -18,7 +18,10 @@ import { join } from "node:path";
 import { runHook, deny, allow } from "./lib/decide.ts";
 import { readPayload, toolInput } from "./lib/payload.ts";
 import { findWorkspaceRoot, locateWork, stageYamlPath } from "./lib/workspace.ts";
-import { loadRunView, newestActiveRun, cursorStage, type RunView } from "./lib/runFile.ts";
+import {
+  loadRunView, newestActiveRun, cursorStage, renderRunEconomies, runSpend,
+  type RunView,
+} from "./lib/runFile.ts";
 import { budgetGateDeny } from "./lib/messages.ts";
 import { currentActor, nowRfc3339 } from "./lib/actor.ts";
 import { loadRunBudget } from "../core/budget/loadBudget.ts";
@@ -123,6 +126,13 @@ await runHook("budget-gate", async () => {
   const estimate = estimateFor(command, work === null ? null : work.usd);
   if (estimate <= 0) return; // nothing declared to spend; nothing to refuse
 
+  // Both economies, and who is driving, said out loud before any decision
+  // (issue #22). This changes no verdict — it is the data a verdict is read
+  // against, and it used to be invisible: `tasks[]` was never parsed, so a run
+  // whose turns a host session paid for reported `$0.00` and nothing else.
+  const economies = renderRunEconomies(view);
+  const spend = runSpend(view);
+
   // A ceiling that is not in dollars cannot deny a dollar spend (design §E.2).
   // The hook says so on stderr and allows: the refusal that matters for a
   // `host-tokens` phase is `tldrx next`'s own, which stops the spawn outright
@@ -130,7 +140,8 @@ await runHook("budget-gate", async () => {
   if (isHostTokens(budget, view.cursor.phase)) {
     process.stderr.write(
       `tldrx hook budget-gate: ${view.cursor.phase} is priced in \`host-tokens\` — `
-      + "no dollar ceiling to enforce here; `tldrx next` refuses a headless spawn on it.\n",
+      + "no dollar ceiling to enforce here; `tldrx next` refuses a headless spawn on it."
+      + `${economies === null ? "" : ` ${economies}`}\n`,
     );
     return;
   }
@@ -152,13 +163,24 @@ await runHook("budget-gate", async () => {
       ceiling_usd: decision.ceiling,
       estimate_usd: decision.estimate,
       blocked_by: currentActor(),
+      // What the decision was made against, in both currencies (issue #22). The
+      // event is the audit trail, and an audit trail that records only the half
+      // of the spend denominated in dollars is how a ledger came to read "$0.00"
+      // after real work had been done.
+      economy: economyFor(budget, view.cursor.phase),
+      attended_by: view.attended_by,
+      metered_usd: spend.meteredUsd,
+      host_tokens: spend.hostTokens,
+      unmetered_tasks: spend.unmeteredTasks,
     },
   });
 
   deny(budgetGateDeny(
     view.cursor.stage, view.cursor.phase, decision.remaining, decision.ceiling, estimate,
     raiseCommand(view.run, view.cursor.phase, shortBy(estimate, decision.remaining)),
-  ));
+  // Appended only when there IS a second currency or an uncosted turn, so the
+  // refusal a plain metered run gets is byte-identical to what it always was.
+  ) + (economies === null ? "" : `\n${economies}`));
 });
 
 /**

@@ -135,9 +135,10 @@ Three layers, because "nothing spawns" is a promise about money and one `if` is 
 3. `spawnAgent` itself throws if any path reaches it, and says in as many words that reaching
    it is a bug.
 
-`--dry-run` is refused with the rest of them. `--dry-run` is headless: it spawns a real
-sub-agent and the turn is billed, and only the FILES are reverted afterwards. `--prepare` is
-the flag that spawns nothing.
+`--dry-run` is refused with the rest of them — but not because it costs anything. Since
+issue #17 it spawns nothing at all: it prices the prompt, prints the command it WOULD run,
+and exits. It is refused here because it describes a dispatch the framework never makes on
+an attended run; `--prepare` writes the bundle you are actually going to carry.
 
 `tldrx run status` prints `· attended: host` on its scope line, and the status line carries an
 `att` marker ahead of `auto:N` and `stale:N`.
@@ -167,6 +168,10 @@ Each prints a line, green or red:
 ```
 · precondition: docker compose ps → exit 0 (1.2s)
 ```
+
+Each gets **60 seconds**, not the stage's `timeout_s` — add `timeout_s: <n>` to one that
+legitimately needs longer. A precondition is a liveness question; letting a hung `docker info`
+borrow a Build stage's 1800 s clock is the half-hour of waste the feature exists to prevent.
 
 A red one stops there, exit `2`, and nothing has been spent:
 

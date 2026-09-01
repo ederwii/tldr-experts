@@ -758,6 +758,79 @@ describe("budget-gate (PreToolUse Bash)", () => {
     });
     expect(run.stdout).toBe("");
   });
+
+  // --- both economies, and who is driving (issue #22) ------------------------
+
+  /** One task the host paid for: no dollars, a declared token figure. */
+  const HOST_TASK =
+    `[{id: t1, status: done, expert: architect, model: sonnet, cost_usd: null, metered: false, tokens: 12000,`
+    + ` error: null, session_id: null, started_at: null, ended_at: null, outputs: []}]`;
+
+  /** Rewrite the fixture run's contracts stage to carry a host-paid turn. */
+  function withHostTask(attended: boolean): void {
+    const path = join(workspace().runDir, "run.yml");
+    let text = readFileSync(path, "utf8").replace("tasks: []}\n", "tasks: []}\n");
+    // The SECOND `tasks: []` is the contracts stage the cursor points at.
+    const at = text.lastIndexOf("tasks: []}");
+    text = `${text.slice(0, at)}tasks: ${HOST_TASK}}${text.slice(at + "tasks: []}".length)}`;
+    if (attended) text = text.replace(/^status: /m, "attended_by: host\nstatus: ");
+    writeFileSync(path, text, "utf8");
+  }
+
+  function priceInHostTokens(): void {
+    const path = join(workspace().runDir, "budget.yml");
+    writeFileSync(
+      path,
+      readFileSync(path, "utf8").replace("{id: 02-how, ceiling_usd: 7.0, spent_usd: 6.39}",
+        "{id: 02-how, ceiling_usd: 7.0, spent_usd: 6.39, economy: host-tokens}"),
+      "utf8",
+    );
+  }
+
+  test("a `host-tokens` phase still allows — and now SAYS what was spent in tokens", async () => {
+    priceInHostTokens();
+    withHostTask(false);
+    const run = await hook("budget-gate", {
+      hook_event_name: "PreToolUse", tool_name: "Bash", cwd: workspace().root,
+      tool_input: { command: "tldrx next 260828-leaderboard" },
+    });
+    // Unchanged decision: a ceiling that is not in dollars cannot deny a dollar
+    // spend, and the two economies are never converted (design §E.2).
+    expect(run.stdout).toBe("");
+    expect(run.stderr).toContain("host-tokens");
+    // What was missing: the gate could not see the host-token spend at all.
+    expect(run.stderr).toContain("12000 host tokens");
+    expect(run.stderr).toContain("1 unmetered turn");
+  });
+
+  test("the deny says the dollar figure is METERED spend only when it is", async () => {
+    withHostTask(true);
+    const run = await hook("budget-gate", {
+      hook_event_name: "PreToolUse", tool_name: "Bash", cwd: workspace().root,
+      tool_input: { command: "tldrx next 260828-leaderboard" },
+    });
+    const said = denialText(run);
+    expect(said).toContain('refusing to start stage "contracts"');
+    expect(said).toContain("12000 host tokens");
+    expect(said).toContain("attended_by: host");
+
+    const blocked = EventLog.forRun(workspace().runDir).read().filter((e) => e.type === "budget.blocked");
+    expect(blocked[0]?.payload).toMatchObject({
+      economy: "metered-usd",
+      attended_by: "host",
+      host_tokens: 12_000,
+      unmetered_tasks: 1,
+    });
+  });
+
+  test("an ordinary metered run's deny is byte-identical to what it always was", async () => {
+    const run = await hook("budget-gate", {
+      hook_event_name: "PreToolUse", tool_name: "Bash", cwd: workspace().root,
+      tool_input: { command: "tldrx next 260828-leaderboard" },
+    });
+    expect(denialText(run)).not.toContain("host tokens");
+    expect(denialText(run)).not.toContain("attended_by");
+  });
 });
 
 describe("session-start (SessionStart)", () => {

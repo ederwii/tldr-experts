@@ -60,6 +60,57 @@
 
 ### Fixed
 
+- **`tldrx next --dry-run` spawns nothing. It used to cost $0.42 a go (#17).** The flag ran the
+  stage for real — one `claude -p`, one `agent.spawned`, one `agent.result`, the cost on the
+  ledger — and only reverted the non-handoff FILES afterwards. Measured on the 2026-08-30 pilot;
+  `tldrx next --help` had said "Spawns nothing and writes nothing" the whole time, so this is the
+  code catching up to the promise rather than the promise being watered down to the code.
+  - **What it does now.** It assembles the prompt, prices it, and stops: the expert bundle, the
+    context ledger, the prompt size, the declared outputs, and the **exact `claude -p` argv** it
+    would have run (with the `--json-schema` blob elided as `<envelope-schema>`, rendered from
+    `buildClaudeArgs` itself so the printed command cannot drift from the real one). Then the two
+    commands that would actually dispatch it. Exit `0`.
+  - **Nothing is written either.** No prompt bundle and no `pending.json`, so a dry run cannot
+    leave a `--commit` looking at a turn that never happened; the stage keeps its status and the
+    ledger keeps its zero. `dry_run_allowed: false` still refuses (Build sets it: a stage that cuts
+    branches and fans out per-story sub-agents has no ONE dispatch to describe).
+  - **On an attended run it is still refused at exit `4`** — but for the right reason now. It costs
+    nothing; it describes a dispatch the framework never makes there, and `--prepare` writes the
+    bundle the host is going to carry. The message said "it spawns a real sub-agent" and no longer
+    lies.
+
+- **A precondition gets its own clock, not the stage's 900–1800 s (#20).** `preconditions:`
+  inherited `timeout_s`, so one hung command — `docker info` against a dead daemon is the measured
+  case — could hold a run for half an hour: exactly the waste the feature exists to prevent, taken
+  by the guard instead of by the attempt. Each precondition now gets **60 s** by default
+  (`PRECONDITION_TIMEOUT_S`), overridable per entry with `timeout_s: <n>`, refused at load if that
+  is not a number `> 0`. A timeout is a red precondition like any other — exit `2`, nothing
+  written, nothing spawned, the stage where it was — and its message names the precondition, its
+  own timeout and the knob that changes it, rather than the stage's. `CommandRun` gained
+  `timedOut` so a timeout can be told from a refusal or a wrong exit code without reading prose.
+
+- **The budget gate can see host-token spend and attendedness (#22).** The tolerant reader the
+  `budget-gate` hook and the status line share (`hooks/lib/runFile.ts`) skipped `tasks[]` and
+  `attended_by:` entirely. So a run whose turns a host session paid for reported `$0.00` metered
+  and nothing else, and `runSnapshot`'s tolerant path hard-coded `attendedByHost: false` with a
+  comment admitting it meant "cannot see". `RunView` now carries `attended_by` and each task's
+  `cost_usd` / `metered` / `tokens`; `runSpend` derives the metered dollars, the declared host
+  tokens and the uncosted turns; `renderRunEconomies` renders the one line that says a dollar
+  figure is a lower bound. The gate appends it to a `host-tokens` phase's stderr note and to a
+  refusal, and `budget.blocked` records `economy`, `attended_by`, `metered_usd`, `host_tokens` and
+  `unmetered_tasks`. **No verdict changed**: a dollar ceiling still governs dollars, the two
+  currencies are still never converted, and a plain metered run's refusal is byte-identical.
+
+- **The `max_reads` flake was a real race, not a slow test (#24).** A chunk boundary is not a line
+  boundary: `LineSplitter` hands every complete line in one chunk to the read counter
+  synchronously, so when the OS coalesced the sub-agent's writes — which is what a loaded CI box
+  does — reads 4..20 were counted in the same tick as read 3, long before the `SIGKILL` just
+  ordered could land. `agent.result.payload.reads` was therefore a function of scheduling, and the
+  assertion pinning it to the cap cost two retries in one night. The counter now stops the moment
+  the cap fires, so what is recorded is the number of reads the cap ALLOWED. Pinned by a fixture
+  that makes the coalescing deterministic (`FAKE_CLAUDE_READS_BURST=1` — every read pair in one
+  write): pre-fix that reported 20 reads against a cap of 3.
+
 - **The merge itself is now serialised, and a gate can no longer describe a tree it is not pushing
   (#44).** `scripts/merge-wave.sh` merges, gates and pushes in ONE shared checkout and took no lock.
   Measured on the pre-fix script with two concurrent invocations against a real sandbox repo: run A

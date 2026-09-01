@@ -499,6 +499,7 @@ import { footer } from "../src/core/ui/scene.ts";
 const ORIGINAL_PATH = process.env.PATH ?? "";
 const FAKE_KEYS = [
   "FAKE_CLAUDE_RUNDIR", "FAKE_CLAUDE_OUTPUTS", "FAKE_CLAUDE_READS", "FAKE_CLAUDE_HANG_MS",
+  "FAKE_CLAUDE_READS_BURST",
 ] as const;
 
 afterEach(() => {
@@ -591,6 +592,42 @@ describe("max_reads (N5)", () => {
     });
     expect(outcome.code).toBe(5);
     expect(outcome.lines.join("\n")).toContain("max_reads is 2");
+  }, 40_000);
+
+  /**
+   * Issue #24 — the flake, and what it actually was.
+   *
+   * A chunk boundary is not a read boundary. `LineSplitter` hands EVERY complete
+   * line in one chunk to `onStdoutLine` synchronously, so when the OS coalesced
+   * the sub-agent's writes — which is what a loaded CI box does — the counter ran
+   * past the cap inside a single callback, long before the SIGKILL it had just
+   * ordered could land. `reads` was therefore a function of scheduling: 3 on an
+   * idle laptop, 4 or 7 or 20 under load, and `payload.reads` was asserted to be
+   * the cap. Twice in one night that cost a retry.
+   *
+   * The fix is to stop counting the moment the cap fires, so the number recorded
+   * is what the cap ALLOWED rather than what happened to arrive before the kill.
+   * This test pins it by making the coalescing deterministic: every read pair in
+   * one write.
+   */
+  test("a burst of reads in ONE chunk still stops at the cap — the count is not a race", async () => {
+    const ws = readingWorkspace(3);
+    process.env.FAKE_CLAUDE_READS = "20";
+    process.env.FAKE_CLAUDE_READS_BURST = "1";
+    process.env.FAKE_CLAUDE_HANG_MS = "30000";
+
+    const outcome = await runNext({
+      root: ws.root, dryRun: false, mode: "headless", yolo: false,
+      actor: "alan", at: "2026-08-28T09:00:00Z",
+    });
+    expect(outcome.code).toBe(5);
+    expect(outcome.lines.join("\n")).toContain("stopped after 3 reads");
+
+    const store = RunStore.open(ws.runDir);
+    expect(store.run.phases[0]?.stages[0]?.tasks[0]?.stopped_by).toBe(STOPPED_BY_MAX_READS);
+    const result = EventLog.forRun(ws.runDir).read().find((e) => e.type === "agent.result");
+    expect(result?.payload.reads).toBe(3);
+    expect(result?.payload.max_reads).toBe(3);
   }, 40_000);
 
   test("the UI footer counts reads against the cap", () => {

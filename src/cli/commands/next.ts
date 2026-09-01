@@ -86,11 +86,11 @@ export const nextCommand: Command = {
           + "around a reviewer's fix list (04-build/fixlist/<story>-<n>.md)",
         );
       }
-      // `--prepare` and `--commit` spawn nothing, so there is nothing to watch:
-      // the handle they get is inert. `--dry-run` DOES spawn — it runs the stage
-      // and reverts the non-handoff outputs afterwards (measured 2026-08-30: one
-      // `agent.spawned`, one `agent.result`, the cost on the ledger) — but its
-      // view is deliberately quiet, because the run is a rehearsal.
+      // `--prepare`, `--commit` and `--dry-run` all spawn nothing, so there is
+      // nothing to watch: the handle they get is inert. `--dry-run` DID spawn
+      // until issue #17 — it ran the stage and reverted the non-handoff outputs
+      // afterwards (measured 2026-08-30: one `agent.spawned`, one `agent.result`,
+      // $0.42 on the ledger) — and this flag was already `!dryRun` for it.
       const ui = startUi(args, { root, spawns: mode === "headless" && !dryRun });
       let outcome;
       try {

@@ -17,7 +17,8 @@
  * label, every path must behave exactly as it did before the label existed.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import {
@@ -25,6 +26,9 @@ import {
   DEFAULT_ECONOMY, type RunBudget,
 } from "../src/core/budget/RunBudget.ts";
 import { validateBudget } from "../src/core/schemas/budget.ts";
+import {
+  isAttendedByHostView, loadRunView, renderRunEconomies, runSpend,
+} from "../src/hooks/lib/runFile.ts";
 import { emitBudgetYaml } from "../src/core/run/emitRunYaml.ts";
 import { raiseBudget } from "../src/core/budget/raiseBudget.ts";
 import { buildRunCost, renderRunCost } from "../src/core/budget/costView.ts";
@@ -516,3 +520,100 @@ function write(dir: string, name: string, content: string): void {
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, name), content, "utf8");
 }
+
+// ---------------------------------------------------------------------------
+// The hook's RunView sees BOTH economies, and who is driving (issue #22)
+// ---------------------------------------------------------------------------
+
+/**
+ * `hooks/lib/runFile.ts` is the tolerant reader — the one a hook uses when it
+ * must render something rather than argue about a schema. Two of its consumers
+ * make budget decisions off it: the `budget-gate` PreToolUse hook and the status
+ * line.
+ *
+ * It read neither economy. `tasks[]` was skipped entirely, so `metered: false`
+ * and `tokens:` — the two fields `--commit` writes for an in-session turn — were
+ * invisible, and `attended_by:` was not parsed at all (`runSnapshot.ts` said so
+ * in as many words: "false here means cannot see, never a claim that the run is
+ * unattended"). The result: an attended-by-host run shows `$0.00` metered, which
+ * is TRUE and useless, and the gate that is supposed to see the real spend sees
+ * the half of it denominated in dollars.
+ *
+ * This wires the data through. It does not change what the gate DECIDES — the
+ * dollar ceiling still governs dollars, and the two economies are still never
+ * converted into one another (design §E.2).
+ */
+describe("the tolerant RunView carries both economies and attendedness (#22)", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+    dirs.length = 0;
+  });
+
+  function runYaml(options: { attended?: string; tasks?: string } = {}): string {
+    const attended = options.attended === undefined ? "" : `attended_by: ${options.attended}\n`;
+    const tasks = options.tasks ?? "[]";
+    return `version: 1
+run: 260830-x
+title: "A run"
+scope: feature
+status: running
+updated_at: 2026-08-30T10:00:00Z
+${attended}cursor: {phase: 01-what, stage: alpha, task: null}
+budget: {ceiling_usd: 10.0, spent_usd: 0.0, per_agent_max_usd: 3.0}
+phases:
+  - id: 01-what
+    status: running
+    stages:
+      - {id: alpha, status: running, expert: product, model: sonnet, budget_usd: 6.0, cost_usd: 0.0,
+         started_at: null, ended_at: null, inputs: [], outputs: [],
+         gate: {type: auto, status: none, by: null, at: null, note: ""},
+         tasks: ${tasks}}
+`;
+  }
+
+  function viewOf(yaml: string) {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-runview-"));
+    dirs.push(dir);
+    writeFileSync(join(dir, "run.yml"), yaml, "utf8");
+    const view = loadRunView(dir);
+    expect(view).not.toBeNull();
+    return view as NonNullable<typeof view>;
+  }
+
+  const HOST_TASKS =
+    `[{id: t1, status: done, expert: product, model: sonnet, cost_usd: null, metered: false, tokens: 12000,`
+    + ` error: null, session_id: null, started_at: null, ended_at: null, outputs: []}]`;
+  const METERED_TASKS =
+    `[{id: t1, status: done, expert: product, model: sonnet, cost_usd: 1.25,`
+    + ` error: null, session_id: null, started_at: null, ended_at: null, outputs: []}]`;
+
+  test("`attended_by` is read, not assumed absent", () => {
+    expect(viewOf(runYaml({ attended: "host" })).attended_by).toBe("host");
+    expect(isAttendedByHostView(viewOf(runYaml({ attended: "host" })))).toBe(true);
+    expect(viewOf(runYaml()).attended_by).toBeNull();
+    expect(isAttendedByHostView(viewOf(runYaml()))).toBe(false);
+  });
+
+  test("`runSpend` reports the metered dollars, the host tokens and the unmetered turns", () => {
+    const host = runSpend(viewOf(runYaml({ attended: "host", tasks: HOST_TASKS })));
+    expect(host).toEqual({ meteredUsd: 0, hostTokens: 12_000, unmeteredTasks: 1 });
+
+    const metered = runSpend(viewOf(runYaml({ tasks: METERED_TASKS })));
+    expect(metered).toEqual({ meteredUsd: 1.25, hostTokens: 0, unmeteredTasks: 0 });
+  });
+
+  test("an ordinary metered run gets NO economy note — the dollar figure is the whole story", () => {
+    expect(renderRunEconomies(viewOf(runYaml({ tasks: METERED_TASKS })))).toBeNull();
+    expect(renderRunEconomies(viewOf(runYaml()))).toBeNull();
+  });
+
+  test("a host-driven run gets one, and it says the dollar figure is a lower bound", () => {
+    const note = renderRunEconomies(viewOf(runYaml({ attended: "host", tasks: HOST_TASKS })));
+    expect(note).not.toBeNull();
+    expect(note).toContain("$0.00 metered");
+    expect(note).toContain("12000 host tokens");
+    expect(note).toContain("1 unmetered turn");
+    expect(note).toContain("attended_by: host");
+  });
+});
