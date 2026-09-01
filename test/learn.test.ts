@@ -40,6 +40,7 @@ import {
   assertOutsideAnyWorkspace, claudeShimScript, defaultSandboxRoot, makeSandbox, sandboxEnv,
   SandboxError, TOY_FILES, writeScript, type Sandbox,
 } from "../src/core/learn/sandbox.ts";
+import { execFileSync } from "node:child_process";
 import {
   chaptersToPlay, displayCommand, expandCommand, expandTurns, newestRunId, playChapter,
   type LearnIo, type StepResult, type StepRunner,
@@ -360,6 +361,44 @@ describe("the sandbox", () => {
     // the tutorial's own state is OUTSIDE the workspace, or `init` would map it
     expect(sandbox.progressPath.startsWith(sandbox.workspace)).toBe(false);
     expect(sandbox.scriptPath.startsWith(sandbox.workspace)).toBe(false);
+  });
+
+  /**
+   * Chapter 4's Build commits what its developer left, through the framework's
+   * own executor — which uses whatever identity the machine has. A box with no
+   * global `user.email` is a normal box, and there that commit fails with
+   * `Author identity unknown` and the chapter dies three commands in (measured on
+   * `ubuntu-latest`, 2026-09-01). So the toy repo carries its own.
+   */
+  test("the toy repo commits with no global git identity at all", async () => {
+    const sandbox = await makeSandbox({ root: temp("tldrx-learn-id-"), selfCommand: SELF });
+    // `user.useConfigOnly` is what makes this deterministic. An EMPTY global
+    // config is not enough: git guesses an identity from the gecos name and the
+    // hostname and only fails where it cannot — a laptop passes, a container
+    // does not, and a test that only fails on the CI runner is the test that let
+    // this through in the first place.
+    const globalConfig = join(sandbox.root, "gitconfig-with-no-identity");
+    writeFileSync(globalConfig, "[user]\n\tuseConfigOnly = true\n", "utf8");
+    const env: Record<string, string | undefined> = {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: globalConfig,
+      GIT_CONFIG_SYSTEM: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      HOME: sandbox.root,
+    };
+    for (const key of ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"]) {
+      delete env[key];
+    }
+    writeFileSync(join(sandbox.workspace, "later.txt"), "written by nobody in particular\n", "utf8");
+
+    execFileSync("git", ["add", "-A"], { cwd: sandbox.workspace, env, stdio: "pipe" });
+    // Throws on `Author identity unknown`, which is the whole point of the test.
+    execFileSync("git", ["commit", "-m", "no global identity"], { cwd: sandbox.workspace, env, stdio: "pipe" });
+
+    const author = execFileSync("git", ["log", "-1", "--format=%ae"], {
+      cwd: sandbox.workspace, env, encoding: "utf8",
+    }).trim();
+    expect(author).toBe("learn@tldrx.invalid");
   });
 
   test("re-opening it keeps the repo and the progress — that is what resume is", async () => {

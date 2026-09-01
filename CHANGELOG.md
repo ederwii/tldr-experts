@@ -22,6 +22,14 @@
   - Chapter 4's `prepare()` commits what `init` left untracked, because the Build executor refuses to
     cut a branch from a dirty tree (measured: `?? .gitignore, ?? CLAUDE.md`, exit 2) — and the narration
     teaches that refusal instead of hiding it.
+  - **Fixed: the toy repo now carries its own git identity.** Chapter 4's Build commits through the
+    framework's own executor, with whatever identity the machine has — so on a box with no global
+    `user.email` (a fresh laptop, a container, `ubuntu-latest`) `git commit` failed with `Author identity
+    unknown` and the chapter died three commands in. `makeSandbox` writes `user.email`, `user.name` and
+    `commit.gpgsign=false` into the sandbox repo's own config, on every open, so an older sandbox is
+    repaired too. The test pins it with `user.useConfigOnly` rather than an empty global config: git
+    guesses an identity from gecos and hostname and only fails where it cannot, so an empty config
+    passes on a laptop and fails in a container — which is exactly how this reached CI.
 
 - **`tldrx learn` — a playable sandbox tutorial that runs the REAL commands (#30, phase 1 of 3).**
   A tutorial that runs the shipped binary can never drift from the shipped behaviour: every output the

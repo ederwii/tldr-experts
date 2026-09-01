@@ -101,7 +101,37 @@ export async function makeSandbox(options: SandboxOptions = {}): Promise<Sandbox
   writeClaudeShim(sandbox, options.selfCommand ?? selfCommand());
   if (!existsSync(sandbox.scriptPath)) writeScript(sandbox, EMPTY_SCRIPT);
   if (!existsSync(join(sandbox.workspace, "package.json"))) await makeToyRepo(sandbox.workspace);
+  // Re-applied on every open, like the shim: an identity is cheap to write and a
+  // sandbox made by an older build does not have one.
+  await setLocalGitIdentity(sandbox.workspace);
   return sandbox;
+}
+
+/**
+ * Give the toy repo its OWN committer, in its own `.git/config`.
+ *
+ * The tutorial does not only commit from `prepare()` — chapter 4's Build spawns a
+ * developer in a worktree and then commits what it left, and that commit runs
+ * with whatever identity the machine has. A box with no `user.email` in its
+ * global config is a normal box (a fresh laptop, a container, a CI runner), and
+ * there `git commit` fails with `Author identity unknown` and chapter 4 dies
+ * three commands in. Measured 2026-09-01 on `ubuntu-latest`.
+ *
+ * Repo-local rather than per-command, because the commits that need it are made
+ * by the framework's own executor, which has no reason to know it is being run by
+ * a tutorial. A linked worktree reads the same config, so the story worktrees get
+ * it too. `commit.gpgsign` goes off for the same reason: a learner who signs every
+ * commit has no key set up for a throwaway repo under `~/.tldrx-learn`.
+ */
+export async function setLocalGitIdentity(dir: string): Promise<void> {
+  if (!existsSync(join(dir, ".git"))) return;
+  for (const [key, value] of [
+    ["user.email", "learn@tldrx.invalid"],
+    ["user.name", "tldrx learn"],
+    ["commit.gpgsign", "false"],
+  ] as const) {
+    await runtime.spawn("git", ["config", key, value], { cwd: dir });
+  }
 }
 
 /**
@@ -242,9 +272,11 @@ export const TOY_FILES: Readonly<Record<string, string>> = {
 /**
  * A git repo with four files and a `test` script that exits 0.
  *
- * Committed, on `main`, with an identity passed per-command: a box with no
- * `user.email` in its global config is a normal box, and a tutorial that fails
- * there fails for the reader who most needed it.
+ * Committed, on `main`, with an identity written into the repo's own config AND
+ * passed per-command: a box with no `user.email` in its global config is a normal
+ * box, and a tutorial that fails there fails for the reader who most needed it.
+ * The repo-local copy is what carries the framework's OWN commits later — see
+ * `setLocalGitIdentity`.
  */
 export async function makeToyRepo(dir: string): Promise<void> {
   mkdirSync(dir, { recursive: true });
@@ -257,6 +289,7 @@ export async function makeToyRepo(dir: string): Promise<void> {
   // Not `init -b main`: that flag is git >= 2.28, and this one works everywhere
   // and needs no commit to exist yet.
   await git(dir, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+  await setLocalGitIdentity(dir);
   await git(dir, ["add", "-A"]);
   await git(dir, [
     "-c", "user.email=learn@tldrx.invalid",
