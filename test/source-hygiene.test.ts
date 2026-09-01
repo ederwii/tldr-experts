@@ -9,9 +9,20 @@
  * this guard turned up a SECOND one, in `src/core/text/srcToken.ts` — same byte, same
  * silence, never reported.
  *
- * NUL is the byte that matters, and only NUL: it is what the binary-file heuristic keys
- * on. A raw ESC does not hide a file (measured — `src/core/doctor/McpProbe.ts` carries
- * one and greps fine), so this guard does not police it.
+ * NUL is the byte that hides a file: it is what the binary-file heuristic keys on.
+ * A raw ESC does not hide anything (measured — `src/core/doctor/McpProbe.ts` carried
+ * one for months and greps found it fine), so the two are checked SEPARATELY and for
+ * different reasons.
+ *
+ * ESC is the second check (#52), and it is about LEGIBILITY, not about search. The one
+ * that was in `McpProbe.ts` sat inside a regex literal where `\x1b` was meant, so the
+ * source read `/<ESC>\[[0-9;]*m/g` and a reader — in a diff, in a review, in a terminal,
+ * in most editors — saw `/\[[0-9;]*m/g`, which is a different and wrong-looking regex.
+ * Someone tidying that is one keystroke from breaking `tldrx doctor --mcp` silently. It
+ * is policed here rather than left to a style call because it costs one `indexOf`, and
+ * because — measured across all 479 `.ts` files under src/test/bin/scripts — a raw ESC
+ * has exactly one legitimate use in this repo, which is none: an escape sequence says
+ * the same thing to the compiler and something readable to the human.
  *
  * The lesson is about instruments, not about one byte: a repo whose text is not text
  * cannot be searched, and the search does not say so. This guard keeps the instrument
@@ -41,13 +52,19 @@ const TS_FILES = ["src", "test", "bin", "scripts"]
   .map((p) => p.slice(REPO_ROOT.length + 1))
   .sort();
 
-/** Where the first NUL is, as `path:line`, or null. Located so a failure is actionable. */
-function firstNul(path: string, label = path): string | null {
+/** Where the first `byte` is, as `path:line`, or null. Located so a failure is actionable. */
+function firstByte(byte: number, path: string, label = path): string | null {
   const bytes = readFileSync(path);
-  const at = bytes.indexOf(0);
+  const at = bytes.indexOf(byte);
   if (at === -1) return null;
   return `${label}:${bytes.subarray(0, at).toString("utf8").split("\n").length}`;
 }
+
+const NUL = 0x00;
+const ESC = 0x1b;
+
+const firstNul = (path: string, label = path): string | null => firstByte(NUL, path, label);
+const firstEsc = (path: string, label = path): string | null => firstByte(ESC, path, label);
 
 describe("every TypeScript source file is plain text a grep can see", () => {
   test("there are files to check, so this invariant is not vacuous", () => {
@@ -63,6 +80,13 @@ describe("every TypeScript source file is plain text a grep can see", () => {
     expect(offenders).toEqual([]);
   });
 
+  test("no file contains a raw ESC byte — write `\\x1b`, which reads as itself (#52)", () => {
+    const offenders = TS_FILES
+      .map((rel) => firstEsc(join(REPO_ROOT, rel), rel))
+      .filter((hit) => hit !== null);
+    expect(offenders).toEqual([]);
+  });
+
   const scratch = mkdtempSync(join(tmpdir(), "tldrx-hygiene-"));
   afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
@@ -74,5 +98,18 @@ describe("every TypeScript source file is plain text a grep can see", () => {
     const clean = join(scratch, "clean.ts");
     writeFileSync(clean, "const a = 1;\nconst b = 2;\n");
     expect(firstNul(clean, "clean.ts")).toBeNull();
+  });
+
+  test("the ESC detector really detects — and does not fire on the escape SEQUENCE", () => {
+    const planted = join(scratch, "planted-esc.ts");
+    writeFileSync(planted, `const a = 1;\nconst b = "\x1b[32m";\n`);
+    expect(firstEsc(planted, "planted-esc.ts")).toBe("planted-esc.ts:2");
+    expect(firstNul(planted, "planted-esc.ts")).toBeNull();
+
+    // The two-character source form `\` + `x1b` is what the fix writes, and it must
+    // pass: policing the byte is only useful if the readable spelling is allowed.
+    const escaped = join(scratch, "escaped.ts");
+    writeFileSync(escaped, "const p = /\\x1b\\[[0-9;]*m/g;\n");
+    expect(firstEsc(escaped, "escaped.ts")).toBeNull();
   });
 });

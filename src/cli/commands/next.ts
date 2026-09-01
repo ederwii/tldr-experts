@@ -34,7 +34,7 @@ export const nextCommand: Command = {
     + "                  [--model <m>] [--effort <level>]\n"
     + "                  [--max-usd <n>] [--prompt-max-bytes <n>] [--max-reads <n>] [--cost-usd <n>] [--tokens <n>]\n"
     + "                  [--yolo] [--keep-worktrees] [--discard-pending] [--reuse-epic] [--parallel <n>]\n"
-    + "                  [--ui scene|compact|plain|off] [--root <path>]",
+    + "                  [--ui scene|compact|plain|off] [--run <id>] [--root <path>]",
   subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {

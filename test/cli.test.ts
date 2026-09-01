@@ -3,6 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { COMMANDS, lookup } from "../src/cli/index.ts";
+import type { Command } from "../src/cli/Command.ts";
 import { flagNames } from "../src/cli/argv.ts";
 import { EXIT_FAILED, EXIT_NOT_IMPLEMENTED, EXIT_OK, EXIT_USAGE } from "../src/cli/exitCodes.ts";
 import {
@@ -384,5 +385,136 @@ describe("<command> --help carries flags, values, examples and exit codes", () =
     for (const [code, meaning] of EXIT_MEANINGS) {
       expect(reference).toContain(`| \`${String(code)}\` | ${meaning} |`);
     }
+  });
+});
+
+/**
+ * The other direction, and the one #25 and #51 were both about.
+ *
+ * `usage` is what a BAD invocation prints — `gate.ts:44`, `run.ts:85`,
+ * `questions.ts:38`, `tickets.ts:60`, `seed.ts:55`, `story.ts:35` and `plan.ts:41`
+ * all write `<cmd>.usage` to stderr — so it is the string an operator reads at the
+ * exact moment they got the invocation wrong. A usage line narrower than the same
+ * command's `--help` hides a flag the code does accept, from the one reader who
+ * most needs it, and nothing went red when it drifted.
+ *
+ * Subcommand-aware ON PURPOSE, and that is not gold-plating. A plain
+ * `usage.includes("--run")` calls `run` CLEAN: `run gates set` names `--run` on its
+ * own line, which is enough to satisfy a substring test while `run attend`,
+ * `run status`, `run estimate`, `run auto`, `run unlock` and `run cancel` still show
+ * only `[<run>]`. Measured at 7a29fab: the naive check saw one of run's seven gaps.
+ * So a flag that declares a `sub:` is looked for in THAT subcommand's block.
+ */
+
+/**
+ * The usage lines for `<cmd> <sub>`: its own `tldrx …` line plus the indented
+ * continuations under it.
+ *
+ * `sub:` in the registry means two different things, and only one of them is a
+ * subcommand. `run --json {sub: "status"}` is `tldrx run status`, a word in argv.
+ * `dashboard --out {sub: "static"}` is a MODE selected by `--static`, and there is
+ * no `tldrx dashboard static` line for it to live under — scoping that one would
+ * report a gap that is not there (it did, on the first draft of this guard). So
+ * `command.subcommands` decides: a real subcommand is scoped, a mode is checked
+ * against the whole usage.
+ */
+function usageBlock(command: Command, sub: string | undefined): string {
+  if (sub === undefined || !command.subcommands.includes(sub)) return command.usage;
+  const opens = new RegExp(`^\\s*tldrx\\s+${command.name}\\s+${sub}\\b`);
+  const block: string[] = [];
+  let inside = false;
+  for (const line of command.usage.split("\n")) {
+    if (/^\s*tldrx\s/.test(line)) inside = opens.test(line);
+    if (inside) block.push(line);
+  }
+  return block.join("\n");
+}
+
+/**
+ * The declared things a usage line is allowed NOT to spell the registry's way,
+ * each with the reason. Two kinds live here and only two:
+ *
+ *  - a usage line that says the SAME thing more specifically (the enum written out,
+ *    the quotes a shell needs, the seven script names) — the registry's `<script>`
+ *    is the general name, the usage is the better one, and neither is wrong;
+ *  - `tickets --dry-run`, which is absent from that usage DELIBERATELY. `tickets
+ *    sync` previews by default and `--apply` is the write; advertising `--dry-run`
+ *    would imply the opposite. `test/money-safety.test.ts` asserts its absence, so
+ *    this entry records a decision rather than papering over a gap.
+ *
+ * Anything else belongs in the usage string, not in here.
+ */
+const USAGE_SPELLINGS: ReadonlyMap<string, string> = new Map([
+  ["run <stage>:<policy>", "usage writes the enum out: `<stage>:<human|auto|agent>`"],
+  ["seed <Qid> <text>", 'usage quotes the second word: `<Qid> "<text>"`'],
+  ["watch [<feature>]", "usage marks it required on `check`, which is the only subcommand that takes it"],
+  ["hook <script>", "usage enumerates the runnable scripts instead of naming the slot"],
+  ["tickets --dry-run", "deliberately absent — preview is the default and --apply is the write (money-safety.test.ts)"],
+]);
+
+describe("every usage line is as wide as its own --help (#25, #51)", () => {
+  test("no declared flag is missing from the usage of the subcommand that takes it", () => {
+    const missing: string[] = [];
+    for (const command of COMMANDS) {
+      for (const flag of helpFor(command.name)?.flags ?? []) {
+        const key = `${command.name} --${flag.name}`;
+        if (USAGE_SPELLINGS.has(key)) continue;
+        if (usageBlock(command, flag.sub).includes(`--${flag.name}`)) continue;
+        missing.push(flag.sub === undefined ? key : `${key} (${command.name} ${flag.sub})`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test("no declared positional is missing from the usage", () => {
+    const missing: string[] = [];
+    for (const command of COMMANDS) {
+      for (const arg of helpFor(command.name)?.args ?? []) {
+        const key = `${command.name} ${arg.name}`;
+        if (USAGE_SPELLINGS.has(key)) continue;
+        if (command.usage.includes(arg.name)) continue;
+        missing.push(key);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  /**
+   * An allowlist nobody re-reads is how the first copy went stale. Every entry must
+   * still name a real declared flag or arg, so a rename or a deletion turns the
+   * exemption into a red build rather than into silence.
+   */
+  test("every allowlisted spelling still points at something the registry declares", () => {
+    const declared = new Set<string>();
+    for (const command of COMMANDS) {
+      const help = helpFor(command.name);
+      for (const flag of help?.flags ?? []) declared.add(`${command.name} --${flag.name}`);
+      for (const arg of help?.args ?? []) declared.add(`${command.name} ${arg.name}`);
+    }
+    expect([...USAGE_SPELLINGS.keys()].filter((key) => !declared.has(key))).toEqual([]);
+  });
+
+  /**
+   * The guard can only see a gap it is capable of seeing. `run --run` is the case
+   * that broke the naive version, so it is asserted directly: the whole usage names
+   * `--run` (on the `gates set` line), and `run status`'s own block does too.
+   */
+  test("the check is subcommand-aware — the case a substring test gets wrong", () => {
+    const run = COMMANDS.find((command) => command.name === "run");
+    expect(run).toBeDefined();
+    if (run === undefined) return;
+    expect(run.usage).toContain("--run");
+    expect(usageBlock(run, "status")).toContain("tldrx run status");
+    expect(usageBlock(run, "status")).toContain("--run");
+    expect(usageBlock(run, "status")).not.toContain("tldrx run cancel");
+  });
+
+  /** The other half of that: a `sub:` that is a MODE, not a word in argv, is not scoped. */
+  test("a flag-selected mode is checked against the whole usage, not a phantom block", () => {
+    const dashboard = COMMANDS.find((command) => command.name === "dashboard");
+    expect(dashboard).toBeDefined();
+    if (dashboard === undefined) return;
+    expect(dashboard.subcommands).not.toContain("static");
+    expect(usageBlock(dashboard, "static")).toBe(dashboard.usage);
   });
 });

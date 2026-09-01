@@ -3,7 +3,7 @@ import { runDoctor } from "../src/core/doctor/runDoctor.ts";
 import { doctorJson } from "../src/cli/commands/doctor.ts";
 import { DoctorReport } from "../src/core/doctor/DoctorReport.ts";
 import { loadEnvManifest } from "../src/core/doctor/loadEnvManifest.ts";
-import { parseMcpList } from "../src/core/doctor/McpProbe.ts";
+import { parseMcpList, stripAnsi } from "../src/core/doctor/McpProbe.ts";
 import { compareVersions, extractVersion, satisfiesMinimum } from "../src/core/doctor/version.ts";
 import type { ToolCheckResult } from "../src/core/doctor/ToolChecker.ts";
 import { findLegacyVersionFiles } from "../src/core/doctor/legacyVersionKeys.ts";
@@ -128,6 +128,48 @@ describe("parseMcpList", () => {
 
   test("returns nothing for output with no server lines", () => {
     expect(parseMcpList("No MCP servers configured.")).toHaveLength(0);
+  });
+});
+
+/**
+ * `ANSI_ESCAPE` was written with a LITERAL 0x1b byte where `\x1b` was meant (#52), so the
+ * source read `/<ESC>\[[0-9;]*m/g` and every reader saw `/\[[0-9;]*m/g`. Replacing the byte
+ * with the escape sequence must be a pure legibility change, and `.source` is the WRONG
+ * instrument for proving that: it returns the literal as written, so the two spellings
+ * differ there while compiling to the same matcher. What is compared here is BEHAVIOUR —
+ * the shipped `stripAnsi` against a reference built from the old literal-ESC form, over a
+ * corpus that includes the shapes `claude mcp list` actually emits.
+ */
+describe("stripAnsi behaves exactly as the literal-ESC regex it replaced (#52)", () => {
+  const ESC = String.fromCharCode(0x1b);
+  /** The pre-fix regex, rebuilt without typing the byte: ESC + `\[[0-9;]*m`. */
+  const legacy = (text: string): string => text.replace(new RegExp(`${ESC}\\[[0-9;]*m`, "g"), "");
+
+  const corpus: readonly string[] = [
+    "",
+    "plain text, no escapes",
+    `${ESC}[32mConnected${ESC}[0m`,
+    `context7: https://mcp.context7.com/mcp (HTTP) - ${ESC}[32m\u2713 Connected${ESC}[0m`,
+    `${ESC}[1;31mFailed to connect${ESC}[m`,
+    `${ESC}[38;5;208mtwo${ESC}[0m escapes${ESC}[0m and a trailing one${ESC}[0m`,
+    // Sequences the regex deliberately does NOT strip, so an over-broad rewrite shows up.
+    `${ESC}]0;title${ESC}\\`,
+    `${ESC}[2Kcarriage`,
+    "\\x1b[32m written out as four characters, not a byte",
+  ];
+
+  test("identical output on every line of the corpus", () => {
+    for (const line of corpus) expect(stripAnsi(line)).toBe(legacy(line));
+  });
+
+  test("and it really does strip — measured: 4 of the 9 lines change, and the right 4", () => {
+    const changed = corpus.filter((line) => stripAnsi(line) !== line);
+    expect(changed).toHaveLength(4);
+    expect(stripAnsi(`${ESC}[32mConnected${ESC}[0m`)).toBe("Connected");
+    // Narrow on purpose: only SGR (`…m`). An OSC title, a `[2K` erase and the
+    // four-character source spelling are all left alone, before and after.
+    expect(stripAnsi(`${ESC}[2Kcarriage`)).toBe(`${ESC}[2Kcarriage`);
+    expect(stripAnsi("\\x1b[32m plain")).toBe("\\x1b[32m plain");
   });
 });
 

@@ -29,7 +29,7 @@ const VALUE_FLAGS = ["run", "root", "area"];
 export const questionsCommand: Command = {
   name: "questions",
   summary: "Check that this run's questions.md can be read by the §2.7 parser",
-  usage: "tldrx questions lint [--run <id>] [--fix] [--area <a>] [--root <path>]",
+  usage: "tldrx questions lint [<run>] [--run <id>] [--fix] [--area <a>] [--root <path>]",
   subcommands: ["lint"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {

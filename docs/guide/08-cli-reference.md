@@ -165,9 +165,9 @@ tldrx run attend   <host|--none> [<run>] [--run <id>]
 tldrx run status   [<run>] [--json] [--run <id>]
 tldrx run estimate [<run>] [--json] [--run <id>]
 tldrx run auto     [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]
-                          [--parallel <n>] [--yolo] [--gate-agent] [--ui <mode>]
-tldrx run unlock   [<run>] [--force]
-tldrx run cancel   [<run>] --note <text> [--force]
+                          [--parallel <n>] [--yolo] [--gate-agent] [--ui <mode>] [--run <id>]
+tldrx run unlock   [<run>] [--force] [--run <id>]
+tldrx run cancel   [<run>] --note <text> [--force] [--run <id>]
 ```
 
 **`new`** — `--scope` is one of the workflow stems on disk: `bugfix` `docs` `feature`
