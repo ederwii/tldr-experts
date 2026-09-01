@@ -470,7 +470,6 @@ function usageBlock(command: Command, sub: string | undefined): string {
 const USAGE_SPELLINGS: ReadonlyMap<string, string> = new Map([
   ["run <stage>:<policy>", "usage writes the enum out: `<stage>:<human|auto|agent>`"],
   ["seed <Qid> <text>", 'usage quotes the second word: `<Qid> "<text>"`'],
-  ["watch [<feature>]", "usage marks it required on `check`, which is the only subcommand that takes it"],
   ["hook <script>", "usage enumerates the runnable scripts instead of naming the slot"],
   ["tickets --dry-run", "deliberately absent — preview is the default and --apply is the write (money-safety.test.ts)"],
 ]);

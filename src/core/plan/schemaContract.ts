@@ -16,9 +16,12 @@
  * lists come from `STORY_KEYS` / `EPIC_KEYS`, the enum from `PLAN_STATUSES`, the
  * numbers from the `MAX_*` constants, and the worked examples are validated
  * against `validatePlan` itself in `test/plan-schema-contract.test.ts`. A prose
- * copy of a schema is a second source of truth, and the one already in this repo
- * — `templates/story.md`, correct and read by nothing — is the reason this one
- * is computed instead.
+ * copy of a schema is a second source of truth, and the one this repo used to
+ * ship — `templates/story.md` and `templates/epic.md`, correct and read by
+ * nothing (gh #48) — is the reason this one is computed instead. Those two files
+ * are DELETED as of 0.5.0 (owner decision, option (a)): `planContractExamples()`
+ * is now the only story and the only epic anyone copies, and
+ * `test/plan-schema-contract.test.ts` fails if either comes back.
  *
  * `Record<StoryKey, Field>` is load-bearing: add a key to `STORY_KEYS` and this
  * file stops compiling until the new key has a value and a rule here.

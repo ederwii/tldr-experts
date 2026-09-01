@@ -315,7 +315,28 @@ async function runAllowlisted(
   ctx: CheckContext,
   timeoutS: number,
 ): Promise<CommandRun> {
-  const workspace = loadWorkspace(ctx.root);
+  return await runDeclaredCommand(ctx.root, command, repo, expectExit, timeoutS);
+}
+
+/**
+ * The same body, addressed by workspace root rather than by a `CheckContext`.
+ *
+ * `tldrx watch check --execute` (issue #65) re-runs the `$ <cmd> → exit <n>`
+ * source a watcher card recorded, months after the run that wrote it closed —
+ * there is no stage and no `CheckContext` at that point, only a root and a card.
+ * It is the same function and not a second one on purpose: the allowlist
+ * comparison, the argv-split-never-a-shell rule and the timeout are the safety
+ * properties, and a second copy of them is a second place for one of the three to
+ * go missing.
+ */
+export async function runDeclaredCommand(
+  root: string,
+  command: string,
+  repo: string,
+  expectExit: number,
+  timeoutS: number,
+): Promise<CommandRun> {
+  const workspace = loadWorkspace(root);
   const refusal = allowlistIssue(command, workspace.commands, "stage");
   if (refusal !== null) return { ok: false, exitCode: null, ms: 0, detail: refusal, timedOut: false };
   const cwd = repoPath(workspace, repo);

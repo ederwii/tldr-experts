@@ -17,7 +17,7 @@
  * last link breaks. Neither can be fixed by editing prose.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseYaml } from "../src/core/yaml.ts";
@@ -146,61 +146,90 @@ describe("the contract cannot drift from the schema", () => {
   });
 });
 
-describe("the shipped templates are held to the same contract (#48)", () => {
+describe("the second copy of the schema is gone, not just guarded (#48)", () => {
   /**
-   * `templates/story.md` and `templates/epic.md` state the Plan front-matter schema, are
-   * shipped in the npm package (`package.json` → `files`), and NOTHING in `src/` reads
-   * either one. They are a second copy of a contract whose first copy is computed from
-   * `STORY_KEYS` / `EPIC_KEYS`, and they were correct only by luck: add a required key
-   * and `schemaContract.ts` stops compiling — `Record<StoryKey, Field>` sees to that —
-   * while these two say nothing at all. A human then opens the template, writes a story
-   * the check refuses, and the framework looks broken.
+   * Owner decision (Alan, 2026-09-01), option (a): `templates/story.md` and
+   * `templates/epic.md` are DELETED, and the story and epic anyone copies are
+   * GENERATED from `planContractExamples()` instead.
    *
-   * This is the guard half of #48, not the packaging half. Whether these files should be
-   * generated from `planContractExamples()` or deleted outright is the owner's call, and
-   * deleting a shipped file is not a decision a drift test gets to make. Until then they
-   * go red the moment they disagree with the schema.
+   * What this describe asserted before that decision was that the two shipped files
+   * agreed with `STORY_KEYS` / `EPIC_KEYS`. It asserts the same contract now, against
+   * the generated output — plus the one thing a drift test could not say while the
+   * files were still on disk: that they are gone, and that nothing else under
+   * `templates/` has quietly grown a third copy of the Plan front matter.
    *
-   * The dod commands are read out of each template rather than asserted against a
-   * workspace: a template has no `workspace.yml` to be verbatim against, and #48 is about
-   * the FRONT MATTER. What is checked is that the block exists and parses.
+   * The teeth are unchanged. Break the generator — a key renamed in the example, a
+   * `status:` the enum does not have, a `touches:` that is no longer a list — and
+   * `validateStoryFile` / `validateEpicFile` refuse it here, exactly as the `plan`
+   * check would refuse it mid-run.
+   *
+   * The dod commands come from the example itself rather than from a workspace:
+   * `validateStoryDod` refuses every command under an EMPTY allowlist, and #48 is
+   * about the FRONT MATTER.
    */
-  const read = (name: string): string => readFileSync(join(TEMPLATES_DIR, name), "utf8");
+  test("templates/story.md and templates/epic.md are not on disk any more", () => {
+    for (const name of ["story.md", "epic.md"]) {
+      const state = existsSync(join(TEMPLATES_DIR, name)) ? "STILL SHIPPED" : "gone";
+      expect(`${name}: ${state}`).toBe(`${name}: gone`);
+    }
+  });
 
-  test("templates/story.md validates through the same `validateStoryFile` the check runs", () => {
-    const text = read("story.md");
-    const dod = parseDodBlock(parseFrontMatter(text).frontMatter.body);
+  /**
+   * Deleting two files does not stop a third from being added — and a `plan-story.md`
+   * carrying the same front matter would be the same defect under a name this test
+   * never mentioned. So the guard is on the SHAPE, not on the two file names.
+   */
+  test("no other shipped template has grown a copy of the Plan front matter", () => {
+    const offenders: string[] = [];
+    for (const name of readdirSync(TEMPLATES_DIR).filter((n) => n.endsWith(".md"))) {
+      const doc = parseFrontMatter(readFileSync(join(TEMPLATES_DIR, name), "utf8")).doc;
+      if (doc === null) continue;
+      const keys = Object.keys(doc as Record<string, unknown>).join(",");
+      if (keys === STORY_KEYS.join(",")) offenders.push(`${name} carries STORY_KEYS`);
+      if (keys === EPIC_KEYS.join(",")) offenders.push(`${name} carries EPIC_KEYS`);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  test("the GENERATED story validates through the same `validateStoryFile` the check runs", () => {
+    const examples = planContractExamples();
+    const dod = parseDodBlock(parseFrontMatter(examples.story).frontMatter.body);
     expect(dod.present).toBe(true);
-    expect(dod.commands.length).toBeGreaterThan(0);
+    expect(dod.commands).toEqual([...examples.dodCommands]);
 
-    const parsed = validateStoryFile(text, new Set(dod.commands));
+    const parsed = validateStoryFile(examples.story, new Set(dod.commands));
     expect(parsed.validation.issues).toEqual([]);
     expect(parsed.story).not.toBeNull();
   });
 
-  test("templates/story.md's keys ARE `STORY_KEYS`, in order — no extra, none missing", () => {
-    expect(keysOf(read("story.md"))).toEqual([...STORY_KEYS]);
+  test("the GENERATED story's keys ARE `STORY_KEYS`, in order — no extra, none missing", () => {
+    expect(keysOf(planContractExamples().story)).toEqual([...STORY_KEYS]);
   });
 
-  test("templates/epic.md validates through the same `validateEpicFile` the check runs", () => {
-    const parsed = validateEpicFile(read("epic.md"));
+  test("the GENERATED epic validates through the same `validateEpicFile` the check runs", () => {
+    const parsed = validateEpicFile(planContractExamples().epic);
     expect(parsed.validation.issues).toEqual([]);
     expect(parsed.epic).not.toBeNull();
   });
 
-  test("templates/epic.md's keys ARE `EPIC_KEYS`, in order", () => {
-    expect(keysOf(read("epic.md"))).toEqual([...EPIC_KEYS]);
+  test("the GENERATED epic's keys ARE `EPIC_KEYS`, in order", () => {
+    expect(keysOf(planContractExamples().epic)).toEqual([...EPIC_KEYS]);
   });
 
   /**
-   * The `status:` line in both templates carries the enum as a trailing comment. That
-   * comment is prose — the validator never reads it — so it is exactly the kind of copy
-   * that goes stale silently and then teaches a reader a status that does not exist.
+   * The deleted templates spelled the enum a SECOND time, in a trailing comment
+   * beside `status:` that no validator ever read — the kind of prose that goes stale
+   * silently and then teaches a reader a status that does not exist. There is one
+   * spelling left, and it is generated: asserted from both ends so neither can rot.
    */
-  test("the enum each template spells out beside `status:` is the real `PLAN_STATUSES`", () => {
-    for (const name of ["story.md", "epic.md"]) {
-      const line = read(name).split("\n").find((l) => l.trimStart().startsWith("status:"));
-      expect(`${name}: ${line ?? "NO status: LINE"}`).toContain(PLAN_STATUSES.join(" | "));
+  test("the only enum anyone reads is `PLAN_STATUSES` itself", () => {
+    expect(renderPlanSchemaContract()).toContain(PLAN_STATUSES.join(" | "));
+    const examples = planContractExamples();
+    const statuses: readonly string[] = PLAN_STATUSES;
+    for (const [what, text] of [["story", examples.story], ["epic", examples.epic]] as const) {
+      const status = (parseFrontMatter(text).doc as { status?: string } | null)?.status ?? "";
+      expect(`${what} status \`${status}\`: ${statuses.includes(status) ? "in the enum" : "NOT IN THE ENUM"}`)
+        .toBe(`${what} status \`${status}\`: in the enum`);
     }
   });
 });
@@ -235,7 +264,6 @@ describe("the shipped templates are held to the same contract (#48)", () => {
  *    (`schemaContract.ts:20`). Status is state, which rots faster than a schema does.
  */
 describe("the epic file states no story's status (#50)", () => {
-  const read = (name: string): string => readFileSync(join(TEMPLATES_DIR, name), "utf8");
 
   /**
    * Every `<story id> = <status>` claim a stretch of markdown makes: any line that
@@ -272,11 +300,12 @@ describe("the epic file states no story's status (#50)", () => {
     expect(storyStatusClaims("## Stories\n\nOne file each under `03-plan/stories/`.")).toEqual([]);
   });
 
-  test("templates/epic.md's body claims no story's status", () => {
-    expect(storyStatusClaims(parseFrontMatter(read("epic.md")).frontMatter.body)).toEqual([]);
-  });
-
-  test("the epic example the Plan agent is told to copy claims none either", () => {
+  /**
+   * `templates/epic.md` used to be the second half of this assertion. It is deleted
+   * (#48, owner option (a)), so the generated epic is now the ONLY epic anyone
+   * copies — and the only one that can carry the table back.
+   */
+  test("the epic example the Plan agent is told to copy claims no story's status", () => {
     const epic = planContractExamples().epic;
     expect(storyStatusClaims(parseFrontMatter(epic).frontMatter.body)).toEqual([]);
   });
@@ -291,9 +320,10 @@ describe("the epic file states no story's status (#50)", () => {
     mkdirSync(join(dir, "stories"), { recursive: true });
     mkdirSync(join(dir, "epics"), { recursive: true });
 
+    const examples = planContractExamples();
     const storyPath = join(dir, "stories", "S1.md");
-    writeFileSync(storyPath, read("story.md"), "utf8");
-    writeFileSync(join(dir, "epics", "E1.md"), read("epic.md"), "utf8");
+    writeFileSync(storyPath, examples.story, "utf8");
+    writeFileSync(join(dir, "epics", "E1.md"), examples.epic, "utf8");
 
     writeFileSync(
       storyPath,

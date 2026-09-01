@@ -49,6 +49,59 @@
     table a report on the reviewer.
   - `--all` is refused (exit `1`) alongside a `<run-id>` or `--apply`, before a file is opened: each
     asks for the opposite of what `--all` does.
+- **`tldrx watch check` is the post-merge checklist (#65, owner decision 2026-09-01: manual command
+  first, `gh` detector later).** `tldrx ship` opens the PR carrying the handoff and the watcher card
+  lists the signals that would prove the feature works — and nothing joined the two, so
+  "merged ≠ deployed ≠ verified" stayed a thing a person had to remember. Remembered wrongly once, it
+  destroyed 19 records. `watch check` now reads the run's cards under `05-watch/watchers/` and prints
+  each card's `## Signal` items as a numbered checklist with `## Where`, the baseline, what broken
+  looks like, and the Query block, so there is one screen to work through after a merge.
+  - **A feature id is now OPTIONAL.** `tldrx watch check` checks every card in the run — the shape a
+    CI job wants; `tldrx watch check <feature>` scopes it to one and still prints the citation
+    verdict `check` always printed. The citation re-check is unchanged and still exits 1 on a dead
+    `[src: …]`.
+  - **Owners are DERIVED, never invented.** The watcher schema has no `owner:` key and adding one
+    would have been a key nothing writes (the #48 defect again). The owner of a signal here is the
+    repo its own citation names — `[src: api:src/Leaderboard.cs:64]` says `api` — and an item that
+    cites no repo says so rather than borrowing the card's.
+  - **Runnable means the card AND the workspace say so.** Only a `$ <cmd> → exit <n>` source whose
+    command `.tldrx/workspace.yml` declares, in a repo the item or the card names unambiguously, is
+    offered. `--execute` (off by default) re-runs exactly those, through `runDeclaredCommand` — the
+    same allowlist, argv-never-a-shell and timeout the stage `cmd` check uses, extracted rather than
+    copied — and reports the exit each gets NOW against the exit the card recorded. That is the one
+    thing in the framework that catches a card whose `$ … → exit 0` has quietly become an exit 1:
+    `resolveSrc` checks a `cmd` source's MEMBERSHIP and takes the exit code on the agent's word.
+  - **A `## Query` block is never runnable.** It is KQL or SQL for the console named under
+    `## Where`, which tldrx has neither credentials nor a client for, so it is reproduced with its
+    fence language and marked print-only.
+  - **Three refusals, told apart because they need different actions.** No `05-watch/` at all ("its
+    Watch stage never ran"), a Watch stage that wrote no card ("no story reached `done`"), and a
+    `draft` card — which is not a failure but an answer: the card's own `absent:` sources are quoted
+    back as what to instrument. The two empty cases exit 3, never 0; a green meaning "I read no
+    cards" is the failure this command exists to stop.
+
+### Removed
+
+- **`templates/story.md` and `templates/epic.md` are deleted (#48, owner decision 2026-09-01,
+  option (a)).** They stated the Plan front-matter schema, shipped in the npm package, and
+  `grep -rn 'story\.md' src/` found nothing that read either one. Since 3ae0ce9 the live copy is
+  generated: `src/core/plan/schemaContract.ts` builds the story, the epic and `waves.yml` from
+  `STORY_KEYS` / `EPIC_KEYS` / `PLAN_STATUSES` / the `MAX_*` constants and splices them into the Plan
+  prompt. The drift guard 7ac298c added held the two files to that contract; deleting them removes
+  the second copy instead of maintaining it.
+  - **The consumers were tests, and they now generate.** `test/plan.test.ts` and
+    `test/plan-schema-contract.test.ts` were the only readers; both take the story and the epic from
+    `planContractExamples()`. Nothing in `src/`, `stages/`, `workflows/`, `plugin/` or `docs/` read
+    either file, and `run new` never copied them.
+  - **`templates` stays in `package.json` → `files`.** The directory still ships eleven templates
+    that ARE read at runtime — `templates/expert.md` and `templates/experts/<role>.md` are read by
+    `createExpert.ts` and `roleExperts.ts` in an installed package — so removing the entry would
+    break `tldrx expert create` to delete two files that no longer exist.
+  - **The drift guard changed meaning and kept its teeth.** It now asserts the GENERATED story and
+    epic validate through `validateStoryFile` / `validateEpicFile` with keys equal to `STORY_KEYS` /
+    `EPIC_KEYS` in order, that neither file is back on disk, and that no OTHER shipped template has
+    grown the same front matter under a new name. Proven, not assumed: setting the example's
+    `status:` to `wip` turns 4 tests red, and renaming `test_plan` in the generator turns 6 red.
 
 ## 0.4.0 — 2026-09-01
 

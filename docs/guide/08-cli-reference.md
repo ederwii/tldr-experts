@@ -656,13 +656,26 @@ is [10 — Unattended mode](10-unattended-mode.md). Exits: `0` `1`.
 
 ```
 tldrx watch list  [--json] [--run <id>] [--root <path>]
-tldrx watch check <feature> [--run <id>] [--root <path>]
+tldrx watch check [<feature>] [--execute] [--run <id>] [--root <path>]
 ```
 
-`check` re-validates one watcher card off disk: every `[src: …]` still resolves, and the
-stamped `status:` still equals what its `## Signal` sources earn. **It exits `1` when a
-citation no longer resolves** — a check that reported rot on stdout and exited `0` would be
-invisible to CI. `3` for an unknown feature, naming the ones that exist. Exits: `0` `1` `2` `3`.
+`check` is the post-merge checklist (#65). It prints each card's `## Signal` items as a
+numbered list with the repo that owns each one, plus `## Where`, the healthy baseline, what
+broken looks like, and the `## Query` block — and it re-validates the card while it is there:
+every `[src: …]` still resolves, and the stamped `status:` still equals what its `## Signal`
+sources earn. Omit `<feature>` and every card in the run is checked; name one to scope it.
+
+**Only a `$ <cmd> → exit <n>` signal is runnable**, and only when `.tldrx/workspace.yml`
+declares that exact command in a repo the item or the card names unambiguously. `--execute`
+re-runs those and reports the exit each gets now against the exit the card recorded; without
+it nothing is run. A `## Query` block is never runnable — it belongs to the console named
+under `## Where`.
+
+**It exits `1` when a citation no longer resolves**, or when an executed command disagrees
+with the card — a check that reported rot on stdout and exited `0` would be invisible to CI.
+`3` for an unknown feature (naming the ones that exist), for a run whose Watch stage never
+ran, and for a Watch stage that wrote no card; those last two are different sentences because
+they need different actions. Exits: `0` `1` `2` `3`.
 
 ## `tldrx tickets`
 

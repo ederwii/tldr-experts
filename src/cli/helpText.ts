@@ -1008,20 +1008,31 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "watch",
-    description: "List the watcher cards a run produced, or re-check one against the code as it is now.",
-    args: [{ name: "[<feature>]", meaning: "watch check: which card to re-resolve. Required for check, unused by list." }],
+    description: "List the watcher cards a run produced, or work through them as a post-merge checklist.",
+    args: [{ name: "[<feature>]", meaning: "watch check: which card to check. Omit it and every card in the run is checked; unused by list." }],
     flags: [
       runFlag(),
       json("the card list", "list"),
+      {
+        name: "execute",
+        arg: null,
+        meaning: "Re-run the `$ <cmd> → exit <n>` sources the cards recorded, through the same workspace.yml allowlist a stage check uses, and report the exit each one gets NOW. Off by default: without it every signal is printed, never run. A `## Query` block is never run — it belongs to the console named under `## Where`.",
+        sub: "check",
+      },
       root(),
     ],
     examples: [
       "tldrx watch list",
       "tldrx watch list --json",
+      "tldrx watch check",
       "tldrx watch check checkout-flow",
+      "tldrx watch check --execute",
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
-    notes: ["`watch check` exits 1 when a citation no longer resolves — a check that reported rot on stdout and exited 0 would be invisible to CI."],
+    notes: [
+      "`watch check` exits 1 when a citation no longer resolves — a check that reported rot on stdout and exited 0 would be invisible to CI.",
+      "It exits 3 when there is nothing to check, and says which nothing: a run whose Watch stage never ran, or a Watch stage that shipped no feature. A green that means \"I read no cards\" is the failure this command exists to stop.",
+    ],
   },
   {
     name: "tickets",
