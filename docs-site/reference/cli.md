@@ -73,7 +73,7 @@ tldrx approve --note "…"    # sign the gate; the checks are re-run first
 | `tldrx map --refresh \| --check` | Rebuild the code map, or check it against the code for drift. |
 | `tldrx expert list \| create \| train \| recompute` | See [Experts](/guides/experts). |
 | `tldrx seed triage` / `seed apply` | Split a big document into several runs. |
-| `tldrx watch list \| check <feature>` | The watcher cards a run produced, re-checked against the code now. |
+| `tldrx watch list \| check [<feature>]` | The watcher cards a run produced: listed, or printed as the post-merge checklist and re-checked against the code now. |
 | `tldrx plan sync-dod` | Repair story definitions of done after editing `workspace.yml`. |
 | `tldrx dashboard` | Watch the workspace live in a browser, or export one static page. |
 | `tldrx replay [<run>]` | The run's event log as a narrative. |
