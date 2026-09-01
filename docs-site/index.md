@@ -11,7 +11,7 @@ hero:
       link: /quickstart
     - theme: alt
       text: Try it offline, free
-      link: /quickstart#try-the-whole-thing-first-for-free
+      link: /quickstart#first-try-it-for-free
     - theme: alt
       text: GitHub
       link: https://github.com/ederwii/tldr-experts
