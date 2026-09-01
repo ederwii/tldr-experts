@@ -67,9 +67,36 @@ export async function runLearn(options: LearnOptions, io: LearnIo): Promise<numb
     return EXIT_FAILED;
   }
 
+  /**
+   * A chapter that is already played cannot be played again on this sandbox.
+   *
+   * Measured 2026-09-01 (#30 QA): `tldrx learn --chapter 5` on a finished sandbox
+   * printed the card, the intro and the first narration and THEN died at `tldrx
+   * run new: tldrx-work/260901-price-typo already exists`. Every chapter's
+   * commands really ran, and most of them refuse to run twice — so this is
+   * refused BEFORE a line is narrated, and the refusal names both ways forward.
+   */
+  if (options.chapter !== undefined && isComplete(progress, options.chapter)) {
+    const next = resumeAt(progress, numbers);
+    io.warn(
+      `tldrx learn: chapter ${String(options.chapter)} is already played, and its commands really ran `
+      + "against this sandbox — most of them refuse to run twice (`run new` on a run that already "
+      + "exists, `approve` on a gate that is already signed), so replaying it would die halfway "
+      + "through.\n"
+      + "  `tldrx learn --reset` rebuilds the sandbox and plays it from the start.\n"
+      + (next === null
+        ? "  Every chapter is played, so there is nothing to pick up.\n"
+        : `  \`tldrx learn\` picks up where you left off, at chapter ${String(next)}.\n`),
+    );
+    return EXIT_FAILED;
+  }
+
   const start = options.chapter ?? resumeAt(progress, numbers);
   if (start === null) {
-    io.write("Every chapter in this build is finished. `tldrx learn --reset` starts over.\n");
+    io.write(
+      `All ${String(CHAPTERS.length)} chapters are played. The sandbox is still at ${sandbox.root} — `
+      + "`tldrx learn --reset` rebuilds it and starts over.\n",
+    );
     return EXIT_OK;
   }
 
@@ -107,11 +134,56 @@ export async function runLearn(options: LearnOptions, io: LearnIo): Promise<numb
   }
 
   if (io.scenes) for (const line of renderFinale(io.ink)) io.write(`${line}\n`);
-  io.write(
-    `You ran ${String(CHAPTERS.length)} chapters of real commands for $0.00. `
-    + `The sandbox is at ${sandbox.root}; delete it whenever you like.\n`,
-  );
+  io.write(ending(sandbox.root, io));
   return EXIT_OK;
+}
+
+/**
+ * The last screen, and the only part of this command that is about a repo the
+ * tutorial has never seen.
+ *
+ * The #30 QA finished the tutorial "fluent and unsure of the first command to
+ * type": eight chapters of real commands and no door out of the sandbox. So the
+ * ending names the four verbs that start the same loop on real work, in the order
+ * somebody would actually type them — including the warning that `tldrx init`
+ * runs an interview by default, which is the one surprise a learner who has only
+ * ever seen `--no-interview` would walk into.
+ *
+ * One `write`, so a test can assert on the ending rather than on the whole
+ * transcript — half of these words also appear in chapters 4 and 5.
+ */
+export function ending(root: string, io: LearnIo): string {
+  const ink = io.ink;
+  return [
+    `You ran ${String(CHAPTERS.length)} chapters of real commands for $0.00. `
+      + `The sandbox is at ${root}; delete it whenever you like.`,
+    "",
+    ink.bold("Now the same loop on a repo you care about:"),
+    "",
+    `  ${ink.cyan("cd ~/your-repo && tldrx init")}`,
+    "      Detection only — no model, no network, nothing spent. It ends by offering",
+    "      `tldrx interview --init` — the questions detection could not answer, and there",
+    "      are always some.",
+    "      `--no-interview` skips them, and every gap they would have closed stays",
+    "      unrecorded — the tutorial used it because this repo was a toy. Read",
+    "      `.tldrx/init-handoff.md` either way; it is the file that says what was",
+    "      measured, what was inferred and what is still assumed.",
+    "",
+    `  ${ink.cyan("tldrx run new <slug> --scope hotfix --title \"…\"")}`,
+    "      Start small. `hotfix` is What → Build → Watch: three stages, no How and no",
+    "      Plan, one story, and a cheap first mistake. `--scope feature` is chapter 4.",
+    "",
+    `  ${ink.cyan("tldrx next")}`,
+    "      One stage, then it stops at the gate and names the command that comes next.",
+    "      Every refusal in this framework names the command that would fix it.",
+    "",
+    `  ${ink.cyan("tldrx ship")}`,
+    "      When the epic branch is green: opens the PR from it, with the run's handoff",
+    "      as the body. Nothing merges to your default branch without it.",
+    "",
+    `${ink.dim("`tldrx learn --reset` plays it all again. `tldrx --help` is the whole verb list.")}`,
+    "",
+  ].join("\n");
 }
 
 /**

@@ -16,6 +16,22 @@
  * says the command ran as intended (a `next` that stops at a human gate is a 4,
  * and that is a pass); `assert()` says the lesson actually happened. Both are
  * needed: a command can exit 0 having taught nothing.
+ *
+ * ## Known wart: the stream prints AFTER the summary it produced
+ *
+ * A step's stdout is streamed line by line (`onStdoutLine`), but its stderr — which
+ * is where the UI's own progress stream goes — is only available as a whole string
+ * when the child exits, so it is written after everything else. The learner reads
+ * `01-what/what done — $0.31 of $4.00` and only then the `[00:00] writing …` lines
+ * that produced it: the verdict before the work. Reported by the #30 cold-player QA
+ * 2026-09-01 and reproduced here.
+ *
+ * It is NOT fixed, and the reason is the seam: `SpawnOptions` has `onStdoutLine`
+ * and no `onStderrLine`, so interleaving means adding one to `runtime/Runtime.ts`
+ * and implementing it in BOTH `bunRuntime.ts` and `nodeRuntime.ts` — the phase-1
+ * wart, a runtime change made for a tutorial's cosmetics. Whoever adds
+ * `onStderrLine` for a real reason should pass it from `realStepRunner` and delete
+ * the buffered write above.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -103,6 +119,12 @@ export async function playChapter(
     writeScript(sandbox, scriptFor(expandTurns(step.agentTurns ?? [], sandbox)));
     const result = await run({ ...step, command }, sandbox, (line) => { io.write(`${line}\n`); });
     if (result.stderr !== "") io.write(result.stderr.endsWith("\n") ? result.stderr : `${result.stderr}\n`);
+    // The number chapter 2 TEACHES. An exit code is a property of the process,
+    // not a line in its output, so `$ tldrx next` reads identically whether it
+    // exited 0 or 4 and the sentence "it exits 4, which is not a failure" has
+    // nothing to point at. Printed only when it is not 0 — the ordinary case
+    // stays quiet, and every appearance is a code the chapter is about.
+    if (result.exitCode !== 0) io.write(`  ${io.ink.dim(`\u2192 exit ${String(result.exitCode)}`)}\n`);
 
     const expected = step.expectExit ?? [0];
     if (!expected.includes(result.exitCode)) {
@@ -182,8 +204,8 @@ export function expandTurns(turns: readonly AgentTurn[], sandbox: Sandbox): read
  * `{run}` is the NEWEST run — which is the one the chapter that opened it is
  * talking about, and stays so for the chapters after it, because ids sort by day
  * and then by slug and a later chapter's run is created later. A chapter that
- * needs an OLDER run must wait for the newer one to be finished (chapter 7 signs
- * the hotfix off; chapter 8 then finds one open run again and needs no id at all).
+ * needs an OLDER run must wait for the newer one to be finished (chapter 6 signs
+ * the hotfix off; chapters 7 and 8 then find one open run again).
  */
 export function expandCommand(command: readonly string[], sandbox: Sandbox): readonly string[] {
   const run = newestRunId(sandbox);
@@ -202,9 +224,9 @@ function expandPlaceholders(text: string, run: string): string {
  * Newest first, because `<yymmdd>-<slug>` sorts by day and a chapter that opens a
  * run is talking about the one it just opened. Open second, and it is the half
  * that matters once there is more than one: chapter 5 opens a hotfix beside the
- * feature run and chapters 6 and 7 carry it to its end — and the moment chapter 7
- * signs it off, `{run}` has to mean the feature run again, because that is the
- * one every remaining command will resolve to. "Open" is `!isFinished` — not
+ * feature run and chapter 6 carries it to its end — and the moment chapter 6 signs
+ * it off, `{run}` has to mean the feature run again, because that is the one
+ * every remaining command resolves to (chapter 7 depends on exactly this). "Open" is `!isFinished` — not
  * `done`, not `cancelled` — which is exactly the set `resolveRun` picks from
  * (`run/RunStore.ts:165`), so the placeholder and the CLI can never disagree.
  *

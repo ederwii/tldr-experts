@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+### Fixed
+
+- **`tldrx learn` — the cold-player QA round (#30).** A first-time player played all eight chapters
+  and returned SHIP-with-fixlist. Everything they found is fixed or recorded:
+  - **Chapter 8 no longer lies about the brake.** It said "the phase has already spent its Watch
+    money" while the tool printed `$1.89 left … estimate is $2.00`. The real mechanism is that a
+    re-run is priced at the stage's WHOLE declared `budget_usd`, never at what a second attempt might
+    add — so a stage that has spent anything can no longer afford itself. The chapter now says that,
+    quotes both figures, and `assert()`s them against the `budget.blocked` event so the numbers cannot
+    drift away from the sentence.
+  - **Chapter 1 no longer promises something chapter 2 does not deliver.** `--no-interview` skips
+    *init's* setup interview, which no chapter covers; the forward reference is gone and the debrief
+    now sends the learner to `.tldrx/init-handoff.md`, where measured/inferred/assumed and
+    `[src: …]` / `absent:` actually live.
+  - **`tldrx learn --chapter <n>` refuses a chapter that is already played**, up front and by name,
+    instead of narrating it and then dying mid-chapter on `run new: … already exists` (exit 1,
+    measured). The refusal names `--reset` and the chapter a bare `learn` would resume at.
+  - **The tutorial has a door out.** The ending now names the first four commands to type on a real
+    repo — `tldrx init` (with the warning that it runs an interview by default), `run new --scope
+    hotfix`, `next`, and `tldrx ship`.
+  - **Chapter 7 RUNS `next --prepare` and `next --commit`** against the feature run's Watch stage
+    instead of describing them in a debrief. Chapters 6 and 7 swapped for it: the attended chapter
+    addresses the feature run through `{run}`, so the hotfix run has to be signed off first.
+  - **Every non-zero exit code is printed** (`→ exit 4`), so the code chapter 2 teaches is a thing
+    the learner reads rather than a thing they are told. Chapter 5 now also demonstrates the exit-2
+    refusal a bare `next` gives with two runs open, and names the two run-id spellings.
+  - Jargon defined at first use — expert, level 0, the `claim-sources` / `no-reask` / `budget-gate`
+    bracket, `boundary`, `[src: …]`, `absent:`, economy, §2.11 — and the `expert … has no evidence`
+    nudge explained once instead of repeating unexplained nine times.
+  - Known and NOT fixed: a step's stderr (where the agent stream lives) is buffered and printed after
+    its stdout, so a summary can appear before the stream that produced it. Interleaving needs an
+    `onStderrLine` on the runtime seam and in both implementations; documented in `engine.ts`.
+
+- **`tldrx cost` no longer claims "two economies" over one (#56).** The `(no total: two economies, no
+  exchange rate)` footnote was unconditional, so a run whose every attempt was metered in dollars was
+  told no total could be printed. It is printed only when both economies are actually present.
+
 ### Added
 
 - **`tldrx learn` chapters 3-8 — the whole loop, played (#30, phase 2).** The tutorial now runs end to
@@ -10,9 +47,10 @@
   conditions, Plan's human gate, then a Build that cuts `epic/bulk-pricing`, spawns a developer in a
   worktree, re-runs the story's `npm run test` DoD, commits, merges and spawns a reviewer), **5** a
   genuinely red DoD and the three commands back from it (`story reopen`, `reject`, `budget raise`),
-  **6** `run attend host` and the refusal a bare `next` then gives, **7** an `agent` gate closed by
-  `approve --as-agent` over a structured evidence note, **8** `cost --all`, `run estimate`, and the
-  budget brake refusing a stage the phase can no longer afford.
+  **6** an `agent` gate closed by `approve --as-agent` over a structured evidence note, **7**
+  `run attend host`, the refusal a bare `next` then gives, and the `next --prepare` / `next --commit`
+  pair actually run, **8** `cost --all`, `run estimate`, and the budget brake refusing a stage the
+  phase can no longer afford.
   - Chapter 4's DoD is real, chapter 5's failure is real: the story's test script is `exit 0` until a
     developer replaces it with a `node` test that then catches a wrong number — so the tutorial teaches
     "a green DoD over an empty test proves nothing" by letting it happen rather than by saying it.

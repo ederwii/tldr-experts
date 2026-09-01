@@ -10,9 +10,14 @@
  *   3. the gate             an approval is a record
  *   4. build one story      branch → agent → DoD → commit → merge → review
  *   5. when things go wrong a red DoD, and the way back from it
- *   6. attend vs auto       who is allowed to spawn
- *   7. unattended           an agent gate, closed over an evidence note
+ *   6. the agent gate       a signature, closed over an evidence note
+ *   7. attended             who is allowed to spawn, and the pair you run instead
  *   8. money                the ledger, the estimate, and the brake
+ *
+ * **6 before 7 is load-bearing.** Chapter 7 addresses the FEATURE run through
+ * `{run}`, which means "the newest run that is still OPEN" — so the hotfix run
+ * chapter 5 opened has to be signed off first, and chapter 6 is what signs it.
+ * Swap them back and every command in 7 silently retargets the hotfix.
  *
  * ## Five things that will bite the next person who edits this file
  *
@@ -43,9 +48,16 @@
  * carrying the fact that answered it.
  *
  * **A stage's budget is spent once.** The brake compares what the phase has LEFT
- * against the stage's whole estimate, so any second attempt at any stage is
- * refused until `tldrx budget raise` gives it room (measured; it is why chapter 5
- * has seven steps and chapter 8 has a brake to show at all).
+ * against the stage's WHOLE declared `budget_usd` — never against what a second
+ * attempt might add — so any stage that has spent anything can no longer afford
+ * itself, and is refused until `tldrx budget raise` gives it room (measured; it is
+ * why chapter 5 is eight steps long and why chapter 8 has a brake to show at all).
+ *
+ * **A host turn's cost is DECLARED, not measured.** Chapter 7 hands the feature
+ * run's Watch stage to a host and commits it, and the `cost_usd` in the host's
+ * `result.json` is what the ledger records (`executors/watch.ts:collectResults`) —
+ * in the same MEASURED column as everything else. Measured 2026-09-01; chapter 7's
+ * debrief says so rather than claiming a separate economy it does not get.
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -57,6 +69,19 @@ import type { Sandbox } from "./sandbox.ts";
 
 /** The run chapter 2 creates, and every later chapter carries on with. */
 export const LEARN_RUN_SLUG = "bulk-pricing";
+
+/** The Watch phase directory and its stage id, as chapters 7 and 8 have to spell them. */
+const WATCH_PHASE_DIR = "05-watch";
+const WATCH_PHASE_STAGE = "watch";
+
+/**
+ * The feature id of the one watcher the feature run ships.
+ *
+ * It is `epic/bulk-pricing` with the prefix stripped (`watch/features.ts`), which
+ * is also what names the card file AND the per-feature bundle directory under
+ * `.agent/watch/`. One constant, because chapter 7 needs all three.
+ */
+const WATCHER_ID = "bulk-pricing";
 
 const QUESTION_ID = "Q1";
 
@@ -151,16 +176,26 @@ const CHAPTER_1: Chapter = {
   steps: [
     {
       narrate: [
-        "`--provider static` keeps the code map offline (the default would shell out to graphify),",
-        "and `--no-interview` skips the setup questions, which chapter 2 covers properly.",
+        "`--provider static` keeps the code map offline (the default would shell out to graphify).",
+        "`--no-interview` skips init's OWN setup interview — the handful of questions detection",
+        "could not answer. On a real repo it is worth answering; here they would be about a toy.",
       ],
       command: ["init", "--provider", "static", "--no-interview"],
     },
   ],
   debrief: [
-    "That repo table came from detection, not from you. Open `.tldrx/workspace.yml`:",
-    "the stack, the default branch, the build/test commands and a `confidence:` for each.",
-    "`.tldrx/conventions/` holds what it inferred about how this repo is written.",
+    "That repo table came from detection, not from you. `10 written · 16 created` counts two different",
+    "piles: the 10 are derived output `init` regenerates every time it runs, and the 16 are files it",
+    "writes once and then never touches — run `init` again and those 16 come back as `kept`, because",
+    "by then they may be yours. Nothing you have edited is overwritten.",
+    "",
+    "Open `.tldrx/workspace.yml` for the stack, the default branch, the build/test commands and a",
+    "`confidence:` for each. Then read the file the tool itself named: `.tldrx/init-handoff.md`. Two",
+    "habits live in it that the rest of this tutorial assumes. Every claim is labelled **measured**,",
+    "**inferred** or **assumed**. And every bullet ends in `[src: file:line]` — a citation the framework",
+    "re-checks, line number included — or `[src: absent:path]`, which is how it cites something that is",
+    "NOT there. `.tldrx/experts/` holds the six role files it seeded at `level 0`: an expert is a role a",
+    "sub-agent is given, and level 0 means seeded from detection with nothing learned about this repo yet.",
   ],
   async assert(sandbox: Sandbox): Promise<readonly string[]> {
     const failures: string[] = [];
@@ -189,7 +224,11 @@ const CHAPTER_2: Chapter = {
   intro: [
     "A run is a directory. `run new` makes one; `next` runs the stage the cursor is on.",
     "The first stage is What, and What's job is to come back with what it does NOT know.",
-    "Its sub-agent here is a stand-in — instant, deterministic, and $0.00. Everything else is real.",
+    "",
+    "Its sub-agent here is a stand-in — instant, deterministic, and $0.00 of real money. It names",
+    "itself `model fake-1` in the stream you are about to see. It is still METERED exactly like a",
+    "real one, so there will be dollar figures everywhere: bookkeeping, not a bill. Chapter 8 is",
+    "that ledger. Everything else in this tutorial is the shipped code doing the real thing.",
   ],
   steps: [
     {
@@ -203,7 +242,14 @@ const CHAPTER_2: Chapter = {
       narrate: [
         "`next` runs one stage — the one the cursor is on — and stops at its gate.",
         "It exits 4, which is not a failure: 4 is `awaiting a human`, the framework's",
-        "way of saying the work is done and the decision is yours.",
+        "way of saying the work is done and the decision is yours. The `→ exit 4` line",
+        "under the output is that code — printed whenever it is not 0, and never otherwise.",
+        "",
+        "Two things in the output are worth naming once. The bracket after `done` —",
+        "`(claim-sources:…, no-reask:…, budget-gate:…)` — is the stage's checks: every bullet",
+        "cites a source that resolves, nothing already answered gets asked again, and the stage",
+        "stayed inside its money. And `expert … has no evidence` is a nudge, never a block: these",
+        "experts were seeded by detection and nobody has trained them on this repo. It will repeat.",
       ],
       command: ["next"],
       // The gate on `what` is `human` in every workflow preset (workflows/feature.yml:20),
@@ -288,7 +334,8 @@ const CHAPTER_3: Chapter = {
   debrief: [
     "Open `tldrx-work/<run>/run.yml` and find the `what` stage. Its `gate:` line now reads",
     "`status: approved`, with your username in `by:`, a UTC `at:`, and your note kept verbatim.",
-    "The cursor moved on its own: `cursor: {phase: \"02-how\", stage: how}`. That is the whole gate.",
+    "The cursor moved on its own — the file's own line, whole:",
+    "`cursor: {phase: \"02-how\", stage: how, task: null}`. That is the whole gate.",
   ],
   async assert(sandbox: Sandbox): Promise<readonly string[]> {
     const failures: string[] = [];
@@ -506,13 +553,15 @@ const CHAPTER_4: Chapter = {
   title: "build one story — branch, agent, DoD, commit, merge, review",
   requires: [3],
   intro: [
-    "Two stages go by quickly here, because you already know their shape: run it, read it, sign it.",
+    "Two stages go by quickly here. One signs itself, one waits for you — you have met both shapes.",
     "Then Build, which is not like the others. It cuts a branch, opens a worktree, spawns a developer",
     "in it, re-runs the story's own Definition of Done, commits, merges, and spawns a reviewer.",
     "",
     "One thing happened before this chapter's first command: the tutorial committed what `tldrx init`",
-    "left untracked. Build refuses to cut a branch from a dirty tree — `refusing to cut an epic branch",
-    "from a dirty tree`, with the paths — and you will meet that refusal on your own repo one day.",
+    "left untracked. Build refuses to cut a branch from a dirty tree. It EXCUSES its own state —",
+    "`.tldrx/` and `tldrx-work/` — and you will see it say so (`ignoring 5 tldrx state file(s)`). But",
+    "`init` also edits two files that are YOURS: `.gitignore` and `CLAUDE.md`. Those are product dirt,",
+    "so they had to be committed, and you will meet that refusal on your own repo one day.",
   ],
   // Measured: Build lists `?? .gitignore` and `?? CLAUDE.md` as product dirt and
   // exits 2 before touching a branch. `.tldrx/` and `tldrx-work/` are excused as
@@ -524,7 +573,10 @@ const CHAPTER_4: Chapter = {
     {
       narrate: [
         "How designs against real files. Its gate is `auto` in this workflow — which is not a skip:",
-        "the harness signs it only when it can show its work, and it prints all seven conditions.",
+        "the harness signs it only when it can show its work, and it prints all seven conditions on",
+        "one `auto-gate:` line. The last one, `boundary`, is the one worth learning now: which paths",
+        "the branch actually changed, and how many of them fall outside what the stories said they",
+        "would touch. On a design stage it is `n/a`; in the Build step below it will have numbers.",
       ],
       command: ["next"],
       agentTurns: [{
@@ -588,8 +640,13 @@ const CHAPTER_4: Chapter = {
     "its exit code, the commit sha, and `04-build/log/S1.md` — open that too, for the reviewer's verdict.",
     "",
     "`git branch` in the sandbox shows `epic/bulk-pricing`: the work is merged there, NOT into `main`.",
-    "`tldrx ship` is what opens the PR. And look at what that green DoD actually ran — `npm run test`,",
-    "whose script in this repo is `exit 0`. Chapter 5 is about what that proves.",
+    "Nothing in this framework writes to your default branch. `tldrx ship` is the verb that ends a run:",
+    "it opens a PR from the epic branch, with the run's handoff as the body, so the reviewer gets the",
+    "same evidence the gates got. It is the last command of a real run and the tutorial never needs it,",
+    "because a sandbox has no remote. On your own repo it is the one you will type most.",
+    "",
+    "And look at what that green DoD actually ran — `npm run test`, whose script in this repo is",
+    "`exit 0`. Chapter 5 is about what that proves.",
   ],
   async assert(sandbox: Sandbox): Promise<readonly string[]> {
     const failures: string[] = [];
@@ -764,9 +821,21 @@ const CHAPTER_5: Chapter = {
     },
     {
       narrate: [
-        "Two runs are open now, so every command below spells out the one it means. Leave the id",
-        "off with two runs open and the framework refuses (exit 2) rather than guessing which.",
-        "`hotfix` gives What an `auto` gate, so this one signs itself.",
+        "Two runs are open now. Watch what a bare `tldrx next` does about that: it refuses (exit 2)",
+        "and lists them, rather than guessing which one you meant. Nothing runs and nothing is spent.",
+      ],
+      // Exit 2 is `refused`: a precondition the operator can fix. The chapter's
+      // point IS the code, so `assert()` below checks the state that produced it —
+      // two runs on disk, both open.
+      command: ["next"],
+      expectExit: [2],
+    },
+    {
+      narrate: [
+        "So every command from here spells out the run it means, and you will see two spellings.",
+        "`next` takes the run id POSITIONALLY (it accepts `--run` too). `approve` and `reject` take",
+        "`--run` and nothing else, and `story reopen` has already spent its positional slot on the",
+        "story id. `hotfix` gives What an `auto` gate, so this one signs itself.",
       ],
       command: ["next", "{run}"],
       agentTurns: [{
@@ -817,13 +886,19 @@ const CHAPTER_5: Chapter = {
         "A stage's budget is spent once. The Build phase has already paid for the attempt that",
         "failed, so a second one does not start until you give it room — run `next` without this",
         "and it refuses, printing this very command. Chapter 8 lets you watch that refusal happen.",
+        "",
+        "The phase moves by the $1.00 you asked for; the RUN ceiling moves to whatever its phases",
+        "now add up to, which is why it lands on $5.99 and not $6.00. A run ceiling is a sum, not",
+        "a separate pot.",
       ],
       command: ["budget", "raise", "04-build", "1", "--run", "{run}"],
     },
     {
       narrate: [
-        "Second attempt. Same story, same branch — the developer starts from the commits the",
-        "last one made, so the test it wrote is still there to judge the fix.",
+        "Second attempt — and `attempt 1 of 2` in the output is the cap: a story gets one developer",
+        "turn and one retry, and then it stays `blocked` for a person. (Reopening it by hand, as you",
+        "just did, resets the count — that was your decision, not the loop's.) Same story, same branch:",
+        "the developer starts from the commits the last one made, so the test it wrote judges the fix.",
       ],
       command: ["next", "{run}"],
       expectExit: [4],
@@ -865,6 +940,15 @@ const CHAPTER_5: Chapter = {
     const failures: string[] = [];
     const run = runIdBySlug(sandbox, LEARN_HOTFIX_SLUG);
     if (run === null) return [`no \`${LEARN_HOTFIX_SLUG}\` run was created — \`run new\` wrote nothing.`];
+    // The bare-`next` step's point IS exit 2, and a `next` with NO run at all also
+    // exits 2 — so check the state that produced the one this chapter means: two
+    // runs on disk, the feature run included.
+    if (runIdBySlug(sandbox, LEARN_RUN_SLUG) === null) {
+      failures.push(
+        `the \`${LEARN_RUN_SLUG}\` run is gone, so the bare \`tldrx next\` did not refuse over two open `
+        + "runs — it refused over none, which is a different lesson.",
+      );
+    }
     const events = read(sandbox, join(PROJECT_WORK_DIR, run, "events.jsonl"));
     if (!events.includes("which is not lower than")) {
       failures.push("events.jsonl carries no failing-DoD record — the red attempt did not happen.");
@@ -889,77 +973,13 @@ const CHAPTER_5: Chapter = {
 };
 
 // ---------------------------------------------------------------------------
-// 6 — attend vs auto
-// ---------------------------------------------------------------------------
-
-const CHAPTER_6: Chapter = {
-  n: 6,
-  id: "attend",
-  title: "attend vs auto — who is allowed to spawn",
-  requires: [5],
-  intro: [
-    "Everything so far has been the framework spawning sub-agents for you. That is one of two modes.",
-    "The other is a host session — a Claude Code window, you in it — doing the work, with the framework",
-    "still keeping the record, running the checks and holding the gates. One flag decides which.",
-  ],
-  steps: [
-    {
-      narrate: [
-        "This hands the run to a host. The framework will not spawn on it again — not `next`,",
-        "not `run auto`. Nothing else about the run changes.",
-      ],
-      command: ["run", "attend", "host", "{run}"],
-    },
-    {
-      narrate: [
-        "Now the same `tldrx next` you have been running all tutorial. It refuses — and the refusal",
-        "is the lesson: it names the command that IS yours to run, rather than doing something else.",
-      ],
-      command: ["next", "{run}"],
-      expectExit: [4],
-    },
-    {
-      narrate: [
-        "And back. `--none` hands the run to the framework again, which is what the last chapter",
-        "of this tutorial needs.",
-      ],
-      command: ["run", "attend", "--none", "{run}"],
-    },
-  ],
-  debrief: [
-    "The pair to remember: `tldrx next --prepare` writes the prompt bundle for a host turn, and",
-    "`tldrx next --commit` picks the same pipeline up at the DoD — the checks, the commit, the merge",
-    "and the reviewer all still run. Attended changes who writes the code, never who keeps the record.",
-    "`tldrx run status` prints `attended_by:` on any run that has it set.",
-  ],
-  async assert(sandbox: Sandbox): Promise<readonly string[]> {
-    const failures: string[] = [];
-    const run = runIdBySlug(sandbox, LEARN_HOTFIX_SLUG);
-    if (run === null) return [`the \`${LEARN_HOTFIX_SLUG}\` run chapter 5 opened is gone.`];
-    const events = read(sandbox, join(PROJECT_WORK_DIR, run, "events.jsonl"));
-    const flips = events.split("run.attended").length - 1;
-    if (flips < 2) {
-      failures.push(`events.jsonl records ${String(flips)} \`run.attended\` event(s); the chapter flips it twice.`);
-    }
-    const runYml = read(sandbox, join(PROJECT_WORK_DIR, run, "run.yml"));
-    if (/attended_by:\s*host/.test(runYml)) {
-      failures.push("run.yml still says `attended_by: host` — `run attend --none` did not hand it back.");
-    }
-    // The refusal only fires on a stage that is READY. A run sitting at a gate
-    // makes `tldrx next` answer "gate pending" instead — exit 4 either way, so
-    // the step would pass having taught the opposite of the chapter's point.
-    if (/^status:\s*awaiting_gate/m.test(runYml)) {
-      failures.push(
-        "the run is at a gate, so `tldrx next` answered `gate pending` and the attended refusal "
-        + "never fired — chapter 5 must leave this run with a stage that is `ready`.",
-      );
-    }
-    return failures;
-  },
-};
-
-// ---------------------------------------------------------------------------
-// 7 — unattended: an agent gate, closed over an evidence note
+// 6 — the agent gate, closed over an evidence note
+//
+// Before chapter 7 and not after it, and that is load-bearing: chapter 7 talks to
+// the FEATURE run through `{run}`, which means "the newest run that is still
+// OPEN". This chapter is the one that signs the hotfix off, so it is what makes
+// `{run}` mean the feature run from here on. Swap the two back and every command
+// in 7 silently retargets the hotfix.
 // ---------------------------------------------------------------------------
 
 /**
@@ -1014,11 +1034,11 @@ function evidenceNote(): string {
   ].join("\n");
 }
 
-const CHAPTER_7: Chapter = {
-  n: 7,
-  id: "unattended",
-  title: "unattended — an agent gate, and what a signature has to rest on",
-  requires: [6],
+const CHAPTER_6: Chapter = {
+  n: 6,
+  id: "agent-gate",
+  title: "the agent gate — what a signature has to rest on",
+  requires: [5],
   intro: [
     "A gate has three policies, not two. `human` waits for you. `auto` lets the harness sign when it",
     "can show its work. `agent` lets a sub-agent sign — but only over a structured evidence note:",
@@ -1093,55 +1113,207 @@ const CHAPTER_7: Chapter = {
 };
 
 // ---------------------------------------------------------------------------
-// 8 — money
+// 7 — attended: who is allowed to spawn, and the two commands you run instead
 // ---------------------------------------------------------------------------
 
-/** The one watcher card the feature run shipped. `epic/bulk-pricing` names the file. */
-const WATCHER_CARD: Readonly<Record<string, string>> = {
-  "{runDir}/05-watch/watchers/bulk-pricing.md": [
-    "---",
-    "version: 1",
-    "id: bulk-pricing",
-    "epic: E1",
-    "title: \"Bulk pricing reads a table\"",
-    "stories: [S1]",
-    "repos: [inventory]",
-    "status: draft",
-    "---",
+/**
+ * The one watcher card the feature run shipped. `epic/bulk-pricing` names the file
+ * (`watch/features.ts:featureId`).
+ *
+ * Written by `prepare()` rather than by an `agentTurns:` script because in this
+ * chapter the framework does not spawn anything: the run is `attended_by: host`,
+ * and the whole point of `--prepare`/`--commit` is that a HOST session writes the
+ * outputs. `prepare()` is the tutorial standing in for that session — the same
+ * hook, and for the same reason, as chapter 6's evidence note.
+ *
+ * It is planted before the chapter's first command rather than between two of
+ * them because a chapter has one hook and not one per step. That is safe here:
+ * `--prepare` writes only `prompt.md` and `pending.json` into the bundle
+ * directory (`facilitator/pending.ts:writeBundle`), so neither the card nor the
+ * `result.json` beside it is disturbed.
+ */
+const WATCHER_CARD_REL = `${WATCH_PHASE_DIR}/watchers/${WATCHER_ID}.md`;
+
+const WATCHER_CARD: string = [
+  "---",
+  "version: 1",
+  `id: ${WATCHER_ID}`,
+  "epic: E1",
+  "title: \"Bulk pricing reads a table\"",
+  "stories: [S1]",
+  "repos: [inventory]",
+  "status: draft",
+  "---",
+  "",
+  `# ${WATCHER_ID} · Bulk pricing reads a table`,
+  "",
+  "## Signal",
+  "",
+  "- Nothing is emitted when a price is looked up — `priceOf` returns and logs nothing,",
+  "  so this feature is not watchable yet [src: absent:src/pricing.ts]",
+  "",
+  "## Where",
+  "",
+  "- There is no log stream or dashboard in this workspace to read it in [src: absent:.tldrx/workspace.yml]",
+  "",
+  "## Healthy baseline",
+  "",
+  "- None measured: with no signal there is no number to take [src: absent:src/pricing.ts]",
+  "",
+  "## Looks broken when",
+  "",
+  "- A bulk SKU is charged the plain price, which today only a reader of the code would notice",
+  "  [src: inventory:src/pricing.ts:3]",
+  "",
+  "## Query",
+  "",
+  "```sh",
+  "npm run test",
+  "```",
+  "",
+  "## Sources",
+  "",
+  "- `src/pricing.ts:3` is the whole price rule, and it emits nothing.",
+  "- The workspace declares no observability command, so there is nowhere to query.",
+  "",
+].join("\n");
+
+/**
+ * What the host session hands back: the envelope `--commit` reads.
+ *
+ * `cost_usd` is DECLARED, not measured — the turn ran inside somebody else's
+ * session and was billed there. It is the one number in this tutorial the
+ * framework is told rather than watching, which is exactly what the chapter says.
+ */
+const HOST_RESULT_JSON = `${JSON.stringify({
+  outputs: [WATCHER_CARD_REL],
+  questions_asked: [],
+  notes: "written in-session by the host, as `--prepare` asked",
+  cost_usd: 0.11,
+}, null, 2)}\n`;
+
+const CHAPTER_7: Chapter = {
+  n: 7,
+  id: "attended",
+  title: "attended — you write the code, the framework still keeps the record",
+  requires: [6],
+  intro: [
+    "Everything so far has been the framework spawning sub-agents for you. That is one of two modes.",
+    "The other is a host session — a Claude Code window, you in it — doing the work, with the framework",
+    "still keeping the record, running the checks and holding the gates. One flag decides which.",
     "",
-    "# bulk-pricing · Bulk pricing reads a table",
+    "The hotfix run is signed off, so `{run}` means the feature run again and its last stage is",
+    "waiting: one watcher card to write. You are about to write it as a host would.",
+  ],
+  /**
+   * Stand in for the host session: the card it would write, and the `result.json`
+   * it would hand back. See the note on `WATCHER_CARD` for why this is a chapter
+   * hook and not an `agentTurns:` script — nothing spawns in this chapter.
+   */
+  async prepare(sandbox: Sandbox): Promise<void> {
+    const run = runIdBySlug(sandbox, LEARN_RUN_SLUG);
+    if (run === null) return;
+    const runDir = join(sandbox.workspace, PROJECT_WORK_DIR, run);
+    writeInto(join(runDir, WATCHER_CARD_REL), WATCHER_CARD);
+    writeInto(join(runDir, ".agent", WATCH_PHASE_STAGE, WATCHER_ID, "result.json"), HOST_RESULT_JSON);
+  },
+  steps: [
+    {
+      narrate: [
+        "This hands the run to a host. The framework will not spawn on it again — not `next`,",
+        "not `run auto`. Nothing else about the run changes.",
+      ],
+      command: ["run", "attend", "host", "{run}"],
+    },
+    {
+      narrate: [
+        "Now the same `tldrx next` you have been running all tutorial. It refuses — and the refusal",
+        "is the lesson: it names the command that IS yours to run, rather than doing something else.",
+      ],
+      command: ["next", "{run}"],
+      expectExit: [4],
+    },
+    {
+      narrate: [
+        "So run the command it named. `--prepare` assembles the prompt a sub-agent would have been",
+        "given and writes it to disk instead of spawning anything: the bundle path, the per-agent",
+        "ceiling, and the one file the turn is allowed to write. Nothing is spawned and nothing spent.",
+        "Open that `prompt.md` afterwards — it is the whole context the turn would have been given,",
+        "and nothing else. That is the thing `--prepare` exists to let you read before it is sent.",
+      ],
+      command: ["next", "--prepare", "{run}"],
+    },
+    {
+      narrate: [
+        "The host wrote the card the bundle asked for, and a `result.json` beside it. `--commit`",
+        "picks the SAME pipeline up from there: it re-reads every declared output off disk, validates",
+        "it, runs the stage's checks and stops at the gate. `0 verified, 1 draft` is the validation",
+        "talking — a card is `verified` only when nothing under `## Signal` cites `absent:`, and this",
+        "one is a draft because the repo emits nothing when a price is looked up. There is no signal",
+        "to cite yet, and the card says so rather than pretending.",
+      ],
+      command: ["next", "--commit", "{run}"],
+      expectExit: [4],
+    },
+    {
+      narrate: [
+        "And back. `--none` hands the run to the framework again, which is what the last chapter",
+        "of this tutorial needs.",
+      ],
+      command: ["run", "attend", "--none", "{run}"],
+    },
+  ],
+  debrief: [
+    "That is the pair: `tldrx next --prepare` writes the bundle for a host turn, `tldrx next --commit`",
+    "carries it the rest of the way — the declared outputs re-read off disk, validated, the stage's",
+    "checks, the gate. On a Build stage `--commit` also runs the Definition of Done, the commit, the",
+    "merge and the reviewer. Attended changes who writes the code, never who keeps the record.",
     "",
-    "## Signal",
-    "",
-    "- Nothing is emitted when a price is looked up — `priceOf` returns and logs nothing,",
-    "  so this feature is not watchable yet [src: absent:src/pricing.ts]",
-    "",
-    "## Where",
-    "",
-    "- There is no log stream or dashboard in this workspace to read it in [src: absent:.tldrx/workspace.yml]",
-    "",
-    "## Healthy baseline",
-    "",
-    "- None measured: with no signal there is no number to take [src: absent:src/pricing.ts]",
-    "",
-    "## Looks broken when",
-    "",
-    "- A bulk SKU is charged the plain price, which today only a reader of the code would notice",
-    "  [src: inventory:src/pricing.ts:3]",
-    "",
-    "## Query",
-    "",
-    "```sh",
-    "npm run test",
-    "```",
-    "",
-    "## Sources",
-    "",
-    "- `src/pricing.ts:3` is the whole price rule, and it emits nothing.",
-    "- The workspace declares no observability command, so there is nowhere to query.",
-    "",
-  ].join("\n"),
+    "One number here was not measured: the cost came from the `result.json` the host wrote, because a",
+    "host turn is billed to the session that ran it and nothing on this side watched it happen. It",
+    "lands in the ledger beside the metered ones — read `tldrx cost` as a record of what was reported,",
+    "not as a receipt. `tldrx run status` prints `attended_by:` on any run that has it set.",
+  ],
+  async assert(sandbox: Sandbox): Promise<readonly string[]> {
+    const failures: string[] = [];
+    const run = runIdBySlug(sandbox, LEARN_RUN_SLUG);
+    if (run === null) return ["the feature run chapter 2 opened is gone."];
+    const events = read(sandbox, join(PROJECT_WORK_DIR, run, "events.jsonl"));
+    const flips = events.split("run.attended").length - 1;
+    if (flips < 2) {
+      failures.push(`events.jsonl records ${String(flips)} \`run.attended\` event(s); the chapter flips it twice.`);
+    }
+    const runYml = read(sandbox, join(PROJECT_WORK_DIR, run, "run.yml"));
+    if (/attended_by:\s*host/.test(runYml)) {
+      failures.push("run.yml still says `attended_by: host` — `run attend --none` did not hand it back.");
+    }
+    // `--prepare` really prepared: a prompt bundle on disk, which no other chapter
+    // writes. This is also what keeps step 2 honest — the attended refusal exits 4
+    // and so does `gate pending`, so a run already AT its gate would pass step 2
+    // for the wrong reason. It could not pass step 3: `--prepare` on a stage that
+    // is not `ready` refuses, and the chapter dies there instead of lying here.
+    const bundle = join(PROJECT_WORK_DIR, run, ".agent", WATCH_PHASE_STAGE, WATCHER_ID, "prompt.md");
+    if (!sandboxHas(sandbox, bundle)) {
+      failures.push(`${bundle} is missing — \`tldrx next --prepare\` wrote no prompt bundle.`);
+    }
+    // `--commit` really committed: the card was validated and stamped, and the
+    // stage's own handoff was written from it.
+    const cardRel = join(PROJECT_WORK_DIR, run, WATCHER_CARD_REL);
+    if (!sandboxHas(sandbox, cardRel)) {
+      failures.push(`${cardRel} is missing — the host's card never reached the run.`);
+    } else if (!read(sandbox, cardRel).includes("status: draft")) {
+      failures.push(`${cardRel} was not stamped by \`--commit\` — its status is not \`draft\`.`);
+    }
+    if (!sandboxHas(sandbox, join(PROJECT_WORK_DIR, run, WATCH_PHASE_DIR, "handoff.md"))) {
+      failures.push("05-watch/handoff.md was not written — `--commit` did not finish the stage.");
+    }
+    return failures;
+  },
 };
+
+// ---------------------------------------------------------------------------
+// 8 — money
+// ---------------------------------------------------------------------------
 
 const CHAPTER_8: Chapter = {
   n: 8,
@@ -1156,43 +1328,38 @@ const CHAPTER_8: Chapter = {
   steps: [
     {
       narrate: [
-        "Before spending: what the stage that has not run yet would cost, and on what basis.",
-        "It says which numbers are measured and which are assumptions. It spawns nothing.",
-      ],
-      command: ["run", "estimate"],
-    },
-    {
-      narrate: [
-        "The feature run's last stage. It writes one card per SHIPPED feature — this one has one —",
-        "and stamps the card `verified` only when nothing under `## Signal` cites `absent:`.",
-      ],
-      command: ["next"],
-      expectExit: [4],
-      agentTurns: [{
-        match: "# Watch —",
-        say: "There is nothing to watch yet, and that is the finding.",
-        costUsd: 0.11,
-        writes: WATCHER_CARD,
-      }],
-    },
-    {
-      narrate: [
-        "Now the ledger. Per attempt, per stage, per run — rolled up from `events.jsonl`,",
-        "never typed by anybody. Two runs, ten sub-agent turns, and not one real cent.",
-      ],
-      command: ["cost", "--all"],
-    },
-    {
-      narrate: [
-        "One last thing worth meeting on purpose. Take the Watch gate back —",
-        "nothing is deleted and nothing is refunded, which is the whole point of the next command.",
+        "The feature run's Watch stage is sitting at the gate you committed in chapter 7. Take it",
+        "back — nothing is deleted and nothing is refunded, which is what the last command is about.",
       ],
       command: ["reject", "--note", "The card cites nothing that is actually instrumented"],
     },
     {
       narrate: [
-        "And the brake. The phase has already spent its Watch money, so the stage does not start.",
-        "A ceiling here is a refusal, not a warning — and it names the command that would fix it.",
+        "The stage is `ready` again. Before spending anything on it: what it would cost, and on what",
+        "basis. It says which numbers are measured and which are assumptions, and it spawns nothing.",
+        "`model haiku` is the model this stage asks for; the stand-in that has been answering all",
+        "tutorial called itself `fake-1` and ignored it. The estimate prices the real one, which is",
+        "the only honest thing to price.",
+      ],
+      command: ["run", "estimate"],
+    },
+    {
+      narrate: [
+        "Now the ledger. Per attempt, per stage, per run — rolled up from `events.jsonl`, never typed",
+        "by anybody. Two runs, ten recorded turns, and not one real cent. `ECONOMY` is the unit a run",
+        "is billed in, and both of these are `metered-usd`: dollars, from turns this process watched.",
+        "The other unit is `host-tokens`, for work billed inside somebody else's session. The two are",
+        "never added — there is no exchange rate between them (spec §2.11) — so a run that mixed them",
+        "would print no grand total at all, only one footer per economy.",
+      ],
+      command: ["cost", "--all"],
+    },
+    {
+      narrate: [
+        "And the brake. A re-run is priced at the stage's whole declared budget, not at what a second",
+        "attempt might add — so a stage that has spent anything can no longer afford itself.",
+        "$1.89 left, $2.00 asked. A ceiling here is a refusal, not a warning, and it names the",
+        "command that would fix it.",
       ],
       command: ["next"],
       expectExit: [2],
@@ -1202,23 +1369,36 @@ const CHAPTER_8: Chapter = {
     "`tldrx budget raise 05-watch 1` would let it run again — or `--take-from <phase>` to move the",
     "money instead of adding it. Either way the decision is yours and it is written down.",
     "",
-    "That is the loop: detect, ask, decide, design, plan, build, prove, watch — every step a file you",
-    "can open, every decision attributed, every dollar counted. Your sandbox is still there; break it.",
+    "That is the loop: What, How, Plan, Build, Watch. Five stages, every step a file you can open,",
+    "every decision attributed, every dollar counted. Your sandbox is still there; break it.",
   ],
   async assert(sandbox: Sandbox): Promise<readonly string[]> {
     const failures: string[] = [];
     const feature = runIdBySlug(sandbox, LEARN_RUN_SLUG);
     if (feature === null) return ["the feature run is gone — chapter 8 has nothing to account for."];
-    const cardRel = join(PROJECT_WORK_DIR, feature, "05-watch", "watchers", "bulk-pricing.md");
-    if (!sandboxHas(sandbox, cardRel)) {
-      failures.push(`${cardRel} was not written — the Watch stage produced no card.`);
-    }
     const events = read(sandbox, join(PROJECT_WORK_DIR, feature, "events.jsonl"));
-    if (!events.includes("budget.blocked")) {
-      failures.push("events.jsonl records no `budget.blocked` — the brake never fired.");
-    }
     if (!events.includes("gate.rejected")) {
       failures.push("events.jsonl records no `gate.rejected` — the gate was never taken back.");
+    }
+    if (!events.includes("budget.blocked")) {
+      failures.push("events.jsonl records no `budget.blocked` — the brake never fired.");
+      return failures;
+    }
+    // The narration quotes two figures. A tutorial that says "$1.89 left, $2.00
+    // asked" while the tool prints something else is the exact lie this fix round
+    // was opened for (#30 QA, 2026-09-01), so the numbers are asserted rather than
+    // trusted: change a stage budget or a scripted cost and this fails loudly.
+    if (!/"remaining_usd":\s*1\.89\b/.test(events)) {
+      failures.push(
+        "the `budget.blocked` event does not record $1.89 remaining, and the chapter's narration "
+        + "says it does — re-measure and fix the narration, or the tutorial is lying.",
+      );
+    }
+    if (!/"estimate_usd":\s*2(\.0+)?[,}]/.test(events)) {
+      failures.push(
+        "the `budget.blocked` event does not record a $2.00 stage estimate, and the chapter's "
+        + "narration says it does.",
+      );
     }
     return failures;
   },
@@ -1231,6 +1411,12 @@ export const CHAPTERS: readonly Chapter[] = [
 
 export function chapterByNumber(n: number): Chapter | undefined {
   return CHAPTERS.find((chapter) => chapter.n === n);
+}
+
+/** Write `content` at `path`, making the directories it needs. The `prepare()` hooks' one verb. */
+function writeInto(path: string, content: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, content, "utf8");
 }
 
 function read(sandbox: Sandbox, rel: string): string {

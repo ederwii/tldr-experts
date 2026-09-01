@@ -152,7 +152,9 @@ Each chapter narrates two to four lines, shows the exact command, waits for Ente
 real, and then points at the file that changed. `q` quits. Progress is a plain
 `progress.json` in the sandbox, so a bare `tldrx learn` resumes at the first unfinished
 chapter and `--chapter <n>` jumps — playing any earlier chapter it depends on first, so a jump
-onto a fresh sandbox works. Exits: `0` `1`.
+onto a fresh sandbox works. A chapter that is already played is REFUSED rather than replayed: its
+commands really ran, and most of them refuse to run twice, so the refusal names `--reset` and the
+chapter a bare `tldrx learn` would resume at. Exits: `0` `1`.
 
 **It cannot spend money and cannot touch your work.** The sandbox writes its own `claude`
 stand-in, points `TLDRX_CLAUDE_BIN` at it and puts it first on the child `PATH`, so no

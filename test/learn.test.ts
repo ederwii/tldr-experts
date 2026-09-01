@@ -550,6 +550,30 @@ describe("playChapter", () => {
     expect((await playChapter(four, await box(), io, runner)).ok).toBe(true);
   });
 
+  /**
+   * Chapter 2 TEACHES exit 4 and the learner never sees one: the code is a
+   * property of the process, not a line in its output, so `$ tldrx next` looks
+   * identical whether it exited 0 or 4. Printing it is the only way the sentence
+   * "it exits 4, which is not a failure" has anything to point at.
+   */
+  test("a non-zero exit is PRINTED — the number chapter 2 teaches has to be visible", async () => {
+    const io = collectingIo();
+    const runner: StepRunner = async () => ({ exitCode: 4, stdout: "", stderr: "" });
+    const four = chapter({ steps: [{ narrate: [], command: ["next"], expectExit: [4] }] });
+
+    expect((await playChapter(four, await box(), io, runner)).ok).toBe(true);
+    expect(io.out.join("")).toContain("exit 4");
+  });
+
+  test("exit 0 prints no exit line — the ordinary case stays quiet", async () => {
+    const io = collectingIo();
+    const runner: StepRunner = async () => okResult;
+
+    await playChapter(chapter(), await box(), io, runner);
+
+    expect(io.out.join("")).not.toContain("exit 0");
+  });
+
   test("commands can exit 0 and still not have taught the lesson — assert() decides", async () => {
     const io = collectingIo();
     const runner: StepRunner = async () => okResult;
@@ -638,6 +662,30 @@ describe("the chapters this build ships", () => {
         expect(required).toBeLessThan(chapter.n);
       }
     }
+  });
+
+  /**
+   * The order is load-bearing, not taste. Chapter 7 addresses the FEATURE run
+   * through `{run}`, which means "the newest run that is still OPEN" — so the
+   * hotfix run chapter 5 opened has to be signed off before chapter 7 runs, and
+   * the chapter that signs it off is the agent gate. Swap these two back and
+   * every command in 7 silently retargets the hotfix.
+   */
+  test("the agent gate comes before the attended chapter, so `{run}` can mean the feature run", () => {
+    expect(CHAPTERS.map((c) => c.id)).toEqual([
+      "init", "what", "gate", "build", "red", "agent-gate", "attended", "money",
+    ]);
+  });
+
+  /**
+   * #30's QA: chapter 6 described `--prepare`/`--commit` and ran neither, so the
+   * mode the framework is half made of was a paragraph. It has to be commands.
+   */
+  test("the attended chapter RUNS the pair it teaches, it does not describe it", () => {
+    const attended = CHAPTERS.find((c) => c.id === "attended");
+    const commands = (attended?.steps ?? []).map((step) => step.command.join(" "));
+    expect(commands.some((c) => c.includes("--prepare"))).toBe(true);
+    expect(commands.some((c) => c.includes("--commit"))).toBe(true);
   });
 
   test("chapter 2's run slug is a legal one — `run new` refuses anything else", () => {
@@ -761,6 +809,17 @@ describe("all eight chapters, played end to end", () => {
     expect(read(feature, "events.jsonl")).toContain("budget.blocked");
     expect(said).toContain("refusing to start stage");
 
+    // --- 7: the attended pair really RAN, and left a real prompt bundle ------
+    expect(existsSync(join(feature, ".agent", "watch", "bulk-pricing", "prompt.md")), said).toBe(true);
+    expect(said).toContain("prepared 05-watch/watch");
+    expect(said).toContain("watcher card(s)");
+
+    // --- the ending is a DOOR: the first commands to type in a real repo -----
+    const ending = io.out[io.out.length - 1] ?? "";
+    for (const door of ["tldrx init", "--no-interview", "--scope hotfix", "tldrx ship"]) {
+      expect(ending, `the ending never names ${door}`).toContain(door);
+    }
+
     // the transcript names the files the debriefs tell the learner to open
     for (const path of [
       ".tldrx/workspace.yml", ".tldrx/memory/facts.yml", "03-plan/stories/S1.md",
@@ -812,6 +871,46 @@ describe("all eight chapters, played end to end", () => {
     expect(code).toBe(0);
     for (const chapter of CHAPTERS) expect(io.out.join("")).toContain(chapter.title);
     expect(existsSync(join(root, "inventory", ".tldrx"))).toBe(false);
+  });
+
+  /**
+   * Measured 2026-09-01 on a finished sandbox: `tldrx learn --chapter 5` printed
+   * the chapter card, the intro and the first narration, and THEN died at
+   * `tldrx run new: tldrx-work/260901-price-typo already exists` (exit 1). Every
+   * chapter's commands really ran, and most of them refuse to run twice — so a
+   * replay has to be refused before a single line is narrated.
+   */
+  test("`--chapter n` on a chapter that is already played is refused UP FRONT", async () => {
+    const root = temp("tldrx-learn-replay-");
+    writeProgress(join(root, "progress.json"), { version: 1, completed: [1, 2, 3, 4, 5], updatedAt: "t" });
+    const io = collectingIo();
+
+    const code = await runLearn({
+      sandboxRoot: root, chapter: 5, reset: false, list: false, cols: 80, selfCommand: SELF,
+    }, io);
+
+    expect(code).toBe(1);
+    expect(io.err.join("")).toContain("chapter 5 is already played");
+    expect(io.err.join("")).toContain("--reset");
+    // the number it CAN pick up at, so the refusal is not a dead end
+    expect(io.err.join("")).toContain("chapter 6");
+    // and nothing was narrated first — that is the whole point
+    expect(io.out.join("")).toBe("");
+  });
+
+  test("`--chapter n` on an UNPLAYED chapter still works — the refusal is not a ban on jumping", async () => {
+    const root = temp("tldrx-learn-jump-");
+    writeProgress(join(root, "progress.json"), { version: 1, completed: [1, 2], updatedAt: "t" });
+    const io = collectingIo();
+
+    await runLearn({
+      sandboxRoot: root, chapter: 3, reset: false, list: false, cols: 80, selfCommand: SELF,
+      runner: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+    }, io);
+
+    // it plays (and fails on assert(), because the stub runner did no work) —
+    // what matters is that it was not REFUSED before narrating anything.
+    expect(io.out.join("")).toContain("chapter 3");
   });
 
   test("a chapter number this build does not have is refused, and says the range", async () => {
