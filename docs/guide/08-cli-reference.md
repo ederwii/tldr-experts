@@ -571,14 +571,86 @@ newest run and refuses (exit `2`) only when several are open. Exits: `0` `1` `2`
 
 ## `tldrx retro`
 
-Close a run and write down what it learned.
+Close a run and write down what it learned — or, with `--all`, what every run keeps catching.
 
 ```
 tldrx retro [<run-id>] [--apply] [--root <path>]
+tldrx retro --all [--root <path>]
 ```
 
 No model runs. `--apply` also appends the practice proposals to `.tldrx/memory/practices.md`,
 idempotently. Exits: `0` `1` `2` `3`.
+
+### `--all` — the cross-run trends table
+
+Every run leaves findings nobody aggregates: a reviewer's verdict and its `## Findings`, a fix
+list with a **disposition** per finding, `retro.md`'s `## Build feedback`, and the reason a
+person typed when they reopened a story. `--all` reads all four across **every** run under
+`tldrx-work/` and prints one table:
+
+```
+3 run(s) under tldrx-work/ · 2 contributed · 9 finding(s) · 1 same-run repeat(s) collapsed
+
+CLASS                      COUNT  RUNS  EXAMPLE
+-------------------------  -----  ----  -------
+authorization-not-widened      3     1  "The tenant filter is not applied to the read model…"
+                                        [src: tldrx-work/260830-tenancy/04-build/log/S5.md:13] · seen in: 260830-tenancy
+```
+
+Seven classes, in this precedence: `test-cannot-fail`, `missing-negative-control`,
+`unreachable-structure`, `stale-comment`, `authorization-not-widened`, `schema-drift`, `other`.
+Classification is **ordered keyword rules over the finding text** — no model, no scoring — so
+the same tree always gives the same table and a rule that misfires can be pointed at. `other`
+is a real row: a table it dominates says the taxonomy is too small.
+
+Four properties are the contract:
+
+- **Zero new state.** It writes nothing anywhere — not `retro.md`, not `practices.md`, no
+  cache. Safe to run out of curiosity, which is the only way anyone runs it.
+- **Absence is never an error.** A run with no Build phase, no retro, no events log or an
+  unreadable one contributes what it has and is still counted. An empty workspace is exit `0`
+  with `no runs found under tldrx-work/`.
+- **A repeat within one run is collapsed** — `retro.md` quotes the fix list verbatim, so the
+  same defect is on disk twice. The same finding in **two** runs is two occurrences, which is
+  the whole point of the table.
+- **A `refuted` fix-list finding is read and dropped.** It is the one disposition that says the
+  reviewer was wrong, with the citation proving it; ranking a class by disproven findings would
+  make this a report on the reviewer.
+
+`--all` is refused (exit `1`) alongside a `<run-id>` or `--apply`: each asks for the opposite of
+what `--all` does, and the refusal happens before a file is opened.
+
+## `tldrx drive`
+
+Print the session mandate for driving a run — the discipline, not the manual.
+
+```
+tldrx drive <--attended|--unattended>
+```
+
+The output is plain text you paste into the session that will drive a run (or read yourself
+before you start). It carries what the first real runs were actually driven by: the three-role
+protocol (developer sub-agent → a **fresh** adversarial reviewer, never the author → the host
+verifying both **in the code**, not in their reports), evidence discipline (measured / inferred
+/ assumed labelled in the same sentence as the claim, exit codes never read through a pipe,
+verification from the source, remote shas via `git ls-remote`), parking product questions
+instead of deciding them, calibrating the reviewer to the story's **stakes**, and declaring a
+turn's cost once — with a floor rather than a total when the records are incomplete.
+
+The two modes share that spine and differ in exactly two sections:
+
+| | `--attended` | `--unattended` |
+|---|---|---|
+| who drives the turns | you say which, and do not switch mid-run | the session, through `--prepare`/`--commit`; the framework never spawns |
+| who closes a gate | **you** — the session does the check, writes the note and hands you the command | the session, over a validated evidence note (`tldrx approve --as-agent`) |
+
+A mode is **required and never guessed** (exit `1`) — the same refusal `tldrx run attend` makes,
+and for the same reason: handing an attended session the unattended text tells it to sign gates
+that were never its to sign.
+
+It needs no workspace, opens no run, spawns nothing and writes nothing. It is versioned with
+the package: the header carries the framework version that printed it. The machinery it assumes
+is [10 — Unattended mode](10-unattended-mode.md). Exits: `0` `1`.
 
 ## `tldrx watch`
 

@@ -951,22 +951,60 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "retro",
-    description: "Close a run and write down what it learned.",
+    description: "Close a run and write down what it learned \u2014 or, with --all, what every run keeps catching.",
     args: [
       {
         name: "[<run-id>]",
-        meaning: "Which run to close. Omit it and the newest run is used; several runs open is a refusal (exit 2).",
+        meaning: "Which run to close. Omit it and the newest run is used; several runs open is a refusal (exit 2). Refused together with --all, which reads every run.",
       },
     ],
     flags: [
-      { name: "apply", arg: null, meaning: "Also append the practice proposals to .tldrx/memory/practices.md." },
+      { name: "apply", arg: null, meaning: "Also append the practice proposals to .tldrx/memory/practices.md. Refused together with --all, which writes nothing." },
+      {
+        name: "all",
+        arg: null,
+        meaning: "Aggregate ACROSS every run under tldrx-work/ instead of closing one, and print the trends table: finding class \u00d7 count \u00d7 how many runs it appeared in \u00d7 one example with its citation. Reads the review logs, the fix lists, retro.md and the story.reopened reasons; writes nothing anywhere.",
+      },
       root(),
     ],
     examples: [
       "tldrx retro",
       "tldrx retro 260101-checkout --apply",
+      "tldrx retro --all",
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
+    notes: [
+      "--all is strictly read-only: no retro.md, no practices.md, no cache, no state. A run missing any of the four sources contributes what it has and is still counted; an empty workspace is an empty answer at exit 0, not a failure.",
+      "Classification is deterministic keyword rules over the finding text \u2014 no model runs \u2014 so the same tree always produces the same table. `other` is a real row: a table it dominates is telling you the taxonomy is too small.",
+      "A repeat of one finding WITHIN a run is collapsed (retro.md quotes the fix list verbatim); the same finding in two runs is two occurrences, which is what the table is for.",
+    ],
+  },
+  {
+    name: "drive",
+    description: "Print the session mandate for driving a run \u2014 the discipline, not the manual.",
+    args: [],
+    flags: [
+      {
+        name: "attended",
+        arg: null,
+        meaning: "A person is at the keyboard and closes every gate. The mandate tells the session to do the checking anyway and hand the decision over \u2014 it never signs.",
+      },
+      {
+        name: "unattended",
+        arg: null,
+        meaning: "Nobody is watching. The mandate is for a session driving an `attended_by: host` run with `agent` gates: it drives every turn, signs a gate only over a written evidence note, and wakes a person for the four things that are still theirs.",
+      },
+    ],
+    examples: [
+      "tldrx drive --unattended",
+      "tldrx drive --attended",
+    ],
+    exits: [EXIT_OK, EXIT_USAGE],
+    notes: [
+      "Read-only in the strongest sense: it needs no workspace, opens no run, spawns nothing and writes nothing. The output is plain text to paste into the session that will drive the run.",
+      "A mode is required and never guessed (exit 1). The two mandates differ in exactly the place a wrong guess costs most \u2014 who may close a gate.",
+      "It is versioned with the package: the header carries the framework version that printed it.",
+    ],
   },
   {
     name: "watch",

@@ -78,6 +78,8 @@ tldrx approve --note "…"    # sign the gate; the checks are re-run first
 | `tldrx dashboard` | Watch the workspace live in a browser, or export one static page. |
 | `tldrx replay [<run>]` | The run's event log as a narrative. |
 | `tldrx retro` | Close a run and capture what was learned. |
+| `tldrx retro --all` | Read-only across EVERY run: which finding classes keep catching you, with counts and one cited example each. Writes nothing. |
+| `tldrx drive --attended \| --unattended` | Print the session mandate for driving a run — the three-role protocol, evidence discipline, parking, review calibration and budget honesty. Needs no workspace. |
 | `tldrx ship` | Open a PR from the epic branch, with the handoff as the body. |
 | `tldrx tickets` | Mirror epics and stories to a ticket tool. Files stay the source of truth. |
 | `tldrx note <run> "…"` | Record one operator annotation, changing nothing else. |

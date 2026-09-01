@@ -36,6 +36,7 @@ import { expertCommand } from "./commands/expert.ts";
 import { dashboardCommand } from "./commands/dashboard.ts";
 import { replayCommand } from "./commands/replay.ts";
 import { retroCommand } from "./commands/retro.ts";
+import { driveCommand } from "./commands/drive.ts";
 import { watchCommand } from "./commands/watch.ts";
 import { ticketsCommand } from "./commands/tickets.ts";
 import { interviewCommand } from "./commands/interview.ts";
@@ -71,6 +72,7 @@ export const COMMANDS: readonly Command[] = [
   dashboardCommand,
   replayCommand,
   retroCommand,
+  driveCommand,
   watchCommand,
   ticketsCommand,
   shipCommand,

@@ -58,6 +58,18 @@ Everything in this section is written and tested on main; none of it is tagged.
 - **`tldrx seed answer`**: a split's questions get somewhere to record the reply, and
   `seed apply` warns about the ones still open.
 
+## v1.3 — the driving discipline, packaged (on main, unreleased)
+
+- **`tldrx drive --attended|--unattended`** (#63): the host/driver mandate as a versioned
+  artifact instead of a chat paste — the three-role protocol, evidence discipline, parking,
+  review calibration by stakes and budget honesty. Two modes over one spine, differing only in
+  who may close a gate and who spawns. Needs no workspace and writes nothing.
+- **`tldrx retro --all`** (#64): what keeps catching you, across every run in the workspace —
+  finding class × count × runs × one cited example, mined from the review logs, the fix lists,
+  `retro.md` and the `story.reopened` reasons. Deterministic keyword rules, zero new state.
+  Feeding these classes back into the stage prompts and expert training is the half that is
+  NOT written: the reader exists, nothing consumes it yet.
+
 ## Adapters (opt-in, files stay the source of truth) — ticket mirror on main, unreleased; chat channel not started
 
 - Ticket mirror: Jira and GitHub are implemented; `linear` is in `process.yml`'s enum with no

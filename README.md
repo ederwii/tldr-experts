@@ -63,7 +63,21 @@ and names the `--prepare` command instead.
 
 ### Overnight, with the checking kept
 
-Two commands and a prompt. There is no keyword for this: the mandate is prose you write.
+Two commands and a prompt — and the prompt now ships with the package:
+
+```bash
+tldrx drive --unattended        # print the mandate; paste it into the session that drives the run
+tldrx drive --attended          # the same disciplines, but every gate stays yours to sign
+```
+
+`tldrx drive` needs no workspace, opens no run and writes nothing: it prints the discipline the
+first real runs were driven by — the three-role protocol (developer → a **fresh** adversarial
+reviewer, never the author → the host verifying both in the code, not in their reports), evidence
+labelled `measured` / `inferred` / `assumed`, product questions parked rather than decided, the
+reviewer calibrated to the story's stakes, and the cost declared once. The two modes differ in
+exactly two places: who drives the turns, and who may close a gate.
+
+The rest of this section is what that mandate says, in the shape you would type it by hand.
 
 ```bash
 tldrx run new payments --scope feature --budget 25 \
@@ -204,6 +218,11 @@ With several runs open and no id, every run-targeting command **refuses rather t
 exits `2`, and lists them — `tldrx next: 3 runs are open — pass one:`. That means "you left off
 the id", not "it broke". Pass a positional `<run>` on `next`, `run status`, `cost`, `replay` and
 `retro`; `--run <id>` on the rest. `tldrx run status` with several open lists them all, exit `0`.
+
+`tldrx retro --all` goes the other way: it reads **every** run in the workspace and prints one
+table of what keeps catching you — finding class × count × how many runs × one example with its
+citation — mined from the review logs, the fix lists, `retro.md` and the `story.reopened` reasons.
+Strictly read-only: it writes nothing, anywhere.
 
 ## What to commit
 
