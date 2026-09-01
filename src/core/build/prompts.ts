@@ -259,6 +259,85 @@ export interface ReviewerPromptParts {
    * existed asked for the same thing it asks for now.
    */
   readonly fixlistAvailable?: boolean;
+  /**
+   * What this workspace's own reviews keep finding (#74) — the top of
+   * `tldrx retro --all`, injected so a review does not start from zero and
+   * rediscover `test-cannot-fail` on its own.
+   *
+   * Optional and empty-safe: absent, or empty, renders NOTHING — no heading, no
+   * blank section. A workspace with no history must get byte-identical bytes to
+   * the ones this prompt had before the feature existed.
+   */
+  readonly recurring?: readonly RecurringClass[];
+}
+
+/**
+ * One row of the reviewer's prior: a class, how often and how widely it has been
+ * found here, and one real example with the citation that lets it be checked.
+ *
+ * It lives in this file rather than in `core/retro/` on purpose. `core/retro/`
+ * already imports `core/build/` (it mines the review logs and fix lists this
+ * phase writes), so the selector that produces these — `retro/reviewerFocus.ts`
+ * — imports the type from here and the arrow keeps pointing one way.
+ */
+export interface RecurringClass {
+  readonly cls: string;
+  /** Occurrences across the whole workspace. */
+  readonly count: number;
+  /** How many distinct runs it appeared in — the spread, which is the stronger signal. */
+  readonly runs: number;
+  /** One finding, verbatim. Null only if a caller builds a row without one. */
+  readonly example: string | null;
+  /** That example's `[src: …]`, so the reviewer can go and read it. */
+  readonly src: string | null;
+}
+
+/** The heading, exported so a test can assert its ABSENCE without spelling it twice. */
+export const REVIEWER_FOCUS_HEADING = "## What this team keeps getting wrong";
+
+/** Long enough to recognise the defect, short enough not to crowd the prompt. */
+const FOCUS_EXAMPLE_MAX = 96;
+
+/**
+ * The prior, or nothing at all.
+ *
+ * The two sentences around the list are load-bearing. A reviewer handed a list of
+ * three defect classes and no framing will find three defect classes — the
+ * failure mode of every prior — so the section says out loud that it is evidence
+ * about the TEAM, that a clean diff is a clean diff, and that the Rules below
+ * still decide the verdict.
+ */
+function recurringSection(recurring: readonly RecurringClass[] | undefined): readonly string[] {
+  if (recurring === undefined || recurring.length === 0) return [];
+  const lines = [
+    REVIEWER_FOCUS_HEADING,
+    "",
+    "This workspace's own history — `tldrx retro --all` over every run in it — ranks these",
+    "as the finding classes its reviews keep producing. Check for them specifically, and",
+    "check for them first: they are where the evidence says this team's defects are.",
+    "",
+  ];
+  for (const entry of recurring) {
+    lines.push(
+      `- \`${entry.cls}\` — ${String(entry.count)} finding(s) across ${String(entry.runs)} run(s)`,
+    );
+    if (entry.example !== null && entry.example !== "") {
+      lines.push(`  e.g. "${truncate(entry.example)}"`);
+    }
+    if (entry.src !== null && entry.src !== "") lines.push(`  ${entry.src}`);
+  }
+  lines.push(
+    "",
+    "It is a prior, not a checklist. A diff clean of all of them is clean, and saying so is",
+    "the right answer; finding one is not automatically `changes` — the Rules below still",
+    "decide that. Never write a finding you cannot cite in the diff.",
+    "",
+  );
+  return lines;
+}
+
+function truncate(text: string): string {
+  return text.length <= FOCUS_EXAMPLE_MAX ? text : `${text.slice(0, FOCUS_EXAMPLE_MAX - 1)}\u2026`;
 }
 
 /**
@@ -292,6 +371,8 @@ export function buildReviewerPrompt(parts: ReviewerPromptParts): string {
     "",
     `    ${diff}`,
     "",
+    // Before the criteria, so the prior frames the read rather than trailing it.
+    ...recurringSection(parts.recurring),
     "## Acceptance criteria",
     "",
     ...story.acceptance.map((item) => `- ${item}`),

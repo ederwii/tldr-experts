@@ -4,6 +4,49 @@
 
 ### Added
 
+- **The retro aggregate has consumers: `--json`, the reviewer prompt, and a workspace taxonomy
+  (#74).** `tldrx retro --all` (#64) produced exactly the dataset that issue asked for — finding
+  class × count × runs × one cited example — and nothing read it. The reader existed; the loop it
+  was meant to close was open at the far end. Three seams close it.
+  - **`tldrx retro --all --json`** — a stable machine shape: `{version, root, runs, contributed,
+    deduped, classes, trends[{cls, count, runs, example{run, kind, text, src}}], findings[]}`. A
+    deliberate projection rather than a dump of the internal type, with its key sets asserted
+    literally by a test, so adding a field is a visible act and renaming one bumps `version`.
+    `--json` belongs to `--all` alone: closing one run WRITES a file and has nothing to parse, so
+    `retro --json` on its own is a refusal rather than a stringified sentence.
+  - **The adversarial reviewer is fed the workspace's top three classes** before it reads the
+    diff, so a review starts from what this team keeps getting wrong instead of rediscovering
+    `test-cannot-fail` on its own, run after run. Computed by the same `mineAll` over the same
+    workspace, so what the reviewer is told is exactly the top of what `tldrx retro --all` prints.
+    Additive and absent-safe in every direction — no runs, no findings, nothing but `other`, or a
+    broken taxonomy file, and there is no section at all, not a heading and not a blank line.
+    `other` is never offered: it names no defect to look for. Mined once per `tldrx next`
+    invocation, so a wave of six stories pays for it once and every reviewer in that invocation
+    gets the same prior. The section says out loud that it is a PRIOR and not a checklist — a
+    reviewer handed three defect classes and no framing finds three defect classes.
+  - **`.tldrx/memory/finding-classes.yml`** adds classes for defects the seven built-in ones do
+    not name (`version: 1`, `classes:` of `{name, rules}`, 1–16 each, rules compiled
+    case-insensitively). Extensions are tried AFTER every built-in rule and before `other`, so a
+    workspace class can only ever claim a finding the built-ins left unclassified — which is what
+    keeps an unbounded taxonomy testable, and leaves every shipped fixture immune to whatever a
+    workspace writes. A file that will not load is a REFUSAL naming the file, the class and the
+    rule — including a rule such as `.*` that matches every text and would swallow the taxonomy —
+    never a silent fallback, because a rule its author believes is running and is not would make
+    every count a lie. The Build reviewer never fails on it: a refusal costs the prior and prints
+    one line, so no story loses an attempt to a YAML typo.
+
+- **`CONTRIBUTING.md`, and a section an outside contributor can build a model provider from
+  (#27 companion).** #27 (a generic model-provider layer) was closed as parked, not rejected:
+  `TLDRX_CLAUDE_BIN` covers today's needs and a provider layer with no second provider is
+  speculation. So the seam is written down instead. The new file covers the contribution loop,
+  the four gates and what CI actually runs, the red-first rules (including "a test that cannot
+  fail is worse than no test", with the shipped example of one that could), and a
+  **Contributing a model-provider config** section: what `TLDRX_CLAUDE_BIN` does and does not
+  buy, `buildClaudeArgs`' exact command surface, the `stream-json` transcript contract
+  `AgentStream` parses and the two behaviours an adapter most easily breaks (the read cap and
+  the cost ledger), the result-envelope requirement with its fail-closed rule, and the five
+  test files a PR would have to touch. Linked from the README.
+
 - **`tldrx questions cards [<run>]` — a parked question, as something to decide (#59).** Measured
   on run `260830-ordering-inventory`, 2026-09-01: the host parked four product questions with
   notes and reported them in its tl;dr. The owner's live words were *"cuales preguntas? no las

@@ -1017,18 +1017,22 @@ const ENTRIES: readonly CommandHelp[] = [
         arg: null,
         meaning: "Aggregate ACROSS every run under tldrx-work/ instead of closing one, and print the trends table: finding class \u00d7 count \u00d7 how many runs it appeared in \u00d7 one example with its citation. Reads the review logs, the fix lists, retro.md and the story.reopened reasons; writes nothing anywhere.",
       },
+      json("the cross-run aggregate (--all only; closing one run writes a file and has nothing to parse)"),
       root(),
     ],
     examples: [
       "tldrx retro",
       "tldrx retro 260101-checkout --apply",
       "tldrx retro --all",
+      "tldrx retro --all --json",
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
     notes: [
       "--all is strictly read-only: no retro.md, no practices.md, no cache, no state. A run missing any of the four sources contributes what it has and is still counted; an empty workspace is an empty answer at exit 0, not a failure.",
       "Classification is deterministic keyword rules over the finding text \u2014 no model runs \u2014 so the same tree always produces the same table. `other` is a real row: a table it dominates is telling you the taxonomy is too small.",
       "A repeat of one finding WITHIN a run is collapsed (retro.md quotes the fix list verbatim); the same finding in two runs is two occurrences, which is what the table is for.",
+      "The taxonomy is workspace-extensible: `.tldrx/memory/finding-classes.yml` (version: 1, `classes:` of `{name, rules}`) adds classes for defects the seven do not name. Extensions are tried AFTER every built-in rule, so they can only claim findings that would otherwise be `other`. A file that will not load is a refusal naming the class and the rule, never a silent fallback.",
+      "The top three classes (never `other`) are also injected into every adversarial reviewer prompt the Build phase renders, so a review starts from what this team keeps getting wrong instead of from zero. No runs, no findings, or a broken finding-classes.yml \u2014 no section at all.",
     ],
   },
   {

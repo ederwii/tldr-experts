@@ -225,7 +225,12 @@ describe("finding classes", () => {
   }
 
   test("every class the rules can produce is in FINDING_CLASSES", () => {
-    for (const [text] of CASES) expect(FINDING_CLASSES).toContain(classify(text));
+    // Widened to `readonly string[]` because `classify` can now also return a
+    // WORKSPACE class name (#74). With no `.tldrx/memory/finding-classes.yml` in
+    // play — as here — the built-ins are still the whole answer, which is the
+    // assertion; the cast only stops the tuple type from narrowing the argument.
+    const shipped: readonly string[] = FINDING_CLASSES;
+    for (const [text] of CASES) expect(shipped).toContain(classify(text));
   });
 });
 
