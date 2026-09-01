@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readYamlFile } from "../src/core/yaml.ts";
 import { TEMPLATES_DIR } from "../src/core/paths.ts";
-import { readFileSync } from "node:fs";
 import { validate } from "../src/core/schemas/index.ts";
 import {
   parseDodBlock, validateStory, validateStoryDod, validateStoryFile,
@@ -13,6 +12,7 @@ import { validateEpic, validateEpicFile } from "../src/core/schemas/epic.ts";
 import { asWavesFile, validateWaveOrder, validateWaves } from "../src/core/schemas/waves.ts";
 import { splitFrontMatter } from "../src/core/schemas/frontMatter.ts";
 import { validatePlan } from "../src/core/plan/validatePlan.ts";
+import { planContractExamples } from "../src/core/plan/schemaContract.ts";
 import { loadPlanPrices, type PlannedStory } from "../src/core/build/plan.ts";
 import { runCheck } from "../src/core/run/checks.ts";
 import { loadWorkflowPreset } from "../src/core/run/workflowPreset.ts";
@@ -89,17 +89,19 @@ describe("front matter (spec §2.13)", () => {
 });
 
 describe("story schema (spec §2.13)", () => {
-  test("the shipped template validates against a workspace that declares its commands", () => {
-    const text = readFileSync(join(TEMPLATES_DIR, "story.md"), "utf8");
-    const report = validateStoryFile(text, new Set(["npm run test", "npm run lint"]));
+  // `templates/story.md` was the second, unread copy of this schema and is deleted
+  // (#48, owner option (a)). The story a human or an agent copies is GENERATED, so
+  // that is the one held to the check here.
+  test("the generated story validates against a workspace that declares its commands", () => {
+    const examples = planContractExamples();
+    const report = validateStoryFile(examples.story, new Set(examples.dodCommands));
     expect(messages(report.validation.issues)).toBe("");
     expect(report.story?.id).toBe("S1");
-    expect(report.dod.commands).toEqual(["npm run test", "npm run lint"]);
+    expect(report.dod.commands).toEqual([...examples.dodCommands]);
   });
 
-  test("the same template is REFUSED where the workspace declares no commands", () => {
-    const text = readFileSync(join(TEMPLATES_DIR, "story.md"), "utf8");
-    const report = validateStoryFile(text);
+  test("the same generated story is REFUSED where the workspace declares no commands", () => {
+    const report = validateStoryFile(planContractExamples().story);
     expect(messages(report.validation.issues)).toContain("an empty allowlist is not a permit");
   });
 
@@ -182,8 +184,8 @@ describe("the ```dod block", () => {
 });
 
 describe("epic schema (spec §2.14)", () => {
-  test("the shipped template validates", () => {
-    const report = validateEpicFile(readFileSync(join(TEMPLATES_DIR, "epic.md"), "utf8"));
+  test("the generated epic validates", () => {
+    const report = validateEpicFile(planContractExamples().epic);
     expect(messages(report.validation.issues)).toBe("");
     expect(report.epic?.branch).toBe("epic/leaderboard");
   });

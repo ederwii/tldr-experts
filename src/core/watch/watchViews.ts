@@ -21,6 +21,15 @@ export interface LoadedCard {
   /** Path relative to the run dir. */
   readonly path: string;
   readonly card: WatcherCard;
+  /**
+   * The card's Markdown, verbatim.
+   *
+   * `WatcherCard` is the VALIDATION of a card; the post-merge checklist (#65)
+   * needs the card itself — the prose under `## Where`, the baseline, the fenced
+   * Query. Carried here rather than re-read from disk so that one `loadCards`
+   * call is one read per file and every view is looking at the same bytes.
+   */
+  readonly text: string;
 }
 
 export function watchersDir(runDir: string): string {
@@ -35,7 +44,9 @@ export function loadCards(runDir: string, ctx: SrcContext): readonly LoadedCard[
   for (const name of readdirSync(dir).filter((n) => n.endsWith(".md")).sort()) {
     const id = name.slice(0, -".md".length);
     const text = readFileSync(join(dir, name), "utf8");
-    cards.push({ id, path: `${WATCH_PHASE}/${WATCHERS_DIR}/${name}`, card: parseWatcherCard(text, ctx, id) });
+    cards.push({
+      id, text, path: `${WATCH_PHASE}/${WATCHERS_DIR}/${name}`, card: parseWatcherCard(text, ctx, id),
+    });
   }
   return cards;
 }

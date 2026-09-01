@@ -7,7 +7,7 @@
  * come back `1`, and a missing one `3`.
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { EXIT_FAILED, EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../src/cli/exitCodes.ts";
@@ -199,11 +199,14 @@ describe("tldrx watch check", () => {
     expect(run.stderr).toContain("leaderboard");
   });
 
-  test("check with no feature id is a usage error", async () => {
+  test("check with no feature id checks EVERY card in the run (#65)", async () => {
     const ws = withCard();
     const run = await tldrx(ws.root, "watch", "check");
-    expect(run.code).toBe(EXIT_USAGE);
-    expect(run.stderr).toContain("feature id");
+
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).toContain("leaderboard");
+    expect(run.stdout).toContain("1. [ ]");
+    expect(run.stdout).toContain(ws.runId);
   });
 
   test("an unknown subcommand is a usage error", async () => {
@@ -218,5 +221,120 @@ describe("tldrx watch check", () => {
     expect(run.code).toBe(EXIT_OK);
     expect(run.stdout).toContain("watch");
     expect(readFileSync(BIN, "utf8")).toContain("dispatch");
+  });
+});
+
+/**
+ * `tldrx watch check` as the post-merge checklist (#65).
+ *
+ * `ship` opens the PR; the card lists what would prove the feature works; nothing
+ * joined them up. These tests are about the join — and about the three things the
+ * command must REFUSE to do: invent a checklist for a run that never watched
+ * anything, present an `absent:` signal as checkable, and run a query it has no
+ * console for.
+ */
+describe("tldrx watch check — the post-merge checklist (#65)", () => {
+  test("the checklist carries Where, the baseline and what broken looks like", async () => {
+    const ws = withCard();
+    const run = await tldrx(ws.root, "watch", "check");
+
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).toContain("The api log stream");
+    expect(run.stdout).toContain("12-40 per hour");
+    expect(run.stdout).toContain("Zero for 30 minutes");
+  });
+
+  test("the Query block is printed with its language and marked print-only", async () => {
+    const ws = withCard();
+    const run = await tldrx(ws.root, "watch", "check");
+    expect(run.stdout).toContain("kql");
+    expect(run.stdout).toContain("traces | count");
+    expect(run.stdout.toLowerCase()).toContain("print only");
+  });
+
+  test("a run whose Watch stage never ran is 3, and names the phase", async () => {
+    const ws = makeFacilitatorWorkspace({
+      scope: "demo",
+      budgetUsd: 10,
+      stages: [{ id: "watch", phase: WATCH_PHASE, budgetUsd: 2, gate: "approve" }],
+    });
+    open.push(ws);
+    rmSync(join(ws.runDir, WATCH_PHASE), { recursive: true, force: true });
+
+    const run = await tldrx(ws.root, "watch", "check");
+    expect(run.code).toBe(EXIT_NOT_FOUND);
+    expect(run.stderr).toContain(WATCH_PHASE);
+  });
+
+  test("a Watch stage that wrote no card is 3, and says THAT instead", async () => {
+    const ws = makeFacilitatorWorkspace({
+      scope: "demo",
+      budgetUsd: 10,
+      stages: [{ id: "watch", phase: WATCH_PHASE, budgetUsd: 2, gate: "approve" }],
+    });
+    open.push(ws);
+
+    const run = await tldrx(ws.root, "watch", "check");
+    expect(run.code).toBe(EXIT_NOT_FOUND);
+    expect(run.stderr).toContain("no watcher card");
+  });
+
+  test("a draft card is printed with the absent source that keeps it draft", async () => {
+    const ws = withCard("absent:api/src/Leaderboard.cs", "draft");
+    const run = await tldrx(ws.root, "watch", "check");
+
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).toContain("DRAFT");
+    expect(run.stdout).toContain("absent:api/src/Leaderboard.cs");
+  });
+
+  test("a card that no longer resolves is 1 even in checklist mode", async () => {
+    const ws = withCard("api:src/Leaderboard.cs:400");
+    const run = await tldrx(ws.root, "watch", "check");
+
+    expect(run.code).toBe(EXIT_FAILED);
+    expect(run.stdout).toContain("cited line 400");
+  });
+
+  /**
+   * The reason #65 exists. The card recorded `$ false → exit 0`; `false` exits 1.
+   * `resolveSrc` never re-runs a `cmd` source — the exit code is the agent's word —
+   * so the card still VALIDATES while the claim on it is false. `--execute` is the
+   * only thing in the framework that catches that, and it is opt-in.
+   */
+  test("--execute re-runs a declared command and reports the exit it really gets", async () => {
+    const ws = withCard("$ false → exit 0");
+    const printed = await tldrx(ws.root, "watch", "check");
+    expect(printed.code).toBe(EXIT_OK);
+    expect(printed.stdout).toContain("--execute");
+    expect(printed.stdout).not.toContain("exit 1");
+
+    const run = await tldrx(ws.root, "watch", "check", "--execute");
+    expect(run.code).toBe(EXIT_FAILED);
+    expect(run.stdout).toContain("exit 1");
+    expect(run.stdout).toContain("card recorded");
+  });
+
+  test("--execute leaves a command the card recorded honestly alone at 0", async () => {
+    const ws = withCard("$ true → exit 0");
+    const run = await tldrx(ws.root, "watch", "check", "--execute");
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).toContain("true");
+  });
+
+  test("--execute runs NOTHING a card only quotes — a query is not a command", async () => {
+    const ws = withCard();
+    const run = await tldrx(ws.root, "watch", "check", "--execute");
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).toContain("traces | count");
+    expect(run.stdout).not.toContain("ran:");
+  });
+
+  test("one feature id scopes the checklist to that card and still reports its verdict", async () => {
+    const ws = withCard();
+    const run = await tldrx(ws.root, "watch", "check", "leaderboard");
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).toContain("1. [ ]");
+    expect(run.stdout).toContain("ok — verified");
   });
 });

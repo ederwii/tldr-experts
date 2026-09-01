@@ -18,3 +18,10 @@ export {
   loadCards, renderWatchList, watchListJson, checkCard, statusOf, watchersDir,
 } from "./watchViews.ts";
 export type { LoadedCard, CheckReport } from "./watchViews.ts";
+export {
+  cardChecklist, cardQuery, checklistOk, executeSignals, nothingToCheck, renderChecklist,
+  runKey, SIGNAL_TIMEOUT_S,
+} from "./signalChecklist.ts";
+export type {
+  CardChecklist, CardQuery, RunnableSignal, SignalItem, SignalRuns,
+} from "./signalChecklist.ts";
