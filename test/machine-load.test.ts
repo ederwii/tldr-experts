@@ -104,7 +104,9 @@ describe("every file that spawns a real process takes the load-aware timeout", (
   /**
    * Spawning is the tell — `git`, `bun`, the CLI. How long a process takes to start is a
    * property of the machine, so a fixed 5000 ms budget on such a test measures the box.
-   * `makeBuildWorkspace` counts: it `git init`s a repo behind the caller's back.
+   * `makeBuildWorkspace` counts: it `git init`s a repo behind the caller's back, and so does
+   * `makeSandbox` — `tldrx learn`'s sandbox builds a real repo and then runs the real CLI
+   * against it as a subprocess, which is the same cost with a different name.
    *
    * Read, never grepped. The first version of this list WAS a `grep -l`, and it silently
    * skipped `cli.test.ts` — one stray NUL byte at line 366 makes the file `data` to
@@ -115,7 +117,8 @@ describe("every file that spawns a real process takes the load-aware timeout", (
     .filter((f) => f.endsWith(".test.ts"))
     .filter((f) => {
       const source = readFileSync(join(TEST_DIR, f), "utf8");
-      return ["node:child_process", "Bun.spawn", "makeBuildWorkspace"].some((m) => source.includes(m));
+      return ["node:child_process", "Bun.spawn", "makeBuildWorkspace", "makeSandbox"]
+        .some((m) => source.includes(m));
     });
 
   test("there are such files, so this invariant is not vacuous", () => {

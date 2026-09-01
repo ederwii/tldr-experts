@@ -262,6 +262,43 @@ const ENTRIES: readonly CommandHelp[] = [
     ],
   },
   {
+    name: "learn",
+    description: "Play the framework in a throwaway sandbox: real commands, a stand-in agent, $0.00.",
+    args: [],
+    flags: [
+      {
+        name: "chapter",
+        arg: "<n>",
+        meaning: "Start at this chapter instead of where you left off. An unfinished chapter it depends on is played first.",
+      },
+      { name: "reset", arg: null, meaning: "Delete the sandbox and build it again. The only way to start over." },
+      { name: "list", arg: null, meaning: "Print the chapters and which are done, and run nothing." },
+      {
+        name: "sandbox",
+        arg: "<path>",
+        meaning: "Where the throwaway workspace lives. Default: ~/.tldrx-learn. Refused if it sits inside a real workspace.",
+      },
+      {
+        name: "ui",
+        arg: "<mode>",
+        meaning: "How much to draw. Same rules as `init`: a pipe, NO_COLOR or CI degrades to plain whatever you ask for.",
+        values: UI_MODES,
+      },
+    ],
+    examples: [
+      "tldrx learn",
+      "tldrx learn --chapter 2",
+      "tldrx learn --reset",
+    ],
+    exits: [EXIT_OK, EXIT_USAGE],
+    notes: [
+      "It spends nothing and needs no key: the sandbox installs a stand-in `claude` and points TLDRX_CLAUDE_BIN and PATH at it, so the real CLI is unreachable from a tutorial step.",
+      "Nothing is ever written outside the sandbox directory, and it is refused outright if that directory sits inside a tldrx workspace.",
+      "Progress lives in <sandbox>/progress.json, so a bare `tldrx learn` resumes at the first unfinished chapter.",
+      "With no terminal on stdin (a pipe, CI, `< /dev/null`) the chapters play straight through instead of waiting for a keypress.",
+    ],
+  },
+  {
     name: "status",
     description: "Everything in this workspace that is waiting on a human, and the command that moves each one.",
     args: [],

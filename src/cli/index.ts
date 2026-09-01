@@ -12,6 +12,7 @@ import { EXIT_OK, EXIT_USAGE } from "./exitCodes.ts";
 import { firstUnknownFlag, flagNames } from "./argv.ts";
 import { declaredFlags, declaredValueFlags, isPassthrough, supportsJson } from "./helpText.ts";
 import { installSignalHandlers } from "./signals.ts";
+import { learnAgentMain, LEARN_AGENT_ARGV0 } from "../core/learn/learnAgent.ts";
 
 import { initCommand } from "./commands/init.ts";
 import { installCommand } from "./commands/install.ts";
@@ -40,6 +41,7 @@ import { ticketsCommand } from "./commands/tickets.ts";
 import { interviewCommand } from "./commands/interview.ts";
 import { questionsCommand } from "./commands/questions.ts";
 import { hookCommand, statuslineCommand } from "./commands/hook.ts";
+import { learnCommand } from "./commands/learn.ts";
 import { versionCommand } from "./commands/version.ts";
 import { makeHelpCommand, renderCommandHelp } from "./commands/help.ts";
 
@@ -48,6 +50,7 @@ export const COMMANDS: readonly Command[] = [
   initCommand,
   installCommand,
   doctorCommand,
+  learnCommand,
   statusCommand,
   runCommand,
   seedCommand,
@@ -100,6 +103,14 @@ export async function dispatch(argv: readonly string[]): Promise<number> {
   const [name, ...rest] = argv;
 
   if (name === undefined || name === "") return helpCommand.run([]);
+
+  // Answered BEFORE the command table and before the flag guard, because this is
+  // not a command. It is the stand-in `claude` that `tldrx learn`'s sandbox
+  // spawns (`core/learn/learnAgent.ts`), and the argv it is handed is CLAUDE's —
+  // `-p --output-format stream-json --json-schema {…}` — which the guard exists
+  // to refuse. It is not in COMMANDS, not in the help registry, and `tldrx --help`
+  // does not list it: nothing but the sandbox's shim ever types it.
+  if (name === LEARN_AGENT_ARGV0) return learnAgentMain(rest);
 
   const command = lookup(name);
   if (!command) {

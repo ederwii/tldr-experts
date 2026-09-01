@@ -4,6 +4,35 @@
 
 ### Added
 
+- **`tldrx learn` — a playable sandbox tutorial that runs the REAL commands (#30, phase 1 of 3).**
+  A tutorial that runs the shipped binary can never drift from the shipped behaviour: every output the
+  learner reads is produced by the code, not written down by a doc author. `tldrx learn` scaffolds a
+  throwaway workspace (a four-file git repo with a `test` script that exits 0), then narrates, shows the
+  exact command, waits for Enter and RUNS it — `tldrx init`, `run new`, `next`, `answer` are the real
+  ones, against that sandbox.
+  - **Chapters 1 and 2 ship playable**: init (read the `workspace.yml` detection actually produced) and
+    the What stage (a question comes back, `tldrx answer` records it, it becomes `F001` in
+    `.tldrx/memory/facts.yml`). Chapters 3-8 from the issue are phase 2 and are DATA plus one
+    `assert()` — see the contract in `src/core/learn/Chapter.ts`.
+  - **It cannot spend money, by construction rather than by convention.** The sandbox writes its own
+    `claude` stand-in, names it in `TLDRX_CLAUDE_BIN` and puts it first on the child `PATH`, so neither
+    the spawn seam nor a bare `claude` on `PATH` can reach the real CLI. `test/learn.test.ts` proves it
+    the only way worth proving: it plants a booby-trapped `claude` that writes a marker file, plays both
+    chapters, and asserts the marker is absent AND the chapters completed — because a tutorial that
+    spawned nothing would pass a marker check for the wrong reason.
+  - **It cannot touch your work.** Everything is written under the sandbox directory (`~/.tldrx-learn`
+    by default, `--sandbox` to move it), and a sandbox that would sit inside a real tldrx workspace is
+    refused before a byte is written.
+  - **Files as state, like everything else**: `progress.json` in the sandbox is what makes a bare
+    `tldrx learn` resume, `--chapter <n>` jump (playing an unfinished prerequisite first), and `--reset`
+    start over. With no terminal on stdin the chapters play straight through rather than hanging at the
+    first prompt.
+  - The stand-in agent is scripted per chapter and is **fail-closed**: a prompt no turn matches exits 1
+    and names the turns it did have, so a hole in the tutorial is a loud failure rather than an
+    improvised answer. The `stream-json` writer moved from `test/fixtures/fakeStream.ts` to
+    `src/core/facilitator/fakeTranscript.ts` — beside `agentEvents.ts`, which reads that format — so the
+    tutorial's stand-in and the four test fakes cannot drift apart. The fixture re-exports it.
+
 - **`tldrx note <run> [--stage <id>] "text"` — an honest carrier for an operator annotation, at the
   moment it happened (#46).** Measured on `260829-scoring-leaderboard` (2026-09-01): a host performed an
   owner-delegated mechanical resync of eight story dod blocks, was asked to note it in the run log, and

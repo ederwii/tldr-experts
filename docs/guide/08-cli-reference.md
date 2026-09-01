@@ -137,6 +137,34 @@ prints the check results; `mcp: null` there means NOT PROBED, which is a differe
 `.gitignore` rule ignoring one, with its `file:line`. That is a warning: it never moves the
 exit code. Exits: `0` `1`.
 
+## `tldrx learn`
+
+Play the framework in a throwaway sandbox: real commands, a stand-in agent, `$0.00`. It
+scaffolds a tiny git repo somewhere harmless, then walks you through the loop by RUNNING it —
+`tldrx init`, `tldrx run new`, `tldrx next`, `tldrx answer` are the shipped commands, executed
+against that sandbox, so what you read on screen cannot drift from what the code does.
+
+```
+tldrx learn [--chapter <n>] [--reset] [--list] [--sandbox <path>] [--ui scene|compact|plain|off]
+```
+
+Each chapter narrates two to four lines, shows the exact command, waits for Enter, runs it for
+real, and then points at the file that changed. `q` quits. Progress is a plain
+`progress.json` in the sandbox, so a bare `tldrx learn` resumes at the first unfinished
+chapter and `--chapter <n>` jumps — playing any earlier chapter it depends on first, so a jump
+onto a fresh sandbox works. Exits: `0` `1`.
+
+**It cannot spend money and cannot touch your work.** The sandbox writes its own `claude`
+stand-in, points `TLDRX_CLAUDE_BIN` at it and puts it first on the child `PATH`, so no
+tutorial step can resolve the real CLI by name or by variable. The sandbox lives at
+`~/.tldrx-learn` unless `--sandbox` says otherwise, nothing is ever written outside it, and it
+is refused outright if that directory would sit inside a real tldrx workspace. `--reset`
+deletes and rebuilds it.
+
+With no terminal on stdin — a pipe, a CI job, `< /dev/null` — the chapters play straight
+through instead of waiting for a keypress, and `--ui` degrades exactly as it does for
+`tldrx init`.
+
 ## `tldrx status`
 
 Everything in this workspace that is waiting on a human, and the command that moves each one.
