@@ -65,6 +65,12 @@ export interface BudgetPhase {
   readonly spent_usd: number;
   /** This phase's own economy, or null to inherit the run's. */
   readonly economy: Economy | null;
+  /**
+   * This phase's HOST-TOKEN allowance (issue #61), or null when it declares
+   * none. Read only under `economy: host-tokens`, where `ceiling_usd` is not
+   * what governs; see `hostTokenCeiling` for the compat fallback.
+   */
+  readonly ceiling_host_tokens: number | null;
 }
 
 export interface RunBudget {
@@ -82,6 +88,24 @@ export interface RunBudget {
    * means `warn`, which is what a token ceiling has always done.
    */
   readonly on_host_tokens_exceed: OnHostTokensExceed;
+  /**
+   * The run's HOST-TOKEN allowance — the ceiling `ceiling_usd` is NOT (issue #61,
+   * owner decision 2026-09-01). Null when the file declares none.
+   *
+   * SEPARATE, never a conversion. `ceiling_usd` is dollars by its name and by
+   * every other use in this tree; a host-token allowance is a count of tokens in
+   * somebody else's session. Summing one into the other is the category error
+   * `economy:` exists to prevent, and until this key existed the phase-sum check
+   * committed it — a 200 000-token phase ceiling read as $200 000 made a valid
+   * file invalid, `RunStore.open` threw, and the budget-gate hook then denied
+   * every spawn on the run (#61, measured).
+   *
+   * ADDITIVE and optional. Absent — every budget.yml written before this key —
+   * means the token sum has nothing to compare against, so it is not checked.
+   * That is deliberately the LAX side: the alternative is comparing a token total
+   * to a dollar figure, which is the bug.
+   */
+  readonly ceiling_host_tokens: number | null;
   readonly phases: readonly BudgetPhase[];
 }
 
@@ -133,6 +157,11 @@ export function validateRunBudget(input: unknown): ValidationResult {
   if (doc.on_host_tokens_exceed !== undefined && doc.on_host_tokens_exceed !== null) {
     requireEnum(doc.on_host_tokens_exceed, ON_HOST_TOKENS_EXCEED, "on_host_tokens_exceed", issues);
   }
+  // Optional, additive: a number of HOST TOKENS. Absent means "no token ceiling
+  // is declared", never "zero" and never "read `ceiling_usd` instead".
+  if (doc.ceiling_host_tokens !== undefined && doc.ceiling_host_tokens !== null) {
+    requireNumber(doc.ceiling_host_tokens, "ceiling_host_tokens", issues);
+  }
   if (doc.warn_at_pct !== undefined) {
     requireNumber(doc.warn_at_pct, "warn_at_pct", issues);
     const pct = doc.warn_at_pct;
@@ -146,7 +175,15 @@ export function validateRunBudget(input: unknown): ValidationResult {
   if (phases.length > MAX_PHASES) {
     issues.push({ path: "phases", message: `${phases.length} phases exceeds the ${MAX_PHASES} cap` });
   }
+  // ONE SUM PER ECONOMY (issue #61, owner decision 2026-09-01). A phase priced in
+  // `host-tokens` carries a number that is not dollars, so it is not summed with
+  // dollars and is not compared against `ceiling_usd`. There is no exchange rate
+  // here and inventing one would be a guess about a price.
+  const runEconomy = (ECONOMIES as readonly unknown[]).includes(doc.economy)
+    ? doc.economy as Economy
+    : DEFAULT_ECONOMY;
   let sum = 0;
+  let tokenSum = 0;
   phases.forEach((phase, i) => {
     const path = `phases[${i}]`;
     if (!isRecord(phase)) {
@@ -160,10 +197,36 @@ export function validateRunBudget(input: unknown): ValidationResult {
     if (phase.economy !== undefined && phase.economy !== null) {
       requireEnum(phase.economy, ECONOMIES, `${path}.economy`, issues);
     }
+    if (phase.ceiling_host_tokens !== undefined && phase.ceiling_host_tokens !== null) {
+      requireNumber(phase.ceiling_host_tokens, `${path}.ceiling_host_tokens`, issues);
+    }
+    const economy = (ECONOMIES as readonly unknown[]).includes(phase.economy)
+      ? phase.economy as Economy
+      : runEconomy;
+    if (economy === "host-tokens") {
+      // COMPAT: a file written before `ceiling_host_tokens` existed put the token
+      // allowance in `ceiling_usd`, and `hostTokenCeiling` reads it there. The sum
+      // reads it the same way, so the two never disagree about what this phase's
+      // ceiling IS.
+      const tokens = typeof phase.ceiling_host_tokens === "number"
+        ? phase.ceiling_host_tokens
+        : typeof phase.ceiling_usd === "number" ? phase.ceiling_usd : 0;
+      tokenSum += tokens;
+      return;
+    }
     if (typeof phase.ceiling_usd === "number") sum += phase.ceiling_usd;
   });
   if (typeof doc.ceiling_usd === "number" && sum > doc.ceiling_usd + 1e-9) {
     issues.push({ path: "phases", message: `phase ceilings sum to ${sum} > ceiling_usd ${doc.ceiling_usd}` });
+  }
+  // Checked ONLY against a declared token ceiling. A file with token-priced phases
+  // and no `ceiling_host_tokens` has said nothing to compare them to, and the one
+  // other number on the run is dollars — see the field's own comment.
+  if (typeof doc.ceiling_host_tokens === "number" && tokenSum > doc.ceiling_host_tokens + 1e-9) {
+    issues.push({
+      path: "phases",
+      message: `phase host-token ceilings sum to ${tokenSum} > ceiling_host_tokens ${doc.ceiling_host_tokens}`,
+    });
   }
   return result(issues, deprecations);
 }
@@ -179,11 +242,13 @@ export function asRunBudget(input: unknown): RunBudget {
     on_exceed: doc.on_exceed ?? "block",
     economy: doc.economy ?? DEFAULT_ECONOMY,
     on_host_tokens_exceed: doc.on_host_tokens_exceed ?? DEFAULT_ON_HOST_TOKENS_EXCEED,
+    ceiling_host_tokens: doc.ceiling_host_tokens ?? null,
     phases: (doc.phases ?? []).map((phase) => ({
       id: phase.id,
       ceiling_usd: phase.ceiling_usd,
       spent_usd: phase.spent_usd,
       economy: phase.economy ?? null,
+      ceiling_host_tokens: phase.ceiling_host_tokens ?? null,
     })),
   };
 }
@@ -194,15 +259,23 @@ export function asRunBudget(input: unknown): RunBudget {
  *
  * Under `economy: host-tokens` the ceiling NUMBER is a host-session token
  * allowance and not dollars — that is what the label means and why the two are
- * never converted. The `_usd` in the field name is history: the file had one
- * scalar with no unit on it before the economy label existed, and renaming the
- * key would break every budget.yml on disk for no gain in truth.
+ * never converted.
+ *
+ * TWO PLACES it can be written, and the order matters (issue #61):
+ *
+ *  - `ceiling_host_tokens`, the field that means tokens and nothing else. This
+ *    is where an operator should put it, and it wins wherever it is present.
+ *  - `ceiling_usd`, the COMPAT reading. Before the token field existed the file
+ *    had one scalar per phase with no unit on it, and f353d8d read that scalar as
+ *    the token allowance under this economy. Files written that way are still on
+ *    disk and still resume, so they are still read that way. Renaming or
+ *    dropping the fallback would break them for no gain in truth.
  */
 export function hostTokenCeiling(budget: RunBudget | null, phaseId?: string | null): number | null {
   if (budget === null || !isHostTokens(budget, phaseId)) return null;
   if (phaseId !== undefined && phaseId !== null) {
     const phase = budget.phases.find((entry) => entry.id === phaseId);
-    if (phase !== undefined) return phase.ceiling_usd;
+    if (phase !== undefined) return phase.ceiling_host_tokens ?? phase.ceiling_usd;
   }
-  return budget.ceiling_usd;
+  return budget.ceiling_host_tokens ?? budget.ceiling_usd;
 }

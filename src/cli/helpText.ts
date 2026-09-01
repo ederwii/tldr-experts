@@ -704,23 +704,30 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "story",
-    description: "Give one Build story another run of attempts, signed with a note.",
+    description: "Give one Build story another run of attempts, or open a fix round on a done one, signed with a note.",
     args: [{ name: "<id>", meaning: "The story id, e.g. S3." }],
     flags: [
       {
         name: "note",
         arg: "<text>",
-        meaning: "Why this story must be built anyway. Required \u2014 a reopen with no reason is not actionable. It is recorded on the story.reopened event and printed by the Build stage when the story runs again.",
+        meaning: "Why this story must be built anyway \u2014 or, with --for-fix, WHICH DEFECT is being fixed. Required \u2014 a reopen with no reason is not actionable. It is recorded on the story.reopened event and printed by the Build stage when the story runs again.",
+      },
+      {
+        name: "for-fix",
+        arg: null,
+        meaning: "Open a FIX ROUND on a story that is `done`: one named defect in work a reviewer already approved. No attempt is consumed, the fix passes the same dod and the same reviewer as the original, and the story's acceptance criteria are not touched \u2014 it is not a way to relitigate scope. Refused when the story is not done, when --note is missing, and when that story already has a fix round open (the bound is one).",
       },
       runFlag(),
       root(),
     ],
     examples: [
       'tldrx story reopen S3 --note "it gates wave 3 (S4, S6) and the owner has decided it ships"',
+      'tldrx story reopen S11 --for-fix --note "linkEmail succeeds then setDisplayName fails: account linked, score never claimable"',
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
     notes: [
-      "Reopenable states are `blocked`, `review` and `in_progress`. A `done` story refuses: undoing finished work is a decision about the STAGE, so it is `tldrx reject --stage <phase>/<stage>`. A `todo` story refuses too \u2014 it is already pending.",
+      "Reopenable states are `blocked`, `review` and `in_progress`. A `done` story refuses: undoing finished work is a decision about the STAGE, so it is `tldrx reject --stage <phase>/<stage>` \u2014 or, for ONE named defect in it, `--for-fix`. A `todo` story refuses too \u2014 it is already pending.",
+      "`--for-fix` is the arc the other two do not cover: `done` \u2192 fix round. It records `story.reopened` with `reason: fix`, consumes no attempt, and the round stays open until the story is `done` again, which is what bounds it to one at a time. It exists because an accepted defect in a done story otherwise has no sanctioned path: rejecting the whole Build stage destroys every other story's closure, and fixing it outside the story machinery leaves an epic-level commit with no story provenance.",
       "The story goes back to `todo` and its attempt counter restarts at 1 of 2. Nothing is erased to make that true: `story.reopened` is a reset boundary the review ledger reads, every earlier attempt stays in events.jsonl, and the event records how many verdicts the closed run consumed.",
       "It runs no agent, spends nothing, deletes nothing and refunds nothing. The story's branch is kept \u2014 that is what carries the last developer's commits forward \u2014 and its worktree is left exactly as the build left it, to be reopened from the branch if the build had removed it.",
       "It does NOT make the stage runnable. If the Build stage is at its gate, `tldrx reject --note \"\u2026\"` sends it back to `ready` first; if the gate is already signed, `tldrx reject --stage` takes that back.",

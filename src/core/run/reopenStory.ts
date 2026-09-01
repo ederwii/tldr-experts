@@ -51,7 +51,7 @@ import { ambiguousRunLines } from "./openRuns.ts";
 import { BUILD_PHASE, buildProgress, PLAN_DIR } from "./buildProgress.ts";
 import { IMPLICIT_PLAN_FILE, updateImplicitPlan } from "../build/implicitPlan.ts";
 import { StoryWriteError, updateStoryFront } from "../build/storyFile.ts";
-import { readReviewLedger } from "../facilitator/executors/build.ts";
+import { MAX_ATTEMPTS, readReviewLedger } from "../facilitator/executors/build.ts";
 import type { RunStage } from "./RunFile.ts";
 import { validateEvent, type TldrxEvent } from "../events/Event.ts";
 
@@ -61,6 +61,13 @@ export interface ReopenOptions {
   readonly storyId: string;
   /** Required. A reopen with no reason is not actionable. */
   readonly note: string;
+  /**
+   * Open a FIX ROUND on a story that is `done` (issue #58): the note names one
+   * defect, no attempt is consumed, and the fix passes the same DoD and the same
+   * reviewer as the original. Absent — every existing caller — is the plain verb,
+   * unchanged.
+   */
+  readonly forFix?: boolean;
   readonly runId?: string;
   readonly actor: string;
   readonly at: string;
@@ -95,11 +102,18 @@ export function reopenStory(options: ReopenOptions): ReopenOutcome {
   if (id === "") {
     return refuse(['story reopen needs a story id: `tldrx story reopen S3 --note "why"`']);
   }
+  const forFix = options.forFix === true;
   if (options.note.trim() === "") {
-    return refuse([
-      `story reopen needs --note: \`tldrx story reopen ${id} --note "why it must be built"\``,
-      "  a reopen with no reason is not actionable — the note is the whole of what the next reader gets",
-    ]);
+    return forFix
+      ? refuse([
+        `story reopen --for-fix needs --note: \`tldrx story reopen ${id} --for-fix --note "<the defect>"\``,
+        "  the note IS the defect — it is what scopes the fix round, and what the reviewer reads",
+        "  to tell a fix from a second opinion about the story",
+      ])
+      : refuse([
+        `story reopen needs --note: \`tldrx story reopen ${id} --note "why it must be built"\``,
+        "  a reopen with no reason is not actionable — the note is the whole of what the next reader gets",
+      ]);
   }
 
   const resolution = RunStore.resolve(options.root, options.runId);
@@ -135,22 +149,53 @@ export function reopenStory(options: ReopenOptions): ReopenOutcome {
   }
 
   const stage = buildStage(store);
-  if (row.status === "done") {
+  // Read once, before any refusal that depends on it. `readReviewLedger` is a
+  // pure read of `events.jsonl`, and BOTH halves of this verb need it: the fix
+  // round's bound is in it, and the plain verb's reset count is too.
+  const ledger = readReviewLedger(store.runDir, id);
+
+  if (forFix) {
+    // The bound the owner set: ONE open fix round per story (2026-09-01). Checked
+    // before the `done` check on purpose — the story of an open fix round is
+    // `todo`, so the generic "not done" refusal would fire first and say the
+    // wrong thing about the right situation.
+    if (ledger.fixRound !== null) {
+      return refuse([
+        `${id} already has a fix round open — one at a time`,
+        `  opened by ${ledger.fixRound.actor} at ${ledger.fixRound.at}: ${ledger.fixRound.note}`,
+        "  land that one (the round closes when the story is `done` again) before opening another.",
+        "  Two open rounds on one story is two defects with one set of acceptance criteria between them,",
+        "  and no way to tell which fix a reviewer just approved.",
+      ]);
+    }
+    if (row.status !== "done") {
+      return refuse([
+        `${id} is \`${row.status}\`, not \`done\` — \`--for-fix\` reopens work that FINISHED`,
+        "  a fix round exists for a defect found in work a reviewer already approved and merged.",
+        `  An unfinished story is the plain verb's job: \`tldrx story reopen ${id} --note "…"\``,
+      ]);
+    }
+  }
+
+  if (!forFix && row.status === "done") {
     return refuse([
       `${id} is \`done\` — refusing to reopen finished work`,
       "  a done story was built, its dod ran green and a reviewer approved it, and its commit is merged.",
       "  Taking that back is a decision about the STAGE, not about one story:",
       `  \`tldrx reject --stage ${BUILD_PHASE}/${stage?.id ?? "<stage>"} --note "…"\` revokes the approval and marks`,
       "  what followed stale. This verb only gives an UNFINISHED story another run of attempts.",
+      "  For ONE named defect in that finished work, open a FIX ROUND instead:",
+      `  \`tldrx story reopen ${id} --for-fix --note "<the defect>"\` — no attempt is consumed, the fix passes`,
+      "  the same dod and the same reviewer, and the story's acceptance criteria do not move.",
     ]);
   }
-  if (row.status === REOPENED_TO) {
+  if (!forFix && row.status === REOPENED_TO) {
     return refuse([
       `${id} is already \`${REOPENED_TO}\` — nothing to reopen`,
       `  it is pending as it stands: \`tldrx next ${store.runId}\` offers it at attempt 1.`,
     ]);
   }
-  if (!REOPENABLE.has(row.status)) {
+  if (!forFix && !REOPENABLE.has(row.status)) {
     return refuse([
       `${id} is \`${row.status}\`, which is not a state a story can be reopened from`,
       `  reopenable: ${[...REOPENABLE].join(", ")}`,
@@ -179,7 +224,6 @@ export function reopenStory(options: ReopenOptions): ReopenOutcome {
   // Which leaves one window worth closing: `EventLog.append` validates, and a
   // `--note` is free text, so a note over the §2.9 4KB payload cap would throw
   // AFTER the story file had been rewritten. Both are checked here instead.
-  const ledger = readReviewLedger(store.runDir, id);
   let patched: string;
   try {
     const text = readFileSync(path, "utf8");
@@ -193,7 +237,7 @@ export function reopenStory(options: ReopenOptions): ReopenOutcome {
     throw error;
   }
 
-  const event = reopenEvent(options, store.runId, id, row.wave, row.status, ledger.verdicts);
+  const event = reopenEvent(options, store.runId, id, row.wave, row.status, ledger.verdicts, forFix);
   const validation = validateEvent(event);
   if (!validation.ok) {
     const first = validation.issues[0];
@@ -206,6 +250,31 @@ export function reopenStory(options: ReopenOptions): ReopenOutcome {
   writeFileSync(path, patched, "utf8");
   store.append(event);
 
+  const kept = [
+    "  its branch is kept, so the next developer starts from the commits the last one made "
+      + "(the worktree is reopened from that branch if the build had removed it)",
+    `  nothing was deleted and no cost was refunded — \`tldrx replay ${store.runId}\` still reads every attempt`,
+    `  ${nextStep(store.runId, stage)}`,
+  ];
+
+  if (forFix) {
+    return {
+      code: EXIT_OK,
+      lines: [
+        `reopened ${id} in ${store.runId} — \`${row.status}\` → \`${REOPENED_TO}\` (${row.wave}), as a fix round`,
+        `  defect: ${options.note}`,
+        "  no attempt was consumed: the verdict that closed this story stops counting against it, "
+          + `so the fix runs as attempt 1 of ${String(MAX_ATTEMPTS)}`,
+        "  the fix must pass the same dod and the same reviewer the story passed — a fix round ends "
+          + "the way the story did, or it does not end",
+        "  the story's acceptance criteria are unchanged, and this verb did not touch them: it reopens "
+          + "the story for the defect above, not for its scope",
+        `  one fix round at a time — this one closes when ${id} is \`done\` again`,
+        ...kept,
+      ],
+    };
+  }
+
   return {
     code: EXIT_OK,
     lines: [
@@ -215,10 +284,7 @@ export function reopenStory(options: ReopenOptions): ReopenOutcome {
         ? "  no reviewer had judged it, so no attempt was consumed; it runs as attempt 1"
         : `  ${String(ledger.verdicts)} verdict(s) were consumed before this and stay on the record — `
           + "they no longer count against it, and the next developer runs as attempt 1",
-      "  its branch is kept, so the next developer starts from the commits the last one made "
-        + "(the worktree is reopened from that branch if the build had removed it)",
-      `  nothing was deleted and no cost was refunded — \`tldrx replay ${store.runId}\` still reads every attempt`,
-      `  ${nextStep(store.runId, stage)}`,
+      ...kept,
     ],
   };
 }
@@ -259,6 +325,7 @@ function reopenEvent(
   wave: string,
   from: string,
   verdicts: number,
+  forFix: boolean,
 ): TldrxEvent {
   return {
     ts: options.at,
@@ -278,6 +345,15 @@ function reopenEvent(
       to_status: REOPENED_TO,
       /** Verdicts the closed run of attempts consumed. Kept because the reset erases the count, not the history. */
       verdicts,
+      /**
+       * WHY this story was reopened (issue #58) — `fix` for a named defect in
+       * finished work, `attempts` for the original verb. Written on BOTH so a
+       * reader never has to infer one from the absence of the other, and so the
+       * fix-round bound has something to count. Additive: a `story.reopened`
+       * with no `reason` predates this key and is an `attempts` reopen, which is
+       * the only kind that existed.
+       */
+      reason: forFix ? "fix" : "attempts",
       note: options.note,
     },
   };

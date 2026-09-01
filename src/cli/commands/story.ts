@@ -1,9 +1,12 @@
 /** `tldrx story` — operator verbs that act on ONE Build story
  *
- * One subcommand today: `reopen`. It gives a story that is `blocked`, `review` or
- * `in_progress` another run of developer attempts, signed with a `--note`, and it
- * is the only sanctioned way to do that — `run.yml` and the story files are the
- * state (spec §1) and hand-editing them is forbidden by design.
+ * One subcommand today: `reopen`, in two shapes. Plain, it gives a story that is
+ * `blocked`, `review` or `in_progress` another run of developer attempts. With
+ * `--for-fix` it opens a FIX ROUND on a story that is `done` (issue #58): one
+ * named defect in work a reviewer already approved, costing no attempt. Both are
+ * signed with a `--note` and both are the only sanctioned ways to do it —
+ * `run.yml` and the story files are the state (spec §1) and hand-editing them is
+ * forbidden by design.
  *
  * Deliberately its own command rather than a flag on `reject`. `reject` is about
  * a GATE — a stage's approval, given or taken back — and a story is not a gate:
@@ -15,7 +18,7 @@
  */
 import type { Command } from "../Command.ts";
 import { EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
-import { parseArgs, stringFlag } from "../argv.ts";
+import { boolFlag, parseArgs, stringFlag } from "../argv.ts";
 import { workspaceRootFrom } from "../workspace.ts";
 import { fail } from "../report.ts";
 import { reopenStory } from "../../core/run/reopenStory.ts";
@@ -26,7 +29,7 @@ const VALUE_FLAGS = ["run", "root", "note"];
 export const storyCommand: Command = {
   name: "story",
   summary: "Give one Build story another run of attempts",
-  usage: "tldrx story reopen <id> --note <text> [--run <id>] [--root <path>]",
+  usage: "tldrx story reopen <id> --note <text> [--for-fix] [--run <id>] [--root <path>]",
   subcommands: ["reopen"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
@@ -49,6 +52,7 @@ function storyReopen(argv: readonly string[]): number {
       root: workspaceRootFrom(args),
       storyId: args.positionals[0] ?? "",
       note: stringFlag(args, "note") ?? "",
+      forFix: boolFlag(args, "for-fix"),
       runId: stringFlag(args, "run"),
       actor: currentActor(),
       at: nowRfc3339(),

@@ -199,14 +199,37 @@ export function emitBudgetYaml(budget: RunBudget): string {
     ...(budget.on_host_tokens_exceed === DEFAULT_ON_HOST_TOKENS_EXCEED
       ? []
       : [`on_host_tokens_exceed: ${yamlScalar(budget.on_host_tokens_exceed)}`]),
+    // Same rule again (issue #61). A token ceiling is NOT `ceiling_usd` and
+    // cannot be recovered from it, so a rewrite that dropped the key would erase
+    // the only number bounding a host-token run — and `budget raise` rewrites
+    // this file through here. Absent stays absent: a file that never declared one
+    // is byte-identical to what it was.
+    ...(budget.ceiling_host_tokens === null
+      ? []
+      : [`ceiling_host_tokens: ${tokens(budget.ceiling_host_tokens)}`]),
     "phases:",
   ];
   for (const phase of budget.phases) {
     const economy = phase.economy === null ? "" : `, economy: ${yamlScalar(phase.economy)}`;
+    const hostTokens = phase.ceiling_host_tokens === null
+      ? ""
+      : `, ceiling_host_tokens: ${tokens(phase.ceiling_host_tokens)}`;
     lines.push(
       `  - {id: ${yamlScalar(phase.id)}, ceiling_usd: ${money(phase.ceiling_usd)}, ` +
-        `spent_usd: ${money(phase.spent_usd)}${economy}}`,
+        `spent_usd: ${money(phase.spent_usd)}${economy}${hostTokens}}`,
     );
   }
   return `${lines.join("\n")}\n`;
+}
+
+/**
+ * A host-token count, written as a whole number.
+ *
+ * Deliberately not `money()`: two decimals on a token allowance would say the
+ * unit is dollars, which is the whole thing issue #61 is about. A fractional
+ * token does not exist, so a value that somehow carries one is truncated rather
+ * than printed as `10000.50`.
+ */
+function tokens(value: number): string {
+  return String(Math.trunc(value));
 }

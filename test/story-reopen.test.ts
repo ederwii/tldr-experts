@@ -499,6 +499,223 @@ describe("the build executor picks a reopened story back up", () => {
   }, 60_000);
 });
 
+/**
+ * A DONE story reopened for ONE NAMED DEFECT (#58, owner decision 2026-09-01).
+ *
+ * Measured on `260829-scoring-leaderboard` (scavtopia, 2026-09-01). S11's
+ * adversarial review found a real defect — `linkEmail` succeeds, `setDisplayName`
+ * fails, the account is permanently linked and the score is never claimable, and
+ * every retry fails the same way. It was accepted, small and well understood. The
+ * story was already `done`, and there was no verb for it: rejecting the whole
+ * Build stage destroys fourteen good stories' closure, and fixing it outside the
+ * story machinery is an epic-level commit with no story provenance.
+ *
+ * So `--for-fix`, and it is deliberately narrow. It reopens a story that is DONE,
+ * it consumes no attempt, the fix goes through the SAME DoD and the SAME reviewer
+ * as the original, and one `story.reopened` carries `reason: fix` and the named
+ * defect. It is not a way to relitigate scope: the note names a defect, the
+ * story's acceptance criteria are not touched, and one story may have exactly one
+ * fix round open at a time.
+ */
+describe("a done story reopened for a named fix (#58)", () => {
+  /** The live defect, near enough — what an owner actually writes at this moment. */
+  const DEFECT = "linkEmail succeeds then setDisplayName fails: account linked, score never claimable";
+
+  async function done(): Promise<BuildWorkspace> {
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_COST = "0";
+    await next(ws);
+    expect(story(ws, "S1")).toContain("status: done");
+    return ws;
+  }
+
+  function forFix(ws: BuildWorkspace, id: string, note: string) {
+    return reopen(ws, id, note, { forFix: true });
+  }
+
+  test("goes back to `todo`, and says it is a fix round, not another attempt", async () => {
+    const ws = await done();
+
+    const outcome = forFix(ws, "S1", DEFECT);
+    const said = outcome.lines.join("\n");
+
+    expect(outcome.code).toBe(0);
+    expect(story(ws, "S1")).toContain("status: todo");
+    expect(said).toContain("reopened S1");
+    expect(said).toContain("`done` → `todo`");
+    expect(said).toContain(DEFECT);
+    expect(said).toContain("fix round");
+    expect(said).toContain("no attempt");
+    // The scope is frozen, and the message says so — this is the sentence that
+    // stops the verb becoming "reopen anything I have changed my mind about".
+    expect(said).toMatch(/acceptance criteria/i);
+  });
+
+  test("one `story.reopened` carries reason `fix`, the defect and the prior state", async () => {
+    const ws = await done();
+    forFix(ws, "S1", DEFECT);
+
+    const appended = events(ws).filter((e) => e.type === "story.reopened");
+    expect(appended).toHaveLength(1);
+    expect(appended[0]?.actor).toBe("alan");
+    expect(appended[0]?.payload).toMatchObject({
+      story: "S1", from_status: "done", to_status: "todo", reason: "fix", note: DEFECT,
+    });
+    expect(validateEvent(appended[0]).ok).toBe(true);
+  });
+
+  test("an ordinary reopen still records its own reason, and it is not `fix`", async () => {
+    const ws = workspace(ONE);
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes", "changes"] });
+    await next(ws);
+    expect(reopen(ws, "S1", WHY).code).toBe(0);
+    expect(events(ws).filter((e) => e.type === "story.reopened")[0]?.payload.reason).toBe("attempts");
+  });
+
+  /**
+   * "Without consuming an attempt" is the whole ask, and the mechanism is the one
+   * that was already there: `story.reopened` is a reset boundary the review ledger
+   * reads, so the approve that closed the story stops counting and the fix runs as
+   * attempt 1 of 2 — with both of them available to it, not one.
+   */
+  test("no attempt is consumed: the ledger resets and the fix runs as attempt 1", async () => {
+    const ws = await done();
+    expect(readReviewLedger(ws.runDir, "S1").verdicts).toBe(1);
+
+    forFix(ws, "S1", DEFECT);
+    expect(readReviewLedger(ws.runDir, "S1").verdicts).toBe(0);
+
+    reenter(ws, "S1 has a defect to fix");
+    await next(ws, { at: "2026-08-29T10:05:00Z" });
+    // Two developer turns in all, and BOTH were attempt 1: the original, and the
+    // fix. The fix round did not start life owing an attempt.
+    expect(events(ws).filter((e) => e.type === "task.started").map((e) => e.payload.attempt))
+      .toEqual([1, 1]);
+  }, 60_000);
+
+  test("the fix passes the same DoD and the same reviewer, and only then is it done", async () => {
+    const ws = await done();
+    const before = events(ws).length;
+    forFix(ws, "S1", DEFECT);
+    reenter(ws, "S1 has a defect to fix");
+    await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    expect(story(ws, "S1")).toContain("status: done");
+    const after = events(ws).slice(before);
+    // The DoD ran again, in the fix round — not once, at the start of time.
+    expect(after.filter((e) => e.payload.check === "dod").length).toBeGreaterThan(0);
+    // And a reviewer judged the fix.
+    expect(after.filter((e) => e.payload.check === "review").length).toBeGreaterThan(0);
+    expect(after.some((e) => e.type === "task.done" && e.payload.status === "done")).toBe(true);
+  }, 60_000);
+
+  test("a fix a reviewer refuses does NOT go done — the handshake still gates it", async () => {
+    const ws = await done();
+    forFix(ws, "S1", DEFECT);
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes", "changes"] });
+    reenter(ws, "S1 has a defect to fix");
+    await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    expect(story(ws, "S1")).toContain("status: blocked");
+  }, 60_000);
+
+  /**
+   * The line between "land a named defect fix" and "reopen the negotiation". The
+   * status is the only thing on the file this verb may move; the acceptance
+   * criteria the reviewer will judge against are the ones that were already there.
+   */
+  test("the story's acceptance criteria are untouched — only `status:` moves", async () => {
+    const ws = await done();
+    const before = story(ws, "S1");
+    forFix(ws, "S1", DEFECT);
+    expect(story(ws, "S1")).toBe(before.replace("status: done", "status: todo"));
+  });
+
+  describe("what --for-fix refuses", () => {
+    test("a story that is not done — that is what the plain reopen is for", async () => {
+      const ws = workspace(ONE);
+      process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes", "changes"] });
+      await next(ws);
+      expect(story(ws, "S1")).toContain("status: blocked");
+
+      const before = story(ws, "S1");
+      const outcome = forFix(ws, "S1", DEFECT);
+      const said = outcome.lines.join("\n");
+
+      expect(outcome.code).toBe(2);
+      expect(said).toContain("--for-fix");
+      expect(said).toContain("`blocked`");
+      expect(said).toContain("tldrx story reopen S1 --note");
+      expect(story(ws, "S1")).toBe(before);
+      expect(events(ws).filter((e) => e.type === "story.reopened")).toHaveLength(0);
+    });
+
+    test("no --note, because the note is the named defect", async () => {
+      const ws = await done();
+      const before = story(ws, "S1");
+      for (const note of ["", "   "]) {
+        const outcome = forFix(ws, "S1", note);
+        expect(outcome.code).toBe(2);
+        expect(outcome.lines.join("\n")).toContain("--note");
+      }
+      expect(story(ws, "S1")).toBe(before);
+      expect(events(ws).filter((e) => e.type === "story.reopened")).toHaveLength(0);
+    });
+
+    test("a second fix round while one is still open — the bound is ONE", async () => {
+      const ws = await done();
+      expect(forFix(ws, "S1", DEFECT).code).toBe(0);
+
+      const before = story(ws, "S1");
+      const outcome = forFix(ws, "S1", "a second, different defect");
+      const said = outcome.lines.join("\n");
+
+      expect(outcome.code).toBe(2);
+      expect(said).toMatch(/fix round/i);
+      expect(said).toContain(DEFECT);
+      expect(said).toContain("alan");
+      expect(story(ws, "S1")).toBe(before);
+      // Still exactly the one event: nothing was appended by the refusal.
+      expect(events(ws).filter((e) => e.type === "story.reopened")).toHaveLength(1);
+    });
+
+    /** A fix round CLOSES when the story is done again, so the next defect may open one. */
+    test("a fix round that landed is closed, and a later defect may open another", async () => {
+      const ws = await done();
+      forFix(ws, "S1", DEFECT);
+      reenter(ws, "S1 has a defect to fix");
+      await next(ws, { at: "2026-08-29T10:05:00Z" });
+      expect(story(ws, "S1")).toContain("status: done");
+
+      expect(forFix(ws, "S1", "a later, different defect").code).toBe(0);
+      expect(events(ws).filter((e) => e.type === "story.reopened")).toHaveLength(2);
+    }, 60_000);
+  });
+
+  test("the plain reopen's `done` refusal now points at --for-fix", async () => {
+    const ws = await done();
+    const said = reopen(ws, "S1", WHY).lines.join("\n");
+    expect(said).toContain("S1 is `done` — refusing to reopen finished work");
+    expect(said).toContain("--for-fix");
+  });
+
+  test("from the command line, with both flags", async () => {
+    const ws = await done();
+    const printed = capture();
+    const code = await storyCommand.run(
+      ["reopen", "S1", "--root", ws.root, "--for-fix", "--note", DEFECT],
+    );
+    const out = printed();
+
+    expect(code).toBe(0);
+    expect(out.stdout).toContain("reopened S1");
+    expect(out.stdout).toContain(DEFECT);
+    expect(out.stderr).toBe("");
+    expect(story(ws, "S1")).toContain("status: todo");
+    expect(storyCommand.usage).toContain("--for-fix");
+  });
+});
+
 /** One `events.jsonl` line, valid against §2.9, for the ledger unit tests. */
 function line(type: string, payload: Record<string, unknown>): string {
   return JSON.stringify({

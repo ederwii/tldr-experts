@@ -3307,6 +3307,21 @@ export interface ReviewLedger {
    * still in the log; this reads the last boundary in it.
    */
   readonly reopened: { readonly at: string; readonly actor: string; readonly note: string } | null;
+  /**
+   * The OPEN fix round on this story (issue #58), or null when there is none.
+   *
+   * A fix round is `tldrx story reopen <id> --for-fix --note "<defect>"`: a DONE
+   * story reopened to land one named defect, consuming no attempt. It OPENS on
+   * that event and CLOSES when the story is `done` again — nothing else closes
+   * it, and a plain reopen deliberately does not: a fix round that blocked and
+   * was granted more attempts is still the same unfixed defect.
+   *
+   * One story may have exactly one open at a time (owner constraint,
+   * 2026-09-01), and this is the field that enforces it across processes. It is
+   * the bound's counter in the same way `fixlistRounds` is — read from the log,
+   * because a second `tldrx` invocation remembers nothing.
+   */
+  readonly fixRound: { readonly at: string; readonly actor: string; readonly note: string } | null;
 }
 
 /** Everything the two resume paths and the requeue counter need, in one pass. */
@@ -3314,7 +3329,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
   const path = join(runDir, "events.jsonl");
   const empty: ReviewLedger = {
     verdicts: 0, fixlistRounds: 0, erroredWith: null, commit: null, dod: [],
-    developerErroredWith: null, blockedWithNothingRun: false, reopened: null,
+    developerErroredWith: null, blockedWithNothingRun: false, reopened: null, fixRound: null,
   };
   if (!existsSync(path)) return empty;
 
@@ -3337,6 +3352,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
   let dod: DodResult[] = [];
   let current: DodResult[] = [];
   let reopened: ReviewLedger["reopened"] = null;
+  let fixRound: ReviewLedger["fixRound"] = null;
 
   for (const line of readFileSync(path, "utf8").split("\n")) {
     if (line.trim() === "") continue;
@@ -3373,6 +3389,11 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
         actor: typeof event.actor === "string" ? event.actor : "",
         note: typeof payload.note === "string" ? payload.note : "",
       };
+      // A FIX round opens here and is not closed by the reset above (#58): the
+      // counters restart, the defect does not stop existing. Deliberately NOT
+      // cleared by a plain reopen either — a fix that blocked and was granted
+      // more attempts is the same fix round, still owed.
+      if (payload.reason === "fix") fixRound = reopened;
       continue;
     }
 
@@ -3392,6 +3413,10 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     if (event.type === "agent.spawned" && payload.role === "reviewer") sawReviewer = true;
     if (event.type === "task.done") {
       if (typeof payload.commit === "string" && payload.commit !== "") commit = payload.commit;
+      // The story finished again: whatever fix round was open has landed, and the
+      // next named defect may open one of its own (#58). This is the ONLY thing
+      // that closes one — the same handshake that closed the story the first time.
+      if (payload.status === "done") fixRound = null;
       // The COMPAT shape, decided at the moment the attempt ended: blocked with
       // nothing to show for itself and nothing that could have judged it.
       blockedWithNothingRun = payload.status === "blocked"
@@ -3452,6 +3477,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     developerErroredWith,
     blockedWithNothingRun,
     reopened,
+    fixRound,
   };
 }
 

@@ -875,14 +875,16 @@ describe("budget-gate (PreToolUse Bash)", () => {
   function hostCeiling(tokens: number, extra = ""): void {
     const path = join(workspace().runDir, "budget.yml");
     const text = readFileSync(path, "utf8")
-      // The phase ceiling IS the token allowance under `host-tokens`. The run
-      // ceiling is raised with it only to keep `Σ phase ceilings ≤ ceiling_usd`
-      // satisfied — that validator sums the two economies as if they shared a
-      // unit, which is a pre-existing wart and not what this test is about.
-      .replace("ceiling_usd: 25.0", "ceiling_usd: 60000")
+      // The token allowance goes in `ceiling_host_tokens`, and the run's
+      // `ceiling_usd: 25.0` is LEFT ALONE (#61, fixed). The first version of this
+      // helper had to raise it to 60000 — a dollar figure that meant nothing —
+      // because the sum check added a 10 000-token phase ceiling to dollars. The
+      // sums are per economy now, so a token phase costs the dollar ceiling
+      // nothing and the fixture stays a fixture.
       .replace(
         "{id: 02-how, ceiling_usd: 7.0, spent_usd: 6.39}",
-        `{id: 02-how, ceiling_usd: ${String(tokens)}, spent_usd: 0, economy: host-tokens}`,
+        `{id: 02-how, ceiling_usd: 7.0, spent_usd: 0, economy: host-tokens, `
+          + `ceiling_host_tokens: ${String(tokens)}}`,
       )
       // Before `phases:`, not after it: `phases:` is a multi-line flow sequence
       // and is the last key in the file.

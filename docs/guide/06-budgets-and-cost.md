@@ -131,11 +131,12 @@ So a price gets a currency. `budget.yml` takes one optional key, at the run leve
 phase, and `03-plan/budget.yml` takes the same key at its root:
 
 ```yaml
-ceiling_usd: 25.0
+ceiling_usd: 25.0                 # DOLLARS, always and only
+ceiling_host_tokens: 500000       # the run's HOST-TOKEN allowance, when it has one
 economy: metered-usd              # metered-usd (the default) | host-tokens
 phases:
   - {id: 01-what,  ceiling_usd: 4.0, spent_usd: 1.14}
-  - {id: 04-build, ceiling_usd: 8.0, spent_usd: 0.0, economy: host-tokens}
+  - {id: 04-build, ceiling_usd: 8.0, spent_usd: 0.0, economy: host-tokens, ceiling_host_tokens: 200000}
 ```
 
 `metered-usd` means dollars a spawn may spend, which is what every file already meant.
@@ -162,6 +163,26 @@ The two are **never converted**. There is no exchange rate here, and inventing o
 a guess about a price — which is the whole reason the label exists. `tldrx budget raise`
 rewrites `budget.yml` and the label survives the rewrite; a raise that erased it would turn
 a token budget back into dollars silently.
+
+### Separate ceilings, separate sums
+
+Each economy has its **own run ceiling**: `ceiling_usd` is dollars by its name and by every
+other use, and `ceiling_host_tokens` is the host-token allowance. The phase-ceiling sum runs
+**once per economy** — Σ the dollar phases against `ceiling_usd`, Σ the token phases against
+`ceiling_host_tokens` — and the two totals never meet.
+
+They used to. Until 2026-09-01 the check added every phase ceiling together and compared the
+total to `ceiling_usd`, so a `200000`-token phase under a `$25` run read as `$200,000`:
+`phase ceilings sum to 200018 > ceiling_usd 25`. That is the one check that fails **closed**
+— `RunStore.open` threw on the file, and the budget-gate hook then denied every spawn on the
+run. An operator who priced a phase in tokens at any realistic magnitude had stopped their
+own run.
+
+`ceiling_host_tokens` is optional and additive, and **absence changes nothing**: with no
+token ceiling declared there is nothing to compare a token total against, so the token sum is
+not checked. Under `economy: host-tokens` a phase's allowance is its `ceiling_host_tokens`
+when it has one and its `ceiling_usd` otherwise — the compat reading, for the files written
+before the field existed, where the one unlabelled scalar *was* the allowance.
 
 The economy is one half of driving a run from a host session; the other half is the run mode
 itself — see [10 — Unattended mode](10-unattended-mode.md).
@@ -215,7 +236,7 @@ that unblocks it with the shortfall already computed and rounded **up** to the c
 
 `raise` is the one sanctioned edit to `budget.yml`, and it leaves a `budget.raised` event
 with before/after, actor and note. It is validated before it writes:
-`Σ phase ceilings ≤ ceiling_usd` holds on the way out, and `--take-from <phase>` moves the
+`Σ phase ceilings ≤ ceiling_usd` holds on the way out (per economy — see above), and `--take-from <phase>` moves the
 money instead of adding it — refusing to cut a donor below what it has already spent. The
 output says which happened: the money moved, or the **run** ceiling grew.
 

@@ -507,10 +507,10 @@ no cost is refunded. It is the one verb that may reopen a finished run. Exits: `
 
 ## `tldrx story`
 
-Give one Build story another run of attempts.
+Give one Build story another run of attempts, or open a fix round on a done one.
 
 ```
-tldrx story reopen <id> --note <text> [--run <id>] [--root <path>]
+tldrx story reopen <id> --note <text> [--for-fix] [--run <id>] [--root <path>]
 ```
 
 `--note` is required — a reopen with no reason is not actionable. The story goes back to
@@ -521,7 +521,33 @@ ledger reads, and every earlier attempt stays in `events.jsonl`. It runs no agen
 nothing, deletes nothing and refunds nothing — the story's branch, which carries the last
 developer's commits, is untouched. It does NOT send the stage back; the output names the
 `reject` that does. Refuses (`2`) an unknown story id, a `done` story (that is
-`reject --stage`), a `todo` story, and a missing `--note`. Exits: `0` `1` `2` `3`.
+`reject --stage`, or `--for-fix` below), a `todo` story, and a missing `--note`.
+Exits: `0` `1` `2` `3`.
+
+### `--for-fix` — a fix round on a `done` story
+
+An accepted defect in finished work had no sanctioned path: rejecting the whole Build stage
+destroys every other story's closure, and fixing it outside the story machinery leaves an
+epic-level commit with no story provenance. `--for-fix` is the missing arc, `done` → fix
+round:
+
+```
+tldrx story reopen S11 --for-fix --note "linkEmail succeeds then setDisplayName fails: account linked, score never claimable"
+```
+
+The `--note` is the **named defect**, and it is what scopes the round. The story goes back to
+`todo` and **no attempt is consumed** — the verdict that closed it stops counting, so the fix
+runs as attempt 1 of 2. The fix then passes **the same DoD and the same reviewer** the story
+passed: a fix round ends the way the story did, or it does not end.
+
+It is not a way to relitigate scope. The story's acceptance criteria are not touched — the
+only line this verb moves on the file is `status:` — and one story may have exactly **one**
+fix round open at a time. The round opens on a `story.reopened` carrying `reason: fix` and
+closes when the story is `done` again.
+
+Refuses (`2`) a story that is **not** `done` (that is the plain reopen), a missing `--note`,
+and a story that already has a fix round open — the refusal names who opened it and with
+which defect.
 
 ## `tldrx plan`
 
