@@ -496,8 +496,15 @@ async function openPrFor(options: ShipOptions, repo: ShipRepo, branch: string): 
   return typeof url === "string" && url !== "" ? url : null;
 }
 
-/** Which of the run's epic branches to ship. Never a guess between several. */
-function pickBranch(claimed: readonly string[], wanted?: string): string | ShipOutcome {
+/**
+ * Which of the run's epic branches to ship. Never a guess between several.
+ *
+ * Exported for `tldrx watch arm` (gh #69), which has to answer the same question
+ * about the same `run.yml` list before it can ask `gh` about a PR. Two answers to
+ * "which branch did this run ship" is how a poller ends up watching a branch
+ * nobody opened a PR from.
+ */
+export function pickBranch(claimed: readonly string[], wanted?: string): string | ShipOutcome {
   const asked = wanted?.trim() ?? "";
   if (asked !== "") {
     if (!claimed.includes(asked)) {
@@ -520,9 +527,24 @@ function pickBranch(claimed: readonly string[], wanted?: string): string | ShipO
   return only;
 }
 
-interface ShipRepo {
+export interface ShipRepo {
   readonly name: string;
   readonly dir: string;
+}
+
+/**
+ * The part of `ShipOptions` that `findRepos` actually reads.
+ *
+ * Narrowed (rather than passing the whole of `ShipOptions`) so `watch arm` can
+ * call it without pretending to be a ship: it has no handoff, no `--draft` and no
+ * `at`. `ShipOptions` still satisfies this structurally, so both call sites below
+ * are unchanged.
+ */
+export interface RepoLookup {
+  readonly root: string;
+  /** `--repo`, when the caller narrowed it to one. */
+  readonly repo?: string;
+  readonly transport: ShipTransport;
 }
 
 /**
@@ -539,8 +561,8 @@ interface ShipRepo {
  * each (issue #66, owner decision 2026-09-01). `--repo` still narrows it to one,
  * which is the escape hatch for the operator who wants exactly one of them.
  */
-async function findRepos(
-  options: ShipOptions,
+export async function findRepos(
+  options: RepoLookup,
   store: RunStore,
   branch: string,
 ): Promise<readonly ShipRepo[] | ShipOutcome> {

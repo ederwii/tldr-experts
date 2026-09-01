@@ -4,6 +4,54 @@
 
 ### Added
 
+- **`tldrx questions cards [<run>]` — a parked question, as something to decide (#59).** Measured
+  on run `260830-ordering-inventory`, 2026-09-01: the host parked four product questions with
+  notes and reported them in its tl;dr. The owner's live words were *"cuales preguntas? no las
+  veo? por que no me guió por las preguntas Claude?"* — they were on disk, they were in
+  `tldrx questions <run>`, and the count was in the summary. None of that PRESENTED them. Counted
+  is not asked, and the gap was never the data; it was the arc from parked to answerable.
+  - **Three slots, each a refusal.** Two lines of context (which run and file the question is
+    parked in, who asked it, when, in what area) so a card pasted into chat stands up away from
+    the terminal. The question's OWN `Why asked:` note verbatim, `[src: …]` included — the slot
+    for what the binding docs already decide, quoted rather than summarised; a note that cites
+    nothing is FLAGGED as somebody's recollection, and a question parked with no note says so.
+    The file's lettered options verbatim, or a loud `NEEDS OPTIONS` marker when it carries none,
+    because manufacturing A/B/C would be answering the question in the act of asking it.
+  - **A reader, and only a reader** (owner decision 2026-09-01: no interactive loop in v1). It
+    opens no run, spawns nothing, records no fact, and a test asserts `questions.md` is
+    byte-identical across a render. Answers still flow through `tldrx answer`, and every card
+    prints the exact line to type. It does not extend the §2.7 grammar: every field on a card is
+    one the existing parser already produces.
+  - **No open question is a sentence and an exit 0** — and two silences are told apart, because
+    "this run never parked anything" and "everything here is answered" send a reader to different
+    places.
+
+- **`tldrx watch arm --run <id>` — the merge detector that fires the post-merge checklist (#69).**
+  `watch check` (#65) answers *"what do I check now?"*. Nothing answered *"the PR just merged, go
+  and check it"* — the half that happens without a human remembering, which matters because the
+  failure #65 was filed about IS a memory failure: the owner's own CD gap, a merged branch read as
+  a deployed one, cost 19 destroyed records. v1 would not have caught it either, because nobody
+  ran it.
+  - **A bounded FOREGROUND poller, not a daemon** (owner decision 2026-09-01: no GitHub Actions in
+    v1). It reads the branch Build cut from `run.yml` — through the same `pickBranch`/`findRepos`
+    `tldrx ship` uses, now exported, so the two verbs cannot disagree about which branch a run
+    shipped — asks `gh pr view <branch> --json state,mergedAt` per repo, and prints the same
+    checklist the moment every PR for that branch has merged. **Three independent bounds**: a hard
+    deadline (`--timeout`, default 3600s, max 86400), a floor on the interval (`--interval`,
+    default 60s, under 10 REFUSED rather than quietly raised), and a poll cap that holds even if
+    the clock does not move.
+  - **Every refusal is a sentence, and they are different sentences.** No epic branch ⇒ `ship`
+    cannot have run. No PR for the branch ⇒ either `ship` has not run or the branch was never
+    pushed, with both commands printed. A PR `CLOSED` without merging ⇒ stop now, because waiting
+    for it could only ever time out. A window that expires ⇒ exit `4` and the command that
+    re-arms it.
+  - **It never pushes, opens or merges anything**, and `--execute` is deliberately not offered: an
+    hour-old poller must not start running the workspace's build commands the instant a merge
+    lands. Re-running a recorded command stays an explicit, typed decision.
+  - **No test in this suite runs the real `gh` or touches a network.** The unit cases drive a
+    recording fake transport; the one end-to-end case puts a stub `gh` first on `PATH`. The clock
+    and the sleep are injected, so a test covering a one-hour timeout finishes in milliseconds.
+
 - **`tldrx plan schema` — the story/epic/waves contract, printed for a human (#71).** #48 deleted
   `templates/story.md` and `templates/epic.md`, rightly: nothing read them, so nothing kept them
   honest. But they were answering a real question — what shape does a story file take? — and after
@@ -363,6 +411,25 @@
     save writes exactly what it always wrote.
 
 ### Changed
+
+- **A watcher card may name a HUMAN owner — optional, per item, never invented (#70).**
+  `watch check` derived an owner from each item's own citation: `[src: api:src/Leaderboard.cs:64]`
+  → `api`. That was right for v1 and stays the fallback, but it answers a different question from
+  the one #70 asked — which repo EMITS a signal is not who gets paged when it stops.
+  - **Additive, in both halves.** An optional front-matter `owner:` (validated only when present,
+    so every card already on disk still validates) and an optional `(owner: <name>)` annotation on
+    an individual item, placed BEFORE its `[src: …]` token because §2.8 makes that token the last
+    thing on the line. Resolution is item → card → repo-derived, and the printed line says WHICH
+    it is showing: `owner: alice (declared on the item)` versus the pre-#70 `owner: api`, left
+    byte-identical for every card that declares nothing.
+  - **Filled from the ledger that already names owners, or not at all.** `tldrx init` parks
+    "Who owns `<repo>`?" as an `ownership` question and the answer lands in
+    `.tldrx/memory/facts.yml`. The Watch prompt was inlining `observability` and `deploy` facts
+    only, so a sub-agent asked for an owner had no honest source and would have invented one;
+    `ownership` is now inlined, and the brief says the name may come from nowhere else.
+  - **A lost name is an error, not an absence.** `(owner: )` is a card that TRIED to name somebody
+    and lost it, so it is a shape issue on the card rather than a silent fall-through to the repo
+    — which is the exact substitution the issue is about.
 
 - **`docs/guide/08-cli-reference.md` documents `note` and `ship` (#72).** Every command in `COMMANDS`
   had a `## tldrx <cmd>` heading except three; #55 wrote `plan`'s, and these are the other two —

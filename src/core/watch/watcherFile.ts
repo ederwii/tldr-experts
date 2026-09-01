@@ -21,6 +21,7 @@ import {
   asWatcher, validateWatcher, WATCHER_CHECKED_SECTIONS, WATCHER_SECTIONS, WATCHER_SIGNAL_SECTION,
   type Watcher, type WatcherStatus,
 } from "./Watcher.ts";
+import { itemOwner } from "./itemOwner.ts";
 
 /**
  * `shape` — the card is malformed: a section missing, an item with no token, a
@@ -112,6 +113,13 @@ export function parseWatcherCard(text: string, ctx: SrcContext, fileStem?: strin
     }
     for (const bullet of section.bullets) {
       if (name === WATCHER_SIGNAL_SECTION && signalLine === null) signalLine = bullet.text;
+      // `(owner: …)` is optional (#70), so its ABSENCE says nothing. A present one
+      // that cannot be read is a shape problem: the stage meant to name a person
+      // and the reader would otherwise be handed a repo in their place.
+      const owner = itemOwner(bullet.text);
+      if (owner.malformed) {
+        issues.push({ path: name, line: bullet.line, kind: "shape", message: `owner annotation — ${owner.reason}` });
+      }
       if (bullet.token === null) {
         issues.push({ path: name, line: bullet.line, kind: "shape", message: "no `[src: …]` token — every item on a card is sourced" });
         continue;

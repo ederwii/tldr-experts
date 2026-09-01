@@ -1,5 +1,5 @@
 /**
- * `tldrx watch list [--run <id>]` and `tldrx watch check [<feature>]` — read-only.
+ * `tldrx watch list`, `watch check [<feature>]` and `watch arm` — read-only.
  *
  * `list` is the one screen that answers "what is watched, and what only looks
  * watched". `check` answers the question that matters *after* the run closes: it
@@ -8,33 +8,45 @@
  * the repo that owns each one. A feature id scopes it to one card; without one,
  * every card in the run is checked, which is the shape a CI job wants.
  *
+ * `arm` (gh #69) is `check` with a trigger in front of it: a BOUNDED foreground
+ * poller over `gh pr view` for the branch the run shipped, which prints the same
+ * checklist the moment the PR merges. It is the half that happens without a human
+ * remembering to type anything — and it is a foreground loop with a deadline, not
+ * a daemon, because the framework has no background process and #69 is not the
+ * reason to grow one.
+ *
  * `--execute` is the single exception to "writes nothing": it re-runs the
  * `$ <cmd> → exit <n>` sources the cards recorded, through the same allowlist and
- * the same argv-never-a-shell rule the stage checks use. Opt-in, never default.
+ * the same argv-never-a-shell rule the stage checks use. Opt-in, never default,
+ * and NOT offered by `arm` — an hour-old poller must not start running build
+ * commands the instant a merge lands.
  */
 import type { Command } from "../Command.ts";
 import { EXIT_FAILED, EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
-import { boolFlag, parseArgs, stringFlag, UsageError, type ParsedArgs } from "../argv.ts";
+import { boolFlag, numberFlag, parseArgs, stringFlag, UsageError, type ParsedArgs } from "../argv.ts";
 import { workspaceRootFrom } from "../workspace.ts";
 import { fail } from "../report.ts";
 import { RunStore } from "../../core/run/RunStore.ts";
 import { notFound, renderAmbiguous } from "../resolveRun.ts";
 import { listRunDirs, loadWorkspace, toSrcContext } from "../../hooks/lib/workspace.ts";
 import {
-  cardChecklist, checklistOk, executeSignals, loadCards, nothingToCheck, renderChecklist,
+  armRun, cardChecklist, checklistOk, executeSignals, loadCards, nothingToCheck, renderChecklist,
   renderWatchList, watchListJson, type CardChecklist, type LoadedCard, type SignalRuns,
 } from "../../core/watch/index.ts";
+import { realShipTransport } from "../../core/run/ship.ts";
 import { PROJECT_WORK_DIR } from "../../core/paths.ts";
 import type { SrcContext } from "../../core/text/srcToken.ts";
 
-const VALUE_FLAGS = ["run", "root"] as const;
+const VALUE_FLAGS = ["run", "root", "branch", "repo", "interval", "timeout"] as const;
 
 export const watchCommand: Command = {
   name: "watch",
   summary: "List the watcher cards a run produced, or work through them as a checklist",
   usage: "tldrx watch list [--json] [--run <id>] [--root <path>]\n"
-    + "       tldrx watch check [<feature>] [--execute] [--run <id>] [--root <path>]",
-  subcommands: ["list", "check"],
+    + "       tldrx watch check [<feature>] [--execute] [--run <id>] [--root <path>]\n"
+    + "       tldrx watch arm [--interval <s>] [--timeout <s>] [--branch <name>] [--repo <name>]\n"
+    + "                       [--run <id>] [--root <path>]",
+  subcommands: ["list", "check", "arm"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     try {
@@ -45,6 +57,8 @@ export const watchCommand: Command = {
           return list(args, rest);
         case "check":
           return await check(args, rest);
+        case "arm":
+          return await arm(args, rest);
         case undefined:
           throw new UsageError(`expected a subcommand — ${watchCommand.usage}`);
         default:
@@ -111,6 +125,38 @@ async function check(args: ParsedArgs, rest: readonly string[]): Promise<number>
     : new Map();
   process.stdout.write(renderChecklist(loaded.runId, lists, runs));
   return checklistOk(lists, runs) ? EXIT_OK : EXIT_FAILED;
+}
+
+/**
+ * Wait for the run's shipped PR to merge, then print the checklist.
+ *
+ * Every refusal comes back as an `ArmOutcome` with a sentence in it rather than a
+ * thrown error, exactly as `tldrx ship` does — a run with no epic branch, or a
+ * branch nobody has opened a PR from, is an ordinary situation and the operator's
+ * next move differs for each.
+ *
+ * The checklist goes to stdout (a merge happened and this is the answer); every
+ * refusal and the timeout go to stderr, so a shell pipeline is never handed
+ * "nothing merged" as though it were a checklist.
+ */
+async function arm(args: ParsedArgs, rest: readonly string[]): Promise<number> {
+  if (rest.length > 0) throw new UsageError(`watch arm takes no positional argument, got '${rest[0] ?? ""}'`);
+  const outcome = await armRun({
+    root: workspaceRootFrom(args),
+    runId: stringFlag(args, "run"),
+    branch: stringFlag(args, "branch"),
+    repo: stringFlag(args, "repo"),
+    intervalS: numberFlag(args, "interval"),
+    timeoutS: numberFlag(args, "timeout"),
+    transport: realShipTransport(),
+    // Progress on stderr: the poller may sit here for an hour, and a terminal
+    // that says nothing for an hour is one an operator kills.
+    onPoll: (line) => process.stderr.write(`${line}\n`),
+  });
+  const text = `${outcome.lines.join("\n")}\n`;
+  if (outcome.merged) process.stdout.write(text);
+  else process.stderr.write(`tldrx watch arm: ${text}`);
+  return outcome.code;
 }
 
 interface OpenedRun {

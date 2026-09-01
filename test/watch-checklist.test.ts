@@ -134,9 +134,13 @@ describe("the checklist is the card, made actionable", () => {
   });
 
   /**
-   * The watcher schema has no `owner:` key (`WATCHER_KEYS`, `Watcher.ts`). The owner
-   * of a signal in this framework's vocabulary is the repo that emits it, and the
+   * With nothing declared, the owner of a signal is the repo that emits it, and the
    * card's own `[src: <repo>:<path>:<line>]` names it. Derived, never invented.
+   *
+   * Since gh #70 a card MAY declare a human owner (an optional front-matter
+   * `owner:`, or `(owner: …)` on the item) and this derivation is the fallback for
+   * the cards that do not — which is every card in this file. `watch-owner.test.ts`
+   * covers the declared side and asserts this line stays byte-identical.
    */
   test("each item names the repo that owns it, taken from its own citation", () => {
     expect(render(card())).toContain("api");

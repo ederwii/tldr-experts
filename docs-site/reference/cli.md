@@ -55,6 +55,7 @@ tldrx approve --note "…"    # sign the gate; the checks are re-run first
 | `tldrx reject --note "…"` | Send the stage back; `--stage <phase>/<stage>` revokes a signature. |
 | `tldrx gate template` | Write the skeleton evidence note an agent gate is signed over. |
 | `tldrx run gates set <stage>:<policy> --note "…"` | The only sanctioned way to change gate policy after `run new`. |
+| `tldrx questions cards` | The run's OPEN questions as printable decision cards — context, what the docs already decide, the options. Reads only. |
 | `tldrx answer <Qid> "…"` | Record an answer as a numbered fact. `--supersede` reverses one. |
 | `tldrx interview` | Answer a run's open questions in the terminal. |
 | `tldrx story reopen <id> --note "…"` | Give one build story another run of attempts. |
@@ -75,6 +76,7 @@ tldrx approve --note "…"    # sign the gate; the checks are re-run first
 | `tldrx expert list \| create \| train \| recompute` | See [Experts](/guides/experts). |
 | `tldrx seed triage` / `seed apply` | Split a big document into several runs. |
 | `tldrx watch list \| check [<feature>]` | The watcher cards a run produced: listed, or printed as the post-merge checklist and re-checked against the code now. |
+| `tldrx watch arm` | Wait for the run's shipped PR to merge, then print that checklist. A bounded foreground poller over `gh pr view` — not a daemon. |
 | `tldrx plan sync-dod \| schema` | Repair story definitions of done after editing `workspace.yml`, or print the story/epic/waves contract the `plan` check enforces. |
 | `tldrx dashboard` | Watch the workspace live in a browser, or export one static page. |
 | `tldrx replay [<run>]` | The run's event log as a narrative. |

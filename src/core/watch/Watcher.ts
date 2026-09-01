@@ -18,6 +18,11 @@
  * `status`; `epic:` is added on top, because one feature per epic is the whole
  * grouping rule and a card with no way back to its epic cannot be re-derived. The
  * caps and the `id`-equals-file-name rule mirror §2.13, not a stated requirement.
+ *
+ * `owner:` (gh #70, owner decision 2026-09-01) is OPTIONAL and validated only when
+ * present, so every card written before it existed still validates unchanged. It
+ * is the card-level default for its items; `itemOwner.ts` carries the per-item
+ * form, and the repo derived from a citation remains the fallback for both.
  */
 import {
   asDocument, requireEnum, requireKeys, result,
@@ -66,9 +71,29 @@ export interface Watcher {
   readonly stories: readonly string[];
   readonly repos: readonly string[];
   readonly status: WatcherStatus;
+  /**
+   * Who to ask about this feature, when the card knows (gh #70). Null when it
+   * does not — which is every card written before the key existed.
+   *
+   * The default for the card's items; an item may name its own, and when neither
+   * does, `watch check` falls back to the repo its citation points at, exactly as
+   * it did before this key. Optional on purpose: a required `owner:` is a key the
+   * stage would have to invent a value for, which is the defect gh #48 and
+   * `schemaContract.ts:20` are both about.
+   */
+  readonly owner: string | null;
 }
 
 export const WATCHER_KEYS = ["version", "id", "epic", "title", "stories", "repos", "status"] as const;
+
+/**
+ * Keys a card MAY carry. Validated when present, never required.
+ *
+ * Separate from `WATCHER_KEYS` because `requireKeys` reads that list as "these
+ * must be here": adding `owner` to it would invalidate every card on disk, which
+ * is the one thing an additive change must not do.
+ */
+export const WATCHER_OPTIONAL_KEYS = ["owner"] as const;
 
 /** The front matter only — shape, ids and enums. The body is `watcherFile.ts`. */
 export function validateWatcher(input: unknown): ValidationResult {
@@ -88,6 +113,11 @@ export function validateWatcher(input: unknown): ValidationResult {
     nonEmpty: true, pattern: REPO_NAME_RE, patternName: "a workspace.yml repo name", unique: true,
   });
   requireEnum(doc.status, WATCHER_STATUSES, "status", issues);
+  // Optional (#70): absent is legal and `requireText` returns on `undefined`.
+  // Present-and-unusable is not — a blank or non-string `owner:` is a card that
+  // tried to name somebody and lost the name, and reading it as "nobody declared"
+  // would silently substitute a repo for the human the author meant.
+  requireText(doc.owner, "owner", issues);
   return result(issues);
 }
 
@@ -101,5 +131,6 @@ export function asWatcher(input: unknown): Watcher {
     stories: doc.stories ?? [],
     repos: doc.repos ?? [],
     status: doc.status ?? "draft",
+    owner: typeof doc.owner === "string" && doc.owner.trim() !== "" ? doc.owner.trim() : null,
   };
 }

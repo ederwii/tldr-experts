@@ -602,7 +602,7 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "questions",
-    description: "Check that this run's questions.md can be read by the \u00a72.7 parser.",
+    description: "Read this run's open questions as decision cards, or check the file the \u00a72.7 parser reads.",
     args: [{ name: "[<run>]", meaning: "A run id. Omit it and the one open run is used." }],
     flags: [
       runFlag(),
@@ -621,12 +621,15 @@ const ENTRIES: readonly CommandHelp[] = [
       root(),
     ],
     examples: [
+      "tldrx questions cards",
+      "tldrx questions cards 260101-checkout",
       "tldrx questions lint",
       "tldrx questions lint --run 260101-checkout --fix",
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
     notes: [
-      "A heading that misses `## Qn \u00b7 Title` is not half-read, it is read as ABSENT — so everything downstream reports \"0 open questions\" and an auto gate signs itself over them. This names every block in that state and exits 2.",
+      "A heading that misses `## Qn \u00b7 Title` is not half-read, it is read as ABSENT \u2014 so everything downstream reports \"0 open questions\" and an auto gate signs itself over them. `lint` names every block in that state and exits 2.",
+      "`cards` renders each OPEN question as a printable decision card: two lines of context, the question's own `Why asked:` note verbatim (the slot for what the binding docs already decide), and the file's lettered options \u2014 or a NEEDS-OPTIONS marker when it carries none, because inventing the choices would be answering the question in the act of asking it. It reads only: answers still flow through `tldrx answer`, and every card prints the exact line to type. No open question is a sentence and an exit 0.",
     ],
   },
   {
@@ -1069,16 +1072,40 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "watch",
-    description: "List the watcher cards a run produced, or work through them as a post-merge checklist.",
-    args: [{ name: "[<feature>]", meaning: "watch check: which card to check. Omit it and every card in the run is checked; unused by list." }],
+    description: "List the watcher cards a run produced, work through them as a post-merge checklist, or wait for the shipped PR to merge and print it.",
+    args: [{ name: "[<feature>]", meaning: "watch check: which card to check. Omit it and every card in the run is checked; unused by list and arm." }],
     flags: [
       runFlag(),
       json("the card list", "list"),
       {
         name: "execute",
         arg: null,
-        meaning: "Re-run the `$ <cmd> → exit <n>` sources the cards recorded, through the same workspace.yml allowlist a stage check uses, and report the exit each one gets NOW. Off by default: without it every signal is printed, never run. A `## Query` block is never run — it belongs to the console named under `## Where`.",
+        meaning: "Re-run the `$ <cmd> \u2192 exit <n>` sources the cards recorded, through the same workspace.yml allowlist a stage check uses, and report the exit each one gets NOW. Off by default: without it every signal is printed, never run. A `## Query` block is never run \u2014 it belongs to the console named under `## Where`. Never offered by `arm`.",
         sub: "check",
+      },
+      {
+        name: "interval",
+        arg: "<s>",
+        meaning: "How often `arm` asks `gh pr view` whether the PR merged. Default 60. Anything under 10 is REFUSED rather than quietly raised \u2014 a PR does not merge twice, and a tighter loop only hammers the API.",
+        sub: "arm",
+      },
+      {
+        name: "timeout",
+        arg: "<s>",
+        meaning: "How long `arm` keeps asking before it gives up and prints the command that re-arms it. Default 3600, maximum 86400. It holds the terminal it was typed in; there is no background poller.",
+        sub: "arm",
+      },
+      {
+        name: "branch",
+        arg: "<name>",
+        meaning: "Which of the run's epic branches to watch, when Build cut more than one. The same list `tldrx ship` picks from (`build.epic_branch` in run.yml), read by the same code.",
+        sub: "arm",
+      },
+      {
+        name: "repo",
+        arg: "<name>",
+        meaning: "Narrow to one repo of the workspace. By default every repo of the run that has the branch is watched, and the checklist fires only when ALL of their PRs have merged.",
+        sub: "arm",
       },
       root(),
     ],
@@ -1088,11 +1115,14 @@ const ENTRIES: readonly CommandHelp[] = [
       "tldrx watch check",
       "tldrx watch check checkout-flow",
       "tldrx watch check --execute",
+      "tldrx watch arm --run 260101-checkout",
+      "tldrx watch arm --interval 120 --timeout 7200",
     ],
-    exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
+    exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_AWAITING_HUMAN],
     notes: [
-      "`watch check` exits 1 when a citation no longer resolves — a check that reported rot on stdout and exited 0 would be invisible to CI.",
+      "`watch check` exits 1 when a citation no longer resolves \u2014 a check that reported rot on stdout and exited 0 would be invisible to CI.",
       "It exits 3 when there is nothing to check, and says which nothing: a run whose Watch stage never ran, or a Watch stage that shipped no feature. A green that means \"I read no cards\" is the failure this command exists to stop.",
+      "`watch arm` is a bounded FOREGROUND poller, not a daemon: it reads the branch Build cut, asks `gh pr view <branch> --json state,mergedAt`, and prints the `watch check` checklist the moment every PR for that branch has merged. It never pushes, opens or merges anything. No epic branch, no PR for the branch, and a PR CLOSED without merging are all refusals with a sentence in them (exit 2); a window that expires with the PR still open exits 4 and says how to re-arm.",
     ],
   },
   {
