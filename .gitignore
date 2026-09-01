@@ -35,3 +35,9 @@ dist/
 # `tldrx install --claude` backs settings.json up before merging into it.
 # The framework's own repo needs the same line it writes into a user's workspace.
 .claude/settings.json.bak-tldrx-*
+
+# docs-site (the public VitePress site). Its build output and the changelog page it
+# generates from CHANGELOG.md at build time — never a second copy anyone maintains.
+docs-site/.vitepress/dist/
+docs-site/.vitepress/cache/
+docs-site/reference/changelog.md
