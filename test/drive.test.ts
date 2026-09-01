@@ -8,13 +8,15 @@
  * enough to stop being read, and that printing a mandate needs no workspace,
  * touches no disk and spawns nothing.
  */
-import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { EXIT_OK, EXIT_USAGE } from "../src/cli/exitCodes.ts";
-import { DRIVE_MODES, MANDATE_MAX_LINES, renderMandate } from "../src/core/drive/index.ts";
+import { DRIVE_MODES, MANDATE_MAX_LINES, renderMandate, type DriveMode } from "../src/core/drive/index.ts";
+import { createRun } from "../src/core/run/newRun.ts";
+import { makeRunWorkspace, type TempRunWorkspace } from "./fixtures/tempRunWorkspace.ts";
 import { noSpawnEnv } from "./fixtures/noSpawnPath.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
@@ -169,5 +171,160 @@ describe("tldrx drive", () => {
     const run = await tldrxIn(bareDir(), "drive", "--unattended");
     const version = JSON.parse(await Bun.file(new URL("../package.json", import.meta.url)).text()).version;
     expect(run.stdout).toContain(version);
+  });
+});
+
+/**
+ * The `<run>` placeholder, filled in (#75).
+ *
+ * `--unattended` prints a mandate whose every command reads `tldrx next --prepare
+ * <run>`, and the header tells the reader to replace `<run>` with the run id — a
+ * hand find-replace across ~8 occurrences, done at the exact moment somebody is
+ * trying to START a run, where one occurrence missed sends a session at the wrong
+ * run. That is the failure this closes.
+ *
+ * Two ways in, and one thing neither does. An explicit id (positional or `--run`,
+ * the same `?? ` order `ship` uses) is substituted TEXTUALLY: no resolution, no
+ * validation, no disk — an id that names no run is the operator's typo to notice,
+ * exactly as it would be had they typed it themselves, and the command stays the
+ * one thing in the CLI that runs anywhere. With no id, and only then, it looks for
+ * the ONE open run in the workspace it is standing in.
+ *
+ * "The ONE open run" — `RunStore.resolve`'s rule, not "the newest open one". A
+ * mandate silently pointed at the wrong run is the very bug being fixed, so where
+ * the CLI would refuse to choose, this declines to substitute and leaves `<run>`
+ * standing, exactly as today. Never resolvable, never a failure: no workspace, no
+ * runs, an unreadable one — every path falls back to the placeholder and exit 0.
+ */
+describe("the mandate's <run> is filled in when there is an id to fill it with (#75)", () => {
+  const RUN_ID = "260901-leaderboard";
+
+  test("renderMandate with an id leaves no `<run>` anywhere in it", () => {
+    for (const mode of DRIVE_MODES) {
+      const text = renderMandate(mode, VERSION, RUN_ID);
+      expect(text).not.toContain("<run>");
+      // The commands themselves carry it — `tldrx note <run>` is in both modes.
+      expect(text).toContain(`tldrx note ${RUN_ID}`);
+    }
+    expect(renderMandate("unattended", VERSION, RUN_ID)).toContain(`tldrx next --prepare ${RUN_ID}`);
+  });
+
+  test("every occurrence is substituted — all of them, not the first", () => {
+    // Measured 2026-09-01, and pinned so the count cannot drift silently: the issue
+    // said "~8", the mandate actually carries 7 unattended and 5 attended. The
+    // argument does not depend on the number — one occurrence missed by a hand
+    // find-replace sends a session at the wrong run — but the number is checkable,
+    // so it is checked rather than approximated.
+    const counts: Record<DriveMode, number> = { attended: 5, unattended: 7 };
+    for (const mode of DRIVE_MODES) {
+      const occurrences = renderMandate(mode, VERSION).split("<run>").length - 1;
+      expect(occurrences).toBe(counts[mode]);
+      const filled = renderMandate(mode, VERSION, RUN_ID);
+      expect(filled.split(RUN_ID).length - 1).toBe(occurrences);
+    }
+  });
+
+  test("without an id the placeholder and its find-replace instruction both stay", () => {
+    const text = renderMandate("unattended", VERSION);
+    expect(text).toContain("<run>");
+    expect(text).toContain("replacing");
+  });
+
+  test("with an id the header stops telling the reader to find-replace", () => {
+    const text = renderMandate("unattended", VERSION, RUN_ID);
+    expect(text).not.toContain("replacing");
+    expect(text).toContain(RUN_ID);
+  });
+
+  test("filling it in does not push the mandate over its line budget", () => {
+    for (const mode of DRIVE_MODES) {
+      const lines = renderMandate(mode, VERSION, RUN_ID).split("\n").length;
+      expect(lines).toBeLessThanOrEqual(MANDATE_MAX_LINES);
+    }
+  });
+
+  test("a positional id substitutes, with no workspace anywhere and nothing written", async () => {
+    const dir = bareDir();
+    const run = await tldrxIn(dir, "drive", "--unattended", RUN_ID);
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).not.toContain("<run>");
+    expect(run.stdout).toContain(`tldrx next --prepare ${RUN_ID}`);
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  test("`--run <id>` does the same, the spelling every other command takes", async () => {
+    const run = await tldrxIn(bareDir(), "drive", "--unattended", "--run", RUN_ID);
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).not.toContain("<run>");
+    expect(run.stdout).toContain(RUN_ID);
+  });
+
+  test("an id that names no run is substituted anyway — not validated, by design", async () => {
+    const run = await tldrxIn(bareDir(), "drive", "--attended", "260101-no-such-run");
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).toContain("260101-no-such-run");
+    expect(run.stderr).toBe("");
+  });
+
+  test("with no id and no workspace, `<run>` stands and the exit is still 0", async () => {
+    const run = await tldrxIn(bareDir(), "drive", "--unattended");
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).toContain("<run>");
+  });
+});
+
+/**
+ * The workspace half of #75: resolution, and its deliberate limits.
+ */
+describe("drive resolves the ONE open run, and refuses to guess between two (#75)", () => {
+  let workspace: TempRunWorkspace | null = null;
+
+  afterEach(() => {
+    workspace?.dispose();
+    workspace = null;
+  });
+
+  /** A workspace with `slugs.length` open runs, oldest first. */
+  function withRuns(...slugs: readonly string[]): { root: string; ids: readonly string[] } {
+    workspace = makeRunWorkspace();
+    const root = workspace.root;
+    const ids = slugs.map((slug, i) => createRun({
+      root, slug, scope: "feature", actor: "alan",
+      now: new Date(`2026-08-${String(20 + i).padStart(2, "0")}T09:00:00Z`),
+    }).runId);
+    return { root, ids };
+  }
+
+  test("one open run: its id is filled in without being asked for", async () => {
+    const { root, ids } = withRuns("leaderboard");
+    const run = await tldrxIn(root, "drive", "--unattended");
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).not.toContain("<run>");
+    expect(run.stdout).toContain(ids[0] as string);
+  });
+
+  test("TWO open runs: `<run>` stands rather than one being picked silently", async () => {
+    const { root, ids } = withRuns("alpha", "beta");
+    const run = await tldrxIn(root, "drive", "--unattended");
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).toContain("<run>");
+    // Silence would be worse than the placeholder: say which ids were on offer.
+    for (const id of ids) expect(run.stderr).toContain(id);
+  });
+
+  test("…and naming one of them there fills it in", async () => {
+    const { root, ids } = withRuns("alpha", "beta");
+    const run = await tldrxIn(root, "drive", "--unattended", ids[0] as string);
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).not.toContain("<run>");
+    expect(run.stdout).toContain(ids[0] as string);
+  });
+
+  test("a workspace with no runs at all keeps the placeholder, quietly", async () => {
+    workspace = makeRunWorkspace();
+    const run = await tldrxIn(workspace.root, "drive", "--attended");
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).toContain("<run>");
+    expect(run.stderr).toBe("");
   });
 });

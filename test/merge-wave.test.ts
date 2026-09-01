@@ -470,3 +470,91 @@ describe("the sandbox does not inherit the host's default branch (#49)", () => {
       { encoding: "utf8", env: HOSTILE_GIT_ENV }).trim()).toBe("refs/heads/main");
   });
 });
+
+/**
+ * #76 — a conflicted merge must hand the checkout back the way it found it.
+ *
+ * Measured 2026-09-01 on the pre-fix script: `exit 2` fired the EXIT trap, which
+ * released the lock and left the conflicted index in place. The next queued
+ * invocation then hit the dirty-tree guard and exited 1, `FAIL dirty tree`, having
+ * merged nothing — and so did every one after it, until a human ran `git merge
+ * --abort` by hand. Under the concurrent multi-cluster pattern this repo is driven
+ * with, one conflict wedged every other cluster; two agents hit it live that night.
+ *
+ * `mergeNoFf` (src/core/build/git.ts:314-326) already does the right thing one
+ * directory over: collect the conflicted paths for the message, THEN abort. This is
+ * the same hazard the lock was written for — state from one invocation leaking into
+ * the next — so it gets the same standard.
+ */
+describe("a conflicted merge does not wedge the checkout (#76)", () => {
+  /**
+   * `main` and `wave-conflict` rewrite the same line of a file BOTH already had, so
+   * the merge stops with `UU` — the state the live wedge was observed in, rather than
+   * the `AA` two independent additions would give.
+   */
+  function conflicting(sb: Sandbox): void {
+    writeFileSync(join(sb.main, "contested.txt"), "the version they both started from\n");
+    sb.git("add", "-A");
+    sb.git("commit", "-q", "-m", "a file both sides will touch");
+    sb.git("checkout", "-q", "-b", "wave-conflict", "main");
+    writeFileSync(join(sb.main, "contested.txt"), "the branch's version\n");
+    sb.git("add", "-A");
+    sb.git("commit", "-q", "-m", "wave-conflict work");
+    sb.git("checkout", "-q", "main");
+    writeFileSync(join(sb.main, "contested.txt"), "main's version\n");
+    sb.git("add", "-A");
+    sb.git("commit", "-q", "-m", "main touches the same file");
+  }
+
+  test("the conflicting paths are still named, and the exit code is still 2", async () => {
+    const sb = sandbox();
+    conflicting(sb);
+    const { code, stdout } = await invoke(sb, "wave-conflict").done;
+    expect(code).toBe(2);
+    expect(stdout).toContain("FAIL merge conflict");
+    // Aborting must not cost the agent the one thing it needs to act on.
+    expect(stdout).toContain("contested.txt");
+  });
+
+  test("and the tree it hands back is CLEAN, with no merge left half-done", async () => {
+    const sb = sandbox();
+    conflicting(sb);
+    const before = sb.git("rev-parse", "HEAD");
+    expect((await invoke(sb, "wave-conflict").done).code).toBe(2);
+    // The bug, precisely: without the abort this reads `UU contested.txt`\n    // — measured on the pre-fix script, 2026-09-01.
+    expect(sb.git("status", "--porcelain")).toBe("");
+    expect(existsSync(join(sb.main, ".git", "MERGE_HEAD"))).toBe(false);
+    expect(sb.git("rev-parse", "HEAD")).toBe(before);
+    // The lock goes back too — that half was never broken, and must stay that way.
+    expect(existsSync(lockDir(sb))).toBe(false);
+  });
+
+  test("so the next queued sibling merges, instead of being refused for dirtiness", async () => {
+    const sb = sandbox();
+    conflicting(sb);
+    expect((await invoke(sb, "wave-conflict").done).code).toBe(2);
+    // This is the invocation that returned 1 `FAIL dirty tree` for cluster L.
+    const next = await invoke(sb, "wave-a").done;
+    expect(next.stdout).not.toContain("FAIL dirty tree");
+    expect(next.code).toBe(0);
+    expect(originLog(sb)[0]).toBe("merge wave-a");
+  });
+});
+
+/**
+ * The message the guard prints when it DOES refuse (#76, the second half).
+ *
+ * `FAIL dirty tree` names the wrong culprit: it reads as "you left junk in your own
+ * checkout" when, inside the lock, the likeliest cause is another run's residue in
+ * the SHARED one. Naming the paths is the difference between a dead end and a fix.
+ */
+describe("the dirty-tree refusal says what is dirty (#76)", () => {
+  test("the refusal names the offending path", async () => {
+    const sb = sandbox();
+    writeFileSync(join(sb.main, "half-finished.ts"), "export const x = 1;\n");
+    const { code, stdout } = await invoke(sb, "wave-a").done;
+    expect(code).toBe(1);
+    expect(stdout).toContain("FAIL dirty tree");
+    expect(stdout).toContain("half-finished.ts");
+  });
+});

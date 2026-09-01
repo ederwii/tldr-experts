@@ -505,6 +505,26 @@ approval already given, whoever signed it: the cursor moves back, `gate.revoked`
 carrying `signed_by`, and later stages that had run are marked `stale`. Nothing is deleted and
 no cost is refunded. It is the one verb that may reopen a finished run. Exits: `0` `1` `2` `3`.
 
+## `tldrx note`
+
+Record one operator annotation on a run's event log, at the moment it happened.
+
+```
+tldrx note [<run>] [--stage <id>] "<text>" [--run <id>] [--root <path>]
+```
+
+The text is required — an empty note is a usage error. `--stage` keys the note to one stage of
+the run, spelled either `plan` or `03-plan/plan`; without it the note is about the run, and a
+stage the run does not have is refused with nothing written.
+
+It appends exactly one `operator_note` event and touches NOTHING else: `run.yml` and
+`budget.yml` are byte-identical across the call, no gate is signed or revoked, no cursor moves
+and no money is spent. It exists because there was no honest carrier for a maintenance action
+at the moment it happened — the alternatives people reached for were a FUTURE gate note (late,
+and attached to a decision the note is not about) and `tldrx reject`, which undoes work. The
+note then shows up in `tldrx status` (the last few) and in `tldrx replay` (every one, in
+place). Exits: `0` `1` `2` `3`.
+
 ## `tldrx story`
 
 Give one Build story another run of attempts, or open a fix round on a done one.
@@ -555,6 +575,7 @@ Carry an edited `workspace.yml` into the dod blocks of stories that are already 
 
 ```
 tldrx plan sync-dod [--dry-run] [--run <id>] [--root <path>]
+tldrx plan schema   [--story | --epic | --waves]
 ```
 
 A story's dod command must equal a `workspace.yml` command verbatim, so editing
@@ -572,7 +593,17 @@ has no ancestors and every non-current line is flagged rather than rewritten.
 Nothing else in a story moves: the front matter, the prose and the fences come back
 byte-identical, the previous version is kept at `<story>.md.bak`, and the result is validated
 by the same plan check the drift came from. `--dry-run` prints the same per-story diff summary
-and writes nothing. It runs no agent, spends nothing and moves no cursor. Exits: `0` `1` `2` `3`.
+and writes nothing. It runs no agent, spends nothing and moves no cursor.
+
+`tldrx plan schema` prints the story, epic and `waves.yml` contract for a human to write to:
+the front-matter keys in order, what the check enforces for each, the caps at the values it
+currently uses, and one example of each file that the check accepts as it stands. These are the
+SAME bytes the Plan agent is given, generated from the validators themselves, so they cannot
+drift from what will be accepted — which is why `templates/story.md` and `templates/epic.md`
+were deleted rather than kept up to date. Pass at most one of `--story`, `--epic` or `--waves`
+to print just that example; passing two is a usage error, and passing none prints the whole
+contract. Alone among these verbs it resolves no workspace and no run, reads no disk and spends
+nothing, because the question comes before any of that exists. Exits: `0` `1` `2` `3`.
 
 ## `tldrx budget`
 
@@ -717,7 +748,7 @@ what `--all` does, and the refusal happens before a file is opened.
 Print the session mandate for driving a run — the discipline, not the manual.
 
 ```
-tldrx drive <--attended|--unattended>
+tldrx drive <--attended|--unattended> [<run>] [--run <id>]
 ```
 
 The output is plain text you paste into the session that will drive a run (or read yourself
@@ -740,9 +771,52 @@ A mode is **required and never guessed** (exit `1`) — the same refusal `tldrx 
 and for the same reason: handing an attended session the unattended text tells it to sign gates
 that were never its to sign.
 
+Every command in the mandate names a run, so a run id fills all of them in at once — `<run>` is
+never partly substituted, which is the point: a hand find-replace across them only has to miss
+one to send a session at the wrong run. Give the id as a positional or as `--run <id>` (the
+positional wins if both are passed); it is substituted **textually and never validated**, so an
+id that names no run is yours to notice, exactly as it would be had you typed it into each
+command yourself. Omit it and the **one** open run of this workspace is used. Where the CLI
+would refuse to choose — two runs open — this declines to substitute, leaves `<run>` standing
+and names the ids on stderr, because a mandate silently aimed at the wrong run is worse than a
+placeholder. With no workspace and no runs at all it still prints, still exits `0`, and still
+carries `<run>`. Exits: `0` `1`.
+
 It needs no workspace, opens no run, spawns nothing and writes nothing. It is versioned with
 the package: the header carries the framework version that printed it. The machinery it assumes
 is [10 — Unattended mode](10-unattended-mode.md). Exits: `0` `1`.
+
+## `tldrx ship`
+
+Open a pull request from the run's epic branch — one per repo the branch is in — with the run's
+handoff as the body.
+
+```
+tldrx ship [<run>] [--branch <name>] [--repo <name>] [--base <branch>]
+                   [--draft] [--dry-run] [--run <id>] [--root <path>]
+```
+
+It NEVER pushes. tldrx does not publish a branch on its own (spec §5), so a branch the remote
+has not seen is a refusal that names the `git push` command rather than running it. The body is
+the LAST phase handoff the run has on disk — `04-build/handoff.md` on a run that built
+something — handed to `gh` as a file, never as an argument, so a long handoff cannot overflow
+an argv limit.
+
+When the branch exists in SEVERAL repos — the normal shape of a chained multi-repo run, whose
+epics share one integration branch — it opens one PR per repo: the same handoff as the body,
+the repo name in the title, and every URL listed at the end. `--repo` narrows that to one, and
+`--branch` picks between epic branches when the run cut more than one (it must be one of the
+run's own; an unrelated branch is refused). `--base` overrides what the PR opens against,
+which defaults to that repo's `default_branch` from `.tldrx/workspace.yml`. A partial failure
+names both sides — the PRs that were opened, with their URLs, and the repos that failed, with
+the reason — and re-running retries the rest, skipping any repo whose PR is already open.
+
+`--dry-run` runs every check and prints the exact `gh` command, creating nothing. It is
+read-only about the run either way: no event, no gate, no cursor. To mirror the plan's epics
+and stories to a ticket tool, `tldrx tickets sync` is the verb that does that, and it stays
+separate. It refuses cleanly, in a sentence, when there is no epic branch, no handoff, no
+remote, no `gh` on PATH, or when several epic branches leave the choice open.
+Exits: `0` `1` `2` `3`.
 
 ## `tldrx watch`
 

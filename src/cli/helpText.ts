@@ -802,7 +802,7 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "plan",
-    description: "Carry an edited workspace.yml into the dod blocks of stories that are already approved.",
+    description: "Carry an edited workspace.yml into approved stories' dod blocks, or print the plan schema.",
     args: [],
     flags: [
       {
@@ -811,15 +811,35 @@ const ENTRIES: readonly CommandHelp[] = [
         meaning: "Print the same per-story diff summary and write nothing.",
         sub: "sync-dod",
       },
+      {
+        name: "story",
+        arg: null,
+        meaning: "plan schema: print only the story example \u2014 a file the check accepts as it stands.",
+        sub: "schema",
+      },
+      {
+        name: "epic",
+        arg: null,
+        meaning: "plan schema: print only the epic example.",
+        sub: "schema",
+      },
+      {
+        name: "waves",
+        arg: null,
+        meaning: "plan schema: print only the waves.yml example.",
+        sub: "schema",
+      },
       runFlag(),
       root(),
     ],
     examples: [
       "tldrx plan sync-dod --dry-run",
       "tldrx plan sync-dod --run 260101-checkout",
+      "tldrx plan schema --story",
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
     notes: [
+      "`plan schema` prints the story/epic/waves contract \u2014 the SAME bytes the Plan agent is given, generated from the validators the `plan` check runs, so it cannot drift from what will be accepted. At most one of --story/--epic/--waves; without one the whole contract is printed. It resolves no workspace and no run, touches no disk and spends nothing, because the question comes before any of those exist.",
       "A story dod command must equal a `workspace.yml` command verbatim, so editing workspace.yml orphans every approved story that cited the old string. This is the mechanical repair, and it does not weaken that rule by a byte.",
       "Four outcomes per line, and only the first three write anything: a line the current workspace still declares is left alone; a line a PREVIOUS version declared under a role the current file still has becomes that role's command; a line whose role is gone is dropped; and a line no version of workspace.yml ever declared is FLAGGED and its story is left untouched \u2014 that is real drift, not a rename, and guessing at it is the one thing this must not do.",
       "The ancestry comes from git's history of `.tldrx/workspace.yml`. In a workspace with no history there are no ancestors, so every non-current line is flagged rather than rewritten.",
@@ -1011,8 +1031,18 @@ const ENTRIES: readonly CommandHelp[] = [
   {
     name: "drive",
     description: "Print the session mandate for driving a run \u2014 the discipline, not the manual.",
-    args: [],
+    args: [
+      {
+        name: "[<run>]",
+        meaning: "The run id to write into the mandate's <run> slots. Omit it and the one open run of this workspace is used; with no workspace, no run, or two open runs, <run> is left as it is.",
+      },
+    ],
     flags: [
+      {
+        name: "run",
+        arg: "<id>",
+        meaning: "The same thing as the positional, in the spelling every other command takes. The positional wins if both are given. Substituted textually and never validated \u2014 an id that names no run is yours to notice.",
+      },
       {
         name: "attended",
         arg: null,
@@ -1026,11 +1056,13 @@ const ENTRIES: readonly CommandHelp[] = [
     ],
     examples: [
       "tldrx drive --unattended",
+      "tldrx drive --unattended 260901-leaderboard",
       "tldrx drive --attended",
     ],
     exits: [EXIT_OK, EXIT_USAGE],
     notes: [
       "Read-only in the strongest sense: it needs no workspace, opens no run, spawns nothing and writes nothing. The output is plain text to paste into the session that will drive the run.",
+      "The mandate's commands all name a run. Given an id it fills every <run> in \u2014 there is no partial substitution, which is the point: a hand find-replace across them only has to miss one to send a session at the wrong run. Given none it looks for the ONE open run here, and where the CLI would refuse to choose between two it declines to substitute and says which ids were on offer, because a mandate silently aimed at the wrong run is worse than a placeholder. It still exits 0 with no workspace at all.",
       "A mode is required and never guessed (exit 1). The two mandates differ in exactly the place a wrong guess costs most \u2014 who may close a gate.",
       "It is versioned with the package: the header carries the framework version that printed it.",
     ],

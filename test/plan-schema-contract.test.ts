@@ -16,7 +16,7 @@
  * Add a required key to a schema and the middle link breaks. Rename one and the
  * last link breaks. Neither can be fixed by editing prose.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,10 +31,15 @@ import {
 } from "../src/core/schemas/planCommon.ts";
 import { STORIES_DIR, validatePlan } from "../src/core/plan/validatePlan.ts";
 import { updateStoryFront } from "../src/core/build/storyFile.ts";
-import { TEMPLATES_DIR } from "../src/core/paths.ts";
+import { FRAMEWORK_ROOT, TEMPLATES_DIR } from "../src/core/paths.ts";
+import { noSpawnEnv } from "./fixtures/noSpawnPath.ts";
+import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 import {
   PLAN_CONTRACT_HEADING, planContractExamples, renderPlanSchemaContract,
 } from "../src/core/plan/schemaContract.ts";
+
+// The #71 block spawns a real `bun bin/tldrx.ts` per case.
+setDefaultTimeout(spawnTestTimeout());
 
 const dirs: string[] = [];
 
@@ -351,5 +356,92 @@ describe("the epic file states no story's status (#50)", () => {
     const contract = renderPlanSchemaContract();
     expect(contract).toContain(`${STORIES_DIR}/<id>.md`);
     expect(contract.toLowerCase()).toContain("do not restate");
+  });
+});
+
+/**
+ * `tldrx plan schema` — the contract, printed for a human (#71).
+ *
+ * #48 deleted `templates/story.md` and `templates/epic.md`. They were WRONG to keep
+ * (nothing read them, so nothing kept them honest — the tests above are the whole
+ * argument), but they were answering a real question: what shape does a story file
+ * take? After #48 the only reader of the generated contract was `checkContracts.ts`,
+ * which splices it into the Plan stage's prompt, so the answer existed only inside a
+ * prompt an agent sees and a person does not.
+ *
+ * This is that answer, addressed to the person — and it is deliberately a RENDERER of
+ * `renderPlanSchemaContract()`, not a second copy of it. Every test here asserts the
+ * printed bytes ARE the contract's, because a `plan schema` that could disagree with
+ * the check would be `templates/story.md` again under a new name.
+ */
+describe("`tldrx plan schema` prints the contract a human has to write to (#71)", () => {
+  const BIN = join(FRAMEWORK_ROOT, "bin", "tldrx.ts");
+
+  async function tldrxIn(cwd: string, ...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+    const proc = Bun.spawn(["bun", BIN, ...args], { stdout: "pipe", stderr: "pipe", cwd, env: noSpawnEnv() });
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    return { code: await proc.exited, stdout, stderr };
+  }
+
+  /** A directory with no `.tldrx/` in it or above it that this command may lean on. */
+  function bare(): string {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-plan-schema-"));
+    dirs.push(dir);
+    return dir;
+  }
+
+  test("with no selector it prints the SAME bytes the Plan agent is given", async () => {
+    const { code, stdout } = await tldrxIn(bare(), "plan", "schema");
+    expect(code).toBe(0);
+    expect(stdout).toBe(`${renderPlanSchemaContract()}\n`);
+  });
+
+  test("all three schemas are in it — story, epic and the wave file", async () => {
+    const { stdout } = await tldrxIn(bare(), "plan", "schema");
+    expect(stdout).toContain("stories/<id>.md");
+    expect(stdout).toContain("epics/<id>.md");
+    expect(stdout).toContain("waves.yml");
+    // The caps a file is refused for, at the value the check currently uses.
+    expect(stdout).toContain("### Caps");
+    // What it must NOT carry: the `## ` heading, which is `checkContracts.ts`'s to
+    // add. Printing it here would make this a second author of the prompt's shape.
+    expect(stdout).not.toContain(`## ${PLAN_CONTRACT_HEADING}`);
+  });
+
+  for (const [flag, key] of [["--story", "story"], ["--epic", "epic"], ["--waves", "waves"]] as const) {
+    test(`${flag} prints just that example — the file, not the essay`, async () => {
+      const { code, stdout } = await tldrxIn(bare(), "plan", "schema", flag);
+      expect(code).toBe(0);
+      const example = planContractExamples()[key];
+      expect(stdout).toBe(`${example.trimEnd()}\n`);
+      // One example, not the surrounding contract: the rule tables stay behind.
+      expect(stdout).not.toContain("| key | what the check enforces |");
+    });
+  }
+
+  test("the printed story example is one `validateStoryFile` accepts, byte for byte", async () => {
+    const { stdout } = await tldrxIn(bare(), "plan", "schema", "--story");
+    // Not "resembles the contract": the bytes a human copies off their terminal go
+    // through the very validator the `plan` check runs.
+    const parsed = validateStoryFile(stdout, new Set(planContractExamples().dodCommands));
+    expect(parsed.validation.issues).toEqual([]);
+    expect(parsed.story).not.toBeNull();
+  });
+
+  test("two selectors are a usage error, because the answer would be ambiguous", async () => {
+    const { code, stderr } = await tldrxIn(bare(), "plan", "schema", "--story", "--epic");
+    expect(code).toBe(1);   // EXIT_USAGE
+    expect(stderr).toContain("one of");
+  });
+
+  test("it needs NO workspace and NO run — the question comes before either exists", async () => {
+    const dir = bare();
+    const { code } = await tldrxIn(dir, "plan", "schema");
+    expect(code).toBe(0);
+    // Read-only about the world: nothing created, in a directory that had nothing.
+    expect(readdirSync(dir)).toEqual([]);
   });
 });

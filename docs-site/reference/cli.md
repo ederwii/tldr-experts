@@ -75,12 +75,12 @@ tldrx approve --note "…"    # sign the gate; the checks are re-run first
 | `tldrx expert list \| create \| train \| recompute` | See [Experts](/guides/experts). |
 | `tldrx seed triage` / `seed apply` | Split a big document into several runs. |
 | `tldrx watch list \| check [<feature>]` | The watcher cards a run produced: listed, or printed as the post-merge checklist and re-checked against the code now. |
-| `tldrx plan sync-dod` | Repair story definitions of done after editing `workspace.yml`. |
+| `tldrx plan sync-dod \| schema` | Repair story definitions of done after editing `workspace.yml`, or print the story/epic/waves contract the `plan` check enforces. |
 | `tldrx dashboard` | Watch the workspace live in a browser, or export one static page. |
 | `tldrx replay [<run>]` | The run's event log as a narrative. |
 | `tldrx retro` | Close a run and capture what was learned. |
 | `tldrx retro --all` | Read-only across EVERY run: which finding classes keep catching you, with counts and one cited example each. Writes nothing. |
-| `tldrx drive --attended \| --unattended` | Print the session mandate for driving a run — the three-role protocol, evidence discipline, parking, review calibration and budget honesty. Needs no workspace. |
+| `tldrx drive --attended \| --unattended [<run>]` | Print the session mandate for driving a run — the three-role protocol, evidence discipline, parking, review calibration and budget honesty. Fills every `<run>` in from the id, or from the one open run. Needs no workspace. |
 | `tldrx ship` | Open a PR from the epic branch, with the handoff as the body — one PR per repo when the branch is in several, listed at the end. Re-running skips a repo whose PR is already open. |
 | `tldrx tickets` | Mirror epics and stories to a ticket tool. Files stay the source of truth. |
 | `tldrx note <run> "…"` | Record one operator annotation, changing nothing else. |

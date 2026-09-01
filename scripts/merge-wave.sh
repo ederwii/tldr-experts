@@ -81,11 +81,33 @@ printf '%s %s %s\n' "$$" "$(hostname)" "$(date +%s)" > "$LOCK/owner"
 
 # --- merge, gate, push --------------------------------------------------------
 LOGS="${TMPDIR:-/tmp}/mw-$$"; mkdir -p "$LOGS"
-[ -z "$(git status --porcelain)" ] || { echo "FAIL dirty tree"; exit 1; }
+# Named, not just flagged (#76). By this line the lock is HELD, so dirt in this shared
+# checkout is more likely another run's residue than the caller's own work — and "FAIL
+# dirty tree" alone sends them looking in the wrong place, with nothing to look at.
+DIRT="$(git status --porcelain)"
+[ -z "$DIRT" ] || { echo "FAIL dirty tree — the lock is held, so this is more likely another run's residue in this SHARED checkout than your own: $(echo "$DIRT" | tr '\n' ' ' | cut -c1-300)"; exit 1; }
 git merge --no-ff "$B" -m "$M
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_019gpPtEAhKfcQc7vfZtmT2L" >"$LOGS/merge.log" 2>&1 || { echo "FAIL merge conflict: $(git diff --name-only --diff-filter=U | tr '\n' ' ')"; exit 2; }
+Claude-Session: https://claude.ai/code/session_019gpPtEAhKfcQc7vfZtmT2L" >"$LOGS/merge.log" 2>&1 || {
+  # Collect the conflicting paths, THEN abort (#76) — the order `mergeNoFf` uses in
+  # src/core/build/git.ts, and for the same reason. `exit 2` fires the EXIT trap, which
+  # hands the LOCK back; without this abort the conflicted INDEX survives that handover,
+  # and every sibling queued behind it then dies on the dirty-tree guard above having
+  # merged nothing, until a human intervenes. One conflict wedged the whole wave.
+  # The agent still learns exactly which files conflicted and still has to rebase.
+  CONFLICTS="$(git diff --name-only --diff-filter=U | tr '\n' ' ')"
+  # The guard above proved this tree clean moments ago under the lock, so the fallback
+  # can only ever discard the failed merge's own residue.
+  git merge --abort >>"$LOGS/merge.log" 2>&1 || git reset -q --hard HEAD >>"$LOGS/merge.log" 2>&1
+  LEFT="$(git status --porcelain)"
+  if [ -n "$LEFT" ]; then
+    echo "FAIL merge conflict: ${CONFLICTS}— and the abort did NOT clean up; this checkout still needs a human: $(echo "$LEFT" | tr '\n' ' ' | cut -c1-200)"
+  else
+    echo "FAIL merge conflict: ${CONFLICTS}— aborted, checkout left clean; rebase $B on main and retry"
+  fi
+  exit 2
+}
 GATED="$(git rev-parse HEAD)"
 bun install >/dev/null 2>&1
 bun run typecheck >"$LOGS/tc.log" 2>&1; TC=$?

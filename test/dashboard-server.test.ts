@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, writeFileSync } from "node:fs";
+import { readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   DASHBOARD_MODEL_VERSION, hostnameOfHeader, isAllowedHost, LOOPBACK,
@@ -195,14 +195,66 @@ describe("tldrx dashboard (live)", () => {
  * server is `node:http` and `node:fs`, so the built CLI has to serve too. This
  * runs the real `dist/tldrx.js` under `node`, on a real port.
  */
+/**
+ * The newest mtime under `src/`, plus the two files that also decide what a build
+ * emits. Used to say whether the artifact under test predates its own inputs.
+ */
+function newestInput(): { path: string; mtimeMs: number } {
+  let newest = { path: "", mtimeMs: 0 };
+  const consider = (path: string): void => {
+    const mtimeMs = statSync(path).mtimeMs;
+    if (mtimeMs > newest.mtimeMs) newest = { path, mtimeMs };
+  };
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else consider(full);
+    }
+  };
+  walk(join(FRAMEWORK_ROOT, "src"));
+  consider(join(FRAMEWORK_ROOT, "scripts", "build.ts"));
+  consider(join(FRAMEWORK_ROOT, "package.json"));
+  return newest;
+}
+
 describe("the built CLI serves it under node", () => {
   const DIST = join(FRAMEWORK_ROOT, "dist", "tldrx.js");
 
+  /**
+   * Built UNCONDITIONALLY (#73).
+   *
+   * This used to be `if (existsSync(DIST)) return`, which ran the tests below against
+   * whatever `dist/tldrx.js` happened to be lying around — locally, a build from BEFORE
+   * the working-tree changes the run is supposed to be checking. Measured 2026-09-01
+   * while fixing #60: the guard served a binary built at 14:43, `DASHBOARD_MODEL_VERSION`
+   * had since gone to 3, and the assertion read `Expected: 3, Received: 2`. That is the
+   * LUCKY direction. The dangerous one is the same staleness hiding a regression — the
+   * built CLI breaks, the assertion never meets the new build, and `bun run build` is a
+   * separate LATER step in both `scripts/merge-wave.sh` and CI. CI was safe only by
+   * accident (a fresh checkout has no `dist/`, so the guard never fired there), which
+   * means the guard only ever applied where it did harm.
+   *
+   * "Always rebuild" rather than a stamp, and the number is the reason: measured
+   * 2026-09-01 on this machine, `bun scripts/build.ts` costs 199 ms cold and 55–59 ms
+   * warm over three runs, against a suite that takes ~340 s — under 0.06%. A stamp of
+   * `src/` would cost more to keep honest than it saves. `test/build.test.ts:78` already
+   * builds unconditionally, so this is the file that was the exception.
+   */
   beforeAll(async () => {
-    if (existsSync(DIST)) return;
     const built = Bun.spawn(["bun", "scripts/build.ts"], { cwd: FRAMEWORK_ROOT, stdout: "pipe", stderr: "pipe" });
     expect(await built.exited).toBe(0);
   }, 120_000);
+
+  test("the binary the tests below run was built from the CURRENT sources (#73)", () => {
+    const artifact = statSync(DIST).mtimeMs;
+    const input = newestInput();
+    expect(
+      artifact,
+      `dist/tldrx.js (${new Date(artifact).toISOString()}) predates ${input.path} `
+      + `(${new Date(input.mtimeMs).toISOString()}) — the tests below are gating a stale build`,
+    ).toBeGreaterThanOrEqual(input.mtimeMs);
+  });
 
   test("`node dist/tldrx.js dashboard --port 0` listens, serves and stops cleanly", async () => {
     const proc = Bun.spawn(["node", DIST, "dashboard", "--port", "0", "--root", workspace.root], {

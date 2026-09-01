@@ -38,26 +38,46 @@ export const MANDATE_MAX_LINES = 120;
 
 const RULE = "-".repeat(78);
 
+/** What the mandate writes where a run id belongs, when it has none to write. */
+export const RUN_PLACEHOLDER = "<run>";
+
 /**
  * The mandate for one mode, as plain text with no trailing newline — the caller
  * adds exactly one, so the line count a test asserts is the line count a reader
  * sees.
  *
- * Deterministic: nothing is read from disk, no workspace is needed, and the same
- * version string always produces the same bytes.
+ * `run` fills in every `<run>` (#75). It is applied TEXTUALLY, at the end, over
+ * the finished document: there is no second list of the places an id appears, so
+ * a command added to the mandate later cannot be forgotten here. Omitted, every
+ * occurrence stays as it is and the header keeps its find-replace instruction —
+ * the behaviour before #75, unchanged.
+ *
+ * Deterministic either way: nothing is read from disk, no workspace is needed,
+ * and the same arguments always produce the same bytes.
  */
-export function renderMandate(mode: DriveMode, version: string): string {
-  return [...header(mode, version), ...roles(), ...evidence(), ...parking(), ...calibration(),
+export function renderMandate(mode: DriveMode, version: string, run?: string): string {
+  const text = [...header(mode, version, run), ...roles(), ...evidence(), ...parking(), ...calibration(),
     ...budget(), ...driving(mode), ...gate(mode)].join("\n").trimEnd();
+  return run === undefined ? text : text.replaceAll(RUN_PLACEHOLDER, run);
 }
 
-function header(mode: DriveMode, version: string): readonly string[] {
+function header(mode: DriveMode, version: string, run?: string): readonly string[] {
   return [
     `tldrx drive — session mandate · ${mode} · tldrx ${version}`,
     "",
-    "Paste everything below the rule into the session that will drive the run, replacing",
-    "<run> with its id. This is the discipline, not the manual: for a command's flags run",
-    "`tldrx <cmd> --help`, and for the machinery read docs/guide/10-unattended-mode.md.",
+    // With an id there is nothing left to find-replace, so saying so would be a
+    // false instruction — and the reader has one fewer thing to get wrong.
+    ...(run === undefined
+      ? [
+        "Paste everything below the rule into the session that will drive the run, replacing",
+        "<run> with its id. This is the discipline, not the manual: for a command's flags run",
+        "`tldrx <cmd> --help`, and for the machinery read docs/guide/10-unattended-mode.md.",
+      ]
+      : [
+        `Paste everything below the rule into the session that will drive run ${run}.`,
+        "This is the discipline, not the manual: for a command's flags run `tldrx <cmd> --help`,",
+        "and for the machinery read docs/guide/10-unattended-mode.md.",
+      ]),
     "",
     RULE,
     "",

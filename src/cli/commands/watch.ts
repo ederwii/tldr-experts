@@ -31,7 +31,7 @@ const VALUE_FLAGS = ["run", "root"] as const;
 
 export const watchCommand: Command = {
   name: "watch",
-  summary: "List and re-check the watcher cards a run produced",
+  summary: "List the watcher cards a run produced, or work through them as a checklist",
   usage: "tldrx watch list [--json] [--run <id>] [--root <path>]\n"
     + "       tldrx watch check [<feature>] [--execute] [--run <id>] [--root <path>]",
   subcommands: ["list", "check"],
