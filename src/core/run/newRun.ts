@@ -32,7 +32,7 @@ import { parseYaml } from "../yaml.ts";
 import { validateHandoff } from "../text/handoff.ts";
 import { parseQuestions, validateQuestions } from "../text/questions.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../hooks/lib/workspace.ts";
-import { validateRunBudget, DEFAULT_ECONOMY, type RunBudget } from "../budget/RunBudget.ts";
+import { validateRunBudget, DEFAULT_ECONOMY, type RunBudget, DEFAULT_ON_HOST_TOKENS_EXCEED } from "../budget/RunBudget.ts";
 import { distill, type DistillResult } from "../distill/distill.ts";
 import { collectSeeds, type SeedSet } from "../seed/collectSeed.ts";
 import { allSeedHeadings, seedClaims } from "../seed/seedClaims.ts";
@@ -221,6 +221,7 @@ function createRunLocked(options: NewRunOptions): NewRunOutcome {
     per_agent_max_usd: budgetPlan.perAgentMax,
     warn_at_pct: DEFAULT_WARN_AT_PCT,
     on_exceed: "block",
+    on_host_tokens_exceed: DEFAULT_ON_HOST_TOKENS_EXCEED,
     // A new run is priced in dollars unless somebody says otherwise; the label is
     // hand-set (or set by the Plan) on a file that already exists (§E.2).
     economy: DEFAULT_ECONOMY,

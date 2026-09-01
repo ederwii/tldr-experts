@@ -1606,9 +1606,22 @@ What that changes is what the gate SAYS, never what it decides. A dollar ceiling
 currencies are still never converted, and a plain metered run's refusal is byte-identical to what it always was. When
 there IS a second currency or an uncosted turn, one line is appended — *"spend so far: $0.00 metered + 12000 host tokens
 + 1 unmetered turn (attended_by: host …). The dollar figure is METERED spend only"* — and `budget.blocked` records
-`economy`, `attended_by`, `metered_usd`, `host_tokens` and `unmetered_tasks` beside the dollar figures. Whether an
-attended run should be gated differently, or a host-token ceiling enforced at all, is a POLICY question and is
-deliberately not answered here.
+`economy`, `attended_by`, `metered_usd`, `host_tokens` and `unmetered_tasks` beside the dollar figures.
+
+**The policy, decided 2026-09-01 (issue #22).** Three answers, and they are the only things here that move a verdict:
+
+  1. **An `attended_by: host` run is never DENIED on metered dollars.** `tldrx next` on such a run spawns nothing, so
+     the dollar estimate a refusal is measured against is spend that provably will not happen. The gate says every
+     number it would have refused with, plus both economies, and allows. The event it writes is `budget.warned` —
+     nothing was blocked, and a ledger that records a block that did not happen is the failure #22 was filed about.
+  2. **A `host-tokens` ceiling is soft-enforced.** Under that economy the ceiling NUMBER is a host-session token
+     allowance, so declared `tokens:` against it is the one comparison here whose two sides share a unit. Crossing it
+     WARNS. It stops only under the explicit opt-in `on_host_tokens_exceed: block` in `budget.yml` — an enum beside
+     `on_exceed`, defaulting to `warn`, so every file written before the key existed keeps the behaviour it had. A
+     token ceiling never denies an attended run: (1) beats (2).
+  3. **`remainingWork` zeroes the developer share on an attended run**, exactly as `economy: host-tokens` already did,
+     because it is the same fact — the host session pays for those turns. Reviewer floors are untouched in both cases:
+     outside attended mode `reviewAndSettle` still spawns a metered reviewer, and over-estimating is the safe direction.
 
 The budget-gate message names the **command** rather than the field it edits. Measured, 2026-08-29 pilot: told to
 "raise phases[02-how].ceiling_usd", the operator hand-edited it to a number that did not cover the estimate, and the
@@ -2135,8 +2148,14 @@ under `root_is_repo: true` the framework's own `tldrx-work/` and `.tldrx/` live 
 rewrites them (`run.yml`, `events.jsonl`, `.lock`, the phase folder it just wrote), so the check would refuse itself and
 would make a user's uncommitted answers a precondition of Build; a story commit excludes those two paths by pathspec for
 the same reason, and the multi-repo shape, whose state is a sibling of the repos, is untouched. `--dry-run` is refused outright (`dry_run_allowed: false`), since a
-stage that cuts branches and fans out per-story sub-agents has no ONE dispatch to describe. Worktrees are removed when a story reaches `done` or
-`blocked` — never on `review`, whose second attempt continues in the same tree — unless `--keep-worktrees`.
+stage that cuts branches and fans out per-story sub-agents has no ONE dispatch to describe. STORY worktrees are removed when a story reaches `done` or
+`blocked` — never on `review`, whose second attempt continues in the same tree — unless `--keep-worktrees`. The EPIC
+worktree outlives the stage: it is removed when the RUN closes, not when Build finishes (issue #16, owner decision
+2026-09-01). A later Watch stage cites code that is committed on the epic branch and deliberately not merged, and §2.8
+can only resolve such a `src` against a checkout that is still on disk; cleaning up at the end of Build put it beyond
+reach before the Build handoff was even written. Every close path takes them — `tldrx next` closing the last stage,
+`tldrx approve` signing the last gate, `tldrx run cancel` — and `--keep-worktrees`, remembered on the run as
+`keep_worktrees:`, means "survive even that".
 
 **The implicit plan — a scope that SKIPS Plan can still Build (2026-08-29).** When the run's workflow names `plan` in
 its `skips:` (§2.4) **and** there is no `03-plan/waves.yml` on disk, the executor synthesises one story rather than

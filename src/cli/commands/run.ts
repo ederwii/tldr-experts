@@ -19,6 +19,7 @@ import { attendRun } from "../../core/run/attend.ts";
 import { ATTENDED_BY, type AttendedBy } from "../../core/run/RunFile.ts";
 import { parallelFlag } from "./next.ts";
 import { cancelRun, unlockRun } from "../../core/run/rescue.ts";
+import { closeRunWorktrees } from "../../core/run/closeWorktrees.ts";
 import { nowRfc3339 } from "../../hooks/lib/actor.ts";
 import { createRun } from "../../core/run/newRun.ts";
 import { setGatePolicy } from "../../core/run/setGatePolicy.ts";
@@ -78,7 +79,7 @@ export const runCommand: Command = {
       case "unlock":
         return runUnlock(rest);
       case "cancel":
-        return runCancel(rest);
+        return await runCancel(rest);
       default:
         process.stderr.write(
           `tldrx run: expected \`new\`, \`attend\`, \`status\`, \`estimate\`, \`gates\`, \`auto\`, \`unlock\` `
@@ -409,17 +410,31 @@ function runGates(argv: readonly string[]): number {
   }
 }
 
-function runCancel(argv: readonly string[]): number {
+async function runCancel(argv: readonly string[]): Promise<number> {
   try {
     const args = parseArgs(argv, VALUE_FLAGS);
-    return report("run cancel", cancelRun({
-      root: workspaceRootFrom(args),
-      runId: args.positionals[0] ?? stringFlag(args, "run"),
+    const root = workspaceRootFrom(args);
+    const runId = args.positionals[0] ?? stringFlag(args, "run");
+    const outcome = cancelRun({
+      root,
+      runId,
       note: stringFlag(args, "note") ?? "",
       force: boolFlag(args, "force"),
       actor: currentActor(),
       at: nowRfc3339(),
-    }));
+    });
+    // Cancelling IS closing, so the run's epic worktrees go here too (#16).
+    // Without this the move off Build's `finish()` would trade one leak for
+    // another: a cancelled run's checkouts used to be gone already, because the
+    // Build stage removed them on its way past. Only ever after a cancel that
+    // actually happened, and never loud enough to change the command's exit.
+    if (outcome.code === EXIT_OK) {
+      const resolved = RunStore.resolve(root, runId ?? undefined);
+      if (resolved.kind === "one") {
+        await closeRunWorktrees(resolved.store.run, root, resolved.store.runDir);
+      }
+    }
+    return report("run cancel", outcome);
   } catch (error) {
     return fail("run cancel", error);
   }

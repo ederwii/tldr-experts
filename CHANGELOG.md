@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+### Changed
+
+- **An epic worktree now lives for the RUN's lifetime, not the Build stage's (#16, owner decision
+  2026-09-01, option (a)).** The shipped half of #16 made a `file` src resolve against
+  `.tldrx/worktrees/<repo>/_epic-<run>-<epic>` before the working tree — and then `BuildSession.finish()`
+  removed that directory before the Build handoff was even written, so unless the operator had typed
+  `--keep-worktrees` a later Watch stage had nothing to resolve against and the fix bit only under a flag.
+  Cleanup moves to run CLOSE, which is what the checkout actually belongs to.
+  - **Watch citing epic-only code works by default.** Proved end to end rather than by construction:
+    `test/build-executor.test.ts` runs the real pipeline, then resolves a `[src: app:s1.txt:1]` against a
+    file the test first shows is committed on `epic/e1` and absent from the working tree.
+  - **Every close path takes them**, because a run does not only close one way: `tldrx next` closing the
+    last stage, `tldrx approve` signing the last gate, and `tldrx run cancel`. Without the last two the
+    change would have traded one leak for another — a cancelled run's checkouts used to be gone already,
+    because Build removed them on the way past.
+  - **`--keep-worktrees` keeps its meaning, one scope wider**: survive even the run close. It is
+    remembered on the run as `keep_worktrees:` (additive and optional; absent means clean up, which is
+    what every existing run.yml meant) because the flag is typed on the `tldrx next` that BUILDS and the
+    run is usually closed by a different command in a different process.
+  - Story worktrees are untouched: still removed the moment a story reaches `done` or `blocked`.
+
+- **The budget gate's three open policy questions are answered (#22, owner decision 2026-09-01).**
+  bb6204b wired the DATA — both economies, `attended_by`, `runSpend` — and deliberately changed no
+  verdict. These are the verdicts.
+  - **(a) An `attended_by: host` run is INFORMED, never DENIED, on metered dollars.** `tldrx next` on
+    such a run spawns nothing, so the estimate the gate was refusing against is spend that provably will
+    not happen. Both the PreToolUse hook and `tldrx next`'s own brake now say every number they would
+    have refused with, plus both economies, and allow. The event is `budget.warned`, not `budget.blocked`:
+    nothing was blocked, and recording a block that did not happen is the exact failure #22 was filed
+    about.
+  - **(b) A `host-tokens` ceiling is soft-enforced.** Under that economy the ceiling NUMBER is a
+    host-session token allowance, so accumulated declared `tokens:` against it is the one comparison in
+    the gate whose two sides share a unit. Crossing it WARNS and still allows. It stops only under the
+    explicit opt-in **`on_host_tokens_exceed: block`** in `budget.yml` — an enum beside `on_exceed`,
+    defaulting to `warn`, so every file written before the key existed keeps the behaviour it had. The
+    refusal never offers `tldrx budget raise`, which moves dollars and would send the operator at the
+    wrong number. (a) beats (b): the opt-in still never denies an attended run.
+  - **(c) `remainingWork` zeroes the developer share on an attended run**, mirroring `economy:
+    host-tokens`, because it is the same fact — the host session pays for those turns. Attendedness and
+    the phase economy were independent, so an attended run on a `metered-usd` phase still counted
+    developer turns against money this framework will never spend, on the brake and in `run estimate`
+    alike. Reviewer floors are untouched in both cases.
+
 ### Added
 
 - **`tldrx learn` chapters 3-8 — the whole loop, played (#30, phase 2).** The tutorial now runs end to

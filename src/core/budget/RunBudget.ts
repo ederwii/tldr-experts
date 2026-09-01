@@ -8,6 +8,26 @@ export const ON_EXCEED = ["block", "warn"] as const;
 export type OnExceed = (typeof ON_EXCEED)[number];
 
 /**
+ * What a HOST-TOKEN ceiling does when the declared tokens cross it (issue #22,
+ * owner decision 2026-09-01, policy (b)).
+ *
+ * Spelled as an enum beside `on_exceed`, and defaulting to `warn`, because the
+ * two levers already in this file are enums and absence already means "the
+ * behaviour this file had before the key existed". A token ceiling has never
+ * stopped anything, so `warn` is that behaviour plus the sentence it was missing.
+ *
+ * `block` is the EXPLICIT OPT-IN the decision requires, and it is deliberately
+ * separate from `on_exceed`: a run that blocks on dollars has said nothing about
+ * whether a host session's own token allowance should stop the framework, and
+ * inferring one from the other would enforce a ceiling nobody asked for.
+ */
+export const ON_HOST_TOKENS_EXCEED = ["warn", "block"] as const;
+export type OnHostTokensExceed = (typeof ON_HOST_TOKENS_EXCEED)[number];
+
+/** Absence means this: say so, never stop. */
+export const DEFAULT_ON_HOST_TOKENS_EXCEED: OnHostTokensExceed = "warn";
+
+/**
  * What the numbers in this file are DENOMINATED IN (spec §2.11, design §E).
  *
  * The money model was a single scalar with no unit on it, and on 2026-08-30 that
@@ -56,6 +76,12 @@ export interface RunBudget {
   readonly on_exceed: OnExceed;
   /** The run-level economy every phase inherits unless it names its own. */
   readonly economy: Economy;
+  /**
+   * Whether crossing a `host-tokens` ceiling warns or stops (issue #22). ADDITIVE
+   * and optional: absent — every budget.yml written before this key existed —
+   * means `warn`, which is what a token ceiling has always done.
+   */
+  readonly on_host_tokens_exceed: OnHostTokensExceed;
   readonly phases: readonly BudgetPhase[];
 }
 
@@ -100,6 +126,12 @@ export function validateRunBudget(input: unknown): ValidationResult {
   // and that same object is revalidated on every `RunStore.save()`.
   if (doc.economy !== undefined && doc.economy !== null) {
     requireEnum(doc.economy, ECONOMIES, "economy", issues);
+  }
+  // Optional, additive: absent means `warn`. Refused rather than defaulted for
+  // the same reason `economy` is — a policy this reader cannot honour is not one
+  // it may quietly downgrade.
+  if (doc.on_host_tokens_exceed !== undefined && doc.on_host_tokens_exceed !== null) {
+    requireEnum(doc.on_host_tokens_exceed, ON_HOST_TOKENS_EXCEED, "on_host_tokens_exceed", issues);
   }
   if (doc.warn_at_pct !== undefined) {
     requireNumber(doc.warn_at_pct, "warn_at_pct", issues);
@@ -146,6 +178,7 @@ export function asRunBudget(input: unknown): RunBudget {
     warn_at_pct: doc.warn_at_pct ?? DEFAULT_WARN_AT_PCT,
     on_exceed: doc.on_exceed ?? "block",
     economy: doc.economy ?? DEFAULT_ECONOMY,
+    on_host_tokens_exceed: doc.on_host_tokens_exceed ?? DEFAULT_ON_HOST_TOKENS_EXCEED,
     phases: (doc.phases ?? []).map((phase) => ({
       id: phase.id,
       ceiling_usd: phase.ceiling_usd,
@@ -153,4 +186,23 @@ export function asRunBudget(input: unknown): RunBudget {
       economy: phase.economy ?? null,
     })),
   };
+}
+
+/**
+ * The host-token allowance governing a phase, or null when it is not priced in
+ * tokens (issue #22).
+ *
+ * Under `economy: host-tokens` the ceiling NUMBER is a host-session token
+ * allowance and not dollars — that is what the label means and why the two are
+ * never converted. The `_usd` in the field name is history: the file had one
+ * scalar with no unit on it before the economy label existed, and renaming the
+ * key would break every budget.yml on disk for no gain in truth.
+ */
+export function hostTokenCeiling(budget: RunBudget | null, phaseId?: string | null): number | null {
+  if (budget === null || !isHostTokens(budget, phaseId)) return null;
+  if (phaseId !== undefined && phaseId !== null) {
+    const phase = budget.phases.find((entry) => entry.id === phaseId);
+    if (phase !== undefined) return phase.ceiling_usd;
+  }
+  return budget.ceiling_usd;
 }

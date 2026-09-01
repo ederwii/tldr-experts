@@ -9,7 +9,7 @@
  * does not work it prints the exact command that fixes it rather than three
  * things the operator could try.
  */
-import { isTerminal, type RunFile, type RunStage } from "../run/RunFile.ts";
+import { isTerminal, type RunFile, type RunStage, isAttendedByHost } from "../run/RunFile.ts";
 import { economyFor, type RunBudget } from "./RunBudget.ts";
 import { remainingWork, renderRemainingWork } from "./remainingWork.ts";
 import { totalSpent, wouldExceed } from "./wouldExceed.ts";
@@ -86,6 +86,7 @@ export function buildBudgetView(run: RunFile, budget: RunBudget, runDir?: string
         perAgentMaxUsd: budget.per_agent_max_usd,
         maxUsd: null,
         economy: economyFor(budget, phase.id),
+        attended: isAttendedByHost(run),
       });
     const estimate = work === null ? staticEstimate : work.usd;
     const decision = wouldExceed(budget, phase.id, estimate);

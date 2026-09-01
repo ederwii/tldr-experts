@@ -17,6 +17,7 @@ import { runChecks, type CheckOutcome } from "./checks.ts";
 import { loadWorkflowPreset, PresetError, type PlannedStage } from "./workflowPreset.ts";
 import type { RunStore } from "./RunStore.ts";
 import type { RunFile, RunGate, RunGateEvidence, RunPhase, RunStage } from "./RunFile.ts";
+import { closeRunWorktrees } from "./closeWorktrees.ts";
 
 export class GateError extends Error {}
 
@@ -137,6 +138,9 @@ export async function approve(store: RunStore, ctx: GateContext): Promise<Approv
   const runDone = store.run.status === "done";
   if (runDone) {
     store.append(event(ctx.at, store.runId, null, "run.closed", ctx.actor, { reason: "every stage terminal" }));
+    // Signing the last gate is the most ordinary way a run closes, so it is also
+    // where its epic worktrees are most ordinarily taken (#16).
+    await closeRunWorktrees(store.run, ctx.root, store.runDir);
   }
   return {
     ok: true, stage: entry.stage.id, phase: entry.phase.id, checks, failed: null,

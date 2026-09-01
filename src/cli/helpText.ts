@@ -503,7 +503,7 @@ const ENTRIES: readonly CommandHelp[] = [
         meaning: "--commit only: tokens the host session used, recorded beside the declared cost. Optional.",
       },
       yolo(),
-      { name: "keep-worktrees", arg: null, meaning: "Leave the per-story worktrees on disk after the build stage finishes with them." },
+      { name: "keep-worktrees", arg: null, meaning: "Leave the per-story worktrees on disk after the build stage finishes with them, and the run's epic worktrees on disk after the run closes. The epic checkouts survive the Build stage either way (a later Watch stage cites code that is committed on the epic branch and merged nowhere); this flag is what makes them survive the run itself. Remembered on the run, so a close by `tldrx approve` or `tldrx run cancel` honours it too." },
       { name: "parallel", arg: "<n>", meaning: "How many stories of ONE build wave run at once. `waves.yml` already guarantees a dependency is in an earlier wave, so a wave's stories are independent by construction. Merges into the epic still happen in the wave's listed order, after every story of that wave has finished, and each sub-agent keeps its own budget share. Default 1: one story at a time, exactly as before. Overrides the workflow's `build: {parallel: N}` and stage.yml's `parallel:`." },
       {
         name: "discard-pending",
