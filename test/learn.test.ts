@@ -1,5 +1,5 @@
 /**
- * `tldrx learn` (#30) — the engine, and chapters 1-2 played for real.
+ * `tldrx learn` (#30) — the engine, and all eight chapters played for real.
  *
  * Three levels, because they fail for three different reasons:
  *
@@ -7,10 +7,12 @@
  *             shim's text. No process, no disk beyond a temp dir.
  *   AGENT     the stand-in `claude` in-process: does the transcript it prints
  *             parse with the SAME reader the real spawn path uses?
- *   PLAYED    the whole tutorial, chapters 1 and 2, driven through `runLearn`
- *             with a scripted `ask` — real `tldrx init`, real `run new`, real
- *             `next` (which really spawns), real `answer`. The assertion is the
- *             sandbox's disk plus `progress.json`.
+ *   PLAYED    the whole tutorial — all eight chapters — driven through `runLearn`
+ *             with a scripted `ask`: real `tldrx init`, `run new`, `next` (which
+ *             really spawns), `answer`, `approve`, a real Build that cuts a
+ *             branch and runs a real DoD, a real red DoD and the recovery, a real
+ *             agent gate. The assertion is the sandbox's disk plus
+ *             `progress.json`, chapter by chapter.
  *
  * And one guard that is not about the tutorial at all: **the real `claude` must
  * be unreachable**. A booby-trapped `claude` is planted on PATH that writes a
@@ -39,18 +41,19 @@ import {
   SandboxError, TOY_FILES, writeScript, type Sandbox,
 } from "../src/core/learn/sandbox.ts";
 import {
-  chaptersToPlay, displayCommand, expandTurns, newestRunId, playChapter,
+  chaptersToPlay, displayCommand, expandCommand, expandTurns, newestRunId, playChapter,
   type LearnIo, type StepResult, type StepRunner,
 } from "../src/core/learn/engine.ts";
-import { CHAPTERS, chapterByNumber, LEARN_RUN_SLUG } from "../src/core/learn/chapters.ts";
+import { CHAPTERS, chapterByNumber, LEARN_HOTFIX_SLUG, LEARN_RUN_SLUG } from "../src/core/learn/chapters.ts";
 import { isComplete, markComplete, NO_PROGRESS, readProgress, resumeAt, writeProgress } from "../src/core/learn/progress.ts";
 import { planFrom, runLearn } from "../src/core/learn/runLearn.ts";
 import type { Chapter } from "../src/core/learn/Chapter.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
-// Every test in the PLAYED section spawns four real `tldrx` subprocesses, one of
-// which spawns a fifth. Process cost is a property of the machine, not of the
-// code, so the budget scales with measured load (#43); a hang is still caught.
+// Every test in the PLAYED section spawns a real `tldrx` subprocess per step —
+// twenty-six of them for the whole tutorial, several of which spawn a sub-agent
+// of their own. Process cost is a property of the machine, not of the code, so
+// the budget scales with measured load (#43); a hang is still caught.
 setDefaultTimeout(spawnTestTimeout());
 
 const BIN = join(FRAMEWORK_ROOT, "bin", "tldrx.ts");
@@ -406,6 +409,39 @@ describe("the sandbox", () => {
     expect(expandTurns([{ match: "x", writes: { "{runDir}/a.md": "in {run}" } }], sandbox)[0]?.writes)
       .toEqual({ "tldrx-work/260901-alpha/a.md": "in 260901-alpha" });
   });
+
+  test("`{run}` expands in a step's argv too — the id a chapter cannot spell", async () => {
+    const sandbox = await makeSandbox({ root: temp("tldrx-learn-argv-"), selfCommand: SELF });
+    expect(expandCommand(["next", "{run}"], sandbox)).toEqual(["next", "{run}"]);
+
+    mkdirSync(join(sandbox.workspace, "tldrx-work", "260901-alpha"), { recursive: true });
+    expect(expandCommand(["next", "{run}"], sandbox)).toEqual(["next", "260901-alpha"]);
+    expect(expandCommand(["cat", "{runDir}/run.yml"], sandbox))
+      .toEqual(["cat", "tldrx-work/260901-alpha/run.yml"]);
+  });
+
+  /**
+   * The half of `{run}` that only matters once chapter 5 has opened a second run:
+   * a FINISHED run is not what the next command will resolve to, so it must not
+   * be what the placeholder means either. Chapter 7 signs the hotfix off and
+   * chapter 8 then has to be talking about the feature run again.
+   */
+  test("`{run}` is the newest run that is still OPEN, and falls back when none is", async () => {
+    const sandbox = await makeSandbox({ root: temp("tldrx-learn-open-"), selfCommand: SELF });
+    const work = join(sandbox.workspace, "tldrx-work");
+    for (const [id, status] of [["260901-alpha", "ready"], ["260901-beta", "ready"]] as const) {
+      mkdirSync(join(work, id), { recursive: true });
+      writeFileSync(join(work, id, "run.yml"), `version: 1\nrun: "${id}"\nstatus: ${status}\n`, "utf8");
+    }
+    expect(newestRunId(sandbox)).toBe("260901-beta");
+
+    writeFileSync(join(work, "260901-beta", "run.yml"), "version: 1\nrun: \"260901-beta\"\nstatus: done\n", "utf8");
+    expect(newestRunId(sandbox)).toBe("260901-alpha");
+
+    // Every run finished: the newest is still the honest answer, not null.
+    writeFileSync(join(work, "260901-alpha", "run.yml"), "version: 1\nrun: \"260901-alpha\"\nstatus: done\n", "utf8");
+    expect(newestRunId(sandbox)).toBe("260901-beta");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -574,7 +610,7 @@ describe("the chapters this build ships", () => {
 // PLAYED — chapters 1 and 2, for real
 // ---------------------------------------------------------------------------
 
-describe("chapters 1 and 2, played end to end", () => {
+describe("all eight chapters, played end to end", () => {
   /**
    * A `claude` on PATH that would be a catastrophe to reach: it writes a marker
    * and exits 0, so if the tutorial ever resolved the NAME rather than the
@@ -589,6 +625,32 @@ describe("chapters 1 and 2, played end to end", () => {
     return { dir, marker };
   }
 
+  /** The run ids the chapters made, found the way the chapters' own asserts do. */
+  function runDirs(workspace: string): { readonly feature: string; readonly hotfix: string } {
+    const work = join(workspace, "tldrx-work");
+    const ids = readdirSync(work);
+    const find = (slug: string): string => {
+      const hit = ids.find((id) => id.endsWith(`-${slug}`));
+      if (hit === undefined) throw new Error(`no run for ${slug} in ${ids.join(", ")}`);
+      return join(work, hit);
+    };
+    return { feature: find(LEARN_RUN_SLUG), hotfix: find(LEARN_HOTFIX_SLUG) };
+  }
+
+  /**
+   * ONE playthrough, asserted chapter by chapter.
+   *
+   * Every chapter already carries its own `assert()` and `runLearn` refuses to
+   * record a chapter whose claim did not hold — so a green run here is already
+   * eight assertions deep. What this adds is the half a chapter cannot check
+   * about itself: that the state it left is the state the NEXT chapter was
+   * written against, and that the transcript actually said the things the
+   * debriefs send the learner to look at.
+   *
+   * It is one test rather than eight because it is one 5-second tutorial: eight
+   * tests would be eight tutorials, and the eighth chapter would still only be
+   * reachable by playing the seven before it.
+   */
   test("the whole tutorial runs, records progress, and never reaches the real `claude`", async () => {
     const trap = boobyTrap();
     process.env.PATH = `${trap.dir}:${ORIGINAL_PATH}`;
@@ -605,21 +667,66 @@ describe("chapters 1 and 2, played end to end", () => {
 
     // 1. the marker must not exist — nothing spawned the real CLI …
     expect(existsSync(trap.marker), said).toBe(false);
-    // 2. … and the chapters really completed, so (1) is not true for the wrong reason
-    expect(readProgress(join(root, "progress.json")).completed).toEqual([1, 2]);
+    // 2. … and every chapter really completed, so (1) is not true for the wrong reason
+    expect(readProgress(join(root, "progress.json")).completed, said).toEqual(CHAPTERS.map((c) => c.n));
 
     const workspace = join(root, "inventory");
-    // chapter 1: init really detected
-    expect(existsSync(join(workspace, ".tldrx", "workspace.yml"))).toBe(true);
+    const { feature, hotfix } = runDirs(workspace);
+    const read = (...parts: string[]): string => readFileSync(join(...parts), "utf8");
+
+    // --- 1: init really detected -------------------------------------------
+    expect(read(workspace, ".tldrx", "workspace.yml")).toContain("npm run test");
     expect(existsSync(join(workspace, ".tldrx", "conventions", "shared.md"))).toBe(true);
-    // chapter 2: a run, a stage that really spawned, and a fact
-    const runs = readFileSync(join(workspace, ".tldrx", "memory", "facts.yml"), "utf8");
-    expect(runs).toContain("kind: answer");
-    expect(runs).toContain("q: Q1");
-    expect(runs).toContain("F001");
-    // the transcript names the files the debrief tells the learner to open
-    expect(said).toContain(".tldrx/workspace.yml");
-    expect(said).toContain(".tldrx/memory/facts.yml");
+
+    // --- 2: the answer became a fact ---------------------------------------
+    const facts = read(workspace, ".tldrx", "memory", "facts.yml");
+    expect(facts).toContain("kind: answer");
+    expect(facts).toContain("q: Q1");
+    expect(facts).toContain("F001");
+
+    // --- 3: the gate is a record, with who / when / why ---------------------
+    const featureRun = read(feature, "run.yml");
+    expect(featureRun).toContain("a price change should be a data change");
+    expect(featureRun).toMatch(/status: approved, by: \S+, at: "\d{4}-/);
+
+    // --- 4: one story built, proven, committed, merged and reviewed ---------
+    const story = read(feature, "03-plan", "stories", "S1.md");
+    expect(story).toContain("status: done");
+    expect(story).toContain("npm run test → exit 0");
+    expect(story).toMatch(/commit [0-9a-f]{7}/);
+    expect(read(feature, "04-build", "log", "S1.md")).toContain("Verdict: **approve**");
+    // the branch was really cut, and `main` was really left alone
+    expect(said).toContain("cut `epic/bulk-pricing` from `main`");
+    expect(read(workspace, "src", "pricing.ts")).toContain("500 : 1200");
+
+    // --- 5: a red DoD, in the ledger, in its own words ----------------------
+    const hotfixEvents = read(hotfix, "events.jsonl");
+    expect(hotfixEvents).toContain("FAIL: a BULK- SKU costs 1720");
+    for (const type of ["story.reopened", "gate.rejected", "budget.raised"]) {
+      expect(hotfixEvents, `events.jsonl has no ${type}`).toContain(type);
+    }
+    // and then it went green, on the second attempt and no later
+    expect(read(hotfix, "04-build", "log", "S1.md")).toContain("`npm run test` → exit 0");
+
+    // --- 6: attended flipped on and back off -------------------------------
+    expect(said).toContain("the framework does not spawn on this run");
+    expect(said).toContain("tldrx next --prepare");
+    expect(read(hotfix, "run.yml")).not.toContain("attended_by: host");
+
+    // --- 7: an agent gate, closed over an evidence note ---------------------
+    expect(read(hotfix, "05-watch", "gate-evidence", "watch.md")).toContain("verdict: sign");
+    expect(read(hotfix, "run.yml")).toContain("by: operations");
+
+    // --- 8: the ledger, and the brake ---------------------------------------
+    expect(read(feature, "05-watch", "watchers", "bulk-pricing.md")).toContain("## Signal");
+    expect(read(feature, "events.jsonl")).toContain("budget.blocked");
+    expect(said).toContain("refusing to start stage");
+
+    // the transcript names the files the debriefs tell the learner to open
+    for (const path of [
+      ".tldrx/workspace.yml", ".tldrx/memory/facts.yml", "03-plan/stories/S1.md",
+      "04-build/log/S1.md", "events.jsonl", "05-watch/gate-evidence/watch.md",
+    ]) expect(said, `the transcript never names ${path}`).toContain(path);
   });
 
   /**
@@ -646,7 +753,9 @@ describe("chapters 1 and 2, played end to end", () => {
 
   test("a second `learn` over the same sandbox says there is nothing left", async () => {
     const root = temp("tldrx-learn-done-");
-    writeProgress(join(root, "progress.json"), { version: 1, completed: [1, 2], updatedAt: "t" });
+    writeProgress(join(root, "progress.json"), {
+      version: 1, completed: CHAPTERS.map((c) => c.n), updatedAt: "t",
+    });
     const io = collectingIo();
 
     const code = await runLearn({ sandboxRoot: root, reset: false, list: false, cols: 80, selfCommand: SELF }, io);

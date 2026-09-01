@@ -32,7 +32,23 @@
  *     human sentence per failure, never a boolean.
  *
  * Nothing in `engine.ts` should need to change for a new chapter. If it does,
- * that is the bug — fix the engine, not the chapter.
+ * that is the bug — fix the engine, not the chapter. (Phase 2 found one: a
+ * chapter cannot spell a run id, so `{run}` and `{runDir}` now expand in a step's
+ * `command` as well as in a turn's writes.)
+ *
+ * ## What phase 2 learned the hard way
+ *
+ *   - **`match:` is a substring of the WHOLE prompt**, and every prompt carries
+ *     every expert.md — each of which has a `## How to reason` heading containing
+ *     `# How`. Match the stage template's first heading in full.
+ *   - **`{run}` means the newest run that is still OPEN.** From chapter 5 there
+ *     are two, and which one the CLI would resolve to changes as chapters finish
+ *     each other's work. An `assert()` should name its run by slug instead.
+ *   - **A step judged only by its exit code can pass for the wrong reason.**
+ *     Chapter 6's `next` exits 4 whether it refuses because the run is attended
+ *     (the lesson) or because a gate is pending (not the lesson), so its
+ *     `assert()` checks the run was at a `ready` stage. If a chapter's point is
+ *     an exit code, its `assert()` has to be about the state that produced it.
  */
 import type { AgentTurn } from "./agentScript.ts";
 import type { Sandbox } from "./sandbox.ts";
@@ -42,9 +58,13 @@ export interface ChapterStep {
   /** 1-3 lines shown before the command. Why this command, in plain language. */
   readonly narrate: readonly string[];
   /**
-   * The argv AFTER `tldrx`. Shown verbatim as `$ tldrx …` and then executed
-   * verbatim — the displayed command and the executed one are the same array, so
-   * they cannot drift.
+   * The argv AFTER `tldrx`. Shown as `$ tldrx …` and then executed from the SAME
+   * array, so the two cannot drift.
+   *
+   * `{run}` and `{runDir}` are substituted first, from the run that is on disk
+   * when the step runs — a chapter cannot spell a run id, and from chapter 5 two
+   * runs are open and every command has to name the one it means. The learner
+   * sees the substituted line, which is the one they could retype.
    */
   readonly command: readonly string[];
   /**

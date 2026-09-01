@@ -17,10 +17,11 @@
  * and that is a pass); `assert()` says the lesson actually happened. Both are
  * needed: a command can exit 0 having taught nothing.
  */
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runtime } from "../runtime/index.ts";
 import { PROJECT_WORK_DIR } from "../paths.ts";
+import { isFinished } from "../run/RunFile.ts";
 import type { Palette } from "../ui/color.ts";
 import { mergeScripts, type AgentScript, type AgentTurn } from "./agentScript.ts";
 import { sandboxEnv, selfCommand, writeScript, type Sandbox } from "./sandbox.ts";
@@ -85,8 +86,11 @@ export async function playChapter(
   io.write("\n");
 
   for (const step of chapter.steps) {
+    // Expanded ONCE, here, so the line that is printed and the argv that is
+    // spawned are the same array — the property `displayCommand` exists for.
+    const command = expandCommand(step.command, sandbox);
     for (const line of step.narrate) io.write(`  ${line}\n`);
-    io.write(`\n  ${io.ink.bold(`$ tldrx ${displayCommand(step.command)}`)}\n`);
+    io.write(`\n  ${io.ink.bold(`$ tldrx ${displayCommand(command)}`)}\n`);
 
     if (io.interactive) {
       const answer = await io.ask(`  ${io.ink.dim("[Enter] to run it, q to quit ")}`);
@@ -97,12 +101,12 @@ export async function playChapter(
     io.write("\n");
 
     writeScript(sandbox, scriptFor(expandTurns(step.agentTurns ?? [], sandbox)));
-    const result = await run(step, sandbox, (line) => { io.write(`${line}\n`); });
+    const result = await run({ ...step, command }, sandbox, (line) => { io.write(`${line}\n`); });
     if (result.stderr !== "") io.write(result.stderr.endsWith("\n") ? result.stderr : `${result.stderr}\n`);
 
     const expected = step.expectExit ?? [0];
     if (!expected.includes(result.exitCode)) {
-      const failure = `\`tldrx ${displayCommand(step.command)}\` exited ${String(result.exitCode)}, `
+      const failure = `\`tldrx ${displayCommand(command)}\` exited ${String(result.exitCode)}, `
         + `and this chapter expected ${expected.join(" or ")}.`;
       io.warn(`\n  ${io.ink.red("✗")} ${failure}\n`);
       return { chapter: chapter.n, ok: false, quit: false, failures: [failure] };
@@ -155,8 +159,7 @@ function scriptFor(turns: readonly AgentTurn[]): AgentScript {
 export function expandTurns(turns: readonly AgentTurn[], sandbox: Sandbox): readonly AgentTurn[] {
   const run = newestRunId(sandbox);
   if (run === null) return turns;
-  const swap = (text: string): string =>
-    text.replaceAll("{runDir}", `${PROJECT_WORK_DIR}/${run}`).replaceAll("{run}", run);
+  const swap = (text: string): string => expandPlaceholders(text, run);
   return turns.map((turn) => {
     if (turn.writes === undefined) return turn;
     const writes: Record<string, string> = {};
@@ -166,11 +169,47 @@ export function expandTurns(turns: readonly AgentTurn[], sandbox: Sandbox): read
 }
 
 /**
- * The id of the run in the sandbox, or null before one exists.
+ * The same two placeholders, in a step's ARGV.
  *
- * Last by name, which for `<yymmdd>-<slug>` is last by day. The sandbox has one
- * run at a time by construction; this is what makes that assumption visible
- * rather than assumed.
+ * A chapter cannot spell a run id: it is `<yymmdd>-<slug>` in UTC and does not
+ * exist until a command in some earlier chapter has run. That is fine while one
+ * run is open — every command finds it — but the moment a second one is (chapter
+ * 5 opens a hotfix beside the feature), `next`, `approve` and the rest refuse to
+ * guess (exit 2) and want the id spelled out. So a chapter writes
+ * `["next", "{run}"]` and this fills it in from the disk, at the same moment and
+ * from the same reading `expandTurns` uses.
+ *
+ * `{run}` is the NEWEST run — which is the one the chapter that opened it is
+ * talking about, and stays so for the chapters after it, because ids sort by day
+ * and then by slug and a later chapter's run is created later. A chapter that
+ * needs an OLDER run must wait for the newer one to be finished (chapter 7 signs
+ * the hotfix off; chapter 8 then finds one open run again and needs no id at all).
+ */
+export function expandCommand(command: readonly string[], sandbox: Sandbox): readonly string[] {
+  const run = newestRunId(sandbox);
+  if (run === null) return command;
+  return command.map((arg) => expandPlaceholders(arg, run));
+}
+
+/** `{runDir}` → `tldrx-work/<run>`, `{run}` → `<run>`. The one substitution, once. */
+function expandPlaceholders(text: string, run: string): string {
+  return text.replaceAll("{runDir}", `${PROJECT_WORK_DIR}/${run}`).replaceAll("{run}", run);
+}
+
+/**
+ * The run `{run}` and `{runDir}` mean: the newest one that is still OPEN.
+ *
+ * Newest first, because `<yymmdd>-<slug>` sorts by day and a chapter that opens a
+ * run is talking about the one it just opened. Open second, and it is the half
+ * that matters once there is more than one: chapter 5 opens a hotfix beside the
+ * feature run and chapters 6 and 7 carry it to its end — and the moment chapter 7
+ * signs it off, `{run}` has to mean the feature run again, because that is the
+ * one every remaining command will resolve to. "Open" is `!isFinished` — not
+ * `done`, not `cancelled` — which is exactly the set `resolveRun` picks from
+ * (`run/RunStore.ts:165`), so the placeholder and the CLI can never disagree.
+ *
+ * Falls back to the newest of all when every run is finished, so this returns
+ * null only when there is no run at all.
  */
 export function newestRunId(sandbox: Sandbox): string | null {
   const workDir = join(sandbox.workspace, PROJECT_WORK_DIR);
@@ -179,7 +218,19 @@ export function newestRunId(sandbox: Sandbox): string | null {
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
     .map((entry) => entry.name)
     .sort();
-  return runs[runs.length - 1] ?? null;
+  const open = runs.filter((run) => !runIsFinished(join(workDir, run)));
+  const pick = open.length > 0 ? open : runs;
+  return pick[pick.length - 1] ?? null;
+}
+
+/** `status:` in a run.yml, read as text. An unreadable run is treated as open. */
+function runIsFinished(runDir: string): boolean {
+  try {
+    const status = /^status:\s*(\S+)/m.exec(readFileSync(join(runDir, "run.yml"), "utf8"))?.[1] ?? "";
+    return isFinished(status);
+  } catch {
+    return false;
+  }
 }
 
 /**

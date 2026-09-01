@@ -4,6 +4,25 @@
 
 ### Added
 
+- **`tldrx learn` chapters 3-8 — the whole loop, played (#30, phase 2).** The tutorial now runs end to
+  end in about five seconds of real commands: **3** the gate (`approve --note`, and the record it writes
+  in `run.yml`), **4** one story built for real (How's `auto` gate closing itself over its seven
+  conditions, Plan's human gate, then a Build that cuts `epic/bulk-pricing`, spawns a developer in a
+  worktree, re-runs the story's `npm run test` DoD, commits, merges and spawns a reviewer), **5** a
+  genuinely red DoD and the three commands back from it (`story reopen`, `reject`, `budget raise`),
+  **6** `run attend host` and the refusal a bare `next` then gives, **7** an `agent` gate closed by
+  `approve --as-agent` over a structured evidence note, **8** `cost --all`, `run estimate`, and the
+  budget brake refusing a stage the phase can no longer afford.
+  - Chapter 4's DoD is real, chapter 5's failure is real: the story's test script is `exit 0` until a
+    developer replaces it with a `node` test that then catches a wrong number — so the tutorial teaches
+    "a green DoD over an empty test proves nothing" by letting it happen rather than by saying it.
+  - Chapter 5 opens a second run, so `{run}` and `{runDir}` now expand in a step's `command` as well as
+    in a turn's writes, and mean **the newest run that is still open** — the same set `resolveRun` picks
+    from, so the placeholder and the CLI cannot disagree about which run a command means.
+  - Chapter 4's `prepare()` commits what `init` left untracked, because the Build executor refuses to
+    cut a branch from a dirty tree (measured: `?? .gitignore, ?? CLAUDE.md`, exit 2) — and the narration
+    teaches that refusal instead of hiding it.
+
 - **`tldrx learn` — a playable sandbox tutorial that runs the REAL commands (#30, phase 1 of 3).**
   A tutorial that runs the shipped binary can never drift from the shipped behaviour: every output the
   learner reads is produced by the code, not written down by a doc author. `tldrx learn` scaffolds a

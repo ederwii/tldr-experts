@@ -25,6 +25,11 @@ tldrx init                # detect repos, map the code, write .tldrx/, ask only 
 tldrx install --claude    # write the skill, hooks and status line into ./.claude/
 ```
 
+**Never used it before?** `tldrx learn` teaches the loop by running it: eight chapters, ~15 minutes,
+in a throwaway sandbox with a toy repo and a stand-in agent. Every command in it is the real one —
+`init`, `run new`, `next`, `approve`, a Build that cuts a branch and runs a real DoD — so nothing it
+shows you can drift from what the binary does, and it costs $0.00 and touches nothing you own.
+
 Then open Claude Code there and type **`/tldrx`**. It runs `tldrx status`, finds what is already
 waiting on you — unanswered setup questions, a proposed split nobody decided, a run waiting on a gate,
 an expert no stage can lean on yet — and walks you through it one item at a time, asking every decision
