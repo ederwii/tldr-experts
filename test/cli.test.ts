@@ -1,11 +1,11 @@
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { COMMANDS, lookup } from "../src/cli/index.ts";
 import type { Command } from "../src/cli/Command.ts";
 import { flagNames } from "../src/cli/argv.ts";
-import { EXIT_FAILED, EXIT_NOT_IMPLEMENTED, EXIT_OK, EXIT_USAGE } from "../src/cli/exitCodes.ts";
+import { EXIT_FAILED, EXIT_NOT_FOUND, EXIT_NOT_IMPLEMENTED, EXIT_OK, EXIT_USAGE } from "../src/cli/exitCodes.ts";
 import {
   declaredFlags, EXIT_MEANINGS, helpFor, HELP_ENTRIES, scopeValues, supportsJson,
 } from "../src/cli/helpText.ts";
@@ -386,6 +386,29 @@ describe("<command> --help carries flags, values, examples and exit codes", () =
       expect(reference).toContain(`| \`${String(code)}\` | ${meaning} |`);
     }
   });
+
+  /**
+   * #54: the page described seven of `run`'s eight subcommands, and the missing one
+   * was `gates set` — the ONLY sanctioned way to move a `gates_policy` that
+   * `run new` froze, which is a thing an operator hits mid-run and searches the docs
+   * for. The alternative they found was "abandon the run".
+   *
+   * Scoped to `run` deliberately, not generalised over every command: measured at
+   * `7ac298c`, `plan sync-dod` has no section on this page at all (a separate gap,
+   * unfiled), and `hook`'s seven scripts are documented as the one `<script>` slot
+   * that USAGE_SPELLINGS already records as a deliberate spelling. A generalised
+   * assertion would fail for those two reasons and say nothing about this one.
+   */
+  test("the CLI reference documents every `tldrx run` subcommand (#54)", () => {
+    const reference = readFileSync(join(FRAMEWORK_ROOT, "docs/guide/08-cli-reference.md"), "utf8");
+    const run = COMMANDS.find((command) => command.name === "run");
+    expect(run).toBeDefined();
+    if (run === undefined) return;
+    expect(run.subcommands.filter((sub) => !reference.includes(`tldrx run ${sub}`))).toEqual([]);
+    // The audit trail is the half a reader cannot infer from the usage line: a
+    // mandatory --note, and one event carrying who moved the policy and why.
+    expect(reference).toContain("gate.policy_changed");
+  });
 });
 
 /**
@@ -517,4 +540,59 @@ describe("every usage line is as wide as its own --help (#25, #51)", () => {
     expect(dashboard.subcommands).not.toContain("static");
     expect(usageBlock(dashboard, "static")).toBe(dashboard.usage);
   });
+});
+
+/**
+ * The third axis, and the one neither guard above can see: the REGISTRY narrower
+ * than the CODE.
+ *
+ * `tickets sync`, `tickets status` and `budget show` all resolve a run from
+ * `stringFlag(args, "run") ?? args.positionals[0]` (`tickets.ts:246`,
+ * `budget.ts:48`), so a bare run id has always worked — and neither the usage line
+ * nor `helpFor(…).args` said so (#53). The two guards above compare the registry to
+ * the usage; where BOTH are silent they are both green, and they were.
+ *
+ * Nothing derives a positional from source, so the list is written by hand. The
+ * behavioural half is what keeps each entry from being a restatement of the
+ * registry: it goes red if the capability is REMOVED as well as if the declaration
+ * is, which is the direction a tidy-up of the arg parsing would break it in.
+ */
+const RUN_POSITIONAL: readonly (readonly [string, readonly string[]])[] = [
+  ["tickets", ["sync", "status"]],
+  ["budget", ["show"]],
+];
+
+describe("a run id the code takes as a positional is declared (#53)", () => {
+  // A `.tldrx/` marker is needed or every command exits 1 at "run `tldrx init` first"
+  // before any argv is read, and a configured `ticket_tool` is needed or `tickets sync`
+  // returns 0 at "kind is none — a no-op" before it resolves anything. `tldrx-work/` is
+  // left absent on purpose, so the probe id misses because no run has it rather than
+  // because this box happens to have one open. Nothing reaches GitHub: the run is
+  // resolved, and refused, before a provider is ever built.
+  const foreign = mkdtempSync(join(tmpdir(), "tldrx-positional-"));
+  mkdirSync(join(foreign, ".tldrx"));
+  writeFileSync(
+    join(foreign, ".tldrx", "process.yml"),
+    "version: 1\nticket_tool: {kind: github, project: acme/lab, sync: one-way}\n",
+  );
+
+  afterAll(() => rmSync(foreign, { recursive: true, force: true }));
+
+  for (const [name, subs] of RUN_POSITIONAL) {
+    test(`\`tldrx ${name}\` declares [<run>] in both its --help and its usage`, () => {
+      const command = COMMANDS.find((candidate) => candidate.name === name);
+      expect(command).toBeDefined();
+      if (command === undefined) return;
+      expect((helpFor(name)?.args ?? []).map((arg) => arg.name)).toContain("[<run>]");
+      for (const sub of subs) expect(usageBlock(command, sub)).toContain("[<run>]");
+    });
+
+    for (const sub of subs) {
+      test(`\`tldrx ${name} ${sub} <run>\` reaches the run resolver`, async () => {
+        const run = await tldrxIn(foreign, name, sub, "zzz-positional-probe");
+        expect(run.code).toBe(EXIT_NOT_FOUND);
+        expect(run.stderr).toContain("no run 'zzz-positional-probe'");
+      });
+    }
+  }
 });

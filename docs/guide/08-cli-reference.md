@@ -166,6 +166,7 @@ tldrx run status   [<run>] [--json] [--run <id>]
 tldrx run estimate [<run>] [--json] [--run <id>]
 tldrx run auto     [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]
                           [--parallel <n>] [--yolo] [--gate-agent] [--ui <mode>] [--run <id>]
+tldrx run gates set <stage>:<human|auto|agent> --note <text> [--run <id>]
 tldrx run unlock   [<run>] [--force] [--run <id>]
 tldrx run cancel   [<run>] --note <text> [--force] [--run <id>]
 ```
@@ -214,6 +215,26 @@ LOOP's spend, checked between stages. Headless only — which is why it is refus
 (exit `1`) on a run marked `attended_by: host`. `--gate-agent` prints a **decision card** at
 the stop instead of the ordinary status block (guide 03); it is rendering only and never
 upgrades a stage's gate policy.
+
+**`gates set`** is the **only sanctioned way to move `gates_policy` after `run new` froze
+it** — the case it exists for is a run opened before the `agent` policy existed, which can
+otherwise never use `approve --as-agent`, and `run.yml` is hand-edit-forbidden. It changes
+who may CLOSE a gate from then on; gates already signed are untouched.
+
+```
+$ tldrx run gates set plan:agent --note "predates the agent policy; the pilot signs with evidence"
+```
+
+One stage per invocation — a comma list is refused, because a second change would ride along
+on the first one's note. The entry must name its policy outright: a bare `plan` is refused
+here even though `--gates plan` means `human` at `run new`, since a signature must not rest
+on a default. A no-op (`human` → `human`) is refused rather than recorded.
+
+**`--note` is required** and there is no way around it. The change is human-signed like
+`story reopen`: it appends one **`gate.policy_changed`** event carrying the actor, the
+moment, your note and the old→new value, which is the whole audit trail for a gate mutation
+nobody would otherwise go looking for. A run with no `gates_policy` map at all gets the full
+map written, every stage explicit, with the one change applied.
 
 **`unlock`** drops a `.lock` nobody is behind and puts the stage it stranded back to `ready`.
 It spends nothing and touches no stage output. A live pid needs `--force`.

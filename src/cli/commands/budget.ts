@@ -24,7 +24,7 @@ export const budgetCommand: Command = {
   name: "budget",
   summary: "Show what the run may still spend, or raise a phase ceiling",
   usage:
-    "tldrx budget show [--run <id>] [--json] [--root <path>]\n" +
+    "tldrx budget show [<run>] [--run <id>] [--json] [--root <path>]\n" +
     "       tldrx budget raise <phase> <usd> [--run <id>] [--take-from <phase>] [--note <text>] [--root <path>]",
   subcommands: ["show", "raise"],
   implemented: true,
