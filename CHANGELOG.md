@@ -4,6 +4,29 @@
 
 ### Added
 
+- **`tldrx plan sync-dod` — the mechanical repair for dod blocks an edited `workspace.yml` orphaned (#42).**
+  A story's ```dod block may only name commands `workspace.yml` declares, byte for byte, and that rule is not
+  relaxed by a byte here — it is what stops a data file from running an arbitrary command as you. What it
+  lacked was an inverse. Measured live 2026-08-31 on `260829-scoring-leaderboard`: fixing `workspace.yml`
+  (a filtered `test:`, `lint:` deleted) instantly invalidated the dod blocks of **8 approved stories**, and
+  the only recoveries were hand-editing agent-approved artefacts or re-running the whole Plan stage — a paid
+  turn to change two lines in eight files, churning thirteen correct stories on the way.
+  - **Evidence, not similarity.** The ancestry comes from git's history of `.tldrx/workspace.yml`: a line a
+    previous version declared under a role the current file still has becomes that role's current command; a
+    line whose role is gone is dropped; a line the current file already declares is left alone; and a line no
+    version ever declared — or one two roles once shared and now disagree on — is **flagged, its story left
+    byte-identical**, and the command exits `2`. Guessing at a rename by string shape is the one thing this
+    must not do. In a workspace with no git history there are no ancestors, so everything non-current is
+    flagged.
+  - **It touches nothing else.** Front matter, prose, blank lines and the fences come back byte-identical;
+    only the command lines inside the fence move. The previous version is kept at `<story>.md.bak`
+    (`writeAtomic`), the summary is a per-story diff, `--dry-run` prints it and writes nothing, and the result
+    is validated by the same plan check the drift came from. Stories that CAN be synced still are — one
+    undecidable line is not a veto on the other seven files.
+  - **The drift message now names the remedy.** "`<cmd>` is not one of .tldrx/workspace.yml's commands — a
+    story may not invent one" gained a second sentence pointing at `tldrx plan sync-dod`. Only for a STORY:
+    a stage's `cmd:` is a line a human wrote, and `sync-dod` does not touch stage files.
+
 - **`tldrx answer <Qn> "…" --supersede` — the verb for reversing a decision already on record.**
   Found live 2026-08-31: an owner reversed an answered decision after the risk behind it was
   refuted, and `tldrx answer` refused ("Q1 is not an open question") because an answer is
@@ -77,6 +100,28 @@
     to resolve against. Closing that means reading blobs out of the epic branch inside a hook
     whose budget is 50 ms, or keeping epic worktrees for the life of the run — a design call, not
     a mechanical one.
+
+- **The Build DoD is a DELTA gate again: the base tree is checked before any story is charged (#41).**
+  A dod block proves one thing — *this story did not break the tree* — and nothing checked that the tree was
+  unbroken to begin with. Measured live 2026-08-31 on `260829-scoring-leaderboard`: of the three commands
+  `workspace.yml` declared, **two already failed on pristine main** — a bare `dotnet test` ran two `Live`-trait
+  tests that call paid Azure AI and that the repo's own CI excludes, and `dotnet format --verify-no-changes`
+  flagged 336 files in a repo whose CI never gates format at all. All 15 stories in the plan would have blocked
+  identically, each having spent a developer turn, and each told the operator the STORY was red.
+  - **Pre-flight at Build entry.** After the dirty-tree and foreign-epic refusals and before anything is
+    dispatched, every dod command the pending stories name is run once against the untouched base tree. A
+    non-zero exit refuses the stage (exit `2`, back to `ready`) naming the command, its exit code and the repo,
+    with no attempt spent and nothing charged.
+  - **In the repo's own checkout, not a fresh worktree.** That is the tree a human means by "the base": it has
+    the installed dependencies and tool state that make the command mean what the team thinks it means. A
+    pristine worktree would fail half the world's repos for want of `node_modules` and turn a safety net into
+    an outage.
+  - **Paid for once.** Results go to `04-build/preflight.yml` — files are the state — keyed by repo, command and
+    the base sha, and are read back by every later invocation of the run. A missing or unreadable cache is a
+    question, never a fault: a run that entered Build on an older binary measures lazily rather than erroring.
+  - **Attribution.** When a story's DoD does go red, the cached base result decides whose fault it is. A command
+    red on the base too halts the build with the same workspace-config error rather than blocking the story and
+    consuming its attempt. A command the gate declined to run is recorded `unmeasured` and excuses nothing.
 
 - **A second run's stories no longer merge into ANOTHER run's epic branch.** Measured live
   2026-08-31 on two concurrent runs: `260831-hardening-d1` reported S1, S2 and S6 all

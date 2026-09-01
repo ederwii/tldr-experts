@@ -138,6 +138,9 @@ signs something it should not have, `tldrx reject --stage <phase>/<stage> --note
 the cursor back and marks the later stages `stale`. When it is one BUILD STORY you disagree with — a
 story two reviewers refused, which is terminal for the rest of the run —
 `tldrx story reopen <id> --note "…"` gives that one story another run of attempts and nothing else.
+When you fix `.tldrx/workspace.yml` mid-run and the approved stories still cite the old command strings,
+`tldrx plan sync-dod` rewrites just their dod lines — renames followed, removed commands dropped, and
+anything with no ancestor in the file's history flagged rather than guessed at.
 What an auto gate cannot do: [`docs/guide/03-runs-and-gates.md`](docs/guide/03-runs-and-gates.md).
 
 ## What you see while it runs

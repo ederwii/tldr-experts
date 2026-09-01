@@ -33,7 +33,9 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import { PROJECT_FRAMEWORK_DIR, epicWorktreeName } from "../../paths.ts";
-import { factsPath, loadWorkspace, type WorkspaceContext } from "../../../hooks/lib/workspace.ts";
+import {
+  FALLBACK_DEFAULT_BRANCH, factsPath, loadWorkspace, type WorkspaceContext,
+} from "../../../hooks/lib/workspace.ts";
 import { DodCommandRefused, runDodCommand } from "../../../hooks/lib/story.ts";
 import { FactsStore } from "../../facts/FactsStore.ts";
 import { RunStore } from "../../run/RunStore.ts";
@@ -52,8 +54,12 @@ import {
 import {
   addWorktree, assertWorktreeOn, baseStateOf, branchExists, commitAll, commitsBetween, currentBranch, diffCommand,
   dirtyPaths, ensureBranch, fastForward, firstLine, GitError, headSha, isDirty, mergeNoFf, partitionDirty, pathAtRef,
-  removeWorktree, repoDirOf, stateDirPrefixes,
+  removeWorktree, repoDirOf, shaOf, stateDirPrefixes,
 } from "../../build/git.ts";
+import {
+  BaseGateFailure, baseRefusalLines, baseResultFor, EMPTY_PREFLIGHT, loadPreflight, PREFLIGHT_REL,
+  savePreflight, withResult, type BaseCommandResult, type BasePreflight,
+} from "../../build/preflight.ts";
 import {
   loadBuildPlan, PlanLoadError, BUILD_PHASE, LOG_DIR, PLAN_PHASE, WORKTREES,
   type BuildPlan, type BuildWave, type PlannedEpic, type PlannedStory,
@@ -266,11 +272,35 @@ export async function buildExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
     }
     return withClaims(await session.runAll());
   } catch (error) {
+    // Issue #41: the DoD step found a red command that is red on the base tree
+    // too. That is a workspace-configuration fault, so it REFUSES (stage back to
+    // `ready`, story untouched, attempt unspent) rather than blocking a story for
+    // something no story caused. Whatever the developer already cost is still in
+    // `session.tasks` and is still recorded.
+    if (error instanceof BaseGateFailure) return withClaims(refusedOnBase(session, error));
     if (error instanceof GitError || error instanceof PlanLoadError) {
       return withClaims(failed(ctx, error.message, session.tasks));
     }
     throw error;
   }
+}
+
+/** A story's DoD failure re-attributed to the base tree — see `BaseGateFailure`. */
+function refusedOnBase(session: BuildSession, error: BaseGateFailure): ExecutorOutcome {
+  const who = error.storyId === null ? "a story" : `\`${error.storyId}\``;
+  return {
+    ok: false,
+    refused: true,
+    awaiting: false,
+    tasks: session.tasks,
+    costUsd: session.tasks.reduce((sum, task) => sum + task.costUsd, 0),
+    outputs: [],
+    lines: [
+      `[tldrx] build: ${who} was not blocked — its Definition of Done failed for a reason the base tree shares.`,
+      ...baseRefusalLines([error.result]),
+    ],
+    error: error.message,
+  };
 }
 
 /**
@@ -444,6 +474,15 @@ class BuildSession {
   private readonly writes = new SerialQueue();
   /** stderr lines: advice for the operator, never a reason to stop. */
   private readonly advisories: string[] = [];
+  /**
+   * What this run measured on the untouched base tree (`build/preflight.ts`).
+   *
+   * Loaded lazily and once: a run resumed after a refusal must not re-pay for a
+   * `dotnet test`, and a run that entered Build before this file existed must
+   * not error on its absence.
+   */
+  private preflight: BasePreflight | null = null;
+  private preflightLoaded = false;
   /** How many stories of one wave may be in flight at once. */
   private readonly lanes: number;
 
@@ -465,7 +504,9 @@ class BuildSession {
 
   /** Headless: every wave, every story, in order, then the handoff. */
   async runAll(): Promise<ExecutorOutcome> {
-    const refusal = await this.refuseOnDirtyRepos() ?? await this.refuseOnForeignEpic();
+    const refusal = await this.refuseOnDirtyRepos()
+      ?? await this.refuseOnForeignEpic()
+      ?? await this.refuseOnRedBase();
     if (refusal !== null) return refusal;
     this.recordGateFeedback();
 
@@ -522,7 +563,9 @@ class BuildSession {
   async prepare(): Promise<ExecutorOutcome> {
     const planned = this.nextPending();
     if (planned === null) return await this.finish();
-    const refusal = await this.refuseOnDirtyRepos() ?? await this.refuseOnForeignEpic();
+    const refusal = await this.refuseOnDirtyRepos()
+      ?? await this.refuseOnForeignEpic()
+      ?? await this.refuseOnRedBase();
     if (refusal !== null) return refusal;
 
     // A story waiting on nothing but a REVIEW gets its reviewer bundle written
@@ -951,7 +994,16 @@ class BuildSession {
         halves.set(planned.story.id, await this.buildHalf(planned));
       }
     };
-    await Promise.all(Array.from({ length: Math.min(this.lanes, queue.length) }, lane));
+    // `allSettled`, then rethrow: a lane that throws (a `GitError`, or the
+    // base-gate halt of issue #41) must not leave its siblings running DETACHED
+    // behind an executor that has already returned — they would write to
+    // `run.yml` and the story files after the caller stopped holding the lock.
+    // The first rejection is still what the caller sees.
+    const settled = await Promise.allSettled(
+      Array.from({ length: Math.min(this.lanes, queue.length) }, lane),
+    );
+    const rejected = settled.find((outcome) => outcome.status === "rejected");
+    if (rejected !== undefined && rejected.status === "rejected") throw rejected.reason;
     return halves;
   }
 
@@ -1741,7 +1793,18 @@ class BuildSession {
         exit_code: result.exitCode,
         detail: green ? "" : result.tail,
       });
-      if (!green) break;
+      if (green) continue;
+      // Issue #41, the second reader: a red command only faults the STORY if it
+      // is green on the untouched base tree. The answer is normally already in
+      // the run's cache — the Build-entry pre-flight put it there — and when it
+      // is not (a run that entered Build on an older binary, a base that moved
+      // under a reopened story) it is measured now rather than assumed. A base
+      // that shares the failure halts the build instead of blocking the story.
+      const base = await this.baseResult(story.planned.story.repo, command);
+      if (base !== null && base.status === "failed") {
+        throw new BaseGateFailure(base, story.planned.story.id);
+      }
+      break;
     }
     return results;
   }
@@ -2246,6 +2309,136 @@ class BuildSession {
       return RunStore.open(this.ctx.runDir).run.build?.epic_branch ?? [];
     } catch {
       return [];
+    }
+  }
+
+  /**
+   * Issue #41: the gate commands, on the UNTOUCHED base tree, before anything is
+   * dispatched or charged.
+   *
+   * A DoD is a delta gate — "this story did not break the tree" — and a command
+   * that is already red on main makes every story in the plan block for something
+   * no story caused. Measured on `260829-scoring-leaderboard`: two of three
+   * declared commands were red on pristine main, so all 15 stories would have
+   * blocked identically, each having spent a developer turn, and one of the two
+   * was running paid live AI tests as a routine gate.
+   *
+   * **Where it runs.** In the repo's own checkout, not a fresh worktree. That is
+   * the tree a human calls "the base": it has the installed dependencies, the
+   * build cache and the tool state that make the command mean what the team
+   * thinks it means, and a pristine worktree would fail half the world's repos
+   * for want of `node_modules` — turning this safety net into an outage. The
+   * dirty-tree refusal has already run, so the tree is product-clean. The trade
+   * is that a gate command which writes build output into a repo that does not
+   * gitignore it now leaves that output in the repo rather than in a worktree —
+   * a repo shaped like that was already broken for Build, whose commit step
+   * would have swept the same files into a story's diff.
+   *
+   * **What it costs.** Once per run: every result is written to
+   * `04-build/preflight.yml` and read back by the next invocation.
+   *
+   * A command the gate DECLINES to run (undeclared, or needing a shell) is
+   * recorded `unmeasured` and refuses nothing — the story-level DoD already has
+   * its own refusal for that, and inventing a base failure out of one would block
+   * a build for a rule that is enforced elsewhere.
+   */
+  private async refuseOnRedBase(): Promise<ExecutorOutcome | null> {
+    const failures: BaseCommandResult[] = [];
+    const seen = new Set<string>();
+    for (const planned of this.pendingStories()) {
+      for (const command of planned.dod.commands) {
+        const key = `${planned.story.repo}\u0000${command}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const result = await this.baseResult(planned.story.repo, command);
+        if (result !== null && result.status === "failed") failures.push(result);
+      }
+    }
+    if (failures.length === 0) return null;
+    const first = failures[0];
+    return {
+      ok: false,
+      refused: true,
+      awaiting: false,
+      tasks: [],
+      costUsd: 0,
+      outputs: [],
+      lines: [...baseRefusalLines(failures)],
+      error: first === undefined
+        ? "a workspace command fails on the base tree"
+        : `\`${first.command}\` exits ${String(first.exitCode)} on the base tree of ${first.repo}`,
+    };
+  }
+
+  /**
+   * One gate command's result on one repo's base tree — from the run's cache when
+   * this run already paid for it, measured and written down when it did not.
+   *
+   * `null` means the question could not be asked at all (a `repo:` the workspace
+   * does not declare). Every caller treats that as "no evidence", never as a
+   * verdict.
+   */
+  private async baseResult(repo: string, command: string): Promise<BaseCommandResult | null> {
+    let repoDir: string;
+    try {
+      repoDir = repoDirOf(this.workspace, repo);
+    } catch {
+      return null;
+    }
+    const baseRef = this.workspace.defaultBranches.get(repo) ?? FALLBACK_DEFAULT_BRANCH;
+    const baseSha = await shaOf(repoDir, baseRef);
+    const cached = baseResultFor(this.basePreflight(), repo, command, baseSha);
+    if (cached !== null) return cached;
+
+    const timeoutMs = this.ctx.spec.planned.timeout_s * 1000;
+    let measured: BaseCommandResult;
+    try {
+      const outcome = await runDodCommand(command, repoDir, timeoutMs, this.workspace.commands);
+      const exitCode = outcome.timedOut ? 124 : outcome.exitCode;
+      measured = {
+        repo, command, baseRef, baseSha, exitCode, timedOut: outcome.timedOut, tail: outcome.tail,
+        status: exitCode === 0 && !outcome.timedOut ? "ok" : "failed",
+      };
+    } catch (error) {
+      if (!(error instanceof DodCommandRefused)) throw error;
+      // The gate would not run it, so nothing was learned ABOUT THE BASE. The
+      // story-level DoD refuses it on its own terms; this must not double as a
+      // second, differently-worded veto.
+      measured = {
+        repo, command, baseRef, baseSha, exitCode: 126, timedOut: false,
+        tail: error.message, status: "unmeasured",
+      };
+    }
+    await this.writes.run(() => this.rememberBase(measured));
+    return measured;
+  }
+
+  /** The run's cached base results, read once per process. */
+  private basePreflight(): BasePreflight {
+    if (!this.preflightLoaded) {
+      this.preflight = loadPreflight(this.ctx.runDir);
+      this.preflightLoaded = true;
+    }
+    return this.preflight ?? EMPTY_PREFLIGHT;
+  }
+
+  /**
+   * Write one measurement into `04-build/preflight.yml`.
+   *
+   * Through the single writer, and best-effort: a cache that cannot be saved
+   * costs the NEXT invocation a re-run, and that is never a reason to fail a
+   * build that is otherwise fine.
+   */
+  private rememberBase(result: BaseCommandResult): void {
+    const next = withResult(this.basePreflight(), result, this.ctx.at);
+    this.preflight = next;
+    this.preflightLoaded = true;
+    try {
+      savePreflight(this.ctx.runDir, next);
+    } catch (error) {
+      this.advisories.push(
+        `could not write ${PREFLIGHT_REL}: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 

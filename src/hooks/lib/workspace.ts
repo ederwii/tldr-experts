@@ -101,6 +101,34 @@ interface RawRepo {
 /** Spec §2.1 example; a repo whose `default_branch` is missing is assumed to use it. */
 export const FALLBACK_DEFAULT_BRANCH = "main";
 
+/**
+ * `repo -> {role -> command}` out of a PARSED workspace.yml document.
+ *
+ * Extracted from `loadWorkspace` when a second reader appeared: `plan sync-dod`
+ * reads OLD versions of the file out of git history, and it has to agree with the
+ * live loader about what counts as a declared command, down to the blank-string
+ * rule. Two spellings of that would be two answers to "was this ever declared?",
+ * and the sync's whole safety rests on there being one.
+ */
+export function commandRolesOf(doc: unknown): ReadonlyMap<string, ReadonlyMap<string, string>> {
+  const out = new Map<string, ReadonlyMap<string, string>>();
+  const list = (doc as { repos?: unknown } | null)?.repos;
+  if (!Array.isArray(list)) return out;
+  for (const entry of list as RawRepo[]) {
+    if (typeof entry?.name !== "string") continue;
+    const roles = new Map<string, string>();
+    const cmds = entry.commands;
+    if (cmds !== null && typeof cmds === "object") {
+      for (const [role, value] of Object.entries(cmds as Record<string, unknown>)) {
+        if (typeof value !== "string" || value.trim() === "") continue;
+        roles.set(role, value);
+      }
+    }
+    out.set(entry.name, roles);
+  }
+  return out;
+}
+
 /** Read `.tldrx/workspace.yml`. A missing or unreadable file yields an empty context. */
 export function loadWorkspace(root: string): WorkspaceContext {
   const repos = new Map<string, string>();
@@ -129,6 +157,7 @@ export function loadWorkspace(root: string): WorkspaceContext {
   }
   const list = (doc as { repos?: unknown } | null)?.repos;
   if (!Array.isArray(list)) return empty();
+  const declared = commandRolesOf(doc);
   for (const entry of list as RawRepo[]) {
     if (typeof entry?.name !== "string") continue;
     repos.set(entry.name, typeof entry.path === "string" ? entry.path : ".");
@@ -139,15 +168,10 @@ export function loadWorkspace(root: string): WorkspaceContext {
         : FALLBACK_DEFAULT_BRANCH,
     );
     const own: string[] = [];
-    const roles = new Map<string, string>();
-    const cmds = entry.commands;
-    if (cmds !== null && typeof cmds === "object") {
-      for (const [role, value] of Object.entries(cmds as Record<string, unknown>)) {
-        if (typeof value !== "string" || value.trim() === "") continue;
-        commands.add(value);
-        roles.set(role, value);
-        if (!own.includes(value)) own.push(value);
-      }
+    const roles = declared.get(entry.name) ?? new Map<string, string>();
+    for (const value of roles.values()) {
+      commands.add(value);
+      if (!own.includes(value)) own.push(value);
     }
     repoCommands.set(entry.name, own);
     commandRoles.set(entry.name, roles);

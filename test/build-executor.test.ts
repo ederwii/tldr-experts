@@ -79,6 +79,20 @@ function next(
   });
 }
 
+/**
+ * A `test` script that is GREEN on the untouched base tree and RED once a
+ * developer has written its story file.
+ *
+ * It replaced a plain `node -e "process.exit(1)"` when the base-tree pre-flight
+ * landed (issue #41). That script failed on pristine main too, which is now a
+ * WORKSPACE-CONFIG error and refuses Build by design — so a test about a story
+ * that cannot prove itself has to fail for the story's own reason, which is what
+ * it always meant. The fake developer writes `<story>.txt` into its worktree; the
+ * base repo has no `.txt` file at all.
+ */
+const RED_ONLY_AFTER_DEVELOPER =
+  'node -e "process.exit(require(\'fs\').readdirSync(\'.\').some(function (f) { return f.endsWith(\'.txt\'); }) ? 1 : 0)"';
+
 /** Two stories, one epic, two waves — the shape the wave loop exists for. */
 const TWO_WAVES: BuildWorkspaceOptions = {
   stories: [
@@ -341,7 +355,7 @@ describe("the epic worktree", () => {
 
 describe("a story that cannot prove itself", () => {
   test("a failed dod blocks the story and nothing is merged", async () => {
-    const ws = workspace({ ...TWO_WAVES, testScript: 'node -e "process.exit(1)"' });
+    const ws = workspace({ ...TWO_WAVES, testScript: RED_ONLY_AFTER_DEVELOPER });
     const outcome = await next(ws);
     expect(outcome.code).toBe(4);
 
@@ -927,7 +941,7 @@ describe("Build writes retro.md as it goes", () => {
   });
 
   test("a failed dod is written with its command and exit code", async () => {
-    const ws = workspace({ ...TWO_WAVES, testScript: 'node -e "process.exit(1)"' });
+    const ws = workspace({ ...TWO_WAVES, testScript: RED_ONLY_AFTER_DEVELOPER });
     await next(ws);
     const text = retro(ws);
     expect(text).toContain("dod `npm run test` exited 1 on the first attempt");
@@ -1402,7 +1416,7 @@ describe("a developer that FAILED is not an attempt", () => {
   }, 60_000);
 
   test("a developer that RAN and failed its DoD still blocks — the fix is narrow", async () => {
-    const ws = workspace({ ...ONE, testScript: 'node -e "process.exit(1)"' });
+    const ws = workspace({ ...ONE, testScript: RED_ONLY_AFTER_DEVELOPER });
 
     await next(ws);
 
@@ -1414,7 +1428,7 @@ describe("a developer that FAILED is not an attempt", () => {
   });
 
   test("a story blocked by a failed DoD is NOT re-offered on the next invocation", async () => {
-    const ws = workspace({ ...ONE, testScript: 'node -e "process.exit(1)"' });
+    const ws = workspace({ ...ONE, testScript: RED_ONLY_AFTER_DEVELOPER });
     process.env.FAKE_BUILD_COST = "0";
 
     await next(ws);
@@ -1537,7 +1551,7 @@ describe("the auto gate and unfinished stories", () => {
   }, 60_000);
 
   test("a blocked story refuses it too — the condition is `done`, not `attempted`", async () => {
-    const ws = workspace({ ...ONE_AUTO, testScript: 'node -e "process.exit(1)"' });
+    const ws = workspace({ ...ONE_AUTO, testScript: RED_ONLY_AFTER_DEVELOPER });
 
     const outcome = await next(ws);
 
@@ -1549,7 +1563,7 @@ describe("the auto gate and unfinished stories", () => {
     // The whole point of the condition. Shipping an epic with a blocked story in
     // it is a judgement about what is worth shipping, and a person is allowed to
     // make it; the harness has no basis for making it on their behalf.
-    const ws = workspace({ ...ONE_AUTO, testScript: 'node -e "process.exit(1)"' });
+    const ws = workspace({ ...ONE_AUTO, testScript: RED_ONLY_AFTER_DEVELOPER });
     await next(ws);
     expect(story(ws, "S1")).toContain("status: blocked");
 
