@@ -1,6 +1,6 @@
 {
   "name": "tldr-experts",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "tldr-experts: a lightweight, file-based AI development workflow. Installs the `tldrx` (and `tldr-experts`) command. Alpha.",
   "license": "MIT",
   "author": "Alan Martinez",

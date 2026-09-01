@@ -242,6 +242,7 @@ back on the registry is 0.3.0.
 
 | Version | Date | Status | Contains |
 |---|---|---|---|
+| 0.4.0 | 2026-09-01 | `beta` | FIRST BETA — 40-issue hardening burn (DoD pre-flight + `plan sync-dod`, merge-wave lock + gated-HEAD, load-aware tests, claim-sources across all outputs), `tldrx learn` 8-chapter sandbox tutorial (cold-player QA), `tldrx ship` / `tldrx note` / `run gates set`, budget policies + dual-economy wiring, single integration branch for chained epics, epic worktrees live to run close, bilingual docs site |
 | 0.3.1 | 2026-08-31 | `alpha` | Unattended mode (gates_policy agent, review handshake, fixlist, decision cards, dual economy), 6 contact fixes from the first feature-scope runs, colored init, training repair round |
 | 0.3.0 | 2026-08-30 | `alpha` | expert training with provenance, auto gates with an undo, `tldrx status`, seed triage, the token economy (context ledger, `max_reads`, `cost`, `estimate`), `install --claude`, `interview`, the ticket mirror, `--help` with flags and exit codes |
 | 0.2.0 | 2026-08-29 | `alpha` | Build executor (worktree + branch per story, epic branches, DoD gate, reviewer), Watch cards, live dashboard |
