@@ -18,7 +18,7 @@
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawn, execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
@@ -321,6 +321,23 @@ describe("the dirty-tree guard and the pack artifact (#45)", () => {
     const { code, stdout } = await invoke(sb, "wave-a").done;
     expect(stdout).not.toContain("FAIL dirty tree");
     expect(code).toBe(0);
+  });
+
+  test("a green run leaves no log directory behind; a red one keeps the one it names", async () => {
+    const logRoot = tmpdir();
+    const before = new Set(readdirSync(logRoot).filter((f) => f.startsWith("mw-")));
+
+    const green = await invoke(sandbox(), "wave-a").done;
+    expect(green.code).toBe(0);
+    const after = readdirSync(logRoot).filter((f) => f.startsWith("mw-") && !before.has(f));
+    expect(after).toEqual([]);
+
+    const red = await invoke(sandbox(), "wave-poison").done;
+    expect(red.code).toBe(3);
+    const named = /logs: (\S+);/.exec(red.stdout)?.[1];
+    expect(named).toBeTruthy();
+    expect(existsSync(named!)).toBe(true);   // kept, because someone has to read it
+    rmSync(named!, { recursive: true, force: true });
   });
 
   test("the guard keeps its teeth: a genuinely untracked file still refuses", async () => {
