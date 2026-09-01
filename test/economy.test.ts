@@ -535,6 +535,23 @@ describe("`tldrx cost`, with the economy as its axis (§E.2)", () => {
     expect(host).not.toContain("$");
   });
 
+  /**
+   * #56, found by the `tldrx learn` QA read-through: the footnote was
+   * unconditional, so a run whose every attempt was metered in dollars was told
+   * there were "two economies" and no total could be printed. There is one, and
+   * the `metered` footer IS the total.
+   */
+  test("one economy gets NO `two economies` footnote — that sentence is only true when both are there", () => {
+    const ws = workspace();
+    const log = EventLog.forRun(ws.runDir);
+    log.append(metered(ws.runId));
+
+    const text = renderRunCost(buildRunCost(ws.runDir)!);
+
+    expect(text).toContain("metered      $0.42 over 1 attempt");
+    expect(text).not.toContain("no total: two economies");
+  });
+
   test("the header carries NO dollar figure — the totals live in their own footers", () => {
     const ws = workspace();
     priceInHostTokens(ws, "02-how");

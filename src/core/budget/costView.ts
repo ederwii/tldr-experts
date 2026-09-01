@@ -357,7 +357,13 @@ function footers(attempts: readonly CostAttempt[]): readonly string[] {
       + "cost unknown, and never counted as zero",
     );
   }
-  lines.push("  (no total: two economies, no exchange rate — see spec §2.11)");
+  // #56, found by the `tldrx learn` cold-player QA: this was unconditional, so a
+  // run whose every attempt was metered in dollars was told there were "two
+  // economies" and that no total could be printed. There is one, and the `metered`
+  // footer above IS it. The sentence is only true when both economies are present.
+  if (metered.length > 0 && declared.length > 0) {
+    lines.push("  (no total: two economies, no exchange rate — see spec §2.11)");
+  }
   return lines;
 }
 
