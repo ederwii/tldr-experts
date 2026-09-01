@@ -100,7 +100,13 @@ export async function evaluateAgentGate(input: AgentGateInput): Promise<AgentGat
     // things a person does something ABOUT, not merely a check that went red.
     const trigger: AgentGateTrigger =
       condition.id === "questions" ? "questions" : condition.id === "boundary" ? "boundary" : "condition";
-    fallthroughs.push({ trigger, detail: `${condition.id}=${condition.detail}` });
+    // `describeAgentFallthroughs` already prints the trigger, so prefixing the detail
+    // with the condition id rendered `boundary: boundary=…` — the label twice (gh #25).
+    // The generic trigger still needs it: `condition:` alone names nothing.
+    fallthroughs.push({
+      trigger,
+      detail: trigger === "condition" ? `${condition.id}=${condition.detail}` : condition.detail,
+    });
   }
 
   const budget = budgetEventsInWindow(input.events, input.stage.started_at);

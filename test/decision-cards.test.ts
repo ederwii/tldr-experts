@@ -561,7 +561,7 @@ describe("next, on an agent gate that fell through on questions", () => {
     const said = outcome.lines.join("\n");
     // Byte-for-byte what it said before the card existed …
     expect(said).toContain("agent gate not taken");
-    expect(said).toContain("questions: questions=2 open (Q1, Q2)");
+    expect(said).toContain("questions: 2 open (Q1, Q2)");
     expect(said).toContain("gate pending: tldrx approve");
     // … plus the decision itself.
     expect(said).toContain(`DECISION — ${ws.runId} · 01-what/alpha`);
