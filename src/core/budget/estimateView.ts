@@ -28,6 +28,29 @@
  * it is stated rather than silently corrected: the honest fix is a measurement of
  * cache lifetime, which this repo does not have.
  *
+ * **What is LEFT, not what a stage was priced at (issue #21).** The four terms
+ * above answer "what will the next TURN cost". They are silent about the other
+ * half of the same question — how much of this stage, and of this run, is still
+ * to be paid for — and until 2026-08-31 this command answered that with nothing
+ * at all while the budget brake answered it with `remainingWork()`. Two models,
+ * one question, and the one people read was the one that never shrank: a Build
+ * stage with five of six stories done was still quoted the number the Plan wrote
+ * before any of them ran. So the SAME function the brake and `budget show` call
+ * is called here — not a second implementation of it — and its answer is
+ * reported beside the token estimate:
+ *
+ *  - `remaining` is the stage-level figure. On a Build stage with a plan it is
+ *    the sum of the caps the executor would still hand out, done stories excluded
+ *    and blocked ones named; everywhere else it is the stage's static
+ *    `budget_usd`, and it says which of the two it is.
+ *  - `runRemaining` is the run-level roll-up: the stages that are not terminal,
+ *    and what they are priced at. A finished stage contributes nothing, which is
+ *    the whole of what "remaining-work aware" means one level up.
+ *
+ * Neither of them is a token estimate and neither pretends to be. They are read
+ * off `run.yml`, the plan and the ledger — measured numbers about work that has
+ * not happened yet, which is a different kind of claim from a median.
+ *
  * Prices come from `modelPrices.ts`, which is `[assumption]` and dated. This
  * command therefore prints "estimate" in words, next to the number, every time —
  * `tldrx cost` is where the real figures live, and the two must never be confused
@@ -35,11 +58,15 @@
  */
 import { PresetError } from "../run/workflowPreset.ts";
 import { RunStore } from "../run/RunStore.ts";
+import { flatten, isTerminal } from "../run/RunFile.ts";
 import { loadStageSpec } from "../facilitator/stageSpec.ts";
 import { assemblePrompt, declaredInputsOf, seedInputsFor } from "../facilitator/runNext.ts";
 import type { ContextLedger } from "../facilitator/contextLedger.ts";
 import { attemptTokensForStage, median } from "./costView.ts";
 import { economyFor, type Economy } from "./RunBudget.ts";
+import {
+  remainingWork, renderRemainingWork, remainingWorkContext, type RemainingWork,
+} from "./remainingWork.ts";
 import {
   estimateTokensFromBytes, priceFor, BYTES_PER_TOKEN,
   CACHE_READ_MULTIPLIER, CACHE_WRITE_MULTIPLIER,
@@ -70,12 +97,40 @@ export interface StageEstimate {
    * simply never converted, because there is no rate to convert them at.
    */
   readonly economy: Economy;
+  /**
+   * What this STAGE still has to pay for, from the same `remainingWork()` the
+   * budget brake and `budget show` use (issue #21). `basis: "plan"` on a Build
+   * stage with a plan on disk — done stories excluded, blocked ones named;
+   * `basis: "static"` everywhere else, carrying `stage.budget_usd`.
+   */
+  readonly remaining: RemainingWork;
+  /** What the RUN still has to pay for: the stages that are not terminal. */
+  readonly runRemaining: RunRemaining;
   /** Null when the model has no priced row, or there is no history. */
   readonly usd: number | null;
   readonly inputUsd: number | null;
   readonly cacheWriteUsd: number | null;
   readonly cacheReadUsd: number | null;
   readonly outputUsd: number | null;
+}
+
+/**
+ * The stages a run has not finished, and what they are priced at.
+ *
+ * Deliberately the STATIC prices rather than a projection: a stage that has never
+ * run has no history to be remaining-work aware ABOUT, and `budget_usd` is the
+ * number its own budget was sized on. The one narrowing is the stage the cursor
+ * is on, which `remaining` may already know more about — see `usd` below.
+ */
+export interface RunRemaining {
+  /** `<phase>/<stage>` of every stage still to run, in execution order. */
+  readonly stages: readonly string[];
+  /** Stages already terminal, and therefore excluded. */
+  readonly done: number;
+  /** Σ `budget_usd` over `stages`. */
+  readonly staticUsd: number;
+  /** The same sum with the cursor stage narrowed by `remaining`, when it could be. */
+  readonly usd: number;
 }
 
 export class EstimateError extends Error {}
@@ -152,6 +207,23 @@ export function estimateNextStage(root: string, runId?: string): StageEstimate {
     && cacheReadUsd !== null && outputUsd !== null;
   const priced = economy === "metered-usd";
 
+  // The SAME call the brake makes (`runNext.stageRemainingWork`) and `budget
+  // show`'s `est.` column makes, with the same inputs. An operator told one
+  // number by a refusal and a different one by this command would rightly trust
+  // neither — which is exactly the state #21 was filed about.
+  const work = remainingWork({
+    runDir: store.runDir,
+    phaseId,
+    stageBudgetUsd: stage.budget_usd,
+    stageSpentUsd: stage.cost_usd,
+    perAgentMaxUsd: store.budget.per_agent_max_usd,
+    // No `--max-usd` here: this command spawns nothing, so there is no per-turn
+    // ceiling of its own to fold in. `run auto --max-usd` narrows the brake, not
+    // the report of what is left.
+    maxUsd: null,
+    economy,
+  });
+
   return {
     run: store.run.run,
     phase: phaseId,
@@ -166,6 +238,8 @@ export function estimateNextStage(root: string, runId?: string): StageEstimate {
     historyBasis: basis,
     sampleSize: history.length,
     economy,
+    remaining: work,
+    runRemaining: runRemainingOf(store, phaseId, stageId, work),
     usd: complete
       ? round((inputUsd ?? 0) + (cacheWriteUsd ?? 0) + (cacheReadUsd ?? 0) + (outputUsd ?? 0))
       : null,
@@ -174,6 +248,39 @@ export function estimateNextStage(root: string, runId?: string): StageEstimate {
     cacheReadUsd: priced && cacheReadUsd !== null ? round(cacheReadUsd) : null,
     outputUsd: priced && outputUsd !== null ? round(outputUsd) : null,
   };
+}
+
+/**
+ * The run-level roll-up: the stages that are not terminal, and what they cost.
+ *
+ * `isTerminal` is the same predicate `run status` counts its bars with, so a
+ * stage this excludes is one that screen already shows as finished. The cursor
+ * stage's contribution is `remaining.usd` when the plan gave a narrower answer
+ * than `budget_usd` — that is the one stage this process knows more about than
+ * the Plan did, and using the wider number there would put the run-level figure
+ * at odds with the stage-level one printed two lines above it.
+ */
+function runRemainingOf(
+  store: RunStore,
+  phaseId: string,
+  stageId: string,
+  work: RemainingWork,
+): RunRemaining {
+  const stages: string[] = [];
+  let staticUsd = 0;
+  let usd = 0;
+  let done = 0;
+  for (const entry of flatten(store.run)) {
+    if (isTerminal(entry.stage.status)) {
+      done += 1;
+      continue;
+    }
+    stages.push(`${entry.phase.id}/${entry.stage.id}`);
+    staticUsd += entry.stage.budget_usd;
+    const isCursor = entry.phase.id === phaseId && entry.stage.id === stageId;
+    usd += isCursor && work.basis === "plan" ? work.usd : entry.stage.budget_usd;
+  }
+  return { stages, done, staticUsd: round(staticUsd), usd: round(usd) };
 }
 
 export function renderEstimate(estimate: StageEstimate): string {
@@ -193,6 +300,7 @@ export function renderEstimate(estimate: StageEstimate): string {
   } else {
     lines.push(basisLine(estimate), breakdown(estimate));
   }
+  lines.push(...remainingLines(estimate));
   if (estimate.economy === "host-tokens") {
     lines.push(
       `ESTIMATE: ${ktok(estimate.promptTokens)} input `
@@ -223,6 +331,39 @@ export function renderEstimate(estimate: StageEstimate): string {
     );
   }
   return lines.join("\n");
+}
+
+/**
+ * What is LEFT — the half of the question the token medians do not answer.
+ *
+ * Two lines minimum: what this STAGE still has to pay for, and what the RUN still
+ * has to run. The stage half only shows the arithmetic when there IS arithmetic
+ * to show — on a `static` basis it is one number the stage file already carries,
+ * and printing "remaining work: $6.00" for it would dress a declared estimate up
+ * as a measurement.
+ */
+function remainingLines(estimate: StageEstimate): readonly string[] {
+  const work = estimate.remaining;
+  const run = estimate.runRemaining;
+  const lines: string[] = [];
+  if (work.basis === "plan") {
+    lines.push(renderRemainingWork(work), ...remainingWorkContext(work).map((line) => `  ${line}`));
+  } else {
+    lines.push(
+      `this stage is priced at $${work.staticUsd.toFixed(2)} \u2014 its declared budget_usd, `
+      + "which is what it is until a plan gives something narrower to measure",
+    );
+  }
+  if (run.stages.length === 0) {
+    lines.push(`still to run: nothing \u2014 every stage of this run is terminal`);
+    return lines;
+  }
+  lines.push(
+    `still to run: ${String(run.stages.length)} stage(s) \u2014 ${run.stages.join(", ")} `
+    + `\u00b7 $${run.usd.toFixed(2)} priced`
+    + (run.done === 0 ? "" : ` (${String(run.done)} already terminal, excluded)`),
+  );
+  return lines;
 }
 
 /** Names the sample the three medians came from — never leaves it to be assumed. */

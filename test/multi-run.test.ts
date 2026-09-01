@@ -240,6 +240,10 @@ const SINGLE_RUN_KEYS = [
   // `attended_by` (§2.2): null on an ordinary run, `host` when a host session is
   // driving it. Appended, not inserted, for the third time and the same reason.
   "attended_by",
+  // `operator_notes` (issue #46): what a person wrote on this run with `tldrx
+  // note`, `[]` on a run nobody has annotated. Appended, not inserted, for the
+  // fourth time and the same reason.
+  "operator_notes",
 ];
 
 describe("tldrx run status with several runs open", () => {
