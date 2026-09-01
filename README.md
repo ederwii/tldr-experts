@@ -257,6 +257,12 @@ Design docs: [`docs/concept.md`](docs/concept.md) (why) · [`docs/spec.md`](docs
 open decisions) · [`docs/ROADMAP.md`](docs/ROADMAP.md) (next) · [`CHANGELOG.md`](CHANGELOG.md) (shipped) ·
 [`docs/dashboard-model.md`](docs/dashboard-model.md).
 
+Contributing: **[`CONTRIBUTING.md`](CONTRIBUTING.md)** — the loop a change goes through, the four gates
+and what CI actually runs, the red-first test rules, and
+[how to contribute a model-provider config](CONTRIBUTING.md#contributing-a-model-provider-config)
+(the `TLDRX_CLAUDE_BIN` seam, the `stream-json` transcript contract, and what a generic provider
+would have to supply).
+
 ## Releases and status tags
 
 Install name is **`tldr-experts`**; it installs two commands, **`tldrx`** (short) and `tldr-experts` (same binary).

@@ -74,7 +74,10 @@ import {
   IMPLICIT_PLAN_REL, IMPLICIT_STORY_ID, IMPLICIT_STORY_NOTE,
 } from "../../build/implicitPlan.ts";
 import { evidenceFor, updateStoryFront } from "../../build/storyFile.ts";
-import { buildDeveloperPrompt, buildReviewerPrompt, REVIEW_SCHEMA } from "../../build/prompts.ts";
+import {
+  buildDeveloperPrompt, buildReviewerPrompt, REVIEW_SCHEMA, type RecurringClass,
+} from "../../build/prompts.ts";
+import { workspaceRecurring } from "../../retro/reviewerFocus.ts";
 import {
   looksLikeReviewerError, parseReview, renderPreviousAttempt, renderReviewLog, reviewerFailed, type Review,
 } from "../../build/review.ts";
@@ -1968,6 +1971,9 @@ class BuildSession {
    */
   private reviewerPrompt(story: StoryContext, dod: readonly DodResult[]): string {
     return buildReviewerPrompt({
+      // What this workspace's own reviews keep finding (#74). Empty on a workspace
+      // with no history, which renders no section at all.
+      recurring: this.recurringClasses(),
       runId: this.ctx.runId,
       story: story.planned,
       repoName: story.planned.story.repo,
@@ -1982,6 +1988,32 @@ class BuildSession {
       // one a spawn would have sent.
       fixlistAvailable: this.fixlistRoundsSpent(story.planned.story.id) < MAX_FIXLIST_ROUNDS,
     });
+  }
+
+  /**
+   * The workspace's recurring finding classes, mined ONCE per invocation (#74).
+   *
+   * Once, not per story, for two reasons. It reads every artefact of every run in
+   * the workspace, and a wave of six stories would pay that six times. And every
+   * reviewer in one invocation should be primed with the SAME prior — an
+   * aggregate that shifted between story three and story four would make two
+   * reviews incomparable for a reason neither log records.
+   *
+   * `workspaceRecurring` never throws: the worst case is no prior. A refused
+   * `finding-classes.yml` is said out loud here rather than swallowed, because a
+   * team editing a file that has silently stopped being read is the failure this
+   * whole feature exists to end.
+   */
+  private recurring: readonly RecurringClass[] | null = null;
+
+  private recurringClasses(): readonly RecurringClass[] {
+    if (this.recurring !== null) return this.recurring;
+    const focus = workspaceRecurring(this.ctx.root);
+    if (focus.error !== null) {
+      this.lines.push(`  \u00b7 reviewer focus skipped \u2014 ${focus.error}`);
+    }
+    this.recurring = focus.classes;
+    return this.recurring;
   }
 
   /**

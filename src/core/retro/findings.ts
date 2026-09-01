@@ -29,33 +29,16 @@ import { BUILD_PHASE, LOG_DIR } from "../build/plan.ts";
 import { FIXLIST_DIR, parseFixlistFile, type Disposition } from "../build/fixlist.ts";
 import { BUILD_RETRO_SECTION, RETRO_FILE } from "../build/retroLog.ts";
 import { RETRO_SECTIONS } from "./renderRetro.ts";
+import { OTHER, RULED_CLASSES, type BuiltinFindingClass, type FindingClass } from "./taxonomy.ts";
+import { loadExtraClasses, type ExtraClass } from "./findingClasses.ts";
 
 /**
- * The taxonomy. Small on purpose, and ORDERED: the classifier takes the first
- * rule that matches, so this list is also the precedence.
- *
- * The order is by how specific the evidence is, not by how much the class
- * matters. `test-cannot-fail` and `missing-negative-control` fire on phrases that
- * mean one thing only. `authorization-not-widened` sits below `stale-comment`
- * deliberately: the S5 finding that produced both classes — "a false security
- * comment beside a non-constant-time compare" — is a defect IN THE COMMENT, and a
- * security keyword appearing anywhere in a sentence would otherwise swallow every
- * finding that mentions auth in passing.
- *
- * `other` is last and matches everything. It is a real answer, not a failure:
- * a table where `other` dominates is telling you the taxonomy is too small, which
- * is a finding about this command rather than about the runs.
+ * The taxonomy lives in `taxonomy.ts` — a leaf both this file and the workspace
+ * extension validator can import without importing each other. Re-exported here
+ * because every existing caller reads it from this module.
  */
-export const FINDING_CLASSES = [
-  "test-cannot-fail",
-  "missing-negative-control",
-  "unreachable-structure",
-  "stale-comment",
-  "authorization-not-widened",
-  "schema-drift",
-  "other",
-] as const;
-export type FindingClass = (typeof FINDING_CLASSES)[number];
+export { FINDING_CLASSES, OTHER, RULED_CLASSES } from "./taxonomy.ts";
+export type { BuiltinFindingClass, FindingClass } from "./taxonomy.ts";
 
 /** Where one mined line came from. The kind is kept because it is evidence too. */
 export type FindingKind =
@@ -93,6 +76,13 @@ export interface ClassTrend {
 
 export interface AllRetro {
   readonly root: string;
+  /**
+   * The effective taxonomy, in precedence order: the built-ins, then whatever
+   * `.tldrx/memory/finding-classes.yml` added, then `other`. Carried on the
+   * report so a consumer reading `trends[].cls` knows the full set it is ranking
+   * over, including names this framework has never heard of.
+   */
+  readonly classes: readonly string[];
   /** Every run folder read, newest first. */
   readonly runs: readonly string[];
   /** The subset that yielded at least one finding. */
@@ -110,7 +100,7 @@ export interface AllRetro {
  * how a reviewer actually phrases the thing, not on the class name: nobody has
  * ever written "unreachable-structure" in a finding.
  */
-const RULES: readonly (readonly [FindingClass, readonly RegExp[]])[] = [
+const RULES: readonly (readonly [BuiltinFindingClass, readonly RegExp[]])[] = [
   ["test-cannot-fail", [
     /cannot fail/i,
     /can(?:no|')t fail/i,
@@ -165,14 +155,31 @@ const RULES: readonly (readonly [FindingClass, readonly RegExp[]])[] = [
   ]],
 ];
 
-/** The first rule that matches, else `other`. Deterministic; no model runs. */
-export function classify(text: string): FindingClass {
+/**
+ * The first rule that matches, else `other`. Deterministic; no model runs.
+ *
+ * Workspace rules are tried AFTER every built-in one and before `other`, so an
+ * extension can only ever claim a finding that would otherwise be unclassified.
+ * That is what keeps an unbounded taxonomy testable: nothing a workspace writes
+ * can move a finding the shipped fixtures pin.
+ */
+export function classify(text: string, extra: readonly ExtraClass[] = []): FindingClass {
   for (const [cls, patterns] of RULES) {
     for (const pattern of patterns) {
       if (pattern.test(text)) return cls;
     }
   }
-  return "other";
+  for (const cls of extra) {
+    for (const pattern of cls.rules) {
+      if (pattern.test(text)) return cls.name;
+    }
+  }
+  return OTHER;
+}
+
+/** The effective taxonomy for a given extension set — `classify`'s own order. */
+export function taxonomyOf(extra: readonly ExtraClass[] = []): readonly string[] {
+  return [...RULED_CLASSES, ...extra.map((cls) => cls.name), OTHER];
 }
 
 // --- mining one run ----------------------------------------------------------
@@ -214,7 +221,9 @@ const VERDICT_RE = /^-\s+Verdict:\s+\*\*([a-z-]+)\*\*/;
  * with dispositions attached — mining the summary there would count them twice
  * with the routing thrown away.
  */
-function fromReviewLog(run: string, rel: string, text: string): readonly MinedFinding[] {
+function fromReviewLog(
+  run: string, rel: string, text: string, extra: readonly ExtraClass[],
+): readonly MinedFinding[] {
   const lines = text.split("\n");
   const found: MinedFinding[] = [];
   let verdict = "";
@@ -237,12 +246,12 @@ function fromReviewLog(run: string, rel: string, text: string): readonly MinedFi
       // The first prose line under the heading is the reviewer's sentence; the
       // rest of the section elaborates it and would be counted as second findings.
       if (!found.some((item) => item.kind === "verdict")) {
-        found.push(mined(run, "verdict", raw.trim(), src(run, rel, line)));
+        found.push(mined(run, "verdict", raw.trim(), src(run, rel, line), extra));
       }
       continue;
     }
     if (section === "Findings" && raw.startsWith("- ") && raw.trim() !== "- none") {
-      found.push(mined(run, "review-finding", raw.slice(2).trim(), src(run, rel, line)));
+      found.push(mined(run, "review-finding", raw.slice(2).trim(), src(run, rel, line), extra));
     }
   }
   return found;
@@ -266,7 +275,9 @@ function fixlistHeadingLines(text: string): ReadonlyMap<number, number> {
  * were disproven would make the table a report on the reviewer's mistakes rather
  * than on the code's, so refutations are read and dropped.
  */
-function fromFixlist(run: string, rel: string, text: string): readonly MinedFinding[] {
+function fromFixlist(
+  run: string, rel: string, text: string, extra: readonly ExtraClass[],
+): readonly MinedFinding[] {
   const headings = fixlistHeadingLines(text);
   const found: MinedFinding[] = [];
   for (const finding of parseFixlistFile(text)) {
@@ -274,7 +285,7 @@ function fromFixlist(run: string, rel: string, text: string): readonly MinedFind
     if (disposition === "refuted") continue;
     const kind: FindingKind = disposition === "defer-with-log" ? "deferred" : "fixlist";
     found.push(mined(
-      run, kind, finding.finding, src(run, rel, headings.get(finding.n) ?? 1),
+      run, kind, finding.finding, src(run, rel, headings.get(finding.n) ?? 1), extra,
       `${finding.finding} ${finding.where} ${finding.detail}`,
     ));
   }
@@ -284,7 +295,7 @@ function fromFixlist(run: string, rel: string, text: string): readonly MinedFind
 /** The H2s of `retro.md` this reads. Practice proposals are process, and count too. */
 const RETRO_SECTIONS_MINED: readonly string[] = [BUILD_RETRO_SECTION, RETRO_SECTIONS[1]];
 
-function fromRetro(run: string, text: string): readonly MinedFinding[] {
+function fromRetro(run: string, text: string, extra: readonly ExtraClass[]): readonly MinedFinding[] {
   const found: MinedFinding[] = [];
   let inside = false;
   for (const [index, raw] of text.split("\n").entries()) {
@@ -294,7 +305,7 @@ function fromRetro(run: string, text: string): readonly MinedFinding[] {
       continue;
     }
     if (!inside || !raw.startsWith("- ")) continue;
-    found.push(mined(run, "retro-bullet", raw.slice(2).trim(), src(run, RETRO_FILE, index + 1)));
+    found.push(mined(run, "retro-bullet", raw.slice(2).trim(), src(run, RETRO_FILE, index + 1), extra));
   }
   return found;
 }
@@ -307,7 +318,7 @@ function fromRetro(run: string, text: string): readonly MinedFinding[] {
  * whole point of this command is that a broken artefact costs the aggregate that
  * artefact and nothing more.
  */
-function fromEvents(run: string, text: string): readonly MinedFinding[] {
+function fromEvents(run: string, text: string, extra: readonly ExtraClass[]): readonly MinedFinding[] {
   const found: MinedFinding[] = [];
   for (const [index, raw] of text.split("\n").entries()) {
     if (raw.trim() === "") continue;
@@ -320,7 +331,7 @@ function fromEvents(run: string, text: string): readonly MinedFinding[] {
     if (event.type !== "story.reopened") continue;
     const note = typeof event.payload?.note === "string" ? event.payload.note.trim() : "";
     if (note === "") continue;
-    found.push(mined(run, "reopen", note, src(run, "events.jsonl", index + 1)));
+    found.push(mined(run, "reopen", note, src(run, "events.jsonl", index + 1), extra));
   }
   return found;
 }
@@ -340,14 +351,15 @@ function withoutSrc(text: string): string {
 }
 
 function mined(
-  run: string, kind: FindingKind, text: string, source: string, classifyOn?: string,
+  run: string, kind: FindingKind, text: string, source: string,
+  extra: readonly ExtraClass[], classifyOn?: string,
 ): MinedFinding {
   return {
     run,
     kind,
     text: oneLine(withoutSrc(text)),
     src: source,
-    cls: classify(withoutSrc(classifyOn ?? text)),
+    cls: classify(withoutSrc(classifyOn ?? text), extra),
   };
 }
 
@@ -372,7 +384,9 @@ function dedupKey(text: string): string {
 const MIN_DEDUP_KEY = 20;
 
 /** One run's findings, in source order, with same-run repeats collapsed. */
-export function mineRun(root: string, run: string): { findings: readonly MinedFinding[]; deduped: number } {
+export function mineRun(
+  root: string, run: string, extra: readonly ExtraClass[] = [],
+): { findings: readonly MinedFinding[]; deduped: number } {
   const dir = runDir(root, run);
   const logDir = join(dir, BUILD_PHASE, LOG_DIR);
   const fixDir = join(dir, BUILD_PHASE, FIXLIST_DIR);
@@ -381,17 +395,17 @@ export function mineRun(root: string, run: string): { findings: readonly MinedFi
   for (const entry of listFiles(logDir)) {
     const rel = `${BUILD_PHASE}/${LOG_DIR}/${entry}`;
     const text = readText(join(logDir, entry));
-    if (text !== null) candidates.push(...fromReviewLog(run, rel, text));
+    if (text !== null) candidates.push(...fromReviewLog(run, rel, text, extra));
   }
   for (const entry of listFiles(fixDir)) {
     const rel = `${BUILD_PHASE}/${FIXLIST_DIR}/${entry}`;
     const text = readText(join(fixDir, entry));
-    if (text !== null) candidates.push(...fromFixlist(run, rel, text));
+    if (text !== null) candidates.push(...fromFixlist(run, rel, text, extra));
   }
   const retro = readText(join(dir, RETRO_FILE));
-  if (retro !== null) candidates.push(...fromRetro(run, retro));
+  if (retro !== null) candidates.push(...fromRetro(run, retro, extra));
   const events = readText(join(dir, "events.jsonl"));
-  if (events !== null) candidates.push(...fromEvents(run, events));
+  if (events !== null) candidates.push(...fromEvents(run, events, extra));
 
   const kept: MinedFinding[] = [];
   const keys: string[] = [];
@@ -416,26 +430,39 @@ function overlaps(a: string, b: string): boolean {
 
 // --- the aggregate -----------------------------------------------------------
 
-export function mineAll(root: string): AllRetro {
+/**
+ * Every run, mined under the workspace's own taxonomy.
+ *
+ * The extension file is read ONCE here rather than per run, and a bad one throws
+ * `FindingClassesError` before a single artefact is opened — half an aggregate
+ * computed under a taxonomy the operator does not have is worse than a refusal.
+ * `extra` is injectable so a test can hold a taxonomy without a file.
+ */
+export function mineAll(root: string, extra?: readonly ExtraClass[]): AllRetro {
+  const classes = extra ?? loadExtraClasses(root);
   const runs = listRuns(root);
   const findings: MinedFinding[] = [];
   const contributed: string[] = [];
   let deduped = 0;
 
   for (const run of runs) {
-    const mined = mineRun(root, run);
+    const mined = mineRun(root, run, classes);
     deduped += mined.deduped;
     if (mined.findings.length === 0) continue;
     contributed.push(run);
     findings.push(...mined.findings);
   }
-  return { root, runs, contributed, findings, deduped, trends: trendsOf(findings) };
+  const taxonomy = taxonomyOf(classes);
+  return {
+    root, classes: taxonomy, runs, contributed, findings, deduped,
+    trends: trendsOf(findings, taxonomy),
+  };
 }
 
 /** Ranked by count, ties broken by the taxonomy's own order — never by chance. */
-function trendsOf(findings: readonly MinedFinding[]): readonly ClassTrend[] {
+function trendsOf(findings: readonly MinedFinding[], taxonomy: readonly string[]): readonly ClassTrend[] {
   const trends: ClassTrend[] = [];
-  for (const cls of FINDING_CLASSES) {
+  for (const cls of taxonomy) {
     const of = findings.filter((finding) => finding.cls === cls);
     if (of.length === 0) continue;
     trends.push({
@@ -446,7 +473,7 @@ function trendsOf(findings: readonly MinedFinding[]): readonly ClassTrend[] {
     });
   }
   return trends.sort((a, b) =>
-    b.count - a.count || FINDING_CLASSES.indexOf(a.cls) - FINDING_CLASSES.indexOf(b.cls));
+    b.count - a.count || taxonomy.indexOf(a.cls) - taxonomy.indexOf(b.cls));
 }
 
 function oneLine(text: string): string {

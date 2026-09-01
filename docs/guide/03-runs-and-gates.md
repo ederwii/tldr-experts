@@ -631,3 +631,9 @@ Writes nothing.
 `[src: tldrx-work/<run>/events.jsonl:<line>]`) and **Proposed stages**. No model runs.
 `--apply` appends the proposals to `.tldrx/memory/practices.md` under a dated, run-stamped
 heading, idempotently.
+
+`tldrx retro --all` is the other direction: it reads EVERY run and writes nothing, ranking the
+finding classes this team keeps producing. `--json` is the machine shape of that aggregate, the
+top three classes are injected into every Build reviewer prompt, and
+`.tldrx/memory/finding-classes.yml` adds classes for defects the seven built-in ones do not name.
+All three in [8 CLI reference](08-cli-reference.md#tldrx-retro).

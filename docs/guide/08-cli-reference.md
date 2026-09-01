@@ -713,7 +713,7 @@ Close a run and write down what it learned — or, with `--all`, what every run 
 
 ```
 tldrx retro [<run-id>] [--apply] [--root <path>]
-tldrx retro --all [--root <path>]
+tldrx retro --all [--json] [--root <path>]
 ```
 
 No model runs. `--apply` also appends the practice proposals to `.tldrx/memory/practices.md`,
@@ -736,7 +736,9 @@ authorization-not-widened      3     1  "The tenant filter is not applied to the
 ```
 
 Seven classes, in this precedence: `test-cannot-fail`, `missing-negative-control`,
-`unreachable-structure`, `stale-comment`, `authorization-not-widened`, `schema-drift`, `other`.
+`unreachable-structure`, `stale-comment`, `authorization-not-widened`, `schema-drift`, `other`
+— plus whatever `.tldrx/memory/finding-classes.yml` adds (below), which slot in just before
+`other`.
 Classification is **ordered keyword rules over the finding text** — no model, no scoring — so
 the same tree always gives the same table and a rule that misfires can be pointed at. `other`
 is a real row: a table it dominates says the taxonomy is too small.
@@ -757,6 +759,124 @@ Four properties are the contract:
 
 `--all` is refused (exit `1`) alongside a `<run-id>` or `--apply`: each asks for the opposite of
 what `--all` does, and the refusal happens before a file is opened.
+
+### `--all --json` — the machine shape
+
+`--json` belongs to `--all` alone. Closing one run **writes** `retro.md` and reports the path;
+there is nothing there to parse, so `tldrx retro --json` without `--all` is a refusal (exit `1`)
+rather than a stringified sentence.
+
+The shape is a deliberate projection, not a dump of an internal type, and its key set is asserted
+literally by a test — adding a field is a visible act, removing or renaming one bumps `version`:
+
+```json
+{
+  "version": 1,
+  "root": "/abs/path/to/workspace",
+  "runs": ["260830-tenancy"],
+  "contributed": ["260830-tenancy"],
+  "deduped": 0,
+  "classes": ["test-cannot-fail", "...", "other"],
+  "trends": [
+    {
+      "cls": "authorization-not-widened",
+      "count": 2,
+      "runs": ["260830-tenancy"],
+      "example": {
+        "run": "260830-tenancy",
+        "kind": "review-finding",
+        "text": "The tenant filter is not applied to the read model, so one tenant can list another's rows.",
+        "src": "[src: tldrx-work/260830-tenancy/04-build/log/S5.md:13]"
+      }
+    }
+  ],
+  "findings": [
+    {
+      "run": "260830-tenancy",
+      "kind": "review-finding",
+      "cls": "authorization-not-widened",
+      "text": "The tenant filter is not applied to the read model, so one tenant can list another's rows.",
+      "src": "[src: tldrx-work/260830-tenancy/04-build/log/S5.md:13]"
+    }
+  ]
+}
+```
+
+`trends` is the ranked table. `findings` is every mined row — the table has no use for them, an
+expert trainer does. `classes` is the effective taxonomy in precedence order, so a consumer
+reading `cls` knows the full set it is ranking over, extensions included. `kind` is one of
+`verdict`, `review-finding`, `fixlist`, `deferred`, `retro-bullet`, `reopen`. Nothing is written,
+and a refusal writes nothing to stdout at all — never half a document.
+
+### The reviewer is fed this
+
+The Build phase's adversarial reviewer prompt carries the **top three** classes (never `other`)
+before it reads the diff, so a review starts from what this team keeps getting wrong instead of
+rediscovering `test-cannot-fail` on its own, run after run:
+
+```
+## What this team keeps getting wrong
+
+This workspace's own history — `tldrx retro --all` over every run in it — ranks these
+as the finding classes its reviews keep producing. Check for them specifically, and
+check for them first: they are where the evidence says this team's defects are.
+
+- `authorization-not-widened` — 2 finding(s) across 1 run(s)
+  e.g. "The tenant filter is not applied to the read model, so one tenant can list another's rows."
+  [src: tldrx-work/260830-tenancy/04-build/log/S5.md:13]
+
+It is a prior, not a checklist. A diff clean of all of them is clean, and saying so is
+the right answer; finding one is not automatically `changes` — the Rules below still
+decide that. Never write a finding you cannot cite in the diff.
+```
+
+It is computed by the same `mineAll` over the same workspace, so **what the reviewer is told is
+exactly the top of what `tldrx retro --all` prints** — run it to see what your reviewers are being
+primed with. It is additive and absent-safe in every direction: no runs, no findings, nothing but
+`other`, or a `finding-classes.yml` that will not load, and there is no section at all — not a
+heading, not a blank line. The aggregate is mined once per `tldrx next` invocation, so every
+reviewer in one invocation gets the same prior and a wave of six stories pays for it once.
+
+### `.tldrx/memory/finding-classes.yml` — extending the taxonomy
+
+The seven built-in classes are a closed set on purpose: keyword rules are only trustworthy because
+they are tested against fixtures. But a team whose repeated defect is not one of the seven got
+`other` and no way to say so. This file is that way.
+
+```yaml
+version: 1
+classes:
+  - name: flaky-timing
+    rules:
+      - "flaky"
+      - "timing[- ]dependent"
+      - "sleep\("
+  - name: n-plus-one
+    rules:
+      - "n\+1"
+      - "query in a loop"
+```
+
+- `version: 1`, like every other data file this framework reads.
+- `classes:` — 1 to 16 entries, each `{name, rules}`. `name` is lowercase letters, digits and
+  hyphens, 2–40 characters (it is a table heading and a JSON key). `rules` is 1 to 16 strings,
+  each a JavaScript regular expression, compiled case-insensitively like every built-in rule.
+- **Extensions are tried AFTER every built-in rule and before `other`.** A workspace class can
+  therefore only ever claim a finding the built-ins left unclassified. It cannot re-label
+  `test-cannot-fail`, which is what keeps an unbounded taxonomy testable — the shipped fixtures
+  are immune to whatever any workspace writes here.
+- **No file is the normal case**, and costs nothing. A file that exists and will not load is a
+  **refusal** (exit `1`) naming the file, the class index, the class and what is wrong with it —
+  never a silent fallback to the built-ins, because a rule its author believes is running and is
+  not would make every count a lie. Refused, with examples: not a mapping · no `version: 1` ·
+  no `classes:` · an empty list · a name that is not a slug · a name that shadows a built-in ·
+  a name declared twice · no rules · a rule that is not a string · a rule that is not a valid
+  regular expression · a rule such as `.*` that matches every text, including the empty string,
+  and so would swallow every unclassified finding.
+
+The Build reviewer never fails on this file: a refusal costs the prior and prints
+`reviewer focus skipped — …` on the invocation's output, so a team editing a file that has stopped
+being read finds out, and no story loses an attempt to a YAML typo.
 
 ## `tldrx drive`
 

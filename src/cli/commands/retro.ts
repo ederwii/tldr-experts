@@ -9,6 +9,12 @@
  * EVERY run in the workspace and writes nothing at all. The two are refused
  * together rather than composed, because they disagree about the two things that
  * matter — how many runs are in scope, and whether anything is written.
+ *
+ * `--json` (#74) belongs to `--all` alone. There is no per-run machine shape to
+ * print — `tldrx retro <run>` WRITES a file and reports what it wrote — so
+ * `--json` without `--all` is a refusal rather than a stringified sentence. A
+ * script told the output is parseable when it is prose is worse off than one
+ * told no.
  */
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -18,18 +24,31 @@ import { RunStore } from "../../core/run/RunStore.ts";
 import { renderAmbiguous } from "../resolveRun.ts";
 import { resolveWorkspaceRoot } from "../../core/experts/index.ts";
 import { listRuns, loadRun } from "../../core/replay/index.ts";
-import { applyPractices, buildRetro, mineAll, renderTrends, RETRO_FILE } from "../../core/retro/index.ts";
+import {
+  applyPractices, buildRetro, mineAll, renderTrends, toAllRetroJson,
+  FindingClassesError, RETRO_FILE,
+} from "../../core/retro/index.ts";
 
 export const retroCommand: Command = {
   name: "retro",
   summary: "Close a run and capture what was learned",
   usage: "tldrx retro [<run-id>] [--apply] [--root <path>]\n"
-    + "tldrx retro --all [--root <path>]",
+    + "tldrx retro --all [--json] [--root <path>]",
   subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const root = resolveWorkspaceRoot(option(argv, "--root"));
     const named = positional(argv);
+    const json = argv.includes("--json");
+
+    if (json && !argv.includes("--all")) {
+      process.stderr.write(
+        "tldrx retro: --json is defined for --all only — the cross-run aggregate is the"
+        + " machine shape. Closing one run WRITES retro.md and reports the path; there is"
+        + " nothing there to parse.\n",
+      );
+      return EXIT_USAGE;
+    }
 
     if (argv.includes("--all")) {
       // Both refusals happen before a single file is opened. `--all --apply` in
@@ -48,7 +67,22 @@ export const retroCommand: Command = {
         );
         return EXIT_USAGE;
       }
-      process.stdout.write(`${renderTrends(mineAll(root))}\n`);
+      // The mine can refuse: `.tldrx/memory/finding-classes.yml` is the one input
+      // to this command a person edits by hand. It is caught HERE rather than at
+      // the top level so the message arrives as this command's own refusal —
+      // exit 1, stderr, and not one byte on stdout, so `--json` never emits half
+      // a document a consumer would try to parse.
+      let report;
+      try {
+        report = mineAll(root);
+      } catch (error) {
+        if (!(error instanceof FindingClassesError)) throw error;
+        process.stderr.write(`tldrx retro: ${error.message}\n`);
+        return EXIT_USAGE;
+      }
+      process.stdout.write(json
+        ? `${JSON.stringify(toAllRetroJson(report), null, 2)}\n`
+        : `${renderTrends(report)}\n`);
       return EXIT_OK;
     }
 
