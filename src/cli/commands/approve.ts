@@ -123,11 +123,19 @@ function readAgentEvidence(root: string, store: RunStore, override: string | und
   }
   const policy = gatePolicyFor(store.run.gates_policy, entry.stage.id);
   if (policy !== "agent") {
+    // Two routes out, and naming only one of them was the bug: `--gates` is chosen
+    // at `run new` and frozen there, so it told an operator mid-run to throw the
+    // run away. The delegated approve works on the run in front of them (gh #19).
+    const note = evidencePath(store.runDir, entry.stage.id);
     process.stderr.write(
       `tldrx approve: --as-agent refused — ${entry.phase.id}/${entry.stage.id} is a \`${policy}\` gate, `
         + "not an `agent` one. A run keeps the policy it was opened with; a flag that upgraded one at "
-        + "approve time would make the frozen policy decorative. Approve it as yourself, or open the run "
-        + `with \`--gates ${entry.stage.id}:agent\`.\n`,
+        + "approve time would make the frozen policy decorative.\n"
+        + "Two ways on, and neither needs this run recreated:\n"
+        + "  · delegated approve — read the agent's evidence note yourself, then sign as you: "
+        + `tldrx approve --note "delegated: <agent> reviewed this, evidence at ${relative(root, note)}". `
+        + `The gate stays \`${policy}\`, the note carries the provenance, and the verdict is a person's.\n`
+        + `  · or open the NEXT run with \`--gates ${entry.stage.id}:agent\` — the policy is chosen there.\n`,
     );
     return { kind: "stop", exit: EXIT_USAGE };
   }

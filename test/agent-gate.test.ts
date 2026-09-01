@@ -674,6 +674,35 @@ describe("approve --as-agent", () => {
     expect(stageOf(ws.runDir)?.gate.status).toBe("pending");
   });
 
+  /**
+   * gh #19 — the refusal named ONE way out, and it was the expensive one: a
+   * `--gates` policy is frozen at `run new`, so "open the run with
+   * `--gates alpha:agent`" means recreating a run already in flight. The cheap
+   * way out works today and the message never mentioned it: a person reads the
+   * agent's evidence note and signs it themselves, carrying the provenance in
+   * `--note`. Found across the 2026-08-30/31 unattended pilots.
+   */
+  test("the refusal also offers the delegated approve, which needs no new run", async () => {
+    const ws = workspace({ alpha: "human", beta: "human" });
+    expect((await next(ws)).code).toBe(4);
+    writeNote(ws.runDir, "alpha", note());
+
+    const printed = capture();
+    const exit = await approveCommand.run(["--root", ws.root, "--as-agent"]);
+    const said = printed();
+
+    expect(exit).toBe(1);
+    // The delegated pattern, spelled as a command a person can paste.
+    expect(said.err).toContain("tldrx approve --note");
+    expect(said.err).toContain("delegated:");
+    // And it says the note is what carries the provenance, so the reader knows
+    // why the prefix matters rather than copying a magic word.
+    expect(said.err.toLowerCase()).toContain("evidence");
+    // The old escape hatch is still named — this ADDS a route, it removes none.
+    expect(said.err).toContain("--gates alpha:agent");
+    expect(stageOf(ws.runDir)?.gate.status).toBe("pending");
+  });
+
   test("--evidence reads the note from somewhere else", async () => {
     const ws = await parked(null);
     const elsewhere = join(ws.runDir, "elsewhere.md");

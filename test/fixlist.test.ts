@@ -557,6 +557,109 @@ describe("parseReview and the third verdict", () => {
       .toBe("approve");
     expect(parseReview("not an object", "fallback")).toEqual({
       verdict: "changes", summary: "fallback", findings: [], fixlist: [], fixlistProblems: [],
+      // No envelope carried no verdict: the summary already says what happened,
+      // so there is no second sentence to add (gh #36).
+      verdictProblem: null,
     });
+  });
+});
+
+/**
+ * gh #36 — the review handshake, measured on `260831-hardening-d1` / S1
+ * (2026-08-31). Two grammars coexist (gate evidence `sign|sign-with-fixlist|refuse`,
+ * story review `approve|fixlist|changes`) and the host-facing hint named neither.
+ * The host wrote `verdict: "sign"`; `parseReview` fail-closed it to `changes`
+ * SILENTLY, which spent the story's second verdict and blocked it. Separately, the
+ * attempt-1 reviewer's seven rich `{severity,file,line,claim,evidence,fix}`
+ * findings were filtered out by a `typeof f === "string"` test: the verdict
+ * survived, the evidence did not.
+ *
+ * Fail-closed stays. Silent does not.
+ */
+describe("an unrecognized verdict is NAMED, not swallowed (#36)", () => {
+  test("`sign` — the gate vocabulary — is still `changes`, and says so in words", () => {
+    const review = parseReview({ verdict: "sign", summary: "the diff is clean", findings: [] }, "");
+    expect(review.verdict).toBe("changes");
+    expect(review.verdictProblem).toContain("sign");
+    expect(review.verdictProblem).toContain("approve|fixlist|changes");
+  });
+
+  test("the problem rides in `findings`, so the log and the next attempt both carry it", () => {
+    const review = parseReview({ verdict: "sign", summary: "", findings: ["one real finding"] }, "");
+    expect(review.findings).toContain("one real finding");
+    expect(review.findings.some((f) => f.includes("sign"))).toBe(true);
+  });
+
+  test("a verdict inside the enum carries no problem at all", () => {
+    for (const verdict of ["approve", "changes"]) {
+      const review = parseReview({ verdict, summary: "ok", findings: [] }, "");
+      expect(review.verdictProblem).toBeNull();
+    }
+    expect(parseReview({ verdict: "fixlist", summary: "s", findings: [], fixlist: THREE_DEFECTS }, "").verdictProblem)
+      .toBeNull();
+  });
+
+  test("an envelope with NO verdict key is named too — that is not a silent `changes`", () => {
+    const review = parseReview({ summary: "looks fine to me", findings: [] }, "");
+    expect(review.verdict).toBe("changes");
+    expect(typeof review.verdictProblem).toBe("string");
+    expect(review.verdictProblem).toContain("approve|fixlist|changes");
+  });
+
+  test("a declared `fixlist` that fell to `changes` is NOT reported as an unknown verdict", () => {
+    // `fixlistProblems` already says that one out loud; two sentences for one
+    // downgrade would read as two different faults.
+    const review = parseReview({ verdict: "fixlist", summary: "signed", findings: [] }, "");
+    expect(review.verdict).toBe("changes");
+    expect(review.verdictProblem).toBeNull();
+    expect(review.fixlistProblems[0]).toContain("missing or is not an array");
+  });
+});
+
+describe("structured findings are stringified, never dropped (#36)", () => {
+  const RICH = {
+    severity: "high",
+    file: "src/core/build/review.ts",
+    line: 74,
+    claim: "the string filter drops every structured finding",
+    evidence: "seven objects in, zero strings out",
+    fix: "stringify severity + file:line + claim",
+  };
+
+  test("a {severity,file,line,claim} object survives with its parts in the text", () => {
+    const review = parseReview({ verdict: "changes", summary: "s", findings: [RICH] }, "");
+    expect(review.findings).toHaveLength(1);
+    const only = review.findings[0] ?? "";
+    expect(only).toContain("high");
+    expect(only).toContain("src/core/build/review.ts:74");
+    expect(only).toContain("the string filter drops every structured finding");
+  });
+
+  test("the live run's seven all survive — the count is the whole point", () => {
+    const seven = Array.from({ length: 7 }, (_, i) => ({ ...RICH, line: i + 1, claim: `defect ${String(i + 1)}` }));
+    const review = parseReview({ verdict: "changes", summary: "s", findings: seven }, "");
+    expect(review.findings).toHaveLength(7);
+    expect(review.findings.every((f) => f.includes("defect "))).toBe(true);
+  });
+
+  test("plain strings still pass through unchanged, and blanks are still dropped", () => {
+    const review = parseReview({ verdict: "changes", summary: "s", findings: ["a", "   ", "b"] }, "");
+    expect(review.findings).toEqual(["a", "b"]);
+  });
+
+  test("an object with no field this recognizes is kept as JSON rather than lost", () => {
+    const review = parseReview({ verdict: "changes", summary: "s", findings: [{ wat: 1 }] }, "");
+    expect(review.findings).toHaveLength(1);
+    expect(review.findings[0]).toContain("wat");
+  });
+
+  test("a `findings` that is not an array is kept as one finding, not emptied", () => {
+    const review = parseReview({ verdict: "changes", summary: "s", findings: "the whole thing as prose" }, "");
+    expect(review.findings).toEqual(["the whole thing as prose"]);
+  });
+
+  test("no findings at all is still no findings", () => {
+    expect(parseReview({ verdict: "approve", summary: "s", findings: [] }, "").findings).toEqual([]);
+    expect(parseReview({ verdict: "approve", summary: "s" }, "").findings).toEqual([]);
   });
 });

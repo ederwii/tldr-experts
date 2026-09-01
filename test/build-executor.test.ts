@@ -825,6 +825,8 @@ describe("reading a review off the ledger", () => {
         findings: [],
         fixlist: [],
         fixlistProblems: [],
+        // A reviewer that never answered declared no verdict to misread (gh #36).
+        verdictProblem: null,
       });
     expect(reviewerFailed(null).summary).toBe("the reviewer sub-agent failed");
     expect(reviewerFailed("  ").verdict).toBe("error");

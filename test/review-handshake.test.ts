@@ -512,3 +512,56 @@ describe("the live run's shape", () => {
     expect(spawns(ws)).toEqual([]);
   }, 60_000);
 });
+
+/**
+ * gh #36 — `260831-hardening-d1` / S1, 2026-08-31. The hint said only "write
+ * {verdict, summary, findings}". The host, holding the GATE vocabulary from
+ * `gate template`, wrote `"verdict": "sign"`. `parseReview` fail-closed it to
+ * `changes` and said nothing, so a clean fix-list verification round read as a
+ * second `changes`, the story went `blocked`, and it took a `story reopen` to
+ * record the verdict that had been intended all along.
+ *
+ * Fail-closed is right and stays. The two things that were wrong: the contract
+ * was never stated, and the downgrade was never announced.
+ */
+describe("the verdict enum is stated and an unknown one is announced (#36)", () => {
+  test("--prepare's hint names the enum, not just the field names", async () => {
+    const ws = workspace();
+    await stallAtReview(ws);
+    const prepared = await next(ws, { mode: "prepare", at: "2026-08-29T10:05:00Z" });
+
+    const said = prepared.lines.join("\n");
+    expect(said).toContain("approve | fixlist | changes");
+  }, 60_000);
+
+  test("the attended hand-over line names the enum too", async () => {
+    const ws = workspace(TWO_WAVES);
+    attendRun({ root: ws.root, attendedBy: "host", actor: "alan", at: "2026-08-29T08:00:00Z" });
+    await next(ws, { mode: "prepare" });
+    writeFileSync(join(ws.root, ".tldrx", "worktrees", "app", `${ws.runId}-S1`, "s1.txt"), "host\n", "utf8");
+    writeFileSync(
+      join(ws.runDir, ".agent", "build", "S1", "result.json"),
+      JSON.stringify({ outputs: ["s1.txt"], questions_asked: [], notes: "", cost_usd: 0 }),
+      "utf8",
+    );
+    const committed = await next(ws, { mode: "commit", at: "2026-08-29T09:30:00Z" });
+
+    expect(committed.lines.join("\n")).toContain("approve | fixlist | changes");
+  }, 60_000);
+
+  test("a host `sign` verdict is still `changes` — and the run SAYS the word it read", async () => {
+    const ws = workspace();
+    await stallAtReview(ws);
+    await next(ws, { mode: "prepare", at: "2026-08-29T10:05:00Z" });
+
+    answerReview(ws, "S1", { verdict: "sign", summary: "the diff is clean", findings: [] });
+    const committed = await next(ws, { mode: "commit", review: true, at: "2026-08-29T10:20:00Z" });
+
+    // Fail-closed, unchanged.
+    expect(events(ws).filter((e) => e.payload.check === "review").at(-1)?.payload.verdict).toBe("changes");
+    // Loud, and attributable: the operator can see WHICH word was not understood.
+    const said = committed.lines.join("\n");
+    expect(said).toContain("sign");
+    expect(said).toContain("approve|fixlist|changes");
+  }, 60_000);
+});
