@@ -47,6 +47,26 @@
 
 ### Added
 
+- **The documentation site speaks Spanish (`docs-site/es/`, phase 2).** All twelve English pages are
+  now mirrored under `/es/` at the same paths and translated into es-MX developer Spanish, and
+  `locales.es.themeConfig` carries the Spanish sidebar, nav, edit link and page chrome (outline,
+  prev/next, search modal, footer) rather than English chrome around Spanish prose. The placeholder
+  that phase 1 left at `/es/` is replaced by the translated landing page.
+  - **tldrx's own vocabulary stays in English where it is an identifier.** The stage names
+    (`What → How → Plan → Build → Watch`), `run`, `story`, `DoD`, `scope`, `handoff` and `workspace`
+    are the things you type or the files on disk, so they are not translated; each is glossed once in
+    Spanish where it first appears. `gate` is the one exception — it renders as **compuerta**, because
+    the phase-1 placeholder had already shipped that word to the live site.
+  - **Code blocks and command output are verbatim English** — a translated transcript would be a
+    transcript of a command nobody ran. The narration around them is translated.
+  - **Anchors were verified against the rendered HTML, not assumed**, because dead-link checking does
+    not see them. That mattered here: VitePress's slugifier strips accents but *keeps* `¿`, so
+    `## ¿Cómo lo detengo?` becomes `id="¿como-lo-detengo"`. The one heading that is linked to carries
+    an explicit `{#puedo-manejarlo-desde-claude-code}`. A sweep of the built site resolves all 5
+    anchor links across its 26 pages, 0 broken.
+  - **Release notes are deliberately not translated**: the page is generated from `CHANGELOG.md` at
+    build time, so a Spanish copy would drift. The `/es/` sidebar links the English page and says so.
+
 - **A public documentation site, written for people who have never seen tldrx (`docs-site/`, phase 1).**
   A VitePress site deployed to GitHub Pages by `.github/workflows/docs.yml` on any push to `main` that
   touches `docs-site/` or `CHANGELOG.md`. Twelve short English pages — a landing page, a Quickstart, one
@@ -319,6 +339,18 @@
 - **`tldrx cost` no longer claims "two economies" over one (#56).** The `(no total: two economies, no
   exchange rate)` footnote was unconditional, so a run whose every attempt was metered in dollars was
   told no total could be printed. It is printed only when both economies are actually present.
+
+- **The README's "Not on npm yet" warning was false and told readers not to run the install line
+  directly underneath it.** The package IS published: `npm view tldr-experts version` → `0.3.1`,
+  exit 0. The warning is removed rather than re-dated — the npm badge at the top of the README
+  already shows the live version, so nothing in its place can go stale the same way. The
+  `npm i -g tldr-experts` line it was contradicting is unchanged.
+
+- **The site's own home page linked an anchor that does not exist.** The hero's "Try it offline,
+  free" button pointed at `/quickstart#try-the-whole-thing-first-for-free`, but the heading renders
+  as `id="first-try-it-for-free"` — verified against the LIVE page, not just a local build. Dead-link
+  checking never saw it because VitePress does not check fragments. Repointed, and a sweep of the
+  built site now resolves every anchor link it emits.
 
 - **`tickets sync`, `tickets status` and `budget show` took a run id as a positional that neither
   their `usage` nor their `--help` declared (#53).** Measured at `7ac298c`:
