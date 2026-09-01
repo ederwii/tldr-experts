@@ -265,17 +265,23 @@ describe("tldrx next refuses to spawn", () => {
   });
 
   /**
-   * `--dry-run` is `mode: "headless"`. It spawns a REAL sub-agent and bills for
-   * it, and only reverts the FILES afterwards — so it is refused with everything
-   * else, and the message says why rather than leaving the operator to find out.
+   * `--dry-run` is `mode: "headless"`, so it is refused with everything else —
+   * but the REASON changed with issue #17. It used to spawn a real sub-agent and
+   * bill for it, reverting only the files afterwards; it spawns nothing now. It
+   * is refused because it describes a dispatch the framework will never make on
+   * an attended run, and the message points at the half that IS useful here.
    */
-  test("`--dry-run` is refused too, and says it spawns for real", async () => {
+  test("`--dry-run` is refused too, and no longer claims it spawns for real", async () => {
     const ws = workspace();
     attend(ws.runDir, ws.root);
     fakeClaude(ws);
     const outcome = await next(ws, { dryRun: true });
     expect(outcome.code).toBe(4);
-    expect(outcome.lines.join("\n")).toContain("--dry-run is headless too");
+    const said = outcome.lines.join("\n");
+    expect(said).toContain("--dry-run is headless too");
+    expect(said).toContain("it spawns nothing");
+    expect(said).not.toContain("spawns a real sub-agent");
+    expect(said).toContain("--prepare");
     expect(spawns(ws.runDir)).toBe(0);
   });
 

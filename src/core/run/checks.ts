@@ -265,7 +265,7 @@ async function checkCommand(check: PlannedCheck, ctx: CheckContext): Promise<Che
   if (check.command === null || check.repo === null) {
     return { id: "cmd", status: "failed", detail: "a `cmd` check needs both `repo` and `command`" };
   }
-  const ran = await runAllowlisted(check.command, check.repo, check.expect_exit, ctx);
+  const ran = await runAllowlisted(check.command, check.repo, check.expect_exit, ctx, ctx.stage.timeout_s);
   return { id: "cmd", status: ran.ok ? "passed" : "failed", detail: ran.detail };
 }
 
@@ -276,6 +276,13 @@ export interface CommandRun {
   readonly exitCode: number | null;
   readonly ms: number;
   readonly detail: string;
+  /**
+   * True only when the clock killed it — as opposed to a refusal, an unknown
+   * repo, or a wrong exit code, which also leave `exitCode` null. A caller that
+   * rewrites the timeout message (`runPrecondition` does) needs to tell those
+   * apart without reading prose.
+   */
+  readonly timedOut: boolean;
 }
 
 /**
@@ -286,39 +293,55 @@ export interface CommandRun {
  * before it. They share this body on purpose: the allowlist comparison, the
  * argv-split-never-a-shell rule and the timeout are the safety properties, and a
  * second copy of them is a second place for one of the three to go missing.
+ *
+ * The one thing they do NOT share is the clock (issue #20). A `cmd` check runs
+ * the stage's work and gets the stage's `timeout_s`; a precondition asks a
+ * liveness question before the work and gets its own, much shorter one. So the
+ * seconds are a parameter here rather than read off `ctx.stage`.
  */
 async function runAllowlisted(
   command: string,
   repo: string,
   expectExit: number,
   ctx: CheckContext,
+  timeoutS: number,
 ): Promise<CommandRun> {
   const workspace = loadWorkspace(ctx.root);
   const refusal = allowlistIssue(command, workspace.commands, "stage");
-  if (refusal !== null) return { ok: false, exitCode: null, ms: 0, detail: refusal };
+  if (refusal !== null) return { ok: false, exitCode: null, ms: 0, detail: refusal, timedOut: false };
   const cwd = repoPath(workspace, repo);
   if (cwd === null) {
-    return { ok: false, exitCode: null, ms: 0, detail: `unknown repo \`${repo}\` (not in workspace.yml)` };
+    return {
+      ok: false, exitCode: null, ms: 0, timedOut: false,
+      detail: `unknown repo \`${repo}\` (not in workspace.yml)`,
+    };
   }
   const argv = command.split(/\s+/).filter((part) => part !== "");
   const head = argv[0];
-  if (head === undefined) return { ok: false, exitCode: null, ms: 0, detail: "empty command" };
+  if (head === undefined) return { ok: false, exitCode: null, ms: 0, detail: "empty command", timedOut: false };
 
   const started = Date.now();
-  const outcome = await runtime.spawn(head, argv.slice(1), { cwd, timeoutMs: ctx.stage.timeout_s * 1000 });
+  const outcome = await runtime.spawn(head, argv.slice(1), { cwd, timeoutMs: timeoutS * 1000 });
   const ms = Date.now() - started;
   if (outcome.timedOut) {
-    return { ok: false, exitCode: null, ms, detail: `\`${command}\` in ${repo} timed out after ${ctx.stage.timeout_s}s` };
+    return {
+      ok: false, exitCode: null, ms, timedOut: true,
+      detail: `\`${command}\` in ${repo} timed out after ${String(timeoutS)}s`,
+    };
   }
   if (outcome.exitCode !== expectExit) {
     return {
       ok: false,
       exitCode: outcome.exitCode,
       ms,
+      timedOut: false,
       detail: `\`${command}\` in ${repo} exited ${outcome.exitCode} (expected ${expectExit}) — ${lastLine(outcome.stdout, outcome.stderr)}`,
     };
   }
-  return { ok: true, exitCode: outcome.exitCode, ms, detail: `\`${command}\` in ${repo} exited ${outcome.exitCode}` };
+  return {
+    ok: true, exitCode: outcome.exitCode, ms, timedOut: false,
+    detail: `\`${command}\` in ${repo} exited ${outcome.exitCode}`,
+  };
 }
 
 /** One precondition's result — `CommandRun` plus the id and command that produced it. */
@@ -343,8 +366,28 @@ export async function runPrecondition(
   precondition: PlannedPrecondition,
   ctx: CheckContext,
 ): Promise<PreconditionOutcome> {
-  const ran = await runAllowlisted(precondition.command, precondition.repo, precondition.expect_exit, ctx);
-  return { ...ran, id: precondition.id, repo: precondition.repo, command: precondition.command };
+  const ran = await runAllowlisted(
+    precondition.command, precondition.repo, precondition.expect_exit, ctx, precondition.timeout_s,
+  );
+  return {
+    ...ran,
+    // A hung precondition is the failure this whole feature exists to catch, so
+    // its message names the precondition, its own clock, and the knob that
+    // changes it — never the stage's `timeout_s`, which is the number that used
+    // to apply here and the reason a dead daemon could cost half an hour
+    // (issue #20).
+    detail: ran.timedOut ? timeoutDetail(precondition) : ran.detail,
+    id: precondition.id,
+    repo: precondition.repo,
+    command: precondition.command,
+  };
+}
+
+function timeoutDetail(precondition: PlannedPrecondition): string {
+  return `precondition \`${precondition.id}\`: \`${precondition.command}\` in ${precondition.repo} `
+    + `timed out after ${String(precondition.timeout_s)}s and was killed. Preconditions have their own clock — `
+    + `the stage's \`timeout_s\` never applies to one. Raise it with \`timeout_s:\` on this precondition, `
+    + "or fix whatever the command is waiting for.";
 }
 
 function lastLine(stdout: string, stderr: string, max = 160): string {

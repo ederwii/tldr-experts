@@ -31,7 +31,7 @@ import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { loadWorkflowPreset, PresetError } from "../src/core/run/workflowPreset.ts";
 import { runPrecondition } from "../src/core/run/checks.ts";
 import { loadStageSpec } from "../src/core/facilitator/stageSpec.ts";
-import { validateStage, MAX_PRECONDITIONS } from "../src/core/schemas/stage.ts";
+import { validateStage, MAX_PRECONDITIONS, PRECONDITION_TIMEOUT_S } from "../src/core/schemas/stage.ts";
 import {
   allowlistIssue, noAllowlistMessage, notDeclaredMessage,
 } from "../src/core/schemas/commandAllowlist.ts";
@@ -43,6 +43,7 @@ import {
   cannedHandoff, cannedIntent, makeFacilitatorWorkspace,
   type FacilitatorWorkspace, type StageOptions,
 } from "./fixtures/facilitator/workspace.ts";
+import { WORKSPACE_YML } from "./fixtures/tempRunWorkspace.ts";
 
 const ORIGINAL_PATH = process.env.PATH ?? "";
 const FAKE_KEYS = [
@@ -490,4 +491,98 @@ describe("a stage that declares none is what shipped", () => {
     expect(outcome.lines.some((l) => l.includes("precondition"))).toBe(false);
     expect(events(ws).some((e) => e.payload.kind === "precondition")).toBe(false);
   }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// The timeout (issue #20) — preconditions get their OWN, much shorter clock
+// ---------------------------------------------------------------------------
+
+/**
+ * A precondition used to inherit the stage's `timeout_s`, which ships at 900 and
+ * runs to 1800 on Build. So a single hung command — `docker info` against a dead
+ * daemon is the measured case — could park a run for half an hour: exactly the
+ * waste the feature exists to prevent, taken by the guard rather than by the
+ * attempt.
+ *
+ * A precondition is a liveness question. Its answer is worth a second or two,
+ * never a stage's worth of wall clock, so it gets a clock of its own —
+ * `PRECONDITION_TIMEOUT_S`, overridable per precondition with `timeout_s:` — and
+ * the message that comes back says which precondition hung, because that is the
+ * one thing the operator needs and the stage's own timeout message cannot say.
+ */
+describe("preconditions have their own timeout, not the stage's", () => {
+  /** A workspace whose `api` repo declares a command that hangs. */
+  function hangingWorkspace(preconditions: string, stageTimeoutS: number): FacilitatorWorkspace {
+    const made = makeFacilitatorWorkspace({
+      scope: "demo",
+      budgetUsd: 10,
+      stages: [{
+        id: "alpha", phase: "01-what", budgetUsd: 6, gate: "auto",
+        outputs: [{ path: "01-what/handoff.md" }],
+        preconditions,
+        timeoutS: stageTimeoutS,
+      }],
+      files: { ".tldrx/workspace.yml": WORKSPACE_YML.replace(`build: "true"`, `build: "sleep 30"`) },
+    });
+    open.push(made);
+    return made;
+  }
+
+  test("the shipped default is a fraction of a stage's, and it is what a precondition gets", () => {
+    // The number itself is the point of the issue: 900–1800 s was the bug.
+    expect(PRECONDITION_TIMEOUT_S).toBeGreaterThan(0);
+    expect(PRECONDITION_TIMEOUT_S).toBeLessThanOrEqual(120);
+
+    const ws = workspace(GREEN);
+    const preset = loadWorkflowPreset(ws.root, "demo");
+    const alpha = preset.stages.find((s) => s.id === "alpha");
+    expect(alpha?.timeout_s).toBe(60);
+    expect(alpha?.preconditions[0]?.timeout_s).toBe(PRECONDITION_TIMEOUT_S);
+  });
+
+  test("`timeout_s:` on the precondition overrides it, and the refusal NAMES the precondition", async () => {
+    const ws = hangingWorkspace(`[{id: docker, repo: api, command: "sleep 30", timeout_s: 1}]`, 900);
+    const log = fakeClaude(ws);
+
+    const started = Date.now();
+    const outcome = await next(ws);
+    const elapsed = Date.now() - started;
+
+    // The whole issue: the stage's 900 s never applied, and neither did the 30 s
+    // the command would have taken on its own.
+    expect(elapsed).toBeLessThan(15_000);
+    expect(outcome.code).toBe(2);
+    const said = outcome.lines.join("\n");
+    expect(said).toContain("precondition `docker`");
+    expect(said).toContain("timed out after 1s");
+    // Refused, not failed: nothing spawned, nothing spent, the stage untouched.
+    expect(existsSync(log)).toBe(false);
+    expect(stageStatus(ws)).toBe("pending");
+
+    const recorded = events(ws).filter((e) => e.payload.kind === "precondition");
+    expect(recorded[0]?.type).toBe("check.failed");
+    expect(recorded[0]?.payload.exit_code).toBeNull();
+  }, 60_000);
+
+  test("a `timeout_s` that is not a positive number is refused AT LOAD", () => {
+    for (const bad of ["0", "-1", `"soon"`]) {
+      const ws = workspace(GREEN);
+      setPreconditions(ws, "alpha", `[{id: docker, repo: api, command: "true", timeout_s: ${bad}}]`);
+      expect(() => loadWorkflowPreset(ws.root, "demo")).toThrow("timeout_s");
+    }
+  });
+
+  test("`validateStage` accepts `timeout_s` and rejects a non-number", () => {
+    const base = {
+      name: "alpha", title: "Alpha", phase: 1, inputs: [], outputs: [], experts: [],
+      model: "sonnet", budget_usd: 1, gate: { type: "none" },
+    };
+    expect(validateStage({ ...base, preconditions: [{ id: "d", repo: "api", command: "true", timeout_s: 5 }] }).ok)
+      .toBe(true);
+    const bad = validateStage({
+      ...base, preconditions: [{ id: "d", repo: "api", command: "true", timeout_s: "soon" }],
+    });
+    expect(bad.ok).toBe(false);
+    expect(bad.issues.some((i) => i.path === "preconditions[0].timeout_s")).toBe(true);
+  });
 });

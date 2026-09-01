@@ -18,6 +18,23 @@ export interface RunCursor {
   readonly task: string | null;
 }
 
+/**
+ * One `tasks[]` row, in the only three fields a budget decision needs (issue #22).
+ *
+ * They are what `tldrx next --commit` writes for an IN-SESSION turn: `cost_usd:
+ * null` + `metered: false` when nobody costed it, and `tokens:` when the host
+ * declared a figure with `--tokens`. Skipping `tasks[]` entirely — which this
+ * reader did — meant a run driven by a host session read as `$0.00` spent, which
+ * is true of the dollars and says nothing about what actually happened.
+ */
+export interface RunTaskView {
+  readonly cost_usd: number | null;
+  /** False when this turn's cost is unmetered. Absent in run.yml means metered. */
+  readonly metered: boolean;
+  /** Host-session tokens the host declared, or null when it declared none. */
+  readonly tokens: number | null;
+}
+
 export interface RunStage {
   readonly id: string;
   readonly status: string;
@@ -25,6 +42,7 @@ export interface RunStage {
   readonly budget_usd: number | null;
   /** What the stage has metered so far — the reviewer floor's own clamp needs it. */
   readonly cost_usd: number | null;
+  readonly tasks: readonly RunTaskView[];
 }
 
 export interface RunPhaseView {
@@ -40,6 +58,14 @@ export interface RunView {
   readonly scope: string;
   readonly status: string;
   readonly updated_at: string;
+  /**
+   * `attended_by:` verbatim (spec §2.2), or null when the run carries none.
+   *
+   * Read rather than assumed since issue #22. Both consumers of this view make a
+   * claim about spending — the `budget-gate` hook and the status line — and
+   * "nobody is driving this run" and "I did not look" are not the same answer.
+   */
+  readonly attended_by: string | null;
   readonly cursor: RunCursor | null;
   readonly phases: readonly RunPhaseView[];
 }
@@ -76,6 +102,7 @@ export function loadRunView(runDir: string): RunView | null {
             expert: typeof s?.expert === "string" ? s.expert : null,
             budget_usd: typeof s?.budget_usd === "number" ? s.budget_usd : null,
             cost_usd: typeof s?.cost_usd === "number" ? s.cost_usd : null,
+            tasks: tasksOf(s?.tasks),
           });
         }
       }
@@ -89,9 +116,82 @@ export function loadRunView(runDir: string): RunView | null {
     scope: str(doc.scope),
     status: str(doc.status),
     updated_at: str(doc.updated_at),
+    attended_by: typeof doc.attended_by === "string" && doc.attended_by !== "" ? doc.attended_by : null,
     cursor,
     phases,
   };
+}
+
+function tasksOf(value: unknown): readonly RunTaskView[] {
+  if (!Array.isArray(value)) return [];
+  return (value as Record<string, unknown>[]).map((task) => ({
+    cost_usd: typeof task?.cost_usd === "number" ? task.cost_usd : null,
+    // Absent means metered: every run.yml written before the flag existed, and
+    // every headless spawn, whose cost is a reconciled `total_cost_usd`.
+    metered: task?.metered !== false,
+    tokens: typeof task?.tokens === "number" ? task.tokens : null,
+  }));
+}
+
+/** `attended_by: host` — a host session drives this run and nothing here spawns. */
+export function isAttendedByHostView(view: RunView): boolean {
+  return view.attended_by === "host";
+}
+
+/** What a run has spent, in BOTH currencies, plus what nobody costed (issue #22). */
+export interface RunSpend {
+  /** Dollars this process metered. A LOWER BOUND whenever `unmeteredTasks > 0`. */
+  readonly meteredUsd: number;
+  /** Host-session tokens declared with `--tokens`. Never converted to dollars. */
+  readonly hostTokens: number;
+  /** In-session turns whose cost nobody declared at all. */
+  readonly unmeteredTasks: number;
+}
+
+/**
+ * The two economies, side by side and never added together.
+ *
+ * There is no exchange rate between a metered dollar and a host token, and
+ * inventing one would be a guess about a price — which is the whole reason the
+ * `economy:` label exists (design §E.2, `budget/RunBudget.ts`). So this returns
+ * both numbers and lets the reader hold them apart.
+ */
+export function runSpend(view: RunView): RunSpend {
+  let meteredUsd = 0;
+  let hostTokens = 0;
+  let unmeteredTasks = 0;
+  for (const phase of view.phases) {
+    for (const stage of phase.stages) {
+      for (const task of stage.tasks) {
+        if (task.cost_usd !== null) meteredUsd += task.cost_usd;
+        if (!task.metered || task.cost_usd === null) unmeteredTasks += 1;
+        if (task.tokens !== null) hostTokens += task.tokens;
+      }
+    }
+  }
+  return { meteredUsd: Math.round(meteredUsd * 100) / 100, hostTokens, unmeteredTasks };
+}
+
+/**
+ * One line saying that the dollar figure is not the whole spend — or null when it
+ * is, in which case nothing is printed and every existing message is unchanged.
+ *
+ * This is the whole of issue #22's user-visible half: a budget decision may still
+ * only enforce dollars, but the operator reading it is entitled to know that
+ * `$0.00` was measured on a run whose turns a host session paid for.
+ */
+export function renderRunEconomies(view: RunView): string | null {
+  const spend = runSpend(view);
+  const attended = isAttendedByHostView(view);
+  if (spend.hostTokens === 0 && spend.unmeteredTasks === 0 && !attended) return null;
+  const parts = [`$${spend.meteredUsd.toFixed(2)} metered`];
+  if (spend.hostTokens > 0) parts.push(`${String(spend.hostTokens)} host tokens`);
+  if (spend.unmeteredTasks > 0) {
+    parts.push(`${String(spend.unmeteredTasks)} unmetered turn${spend.unmeteredTasks === 1 ? "" : "s"}`);
+  }
+  const who = attended ? " (attended_by: host — the framework does not spawn on this run)" : "";
+  return `spend so far: ${parts.join(" + ")}${who}. `
+    + "The dollar figure is METERED spend only; host tokens are a different currency and are never converted.";
 }
 
 export function isTerminal(status: string): boolean {

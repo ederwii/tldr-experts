@@ -308,19 +308,79 @@ describe("failure", () => {
   });
 });
 
+/**
+ * `--dry-run` (issue #17).
+ *
+ * It used to RUN the stage — one real `claude -p`, one `agent.spawned`, one
+ * `agent.result`, the cost on the ledger (measured $0.42 on the 2026-08-30
+ * pilot) — and then revert the non-handoff files. A flag named "dry run" that
+ * calls a paid model is a cost bug however it is documented, and `tldrx --help`
+ * had already been written the other way round ("Spawns nothing and writes
+ * nothing").
+ *
+ * So it spawns nothing now. It assembles the prompt, prices it, and prints what
+ * WOULD be dispatched: the bundle, the prompt size, and the exact command. The
+ * proof that it does not spawn is `FAKE_CLAUDE_ARGV_LOG` — the fake `claude`
+ * appends one line per invocation, so the file's ABSENCE is the assertion.
+ */
 describe("--dry-run", () => {
-  test("keeps the handoff, reverts everything else and marks the stage skipped", async () => {
+  test("spawns nothing: the fake `claude` is never invoked, and no cost is recorded", async () => {
+    const ws = workspace(TWO_STAGE);
+    const argvLog = join(ws.root, "argv.log");
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS, FAKE_CLAUDE_ARGV_LOG: argvLog });
+
+    const outcome = await next(ws, { dryRun: true });
+    expect(outcome.code).toBe(0);
+    // The whole issue, in one line: nothing ran the binary.
+    expect(existsSync(argvLog)).toBe(false);
+    expect(types(ws)).not.toContain("agent.spawned");
+    expect(types(ws)).not.toContain("agent.result");
+
+    const store = RunStore.open(ws.runDir);
+    expect(store.run.phases[0]?.stages[0]?.cost_usd).toBe(0);
+    expect(store.budget.phases[0]?.spent_usd).toBe(0);
+  });
+
+  test("writes nothing and leaves the stage exactly where it was", async () => {
+    const ws = workspace(TWO_STAGE);
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS });
+    const before = RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.status;
+
+    const outcome = await next(ws, { dryRun: true });
+    expect(outcome.code).toBe(0);
+    // No stage output, and no prompt bundle either: a dry run leaves no bundle
+    // for a later `--commit` to mistake for a prepared turn.
+    expect(existsSync(join(ws.runDir, "01-what", "handoff.md"))).toBe(false);
+    expect(existsSync(join(ws.runDir, "01-what", "intent.md"))).toBe(false);
+    expect(existsSync(join(ws.runDir, ".agent", "alpha", "prompt.md"))).toBe(false);
+    expect(existsSync(join(ws.runDir, ".agent", "alpha", "pending.json"))).toBe(false);
+
+    const store = RunStore.open(ws.runDir);
+    expect(store.run.phases[0]?.stages[0]?.status).toBe(before);
+    expect(types(ws)).not.toContain("stage.started");
+    expect(types(ws)).not.toContain("stage.skipped");
+  });
+
+  test("shows what WOULD be dispatched: the bundle, the prompt size and the command", async () => {
     const ws = workspace(TWO_STAGE);
     fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS });
 
     const outcome = await next(ws, { dryRun: true });
-    expect(outcome.code).toBe(0);
-    expect(existsSync(join(ws.runDir, "01-what", "handoff.md"))).toBe(true);
-    expect(existsSync(join(ws.runDir, "01-what", "intent.md"))).toBe(false);
-
-    const store = RunStore.open(ws.runDir);
-    expect(store.run.phases[0]?.stages[0]?.status).toBe("skipped");
-    expect(types(ws)).toContain("stage.skipped");
+    const said = outcome.lines.join("\n");
+    expect(said).toContain("dry run: nothing was spawned and nothing was written");
+    expect(said).toContain("would dispatch 01-what/alpha");
+    // The context ledger — which is where the prompt size lives — is printed on a
+    // dry run exactly as it is on a `--prepare`.
+    expect(said).toMatch(/context \d+ B of /);
+    expect(said).toMatch(/prompt: \d+ B/);
+    // The command, verbatim enough to recognise — with the schema blob elided.
+    expect(said).toContain("claude -p --output-format stream-json --verbose");
+    expect(said).toContain("--max-budget-usd");
+    expect(said).toContain("<envelope-schema>");
+    // The outputs the sub-agent would have been allowed to write.
+    expect(said).toContain("01-what/handoff.md");
+    // And the way to actually do it.
+    expect(said).toContain("--prepare");
   });
 
   test("is refused when the stage sets dry_run_allowed: false", async () => {
@@ -896,20 +956,25 @@ describe("a stage whose declared outputs are patterns", () => {
     expect(beta.lines.join("\n")).toContain("requires 1 input(s) that do not exist: 01-what/stories/<id>.md");
   });
 
-  test("--dry-run reverts every file a pattern matched, and names them", async () => {
+  /**
+   * A pattern output is a SHAPE, not a file, and on a dry run no file exists yet
+   * to resolve it against. So the dispatch report names the declared pattern —
+   * `01-what/stories/<id>.md` — which is exactly what the sub-agent would be told
+   * it may write. Nothing is written either way (issue #17).
+   */
+  test("--dry-run names the declared outputs, patterns included, and writes none of them", async () => {
     const ws = workspace(PATTERN_STAGES);
     fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: PLAN_OUTPUTS });
 
     const outcome = await next(ws, { dryRun: true });
     expect(outcome.code).toBe(0);
     const said = outcome.lines.join("\n");
+    expect(said).toContain("01-what/stories/<id>.md");
+    expect(said).toContain("01-what/epics/<epic>.md");
     for (const id of ["S1", "S2", "S3"]) {
-      expect(said).toContain(`01-what/stories/${id}.md`);
       expect(existsSync(join(ws.runDir, "01-what", "stories", `${id}.md`))).toBe(false);
     }
-    expect(said).toContain("01-what/epics/E1.md");
-    expect(said).not.toContain("<id>.md");
-    // The handoff is the one thing a dry run keeps (spec §5).
-    expect(existsSync(join(ws.runDir, "01-what", "handoff.md"))).toBe(true);
+    expect(existsSync(join(ws.runDir, "01-what", "epics", "E1.md"))).toBe(false);
+    expect(existsSync(join(ws.runDir, "01-what", "handoff.md"))).toBe(false);
   });
 });

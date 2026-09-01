@@ -12,7 +12,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { RunStore } from "../run/RunStore.ts";
 import { isAttendedByHost, isTerminal } from "../run/RunFile.ts";
-import { openRunViews, cursorStage } from "../../hooks/lib/runFile.ts";
+import { openRunViews, cursorStage, isAttendedByHostView } from "../../hooks/lib/runFile.ts";
 import { openQuestionIds, phaseDirs } from "../facilitator/skipIf.ts";
 
 export type SnapshotSource = "run-store" | "tolerant";
@@ -136,9 +136,11 @@ function fromTolerantRead(root: string): RunSnapshot | null {
     // gate was auto-signed.
     autoGates: 0,
     staleStages: 0,
-    // Same rule as `autoGates`: the tolerant reader does not parse it, and false
-    // here means "cannot see", never a claim that the run is unattended.
-    attendedByHost: false,
+    // Read for real since issue #22. It used to be hard-coded `false` with a
+    // comment saying so — but a run.yml that fails §2.2 validation is exactly
+    // when an operator is staring at the status line wondering why `tldrx next`
+    // did nothing, and `attended_by:` is a top-level scalar this reader can see.
+    attendedByHost: isAttendedByHostView(view),
     source: "tolerant",
   };
 }

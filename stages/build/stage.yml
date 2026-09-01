@@ -22,7 +22,8 @@ model: sonnet
 effort: high
 budget_usd: 9
 timeout_s: 1800
-# Branches and commits are not revertible by a flag, so a dry run is refused
+# A stage that cuts branches and fans out per-story sub-agents has no ONE dispatch to
+# describe, so a dry run is refused
 # rather than half-honoured (spec §5, Build executor).
 dry_run_allowed: false
 

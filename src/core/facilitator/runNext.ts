@@ -50,7 +50,7 @@ import {
   describeBundles, loadExpertBundles, untrainedNotes, type ExpertBundleSet,
 } from "../experts/expertBundle.ts";
 import { nearbyPathsFor } from "../experts/domainRank.ts";
-import { spawnAgent } from "./spawnAgent.ts";
+import { describeSpawn, spawnAgent } from "./spawnAgent.ts";
 import { withAttendedGuard } from "./attended.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
 import { validateOutputs, describeProblems } from "./validateOutputs.ts";
@@ -453,6 +453,34 @@ async function runStage(
   }
   const advisories = [...untrainedNotes(assembled.bundles), ...renderContextWarning(ledger)];
 
+  // --- dry run (issue #17) -------------------------------------------------
+  // The LAST thing that happens on a dry run, and it happens HERE: after the
+  // prompt is assembled and priced — so the report is about the real bundle, not
+  // a guess at one — and before `writeBundle`, before `stage.started`, before
+  // the spawn. Nothing is written and nothing is spent.
+  //
+  // It used to run the stage for real and revert the non-handoff files
+  // afterwards: one `claude -p`, one `agent.spawned`, one `agent.result`, $0.42
+  // on the 2026-08-30 pilot's ledger. `tldrx next --help` had said "Spawns
+  // nothing and writes nothing" the whole time; this is the code catching up to
+  // the promise, rather than the promise being watered down to the code.
+  if (options.dryRun) {
+    return out(EXIT_OK, [
+      ...notes,
+      ...dryRunReport(store, options, phaseId, stageId, {
+        outputs: expandAll(spec.planned.outputs, store.run.repos),
+        promptBytes: byteLength(prompt),
+        cap, model, effort, maxReads,
+        command: describeSpawn({
+          prompt, model, effort, maxBudgetUsd: cap,
+          workspaceCommands: [...loadWorkspace(options.root).commands],
+          yolo: options.yolo, cwd: options.root,
+          timeoutMs: spec.planned.timeout_s * 1000, maxReads,
+        }),
+      }),
+    ], advisories);
+  }
+
   const pending: PendingStage = {
     version: 1,
     run: store.runId,
@@ -638,8 +666,11 @@ function bundleSummary(set: ExpertBundleSet): PendingStage["experts"] {
  * a pipeline that has already merged. The review bundle is checked first because
  * it is the more specific fact.
  *
- * `--dry-run` is refused with everything else: it is `mode: "headless"`, it
- * spawns a real sub-agent and bills for it, and only reverts the FILES afterwards.
+ * `--dry-run` is refused with everything else, but no longer because it costs
+ * anything: since issue #17 it spawns nothing. It is refused because it is
+ * `mode: "headless"` and describes a dispatch the framework will never make on
+ * this run — the useful rehearsal here is `--prepare`, which writes the bundle
+ * the host is actually going to carry.
  */
 function attendedRefusal(
   store: RunStore,
@@ -662,7 +693,8 @@ function attendedRefusal(
     `${store.runId} is attended_by: host — the framework does not spawn on this run.`,
     `  ${phaseId}/${stageId} ${waiting}: tldrx next ${half} ${store.runId}`,
     ...(options.dryRun
-      ? ["  (--dry-run is headless too: it spawns a real sub-agent and only reverts the files afterwards)"]
+      ? ["  (--dry-run is headless too: it spawns nothing, but it describes a dispatch this run never makes — "
+        + "`--prepare` writes the bundle you are going to carry)"]
       : []),
     `  (to hand the whole run back to the framework: tldrx run attend --none ${store.runId})`,
   ]);
@@ -1147,18 +1179,6 @@ async function finishStage(
     return failStage(store, options, phaseId, stageId, `check \`${failed.id}\` failed: ${failed.detail}`, notes);
   }
   const checkSummary = checks.length === 0 ? "no checks declared" : checks.map((c) => `${c.id}:${c.status}`).join(", ");
-
-  // --- dry run (spec §5: keep the handoff, skip the stage) -----------------
-  if (options.dryRun) {
-    const dropped = revertNonHandoff(outputs, ctx);
-    skipStage(store, options, phaseId, stageId, "dry run");
-    store.save();
-    return out(EXIT_OK, [
-      ...notes,
-      `dry run: ${phaseId}/${stageId} skipped after producing its handoff (${checkSummary})`,
-      dropped.length === 0 ? "no non-handoff outputs to revert" : `reverted ${dropped.join(", ")}`,
-    ]);
-  }
 
   // --- gate or advance -----------------------------------------------------
   const stage = requireStage(store, phaseId, stageId);
@@ -1741,19 +1761,48 @@ function expandedSections(planned: PlannedStage, repos: readonly string[]): Read
   return map;
 }
 
-/** Spec §5 `--dry-run`: "revert non-handoff outputs". */
-function revertNonHandoff(outputs: readonly string[], ctx: PathContext): readonly string[] {
-  const dropped: string[] = [];
-  for (const declared of outputs) {
-    if (declared.endsWith("handoff.md")) continue;
-    // A pattern reverts every file it matched, and the line names them: "reverted
-    // 03-plan/stories/<id>.md" would leave the operator guessing what went.
-    for (const hit of resolveMany(declared, ctx)) {
-      rmSync(hit.absolute, { force: true });
-      dropped.push(hit.path);
-    }
-  }
-  return dropped;
+/** Everything `--dry-run` reports about the turn it is NOT taking (issue #17). */
+interface DryRunFacts {
+  readonly outputs: readonly string[];
+  readonly promptBytes: number;
+  readonly cap: number;
+  readonly model: string | null;
+  readonly effort: EffortLevel | null;
+  readonly maxReads: number;
+  readonly command: string;
+}
+
+/**
+ * What a dry run prints: the dispatch, described, and the two commands that
+ * would actually make it.
+ *
+ * The context ledger (bytes per section, the total against `prompt_max_bytes`)
+ * is already in `notes` by the time this is called — a dry run gets the same
+ * breakdown `--prepare` does — so this adds only what the ledger cannot say: the
+ * ceiling, the model, the read cap, the files the sub-agent would be allowed to
+ * write, and the argv. The bundle PATH is named rather than written: writing a
+ * `pending.json` nobody dispatched would leave a `--commit` looking at a turn
+ * that never happened.
+ */
+function dryRunReport(
+  store: RunStore,
+  options: NextOptions,
+  phaseId: string,
+  stageId: string,
+  facts: DryRunFacts,
+): readonly string[] {
+  const dir = relative(options.root, agentDir(store.runDir, stageId));
+  return [
+    "dry run: nothing was spawned and nothing was written.",
+    `would dispatch ${phaseId}/${stageId} — ONE sub-agent, $${facts.cap.toFixed(2)} ceiling, `
+      + `model ${facts.model ?? "default"}, effort ${facts.effort ?? "default"}, `
+      + `max_reads ${String(facts.maxReads)}`,
+    `  prompt: ${String(facts.promptBytes)} B — would be written to ${dir}/prompt.md`,
+    `  it may write: ${facts.outputs.join(", ") || "(no declared outputs)"}`,
+    `  command: ${facts.command}  # prompt on stdin`,
+    `Dispatch it for real with \`tldrx next ${store.runId}\`, or hand it to this session with `
+      + `\`tldrx next --prepare ${store.runId}\`.`,
+  ];
 }
 
 /** Spec §2.11 `warn_at_pct`: "emits `budget.warned` once per phase". */

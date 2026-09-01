@@ -130,6 +130,31 @@ export function buildClaudeArgs(request: AgentRequest): readonly string[] {
   return args;
 }
 
+/** What `--json-schema`'s value is replaced by in a printed command. */
+export const SCHEMA_PLACEHOLDER = "<envelope-schema>";
+
+/**
+ * The command `spawnAgent` WOULD run, as one printable line — for `--dry-run`
+ * (issue #17), which must show the dispatch rather than make it.
+ *
+ * It is `buildClaudeArgs` itself, not a second description of it, so the printed
+ * command cannot drift from the one that runs. The single edit is the
+ * `--json-schema` value: the envelope schema is a JSON blob nobody reads on a
+ * terminal, and a line that is 90% schema hides the three flags — model, budget,
+ * tools — a reader is actually checking. The prompt is on stdin either way,
+ * which the caller says out loud.
+ */
+export function describeSpawn(request: AgentRequest): string {
+  const args = buildClaudeArgs(request);
+  const shown = args.map((arg, i) => (args[i - 1] === "--json-schema" ? SCHEMA_PLACEHOLDER : arg));
+  return `${CLAUDE_BIN} ${shown.map(shellQuote).join(" ")}`;
+}
+
+/** Quote an argv element only when it needs it, so the common case stays readable. */
+function shellQuote(arg: string): string {
+  return /^[\w.,:/@=-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", `'\\''`)}'`;
+}
+
 export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
   // Before the parser, before the argv, before a byte of prompt goes anywhere: a
   // run marked `attended_by: host` never spawns, and the one place that cannot be
@@ -162,10 +187,23 @@ export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
       for (const event of stream.push(line)) {
         // Counted on COMPLETION, so the kill lands between tools rather than
         // inside one, and a read whose result never arrived is not charged.
-        if (event.kind === "tool-done" && isReadTool(event.name)) {
+        //
+        // `!capped` guards the COUNTER, not just the kill (issue #24). A chunk
+        // boundary is not a line boundary: `LineSplitter` hands every complete
+        // line in one chunk to this callback synchronously, so on a loaded
+        // machine — where the OS coalesces the child's writes — reads 4..20
+        // arrive in the same tick as read 3 and were counted, minutes of wall
+        // clock before the SIGKILL just ordered could possibly land. The
+        // recorded figure was therefore a function of scheduling, and the test
+        // that pinned it to the cap flaked twice in one night.
+        //
+        // Once the cap has fired the process is already being killed and this
+        // run is over. What belongs on the ledger is the number of reads the cap
+        // ALLOWED — which is the cap — not however many bytes were in flight.
+        if (!capped && event.kind === "tool-done" && isReadTool(event.name)) {
           reads += 1;
           publish({ kind: "reads", count: reads, cap });
-          if (cap > 0 && reads >= cap && !capped) {
+          if (cap > 0 && reads >= cap) {
             capped = true;
             publish({ kind: "error", message: readCapError(reads, cap) });
             controller.abort();

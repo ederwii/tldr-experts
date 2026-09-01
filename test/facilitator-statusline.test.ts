@@ -7,7 +7,7 @@
  * for a hook — that neither half can take the status line down.
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { rmSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { renderRunLine, money, hostFrom, locateFrom } from "../src/core/statusline/renderRunLine.ts";
@@ -124,6 +124,23 @@ describe("runSnapshot", () => {
     // the shipped hooks fixture states spent_usd 3.75 with no tasks to back it
     expect(snapshot?.source).toBe("tolerant");
     expect(snapshot).toMatchObject({ run: "260828-leaderboard", phase: "02-how", stage: "contracts", ceilingUsd: 25 });
+  });
+
+  /**
+   * The tolerant reader used to hard-code `attendedByHost: false` and say so:
+   * "false here means cannot see, never a claim that the run is unattended". The
+   * operator most in need of that flag is the one about to type `tldrx next` and
+   * wonder why nothing happened — and a run.yml that fails §2.2 validation is
+   * exactly when they are looking at the status line (issue #22).
+   */
+  test("the tolerant reader now sees `attended_by: host` instead of hard-coding false", () => {
+    const ws = makeWorkspace();
+    open.push(ws);
+    const path = join(ws.runDir, "run.yml");
+    writeFileSync(path, readFileSync(path, "utf8").replace(/^status: /m, "attended_by: host\nstatus: "), "utf8");
+    const snapshot = runSnapshot(ws.root);
+    expect(snapshot?.source).toBe("tolerant");
+    expect(snapshot?.attendedByHost).toBe(true);
   });
 
   test("is nowhere near the 50 ms hook budget", () => {

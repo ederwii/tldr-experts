@@ -18,7 +18,9 @@ import { isRecord } from "../schemas/validation.ts";
 import { PROJECT_FRAMEWORK_DIR, STAGES_DIR, WORKFLOWS_DIR } from "../paths.ts";
 import { GatePolicyError, parseWorkflowGates, type GatesPolicy } from "./gatePolicy.ts";
 import type { GateType } from "./RunFile.ts";
-import { EFFORT_LEVELS, isEffortLevel, MAX_PRECONDITIONS, type EffortLevel } from "../schemas/stage.ts";
+import {
+  EFFORT_LEVELS, isEffortLevel, MAX_PRECONDITIONS, PRECONDITION_TIMEOUT_S, type EffortLevel,
+} from "../schemas/stage.ts";
 import { allowlistIssue } from "../schemas/commandAllowlist.ts";
 import { loadWorkspace } from "../../hooks/lib/workspace.ts";
 
@@ -49,6 +51,12 @@ export interface PlannedPrecondition {
   readonly repo: string;
   readonly command: string;
   readonly expect_exit: number;
+  /**
+   * Seconds this command gets, RESOLVED — the precondition's own `timeout_s:` if
+   * it declared one, else `PRECONDITION_TIMEOUT_S`. Never the stage's
+   * `timeout_s`, which is minutes of work time and was the bug in issue #20.
+   */
+  readonly timeout_s: number;
 }
 
 export interface PlannedStage {
@@ -368,11 +376,20 @@ function normalisePreconditions(
     if (command === null) throw new PresetError(`${where} (${id}) has no \`command\``);
     const refusal = allowlistIssue(command, allowed(), "stage");
     if (refusal !== null) throw new PresetError(`${where} (${id}): ${refusal}`);
+    // Refused at load like everything else here: a stage file that asks for a
+    // timeout nobody can honour ("soon", 0, -1) is a typo, and a typo that
+    // quietly became the default would be a stage running under a clock its
+    // author did not choose.
+    const timeout = entry.timeout_s;
+    if (timeout !== undefined && (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout <= 0)) {
+      throw new PresetError(`${where} (${id}): \`timeout_s\` must be a number of seconds > 0`);
+    }
     preconditions.push({
       id,
       repo,
       command,
       expect_exit: typeof entry.expect_exit === "number" ? entry.expect_exit : 0,
+      timeout_s: typeof timeout === "number" ? timeout : PRECONDITION_TIMEOUT_S,
     });
   });
   return preconditions;

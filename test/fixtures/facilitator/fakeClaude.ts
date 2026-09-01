@@ -79,15 +79,30 @@ const spec: FakeResult = {
 // TIME, before the rest of the transcript — and then waits. That is what makes a
 // live kill testable: a fake that prints everything in one write has already
 // exited by the time anything could stop it.
+//
+// `FAKE_CLAUDE_READS_BURST=1` prints all n of them in a SINGLE write instead.
+// That is the shape a loaded machine produces on its own — the reader gets one
+// chunk holding many lines — and it is the shape the `max_reads` flake (issue
+// #24) was made of: `LineSplitter` hands every line in a chunk to the counter
+// synchronously, so a cap that stopped counting only when the child died
+// overshot by however many lines the OS happened to coalesce. Deterministic
+// here, a coin flip there; same code path.
 const slowReads = Number(process.env.FAKE_CLAUDE_READS ?? "0");
 if (Number.isFinite(slowReads) && slowReads > 0) {
   const hangMs = Number(process.env.FAKE_CLAUDE_HANG_MS ?? "5000");
-  for (let i = 0; i < slowReads; i++) {
-    for (const line of toolPairLines(spec, { name: "Read", input: { file_path: `/x/${String(i)}.md` } }, i,
-      new Date(Date.parse("2026-08-29T12:00:00.000Z") + i * 10).toISOString())) {
-      process.stdout.write(`${line}\n`);
+  const burst = process.env.FAKE_CLAUDE_READS_BURST === "1";
+  const lineFor = (i: number): readonly string[] =>
+    toolPairLines(spec, { name: "Read", input: { file_path: `/x/${String(i)}.md` } }, i,
+      new Date(Date.parse("2026-08-29T12:00:00.000Z") + i * 10).toISOString());
+  if (burst) {
+    const all: string[] = [];
+    for (let i = 0; i < slowReads; i++) all.push(...lineFor(i));
+    process.stdout.write(`${all.join("\n")}\n`);
+  } else {
+    for (let i = 0; i < slowReads; i++) {
+      for (const line of lineFor(i)) process.stdout.write(`${line}\n`);
+      await new Promise((resolve) => setTimeout(resolve, 2));
     }
-    await new Promise((resolve) => setTimeout(resolve, 2));
   }
   await new Promise((resolve) => setTimeout(resolve, hangMs));
 }

@@ -152,9 +152,9 @@ On an attended run:
 - **`tldrx next` with no `--prepare`/`--commit` exits `4`** and names the exact command the
   stage is waiting for. Nothing is billed, nothing is written. `4` and not `2` because the run
   is not refusing the work — it is waiting on you, the same shape as waiting at a gate.
-- **`--dry-run` is refused with it.** `--dry-run` is headless: it spawns a real sub-agent and
-  the turn is billed, and only the FILES are reverted afterwards. `--prepare` is the flag that
-  spawns nothing.
+- **`--dry-run` is refused with it.** Not for money — since issue #17 `--dry-run` spawns
+  nothing anywhere — but because it describes a dispatch the framework never makes on an
+  attended run. `--prepare` writes the bundle you are going to carry.
 - **`tldrx run auto` is refused** at exit `1`, before it writes anything.
 - **Nothing can reach a spawn.** Each executor exposes prepare/commit only, and `spawnAgent`
   itself throws on an attended run. Three layers, because "nothing spawns" is a promise about

@@ -205,7 +205,8 @@ query. Generated from what Execute actually instrumented — not aspirational.
 
 1. **Doc mode**: `tldrx doc <question>` — answer from `map/` + code with citations, no run.
 2. **Drift check**: `tldrx map --check` — flags map entries whose cited paths no longer exist.
-3. **Dry run**: any stage with `--dry-run` produces the handoff without writing decisions.
+3. **Dry run**: any stage with `--dry-run` prints what it WOULD dispatch — the expert bundle,
+   the context ledger, the prompt size and the `claude -p` argv — and spawns nothing.
 4. **Replay**: `tldrx replay <run>` renders `events.jsonl` as a narrative (stakeholder view).
 5. **Import**: `tldrx run new --from <PRD|Jira epic|aidlc intent folder>` — the leaderboard
    ideation pack becomes the pilot's phase-1 input without redoing 38 questions.

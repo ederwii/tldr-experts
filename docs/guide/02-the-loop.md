@@ -42,7 +42,7 @@ The keys a stage may set, and what they do:
 | `dry_run_allowed` | `true` | `false` refuses `tldrx next --dry-run` on this stage |
 | `gate.type` | required | `approve` \| `checks` \| `auto` |
 | `checks` | none | The list that is actually enforced, re-run off disk by `tldrx approve` |
-| `preconditions` | none (≤10) | `{id, repo, command, expect_exit}` — an operational fact checked **before** the stage is dispatched. Same allowlist rule as a `cmd` check; `expect_exit` defaults to `0`. A red one is exit `2` before anything is spent ([10 — Unattended mode](10-unattended-mode.md)) |
+| `preconditions` | none (≤10) | `{id, repo, command, expect_exit, timeout_s}` — an operational fact checked **before** the stage is dispatched. Same allowlist rule as a `cmd` check; `expect_exit` defaults to `0` and `timeout_s` to **60 s**, never the stage's. A red one is exit `2` before anything is spent ([10 — Unattended mode](10-unattended-mode.md)) |
 
 `expert_knowledge_bytes:` is the retired spelling of `knowledge_max_bytes` and is still
 read, as the same **total**. `skip_if` and `questions.max` come from the workflow entry
