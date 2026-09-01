@@ -44,7 +44,7 @@ export const DISPATCH_NOTES_MAX_BYTES = 8 * 1024;
 
 /** One file that fed the slot, and how much of it reached the page. */
 export interface DispatchNoteSource {
-  /** Run-dir relative, e.g. `.agent/04-build/build/S5/dispatch-notes.md`. */
+  /** Run-dir relative, e.g. `.agent/build/S5/dispatch-notes.md`. */
   readonly rel: string;
   readonly totalBytes: number;
   /** 0 when the cap was already spent before this file was reached. */

@@ -47,7 +47,7 @@ export const runCommand: Command = {
   name: "run",
   summary: "Create, inspect or auto-run a piece of work",
   usage: "tldrx run new <slug> [--title <t>] [--scope <s>] [--budget <usd>] [--repos a,b]\n" +
-    "                  [--from <aidlc-intent-dir> | --seed <file|dir> ...] [--gates <a,b|all|none>]\n" +
+    "                  [--from <aidlc-intent-dir> | --seed <file|dir> ...] [--gates <a,b|a:agent|all|none>]\n" +
     "                  [--attended-by host] [--root <path>]\n" +
     "       tldrx run attend <host|--none> [<run>] [--root <path>]\n" +
     "       tldrx run status [<run>] [--json] [--root <path>]\n" +

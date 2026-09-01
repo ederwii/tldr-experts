@@ -363,7 +363,7 @@ describe("<command> --help carries flags, values, examples and exit codes", () =
       const run = await tldrx(command.name, "--help");
       expect(run.stdout).toContain("Exit codes:");
       for (const code of helpFor(command.name)?.exits ?? []) {
-        expect(run.stdout).toContain(EXIT_MEANINGS.get(code) ?? " ");
+        expect(run.stdout).toContain(EXIT_MEANINGS.get(code) ?? "\0");
       }
     }
   });

@@ -55,6 +55,36 @@
     `adapters/transport.ts`, and the only way to ASSERT the argument shape of a command the suite must not
     run. The unit tests drive a recording fake; the one end-to-end test puts a STUB `gh` first on PATH in a
     throwaway workspace with a throwaway bare `origin`. The real `gh` is never invoked by a test.
+- **`TLDRX_CLAUDE_BIN` — point the sub-agent spawn at a different binary (#27, minimal slice).**
+  `spawnAgent` hardcoded `claude`, so a pinned install, a wrapper that adds a proxy or credentials,
+  and a stand-in in a sandbox all required patching source. The variable replaces the executable
+  NAME and nothing else — the argv is still Claude Code's, so what it points at has to speak
+  `-p --output-format stream-json --json-schema` — and blank or whitespace counts as unset. Honoured
+  everywhere the CLI is spawned: `spawnAgent`, the `--dry-run` command line (`describeSpawn`) and
+  `claude mcp list` (`McpProbe`). `tldrx doctor` deliberately still checks `claude --version`,
+  because `env.yml` declares that string. Documented under **Environment variables** in the CLI
+  reference. This is not the provider abstraction #27 asks for; #27 stays open for it.
+
+- **A drift guard on `templates/story.md` and `templates/epic.md` (#48).**
+  Both ship in the npm package, both state the Plan front-matter schema, and **nothing in `src/`
+  reads either one** — a second copy of a contract whose first copy is computed from `STORY_KEYS`
+  and `EPIC_KEYS`. Add a required key and `schemaContract.ts` stops compiling while the templates
+  say nothing; a human then opens one, writes a story the check refuses, and the framework looks
+  broken. They now go through `validateStoryFile` / `validateEpicFile` — the very checks the stage
+  gates on — with their key sets asserted equal to `STORY_KEYS` / `EPIC_KEYS` in order, and the
+  status enum each spells out in a comment asserted equal to `PLAN_STATUSES`. Proven to have teeth:
+  renaming one key and staling one enum comment turns three tests red. Whether the files should be
+  generated or deleted is a packaging decision and is left open on #48.
+
+- **The merge-wave sandbox is built under a hostile `init.defaultBranch` (#49).**
+  `test/merge-wave.test.ts` names every repo `main`, and CI run 33459567355 failed in the test's
+  own setup — `git push -q origin main` → `src refspec main does not match any` — on a runner whose
+  default branch is not `main`. `f1ffe56` had already fixed it (`-b main` on both inits,
+  `--branch main` on the clone), but nothing EXERCISED the fix: on a `main`-defaulting host,
+  removing the treatment changes nothing. The sandbox now pins `init.defaultBranch: trunk` for
+  every git command it builds itself with, the clone asserts it is on `main` rather than
+  discovering it five lines later, and two tests pin the mechanism — untreated reproduces the CI
+  error verbatim, treated does not.
 
 - **The Plan prompt now STATES the schema the `plan` check enforces, generated from the check itself (#35, #38).**
   `stages/plan/stage.md` named the output filenames — `stories/<id>.md`, `epics/<epic>.md`, `waves.yml` — and
@@ -133,6 +163,36 @@
     `(superseded by F<n>)` beside it.
 
 ### Fixed
+
+- **A stray NUL byte made two source files invisible to every grep-based sweep (#47).**
+  `test/cli.test.ts` carried one literal `0x00`, so `file(1)` called it `data` and `grep -I` —
+  ripgrep and ugrep too — dropped it SILENTLY, exit 0, no message. Measured on `origin/main`:
+  `grep -lI -E 'node:child_process|Bun\.spawn' test/*.ts` returned **36 files with `cli.test.ts`
+  absent**, though it calls `Bun.spawn` on line 32. That is how it missed #43's load-aware timeout
+  and then timed out at 5004 ms on the very merge that was fixing timeouts. Writing the guard found
+  a **second** one nobody had reported — `src/core/text/srcToken.ts:711`, a NUL used as a cache-key
+  separator, which hid that file from every `src/` sweep (367 of 368 `.ts` files visible). Both are
+  now the two-character escape `\0`: identical at runtime, ordinary text on disk. Post-fix the same
+  sweep finds `cli.test.ts` and all 368 `src/` files. `test/source-hygiene.test.ts` walks `src/`,
+  `test/`, `bin/` and `scripts/` and fails on any NUL, with the offender named at `path:line`.
+
+- **The five wave-5 docs-pass nits, each a sentence nothing was checking (#25).**
+  - **`boundary.ts` promised an exclusion is "never silent" and dropped state paths without a
+    word** — `BoundarySurface.excluded` was populated and read by nothing. Every verdict that has a
+    surface now names what was excluded, green and red alike, including the case where the
+    exclusion was ALL there was and the run therefore reported "declares no surface".
+  - **The precondition refusal asserted "the stage is still `ready`" without looking.** It reports
+    the status `run.yml` actually holds. Bigger than filed: on a FRESH run the stage at the cursor
+    is `pending`, not `ready`, so the old sentence was wrong in the ordinary case as well as on the
+    retry of a `failed` stage.
+  - **The agent-gate fallthrough printed its label twice** — `boundary: boundary=…`, because every
+    condition detail was prefixed with its own id including the two that have a trigger of their
+    own. Only the generic `condition` trigger keeps the prefix; alone it names nothing.
+  - **`dispatchNotes.ts` documented `.agent/04-build/build/S5/…`**, one phase segment more than
+    `dispatchNotesPath` builds. The example is now asserted equal to the path the code produces.
+  - **Two usage strings were narrower than their own `--help`**: `tldrx gate template` omitted the
+    positional `[<run>]` it accepts, and `run new` spelled `--gates <a,b|all|none>` where the help
+    says `<a,b|a:agent|all|none>`.
 
 - **`tldrx next --dry-run` spawns nothing. It used to cost $0.42 a go (#17).** The flag ran the
   stage for real — one `claude -p`, one `agent.spawned`, one `agent.result`, the cost on the
