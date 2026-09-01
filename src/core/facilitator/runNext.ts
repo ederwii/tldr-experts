@@ -44,6 +44,7 @@ import {
   agentDir, evidencePath, expandAll, expandPatterns, missing, present, resolveMany, type PathContext,
 } from "./paths.ts";
 import { fenceFor, renderConventions, renderFacts, renderParts, stackExpertNames } from "./prompt.ts";
+import { applyCheckContracts } from "./checkContracts.ts";
 import { describeDispatchNotes, loadDispatchNotes, type DispatchNotes } from "./dispatchNotes.ts";
 import {
   describeBundles, loadExpertBundles, untrainedNotes, type ExpertBundleSet,
@@ -1429,7 +1430,13 @@ export function assemblePrompt(
   ctx: PathContext,
   seed: ReadonlySet<string>,
 ): AssembledPrompt {
-  const stageMd = readStageMd(spec.planned);
+  // The stage body plus the contracts its own `checks:` enforce (gh #35, #38):
+  // the Plan agent used to be told the output FILENAMES and left to discover the
+  // front-matter schema and the list caps by having a paid attempt refused.
+  const stageMd = applyCheckContracts(readStageMd(spec.planned), {
+    checks: spec.planned.checks.map((check) => check.id),
+    outputs: spec.planned.outputs,
+  });
   const facts = FactsStore.loadOrEmpty(factsPath(options.root));
   const workspace = loadWorkspace(options.root);
   // The declared inputs ARE the run's cited paths at this point: they are what the

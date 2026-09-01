@@ -27,7 +27,14 @@ export const REPO_NAME_RE = /^[a-z0-9-]{1,32}$/;
 export const PLAN_STATUSES = ["todo", "in_progress", "review", "done", "blocked"] as const;
 export type PlanStatus = (typeof PLAN_STATUSES)[number];
 
-/** Caps, in the spirit of spec §0: a Plan artefact is bounded or it is a document. */
+/**
+ * Caps, in the spirit of spec §0: a Plan artefact is bounded or it is a document.
+ *
+ * Every message that refuses a value interpolates the constant rather than
+ * spelling the number (gh #38): the agent that trips one is told what the cap is
+ * and what to do about it, and `plan/schemaContract.ts` renders the same
+ * constants into the Plan prompt so the contract is stated before it is enforced.
+ */
 export const MAX_LIST_ITEMS = 64;
 export const MAX_TOUCHES = 128;
 export const MAX_ITEM_CHARS = 512;
@@ -64,7 +71,7 @@ export function requireStringList(
   }
   const max = rules.max ?? MAX_LIST_ITEMS;
   if (value.length > max) {
-    issues.push({ path, message: `${value.length} items exceeds the ${max} cap` });
+    issues.push({ path, message: `${value.length} items exceeds the ${max}-item cap` });
   }
   if (rules.nonEmpty === true && value.length === 0) {
     issues.push({ path, message: "must not be empty" });
@@ -82,7 +89,11 @@ export function requireStringList(
       return;
     }
     if (item.length > MAX_ITEM_CHARS) {
-      issues.push({ path: at, message: `${item.length} characters exceeds the ${MAX_ITEM_CHARS} cap` });
+      issues.push({
+        path: at,
+        message: `${item.length} characters exceeds the ${MAX_ITEM_CHARS}-character cap on one list item `
+          + "— split it into several items",
+      });
     }
     if (rules.pattern !== undefined && !rules.pattern.test(item)) {
       issues.push({ path: at, message: `expected ${rules.patternName ?? String(rules.pattern)}, got \`${item}\`` });
@@ -125,7 +136,7 @@ export function requireText(value: unknown, path: string, issues: ValidationIssu
   }
   if (value.trim() === "") issues.push({ path, message: "must not be blank" });
   if (value.length > MAX_ITEM_CHARS) {
-    issues.push({ path, message: `${value.length} characters exceeds the ${MAX_ITEM_CHARS} cap` });
+    issues.push({ path, message: `${value.length} characters exceeds the ${MAX_ITEM_CHARS}-character cap` });
   }
 }
 
