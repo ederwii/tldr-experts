@@ -27,13 +27,14 @@ import { renderDecisionCard } from "../ui/decisionCard.ts";
 import { gatePolicyFor } from "../run/gatePolicy.ts";
 import { PresetError, stageMdPath, type PlannedStage } from "../run/workflowPreset.ts";
 import { economyFor, isHostTokens } from "../budget/RunBudget.ts";
-import { remaining } from "../budget/wouldExceed.ts";
+import { remaining, wouldExceedHostTokens } from "../budget/wouldExceed.ts";
 import {
   remainingWork, renderRemainingWork, remainingWorkContext, type RemainingWork,
 } from "../budget/remainingWork.ts";
 import { raiseCommand, shortBy } from "../budget/budgetView.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../hooks/lib/workspace.ts";
+import { closeRunWorktrees } from "../run/closeWorktrees.ts";
 import type { TldrxEvent } from "../events/Event.ts";
 import { setProgressCeiling, setProgressReadCap, setProgressTitle } from "../ui/bus.ts";
 import { acquireLock, releaseLock } from "./Lock.ts";
@@ -829,8 +830,7 @@ function budgetRefusal(
   // in-session phase whose ceiling nothing here can enforce is a fact an operator
   // should read, not a silence.
   if (isHostTokens(store.budget, phaseId)) {
-    hostTokensNote(store, options, phaseId, stageId, notes);
-    return null;
+    return hostTokensNote(store, options, phaseId, stageId, notes);
   }
   // What is still to be DISPATCHED, not what the stage was priced at. On a Build
   // stage with a plan on disk this is the sum of the caps the executor would
@@ -838,6 +838,29 @@ function budgetRefusal(
   // `stage.budget_usd`, exactly as it always was (design §E.2).
   const work = stageRemainingWork(store, options, phaseId, stage);
   const estimate = work.usd;
+  // An `attended_by: host` run spawns nothing, so the dollars this brake would
+  // refuse are spend that provably will not happen (issue #22, owner decision
+  // 2026-09-01, policy (a)). It says the numbers and allows. In headless mode
+  // `attendedRefusal` has already returned above; this is the `--prepare` path,
+  // where the run genuinely continues and used to be refused on money nobody
+  // was going to spend.
+  if (phaseRemaining < estimate && isAttendedByHost(store.run)) {
+    notes.push(
+      `budget: phase ${phaseId} has $${phaseRemaining.toFixed(2)} left and the estimate is `
+        + `$${estimate.toFixed(2)} — NOT refusing: this run is attended_by: host and nothing here spawns`,
+    );
+    if (!alreadyWarned(store, phaseId)) {
+      store.append(event(options, store.runId, stageId, "budget.warned", {
+        phase: phaseId,
+        economy: economyFor(store.budget, phaseId),
+        attended_by: store.run.attended_by ?? null,
+        remaining_usd: phaseRemaining,
+        estimate_usd: estimate,
+        reason: "attended_by: host — no dollar gate applied",
+      }));
+    }
+    return null;
+  }
   if (phaseRemaining < estimate && store.budget.on_exceed === "block") {
     store.append(event(options, store.runId, stageId, "budget.blocked", {
       phase: phaseId,
@@ -891,6 +914,9 @@ function stageRemainingWork(
     perAgentMaxUsd: store.budget.per_agent_max_usd,
     maxUsd: options.maxUsd ?? null,
     economy: economyFor(store.budget, phaseId),
+    // Attended ⇒ the host pays the developer turns, so they are not money this
+    // brake is protecting (#22 (c)).
+    attended: isAttendedByHost(store.run),
   });
 }
 
@@ -957,6 +983,14 @@ async function runExecutor(
   }
 
   const stage = requireStage(store, phaseId, stageId);
+  // `--keep-worktrees` is typed on the invocation that BUILDS, and the run is
+  // usually closed by another command in another process — `tldrx approve`, or
+  // `tldrx run cancel` days later (issue #16). Record the intent on the run once,
+  // so every close path can honour a flag it never sees.
+  if (options.keepWorktrees === true && store.run.keep_worktrees !== true) {
+    store.mutate((run) => ({ ...run, keep_worktrees: true }));
+    store.save();
+  }
   announce(store.runId, stageId, nextTaskId(store, phaseId, stageId), agentCap(options, store, stage));
   const executorCtx: ExecutorContext = {
     root: options.root,
@@ -1346,6 +1380,8 @@ async function finishStage(
   store.save();
   if (store.run.status === "done") {
     store.append(event(options, store.runId, null, "run.closed", { reason: "every stage terminal" }));
+    // The run owns its epic worktrees, so the run's close is what takes them (#16).
+    await closeRunWorktrees(store.run, options.root, store.runDir);
   }
   return out(EXIT_OK, [
     ...notes,
@@ -1828,17 +1864,58 @@ function hostTokensNote(
   phaseId: string,
   stageId: string,
   notes: string[],
-): void {
+): NextOutcome | null {
   notes.push(
     `budget: phase ${phaseId} is priced in \`host-tokens\` — this process meters none of it, `
       + "so no dollar ceiling was enforced here",
   );
-  if (alreadyWarned(store, phaseId)) return;
-  store.append(event(options, store.runId, stageId, "budget.warned", {
-    phase: phaseId,
-    economy: "host-tokens",
-    reason: "ceiling is not denominated in USD; no dollar gate applied",
-  }));
+  // The declared tokens against a ceiling that IS a token allowance — the one
+  // comparison here whose sides share a unit (issue #22 (b)). It warns; it stops
+  // only under the explicit `on_host_tokens_exceed: block`, and never on an
+  // attended run (policy (a) beats policy (b)).
+  const tokens = wouldExceedHostTokens(store.budget, phaseId, declaredTokensIn(store.run, phaseId));
+  const stops = tokens !== null && tokens.blocked && !isAttendedByHost(store.run);
+  if (tokens !== null && tokens.over) {
+    notes.push(
+      `budget: phase ${phaseId} is OVER its host-token ceiling — ${String(tokens.spent)} declared `
+        + `of ${String(tokens.ceiling)} allowed`,
+    );
+  }
+  // `alreadyWarned` is a WARN-once guard and must not silence a REFUSAL. A phase
+  // that emitted the "no dollar ceiling here" note on an earlier stage and later
+  // crosses its token ceiling would otherwise be refused with no `budget.blocked`
+  // on the record — a run stopped for a reason its own audit trail never states,
+  // which is the failure issue #22 exists to close.
+  if (stops || !alreadyWarned(store, phaseId)) {
+    store.append(event(options, store.runId, stageId, stops ? "budget.blocked" : "budget.warned", {
+      phase: phaseId,
+      economy: "host-tokens",
+      ...(tokens === null ? {} : { host_tokens: tokens.spent, ceiling_tokens: tokens.ceiling }),
+      reason: tokens !== null && tokens.over
+        ? "declared host tokens are over the phase ceiling"
+        : "ceiling is not denominated in USD; no dollar gate applied",
+    }));
+  }
+  if (!stops || tokens === null) return null;
+  return out(EXIT_REFUSED, [
+    ...notes,
+    `[tldrx] budget: refusing to start stage "${stageId}" — phase ${phaseId} is priced in \`host-tokens\` `
+      + `and has declared ${String(tokens.spent)} of ${String(tokens.ceiling)} allowed.`,
+    "Raise that phase's ceiling in budget.yml (under this economy the number is a TOKEN allowance), "
+      + "or set `on_host_tokens_exceed: warn` to go back to a note.",
+  ]);
+}
+
+/** Declared `tokens:` recorded against one phase of a run (issue #22 (b)). */
+function declaredTokensIn(run: RunFile, phaseId: string): number {
+  let tokens = 0;
+  for (const phase of run.phases) {
+    if (phase.id !== phaseId) continue;
+    for (const stage of phase.stages) {
+      for (const task of stage.tasks) tokens += task.tokens ?? 0;
+    }
+  }
+  return tokens;
 }
 
 function warnOnce(

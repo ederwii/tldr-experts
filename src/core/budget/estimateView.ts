@@ -58,7 +58,7 @@
  */
 import { PresetError } from "../run/workflowPreset.ts";
 import { RunStore } from "../run/RunStore.ts";
-import { flatten, isTerminal } from "../run/RunFile.ts";
+import { flatten, isTerminal, isAttendedByHost } from "../run/RunFile.ts";
 import { loadStageSpec } from "../facilitator/stageSpec.ts";
 import { assemblePrompt, declaredInputsOf, seedInputsFor } from "../facilitator/runNext.ts";
 import type { ContextLedger } from "../facilitator/contextLedger.ts";
@@ -222,6 +222,7 @@ export function estimateNextStage(root: string, runId?: string): StageEstimate {
     // the report of what is left.
     maxUsd: null,
     economy,
+    attended: isAttendedByHost(store.run),
   });
 
   return {

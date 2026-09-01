@@ -17,7 +17,7 @@ import { existsSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { runtime } from "../runtime/index.ts";
 import { PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../paths.ts";
-import { repoPath, type WorkspaceContext } from "../../hooks/lib/workspace.ts";
+import { epicWorktreesOf, loadWorkspace, repoPath, type WorkspaceContext } from "../../hooks/lib/workspace.ts";
 
 /** A git call is a local filesystem operation; a minute is already generous. */
 export const GIT_TIMEOUT_MS = 60_000;
@@ -240,6 +240,47 @@ export async function removeWorktree(cwd: string, path: string): Promise<boolean
   const removed = await git(["worktree", "remove", "--force", path], cwd);
   await git(["worktree", "prune"], cwd);
   return removed.ok;
+}
+
+/**
+ * Remove every epic worktree belonging to ONE run — the run-close half of #16
+ * (owner decision, 2026-09-01, option (a)).
+ *
+ * This used to happen when the BUILD STAGE finished, which put the checkout a
+ * later Watch stage needs to resolve `[src: …]` against beyond reach before the
+ * Build handoff was even written: the shipped half of #16 resolved a `file` src
+ * against the epic worktree, and then there was no epic worktree. Cleanup belongs
+ * to the RUN's lifetime instead, so the tree lives exactly as long as the thing
+ * that owns it.
+ *
+ * This run's trees and no others. `epicWorktreesOf` keys on the run id embedded in
+ * the directory name (issue #40) and answers by reading the directory rather than
+ * by asking a live `BuildSession` — which is what makes this callable from a
+ * different PROCESS than the one that opened them. Every close path is exactly
+ * that: `tldrx next` closing the last stage, or `tldrx run cancel` days later.
+ *
+ * Best effort per tree, like `removeWorktree` itself: a checkout that will not go
+ * away must not turn closing a run into a failed close. The returned list is
+ * MEASURED — a path is in it because it is no longer on disk, not because git
+ * reported success.
+ */
+export async function cleanUpRunEpicWorktrees(root: string, runDir: string): Promise<readonly string[]> {
+  let workspace: WorkspaceContext;
+  try {
+    workspace = loadWorkspace(root);
+  } catch {
+    return [];   // no readable workspace.yml — nothing here could be ours to remove
+  }
+  const removed: string[] = [];
+  for (const tree of epicWorktreesOf(workspace, runDir)) {
+    try {
+      await removeWorktree(repoDirOf(workspace, tree.repo), tree.dir);
+    } catch {
+      // A worktree that will not go away is a note, not a failed close.
+    }
+    if (!existsSync(tree.dir)) removed.push(tree.dir);
+  }
+  return removed;
 }
 
 /**

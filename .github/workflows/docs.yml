@@ -1,0 +1,64 @@
+# Build the public documentation site (docs-site/) and publish it to GitHub Pages.
+#
+# Separate from ci.yml on purpose: a docs change must not re-run the test suite, and a
+# code change must not redeploy the site. The paths filter includes CHANGELOG.md because
+# docs-site/reference/changelog.md is GENERATED from it at build time (scripts/gen-changelog.ts)
+# rather than kept as a second copy — so a release note lands on the site without anyone
+# editing docs-site/.
+#
+# Pages must be set to "GitHub Actions" as its source. `configure-pages` tries to do that
+# itself (`enablement: true`); if the token cannot, one click in Settings -> Pages fixes it
+# and the deploy job stops failing.
+name: docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs-site/**"
+      - "CHANGELOG.md"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time. Not cancel-in-progress: a half-finished deploy of a docs site
+# is worse than waiting for the previous one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `lastUpdated` in the VitePress config reads git history for each page.
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - run: bun install --frozen-lockfile
+        working-directory: docs-site
+      - run: bun run build
+        working-directory: docs-site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs-site/.vitepress/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

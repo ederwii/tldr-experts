@@ -2,44 +2,70 @@
 
 ## Unreleased
 
-### Fixed
+### Changed
 
-- **`tldrx learn` — the cold-player QA round (#30).** A first-time player played all eight chapters
-  and returned SHIP-with-fixlist. Everything they found is fixed or recorded:
-  - **Chapter 8 no longer lies about the brake.** It said "the phase has already spent its Watch
-    money" while the tool printed `$1.89 left … estimate is $2.00`. The real mechanism is that a
-    re-run is priced at the stage's WHOLE declared `budget_usd`, never at what a second attempt might
-    add — so a stage that has spent anything can no longer afford itself. The chapter now says that,
-    quotes both figures, and `assert()`s them against the `budget.blocked` event so the numbers cannot
-    drift away from the sentence.
-  - **Chapter 1 no longer promises something chapter 2 does not deliver.** `--no-interview` skips
-    *init's* setup interview, which no chapter covers; the forward reference is gone and the debrief
-    now sends the learner to `.tldrx/init-handoff.md`, where measured/inferred/assumed and
-    `[src: …]` / `absent:` actually live.
-  - **`tldrx learn --chapter <n>` refuses a chapter that is already played**, up front and by name,
-    instead of narrating it and then dying mid-chapter on `run new: … already exists` (exit 1,
-    measured). The refusal names `--reset` and the chapter a bare `learn` would resume at.
-  - **The tutorial has a door out.** The ending now names the first four commands to type on a real
-    repo — `tldrx init` (with the warning that it runs an interview by default), `run new --scope
-    hotfix`, `next`, and `tldrx ship`.
-  - **Chapter 7 RUNS `next --prepare` and `next --commit`** against the feature run's Watch stage
-    instead of describing them in a debrief. Chapters 6 and 7 swapped for it: the attended chapter
-    addresses the feature run through `{run}`, so the hotfix run has to be signed off first.
-  - **Every non-zero exit code is printed** (`→ exit 4`), so the code chapter 2 teaches is a thing
-    the learner reads rather than a thing they are told. Chapter 5 now also demonstrates the exit-2
-    refusal a bare `next` gives with two runs open, and names the two run-id spellings.
-  - Jargon defined at first use — expert, level 0, the `claim-sources` / `no-reask` / `budget-gate`
-    bracket, `boundary`, `[src: …]`, `absent:`, economy, §2.11 — and the `expert … has no evidence`
-    nudge explained once instead of repeating unexplained nine times.
-  - Known and NOT fixed: a step's stderr (where the agent stream lives) is buffered and printed after
-    its stdout, so a summary can appear before the stream that produced it. Interleaving needs an
-    `onStderrLine` on the runtime seam and in both implementations; documented in `engine.ts`.
+- **An epic worktree now lives for the RUN's lifetime, not the Build stage's (#16, owner decision
+  2026-09-01, option (a)).** The shipped half of #16 made a `file` src resolve against
+  `.tldrx/worktrees/<repo>/_epic-<run>-<epic>` before the working tree — and then `BuildSession.finish()`
+  removed that directory before the Build handoff was even written, so unless the operator had typed
+  `--keep-worktrees` a later Watch stage had nothing to resolve against and the fix bit only under a flag.
+  Cleanup moves to run CLOSE, which is what the checkout actually belongs to.
+  - **Watch citing epic-only code works by default.** Proved end to end rather than by construction:
+    `test/build-executor.test.ts` runs the real pipeline, then resolves a `[src: app:s1.txt:1]` against a
+    file the test first shows is committed on `epic/e1` and absent from the working tree.
+  - **Every close path takes them**, because a run does not only close one way: `tldrx next` closing the
+    last stage, `tldrx approve` signing the last gate, and `tldrx run cancel`. Without the last two the
+    change would have traded one leak for another — a cancelled run's checkouts used to be gone already,
+    because Build removed them on the way past.
+  - **`--keep-worktrees` keeps its meaning, one scope wider**: survive even the run close. It is
+    remembered on the run as `keep_worktrees:` (additive and optional; absent means clean up, which is
+    what every existing run.yml meant) because the flag is typed on the `tldrx next` that BUILDS and the
+    run is usually closed by a different command in a different process.
+  - Story worktrees are untouched: still removed the moment a story reaches `done` or `blocked`.
 
-- **`tldrx cost` no longer claims "two economies" over one (#56).** The `(no total: two economies, no
-  exchange rate)` footnote was unconditional, so a run whose every attempt was metered in dollars was
-  told no total could be printed. It is printed only when both economies are actually present.
+- **The budget gate's three open policy questions are answered (#22, owner decision 2026-09-01).**
+  bb6204b wired the DATA — both economies, `attended_by`, `runSpend` — and deliberately changed no
+  verdict. These are the verdicts.
+  - **(a) An `attended_by: host` run is INFORMED, never DENIED, on metered dollars.** `tldrx next` on
+    such a run spawns nothing, so the estimate the gate was refusing against is spend that provably will
+    not happen. Both the PreToolUse hook and `tldrx next`'s own brake now say every number they would
+    have refused with, plus both economies, and allow. The event is `budget.warned`, not `budget.blocked`:
+    nothing was blocked, and recording a block that did not happen is the exact failure #22 was filed
+    about.
+  - **(b) A `host-tokens` ceiling is soft-enforced.** Under that economy the ceiling NUMBER is a
+    host-session token allowance, so accumulated declared `tokens:` against it is the one comparison in
+    the gate whose two sides share a unit. Crossing it WARNS and still allows. It stops only under the
+    explicit opt-in **`on_host_tokens_exceed: block`** in `budget.yml` — an enum beside `on_exceed`,
+    defaulting to `warn`, so every file written before the key existed keeps the behaviour it had. The
+    refusal never offers `tldrx budget raise`, which moves dollars and would send the operator at the
+    wrong number. (a) beats (b): the opt-in still never denies an attended run.
+  - **(c) `remainingWork` zeroes the developer share on an attended run**, mirroring `economy:
+    host-tokens`, because it is the same fact — the host session pays for those turns. Attendedness and
+    the phase economy were independent, so an attended run on a `metered-usd` phase still counted
+    developer turns against money this framework will never spend, on the brake and in `run estimate`
+    alike. Reviewer floors are untouched in both cases.
 
 ### Added
+
+- **A public documentation site, written for people who have never seen tldrx (`docs-site/`, phase 1).**
+  A VitePress site deployed to GitHub Pages by `.github/workflows/docs.yml` on any push to `main` that
+  touches `docs-site/` or `CHANGELOG.md`. Twelve short English pages — a landing page, a Quickstart, one
+  page per concept (the five stages, files-as-state, gates, evidence, budgets), four guides and a
+  condensed CLI overview — plus a generated changelog and a Spanish placeholder. None of them is pasted
+  from `docs/`, which stays the agent-facing reference. Every command
+  and every block of output on the Quickstart was produced by running the real binary; nothing on the
+  site documents a flag that `--help` does not.
+  - **The changelog page is generated, never copied.** `docs-site/scripts/gen-changelog.ts` reads this
+    file at build time and emits one line per entry, so a release note reaches the website without
+    anybody maintaining a second copy of it. The generated page is gitignored for the same reason.
+  - VitePress dead-link checking is left ON and the build is green with it — proven by a probe, not
+    assumed: a deliberate link to a missing page failed the build with `1 dead link(s) found`. (Anchors
+    are NOT checked by it, so `#fragment` targets were verified against the rendered HTML by hand.)
+  - i18n is wired now, with the English content at the root and a Spanish placeholder under `/es/`, so
+    phase 2 is a matter of adding files rather than restructuring the site.
+  - `docs-site/` is excluded from the npm package (it is not in `files:`) and from `tsc --noEmit` (the
+    root tsconfig includes only `bin`, `src`, `test`) — measured: `npm pack --dry-run` still lists 52
+    files and none of them is under `docs-site/`.
 
 - **`tldrx learn` chapters 3-8 — the whole loop, played (#30, phase 2).** The tutorial now runs end to
   end in about five seconds of real commands: **3** the gate (`approve --note`, and the record it writes
@@ -258,6 +284,41 @@
     `(superseded by F<n>)` beside it.
 
 ### Fixed
+
+- **`tldrx learn` — the cold-player QA round (#30).** A first-time player played all eight chapters
+  and returned SHIP-with-fixlist. Everything they found is fixed or recorded:
+  - **Chapter 8 no longer lies about the brake.** It said "the phase has already spent its Watch
+    money" while the tool printed `$1.89 left … estimate is $2.00`. The real mechanism is that a
+    re-run is priced at the stage's WHOLE declared `budget_usd`, never at what a second attempt might
+    add — so a stage that has spent anything can no longer afford itself. The chapter now says that,
+    quotes both figures, and `assert()`s them against the `budget.blocked` event so the numbers cannot
+    drift away from the sentence.
+  - **Chapter 1 no longer promises something chapter 2 does not deliver.** `--no-interview` skips
+    *init's* setup interview, which no chapter covers; the forward reference is gone and the debrief
+    now sends the learner to `.tldrx/init-handoff.md`, where measured/inferred/assumed and
+    `[src: …]` / `absent:` actually live.
+  - **`tldrx learn --chapter <n>` refuses a chapter that is already played**, up front and by name,
+    instead of narrating it and then dying mid-chapter on `run new: … already exists` (exit 1,
+    measured). The refusal names `--reset` and the chapter a bare `learn` would resume at.
+  - **The tutorial has a door out.** The ending now names the first four commands to type on a real
+    repo — `tldrx init` (with the warning that it runs an interview by default), `run new --scope
+    hotfix`, `next`, and `tldrx ship`.
+  - **Chapter 7 RUNS `next --prepare` and `next --commit`** against the feature run's Watch stage
+    instead of describing them in a debrief. Chapters 6 and 7 swapped for it: the attended chapter
+    addresses the feature run through `{run}`, so the hotfix run has to be signed off first.
+  - **Every non-zero exit code is printed** (`→ exit 4`), so the code chapter 2 teaches is a thing
+    the learner reads rather than a thing they are told. Chapter 5 now also demonstrates the exit-2
+    refusal a bare `next` gives with two runs open, and names the two run-id spellings.
+  - Jargon defined at first use — expert, level 0, the `claim-sources` / `no-reask` / `budget-gate`
+    bracket, `boundary`, `[src: …]`, `absent:`, economy, §2.11 — and the `expert … has no evidence`
+    nudge explained once instead of repeating unexplained nine times.
+  - Known and NOT fixed: a step's stderr (where the agent stream lives) is buffered and printed after
+    its stdout, so a summary can appear before the stream that produced it. Interleaving needs an
+    `onStderrLine` on the runtime seam and in both implementations; documented in `engine.ts`.
+
+- **`tldrx cost` no longer claims "two economies" over one (#56).** The `(no total: two economies, no
+  exchange rate)` footnote was unconditional, so a run whose every attempt was metered in dollars was
+  told no total could be printed. It is printed only when both economies are actually present.
 
 - **`tickets sync`, `tickets status` and `budget show` took a run id as a positional that neither
   their `usage` nor their `--help` declared (#53).** Measured at `7ac298c`:

@@ -19,15 +19,15 @@ import { runHook, deny, allow } from "./lib/decide.ts";
 import { readPayload, toolInput } from "./lib/payload.ts";
 import { findWorkspaceRoot, locateWork, stageYamlPath } from "./lib/workspace.ts";
 import {
-  loadRunView, newestActiveRun, cursorStage, renderRunEconomies, runSpend,
-  type RunView,
+  loadRunView, newestActiveRun, cursorStage, hostTokensIn, isAttendedByHostView,
+  renderRunEconomies, runSpend, type RunView,
 } from "./lib/runFile.ts";
 import { budgetGateDeny } from "./lib/messages.ts";
 import { currentActor, nowRfc3339 } from "./lib/actor.ts";
 import { loadRunBudget } from "../core/budget/loadBudget.ts";
 import { economyFor, isHostTokens } from "../core/budget/RunBudget.ts";
 import { remainingWork } from "../core/budget/remainingWork.ts";
-import { wouldExceed } from "../core/budget/wouldExceed.ts";
+import { wouldExceed, wouldExceedHostTokens } from "../core/budget/wouldExceed.ts";
 import { raiseCommand, shortBy } from "../core/budget/budgetView.ts";
 import { EventLog } from "../core/events/EventLog.ts";
 import { parseYaml } from "../core/yaml.ts";
@@ -107,6 +107,9 @@ await runHook("budget-gate", async () => {
   }
   if (budget === null) failClosed(command, `${view.dir}/budget.yml is missing or unreadable`);
 
+  // Read before the estimate: an attended run's developer turns are paid by the
+  // host session, so they are not in the number this gate reasons about (#22 (c)).
+  const attended = isAttendedByHostView(view);
   const stage = cursorStage(view);
   const declared = stage?.budget_usd ?? stageBudgetFromLibrary(root, view.cursor.stage);
   // Not the stage's price — what is LEFT to dispatch under it. On a Build stage
@@ -122,6 +125,7 @@ await runHook("budget-gate", async () => {
     perAgentMaxUsd: budget.per_agent_max_usd,
     maxUsd: null,
     economy: economyFor(budget, view.cursor.phase),
+    attended,
   });
   const estimate = estimateFor(command, work === null ? null : work.usd);
   if (estimate <= 0) return; // nothing declared to spend; nothing to refuse
@@ -138,9 +142,45 @@ await runHook("budget-gate", async () => {
   // `host-tokens` phase is `tldrx next`'s own, which stops the spawn outright
   // rather than measuring it against the wrong unit.
   if (isHostTokens(budget, view.cursor.phase)) {
+    // ONE comparison in this file has the same unit on both sides: declared
+    // `tokens:` against a ceiling that IS a token allowance (issue #22, owner
+    // decision 2026-09-01, policy (b)). It warns. It stops only when the operator
+    // asked for that with `on_host_tokens_exceed: block`, and never on an attended
+    // run, whose spawns this framework does not make (policy (a)).
+    const tokens = wouldExceedHostTokens(budget, view.cursor.phase, hostTokensIn(view, view.cursor.phase));
+    const over = tokens !== null && tokens.over
+      ? ` ${view.cursor.phase} is OVER its host-token ceiling: `
+        + `${String(tokens.spent)} declared of ${String(tokens.ceiling)} allowed.`
+      : "";
+    const stops = tokens !== null && tokens.blocked && !attended;
+    if (over !== "") {
+      recordBudgetEvent(view, view.cursor.stage, stops ? "budget.blocked" : "budget.warned", {
+        phase: view.cursor.phase,
+        scope: tokens?.scope ?? "phase",
+        economy: "host-tokens",
+        attended_by: view.attended_by,
+        host_tokens: tokens?.spent ?? 0,
+        ceiling_tokens: tokens?.ceiling ?? 0,
+        estimate_usd: estimate,
+        metered_usd: spend.meteredUsd,
+        unmetered_tasks: spend.unmeteredTasks,
+      });
+    }
+    if (stops && tokens !== null) {
+      // No `budget raise` here: that command moves DOLLARS, and offering it for a
+      // token ceiling would send the operator to fix the wrong number.
+      deny(
+        `[tldrx] budget-gate: refusing to start stage "${view.cursor.stage}" — phase ${view.cursor.phase} is `
+        + `priced in \`host-tokens\` and has declared ${String(tokens.spent)} of ${String(tokens.ceiling)} `
+        + "allowed. Raise that phase's ceiling in budget.yml (under this economy the number is a TOKEN "
+        + "allowance), or set `on_host_tokens_exceed: warn` to go back to a note."
+        + `${economies === null ? "" : `\n${economies}`}`,
+      );
+    }
     process.stderr.write(
       `tldrx hook budget-gate: ${view.cursor.phase} is priced in \`host-tokens\` — `
       + "no dollar ceiling to enforce here; `tldrx next` refuses a headless spawn on it."
+      + over
       + `${economies === null ? "" : ` ${economies}`}\n`,
     );
     return;
@@ -148,6 +188,33 @@ await runHook("budget-gate", async () => {
 
   const decision = wouldExceed(budget, view.cursor.phase, estimate);
   if (!decision.blocked) return;
+
+  // `tldrx next` on an `attended_by: host` run exits 4 and spawns nothing, so the
+  // dollars this refusal is measured in are spend that provably will not happen
+  // (issue #22, owner decision 2026-09-01, policy (a)). The gate INFORMS — every
+  // number it would have refused with, plus both economies — and allows. The event
+  // says `warned`, not `blocked`, because nothing was blocked.
+  if (attended) {
+    recordBudgetEvent(view, view.cursor.stage, "budget.warned", {
+      phase: view.cursor.phase,
+      scope: decision.scope,
+      remaining_usd: decision.remaining,
+      ceiling_usd: decision.ceiling,
+      estimate_usd: decision.estimate,
+      economy: economyFor(budget, view.cursor.phase),
+      attended_by: view.attended_by,
+      metered_usd: spend.meteredUsd,
+      host_tokens: spend.hostTokens,
+      unmetered_tasks: spend.unmeteredTasks,
+    });
+    process.stderr.write(
+      `tldrx hook budget-gate: ${view.cursor.phase} has $${decision.remaining.toFixed(2)} left of `
+      + `$${decision.ceiling.toFixed(2)} and the stage estimate is $${estimate.toFixed(2)} — NOT refusing, `
+      + "because this run is attended_by: host and the framework spawns nothing on it."
+      + `${economies === null ? "" : ` ${economies}`}\n`,
+    );
+    return;
+  }
 
   new EventLog(join(view.dir, "events.jsonl")).tryAppend({
     ts: nowRfc3339(),
@@ -182,6 +249,32 @@ await runHook("budget-gate", async () => {
   // refusal a plain metered run gets is byte-identical to what it always was.
   ) + (economies === null ? "" : `\n${economies}`));
 });
+
+/**
+ * One budget event, written the way the deny path writes its own.
+ *
+ * A separate writer rather than a flag on the existing one: the two callers below
+ * record decisions that did NOT stop anything, and the `budget.blocked` payload
+ * carries `blocked_by` — the actor a refusal is attributed to. Putting a
+ * `blocked_by` on a turn nobody blocked is exactly the kind of ledger entry
+ * issue #22 was filed about.
+ */
+function recordBudgetEvent(
+  view: RunView,
+  stage: string,
+  type: "budget.blocked" | "budget.warned",
+  payload: Record<string, unknown>,
+): void {
+  new EventLog(join(view.dir, "events.jsonl")).tryAppend({
+    ts: nowRfc3339(),
+    run: view.run,
+    stage,
+    type,
+    actor: "hook:budget-gate",
+    cost_usd: 0,
+    payload,
+  });
+}
 
 /**
  * What this invocation could spend, by command.

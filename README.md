@@ -219,7 +219,11 @@ else, because those five are machine-local or regenerated: `.tldrx/graphify-out/
 
 ## Documentation
 
-The guide, in `docs/guide/`: [1 Quick start](docs/guide/01-quick-start.md) ·
+**[The documentation site](https://ederwii.github.io/tldr-experts/)** is the place to start if you have
+never used this: a landing page, a Quickstart and one short page per concept, written for a reader
+rather than for an agent. Source in [`docs-site/`](docs-site/).
+
+The reference guide, in `docs/guide/`: [1 Quick start](docs/guide/01-quick-start.md) ·
 [2 The loop](docs/guide/02-the-loop.md) (the four steps, what a stage file controls, the two execution modes) ·
 [3 Runs and gates](docs/guide/03-runs-and-gates.md) (`run new`→`retro`, gate policy, `run auto`, unlock/cancel, dashboard, tickets) ·
 [4 Experts](docs/guide/04-experts.md) (loading rules, role experts, training, levels) ·

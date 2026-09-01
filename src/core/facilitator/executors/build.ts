@@ -2148,7 +2148,11 @@ class BuildSession {
   // --- the end of the phase -------------------------------------------------
 
   private async finish(): Promise<ExecutorOutcome> {
-    await this.cleanUpEpics();
+    // The epic worktrees are deliberately NOT removed here (issue #16, owner
+    // decision 2026-09-01). They belong to the RUN, not to this stage: a later
+    // Watch stage cites code that is committed on the epic branch and merged
+    // nowhere, and `resolveSrc` can only resolve that against a checkout that is
+    // still on disk. `cleanUpRunEpicWorktrees` takes them at run close instead.
     const outcomes = this.orderedOutcomes();
     const done = outcomes.filter((o) => o.status === "done").length;
     this.writeHandoff(outcomes);
@@ -3101,16 +3105,6 @@ class BuildSession {
     await removeWorktree(story.repoDir, story.worktree);
   }
 
-  private async cleanUpEpics(): Promise<void> {
-    if (this.ctx.keepWorktrees) return;
-    for (const [key, path] of this.epicWorktrees) {
-      try {
-        await removeWorktree(repoDirOf(this.workspace, key.split(":")[0] ?? ""), path);
-      } catch {
-        // A worktree that will not go away is a note, not a failed phase.
-      }
-    }
-  }
 }
 
 /**
