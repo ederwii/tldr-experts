@@ -62,7 +62,11 @@ function sandbox(): Sandbox {
   const originGit = join(dir, "origin.git");
   const run = (cwd: string, ...args: string[]) =>
     execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
-  execFileSync("git", ["init", "-q", "--bare", originGit]);
+  // `-b main` and `--branch main` are not decoration: a runner whose `init.defaultBranch`
+  // is `master` gives the bare repo a HEAD pointing at a ref that never exists, and the
+  // clone below then has no local `main` at all. That is exactly how this file passed on
+  // macOS and failed on CI.
+  execFileSync("git", ["init", "-q", "--bare", "-b", "main", originGit]);
   execFileSync("git", ["init", "-q", "-b", "main", main]);
   for (const cfg of [["user.email", "fixture@example.com"], ["user.name", "Fixture"], ["commit.gpgsign", "false"]]) {
     run(main, "config", cfg[0]!, cfg[1]!);
@@ -287,7 +291,7 @@ describe("what gets pushed is what was gated (#44)", () => {
     const sb = sandbox();
     // Someone else's commit lands on origin/main while this checkout knows nothing of it.
     const clone = join(sb.dir, "other");
-    execFileSync("git", ["clone", "-q", sb.originGit, clone]);
+    execFileSync("git", ["clone", "-q", "--branch", "main", sb.originGit, clone]);
     for (const cfg of [["user.email", "o@example.com"], ["user.name", "Other"]]) {
       execFileSync("git", ["config", cfg[0]!, cfg[1]!], { cwd: clone });
     }
