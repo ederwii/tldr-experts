@@ -33,9 +33,33 @@ export function noAllowlistMessage(command: string): string {
     + "run for real, as you, and an empty allowlist is not a permit.";
 }
 
-/** The refusal when the workspace declares commands and this is not one of them. */
+/**
+ * The command that repairs the drift this refusal is usually reporting.
+ *
+ * A story's dod block must name workspace commands VERBATIM, so editing
+ * `workspace.yml` orphans every approved story that cited the old string.
+ * Measured live on `260829-scoring-leaderboard` (2026-08-31): one edit —
+ * a filtered `test:`, `lint:` removed — invalidated the dod blocks of 8 approved
+ * stories at once, and the only recoveries on offer were hand-editing
+ * agent-approved artefacts or re-running the whole Plan stage for two lines.
+ */
+export const SYNC_DOD_COMMAND = "tldrx plan sync-dod";
+
+/**
+ * The refusal when the workspace declares commands and this is not one of them.
+ *
+ * A STORY gets the remedy appended, because a story's dod block is data the
+ * operator did not type and cannot be asked to retype: the constraint alone
+ * states the rule and stops, which is the failure mode this repo keeps finding
+ * (see #35). A STAGE does not — its `cmd:` is a line a human wrote in
+ * `stage.yml`, and `sync-dod` does not touch stage files.
+ */
 export function notDeclaredMessage(command: string, subject: string): string {
-  return `\`${command}\` is not one of .tldrx/workspace.yml's commands — a ${subject} may not invent one`;
+  const rule = `\`${command}\` is not one of .tldrx/workspace.yml's commands — a ${subject} may not invent one`;
+  return subject === "story"
+    ? `${rule}. If workspace.yml was edited after the plan was approved, `
+      + `\`${SYNC_DOD_COMMAND}\` rewrites the story's dod block to the current commands.`
+    : rule;
 }
 
 /**

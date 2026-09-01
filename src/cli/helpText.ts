@@ -659,6 +659,32 @@ const ENTRIES: readonly CommandHelp[] = [
     ],
   },
   {
+    name: "plan",
+    description: "Carry an edited workspace.yml into the dod blocks of stories that are already approved.",
+    args: [],
+    flags: [
+      {
+        name: "dry-run",
+        arg: null,
+        meaning: "Print the same per-story diff summary and write nothing.",
+        sub: "sync-dod",
+      },
+      runFlag(),
+      root(),
+    ],
+    examples: [
+      "tldrx plan sync-dod --dry-run",
+      "tldrx plan sync-dod --run 260101-checkout",
+    ],
+    exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
+    notes: [
+      "A story dod command must equal a `workspace.yml` command verbatim, so editing workspace.yml orphans every approved story that cited the old string. This is the mechanical repair, and it does not weaken that rule by a byte.",
+      "Four outcomes per line, and only the first three write anything: a line the current workspace still declares is left alone; a line a PREVIOUS version declared under a role the current file still has becomes that role's command; a line whose role is gone is dropped; and a line no version of workspace.yml ever declared is FLAGGED and its story is left untouched \u2014 that is real drift, not a rename, and guessing at it is the one thing this must not do.",
+      "The ancestry comes from git's history of `.tldrx/workspace.yml`. In a workspace with no history there are no ancestors, so every non-current line is flagged rather than rewritten.",
+      "Nothing else in a story moves: the front matter, the prose and the fences come back byte-identical, the previous version is kept at `<story>.md.bak`, and the result is validated by the same plan check the drift came from. It runs no agent, spends nothing and moves no cursor.",
+    ],
+  },
+  {
     name: "budget",
     description: "What the run may still spend, and where to move a ceiling from.",
     args: [

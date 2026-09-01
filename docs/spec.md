@@ -1138,7 +1138,7 @@ Filled by Build, one bullet per proof. [src: $ npm run test → exit 0]
 | `acceptance` | str[] (≥1, ≤64) | y | What must be true for a human to accept it |
 | `test_plan` | str[] (≥1, ≤64) | y | How it will be proven, before it is written |
 | `evidence` | str[] (≤64) | y | Filled by Build. **Required non-empty when `status: done`** — done means proven, not asserted. May cite `04-build/fixlist/<id>-<n>.md` beside the review log when the story went through a fix-list round |
-| ` ```dod ` block | fenced, ≥1 command | y | Each line must equal a `workspace.yml` command **verbatim**; `dod-gate` re-runs all of them from `repo` and every one must exit `0` |
+| ` ```dod ` block | fenced, ≥1 command | y | Each line must equal a `workspace.yml` command **verbatim**; `dod-gate` re-runs all of them from `repo` and every one must exit `0`. Editing `workspace.yml` therefore orphans every approved story that cited the old string — `tldrx plan sync-dod` is the mechanical repair, and the drift message names it |
 
 **Validation.** Front matter present and parseable; keys and enums as above; `id` matches the file name; `depends_on`
 free of self-reference and duplicates; every ` ```dod ` command in `workspace.yml` (skipped when there are no commands to
@@ -2049,7 +2049,19 @@ one story never varies:
    story `blocked` — terminal in-run — so six of seven stories were reported as tried and failed when five of them had
    never been tried. A developer that RAN and produced work its DoD faulted is a different thing and still blocks.
 3. **The Definition of Done, re-run by the facilitator** in that worktree, through the same runner `dod-gate` uses. All
-   commands must exit 0. Then anything still uncommitted is committed as `feat(<story-id>): <title>` — the agent may
+   commands must exit 0.
+
+   **A DoD is a DELTA gate, so the base tree is checked first (2026-08-31).** At Build entry — after the dirty-tree and
+   foreign-epic refusals, before a story is dispatched or charged — every dod command the pending stories name is run
+   ONCE against the untouched base tree, in the repo's own checkout (the tree that has the installed dependencies; a
+   pristine worktree would fail for want of them and turn this into an outage). A non-zero exit is a **workspace-config
+   error**: Build refuses with exit 2, naming the command, its exit code and the repo, and no story attempt is spent.
+   Results are written to `04-build/preflight.yml` (files are the state) and read back by later invocations, so a
+   resumed run never re-pays for them; a command the gate declines to run at all is recorded `unmeasured` and refuses
+   nothing. When a story's DoD then fails, the cached base result decides ATTRIBUTION: a command red on the base too
+   halts the build with the same config error instead of blocking the story. Measured on `260829-scoring-leaderboard`:
+   two of three declared commands already failed on pristine main — one of them running paid `Live` AI tests the repo's
+   own CI excludes — so all 15 stories would have blocked identically, each having spent a developer turn on it. Then anything still uncommitted is committed as `feat(<story-id>): <title>` — the agent may
    have committed already, and either way the sha is read back with `rev-parse`.
 4. **Merge into the epic**, `git merge --no-ff` inside a worktree checked out on the epic branch. On conflict the merge
    is **aborted** — so the epic branch is exactly as the previous story left it and the wave can continue — the

@@ -107,8 +107,15 @@ export interface DodBlock {
   readonly commands: readonly string[];
 }
 
-const FENCE_OPEN_RE = /^\s*```+\s*dod\s*$/i;
-const FENCE_CLOSE_RE = /^\s*```+\s*$/;
+/**
+ * Exported so `plan sync-dod` can walk the same fence this parses, rather than
+ * spelling the boundary a second time: a rewriter that disagreed with the parser
+ * about where the block ENDS would edit prose.
+ */
+export const DOD_FENCE_OPEN_RE = /^\s*```+\s*dod\s*$/i;
+export const DOD_FENCE_CLOSE_RE = /^\s*```+\s*$/;
+const FENCE_OPEN_RE = DOD_FENCE_OPEN_RE;
+const FENCE_CLOSE_RE = DOD_FENCE_CLOSE_RE;
 
 /**
  * The fenced ```dod block, by line scanning. Shared by `dod-gate` and the Plan

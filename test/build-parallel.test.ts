@@ -291,7 +291,7 @@ describe("a story that fails inside a parallel wave", () => {
     const ws = workspace({
       stories: [
         { id: "S1", epic: "E1", title: "First" },
-        // Its own dod command, and that command exits 1.
+        // Its own dod command, and that command goes red once its developer has run.
         { id: "S2", epic: "E1", title: "Second, red", dod: ["npm run lint"] },
         { id: "S3", epic: "E1", title: "Third" },
         { id: "S4", epic: "E1", title: "Fourth, in the next wave" },
@@ -304,7 +304,15 @@ describe("a story that fails inside a parallel wave", () => {
           name: "app",
           version: "0.0.0",
           private: true,
-          scripts: { test: 'node -e "process.exit(0)"', lint: 'node -e "process.exit(1)"' },
+          scripts: {
+            test: 'node -e "process.exit(0)"',
+            // Green on the untouched base tree, red in a worktree a developer has
+            // written its story file into. A `lint` that failed on main too is a
+            // WORKSPACE-CONFIG error since the base-tree pre-flight landed
+            // (issue #41) and would refuse the whole build — which is not what
+            // this test is about.
+            lint: 'node -e "process.exit(require(\'fs\').readdirSync(\'.\').some(function (f) { return f.endsWith(\'.txt\'); }) ? 1 : 0)"',
+          },
         }, null, 2)}\n`,
       },
     });
