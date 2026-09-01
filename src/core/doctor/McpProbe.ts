@@ -8,7 +8,10 @@
 import { runtime } from "../runtime/index.ts";
 import { claudeBin } from "../facilitator/spawnAgent.ts";
 
-const ANSI_ESCAPE = /\[[0-9;]*m/g;
+// eslint-disable-next-line no-control-regex -- ESC is the thing being matched.
+// Written as the escape SEQUENCE, never as the byte: a raw 0x1b here is invisible in
+// a diff, a review and most editors, so the line reads `/\[[0-9;]*m/g` (#52).
+const ANSI_ESCAPE = /\x1b\[[0-9;]*m/g;
 const SERVER_LINE = /^([A-Za-z0-9._@/-]+):\s+(.+?)\s+-\s+(.+)$/;
 
 export interface McpServer {

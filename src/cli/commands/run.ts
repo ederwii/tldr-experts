@@ -49,15 +49,15 @@ export const runCommand: Command = {
   usage: "tldrx run new <slug> [--title <t>] [--scope <s>] [--budget <usd>] [--repos a,b]\n" +
     "                  [--from <aidlc-intent-dir> | --seed <file|dir> ...] [--gates <a,b|a:agent|all|none>]\n" +
     "                  [--attended-by host] [--root <path>]\n" +
-    "       tldrx run attend <host|--none> [<run>] [--root <path>]\n" +
-    "       tldrx run status [<run>] [--json] [--root <path>]\n" +
-    "       tldrx run estimate [<run>] [--json] [--root <path>]\n" +
+    "       tldrx run attend <host|--none> [<run>] [--run <id>] [--root <path>]\n" +
+    "       tldrx run status [<run>] [--json] [--run <id>] [--root <path>]\n" +
+    "       tldrx run estimate [<run>] [--json] [--run <id>] [--root <path>]\n" +
     "       tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]\n" +
     "                  [--yolo] [--parallel <n>] [--gate-agent] [--ui scene|compact|plain|off]\n" +
-    "                  [--root <path>]\n" +
+    "                  [--run <id>] [--root <path>]\n" +
     "       tldrx run gates set <stage>:<human|auto|agent> --note <text> [--run <id>] [--root <path>]\n" +
-    "       tldrx run unlock [<run>] [--force] [--root <path>]\n" +
-    "       tldrx run cancel [<run>] --note <text> [--force] [--root <path>]",
+    "       tldrx run unlock [<run>] [--force] [--run <id>] [--root <path>]\n" +
+    "       tldrx run cancel [<run>] --note <text> [--force] [--run <id>] [--root <path>]",
   subcommands: ["new", "attend", "status", "estimate", "gates", "auto", "unlock", "cancel"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {

@@ -165,6 +165,64 @@
 
 ### Fixed
 
+- **The epic file duplicated every story's status, and nothing ever updated the copy (#50).**
+  Measured on `260829-scoring-leaderboard` (2026-09-01): `03-plan/epics/E1.md` listed S1, S2 and S3 as
+  `todo` in its `## Stories` table while `03-plan/stories/S1.md` said `done` (merged at `0a50660`,
+  `task.done` in `events.jsonl` at 23:46:11Z) and S2 said `in_progress`. Nothing had lied — nothing had
+  written, either. Fixed by **removing the copy**, not by adding a second writer, and the repo already
+  drew that line for the one field it does maintain: the epic's front-matter `status:` is DERIVED and
+  written by `BuildExecutor.updateEpicStatus` (`build.ts:2552`) from the story files. A copy with a
+  writer is a cache; a copy without one is a lie waiting to be read.
+  - **Nothing parsed the table.** `validateEpicFile` is front matter only ("the front matter is the whole
+    schema", `schemas/epic.ts:69`), `adapters/body.ts:50` mirrors an epic to a ticket as a bare list of
+    ids with no status, and the dashboard reads the front matter. A writer would have been maintaining a
+    document with no reader.
+  - **Both copies of the shape are fixed, not just the visible one.** `templates/epic.md` now points at
+    `03-plan/stories/<id>.md` instead of tabulating it, and the GENERATED contract the Plan sub-agent
+    reads (`schemaContract.ts`, spliced into the stage prompt) now says "Do NOT restate a story's status,
+    repo or `depends_on`" — without that, the next Plan agent invents the table again, which is how it
+    got there.
+  - `test/plan-schema-contract.test.ts` runs the issue's acceptance: build a plan from the shipped
+    templates, flip S1 to `done` through `updateStoryFront` (the writer the Build executor uses), then
+    grep the epic. Any `S<n>` + status word on one line of the epic body is a claim, and the claim set
+    must be empty.
+
+- **Seven `usage` strings were narrower than the same command's `--help` (#51, after #25).**
+  `usage` is what a BAD invocation prints — `run.ts:85`, `questions.ts:38`, `tickets.ts:60`, `gate.ts:44`
+  and three more write `<cmd>.usage` to stderr — so it is the string an operator reads at the exact
+  moment they got the invocation wrong, and it was hiding flags the code accepts. Widened: `run attend`,
+  `run status`, `run estimate`, `run auto`, `run unlock` and `run cancel` now show `[--run <id>]`
+  (all six read `args.positionals[0] ?? stringFlag(args, "run")`); `tldrx next` shows it too
+  (`next.ts:48`); and `tldrx questions lint` shows the `[<run>]` positional it has always taken
+  (`questions.ts:49`, and `docs/guide/08-cli-reference.md` had been documenting it for longer than the
+  CLI admitted it).
+  - **The guard is subcommand-aware, and that is not gold-plating.** A plain
+    `usage.includes("--run")` calls `run` CLEAN, because the new `run gates set` line names `--run` —
+    measured, the naive check saw **one of run's seven gaps**. `test/cli.test.ts` scopes a flag that
+    declares a `sub:` to that subcommand's block of the usage, and falls back to the whole string for a
+    `sub:` that is a MODE rather than a word in argv (`dashboard --out {sub: "static"}`, which the first
+    draft reported as a gap it is not).
+  - **Three of the seven were spelling, not gaps, and are allowlisted with the reason:** `seed`'s
+    `<Qid> "<text>"`, `watch`'s `check <feature>` and `hook`'s enumerated script names all say the same
+    thing more specifically than the registry's general name. A fourth, `run`'s
+    `<stage>:<human|auto|agent>`, is the same case. The allowlist is itself checked: every entry must
+    still name a declared flag or arg, so a rename turns an exemption red instead of silent.
+  - **`tickets --dry-run` was left OUT on purpose.** `tickets sync` previews by default and `--apply` is
+    the write; advertising `--dry-run` would imply the opposite, and `test/money-safety.test.ts:319`
+    asserts its absence. Recorded in the allowlist as a decision rather than papered over as a gap.
+
+- **A literal ESC byte in `McpProbe.ts`'s ANSI regex (#52).** `src/core/doctor/McpProbe.ts:11` wrote a raw
+  `0x1b` where `\x1b` was meant, so the source read `/<ESC>\[[0-9;]*m/g` and a reader — in a diff, in a
+  review, in a terminal, in most editors — saw `/\[[0-9;]*m/g`, a different and wrong-looking regex that
+  someone tidying is one keystroke from breaking `tldrx doctor --mcp` with. **Not the #47 hazard**, and
+  worth saying: ESC does not trip the binary-file heuristic, and the file was always visible to a grep.
+  Behaviour is byte-identical, and `.source` is the wrong instrument for proving that (it returns the
+  literal as written, so the two spellings differ there while compiling to the same matcher) — so
+  `test/doctor.test.ts` compares the shipped `stripAnsi` against a reference rebuilt from the old
+  literal-ESC form over a nine-line corpus, 4 of which change. `test/source-hygiene.test.ts` now flags a
+  raw ESC as well as a NUL: measured across all 479 `.ts` files under `src/`, `test/`, `bin/` and
+  `scripts/`, `McpProbe.ts` held the only one, so the check has no false positives to trade against.
+
 - **A stray NUL byte made two source files invisible to every grep-based sweep (#47).**
   `test/cli.test.ts` carried one literal `0x00`, so `file(1)` called it `data` and `grep -I` —
   ripgrep and ugrep too — dropped it SILENTLY, exit 0, no message. Measured on `origin/main`:
