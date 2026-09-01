@@ -43,7 +43,7 @@ import {
 import { execFileSync } from "node:child_process";
 import {
   chaptersToPlay, displayCommand, expandCommand, expandTurns, newestRunId, playChapter,
-  type LearnIo, type StepResult, type StepRunner,
+  realStepRunner, type LearnIo, type StepResult, type StepRunner,
 } from "../src/core/learn/engine.ts";
 import { CHAPTERS, chapterByNumber, LEARN_HOTFIX_SLUG, LEARN_RUN_SLUG } from "../src/core/learn/chapters.ts";
 import { isComplete, markComplete, NO_PROGRESS, readProgress, resumeAt, writeProgress } from "../src/core/learn/progress.ts";
@@ -530,6 +530,65 @@ describe("playChapter", () => {
     expect(outcome.ok).toBe(false);
     expect(ran).toBe(0);
   });
+
+  /**
+   * #67, the engine half. The buffered `if (result.stderr !== "") io.write(...)`
+   * is GONE: stderr now arrives through the same line sink as stdout, while the
+   * command runs, so writing the whole string again afterwards would print every
+   * progress line twice. Counted rather than merely "contains", because a
+   * `toContain` passes on both the fixed and the broken output.
+   */
+  test("a step's stderr is not written a second time after it finishes (#67)", async () => {
+    const io = collectingIo();
+    const line = "[00:00] writing 01-what/what.md";
+    const runner: StepRunner = async (_step, _sandbox, onLine) => {
+      onLine(line);
+      return { exitCode: 0, stdout: "", stderr: `${line}\n` };
+    };
+
+    const outcome = await playChapter(chapter(), await box(), io, runner);
+
+    expect(outcome.ok).toBe(true);
+    expect(io.out.join("").split(line).length - 1).toBe(1);
+  });
+
+  /**
+   * #67, the seam half — the property the whole issue is about, measured on a
+   * real child rather than a stub.
+   *
+   * `["/bin/sh", "-c"]` stands in for `selfCommand()`: `realStepRunner` spawns
+   * `interpreter [entry, ...step.command]`, which for `sh -c` is exactly a script
+   * and its argument. Same code path the tutorial takes, driving a child whose
+   * timing this test can state.
+   *
+   * `settled` is the assertion that matters. Content checks alone would pass on a
+   * runner that split the buffered `result.stderr` at exit, which is the bug.
+   */
+  test("realStepRunner streams stderr WHILE the step runs, not after it (#67)", async () => {
+    const sandbox = await box();
+    const seen: string[] = [];
+    let settled = false;
+    const running = realStepRunner(["/bin/sh", "-c"])(
+      { narrate: [], command: ["printf 'progress\\n' >&2; sleep 1; printf 'done\\n'"] },
+      sandbox,
+      (line) => { seen.push(line); },
+    ).then((result) => { settled = true; return result; });
+
+    const deadline = Date.now() + 5_000;
+    while (!seen.includes("progress") && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(seen).toEqual(["progress"]);
+    expect(settled).toBe(false);
+
+    const result = await running;
+    expect(result.exitCode).toBe(0);
+    // Both streams, one sink, in the order they were produced — which is the
+    // interleaving the cold player asked for.
+    expect(seen).toEqual(["progress", "done"]);
+    expect(result.stderr).toBe("progress\n");
+    expect(result.stdout).toBe("done\n");
+  }, 20_000);
 
   test("a step that exits the wrong way fails the chapter and says both codes", async () => {
     const io = collectingIo();

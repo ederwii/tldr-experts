@@ -74,6 +74,10 @@ export const nodeRuntime: Runtime = {
             }, opts.timeoutMs);
 
       const splitter = opts.onStdoutLine === undefined ? null : new LineSplitter(opts.onStdoutLine);
+      // Its own splitter, not a shared one (#67): two streams whose partial lines
+      // are held in one buffer would splice a half-written stdout line onto the
+      // front of a stderr line and hand the caller a sentence neither wrote.
+      const errSplitter = opts.onStderrLine === undefined ? null : new LineSplitter(opts.onStderrLine);
 
       const finish = (exitCode: number): void => {
         if (settled) return;
@@ -83,6 +87,7 @@ export const nodeRuntime: Runtime = {
         // newline must still be seen by the progress view, and after `resolve`
         // nobody is listening.
         splitter?.end();
+        errSplitter?.end();
         opts.signal?.removeEventListener("abort", onAbort);
         if (timer !== null) clearTimeout(timer);
         if (graceTimer !== null) clearTimeout(graceTimer);
@@ -95,7 +100,12 @@ export const nodeRuntime: Runtime = {
         splitter?.push(text);
       });
       child.stdout?.on("end", () => splitter?.end());
-      child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+      child.stderr?.on("data", (chunk: Buffer) => {
+        const text = chunk.toString("utf8");
+        stderr += text;
+        errSplitter?.push(text);
+      });
+      child.stderr?.on("end", () => errSplitter?.end());
       child.on("error", (error: Error) => {
         stderr += error.message;
         finish(127);

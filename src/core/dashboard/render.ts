@@ -240,13 +240,19 @@ export function dashCmd(text: string, id: string): string {
  * question to answer, a stage that failed. `ready` and `done` are states of the
  * work, not asks, and a page that alerts on them alerts on everything.
  *
- * A run waiting behind a sibling raises nothing either, whatever its own stage
- * says — the same call `tldrx status` makes when it prints no command for a
- * blocked run. Its gate is real, but signing it is not the next move, and an
- * alert that cannot be acted on is the noise that makes the others ignorable.
+ * A run that has NOT STARTED and is waiting behind a sibling raises nothing
+ * either — the same call `tldrx status` makes when it prints no command for it.
+ * Its gate is not reachable yet, and an alert that cannot be acted on is the
+ * noise that makes the others ignorable.
+ *
+ * The "not started" half is #60. This used to suppress the alert for ANY run with
+ * an unfinished `depends_on`, "whatever its own stage says" — which silenced the
+ * gate of a run that had already run the stage and was sitting at it. That gate
+ * IS the next move: `depends_on` is an order a split proposed, not an
+ * enforcement, and it cannot make a signature unreachable after the fact.
  */
 export function dashPending(run: RunModel): DashPending | null {
-  if (run.blockedBy.length > 0) return null;
+  if (!run.started && run.blockedBy.length > 0) return null;
   const kind = run.waiting.kind;
   if (kind === "gate") {
     return { kind: "gate", text: `stage ${run.pendingGate ?? "?"} is waiting at a gate` };
@@ -268,20 +274,28 @@ export function dashSlug(id: string): string {
  * The WAITING ON column: what this run needs, in the fewest words that are true.
  *
  * Every kind gets a line, not only the three that raise a card — "nothing" in a
- * column headed "waiting on" is what made a `ready` run look finished. A blocked
- * run says what it is behind first, whatever its own stage says: a gate you
- * cannot reach yet is not the thing to go and sign.
+ * column headed "waiting on" is what made a `ready` run look finished. A run that
+ * has not started says what it is behind first: a gate you cannot reach yet is
+ * not the thing to go and sign.
+ *
+ * A run that HAS started says what it is doing (#60). "Blocked by" is reserved
+ * for a run that really cannot move; the proposal it outran is a note beside its
+ * own state, never the state itself.
  */
 export function dashWaitingCell(run: RunModel): string {
-  if (run.blockedBy.length > 0) {
+  if (run.blockedBy.length > 0 && !run.started) {
     return `<span class="nowrap">blocked by ${dashText(run.blockedBy.map(dashSlug).join(", "))}</span>`;
   }
+  const note = run.blockedBy.length === 0
+    ? ""
+    : `<span class="faint"> · proposed to follow ${dashText(run.blockedBy.map(dashSlug).join(", "))}`
+      + " — started anyway</span>";
   const pending = dashPending(run);
-  if (pending !== null) return dashText(pending.text);
+  if (pending !== null) return `${dashText(pending.text)}${note}`;
   if (run.waiting.kind === "ready") {
-    return `<span class="nowrap">ready — <code>tldrx next ${dashText(run.id)}</code></span>`;
+    return `<span class="nowrap">ready — <code>tldrx next ${dashText(run.id)}</code></span>${note}`;
   }
-  return `<span class="faint">nothing — ${dashText(dashWords(run.status))}</span>`;
+  return `<span class="faint">nothing — ${dashText(dashWords(run.status))}</span>${note}`;
 }
 
 /** The first run in workspace order that a human could actually move, or "". */
@@ -309,7 +323,8 @@ export function dashAttention(model: DashboardModel): string {
   for (const id of model.order) {
     const run = model.runs.filter((candidate) => candidate.id === id)[0];
     if (run === undefined) continue;
-    if (run.blockedBy.length > 0) { blocked++; continue; }
+    // #60: only a run the proposal still holds back is counted blocked.
+    if (!run.started && run.blockedBy.length > 0) { blocked++; continue; }
     if (dashPending(run) !== null) { human++; continue; }
     if (run.waiting.kind === "ready" && run.runnable) {
       ready++;

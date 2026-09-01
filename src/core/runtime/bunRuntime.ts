@@ -55,7 +55,11 @@ export const bunRuntime: Runtime = {
         opts.onStdoutLine === undefined
           ? new Response(proc.stdout).text()
           : drainLines(proc.stdout, opts.onStdoutLine),
-        new Response(proc.stderr).text(),
+        // Independently of stdout (#67): a caller may want progress lines off
+        // stderr and the whole of stdout, or the other way round.
+        opts.onStderrLine === undefined
+          ? new Response(proc.stderr).text()
+          : drainLines(proc.stderr, opts.onStderrLine),
       ]);
       const timer =
         opts.timeoutMs === undefined

@@ -139,6 +139,23 @@ export interface ExecutorContext {
    */
   readonly attendedByHost: boolean;
   /**
+   * `--cost-usd <n>` on `tldrx next --commit` — what the HOST says its in-session
+   * sub-agent cost. `null` when nothing was declared.
+   *
+   * Issue #68: this was missing, and an executor that cannot see the declaration
+   * cannot attach it. Build's `commit()` fell back to the envelope's own
+   * `cost_usd`, which a host session has no reason to fill, and recorded a
+   * METERED `$0.00` for a story turn that had really cost $2.25 — so `tldrx cost`
+   * kept 04-build at zero across two live runs while what/how/plan, which read
+   * `options.costUsd` in `commitStage`, recorded theirs.
+   *
+   * A declaration, never a measurement: it is consulted only on the `--commit`
+   * path, and a headless spawn's reconciled `cost_usd` is untouched by it.
+   */
+  readonly costUsd: number | null;
+  /** `--tokens <n>` on the same commit — the host's token count, or `null`. */
+  readonly tokens: number | null;
+  /**
    * `min(stage budget × share, per_agent_max_usd, --max-usd)`, to the cent.
    * `agentCap(1)` is `maxBudgetUsd`; an executor that splits the stage between N
    * sub-agents asks for `agentCap(1 / N)` rather than dividing `maxBudgetUsd`,

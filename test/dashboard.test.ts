@@ -119,6 +119,7 @@ describe("the dashboard model", () => {
       "runs[].spentUsd",
       "runs[].stagesDone",
       "runs[].stagesTotal",
+      "runs[].started",
       "runs[].status",
       "runs[].title",
       "runs[].updatedAt",

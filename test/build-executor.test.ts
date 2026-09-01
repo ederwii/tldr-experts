@@ -1156,7 +1156,95 @@ describe("in-session mode", () => {
     expect(done.lines.join("\n")).toContain("gate pending");
     expect(story(ws, "S2")).toContain("status: done");
   });
+
+  /**
+   * #68. Measured on two live runs: the leaderboard host declared $2.25 on a
+   * story commit and `tldrx cost` kept 04-build at $0.00 — "the declaration
+   * didn't attach to the build task the way it did for what/how/plan". The
+   * ordering run showed the same shape. Consequence: the run's recorded build
+   * spend is a floor, budget arithmetic runs blind on the most expensive phase,
+   * and ~8M host tokens are invisible.
+   *
+   * The cause was the seam, not the accounting: `ExecutorContext` never carried
+   * `--cost-usd`/`--tokens`, so Build's `commit()` could only read the envelope's
+   * own `cost_usd` and wrote `round2(result.cost_usd ?? 0)` — a metered $0.00.
+   * `commitStage` (what/how/plan) resolves `options.costUsd ?? result.cost_usd`;
+   * this asserts Build now resolves it the same way, on the task row AND on the
+   * `agent.result` payload the cost report reads.
+   */
+  test("a --cost-usd/--tokens declaration on a story commit attaches to the build task (#68)", async () => {
+    const ws = workspace(ONE_STORY_INSESSION);
+    await next(ws, { mode: "prepare" });
+    writeFileSync(join(ws.root, ".tldrx", "worktrees", "app", `${ws.runId}-S1`, "s1.txt"), "S1\n", "utf8");
+    writeFileSync(
+      join(ws.runDir, ".agent", "build", "S1", "result.json"),
+      // Exactly the shape a host session writes: no cost of its own to report.
+      JSON.stringify({ outputs: ["s1.txt"], questions_asked: [], notes: "", cost_usd: null }),
+      "utf8",
+    );
+
+    await next(ws, { mode: "commit", costUsd: 2.25, tokens: 8_000_000 });
+
+    const developer = RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.tasks[0];
+    expect(developer?.cost_usd).toBe(2.25);
+    expect(developer?.tokens).toBe(8_000_000);
+    // The event is the half `tldrx cost` reads; a task row nothing reports off
+    // would leave the ledger saying $0.00 exactly as before.
+    const result = events(ws).find((e) => e.type === "agent.result");
+    expect(result?.cost_usd).toBe(2.25);
+    expect(result?.payload.tokens).toBe(8_000_000);
+  });
+
+  /**
+   * The other half of the same rule, and the reason the fix is not "default the
+   * declaration to 0": with NOTHING declared, `$0.00` is a measurement and a
+   * false one (2026-08-29 audit, §A). `commitStage` writes `cost_usd: null` +
+   * `metered: false` for that case, and Build now says it the same way.
+   */
+  test("with nothing declared the story turn is unmetered, not a $0.00 measurement (#68)", async () => {
+    const ws = workspace(ONE_STORY_INSESSION);
+    await next(ws, { mode: "prepare" });
+    writeFileSync(join(ws.root, ".tldrx", "worktrees", "app", `${ws.runId}-S1`, "s1.txt"), "S1\n", "utf8");
+    writeFileSync(
+      join(ws.runDir, ".agent", "build", "S1", "result.json"),
+      JSON.stringify({ outputs: ["s1.txt"], questions_asked: [], notes: "", cost_usd: null }),
+      "utf8",
+    );
+
+    await next(ws, { mode: "commit" });
+
+    const developer = RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.tasks[0];
+    expect(developer?.cost_usd).toBeNull();
+    expect(developer?.metered).toBe(false);
+  });
+
+  /**
+   * A declaration is never allowed to overwrite a MEASUREMENT. Headless Build
+   * reconciles the envelope's real `cost_usd`, so an envelope that carries one
+   * keeps it — the same precedence `--cost-usd`'s own usage line states.
+   */
+  test("an envelope that reports its own cost still wins over nothing declared (#68)", async () => {
+    const ws = workspace(ONE_STORY_INSESSION);
+    await next(ws, { mode: "prepare" });
+    writeFileSync(join(ws.root, ".tldrx", "worktrees", "app", `${ws.runId}-S1`, "s1.txt"), "S1\n", "utf8");
+    writeFileSync(
+      join(ws.runDir, ".agent", "build", "S1", "result.json"),
+      JSON.stringify({ outputs: ["s1.txt"], questions_asked: [], notes: "", cost_usd: 0.3 }),
+      "utf8",
+    );
+
+    await next(ws, { mode: "commit" });
+
+    expect(RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.tasks[0]?.cost_usd).toBe(0.3);
+  });
 });
+
+/** One story, one wave — an in-session cycle that settles without a second story. */
+const ONE_STORY_INSESSION: BuildWorkspaceOptions = {
+  stories: [{ id: "S1", epic: "E1", title: "First story" }],
+  epics: [{ id: "E1", stories: ["S1"], branch: "epic/e1" }],
+  waves: [["S1"]],
+};
 
 /** One story, one epic, one wave — enough to watch a single commit's contents. */
 const ONE_STORY: BuildWorkspaceOptions = {

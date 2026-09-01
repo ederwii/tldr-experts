@@ -834,13 +834,17 @@ class BuildSession {
     const story = await this.openStory(planned);
     this.noteMerged(story, null);
     const review = this.narrowFixlist(planned.story.id, parseReview(envelope, summaryOf(envelope)));
+    // The reviewer half of #68: `--commit --review --cost-usd 1.10` is the same
+    // declaration about the same kind of turn, so it takes the same precedence
+    // over the envelope it did for the developer.
+    const declaredReview = this.ctx.costUsd ?? numberOf(envelope.cost_usd);
     this.recordReview(story, review, {
-      costUsd: numberOf(envelope.cost_usd) ?? 0,
+      costUsd: declaredReview ?? 0,
       sessionId: typeof envelope.session_id === "string" ? envelope.session_id : null,
       // Billed to the HOST session, not metered here. `cost_usd: null` +
       // `metered: false` is the same spelling every other host turn gets.
-      metered: numberOf(envelope.cost_usd) !== undefined,
-      tokens: numberOf(envelope.tokens),
+      metered: declaredReview !== undefined,
+      tokens: this.ctx.tokens ?? numberOf(envelope.tokens),
       source: "host",
     });
     await this.reviewAndSettle(story, work.dod, work.commit, 0, null, review);
@@ -884,15 +888,27 @@ class BuildSession {
     }
 
     const story = await this.openStory(planned);
+    // The cost of an in-session story turn is DECLARED, never measured: the
+    // developer ran inside the host's session and was billed to it. Same
+    // precedence, and the same three-value contract, `commitStage` uses for a
+    // single-agent stage — `--cost-usd` first, then the envelope's own
+    // `cost_usd`, and with NEITHER `null` + `metered: false` rather than `0`,
+    // which is a measurement and a false one. Issue #68: this read the envelope
+    // alone, so a host that declared $2.25 on the command line got a metered
+    // $0.00 on the task row and `tldrx cost` reported 04-build at zero.
+    const declared = this.ctx.costUsd ?? result.cost_usd;
+    const cost = declared === null ? null : round2(declared);
     this.tasks.push({
       key: planned.story.id,
       model: this.model(),
-      costUsd: round2(result.cost_usd ?? 0),
+      costUsd: cost ?? 0,
       sessionId: result.session_id,
       error: null,
       outputs: result.outputs,
+      ...(cost === null ? { metered: false } : {}),
+      ...(this.ctx.tokens === null ? {} : { tokens: this.ctx.tokens }),
     });
-    const route = await this.pipelineFromDod(story, round2(result.cost_usd ?? 0));
+    const route = await this.pipelineFromDod(story, cost ?? 0);
     // On an attended run the story is merged and its review is now the host's:
     // the bundle is out, nothing is settled, and the next command is the review
     // half — not `--prepare` for the story after this one.

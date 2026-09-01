@@ -482,6 +482,31 @@ developer's commits, is untouched. It does NOT send the stage back; the output n
 `reject` that does. Refuses (`2`) an unknown story id, a `done` story (that is
 `reject --stage`), a `todo` story, and a missing `--note`. Exits: `0` `1` `2` `3`.
 
+## `tldrx plan`
+
+Carry an edited `workspace.yml` into the dod blocks of stories that are already approved.
+
+```
+tldrx plan sync-dod [--dry-run] [--run <id>] [--root <path>]
+```
+
+A story's dod command must equal a `workspace.yml` command verbatim, so editing
+`workspace.yml` orphans every approved story that cited the old string. This is the
+mechanical repair for that, and it does not weaken the verbatim rule by a byte.
+
+Four outcomes per dod line, and only the first three write anything: a line the current
+workspace still declares is left alone; a line a PREVIOUS version declared under a role the
+current file still has becomes that role's command; a line whose role is gone is dropped; and
+a line no version of `workspace.yml` ever declared is FLAGGED and its story left untouched —
+that is real drift, not a rename, and guessing at it is the one thing this must not do. The
+ancestry comes from git's history of `.tldrx/workspace.yml`, so a workspace with no history
+has no ancestors and every non-current line is flagged rather than rewritten.
+
+Nothing else in a story moves: the front matter, the prose and the fences come back
+byte-identical, the previous version is kept at `<story>.md.bak`, and the result is validated
+by the same plan check the drift came from. `--dry-run` prints the same per-story diff summary
+and writes nothing. It runs no agent, spends nothing and moves no cursor. Exits: `0` `1` `2` `3`.
+
 ## `tldrx budget`
 
 ```

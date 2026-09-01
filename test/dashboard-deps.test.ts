@@ -108,7 +108,7 @@ describe("dependencies, order and chains", () => {
     const paths = new Set(fieldPaths(model));
     for (const field of [
       "chains[][]", "order[]",
-      "runs[].dependsOn[]", "runs[].blockedBy[]", "runs[].runnable",
+      "runs[].dependsOn[]", "runs[].blockedBy[]", "runs[].runnable", "runs[].started",
       "runs[].waiting.kind", "runs[].waiting.message", "runs[].waiting.questions[]",
       "runs[].path[].gatePolicy", "runs[].path[].gateBy",
     ]) {
@@ -128,17 +128,38 @@ describe("dependencies, order and chains", () => {
     expect(byId.get("260903-golf")?.runnable).toBe(true);
   });
 
-  test("a run at a gate it cannot reach yet is blocked, not an ask", () => {
+  /**
+   * #60. charlie is `awaiting_gate` and was proposed to follow bravo, which is
+   * still `pending` — so it is the shape the issue is about: a run that HAS run a
+   * stage, sitting at a gate a person can sign right now, behind a sibling that
+   * was only ever PROPOSED to come first.
+   *
+   * This used to assert `runnable: false`, on the reasoning that a gate you
+   * cannot reach yet is not the thing to go and sign. The reasoning does not
+   * survive the evidence: charlie HAS reached its gate. `depends_on` is a
+   * proposal a split wrote, not an enforcement, so it cannot make a signature
+   * unreachable after the fact. `blockedBy` still records the proposal — that is
+   * a true statement about the split — and `started` is what says it no longer
+   * holds anything back.
+   */
+  test("a started run outranks the order it was proposed to follow (#60)", () => {
     const gated = model.runs.find((run) => run.id === "260903-charlie");
     expect(gated?.waiting.kind).toBe("gate");
+    expect(gated?.started).toBe(true);
     expect(gated?.blockedBy).toEqual(["260903-bravo"]);
-    expect(gated?.runnable).toBe(false);
+    expect(gated?.runnable).toBe(true);
+    // …and the run that has NOT started is still held by it.
+    const notStarted = model.runs.find((run) => run.id === "260903-bravo");
+    expect(notStarted?.started).toBe(false);
+    expect(notStarted?.runnable).toBe(false);
   });
 
-  test("`runnable` needs BOTH nothing blocking and something a human can do", () => {
+  test("`runnable` needs BOTH nothing that still blocks and something a human can do", () => {
     const finished = model.runs.find((run) => run.id === "260903-foxtrot");
     expect(finished?.blockedBy).toEqual([]);
     expect(finished?.waiting.kind).toBe("done");
+    // Started, unblocked — and still not runnable, because `done` is not a move.
+    expect(finished?.started).toBe(true);
     expect(finished?.runnable).toBe(false);
   });
 
@@ -177,13 +198,15 @@ describe("what the chain workspace draws", () => {
   const runs = dashMain(model, ui, { view: "runs", id: null }, nowMs);
 
   test("the attention summary mirrors `tldrx status`, counts disjoint", () => {
-    // 3 ready (alpha, golf and... no: golf is ready, alpha is ready), 2 blocked
-    // (bravo, charlie), 2 waiting on a human (delta at a question, echo failed),
-    // and foxtrot is done. 2 + 2 + 2 + 1 = 7.
+    // 2 ready (alpha, golf), 1 blocked (bravo — the only one that has not
+    // started), 3 waiting on a human (delta at a question, echo failed, and
+    // charlie at the gate it has actually reached), and foxtrot is done.
+    // 2 + 1 + 3 + 1 = 7. charlie moved from `blocked` to `waiting on you` with
+    // #60: it was counted behind a sibling it had already overtaken.
     expect(runs).toContain("2 runs ready");
     expect(runs).toContain("<code class=\"attn__cmd\">tldrx next 260903-alpha</code>");
-    expect(runs).toContain("2 blocked");
-    expect(runs).toContain("2 waiting on you");
+    expect(runs).toContain("1 blocked");
+    expect(runs).toContain("3 waiting on you");
   });
 
   test("the dependency chain block renders both chains as text", () => {
@@ -198,13 +221,16 @@ describe("what the chain workspace draws", () => {
     expect(runs).not.toContain(">260903-alpha</a>");
   });
 
-  test("the WAITING ON column says what a blocked run is behind", () => {
+  test("the WAITING ON column says what a NOT-STARTED run is behind (#60)", () => {
+    // bravo has not started, so the proposal still holds it and the cell says so.
     expect(runs).toContain("blocked by alpha");
-    expect(runs).toContain("blocked by bravo");
-    // charlie IS at a gate, but it is behind bravo — so the row says what it is
-    // behind, and it raises no alert card. Same call `tldrx status` makes.
-    expect(runs).not.toContain("stage what is waiting at a gate");
-    expect(runs).not.toContain('href="#/run/260903-charlie">Ship it</a>');
+    // charlie has, so its own gate is the cell and the proposal is the note
+    // beside it. "blocked by bravo" was the false claim #60 was filed about, and
+    // suppressing its alert card hid the one signature a person could give.
+    expect(runs).not.toContain("blocked by bravo");
+    expect(runs).toContain("stage what is waiting at a gate");
+    expect(runs).toContain("proposed to follow bravo — started anyway");
+    expect(runs).toContain('href="#/run/260903-charlie">Ship it</a>');
   });
 
   test("a fresh run reads as ready, with the command that starts it", () => {

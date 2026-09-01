@@ -180,6 +180,8 @@ function fixture(plan: Readonly<Record<string, string>> = defaultPlan()): Fixtur
       mode: "headless",
       model: null,
       effort: null,
+      costUsd: null,
+      tokens: null,
       budgetUsd: 2,
       maxBudgetUsd: 2,
       yolo: false,

@@ -393,21 +393,38 @@ describe("<command> --help carries flags, values, examples and exit codes", () =
    * `run new` froze, which is a thing an operator hits mid-run and searches the docs
    * for. The alternative they found was "abandon the run".
    *
-   * Scoped to `run` deliberately, not generalised over every command: measured at
-   * `7ac298c`, `plan sync-dod` has no section on this page at all (a separate gap,
-   * unfiled), and `hook`'s seven scripts are documented as the one `<script>` slot
-   * that USAGE_SPELLINGS already records as a deliberate spelling. A generalised
-   * assertion would fail for those two reasons and say nothing about this one.
+   * #55 widened it to `plan`. At `7ac298c` the page had no `## tldrx plan` heading
+   * at all, so `sync-dod` — the one repair for a story whose dod block a
+   * `workspace.yml` edit orphaned — was undocumented in the same way and for the
+   * same reason. The scoped list is what makes the gap a red test rather than a
+   * note: it is widened one command at a time, as each one's section is written.
+   *
+   * Still NOT generalised over every command, and the reasons are measured at
+   * `28d4a56`: `hook`'s seven scripts are documented as the one `<script>` slot
+   * that USAGE_SPELLINGS already records as a deliberate spelling, and `note` and
+   * `ship` have no section on this page either (the same gap as #55, filed
+   * separately). A generalised assertion would go red for those three and say
+   * nothing about the two it is here to hold.
    */
-  test("the CLI reference documents every `tldrx run` subcommand (#54)", () => {
+  const DOCUMENTED_SUBCOMMANDS = ["run", "plan"] as const;
+
+  test("the CLI reference documents every subcommand of `run` and `plan` (#54, #55)", () => {
     const reference = readFileSync(join(FRAMEWORK_ROOT, "docs/guide/08-cli-reference.md"), "utf8");
-    const run = COMMANDS.find((command) => command.name === "run");
-    expect(run).toBeDefined();
-    if (run === undefined) return;
-    expect(run.subcommands.filter((sub) => !reference.includes(`tldrx run ${sub}`))).toEqual([]);
+    for (const name of DOCUMENTED_SUBCOMMANDS) {
+      const command = COMMANDS.find((entry) => entry.name === name);
+      expect(command).toBeDefined();
+      if (command === undefined) continue;
+      // A heading, not a passing mention: the page is navigated by its `##` list.
+      expect(reference).toContain(`## \`tldrx ${name}\``);
+      expect(command.subcommands.filter((sub) => !reference.includes(`tldrx ${name} ${sub}`))).toEqual([]);
+    }
     // The audit trail is the half a reader cannot infer from the usage line: a
     // mandatory --note, and one event carrying who moved the policy and why.
     expect(reference).toContain("gate.policy_changed");
+    // `plan sync-dod`'s equivalent: the four per-line outcomes are the whole
+    // behaviour, and the flagged one — the line no workspace.yml ever declared —
+    // is the case an operator has to act on themselves.
+    expect(reference).toContain(".md.bak");
   });
 });
 

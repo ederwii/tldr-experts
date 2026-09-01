@@ -131,6 +131,66 @@ for (const [name, runtime] of IMPLEMENTATIONS) {
       expect(liveChildren()).not.toContain(pid);
     }, 10_000);
 
+    /**
+     * #67: stderr, line by line, WHILE the child is still running.
+     *
+     * The seam had `onStdoutLine` and nothing for the other stream, so a child's
+     * progress output — which is where every tldrx UI writes it — was only
+     * available as one string at exit. `tldrx learn` printed it under the summary
+     * it had produced: the verdict before the work.
+     *
+     * The assertion that makes this a streaming test and not a splitting one is
+     * `settled`. A buffered implementation could hand the same lines to the same
+     * callback by splitting `result.stderr` at the end, and every content check
+     * would still pass. Only the TIMING tells them apart, so the line is required
+     * to arrive while the spawn's promise is still pending.
+     */
+    test("onStderrLine delivers each line while the child is still running (#67)", async () => {
+      const seen: string[] = [];
+      let settled = false;
+      const spawned = runtime
+        .spawn("/bin/sh", ["-c", "printf 'progress\\n' >&2; sleep 1; printf 'done\\n'"], {
+          onStderrLine: (line) => { seen.push(line); },
+        })
+        .then((result) => { settled = true; return result; });
+
+      await until(() => seen.length > 0, 5_000);
+      expect(seen).toEqual(["progress"]);
+      expect(settled).toBe(false);
+
+      const result = await spawned;
+      // An EXTRA view of the same bytes, never a replacement: the whole string is
+      // still there, exactly as a caller that passes no callback would get it.
+      expect(result.stderr).toBe("progress\n");
+      expect(result.stdout).toBe("done\n");
+      expect(result.exitCode).toBe(0);
+    }, 15_000);
+
+    test("both line callbacks can be passed at once, and neither buffer is lost", async () => {
+      const out: string[] = [];
+      const err: string[] = [];
+      const result = await runtime.spawn(
+        "/bin/sh",
+        ["-c", "printf 'o1\\no2\\n'; printf 'e1\\ne2\\n' >&2"],
+        { onStdoutLine: (line) => { out.push(line); }, onStderrLine: (line) => { err.push(line); } },
+      );
+      expect(out).toEqual(["o1", "o2"]);
+      expect(err).toEqual(["e1", "e2"]);
+      expect(result.stdout).toBe("o1\no2\n");
+      expect(result.stderr).toBe("e1\ne2\n");
+    });
+
+    // The same courtesy `onStdoutLine` already extends: a producer that forgets
+    // its last newline is delivered at close rather than silently truncated.
+    test("a trailing stderr line with no newline is still delivered", async () => {
+      const err: string[] = [];
+      const result = await runtime.spawn("/bin/sh", ["-c", "printf 'no-newline' >&2"], {
+        onStderrLine: (line) => { err.push(line); },
+      });
+      expect(err).toEqual(["no-newline"]);
+      expect(result.stderr).toBe("no-newline");
+    });
+
     // The ordering hazard the resolution created: the child is registered BEFORE
     // an already-aborted signal is checked, so the immediate kill has a pid to
     // drop. Registered after, this would leak the pid for the process's lifetime.

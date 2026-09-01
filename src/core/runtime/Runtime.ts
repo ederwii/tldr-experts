@@ -51,6 +51,21 @@ export interface SpawnOptions {
    */
   readonly onStdoutLine?: (line: string) => void;
   /**
+   * The same, for stderr — each COMPLETE line as it arrives, newline stripped.
+   *
+   * Added for #67. stderr is where every tldrx UI writes its progress stream, and
+   * with only `onStdoutLine` the seam could hand it back no earlier than exit: a
+   * `tldrx learn` chapter printed the stage summary and only THEN the `[00:00] …`
+   * lines that produced it — the verdict before the work. The two callbacks are
+   * independent, so a caller may take one stream as lines and the other whole.
+   *
+   * Same contract as `onStdoutLine` in every other respect: `SpawnResult.stderr`
+   * still accumulates the full text, a trailing partial line is delivered when
+   * the stream closes, and omitting it leaves the buffered path byte-for-byte as
+   * it was.
+   */
+  readonly onStderrLine?: (line: string) => void;
+  /**
    * Kill the child (and its group) when this aborts.
    *
    * Added for `max_reads` (wave N): the only way to stop a sub-agent that is

@@ -22,6 +22,16 @@
  *                    failed sibling still blocks, because it did not deliver
  *                    what the dependent was told to build on.
  *
+ * And one rule added by #60:
+ *
+ *   started wins     A proposal cannot un-start a run that has started. Once a
+ *                    run leaves `pending` its OBSERVED state outranks the order
+ *                    a split proposed, so it is `runnable` on its own waiting
+ *                    kind and the proposal becomes a note. `blockedBy` still
+ *                    lists the unfinished dependencies — that is a fact about
+ *                    the proposal, and both renderers want it either way — but
+ *                    it is no longer allowed to mean "cannot move".
+ *
  * Pure: plain records in, plain records out. It reads no file and imports
  * nothing, so both callers can feed it from whichever reader they already have.
  */
@@ -45,10 +55,31 @@ export interface ResolvedRun {
   readonly id: string;
   /** `dependsOn` resolved to run ids; a slug with no run keeps the raw slug. */
   readonly dependsOn: readonly string[];
-  /** The subset of `dependsOn` that is not `done` — including ones with no run. */
+  /**
+   * The subset of `dependsOn` that is not `done` — including ones with no run.
+   *
+   * A statement about the PROPOSAL, not a verdict on this run: once `started` is
+   * true these are runs it was proposed to follow and did not. A renderer that
+   * turns this into "blocked by" without checking `started` prints #60.
+   */
   readonly blockedBy: readonly string[];
-  /** Nothing blocks it and a human could move it right now. */
+  /** This run has left `pending` — work has observably begun. See `hasStarted`. */
+  readonly started: boolean;
+  /** A human could move it right now, and nothing that still applies blocks it. */
   readonly runnable: boolean;
+}
+
+/**
+ * Has this run actually begun?
+ *
+ * `pending` is the only status a run that has never run a stage can wear: a run
+ * is created with every stage `pending` (`newRun.ts`), `run.yml`'s status is
+ * re-derived from the stage at the cursor on every save, and every path to any
+ * other value — `ready` included — goes through a stage that was `running`.
+ * So the question is one comparison, and it is the one the ordering rules ask.
+ */
+export function hasStarted(status: string): boolean {
+  return status !== "pending";
 }
 
 export interface DependencyGraph {
@@ -88,7 +119,17 @@ export function resolveDependencies(inputs: readonly DependencyInput[]): Depende
   const runs: ResolvedRun[] = inputs.map((input) => {
     const dependsOn = input.dependsOn.map((slug) => idBySlug.get(slug) ?? slug);
     const blockedBy = dependsOn.filter((id) => statusById.get(id) !== "done");
-    return { id: input.id, dependsOn, blockedBy, runnable: blockedBy.length === 0 && input.movable };
+    const started = hasStarted(input.status);
+    // #60: a started run is runnable on its own waiting kind. The live case was a
+    // run RUNNING at 04-build with stories in flight that `tldrx status` demoted
+    // out of the `← next` slot in favour of a sibling that had not begun.
+    return {
+      id: input.id,
+      dependsOn,
+      blockedBy,
+      started,
+      runnable: input.movable && (started || blockedBy.length === 0),
+    };
   });
 
   return { runs, order: orderOf(inputs, runs), chains: chainsOf(inputs, runs) };

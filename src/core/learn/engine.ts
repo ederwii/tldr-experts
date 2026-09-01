@@ -17,21 +17,14 @@
  * and that is a pass); `assert()` says the lesson actually happened. Both are
  * needed: a command can exit 0 having taught nothing.
  *
- * ## Known wart: the stream prints AFTER the summary it produced
- *
- * A step's stdout is streamed line by line (`onStdoutLine`), but its stderr — which
- * is where the UI's own progress stream goes — is only available as a whole string
- * when the child exits, so it is written after everything else. The learner reads
- * `01-what/what done — $0.31 of $4.00` and only then the `[00:00] writing …` lines
- * that produced it: the verdict before the work. Reported by the #30 cold-player QA
- * 2026-09-01 and reproduced here.
- *
- * It is NOT fixed, and the reason is the seam: `SpawnOptions` has `onStdoutLine`
- * and no `onStderrLine`, so interleaving means adding one to `runtime/Runtime.ts`
- * and implementing it in BOTH `bunRuntime.ts` and `nodeRuntime.ts` — the phase-1
- * wart, a runtime change made for a tutorial's cosmetics. Whoever adds
- * `onStderrLine` for a real reason should pass it from `realStepRunner` and delete
- * the buffered write above.
+ * **Both streams go to one sink, as they arrive.** A step's stdout and its stderr
+ * are streamed line by line into the same `onLine` the engine hands the runner, so
+ * the learner reads the `[00:00] writing …` progress lines and the summary they
+ * produced in the order they happened. Until #67 the seam had `onStdoutLine` and
+ * nothing for stderr, so the progress stream was buffered until the child exited
+ * and printed UNDER the summary — the verdict before the work (reported by the #30
+ * cold-player QA, 2026-09-01). The buffered write that did that is gone: writing
+ * `result.stderr` again after the step would now print every line twice.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -118,7 +111,6 @@ export async function playChapter(
 
     writeScript(sandbox, scriptFor(expandTurns(step.agentTurns ?? [], sandbox)));
     const result = await run({ ...step, command }, sandbox, (line) => { io.write(`${line}\n`); });
-    if (result.stderr !== "") io.write(result.stderr.endsWith("\n") ? result.stderr : `${result.stderr}\n`);
     // The number chapter 2 TEACHES. An exit code is a property of the process,
     // not a line in its output, so `$ tldrx next` reads identically whether it
     // exited 0 or 4 and the sentence "it exits 4, which is not a failure" has
@@ -274,6 +266,10 @@ export function realStepRunner(selfCmd: readonly [string, string] = selfCommand(
       cwd,
       env: sandboxEnv(sandbox),
       onStdoutLine: onLine,
+      // #67. The same sink, so the progress stream and the output it describes
+      // interleave in the order the step produced them. The engine no longer
+      // writes `result.stderr` afterwards — that would print each line twice.
+      onStderrLine: onLine,
     });
     return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr };
   };
