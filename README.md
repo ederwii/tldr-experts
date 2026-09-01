@@ -13,10 +13,6 @@ do: a command that cannot do the thing exits non-zero and says which thing.
 
 ## Quick start
 
-> **Not on npm yet.** Every published version was unpublished on 2026-08-29 (`npm view tldr-experts
-> version` → `E404 Unpublished`) and there is no `v0.3.0` tag, so the `npm i -g` line 404s until
-> `scripts/release.sh 0.3.0` is run. Until then: clone and `bun link`, or `bun <repo>/bin/tldrx.ts <cmd>`.
-
 ```bash
 npm i -g tldr-experts     # installs `tldrx` (short) and `tldr-experts` (same binary)
 cd your-project

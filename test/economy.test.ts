@@ -301,6 +301,112 @@ describe("the economy label (§E.2)", () => {
   });
 });
 
+/**
+ * The host-token CEILING (#22 (b), owner decision 2026-09-01).
+ *
+ * `tldrx next --prepare` is the only way this brake is reached on a `host-tokens`
+ * phase: a headless invocation is refused above it by `economyRefusal`. What is
+ * measured here is the CLI half of the policy — warn by default, stop only under
+ * the explicit opt-in — and that the stop is recorded even when the phase has
+ * already emitted a warning.
+ */
+describe("the host-token ceiling (#22b, `tldrx next`)", () => {
+  /** A finished turn on `alpha` that declared 12 000 host tokens. */
+  function declareTokens(ws: FacilitatorWorkspace, tokens: number): void {
+    const path = join(ws.runDir, "run.yml");
+    const task = `[{id: t1, status: done, expert: product, model: sonnet, cost_usd: null, `
+      + `metered: false, tokens: ${String(tokens)}, error: null, session_id: null, `
+      + `started_at: null, ended_at: null, outputs: []}]`;
+    const text = readFileSync(path, "utf8").replace("        tasks: []", `        tasks: ${task}`);
+    writeFileSync(path, text, "utf8");
+  }
+
+  function tokenCeiling(ws: FacilitatorWorkspace, tokens: number, optIn: boolean): void {
+    const path = join(ws.runDir, "budget.yml");
+    let text = readFileSync(path, "utf8")
+      .replace(/^ceiling_usd: .*$/m, "ceiling_usd: 100000")
+      .split("\n")
+      .map((line) => /id: "?01-what"?,/.test(line)
+        ? line.replace(/ceiling_usd: [0-9.]+/, `ceiling_usd: ${String(tokens)}`).replace(/}\s*$/, ", economy: host-tokens}")
+        : line)
+      .join("\n");
+    if (optIn) text = text.replace("phases:", "on_host_tokens_exceed: block\nphases:");
+    writeFileSync(path, text, "utf8");
+  }
+
+  test("over the ceiling it WARNS and lets the prepare through", async () => {
+    const ws = workspace();
+    declareTokens(ws, 12_000);
+    tokenCeiling(ws, 10_000, false);
+
+    const outcome = await next(ws, { mode: "prepare" });
+
+    expect(outcome.code).not.toBe(2);
+    expect(outcome.lines.join(" ")).toContain("OVER its host-token ceiling");
+    expect(outcome.lines.join(" ")).toContain("12000");
+    const warned = events(ws).filter((e) => e.type === "budget.warned");
+    expect(warned).toHaveLength(1);
+    expect(warned[0]?.payload).toMatchObject({ host_tokens: 12_000, ceiling_tokens: 10_000 });
+    expect(events(ws).filter((e) => e.type === "budget.blocked")).toHaveLength(0);
+  });
+
+  test("`on_host_tokens_exceed: block` REFUSES, and the refusal never offers `budget raise`", async () => {
+    const ws = workspace();
+    declareTokens(ws, 12_000);
+    tokenCeiling(ws, 10_000, true);
+
+    const outcome = await next(ws, { mode: "prepare" });
+
+    expect(outcome.code).toBe(2);
+    const said = outcome.lines.join(" ");
+    expect(said).toContain("refusing to start stage");
+    expect(said).toContain("12000");
+    expect(said).toContain("on_host_tokens_exceed: warn");
+    // `budget raise` moves DOLLARS; offering it here sends the operator at the
+    // wrong number.
+    expect(said).not.toContain("budget raise");
+    expect(events(ws).filter((e) => e.type === "budget.blocked")).toHaveLength(1);
+  });
+
+  /**
+   * `alreadyWarned` is a warn-ONCE guard and must not silence a REFUSAL. A phase
+   * that already emitted a `budget.warned` and then crosses its ceiling would
+   * otherwise be refused with no `budget.blocked` on the record — a run stopped
+   * for a reason its own audit trail never states.
+   */
+  test("a prior warning does not swallow the `budget.blocked` of a later stop", async () => {
+    const ws = workspace();
+    declareTokens(ws, 12_000);
+    tokenCeiling(ws, 10_000, false);
+    await next(ws, { mode: "prepare" });
+    expect(events(ws).filter((e) => e.type === "budget.warned")).toHaveLength(1);
+
+    // Only the opt-in changes; re-running `tokenCeiling` would double-apply its
+    // substitutions and corrupt the file.
+    const path = join(ws.runDir, "budget.yml");
+    writeFileSync(path, readFileSync(path, "utf8").replace("phases:", "on_host_tokens_exceed: block\nphases:"), "utf8");
+    // `--discard-pending`: the first prepare left a bundle, and without this the
+    // second call is refused for THAT reason and never reaches the budget gate.
+    const outcome = await next(ws, { mode: "prepare", discardPending: true });
+
+    expect(outcome.code).toBe(2);
+    expect(outcome.lines.join(" ")).toContain("refusing to start stage");
+    expect(events(ws).filter((e) => e.type === "budget.blocked")).toHaveLength(1);
+  });
+
+  test("under the ceiling nothing new is said, and the prepare is untouched", async () => {
+    const ws = workspace();
+    declareTokens(ws, 12_000);
+    tokenCeiling(ws, 50_000, true);
+
+    const outcome = await next(ws, { mode: "prepare" });
+
+    expect(outcome.code).not.toBe(2);
+    expect(outcome.lines.join(" ")).not.toContain("OVER its host-token ceiling");
+    expect(events(ws).filter((e) => e.type === "budget.blocked")).toHaveLength(0);
+  });
+});
+
 // --- the refusal that would have saved the $9.95 ---------------------------
 
 describe("a headless spawn under a host-tokens ceiling (§E.2)", () => {
@@ -427,6 +533,23 @@ describe("`tldrx cost`, with the economy as its axis (§E.2)", () => {
     expect(metered_).not.toContain("tokens (host session)");
     expect(host).toContain("~342.5k tokens (host session)");
     expect(host).not.toContain("$");
+  });
+
+  /**
+   * #56, found by the `tldrx learn` QA read-through: the footnote was
+   * unconditional, so a run whose every attempt was metered in dollars was told
+   * there were "two economies" and no total could be printed. There is one, and
+   * the `metered` footer IS the total.
+   */
+  test("one economy gets NO `two economies` footnote — that sentence is only true when both are there", () => {
+    const ws = workspace();
+    const log = EventLog.forRun(ws.runDir);
+    log.append(metered(ws.runId));
+
+    const text = renderRunCost(buildRunCost(ws.runDir)!);
+
+    expect(text).toContain("metered      $0.42 over 1 attempt");
+    expect(text).not.toContain("no total: two economies");
   });
 
   test("the header carries NO dollar figure — the totals live in their own footers", () => {

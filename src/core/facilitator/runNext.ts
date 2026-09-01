@@ -1900,7 +1900,12 @@ function hostTokensNote(
         + `of ${String(tokens.ceiling)} allowed`,
     );
   }
-  if (!alreadyWarned(store, phaseId)) {
+  // `alreadyWarned` is a WARN-once guard and must not silence a REFUSAL. A phase
+  // that emitted the "no dollar ceiling here" note on an earlier stage and later
+  // crosses its token ceiling would otherwise be refused with no `budget.blocked`
+  // on the record — a run stopped for a reason its own audit trail never states,
+  // which is the failure issue #22 exists to close.
+  if (stops || !alreadyWarned(store, phaseId)) {
     store.append(event(options, store.runId, stageId, stops ? "budget.blocked" : "budget.warned", {
       phase: phaseId,
       economy: "host-tokens",

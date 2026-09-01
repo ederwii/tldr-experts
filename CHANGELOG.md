@@ -84,6 +84,26 @@
 
 ### Added
 
+- **The documentation site speaks Spanish (`docs-site/es/`, phase 2).** All twelve English pages are
+  now mirrored under `/es/` at the same paths and translated into es-MX developer Spanish, and
+  `locales.es.themeConfig` carries the Spanish sidebar, nav, edit link and page chrome (outline,
+  prev/next, search modal, footer) rather than English chrome around Spanish prose. The placeholder
+  that phase 1 left at `/es/` is replaced by the translated landing page.
+  - **tldrx's own vocabulary stays in English where it is an identifier.** The stage names
+    (`What → How → Plan → Build → Watch`), `run`, `story`, `DoD`, `scope`, `handoff` and `workspace`
+    are the things you type or the files on disk, so they are not translated; each is glossed once in
+    Spanish where it first appears. `gate` is the one exception — it renders as **compuerta**, because
+    the phase-1 placeholder had already shipped that word to the live site.
+  - **Code blocks and command output are verbatim English** — a translated transcript would be a
+    transcript of a command nobody ran. The narration around them is translated.
+  - **Anchors were verified against the rendered HTML, not assumed**, because dead-link checking does
+    not see them. That mattered here: VitePress's slugifier strips accents but *keeps* `¿`, so
+    `## ¿Cómo lo detengo?` becomes `id="¿como-lo-detengo"`. The one heading that is linked to carries
+    an explicit `{#puedo-manejarlo-desde-claude-code}`. A sweep of the built site resolves all 5
+    anchor links across its 26 pages, 0 broken.
+  - **Release notes are deliberately not translated**: the page is generated from `CHANGELOG.md` at
+    build time, so a Spanish copy would drift. The `/es/` sidebar links the English page and says so.
+
 - **A public documentation site, written for people who have never seen tldrx (`docs-site/`, phase 1).**
   A VitePress site deployed to GitHub Pages by `.github/workflows/docs.yml` on any push to `main` that
   touches `docs-site/` or `CHANGELOG.md`. Twelve short English pages — a landing page, a Quickstart, one
@@ -110,9 +130,10 @@
   conditions, Plan's human gate, then a Build that cuts `epic/bulk-pricing`, spawns a developer in a
   worktree, re-runs the story's `npm run test` DoD, commits, merges and spawns a reviewer), **5** a
   genuinely red DoD and the three commands back from it (`story reopen`, `reject`, `budget raise`),
-  **6** `run attend host` and the refusal a bare `next` then gives, **7** an `agent` gate closed by
-  `approve --as-agent` over a structured evidence note, **8** `cost --all`, `run estimate`, and the
-  budget brake refusing a stage the phase can no longer afford.
+  **6** an `agent` gate closed by `approve --as-agent` over a structured evidence note, **7**
+  `run attend host`, the refusal a bare `next` then gives, and the `next --prepare` / `next --commit`
+  pair actually run, **8** `cost --all`, `run estimate`, and the budget brake refusing a stage the
+  phase can no longer afford.
   - Chapter 4's DoD is real, chapter 5's failure is real: the story's test script is `exit 0` until a
     developer replaces it with a `node` test that then catches a wrong number — so the tutorial teaches
     "a green DoD over an empty test proves nothing" by letting it happen rather than by saying it.
@@ -320,6 +341,53 @@
     `(superseded by F<n>)` beside it.
 
 ### Fixed
+
+- **`tldrx learn` — the cold-player QA round (#30).** A first-time player played all eight chapters
+  and returned SHIP-with-fixlist. Everything they found is fixed or recorded:
+  - **Chapter 8 no longer lies about the brake.** It said "the phase has already spent its Watch
+    money" while the tool printed `$1.89 left … estimate is $2.00`. The real mechanism is that a
+    re-run is priced at the stage's WHOLE declared `budget_usd`, never at what a second attempt might
+    add — so a stage that has spent anything can no longer afford itself. The chapter now says that,
+    quotes both figures, and `assert()`s them against the `budget.blocked` event so the numbers cannot
+    drift away from the sentence.
+  - **Chapter 1 no longer promises something chapter 2 does not deliver.** `--no-interview` skips
+    *init's* setup interview, which no chapter covers; the forward reference is gone and the debrief
+    now sends the learner to `.tldrx/init-handoff.md`, where measured/inferred/assumed and
+    `[src: …]` / `absent:` actually live.
+  - **`tldrx learn --chapter <n>` refuses a chapter that is already played**, up front and by name,
+    instead of narrating it and then dying mid-chapter on `run new: … already exists` (exit 1,
+    measured). The refusal names `--reset` and the chapter a bare `learn` would resume at.
+  - **The tutorial has a door out.** The ending now names the first four commands to type on a real
+    repo — `tldrx init` (with the warning that it runs an interview by default), `run new --scope
+    hotfix`, `next`, and `tldrx ship`.
+  - **Chapter 7 RUNS `next --prepare` and `next --commit`** against the feature run's Watch stage
+    instead of describing them in a debrief. Chapters 6 and 7 swapped for it: the attended chapter
+    addresses the feature run through `{run}`, so the hotfix run has to be signed off first.
+  - **Every non-zero exit code is printed** (`→ exit 4`), so the code chapter 2 teaches is a thing
+    the learner reads rather than a thing they are told. Chapter 5 now also demonstrates the exit-2
+    refusal a bare `next` gives with two runs open, and names the two run-id spellings.
+  - Jargon defined at first use — expert, level 0, the `claim-sources` / `no-reask` / `budget-gate`
+    bracket, `boundary`, `[src: …]`, `absent:`, economy, §2.11 — and the `expert … has no evidence`
+    nudge explained once instead of repeating unexplained nine times.
+  - Known and NOT fixed: a step's stderr (where the agent stream lives) is buffered and printed after
+    its stdout, so a summary can appear before the stream that produced it. Interleaving needs an
+    `onStderrLine` on the runtime seam and in both implementations; documented in `engine.ts`.
+
+- **`tldrx cost` no longer claims "two economies" over one (#56).** The `(no total: two economies, no
+  exchange rate)` footnote was unconditional, so a run whose every attempt was metered in dollars was
+  told no total could be printed. It is printed only when both economies are actually present.
+
+- **The README's "Not on npm yet" warning was false and told readers not to run the install line
+  directly underneath it.** The package IS published: `npm view tldr-experts version` → `0.3.1`,
+  exit 0. The warning is removed rather than re-dated — the npm badge at the top of the README
+  already shows the live version, so nothing in its place can go stale the same way. The
+  `npm i -g tldr-experts` line it was contradicting is unchanged.
+
+- **The site's own home page linked an anchor that does not exist.** The hero's "Try it offline,
+  free" button pointed at `/quickstart#try-the-whole-thing-first-for-free`, but the heading renders
+  as `id="first-try-it-for-free"` — verified against the LIVE page, not just a local build. Dead-link
+  checking never saw it because VitePress does not check fragments. Repointed, and a sweep of the
+  built site now resolves every anchor link it emits.
 
 - **`tickets sync`, `tickets status` and `budget show` took a run id as a positional that neither
   their `usage` nor their `--help` declared (#53).** Measured at `7ac298c`:

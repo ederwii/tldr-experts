@@ -45,10 +45,12 @@
  *     are two, and which one the CLI would resolve to changes as chapters finish
  *     each other's work. An `assert()` should name its run by slug instead.
  *   - **A step judged only by its exit code can pass for the wrong reason.**
- *     Chapter 6's `next` exits 4 whether it refuses because the run is attended
- *     (the lesson) or because a gate is pending (not the lesson), so its
- *     `assert()` checks the run was at a `ready` stage. If a chapter's point is
- *     an exit code, its `assert()` has to be about the state that produced it.
+ *     The attended chapter's `next` exits 4 whether it refuses because the run is
+ *     attended (the lesson) or because a gate is pending (not the lesson), and
+ *     chapter 5's bare `next` exits 2 over two open runs (the lesson) or over
+ *     none (not). If a chapter's point IS an exit code, its `assert()` has to be
+ *     about the state that produced it — or a later step has to be one that
+ *     could not have run from the wrong state.
  */
 import type { AgentTurn } from "./agentScript.ts";
 import type { Sandbox } from "./sandbox.ts";
