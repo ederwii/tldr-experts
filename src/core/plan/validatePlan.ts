@@ -27,6 +27,17 @@ export const EPICS_DIR = "epics";
 export interface PlanIssue extends ValidationIssue {
   /** The Plan file the issue is in, relative to the phase dir. */
   readonly file: string;
+  /**
+   * This issue exists only because ANOTHER file did not validate (gh #37).
+   *
+   * `S8.md` held one 1,009-character acceptance item against the 512 cap, so it
+   * never entered the parsed-story set, so the cross-file checks reported
+   * `S8 has no file in stories/` twice — for a file that was 5,794 bytes on
+   * disk. A reader then goes hunting for a missing file or rewrites waves.yml.
+   * A cascade says which file to fix instead, and `describePlanIssues` shows the
+   * root violation ahead of it.
+   */
+  readonly cascade?: boolean;
 }
 
 export interface PlanReport {
@@ -47,12 +58,19 @@ export function validatePlan(planDir: string, allowed: ReadonlySet<string> = new
   const add = (file: string, list: readonly ValidationIssue[]): void => {
     for (const issue of list) issues.push({ ...issue, file });
   };
+  const addCascade = (file: string, issue: ValidationIssue): void => {
+    issues.push({ ...issue, file, cascade: true });
+  };
 
   const storyFiles = markdownIn(join(planDir, STORIES_DIR));
   const epicFiles = markdownIn(join(planDir, EPICS_DIR));
   const dependsOn = new Map<string, readonly string[]>();
   const storyIds = new Set<string>();
   const epicIds = new Set<string>();
+  // id-from-file-name -> why that file cannot answer to it. A reference to an id
+  // in here resolves to a file that EXISTS, so it is never "has no file".
+  const unusableStories = new Map<string, string>();
+  const unusableEpics = new Map<string, string>();
 
   if (storyFiles.length === 0) {
     add(`${STORIES_DIR}/`, [{ path: "", message: "the Plan wrote no stories — there is nothing for Build to pick up" }]);
@@ -62,9 +80,13 @@ export function validatePlan(planDir: string, allowed: ReadonlySet<string> = new
     const parsed = validateStoryFile(readFileSync(join(planDir, STORIES_DIR, name), "utf8"), allowed);
     add(rel, parsed.validation.issues);
     const story = parsed.story;
-    if (story === null) continue;
+    if (story === null) {
+      unusableStories.set(name.replace(/\.md$/, ""), "failed validation");
+      continue;
+    }
     if (`${story.id}.md` !== name) {
       add(rel, [{ path: "id", message: `\`${story.id}\` does not match the file name — a story is addressed by its id` }]);
+      unusableStories.set(name.replace(/\.md$/, ""), `declares id \`${story.id}\``);
     }
     if (storyIds.has(story.id)) {
       add(rel, [{ path: "id", message: `\`${story.id}\` is used by more than one story file` }]);
@@ -83,14 +105,21 @@ export function validatePlan(planDir: string, allowed: ReadonlySet<string> = new
     const parsed = validateEpicFile(readFileSync(join(planDir, EPICS_DIR, name), "utf8"));
     add(rel, parsed.validation.issues);
     const epic = parsed.epic;
-    if (epic === null) continue;
+    if (epic === null) {
+      unusableEpics.set(name.replace(/\.md$/, ""), "failed validation");
+      continue;
+    }
     if (`${epic.id}.md` !== name) {
       add(rel, [{ path: "id", message: `\`${epic.id}\` does not match the file name` }]);
+      unusableEpics.set(name.replace(/\.md$/, ""), `declares id \`${epic.id}\``);
     }
     epicIds.add(epic.id);
     epic.stories.forEach((story, i) => {
       if (!storyIds.has(story)) {
-        add(rel, [{ path: `stories[${i}]`, message: `${story} has no file in ${STORIES_DIR}/` }]);
+        const why = unusableStories.get(story);
+        const at = `stories[${i}]`;
+        if (why === undefined) add(rel, [{ path: at, message: `${story} has no file in ${STORIES_DIR}/` }]);
+        else addCascade(rel, { path: at, message: cascadeMessage(story, STORIES_DIR, why) });
         return;
       }
       const already = claimedByEpic.get(story);
@@ -110,7 +139,9 @@ export function validatePlan(planDir: string, allowed: ReadonlySet<string> = new
     const epic = epicOf(planDir, name);
     if (epic === null) continue;
     if (!epicIds.has(epic)) {
-      add(rel, [{ path: "epic", message: `${epic} has no file in ${EPICS_DIR}/` }]);
+      const why = unusableEpics.get(epic);
+      if (why === undefined) add(rel, [{ path: "epic", message: `${epic} has no file in ${EPICS_DIR}/` }]);
+      else addCascade(rel, { path: "epic", message: cascadeMessage(epic, EPICS_DIR, why) });
       continue;
     }
     if (claimedByEpic.get(id) !== epic) {
@@ -140,9 +171,11 @@ export function validatePlan(planDir: string, allowed: ReadonlySet<string> = new
   waves.waves.forEach((wave, index) => {
     wave.stories.forEach((story, i) => {
       scheduled.add(story);
-      if (!storyIds.has(story)) {
-        add(WAVES_FILE, [{ path: `waves[${index}].stories[${i}]`, message: `${story} has no file in ${STORIES_DIR}/` }]);
-      }
+      if (storyIds.has(story)) return;
+      const why = unusableStories.get(story);
+      const at = `waves[${index}].stories[${i}]`;
+      if (why === undefined) add(WAVES_FILE, [{ path: at, message: `${story} has no file in ${STORIES_DIR}/` }]);
+      else addCascade(WAVES_FILE, { path: at, message: cascadeMessage(story, STORIES_DIR, why) });
     });
   });
   for (const id of [...storyIds].sort()) {
@@ -157,9 +190,32 @@ export function validatePlan(planDir: string, allowed: ReadonlySet<string> = new
 
 /** One line, ready for a check `detail` or a deny message. */
 export function describePlanIssues(issues: readonly PlanIssue[], max = 3): string {
-  const shown = issues.slice(0, max).map((i) => `${i.file}${i.path === "" ? "" : ` ${i.path}`}: ${i.message}`);
-  const rest = issues.length - shown.length;
+  // Root violations first (gh #37). The window is three issues wide, so a plan
+  // whose one real defect cascades into four references would otherwise spend
+  // the whole window on the consequences and never name the cause.
+  const ordered = [...issues.filter((i) => i.cascade !== true), ...issues.filter((i) => i.cascade === true)];
+  const shown = ordered.slice(0, max).map((i) => `${i.file}${i.path === "" ? "" : ` ${i.path}`}: ${i.message}`);
+  const rest = ordered.length - shown.length;
   return rest > 0 ? `${shown.join("; ")} (+${String(rest)} more)` : shown.join("; ");
+}
+
+/**
+ * A reference to a file that EXISTS but cannot answer to the id it was asked
+ * for. Never "has no file": that sentence sent a real session hunting for a
+ * 5,794-byte file it already had (gh #37).
+ */
+function cascadeMessage(id: string, dir: string, why: string): string {
+  return `${id} is unresolved because ${dir}/${id}.md ${why} — that file exists; `
+    + "fix the errors reported against it and this one goes with them";
+}
+
+/**
+ * True when a stage writes the Plan artefacts. The predicate `checkPlan` skips
+ * on, and the one that decides whether the schema contract is worth its bytes in
+ * that stage's prompt — one source so the two cannot disagree.
+ */
+export function writesPlanArtefacts(outputs: readonly string[]): boolean {
+  return outputs.some((path) => path.endsWith(WAVES_FILE));
 }
 
 function report(issues: readonly PlanIssue[], storyCount: number, epicCount: number, waveCount: number): PlanReport {

@@ -52,6 +52,17 @@
 - `waves.yml`
 - `budget.yml`
 
+The first three are **schema'd files a machine parses**, not free markdown. Their exact
+front matter, id shapes, enums and size caps are under **Output schemas** below — read
+that section before writing any of them.
+
+## Output schemas
+
+_The framework renders this section from the validators that gate this stage, so it is the
+contract itself rather than a copy of it. If you are reading this sentence instead of a
+schema, the bundle was not assembled by `tldrx next`: read `src/core/schemas/story.ts`,
+`epic.ts` and `waves.ts` before writing anything._
+
 ## Gate
 
 Blocked on: **<human approval | checks green>** — `stage.yml`'s `gate.type`. What is

@@ -4,6 +4,28 @@
 
 ### Added
 
+- **The Plan prompt now STATES the schema the `plan` check enforces, generated from the check itself (#35, #38).**
+  `stages/plan/stage.md` named the output filenames — `stories/<id>.md`, `epics/<epic>.md`, `waves.yml` — and
+  said nothing about their shape, so a fresh agent learned it by having a paid attempt refused. Measured twice
+  in two days: on `260831-hardening-d1` the plan sub-agent followed the rendered bundle faithfully and wrote
+  seven stories as plain markdown (`no YAML front matter — the file must open with ---`), and on
+  `260829-scoring-leaderboard` it wrote a 1,009-character acceptance item against a `MAX_ITEM_CHARS = 512`
+  cap that appeared in no file it could read. Both attempts were consumed, correctly and uselessly.
+  - **Generated, not copied.** `src/core/plan/schemaContract.ts` renders a `## Output schemas` section from
+    `STORY_KEYS`, `EPIC_KEYS`, `PLAN_STATUSES` and the six `MAX_*` constants — the same definitions
+    `validateStory`, `validateEpic` and `validateWaves` read. `Record<StoryKey, Field>` is load-bearing:
+    add a key to a schema and the file stops compiling until the new key has a value and a rule. The worked
+    examples it ships are run through `validatePlan` itself in the tests, so the contract the prompt states
+    and the contract the check enforces are provably the same one. This repo already had the other kind:
+    `templates/story.md` carries the schema correctly and `grep -rn 'story\.md' src/` finds nothing that
+    reads it.
+  - **Only where the check runs.** `applyCheckContracts` splices it under an H2 the framework owns, for a
+    stage that declares `checks: [plan]` AND writes `waves.yml` — the same predicate `checkPlan` skips on,
+    now shared (`writesPlanArtefacts`). A What or How prompt is byte-identical to before. It goes into
+    `stage.md` rather than after the inputs because `prompt.ts` orders the document most-stable-first for
+    the prompt cache, and a section computed from constants is exactly as stable as the stage body.
+  - **~4.2 KB against a $4 stage.** The alternative it replaces is a refused attempt per fresh workspace.
+
 - **`tldrx plan sync-dod` — the mechanical repair for dod blocks an edited `workspace.yml` orphaned (#42).**
   A story's ```dod block may only name commands `workspace.yml` declares, byte for byte, and that rule is not
   relaxed by a byte here — it is what stops a data file from running an arbitrary command as you. What it
@@ -59,6 +81,31 @@
     `(superseded by F<n>)` beside it.
 
 ### Fixed
+
+- **One over-cap list item no longer cascades into false "S<id> has no file" errors (#37).**
+  `validatePlan` resolves cross-file references out of the set of stories that PARSED, so a story file that
+  failed its own validation was indistinguishable from one that was never written. Measured on the
+  `260829-scoring-leaderboard` session: `acceptance[3]` in `S8.md` was 1,009 characters against the 512 cap,
+  and the check reported three errors of which one was real — the other two said `S8 has no file in stories/`
+  about a file that was 5,794 bytes on disk. The operator only avoided a wasted pass by re-deriving the cause
+  from the validator source; an agent reading that message goes hunting for a missing file or rewrites
+  `waves.yml`.
+  - A reference to a story or epic whose FILE EXISTS is never reported as missing. It now reads
+    `S8 is unresolved because stories/S8.md failed validation — that file exists; fix the errors reported
+    against it and this one goes with them`, carries `cascade: true` on the `PlanIssue`, and covers the
+    id-mismatch case (`stories/S8.md declares id \`S9\``) as well as the invalid-file case. The epic side —
+    a story pointing at an epic whose own file did not validate — had the identical bug and the identical fix.
+  - `describePlanIssues` orders root violations ahead of cascades. Its window is three issues wide, so one
+    real defect cascading into four references could otherwise spend the whole window on consequences and
+    never name the cause.
+  - A story that is genuinely absent still reports `has no file`, with no cascade flag.
+
+- **A refused list value now names the cap it broke, at the cap's current value (#38).**
+  The constants were interpolated already but the sentence was not self-describing: `513 characters exceeds
+  the 512 cap` did not say the cap is per-item or that splitting the item is the fix. Now
+  `513 characters exceeds the 512-character cap on one list item — split it into several items` and
+  `65 items exceeds the 64-item cap`, both still derived from `MAX_ITEM_CHARS` / the list's own `max`, and
+  the same constants are what the Plan prompt states up front.
 
 - **The merge itself is now serialised, and a gate can no longer describe a tree it is not pushing
   (#44).** `scripts/merge-wave.sh` merges, gates and pushes in ONE shared checkout and took no lock.
