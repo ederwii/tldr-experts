@@ -71,7 +71,12 @@ const EPIC_FIELDS: Readonly<Record<EpicKey, Field>> = {
   title: { value: '"Player leaderboard"', rule: `one line, at most ${String(MAX_ITEM_CHARS)} characters` },
   repos: { value: "[example]", rule: "non-empty, unique `.tldrx/workspace.yml` repo names" },
   stories: { value: "[S1]", rule: "non-empty, unique story ids, every one of which has a file" },
-  branch: { value: "epic/leaderboard", rule: "`epic/<slug>`, lowercase — the branch every story branch is cut from" },
+  branch: {
+    value: "epic/leaderboard",
+    rule: "`epic/<slug>`, lowercase — the branch every story branch is cut from. If any story "
+      + "`depends_on` a story in ANOTHER epic, the run cuts one integration branch for the whole "
+      + "run instead and this value is not used (issue #57)",
+  },
   status: { value: "todo", rule: `one of ${STATUS_CELL}` },
 };
 

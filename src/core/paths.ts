@@ -59,6 +59,17 @@ export const PROJECT_WORKTREES_DIR = "worktrees";
  */
 export const EPIC_WORKTREE_PREFIX = "_epic-";
 
+/**
+ * The slot an integration run's ONE epic worktree occupies, in place of an epic
+ * id (issue #57).
+ *
+ * A run whose epics form a dependency chain merges every story into one branch,
+ * and git refuses to check one branch out in two worktrees — so the epics share
+ * a slot as well as a branch. It is not an `E<n>`, so it can never collide with
+ * a real epic id.
+ */
+export const INTEGRATION_EPIC_SLOT = "integration";
+
 /** `_epic-<run>-<epic>` — the run id is in the name so two runs cannot collide (issue #40). */
 export function epicWorktreeName(runId: string, epicId: string): string {
   return `${EPIC_WORKTREE_PREFIX}${runId}-${epicId}`;

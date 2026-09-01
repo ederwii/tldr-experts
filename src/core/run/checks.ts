@@ -14,7 +14,7 @@
  * reported as skipped rather than silently counted as passes.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { runtime } from "../runtime/index.ts";
 import { parseYaml } from "../yaml.ts";
 import {
@@ -24,6 +24,7 @@ import {
 import { validateRunBudget } from "../budget/RunBudget.ts";
 import { loadWorkspace, repoPath, toSrcContext } from "../../hooks/lib/workspace.ts";
 import { describePlanIssues, validatePlan, writesPlanArtefacts } from "../plan/validatePlan.ts";
+import { branchModelFor, describeBranchModel } from "../plan/branchModel.ts";
 import { validateRunFile } from "./RunFile.ts";
 import { resolveMany, type PathContext } from "../facilitator/paths.ts";
 import { allowlistIssue } from "../schemas/commandAllowlist.ts";
@@ -221,6 +222,12 @@ export function unverifiedCount(outcome: CheckOutcome): number {
  * The Plan phase's epics, stories and waves, read together (spec §2.13–§2.15).
  * Skipped for any stage that does not declare `waves.yml` as an output — the check
  * is listed on the Plan stage and would otherwise fail every other stage's gate.
+ *
+ * A passing detail also states the BRANCH MODEL (issue #57). The Plan already
+ * knows whether the epics depend on each other, and the run cuts one integration
+ * branch when they do; a host that learns that from a Build stage mid-flight is
+ * the exact failure the owner decided against on 2026-09-01. The run id comes
+ * from the run directory's name, which is what `RunStore` calls the run.
  */
 function checkPlan(ctx: CheckContext): CheckOutcome {
   if (!writesPlanArtefacts(ctx.stage.outputs)) {
@@ -231,10 +238,12 @@ function checkPlan(ctx: CheckContext): CheckOutcome {
   if (!report.ok) {
     return { id: "plan", status: "failed", detail: describePlanIssues(report.issues) };
   }
+  const model = branchModelFor(basename(ctx.runDir), report.epicChain);
   return {
     id: "plan",
     status: "passed",
-    detail: `${report.epicCount} epic(s), ${report.storyCount} story(ies), ${report.waveCount} wave(s)`,
+    detail: `${report.epicCount} epic(s), ${report.storyCount} story(ies), ${report.waveCount} wave(s)`
+      + ` — ${describeBranchModel(model)}`,
   };
 }
 

@@ -25,6 +25,7 @@ import { describeAgentFallthroughs, evaluateAgentGate } from "../run/agentGate.t
 import { cardForTriggers, type Money } from "../run/decisionCards.ts";
 import { renderDecisionCard } from "../ui/decisionCard.ts";
 import { gatePolicyFor } from "../run/gatePolicy.ts";
+import type { BranchModelKind } from "../plan/branchModel.ts";
 import { PresetError, stageMdPath, type PlannedStage } from "../run/workflowPreset.ts";
 import { economyFor, isHostTokens } from "../budget/RunBudget.ts";
 import { remaining, wouldExceedHostTokens } from "../budget/wouldExceed.ts";
@@ -608,18 +609,36 @@ async function runStage(
 }
 
 /**
- * Merge the epic branches an executor claimed into `run.yml` (`build.epic_branch`).
+ * Merge the branches an executor claimed into `run.yml` (`build.epic_branch`),
+ * with the branch model it used beside them (`build.branch_model`, issue #57).
  *
- * Additive and idempotent. This is what lets the NEXT Build invocation tell an
- * epic branch IT cut from one that was already on the repo — the check that keeps
- * two runs from stacking commits on the same branch.
+ * Additive and idempotent. The branches are what lets the NEXT Build invocation
+ * tell a branch IT cut from one that was already on the repo — the check that
+ * keeps two runs from stacking commits on the same branch. The model is what lets
+ * that invocation cut the SAME branches again rather than re-deciding: a run that
+ * started per-epic stays per-epic, whatever its plan says today.
  */
-function claimEpicBranches(store: RunStore, claimed: readonly string[] | undefined): void {
-  if (claimed === undefined || claimed.length === 0) return;
+function claimEpicBranches(
+  store: RunStore,
+  claimed: readonly string[] | undefined,
+  model: BranchModelKind | undefined,
+): void {
+  if ((claimed === undefined || claimed.length === 0) && model === undefined) return;
   store.mutate((run) => {
     const known = new Set(run.build?.epic_branch ?? []);
-    for (const branch of claimed) known.add(branch);
-    return { ...run, build: { epic_branch: [...known].sort() } };
+    for (const branch of claimed ?? []) known.add(branch);
+    // The model is written once and never rewritten: it is the record of what
+    // this run DID, and a later invocation that read it must not be able to
+    // change the answer it read.
+    const kept = run.build?.branch_model;
+    const branchModel = kept ?? model;
+    return {
+      ...run,
+      build: {
+        epic_branch: [...known].sort(),
+        ...(branchModel === undefined ? {} : { branch_model: branchModel }),
+      },
+    };
   });
 }
 
@@ -1023,7 +1042,7 @@ async function runExecutor(
   };
 
   const outcome = await executor(executorCtx);
-  claimEpicBranches(store, outcome.epicBranches);
+  claimEpicBranches(store, outcome.epicBranches, outcome.branchModel);
   recordExecutorTasks(store, options, phaseId, stageId, spec, outcome);
   store.save();
 

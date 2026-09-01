@@ -43,6 +43,7 @@ import type { Epic } from "../schemas/epic.ts";
 import { isLive, MAX_FACT_CHARS, type Fact } from "../facts/Fact.ts";
 import { repoPath, type WorkspaceContext } from "../../hooks/lib/workspace.ts";
 import { PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../paths.ts";
+import { integrationBranchFor } from "../plan/branchModel.ts";
 import { MAX_TOUCHED_FILES } from "./prompts.ts";
 import { applyPlanPatch, quote, type StoryPatch } from "./storyFile.ts";
 import { BUILD_PHASE, PLAN_PHASE, type BuildPlan, type PlannedEpic, type PlannedStory } from "./plan.ts";
@@ -1079,15 +1080,16 @@ export function chooseRepo(repos: readonly string[], cited: readonly CitedPath[]
   return best;
 }
 
-/** `epic/<slug>` from the run id, forced into `EPIC_BRANCH_RE`'s shape. */
+/**
+ * `epic/<slug>` from the run id, forced into `EPIC_BRANCH_RE`'s shape.
+ *
+ * Delegates to `plan/branchModel.ts`, which needs the identical name for a
+ * chained run's integration branch (issue #57). Two copies of this slug rule
+ * would let an implicit plan and an integration branch disagree about what the
+ * same run is called.
+ */
 export function epicBranchFor(runId: string): string {
-  const slug = runId
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+/, "")
-    .replace(/-+$/, "")
-    .slice(0, 49);
-  return `epic/${slug === "" ? "run" : slug}`;
+  return integrationBranchFor(runId);
 }
 
 // --- odds and ends ----------------------------------------------------------

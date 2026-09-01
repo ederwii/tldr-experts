@@ -14,6 +14,7 @@ import {
   requireVersion, result, type ValidationIssue, type ValidationResult,
 } from "../schemas/validation.ts";
 import { validateGatesPolicy, type GatesPolicy } from "./gatePolicy.ts";
+import { BRANCH_MODELS, isBranchModelKind, type BranchModelKind } from "../plan/branchModel.ts";
 import {
   EVIDENCE_ROLES, EVIDENCE_VERDICTS, type EvidenceRole, type EvidenceVerdict,
 } from "../text/evidence.ts";
@@ -216,6 +217,18 @@ export interface RunCancellation {
  */
 export interface RunBuild {
   readonly epic_branch: readonly string[];
+  /**
+   * Which branch model this run's Build is executing (issue #57): `per-epic`,
+   * or `integration` when the plan's epics form a dependency chain and every
+   * story merges into one branch.
+   *
+   * ADDITIVE and optional, and that is what makes the change backward-safe. A
+   * `run.yml` written before this key existed — the three closed runs, and any
+   * run mid-flight — has `epic_branch` and no model, and the executor reads that
+   * absence as "keep the branches you already cut". The key is only ever written
+   * by the Build executor, which records the model it actually used.
+   */
+  readonly branch_model?: BranchModelKind;
 }
 
 export interface RunFile {
@@ -391,6 +404,14 @@ export function validateRunFile(input: unknown): ValidationResult {
       if (requireArray(doc.build.epic_branch, "build.epic_branch", issues)) {
         (doc.build.epic_branch as unknown[]).forEach((branch, i) => {
           requireString(branch, `build.epic_branch[${i}]`, issues);
+        });
+      }
+      // Optional (issue #57): absent on every run.yml written before the key
+      // existed, which is what keeps those runs replaying identically.
+      if (doc.build.branch_model !== undefined && !isBranchModelKind(doc.build.branch_model)) {
+        issues.push({
+          path: "build.branch_model",
+          message: `expected one of ${BRANCH_MODELS.join(" | ")}`,
         });
       }
     } else {

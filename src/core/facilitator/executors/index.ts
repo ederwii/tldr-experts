@@ -24,6 +24,7 @@ import { BUILD_PHASE } from "../../build/plan.ts";
 import type { StageSpec } from "../stageSpec.ts";
 import type { NextMode } from "../runNext.ts";
 import type { GateType } from "../../run/RunFile.ts";
+import type { BranchModelKind } from "../../plan/branchModel.ts";
 import type { EventType } from "../../events/Event.ts";
 import type { EffortLevel } from "../../schemas/stage.ts";
 import { watchExecutor } from "./watch.ts";
@@ -189,6 +190,16 @@ export interface ExecutorOutcome {
    * would overwrite anything written behind its back.
    */
   readonly epicBranches?: readonly string[];
+  /**
+   * Which branch model the executor actually used (issue #57), recorded beside
+   * the branches in `run.yml`'s `build:`.
+   *
+   * It is the executor's answer, not the plan's question: a run whose `run.yml`
+   * already claimed per-epic branches keeps them even when its plan is chained,
+   * and the recorded model is what the NEXT invocation reads instead of
+   * re-deciding.
+   */
+  readonly branchModel?: BranchModelKind;
   /** One line, for `stage.error`. Null when `ok`. */
   readonly error: string | null;
   /**
