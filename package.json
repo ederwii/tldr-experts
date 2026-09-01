@@ -48,6 +48,8 @@
   "scripts": {
     "test": "bun test",
     "build": "bun scripts/build.ts",
+    "docs:dev": "cd docs-site && bun install && bun run dev",
+    "docs:build": "cd docs-site && bun install --frozen-lockfile && bun run build",
     "typecheck": "tsc --noEmit",
     "doctor": "bun bin/tldrx.ts doctor",
     "prepublishOnly": "bun run build"

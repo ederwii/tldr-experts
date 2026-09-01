@@ -47,6 +47,26 @@
 
 ### Added
 
+- **A public documentation site, written for people who have never seen tldrx (`docs-site/`, phase 1).**
+  A VitePress site deployed to GitHub Pages by `.github/workflows/docs.yml` on any push to `main` that
+  touches `docs-site/` or `CHANGELOG.md`. Twelve short English pages — a landing page, a Quickstart, one
+  page per concept (the five stages, files-as-state, gates, evidence, budgets), four guides and a
+  condensed CLI overview — plus a generated changelog and a Spanish placeholder. None of them is pasted
+  from `docs/`, which stays the agent-facing reference. Every command
+  and every block of output on the Quickstart was produced by running the real binary; nothing on the
+  site documents a flag that `--help` does not.
+  - **The changelog page is generated, never copied.** `docs-site/scripts/gen-changelog.ts` reads this
+    file at build time and emits one line per entry, so a release note reaches the website without
+    anybody maintaining a second copy of it. The generated page is gitignored for the same reason.
+  - VitePress dead-link checking is left ON and the build is green with it — proven by a probe, not
+    assumed: a deliberate link to a missing page failed the build with `1 dead link(s) found`. (Anchors
+    are NOT checked by it, so `#fragment` targets were verified against the rendered HTML by hand.)
+  - i18n is wired now, with the English content at the root and a Spanish placeholder under `/es/`, so
+    phase 2 is a matter of adding files rather than restructuring the site.
+  - `docs-site/` is excluded from the npm package (it is not in `files:`) and from `tsc --noEmit` (the
+    root tsconfig includes only `bin`, `src`, `test`) — measured: `npm pack --dry-run` still lists 52
+    files and none of them is under `docs-site/`.
+
 - **`tldrx learn` chapters 3-8 — the whole loop, played (#30, phase 2).** The tutorial now runs end to
   end in about five seconds of real commands: **3** the gate (`approve --note`, and the record it writes
   in `run.yml`), **4** one story built for real (How's `auto` gate closing itself over its seven
