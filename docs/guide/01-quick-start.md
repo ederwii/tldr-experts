@@ -16,9 +16,10 @@ tldrx doctor              # check the local environment first — it is the auth
 runtime dependencies, so an installed `tldrx` needs only Node. Bun is required to
 *build* from source, not to run it.
 
-Required, per `env.yml`: **bun ≥ 1.3** (to build), **node ≥ 20** (to run the build),
-**git ≥ 2.30**, **claude ≥ 2.0**. Optional: python3 ≥ 3.10 and graphify (the code map),
-gh (the ticket mirror). The framework never installs anything — `doctor` prints the
+Required, per `env.yml`: **node ≥ 20** (runs the published build), **git ≥ 2.30**,
+**claude ≥ 2.0**. Optional: **bun ≥ 1.3** — needed only to build from source, run the test
+suite, or run the hooks straight from a clone — plus python3 ≥ 3.10 and graphify (the code
+map), and gh (the ticket mirror). The framework never installs anything — `doctor` prints the
 exact command for your OS and stops there.
 
 ## Set the workspace up

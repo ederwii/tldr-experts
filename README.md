@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/tldr-experts?label=npm%20tldr-experts)](https://www.npmjs.com/package/tldr-experts) [![ci](https://github.com/ederwii/tldr-experts/actions/workflows/ci.yml/badge.svg)](https://github.com/ederwii/tldr-experts/actions/workflows/ci.yml) ![status](https://img.shields.io/badge/status-beta-blue)
 
-**An evidence-first, file-based AI development framework: five stages, a gate on every one, and every claim cited or refused.** Open source, tool-agnostic in design, piloted on Claude Code. **Beta:** every command is implemented and verified by running it, the `version: 1` file formats only grow from here, and `tldrx --help` is the authoritative command surface.
+**An evidence-first, file-based AI development framework: five stages, a gate on every one, and every claim cited or refused.** Open source. The workflow and the persisted state format are provider-independent; the automated runner currently supports Claude Code. **Beta:** every command is implemented and verified by running it, the `version: 1` file formats only grow from here, and `tldrx --help` is the authoritative command surface.
 
 One loop — *Investigate → Handoff → Interview → Gate* — five phases, **what · how · plan · build ·
 watch**, one stage per command, each stopping at a gate you own; the files ARE the state, the
@@ -41,8 +41,10 @@ tldrx run new payments --scope feature --seed docs/payments/ --budget 25
 tldrx run auto            # `next`, over and over, until something actually needs you
 ```
 
-**Runtime: Node ≥ 20 or Bun** — the published package is a pre-built bundle with zero runtime
-dependencies, so an installed `tldrx` needs only Node; Bun builds it. Full walkthrough:
+**To run it: Node ≥ 20, and nothing else** — the published package is a pre-built bundle with
+zero runtime dependencies, and `dist/` is a Node bundle (Bun runs it too, if you have it).
+**To build or contribute: Bun ≥ 1.3**, which compiles that bundle and runs the test suite.
+`tldrx doctor` is the authority on the rest. Full walkthrough:
 [`docs/guide/01-quick-start.md`](docs/guide/01-quick-start.md).
 
 ## Trying it: three ways to run

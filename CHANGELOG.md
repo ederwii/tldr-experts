@@ -301,6 +301,20 @@ same amount after it; what changed is that the page now says how big the bound i
     owner and a token that is not the merging run's. 40 runs of `test/merge-wave.test.ts`
     four-way concurrent under 20 CPU spinners did not produce it.
 
+- **A drift guard over the public surfaces (#121).** `test/public-surface-consistency.test.ts`
+  fails when the README, the docs site (both locales), `env.yml` and `package.json` stop
+  agreeing with each other. It reads files off disk, spawns nothing and touches no network,
+  and every failure names the file and line to go fix. It checks that no page states the
+  current version as a literal (it must be interpolated), that every release-shaped literal
+  left in the prose is a version we deliberately cite as history, that the README release
+  table leads with `package.json`'s version, that the docs config derives the version rather
+  than hardcoding it, that `env.yml` does not require Bun, that no quickstart tells a reader
+  they need Bun to run tldrx, and that no surface carries a claim we have retired.
+  - Red-first, against the tree as it stood: 6 of 10 assertions failed, one per real defect.
+  - `scripts/release-check.sh` already compared `package.json`, `plugin.json`, `CHANGELOG.md`
+    and the README table — but only at release time, when the drift has already shipped. This
+    runs on every PR through `ci.yml`.
+
 ### Changed
 
 - The staleness field is spelled `lastEventFrom`, not `lastEventSource`. The model is
@@ -520,6 +534,47 @@ same amount after it; what changed is that the page now says how big the bound i
     (`` `30 days` IS at docs/retention.md:3 — that is a presence, not an absence ``). It is the
     upgrade path out of `noted`, and the first form in which an absence over a file with content is
     ever actually checked.
+
+- **The docs site advertised a version we had already shipped past (#121).** The hero said
+  0.4.0 in four places — `index.md`, `guides/faq.md` and both Spanish mirrors — while npm
+  served 0.5.0. Hand-bumping it would have bought one release; the number is now read at
+  build time instead, by `docs-site/version.ts`, from `package.json` (the field npm
+  publishes) and the README release table (the row `release-check.sh` already refuses to
+  release without). `config.mts` hands both to the pages through `themeConfig`, on the root
+  and on each locale, and the pages interpolate. `version.ts` throws rather than guesses: a
+  docs build that cannot tell which version it is describing fails, instead of quietly
+  publishing `undefined`. The "0.4.0 was the first beta" sentences stay — that is history,
+  and it is still true — but they now read as history.
+
+- **Three surfaces disagreed about whether Bun is needed to run tldrx (#121).** `env.yml`
+  declared `bun` `required: true`, and `DoctorReport.healthy` is "no required tool is
+  missing", so `tldrx doctor` exited 1 on machines where tldrx was installed and working.
+  The docs site's quickstart said you need "Node 20 **and** Bun 1.3"; the README and
+  `docs/guide/01-quick-start.md` said an installed tldrx needs only Node. The README was
+  right, and the code says so: `node dist/tldrx.js --version` prints the version and exits 0
+  with no Bun involved, because `src/core/runtime/index.ts` picks its implementation off
+  `typeof Bun` at import time and `nodeRuntime.ts` is complete — `bun build --target=node`
+  inlines the `yaml` package, so a published install resolves zero runtime dependencies.
+  - `bun` is now `required: false` in `env.yml`, still declared and still carrying its 1.3.0
+    floor, with the measurement recorded beside the flag. It remains genuinely required to
+    build the bundle, to run the test suite, and to run the hooks straight from a clone
+    (`plugin/hooks/hooks.json` spawns `bun`); an `install --claude` wiring goes through
+    `tldrx hook <name>`, which is the Node bundle.
+  - Every surface now separates *running the published package* from *building and
+    contributing*, in the same words: both quickstarts, the README, `01-quick-start.md` and
+    `09-troubleshooting.md`.
+
+- **The landing page claimed an absolute the implementation cannot guarantee (#121).** It
+  told readers that because the files are the state, nothing could get out of step with
+  anything — in the same week that #116 and #117 shipped precisely because state can. It now
+  says what is defensible and still worth saying: the canonical state is on disk,
+  inspectable, diffable, committable, recoverable. Mirrored in Spanish.
+
+- **Provider wording tightened to what we can show (#121).** "Tool-agnostic" was an
+  unqualified claim about software with one working runner. The README and `docs/concept.md`
+  now say the workflow and the persisted state format are provider-independent, and that the
+  automated runner currently supports Claude Code. The docs site made no stronger claim; it
+  was swept and needed no change.
 
 ## 0.5.0 — 2026-09-02
 

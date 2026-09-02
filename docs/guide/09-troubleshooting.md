@@ -10,8 +10,9 @@ Every entry here is a message the tool actually prints, and the move that clears
 `scripts/release.sh 0.3.0 --tag alpha` — see [`docs/RELEASING.md`](../RELEASING.md).
 
 **`tldrx doctor` exits 1.** A **required** tool is missing or below its `min_version`
-(bun ≥ 1.3, node ≥ 20, git ≥ 2.30, claude ≥ 2.0). An optional tool — python3, graphify, gh —
-is reported and never fatal. `doctor` prints the exact install command for your OS; the
+(node ≥ 20, git ≥ 2.30, claude ≥ 2.0). An optional tool — bun, python3, graphify, gh — is
+reported and never fatal. Bun is optional on purpose: an installed `tldrx` runs on Node, so
+a missing Bun must not fail the check on a machine where tldrx works. `doctor` prints the exact install command for your OS; the
 framework never installs anything itself.
 
 **`tldrx doctor` says `Gitignore shadow: N of 4 probed state paths are IGNORED`.** A rule in

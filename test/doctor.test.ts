@@ -23,10 +23,26 @@ describe("env manifest", () => {
     }
   });
 
-  test("it declares claude, bun, node and git as required", async () => {
+  test("it declares claude, node and git as required — and NOT bun", async () => {
     const manifest = await loadEnvManifest();
     const required = manifest.tools.filter((t) => t.required).map((t) => t.id).sort();
-    expect(required).toEqual(["bun", "claude", "git", "node"]);
+    expect(required).toEqual(["claude", "git", "node"]);
+  });
+
+  /**
+   * Bun moved to optional on 2026-09-02, and the evidence is in `env.yml` beside the
+   * flag: `node dist/tldrx.js --version` prints the version and exits 0 with no Bun on
+   * the machine, because `src/core/runtime/index.ts` falls to `nodeRuntime` when
+   * `typeof Bun` is undefined. `DoctorReport.healthy` is "no required tool is missing",
+   * so a required Bun exited `tldrx doctor` 1 on working installs. It stays DECLARED —
+   * a contributor still needs it to build and to run the tests — just not fatal.
+   */
+  test("bun is still declared, with its version floor, just not required", async () => {
+    const manifest = await loadEnvManifest();
+    const bun = manifest.tools.find((t) => t.id === "bun");
+    expect(bun).toBeDefined();
+    expect(bun!.required).toBe(false);
+    expect(bun!.min_version).toBe("1.3.0");
   });
 });
 

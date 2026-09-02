@@ -1,6 +1,6 @@
 # Concept v0 — an evidence-first, file-based AI development framework
 
-Name: **tldr-experts** — CLI `tldrx` (decided 2026-08-28). Open source, tool-agnostic, Claude Code pilot.
+Name: **tldr-experts** — CLI `tldrx` (decided 2026-08-28). Open source. The workflow and the persisted state format are provider-independent; the automated runner currently supports Claude Code.
 
 Everything below is a proposal. Platform facts it relies on are in Appendix A (verified from official docs by research agents); nothing else is verified.
 

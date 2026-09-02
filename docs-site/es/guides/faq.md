@@ -2,6 +2,13 @@
 title: Preguntas frecuentes para impacientes
 ---
 
+<script setup>
+// The version and maturity tag come from package.json and the README release table at
+// build time (docs-site/version.ts), so this page cannot lag a release.
+import { useData } from 'vitepress'
+const { theme } = useData()
+</script>
+
 # Preguntas frecuentes para impacientes
 
 ## ¿Cuál es la forma más corta de entender esto?
@@ -99,9 +106,9 @@ quien clone el repo se lleva el run.
 
 ## ¿Ya está listo?
 
-**Beta, 0.4.0.** Todos los comandos son reales y están probados; la autoridad es
+**{{ theme.tldrxStatus }}, {{ theme.tldrxVersion }}.** Todos los comandos son reales y están probados; la autoridad es
 `tldrx --help` en tu máquina, no este sitio. Las versiones hasta la 0.3.1 fueron `alpha`; la
-0.4.0 es la primera `beta`, y el requisito para llegar ahí ya se cumplió: formatos de
+0.4.0 fue la primera `beta`, y el requisito para llegar ahí ya se cumplió: formatos de
 archivo congelados, dos o más workspaces reales llevados hasta Build, y una ruta de
 actualización documentada.
 

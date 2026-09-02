@@ -14,8 +14,10 @@ npm i -g tldr-experts     # te deja `tldrx` y `tldr-experts`: el mismo binario
 tldrx doctor              # la autoridad sobre qué más te hace falta
 ```
 
-Necesitas **Node 20 o más nuevo** y **Bun 1.3 o más nuevo**; el paquete es un bundle ya
-compilado, sin dependencias en tiempo de ejecución. `doctor` revisa lo demás — `git`,
+Para *correr* tldrx necesitas **Node 20 o más nuevo**, y nada más: el paquete se publica
+como un bundle ya compilado, sin dependencias en tiempo de ejecución. **Bun 1.3+** aquí es
+herramienta de quien contribuye —compila ese bundle y corre la suite de pruebas—, así que no
+te hace falta para instalar ni para usar un tldrx publicado. `doctor` revisa lo demás — `git`,
 `claude`, un par de extras opcionales — y para cada cosa que falte imprime el comando de
 instalación en vez de instalarla por su cuenta. Una máquina limpia termina en
 `All required tools present. ✓`.
