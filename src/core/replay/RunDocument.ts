@@ -159,6 +159,13 @@ export interface BudgetPhase {
   readonly id: string;
   readonly ceiling_usd: number | null;
   readonly spent_usd: number | null;
+  /**
+   * This phase's own economy, or null to inherit the run's (`RunBudget.economy`).
+   * Null is "nobody wrote a choice here", NOT `metered-usd`.
+   */
+  readonly economy: string | null;
+  /** This phase's HOST-TOKEN allowance (#61), or null when it declares none. */
+  readonly ceiling_host_tokens: number | null;
 }
 
 export interface BudgetDocument {
@@ -166,6 +173,24 @@ export interface BudgetDocument {
   readonly per_agent_max_usd: number | null;
   readonly warn_at_pct: number | null;
   readonly on_exceed: string | null;
+  /**
+   * What the numbers here are DENOMINATED IN (`metered-usd` | `host-tokens`,
+   * spec §2.11). Null on every budget.yml written before the label existed,
+   * which means `metered-usd` — the strict reader's `DEFAULT_ECONOMY`.
+   *
+   * Carried tolerantly rather than through `loadBudget`: this reader must never
+   * throw, and a run whose budget.yml is a byte wrong is a run whose PAGE still
+   * has to draw. The three keys below are read the same way and for the same
+   * reason. Absence is reported as null; interpreting it is the caller's job.
+   */
+  readonly economy: string | null;
+  /** `warn` | `block` (#22), or null meaning `warn` — what a token ceiling always did. */
+  readonly on_host_tokens_exceed: string | null;
+  /**
+   * The run's HOST-TOKEN allowance — the ceiling `ceiling_usd` is NOT (#61).
+   * Never summed into dollars: there is no exchange rate between the two.
+   */
+  readonly ceiling_host_tokens: number | null;
   readonly phases: readonly BudgetPhase[];
 }
 
@@ -232,6 +257,9 @@ export function toBudgetDocument(input: unknown): BudgetDocument | null {
     per_agent_max_usd: num(doc.per_agent_max_usd),
     warn_at_pct: num(doc.warn_at_pct),
     on_exceed: nullableStr(doc.on_exceed),
+    economy: nullableStr(doc.economy),
+    on_host_tokens_exceed: nullableStr(doc.on_host_tokens_exceed),
+    ceiling_host_tokens: num(doc.ceiling_host_tokens),
     phases: array(doc.phases)
       .map(record)
       .filter((phase): phase is Record<string, unknown> => phase !== null)
@@ -239,6 +267,8 @@ export function toBudgetDocument(input: unknown): BudgetDocument | null {
         id: str(phase.id),
         ceiling_usd: num(phase.ceiling_usd),
         spent_usd: num(phase.spent_usd),
+        economy: nullableStr(phase.economy),
+        ceiling_host_tokens: num(phase.ceiling_host_tokens),
       })),
   };
 }

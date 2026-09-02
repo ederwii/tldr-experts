@@ -48,13 +48,14 @@ of it.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `modelVersion` | number | `3` today. `1 → 2`: `pendingQuestion` and `pendingGate` became aliases of `waiting` and no longer report an open question, or a gate object, that the run is not actually stopped on. `2 → 3` (#60): `runnable` reads `true` for a run that has STARTED and was proposed to follow an unfinished sibling — a proposal recorded before either run existed cannot un-start a running run. Additions never bump it. |
+| `modelVersion` | number | `3` today. `1 → 2`: `pendingQuestion` and `pendingGate` became aliases of `waiting` and no longer report an open question, or a gate object, that the run is not actually stopped on. `2 → 3` (#60): `runnable` reads `true` for a run that has STARTED and was proposed to follow an unfinished sibling — a proposal recorded before either run existed cannot un-start a running run. Additions never bump it, and #85 is the case that tested the rule: it gave the model two new files and eight new fields and stayed at **3**. `spentUsd` was the field with a case to answer, because a consumer reading it alone is demonstrably wrong about a host-attended run now that the page can show the token ceiling beside it — but it is computed from the same `run.yml` key, holds the same number, and has meant "METERED dollars, a lower bound when `unmeteredTasks > 0`" since v3. A field that gained NEIGHBOURS did not change meaning. |
 | `generatedAt` | string | ISO-8601, to the second, when the files were read. |
 | `root` | string | Absolute path of the workspace that was read. |
 | `workspace` | string | Its basename — what the page calls itself. |
 | `workspaceFound` | boolean | `false` when there is no `.tldrx/` at `root`. The page says so instead of looking empty. |
 | `live` | boolean | `true` when the watching server produced it, `false` for a static export. |
 | `maxLevel` | number | Highest competency level (spec §2.6), so a renderer never hard-codes it. |
+| `maxAttempts` | number | Attempts a Build story gets before it blocks (`MAX_ATTEMPTS`), so a renderer never hard-codes it either. It travels as data for a mechanical reason: the `dash*` functions are serialised into the page and run there closure-free, so a constant one referenced by name would be a `ReferenceError` in the browser. |
 | `runs` | `Run[]` | Newest first (run ids are date-prefixed). |
 | `order` | `string[]` | Every run id in the order a human should work through them — topological on `dependsOn`, runnable first, then newest-updated. The head is the run to do next. `runs` stays newest-first, so a renderer can offer either. |
 | `chains` | `string[][]` | Root-to-leaf dependency paths, for an `A → B → C` rendering. |
@@ -99,6 +100,11 @@ still carries the slug, which is where that fact belongs.
 | `phases` | `Phase[]` | Per phase: its handoff and its open questions. |
 | `plan` | `Plan` \| null | Stories, epics and waves, when the Plan phase wrote them. |
 | `build` | `Build` \| null | What the Build cut on disk (`run.yml` `build`): `branchModel` (`"per-epic"` \| `"integration"` \| null when the run predates the key — which is **not** the same as `per-epic`) and `epicBranches` (`string[]`). Null until a Build stage cuts or adopts a branch. |
+| `budget` | `Budget` \| null | **`budget.yml`** (#85) — null when there is none, and null when the file does not parse. Distinct from `spentUsd`/`ceilingUsd`, which come from the run.yml MIRROR. Fields: `ceilingUsd`, `perAgentMaxUsd`, `warnAtPct`, `onExceed` (each number/string \| null), `economy` (`"metered-usd"` \| `"host-tokens"` — never null; a file with no key means `metered-usd`), `onHostTokensExceed` (`"warn"` \| `"block"` — never null; absence means `warn`), `ceilingHostTokens` (number \| null — **the ceiling `hostTokens` is judged against**, and the reason a host-attended run's dollar meter could not tell the truth without this file), and `phases` (`BudgetPhase[]`). |
+| `notes` | `Note[]` | Operator notes off the ledger, oldest first (#46): `ts`, `actor`, `stage` (string \| null), `phase` (string \| null), `note`. **All of them** — `tldrx run status` caps at three because a terminal has a bottom; a run detail page does not. |
+| `budgetBlocks` | `BudgetBlock[]` | Every `budget.blocked` on the ledger, oldest first. **History, not a state**: the ceiling may have been raised since, so this raises no attention card. `ts`, `stage`, `phase`, `economy` (`"metered-usd"` unless the event says otherwise), `remainingUsd`, `estimateUsd`, `hostTokens`, `ceilingTokens` (each number \| null — a dollar refusal carries the first two, a host-token refusal the last two, and they are never added), `reason` (string \| null). |
+| `eventsError` | string \| null | Set when `events.jsonl` is on disk and could not be read at all. Carried so the page never renders "no operator notes" over an unreadable ledger. |
+| `eventsSkipped` | number | Non-empty ledger lines that did not parse — a torn write. Shown, never swallowed. |
 | `filter` | string | Lowercased haystack for a text filter over the run list. |
 
 ### `Waiting`
@@ -142,8 +148,9 @@ beside it (#60).
 
 `phase`, `id`, `status`, `expert` (string \| null), `model` (string \| null),
 `costUsd` (number), `budgetUsd` (number \| null — the stage's own ceiling from
-`run.yml` `stage.budget_usd`; the model does not read `budget.yml`, whose
-ceilings are per phase), `gate` (string \| null, e.g. `"approve: pending"`),
+`run.yml` `stage.budget_usd`, which is per STAGE; `budget.yml`'s ceilings are per
+phase and reach the model as `run.budget`), `gate` (string \| null, e.g.
+`"approve: pending"`),
 `gateBy` (string \| null — `auto` when the facilitator closed it, the operator's
 name when a person did, null while it is open), `gatePolicy` (`"human"` |
 `"auto"` | `"agent"` — who is MEANT to sign it, spec §2.2 `gates_policy`;
@@ -178,9 +185,29 @@ it is not a button, and the dashboard has no write path.
 swallowed).
 
 - **Story**: `id`, `epic`, `title`, `repo`, `status`, `dependsOn` (`string[]`),
-  `wave` (string \| null — the wave that schedules it, null when none does).
+  `wave` (string \| null — the wave that schedules it, null when none does), and
+  three facts that live only in `events.jsonl` because the story file has no
+  counters (#85 §2, §5): `attempt` (number \| null — the attempt the LAST
+  `task.started` recorded; null means nobody has picked it up, and is never a
+  coerced `0`; read against `maxAttempts`), `reviewRetries` (number — how many
+  review envelopes were refused on their FORMAT and asked for again, each costing
+  the story no attempt), and `reopens` (`StoryReopen[]`, below).
 - **Epic**: `id`, `title`, `branch`, `status`, `stories` (`string[]`).
 - **Wave**: `id`, `stories` (`string[]`). File order is execution order.
+### `BudgetPhase` (a row of `run.budget.phases`)
+
+`id`, `ceilingUsd` (number \| null), `spentUsd` (number \| null), `economy`
+(string \| null — **null means INHERIT the run's**, which is a different
+statement from "this phase chose `metered-usd`"), `ceilingHostTokens` (number \|
+null — this phase's own host-token allowance, #61).
+
+### `Plan` types, continued
+
+- **StoryReopen**: `ts`, `actor`, `reason` (`"fix"` \| `"attempts"`), `note`,
+  `fromStatus` (string \| null), `verdicts` (number \| null — what the closed run
+  of attempts consumed). A `story.reopened` written before the `reason` key
+  existed reads as `attempts`, which is the only kind that existed; it is
+  resolved here rather than reported as a blank.
 
 ## `Expert`
 
@@ -199,11 +226,23 @@ level), `evidenceCount`, `newestEvidence` (`YYYY-MM-DD` \| null), `trainPrompt`.
 
 ## What is NOT in it
 
-`events.jsonl` is **not read**. Everything that lives only in the ledger is
-therefore absent: operator notes (`tldrx note`), per-attempt costs, story
-reopens, review retries, budget refusals. `tldrx replay <run>` and `tldrx run
-status` read the ledger; this page does not, and says so on the *How to use it*
-tab rather than letting an empty section read as an empty ledger.
+`budget.yml` and `events.jsonl` **are** read, since #85. What the ledger gives
+the model is deliberately narrow: operator notes (`tldrx note`), each story's
+current attempt, the free review retries it was granted, story reopens and their
+reasons, and every `budget.blocked`. What it does **not** give is the narrative —
+per-attempt costs, the agent spawns, the check results, the order things happened
+in. That is `tldrx replay <run>`, and the *How to use it* tab says so.
+
+Two files are still unread, and their absences are real:
+
+- `04-build/preflight.yml` — a DoD-delta refusal rolls the stage back to `ready`
+  and writes this file, emitting no event and setting no `run.yml` field. From
+  the page the stage simply went backwards for no visible reason (#85 §5).
+- `05-watch/watchers/*.md` — the Watchers tab prints the shape it expects and a
+  list of Watch stages. Reading them is a decision about whether the page
+  re-checks the code or only reads the files (#85 §3).
+
+Neither file is opened here, and the page must not imply otherwise.
 
 ## Serving it
 

@@ -875,7 +875,7 @@ three are handed the run directory of the file they are judging.
 
 ### 2.9 `tldrx-work/<run>/events.jsonl`
 
-Append-only audit log: with `run.yml` the dashboard's only data source, the cost ledger, and the `replay`/`retro` input.
+Append-only audit log: the cost ledger, the `replay`/`retro` input, and — with `run.yml`, `budget.yml` and the phase artefacts — one of the dashboard's data sources (#85).
 
 **Type enum:** `run.created` `run.closed` `run.unlocked` `run.cancelled` `run.attended` `phase.started` `phase.done` `stage.started` `stage.done` `stage.failed`
 `stage.skipped` `task.started` `task.done` `agent.spawned` `agent.result` `question.asked` `question.answered`

@@ -24,7 +24,7 @@ who opened it. Both are the same document; only the watching differs.
 | View | What is on it |
 |---|---|
 | Runs | Every run, its status, phase progress, spend, and **what it is waiting on**. The one a human could pick up next wears `← next`, the same marker `tldrx status` prints. |
-| One run | The execution path stage by stage — expert, model, cost, gate, who signs it and who signed — plus the handoffs, the open questions, the plan and the branches the Build cut. |
+| One run | The execution path stage by stage — expert, model, cost, gate, who signs it and who signed — plus the handoffs, the open questions, the plan and the branches the Build cut. From the ledger: the **operator notes** somebody left with `tldrx note`, each story's attempt and the free review retries it was granted, the reopens and their reasons, and every moment the budget brake refused a stage. From `budget.yml`: the per-phase ceilings, the levers, and the **host-token allowance**. |
 | Experts | Competency levels **recomputed from evidence at read time**, never the number stored on disk, with the evidence behind each one. |
 | Watchers | Not yet: watcher cards are written by the Watch phase and the model does not read them, so the tab says so rather than inventing a card. Use `tldrx watch list`. |
 | How to use it | The terminal loop, as copy-paste commands. |
@@ -41,10 +41,17 @@ a true statement about what tldrx measured and a false one about what the run co
 page prints the other currency beside it: host tokens declared with `--tokens`, and how many
 turns nobody costed at all. The two are never added together — there is no exchange rate.
 
-::: info It does not read `events.jsonl`
-Everything that lives only in the ledger is absent from this page: operator notes
-(`tldrx note`), per-attempt costs, story reopens, review retries. `tldrx replay <run>` and
-`tldrx run status` read the ledger.
+And when `budget.yml` prices the run in `host-tokens`, the page stops quoting dollars at it
+entirely — in the runs list and on the run detail alike. `ceiling_usd` governs nothing there,
+so `$0.00 of $25.00`, bar or words, would be a confident statement about a denominator that
+does not apply. The spend reads in tokens, against `ceiling_host_tokens` — the ceiling those
+tokens really are judged against, which lives in `budget.yml` and in no other file.
+
+::: info What is still only in `tldrx replay`
+The page reads the ledger, but not all of it: the narrative — per-attempt costs, the agent
+spawns, the checks, the order things happened in — is `tldrx replay <run>`'s job. Two files
+are read by nobody here: `04-build/preflight.yml`, so a DoD-delta refusal looks like a stage
+that went backwards for no reason, and `05-watch/watchers/*.md`.
 :::
 
 ## It cannot disagree with the CLI

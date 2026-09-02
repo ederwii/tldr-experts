@@ -64,6 +64,12 @@ describe("the dashboard model", () => {
   // because this fixture's one run has no siblings and no open block in its
   // cursor phase. `dashboard-deps.test.ts` asserts all four over a fixture that
   // does have them — the two lists together are the whole contract.
+  //
+  // The ledger fields (#85) split the same way. `runs[].budget.*`,
+  // `runs[].eventsError` and `runs[].eventsSkipped` are here because this
+  // fixture has a `budget.yml` and an `events.jsonl`; `runs[].notes[]`,
+  // `runs[].budgetBlocks[]` and the story arcs are empty in it, and
+  // `dashboard-sources.test.ts` asserts those over fixtures that carry them.
   test("its field names are the contract a designer targets", () => {
     expect([...fieldPaths(model)].sort()).toEqual([
       "experts[].areas[].evidenceCount",
@@ -82,14 +88,29 @@ describe("the dashboard model", () => {
       "faq[].heading",
       "generatedAt",
       "live",
+      "maxAttempts",
       "maxLevel",
       "modelVersion",
       "order[]",
       "root",
       "runs[].attendedBy",
+      "runs[].budget.ceilingHostTokens",
+      "runs[].budget.ceilingUsd",
+      "runs[].budget.economy",
+      "runs[].budget.onExceed",
+      "runs[].budget.onHostTokensExceed",
+      "runs[].budget.perAgentMaxUsd",
+      "runs[].budget.phases[].ceilingHostTokens",
+      "runs[].budget.phases[].ceilingUsd",
+      "runs[].budget.phases[].economy",
+      "runs[].budget.phases[].id",
+      "runs[].budget.phases[].spentUsd",
+      "runs[].budget.warnAtPct",
       "runs[].build",
       "runs[].ceilingUsd",
       "runs[].cursor",
+      "runs[].eventsError",
+      "runs[].eventsSkipped",
       "runs[].filter",
       "runs[].hostTokens",
       "runs[].id",
