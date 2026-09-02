@@ -35,20 +35,36 @@ import {
 export const DEMO_FIXTURE_ROOT: string = join(FRAMEWORK_ROOT, "test", "fixtures");
 
 /**
- * The two fixtures, in overlay order.
+ * The three fixtures, in overlay order.
  *
  * `views` is the detailed one — one run with handoffs, open questions, a budget
  * ledger, an events log and two trained experts — and it supplies `.tldrx/` for
  * the composed workspace. `chain` is the wide one: seven runs carrying every
  * status a reader should learn to recognise (`pending`, `awaiting_gate`,
  * `awaiting_answer`, `failed`, `done`) and the dependency edges between them.
- * Neither is written for this page; both are what the dashboard's own tests
- * assert against, which is why the demo cannot drift away from the real thing
- * without a test going red.
+ * None is written for this page; all are what the dashboard's own tests assert
+ * against, which is why the demo cannot drift away from the real thing without a
+ * test going red.
+ *
+ * `plan` is the third, and it exists because of what the first two could NOT
+ * show (#119). Neither had ever reached the Plan phase, so `loadPlan` returned
+ * null for all eight runs and every plan-shaped rendering on this public page
+ * drew its EMPTY state: the Waves view said "No waves in this workspace", the
+ * story grid drew nothing at all, and Plan & build said the Plan phase had
+ * written no stories. A demo of a dashboard that cannot show two of its views is
+ * a demo of the wrong thing.
+ *
+ * It is a THIRD fixture rather than an edit to the other two on purpose. A
+ * `03-plan/` dropped into a chain run would move that run's `stagesTotal`,
+ * `stagesDone` and `percent` — numbers `test/dashboard-deps.test.ts` reads — and
+ * `test/dashboard.test.ts` asserts, correctly, that the views fixture's one run
+ * carries `plan: null`. Both fixtures stay byte-identical; the new shape arrives
+ * beside them.
  */
 export const DEMO_SOURCES: readonly string[] = [
   join(DEMO_FIXTURE_ROOT, "views", "workspace"),
   join(DEMO_FIXTURE_ROOT, "chain", "workspace"),
+  join(DEMO_FIXTURE_ROOT, "plan", "workspace"),
 ];
 
 /**

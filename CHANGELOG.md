@@ -4,6 +4,26 @@
 
 ### Added
 
+- **The docs site's demo dashboard now shows the story grid and the Waves view with
+  something in them (#119).** `gen-demo.ts` composed its workspace from two fixtures,
+  neither of which had ever reached the Plan phase, so `loadPlan` returned null for all
+  eight runs and every plan-shaped rendering on the public page drew its EMPTY state: the
+  Waves view said "No waves in this workspace", the story grid drew nothing at all, and
+  Plan & build said the Plan phase had written no stories. A demo of a dashboard that
+  cannot show two of its own views is a demo of the wrong thing.
+  - A **third** synthetic fixture — `test/fixtures/plan/workspace`, one run at Build with
+    six stories over two waves, two epics on two repos, a fix round on S2 and two review
+    retries on S5 — added to `DEMO_SOURCES` beside the other two. Third rather than an
+    edit, because a `03-plan/` dropped into a chain run would move that run's
+    `stagesTotal`, `stagesDone` and `percent` (numbers `dashboard-deps.test.ts` reads),
+    and `dashboard.test.ts` asserts — correctly — that the views fixture's one run carries
+    `plan: null`. Both existing fixtures stay byte-identical.
+  - Synthetic like everything else on that page: it lives under `test/fixtures/`, so
+    `assertSynthetic` is what permits it to be read at all, and the demo stays
+    deterministic (fixed clock, invented root, no machine path).
+  - Measured over the composed workspace: 9 runs, 2 experts, 0 unreadable files, 0 skipped
+    events, 6 stories across 2 waves, and `run.build` non-null for the first time.
+
 - **A stage now carries when it started, when it ended and what its gate said (#118).**
   `run.yml` has recorded `started_at`, `ended_at` and `gate.note` on every stage since
   `run new` wrote the first one, and `StageRowModel` carried none of the three — so the

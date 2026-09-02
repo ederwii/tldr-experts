@@ -1,0 +1,60 @@
+version: 1
+run: 260902-checkout
+title: "Guest checkout"
+scope: feature
+workflow: feature
+repos: [api, lab]
+created_at: 2026-09-02T09:00:00Z
+updated_at: 2026-09-03T10:45:00Z
+status: running
+cursor: {phase: 04-build, stage: build, task: null}
+budget: {ceiling_usd: 40.0, spent_usd: 18.32, per_agent_max_usd: 4.0}
+gates_policy: {what: human, how: human, plan: human, build: auto, watch: human}
+build: {branch_model: per-epic,
+        epic_branch: ["epic/260902-checkout-api", "epic/260902-checkout-lab"]}
+phases:
+  - id: 01-what
+    status: done
+    stages:
+      - {id: what, status: done, expert: product, model: sonnet, budget_usd: 4.0, cost_usd: 2.18,
+         started_at: 2026-09-02T09:05:00Z, ended_at: 2026-09-02T10:20:00Z,
+         inputs: [], outputs: ["01-what/handoff.md"],
+         gate: {type: approve, status: approved, by: alan, at: 2026-09-02T10:30:00Z,
+                note: "scope is right — guests only, no account merge in this run"},
+         tasks: [{id: t1, status: done, expert: product, model: sonnet, cost_usd: 2.18, error: null}]}
+  - id: 02-how
+    status: done
+    stages:
+      - {id: how, status: done, expert: architect, model: sonnet, budget_usd: 6.0, cost_usd: 3.94,
+         started_at: 2026-09-02T11:00:00Z, ended_at: 2026-09-02T12:12:00Z,
+         inputs: ["01-what/handoff.md"], outputs: ["02-how/handoff.md"],
+         gate: {type: approve, status: approved, by: alan, at: 2026-09-02T13:05:00Z,
+                note: "one table, no new service — take the boring option"},
+         tasks: [{id: t1, status: done, expert: architect, model: sonnet, cost_usd: 3.94, error: null}]}
+  - id: 03-plan
+    status: done
+    stages:
+      - {id: plan, status: done, expert: architect, model: sonnet, budget_usd: 6.0, cost_usd: 2.05,
+         started_at: 2026-09-02T14:00:00Z, ended_at: 2026-09-02T14:41:00Z,
+         inputs: ["02-how/handoff.md"],
+         outputs: ["03-plan/waves.yml", "03-plan/epics/E1.md", "03-plan/epics/E2.md"],
+         gate: {type: approve, status: approved, by: alan, at: 2026-09-02T15:00:00Z,
+                note: "six stories over two waves reads right; S6 can slip"},
+         tasks: [{id: t1, status: done, expert: architect, model: sonnet, cost_usd: 2.05, error: null}]}
+  - id: 04-build
+    status: running
+    stages:
+      - {id: build, status: running, expert: developer, model: sonnet, budget_usd: 20.0, cost_usd: 10.15,
+         started_at: 2026-09-03T08:30:00Z, ended_at: null,
+         inputs: ["03-plan/waves.yml"], outputs: [],
+         gate: {type: approve, status: pending, by: null, at: null, note: ""},
+         tasks: [{id: t1, status: done, expert: developer, model: sonnet, cost_usd: 4.40, error: null},
+                 {id: t2, status: done, expert: reviewer, model: sonnet, cost_usd: 1.15, error: null},
+                 {id: t3, status: running, expert: developer, model: sonnet, cost_usd: 4.60, error: null}]}
+  - id: 05-watch
+    status: pending
+    stages:
+      - {id: watch, status: pending, expert: architect, model: sonnet, budget_usd: 4.0, cost_usd: 0.0,
+         started_at: null, ended_at: null, inputs: [], outputs: [],
+         gate: {type: approve, status: pending, by: null, at: null, note: ""},
+         tasks: []}

@@ -1,0 +1,4 @@
+version: 1
+waves:
+  - {id: W1, stories: [S1, S2, S3]}
+  - {id: W2, stories: [S4, S5, S6]}
