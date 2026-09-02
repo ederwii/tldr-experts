@@ -454,7 +454,9 @@ describe("the spawned reviewer reaches the same verdict", () => {
 
     expect(existsSync(fixlistPath(ws, "S1", 1))).toBe(false);
     expect(outcome.lines.join("\n")).toContain("the reviewer's fix list was REFUSED");
-    expect(outcome.lines.join("\n")).toContain("is `refuted` with no `[src: …]`");
+    // gh #77: the refusal says WHY the citation was not read, not just that it was not.
+    expect(outcome.lines.join("\n")).toContain("is `refuted` and its citation was not read");
+    expect(outcome.lines.join("\n")).toContain("must END with a `[src: …]` token that parses");
     expect(outcome.lines.join("\n")).toContain("does not buy a free round");
     expect(readReviewLedger(ws.runDir, "S1").fixlistRounds).toBe(0);
   }, 90_000);
@@ -485,14 +487,18 @@ describe("parseFixFindings", () => {
     const parsed = parseFixFindings([{ finding: "not a real defect", disposition: "refuted" }]);
     expect(parsed.findings).toEqual([]);
     expect(parsed.problems).toHaveLength(1);
-    expect(parsed.problems[0]).toContain("finding 1 is `refuted` with no `[src: …]`");
+    expect(parsed.problems[0]).toContain("finding 1 is `refuted` and its citation was not read");
+    // gh #77: and it says what a citation IS, with a line that would pass.
+    expect(parsed.problems[0]).toContain("must END with a `[src: …]` token that parses");
   });
 
-  test("a malformed [src: …] is not a citation", () => {
+  test("a malformed [src: …] is not a citation, and the rule that refused it is named", () => {
     const parsed = parseFixFindings([
       { finding: "x", disposition: "refuted", where: "checked [src: ]" },
     ]);
     expect(parsed.problems).toHaveLength(1);
+    expect(parsed.problems[0]).toContain("empty-token");
+    expect(parsed.problems[0]).toContain("checked [src: ]");
   });
 
   test("an unknown disposition, a missing finding and an empty list are each refused", () => {

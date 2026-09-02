@@ -18,9 +18,10 @@ import { basename, join } from "node:path";
 import { runtime } from "../runtime/index.ts";
 import { parseYaml } from "../yaml.ts";
 import {
-  isHandoff, validateCitations, validateHandoff,
-  type CitationReport, type HandoffValidation,
+  BULLET_RULE, EMPTY_SECTION_RULE, isHandoff, noneBullet, validateCitations, validateHandoff,
+  type CitationReport, type HandoffIssue, type HandoffValidation,
 } from "../text/handoff.ts";
+import { srcRule, type SrcRuleId } from "../text/srcToken.ts";
 import { validateRunBudget } from "../budget/RunBudget.ts";
 import { loadWorkspace, repoPath, toSrcContext } from "../../hooks/lib/workspace.ts";
 import { describePlanIssues, validatePlan, writesPlanArtefacts } from "../plan/validatePlan.ts";
@@ -131,13 +132,13 @@ function checkClaimSources(ctx: CheckContext): CheckOutcome {
         handoffs++;
         const validation = validateHandoff(text, srcCtx);
         unverified += validation.unverified.length;
-        failures.push(...describeHandoff(hit.path, validation));
+        failures.push(...describeHandoff(hit.path, validation, text));
         continue;
       }
       others++;
       const report = validateCitations(text, srcCtx);
       unverified += report.unverified.length;
-      failures.push(...describeCitations(hit.path, report));
+      failures.push(...describeCitations(hit.path, report, text));
     }
   }
 
@@ -158,38 +159,68 @@ function some(issues: readonly string[]): string {
   return rest > 0 ? `${shown} (+${String(rest)} more)` : shown;
 }
 
+/**
+ * The malformed phrase, naming the RULES that fired and quoting one offender.
+ *
+ * Before gh #77 this said "the [src: …] token must be last on the line" whatever
+ * had actually gone wrong, which is right for one of the three ways a token fails
+ * to tokenise and misleading for the other two. The detail line is read inside
+ * one-line renderings (`autoGate`, `next`), so it names the distinct rules and
+ * quotes exactly ONE line — the full block, with a corrected example per line,
+ * belongs to the hook's deny and is where an author is sent next.
+ */
+function malformedPhrase(issues: readonly HandoffIssue[], text: string): string {
+  const rules = [...new Set(issues.map((i) => i.rule).filter((id): id is SrcRuleId => id !== undefined))];
+  const named = rules.length === 0
+    ? "the [src: …] token could not be read"
+    : `rule(s) ${rules.map((id) => `\`${id}\``).join(", ")}`;
+  const first = issues[0];
+  const quoted = first === undefined ? null : quoteLine(text, first.line);
+  const example = rules[0] === undefined ? "" : ` — write e.g. \`${srcRule(rules[0]).good}\``;
+  return `${String(issues.length)} malformed citation(s) on `
+    + `${some(issues.map((m) => `L${String(m.line)}`))} — ${named}`
+    + (quoted === null ? "" : `; L${String(first?.line ?? 0)} reads \`${quoted}\``)
+    + example;
+}
+
+/** Line `n` of the document, trimmed and capped — or null when there is none. */
+function quoteLine(text: string, line: number): string | null {
+  if (text === "" || line < 1) return null;
+  const found = text.split("\n")[line - 1];
+  if (found === undefined || found.trim() === "") return null;
+  const trimmed = found.trim();
+  return trimmed.length <= MAX_QUOTED_CHARS ? trimmed : `${trimmed.slice(0, MAX_QUOTED_CHARS)}…`;
+}
+
+const MAX_QUOTED_CHARS = 120;
+
 /** One phrase per category that has anything in it — never just the first. */
-function describeHandoff(rel: string, validation: HandoffValidation): readonly string[] {
+function describeHandoff(rel: string, validation: HandoffValidation, text = ""): readonly string[] {
   if (validation.ok) return [];
   const parts: string[] = [];
   if (validation.missingSections.length > 0) {
     parts.push(`missing section(s) ${validation.missingSections.join(", ")}`);
   }
   if (validation.unsourced.length > 0) {
+    const first = validation.unsourced[0];
+    const quoted = first === undefined ? null : quoteLine(text, first);
     parts.push(`${String(validation.unsourced.length)} unsourced bullet(s) on `
-      + `line(s) ${some(validation.unsourced.map(String))}`);
+      + `line(s) ${some(validation.unsourced.map(String))} — ${BULLET_RULE}`
+      + (quoted === null ? "" : `; L${String(first ?? 0)} reads \`${quoted}\``));
   }
-  if (validation.malformed.length > 0) {
-    parts.push(`${String(validation.malformed.length)} malformed citation(s) on `
-      + `${some(validation.malformed.map((m) => `L${String(m.line)}`))} — `
-      + "the [src: …] token must be last on the line");
-  }
+  if (validation.malformed.length > 0) parts.push(malformedPhrase(validation.malformed, text));
   if (validation.emptySections.length > 0) {
     parts.push(`section(s) with no list items — `
       + `${some(validation.emptySections.map((s) => `${s.name} (L${String(s.line)})`))}. `
-      + "Write `- none [src: absent:<what you looked at>]`");
+      + `${EMPTY_SECTION_RULE}; write \`${noneBullet("<what you looked at>")}\``);
   }
   parts.push(...unresolvedPhrase(validation.unresolved));
   return parts.length === 0 ? [] : [`${rel}: ${parts.join("; ")}`];
 }
 
-function describeCitations(rel: string, report: CitationReport): readonly string[] {
+function describeCitations(rel: string, report: CitationReport, text = ""): readonly string[] {
   const parts: string[] = [];
-  if (report.malformed.length > 0) {
-    parts.push(`${String(report.malformed.length)} malformed citation(s) on `
-      + `${some(report.malformed.map((m) => `L${String(m.line)}`))} — `
-      + "the [src: …] token must be last on the line");
-  }
+  if (report.malformed.length > 0) parts.push(malformedPhrase(report.malformed, text));
   parts.push(...unresolvedPhrase(report.unresolved));
   return parts.length === 0 ? [] : [`${rel}: ${parts.join("; ")}`];
 }
@@ -199,10 +230,15 @@ function describeCitations(rel: string, report: CitationReport): readonly string
  * `unresolved` with line 0, so a file with 226 bullets and one bad path put the
  * cap behind 200-odd citations — exactly the failure issue #33 was filed for.
  */
-function unresolvedPhrase(issues: readonly { line: number; message: string }[]): readonly string[] {
+function unresolvedPhrase(issues: readonly HandoffIssue[]): readonly string[] {
   if (issues.length === 0) return [];
   const ordered = [...issues.filter((i) => i.line === 0), ...issues.filter((i) => i.line !== 0)];
-  const named = ordered.map((i) => (i.line === 0 ? i.message : `L${String(i.line)}: ${i.message}`));
+  // A grammar failure inside a token that DID tokenise arrives here rather than in
+  // `malformed`; it carries a rule id, and naming it costs six characters (gh #77).
+  const named = ordered.map((i) => {
+    const rule = i.rule === undefined ? "" : ` [rule \`${i.rule}\`]`;
+    return i.line === 0 ? `${i.message}${rule}` : `L${String(i.line)}: ${i.message}${rule}`;
+  });
   return [`${String(issues.length)} unresolvable source(s) — ${some(named)}`];
 }
 

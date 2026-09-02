@@ -15,7 +15,8 @@
  * is a claim like any other.
  */
 import {
-  hasSrcMarker, parseSrcToken, resolveSrc, type SrcContext, type SrcRef, type SrcToken,
+  diagnoseSrcToken, hasSrcMarker, parseSrcToken, resolveSrc,
+  type SrcContext, type SrcRef, type SrcRuleId, type SrcToken,
 } from "./srcToken.ts";
 
 export const HANDOFF_SECTIONS = ["Findings", "Decisions", "Unknowns", "Evidence ledger"] as const;
@@ -227,7 +228,29 @@ export function missingSections(
 export interface HandoffIssue {
   readonly line: number;
   readonly message: string;
+  /**
+   * The `[src: …]` rule that refused it, when one did (gh #77).
+   *
+   * Optional because a RESOLUTION failure — "no such file", "that fact is
+   * retired" — breaks no grammar rule; its message already names the thing that
+   * was not there. A GRAMMAR failure carries the id, and every message builder
+   * on this path turns it into the rule's own words plus a line that would pass.
+   */
+  readonly rule?: SrcRuleId;
 }
+
+/**
+ * The three rules this module enforces that are about the DOCUMENT rather than
+ * the token, written once, from the constants that enforce them.
+ *
+ * They are exported for the same reason `SRC_RULES` is: the deny message, the
+ * gate's detail and the generated grammar contract must say the same sentence,
+ * and three copies of a sentence is how they stop doing so.
+ */
+export const BULLET_RULE =
+  `every list item under ${HANDOFF_SECTIONS.join(" / ")} ends with a \`[src: …]\` token`;
+export const EMPTY_SECTION_RULE =
+  `each of ${HANDOFF_SECTIONS.join(" / ")} holds at least one list item — prose alone is not a claim`;
 
 /** A required section that is present but carries no list item. */
 export interface EmptySection {
@@ -279,6 +302,9 @@ export interface SectionReport {
 
 /** Cap from spec §2.8; beyond it the handoff is a document, not a handoff. */
 export const MAX_BULLETS = 200;
+export const BULLET_CAP_RULE =
+  `a handoff carries at most ${String(MAX_BULLETS)} list items across the four sections — `
+  + "beyond that cap it is a document, not a handoff";
 
 /**
  * The half of the §2.8 rule that is about SECTIONS and their bullets, over any
@@ -296,6 +322,27 @@ export const MAX_BULLETS = 200;
  * sections begin partway down the file — an evidence note's body sits under its
  * YAML front matter. A handoff starts at line 1 and passes 0.
  */
+/**
+ * The one place a "you cited something I could not read" issue is built (gh #77).
+ *
+ * It used to be two copies of one sentence — "the token must be the last thing on
+ * the line" — which is the right advice for ONE of the three ways a token fails
+ * to tokenise and misleading for the other two. A nested `]` truncates the match
+ * with the token sitting exactly where the message says it should; a live run
+ * spent two guesses on that before reading the bundle. `diagnoseSrcToken` names
+ * the rule that actually fired, and the id travels with the issue so every
+ * renderer downstream can say it too.
+ */
+function citationIssue(line: number, text: string): HandoffIssue {
+  const failure = diagnoseSrcToken(text);
+  if (failure === null) {
+    // `hasSrcMarker` was true, so something was attempted; the diagnosis only
+    // returns null for a clean token, which this is not.
+    return { line, message: "malformed citation — the `[src: …]` token could not be read" };
+  }
+  return { line, message: `malformed citation — ${failure.rule.rule}`, rule: failure.rule.id };
+}
+
 export function validateSections(
   handoff: Handoff,
   required: readonly string[],
@@ -319,20 +366,12 @@ export function validateSections(
       bulletCount++;
       const line = bullet.line + lineOffset;
       if (bullet.token === null) {
-        if (hasSrcMarker(bullet.text)) {
-          malformed.push({
-            line,
-            message:
-              "malformed citation — the `[src: …]` token must be the last thing on the line " +
-              "(closing quotes, brackets and a final `.` are allowed after it, words are not)",
-          });
-        } else {
-          unsourced.push(line);
-        }
+        if (hasSrcMarker(bullet.text)) malformed.push(citationIssue(line, bullet.text));
+        else unsourced.push(line);
         continue;
       }
       for (const error of bullet.token.errors) {
-        unresolved.push({ line, message: `[src: ${error.raw}] — ${error.message}` });
+        unresolved.push({ line, message: `[src: ${error.raw}] — ${error.message}`, rule: error.rule });
       }
       // The claim is the bullet WITHOUT its citation. `absent:` reads this text to
       // decide whether the claim is negative, and `[src: absent:…]` contains the
@@ -356,7 +395,7 @@ export function validateHandoff(text: string, ctx: SrcContext): HandoffValidatio
   const report = validateSections(handoff, HANDOFF_SECTIONS, ctx);
   const unresolved = [...report.unresolved];
   if (report.bulletCount > MAX_BULLETS) {
-    unresolved.push({ line: 0, message: `${report.bulletCount} bullets exceeds the ${MAX_BULLETS} cap` });
+    unresolved.push({ line: 0, message: `${String(report.bulletCount)} bullets — ${BULLET_CAP_RULE}` });
   }
   return {
     // `unverified` is deliberately NOT here: it does not fail the stage (spec §2.8),
@@ -410,17 +449,12 @@ export function validateCitations(text: string, ctx: SrcContext): CitationReport
     if (item.token === null) {
       if (!hasSrcMarker(item.text)) continue;
       cited++;
-      malformed.push({
-        line: item.line,
-        message:
-          "malformed citation — the `[src: …]` token must be the last thing on the line " +
-          "(closing quotes, brackets and a final `.` are allowed after it, words are not)",
-      });
+      malformed.push(citationIssue(item.line, item.text));
       continue;
     }
     cited++;
     for (const error of item.token.errors) {
-      unresolved.push({ line: item.line, message: `[src: ${error.raw}] — ${error.message}` });
+      unresolved.push({ line: item.line, message: `[src: ${error.raw}] — ${error.message}`, rule: error.rule });
     }
     const claim = item.text.replace(item.token.raw, " ").trim();
     for (const ref of item.token.refs) {

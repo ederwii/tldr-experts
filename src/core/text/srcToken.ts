@@ -36,6 +36,16 @@ export type SrcRef =
 export interface SrcParseError {
   readonly raw: string;
   readonly message: string;
+  /**
+   * The rule that refused it (gh #77).
+   *
+   * A message is free to describe the symptom; the id says which RULE fired, and
+   * `SRC_RULES` turns that id into the rule's own words plus a line that would
+   * have passed. Run `260830-ordering-inventory` lost three story attempts to a
+   * rejection that had only the symptom, and the host ended up reading
+   * `dist/tldrx.js` to recover the grammar.
+   */
+  readonly rule: SrcRuleId;
 }
 
 export interface SrcToken {
@@ -115,6 +125,294 @@ const SRC_MARKER = "[src:";
 /** `aidlc:<file>:<line>` (prose) or `aidlc:<file>#Q<n>` (an answered question). */
 const AIDLC_LINE_RE = /^(.+):(\d{1,9})$/;
 const AIDLC_Q_RE = /^(.+)#(Q\d{1,6})$/;
+/** What joins two sources inside ONE token. Split on it, and documented from it. */
+export const SRC_SEPARATOR = "; ";
+
+/**
+ * A pattern's source with its `\uXXXX` escapes decoded, for printing.
+ *
+ * `RegExp.prototype.source` re-escapes non-ASCII, so `CMD_RE.source` comes back
+ * spelling the arrow as a six-character escape rather than as the arrow. Printing
+ * THAT into the grammar contract would document the one rule gh #77 was filed
+ * over — "the arrow is the real one, not `->`" — with the arrow itself written as
+ * an escape sequence, which is a fourth way to get it wrong; the drift trap in
+ * `test/src-grammar.test.ts` caught it before it shipped. Display only: the
+ * pattern the reader runs is untouched.
+ */
+export function readableSource(pattern: RegExp): string {
+  return pattern.source.replace(
+    /\\u([0-9a-fA-F]{4})/g,
+    (_match, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)),
+  );
+}
+
+/**
+ * The patterns the reader actually runs, published so the DOCUMENTATION can be
+ * generated from them rather than copied beside them (gh #35's precedent applied
+ * to gh #77).
+ *
+ * None is global, so none carries a `lastIndex` — sharing them with a renderer is
+ * safe. `renderSrcGrammarContract` prints them through `readableSource`: loosen a
+ * regex and the published grammar moves with it in the same commit, and the
+ * examples below are re-run against the new one by `test/src-grammar.test.ts`.
+ */
+export const SRC_PATTERNS = {
+  trailingToken: TRAILING_TOKEN_RE,
+  trailingClosers: TRAILING_CLOSER_RE,
+  cmd: CMD_RE,
+  answer: ANSWER_RE,
+  fact: FACT_RE,
+  line: LINE_RE,
+  lineRange: LINE_RANGE_RE,
+  aidlcLine: AIDLC_LINE_RE,
+  aidlcQuestion: AIDLC_Q_RE,
+} as const;
+
+/**
+ * Every way a `[src: …]` can be refused, as an ID.
+ *
+ * An id rather than a sentence because three readers need the same answer in
+ * three shapes: the hook's deny block, the gate's one-line detail, and the
+ * generated grammar contract. A sentence copied into all three drifts; an id
+ * looked up in `SRC_RULES` cannot.
+ */
+export const SRC_RULE_IDS = [
+  "trailing-position",
+  "no-bracket-inside",
+  "marker-spelling",
+  "empty-token",
+  "empty-source",
+  "cmd-arrow",
+  "doc-https",
+  "file-shape",
+  "line-range",
+  "line-number",
+  "no-parent-dir",
+  "id-shape",
+  "graph-node",
+  "absent-path",
+  "aidlc-shape",
+] as const;
+export type SrcRuleId = (typeof SRC_RULE_IDS)[number];
+
+export interface SrcRule {
+  readonly id: SrcRuleId;
+  /** What the rule requires, in one clause. Quoted verbatim by every rejection. */
+  readonly rule: string;
+  /**
+   * The live pattern(s) or constant(s) that enforce it — `.source` and all.
+   * Printed into the contract, so a regex edit shows up in the documentation.
+   */
+  readonly enforcedBy: readonly string[];
+  /** A whole line this rule refuses, verbatim. Re-run by the drift trap. */
+  readonly bad: string;
+  /** The same claim, written so the reader accepts it. Also re-run. */
+  readonly good: string;
+}
+
+/**
+ * The rules, with a worked pair each.
+ *
+ * `bad` and `good` are whole BULLETS, not token fragments, because the failure
+ * being fixed is a line-level one: `citesSomething` and the handoff parser both
+ * read whole lines, which is exactly why a mid-sentence `[src: …]` was invisible
+ * and unexplained. Every pair is pushed back through `diagnoseSrcToken` and
+ * `parseSrcToken` in `test/src-grammar.test.ts` — a `bad` that stops failing, or
+ * a `good` that stops parsing, is a red suite and not a stale doc.
+ */
+export const SRC_RULES: readonly SrcRule[] = [
+  {
+    id: "trailing-position",
+    rule: "the `[src: …]` token is the LAST thing on the line — a citation written "
+      + "mid-sentence is invisible to the reader, which anchors the token to end-of-line",
+    enforcedBy: [readableSource(TRAILING_TOKEN_RE), readableSource(TRAILING_CLOSER_RE)],
+    bad: "- it drops places [src: api:src/Sel.ts:2] before ranking",
+    good: "- it drops places before ranking [src: api:src/Sel.ts:2]",
+  },
+  {
+    id: "no-bracket-inside",
+    rule: "no `]` anywhere INSIDE the token — the reader stops at the first one, so a "
+      + "quoted list or an array in the citation truncates the match and the whole token is lost",
+    enforcedBy: [readableSource(TRAILING_TOKEN_RE)],
+    bad: "- four pids skipped [src: api:src/Sweep.ts:88 (pids: [119,120])]",
+    good: "- four pids skipped, 119 and 120 among them [src: api:src/Sweep.ts:88]",
+  },
+  {
+    id: "marker-spelling",
+    rule: "the token opens with `[src: ` — the marker, a colon and ONE space; `[src:x]` is not a token",
+    enforcedBy: [readableSource(TRAILING_TOKEN_RE)],
+    bad: "- hints are synchronous [src:api:src/Hints.ts:12]",
+    good: "- hints are synchronous [src: api:src/Hints.ts:12]",
+  },
+  {
+    id: "empty-token",
+    rule: "a token names at least one source — `[src: ]` cites nothing and is refused like an uncited claim",
+    enforcedBy: [readableSource(TRAILING_TOKEN_RE)],
+    bad: "- no retention policy is recorded [src: ]",
+    good: "- no retention policy is recorded [src: absent:docs/retention.md]",
+  },
+  {
+    id: "empty-source",
+    rule: `sources inside one token are joined by \`${SRC_SEPARATOR}\` and none of them may be empty`,
+    enforcedBy: [`${SRC_SEPARATOR}`],
+    bad: "- two things happened [src: api:src/A.ts:1; ]",
+    good: "- two things happened [src: api:src/A.ts:1; api:src/B.ts:2]",
+  },
+  {
+    id: "cmd-arrow",
+    rule: "a command source reads `$ <command> → exit <n>` with the REAL arrow → (U+2192) — "
+      + "ASCII `->` is not the arrow and is refused",
+    enforcedBy: [readableSource(CMD_RE)],
+    bad: "- the suite is green [src: $ bun test -> exit 0]",
+    good: "- the suite is green [src: $ bun test → exit 0]",
+  },
+  {
+    id: "doc-https",
+    rule: "a `doc` source is `https://` followed by a non-space URL — `http://` is refused",
+    enforcedBy: ["https://"],
+    bad: "- the SDK is generated from the spec [src: http://example.com/spec]",
+    good: "- the SDK is generated from the spec [src: https://example.com/spec]",
+  },
+  {
+    id: "file-shape",
+    rule: "a `file` source is `[repo:]path:line[-line]` — a path with no line number cites a file, not a fact",
+    enforcedBy: [readableSource(LINE_RE), readableSource(LINE_RANGE_RE)],
+    bad: "- the API binds to all interfaces [src: src/Program.cs]",
+    good: "- the API binds to all interfaces [src: src/Program.cs:41]",
+  },
+  {
+    id: "line-range",
+    rule: "what follows the LAST `:` is a line number or a `line-line` range, and the range ascends",
+    enforcedBy: [readableSource(LINE_RE), readableSource(LINE_RANGE_RE)],
+    bad: "- the handler validates the token [src: api:src/Auth.ts:12-x]",
+    good: "- the handler validates the token [src: api:src/Auth.ts:12-18]",
+  },
+  {
+    id: "line-number",
+    rule: "line numbers are 1-based — there is no line 0",
+    enforcedBy: [readableSource(LINE_RE)],
+    bad: "- the file opens with a fence [src: api:src/Auth.ts:0]",
+    good: "- the file opens with a fence [src: api:src/Auth.ts:1]",
+  },
+  {
+    id: "no-parent-dir",
+    rule: "`..` is not allowed in a source path — cite from the repo root, not from where you stood",
+    enforcedBy: [".."],
+    bad: "- the config lives one level up [src: api:../shared/config.ts:3]",
+    good: "- the config lives one level up [src: api:shared/config.ts:3]",
+  },
+  {
+    id: "id-shape",
+    rule: `an answer is \`Q<n>\` (${readableSource(ANSWER_RE)}) and a fact is \`F<nnn>\` (${readableSource(FACT_RE)})`,
+    enforcedBy: [readableSource(ANSWER_RE), readableSource(FACT_RE)],
+    bad: "- the owner picked option (a) [src: Q]",
+    good: "- the owner picked option (a) [src: Q3]",
+  },
+  {
+    id: "graph-node",
+    rule: "`graph:` carries a non-empty node id with no spaces in it",
+    enforcedBy: ["graph:"],
+    bad: "- the hunt module owns selection [src: graph:]",
+    good: "- the hunt module owns selection [src: graph:hunt-engine]",
+  },
+  {
+    id: "absent-path",
+    rule: "`absent:` carries the path you looked at — an absence names what was checked or it is not evidence",
+    enforcedBy: ["absent:"],
+    bad: "- no retention policy is recorded [src: absent:]",
+    good: "- no retention policy is recorded [src: absent:docs/retention.md]",
+  },
+  {
+    id: "aidlc-shape",
+    rule: "an `aidlc` source is `aidlc:<file>:<line>` or `aidlc:<file>#Q<n>`",
+    enforcedBy: [readableSource(AIDLC_LINE_RE), readableSource(AIDLC_Q_RE)],
+    bad: "- the intent named two personas [src: aidlc:intents/260821/design.md]",
+    good: "- the intent named two personas [src: aidlc:intents/260821/design.md:14]",
+  },
+];
+
+const RULES_BY_ID = new Map<SrcRuleId, SrcRule>(SRC_RULES.map((rule) => [rule.id, rule]));
+
+/** The rule behind an id. Every id in `SRC_RULE_IDS` has one; the map is total. */
+export function srcRule(id: SrcRuleId): SrcRule {
+  const found = RULES_BY_ID.get(id);
+  // Unreachable while the drift trap is green: it asserts the two lists agree.
+  if (found === undefined) throw new Error(`no src rule '${id}'`);
+  return found;
+}
+
+/**
+ * A refusal that carries its rule.
+ *
+ * `message` IS the rule's own clause, so a caller that prints nothing but the
+ * message still says what was enforced — the property gh #77 is about. `detail`
+ * adds the one thing the rule cannot know: which of its halves this line broke.
+ */
+function refuse(raw: string, rule: SrcRuleId, detail?: string): SrcParseError {
+  const clause = srcRule(rule).rule;
+  return { raw, message: detail === undefined ? clause : `${clause} — ${detail}`, rule };
+}
+
+/** A line that TRIED to cite something, and the rule that refused it. */
+export interface SrcFailure {
+  readonly rule: SrcRule;
+  /** The offending line, as written (trimmed, and capped for a deny block). */
+  readonly line: string;
+  /** The piece of the token that failed, when the failure is inside one. */
+  readonly piece: string | null;
+}
+
+/** Longest offending line a rejection quotes back before it becomes noise. */
+const MAX_QUOTED_CHARS = 200;
+
+function quotable(line: string): string {
+  const trimmed = line.trim();
+  return trimmed.length <= MAX_QUOTED_CHARS ? trimmed : `${trimmed.slice(0, MAX_QUOTED_CHARS)}…`;
+}
+
+/**
+ * Why this line's citation could not be read — by RULE, not by symptom (gh #77).
+ *
+ * Returns null for a line that never attempted a citation (nothing to explain)
+ * and for one whose token parses (nothing wrong). Everything else lands on
+ * exactly one rule, and the three the live run paid to discover are the first
+ * three branches: the token is not last, a `]` sits inside it, or the marker is
+ * misspelled. Anything that DID tokenise is diagnosed from the piece that failed,
+ * whose own error already carries the rule id.
+ */
+export function diagnoseSrcToken(line: string, repos?: ReadonlySet<string>): SrcFailure | null {
+  if (!hasSrcMarker(line)) return null;
+  const token = parseSrcToken(line, repos);
+  if (token !== null) {
+    const error = token.errors[0];
+    if (error === undefined) return null;
+    return { rule: srcRule(error.rule), line: quotable(line), piece: error.raw === "" ? null : error.raw };
+  }
+  const trimmed = trimTrailingClosers(line);
+  const at = trimmed.lastIndexOf(SRC_MARKER);
+  const after = at === -1 ? "" : trimmed.slice(at);
+  const opener = `${SRC_MARKER} `;
+  let id: SrcRuleId = "trailing-position";
+  if (at === -1 || !after.startsWith(opener)) {
+    id = "marker-spelling";
+  } else if (trimmed.endsWith("]") && after.slice(opener.length, -1).includes("]")) {
+    id = "no-bracket-inside";
+  }
+  return { rule: srcRule(id), line: quotable(line), piece: null };
+}
+
+/**
+ * A failure as a reader sees it: the rule in its own words, the line as written,
+ * and a line that would pass. Three lines, because the two-attempt guessing game
+ * in #77 was played against a message that had only the first half of one.
+ */
+export function describeSrcFailure(failure: SrcFailure): string {
+  return [
+    `rule \`${failure.rule.id}\`: ${failure.rule.rule}`,
+    `      you wrote: ${failure.line}`,
+    `      corrected: ${failure.rule.good}`,
+  ].join("\n");
+}
 
 /**
  * The `[src: …]` token a line ends with, or null when there is none.
@@ -127,13 +425,16 @@ export function parseSrcToken(line: string, repos?: ReadonlySet<string>): SrcTok
   const inner = match[1] ?? "";
   const refs: SrcRef[] = [];
   const errors: SrcParseError[] = [];
-  for (const piece of inner.split("; ")) {
+  for (const piece of inner.split(SRC_SEPARATOR)) {
     const parsed = classifySrc(piece, repos);
     if ("message" in parsed) errors.push(parsed);
     else refs.push(parsed);
   }
   if (inner.trim() === "") {
-    return { raw: match[0], refs: [], errors: [{ raw: "", message: "empty [src: ] token" }] };
+    return {
+      raw: match[0], refs: [],
+      errors: [{ raw: "", message: srcRule("empty-token").rule, rule: "empty-token" }],
+    };
   }
   return { raw: match[0], refs, errors };
 }
@@ -162,42 +463,37 @@ export function hasSrcMarker(line: string): boolean {
 /** One `src` production. Returns a ref, or an error describing why it is not one. */
 export function classifySrc(src: string, repos?: ReadonlySet<string>): SrcRef | SrcParseError {
   const raw = src;
-  if (raw === "") return { raw, message: "empty source" };
+  if (raw === "") return refuse(raw, "empty-source");
 
   if (raw.startsWith("https://")) {
-    if (raw.length <= "https://".length || /\s/.test(raw)) {
-      return { raw, message: "`doc` must be https:// followed by a non-space URL" };
-    }
+    if (raw.length <= "https://".length || /\s/.test(raw)) return refuse(raw, "doc-https");
     return { kind: "doc", raw, url: raw };
   }
-  if (raw.startsWith("http://")) {
-    return { raw, message: "`doc` sources must be https:// — http:// is rejected" };
-  }
+  if (raw.startsWith("http://")) return refuse(raw, "doc-https");
   if (raw.startsWith("$ ")) {
     const m = CMD_RE.exec(raw);
-    if (m === null || m[1] === undefined || m[2] === undefined) {
-      return { raw, message: "`cmd` must read `$ <command> → exit <n>`" };
-    }
+    // The arrow is the failure this names first: `->` is the spelling every host
+    // reaches for, and until gh #77 the refusal printed the shape without ever
+    // saying which character in it was wrong.
+    if (m === null || m[1] === undefined || m[2] === undefined) return refuse(raw, "cmd-arrow");
     return { kind: "cmd", raw, command: m[1], exitCode: Number(m[2]) };
   }
   if (raw.startsWith("graph:")) {
     const node = raw.slice("graph:".length);
-    if (node === "" || /\s/.test(node)) return { raw, message: "`graph:` needs a non-empty node id" };
+    if (node === "" || /\s/.test(node)) return refuse(raw, "graph-node");
     return { kind: "graph", raw, node };
   }
   if (raw.startsWith("aidlc:")) return parseAidlcSrc(raw);
   if (raw.startsWith("absent:")) {
     const path = raw.slice("absent:".length);
-    if (path === "") return { raw, message: "`absent:` needs a path" };
+    if (path === "") return refuse(raw, "absent-path");
     return { kind: "absent", raw, path };
   }
   if (ANSWER_RE.test(raw)) return { kind: "answer", raw, q: raw };
   if (FACT_RE.test(raw)) return { kind: "fact", raw, id: raw };
   if (raw.startsWith("Q") || raw.startsWith("F")) {
     // Looks like an id but is not one — say so rather than falling through to `file`.
-    if (!raw.includes(":")) {
-      return { raw, message: "expected `Q<n>` or `F<nnn>`" };
-    }
+    if (!raw.includes(":")) return refuse(raw, "id-shape");
   }
   return parseFileSrc(raw, repos);
 }
@@ -211,8 +507,8 @@ export function classifySrc(src: string, repos?: ReadonlySet<string>): SrcRef | 
  */
 function parseAidlcSrc(raw: string): SrcRef | SrcParseError {
   const rest = raw.slice("aidlc:".length);
-  if (rest === "") return { raw, message: "`aidlc:` needs a path" };
-  if (rest.includes("..")) return { raw, message: "`..` is not allowed in a source path" };
+  if (rest === "") return refuse(raw, "aidlc-shape", "`aidlc:` carries no path at all");
+  if (rest.includes("..")) return refuse(raw, "no-parent-dir");
 
   const question = AIDLC_Q_RE.exec(rest);
   if (question !== null && question[1] !== undefined && question[2] !== undefined) {
@@ -221,18 +517,16 @@ function parseAidlcSrc(raw: string): SrcRef | SrcParseError {
   const located = AIDLC_LINE_RE.exec(rest);
   if (located !== null && located[1] !== undefined && located[2] !== undefined) {
     const line = Number(located[2]);
-    if (line < 1) return { raw, message: "line numbers are 1-based" };
+    if (line < 1) return refuse(raw, "line-number");
     return { kind: "aidlc", raw, path: located[1], line, q: null };
   }
-  return { raw, message: "expected `aidlc:<file>:<line>` or `aidlc:<file>#Q<n>`" };
+  return refuse(raw, "aidlc-shape");
 }
 
 /** `[repo ":"] path ":" line ["-" line]`, split from the right so paths may contain colons. */
 function parseFileSrc(raw: string, repos?: ReadonlySet<string>): SrcRef | SrcParseError {
   const lastColon = raw.lastIndexOf(":");
-  if (lastColon <= 0) {
-    return { raw, message: "expected `[repo:]path:line[-line]`" };
-  }
+  if (lastColon <= 0) return refuse(raw, "file-shape", "there is no `:<line>` on the end");
   const lineSpec = raw.slice(lastColon + 1);
   const head = raw.slice(0, lastColon);
   let startLine: number;
@@ -242,13 +536,13 @@ function parseFileSrc(raw: string, repos?: ReadonlySet<string>): SrcRef | SrcPar
   } else {
     const range = LINE_RANGE_RE.exec(lineSpec);
     if (range === null || range[1] === undefined || range[2] === undefined) {
-      return { raw, message: "expected a line number or `line-line` range after the last `:`" };
+      return refuse(raw, "line-range", `\`${lineSpec}\` is neither`);
     }
     startLine = Number(range[1]);
     endLine = Number(range[2]);
-    if (endLine < startLine) return { raw, message: "line range ends before it starts" };
+    if (endLine < startLine) return refuse(raw, "line-range", "this range ends before it starts");
   }
-  if (startLine < 1) return { raw, message: "line numbers are 1-based" };
+  if (startLine < 1) return refuse(raw, "line-number");
 
   let repo: string | null = null;
   let path = head;
@@ -261,8 +555,8 @@ function parseFileSrc(raw: string, repos?: ReadonlySet<string>): SrcRef | SrcPar
       path = head.slice(firstColon + 1);
     }
   }
-  if (path === "") return { raw, message: "empty path" };
-  if (path.includes("..")) return { raw, message: "`..` is not allowed in a source path" };
+  if (path === "") return refuse(raw, "file-shape", "the path is empty");
+  if (path.includes("..")) return refuse(raw, "no-parent-dir");
   return { kind: "file", raw, repo, path, startLine, endLine };
 }
 

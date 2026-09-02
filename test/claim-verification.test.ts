@@ -328,8 +328,13 @@ describe("M11 · a citation wrapped in punctuation is still a citation", () => {
     ].join("\n");
     const report = validateHandoff(text, probe.ctx);
     expect(report.unsourced).toEqual([]);
+    // gh #77: the issue names the RULE it enforced, not just the symptom.
     expect(report.malformed).toEqual([
-      { line: 4, message: expect.stringContaining("malformed citation") as unknown as string },
+      {
+        line: 4,
+        message: expect.stringContaining("malformed citation") as unknown as string,
+        rule: "trailing-position",
+      },
     ]);
     expect(report.ok).toBe(false);
   });
