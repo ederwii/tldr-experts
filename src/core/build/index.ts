@@ -4,9 +4,11 @@ export {
   addWorktree, removeWorktree, cleanUpRunEpicWorktrees, commitAll, commitPathsOnly, mergeNoFf, diffCommand,
   firstLine, GitError, GIT_TIMEOUT_MS,
   stateDirPrefixes, partitionDirty, porcelainPath, shaOf, baseStateOf, fastForward, commitsBetween,
-  assertWorktreeOn, WorktreeBranchMismatchError,
+  assertWorktreeOn, WorktreeBranchMismatchError, shaReachability,
 } from "./git.ts";
-export type { GitResult, MergeOutcome, PathCommit, DirtySplit, BaseState, BaseStaleness } from "./git.ts";
+export type {
+  GitResult, MergeOutcome, PathCommit, DirtySplit, BaseState, BaseStaleness, ShaReachability,
+} from "./git.ts";
 export { loadBuildPlan, inOrder, PlanLoadError } from "./plan.ts";
 export type { BuildPlan, BuildWave, PlannedStory, PlannedEpic } from "./plan.ts";
 export { updateStoryFront, applyPlanPatch, evidenceFor, quote, StoryWriteError } from "./storyFile.ts";
@@ -31,11 +33,12 @@ export type { DeveloperPromptParts, ReviewerPromptParts } from "./prompts.ts";
 export { parseReview, renderReviewLog, renderPreviousAttempt } from "./review.ts";
 export type { Review } from "./review.ts";
 export { dodGreen, describeOutcome } from "./outcome.ts";
-export type { StoryOutcome, DodResult, Verdict } from "./outcome.ts";
+export type { StoryOutcome, DodResult, Verdict, RescuedWork } from "./outcome.ts";
 export {
   parseFixFindings, parseFixlistFile, renderFixlist, renderFixlistSection, writeFixlist,
   fixlistRounds, fixlistRel, fixlistStory, latestFixlist, readFixlistAt, openFindings, isOpen,
-  fixlistRetroLines, DISPOSITIONS, FIXLIST_DIR, MAX_FIXLIST_ROUNDS,
+  fixlistRetroLines, unevidencedClaims, markUnverified,
+  CLAIMED_UNVERIFIED, DISPOSITIONS, FIXLIST_DIR, MAX_FIXLIST_ROUNDS,
 } from "./fixlist.ts";
 export type { FixFinding, Disposition, FixlistParts, FixlistOnDisk, ParsedFixlist } from "./fixlist.ts";
 export { renderBuildHandoff } from "./handoff.ts";

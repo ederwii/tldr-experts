@@ -332,7 +332,7 @@ export function renderFixlist(parts: FixlistParts): string {
     "> proving the finding wrong.",
     ">",
     "> A bare `Resolved: yes` closes nothing. The sha is checked — it must be a commit in the",
-    `> repo and reachable from the story branch — and a claim that does not check out is`,
+    "> repo and reachable from the story branch — and a claim that does not check out is",
     `> rewritten here as \`Resolved: ${CLAIMED_UNVERIFIED}\`, with the reason. This record is`,
     "> held to the same standard as every other claim the framework makes.",
     "",
