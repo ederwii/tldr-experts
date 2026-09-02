@@ -34,6 +34,9 @@ afterAll(async () => {
   workspace.dispose();
 });
 
+/** Bumped per touch, so two touches never write the same ledger line twice. */
+let touches = 0;
+
 /**
  * Open the stream, drain the greeting, change a file, and say whether a `reload`
  * arrived inside two seconds.
@@ -53,7 +56,24 @@ async function reloadAfterTouch(target: DashboardServer, temp: TempViews): Promi
   }
   seen = "";
 
-  writeFileSync(join(temp.runDir, "events.jsonl"), `{"seq":99,"type":"stage.started","at":"${new Date().toISOString()}"}\n`, { flag: "a" });
+  // A REAL ledger line. `ts` is the field the model reads for staleness, and
+  // since #108 the server only pushes when the model actually moved — a line
+  // shaped like an event but carrying no `ts` changes nothing on the page and
+  // is correctly not pushed. The stamp is distinct per call so repeated touches
+  // keep moving it.
+  writeFileSync(
+    join(temp.runDir, "events.jsonl"),
+    `${JSON.stringify({
+      ts: new Date(Date.now() + touches++ * 60_000).toISOString(),
+      run: VIEWS_RUN,
+      stage: "how",
+      type: "stage.started",
+      actor: "facilitator",
+      cost_usd: 0,
+      payload: { phase: "02-how" },
+    })}\n`,
+    { flag: "a" },
+  );
 
   const deadline = Date.now() + 2_000;
   while (!seen.includes("event: reload") && Date.now() < deadline) {

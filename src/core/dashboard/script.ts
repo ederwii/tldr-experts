@@ -34,7 +34,20 @@
 /** Path constants the server and the live page must agree on. */
 export const MODEL_PATH = "/model.json";
 export const EVENTS_PATH = "/events";
+/** A file the page reads changed. Its data is the JSON of what moved. */
 export const RELOAD_EVENT = "reload";
+/**
+ * The clock moved and the files did not (#108).
+ *
+ * Ages on the page — "last event 40m ago", and the `quiet` mark the render puts
+ * on half an hour of silence — are computed against a `now`. Without a tick they
+ * are computed against the `now` of the last file change, so the one state that
+ * matters most (nothing is happening) is the one state the page cannot reach on
+ * its own: a run goes quiet and the page keeps saying "2m ago" until somebody
+ * writes a file. This event is what gives that badge teeth, and it doubles as
+ * the stream's keep-alive.
+ */
+export const AGE_EVENT = "age";
 
 export const DASHBOARD_JS = `
 (function () {
@@ -249,18 +262,46 @@ export function liveScript(): string {
   if (typeof EventSource === "undefined" || !/^https?:$/.test(location.protocol)) return;
   var busy = false;
 
+  function stops() { return document.querySelectorAll('[data-nav="1"]'); }
+
+  /**
+   * Redraw, and put the reader back.
+   *
+   * DASHBOARD_JS already restores scroll and open panels around its own swap of
+   * #main, because a reader who clicked something expects to still be looking at
+   * it. Focus is this layer's to keep rather than that one's: only a LIVE page
+   * redraws itself when nobody asked, and a card focused with j/k stops existing
+   * when its markup is replaced. The stops are identified by position rather
+   * than by id -- the model has no id for "the third card", and a list that
+   * shrank is followed to its end rather than dropping focus to the body.
+   */
+  function apply(model) {
+    var before = stops();
+    var at = -1;
+    for (var i = 0; i < before.length; i++) if (before[i] === document.activeElement) at = i;
+    window.tldrxApply(model);
+    if (at < 0) return;
+    var after = stops();
+    if (after.length === 0) return;
+    var target = after[at < after.length ? at : after.length - 1];
+    if (target) target.focus();
+  }
+
   function repaint() {
     if (busy) return;
     busy = true;
     fetch(${JSON.stringify(MODEL_PATH)}, { cache: "no-store" })
       .then(function (response) { return response.json(); })
-      .then(function (model) { window.tldrxApply(model); })
+      .then(function (model) { apply(model); })
       .catch(function () { /* the server went away; EventSource will reconnect */ })
       .then(function () { busy = false; });
   }
 
   var stream = new EventSource(${JSON.stringify(EVENTS_PATH)});
   stream.addEventListener(${JSON.stringify(RELOAD_EVENT)}, repaint);
+  // Nothing changed on disk, but the clock did: ages age, and a run that has
+  // gone quiet says so without waiting for somebody to write a file.
+  stream.addEventListener(${JSON.stringify(AGE_EVENT)}, repaint);
   window.addEventListener("beforeunload", function () { stream.close(); });
 })();
 `.trim();

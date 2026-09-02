@@ -2,9 +2,10 @@
  * `tldrx dashboard` — watch the files live, or export one static page (§12).
  *
  * Both modes render the same model through the same renderer; the only
- * difference is whether the page keeps listening. Neither writes anything into
- * the workspace beyond the requested export, and no route on the server accepts
- * anything but a GET.
+ * difference is whether the page keeps listening. `--serve` is the default and
+ * can be said explicitly; `--static` is the other one, and both together is a
+ * refusal rather than a guess. Neither writes anything into the workspace beyond
+ * the requested export, and no route on the server accepts anything but a GET.
  *
  * Ctrl-C is a first-class exit here, not a crash: SIGINT closes the listener and
  * the watcher and returns 0, because the thing being interrupted is a viewer.
@@ -24,7 +25,7 @@ const VALUE_FLAGS = ["out", "root", "port"] as const;
 export const dashboardCommand: Command = {
   name: "dashboard",
   summary: "Watch the workspace live in a browser, or export it as one static page",
-  usage: "tldrx dashboard [--port <n>] [--open] [--root <path>] | tldrx dashboard --static [--out <dir>]",
+  usage: "tldrx dashboard [--serve] [--port <n>] [--open] [--root <path>] | tldrx dashboard --static [--out <dir>]",
   subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
@@ -36,8 +37,21 @@ export const dashboardCommand: Command = {
       return EXIT_USAGE;
     }
 
+    // Two modes, and only one of them can be meant. `--serve` is the default and
+    // says so out loud, so a script can be explicit about which one it wants;
+    // passing both is a contradiction, and picking one silently would run the
+    // wrong one half the time.
+    const wantsStatic = boolFlag(args, "static");
+    if (wantsStatic && boolFlag(args, "serve")) {
+      process.stderr.write(
+        "tldrx dashboard: --serve and --static are the two modes \u2014 pass one\n"
+          + "  --serve watches and keeps the page live; --static writes one file and exits\n",
+      );
+      return EXIT_USAGE;
+    }
+
     const root = resolveWorkspaceRoot(stringFlag(args, "root") ?? null);
-    return boolFlag(args, "static") ? exportStatic(args, root) : serve(args, root);
+    return wantsStatic ? exportStatic(args, root) : serve(args, root);
   },
 };
 
@@ -90,6 +104,7 @@ async function serve(args: ReturnType<typeof parseArgs>, root: string): Promise<
   process.stdout.write(
     `tldrx dashboard: ${server.url}\n`
       + `  watching ${root} (.tldrx/ and tldrx-work/, ${server.watchMode === "poll" ? "polled" : "file events"})\n`
+      + "  it redraws when a file it reads changes, and ages itself in between\n"
       + "  read-only — this page never writes. Ctrl-C to stop.\n",
   );
 

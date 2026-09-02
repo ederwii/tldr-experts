@@ -24,6 +24,9 @@ Everything in this section is written and tested on main; none of it is tagged.
 - **Watch phase**: `watchers/<feature>.md` generated from what Build actually instrumented.
 - **Story / epic / waves schemas** (spec §2.13–§2.15).
 - **Live dashboard** (`tldrx dashboard`): same renderer, file watcher + SSE, still read-only.
+  A push is sent only when a rebuild of the model differs from the page's, an `age` tick keeps
+  the staleness marks honest while nothing happens, and the ledger is read forward from the
+  last offset rather than re-read whole.
 - **Budget UX**: `budget show` / `budget raise`, estimate vs. ceiling reconciliation so a retry
   is not blocked by its own first attempt; per-attempt accounting in `run status`.
 - **Token economy**: cache-friendly prompt order with both cache counters recorded; one shared

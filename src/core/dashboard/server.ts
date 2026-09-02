@@ -10,7 +10,8 @@
  * Three routes, all GET:
  *   `/`            the page (the same renderer the static export uses)
  *   `/model.json`  the model that page was rendered from
- *   `/events`      Server-Sent Events; one `reload` per debounced file change
+ *   `/events`      Server-Sent Events: `reload` when a file the page reads
+ *                  changed, `age` when only the clock did
  *
  * It binds to 127.0.0.1 and nothing else — a dashboard that shows a team's
  * unshipped plans has no business on a LAN by default. It never writes: no route
@@ -38,7 +39,8 @@ import { join } from "node:path";
 import { PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../paths.ts";
 import { buildModel } from "./model.ts";
 import { renderDashboard } from "./render.ts";
-import { EVENTS_PATH, MODEL_PATH, RELOAD_EVENT } from "./script.ts";
+import { AGE_EVENT, EVENTS_PATH, MODEL_PATH, RELOAD_EVENT } from "./script.ts";
+import { createLedgerTail } from "./tail.ts";
 
 export const DEFAULT_PORT = 4477;
 export const LOOPBACK = "127.0.0.1";
@@ -53,7 +55,28 @@ const LOOPBACK_HOSTNAMES: readonly string[] = ["127.0.0.1", "localhost", "::1"];
 /** Collapse a burst of writes — a stage finishing touches several files at once. */
 export const DEBOUNCE_MS = 300;
 const POLL_MS = 500;
-const HEARTBEAT_MS = 25_000;
+/**
+ * How often the stream says what time it is (#108).
+ *
+ * The page's ages, and the `quiet` mark the render puts on half an hour of
+ * silence, are computed against a `now`. Push only on file changes and the page
+ * can never reach the one state that matters most — nothing is happening —
+ * because reaching it requires something to happen. So the clock is an event
+ * too. It doubles as the keep-alive a parked SSE connection needs, which is why
+ * there is no separate heartbeat: a tick that says something beats a comment
+ * that says nothing, at the same cost.
+ */
+export const AGE_TICK_MS = 25_000;
+/**
+ * The probe's clock, which never moves.
+ *
+ * "Did anything the page shows actually change" is answered by building the
+ * model twice and comparing, and every age in it is derived from a `now` — so
+ * the comparison uses a FIXED one. Otherwise every rebuild differs from the
+ * last by however long the two were apart, and the answer is always yes.
+ */
+const PROBE_NOW = new Date(0);
+const PROBE_STAMP = "1970-01-01T00:00:00Z";
 /** Enough for a run tree; a cap so a stray symlink cannot make the sweep unbounded. */
 const MAX_SWEEP_ENTRIES = 20_000;
 
@@ -64,6 +87,8 @@ export interface DashboardServerOptions {
   readonly host?: string;
   /** Overridable so a test does not have to wait 300 ms. */
   readonly debounceMs?: number;
+  /** How often the `age` event fires. Overridable for the same reason. */
+  readonly ageTickMs?: number;
   /**
    * `"auto"` (the default) uses recursive `fs.watch` where the platform has it.
    * `"poll"` forces the mtime sweep — the path Linux CI may take on its own, so
@@ -101,21 +126,43 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
   const address = server.address();
   const port = typeof address === "object" && address !== null ? address.port : (options.port ?? DEFAULT_PORT);
 
+  // Both are primed BEFORE the watcher starts, so the runs already on disk are
+  // not announced as news the first time somebody saves a file.
+  const tail = createLedgerTail(root);
+  tail.poll();
+  let shown = probe(root);
+
   const watcher = watchWorkspace(root, debounceMs, options.watch ?? "auto", () => {
-    for (const client of clients) send(client, RELOAD_EVENT, new Date().toISOString());
+    const change = tail.poll();
+    const next = probe(root);
+    // A page that would draw the same thing does not need redrawing. `null` is
+    // "the workspace could not be read this instant" — a torn write, most
+    // likely — and it is pushed rather than swallowed, because a dashboard that
+    // quietly stops updating is worse than one that redraws for nothing.
+    if (next !== null && shown !== null && next === shown) return;
+    shown = next;
+    const payload = JSON.stringify({
+      at: new Date().toISOString(),
+      appended: change.lines,
+      runs: change.appended.map((one) => one.run),
+      added: change.added,
+      removed: change.removed,
+    });
+    for (const client of clients) send(client, RELOAD_EVENT, payload);
   });
 
-  const heartbeat = setInterval(() => {
-    for (const client of clients) client.write(": ping\n\n");
-  }, HEARTBEAT_MS);
-  heartbeat.unref();
+  const tick = setInterval(() => {
+    const at = new Date().toISOString();
+    for (const client of clients) send(client, AGE_EVENT, at);
+  }, options.ageTickMs ?? AGE_TICK_MS);
+  tick.unref();
 
   return {
     port,
     url: `http://${host}:${String(port)}`,
     watchMode: watcher.mode,
     close: async (): Promise<void> => {
-      clearInterval(heartbeat);
+      clearInterval(tick);
       watcher.close();
       for (const client of clients) client.end();
       clients.clear();
@@ -240,6 +287,26 @@ function stamp(): string {
   return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
+/**
+ * What the page WOULD show, as one comparable string — or `null` when the
+ * workspace cannot be read right now.
+ *
+ * This is deliberately the model itself rather than a digest of the files that
+ * feed it. A digest has to know which files matter, and that list drifts the
+ * moment the model reads one more thing; the drift is silent, and its symptom
+ * is a dashboard that stops updating. Comparing the built model cannot drift:
+ * if the answer is the same document, nothing on the page moved. It costs one
+ * extra build per debounced burst, which is the same build the browser's own
+ * refetch was about to do anyway.
+ */
+function probe(root: string): string | null {
+  try {
+    return JSON.stringify(buildModel(root, PROBE_STAMP, { now: PROBE_NOW }));
+  } catch {
+    return null;
+  }
+}
+
 interface Watching {
   readonly mode: "watch" | "poll";
   close(): void;
@@ -277,6 +344,16 @@ function watchWorkspace(
 
   const arm = (): void => {
     if (closed || mode === "poll") return;
+    // A directory that has gone leaves a watcher bound to something that no
+    // longer exists. It does not error and it never fires again, and while it
+    // sits in the map the replacement directory is never watched — the page
+    // goes silently stale, which is the failure mode this whole file is written
+    // against. Drop the dead ones first, then arm whatever is there now.
+    for (const [dir, watcher] of [...watchers]) {
+      if (existsSync(dir)) continue;
+      watcher.close();
+      watchers.delete(dir);
+    }
     for (const dir of [root, ...targets]) {
       if (watchers.has(dir) || !existsSync(dir)) continue;
       try {

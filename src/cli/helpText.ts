@@ -983,6 +983,7 @@ const ENTRIES: readonly CommandHelp[] = [
     description: "Watch the workspace live in a browser, or export it as one static page.",
     args: [],
     flags: [
+      { name: "serve", arg: null, meaning: "Serve the page and keep watching the files \u2014 the default. Refused together with --static." },
       { name: "port", arg: "<n>", meaning: "Port to serve on. Default 4477; 0 takes any free one." },
       { name: "open", arg: null, meaning: "Open the page in the default browser once the server is up." },
       { name: "static", arg: null, meaning: "Write one self-contained page instead of serving. No server, no watcher." },

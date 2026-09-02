@@ -43,6 +43,41 @@
   - The timeline draws the duration beside the cost on each stage's summary row and quotes
     the gate's own words inside its drawer — the two of #107's four asks that could not be
     met before.
+- **`tldrx dashboard --serve` pushes only when the page would actually change, and ages
+  itself when it would not (#108).** The live server already watched the tree and pushed a
+  `reload` per debounced burst; three things were missing, and each one is a different way
+  for a live page to lie.
+  - **A push per burst is not a push per change.** Every write under `.tldrx/` or
+    `tldrx-work/` pushed, including writes to files the model does not read — `--static`
+    writes into `.tldrx/cache/`, inside the watched tree, so exporting a page while serving
+    one made the served page redraw because it had been photographed. The trigger is still
+    the file event; the DECISION is now a rebuild of the model compared against the one the
+    page is showing, on a fixed clock so ages do not make every rebuild differ. A digest of
+    "the files that matter" was rejected on purpose: that list drifts the moment the model
+    reads one more thing, and its failure mode — a dashboard that quietly stops updating —
+    is exactly what the comparison cannot do.
+  - **Silence is a state the files cannot announce.** Ages, and the `quiet` mark #107 puts
+    on half an hour of nothing, are computed against a `now`. With only file-triggered
+    pushes a stalled run keeps saying "2m ago" until somebody writes a file: the one state
+    worth seeing is the one state the page could not reach. A new `age` event carries a
+    timestamp every 25 s, whatever the disk is doing, and doubles as the stream's
+    keep-alive — a tick that says something, at the cost of the comment that said nothing.
+  - **The ledger is read forward.** `events.jsonl` is append-only, so
+    `src/core/dashboard/tail.ts` keeps a byte offset per run and reads only what arrived —
+    holding back a line whose newline has not landed, starting over if a ledger shrinks
+    under it, and dropping a run's offset when the run goes. That is what lets a `reload`
+    carry `{at, appended, runs, added, removed}` and say *three events landed on this run*
+    rather than only *something changed*.
+  - **`--serve` is a flag now**, and `--serve --static` is a refusal (exit 2) rather than a
+    silent pick of one. Serving is still the default.
+  - **`listRuns` no longer throws while the disk is being written to.** An entry removed
+    between the `readdir` and its `stat`, and a `tldrx-work` that is not a directory, both
+    escaped `buildModel` — measured, both reproduced. A live reader asks that question
+    while a wave is writing.
+  - The live page keeps the reader's FOCUS across a repaint (scroll and open panels were
+    already kept), because only a live page redraws when nobody asked, and #107's j/k
+    navigation loses its place otherwise. That code is in `liveScript()` alone: the static
+    export is byte-identical to what it was before this landed, and a test pins the hash.
 
 - **An answer that overtakes an earlier phase's document now says so on that document
   (#104).** A phase document is a point-in-time snapshot, and an owner answer recorded

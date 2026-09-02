@@ -14,9 +14,11 @@ export { writeStaticDashboard, DEFAULT_OUT_DIR, INDEX_FILE } from "./writeStatic
 export type { StaticExport } from "./writeStatic.ts";
 export {
   startDashboardServer, hostnameOfHeader, isAllowedHost,
-  DEFAULT_PORT, LOOPBACK, DEBOUNCE_MS,
+  DEFAULT_PORT, LOOPBACK, DEBOUNCE_MS, AGE_TICK_MS,
 } from "./server.ts";
 export type { DashboardServer, DashboardServerOptions } from "./server.ts";
 export { offlineHtml } from "./offlineHtml.ts";
 export { DASHBOARD_CSS } from "./styles.ts";
-export { DASHBOARD_JS, liveScript, MODEL_PATH, EVENTS_PATH, RELOAD_EVENT } from "./script.ts";
+export { DASHBOARD_JS, liveScript, MODEL_PATH, EVENTS_PATH, RELOAD_EVENT, AGE_EVENT } from "./script.ts";
+export { createLedgerTail } from "./tail.ts";
+export type { LedgerTail, LedgerChange, LedgerAppend, TailRead } from "./tail.ts";
