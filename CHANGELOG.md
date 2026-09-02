@@ -192,6 +192,34 @@ same amount after it; what changed is that the page now says how big the bound i
     the test asserts the two differ. A test that asks one process whether its own name is
     unique can only ever say yes.
 
+- **`merge-wave.sh` no longer executes a file anything can rewrite underneath it (#117).**
+  Bash reads a script incrementally and seeks back into it for each next command; it does
+  not snapshot. `git merge --no-ff` sits about a third of the way through `merge-wave.sh`,
+  and everything that makes a wave honest lives after that byte — the four gates, the
+  `HEAD moved` assertion, the fast-forward check, the push, and the summary line. Measured
+  on `GNU bash 3.2.57(1)-release (arm64-apple-darwin25)`: a ~24 KB script rewritten IN PLACE
+  while it slept printed its head, lost its tail, and **exited 0**. Silently stopping early
+  and reporting success is exactly the failure this script exists to prevent, aimed at
+  itself. Reproduced as a wave: with the typecheck gate truncating `scripts/merge-wave.sh`,
+  the run merged, ran ONE of three gates, pushed nothing, printed nothing, and exited 0.
+  - **The script now re-execs itself from a private snapshot before it does anything.**
+    `exec` keeps the pid, so a caller's timeout, `kill`, `$$`, the lock's owner line and
+    `$LOGS` all still name the same process; the copy lives in this run's own `$TMPDIR`
+    under an `mw-*` name, so #95's leak assertions double as its cleanup check. The
+    re-entry flag is an ARGV sentinel rather than an environment variable on purpose: the
+    `bun test` gate runs this repo's own merge-wave suite, which spawns the script again,
+    and an exported flag would have let an outer wave switch off the inner ones' protection.
+  - **Why the live merges of #113/#114 survived, and why that is not a defence.** `git
+    merge` unlinks and recreates a changed file rather than truncating it — measured on git
+    2.50.1, a merge that shrank a tracked file moved it from inode `192824934` to
+    `192824958` — so the running shell kept reading the ORIGINAL bytes off the now-unlinked
+    inode. That is how merge `481540d` printed `typecheck/build/seam clean` while
+    `git show 481540d:scripts/merge-wave.sh` already ended in `typecheck/build/docs/seam
+    clean`: two versions, both intact, in the same second. The merge path was safe only for
+    as long as git keeps replacing rather than truncating — an implementation detail of
+    somebody else's program, load-bearing for this script's honesty, and nothing here would
+    have noticed it changing.
+
 - **An interrupted merge wave no longer leaves an ungated commit on `main` for the next
   sibling to push under its own gate result (#116).** Measured live 2026-09-02 while merging
   #109/#110 in the shared checkout: the caller's own 10-minute timeout sent `SIGTERM` at

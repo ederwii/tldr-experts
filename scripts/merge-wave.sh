@@ -29,7 +29,48 @@
 #             5 HEAD moved during the gates · 6 gave up waiting for the lock
 #             7 the gated commit is not a fast-forward of origin/main
 #             8 unpushed, ungated commits were already sitting on main
+#             9 could not snapshot this script before running it
 set -u
+
+# --- run from a SNAPSHOT of this file, never from the file itself (#117) ------
+# Bash reads a script incrementally and seeks back into it for each next command; it does
+# not snapshot. `git merge` sits about a third of the way through this file, and every
+# thing that makes the run honest — the four gates, the HEAD assertion, the fast-forward
+# check, the push, the summary line — lives after that byte. Measured, macOS, GNU bash
+# 3.2.57(1): a ~24 KB script rewritten IN PLACE while it slept printed its head, lost its
+# tail, and EXITED 0. Silently stopping early and reporting success is precisely the
+# failure this script exists to prevent, aimed at itself.
+#
+# The live merges of #113/#114 survived only by an accident of somebody else's program:
+# `git merge` unlinks and recreates a changed file rather than truncating it (measured, git
+# 2.50.1 — inode 192824934 -> 192824958), so the running shell kept reading the original
+# bytes off the unlinked inode. Nothing in this repo would notice that changing. So this
+# does not try to handle merges; it stops executing a file anyone can rewrite.
+#
+# An ARGV sentinel rather than an environment variable, deliberately: `bun test` below runs
+# this repo's own merge-wave suite, which spawns this script again. argv is not inherited,
+# so every invocation snapshots itself; an exported flag would have let the outer wave
+# switch off the inner ones' protection. `exec` keeps the pid, so the caller's timeout,
+# `kill`, `$$`, the lock owner line and $LOGS all still refer to this same process.
+if [ "${1:-}" = "--mw-snapshot" ]; then
+  MW_DIR="$2"                                   # the REAL scripts/ dir, for the two siblings
+  MW_SNAP="$(cd "$(dirname "$0")" && pwd)"      # this copy's private directory, ours to remove
+  shift 2
+  trap 'rm -rf "$MW_SNAP"' EXIT                 # replaced below, once there is more to undo
+else
+  MW_ORIG="$(cd "$(dirname "$0")" && pwd)"
+  MW_SNAP="$(mktemp -d "${TMPDIR:-/tmp}/mw-self.XXXXXX")" || {
+    echo "FAIL snapshot: mktemp -d under ${TMPDIR:-/tmp} failed — nothing merged"; exit 9
+  }
+  # Named `mw-*` on purpose: the suite's leak assertions scan this run's private $TMPDIR for
+  # exactly that prefix, so a snapshot this script forgets to remove fails a test (#95).
+  if cp "$0" "$MW_SNAP/merge-wave.sh"; then
+    exec bash "$MW_SNAP/merge-wave.sh" --mw-snapshot "$MW_ORIG" "$@"
+  fi
+  rm -rf "$MW_SNAP"
+  echo "FAIL snapshot: could not copy $0 into $MW_SNAP — nothing merged"; exit 9
+fi
+
 B="${1:?branch}"; M="${2:?message}"; R="$(git rev-parse --show-toplevel)"; cd "$R" || exit 1
 
 # --- the lock -----------------------------------------------------------------
@@ -39,7 +80,8 @@ B="${1:?branch}"; M="${2:?message}"; R="$(git rev-parse --show-toplevel)"; cd "$
 # also the right scope — every worktree of this repo pushes the same `main`. That
 # resolution, and the rules for when an owner counts as dead, live in merge-lock.sh
 # because scripts/merge-guard.sh has to answer both questions the same way.
-MW_DIR="$(cd "$(dirname "$0")" && pwd)"
+# MW_DIR is the REPOSITORY's scripts/ directory, handed over by the snapshot preamble —
+# `dirname "$0"` would name the temp copy, which has no siblings in it (#117).
 [ -f "$MW_DIR/merge-lock.sh" ] || { echo "FAIL lock: $MW_DIR/merge-lock.sh is missing — nothing merged"; exit 6; }
 # shellcheck source=scripts/merge-lock.sh
 . "$MW_DIR/merge-lock.sh"
@@ -81,7 +123,7 @@ unwind() {
   echo "merge-wave: could NOT rewind $MERGE_SHA to $PRE — main is carrying an UNGATED commit and needs a human" >&2
   return 1
 }
-trap 'unwind; release' EXIT
+trap 'unwind; release; rm -rf "$MW_SNAP"' EXIT
 # A signal that is not trapped kills bash WITHOUT running the EXIT trap, so an
 # interrupted merge would leave its lock behind. The stale rules below would break it
 # open a second later; releasing here means nobody has to. SIGKILL and a power cut run
