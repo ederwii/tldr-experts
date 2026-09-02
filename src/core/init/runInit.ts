@@ -40,8 +40,14 @@ import type { MapProvider } from "../map/Provider.ts";
 import type { DetectedRepo, DetectedWorkspace } from "../detect/types.ts";
 import { COMMAND_SLOTS } from "../detect/types.ts";
 import type { InitOptions } from "./InitOptions.ts";
+import { PROJECT_WORKSPACE_FILE } from "../paths.ts";
 
-export const WORKSPACE_FILE = ".tldrx/workspace.yml";
+/**
+ * Kept under this name for every existing import site; the STRING is
+ * `paths.ts`'s `PROJECT_WORKSPACE_FILE` (#92), so the path an operator is told
+ * to edit is spelled in exactly one place.
+ */
+export const WORKSPACE_FILE = PROJECT_WORKSPACE_FILE;
 export const PROCESS_FILE = ".tldrx/process.yml";
 export const HANDOFF_FILE = ".tldrx/init-handoff.md";
 

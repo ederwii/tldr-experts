@@ -77,7 +77,7 @@ que la etapa pidió le gana a material de referencia que nadie pidió.
 ## Cómo entrenar uno
 
 ```bash
-tldrx expert create billing --domain money
+tldrx expert create billing --area money --title "Facturación, prorrateo y reembolsos"
 tldrx expert train billing --area money --mode light --print-prompt   # gratis: imprime y se para
 tldrx expert train billing --area money --mode light
 ```
@@ -93,7 +93,14 @@ Dos cosas hacen que el resultado sea confiable:
   tope de 40 archivos y 96 KB, y todo lo que rebasa el tope queda **listado por nombre como
   "not read"**, para que un subagente no pueda describir un archivo que nunca le enseñaron.
 - **El dominio declarado del experto es un límite duro.** Una cita fuera de él no le gana
-  evidencia a ese experto, por muy cierta que sea.
+  evidencia a ese experto, por muy cierta que sea. Los bullets de `## Domain` en `expert.md`
+  son rutas **relativas a un repo**, sin prefijo de repo — `` - `src/Checkout/` ``, nunca
+  `` - `api/src/Checkout/` `` — porque una cita llega como `repo:ruta:línea` y solo se compara
+  la mitad de la ruta. `create` escribe esa regla, y el `repos:` del front matter, en el
+  archivo que crea.
+
+Un experto sin área no se puede entrenar, y por eso `--area` va arriba: sin ella,
+`expert train` se niega y nombra el bloque que hay que agregar a `competencies.yml`.
 
 `tldrx expert recompute` vuelve a derivar cada nivel a partir de la evidencia que hay en
 disco.

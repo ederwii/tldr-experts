@@ -453,6 +453,56 @@
 
 ### Fixed
 
+- **`expert create` now yields an expert that can actually be trained, and states the `## Domain`
+  grammar it will be read under (#94).** Live 2026-09-02: `tldrx expert create discoverer` printed
+  *"no areas — every level starts at 0"*, and `tldrx expert train discoverer --area discoverer`
+  answered *"has no area (areas: none)"*. Neither sentence said HOW to add one; no flag or
+  subcommand existed; the sanctioned path — a block in `competencies.yml` — was discoverable only
+  by reading the source. Then the same gap cost money twice more: the hand-written `## Domain`
+  bullets came out WORKSPACE-relative (`Scavtopia.Workflows/src/…`) because nothing documents the
+  grammar, so **a $2.10 full training earned zero evidence — all 13 of its code citations read
+  `outside domain`** — plus two near-empty $0.82 runs whose code sweeps found nothing in domain.
+  - **`--area <id>` seeds the first competency area, and `--title <text>` names it.** The title is
+    not decoration: light mode greps the words of the area title to choose which files the expert
+    is shown (`training/selectFiles.ts`), so `create` prints the default title it chose and names
+    `--title`. An area id obeys the same slug rule the expert name does — it is a filename
+    (`knowledge/<area>.md`) and half of a copy-pasteable `--area` argument.
+  - **Both refusals name the FILE and print the block.** `expert train` on a missing area now
+    answers with `.tldrx/experts/<name>/competencies.yml` and the five keys to paste (`id`,
+    `title`, `level: 0`, `train_prompt`, `evidence: []`), from one helper both the CLI and
+    `runTraining` use, so the two paths cannot drift. `create` with no area says the same thing.
+  - **`create` writes the front-matter `repos:`**, read off `.tldrx/workspace.yml` (`repos: []`
+    when there is none, rather than a guess). `expert.md` had no such key at all, so a
+    hand-created expert declared nothing about which repos its `## Domain` bullets are relative
+    to — and that is exactly the thing the bullets are relative to.
+  - **The created `expert.md` states the grammar in its own `## Domain` section**: bullets are
+    repo-RELATIVE with no repo prefix, a whole-repo claim is `` - repo `api` ``, citations arrive
+    as `repo:path:line` so `api:src/Checkout/Cart.cs:12` is matched by `` `src/Checkout/` `` and
+    **not** by `` `api/src/Checkout/` ``. It is written as prose, deliberately: a worked example
+    written as a BULLET would itself be parsed as a declared domain path, and an expert that
+    silently claims `api/src/Checkout` puts every real citation outside its own domain — the bug,
+    not the fix. Pinned by a test that the created file still parses to zero domain paths.
+  - **The `outside domain` warning names the grammar FIRST** when the cited path would match with
+    one leading segment dropped from either side — the bullet carrying a repo prefix it should
+    not, or the citation being workspace-relative where a `repo:path:line` was wanted. It says the
+    measured fact (`X` without its first segment DOES contain this path), not a diagnosis.
+  - **And naming another expert no longer reads as exclusivity.** *"train that expert on it
+    instead"* was measured false: overlap between domains is legal, and the hint fires whenever
+    this expert's own paths miss. It now reads *"also declares a domain that contains it, so it
+    may be the better home for this one (overlap is legal: this fired because none of `<expert>`'s
+    own paths match)"*.
+  - **`init/loadWorkspaceFile.ts` reads `.tldrx/workspace.yml`'s name from `core/paths.ts`**
+    (`PROJECT_WORKSPACE_FILE`, the constant #92 added) instead of from `init/runInit.ts`;
+    `runInit` keeps exporting `WORKSPACE_FILE` under that name, aliased to the same string, so no
+    import site changed. `loadWorkspaceFile` is the small leaf several commands read the repo list
+    through, and taking that one constant off `runInit` dragged the whole of `init` — detection,
+    map providers, the MCP probe — into every module that read it: `dist/hooks/session-start.js`
+    went 37,937 → 54,467 bytes and blew the 50 KB entry-point cap `test/build.test.ts` enforces.
+    It is back to 37,937.
+  - Documented in `docs/spec.md` §2.3 and §2.8, `docs/guide/04-experts.md`,
+    `docs/guide/08-cli-reference.md`, `docs/guide/09-troubleshooting.md` and both docs-site expert
+    guides — the grammar had never been written down anywhere outside `expertDomain.ts`.
+
 - **The prose was validated against the binary, top to bottom, and a lot of it was false.**
   The last docs QA (3ee3723) was a release ago; `watch check`/`watch arm`, `update` and
   its notice, the `drive` preflight, `plan schema`, `questions cards`, `story reopen --for-fix`,

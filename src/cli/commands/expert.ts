@@ -11,6 +11,7 @@
  * session themselves. `recompute` is that path's other half: it settles the level
  * such a session leaves behind, without pretending a training run happened.
  */
+import { join } from "node:path";
 import type { Command } from "../Command.ts";
 import { EXIT_FAILED, EXIT_NOT_FOUND, EXIT_OK } from "../exitCodes.ts";
 import { boolFlag, numberFlag, parseArgs, stringFlag, UsageError, type ParsedArgs } from "../argv.ts";
@@ -24,8 +25,8 @@ import {
 } from "../../core/training/index.ts";
 import { loadWorkspaceFile } from "../../core/init/loadWorkspaceFile.ts";
 import {
-  createExpert, evidenceWarnings, expertListJson, loadExpert, loadExperts,
-  readExpertDocument, renderExpertList, renderTrainPrompt, resolveWorkspaceRoot,
+  areaTitle, createExpert, evidenceWarnings, expertListJson, loadExpert, loadExperts,
+  missingAreaRefusal, readExpertDocument, renderExpertList, renderTrainPrompt, resolveWorkspaceRoot,
   sharedCitations, sharedCitationWarnings,
   stagesLoadingExperts, ROLE_EXPERTS, type TrainRepo,
 } from "../../core/experts/index.ts";
@@ -33,7 +34,8 @@ import {
 const USAGE = [
   "Usage:",
   "  tldrx expert list [--root <path>] [--json]",
-  "  tldrx expert create <name> [--role <slug>] [--domain <slug>] [--stack <lang>] [--root <path>]",
+  "  tldrx expert create <name> [--area <id>] [--title <text>] [--role <slug>] [--domain <slug>]",
+  "                             [--stack <lang>] [--root <path>]",
   "  tldrx expert train <name> --area <area> [--mode light|full] [--max-usd <n>] [--model <m>]",
   "                                          [--effort <level>] [--prepare|--commit] [--yolo]",
   "                                          [--ui scene|compact|plain|off] [--root <path>]",
@@ -45,7 +47,8 @@ export const expertCommand: Command = {
   name: "expert",
   summary: "List or create experts, or print a training prompt",
   usage: "tldrx expert list [--root <path>] [--json]\n" +
-    "       tldrx expert create <name> [--role <slug>] [--domain <slug>] [--stack <lang>] [--root <path>]\n" +
+    "       tldrx expert create <name> [--area <id>] [--title <text>] [--role <slug>] [--domain <slug>]\n" +
+    "                                  [--stack <lang>] [--root <path>]\n" +
     "       tldrx expert train <name> --area <area> [--mode light|full] [--max-usd <n>] [--model <m>]\n" +
     "                                               [--effort <level>] [--prepare|--commit] [--yolo] [--print-prompt]\n" +
     "                                               [--ui scene|compact|plain|off] [--root <path>]\n" +
@@ -119,18 +122,36 @@ async function create(argv: readonly string[]): Promise<number> {
   const root = resolveWorkspaceRoot(option(argv, "--root"));
   try {
     const role = option(argv, "--role");
+    const area = option(argv, "--area");
+    const title = option(argv, "--title");
     const created = await createExpert({
       root,
       name,
       role,
+      area,
+      title,
       domain: option(argv, "--domain"),
       stack: option(argv, "--stack"),
       createdAt: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
     });
+    // gh #94: "no areas" used to be the whole sentence, and an expert with no
+    // area is one `expert train` refuses. The remedy is named where it is read.
     const areas = created.areas.length === 0
-      ? "no areas — every level starts at 0 because there is no evidence yet"
+      ? "no areas — every level starts at 0, and `expert train` refuses an expert with none."
+        + `\n  Add one with \`--area <id> [--title <text>]\` at create time, or by hand under`
+        + `\n  \`areas:\` in ${join(created.dir, "competencies.yml")}`
       : `areas: ${created.areas.join(", ")} (level 0 until training gives them evidence)`;
     const lines = [`created ${created.dir}`, `  ${areas}`];
+    lines.push(`  repos: [${created.repos.join(", ")}]`
+      + (created.repos.length === 0
+        ? " — no .tldrx/workspace.yml here; the `## Domain` bullets are still repo-relative"
+        : " — `## Domain` bullets are paths RELATIVE to these, with no repo prefix"));
+    // The title is what light mode greps for, so a default one is said out loud
+    // rather than left to be discovered in competencies.yml.
+    if (area !== null && (title === null || title.trim() === "")) {
+      lines.push(`  title: "${areaTitle(area, null)}" — set it with \`--title <text>\`:`);
+      lines.push("    light mode greps the words of the area title to pick which files it reads");
+    }
     // Which body it got is the difference between a role expert and an empty
     // folder wearing a role's name, so it is said rather than left to be opened.
     if (role !== null) {
@@ -180,8 +201,12 @@ async function train(argv: readonly string[]): Promise<number> {
   }
   const area = expert.areas.find((candidate) => candidate.id === areaId);
   if (area === undefined) {
-    const known = expert.areas.map((candidate) => candidate.id).join(", ") || "none";
-    process.stderr.write(`tldrx expert train: ${name} has no area '${areaId}' (areas: ${known})\n`);
+    // gh #94: name the file and print the block. The refusal used to state the
+    // constraint and stop, and the sanctioned remedy was only in the source.
+    const refusal = missingAreaRefusal({
+      root, expert: name, areaId, known: expert.areas.map((candidate) => candidate.id), mode: modeArg,
+    });
+    process.stderr.write(prefix(`${refusal.join("\n")}\n`));
     return EXIT_FAILED;
   }
 
@@ -323,7 +348,9 @@ function positional(argv: readonly string[]): string | null {
   return null;
 }
 
-const TAKES_VALUE = new Set(["--root", "--role", "--domain", "--stack", "--area", "--mode"]);
+const TAKES_VALUE = new Set([
+  "--root", "--role", "--domain", "--stack", "--area", "--title", "--mode",
+]);
 
 function option(argv: readonly string[], name: string): string | null {
   const at = argv.indexOf(name);

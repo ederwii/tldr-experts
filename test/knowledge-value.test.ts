@@ -350,6 +350,68 @@ describe("an expert speaks for its declared `## Domain` and nothing else", () =>
       .not.toContain("api:src/hunts/next.ts:1");
   });
 
+  /**
+   * gh #94(f). The owner's `## Domain` bullets were WORKSPACE-relative
+   * (`Scavtopia.Workflows/src/…`) while citations arrive repo-relative, so all 13
+   * of a $2.10 training's code citations earned zero evidence — and the warning
+   * pointed at a different EXPERT, which reads as exclusivity, instead of at the
+   * one-segment spelling mistake that was actually there.
+   */
+  test("(f) a repo-PREFIXED domain bullet is named as a grammar mistake, FIRST", () => {
+    const ws = domainWorkspace();
+    const scope: KnowledgeScope = {
+      expert: EXPERT,
+      // The mistake: workspace-relative, where the reader wants repo-relative.
+      domainPaths: ["api/src/hunts"],
+      otherDomains: new Map([["hunts-expert", ["src/hunts"]]]),
+      seenSrc: new Set(),
+    };
+    const parsed = parseKnowledgeFile(
+      knowledgeWith(["- The next stop is chosen without a token [src: api:src/hunts/next.ts:1]"]),
+      ctxOf(ws), LIGHT_SHAPE, scope,
+    );
+    const outside = parsed.issues.filter((issue) =>
+      issue.message.includes("outside domain") && issue.message.includes("src/hunts/next.ts"));
+    expect(outside).toHaveLength(1);
+    const message = outside[0]?.message ?? "";
+    expect(message).toContain("repo-relative");
+    expect(message).toContain("no repo prefix");
+    expect(message).toContain("src/hunts");
+    // FIRST: before the other expert, which is the hint that misled the owner.
+    expect(message.indexOf("repo-relative")).toBeLessThan(message.indexOf("hunts-expert"));
+  });
+
+  test("(f) naming another expert no longer reads as exclusivity", () => {
+    const ws = domainWorkspace();
+    const scope = knowledgeScopeFor(ws.root, loadExpert(ws.root, EXPERT, TRAIN_NOW), AREA);
+    const parsed = parseKnowledgeFile(
+      knowledgeWith(["- The next stop is chosen without a token [src: api:src/hunts/next.ts:1]"]),
+      ctxOf(ws), LIGHT_SHAPE, scope,
+    );
+    const message = parsed.issues.find((issue) => issue.message.includes("outside domain"))?.message ?? "";
+    expect(message).toContain("hunts-expert");
+    expect(message).toContain("overlap is legal");
+    // A correctly spelled domain earns no grammar hint.
+    expect(message).not.toContain("no repo prefix");
+  });
+
+  test("(f) a workspace-relative CITATION is named as the other spelling too", () => {
+    const ws = domainWorkspace();
+    const scope: KnowledgeScope = {
+      expert: EXPERT,
+      domainPaths: ["src/hunts"],
+      otherDomains: new Map(),
+      seenSrc: new Set(),
+    };
+    const parsed = parseKnowledgeFile(
+      knowledgeWith(["- The next stop is chosen without a token [src: api/src/hunts/next.ts:1]"]),
+      ctxOf(ws), LIGHT_SHAPE, scope,
+    );
+    const message = parsed.issues.find((issue) => issue.message.includes("outside domain"))?.message ?? "";
+    expect(message).toContain("repo-relative");
+    expect(message).toContain("`repo:path:line`");
+  });
+
   test("a src already on record in another area of the same expert is a duplicate", () => {
     const ws = domainWorkspace();
     const scope: KnowledgeScope = {

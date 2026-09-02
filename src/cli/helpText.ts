@@ -938,6 +938,8 @@ const ENTRIES: readonly CommandHelp[] = [
     ],
     flags: [
       json("the table", "list"),
+      { name: "area", arg: "<id>", meaning: "Seed the new expert's first competency area, at level 0. Without an area there is nothing to train, and `expert train` refuses it.", sub: "create" },
+      { name: "title", arg: "<text>", meaning: "Name that area. Light mode greps the words of the area title to choose which files the expert is shown, so it is worth writing.", sub: "create" },
       { name: "role", arg: "<slug>", meaning: "Create a ROLE expert with the shipped body for that role.", sub: "create" },
       { name: "domain", arg: "<slug>", meaning: "Add one domain area to the new expert, at level 0.", sub: "create" },
       { name: "stack", arg: "<lang>", meaning: "Add one stack area to the new expert, at level 0.", sub: "create" },
@@ -962,6 +964,7 @@ const ENTRIES: readonly CommandHelp[] = [
     ],
     examples: [
       "tldrx expert list",
+      "tldrx expert create billing --area money --title \"Invoicing, proration and refunds\"",
       "tldrx expert train billing --area money --mode light --print-prompt",
       "tldrx expert train billing --area money --mode full --model sonnet",
       "tldrx expert recompute --json",
@@ -970,6 +973,7 @@ const ENTRIES: readonly CommandHelp[] = [
     notes: [
       "`--max-usd` defaults to $2.00 in light mode and $3.00 in full, because full mode spawns TWO sub-agents and splits the ceiling between them. Measured full trainings cost $1.21-$1.60 end to end on a mid model.",
       "`--prepare` gets the same line and the same arithmetic: it does not spawn, but it freezes the ceiling into `pending.json` and into the prompt a host session spends against. An explicit `--model` that cannot fit is refused there too; an inherited one warns, because tldrx cannot see which model the host session will pick.",
+      "An expert with no competency area cannot be trained: `expert train` refuses it and prints the `areas:` block to add to `.tldrx/experts/<name>/competencies.yml`. `create --area <id>` writes that block for you. `create` also writes the front-matter `repos:` from `.tldrx/workspace.yml` — the `## Domain` bullets are paths RELATIVE to those repos, with no repo prefix.",
       "With no `--model`, the sub-agent inherits whatever your claude CLI is set to — which can be a premium tier at premium prices. `train` now says which model it resolved and what tier that is BEFORE it spawns, and REFUSES (exit 2, nothing spent) when the per-sub-agent share cannot reach what a pass on that tier costs. Pass `--model sonnet` or an explicit `--max-usd` to proceed.",
     ],
   },

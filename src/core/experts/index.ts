@@ -6,7 +6,9 @@ export { readEvidenceRows, ignoredRowWarnings } from "./readEvidenceRows.ts";
 export type { EvidenceRows, IgnoredRow } from "./readEvidenceRows.ts";
 export { checkEvidenceSrc, describeSrcProblem, EXPECTED_SRC } from "./evidenceSrc.ts";
 export type { IgnoredReason, SrcProblem } from "./evidenceSrc.ts";
-export { createExpert, planAreas, renderExpertMarkdown, EXPERT_NAME_RE } from "./createExpert.ts";
+export { createExpert, planAreas, areaTitle, renderExpertMarkdown, EXPERT_NAME_RE } from "./createExpert.ts";
+export { missingAreaRefusal } from "./missingArea.ts";
+export type { MissingAreaInput } from "./missingArea.ts";
 export {
   ROLE_EXPERTS, ROLE_AREA_TITLES, ROLE_TEMPLATES_DIR, isRoleExpert, hasRoleTemplate,
   roleTemplatePath, readRoleTemplate, renderRoleExpert,

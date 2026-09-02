@@ -672,12 +672,19 @@ List or create experts, recompute their levels, or train one. See
 
 ```
 tldrx expert list      [--json]
-tldrx expert create    <name> [--role <slug>] [--domain <slug>] [--stack <lang>]
+tldrx expert create    <name> [--area <id>] [--title <text>] [--role <slug>] [--domain <slug>]
+                              [--stack <lang>]
 tldrx expert train     <name> --area <area> [--mode light|full] [--max-usd <n>] [--model <m>]
                               [--effort <level>] [--prepare|--commit] [--yolo] [--print-prompt]
                               [--ui <mode>]
 tldrx expert recompute [<name>] [--json]
 ```
+
+`create --area <id>` seeds the expert's first competency area and `--title <text>` names it —
+without one, the expert has no area and `expert train` refuses it (#94). The title is what light
+mode greps the code for, so it is worth writing. `create` also writes the front matter `repos:`
+from `.tldrx/workspace.yml`; the `## Domain` bullets are paths relative to those repos, with no
+repo prefix.
 
 `train --area` is required. `--mode light` reads the code; `full` also mines finished runs'
 handoffs — a role expert only trains `full`. `--print-prompt` prints the training prompt and
