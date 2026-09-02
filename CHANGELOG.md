@@ -4,6 +4,46 @@
 
 ### Added
 
+- **The docs site's demo dashboard now shows the story grid and the Waves view with
+  something in them (#119).** `gen-demo.ts` composed its workspace from two fixtures,
+  neither of which had ever reached the Plan phase, so `loadPlan` returned null for all
+  eight runs and every plan-shaped rendering on the public page drew its EMPTY state: the
+  Waves view said "No waves in this workspace", the story grid drew nothing at all, and
+  Plan & build said the Plan phase had written no stories. A demo of a dashboard that
+  cannot show two of its own views is a demo of the wrong thing.
+  - A **third** synthetic fixture — `test/fixtures/plan/workspace`, one run at Build with
+    six stories over two waves, two epics on two repos, a fix round on S2 and two review
+    retries on S5 — added to `DEMO_SOURCES` beside the other two. Third rather than an
+    edit, because a `03-plan/` dropped into a chain run would move that run's
+    `stagesTotal`, `stagesDone` and `percent` (numbers `dashboard-deps.test.ts` reads),
+    and `dashboard.test.ts` asserts — correctly — that the views fixture's one run carries
+    `plan: null`. Both existing fixtures stay byte-identical.
+  - Synthetic like everything else on that page: it lives under `test/fixtures/`, so
+    `assertSynthetic` is what permits it to be read at all, and the demo stays
+    deterministic (fixed clock, invented root, no machine path).
+  - Measured over the composed workspace: 9 runs, 2 experts, 0 unreadable files, 0 skipped
+    events, 6 stories across 2 waves, and `run.build` non-null for the first time.
+
+- **A stage now carries when it started, when it ended and what its gate said (#118).**
+  `run.yml` has recorded `started_at`, `ended_at` and `gate.note` on every stage since
+  `run new` wrote the first one, and `StageRowModel` carried none of the three — so the
+  phase timeline (#107) printed neither a duration nor a signature and had to carry a
+  paragraph explaining why. Three additive fields, read off the same `run.yml` object the
+  row was already built from. `DASHBOARD_MODEL_VERSION` stays at **3**: additions never
+  bump it, and no existing field reads differently than it did at v3.
+  - **No duration is stored.** A duration is a subtraction, it exists only when both ends
+    do, and a model field would have to pick a number for the case where one end is
+    missing — `0` is a measurement of zero, and inventing one is exactly the class of
+    confident-wrong figure this redesign exists to stop. `dashDuration` does the
+    subtraction where it is drawn, and a stage that recorded neither end gets a sentence
+    naming *which* end is missing rather than a blank cell reading as "it took no time".
+  - **An empty note is an absent one.** `note: ""` is what `run new` writes on a gate
+    nobody has signed. It reaches the model as `null` and is not quoted at a reader as if
+    it were a signature.
+  - The timeline draws the duration beside the cost on each stage's summary row and quotes
+    the gate's own words inside its drawer — the two of #107's four asks that could not be
+    met before.
+
 - **An answer that overtakes an earlier phase's document now says so on that document
   (#104).** A phase document is a point-in-time snapshot, and an owner answer recorded
   three phases later can flip a design it still asserts. Measured twice on

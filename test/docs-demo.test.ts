@@ -77,8 +77,9 @@ describe("where the demo's data comes from", () => {
       const model = buildModel(root, DEMO_GENERATED_AT, { now: DEMO_NOW });
       expect(model.workspaceFound).toBe(true);
       expect(model.unreadable).toEqual([]);
-      // Eight runs: the views fixture's one detailed run plus the chain fixture's seven.
-      expect(model.runs.length).toBe(8);
+      // Nine runs: the views fixture's one detailed run, the chain fixture's seven, and
+      // the plan fixture's one (#119) — the only one that has reached Build.
+      expect(model.runs.length).toBe(9);
       expect(model.experts.length).toBe(2);
       for (const run of model.runs) expect(run.id).toMatch(/^2609\d{2}-[a-z]+$/);
     } finally {
@@ -90,7 +91,7 @@ describe("where the demo's data comes from", () => {
 describe("the generated page", () => {
   test("is one non-empty, self-contained HTML document", () => {
     expect(written.bytes).toBeGreaterThan(10_000);
-    expect(written.runs).toBe(8);
+    expect(written.runs).toBe(9);
     expect(html.startsWith("<!doctype html>")).toBe(true);
     expect(html.trimEnd().endsWith("</html>")).toBe(true);
     expect(html).toContain("<style>");
@@ -176,6 +177,61 @@ describe("the generated page", () => {
       const experts = dashMain(model, { status: "all", sort: "updated" },
         { view: "experts", id: null }, ms);
       for (const expert of model.experts) expect(experts).toContain(expert.name);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * #119. The demo's whole job is to SHOW the dashboard, and two of its views
+   * could not be shown: neither composed fixture had ever reached Plan, so
+   * `loadPlan` returned null for all eight runs, the Waves view drew "No waves in
+   * this workspace." and the story grid drew nothing at all.
+   *
+   * A third fixture — `test/fixtures/plan/workspace`, one run at Build with six
+   * stories over two waves, a fix round and a review retry — fixes that without
+   * touching the other two, so every test pinned to their exact shape stays
+   * pinned. Synthetic like the rest: `assertSynthetic` is what allows it to be
+   * read at all.
+   */
+  test("the demo showcases the story grid and the Waves view POPULATED, not their empty states", () => {
+    const root = composeDemoWorkspace();
+    try {
+      const model = buildModel(root, DEMO_GENERATED_AT, { now: DEMO_NOW });
+      const ms = DEMO_NOW.getTime();
+      const ui = { status: "all", sort: "updated" };
+
+      // At least one run reached Plan — the fact the whole issue turns on.
+      const planned = model.runs.filter((run) => run.plan !== null);
+      expect(planned.length).toBeGreaterThan(0);
+
+      const waves = dashMain(model, ui, { view: "waves", id: null }, ms);
+      expect(waves).toContain('class="gantt__bar"');
+      expect(waves).not.toContain("No waves in this workspace");
+      // Two waves, because parallelism is the one shape this view exists for.
+      expect(waves).toContain('data-wave="W1"');
+      expect(waves).toContain('data-wave="W2"');
+      // And a fix round, which is the other.
+      expect(waves).toContain("fix round");
+
+      const detail = dashMain(model, ui, { view: "run", id: "260902-checkout" }, ms);
+      expect(detail).toContain("<h2>Story grid</h2>");
+      expect(detail).not.toContain("The Plan phase has not written stories yet");
+      for (const story of ["S1", "S2", "S3", "S4", "S5", "S6"]) expect(detail).toContain(story);
+      // The Build cut branches, so `run.build` is no longer null on every run either.
+      expect(detail).toContain("epic/260902-checkout-api");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /** Every file the third fixture adds has to PARSE, or the page shows a warning. */
+  test("nothing the new fixture adds is unreadable", () => {
+    const root = composeDemoWorkspace();
+    try {
+      const model = buildModel(root, DEMO_GENERATED_AT, { now: DEMO_NOW });
+      expect(model.unreadable).toEqual([]);
+      for (const run of model.runs) expect(run.plan?.unreadable ?? []).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

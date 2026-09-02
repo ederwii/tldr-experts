@@ -142,15 +142,18 @@ describe("the dashboard model", () => {
       "runs[].nextAction.waitingOn",
       "runs[].path[].budgetUsd",
       "runs[].path[].costUsd",
+      "runs[].path[].endedAt",
       "runs[].path[].expert",
       "runs[].path[].gate",
       "runs[].path[].gateBy",
       "runs[].path[].gateEvidence",
+      "runs[].path[].gateNote",
       "runs[].path[].gatePolicy",
       "runs[].path[].id",
       "runs[].path[].model",
       "runs[].path[].phase",
       "runs[].path[].stale",
+      "runs[].path[].startedAt",
       "runs[].path[].status",
       "runs[].pendingGate",
       "runs[].pendingQuestion",
@@ -246,6 +249,31 @@ describe("the dashboard model", () => {
     } finally {
       workspace.dispose();
     }
+  });
+
+  /**
+   * #118. `run.yml` records `started_at`, `ended_at` and the gate's free-text
+   * `note` on every stage; `StageRowModel` carried none of the three, so the
+   * phase timeline (#107) could report no duration and quote no signature.
+   *
+   * Three ADDITIVE fields, read off the same `run.yml` object the row is already
+   * built from. No duration is stored: a null on either end is "not recorded",
+   * which is a different fact from zero, and the subtraction belongs where it is
+   * drawn. An EMPTY note is `null` for the same reason — `note: ""` is what
+   * `run new` writes on a gate nobody has signed, and "" is not a signature.
+   */
+  test("a stage carries its own start, its end and the gate's note", () => {
+    const [what, how] = model.runs[0]!.path;
+    expect(what!.startedAt).toBe("2026-09-01T09:02:00Z");
+    expect(what!.endedAt).toBe("2026-09-01T11:40:00Z");
+    expect(what!.gateNote).toBe("good now");
+    // The open gate wears `note: ""` in the file. Absent, not empty-quoted.
+    expect(how!.startedAt).toBe("2026-09-01T13:00:00Z");
+    expect(how!.gateNote).toBeNull();
+  });
+
+  test("adding them did not bump the model version — additions never do", () => {
+    expect(model.modelVersion).toBe(3);
   });
 
   test("a run with no Plan artefacts carries `plan: null`", () => {

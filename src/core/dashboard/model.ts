@@ -368,6 +368,30 @@ export interface StageRowModel {
    * `stage.stale`). The outputs are still on disk and still read as current.
    */
   readonly stale: boolean;
+  /**
+   * When the stage started and when it ended — `run.yml`'s own `started_at` /
+   * `ended_at`, unconverted (#118).
+   *
+   * ADDITIVE. Both are `null` until something records them, and a null is "not
+   * recorded", which is a DIFFERENT FACT from a zero-length stage. That is also
+   * why no `durationSeconds` sits beside them: a duration is a subtraction, it
+   * only exists when both ends do, and storing it would force this layer to pick
+   * a number for the case where one end is missing. The subtraction belongs
+   * where it is drawn.
+   */
+  readonly startedAt: string | null;
+  readonly endedAt: string | null;
+  /**
+   * What the person (or the facilitator) who closed the gate wrote — `run.yml`
+   * `stage.gate.note` — or null (#118).
+   *
+   * Null covers all three absences and does not distinguish them, because the
+   * page treats them the same: the stage has no gate at all, the gate is still
+   * open, or the note is the empty string `run new` writes and `tldrx approve`
+   * never replaced. `""` is not a signature, so it does not reach a reader as
+   * one.
+   */
+  readonly gateNote: string | null;
 }
 
 /**
@@ -1009,6 +1033,10 @@ export function toRunModel(
             outsideSurface: stage.gate.evidence.outside_surface,
           },
       stale: stage.stale,
+      startedAt: stage.started_at,
+      endedAt: stage.ended_at,
+      // An empty note is an absent one — see `gateNote`.
+      gateNote: stage.gate === null || stage.gate.note === "" ? null : stage.gate.note,
     })),
   );
 
