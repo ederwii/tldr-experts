@@ -96,6 +96,14 @@ export function dispatchNotesRecord(
   };
 }
 
+/**
+ * `pending.json`'s `preflight` key — and NOTHING when the check said nothing, so
+ * an unremarkable bundle stays byte-identical to the one it has always been.
+ */
+export function preflightRecord(lines: readonly string[]): { preflight?: readonly string[] } {
+  return lines.length === 0 ? {} : { preflight: [...lines] };
+}
+
 export interface PendingStage {
   readonly version: 1;
   readonly run: string;
@@ -129,6 +137,17 @@ export interface PendingStage {
   readonly dispatch_notes?: PendingDispatchNotes;
   /** The `Read`/`Glob`/`Grep` ceiling this stage's sub-agent runs under. */
   readonly max_reads?: number;
+  /**
+   * What the pre-start check had to say about the model and the ceiling in this
+   * bundle (#96/#98) — the same lines a headless run prints before it spawns.
+   *
+   * ABSENT when there was nothing to say, so a bundle nobody had a warning for is
+   * the bundle it always was, byte for byte. It is here because `--prepare` hands
+   * the spending decision to a HOST session, and a warning that lives only in
+   * whoever-ran-prepare's scrollback is a warning the session that spends the
+   * money never sees.
+   */
+  readonly preflight?: readonly string[];
   /**
    * The story this bundle is for, when the stage runs story by story (the Build
    * executor's `--prepare`/`--commit` cycle). `--commit` reads it back to know

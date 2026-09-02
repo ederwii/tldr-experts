@@ -13,7 +13,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  runTraining, trainPreflight, modelTier, resolveAmbientModel, ambientModelFiles,
+  runTraining, trainingCacheDir, trainPreflight, modelTier, resolveAmbientModel, ambientModelFiles,
   DEFAULT_TRAIN_USD, DEFAULT_FULL_TRAIN_USD, MEASURED_FULL_TRAIN_USD, defaultTrainUsd,
   type TrainOptions, type PreflightInput,
 } from "../src/core/training/index.ts";
@@ -96,7 +96,7 @@ function input(overrides: Partial<PreflightInput> = {}): PreflightInput {
     ceilingExplicit: false,
     model: null,
     ambient: FABLE,
-    spawns: true,
+    run: "headless",
     ...overrides,
   };
 }
@@ -168,8 +168,8 @@ describe("premium model + full mode + the DEFAULT ceiling", () => {
     expect(result.notice.join("\n")).not.toContain("warning");
   });
 
-  test("nothing is said on --prepare/--commit, which spawn nothing here", () => {
-    const result = trainPreflight(input({ spawns: false }));
+  test("nothing is said on --commit — that money is already spent", () => {
+    const result = trainPreflight(input({ run: "commit" }));
     expect(result.refusal).toBeNull();
     expect(result.notice).toEqual([]);
   });
@@ -408,5 +408,124 @@ describe("tldrx expert train, with the model coming off the environment", () => 
     expect(run.stderr).toContain("model sonnet (mid, inherited from your claude CLI via $ANTHROPIC_MODEL)");
     expect(run.stderr).not.toContain("refusing to spawn");
     expect(spawns(ws)).toBe(2);
+  });
+});
+
+// --- #98: the same trap, one step removed -------------------------------------
+
+/**
+ * `--prepare` spawns nothing HERE, and that is exactly why it was skipped (#96
+ * wired the check to `spawns: run === "headless"`). But it writes the ceiling
+ * into `pending.json` and into the prompt text, and a host session then spends
+ * against it — so the run that dies at `error_max_budget_usd` with nothing
+ * written is still reachable, one command later, on someone else's money.
+ *
+ * The asymmetry the tests below pin: headless we KNOW the model (tldrx spawns
+ * `claude` with no `--model`, so the CLI default applies); on `--prepare` the
+ * sub-agent is started by the host session, so an INHERITED model is a
+ * prediction about a process tldrx does not control. Explicit `--model` is
+ * written into the bundle as an instruction, so that one is knowledge and is
+ * refused like any other.
+ */
+describe("--prepare carries the check into the bundle (#98)", () => {
+  test("an inherited premium model WARNS — it does not refuse a process we do not start", () => {
+    const result = trainPreflight(input({ run: "prepare" }));
+
+    expect(result.refusal).toBeNull();
+    const warnings = result.notice.filter((line) => line.startsWith("warning:"));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("the session you hand this bundle to");
+    expect(warnings[0]).toContain("--model sonnet");
+    expect(warnings[0]).toContain("--max-usd");
+    // The model line is still said, tier and provenance included.
+    expect(result.notice[0]).toContain("claude-fable-5[1m]");
+    expect(result.notice[0]).toContain("premium");
+  });
+
+  test("an EXPLICIT --model is an instruction in the bundle, so it is refused", () => {
+    const result = trainPreflight(input({ run: "prepare", model: "claude-fable-5[1m]", ambient: null }));
+
+    expect(result.refusal).not.toBeNull();
+    const said = (result.refusal ?? []).join("\n");
+    expect(said).toContain("refusing to prepare");
+    expect(said).toContain("nothing was written");
+    expect(said).toContain("--model sonnet");
+    expect(result.notice).toEqual([]);
+  });
+
+  test("an explicit --max-usd is never refused on --prepare either", () => {
+    const result = trainPreflight(input({
+      run: "prepare", model: "claude-fable-5[1m]", ambient: null, ceilingExplicit: true, ceilingUsd: 2,
+    }));
+    expect(result.refusal).toBeNull();
+    expect(result.notice.filter((line) => line.startsWith("warning:"))).toHaveLength(1);
+  });
+
+  test("a mid model preparing at the default says its line and warns about nothing", () => {
+    const result = trainPreflight(input({ run: "prepare", model: "sonnet", ambient: null }));
+    expect(result.refusal).toBeNull();
+    expect(result.notice).toHaveLength(1);
+    expect(result.notice[0]).toContain("model sonnet (mid, --model)");
+  });
+
+  test("runTraining --prepare staples the lines onto stdout AND into every pending.json", async () => {
+    const ws = workspace();
+    // No fake on PATH: --prepare must not spawn, warning or no warning.
+    const outcome = await train(ws, { run: "prepare", mode: "full", ambientModel: { ...FABLE } });
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.costUsd).toBe(0);
+    const said = (outcome.preflight ?? []).join("\n");
+    expect(said).toContain("claude-fable-5[1m]");
+    expect(said).toContain("the session you hand this bundle to");
+
+    // stdout, where the operator reads the prepared block — not only stderr.
+    const stdout = outcome.lines.join("\n");
+    expect(stdout).toContain("claude-fable-5[1m]");
+    expect(stdout).toContain("prepared training for");
+
+    // And in the bundle, where the HOST session reads it.
+    const cache = trainingCacheDir(ws.root, EXPERT, AREA);
+    for (const key of ["code", "runs"]) {
+      const pending = JSON.parse(
+        readFileSync(join(cache, ".agent", key, "pending.json"), "utf8"),
+      ) as Record<string, unknown>;
+      const lines = pending.preflight as string[] | undefined;
+      expect(lines).toBeDefined();
+      expect((lines ?? []).join("\n")).toContain("premium");
+      expect(pending.max_budget_usd).toBe(1.5);
+    }
+  });
+
+  test("runTraining --prepare with an explicit --model exits 2 and writes NO bundle", async () => {
+    const ws = workspace();
+    const outcome = await train(ws, {
+      run: "prepare", mode: "full", model: "claude-fable-5[1m]", ambientModel: null,
+    });
+
+    expect(outcome.code).toBe(2);
+    expect(outcome.lines.join("\n")).toContain("refusing to prepare");
+    const cache = trainingCacheDir(ws.root, EXPERT, AREA);
+    expect(existsSync(join(cache, ".agent", "code", "prompt.md"))).toBe(false);
+    expect(existsSync(join(cache, ".agent", "runs", "prompt.md"))).toBe(false);
+  });
+
+  test("a bundle with nothing to say carries no `preflight` key at all", async () => {
+    const ws = workspace();
+    // A mid model at the default fits, so the only line is the model line — and
+    // an unchanged bundle should stay an unchanged bundle wherever it can.
+    await train(ws, { run: "prepare", mode: "full", model: "sonnet", ambientModel: null });
+
+    const cache = trainingCacheDir(ws.root, EXPERT, AREA);
+    const pending = JSON.parse(
+      readFileSync(join(cache, ".agent", "code", "pending.json"), "utf8"),
+    ) as Record<string, unknown>;
+    expect(pending.preflight).toBeUndefined();
+  });
+
+  test("--commit writes nothing new: the money it is reconciling is already spent", () => {
+    const result = trainPreflight(input({ run: "commit", ceilingUsd: 2 }));
+    expect(result.notice).toEqual([]);
+    expect(result.refusal).toBeNull();
   });
 });

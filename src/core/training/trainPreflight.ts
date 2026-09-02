@@ -28,7 +28,10 @@
  * is the whole decision this module exists to ask for. It warns in one line and
  * proceeds.
  */
-import { DEFAULT_FULL_TRAIN_USD, MEASURED_FULL_TRAIN_USD, type TrainingMode } from "./Training.ts";
+import {
+  DEFAULT_FULL_TRAIN_USD, MEASURED_FULL_TRAIN_USD,
+  type TrainingMode, type TrainingRunMode,
+} from "./Training.ts";
 
 /**
  * The tier a model name belongs to, for the one question asked here: is the
@@ -123,8 +126,13 @@ export interface PreflightInput {
   readonly model: string | null;
   /** What that inherited model resolves to, when it could be read. */
   readonly ambient: AmbientModel | null;
-  /** False for `--prepare`/`--commit`, which spawn nothing here. */
-  readonly spawns: boolean;
+  /**
+   * Which half of the run this is. It decides how much the check may CLAIM, not
+   * how much it says — see the module comment: `headless` knows the model,
+   * `prepare` is predicting one for a session it does not start, and `commit` is
+   * reconciling money already gone.
+   */
+  readonly run: TrainingRunMode;
 }
 
 export interface TrainPreflight {
@@ -133,8 +141,15 @@ export interface TrainPreflight {
   readonly tier: ModelTier;
   /** True when `model` came from the environment rather than `--model`. */
   readonly inherited: boolean;
-  /** The one line printed before the money. Empty when nothing spawns. */
+  /** The model line, plus any warning. Empty on `--commit`. */
   readonly notice: readonly string[];
+  /**
+   * Just the warnings out of `notice` — what makes this run REMARKABLE, as
+   * opposed to what merely describes it. `--prepare` writes the bundle's
+   * `preflight` key only when this is non-empty, so a bundle nobody had an alarm
+   * for stays byte-identical to the one it has always been.
+   */
+  readonly warnings: readonly string[];
   /** Non-null ⇒ refuse, exit 2, spawn nothing. */
   readonly refusal: readonly string[] | null;
 }
@@ -151,37 +166,74 @@ export function trainPreflight(input: PreflightInput): TrainPreflight {
   const model = input.model ?? input.ambient?.model ?? null;
   const inherited = input.model === null && input.ambient !== null;
   const tier = modelTier(model);
-  const base: Omit<TrainPreflight, "notice" | "refusal"> = { model, tier, inherited };
+  const base: Omit<TrainPreflight, "notice" | "warnings" | "refusal"> = { model, tier, inherited };
 
-  if (!input.spawns) return { ...base, notice: [], refusal: null };
+  // `--commit` is reading a `result.json` for work that has already been paid
+  // for. There is no decision left to inform, so it says nothing.
+  if (input.run === "commit") return { ...base, notice: [], warnings: [], refusal: null };
 
   const share = input.ceilingUsd / Math.max(1, input.agents);
   const expected = perAgentExpectedUsd(tier);
   // The whole test, and it is arithmetic rather than a category: does the share
   // this run can hand ONE sub-agent reach what a pass on this tier is expected to
   // cost? On the shipped full-mode default that is $1.50 against $1.76 for a
-  // premium pass — it does not, which is why it is refused rather than warned
-  // about. A role expert's full run spawns one sub-agent and keeps the whole
-  // ceiling, so the same arithmetic lets it through.
+  // premium pass — it does not. A role expert's full run spawns one sub-agent and
+  // keeps the whole ceiling, so the same arithmetic lets it through.
   const cannotFit = expected !== null && share < expected;
 
+  // Whether that arithmetic may REFUSE depends on how well this half of the run
+  // knows the model (#98).
+  //
+  //  - `headless`: tldrx spawns `claude` itself with no `--model`, so the CLI's
+  //    own default is what runs. Reading it is a prediction about a process this
+  //    code starts — refusable, explicit flag or not.
+  //  - `prepare`: the sub-agent is started by the HOST session. An explicit
+  //    `--model` is written into `pending.json` as an instruction, so that one is
+  //    knowledge and is refused. An INHERITED model is a guess about a session
+  //    tldrx does not control, and refusing a bundle on a guess would be
+  //    asserting more than is known — it warns instead, in the bundle and on
+  //    stdout, and the operator decides.
+  const mayRefuse = input.run === "headless" || input.model !== null;
+
   const named = describeModel(model, tier, inherited ? input.ambient : null);
-  if (cannotFit && !input.ceilingExplicit) {
-    return { ...base, notice: [], refusal: refusal(input, named, share, expected ?? 0) };
+  if (cannotFit && !input.ceilingExplicit && mayRefuse) {
+    return {
+      ...base, notice: [], warnings: [], refusal: refusal(input, named, share, expected ?? 0),
+    };
   }
 
   const money = `$${input.ceilingUsd.toFixed(2)} across ${String(input.agents)} sub-agent(s)`
     + `, $${share.toFixed(2)} each`;
-  const notice = [`${named} · --mode ${input.mode} · ${money}`];
-  if (cannotFit) {
-    notice.push(
-      `warning: $${share.toFixed(2)} per sub-agent is under the $${(expected ?? 0).toFixed(2)} one`
-      + ` ${tier} pass is expected to cost (${measuredBand()} end to end on a mid model,`
-      + ` x${String(TIER_MULTIPLIER[tier] ?? 1)} for this tier) — and --max-budget-usd stops a turn,`
-      + " it does not cap one. You passed --max-usd, so this proceeds.",
-    );
-  }
-  return { ...base, notice, refusal: null };
+  const warnings = cannotFit ? [warning(input, share, tier, expected ?? 0)] : [];
+  return {
+    ...base,
+    notice: [`${named} · --mode ${input.mode} · ${money}`, ...warnings],
+    warnings,
+    refusal: null,
+  };
+}
+
+/**
+ * The one line that proceeds anyway — and it has two audiences, because the two
+ * ways to reach it are different situations.
+ *
+ * An explicit `--max-usd` means the operator looked at the number: the sentence
+ * ends there. An inherited model on `--prepare` means nobody has looked at
+ * anything yet — the bundle is about to freeze this ceiling into `pending.json`
+ * and into the prompt text a host session will spend against — so that one names
+ * the remedies the refusal would have named.
+ */
+function warning(
+  input: PreflightInput, share: number, tier: ModelTier, expected: number,
+): string {
+  const arithmetic = `warning: $${share.toFixed(2)} per sub-agent is under the $${expected.toFixed(2)}`
+    + ` one ${tier} pass is expected to cost (${measuredBand()} end to end on a mid model,`
+    + ` x${String(TIER_MULTIPLIER[tier] ?? 1)} for this tier) — and --max-budget-usd stops a turn,`
+    + " it does not cap one.";
+  if (input.ceilingExplicit) return `${arithmetic} You passed --max-usd, so this proceeds.`;
+  return `${arithmetic} This is only a warning because the session you hand this bundle to picks`
+    + " its own model and tldrx cannot see it — if it is the one above, re-prepare with"
+    + " --model sonnet or --max-usd <n>.";
 }
 
 /**
@@ -207,11 +259,13 @@ function refusal(
   input: PreflightInput, model: string, share: number, expected: number,
 ): readonly string[] {
   return [
-    `refusing to spawn: --mode ${input.mode} on a ${modelTier(input.model ?? input.ambient?.model ?? null)}`
-    + ` model against the DEFAULT $${input.ceilingUsd.toFixed(2)} ceiling — nothing was spent.`,
+    `${input.run === "prepare" ? "refusing to prepare" : "refusing to spawn"}: --mode ${input.mode}`
+    + ` on a ${modelTier(input.model ?? input.ambient?.model ?? null)} model against the DEFAULT`
+    + ` $${input.ceilingUsd.toFixed(2)} ceiling — nothing was spent`
+    + `${input.run === "prepare" ? " and nothing was written" : ""}.`,
     `  ${model}`,
-    `  This run splits that ceiling between ${String(input.agents)} sub-agent(s), $${share.toFixed(2)}`
-    + ` each, and one repair round`,
+    `  ${input.run === "prepare" ? "This bundle would give" : "This run splits that ceiling between"}`
+    + ` ${String(input.agents)} sub-agent(s) $${share.toFixed(2)} each, and one repair round`,
     "  comes out of the same money. A full training has measured "
     + `${measuredBand()} END TO END on a mid`,
     "  model (docs/audits/2026-08-29/experts-knowledge.md) — two sub-agent passes, so ~$"

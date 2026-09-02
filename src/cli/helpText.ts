@@ -968,6 +968,7 @@ const ENTRIES: readonly CommandHelp[] = [
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_AGENT_FAILED],
     notes: [
       "`--max-usd` defaults to $2.00 in light mode and $3.00 in full, because full mode spawns TWO sub-agents and splits the ceiling between them. Measured full trainings cost $1.21-$1.60 end to end on a mid model.",
+      "`--prepare` gets the same line and the same arithmetic: it does not spawn, but it freezes the ceiling into `pending.json` and into the prompt a host session spends against. An explicit `--model` that cannot fit is refused there too; an inherited one warns, because tldrx cannot see which model the host session will pick.",
       "With no `--model`, the sub-agent inherits whatever your claude CLI is set to — which can be a premium tier at premium prices. `train` now says which model it resolved and what tier that is BEFORE it spawns, and REFUSES (exit 2, nothing spent) when the per-sub-agent share cannot reach what a pass on that tier costs. Pass `--model sonnet` or an explicit `--max-usd` to proceed.",
     ],
   },
