@@ -232,12 +232,18 @@ export interface StageResult {
 /**
  * The handshake's own file is not readable.
  *
- * `kind` exists because the two ways that happens cost the run different things
- * (gh #82). `absent` is a STEP not yet taken — `--commit` before the host wrote
- * `result.json`, `--prepare` never run at all — and the fix is another command,
- * so it is a sequencing refusal that leaves the run exactly where it was.
- * `unreadable` is a file somebody DID write and got wrong; something is broken
- * rather than merely out of order, so it keeps costing what it always cost.
+ * `kind` exists because the two ways that happens are different FACTS about the
+ * host (gh #82). `absent` is a STEP not yet taken — `--commit` before the host
+ * wrote `result.json`, `--prepare` never run at all. `unreadable` is a file
+ * somebody DID write and got wrong: not valid JSON, or not a JSON object.
+ *
+ * They no longer cost the run different things. `unreadable` used to fail the
+ * stage; the owner's call on gh #88 (2026-09-02) is that it is refused like an
+ * absent one — nothing was attempted either way, and the fix is the same single
+ * command — PLUS a loud `result.unreadable` event naming the file and the parse
+ * error, so corruption never passes silently. `kind` is what tells the two
+ * apart at that seam, and it is why the distinction is still carried:
+ * `Build.refuseOnEnvelope` emits for one and not the other.
  *
  * Typed rather than sniffed out of the message on purpose: a caller matching on
  * the words would break the moment the message improved, which is the opposite

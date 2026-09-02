@@ -916,3 +916,59 @@ describe("a half-applied split is visible in tldrx status", () => {
     }
   });
 });
+
+/**
+ * A run somebody CLOSED is not a run to retry (gh #86).
+ *
+ * `tldrx run cancel` is the way to close a run whose stage FAILED — that is the
+ * case `run.cancelled` exists for, and it is a run-level field precisely because
+ * the stages keep their history. `deriveRunStatus` honours that and reads the
+ * cancellation first. `waitingFor` did not: it answered from the status of the
+ * stage at the cursor, which is still `failed`, so the operator was told to
+ * retry a run they had deliberately closed — on `tldrx run status`, and on the
+ * dashboard, which reads the same derivation.
+ *
+ * The note and the name were dropped everywhere, so the one screen that could
+ * have said "alan closed this, because …" said "FAILED — retry" instead.
+ */
+describe("a cancelled run reads as cancelled, not as a failure to retry (gh #86)", () => {
+  /** A failed stage, then `run cancel` — the exact shape the issue was measured on. */
+  function cancelledAfterFailure(): FacilitatorWorkspace {
+    const ws = oneStage();
+    const store = RunStore.open(ws.runDir);
+    store.mutate((run) => withStageStatus(run, "alpha", "failed"));
+    store.save();
+    expect(cancelRun({ ...rescue(ws), note: "superseded by 260830-v2" }).code).toBe(0);
+    return ws;
+  }
+
+  test("waitingFor sees the cancellation, not the failure underneath it", () => {
+    const ws = cancelledAfterFailure();
+    const run = RunStore.open(ws.runDir).run;
+    // The stage keeps what happened to it; the run carries the decision.
+    expect(run.status).toBe("cancelled");
+    expect(run.phases[0]!.stages[0]!.status).toBe("failed");
+
+    const waiting = waitingFor(run, ws.runDir);
+    expect(waiting.kind).toBe("cancelled");
+    // Who closed it and why — the two facts every screen dropped.
+    expect(waiting.message).toContain("alan");
+    expect(waiting.message).toContain("superseded by 260830-v2");
+    // And NOT an offer to run it again.
+    expect(waiting.message).not.toContain("tldrx next");
+    expect(waiting.message).not.toContain("retry");
+    // A closed run is not a run you can be handed.
+    expect(isMovable(waiting.kind)).toBe(false);
+  });
+
+  test("`tldrx run status` prints the cancellation instead of a retry", () => {
+    const ws = cancelledAfterFailure();
+    const reopened = RunStore.open(ws.runDir);
+    const view = buildStatus(reopened.run, reopened.budget, ws.runDir);
+    expect(view.waiting.kind).toBe("cancelled");
+
+    const rendered = renderStatus(view);
+    expect(rendered).toContain("superseded by 260830-v2");
+    expect(rendered).not.toContain("retry: `tldrx next`");
+  });
+});

@@ -175,6 +175,13 @@ function bullet(item: NumberedEvent): string | null {
         + `${text(payload.fact) || "?"} (${q || "a question"}), ${actor}: `
         + `${text(payload.answer) || "no answer recorded"}`;
     case "map.refreshed": return `${prefix}map refreshed`;
+    // Nothing moved and nothing was spent — but a host wrote an envelope it could
+    // not read, and the run said so out loud rather than shrugging (gh #88). The
+    // path is the whole point of the line: it is the file to go and rewrite.
+    case "result.unreadable":
+      return `${prefix}UNREADABLE ${text(payload.path) || "result.json"}`
+        + ` — ${text(payload.error) || "no parse error recorded"}`
+        + " (nothing failed; rewrite it and run the same command again)";
     case "error": return `${prefix}error: ${text(payload.message) || "no message recorded"}`;
     default: return null;
   }

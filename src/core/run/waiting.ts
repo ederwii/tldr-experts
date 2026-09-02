@@ -39,9 +39,10 @@ import { hasPreparedBundle } from "./prepared.ts";
  *
  * `running` — a live `next` holds the run's `.lock`; nobody else may touch it.
  * `prepared` — a `--prepare` bundle is on disk and no process is holding the run.
+ * `cancelled` — a human closed the run with `tldrx run cancel` (gh #86).
  */
 export const WAITING_KINDS = [
-  "gate", "answer", "ready", "done", "blocked", "failed", "running", "prepared",
+  "gate", "answer", "ready", "done", "blocked", "failed", "running", "prepared", "cancelled",
 ] as const;
 export type WaitingKind = (typeof WAITING_KINDS)[number];
 
@@ -55,8 +56,9 @@ export interface Waiting {
 /**
  * The waiting kinds a human can act on right now.
  *
- * `done` is finished, `blocked` needs something else to move first, and
- * `running` is already in someone's hands, so none of the three is a run you can
+ * `done` is finished, `cancelled` was closed on purpose, `blocked` needs
+ * something else to move first, and `running` is already in someone's hands, so
+ * none of the four is a run you can
  * be handed. `prepared` IS one: the bundle is written and it is waiting on a
  * human to run the prompt and come back through `--commit`. `tldrx status` uses this to pick which run
  * wears `← next`, and the dashboard uses it for the same decision.
@@ -91,9 +93,38 @@ export interface WaitingCursor {
   readonly stage: string;
 }
 
+/**
+ * `run.yml`'s `cancelled:` — who closed the run by hand, when, and why.
+ *
+ * Structurally the same three strings `RunFile.RunCancellation` carries, spelled
+ * again here for the same reason every other shape in this file is: `waiting.ts`
+ * must not depend on the strict schema, or the dashboard's tolerantly-read
+ * document could not be passed to it.
+ */
+export interface WaitingCancellation {
+  readonly by: string;
+  readonly at: string;
+  readonly note: string;
+}
+
 export interface WaitingRun {
   /** `RunFile` always has one; a tolerantly-read `RunDocument` may not. */
   readonly cursor: WaitingCursor | null;
+  /**
+   * Present only on a run `tldrx run cancel` closed (gh #86).
+   *
+   * The field this shape was MISSING, and the reason a closed run was told to
+   * retry itself: the answer used to come from the status of the stage at the
+   * cursor, and cancelling a run deliberately leaves that stage `failed` —
+   * "which is history, not state" (`RunFile.RunCancellation`). `deriveRunStatus`
+   * had read the decision first since the field existed; this could not see it
+   * at all, so `tldrx run status` and the dashboard — one derivation since
+   * #60 — both offered `tldrx next` on a run somebody had closed.
+   *
+   * Optional and nullable so BOTH readers satisfy it: `RunFile` leaves the key
+   * off entirely, the tolerant `RunDocument` projects `null`.
+   */
+  readonly cancelled?: WaitingCancellation | null;
   readonly phases: readonly WaitingPhase[];
 }
 
@@ -137,6 +168,17 @@ function stageAtCursor(
  * initial value of a field.
  */
 export function waitingFor(run: WaitingRun, runDir: string): Waiting {
+  // A cancellation is a DECISION, not a roll-up, so it is read before anything
+  // is derived — the same order, and for the same reason, as `deriveRunStatus`
+  // (`RunFile.ts`). It has to come first: the run most often cancelled is one
+  // whose stage FAILED, and that stage keeps its failure, so any answer derived
+  // from the cursor would offer a retry on a run a person deliberately closed.
+  //
+  // It also comes before the cursor checks. A run with no resolvable cursor is
+  // `blocked` — something to go and fix — and a closed run is not that either.
+  if (run.cancelled !== undefined && run.cancelled !== null) {
+    return { kind: "cancelled", message: cancelledMessage(run.cancelled), questions: [] };
+  }
   const cursor = run.cursor;
   if (cursor === null) {
     return { kind: "blocked", message: "run.yml records no cursor, so nothing can say where it is", questions: [] };
@@ -219,6 +261,22 @@ export function waitingFor(run: WaitingRun, runDir: string): Waiting {
         questions: open,
       };
   }
+}
+
+/**
+ * Who closed the run, when, and what they said — the three facts every screen
+ * dropped (gh #86).
+ *
+ * No command is offered, deliberately. `tldrx next` on a cancelled run already
+ * advances nothing and says so, and printing it here is what made an operator
+ * think there was something left to do. `tldrx replay <run>` is how the history
+ * of a closed run is read, and it is not "what this run is waiting on".
+ */
+function cancelledMessage(cancelled: WaitingCancellation): string {
+  const by = cancelled.by.trim() === "" ? "someone" : cancelled.by.trim();
+  const when = cancelled.at.trim() === "" ? "" : ` at ${cancelled.at.trim()}`;
+  const note = cancelled.note.trim();
+  return `run cancelled by ${by}${when}${note === "" ? "" : ` — ${note}`}`;
 }
 
 function openQuestionIds(path: string): readonly string[] {

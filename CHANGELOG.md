@@ -258,6 +258,57 @@
     `git reset --hard` or `git checkout -B main` in the shared checkout. A test asserts both
     files still say it.
 
+- **A cancelled run is no longer told to retry itself (#86).** `tldrx run cancel` is the way to
+  close a run whose stage FAILED — that is the case `run.cancelled` exists for, and it is a
+  run-level field precisely so the stages keep their failure, "which is history, not state".
+  `deriveRunStatus` read that decision first; `waitingFor` could not read it at all. It is typed
+  against `WaitingRun`, the smallest shape both `RunFile` and the dashboard's tolerantly-read
+  `RunDocument` satisfy, and that shape had `cursor` and `phases` and nothing else — so the answer
+  came from the status of the stage at the cursor, which a cancellation deliberately leaves
+  `failed`. A run somebody had closed reported `waiting.kind: failed` and
+  `"… FAILED — retry: \`tldrx next\`"`, counted as movable, and could wear `← next` on the
+  dashboard. Both screens, because both have read the same derivation since #60.
+  - `WaitingRun` grows an optional `cancelled`, `RunDocument` projects it, and `waitingFor` reads
+    it FIRST — before the cursor checks, in the same order and for the same reason
+    `deriveRunStatus` does. A ninth waiting kind, `cancelled`, joins `WAITING_KINDS`; it is not in
+    `MOVABLE_KINDS`, so `tldrx status` stops offering the run and the dashboard raises no card.
+  - The message names **who closed it, when, and their note** — three facts that were dropped
+    everywhere, on the one screen that exists to say what a run needs. It offers no command:
+    `tldrx next` on a cancelled run already advances nothing, and printing it is what made an
+    operator think there was something left to do.
+
+- **An out-of-order `--commit` no longer leaves a `stage.started` behind (#87).** `runExecutor`
+  stamped the stage `running` and appended `stage.started` on its way in, before the executor had
+  had a chance to say anything. #82 restores the stage's STATUS when that executor turns out to be
+  refusing a sequencing mistake, so `run.yml` comes back byte for byte — but `events.jsonl` is
+  append-only truth and the line could not be unwritten. The live run `260901-leaderboard-v2` left
+  one at 2026-09-02T00:36:37Z: a `stage.started` with no matching `stage.done` or `stage.failed`,
+  which `renderReplay` and anything counting starts read as a start. A `--commit` never STARTS a
+  stage — it settles a cycle a `--prepare` started, and on the ordinary commit the stage is
+  already `running` and no event was emitted anyway — so it no longer emits one at all. The
+  `markRunning` STAMP stays, keeping the original `started_at`, so a `--commit` that does settle a
+  cycle on a stage something demoted still finishes through. The refusal now precedes the event by
+  construction: there is no event. Pinned by measuring the WHOLE log, not a `stage.started` count.
+
+- **An unreadable `result.json` is refused like an absent one, loudly (#88).** Owner decision,
+  2026-09-02. #82 split `PendingError` into `absent` (the host has not written the file) and
+  `unreadable` (the host wrote it and got it wrong), and left the second failing the stage. But
+  nothing was attempted there either — no sub-agent ran, no cent moved, no branch changed — and
+  the fix is the same single command: rewrite the file, run `tldrx next --commit` again. Failing
+  it actively OBSTRUCTED that fix, because it demoted the stage out of `running`, and the
+  phase-budget gate is skipped exactly when a stage is `running` — which is how #82's live run
+  took a `budget.blocked` it had not earned. A host that fat-fingers its JSON paid the same tax.
+  It is #79's model — FORM never costs an attempt, CONTENT/WORK always does — applied to run
+  state.
+  - Corruption does not pass silently. Both call sites in `build.ts` now go through one door that
+    appends a typed **`result.unreadable`** event naming the run-dir-relative path, the parser's
+    own message, the role (`developer` or `reviewer`) and the story, and the refusal line says
+    which file to rewrite and which command to run. It is the only thing a sequencing refusal ever
+    writes; `run.yml` still comes back byte for byte, and `tldrx replay` renders the line.
+  - `parseReview`'s fail-closed rule is untouched and is a different, harsher contract: it governs
+    an envelope that PARSES and is not a valid verdict (unreadable ⇒ `changes`, never `approve`).
+    A file that does not parse at all never reaches it.
+
 - **The dashboard says the framework's CURRENT vocabulary, not 0.2.0's.** The live page
   shipped in 0.2.0 and has had one change since; the framework has had a great many. An audit of
   `src/core/dashboard/` against today's `run.yml` and `waiting.ts` found seven words the files use

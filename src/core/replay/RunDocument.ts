@@ -108,6 +108,20 @@ export interface RunBuildDocument {
   readonly branch_model: string | null;
 }
 
+/**
+ * `cancelled:` — the run-level decision `tldrx run cancel` writes (gh #86).
+ *
+ * Projected here because `waitingFor` needs it and the dashboard hands it this
+ * document: without the key the page derived its answer from the cursor stage,
+ * which a cancellation deliberately leaves `failed`, and offered `tldrx next` on
+ * a run somebody had closed.
+ */
+export interface RunCancellation {
+  readonly by: string;
+  readonly at: string;
+  readonly note: string;
+}
+
 export interface RunDocument {
   readonly run: string;
   readonly title: string;
@@ -122,6 +136,8 @@ export interface RunDocument {
   readonly spent_usd: number | null;
   /** Absent on a run `tldrx run new` created — it depends on nothing. */
   readonly triage: RunTriage | null;
+  /** Null on every run nobody closed by hand, which is nearly all of them. */
+  readonly cancelled: RunCancellation | null;
   /**
    * Stage id -> `human` | `auto` | `agent` (spec §2.2 `gates_policy`). An absent
    * key, or a run.yml written before the key existed, reads as `human` — the same
@@ -182,11 +198,23 @@ export function toRunDocument(input: unknown, fallbackId: string): RunDocument |
     ceiling_usd: num(budget?.ceiling_usd) ?? num(doc.budget_usd),
     spent_usd: num(budget?.spent_usd),
     triage: toTriage(doc.triage),
+    cancelled: toCancellation(doc.cancelled),
     gates_policy: toGatesPolicy(doc.gates_policy),
     attended_by: nullableStr(doc.attended_by),
     build: toBuild(doc.build),
     phases: array(doc.phases).map(toPhase).filter((phase): phase is RunPhase => phase !== null),
   };
+}
+
+/**
+ * Absent on every run nobody cancelled. Read as tolerantly as the rest: the three
+ * keys are strings or the empty string, never a throw, because a viewer must not
+ * refuse to show a file it can otherwise read.
+ */
+function toCancellation(input: unknown): RunCancellation | null {
+  const cancelled = record(input);
+  if (cancelled === null) return null;
+  return { by: str(cancelled.by), at: str(cancelled.at), note: str(cancelled.note) };
 }
 
 /** Absent on every run until a Build stage cuts a branch, which is most runs. */

@@ -367,3 +367,123 @@ async function stallAtReviewInSession(ws: BuildWorkspace, declared = 0): Promise
   await next(ws, { mode: "commit", at: "2026-09-02T09:30:00Z" });
   expect(storyFile(ws, "S1")).toContain("status: review");
 }
+
+/**
+ * The refusal has to come BEFORE the event, not after it (gh #87).
+ *
+ * `runExecutor` stamps a stage `running` and appends `stage.started` on its way
+ * in, before the executor has had a chance to say anything. #82 restores the
+ * STATUS when the executor turns out to be refusing a sequencing mistake, so
+ * `run.yml` comes back correct — but events.jsonl is append-only truth and the
+ * line cannot be unwritten. The live run left one behind on 2026-09-02T00:36:37Z:
+ * a `stage.started` with no matching `stage.done` or `stage.failed`, which
+ * `renderReplay` and anything counting starts read as a start.
+ *
+ * Measured as the WHOLE log, not as a `stage.started` count: a refusal that
+ * writes nothing must write nothing, and a count only ever catches the one event
+ * somebody thought of.
+ */
+describe("an out-of-order `--commit` writes no event either (gh #87)", () => {
+  test("`--commit` with no story in progress appends nothing to events.jsonl", async () => {
+    const ws = workspace();
+    const before = events(ws).length;
+    const startedBefore = countOf(ws, "stage.started");
+
+    await refusesWithoutTouchingAnything(
+      ws,
+      { mode: "commit", at: "2026-09-02T09:10:00Z" },
+      "no story is `in_progress`",
+    );
+
+    // The whole issue: a `--commit` never STARTS a stage — it settles a cycle a
+    // `--prepare` started — so there is no true `stage.started` to write here.
+    expect(countOf(ws, "stage.started")).toBe(startedBefore);
+    expect(events(ws).length).toBe(before);
+  });
+
+  test("`--commit --review` on a stage nothing has prepared appends nothing either", async () => {
+    const ws = workspace();
+    const before = events(ws).length;
+
+    await refusesWithoutTouchingAnything(
+      ws,
+      { mode: "commit", review: true, at: "2026-09-02T09:10:00Z" },
+      "no reviewer bundle is out",
+    );
+
+    expect(countOf(ws, "stage.started")).toBe(0);
+    expect(events(ws).length).toBe(before);
+  });
+});
+
+/**
+ * An UNREADABLE `result.json` is treated like an absent one, LOUDLY (gh #88).
+ *
+ * Owner decision, 2026-09-02: nothing was attempted here either — no sub-agent
+ * ran, no cent moved, no branch changed — and the fix is the same shape as the
+ * `absent` one, which is to rewrite the file and run the same command again.
+ * Failing the stage actively obstructs that fix: it demotes the stage out of
+ * `running`, and the phase-budget gate is skipped exactly when a stage IS
+ * `running`, which is how #82's live run took a `budget.blocked` it had not
+ * earned. A host that fat-fingers its JSON must not pay that tax.
+ *
+ * The other half of the decision is what stops this being a framework that
+ * shrugs at broken artefacts: corruption never passes silently. A typed event
+ * lands in events.jsonl naming the file and the parse error, so the log says a
+ * host wrote something it could not read even though the run did not move.
+ */
+describe("an unreadable result.json refuses loudly instead of failing the stage (gh #88)", () => {
+  test("the developer envelope: not valid JSON", async () => {
+    const ws = workspace();
+    expect((await next(ws, { mode: "prepare" })).code).toBe(0);
+    const path = join(ws.runDir, ".agent", "build", "S1", "result.json");
+    writeFileSync(path, "{ outputs: [s1.txt]  <- not JSON\n", "utf8");
+
+    await refusesWithoutTouchingAnything(
+      ws,
+      { mode: "commit", at: "2026-09-02T09:10:00Z" },
+      "is not valid JSON",
+    );
+    // The bundle is still out and the stage is still mid-handshake: rewrite the
+    // file and run the SAME command again.
+    expect(stageStatus(ws)).toBe("running");
+
+    const loud = events(ws).filter((e) => e.type === "result.unreadable");
+    expect(loud).toHaveLength(1);
+    expect(String(loud[0]!.payload.path)).toContain("result.json");
+    expect(String(loud[0]!.payload.error)).not.toBe("");
+    expect(String(loud[0]!.payload.error)).toContain("not valid JSON");
+  });
+
+  test("the developer envelope: valid JSON that is not an object", async () => {
+    const ws = workspace();
+    expect((await next(ws, { mode: "prepare" })).code).toBe(0);
+    writeFileSync(join(ws.runDir, ".agent", "build", "S1", "result.json"), "[1, 2, 3]\n", "utf8");
+
+    await refusesWithoutTouchingAnything(
+      ws,
+      { mode: "commit", at: "2026-09-02T09:10:00Z" },
+      "must be a JSON object",
+    );
+    expect(stageStatus(ws)).toBe("running");
+    expect(events(ws).filter((e) => e.type === "result.unreadable")).toHaveLength(1);
+  });
+
+  test("the reviewer envelope gets the same door", async () => {
+    const ws = workspace();
+    await stallAtReviewInSession(ws);
+    expect((await next(ws, { mode: "prepare", review: true, at: "2026-09-02T09:10:00Z" })).code).toBe(0);
+    writeFileSync(join(ws.runDir, ".agent", "build", "S1", "review", "result.json"), "{{\n", "utf8");
+
+    await refusesWithoutTouchingAnything(
+      ws,
+      { mode: "commit", review: true, at: "2026-09-02T09:20:00Z" },
+      "is not valid JSON",
+    );
+    expect(stageStatus(ws)).toBe("running");
+
+    const loud = events(ws).filter((e) => e.type === "result.unreadable");
+    expect(loud).toHaveLength(1);
+    expect(String(loud[0]!.payload.role)).toBe("reviewer");
+  });
+});

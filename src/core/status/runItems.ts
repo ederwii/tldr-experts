@@ -227,6 +227,11 @@ function summaryOf(run: RunFile, waiting: Waiting, blocked: readonly string[]): 
       return `run ${what} is ready to run its next stage`;
     case "done":
       return `run ${what} has no stage left to run but is still open`;
+    // A run somebody CLOSED (gh #86). Not "blocked at", which is what the
+    // default said and is the one thing it is not: nobody is waiting on it and
+    // there is nothing to unblock.
+    case "cancelled":
+      return `run ${what} was closed by hand — ${waiting.message}`;
     // The two kinds a RUNNING run wears. Both used to fall through to "is blocked
     // at", which is the same wrong word #60 was filed about: a bundle waiting on
     // the host, and a stage another process is holding, are states of work in

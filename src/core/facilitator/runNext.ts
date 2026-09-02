@@ -997,14 +997,33 @@ async function runExecutor(
   const effort = options.effort ?? spec.planned.effort ?? null;
   if (!started) {
     markRunning(store, phaseId, stageId, options.at);
-    store.append(event(options, store.runId, stageId, "stage.started", {
-      phase: phaseId,
-      model,
-      effort,
-      budget_usd: requireStage(store, phaseId, stageId).budget_usd,
-      mode: options.mode,
-      executor: phaseId,
-    }));
+    // `stage.started` is a claim that THIS invocation started the stage, and a
+    // `--commit` never does one (gh #87). It settles a cycle a `--prepare`
+    // started, so on the ordinary commit — the stage already `running` — no
+    // event was emitted here anyway. The stage NOT being running is what makes
+    // a commit out of order in the first place, and the executor is a few lines
+    // below with the refusal for it. Emitting first meant the refusal came too
+    // late to prevent anything: #82 restores the stage's STATUS, but the log is
+    // append-only and the line cannot be unwritten. The live run
+    // `260901-leaderboard-v2` left one behind at 2026-09-02T00:36:37Z — a
+    // `stage.started` with no matching `stage.done` or `stage.failed`, which
+    // `renderReplay` and anything counting starts read as a start.
+    //
+    // The STAMP stays, and only the event goes. A `--commit` that does settle a
+    // cycle on a stage something demoted (a stale `.lock` cleared, a failure the
+    // operator fixed) still needs `running` to finish through, and `markRunning`
+    // keeps the original `started_at` — so nothing is lost and nothing is
+    // claimed twice.
+    if (options.mode !== "commit") {
+      store.append(event(options, store.runId, stageId, "stage.started", {
+        phase: phaseId,
+        model,
+        effort,
+        budget_usd: requireStage(store, phaseId, stageId).budget_usd,
+        mode: options.mode,
+        executor: phaseId,
+      }));
+    }
     store.save();
   }
 
