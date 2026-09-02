@@ -420,6 +420,48 @@ Superseding is not retiring. Retire a fact when it should never have been record
 stale with no replacement (`retired: {at, by, reason}`, by hand); supersede it when a *different*
 answer is now the right one.
 
+### When the answer overtakes a document — the superseded stamp
+
+Every answer, `--supersede` or not, can flip something an **earlier phase already wrote down**. The
+plan says the trigger is inert; you answer Q4 three phases later and it is not. The fact is right,
+`questions.md` is right, `retro.md` is right — and `03-plan/stories/S4.md`, which is what anyone
+actually opens, still says the old thing.
+
+So when an answer is recorded, `tldrx` appends a marker to the earlier-phase documents the question
+**names**:
+
+```markdown
+<!-- tldrx:superseded F021 | q: Q4 | at: 2026-08-30T10:00:00Z | see: 04-build/questions.md -->
+> **Superseded in part by F021** — Q4 was answered after this document was written; the answer is
+> in `04-build/questions.md` and `.tldrx/memory/facts.yml`. This document was not reconciled:
+> where the two disagree, the fact is what the workspace believes.
+```
+
+**Which documents.** The ones the block names, and nothing else:
+
+- every `file` citation in its `Why asked:` `[src: …]` token that points at a `.md` file in an
+  **earlier** phase of the run. §2.7 already requires that token, so a question raised in Build
+  about a plan claim normally cites the plan claim — no new habit to learn. A citation into the
+  question's own phase is not a supersession (you are reading your own half-written page), and a
+  citation into source code names no phase document at all;
+- anything listed in an optional `affects:` key on the block's metadata comment, honoured wherever
+  it points inside the run. Use it when the honest citation is a `.cs` file rather than a document:
+
+```markdown
+<!-- id: Q4 | status: open | area: inventory | asked_by: developer | asked_at: 2026-08-30T09:00:00Z | affects: 02-how/design.md, 02-how/handoff.md -->
+```
+
+**What it is not.** It is a marker, not a reconciliation. Nothing in the document's own words is
+rewritten — knowing *which sentence* went stale means guessing, and a framework that guesses at
+content is the thing `[src: …]` exists to stop. Read the fact and the question; the document tells
+you they exist.
+
+**Properties worth relying on.** It is append-only (`appendFileSync` — no byte the phase wrote is
+read back or rewritten); idempotent per fact (the comment carries the id, so recording the same
+answer twice stamps once); and deliberately not a list item and not a citation, so a stamped
+`handoff.md` passes `claim-sources` and the §2.8 gate exactly as it did before. Each stamp appends
+one `doc.superseded` line to `events.jsonl`, which `tldrx replay` renders.
+
 ## `tldrx interview`
 
 Work through the open questions in the terminal, one at a time.

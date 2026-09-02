@@ -174,6 +174,12 @@ function bullet(item: NumberedEvent): string | null {
       return `${prefix}fact ${text(payload.supersedes) || "?"} SUPERSEDED by `
         + `${text(payload.fact) || "?"} (${q || "a question"}), ${actor}: `
         + `${text(payload.answer) || "no answer recorded"}`;
+    // The moment an earlier phase's document stopped being current. A narrative
+    // that showed the answer and not the documents it overtook is exactly the gap
+    // gh #104 measured — the flip was in the log and in none of the pages.
+    case "doc.superseded":
+      return `${prefix}${text(payload.doc) || "a phase document"} marked superseded in part by `
+        + `${text(payload.fact) || "?"} (${q || "a question"}) — the document itself was not reconciled`;
     case "map.refreshed": return `${prefix}map refreshed`;
     // Nothing moved and nothing was spent — but a host wrote an envelope it could
     // not read, and the run said so out loud rather than shrugging (gh #88). The
