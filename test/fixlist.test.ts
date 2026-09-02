@@ -457,7 +457,10 @@ describe("the spawned reviewer reaches the same verdict", () => {
     // gh #77: the refusal says WHY the citation was not read, not just that it was not.
     expect(outcome.lines.join("\n")).toContain("is `refuted` and its citation was not read");
     expect(outcome.lines.join("\n")).toContain("must END with a `[src: …]` token that parses");
-    expect(outcome.lines.join("\n")).toContain("does not buy a free round");
+    // The unreadable envelope does not get the third VERDICT — the thing this
+    // test is about. It DOES get a bounded free correction (#78, #79), which is
+    // a different grant, so the line says which one was refused.
+    expect(outcome.lines.join("\n")).toContain("does not grant a fix-list round");
     expect(readReviewLedger(ws.runDir, "S1").fixlistRounds).toBe(0);
   }, 90_000);
 });
@@ -570,7 +573,7 @@ describe("parseReview and the third verdict", () => {
       .toBe("approve");
     expect(parseReview("not an object", "fallback")).toEqual({
       verdict: "changes", summary: "fallback", findings: [], fixlist: [], fixlistProblems: [],
-      grammarProblems: [],
+      formatProblems: [],
       // No envelope carried no verdict: the summary already says what happened,
       // so there is no second sentence to add (gh #36).
       verdictProblem: null,

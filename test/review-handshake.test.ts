@@ -330,14 +330,25 @@ describe("--commit --review", () => {
     await stallAtReview(ws);
     await next(ws, { mode: "prepare", at: "2026-08-29T10:05:00Z" });
 
-    // Present, parseable JSON, and meaningless. Fail-closed: an unreadable
-    // verdict must never buy a sign-off.
-    answerReview(ws, "S1", { nonsense: true });
-    await next(ws, { mode: "commit", review: true, at: "2026-08-29T10:20:00Z" });
+    // Present, parseable JSON, and meaningless — it declares no `verdict` at
+    // all. Fail-closed: an unreadable verdict must never buy a sign-off.
+    //
+    // gh #79 changed WHEN it is written down, not what it is written down as.
+    // An envelope refused for its SHAPE now buys a bounded free correction
+    // (`MAX_FORMAT_RETRIES`), so the first two are re-prompted and the third is
+    // recorded as the `changes` this always fell to. Never `approve`, at any
+    // point in that sequence — which is the invariant this test is named for.
+    const verdicts = (): readonly unknown[] =>
+      events(ws).filter((e) => e.payload.check === "review").map((e) => e.payload.verdict);
+    for (const at of ["10:20", "10:30", "10:40"]) {
+      answerReview(ws, "S1", { nonsense: true });
+      await next(ws, { mode: "commit", review: true, at: `2026-08-29T${at}:00Z` });
+      expect(verdicts()).not.toContain("approve");
+    }
 
     expect(story(ws, "S1")).toContain("status: review");
-    expect(events(ws).filter((e) => e.payload.check === "review").at(-1)?.payload.verdict).toBe("changes");
-  }, 60_000);
+    expect(verdicts().at(-1)).toBe("changes");
+  }, 90_000);
 
   test("with no bundle out it says so, and settles nothing", async () => {
     const ws = workspace();
@@ -564,11 +575,24 @@ describe("the verdict enum is stated and an unknown one is announced (#36)", () 
     answerReview(ws, "S1", { verdict: "sign", summary: "the diff is clean", findings: [] });
     const committed = await next(ws, { mode: "commit", review: true, at: "2026-08-29T10:20:00Z" });
 
-    // Fail-closed, unchanged.
-    expect(events(ws).filter((e) => e.payload.check === "review").at(-1)?.payload.verdict).toBe("changes");
-    // Loud, and attributable: the operator can see WHICH word was not understood.
+    // Loud, and attributable: the operator can see WHICH word was not
+    // understood. This half is #36 itself and gh #79 does not touch it — what
+    // #79 changed is the PRICE of the mistake, never the message.
     const said = committed.lines.join("\n");
     expect(said).toContain("sign");
     expect(said).toContain("approve|fixlist|changes");
-  }, 60_000);
+    // A verdict word outside the enum is a FORM fault (#79), so the first two
+    // are re-prompted for free and nothing NEW is recorded against the story.
+    // Measured as a delta, because `stallAtReview` leaves an errored review of
+    // its own on the ledger and that one is not a verdict this test wrote.
+    const verdicts = (): readonly unknown[] =>
+      events(ws).filter((e) => e.payload.check === "review").map((e) => e.payload.verdict);
+    expect(verdicts()).toEqual(["error"]);
+    // …and past the bound it is the fail-closed `changes` it always was.
+    for (const at of ["10:30", "10:40"]) {
+      answerReview(ws, "S1", { verdict: "sign", summary: "the diff is clean", findings: [] });
+      await next(ws, { mode: "commit", review: true, at: `2026-08-29T${at}:00Z` });
+    }
+    expect(verdicts().at(-1)).toBe("changes");
+  }, 90_000);
 });

@@ -1,5 +1,5 @@
 /**
- * gh #78 — what a story's ATTEMPT is allowed to be spent on.
+ * gh #78, gh #79 — what a story's ATTEMPT is allowed to be spent on.
  *
  * Measured on run `260830-ordering-inventory` (2026-09-01), in that run's own
  * `events.jsonl` and `04-build/log/`: S2, S3 and S5 each recorded
@@ -10,15 +10,22 @@
  * the reviewer's report — and every one of them was charged to the story as a
  * failure of its WORK: one of two attempts, gone, on a diff nobody faulted.
  *
- * Owner decision (2026-09-01, on the issue): a claim-sources/grammar rejection
- * of a review envelope re-prompts for a corrected envelope WITHOUT consuming an
- * attempt, bounded at `MAX_GRAMMAR_RETRIES`; the one after that consumes it
- * exactly as today, so a reviewer that cannot write the grammar at all still
- * settles instead of looping for free.
+ * Owner decision (2026-09-01, on #78): a claim-sources rejection of a review
+ * envelope re-prompts for a corrected envelope WITHOUT consuming an attempt,
+ * bounded at `MAX_FORMAT_RETRIES`; the one after that consumes it exactly as
+ * before, so a reviewer that cannot write the grammar at all still settles
+ * instead of looping for free.
+ *
+ * Owner decision (2026-09-01, on #79): the same treatment for ALL envelope-FORMAT
+ * refusals — a missing `disposition`, a row that is not an object, an empty
+ * `fixlist[]`, a verdict word outside the enum (#36). One mental model: **FORM
+ * never costs an attempt, CONTENT/WORK always does.** What #78 built narrowly,
+ * #79 widened without touching the bound, the counter or the event.
  *
  * The scope guard is half the feature, so half the tests are pins: a verdict's
- * CONTENT, a DoD failure, an envelope refused for anything other than the
- * citation grammar — all keep the cost they have today, to the event.
+ * CONTENT and a DoD failure keep the cost they have today, to the event — and
+ * the free round is granted only when the typed index claims EVERY reason the
+ * envelope was refused, which is the pin that has to outlive the next widening.
  *
  * "Spends no attempt" is measured off `readReviewLedger`, which is the counter
  * the requeue actually reads, and off `events.jsonl`, never off prose in a log.
@@ -28,7 +35,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import {
-  isGrammarRejection, MAX_GRAMMAR_RETRIES, parseReview, renderGrammarRefusal,
+  isFormatRejection, MAX_FORMAT_RETRIES, parseReview, renderFormatRefusal,
 } from "../src/core/build/review.ts";
 import { parseFixFindings } from "../src/core/build/fixlist.ts";
 import { SRC_GRAMMAR_HEADING } from "../src/core/text/srcGrammarContract.ts";
@@ -81,10 +88,10 @@ const CITATION_FIXED: readonly Record<string, unknown>[] = [
 ];
 
 /**
- * Refused for something that is NOT the citation grammar. This is the pin: the
- * envelope is still unreadable and still falls to `changes`, and it still costs
- * the attempt, because widening the free retry past the claim-sources check is a
- * decision nobody has made.
+ * Refused for a SHAPE fault rather than a citation one: `wontfix` is not one of
+ * the four dispositions. Under #78 this was the pin that the free retry stopped
+ * at the claim-sources check; under #79 it is one of the four newly-free classes
+ * the owner named, and the pin moved to what a refusal is ABOUT (see below).
  */
 const BAD_DISPOSITION: readonly Record<string, unknown>[] = [
   {
@@ -94,6 +101,20 @@ const BAD_DISPOSITION: readonly Record<string, unknown>[] = [
     where: "src/stock.ts:120",
     disposition: "wontfix",
     detail: "IStockPort promises a failure Result and throws instead.",
+  },
+];
+
+/** A row that is not a finding object at all — `finding N is not an object`. */
+const NON_OBJECT_ROW: readonly unknown[] = ["a bare string where a finding object belongs"];
+
+/** A finding object with everything but the one field that names it. */
+const NO_FINDING_TEXT: readonly Record<string, unknown>[] = [
+  {
+    n: 1,
+    severity: "high",
+    where: "src/stock.ts:120",
+    disposition: "fix-now",
+    detail: "the heading is missing and there is nothing to call this finding.",
   },
 ];
 
@@ -263,7 +284,7 @@ describe("#78 — a claim-sources rejection re-prompts and spends no attempt", (
   }, 120_000);
 });
 
-describe("#78 scope guard — every other rejection costs exactly what it did", () => {
+describe("#78 scope guard — a judgement about the WORK costs exactly what it did", () => {
   test("a CONTENT `changes` still consumes the attempt, and records no free retry", async () => {
     const ws = workspace();
     process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes", "changes"] });
@@ -276,19 +297,6 @@ describe("#78 scope guard — every other rejection costs exactly what it did", 
     expect(retries(ws)).toEqual([]);
   }, 90_000);
 
-  test("an envelope refused for something OTHER than the citation grammar still costs one", async () => {
-    const ws = workspace();
-    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["fixlist", "approve"] });
-    process.env.FAKE_BUILD_FIXLIST = JSON.stringify({ S1: BAD_DISPOSITION });
-
-    await next(ws);
-
-    // Unreadable, fail-closed to `changes`, counted — the pre-#78 behaviour.
-    expect(verdicts(ws)).toEqual(["changes", "approve"]);
-    expect(retries(ws)).toEqual([]);
-    expect(readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8")).toContain("Attempt: 2");
-  }, 120_000);
-
   test("a red DoD still blocks the story — nothing here touches that path", async () => {
     // Red only once the developer has written into the worktree, so the base
     // tree stays green and Build is not refused for a workspace-config fault.
@@ -299,6 +307,100 @@ describe("#78 scope guard — every other rejection costs exactly what it did", 
     expect(story(ws, "S1")).toContain("status: blocked");
     expect(retries(ws)).toEqual([]);
   }, 90_000);
+});
+
+/**
+ * gh #79 — the same free round, for every FORMAT refusal of the envelope.
+ *
+ * #78 drew the scope at the claim-sources check because that is what the
+ * evidence named, and filed the rest. Owner decision (2026-09-01, on #79): all
+ * of it, one mental model — **FORM never costs an attempt, CONTENT/WORK always
+ * does.** A missing `disposition`, a row that is not an object, an empty
+ * `fixlist[]`, a verdict word outside the enum (#36's loud error): each is a
+ * fault in how the reviewer wrote its REPORT, none of them is a fault in the
+ * diff, and each now buys the same bounded re-prompt a mis-placed `[src: …]`
+ * bought under #78.
+ *
+ * Every test here is the same measurement #78's are: the story's attempt count
+ * off `readReviewLedger` and `04-build/log/`, the free round off
+ * `story.review_retried` in `events.jsonl`. Never off prose in a log.
+ */
+describe("#79 — every envelope-FORMAT refusal re-prompts, not just the citation", () => {
+  /**
+   * One refused envelope, then a good one. Asserts the whole economy at once:
+   * the refusal is not a verdict, the story keeps attempt 1, and the free round
+   * is on the record saying what was wrong with it.
+   */
+  async function freeRound(
+    ws: BuildWorkspace,
+    said: string,
+  ): Promise<void> {
+    await next(ws);
+
+    expect(story(ws, "S1")).toContain("status: done");
+    // The refused envelope is not a verdict: only the corrected one is counted.
+    expect(verdicts(ws)).toEqual(["approve"]);
+    expect(readReviewLedger(ws.runDir, "S1").verdicts).toBe(1);
+    // The work was never faulted, so the story finishes on its FIRST attempt.
+    expect(readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8")).toContain("Attempt: 1");
+    // And the free round is on the record, with the refusal that earned it.
+    const retried = retries(ws);
+    expect(retried).toHaveLength(1);
+    expect(retried[0]?.story).toBe("S1");
+    expect(String(retried[0]?.detail ?? "")).toContain(said);
+  }
+
+  test("a finding with no valid `disposition` is re-prompted, and costs no attempt", async () => {
+    const ws = workspace();
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["fixlist", "approve"] });
+    process.env.FAKE_BUILD_FIXLIST = JSON.stringify({ S1: BAD_DISPOSITION });
+
+    await freeRound(ws, "disposition");
+  }, 120_000);
+
+  test("a fix-list row that is not an object is re-prompted, and costs no attempt", async () => {
+    const ws = workspace();
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["fixlist", "approve"] });
+    process.env.FAKE_BUILD_FIXLIST = JSON.stringify({ S1: NON_OBJECT_ROW });
+
+    await freeRound(ws, "is not an object");
+  }, 120_000);
+
+  test("an EMPTY `fixlist[]` is re-prompted, and costs no attempt", async () => {
+    const ws = workspace();
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["fixlist", "approve"] });
+    process.env.FAKE_BUILD_FIXLIST = JSON.stringify({ S1: [] });
+
+    await freeRound(ws, "is empty");
+  }, 120_000);
+
+  test("a verdict WORD outside the enum is re-prompted, and costs no attempt (#36)", async () => {
+    const ws = workspace();
+    // `sign` is the GATE vocabulary reached for by a story reviewer — #36's own
+    // example. It is a word, not a judgement: nothing about the diff was said
+    // wrong, so nothing about the diff is charged for it.
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["sign", "approve"] });
+
+    await freeRound(ws, "sign");
+  }, 120_000);
+
+  test("the bound is the SHAPE refusal's too — the third one costs the attempt", async () => {
+    const ws = workspace();
+    // Three refused envelopes: two free, the third counted. Then the developer
+    // gets its second attempt and the fourth reviewer approves. Identical to
+    // #78's citation bound, which is the point: one counter, one economy.
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({
+      S1: ["fixlist", "fixlist", "fixlist", "approve"],
+    });
+    process.env.FAKE_BUILD_FIXLIST = JSON.stringify({ S1: BAD_DISPOSITION });
+
+    await next(ws);
+
+    expect(retries(ws)).toHaveLength(2);
+    expect(verdicts(ws)).toEqual(["changes", "approve"]);
+    expect(story(ws, "S1")).toContain("status: done");
+    expect(readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8")).toContain("Attempt: 2");
+  }, 150_000);
 });
 
 describe("#78 through the host handshake — the same rule, the other door", () => {
@@ -345,7 +447,7 @@ describe("#78 through the host handshake — the same rule, the other door", () 
     expect(verdicts(ws)).toEqual(["error", "changes"]);
     expect(readReviewLedger(ws.runDir, "S1").verdicts).toBe(1);
     // The round closed, so the counter is back to zero for the next envelope.
-    expect(readReviewLedger(ws.runDir, "S1").grammarRetries).toBe(0);
+    expect(readReviewLedger(ws.runDir, "S1").formatRetries).toBe(0);
   }, 90_000);
 });
 
@@ -354,7 +456,7 @@ describe("#78 through the host handshake — the same rule, the other door", () 
  * first, which is the point of writing it as a predicate rather than as a
  * condition inline in the executor.
  */
-describe("isGrammarRejection — the scope guard, in one predicate", () => {
+describe("isFormatRejection — the scope guard, in one predicate", () => {
   function refused(fixlist: readonly Record<string, unknown>[]) {
     return parseReview({ verdict: "fixlist", summary: "I would sign this", findings: [], fixlist }, "");
   }
@@ -362,66 +464,107 @@ describe("isGrammarRejection — the scope guard, in one predicate", () => {
   test("a mis-placed [src: …] on a `refuted` finding is one", () => {
     const review = refused(CITATION_MID_LINE);
     expect(review.verdict).toBe("changes");
-    expect(review.grammarProblems).toHaveLength(1);
+    expect(review.formatProblems).toHaveLength(1);
     // The subset is a subset: an operator still reads every refusal.
-    expect(review.fixlistProblems).toEqual(review.grammarProblems);
-    expect(isGrammarRejection(review)).toBe(true);
+    expect(review.fixlistProblems).toEqual(review.formatProblems);
+    expect(isFormatRejection(review)).toBe(true);
   });
 
   test("a citation the parser CAN read is not refused at all", () => {
     const review = refused(CITATION_FIXED);
     expect(review.verdict).toBe("fixlist");
-    expect(review.grammarProblems).toEqual([]);
-    expect(isGrammarRejection(review)).toBe(false);
+    expect(review.formatProblems).toEqual([]);
+    expect(isFormatRejection(review)).toBe(false);
   });
 
-  test("an envelope refused for anything else is NOT one", () => {
-    for (const envelope of [
-      { verdict: "fixlist", summary: "s", findings: [] },                        // no fixlist[]
-      { verdict: "fixlist", summary: "s", findings: [], fixlist: [] },           // empty
-      { verdict: "fixlist", summary: "s", findings: [], fixlist: BAD_DISPOSITION },
-      { verdict: "changes", summary: "the criteria are not met", findings: [] }, // content
-      { verdict: "approve", summary: "ok", findings: [] },
-    ]) {
-      expect(isGrammarRejection(parseReview(envelope, ""))).toBe(false);
+  test("every envelope-FORMAT refusal is one (#79)", () => {
+    // The owner's list, verbatim from the #79 decision, each as the envelope
+    // that produces it. All FORM, none of them a word about the diff.
+    for (const [why, envelope] of [
+      ["no `fixlist[]` at all", { verdict: "fixlist", summary: "s", findings: [] }],
+      ["an empty `fixlist[]`", { verdict: "fixlist", summary: "s", findings: [], fixlist: [] }],
+      ["a row that is not an object", { verdict: "fixlist", summary: "s", findings: [], fixlist: NON_OBJECT_ROW }],
+      ["a row with no `finding` text", { verdict: "fixlist", summary: "s", findings: [], fixlist: NO_FINDING_TEXT }],
+      ["no valid `disposition`", { verdict: "fixlist", summary: "s", findings: [], fixlist: BAD_DISPOSITION }],
+      ["a verdict word outside the enum", { verdict: "sign", summary: "s", findings: [] }],
+    ] as const) {
+      const review = parseReview(envelope, "");
+      expect(review.verdict, why).toBe("changes");
+      expect(isFormatRejection(review), why).toBe(true);
     }
   });
 
-  test("a MIXED refusal costs the attempt — one bad citation does not excuse the rest", () => {
+  test("two FORMAT faults in one envelope are still only format (#79)", () => {
+    // #78 charged this as MIXED, because half of it was outside its scope. With
+    // one classifier over both, it is what it always was: a badly written report.
     const review = refused([...CITATION_MID_LINE, ...BAD_DISPOSITION]);
-    expect(review.grammarProblems).toHaveLength(1);
     expect(review.fixlistProblems).toHaveLength(2);
-    expect(isGrammarRejection(review)).toBe(false);
+    expect(review.formatProblems).toEqual(review.fixlistProblems);
+    expect(isFormatRejection(review)).toBe(true);
   });
 
-  test("an unreadable verdict WORD keeps its own fault, and its own cost (#36)", () => {
-    // `sign` is the gate vocabulary; #36 named it out loud and it still costs an
-    // attempt. A `fixlist[]` beside it does not turn that into a formatting slip.
+  test("a judgement about the WORK is never one", () => {
+    for (const [why, envelope] of [
+      ["a content `changes`", { verdict: "changes", summary: "the criteria are not met", findings: ["a"] }],
+      ["a bare content `changes`", { verdict: "changes", summary: "the criteria are not met", findings: [] }],
+      ["an approval", { verdict: "approve", summary: "ok", findings: [] }],
+      ["no envelope at all", null],
+    ] as const) {
+      expect(isFormatRejection(parseReview(envelope, "the reviewer said nothing")), why).toBe(false);
+    }
+  });
+
+  test("a refusal the classifier does not INDEX keeps its cost — the guard is the index", () => {
+    // The MIXED pin, in the only form that can outlive #79: every refusal
+    // `parseFixFindings` raises today is a FORM fault, so a format-plus-content
+    // envelope cannot be built out of one. What survives the widening is the
+    // MECHANISM — the free round is granted only when the typed index claims
+    // EVERY reason the envelope was refused. A future refusal about the WORK
+    // that forgets to index itself is charged, which is the safe direction.
+    const real = refused(CITATION_MID_LINE);
+    const mixed = {
+      ...real,
+      fixlistProblems: [...real.fixlistProblems, "the diff does not do what the story asked for"],
+    };
+    expect(isFormatRejection(mixed)).toBe(false);
+  });
+
+  test("an unreadable verdict WORD keeps #36's message, and #79 makes it FORM", () => {
+    // `sign` is the gate vocabulary reached for by a story reviewer. #36 named
+    // it out loud and that message is unchanged; what changed is the price. It
+    // is a word the enum does not have, not a sentence about the diff.
     const review = parseReview({ verdict: "sign", summary: "s", findings: [], fixlist: CITATION_MID_LINE }, "");
     expect(review.verdictProblem).toContain("sign");
-    expect(isGrammarRejection(review)).toBe(false);
+    // The refusal has to REACH the corrected envelope's prompt, so the verdict
+    // fault is indexed like any other — the executor renders this exact list.
+    expect(review.formatProblems).toContain(review.verdictProblem ?? "");
+    expect(isFormatRejection(review)).toBe(true);
   });
 
   test("the re-prompt carries #77's diagnosis verbatim — rule named, line quoted", () => {
     const parsed = parseFixFindings(CITATION_MID_LINE);
-    expect(parsed.grammar).toHaveLength(1);
+    expect(parsed.format).toHaveLength(1);
     const said = parsed.problems[0] ?? "";
     // #77's contract, not #78's: the rule it enforced, the line it read, and a
     // corrected one. #78 owns none of these words and re-words none of them.
     expect(said).toContain("trailing-position");
     expect(said).toContain("the CHECK cannot see this class of oversell [src: app:s1.txt:1]");
-    const prompt = renderGrammarRefusal(parsed.problems);
+    const prompt = renderFormatRefusal(parsed.problems);
     expect(prompt).toContain(said);
-    expect(prompt).toContain(String(MAX_GRAMMAR_RETRIES));
+    expect(prompt).toContain(String(MAX_FORMAT_RETRIES));
     // …and it points at the grammar #77 splices into the same prompt rather than
     // restating it. Two copies of a grammar is the thing #77 exists to abolish.
     expect(prompt).toContain(SRC_GRAMMAR_HEADING);
   });
 
   test("#78 indexes #77's refusals, it does not re-word or filter them", () => {
-    const parsed = parseFixFindings(CITATION_MID_LINE);
-    // `grammar` is a SUBSET of `problems`, sharing the identical strings — so a
-    // change to the message cannot silently change what counts as free.
-    expect(parsed.grammar).toEqual(parsed.problems);
+    // The index is a SUBSET of `problems`, sharing the identical strings — so a
+    // change to the message cannot silently change what counts as free. True of
+    // every shape #79 added, not only of the citation #78 started with.
+    for (const fixlist of [CITATION_MID_LINE, BAD_DISPOSITION, NON_OBJECT_ROW, NO_FINDING_TEXT, []]) {
+      const parsed = parseFixFindings(fixlist);
+      expect(parsed.problems.length).toBeGreaterThan(0);
+      expect(parsed.format).toEqual(parsed.problems);
+    }
   });
 });

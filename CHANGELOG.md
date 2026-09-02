@@ -397,15 +397,49 @@
     the refusal. `readReviewLedger` counts them, which is how the bound survives a fresh
     `tldrx next` and the one-envelope-per-process host handshake alike. Each re-prompt is a real
     metered turn and gets its own task row: it costs the story no attempt, never no money.
-  - **Scope guard, pinned by test.** Only the claim-sources grammar. A verdict's CONTENT, a red DoD,
-    an unreadable verdict WORD (#36), an envelope with no readable `disposition`, and a MIXED
-    refusal (one bad citation beside another shape problem) all keep exactly the cost they had.
-  - **The message is #77's, inherited rather than copied.** The re-prompt carries
-    `fixlistProblems` verbatim and points at the `Citation grammar` section #77 splices into the
+  - **Scope guard, pinned by test.** Only the claim-sources grammar — *widened to every
+    envelope-FORMAT refusal by #79 below, in the same release.* A verdict's CONTENT and a red DoD
+    keep exactly the cost they had.
+  - **The message is #77's, inherited rather than copied.** The re-prompt carries the refusals
+    verbatim and points at the `Citation grammar` section #77 splices into the
     same prompt, so the reviewer is told which rule it broke, on which line, with a corrected
-    example — and there is no second copy of the grammar to keep in step. `ParsedFixlist.grammar`
+    example — and there is no second copy of the grammar to keep in step. The classifier
     is a typed INDEX over `problems`, not a second list, precisely so #78 could not end up
     string-matching the text #77 was rewriting.
+
+- **Every envelope-FORMAT refusal gets that same free round, not just the citation (#79).** #78 drew
+  its scope at the claim-sources check because that is what the evidence named, and filed the rest.
+  But `parseFixFindings` refuses an envelope for five other shapes — a `fixlist` that is missing,
+  not an array or empty; a row that is not an object; a row with no `finding` text; a row with no
+  valid `disposition` — and `parseReview` refuses a sixth, a verdict WORD outside the enum (#36).
+  Every one of them is a fault in how the reviewer wrote its *report*, exactly the argument #78 made,
+  and every one of them still cost the story an attempt. Owner decision (2026-09-01, on the issue):
+  all of it, **one mental model — FORM never costs an attempt, CONTENT/WORK always does.**
+  - **Nothing about the mechanism changed.** Same bound (two per envelope round, the third is the
+    ordinary `changes`), same counter, same `story.review_retried` event, same two doors, same
+    per-turn metering. #79 widened *what earns a correction* and touched nothing else.
+  - **The verdict WORD (#36) is now free too, and #36's message is unchanged.** A reviewer that
+    writes `sign` — the gate vocabulary — said nothing wrong about the diff; it reached for a word
+    the story enum does not have. It is told so, by name, and asked again. `Review.formatProblems`
+    is the union of the fix-list index and that verdict fault, because it is also what the corrected
+    envelope's prompt is rendered from: a refusal missing from it is one the reviewer is never told
+    about.
+  - **The guard is the INDEX, which is what survives the next widening.** `ParsedFixlist.format`
+    stays a typed subset of `problems`, built one push site at a time through a single
+    `refuseFormat` helper — never a second list of strings, and never "everything `parseFixFindings`
+    said". The free round is granted only when the index claims **every** reason the envelope was
+    refused, so a refusal about the WORK added later costs the attempt until somebody deliberately
+    indexes it as form. Defaulting to *costs* is the direction a mistake is recoverable in.
+  - **A non-empty `findings[]` is deliberately NOT the content signal**, though it is the obvious
+    candidate. Measured across the nine `aparece-v2` runs (2026-09-01): all 25 recorded review logs
+    carry a non-empty `findings[]` and all 25 are `approve` — the one verdict whose own prompt line
+    says *"Empty on `approve`"*. Reviewers use it as a narrative evidence log whatever the verdict,
+    so gating on it would have made the free round almost never fire and quietly narrowed #78 as
+    well. A judgement about the work is caught where it is actually stated: a declared `changes`
+    raises no format refusal at all, so it costs its attempt.
+  - **Nine tests red first**, each newly-free class proven to re-prompt without spending an attempt
+    and to record the event, plus the bound re-proven on a shape refusal. #78's CONTENT and DoD pins
+    are unchanged and still green.
 
 - **`merge-wave.sh` no longer leaves a conflicted tree behind, wedging every queued sibling (#76).**
   On a merge conflict the script exited `2` **without** `git merge --abort`, and the `EXIT` trap

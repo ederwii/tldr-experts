@@ -49,12 +49,14 @@ import {
  * envelope's `stage` carries the stage or null. It mutates nothing — see
  * `run/operatorNote.ts`.
  *
- * `story.review_retried` was added 2026-09-01 (issue #78), and it is the one event
- * whose whole job is to say that something did NOT happen: a story's attempt was
- * not spent. A review envelope refused by the claim-sources check is a formatting
- * fault in the reviewer's REPORT, not a fault in the diff, so the framework asks
- * for a corrected envelope instead of charging the story one of its two attempts
- * (owner decision, 2026-09-01). Attempt bookkeeping that changes with nothing in
+ * `story.review_retried` was added 2026-09-01 (issue #78, widened by #79), and it
+ * is the one event whose whole job is to say that something did NOT happen: a
+ * story's attempt was not spent. A review envelope refused for its FORMAT — an
+ * unparseable `[src: …]` on a `refuted` finding, a missing `disposition`, a row
+ * that is not an object, an empty `fixlist[]`, a verdict word outside the enum —
+ * is a fault in the reviewer's REPORT, not a fault in the diff, so the framework
+ * asks for a corrected envelope instead of charging the story one of its two
+ * attempts (owner decisions, 2026-09-01). Attempt bookkeeping that changes with nothing in
  * the log would be unauditable, which is what this event is for: its payload
  * carries the story, the attempt it did not spend, which retry this was and the
  * bound, and the refusal verbatim. `readReviewLedger` counts them, and that count
