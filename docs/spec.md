@@ -2415,8 +2415,15 @@ share it used before plan prices were read at all, and it says so in one line ra
 money.
 
 `03-plan/budget.yml` prices a story in its `per_phase_usd:` map — which the Plan writes and the Plan gate validates,
-and which nothing read until this date — that story's developer cap is `price ÷ (MAX_ATTEMPTS × (1 + REVIEWER_SHARE))`
-and its reviewer's a `REVIEWER_SHARE` of that. Prices summing to more than the stage are scaled down proportionally, so
+and which nothing read until this date — that story's developer cap is `price ÷ developerPriceDivisor(attempt)`:
+`price ÷ (1 + REVIEWER_SHARE)` on **attempt 1**, the pass the plan priced, and
+`price ÷ (MAX_ATTEMPTS × (1 + REVIEWER_SHARE))` on the contingency attempt after it. Its reviewer's cap is a
+`REVIEWER_SHARE` of the worst-case figure, on every attempt. Both attempts used the worst-case figure until
+2026-09-02, when gh #91 measured run `260901-leaderboard-v2` dispatching a story the plan priced at $2.10 under an
+$0.84 ceiling — a deliberately-atomic large story starving on the only attempt that mattered. The change raises the
+worst case ONE priced story can be asked for from `0.8 × price` to `1.2 × price`; the phase ceiling is metered once,
+at stage entry, and `remainingWork` still clamps the brake to the stage's own price.
+Prices summing to more than the stage are scaled down proportionally, so
 the plan's ratio survives and the total cannot escape the ceiling; an unparseable or invalid file is an advisory on
 stderr and the uniform split. Measured before it: a seven-story plan pricing S1 at $4.75 and S2 at $0.75 gave both
 $1.03. **The reviewer also has a floor** (`REVIEWER_FLOOR_USD`, $1.00), clamped by what the stage has left and by

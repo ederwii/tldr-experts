@@ -369,6 +369,42 @@
     tmpdir and never removed — 1300 `mw-*` directories had accumulated there by the time #95 was
     filed, including the one it tripped on.
 
+- **A story's first attempt is dispatched at what the plan priced it, not at that figure halved
+  again (#91).** `03-plan/budget.yml` has been read since 2026-08-30, but the price it carries was
+  divided by the worst case ONE story can be asked for — `MAX_ATTEMPTS × (1 + REVIEWER_SHARE)` =
+  2.5 — before a single attempt had run. Measured on run `260901-leaderboard-v2` (finding F-4):
+  Delivery priced S2 at $2.10 of a $3.85 Build stage and the developer was dispatched under
+  **$0.84**. A deliberately-atomic large story starved on the one attempt that mattered while
+  trivial ones carried slack, and the plan's own measured pricing — the whole point of writing the
+  file — was thrown away in the arithmetic that read it.
+  - **`developerPriceDivisor(attempt)`** now decides it. Attempt 1 is the pass Delivery priced and
+    gets `price / (1 + REVIEWER_SHARE)` — the whole price less the reviewer's derived quarter, so
+    S2's ceiling goes $0.84 → **$1.68**. Attempt 2 is a contingency nobody priced and keeps the
+    pre-#91 figure, `price / (MAX_ATTEMPTS × (1 + REVIEWER_SHARE))`. No attempt is ever handed less
+    than it was handed before.
+  - **The even split is untouched.** A plan with no `budget.yml`, one that does not validate, one
+    priced in `host-tokens`, and any story the plan did not name all still get
+    `stage / (stories × attempts × 1.25)`, pinned by tests that were green before this change and
+    are green after it.
+  - **What this costs, stated.** The worst case one PRICED story can be asked for goes from
+    `0.8 × price` to `1.2 × price`. The phase ceiling is metered once, at stage entry —
+    `runNext.runExecutor` skips the brake while a stage is `running` — so nothing re-checks the
+    envelope between two spawns of the same headless `runAll`; that is the window
+    `REVIEWER_FLOOR_USD` already opens by design. `priceScale` still holds the sum of the declared
+    prices inside the stage, and `remainingWork` still clamps the brake's estimate to the stage's
+    own price, so the brake can never refuse more often than it used to. The measured REMAINDER of
+    a story's price would be tighter on the second attempt, and is recoverable (`agent.result`
+    carries `key` = the story id and a row-level `cost_usd`) — it is not read, because the
+    budget-gate hook's `remainingWork` would have to read the same ledger on its hot path to stay
+    in step, and the worst case is `0.8 + 0.4` either way.
+  - **`remainingWork` mirrors the schedule, turn by turn.** `RemainingStory` gains
+    `developerCapsUsd` — one cap per turn still to dispatch, in the order they run — because
+    `cap × turns` stopped being the truth. The turns still to run are the LAST of the story's run
+    of attempts, so a story with one attempt behind it is priced as the attempt 2 it is about to
+    become. `renderRemainingWork` prints `dev $1.20 ×2` while the turns cost the same and
+    `dev $3.60 + $1.80` once they do not, so the total on the line still adds up. A test asserts
+    the mirrored divisor equals the executor's own, as it already did for the three constants.
+
 - **The merge lock now has something to say about raw git in the shared checkout (#89).** The
   lock serialises merge-wave INVOCATIONS; it never serialised git. Measured 2026-09-02: while
   agent A's gates were running, agent B typed `git reset --hard origin/main` into the same

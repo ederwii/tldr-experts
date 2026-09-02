@@ -20,13 +20,14 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
-  MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE,
+  MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE, developerPriceDivisor,
   remainingWork, remainingWorkContext, renderRemainingWork, reviewVerdictsByStory,
 } from "../src/core/budget/remainingWork.ts";
 import {
   MAX_ATTEMPTS as BUILD_MAX_ATTEMPTS,
   REVIEWER_FLOOR_USD as BUILD_REVIEWER_FLOOR_USD,
   REVIEWER_SHARE as BUILD_REVIEWER_SHARE,
+  developerPriceDivisor as buildDeveloperPriceDivisor,
   readReviewLedger,
 } from "../src/core/facilitator/executors/build.ts";
 import { buildBudgetView, renderBudget } from "../src/core/budget/budgetView.ts";
@@ -142,6 +143,17 @@ describe("the cap constants are mirrored, not guessed", () => {
     expect(REVIEWER_SHARE).toBe(BUILD_REVIEWER_SHARE);
     expect(REVIEWER_FLOOR_USD).toBe(BUILD_REVIEWER_FLOOR_USD);
   });
+
+  test("and so does the per-attempt divisor gh #91 introduced", () => {
+    // A schedule restated wrong is worse than a constant restated wrong: it would
+    // put the brake's estimate and the executor's spend on different attempts.
+    for (const attempt of [0, 1, 2, 3, 9]) {
+      expect([attempt, developerPriceDivisor(attempt)])
+        .toEqual([attempt, buildDeveloperPriceDivisor(attempt)]);
+    }
+    expect(developerPriceDivisor(1)).toBe(1 + REVIEWER_SHARE);
+    expect(developerPriceDivisor(2)).toBe(MAX_ATTEMPTS * (1 + REVIEWER_SHARE));
+  });
 });
 
 // --- the verdict counter ----------------------------------------------------
@@ -204,12 +216,12 @@ describe("remaining work over a plan", () => {
 
     expect(work.basis).toBe("plan");
     expect(work.staticUsd).toBe(18);
-    // S4's price is $3.75; the developer cap is price / (2 attempts x 1.25) =
-    // $1.50 and the reviewer's derived quarter of that ($0.375) loses to the
-    // $1.00 floor. One attempt left, so one of each.
+    // S4's price is $3.75 and its one remaining turn is ATTEMPT 2, whose divisor
+    // gh #91 left alone: price / (2 attempts x 1.25) = $1.50. The reviewer's
+    // derived quarter ($0.375) loses to the $1.00 floor.
     expect(work.stories).toEqual([{
       id: "S4", status: "in_progress", developerTurns: 1, reviews: 1,
-      developerCapUsd: 1.5, reviewerCapUsd: 1, usd: 2.5,
+      developerCapUsd: 1.5, developerCapsUsd: [1.5], reviewerCapUsd: 1, usd: 2.5,
     }]);
     expect(work.usd).toBe(2.5);
     expect(work.blocked).toEqual(["S6", "S7"]);
@@ -248,9 +260,34 @@ describe("remaining work over a plan", () => {
       ...BASE,
       runDir: planDir({ stories: [{ id: "S1", status: "todo", verdicts: 2 }], prices: { S1: 10 } }),
     });
-    expect(half.rawUsd * 2).toBeCloseTo(fresh.rawUsd, 5);
+    // NOT `half x 2 = fresh` any more, and deliberately: since gh #91 the two
+    // developer turns are priced differently — $8.00 for attempt 1, $4.00 for
+    // attempt 2 — so a story with attempt 1 behind it drops exactly attempt 1's
+    // developer cap plus one reviewer floor, and nothing else.
+    expect(fresh.stories[0]?.developerCapsUsd).toEqual([8, 4]);
+    expect(half.stories[0]?.developerCapsUsd).toEqual([4]);
+    expect(fresh.rawUsd - half.rawUsd).toBeCloseTo(9, 5);   // $8.00 dev + $1.00 reviewer
+    expect(half.rawUsd).toBeLessThan(fresh.rawUsd);
     expect(spent.rawUsd).toBe(0);
     expect(spent.stories).toEqual([]);
+  });
+
+  /**
+   * gh #91, run `260901-leaderboard-v2`: the plan priced S2 at $2.10 of a $3.85
+   * Build stage and the brake — mirroring the executor — priced its first turn at
+   * $0.84. The brake and the spawn have to agree, so this is the same fixture as
+   * the executor's own leaderboard-v2 test.
+   */
+  test("the leaderboard-v2 shape: the first turn is priced at what the plan said", () => {
+    const dir = planDir({
+      stories: [{ id: "S1", status: "todo" }, { id: "S2", status: "todo" }],
+      prices: { S1: 1.75, S2: 2.10 },
+    });
+    const work = remainingWork({ ...BASE, runDir: dir, stageBudgetUsd: 3.85, perAgentMaxUsd: 3.85 });
+    const s2 = work.stories.find((story) => story.id === "S2");
+    expect(s2?.developerCapsUsd).toEqual([1.68, 0.84]);
+    expect(s2?.developerCapUsd).toBe(1.68);
+    expect(renderRemainingWork(work)).toContain("S2 dev $1.68 + $0.84");
   });
 
   test("a reopened story is charged its attempts again — a reopen RAISES the estimate", () => {
@@ -288,7 +325,7 @@ describe("remaining work over a plan", () => {
 
   test("`--max-usd` and `per_agent_max_usd` clamp a cap, as they do on a real spawn", () => {
     const dir = planDir({ stories: [{ id: "S1", status: "todo" }], prices: { S1: 18 } });
-    expect(remainingWork({ ...BASE, runDir: dir }).stories[0]?.developerCapUsd).toBe(7.2);
+    expect(remainingWork({ ...BASE, runDir: dir }).stories[0]?.developerCapUsd).toBe(14.4);
     expect(remainingWork({ ...BASE, runDir: dir, perAgentMaxUsd: 2 }).stories[0]?.developerCapUsd).toBe(2);
     expect(remainingWork({ ...BASE, runDir: dir, maxUsd: 0.5 }).stories[0]?.developerCapUsd).toBe(0.5);
   });
@@ -356,14 +393,15 @@ describe("the economy label", () => {
       ...BASE,
       runDir: planDir({ ...fixture, planEconomy: "host-tokens" }),
     });
-    expect(priced.stories[0]?.developerCapUsd).toBe(3.6); // 9 / 2.5
+    expect(priced.stories[0]?.developerCapUsd).toBe(7.2); // 9 / 1.25, attempt 1
     expect(hostPriced.stories[0]?.developerCapUsd).toBe(3.6); // 18 / (2 x 2 x 1.25)
-    // Same number by coincidence of this fixture; what differs is the SOURCE, so
-    // assert the price was actually dropped rather than trusting the total.
+    // The price was actually DROPPED, not silently reused: assert it directly
+    // rather than trusting a total the two paths could reach by coincidence.
     expect(remainingWork({
       ...BASE,
       runDir: planDir({ stories: fixture.stories, prices: { S1: 2, S2: 16 }, planEconomy: "host-tokens" }),
     }).stories.map((s) => s.developerCapUsd)).toEqual([3.6, 3.6]);
+    expect(hostPriced.stories.map((s) => s.developerCapsUsd)).toEqual([[3.6, 3.6], [3.6, 3.6]]);
   });
 });
 
@@ -611,6 +649,45 @@ describe("the brake", () => {
     expect(blocked?.payload).toMatchObject({
       phase: "04-build", estimate_basis: "plan", static_estimate_usd: 9, stories_done: 2, stories_total: 3,
     });
+    expect(events.some((e) => e.type === "agent.spawned")).toBe(false);
+  });
+
+  /**
+   * gh #91 raised what one story may be dispatched at; it did not raise what the
+   * PHASE may spend. The brake is the only thing between a starved phase and a
+   * spawn — `runNext.runExecutor` skips it once the stage is `running` — so a
+   * bigger first-attempt cap must still hit the same wall.
+   */
+  test("a PRICED plan is still refused at the wall, and spawns nothing", async () => {
+    const ws = workspace();
+    writeFileSync(join(ws.planDir, "budget.yml"), [
+      "version: 1",
+      `run: "${ws.runId}"`,
+      "ceiling_usd: 9.00",
+      "spent_usd: 0.00",
+      "per_phase_usd:",
+      "  S1: 2.00",
+      "  S2: 2.50",
+      "  S3: 4.50",
+      "",
+    ].join("\n"), "utf8");
+    settle(ws, "S1", "done");
+    settle(ws, "S2", "done");
+    // S3 alone, priced $4.50: dev $3.60 (attempt 1) + $1.80 (attempt 2) + two
+    // $1.00 reviewer floors = $7.40, against $0.40 of phase ceiling. The prices
+    // are deliberately NOT the uniform share ($1.20), so a plan that went unread
+    // fails this test rather than passing it by coincidence.
+    starve(ws, 0.4);
+
+    const outcome = await next(ws);
+    expect(outcome.code).toBe(2);
+    const text = outcome.lines.join("\n");
+    expect(text).toContain("refusing to start stage \"build\"");
+    expect(text).toContain("$0.40 left and the remaining work is");
+    expect(text).toContain("remaining work: S3 dev $3.60 + $1.80");
+    expect(text).toContain("= $7.40");
+    const events = readFileSync(join(ws.runDir, "events.jsonl"), "utf8")
+      .split("\n").filter((l) => l.trim() !== "").map((l) => JSON.parse(l) as { type: string });
     expect(events.some((e) => e.type === "agent.spawned")).toBe(false);
   });
 

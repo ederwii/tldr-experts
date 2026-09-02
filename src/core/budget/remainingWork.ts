@@ -22,7 +22,9 @@
  * `Σ` over the stories that are still going to be dispatched, of exactly the caps
  * `build.ts` would hand out for them: the per-story prices from
  * `03-plan/budget.yml` run through the same scale/share arithmetic, the developer
- * and reviewer shares, `REVIEWER_FLOOR_USD`, and the attempts each story has left.
+ * and reviewer shares, `REVIEWER_FLOOR_USD`, and the attempts each story has left
+ * — including WHICH attempts, since gh #91 prices a priced story's first turn and
+ * its second differently (`developerPriceDivisor`).
  *
  * Three sources, all already on disk and none of them a projection:
  *
@@ -65,9 +67,9 @@
  *
  * ## Why the constants are mirrored rather than imported
  *
- * `MAX_ATTEMPTS`, `REVIEWER_SHARE` and `REVIEWER_FLOOR_USD` live in
- * `facilitator/executors/build.ts`, which drags `spawnAgent`, `RunStore` and the
- * git seam in behind it. This module is loaded by the `budget-gate` PreToolUse
+ * `MAX_ATTEMPTS`, `REVIEWER_SHARE`, `REVIEWER_FLOOR_USD` and
+ * `developerPriceDivisor` live in `facilitator/executors/build.ts`, which drags
+ * `spawnAgent`, `RunStore` and the git seam in behind it. This module is loaded by the `budget-gate` PreToolUse
  * hook, which runs before every Bash call a session makes and must stay cheap.
  * The numbers are therefore restated here and `test/remaining-work.test.ts`
  * asserts they are identical to build.ts's — a duplication that is checked is a
@@ -87,6 +89,14 @@ export const REVIEWER_SHARE = 0.25;
 /** Mirrors `build.ts`. */
 export const REVIEWER_FLOOR_USD = 1.00;
 
+/**
+ * Mirrors `build.ts`'s `developerPriceDivisor` (gh #91). The reason for the
+ * duplication, and the test that keeps it honest, are in the module header.
+ */
+export function developerPriceDivisor(attempt: number): number {
+  return attempt <= 1 ? 1 + REVIEWER_SHARE : MAX_ATTEMPTS * (1 + REVIEWER_SHARE);
+}
+
 /** How many stories the refusal message names before it starts counting. */
 const NAMED_STORIES = 6;
 
@@ -97,8 +107,24 @@ export interface RemainingStory {
   readonly developerTurns: number;
   /** Reviews still to be run for it. */
   readonly reviews: number;
-  /** One developer cap, as `build.ts` would compute it. */
+  /**
+   * The cap of the NEXT developer turn, as `build.ts` would compute it — the
+   * first entry of `developerCapsUsd`, or 0 when there is no turn left to
+   * dispatch.
+   */
   readonly developerCapUsd: number;
+  /**
+   * One cap per developer turn still to be dispatched, in the order they will
+   * run (gh #91).
+   *
+   * A list rather than a number because the turns are no longer priced alike: a
+   * priced story's attempt 1 gets the whole pass Delivery priced and attempt 2
+   * gets the pre-#91 worst-case share, so `cap × turns` would over-count the
+   * remaining work and `renderRemainingWork` would print an arithmetic that does
+   * not add up. An unpriced story's turns are still identical and still render
+   * as `dev $1.20 ×2`.
+   */
+  readonly developerCapsUsd: readonly number[];
   /** One reviewer cap, floor and all. */
   readonly reviewerCapUsd: number;
   readonly usd: number;
@@ -252,9 +278,18 @@ function measure(input: RemainingWorkInput): RemainingWork {
     // The developer turn of the attempt now under review is already spent: the
     // diff is on the branch and only a `changes` verdict buys another one.
     const developerTurns = Math.max(attemptsLeft - (story.status === "review" ? 1 : 0), 0);
-    const developerCapUsd = hostPaysDeveloper ? 0 : caps.developer(story.id);
+    // The turns still to dispatch are the LAST `developerTurns` of the story's
+    // run of attempts, so a story with one attempt behind it is priced as the
+    // attempt 2 it is about to become — not as a fresh attempt 1 (gh #91).
+    const firstTurn = MAX_ATTEMPTS - developerTurns + 1;
+    const developerCapsUsd = Array.from(
+      { length: developerTurns },
+      (_unused, i) => (hostPaysDeveloper ? 0 : caps.developer(story.id, firstTurn + i)),
+    );
+    const developerCapUsd = developerCapsUsd[0] ?? 0;
     const reviewerCapUsd = caps.reviewer(story.id);
-    const usd = round2(developerCapUsd * developerTurns + reviewerCapUsd * attemptsLeft);
+    const developerUsd = developerCapsUsd.reduce((sum, cap) => sum + cap, 0);
+    const usd = round2(developerUsd + reviewerCapUsd * attemptsLeft);
     if (usd <= 0 && developerTurns === 0 && attemptsLeft === 0) continue;
     stories.push({
       id: story.id,
@@ -262,6 +297,7 @@ function measure(input: RemainingWorkInput): RemainingWork {
       developerTurns,
       reviews: attemptsLeft,
       developerCapUsd,
+      developerCapsUsd,
       reviewerCapUsd,
       usd,
     });
@@ -298,7 +334,13 @@ export function renderRemainingWork(work: RemainingWork): string {
   const named = work.stories.slice(0, NAMED_STORIES).map((story) => {
     const parts: string[] = [];
     if (story.developerTurns > 0) {
-      parts.push(`${story.id} dev $${story.developerCapUsd.toFixed(2)}${times(story.developerTurns)}`);
+      // `dev $1.20 ×2` while the turns cost the same, `dev $3.60 + $1.80` once
+      // they do not — the sum has to be readable off the line it is printed on.
+      const caps = story.developerCapsUsd;
+      const uniform = caps.every((cap) => cap === caps[0]);
+      parts.push(uniform
+        ? `${story.id} dev $${(caps[0] ?? 0).toFixed(2)}${times(caps.length)}`
+        : `${story.id} dev ${caps.map((cap) => `$${cap.toFixed(2)}`).join(" + ")}`);
     }
     if (story.reviews > 0) {
       const label = story.developerTurns > 0 ? "reviewer" : `${story.id} reviewer`;
@@ -371,10 +413,10 @@ class CapMath {
     this.maxBudgetUsd = this.agentCap(1);
   }
 
-  developer(storyId: string): number {
+  developer(storyId: string, attempt: number): number {
     const price = this.priceOf(storyId);
     if (price === null) return this.agentCap(1 / this.worstCaseShares());
-    return this.agentCap(this.shareOf(price / (MAX_ATTEMPTS * (1 + REVIEWER_SHARE))));
+    return this.agentCap(this.shareOf(price / developerPriceDivisor(attempt)));
   }
 
   reviewer(storyId: string): number {
