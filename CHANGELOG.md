@@ -136,6 +136,27 @@ same amount after it; what changed is that the page now says how big the bound i
     `.tldrx/**/*.bak`. Existing workspaces pick the block up on the next `tldrx init` (it is a
     marked block, so re-running it is idempotent); until then the close excludes `*.bak` from
     its own pathspec, so the one write path that could have committed them does not.
+- **A 1M-context model is no longer sized at 200k because of how its name was spelled
+  (#112).** Measured at `d1d9c3f`: `priceFor("claude-sonnet-4-5-20250929[1m]")` returned the
+  `sonnet` row and `contextTokensFor` therefore answered **200,000, not 1,000,000**. The
+  cause was that `[1m]` was carried inside a row's id, so `name.includes("sonnet[1m]")`
+  could only ever match the bare alias — and the suite could not see it, because the one pin
+  that existed (`priceFor("opus[1m]")`) used exactly that convenient spelling while the
+  repo's own fixtures use the dated form (`claude-fable-5[1m]`). It fed `run estimate` and
+  the context ledger, which decides when a stage is near its window.
+  - **`[1m]` is now matched as a MARKER on a name, separately from the family**, so
+    `sonnet[1m]` and `claude-sonnet-4-5-20250929[1m]` land on the same row. A `[1m]` row is
+    offered only to a name that carries the marker, so a dated spelling WITHOUT it is not
+    promoted: `claude-opus-4-5-20251101` still resolves to `opus`/200k.
+  - **A family the table prices answers for its own windows.** haiku has no `[1m]` row
+    because there is no 1M haiku, and its 200k is the one MEASURED number in the file — a
+    marker does not overrule it, so `claude-haiku-4-5-20251001[1m]` stays 200k.
+  - **A family the table does NOT price gets the window its name declares.**
+    `contextTokensFor("claude-fable-5[1m]")` is 1,000,000 rather than a silent 200k default.
+    No fable price row was invented: `priceFor` still returns null for it, so nothing quotes
+    a price for a model this table cannot price — only the sizing changed.
+  - No USD figure moved. The `[1m]` rows already priced identically to their 200k siblings;
+    this was never a billing bug, and `tldrx cost` reads `total_cost_usd` off the CLI.
 
 ## 0.5.0 — 2026-09-02
 

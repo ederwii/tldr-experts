@@ -1048,6 +1048,49 @@ describe("the price/context table (N7)", () => {
     expect(contextTokensFor("sonnet[1m]")).toBe(1_000_000);
     expect(contextTokensFor("something-unknown")).toBe(200_000);
   });
+
+  // #112: `[1m]` is a MARKER a name carries, not a spelling of the family. It
+  // rode on the bare alias only (`sonnet[1m]`), so every dated spelling — the
+  // form a `--model` flag and a `result` event actually use — resolved to the
+  // 200k row and the context ledger sized a 1M model at a fifth of its window.
+  test("the 1m marker is read on dated spellings, not just the bare alias (#112)", () => {
+    expect(priceFor("claude-sonnet-4-5-20250929[1m]")?.id).toBe("sonnet[1m]");
+    expect(priceFor("claude-opus-4-5-20251101[1m]")?.id).toBe("opus[1m]");
+    expect(contextTokensFor("claude-sonnet-4-5-20250929[1m]")).toBe(1_000_000);
+    expect(contextTokensFor("claude-opus-4-5-20251101[1m]")).toBe(1_000_000);
+  });
+
+  test("a family this table does not price still gets the window its name declares (#112)", () => {
+    // `claude-fable-5[1m]` is the repo's OWN fixture spelling
+    // (test/train-preflight.test.ts:49). The table prices no fable row and this
+    // does not invent one — `priceFor` still refuses. But a name that declares
+    // 1M is the only window evidence there is, so the ledger honours it rather
+    // than silently falling back to 200k.
+    expect(priceFor("claude-fable-5[1m]")).toBeNull();
+    expect(priceFor("claude-fable-5")).toBeNull();
+    expect(contextTokensFor("claude-fable-5[1m]")).toBe(1_000_000);
+    expect(contextTokensFor("claude-fable-5")).toBe(200_000);
+  });
+
+  test("a dated spelling with no marker keeps its 200k row (#112)", () => {
+    // The marker must be READ, not assumed: adding it to the match must not
+    // start promoting every dated name to the 1M row.
+    expect(priceFor("claude-sonnet-4-5-20250929")?.id).toBe("sonnet");
+    expect(priceFor("claude-opus-4-5-20251101")?.id).toBe("opus");
+    expect(priceFor("us.anthropic.claude-opus-4-5-20251101-v1:0")?.id).toBe("opus");
+    expect(contextTokensFor("claude-sonnet-4-5-20250929")).toBe(200_000);
+    expect(contextTokensFor("claude-opus-4-5-20251101")).toBe(200_000);
+  });
+
+  test("a priced family answers for its own windows, marker or not (#112)", () => {
+    // haiku has no `[1m]` row because there is no 1M haiku, and haiku's 200k is
+    // the one MEASURED window in the file. A marker on a family the table
+    // prices does not get to overrule it.
+    expect(priceFor("claude-haiku-4-5-20251001[1m]")?.id).toBe("haiku");
+    expect(contextTokensFor("claude-haiku-4-5-20251001[1m]")).toBe(200_000);
+    // And a marker on nothing recognisable is still not a price.
+    expect(priceFor("gpt-nothing[1m]")).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
