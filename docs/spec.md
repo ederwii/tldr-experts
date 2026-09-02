@@ -166,7 +166,7 @@ stage at `cursor`, or `done` when every phase is terminal.
 | `stages[].budget_usd` / `.cost_usd` / `.started_at` / `.ended_at` | number ≥0 / RFC3339\|null | y | Ceiling, actual from `total_cost_usd`, wall clock |
 | `stages[].inputs` / `.outputs` | rel path[] | y | Declared inputs; files produced |
 | `stages[].gate` | {type, status, by, at, note} | y | `type` `approve\|checks\|auto`; `status` `pending\|approved\|rejected\|n-a`; `by` is `auto` on a gate the facilitator closed, and the note's `by:` on one an `agent` policy closed |
-| `stages[].gate.evidence` | {path, role, verdict, sampled, of, resolved, refuted, outside_surface} | n | **Additive.** Present only on a gate an `agent` policy closed (§5). `path` is run-relative and points at the COMMITTED copy of the §2.17 note, `<phase>/gate-evidence/<stage>.md`; the counts are the note's own. Absent on every gate a person or the facilitator closed, and on every run.yml written before this key existed — the gate mapping has never rejected an unknown key, so the two directions cross without a shim. Emitted only when present |
+| `stages[].gate.evidence` | {path, role, verdict, sampled, of, resolved, refuted, outside_surface} | n | **Additive.** Present only on a gate an `agent` policy closed (§5). `path` is run-relative and points at the COMMITTED copy of the §2.17 note, `<phase>/gate-evidence/<stage>.md`; the counts are the note's own. Absent on every gate a person or the facilitator closed, and on every run.yml written before this key existed — the gate mapping has never rejected an unknown key, so the two directions cross without a shim. Emitted only when present. **Cleared by a revoke** (§5), beside `by`, `at`, `executed_by` and `authority`: a gate nobody has signed rests on nothing, and the withdrawn pointer is written onto the `gate.revoked` event rather than deleted |
 | `stages[].gate.executed_by` | {type: `human\|agent\|auto`, id?} | n | **Additive.** WHICH ENTITY evaluated this gate, as against `by`, which is a NAME. On a gate an `agent` policy closed that name is the operator's — the account the agent ran as — so `by` alone cannot say a person did not review it. `id` is the name the entity signed under and is ABSENT for `auto`: the facilitator is a role, not an identity, and `by: auto` already carries it. Written by `approve` on every gate it closes; absent on every run.yml written before this key existed, where every reader falls back to `by`. Emitted only when present |
 | `stages[].gate.authority` | {type: `direct\|delegated`, policy, authorized_by, source} | n | **Additive.** UNDER WHOSE AUTHORITY. `direct` is a person signing as themselves; `delegated` is an agent or the facilitator acting on a policy somebody set. `policy` is §2.2 `gates_policy` for this stage at the moment of signing. `authorized_by` is who set it and `source` says how that was established: `self`, `run.created` (frozen at `run new` by whoever opened the run), `gate.policy_changed` (the actor of the `run gates set` that last moved it), or `unrecorded` — in which case `authorized_by` is `null`. Nothing here is inferred beyond those two events; an absence is NAMED, never filled in |
 | `attended_by` | `host` | n | **Additive.** Who DRIVES the run. Absent (the default, and every run.yml written before this key) ⇒ the framework may spawn. `host` ⇒ a host session is doing the turns: `tldrx next` refuses the headless mode with exit 4 naming the `--prepare` command, every executor exposes prepare/commit only, `run auto` is refused at the CLI (exit 1), and no run path can reach `spawnAgent`. Set at creation with `run new --attended-by host` or flipped later with `run attend`; emitted only when set |
@@ -1003,7 +1003,10 @@ unknown type is a validation error.
 
 **`gate.revoked` and `budget.raised` were added 2026-08-29.** Both name a moment the log could not previously describe.
 `gate.revoked` is `tldrx reject --stage <phase>/<stage>` taking an approval back (§5, "Revoking an approval"); its
-payload carries `signed_by` — `auto` or a person — plus the `staled` list. `budget.raised` is `tldrx budget raise`,
+payload carries `signed_by` — `auto` or a person — `signed_at`, the `staled` list, and, **when the withdrawn
+signature rested on one, the `evidence` block that has just left the gate mapping**. That block is written only
+when there was one, so every `gate.revoked` for a human or auto gate is shape-identical to the ones written
+before it existed. The envelope's own `actor` and `ts` are who took the approval back and when. `budget.raised` is `tldrx budget raise`,
 which until then rewrote `budget.yml` and appended nothing at all: the one sanctioned way to move a ceiling was the one
 act with no record. Its payload carries `phase`, `amount_usd`, `take_from`, before/after for both the phase and the run
 ceiling, and the operator's `--note`.
@@ -2201,7 +2204,12 @@ pass would make `--commit` unusable. What it must never do is read as "$0.00 —
 **Revoking an approval.** `tldrx reject --stage <phase>/<stage> --note "…"` takes back a gate that is already
 `approved`, whoever signed it. The stage returns to `ready` with the note on its gate, the cursor moves back to it, and
 one `gate.revoked` is appended carrying `signed_by` (`auto` or a person) and the list of later stages now marked
-`stale: true`. Those stages' outputs stay on disk — they cost money and are usually mostly right — but nothing may
+`stale: true`. **Everything that described the signature leaves the gate mapping together** — `by`, `at`,
+`executed_by`, `authority` and `evidence` — because a `pending` gate that still records what its signature
+rested on states two contradicting facts in one mapping, and `replay` drew the counts of a withdrawn signature
+under a gate the same file said was open. Nothing is destroyed by that: `run.yml` is STATE and `events.jsonl`
+is HISTORY, so the withdrawn `evidence` block rides onto the `gate.revoked` event (§2.9), and the committed
+note stays exactly where it was, at `<phase>/gate-evidence/<stage>.md`. Those stages' outputs stay on disk — they cost money and are usually mostly right — but nothing may
 treat them as current; running a stage again clears its own flag. No cost is refunded and no task is deleted. `--stage`
 is also the one verb allowed to target a run that has already FINISHED, because reopening one is its whole purpose.
 Before this, `approve()` moved the cursor in the same transaction that signed the gate and `reject` only ever looked at
@@ -2219,9 +2227,15 @@ no stage — the story's branch, which carries the last developer's commits, is 
 back remains `reject`'s own signed decision. Reopenable states are `blocked`, `review` and `in_progress`; `done`
 refuses, because undoing finished work is a decision about the stage.
 
-**`by: auto` where people look.** An auto-signed gate is named in `tldrx status` — with the `tldrx reject --stage …`
-that undoes it — and the status line carries `att`, `auto:N` and `stale:N`. It reached `run.yml`, the event log and
-`run status` before this, and none of those is a glance.
+**A machine-closed gate, where people look.** A gate no PERSON evaluated is named in `tldrx status` — with the
+`tldrx reject --stage …` that undoes it — and the status line carries `att`, `auto:N` and `stale:N`. It reached
+`run.yml`, the event log and `run status` before this, and none of those is a glance. The selector is
+`gate.executed_by.type != human`, with `by == auto` as the union member for records written before that field
+existed: an `agent` gate records the operator account the agent ran as, so it carries a PERSON's name, and a
+report that keyed on `by: auto` alone listed every facilitator-closed gate and no agent-closed one — the inverse
+of what the report is for. The line names the executor's kind per stage, through the same renderer `run status`,
+`replay` and the dashboard use, and says out loud that the name on an agent gate is not the entity that did the
+checking. The status line's `auto:N` still counts facilitator signatures only, and says `auto`.
 
 (5) overlaps (1) on purpose and is run **whether or not the stage listed `claim-sources` under `checks:`** — a
 stage file that forgot to list it must not thereby buy itself a cheaper gate. All seven are evaluated even after one

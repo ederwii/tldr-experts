@@ -426,6 +426,74 @@ same amount after it; what changed is that the page now says how big the bound i
     (`check` free of shell metacharacters) is filed separately, because `ToolChecker` runs
     `sh -c <check>` and honouring the rule would be a change of behaviour, not a check to add.
 
+- **A revoked gate no longer records what its withdrawn signature rested on (#123).**
+  `revoke` reset an approved gate to `pending` and nulled `by` and `at`, but spread
+  `gate.evidence` straight through, so the same mapping said *nobody has signed this gate*
+  (`status: pending`, `by: null`) and *here is what the signature rested on*
+  (`evidence: {path: …, verdict: sign, sampled: 7, of: 34}`). Both cannot be true, and
+  `tldrx replay` — which renders the evidence block off `run.yml`, not off the events — drew
+  the counts of a withdrawn signature under a gate whose own closing section said
+  `Pending gate: alpha is waiting for tldrx approve`. #122 had already cleared `executed_by`
+  and `authority` on a revoke for exactly this reason and deliberately left this one call
+  open.
+  - **Everything that described the signature now leaves the mapping together**: `by`, `at`,
+    `executed_by`, `authority` and `evidence`. A revoked gate is back to the five keys a
+    pending gate has always had, byte for byte.
+  - **Moved, not destroyed.** `run.yml` is STATE — the resume point, read as a description of
+    how things are now. `events.jsonl` is HISTORY — append-only, read as a description of what
+    happened. The contradiction was a state contradiction, so the pointer leaves the gate; and
+    because an audit framework does not delete history, the withdrawn `evidence` block is
+    written onto the `gate.revoked` event, beside the `signed_by`/`signed_at` it already
+    carried and the envelope's own actor and timestamp — who took it back, and when. The
+    committed note never moves from `<phase>/gate-evidence/<stage>.md`, and `tldrx reject`
+    now says so on the way out rather than leaving an operator to guess that a cleared
+    pointer was not a deleted file.
+  - A `revoked:` trail kept ON the gate was the alternative. It was refused because it grows:
+    a gate may be approved, revoked, re-approved and revoked again, so the state file would
+    accumulate a list of withdrawn signatures — which is what the append-only log is for —
+    and every reader would have to learn a "withdrawn" mode for a block whose only truthful
+    reading in `run.yml` is "current".
+  - **`gate.revoked` is narrated by `tldrx replay` for the first time.** It was in the event
+    set and in no narrative: `bullet()` had no case for it, so it fell to `default: return
+    null` and a replay of a run whose approval had been taken back showed the approval and
+    nothing after it. Evidence moved somewhere no reader looks is evidence deleted, so that
+    line is part of this fix — it names both parties, the stale count, what the signature had
+    rested on and that the note is still on disk.
+  - `evidence` is written on the event **only when there was one**, so every `gate.revoked`
+    for a human or auto gate is shape-identical to the ones written before this. Old records
+    are untouched in both directions: an approved gate carrying `evidence` and none of #122's
+    blocks validates, loads and emits byte-for-byte, and revoking one clears its evidence by
+    the same single rule. Pinned in `test/revoke-evidence.test.ts`.
+
+- **`tldrx status` now reports an AGENT-signed gate as machine-signed (#124).**
+  `machineSignedDetails` is the report whose whole job is naming the gates a machine closed,
+  so a person can take one back, and its selector was `gate.by === "auto"`. That catches every
+  facilitator-closed gate and no agent-closed one: an `agent` gate records the evidence note's
+  `by:`, which is the OPERATOR account the agent was running as — a person's name. Measured on
+  run `260902-discovery-pipeline-map` (the record in #122) that gate reads `by: alanmartinez`,
+  so the report counted it as human-signed and never offered the revoke. That is the inverse of
+  what the report is for, on the one closure kind where the recorded name is not the entity
+  that did the checking.
+  - The selector is now `gate.executed_by.type !== "human"`, with `by === "auto"` kept as the
+    **union member** rather than replaced: a gate signed before #122 has no `executed_by`, and
+    there the old heuristic is the only signal there is. It asks `!== "human"` rather than
+    naming `agent` and `auto`, because listing the machines by name is exactly how the `agent`
+    case went missing the first time.
+  - **The wording changed with it.** "N gate(s) signed `by: auto`, not by a person" was true of
+    the facilitator and false of an agent gate, where the record *does* carry a person's name.
+    The line now reads `N gate(s) closed by a machine, not by a person — <phase>/<stage> signed
+    by <signature>, …`, rendering each signature through `describeGateSignature` — the one
+    renderer `run status`, `replay` and the dashboard already share, so a fourth reading of one
+    fact cannot drift from the other three, and a record with no `executed_by` still prints the
+    bare `by` it always printed. A second line, present only when an agent gate is among them,
+    says that an `agent` gate is signed under the operator account the agent ran as, so the
+    name on it is not the entity that did the checking.
+  - **The executor's kind, never the policy.** A person approving an `agent`-gated stage with
+    no flag is a human acting directly and is still not reported. Pinned, with the legacy
+    fallback and the negative cases, in `test/machine-signed-gates.test.ts`.
+  - The statusline's `auto:N` counter is unchanged and still counts facilitator signatures
+    only — it is labelled `auto` and says what it counts. Filed separately.
+
 - **The merge-wave suite no longer plants its #95 fixture at a machine-global path (#113).**
   `b8d1fcb` gave each invocation a private `$TMPDIR`, so a run's own log root stopped being
   a shared namespace — and the fixture that plants a *foreign* wave's kept log kept writing

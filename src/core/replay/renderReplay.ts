@@ -142,6 +142,15 @@ function bullet(item: NumberedEvent): string | null {
     case "gate.approved":
       return `${prefix}gate APPROVED by ${signature(actor, payload)}${note(payload.note)}`;
     case "gate.rejected": return `${prefix}gate REJECTED by ${actor}${note(payload.note)}`;
+    // An approval TAKEN BACK was in the event set and in no narrative: `bullet`
+    // had no case for it, so it fell to `default: return null` and a replay of a
+    // run whose gate had been revoked showed the approval and nothing after it
+    // (issue #123). It is also where the withdrawn signature's evidence now
+    // lives, and evidence moved somewhere no reader looks is evidence deleted.
+    case "gate.revoked":
+      return `${prefix}gate REVOKED by ${actor} — signed by ${text(payload.signed_by) || "unknown"}`
+        + `${text(payload.signed_at) === "" ? "" : ` at ${text(payload.signed_at)}`}`
+        + `${staleClause(payload.staled)}${withdrawnEvidence(payload.evidence)}${note(payload.note)}`;
     // A person overruling a block is the one thing in the log that explains why a
     // story's attempt counter went backwards. A narrative that showed the two
     // `changes` verdicts and then a third developer turn, with nothing in between,
@@ -241,6 +250,35 @@ function gateEvidenceLines(loaded: LoadedRun, phase: RunPhase, stage: RunStage):
 
 function count(value: number | null): string {
   return value === null ? "?" : String(value);
+}
+
+/** How many later stages the revocation left behind — omitted when none did. */
+function staleClause(value: unknown): string {
+  const staled = Array.isArray(value) ? value.length : 0;
+  return staled === 0 ? "" : `, ${String(staled)} later stage(s) marked stale`;
+}
+
+/**
+ * What the withdrawn signature had rested on (issue #123).
+ *
+ * Read off the EVENT, because `revoke` clears it from `run.yml` — a gate nobody
+ * has signed rests on nothing, and the same mapping cannot say `by: null` and
+ * name the counts a signature was closed over. The note itself never moved, so
+ * the line says where it still is: the pointer was cleared, not a file deleted.
+ *
+ * Absent on every `gate.revoked` written before this, and on every revocation of
+ * a human or auto gate, which rest on no note at all — those render exactly the
+ * line they always would have.
+ */
+function withdrawnEvidence(value: unknown): string {
+  if (!isRecord(value)) return "";
+  const path = text(value.path);
+  const verdict = text(value.verdict);
+  const counts = typeof value.sampled === "number" && typeof value.of === "number"
+    ? `, ${String(value.sampled)} of ${String(value.of)} citations spot-checked`
+    : "";
+  return ` — it had been signed over ${path === "" ? "an evidence note" : path}`
+    + `${verdict === "" ? "" : ` (${verdict}${counts})`}, which is still on disk`;
 }
 
 function checkName(payload: Readonly<Record<string, unknown>>): string {

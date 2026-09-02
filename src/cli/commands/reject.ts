@@ -65,6 +65,15 @@ export const rejectCommand: Command = {
             : `${outcome.staled.length} later stage(s) marked stale — their files are still on disk, `
               + `and they were derived from a decision that is now withdrawn: ${outcome.staled.join(", ")}`,
         );
+        // A pointer was cleared, not a file deleted (#123). Said out loud, because
+        // "the gate no longer records what it was signed over" reads like a
+        // deletion to anyone who does not know where the note lives.
+        if (outcome.signedOver !== null) {
+          lines.push(
+            `the evidence it was signed over stays on disk at ${outcome.signedOver.path} — the gate no longer `
+            + "points at it, and the withdrawn counts are on the `gate.revoked` event",
+          );
+        }
         lines.push("nothing was deleted and no cost was refunded — `tldrx next` re-runs the stage with the note");
         process.stdout.write(`${lines.join("\n")}\n`);
         return EXIT_OK;
