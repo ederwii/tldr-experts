@@ -874,7 +874,7 @@ ans    := "Q" digit+                               # a question in this run
 fact   := "F" digit{3,6}                           # facts.yml id
 cmd    := "$ " command " → exit " digit+           # command must exist in workspace.yml
 graph  := "graph:" nodeid                          # a graphify node id
-absent := "absent:" path                           # looked here, found nothing
+absent := "absent:" path ["#" needle]              # looked HERE; the needle is what for
 ```
 
 **Validation.** The four sections present in that order; each holding **at least one list item** — a section that is
@@ -891,8 +891,8 @@ closing quotes, backticks, brackets and a terminal `.` / `,` / `;` / `!` / `?` a
 wrapped in backticks. A line holding a `[src:` marker the parser cannot read is now reported as a **malformed
 citation**, not as an unsourced bullet — the two need different advice.
 
-**Three outcomes, not two (2026-08-29).** Every `src` kind is resolved, and each resolution is `ok`, `refused` or
-`unverified`:
+**Four outcomes (2026-09-02; three since 2026-08-29).** Every `src` kind is resolved, and each resolution is `ok`,
+`noted`, `refused` or `unverified`:
 
 | kind | resolved against | `refused` when | `unverified` when |
 |---|---|---|---|
@@ -902,7 +902,7 @@ citation**, not as an unsourced bullet — the two need different advice.
 | `answer` | every `questions.md` in the run | no block with that id | the caller passed no run dir |
 | `graph` | `graphify-out/graph.json`, else `map/**` | not a node id, and not a token in the map | neither source exists |
 | `doc` | URLs named by the run's artefacts, `map/**`, expert `knowledge/**` | — (never fetched, so never disproved) | nothing in the workspace cites it |
-| `absent` | the path, plus the claim's own wording | the claim is POSITIVE and the section is not `Unknowns` | the path EXISTS (the absence is about its contents) |
+| `absent` | the same bases a `file` uses, plus the claim's own wording and the optional needle | the claim is POSITIVE outside `Unknowns`; or the needle IS at that path | — (never; see `noted` below) |
 | `aidlc` | nothing | — | — (provenance for a `--from` distill; §6) |
 
 An `unverified` citation **does not fail a stage** — it is not a lie, it is a check nobody could run. It does stop an
@@ -914,6 +914,33 @@ closed its own auto gate and advanced the cursor (measured probe, 2026-08-29).
 `## Unknowns` is exempt from the `absent:` negative-claim rule, because that heading IS the negation: the example above
 (`- Retention period for historical rankings [src: absent:…]`) reads as a positive noun phrase and means "we do not
 know it".
+
+#### `absent:` — one semantic, both checkers
+
+`absent:<path>[#<needle>]` means **"I looked HERE, and it is not there."** It is resolved the same way everywhere, and
+the fourth outcome exists because it was not:
+
+| what is on disk | outcome | why |
+|---|---|---|
+| no such path, at any base | `ok` | the absence is literal, and a reader confirms it in one look |
+| the path exists and is EMPTY — a zero-byte or whitespace-only file, a directory with no entries | `ok` | there was nothing there to have missed |
+| a needle is given and it is **not** in the file | `ok` | the absence was actually **searched**. This is the only form in which an absence over a file with content is *checked* |
+| a needle is given and it **is** in the file | `refused` | a presence, not an absence. The refusal names the line: ``` `30 days` IS at docs/retention.md:3 ``` |
+| the claim is POSITIVE and the section is not `Unknowns` | `refused` | an absence can only support a negative claim |
+| the path exists, holds content, and no needle is given | **`noted`** | "it is not in there" is a claim about CONTENT that nothing here read |
+
+**`noted` never fails a stage and never blocks a gate — and is never silent.** It is counted and named, by path, in the
+`claim-sources` detail (`unchecked absence: 2 (04-build/log, .tldrx/memory/facts.yml)`) and therefore in the auto-gate
+note. `- none [src: absent:.tldrx/memory/facts.yml]` is this document's own spelling of an empty section, so refusing it
+would outlaw the negative-case discipline §2.8 exists to encourage; passing it in silence is what let
+`- none [src: absent:04-build/log]` stand over a directory of seven files. Measured live 2026-09-02: those were the
+same resolution, read as "fine" by `claim-sources` and as "stop" by the auto gate on the same file. To turn a `noted`
+into a checked `ok`, add the needle — or cite the line that proves the point.
+
+**An `absent:` path resolves against the same bases a `file` path does** (workspace root, then the run directory, then a
+named repo, plus this run's epic worktrees), and `repo:path` is accepted. It used to try the workspace root and nothing
+else, so the run-relative `absent:04-build/log` never even saw the directory it named and reported an absence it had
+never looked for.
 
 **Resolving is not sustaining.** Every outcome above is a fact about the CITATION. Whether the citation supports the
 SENTENCE is a separate question, and §2.6 answers it for knowledge files: a claim that asserts a result needs the
@@ -1997,16 +2024,23 @@ note**, because a condition that could not measure must not report that it measu
 
 Two of the others were tightened on 2026-08-29, both because an auto gate could be closed by SILENCE:
 
-- **(2) "zero open" is only an answer when the file was readable.** When the stage's `stage.yml outputs:` names a
-  `questions.md`, a file the §2.7 parser cannot read — or one that parses to zero blocks — does NOT satisfy the
-  condition. The gate falls to a human with the reason
+- **(2) "zero open" is only an answer when the file was readable — but silence with a readable file IS an answer.**
+  When the stage's `stage.yml outputs:` names a `questions.md`, **three** states are told apart. A file the §2.7 parser
+  cannot read does NOT satisfy the condition: the gate falls to a human with the reason
   `questions.md has no parseable question (expected `## Qn · …` + metadata line) — see template`, naming the ids it
-  could not see. `tldrx next --commit` refuses the same file outright with exit `5`, while the host session that wrote
-  it is still there to fix it. A stage that merely *may* ask (a `questions:` cap with no such output) is unaffected:
-  asking nothing is its right.
-- **(5) `unverified` counts.** A citation that is well formed and could not be checked from disk — an https doc nothing
-  in the workspace names, an `absent:` over a file that exists, a `cmd` with no `workspace.yml` commands to check
-  against — passes the stage and blocks the auto gate. See the §2.8 outcome table.
+  could not see, and `tldrx next --commit` refuses the same file outright with exit `5` while the host session that
+  wrote it is still there to fix it. A file that was **never written** does not satisfy it either —
+  `questions.md is a declared output of this stage and was never written — an absent file is not an answer`. But a file
+  that is **present, readable and raises nothing** DOES satisfy it (`0 open (questions.md written, none raised)`): a
+  stage with no decision to ask for is the state an auto gate exists to close over, and conflating it with the
+  unreadable file penalised every clean stage (measured live 2026-09-02, run `260902-discovery-pipeline-map`). A stage
+  that merely *may* ask (a `questions:` cap with no such output) is unaffected: asking nothing is its right.
+- **(5) `unverified` counts; `noted` is named.** A citation that is well formed and could not be checked from disk — an
+  https doc nothing in the workspace names, a `cmd` with no `workspace.yml` commands to check against — passes the
+  stage and blocks the auto gate. An **unchecked absence** (`absent:` over a path that exists with content) is `noted`,
+  not `unverified`: it passes the stage AND the gate, and is named by path in both the check detail and the gate note.
+  Blocking on it penalised the state-the-negative-case discipline §2.8 asks for, and waving it through in silence let a
+  `- none [src: absent:04-build/log]` stand over a directory of seven files. See the §2.8 outcome table.
 
 **`agent` gates.** A gate an agent may close, and only over a check it wrote down. It is **strictly stronger** than
 an auto gate, never a cheaper one — three things must hold, not one:

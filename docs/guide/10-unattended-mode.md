@@ -402,9 +402,11 @@ recommend: []
 Four H2 sections, **in that order**, each with at least one list item, and **every list item
 ends in a `[src: …]` token that resolves** — checked by the same §2.8 machinery `claim-sources`
 runs on a handoff. One rule is stricter here than on a handoff: a citation nothing could
-*check* — an https URL the workspace never names, an `absent:` over a file that exists —
+*check* — an https URL the workspace never names, a `cmd` with no workspace command behind it —
 refuses the note outright. A gate closed by an agent has to be stronger than one closed by the
-harness, never cheaper.
+harness, never cheaper. An `absent:` over a path that exists is not one of those: it is `noted`
+here as everywhere — named, never fatal — because it is the framework's own spelling of a
+negative case.
 
 The note also refuses arithmetic that cannot be true (`sampled` above `of`; `resolved + refuted`
 above `sampled`), a `sampled: 0` while citations exist ("I checked none of them" is not a

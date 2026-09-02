@@ -8,7 +8,8 @@
  * can show its work. Every condition is measured off files that already exist:
  *
  *   1. `checks`        — the stage's declared checks, as `next` just ran them
- *   2. `questions`     — open blocks in this phase's questions.md
+ *   2. `questions`     — open blocks in this phase's questions.md (a stage that
+ *                        raises none is silent by right; see `questionsCondition`)
  *   3. `budget`        — the stage's own spend against its ceiling, and the phase's
  *   4. `status`        — the stage did not end `failed`
  *   5. `claim-sources` — the §2.8 handoff validator, run whether or not the stage
@@ -33,7 +34,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { openBlocks, parseQuestions, unreadableQuestionHeadings } from "../text/questions.ts";
 import { isHostTokens, type RunBudget } from "../budget/RunBudget.ts";
-import { runCheck, unverifiedCount, type CheckOutcome } from "./checks.ts";
+import { notedCount, runCheck, unverifiedCount, type CheckOutcome } from "./checks.ts";
 import { buildProgress, BUILD_PHASE } from "./buildProgress.ts";
 import { evaluateBoundary } from "./boundary.ts";
 import type { PlannedStage } from "./workflowPreset.ts";
@@ -113,23 +114,49 @@ export const NO_PARSEABLE_QUESTIONS =
   "questions.md has no parseable question (expected `## Qn · …` + metadata line) — see template";
 
 /**
- * Zero open questions is only an ANSWER when the file could be read.
+ * The reason an auto gate falls to a human when the stage was told to write
+ * questions and wrote no file at all. A separate sentence from
+ * `NO_PARSEABLE_QUESTIONS` because the two are opposite mistakes with opposite
+ * fixes, and telling a stage that raised nothing to "see template" sent the
+ * unattended driver of 260902-discovery-pipeline-map hunting for a grammar error
+ * in a file that did not exist.
+ */
+export const MISSING_QUESTIONS =
+  "questions.md is a declared output of this stage and was never written — an absent file is not an answer";
+
+/**
+ * Zero open questions is an ANSWER, unless the file is unreadable or missing.
  *
- * Measured 2026-08-29: a stage that declares `questions.md` as an output wrote
- * `### Q1 — …` with a `**Answer:**` line, following the shipped template rather
- * than the parser's §2.7 grammar. The parser found zero blocks, "0 open" was
- * recorded as satisfied, and the gate closed over four unanswered questions. An
- * empty parse of a file the stage was told to write is silence, not consent.
+ * THREE states, not two (gh #109). Zero parsed blocks used to mean one thing here
+ * and it is really three:
+ *
+ *   **unreadable** — measured 2026-08-29: a stage wrote `### Q1 — …` with a
+ *   `**Answer:**` line, following the shipped template rather than the parser's
+ *   §2.7 grammar. Zero blocks parsed, "0 open" was recorded as satisfied, and the
+ *   gate closed over four unanswered questions. Still refused, by id.
+ *
+ *   **missing** — the stage was told to write the file and did not. Still
+ *   refused: a declared output nobody wrote is not an answer.
+ *
+ *   **present, readable, and empty of questions** — the GOOD case, and the one
+ *   this used to punish. Measured 2026-09-02 on run 260902-discovery-pipeline-map:
+ *   a stage that had nothing to ask could never satisfy the condition, so every
+ *   clean stage paid for the 2026-08-29 failure. An empty questions.md, or one
+ *   holding "none", is a stage saying it needs no decision — which is exactly what
+ *   an auto gate exists to close over.
  */
 function questionsCondition(runDir: string, phaseId: string, planned: PlannedStage): AutoGateCondition {
   const path = join(runDir, phaseId, "questions.md");
   if (declaresQuestions(planned)) {
+    if (!existsSync(path)) {
+      return { id: "questions", ok: false, detail: MISSING_QUESTIONS };
+    }
     const unreadable = unreadableHeadings(path);
     if (unreadable.length > 0) {
       return { id: "questions", ok: false, detail: `${NO_PARSEABLE_QUESTIONS} (${unreadable.join(", ")})` };
     }
-    if (!existsSync(path) || parsedBlocks(path) === 0) {
-      return { id: "questions", ok: false, detail: NO_PARSEABLE_QUESTIONS };
+    if (parsedBlocks(path) === 0) {
+      return { id: "questions", ok: true, detail: "0 open (questions.md written, none raised)" };
     }
   }
   const open = openQuestions(path);
@@ -234,11 +261,22 @@ async function claimSourcesCondition(input: AutoGateInput): Promise<AutoGateCond
       detail: `${String(unchecked)} unverified citation(s) — ${outcome.detail}`,
     };
   }
-  return {
-    id: "claim-sources",
-    ok: true,
-    detail: outcome.status === "passed" ? "passed" : `${outcome.status}: ${outcome.detail}`,
-  };
+  // An UNCHECKED ABSENCE is not one of those (gh #110). `absent:` over a path that
+  // exists with content is `noted`, not `unverified`: it is the framework's own
+  // spelling of "I looked and there is nothing recorded", and blocking on it
+  // penalised exactly the state-the-negative-case discipline the mandate asks
+  // for. It does not refuse the gate — and it is carried into the gate note by
+  // name, so `claim-sources` and this condition say the same words about the same
+  // file instead of one waving it through while the other refuses it.
+  const absences = notedCount(outcome);
+  if (outcome.status === "passed") {
+    return {
+      id: "claim-sources",
+      ok: true,
+      detail: absences === 0 ? "passed" : `passed, ${outcome.detail}`,
+    };
+  }
+  return { id: "claim-sources", ok: true, detail: `${outcome.status}: ${outcome.detail}` };
 }
 
 /**

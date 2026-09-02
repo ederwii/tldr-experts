@@ -197,6 +197,38 @@ same amount after it; what changed is that the page now says how big the bound i
     a price for a model this table cannot price — only the sizing changed.
   - No USD figure moved. The `[1m]` rows already priced identically to their 200k siblings;
     this was never a billing bug, and `tldrx cost` reads `total_cost_usd` off the CLI.
+- **A stage with nothing to ask can close its own auto gate again (#109).** `questionsCondition`
+  read zero parsed question blocks as one thing when it is really three. *Unreadable* — the
+  2026-08-29 failure, where a stage wrote `### Q1 — …` from the old template and four questions
+  were swallowed — is still refused, by id. *Missing* — a `questions.md` the stage declared as an
+  output and never wrote — is still refused, and now says so in its own words
+  (`questions.md is a declared output of this stage and was never written — an absent file is not
+  an answer`) instead of sending the reader to a template for a file that does not exist.
+  *Present, readable, and raising nothing* — the GOOD case — now SATISFIES the condition. Measured
+  live 2026-09-02 on run `260902-discovery-pipeline-map`: every clean stage was paying for the
+  2026-08-29 bug, because the state an auto gate exists to close over was indistinguishable from
+  the state it exists to refuse.
+- **`absent:` has ONE semantic, and both checkers share it (#110, absorbing #105).** Two live
+  failures in the same week, in opposite directions, out of the same resolution: `claim-sources`
+  PASSED `- none [src: absent:04-build/log]` over a directory holding seven files, while the auto
+  gate REFUSED `absent:.tldrx/memory/facts.yml` — "I searched, there is no recorded fact", which is
+  the spec's own spelling of an empty section. Both were `unverified`, which one checker read as
+  "fine" and the other as "stop".
+  - **`absent:<path>` now resolves against the same bases a `file` src does** (workspace root, run
+    directory, named repo, epic worktrees), and accepts `repo:path`. That is the mechanism behind
+    #105: it used to try the workspace root and nothing else, so a run-relative
+    `absent:04-build/log` never even saw the directory it named and reported an absence it had
+    never looked for.
+  - **A fourth outcome, `noted`.** No such path, an empty file, an empty directory ⇒ `ok`, the
+    absence is literal. The path exists with content and no needle ⇒ `noted`: legal, never fatal,
+    never blocking — and never silent. It is counted and named BY PATH in the `claim-sources`
+    detail (`unchecked absence: 2 (04-build/log, .tldrx/memory/facts.yml)`) and therefore in the
+    auto-gate note, so the two can no longer disagree about the same file.
+  - **`absent:<path>#<needle>` makes an absence checkable.** Say what you searched for and the
+    checker searches for it: not found is a *verified* `ok`, found is a REFUSAL that names the line
+    (`` `30 days` IS at docs/retention.md:3 — that is a presence, not an absence ``). It is the
+    upgrade path out of `noted`, and the first form in which an absence over a file with content is
+    ever actually checked.
 
 ## 0.5.0 — 2026-09-02
 

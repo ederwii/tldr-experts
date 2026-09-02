@@ -289,6 +289,12 @@ export function validateEvidence(
     message: `${issue.message} — an agent gate cannot sign over a citation nothing could check`,
   }));
   issues.push(...unverified);
+  // `noted` — an `absent:` over a path that exists with content — is NOT one of
+  // those, here or anywhere (gh #110). It is the framework's own spelling of a
+  // negative case, and the one `absent:` semantic is that it never fails a stage
+  // and never blocks a gate; a third reading of it in the strictest gate would
+  // recreate exactly the disagreement #110 removed. `report.noted` is deliberately
+  // not pushed.
 
   const front = note.front;
   if (front !== null) {
