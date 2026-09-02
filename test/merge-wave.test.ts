@@ -710,6 +710,58 @@ describe("the guard refuses raw git in the SHARED checkout while a wave holds th
     expect(sb.git("rev-parse", "main")).toBe(mainSha);
   });
 
+  /**
+   * The state names git passes are NOT portable, and assuming they were shipped a red CI.
+   *
+   * macOS git 2.50.1 calls the abortable state `prepared`. The Linux runner's git calls it
+   * something else — `fatal: in 'preparing' phase, update aborted by the reference-transaction
+   * hook`, CI run 33589554234 on e0e76a2. The guard's `*)` arm printed a usage error and
+   * exited 2, so on that machine EVERY ref update in every sandbox was refused and the whole
+   * of this file went red at once, while macOS stayed green — #49's failure shape exactly.
+   *
+   * So nothing here hardcodes a state name. The test ASKS this git which states it passes,
+   * then holds the guard to both halves of the contract for each one.
+   */
+  function statesThisGitPasses(sb: Sandbox): string[] {
+    const hook = join(sb.main, ".git", "hooks", "reference-transaction");
+    const seen = join(sb.dir, "states.log");
+    mkdirSync(join(sb.main, ".git", "hooks"), { recursive: true });
+    writeFileSync(hook, `#!/usr/bin/env bash\nprintf '%s\\n' "$1" >> ${seen}\ncat > /dev/null\nexit 0\n`);
+    chmodSync(hook, 0o755);
+    sb.git("commit", "-q", "--allow-empty", "-m", "a probe, to ask git what it calls its states");
+    rmSync(hook, { force: true });
+    return [...new Set(readFileSync(seen, "utf8").trim().split("\n").filter(Boolean))];
+  }
+
+  test("whatever THIS git calls its transaction states, the guard handles every one", () => {
+    const sb = sandbox();
+    const states = statesThisGitPasses(sb);
+    expect(states.length).toBeGreaterThan(0);
+
+    // Both the names this git uses AND the names it does not: a machine only ever exercises
+    // its own, so the portability property is only testable against the others. `preparing`
+    // is the one that shipped red; the third is a name no git has, standing in for the next
+    // rename. On macOS all three fail against the `*)` arm this replaced.
+    const probe = [...new Set([...states, "prepared", "preparing", "some-future-state"])];
+
+    // With no wave in progress, not one of them may refuse — and none may hit the usage error,
+    // which is the arm that bricked CI.
+    for (const state of probe) {
+      const clear = spawnSync("bash", [MERGE_GUARD, state], { cwd: sb.main, encoding: "utf8", input: "" });
+      expect(clear.stderr).not.toContain("usage:");
+      expect(clear.status, `state \`${state}\` refused with no wave running: ${clear.stderr}`).toBe(0);
+    }
+
+    // With one in progress, at least one of them must refuse — otherwise the guard is decoration
+    // on this machine, which is the OTHER way a portable state name can be got wrong.
+    holdLock(sb);
+    const refuses = (state: string) =>
+      spawnSync("bash", [MERGE_GUARD, state], { cwd: sb.main, encoding: "utf8", input: "" }).status !== 0;
+    expect(states.filter(refuses).length).toBeGreaterThan(0);
+    // And the name CI actually uses refuses here even on a machine that never passes it.
+    expect(refuses("preparing")).toBe(true);
+  });
+
   test("`--check` answers the same question without a ref transaction to hang it on", () => {
     const sb = sandbox();
     const clear = spawnSync("bash", [MERGE_GUARD, "--check"], { cwd: sb.main, encoding: "utf8" });
@@ -733,6 +785,22 @@ describe("the guard refuses raw git in the SHARED checkout while a wave holds th
 });
 
 describe("the convention the guard only approximates is written down (#89)", () => {
+  /**
+   * The header block is the only usage text a maintainer reads before running this script,
+   * and it drifted from the code the day it was written: it advertised `--install [--force]`
+   * when no `--force` existed. "A comment that no longer describes the code beside it is a
+   * defect in its own right" — so the two are pinned to each other in both directions.
+   */
+  test("every flag the header advertises is a flag the case statement accepts, and vice versa", () => {
+    const src = readFileSync(MERGE_GUARD, "utf8");
+    const block = /# Three ways in:\n((?:#.*\n)+)/.exec(src)?.[1] ?? "";
+    expect(block).not.toBe("");
+    const documented = [...block.matchAll(/--[a-z][a-z-]*/g)].map((m) => m[0]).sort();
+    const accepted = [...src.matchAll(/^ {2}(--[a-z][a-z-]*)\)/gm)].map((m) => m[1]!).sort();
+    expect(documented).toEqual(accepted);
+    expect(accepted).toEqual(["--check", "--install"]);   // and the pin itself can fail
+  });
+
   const rule = (file: string) => readFileSync(join(REPO, file), "utf8");
 
   test("CONTRIBUTING and CLAUDE.md both state the rule in the same words", () => {
