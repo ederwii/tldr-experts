@@ -53,27 +53,64 @@ export const MODEL_PRICES: readonly ModelPrice[] = [
 ];
 
 /**
- * The row for a model name as a stage file, a `--model` flag or a `result` event
- * spells it — `sonnet`, `claude-haiku-4-5-20251001`, `us.anthropic.claude-…`.
+ * The 1M-context suffix a model name carries — `sonnet[1m]`, and equally
+ * `claude-sonnet-4-5-20250929[1m]`.
  *
- * Longest matching family name wins, so `opus[1m]` is not answered by `opus`.
- * Null when nothing matches: a caller then says "unknown model" rather than
- * quoting a price for a model it has never heard of.
+ * It is a MARKER on a name, not part of a family's spelling, and reading it as
+ * one was #112: a row id of `sonnet[1m]` could only ever be a substring of the
+ * bare alias, so every DATED spelling — the form a `--model` flag and a `result`
+ * event actually use — fell through to the 200k row and the context ledger sized
+ * a 1M model at a fifth of its window. Family and marker are matched separately
+ * below so that both spellings land on the same row.
+ */
+const ONE_MILLION_MARKER = "[1m]";
+const ONE_MILLION_TOKENS = 1_000_000;
+
+/** A row's family name, with its `[1m]` marker taken off. */
+function familyOf(id: string): string {
+  return id.endsWith(ONE_MILLION_MARKER) ? id.slice(0, -ONE_MILLION_MARKER.length) : id;
+}
+
+/**
+ * The row for a model name as a stage file, a `--model` flag or a `result` event
+ * spells it — `sonnet`, `claude-haiku-4-5-20251001`, `us.anthropic.claude-…`,
+ * `claude-sonnet-4-5-20250929[1m]`.
+ *
+ * A `[1m]` row is offered only to a name that carries the marker, and longest id
+ * still wins, so `opus[1m]` is not answered by `opus` and `opus` is not answered
+ * by `opus[1m]`. Null when nothing matches: a caller then says "unknown model"
+ * rather than quoting a price for a model it has never heard of.
  */
 export function priceFor(model: string | null): ModelPrice | null {
   if (model === null) return null;
   const name = model.toLowerCase();
+  const oneMillion = name.includes(ONE_MILLION_MARKER);
   let best: ModelPrice | null = null;
   for (const row of MODEL_PRICES) {
-    if (!name.includes(row.id)) continue;
+    const family = familyOf(row.id);
+    // A family with no `[1m]` row has no 1M variant — haiku's 200k is the one
+    // MEASURED window here, and a marker does not get to overrule it.
+    if (family !== row.id && !oneMillion) continue;
+    if (!name.includes(family)) continue;
     if (best === null || row.id.length > best.id.length) best = row;
   }
   return best;
 }
 
-/** Context window for a model name, falling back to the documented default. */
+/**
+ * Context window for a model name, falling back to the documented default.
+ *
+ * A family this table prices answers for its own windows. For one it does NOT
+ * price — `claude-fable-5[1m]`, the spelling this repo's own fixtures use — a
+ * `[1m]` in the name is the only window evidence there is, and honouring it is
+ * strictly better than a silent 200k. This still quotes no price for it:
+ * `priceFor` goes on refusing, so nothing bills a model the table cannot price.
+ */
 export function contextTokensFor(model: string | null): number {
-  return priceFor(model)?.contextTokens ?? DEFAULT_CONTEXT_TOKENS;
+  const priced = priceFor(model);
+  if (priced !== null) return priced.contextTokens;
+  if (model !== null && model.toLowerCase().includes(ONE_MILLION_MARKER)) return ONE_MILLION_TOKENS;
+  return DEFAULT_CONTEXT_TOKENS;
 }
 
 export function estimateTokensFromBytes(bytes: number): number {
