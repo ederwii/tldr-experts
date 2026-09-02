@@ -48,7 +48,7 @@ of it.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `modelVersion` | number | `3` today. `1 → 2`: `pendingQuestion` and `pendingGate` became aliases of `waiting` and no longer report an open question, or a gate object, that the run is not actually stopped on. `2 → 3` (#60): `runnable` reads `true` for a run that has STARTED and was proposed to follow an unfinished sibling — a proposal recorded before either run existed cannot un-start a running run. Additions never bump it, and #85 is the case that tested the rule: it gave the model two new files and eight new fields and stayed at **3**. `spentUsd` was the field with a case to answer, because a consumer reading it alone is demonstrably wrong about a host-attended run now that the page can show the token ceiling beside it — but it is computed from the same `run.yml` key, holds the same number, and has meant "METERED dollars, a lower bound when `unmeteredTasks > 0`" since v3. A field that gained NEIGHBOURS did not change meaning. #93 stayed at **3** again and by the same rule: `watch`, `preflight` and `keepWorktrees` are three more additions, and nothing that already existed reads differently than it did at v3 — the argument the other way is that this doc used to promise, under *What is NOT in it*, that two named files were unread, and that promise is now void. But a documented absence is not a field, and no field's meaning moved. |
+| `modelVersion` | number | `3` today. `1 → 2`: `pendingQuestion` and `pendingGate` became aliases of `waiting` and no longer report an open question, or a gate object, that the run is not actually stopped on. `2 → 3` (#60): `runnable` reads `true` for a run that has STARTED and was proposed to follow an unfinished sibling — a proposal recorded before either run existed cannot un-start a running run. Additions never bump it, and #85 is the case that tested the rule: it gave the model two new files and eight new fields and stayed at **3**. `spentUsd` was the field with a case to answer, because a consumer reading it alone is demonstrably wrong about a host-attended run now that the page can show the token ceiling beside it — but it is computed from the same `run.yml` key, holds the same number, and has meant "METERED dollars, a lower bound when `unmeteredTasks > 0`" since v3. A field that gained NEIGHBOURS did not change meaning. #93 stayed at **3** again and by the same rule: `watch`, `preflight` and `keepWorktrees` are three more additions, and nothing that already existed reads differently than it did at v3 — the argument the other way is that this doc used to promise, under *What is NOT in it*, that two named files were unread, and that promise is now void. But a documented absence is not a field, and no field's meaning moved. #103 stays at **3** for the third time: `spend`, `nextAction`, `lastEventAt`, `lastEventFrom` and `ageSeconds` are five additions, and the field with a case to answer is `spentUsd` again. It is not answered any differently: it is still the same `run.yml` key, still the same number, and still "METERED dollars, a lower bound when `unmeteredTasks > 0`". What changed is that the page now says out loud how big that bound is. A consumer that read it as a total was wrong before this wave and is wrong by exactly the same amount after it. |
 | `generatedAt` | string | ISO-8601, to the second, when the files were read. |
 | `root` | string | Absolute path of the workspace that was read. |
 | `workspace` | string | Its basename — what the page calls itself. |
@@ -87,9 +87,14 @@ still carries the slug, which is where that fact belongs.
 | `attendedBy` | string \| null | `"host"` when a host session drives the turns (`run.yml` `attended_by`), null when the framework may spawn. |
 | `unmeteredTasks` | number | Turns whose cost nobody declared (`cost_usd: null`, in-session `--commit`). |
 | `hostTokens` | number | Host-session tokens declared with `--tokens`. A **different currency** — never add it to dollars, there is no exchange rate. |
+| `spend` | `Spend` | **Both economies in one record, with the half nobody metered named rather than implied** (#103). The three fields above are unchanged; this is the one that says how much of the run they can see. See below. |
+| `lastEventAt` | string \| null | ISO-8601. When anything last happened: the `ts` of the **last line** of `events.jsonl`, or the file's mtime when nothing in it parses. Null when there is no ledger at all. |
+| `lastEventFrom` | string | Which of the two: `"event"` \| `"mtime"` \| `"none"`. Named, because an mtime is a **weaker fact** — the file was touched, which is not the same as the run moving. |
+| `ageSeconds` | number \| null | Seconds between `lastEventAt` and the model's `now`. Null when there is no timestamp. **No threshold is baked in** — nothing here decides what "stale" means. Not clamped either: a ledger written after `now` reports a negative age. |
 | `stagesTotal` / `stagesDone` | number | `done`/`failed`/`skipped`/`cancelled` count as done. |
 | `percent` | number | 0–100, rounded. |
 | `waiting` | `Waiting` | **What this run is waiting on.** The one field to read. |
+| `nextAction` | `NextAction` | `waiting`, taken apart into the pieces a card renders: who, where, and the command. A **projection** of `waiting`, never a second derivation. See below. |
 | `pendingGate` | string \| null | Stage id of the gate the run waits on. **Derived alias** of `waiting` — see below. |
 | `pendingQuestion` | string \| null | `"<Qid> · <title>"` of the question the run stopped for. **Derived alias** of `waiting`. |
 | `dependsOn` | `string[]` | Runs this one was proposed to follow (`run.yml` `triage.depends_on`), resolved from slugs to run ids. A slug with no run in this workspace keeps its raw slug. |
@@ -143,6 +148,91 @@ when `kind` is `answer`. They are kept for one release for templates that
 already read them — **new code should read `waiting`.** Open questions in a
 phase that was already approved still appear under `phases[].questions`; they
 are simply not what the run is waiting on.
+
+### `NextAction`
+
+`waiting` answers the question as prose. A card that wants the command in a
+button, the stage in a subtitle and the actor in a chip had to regex that
+sentence to get them — and a renderer that parses a sentence is a renderer that
+will one day parse it wrong. So the same answer arrives pre-split:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `kind` | string | `waiting.kind`, **verbatim**. One of `WAITING_KINDS`. |
+| `waitingOn` | string | Who has to move: `"person"` \| `"process"` \| `"run"` \| `"nobody"` \| `"unknown"`. |
+| `phase` / `stage` | string \| null | Where the waiting is, from `run.yml`'s cursor. Null on the kinds that do not point at a stage. |
+| `command` | string \| null | The command that closes it: the **first backticked span** of `message`, verbatim. Null when the sentence offers none. |
+| `alternatives` | `string[]` | The remaining backticked spans, in order — `tldrx reject`, and its kind. |
+| `message` | string | `waiting.message`, **verbatim**. |
+
+**Nothing here decides anything twice.** `kind` and `message` are copies,
+`command` and `alternatives` are read OUT OF that message rather than rebuilt
+beside it, and `waitingOn` applies `isMovable` — the framework's own definition
+of "a human could move it right now" — rather than a second opinion about it.
+
+`waitingOn` resolves in this order, which is the order `dashPending` already
+applies: a run that has **not started** and was proposed to follow an unfinished
+sibling is `"run"`, whatever its own stage says (an alert nobody can act on is
+the noise that makes the others ignorable); then `isMovable` gives `"person"`;
+`running` is a `"process"` holding the lock; `done` and `cancelled` wait on
+`"nobody"`. `"unknown"` is the honest fifth — a `blocked` run with no sibling
+named is one whose `run.yml` records no cursor, or a cursor that resolves to
+nothing. Somebody has to fix that file, and the model will not guess who.
+
+`phase`/`stage` are null on `done`, `cancelled` and `blocked`. The cursor still
+names a stage on the first two; nothing is waiting there, and printing the last
+stage a finished run touched answers a question nobody asked.
+
+### `Spend`
+
+Both economies of one run, and an explicit account of the half nobody metered.
+
+`spentUsd` is a sum of dollars this process watched. On a **host-attended** run
+that number reconciles perfectly against every other ledger surface and is still
+nowhere near what the run cost. Measured on `260830-ordering-inventory`
+(aparece-v2, audited 2026-09-02): `run.yml` `spent_usd`, the `events.jsonl` sum,
+the stage sums, the task sums and the `budget.yml` phase sums **all agree at
+$14.60**, over 34 turns of which **4** carried money. The run's own watch gate
+note puts the real figure at "about 81 dollars across 34 sub-agent turns". The
+framework was not mis-metering; the front page was lying by omission.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `meteredUsd` | number \| null | The metered dollars — the same number as `spentUsd`, restated so this record reads alone. |
+| `totalTasks` | number | Every task on the run, across every stage. |
+| `unmeteredTasks` | number | Turns whose cost nobody declared. Byte-for-byte the rule `Run.unmeteredTasks` has always used. |
+| `zeroCostTasks` | number | Turns recorded as **metered** at exactly `$0.00`. |
+| `costlessTasks` | number | `unmeteredTasks + zeroCostTasks` — every turn that put nothing in the meter. |
+| `hostTokens` | number | Tokens declared with `--tokens` across **all** turns — the same number as `Run.hostTokens`. |
+| `costlessTokens` | number | The subset declared **by a costless turn** — the only host-side figure the dollars do not already cover. |
+| `silentTasks` | number | Costless turns that declared nothing at all: no dollars, no tokens. |
+| `basis` | string | `"measured"` \| `"declared"` \| `"partial"` \| `"absent"`. |
+| `reason` | string | `basis` as a whole sentence, already worded for a reader. |
+
+**Both spellings of "this turn cost nothing" are counted, and neither is
+overruled.** The model already knew `cost_usd: null` + `metered: false`
+(`runNext.commitStage`). It did not know the other one: a flat `cost_usd: 0.00`
+written by an executor turn a host session drove, which is what **16 of that
+run's 34 turns** wear and which reads as a measurement of zero. `unmeteredTasks`
+keeps its exact old meaning — it counted 14 of those 30 turns and still does —
+and `zeroCostTasks` is a second count beside it. A file that says `0.00` is not
+re-labelled here; it is counted.
+
+**`basis` says how much of the host side is actually derivable:**
+
+- `measured` — no turn was costless. The metered figure is the whole of it.
+- `declared` — every costless turn declared its tokens. Complete, in the other
+  currency.
+- `partial` — some declared, some did not. A lower bound in both currencies.
+- `absent` — costless turns exist and **not one of them declared anything**. The
+  host-side figure is not in the files, and no number here pretends it is. The
+  audited run is this case: all 920,641 of its declared tokens sit on turns that
+  also carried dollars, so they describe none of the 30 turns that carried none.
+
+`reason` carries the framework's own phrase — "the metered total is a **LOWER
+BOUND**, not a total", the wording `tldrx budget show` prints for the identical
+fact — so the two screens cannot word it two ways. It is counts only: the model
+does not format money.
 
 Suggested rendering: `gate`, `answer`, `failed` and `prepared` are the four
 kinds that raise an attention card — each is a run waiting on a person. `ready`
@@ -299,15 +389,32 @@ resolves no `[src: …]`, calls no `parseWatcherCard`, and computes no
 `CardChecklist`. `tldrx watch check` remains the only thing that re-checks a card
 against today's code, and the page says so.
 
+Since #103 the model reads one more thing about `events.jsonl`, and it is not a
+line of it: the file's **mtime**, carried on `LoadedRun` by the reader that
+already opens the path, as the fallback behind `lastEventAt`. The ledger is
+still read exactly once per run and still only through what `loadRunResult`
+parsed. `lastEventFrom` says which of the two answers you are looking at,
+because an mtime is the weaker fact.
+
 What is still not here:
 
 - **The narrative.** Per-attempt costs, agent spawns, check results, the order
   things happened in — `tldrx replay <run>`.
+- **Any dollar figure nobody declared.** `spend` counts the turns the meter
+  could not see and reports what was declared about them. It runs no price
+  table, converts no token to a dollar, and synthesises no estimate from stage
+  prices or turn counts. Where nothing was declared, `basis` is `absent` and the
+  number is missing on purpose — a guess about a price is exactly what the front
+  page was already making, in the other direction.
+- **Any threshold.** `ageSeconds` is a measurement. Nothing in the model decides
+  what "stale" means, which run is abandoned, or when a budget is alarming; a
+  renderer is free to, and owns the call.
 - **Any verdict the files do not already carry.** The model reports a card's
   `status` and its `absent:` citations side by side; it does not re-decide which
   is right.
 - **Any write path.** Nothing in the model is a command, an action, or an id you
-  can POST back.
+  can POST back. `nextAction.command` is **text** — the sentence `waiting.ts`
+  already wrote, split for a button. Nothing on this page runs it.
 
 ## Serving it
 

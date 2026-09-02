@@ -76,6 +76,15 @@ describe("the dashboard model", () => {
   // their names appear and their children do not. `dashboard-leftovers.test.ts`
   // asserts the children over fixtures that carry a watcher card and a
   // preflight.yml.
+  //
+  // The #103 fields — `runs[].spend.*`, `runs[].nextAction.*`, and the three
+  // staleness ones — are all present here because every run has turns, a waiting
+  // state and a ledger. This fixture is the EASY case for them: two metered
+  // turns, so `spend.basis` reads `measured` and the page gains no line.
+  // `dashboard-headline.test.ts` asserts them over the shape #103 was filed
+  // about — a host-attended run whose 30 of 34 turns produced no dollars.
+  // `nextAction.alternatives[]` appears only because this run sits at a gate,
+  // whose sentence offers `tldrx reject` beside `tldrx approve`.
   test("its field names are the contract a designer targets", () => {
     expect([...fieldPaths(model)].sort()).toEqual([
       "experts[].areas[].evidenceCount",
@@ -99,6 +108,7 @@ describe("the dashboard model", () => {
       "modelVersion",
       "order[]",
       "root",
+      "runs[].ageSeconds",
       "runs[].attendedBy",
       "runs[].budget.ceilingHostTokens",
       "runs[].budget.ceilingUsd",
@@ -121,6 +131,15 @@ describe("the dashboard model", () => {
       "runs[].hostTokens",
       "runs[].id",
       "runs[].keepWorktrees",
+      "runs[].lastEventAt",
+      "runs[].lastEventFrom",
+      "runs[].nextAction.alternatives[]",
+      "runs[].nextAction.command",
+      "runs[].nextAction.kind",
+      "runs[].nextAction.message",
+      "runs[].nextAction.phase",
+      "runs[].nextAction.stage",
+      "runs[].nextAction.waitingOn",
       "runs[].path[].budgetUsd",
       "runs[].path[].costUsd",
       "runs[].path[].expert",
@@ -150,6 +169,16 @@ describe("the dashboard model", () => {
       "runs[].repos[]",
       "runs[].runnable",
       "runs[].scope",
+      "runs[].spend.basis",
+      "runs[].spend.costlessTasks",
+      "runs[].spend.costlessTokens",
+      "runs[].spend.hostTokens",
+      "runs[].spend.meteredUsd",
+      "runs[].spend.reason",
+      "runs[].spend.silentTasks",
+      "runs[].spend.totalTasks",
+      "runs[].spend.unmeteredTasks",
+      "runs[].spend.zeroCostTasks",
       "runs[].spentUsd",
       "runs[].stagesDone",
       "runs[].stagesTotal",
