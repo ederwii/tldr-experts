@@ -14,8 +14,10 @@ npm i -g tldr-experts     # gives you `tldrx` and `tldr-experts` — the same bi
 tldrx doctor              # the authority on what else you need
 ```
 
-You need **Node 20 or newer** and **Bun 1.3 or newer**; the package is a pre-built
-bundle with no runtime dependencies. `doctor` checks the rest — `git`, `claude`, a few
+To *run* tldrx you need **Node 20 or newer**, and nothing else: the package ships as a
+pre-built bundle with zero runtime dependencies. **Bun 1.3+** is a contributor's tool here —
+it builds that bundle and runs the test suite — so you do not need it to install or use a
+released tldrx. `doctor` checks the rest — `git`, `claude`, a few
 optional extras — and prints the install command for anything missing rather than
 installing it. A clean machine ends on `All required tools present. ✓`.
 

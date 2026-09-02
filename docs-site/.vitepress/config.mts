@@ -1,6 +1,14 @@
 import { defineConfig } from "vitepress";
+import { tldrxStatusLabel, tldrxVersion } from "../version.ts";
 
 const REPO = "https://github.com/ederwii/tldr-experts";
+
+// Resolved once, at build time, from package.json and the README release table — never
+// typed into a page. See docs-site/version.ts for why. Exposed through `themeConfig` on
+// the root AND on each locale: VitePress merges the two, and a page that renders
+// `undefined` here would advertise nothing at all, so both are set explicitly.
+const VERSION = tldrxVersion();
+const STATUS = tldrxStatusLabel();
 
 // One sidebar, shared by every English page. `sidebarEs` below is its Spanish mirror:
 // same shape, same order, every link prefixed `/es/`.
@@ -99,6 +107,8 @@ export default defineConfig({
       label: "English",
       lang: "en",
       themeConfig: {
+        tldrxVersion: VERSION,
+        tldrxStatus: STATUS,
         nav: [
           { text: "Quickstart", link: "/quickstart" },
           { text: "Demo", link: "/demo" },
@@ -121,6 +131,8 @@ export default defineConfig({
       description:
         "Un framework de desarrollo con IA basado en archivos y en evidencia. Cinco etapas, una compuerta al final de cada una cuyo cierre tú decides, y toda afirmación en disco con su fuente al lado.",
       themeConfig: {
+        tldrxVersion: VERSION,
+        tldrxStatus: STATUS,
         nav: [
           { text: "Guía rápida", link: "/es/quickstart" },
           { text: "Demo", link: "/es/demo" },
@@ -152,6 +164,8 @@ export default defineConfig({
   },
 
   themeConfig: {
+    tldrxVersion: VERSION,
+    tldrxStatus: STATUS,
     socialLinks: [{ icon: "github", link: REPO }],
     search: {
       provider: "local",

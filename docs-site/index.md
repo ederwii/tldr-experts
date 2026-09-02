@@ -26,6 +26,13 @@ features:
     details: Everything lives in .tldrx/ and tldrx-work/ in your repo. Commit them and a teammate who clones gets the whole run.
 ---
 
+<script setup>
+// The version and maturity tag come from package.json and the README release table at
+// build time (docs-site/version.ts), so this page cannot lag a release.
+import { useData } from 'vitepress'
+const { theme } = useData()
+</script>
+
 ## What it is
 
 You ask an AI to build something. It goes away, does a lot, and comes back with a summary
@@ -40,7 +47,7 @@ it can show its work.
 Everything a stage produces is a file in your repo — the intent, the design, the plan, the
 questions it could not answer, the answers you gave, the money spent. Those files are not
 a report about the state. They **are** the state: the tool re-reads them to decide what to
-do next, so there is nothing to fall out of sync with.
+do next. The canonical state is on disk — inspectable, diffable, committable, recoverable.
 
 ## How it feels
 
@@ -64,13 +71,13 @@ first time something genuinely needs a person.
 
 ## Where this is
 
-**Beta, version 0.4.0.** Every command is real and tested — the docs on this site were
+**{{ theme.tldrxStatus }}, version {{ theme.tldrxVersion }}.** Every command is real and tested — the docs on this site were
 written by running them — and `tldrx --help` on your machine is the authority, not this
 site.
 
 The bar for **beta** was public and it has been cleared: file formats frozen (`version: 1`
 schemas only grow), two or more real workspaces taken through the Build phase, and a
-documented upgrade path. Releases through 0.3.1 were `alpha`; 0.4.0 is the first `beta`.
+documented upgrade path. Releases through 0.3.1 were `alpha`; 0.4.0 was the first `beta`.
 **Stable** means 1.0 and semver from then on.
 
 Install name is `tldr-experts`; it gives you two commands, `tldrx` (short) and

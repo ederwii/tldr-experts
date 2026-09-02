@@ -2,6 +2,13 @@
 title: FAQ for the impatient
 ---
 
+<script setup>
+// The version and maturity tag come from package.json and the README release table at
+// build time (docs-site/version.ts), so this page cannot lag a release.
+import { useData } from 'vitepress'
+const { theme } = useData()
+</script>
+
 # FAQ for the impatient
 
 ## What is the shortest way to understand this?
@@ -98,8 +105,8 @@ teammate who clones the repo gets the run.
 
 ## Is it ready?
 
-**Beta, 0.4.0.** Every command is real and tested; `tldrx --help` on your machine is the
-authority, not this site. Releases through 0.3.1 were `alpha`; 0.4.0 is the first `beta`, and
+**{{ theme.tldrxStatus }}, {{ theme.tldrxVersion }}.** Every command is real and tested; `tldrx --help` on your machine is the
+authority, not this site. Releases through 0.3.1 were `alpha`; 0.4.0 was the first `beta`, and
 the bar for it has been cleared: frozen file formats, two or more real workspaces taken
 through Build, and a documented upgrade path.
 

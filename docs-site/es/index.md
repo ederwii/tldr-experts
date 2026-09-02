@@ -26,6 +26,13 @@ features:
     details: Todo vive en .tldrx/ y tldrx-work/, dentro de tu repo. Haz commit y quien clone se lleva el run completo.
 ---
 
+<script setup>
+// The version and maturity tag come from package.json and the README release table at
+// build time (docs-site/version.ts), so this page cannot lag a release.
+import { useData } from 'vitepress'
+const { theme } = useData()
+</script>
+
 ## Qué es
 
 Le pides a una IA que construya algo. Se va, hace un montón de cosas y vuelve con un
@@ -40,7 +47,8 @@ las puede firmar la herramienta sola, pero solo cuando puede mostrar en qué se 
 Todo lo que produce una etapa es un archivo dentro de tu repo: la intención, el diseño, el
 plan, las preguntas que no pudo responder, las respuestas que le diste, el dinero gastado.
 Esos archivos no son un reporte del estado. **Son** el estado: la herramienta los vuelve a
-leer para decidir qué sigue, así que no hay nada que se pueda desincronizar.
+leer para decidir qué sigue. El estado canónico vive en disco: se puede inspeccionar,
+comparar, versionar y recuperar.
 
 ## Cómo se siente
 
@@ -65,14 +73,14 @@ primera vez que algo de verdad necesita a una persona.
 
 ## En qué punto está
 
-**Beta, versión 0.4.0.** Todos los comandos son reales y están probados — la documentación
+**{{ theme.tldrxStatus }}, versión {{ theme.tldrxVersion }}.** Todos los comandos son reales y están probados — la documentación
 de este sitio se escribió corriéndolos — y la autoridad es `tldrx --help` en tu máquina, no
 este sitio.
 
 El requisito para llegar a **beta** era público y ya se cumplió: formatos de archivo
 congelados (los esquemas `version: 1` solo crecen), dos o más workspaces reales llevados
 hasta la fase Build, y una ruta de actualización documentada. Las versiones hasta la 0.3.1
-fueron `alpha`; la 0.4.0 es la primera `beta`. **Stable** quiere decir 1.0 y semver de ahí
+fueron `alpha`; la 0.4.0 fue la primera `beta`. **Stable** quiere decir 1.0 y semver de ahí
 en adelante.
 
 El paquete se instala como `tldr-experts` y te deja dos comandos: `tldrx` (el corto) y
