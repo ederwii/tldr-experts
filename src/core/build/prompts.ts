@@ -270,6 +270,16 @@ export interface ReviewerPromptParts {
    * the ones this prompt had before the feature existed.
    */
   readonly recurring?: readonly RecurringClass[];
+  /**
+   * The refusal a PREVIOUS envelope of this same review round earned, when there
+   * was one (gh #78) — rendered by `renderGrammarRefusal`, carried verbatim.
+   *
+   * Absent or null on a first review, which is every review the framework asked
+   * for before this existed. Present only for a re-prompt the claim-sources check
+   * bought: the reviewer is being asked for the SAME judgement in a readable
+   * envelope, not for a different one, and the prompt says so in those words.
+   */
+  readonly refusal?: string | null;
 }
 
 /**
@@ -396,6 +406,9 @@ export function buildReviewerPrompt(parts: ReviewerPromptParts): string {
     parts.story.text.replace(/\n$/, ""),
     fenceFor(parts.story.text),
     "",
+    ...(parts.refusal === undefined || parts.refusal === null || parts.refusal.trim() === ""
+      ? []
+      : [parts.refusal, ""]),
     "## Produce",
     "",
     "Return the result envelope, nothing else:",

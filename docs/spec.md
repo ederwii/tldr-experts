@@ -879,7 +879,8 @@ Append-only audit log: with `run.yml` the dashboard's only data source, the cost
 
 **Type enum:** `run.created` `run.closed` `run.unlocked` `run.cancelled` `run.attended` `phase.started` `phase.done` `stage.started` `stage.done` `stage.failed`
 `stage.skipped` `task.started` `task.done` `agent.spawned` `agent.result` `question.asked` `question.answered`
-`gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `story.reopened` `story.base_fastforwarded` `check.passed` `check.failed` `budget.warned`
+`gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `story.reopened` `story.base_fastforwarded` `story.review_retried`
+`check.passed` `check.failed` `budget.warned`
 `budget.blocked` `budget.raised` `fact.added` `fact.retired` `fact.superseded` `map.refreshed` `ticket.synced` `error`. Closed set: an
 unknown type is a validation error.
 
@@ -916,6 +917,18 @@ ref**: a story branch that sat behind its epic tip, brought up to it before a de
 (short shas) and `commits` (how many the move carried). It is appended ONLY when the ref actually moved — a divergent
 or dirty branch is warned about on stdout and changed by nothing, so it has no event, because nothing happened. A
 branch tldrx moves without saying so would be the framework editing the operator's git state silently.
+
+**`story.review_retried` was added 2026-09-01 (#78).** It is the one event in the enum whose subject is something that
+did NOT happen: a story's attempt was not spent. A review envelope refused by the **claim-sources** check — a `refuted`
+fix-list finding whose `[src: …]` does not parse — is a formatting fault in the reviewer's REPORT, not a fault in the
+diff, so Build asks for a corrected envelope instead of recording a `changes` verdict against one of the story's two
+attempts (owner decision, 2026-09-01, measured on `260830-ordering-inventory`, where three envelopes cost three
+attempts). Its payload carries `phase`, `story`, `attempt` (the one it did not spend), `retry`, `max_retries` and
+`detail` (the refusal verbatim). The bound is read back off these events, so it survives a fresh `tldrx next` and the
+one-envelope-per-process host handshake alike; the count resets at any recorded review verdict — including an errored
+one — because it is a bound per envelope round, not per story. The refusal after the bound is recorded as the ordinary
+`check.failed` · `verdict: changes` it always was, and costs the attempt. **Scope:** only the claim-sources grammar. A
+verdict's CONTENT, a red DoD, an unreadable verdict WORD (#36) and every other envelope refusal keep the cost they had.
 
 ```json
 {"ts":"2026-08-28T14:29:58Z","run":"260828-leaderboard","stage":"contracts","type":"agent.result","actor":"architect","cost_usd":2.61,"payload":{"phase":"02-how","task":"t1","session_id":"1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d","model":"sonnet","outputs":["02-how/contracts.md"],"usage":{"input_tokens":184203,"output_tokens":9114}}}
@@ -2171,6 +2184,21 @@ one story never varies:
    was faulted — and writes `04-build/fixlist/<story-id>-<round>.md` beside it. Only a verdict that FAULTED the diff
    consumes the requeue. Headless re-runs it by spawning; `--prepare` writes the
    reviewer bundle for the host and stops (see "the second delegable role" below).
+
+   **A GRAMMAR-refused envelope is re-prompted, not charged (#78).** A declared `fixlist` whose `refuted` finding
+   carries an `[src: …]` the §2.8 parser cannot read falls to `changes` as above — but that is a fault in the
+   reviewer's REPORT, not in the diff, and charging the story one of its two attempts for it conflates the instrument
+   with the result (measured 2026-09-01 on `260830-ordering-inventory`: S2, S3 and S5 each lost an attempt to it, over
+   summaries beginning "I would sign this"). Build instead asks the SAME reviewer for a corrected envelope, carrying
+   #77's diagnosis verbatim — the rule it broke, the line it wrote, a corrected one — under
+   `## Your previous envelope was REFUSED`, and records one `story.review_retried` (§2.9)
+   per free round. Bounded at **two** per envelope round: the third refusal is the ordinary `changes` and costs the
+   attempt, so a reviewer that cannot write the grammar still settles. Both doors go through it — a spawn re-prompts
+   itself; `--commit --review` leaves the bundle out with the refusal spliced into its `prompt.md`, bins the refused
+   `result.json`, and settles nothing. Each re-prompt is a real metered turn and appears as its own task row: it costs
+   the story no ATTEMPT, never no money. **Scope:** the claim-sources grammar and nothing else. A verdict's CONTENT, a
+   red DoD, an unreadable verdict WORD (#36) and an envelope refused for any other shape problem all keep the cost
+   they had.
 
 **Blast radius is one story.** A red DoD, a merge conflict or a failed sub-agent blocks that story only; the epic
 carries on with the next, and so does the wave. **The phase never ships:** no epic is merged into a default branch, so

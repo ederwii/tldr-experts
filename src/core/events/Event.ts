@@ -49,6 +49,18 @@ import {
  * envelope's `stage` carries the stage or null. It mutates nothing — see
  * `run/operatorNote.ts`.
  *
+ * `story.review_retried` was added 2026-09-01 (issue #78), and it is the one event
+ * whose whole job is to say that something did NOT happen: a story's attempt was
+ * not spent. A review envelope refused by the claim-sources check is a formatting
+ * fault in the reviewer's REPORT, not a fault in the diff, so the framework asks
+ * for a corrected envelope instead of charging the story one of its two attempts
+ * (owner decision, 2026-09-01). Attempt bookkeeping that changes with nothing in
+ * the log would be unauditable, which is what this event is for: its payload
+ * carries the story, the attempt it did not spend, which retry this was and the
+ * bound, and the refusal verbatim. `readReviewLedger` counts them, and that count
+ * is the bound — the third refusal is recorded as the `check.failed · changes` it
+ * always was.
+ *
  * `story.base_fastforwarded` was added 2026-08-31, and is the only event in this
  * set that records tldrx MOVING A REF. Design §F.2: a story branch that sits
  * behind its epic tip is fast-forwarded before a developer is dispatched onto it,
@@ -67,7 +79,7 @@ export const EVENT_TYPES = [
   "agent.spawned", "agent.result",
   "question.asked", "question.answered",
   "gate.requested", "gate.approved", "gate.rejected", "gate.revoked", "gate.policy_changed",
-  "story.reopened", "story.base_fastforwarded",
+  "story.reopened", "story.base_fastforwarded", "story.review_retried",
   "operator_note",
   "check.passed", "check.failed",
   "budget.warned", "budget.blocked", "budget.raised",

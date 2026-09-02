@@ -301,6 +301,38 @@
     real `→`" with the arrow itself written as an escape sequence. `readableSource` decodes it.
   - Not changed: what the parser ACCEPTS. Tolerating `->` is a product decision and stays open
     as #77's item 3.
+- **A grammar-rejected review envelope no longer consumes a story ATTEMPT (#78).** Measured on run
+  `260830-ordering-inventory` (2026-09-01): stories S2, S3 and S5 each recorded
+  `check: review · verdict: changes · attempt: 1` over a summary beginning *"I would sign this:
+  every named acceptance criterion is met"*. Those were `fixlist` envelopes refused by the
+  **claim-sources** check — a `refuted` finding whose `[src: …]` sat mid-line, where §2.8's
+  end-anchored parser cannot see it — and each was charged to the story as a failure of its WORK.
+  Three of the run's attempts went on formatting. A malformed envelope is a fault in the reviewer's
+  *report*; conflating the instrument with the result is what this fixes.
+  - **The framework asks again, for free.** A refusal the claim-sources check raised re-prompts the
+    same reviewer for a corrected envelope, carrying what was refused verbatim under
+    `## Your previous envelope was REFUSED`. **Bounded at two** per envelope round (owner decision,
+    2026-09-01): the third refusal is recorded as the ordinary `changes` and costs the attempt, so a
+    reviewer that cannot write the grammar at all still settles instead of looping free. The bound
+    resets when a verdict is finally counted — it is per envelope round, not per story.
+  - **Both doors, one rule.** A spawned reviewer re-prompts itself in-process;
+    `tldrx next --commit --review` leaves the bundle out with the refusal spliced into its
+    `prompt.md`, bins the refused `result.json` and settles nothing. Attempt accounting must not
+    depend on which door a verdict came through, so both go through the same predicate.
+  - **Auditable, because it is bookkeeping.** Each free round appends one `story.review_retried`
+    (§2.9) carrying the story, the attempt it did **not** spend, which retry it was, the bound, and
+    the refusal. `readReviewLedger` counts them, which is how the bound survives a fresh
+    `tldrx next` and the one-envelope-per-process host handshake alike. Each re-prompt is a real
+    metered turn and gets its own task row: it costs the story no attempt, never no money.
+  - **Scope guard, pinned by test.** Only the claim-sources grammar. A verdict's CONTENT, a red DoD,
+    an unreadable verdict WORD (#36), an envelope with no readable `disposition`, and a MIXED
+    refusal (one bad citation beside another shape problem) all keep exactly the cost they had.
+  - **The message is #77's, inherited rather than copied.** The re-prompt carries
+    `fixlistProblems` verbatim and points at the `Citation grammar` section #77 splices into the
+    same prompt, so the reviewer is told which rule it broke, on which line, with a corrected
+    example — and there is no second copy of the grammar to keep in step. `ParsedFixlist.grammar`
+    is a typed INDEX over `problems`, not a second list, precisely so #78 could not end up
+    string-matching the text #77 was rewriting.
 
 - **`merge-wave.sh` no longer leaves a conflicted tree behind, wedging every queued sibling (#76).**
   On a merge conflict the script exited `2` **without** `git merge --abort`, and the `EXIT` trap

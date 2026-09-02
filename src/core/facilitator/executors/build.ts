@@ -30,7 +30,7 @@
  * changed under them. Serial B costs the reviewers' wall-clock and buys a review
  * that means something.
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import { PROJECT_FRAMEWORK_DIR, epicWorktreeName } from "../../paths.ts";
 import {
@@ -79,7 +79,8 @@ import {
 } from "../../build/prompts.ts";
 import { workspaceRecurring } from "../../retro/reviewerFocus.ts";
 import {
-  looksLikeReviewerError, parseReview, renderPreviousAttempt, renderReviewLog, reviewerFailed, type Review,
+  isGrammarRejection, looksLikeReviewerError, MAX_GRAMMAR_RETRIES, parseReview, renderGrammarRefusal,
+  renderPreviousAttempt, renderReviewLog, reviewerFailed, type Review,
 } from "../../build/review.ts";
 import { DEVELOPER_FAILED, dodGreen, type DodResult, type StoryOutcome } from "../../build/outcome.ts";
 import {
@@ -484,6 +485,19 @@ class BuildSession {
    * process — a bound a restart forgets is not a bound.
    */
   private readonly fixlists = new Map<string, number>();
+  /**
+   * Free re-prompts this process has granted THIS review round, per story (#78).
+   *
+   * A third counter rather than a flag on one of the other two, because it counts
+   * a third thing: `reviews` counts verdicts that cost an attempt, `fixlists`
+   * counts free rounds granted to the AUTHOR, and this counts envelopes the
+   * claim-sources check sent back to the REVIEWER. It is reset — not incremented
+   * — the moment a verdict is finally counted, because the bound is per envelope
+   * round (see `MAX_GRAMMAR_RETRIES`). Read through `grammarRetriesSpent`, which
+   * falls back to the ledger: the host door settles one envelope per process, so
+   * a bound this process alone remembered would be no bound at all.
+   */
+  private readonly grammarRetries = new Map<string, number>();
   /** Epic branches this run cut or adopted; `runNext` writes them to run.yml. */
   readonly claimedEpics = new Set<string>();
   /**
@@ -759,7 +773,10 @@ class BuildSession {
       `  · ${planned.story.id}: ${work.why} — preparing the REVIEW only; `
       + `\`${work.commit}\` is already merged into \`${story.epicBranch}\``,
     );
-    const key = this.writeReviewBundle(story, work);
+    // A `--prepare --review` over a story whose LAST envelope was refused must
+    // not quietly drop the refusal: rewriting the prompt without it would hand
+    // the host the same brief that produced the unreadable envelope (gh #78).
+    const key = this.writeReviewBundle(story, work, this.pendingRefusal(planned.story.id));
     // The story file is the state: `review` is where a story waiting on a verdict
     // lives, and it is what `--commit --review` looks for. A story left
     // `in_progress` by a developer bundle that was never owed is moved back here.
@@ -841,6 +858,20 @@ class BuildSession {
     // declaration about the same kind of turn, so it takes the same precedence
     // over the envelope it did for the developer.
     const declaredReview = this.ctx.costUsd ?? numberOf(envelope.cost_usd);
+    // The claim-sources check refused this envelope and the round has a
+    // correction left (gh #78). Nothing is recorded and nothing is settled: the
+    // bundle stays out — its presence IS "a review is outstanding" — with the
+    // refusal spliced into the prompt, and `--commit --review` picks the
+    // corrected envelope up on the SAME attempt. Reached through the same
+    // `isGrammarRejection` the spawned door uses, so the two economies cannot
+    // drift apart on what an attempt costs.
+    const again = this.grammarRetry(story, review, {
+      costUsd: declaredReview ?? 0,
+      sessionId: typeof envelope.session_id === "string" ? envelope.session_id : null,
+      metered: declaredReview !== undefined,
+      tokens: this.ctx.tokens ?? numberOf(envelope.tokens),
+    });
+    if (again !== null) return this.reopenReviewBundle(story, work, again);
     this.recordReview(story, review, {
       costUsd: declaredReview ?? 0,
       sessionId: typeof envelope.session_id === "string" ? envelope.session_id : null,
@@ -1469,7 +1500,10 @@ class BuildSession {
     await this.settle(story, before, {
       dod: [], commit: null, merged: false, carried: null,
       verdict: "n-a",
-      review: { verdict: "n-a", summary: "", findings: [], fixlist: [], fixlistProblems: [], verdictProblem: null },
+      review: {
+        verdict: "n-a", summary: "", findings: [], fixlist: [], fixlistProblems: [],
+        grammarProblems: [], verdictProblem: null,
+      },
       developerError: error,
       keepWorktree: true,
       cost,
@@ -1908,56 +1942,215 @@ class BuildSession {
     story: StoryContext,
     dod: readonly DodResult[],
   ): Promise<{ review: Review; cost: number }> {
-    const cap = this.reviewerCap(story.planned.story.id);
-    this.ctx.emit("agent.spawned", {
+    const id = story.planned.story.id;
+    let refusal: string | null = null;
+    let spent = 0;
+    // Bounded by `MAX_GRAMMAR_RETRIES` and by nothing else — the loop can only
+    // go round again on the one outcome `grammarRetry` grants, and that grant is
+    // counted on disk before this line is reached a second time (gh #78).
+    for (;;) {
+      const cap = this.reviewerCap(id);
+      this.ctx.emit("agent.spawned", {
+        phase: this.ctx.phaseId,
+        story: id,
+        role: "reviewer",
+        model: this.model(),
+        effort: this.ctx.effort,
+        max_budget_usd: cap,
+      }, 0, "reviewer");
+
+      const agent = await spawnAgent({
+        prompt: this.reviewerPrompt(story, dod, refusal),
+        model: this.model(),
+        effort: this.ctx.effort,
+        maxBudgetUsd: cap,
+        workspaceCommands: [],
+        tools: REVIEWER_TOOLS,
+        schema: REVIEW_SCHEMA,
+        // NOT `this.ctx.yolo`. `--yolo` is `--dangerously-skip-permissions`
+        // (spawnAgent.ts:89), and handing it to the read-only reviewer took away the
+        // one thing making it read-only — an agent asked to judge a diff was given a
+        // permission-free shell to do it with (2026-08-29 audit, §C). The developer
+        // still gets it: that one is meant to write.
+        yolo: false,
+        cwd: story.worktree,
+        timeoutMs: this.ctx.spec.planned.timeout_s * 1000,
+        lane: this.lane(story),
+      });
+
+      // A reviewer that did not finish has not approved anything — and has not
+      // asked for changes either. `agent.ok === false` is a TRANSPORT outcome (the
+      // spawn failed, the process timed out, `--max-budget-usd` bit), and the one
+      // thing it is not is a judgement of the diff. Fabricating `changes` here is
+      // what spent story S1's single requeue on a reviewer that died mid-read
+      // (2026-08-30); `reviewerFailed` records the corpse as a corpse.
+      const parsed = agent.ok ? parseReview(agent.structured, agent.result) : reviewerFailed(agent.error);
+      // The bound is applied between the parse and the record, so a refused second
+      // fix-list round reaches the requeue counter, the ledger line and the story's
+      // fate as the ONE verdict it was downgraded to — not as a fix list here and a
+      // `changes` three lines later.
+      const review = this.narrowFixlist(id, parsed);
+      const turn = round2(agent.costUsd);
+
+      // The envelope was refused on the CITATION grammar and the story still has
+      // a correction in hand: ask again. The turn's money is real and is recorded
+      // as its own task row; the verdict is not, because there was none to record
+      // (gh #78). Every other outcome — including the third refusal — falls
+      // through to `recordReview` exactly as it always did.
+      const again = this.grammarRetry(story, review, {
+        costUsd: turn, sessionId: agent.sessionId, metered: true,
+      });
+      if (again !== null) {
+        refusal = again;
+        spent = round2(spent + turn);
+        continue;
+      }
+
+      this.recordReview(story, review, {
+        costUsd: turn,
+        sessionId: agent.sessionId,
+        error: agent.error,
+        metered: true,
+        source: "agent",
+      });
+      // The story's recorded cost is every turn this review took, not just the
+      // last one: a free retry costs the story no ATTEMPT, never no money.
+      return { review, cost: round2(spent + turn) };
+    }
+  }
+
+  /**
+   * Grant one free re-prompt for a grammar-refused envelope, or refuse to (#78).
+   *
+   * Returns the refusal to carry into the corrected envelope's prompt, or null —
+   * and null is the answer for every case except the narrow one this exists for,
+   * which is why the caller can treat it as "carry on exactly as before".
+   *
+   * The grant is RECORDED before it is used, in both places a bound has to live:
+   * `this.grammarRetries` for this process, and a `story.review_retried` event for
+   * every process after it. Attempt bookkeeping that moved with nothing in the log
+   * would be unauditable, and this is the one path where an attempt is deliberately
+   * not spent.
+   *
+   * The turn's money is pushed as its own task row here rather than at
+   * `recordReview`, because that turn happened and was billed: what it did not
+   * produce is a VERDICT.
+   */
+  private grammarRetry(
+    story: StoryContext,
+    review: Review,
+    task: {
+      costUsd: number;
+      sessionId: string | null;
+      /** False ⇒ the turn was billed to the host session, as in `recordReview`. */
+      metered: boolean;
+      tokens?: number;
+    },
+  ): string | null {
+    const id = story.planned.story.id;
+    if (!isGrammarRejection(review)) return null;
+    const spent = this.grammarRetriesSpent(id);
+    if (spent >= MAX_GRAMMAR_RETRIES) {
+      this.lines.push(
+        `  · ${id}: a ${String(MAX_GRAMMAR_RETRIES + 1)}th envelope was refused on the same citation `
+        + `grammar — the bound is ${String(MAX_GRAMMAR_RETRIES)} free correction(s), so this one is `
+        + "recorded as `changes` and costs the attempt",
+      );
+      return null;
+    }
+    this.grammarRetries.set(id, spent + 1);
+    this.tasks.push({
+      key: id,
+      model: task.metered ? this.model() : null,
+      costUsd: task.costUsd,
+      sessionId: task.sessionId,
+      error: null,
+      outputs: [],
+      ...(task.metered ? {} : { metered: false }),
+      ...(task.tokens === undefined ? {} : { tokens: task.tokens }),
+    });
+    const detail = review.fixlistProblems.join(" · ");
+    this.ctx.emit("story.review_retried", {
       phase: this.ctx.phaseId,
-      story: story.planned.story.id,
-      role: "reviewer",
-      model: this.model(),
-      effort: this.ctx.effort,
-      max_budget_usd: cap,
-    }, 0, "reviewer");
+      story: id,
+      // The attempt this did NOT spend. That is the whole point of the event.
+      attempt: story.attempt,
+      retry: spent + 1,
+      max_retries: MAX_GRAMMAR_RETRIES,
+      detail: clipDetail(detail),
+    }, task.costUsd, "reviewer");
+    this.lines.push(
+      `  · ${id}: the review envelope was REFUSED by the claim-sources check — ${detail}`,
+      `  · ${id}: asking for a corrected envelope; this cost the story NO attempt `
+      + `(correction ${String(spent + 1)} of ${String(MAX_GRAMMAR_RETRIES)})`,
+    );
+    return renderGrammarRefusal(review.fixlistProblems);
+  }
 
-    const agent = await spawnAgent({
-      prompt: this.reviewerPrompt(story, dod),
-      model: this.model(),
-      effort: this.ctx.effort,
-      maxBudgetUsd: cap,
-      workspaceCommands: [],
-      tools: REVIEWER_TOOLS,
-      schema: REVIEW_SCHEMA,
-      // NOT `this.ctx.yolo`. `--yolo` is `--dangerously-skip-permissions`
-      // (spawnAgent.ts:89), and handing it to the read-only reviewer took away the
-      // one thing making it read-only — an agent asked to judge a diff was given a
-      // permission-free shell to do it with (2026-08-29 audit, §C). The developer
-      // still gets it: that one is meant to write.
-      yolo: false,
-      cwd: story.worktree,
-      timeoutMs: this.ctx.spec.planned.timeout_s * 1000,
-      lane: this.lane(story),
-    });
+  /**
+   * The refusal a previous envelope of this story's open round earned, rendered
+   * for a prompt — or null when the last envelope was not refused that way (#78).
+   *
+   * Read off the ledger rather than off this process, because the only caller is
+   * `--prepare --review`, which by definition runs after the invocation that
+   * recorded the refusal has exited.
+   */
+  private pendingRefusal(storyId: string): string | null {
+    const said = readReviewLedger(this.ctx.runDir, storyId).grammarRefusal;
+    return said === null ? null : renderGrammarRefusal([said]);
+  }
 
-    // A reviewer that did not finish has not approved anything — and has not
-    // asked for changes either. `agent.ok === false` is a TRANSPORT outcome (the
-    // spawn failed, the process timed out, `--max-budget-usd` bit), and the one
-    // thing it is not is a judgement of the diff. Fabricating `changes` here is
-    // what spent story S1's single requeue on a reviewer that died mid-read
-    // (2026-08-30); `reviewerFailed` records the corpse as a corpse.
-    const parsed = agent.ok ? parseReview(agent.structured, agent.result) : reviewerFailed(agent.error);
-    // The bound is applied between the parse and the record, so a refused second
-    // fix-list round reaches the requeue counter, the ledger line and the story's
-    // fate as the ONE verdict it was downgraded to — not as a fix list here and a
-    // `changes` three lines later.
-    const review = this.narrowFixlist(story.planned.story.id, parsed);
+  /**
+   * The HOST's envelope was refused on the citation grammar: hand the same review
+   * back, with the refusal in its prompt, and settle nothing (gh #78).
+   *
+   * The refused `result.json` is MOVED ASIDE rather than left or deleted, and
+   * both halves of that matter. Left, the next `--commit --review` would settle
+   * the very envelope this just declined to count. Deleted, a host would lose a
+   * judgement it paid for over one mis-placed bracket — so it is renamed to
+   * `result.refused-<n>.json`, which the host can copy back with the citation
+   * fixed. This is the one place `--prepare`'s "an answer already here is not
+   * binned" rule is bent, and nothing is actually binned.
+   */
+  private reopenReviewBundle(story: StoryContext, work: ReviewWork, refusal: string): ExecutorOutcome {
+    const id = story.planned.story.id;
+    const key = this.reviewBundleKey(id);
+    const dir = agentDir(this.ctx.runDir, key);
+    const kept = `result.refused-${String(this.grammarRetriesSpent(id))}.json`;
+    renameSync(join(dir, RESULT_FILE), join(dir, kept));
+    rmSync(join(dir, RAW_FILE), { force: true });
+    this.writeReviewBundle(story, work, refusal);
+    const rel = relative(this.ctx.root, dir);
+    this.lines.push(
+      `  · ${id}: the refused envelope was kept as ${rel}/${kept} — `
+      + "copy it back with the citation fixed rather than writing it again",
+    );
+    return {
+      ok: true,
+      awaiting: true,
+      tasks: this.tasks,
+      costUsd: this.spent(),
+      outputs: [...this.logPaths(), ...this.planOutputs(), ...this.retroOutputs()],
+      lines: [
+        ...this.lines,
+        `re-prepared the REVIEW of ${story.planned.story.id} — ${rel}/prompt.md carries what was refused`,
+        `write the CORRECTED envelope to ${rel}/${RESULT_FILE} and run \`tldrx next --commit --review\``,
+      ],
+      stderr: [...this.advisories],
+      error: null,
+    };
+  }
 
-    this.recordReview(story, review, {
-      costUsd: round2(agent.costUsd),
-      sessionId: agent.sessionId,
-      error: agent.error,
-      metered: true,
-      source: "agent",
-    });
-    return { review, cost: round2(agent.costUsd) };
+  /**
+   * Free re-prompts already granted for this story's CURRENT envelope round.
+   *
+   * The same two-source shape `reviewAttempts` and `fixlistRoundsSpent` use, and
+   * for the same reason — except that here the ledger side is load-bearing rather
+   * than a fallback: `--commit --review` settles one envelope per process, so
+   * every host correction is read back off the log.
+   */
+  private grammarRetriesSpent(storyId: string): number {
+    return this.grammarRetries.get(storyId) ?? readReviewLedger(this.ctx.runDir, storyId).grammarRetries;
   }
 
   /**
@@ -1969,11 +2162,16 @@ class BuildSession {
    * is. Sharing the call is how that stays true without a test having to keep
    * two copies in step.
    */
-  private reviewerPrompt(story: StoryContext, dod: readonly DodResult[]): string {
+  private reviewerPrompt(
+    story: StoryContext,
+    dod: readonly DodResult[],
+    refusal: string | null = null,
+  ): string {
     return buildReviewerPrompt({
       // What this workspace's own reviews keep finding (#74). Empty on a workspace
       // with no history, which renders no section at all.
       recurring: this.recurringClasses(),
+      refusal,
       runId: this.ctx.runId,
       story: story.planned,
       repoName: story.planned.story.repo,
@@ -2058,6 +2256,11 @@ class BuildSession {
     if (review.verdict !== "error" && review.verdict !== "fixlist") {
       this.reviews.set(id, (this.reviews.get(id) ?? 0) + 1);
     }
+    // A verdict — any verdict — closes this envelope round, and the next one
+    // starts with its corrections again (gh #78). Set to `0` rather than deleted
+    // so this process's own answer keeps winning over a ledger it has not
+    // finished writing; `readReviewLedger` resets on exactly the same events.
+    this.grammarRetries.set(id, 0);
     // The reviewer IS a check: `approve` is the pass, `changes` and `error` the
     // two failures. `verdict` is what tells a ledger which one it is reading, and
     // `detail` on an errored review is the ERROR, verbatim.
@@ -2094,7 +2297,10 @@ class BuildSession {
       carried: null,
       conflicts: extra.conflicts ?? [],
       verdict: "n-a",
-      review: { verdict: "n-a", summary: "", findings: [], fixlist: [], fixlistProblems: [], verdictProblem: null },
+      review: {
+        verdict: "n-a", summary: "", findings: [], fixlist: [], fixlistProblems: [],
+        grammarProblems: [], verdictProblem: null,
+      },
       cost,
       reason,
     });
@@ -2961,7 +3167,7 @@ class BuildSession {
    * because the host is entitled to know what the framework would have paid for
    * this read — but it is a number to compare against, not one to enforce here.
    */
-  private writeReviewBundle(story: StoryContext, work: ReviewWork): string {
+  private writeReviewBundle(story: StoryContext, work: ReviewWork, refusal: string | null = null): string {
     const id = story.planned.story.id;
     const key = this.reviewBundleKey(id);
     const review: PendingReview = {
@@ -3006,7 +3212,7 @@ class BuildSession {
     // instead, because a stale answer read as a fresh verdict is the other half
     // of that hazard and `--discard-pending` is the door for it.
     const answered = existsSync(join(agentDir(this.ctx.runDir, key), RESULT_FILE));
-    writeBundle(this.ctx.runDir, key, this.reviewerPrompt(story, work.dod), pending);
+    writeBundle(this.ctx.runDir, key, this.reviewerPrompt(story, work.dod, refusal), pending);
     if (answered) {
       this.lines.push(
         `  · ${id}: a ${RESULT_FILE} was already in the reviewer bundle and was KEPT — `
@@ -3161,6 +3367,7 @@ class BuildSession {
         findings: outcome.reviewFindings,
         fixlist: [],
         fixlistProblems: [],
+        grammarProblems: [],
         verdictProblem: null,
       });
     }
@@ -3354,6 +3561,25 @@ export interface ReviewLedger {
    * because a second `tldrx` invocation remembers nothing.
    */
   readonly fixRound: { readonly at: string; readonly actor: string; readonly note: string } | null;
+  /**
+   * Free re-prompts already granted for the story's OPEN envelope round (#78).
+   *
+   * The bound's counter, and the reason it is read from the log: `--commit
+   * --review` settles one envelope per process, so a limit this process alone
+   * remembered would reset on every host correction. It restarts at zero the
+   * moment any review verdict is recorded — including an errored one — because
+   * the bound is per envelope round, not per story.
+   */
+  readonly grammarRetries: number;
+  /**
+   * What the claim-sources check said about the last refused envelope, or null.
+   *
+   * Cleared by the same events that reset `grammarRetries`, so it is never advice
+   * about a round that has already closed. `--prepare --review` splices it back
+   * into a rewritten prompt: a host asked for a corrected envelope must not be
+   * handed the brief that produced the broken one.
+   */
+  readonly grammarRefusal: string | null;
 }
 
 /** Everything the two resume paths and the requeue counter need, in one pass. */
@@ -3362,6 +3588,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
   const empty: ReviewLedger = {
     verdicts: 0, fixlistRounds: 0, erroredWith: null, commit: null, dod: [],
     developerErroredWith: null, blockedWithNothingRun: false, reopened: null, fixRound: null,
+    grammarRetries: 0, grammarRefusal: null,
   };
   if (!existsSync(path)) return empty;
 
@@ -3385,6 +3612,8 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
   let current: DodResult[] = [];
   let reopened: ReviewLedger["reopened"] = null;
   let fixRound: ReviewLedger["fixRound"] = null;
+  let grammarRetries = 0;
+  let grammarRefusal: string | null = null;
 
   for (const line of readFileSync(path, "utf8").split("\n")) {
     if (line.trim() === "") continue;
@@ -3426,6 +3655,19 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
       // cleared by a plain reopen either — a fix that blocked and was granted
       // more attempts is the same fix round, still owed.
       if (payload.reason === "fix") fixRound = reopened;
+      grammarRetries = 0;
+      grammarRefusal = null;
+      continue;
+    }
+
+    // One envelope the claim-sources check sent back, costing no attempt (#78).
+    // Counted here and nowhere else: the grant is what this event records, and a
+    // grant that a fresh `tldrx next` could not see would not be a bound.
+    if (event.type === "story.review_retried") {
+      grammarRetries++;
+      grammarRefusal = typeof payload.detail === "string" && payload.detail.trim() !== ""
+        ? payload.detail.trim()
+        : null;
       continue;
     }
 
@@ -3483,6 +3725,13 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     }
     if (payload.check !== "review") continue;
 
+    // Any recorded review CLOSES the envelope round — an error and a fix list as
+    // much as a counted verdict — so the next one starts with its corrections
+    // again. Mirrors `recordReview`, which resets the in-process counter for
+    // exactly the same set of outcomes (#78).
+    grammarRetries = 0;
+    grammarRefusal = null;
+
     if (reviewEventErrored(payload)) {
       erroredWith = typeof payload.detail === "string" && payload.detail.trim() !== ""
         ? payload.detail.trim()
@@ -3510,7 +3759,15 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     blockedWithNothingRun,
     reopened,
     fixRound,
+    grammarRetries,
+    grammarRefusal,
   };
+}
+
+/** One event payload's `detail`, bounded — spec §2.9 caps a payload at 4 KB. */
+function clipDetail(detail: string): string {
+  const text = detail.replace(/\s+/g, " ").trim();
+  return text.length <= 1200 ? text : `${text.slice(0, 1197)}…`;
 }
 
 /**
