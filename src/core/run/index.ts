@@ -18,7 +18,7 @@ export { buildStatus, renderStatus, whatIsWaiting, bar } from "./runStatus.ts";
 export { stageAttempts, renderAttempts } from "./attempts.ts";
 export type { StageAttempts } from "./attempts.ts";
 export type { RunStatusView, PhaseProgress, Waiting, WaitingKind } from "./runStatus.ts";
-export { waitingFor, failureReason, isMovable, MOVABLE_KINDS } from "./waiting.ts";
+export { waitingFor, failureReason, isMovable, MOVABLE_KINDS, WAITING_KINDS } from "./waiting.ts";
 export { resolveDependencies, slugOfRun, MAX_CHAINS } from "./dependencies.ts";
 export type { DependencyInput, DependencyGraph, ResolvedRun } from "./dependencies.ts";
 export type { WaitingRun, WaitingPhase, WaitingStage, WaitingCursor } from "./waiting.ts";

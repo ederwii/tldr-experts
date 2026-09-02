@@ -12,10 +12,17 @@
  * and plain objects only. It is what `GET /model.json` serves verbatim, what the
  * static export renders from, and what a future designer targets.
  *
- * `run.yml` + `events.jsonl` remain the only run data source (spec §2.9), with
- * the phase artefacts (`handoff.md`, `questions.md`) and the Plan artefacts
- * (`stories/`, `epics/`, `waves.yml`) read through the existing parsers. Nothing
- * here talks to a network or a model.
+ * `run.yml` is the run data source, with the phase artefacts (`handoff.md`,
+ * `questions.md`) and the Plan artefacts (`stories/`, `epics/`, `waves.yml`)
+ * read through the existing parsers. Nothing here talks to a network or a model.
+ *
+ * **`events.jsonl` is NOT read**, and the page must not say it is (measured
+ * 2026-09-01: nothing in this file or in `loadPhaseArtefacts` opens the ledger).
+ * That is why every events-only fact is absent — operator notes (`tldrx note`),
+ * per-attempt costs, story reopens and review retries all live in the ledger and
+ * in no other file. Reading it is a real change with a panel behind it, not a
+ * line in a doc comment; until somebody makes it, the honest thing is to name
+ * the files that ARE read.
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -53,6 +60,38 @@ import { offlineHtml } from "./offlineHtml.ts";
  */
 export const DASHBOARD_MODEL_VERSION = 3;
 
+/**
+ * What an `agent` gate was signed over (`run.yml` `gate.evidence`, design §A.5).
+ *
+ * Carried because the page already prints WHO closed a gate, and for an agent
+ * that is a name with nothing behind it. `run.yml` records the counts and the
+ * path of the COMMITTED note, so a reader can audit the signature from a clone
+ * instead of taking it. Null on every gate a person or the facilitator closed,
+ * which is most gates ever written.
+ */
+export interface GateEvidenceModel {
+  /** Run-relative path of the committed note. Text — the page fetches nothing. */
+  readonly path: string;
+  readonly role: string;
+  readonly verdict: string;
+  readonly sampled: number | null;
+  readonly of: number | null;
+  readonly resolved: number | null;
+  readonly refuted: number | null;
+  readonly outsideSurface: number | null;
+}
+
+/** What the Build claimed on disk (`run.yml` `build`). */
+export interface BuildModel {
+  /**
+   * `per-epic` | `integration`, or null on a run.yml written before the key
+   * existed (issue #57). Null is not `per-epic`: nobody recorded a choice.
+   */
+  readonly branchModel: string | null;
+  /** Epic branches this run cut or adopted. A list even under `integration`. */
+  readonly epicBranches: readonly string[];
+}
+
 export interface StageRowModel {
   readonly phase: string;
   readonly id: string;
@@ -78,6 +117,13 @@ export interface StageRowModel {
    * exactly the same rule.
    */
   readonly gatePolicy: string;
+  /** What an `agent` policy signed this gate over, or null. */
+  readonly gateEvidence: GateEvidenceModel | null;
+  /**
+   * True when an earlier stage's gate was revoked after this one ran (`run.yml`
+   * `stage.stale`). The outputs are still on disk and still read as current.
+   */
+  readonly stale: boolean;
 }
 
 /**
@@ -168,8 +214,25 @@ export interface RunModel {
   readonly updatedAt: string | null;
   /** `"<phase> / <stage>"`, or null when run.yml records no cursor. */
   readonly cursor: string | null;
+  /**
+   * METERED dollars only, and a LOWER BOUND whenever `unmeteredTasks > 0`.
+   *
+   * Read it with the two fields below or not at all: a host-attended run whose
+   * every turn was billed to somebody's session sums to `0` here, and that is a
+   * true statement about what this process measured and a false one about what
+   * the run cost.
+   */
   readonly spentUsd: number | null;
   readonly ceilingUsd: number | null;
+  /**
+   * `host` when a host session drives the turns (`run.yml` `attended_by`), null
+   * when the framework may spawn. Same wording `tldrx run status` prints.
+   */
+  readonly attendedBy: string | null;
+  /** Turns whose cost nobody declared. `spentUsd` is a lower bound when > 0. */
+  readonly unmeteredTasks: number;
+  /** Host-session tokens declared with `--tokens`. A DIFFERENT currency: never added to dollars. */
+  readonly hostTokens: number;
   readonly stagesTotal: number;
   readonly stagesDone: number;
   /** 0–100, rounded. */
@@ -213,6 +276,8 @@ export interface RunModel {
   readonly phases: readonly PhaseModel[];
   /** The Plan phase's stories/epics/waves, when the run has written them. */
   readonly plan: PlanModel | null;
+  /** What the Build cut on disk, when it has cut anything. */
+  readonly build: BuildModel | null;
   /** Lowercased haystack the client-side run filter matches against. */
   readonly filter: string;
 }
@@ -399,8 +464,28 @@ export function toRunModel(
       gate: stage.gate === null ? null : `${stage.gate.type}: ${stage.gate.status}`,
       gateBy: stage.gate === null ? null : stage.gate.by,
       gatePolicy: doc.gates_policy[stage.id] ?? "human",
+      gateEvidence: stage.gate?.evidence == null
+        ? null
+        : {
+            path: stage.gate.evidence.path,
+            role: stage.gate.evidence.role,
+            verdict: stage.gate.evidence.verdict,
+            sampled: stage.gate.evidence.sampled,
+            of: stage.gate.evidence.of,
+            resolved: stage.gate.evidence.resolved,
+            refuted: stage.gate.evidence.refuted,
+            outsideSurface: stage.gate.evidence.outside_surface,
+          },
+      stale: stage.stale,
     })),
   );
+
+  // The two economies, counted once and never added together (issue #22). A
+  // dollar and a host token have no exchange rate, so this carries both numbers
+  // and the count of turns that produced neither.
+  const tasks = doc.phases.flatMap((phase) => phase.stages).flatMap((stage) => stage.tasks);
+  const unmeteredTasks = tasks.filter((task) => !task.metered).length;
+  const hostTokens = tasks.reduce((sum, task) => sum + (task.tokens ?? 0), 0);
 
   const stages = doc.phases.flatMap((phase) => phase.stages);
   const open = phases.flatMap((phase) => phase.questions);
@@ -426,6 +511,9 @@ export function toRunModel(
     cursor: doc.cursor === null ? null : `${doc.cursor.phase} / ${doc.cursor.stage}`,
     spentUsd: doc.spent_usd,
     ceilingUsd: doc.ceiling_usd,
+    attendedBy: doc.attended_by,
+    unmeteredTasks,
+    hostTokens,
     stagesTotal,
     stagesDone,
     percent: stagesTotal === 0 ? 0 : Math.round((stagesDone / stagesTotal) * 100),
@@ -439,6 +527,9 @@ export function toRunModel(
     path,
     phases,
     plan: loadPlan(loaded),
+    build: doc.build === null
+      ? null
+      : { branchModel: doc.build.branch_model, epicBranches: doc.build.epic_branch },
     filter: [doc.run, doc.title, doc.scope, doc.status].join(" ").toLowerCase(),
   };
 }

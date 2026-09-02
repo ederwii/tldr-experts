@@ -207,7 +207,10 @@ export function dashTone(status: string | null): string {
   const text = String(status === null || status === undefined ? "" : status).toLowerCase();
   if (/awaiting|blocked|failed|error|reject/.test(text)) return "wait";
   if (/done|approved|complete|passed|verified/.test(text)) return "done";
-  if (/ready|running|active|in_progress|working/.test(text)) return "active";
+  // `review` is a PLAN_STATUSES value (`schemas/planCommon.ts`) and a story
+  // wearing it is in flight — it had landed in the same grey as `todo`, which
+  // said the opposite of what it means.
+  if (/ready|running|review|active|in_progress|working|prepared/.test(text)) return "active";
   if (/skipped|cancelled|canceled|draft/.test(text)) return "off";
   return "idle";
 }
@@ -236,9 +239,15 @@ export function dashCmd(text: string, id: string): string {
  * The one thing a run waits on, when it waits on a HUMAN — or null.
  *
  * Read straight off `run.waiting`, which is `tldrx run status`'s own answer
- * (`src/core/run/waiting.ts`). Three kinds raise a card: a gate to sign, a
- * question to answer, a stage that failed. `ready` and `done` are states of the
- * work, not asks, and a page that alerts on them alerts on everything.
+ * (`src/core/run/waiting.ts`). Four kinds raise a card: a gate to sign, a
+ * question to answer, a stage that failed, and a `--prepare` bundle somebody has
+ * to run and `--commit`. `ready` and `done` are states of the work, not asks, and
+ * a page that alerts on them alerts on everything.
+ *
+ * `prepared` is the one that was missing. It is in `MOVABLE_KINDS`, so such a run
+ * can already wear `← next` here — a row offered as the next move whose WAITING ON
+ * column read "nothing" contradicted itself, and the bundle is the whole of the
+ * host-attended loop (`tldrx next --prepare` writes it and releases the lock).
  *
  * A run that has NOT STARTED and is waiting behind a sibling raises nothing
  * either — the same call `tldrx status` makes when it prints no command for it.
@@ -261,6 +270,7 @@ export function dashPending(run: RunModel): DashPending | null {
     return { kind: "question", text: run.pendingQuestion ?? run.waiting.message };
   }
   if (kind === "failed") return { kind: "failed", text: run.waiting.message };
+  if (kind === "prepared") return { kind: "prepared", text: run.waiting.message };
   return null;
 }
 
@@ -295,7 +305,15 @@ export function dashWaitingCell(run: RunModel): string {
   if (run.waiting.kind === "ready") {
     return `<span class="nowrap">ready — <code>tldrx next ${dashText(run.id)}</code></span>${note}`;
   }
-  return `<span class="faint">nothing — ${dashText(dashWords(run.status))}</span>${note}`;
+  // Every remaining kind gets `waiting.message`, which is a whole sentence the
+  // CLI already prints. The old fallback printed the run STATUS instead, and the
+  // two are not the same word: a `running` run is `running` whether a live `next`
+  // holds its lock or a `--prepare` bundle is waiting for a person, and "nothing
+  // — running" was the answer to a question nobody asked.
+  if (run.waiting.kind === "done") {
+    return `<span class="faint">nothing — ${dashText(dashWords(run.status))}</span>${note}`;
+  }
+  return `<span class="faint">${dashText(run.waiting.message)}</span>${note}`;
 }
 
 /** The first run in workspace order that a human could actually move, or "". */
@@ -620,13 +638,19 @@ export function dashRunView(model: DashboardModel, id: string, nowMs: number): s
       + `<div class="row" style="margin-top:6px">${run.repos
         .map((repo) => `<span class="tag">${dashText(repo)}</span>`).join("")}</div></div>`;
   parts.push('<div class="card"><div class="kv">'
-    + dashKv("status", dashChip(run.status, null, false))
+    + dashKv("status", dashChip(run.status, null, false)
+      // The exact words `tldrx run status` prints, so the two screens agree about
+      // who is driving. Only when set: an ordinary run's card is unchanged.
+      + (run.attendedBy === null
+        ? ""
+        : ` <span class="tag">attended: ${dashText(run.attendedBy)}</span>`))
     + dashKv("scope", dashText(run.scope === "" ? "—" : run.scope) + workflow)
     + dashKv("cursor", '<span class="mono" style="font-size:var(--text-xs)">'
       + `${dashText(run.cursor === null ? "—" : run.cursor)}</span>`)
     + dashKv("spent", `<span class="num">${dashText(dashUsd(run.spentUsd))}</span> `
       + `<span class="faint">of ${dashText(dashUsd(run.ceilingUsd))}</span>`
-      + dashMeter(run.spentUsd, run.ceilingUsd))
+      + dashMeter(run.spentUsd, run.ceilingUsd)
+      + dashEconomies(run))
     + dashKv("stages", `<span class="num">${String(run.stagesDone)}/${String(run.stagesTotal)}</span> `
       + `<span class="faint">${String(run.percent)}%</span>`)
     + dashKv("updated", `<span class="nowrap">${dashText(dashDateTime(run.updatedAt))}</span> `
@@ -665,11 +689,72 @@ export function dashGateSigner(stage: StageRowModel): string {
   const policy = `<span class="tag">${dashText(stage.gatePolicy)}</span>`;
   if (stage.gate === null) return '<span class="faint">—</span>';
   if (stage.gateBy === null) return policy;
-  return `${policy} <span class="signer">by ${dashText(stage.gateBy)}</span>`;
+  return `${policy} <span class="signer">by ${dashText(stage.gateBy)}</span>`
+    + dashGateEvidence(stage);
+}
+
+/**
+ * What an `agent` gate was signed over — or nothing, for the gates a person or
+ * the facilitator closed.
+ *
+ * A name in the "signed by" column is enough for a human signature: the human is
+ * accountable. For an agent it is not. `run.yml` records what the sub-agent
+ * actually checked — the verdict, how much of the surface it sampled, how many
+ * claims resolved and how many it refuted, and the run-relative path of the
+ * COMMITTED note under `<phase>/gate-evidence/` — and the page dropped all of it,
+ * so `agent by reviewer` and `human by alan` read as the same kind of fact.
+ *
+ * The path is TEXT, never a link: the page fetches nothing (`renderDashboard`).
+ */
+export function dashGateEvidence(stage: StageRowModel): string {
+  const evidence = stage.gateEvidence;
+  if (evidence === null) return "";
+  const count = (value: number | null): string => (value === null ? "?" : String(value));
+  const sampled = `${count(evidence.sampled)} of ${count(evidence.of)} sampled`;
+  const outcome = `${count(evidence.resolved)} resolved, ${count(evidence.refuted)} refuted`;
+  const outside = evidence.outsideSurface === null || evidence.outsideSurface === 0
+    ? ""
+    : ` · ${String(evidence.outsideSurface)} outside the surface`;
+  return '<div class="evidence">'
+    + `${dashChip(evidence.verdict, evidence.verdict, false)} `
+    + `<span class="faint">${dashText(evidence.role)} · ${dashText(sampled)} · `
+    + `${dashText(outcome)}${dashText(outside)}</span>`
+    + `<div class="mono faint" style="font-size:var(--text-2xs)">${dashText(evidence.path)}</div>`
+    + "</div>";
 }
 
 export function dashKv(key: string, value: string): string {
   return `<div><div class="kv__k">${dashText(key)}</div><div class="kv__v">${value}</div></div>`;
+}
+
+/**
+ * The second currency, and the turns nobody costed — or nothing at all.
+ *
+ * `spentUsd` is a sum of what THIS process metered. On a host-attended run every
+ * turn is billed to somebody's session, so the meter reads `$0.00 of $25.00`
+ * after real money has gone — the exact failure `unmeteredNote`
+ * (`src/core/budget/budgetView.ts`) exists to stop the CLI making, and the page
+ * was making it in a progress bar. Two numbers, never added: there is no
+ * exchange rate between a metered dollar and a host token, and inventing one
+ * would be a guess about a price.
+ *
+ * Silent on an ordinary run — no tokens, no unmetered turns, nobody attending —
+ * so nothing that reads correctly today gains a line.
+ */
+export function dashEconomies(run: RunModel): string {
+  if (run.unmeteredTasks === 0 && run.hostTokens === 0) return "";
+  const parts: string[] = [];
+  if (run.hostTokens > 0) parts.push(`${String(run.hostTokens)} host tokens`);
+  if (run.unmeteredTasks > 0) {
+    parts.push(`${String(run.unmeteredTasks)} unmetered `
+      + `${run.unmeteredTasks === 1 ? "turn" : "turns"} (in-session)`);
+  }
+  const bound = run.unmeteredTasks === 0
+    ? ""
+    : " Their cost was never declared, so spent is a LOWER BOUND, not a total.";
+  return `<div class="econ"><strong>+ ${dashText(parts.join(" + "))}</strong>`
+    + `<span class="faint">${dashText(bound)} Host tokens are a different currency `
+    + "and are never converted to dollars.</span></div>";
 }
 
 /** Phase → stage → expert → model → cost → gate, in `run.yml` order. */
@@ -679,10 +764,17 @@ export function dashPathSection(run: RunModel): string {
     // gate downstream of it also reads `pending`, and marking those too would
     // paint most of the table as an alert and mean nothing.
     const waits = run.pendingGate === stage.id;
+    // A stale stage is `done` and its outputs are on disk, so the status chip
+    // alone says "finished" about work derived from a decision that has since
+    // been withdrawn (`tldrx reject --stage`). `run status` says so; this now does.
+    const stale = stage.stale
+      ? ' <span class="chip" data-st="wait" title="an earlier gate was revoked after '
+        + 'this stage ran — its outputs are still on disk">stale</span>'
+      : "";
     return `<tr${waits ? ' data-wait="1"' : ""}>`
       + `<td class="mono faint" style="font-size:var(--text-2xs)">${dashText(stage.phase)}</td>`
       + `<td class="mono">${dashText(stage.id)}</td>`
-      + `<td>${dashChip(stage.status, null, false)}</td>`
+      + `<td>${dashChip(stage.status, null, false)}${stale}</td>`
       + `<td>${dashText(stage.expert === null ? "—" : stage.expert)}</td>`
       + `<td><span class="tag">${dashText(stage.model === null ? "—" : stage.model)}</span></td>`
       + `<td class="num" style="white-space:nowrap">${dashText(dashUsd(stage.costUsd))}`
@@ -694,10 +786,17 @@ export function dashPathSection(run: RunModel): string {
       + `<td>${dashGateSigner(stage)}</td></tr>`;
   }).join("");
 
+  // Counted per policy rather than as "auto and the rest" — the same arithmetic
+  // `renderGates` in run/runStatus.ts does. An `agent` gate counted as human
+  // inflated the one number this eyebrow exists to give: how many of these stop
+  // for a person. A run gated `what:agent,plan:agent,build:agent` read as
+  // all-human, which is the opposite of what it was set up to do.
   const auto = run.path.filter((stage) => stage.gatePolicy === "auto").length;
+  const agent = run.path.filter((stage) => stage.gatePolicy === "agent").length;
+  const human = run.path.length - auto - agent;
   return '<div class="section"><div class="section__title"><h2>Execution path</h2>'
-    + `<span class="eyebrow">run.yml order · ${String(run.path.length - auto)} human, `
-    + `${String(auto)} auto</span></div>`
+    + `<span class="eyebrow">run.yml order · ${String(human)} human, `
+    + `${String(auto)} auto${agent === 0 ? "" : `, ${String(agent)} agent`}</span></div>`
     + '<div class="card card--flush"><div class="scroll-x"><table><thead><tr>'
     + "<th>phase</th><th>stage</th><th>status</th><th>expert</th><th>model</th><th>cost</th>"
     + `<th>gate</th><th>signed by</th></tr></thead><tbody>${rows}</tbody></table></div></div></div>`;
@@ -754,9 +853,11 @@ export function dashQuestion(run: RunModel, phase: PhaseModel, question: Questio
 /** Epics, their stories and the waves that schedule them. */
 export function dashPlanSection(run: RunModel): string {
   const plan = run.plan;
+  const build = dashBuildBranches(run);
   if (plan === null) {
     return '<div class="section"><div class="section__title"><h2>Plan &amp; build</h2>'
       + '<span class="eyebrow">plan · null</span></div>'
+      + build
       + '<div class="empty">The Plan phase has not written stories yet. When it does, epics, '
       + "stories and waves appear here, and each story shows its status, repo and dependencies."
       + "</div></div>";
@@ -773,7 +874,8 @@ export function dashPlanSection(run: RunModel): string {
 
   const parts: string[] = ['<div class="section"><div class="section__title"><h2>Plan &amp; build</h2>'
     + `<span class="eyebrow">${dashText(plan.phase)} · ${String(plan.stories.length)} `
-    + `${plan.stories.length === 1 ? "story" : "stories"}</span></div><div class="stack">`];
+    + `${plan.stories.length === 1 ? "story" : "stories"}</span></div><div class="stack">`,
+    build];
 
   if (plan.unreadable.length > 0) {
     parts.push('<div class="alert"><span class="alert__kind">unreadable</span><span>'
@@ -823,6 +925,36 @@ export function dashPlanSection(run: RunModel): string {
 
   parts.push("</div></div>");
   return parts.join("");
+}
+
+/**
+ * What the Build actually cut, and under which branch model.
+ *
+ * The epic table above shows the branch each epic DECLARED. `run.yml` `build`
+ * records what the executor cut or adopted, and `build.branch_model` (issue #57)
+ * says whether those are independent per-epic branches or one integration branch
+ * every story merges into — a chained epic plan and an independent one produce
+ * very different git, and the page showed the same table for both.
+ *
+ * Silent when a run has no `build` key, which is every run before a Build stage
+ * runs. A null `branch_model` is reported as unrecorded rather than guessed at:
+ * it is not the same as `per-epic`.
+ */
+export function dashBuildBranches(run: RunModel): string {
+  const build = run.build;
+  if (build === null) return "";
+  const model = build.branchModel === null
+    ? '<span class="faint">not recorded — this run predates <code>build.branch_model</code></span>'
+    : `<span class="tag">${dashText(build.branchModel)}</span>`;
+  const branches = build.epicBranches.length === 0
+    ? '<span class="faint">none cut yet</span>'
+    : build.epicBranches.map((branch) => `<span class="tag">${dashText(branch)}</span>`).join(" ");
+  return '<div class="card"><div class="card__head">'
+    + '<h3 style="font-size:var(--text-sm)">Branches</h3>'
+    + '<span class="eyebrow">run.yml · build</span></div>'
+    + `<div class="kv"><div><div class="kv__k">branch model</div><div class="kv__v">${model}</div></div>`
+    + `<div><div class="kv__k">epic branches</div><div class="kv__v row">${branches}</div></div>`
+    + "</div></div>";
 }
 
 // ---------------------------------------------------------------------------
@@ -997,6 +1129,13 @@ export function dashRadar(expert: ExpertModel, max: number): string {
  * dashboard claiming coverage that no file backs. So the view says exactly that,
  * prints the shape it expects, and shows the Watch stages the model *does*
  * carry, so the reader learns where the gap is rather than seeing a blank tab.
+ *
+ * The shape it prints is now the REAL one — `Watcher` in
+ * `src/core/watch/Watcher.ts`, plus where the cards live and what decides
+ * `draft` vs `verified`. It used to print an invented shape
+ * (`feature`, `signal`, `whereToLook`, `healthyBaseline`, `brokenWhen`) whose
+ * field names matched none of the seven the file actually carries, so the one
+ * thing this view existed to be honest about was itself wrong.
  */
 export function dashWatchersView(model: DashboardModel): string {
   const parts: string[] = ['<div class="viewhead"><h1>Watchers</h1><p>One card per shipped feature: '
@@ -1004,12 +1143,15 @@ export function dashWatchersView(model: DashboardModel): string {
     + "</p></div>"];
 
   parts.push('<div class="empty"><strong>No watchers in this model.</strong> '
-    + 'Watchers are written by the Watch phase; <code>modelVersion '
+    + "Watchers are written by the Watch phase to "
+    + "<code>&lt;run&gt;/05-watch/watchers/&lt;feature&gt;.md</code>; <code>modelVersion "
     + `${String(model.modelVersion)}</code> has no <code>watchers</code> field yet, so this view has `
-    + "nothing it is allowed to invent. The cards appear here once the model carries:"
-    + '<div class="spec">watchers[]: {\n  id, feature, signal, whereToLook,\n  healthyBaseline, '
-    + 'brokenWhen,\n  query,            // copy-paste, text only\n  status            // "draft" | '
-    + '"verified"\n}</div></div>');
+    + "nothing it is allowed to invent. Read them with <code>tldrx watch list</code>, or check them "
+    + "against today's code with <code>tldrx watch check</code>. The cards appear here once the "
+    + "model carries the front matter those files already have:"
+    + '<div class="spec">watchers[]: {\n  id, epic, title,\n  stories, repos,\n  owner,'
+    + '            // string | null\n  status            // "verified" when every Signal item\n'
+    + '                    // was found in the code, else "draft"\n}</div></div>');
 
   const rows: string[] = [];
   for (const run of model.runs) {
@@ -1051,9 +1193,19 @@ export function dashFaqView(model: DashboardModel): string {
     + '<div class="section"><div class="section__title"><h2>What this page is</h2></div>'
     + '<div class="card"><div class="prose"><p>A read-only view of <code>'
     + `${dashText(model.root)}</code>, generated from files on disk: <code>run.yml</code>, `
-    + "<code>events.jsonl</code>, handoffs, questions and expert competencies. It has no write "
-    + "path — no button here changes a file. Two states need a human, and only those two raise an "
-    + "alert: an open <strong>question</strong> and a pending <strong>gate</strong>.</p>"
+    + "handoffs, questions, the Plan artefacts and expert competencies. It has no write "
+    + "path — no button here changes a file.</p>"
+    // It used to name events.jsonl here, and it has never opened it (measured
+    // 2026-09-01). Saying so is not a caveat — it is the reason a reader cannot
+    // find their operator notes on this page, and the pointer at the command
+    // that does have them.
+    + "<p>It does <strong>not</strong> read <code>events.jsonl</code>, so nothing that lives only "
+    + "in the ledger is here: operator notes (<code>tldrx note</code>), per-attempt costs, story "
+    + "reopens and review retries. <code>tldrx replay &lt;run&gt;</code> and "
+    + "<code>tldrx run status</code> read the ledger.</p>"
+    + "<p>Four states need a human, and only those raise an alert: an open <strong>question</strong>, "
+    + "a pending <strong>gate</strong>, a <strong>failed</strong> stage, and a "
+    + "<code>--prepare</code> bundle waiting to be run and committed.</p>"
     + '<p class="muted" style="margin-top:var(--space-sm)">Read at '
     + `${dashText(dashDateTime(model.generatedAt))} · model version ${String(model.modelVersion)} · `
     + `${model.live ? "live server" : "static export"}</p></div></div></div>`;
@@ -1073,8 +1225,9 @@ const TEMPLATE_FUNCTIONS = [
   dashRoute, dashWaiting, dashTitle, dashTopMeta, dashNav,
   dashMain, dashNoWorkspace,
   dashRunsView, dashUnreadable, dashFirstLine, dashRunRow, dashMeter,
-  dashRunView, dashGateSigner, dashKv, dashPathSection, dashHandoffsSection, dashPanelId, dashQuestion,
-  dashPlanSection,
+  dashRunView, dashGateSigner, dashGateEvidence, dashKv, dashEconomies,
+  dashPathSection, dashHandoffsSection, dashPanelId, dashQuestion,
+  dashPlanSection, dashBuildBranches,
   dashExpertsView, dashExpertCard, dashTrainCommand, dashRadar,
   dashWatchersView,
   dashFaqView,

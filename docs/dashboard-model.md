@@ -48,7 +48,7 @@ of it.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `modelVersion` | number | `2` today. `1 → 2`: `pendingQuestion` and `pendingGate` became aliases of `waiting` and no longer report an open question, or a gate object, that the run is not actually stopped on. |
+| `modelVersion` | number | `3` today. `1 → 2`: `pendingQuestion` and `pendingGate` became aliases of `waiting` and no longer report an open question, or a gate object, that the run is not actually stopped on. `2 → 3` (#60): `runnable` reads `true` for a run that has STARTED and was proposed to follow an unfinished sibling — a proposal recorded before either run existed cannot un-start a running run. Additions never bump it. |
 | `generatedAt` | string | ISO-8601, to the second, when the files were read. |
 | `root` | string | Absolute path of the workspace that was read. |
 | `workspace` | string | Its basename — what the page calls itself. |
@@ -82,7 +82,10 @@ still carries the slug, which is where that fact belongs.
 | `status` | string | `run.yml` status, e.g. `awaiting_gate`. |
 | `updatedAt` | string \| null | ISO-8601. |
 | `cursor` | string \| null | `"<phase> / <stage>"`. |
-| `spentUsd` / `ceilingUsd` | number \| null | Dollars. Format them; the model does not. |
+| `spentUsd` / `ceilingUsd` | number \| null | Dollars. Format them; the model does not. `spentUsd` is METERED spend and is a **lower bound** whenever `unmeteredTasks > 0` — read the three fields below with it. |
+| `attendedBy` | string \| null | `"host"` when a host session drives the turns (`run.yml` `attended_by`), null when the framework may spawn. |
+| `unmeteredTasks` | number | Turns whose cost nobody declared (`cost_usd: null`, in-session `--commit`). |
+| `hostTokens` | number | Host-session tokens declared with `--tokens`. A **different currency** — never add it to dollars, there is no exchange rate. |
 | `stagesTotal` / `stagesDone` | number | `done`/`failed`/`skipped`/`cancelled` count as done. |
 | `percent` | number | 0–100, rounded. |
 | `waiting` | `Waiting` | **What this run is waiting on.** The one field to read. |
@@ -90,18 +93,28 @@ still carries the slug, which is where that fact belongs.
 | `pendingQuestion` | string \| null | `"<Qid> · <title>"` of the question the run stopped for. **Derived alias** of `waiting`. |
 | `dependsOn` | `string[]` | Runs this one was proposed to follow (`run.yml` `triage.depends_on`), resolved from slugs to run ids. A slug with no run in this workspace keeps its raw slug. |
 | `blockedBy` | `string[]` | The subset of `dependsOn` that is not `done`. Empty means nothing blocks it. |
-| `runnable` | boolean | Nothing blocks it **and** a human could move it right now. |
+| `started` | boolean | This run has left `pending` — work has observably begun (#60). Read it with `blockedBy`. |
+| `runnable` | boolean | Nothing that still applies blocks it **and** a human could move it right now. |
 | `path` | `Stage[]` | The execution path, in `run.yml` order. |
 | `phases` | `Phase[]` | Per phase: its handoff and its open questions. |
 | `plan` | `Plan` \| null | Stories, epics and waves, when the Plan phase wrote them. |
+| `build` | `Build` \| null | What the Build cut on disk (`run.yml` `build`): `branchModel` (`"per-epic"` \| `"integration"` \| null when the run predates the key — which is **not** the same as `per-epic`) and `epicBranches` (`string[]`). Null until a Build stage cuts or adopts a branch. |
 | `filter` | string | Lowercased haystack for a text filter over the run list. |
 
 ### `Waiting`
 
-`kind` — one of `gate` | `answer` | `ready` | `done` | `blocked` | `failed` —
-plus `message` (a whole sentence, already worded for a reader, carrying the
-command to run) and `questions` (open question ids in the cursor phase, when it
-is waiting on answers).
+`kind` — one of `gate` | `answer` | `ready` | `done` | `blocked` | `failed` |
+`running` | `prepared` (the list is `WAITING_KINDS` in
+`src/core/run/waiting.ts`) — plus `message` (a whole sentence, already worded for
+a reader, carrying the command to run) and `questions` (open question ids in the
+cursor phase, when it is waiting on answers).
+
+The last two are the ones a renderer forgets. `running` means a live `next`
+holds the run's `.lock`. `prepared` means a `--prepare` bundle is on disk and
+nothing holds the run: the host session has to run the prompt and come back
+through `tldrx next --commit`. **`prepared` is in `MOVABLE_KINDS`** — such a run
+can wear `← next` — so a renderer that has no branch for it offers a run as the
+next move and then says it is waiting on nothing.
 
 **This is `tldrx run status`'s own answer, not a second derivation.** Both
 screens call `waitingFor` in `src/core/run/waiting.ts`, so the page cannot
@@ -117,10 +130,13 @@ already read them — **new code should read `waiting`.** Open questions in a
 phase that was already approved still appear under `phases[].questions`; they
 are simply not what the run is waiting on.
 
-Suggested rendering: `gate`, `answer` and `failed` are the three kinds that
-raise an attention card. `ready` is a state of the work, not an ask. A run with
-a non-empty `blockedBy` should say what it is behind whatever its own kind says
-— a gate you cannot reach yet is not the next move.
+Suggested rendering: `gate`, `answer`, `failed` and `prepared` are the four
+kinds that raise an attention card — each is a run waiting on a person. `ready`
+and `done` are states of the work, not asks. Every other kind should still print
+its `message`: it is a whole sentence and it is what the CLI prints. A run with
+a non-empty `blockedBy` **that has not started** should say what it is behind; a
+run that has started should say what it is doing, with the proposal as a note
+beside it (#60).
 
 ### `Stage` (a row of `run.path`)
 
@@ -129,9 +145,20 @@ a non-empty `blockedBy` should say what it is behind whatever its own kind says
 `run.yml` `stage.budget_usd`; the model does not read `budget.yml`, whose
 ceilings are per phase), `gate` (string \| null, e.g. `"approve: pending"`),
 `gateBy` (string \| null — `auto` when the facilitator closed it, the operator's
-name when a person did, null while it is open), and `gatePolicy` (`"human"` |
-`"auto"` — who is MEANT to sign it, spec §2.2 `gates_policy`; absence reads as
-`human`).
+name when a person did, null while it is open), `gatePolicy` (`"human"` |
+`"auto"` | `"agent"` — who is MEANT to sign it, spec §2.2 `gates_policy`;
+absence reads as `human`), `gateEvidence` (below), and `stale` (boolean — true
+when an EARLIER stage's gate was revoked after this one ran; its outputs are
+still on disk and still look current).
+
+### `GateEvidence`
+
+Non-null only on a gate an `agent` policy closed (design §A.5): `path` (the
+run-relative path of the COMMITTED note under `<phase>/gate-evidence/` — text,
+never a link), `role`, `verdict`, and the counts `sampled`, `of`, `resolved`,
+`refuted`, `outsideSurface` (each number \| null). A human signature is a name
+and a person who is accountable for it; an agent's is a name and nothing, unless
+what it checked is shown beside it.
 
 ### `Phase`
 
@@ -169,6 +196,14 @@ level), `evidenceCount`, `newestEvidence` (`YYYY-MM-DD` \| null), `trainPrompt`.
 ## `FaqEntry`
 
 `heading` and `commands` (`string[]`). Copy-paste terminal commands, in order.
+
+## What is NOT in it
+
+`events.jsonl` is **not read**. Everything that lives only in the ledger is
+therefore absent: operator notes (`tldrx note`), per-attempt costs, story
+reopens, review retries, budget refusals. `tldrx replay <run>` and `tldrx run
+status` read the ledger; this page does not, and says so on the *How to use it*
+tab rather than letting an empty section read as an empty ledger.
 
 ## Serving it
 

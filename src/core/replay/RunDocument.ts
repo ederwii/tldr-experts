@@ -41,6 +41,19 @@ export interface RunTask {
   readonly status: string;
   readonly cost_usd: number;
   readonly error: string | null;
+  /**
+   * False when nobody declared what this turn cost (spec §5, `--commit`).
+   *
+   * `cost_usd` above is coerced to `0` for arithmetic, which is the right number
+   * to add up and the wrong one to READ: a run whose every turn a host session
+   * paid for sums to `$0.00`, and a viewer that only had the coerced number could
+   * not tell that from a run that genuinely spent nothing. So the null survives
+   * as this boolean. Same rule as `runSpend` in `src/hooks/lib/runFile.ts`: a
+   * turn is unmetered when `metered` is false OR `cost_usd` is null.
+   */
+  readonly metered: boolean;
+  /** Host-session tokens declared with `--tokens`. Never converted to dollars. */
+  readonly tokens: number | null;
 }
 
 export interface RunStage {
@@ -56,6 +69,12 @@ export interface RunStage {
   readonly outputs: readonly string[];
   readonly gate: RunGate | null;
   readonly tasks: readonly RunTask[];
+  /**
+   * True when an EARLIER stage's gate was revoked after this one had already run
+   * (`RunFile.stale`). Its outputs are still on disk and still look current; the
+   * decision they were derived from has been withdrawn.
+   */
+  readonly stale: boolean;
 }
 
 export interface RunPhase {
@@ -78,6 +97,17 @@ export interface RunTriage {
   readonly depends_on: readonly string[];
 }
 
+/**
+ * What the Build claimed on disk (`RunFile.build`), read as tolerantly as the rest.
+ *
+ * `branch_model` is null on every run.yml written before issue #57 — which is not
+ * the same as `per-epic`, and is not guessed at here.
+ */
+export interface RunBuildDocument {
+  readonly epic_branch: readonly string[];
+  readonly branch_model: string | null;
+}
+
 export interface RunDocument {
   readonly run: string;
   readonly title: string;
@@ -98,6 +128,14 @@ export interface RunDocument {
    * default `gatePolicyFor` applies, spelled here so a reader never has to know it.
    */
   readonly gates_policy: Readonly<Record<string, string>>;
+  /**
+   * `host` when a host session drives the turns (`RunFile.attended_by`), null on
+   * every run the framework may spawn on — which is every run.yml written before
+   * the key existed.
+   */
+  readonly attended_by: string | null;
+  /** Null until a Build stage cuts or adopts an epic branch. */
+  readonly build: RunBuildDocument | null;
   readonly phases: readonly RunPhase[];
 }
 
@@ -145,8 +183,17 @@ export function toRunDocument(input: unknown, fallbackId: string): RunDocument |
     spent_usd: num(budget?.spent_usd),
     triage: toTriage(doc.triage),
     gates_policy: toGatesPolicy(doc.gates_policy),
+    attended_by: nullableStr(doc.attended_by),
+    build: toBuild(doc.build),
     phases: array(doc.phases).map(toPhase).filter((phase): phase is RunPhase => phase !== null),
   };
+}
+
+/** Absent on every run until a Build stage cuts a branch, which is most runs. */
+function toBuild(input: unknown): RunBuildDocument | null {
+  const build = record(input);
+  if (build === null) return null;
+  return { epic_branch: strings(build.epic_branch), branch_model: nullableStr(build.branch_model) };
 }
 
 export function toBudgetDocument(input: unknown): BudgetDocument | null {
@@ -238,6 +285,9 @@ function toStage(input: unknown): RunStage | null {
           note: str(gate.note),
           evidence: toGateEvidence(gate.evidence),
         },
+    // Optional and additive: absent on every run.yml written before revocation
+    // existed, and absent again the moment the stage re-runs.
+    stale: stage.stale === true,
     tasks: array(stage.tasks)
       .map(record)
       .filter((task): task is Record<string, unknown> => task !== null)
@@ -246,6 +296,11 @@ function toStage(input: unknown): RunStage | null {
         status: str(task.status),
         cost_usd: num(task.cost_usd) ?? 0,
         error: nullableStr(task.error),
+        // Read BEFORE the `?? 0` above throws the null away. `metered: false` and
+        // a null cost are the same fact recorded two ways, and either one alone
+        // means the number in `cost_usd` is not a measurement.
+        metered: task.metered !== false && num(task.cost_usd) !== null,
+        tokens: num(task.tokens),
       })),
   };
 }

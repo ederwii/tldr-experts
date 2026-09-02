@@ -79,7 +79,7 @@ tldrx approve --note "…"    # sign the gate; the checks are re-run first
 | `tldrx watch list \| check [<feature>]` | The watcher cards a run produced: listed, or printed as the post-merge checklist and re-checked against the code now. `--execute` re-runs the commands the cards recorded, through the workspace allowlist. |
 | `tldrx watch arm` | Wait for the run's shipped PR to merge, then print that checklist. A bounded foreground poller over `gh pr view` — not a daemon. |
 | `tldrx plan sync-dod \| schema` | Repair story definitions of done after editing `workspace.yml`, or print the story/epic/waves contract the `plan` check enforces. |
-| `tldrx dashboard` | Watch the workspace live in a browser, or export one static page. |
+| `tldrx dashboard` | Watch the workspace live in a browser, or export one static page. See [Dashboard](/reference/dashboard). |
 | `tldrx replay [<run>]` | The run's event log as a narrative. |
 | `tldrx retro` | Close a run and capture what was learned. |
 | `tldrx retro --all` | Read-only across EVERY run: which finding classes keep catching you, with counts and one cited example each. `--json` for the machine shape. Writes nothing. |

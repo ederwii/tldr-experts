@@ -79,7 +79,7 @@ tldrx approve --note "…"    # firma la compuerta; antes se vuelven a correr la
 | `tldrx watch list \| check [<feature>]` | Las tarjetas de vigilancia que produjo un run: listadas, o impresas como la checklist de post-merge y revisadas contra el código de hoy. `--execute` vuelve a correr los comandos que registraron las tarjetas, a través de la lista blanca del workspace. |
 | `tldrx watch arm` | Espera a que el PR del run se mergee y entonces imprime esa checklist. Un poller acotado en primer plano sobre `gh pr view`, no un demonio. |
 | `tldrx plan sync-dod \| schema` | Repara los DoD de las stories después de editar `workspace.yml`, o imprime el contrato de story/épica/waves que hace cumplir la verificación `plan`. |
-| `tldrx dashboard` | Mira el workspace en vivo en el navegador, o exporta una página estática. |
+| `tldrx dashboard` | Mira el workspace en vivo en el navegador, o exporta una página estática. Ver [Dashboard](/es/reference/dashboard). |
 | `tldrx replay [<run>]` | El log de eventos del run, contado como historia. |
 | `tldrx retro` | Cierra un run y captura lo que se aprendió. |
 | `tldrx retro --all` | Solo lectura, sobre TODOS los runs: qué clases de hallazgo te siguen agarrando, con conteos y un ejemplo citado de cada una. `--json` para la forma que lee una máquina. No escribe nada. |

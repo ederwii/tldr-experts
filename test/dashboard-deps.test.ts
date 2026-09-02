@@ -1,16 +1,22 @@
 /**
  * The dashboard and the CLI, told to agree.
  *
- * `test/fixtures/chain/workspace` holds seven runs that between them cover every
- * waiting kind — a fresh one nobody has touched, one parked at a gate, one
- * holding open questions, one that failed, one that finished, and two that were
- * proposed to follow a sibling — wired into two dependency chains. Both screens
- * read the same folder, so any disagreement is a bug in one of them.
+ * `test/fixtures/chain/workspace` holds seven runs — a fresh one nobody has
+ * touched, one parked at a gate, one holding open questions, one that failed,
+ * one that finished, and two that were proposed to follow a sibling — wired into
+ * two dependency chains. Both screens read the same folder, so any disagreement
+ * is a bug in one of them.
+ *
+ * It covers five of the eight waiting kinds, not all eight, and the test below
+ * now says which three it misses instead of claiming otherwise. That claim was
+ * not free: `prepared` and `running` went unrendered because a test a few lines
+ * from here said every kind was covered.
  */
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { buildModel, clientRenderer, dashMain } from "../src/core/dashboard/index.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
+import { WAITING_KINDS } from "../src/core/run/waiting.ts";
 import { whatIsWaiting } from "../src/core/run/runStatus.ts";
 import { listRunDirs } from "../src/hooks/lib/workspace.ts";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
@@ -45,10 +51,18 @@ function cliWaiting(): ReadonlyMap<string, string> {
 }
 
 describe("the dashboard never disagrees with `tldrx run status`", () => {
-  test("the fixture covers every waiting kind, so parity means something", () => {
-    expect([...new Set(model.runs.map((run) => run.waiting.kind))].sort())
-      .toEqual(["answer", "done", "failed", "gate", "ready"]);
+  test("the fixture's coverage is stated, and the gap is named rather than implied", () => {
+    const covered = new Set<string>(model.runs.map((run) => run.waiting.kind));
+    expect([...covered].sort()).toEqual(["answer", "done", "failed", "gate", "ready"]);
     expect(model.runs).toHaveLength(7);
+
+    // The three this fixture cannot hold: `blocked` needs a broken cursor,
+    // `running` needs a live pid, `prepared` needs a bundle on disk. They are
+    // covered in `test/dashboard-vocabulary.test.ts` against fixtures built for
+    // them. Asserted against WAITING_KINDS so a NINTH kind fails here — which is
+    // the only thing that would have caught `prepared` going unrendered.
+    const missing = WAITING_KINDS.filter((kind) => !covered.has(kind));
+    expect([...missing].sort()).toEqual(["blocked", "prepared", "running"]);
   });
 
   test("`waiting.kind` matches the CLI for every run, including a fresh one", () => {
