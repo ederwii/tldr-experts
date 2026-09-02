@@ -4,6 +4,33 @@
 
 ### Added
 
+- **The Plan prompt now says how to make a `touches` list COMPLETE (#132).** Measured on one
+  live run: 3 of 5 stories needed their write surface extended after the fact. S2 could not
+  write the failing test its own test plan promised, because the test file was outside
+  `touches`. S4 added two enum members and left out the switch sites, so the branch did not
+  compile. S8's security criterion read a file the story never declared, so the criterion
+  would have passed on nothing. The developers caught all three — at the cost of a round each
+  time. Every other rule in `## Output schemas` is generated from a validator, because a
+  validator refuses what breaks it and says why; under-declaration breaks no rule at all.
+  `["src/thing.ts"]` is a well-formed list, `validateStory` passes it, and the bill arrives
+  one stage later at the developer prompt's "change only what `touches` names" and at
+  auto-gate condition 7 `boundary`.
+  - A `### Completing \`touches\`` sub-section in `renderPlanSchemaContract()`, ~1.3 KB in the
+    cached, most-stable part of a prompt whose stage budget is $4: three sweeps, one per real
+    failure — its tests · every switch, registration, factory, DI container or barrel a new
+    name has to reach · every file a gated criterion reads — plus what omitting one costs, so
+    the reason is in the prompt rather than in an issue. The `touches` row of the generated
+    table now points at it instead of restating it.
+  - Prose on purpose, and the only prose in that file: no compiler runs at Plan time, so
+    nothing can compute this list. **Compile simulation stays the escalation path** if the
+    checklist measures poorly on the next runs.
+  - Red-first in two places: `test/plan-schema-contract.test.ts` pins the three rules and the
+    cost statement against the rendered contract, and `test/plan-contract.test.ts` pins them
+    against the prompt the real `tldrx next --prepare` bundle writes — a contract that renders
+    correctly and is spliced into no prompt is the `templates/story.md` failure again (#48).
+    6 red before, green after. `docs/spec.md` §2.13 and the `delivery` expert each carry one
+    line pointing at the checklist.
+
 - **The landing page now sells the unattended flow it never mentioned (#128).** Measured at
   `95a39db`: `grep -c 'tldrx drive' docs-site/index.md` returned `0`, and so did its Spanish
   twin — a bare `grep drive` exited `1` on both. `tldrx drive` is the star command for handing

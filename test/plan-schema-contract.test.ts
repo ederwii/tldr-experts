@@ -445,3 +445,50 @@ describe("`tldrx plan schema` prints the contract a human has to write to (#71)"
     expect(readdirSync(dir)).toEqual([]);
   });
 });
+
+/**
+ * `touches` is systematically under-declared, and the schema cannot see it
+ * (gh #132).
+ *
+ * Every rule the section above states is a rule a validator enforces, so a story
+ * that breaks one is refused and the agent is told why. Under-declaration breaks
+ * NO rule: `touches: ["src/thing.ts"]` is a valid list, it passes `validateStory`,
+ * and the cost lands one stage later — the Build agent is told to change nothing
+ * outside it (`build/prompts.ts`, "A change outside it is a plan deviation") and
+ * auto-gate condition 7 `boundary` names every changed path the plan never
+ * declared. Measured on a live run: 3 of 5 stories needed the surface extended
+ * after the fact — S2 wanted the test file for its red gate, S4 wanted the two
+ * enums whose switch sites would not compile, S8 wanted the file a security
+ * criterion read (without it the criterion passed vacuously). Each cost a round.
+ *
+ * So the checklist is prose, deliberately: it states the three shapes no
+ * validator can catch. These tests pin the shapes, not the wording — a rule that
+ * is deleted or watered down until it no longer says what to look for fails here.
+ */
+describe("the contract tells the agent how to COMPLETE `touches` (#132)", () => {
+  /** The rendered section, lowercased with runs of whitespace collapsed. */
+  function flat(): string {
+    return renderPlanSchemaContract().toLowerCase().replaceAll(/\s+/g, " ");
+  }
+
+  test("rule 1 — for every source file it changes, that file's test file", () => {
+    expect(flat()).toContain("for every source file the story changes, the file its tests live in");
+  });
+
+  test("rule 2 — for every new name, every site that has to learn it", () => {
+    expect(flat()).toContain("every switch, registration, factory, di container or barrel that has to handle it");
+  });
+
+  test("rule 3 — for every gated criterion, the file the gate reads", () => {
+    expect(flat()).toContain("a criterion whose file is not in the surface passes vacuously");
+  });
+
+  test("it states what an under-declared surface costs", () => {
+    expect(flat()).toContain("the story comes back for another paid round");
+  });
+
+  test("the `touches` row points at the checklist rather than restating it", () => {
+    const row = renderPlanSchemaContract().split("\n").find((line) => line.startsWith("| `touches` |"));
+    expect(row ?? "(no `touches` row)").toContain("Completing");
+  });
+});
