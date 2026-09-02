@@ -4,6 +4,32 @@
 
 ### Added
 
+- **The `tldrx drive` mandate carries its own preflight (#84).** Launching a cold unattended
+  session took SIX hand-run commands before the mandate could be pasted at all — `tldrx run
+  attend host`, then `tldrx run gates set` five times. Every one of them is a precondition of
+  the discipline the mandate exists to transfer, so an owner typing them by hand was doing the
+  driver's job for it, and a mandate that assumes its own preconditions only works where
+  somebody has already been careful. Both modes now open with a **`## Before anything: the
+  preflight`** section, ahead of the roles, that establishes attendedness (`tldrx run status
+  <run>`), the gate policy (`--json`, stage by stage) and `budget.yml` — and makes the driver
+  **state the ceiling it will honour** before the first turn. Any one it cannot establish is a
+  **refusal to start** that names the command that failed, because a driver that starts anyway
+  has spent money on a run whose gates it may not close.
+  - The two modes differ here exactly as they differ at the gate. `--unattended` may SET what
+    it finds wrong: `tldrx run attend host <run>`, and `tldrx run gates set <stage>:agent
+    --note "…"` for a stage the owner delegated, over a note **quoting the owner's own
+    delegation from the launch message** — so the policy change is signed by the owner's words
+    rather than the driver's judgement. `--attended` gets the mirror and may not: gates stay
+    human there, so it checks attendedness and the budget, reports a stage that is not `human`
+    where it was expected, and moves nothing. A test asserts the attended text contains no
+    `gates set <stage>:agent` at all.
+  - The `<run>` substitution (#75) covers the new lines like every other, `<stage>` untouched:
+    the pinned occurrence count moves from 5/7 to **7 attended / 10 unattended**.
+  - Both mandates stay inside `MANDATE_MAX_LINES` (119 unattended, 116 attended), paid for out
+    of the header, the driving block and the unattended gate. The sections that make the
+    document worth pasting — the three-role spine, evidence discipline, parking, review
+    calibration by stakes and budget honesty — are untouched.
+
 - **The retro aggregate has consumers: `--json`, the reviewer prompt, and a workspace taxonomy
   (#74).** `tldrx retro --all` (#64) produced exactly the dataset that issue asked for — finding
   class × count × runs × one cited example — and nothing read it. The reader existed; the loop it

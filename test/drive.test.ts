@@ -210,12 +210,14 @@ describe("the mandate's <run> is filled in when there is an id to fill it with (
   });
 
   test("every occurrence is substituted — all of them, not the first", () => {
-    // Measured 2026-09-01, and pinned so the count cannot drift silently: the issue
-    // said "~8", the mandate actually carries 7 unattended and 5 attended. The
-    // argument does not depend on the number — one occurrence missed by a hand
+    // Measured, and pinned so the count cannot drift silently: the issue said "~8",
+    // the mandate carried 7 unattended and 5 attended on 2026-09-01, and the #84
+    // preflight added three more to each (`run status`, `run attend host` and the
+    // `budget.yml` path — the attended mirror has no `attend host` line, so two).
+    // The argument does not depend on the number — one occurrence missed by a hand
     // find-replace sends a session at the wrong run — but the number is checkable,
     // so it is checked rather than approximated.
-    const counts: Record<DriveMode, number> = { attended: 5, unattended: 7 };
+    const counts: Record<DriveMode, number> = { attended: 7, unattended: 10 };
     for (const mode of DRIVE_MODES) {
       const occurrences = renderMandate(mode, VERSION).split("<run>").length - 1;
       expect(occurrences).toBe(counts[mode]);
@@ -326,5 +328,84 @@ describe("drive resolves the ONE open run, and refuses to guess between two (#75
     expect(run.code).toBe(EXIT_OK);
     expect(run.stdout).toContain("<run>");
     expect(run.stderr).toBe("");
+  });
+});
+
+/**
+ * The mandate carries its own preflight (#84).
+ *
+ * The failure this closes was measured on a real cold start (2026-09-02): launching an
+ * unattended run took SIX hand-run commands — `run attend host`, then `run gates set` five
+ * times — before the mandate could be pasted at all. Every one of them is a precondition of
+ * the discipline the mandate exists to transfer, so an owner running them by hand is doing
+ * the driver's job for it. A mandate that assumes its own preconditions is a mandate that
+ * only works when somebody has already been careful.
+ *
+ * So the text now starts by establishing them, and the two modes differ here exactly as they
+ * differ at the gate: the unattended driver may MOVE a gate to `agent` — over a note quoting
+ * the owner's own delegation, so the change is signed by the owner's words rather than the
+ * driver's judgement — and the attended one may not, because in that mode every gate is the
+ * owner's and moving one would be the driver quietly taking the signature away.
+ *
+ * The refusal is the load-bearing half. A driver that cannot establish a precondition and
+ * starts anyway has spent money on a run whose gates it may not close.
+ */
+describe("the mandate carries its own preflight (#84)", () => {
+  const unattended = renderMandate("unattended", VERSION);
+  const attended = renderMandate("attended", VERSION);
+  const both = [["unattended", unattended], ["attended", attended]] as const;
+
+  for (const [mode, text] of both) {
+    test(`${mode}: the preflight is the FIRST section, ahead of the roles`, () => {
+      expect(text).toContain("## Before anything: the preflight");
+      expect(text.indexOf("## Before anything: the preflight"))
+        .toBeLessThan(text.indexOf("## Three roles"));
+    });
+
+    test(`${mode}: it checks attendedness, off the run's own status`, () => {
+      expect(text).toContain("tldrx run status <run>");
+      expect(text).toContain("attended_by");
+    });
+
+    test(`${mode}: it checks budget.yml and makes the driver state the ceiling`, () => {
+      expect(text).toContain("`tldrx-work/<run>/budget.yml`");
+      expect(text.toLowerCase()).toContain("state the ceiling");
+    });
+
+    test(`${mode}: it refuses to start on a precondition it cannot establish, naming the command`, () => {
+      expect(text).toContain("REFUSE to start");
+      expect(text).toContain("name the command that failed");
+    });
+  }
+
+  test("unattended: it sets attendedness, and moves a mismatched gate over a cited note", () => {
+    expect(unattended).toContain("tldrx run attend host <run>");
+    expect(unattended).toContain('tldrx run gates set <stage>:agent --note "…"');
+    expect(unattended).toContain("quoting MY delegation from the launch message");
+  });
+
+  test("attended: the gates stay human — the mirror never moves one to `agent`", () => {
+    expect(attended).not.toContain("gates set <stage>:agent");
+    expect(attended).not.toContain("gates set");
+    expect(attended).not.toContain(":agent");
+    expect(attended).toContain("they stay mine");
+  });
+
+  test("the preflight's `<run>` is substituted like every other one (#75)", () => {
+    const filled = renderMandate("unattended", VERSION, "260901-leaderboard");
+    expect(filled).toContain("tldrx run status 260901-leaderboard");
+    expect(filled).toContain("tldrx run attend host 260901-leaderboard");
+    expect(filled).toContain("`tldrx-work/260901-leaderboard/budget.yml`");
+    expect(filled).not.toContain("<run>");
+    // `<stage>` is NOT a run id and must survive untouched, or the command is a lie.
+    expect(filled).toContain("<stage>:agent");
+  });
+
+  test("adding it kept both mandates inside the line budget", () => {
+    for (const mode of DRIVE_MODES) {
+      expect(renderMandate(mode, VERSION).split("\n").length).toBeLessThanOrEqual(MANDATE_MAX_LINES);
+      expect(renderMandate(mode, VERSION, "260901-leaderboard").split("\n").length)
+        .toBeLessThanOrEqual(MANDATE_MAX_LINES);
+    }
   });
 });

@@ -10,7 +10,12 @@
  * package, so a third party inherited the CLI and rediscovered the discipline —
  * or did not.
  *
- * Three rules hold this file up:
+ * Four rules hold this file up:
+ *
+ *   - **Preconditions ARE the discipline.** The mandate establishes its own before it
+ *     asks for anything (#84): a text that assumes attendedness, a gate policy and a
+ *     budget were arranged for it by hand only works where somebody was already being
+ *     careful, which is the failure it exists to prevent.
  *
  *   - **It is a MANDATE, not a manual.** It says what the driver must DO and what
  *     it may not decide. The commands appear only where the instruction is
@@ -56,8 +61,8 @@ export const RUN_PLACEHOLDER = "<run>";
  * and the same arguments always produce the same bytes.
  */
 export function renderMandate(mode: DriveMode, version: string, run?: string): string {
-  const text = [...header(mode, version, run), ...roles(), ...evidence(), ...parking(), ...calibration(),
-    ...budget(), ...driving(mode), ...gate(mode)].join("\n").trimEnd();
+  const text = [...header(mode, version, run), ...preflight(mode), ...roles(), ...evidence(),
+    ...parking(), ...calibration(), ...budget(), ...driving(mode), ...gate(mode)].join("\n").trimEnd();
   return run === undefined ? text : text.replaceAll(RUN_PLACEHOLDER, run);
 }
 
@@ -69,29 +74,72 @@ function header(mode: DriveMode, version: string, run?: string): readonly string
     // false instruction — and the reader has one fewer thing to get wrong.
     ...(run === undefined
       ? [
-        "Paste everything below the rule into the session that will drive the run, replacing",
-        "<run> with its id. This is the discipline, not the manual: for a command's flags run",
-        "`tldrx <cmd> --help`, and for the machinery read docs/guide/10-unattended-mode.md.",
+        "Paste everything below the rule into the session that will drive the run, replacing <run>",
+        "with its id. Discipline, not manual: `tldrx <cmd> --help`, docs/guide/10-unattended-mode.md.",
       ]
       : [
         `Paste everything below the rule into the session that will drive run ${run}.`,
-        "This is the discipline, not the manual: for a command's flags run `tldrx <cmd> --help`,",
-        "and for the machinery read docs/guide/10-unattended-mode.md.",
+        "Discipline, not manual: `tldrx <cmd> --help`, docs/guide/10-unattended-mode.md.",
       ]),
     "",
     RULE,
     "",
     ...(mode === "unattended"
       ? [
-        "You are my unattended verification gate on run <run>, until it reaches its last gate.",
-        "Nobody is watching. That is not permission to go faster — it is the reason every claim",
-        "below has to still be checkable by someone reading the tree tomorrow.",
+        "You are my unattended verification gate on run <run>, until its last gate. Nobody is watching:",
+        "that is not permission to go faster — it is why every claim below stays checkable tomorrow.",
       ]
       : [
-        "You are driving run <run> with me at the keyboard. I read what you tell me, and I sign",
-        "every gate. Your job is to make each of my decisions a five-second one — because you",
-        "already did the checking — rather than a leap of faith dressed up as a summary.",
+        "You are driving run <run> with me at the keyboard: I read what you tell me, and I sign every",
+        "gate. Make each of my decisions a five-second one, because you already did the checking.",
       ]),
+    "",
+  ];
+}
+
+/**
+ * The preflight (#84) — the FIRST section, because a mandate that assumes its own
+ * preconditions only works when somebody has already been careful.
+ *
+ * Measured on a cold start (2026-09-02): launching an unattended run took SIX
+ * hand-run commands before the mandate could be pasted at all — `run attend host`,
+ * then `run gates set` five times. Every one is a precondition of the discipline
+ * this text exists to transfer, so an owner typing them is doing the driver's job.
+ * The mandate now establishes them, and REFUSES to start where it cannot.
+ *
+ * The modes differ here exactly as they differ at the gate. The unattended driver
+ * may MOVE a stage to `agent` — over a note quoting the owner's own delegation, so
+ * the change is signed by the owner's words and not the driver's judgement. The
+ * attended one may not: there every gate is the owner's, and a driver that moved
+ * one would be taking the signature away rather than earning it.
+ */
+function preflight(mode: DriveMode): readonly string[] {
+  if (mode === "unattended") {
+    return [
+      "## Before anything: the preflight",
+      "",
+      "Preconditions ARE the discipline — establish them yourself, do not make me hand-run them.",
+      "`tldrx run status <run>` shows attendedness and the ceiling; `--json` adds the gate policy:",
+      "- ATTENDED: `attended_by: host` per my economy instruction; else `tldrx run attend host <run>`.",
+      "- GATES: every stage I delegated must read `agent`. Move each one that does not with",
+      "  `tldrx run gates set <stage>:agent --note \"…\"`, quoting MY delegation from the launch message.",
+      "- BUDGET: `tldrx-work/<run>/budget.yml` exists. State the ceiling you will honour, in dollars.",
+      "",
+      "Any one of the three you cannot establish: REFUSE to start, and name the command that failed.",
+      "",
+    ];
+  }
+  return [
+    "## Before anything: the preflight",
+    "",
+    "Preconditions ARE the discipline — check them before you ask me for anything. Read",
+    "`tldrx run status <run>`, which shows attendedness and the ceiling, and then:",
+    "- ATTENDED: say which way `attended_by` reads, and drive that way for the whole run.",
+    "- GATES: mine, and they stay mine. This mandate moves no gate policy: if a stage is not",
+    "  `human` where I expected it, stop and tell me rather than working around it.",
+    "- BUDGET: `tldrx-work/<run>/budget.yml` exists. State the ceiling you will honour, in dollars.",
+    "",
+    "Either check you cannot establish: REFUSE to start, and name the command that failed.",
     "",
   ];
 }
@@ -192,18 +240,15 @@ function driving(mode: DriveMode): readonly string[] {
     return [
       "## Driving the turns",
       "",
-      "The run is `attended_by: host`. The framework must never spawn on it — every turn is",
-      "yours, through the prepare/commit handshake:",
+      "The run is `attended_by: host`. The framework must never spawn on it; every turn is yours:",
       "",
       "    tldrx next --prepare <run>            # bundle, preconditions, dispatch notes",
       "    … dispatch ONE sub-agent with the bundle's prompt.md, write its result.json …",
       "    tldrx next --commit <run> --cost-usd <n> --tokens <n>",
-      "",
       "    tldrx next --prepare --review <run>   # the reviewer's bundle: read-only, fresh agent",
       "    tldrx next --commit  --review <run>",
       "",
-      "A bare `tldrx next` here exits 4 and names the half that is outstanding. If you reach for",
-      "`tldrx run auto`, stop — it is refused on this run, and the refusal is the point.",
+      "A bare `tldrx next` exits 4 here, and `tldrx run auto` is refused — the refusal is the point.",
       "",
     ];
   }
@@ -232,21 +277,18 @@ function gate(mode: DriveMode): readonly string[] {
       "    … fill Read · Citations checked · Touches audited · Verdict …",
       "    tldrx approve --as-agent",
       "",
-      "Three things must be true before you sign, and each is something you DID, not something",
-      "you were told:",
-      "",
+      "Three things must be true before you sign, and each is one you DID, not one you were told:",
       "- every `[src: …]` you sampled resolves — you opened that file at that line;",
       "- every changed path is one this run declared (the What/How citations plus the stories'",
       "  `touches:`) — read the diff's path list, do not take the count on trust;",
       "- the diff implements the stories it claims to, and nothing else.",
       "",
-      "`refuse` and `sign-with-fixlist` are real verdicts. Use them. A note that signs everything",
-      "is a rubber stamp with extra steps, and the framework will believe it.",
+      "`refuse` and `sign-with-fixlist` are real verdicts — use them. A note that signs everything",
+      "is a rubber stamp the framework will believe.",
       "",
-      "Interrupt me ONLY for: a new product decision · a budget-ceiling raise · work that has to",
-      "go outside the declared boundary · the final merge. Everything else you decide, and log.",
-      "",
-      "Never push. The final merge is mine.",
+      "Interrupt me ONLY for: a new product decision · a budget-ceiling raise · work outside the",
+      "declared boundary · the final merge. Everything else you decide, and log. Never push — the",
+      "final merge is mine.",
       "",
     ];
   }

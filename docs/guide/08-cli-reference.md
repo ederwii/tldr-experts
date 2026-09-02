@@ -890,7 +890,13 @@ tldrx drive <--attended|--unattended> [<run>] [--run <id>]
 ```
 
 The output is plain text you paste into the session that will drive a run (or read yourself
-before you start). It carries what the first real runs were actually driven by: the three-role
+before you start). It opens with a **preflight** — the driver establishes the run's
+attendedness (`tldrx run status <run>`), its gate policy (`--json`, stage by stage) and its
+`budget.yml`, states the ceiling it will honour, and **refuses to start** on any one it cannot
+establish, naming the command that failed. Preconditions are part of the discipline the
+mandate transfers: a text that assumes six commands were hand-run for it first only works
+where somebody was already being careful. After that it carries what the first real runs were
+actually driven by: the three-role
 protocol (developer sub-agent → a **fresh** adversarial reviewer, never the author → the host
 verifying both **in the code**, not in their reports), evidence discipline (measured / inferred
 / assumed labelled in the same sentence as the claim, exit codes never read through a pipe,
@@ -898,10 +904,11 @@ verification from the source, remote shas via `git ls-remote`), parking product 
 instead of deciding them, calibrating the reviewer to the story's **stakes**, and declaring a
 turn's cost once — with a floor rather than a total when the records are incomplete.
 
-The two modes share that spine and differ in exactly two sections:
+The two modes share that spine and differ in exactly three sections:
 
 | | `--attended` | `--unattended` |
 |---|---|---|
+| the preflight | checks attendedness and the budget, and **moves no gate policy** — a stage that is not `human` where you expected it is reported to you, not fixed | sets what it finds wrong: `tldrx run attend host <run>`, and `tldrx run gates set <stage>:agent --note "…"` for a stage you delegated, over a note quoting **your** delegation from the launch message |
 | who drives the turns | you say which, and do not switch mid-run | the session, through `--prepare`/`--commit`; the framework never spawns |
 | who closes a gate | **you** — the session does the check, writes the note and hands you the command | the session, over a validated evidence note (`tldrx approve --as-agent`) |
 
