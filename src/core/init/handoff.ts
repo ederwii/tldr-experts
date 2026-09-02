@@ -8,7 +8,7 @@
  * (a file, a command's exit code) from what was DECIDED (a default we picked) and
  * what is still UNKNOWN (a question, or an `absent:` path).
  */
-import { srcToken } from "../map/srcToken.ts";
+import { srcToken } from "../text/srcToken.ts";
 import { plural } from "../map/plural.ts";
 import { CHURN_SRC } from "../map/gitChurn.ts";
 import { COMMAND_SLOTS, type DetectedWorkspace } from "../detect/types.ts";

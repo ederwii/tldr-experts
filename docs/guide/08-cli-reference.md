@@ -654,9 +654,12 @@ tldrx map --check   [--root <path>]
 ```
 
 One of `--refresh` or `--check` is required; they are the subcommands, spelled as flags.
-`--check` resolves every `[src: <repo:>path:line]` citation in the map and the init handoff
-against the filesystem — exit `1` with the offending document, line and reason when one does
-not land. `--refresh` appends `map.refreshed` to the newest OPEN run's `events.jsonl` and says
+`--check` reads every `[src: …]` citation in the map and the init handoff through the same
+grammar `claim-sources` enforces, then resolves the `file` ones against the filesystem. Exit
+`1` reports two kinds of problem, counted separately: citations that no longer **land** (the
+file is gone, the line is past the end, the repo is not in `workspace.yml`), and citations
+that no longer **parse** — those name the rule that refused them, quote the line as written
+and show a line that would pass, exactly as a `claim-sources` rejection does. `--refresh` appends `map.refreshed` to the newest OPEN run's `events.jsonl` and says
 which run it filed under; with no open run it records nothing and still exits `0`. Providers:
 `auto` `graphify` `static`. Exits: `0` `1`.
 

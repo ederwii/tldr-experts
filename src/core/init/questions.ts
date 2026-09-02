@@ -10,7 +10,7 @@
  * `init` writes the file and stops. Capturing answers is the answer-capture
  * hook's job, not this command's.
  */
-import { srcToken } from "../map/srcToken.ts";
+import { srcToken } from "../text/srcToken.ts";
 import { gapSrc } from "../detect/gapSrc.ts";
 import { isGreenfield } from "../detect/greenfield.ts";
 import { STACK_CHOICES } from "./stackChoices.ts";

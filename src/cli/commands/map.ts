@@ -2,10 +2,12 @@
  *
  * Concept §4.2, spec §3.
  *   `--refresh` re-detects the workspace and rewrites `.tldrx/map/**`.
- *   `--check`   resolves every `[src: <repo:>path:line]` citation in the map and
- *               the init handoff against the filesystem. Exit 1 lists the ones
- *               that no longer land — a map whose citations rot is a map that
- *               lies.
+ *   `--check`   reads every `[src: …]` citation in the map and the init handoff
+ *               through the ONE grammar (`core/text/srcToken.ts`, gh #80) and
+ *               resolves the `file` ones against the filesystem. Exit 1 lists
+ *               both what no longer lands and what no longer parses, each naming
+ *               the rule that refused it — a map whose citations rot is a map
+ *               that lies.
  */
 import { resolve } from "node:path";
 import type { Command } from "../Command.ts";
@@ -153,11 +155,26 @@ async function check(args: MapArgs): Promise<number> {
     );
     return EXIT_OK;
   }
-  const lines = result.problems.map((problem) =>
-    `  ${problem.file}:${problem.line}  ${problem.src === "" ? "(no token)" : problem.src}  — ${problem.reason}`);
+  // Two different failures, counted separately (gh #80). A citation that does not
+  // PARSE never reached the filesystem, so folding it into "N of M citations do not
+  // resolve" reported a denominator it was never in — and, when every problem was a
+  // grammar one, printed "3 of 0".
+  const malformed = result.problems.filter((problem) => problem.rule !== null).length;
+  const drifted = result.problems.length - malformed;
+  const counts = [
+    drifted > 0 ? `${drifted} of ${result.checked} citations do not resolve` : "",
+    malformed > 0 ? `${malformed} do not parse` : "",
+  ].filter((part) => part !== "");
+  // The middle column is the offending SOURCE when there is one. A whole-line
+  // failure has no piece to name, so it carries the rule id instead: "(no token)"
+  // was actively wrong for a `trailing-position`, where a token is exactly what
+  // the line does have.
+  const lines = result.problems.map((problem) => {
+    const what = problem.src !== "" ? problem.src : (problem.rule ?? "(no token)");
+    return `  ${problem.file}:${problem.line}  ${what}  — ${problem.reason}`;
+  });
   process.stderr.write(
-    `tldrx map --check — ${result.problems.length} of ${result.checked} citations do not resolve:\n`
-    + lines.join("\n") + "\n",
+    `tldrx map --check — ${counts.join(", ")}:\n` + lines.join("\n") + "\n",
   );
   return EXIT_FAILED;
 }

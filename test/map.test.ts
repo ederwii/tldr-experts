@@ -3,43 +3,68 @@ import { join } from "node:path";
 import { rm } from "node:fs/promises";
 import { detectWorkspace, SpawnCommandRunner } from "../src/core/detect/index.ts";
 import {
-  buildMap, checkCitations, endsWithToken, isBullet, parseChurn, parseSrc, parseToken,
+  buildMap, checkCitations, endsWithToken, isBullet, parseChurn,
   renderMapDoc, srcToken, summariseGraph, GraphifyProvider, StaticProvider, MAP_DOCS,
   type MapContext,
 } from "../src/core/map/index.ts";
+import { classifySrc, parseSrcToken } from "../src/core/text/srcToken.ts";
 import { fakeRunner, multiRepoFixture, okResult, singleRepoFixture, type Fixture } from "./init-fixture.ts";
 
 const runner = new SpawnCommandRunner();
 
-describe("the src token grammar (spec §2.8)", () => {
+/**
+ * The map reads the ONE grammar (gh #80).
+ *
+ * These assertions used to run `core/map/srcToken.ts`, a second implementation
+ * that disagreed with the claim-sources reader on five axes. They run
+ * `core/text/srcToken.ts` now — same claims, one reader. The productions and the
+ * rules are owned by `test/src-grammar.test.ts`; what is checked HERE is that the
+ * map's own front door reaches them, and that its two document-shape helpers
+ * (`srcToken`, `isBullet`) still behave.
+ */
+describe("the src token grammar the map reads (spec §2.8, gh #80)", () => {
+  /** `classifySrc` returns a ref or an error; `kind` is only on the ref. */
+  function kindOf(src: string): string | null {
+    const parsed = classifySrc(src);
+    return "message" in parsed ? null : parsed.kind;
+  }
+
   test("every production parses", () => {
-    expect(parseSrc("api:src/Hunt.cs:184")?.kind).toBe("file");
-    expect(parseSrc("src/index.ts:1-20")?.kind).toBe("file");
-    expect(parseSrc("https://example.com/docs")?.kind).toBe("doc");
-    expect(parseSrc("Q4")?.kind).toBe("ans");
-    expect(parseSrc("F019")?.kind).toBe("fact");
-    expect(parseSrc("$ dotnet build → exit 0")?.kind).toBe("cmd");
-    expect(parseSrc("graph:pkg_mod_a")?.kind).toBe("graph");
-    expect(parseSrc("absent:.tldrx/memory/facts.yml")?.kind).toBe("absent");
+    expect(kindOf("api:src/Hunt.cs:184")).toBe("file");
+    expect(kindOf("src/index.ts:1-20")).toBe("file");
+    expect(kindOf("https://example.com/docs")).toBe("doc");
+    expect(kindOf("Q4")).toBe("answer");
+    expect(kindOf("F019")).toBe("fact");
+    expect(kindOf("$ dotnet build → exit 0")).toBe("cmd");
+    expect(kindOf("graph:pkg_mod_a")).toBe("graph");
+    expect(kindOf("absent:.tldrx/memory/facts.yml")).toBe("absent");
+    // the kind the deleted second grammar had never heard of
+    expect(kindOf("aidlc:intents/260821/design.md:14")).toBe("aidlc");
   });
 
   test("what the grammar rejects", () => {
-    expect(parseSrc("http://example.com")).toBeNull(); // https only
-    expect(parseSrc("src/index.ts")).toBeNull(); // no line number
-    expect(parseSrc("F1")).toBeNull(); // fact ids are 3-6 digits
-    expect(parseSrc("just some prose")).toBeNull();
+    expect(kindOf("http://example.com")).toBeNull(); // https only
+    expect(kindOf("src/index.ts")).toBeNull(); // no line number
+    expect(kindOf("F1")).toBeNull(); // fact ids are 3-6 digits
+    expect(kindOf("just some prose")).toBeNull();
   });
 
   test("a file src keeps its repo, path and line range", () => {
-    const parsed = parseSrc("lab:src/a.ts:10-12");
-    expect(parsed).toEqual({ kind: "file", raw: "lab:src/a.ts:10-12", repo: "lab", path: "src/a.ts", line: 10, endLine: 12 });
+    expect(classifySrc("lab:src/a.ts:10-12")).toEqual({
+      kind: "file", raw: "lab:src/a.ts:10-12", repo: "lab", path: "src/a.ts", startLine: 10, endLine: 12,
+    });
   });
 
   test("a bullet must END with its token, and multiple srcs are separated by `; `", () => {
     expect(endsWithToken(`- claim ${srcToken(["lab:src/a.ts:1", "$ git log → exit 0"])}`)).toBe(true);
     expect(endsWithToken("- claim [src: lab:src/a.ts:1] and then more prose")).toBe(false);
     expect(endsWithToken("- claim with no source at all")).toBe(false);
-    expect(parseToken("- x [src: Q4; F001]").length).toBe(2);
+    expect(parseSrcToken("- x [src: Q4; F001]")?.refs.length).toBe(2);
+  });
+
+  test("the builder joins on the separator the reader splits on", () => {
+    expect(srcToken(["Q4", "F001"])).toBe("[src: Q4; F001]");
+    expect(endsWithToken(`- x ${srcToken(["Q4", "F001"])}`)).toBe(true);
   });
 
   test("bullets are recognised, headings are not", () => {

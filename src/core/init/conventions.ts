@@ -7,7 +7,7 @@
  *  - `<repo>.md` holds what the repo's own tooling enforces, and every line of it
  *    cites the config file that does the enforcing.
  */
-import { srcToken } from "../map/srcToken.ts";
+import { srcToken } from "../text/srcToken.ts";
 import { COMMAND_SLOTS, type DetectedRepo } from "../detect/types.ts";
 import { gapSrc } from "../detect/gapSrc.ts";
 import type { ConventionSignal } from "../map/conventionSignals.ts";
