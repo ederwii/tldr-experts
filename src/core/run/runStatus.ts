@@ -12,8 +12,12 @@ import type { RunBudget } from "../budget/RunBudget.ts";
 import { renderAttempts, stageAttempts, type StageAttempts } from "./attempts.ts";
 import { buildProgress, renderBuildProgress, renderStoryCosts, BUILD_PHASE, type BuildProgress } from "./buildProgress.ts";
 import { gatePolicyFor, type GatePolicy, type GatesPolicy } from "./gatePolicy.ts";
+import { describeGateSignature } from "./gateAuthority.ts";
 import { failureReason, waitingFor, type Waiting, type WaitingKind } from "./waiting.ts";
-import { flatten, isTerminal, type AttendedBy, type RunFile, type RunPhase } from "./RunFile.ts";
+import {
+  flatten, isTerminal,
+  type AttendedBy, type RunFile, type RunGateAuthority, type RunGateExecutor, type RunPhase,
+} from "./RunFile.ts";
 import { operatorNotes, type OperatorNote } from "./operatorNote.ts";
 
 export const BAR_CELLS = 5;
@@ -43,6 +47,16 @@ export interface GateRow {
   /** `auto` on a gate the facilitator closed, the operator's name on a human one. */
   readonly by: string | null;
   readonly at: string | null;
+  /**
+   * Which entity evaluated this gate, and under whose authority (#122).
+   *
+   * ADDITIVE and optional, both: a run.yml written before those keys existed
+   * carries neither, and `describeGateSignature` falls back to `by` — the exact
+   * string this row rendered before. Appended at the end so `--json` consumers
+   * reading by key order are unaffected.
+   */
+  readonly executed_by?: RunGateExecutor;
+  readonly authority?: RunGateAuthority;
 }
 
 /**
@@ -153,6 +167,8 @@ function gateRows(run: RunFile): readonly GateRow[] {
     status: entry.stage.gate.status,
     by: entry.stage.gate.by,
     at: entry.stage.gate.at,
+    ...(entry.stage.gate.executed_by === undefined ? {} : { executed_by: entry.stage.gate.executed_by }),
+    ...(entry.stage.gate.authority === undefined ? {} : { authority: entry.stage.gate.authority }),
   }));
 }
 
@@ -279,8 +295,12 @@ export function renderGates(rows: readonly GateRow[]): readonly string[] {
 }
 
 function describeGate(row: GateRow): string {
-  if (row.status === "approved") return `approved by ${row.by ?? "?"}`;
-  if (row.status === "rejected") return `rejected by ${row.by ?? "?"}`;
+  // `describeGateSignature` is the ONE renderer (#122): a bare name for a person
+  // signing as themselves and for every record written before the fields existed,
+  // and `agent alan (delegated by alan, policy: agent)` when the name in `by`
+  // belongs to somebody who was not the one checking.
+  if (row.status === "approved") return `approved by ${describeGateSignature(row)}`;
+  if (row.status === "rejected") return `rejected by ${describeGateSignature(row)}`;
   if (row.status === "n-a") return `${row.type}: n-a`;
   return `${row.type}: ${row.status}`;
 }

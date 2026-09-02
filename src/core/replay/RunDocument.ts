@@ -26,6 +26,22 @@ export interface RunGateEvidence {
   readonly outside_surface: number | null;
 }
 
+/** `gate.executed_by` (#122) — which entity evaluated the gate. */
+export interface RunGateExecutor {
+  readonly type: string;
+  /** Null for `auto`, which is a role rather than an identity. */
+  readonly id: string | null;
+}
+
+/** `gate.authority` (#122) — under whose authority, and how that was established. */
+export interface RunGateAuthority {
+  readonly type: string;
+  readonly policy: string;
+  /** Null when the log named nobody; `source` is then `unrecorded`. */
+  readonly authorized_by: string | null;
+  readonly source: string;
+}
+
 export interface RunGate {
   readonly type: string;
   readonly status: string;
@@ -34,6 +50,13 @@ export interface RunGate {
   readonly note: string;
   /** Present only on a gate an `agent` policy closed. */
   readonly evidence: RunGateEvidence | null;
+  /**
+   * Who signed it and under what (#122). Null on every gate written before those
+   * keys existed, and every reader falls back to `by` — which is exactly what it
+   * meant then and still means now.
+   */
+  readonly executed_by: RunGateExecutor | null;
+  readonly authority: RunGateAuthority | null;
 }
 
 export interface RunTask {
@@ -318,6 +341,24 @@ function toGateEvidence(input: unknown): RunGateEvidence | null {
   };
 }
 
+/** Null on every gate written before #122, which is most gates ever written. */
+function toGateExecutor(input: unknown): RunGateExecutor | null {
+  const executor = record(input);
+  if (executor === null) return null;
+  return { type: str(executor.type), id: nullableStr(executor.id) };
+}
+
+function toGateAuthority(input: unknown): RunGateAuthority | null {
+  const authority = record(input);
+  if (authority === null) return null;
+  return {
+    type: str(authority.type),
+    policy: str(authority.policy),
+    authorized_by: nullableStr(authority.authorized_by),
+    source: str(authority.source),
+  };
+}
+
 function toPhase(input: unknown): RunPhase | null {
   const phase = record(input);
   if (phase === null) return null;
@@ -352,6 +393,8 @@ function toStage(input: unknown): RunStage | null {
           at: nullableStr(gate.at),
           note: str(gate.note),
           evidence: toGateEvidence(gate.evidence),
+          executed_by: toGateExecutor(gate.executed_by),
+          authority: toGateAuthority(gate.authority),
         },
     // Optional and additive: absent on every run.yml written before revocation
     // existed, and absent again the moment the stage re-runs.

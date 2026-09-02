@@ -8,6 +8,7 @@
 import { openBlocks, parseQuestions } from "../text/index.ts";
 import { parseEvidence } from "../text/evidence.ts";
 import { skippedNote } from "../events/EventLog.ts";
+import { describeGateSignature } from "../run/gateAuthority.ts";
 import {
   loadGateEvidence, loadPhaseArtefacts, runLevelEvents, stageEvents,
   type LoadedRun, type NumberedEvent,
@@ -133,7 +134,13 @@ function bullet(item: NumberedEvent): string | null {
     case "question.asked": return `${prefix}${q || "a question"} asked by ${actor}: ${text(payload.question)}`.trimEnd();
     case "question.answered": return `${prefix}${q || "a question"} answered by ${actor}: ${text(payload.answer)}`.trimEnd();
     case "gate.requested": return `${prefix}gate requested`;
-    case "gate.approved": return `${prefix}gate APPROVED by ${actor}${note(payload.note)}`;
+    // Who SIGNED it, not merely who ran the process (#122). A gate an agent
+    // closed under a delegated policy carries the operator's name in `by`,
+    // and a narrative read six months later must not present that as the
+    // operator having reviewed it. Every event written before those fields
+    // existed renders the bare actor, exactly as it always did.
+    case "gate.approved":
+      return `${prefix}gate APPROVED by ${signature(actor, payload)}${note(payload.note)}`;
     case "gate.rejected": return `${prefix}gate REJECTED by ${actor}${note(payload.note)}`;
     // A person overruling a block is the one thing in the log that explains why a
     // story's attempt counter went backwards. A narrative that showed the two
@@ -247,6 +254,36 @@ function note(value: unknown): string {
 
 function text(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+/**
+ * The gate signature as `run status` and the dashboard render it (#122), read out
+ * of an event payload rather than off `run.yml`.
+ *
+ * The payload is `unknown` by construction — `events.jsonl` is JSON somebody
+ * else's version may have written — so the two blocks are narrowed here and a
+ * malformed one falls back to the actor. A narrative is not the place to refuse.
+ */
+function signature(actor: string, payload: Readonly<Record<string, unknown>>): string {
+  const executed = payload.executed_by;
+  if (!isRecord(executed) || typeof executed.type !== "string") return actor;
+  const authority = payload.authority;
+  return describeGateSignature({
+    by: typeof payload.by === "string" ? payload.by : actor,
+    executed_by: { type: executed.type, id: typeof executed.id === "string" ? executed.id : null },
+    authority: !isRecord(authority) || typeof authority.type !== "string"
+        || typeof authority.policy !== "string"
+      ? null
+      : {
+          type: authority.type,
+          policy: authority.policy,
+          authorized_by: typeof authority.authorized_by === "string" ? authority.authorized_by : null,
+        },
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function who(stage: RunStage): string {

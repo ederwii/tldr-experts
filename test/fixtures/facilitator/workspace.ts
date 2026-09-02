@@ -64,6 +64,12 @@ export interface WorkspaceOptions {
   readonly gatesFlag?: string;
   /** Extra files, keyed by path relative to the workspace root. */
   readonly files?: Readonly<Record<string, string>>;
+  /**
+   * Who ran `run new`. Defaults to `alan`, which is what every test that does not
+   * care has always got. It matters to the tests that read the run's `run.created`
+   * event back — the authorizer of a run-new-frozen gate policy is that actor.
+   */
+  readonly actor?: string;
 }
 
 export interface FacilitatorWorkspace {
@@ -144,7 +150,7 @@ export function makeFacilitatorWorkspace(options: WorkspaceOptions): Facilitator
     scope: options.scope,
     budgetUsd: options.budgetUsd,
     gates: options.gatesFlag,
-    actor: "alan",
+    actor: options.actor ?? "alan",
     now: new Date("2026-08-28T09:00:00Z"),
   });
 

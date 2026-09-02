@@ -2,11 +2,11 @@ export { buildModel, toRunModel, DASHBOARD_MODEL_VERSION } from "./model.ts";
 export type {
   DashboardModel, RunModel, PhaseModel, StageRowModel, QuestionModel, QuestionOptionModel,
   PlanModel, StoryModel, EpicModel, WaveModel, ExpertModel, AreaModel, FaqEntryModel, ModelOptions,
-  SpendModel, NextActionModel,
+  SpendModel, NextActionModel, GateExecutorModel, GateAuthorityModel,
 } from "./model.ts";
 export {
   renderDashboard, clientRenderer, dashModelJson, dashMain, dashEscape, dashText, dashTitle,
-  dashUsd, dashTone, dashRoute, dashPending, dashRadar, dashPanelId,
+  dashUsd, dashTone, dashRoute, dashPending, dashRadar, dashPanelId, dashSignature,
   DASHBOARD_TITLE, APP_ELEMENT_ID, MODEL_ELEMENT_ID,
 } from "./render.ts";
 export type { DashUi, DashRoute, DashPending } from "./render.ts";

@@ -149,6 +149,40 @@ Every stage ends at a gate. What you choose is **who closes it**. Three answers:
 | `auto` | seven measured conditions hold | `by: auto` |
 | `agent` | those seven, **plus** no budget decision in the stage's window, **plus** an evidence note that signs | the note's `by:`, with `gate.evidence` beside it and `role: agent` on the event |
 
+Every closed gate also records **which entity evaluated it and under whose authority**, in
+two blocks beside `by:`. `by:` is a name; it is not a kind. On an agent-closed gate that name
+is the *operator's* — the account the agent was running as — and read alone six months later
+it says "that person reviewed this", which is not what happened:
+
+```yaml
+gate: {type: approve, status: approved, by: alanmartinez, at: 2026-09-02T09:14:03Z, note: "agent-gate: …",
+       evidence: {…},
+       executed_by: {type: agent, id: alanmartinez},
+       authority: {type: delegated, policy: agent, authorized_by: alanmartinez, source: run.created}}
+```
+
+`executed_by.type` is `human`, `agent` or `auto`. `authority.type` is `direct` (a person
+signing as themselves) or `delegated` (an agent or the harness acting on a policy somebody
+set), `policy` is the gate policy in force when it was signed, and `authorized_by` is who set
+it — the run's creator for a policy frozen at `run new`, or the actor of the
+`tldrx run gates set` that moved it, with `source` naming which. Where the log names neither,
+`authorized_by` is `null` and `source` is `unrecorded`: an absence is said out loud, never
+filled in with a plausible name.
+
+`tldrx run status`, `tldrx replay` and the dashboard all read the same two blocks, so a
+delegated-agent signature never renders as a bare human name:
+
+```
+gates   1 human, 0 auto, 1 agent
+  01-what/alpha  agent  approved by agent alanmartinez (delegated by alanmartinez, policy: agent)
+  02-how/beta    human  approve: pending
+```
+
+Both blocks are **additive and optional**. A gate signed before they existed has neither,
+`by:` means exactly what it always meant, and every reader falls back to it — a person who
+signed as themselves still renders as a bare name, because for them the name is the whole
+truth.
+
 `human` waits for `tldrx approve`; `auto` lets the harness close it — but only when all seven conditions hold:
 the stage's checks pass, its phase has no open question, the spend is inside both the stage
 and the phase ceiling, the stage did not fail, the claim-sources validator reports
@@ -335,8 +369,10 @@ the first writes `agent-gate: <seven conditions>; evidence=…` and the second w
 `agent-gate: evidence=…`. The checks are re-run off disk. The note is **copied into the
 run tree** at `<phase>/gate-evidence/<stage>.md`, which is committed — a gate whose evidence
 lives only in a gitignored directory is a gate nobody can audit from a clone. `gate.by`
-records the note's `by:`, `gate.evidence` records its counts and the path, and one ordinary
-`gate.approved` is appended. `tldrx replay` then renders the check itself:
+records the note's `by:`, `gate.evidence` records its counts and the path,
+`gate.executed_by` records that an **agent** did the checking and `gate.authority` records
+that it did so under a policy you set, and one ordinary `gate.approved` is appended carrying
+all of it. `tldrx replay` then renders the check itself:
 
 ```
 - 03-plan/plan SIGN by fable (agent) — read 9 files, spot-checked 7 of 34 citations (7 resolved),

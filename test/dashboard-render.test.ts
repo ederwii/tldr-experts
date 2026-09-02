@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
-  buildModel, clientRenderer, dashEscape, dashMain, dashModelJson, dashRoute, dashText,
+  buildModel, clientRenderer, dashEscape, dashMain, dashModelJson, dashRoute, dashSignature, dashText,
   liveScript, renderDashboard, DASHBOARD_JS,
 } from "../src/core/dashboard/index.ts";
-import type { DashUi } from "../src/core/dashboard/index.ts";
+import type { DashUi, StageRowModel } from "../src/core/dashboard/index.ts";
 import { escapeHtml } from "../src/core/markdown/index.ts";
+import { describeGateSignature } from "../src/core/run/gateAuthority.ts";
 import { money } from "../src/core/replay/index.ts";
 import { VIEWS_FIXTURE, VIEWS_NOW } from "./fixtures/views/tempViews.ts";
 
@@ -183,6 +184,65 @@ describe("the renderer's own escapers", () => {
     for (const sample of ["<script>", "a & b", `"quoted"`, "it's", "a>b", "plain", "&amp;", "«ok»"]) {
       expect(dashEscape(sample)).toBe(escapeHtml(sample));
     }
+  });
+
+  /**
+   * #122. Everything serialised to the browser may close over nothing, so
+   * `dashSignature` is a copy of `describeGateSignature` — the same bargain
+   * `dashEscape` strikes with `escapeHtml`, and the same insurance against the
+   * two drifting: one of them printing a delegated agent as a bare human name
+   * would be exactly the bug the fields were added for.
+   */
+  test("dashSignature matches the core describeGateSignature, case for case", () => {
+    const cases: readonly Partial<StageRowModel>[] = [
+      { gateBy: "alan", gateExecutedBy: null, gateAuthority: null },
+      { gateBy: null, gateExecutedBy: null, gateAuthority: null },
+      {
+        gateBy: "alan", gateExecutedBy: { type: "human", id: "alan" },
+        gateAuthority: { type: "direct", policy: "human", authorizedBy: "alan", source: "self" },
+      },
+      {
+        gateBy: "alanmartinez", gateExecutedBy: { type: "agent", id: "alanmartinez" },
+        gateAuthority: {
+          type: "delegated", policy: "agent", authorizedBy: "alanmartinez", source: "run.created",
+        },
+      },
+      {
+        gateBy: "auto", gateExecutedBy: { type: "auto", id: null },
+        gateAuthority: { type: "delegated", policy: "auto", authorizedBy: "will", source: "gate.policy_changed" },
+      },
+      {
+        gateBy: "auto", gateExecutedBy: { type: "auto", id: null },
+        gateAuthority: { type: "delegated", policy: "auto", authorizedBy: null, source: "unrecorded" },
+      },
+      // a record a NEWER writer made, whose executor kind this version never heard of
+      {
+        gateBy: "someone", gateExecutedBy: { type: "committee", id: "board" },
+        gateAuthority: { type: "delegated", policy: "agent", authorizedBy: "alan", source: "run.created" },
+      },
+      // half a record: an executor with no authority beside it
+      { gateBy: "fable", gateExecutedBy: { type: "agent", id: "fable" }, gateAuthority: null },
+    ];
+    for (const stage of cases) {
+      const authority = stage.gateAuthority ?? null;
+      expect(dashSignature(stage as StageRowModel)).toBe(describeGateSignature({
+        by: stage.gateBy ?? null,
+        executed_by: stage.gateExecutedBy ?? null,
+        authority: authority === null ? null : {
+          type: authority.type,
+          policy: authority.policy,
+          authorized_by: authority.authorizedBy,
+          source: authority.source,
+        },
+      }));
+    }
+    // and the one that matters, spelled out rather than only compared
+    expect(dashSignature({
+      gateBy: "alanmartinez", gateExecutedBy: { type: "agent", id: "alanmartinez" },
+      gateAuthority: {
+        type: "delegated", policy: "agent", authorizedBy: "alanmartinez", source: "run.created",
+      },
+    } as StageRowModel)).toBe("agent alanmartinez (delegated by alanmartinez, policy: agent)");
   });
 
   test("dashText leaves quotes alone — a shell command in a <code> should read like one", () => {

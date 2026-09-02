@@ -4,6 +4,47 @@
 
 ### Added
 
+- **A gate record now says which entity evaluated it and under whose authority (#122).**
+  Measured 2026-09-02 on run `260902-discovery-pipeline-map`:
+  `{"type":"gate.approved","actor":"alanmartinez","payload":{"by":"alanmartinez","note":"agent-gate: evidence=sign by alanmartinez, …"}}`
+  — a gate an AGENT evaluated and signed, under authority the owner delegated once at
+  `run new --gates what:agent`. Nobody named `alanmartinez` looked at that stage. `by:` is a
+  name and never a kind, the agent signs under the operator account it is running as, and six
+  months later that record reads as "Alan personally reviewed this". The only trace of the
+  delegation was the prose inside `note:` — which nothing parses and any hand-typed
+  `--note "agent-gate: …"` can forge.
+  - Two additive blocks on `run.yml`'s gate mapping and on the `gate.approved` payload:
+    `executed_by: {type: human|agent|auto, id?}` and
+    `authority: {type: direct|delegated, policy, authorized_by, source}`. Between them they
+    answer the four questions an audit asks — who authorized the decision authority, which
+    entity evaluated THIS gate, whether it was a person / an agent / the facilitator, and
+    under which policy.
+  - **The executor's kind is read off how the gate is being closed, never off the policy.**
+    A person may always `approve` an `agent`-gated stage with no flag; that is a human acting
+    directly, whatever the stage was set up to allow, and it is recorded as one.
+  - **Derived, never guessed.** The policy is the run's own frozen `gates_policy`. The
+    authorizer is the actor of the `gate.policy_changed` that last moved that stage's policy,
+    or — when nothing moved it — the actor of `run.created`, who froze it at `run new`, and
+    `source` names which. When the log says neither, `authorized_by` is `null` and `source` is
+    `unrecorded`: the absence is said out loud rather than filled in with a plausible name,
+    and the validator refuses a record where those two do not travel together.
+  - **`by:` is untouched**, and so is `gate.evidence`. `by` is what the note said, and the
+    note is the agent's own claim about itself; rewriting it would be inventing a second one.
+    `gate.evidence` says what was checked — not who checked it under whose authority — and
+    its `role:` is a job an agent gave itself, not an identity the framework measured.
+  - **Old records read exactly as they did.** A gate written before these keys has neither,
+    validates, loads, and emits byte-for-byte; every reader falls back to `by`, and so does a
+    person who signed as themselves — for them the name is the whole truth. Pinned by test in
+    `test/gate-authority.test.ts`.
+  - `tldrx run status`, `tldrx replay` and the dashboard render a delegated signature as
+    `agent alanmartinez (delegated by alanmartinez, policy: agent)` — one shared renderer,
+    `describeGateSignature`, so the three cannot disagree. The dashboard carries its own
+    closure-free copy (`dashSignature`) because everything serialised to the browser may close
+    over nothing, and the two are asserted to agree case for case, exactly as `dashEscape` is
+    against `escapeHtml`. `DASHBOARD_MODEL_VERSION` stays at **3**: additions never bump it.
+  - A revoked gate DROPS both. `by: null` says nobody signed it, and an executor left beside
+    that would be two contradicting claims about one fact.
+
 - **The docs site's demo dashboard now shows the story grid and the Waves view with
   something in them (#119).** `gen-demo.ts` composed its workspace from two fixtures,
   neither of which had ever reached the Plan phase, so `loadPlan` returned null for all
