@@ -9,6 +9,10 @@ export { detectConventionSignals, CONVENTION_GAP_PATHS, type ConventionSignal } 
 export { readSourceTree, topFolder, extensionOf, type SourceTree, type FolderSummary } from "./sourceTree.ts";
 export { scanTodos, type TodoScan, type TodoHit } from "./todoScan.ts";
 export { plural, fileSize } from "./plural.ts";
-export { srcToken, parseSrc, parseToken, endsWithToken, isBullet, type ParsedSrc, type FileSrc } from "./srcToken.ts";
+// The `[src: …]` grammar has ONE reader (gh #80): `core/text/srcToken.ts`. The map
+// re-exports it so `map/index.ts` stays the front door, and owns only `isBullet`,
+// which is about DOCUMENTS and not about the token.
+export { srcToken, endsWithToken } from "../text/srcToken.ts";
+export { isBullet } from "./checkCitations.ts";
 export { MAP_DOCS, emptyDocs, type MapDoc, type MapBullet, type MapFacts } from "./MapFacts.ts";
 export type { MapProvider, MapContext } from "./Provider.ts";

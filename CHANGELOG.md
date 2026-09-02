@@ -273,6 +273,47 @@
 
 ### Fixed
 
+- **`tldrx map --check` ran a SECOND, divergent `[src: …]` grammar; there is one grammar now
+  (#80).** `src/core/map/srcToken.ts` was not a thin wrapper over the claim-sources reader — it was
+  a parallel set of regexes, and they disagreed on five axes: its `file` pattern
+  (`[^\s:]+`) refused a path containing a colon, its answer pattern (`^Q\d+$`) had no digit cap,
+  its token pattern was **global** so a citation written mid-sentence counted as one, it stripped no
+  trailing backtick or full stop before matching, and it had never heard of `aidlc:`. So a citation
+  `claim-sources` accepted could be reported by `map --check` as a problem, and one it refused could
+  be reported as fine — the "two readers of one question drift, and the looser one wins the argument
+  at the wrong moment" hazard `core/text/handoff.ts` is written against. It also carried #77's
+  defect on its own path, printing the symptoms `bullet has no [src: …] token` and
+  `unparseable src token` and nothing else.
+  - **The parser is deleted, not wrapped.** `checkCitations` calls `parseSrcToken`,
+    `diagnoseSrcToken` and `describeSrcFailure` from `src/core/text/srcToken.ts`, so every `map
+    --check` grammar failure gets the #77 treatment by construction: the rule id, the rule in its
+    own words, the line as written, and a line that would have passed. `CitationProblem` gained a
+    `rule` field, so a caller can tell "you wrote it wrong" from "it has drifted" without parsing
+    prose. `srcToken(srcs)` — the BUILDER, which had no equivalent on the canonical side — moved
+    across rather than went, and now joins on the same `SRC_SEPARATOR` the reader splits on.
+    `isBullet` stayed behind in `checkCitations.ts`: it is about DOCUMENTS, and mixing the two is
+    what the deleted file got wrong.
+  - **The migration hazard was measured before the switch, not asserted after it.** Both grammars
+    were run over every `.tldrx/map/**` document and init handoff in the two real workspaces
+    available — **39 documents, 692 lines, 435 of them carrying a citation** — and they disagreed on
+    **zero** lines: no multi-token line, no non-bullet citation, and not one token that failed to end
+    its line. The axes where they *would* differ are pinned as a table in
+    `test/map-citations.test.ts`. Unification is **stricter** on six shapes (a mid-line token, a
+    `..` in a path, a 7-digit `Q`, a 4-digit exit code, a backwards line range, a line number of
+    zero) and **looser** on five that the old reader wrongly refused (a path containing a colon, an
+    `aidlc:…#Q<n>` src, a `cmd` whose command holds a backtick, an `absent:` path with a space, a
+    token wrapped in backticks). An `aidlc:` citation used to be misread as repo `aidlc` and
+    reported as an unknown repo; it is a kind now.
+  - **A guard makes re-adding a copy go red** (#48's lesson: deleting one file does not stop a
+    second). Two halves, both on the SHAPE rather than the file name — no file outside the canonical
+    grammar and two documented non-parsers may hold a regex that matches the `[src:` marker, and no
+    file outside it may classify two or more src KINDS. The guard is proven against the deleted
+    file's own two regexes rather than assumed. It also turned up a real second copy of the fact and
+    question id shapes in `validateFactsFile.ts`, filed as #81 rather than fixed here.
+  - **`map --check`'s summary counts the two failures separately.** A citation that does not parse
+    never reached the filesystem, so folding it into "N of M citations do not resolve" reported a
+    denominator it was never in — and, when every problem was a grammar one, printed "3 of 0".
+
 - **A `[src: …]` rejection now states the RULE it enforced, and the grammar is published where the
   writers read it (#77).** Run `260830-ordering-inventory` lost **three story attempts** to one
   message. Three review envelopes were refused with "no `[src: …]`" — the SYMPTOM — while all three

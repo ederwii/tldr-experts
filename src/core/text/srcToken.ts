@@ -129,6 +129,34 @@ const AIDLC_Q_RE = /^(.+)#(Q\d{1,6})$/;
 export const SRC_SEPARATOR = "; ";
 
 /**
+ * Render `srcs` as ONE token — the write side of this grammar (gh #80).
+ *
+ * It lived in `core/map/srcToken.ts`, beside a second reader that has now been
+ * deleted; the builder had no equivalent here, so it moved rather than went. It
+ * belongs next to the parser for the reason the parser exists at all: the
+ * separator a writer joins on and the separator a reader splits on are the same
+ * constant, and cannot drift apart into two spellings of `"; "`.
+ *
+ * Callers pass PAYLOADS (`"api:src/Sel.ts:41"`), never a pre-built token.
+ */
+export function srcToken(srcs: readonly string[]): string {
+  return `[src: ${srcs.join(SRC_SEPARATOR)}]`;
+}
+
+/**
+ * True when `line` ends with a token that parses clean and cites at least one
+ * source — the whole-line predicate, for callers that only need a yes.
+ *
+ * A thin read of `parseSrcToken`, so it strips trailing closers and refuses a
+ * mid-line citation for the same reasons the parser does. Callers wanting to
+ * know WHY a line failed want `diagnoseSrcToken` instead.
+ */
+export function endsWithToken(line: string, repos?: ReadonlySet<string>): boolean {
+  const token = parseSrcToken(line, repos);
+  return token !== null && token.errors.length === 0 && token.refs.length > 0;
+}
+
+/**
  * A pattern's source with its `\uXXXX` escapes decoded, for printing.
  *
  * `RegExp.prototype.source` re-escapes non-ASCII, so `CMD_RE.source` comes back

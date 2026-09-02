@@ -5,7 +5,7 @@
  * a zero-line diff, so a rerun is proof that nothing moved rather than noise.
  * Every bullet ends with its `[src: …]` token — that is the format's whole point.
  */
-import { srcToken } from "./srcToken.ts";
+import { srcToken } from "../text/srcToken.ts";
 import { GRAPHIFY_SRC } from "./GraphifyProvider.ts";
 import type { MapBullet, MapDoc, MapFacts } from "./MapFacts.ts";
 import { gapSrc } from "../detect/gapSrc.ts";

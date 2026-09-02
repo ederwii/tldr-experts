@@ -101,7 +101,8 @@ or followed by a full stop, is fine; words after the `]` are not.
 **A citation resolves to nothing.** `F<n>` must be a live (neither retired nor superseded) row in `facts.yml`,
 `Q<n>` a question this run actually asked, `graph:<node>` a node in the graph or a token named
 in `.tldrx/map/`, and `absent:` may only source a **negative** claim. `tldrx map --check`
-re-resolves every citation in the map and the init handoff.
+re-resolves every citation in the map and the init handoff — through the same reader, so a
+token `claim-sources` accepts is never reported as a problem there, and vice versa.
 
 **An auto gate did not close and the note says `unverified`.** Something could not be checked
 offline: an https doc nothing in the workspace names, an `absent:` over a file that exists, a
