@@ -258,6 +258,13 @@ tbody tr:last-child td{border-bottom:0}
 tr[data-wait="1"] td{background:var(--st-wait-bg)}
 .signer{font-family:var(--font-mono);font-size:var(--text-2xs);color:var(--text-muted);
   white-space:nowrap}
+/* what an agent gate was signed over — under the signer, never beside it:
+   a sampled count that wraps into the name reads as part of the name */
+.evidence{margin-top:6px;font-size:var(--text-2xs);line-height:var(--leading-normal);
+  max-width:34ch}
+/* the second currency, under the money meter it qualifies */
+.econ{margin-top:6px;font-size:var(--text-2xs);line-height:var(--leading-normal)}
+.econ .faint{display:block}
 
 /* attention summary: the three counts tldrx status opens with */
 .attn{display:flex;flex-wrap:wrap;gap:var(--space-xs);align-items:center;

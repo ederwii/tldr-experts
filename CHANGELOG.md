@@ -212,6 +212,60 @@
     back as what to instrument. The two empty cases exit 3, never 0; a green meaning "I read no
     cards" is the failure this command exists to stop.
 
+### Fixed
+
+- **The dashboard says the framework's CURRENT vocabulary, not 0.2.0's.** The live page
+  shipped in 0.2.0 and has had one change since; the framework has had a great many. An audit of
+  `src/core/dashboard/` against today's `run.yml` and `waiting.ts` found seven words the files use
+  and the page dropped. A page that drops a word does not look wrong — it looks finished, which is
+  worse, and every one of these was measured on a rendered fixture before it was fixed.
+  - **`prepared` and `running` rendered as "nothing".** `waitingFor` has had eight kinds since the
+    2026-08-29 audit; the WAITING ON column named five and fell through to `nothing — <status>` for
+    the rest. So a host-attended run with a `--prepare` bundle on disk — the entire attended loop —
+    said it was waiting on nothing while `isMovable` had it wearing `← next` on the same row. Every
+    kind now prints `waiting.message`, which is the sentence the CLI already prints, and `prepared`
+    joins gate/answer/failed as a card: it is a run waiting on a person.
+  - **An `agent` gate was counted as a human one.** The execution-path eyebrow read
+    `N human, M auto`, so a run opened `--gates what:agent,plan:agent,build:agent` reported as
+    all-human — the exact opposite of what it was set up to do, in the one number that eyebrow
+    exists to give. It now counts all three, the same arithmetic `renderGates` does.
+  - **Nothing showed what an agent gate was signed over.** `run.yml` records the verdict, the
+    sample, what resolved and what was refuted, and the run-relative path of the COMMITTED evidence
+    note; the model dropped the whole block, so `agent by reviewer` and `human by alan` read as the
+    same kind of fact. A human signature is a name and a person accountable for it. An agent's is a
+    name and nothing, unless what it checked is beside it. Now `path[].gateEvidence`, printed under
+    the signer — the path as text, never a link.
+  - **`$0.00 spent` on a run whose turns a host session paid for.** `spentUsd` is metered dollars
+    and the meter drew it as the whole story: the exact failure `unmeteredNote` exists to stop the
+    CLI making, made in a progress bar. `attendedBy`, `unmeteredTasks` and `hostTokens` now ride the
+    model, the card prints `attended: host` in the CLI's own words, and the two currencies are shown
+    side by side and never added — there is no exchange rate between a metered dollar and a host token.
+  - **`build.branch_model` (#57) and the epic branches were invisible** in a section headed
+    *Plan & build*. A chained plan on one integration branch and independent per-epic branches drew
+    the identical table. A null model is reported as unrecorded, never guessed at as `per-epic`.
+  - **A `stale` stage looked finished.** A stage left behind by `tldrx reject --stage` wears
+    `done` with its outputs still on disk, derived from a decision that has been withdrawn. It now
+    wears a `stale` chip too.
+  - **The page claimed it read `events.jsonl`.** It never has (measured: nothing in `model.ts` or
+    `loadPhaseArtefacts` opens the ledger). That sentence is why a reader could not tell an empty
+    ledger from an unread one, so the *How to use it* tab now says which files it reads, that the
+    ledger is not among them, and which commands do read it. The Watchers tab, which existed
+    precisely to be honest about a gap, printed an invented card shape whose field names matched
+    none of the seven `Watcher` actually carries; it now prints the real one and names
+    `tldrx watch list`.
+  - **`review` was grey.** A `PLAN_STATUSES` value the page's tone function had never heard of, so
+    a story in review landed in the same colour as one nobody had started.
+  - **The test that should have caught all of this asserted the opposite.** `WAITING_KINDS` is now a
+    value rather than a bare type union, and the chain fixture's coverage test names the three kinds
+    it cannot hold instead of claiming it covers every kind — the claim that let `prepared` go
+    unrendered for months. `modelVersion` stays at `3`: every model change here is an ADDITION, and
+    the rule in `model.ts` is that only a removal or a change of meaning bumps it.
+  - **What the same audit found and did NOT fix is #85**, because each of it is a decision rather
+    than a patch: reading `events.jsonl` (operator notes, story attempts and reopens), reading
+    `budget.yml` (per-phase ceilings, `on_exceed`, whether `next` is affordable), reading the
+    watcher cards, and surfacing a preflight refusal. #86 is a separate bug the audit turned up in
+    `run/waiting.ts` — a cancelled run is offered a retry — which both screens share.
+
 ### Removed
 
 - **`templates/story.md` and `templates/epic.md` are deleted (#48, owner decision 2026-09-01,

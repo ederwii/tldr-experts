@@ -27,12 +27,23 @@ import { openBlocks, parseQuestions } from "../text/questions.ts";
 import { isAlive, readLock } from "../facilitator/Lock.ts";
 import { hasPreparedBundle } from "./prepared.ts";
 
-export type WaitingKind =
-  | "gate" | "answer" | "ready" | "done" | "blocked" | "failed"
-  /** A live `next` holds the run's `.lock`. Nobody else may touch it. */
-  | "running"
-  /** A `--prepare` bundle is on disk and no process is holding the run. */
-  | "prepared";
+/**
+ * Every kind, as a VALUE — so a reader can enumerate them.
+ *
+ * It was a bare type union, which is invisible at runtime, and a screen could
+ * therefore claim to cover "every waiting kind" while handling five of the eight
+ * and nothing could contradict it. The dashboard did exactly that: `prepared`
+ * and `running` fell through its WAITING ON column into "nothing", for months,
+ * with a test asserting full coverage a few lines away (measured 2026-09-01).
+ * A list a test can iterate makes the next addition a visible act.
+ *
+ * `running` — a live `next` holds the run's `.lock`; nobody else may touch it.
+ * `prepared` — a `--prepare` bundle is on disk and no process is holding the run.
+ */
+export const WAITING_KINDS = [
+  "gate", "answer", "ready", "done", "blocked", "failed", "running", "prepared",
+] as const;
+export type WaitingKind = (typeof WAITING_KINDS)[number];
 
 export interface Waiting {
   readonly kind: WaitingKind;
