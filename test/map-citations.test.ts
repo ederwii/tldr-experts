@@ -254,6 +254,58 @@ function definesMarkerRegex(text: string): boolean {
   return text.includes("\\[src");
 }
 
+/**
+ * The per-kind productions of the grammar, spelled as a file that CLASSIFIES
+ * sources spells them. Verbatim shapes from the deleted `core/map/srcToken.ts`
+ * (`/^Q\\d+$/`, `/^F\\d{3,6}$/`, `→ exit`, `/^graph:…/`, `/^absent:…/`,
+ * `/^https:…/`), which is what the sweep is measured against below.
+ */
+const KIND_PRODUCTIONS: readonly [string, RegExp][] = [
+  ["answer", /\/\^Q\\d/],
+  ["fact", /\/\^F\\d/],
+  ["cmd", /exit \\d|→ exit/],
+  ["graph", /\^graph:/],
+  ["absent", /\^absent:/],
+  ["doc", /\^https:/],
+];
+
+/**
+ * The kind sweep's code-vs-prose discriminator (gh #83): a line that IS comment
+ * prose — a whole-line `//`, the opener of a block, or one of its `*` continuation
+ * lines — is not a classification.
+ *
+ * The marker half of this guard gets its discriminator for free: a `[` inside a
+ * regex opens a character class, so code that matches the marker must spell it
+ * `\[src` while prose writes `[src: …]` bare. That trick does not transfer here.
+ * Prose quoting a regex LITERAL copies it character for character — #81's doc
+ * comment wrote `` `/^F\d{3,6}$/` `` while explaining that exactly those two
+ * literals had just been deleted, and the sweep read the file that had stopped
+ * classifying as one that classified two kinds. Nothing inside the quoted shape
+ * distinguishes it; only the line it sits on does.
+ *
+ * LINE-LOCAL on purpose, and that is the whole design. The first version of the
+ * marker guard reached for a lexer and was bitten twice — eleven doc comments, then
+ * five template literals nested inside interpolations once comments and strings were
+ * stripped. This predicate reads one line at a time and holds NO state, so it never
+ * looks inside a string and an unclosed `/**` in a prompt cannot unbalance it
+ * (asserted below). The price is paid in the safe direction: a shape quoted in a
+ * TRAILING comment after code, or inside a block written without `*` gutters, is
+ * still read as code and still turns the suite red — this half fails CLOSED, exactly
+ * as it did before.
+ */
+const COMMENT_PROSE_LINE = /^(?:\/\/|\/\*|\*)/;
+
+/** `text` with its comment-prose lines removed. No lexer, no string tracking. */
+function codeOnly(text: string): string {
+  return text.split("\n").filter((line) => !COMMENT_PROSE_LINE.test(line.trimStart())).join("\n");
+}
+
+/** Which kinds this file's CODE decides. Two or more is a second grammar. */
+function classifiesKinds(text: string): readonly string[] {
+  const code = codeOnly(text);
+  return KIND_PRODUCTIONS.filter(([, re]) => re.test(code)).map(([name]) => name);
+}
+
 describe("there is exactly ONE `[src: …]` grammar in the tree (#80, #48's lesson)", () => {
   test("the sweep is not vacuous: it sees the canonical grammar and a real file count", () => {
     expect(SRC_FILES.length).toBeGreaterThan(100);
@@ -317,14 +369,6 @@ describe("there is exactly ONE `[src: …]` grammar in the tree (#80, #48's less
    * per-kind productions in one file is that decision being made a second time.
    */
   test("no other file classifies src KINDS — that is what makes a file a grammar", () => {
-    const productions: readonly [string, RegExp][] = [
-      ["answer", /\/\^Q\\d/],
-      ["fact", /\/\^F\\d/],
-      ["cmd", /exit \\d|→ exit/],
-      ["graph", /\^graph:/],
-      ["absent", /\^absent:/],
-      ["doc", /\^https:/],
-    ];
     const offenders: string[] = [];
     /**
      * There are no exemptions, and that is a deliberate state rather than an empty one.
@@ -342,10 +386,109 @@ describe("there is exactly ONE `[src: …]` grammar in the tree (#80, #48's less
     for (const rel of SRC_FILES) {
       if (rel === CANONICAL) continue;
       const text = readFileSync(join(REPO_ROOT, rel), "utf8");
-      const matched = productions.filter(([, re]) => re.test(text)).map(([name]) => name);
+      const matched = classifiesKinds(text);
       if (matched.length >= 2) offenders.push(`${rel} classifies ${matched.join(", ")}`);
     }
     expect(offenders).toEqual([]);
+  });
+
+  /**
+   * The kind sweep's teeth, proven the way the marker half's are: the six per-kind
+   * productions the deleted `core/map/srcToken.ts` carried, verbatim from
+   * `origin/main` at 888c518. A guard that would not have caught the thing it was
+   * written for is decoration.
+   */
+  test("the kind sweep WOULD have caught the copy it was written for", () => {
+    const deleted = [
+      String.raw`const DOC_RE = /^https:\/\/[^\s]+$/;`,
+      String.raw`const ANS_RE = /^Q\d+$/;`,
+      String.raw`const FACT_RE = /^F\d{3,6}$/;`,
+      "const CMD_RE = /^\\$ [^`]+ → exit \\d+$/;",
+      String.raw`const GRAPH_RE = /^graph:[^\s]+$/;`,
+      String.raw`const ABSENT_RE = /^absent:[^\s]+$/;`,
+    ].join("\n");
+    expect([...classifiesKinds(deleted)].sort())
+      .toEqual(["absent", "answer", "cmd", "doc", "fact", "graph"]);
+  });
+
+  /**
+   * The sweep is not vacuous: it fires on the file that really does classify. Only
+   * three of the six productions are live in today's tree — `classifySrc` decides
+   * `graph`, `absent` and `doc` with `raw.startsWith(…)` rather than an anchored
+   * regex, so those three describe the DELETED spelling and match no file that
+   * ships. Three is still two, which is what the sweep needs; asserting the set
+   * rather than a count is what would make that change visible.
+   */
+  test("the kind sweep is not vacuous: the canonical grammar trips it", () => {
+    const canonical = readFileSync(join(REPO_ROOT, CANONICAL), "utf8");
+    const kinds = [...classifiesKinds(canonical)].sort();
+    expect(kinds).toEqual(["answer", "cmd", "fact"]);
+    expect(kinds.length).toBeGreaterThanOrEqual(2);
+  });
+
+  /**
+   * gh #83 — the discriminator this half was missing.
+   *
+   * The marker half has one: a `[` inside a regex opens a character class, so code
+   * that matches the marker must write `\[src` while prose writes `[src: …]` bare.
+   * That trick does NOT transfer here, and #81 is the proof — a doc comment
+   * explaining which two literals had just been DELETED quoted them character for
+   * character, backslashes and slashes included, and the sweep read the file that
+   * had stopped classifying as one that classified two kinds. There is no signature
+   * INSIDE a quoted regex literal that a real one lacks; the only thing that differs
+   * is the line it sits on. So the discriminator is the line's role, not its
+   * characters: a line that is comment prose is not a classification.
+   */
+  test("prose that QUOTES a production is not a classification (#83)", () => {
+    // the line from #81 that actually tripped it, verbatim, in its comment
+    const docComment = [
+      "/**",
+      " * A `facts.yml` id and a citable id are ONE shape.",
+      " *",
+      " * They used to be two literals — `/^F\\d{3,6}$/` and `/^Q\\d{1,6}$/` — agreeing with",
+      " * `SRC_PATTERNS.fact` / `.answer` character for character.",
+      " */",
+      "export const NOT_A_GRAMMAR = 1;",
+    ].join("\n");
+    expect(classifiesKinds(docComment)).toEqual([]);
+
+    // …and the `//` spelling, and a header block that names every kind in prose
+    const lineComments = [
+      String.raw`// answer ids are /^Q\d{1,6}$/ and facts are /^F\d{3,6}$/`,
+      "// a cmd src reads `$ <cmd> → exit <n>`; a graph src is /^graph:…/",
+      "export const STILL_NOT_A_GRAMMAR = 2;",
+    ].join("\n");
+    expect(classifiesKinds(lineComments)).toEqual([]);
+  });
+
+  /**
+   * The discriminator must not become an escape hatch. A trailing comment does not
+   * un-classify the code on its own line, and the sweep still fails CLOSED on the
+   * one shape it cannot lex: a shape quoted after code is read as code.
+   */
+  test("the discriminator hides prose, not code", () => {
+    const withTrailingComment = String.raw`const ANS = /^Q\d+$/; const F = /^F\d{3,6}$/; // the two id shapes`;
+    expect([...classifiesKinds(withTrailingComment)].sort()).toEqual(["answer", "fact"]);
+  });
+
+  /**
+   * Why LINE-LOCAL rather than a block-comment stripper. A stateful stripper meets an
+   * unclosed `/**` inside a template literal — a prompt that embeds an example — and
+   * swallows every line after it, which is the #80 guard's own measured failure
+   * (comments stripped, then five template literals nested in interpolations) pointing
+   * the other way: a guard that reads no code cannot catch a second grammar. This
+   * predicate holds no state, so the same file still classifies.
+   */
+  test("an unclosed comment inside a template literal cannot blind the sweep", () => {
+    const prompt = [
+      "const PROMPT = `",
+      "/**",
+      " * an example block the prompt shows the model, never closed",
+      "`;",
+      String.raw`const ANS_RE = /^Q\d+$/;`,
+      String.raw`const FACT_RE = /^F\d{3,6}$/;`,
+    ].join("\n");
+    expect([...classifiesKinds(prompt)].sort()).toEqual(["answer", "fact"]);
   });
 
   test("map's public surface no longer re-exports a parser of its own", () => {
