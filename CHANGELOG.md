@@ -214,6 +214,50 @@
 
 ### Fixed
 
+- **The merge lock now has something to say about raw git in the shared checkout (#89).** The
+  lock serialises merge-wave INVOCATIONS; it never serialised git. Measured 2026-09-02: while
+  agent A's gates were running, agent B typed `git reset --hard origin/main` into the same
+  shared checkout — reflog `reset: moving to origin/main` — and A's merge commit stopped being
+  reachable from `main` mid-gate. #44's gated-HEAD assertion fired for the first time in anger
+  and refused to push. The aftermath was caught; the damage was not prevented.
+  - **`scripts/merge-guard.sh`, installed as a `reference-transaction` hook on every
+    merge-wave run.** That is the only hook git will let abort work in progress: it fires for
+    every reference update and, in its `prepared` state alone, aborts the whole transaction on
+    a non-zero exit. Measured on git 2.50.1 with the guard refusing — `git reset --hard`,
+    `git checkout -B main`, `git merge --no-ff`, `git commit` (including `--no-verify`, which
+    does **not** bypass it) and `git update-ref` all exit 128 with `fatal: ref updates aborted
+    by hook`, and **the ref does not move**. There is no pre-reset, pre-checkout or
+    pre-merge-anything hook; this is the strongest mechanism git offers without a daemon.
+  - **Where the line honestly lies, because it is not where it looks.** `git reset --hard`
+    writes the WORKING TREE before it opens any ref transaction — measured: the file content
+    had already changed to the target commit's while HEAD still pointed at the old one. So the
+    guard saves the **commit**, which is what #89 lost, and cannot save the checked-out files;
+    a wave whose worktree is clobbered mid-gate still gates a tree nobody meant it to, and its
+    gated-HEAD assertion will not fire, because HEAD is exactly where it left it. `git merge`
+    is the better case — refused before the worktree is touched at all. And a hook in a
+    checkout is bypassable by anyone willing to: `git -c core.hooksPath=…`, deleting the hook,
+    or exporting `MW_LOCK_TOKEN`. It is built against accidents, not intent.
+  - **The lock is the sentinel; the marker is what that lock looks like to a human.**
+    `merge-wave.sh` writes `.MERGE-WAVE-IN-PROGRESS` at the root of the shared checkout naming
+    the branch, the owning pid and host, and the way back in. Gitignored, so a wave cannot trip
+    its own dirty-tree guard; removed by `release()` on every path out, INT and TERM traps
+    included. The guard keys on the LOCK rather than on the marker, because only the lock
+    carries an owner and only an owner can be tested for death — a SIGKILLed wave must not
+    leave a file behind that wedges the checkout.
+  - **Scope, so an agent's own work is never in the way.** In the shared checkout every ref
+    update is refused while a foreign wave holds the lock. From a linked worktree only
+    `refs/heads/main` is — refs live in the common dir, so `git update-ref refs/heads/main`
+    typed in a worktree destroys the wave just as thoroughly (measured: it succeeds, unguarded).
+    The holder's own git is recognised by an exported token written inside the lock, so
+    merge-wave cannot deadlock itself, and a lock whose owner is dead is ignored exactly as the
+    waiting loop already ignores it — `scripts/merge-lock.sh` is that one vocabulary, shared by
+    writer and guard so the two cannot drift apart.
+  - **And the convention it only approximates is now written down**, verbatim and identically,
+    in `CONTRIBUTING.md` and `CLAUDE.md`: agents touch the shared checkout ONLY through
+    `scripts/merge-wave.sh`, every other piece of work happens in their own worktree, and never
+    `git reset --hard` or `git checkout -B main` in the shared checkout. A test asserts both
+    files still say it.
+
 - **The dashboard says the framework's CURRENT vocabulary, not 0.2.0's.** The live page
   shipped in 0.2.0 and has had one change since; the framework has had a great many. An audit of
   `src/core/dashboard/` against today's `run.yml` and `waiting.ts` found seven words the files use

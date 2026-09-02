@@ -17,7 +17,7 @@
  * this script is the first test below.
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { spawn, execFileSync } from "node:child_process";
+import { spawn, execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -556,5 +556,192 @@ describe("the dirty-tree refusal says what is dirty (#76)", () => {
     expect(code).toBe(1);
     expect(stdout).toContain("FAIL dirty tree");
     expect(stdout).toContain("half-finished.ts");
+  });
+});
+
+/**
+ * The lock serialises merge-wave INVOCATIONS. It has never stopped raw git in the shared
+ * checkout (#89).
+ *
+ * Measured 2026-09-02: while agent A's gates were running, agent B typed
+ * `git reset --hard origin/main` into the same shared checkout. The reflog says
+ * `reset: moving to origin/main`; A's merge commit stopped being reachable from `main`
+ * mid-gate. The #44 gated-HEAD assertion fired and refused to push — the aftermath was
+ * caught, the damage was not prevented.
+ *
+ * So the lock now advertises itself two ways: a marker file at the shared checkout's root
+ * that a human or an agent can SEE, and a `reference-transaction` hook that git consults
+ * before it will move any ref. What that hook can and cannot save is measured below, and
+ * the boundary is stated in `scripts/merge-guard.sh` rather than implied.
+ */
+const MERGE_GUARD = join(REPO, "scripts", "merge-guard.sh");
+const markerPath = (sb: Sandbox) => join(sb.main, ".MERGE-WAVE-IN-PROGRESS");
+
+/** Run git and hand back the exit code instead of throwing on it. */
+function gitTry(cwd: string, env: Record<string, string>, ...args: string[]): { code: number; err: string } {
+  const r = spawnSync("git", args, { cwd, encoding: "utf8", env: { ...HOSTILE_GIT_ENV, ...env } });
+  return { code: r.status ?? -1, err: r.stderr ?? "" };
+}
+
+/** Install the guard into the sandbox's own git dir, the way merge-wave does at startup. */
+function installGuard(cwd: string): { code: number; err: string } {
+  const r = spawnSync("bash", [MERGE_GUARD, "--install"], { cwd, encoding: "utf8" });
+  return { code: r.status ?? -1, err: r.stderr ?? "" };
+}
+
+/** A lock held by SOMEONE ELSE: a live pid on this host, and a token this test will not lend out. */
+function holdLock(sb: Sandbox, pid: number = process.pid): string {
+  const lock = lockDir(sb);
+  mkdirSync(lock, { recursive: true });
+  const token = "token-of-another-invocation";
+  writeFileSync(join(lock, "token"), `${token}\n`);
+  writeFileSync(join(lock, "owner"), `${pid} ${hostname()} ${Math.floor(Date.now() / 1000)}\n`);
+  writeFileSync(markerPath(sb), "MERGE WAVE IN PROGRESS — planted by the test\n");
+  return token;
+}
+
+describe("a held lock is visible in the tree it is guarding (#89)", () => {
+  test("the marker names the wave while the lock is held, and leaves with it", async () => {
+    const sb = sandbox();
+    const release = join(sb.dir, "release-a");
+    const a = invoke(sb, "wave-a", { GATE_HOLD_UNTIL: release, GATE_HOLD_ON: "typecheck" });
+    await waitUntil(() => existsSync(join(lockDir(sb), "owner")), 30_000, "the lock to be taken");
+
+    // Read the instant `owner` appears, and demand a COMPLETE marker. That is the ordering
+    // under test: the marker is moved into place BEFORE `owner` is published, so nobody who
+    // can see the lock as taken can catch the file half-written. Read as a `>` redirection
+    // mid-flight, this assertion failed on the last line under full-suite load.
+    expect(existsSync(markerPath(sb))).toBe(true);
+    const marker = readFileSync(markerPath(sb), "utf8");
+    expect(marker).toContain("MERGE WAVE IN PROGRESS");
+    expect(marker).toContain("wave-a");                       // which wave, not just "a wave"
+    expect(marker).toContain("scripts/merge-wave.sh");        // and what to do instead
+    expect(marker).toContain("git reset --hard");             // the last line, so: all of it
+    // It must not itself trip the dirty-tree guard it sits beside.
+    expect(sb.git("status", "--porcelain")).toBe("");
+
+    writeFileSync(release, "go\n");
+    const ra = await a.done;
+    expect(ra.code).toBe(0);
+    expect(existsSync(markerPath(sb))).toBe(false);
+  });
+
+  test("an interrupted merge takes its marker with it, not only its lock", async () => {
+    const sb = sandbox();
+    const release = join(sb.dir, "release-a");
+    const a = invoke(sb, "wave-a", { GATE_HOLD_UNTIL: release, GATE_HOLD_ON: "typecheck" });
+    await waitUntil(() => existsSync(markerPath(sb)), 30_000, "the marker to appear");
+    a.signal("SIGTERM");
+    const { code } = await a.done;
+    expect(code).toBe(143);
+    expect(existsSync(markerPath(sb))).toBe(false);
+    expect(existsSync(lockDir(sb))).toBe(false);
+    writeFileSync(release, "go\n");
+  });
+
+  test("the repo's own .gitignore covers the marker, so no wave can dirty its own tree", () => {
+    const ignored = execFileSync("git", ["check-ignore", "-v", "--", ".MERGE-WAVE-IN-PROGRESS"],
+      { cwd: REPO, encoding: "utf8" });
+    expect(ignored).toContain(".gitignore");
+  });
+});
+
+describe("the guard refuses raw git in the SHARED checkout while a wave holds the lock (#89)", () => {
+  test("with no wave in progress the guard is invisible", () => {
+    const sb = sandbox();
+    expect(installGuard(sb.main).code).toBe(0);
+    const { code } = gitTry(sb.main, {}, "commit", "-q", "--allow-empty", "-m", "ordinary work");
+    expect(code).toBe(0);
+  });
+
+  test("`git reset --hard` is refused, and the ref does NOT move — #89's exact command", () => {
+    const sb = sandbox();
+    expect(installGuard(sb.main).code).toBe(0);
+    sb.git("commit", "-q", "--allow-empty", "-m", "the merge commit a sibling destroyed");
+    const kept = sb.git("rev-parse", "HEAD");
+    holdLock(sb);
+
+    const { code, err } = gitTry(sb.main, {}, "reset", "--hard", "HEAD~1");
+    expect(code).not.toBe(0);
+    expect(err).toContain("MERGE-WAVE-IN-PROGRESS");        // points at the marker it can read
+    expect(err).toContain("merge-wave.sh");                 // and at the way in
+    expect(sb.git("rev-parse", "HEAD")).toBe(kept);         // the commit is still reachable
+  });
+
+  test("`git checkout -B main` and `git merge` are refused the same way", () => {
+    const sb = sandbox();
+    expect(installGuard(sb.main).code).toBe(0);
+    const kept = sb.git("rev-parse", "HEAD");
+    holdLock(sb);
+
+    expect(gitTry(sb.main, {}, "checkout", "-B", "main", "wave-a").code).not.toBe(0);
+    expect(gitTry(sb.main, {}, "merge", "--no-ff", "wave-a", "-m", "not yours to merge").code).not.toBe(0);
+    expect(sb.git("rev-parse", "HEAD")).toBe(kept);
+  });
+
+  test("the lock HOLDER's own git is let through — otherwise merge-wave would deadlock itself", () => {
+    const sb = sandbox();
+    expect(installGuard(sb.main).code).toBe(0);
+    const token = holdLock(sb);
+    const { code } = gitTry(sb.main, { MW_LOCK_TOKEN: token }, "commit", "-q", "--allow-empty", "-m", "the holder's own merge");
+    expect(code).toBe(0);
+  });
+
+  test("a lock whose owner is dead does not wedge the checkout", () => {
+    const sb = sandbox();
+    expect(installGuard(sb.main).code).toBe(0);
+    holdLock(sb, 999999);                                   // a pid that is not running, on this host
+    const { code } = gitTry(sb.main, {}, "commit", "-q", "--allow-empty", "-m", "after the owner died");
+    expect(code).toBe(0);
+  });
+
+  test("an agent's OWN worktree keeps working; only `main` is off limits from there", () => {
+    const sb = sandbox();
+    expect(installGuard(sb.main).code).toBe(0);
+    const wt = join(sb.dir, "agent-wt");
+    sb.git("worktree", "add", "-q", wt, "wave-b");
+    const mainSha = sb.git("rev-parse", "main");
+    holdLock(sb);
+
+    // The whole point of the convention: your own branch, in your own worktree, is yours.
+    expect(gitTry(wt, {}, "commit", "-q", "--allow-empty", "-m", "my own work").code).toBe(0);
+    // `main` is shared no matter which worktree the command is typed in.
+    expect(gitTry(wt, {}, "update-ref", "refs/heads/main", "HEAD").code).not.toBe(0);
+    expect(sb.git("rev-parse", "main")).toBe(mainSha);
+  });
+
+  test("`--check` answers the same question without a ref transaction to hang it on", () => {
+    const sb = sandbox();
+    const clear = spawnSync("bash", [MERGE_GUARD, "--check"], { cwd: sb.main, encoding: "utf8" });
+    expect(clear.status).toBe(0);
+    holdLock(sb);
+    const held = spawnSync("bash", [MERGE_GUARD, "--check"], { cwd: sb.main, encoding: "utf8" });
+    expect(held.status).toBe(1);
+    expect(held.stderr).toContain("MERGE-WAVE-IN-PROGRESS");
+  });
+
+  test("installing over a foreign hook refuses rather than clobbering it", () => {
+    const sb = sandbox();
+    const hook = join(sb.main, ".git", "hooks", "reference-transaction");
+    mkdirSync(join(sb.main, ".git", "hooks"), { recursive: true });
+    writeFileSync(hook, "#!/usr/bin/env bash\nexit 0\n");
+    const { code, err } = installGuard(sb.main);
+    expect(code).not.toBe(0);
+    expect(err).toContain("already exists");
+    expect(readFileSync(hook, "utf8")).not.toContain("merge guard");
+  });
+});
+
+describe("the convention the guard only approximates is written down (#89)", () => {
+  const rule = (file: string) => readFileSync(join(REPO, file), "utf8");
+
+  test("CONTRIBUTING and CLAUDE.md both state the rule in the same words", () => {
+    for (const file of ["CONTRIBUTING.md", "CLAUDE.md"]) {
+      const text = rule(file);
+      expect(text).toContain("ONLY through `scripts/merge-wave.sh`");
+      expect(text).toContain("own worktree");
+      expect(text).toContain("git reset --hard");
+      expect(text).toContain("git checkout -B main");
+    }
   });
 });

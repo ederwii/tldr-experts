@@ -5,5 +5,13 @@
   It takes a lock on the checkout for the whole merge+gate+push span: a second invocation WAITS,
   reporting the wait on stderr. Do not work around it — that lock is what stops one agent's gates
   from running over another agent's half-merged tree.
+- **Agents touch the shared checkout ONLY through `scripts/merge-wave.sh`. Every other piece of
+  work happens in your own worktree. Never `git reset --hard` and never `git checkout -B main` in
+  the shared checkout** (#89: a sibling did exactly that mid-gate and a merge commit stopped being
+  reachable from `main`). A `.MERGE-WAVE-IN-PROGRESS` file at the repo root means a wave is running
+  right now — read it and wait. `merge-wave.sh` also installs `scripts/merge-guard.sh` as a
+  `reference-transaction` hook, so git itself refuses ref updates in the shared checkout while the
+  lock is held; it saves the commit, not the working tree, and it is bypassable. The rule above is
+  the real protection.
 - Gates for any change: `bun run typecheck`, `bun test`, `bun run build`, and no `Bun.*` outside `src/core/runtime/`. Run them without pipes and read the exit codes.
 - Docs are part of the change: CHANGELOG (`## <next> — unreleased`), README status table + release table, `docs/spec.md` when a schema or command changes, `docs/ROADMAP.md` when scope moves.

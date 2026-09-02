@@ -41,3 +41,8 @@ dist/
 docs-site/.vitepress/dist/
 docs-site/.vitepress/cache/
 docs-site/reference/changelog.md
+
+# `scripts/merge-wave.sh` advertises a held lock here, at the root of the shared
+# checkout, so an agent standing in it can SEE that a merge is in flight. It is removed
+# when the wave ends, and ignored so a wave cannot trip its own dirty-tree guard (#89).
+.MERGE-WAVE-IN-PROGRESS*
