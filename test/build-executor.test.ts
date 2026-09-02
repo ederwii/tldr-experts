@@ -614,12 +614,20 @@ describe("the reviewer", () => {
 });
 
 /**
- * The Plan's own prices decide the caps (2026-08-30).
+ * The Plan's own prices decide the caps (2026-08-30), and the FIRST attempt gets
+ * the whole of what the plan priced (gh #91, 2026-09-02).
  *
  * `03-plan/budget.yml` is authored by Delivery, validated by the Plan gate, and
- * was until now read by NOTHING. On run `260830-tenancy-identity-customers` it
- * priced S1 at $4.75 and S2 at $0.75, and the executor handed both the same
+ * was until 2026-08-30 read by NOTHING. On run `260830-tenancy-identity-customers`
+ * it priced S1 at $4.75 and S2 at $0.75, and the executor handed both the same
  * $1.03 — because it split the stage into equal shares and never opened the file.
+ *
+ * Reading the file was half the fix. The other half is gh #91: the price was then
+ * divided by `MAX_ATTEMPTS x (1 + REVIEWER_SHARE)` = 2.5 BEFORE the first attempt
+ * ran, so a story Delivery priced at $2.10 was dispatched under an $0.84 ceiling
+ * and a deliberately-atomic large story starved on the only attempt that matters.
+ * Attempt 1 now gets `price / (1 + REVIEWER_SHARE)` — the pass the plan priced,
+ * less the reviewer's derived quarter. Attempt 2 keeps the pre-fix figure.
  */
 describe("story caps come from 03-plan/budget.yml when it has them", () => {
   /** Every `--max-budget-usd` the fake `claude` was called with, in order. */
@@ -648,10 +656,10 @@ describe("story caps come from 03-plan/budget.yml when it has them", () => {
     const ws = workspace({ ...TWO_WAVES, budgetUsd: 8, perAgentMaxUsd: 8 });
     priceStories(ws, { S1: 5.0, S2: 1.0 });
 
-    // developer = price / (MAX_ATTEMPTS x (1 + REVIEWER_SHARE)) = price / 2.5.
-    // S1: 5.00/2.5 = $2.00. S2: 1.00/2.5 = $0.40. Both reviewers derive under a
+    // Attempt 1's developer = price / (1 + REVIEWER_SHARE) = price / 1.25.
+    // S1: 5.00/1.25 = $4.00. S2: 1.00/1.25 = $0.80. Both reviewers derive under a
     // dollar and are lifted to REVIEWER_FLOOR_USD.
-    expect(await caps(ws)).toEqual(["2.00", "1.00", "0.40", "1.00"]);
+    expect(await caps(ws)).toEqual(["4.00", "1.00", "0.80", "1.00"]);
   }, 60_000);
 
   test("prices that add up to more than the stage are scaled down, keeping the ratio", async () => {
@@ -660,16 +668,17 @@ describe("story caps come from 03-plan/budget.yml when it has them", () => {
     priceStories(ws, { S1: 18.0, S2: 6.0 });
 
     const seen = await caps(ws);
-    expect([seen[0], seen[2]]).toEqual(["2.40", "0.80"]);
+    expect([seen[0], seen[2]]).toEqual(["4.80", "1.60"]);
     expect(Number(seen[0]) / Number(seen[2])).toBeCloseTo(3, 5);
   }, 60_000);
 
   test("a story the plan did not price falls back to the uniform share", async () => {
     const ws = workspace({ ...TWO_WAVES, budgetUsd: 8, perAgentMaxUsd: 8 });
     priceStories(ws, { S1: 5.0 });
-    // S2 is unpriced: 8 / (2 stories x 2 attempts x 1.25) = $1.60, as before.
+    // S2 is unpriced: 8 / (2 stories x 2 attempts x 1.25) = $1.60, as before. The
+    // even split is the fallback and gh #91 did not touch it.
     const seen = await caps(ws);
-    expect([seen[0], seen[2]]).toEqual(["2.00", "1.60"]);
+    expect([seen[0], seen[2]]).toEqual(["4.00", "1.60"]);
   }, 60_000);
 
   test("a budget.yml that does not validate is an advisory, never a refusal", async () => {
@@ -686,6 +695,39 @@ describe("story caps come from 03-plan/budget.yml when it has them", () => {
       .map((line) => JSON.parse(line) as string[])
       .map((argv) => argv[argv.indexOf("--max-budget-usd") + 1] ?? "");
     expect([seen[0], seen[2]]).toEqual(["1.60", "1.60"]);   // the uniform share
+  }, 60_000);
+
+  /**
+   * The live shape from gh #91, run `260901-leaderboard-v2`, finding F-4: the
+   * plan priced S2 at $2.10 of a $3.85 Build total and the executor dispatched it
+   * under a per-attempt ceiling near a dollar. $2.10 is measured work; $0.84 is
+   * arithmetic done to it before anyone tried to spend it.
+   */
+  test("the leaderboard-v2 shape: the atomic story is dispatched at what it was priced", async () => {
+    const ws = workspace({ ...TWO_WAVES, budgetUsd: 3.85, perAgentMaxUsd: 3.85 });
+    priceStories(ws, { S1: 1.75, S2: 2.10 });
+
+    // 2.10 / 1.25 = $1.68 for S2, 1.75 / 1.25 = $1.40 for S1. Before this fix
+    // both were halved again: $0.84 and $0.70.
+    const seen = await caps(ws);
+    expect([seen[0], seen[2]]).toEqual(["1.40", "1.68"]);
+  }, 60_000);
+
+  /**
+   * A second attempt is a CONTINGENCY the plan did not price, so it keeps the
+   * figure the pre-#91 formula gave it — `price / (MAX_ATTEMPTS x 1.25)`. Handing
+   * it the first attempt's ceiling again would double this stage's worst case,
+   * which is the "Build 2.5x su fase" overrun `worstCaseShares` exists to stop.
+   */
+  test("a second attempt keeps the pre-fix per-attempt figure, not attempt 1's", async () => {
+    const ws = workspace({ ...TWO_WAVES, budgetUsd: 8, perAgentMaxUsd: 8 });
+    priceStories(ws, { S1: 5.0, S2: 1.0 });
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes", "approve"] });
+
+    // S1 dev (attempt 1), S1 reviewer, S1 dev (attempt 2), S1 reviewer.
+    // 5.00/1.25 = $4.00, then 5.00/2.5 = $2.00.
+    const seen = await caps(ws);
+    expect(seen.slice(0, 4)).toEqual(["4.00", "1.00", "2.00", "1.00"]);
   }, 60_000);
 });
 

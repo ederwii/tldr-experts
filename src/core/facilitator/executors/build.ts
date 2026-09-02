@@ -128,6 +128,50 @@ export const REVIEWER_SHARE = 0.25;
 export const REVIEWER_FLOOR_USD = 1.00;
 
 /**
+ * The divisor a PRICED story's per-attempt developer ceiling is derived with
+ * (gh #91, 2026-09-02).
+ *
+ * `03-plan/budget.yml` prices a story at what Delivery measured the WORK to
+ * cost. Until now the executor divided that by the worst case one story can be
+ * asked for — `MAX_ATTEMPTS x (1 + REVIEWER_SHARE)` = 2.5 — before the first
+ * attempt had run. Measured on run `260901-leaderboard-v2` (finding F-4): the
+ * plan priced S2 at $2.10 of a $3.85 Build stage and the developer was
+ * dispatched under $0.84. A deliberately-atomic large story starved on the one
+ * attempt that mattered while trivial ones carried slack.
+ *
+ * Two attempts, two different things:
+ *
+ *  - **Attempt 1 is the pass the plan priced.** It gets `price / (1 +
+ *    REVIEWER_SHARE)` — the whole price less the reviewer's derived quarter —
+ *    so a story is dispatched at what Delivery said it was worth.
+ *  - **Attempt 2 is a CONTINGENCY nobody priced.** It keeps the pre-#91 figure,
+ *    `price / (MAX_ATTEMPTS x (1 + REVIEWER_SHARE))`. Handing it attempt 1's
+ *    ceiling again would double the stage's worst case, which is the "Build 2.5x
+ *    su fase" overrun `worstCaseShares` exists to stop.
+ *
+ * Why the second attempt is not the measured REMAINDER of the story's price,
+ * which would be tighter still: the spend is recoverable (`agent.result` events
+ * carry `key` = the story id and a row-level `cost_usd`), but the brake in
+ * `budget/remainingWork.ts` mirrors this arithmetic on the budget-gate hook's
+ * hot path and would have to read the same ledger to stay in step. It buys
+ * nothing at the worst case — `0.8 + 0.4` either way — so the schedule is fixed
+ * and the ledger stays unread.
+ *
+ * What this does NOT change: the reviewer's own share and its floor, the uniform
+ * split an unpriced plan still gets, and `priceScale`, which keeps the sum of the
+ * declared prices inside the stage ceiling. What it does change is the worst case
+ * ONE priced story can be asked for: `0.8 x price` becomes `1.2 x price`. The
+ * phase ceiling is metered once, at stage entry (`runNext.runExecutor` skips the
+ * brake while a stage is `running`), so nothing re-checks the envelope between
+ * two spawns of the same headless `runAll` — the same window `REVIEWER_FLOOR_USD`
+ * already opens by design, and `remainingWork` still clamps the brake's estimate
+ * to the stage's own price so it can never refuse more often than it used to.
+ */
+export function developerPriceDivisor(attempt: number): number {
+  return attempt <= 1 ? 1 + REVIEWER_SHARE : MAX_ATTEMPTS * (1 + REVIEWER_SHARE);
+}
+
+/**
  * The default degree of parallelism inside a wave: one story at a time.
  *
  * Spec §5 decision (c) shipped v1 sequential, and this stays the default so a
@@ -649,7 +693,7 @@ class BuildSession {
     // `true`: a developer is about to be dispatched onto this branch, so it is
     // one of the two openings that may bring the base up to the epic tip (§F.2).
     const story = await this.openStory(planned, true);
-    const cap = this.developerCap(planned.story.id);
+    const cap = this.developerCap(planned.story.id, story.attempt);
     const key = this.bundleKey(planned.story.id);
     const notes = this.dispatchNotesFor(planned.story.id);
     this.lines.push(...describeDispatchNotes(notes));
@@ -1813,7 +1857,7 @@ class BuildSession {
    * money is the operator's clue about why it errored.
    */
   private async spawnDeveloper(story: StoryContext): Promise<{ cost: number; error: string | null }> {
-    const cap = this.developerCap(story.planned.story.id);
+    const cap = this.developerCap(story.planned.story.id, story.attempt);
     const commands = this.repoCommands(story.planned.story.repo);
     this.ctx.emit("agent.spawned", {
       phase: this.ctx.phaseId,
@@ -2947,7 +2991,7 @@ class BuildSession {
       conventions: renderConventions(this.ctx.root, [repo]),
       facts: renderFacts(facts.facts, [repo]),
       experts: bundles.experts,
-      budgetUsd: this.developerCap(story.planned.story.id),
+      budgetUsd: this.developerCap(story.planned.story.id, story.attempt),
       // The implicit plan writes its own note, naming the facts this story is
       // for; the constant is the fallback for a plan built before it did.
       planNote: this.plan.implicit ? (story.planned.note ?? IMPLICIT_STORY_NOTE) : undefined,
@@ -3064,9 +3108,11 @@ class BuildSession {
    * 2026-08-30 it was read by nothing: on
    * `260830-tenancy-identity-customers` the executor handed $1.03 to the story
    * priced at $4.75 and the same $1.03 to the one priced at $0.75. The price is
-   * divided by the worst case that ONE story can be asked for —
-   * `MAX_ATTEMPTS × (1 + REVIEWER_SHARE)` — so a story that runs twice, developer
-   * and reviewer both, stays inside what it was priced at.
+   * divided by `developerPriceDivisor(attempt)`: the whole price less the
+   * reviewer's derived quarter on attempt 1 — the pass Delivery priced — and the
+   * worst-case share `MAX_ATTEMPTS × (1 + REVIEWER_SHARE)` on the contingency
+   * attempt after it (gh #91; before it, both attempts got the worst-case share
+   * and a $2.10 story was dispatched under $0.84).
    *
    * **A uniform share**, otherwise, exactly as before. Measured 2026-08-29: a
    * story's spend was `developer (1/N) + reviewer (0.25/N)` and the whole pipeline
@@ -3074,10 +3120,10 @@ class BuildSession {
    * audit's "Build 2.5x su fase". Dividing by the worst case up front fixes that,
    * and a plan with no prices still gets it.
    */
-  private developerCap(storyId?: string): number {
+  private developerCap(storyId?: string, attempt = 1): number {
     const price = this.priceOf(storyId);
     if (price === null) return this.ctx.agentCap(1 / this.worstCaseShares());
-    return this.ctx.agentCap(this.shareOf(price / (MAX_ATTEMPTS * (1 + REVIEWER_SHARE))));
+    return this.ctx.agentCap(this.shareOf(price / developerPriceDivisor(attempt)));
   }
 
   /**

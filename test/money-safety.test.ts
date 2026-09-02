@@ -22,7 +22,9 @@ import { createRun } from "../src/core/run/newRun.ts";
 import { buildBudgetView, renderBudget, countUnmetered } from "../src/core/budget/budgetView.ts";
 import { buildStatus, renderStatus } from "../src/core/run/runStatus.ts";
 import { MIN_AGENT_USD, floorOverrun } from "../src/core/facilitator/executors/watch.ts";
-import { MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE } from "../src/core/facilitator/executors/build.ts";
+import {
+  MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE, developerPriceDivisor,
+} from "../src/core/facilitator/executors/build.ts";
 import { validateRunFile } from "../src/core/run/RunFile.ts";
 import { emitRunYaml } from "../src/core/run/emitRunYaml.ts";
 import { parseYaml } from "../src/core/yaml.ts";
@@ -250,18 +252,51 @@ describe("M9 · a phase ceiling is a ceiling", () => {
     expect(total).toBe(17);
     expect(total).toBeLessThanOrEqual(stage);           // nothing is scaled down
 
-    const dev = prices.S1 / (MAX_ATTEMPTS * (1 + REVIEWER_SHARE));
-    expect(dev).toBeCloseTo(1.9, 5);
-    // The derived reviewer share is $0.475 — under the floor, and under what a
-    // 39-file diff costs to read. The measured failure was $0.26.
-    expect(dev * REVIEWER_SHARE).toBeCloseTo(0.475, 5);
-    expect(Math.max(dev * REVIEWER_SHARE, REVIEWER_FLOOR_USD)).toBe(1.0);
+    // gh #91: attempt 1 is the pass Delivery priced, so it gets the price less
+    // the reviewer's derived quarter — not that figure halved again.
+    const dev = prices.S1 / developerPriceDivisor(1);
+    expect(dev).toBeCloseTo(3.8, 5);
+    // The reviewer's own share is UNTOUCHED by #91 and still derives off the
+    // worst case: $0.475 — under the floor, and under what a 39-file diff costs
+    // to read. The measured failure was $0.26.
+    const reviewer = prices.S1 * REVIEWER_SHARE / (MAX_ATTEMPTS * (1 + REVIEWER_SHARE));
+    expect(reviewer).toBeCloseTo(0.475, 5);
+    expect(Math.max(reviewer, REVIEWER_FLOOR_USD)).toBe(1.0);
 
     // What the old uniform split handed the same story: $1.03 and $0.26, the
     // same as the story priced at $0.75.
     const uniform = stage / (7 * MAX_ATTEMPTS * (1 + REVIEWER_SHARE));
     expect(uniform).toBeCloseTo(1.028571, 5);
     expect(uniform * REVIEWER_SHARE).toBeCloseTo(0.257143, 5);
+  });
+
+  /**
+   * gh #91's arithmetic, written down where the trade can be read back.
+   *
+   * The phase ceiling is metered ONCE, at stage entry (`runNext.runExecutor`
+   * skips the brake while a stage is `running`), so nothing checks the envelope
+   * again between two story spawns of the same headless `runAll`. That is why
+   * attempt 1 may take the whole priced pass but attempt 2 may not: the worst
+   * case one priced story can be asked for goes from `0.8 x price` to
+   * `1.2 x price`, and `priceScale` still holds the sum of the prices themselves
+   * inside the stage.
+   */
+  test("attempt 1 doubles, attempt 2 does not, and the sum of the prices still fits", () => {
+    const stage = 3.85;                                  // 260901-leaderboard-v2
+    const prices = { S1: 1.75, S2: 2.10 };
+    expect(Object.values(prices).reduce((sum, p) => sum + p, 0)).toBeCloseTo(stage, 5);
+
+    expect(prices.S2 / developerPriceDivisor(1)).toBeCloseTo(1.68, 5);
+    expect(prices.S2 / developerPriceDivisor(2)).toBeCloseTo(0.84, 5);
+    // The pre-#91 figure IS attempt 2's, so no attempt is ever handed less than
+    // it used to be.
+    for (const attempt of [1, 2, 3]) {
+      expect([attempt, developerPriceDivisor(attempt) <= MAX_ATTEMPTS * (1 + REVIEWER_SHARE)])
+        .toEqual([attempt, true]);
+    }
+
+    const worstPerStory = 1 / developerPriceDivisor(1) + 1 / developerPriceDivisor(2);
+    expect(worstPerStory).toBeCloseTo(1.2, 5);
   });
 
   test("the OLD arithmetic is what overran — 2.5x, as measured", () => {

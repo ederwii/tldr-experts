@@ -257,8 +257,10 @@ stage is in flight is no longer silently reverted when that stage saves.
 
 `03-plan/budget.yml` is written by the Plan phase: a `per_phase_usd:` map from story id to
 dollars, inside the Build stage's ceiling. The Build executor reads it. A story the plan
-priced gets a developer ceiling of `price / (2 attempts x (developer + a quarter for the
-reviewer))`, and its reviewer a quarter of that. A story the plan did not price falls back
+priced gets its **first** developer attempt at `price / (developer + a quarter for the
+reviewer)` — the pass the plan priced — and a **second** attempt, which nobody priced, at
+half of that. Its reviewer gets a quarter of the halved figure on every attempt. A story
+the plan did not price falls back
 to an equal share of the stage. If the prices add up to more than the stage was given they
 are scaled down proportionally, so the ratio the plan decided survives and the total cannot
 escape the ceiling. A `budget.yml` that will not parse or validate is an advisory on stderr
@@ -266,7 +268,9 @@ and an equal split — never a refused build. So is one labelled `economy: host-
 numbers are not dollars, so they never become `--max-budget-usd` on a spawn.
 
 Until 2026-08-30 nothing read that file, and a seven-story plan that priced one story at
-$4.75 and another at $0.75 handed both the same $1.03.
+$4.75 and another at $0.75 handed both the same $1.03. Until 2026-09-02 the price that WAS
+read was halved before the first attempt ran: a story priced $2.10 of a $3.85 Build stage
+was dispatched under $0.84, which is what a big atomic story starving looks like.
 
 **The reviewer has a floor of $1.00.** Whatever the arithmetic says, a reviewer is given at
 least that (clamped by what the stage has left and by `per_agent_max_usd`). Measured the
