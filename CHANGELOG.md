@@ -380,7 +380,7 @@
   the concept doc, where it was true of a proposal. What it now describes is five stages, a
   machine-enforced `[src: …]` grammar that refuses a write it cannot resolve, an adversarial
   reviewer that is never the author, a dual-economy budget ledger, and a written trail from `run
-  new` to `retro` — 3079 tests across 108 files hold it up. One line replaces it everywhere, so
+  new` to `retro`, held up by a suite that measured 3093 tests across 108 files on 2026-09-02. One line replaces it everywhere, so
   the npm page, the binary's own `--help`, the plugin manifest, the README and both landing pages
   say the same thing: **an evidence-first, file-based AI development framework: five stages, a gate
   on every one, and every claim cited or refused.**
@@ -514,7 +514,7 @@
   - Two defects found while checking and **filed rather than fixed**, both outside this pass:
     [#99](https://github.com/ederwii/tldr-experts/issues/99) `test/merge-wave.test.ts` asserts over
     a shared `TMPDIR`, so a sibling process fails it (measured: red under load, green alone, and
-    green for the full suite with no sibling — 3079 pass), and
+    green for the full suite with no sibling), and
     [#100](https://github.com/ederwii/tldr-experts/issues/100) `release.sh` pushes the release
     commit to `main` before it runs `release-check.sh`.
 
