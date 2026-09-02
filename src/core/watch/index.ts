@@ -11,7 +11,7 @@ export {
 export type { WatcherCard, WatcherIssue } from "./watcherFile.ts";
 export { collectFeatures, featureId, PLAN_PHASE } from "./features.ts";
 export type { Feature, DoneStory } from "./features.ts";
-export { epicDiff, renderDiffs, readRepoBases, GIT_BIN, MAX_DIFF_BYTES } from "./epicDiff.ts";
+export { epicDiff, renderDiffs, readRepoBases, GIT_BIN, MAX_DIFF_BYTES, WORKSPACE_YML } from "./epicDiff.ts";
 export type { RepoDiff, DiffRequest, RepoBase } from "./epicDiff.ts";
 export { recordedEpicBranch } from "./recordedBranch.ts";
 export type { RecordedBranch, RecordedBuild } from "./recordedBranch.ts";

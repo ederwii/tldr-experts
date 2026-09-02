@@ -428,6 +428,51 @@
     `build.epic_branch`), the loud path in both `headless` and `--prepare`, `--commit` deliberately
     NOT refusing a turn that is already paid for, and the honest absence.
 
+- **A recorded `default_branch` that does not resolve is incoherent state too (#92).** #90 taught
+  Watch to tell a run that recorded NO branch (honest) from a branch its own `build.epic_branch`
+  claims and the repo cannot find (incoherent, refused). It left the third case alone: the BASE of
+  the same diff. `.tldrx/workspace.yml` declares `default_branch: main` for a repo where `main` does
+  not resolve, and the prompt rendered *"`main`, the `default_branch` of api, does not resolve
+  there. Treat this feature's code as UNSEEN — cite `absent:` rather than guessing at what it
+  emits"* — inviting the same all-`absent:` card that passes `claim-sources` and covers nothing.
+  Narrower blast radius than #90 (a misdetected or renamed default branch, not an every-run
+  derivation), same shape: **a value the workspace RECORDS that the repo cannot find.**
+  - **Watch refuses at `--prepare` and headless**, naming the repo, the recorded value and
+    `.tldrx/workspace.yml`, and saying that the value was DETECTED from that repo — so a repo with
+    no such branch means the record has gone stale (a rename, a fresh clone with only remote
+    branches, a misdetection). `epicDiff` carries it as `baseMissing`, the sibling of #90's
+    `branchMissing`, and checks the base FIRST: a base that is not there voids every diff in that
+    repo rather than emptying one, so there is nothing to learn by asking about the branch. On
+    `--commit` it stays tolerant, the same call #90 made — those cards are already paid for.
+  - **`tldrx doctor` reports it**, which is where the issue asked whether it belonged, and the
+    answer is yes: this is a workspace RECORDING something false, and `doctor` is the one command
+    whose job is what this machine and this workspace actually have. One
+    `git rev-parse --verify --quiet` per declared repo, nothing fetched or written. A **warning**
+    that never moves the exit code — `healthy` is about the TOOLS this machine has, and a repo can
+    legitimately be mid-clone or mid-rename on a developer's box; a `doctor` that exits 1 for that
+    is a `doctor` people stop running. A repo that is not on disk, has no `default_branch` recorded,
+    or is not a git repo is reported as SKIPPED with its reason, never folded into "all resolve".
+  - **`boundary` has the gap and deliberately keeps its verdict — measured, not assumed.** It does
+    diff `<default_branch>...<epic_branch>` (`boundary.ts`, `base:` read from `workspace.yml`;
+    changing the record from `main` to `trunk` changes the target's `base` byte for byte), and an
+    unresolvable base came back `{ok: true, detail: "n/a (nothing could be diffed: \`trunk\` does not
+    resolve in app)"}` — the gate passes GREEN and stops measuring for as long as the record is
+    wrong. It is **not** made to refuse: it spawns nothing and writes nothing, so the fault costs it
+    a measurement rather than producing a false one, and `boundary.ts`'s own contract is that it
+    "must not refuse a gate for a reason that has nothing to do with the boundary" — one stale
+    record would otherwise brick every Build gate in the workspace. What changed is the WORDING: its
+    two absences used to be the same sentence (`` `<ref>` does not resolve in <repo> ``), so a
+    merged-and-deleted epic branch (nothing to fix) read exactly like a stale `default_branch`
+    (`n/a` until someone fixes it). The base's reason now names the record and points at
+    `tldrx doctor`; the branch's is untouched.
+  - `.tldrx/workspace.yml` is spelled once, in `paths.ts`, now that three operator-facing messages
+    tell someone to go and edit it.
+  - Fifteen tests, red first (8 red / 7 green before, 15 green after), including the verbatim
+    pre-fix string captured off the real prompt, the `--commit` tolerance, doctor's warning level
+    asserted through `runDoctor` end to end, and the boundary determination pinned on all four
+    counts — that it reads `default_branch`, that it stays `ok`, that its reason now names the
+    record, and that a missing epic branch keeps its own wording.
+
 - **The dashboard says the framework's CURRENT vocabulary, not 0.2.0's.** The live page
   shipped in 0.2.0 and has had one change since; the framework has had a great many. An audit of
   `src/core/dashboard/` against today's `run.yml` and `waiting.ts` found seven words the files use

@@ -13,4 +13,8 @@ export {
   type GitignoreShadowResult,
   type ShadowedPath,
 } from "./gitignoreShadow.ts";
+export { findUnresolvedDefaultBranches, WORKSPACE_YML_REL } from "./recordedDefaultBranch.ts";
+export type {
+  DefaultBranchAudit, RecordedDefaultBranch, SkippedRepo,
+} from "./recordedDefaultBranch.ts";
 export { extractVersion, compareVersions, satisfiesMinimum } from "./version.ts";

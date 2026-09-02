@@ -175,8 +175,10 @@ tldrx doctor [--mcp] [--json]
 prints the check results; `mcp: null` there means NOT PROBED, which is a different claim from
 "no servers". It also runs `git check-ignore` over four paths that are committed state
 (`run.yml`, `events.jsonl`, a `04-build/log/` probe, `memory/facts.yml`) and names any
-`.gitignore` rule ignoring one, with its `file:line`. That is a warning: it never moves the
-exit code. Exits: `0` `1`.
+`.gitignore` rule ignoring one, with its `file:line`. And it asks git whether every repo in
+`.tldrx/workspace.yml` actually HAS the `default_branch` recorded for it — a stale record there
+makes the Watch stage refuse and leaves the `boundary` gate condition `n/a` at every Build gate,
+and nothing else reports it. Both are warnings: neither moves the exit code. Exits: `0` `1`.
 
 ## `tldrx learn`
 

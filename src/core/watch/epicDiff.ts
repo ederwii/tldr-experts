@@ -14,7 +14,7 @@
  * as a silent empty diff that would read as "nothing was instrumented".
  *
  * The branch is supplied by the caller from `run.yml`'s `build.epic_branch`
- * (`recordedBranch.ts`) and is never derived here. Two absences that used to read
+ * (`recordedBranch.ts`) and is never derived here. Absences that used to read
  * identically are therefore now told apart, because they mean opposite things:
  *
  *   - the run RECORDED no branch for this feature — an honest absence, and the one
@@ -22,15 +22,25 @@
  *   - the run recorded one and the repo cannot find it (`branchMissing`) — that is
  *     incoherent state, and the executor REFUSES on it rather than instructing a
  *     watcher to write an all-`absent:` card about a branch its own run claims
- *     (gh #90).
+ *     (gh #90);
+ *   - the WORKSPACE records a `default_branch` the repo cannot find
+ *     (`baseMissing`) — the same contradiction one level up, and the executor
+ *     refuses on it too (gh #92). `.tldrx/workspace.yml` is a record, not a
+ *     guess: `tldrx init` DETECTED that value from the repo, so a repo that has
+ *     no such branch means the record has gone stale (renamed `master`→`main`, a
+ *     fresh clone with no local branch, a misdetection). Diffing `main...branch`
+ *     when `main` is not there yields nothing to see, and a watcher told to treat
+ *     that as unseen writes the same all-`absent:` card #90 exists to prevent.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runtime } from "../runtime/index.ts";
 import { parseYaml } from "../yaml.ts";
-import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
+import { PROJECT_FRAMEWORK_DIR, PROJECT_WORKSPACE_FILE } from "../paths.ts";
 
 export const GIT_BIN = "git";
+/** Where a `default_branch` is RECORDED — named in the refusal, because it is the fix. */
+export const WORKSPACE_YML = PROJECT_WORKSPACE_FILE;
 /** `[assumption]` — a whole epic's unified diff can be megabytes; the prompt gets a bounded slice. */
 export const MAX_DIFF_BYTES = 24 * 1024;
 const GIT_TIMEOUT_MS = 30_000;
@@ -53,6 +63,16 @@ export interface RepoDiff {
    * passes `claim-sources` and covers nothing. The Watch executor refuses.
    */
   readonly branchMissing: boolean;
+  /**
+   * The `default_branch` `.tldrx/workspace.yml` RECORDS did not resolve in this
+   * repo (gh #92).
+   *
+   * The sibling of `branchMissing`, one level up: not the run contradicting
+   * itself but the WORKSPACE contradicting the repo. Also not an absence — every
+   * diff in that repo is against a base that is not there, so the whole
+   * measurement is void rather than empty. The Watch executor refuses.
+   */
+  readonly baseMissing: boolean;
   readonly stat: string;
   readonly nameStatus: string;
   /** Unified diff, truncated to `MAX_DIFF_BYTES`. */
@@ -83,9 +103,12 @@ export async function epicDiff(request: DiffRequest): Promise<RepoDiff> {
   // an INPUT (why the record names no branch) and has no business riding along in
   // the result anything downstream renders or serialises.
   const { repo, dir, base, branch } = request;
-  const absent = (reason: string, branchMissing = false): RepoDiff => ({
+  const absent = (reason: string, flags: { branchMissing?: boolean; baseMissing?: boolean } = {}): RepoDiff => ({
     repo, dir, base, branch,
-    resolved: false, reason, branchMissing, stat: "", nameStatus: "", patch: "", truncated: false,
+    resolved: false, reason,
+    branchMissing: flags.branchMissing ?? false,
+    baseMissing: flags.baseMissing ?? false,
+    stat: "", nameStatus: "", patch: "", truncated: false,
   });
 
   // The record does not name a branch for this feature. Say so, and run no git:
@@ -94,13 +117,21 @@ export async function epicDiff(request: DiffRequest): Promise<RepoDiff> {
   if (unrecorded !== null && unrecorded !== "") return absent(unrecorded);
   if (request.branch === "") return absent("this run's record names no branch for this feature");
 
+  // The base FIRST, and its own flag. A `default_branch` the workspace records
+  // and the repo cannot find voids every diff in that repo, so there is no point
+  // asking about the branch — and no honest way to report the result as an
+  // absence the watcher should work around (gh #92).
   const baseCheck = await git(request.dir, ["rev-parse", "--verify", "--quiet", `${request.base}^{commit}`]);
   if (baseCheck.exitCode !== 0) {
-    return absent(`\`${request.base}\`, the \`default_branch\` of ${request.repo}, does not resolve there`);
+    return absent(
+      `\`${request.base}\`, the \`default_branch\` ${WORKSPACE_YML} records for ${request.repo}, `
+      + "does not resolve there",
+      { baseMissing: true },
+    );
   }
   const branchCheck = await git(request.dir, ["rev-parse", "--verify", "--quiet", `${request.branch}^{commit}`]);
   if (branchCheck.exitCode !== 0) {
-    return absent(`\`${request.branch}\` does not resolve in ${request.repo}`, true);
+    return absent(`\`${request.branch}\` does not resolve in ${request.repo}`, { branchMissing: true });
   }
 
   const range = `${request.base}...${request.branch}`;
@@ -116,6 +147,7 @@ export async function epicDiff(request: DiffRequest): Promise<RepoDiff> {
     resolved: true,
     reason: null,
     branchMissing: false,
+    baseMissing: false,
     stat: stat.stdout.trimEnd(),
     nameStatus: nameStatus.stdout.trimEnd(),
     patch: truncated ? Buffer.from(full, "utf8").subarray(0, MAX_DIFF_BYTES).toString("utf8") : full,
@@ -139,6 +171,18 @@ export function renderDiffs(diffs: readonly RepoDiff[]): string {
         : `### \`${diff.repo}\` — \`${diff.base}...${diff.branch}\``,
       "",
     );
+    if (diff.baseMissing) {
+      // The workspace contradicting the repo (gh #92). Same rule as below: never
+      // the treat-as-UNSEEN instruction, because the base being absent voids the
+      // whole diff rather than emptying it.
+      out.push(
+        `_INCOHERENT: ${diff.reason ?? "unavailable"}. ${WORKSPACE_YML} RECORDS that branch as this `
+        + "repo's base and the repo cannot find it, so nothing here could be diffed against anything "
+        + "— do not write a card off this._",
+        "",
+      );
+      continue;
+    }
     if (diff.branchMissing) {
       // Never the treat-as-UNSEEN instruction here: this is the run contradicting
       // itself, and the executor refuses before a prompt is ever spawned. Rendered

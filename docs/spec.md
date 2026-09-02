@@ -2536,6 +2536,18 @@ finding it belongs to is dropped rather than half-read.
    Deriving it used to put `epic/<feature-id>` — a name nothing had cut — in front of both watchers of
    `260901-leaderboard-v2` with a "treat this feature's code as UNSEEN" instruction; the all-`absent:` card that
    invites PASSES `claim-sources`, because an `absent:` citation resolves by construction.
+
+   **The BASE is a record too, and gets the same treatment** (#92). The range is
+   `<default_branch>...<epic_branch>`, and `default_branch` comes from `.tldrx/workspace.yml`, where `tldrx init`
+   DETECTED it (§2.1). A repo that cannot find the branch its own workspace entry records is the same contradiction one
+   level up — a rename, a fresh clone with no local branch, a misdetection — and it voids every diff in that repo rather
+   than emptying one, so it is **refused** on exactly like a missing epic branch, naming the repo, the recorded value
+   and `.tldrx/workspace.yml`. It used to render as `` `main`, the `default_branch` of api, does not resolve there.
+   Treat this feature's code as UNSEEN ``, which invites the same worthless card. `tldrx doctor` reports every repo in
+   the workspace whose recorded `default_branch` does not resolve, as a warning that does not move its exit code.
+   The `boundary` condition (§5) reads the same `default_branch` and is deliberately NOT refused on it: it spawns
+   nothing and writes nothing, so the fault costs it a measurement rather than producing a false one, and it stays
+   `n/a` with a reason that now names the record.
 3. **Validation and the status stamp**, done by the framework off disk: sections, tokens and citations via the shared
    handoff parser, then `status: verified` written only when no `absent:` source remains under `## Signal`.
 4. **`05-watch/handoff.md`, written deterministically** — Findings are one line per card with its status, each sourced

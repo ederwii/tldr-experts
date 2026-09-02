@@ -25,7 +25,7 @@ import { applyCheckContracts } from "../checkContracts.ts";
 import { FactsStore } from "../../facts/FactsStore.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../../hooks/lib/workspace.ts";
 import { collectFeatures, PLAN_PHASE, type Feature } from "../../watch/features.ts";
-import { epicDiff, readRepoBases, type RepoDiff } from "../../watch/epicDiff.ts";
+import { epicDiff, readRepoBases, WORKSPACE_YML, type RepoDiff } from "../../watch/epicDiff.ts";
 import { recordedEpicBranch, type RecordedBuild } from "../../watch/recordedBranch.ts";
 import { featureBrief, featureInputs, watcherRelPath } from "../../watch/watchPrompt.ts";
 import { describeWatcherIssues, parseWatcherCard, setWatcherStatus } from "../../watch/watcherFile.ts";
@@ -107,12 +107,15 @@ export async function watchExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
   }
 
   // The diffs BEFORE any prompt, because one of their outcomes is a refusal: a
-  // branch this run's own `build.epic_branch` claims and the repo cannot find is
-  // incoherent state, and no card may be written off it (gh #90).
+  // ref that a RECORD claims and the repo cannot find is incoherent state, and no
+  // card may be written off it — the branch from this run's own
+  // `build.epic_branch` (gh #90), or the base from `.tldrx/workspace.yml`'s
+  // `default_branch` (gh #92).
   //
   // Not on `--commit`. There the cards are already written and already paid for,
-  // the prompt is history, and a branch deleted between `--prepare` and here would
-  // otherwise refuse a turn that has nothing left to get wrong.
+  // the prompt is history, and a branch deleted (or a workspace re-detected)
+  // between `--prepare` and here would otherwise refuse a turn that has nothing
+  // left to get wrong.
   let prompts: readonly string[] = [];
   if (ctx.mode !== "commit") {
     const build = recordedBuild(ctx.runDir);
@@ -359,41 +362,105 @@ function recordedBuild(runDir: string): RecordedBuild | undefined {
 }
 
 /**
- * The refusal for a branch the run RECORDED and the repo cannot find.
+ * The refusal for a ref something RECORDED and the repo cannot find.
+ *
+ * Two records, two levels, one rule. `run.yml`'s `build.epic_branch` names the
+ * branch (gh #90); `.tldrx/workspace.yml`'s `default_branch` names the base it is
+ * diffed against (gh #92). Either one claiming a ref the repo has never had is a
+ * contradiction, not an absence, and a watcher told to treat it as "unseen"
+ * writes an all-`absent:` card that PASSES `claim-sources` and covers nothing.
+ *
+ * The base is reported FIRST when both are present, because it is the wider
+ * fault: a repo whose recorded base does not resolve has no diffable range at
+ * all, and `epicDiff` never even asks about the branch there.
  *
  * Null when every feature is coherent — including the honest absence, where the
  * record names no branch at all and the prompt says so. `refused` rather than
- * `failed` because it is a precondition someone fixes (fetch the branch back, or
- * correct `build.epic_branch`), not work that went wrong.
+ * `failed` because it is a precondition someone fixes (fetch the branch back,
+ * correct `build.epic_branch`, correct `default_branch`), not work that went
+ * wrong.
  */
 function branchIncoherence(
   ctx: ExecutorContext,
   features: readonly Feature[],
   diffs: readonly (readonly RepoDiff[])[],
 ): readonly string[] | null {
-  const missing: RepoDiff[] = [];
-  const owners: string[] = [];
+  const owned: { diff: RepoDiff; owner: string }[] = [];
   for (const [i, list] of diffs.entries()) {
     for (const diff of list) {
-      if (!diff.branchMissing) continue;
-      missing.push(diff);
-      owners.push(features[i]?.id ?? "");
+      if (!diff.branchMissing && !diff.baseMissing) continue;
+      owned.push({ diff, owner: features[i]?.id ?? "" });
     }
   }
-  const first = missing[0];
-  if (first === undefined) return null;
-  return [
-    `${ctx.phaseId}/${ctx.stageId} refuses to start: run.yml records \`${first.branch}\` for `
-      + `\`${owners[0] ?? ""}\`, and it does not resolve in \`${first.repo}\`.`,
-    ...missing.slice(1).map((diff, i) =>
-      `  also \`${diff.branch}\` for \`${owners[i + 1] ?? ""}\` in \`${diff.repo}\``),
-    "  `build.epic_branch` is written by this run's own Build stage, so a branch it claims and the repo",
-    "  cannot find is incoherent state, not an absence. Watching it anyway would hand the watcher a",
-    "  feature it cannot see and a card of `absent:` citations — which passes `claim-sources` and covers",
-    "  nothing (gh #90).",
-    `  Fetch or restore the branch in \`${first.repo}\`, or correct \`build.epic_branch\` in `
-      + `${ctx.runId}/run.yml, then run this stage again.`,
-  ];
+  // Deduplicate by repo: N features over one broken repo is one fact, said once.
+  const bases = dedupeByRepo(owned.filter((row) => row.diff.baseMissing));
+  const branches = owned.filter((row) => !row.diff.baseMissing);
+  if (bases.length === 0 && branches.length === 0) return null;
+
+  const first = bases[0];
+  const firstBranch = branches[0];
+  const blocks: (readonly string[])[] = [];
+  if (first !== undefined) {
+    blocks.push([
+      `${WORKSPACE_YML} records \`default_branch: ${first.diff.base}\` for \`${first.diff.repo}\`, and `
+        + "it does not resolve there.",
+      ...bases.slice(1).map((row) =>
+        `  also \`default_branch: ${row.diff.base}\` for \`${row.diff.repo}\``),
+      "  That value was DETECTED from the repo when the workspace was set up, so a repo with no such",
+      "  branch means the record has gone stale — a rename, a fresh clone with no local branch, or a",
+      "  misdetection. Every diff in that repo is against a base that is not there, so the measurement",
+      "  is void rather than empty; handing a watcher that as an absence gets an all-`absent:` card,",
+      "  which passes `claim-sources` and covers nothing (gh #92, gh #90).",
+      `  Correct \`default_branch\` for \`${first.diff.repo}\` in ${WORKSPACE_YML} (or fetch the branch`,
+      "  into that repo), then run this stage again.",
+      "  `tldrx doctor` reports every repo whose recorded default_branch does not resolve.",
+    ]);
+  }
+  if (firstBranch !== undefined) {
+    blocks.push([
+      `run.yml records \`${firstBranch.diff.branch}\` for \`${firstBranch.owner}\`, and it does not `
+        + `resolve in \`${firstBranch.diff.repo}\`.`,
+      ...branches.slice(1).map((row) =>
+        `  also \`${row.diff.branch}\` for \`${row.owner}\` in \`${row.diff.repo}\``),
+      "  `build.epic_branch` is written by this run's own Build stage, so a branch it claims and the repo",
+      "  cannot find is incoherent state, not an absence. Watching it anyway would hand the watcher a",
+      "  feature it cannot see and a card of `absent:` citations — which passes `claim-sources` and covers",
+      "  nothing (gh #90).",
+      `  Fetch or restore the branch in \`${firstBranch.diff.repo}\`, or correct \`build.epic_branch\` in `
+        + `${ctx.runId}/run.yml, then run this stage again.`,
+    ]);
+  }
+
+  // The FIRST fault opens the refusal on the same line as the stage id, which is
+  // the shape gh #90 shipped and `09-troubleshooting.md` quotes verbatim. A second
+  // fault (only possible when a run has both a broken base in one repo and a
+  // broken branch in another) is indented under it rather than given a heading of
+  // its own — one refusal, one opening line, always.
+  const out: string[] = [];
+  for (const [i, block] of blocks.entries()) {
+    const [opening, ...rest] = block;
+    out.push(
+      i === 0
+        ? `${ctx.phaseId}/${ctx.stageId} refuses to start: ${opening ?? ""}`
+        : `  and: ${opening ?? ""}`,
+      ...rest,
+    );
+  }
+  return out;
+}
+
+/** One row per repo — the first one seen. A broken base is a fact about the REPO. */
+function dedupeByRepo(
+  rows: readonly { diff: RepoDiff; owner: string }[],
+): readonly { diff: RepoDiff; owner: string }[] {
+  const seen = new Set<string>();
+  const out: { diff: RepoDiff; owner: string }[] = [];
+  for (const row of rows) {
+    if (seen.has(row.diff.repo)) continue;
+    seen.add(row.diff.repo);
+    out.push(row);
+  }
+  return out;
 }
 
 // --- odds and ends ---------------------------------------------------------
