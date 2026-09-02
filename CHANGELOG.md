@@ -4,6 +4,55 @@
 
 ### Added
 
+- **The dashboard reads `budget.yml` and `events.jsonl` (#85).** The audit that filed the issue
+  found five gaps with one root: `buildModel()` read `run.yml`, the phase artefacts, the Plan
+  artefacts and the expert files, and nothing else — so five facts a reader went looking for were
+  nowhere on the page, each because it lives only in one of those two files. The owner's decision
+  (2026-09-02) was that the model may read both, read-only and additive. All five are now drawn.
+  - **Operator notes** (`tldrx note`, #46) get their own section on the run detail, with the actor,
+    the stage or phase, and the time. **All of them**, not the last three: `tldrx run status` caps
+    at three because a terminal has a bottom, and a run detail page does not.
+  - **Free review retries** (#78/#79) and the **attempt** each story is on. Both are event-only —
+    the story file carries `status` and `evidence` and no counters — so a story that burned both
+    attempts and was granted two free re-prompts read on disk exactly like one nobody had touched.
+    The plan table gains an `attempts` column (`1 of 2`, against the model's new `maxAttempts`), and
+    a **Reopens & retries** section shows the `story.reopened` arcs with their `fix`/`attempts`
+    reason and the operator's note. A reopen written before the `reason` key existed reads as
+    `attempts`, which is the only kind that existed, rather than as a blank.
+  - **`budget.blocked`** occurrences are listed with the phase, both economies' numbers, and — for a
+    dollar refusal — the exact `tldrx budget raise` command, short-by rounding included, pinned by a
+    test against `raiseCommand` because the renderer is serialised into the page and cannot import
+    it. Deliberately **not** an attention card: the page's rule is that an alert means a run is
+    waiting on a person NOW, and a refusal in the log is not evidence of that.
+  - **The `$0.00 of $25.00` progress bar on a host run is fixed properly.** A run whose `budget.yml`
+    says `economy: host-tokens` is not priced in dollars at all, so `ceiling_usd` governs nothing
+    and the bar stated a fraction of a denominator that does not apply. Such a run now reads in
+    TOKENS on both screens — the runs list and the run detail share one `dashSpendText`, because
+    suppressing the bar alone would leave the words `$0.00 of $25.00` making the claim the bar
+    was — metered against `ceiling_host_tokens`, the ceiling those tokens really are judged
+    against, which exists in no other file. A **Budget** panel carries the per-phase ceilings, `on_exceed`,
+    `warn_at_pct`, `on_host_tokens_exceed` and the per-phase economy. An unset phase economy is
+    reported as *inherits*, never as a choice somebody made.
+  - **`DASHBOARD_MODEL_VERSION` stays at 3**, and the issue asked. Eight fields were added and none
+    removed. `spentUsd` was the one with a case to answer — a consumer reading it alone is
+    demonstrably wrong about a host-attended run now that the ceiling can sit beside it — but it is
+    computed from the same `run.yml` key, holds the same number, and has meant "METERED dollars, a
+    lower bound when `unmeteredTasks > 0`" since v3 put `unmeteredTasks` and `hostTokens` next to it.
+    A field that gained neighbours did not change meaning.
+  - **Neither file is opened by the model**, and the ledger is walked **once per run**. `loadRunResult`
+    already parsed both for every run and this file had been discarding them, so the page costs the
+    reads it always did; the per-story facts come out of one pass rather than from
+    `readReviewLedger`, which re-reads the whole ledger per story and would have made a forty-story
+    plan forty passes over a file already in memory.
+  - **Absence and damage stay graceful.** No `budget.yml` and no `events.jsonl` renders exactly as
+    before, with none of the new sections. An unparseable `budget.yml` costs the panel and nothing
+    else. A torn ledger line costs that line and **says so** on the page, because "no operator notes"
+    over a damaged ledger is the same lie by omission an unlisted corrupt `run.yml` was.
+  - Fixed on the way: an event with **no `payload` key at all** parses fine through the tolerant
+    `EventLog.readAll`, and reading `payload.story` off it threw a `TypeError` out of `buildModel`
+    and killed the live server for the whole workspace. `TldrxEvent.payload` is typed non-optional;
+    the type is a claim about `validateEvent`'s output, not about what is in the file.
+
 - **The `tldrx drive` mandate carries its own preflight (#84).** Launching a cold unattended
   session took SIX hand-run commands before the mandate could be pasted at all — `tldrx run
   attend host`, then `tldrx run gates set` five times. Every one of them is a precondition of

@@ -24,7 +24,7 @@ nada sobre quién la abrió. Los dos son el mismo documento; lo único que cambi
 | Vista | Qué trae |
 |---|---|
 | Runs | Cada run, su estado, el avance por fase, el gasto, y **qué está esperando**. El que puedes retomar ahora mismo lleva `← next`, la misma marca que imprime `tldrx status`. |
-| Un run | El camino de ejecución etapa por etapa — experto, modelo, costo, compuerta, quién la firma y quién la firmó —, más los handoffs, las preguntas abiertas, el plan y las ramas que cortó el Build. |
+| Un run | El camino de ejecución etapa por etapa — experto, modelo, costo, compuerta, quién la firma y quién la firmó —, más los handoffs, las preguntas abiertas, el plan y las ramas que cortó el Build. Del ledger: las **notas de operador** que alguien dejó con `tldrx note`, el intento en el que va cada story y los reintentos de revisión gratuitos que se le concedieron, las reaperturas y sus motivos, y cada vez que el freno del presupuesto se negó a arrancar una etapa. De `budget.yml`: los techos por fase, las palancas y el **cupo de tokens de anfitrión**. |
 | Expertos | Los niveles de competencia **recalculados desde la evidencia al momento de leer**, nunca el número guardado en disco, con la evidencia detrás de cada uno. |
 | Watchers | Todavía no: las tarjetas de vigilancia las escribe la fase Watch y el modelo no las lee, así que la pestaña lo dice en vez de inventarse una tarjeta. Usa `tldrx watch list`. |
 | Cómo se usa | El loop de la terminal, como comandos para copiar y pegar. |
@@ -42,10 +42,19 @@ techo, y eso es cierto sobre lo que tldrx midió y falso sobre lo que costó el 
 la página imprime la otra moneda a un lado: los tokens de anfitrión declarados con
 `--tokens`, y cuántos turnos nadie costeó. Las dos nunca se suman — no hay tipo de cambio.
 
-::: info No lee `events.jsonl`
-Todo lo que vive únicamente en el ledger no está en esta página: las notas de operador
-(`tldrx note`), los costos por intento, las stories reabiertas, los reintentos de revisión.
-`tldrx replay <run>` y `tldrx run status` sí leen el ledger.
+Y cuando `budget.yml` cotiza el run en `host-tokens`, la página deja de citarle dólares por
+completo — igual en la lista de runs que en el detalle. Ahí `ceiling_usd` no gobierna nada,
+así que `$0.00 de $25.00`, en barra o en palabras, sería una afirmación segura sobre un
+denominador que no aplica. El gasto se lee en tokens, contra `ceiling_host_tokens` — el
+techo contra el que esos tokens sí se miden, que vive en `budget.yml` y en ningún otro
+archivo.
+
+::: info Lo que sigue estando solo en `tldrx replay`
+La página lee el ledger, pero no entero: la narrativa — los costos por intento, los agentes
+que se lanzaron, los checks, el orden en que pasaron las cosas — es trabajo de
+`tldrx replay <run>`. Dos archivos no los lee nadie aquí: `04-build/preflight.yml`, así que
+un rechazo por delta de DoD se ve como una etapa que retrocedió sin motivo, y
+`05-watch/watchers/*.md`.
 :::
 
 ## No puede contradecir a la CLI

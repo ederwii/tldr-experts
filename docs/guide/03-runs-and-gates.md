@@ -580,6 +580,11 @@ any open handoff panel. Five views behind a hash route — runs list, run detail
 watchers, how-to. `node:http` + `node:fs` only; no framework, no runtime dependency; it
 never writes and answers nothing but GET.
 
+It reads `run.yml`, `budget.yml`, `events.jsonl` and the phase and Plan artefacts. From the
+ledger it takes the operator notes (`tldrx note`), each story's attempt and free review
+retries, the reopens and their reasons, and every `budget.blocked`; the narrative order and
+the per-attempt costs stay `tldrx replay <run>`'s job.
+
 A request whose `Host` is not `127.0.0.1`, `localhost`, `::1` or the host it was told to
 bind gets 403 before the method check — binding loopback is necessary, not sufficient, when
 a page on a name the attacker owns can point a browser at 127.0.0.1. Only the name is

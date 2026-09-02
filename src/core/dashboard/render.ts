@@ -588,9 +588,8 @@ export function dashRunRow(run: RunModel, nowMs: number, isNext: boolean): strin
     + `${String(run.stagesDone)} of ${String(run.stagesTotal)} stages done">${pips}</div>`
     + `<span class="runrow__v">${String(run.stagesDone)}/${String(run.stagesTotal)} stages · `
     + `${String(run.percent)}%</span></div>`
-    + `<div class="runrow__cell"><span class="runrow__v">${dashText(dashUsd(run.spentUsd))} `
-    + `<span class="faint">/ ${dashText(dashUsd(run.ceilingUsd))}</span></span>`
-    + `${dashMeter(run.spentUsd, run.ceilingUsd)}</div>`
+    + `<div class="runrow__cell"><span class="runrow__v">${dashSpendText(run)}</span>`
+    + `${dashBudgetMeter(run, false)}</div>`
     + `<div class="runrow__wait"${pending === null ? "" : ' data-wait="1"'}>`
     + dashWaitingCell(run)
     + "</div></a>";
@@ -647,10 +646,7 @@ export function dashRunView(model: DashboardModel, id: string, nowMs: number): s
     + dashKv("scope", dashText(run.scope === "" ? "—" : run.scope) + workflow)
     + dashKv("cursor", '<span class="mono" style="font-size:var(--text-xs)">'
       + `${dashText(run.cursor === null ? "—" : run.cursor)}</span>`)
-    + dashKv("spent", `<span class="num">${dashText(dashUsd(run.spentUsd))}</span> `
-      + `<span class="faint">of ${dashText(dashUsd(run.ceilingUsd))}</span>`
-      + dashMeter(run.spentUsd, run.ceilingUsd)
-      + dashEconomies(run))
+    + dashKv("spent", dashSpendText(run) + dashBudgetMeter(run, true) + dashEconomies(run))
     + dashKv("stages", `<span class="num">${String(run.stagesDone)}/${String(run.stagesTotal)}</span> `
       + `<span class="faint">${String(run.percent)}%</span>`)
     + dashKv("updated", `<span class="nowrap">${dashText(dashDateTime(run.updatedAt))}</span> `
@@ -671,7 +667,11 @@ export function dashRunView(model: DashboardModel, id: string, nowMs: number): s
   }
 
   parts.push(dashHandoffsSection(run));
-  parts.push(dashPlanSection(run));
+  parts.push(dashPlanSection(run, model.maxAttempts));
+  parts.push(dashStoryArcs(run, model.maxAttempts));
+  parts.push(dashBudgetSection(run));
+  parts.push(dashBudgetBlocks(run));
+  parts.push(dashNotesSection(run));
   return parts.join("");
 }
 
@@ -740,11 +740,27 @@ export function dashKv(key: string, value: string): string {
  *
  * Silent on an ordinary run — no tokens, no unmetered turns, nobody attending —
  * so nothing that reads correctly today gains a line.
+ *
+ * Since #85 the token count carries the ALLOWANCE it is judged against, which
+ * comes from `budget.yml` and exists in no other file. A bare "12000 host tokens"
+ * is a number with no scale: it is either a rounding error or twice the ceiling,
+ * and the page had no way to say which.
+ *
+ * One exception, and it is about not saying the same thing twice: when the run's
+ * economy IS `host-tokens`, `dashBudgetMeter` has already drawn those tokens
+ * against that ceiling as the PRIMARY meter, so repeating them here left the
+ * card reading "184000 host tokens of 200000 allowed" twice in four lines. There
+ * this reports only the turns nobody costed — the half the meter does not carry.
  */
 export function dashEconomies(run: RunModel): string {
   if (run.unmeteredTasks === 0 && run.hostTokens === 0) return "";
+  const priced = run.budget !== null && run.budget.economy === "host-tokens";
+  const allowance = run.budget === null || run.budget.ceilingHostTokens === null
+    ? ""
+    : ` of ${String(run.budget.ceilingHostTokens)} allowed`;
   const parts: string[] = [];
-  if (run.hostTokens > 0) parts.push(`${String(run.hostTokens)} host tokens`);
+  if (run.hostTokens > 0 && !priced) parts.push(`${String(run.hostTokens)} host tokens${allowance}`);
+  if (parts.length === 0 && run.unmeteredTasks === 0) return "";
   if (run.unmeteredTasks > 0) {
     parts.push(`${String(run.unmeteredTasks)} unmetered `
       + `${run.unmeteredTasks === 1 ? "turn" : "turns"} (in-session)`);
@@ -755,6 +771,261 @@ export function dashEconomies(run: RunModel): string {
   return `<div class="econ"><strong>+ ${dashText(parts.join(" + "))}</strong>`
     + `<span class="faint">${dashText(bound)} Host tokens are a different currency `
     + "and are never converted to dollars.</span></div>";
+}
+
+/**
+ * The dollar bar, the token bar, or neither — whichever one is TRUE here.
+ *
+ * `dashMeter` draws `spent / ceiling` as a fraction, and issue #85 §4 is about
+ * the case where that fraction is a lie: a run whose `budget.yml` says
+ * `economy: host-tokens` is not priced in dollars at all, so its `ceiling_usd`
+ * governs nothing and `spent_usd` is `0.00` because nothing metered was ever
+ * spent. The page drew `$0.00 of $25.00` and a 0% progress bar over it — a
+ * confident statement about a denominator that does not apply.
+ *
+ * The honest picture needs `budget.yml`, which the model did not read until #85:
+ * the ceiling those host tokens ARE judged against is `ceiling_host_tokens`, and
+ * it lives nowhere else. So under a `host-tokens` economy this draws the TOKEN
+ * bar and no dollar bar; under the ordinary economy it draws exactly the bar it
+ * always did. The numbers over it come from `dashSpendText`, which switches
+ * currency with it.
+ *
+ * `verbose` is the run detail, where there is room to say WHY the bar is not the
+ * money one. The runs list passes false and gets the bar alone: two sentences of
+ * prose inside a table cell is not a list.
+ *
+ * A run with no `budget.yml` — most of them — falls through to `dashMeter`
+ * unchanged. Nothing that reads correctly today changes.
+ */
+export function dashBudgetMeter(run: RunModel, verbose: boolean): string {
+  const budget = run.budget;
+  if (budget === null || budget.economy !== "host-tokens") {
+    return dashMeter(run.spentUsd, run.ceilingUsd);
+  }
+  const ceiling = budget.ceilingHostTokens;
+  if (ceiling === null || ceiling === 0) {
+    return !verbose
+      ? ""
+      : '<div class="econ"><span class="faint">budget.yml prices this run in '
+        + "<code>host-tokens</code> and declares no <code>ceiling_host_tokens</code>, "
+        + "so nothing bounds them.</span></div>";
+  }
+  const percent = Math.min(100, Math.round((run.hostTokens / ceiling) * 100));
+  const bar = `<div class="meter" title="${String(percent)}% of the host-token ceiling">`
+    + `<div class="meter__tok" data-over="${percent >= 90 ? "1" : "0"}" `
+    + `style="width:${String(percent)}%"></div></div>`;
+  return !verbose
+    ? bar
+    : `<div class="econ">${bar}<span class="faint">Not dollars. budget.yml prices this run in `
+      + "<code>host-tokens</code>, so <code>ceiling_usd</code> governs nothing here and the "
+      + "metered total is $0.00 for a reason that is not thrift.</span></div>";
+}
+
+/**
+ * The two numbers over that bar — dollars, or tokens when dollars do not govern.
+ *
+ * The runs LIST and the run DETAIL both print a spend readout, and before #85
+ * both hard-coded `spentUsd / ceilingUsd`. Suppressing only the bar under a
+ * `host-tokens` economy would have left the row still reading `$0.00 of $25.00`
+ * in words — the same claim the bar was making, minus the picture. One function
+ * for both screens, so they cannot disagree about which currency is in force.
+ */
+export function dashSpendText(run: RunModel): string {
+  const budget = run.budget;
+  if (budget !== null && budget.economy === "host-tokens") {
+    const ceiling = budget.ceilingHostTokens;
+    return `<span class="num">${String(run.hostTokens)}</span> `
+      + `<span class="faint">${ceiling === null
+        ? "host tokens · no ceiling declared"
+        : `of ${String(ceiling)} host tokens`}</span>`;
+  }
+  return `<span class="num">${dashText(dashUsd(run.spentUsd))}</span> `
+    + `<span class="faint">of ${dashText(dashUsd(run.ceilingUsd))}</span>`;
+}
+
+/**
+ * `budget.yml` itself — the per-phase ceilings, the levers, and both economies.
+ *
+ * Everything `tldrx budget show` exists to say and the run.yml MIRROR has never
+ * carried (#85 §4). Silent on a run with no budget.yml, and on one whose copy did
+ * not parse: `loadRunResult` turns that into a null rather than an exception, and
+ * a panel of blanks would be worse than no panel.
+ */
+export function dashBudgetSection(run: RunModel): string {
+  const budget = run.budget;
+  if (budget === null) return "";
+  const tokens = budget.ceilingHostTokens === null
+    ? ""
+    : dashKv("ceiling_host_tokens", `<span class="num">${String(budget.ceilingHostTokens)}</span> `
+        + '<span class="faint">tokens — never dollars</span>')
+      + dashKv("on_host_tokens_exceed", `<span class="tag">${dashText(budget.onHostTokensExceed)}</span>`);
+
+  const rows = budget.phases.map((phase) => {
+    const ceiling = phase.ceilingUsd === null ? "—" : dashUsd(phase.ceilingUsd);
+    const spent = phase.spentUsd === null ? "—" : dashUsd(phase.spentUsd);
+    const left = phase.ceilingUsd === null || phase.spentUsd === null
+      ? "—"
+      : dashUsd(Math.round((phase.ceilingUsd - phase.spentUsd) * 100) / 100);
+    // An unset phase economy INHERITS; saying so beats printing the run's value
+    // here, which would read as a choice somebody made about this phase.
+    const economy = phase.economy === null
+      ? `<span class="faint">inherits ${dashText(budget.economy)}</span>`
+      : `<span class="tag">${dashText(phase.economy)}</span>`;
+    const allowance = phase.ceilingHostTokens === null
+      ? '<span class="faint">—</span>'
+      : `<span class="num">${String(phase.ceilingHostTokens)}</span>`;
+    return `<tr><td class="mono">${dashText(phase.id)}</td>`
+      + `<td class="num">${dashText(ceiling)}</td><td class="num">${dashText(spent)}</td>`
+      + `<td class="num">${dashText(left)}</td><td>${economy}</td><td class="num">${allowance}</td></tr>`;
+  }).join("");
+
+  return '<div class="section"><div class="section__title"><h2>Budget</h2>'
+    + '<span class="eyebrow">budget.yml</span></div>'
+    + '<div class="card"><div class="kv">'
+    + dashKv("ceiling", `<span class="num">${dashText(dashUsd(budget.ceilingUsd))}</span>`)
+    + dashKv("per agent max", `<span class="num">${dashText(dashUsd(budget.perAgentMaxUsd))}</span>`)
+    + dashKv("economy", `<span class="tag">${dashText(budget.economy)}</span>`)
+    + dashKv("on_exceed", `<span class="tag">${dashText(budget.onExceed === null ? "—" : budget.onExceed)}</span>`)
+    + dashKv("warn_at_pct", `<span class="num">${budget.warnAtPct === null ? "—" : String(budget.warnAtPct)}</span>`)
+    + tokens
+    + '</div><div class="scroll-x"><table><thead><tr><th>phase</th><th>ceiling</th><th>spent</th>'
+    + "<th>left</th><th>economy</th><th>host tokens allowed</th></tr></thead>"
+    + `<tbody>${rows}</tbody></table></div></div></div>`;
+}
+
+/**
+ * Every `budget.blocked` on the ledger — the moments the brake refused a stage.
+ *
+ * Deliberately a RECORD, not an alert. The page's rule is that a card means a run
+ * is waiting on a person right now, and a refusal in the log is not evidence of
+ * that: the ceiling may have been raised an hour later and the run finished since.
+ * What the run is waiting on now is `waiting`, which is derived where it always
+ * was and drawn where it always was.
+ *
+ * The dollar refusals carry the command that fixes them, in the shape
+ * `raiseCommand` writes (`src/core/budget/budgetView.ts`) — pinned by a test,
+ * because this function is serialised into the page and cannot import it. A
+ * host-token refusal has no dollar raise, so it gets the sentence the CLI prints
+ * instead of a command that would not help.
+ */
+export function dashBudgetBlocks(run: RunModel): string {
+  if (run.budgetBlocks.length === 0) return "";
+  const rows = run.budgetBlocks.map((block, index) => {
+    const where = `${block.phase === null ? "—" : block.phase}`
+      + `${block.stage === null ? "" : ` / ${block.stage}`}`;
+    let detail: string;
+    let fix: string;
+    if (block.economy === "host-tokens") {
+      detail = `${block.hostTokens === null ? "?" : String(block.hostTokens)} host tokens declared of `
+        + `${block.ceilingTokens === null ? "?" : String(block.ceilingTokens)} allowed`;
+      fix = "Raise that phase's ceiling_host_tokens in budget.yml, or set "
+        + "`on_host_tokens_exceed: warn` to go back to a note.";
+    } else {
+      const remaining = block.remainingUsd;
+      const estimate = block.estimateUsd;
+      detail = `${dashUsd(remaining)} left, ${dashUsd(estimate)} needed`;
+      fix = remaining === null || estimate === null
+        ? "Raise the phase ceiling in budget.yml."
+        : `tldrx budget raise ${block.phase ?? ""} `
+          + `${Math.max(0.01, Math.ceil((estimate - remaining) * 100) / 100).toFixed(2)} --run ${run.id}`;
+    }
+    const reason = block.reason === null ? "" : ` <span class="faint">${dashText(block.reason)}</span>`;
+    return '<div class="blocked"><div class="row">'
+      + dashChip("blocked", "budget.blocked", false)
+      + `<span class="mono" style="font-size:var(--text-xs)">${dashText(where)}</span>`
+      + `<span class="tag">${dashText(block.economy)}</span>`
+      + `<span class="faint nowrap" style="margin-left:auto">${dashText(dashDateTime(block.ts))}</span>`
+      + `</div><div>${dashText(detail)}${reason}</div>`
+      + (block.economy === "host-tokens"
+        ? `<div class="faint">${dashText(fix)}</div>`
+        : dashCmd(fix, `raise-${dashSlug(run.id)}-${String(index)}`))
+      + "</div>";
+  }).join("");
+  return '<div class="section"><div class="section__title"><h2>Budget refusals</h2>'
+    + `<span class="eyebrow">events.jsonl · ${dashPlural(run.budgetBlocks.length, "refusal")}</span></div>`
+    + `<div class="stack">${rows}</div></div>`;
+}
+
+/**
+ * Operator notes (`tldrx note`, #46), and the state of the ledger they came from.
+ *
+ * `tldrx run status` shows the last three and points at `tldrx replay` for the
+ * rest, because a terminal has a bottom. This page does not, so it draws them
+ * all — the issue asked which, and a run detail is the screen with room.
+ *
+ * It also draws when there are NO notes but the ledger is damaged, which is the
+ * point: "no operator notes" over a file that could not be read is the same lie
+ * by omission that an unlisted corrupt `run.yml` was.
+ */
+export function dashNotesSection(run: RunModel): string {
+  const damaged = run.eventsError !== null || run.eventsSkipped > 0;
+  if (run.notes.length === 0 && !damaged) return "";
+  const rows = run.notes.map((note) => '<div class="note">'
+    + `<div class="row"><strong>${dashText(note.actor)}</strong>`
+    + (note.stage === null
+      ? ""
+      : `<span class="mono" style="font-size:var(--text-xs)">${dashText(
+          note.phase === null ? note.stage : `${note.phase}/${note.stage}`)}</span>`)
+    + `<span class="faint nowrap" style="margin-left:auto">${dashText(dashDateTime(note.ts))}</span></div>`
+    + `<div>${dashText(note.note)}</div></div>`).join("");
+  const trouble = !damaged
+    ? ""
+    : '<div class="alert"><span class="alert__kind">ledger</span><span>'
+      + (run.eventsError === null
+        ? `${dashPlural(run.eventsSkipped, "line")} of events.jsonl did not parse and `
+          + "were skipped — a torn write. Anything they carried is missing from this page."
+        : `events.jsonl could not be read: ${dashText(dashFirstLine(run.eventsError))}. `
+          + "Nothing on this page comes from the ledger.")
+      + "</span></div>";
+  return '<div class="section"><div class="section__title"><h2>Operator notes</h2>'
+    + `<span class="eyebrow">events.jsonl · ${dashPlural(run.notes.length, "note")}</span></div>`
+    + `${trouble}<div class="stack">${rows}</div></div>`;
+}
+
+/**
+ * What the ledger says happened to a story that the story FILE cannot say.
+ *
+ * A story's front matter carries `status` and `evidence` and no counters, so a
+ * story that burned two attempts, was granted two free review re-prompts and was
+ * reopened by hand for a named defect looks, on disk, exactly like one nobody
+ * touched. All three facts are event-only (#85 §2 and §5).
+ *
+ * Silent unless something happened: an ordinary plan gains no card.
+ */
+export function dashStoryArcs(run: RunModel, maxAttempts: number): string {
+  const plan = run.plan;
+  if (plan === null) return "";
+  const eventful = plan.stories.filter(
+    (story) => story.reopens.length > 0 || story.reviewRetries > 0);
+  if (eventful.length === 0) return "";
+  const rows = eventful.map((story) => {
+    const attempt = story.attempt === null
+      ? ""
+      : `<span class="tag">attempt ${String(story.attempt)} of ${String(maxAttempts)}</span>`;
+    const retries = story.reviewRetries === 0
+      ? ""
+      : `<div class="faint">${dashPlural(story.reviewRetries, "free review retry")} — a review `
+        + "envelope refused on its FORMAT and asked for again, costing the story no attempt.</div>";
+    const reopens = story.reopens.map((reopen) => '<div class="note">'
+      + `<div class="row"><span class="chip" data-st="${reopen.reason === "fix" ? "wait" : "idle"}">`
+      + `${dashText(reopen.reason)}</span>`
+      + `<strong>${dashText(reopen.actor)}</strong>`
+      + (reopen.fromStatus === null
+        ? ""
+        : `<span class="faint">from ${dashText(reopen.fromStatus)}</span>`)
+      + (reopen.verdicts === null
+        ? ""
+        : `<span class="faint">${dashPlural(reopen.verdicts, "verdict")} before it</span>`)
+      + `<span class="faint nowrap" style="margin-left:auto">${dashText(dashDateTime(reopen.ts))}</span>`
+      + `</div><div>${dashText(reopen.note)}</div></div>`).join("");
+    return '<div class="epic"><div class="epic__head">'
+      + `<span class="mono" style="font-size:var(--text-xs)">${dashText(story.id)}</span>`
+      + `<strong>${dashText(story.title)}</strong>${attempt}</div>`
+      + `${retries}${reopens}</div>`;
+  }).join("");
+  return '<div class="section"><div class="section__title"><h2>Reopens &amp; retries</h2>'
+    + '<span class="eyebrow">events.jsonl</span></div>'
+    + `<div class="stack">${rows}</div></div>`;
 }
 
 /** Phase → stage → expert → model → cost → gate, in `run.yml` order. */
@@ -851,7 +1122,7 @@ export function dashQuestion(run: RunModel, phase: PhaseModel, question: Questio
 }
 
 /** Epics, their stories and the waves that schedule them. */
-export function dashPlanSection(run: RunModel): string {
+export function dashPlanSection(run: RunModel, maxAttempts: number): string {
   const plan = run.plan;
   const build = dashBuildBranches(run);
   if (plan === null) {
@@ -864,11 +1135,12 @@ export function dashPlanSection(run: RunModel): string {
   }
 
   const byId: Record<string, { title: string; repo: string; status: string; wave: string | null;
-    dependsOn: readonly string[] }> = {};
+    dependsOn: readonly string[]; attempt: number | null; reviewRetries: number }> = {};
   for (const story of plan.stories) {
     byId[story.id] = {
       title: story.title, repo: story.repo, status: story.status,
       wave: story.wave, dependsOn: story.dependsOn,
+      attempt: story.attempt, reviewRetries: story.reviewRetries,
     };
   }
 
@@ -887,12 +1159,22 @@ export function dashPlanSection(run: RunModel): string {
       const story = byId[storyId];
       if (story === undefined) {
         return `<tr><td class="mono">${dashText(storyId)}</td>`
-          + '<td colspan="5" class="faint">not in stories[]</td></tr>';
+          + '<td colspan="6" class="faint">not in stories[]</td></tr>';
       }
+      // Both event-only (#85 §2): the story FILE carries `status` and `evidence`
+      // and no counters, so a story that burned both attempts and was granted two
+      // free re-prompts reads on disk exactly like one nobody has picked up.
+      const attempt = story.attempt === null
+        ? '<span class="faint">—</span>'
+        : `${String(story.attempt)} of ${String(maxAttempts)}`;
+      const retries = story.reviewRetries === 0
+        ? ""
+        : ` <span class="faint">· ${dashPlural(story.reviewRetries, "free review retry")}</span>`;
       return `<tr><td class="mono">${dashText(storyId)}</td><td>${dashText(story.title)}</td>`
         + `<td><span class="tag">${dashText(story.repo === "" ? "—" : story.repo)}</span></td>`
         + `<td>${dashChip(story.status, null, false)}</td>`
         + `<td class="mono faint">${dashText(story.wave === null ? "—" : story.wave)}</td>`
+        + `<td class="nowrap" style="font-size:var(--text-xs)">${attempt}${retries}</td>`
         + '<td class="mono faint" style="font-size:var(--text-2xs)">'
         + `${dashText(story.dependsOn.length === 0 ? "—" : story.dependsOn.join(", "))}</td></tr>`;
     }).join("");
@@ -901,7 +1183,7 @@ export function dashPlanSection(run: RunModel): string {
       + `<strong>${dashText(epic.title)}</strong>${dashChip(epic.status, null, false)}`
       + `<span class="tag" style="margin-left:auto">${dashText(epic.branch === "" ? "no branch" : epic.branch)}</span></div>`
       + '<div class="scroll-x"><table><thead><tr><th>story</th><th>title</th><th>repo</th>'
-      + `<th>status</th><th>wave</th><th>depends on</th></tr></thead><tbody>${rows}</tbody>`
+      + `<th>status</th><th>wave</th><th>attempts</th><th>depends on</th></tr></thead><tbody>${rows}</tbody>`
       + "</table></div></div>");
   }
 
@@ -1193,16 +1475,16 @@ export function dashFaqView(model: DashboardModel): string {
     + '<div class="section"><div class="section__title"><h2>What this page is</h2></div>'
     + '<div class="card"><div class="prose"><p>A read-only view of <code>'
     + `${dashText(model.root)}</code>, generated from files on disk: <code>run.yml</code>, `
-    + "handoffs, questions, the Plan artefacts and expert competencies. It has no write "
-    + "path — no button here changes a file.</p>"
-    // It used to name events.jsonl here, and it has never opened it (measured
-    // 2026-09-01). Saying so is not a caveat — it is the reason a reader cannot
-    // find their operator notes on this page, and the pointer at the command
-    // that does have them.
-    + "<p>It does <strong>not</strong> read <code>events.jsonl</code>, so nothing that lives only "
-    + "in the ledger is here: operator notes (<code>tldrx note</code>), per-attempt costs, story "
-    + "reopens and review retries. <code>tldrx replay &lt;run&gt;</code> and "
-    + "<code>tldrx run status</code> read the ledger.</p>"
+    + "<code>budget.yml</code>, <code>events.jsonl</code>, handoffs, questions, the Plan "
+    + "artefacts and expert competencies. It has no write path — no button here changes a file.</p>"
+    // This paragraph used to say the opposite, and was true when it was written:
+    // until #85 the model read neither file, which is why a reader could not find
+    // their own operator notes here. Both are read now, so the honest sentence is
+    // the one that says what is STILL only in the ledger.
+    + "<p>From the ledger it takes operator notes (<code>tldrx note</code>), the attempt each "
+    + "story is on, the free review retries it was granted, story reopens and the moments the "
+    + "budget brake refused a stage. Per-attempt costs and the full narrative order are still "
+    + "<code>tldrx replay &lt;run&gt;</code>'s job.</p>"
     + "<p>Four states need a human, and only those raise an alert: an open <strong>question</strong>, "
     + "a pending <strong>gate</strong>, a <strong>failed</strong> stage, and a "
     + "<code>--prepare</code> bundle waiting to be run and committed.</p>"
@@ -1226,6 +1508,7 @@ const TEMPLATE_FUNCTIONS = [
   dashMain, dashNoWorkspace,
   dashRunsView, dashUnreadable, dashFirstLine, dashRunRow, dashMeter,
   dashRunView, dashGateSigner, dashGateEvidence, dashKv, dashEconomies,
+  dashBudgetMeter, dashSpendText, dashBudgetSection, dashBudgetBlocks, dashNotesSection, dashStoryArcs,
   dashPathSection, dashHandoffsSection, dashPanelId, dashQuestion,
   dashPlanSection, dashBuildBranches,
   dashExpertsView, dashExpertCard, dashTrainCommand, dashRadar,

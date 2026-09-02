@@ -265,6 +265,23 @@ tr[data-wait="1"] td{background:var(--st-wait-bg)}
 /* the second currency, under the money meter it qualifies */
 .econ{margin-top:6px;font-size:var(--text-2xs);line-height:var(--leading-normal)}
 .econ .faint{display:block}
+/* the HOST-TOKEN bar. A distinct class rather than a modifier on .meter__fill:
+   a token allowance and a dollar ceiling are not the same measurement, and the
+   one thing this bar must never do is read as the money one (#85). */
+.meter__tok{height:100%;background:var(--st-active)}
+.meter__tok[data-over="1"]{background:var(--st-wait)}
+
+/* one operator note, one reopen: a byline row over the words themselves */
+.note{padding:var(--space-sm) var(--space-md);border:1px solid var(--line-hairline);
+  border-radius:2px;background:var(--surface-sunken);font-size:var(--text-xs);
+  line-height:var(--leading-normal)}
+.note .row{margin-bottom:4px;align-items:baseline}
+/* a moment the budget brake refused a stage — history, so it is a card and
+   never an alert; the page's alerts mean "a person is needed NOW" */
+.blocked{padding:var(--space-sm) var(--space-md);border:1px solid var(--line-hairline);
+  border-left:2px solid var(--st-wait);border-radius:2px;font-size:var(--text-xs);
+  line-height:var(--leading-normal)}
+.blocked .row{margin-bottom:4px;align-items:baseline}
 
 /* attention summary: the three counts tldrx status opens with */
 .attn{display:flex;flex-wrap:wrap;gap:var(--space-xs);align-items:center;

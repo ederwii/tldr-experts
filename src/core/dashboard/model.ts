@@ -16,18 +16,36 @@
  * `questions.md`) and the Plan artefacts (`stories/`, `epics/`, `waves.yml`)
  * read through the existing parsers. Nothing here talks to a network or a model.
  *
- * **`events.jsonl` is NOT read**, and the page must not say it is (measured
- * 2026-09-01: nothing in this file or in `loadPhaseArtefacts` opens the ledger).
- * That is why every events-only fact is absent — operator notes (`tldrx note`),
- * per-attempt costs, story reopens and review retries all live in the ledger and
- * in no other file. Reading it is a real change with a panel behind it, not a
- * line in a doc comment; until somebody makes it, the honest thing is to name
- * the files that ARE read.
+ * **`budget.yml` and `events.jsonl` are read too**, since #85 (owner decision,
+ * 2026-09-02). Until then they were not, and five facts a reader went looking
+ * for were therefore nowhere on the page: operator notes (`tldrx note`), the
+ * free review retries a story was granted, the attempt it is on, the moments the
+ * budget brake refused a stage, and the ceiling a host-attended run's TOKENS are
+ * judged against. Each lives only in one of those two files.
+ *
+ * Two rules make that additive rather than expensive:
+ *
+ *  - **Neither file is opened here.** `loadRunResult` already parses both for
+ *    every run it loads (`src/core/replay/loadRun.ts`) and hands them over on
+ *    `LoadedRun` as `budget` and `events`; this file had simply been throwing
+ *    them away. So the page costs the same reads it always did.
+ *  - **The ledger is walked ONCE per run**, by `readLedger` below, which collects
+ *    the notes, the refusals and every story's arc in a single pass. The obvious
+ *    alternative — `readReviewLedger(runDir, storyId)`, the executor's own reader
+ *    — re-opens and re-parses the whole file per STORY, which on a long run with
+ *    a forty-story plan is forty passes over a file already in memory.
+ *
+ * Both files are read TOLERANTLY, through the readers that never throw: a
+ * budget.yml that does not parse is a null budget and no panel, a torn line in
+ * the ledger costs that line and is counted rather than swallowed, and a
+ * workspace with neither file renders exactly as it did before.
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { MAX_LEVEL, loadExperts, driftWarnings, evidenceWarnings, type ExpertRecord } from "../experts/index.ts";
 import { listRuns, loadPhaseArtefacts, loadRunResult, type LoadedRun } from "../replay/index.ts";
+import { DEFAULT_ECONOMY, DEFAULT_ON_HOST_TOKENS_EXCEED } from "../budget/RunBudget.ts";
+import { MAX_ATTEMPTS } from "../budget/remainingWork.ts";
 import { hasStarted, resolveDependencies, type DependencyInput, type ResolvedRun } from "../run/dependencies.ts";
 import { isMovable, waitingFor, type Waiting } from "../run/waiting.ts";
 import { openBlocks, parseQuestions } from "../text/index.ts";
@@ -57,6 +75,20 @@ import { offlineHtml } from "./offlineHtml.ts";
  * before either run existed cannot un-start a run that is running. `blockedBy`
  * itself is unchanged and still lists those siblings — the new `started` field is
  * what says whether they still hold anything back.
+ *
+ * **Still 3 after #85**, deliberately, and the issue asked. That wave gave the
+ * model two new files to read and eight new fields to carry them — `notes`,
+ * `budget`, `budgetBlocks`, `eventsError`, `eventsSkipped`, `maxAttempts`, and
+ * `attempt`/`reviewRetries`/`reopens` on a story — and removed nothing. The one
+ * field with a case to answer is `spentUsd`, because the page can now show the
+ * host-token ceiling beside it and a consumer reading it alone is demonstrably
+ * wrong about a host-attended run. It is still not a change of meaning: it is
+ * computed from the same `run.yml` key, it holds the same number, and it has
+ * meant "METERED dollars, a lower bound when `unmeteredTasks > 0`" since v3 put
+ * `unmeteredTasks` and `hostTokens` beside it. A consumer that read it as a
+ * total was wrong before this wave and is wrong by exactly the same amount
+ * after it. Bumping for a field that gained NEIGHBOURS would make the number
+ * mean "something near here changed", which is what a changelog is for.
  */
 export const DASHBOARD_MODEL_VERSION = 3;
 
@@ -79,6 +111,114 @@ export interface GateEvidenceModel {
   readonly resolved: number | null;
   readonly refuted: number | null;
   readonly outsideSurface: number | null;
+}
+
+/**
+ * One `operator_note` on the ledger (#46) — the only channel a person has for
+ * saying what they did OUTSIDE the tool.
+ *
+ * `tldrx run status` prints the last three and points at `tldrx replay` for the
+ * rest, because a terminal has a bottom. A run detail page does not, so every
+ * note is carried and the renderer draws them all.
+ */
+export interface NoteModel {
+  readonly ts: string;
+  readonly actor: string;
+  /** The stage the note was keyed to (the envelope's `stage`), or null. */
+  readonly stage: string | null;
+  /** The phase, when the note named one. Null on a run-level note. */
+  readonly phase: string | null;
+  readonly note: string;
+}
+
+/**
+ * One `budget.blocked` — a moment the brake refused to start a stage.
+ *
+ * HISTORY, not a state. The run may have been raised and moved on since, so this
+ * is drawn as a record of what happened and deliberately does NOT raise an
+ * attention card: the page's stated rule is that an alert means a run is waiting
+ * on a person right now, and a past refusal is not evidence of that. What the
+ * run is waiting on now is `waiting`, derived where it always was.
+ *
+ * Both economies land here. A dollar refusal carries `remainingUsd`/`estimateUsd`
+ * and no tokens; a host-token refusal (#22) carries `hostTokens`/`ceilingTokens`
+ * and no dollars. The two are never added.
+ */
+export interface BudgetBlockModel {
+  readonly ts: string;
+  readonly stage: string | null;
+  readonly phase: string | null;
+  /** `metered-usd` unless the event says `host-tokens`. */
+  readonly economy: string;
+  readonly remainingUsd: number | null;
+  readonly estimateUsd: number | null;
+  readonly hostTokens: number | null;
+  readonly ceilingTokens: number | null;
+  /** The event's own `reason`, when it recorded one. */
+  readonly reason: string | null;
+}
+
+/** One phase's row of `budget.yml`. */
+export interface BudgetPhaseModel {
+  readonly id: string;
+  readonly ceilingUsd: number | null;
+  readonly spentUsd: number | null;
+  /**
+   * This phase's own economy, or null to INHERIT the run's. Null is not
+   * `metered-usd`: nobody wrote a choice on this phase.
+   */
+  readonly economy: string | null;
+  readonly ceilingHostTokens: number | null;
+}
+
+/**
+ * `budget.yml`, when it is on disk and parses — null otherwise, which is every
+ * run that never had one and every run whose copy is damaged.
+ *
+ * Distinct from `RunModel.spentUsd`/`ceilingUsd`, which come from the run.yml
+ * budget MIRROR. This is the file `tldrx budget show` reads, and it holds the
+ * things the mirror has never carried: the per-phase ceilings, `on_exceed`,
+ * `warn_at_pct`, and — the reason #85 asked for it — the economy the numbers are
+ * denominated in and the HOST-TOKEN allowance a host-attended run's turns are
+ * actually judged against.
+ */
+export interface BudgetModel {
+  readonly ceilingUsd: number | null;
+  readonly perAgentMaxUsd: number | null;
+  readonly warnAtPct: number | null;
+  readonly onExceed: string | null;
+  /**
+   * `metered-usd` | `host-tokens`. Never null: a file with no `economy` key
+   * means `metered-usd`, which is what every file written before the label
+   * existed meant, and resolving it here keeps the renderer from re-deriving a
+   * default the enforcement path owns (`economyFor`).
+   */
+  readonly economy: string;
+  /** `warn` | `block` (#22). Absence reads as `warn` — what a token ceiling always did. */
+  readonly onHostTokensExceed: string;
+  /** The run's host-token allowance, or null when the file declares none. */
+  readonly ceilingHostTokens: number | null;
+  readonly phases: readonly BudgetPhaseModel[];
+}
+
+/**
+ * A person handing one story another run of attempts, or one named defect to fix
+ * (`tldrx story reopen`, #58).
+ *
+ * `reason` is resolved rather than carried raw: a `story.reopened` written before
+ * the key existed is an `attempts` reopen, which is the only kind that existed,
+ * and reporting it as a blank would make the older half of every ledger look
+ * like a third kind of event.
+ */
+export interface StoryReopenModel {
+  readonly ts: string;
+  readonly actor: string;
+  /** `fix` | `attempts`. */
+  readonly reason: string;
+  readonly note: string;
+  readonly fromStatus: string | null;
+  /** Verdicts the closed run of attempts consumed. The reset erased the count, not the history. */
+  readonly verdicts: number | null;
 }
 
 /** What the Build claimed on disk (`run.yml` `build`). */
@@ -179,6 +319,32 @@ export interface StoryModel {
   readonly dependsOn: readonly string[];
   /** The wave id this story runs in, or null when `waves.yml` does not schedule it. */
   readonly wave: string | null;
+  /**
+   * The attempt the story is on — the number the LAST `task.started` for it
+   * recorded — or null when no attempt has started.
+   *
+   * Null, never a coerced `0`: "nobody has picked this story up" and "it is on
+   * attempt zero" are different facts, and the second one does not exist. Read
+   * against `DashboardModel.maxAttempts`.
+   *
+   * The LAST rather than the highest, because `tldrx story reopen` hands a story
+   * a fresh run of attempts: after a reopen the number the executor writes is
+   * the one that governs, and a max would keep reporting the closed run's.
+   */
+  readonly attempt: number | null;
+  /**
+   * `story.review_retried` events on this story (#78/#79) — review envelopes
+   * refused for their FORMAT and asked for again, each costing the story NO
+   * attempt.
+   *
+   * A COUNT OF EVENTS, and deliberately not a re-derivation of the executor's
+   * `formatRetries`, which is the bound's counter and restarts at every verdict.
+   * Two derivations of one number is how a page and a CLI come to disagree; this
+   * one is a fact about the log that needs no policy to read.
+   */
+  readonly reviewRetries: number;
+  /** Every `story.reopened` on this story, oldest first. */
+  readonly reopens: readonly StoryReopenModel[];
 }
 
 export interface EpicModel {
@@ -278,6 +444,27 @@ export interface RunModel {
   readonly plan: PlanModel | null;
   /** What the Build cut on disk, when it has cut anything. */
   readonly build: BuildModel | null;
+  /**
+   * `budget.yml`, or null when there is none or it does not parse (#85).
+   *
+   * The ceiling `hostTokens` is judged against lives here and nowhere else, which
+   * is why a host-attended run's dollar meter could not tell the truth without it.
+   */
+  readonly budget: BudgetModel | null;
+  /** Operator notes off the ledger, oldest first (#46). */
+  readonly notes: readonly NoteModel[];
+  /** Every `budget.blocked` on the ledger, oldest first. History, not a state. */
+  readonly budgetBlocks: readonly BudgetBlockModel[];
+  /**
+   * Set when `events.jsonl` is on disk and could not be read at all.
+   *
+   * Carried because the alternative is a page that renders "no operator notes"
+   * over an unreadable ledger — the same lie by omission `unreadable` exists to
+   * stop one folder up.
+   */
+  readonly eventsError: string | null;
+  /** Non-empty ledger lines that did not parse (a torn write). Shown, never swallowed. */
+  readonly eventsSkipped: number;
   /** Lowercased haystack the client-side run filter matches against. */
   readonly filter: string;
 }
@@ -331,6 +518,17 @@ export interface DashboardModel {
   readonly live: boolean;
   /** Highest competency level, so the renderer never has to know the constant. */
   readonly maxLevel: number;
+  /**
+   * Attempts a Build story gets before it blocks (`MAX_ATTEMPTS`), so the
+   * renderer never has to know the constant either.
+   *
+   * It travels as DATA for a mechanical reason, not a stylistic one: the `dash*`
+   * functions are serialised into the page by `clientRenderer()` and run there
+   * closure-free with no imports, so a constant one of them referenced by name
+   * would be a `ReferenceError` in the browser. `maxLevel` is here for exactly
+   * the same reason.
+   */
+  readonly maxAttempts: number;
   readonly runs: readonly RunModel[];
   /**
    * Run folders whose `run.yml` is on disk but does not parse. Named rather than
@@ -402,6 +600,7 @@ export function buildModel(root: string, generatedAt: string, options: ModelOpti
     workspaceFound: existsSync(join(root, PROJECT_FRAMEWORK_DIR)),
     live: options.live === true,
     maxLevel: MAX_LEVEL,
+    maxAttempts: MAX_ATTEMPTS,
     runs: loaded.map((run) => toRunModel(run, waiting.get(run.id), resolved.get(run.id))),
     unreadable,
     order: graph.order,
@@ -487,6 +686,7 @@ export function toRunModel(
   const unmeteredTasks = tasks.filter((task) => !task.metered).length;
   const hostTokens = tasks.reduce((sum, task) => sum + (task.tokens ?? 0), 0);
 
+  const ledger = readLedger(loaded);
   const stages = doc.phases.flatMap((phase) => phase.stages);
   const open = phases.flatMap((phase) => phase.questions);
   // Both aliases are now DERIVED from `waiting`, never from the gate objects.
@@ -526,12 +726,177 @@ export function toRunModel(
     runnable: depends.runnable,
     path,
     phases,
-    plan: loadPlan(loaded),
+    plan: loadPlan(loaded, ledger.stories),
     build: doc.build === null
       ? null
       : { branchModel: doc.build.branch_model, epicBranches: doc.build.epic_branch },
+    budget: toBudgetModel(loaded),
+    notes: ledger.notes,
+    budgetBlocks: ledger.blocks,
+    eventsError: loaded.eventsError,
+    eventsSkipped: loaded.eventsSkipped,
     filter: [doc.run, doc.title, doc.scope, doc.status].join(" ").toLowerCase(),
   };
+}
+
+/**
+ * `budget.yml`, as the page needs it — or null, which is most runs.
+ *
+ * `loadRunResult` has already read and tolerantly parsed the file, and already
+ * turned an unparseable one into a null, so there is nothing to open and nothing
+ * to catch here. The two defaults are resolved rather than passed through,
+ * against the constants the ENFORCEMENT path uses: a file with no `economy` key
+ * means `metered-usd` and one with no `on_host_tokens_exceed` means `warn`, and
+ * a renderer inventing those for itself is a page that can disagree with the
+ * brake about which ceiling is in force.
+ */
+function toBudgetModel(loaded: LoadedRun): BudgetModel | null {
+  const budget = loaded.budget;
+  if (budget === null) return null;
+  return {
+    ceilingUsd: budget.ceiling_usd,
+    perAgentMaxUsd: budget.per_agent_max_usd,
+    warnAtPct: budget.warn_at_pct,
+    onExceed: budget.on_exceed,
+    economy: budget.economy ?? DEFAULT_ECONOMY,
+    onHostTokensExceed: budget.on_host_tokens_exceed ?? DEFAULT_ON_HOST_TOKENS_EXCEED,
+    ceilingHostTokens: budget.ceiling_host_tokens,
+    phases: budget.phases.map((phase) => ({
+      id: phase.id,
+      ceilingUsd: phase.ceiling_usd,
+      spentUsd: phase.spent_usd,
+      // NOT defaulted: null here means "inherit the run's", which is a different
+      // statement from "this phase chose metered-usd".
+      economy: phase.economy,
+      ceilingHostTokens: phase.ceiling_host_tokens,
+    })),
+  };
+}
+
+/** One story's arc, as the ledger tells it. */
+interface StoryArc {
+  attempt: number | null;
+  reviewRetries: number;
+  reopens: StoryReopenModel[];
+}
+
+interface Ledger {
+  readonly notes: readonly NoteModel[];
+  readonly blocks: readonly BudgetBlockModel[];
+  readonly stories: ReadonlyMap<string, StoryArc>;
+}
+
+/**
+ * Everything the page reads out of `events.jsonl`, in ONE pass.
+ *
+ * The events are already parsed — `loadRunResult` walked the file through
+ * `EventLog.readAll`, the tolerant reader, before `toRunModel` was called. So
+ * this opens nothing; it is a loop over an array that is already in memory, and
+ * it is O(events), not O(events × stories).
+ *
+ * That last point is the whole reason this function exists rather than a call to
+ * `readReviewLedger`, which answers the per-story questions properly and re-reads
+ * and re-parses the entire ledger for EACH story it is asked about. On a run with
+ * a forty-story plan and a ledger in the tens of thousands of lines, rendering
+ * one page would walk that file forty times.
+ */
+function readLedger(loaded: LoadedRun): Ledger {
+  const notes: NoteModel[] = [];
+  const blocks: BudgetBlockModel[] = [];
+  const stories = new Map<string, StoryArc>();
+
+  const arcOf = (id: string): StoryArc => {
+    const found = stories.get(id);
+    if (found !== undefined) return found;
+    const fresh: StoryArc = { attempt: null, reviewRetries: 0, reopens: [] };
+    stories.set(id, fresh);
+    return fresh;
+  };
+
+  for (const { event } of loaded.events) {
+    const payload = asPayload(event.payload);
+    const story = typeof payload.story === "string" ? payload.story : null;
+
+    if (event.type === "operator_note") {
+      notes.push({
+        ts: event.ts,
+        actor: event.actor,
+        stage: event.stage,
+        phase: typeof payload.phase === "string" ? payload.phase : null,
+        note: typeof payload.note === "string" ? payload.note : "",
+      });
+      continue;
+    }
+
+    if (event.type === "budget.blocked") {
+      blocks.push({
+        ts: event.ts,
+        stage: event.stage,
+        phase: typeof payload.phase === "string" ? payload.phase : null,
+        // The dollar refusal writes no `economy` at all; it is the default one.
+        economy: typeof payload.economy === "string" ? payload.economy : DEFAULT_ECONOMY,
+        remainingUsd: finite(payload.remaining_usd),
+        estimateUsd: finite(payload.estimate_usd),
+        hostTokens: finite(payload.host_tokens),
+        ceilingTokens: finite(payload.ceiling_tokens),
+        reason: typeof payload.reason === "string" ? payload.reason : null,
+      });
+      continue;
+    }
+
+    if (story === null) continue;
+
+    if (event.type === "task.started") {
+      // LAST wins, not highest — see `StoryModel.attempt`. A reviewer's
+      // `task.started` carries the same attempt as its developer's, so counting
+      // rows here would be wrong; reading the number the event carries is not.
+      const attempt = finite(payload.attempt);
+      if (attempt !== null) arcOf(story).attempt = attempt;
+      continue;
+    }
+
+    if (event.type === "story.review_retried") {
+      arcOf(story).reviewRetries++;
+      continue;
+    }
+
+    if (event.type === "story.reopened") {
+      arcOf(story).reopens.push({
+        ts: event.ts,
+        actor: event.actor,
+        // A reopen with no `reason` predates the key and is an `attempts` reopen,
+        // which is the only kind that existed (`run/reopenStory.ts`).
+        reason: payload.reason === "fix" ? "fix" : "attempts",
+        note: typeof payload.note === "string" ? payload.note : "",
+        fromStatus: typeof payload.from_status === "string" ? payload.from_status : null,
+        verdicts: finite(payload.verdicts),
+      });
+    }
+  }
+
+  return { notes, blocks, stories };
+}
+
+/** A finite number from a payload field, or null. Never a coerced `0`. */
+function finite(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * The event's payload, or an empty one.
+ *
+ * `TldrxEvent.payload` is typed non-optional, and on a line somebody hand-wrote
+ * — or a fixture that predates the key — it is simply absent. The type is a
+ * claim about `validateEvent`'s output; `EventLog.readAll` is tolerant and hands
+ * back what is in the file. Reading `payload.story` off that threw a TypeError
+ * out of `buildModel` and killed the dashboard server, which is the same class
+ * of failure a corrupt `run.yml` used to cause. `readReviewLedger` guards the
+ * identical way (`event.payload ?? {}`), for the identical reason.
+ */
+function asPayload(value: unknown): Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 /**
@@ -543,7 +908,7 @@ export function toRunModel(
  * Read tolerantly — a half-written story is listed as unreadable, never dropped
  * silently and never a reason to refuse to draw the page.
  */
-function loadPlan(loaded: LoadedRun): PlanModel | null {
+function loadPlan(loaded: LoadedRun, arcs: ReadonlyMap<string, StoryArc>): PlanModel | null {
   for (const phase of loaded.run.phases) {
     const dir = join(loaded.dir, phase.id);
     const hasWaves = existsSync(join(dir, WAVES_FILE));
@@ -564,6 +929,9 @@ function loadPlan(loaded: LoadedRun): PlanModel | null {
         unreadable.push(`${STORIES_DIR}/${name}`);
         continue;
       }
+      // A story the ledger never mentions has begun nothing: no attempt, no
+      // retries, no reopens. That is the honest empty arc, not a missing one.
+      const arc = arcs.get(story.id);
       stories.push({
         id: story.id,
         epic: story.epic,
@@ -572,6 +940,9 @@ function loadPlan(loaded: LoadedRun): PlanModel | null {
         status: story.status,
         dependsOn: story.depends_on,
         wave: scheduled.get(story.id) ?? null,
+        attempt: arc?.attempt ?? null,
+        reviewRetries: arc?.reviewRetries ?? 0,
+        reopens: arc?.reopens ?? [],
       });
     }
 

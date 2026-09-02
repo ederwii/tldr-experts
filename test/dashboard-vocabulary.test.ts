@@ -225,27 +225,30 @@ describe("the branch model the Build actually executed", () => {
     const run = onlyRun(root);
     expect(run.build?.branchModel).toBe("integration");
     expect(run.build?.epicBranches).toEqual(["epic/scoreboard", "epic/leaderboard"]);
-    const rendered = text(dashPlanSection(run));
+    const rendered = text(dashPlanSection(run, 2));
     expect(rendered).toContain("integration");
     expect(rendered).toContain("epic/scoreboard");
   });
 });
 
 describe("what the page claims it read", () => {
-  test("it does not list `events.jsonl` among the files it read", () => {
+  /**
+   * This test used to demand the OPPOSITE sentence, and was right to: until #85
+   * `buildModel` opened neither the ledger nor `budget.yml`, and the page claimed
+   * both as sources anyway, so a reader who trusted it could not tell an empty
+   * ledger from an unread one. The claim is what is under test, not the answer —
+   * #85 changed the code, so the sentence had to move with it.
+   */
+  test("the files it names are the files it opens", () => {
     const { root } = workspaceWith("260902-agentgate", AGENT_GATE_RUN);
     const model = buildModel(root, READ_AT);
-    // `buildModel` reads run.yml, handoff.md, questions.md, the Plan artefacts and
-    // the expert files. Nothing in it opens the ledger — measured 2026-09-01 — and
-    // the page said "generated from files on disk: run.yml, events.jsonl, …"
-    // anyway. Operator notes, per-attempt costs, story reopens and review retries
-    // are absent BECAUSE of that, and a reader who trusts the sentence cannot
-    // tell an empty ledger from an unread one.
     const rendered = text(dashFaqView(model));
-    expect(rendered).not.toContain("files on disk: run.yml , events.jsonl");
-    // Naming it is fine — naming it as a SOURCE is not. Say what is missing and
-    // which command has it.
-    expect(rendered).toContain("does not");
+    expect(rendered).toContain("events.jsonl");
+    expect(rendered).toContain("budget.yml");
+    // And it no longer disclaims the file it now reads.
+    expect(rendered).not.toContain("does not read");
+    // What it takes FROM the ledger is named, and so is what is still only in
+    // `replay` — a page that reads a file is not a page that shows all of it.
     expect(rendered).toContain("operator notes");
     expect(rendered).toContain("tldrx replay");
   });
