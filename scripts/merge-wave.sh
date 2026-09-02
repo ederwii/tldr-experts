@@ -12,6 +12,11 @@
 #   2. An assertion, between the gates and the push, that HEAD is still the commit the
 #      gates ran against. The lock prevents the race; the assertion makes it impossible
 #      to push a HEAD whose gates ran on a different tree even if the lock is bypassed.
+#   3. A `reference-transaction` guard, installed on every run (#89). The first two defend
+#      against another MERGE-WAVE; neither has anything to say about an agent typing
+#      `git reset --hard origin/main` into this same shared checkout, which is exactly what
+#      happened on 2026-09-02. See scripts/merge-guard.sh for what git lets it stop and
+#      what it demonstrably cannot.
 #
 # Exit codes: 1 dirty tree · 2 merge conflict · 3 red gate · 4 push failed
 #             5 HEAD moved during the gates · 6 gave up waiting for the lock
@@ -23,15 +28,31 @@ B="${1:?branch}"; M="${2:?message}"; R="$(git rev-parse --show-toplevel)"; cd "$
 # Inside the git dir, where it can never show up as dirt in the tree it is guarding.
 # --git-common-dir, not "$R/.git": in a linked worktree that path is a FILE, so `mkdir`
 # there could never succeed and every run would queue for an hour. The common dir is
-# also the right scope — every worktree of this repo pushes the same `main`.
-GITDIR="$(git rev-parse --git-common-dir 2>/dev/null || git rev-parse --git-dir)"
-case "$GITDIR" in /*) ;; *) GITDIR="$R/$GITDIR" ;; esac
-LOCK="$GITDIR/merge-wave.lock"
+# also the right scope — every worktree of this repo pushes the same `main`. That
+# resolution, and the rules for when an owner counts as dead, live in merge-lock.sh
+# because scripts/merge-guard.sh has to answer both questions the same way.
+MW_DIR="$(cd "$(dirname "$0")" && pwd)"
+[ -f "$MW_DIR/merge-lock.sh" ] || { echo "FAIL lock: $MW_DIR/merge-lock.sh is missing — nothing merged"; exit 6; }
+# shellcheck source=scripts/merge-lock.sh
+. "$MW_DIR/merge-lock.sh"
+mw_lock_paths || { echo "FAIL lock: cannot resolve this repository's git dir — nothing merged"; exit 6; }
+LOCK="$MW_LOCK"
+MARKER="$(mw_marker_path)"
 WAIT_S="${MW_LOCK_WAIT_S:-3600}"    # how long to queue behind another merge before giving up
-STALE_S="${MW_LOCK_STALE_S:-3600}"  # an owner this old is assumed dead
-POLL_S="${MW_LOCK_POLL_S:-2}"
+POLL_S="${MW_LOCK_POLL_S:-2}"       # MW_LOCK_STALE_S is read by mw_dead_owner in the library
+# Install the ref guard BEFORE queueing (#89). The lock stops another merge-wave; only the
+# guard stops another agent's raw `git reset --hard` in this same shared checkout, which is
+# what destroyed a merge commit mid-gate on 2026-09-02. Not fatal when it will not install:
+# an unguarded merge still beats no merge, and the refusal says so on stderr.
+bash "$MW_DIR/merge-guard.sh" --install; GUARD=$?
+[ "$GUARD" = 0 ] || echo "merge-wave: the ref guard did not install (exit $GUARD) — merging UNGUARDED" >&2
+# The token that tells THIS run's own git apart from a sibling's. Exported, so every git
+# child inherits it; generated before the wait loop, so no path through it leaves it unset.
+MW_LOCK_TOKEN="mw-$$-$(date +%s)-${RANDOM:-0}"
+export MW_LOCK_TOKEN
 HELD=0
-release() { if [ "$HELD" = 1 ]; then rm -rf "$LOCK"; fi; return 0; }
+# The marker goes with the lock, on every path out — including the INT/TERM traps below.
+release() { if [ "$HELD" = 1 ]; then rm -f "$MARKER" "$MARKER.tmp.$$"; rm -rf "$LOCK"; fi; return 0; }
 trap release EXIT
 # A signal that is not trapped kills bash WITHOUT running the EXIT trap, so an
 # interrupted merge would leave its lock behind. The stale rules below would break it
@@ -39,44 +60,56 @@ trap release EXIT
 trap 'release; exit 130' INT
 trap 'release; exit 143' TERM
 
-owner_of() { cat "$LOCK/owner" 2>/dev/null || true; }
-
-# "<pid> <host> <epoch>" — true when that owner is gone: same host and the pid is dead,
-# or the lock is older than STALE_S (the only signal available for another host).
-dead_owner() {
-  o="$1"
-  [ -n "$o" ] || return 0
-  pid=$(echo "$o" | cut -d' ' -f1); host=$(echo "$o" | cut -d' ' -f2); born=$(echo "$o" | cut -d' ' -f3)
-  case "$born" in ''|*[!0-9]*) born=0 ;; esac
-  if [ "$born" -gt 0 ] && [ $(( $(date +%s) - born )) -gt "$STALE_S" ]; then return 0; fi
-  if [ "$host" = "$(hostname)" ] && [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then return 0; fi
-  return 1
-}
-
 waited=0; noted=0
 until mkdir "$LOCK" 2>/dev/null; do
   # mkdir failed and there is no lock: the PATH is unusable, not contended. Say so now —
   # queueing for an hour behind a lock that cannot exist is the worst of both worlds.
   [ -d "$LOCK" ] || { echo "FAIL lock: cannot create $LOCK — nothing merged"; exit 6; }
   if [ "$waited" -ge "$WAIT_S" ]; then
-    echo "FAIL lock: another merge-wave has held $LOCK for ${waited}s (owner: $(owner_of)) — nothing merged"; exit 6
+    echo "FAIL lock: another merge-wave has held $LOCK for ${waited}s (owner: $(mw_owner_of)) — nothing merged"; exit 6
   fi
-  o="$(owner_of)"
+  o="$(mw_owner_of)"
   if [ "$noted" -eq 0 ] || [ $(( waited % 60 )) -lt "$POLL_S" ]; then
     echo "merge-wave: waiting for another merge in this checkout (owner: ${o:-unknown}, ${waited}s so far)" >&2
     noted=1
   fi
-  if dead_owner "$o"; then
+  if mw_dead_owner "$o"; then
     # Re-read after a beat: only break a lock whose owner line has not changed, so two
     # waiters cannot tear down a lock a third one has just legitimately taken. The beat
     # counts against the budget like any other wait — no path through this loop is free.
     sleep 1; waited=$(( waited + 1 ))
-    if [ "$(owner_of)" = "$o" ]; then rm -rf "$LOCK"; fi
+    if [ "$(mw_owner_of)" = "$o" ]; then rm -rf "$LOCK"; fi
     continue
   fi
   sleep "$POLL_S"; waited=$(( waited + POLL_S ))
 done
 HELD=1
+# `owner` is what everyone else polls for — a waiting merge-wave, and this run's own tests.
+# So it is published LAST, after the token the guard recognises this run by and after the
+# marker a human reads: by the time anything can see this lock as taken, both are complete.
+printf '%s\n' "$MW_LOCK_TOKEN" > "$LOCK/token"
+# The lock lives inside the git dir where nobody trips over it. The marker is the same fact
+# where somebody WILL: at the root of the shared checkout, gitignored so it cannot dirty the
+# tree it is guarding, and removed by release() on every path out.
+#
+# Written to a temp file and MOVED into place. A reader that catches a `> "$MARKER"` block
+# halfway through gets a marker missing the very line that tells them what to do instead —
+# measured, as a flaky test, before it could be measured as a confused agent.
+if {
+  echo "MERGE WAVE IN PROGRESS — do not run git in this checkout."
+  echo
+  echo "branch: $B"
+  echo "owner:  pid $$ on $(hostname), since $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  echo "lock:   $LOCK"
+  echo
+  echo "Agents: work in your OWN worktree and merge ONLY through scripts/merge-wave.sh."
+  echo "Never 'git reset --hard' or 'git checkout -B main' in this shared checkout."
+} > "$MARKER.tmp.$$"; then
+  mv -f "$MARKER.tmp.$$" "$MARKER"; MV=$?
+  [ "$MV" = 0 ] || echo "merge-wave: could not publish $MARKER (mv exit $MV) — the wave is unadvertised" >&2
+else
+  echo "merge-wave: could not write $MARKER.tmp.$$ — the wave is unadvertised, merging anyway" >&2
+fi
 printf '%s %s %s\n' "$$" "$(hostname)" "$(date +%s)" > "$LOCK/owner"
 
 # --- merge, gate, push --------------------------------------------------------

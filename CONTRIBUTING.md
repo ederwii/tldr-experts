@@ -49,6 +49,41 @@ Maintainers merge internal wave branches with `scripts/merge-wave.sh`, which tak
 the shared checkout and re-runs every gate before pushing. That script is for the maintainer's
 own multi-agent workflow; a fork's PR does not use it, and you do not need it.
 
+### The shared checkout is not yours (agents, read this one twice)
+
+Several agents work this repository at once, each in its own `git worktree`, all sharing one
+checkout and one `main`. The rule, verbatim:
+
+> **Agents touch the shared checkout ONLY through `scripts/merge-wave.sh`. Every other piece
+> of work happens in your own worktree. Never `git reset --hard` and never
+> `git checkout -B main` in the shared checkout.**
+
+This is not style. On 2026-09-02 one agent ran `git reset --hard origin/main` in the shared
+checkout while another's merge-wave gates were running; the reflog reads
+`reset: moving to origin/main`, and a merge commit stopped being reachable from `main`
+mid-gate. The gated-HEAD assertion caught the aftermath and refused to push
+([#89](https://github.com/ederwii/tldr-experts/issues/89)).
+
+Since then `merge-wave.sh` installs a `reference-transaction` hook
+(`scripts/merge-guard.sh`) that makes git itself refuse to move any ref in the shared
+checkout while a wave holds the lock, and drops a `.MERGE-WAVE-IN-PROGRESS` marker at the
+repo root so the wave is visible to whoever is standing in it. Install it by hand with
+`bash scripts/merge-guard.sh --install`; ask it a question with
+`bash scripts/merge-guard.sh --check`.
+
+The guard buys less than it looks like it buys, and the difference matters:
+
+- It saves the **commit**, not the **working tree**. `git reset --hard` writes your files
+  before it opens a ref transaction, so the hook can refuse the ref move — measured, HEAD
+  unmoved — while the files on disk have already been rewritten.
+- It is a hook in a checkout. `git -c core.hooksPath=…`, deleting the hook, or exporting
+  `MW_LOCK_TOKEN` all defeat it. It is built against accidents, not against intent.
+- Your own worktree stays fully yours during a wave. Only the shared checkout, and
+  `refs/heads/main` from anywhere, are refused.
+
+So the convention above is still the thing that keeps this repository working. The guard
+only makes the most expensive way of breaking it fail loudly instead of silently.
+
 Releases are `scripts/release.sh X.Y.Z --tag <alpha|beta|stable>` and nothing else — a
 PreToolUse hook denies hand-made `git tag` and `npm publish`. See `docs/RELEASING.md`.
 
