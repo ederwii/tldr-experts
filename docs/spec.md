@@ -712,6 +712,39 @@ nothing reached `competencies.yml`, the ledger recorded the $5.15, and the knowl
 the agent had already written was quarantined rather than left where an accepted one lives
 (it would in fact have validated — 111 sourced items, 21 distinct files, level 5).
 
+**The pre-start check, and the default `--max-usd` per mode (#96).** `--max-usd` defaults to
+**$2.00 in light mode and $3.00 in full**, because full mode spawns TWO sub-agents on a code expert
+and splits the ceiling between them (`core/training/Training.ts`). $3.00 is $1.50 a pass, ~2x the
+per-pass midpoint of the measured band below, which is what leaves room for the one repair round
+that comes out of the same share.
+
+*Measured, and the only cost figures this framework quotes about training:* a full run costs
+**$1.21–$1.60 end to end on a mid model** — two ledger lines off `training.jsonl` on
+`aparece-platform` ($1.21 platform, $1.29 abstractions,
+`docs/audits/2026-08-29/experts-knowledge.md` §E) and the top of the band the owner reports in #96.
+One sub-agent pass is therefore ~$0.70 on a mid model, ~$1.76 on a premium tier (opus lists at 2.5x
+sonnet, `core/budget/modelPrices.ts`) and ~$0.35 on haiku.
+
+Before anything is spawned, `expert train` states **which model the sub-agent will get, what tier
+that is, and where the answer came from** — `--model`, `$ANTHROPIC_MODEL`, or a `model:` key in
+`.claude/settings.local.json` / `.claude/settings.json` / `~/.claude/settings.json`
+(`core/training/ambientModel.ts`; the precedence is `[assumption]`, the claude CLI's, not something
+this repo measures). When nothing on the box says, it says THAT rather than guessing a tier.
+
+It then **REFUSES — exit `2`, nothing spawned, nothing spent — when the per-sub-agent share cannot
+reach what one pass on that tier costs AND the ceiling is the default one.** On the shipped full
+default that is $1.50 a pass against $1.76 for a premium tier. The refusal names both remedies:
+`--model sonnet`, or an explicit `--max-usd <n>`. An **explicit `--max-usd` is never refused** — the
+operator has looked at the number — it warns in one line and proceeds. A role expert's full run
+spawns one sub-agent and keeps the whole ceiling, so the same arithmetic lets it through, and a
+model no price table knows yields no projection and therefore no refusal.
+
+*Why a refusal rather than a bigger default:* `--max-budget-usd` is a stop after the turn, so a
+higher ceiling cannot make a premium turn cheaper — it only raises what one overshooting turn may
+lose. Live 2026-09-02, before this check existed: `expert train … --mode full` inherited `fable-5`
+against the then-$2.00 default, was handed $1.00 for its code pass, died at **$1.31** with nothing
+written to `competencies.yml`.
+
 ### 2.7 `tldrx-work/<run>/<phase>/questions.md`
 
 The Interview artefact and human interface of the loop; only unknowns become questions. The file is the contract, the
@@ -1613,7 +1646,7 @@ spends nothing or there is no `.tldrx/` at all: those are correct negatives, not
 | `no-re-ask` | PreToolUse (`Write\|Edit`) | `tool_input.file_path` matches `tldrx-work/**/questions.md` | Tokenise each new question heading + `area`; compare against LIVE `facts.yml` rows (neither retired nor superseded); Jaccard ≥ 0.6 on ≥4-char tokens ⇒ hit `[assumption]` | Denies the write, names the matching fact |
 | `answer-capture` | PostToolUse + FileChanged | `tldrx-work/**/questions.md` | Find blocks with `status: open` and a non-empty `[Answer]:` capture | Never blocks; writes footer + `facts.yml` + `question.answered`; echoes one line to stdout as context |
 | `DoD-gate` | PreToolUse (`Write\|Edit`) | would-be content of `tldrx-work/**/stories/*.md` sets `status: done` | Re-run every command in the story's fenced ```dod block, in its repo, with `stage.yml timeout_s`; all must exit 0. **Only a command byte-equal to a `workspace.yml` command runs, argv-split with no shell** | Denies if any command fails, is not on the allowlist, needs a shell, or the block is missing (this hook is not <50 ms by design) |
-| `budget-gate` | PreToolUse (`Bash`) | `tool_input.command` matching `^(claude -p\|tldrx next\|tldrx run auto\|tldrx expert train\|tldrx seed triage)` | `spent + estimate > phase ceiling` (or run ceiling) and `on_exceed: block`. Estimate: the **remaining work** for `next` (below); `--max-usd` else the same figure for `run auto`; $2.00 / $1.00 defaults for `train` / `triage` | Denies the spawn; appends `budget.blocked` |
+| `budget-gate` | PreToolUse (`Bash`) | `tool_input.command` matching `^(claude -p\|tldrx next\|tldrx run auto\|tldrx expert train\|tldrx seed triage)` | `spent + estimate > phase ceiling` (or run ceiling) and `on_exceed: block`. Estimate: the **remaining work** for `next` (below); `--max-usd` else the same figure for `run auto`; $2.00 light / $3.00 `--mode full` for `train` (#96), $1.00 for `triage` | Denies the spawn; appends `budget.blocked` |
 | `session-start-status` | SessionStart | always | Read the newest non-terminal `run.yml`; when several are open, list them all first. Then build the `tldrx status` report (§3) | Never blocks; injects a 3-line "where we are" via `additionalContext`, then up to 3 lines of the pending report — a headline plus as many items as fit. Nothing pending AND no run ⇒ no output at all |
 | `statusline` | statusLine | always | Render from the statusLine JSON + `run.yml` | Output only |
 

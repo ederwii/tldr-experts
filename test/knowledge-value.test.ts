@@ -73,7 +73,9 @@ function fakeClaude(ws: TrainingWorkspace, plans: readonly Record<string, string
 function train(ws: TrainingWorkspace, overrides: Partial<TrainOptions> = {}) {
   return runTraining({
     root: ws.root, expert: EXPERT, area: AREA, mode: "light", run: "headless",
-    actor: "alan", at: TRAIN_AT, now: TRAIN_NOW, timeoutMs: 20_000, ...overrides,
+    actor: "alan", at: TRAIN_AT, now: TRAIN_NOW, timeoutMs: 20_000,
+    // Hermetic (#96): never read the developer's own `~/.claude/settings.json`.
+    ambientModel: null, ...overrides,
   });
 }
 
@@ -738,6 +740,7 @@ describe("retro.md carries the gates back to the experts", () => {
     const trained = await runTraining({
       root: ws.root, expert: ROLE, area: ROLE, mode: "full", run: "headless",
       actor: "alan", at: TRAIN_AT, now: TRAIN_NOW, timeoutMs: 20_000,
+      ambientModel: null,
     });
     expect(trained.code).toBe(0);
 

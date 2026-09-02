@@ -20,6 +20,7 @@
  * failure rejects exactly as the first one used to.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, relative } from "node:path";
 import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
 import { loadWorkspace, toSrcContext, factsPath } from "../../hooks/lib/workspace.ts";
@@ -34,9 +35,11 @@ import type { EffortLevel } from "../schemas/stage.ts";
 import type { SrcContext } from "../text/srcToken.ts";
 import type { CompetencyEvidence } from "../init/competencyLevel.ts";
 import {
-  CODE_TASK, DEFAULT_TRAIN_EFFORT, DEFAULT_TRAIN_USD, MIN_TRAIN_USD, RUNS_TASK,
+  CODE_TASK, DEFAULT_TRAIN_EFFORT, MIN_TRAIN_USD, RUNS_TASK, defaultTrainUsd,
   fromRunsRelPath, knowledgeRelPath, partialOf, type TrainingMode, type TrainingTask,
 } from "./Training.ts";
+import { trainPreflight, type AmbientModel } from "./trainPreflight.ts";
+import { ambientModelFiles, resolveAmbientModel } from "./ambientModel.ts";
 import {
   LIGHT_SHAPE, RUNS_SHAPE, codeEvidence, describeKnowledgeIssue, describeKnowledgeIssues,
   knowledgeErrors, knowledgeWarnings, parseKnowledgeFile, runEvidence,
@@ -72,6 +75,13 @@ export interface TrainOptions {
   readonly run: TrainingRunMode;
   readonly maxUsd?: number;
   readonly model?: string | null;
+  /**
+   * What the sub-agent inherits when `--model` is absent. `undefined` ⇒ resolve
+   * it from this box (`ambientModel.ts`); `null` ⇒ there is none and the
+   * pre-start line says so. Tests pass it explicitly so no run's behaviour
+   * depends on the developer's own `~/.claude/settings.json`.
+   */
+  readonly ambientModel?: AmbientModel | null;
   /** `--effort`. Undefined ⇒ `DEFAULT_TRAIN_EFFORT`. */
   readonly effort?: EffortLevel | null;
   readonly yolo?: boolean;
@@ -93,9 +103,27 @@ export interface TrainOutcome {
    * about the input.
    */
   readonly warnings?: readonly string[];
+  /**
+   * The lines said BEFORE the money, already written to stderr by the time this
+   * returns (`trainPreflight.ts`). Returned as well as printed so a test can
+   * assert on the sentence an operator was shown, not only on the exit code.
+   */
+  readonly preflight?: readonly string[];
 }
 
+/**
+ * The pre-start lines are collected into `said` and stapled onto whatever
+ * outcome the run reaches, whichever of its two dozen exits it takes. A thin
+ * wrapper rather than a `preflight:` on every `return`: there is exactly one
+ * place that decides them, and one place that attaches them.
+ */
 export async function runTraining(options: TrainOptions): Promise<TrainOutcome> {
+  const said: string[] = [];
+  const outcome = await trainWithPreflight(options, said);
+  return said.length === 0 ? outcome : { ...outcome, preflight: said };
+}
+
+async function trainWithPreflight(options: TrainOptions, said: string[]): Promise<TrainOutcome> {
   const now = options.now ?? new Date(options.at);
   const expert = loadExpert(options.root, options.expert, now);
   const dir = expertDir(options.root, options.expert);
@@ -118,7 +146,7 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
   if (refusal !== null) return fail(EXIT_USAGE, refusal);
 
   // --- money, before anything is read --------------------------------------
-  const ceiling = options.maxUsd ?? DEFAULT_TRAIN_USD;
+  const ceiling = options.maxUsd ?? defaultTrainUsd(options.mode);
   // A role expert in full mode runs the runs pass alone — one sub-agent, so the
   // whole ceiling is its share rather than half of it.
   const agents = options.mode === "full" && !isRole ? 2 : 1;
@@ -131,6 +159,34 @@ export async function runTraining(options: TrainOptions): Promise<TrainOutcome> 
   }
   const share = round2(Math.max(MIN_TRAIN_USD, ceiling / agents));
   const effort: EffortLevel = options.effort ?? DEFAULT_TRAIN_EFFORT;
+
+  // Which model this will actually use, what that tier costs, and whether the
+  // ceiling in force was ever measured for it — said before the spawn, and a
+  // refusal when the combination provably cannot fit (#96). Only the headless
+  // path spawns: `--prepare` hands the ceiling to the operator's own session and
+  // `--commit` is reading a result that has already been paid for.
+  const preflight = trainPreflight({
+    mode: options.mode,
+    agents,
+    ceilingUsd: ceiling,
+    ceilingExplicit: options.maxUsd !== undefined,
+    model: options.model ?? null,
+    ambient: options.ambientModel === undefined
+      ? resolveAmbientModel({
+        env: process.env,
+        home: homedir(),
+        files: ambientModelFiles(options.root, homedir()),
+      })
+      : options.ambientModel,
+    spawns: options.run === "headless",
+  });
+  if (preflight.refusal !== null) return fail(EXIT_GATE_REFUSED, preflight.refusal);
+  // Written here rather than returned only at the end: a line an operator reads
+  // after the money has been spent is a receipt, not a warning.
+  for (const line of preflight.notice) {
+    said.push(line);
+    process.stderr.write(`${line}\n`);
+  }
 
   // --- the deterministic pre-pass ------------------------------------------
   const workspace = loadWorkspace(options.root);

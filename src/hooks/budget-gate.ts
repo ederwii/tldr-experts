@@ -46,9 +46,18 @@ import { PROJECT_WORK_DIR } from "../core/paths.ts";
 const SPAWN_RE = /^(claude -p|tldrx next|tldrx run auto|tldrx expert train|tldrx seed triage)\b/;
 const RUN_ARG_RE = /--run[= ]([\w.-]+)/;
 
-/** The default ceiling each non-`next` spender uses when it is given no flag. */
+/**
+ * The default ceiling each non-`next` spender uses when it is given no flag.
+ *
+ * `expert train` has TWO, because full mode costs what two sub-agents cost
+ * (`core/training/Training.ts`, #96). Duplicated here rather than imported: this
+ * hook runs as its own process off a PreToolUse payload and must not drag the
+ * training module's filesystem imports in. The tests pin the two files together.
+ */
 const DEFAULT_TRAIN_USD = 2.0;
+const DEFAULT_FULL_TRAIN_USD = 3.0;
 const DEFAULT_TRIAGE_USD = 1.0;
+const FULL_MODE_RE = /--mode[= ]full\b/;
 const MAX_USD_RE = /--max-usd[= ]([0-9]+(?:\.[0-9]+)?)/;
 const MAX_BUDGET_RE = /--max-budget-usd[= ]([0-9]+(?:\.[0-9]+)?)/;
 
@@ -291,7 +300,8 @@ function estimateFor(command: string, stageBudget: number | null): number {
     return Number.isFinite(flagged) ? flagged : (stageBudget ?? 0);
   }
   if (/^tldrx expert train\b/.test(command)) {
-    return Number.isFinite(flagged) ? flagged : DEFAULT_TRAIN_USD;
+    if (Number.isFinite(flagged)) return flagged;
+    return FULL_MODE_RE.test(command) ? DEFAULT_FULL_TRAIN_USD : DEFAULT_TRAIN_USD;
   }
   if (/^tldrx seed triage\b/.test(command)) {
     return Number.isFinite(flagged) ? flagged : DEFAULT_TRIAGE_USD;
