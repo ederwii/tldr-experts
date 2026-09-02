@@ -89,6 +89,24 @@ number, and has meant "METERED dollars, a lower bound when `unmeteredTasks > 0`"
 A consumer that read it as a total was wrong before this wave and is wrong by exactly the
 same amount after it; what changed is that the page now says how big the bound is.
 
+- **`scripts/merge-wave.sh` now gates the documentation site too (#114).** The wave ran
+  typecheck, `bun test`, `build` and the runtime-seam grep, pushed, and left the site to
+  `.github/workflows/docs.yml` — *after* the merge. That is a build with two failure modes
+  the test suite cannot see: `ignoreDeadLinks: false` in `docs-site/.vitepress/config.mts`
+  is deliberate, so a page somebody moved breaks it, and `docs-site/package.json` runs
+  `gen-changelog.ts` and `gen-demo.ts` before VitePress, either of which can throw on input
+  no test feeds it. Both used to land on `main` GREEN and go red as a failed **deploy** —
+  `main` broken and the published site stale, the worst of both. `bun run docs:build` is now
+  the fifth gate, on the same tree as the other four, and a red one is `docs=1` in the FAIL
+  line and nothing pushed.
+  - **It blocks, and the cost is why that was affordable.** Measured 2026-09-02 on this
+    repo, warm: 4 s wall — VitePress 2.91 s plus a `bun install --frozen-lockfile` in
+    `docs-site/` that installs 126 cached packages in 165 ms — against a wave whose
+    `bun test` alone is ~440 s. `git status --porcelain` is empty before AND after it, so
+    the new gate cannot leave dirt that fails the NEXT wave's dirty-tree guard: everything
+    it writes (`.vitepress/dist/`, `.vitepress/cache/`, `reference/changelog.md`,
+    `public/`) was already ignored.
+
 ### Changed
 
 - The staleness field is spelled `lastEventFrom`, not `lastEventSource`. The model is
@@ -99,6 +117,24 @@ same amount after it; what changed is that the page now says how big the bound i
   right; the name was wrong.
 
 ### Fixed
+
+- **The merge-wave suite no longer plants its #95 fixture at a machine-global path (#113).**
+  `b8d1fcb` gave each invocation a private `$TMPDIR`, so a run's own log root stopped being
+  a shared namespace — and the fixture that plants a *foreign* wave's kept log kept writing
+  to the constant `mw-999999` in the machine's tmpdir. Every concurrent copy of
+  `test/merge-wave.test.ts` planted that one directory and, in its `finally`, deleted it, so
+  the first process to finish removed the directory its siblings were still about to assert
+  on. Measured 2026-09-02 at `965eb54`, four concurrent runs of that file: **9 failures in
+  12** targeted runs and **5 in 8** whole-file runs, every one of them
+  `expect(existsSync(foreign)).toBe(true)` receiving false. After the fix, on the same box
+  and the same load: **0 in 12** and **0 in 8**.
+  - The plant is still `mw-<pid>`, still directly in the shared tmpdir — both load-bearing,
+    because a regression to the pre-#95 machine-global scan has to keep finding it — but the
+    pid is now derived from the planting process's own, in `test/fixtures/foreignWaveLog.ts`.
+    It is a fixture module rather than an inline helper so the guard can be a two-PROCESS
+    measurement: a child imports the same function and prints the path it would choose, and
+    the test asserts the two differ. A test that asks one process whether its own name is
+    unique can only ever say yes.
 
 - **A docs-scope story bundle is no longer handed to a developer with nothing to write, no
   requirements it can open, and its core acceptance criterion deleted (#111).**
