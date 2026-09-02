@@ -36,11 +36,13 @@ dist/
 # The framework's own repo needs the same line it writes into a user's workspace.
 .claude/settings.json.bak-tldrx-*
 
-# docs-site (the public VitePress site). Its build output and the changelog page it
-# generates from CHANGELOG.md at build time — never a second copy anyone maintains.
+# docs-site (the public VitePress site). Its build output and the two pages it generates
+# at build time — the changelog, from CHANGELOG.md, and the demo dashboard, rendered from
+# the test fixtures by scripts/gen-demo.ts. Never a second copy anyone maintains.
 docs-site/.vitepress/dist/
 docs-site/.vitepress/cache/
 docs-site/reference/changelog.md
+docs-site/public/
 
 # `scripts/merge-wave.sh` advertises a held lock here, at the root of the shared
 # checkout, so an agent standing in it can SEE that a merge is in flight. It is removed

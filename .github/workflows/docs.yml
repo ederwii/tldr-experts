@@ -6,6 +6,12 @@
 # rather than kept as a second copy — so a release note lands on the site without anyone
 # editing docs-site/.
 #
+# It includes src/core/dashboard/ and the two fixtures for the same reason, one step further:
+# /demo/ is a REAL `tldrx dashboard` page, rendered at build time by scripts/gen-demo.ts over
+# the repo's synthetic fixtures (#106). If the renderer or the fixtures move and this workflow
+# does not run, the site keeps serving a dashboard the product no longer draws — a stale
+# screenshot with none of the honesty of one. So a change to either redeploys the site.
+#
 # Pages must be set to "GitHub Actions" as its source. `configure-pages` tries to do that
 # itself (`enablement: true`); if the token cannot, one click in Settings -> Pages fixes it
 # and the deploy job stops failing.
@@ -18,6 +24,10 @@ on:
       - "docs-site/**"
       - "CHANGELOG.md"
       - ".github/workflows/docs.yml"
+      # The demo page is rendered from these on every deploy — see the note above.
+      - "src/core/dashboard/**"
+      - "test/fixtures/views/**"
+      - "test/fixtures/chain/**"
   workflow_dispatch:
 
 permissions:
@@ -45,6 +55,13 @@ jobs:
       - uses: actions/configure-pages@v5
         with:
           enablement: true
+      # Root deps, not only the site's: scripts/gen-demo.ts renders the demo through
+      # src/core/dashboard/, whose runtime seam imports `yaml`. Module resolution walks up
+      # from src/, so docs-site/node_modules is not on that path — without this step bun
+      # would silently auto-install the package at run time, which is a network fetch this
+      # build never declared. Measured 2026-09-02: `import "yaml"` from src/ fails outright
+      # once the root node_modules is gone.
+      - run: bun install --frozen-lockfile
       - run: bun install --frozen-lockfile
         working-directory: docs-site
       - run: bun run build
