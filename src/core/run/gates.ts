@@ -251,6 +251,14 @@ export interface RevokeOutcome {
   readonly signedBy: string;
   /** When it was signed. */
   readonly signedAt: string | null;
+  /**
+   * What the withdrawn signature had rested on, when it rested on anything
+   * (issue #123). It has just been cleared from `run.yml` and written onto the
+   * `gate.revoked` event; it is returned so the CLI can say where the note it
+   * was signed over still is, rather than leaving the operator to guess that
+   * clearing a pointer did not delete a file.
+   */
+  readonly signedOver: RunGateEvidence | null;
   /** `<phase>/<stage>` of every later stage now marked stale. */
   readonly staled: readonly string[];
 }
@@ -276,8 +284,32 @@ export interface RevokeOutcome {
  *   - no cost is refunded and no task is deleted. Money spent stays on the record
  *     (spec §5).
  *
- * One `gate.revoked` event carries who signed the original, who took it back, and
- * what went stale.
+ * One `gate.revoked` event carries who signed the original, who took it back,
+ * what went stale — and, when the withdrawn signature rested on an evidence note,
+ * what it rested on (issue #123).
+ *
+ * ## Why the gate mapping is emptied and the event is not (issue #123)
+ *
+ * `run.yml` is STATE — the resume point, read as a description of how things are
+ * now. `events.jsonl` is HISTORY — append-only, read as a description of what
+ * happened. A revoked gate carrying `evidence` said both "nobody has signed this"
+ * (`status: pending`, `by: null`) and "here is what the signature rested on", in
+ * one mapping, and `replay` drew the counts of a withdrawn signature under a gate
+ * the same file said was open.
+ *
+ * So everything that DESCRIBED the signature leaves the mapping together — `by`,
+ * `at`, `executed_by`, `authority` and `evidence` — and the evidence rides onto
+ * the `gate.revoked` event beside `signed_by`/`signed_at`, where the envelope's
+ * own actor and timestamp say who took it back and when. Nothing is destroyed:
+ * the committed note stays exactly where it was, under
+ * `<phase>/gate-evidence/<stage>.md`.
+ *
+ * A `revoked:` trail kept ON the gate was the alternative, and it was refused
+ * because it grows. A gate may be approved, revoked, re-approved and revoked
+ * again, so the state file would accumulate a list of withdrawn signatures —
+ * which is what the append-only log is for — and every reader would have to learn
+ * a "withdrawn" mode for a block whose only truthful reading in `run.yml` is
+ * "current".
  */
 export function revoke(store: RunStore, ctx: GateContext, target: string): RevokeOutcome {
   if (ctx.note.trim() === "") {
@@ -292,6 +324,7 @@ export function revoke(store: RunStore, ctx: GateContext, target: string): Revok
   }
   const signedBy = entry.stage.gate.by ?? "unknown";
   const signedAt = entry.stage.gate.at;
+  const signedOver = entry.stage.gate.evidence ?? null;
   const later = stagesAfter(store.run, entry.phase.id, entry.stage.id)
     .filter((e) => e.stage.status !== "pending" || e.stage.tasks.length > 0)
     .map((e) => `${e.phase.id}/${e.stage.id}`);
@@ -304,13 +337,17 @@ export function revoke(store: RunStore, ctx: GateContext, target: string): Revok
       stale: undefined,
       // `by: null` says nobody has signed this gate. An `executed_by` left beside
       // it would be a second, contradicting claim about the same fact, so the
-      // attribution goes with the signature it described (#122).
+      // attribution goes with the signature it described (#122) — and so does
+      // `evidence`, which is what that signature rested on (#123). What leaves
+      // the mapping is not lost: it is on the `gate.revoked` event below, and the
+      // note itself never moved off disk.
       gate: {
         ...stage.gate,
         status: "pending",
         by: null,
         at: null,
         note: ctx.note,
+        evidence: undefined,
         executed_by: undefined,
         authority: undefined,
       } satisfies RunGate,
@@ -333,12 +370,17 @@ export function revoke(store: RunStore, ctx: GateContext, target: string): Revok
     note: ctx.note,
     signed_by: signedBy,
     signed_at: signedAt,
+    // Only when the withdrawn signature HAD one. A human or auto gate rests on no
+    // note, and an `evidence: null` there would be a key claiming the record
+    // knows something it does not — every `gate.revoked` written before #123
+    // stays shape-identical.
+    ...(signedOver === null ? {} : { evidence: { ...signedOver } }),
     staled: later,
   }));
   store.save();
   return {
     stage: entry.stage.id, phase: entry.phase.id, note: ctx.note,
-    signedBy, signedAt, staled: later,
+    signedBy, signedAt, signedOver, staled: later,
   };
 }
 

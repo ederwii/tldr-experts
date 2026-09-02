@@ -25,7 +25,8 @@ import { whatIsWaiting, type Waiting } from "../run/runStatus.ts";
 import { questionsCard } from "../run/decisionCards.ts";
 import { renderDecisionCard } from "../ui/decisionCard.ts";
 import { isMovable } from "../run/waiting.ts";
-import type { RunFile } from "../run/RunFile.ts";
+import { describeGateSignature } from "../run/gateAuthority.ts";
+import type { RunFile, RunGate } from "../run/RunFile.ts";
 import type { PendingItem } from "./PendingItem.ts";
 
 /** The marker on the first run a human could actually move. */
@@ -175,26 +176,69 @@ function unreadableItem(root: string): PendingItem | null {
 const AUTO = "auto";
 
 /**
- * Which gates the machine signed, and which stages a revocation left behind.
+ * Did a MACHINE close this gate? (issue #124)
+ *
+ * The selector used to be `by === "auto"`, which catches every facilitator-closed
+ * gate and no agent-closed one: an `agent` gate records the evidence note's
+ * `by:`, which is the OPERATOR account the agent was running as — a person's
+ * name. Measured on run `260902-discovery-pipeline-map`, that gate reads
+ * `by: alanmartinez`, so a report whose whole job is naming the gates no person
+ * evaluated counted it as human-signed and never offered the revoke.
+ *
+ * With #122's `executed_by` the question is answered directly, off the field
+ * written on every gate `approve` closes. It asks `!== "human"` rather than
+ * naming `agent` and `auto`: a kind this version has not heard of is a kind
+ * nobody has shown to be a person, and listing the machines by name is exactly
+ * how the `agent` case went missing the first time.
+ *
+ * `by === "auto"` stays as the UNION member, not as a replacement: a gate signed
+ * before #122 has no `executed_by`, and there it is the only signal there is.
+ */
+function closedByMachine(gate: RunGate): boolean {
+  const executed = gate.executed_by;
+  if (executed !== undefined) return executed.type !== "human";
+  return gate.by === AUTO;
+}
+
+/**
+ * Which gates a machine closed, and which stages a revocation left behind.
  *
  * `by: auto` used to live only in run.yml, the event log and `run status` — three
- * places nobody glances at (2026-08-29 audit, §B). A stage the facilitator
- * approved is exactly the one worth a second look, so this report names them and
- * hands over the command that takes one back.
+ * places nobody glances at (2026-08-29 audit, §B). A stage no person evaluated is
+ * exactly the one worth a second look, so this report names them and hands over
+ * the command that takes one back.
+ *
+ * The naming goes through `describeGateSignature` (#122), the one renderer
+ * `run status`, `replay` and the dashboard already share, so a fourth reading of
+ * one fact cannot drift from the other three — and a record with no `executed_by`
+ * still prints the bare `by` it always printed.
  */
 function machineSignedDetails(run: RunFile): readonly string[] {
   const stages = run.phases.flatMap((phase) => phase.stages.map((stage) => ({ phase, stage })));
-  const auto = stages.filter((e) => e.stage.gate.status === "approved" && e.stage.gate.by === AUTO);
+  const machine = stages.filter((e) => e.stage.gate.status === "approved" && closedByMachine(e.stage.gate));
   const stale = stages.filter((e) => e.stage.stale === true);
   const details: string[] = [];
-  if (auto.length > 0) {
-    const named = auto.map((e) => `${e.phase.id}/${e.stage.id}`).join(", ");
-    const first = auto[0];
+  if (machine.length > 0) {
+    const named = machine
+      .map((e) => `${e.phase.id}/${e.stage.id} signed by ${describeGateSignature(e.stage.gate)}`)
+      .join(", ");
+    const first = machine[0];
     details.push(
-      `${auto.length} gate(s) signed \`by: auto\`, not by a person — ${named}. `
+      `${machine.length} gate(s) closed by a machine, not by a person — ${named}. `
       + `Take one back with \`tldrx reject --run ${run.run} `
       + `--stage ${first?.phase.id ?? ""}/${first?.stage.id ?? ""} --note "<why>"\``,
     );
+    // Only when one of them is an agent gate. "signed `by: auto`, not by a
+    // person" was true of the facilitator and false here: the record DOES carry a
+    // person's name, and the thing worth saying is that the person did not do the
+    // checking. A reader who opens run.yml, sees `by: alanmartinez` and is told
+    // no person signed it needs that sentence or the report reads as broken.
+    if (machine.some((e) => e.stage.gate.executed_by?.type === "agent")) {
+      details.push(
+        "an `agent` gate is signed under the operator account the agent ran as, so the name on it "
+        + "is not the entity that did the checking — `by:` there is a person who did not review the stage",
+      );
+    }
   }
   if (stale.length > 0) {
     details.push(

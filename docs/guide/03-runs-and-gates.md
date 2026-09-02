@@ -498,8 +498,51 @@ REVOKED 02-how/contracts — it had been auto-approved by the facilitator at 202
 moves back to that stage, one `gate.revoked` is appended carrying `signed_by`, and later
 stages that had run are marked `stale: true` — their files stay on disk, they stop counting
 as current. Nothing is deleted and no cost is refunded. It is the one verb that may reopen
-a FINISHED run. `tldrx status` names every gate signed `by: auto` and the status line
-carries `att` / `auto:N` / `stale:N`, in that order and only when each is true.
+a FINISHED run. `tldrx status` names every gate a MACHINE closed — the facilitator's and an
+agent's alike — and the status line carries `att` / `auto:N` / `stale:N`, in that order and
+only when each is true.
+
+```
+1 gate(s) closed by a machine, not by a person — 01-what/alpha signed by agent alanmartinez
+(delegated by alanmartinez, policy: agent). Take one back with `tldrx reject --run 260902-demo
+--stage 01-what/alpha --note "<why>"`
+an `agent` gate is signed under the operator account the agent ran as, so the name on it is not
+the entity that did the checking — `by:` there is a person who did not review the stage
+```
+
+The second line is there only when one of them is an agent gate. It is the one closure kind
+where `run.yml` carries a person's name — the operator account the agent ran as — so a reader
+who opens the file, sees `by: alanmartinez` and is told no person signed it needs the sentence
+or the report reads as broken. The selector is the executor's KIND, never the policy: a person
+who approves an `agent`-gated stage themselves is a human acting directly and is not listed.
+
+Everything that described the signature goes with it: `by`, `at`, and — on a gate an agent
+closed — `executed_by`, `authority` and `evidence`. A gate nobody has signed rests on
+nothing, and a `pending` gate that still recorded what its signature was closed over made
+`tldrx replay` draw the counts of a withdrawn signature under a gate the same file said was
+open. None of it is lost. `run.yml` is the resume point and `events.jsonl` is the history,
+so the withdrawn evidence block is written onto the `gate.revoked` event beside who signed
+it, who took it back and when — and the note itself never moves:
+
+```
+$ tldrx reject --stage 01-what/alpha --note "the sample was too small"
+REVOKED 01-what/alpha — it had been approved by alanmartinez at 2026-09-02T08:14:03Z
+note: the sample was too small
+cursor → 01-what/alpha (ready)
+1 later stage(s) marked stale — their files are still on disk, and they were derived from a
+decision that is now withdrawn: 02-how/beta
+the evidence it was signed over stays on disk at 01-what/gate-evidence/alpha.md — the gate no
+longer points at it, and the withdrawn counts are on the `gate.revoked` event
+nothing was deleted and no cost was refunded — `tldrx next` re-runs the stage with the note
+```
+
+`tldrx replay` narrates the withdrawal in place, at its own timestamp:
+
+```
+- 2026-09-02T11:00:00Z — gate REVOKED by will — signed by alanmartinez at 2026-09-02T08:14:03Z,
+  1 later stage(s) marked stale — it had been signed over 01-what/gate-evidence/alpha.md
+  (sign, 2 of 4 citations spot-checked), which is still on disk — "the sample was too small"
+```
 
 ### Giving one story another go
 

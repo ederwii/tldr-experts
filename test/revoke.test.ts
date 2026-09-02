@@ -254,14 +254,21 @@ describe("M3 · tldrx reject --stage", () => {
   });
 });
 
-describe("M3 · `by: auto` is visible where people look", () => {
+describe("M3 · a machine-closed gate is visible where people look", () => {
+  // The report's WORDS changed with #124, not what it is asserting here. It used
+  // to read "N gate(s) signed `by: auto`, not by a person", which was the whole
+  // selector as well as the whole sentence — and it was false of the third way a
+  // gate closes: an `agent` gate records the operator account the agent ran as, so
+  // it carries a person's name and was never listed at all. The line now names the
+  // executor's KIND per stage, so this test pins the same auto gate being named,
+  // the same revoke command being offered, and — new — the kind it was closed by.
   test("tldrx status names the auto-signed gate and the command that undoes it", async () => {
     const ws = workspace([ALPHA, BETA], { alpha: "auto" });
     armFake(ws, ALPHA_OUTPUTS);
     await next(ws);
     const details = runItems(ws.root).flatMap((item) => item.details).join("\n");
-    expect(details).toContain("signed `by: auto`");
-    expect(details).toContain("01-what/alpha");
+    expect(details).toContain("closed by a machine, not by a person");
+    expect(details).toContain("01-what/alpha signed by auto");
     expect(details).toContain("tldrx reject");
     expect(details).toContain("--stage 01-what/alpha");
   });
