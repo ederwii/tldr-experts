@@ -50,6 +50,13 @@ export interface BuildWorkspaceOptions {
   readonly waves: readonly (readonly string[])[];
   /** The workflow (and `run.yml` scope) this run is opened under. */
   readonly scope?: string;
+  /**
+   * `run new --seed <path>` — documents at the WORKSPACE ROOT the run is opened
+   * from. They are not copied into the run and they are not inside the product
+   * repo, which is the shape a docs-scope run has when the sources of truth live
+   * in the root repo and the story's repo is a sibling (gh #111).
+   */
+  readonly seed?: readonly string[];
   /** The workflow's `skips:` — `["plan"]` is what makes Build synthesise a plan. */
   readonly skips?: readonly string[];
   /** False writes no `03-plan/` at all, the way a Plan-skipping scope leaves it. */
@@ -140,6 +147,7 @@ export function makeBuildWorkspace(options: BuildWorkspaceOptions): BuildWorkspa
     budgetUsd: options.budgetUsd ?? 8,
     repos: [repoName],
     gates: options.gates,
+    ...(options.seed === undefined ? {} : { seed: options.seed }),
     actor: "alan",
     now: new Date("2026-08-29T09:00:00Z"),
   });

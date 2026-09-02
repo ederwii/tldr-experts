@@ -100,6 +100,46 @@ same amount after it; what changed is that the page now says how big the bound i
 
 ### Fixed
 
+- **A docs-scope story bundle is no longer handed to a developer with nothing to write, no
+  requirements it can open, and its core acceptance criterion deleted (#111).**
+  All three were repaired BY HAND by the unattended driver of `260902-discovery-pipeline-map`
+  on 2026-09-02, and all three reproduce from one fixture: a real `run new --scope docs
+  --seed <root document>` where the seed is the run's source of truth, lives at the workspace
+  root, and the story's repo is a sibling directory.
+  - **`touches` was empty.** It was built from what `01-what/handoff.md` CITES with a repo
+    prefix, and that could only ever find files already on disk — so a run whose whole output
+    is a document nobody has written yet got `touches: []`, while the developer prompt tells
+    the sub-agent that a change outside `touches` is a plan deviation. The story was forbidden
+    to do the one thing it existed for. `touches` now also carries the documents the run's own
+    brief NAMES — `## Decisions` and `01-what/success-metrics.md` — including a path with no
+    file behind it yet, which `prompts.ts` has always rendered as "(does not exist yet — this
+    story creates it)". Two ways in and no third: the repo has the file, or the path has a
+    directory and the repo has that directory; a bare dotted word in prose (`Node.js`) is
+    refused. Every addition is written into `notes:`, and a `touches` that is still empty now
+    says so in `notes:` instead of leaving it to a comment on an empty list.
+  - **The seed documents were unreachable from the story worktree.** They live at the
+    workspace root, are never copied, and need not be inside the story's repo — so the
+    handoff's `[src: seeds/….md:5]` resolved to nothing from the worktree and the driver
+    rewrote every read to an absolute path. The bundle now CARRIES them: `inputs:` lists the
+    run's `--seed` documents (read from `run.yml`'s first stage, where `run new` declares
+    them) and the developer prompt inlines their content, resolved through the same
+    `resolveDeclared` two-base rule the What stage's own inputs use. Bounded at 64 KB per
+    bundle — the same budget the story's touched files spend — and anything that does not fit
+    is named in `notes:` rather than dropped in silence.
+  - **The acceptance filter deleted the story's core criterion for naming a question id.**
+    "All four seed questions (Q1–Q4) have a dedicated section in
+    `docs/discovery-pipeline-map.md`" was dropped on the `a question id` signal, leaving the
+    story with the "(no `## Decisions` bullet …)" placeholder as its whole Done-when list.
+    Naming a question is how a document ABOUT the questions is specified. A bullet that names
+    a PRODUCT document now survives every signal — which is what the code comment above that
+    list has claimed since it was written, and was not true. Two narrower repairs came with
+    it: `questions.md` is matched at a path boundary, so `seeds/pipeline-questions.md` — a
+    document the TEAM wrote — is no longer read as the What stage's own output (it had
+    emptied `goal:` on the same run); and every signal is now tested against the bullet's
+    PROSE, not its `[src: …]` token, because a citation says where a claim was checked and not
+    what it is about. New `withoutSrcToken` lives in `text/srcToken.ts`, the one file that may
+    hold the grammar (#80).
+
 - **A closed run no longer sets up the operator's next `git pull` to be refused (#102).**
   Measured on aparece-v2, run `260830-ordering-inventory`, 2026-09-02: the run closed at
   `14:14:00Z`; ninety-two seconds later a commit on `epic/ordering-inventory` carried a

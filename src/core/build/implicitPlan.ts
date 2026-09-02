@@ -17,7 +17,11 @@
  *   goal        `01-what/handoff.md` § Decisions, verbatim, tokens and all
  *   acceptance  `01-what/success-metrics.md`'s items, verbatim
  *   touches     the repo paths those two documents cite, that exist, PLUS the
- *               documents this run's own answers settle by name
+ *               documents this run's own answers settle by name, PLUS the
+ *               documents its brief NAMES — including one not written yet, which
+ *               is what a docs run's whole output is
+ *   inputs      `01-what/questions.md` and the run's `--seed` documents, carried
+ *               as content because neither is inside the story's worktree
  *   dod         the commands `workspace.yml` declares that this scope calls for
  *   budget_usd  the Build stage's own ceiling
  *
@@ -31,12 +35,14 @@
  * `tldrx next` read the story's progress out of the same document that describes
  * it.
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { SKIPPED_DIRS } from "../detect/walk.ts";
+import { parseYaml } from "../yaml.ts";
+import { resolveDeclared } from "../facilitator/paths.ts";
 import { listItems, parseHandoff } from "../text/handoff.ts";
 import { parseQuestions } from "../text/questions.ts";
-import { parseSrcToken } from "../text/srcToken.ts";
+import { parseSrcToken, withoutSrcToken } from "../text/srcToken.ts";
 import { MAX_ITEM_CHARS, MAX_LIST_ITEMS, type PlanStatus } from "../schemas/planCommon.ts";
 import type { Story } from "../schemas/story.ts";
 import type { Epic } from "../schemas/epic.ts";
@@ -44,7 +50,7 @@ import { isLive, MAX_FACT_CHARS, type Fact } from "../facts/Fact.ts";
 import { repoPath, type WorkspaceContext } from "../../hooks/lib/workspace.ts";
 import { PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../paths.ts";
 import { integrationBranchFor } from "../plan/branchModel.ts";
-import { MAX_TOUCHED_FILES } from "./prompts.ts";
+import { MAX_TOUCHED_BYTES, MAX_TOUCHED_FILES } from "./prompts.ts";
 import { applyPlanPatch, quote, type StoryPatch } from "./storyFile.ts";
 import { BUILD_PHASE, PLAN_PHASE, type BuildPlan, type PlannedEpic, type PlannedStory } from "./plan.ts";
 
@@ -259,9 +265,18 @@ export interface ImplicitPlanContent {
   /** Ids of the answered facts of this run, for the log line. */
   readonly factIds: readonly string[];
   /**
-   * Run-relative files the developer prompt inlines beyond the story and its
-   * touched paths. Today that is `01-what/questions.md` — the only place the
-   * WHOLE answer lives, and the file every apply-bullet cites by line.
+   * Files the developer prompt inlines beyond the story and its touched paths.
+   *
+   * Two kinds, and they resolve against two different roots — the same two
+   * `facilitator/paths.ts` `resolveDeclared` has always resolved a declared input
+   * against, run dir first and workspace root second:
+   *
+   *   - `01-what/questions.md`, run-relative — the only place the WHOLE answer
+   *     lives, and the file every apply-bullet cites by line.
+   *   - this run's `--seed` documents, workspace-root-relative — the sources of
+   *     truth the run was opened from. They are never copied into the run and
+   *     they need not be inside the story's repo, so inlining their content is
+   *     the ONLY way a sub-agent standing in one repo's worktree can read them.
    */
   readonly inputs: readonly string[];
   readonly branch: string;
@@ -300,7 +315,34 @@ export function implicitPlanContent(parts: ImplicitPlanParts): ImplicitPlanConte
     existing: citedTouches,
     limit: MAX_IMPLICIT_TOUCHES,
   });
-  const touches = [...citedTouches, ...added.map((entry) => entry.path)].slice(0, MAX_IMPLICIT_TOUCHES);
+  // A document the run's own BRIEF names belongs in `touches` too — including one
+  // that does not exist yet, which is the normal shape of a docs run. Measured on
+  // the 260902-discovery-pipeline-map run (gh #111): the run existed to write
+  // `docs/discovery-pipeline-map.md`, its success metrics said so by name, and
+  // `touches` came out EMPTY — a story whose write surface forbids every change
+  // it was opened to make. `touchedInputs` already renders a path with no file
+  // behind it as "(does not exist yet — this story creates it)", so the only
+  // thing missing was the path.
+  const briefAdded = touchesNamedInBrief({
+    bullets: [
+      ...decisionBullets(handoff).map((text) => ({ where: WHAT_HANDOFF_REL, text })),
+      ...listItems(metrics).map((text) => ({ where: SUCCESS_METRICS_REL, text })),
+    ],
+    repoDir: repoPath(parts.workspace, repo) ?? "",
+    existing: [...citedTouches, ...added.map((entry) => entry.path)],
+    limit: MAX_IMPLICIT_TOUCHES,
+  });
+  const touches = [
+    ...citedTouches, ...added.map((entry) => entry.path), ...briefAdded.map((entry) => entry.path),
+  ].slice(0, MAX_IMPLICIT_TOUCHES);
+
+  // The run's `--seed` documents: the sources of truth this run was opened from.
+  // They live at the WORKSPACE root and are never copied, so a story worktree of
+  // one repo cannot open them by the path the handoff cites (gh #111, defect 2:
+  // the driver rewrote every read to an absolute path by hand). Carried as
+  // INPUTS, whose content the prompt inlines, rather than as touches: they are
+  // the team's own documents and this story does not write them.
+  const seeds = carriedSeeds(seedDocuments(parts.runDir), parts.workspace.root);
 
   // The answers a human gave at this run's gates, and which touched document each
   // one settles. This is the half that makes the plan about Build's work rather
@@ -359,10 +401,12 @@ export function implicitPlanContent(parts: ImplicitPlanParts): ImplicitPlanConte
     touches,
     dod,
     notes: cap([
-      ...excludedNotes(excluded), ...addedNotes(added), ...factNotes(answered), ...droppedNotes(dropped),
+      ...excludedNotes(excluded), ...addedNotes(added), ...briefNotes(briefAdded),
+      ...emptyTouchesNote(touches, repo), ...seedNotes(seeds, repo),
+      ...factNotes(answered), ...droppedNotes(dropped),
     ]),
     factIds: answered.facts.map((fact) => fact.id),
-    inputs: index.lines.size > 0 ? [QUESTIONS_REL] : [],
+    inputs: [...(index.lines.size > 0 ? [QUESTIONS_REL] : []), ...seeds.carried],
     branch: epicBranchFor(parts.runId),
     budgetUsd: parts.budgetUsd,
   };
@@ -402,8 +446,9 @@ export function renderImplicitPlan(content: ImplicitPlanContent, status: PlanSta
     `  title: ${quote(content.title)}`,
     `  repo: ${content.repo}`,
     "  depends_on: []",
-    ...block("touches", content.touches, `[]  # ${WHAT_HANDOFF_REL} cites no path inside a declared repo`),
-    ...block("inputs", content.inputs, `[]  # this run wrote no ${QUESTIONS_REL}`),
+    ...block("touches", content.touches,
+      `[]  # neither ${WHAT_HANDOFF_REL} nor ${SUCCESS_METRICS_REL} names a path inside a declared repo`),
+    ...block("inputs", content.inputs, `[]  # this run wrote no ${QUESTIONS_REL} and imported no seed document`),
     ...block("goal", content.goal, `[]  # ${WHAT_HANDOFF_REL} has no \`## Decisions\` bullet`),
     ...block("context", content.context, "[]  # nothing to apply, so the What's decisions ARE the goal above"),
     ...block("acceptance", content.acceptance, "[]"),
@@ -449,12 +494,15 @@ export function loadImplicitPlan(parts: ImplicitPlanParts): BuildPlan {
     test_plan: content.testPlan,
     evidence: [],
   };
-  // `01-what/questions.md` lives in the RUN dir, not in the story's worktree, so
-  // it can never arrive through `touches`. It is read here and handed to the
-  // prompt as content, which is the only way a sub-agent told to read nothing
-  // else can be shown the answers its story is about.
+  // `01-what/questions.md` lives in the RUN dir and a `--seed` document lives at
+  // the WORKSPACE root; neither is in the story's worktree, so neither can ever
+  // arrive through `touches`. They are read here and handed to the prompt as
+  // content, which is the only way a sub-agent told to read nothing else can be
+  // shown the answers and the requirements its story is about. `resolveDeclared`
+  // is the same two-base resolution the What stage's own inputs already use.
+  const pathCtx = { root: parts.workspace.root, runDir: parts.runDir };
   const extraInputs = content.inputs
-    .map((rel) => ({ path: rel, content: readOrEmpty(join(parts.runDir, rel)) }))
+    .map((rel) => ({ path: rel, content: readOrEmpty(resolveDeclared(rel, pathCtx)) }))
     .filter((input) => input.content !== "");
   const epic: Epic = {
     version: 1,
@@ -588,7 +636,12 @@ export function runFacts(facts: readonly Fact[], runId: string): readonly Fact[]
  * gets wrong is visible to the person reading the plan rather than gone.
  */
 export const WHAT_SIGNALS: readonly { readonly name: string; readonly test: (bullet: string) => boolean }[] = [
-  { name: "questions.md", test: (b) => b.includes("questions.md") },
+  // Path-boundary matched, not substring matched. `b.includes("questions.md")`
+  // also fires on `seeds/pipeline-questions.md` — a document the TEAM wrote, and
+  // the source of truth of the run gh #111 was filed from. Both of that run's
+  // `## Decisions` bullets cited it, both were read as the What stage's own
+  // output, and `goal:` came out empty.
+  { name: "questions.md", test: (b) => /(?:^|[^\w-])questions\.md/.test(b) },
   { name: "### Q", test: (b) => b.includes("### Q") },
   // Any path inside the What phase: `01-what/handoff.md`, `01-what/scope.md`.
   { name: "01-what/", test: (b) => b.includes("01-what/") },
@@ -609,9 +662,80 @@ export function isWhatDeliverable(bullet: string): boolean {
   return whatSignal(bullet) !== null;
 }
 
-/** Which signal fired, for the note. Null when the bullet is Build's work. */
+/**
+ * Which signal fired, for the note. Null when the bullet is Build's work.
+ *
+ * A bullet that NAMES A PRODUCT DOCUMENT is Build's work whatever else it says.
+ * The sentence above this list has claimed that since it was written — "a bullet
+ * about `04-build/`, or about a file the story touches, matches no signal and
+ * survives" — and it was not true: the signals were tested against the whole
+ * bullet with nothing to weigh them against. Measured on the
+ * 260902-discovery-pipeline-map run (gh #111), the criterion
+ *
+ *   "All four seed questions (Q1–Q4) have a dedicated section in
+ *    `docs/discovery-pipeline-map.md`"
+ *
+ * — the run's core acceptance criterion, and the only measurable one — was
+ * dropped on `a question id`, leaving the story with the "(no `## Decisions`
+ * bullet …)" placeholder as its whole Done-when list. Naming a question is how a
+ * document ABOUT the questions is specified; it is not evidence that the subject
+ * is `01-what/questions.md`. The document named is.
+ *
+ * The signals are unchanged and still drop what they always dropped: the aparece
+ * bullets that fired them ("Every question names what is blocked", "No recorded
+ * fact is re-asked", "Gate passes") name no product document and are dropped
+ * exactly as before.
+ */
 export function whatSignal(bullet: string): string | null {
-  return WHAT_SIGNALS.find((signal) => signal.test(bullet))?.name ?? null;
+  // The CLAIM, not its evidence: §2.8's token says where a bullet was CHECKED,
+  // and reading it as the subject gets the answer wrong in both directions —
+  // "In scope: one `questions.md` block per open ADR [src: app:docs/adr/…]" is
+  // about the What's own file, and "Rewrite § Install [src: 01-what/handoff.md:3]"
+  // is Build's work. Only the prose says which.
+  const claim = withoutSrcToken(bullet);
+  if (productPathsIn(claim).length > 0) return null;
+  return WHAT_SIGNALS.find((signal) => signal.test(claim))?.name ?? null;
+}
+
+/**
+ * A run phase directory — `01-what/`, `03-plan/`, `04-build/`. A path under one
+ * is the framework's own document, never a product document.
+ */
+const PHASE_DIR_RE = /^\d\d-[a-z][a-z0-9-]*\//;
+
+/**
+ * The What stage's own outputs, by bare file name.
+ *
+ * A bullet writes `questions.md` as often as `01-what/questions.md`, and the
+ * unqualified form has to mean the same thing — otherwise dropping the phase
+ * prefix would turn the What's own deliverable into a product document.
+ */
+export const WHAT_OUTPUT_NAMES: readonly string[] = [
+  "questions.md", "handoff.md", "intent.md", "scope.md", "success-metrics.md", "seed-index.md",
+];
+
+/**
+ * Every path-shaped token in a line, in first-named order.
+ *
+ * Deliberately narrow: a name, optional directories, and an extension of at
+ * least two letters starting with a letter. `e.g.` and `0.5.1` are not paths and
+ * must not become one — the extension rule is what refuses them.
+ */
+const PATH_TOKEN_RE = /(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_][A-Za-z0-9_.-]*\.[A-Za-z][A-Za-z0-9]{1,5}(?![A-Za-z0-9])|[A-Za-z0-9_][A-Za-z0-9_.-]*\.[A-Za-z][A-Za-z0-9]{1,5}(?![A-Za-z0-9])/g;
+
+export function pathsIn(text: string): readonly string[] {
+  return [...new Set(text.match(PATH_TOKEN_RE) ?? [])];
+}
+
+/**
+ * The paths a line names that are a PRODUCT document — not the run's own state,
+ * not a phase output, not the What stage's own file under a bare name.
+ */
+export function productPathsIn(text: string): readonly string[] {
+  return pathsIn(text).filter((path) =>
+    !PHASE_DIR_RE.test(path)
+    && !isStatePath(path)
+    && !(!path.includes("/") && WHAT_OUTPUT_NAMES.includes(path)));
 }
 
 /** One note per dropped bullet, naming the signal and the bullet's opening. */
@@ -947,6 +1071,200 @@ function firstFactNaming(
 export function addedNotes(added: readonly AddedTouch[]): readonly string[] {
   return added.map((entry) =>
     `added ${entry.path} to touches: settled by ${entry.factId} (its text mentions \`${entry.key}\`)`);
+}
+
+// --- the write surface the run's own brief names ----------------------------
+
+/** A bullet of the run's brief, and which document it came from. */
+export interface BriefBullet {
+  readonly where: string;
+  readonly text: string;
+}
+
+export interface BriefTouch {
+  readonly path: string;
+  readonly where: string;
+  /** False when the repo has no file there yet — the story CREATES it. */
+  readonly exists: boolean;
+}
+
+export interface TouchesNamedInBriefParts {
+  readonly bullets: readonly BriefBullet[];
+  readonly repoDir: string;
+  readonly existing: readonly string[];
+  readonly limit: number;
+}
+
+/**
+ * Documents the run's own brief NAMES that `touches` does not already hold.
+ *
+ * `citedRepoPaths` can only find a path that is BOTH cited with a repo prefix and
+ * already on disk, and a docs run's whole output is a document that is neither.
+ * Measured on the 260902-discovery-pipeline-map run (gh #111): the run existed to
+ * write `docs/discovery-pipeline-map.md`, its `01-what/success-metrics.md` named
+ * that file in its first criterion, the seeded handoff cited only workspace-root
+ * paths — and the story shipped with `touches: []`. The developer prompt tells a
+ * sub-agent that a change outside `touches` is a plan deviation, so an empty list
+ * is not a small omission: it forbids the whole story.
+ *
+ * Two ways in, and no third:
+ *   - the repo HAS the file — the brief names something real;
+ *   - the path has a directory and the repo HAS that directory — a new file in a
+ *     place that exists, which is what "write this document" looks like before
+ *     it is written.
+ *
+ * A bare name the repo does not have (`Node.js`, `package.json` in a repo with no
+ * such file) is refused: prose is full of dotted words, and inventing a top-level
+ * file out of one is how a filter earns its distrust.
+ */
+export function touchesNamedInBrief(parts: TouchesNamedInBriefParts): readonly BriefTouch[] {
+  const already = new Set(parts.existing);
+  const out: BriefTouch[] = [];
+  const room = parts.limit - parts.existing.length;
+  if (room <= 0 || parts.repoDir === "") return out;
+
+  for (const bullet of parts.bullets) {
+    // The CLAIM, not its `[src: …]`: a citation is already handled by
+    // `citedRepoPaths`, and reading one as a write target would put a document
+    // the bullet merely quoted on the story's write surface.
+    for (const path of productPathsIn(withoutSrcToken(bullet.text))) {
+      if (already.has(path) || out.length >= room) continue;
+      const exists = existsSync(join(parts.repoDir, path));
+      const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+      if (!exists && (dir === "" || !isDirectory(join(parts.repoDir, dir)))) continue;
+      already.add(path);
+      out.push({ path, where: bullet.where, exists });
+    }
+  }
+  return out;
+}
+
+/** One note per document the brief pulled in, so an addition is never silent. */
+export function briefNotes(added: readonly BriefTouch[]): readonly string[] {
+  return added.map((entry) => entry.exists
+    ? `added ${entry.path} to touches: named by ${entry.where}`
+    : `added ${entry.path} to touches: named by ${entry.where} and not on disk — this story creates it`);
+}
+
+/**
+ * The one note a story with NO write surface owes its reader.
+ *
+ * A `touches: []` renders as an empty list with a comment, which reads like a
+ * detail. It is not: every change the story could make is outside it.
+ */
+export function emptyTouchesNote(touches: readonly string[], repo: string): readonly string[] {
+  if (touches.length > 0) return [];
+  return [
+    `touches is empty: nothing ${WHAT_HANDOFF_REL} cites and nothing ${SUCCESS_METRICS_REL} names is ` +
+    `inside repo '${repo}', so this story has no write surface — name the document it is to write`,
+  ];
+}
+
+// --- the seed documents this run was opened from ----------------------------
+
+/**
+ * `[assumption]` — how many bytes of `--seed` documents one story bundle carries.
+ *
+ * The same 64 KB `prompts.ts` spends on a story's touched files, and for the same
+ * reason: a seed can be a directory of fifty documents, and a prompt that inlines
+ * all of them has no room left for the files the story writes.
+ */
+export const MAX_SEED_CARRY_BYTES = MAX_TOUCHED_BYTES;
+
+export interface CarriedSeeds {
+  /** Workspace-root-relative, in declaration order — inlined into the prompt. */
+  readonly carried: readonly string[];
+  /** Declared, present, and over the byte budget. Named in `notes:`, never silent. */
+  readonly skipped: readonly string[];
+}
+
+/**
+ * The `--seed` documents this run declared, workspace-root-relative.
+ *
+ * Read from `run.yml`'s FIRST stage, which is where `run new --seed` declares
+ * them (`newRun.declareSeedInputs`). A declared input that is neither
+ * workspace-prefixed (`.tldrx/…`) nor run-relative (`01-what/…`) is a seed
+ * document — that is exactly the third case `facilitator/paths.ts`
+ * `resolveDeclared` was written for, stated from the other side.
+ *
+ * An unreadable or seedless `run.yml` is an empty list, not a throw: the implicit
+ * plan is derived from what the run HAS, and a run with no seeds is the ordinary
+ * case.
+ */
+export function seedDocuments(runDir: string): readonly string[] {
+  const text = readOrEmpty(join(runDir, "run.yml"));
+  if (text === "") return [];
+  let doc: unknown;
+  try {
+    doc = parseYaml(text);
+  } catch {
+    return [];
+  }
+  const phases = (doc as { phases?: unknown }).phases;
+  if (!Array.isArray(phases)) return [];
+  const stages = (phases[0] as { stages?: unknown } | undefined)?.stages;
+  if (!Array.isArray(stages)) return [];
+  const inputs = (stages[0] as { inputs?: unknown } | undefined)?.inputs;
+  if (!Array.isArray(inputs)) return [];
+  return inputs.filter((entry): entry is string =>
+    typeof entry === "string"
+    && entry !== ""
+    && !PHASE_DIR_RE.test(entry)
+    && !isStatePath(entry));
+}
+
+/** Which of them fit the bundle's inline budget, in declaration order. */
+export function carriedSeeds(documents: readonly string[], root: string): CarriedSeeds {
+  const carried: string[] = [];
+  const skipped: string[] = [];
+  let spent = 0;
+  for (const rel of documents) {
+    const abs = join(root, rel);
+    if (!existsSync(abs)) continue;
+    const size = sizeOf(abs);
+    if (spent + size > MAX_SEED_CARRY_BYTES) {
+      skipped.push(rel);
+      continue;
+    }
+    spent += size;
+    carried.push(rel);
+  }
+  return { carried, skipped };
+}
+
+/** What the bundle did with the seeds, and why it had to do anything at all. */
+export function seedNotes(seeds: CarriedSeeds, repo: string): readonly string[] {
+  const notes: string[] = [];
+  if (seeds.carried.length > 0) {
+    notes.push(
+      `carried ${String(seeds.carried.length)} seed document(s) into inputs (${listPaths(seeds.carried)}): ` +
+      `they live at the workspace root, outside repo '${repo}', so the story worktree cannot open them — ` +
+      "their content is inlined in the prompt instead",
+    );
+  }
+  if (seeds.skipped.length > 0) {
+    notes.push(
+      `${String(seeds.skipped.length)} seed document(s) were NOT carried (${listPaths(seeds.skipped)}): ` +
+      `over the ${String(MAX_SEED_CARRY_BYTES)}-byte inline budget for one bundle`,
+    );
+  }
+  return notes;
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function sizeOf(path: string): number {
+  try {
+    return statSync(path).size;
+  } catch {
+    return 0;
+  }
 }
 
 /**
