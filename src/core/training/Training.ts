@@ -21,6 +21,19 @@
  * to prevent.
  */
 
+/**
+ * The three execution modes a training run has, exactly as `tldrx next` does:
+ * `headless` spawns `claude -p` itself, `prepare` writes the prompt bundle and
+ * stops, `commit` picks the validation path up from the host session's
+ * `result.json`.
+ *
+ * It lives here rather than in `runTraining.ts` because the pre-start check
+ * (`trainPreflight.ts`) has to branch on it, and `runTraining` imports THAT —
+ * so the type has to sit below both. `runTraining.ts` re-exports it, so every
+ * existing importer is unchanged.
+ */
+export type TrainingRunMode = "headless" | "prepare" | "commit";
+
 export const TRAINING_MODES = ["light", "full"] as const;
 export type TrainingMode = (typeof TRAINING_MODES)[number];
 

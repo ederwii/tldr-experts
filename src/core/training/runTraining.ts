@@ -28,7 +28,10 @@ import { FactsStore } from "../facts/FactsStore.ts";
 import { loadExpert, expertDir, EXPERT_FILE } from "../experts/loadExperts.ts";
 import { readExpertDocument } from "../experts/expertDocument.ts";
 import { agentDir } from "../facilitator/paths.ts";
-import { promptPath, readResult, writeBundle, writeRaw, PendingError, type PendingStage } from "../facilitator/pending.ts";
+import {
+  promptPath, preflightRecord, readResult, writeBundle, writeRaw, PendingError,
+  type PendingStage,
+} from "../facilitator/pending.ts";
 import { spawnAgent } from "../facilitator/spawnAgent.ts";
 import { setProgressCeiling, setProgressTitle } from "../ui/bus.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
@@ -36,7 +39,8 @@ import type { SrcContext } from "../text/srcToken.ts";
 import type { CompetencyEvidence } from "../init/competencyLevel.ts";
 import {
   CODE_TASK, DEFAULT_TRAIN_EFFORT, MIN_TRAIN_USD, RUNS_TASK, defaultTrainUsd,
-  fromRunsRelPath, knowledgeRelPath, partialOf, type TrainingMode, type TrainingTask,
+  fromRunsRelPath, knowledgeRelPath, partialOf,
+  type TrainingMode, type TrainingRunMode, type TrainingTask,
 } from "./Training.ts";
 import { trainPreflight, type AmbientModel } from "./trainPreflight.ts";
 import { ambientModelFiles, resolveAmbientModel } from "./ambientModel.ts";
@@ -54,7 +58,7 @@ import { CompetenciesError, writeCompetencies } from "./competenciesWrite.ts";
 import { isRoleExpertOnDisk, lightModeRefusal, nothingToMineRefusal } from "./roleTraining.ts";
 import { MAX_PAYLOAD_BYTES, TrainingLog, type TrainingEvent } from "./trainingLog.ts";
 
-export type TrainingRunMode = "headless" | "prepare" | "commit";
+export type { TrainingRunMode } from "./Training.ts";
 
 /** Spec §3 codes, as `tldrx next` uses them. */
 const EXIT_OK = 0;
@@ -178,14 +182,19 @@ async function trainWithPreflight(options: TrainOptions, said: string[]): Promis
         files: ambientModelFiles(options.root, homedir()),
       })
       : options.ambientModel,
-    spawns: options.run === "headless",
+    run: options.run,
   });
   if (preflight.refusal !== null) return fail(EXIT_GATE_REFUSED, preflight.refusal);
   // Written here rather than returned only at the end: a line an operator reads
   // after the money has been spent is a receipt, not a warning.
-  for (const line of preflight.notice) {
-    said.push(line);
-    process.stderr.write(`${line}\n`);
+  for (const line of preflight.notice) said.push(line);
+  // A headless run is about to spend, so the line goes to stderr the moment it is
+  // known — before the pre-pass, never as a receipt afterwards. `--prepare` spends
+  // nothing here: its audience is the operator reading the prepared block on
+  // stdout and the host session reading `pending.json`, and it is written into
+  // both below (#98) rather than into a stream nobody is reading yet.
+  if (options.run === "headless") {
+    for (const line of preflight.notice) process.stderr.write(`${line}\n`);
   }
 
   // --- the deterministic pre-pass ------------------------------------------
@@ -255,6 +264,7 @@ async function trainWithPreflight(options: TrainOptions, said: string[]): Promis
   // --- --prepare: hand the work to the host session and stop ----------------
   if (options.run === "prepare") {
     const lines = [
+      ...preflight.notice,
       `prepared training for ${options.expert}/${area.id} (${options.mode}) — `
         + `${String(prompts.length)} sub-agent(s), $${share.toFixed(2)} ceiling each, effort ${effort}`,
     ];
@@ -274,6 +284,11 @@ async function trainWithPreflight(options: TrainOptions, said: string[]): Promis
         sections: {},
         checks: [],
         prepared_at: options.at,
+        // The whole notice when there is an alarm — a bare warning without the
+        // model line beside it is an assertion the reader cannot check. Nothing
+        // at all when there is not, so an unremarkable bundle is byte-identical
+        // to the one this command has always written.
+        ...preflightRecord(preflight.warnings.length === 0 ? [] : preflight.notice),
       };
       writeBundle(bundleRoot, task.key, task.prompt, pending);
       lines.push(

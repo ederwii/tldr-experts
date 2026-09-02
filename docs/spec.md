@@ -234,6 +234,7 @@ for files whose citations §2.6 would refuse to count.
 | `inputs_max_bytes` | int ≥0 | n (98304) | Shared ceiling on the CONTENT of every declared input, spent in declaration order and filled BEFORE the experts get anything (§5, "One budget, inputs first") |
 | `prompt_max_bytes` | int ≥0 | n (163840) | The whole prompt's ceiling. Over it the stage is **refused** (exit 2) before a sub-agent is spawned (§5, "The context ledger"). `--prompt-max-bytes <n>` overrides it for one invocation |
 | `max_reads` | int ≥0 | n (120 · build 200 · watch 60) | How many `Read`/`Glob`/`Grep` calls the sub-agent may complete before it is stopped (§5, "The read cap"). `--max-reads <n>` overrides it for one invocation |
+| `preflight` | str[] | n | What the pre-start check said about the model and the ceiling this bundle freezes (§2.6.1, #96/#98). Written by `expert train --prepare` **only when there is a warning**, so a bundle nobody had an alarm for is byte-identical to the one that command has always written |
 | `effort` | `low\|medium\|high\|xhigh\|max` | n (unset) | Passed to the sub-agent as `--effort`. **Unset ⇒ the flag is not passed at all** and the CLI uses its own default |
 | `budget_usd` | number >0 | y | Stage ceiling and the sub-agent's `--max-budget-usd` share |
 | `timeout_s` / `dry_run_allowed` | int >0 / bool | n (900 / `true`) | Wall clock for sub-agent and `cmd` checks `[assumption]`; `dry_run_allowed: false` refuses `--dry-run` on this stage |
@@ -738,6 +739,22 @@ default that is $1.50 a pass against $1.76 for a premium tier. The refusal names
 operator has looked at the number — it warns in one line and proceeds. A role expert's full run
 spawns one sub-agent and keeps the whole ceiling, so the same arithmetic lets it through, and a
 model no price table knows yields no projection and therefore no refusal.
+
+**`--prepare` carries the same check into the bundle (#98).** `--prepare` spawns nothing here, but it
+WRITES the ceiling into `pending.json` (`max_budget_usd`) and into the prompt text (`Ceiling for this
+sub-agent: $1.50`), and a host session then spends against it — so skipping the check there left the
+same budget death reachable one command later, on the host's money. The model line and any warning
+now go to **stdout with the prepared block** and into an optional **`preflight`** key on each
+bundle's `pending.json` — absent when there is no warning, so an unremarkable bundle stays
+byte-identical.
+
+How much it may CLAIM differs by half, and deliberately: on the headless path tldrx spawns `claude`
+itself with no `--model`, so the CLI's own default is a prediction about a process this code starts
+and the refusal stands. On `--prepare` the sub-agent is started by the host session, so an **explicit
+`--model`** — written into the bundle as an instruction — is refused the same way (exit `2`, no bundle
+written), while an **inherited** model only warns: refusing a bundle because of a `model:` key in a
+settings file, for a session tldrx does not control, would be asserting more than is known.
+`--commit` says nothing at all; that money is already spent.
 
 *Why a refusal rather than a bigger default:* `--max-budget-usd` is a stop after the turn, so a
 higher ceiling cannot make a premium turn cheaper — it only raises what one overshooting turn may

@@ -345,6 +345,23 @@
   - Salvaging the partial evidence a budget death throws away is a design call and was NOT built;
     the question is asked on #96.
 
+- **`expert train --prepare` carries that check into the bundle (#98).** The check above was wired
+  to the spawning path only, and `--prepare` spawns nothing — but it writes the ceiling into
+  `pending.json` (`max_budget_usd: 1.50`) and into the prompt text (`Ceiling for this sub-agent:
+  $1.50`), and a host session then spends against it. Measured on `b5d59c5`: a full `--prepare` with
+  a premium model inherited from `~/.claude/settings.json` printed `$1.50 ceiling each`, returned
+  `preflight: null`, and wrote two bundles saying `model: null` — the same trap, one command later,
+  on the host's money.
+  - The model line and any warning now go to **stdout with the prepared block** and into an optional
+    **`preflight`** key on each bundle's `pending.json`. Absent when there is no warning, so an
+    unremarkable bundle stays byte-identical to the one this command has always written.
+  - **What it may CLAIM differs by half.** Headless, tldrx spawns `claude` with no `--model`, so the
+    CLI's default is a prediction about a process this code starts: the refusal stands. On
+    `--prepare` an **explicit `--model`** is an instruction written into the bundle and is refused
+    the same way (exit `2`, no bundle written); an **inherited** model only warns, naming both
+    remedies — refusing a bundle over a settings-file key, for a session tldrx does not control,
+    would be asserting more than is known. `--commit` says nothing: that money is already spent.
+
 - **`test/merge-wave.test.ts` no longer fails a wave over another wave's log directory (#95, #97).**
   `merge-wave.sh` writes its logs to `${TMPDIR:-/tmp}/mw-$$`, and the test that asserts a green run
   cleans up after itself diffed a listing of the machine's SHARED tmpdir. Every wave on the box
