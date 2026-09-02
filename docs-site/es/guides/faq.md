@@ -65,9 +65,10 @@ Si un comando se murió feo y dejó un lock tirado: `tldrx run unlock`.
 
 ## Me dijo "3 runs are open — pass one" y se negó
 
-Eso es que está funcionando. Con varios runs abiertos y sin id, todo comando que apunta a
-un run se niega en lugar de adivinar a cuál te referías: sale con `2` y te los lista.
-Pásale el id.
+Eso es que está funcionando. Con varios runs abiertos y sin id, un comando que apunta a un
+run te los lista y se niega en lugar de adivinar a cuál te referías — sale con `2`, salvo
+`cost`, que se niega con `1`. `run status` es el que no se niega: te los lista y sale
+con `0`, así que ahí es donde vas a buscar el id. Pásale el id.
 
 ## ¿Y si no estoy de acuerdo con lo que hizo?
 
@@ -98,10 +99,11 @@ quien clone el repo se lleva el run.
 
 ## ¿Ya está listo?
 
-**Alpha, 0.4.0.** Todos los comandos son reales y están probados; las interfaces pueden
-cambiar sin aviso. La autoridad es `tldrx --help` en tu máquina, no este sitio. Beta quiere
-decir formatos de archivo congelados, dos o más workspaces reales llevados hasta Build, y
-una ruta de actualización documentada.
+**Beta, 0.4.0.** Todos los comandos son reales y están probados; la autoridad es
+`tldrx --help` en tu máquina, no este sitio. Las versiones hasta la 0.3.1 fueron `alpha`; la
+0.4.0 es la primera `beta`, y el requisito para llegar ahí ya se cumplió: formatos de
+archivo congelados, dos o más workspaces reales llevados hasta Build, y una ruta de
+actualización documentada.
 
 ## ¿Puedo contribuir?
 

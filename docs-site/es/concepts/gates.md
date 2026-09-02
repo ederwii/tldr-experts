@@ -109,7 +109,7 @@ Cuando con lo que no estás de acuerdo es con una sola *story* de Build,
 `tldrx story reopen <id> --note "…"` le da a esa story otra tanda de intentos y no toca
 nada más. Una story que ya está `done` se niega — deshacer trabajo terminado es una decisión
 sobre la etapa —, pero un defecto concreto en ella abre una **ronda de arreglo**:
-`tldrx story reopen S11 --for-fix --note "cuál defecto"`. No se consume ningún intento, el
+`tldrx story reopen S11 --for-fix --note "which defect"`. No se consume ningún intento, el
 arreglo pasa el mismo DoD y el mismo revisor, no se tocan los criterios de aceptación, y
 solo puede haber una ronda abierta a la vez. Existe para que un defecto aceptado no le
 cueste el cierre a todas las demás stories de la etapa.

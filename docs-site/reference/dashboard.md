@@ -11,13 +11,15 @@ source of truth competing with the files.
 ```bash
 tldrx dashboard              # a live server on 127.0.0.1, redrawing as files change
 tldrx dashboard --static     # write one self-contained index.html and stop
-tldrx dashboard --static --out ./somewhere/page.html
+tldrx dashboard --static --out ./somewhere/   # --out names a directory, not a file
 ```
 
 The live server watches the workspace and pushes a reload when a file underneath it
 changes. The static export is one file with the CSS, the JavaScript and the data inlined —
 no network reference of any kind, so it renders identically offline and leaks nothing about
-who opened it. Both are the same document; only the watching differs.
+who opened it. `--out` names the directory to write into, which is created if it is not
+there; the page inside it is always called `index.html`. Both are the same document; only
+the watching differs.
 
 ## What it shows
 
@@ -27,7 +29,7 @@ who opened it. Both are the same document; only the watching differs.
 | One run | The execution path stage by stage — expert, model, cost, gate, who signs it and who signed — plus the handoffs, the open questions, the plan and the branches the Build cut. From the ledger: the **operator notes** somebody left with `tldrx note`, each story's attempt and the free review retries it was granted, the reopens and their reasons, and every moment the budget brake refused a stage. From `budget.yml`: the per-phase ceilings, the levers, and the **host-token allowance**. From `04-build/preflight.yml`: the **base gates** — what each of the workspace's own gate commands did on the untouched tree, so a Build that refused to start is not a stage that went backwards for no reason. Plus, when they are set, why a run was **cancelled** (who, when, the note) and whether its epic **worktrees are kept**. |
 | Experts | Competency levels **recomputed from evidence at read time**, never the number stored on disk, with the evidence behind each one. |
 | Watchers | One card per shipped feature, read from `05-watch/watchers/*.md`: what to watch, who owns it, the epic and stories behind it, and — on a `draft` — the `absent:` citations that say exactly what is not instrumented yet. The page **reads** the cards; it does not re-check them against today's code. That is `tldrx watch check`. |
-| How to use it | The terminal loop, as copy-paste commands. |
+| How to use | The terminal loop, as copy-paste commands. |
 
 Four states raise an alert, because each is a run waiting on a **person**: an open
 question, a pending gate, a failed stage, and a `--prepare` bundle waiting to be run and

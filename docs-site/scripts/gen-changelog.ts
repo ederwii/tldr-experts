@@ -71,8 +71,8 @@ const out: string[] = [
   `[CHANGELOG.md](${REPO}/blob/main/CHANGELOG.md) at build time — this page is an index, not`,
   "a second copy. Follow the link for the reasoning, the measurements and the code behind any line.",
   "",
-  "Every release so far is tagged `alpha`: the commands are real and tested, and the interfaces may",
-  "still change. See [what alpha, beta and stable mean](/#where-this-is).",
+  "Releases through 0.3.1 are tagged `alpha`; 0.4.0 is the first `beta`. The commands are real and",
+  "tested. See [what alpha, beta and stable mean](/#where-this-is).",
   "",
 ];
 

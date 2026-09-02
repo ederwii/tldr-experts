@@ -34,6 +34,7 @@ Si alguno no lo trae, la etapa se rechaza — antes de la compuerta, no después
 | `https://…` | un documento; `http://` se rechaza |
 | `graph:<node>` | un nodo del mapa de código |
 | `absent:path/to/file` | *buscamos aquí y no había nada* |
+| `aidlc:intents/260821/design.md:14` | una línea de la carpeta de intención de AI-DLC que destiló un `run new --from` — o `#Q3`, una de sus preguntas ya contestadas. Se registra, nunca se resuelve: esa carpeta vive fuera del workspace y puede que ya no exista para cuando alguien lea el handoff |
 
 `absent:` es el que abarata la honestidad. "No hay política de reintentos" es una
 afirmación, y así es como se le pone fuente. Se rechaza en una afirmación **positiva**

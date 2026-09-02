@@ -1,4 +1,4 @@
-# Concept v0 — a lightweight, file-based AI development workflow
+# Concept v0 — an evidence-first, file-based AI development framework
 
 Name: **tldr-experts** — CLI `tldrx` (decided 2026-08-28). Open source, tool-agnostic, Claude Code pilot.
 

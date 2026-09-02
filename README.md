@@ -1,8 +1,8 @@
 # tldr-experts
 
-[![npm](https://img.shields.io/npm/v/tldr-experts?label=npm%20tldr-experts)](https://www.npmjs.com/package/tldr-experts) [![ci](https://github.com/ederwii/tldr-experts/actions/workflows/ci.yml/badge.svg)](https://github.com/ederwii/tldr-experts/actions/workflows/ci.yml) ![status](https://img.shields.io/badge/status-alpha-orange)
+[![npm](https://img.shields.io/npm/v/tldr-experts?label=npm%20tldr-experts)](https://www.npmjs.com/package/tldr-experts) [![ci](https://github.com/ederwii/tldr-experts/actions/workflows/ci.yml/badge.svg)](https://github.com/ederwii/tldr-experts/actions/workflows/ci.yml) ![status](https://img.shields.io/badge/status-beta-blue)
 
-**A lightweight, file-based AI development workflow.** Open source, tool-agnostic in design, piloted on Claude Code. **Alpha:** every command is implemented and verified by running it; interfaces may change without notice, and `tldrx --help` is the authoritative surface.
+**An evidence-first, file-based AI development framework: five stages, a gate on every one, and every claim cited or refused.** Open source, tool-agnostic in design, piloted on Claude Code. **Beta:** every command is implemented and verified by running it, the `version: 1` file formats only grow from here, and `tldrx --help` is the authoritative command surface.
 
 One loop — *Investigate → Handoff → Interview → Gate* — five phases, **what · how · plan · build ·
 watch**, one stage per command, each stopping at a gate you own; the files ARE the state, the
@@ -157,7 +157,11 @@ Those are the shipped defaults, and every scope keeps at least one human gate. O
 signs something it should not have, `tldrx reject --stage <phase>/<stage> --note "…"` revokes it, moves
 the cursor back and marks the later stages `stale`. When it is one BUILD STORY you disagree with — a
 story two reviewers refused, which is terminal for the rest of the run —
-`tldrx story reopen <id> --note "…"` gives that one story another run of attempts and nothing else.
+`tldrx story reopen <id> --note "…"` gives that one story another run of attempts and nothing else;
+for one named defect in a story already `done`, `--for-fix` opens a fix round instead — no attempt
+consumed, the same DoD and the same reviewer, one open round at a time.
+To move who may close a gate after `run new` froze it, `tldrx run gates set <stage>:<policy> --note "…"`
+is the only sanctioned way, and it records the old→new value with your reason.
 When you fix `.tldrx/workspace.yml` mid-run and the approved stories still cite the old command strings,
 `tldrx plan sync-dod` rewrites just their dod lines — renames followed, removed commands dropped, and
 anything with no ancestor in the file's history flagged rather than guessed at.
@@ -209,7 +213,7 @@ context 83.7 KB of 160.0 KB (~23.8k tok, 12% of sonnet's ~200.0k window)
 ```
 
 Over `prompt_max_bytes` the stage is **refused** (exit 2) before anything spawns; `max_reads` stops
-the sub-agent at a read ceiling; `--effort` changes what a turn costs. What `--max-budget-usd` does is
+the sub-agent at a read ceiling; `--effort` changes what a turn costs. What `--max-usd` does is
 end a run *after* the turn it is already in — measured, one turn spent **$5.15** against a **$1.50**
 ceiling — so size the prompt for the money you are willing to lose. Afterwards `tldrx cost [--all]` adds up what was actually charged, per attempt, per stage, per
 run, read off `agent.result` events and nothing else. Retries are never merged — a retry is
@@ -219,10 +223,17 @@ Details: [`docs/guide/06-budgets-and-cost.md`](docs/guide/06-budgets-and-cost.md
 
 ## Several runs
 
-With several runs open and no id, every run-targeting command **refuses rather than guessing**,
-exits `2`, and lists them — `tldrx next: 3 runs are open — pass one:`. That means "you left off
-the id", not "it broke". Pass a positional `<run>` on `next`, `run status`, `cost`, `replay` and
-`retro`; `--run <id>` on the rest. `tldrx run status` with several open lists them all, exit `0`.
+With several runs open and no id, a run-targeting command **refuses rather than guessing** and
+lists them — `tldrx next: 3 runs are open — pass one:`. That means "you left off the id", not "it
+broke". Two of them refuse differently and it is worth knowing which: `tldrx run status` is not a
+refusal at all — it lists every open run and exits `0`, and it is the screen you read to find the
+id the others want — and `tldrx cost` refuses at exit `1`, not `2`.
+
+Most run-targeting commands take the id either way, a positional `<run>` or `--run <id>`: `next`,
+`cost`, `note`, `gate template`, `questions`, `budget show`, `ship`, `tickets`, and `run attend` ·
+`status` · `estimate` · `auto` · `unlock` · `cancel`. `replay` and `retro` take the positional only
+— `--run` there is an unknown flag. `approve`, `reject`, `answer`, `interview`, `plan`,
+`story reopen`, `watch` and `run gates set` take `--run <id>` only.
 
 `tldrx retro --all` goes the other way: it reads **every** run in the workspace and prints one
 table of what keeps catching you — finding class × count × how many runs × one example with its
@@ -233,9 +244,11 @@ Strictly read-only: it writes nothing, anywhere.
 
 **Both `.tldrx/` and `tldrx-work/`.** The files are the state — the map, the facts, the questions and
 their answers, `run.yml`, `budget.yml`, `events.jsonl`, the handoffs, the plan — so a teammate who clones
-the repo gets the run. The block `tldrx init` appends to `.gitignore` excludes five paths and nothing
-else, because those five are machine-local or regenerated: `.tldrx/graphify-out/`, `.tldrx/cache/`,
-`.tldrx/worktrees/`, `tldrx-work/*/.lock`, `tldrx-work/*/.agent/`.
+the repo gets the run. The block `tldrx init` appends to `.gitignore` excludes eight paths and nothing
+else, because those eight are machine-local, regenerated, or a backup git already holds the history
+of: `.tldrx/graphify-out/`, `.tldrx/cache/`, `.tldrx/worktrees/`, `tldrx-work/*/.lock`,
+`tldrx-work/*/.agent/`, `tldrx-work/*/*.bak`, `.tldrx/memory/*.bak` and
+`.claude/settings.json.bak-tldrx-*`.
 
 ## Documentation
 
@@ -272,6 +285,7 @@ back on the registry is 0.3.0.
 
 | Version | Date | Status | Contains |
 |---|---|---|---|
+| 0.5.0 | unreleased | `beta` | `tldrx drive` and its own preflight, `watch check` / `watch arm`, `questions cards`, `plan schema`, `retro --all` (with its findings fed back into every reviewer prompt) and `story reopen --for-fix`; `tldrx update` plus a cached newer-version notice; the dashboard reads `budget.yml` and `events.jsonl` — operator notes, reopens and retries, the per-phase budget panel, and a host-attended run metered in tokens against `ceiling_host_tokens`; a rejected review envelope no longer burns a story attempt; `ship` opens one PR per repo; merge-wave lock + ref guard; five golden-transcript evals, one per stage; `CONTRIBUTING.md` and a model-provider contract |
 | 0.4.0 | 2026-09-01 | `beta` | FIRST BETA — 40-issue hardening burn (DoD pre-flight + `plan sync-dod`, merge-wave lock + gated-HEAD, load-aware tests, claim-sources across all outputs), `tldrx learn` 8-chapter sandbox tutorial (cold-player QA), `tldrx ship` / `tldrx note` / `run gates set`, budget policies + dual-economy wiring, single integration branch for chained epics, epic worktrees live to run close, bilingual docs site |
 | 0.3.1 | 2026-08-31 | `alpha` | Unattended mode (gates_policy agent, review handshake, fixlist, decision cards, dual economy), 6 contact fixes from the first feature-scope runs, colored init, training repair round |
 | 0.3.0 | 2026-08-30 | `alpha` | expert training with provenance, auto gates with an undo, `tldrx status`, seed triage, the token economy (context ledger, `max_reads`, `cost`, `estimate`), `install --claude`, `interview`, the ticket mirror, `--help` with flags and exit codes |
@@ -286,6 +300,10 @@ path documented; `stable` = 1.0, semver from here on. The badge above shows the 
 
 ## Releasing
 
-**One command: `scripts/release.sh X.Y.Z --tag alpha`.** It is the only sanctioned path — a Claude Code hook denies hand-made `git tag` / `npm publish`, and `publish.yml` re-runs the same checks. Checklist and judgement calls: `docs/RELEASING.md`.
+**One command: `scripts/release.sh X.Y.Z --tag beta`.** The tag is not optional in practice: omit
+`--tag` and the script writes `alpha`, which is no longer this project's status. It is the only
+sanctioned path — a Claude Code hook denies hand-made `git tag` / `npm publish`, and `publish.yml`
+runs `release-check.sh --ci` (the file checks only) plus its own typecheck, tests and build.
+Checklist and judgement calls: `docs/RELEASING.md`.
 
 MIT, © 2026 Alan Martinez — a placeholder made while scaffolding; change it freely before anything ships.

@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: tldr-experts
-  text: Un flujo de desarrollo con IA que deja rastro por escrito
-  tagline: Cinco etapas, una compuerta al final de cada una — y tú eliges quién puede cerrarla. Toda afirmación escrita en un archivo con su fuente al lado. Corre desde tu terminal o desde Claude Code.
+  text: Un framework de desarrollo con IA basado en evidencia
+  tagline: Cinco etapas, una compuerta en cada una, y toda afirmación citada o rechazada. Corre desde tu terminal o desde Claude Code.
   actions:
     - theme: brand
       text: Guía rápida
@@ -22,7 +22,7 @@ features:
     details: Un hallazgo sin un archivo, una línea, un comando o un id de hecho detrás se rechaza antes de que la etapa pueda terminar. Se acabaron los párrafos muy seguros de sí mismos sobre código que nadie abrió.
   - title: El dinero se mide, no se adivina
     details: "Cada dólar que se reporta viene de lo que el modelo cobró de verdad. El único comando que estima lo dice con todas sus letras: ESTIMATE."
-  - title: Son nada más archivos
+  - title: Los archivos son el estado
     details: Todo vive en .tldrx/ y tldrx-work/, dentro de tu repo. Haz commit y quien clone se lleva el run completo.
 ---
 
@@ -55,7 +55,7 @@ compuerta con código de salida `4`: "el trabajo está hecho, la decisión es tu
 :::
 
 ::: info 3 — Fírmala, o regrésala
-`tldrx approve --note "por qué"` vuelve a correr las verificaciones de la etapa contra lo
+`tldrx approve --note "why"` vuelve a correr las verificaciones de la etapa contra lo
 que hay en disco y adelanta el cursor. `tldrx reject --note "…"` la regresa, y el siguiente
 intento lee tu nota.
 :::
@@ -65,14 +65,15 @@ primera vez que algo de verdad necesita a una persona.
 
 ## En qué punto está
 
-**Alpha, versión 0.4.0.** Todos los comandos son reales y están probados — la documentación
-de este sitio se escribió corriéndolos — pero las interfaces pueden cambiar sin aviso, y la
-autoridad es `tldrx --help` en tu máquina, no este sitio.
+**Beta, versión 0.4.0.** Todos los comandos son reales y están probados — la documentación
+de este sitio se escribió corriéndolos — y la autoridad es `tldrx --help` en tu máquina, no
+este sitio.
 
-El requisito para llegar a **beta** es público y ya se está avanzando en él: formatos de
-archivo congelados (los esquemas `version: 1` solo crecen), dos o más workspaces reales
-llevados hasta la fase Build, y una ruta de actualización documentada. **Stable** quiere
-decir 1.0 y semver de ahí en adelante.
+El requisito para llegar a **beta** era público y ya se cumplió: formatos de archivo
+congelados (los esquemas `version: 1` solo crecen), dos o más workspaces reales llevados
+hasta la fase Build, y una ruta de actualización documentada. Las versiones hasta la 0.3.1
+fueron `alpha`; la 0.4.0 es la primera `beta`. **Stable** quiere decir 1.0 y semver de ahí
+en adelante.
 
 El paquete se instala como `tldr-experts` y te deja dos comandos: `tldrx` (el corto) y
 `tldr-experts` (el mismo binario).

@@ -105,8 +105,13 @@ Which of these a given command can return is listed by `tldrx <command> --help`.
 ## Two conventions that apply almost everywhere
 
 - **It never guesses which run you meant.** With several open and no id, a run-targeting
-  command exits `2` and lists them. Pass a positional `<run>` on `next`, `run status`,
-  `cost`, `replay` and `retro`; `--run <id>` on the rest.
+  command lists them and refuses — exit `2`, except `cost`, which refuses at `1`.
+  `run status` is the one that does not refuse: it lists them and exits `0`, because it is
+  the screen you read to find the id every other command wants. How you pass that id
+  varies. `next`, `cost`, `note`, `ship`, and `run` on an open one (`attend`, `status`,
+  `estimate`, `auto`, `unlock`, `cancel`) take either a positional `<run>` or `--run <id>`;
+  `replay` and `retro` take the positional only; `approve`, `reject`, `answer`, `interview`
+  and `run gates set` take `--run <id>` only. `tldrx <command> --help` settles any of them.
 - **Progress output goes to stderr, always.** `--ui scene|compact|plain|off` (default
   `auto`) changes what you see while a sub-agent runs; stdout is byte-identical either way,
   so `tldrx run status --json | jq` is unaffected.

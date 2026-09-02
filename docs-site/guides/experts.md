@@ -4,10 +4,11 @@ title: Experts
 
 # Experts
 
-An expert is a folder of context that gets pasted into a stage's prompt. Nothing more
-magical than that — but the rules around what may go in it are the interesting part.
+An expert is a folder of context that gets pasted into a stage's prompt. The rules around
+what may go in it are the interesting part.
 
-`tldrx init` seeds six of them for you and never asks:
+`tldrx init` seeds them for you and never asks. How many depends on what detection found —
+here, one language and no source folder the map read as a domain:
 
 ```
 expert            status   last_trained  areas  evidence  levels
@@ -24,10 +25,16 @@ architect — created
   architect  ☆☆☆☆☆ 0  (no evidence)
 ```
 
-Five are **role experts** — `product` for What, `architect` for How and Plan, `delivery`
-for Plan, `developer` for Build, `operations` for Watch. The sixth is a **stack expert**,
-one per language in your workspace. All six start at level 0, and an expert at level 0 is
-not broken: it contributes its role description and nothing else.
+Three kinds are seeded. Five **role experts**, always — `product` for What, `architect`
+for How and Plan, `delivery` for Plan, `developer` for Build, `operations` for Watch; the
+stage files name them, so they do not depend on detection. Then one **stack expert** per
+language, detected or declared — two languages means two of them, which is why the count
+above is a floor and not a rule. Then one **domain expert** per top-level source folder the
+map read as a domain, capped at eight so a large monorepo does not produce fifty stubs
+nobody trains. The repo above had none to seed; a real codebase usually does.
+
+Every one of them starts at level 0, and an expert at level 0 is not broken: it contributes
+its role description and nothing else.
 
 ## What is inside one
 

@@ -13,10 +13,14 @@ skips: [how, plan]
 depth: minimal
 default_budget_usd: 5
 # gates  — who closes each stage's gate: `human` waits for `tldrx approve`,
-#           `auto` lets the facilitator close it when the five spec §5 conditions
-#           hold (checks pass, no open question, spend within ceiling, the stage
-#           did not fail, claim-sources clean). Every stage still ENDS at a gate;
-#           this only says who signs it. A stage not named here is `human`.
+#           `auto` lets the facilitator close it when ALL SEVEN conditions of
+#           `evaluateAutoGate` hold (checks pass, no open question, spend within
+#           ceiling, the stage did not fail, claim-sources clean, every story of
+#           the plan `done`, and the epic branch touched nothing undeclared).
+#           `agent` is the third policy: those same seven, plus no budget decision
+#           taken while the stage ran, plus a validated evidence note. Every stage
+#           still ENDS at a gate; this only says who signs it. A stage not named
+#           here is `human`.
 gates: {what: auto, build: human, watch: human}
 changes:
   - "What collapses to a ten-line handoff: symptom, blast radius, the one change."

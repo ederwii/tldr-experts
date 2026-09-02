@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: tldr-experts
-  text: An AI dev workflow that leaves a paper trail
-  tagline: Five stages, a gate at the end of each — and you choose who may close it. Every claim written to a file with a source next to it. Runs from your terminal or from Claude Code.
+  text: An evidence-first AI development framework
+  tagline: Five stages, a gate on every one, and every claim cited or refused. Runs from your terminal or from Claude Code.
   actions:
     - theme: brand
       text: Quickstart
@@ -22,7 +22,7 @@ features:
     details: A finding without a file, line, command or fact id behind it is refused before the stage can finish. No confident paragraphs about code nobody opened.
   - title: Money is measured, not guessed
     details: Every dollar reported comes from what the model actually charged. The one command that estimates says ESTIMATE in words.
-  - title: It is just files
+  - title: The files are the state
     details: Everything lives in .tldrx/ and tldrx-work/ in your repo. Commit them and a teammate who clones gets the whole run.
 ---
 
@@ -64,13 +64,14 @@ first time something genuinely needs a person.
 
 ## Where this is
 
-**Alpha, version 0.4.0.** Every command is real and tested — the docs on this site were
-written by running them — but interfaces may change without notice, and `tldrx --help` on
-your machine is the authority, not this site.
+**Beta, version 0.4.0.** Every command is real and tested — the docs on this site were
+written by running them — and `tldrx --help` on your machine is the authority, not this
+site.
 
-The bar for **beta** is public and being worked through: file formats frozen (`version: 1`
+The bar for **beta** was public and it has been cleared: file formats frozen (`version: 1`
 schemas only grow), two or more real workspaces taken through the Build phase, and a
-documented upgrade path. **Stable** means 1.0 and semver from then on.
+documented upgrade path. Releases through 0.3.1 were `alpha`; 0.4.0 is the first `beta`.
+**Stable** means 1.0 and semver from then on.
 
 Install name is `tldr-experts`; it gives you two commands, `tldrx` (short) and
 `tldr-experts` (the same binary).

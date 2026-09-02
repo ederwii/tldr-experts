@@ -9,7 +9,7 @@ import {
 export function renderHelp(version: string, commands: readonly Command[]): string {
   const width = Math.max(...commands.map((c) => c.name.length));
   const lines: string[] = [
-    `tldrx ${version} — tldr-experts, a file-based AI development workflow. Alpha.`,
+    `tldrx ${version} — tldr-experts, an evidence-first, file-based AI development framework. Beta.`,
     "",
     "Usage: tldrx <command> [args]",
     "",

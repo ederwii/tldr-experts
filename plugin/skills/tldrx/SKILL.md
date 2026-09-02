@@ -11,7 +11,7 @@ argument-hint: "[optional: which item, or what you want to work on]"
 
 # tldrx — status, then guide
 
-**Alpha.** Every command is implemented. `tldrx --help` is the authoritative
+**Beta.** Every command is implemented. `tldrx --help` is the authoritative
 surface — read it before you promise anything, and never narrate progress a tool
 did not make.
 

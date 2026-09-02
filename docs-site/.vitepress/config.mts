@@ -84,7 +84,7 @@ const sidebarEs = [
 export default defineConfig({
   title: "tldr-experts",
   description:
-    "A file-based AI development workflow. Five stages, a gate at the end of each whose closer you choose, and every claim on disk carrying a source.",
+    "An evidence-first, file-based AI development framework. Five stages, a gate at the end of each whose closer you choose, and every claim on disk carrying a source.",
   base: "/tldr-experts/",
   cleanUrls: true,
   lastUpdated: true,
@@ -116,7 +116,7 @@ export default defineConfig({
       lang: "es",
       link: "/es/",
       description:
-        "Un flujo de desarrollo con IA basado en archivos. Cinco etapas, una compuerta al final de cada una cuyo cierre tú decides, y toda afirmación en disco con su fuente al lado.",
+        "Un framework de desarrollo con IA basado en archivos y en evidencia. Cinco etapas, una compuerta al final de cada una cuyo cierre tú decides, y toda afirmación en disco con su fuente al lado.",
       themeConfig: {
         nav: [
           { text: "Guía rápida", link: "/es/quickstart" },
@@ -140,7 +140,7 @@ export default defineConfig({
         darkModeSwitchTitle: "Cambiar a modo oscuro",
         langMenuLabel: "Cambiar de idioma",
         footer: {
-          message: "Publicado bajo licencia MIT. Software alpha: las interfaces pueden cambiar.",
+          message: "Publicado bajo licencia MIT. Software beta: los formatos de archivo ya están congelados.",
           copyright: "© 2026 Alan Martinez",
         },
       },
@@ -173,7 +173,7 @@ export default defineConfig({
       },
     },
     footer: {
-      message: "MIT licensed. Alpha software — interfaces may change.",
+      message: "MIT licensed. Beta software — the file formats are frozen.",
       copyright: "© 2026 Alan Martinez",
     },
   },

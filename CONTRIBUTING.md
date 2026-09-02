@@ -46,8 +46,11 @@ disagree with your working tree at the worst possible moment.
    non-empty before believing it.
 
 Maintainers merge internal wave branches with `scripts/merge-wave.sh`, which takes a lock on
-the shared checkout and re-runs every gate before pushing. That script is for the maintainer's
-own multi-agent workflow; a fork's PR does not use it, and you do not need it.
+the shared checkout and re-runs every gate before pushing. It exits `1` dirty tree · `2` merge
+conflict · `3` red gate · `4` push failed · `5` HEAD moved during the gates · `6` gave up waiting
+for the lock · `7` the gated commit is not a fast-forward of `origin/main` — and on every one of
+them `main` is left unpushed. That script is for the maintainer's own multi-agent workflow; a
+fork's PR does not use it, and you do not need it.
 
 ### The shared checkout is not yours (agents, read this one twice)
 
@@ -65,8 +68,10 @@ mid-gate. The gated-HEAD assertion caught the aftermath and refused to push
 ([#89](https://github.com/ederwii/tldr-experts/issues/89)).
 
 Since then `merge-wave.sh` installs a `reference-transaction` hook
-(`scripts/merge-guard.sh`) that makes git itself refuse to move any ref in the shared
-checkout while a wave holds the lock, and drops a `.MERGE-WAVE-IN-PROGRESS` marker at the
+(`scripts/merge-guard.sh`) that makes git itself refuse to move a ref in the shared
+checkout while ANOTHER invocation holds the lock — the holding run's own git children carry
+`MW_LOCK_TOKEN` and pass, which is what lets the wave commit and push through its own guard —
+and drops a `.MERGE-WAVE-IN-PROGRESS` marker at the
 repo root so the wave is visible to whoever is standing in it. Install it by hand with
 `bash scripts/merge-guard.sh --install`; ask it a question with
 `bash scripts/merge-guard.sh --check`.
@@ -122,7 +127,7 @@ bun test                                            # must exit 0
 bun run build                                       # must exit 0 — it is not conditional
 ```
 
-Locally, run the same four things plus the seam invariant, each on its own line so no pipe
+Locally, run the same three gates plus the seam invariant, each on its own line so no pipe
 can eat an exit code:
 
 ```bash
@@ -134,7 +139,9 @@ grep -rn 'Bun\.' src | grep -v src/core/runtime/    # must print NOTHING
 
 That last one is the Bun/Node seam: the package is built with Bun and must **run** on Node,
 so every host capability that differs between the two — spawn, stdin, file IO, YAML — lives
-behind `src/core/runtime/`. A `Bun.` anywhere else is a runtime crash for half the users.
+behind `src/core/runtime/`. A `Bun.` anywhere else **under `src/`** is a runtime crash for half
+the users. `scripts/` and `test/` run under Bun by definition and are not scanned — `scripts/build.ts`
+calls `Bun.build` for a living.
 
 `bun run build` is deliberately unconditional in CI: it once swallowed its own exit code
 behind an `if`, and a red build passed.
@@ -156,9 +163,10 @@ behind an `if`, and a red build passed.
 
 ## Contributing a model-provider config
 
-**Status: [#27](https://github.com/ederwii/tldr-experts/issues/27) is closed as parked, not
-rejected.** The full provider layer waits for real demand for a second model provider — but
-the seam is described here precisely enough to build against, and a credible PR is the demand.
+**Status: [#27](https://github.com/ederwii/tldr-experts/issues/27) is closed as completed —
+its minimal slice, the `TLDRX_CLAUDE_BIN` seam, shipped; the full provider layer did not.** That
+layer waits for real demand for a second model provider — but the seam is described here precisely
+enough to build against, and a credible PR is the demand.
 Open an issue referencing #27 before you start, so scope is agreed once rather than in review.
 
 ### What exists today

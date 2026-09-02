@@ -28,7 +28,7 @@ Eso trae tres consecuencias prácticas.
   conventions/                   # cómo se escribe este repo
 
 tldrx-work/260901-bulk-pricing/  # una carpeta por pieza de trabajo
-  run.yml                        # el cursor, las compuertas, los costos — el punto de retomada
+  run.yml                        # el cursor, las compuertas, los costos — desde aquí se retoma
   budget.yml                     # techos, por run y por fase
   events.jsonl                   # bitácora de solo-agregar de todo lo que pasó
   01-what/ … 05-watch/           # una carpeta por etapa, con sus archivos de salida

@@ -64,8 +64,10 @@ If a command died badly and left a lock behind: `tldrx run unlock`.
 
 ## It said "3 runs are open — pass one" and refused
 
-That is working. With several runs open and no id, every run-targeting command refuses
-rather than guessing which one you meant, exits `2`, and lists them. Pass the id.
+That is working. With several runs open and no id, a run-targeting command lists them and
+refuses rather than guessing which one you meant — exit `2`, except `cost`, which refuses
+at `1`. `run status` is the one that does not refuse: it lists them and exits `0`, so it is
+where you go to find the id. Pass the id.
 
 ## What if I disagree with what it did?
 
@@ -96,9 +98,10 @@ teammate who clones the repo gets the run.
 
 ## Is it ready?
 
-**Alpha, 0.4.0.** Every command is real and tested; interfaces may change without notice.
-`tldrx --help` on your machine is the authority, not this site. Beta means frozen file
-formats, two or more real workspaces through Build, and a documented upgrade path.
+**Beta, 0.4.0.** Every command is real and tested; `tldrx --help` on your machine is the
+authority, not this site. Releases through 0.3.1 were `alpha`; 0.4.0 is the first `beta`, and
+the bar for it has been cleared: frozen file formats, two or more real workspaces taken
+through Build, and a documented upgrade path.
 
 ## Can I contribute?
 

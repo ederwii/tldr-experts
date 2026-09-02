@@ -312,7 +312,211 @@
     back as what to instrument. The two empty cases exit 3, never 0; a green meaning "I read no
     cards" is the failure this command exists to stop.
 
+- **Evals v1 — five golden-transcript evals, one per stage (#26, owner decision 2026-09-01: small
+  v1 now).** The suite proved the harness; nothing proved a STAGE. `test/evals/` now runs each of
+  What, How, Plan, Build and Watch through the real facilitator against the scripted stand-in agent
+  and asserts that stage's output CONTRACT. About 5 seconds on top of `bun test`.
+  - **One stage at a time, not a chain.** Stages are sequential — Plan cannot run until How's gate
+    is signed — so playing four stages to reach the fifth would make every eval depend on the ones
+    before it, and a regression in What would turn all five red without any of them saying why.
+    Each eval instead opens its own run on a workflow preset holding exactly one stage, which needs
+    no new code: `workflowPath` already prefers `.tldrx/workflows/<scope>.yml` over the shipped
+    presets, and `normalisePhase` already takes the phase folder from the stage's own `phase:`
+    rather than from its position. Whatever the stage genuinely reads — a plan for Build, a done
+    story for Watch — is seeded onto the disk by the scenario.
+  - **Built on `learn`'s machinery, not beside it.** The stand-in `claude`
+    (`src/core/learn/agentScript.ts`, `learnAgent.ts`) and the toy-repo sandbox are reused as they
+    are; the real CLI is unreachable by the same two doors `learn` closes. No production code
+    changed for this.
+  - **Contract, not snapshot.** Nothing compares bytes. The evals assert what the FRAMEWORK
+    computes: the declared outputs read back off `gate.requested`, the `checks:` outcomes and their
+    computed detail (`checkPlan`'s branch-model line), the artifacts re-parsed with the framework's
+    OWN validators (`validateQuestions`, `parseWatcherCard`), and the side effects a stage exists
+    for — a branch cut, the story's `dod` block re-run and its exit code recorded, a `--no-ff` merge
+    into the epic branch with `main` untouched, and a watcher card's status COMPUTED as `verified`
+    when the scenario's front matter claimed `draft`.
+  - **A check that is `skipped` for any reason other than being write-time-only now fails an eval.**
+    `runCheck` falls through to `unknown check id '<x>'`, which is what a renamed or deleted check
+    looks like from outside — and it would otherwise read as a pass.
+  - **`EVALS` is load-bearing, not bookkeeping.** A coverage test asserts it names every stage
+    under `stages/`, so a sixth stage shipping without an eval turns the suite red and says which
+    one is missing.
+  - **Every eval was watched failing before it was trusted.** One sabotage each, listed with its
+    symptom in `test/evals/README.md`; the Plan one is the shape to aim for — nothing crashed, every
+    count still matched, and dropping a cross-epic `depends_on` was still caught because the derived
+    branch model changed. The same file says how to add a sixth eval, and what v1 deliberately does
+    not cover: failure paths, the agent gate, attended runs, and prompt QUALITY, which needs a real
+    model and a judge.
+
+- **`tldrx story reopen <id> --for-fix --note "<defect>"` — a sanctioned fix round on a `done` story
+  (#58, owner decision 2026-09-01).** Measured on `260829-scoring-leaderboard`: S11's adversarial
+  review found a real defect (linkEmail succeeds, setDisplayName fails, the account is permanently
+  linked and the score never claimable). It was accepted, small and well understood — and the story
+  was already `done`, so the only choices were rejecting the whole Build stage, which destroys
+  fourteen good stories' closure, or fixing it outside the story machinery, which leaves an
+  epic-level commit with no story provenance. `done` → fix round was the missing arc.
+  - **No attempt is consumed.** The mechanism is the one that was already there: `story.reopened` is a
+    reset boundary the review ledger reads, so the approve that closed the story stops counting and
+    the fix runs as attempt 1 of 2 — with both turns available to it.
+  - **The same DoD and the same reviewer.** The story goes back to `todo` and the Build pipeline picks
+    it up unchanged; a fix a reviewer refuses twice blocks, exactly as the original would have.
+    Nothing is waved through because a human asked for it.
+  - **It cannot relitigate scope.** The `--note` names a defect, and `status:` is the ONLY line the
+    verb moves on the story file — the acceptance criteria the reviewer will judge against are the
+    ones that were already there.
+  - **One open fix round per story.** It opens on a `story.reopened` carrying the new `reason: fix`
+    and closes when the story is `done` again; a second `--for-fix` while one is open is refused,
+    naming who opened it and with which defect. The bound is read from `events.jsonl`
+    (`ReviewLedger.fixRound`), so it holds across processes.
+  - Refused when the story is **not** `done` (an unfinished story is the plain verb's job), when
+    `--note` is missing, and on that second round. `reason` is written on every `story.reopened` now —
+    `fix` or `attempts` — and an event without it predates the key and is an `attempts` reopen, the
+    only kind that existed.
+  - The plain verb's `done` refusal now points at `--for-fix` beside `reject --stage`.
+
+### Changed
+
+- **tldrx is no longer sold as "lightweight" (owner decision, 2026-09-02).** The word survived from
+  the concept doc, where it was true of a proposal. What it now describes is five stages, a
+  machine-enforced `[src: …]` grammar that refuses a write it cannot resolve, an adversarial
+  reviewer that is never the author, a dual-economy budget ledger, and a written trail from `run
+  new` to `retro` — 3079 tests across 108 files hold it up. One line replaces it everywhere, so
+  the npm page, the binary's own `--help`, the plugin manifest, the README and both landing pages
+  say the same thing: **an evidence-first, file-based AI development framework: five stages, a gate
+  on every one, and every claim cited or refused.**
+  - Changed in `package.json`, `src/cli/commands/help.ts` (the first line of `tldrx --help`),
+    `plugin/.claude-plugin/plugin.json`, `plugin/skills/tldrx/SKILL.md`, `docs/concept.md`,
+    `README.md`, and the docs site's `description`, hero and Spanish mirror.
+  - **The status tag moved with it, because it was already stale.** 0.4.0 shipped as `beta`
+    (`CHANGELOG.md`, `README.md` release table) while the badge, the README preamble, the binary,
+    the plugin manifest, the site's "Where this is" section, both site footers and the generated
+    release-notes preamble all still said `alpha`. They say `beta` now. The site's beta bar is
+    stated as CLEARED rather than as being worked through, which is what the release table has
+    claimed since 0.4.0.
+  - `docs/RELEASING.md` gains the thing that made this drift invisible: the `status-…` badge is a
+    hardcoded shields.io URL and does **not** update on its own, unlike the npm and CI badges
+    beside it. The README's own release paragraph now shows `--tag beta`, because `release.sh`
+    writes `alpha` when `--tag` is omitted.
+
+- **A watcher card may name a HUMAN owner — optional, per item, never invented (#70).**
+  `watch check` derived an owner from each item's own citation: `[src: api:src/Leaderboard.cs:64]`
+  → `api`. That was right for v1 and stays the fallback, but it answers a different question from
+  the one #70 asked — which repo EMITS a signal is not who gets paged when it stops.
+  - **Additive, in both halves.** An optional front-matter `owner:` (validated only when present,
+    so every card already on disk still validates) and an optional `(owner: <name>)` annotation on
+    an individual item, placed BEFORE its `[src: …]` token because §2.8 makes that token the last
+    thing on the line. Resolution is item → card → repo-derived, and the printed line says WHICH
+    it is showing: `owner: alice (declared on the item)` versus the pre-#70 `owner: api`, left
+    byte-identical for every card that declares nothing.
+  - **Filled from the ledger that already names owners, or not at all.** `tldrx init` parks
+    "Who owns `<repo>`?" as an `ownership` question and the answer lands in
+    `.tldrx/memory/facts.yml`. The Watch prompt was inlining `observability` and `deploy` facts
+    only, so a sub-agent asked for an owner had no honest source and would have invented one;
+    `ownership` is now inlined, and the brief says the name may come from nowhere else.
+  - **A lost name is an error, not an absence.** `(owner: )` is a card that TRIED to name somebody
+    and lost it, so it is a shape issue on the card rather than a silent fall-through to the repo
+    — which is the exact substitution the issue is about.
+
+- **`docs/guide/08-cli-reference.md` documents `note` and `ship` (#72).** Every command in `COMMANDS`
+  had a `## tldrx <cmd>` heading except three; #55 wrote `plan`'s, and these are the other two —
+  `ship` being the command that opens the PR at the end of a run, and `note` how an operator records
+  something against a stage. `DOCUMENTED_SUBCOMMANDS` in `test/cli.test.ts` grew to cover them, which
+  is what keeps each of these gaps a red test rather than a note. Only `hook` is left out, and
+  deliberately: its seven scripts are documented as the one `<script>` slot `USAGE_SPELLINGS` already
+  records as a spelling.
+
+- **`tldrx watch`'s one-line summary says checklist.** It read "List and re-check the watcher cards a
+  run produced", which described half of what `watch check` is for and disagreed with the `--help`
+  text #65 updated.
+
+- **`tldrx ship` opens one PR PER REPO when the branch is in more than one (#66, owner decision
+  2026-09-01).** Since #57 a chained multi-repo run cuts ONE integration branch, `epic/<run-id>`,
+  with the same name in every repo — so `ship` found it in several, every time, by construction, and
+  refused with `pass one: --repo <name>`. The last step of every such run was typing the same command
+  once per repo and remembering which ones had already gone through.
+  - Same handoff as the body of every PR, the repo name in the title, and every URL listed at the
+    end. Each PR opens against **that repo's own** `default_branch`.
+  - **One repo is byte-identical**, down to the four lines it prints and the number of processes it
+    spawns: the `gh pr list` probe below exists for the multi-repo case and never runs when there is
+    only one. The single-repo lines are asserted as exact strings, not substrings — "we did not
+    change the common case" is not a claim a `toContain` can make.
+  - **A partial failure names both sides.** PR 2 of 3 failing still opens PR 3, and the report lists
+    the repos that succeeded with their URLs and the repos that failed with the reason (exit `2`).
+    Aborting on the first failure would leave a half-shipped run and no statement of which half.
+  - **Re-running is safe.** Before creating, each repo is asked whether an open PR for the branch
+    already exists (`gh pr list --head`); one that has is skipped and listed. So the fix for a
+    partial failure is `tldrx ship` again and nothing else. A `gh` that fails or answers with
+    non-JSON is treated as "there is none", so a transient error can never silently turn a real ship
+    into a skip.
+  - `--repo` still narrows to exactly one, and `ship` still never pushes: an unpushed branch in one
+    repo is that repo's failure line, naming its `git push`, while the other repos' PRs still open.
+
 ### Fixed
+
+- **The prose was validated against the binary, top to bottom, and a lot of it was false.**
+  The last docs QA (3ee3723) was a release ago; `watch check`/`watch arm`, `update` and
+  its notice, the `drive` preflight, `plan schema`, `questions cards`, `story reopen --for-fix`,
+  the host-token economy and the dashboard's new sources have all landed since. Every claim in
+  `README.md`, all thirteen English pages, all thirteen Spanish pages and `CONTRIBUTING.md` was
+  cold-read for lies first, then checked against `tldrx <cmd> --help` and the source. What was
+  found was not drift at the edges — most of it was load-bearing.
+  - **A flag that does not exist.** The README's cost section explained what `--max-budget-usd`
+    does. That is the flag tldrx passes DOWN to `claude`, not one a user may type: `tldrx next
+    --max-budget-usd 5` answers `unknown flag`. The user-facing flag is `--max-usd`.
+  - **"Every run-targeting command exits `2`" was wrong twice**, in the README, the CLI reference
+    and the FAQ. `tldrx cost` refuses at exit **1** (`cost.ts` returns `EXIT_USAGE`, and its own
+    `--help` never lists a 2), and `tldrx run status` does not refuse at all — it lists every open
+    run and exits **0**, which is the whole point of it, since it is the screen you read to find
+    the id the others are asking for. All three pages also named five commands as taking a
+    positional `<run>`; the real split is that most take either form, `replay` and `retro` take
+    the positional only (`--run` there is an unknown flag, measured), and seven take `--run` only.
+  - **A documented command that silently creates a directory where you asked for a file.**
+    `tldrx dashboard --static --out ./somewhere/page.html` was in the reference. `--out` is a
+    directory and the filename is not negotiable (`writeStatic.ts` joins `index.html` and
+    `mkdirSync`s the path), so that line makes a directory literally named `page.html`.
+  - **A required tool the Quickstart did not name.** `env.yml` declares four `required: true`
+    tools; the install page named Node, `git` and `claude` and never mentioned **Bun ≥ 1.3**, so a
+    reader who followed it exactly got `tldrx doctor` exit 1 and no explanation.
+  - **The `tldrx learn` chapter list was stale AND swapped** on both language Quickstarts: 6 and 7
+    are `the agent gate` and `attended`, and the pages had two other titles in the other order —
+    so `--chapter 7` sent a reader looking for the agent gate to the wrong chapter.
+  - **Counts that had grown.** The `.gitignore` block `init` writes excludes **eight** paths, not
+    the five the README listed. The `[src: …]` grammar has **eight** kinds, not the seven the
+    evidence table showed — `aidlc:` was missing while the page's own next paragraph said
+    "eight". The What, How and Plan stages each declare `questions.md` as an output and Plan also
+    declares `budget.yml`; the stages table showed none of them, which matters because the auto
+    gate is measured on exactly that file. `tldrx init` seeds **three** kinds of expert — role,
+    stack and **domain** — and both expert sections said two.
+  - **Twelve `workflows/*.yml` said the auto gate has "the five spec §5 conditions"** and listed
+    five. `evaluateAutoGate` has had **seven** since the stories and boundary conditions landed.
+  - **The `tldrx drive` mandate's preflight (#84) was absent from every page that enumerates what
+    the mandate carries**, in both languages, and the English driving guide still taught the
+    three-command recipe the preflight replaced.
+  - **`CONTRIBUTING.md` overstated the ref guard and understated the lock.** The guard refuses a
+    ref move while ANOTHER invocation holds the lock — the holding run's own git children carry
+    `MW_LOCK_TOKEN` and pass, which is what lets the wave commit and push through its own guard;
+    as written it would have refused the merge it exists to protect. `merge-wave.sh`'s seven exit
+    codes were documented nowhere, in a file whose own rule is to read exit codes. The lock's wait
+    is bounded (`MW_LOCK_WAIT_S`, default 3600 s, then exit 6) and `CLAUDE.md` implied it was not.
+  - **The Bun/Node seam rule was stated more broadly than it is enforced**, in `CONTRIBUTING.md`,
+    `CLAUDE.md` and `docs/RELEASING.md`: the grep scans `src` only, and `scripts/build.ts` calls
+    `Bun.build` for a living. A contributor reading it literally files a bug against the build.
+  - **`publish.yml` does not "run the same check".** `release-check.sh --ci` skips items 4 and 5
+    entirely; the seam check runs in no CI workflow at all. Said plainly now, in both the README
+    and `docs/RELEASING.md`.
+  - **Four translated strings that had to stay English** in the Spanish mirror: two `--note`
+    samples, the `## Qn · Title` heading the §2.7 parser matches on, and `$0.00 of $25.00`, which
+    is what the dashboard actually renders.
+  - Fixed on the way: the `0.5.0` CHANGELOG section had grown **two `### Fixed` groups** and had
+    two additions (Evals v1, `story reopen --for-fix`) filed under `### Removed` — an artefact of
+    unioning sibling branches. One group per kind now, in the order `0.3.0` used, with every entry
+    byte-identical and only the duplicate heading gone.
+  - Two defects found while checking and **filed rather than fixed**, both outside this pass:
+    [#99](https://github.com/ederwii/tldr-experts/issues/99) `test/merge-wave.test.ts` asserts over
+    a shared `TMPDIR`, so a sibling process fails it (measured: red under load, green alone, and
+    green for the full suite with no sibling — 3079 pass), and
+    [#100](https://github.com/ederwii/tldr-experts/issues/100) `release.sh` pushes the release
+    commit to `main` before it runs `release-check.sh`.
 
 - **`expert train` says what it is about to spend, on which model, BEFORE it spends it (#96).**
   Live 2026-09-02: `tldrx expert train discoverer --area discoverer --mode full` inherited the
@@ -652,93 +856,6 @@
     `budget.yml` (per-phase ceilings, `on_exceed`, whether `next` is affordable), reading the
     watcher cards, and surfacing a preflight refusal. #86 is a separate bug the audit turned up in
     `run/waiting.ts` — a cancelled run is offered a retry — which both screens share.
-
-### Removed
-
-- **`templates/story.md` and `templates/epic.md` are deleted (#48, owner decision 2026-09-01,
-  option (a)).** They stated the Plan front-matter schema, shipped in the npm package, and
-  `grep -rn 'story\.md' src/` found nothing that read either one. Since 3ae0ce9 the live copy is
-  generated: `src/core/plan/schemaContract.ts` builds the story, the epic and `waves.yml` from
-  `STORY_KEYS` / `EPIC_KEYS` / `PLAN_STATUSES` / the `MAX_*` constants and splices them into the Plan
-  prompt. The drift guard 7ac298c added held the two files to that contract; deleting them removes
-  the second copy instead of maintaining it.
-  - **The consumers were tests, and they now generate.** `test/plan.test.ts` and
-    `test/plan-schema-contract.test.ts` were the only readers; both take the story and the epic from
-    `planContractExamples()`. Nothing in `src/`, `stages/`, `workflows/`, `plugin/` or `docs/` read
-    either file, and `run new` never copied them.
-  - **`templates` stays in `package.json` → `files`.** The directory still ships eleven templates
-    that ARE read at runtime — `templates/expert.md` and `templates/experts/<role>.md` are read by
-    `createExpert.ts` and `roleExperts.ts` in an installed package — so removing the entry would
-    break `tldrx expert create` to delete two files that no longer exist.
-  - **The drift guard changed meaning and kept its teeth.** It now asserts the GENERATED story and
-    epic validate through `validateStoryFile` / `validateEpicFile` with keys equal to `STORY_KEYS` /
-    `EPIC_KEYS` in order, that neither file is back on disk, and that no OTHER shipped template has
-    grown the same front matter under a new name. Proven, not assumed: setting the example's
-    `status:` to `wip` turns 4 tests red, and renaming `test_plan` in the generator turns 6 red.
-
-- **Evals v1 — five golden-transcript evals, one per stage (#26, owner decision 2026-09-01: small
-  v1 now).** The suite proved the harness; nothing proved a STAGE. `test/evals/` now runs each of
-  What, How, Plan, Build and Watch through the real facilitator against the scripted stand-in agent
-  and asserts that stage's output CONTRACT. About 5 seconds on top of `bun test`.
-  - **One stage at a time, not a chain.** Stages are sequential — Plan cannot run until How's gate
-    is signed — so playing four stages to reach the fifth would make every eval depend on the ones
-    before it, and a regression in What would turn all five red without any of them saying why.
-    Each eval instead opens its own run on a workflow preset holding exactly one stage, which needs
-    no new code: `workflowPath` already prefers `.tldrx/workflows/<scope>.yml` over the shipped
-    presets, and `normalisePhase` already takes the phase folder from the stage's own `phase:`
-    rather than from its position. Whatever the stage genuinely reads — a plan for Build, a done
-    story for Watch — is seeded onto the disk by the scenario.
-  - **Built on `learn`'s machinery, not beside it.** The stand-in `claude`
-    (`src/core/learn/agentScript.ts`, `learnAgent.ts`) and the toy-repo sandbox are reused as they
-    are; the real CLI is unreachable by the same two doors `learn` closes. No production code
-    changed for this.
-  - **Contract, not snapshot.** Nothing compares bytes. The evals assert what the FRAMEWORK
-    computes: the declared outputs read back off `gate.requested`, the `checks:` outcomes and their
-    computed detail (`checkPlan`'s branch-model line), the artifacts re-parsed with the framework's
-    OWN validators (`validateQuestions`, `parseWatcherCard`), and the side effects a stage exists
-    for — a branch cut, the story's `dod` block re-run and its exit code recorded, a `--no-ff` merge
-    into the epic branch with `main` untouched, and a watcher card's status COMPUTED as `verified`
-    when the scenario's front matter claimed `draft`.
-  - **A check that is `skipped` for any reason other than being write-time-only now fails an eval.**
-    `runCheck` falls through to `unknown check id '<x>'`, which is what a renamed or deleted check
-    looks like from outside — and it would otherwise read as a pass.
-  - **`EVALS` is load-bearing, not bookkeeping.** A coverage test asserts it names every stage
-    under `stages/`, so a sixth stage shipping without an eval turns the suite red and says which
-    one is missing.
-  - **Every eval was watched failing before it was trusted.** One sabotage each, listed with its
-    symptom in `test/evals/README.md`; the Plan one is the shape to aim for — nothing crashed, every
-    count still matched, and dropping a cross-epic `depends_on` was still caught because the derived
-    branch model changed. The same file says how to add a sixth eval, and what v1 deliberately does
-    not cover: failure paths, the agent gate, attended runs, and prompt QUALITY, which needs a real
-    model and a judge.
-
-- **`tldrx story reopen <id> --for-fix --note "<defect>"` — a sanctioned fix round on a `done` story
-  (#58, owner decision 2026-09-01).** Measured on `260829-scoring-leaderboard`: S11's adversarial
-  review found a real defect (linkEmail succeeds, setDisplayName fails, the account is permanently
-  linked and the score never claimable). It was accepted, small and well understood — and the story
-  was already `done`, so the only choices were rejecting the whole Build stage, which destroys
-  fourteen good stories' closure, or fixing it outside the story machinery, which leaves an
-  epic-level commit with no story provenance. `done` → fix round was the missing arc.
-  - **No attempt is consumed.** The mechanism is the one that was already there: `story.reopened` is a
-    reset boundary the review ledger reads, so the approve that closed the story stops counting and
-    the fix runs as attempt 1 of 2 — with both turns available to it.
-  - **The same DoD and the same reviewer.** The story goes back to `todo` and the Build pipeline picks
-    it up unchanged; a fix a reviewer refuses twice blocks, exactly as the original would have.
-    Nothing is waved through because a human asked for it.
-  - **It cannot relitigate scope.** The `--note` names a defect, and `status:` is the ONLY line the
-    verb moves on the story file — the acceptance criteria the reviewer will judge against are the
-    ones that were already there.
-  - **One open fix round per story.** It opens on a `story.reopened` carrying the new `reason: fix`
-    and closes when the story is `done` again; a second `--for-fix` while one is open is refused,
-    naming who opened it and with which defect. The bound is read from `events.jsonl`
-    (`ReviewLedger.fixRound`), so it holds across processes.
-  - Refused when the story is **not** `done` (an unfinished story is the plain verb's job), when
-    `--note` is missing, and on that second round. `reason` is written on every `story.reopened` now —
-    `fix` or `attempts` — and an event without it predates the key and is an `attempts` reopen, the
-    only kind that existed.
-  - The plain verb's `done` refusal now points at `--for-fix` beside `reject --stage`.
-
-### Fixed
 
 - **The #80 guard's kind sweep could not tell a regex literal in CODE from one quoted in a
   COMMENT (#83).** The marker half of that guard has a discriminator and says why: a `[` inside a
@@ -1180,60 +1297,28 @@
     budget.yml on disk today, the live one included — all three are identical on both sides and the
     save writes exactly what it always wrote.
 
-### Changed
+### Removed
 
-- **A watcher card may name a HUMAN owner — optional, per item, never invented (#70).**
-  `watch check` derived an owner from each item's own citation: `[src: api:src/Leaderboard.cs:64]`
-  → `api`. That was right for v1 and stays the fallback, but it answers a different question from
-  the one #70 asked — which repo EMITS a signal is not who gets paged when it stops.
-  - **Additive, in both halves.** An optional front-matter `owner:` (validated only when present,
-    so every card already on disk still validates) and an optional `(owner: <name>)` annotation on
-    an individual item, placed BEFORE its `[src: …]` token because §2.8 makes that token the last
-    thing on the line. Resolution is item → card → repo-derived, and the printed line says WHICH
-    it is showing: `owner: alice (declared on the item)` versus the pre-#70 `owner: api`, left
-    byte-identical for every card that declares nothing.
-  - **Filled from the ledger that already names owners, or not at all.** `tldrx init` parks
-    "Who owns `<repo>`?" as an `ownership` question and the answer lands in
-    `.tldrx/memory/facts.yml`. The Watch prompt was inlining `observability` and `deploy` facts
-    only, so a sub-agent asked for an owner had no honest source and would have invented one;
-    `ownership` is now inlined, and the brief says the name may come from nowhere else.
-  - **A lost name is an error, not an absence.** `(owner: )` is a card that TRIED to name somebody
-    and lost it, so it is a shape issue on the card rather than a silent fall-through to the repo
-    — which is the exact substitution the issue is about.
-
-- **`docs/guide/08-cli-reference.md` documents `note` and `ship` (#72).** Every command in `COMMANDS`
-  had a `## tldrx <cmd>` heading except three; #55 wrote `plan`'s, and these are the other two —
-  `ship` being the command that opens the PR at the end of a run, and `note` how an operator records
-  something against a stage. `DOCUMENTED_SUBCOMMANDS` in `test/cli.test.ts` grew to cover them, which
-  is what keeps each of these gaps a red test rather than a note. Only `hook` is left out, and
-  deliberately: its seven scripts are documented as the one `<script>` slot `USAGE_SPELLINGS` already
-  records as a spelling.
-
-- **`tldrx watch`'s one-line summary says checklist.** It read "List and re-check the watcher cards a
-  run produced", which described half of what `watch check` is for and disagreed with the `--help`
-  text #65 updated.
-
-- **`tldrx ship` opens one PR PER REPO when the branch is in more than one (#66, owner decision
-  2026-09-01).** Since #57 a chained multi-repo run cuts ONE integration branch, `epic/<run-id>`,
-  with the same name in every repo — so `ship` found it in several, every time, by construction, and
-  refused with `pass one: --repo <name>`. The last step of every such run was typing the same command
-  once per repo and remembering which ones had already gone through.
-  - Same handoff as the body of every PR, the repo name in the title, and every URL listed at the
-    end. Each PR opens against **that repo's own** `default_branch`.
-  - **One repo is byte-identical**, down to the four lines it prints and the number of processes it
-    spawns: the `gh pr list` probe below exists for the multi-repo case and never runs when there is
-    only one. The single-repo lines are asserted as exact strings, not substrings — "we did not
-    change the common case" is not a claim a `toContain` can make.
-  - **A partial failure names both sides.** PR 2 of 3 failing still opens PR 3, and the report lists
-    the repos that succeeded with their URLs and the repos that failed with the reason (exit `2`).
-    Aborting on the first failure would leave a half-shipped run and no statement of which half.
-  - **Re-running is safe.** Before creating, each repo is asked whether an open PR for the branch
-    already exists (`gh pr list --head`); one that has is skipped and listed. So the fix for a
-    partial failure is `tldrx ship` again and nothing else. A `gh` that fails or answers with
-    non-JSON is treated as "there is none", so a transient error can never silently turn a real ship
-    into a skip.
-  - `--repo` still narrows to exactly one, and `ship` still never pushes: an unpushed branch in one
-    repo is that repo's failure line, naming its `git push`, while the other repos' PRs still open.
+- **`templates/story.md` and `templates/epic.md` are deleted (#48, owner decision 2026-09-01,
+  option (a)).** They stated the Plan front-matter schema, shipped in the npm package, and
+  `grep -rn 'story\.md' src/` found nothing that read either one. Since 3ae0ce9 the live copy is
+  generated: `src/core/plan/schemaContract.ts` builds the story, the epic and `waves.yml` from
+  `STORY_KEYS` / `EPIC_KEYS` / `PLAN_STATUSES` / the `MAX_*` constants and splices them into the Plan
+  prompt. The drift guard 7ac298c added held the two files to that contract; deleting them removes
+  the second copy instead of maintaining it.
+  - **The consumers were tests, and they now generate.** `test/plan.test.ts` and
+    `test/plan-schema-contract.test.ts` were the only readers; both take the story and the epic from
+    `planContractExamples()`. Nothing in `src/`, `stages/`, `workflows/`, `plugin/` or `docs/` read
+    either file, and `run new` never copied them.
+  - **`templates` stays in `package.json` → `files`.** The directory still ships eleven templates
+    that ARE read at runtime — `templates/expert.md` and `templates/experts/<role>.md` are read by
+    `createExpert.ts` and `roleExperts.ts` in an installed package — so removing the entry would
+    break `tldrx expert create` to delete two files that no longer exist.
+  - **The drift guard changed meaning and kept its teeth.** It now asserts the GENERATED story and
+    epic validate through `validateStoryFile` / `validateEpicFile` with keys equal to `STORY_KEYS` /
+    `EPIC_KEYS` in order, that neither file is back on disk, and that no OTHER shipped template has
+    grown the same front matter under a new name. Proven, not assumed: setting the example's
+    `status:` to `wip` turns 4 tests red, and renaming `test_plan` in the generator turns 6 red.
 
 ## 0.4.0 — 2026-09-01
 

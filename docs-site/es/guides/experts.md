@@ -4,10 +4,12 @@ title: Expertos
 
 # Expertos
 
-Un experto es una carpeta de contexto que se pega dentro del prompt de una etapa. Nada más
-mágico que eso — pero las reglas sobre qué puede entrar ahí son la parte interesante.
+Un experto es una carpeta de contexto que se pega dentro del prompt de una etapa. Las
+reglas sobre qué puede entrar ahí son la parte interesante.
 
-`tldrx init` te siembra seis y nunca pregunta:
+`tldrx init` te los siembra y nunca pregunta. Cuántos, depende de lo que haya encontrado la
+detección — aquí, un solo lenguaje y ninguna carpeta de código que el mapa leyera como
+dominio:
 
 ```
 expert            status   last_trained  areas  evidence  levels
@@ -24,10 +26,17 @@ architect — created
   architect  ☆☆☆☆☆ 0  (no evidence)
 ```
 
-Cinco son **expertos de rol**: `product` para What, `architect` para How y Plan, `delivery`
-para Plan, `developer` para Build, `operations` para Watch. El sexto es un **experto de
-stack**, uno por cada lenguaje de tu workspace. Los seis arrancan en nivel 0, y un experto
-en nivel 0 no está roto: aporta la descripción de su rol y nada más.
+Se siembran tres clases. Cinco **expertos de rol**, siempre: `product` para What,
+`architect` para How y Plan, `delivery` para Plan, `developer` para Build, `operations` para
+Watch; los archivos de etapa los nombran, así que no dependen de la detección. Luego un
+**experto de stack** por lenguaje, detectado o declarado — dos lenguajes son dos de ellos, y
+por eso el conteo de arriba es un piso y no una regla. Y luego un **experto de dominio** por
+cada carpeta de código de primer nivel que el mapa leyó como dominio, con tope de ocho para
+que un monorepo grande no acabe con cincuenta esbozos que nadie entrena. El repo de arriba
+no tenía ninguno que sembrar; uno de verdad casi siempre sí.
+
+Todos arrancan en nivel 0, y un experto en nivel 0 no está roto: aporta la descripción de su
+rol y nada más.
 
 ## Qué trae uno adentro
 
