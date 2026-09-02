@@ -35,6 +35,13 @@ story's own definition of done, a commit, a merge into the epic — and then a s
 read-only reviewer whose job is to disagree. The epic branch waits for you; the framework
 never pushes.
 
+One branch per epic assumes the epics are independent. When a story `depends_on` a story in
+**another** epic, the epics form a chain and the run cuts a single **integration branch**,
+`epic/<run-id>`, with the epics staying in the plan as labels. That is decided at Plan time
+from what the plan already says — the `plan` check prints which model it read, `epics form a
+chain (E3→E2, E4→E2) → single integration branch` or `independent epics → one branch each`
+— so you never discover it mid-Build.
+
 ## Scope decides which stages run
 
 `tldrx run new <slug> --scope <scope>` picks a preset. There are 13 on disk, and the

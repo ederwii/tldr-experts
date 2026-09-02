@@ -304,6 +304,28 @@
     null` while the reader ran `^Q\d{1,6}$` — the shape's third spelling, telling an author a
     seven-digit question id was acceptable and then refusing it. Both refusal messages are now
     generated from the pattern they enforce, so neither can drift from its reader again.
+- **The docs site said 0.3.1, named a flag that does not exist, and told readers to hand-write
+  a mandate the CLI now prints.** A cold read of every page against `tldrx <cmd> --help`, EN and
+  ES. Three claims were false rather than merely stale: the version, printed on six pages, was two
+  releases behind what `npm i -g tldr-experts` installs; `--max-budget-usd` was named as a `tldrx
+  next` flag in both budget pages, but it is what tldrx passes down to `claude` and `tldrx next
+  --max-budget-usd 3` exits `1` on an unknown flag; and `guides/driving` said "there is no keyword
+  for the third part — the mandate is prose you write" three weeks after `tldrx drive
+  --attended|--unattended` shipped to print exactly that, versioned with the package. Also
+  corrected: the hero claimed a gate you own at the end of *each* stage, where `feature` ships two
+  `auto` ones; the quickstart said "five role experts" one line under output reading `experts 6
+  seeded`, and reported `$0.31 of $4.00` on a run opened at `$5.00` without saying the second
+  figure is the stage's ceiling.
+- **The site covered none of the last release's commands, and the Spanish mirror had fallen a
+  release behind the English one.** Added across both languages: `story reopen --for-fix`,
+  `questions lint`, `retro --all --json`, `watch check --execute`, `update_check: off`, `seed
+  answer`, exit `130`, `budget.yml`'s `ceiling_host_tokens` / `on_host_tokens_exceed` (the host
+  economy was documented as unboundable), the integration-branch model for chained epics (#57),
+  a FAQ entry for `tldrx update` and the version notice, and a link to `CONTRIBUTING.md`. The ES
+  CLI reference was additionally missing `update`, `drive`, `retro --all` and `plan schema`
+  outright. `reference/cli` no longer pins a version number that goes stale every release. The
+  Spanish pages' code comments were half-translated; terminal output stays English, the docs
+  author's own `#` comments do not.
 
 - **`tldrx map --check` ran a SECOND, divergent `[src: …]` grammar; there is one grammar now
   (#80).** `src/core/map/srcToken.ts` was not a thin wrapper over the claim-sources reader — it was

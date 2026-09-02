@@ -20,7 +20,7 @@ budget  $0.00 spent of $5.00 ceiling ($5.00 left)
 
 Cuatro cosas acotan lo que cuesta una sola etapa, y nada más dos actúan *antes* de que se
 gaste el dinero. La guía práctica es [Presupuestos y estimaciones](/es/guides/budgets); la
-versión corta es que `--max-budget-usd` es la más débil de las cuatro, porque termina un
+versión corta es que `--max-usd` es la más débil de las cuatro, porque termina un
 run solo una vez que ya se conoce el costo de un turno, y no puede detener un turno que va
 en vuelo. Medido: una llamada con techo de $1.50 se mató después de haber gastado **$5.15**.
 
@@ -48,12 +48,20 @@ registra nada, y lo dice:
 Si tú sabes lo que costó un turno host, lo puedes declarar: `tldrx next --commit --cost-usd
 0.42`. Lo declarado se guarda aparte de lo medido, porque son afirmaciones distintas.
 
+Eso no deja sin límite a una fase host. `budget.yml` acepta un `ceiling_host_tokens`
+opcional, a nivel de run y por fase, y los `tokens:` declarados se suman contra **ese**
+techo, nunca contra `ceiling_usd`. Los dos nunca se suman ni se convierten: no hay tipo de
+cambio entre un dólar medido y un token de sesión host, e inventarlo sería adivinar un
+precio. Pasarse del techo avisa; `on_host_tokens_exceed: block` es la opción explícita que
+hace que en vez de avisar, niegue. Si no declaras techo de tokens, no hay contra qué
+comparar, así que no se revisa nada.
+
 ## Cómo leer la cuenta
 
 ```bash
-tldrx cost                # this run: per attempt, per stage, per run
-tldrx cost --all          # every run in the workspace, totalled per economy
-tldrx run estimate        # the one command that guesses — it says so in words
+tldrx cost                # este run: por intento, por etapa, por run
+tldrx cost --all          # todos los runs del workspace, sumados por economía
+tldrx run estimate        # el único que adivina — y lo dice con todas sus letras
 ```
 
 `tldrx cost` lee las cifras en dólares del log de eventos del run, y de nada más. **Nunca

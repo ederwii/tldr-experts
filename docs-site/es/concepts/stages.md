@@ -35,6 +35,13 @@ corrida del DoD (*definition of done*) de esa story, un commit, un merge a la é
 después un revisor aparte, de solo lectura, cuyo trabajo es no estar de acuerdo. La rama de
 la épica te espera a ti; el framework nunca hace push.
 
+Una rama por épica da por hecho que las épicas son independientes. Cuando una story lleva
+`depends_on` a una story de **otra** épica, las épicas forman una cadena y el run corta una
+sola **rama de integración**, `epic/<run-id>`, y las épicas se quedan en el plan como
+etiquetas. Eso se decide en Plan, a partir de lo que el plan ya dice: la verificación `plan`
+imprime qué modelo leyó — `epics form a chain (E3→E2, E4→E2) → single integration branch` o
+`independent epics → one branch each` —, así que nunca te enteras a medio Build.
+
 ## El scope decide qué etapas corren
 
 `tldrx run new <slug> --scope <scope>` elige un preset. Hay 13 en disco, y el preset dice
@@ -42,8 +49,8 @@ qué etapas corren, con cuánta profundidad, con qué presupuesto por omisión y
 cada compuerta.
 
 ```bash
-tldrx run new bulk-pricing --scope feature   # what, how, plan, build, watch — $25 default
-tldrx run new is-redis-enough --scope spike  # what, how only — $6 default, decision memo
+tldrx run new bulk-pricing --scope feature   # what, how, plan, build, watch — $25 por omisión
+tldrx run new is-redis-enough --scope spike  # solo what y how — $6 por omisión, memo de decisión
 ```
 
 Una etapa que el scope se salta queda registrada como saltada, no desaparece en silencio:

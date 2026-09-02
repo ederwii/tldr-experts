@@ -4,7 +4,7 @@ layout: home
 hero:
   name: tldr-experts
   text: Un flujo de desarrollo con IA que deja rastro por escrito
-  tagline: Cinco etapas, una compuerta tuya al final de cada una, y toda afirmación escrita en un archivo con su fuente al lado. Corre desde tu terminal o desde Claude Code.
+  tagline: Cinco etapas, una compuerta al final de cada una — y tú eliges quién puede cerrarla. Toda afirmación escrita en un archivo con su fuente al lado. Corre desde tu terminal o desde Claude Code.
   actions:
     - theme: brand
       text: Guía rápida
@@ -65,7 +65,7 @@ primera vez que algo de verdad necesita a una persona.
 
 ## En qué punto está
 
-**Alpha, versión 0.3.1.** Todos los comandos son reales y están probados — la documentación
+**Alpha, versión 0.4.0.** Todos los comandos son reales y están probados — la documentación
 de este sitio se escribió corriéndolos — pero las interfaces pueden cambiar sin aviso, y la
 autoridad es `tldrx --help` en tu máquina, no este sitio.
 

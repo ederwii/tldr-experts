@@ -10,8 +10,8 @@ Cada salida que ves aquí abajo vino de correr el comando; donde está recortada
 ## Instalar
 
 ```bash
-npm i -g tldr-experts     # gives you `tldrx` and `tldr-experts` — the same binary
-tldrx doctor              # the authority on what else you need
+npm i -g tldr-experts     # te deja `tldrx` y `tldr-experts`: el mismo binario
+tldrx doctor              # la autoridad sobre qué más te hace falta
 ```
 
 Necesitas **Node 20 o más nuevo**; el paquete es un bundle ya compilado, sin dependencias
@@ -26,7 +26,7 @@ tldrx learn
 ```
 
 Ocho capítulos, unos quince minutos, en un sandbox desechable con un repo de juguete y un
-agente de mentiras. Cada comando ahí dentro es el de verdad — `init`, `run new`, `next`,
+agente de utilería. Cada comando ahí dentro es el de verdad — `init`, `run new`, `next`,
 `answer`, `approve`, y un Build que corta una rama y corre un DoD real — así que nada de lo
 que te enseña puede desviarse de lo que hace el binario. **Sin llave de API, sin red,
 $0.00**, y no escribe nada fuera de su propio directorio de sandbox.
@@ -51,7 +51,7 @@ empieza de cero. Si lo que quieres es entender tldrx sin tocar nada tuyo, quéda
 
 ```bash
 cd your-project
-tldrx init            # deterministic and offline: filesystem and git only, $0.00
+tldrx init            # determinista y sin conexión: archivos y git nada más, $0.00
 tldrx interview --init
 ```
 
@@ -63,8 +63,8 @@ tldrx init — single-repo, 1 repo(s) under /Users/you/acme-api
   questions  4 written to .tldrx/init-questions.md
 ```
 
-`init` escribe `.tldrx/`: lo que detectó, un mapa del código, cinco expertos de rol y la
-lista corta de preguntas que la detección no pudo responder. `interview --init` te las hace
+`init` escribe `.tldrx/`: lo que detectó, un mapa del código, seis expertos — cinco de rol y
+uno de tu stack — y la lista corta de preguntas que la detección no pudo responder. `interview --init` te las hace
 en la terminal — contéstalas ahí en lugar de editar el archivo, porque la entrevista es lo
 que registra cada respuesta como un hecho numerado en `.tldrx/memory/facts.yml`:
 
@@ -102,8 +102,9 @@ gate pending: tldrx approve
 
 ::: tip El código de salida 4 no es un error
 `next` sale con `4` — *esperando a una persona*. El trabajo está hecho; la decisión es
-tuya. (Esa salida viene del sandbox, donde el agente es de mentiras. En tu proyecto la
-cifra en dólares es lo que el modelo cobró de verdad.)
+tuya. (La segunda cifra es el techo de esa etapa, no el del run. Esa salida viene del
+sandbox, donde el agente es de utilería; en tu proyecto la cifra en dólares es lo que el
+modelo cobró de verdad.)
 :::
 
 Lee `tldrx-work/260901-bulk-pricing/01-what/handoff.md`. Si la etapa te preguntó algo,

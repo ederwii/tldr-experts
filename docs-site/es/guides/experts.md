@@ -33,9 +33,9 @@ en nivel 0 no está roto: aporta la descripción de su rol y nada más.
 
 ```
 .tldrx/experts/billing/
-  expert.md              the role, the domain it owns, and its citation rules — a human wrote this
-  competencies.yml       one line per area, computed from evidence, never self-declared
-  knowledge/money.md     what training found, every bullet with a source
+  expert.md              el rol, el dominio que le toca y sus reglas de cita — esto lo escribió una persona
+  competencies.yml       una línea por área, calculada de la evidencia, nunca autodeclarada
+  knowledge/money.md     lo que encontró el entrenamiento, cada punto con su fuente
 ```
 
 La tabla de estrellas es la parte honesta:
@@ -69,7 +69,7 @@ que la etapa pidió le gana a material de referencia que nadie pidió.
 
 ```bash
 tldrx expert create billing --domain money
-tldrx expert train billing --area money --mode light --print-prompt   # free: prints and stops
+tldrx expert train billing --area money --mode light --print-prompt   # gratis: imprime y se para
 tldrx expert train billing --area money --mode light
 ```
 

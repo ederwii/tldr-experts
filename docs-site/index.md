@@ -4,7 +4,7 @@ layout: home
 hero:
   name: tldr-experts
   text: An AI dev workflow that leaves a paper trail
-  tagline: Five stages, a gate you own at the end of each, and every claim written to a file with a source next to it. Runs from your terminal or from Claude Code.
+  tagline: Five stages, a gate at the end of each — and you choose who may close it. Every claim written to a file with a source next to it. Runs from your terminal or from Claude Code.
   actions:
     - theme: brand
       text: Quickstart
@@ -64,7 +64,7 @@ first time something genuinely needs a person.
 
 ## Where this is
 
-**Alpha, version 0.3.1.** Every command is real and tested — the docs on this site were
+**Alpha, version 0.4.0.** Every command is real and tested — the docs on this site were
 written by running them — but interfaces may change without notice, and `tldrx --help` on
 your machine is the authority, not this site.
 

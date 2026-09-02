@@ -14,7 +14,7 @@ $0.00, y cada comando ahí dentro es el binario de verdad.
 Sí, y es la manera más agradable.
 
 ```bash
-tldrx install --claude    # writes .claude/skills/tldrx/, merges the hooks and status line
+tldrx install --claude    # escribe .claude/skills/tldrx/ y mezcla los hooks y la status line
 ```
 
 Después escribe **`/tldrx`** en ese proyecto. Corre `tldrx status`, encuentra lo que ya te
@@ -46,6 +46,15 @@ cualquier otra herramienta de programación con IA. Lo que va en ese prompt no e
 misterio: `tldrx next --prepare` lo escribe a un archivo e imprime su desglose byte por
 byte antes de lanzar nada.
 
+## ¿Cómo lo mantengo actualizado?
+
+`tldrx update`: es `npm i -g tldr-experts@latest` corrido por ti, e imprime el CHANGELOG
+entre la versión que tenías y la que quedó, leído de vuelta de lo que npm instaló y no
+supuesto. Además, cualquier comando te avisa en una línea cuando ya existe una versión más
+nueva: nunca se llama al registro en el camino caliente, la respuesta se cachea por un día,
+y jamás aparece en la salida `--json` ni dentro de un hook. `TLDRX_UPDATE_CHECK=off` lo
+calla en una terminal; `update_check: off` en `~/.tldrx/config.yml`, en toda la máquina.
+
 ## ¿Cómo lo detengo?
 
 Ctrl-C. Mata el árbol de procesos completo del subagente, registra un resultado parcial con
@@ -63,10 +72,11 @@ Pásale el id.
 ## ¿Y si no estoy de acuerdo con lo que hizo?
 
 ```bash
-tldrx reject --note "…"                    # send this stage back; the note reaches the next attempt
-tldrx reject --stage 02-how/how --note "…" # revoke an approval already given
-tldrx story reopen S3 --note "…"           # just this one build story
-tldrx run cancel --note "superseded"       # close the run for good; nothing is deleted
+tldrx reject --note "…"                    # regresa esta etapa; la nota le llega al siguiente intento
+tldrx reject --stage 02-how/how --note "…" # revoca una aprobación ya dada
+tldrx story reopen S3 --note "…"           # solo esta story de Build
+tldrx story reopen S3 --for-fix --note "…" # un defecto concreto en una story ya terminada
+tldrx run cancel --note "superseded"       # cierra el run para siempre; no se borra nada
 ```
 
 ## ¿Qué significan los códigos de salida?
@@ -79,6 +89,7 @@ tldrx run cancel --note "superseded"       # close the run for good; nothing is 
 | `3` | no encontrado — no hay workspace, no hay run, no hay tarjeta con ese nombre |
 | `4` | **esperando a una persona** — la etapa corrió y se detuvo en su compuerta. No es una falla. |
 | `5` | el subagente falló |
+| `130` | Ctrl-C — se mató al subagente y la etapa volvió a `ready` |
 
 ## ¿Tengo que hacer commit de `.tldrx/` y `tldrx-work/`?
 
@@ -87,10 +98,16 @@ quien clone el repo se lleva el run.
 
 ## ¿Ya está listo?
 
-**Alpha, 0.3.1.** Todos los comandos son reales y están probados; las interfaces pueden
+**Alpha, 0.4.0.** Todos los comandos son reales y están probados; las interfaces pueden
 cambiar sin aviso. La autoridad es `tldrx --help` en tu máquina, no este sitio. Beta quiere
 decir formatos de archivo congelados, dos o más workspaces reales llevados hasta Build, y
 una ruta de actualización documentada.
+
+## ¿Puedo contribuir?
+
+En [`CONTRIBUTING.md`](https://github.com/ederwii/tldr-experts/blob/main/CONTRIBUTING.md)
+está el recorrido que hace un cambio, las cuatro compuertas y lo que CI de verdad corre, las
+reglas de prueba-en-rojo-primero, y por dónde entraría un proveedor de modelo externo.
 
 ## Algo se está negando y no sé por qué
 

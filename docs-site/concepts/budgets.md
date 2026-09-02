@@ -20,7 +20,7 @@ budget  $0.00 spent of $5.00 ceiling ($5.00 left)
 
 Four things bound what a single stage costs, and only two of them act *before* the money
 is spent. The practical guide is [Budgets and estimates](/guides/budgets); the short
-version is that `--max-budget-usd` is the weakest of the four, because it ends a run only
+version is that `--max-usd` is the weakest of the four, because it ends a run only
 once a turn's cost is known and cannot stop a turn already in flight. Measured: a call
 with a $1.50 ceiling was killed after it had spent **$5.15**.
 
@@ -47,6 +47,14 @@ nothing instead, and says so:
 
 If you know what a host turn cost, you can declare it: `tldrx next --commit --cost-usd
 0.42`. Declared is kept separate from measured, because they are different claims.
+
+A host phase is not therefore unbounded. `budget.yml` takes an optional
+`ceiling_host_tokens`, at the run level and per phase, and the declared `tokens:` are summed
+against **that** — never against `ceiling_usd`. The two are never added and never converted:
+there is no exchange rate between a metered dollar and a host token, and inventing one
+would be a guess about a price. Crossing the ceiling warns; `on_host_tokens_exceed: block`
+is the explicit opt-in that makes it deny instead. Declare no token ceiling and there is
+nothing to compare against, so nothing is checked.
 
 ## Reading the ledger
 

@@ -20,18 +20,18 @@ Eso trae tres consecuencias prácticas.
 ## Dos directorios
 
 ```
-.tldrx/                          # what the tool knows about your project
-  workspace.yml                  # repos, stacks, branches, the commands it may run
-  map/                           # the code map, one folder per repo
-  memory/facts.yml               # every answer you have ever given, numbered
-  experts/                       # who the stages lean on, and what they have learned
-  conventions/                   # how this repo is written
+.tldrx/                          # lo que la herramienta sabe de tu proyecto
+  workspace.yml                  # repos, stacks, ramas, y los comandos que puede correr
+  map/                           # el mapa del código, una carpeta por repo
+  memory/facts.yml               # cada respuesta que has dado, numerada
+  experts/                       # en quién se apoyan las etapas, y qué han aprendido
+  conventions/                   # cómo se escribe este repo
 
-tldrx-work/260901-bulk-pricing/  # one folder per piece of work
-  run.yml                        # the cursor, the gates, the costs — the resume point
-  budget.yml                     # ceilings, per run and per phase
-  events.jsonl                   # append-only log of everything that happened
-  01-what/ … 05-watch/           # one folder per stage, holding its output files
+tldrx-work/260901-bulk-pricing/  # una carpeta por pieza de trabajo
+  run.yml                        # el cursor, las compuertas, los costos — el punto de retomada
+  budget.yml                     # techos, por run y por fase
+  events.jsonl                   # bitácora de solo-agregar de todo lo que pasó
+  01-what/ … 05-watch/           # una carpeta por etapa, con sus archivos de salida
 ```
 
 ## Los tres que importan

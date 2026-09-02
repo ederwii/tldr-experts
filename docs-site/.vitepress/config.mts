@@ -82,7 +82,7 @@ const sidebarEs = [
 export default defineConfig({
   title: "tldr-experts",
   description:
-    "A file-based AI development workflow. Five stages, a gate you own at the end of each, and every claim on disk carrying a source.",
+    "A file-based AI development workflow. Five stages, a gate at the end of each whose closer you choose, and every claim on disk carrying a source.",
   base: "/tldr-experts/",
   cleanUrls: true,
   lastUpdated: true,
@@ -114,7 +114,7 @@ export default defineConfig({
       lang: "es",
       link: "/es/",
       description:
-        "Un flujo de desarrollo con IA basado en archivos. Cinco etapas, una compuerta tuya al final de cada una, y toda afirmación en disco con su fuente al lado.",
+        "Un flujo de desarrollo con IA basado en archivos. Cinco etapas, una compuerta al final de cada una cuyo cierre tú decides, y toda afirmación en disco con su fuente al lado.",
       themeConfig: {
         nav: [
           { text: "Guía rápida", link: "/es/quickstart" },
