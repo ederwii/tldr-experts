@@ -299,6 +299,36 @@
 
 ### Fixed
 
+- **The #80 guard's kind sweep could not tell a regex literal in CODE from one quoted in a
+  COMMENT (#83).** The marker half of that guard has a discriminator and says why: a `[` inside a
+  regex opens a character class, so code that matches the `[src:` marker must spell it `\[src`
+  while prose writes `[src: …]` bare. The kind half had no equivalent, because prose quoting a
+  regex LITERAL copies it character for character — there is no signature inside `/^F\d{3,6}$/`
+  that a real production has and a quoted one lacks. #81 paid the tax: the doc comment explaining
+  which two literals had just been DELETED tripped the sweep in the very file that had stopped
+  classifying, and had to be reworded to name the shapes without writing them.
+  - **The discriminator is the line's ROLE, not its characters.** A line that is comment prose —
+    a whole-line `//`, a block opener, or one of its `*` continuation lines — is not a
+    classification, and the sweep now reads the file with those lines removed.
+  - **Line-local, holding no state, and that is the design rather than a shortcut.** #80's own
+    first attempt reached for a lexer and was bitten twice: eleven offenders that were all doc
+    comments, then five more that were template literals nested inside interpolations once
+    comments and strings were stripped. This predicate never looks inside a string, so an
+    unclosed `/**` in a prompt cannot unbalance it and blind the sweep to the code below —
+    asserted, not assumed. What it cannot lex it keeps: a shape quoted in a trailing comment
+    after code is still read as code, so this half still fails CLOSED.
+  - **Measured in both directions on the real tree, not only on fixtures.** Re-injecting #81's
+    exact doc comment into `validateFactsFile.ts` leaves the sweep green; injecting two real
+    productions as CODE into the same file turns it red with `validateFactsFile.ts classifies
+    answer, fact` — the identical message #81 saw for prose. The sweep is also no longer
+    vacuous by assumption: a test pins the kinds the canonical grammar itself trips
+    (`answer`, `cmd`, `fact`) and the six productions the deleted `core/map/srcToken.ts`
+    carried, so a production that stops matching anything becomes visible rather than silent.
+  - **What it removed, measured over the tree.** 28 files matched at least one production
+    before, 20 after; the 8 that stopped matching were doc comments mentioning `→ exit` and
+    nothing else — each one production away from #81's surprise red. No file lost a
+    classification: the most kinds any file decides is still 3, and it is still `srcToken.ts`.
+
 - **`facts.yml` ids and citable ids were two spellings of one shape; now they are one constant
   (#81).** `src/core/facts/validateFactsFile.ts` defined its own `F` and `Q` id patterns, agreeing
   with `SRC_PATTERNS.fact` / `.answer` character for character, with nothing asserting that they
