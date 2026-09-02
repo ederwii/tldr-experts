@@ -31,7 +31,8 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isRecord } from "../schemas/validation.ts";
-import { parseSrcToken } from "../text/srcToken.ts";
+import { describeSrcFailure, diagnoseSrcToken, parseSrcToken, srcRule } from "../text/srcToken.ts";
+import { SRC_GRAMMAR_HEADING } from "../text/srcGrammarContract.ts";
 
 /** `04-build/fixlist/` — a sibling of `04-build/log/`, and tracked like it. */
 export const FIXLIST_DIR = "fixlist";
@@ -135,12 +136,12 @@ export function parseFixFindings(value: unknown): ParsedFixlist {
     // A reviewer's verdict is a claim too. `refuted` is the one disposition that
     // contradicts the finding it is attached to, and it may only do so with the
     // §2.8 citation that contradicts it — the same grammar, the same parser.
-    if (disposition === "refuted" && !citesSomething(where, detail)) {
-      problems.push(
-        `finding ${String(at)} is \`refuted\` with no \`[src: …]\` — a refutation is a claim, `
-        + "and it carries its evidence or it is not one",
-      );
-      continue;
+    if (disposition === "refuted") {
+      const why = citationProblem(where, detail);
+      if (why !== null) {
+        problems.push(`finding ${String(at)} is \`refuted\` and its citation was not read — ${why}`);
+        continue;
+      }
     }
     findings.push({
       n: typeof row.n === "number" && Number.isInteger(row.n) && row.n > 0 ? row.n : at,
@@ -165,13 +166,35 @@ function isDisposition(value: string): value is Disposition {
   return (DISPOSITIONS as readonly string[]).includes(value);
 }
 
-/** Does either field end in a `[src: …]` token that PARSES? Not merely one that exists. */
-function citesSomething(where: string, detail: string): boolean {
-  for (const candidate of [where, ...detail.split("\n")]) {
-    const token = parseSrcToken(candidate.trim());
-    if (token !== null && token.errors.length === 0 && token.refs.length > 0) return true;
+/**
+ * Why the refutation's citation was not read — or null when one WAS (gh #77).
+ *
+ * The old boolean produced the message the issue is named after: "`refuted` with
+ * no `[src: …]`", printed at a reviewer that had written one. It had written it
+ * mid-sentence, or with a `]` in it, or with `->` for `→` — three different
+ * mistakes, one message, none of them stated. Three story attempts went on
+ * guessing which.
+ *
+ * The candidates are the same ones the old check read — `where`, and each LINE of
+ * `detail`, because the token is anchored to end-of-line. The first candidate
+ * that attempted a citation is the one diagnosed: a reviewer that wrote one
+ * malformed token and no good one is told about the token it wrote, not told it
+ * wrote none.
+ */
+function citationProblem(where: string, detail: string): string | null {
+  const candidates = [where, ...detail.split("\n")].map((line) => line.trim());
+  for (const candidate of candidates) {
+    const token = parseSrcToken(candidate);
+    if (token !== null && token.errors.length === 0 && token.refs.length > 0) return null;
   }
-  return false;
+  for (const candidate of candidates) {
+    const failure = diagnoseSrcToken(candidate);
+    if (failure !== null) return describeSrcFailure(failure);
+  }
+  return "a refutation is a claim, and it carries its evidence or it is not one: `where`, or one "
+    + "LINE of `detail`, must END with a `[src: …]` token that parses. "
+    + `Write e.g. \`${srcRule("file-shape").good}\` — the full grammar is under `
+    + `"${SRC_GRAMMAR_HEADING}" in your prompt.`;
 }
 
 function str(value: unknown): string {

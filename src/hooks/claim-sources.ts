@@ -53,16 +53,27 @@ await runHook("claim-sources", async () => {
   if (looksLikeHandoff) {
     const report = validateHandoff(wouldBe.text, srcCtx);
     if (report.ok) return;
-    if (report.unsourced.length > 0) parts.push(claimSourcesDeny(relPath, report.unsourced));
-    if (report.malformed.length > 0) parts.push(claimSourcesMalformedDeny(relPath, report.malformed));
+    // `wouldBe.text` is the content the write WOULD leave on disk, which is the
+    // text the line numbers were measured against — so the quoted line is the one
+    // the author is looking at, not the one already saved (gh #77).
+    if (report.unsourced.length > 0) parts.push(claimSourcesDeny(relPath, report.unsourced, wouldBe.text));
+    if (report.malformed.length > 0) {
+      parts.push(claimSourcesMalformedDeny(relPath, report.malformed, wouldBe.text));
+    }
     if (report.emptySections.length > 0) {
       parts.push(claimSourcesEmptySectionDeny(relPath, [...report.emptySections]));
     }
-    if (report.unresolved.length > 0) parts.push(claimSourcesUnresolvedDeny(relPath, report.unresolved));
+    if (report.unresolved.length > 0) {
+      parts.push(claimSourcesUnresolvedDeny(relPath, report.unresolved, wouldBe.text));
+    }
   } else {
     const report = validateCitations(wouldBe.text, srcCtx);
-    if (report.malformed.length > 0) parts.push(claimSourcesMalformedDeny(relPath, report.malformed));
-    if (report.unresolved.length > 0) parts.push(claimSourcesUnresolvedDeny(relPath, report.unresolved));
+    if (report.malformed.length > 0) {
+      parts.push(claimSourcesMalformedDeny(relPath, report.malformed, wouldBe.text));
+    }
+    if (report.unresolved.length > 0) {
+      parts.push(claimSourcesUnresolvedDeny(relPath, report.unresolved, wouldBe.text));
+    }
   }
   if (parts.length === 0) return; // missing sections alone: the file is simply not a handoff yet
 

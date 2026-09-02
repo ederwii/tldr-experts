@@ -17,6 +17,7 @@ import { join, relative } from "node:path";
 import { SKIPPED_DIRS, toPosix } from "../detect/walk.ts";
 import { byteLength } from "../experts/expertKnowledge.ts";
 import { fenceFor, renderInputs, type PromptInput } from "../facilitator/prompt.ts";
+import { SRC_GRAMMAR_HEADING, renderSrcGrammarContract } from "../text/srcGrammarContract.ts";
 import { diffCommand } from "./git.ts";
 import type { PlannedEpic, PlannedStory } from "./plan.ts";
 
@@ -412,12 +413,31 @@ export function buildReviewerPrompt(parts: ReviewerPromptParts): string {
     "  criteria or the conventions actually require.",
     "- You have no write tool. Do not attempt to edit, commit or fix anything.",
     "",
+    ...grammarSection(parts.fixlistAvailable !== false),
     "## Stop",
     "",
     "Return the envelope and stop.",
     "",
   ];
   return lines.join("\n");
+}
+
+/**
+ * The `[src: …]` grammar, for the one verdict that is held to it (gh #77).
+ *
+ * `refuted` is the disposition that contradicts its own finding, and
+ * `parseFixFindings` refuses one whose citation does not parse — dropping the
+ * whole envelope back to `changes`, which costs the story a real attempt. Until
+ * now the prompt asked for a citation and never said what one is; run
+ * `260830-ordering-inventory` lost three attempts to exactly that gap.
+ *
+ * Emitted only when `fixlist` is on the table, for the reason `verdictLines`
+ * above withdraws the verdict itself: a reviewer that cannot return `refuted`
+ * pays nothing for the grammar of a citation it will never be asked for.
+ */
+function grammarSection(fixlistAvailable: boolean): readonly string[] {
+  if (!fixlistAvailable) return [];
+  return [`## ${SRC_GRAMMAR_HEADING}`, "", renderSrcGrammarContract(), ""];
 }
 
 /**

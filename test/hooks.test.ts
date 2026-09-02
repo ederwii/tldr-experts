@@ -134,10 +134,21 @@ const BAD_HANDOFF = [
   "",
 ].join("\n");
 
+/**
+ * gh #77: the deny quotes each offending bullet and names the rule it broke.
+ *
+ * Naming L14 and nothing else asks the author to go and find L14, and then to
+ * work out for themselves which of its characters the reader objected to — the
+ * loop that cost run `260830-ordering-inventory` three story attempts.
+ */
 const CLAIM_SOURCES_DENY =
   "[tldrx] claim-sources: 3 unsourced bullet(s) in tldrx-work/260828-leaderboard/02-how/handoff.md — L14, L22, L31.\n" +
-  "Every bullet under Findings/Decisions/Unknowns/Evidence ledger must end with " +
-  "[src: <repo:path:line> | https://… | Q<n> | F<n> | $ <cmd> → exit <n> | graph:<node> | absent:<path>]. " +
+  "L14: - Ranking ties are broken by completion time\n" +
+  "L22: - Whether old seasons are archived\n" +
+  "L31: - Nothing else was run\n" +
+  "Rule: every list item under Findings / Decisions / Unknowns / Evidence ledger ends with a " +
+  "`[src: …]` token. The token goes at the END of the line: " +
+  "[src: <repo:path:line> | https://… | Q<n> | F<n> | $ <cmd> → exit <n> | graph:<node> | absent:<path>].\n" +
   "Add the source or delete the claim.";
 
 describe("claim-sources (PreToolUse Write|Edit)", () => {
@@ -170,6 +181,10 @@ describe("claim-sources (PreToolUse Write|Edit)", () => {
     expect(denial(run)).toBe(
       "[tldrx] claim-sources: 1 unresolvable source(s) in tldrx-work/260828-leaderboard/02-how/handoff.md.\n" +
       "L4: [src: api:src/Nope.cs:8] — no such file: src/Nope.cs — tried repo `api` (api)\n" +
+      // gh #77: the line as written, so the author is not sent to go and read it.
+      // No `rule` line here — a file that is not there breaks no GRAMMAR rule, and
+      // the message already names the thing that was not found.
+      "      you wrote: - Hunt completion already emits a HuntCompleted domain event [src: api:src/Nope.cs:8]\n" +
       "A cited file must exist with the line in range, a command must be one of workspace.yml's, and " +
       "`$ … → exit n` belongs only in the Evidence ledger. Fix the citation or delete the claim.",
     );

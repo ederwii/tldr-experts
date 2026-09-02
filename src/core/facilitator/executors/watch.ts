@@ -19,6 +19,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { stageMdPath } from "../../run/workflowPreset.ts";
+import { applyCheckContracts } from "../checkContracts.ts";
 import { FactsStore } from "../../facts/FactsStore.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../../hooks/lib/workspace.ts";
 import { collectFeatures, PLAN_PHASE, type Feature } from "../../watch/features.ts";
@@ -257,7 +258,19 @@ async function featurePrompt(ctx: ExecutorContext, feature: Feature): Promise<st
   const diffs = await featureDiffs(ctx, feature);
   const facts = FactsStore.loadOrEmpty(factsPath(ctx.root)).facts;
   // Per-file resolution, and a refusal rather than an empty body (gh #39).
-  const stageMd = readFileSync(stageMdPath(ctx.spec.planned.id, ctx.spec.planned.source), "utf8");
+  //
+  // The contracts its `checks:` publish are spliced in exactly as the default
+  // one-agent path does it (gh #35, gh #77). The Watch stage declares
+  // `claim-sources` and its cards are validated with the same parser, so a watcher
+  // that did not get the grammar was the one writer being asked for citations
+  // without being told what one looks like.
+  const stageMd = applyCheckContracts(
+    readFileSync(stageMdPath(ctx.spec.planned.id, ctx.spec.planned.source), "utf8"),
+    {
+      checks: ctx.spec.planned.checks.map((check) => check.id),
+      outputs: ctx.spec.planned.outputs,
+    },
+  );
   const bundles = loadExpertBundles({
     root: ctx.root,
     staged: ctx.spec.planned.experts,

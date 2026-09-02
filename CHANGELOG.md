@@ -273,6 +273,35 @@
 
 ### Fixed
 
+- **A `[src: …]` rejection now states the RULE it enforced, and the grammar is published where the
+  writers read it (#77).** Run `260830-ordering-inventory` lost **three story attempts** to one
+  message. Three review envelopes were refused with "no `[src: …]`" — the SYMPTOM — while all three
+  carried a citation. The host guessed the grammar twice, got it wrong twice, and finally opened
+  `dist/tldrx.js` to extract three rules that were written down nowhere a writer could read them:
+  the token must END its line (`TRAILING_TOKEN_RE` is anchored), a `]` **inside** the token
+  truncates the match (`[^\]]*`), and a `cmd` source needs the real `→`, never ASCII `->`.
+  - **Every rejection on the path names its rule, quotes the line, and shows a corrected one.**
+    `SRC_RULES` (`src/core/text/srcToken.ts`) is fifteen rules, each with the pattern that enforces
+    it and a worked `bad`/`good` pair; `diagnoseSrcToken` maps a failure onto exactly one. The hook
+    denies, the gate's `claim-sources` detail, `parseFixFindings`' `refuted` refusal and every
+    `classifySrc` error now carry the id. The deny messages take the document text and quote the
+    offending line back — naming `L14` and stopping there is what sent the host looking.
+  - **The grammar is GENERATED and spliced into the prompt** (`renderSrcGrammarContract`), following
+    the #35 precedent: kinds from `SRC_KINDS`, patterns from `SRC_PATTERNS` printed `.source` and
+    all, rules and examples from `SRC_RULES`, the four-section rules from the same constants
+    `handoff.ts` enforces. It reaches the writers through the check-contracts registry (every stage
+    declaring `claim-sources` over a `.md` output), the Watch executor — which read `stage.md`
+    raw and so was the one writer never given any contract — and the reviewer prompt, whose
+    `refuted` verdict is held to this grammar and was never told what it is.
+  - **The trap is behavioural, not textual.** `test/src-grammar.test.ts` pushes every documented
+    `bad` back through `diagnoseSrcToken` and every `good` through `parseSrcToken`. Loosen a regex
+    without updating its rule and the suite goes red; a doc that has stopped being true cannot ship
+    quietly. It caught one bug on its first run: `RegExp.source` re-escapes non-ASCII, so
+    `CMD_RE.source` spells the arrow as a `\u`-escape — the contract would have documented "use the
+    real `→`" with the arrow itself written as an escape sequence. `readableSource` decodes it.
+  - Not changed: what the parser ACCEPTS. Tolerating `->` is a product decision and stays open
+    as #77's item 3.
+
 - **`merge-wave.sh` no longer leaves a conflicted tree behind, wedging every queued sibling (#76).**
   On a merge conflict the script exited `2` **without** `git merge --abort`, and the `EXIT` trap
   then released the lock. The conflicted index survived that handover, so the next queued

@@ -25,6 +25,7 @@
  */
 import { PLAN_CONTRACT_HEADING, renderPlanSchemaContract } from "../plan/schemaContract.ts";
 import { writesPlanArtefacts } from "../plan/validatePlan.ts";
+import { SRC_GRAMMAR_HEADING, renderSrcGrammarContract } from "../text/srcGrammarContract.ts";
 import { replaceSection } from "./prompt.ts";
 
 /** What a contract needs to know about the stage it might be rendered for. */
@@ -59,6 +60,20 @@ const SOURCES: readonly ContractSource[] = [{
   // check that will skip is bytes for nothing.
   applies: (stage) => stage.checks.includes("plan") && writesPlanArtefacts(stage.outputs),
   render: renderPlanSchemaContract,
+}, {
+  check: "claim-sources",
+  heading: SRC_GRAMMAR_HEADING,
+  // Same two halves. `checkClaimSources` skips outright for a stage with no `.md`
+  // output ("the stage declares no .md output"), and the hook only ever fires on
+  // `.md`, so a stage writing only `waves.yml` pays nothing.
+  //
+  // Every other stage pays ~7.5 KB, in the most-stable part of the prompt and so
+  // cached, and gh #77 is the receipt: run `260830-ordering-inventory` spent three
+  // story attempts discovering three rules by having attempts refused, because the
+  // grammar existed only as regexes in `srcToken.ts` and as a symptom in the deny.
+  applies: (stage) => stage.checks.includes("claim-sources")
+    && stage.outputs.some((path) => path.endsWith(".md")),
+  render: renderSrcGrammarContract,
 }];
 
 /** The contracts this stage's checks publish, in declaration order. */

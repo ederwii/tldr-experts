@@ -7,6 +7,8 @@
  * joined with one space. Everything else, down to the punctuation, is copied.
  */
 import type { Fact } from "../../core/facts/Fact.ts";
+import { BULLET_RULE, EMPTY_SECTION_RULE, noneBullet } from "../../core/text/handoff.ts";
+import { srcRule, type SrcRuleId } from "../../core/text/srcToken.ts";
 
 const GRAMMAR =
   "[src: <repo:path:line> | https://… | Q<n> | F<n> | $ <cmd> → exit <n> | graph:<node> | absent:<path>]";
@@ -15,11 +17,69 @@ export function usd(amount: number): string {
   return `$${amount.toFixed(2)}`;
 }
 
-export function claimSourcesDeny(relPath: string, lines: readonly number[]): string {
-  const list = lines.map((n) => `L${n}`).join(", ");
+/** An issue as every claim-sources deny receives it: a line, a reason, maybe a rule. */
+export interface DenyIssue {
+  readonly line: number;
+  readonly message: string;
+  readonly rule?: SrcRuleId;
+}
+
+/** Longest offending line quoted back before it stops helping. */
+const MAX_QUOTED_CHARS = 200;
+
+/**
+ * Line `n` of the document, as written (gh #77).
+ *
+ * Every deny on this path now takes the file's text and quotes the line it is
+ * refusing. Naming L12 and nothing else asks the author to go and find L12, then
+ * work out for themselves which of its characters the reader objected to — which
+ * is precisely the loop that cost run `260830-ordering-inventory` three attempts.
+ * A line number that cannot be resolved (an out-of-range index, no text passed)
+ * degrades to no quote rather than to a wrong one.
+ */
+function quoteLine(text: string, line: number): string | null {
+  if (text === "" || line < 1) return null;
+  const found = text.split("\n")[line - 1];
+  if (found === undefined || found.trim() === "") return null;
+  const trimmed = found.trim();
+  return trimmed.length <= MAX_QUOTED_CHARS ? trimmed : `${trimmed.slice(0, MAX_QUOTED_CHARS)}…`;
+}
+
+/**
+ * One issue, rendered as the rule it broke, the line as written, and a line that
+ * would pass.
+ *
+ * The corrected example comes from `SRC_RULES` — the same registry the reader
+ * diagnoses with — so it can never suggest a spelling the parser would refuse:
+ * `test/src-grammar.test.ts` pushes every one of them back through the parser.
+ */
+function issueBlock(issue: DenyIssue, text: string): string {
+  const out = [`L${String(issue.line)}: ${issue.message}`];
+  const quoted = quoteLine(text, issue.line);
+  if (quoted !== null) out.push(`      you wrote: ${quoted}`);
+  if (issue.rule !== undefined) {
+    const rule = srcRule(issue.rule);
+    // Most messages on this path ARE the rule's clause — `refuse()` builds them
+    // from it, so a caller that prints nothing else still says what was enforced.
+    // Print it a second time only when the message did not already carry it.
+    out.push(issue.message.includes(rule.rule)
+      ? `      rule:      \`${rule.id}\``
+      : `      rule \`${rule.id}\`: ${rule.rule}`);
+    out.push(`      corrected: ${rule.good}`);
+  }
+  return out.join("\n");
+}
+
+export function claimSourcesDeny(relPath: string, lines: readonly number[], text = ""): string {
+  const list = lines.map((n) => `L${String(n)}`).join(", ");
+  const quotes = lines
+    .map((n) => ({ n, quoted: quoteLine(text, n) }))
+    .filter((row): row is { n: number; quoted: string } => row.quoted !== null)
+    .map((row) => `L${String(row.n)}: ${row.quoted}`);
   return (
-    `[tldrx] claim-sources: ${lines.length} unsourced bullet(s) in ${relPath} — ${list}.\n` +
-    `Every bullet under Findings/Decisions/Unknowns/Evidence ledger must end with ${GRAMMAR}. ` +
+    `[tldrx] claim-sources: ${String(lines.length)} unsourced bullet(s) in ${relPath} — ${list}.\n` +
+    (quotes.length === 0 ? "" : `${quotes.join("\n")}\n`) +
+    `Rule: ${BULLET_RULE}. The token goes at the END of the line: ${GRAMMAR}.\n` +
     "Add the source or delete the claim."
   );
 }
@@ -32,13 +92,13 @@ export function claimSourcesEmptySectionDeny(
   relPath: string,
   sections: readonly { name: string; line: number }[],
 ): string {
-  const list = sections.map((s) => `"${s.name}" (L${s.line})`).join(", ");
+  const list = sections.map((s) => `"${s.name}" (L${String(s.line)})`).join(", ");
   return (
-    `[tldrx] claim-sources: ${sections.length} checked section(s) in ${relPath} contain no list ` +
+    `[tldrx] claim-sources: ${String(sections.length)} checked section(s) in ${relPath} contain no list ` +
     `items — ${list}.\n` +
-    "Findings/Decisions/Unknowns/Evidence ledger must each hold at least one sourced item; prose alone " +
-    "is not a claim anything can check. If there is genuinely nothing, say so as an item: " +
-    "`- none [src: absent:<what you looked at>]`."
+    `Rule: ${EMPTY_SECTION_RULE}.\n` +
+    "If there is genuinely nothing, say so as an item: " +
+    `\`${noneBullet("<what you looked at>")}\`.`
   );
 }
 
@@ -48,33 +108,44 @@ export function claimSourcesEmptySectionDeny(
  * Split out of `claimSourcesDeny` on 2026-08-29: a real user's first `tldrx next`
  * was refused with "9 unsourced bullet(s)" when all nine carried a citation —
  * they were wrapped in backticks. "You wrote no source" sent them looking for
- * something already on the page. `[assumption]` on the wording; there is no
- * verbatim spec text for this case.
+ * something already on the page.
+ *
+ * Rewritten again for gh #77. The one sentence it used to print — "the token must
+ * be the LAST thing on the line" — is right for one of the three ways a token
+ * fails to tokenise and actively misleading for the other two: a nested `]` fails
+ * with the token sitting exactly where that advice puts it. It now prints the
+ * rule the reader actually fired, the line as written, and a corrected line.
  */
 export function claimSourcesMalformedDeny(
   relPath: string,
-  issues: readonly { line: number; message: string }[],
+  issues: readonly DenyIssue[],
+  text = "",
 ): string {
-  const list = issues.map((i) => `L${i.line}`).join(", ");
+  const list = issues.map((i) => `L${String(i.line)}`).join(", ");
   return (
-    `[tldrx] claim-sources: ${issues.length} malformed citation(s) in ${relPath} — ${list}.\n` +
-    "The bullet cites a source but the token could not be read. The `[src: …]` token must be the LAST " +
-    "thing on the line: remove the backticks around it and any words after it. A closing quote, bracket " +
-    "or a final `.` after the `]` is fine."
+    `[tldrx] claim-sources: ${String(issues.length)} malformed citation(s) in ${relPath} — ${list}.\n` +
+    `${issues.map((issue) => issueBlock(issue, text)).join("\n")}\n` +
+    "The bullet cites a source but the token could not be read. Fix the citation or delete the claim."
   );
 }
 
 /**
  * The spec gives no verbatim text for a source that parses but does not resolve,
  * so this one is written in its voice. `[assumption]`
+ *
+ * It carries GRAMMAR failures too — a piece inside a token that no `src` rule
+ * accepts is reported here rather than as `malformed`, because the token itself
+ * tokenised. Those arrive with a `rule` and get the same three lines the
+ * malformed ones do (gh #77).
  */
 export function claimSourcesUnresolvedDeny(
   relPath: string,
-  issues: readonly { line: number; message: string }[],
+  issues: readonly DenyIssue[],
+  text = "",
 ): string {
-  const detail = issues.map((i) => `L${i.line}: ${i.message}`).join("\n");
+  const detail = issues.map((issue) => issueBlock(issue, text)).join("\n");
   return (
-    `[tldrx] claim-sources: ${issues.length} unresolvable source(s) in ${relPath}.\n` +
+    `[tldrx] claim-sources: ${String(issues.length)} unresolvable source(s) in ${relPath}.\n` +
     `${detail}\n` +
     "A cited file must exist with the line in range, a command must be one of workspace.yml's, and " +
     "`$ … → exit n` belongs only in the Evidence ledger. Fix the citation or delete the claim."
