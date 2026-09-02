@@ -2492,6 +2492,17 @@ finding it belongs to is dropped rather than half-read.
    code existed and is an intention. Where they disagree, the diff is the evidence. `[assumption]` — the patch is
    truncated at 24 KB per repo and the prompt says so; a repo that cannot be diffed is stated as an absence, never as a
    silent empty diff, which would read as "nothing was instrumented".
+
+   **The branch is read from `run.yml`'s `build.epic_branch` / `build.branch_model`, never derived from an epic or
+   feature id** (#90). Under `branch_model: integration` (#57) that is the run's ONE branch for every feature; under
+   `per-epic` it is the recorded entry the epic's own `branch:` names, and the declaration is used only as a key into
+   the record. The three outcomes are distinct, because they mean different things:
+   a branch that resolves gives a diff; a run whose record names **no** branch for the feature is an absence the prompt
+   states, with the instruction to cite `absent:`; and a branch the record **claims** that the repo cannot find is
+   incoherent state, on which the stage **refuses** (exit 2, nothing spawned) naming the recorded value and the repo.
+   Deriving it used to put `epic/<feature-id>` — a name nothing had cut — in front of both watchers of
+   `260901-leaderboard-v2` with a "treat this feature's code as UNSEEN" instruction; the all-`absent:` card that
+   invites PASSES `claim-sources`, because an `absent:` citation resolves by construction.
 3. **Validation and the status stamp**, done by the framework off disk: sections, tokens and citations via the shared
    handoff parser, then `status: verified` written only when no `absent:` source remains under `## Signal`.
 4. **`05-watch/handoff.md`, written deterministically** — Findings are one line per card with its status, each sourced

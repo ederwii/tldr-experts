@@ -358,6 +358,33 @@
     an envelope that PARSES and is not a valid verdict (unreadable ⇒ `changes`, never `approve`).
     A file that does not parse at all never reaches it.
 
+- **Watch READS the branch it diffs off `run.yml`; it used to derive one (#90).** The watch stage
+  diffed `feature.epic?.branch` — the `branch:` an epic file DECLARES, written at Plan time before a
+  line of code exists. Under the integration branch model (#57) the Build executor deliberately
+  ignores that value: every epic's stories merge into one `epic/<run-slug>` branch and the epic
+  stays in the plan as a label. So on `260901-leaderboard-v2` the prompt told BOTH watchers,
+  verbatim, that `epic/leaderboard-v2-api` *"does not resolve in scavtopia-workflows. Treat this
+  feature's code as UNSEEN — cite `absent:` rather than guessing at what it emits"* — about a branch
+  nothing had ever cut, while `build.epic_branch` recorded the real one three lines away in the same
+  run. An obedient watcher would have written an all-`absent:` card, and **that card PASSES
+  `claim-sources`**, because an `absent:` citation resolves by construction. Confident, validated,
+  useless coverage; caught only because the host's brief carried the real branch independently.
+  - **The branch now comes from the run's record and nowhere else** (`core/watch/recordedBranch.ts`).
+    `branch_model: integration` → the run's one recorded branch, for every feature. `per-epic`, and
+    every run written before `branch_model` existed → the recorded LIST, with the epic's declaration
+    used *only as a key into it*. A declaration is never returned as a branch: either it is in the
+    record and the record's entry is what is returned, or the answer is "unrecorded".
+  - **A branch the record CLAIMS and the repo cannot find is now a refusal**, not an instruction.
+    It is the run contradicting itself, so the stage refuses before anything spawns (`refused`, so
+    the stage goes back to `ready`), naming the recorded value, the feature and the repo, and saying
+    what fixes it. The treat-as-UNSEEN instruction survives for the one honest case — the record
+    names no branch at all — where the prompt now cites `build.epic_branch` rather than a name it
+    made up. The two absences used to render as the same sentence.
+  - Thirteen tests, red first (6 red / 6 green before, 13 green after): the derivation reproduced
+    under both branch models (the prompt's branch lines asserted byte for byte against
+    `build.epic_branch`), the loud path in both `headless` and `--prepare`, `--commit` deliberately
+    NOT refusing a turn that is already paid for, and the honest absence.
+
 - **The dashboard says the framework's CURRENT vocabulary, not 0.2.0's.** The live page
   shipped in 0.2.0 and has had one change since; the framework has had a great many. An audit of
   `src/core/dashboard/` against today's `run.yml` and `waiting.ts` found seven words the files use

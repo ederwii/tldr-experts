@@ -3,7 +3,8 @@
  *
  * Shape of the stage, in order:
  *
- *   1. a DETERMINISTIC pre-pass — done stories grouped by epic, one feature each.
+ *   1. a DETERMINISTIC pre-pass — done stories grouped by epic, one feature each,
+ *      each against the branch `run.yml` RECORDS for it (gh #90, `recordedBranch.ts`).
  *      No model is asked which features shipped, because the files already say.
  *   2. one sub-agent per feature, handed the done stories, the epic-branch diff,
  *      the observability/deploy facts and the repos' gotchas, and nothing else.
@@ -19,11 +20,13 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { stageMdPath } from "../../run/workflowPreset.ts";
+import { RunStore } from "../../run/RunStore.ts";
 import { applyCheckContracts } from "../checkContracts.ts";
 import { FactsStore } from "../../facts/FactsStore.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../../hooks/lib/workspace.ts";
 import { collectFeatures, PLAN_PHASE, type Feature } from "../../watch/features.ts";
 import { epicDiff, readRepoBases, type RepoDiff } from "../../watch/epicDiff.ts";
+import { recordedEpicBranch, type RecordedBuild } from "../../watch/recordedBranch.ts";
 import { featureBrief, featureInputs, watcherRelPath } from "../../watch/watchPrompt.ts";
 import { describeWatcherIssues, parseWatcherCard, setWatcherStatus } from "../../watch/watcherFile.ts";
 import { renderWatchHandoff, type WrittenCard } from "../../watch/renderWatchHandoff.ts";
@@ -103,7 +106,26 @@ export async function watchExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
     };
   }
 
-  const prompts = await Promise.all(features.map((feature) => featurePrompt(ctx, feature)));
+  // The diffs BEFORE any prompt, because one of their outcomes is a refusal: a
+  // branch this run's own `build.epic_branch` claims and the repo cannot find is
+  // incoherent state, and no card may be written off it (gh #90).
+  //
+  // Not on `--commit`. There the cards are already written and already paid for,
+  // the prompt is history, and a branch deleted between `--prepare` and here would
+  // otherwise refuse a turn that has nothing left to get wrong.
+  let prompts: readonly string[] = [];
+  if (ctx.mode !== "commit") {
+    const build = recordedBuild(ctx.runDir);
+    const diffs = await Promise.all(features.map((feature) => featureDiffs(ctx, feature, build)));
+    const incoherent = branchIncoherence(ctx, features, diffs);
+    if (incoherent !== null) {
+      return {
+        ok: false, awaiting: false, tasks: [], costUsd: 0, outputs: [],
+        lines: incoherent, error: null, refused: true,
+      };
+    }
+    prompts = features.map((feature, i) => featurePrompt(ctx, feature, diffs[i] ?? []));
+  }
 
   if (ctx.mode === "prepare") return prepare(ctx, features, prompts);
 
@@ -254,8 +276,7 @@ function collectResults(
 
 // --- prompt ----------------------------------------------------------------
 
-async function featurePrompt(ctx: ExecutorContext, feature: Feature): Promise<string> {
-  const diffs = await featureDiffs(ctx, feature);
+function featurePrompt(ctx: ExecutorContext, feature: Feature, diffs: readonly RepoDiff[]): string {
   const facts = FactsStore.loadOrEmpty(factsPath(ctx.root)).facts;
   // Per-file resolution, and a refusal rather than an empty body (gh #39).
   //
@@ -296,17 +317,83 @@ async function featurePrompt(ctx: ExecutorContext, feature: Feature): Promise<st
   return replaceSection(body, "Feature", featureBrief(feature));
 }
 
-/** The epic branch against each repo's default branch, read-only. */
-async function featureDiffs(ctx: ExecutorContext, feature: Feature): Promise<readonly RepoDiff[]> {
+/**
+ * The RECORDED epic branch against each repo's default branch, read-only.
+ *
+ * The branch comes from `run.yml`'s `build:` and nothing else. It used to come
+ * from `feature.epic?.branch` — the epic file's Plan-time DECLARATION, which the
+ * integration branch model (issue #57) deliberately ignores. On
+ * `260901-leaderboard-v2` that put a branch nobody had ever cut into both
+ * watchers' prompts, with an instruction to treat the feature as unseen; the
+ * all-`absent:` cards that would have produced pass `claim-sources` (gh #90).
+ */
+async function featureDiffs(
+  ctx: ExecutorContext,
+  feature: Feature,
+  build: RecordedBuild | undefined,
+): Promise<readonly RepoDiff[]> {
   const bases = readRepoBases(ctx.root);
-  const branch = feature.epic?.branch ?? "";
+  const recorded = recordedEpicBranch(build, feature);
   const diffs: RepoDiff[] = [];
   for (const repo of feature.repos) {
     const base = bases.get(repo);
     if (base === undefined) continue;
-    diffs.push(await epicDiff({ repo, dir: join(ctx.root, base.path), base: base.defaultBranch, branch }));
+    diffs.push(await epicDiff({
+      repo,
+      dir: join(ctx.root, base.path),
+      base: base.defaultBranch,
+      branch: recorded.kind === "recorded" ? recorded.branch : "",
+      unrecorded: recorded.kind === "unrecorded" ? recorded.reason : null,
+    }));
   }
   return diffs;
+}
+
+/** `run.yml`'s `build:` block, or nothing when the file will not open. */
+function recordedBuild(runDir: string): RecordedBuild | undefined {
+  try {
+    return RunStore.open(runDir).run.build;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The refusal for a branch the run RECORDED and the repo cannot find.
+ *
+ * Null when every feature is coherent — including the honest absence, where the
+ * record names no branch at all and the prompt says so. `refused` rather than
+ * `failed` because it is a precondition someone fixes (fetch the branch back, or
+ * correct `build.epic_branch`), not work that went wrong.
+ */
+function branchIncoherence(
+  ctx: ExecutorContext,
+  features: readonly Feature[],
+  diffs: readonly (readonly RepoDiff[])[],
+): readonly string[] | null {
+  const missing: RepoDiff[] = [];
+  const owners: string[] = [];
+  for (const [i, list] of diffs.entries()) {
+    for (const diff of list) {
+      if (!diff.branchMissing) continue;
+      missing.push(diff);
+      owners.push(features[i]?.id ?? "");
+    }
+  }
+  const first = missing[0];
+  if (first === undefined) return null;
+  return [
+    `${ctx.phaseId}/${ctx.stageId} refuses to start: run.yml records \`${first.branch}\` for `
+      + `\`${owners[0] ?? ""}\`, and it does not resolve in \`${first.repo}\`.`,
+    ...missing.slice(1).map((diff, i) =>
+      `  also \`${diff.branch}\` for \`${owners[i + 1] ?? ""}\` in \`${diff.repo}\``),
+    "  `build.epic_branch` is written by this run's own Build stage, so a branch it claims and the repo",
+    "  cannot find is incoherent state, not an absence. Watching it anyway would hand the watcher a",
+    "  feature it cannot see and a card of `absent:` citations — which passes `claim-sources` and covers",
+    "  nothing (gh #90).",
+    `  Fetch or restore the branch in \`${first.repo}\`, or correct \`build.epic_branch\` in `
+      + `${ctx.runId}/run.yml, then run this stage again.`,
+  ];
 }
 
 // --- odds and ends ---------------------------------------------------------
