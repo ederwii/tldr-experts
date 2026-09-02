@@ -294,6 +294,30 @@
   - Salvaging the partial evidence a budget death throws away is a design call and was NOT built;
     the question is asked on #96.
 
+- **`test/merge-wave.test.ts` no longer fails a wave over another wave's log directory (#95, #97).**
+  `merge-wave.sh` writes its logs to `${TMPDIR:-/tmp}/mw-$$`, and the test that asserts a green run
+  cleans up after itself diffed a listing of the machine's SHARED tmpdir. Every wave on the box
+  writes there — this file's other tests, every sibling agent's wave, and the real merge wave whose
+  `bun test` is running this very file — so the assertion was about ONE run's cleanup and measured
+  the whole machine. It went red twice on trees whose diff touches neither the script nor its tests:
+  **#95**, on a sibling's DELIBERATELY KEPT red-wave log (`mw-35458`, carrying another run's
+  `poison.txt` merge — merge-wave keeps a failed run's logs on purpose, "every FAIL above names the
+  directory it kept"); and **#97**, on a CONCURRENT invocation's LIVE `mw-15412`, twelve minutes into
+  #90's wave, with `main` left at an unpushed merge commit. Both cost a full re-gate, and the same
+  trees passed standalone.
+  - **Every invocation now gets a private `$TMPDIR` inside its own sandbox**, so "did THIS run clean
+    up after itself" has an answer that does not depend on what else the box is doing. Per
+    invocation, not per sandbox: this file deliberately runs two waves at once. The scan is read only
+    after the run has exited, so anything left in that root is a genuine leftover and no liveness
+    rule has to be guessed at — a concurrent wave's live `mw-<pid>` is, correctly, invisible from
+    there.
+  - **What the test asserts about merge-wave is unchanged.** A green run that stops removing its log
+    directory still fails it, and a red run that stops keeping the one it names still fails it — both
+    re-measured by mutating `scripts/merge-wave.sh` and watching the assertions fire.
+  - **A red run's kept logs now leave with the sandbox.** They were being written to the machine's
+    tmpdir and never removed — 1300 `mw-*` directories had accumulated there by the time #95 was
+    filed, including the one it tripped on.
+
 - **The merge lock now has something to say about raw git in the shared checkout (#89).** The
   lock serialises merge-wave INVOCATIONS; it never serialised git. Measured 2026-09-02: while
   agent A's gates were running, agent B typed `git reset --hard origin/main` into the same
