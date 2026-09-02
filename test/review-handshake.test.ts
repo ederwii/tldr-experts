@@ -242,10 +242,14 @@ describe("--prepare on a story awaiting review", () => {
 
     const outcome = await next(ws, { mode: "prepare", review: true });
 
-    // `failed()`, exit 5 — the same shape `commit()` uses for "no story is
-    // in_progress": a half of the handshake asked for over work that has not
-    // reached it yet.
-    expect(outcome.code).toBe(5);
+    // Exit 1 — the same shape `commit()` uses for "no story is in_progress": a
+    // half of the handshake asked for over work that has not reached it yet.
+    //
+    // It was exit 5, a stage FAILURE, until gh #82. Nothing here was attempted,
+    // nothing was spent and nothing is broken; the only thing wrong is the order,
+    // and the line below already says which command fixes it. What the stage does
+    // about that is pinned in test/handshake-sequencing.test.ts.
+    expect(outcome.code).toBe(1);
     expect(outcome.lines.join("\n")).toContain("S1 has no merged commit to review");
     expect(outcome.lines.join("\n")).toContain("tldrx next --prepare");
     expect(spawns(ws)).toEqual([]);
@@ -357,7 +361,11 @@ describe("--commit --review", () => {
 
     const outcome = await next(ws, { mode: "commit", review: true, at: "2026-08-29T10:20:00Z" });
 
-    expect(outcome.code).toBe(5);
+    // Exit 1, not the 5 this asserted until gh #82: the live run that earned this
+    // message had its stage and its whole run marked `failed` over a mistyped
+    // command. "Settles nothing" is now the smaller half of the promise — it also
+    // CHANGES nothing (test/handshake-sequencing.test.ts).
+    expect(outcome.code).toBe(1);
     expect(outcome.lines.join("\n")).toContain("no reviewer bundle is out");
     expect(story(ws, "S1")).toContain("status: review");
     expect(spawns(ws)).toEqual([]);

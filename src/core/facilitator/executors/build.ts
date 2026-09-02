@@ -745,11 +745,12 @@ class BuildSession {
 
     const work = this.reviewWorkFor(planned) ?? this.reviewWorkFromLedger(planned);
     if (work === null) {
-      return failed(
+      // Order, not damage: the developer half has simply not run yet, and the
+      // line already says which command runs it (gh #82).
+      return refusedOnSequence(
         this.ctx,
         `${planned.story.id} has no merged commit to review — a story is reviewed after its developer turn, `
         + "not instead of one. Run `tldrx next --prepare` for the developer half first.",
-        [],
       );
     }
     return await this.prepareReview(planned, work);
@@ -827,10 +828,12 @@ class BuildSession {
     this.recordGateFeedback();
     const planned = this.awaitingReview();
     if (planned === null) {
-      return failed(
+      // The refusal `260901-leaderboard-v2` earned on 2026-09-02, and the one
+      // that used to fail the stage and the run with it. The message was always
+      // right; what it did to the run was not (gh #82).
+      return refusedOnSequence(
         this.ctx,
         "no reviewer bundle is out — run `tldrx next --prepare --review` first",
-        [],
       );
     }
     const key = this.reviewBundleKey(planned.story.id);
@@ -838,7 +841,14 @@ class BuildSession {
     try {
       envelope = readResultObject(this.ctx.runDir, key);
     } catch (error) {
-      if (error instanceof PendingError) return failed(this.ctx, error.message, []);
+      if (error instanceof PendingError) {
+        // `absent` is "write the file, then run the same command again" — a step
+        // of the handshake, not a failure of it (gh #82). An `unreadable` one is
+        // a file somebody wrote wrong, and costs what it always did.
+        return error.kind === "absent"
+          ? refusedOnSequence(this.ctx, error.message)
+          : failed(this.ctx, error.message, []);
+      }
       throw error;
     }
     const work = this.reviewWorkFromBundle(planned.story.id) ?? this.reviewWorkFromLedger(planned);
@@ -910,14 +920,22 @@ class BuildSession {
     this.recordGateFeedback();
     const planned = this.inProgress();
     if (planned === null) {
-      return failed(this.ctx, "no story is `in_progress` — run `tldrx next --prepare` first", []);
+      // The developer's half of the same mistake (gh #82).
+      return refusedOnSequence(this.ctx, "no story is `in_progress` — run `tldrx next --prepare` first");
     }
     const key = this.bundleKey(planned.story.id);
     let result;
     try {
       result = readResult(this.ctx.runDir, key);
     } catch (error) {
-      if (error instanceof PendingError) return failed(this.ctx, error.message, []);
+      if (error instanceof PendingError) {
+        // `absent` is "write the file, then run the same command again" — a step
+        // of the handshake, not a failure of it (gh #82). An `unreadable` one is
+        // a file somebody wrote wrong, and costs what it always did.
+        return error.kind === "absent"
+          ? refusedOnSequence(this.ctx, error.message)
+          : failed(this.ctx, error.message, []);
+      }
       throw error;
     }
 
@@ -3792,6 +3810,38 @@ function reviewEventErrored(payload: Record<string, unknown>): boolean {
 
 function isPlanStatus(value: string | undefined): value is PlanStatus {
   return value !== undefined && ["todo", "in_progress", "review", "done", "blocked"].includes(value);
+}
+
+/**
+ * The handshake was called by the wrong end — and that is ALL that is wrong (gh #82).
+ *
+ * Nothing was attempted, nothing was spent, nothing is out that was not out
+ * before, and the fix is the other half of the same handshake, named on the line
+ * this returns. So the run must come out of the invocation exactly as it went in:
+ * see `ExecutorOutcome.sequencing` for what `runNext` does with it, and why that
+ * is not the same as the `refused` a dirty repo earns.
+ *
+ * `error: null` because there is no failure to report. `refused: true` beside it
+ * so a caller that has not learned about `sequencing` still lands on the
+ * not-a-failure path rather than on `failStage` — the fail-safe reading of a flag
+ * it does not know is the conservative one, not the destructive one.
+ *
+ * No `tasks` parameter, deliberately. A refusal that has a task to record is one
+ * that spent money, which is not this: giving the helper somewhere to put tasks
+ * would make it possible to write a sequencing refusal that quietly drops them.
+ */
+function refusedOnSequence(ctx: ExecutorContext, why: string): ExecutorOutcome {
+  return {
+    ok: false,
+    refused: true,
+    sequencing: true,
+    awaiting: false,
+    tasks: [],
+    costUsd: 0,
+    outputs: [],
+    lines: [`${ctx.phaseId}/${ctx.stageId}: ${why}`],
+    error: null,
+  };
 }
 
 function failed(ctx: ExecutorContext, error: string, tasks: readonly ExecutorTask[]): ExecutorOutcome {

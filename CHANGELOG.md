@@ -383,6 +383,46 @@
     nothing else — each one production away from #81's surprise red. No file lost a
     classification: the most kinds any file decides is still 3, and it is still `srcToken.ts`.
 
+- **A handshake called in the wrong ORDER no longer fails the stage and the run (#82).** On the
+  live run `260901-leaderboard-v2` (2026-09-02T00:36Z) the driver ran `tldrx next --commit
+  --review` while no reviewer bundle was out. The framework said exactly the right thing — "no
+  reviewer bundle is out — run `tldrx next --prepare --review` first" — and then emitted
+  `stage.failed` twice and flipped the run to `status: failed`, so a mistyped command needed an
+  explicit recovery. Nothing had been attempted: no spawn, no cent, no branch, no story moved.
+  Same family as #78/#79 (form vs work), applied to state transitions instead of attempts.
+  - **Five refusals are reclassified**, all of them the handshake asked for by the wrong end:
+    `--commit --review` with no reviewer bundle out; `--commit` with no story `in_progress`;
+    `--prepare --review` over a story whose developer half has not run; and either `--commit`
+    before its `result.json` has been written. Each now exits `1`, names the command that fixes
+    it, and leaves `run.yml` byte for byte as it was — no `stage.failed`, no status moved, no
+    task recorded, no cent metered.
+  - **This is the behaviour the framework already had one layer over.** A single-agent stage sent
+    `--commit` before its `--prepare` has always returned exit `1` and touched nothing
+    (`commitStage`). Build was the outlier because Build owns its own middle, so its refusals came
+    back as `ok: false` and `runNext` could only read that as a failed stage. The fix gives Build
+    the same door rather than inventing a second contract.
+  - **`sequencing` is a second flag, not a widening of `refused`.** `refused` sends the stage back
+    to `ready`, which is right for a precondition an operator must go and fix — a dirty repo, a
+    red base tree — because the cycle cannot continue. A sequencing refusal is a cycle that is
+    perfectly fine, held by the wrong end: the bundle is still out and sending the stage back to
+    `ready` would throw away the state the next command needs. Honoured only when the outcome
+    carries no tasks, no cost and no epic claim, so a refusal that spent something still records
+    it; defaulting to "record it" is the direction a mistake here is recoverable in.
+  - **The bug had a price, and it was the budget brake.** `runExecutor` skips the phase-budget
+    gate exactly when a stage is already `running`, because a Build stage hands out one story per
+    `--prepare`/`--commit` cycle. Failing the stage demoted it out of `running`, so the next
+    `--prepare` was priced as a fresh stage start: on the live run that was a `budget.blocked`
+    ten seconds after the refusal, $2.66 left against a re-charged $4.32 estimate, for money
+    already partly spent. Reproduced in the fixture and pinned.
+  - **`PendingError` carries a typed `kind`** — `absent` (the file was never written; a step of
+    the handshake) vs `unreadable` (somebody wrote it and got it wrong; still a failure). Typed
+    rather than matched on the message, for the reason #79 gave: a caller reading the words breaks
+    the moment the message improves.
+  - Genuine failures are untouched and pinned: a red Definition of Done still blocks its story, a
+    reviewer that dies is still recorded as a failed check, and a plan that cannot be loaded is
+    still `stage.failed` with a `failed` run. Two existing pins moved deliberately, both of them
+    asserting the old exit `5` of a pure sequencing refusal.
+
 - **`facts.yml` ids and citable ids were two spellings of one shape; now they are one constant
   (#81).** `src/core/facts/validateFactsFile.ts` defined its own `F` and `Q` id patterns, agreeing
   with `SRC_PATTERNS.fact` / `.answer` character for character, with nothing asserting that they
