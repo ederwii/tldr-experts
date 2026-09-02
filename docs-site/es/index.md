@@ -71,6 +71,31 @@ intento lee tu nota.
 Repite hasta terminar el run. `tldrx run auto` hace esa repetición por ti y se detiene la
 primera vez que algo de verdad necesita a una persona.
 
+## Cuando nadie está viendo
+
+Los tres pasos de arriba son contigo en el teclado. El otro caso es el exigente: le
+entregas un run para toda la noche, dentro de los límites que tú escribiste — qué
+compuertas puede cerrar un agente, y cuánto puede costar todo — y lo que regresa no es un
+resumen que no te quede más que creer. Es el run mismo: los archivos que escribió cada
+etapa, la nota de evidencia debajo de cada firma, el dinero que de verdad gastó, todo en
+disco y en el orden que quieras leerlo.
+
+```bash
+tldrx init            # determinista y sin conexión: archivos y git nada más, $0.00
+tldrx run new payments --scope feature --budget 25 \
+  --attended-by host --gates what:agent,plan:agent,build:agent,watch:agent
+tldrx drive --unattended    # el mandato: pégalo en una sesión de Claude Code
+```
+
+Ese último comando no abre ningún run y no lanza nada: imprime el **mandato** desde el que
+maneja la sesión. El mandato es lo que mantiene honesta la noche — un subagente que
+programa, luego un revisor nuevo que nunca es quien escribió el código, una compuerta que
+se firma solo sobre una nota de evidencia escrita, y las cuatro cosas para las que sí tiene
+que despertarte en lugar de decidirlas.
+
+[Atendido o desatendido](/es/guides/driving): las tres maneras de correr una etapa, cuál
+elegir, y qué cuesta cada una.
+
 ## En qué punto está
 
 **{{ theme.tldrxStatus }}, versión {{ theme.tldrxVersion }}.** Todos los comandos son reales y están probados — la documentación
