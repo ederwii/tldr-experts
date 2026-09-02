@@ -273,6 +273,38 @@
 
 ### Fixed
 
+- **`facts.yml` ids and citable ids were two spellings of one shape; now they are one constant
+  (#81).** `src/core/facts/validateFactsFile.ts` defined its own `F` and `Q` id patterns, agreeing
+  with `SRC_PATTERNS.fact` / `.answer` character for character, with nothing asserting that they
+  must. Found while fixing #80 and filed rather than fixed there, because it is not #80's defect:
+  the `[src: …]` token grammar has exactly one reader now, and what was duplicated here is the id
+  SHAPE that grammar happens to share with the facts file, reached by a different reader answering
+  a different question — which is why #80's kind sweep allowlisted the file rather than folding it in.
+  - **They must agree, and the DIRECTION is what makes it load-bearing.** One string makes one
+    trip: `formatFactId` mints `F102`, `validateFactsFile` admits it into `.tldrx/memory/facts.yml`,
+    and `classifySrc` reads that same `F102` back out of a `[src: F102]` token for `knowledgeFile`
+    to resolve against the store. So every id the facts file accepts must be citable, or a fact
+    exists that cannot be cited and is invisible to every reader downstream of it. Nothing in that
+    pipeline ever runs both readers on the same string, so the drift would have been silent. (The
+    other direction is merely untidy: a citable id no facts file holds is caught later, as a
+    citation that resolves to nothing.)
+  - **Derived, not merely asserted.** `validateFactsFile.ts` imports `SRC_PATTERNS.fact` and
+    `.answer` — the same publication surface `srcGrammarContract.ts` already generates the
+    documented grammar from — so there is one spelling rather than two that match. The #80
+    allowlist entry is deleted along with the need for it, and that sweep now covers the file like
+    any other; an exemption that has stopped being needed is one that will some day cover something
+    it was never granted for.
+  - **A behavioural guard too, because sharing a constant only holds while nobody re-types a
+    literal.** The kind sweep needs TWO productions in one file before it fires, so a single
+    respelled `F` shape slips straight past it — measured by sabotage, not assumed.
+    `test/map-citations.test.ts` now runs both readers over a table of ids spanning both digit
+    boundaries and compares their verdicts; loosening either shape by one digit turns it red with
+    `F12: facts.yml holds it but the grammar refuses it`.
+  - **One drift had already happened, in prose.** The `source.q` refusal read `expected ^Q\d+$ or
+    null` while the reader ran `^Q\d{1,6}$` — the shape's third spelling, telling an author a
+    seven-digit question id was acceptable and then refusing it. Both refusal messages are now
+    generated from the pattern they enforce, so neither can drift from its reader again.
+
 - **`tldrx map --check` ran a SECOND, divergent `[src: …]` grammar; there is one grammar now
   (#80).** `src/core/map/srcToken.ts` was not a thin wrapper over the claim-sources reader — it was
   a parallel set of regexes, and they disagreed on five axes: its `file` pattern

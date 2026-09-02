@@ -12,9 +12,32 @@ import {
   FACT_CONFIDENCES, FACT_KINDS, MAX_FACTS, MAX_FACT_CHARS, factNumber,
   type Fact, type FactsFile,
 } from "./Fact.ts";
+import { readableSource, SRC_PATTERNS } from "../text/srcToken.ts";
 
-const ID_RE = /^F\d{3,6}$/;
-const Q_RE = /^Q\d{1,6}$/;
+/**
+ * The two id shapes, TAKEN from the `[src: …]` grammar rather than respelled here (#81).
+ *
+ * They used to be two local literals respelling the same two shapes, agreeing with
+ * `SRC_PATTERNS.fact` / `.answer` character for character, with nothing asserting that
+ * they must. (They are not written out again even here: the shapes are one import away,
+ * and a comment that spells them is one more copy to drift — it also trips the kind sweep
+ * in `test/map-citations.test.ts`, which reads a quoted regex literal as a second reader.)
+ * They must agree, and in one direction in particular: **every id this file accepts
+ * has to be citable.** One string makes one trip. `formatFactId` mints `F102`, this
+ * validator admits it into `.tldrx/memory/facts.yml`, and `classifySrc` has to read that
+ * same `F102` back out of a `[src: F102]` token before `knowledgeFile` can resolve the
+ * citation against the store. A row this file accepted and the grammar refused would be a
+ * fact that exists and cannot be cited — invisible to every reader downstream — and the
+ * drift would be silent, because no code path runs both readers on the same string.
+ *
+ * So it is one constant, not two that happen to match. `SRC_PATTERNS` is published for
+ * exactly this reuse (see its doc comment): none of its patterns is global, so none
+ * carries a `lastIndex` and sharing one is safe. The correspondence is asserted
+ * behaviourally in `test/map-citations.test.ts`, so re-typing either shape as a local
+ * literal — which one file-level sweep alone would not catch — goes red.
+ */
+const ID_RE = SRC_PATTERNS.fact;
+const Q_RE = SRC_PATTERNS.answer;
 
 export function validateFactsFile(input: unknown): ValidationResult {
   const issues: ValidationIssue[] = [];
@@ -41,7 +64,7 @@ export function validateFactsFile(input: unknown): ValidationResult {
     }
     requireKeys(row, ["id", "fact", "area", "repos", "kind", "confidence", "source", "supersedes", "superseded_by", "retired"], path, issues);
     const id = typeof row.id === "string" ? row.id : "";
-    if (!ID_RE.test(id)) issues.push({ path: `${path}.id`, message: "id must match ^F\\d{3,6}$" });
+    if (!ID_RE.test(id)) issues.push({ path: `${path}.id`, message: `id must match ${readableSource(ID_RE)}` });
     else if (byId.has(id)) issues.push({ path: `${path}.id`, message: `duplicate fact id ${id}` });
     else {
       const n = factNumber(id);
@@ -62,7 +85,9 @@ export function validateFactsFile(input: unknown): ValidationResult {
       requireKeys(row.source, ["who", "when", "run", "q"], `${path}.source`, issues);
       const q = row.source.q;
       if (typeof q === "string" && !Q_RE.test(q)) {
-        issues.push({ path: `${path}.source.q`, message: "expected ^Q\\d+$ or null" });
+        // Generated, not typed: this said `^Q\d+$` while the reader ran `^Q\d{1,6}$` — the
+        // shape's third spelling, and the one that had already drifted (#81).
+        issues.push({ path: `${path}.source.q`, message: `expected ${readableSource(Q_RE)} or null` });
       }
     } else if (row.source !== undefined) {
       issues.push({ path: `${path}.source`, message: "expected a mapping" });

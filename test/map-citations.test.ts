@@ -34,7 +34,10 @@ import { makeWorkspace, type TempWorkspace } from "./fixtures/tempWorkspace.ts";
 import { noSpawnEnv } from "./fixtures/noSpawnPath.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 import { checkCitations, MAP_BULLET_RULE, type CitationProblem } from "../src/core/map/checkCitations.ts";
-import { srcRule, srcToken, SRC_RULE_IDS, type SrcRuleId } from "../src/core/text/srcToken.ts";
+import {
+  classifySrc, readableSource, srcRule, srcToken, SRC_PATTERNS, SRC_RULE_IDS, type SrcRuleId,
+} from "../src/core/text/srcToken.ts";
+import { validateFactsFile } from "../src/core/facts/validateFactsFile.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 
@@ -324,16 +327,20 @@ describe("there is exactly ONE `[src: …]` grammar in the tree (#80, #48's less
     ];
     const offenders: string[] = [];
     /**
-     * `validateFactsFile.ts` re-spells `^F\\d{3,6}$` and `^Q\\d{1,6}$` to validate the
-     * `id:` and `question:` FIELDS of `.tldrx/memory/facts.yml`. Today they agree
-     * with `SRC_PATTERNS.fact` / `.answer` character for character. That is a second
-     * copy of a shape and it is the same family of defect as #80 — but it is a
-     * different question (is this a valid fact id in a facts FILE) reached by a
-     * different reader, so it is FILED rather than fixed here. See gh #81.
+     * There are no exemptions, and that is a deliberate state rather than an empty one.
+     * `validateFactsFile.ts` held the only one: it re-spelled `^F\\d{3,6}$` and
+     * `^Q\\d{1,6}$` to validate the `id:` and `source.q` FIELDS of
+     * `.tldrx/memory/facts.yml`, a second copy of a shape reached by a different reader
+     * asking a different question, which is why #80 listed it and #81 filed it. #81
+     * resolved it the way the exemption's own reason implied it should be: that file now
+     * IMPORTS `SRC_PATTERNS.fact` / `.answer`, so the shape has one spelling and this
+     * sweep covers the file like any other. An exemption that has stopped being needed is
+     * one that will some day cover something it was never granted for, so it is deleted
+     * rather than kept empty — and the correspondence it used to excuse is asserted
+     * behaviourally in "a facts.yml id and a citable id are the same shape (#81)" below.
      */
-    const KIND_ALLOWED = new Set(["src/core/facts/validateFactsFile.ts"]);
     for (const rel of SRC_FILES) {
-      if (rel === CANONICAL || KIND_ALLOWED.has(rel)) continue;
+      if (rel === CANONICAL) continue;
       const text = readFileSync(join(REPO_ROOT, rel), "utf8");
       const matched = productions.filter(([, re]) => re.test(text)).map(([name]) => name);
       if (matched.length >= 2) offenders.push(`${rel} classifies ${matched.join(", ")}`);
@@ -347,6 +354,123 @@ describe("there is exactly ONE `[src: …]` grammar in the tree (#80, #48's less
       expect(index, `map/index.ts still exports ${gone}`).not.toContain(gone);
     }
     expect(index).toContain("../text/srcToken.ts");
+  });
+});
+
+// --- 2b. the id shapes `facts.yml` and the grammar share (#81) ------------------
+
+/**
+ * A `facts.yml` id and a citable id are ONE shape, and this is what holds them there.
+ *
+ * `validateFactsFile.ts` used to respell `^F\d{3,6}$` and `^Q\d{1,6}$` as its own two
+ * literals. They agreed with `SRC_PATTERNS.fact` / `.answer` character for character and
+ * nothing asserted that they must, so #80's kind sweep above carried an exemption for the
+ * file and #81 filed the coincidence rather than fixing it in that PR.
+ *
+ * WHY they must agree — the part that is not obvious from either file alone. One string
+ * makes one trip: `formatFactId` mints `F102`, `validateFactsFile` admits it into
+ * `.tldrx/memory/facts.yml`, and `classifySrc` has to read that same `F102` back out of a
+ * `[src: F102]` token for `knowledgeFile` to resolve the citation against the store. The
+ * load-bearing direction is CONTAINMENT: every id the facts file accepts must be citable,
+ * because a fact that exists and cannot be cited is invisible to every reader downstream
+ * of it, and nothing in that pipeline ever runs both readers on the same string — so the
+ * drift would never announce itself. The other direction is merely untidy: a citable id
+ * no facts file will hold is caught later, as a citation that resolves to nothing.
+ *
+ * Equality is how containment is guaranteed here, so equivalence is what the table below
+ * asserts. Sharing one constant makes drift impossible only while nobody re-types a
+ * literal, and the kind sweep above needs TWO productions in a file before it fires — a
+ * single respelled `^F\d{3,6}$` would slip past it. This guard is behavioural and needs
+ * only one: it runs both readers over the same strings and compares their answers.
+ */
+describe("a facts.yml id and a citable id are the same shape (#81)", () => {
+  /** The smallest document the validator accepts, so only `id` and `source.q` vary. */
+  function factsDoc(id: string, q: string | null): unknown {
+    return {
+      version: 1,
+      facts: [{
+        id, fact: "a claim", area: "core", repos: [], kind: "observed", confidence: "measured",
+        source: { who: "w", when: "2026-09-01", run: null, q },
+        supersedes: null, superseded_by: null, retired: null,
+      }],
+    };
+  }
+
+  /**
+   * Does the facts FILE hold this id?
+   *
+   * Matched on the message's stable prefix, not on the shape it quotes: `facts[0].id`
+   * also carries the ascending-order and duplicate rules, and this must isolate the
+   * SHAPE. The prefix survives a sabotaged pattern, which is the point — the helper has
+   * to keep telling the truth while the thing it is measuring is wrong.
+   */
+  function factsFileHoldsFactId(id: string): boolean {
+    return !validateFactsFile(factsDoc(id, null)).issues
+      .some((issue) => issue.path === "facts[0].id" && issue.message.startsWith("id must match"));
+  }
+
+  /** `source.q` carries no rule but the shape, so the path alone identifies it. */
+  function factsFileHoldsQuestionId(q: string): boolean {
+    return !validateFactsFile(factsDoc("F001", q)).issues
+      .some((issue) => issue.path === "facts[0].source.q");
+  }
+
+  /** Does the `[src: …]` grammar read the same string back as `kind`? */
+  function grammarReads(raw: string, kind: "fact" | "answer"): boolean {
+    const ref = classifySrc(raw);
+    return "kind" in ref && ref.kind === kind;
+  }
+
+  /** Spanning both boundaries of `\d{3,6}`, plus shapes that are not ids at all. */
+  const FACT_IDS = [
+    "F000", "F001", "F102", "F99999", "F123456",
+    "F1", "F12", "F1234567", "F", "Fabc", "F 1", "f001", "F-1",
+  ];
+  /** …and both boundaries of `\d{1,6}`. */
+  const QUESTION_IDS = [
+    "Q1", "Q3", "Q42", "Q123456",
+    "Q1234567", "Q", "Qabc", "Q 1", "q1", "Q-1",
+  ];
+
+  /**
+   * A table every row of which is refused (or every row accepted) would pass the
+   * agreement tests below while measuring nothing. #80's sweep learned this the hard way.
+   */
+  test("the tables are not one-sided: each holds ids of both verdicts", () => {
+    for (const [label, ids, kind] of [
+      ["fact", FACT_IDS, "fact"], ["question", QUESTION_IDS, "answer"],
+    ] as const) {
+      const citable = ids.filter((id) => grammarReads(id, kind));
+      expect(citable.length, `no ${label} id in the table is citable`).toBeGreaterThan(3);
+      expect(ids.length - citable.length, `no ${label} id in the table is refused`).toBeGreaterThan(3);
+    }
+  });
+
+  test("every fact id the facts FILE holds is one the `[src: …]` grammar cites, and back", () => {
+    const disagreements = FACT_IDS
+      .filter((id) => factsFileHoldsFactId(id) !== grammarReads(id, "fact"))
+      .map((id) => `${id}: facts.yml ${factsFileHoldsFactId(id) ? "holds" : "refuses"} it but the grammar ${grammarReads(id, "fact") ? "cites" : "refuses"} it`);
+    expect(disagreements).toEqual([]);
+  });
+
+  test("every question id the facts FILE holds is one the grammar cites, and back", () => {
+    const disagreements = QUESTION_IDS
+      .filter((q) => factsFileHoldsQuestionId(q) !== grammarReads(q, "answer"))
+      .map((q) => `${q}: facts.yml ${factsFileHoldsQuestionId(q) ? "holds" : "refuses"} it but the grammar ${grammarReads(q, "answer") ? "cites" : "refuses"} it`);
+    expect(disagreements).toEqual([]);
+  });
+
+  /**
+   * The THIRD spelling, and the one that had already drifted: the refusal messages wrote
+   * the shape out in prose. `source.q` said `^Q\d+$` while the reader ran `^Q\d{1,6}$`,
+   * so the file told an author a seven-digit id was fine and then refused it — #81 in
+   * miniature, inside the very file #81 is about. Generated from the pattern, it cannot.
+   */
+  test("each refusal quotes the shape its reader actually runs", () => {
+    const issues = validateFactsFile(factsDoc("F1", "Q1234567")).issues;
+    const byPath = (path: string) => issues.find((issue) => issue.path === path)?.message ?? "";
+    expect(byPath("facts[0].id")).toContain(readableSource(SRC_PATTERNS.fact));
+    expect(byPath("facts[0].source.q")).toContain(readableSource(SRC_PATTERNS.answer));
   });
 });
 
