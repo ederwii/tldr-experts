@@ -79,7 +79,7 @@ import {
 } from "../../build/prompts.ts";
 import { workspaceRecurring } from "../../retro/reviewerFocus.ts";
 import {
-  isGrammarRejection, looksLikeReviewerError, MAX_GRAMMAR_RETRIES, parseReview, renderGrammarRefusal,
+  isFormatRejection, looksLikeReviewerError, MAX_FORMAT_RETRIES, parseReview, renderFormatRefusal,
   renderPreviousAttempt, renderReviewLog, reviewerFailed, type Review,
 } from "../../build/review.ts";
 import { DEVELOPER_FAILED, dodGreen, type DodResult, type StoryOutcome } from "../../build/outcome.ts";
@@ -491,13 +491,13 @@ class BuildSession {
    * A third counter rather than a flag on one of the other two, because it counts
    * a third thing: `reviews` counts verdicts that cost an attempt, `fixlists`
    * counts free rounds granted to the AUTHOR, and this counts envelopes the
-   * claim-sources check sent back to the REVIEWER. It is reset — not incremented
+   * format check sent back to the REVIEWER. It is reset — not incremented
    * — the moment a verdict is finally counted, because the bound is per envelope
-   * round (see `MAX_GRAMMAR_RETRIES`). Read through `grammarRetriesSpent`, which
+   * round (see `MAX_FORMAT_RETRIES`). Read through `formatRetriesSpent`, which
    * falls back to the ledger: the host door settles one envelope per process, so
    * a bound this process alone remembered would be no bound at all.
    */
-  private readonly grammarRetries = new Map<string, number>();
+  private readonly formatRetries = new Map<string, number>();
   /** Epic branches this run cut or adopted; `runNext` writes them to run.yml. */
   readonly claimedEpics = new Set<string>();
   /**
@@ -858,14 +858,14 @@ class BuildSession {
     // declaration about the same kind of turn, so it takes the same precedence
     // over the envelope it did for the developer.
     const declaredReview = this.ctx.costUsd ?? numberOf(envelope.cost_usd);
-    // The claim-sources check refused this envelope and the round has a
+    // The envelope was refused on its FORMAT and the round has a
     // correction left (gh #78). Nothing is recorded and nothing is settled: the
     // bundle stays out — its presence IS "a review is outstanding" — with the
     // refusal spliced into the prompt, and `--commit --review` picks the
     // corrected envelope up on the SAME attempt. Reached through the same
-    // `isGrammarRejection` the spawned door uses, so the two economies cannot
+    // `isFormatRejection` the spawned door uses, so the two economies cannot
     // drift apart on what an attempt costs.
-    const again = this.grammarRetry(story, review, {
+    const again = this.formatRetry(story, review, {
       costUsd: declaredReview ?? 0,
       sessionId: typeof envelope.session_id === "string" ? envelope.session_id : null,
       metered: declaredReview !== undefined,
@@ -1396,7 +1396,11 @@ class BuildSession {
     }
     if (review.fixlistProblems.length > 0) {
       this.lines.push(
-        `  · ${storyId}: an unreadable fix list does not buy a free round — read as \`changes\``,
+        // Not "does not buy a free round", which is what this said before #78:
+        // an unreadable envelope DOES buy a bounded free CORRECTION now. What it
+        // still cannot buy is the third VERDICT — a fix-list round is granted on
+        // a fix list somebody can read, and on nothing else.
+        `  · ${storyId}: an unreadable fix list does not grant a fix-list round — read as \`changes\``,
       );
     }
     if (review.verdict !== "fixlist") return review;
@@ -1502,7 +1506,7 @@ class BuildSession {
       verdict: "n-a",
       review: {
         verdict: "n-a", summary: "", findings: [], fixlist: [], fixlistProblems: [],
-        grammarProblems: [], verdictProblem: null,
+        formatProblems: [], verdictProblem: null,
       },
       developerError: error,
       keepWorktree: true,
@@ -1945,8 +1949,8 @@ class BuildSession {
     const id = story.planned.story.id;
     let refusal: string | null = null;
     let spent = 0;
-    // Bounded by `MAX_GRAMMAR_RETRIES` and by nothing else — the loop can only
-    // go round again on the one outcome `grammarRetry` grants, and that grant is
+    // Bounded by `MAX_FORMAT_RETRIES` and by nothing else — the loop can only
+    // go round again on the one outcome `formatRetry` grants, and that grant is
     // counted on disk before this line is reached a second time (gh #78).
     for (;;) {
       const cap = this.reviewerCap(id);
@@ -1992,12 +1996,12 @@ class BuildSession {
       const review = this.narrowFixlist(id, parsed);
       const turn = round2(agent.costUsd);
 
-      // The envelope was refused on the CITATION grammar and the story still has
+      // The envelope was refused on its FORMAT and the story still has
       // a correction in hand: ask again. The turn's money is real and is recorded
       // as its own task row; the verdict is not, because there was none to record
       // (gh #78). Every other outcome — including the third refusal — falls
       // through to `recordReview` exactly as it always did.
-      const again = this.grammarRetry(story, review, {
+      const again = this.formatRetry(story, review, {
         costUsd: turn, sessionId: agent.sessionId, metered: true,
       });
       if (again !== null) {
@@ -2020,14 +2024,14 @@ class BuildSession {
   }
 
   /**
-   * Grant one free re-prompt for a grammar-refused envelope, or refuse to (#78).
+   * Grant one free re-prompt for a FORMAT-refused envelope, or refuse to (#78, #79).
    *
    * Returns the refusal to carry into the corrected envelope's prompt, or null —
    * and null is the answer for every case except the narrow one this exists for,
    * which is why the caller can treat it as "carry on exactly as before".
    *
    * The grant is RECORDED before it is used, in both places a bound has to live:
-   * `this.grammarRetries` for this process, and a `story.review_retried` event for
+   * `this.formatRetries` for this process, and a `story.review_retried` event for
    * every process after it. Attempt bookkeeping that moved with nothing in the log
    * would be unauditable, and this is the one path where an attempt is deliberately
    * not spent.
@@ -2036,7 +2040,7 @@ class BuildSession {
    * `recordReview`, because that turn happened and was billed: what it did not
    * produce is a VERDICT.
    */
-  private grammarRetry(
+  private formatRetry(
     story: StoryContext,
     review: Review,
     task: {
@@ -2048,17 +2052,17 @@ class BuildSession {
     },
   ): string | null {
     const id = story.planned.story.id;
-    if (!isGrammarRejection(review)) return null;
-    const spent = this.grammarRetriesSpent(id);
-    if (spent >= MAX_GRAMMAR_RETRIES) {
+    if (!isFormatRejection(review)) return null;
+    const spent = this.formatRetriesSpent(id);
+    if (spent >= MAX_FORMAT_RETRIES) {
       this.lines.push(
-        `  · ${id}: a ${String(MAX_GRAMMAR_RETRIES + 1)}th envelope was refused on the same citation `
-        + `grammar — the bound is ${String(MAX_GRAMMAR_RETRIES)} free correction(s), so this one is `
+        `  · ${id}: a ${String(MAX_FORMAT_RETRIES + 1)}th envelope was refused on its FORMAT — the `
+        + `bound is ${String(MAX_FORMAT_RETRIES)} free correction(s), so this one is `
         + "recorded as `changes` and costs the attempt",
       );
       return null;
     }
-    this.grammarRetries.set(id, spent + 1);
+    this.formatRetries.set(id, spent + 1);
     this.tasks.push({
       key: id,
       model: task.metered ? this.model() : null,
@@ -2069,22 +2073,25 @@ class BuildSession {
       ...(task.metered ? {} : { metered: false }),
       ...(task.tokens === undefined ? {} : { tokens: task.tokens }),
     });
-    const detail = review.fixlistProblems.join(" · ");
+    // `formatProblems`, not `fixlistProblems`: a verdict WORD outside the enum
+    // (gh #36) is a format refusal that raises no fix-list problem at all, and
+    // reading the narrower list would record — and re-prompt with — nothing.
+    const detail = review.formatProblems.join(" · ");
     this.ctx.emit("story.review_retried", {
       phase: this.ctx.phaseId,
       story: id,
       // The attempt this did NOT spend. That is the whole point of the event.
       attempt: story.attempt,
       retry: spent + 1,
-      max_retries: MAX_GRAMMAR_RETRIES,
+      max_retries: MAX_FORMAT_RETRIES,
       detail: clipDetail(detail),
     }, task.costUsd, "reviewer");
     this.lines.push(
-      `  · ${id}: the review envelope was REFUSED by the claim-sources check — ${detail}`,
+      `  · ${id}: the review envelope was REFUSED as malformed — ${detail}`,
       `  · ${id}: asking for a corrected envelope; this cost the story NO attempt `
-      + `(correction ${String(spent + 1)} of ${String(MAX_GRAMMAR_RETRIES)})`,
+      + `(correction ${String(spent + 1)} of ${String(MAX_FORMAT_RETRIES)})`,
     );
-    return renderGrammarRefusal(review.fixlistProblems);
+    return renderFormatRefusal(review.formatProblems);
   }
 
   /**
@@ -2096,19 +2103,19 @@ class BuildSession {
    * recorded the refusal has exited.
    */
   private pendingRefusal(storyId: string): string | null {
-    const said = readReviewLedger(this.ctx.runDir, storyId).grammarRefusal;
-    return said === null ? null : renderGrammarRefusal([said]);
+    const said = readReviewLedger(this.ctx.runDir, storyId).formatRefusal;
+    return said === null ? null : renderFormatRefusal([said]);
   }
 
   /**
-   * The HOST's envelope was refused on the citation grammar: hand the same review
+   * The HOST's envelope was refused on its FORMAT: hand the same review
    * back, with the refusal in its prompt, and settle nothing (gh #78).
    *
    * The refused `result.json` is MOVED ASIDE rather than left or deleted, and
    * both halves of that matter. Left, the next `--commit --review` would settle
    * the very envelope this just declined to count. Deleted, a host would lose a
    * judgement it paid for over one mis-placed bracket — so it is renamed to
-   * `result.refused-<n>.json`, which the host can copy back with the citation
+   * `result.refused-<n>.json`, which the host can copy back with the envelope
    * fixed. This is the one place `--prepare`'s "an answer already here is not
    * binned" rule is bent, and nothing is actually binned.
    */
@@ -2116,14 +2123,14 @@ class BuildSession {
     const id = story.planned.story.id;
     const key = this.reviewBundleKey(id);
     const dir = agentDir(this.ctx.runDir, key);
-    const kept = `result.refused-${String(this.grammarRetriesSpent(id))}.json`;
+    const kept = `result.refused-${String(this.formatRetriesSpent(id))}.json`;
     renameSync(join(dir, RESULT_FILE), join(dir, kept));
     rmSync(join(dir, RAW_FILE), { force: true });
     this.writeReviewBundle(story, work, refusal);
     const rel = relative(this.ctx.root, dir);
     this.lines.push(
       `  · ${id}: the refused envelope was kept as ${rel}/${kept} — `
-      + "copy it back with the citation fixed rather than writing it again",
+      + "copy it back with the envelope fixed rather than writing it again",
     );
     return {
       ok: true,
@@ -2149,8 +2156,8 @@ class BuildSession {
    * than a fallback: `--commit --review` settles one envelope per process, so
    * every host correction is read back off the log.
    */
-  private grammarRetriesSpent(storyId: string): number {
-    return this.grammarRetries.get(storyId) ?? readReviewLedger(this.ctx.runDir, storyId).grammarRetries;
+  private formatRetriesSpent(storyId: string): number {
+    return this.formatRetries.get(storyId) ?? readReviewLedger(this.ctx.runDir, storyId).formatRetries;
   }
 
   /**
@@ -2260,7 +2267,7 @@ class BuildSession {
     // starts with its corrections again (gh #78). Set to `0` rather than deleted
     // so this process's own answer keeps winning over a ledger it has not
     // finished writing; `readReviewLedger` resets on exactly the same events.
-    this.grammarRetries.set(id, 0);
+    this.formatRetries.set(id, 0);
     // The reviewer IS a check: `approve` is the pass, `changes` and `error` the
     // two failures. `verdict` is what tells a ledger which one it is reading, and
     // `detail` on an errored review is the ERROR, verbatim.
@@ -2299,7 +2306,7 @@ class BuildSession {
       verdict: "n-a",
       review: {
         verdict: "n-a", summary: "", findings: [], fixlist: [], fixlistProblems: [],
-        grammarProblems: [], verdictProblem: null,
+        formatProblems: [], verdictProblem: null,
       },
       cost,
       reason,
@@ -3367,7 +3374,7 @@ class BuildSession {
         findings: outcome.reviewFindings,
         fixlist: [],
         fixlistProblems: [],
-        grammarProblems: [],
+        formatProblems: [],
         verdictProblem: null,
       });
     }
@@ -3570,16 +3577,16 @@ export interface ReviewLedger {
    * moment any review verdict is recorded — including an errored one — because
    * the bound is per envelope round, not per story.
    */
-  readonly grammarRetries: number;
+  readonly formatRetries: number;
   /**
-   * What the claim-sources check said about the last refused envelope, or null.
+   * What the format check said about the last refused envelope, or null.
    *
-   * Cleared by the same events that reset `grammarRetries`, so it is never advice
+   * Cleared by the same events that reset `formatRetries`, so it is never advice
    * about a round that has already closed. `--prepare --review` splices it back
    * into a rewritten prompt: a host asked for a corrected envelope must not be
    * handed the brief that produced the broken one.
    */
-  readonly grammarRefusal: string | null;
+  readonly formatRefusal: string | null;
 }
 
 /** Everything the two resume paths and the requeue counter need, in one pass. */
@@ -3588,7 +3595,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
   const empty: ReviewLedger = {
     verdicts: 0, fixlistRounds: 0, erroredWith: null, commit: null, dod: [],
     developerErroredWith: null, blockedWithNothingRun: false, reopened: null, fixRound: null,
-    grammarRetries: 0, grammarRefusal: null,
+    formatRetries: 0, formatRefusal: null,
   };
   if (!existsSync(path)) return empty;
 
@@ -3612,8 +3619,8 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
   let current: DodResult[] = [];
   let reopened: ReviewLedger["reopened"] = null;
   let fixRound: ReviewLedger["fixRound"] = null;
-  let grammarRetries = 0;
-  let grammarRefusal: string | null = null;
+  let formatRetries = 0;
+  let formatRefusal: string | null = null;
 
   for (const line of readFileSync(path, "utf8").split("\n")) {
     if (line.trim() === "") continue;
@@ -3655,17 +3662,17 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
       // cleared by a plain reopen either — a fix that blocked and was granted
       // more attempts is the same fix round, still owed.
       if (payload.reason === "fix") fixRound = reopened;
-      grammarRetries = 0;
-      grammarRefusal = null;
+      formatRetries = 0;
+      formatRefusal = null;
       continue;
     }
 
-    // One envelope the claim-sources check sent back, costing no attempt (#78).
+    // One envelope refused on its FORMAT and sent back, costing no attempt (#78).
     // Counted here and nowhere else: the grant is what this event records, and a
     // grant that a fresh `tldrx next` could not see would not be a bound.
     if (event.type === "story.review_retried") {
-      grammarRetries++;
-      grammarRefusal = typeof payload.detail === "string" && payload.detail.trim() !== ""
+      formatRetries++;
+      formatRefusal = typeof payload.detail === "string" && payload.detail.trim() !== ""
         ? payload.detail.trim()
         : null;
       continue;
@@ -3729,8 +3736,8 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     // much as a counted verdict — so the next one starts with its corrections
     // again. Mirrors `recordReview`, which resets the in-process counter for
     // exactly the same set of outcomes (#78).
-    grammarRetries = 0;
-    grammarRefusal = null;
+    formatRetries = 0;
+    formatRefusal = null;
 
     if (reviewEventErrored(payload)) {
       erroredWith = typeof payload.detail === "string" && payload.detail.trim() !== ""
@@ -3759,8 +3766,8 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     blockedWithNothingRun,
     reopened,
     fixRound,
-    grammarRetries,
-    grammarRefusal,
+    formatRetries,
+    formatRefusal,
   };
 }
 

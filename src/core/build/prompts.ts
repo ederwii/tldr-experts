@@ -272,7 +272,7 @@ export interface ReviewerPromptParts {
   readonly recurring?: readonly RecurringClass[];
   /**
    * The refusal a PREVIOUS envelope of this same review round earned, when there
-   * was one (gh #78) — rendered by `renderGrammarRefusal`, carried verbatim.
+   * was one (gh #78) — rendered by `renderFormatRefusal`, carried verbatim.
    *
    * Absent or null on a first review, which is every review the framework asked
    * for before this existed. Present only for a re-prompt the claim-sources check

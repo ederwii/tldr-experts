@@ -980,7 +980,7 @@ describe("reading a review off the ledger", () => {
         findings: [],
         fixlist: [],
         fixlistProblems: [],
-        grammarProblems: [],
+        formatProblems: [],
         // A reviewer that never answered declared no verdict to misread (gh #36).
         verdictProblem: null,
       });

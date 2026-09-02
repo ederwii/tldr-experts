@@ -37,15 +37,21 @@ export interface Review {
    */
   readonly fixlistProblems: readonly string[];
   /**
-   * The SUBSET of `fixlistProblems` the claim-sources check raised (gh #78).
+   * Every reason this envelope was refused that is a fault in its FORM (#78, #79).
    *
-   * Non-empty ⇒ at least one of the reasons this envelope was refused is that a
-   * `refuted` finding's `[src: …]` does not parse. That is a fault in the REPORT,
-   * not in the diff, and `isGrammarRejection` is what decides whether it may be
-   * re-prompted for free. Always a subset of `fixlistProblems`, never a
-   * replacement for it: an operator still reads every refusal.
+   * The union of two indexes, because a review envelope has two things that can
+   * be malformed: `ParsedFixlist.format` (the `fixlist[]` shape — a missing
+   * `disposition`, a row that is not an object, an empty array, an unparseable
+   * `[src: …]`) and `verdictProblem` (the verdict WORD, gh #36). Both are faults
+   * in how the reviewer wrote its REPORT rather than in the diff it judged, and
+   * `isFormatRejection` is what decides that they may be re-prompted for free.
+   *
+   * This is what the corrected envelope's prompt is rendered from, so a refusal
+   * missing here is a refusal the reviewer is never told about. Never a
+   * replacement for `fixlistProblems`/`verdictProblem`: an operator still reads
+   * every refusal through those.
    */
-  readonly grammarProblems: readonly string[];
+  readonly formatProblems: readonly string[];
   /**
    * The verdict this could not read, named — or null when it read one.
    *
@@ -69,19 +75,20 @@ const VERDICT_ENUM = VERDICT_WORDS.join("|");
 
 /**
  * How many times one review round may be re-prompted for a corrected envelope
- * before the refusal starts costing the story an attempt (gh #78).
+ * before the refusal starts costing the story an attempt (gh #78, gh #79).
  *
  * Owner decision, 2026-09-01: two. The reasoning is the same shape as
  * `MAX_FIXLIST_ROUNDS`' — a free round nobody counts is a story that never has
- * to settle. A reviewer that cannot write a parseable `[src: …]` in three tries
- * is not having a formatting accident, and the third refusal is recorded as the
- * `changes` it always was.
+ * to settle. A reviewer that cannot write a readable envelope in three tries is
+ * not having a formatting accident, and the third refusal is recorded as the
+ * `changes` it always was. gh #79 widened WHAT earns a correction and changed
+ * nothing about how many: one bound, one counter, one economy.
  *
  * Counted PER ROUND, not per story: a counted verdict starts the next envelope
  * with its two corrections again. The overall bound is still hard — attempts are
  * capped at `MAX_ATTEMPTS`, so a story can burn at most that many rounds.
  */
-export const MAX_GRAMMAR_RETRIES = 2;
+export const MAX_FORMAT_RETRIES = 2;
 
 /**
  * The `structured_output` of a reviewer run, narrowed. Anything odd is `changes`.
@@ -101,7 +108,7 @@ export function parseReview(structured: unknown, fallback: string): Review {
       findings: [],
       fixlist: [],
       fixlistProblems: [],
-      grammarProblems: [],
+      formatProblems: [],
       // No envelope at all is already said in the summary; naming a verdict that
       // was never on the wire would be a second sentence for one fault.
       verdictProblem: null,
@@ -134,60 +141,91 @@ export function parseReview(structured: unknown, fallback: string): Review {
     findings,
     fixlist: verdict === "fixlist" ? (parsed?.findings ?? []) : [],
     fixlistProblems: verdict === "fixlist" ? [] : (parsed?.problems ?? []),
-    grammarProblems: verdict === "fixlist" ? [] : (parsed?.grammar ?? []),
+    // The union described on `Review.formatProblems`. A GRANTED `fixlist` was
+    // refused for nothing, and a declared `fixlist` can carry no verdict fault,
+    // so the two halves can never both be non-empty — but they are spread rather
+    // than chosen between, because that is an argument about today's parser and
+    // this has to stay right when the parser changes.
+    formatProblems: [
+      ...(verdict === "fixlist" ? [] : (parsed?.format ?? [])),
+      ...(verdictProblem === null ? [] : [verdictProblem]),
+    ],
     verdictProblem,
   };
 }
 
 /**
- * Is this refusal a claim-sources GRAMMAR fault and nothing else (gh #78)?
+ * Was this envelope refused for its FORM, and for nothing else (gh #78, gh #79)?
  *
- * The whole scope guard of #78 is in this predicate, so it is deliberately hard
- * to satisfy. Four conditions, and the last two are the guard:
+ * The scope guard of both issues is in this one predicate. Three conditions:
  *
- *   - the envelope fell to `changes` (an approval or a granted fix list is not a
- *     refusal at all);
- *   - the claim-sources check raised at least one of the reasons;
- *   - it raised ALL of them — an envelope also missing a `disposition` is not
- *     merely mis-cited, and widening the free retry to cover that shape is a
- *     decision nobody has made (filed separately);
- *   - and the verdict WORD itself parsed. `sign` instead of `approve` is a
- *     different fault with its own message (gh #36), and it keeps its cost.
+ *   - the envelope fell to `changes` — an approval or a GRANTED fix list is not
+ *     a refusal at all, and neither is a fix-list round refused for being the
+ *     second one (`narrowFixlist`), which is a bound rather than a fault;
+ *   - something was refused as FORM;
+ *   - and EVERY reason it was refused is one of those. This is the guard, and it
+ *     is a guard about the index rather than about any particular shape: the
+ *     free round is granted only when the typed index claims all of it, so a
+ *     refusal about the WORK added to `parseFixFindings` later costs the attempt
+ *     until somebody deliberately indexes it as form.
+ *
+ * gh #78 scoped this to the claim-sources citation check alone. Owner decision
+ * on gh #79 (2026-09-01): all envelope-FORMAT refusals, one mental model — FORM
+ * never costs an attempt, CONTENT/WORK always does. So a missing `disposition`,
+ * a non-object row, an empty `fixlist[]` and a verdict word outside the enum
+ * (gh #36) join the mis-placed `[src: …]`, and #36's message is unchanged; only
+ * its price is.
+ *
+ * **What is deliberately NOT part of the guard: a non-empty `findings[]`.** It
+ * looks like the obvious way to spell "the reviewer also judged the WORK", and
+ * it is the wrong instrument. Measured across the nine `aparece-v2` runs on
+ * 2026-09-01: all 25 recorded review logs carry a non-empty `findings[]`, and
+ * all 25 are `approve` — the one verdict whose own prompt line says "Empty on
+ * `approve`". Reviewers use `findings[]` as a narrative evidence log whatever
+ * the verdict, so gating on it would have made this predicate almost never fire
+ * and quietly narrowed #78 as well. A judgement about the work is caught where
+ * it is actually stated: a DECLARED `changes` raises no format refusal at all,
+ * so it fails the second condition and costs its attempt.
  *
  * Measured on run `260830-ordering-inventory` (2026-09-01): S2, S3 and S5 each
  * recorded `verdict: changes, attempt: 1` over a summary beginning "I would sign
- * this" — three envelopes that satisfied exactly this predicate, and three
- * attempts spent on formatting.
+ * this" — three envelopes that satisfy this predicate, and three attempts spent
+ * on formatting.
  */
-export function isGrammarRejection(review: Review): boolean {
+export function isFormatRejection(review: Review): boolean {
+  // Every reason the envelope was refused, counted where each is RECORDED.
+  const refusals = review.fixlistProblems.length + (review.verdictProblem === null ? 0 : 1);
   return review.verdict === "changes"
-    && review.grammarProblems.length > 0
-    && review.grammarProblems.length === review.fixlistProblems.length
-    && review.verdictProblem === null;
+    && review.formatProblems.length > 0
+    && review.formatProblems.length === refusals;
 }
 
 /**
- * The refusal, rendered for the corrected envelope's prompt (gh #78).
+ * The refusal, rendered for the corrected envelope's prompt (gh #78, gh #79).
  *
- * `problems` is `Review.fixlistProblems` verbatim — deliberately not re-worded and
- * deliberately not supplemented. gh #77 landed first and made those strings name
- * the rule they enforced, quote the offending line and show a corrected one, and
- * it splices the full grammar into this very prompt under `SRC_GRAMMAR_HEADING`.
- * So this section says what was refused and points at that; restating the rules
- * here would be the second copy #77 exists to abolish.
+ * `problems` is `Review.formatProblems` verbatim — deliberately not re-worded and
+ * deliberately not supplemented. Every refusal already names the rule it
+ * enforced: gh #77 made the citation ones quote the offending line and show a
+ * corrected one, and the shape ones have always spelled out what was required
+ * (`one of fix-now, defer-with-log, refuted, out-of-scope`). So this section
+ * says what was refused and points at the grammar #77 splices into this same
+ * prompt; restating any of it here would be the second copy #77 exists to
+ * abolish.
  */
-export function renderGrammarRefusal(problems: readonly string[]): string {
+export function renderFormatRefusal(problems: readonly string[]): string {
   return [
     "## Your previous envelope was REFUSED",
     "",
-    "It did not reach the story. This round cost the story NO attempt, and there are",
-    `${String(MAX_GRAMMAR_RETRIES)} such corrections in total — after that a refusal is recorded as \`changes\`,`,
-    "which does cost one. What the check said, verbatim:",
+    "It could not be read, so it did not reach the story. Nothing about your JUDGEMENT was",
+    "refused — this is about the SHAPE of the envelope you returned. The round cost the story",
+    `NO attempt, and there are ${String(MAX_FORMAT_RETRIES)} such corrections in total; after that a refusal is`,
+    "recorded as `changes`, which does cost one. What the check said, verbatim:",
     "",
     ...problems.map((problem) => `- ${problem}`),
     "",
-    `Return the SAME judgement again with the citation fixed. The rule each refusal names is`,
-    `spelled out, with a worked example, under "${SRC_GRAMMAR_HEADING}" in this prompt.`,
+    "Return the SAME judgement again, in an envelope that fixes exactly those. Each refusal",
+    `names the rule it enforced; for a citation, the grammar is spelled out with a worked`,
+    `example under "${SRC_GRAMMAR_HEADING}" in this prompt.`,
     "",
     "Do not soften the verdict to get past this check: the judgement is not what was refused.",
     "",
@@ -275,7 +313,7 @@ export function reviewerFailed(error: string | null | undefined): Review {
     findings: [],
     fixlist: [],
     fixlistProblems: [],
-    grammarProblems: [],
+    formatProblems: [],
     // A reviewer that never answered declared no verdict to misread.
     verdictProblem: null,
   };
