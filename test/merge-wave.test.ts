@@ -380,6 +380,76 @@ describe("the dirty-tree guard and the pack artifact (#45)", () => {
   });
 });
 
+/**
+ * #95 and #97 — two waves, one machine, one $TMPDIR.
+ *
+ * `merge-wave.sh` writes its logs to `${TMPDIR:-/tmp}/mw-$$`, so under the machine's
+ * shared $TMPDIR every wave on the box lands in ONE directory: this file's other tests,
+ * every sibling agent's wave, and the REAL merge wave whose `bun test` is running this
+ * very file. A directory-listing diff over that root is a global-namespace diff, and it
+ * has now failed two waves on trees whose diff never touched this script:
+ *
+ *   #95 — a sibling's DELIBERATELY KEPT red log (`mw-35458`, carrying another run's
+ *         `poison.txt` merge) counted as the green run's residue. Merge-wave keeps a red
+ *         run's logs on purpose: "every FAIL above names the directory it kept".
+ *   #97 — a CONCURRENT invocation's LIVE `mw-15412` counted as the green run's residue,
+ *         12 minutes into #90's wave, leaving `main` at an unpushed merge commit.
+ *
+ * Same defect both times: the assertion is about ONE run's cleanup and it measured the
+ * whole machine. These two tests plant the foreign directory rather than racing a second
+ * live wave for it — a test that needs the box to be busy to prove its point is the
+ * disease, not the treatment.
+ */
+describe("the log-directory assertion is about THIS run, not the machine (#95, #97)", () => {
+  /**
+   * A foreign `mw-<pid>` in the machine's SHARED tmpdir — the real shape, real contents.
+   *
+   * An `mw-<pid>` already there under a LIVE pid cannot exist: whoever wrote it held that
+   * pid, and this process holds it now, so that wave is dead and its log is stale.
+   */
+  function plantForeignWaveLog(pid: number): string {
+    const dir = join(tmpdir(), `mw-${pid}`);
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "merge.log"), "Merge made by the 'ort' strategy.\n poison.txt | 1 +\n");
+    writeFileSync(join(dir, "tc.log"), "$ bash gate.sh typecheck\ngate saw poison.txt\n");
+    return dir;
+  }
+
+  test("a sibling wave's deliberately KEPT red log is not this run's residue (#95)", async () => {
+    const logRoot = tmpdir();
+    const before = new Set(readdirSync(logRoot).filter((f) => f.startsWith("mw-")));
+    // A wave that has exited and left its log behind ON PURPOSE, for someone to read.
+    const foreign = plantForeignWaveLog(999_999);
+    try {
+      const green = await invoke(sandbox(), "wave-a").done;
+      expect(green.code).toBe(0);
+      const after = readdirSync(logRoot).filter((f) => f.startsWith("mw-") && !before.has(f));
+      expect(after).toEqual([]);
+      expect(existsSync(foreign)).toBe(true);   // and it was never this run's to delete
+    } finally {
+      rmSync(foreign, { recursive: true, force: true });
+    }
+  });
+
+  test("a CONCURRENT wave's live log directory is not this run's residue either (#97)", async () => {
+    const logRoot = tmpdir();
+    const before = new Set(readdirSync(logRoot).filter((f) => f.startsWith("mw-")));
+    // This process's own pid: alive, on this host, for the whole of the run below — a
+    // wave still inside its gates, whose log directory is not a leftover of anything.
+    const foreign = plantForeignWaveLog(process.pid);
+    try {
+      const green = await invoke(sandbox(), "wave-a").done;
+      expect(green.code).toBe(0);
+      const after = readdirSync(logRoot).filter((f) => f.startsWith("mw-") && !before.has(f));
+      expect(after).toEqual([]);
+      expect(existsSync(foreign)).toBe(true);
+    } finally {
+      rmSync(foreign, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("the sandbox does not inherit the host's default branch (#49)", () => {
   /**
    * CI run 33459567355 (sha 064279e) failed here — `git push -q origin main` →
