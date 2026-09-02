@@ -1307,7 +1307,7 @@ Filled by Build, one bullet per proof. [src: $ npm run test → exit 0]
 | `repo` | `^[a-z0-9-]{1,32}$` | y | A `workspace.yml` repo name — the worktree's repo and the DoD's cwd |
 | `status` | `todo\|in_progress\|review\|done\|blocked` | y | The line `dod-gate` watches for `done` |
 | `depends_on` | `S<n>[]` (≤64, unique) | y | Stories that must be done first; may not contain this story. `waves.yml` must place every one of them in an earlier wave |
-| `touches` | rel path[] (≥1, ≤128) | y | Files/dirs this story is expected to change; no `..`. Two stories in one wave touching the same path is a plan smell, not a schema error |
+| `touches` | rel path[] (≥1, ≤128) | y | Files/dirs this story is expected to change; no `..`. Two stories in one wave touching the same path is a plan smell, not a schema error. **Completeness is not schema-checkable** — a short list is a valid list, and the cost lands one stage later, at the developer prompt's "change only what `touches` names" and auto-gate condition 7 — so the Plan prompt carries a three-sweep completeness checklist (tests · registration sites · files a gate reads), generated beside this table by `renderPlanSchemaContract()` (gh #132) |
 | `acceptance` | str[] (≥1, ≤64) | y | What must be true for a human to accept it |
 | `test_plan` | str[] (≥1, ≤64) | y | How it will be proven, before it is written |
 | `evidence` | str[] (≤64) | y | Filled by Build. **Required non-empty when `status: done`** — done means proven, not asserted. May cite `04-build/fixlist/<id>-<n>.md` beside the review log when the story went through a fix-list round |

@@ -54,6 +54,52 @@ const STATUS_ENUM = PLAN_STATUSES.join(" | ");
 const STATUS_CELL = PLAN_STATUSES.map((status) => `\`${status}\``).join(", ");
 const ITEM_RULE = `non-empty · at most ${String(MAX_LIST_ITEMS)} items · at most ${String(MAX_ITEM_CHARS)} characters per item`;
 
+/** The H3 the `touches` rule points at, and the checklist writes. */
+const TOUCHES_CHECKLIST_HEADING = "Completing `touches`";
+
+/**
+ * The one Plan rule that is prose on purpose (gh #132).
+ *
+ * Everything else in this file is GENERATED from a validator, because a validator
+ * refuses what breaks it and says why. Under-declaring `touches` breaks nothing:
+ * `["src/thing.ts"]` is a well-formed list, `validateStory` passes it, and the
+ * cost lands a stage later — the developer prompt says "Change only what the
+ * story's `touches` list names. A change outside it is a plan deviation"
+ * (`build/prompts.ts`), and auto-gate condition 7 `boundary` names every changed
+ * path the plan never declared (`run/boundary.ts`). No compiler runs at Plan
+ * time, so nothing can compute this list; the three sweeps below are what a
+ * driver had to supply by hand.
+ *
+ * Measured, one live run, 5 stories: 3 needed the surface extended after the
+ * fact. S2 could not write the failing test its own test plan promised (the test
+ * file was outside `touches`). S4 added two enum members and left out the switch
+ * sites, so the branch did not compile. S8's security criterion read a file the
+ * story never declared, so the criterion would have passed on nothing. One rule
+ * each, in the order they were hit.
+ */
+const TOUCHES_CHECKLIST: readonly (readonly string[])[] = [[
+  "**Its tests.** For every source file the story changes, the file its tests live in — that",
+  "file when it exists, its directory when the story creates it. A test plan that promises a",
+  "failing test first cannot be satisfied from outside the surface.",
+], [
+  "**Every site that has to learn a new name.** For every enum member, variant, type or handler",
+  "the story ADDS, every switch, registration, factory, DI container or barrel that has to handle",
+  "it. These are what stop the branch compiling, and they live in files the definition never",
+  "names — grep for the thing being EXTENDED, not for the member being added.",
+], [
+  "**Every file a gate reads.** For every acceptance criterion something verifies by reading a",
+  "file, that file. A criterion whose file is not in the surface passes vacuously: the gate finds",
+  "nothing to check and reports nothing wrong, which is worse than a criterion that fails.",
+]];
+
+/** Why the checklist is worth the bytes, in the prompt rather than in an issue. */
+const TOUCHES_COST: readonly string[] = [
+  "`touches` is the story's WRITE SURFACE, not a summary of it. The Build agent is told to change",
+  "nothing outside it, and the Build gate names every changed path the plan never declared — so a",
+  "path left out here is a path nobody writes, and **the story comes back for another paid round**.",
+  "Over-declaring costs nothing by comparison. Three sweeps before you write the list:",
+];
+
 const STORY_FIELDS: Readonly<Record<StoryKey, Field>> = {
   version: { value: "1", rule: "always `1` — the schema version, not the story's" },
   id: { value: "S1", rule: "`S<n>` (1–4 digits) and it MUST equal the file name" },
@@ -62,7 +108,11 @@ const STORY_FIELDS: Readonly<Record<StoryKey, Field>> = {
   repo: { value: "example", rule: "one `.tldrx/workspace.yml` repo name — lowercase, digits and `-`" },
   status: { value: "todo", rule: `one of ${STATUS_CELL}; \`done\` also demands a non-empty \`evidence\`` },
   depends_on: { value: "[]", rule: "story ids, unique, never its own — and each must run in an EARLIER wave" },
-  touches: { value: '["src/features/leaderboard/"]', rule: `non-empty · at most ${String(MAX_TOUCHES)} paths · no \`..\`` },
+  touches: {
+    value: '["src/features/leaderboard/"]',
+    rule: `non-empty · at most ${String(MAX_TOUCHES)} paths · no \`..\` — and COMPLETE: `
+      + `see **${TOUCHES_CHECKLIST_HEADING}** below, the one rule here no validator can catch`,
+  },
   acceptance: { value: '["Top-50 ranks render from the materialised view, newest hunt first"]', rule: ITEM_RULE },
   test_plan: { value: '["Unit: rank ordering with ties, empty table, single player"]', rule: ITEM_RULE },
   evidence: { value: "[]", rule: "Build fills it; leave it empty here" },
@@ -199,6 +249,16 @@ export function renderPlanSchemaContract(): string {
     examples.story.trimEnd(),
     outer,
     "",
+    `### ${TOUCHES_CHECKLIST_HEADING}`,
+    "",
+    ...TOUCHES_COST,
+    "",
+    ...renderTouchesChecklist(),
+    "",
+    "A directory entry covers everything beneath it, so declare the directory when the story",
+    "creates files there. If a sweep turns up a path you are not sure about, list it: an",
+    "unused entry is not a schema error, and a missing one is a round.",
+    "",
     `### \`${EPICS_DIR}/<id>.md\``,
     "",
     "The same front matter rules. Exactly these keys, all required, in this order:",
@@ -234,6 +294,12 @@ export function renderPlanSchemaContract(): string {
     `An over-cap value is refused, never trimmed. Split a long acceptance criterion into several`,
     `items rather than writing one over ${String(MAX_ITEM_CHARS)} characters.`,
   ].join("\n");
+}
+
+/** The checklist as a numbered markdown list, continuation lines indented under it. */
+function renderTouchesChecklist(): readonly string[] {
+  return TOUCHES_CHECKLIST.flatMap((rule, index) =>
+    rule.map((line, at) => (at === 0 ? `${String(index + 1)}. ${line}` : `   ${line}`)));
 }
 
 /** A fence longer than any fence inside `text`, so an example nests safely. */

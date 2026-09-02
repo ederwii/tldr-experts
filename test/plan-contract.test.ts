@@ -155,3 +155,27 @@ describe("the violation message names the cap it broke (#38)", () => {
     expect(message).toContain(String(MAX_LIST_ITEMS + 1));
   });
 });
+
+/**
+ * The checklist reaches the agent through the REAL bundle (gh #132).
+ *
+ * `plan-schema-contract.test.ts` pins the three rules against
+ * `renderPlanSchemaContract()`. This one asks the question that issue is about:
+ * does a plan agent, handed the prompt `tldrx next --prepare` actually writes,
+ * read them? A contract that renders correctly and is spliced into no prompt is
+ * the `templates/story.md` failure again (#48).
+ */
+describe("the plan bundle tells the agent how to COMPLETE `touches` (#132)", () => {
+  test("the prepared prompt carries all three rules and what omitting one costs", async () => {
+    const section = contractSection(await preparedPrompt(PLAN_STAGE, "plan"))
+      .toLowerCase().replaceAll(/\s+/g, " ");
+    // S2: the red gate needed a test file the story never declared.
+    expect(section).toContain("for every source file the story changes, the file its tests live in");
+    // S4: two new enum members, and the switch sites that would not compile.
+    expect(section).toContain("every switch, registration, factory, di container or barrel that has to handle it");
+    // S8: a security criterion whose file was outside the surface passed on nothing.
+    expect(section).toContain("a criterion whose file is not in the surface passes vacuously");
+    // Why any of it matters, in the prompt rather than in an issue.
+    expect(section).toContain("the story comes back for another paid round");
+  });
+});
