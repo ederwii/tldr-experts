@@ -4,6 +4,57 @@
 
 ### Added
 
+- **The dashboard answers the five questions #85 left open (#93).** Each needed a decision
+  rather than a patch, and each was taken the CONSERVATIVE way: render what the files
+  already say, invent no interaction the page does not already have, and let nothing on a
+  read-only page run anything. Every choice below is a **maintainer call, subject to owner
+  review** — they are listed on the issue.
+  - **The Watchers tab draws the cards.** `05-watch/watchers/*.md` is read into the model as
+    the seven fields `Watcher` really declares — `id`, `epic`, `title`, `stories`, `repos`,
+    `status`, plus the optional `owner` (#70) — and the tab prints them instead of printing
+    the shape it wished it had. A `draft` card also carries **why**: the `absent:` sources it
+    cites under `## Signal`, which is the card's own rule for not being `verified`. The
+    reading is deliberately the SMALL one — the model resolves no `[src: …]`, calls no
+    `parseWatcherCard` and computes no `CardChecklist`, because that re-checks every citation
+    against today's working tree and would make a read-only dashboard the only screen in the
+    product that runs something. `tldrx watch check` stays the thing that checks, and the
+    page says so. A `verified` stamp over an `absent:` Signal is shown as what it is rather
+    than silently corrected: `watch check` re-stamps cards, and a viewer that disagreed with
+    the file would be a third opinion.
+  - **A `draft` card raises no attention card.** The page's rule — an alert means a run is
+    waiting on a PERSON right now, derived once in `waiting.ts` — is unchanged. An
+    uninstrumented signal is a fact about coverage that stays true until somebody
+    instruments it, and it belongs in a panel the way `budget.blocked` does.
+  - **Preflight refusals leave their rows on the page.** `04-build/preflight.yml` is read the
+    same way `budget.yml` is: read-only, additive, and through the reader that never throws.
+    A new **Base gates** section names each of the workspace's own gate commands, the repo
+    and base it ran on, its exit code and its `ok`/`failed`/`unmeasured` status — so a Build
+    that refused to start is no longer a stage that went backwards for no visible reason.
+    The alternative on the issue was to emit an EVENT instead; that is the bigger, better
+    change and it is not this one, because the owner's #85 decision covered the two files
+    that already existed and an event is a new write on a refusal path. Reading the file it
+    already writes is the same doctrine one step further. Red rows are drawn as rows, not as
+    alerts, for the same reason `budget.blocked` is.
+  - **`keep_worktrees` is one line on the run detail**, and only when it is set (#16). The
+    key is written only when true, so drawing `false` would put a row on every run in the
+    workspace saying what all of them do. `RunDocument` projects it tolerantly: anything that
+    is not the boolean `true` is not a promise to keep the worktrees.
+  - **A cancelled run says who closed it, when, and why.** All three facts already travelled
+    on `waiting.message` (#86); the run detail printed the status chip and dropped them. It
+    is one `kv` row carrying that sentence — not a second derivation, so the page cannot word
+    it differently from `tldrx run status`.
+  - **An annotated run wears a marker in the runs list** — one ✎ glyph with the note count in
+    its `title`, nothing more. #85 §1 asked for it and the wave declined to invent it. This
+    is the smallest thing that is true: no column, no badge count, no new sort key, and the
+    notes themselves stay on the run detail where they were. Explicitly **provisional** — a
+    count in a row is a design decision, and the first person with a real opinion about that
+    list should replace it.
+  - **`DASHBOARD_MODEL_VERSION` stays at 3.** `watch`, `preflight` and `keepWorktrees` are
+    three additions and nothing was removed; no existing field reads differently than it did
+    at v3. The argument for bumping is that `docs/dashboard-model.md` promised, under *What
+    is NOT in it*, that two named files were unread, and that promise is now void — but a
+    documented absence is not a field, and the number is for fields.
+
 - **The dashboard reads `budget.yml` and `events.jsonl` (#85).** The audit that filed the issue
   found five gaps with one root: `buildModel()` read `run.yml`, the phase artefacts, the Plan
   artefacts and the expert files, and nothing else — so five facts a reader went looking for were

@@ -24,15 +24,26 @@ nada sobre quién la abrió. Los dos son el mismo documento; lo único que cambi
 | Vista | Qué trae |
 |---|---|
 | Runs | Cada run, su estado, el avance por fase, el gasto, y **qué está esperando**. El que puedes retomar ahora mismo lleva `← next`, la misma marca que imprime `tldrx status`. |
-| Un run | El camino de ejecución etapa por etapa — experto, modelo, costo, compuerta, quién la firma y quién la firmó —, más los handoffs, las preguntas abiertas, el plan y las ramas que cortó el Build. Del ledger: las **notas de operador** que alguien dejó con `tldrx note`, el intento en el que va cada story y los reintentos de revisión gratuitos que se le concedieron, las reaperturas y sus motivos, y cada vez que el freno del presupuesto se negó a arrancar una etapa. De `budget.yml`: los techos por fase, las palancas y el **cupo de tokens de anfitrión**. |
+| Un run | El camino de ejecución etapa por etapa — experto, modelo, costo, compuerta, quién la firma y quién la firmó —, más los handoffs, las preguntas abiertas, el plan y las ramas que cortó el Build. Del ledger: las **notas de operador** que alguien dejó con `tldrx note`, el intento en el que va cada story y los reintentos de revisión gratuitos que se le concedieron, las reaperturas y sus motivos, y cada vez que el freno del presupuesto se negó a arrancar una etapa. De `budget.yml`: los techos por fase, las palancas y el **cupo de tokens de anfitrión**. De `04-build/preflight.yml`: las **compuertas base** — qué hizo cada comando de gate del workspace sobre el árbol intacto, para que un Build que se negó a arrancar no parezca una etapa que retrocedió sin motivo. Y, cuando están puestos, por qué se **canceló** un run (quién, cuándo, la nota) y si sus **worktrees** de épica se conservan. |
 | Expertos | Los niveles de competencia **recalculados desde la evidencia al momento de leer**, nunca el número guardado en disco, con la evidencia detrás de cada uno. |
-| Watchers | Todavía no: las tarjetas de vigilancia las escribe la fase Watch y el modelo no las lee, así que la pestaña lo dice en vez de inventarse una tarjeta. Usa `tldrx watch list`. |
+| Watchers | Una tarjeta por feature entregada, leída de `05-watch/watchers/*.md`: qué señal vigilar, quién la cuida, la épica y las stories detrás, y — en una `draft` — las citas `absent:` que dicen exactamente qué todavía no está instrumentado. La página **lee** las tarjetas; no las vuelve a checar contra el código de hoy. Eso es `tldrx watch check`. |
 | Cómo se usa | El loop de la terminal, como comandos para copiar y pegar. |
 
 Cuatro estados levantan una alerta, porque cada uno es un run esperando a una **persona**:
 una pregunta abierta, una compuerta pendiente, una etapa que falló, y un paquete
 `--prepare` esperando a que alguien lo corra y lo mande con `--commit`. `ready` y `done` son
 estados del trabajo, no peticiones.
+
+Nada más levanta una, y eso es una regla, no un olvido. Una tarjeta `draft`, una compuerta
+base en rojo y un rechazo de presupuesto pasado se dibujan como paneles: cada uno sigue
+siendo cierto mientras nadie lo arregle, y ninguno es un run que te esté esperando ahorita.
+Una alerta que significa "alguien debería ver esto algún día" es una alerta que la gente
+deja de leer.
+
+Los runs con notas de operador llevan una ✎ chiquita en la lista, con la cuenta en el
+tooltip — las notas siguen viviendo en el detalle del run. Es a propósito la marca más
+chica que es cierta, y es provisional: la lista es una lista, y meterle un contador a un
+renglón es una decisión de diseño que nadie ha tomado todavía.
 
 ## El dinero que muestra es dinero medido
 
@@ -52,9 +63,16 @@ archivo.
 ::: info Lo que sigue estando solo en `tldrx replay`
 La página lee el ledger, pero no entero: la narrativa — los costos por intento, los agentes
 que se lanzaron, los checks, el orden en que pasaron las cosas — es trabajo de
-`tldrx replay <run>`. Dos archivos no los lee nadie aquí: `04-build/preflight.yml`, así que
-un rechazo por delta de DoD se ve como una etapa que retrocedió sin motivo, y
-`05-watch/watchers/*.md`.
+`tldrx replay <run>`.
+:::
+
+::: info La página lee. No checa.
+Cada archivo que abre, lo abre de solo lectura, y no vuelve a derivar nada que los archivos
+ya deciden. La tarjeta de vigilancia es el caso más claro: `tldrx watch check` comprueba que
+cada `[src: …]` de una tarjeta siga apuntando a código real, y el dashboard no — imprime el
+`status` que trae la tarjeta y las fuentes `absent:` que ella misma cita, uno al lado del
+otro. Un sello `verified` encima de una señal `absent:` se muestra tal cual, como un sello
+viejo, en vez de que una tercera opinión lo corrija en silencio.
 :::
 
 ## No puede contradecir a la CLI

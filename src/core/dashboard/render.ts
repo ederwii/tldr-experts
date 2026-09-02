@@ -35,7 +35,7 @@
 import { DASHBOARD_CSS } from "./styles.ts";
 import { DASHBOARD_JS, liveScript } from "./script.ts";
 import type {
-  DashboardModel, ExpertModel, PhaseModel, QuestionModel, RunModel, StageRowModel,
+  DashboardModel, ExpertModel, PhaseModel, QuestionModel, RunModel, StageRowModel, WatcherModel,
 } from "./model.ts";
 
 export const DASHBOARD_TITLE = "tldrx dashboard";
@@ -576,9 +576,27 @@ export function dashRunRow(run: RunModel, nowMs: number, isNext: boolean): strin
     .map((stage) => `<span class="pip" data-st="${dashEscape(dashTone(stage.status))}"></span>`)
     .join("");
 
+  // The annotation marker (#85 §1, #93 §5) — the SMALLEST one that is true.
+  //
+  // Every note is drawn on the run detail; the list is a list, and a count in a
+  // row is a design decision nobody has made. So: one glyph, on the runs that
+  // have notes, carrying the count in a `title` — no column, no badge count, no
+  // second sort key, nothing that changes the shape of the row. It is a pointer
+  // to a section that already exists. PROVISIONAL, and marked as such on #93:
+  // the first person with a real opinion about this list should replace it.
+  //
+  // `aria-label` as well as `title`, because a bare glyph has no accessible name
+  // and a screen reader would announce a pencil.
+  const notes = run.notes.length === 0
+    ? ""
+    : `<span class="runrow__note" title="${dashEscape(dashPlural(run.notes.length, "operator note"))}`
+      + ` — read them on the run detail" aria-label="`
+      + `${dashEscape(dashPlural(run.notes.length, "operator note"))}">&#9998;</span>`;
+
   return `<a class="runrow" href="#/run/${dashEscape(encodeURIComponent(run.id))}">`
     + `<div><div class="runrow__id">${dashText(run.id)}`
     + (isNext ? '<span class="runrow__next">&larr; next</span>' : "")
+    + notes
     + "</div>"
     + `<div class="runrow__title">${dashText(run.title === "" ? "(untitled)" : run.title)}</div>`
     + `<div class="runrow__sub">${dashText((run.scope === "" ? "—" : run.scope) + repos + cursor)}</div></div>`
@@ -651,6 +669,22 @@ export function dashRunView(model: DashboardModel, id: string, nowMs: number): s
       + `<span class="faint">${String(run.percent)}%</span>`)
     + dashKv("updated", `<span class="nowrap">${dashText(dashDateTime(run.updatedAt))}</span> `
       + `<span class="faint nowrap">${dashText(dashAgo(run.updatedAt, nowMs))}</span>`)
+    // Who closed the run, when, and why (gh #86, #93 §4). The status chip says
+    // `cancelled` and said nothing else, so a reader had the decision and none
+    // of the three facts behind it. `waiting.message` is where all three already
+    // live — one sentence, worded by `cancelledMessage` in `waiting.ts` — so this
+    // is a row, not a second derivation, and the page cannot word it differently
+    // from `tldrx run status`. Absent on every run nobody closed by hand.
+    + (run.waiting.kind === "cancelled"
+      ? dashKv("cancelled", dashText(run.waiting.message))
+      : "")
+    // `--keep-worktrees`, remembered on the run (#16, #93 §3). Only when TRUE:
+    // the key is written only when true, so drawing `false` would be a row on
+    // every run in the workspace saying what all of them do.
+    + (run.keepWorktrees
+      ? dashKv("worktrees", "kept — <code>--keep-worktrees</code>; the epic worktrees "
+        + "survive this run closing, and nothing removes them for you")
+      : "")
     + `</div>${repos}</div>`);
 
   parts.push(dashPathSection(run));
@@ -669,6 +703,7 @@ export function dashRunView(model: DashboardModel, id: string, nowMs: number): s
   parts.push(dashHandoffsSection(run));
   parts.push(dashPlanSection(run, model.maxAttempts));
   parts.push(dashStoryArcs(run, model.maxAttempts));
+  parts.push(dashPreflightSection(run));
   parts.push(dashBudgetSection(run));
   parts.push(dashBudgetBlocks(run));
   parts.push(dashNotesSection(run));
@@ -944,6 +979,57 @@ export function dashBudgetBlocks(run: RunModel): string {
   return '<div class="section"><div class="section__title"><h2>Budget refusals</h2>'
     + `<span class="eyebrow">events.jsonl · ${dashPlural(run.budgetBlocks.length, "refusal")}</span></div>`
     + `<div class="stack">${rows}</div></div>`;
+}
+
+/**
+ * The base gates: what the workspace's own gate commands did on the UNTOUCHED
+ * tree, before any story touched it (#93 §2).
+ *
+ * A DoD block proves one thing — *this story did not break the tree* — and that
+ * claim is empty if the tree was already broken. `preflight.ts` measures it once,
+ * refuses to enter Build when a base command is red, rolls the stage back to
+ * `ready`, and writes `04-build/preflight.yml`. It emits no event and sets no
+ * `run.yml` field, so until this section existed a reader saw a stage go
+ * backwards for no reason at all.
+ *
+ * Drawn as ROWS, not as an alert. Same rule as `dashBudgetBlocks`: an attention
+ * card means a run is waiting on a person right now, and `waiting` is the one
+ * derivation that decides that. A red base row says the workspace needs fixing,
+ * which is true whether or not this run is stopped — and it may have been fixed
+ * since, because nothing re-measures on render.
+ *
+ * `unmeasured` gets its own tone deliberately: the gate declined to run the
+ * command at all, so it is neither a pass nor a failure and nothing may be
+ * inferred from it.
+ */
+export function dashPreflightSection(run: RunModel): string {
+  const preflight = run.preflight;
+  if (preflight === null || preflight.rows.length === 0) return "";
+  const failed = preflight.rows.filter((row) => row.status === "failed").length;
+  const rows = preflight.rows.map((row) => {
+    // The three states, in the page's own tones. `unmeasured` is `off` rather
+    // than a pass or a failure: the gate declined to run the command at all.
+    const tone = row.status === "failed" ? "wait" : row.status === "ok" ? "done" : "off";
+    const at = row.baseSha === "" ? row.baseRef : `${row.baseRef} ${row.baseSha}`;
+    return `<tr><td class="mono">${dashText(row.command)}</td>`
+      + `<td>${dashText(row.repo)}</td>`
+      + `<td class="mono">${dashText(at)}</td>`
+      + `<td class="num">${String(row.exitCode)}${row.timedOut ? " (timed out)" : ""}</td>`
+      + `<td><span class="chip" data-st="${dashEscape(tone)}">${dashText(row.status)}</span></td>`
+      + `<td class="faint">${dashText(row.tail)}</td></tr>`;
+  }).join("");
+  const headline = failed === 0
+    ? "Every gate command the workspace declares passed on the untouched base tree."
+    : `${dashPlural(failed, "command")} already ${failed === 1 ? "fails" : "fail"} on the untouched `
+      + "base tree, so every story would block for something no story caused. Build refuses to start "
+      + "until .tldrx/workspace.yml (or the base) is fixed — nothing is dispatched and nothing is charged.";
+  const when = preflight.checkedAt === "" ? "" : ` · measured ${dashDateTime(preflight.checkedAt)}`;
+  return '<div class="section"><div class="section__title"><h2>Base gates</h2>'
+    + `<span class="eyebrow">04-build/preflight.yml${dashText(when)}</span></div>`
+    + `<div class="card card--flush"><div class="prose" style="padding:var(--space-md)">`
+    + `<p>${dashText(headline)}</p></div><div class="scroll-x"><table><thead><tr>`
+    + "<th>command</th><th>repo</th><th>base</th><th>exit</th><th>status</th><th>last line</th>"
+    + `</tr></thead><tbody>${rows}</tbody></table></div></div></div>`;
 }
 
 /**
@@ -1403,37 +1489,68 @@ export function dashRadar(expert: ExpertModel, max: number): string {
 // ---------------------------------------------------------------------------
 
 /**
- * `[assumption]` The model has no `watchers` field, so this view has nothing it
- * is allowed to invent.
+ * One card per shipped feature, read from the files the Watch phase wrote (#93 §1).
  *
- * Watcher cards are written by the Watch phase (`src/core/watch/`), but
- * `buildModel()` does not read them yet, and inventing a card here would be a
- * dashboard claiming coverage that no file backs. So the view says exactly that,
- * prints the shape it expects, and shows the Watch stages the model *does*
- * carry, so the reader learns where the gap is rather than seeing a blank tab.
+ * Until now this view had nothing: `buildModel()` did not read
+ * `05-watch/watchers/*.md`, so the tab printed the SHAPE it expected and a list
+ * of Watch stages, and said out loud that it was inventing nothing. That was
+ * honest and it was still a stub.
  *
- * The shape it prints is now the REAL one — `Watcher` in
- * `src/core/watch/Watcher.ts`, plus where the cards live and what decides
- * `draft` vs `verified`. It used to print an invented shape
- * (`feature`, `signal`, `whereToLook`, `healthyBaseline`, `brokenWhen`) whose
- * field names matched none of the seven the file actually carries, so the one
- * thing this view existed to be honest about was itself wrong.
+ * The reading is the small one, and the choice matters more than the markup.
+ * `tldrx watch check` computes a `CardChecklist` by re-resolving every `[src: …]`
+ * on a card against today's working tree; that is a different product — the page
+ * would be re-checking the code on every render and on every file-change reload,
+ * and a read-only dashboard would become the only screen that runs anything. So
+ * the model carries what the CARD says: its seven front-matter fields, and the
+ * `absent:` citations under `## Signal` that are, by the card's own rule, the
+ * reason it is a `draft`. `tldrx watch check` stays the thing that re-checks, and
+ * the panel says so.
+ *
+ * A `draft` card raises NO attention card, and that was the other open question.
+ * The page's rule is that an alert means a run is waiting on a PERSON right now —
+ * derived once, in `waiting.ts` — and an uninstrumented signal is a fact about
+ * coverage, true for as long as nobody instruments it. It belongs in a panel, the
+ * way `budget.blocked` does.
+ *
+ * A `verified` stamp sitting over an `absent:` Signal is drawn as what it is: the
+ * status the file carries, with the absent list beside it. Nothing here silently
+ * corrects a card — `watch check` re-stamps them, and a viewer that quietly
+ * disagreed with the file would be a third opinion.
  */
 export function dashWatchersView(model: DashboardModel): string {
   const parts: string[] = ['<div class="viewhead"><h1>Watchers</h1><p>One card per shipped feature: '
-    + "the signal to watch, where to look, what healthy looks like, and how you would know it broke."
-    + "</p></div>"];
+    + "the signal to watch, where to look, what healthy looks like, and how you would know it broke. "
+    + "Read from the cards on disk — this page does not re-check them against today's code; "
+    + "<code>tldrx watch check</code> does.</p></div>"];
 
-  parts.push('<div class="empty"><strong>No watchers in this model.</strong> '
-    + "Watchers are written by the Watch phase to "
-    + "<code>&lt;run&gt;/05-watch/watchers/&lt;feature&gt;.md</code>; <code>modelVersion "
-    + `${String(model.modelVersion)}</code> has no <code>watchers</code> field yet, so this view has `
-    + "nothing it is allowed to invent. Read them with <code>tldrx watch list</code>, or check them "
-    + "against today's code with <code>tldrx watch check</code>. The cards appear here once the "
-    + "model carries the front matter those files already have:"
-    + '<div class="spec">watchers[]: {\n  id, epic, title,\n  stories, repos,\n  owner,'
-    + '            // string | null\n  status            // "verified" when every Signal item\n'
-    + '                    // was found in the code, else "draft"\n}</div></div>');
+  const cards: string[] = [];
+  const damaged: string[] = [];
+  for (const run of model.runs) {
+    const watch = run.watch;
+    if (watch === null) continue;
+    for (const watcher of watch.watchers) cards.push(dashWatcherCard(run, watcher));
+    for (const name of watch.unreadable) {
+      damaged.push('<div class="alert"><span class="alert__kind">unreadable</span>'
+        + `<span><strong>${dashText(`${watch.phase}/${name}`)}</strong> — the card does not parse, `
+        + "so nothing on this page speaks for it. "
+        + `<br><span class="faint mono" style="font-size:var(--text-2xs)">`
+        + `${dashText(`tldrx watch check --run ${run.id}`)}</span></span></div>`);
+    }
+  }
+
+  if (damaged.length > 0) {
+    parts.push(`<div class="stack stack--sm" style="margin-bottom:var(--space-lg)">${damaged.join("")}</div>`);
+  }
+  if (cards.length === 0 && damaged.length === 0) {
+    parts.push('<div class="empty"><strong>No watchers in this model.</strong> '
+      + "Watchers are written by the Watch phase to "
+      + "<code>&lt;run&gt;/05-watch/watchers/&lt;feature&gt;.md</code>, and no run in this "
+      + "workspace has written one yet. They appear here as soon as a Watch stage does. "
+      + "Read them with <code>tldrx watch list</code>, or check them against today's code with "
+      + "<code>tldrx watch check</code>.</div>");
+  } else if (cards.length > 0) {
+    parts.push(`<div class="stack">${cards.join("")}</div>`);
+  }
 
   const rows: string[] = [];
   for (const run of model.runs) {
@@ -1443,7 +1560,7 @@ export function dashWatchersView(model: DashboardModel): string {
         + `style="color:inherit">${dashText(run.id)}</a></td>`
         + `<td class="mono">${dashText(stage.id)}</td>`
         + `<td>${dashChip(stage.status, null, false)}</td>`
-        + `<td>${dashText(stage.expert === null ? "—" : stage.expert)}</td>`
+        + `<td>${dashText(stage.expert === null ? "\u2014" : stage.expert)}</td>`
         + `<td>${stage.gate === null ? '<span class="faint">none</span>' : dashText(stage.gate)}</td>`
         + "</tr>");
     }
@@ -1457,6 +1574,48 @@ export function dashWatchersView(model: DashboardModel): string {
       + `<tbody>${rows.join("")}</tbody></table></div></div></div>`);
   }
   return parts.join("");
+}
+
+/**
+ * One card: what it watches, who owns it, and — when it is a draft — exactly
+ * what is not instrumented.
+ *
+ * The `absent:` list is the whole point of the panel. A watcher naming the log
+ * line somebody MEANT to add reads as coverage, and the first person to trust it
+ * is on-call; the card refuses to be `verified` while it cites one, and this
+ * prints the citations so the reader sees what to go and instrument rather than
+ * just a colour.
+ *
+ * The path is TEXT, never a link: the page fetches nothing.
+ */
+export function dashWatcherCard(run: RunModel, watcher: WatcherModel): string {
+  const owner = watcher.owner === null
+    ? ""
+    : ` <span class="tag">owner: ${dashText(watcher.owner)}</span>`;
+  const ids = [
+    `<span class="tag">${dashText(watcher.epic)}</span>`,
+    ...watcher.stories.map((story) => `<span class="tag">${dashText(story)}</span>`),
+    ...watcher.repos.map((repo) => `<span class="tag">${dashText(repo)}</span>`),
+  ].join("");
+  const absent = watcher.absent.length === 0
+    ? ""
+    : '<div class="blocked" style="margin-top:var(--space-sm)">'
+      + `<div>${dashPlural(watcher.absent.length, "Signal item")} cite`
+      + `${watcher.absent.length === 1 ? "s" : ""} <code>absent:</code> — nothing emits this yet, `
+      + "which is why the card is not <strong>verified</strong>:</div>"
+      + watcher.absent.map((path) =>
+        `<div class="mono faint" style="font-size:var(--text-2xs)">${dashText(path)}</div>`).join("")
+    + "</div>";
+
+  return '<div class="epic"><div class="epic__head">'
+    + `<span class="mono" style="font-size:var(--text-xs)">${dashText(watcher.id)}</span>`
+    + `<strong>${dashText(watcher.title === "" ? watcher.id : watcher.title)}</strong>`
+    + `${dashChip(watcher.status, null, false)}${owner}</div>`
+    + '<div style="padding:var(--space-sm) var(--space-md)">'
+    + `<div class="row">${ids}</div>${absent}`
+    + '<div class="mono faint" style="font-size:var(--text-2xs);margin-top:var(--space-sm)">'
+    + `<a href="#/run/${dashEscape(encodeURIComponent(run.id))}" style="color:inherit">`
+    + `${dashText(run.id)}</a> ${dashText(watcher.path)}</div></div></div>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1475,8 +1634,10 @@ export function dashFaqView(model: DashboardModel): string {
     + '<div class="section"><div class="section__title"><h2>What this page is</h2></div>'
     + '<div class="card"><div class="prose"><p>A read-only view of <code>'
     + `${dashText(model.root)}</code>, generated from files on disk: <code>run.yml</code>, `
-    + "<code>budget.yml</code>, <code>events.jsonl</code>, handoffs, questions, the Plan "
-    + "artefacts and expert competencies. It has no write path — no button here changes a file.</p>"
+    + "<code>budget.yml</code>, <code>events.jsonl</code>, <code>04-build/preflight.yml</code>, "
+    + "the watcher cards, handoffs, questions, the Plan artefacts and expert competencies. "
+    + "It has no write path — no button here changes a file, and nothing here re-checks the "
+    + "code: a watcher card is read, never resolved against today's tree.</p>"
     // This paragraph used to say the opposite, and was true when it was written:
     // until #85 the model read neither file, which is why a reader could not find
     // their own operator notes here. Both are read now, so the honest sentence is
@@ -1509,9 +1670,10 @@ const TEMPLATE_FUNCTIONS = [
   dashRunsView, dashUnreadable, dashFirstLine, dashRunRow, dashMeter,
   dashRunView, dashGateSigner, dashGateEvidence, dashKv, dashEconomies,
   dashBudgetMeter, dashSpendText, dashBudgetSection, dashBudgetBlocks, dashNotesSection, dashStoryArcs,
+  dashPreflightSection,
   dashPathSection, dashHandoffsSection, dashPanelId, dashQuestion,
   dashPlanSection, dashBuildBranches,
   dashExpertsView, dashExpertCard, dashTrainCommand, dashRadar,
-  dashWatchersView,
+  dashWatchersView, dashWatcherCard,
   dashFaqView,
 ];
