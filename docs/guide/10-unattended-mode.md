@@ -141,7 +141,7 @@ and exits. It is refused here because it describes a dispatch the framework neve
 an attended run; `--prepare` writes the bundle you are actually going to carry.
 
 `tldrx run status` prints `· attended: host` on its scope line, and the status line carries an
-`att` marker ahead of `auto:N` and `stale:N`.
+`att` marker ahead of `machine:N` and `stale:N`.
 
 ## One story, end to end
 

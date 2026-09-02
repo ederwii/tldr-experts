@@ -167,6 +167,36 @@ export interface GateSignature {
  *     entity first, so a delegated-agent signature can never be read as a person,
  *     then who lent it the authority and under which policy.
  */
+/**
+ * Did a MACHINE close this gate? (issues #124, #127)
+ *
+ * The selector used to be `by === "auto"`, in two places independently. That
+ * catches every facilitator-closed gate and no agent-closed one: an `agent` gate
+ * records the evidence note's `by:`, which is the OPERATOR account the agent was
+ * running as — a person's name. Measured on run `260902-discovery-pipeline-map`,
+ * that gate reads `by: alanmartinez`, so `tldrx status` counted it as
+ * human-signed (#124) and the status line's counter did not count it at all
+ * (#127).
+ *
+ * With #122's `executed_by` the question is answered directly, off the field
+ * written on every gate `approve` closes. It asks `!== "human"` rather than
+ * naming `agent` and `auto`: a kind this version has not heard of is a kind
+ * nobody has shown to be a person, and listing the machines by name is exactly
+ * how the `agent` case went missing the first time.
+ *
+ * `by === "auto"` stays as the UNION member, not as a replacement: a gate signed
+ * before #122 has no `executed_by`, and there it is the only signal there is.
+ *
+ * It lives HERE, next to `describeGateSignature`, because the report and the
+ * status line answer the same question about the same field and had drifted once
+ * already — #124 fixed one copy and #127 was the other copy, still saying `auto`.
+ */
+export function closedByMachine(sig: GateSignature): boolean {
+  const executed = sig.executed_by ?? null;
+  if (executed !== null) return executed.type !== "human";
+  return sig.by === AUTO_GATE_ACTOR;
+}
+
 export function describeGateSignature(sig: GateSignature): string {
   const by = sig.by ?? "?";
   const executed = sig.executed_by ?? null;

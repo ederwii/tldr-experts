@@ -284,15 +284,15 @@ describe("M3 · a machine-closed gate is visible where people look", () => {
     expect(details).toContain("02-how/beta");
   });
 
-  test("the status line carries auto: and stale:", async () => {
+  test("the status line carries machine: and stale:", async () => {
     const ws = workspace([ALPHA, BETA], { alpha: "auto", beta: "auto" });
     armFake(ws, BOTH_OUTPUTS);
     await next(ws);
     const host = { modelName: "Sonnet", usedPercentage: 4, totalCostUsd: 0 };
 
     const withAuto = runSnapshot(ws.root);
-    expect(withAuto?.autoGates).toBe(1);
-    expect(renderRunLine(host, withAuto as never)).toContain("auto:1");
+    expect(withAuto?.machineGates).toBe(1);
+    expect(renderRunLine(host, withAuto as never)).toContain("machine:1");
 
     await next(ws);
     revoke(RunStore.open(ws.runDir), { ...ctx("redo"), root: ws.root }, "01-what/alpha");
@@ -301,14 +301,14 @@ describe("M3 · a machine-closed gate is visible where people look", () => {
     expect(renderRunLine(host, withStale as never)).toContain("stale:1");
   });
 
-  test("a run with no auto gate keeps the line byte-identical", async () => {
+  test("a run with no machine-closed gate keeps the line byte-identical", async () => {
     const ws = workspace([ALPHA, BETA], { alpha: "human" });
     armFake(ws, ALPHA_OUTPUTS);
     await next(ws);
     const snapshot = runSnapshot(ws.root);
-    expect(snapshot?.autoGates).toBe(0);
+    expect(snapshot?.machineGates).toBe(0);
     const line = renderRunLine({ modelName: "Sonnet", usedPercentage: 4, totalCostUsd: 0 }, snapshot as never);
-    expect(line).not.toContain("auto:");
+    expect(line).not.toContain("machine:");
     expect(line).not.toContain("stale:");
   });
 });

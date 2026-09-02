@@ -24,12 +24,14 @@
  * drift from the other three.
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { approve } from "../src/core/run/gates.ts";
 import { runItems } from "../src/core/status/runItems.ts";
+import { runSnapshot, type RunSnapshot } from "../src/core/statusline/runSnapshot.ts";
+import { renderRunLine } from "../src/core/statusline/renderRunLine.ts";
 import { evidencePath } from "../src/core/facilitator/paths.ts";
 import { clearSrcCaches } from "../src/core/text/srcToken.ts";
 import type { RunFile } from "../src/core/run/RunFile.ts";
@@ -54,6 +56,14 @@ afterEach(() => {
 
 const OWNER = "alanmartinez";
 const GATE = "01-what/alpha";
+const HOST = { modelName: "Sonnet", usedPercentage: 4, totalCostUsd: 0 };
+/** A hand-built snapshot, for the two assertions that are about rendering alone. */
+const SNAPSHOT: RunSnapshot = {
+  runDir: "/tmp/x", run: "260902-demo", title: "", scope: "demo", status: "ready",
+  phase: "01-what", stage: "alpha", stageStatus: "ready", expert: null,
+  done: 0, total: 2, ceilingUsd: 10, spentUsd: 0, openCount: 1, machineGates: 0, staleStages: 0,
+  attendedByHost: false, source: "run-store",
+};
 
 const ALPHA: StageOptions = {
   id: "alpha", phase: "01-what", budgetUsd: 6, gate: "approve",
@@ -241,5 +251,107 @@ describe("a gate signed before `executed_by` existed", () => {
     store.save();
 
     expect(details(ws.root)).not.toContain("closed by a machine");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D. The status line — issue #127
+// ---------------------------------------------------------------------------
+
+/**
+ * `runSnapshot` computed its counter with the SAME selector this file's subject
+ * had just lost: `gate.status === "approved" && gate.by === "auto"`. So a run
+ * whose only closed gate was signed by an agent showed no marker at all on the
+ * one line an operator actually watches — measured on the #122 fixture, after
+ * `runNext` closed an `agent` gate:
+ *
+ *     gate.by=alanmartinez executed_by={"type":"agent","id":"alanmartinez"}
+ *     autoGates=0 staleStages=0
+ *
+ * The counter is not widened under its old name. A number labelled `auto` that
+ * counted agents would be the NEXT lie on this line — `auto` is a reserved actor
+ * literal here (`AUTO_GATE_ACTOR`), and reusing it for the superset is exactly the
+ * ambiguity that hid the agent case in the first place. Label and selector move
+ * together: the segment is `machine:N`, in the vocabulary `tldrx status` already
+ * uses one screen away ("N gate(s) closed by a machine, not by a person"), off
+ * the ONE shared `closedByMachine` so the line and the report cannot drift.
+ */
+describe("the status line counts every machine-closed gate", () => {
+  test("an agent-signed gate is counted, and rendered as `machine:1`", async () => {
+    const ws = workspace({ alpha: "agent", beta: "human" });
+    writeNote(ws.runDir);
+    expect((await next(ws)).code).toBe(0);
+    // the record the old selector read as a human's
+    expect(RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.gate.by).toBe(OWNER);
+
+    const snapshot = runSnapshot(ws.root);
+    expect(snapshot?.machineGates).toBe(1);
+    expect(renderRunLine(HOST, snapshot as never)).toContain("machine:1");
+  });
+
+  test("a facilitator-signed gate is counted exactly as it always was", async () => {
+    const ws = workspace({ alpha: "auto", beta: "human" });
+    expect((await next(ws)).code).toBe(0);
+
+    const snapshot = runSnapshot(ws.root);
+    expect(snapshot?.machineGates).toBe(1);
+    expect(renderRunLine(HOST, snapshot as never)).toContain("machine:1");
+  });
+
+  test("a `by: auto` record written before `executed_by` existed is still counted", () => {
+    const ws = workspace({ alpha: "human", beta: "human" });
+    const store = RunStore.open(ws.runDir);
+    store.mutate((run) => withGate(run, {
+      type: "approve", status: "approved", by: "auto", at: "2026-09-01T10:00:00Z", note: "",
+    }));
+    store.save();
+
+    expect(runSnapshot(ws.root)?.machineGates).toBe(1);
+  });
+
+  test("a gate a person closed leaves the line byte-identical", async () => {
+    const ws = workspace({ alpha: "human", beta: "human" });
+    expect((await next(ws)).code).toBe(4);
+    const store = RunStore.open(ws.runDir);
+    expect((await approve(store, { root: ws.root, actor: "will", at: "2026-09-02T10:00:00Z", note: "read it" })).ok)
+      .toBe(true);
+
+    const snapshot = runSnapshot(ws.root);
+    expect(snapshot?.machineGates).toBe(0);
+    const line = renderRunLine(HOST, snapshot as never);
+    expect(line).not.toContain("machine:");
+    expect(line).not.toContain("auto:");
+  });
+
+  test("the line and `tldrx status` agree about the same run — one selector, two surfaces", async () => {
+    const ws = workspace({ alpha: "agent", beta: "human" });
+    writeNote(ws.runDir);
+    await next(ws);
+
+    expect(details(ws.root)).toContain("1 gate(s) closed by a machine, not by a person");
+    expect(runSnapshot(ws.root)?.machineGates).toBe(1);
+  });
+
+  test("`auto` is gone from the rendered line, so nothing reads a superset under that name", () => {
+    expect(renderRunLine(HOST, { ...SNAPSHOT, machineGates: 2 })).toContain("machine:2");
+    expect(renderRunLine(HOST, { ...SNAPSHOT, machineGates: 2 })).not.toContain("auto:");
+  });
+
+  /**
+   * The tolerant reader does not parse gates, and `0` there means "cannot see" —
+   * never "no machine signed anything". Both render as no segment, which is the
+   * honest rendering of a thing this reader cannot know; what must not happen is
+   * the tolerant path inventing a number.
+   */
+  test("the tolerant reader still claims nothing it cannot see", () => {
+    const ws = workspace({ alpha: "auto", beta: "human" });
+    // Valid YAML that §2.2 refuses, so `RunStore.findOpen` skips it and the
+    // status line falls to the scraper — the shape of a real unreadable run.
+    const path = join(ws.runDir, "run.yml");
+    writeFileSync(path, readFileSync(path, "utf8").replace("version: 1", "version: 2"), "utf8");
+    const snapshot = runSnapshot(ws.root);
+    expect(snapshot?.source).toBe("tolerant");
+    expect(snapshot?.machineGates).toBe(0);
+    expect(renderRunLine(HOST, snapshot as never)).not.toContain("machine:");
   });
 });

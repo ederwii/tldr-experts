@@ -1114,10 +1114,14 @@ tools:
 | `install.{macos,linux,windows,all}` | str | y | Printed, never executed; `all` is the fallback when this OS has no key |
 
 **Validation.** `validateEnv` (`src/core/schemas/env.ts`) requires `version`, `tools`, and per tool `id`, `required`,
-`check`, `install`. Required today: `node`, `git`, `claude`; optional `bun`, `python3`, `graphify`, `gh`. Designed and
-not yet enforced: ids unique, `check` free of `; && | > \``, ≤64 tools — and the metacharacter rule is a change of
-BEHAVIOUR, not just a check to add, because `ToolChecker` runs `sh -c <check>` today. Env vars `CONTEXT7_API_KEY` /
-`GEMINI_API_KEY` as tools with `check: "test -n \"$VAR\""` `[assumption]`.
+`check`, `install`; **ids are unique** across `tools` and there are **at most 64** of them (#126 — `runDoctor` probes
+each entry, so a repeated id ran the same check twice and printed two rows for one tool, and nothing bounded the file
+at all). Required today: `node`, `git`, `claude`; optional `bun`, `python3`, `graphify`, `gh`. **`check` is a SHELL
+COMMAND LINE**: `ToolChecker` runs it as `sh -c <check>`, as the invoking user, on that user's machine — `; && | > \``
+and `$VAR` all mean what the shell means by them, deliberately, and the `[assumption]` below depends on it. There is
+no metacharacter rule and there is not going to be one: `env.yml` is a committed file its owner writes and reviews
+like code, and refusing shell syntax would have broken the manifest's own idiom to defend that owner from themselves.
+Env vars `CONTEXT7_API_KEY` / `GEMINI_API_KEY` as tools with `check: "test -n \"$VAR\""` `[assumption]`.
 
 ### 2.11 `tldrx-work/<run>/budget.yml`
 
@@ -1864,7 +1868,8 @@ Statusline renderer uses `model.display_name`, `cost.total_cost_usd`, `context_w
 `budget.ceiling_usd` from `run.yml`, and prints:
 `[tldrx] 260828-leaderboard · 02-HOW [▓▓░░░] 2/5 > contracts — architect | Sonnet ctx:16% $3.75/$25`
 Up to three markers sit between the stage count and the `>`, in this order and only when each is true: **`att`** (the
-run is `attended_by: host`), `auto:N` and `stale:N`.
+run is `attended_by: host`), `machine:N` (gates a MACHINE closed — the facilitator's and an agent's alike) and
+`stale:N`.
 
 With several runs open (§3.1) the status line still shows ONE run — the newest open one — with a marker for the
 others: `[tldrx] 260828-leaderboard (+1 open) · 02-HOW …`. No hook refuses on ambiguity. `claim-sources`,
@@ -2228,14 +2233,17 @@ back remains `reject`'s own signed decision. Reopenable states are `blocked`, `r
 refuses, because undoing finished work is a decision about the stage.
 
 **A machine-closed gate, where people look.** A gate no PERSON evaluated is named in `tldrx status` — with the
-`tldrx reject --stage …` that undoes it — and the status line carries `att`, `auto:N` and `stale:N`. It reached
+`tldrx reject --stage …` that undoes it — and the status line carries `att`, `machine:N` and `stale:N`. It reached
 `run.yml`, the event log and `run status` before this, and none of those is a glance. The selector is
 `gate.executed_by.type != human`, with `by == auto` as the union member for records written before that field
 existed: an `agent` gate records the operator account the agent ran as, so it carries a PERSON's name, and a
 report that keyed on `by: auto` alone listed every facilitator-closed gate and no agent-closed one — the inverse
 of what the report is for. The line names the executor's kind per stage, through the same renderer `run status`,
 `replay` and the dashboard use, and says out loud that the name on an agent gate is not the entity that did the
-checking. The status line's `auto:N` still counts facilitator signatures only, and says `auto`.
+checking. The status line counts the SAME gates through the same `closedByMachine`, and says `machine:N` (#127). It said
+`auto:N` and counted `by: auto` only, which made an agent-signed gate invisible on the one line an operator watches;
+widening that count under the `auto` label would have moved the error rather than removed it, because `auto` is a
+specific actor here and not a synonym for "the machine". Label and selector moved together.
 
 (5) overlaps (1) on purpose and is run **whether or not the stage listed `claim-sources` under `checks:`** — a
 stage file that forgot to list it must not thereby buy itself a cheaper gate. All seven are evaluated even after one

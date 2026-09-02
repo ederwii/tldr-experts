@@ -299,8 +299,9 @@ With a live run it prints:
 ```
 
 Three markers can appear after the stage count, and only when they are true: **`att`** (the
-run is `attended_by: host` — the framework will not spawn on it), **`auto:N`** (N gates the
-facilitator signed rather than a person) and **`stale:N`** (stages whose approval was revoked).
+run is `attended_by: host` — the framework will not spawn on it), **`machine:N`** (N gates a
+machine closed — the facilitator's and an agent's alike, never one a person signed) and
+**`stale:N`** (stages whose approval was revoked).
 With none of them the line is exactly what it always was.
 
 The run half comes from `RunStore`, the model/context/cost half from the documented

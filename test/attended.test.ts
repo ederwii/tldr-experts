@@ -510,7 +510,7 @@ describe("the screens say so", () => {
     const snapshot: RunSnapshot = {
       runDir: "/tmp/x", run: "260828-leaderboard", title: "", scope: "feature", status: "ready",
       phase: "02-how", stage: "contracts", stageStatus: "ready", expert: "architect",
-      done: 2, total: 5, ceilingUsd: 25, spentUsd: 3.75, openCount: 1, autoGates: 0, staleStages: 0,
+      done: 2, total: 5, ceilingUsd: 25, spentUsd: 3.75, openCount: 1, machineGates: 0, staleStages: 0,
       attendedByHost: false, source: "run-store",
     };
     const host = { modelName: "Sonnet", usedPercentage: 16, totalCostUsd: 3.75 };
@@ -520,15 +520,15 @@ describe("the screens say so", () => {
       .toBe("[tldrx] 260828-leaderboard · 02-HOW [▓▓░░░] 2/5 att > contracts — architect | Sonnet ctx:16% $3.75/$25");
   });
 
-  test("`att` leads the markers when a gate was also auto-signed", () => {
+  test("`att` leads the markers when a gate was also machine-signed", () => {
     const snapshot: RunSnapshot = {
       runDir: "/tmp/x", run: "260828-x", title: "", scope: "docs", status: "ready",
       phase: "01-what", stage: "alpha", stageStatus: "ready", expert: null,
-      done: 0, total: 2, ceilingUsd: 10, spentUsd: 0, openCount: 1, autoGates: 2, staleStages: 1,
+      done: 0, total: 2, ceilingUsd: 10, spentUsd: 0, openCount: 1, machineGates: 2, staleStages: 1,
       attendedByHost: true, source: "run-store",
     };
     expect(renderRunLine({ modelName: "Opus", usedPercentage: 4, totalCostUsd: 0 }, snapshot))
-      .toContain("0/2 att auto:2 stale:1 > alpha");
+      .toContain("0/2 att machine:2 stale:1 > alpha");
   });
 });
 

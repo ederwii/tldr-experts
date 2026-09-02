@@ -499,7 +499,7 @@ moves back to that stage, one `gate.revoked` is appended carrying `signed_by`, a
 stages that had run are marked `stale: true` — their files stay on disk, they stop counting
 as current. Nothing is deleted and no cost is refunded. It is the one verb that may reopen
 a FINISHED run. `tldrx status` names every gate a MACHINE closed — the facilitator's and an
-agent's alike — and the status line carries `att` / `auto:N` / `stale:N`, in that order and
+agent's alike — and the status line carries `att` / `machine:N` / `stale:N`, in that order and
 only when each is true.
 
 ```
