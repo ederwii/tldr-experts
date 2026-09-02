@@ -93,6 +93,11 @@ function train(ws: TrainingWorkspace, overrides: Partial<TrainOptions> = {}) {
     at: TRAIN_AT,
     now: TRAIN_NOW,
     timeoutMs: 20_000,
+    // Hermetic (#96): the pre-start check resolves the model a sub-agent would
+    // INHERIT from `~/.claude/settings.json`, and a premium one there is a
+    // refusal. Pinned to null so no test in this file passes or fails because of
+    // whatever the developer's own claude CLI was last pointed at.
+    ambientModel: null,
     ...overrides,
   });
 }
@@ -1154,7 +1159,8 @@ describe("--prepare / --commit", () => {
     // The bundle declares the PARTIAL: that is what the sub-agent writes, and the
     // rename onto `<area>.md` is the framework's to make, after validation.
     expect(pending.outputs).toEqual([KNOWLEDGE_WRITE]);
-    expect(pending.max_budget_usd).toBe(1);
+    // Half of full mode's $3.00 default (#96 raised it from $2.00).
+    expect(pending.max_budget_usd).toBe(1.5);
     expect(competencies(ws).status).toBe("created");
   });
 

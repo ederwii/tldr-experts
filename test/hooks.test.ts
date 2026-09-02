@@ -742,12 +742,20 @@ describe("budget-gate (PreToolUse Bash)", () => {
     expect(denialText(run)).toContain("the stage estimate is $25.00");
   });
 
-  test("`tldrx expert train` is gated at its $2.00 default", async () => {
+  test("`tldrx expert train` is gated at its $2.00 light-mode default", async () => {
     const run = await hook("budget-gate", {
       hook_event_name: "PreToolUse", tool_name: "Bash", cwd: workspace().root,
       tool_input: { command: `tldrx expert train architect --area api --run ${FIXTURE_RUN}` },
     });
     expect(denialText(run)).toContain("the stage estimate is $2.00");
+  });
+
+  test("`--mode full` is gated at $3.00 — the mode has its own default (#96)", async () => {
+    const run = await hook("budget-gate", {
+      hook_event_name: "PreToolUse", tool_name: "Bash", cwd: workspace().root,
+      tool_input: { command: `tldrx expert train architect --area api --mode full --run ${FIXTURE_RUN}` },
+    });
+    expect(denialText(run)).toContain("the stage estimate is $3.00");
   });
 
   test("`tldrx seed triage --propose` is gated at its $1.00 default", async () => {

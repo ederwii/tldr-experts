@@ -1,10 +1,18 @@
 export {
-  TRAINING_MODES, isTrainingMode, DEFAULT_TRAIN_USD, MIN_TRAIN_USD, DEFAULT_TRAIN_EFFORT,
+  TRAINING_MODES, isTrainingMode, DEFAULT_TRAIN_USD, DEFAULT_FULL_TRAIN_USD, defaultTrainUsd,
+  MEASURED_FULL_TRAIN_USD, MIN_TRAIN_USD, DEFAULT_TRAIN_EFFORT,
   MAX_INLINE_FILES, MAX_INLINE_BYTES, MAX_FILE_BYTES,
   CODE_TASK, RUNS_TASK, KNOWLEDGE_DIRNAME, TRAINING_LOG_FILE,
   knowledgeRelPath, fromRunsRelPath,
 } from "./Training.ts";
 export type { TrainingMode, TrainingTask } from "./Training.ts";
+
+export {
+  trainPreflight, modelTier, measuredBand, perAgentExpectedUsd, TIER_MULTIPLIER,
+} from "./trainPreflight.ts";
+export type { AmbientModel, ModelTier, PreflightInput, TrainPreflight } from "./trainPreflight.ts";
+export { resolveAmbientModel, ambientModelFiles } from "./ambientModel.ts";
+export type { AmbientModelInput } from "./ambientModel.ts";
 
 export {
   KNOWLEDGE_SECTIONS, KNOWLEDGE_CHECKED_SECTIONS, FROM_RUNS_SECTIONS, FROM_RUNS_CHECKED_SECTIONS,

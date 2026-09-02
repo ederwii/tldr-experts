@@ -28,8 +28,47 @@ export function isTrainingMode(value: string): value is TrainingMode {
   return (TRAINING_MODES as readonly string[]).includes(value);
 }
 
-/** `--max-usd` when the operator does not say. */
+/** `--max-usd` for `--mode light` when the operator does not say. */
 export const DEFAULT_TRAIN_USD = 2.0;
+
+/**
+ * `--max-usd` for `--mode full` when the operator does not say — $3.00, raised
+ * from the $2.00 light mode uses (#96).
+ *
+ * **Why $2.00 was the wrong number for full mode.** Full mode spawns TWO
+ * sub-agents and splits the ceiling between them (`runTraining.ts`), so $2.00
+ * handed each pass $1.00. A real full training costs `MEASURED_FULL_TRAIN_USD`
+ * END TO END on a mid model — $0.60-$0.80 per sub-agent — so $1.00 was 25% over
+ * the measured worst case, and the one repair round a rejected knowledge file
+ * earns comes out of that same share (`repairRound`). It was a ceiling with no
+ * room in it, and on 2026-09-02 a run hit it at $1.31 and threw the work away.
+ *
+ * **Why $3.00 and not more.** $1.50 per sub-agent is ~2x the measured per-agent
+ * mean, which leaves the repair round somewhere to live without turning the
+ * default into a number nobody would type. It is deliberately NOT scaled up for
+ * a premium model: `--max-budget-usd` is a stop after the turn, not a cap
+ * (spec 2.6.1), so a bigger default cannot make a premium turn affordable — it
+ * only raises what a single overshooting turn may lose. A premium tier in full
+ * mode is refused up front instead (`trainPreflight.ts`).
+ */
+export const DEFAULT_FULL_TRAIN_USD = 3.0;
+
+/**
+ * What a full training run has actually COST, end to end, on a mid model.
+ *
+ * Measured, not assumed: `docs/audits/2026-08-29/experts-knowledge.md` section E
+ * reads two lines straight off `training.jsonl` on `aparece-platform` — $1.21
+ * (platform, 15k output tokens) and $1.29 (abstractions). The top of the band is
+ * the $1.60 the owner reports for full runs in #96. Every number this framework
+ * quotes about the cost of training comes from here, so the figure and its
+ * provenance cannot drift apart.
+ */
+export const MEASURED_FULL_TRAIN_USD = { low: 1.21, high: 1.6 } as const;
+
+/** The ceiling for a mode when `--max-usd` is absent. */
+export function defaultTrainUsd(mode: TrainingMode): number {
+  return mode === "full" ? DEFAULT_FULL_TRAIN_USD : DEFAULT_TRAIN_USD;
+}
 
 /**
  * The floor one sub-agent may be given, in dollars.

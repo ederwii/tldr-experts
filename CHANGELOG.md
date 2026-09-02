@@ -263,6 +263,37 @@
 
 ### Fixed
 
+- **`expert train` says what it is about to spend, on which model, BEFORE it spends it (#96).**
+  Live 2026-09-02: `tldrx expert train discoverer --area discoverer --mode full` inherited the
+  claude CLI's last-used model — `fable-5`, a premium tier — and ran against the default ceiling.
+  Full mode splits that ceiling between its two sub-agents, so the code pass was handed $1.00. It
+  died with `Reached maximum budget ($1)` at 54 s, **$1.31 spent and recorded, nothing written to
+  `competencies.yml`.** Three defaults compounded and not one of them was said out loud.
+  - **A pre-start line names the model, its tier, and where the name came from** — `--model`,
+    `$ANTHROPIC_MODEL`, or a `model:` key in `.claude/settings.local.json` /
+    `.claude/settings.json` / `~/.claude/settings.json`: `model claude-fable-5[1m] (premium,
+    inherited from your claude CLI via ~/.claude/settings.json) — pass --model to override ·
+    --mode full · $3.00 across 2 sub-agent(s), $1.50 each`. When nothing on the box says which
+    model the CLI will pick, the line says THAT rather than inventing a tier.
+  - **A refusal — exit `2`, nothing spawned, nothing spent — when the share cannot fit and the
+    ceiling is the DEFAULT one.** The test is arithmetic, not a category: does the money one
+    sub-agent gets reach what one pass on that tier costs? Measured full trainings run
+    **$1.21–$1.60 end to end on a mid model** (two `training.jsonl` lines on `aparece-platform`,
+    `docs/audits/2026-08-29/experts-knowledge.md` §E, plus the top of the band in #96), so one
+    pass is ~$0.70 mid and ~$1.76 premium (opus lists at 2.5x sonnet). Full mode's $1.50 a pass
+    does not reach it. The refusal names both remedies — `--model sonnet`, or `--max-usd <n>`.
+  - **An explicit `--max-usd` is never refused.** The operator looked at the number; that is the
+    whole decision this check exists to ask for. It warns in one line and proceeds.
+  - **The full-mode default `--max-usd` is now $3.00**, up from the $2.00 light mode still uses,
+    because full mode pays for two sub-agent passes and the one repair round a rejected knowledge
+    file earns comes out of the same share. $1.50 a pass is ~2x the measured per-pass midpoint.
+    Deliberately not scaled higher for a premium model: `--max-budget-usd` is a stop after the
+    turn, not a cap (spec §2.6.1 — a $1.50 ceiling has realised $5.15), so a bigger default cannot
+    make a premium turn affordable, only more expensive to lose. `budget-gate` prices `--mode
+    full` at $3.00 to match.
+  - Salvaging the partial evidence a budget death throws away is a design call and was NOT built;
+    the question is asked on #96.
+
 - **The merge lock now has something to say about raw git in the shared checkout (#89).** The
   lock serialises merge-wave INVOCATIONS; it never serialised git. Measured 2026-09-02: while
   agent A's gates were running, agent B typed `git reset --hard origin/main` into the same

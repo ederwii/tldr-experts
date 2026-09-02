@@ -13,10 +13,20 @@ known; it cannot end a turn already in flight.
 
 **Size the prompt for the money you are willing to lose, not the ceiling you passed.**
 
-Measured costs so far (Sonnet, Aug 2026): a What stage ≈ $1.2–1.4; a light expert training
-over ~20 files ≈ $5; a cold `claude -p` call floors at ≈ $0.25 (10–26k cache-creation tokens
-before the first reply), which is why every spawn has a $0.25 floor and refuses below it
-rather than paying for a failure.
+Measured costs so far (Sonnet, Aug 2026): a What stage ≈ $1.2–1.4; a **full expert training
+$1.21–$1.60 end to end** (two `training.jsonl` lines, `docs/audits/2026-08-29/experts-knowledge.md`
+§E); a light training over ~20 files ≈ $5 on a 1M-context model, which is the overshoot above, not
+the job; a cold `claude -p` call floors at ≈ $0.25 (10–26k cache-creation tokens before the first
+reply), which is why every spawn has a $0.25 floor and refuses below it rather than paying for a
+failure.
+
+**`expert train` checks the model against the ceiling before it spawns (#96).** With no `--model`
+the sub-agent inherits whatever your claude CLI is set to, which can be a premium tier. The run now
+prints which model it resolved, what tier that is and where it read it, and it REFUSES (exit `2`,
+nothing spent) when the per-sub-agent share cannot reach what one pass on that tier costs and the
+ceiling is the default. `--max-usd` defaults to $2.00 in light mode and **$3.00 in full**, because
+full mode splits the ceiling between two sub-agents. An explicit `--max-usd` is never refused: it
+warns once and proceeds.
 
 ## Four things bound what a stage costs
 
