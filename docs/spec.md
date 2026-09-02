@@ -996,7 +996,7 @@ Append-only audit log: the cost ledger, the `replay`/`retro` input, and — with
 
 **Type enum:** `run.created` `run.closed` `run.unlocked` `run.cancelled` `run.attended` `phase.started` `phase.done` `stage.started` `stage.done` `stage.failed`
 `stage.skipped` `task.started` `task.done` `agent.spawned` `agent.result` `question.asked` `question.answered`
-`gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `story.reopened` `story.base_fastforwarded` `story.review_retried`
+`gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `story.reopened` `story.base_fastforwarded` `story.review_retried` `story.work_rescued`
 `check.passed` `check.failed` `budget.warned`
 `budget.blocked` `budget.raised` `fact.added` `fact.retired` `fact.superseded` `doc.superseded` `map.refreshed` `ticket.synced` `error`. Closed set: an
 unknown type is a validation error.
@@ -1037,6 +1037,13 @@ ref**: a story branch that sat behind its epic tip, brought up to it before a de
 (short shas) and `commits` (how many the move carried). It is appended ONLY when the ref actually moved — a divergent
 or dirty branch is warned about on stdout and changed by nothing, so it has no event, because nothing happened. A
 branch tldrx moves without saying so would be the framework editing the operator's git state silently.
+
+**`story.work_rescued` was added 2026-09-02 (#129).** It is the SECOND event in the enum that records tldrx touching
+git on the operator's behalf: changes found in a story worktree that had reached no ref, committed to the story branch
+before the worktree was pruned. Its payload carries `phase`, `story`, `repo`, `branch`, `sha` (short) and `status` —
+the status the story settled at. It is appended ONLY when a commit was really made; a rescue that could not commit
+keeps the worktree instead and appends nothing, because nothing happened to git. See §5, "Uncommitted work is never
+pruned".
 
 **`story.review_retried` was added 2026-09-01 (#78, widened by #79).** It is the one event in the enum whose subject is
 something that did NOT happen: a story's attempt was not spent. A review envelope refused for its **FORMAT** is a fault
@@ -2452,6 +2459,18 @@ reach before the Build handoff was even written. Every close path takes them —
 `tldrx approve` signing the last gate, `tldrx run cancel` — and `--keep-worktrees`, remembered on the run as
 `keep_worktrees:`, means "survive even that".
 
+**Uncommitted work is never pruned (#129).** Before a story worktree is removed, anything in it that has reached no ref
+is committed to the STORY branch, with a `wip(<id>): rescued from a story that settled \`<status>\`` message naming the
+verdict and the reason. One line on stdout and one `story.work_rescued` event (§2.9) carry the sha; the review log
+gains a `## Uncommitted work rescued` section saying where the work is and that nothing reviewed or merged it. If the
+commit cannot be made, **the worktree is KEPT** and the log names its path — a tree holding the only copy of somebody's
+work is not the framework's to delete. Framework state (`tldrx-work/`, `.tldrx/`) is excluded by the same pathspec a
+story commit uses. Measured 2026-09-02 on run `260830-money-and-payments` (aparece-v2): a story's DoD failed, it
+settled `blocked`, `git worktree remove --force` ran, and the developer's fix — uncommitted, inside — was gone. There
+was no branch, no stash and no reflog to recover it from, and `blocked` is precisely the state a human is going to want
+to inspect. Nothing is rescued on the ordinary path: a story that reaches `done` was committed before its DoD was even
+scored, so there is nothing left in the tree.
+
 **The implicit plan — a scope that SKIPS Plan can still Build (2026-08-29).** When the run's workflow names `plan` in
 its `skips:` (§2.4) **and** there is no `03-plan/waves.yml` on disk, the executor synthesises one story rather than
 refusing. A real `03-plan/` always wins: if the file is there it is executed, whatever `skips:` says, because somebody
@@ -2668,9 +2687,9 @@ EXECUTOR from the envelope (the reviewer holds no write tool, the same reason th
 shape: a heading, the round's own facts (verdict, attempt, diff command, commit), then one
 `## <n> · <finding>␣␣[<severity>]` section per finding — **two spaces** before the bracket — carrying `Where:`
 (the literal `(not stated)` when the envelope gave none), `Disposition:` and `Resolved:`. The disposition is written
-and **read back bolded**: `Disposition: **fix-now**`. A host editing the file closes a finding with `Resolved: yes` or
-re-routes it by changing the value between those asterisks; a `Disposition:` line without them does not parse, and the
-finding it belongs to is dropped rather than half-read.
+and **read back bolded**: `Disposition: **fix-now**`. A host editing the file closes a finding with
+`Resolved: yes <sha>` or re-routes it by changing the value between those asterisks; a `Disposition:` line without
+them does not parse, and the finding it belongs to is dropped rather than half-read.
 
 - **Four dispositions**, and each is a decision somebody made rather than a fact about the code: `fix-now` (this
   story's own correctness), `defer-with-log` (real, somebody else's call), `refuted` (the reviewer was wrong),
@@ -2681,14 +2700,26 @@ finding it belongs to is dropped rather than half-read.
 - **A disposition ROUTES a finding; `Resolved:` CLOSES it.** Two questions, two fields. `defer-with-log` findings are
   appended to `retro.md`'s `## Build feedback` as they are written — the existing second writer with its existing
   verbatim dedup — so a deferred defect reaches the owner through a channel that already exists.
+- **`Resolved: yes` carries the sha the fix landed as, or it closes nothing (#130).** The line is
+  `Resolved: yes <sha>`, and the sha is CHECKED before the story may settle: it must resolve to a commit in the story's
+  repo (`git rev-parse --verify <sha>^{commit}`) and be reachable from the story branch
+  (`git merge-base --is-ancestor`). A bare `yes`, a sha that is not a commit, or a commit that is not on the branch all
+  fail the same way — the finding stays open, and **the file is rewritten in place** to
+  `Resolved: claimed-unverified — <why>`, keeping the fact that a claim was made while withdrawing the claim. Every
+  `Resolved: yes` is checked, whatever its disposition; only a `fix-now` gates `done`. Measured 2026-09-02 on run
+  `260830-money-and-payments`: `S4-1.md` ended with `Resolved: yes` and a `result.json` describing the fix in detail,
+  over a branch that did not contain it — the worktree holding it had been pruned (#129) — and the story was one
+  approval away from `done` with the defect alive. The accounting was written from an agent's REPORT rather than from
+  a verified code state, which is the one thing the framework refuses everywhere else. Verification only ever moves a
+  finding from closed to OPEN; nothing here closes one, and a `Resolved: no` is never touched.
 - **One round per story** (`MAX_FIXLIST_ROUNDS`, reset by `story reopen` like every other count in the review ledger).
   A free round that could be taken twice is a story that never has to settle, so a second `fixlist` is refused out
   loud and read as `changes` — which costs the attempt the first one did not — and the SECOND reviewer's prompt
   withdraws the verdict rather than offering one the executor would refuse.
 - **A story cannot settle `done` while a `fix-now` finding is open.** It settles `blocked` instead, and the reason
-  names the file, the finding's number and its heading. The check is against the FILE, not the envelope that produced
-  it: the file is the state, and a host closes a finding there by writing `Resolved: yes` or re-routing its
-  `Disposition:`.
+  names the file, the finding's number and its heading — and, when a claim was refused, how many and why. The check is
+  against the FILE and against GIT, not against the envelope that produced it: the file is the state, and a host closes
+  a finding there by writing `Resolved: yes <sha>` or re-routing its `Disposition:`.
 - **The router: `tldrx next --prepare --fixlist <path>`.** Re-prepares the AUTHOR's bundle with the open findings under
   `## Fix list` in the developer prompt — numbered, with their `Do NOT` lines verbatim — and carries the prior turn's
   `session_id` in `pending.json` as `resume_session` so the host can resume that sub-agent rather than pay to rebuild

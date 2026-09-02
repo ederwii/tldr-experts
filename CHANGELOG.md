@@ -2,6 +2,71 @@
 
 ## 0.6.1 — unreleased
 
+### Fixed
+
+- **Pruning a blocked story's worktree destroyed the work inside it (#129).** Measured live
+  2026-09-02 on run `260830-money-and-payments` (aparece-v2), reported by the unattended
+  driver: a story's Definition of Done failed, the executor settled it `blocked`, and
+  `cleanUp` ran `git worktree remove --force` over a tree that still held the developer's
+  fix, uncommitted. There was no branch, no stash and no reflog to get it back from. `blocked`
+  is precisely the state a human is going to want to inspect, and it was the one state that
+  destroyed the evidence first.
+  - The invariant, and it has no exceptions in it: **the framework never deletes a worktree
+    holding changes that reached no ref.** Before any prune, `settle` commits whatever the
+    tree still holds to the STORY branch as
+    `wip(<id>): rescued from a story that settled \`blocked\`` — an honest subject naming the
+    verdict, the reason in the body, and "nothing reviewed this and nothing merged it" said
+    out loud, because a rescue commit that read like a delivery would be #130 in another file.
+  - Commit-then-prune rather than never-prune, because *recoverable* has to mean recoverable
+    **by sha**: a kept directory survives until the next `run close` or temp sweep, a commit
+    on the story branch survives a year. If the commit cannot be made, the worktree is KEPT
+    instead and the review log names its path.
+  - The sha is recorded where a human looks, not only where a terminal scrolls: a
+    `## Uncommitted work rescued` section in `04-build/log/<id>.md`, and a new
+    `story.work_rescued` event (§2.9) carrying story, repo, branch, sha and the settled
+    status. It is the second event in the enum that records tldrx touching git on the
+    operator's behalf, and it is appended only when a commit was really made.
+  - `--keep-worktrees`, a story parked at `review`, and a parked developer failure are
+    untouched: nothing is about to be deleted on any of those paths, so there is nothing to
+    rescue from. A green story rescues nothing either — `commitIfDirty` has already put every
+    byte on the branch.
+  - Red first, in `test/blocked-prune.test.ts`: on `14f01ec` a blocked story's `s1.txt`
+    existed nowhere — `git cat-file -e story/<run>/S1:s1.txt` exited non-zero and the tip of
+    the story branch was still `chore: fixture repo`. Five tests, including the
+    commit-cannot-be-made path (a `pre-commit` hook that exits 1), which asserts the tree is
+    still there with the file in it.
+
+- **The fix list recorded `Resolved: yes` over a fix that did not exist (#130).** Same
+  incident, and the driver called it the most dangerous of the four because it fails silently
+  and in the wrong direction: `04-build/fixlist/S4-1.md` ended with **`Resolved: yes`** and a
+  `result.json` describing the fix in detail, while the code did not contain it — the worktree
+  holding it had been pruned (#129) before anything reached a ref. The audit trail said a
+  defect was closed while it was alive, and one approval away from carrying the story to
+  `done`. Root: the accounting was written from an agent's REPORT rather than from a verified
+  code state, which is the one thing this framework refuses everywhere else and had never
+  applied to its own bookkeeping.
+  - **A close now carries the sha the fix landed as**: the line is `Resolved: yes <sha>`, and
+    the sha is CHECKED before a story may settle — it must resolve to a commit in the story's
+    repo (`git rev-parse --verify <sha>^{commit}`) and be reachable from the story branch
+    (`git merge-base --is-ancestor`). A bare `yes` closes nothing; `isOpen` treats an
+    unevidenced claim as an open finding.
+  - **The record stops lying about itself.** A claim that does not check out is rewritten in
+    place to `Resolved: claimed-unverified — <why>`, keeping the fact that somebody reported a
+    fix while withdrawing the assertion that it landed. Three refusals, each named: no commit
+    to point at, a sha that is not a commit in the repo, a commit that is not on the branch.
+  - One-directional by construction: verification can only move a finding from closed to
+    OPEN. Nothing here closes one, and a `Resolved: no` is never touched. Every `Resolved: yes`
+    is checked whatever its disposition — a `defer-with-log` claim over a fix that does not
+    exist is a smaller problem and the same lie — while only a `fix-now` gates `done`.
+  - The artifact teaches the form: its preamble now says `Resolved: yes <sha>`, says a bare
+    `yes` closes nothing, and says the sha is checked. So do the router's lines in a
+    `--prepare --fixlist` bundle and the block message on a refused `done`.
+  - Red first, in `test/fixlist.test.ts`: on `14f01ec` a fix list edited to `Resolved: yes`
+    with nothing landed settled the story `status: done`, evidence `commit 3380cca`, over two
+    live `fix-now` findings — and `Resolved: yes deadbeefdeadbeef` did the same. Two existing
+    tests that encoded the old contract were updated to name a real commit on the story branch;
+    they still prove that closing every finding lets the same approve settle `done`.
+
 ### Added
 
 - **The Plan prompt now says how to make a `touches` list COMPLETE (#132).** Measured on one

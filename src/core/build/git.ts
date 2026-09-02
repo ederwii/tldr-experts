@@ -234,6 +234,28 @@ export async function assertWorktreeOn(path: string, branch: string, what = "wor
   );
 }
 
+/**
+ * Is `sha` a commit this repo has, and is it reachable from `ref`?
+ *
+ * Three answers rather than two, because the two failures are different
+ * sentences to the person reading a refused claim: `absent` is "that is not a
+ * commit here at all", `unreachable` is "that commit exists, and it is not on
+ * this branch". Both refuse; only one of them is a typo.
+ *
+ * Added for #130, where a fix list recorded `Resolved: yes` over a fix that had
+ * reached no ref anywhere. A close is a claim like any other, and this is the
+ * measurement that either backs it or does not.
+ */
+export type ShaReachability = "reachable" | "unreachable" | "absent";
+
+export async function shaReachability(cwd: string, sha: string, ref: string): Promise<ShaReachability> {
+  // `^{commit}` on purpose: a blob or a tree whose id somebody pasted is not a
+  // commit a fix landed as, and `rev-parse` would otherwise resolve it happily.
+  const resolved = await git(["rev-parse", "--verify", "--quiet", `${sha}^{commit}`], cwd);
+  if (!resolved.ok) return "absent";
+  return (await git(["merge-base", "--is-ancestor", sha, ref], cwd)).ok ? "reachable" : "unreachable";
+}
+
 /** Best effort: a worktree that will not go away is a warning, never a failure. */
 export async function removeWorktree(cwd: string, path: string): Promise<boolean> {
   if (!existsSync(path)) return true;

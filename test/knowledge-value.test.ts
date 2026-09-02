@@ -697,7 +697,7 @@ describe("retro.md carries the gates back to the experts", () => {
       dod: [{ command: "npm run test", exitCode: 1, timedOut: false, tail: "1 failing" }],
       commit: null, merged: false, carried: null, conflicts: [], verdict: "changes", developerError: null,
       reviewSummary: "the acceptance criteria are not met yet", reviewFindings: ["no test for the empty code"],
-      reviewRel: "04-build/log/S1.md", reason: null, cost_usd: 0.4, ...overrides,
+      reviewRel: "04-build/log/S1.md", reason: null, rescued: null, cost_usd: 0.4, ...overrides,
     };
   }
 

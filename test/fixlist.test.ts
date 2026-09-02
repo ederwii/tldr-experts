@@ -27,6 +27,7 @@
  * reads, not off a line of prose in a log.
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
@@ -35,6 +36,7 @@ import { EventLog } from "../src/core/events/EventLog.ts";
 import { parseReview } from "../src/core/build/review.ts";
 import {
   DISPOSITIONS, MAX_FIXLIST_ROUNDS, openFindings, parseFixFindings, parseFixlistFile, renderFixlist,
+  unevidencedClaims,
 } from "../src/core/build/fixlist.ts";
 import { readReviewLedger } from "../src/core/facilitator/executors/build.ts";
 import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
@@ -365,22 +367,29 @@ describe("a story cannot settle `done` over an open `fix-now`", () => {
     const log = readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8");
     expect(log).toContain("2 fix-list finding(s) are still `fix-now` in 04-build/fixlist/S1-1.md");
     expect(log).toContain("#1 · Concurrent double-confirm mints two sessions");
-    expect(log).toContain("Close each one there (`Resolved: yes`) or re-route its `Disposition:`");
+    expect(log).toContain("Close each one there with `Resolved: yes <sha>`");
+    expect(log).toContain("or re-route its `Disposition:`");
   }, 90_000);
 
-  test("closing every finding in the file lets the same approve settle `done`", async () => {
+  test("closing every finding with the sha it landed as lets the same approve settle `done`", async () => {
     const ws = workspace();
     await handOffReview(ws);
     await fixlistRound(ws, "2026-08-29T10:00:00Z");
-    // The host's move: the fixes landed, so the file says so.
+    // The host's move, since #130: the fixes landed, and the record points at the
+    // commit they landed as. `handOffReview` already put one on the story branch.
+    const sha = execFileSync("git", ["rev-parse", `story/${ws.runId}/S1`], {
+      cwd: join(ws.root, "app"), encoding: "utf8",
+    }).trim();
     const path = fixlistPath(ws, "S1", 1);
-    writeFileSync(path, readFileSync(path, "utf8").replaceAll("Resolved: no", "Resolved: yes"), "utf8");
+    writeFileSync(path, readFileSync(path, "utf8").replaceAll("Resolved: no", `Resolved: yes ${sha}`), "utf8");
     await next(ws, { mode: "prepare", review: true, at: "2026-08-29T10:20:00Z" });
 
     answerReview(ws, "S1", { verdict: "approve", summary: "re-read the diff", findings: [] });
     await next(ws, { mode: "commit", review: true, at: "2026-08-29T10:30:00Z" });
 
     expect(story(ws, "S1")).toContain("status: done");
+    // Untouched: a claim that checks out is left exactly as the human wrote it.
+    expect(readFileSync(path, "utf8")).toContain(`Resolved: yes ${sha}`);
   }, 90_000);
 
   test("re-routing a finding away from `fix-now` closes it too", async () => {
@@ -535,17 +544,19 @@ describe("the artifact round-trips", () => {
     expect(text).toContain("**A `fix-now` finding keeps this story out of `done`.**");
   });
 
-  test("`Resolved: yes` closes a finding without changing where it was routed", () => {
+  test("`Resolved: yes <sha>` closes a finding without changing where it was routed", () => {
     const findings = parseFixFindings(THREE_DEFECTS).findings;
     const text = renderFixlist({
       storyId: "S5", title: "OTP confirm", round: 1, attempt: 1, maxAttempts: 2,
       diff: "d", commit: "c", summary: "", findings,
-    }).replace("Resolved: no", "Resolved: yes");
+    }).replace("Resolved: no", "Resolved: yes 9f2c1ab");
     const read = parseFixlistFile(text);
 
     expect(read[0]?.resolved).toBe(true);
+    expect(read[0]?.resolvedSha).toBe("9f2c1ab");
     expect(read[0]?.disposition).toBe("fix-now");
     expect(openFindings(read).map((f) => f.n)).toEqual([2]);
+    expect(unevidencedClaims(read)).toEqual([]);
   });
 });
 
@@ -679,4 +690,105 @@ describe("structured findings are stringified, never dropped (#36)", () => {
     expect(parseReview({ verdict: "approve", summary: "s", findings: [] }, "").findings).toEqual([]);
     expect(parseReview({ verdict: "approve", summary: "s" }, "").findings).toEqual([]);
   });
+});
+
+/**
+ * `Resolved: yes` is a CLAIM, and it carries its evidence or it is not one (#130).
+ *
+ * Measured live on 2026-09-02, run `260830-money-and-payments` (aparece-v2), the
+ * same incident as #129: `04-build/fixlist/S4-1.md` ended with **Resolved: yes**
+ * and a `result.json` describing the fix in detail — while the code did not
+ * contain it. The worktree holding the fix had been pruned before anything
+ * reached a ref, so the finding was alive and the audit trail said it was closed.
+ * The driver's words: *"Si yo le hubiera creído, S4 pasa a done con el bug."*
+ *
+ * The root is that the accounting was written from an agent's REPORT rather than
+ * from a verified code state — which is the one thing this framework refuses
+ * everywhere else and had never applied to its own bookkeeping. So: a `fix-now`
+ * finding closes on a sha that exists and is reachable from the story branch, or
+ * it does not close, and the record says *claimed, unverified* rather than
+ * *resolved*. Fail-closed, in the direction a mistake is recoverable in.
+ */
+describe("`Resolved: yes` is gated on the fix existing on a ref (#130)", () => {
+  test("a bare `Resolved: yes` does not close a finding — it is a claim with nothing behind it", () => {
+    const findings = parseFixFindings(THREE_DEFECTS).findings;
+    const text = renderFixlist({
+      storyId: "S5", title: "OTP confirm", round: 1, attempt: 1, maxAttempts: 2,
+      diff: "d", commit: "c", summary: "", findings,
+    }).replace("Resolved: no", "Resolved: yes");
+    const read = parseFixlistFile(text);
+
+    expect(read[0]?.resolved).toBe(true);          // the file CLAIMS it
+    expect(read[0]?.resolvedSha).toBeNull();       // and points at nothing
+    expect(openFindings(read).map((f) => f.n)).toEqual([1, 2]);
+    expect(unevidencedClaims(read).map((f) => f.n)).toEqual([1]);
+  });
+
+  test("the artifact tells the reader the sha is part of the word `yes`", () => {
+    const text = renderFixlist({
+      storyId: "S5", title: "OTP confirm", round: 1, attempt: 1, maxAttempts: 2,
+      diff: "d", commit: "c", summary: "", findings: parseFixFindings(THREE_DEFECTS).findings,
+    });
+    expect(text).toContain("`Resolved: yes <sha>`");
+  });
+
+  test("a rendered `resolved` finding carries its sha rather than a bare yes", () => {
+    const [first = null] = parseFixFindings(THREE_DEFECTS).findings;
+    expect(first).not.toBeNull();
+    const text = renderFixlist({
+      storyId: "S5", title: "OTP confirm", round: 1, attempt: 1, maxAttempts: 2,
+      diff: "d", commit: "c", summary: "",
+      findings: [{ ...first!, resolved: true, resolvedSha: "9f2c1ab" }],
+    });
+    expect(text).toContain("Resolved: yes 9f2c1ab");
+  });
+
+  test("the LIVE lie: a fixlist that says yes over a branch that lacks the fix does NOT settle done", async () => {
+    const ws = workspace();
+    await handOffReview(ws);
+    await fixlistRound(ws, "2026-08-29T10:00:00Z");
+
+    // The incident, reproduced: the accounting is edited to `yes` and nothing
+    // else happens. No fix, no commit, no sha — exactly the state S4 was left in.
+    const path = fixlistPath(ws, "S1", 1);
+    writeFileSync(path, readFileSync(path, "utf8").replaceAll("Resolved: no", "Resolved: yes"), "utf8");
+    await next(ws, { mode: "prepare", review: true, at: "2026-08-29T10:20:00Z" });
+
+    answerReview(ws, "S1", { verdict: "approve", summary: "re-read the diff", findings: [] });
+    await next(ws, { mode: "commit", review: true, at: "2026-08-29T10:30:00Z" });
+
+    // Before the fix this was `status: done` with two live defects behind it.
+    expect(story(ws, "S1")).toContain("status: blocked");
+    const log = readFileSync(join(ws.runDir, "04-build", "log", "S1.md"), "utf8");
+    expect(log).toContain("claimed-unverified");
+
+    // And the record stops lying about itself: the file no longer says `yes`.
+    const after = readFileSync(path, "utf8");
+    // Anchored: the preamble QUOTES `Resolved: yes` while teaching the form, and
+    // it is the finding's own line that must have stopped saying it.
+    expect(after).not.toMatch(/^Resolved: yes/m);
+    expect(after).toContain("Resolved: claimed-unverified");
+    expect(after).toContain("no commit to point at");
+  }, 90_000);
+
+  test("a sha that is not on the story branch is refused by name, not believed", async () => {
+    const ws = workspace();
+    await handOffReview(ws);
+    await fixlistRound(ws, "2026-08-29T10:00:00Z");
+
+    const path = fixlistPath(ws, "S1", 1);
+    writeFileSync(
+      path,
+      readFileSync(path, "utf8").replaceAll("Resolved: no", "Resolved: yes deadbeefdeadbeef"),
+      "utf8",
+    );
+    await next(ws, { mode: "prepare", review: true, at: "2026-08-29T10:20:00Z" });
+    answerReview(ws, "S1", { verdict: "approve", summary: "re-read the diff", findings: [] });
+    await next(ws, { mode: "commit", review: true, at: "2026-08-29T10:30:00Z" });
+
+    expect(story(ws, "S1")).toContain("status: blocked");
+    const after = readFileSync(path, "utf8");
+    expect(after).toContain("Resolved: claimed-unverified");
+    expect(after).toContain("deadbeefdeadbeef");
+  }, 90_000);
 });

@@ -404,10 +404,41 @@ export function renderReviewLog(outcome: StoryOutcome): string {
       "",
     );
   }
+  if (outcome.rescued !== null) {
+    lines.push("## Uncommitted work rescued", "", ...rescueLines(outcome), "");
+  }
   if (outcome.reason !== null) {
     lines.push("## Why it is not done", "", outcome.reason, "");
   }
   return lines.join("\n");
+}
+
+/**
+ * What happened to changes the worktree held and no ref did (#129).
+ *
+ * Written into the review log rather than only onto stdout because the sha is
+ * the whole point: a blocked story is read hours later by somebody who wants the
+ * work back, and a line that scrolled past in a terminal is not a record.
+ */
+function rescueLines(outcome: StoryOutcome): readonly string[] {
+  const rescued = outcome.rescued;
+  if (rescued === null) return [];
+  if (rescued.sha !== null) {
+    return [
+      `This story's worktree still held changes that had reached no ref when it settled`,
+      `\`${outcome.status}\`. They were committed to \`${rescued.branch}\` as \`${rescued.sha}\``,
+      "before the worktree was removed — `git show " + rescued.sha + "` has them back.",
+      "",
+      "The commit is a `wip:` rescue, not a delivery: nothing reviewed it and nothing merged it.",
+    ];
+  }
+  return [
+    "This story's worktree held changes that had reached no ref, and they could NOT be committed",
+    `(${rescued.failure ?? "no reason recorded"}).`,
+    "",
+    `The worktree was KEPT rather than pruned, because it is the only copy of that work:`,
+    `\`${rescued.worktree ?? "(path not recorded)"}\``,
+  ];
 }
 
 /**

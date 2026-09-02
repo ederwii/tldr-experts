@@ -59,7 +59,7 @@ import {
 import {
   addWorktree, assertWorktreeOn, baseStateOf, branchExists, commitAll, commitsBetween, currentBranch, diffCommand,
   dirtyPaths, ensureBranch, fastForward, firstLine, GitError, headSha, isDirty, mergeNoFf, partitionDirty, pathAtRef,
-  removeWorktree, repoDirOf, shaOf, stateDirPrefixes,
+  removeWorktree, repoDirOf, shaOf, shaReachability, stateDirPrefixes,
 } from "../../build/git.ts";
 import {
   BaseGateFailure, baseRefusalLines, baseResultFor, EMPTY_PREFLIGHT, loadPreflight, PREFLIGHT_REL,
@@ -83,10 +83,13 @@ import {
   isFormatRejection, looksLikeReviewerError, MAX_FORMAT_RETRIES, parseReview, renderFormatRefusal,
   renderPreviousAttempt, renderReviewLog, reviewerFailed, type Review,
 } from "../../build/review.ts";
-import { DEVELOPER_FAILED, dodGreen, type DodResult, type StoryOutcome } from "../../build/outcome.ts";
 import {
-  fixlistRel, fixlistRetroLines, latestFixlist, MAX_FIXLIST_ROUNDS, openFindings, readFixlistAt,
-  renderFixlistSection, writeFixlist, type FixlistOnDisk,
+  DEVELOPER_FAILED, dodGreen, type DodResult, type RescuedWork, type StoryOutcome,
+} from "../../build/outcome.ts";
+import {
+  CLAIMED_UNVERIFIED, fixlistRel, fixlistRetroLines, latestFixlist, markUnverified, MAX_FIXLIST_ROUNDS,
+  openFindings, readFixlistAt, renderFixlistSection, writeFixlist,
+  type FixFinding, type FixlistOnDisk,
 } from "../../build/fixlist.ts";
 import { renderBuildHandoff, type EpicSummaryRow } from "../../build/handoff.ts";
 import { appendBuildRetro, buildRetroPath, gateRetroLines, storyRetroLines } from "../../build/retroLog.ts";
@@ -739,7 +742,8 @@ class BuildSession {
           : `  · ${planned.story.id}: the prior author's session was \`${resume}\` — resume it if your `
             + "tooling can; the framework resumes nothing itself",
         `  · ${planned.story.id}: close each finding in ${fixlist.rel} as it lands `
-          + "(`Resolved: yes`) or re-route its `Disposition:` — an open `fix-now` blocks `done`",
+          + "(`Resolved: yes <sha>`, naming the commit it landed as — a bare `yes` closes "
+          + "nothing) or re-route its `Disposition:` — an open `fix-now` blocks `done`",
       );
     }
     // The story file is the state: `in_progress` is how `--commit` finds it again.
@@ -1331,7 +1335,7 @@ class BuildSession {
     // produced it, because the file is the state: a host closes a finding by
     // writing one word in it, and the whole point of the artifact is that the
     // decision outlives the turn that raised it.
-    const open = this.openFixNow(story.planned.story.id);
+    const open = await this.openFixNow(story);
     if (open !== null) {
       // Not `block()`: that one is for a story nothing judged, and it would
       // record `verdict: n-a` and `not merged` over a diff a reviewer APPROVED
@@ -1395,17 +1399,87 @@ class BuildSession {
    * Names the file, the finding's number and its heading — the three things the
    * person who has to close it needs — and then the two ways to close it, because
    * a refusal that does not say what to do next is a trap rather than a gate.
+   *
+   * Asked of the FILE, and — since #130 — of GIT. `Resolved: yes` is a claim
+   * somebody typed; `verifyResolutions` is what turns it into a fact or refuses
+   * it. Measured 2026-09-02 on `260830-money-and-payments`: `S4-1.md` said
+   * `Resolved: yes` with a result.json describing the fix, and the branch did not
+   * contain it, because the worktree holding it had been pruned (#129). The story
+   * would have settled `done` over a live defect, silently, in the one direction
+   * a mistake is not recoverable in.
    */
-  private openFixNow(storyId: string): string | null {
+  private async openFixNow(story: StoryContext): Promise<string | null> {
+    const storyId = story.planned.story.id;
     const fixlist = latestFixlist(this.ctx.runDir, BUILD_PHASE, storyId);
     if (fixlist === null) return null;
-    const open = openFindings(fixlist.findings);
+    const { findings, refused } = await this.verifyResolutions(story, fixlist);
+    const open = openFindings(findings);
     const first = open[0];
     if (first === undefined) return null;
     return `${String(open.length)} fix-list finding(s) are still \`fix-now\` in ${fixlist.rel} — `
       + `#${String(first.n)} · ${first.finding}. `
-      + "Close each one there (`Resolved: yes`) or re-route its `Disposition:`, "
+      + (refused.length === 0
+        ? ""
+        : `${String(refused.length)} \`Resolved: yes\` claim(s) did not check out and were `
+          + `recorded as \`${CLAIMED_UNVERIFIED}\`: ${refused.join("; ")}. `)
+      + "Close each one there with `Resolved: yes <sha>` — the commit the fix landed as on "
+      + `\`${story.branch}\` — or re-route its \`Disposition:\`, `
       + `then \`tldrx story reopen ${storyId}\``;
+  }
+
+  /**
+   * Hold every `Resolved: yes` in a fix list to the framework's own evidence rule.
+   *
+   * A claim closes a finding when it names a commit that (a) exists in the story's
+   * repo and (b) is reachable from the story branch. Anything else is a claim
+   * nobody can check, and the file is REWRITTEN to say so — `claimed-unverified`,
+   * with the reason — rather than left saying `yes`. That rewrite is the point:
+   * the incident was not a story that settled wrong once, it was an audit record
+   * that went on asserting a closed defect afterwards.
+   *
+   * Deliberately one-directional. This can only ever move a finding from closed to
+   * open; nothing here closes one, and a `no` is never touched.
+   */
+  private async verifyResolutions(
+    story: StoryContext,
+    fixlist: FixlistOnDisk,
+  ): Promise<{ findings: readonly FixFinding[]; refused: readonly string[] }> {
+    const id = story.planned.story.id;
+    const findings: FixFinding[] = [];
+    const refused: string[] = [];
+    let text: string | null = null;
+    for (const finding of fixlist.findings) {
+      // EVERY claim, not only the ones that gate `done`. A `defer-with-log`
+      // finding marked resolved over a fix that does not exist is a smaller
+      // problem and the same lie, and the record is what is being fixed here.
+      const why = finding.resolved ? await this.unverifiedBecause(story, finding.resolvedSha) : null;
+      if (why === null) {
+        findings.push(finding);
+        continue;
+      }
+      findings.push({ ...finding, resolved: false, resolvedSha: null });
+      refused.push(`#${String(finding.n)} — ${why}`);
+      text = markUnverified(text ?? readFileSync(fixlist.path, "utf8"), finding.n, why);
+      this.lines.push(
+        `  · ${id}: fix-list finding #${String(finding.n)} claimed \`Resolved: yes\` and `
+        + `${why} — recorded as \`${CLAIMED_UNVERIFIED}\`, and it still blocks \`done\``,
+      );
+    }
+    if (text !== null) writeFileSync(fixlist.path, text, "utf8");
+    return { findings, refused };
+  }
+
+  /** Why a `Resolved: yes` does not check out, or null when it does. */
+  private async unverifiedBecause(story: StoryContext, sha: string | null): Promise<string | null> {
+    if (sha === null) return "named no commit to point at";
+    switch (await shaReachability(story.repoDir, sha, story.branch)) {
+      case "reachable":
+        return null;
+      case "absent":
+        return `named \`${sha}\`, which is not a commit in repo ${story.planned.story.repo}`;
+      default:
+        return `named \`${sha}\`, which is not reachable from \`${story.branch}\``;
+    }
   }
 
   /**
@@ -2388,6 +2462,13 @@ class BuildSession {
   ): Promise<void> {
     const id = story.planned.story.id;
     const reviewRel = `${BUILD_PHASE}/${LOG_DIR}/${id}.md`;
+    // #129, and it happens FIRST because the sha has to be in the outcome the
+    // review log renders from. Worktrees survive a `review` and a parked
+    // developer failure on purpose, and `--keep-worktrees` keeps every one of
+    // them: those three are the cases where nothing is about to be deleted, so
+    // there is nothing to rescue from.
+    const pruning = status !== "review" && parts.keepWorktree !== true && !this.ctx.keepWorktrees;
+    const rescued = pruning ? await this.rescueUncommitted(story, status, parts.reason) : null;
     const outcome: StoryOutcome = {
       id,
       title: story.planned.story.title,
@@ -2409,6 +2490,7 @@ class BuildSession {
       reviewFindings: parts.review.findings,
       reviewRel,
       reason: parts.reason,
+      rescued,
       cost_usd: parts.cost,
     };
     this.outcomes.set(id, outcome);
@@ -2440,8 +2522,13 @@ class BuildSession {
     });
     // Worktrees survive a `review` on purpose: the second attempt continues in
     // the same tree rather than re-cutting the branch it just wrote. A parked
-    // developer failure keeps its tree for the same reason.
-    if (status !== "review" && parts.keepWorktree !== true) await this.cleanUp(story);
+    // developer failure keeps its tree for the same reason — and, since #129, so
+    // does a tree whose changes could not be made to reach a ref.
+    // `worktree` is non-null on exactly one shape: the rescue could not commit,
+    // so the tree is the ONLY copy and it stays.
+    if (pruning && (rescued === null || rescued.worktree === null)) {
+      await removeWorktree(story.repoDir, story.worktree);
+    }
     this.lines.push(
       `  ${status === "done" ? "✓" : "·"} ${id} → \`${status}\`` +
         (parts.reason === null ? "" : ` (${parts.reason})`),
@@ -2581,6 +2668,9 @@ class BuildSession {
       reviewFindings: [],
       reviewRel: `${BUILD_PHASE}/${LOG_DIR}/${planned.story.id}.md`,
       reason: status === "done" ? null : "settled by an earlier `tldrx next`",
+      // This invocation rescued nothing: the story settled in a process that has
+      // already gone. Whatever it rescued is in ITS log, not reconstructed here.
+      rescued: null,
       cost_usd: 0,
     };
     if (!existsSync(join(this.ctx.runDir, outcome.reviewRel))) this.writeLog(outcome);
@@ -3545,9 +3635,74 @@ class BuildSession {
     return path;
   }
 
-  private async cleanUp(story: StoryContext): Promise<void> {
-    if (this.ctx.keepWorktrees) return;
-    await removeWorktree(story.repoDir, story.worktree);
+  /**
+   * Get anything the worktree holds and no ref does onto the story branch, before
+   * the worktree is deleted (#129).
+   *
+   * The invariant, and it has no exceptions in it: **the framework never deletes a
+   * worktree holding changes that reached no ref.** Measured live 2026-09-02 on
+   * run `260830-money-and-payments` (aparece-v2) — a story's DoD failed, the
+   * executor settled it `blocked`, and `git worktree remove --force` took the
+   * developer's uncommitted fix with it. The work was gone: no branch, no stash,
+   * no reflog, nothing to `git show`. `blocked` is precisely the state a human is
+   * going to want to inspect, and it was the one state that destroyed the evidence.
+   *
+   * Commit-then-prune rather than never-prune, because "recoverable" has to mean
+   * recoverable by SHA. A kept directory is recoverable only until somebody runs
+   * `tldrx run close`, cleans a temp dir, or opens the next run; a commit on the
+   * story branch is recoverable in a year. The message says `wip:` and names the
+   * verdict, because this commit is not a story delivered and an audit trail that
+   * implied otherwise would be #130 in a different file.
+   *
+   * Returns null when there was nothing to rescue — the ordinary case, since
+   * `commitIfDirty` has already run on every path that reaches `done`.
+   */
+  private async rescueUncommitted(
+    story: StoryContext,
+    status: PlanStatus,
+    reason: string | null,
+  ): Promise<RescuedWork | null> {
+    const id = story.planned.story.id;
+    // The framework's own state dirs are excluded from the question and from the
+    // commit, exactly as `commitIfDirty` excludes them: a worktree of a repo that
+    // IS the workspace root also holds `tldrx-work/`, and a rescue that swept the
+    // run log into a commit would be a worse record than none.
+    const state = stateDirPrefixes(this.workspace.root, story.repoDir);
+    return await this.writes.run(async () => {
+      if (!existsSync(story.worktree)) return null;
+      if (!(await isDirty(story.worktree, state))) return null;
+      const committed = await commitAll(
+        story.worktree,
+        `wip(${id}): rescued from a story that settled \`${status}\`\n\n`
+        + `${reason ?? "no reason was recorded"}\n\n`
+        + "Committed by tldrx before its worktree was pruned, so the work reaches a ref.\n"
+        + "Nothing reviewed this and nothing merged it (gh #129).",
+        state,
+      );
+      const sha = committed.ok ? await headSha(story.worktree) : "";
+      if (sha === "") {
+        const failure = firstLine(committed.stderr) || firstLine(committed.stdout)
+          || "git wrote no commit and said nothing";
+        this.lines.push(
+          `  · ${id}: its worktree holds changes that reached NO ref and could not be committed `
+          + `(${failure}) — KEEPING ${story.worktree} rather than deleting the only copy`,
+        );
+        return { sha: null, branch: story.branch, worktree: story.worktree, failure };
+      }
+      this.lines.push(
+        `  · ${id}: uncommitted work RESCUED to \`${story.branch}\` as \`${sha}\` `
+        + "before its worktree was pruned — `git show " + sha + "`",
+      );
+      this.ctx.emit("story.work_rescued", {
+        phase: this.ctx.phaseId,
+        story: id,
+        repo: story.planned.story.repo,
+        branch: story.branch,
+        sha,
+        status,
+      });
+      return { sha, branch: story.branch, worktree: null, failure: null };
+    });
   }
 
 }

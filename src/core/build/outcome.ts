@@ -42,6 +42,32 @@ export interface DodResult {
   readonly tail: string;
 }
 
+/**
+ * Work that was in the story worktree and in no ref, when the framework was
+ * about to delete the worktree (#129).
+ *
+ * Measured live 2026-09-02 on run `260830-money-and-payments`: a DoD failed, the
+ * story settled `blocked`, and `git worktree remove --force` took the developer's
+ * fix with it. `blocked` is the state a human is most likely to want to inspect,
+ * so the one path that must never destroy anything destroyed everything.
+ *
+ * Two shapes, and they are the two honest answers. `sha` set: the changes were
+ * committed to the story branch first, and `git show <sha>` gets them back.
+ * `sha` null: they could NOT be committed, `failure` says why, and the worktree
+ * was kept rather than pruned — because a tree holding the only copy of somebody's
+ * work is not the framework's to delete.
+ */
+export interface RescuedWork {
+  /** The rescue commit, or null when none could be made. */
+  readonly sha: string | null;
+  /** The branch it landed on — the story branch. */
+  readonly branch: string;
+  /** Where the tree still is, when it was KEPT. Null once it has been pruned. */
+  readonly worktree: string | null;
+  /** Why nothing could be committed. Measured from git, never guessed. */
+  readonly failure: string | null;
+}
+
 export interface StoryOutcome {
   readonly id: string;
   readonly title: string;
@@ -98,6 +124,11 @@ export interface StoryOutcome {
   readonly reviewRel: string;
   /** One line saying why, when the story did not reach `done`. */
   readonly reason: string | null;
+  /**
+   * Uncommitted work found in the worktree as the story settled — null on the
+   * ordinary case, where `commitIfDirty` already put every byte on the branch.
+   */
+  readonly rescued: RescuedWork | null;
   readonly cost_usd: number;
 }
 
