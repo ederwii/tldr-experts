@@ -229,7 +229,28 @@ export interface StageResult {
   readonly session_id: string | null;
 }
 
-export class PendingError extends Error {}
+/**
+ * The handshake's own file is not readable.
+ *
+ * `kind` exists because the two ways that happens cost the run different things
+ * (gh #82). `absent` is a STEP not yet taken — `--commit` before the host wrote
+ * `result.json`, `--prepare` never run at all — and the fix is another command,
+ * so it is a sequencing refusal that leaves the run exactly where it was.
+ * `unreadable` is a file somebody DID write and got wrong; something is broken
+ * rather than merely out of order, so it keeps costing what it always cost.
+ *
+ * Typed rather than sniffed out of the message on purpose: a caller matching on
+ * the words would break the moment the message improved, which is the opposite
+ * of what should happen.
+ */
+export class PendingError extends Error {
+  readonly kind: "absent" | "unreadable";
+
+  constructor(message: string, kind: "absent" | "unreadable" = "unreadable") {
+    super(message);
+    this.kind = kind;
+  }
+}
 
 export function writeBundle(runDir: string, stageId: string, prompt: string, pending: PendingStage): void {
   const dir = agentDir(runDir, stageId);
@@ -262,6 +283,7 @@ export function readPending(runDir: string, stageId: string): PendingStage {
   if (!existsSync(path)) {
     throw new PendingError(
       `no ${PENDING_FILE} in ${agentDir(runDir, stageId)} — run \`tldrx next --prepare\` first`,
+      "absent",
     );
   }
   let doc: unknown;
@@ -290,6 +312,7 @@ export function readResultObject(runDir: string, stageId: string): Record<string
   if (!existsSync(path)) {
     throw new PendingError(
       `no ${RESULT_FILE} in ${agentDir(runDir, stageId)} — the in-session run must write it before \`next --commit\``,
+      "absent",
     );
   }
   let doc: unknown;

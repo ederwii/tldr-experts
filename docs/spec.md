@@ -1436,7 +1436,7 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx seed apply <split.yml> [--dry-run]` | `split.yml`, `inventory.json` beside it, `workflows/*.yml` | one `tldrx-work/<run>/` per proposed run (via `run new`'s own path) each with a `triage:` block, and `split.yml` rewritten to `status: applied`. Questions with no `answer:` are listed on **stderr** as a warning — never a refusal | 0,1,3 |
 | `tldrx run attend <host\|--none> [<run>]` | `run.yml` | `run.yml`'s `attended_by` (§2.2), `events.jsonl` (`run.attended`, carrying the new value and the old). Nothing else: no agent, no cost, no stage moved, no branch touched. `--none` REMOVES the key rather than blanking it — `null` is not a legal value. A direction is required and is never guessed (exit 1); setting what is already set is a silent no-op; a `done` or `cancelled` run is refused (exit 2) | 0,1,2,3 |
 | `tldrx run status [<run>]` | `run.yml`, `events.jsonl` | nothing (stdout) | 0,3 |
-| `tldrx next [<run>] [--dry-run] [--prepare\|--commit] [--review] [--fixlist <path>] [--parallel <n>] [--prompt-max-bytes <n>] [--max-reads <n>] [--commit --cost-usd <n>] [--tokens <n>]` | `run.yml`, `stage.yml`, `stage.md`, `expert.md`, declared inputs, `graphify-out/<repo>/graph.json` | stage outputs, `run.yml`, `events.jsonl`. `--cost-usd` is the in-session turn's DECLARED cost (§2.2); with none the task is `cost_usd: null, metered: false`. Both flags are `--commit`-only — headless reconciles a real `total_cost_usd` and a flag must not overwrite a measurement. On a run marked `attended_by: host` (§2.2) the headless mode — `--dry-run` included, which spawns nothing (issue #17) but describes a dispatch this run never makes — is refused with **exit 4** before the budget gate, before an input is read and before a prompt is assembled; the message names the exact half of the handshake the stage is waiting for | 0,2,3,4,5 |
+| `tldrx next [<run>] [--dry-run] [--prepare\|--commit] [--review] [--fixlist <path>] [--parallel <n>] [--prompt-max-bytes <n>] [--max-reads <n>] [--commit --cost-usd <n>] [--tokens <n>]` | `run.yml`, `stage.yml`, `stage.md`, `expert.md`, declared inputs, `graphify-out/<repo>/graph.json` | stage outputs, `run.yml`, `events.jsonl`. `--cost-usd` is the in-session turn's DECLARED cost (§2.2); with none the task is `cost_usd: null, metered: false`. Both flags are `--commit`-only — headless reconciles a real `total_cost_usd` and a flag must not overwrite a measurement. On a run marked `attended_by: host` (§2.2) the headless mode — `--dry-run` included, which spawns nothing (issue #17) but describes a dispatch this run never makes — is refused with **exit 4** before the budget gate, before an input is read and before a prompt is assembled; the message names the exact half of the handshake the stage is waiting for | 0,1,2,3,4,5 |
 | `tldrx cost [<run>] [--run <id>] [--all] [--json]` | every run's `events.jsonl` (+ `run.yml` for the title) | nothing (stdout) | 0,1,3 |
 | `tldrx run estimate [<run>] [--json]` | everything `next --prepare` reads, plus every run's `events.jsonl` for cache-write / cache-read / output history | nothing (stdout) | 0,1,3 |
 | `tldrx run gates set <stage>:<human\|auto\|agent> --note <text> [<run>]` | `run.yml` | `run.yml`'s §2.2 `gates_policy` and `events.jsonl` (`gate.policy_changed`, carrying actor, moment, note and old→new). The ONLY sanctioned way to move a frozen `gates_policy`; `run.yml` stays hand-edit-forbidden (§1). ONE `<stage>:<policy>` per invocation — a comma list is refused, and the entry must name its policy outright, since under `--gates` a bare stage means `human` and a signature must not rest on a default. An empty or missing `--note` is refused, as is a no-op (`human` → `human`). A run whose `run.yml` has no `gates_policy` at all gets the FULL map written, every stage explicit, with the one change applied. Gates already signed are untouched | 0,1,2,3 |
@@ -2414,6 +2414,21 @@ verdict and spends no attempt. The turn is recorded `cost_usd: null, metered: fa
 envelope declares it), the `check: review` event carries `source: host`, and **no `agent.spawned` is emitted** — a
 `task.started` with `role: reviewer, mode: prepare` is. A settled handshake removes the bundle; its presence is what
 says a review is outstanding, and `--discard-pending` bins it like any other.
+
+**A handshake called by the wrong end is a SEQUENCING refusal: exit `1`, and the run is left untouched (gh #82).**
+`--commit --review` with no reviewer bundle out, `--commit` with no story `in_progress`, `--prepare --review` over a
+story whose developer half has not run, and either `--commit` before its `result.json` has been written — all five say
+what to run instead, exit `1`, and change **nothing**: no `stage.failed`, no status moved, no task recorded, no cent
+metered, `run.yml` byte for byte as it was. This is the behaviour a single-agent stage already had (`--commit` before
+`--prepare` ⇒ exit `1`, nothing touched); Build was the outlier because Build owns its own middle, and its refusals
+came back as a failed stage. It is a narrower thing than the `refused` a red precondition earns: that one sends the
+stage back to `ready` because the cycle cannot continue, while here the cycle is fine and only the operator is holding
+it by the wrong end — sending it back would throw away the state the next command needs. Measured cost of the old
+behaviour, on `260901-leaderboard-v2` (2026-09-02T00:36Z): one mistyped command marked the stage and the run `failed`,
+which demoted the stage out of `running` — and the phase-budget gate is skipped exactly when a stage is already
+`running` — so the next `--prepare` was priced as a fresh stage start and took a `budget.blocked` nothing had earned.
+A file the host DID write and got wrong is **not** this: unreadable JSON is broken rather than out of order, and still
+costs what it always did.
 
 Two things route into it without the flag. A story **waiting on a review** — its last reviewer errored, or its review
 is already out with the host — gets its reviewer bundle from a bare `tldrx next --prepare`, because a `--prepare` that

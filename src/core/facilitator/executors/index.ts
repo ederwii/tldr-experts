@@ -232,6 +232,41 @@ export interface ExecutorOutcome {
    * stage goes back to `ready` and `lines` says what to do. (wave5)
    */
   readonly refused?: boolean;
+  /**
+   * This refusal is about the ORDER the handshake was called in, and nothing
+   * else (gh #82).
+   *
+   * `refused` already says "not a failure — the stage must not be marked
+   * `failed`". This says the stricter thing underneath it: **and not a state
+   * change either**. The stage keeps the status it had, `run.yml` comes out of
+   * the invocation byte for byte as it went in, and no event is appended. Exit
+   * is `EXIT_USAGE`, the same code a single-agent stage already returns when it
+   * is sent `--commit` before its `--prepare` (`commitStage`, runNext.ts) — this
+   * is that behaviour, extended to the phase that owns its own middle.
+   *
+   * The distinction is worth two flags because the two refusals leave the run in
+   * genuinely different places. `refused` is a PRECONDITION an operator has to
+   * go and fix — a dirty repo, a red base tree, a daemon that is down — and the
+   * stage goes back to `ready` because the cycle it was in cannot continue.
+   * `sequencing` is the operator holding a perfectly good cycle by the wrong
+   * end: the bundle is still out, the story is still where it was, and the fix
+   * is the other command, printed on the line above. Sending THAT back to
+   * `ready` would throw away the very state the next command needs.
+   *
+   * That is not theoretical. On `260901-leaderboard-v2` (2026-09-02T00:36Z) one
+   * `--commit --review` with no reviewer bundle out was recorded as
+   * `stage.failed`, which demoted the stage out of `running` — and `runExecutor`
+   * skips the phase-budget gate exactly when a stage is already `running`. The
+   * next `--prepare` was therefore priced as a fresh stage start and took a
+   * `budget.blocked` nothing had earned. A refusal that changes no state cannot
+   * cause that.
+   *
+   * Set ONLY through `refusedOnSequence`, and honoured only when the outcome
+   * carries no tasks and claims no epic branches — a refusal that spent
+   * something or cut a branch has work to record, so it takes the ordinary path.
+   * Defaulting to "record it" is the direction a mistake here is recoverable in.
+   */
+  readonly sequencing?: boolean;
 }
 
 export type StageExecutor = (ctx: ExecutorContext) => Promise<ExecutorOutcome>;

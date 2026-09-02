@@ -959,6 +959,13 @@ async function runExecutor(
 ): Promise<NextOutcome> {
   const ctx: PathContext = { root: options.root, runDir: store.runDir };
 
+  // The stage exactly as this invocation found it, so a SEQUENCING refusal can
+  // hand it back untouched (gh #82). Read before the budget gate and before the
+  // `running` stamp, because those are the two things an invocation writes on its
+  // way in — and an invocation that turns out to have been the wrong half of the
+  // handshake had no business writing either.
+  const stageOnEntry = requireStage(store, phaseId, stageId);
+
   // A stage already `running` is mid-pipeline — a Build phase hands out one story
   // per `--prepare`/`--commit` cycle — and re-charging the whole stage estimate
   // against a phase it has already spent from would refuse the second cycle every
@@ -1046,6 +1053,31 @@ async function runExecutor(
   };
 
   const outcome = await executor(executorCtx);
+
+  // The handshake called by the wrong end, and nothing else wrong (gh #82). Its
+  // door is HERE, before anything is recorded or saved, because the property it
+  // has to keep is that `run.yml` comes out of the invocation byte for byte as it
+  // went in — and `store.save()` alone would move `updated_at`.
+  //
+  // Nothing is skipped by taking it: `isSequencingRefusal` already established
+  // there are no tasks to record and no branches to claim. The only write left is
+  // undoing the `running` stamp this invocation may have put on the way in, and
+  // that is a write that puts the stage BACK, not one that moves it.
+  if (isSequencingRefusal(outcome)) {
+    // `started` is false exactly when this invocation stamped the stage `running`
+    // on its way in — `markRunning` above is the one and only write to the stage
+    // between entry and here, so undoing it is the whole restoration. When the
+    // stage was ALREADY running, which is the live shape this fixes, there is
+    // nothing to undo and nothing is written at all.
+    if (!started) {
+      mapStage(store, phaseId, stageId, () => stageOnEntry);
+      store.save();
+    }
+    // Exit 1, matching `commitStage`'s refusal for the same mistake on a
+    // single-agent stage: spec §3's "you asked for something impossible".
+    return out(EXIT_USAGE, [...notes, ...outcome.lines]);
+  }
+
   claimEpicBranches(store, outcome.epicBranches, outcome.branchModel);
   recordExecutorTasks(store, options, phaseId, stageId, spec, outcome);
   store.save();
@@ -1066,6 +1098,25 @@ async function runExecutor(
     await finishStage(store, options, phaseId, stageId, spec, [...notes, ...outcome.lines], outcome.gate),
     advisories,
   );
+}
+
+/**
+ * Is this outcome a pure SEQUENCING refusal — safe to return without writing
+ * anything at all (gh #82)?
+ *
+ * The flag alone is not enough. Every condition beyond it is a thing that WOULD
+ * have been written on the ordinary path: a task carries money and an
+ * `agent.result`, an epic branch is a claim the next invocation reads out of
+ * `run.yml`. An outcome carrying either has work to record, so it takes the
+ * ordinary path and records it — the flag can widen what refuses for free, but it
+ * can never make the framework forget a dollar it spent or a branch it cut.
+ */
+function isSequencingRefusal(outcome: ExecutorOutcome): boolean {
+  return outcome.sequencing === true
+    && outcome.refused === true
+    && outcome.tasks.length === 0
+    && outcome.costUsd === 0
+    && (outcome.epicBranches?.length ?? 0) === 0;
 }
 
 /** One `run.yml` task and one `agent.result` per sub-agent the executor ran. */
