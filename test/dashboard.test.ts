@@ -335,9 +335,14 @@ describe("the static page", () => {
     expect(html).not.toContain("EventSource");
     expect(html).not.toContain("XMLHttpRequest");
     expect(html).not.toContain("localStorage");
-    // Every button on the page copies text or filters the list. Nothing else.
+    // Every button on the page copies text, or changes what the page is showing
+    // you. Nothing else. `stream` joined the list with the run detail's event
+    // stream (#107) and is the same kind of thing `filter` and `sort` are: view
+    // state in `state.ui`, read by the renderer, never sent anywhere. The list is
+    // the point of the assertion — a button carrying anything NOT on it is a
+    // write path, and this is where that would be caught.
     for (const [, attributes] of html.matchAll(/<button([^>]*)>/g)) {
-      expect(attributes).toMatch(/data-(copy|filter|sort)=/);
+      expect(attributes).toMatch(/data-(copy|filter|sort|stream)=/);
     }
   });
 

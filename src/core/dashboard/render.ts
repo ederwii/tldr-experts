@@ -48,6 +48,18 @@ export const MODEL_ELEMENT_ID = "model-data";
 export interface DashUi {
   readonly status: string;
   readonly sort: string;
+  /**
+   * Which kinds the run detail's event stream is showing — `all`, or one of the
+   * stream's own kinds (#107).
+   *
+   * Optional, and absent reads as `all`. This is VIEW state, not model state:
+   * the model's "absent is null, never missing" rule is about the document a
+   * consumer parses, and every caller that predates the stream — four test files
+   * and the page's own boot object — means "show me everything" by not saying so.
+   * A required field here would have been a required edit in files this change
+   * has no business touching.
+   */
+  readonly stream?: string;
 }
 
 /** Which view the hash asks for. `id` is set only for a run detail. */
@@ -394,7 +406,7 @@ export function dashRoute(hash: string): DashRoute {
   if (parts[0] === "run" && parts[1] !== undefined && parts[1] !== "") {
     return { view: "run", id: decodeURIComponent(parts[1]) };
   }
-  const known = ["runs", "experts", "watchers", "faq"];
+  const known = ["runs", "waves", "experts", "watchers", "faq"];
   return { view: known.indexOf(parts[0] ?? "") >= 0 ? String(parts[0]) : "runs", id: null };
 }
 
@@ -415,6 +427,7 @@ export function dashTopMeta(model: DashboardModel): string {
 export function dashNav(model: DashboardModel, view: string): string {
   const views = [
     { id: "runs", label: "Runs" },
+    { id: "waves", label: "Waves" },
     { id: "experts", label: "Experts" },
     { id: "watchers", label: "Watchers" },
     { id: "faq", label: "How to use" },
@@ -438,7 +451,8 @@ export function dashMain(
   nowMs: number,
 ): string {
   if (!model.workspaceFound) return dashNoWorkspace(model);
-  if (route.view === "run") return dashRunView(model, route.id ?? "", nowMs);
+  if (route.view === "run") return dashRunView(model, route.id ?? "", nowMs, ui);
+  if (route.view === "waves") return dashWavesView(model);
   if (route.view === "experts") return dashExpertsView(model);
   if (route.view === "watchers") return dashWatchersView(model);
   if (route.view === "faq") return dashFaqView(model);
@@ -478,7 +492,6 @@ export function dashRunsView(model: DashboardModel, ui: DashUi, nowMs: number): 
       : ui.sort === "id"
         ? b.id.localeCompare(a.id)
         : rank(a) - rank(b)));
-  const waiting = model.runs.filter((run) => dashPending(run) !== null);
   const next = dashNextRun(model);
 
   const parts: string[] = [
@@ -488,19 +501,13 @@ export function dashRunsView(model: DashboardModel, ui: DashUi, nowMs: number): 
     dashUnreadable(model),
   ];
 
-  if (waiting.length > 0) {
-    const alerts = waiting.map((run) => {
-      const pending = dashPending(run);
-      const kind = pending === null ? "" : pending.kind;
-      const text = pending === null ? "" : pending.text;
-      return `<div class="alert"><span class="alert__kind">${dashText(kind)}</span>`
-        + `<span><a href="#/run/${dashEscape(encodeURIComponent(run.id))}">`
-        + `${dashText(run.title === "" ? run.id : run.title)}</a> — ${dashText(text)}`
-        + '<br><span class="faint mono" style="font-size:var(--text-2xs)">waiting on a human</span>'
-        + "</span></div>";
-    });
-    parts.push(`<div class="stack stack--sm" style="margin-bottom:var(--space-lg)">${alerts.join("")}</div>`);
-  }
+  // The "Now" strip is what the alert stack became (#107). It is a superset:
+  // the same `dashPending` ask, in the same words and wearing the same
+  // `alert__kind` badge, on a card that also carries the phase dots, the spend
+  // and how long the run has been quiet — and it covers every LIVE run rather
+  // than only the four kinds that raise an ask. Two surfaces answering "who
+  // needs me" was the duplication this replaced, not a fallback worth keeping.
+  parts.push(dashNowStrip(model, nowMs));
 
   const statusButtons = ["all"].concat(statuses).map((status) =>
     `<button class="fbtn" type="button" data-filter="${dashEscape(status)}" `
@@ -513,7 +520,8 @@ export function dashRunsView(model: DashboardModel, ui: DashUi, nowMs: number): 
       + statusButtons.join("")
       + '<span class="filters__label" style="margin-left:var(--space-md)">sort</span>'
       + sortButtons.join("")
-      + "</div>",
+      + "</div>"
+      + dashKeyHelp(),
   );
   parts.push(dashChains(model));
 
@@ -626,7 +634,12 @@ export function dashMeter(spent: number | null, ceiling: number | null): string 
 // View: one run
 // ---------------------------------------------------------------------------
 
-export function dashRunView(model: DashboardModel, id: string, nowMs: number): string {
+export function dashRunView(
+  model: DashboardModel,
+  id: string,
+  nowMs: number,
+  ui?: DashUi,
+): string {
   const run = model.runs.filter((candidate) => candidate.id === id)[0];
   if (run === undefined) {
     return '<div class="viewhead"><h1>Run not found</h1><p><code>'
@@ -687,7 +700,7 @@ export function dashRunView(model: DashboardModel, id: string, nowMs: number): s
       : "")
     + `</div>${repos}</div>`);
 
-  parts.push(dashPathSection(run));
+  parts.push(dashPhaseTimeline(run));
 
   const pairs: { phase: PhaseModel; question: QuestionModel }[] = [];
   for (const phase of run.phases) {
@@ -702,11 +715,16 @@ export function dashRunView(model: DashboardModel, id: string, nowMs: number): s
 
   parts.push(dashHandoffsSection(run));
   parts.push(dashPlanSection(run, model.maxAttempts));
+  parts.push(dashStoryGrid(run, model.maxAttempts));
   parts.push(dashStoryArcs(run, model.maxAttempts));
   parts.push(dashPreflightSection(run));
   parts.push(dashBudgetSection(run));
   parts.push(dashBudgetBlocks(run));
   parts.push(dashNotesSection(run));
+  // The filter is view state and the run detail has three callers that predate
+  // it (`dashboard-vocabulary`, `-leftovers` and `-headline` all render a detail
+  // with no UI in hand). Absent reads as unfiltered, which is what they mean.
+  parts.push(dashEventStream(run, ui === undefined ? { status: "all", sort: "order" } : ui));
   return parts.join("");
 }
 
@@ -1694,4 +1712,597 @@ const TEMPLATE_FUNCTIONS = [
   dashExpertsView, dashExpertCard, dashTrainCommand, dashRadar,
   dashWatchersView, dashWatcherCard,
   dashFaqView,
+  dashNowStrip, dashNowCard, dashPhaseDots, dashPhaseShort, dashHeroSpend, dashHeroAge,
+  dashWaitingWho, dashPhaseTimeline, dashTimelineStage, dashStoryGrid, dashEventStream,
+  dashWavesView, dashKeyHelp,
 ];
+
+// ---------------------------------------------------------------------------
+// The "Now" strip (#107) — three questions, five seconds
+// ---------------------------------------------------------------------------
+
+/**
+ * `01-what` -> `what`. The phase folder is numbered so it sorts; a reader reads
+ * the name.
+ */
+export function dashPhaseShort(id: string): string {
+  const match = /^\d+-(.+)$/.exec(String(id));
+  return match === null ? String(id) : String(match[1]);
+}
+
+/**
+ * The run's shape at a glance: one dot per phase, in `run.yml` order.
+ *
+ * **The dots are the phases the FILE declares, and no others.** `run new` writes
+ * every phase of the workflow preset up front (`buildPhases`, `newRun.ts`), so a
+ * `feature` run really does draw five — what, how, plan, build, watch — from the
+ * moment it exists. But a `docs` run declares fewer, a custom workflow may name
+ * them differently, and a hand-written run.yml may carry two. Drawing five
+ * because the redesign asked for five would be the page inventing a path this
+ * run does not have; the model carries no workflow preset and this function does
+ * not go looking for one.
+ *
+ * Tones are the page's five, so a dot means here what a chip means everywhere
+ * else. The whole reading is in the `aria-label`, because a row of coloured
+ * squares has no accessible name at all.
+ */
+export function dashPhaseDots(run: RunModel): string {
+  if (run.phases.length === 0) return "";
+  const dots = run.phases.map((phase) =>
+    `<span class="pdot" data-st="${dashEscape(dashTone(phase.status))}" `
+    + `title="${dashEscape(`${phase.id} — ${dashWords(phase.status)}`)}">`
+    + '<span class="pdot__i"></span>'
+    + `<span class="pdot__t">${dashText(dashPhaseShort(phase.id))}</span></span>`).join("");
+  const reading = run.phases
+    .map((phase) => `${dashPhaseShort(phase.id)} ${dashWords(phase.status)}`).join(", ");
+  return `<div class="pdots" role="img" aria-label="${dashEscape(reading)}">${dots}</div>`;
+}
+
+/**
+ * Spend on the hero card — and the one rule this whole redesign turns on.
+ *
+ * **A bar is a claim about a denominator.** `dashMeter` draws `spent / ceiling`
+ * as a fraction, which is honest exactly when the numerator is the whole of what
+ * was spent. On the run #103 was filed about it is not: 30 of 34 turns put
+ * nothing in the meter, none of them declared a token, and `$14.60 of $62.00`
+ * under a 24%-full bar is a confident wrong number drawn in the one shape a
+ * reader cannot argue with. So:
+ *
+ *  - `spend.basis === "measured"` — no turn was costless, the fraction is real,
+ *    and the bar is drawn exactly as it always was.
+ *  - anything else (`declared`, `partial`, `absent`) — the metered figure is
+ *    still shown, because it is the part that IS known, and it wears a
+ *    **lower bound** marker with `spend.reason` (the model's own sentence,
+ *    carrying the CLI's "LOWER BOUND, not a total") in its title. No bar.
+ *
+ * The counts come next, so the size of the gap is a number rather than an
+ * adjective: how many turns put nothing in the meter, out of how many there were.
+ * Host tokens are printed beside the dollars and never added to them — there is
+ * no exchange rate, and inventing one would be a guess about a price.
+ *
+ * Under a `host-tokens` economy the tokens ARE the meter (#85), so the bar is the
+ * token one and the marker is reserved for `spend.silentTasks` — costless turns
+ * that declared neither dollars nor tokens, which is the only thing that bar
+ * cannot see.
+ */
+export function dashHeroSpend(run: RunModel): string {
+  const spend = run.spend;
+  const budget = run.budget;
+  const tokens = budget !== null && budget.economy === "host-tokens";
+  const bound = tokens ? spend.silentTasks > 0 : spend.basis !== "measured";
+  const figure = tokens
+    ? `<span class="now__usd">${String(run.hostTokens)}</span> `
+      + `<span class="faint">${budget === null || budget.ceilingHostTokens === null
+        ? "host tokens · no ceiling declared"
+        : `of ${String(budget.ceilingHostTokens)} host tokens`}</span>`
+    : `<span class="now__usd">${dashText(dashUsd(run.spentUsd))}</span> `
+      + `<span class="faint">of ${dashText(dashUsd(run.ceilingUsd))}</span>`;
+  const marker = !bound
+    ? ""
+    : `<span class="bound" title="${dashEscape(spend.reason)}">lower bound</span>`;
+  const counts: string[] = [];
+  if (spend.costlessTasks > 0) {
+    counts.push(`${String(spend.costlessTasks)} of ${String(spend.totalTasks)} turns `
+      + "put nothing in the meter");
+  }
+  if (!tokens && run.hostTokens > 0) {
+    counts.push(`${String(run.hostTokens)} host tokens — a different currency, never added`);
+  }
+  return `<div class="now__spend">${figure}${marker}</div>`
+    + (bound ? "" : dashBudgetMeter(run, false))
+    + (counts.length === 0
+      ? ""
+      : `<div class="now__note">${dashText(counts.join(" · "))}</div>`);
+}
+
+/**
+ * How long since anything happened — and the threshold is the PAGE's, on purpose.
+ *
+ * The model carries `ageSeconds` unclamped and bakes in no idea of "stale"
+ * (#103), which is right: a workspace where a stage takes forty minutes and one
+ * where it takes forty seconds cannot share a constant, and a model that picked
+ * one would be making a policy every consumer then has to undo. So the RENDER
+ * picks: **30 minutes of silence gets a `quiet` mark**, chosen because a stage
+ * turn on a mid model runs in single digits of minutes, so half an hour with
+ * nothing on the ledger is either a person who has not been asked or a process
+ * that died. It is one comparison, in one place, and a second consumer is free to
+ * disagree with it without touching the model.
+ *
+ * Two shapes the naive version got wrong:
+ *
+ *  - **`lastEventFrom === "mtime"` is a weaker fact.** The ledger's mtime says
+ *    the file was written, not that the run moved. It is printed as "touched",
+ *    never as "last event".
+ *  - **A negative age is a clock, not a silence.** `ageSeconds` is deliberately
+ *    unclamped, so a ledger written after the read reports below zero. Calling
+ *    that "0m ago" would launder a disagreement between two clocks into a
+ *    freshness claim; it is named instead, and it never goes quiet.
+ */
+export function dashHeroAge(run: RunModel, nowMs: number): string {
+  if (run.lastEventFrom === "none" || run.lastEventAt === null || run.ageSeconds === null) {
+    return '<div class="now__age"><span class="faint">no ledger yet — nothing has been '
+      + "written for this run</span></div>";
+  }
+  if (run.ageSeconds < 0) {
+    return '<div class="now__age"><span class="faint">its ledger is dated '
+      + `${dashText(dashDateTime(run.lastEventAt))}, ahead of this read — two clocks `
+      + "disagree</span></div>";
+  }
+  const quiet = run.ageSeconds >= 1800;
+  return `<div class="now__age"${quiet ? ' data-quiet="1"' : ""}>`
+    + `<span class="now__agek">${run.lastEventFrom === "mtime" ? "touched" : "last event"}</span> `
+    + `<span>${dashText(dashAgo(run.lastEventAt, nowMs))}</span>`
+    + (quiet ? ' <span class="bound">quiet</span>' : "")
+    + (run.lastEventFrom === "mtime"
+      ? ' <span class="faint">— the file was written, which is not the same as the run '
+        + "moving</span>"
+      : "")
+    + "</div>";
+}
+
+/**
+ * Who has to move, in words — `nextAction.waitingOn`, which is `isMovable`'s own
+ * answer rather than a second opinion about it.
+ *
+ * `unknown` is printed as what it is. A `blocked` run whose `run.yml` records no
+ * cursor is a file somebody has to fix, and "waiting on nobody" would read as
+ * "finished".
+ */
+export function dashWaitingWho(run: RunModel): string {
+  const on = run.nextAction.waitingOn;
+  // `waitingOn === "person"` is `isMovable`, and `ready` is movable — so a run
+  // nobody is actually waiting for reads "waiting on a human", truthfully. What
+  // it must NOT do is wear the same red as a gate: the page's rule is that only
+  // the four `dashPending` kinds are asks, and a colour that fires on movability
+  // is a colour that fires on nearly everything. The words come from the model;
+  // the emphasis comes from the same derivation the alerts use.
+  const ask = dashPending(run) !== null;
+  const words = on === "person"
+    ? "waiting on a human"
+    : on === "process"
+      ? "waiting on a process — a live next holds the lock"
+      : on === "run"
+        ? "waiting on another run"
+        : on === "nobody"
+          ? "waiting on nobody"
+          : "waiting on — run.yml records no cursor that says who";
+  return `<span class="now__who" data-who="${dashEscape(on)}"${ask ? ' data-ask="1"' : ""}>`
+    + `${dashText(words)}</span>`;
+}
+
+/**
+ * One live run, as the card the redesign is about.
+ *
+ * Everything on it answers one of the three questions: the dots and the chip say
+ * where it is, the ask line and the command say whether it is on a person, the
+ * spend line says what it has cost, and the age line says whether it is moving.
+ *
+ * The ask reuses `dashPending` — the same four kinds that raise an attention card
+ * everywhere else on this page, derived once in `waiting.ts` — so the strip
+ * cannot alert on something the runs table calls quiet. `alert__kind` is reused
+ * rather than renamed: it is already the page's word for "what kind of ask this
+ * is", and a second class saying the same thing is a second vocabulary.
+ *
+ * The copy button appears only when a PERSON is waited on and the sentence
+ * carries a command. On a run waiting on a process, a command to copy is an
+ * invitation to fight the lock.
+ */
+export function dashNowCard(run: RunModel, nowMs: number, isNext: boolean): string {
+  const pending = dashPending(run);
+  const ask = pending === null
+    ? `<span class="now__askt">${dashText(run.waiting.message)}</span>`
+    : `<span class="alert__kind">${dashText(pending.kind)}</span>`
+      + `<span class="now__askt">${dashText(pending.text)}</span>`;
+  const behind = run.blockedBy.length === 0 || run.started
+    ? ""
+    : `<div class="now__note">behind ${dashText(run.blockedBy.map(dashSlug).join(", "))}</div>`;
+  const command = run.nextAction.command === null || run.nextAction.waitingOn !== "person"
+    ? ""
+    : dashCmd(run.nextAction.command, `now-${run.id}`);
+  // The card takes focus (j/k walk it), so it needs a NAME — an unnamed
+  // `tabindex="0"` container announces as "group". `aria-labelledby` at its own
+  // title rather than an `aria-label` repeating it: a label on a container whose
+  // children are also read is the same sentence twice.
+  const titleId = `now-t-${run.id}`;
+  return `<article class="now" data-st="${dashEscape(dashTone(run.status))}" `
+    + `data-nav="1" tabindex="0" aria-labelledby="${dashEscape(titleId)}">`
+    + `<div class="now__top"><span class="now__id">${dashText(run.id)}</span>`
+    + (isNext ? '<span class="now__next">&larr; next</span>' : "")
+    + `<span class="now__chip">${dashChip(run.status, null, false)}</span></div>`
+    + `<a class="now__title" id="${dashEscape(titleId)}" `
+    + `href="#/run/${dashEscape(encodeURIComponent(run.id))}">`
+    + `${dashText(run.title === "" ? "(untitled)" : run.title)}</a>`
+    + dashPhaseDots(run)
+    + `<div class="now__line">${ask}</div>`
+    + dashWaitingWho(run)
+    + behind
+    + command
+    + dashHeroSpend(run)
+    + dashHeroAge(run, nowMs)
+    + "</article>";
+}
+
+/**
+ * The strip itself: one card per LIVE run, the ones waiting on a person first.
+ *
+ * **Live means still in play** — every run whose `waiting.kind` is neither `done`
+ * nor `cancelled`. That includes a run nobody has started and one nothing can
+ * move: "is anything blocked?" is one of the three questions, and a strip that
+ * showed only what is running could not answer it. It excludes the finished ones,
+ * which are not news, and a strip carrying them is a strip a reader learns to
+ * skim past.
+ *
+ * The order is `model.order` — the workspace's own answer to "what next" — with
+ * the runs that raise an ask lifted to the front. That second sort is the whole
+ * point of the strip: a person scanning it for five seconds should hit the cards
+ * that need them before the ones that do not.
+ *
+ * Nothing is capped. A workspace with thirty live runs draws thirty cards, and
+ * that is a true picture of a workspace with thirty live runs; a cap would be
+ * this page deciding which of somebody's work is worth showing.
+ */
+export function dashNowStrip(model: DashboardModel, nowMs: number): string {
+  const live = model.runs.filter((run) =>
+    run.waiting.kind !== "done" && run.waiting.kind !== "cancelled");
+  if (live.length === 0) {
+    return '<div class="section" style="margin-top:0"><div class="section__title"><h2>Now</h2>'
+      + '<span class="eyebrow">nothing in play</span></div>'
+      + '<div class="empty"><strong>Nothing is live.</strong> Every run in this workspace is '
+      + "done or cancelled. <code>tldrx run new</code> starts another.</div></div>";
+  }
+  const next = dashNextRun(model);
+  const rank = (run: RunModel): number => {
+    const at = model.order.indexOf(run.id);
+    return (dashPending(run) === null ? 1000 : 0) + (at < 0 ? model.order.length : at);
+  };
+  const cards = live.slice().sort((a, b) => rank(a) - rank(b))
+    .map((run) => dashNowCard(run, nowMs, run.id === next)).join("");
+  const asks = live.filter((run) => dashPending(run) !== null).length;
+  return '<div class="section" style="margin-top:0"><div class="section__title"><h2>Now</h2>'
+    + `<span class="eyebrow">${dashText(dashPlural(live.length, "run"))} in play · `
+    + `${String(asks)} waiting on you</span></div>`
+    + `<div class="nowgrid">${cards}</div></div>`;
+}
+
+/** The shortcuts, printed rather than hidden — an undiscoverable key is no key. */
+export function dashKeyHelp(): string {
+  return '<div class="keyhelp"><span class="eyebrow">keys</span>'
+    + "<kbd>j</kbd><kbd>k</kbd><span>move between cards and rows</span>"
+    + "<kbd>enter</kbd><span>open the focused one</span>"
+    + "<kbd>/</kbd><span>jump to the filters</span></div>";
+}
+
+// ---------------------------------------------------------------------------
+// Drill-in: phase timeline, story grid, event stream
+// ---------------------------------------------------------------------------
+
+/**
+ * One stage of the timeline, closed by default and carrying everything the model
+ * has about its gate.
+ *
+ * The summary is what a reader scans — stage, status, model, cost — and the body
+ * is what they open when one of those looks wrong: the expert, the cost against
+ * the stage's own ceiling, the gate and its policy, who signed it, and what an
+ * `agent` signature was given over (`dashGateEvidence`).
+ */
+export function dashTimelineStage(run: RunModel, stage: StageRowModel): string {
+  return '<details class="panel lane__stage"'
+    + (run.pendingGate === stage.id ? ' data-wait="1"' : "")
+    + ` id="${dashEscape(`tl-${run.id}-${stage.phase}-${stage.id}`)}">`
+    + '<summary><span class="caret">&#9656;</span>'
+    + `<h3>${dashText(stage.id)}</h3>${dashChip(stage.status, null, false)}`
+    + `<span class="tag">${dashText(stage.model === null ? "no model" : stage.model)}</span>`
+    + `<span class="now__usd lane__cost">${dashText(dashUsd(stage.costUsd))}</span></summary>`
+    + '<div class="panel__body"><div class="kv">'
+    + dashKv("expert", dashText(stage.expert === null ? "—" : stage.expert))
+    + dashKv("cost", `<span class="now__usd">${dashText(dashUsd(stage.costUsd))}</span>`
+      + (stage.budgetUsd === null
+        ? ""
+        : ` <span class="faint">of ${dashText(dashUsd(stage.budgetUsd))}</span>`))
+    + dashKv("gate", stage.gate === null
+      ? '<span class="faint">none</span>'
+      : dashChip(stage.gate, stage.gate, false))
+    + dashKv("signed by", dashGateSigner(stage))
+    + (stage.stale
+      ? dashKv("stale", "an earlier gate was revoked after this stage ran — its outputs are "
+        + "still on disk and still read as current")
+      : "")
+    + "</div></div></details>";
+}
+
+/**
+ * The run's path as lanes: a row per phase, its stages inside it, cost on the end.
+ *
+ * The execution-path TABLE is still the exhaustive listing and is still exactly
+ * what it was — it moves inside a closed panel at the bottom of this section
+ * rather than being drawn twice. What the lanes add is the shape: which phase the
+ * money went to, which stage is holding a gate, and a place to open one stage
+ * without reading a row of eight columns.
+ *
+ * **What is missing is named.** `run.yml` records `started_at`, `ended_at` and the
+ * gate's free-text `note`; `StageRowModel` carries none of the three, so this
+ * section reports no duration and quotes no signature. A blank duration column
+ * would read as "it took no time", which is the class of confident-wrong figure
+ * this redesign exists to stop. Measured 2026-09-02: `tldrx run status` does not
+ * print them either, so the honest pointer is the file.
+ */
+export function dashPhaseTimeline(run: RunModel): string {
+  const lanes = run.phases.map((phase) => {
+    const stages = run.path.filter((stage) => stage.phase === phase.id);
+    let cost = 0;
+    for (const stage of stages) cost += stage.costUsd;
+    const body = stages.length === 0
+      ? '<div class="faint" style="font-size:var(--text-xs)">no stage recorded on this phase</div>'
+      : stages.map((stage) => dashTimelineStage(run, stage)).join("");
+    return '<div class="lane"><div class="lane__head">'
+      + `<span class="mono lane__id">${dashText(phase.id)}</span>`
+      + dashChip(phase.status, null, false)
+      + `<span class="now__usd lane__cost">${dashText(dashUsd(cost))}</span></div>`
+      + `<div class="lane__body">${body}</div></div>`;
+  }).join("");
+  return '<div class="section"><div class="section__title"><h2>Phase timeline</h2>'
+    + '<span class="eyebrow">run.yml order</span></div>'
+    + `<div class="stack stack--sm">${lanes}</div>`
+    + '<p class="muted" style="margin-top:var(--space-sm);font-size:var(--text-xs)">'
+    + "A stage&#39;s <code>started_at</code>, its <code>ended_at</code> and the gate&#39;s "
+    + "free-text <code>note</code> are in <code>run.yml</code> and are <strong>not on the "
+    + "model</strong> this page reads, so nothing here reports a duration or quotes a "
+    + `signature. They are in <code>tldrx-work/${dashText(run.id)}/run.yml</code>.</p>`
+    + '<details class="panel" style="margin-top:var(--space-md)">'
+    + '<summary><span class="caret">&#9656;</span><h3>the same path, as a table</h3></summary>'
+    + `<div class="panel__body">${dashPathSection(run)}</div></details></div>`;
+}
+
+/**
+ * Every story as one status cell, each opening onto what the model knows about it.
+ *
+ * The epic tables under Plan &amp; build are a reading of the PLAN — who depends on
+ * whom, which repo, which wave. This is a reading of the STATE: forty stories as
+ * forty coloured cells is the one shape that answers "how much of this is done"
+ * without scrolling, and the `<details>` is the drill-in the redesign asked for.
+ *
+ * **The build log and the fix list are not on the model.** They are files the
+ * Build writes, and the dashboard reads neither; a cell that opened onto an empty
+ * pane would read as "there is nothing to see". What opens is what is carried:
+ * the plan file's fields, the attempt the ledger last recorded, the free review
+ * retries, and every reopen with its note.
+ */
+export function dashStoryGrid(run: RunModel, maxAttempts: number): string {
+  const plan = run.plan;
+  if (plan === null || plan.stories.length === 0) return "";
+  const cells = plan.stories.map((story) => {
+    const fixes = story.reopens.filter((reopen) => reopen.reason === "fix").length;
+    const reopens = story.reopens.map((reopen) => '<div class="note">'
+      + `<div class="row"><span class="chip" data-st="${reopen.reason === "fix" ? "wait" : "idle"}">`
+      + `${dashText(reopen.reason)}</span><strong>${dashText(reopen.actor)}</strong>`
+      + `<span class="faint nowrap" style="margin-left:auto">`
+      + `${dashText(dashDateTime(reopen.ts))}</span></div>`
+      + `<div>${dashText(reopen.note)}</div></div>`).join("");
+    return `<details class="scell" data-st="${dashEscape(dashTone(story.status))}">`
+      + `<summary><span class="scell__id">${dashText(story.id)}</span>`
+      + dashChip(story.status, null, true)
+      + (fixes === 0
+        ? ""
+        : `<span class="scell__fix">${dashText(dashPlural(fixes, "fix"))}</span>`)
+      + "</summary>"
+      + `<div class="scell__body"><div class="scell__t">${dashText(story.title)}</div>`
+      + `<div class="row"><span class="tag">${dashText(story.repo === "" ? "no repo" : story.repo)}</span>`
+      + `<span class="tag">${dashText(story.epic)}</span>`
+      + `<span class="tag">${dashText(story.wave === null ? "no wave" : story.wave)}</span>`
+      + `<span class="tag">${story.attempt === null
+        ? "not started"
+        : `attempt ${String(story.attempt)} of ${String(maxAttempts)}`}</span>`
+      + (story.reviewRetries === 0
+        ? ""
+        : `<span class="tag">${dashText(dashPlural(story.reviewRetries, "free review retry"))}</span>`)
+      + "</div>"
+      + (story.dependsOn.length === 0
+        ? ""
+        : '<div class="faint mono" style="font-size:var(--text-2xs)">after '
+          + `${dashText(story.dependsOn.join(", "))}</div>`)
+      + `${reopens}</div></details>`;
+  }).join("");
+  const done = plan.stories.filter((story) => dashTone(story.status) === "done").length;
+  return '<div class="section"><div class="section__title"><h2>Story grid</h2>'
+    + `<span class="eyebrow">${dashText(plan.phase)} · ${String(done)} of `
+    + `${String(plan.stories.length)} done</span></div>`
+    + `<div class="card"><div class="sgrid">${cells}</div>`
+    + '<p class="muted" style="margin-top:var(--space-md);font-size:var(--text-xs)">'
+    + "A story&#39;s build log and its fix list are files the Build writes; they are "
+    + "<strong>not on the model</strong> this page reads. What opens above is the plan file "
+    + "and what the ledger recorded against it.</p></div></div>";
+}
+
+/**
+ * The three timestamped things the model carries, in one order, filterable.
+ *
+ * The sections below it group by kind and carry the detail — a budget refusal's
+ * raise command, a note's full byline. This is the other reading, and the one
+ * neither of them gives: what happened to this run, in the order it happened.
+ * Reading a note at 11:30 next to the refusal at 11:28 is how a person works out
+ * why somebody rebased a branch by hand.
+ *
+ * **It is not the ledger and it says so.** `events.jsonl` carries every stage
+ * transition, every agent result and every gate; `buildModel` reads three kinds
+ * out of it (operator notes, `budget.blocked`, `story.reopened`) because those
+ * are the three it has a use for. A stream that implied it was the log would be
+ * the worse lie — `tldrx replay` is the log, and the prose points at it.
+ *
+ * The filter is `state.ui.stream`, the same button vocabulary the runs list
+ * already uses, so it survives a live redraw the way the status filter does.
+ */
+export function dashEventStream(run: RunModel, ui: DashUi): string {
+  const kind = ui.stream === undefined || ui.stream === "" ? "all" : ui.stream;
+  const rows: { ts: string; kind: string; who: string; where: string; what: string }[] = [];
+  for (const note of run.notes) {
+    rows.push({
+      ts: note.ts, kind: "note", who: note.actor,
+      where: note.stage === null
+        ? ""
+        : (note.phase === null ? note.stage : `${note.phase}/${note.stage}`),
+      what: note.note,
+    });
+  }
+  for (const block of run.budgetBlocks) {
+    rows.push({
+      ts: block.ts, kind: "budget", who: "the brake",
+      where: `${block.phase === null ? "—" : block.phase}`
+        + `${block.stage === null ? "" : ` / ${block.stage}`}`,
+      what: block.economy === "host-tokens"
+        ? `refused — ${block.hostTokens === null ? "?" : String(block.hostTokens)} host tokens `
+          + `declared of ${block.ceilingTokens === null ? "?" : String(block.ceilingTokens)} allowed`
+        : `refused — ${dashUsd(block.remainingUsd)} left, ${dashUsd(block.estimateUsd)} needed`,
+    });
+  }
+  const plan = run.plan;
+  if (plan !== null) {
+    for (const story of plan.stories) {
+      for (const reopen of story.reopens) {
+        rows.push({
+          ts: reopen.ts, kind: "reopen", who: reopen.actor, where: story.id,
+          what: `${reopen.reason} — ${reopen.note}`,
+        });
+      }
+    }
+  }
+  if (rows.length === 0) return "";
+  rows.sort((a, b) => b.ts.localeCompare(a.ts));
+
+  const buttons = ["all", "note", "budget", "reopen"].map((name) => {
+    const count = name === "all"
+      ? rows.length
+      : rows.filter((row) => row.kind === name).length;
+    return `<button class="fbtn" type="button" data-stream="${dashEscape(name)}" `
+      + `aria-pressed="${kind === name ? "true" : "false"}">`
+      + `${dashText(name)} ${String(count)}</button>`;
+  }).join("");
+  const shown = rows.filter((row) => kind === "all" || row.kind === kind);
+  const list = shown.length === 0
+    ? `<div class="empty" style="border:0">Nothing of kind <strong>${dashText(kind)}</strong> `
+      + "on this run&#39;s ledger.</div>"
+    : shown.map((row) => '<div class="ev">'
+      + `<span class="ev__ts num">${dashText(dashDateTime(row.ts))}</span>`
+      + `<span class="chip chip--plain" data-st="${row.kind === "budget"
+        ? "wait"
+        : row.kind === "reopen" ? "active" : "idle"}">${dashText(row.kind)}</span>`
+      + `<span class="ev__who">${dashText(row.who)}</span>`
+      + `<span class="ev__where mono">${dashText(row.where)}</span>`
+      + `<span class="ev__what">${dashText(row.what)}</span></div>`).join("");
+  return '<div class="section"><div class="section__title"><h2>Event stream</h2>'
+    + `<span class="eyebrow">events.jsonl · ${dashText(dashPlural(rows.length, "entry"))}`
+    + "</span></div>"
+    + `<div class="filters"><span class="filters__label">kind</span>${buttons}</div>`
+    + `<div class="card card--flush"><div class="evlist">${list}</div></div>`
+    + '<p class="muted" style="margin-top:var(--space-sm);font-size:var(--text-xs)">'
+    + "The ledger carries far more than this — every stage transition, every agent result, "
+    + "every gate. The model reads the three kinds above and no others, so this is the page&#39;s "
+    + "own facts in time order, not the log. "
+    + `<code>tldrx replay ${dashText(run.id)}</code> is the log.</p></div>`;
+}
+
+// ---------------------------------------------------------------------------
+// View: waves
+// ---------------------------------------------------------------------------
+
+/**
+ * The plan as bars: a row per wave, a bar per story in it.
+ *
+ * Gantt-lite, and deliberately not a Gantt. A real one needs a start and an end
+ * per story, and the model carries neither — `StoryModel` has a status, a wave
+ * and an arc off the ledger, and nothing with a clock on it. So the axis is the
+ * WAVE, which is the only ordering the files actually assert: bars sharing a row
+ * were scheduled to run together, and that is the parallelism the view exists to
+ * show. Inventing an x-axis out of nothing would be a chart that reads as
+ * measured and is not.
+ *
+ * Fix rounds are marked on the bar because they are what a wave view is opened
+ * for: a wave that looks done but cost three fix rounds is a different fact from
+ * one that landed first time, and neither the epic table nor the story grid puts
+ * them side by side.
+ *
+ * A story the plan schedules in no wave gets its own row rather than being
+ * dropped — the same rule the rest of the page keeps about things it cannot place.
+ */
+export function dashWavesView(model: DashboardModel): string {
+  const head = '<div class="viewhead"><h1>Waves</h1><p>What each Plan scheduled to run '
+    + "together, and what happened to it. A bar is a story; bars sharing a row were scheduled "
+    + "into the same wave, which is where the parallelism is. File order is execution order. "
+    + "There is no time axis — the model carries no start or end per story, and an invented "
+    + "one would read as measured.</p></div>";
+  const blocks: string[] = [];
+  for (const run of model.runs) {
+    const plan = run.plan;
+    if (plan === null || plan.waves.length === 0) continue;
+    const rows = plan.waves.map((wave, index) => {
+      const bars = wave.stories.map((id) => {
+        const story = plan.stories.filter((candidate) => candidate.id === id)[0];
+        const fixes = story === undefined
+          ? 0
+          : story.reopens.filter((reopen) => reopen.reason === "fix").length;
+        const retries = story === undefined ? 0 : story.reviewRetries;
+        return `<span class="gantt__bar" data-wave="${dashEscape(wave.id)}" `
+          + `data-st="${dashEscape(dashTone(story === undefined ? "" : story.status))}" `
+          + `title="${dashEscape(`${id} — ${story === undefined
+            ? "not in stories[]"
+            : dashWords(story.status)}`)}">`
+          + `<span class="gantt__id">${dashText(id)}</span>`
+          + `<span class="gantt__t">${dashText(story === undefined
+            ? "not in stories[]"
+            : story.title)}</span>`
+          + (fixes === 0
+            ? ""
+            : `<span class="gantt__fix">${dashText(dashPlural(fixes, "fix round"))}</span>`)
+          + (retries === 0
+            ? ""
+            : `<span class="gantt__retry">${dashText(dashPlural(retries, "review retry"))}</span>`)
+          + "</span>";
+      }).join("");
+      return '<div class="gantt__row"><span class="gantt__w">'
+        + `<span class="mono">${dashText(wave.id)}</span>`
+        + `<span class="faint">#${String(index + 1)}</span></span>`
+        + `<span class="gantt__bars">${bars}</span></div>`;
+    }).join("");
+    const loose = plan.stories.filter((story) => story.wave === null);
+    const unscheduled = loose.length === 0
+      ? ""
+      : '<div class="gantt__row"><span class="gantt__w">'
+        + '<span class="mono faint">unscheduled</span></span>'
+        + `<span class="gantt__bars">${loose.map((story) =>
+          `<span class="gantt__bar" data-st="${dashEscape(dashTone(story.status))}">`
+          + `<span class="gantt__id">${dashText(story.id)}</span>`
+          + `<span class="gantt__t">${dashText(story.title)}</span></span>`).join("")}</span></div>`;
+    blocks.push('<div class="section"><div class="section__title">'
+      + `<h2><a class="gantt__run" href="#/run/${dashEscape(encodeURIComponent(run.id))}">`
+      + `${dashText(run.title === "" ? run.id : run.title)}</a></h2>`
+      + `<span class="eyebrow">${dashText(plan.phase)} · `
+      + `${dashText(dashPlural(plan.waves.length, "wave"))}</span></div>`
+      + `<div class="card"><div class="gantt">${rows}${unscheduled}</div></div></div>`);
+  }
+  if (blocks.length === 0) {
+    return `${head}<div class="empty"><strong>No waves in this workspace.</strong> A wave is `
+      + "written by the Plan phase to <code>&lt;run&gt;/03-plan/waves.yml</code>, and no run "
+      + "here has one yet. Until then the Plan &amp; build section on a run detail is the "
+      + "whole picture.</div>";
+  }
+  return head + blocks.join("");
+}
