@@ -209,6 +209,19 @@ the front matter `repos:`. Measured 2026-09-02: a $2.10 full training earned zer
 way. The warning now names the grammar first whenever the path would match under the other
 spelling.
 
+**`nothing to train from in --mode <m>, and nothing was spent`.** Every pass this mode would run
+has an empty input, so nothing was spawned (#101). The message names each empty pass. *"the code
+pass has nothing to read"* means the deterministic pre-pass selected **0 files** — the expert's
+`## Domain` names a folder that is not on disk, or the bullet is spelled workspace-relative
+(see the grammar above), or, with no `## Domain` at all, nothing in the repos matched the words of
+the area title. *"the runs pass has nothing to mine"* means no `tldrx-work/<run>/` holds a handoff
+or a retro this expert's repos match — finish a run first.
+
+**`<expert>/<area>: skipped — the … pass has nothing to …`.** The other half of the same check: a
+`--mode full` run where one pass has real input and the other does not. The dead pass is skipped
+rather than paid for, the live one runs, and the skipped share of the ceiling is not spent. Before
+#101 that second sub-agent was spawned anyway, and wrote a file saying `- none`.
+
 **`tldrx expert list` warns that a stored level disagrees with the computed one.**
 `tldrx expert recompute <name>`. It happens when a human pasted a `--print-prompt` prompt into
 their own session: only the headless / `--commit` path ever wrote a level.

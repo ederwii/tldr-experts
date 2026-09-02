@@ -57,6 +57,9 @@ import { codePrompt, outputPath, repairPrompt, runsPrompt, type TrainingPromptIn
 import { describeStrayRecovery, findStrayWrite, recoverStrayWrite } from "./strayWrite.ts";
 import { CompetenciesError, writeCompetencies } from "./competenciesWrite.ts";
 import { isRoleExpertOnDisk, lightModeRefusal, nothingToMineRefusal } from "./roleTraining.ts";
+import {
+  emptyCodeSweepNote, emptyRunsNote, nothingToTrainRefusal, skipNoteLines,
+} from "./emptyPass.ts";
 import { MAX_PAYLOAD_BYTES, TrainingLog, type TrainingEvent } from "./trainingLog.ts";
 
 export type { TrainingRunMode } from "./Training.ts";
@@ -227,6 +230,10 @@ async function trainWithPreflight(options: TrainOptions, said: string[]): Promis
   // name it earns by validating. Nothing half-written ever wears the final name,
   // because `knowledge/*.md` is what gets inlined into later prompts.
   const prompts: { key: string; prompt: string; output: string; final: string }[] = [];
+  // A pass whose INPUT is empty is not spawned (#101). The reason is collected
+  // rather than acted on here, because whether it is a SKIP or a REFUSAL depends
+  // on the other pass: skip a dead one, refuse only when none survives.
+  const emptyPasses: (readonly string[])[] = [];
   // The code pass is skipped for a role expert — not budgeted, not walked, not
   // spawned. `selectFiles` walks every repo, so skipping it is also why a role
   // training run starts instantly.
@@ -241,12 +248,19 @@ async function trainWithPreflight(options: TrainOptions, said: string[]): Promis
       // knowledge it is then warned for, at full price.
       domainPaths: scope.domainPaths,
     });
-    prompts.push({
-      key: CODE_TASK,
-      prompt: codePrompt(promptInput, selection),
-      output: partialOf(knowledgeRelPath(area.id)),
-      final: knowledgeRelPath(area.id),
-    });
+    const nothingToRead = emptyCodeSweepNote(
+      options.expert, area.id, selection.inlined.length,
+      scope.domainPaths, repos.map((repo) => repo.name),
+    );
+    if (nothingToRead !== null) emptyPasses.push(nothingToRead);
+    else {
+      prompts.push({
+        key: CODE_TASK,
+        prompt: codePrompt(promptInput, selection),
+        output: partialOf(knowledgeRelPath(area.id)),
+        final: knowledgeRelPath(area.id),
+      });
+    }
   }
   if (options.mode === "full") {
     const mine = mineRuns({
@@ -256,14 +270,35 @@ async function trainWithPreflight(options: TrainOptions, said: string[]): Promis
       keywords: keywordsFor(area.id, area.title),
       facts: FactsStore.loadOrEmpty(factsPath(options.root)).facts,
     });
+    // A ROLE expert keeps its own, better-worded refusal: the runs pass is the
+    // only pass it has, so "nothing to mine" is already "nothing to train from"
+    // and there is no second pass a skip could preserve.
     const empty = nothingToMineRefusal(options.expert, area.id, mine.files.length, isRole);
     if (empty !== null) return fail(EXIT_USAGE, empty);
-    prompts.push({
-      key: RUNS_TASK,
-      prompt: runsPrompt(promptInput, mine),
-      output: partialOf(fromRunsRelPath(area.id)),
-      final: fromRunsRelPath(area.id),
-    });
+    const nothingToMine = emptyRunsNote(options.expert, area.id, mine.files.length);
+    if (nothingToMine !== null) emptyPasses.push(nothingToMine);
+    else {
+      prompts.push({
+        key: RUNS_TASK,
+        prompt: runsPrompt(promptInput, mine),
+        output: partialOf(fromRunsRelPath(area.id)),
+        final: fromRunsRelPath(area.id),
+      });
+    }
+  }
+
+  // Nothing survived: refuse before the spawn, name every empty pass, spend
+  // nothing and write nothing. One pass surviving is a skip instead — the run is
+  // worth making, and the share the skipped pass was priced is simply not spent
+  // (the #96 preflight's arithmetic is deliberately left alone).
+  const nothingAtAll = nothingToTrainRefusal(
+    options.expert, area.id, options.mode, prompts.length === 0 ? emptyPasses : [],
+  );
+  if (nothingAtAll !== null) return fail(EXIT_USAGE, nothingAtAll);
+  const skipped = emptyPasses.flatMap((reason) => skipNoteLines(options.expert, area.id, reason));
+  // Said before the money, like the pre-start line, and never only as a receipt.
+  if (options.run === "headless") {
+    for (const line of skipped) process.stderr.write(`${line}\n`);
   }
 
   const bundleRoot = trainingCacheDir(options.root, options.expert, area.id);
@@ -273,6 +308,7 @@ async function trainWithPreflight(options: TrainOptions, said: string[]): Promis
   if (options.run === "prepare") {
     const lines = [
       ...preflight.notice,
+      ...skipped,
       `prepared training for ${options.expert}/${area.id} (${options.mode}) — `
         + `${String(prompts.length)} sub-agent(s), $${share.toFixed(2)} ceiling each, effort ${effort}`,
     ];
@@ -554,7 +590,7 @@ async function trainWithPreflight(options: TrainOptions, said: string[]): Promis
   return {
     code: EXIT_OK,
     costUsd,
-    warnings: [...softWarnings, ...written.warnings],
+    warnings: [...skipped, ...softWarnings, ...written.warnings],
     lines: [
       `trained ${options.expert}/${area.id} (${options.mode}) — $${costUsd.toFixed(2)} of $${ceiling.toFixed(2)}`,
       ...recovered,

@@ -60,6 +60,7 @@ export {
 export type { TrainingEvent, TrainingEventType } from "./trainingLog.ts";
 
 export { isRoleExpertOnDisk, lightModeRefusal, nothingToMineRefusal } from "./roleTraining.ts";
+export { emptyCodeSweepNote, emptyRunsNote, nothingToTrainRefusal, skipNoteLines } from "./emptyPass.ts";
 
 export { findStrayWrite, recoverStrayWrite, describeStrayRecovery } from "./strayWrite.ts";
 export type { StrayProbe, StrayWrite, StrayRecovery } from "./strayWrite.ts";

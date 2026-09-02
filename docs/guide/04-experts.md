@@ -87,6 +87,12 @@ an agent said it learned something.**
   keyword grep over the expert's repos (the area id and the words of its title) — capped at
   **40 files / 96 KB**, with everything over the cap listed by name as "not read", so a
   sub-agent cannot describe a file it was never shown.
+- **A pass with an empty input is never paid for (#101).** If the sweep selects 0 files, or
+  `--mode full` finds no run to mine, that pass is not spawned. When the OTHER pass still has
+  real input it is skipped with the reason on stderr and its share goes unspent; when no pass
+  survives the run is refused (exit 1) before anything is spawned. Measured before the check
+  existed: a training whose domain matched nothing still spawned, spent, and wrote a knowledge
+  file about no code.
 - **The expert's own `## Domain` is a hard boundary on that walk.** A file outside the declared
   folders is never scored, never inlined, and is not even listed as "not read" — it was never a
   candidate for this expert. Measured on a real workspace: the grep alone put 29% / 55% / 22% of

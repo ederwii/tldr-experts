@@ -691,11 +691,22 @@ handoffs — a role expert only trains `full`. `--print-prompt` prints the train
 stops: it spawns nothing and costs nothing. `recompute` is arithmetic over evidence already
 on disk: it spawns nothing, spends nothing, and does not touch `status` or `last_trained`.
 
+`expert train` **refuses before it spawns** whenever the run has nothing to work on — exit `1`,
+nothing spent, nothing written: no such area (#94), `--mode light` on a role expert, and — since
+#101 — a pass whose input is empty. A `--mode full` run with one live pass and one empty one is
+not refused: the empty pass is **skipped**, said on stderr, and its share of the ceiling simply
+goes unspent.
+
 Exits, as `tldrx expert --help` prints them: `0` `1` `3`. **`expert train` also returns `2`**
-(below the $0.25 spawn floor, or `--mode light` on a role expert) **and `5`** (the knowledge
-file failed validation and was quarantined) — `src/core/training/runTraining.ts:114,297,511`.
-Those two are missing from the help registry's `exits:` list for `expert`; the codes are real,
-the help screen is the thing that is short.
+(below the $0.25 spawn floor, or the #96 pre-start check: the per-sub-agent share cannot reach
+what one pass on the resolved model tier costs) **and `5`** (the knowledge file failed validation
+and was quarantined). Those two are missing from the help registry's `exits:` list for `expert`;
+the codes are real, the help screen is the thing that is short.
+
+*(Corrected 2026-09-02: this paragraph used to put `--mode light` on a role expert under `2`. It
+is `1` — `lightModeRefusal` returns `EXIT_USAGE`, which `src/cli/exitCodes.ts` defines as `1`, and
+`test/training.test.ts` pins it as "refused (exit 1)". `2` is this codebase's MONEY refusal: the
+spawn floor and the preflight.)*
 
 ## `tldrx dashboard`
 
