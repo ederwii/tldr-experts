@@ -24,12 +24,19 @@
  * coming back: **the current version must never be typed into prose.** A literal
  * is a promise to remember, and we have now failed to remember twice. The docs
  * config derives it from `package.json`; this test makes sure nobody re-types it.
+ *
+ * #125 found the same failure mode on a fifth surface: `docs/spec.md` §2.10 RESTATES an
+ * `env.yml`, and a restated example goes stale exactly the way a restated version number
+ * does — two of the three defects on that one line were on the same line as each other.
+ * The last describe block asserts that example against the real manifest and the real schema.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { loadEnvManifest } from "../src/core/doctor/loadEnvManifest.ts";
+import { parseYaml } from "../src/core/yaml.ts";
+import { validateEnv } from "../src/core/schemas/env.ts";
 
 const DOCS_SITE = join(FRAMEWORK_ROOT, "docs-site");
 
@@ -238,6 +245,110 @@ describe("what you actually need installed", () => {
       offenders,
       "Bun builds tldrx and runs its tests; it is not needed to run the published package. " +
         "Say which is which rather than listing it as a requirement:\n" + offenders.join("\n"),
+    ).toEqual([]);
+  });
+});
+
+describe("the env.yml example in docs/spec.md", () => {
+  /**
+   * §2.10 restates a manifest, and a restated manifest drifts. By #125 this one had
+   * drifted three ways at once, two of them on the same physical line:
+   *
+   *  - `version_re:` — a field that was designed and then dropped. `src/core/schemas/env.ts`
+   *    requires `["id", "required", "check", "install"]` and knows `min_version`; no regex
+   *    appears anywhere in it. Extraction is `extractVersion` in `src/core/doctor/version.ts`,
+   *    "the first dotted numeric run in stdout+stderr", which is what `env.yml`'s own header
+   *    comment has always said. A contributor who copied the example got a field nothing reads.
+   *  - `min_version: "1.1.0"` for Bun, which the manifest stopped saying when native `Bun.YAML`
+   *    became the dependency (`1.3.0`).
+   *  - `required: true` for Bun, which #121 disproved: the published package runs on Node alone.
+   *
+   * So the example is asserted rather than proofread. Deliberately narrow: it must parse, it
+   * must satisfy the schema `loadEnvManifest` enforces, it may use no key the real `env.yml`
+   * does not, and it must agree with the real manifest about every tool it names. It says
+   * nothing about prose, ordering, or WHICH tools are shown — an illustration is allowed to be
+   * an excerpt, and `purpose` is deliberately not compared because the example abbreviates it.
+   */
+  const SPEC_REL = join("docs", "spec.md");
+  const SPEC = readFileSync(join(FRAMEWORK_ROOT, SPEC_REL), "utf8");
+
+  /** The first fenced ```yaml block under the `### 2.10 … env.yml` heading. */
+  function example(): string {
+    const lines = SPEC.split("\n");
+    const heading = lines.findIndex((l) => /^### 2\.10\b.*env\.yml/.test(l));
+    expect(heading, `${SPEC_REL} no longer has a "### 2.10 … env.yml" heading`).toBeGreaterThan(-1);
+    let open = -1;
+    for (let i = heading + 1; i < lines.length; i++) {
+      if (/^#{1,3} /.test(lines[i]!)) break;
+      if (lines[i] === "```yaml") { open = i; break; }
+    }
+    expect(open, `${SPEC_REL} §2.10 carries no \`\`\`yaml example any more`).toBeGreaterThan(-1);
+    const close = lines.indexOf("```", open + 1);
+    expect(close, `${SPEC_REL} §2.10's yaml fence is never closed`).toBeGreaterThan(open);
+    return lines.slice(open + 1, close).join("\n");
+  }
+
+  test("satisfies the same schema loadEnvManifest enforces on the real file", () => {
+    const check = validateEnv(parseYaml(example()));
+    expect(
+      check.ok,
+      `${SPEC_REL} §2.10's example would be REFUSED by \`tldrx doctor\` if anyone pasted it:\n` +
+        check.issues.map((i) => `  ${i.path || "<root>"}: ${i.message}`).join("\n"),
+    ).toBe(true);
+  });
+
+  test("invents no field — every key it uses is a key env.yml uses", async () => {
+    const manifest = await loadEnvManifest();
+    const topKeys = new Set(Object.keys(manifest as unknown as Record<string, unknown>));
+    const toolKeys = new Set(
+      manifest.tools.flatMap((t) => Object.keys(t as unknown as Record<string, unknown>)),
+    );
+    const doc = parseYaml(example()) as Record<string, unknown>;
+
+    const offenders: string[] = [];
+    for (const key of Object.keys(doc)) if (!topKeys.has(key)) offenders.push(`top-level \`${key}\``);
+    for (const tool of (doc.tools ?? []) as Record<string, unknown>[]) {
+      for (const key of Object.keys(tool)) {
+        if (!toolKeys.has(key)) offenders.push(`\`${String(tool.id)}\`.\`${key}\``);
+      }
+    }
+    expect(
+      offenders,
+      `${SPEC_REL} §2.10 shows field(s) the real env.yml does not have. Either the schema in\n` +
+        `src/core/schemas/env.ts grew them and env.yml should use them, or — as with \`version_re\` —\n` +
+        `they were designed and dropped and the example is teaching a validation error:\n` +
+        offenders.map((o) => `  ${o}`).join("\n"),
+    ).toEqual([]);
+  });
+
+  test("carries the real manifest's own values for every tool it names", async () => {
+    const manifest = await loadEnvManifest();
+    const doc = parseYaml(example()) as { tools?: Record<string, unknown>[] };
+
+    const offenders: string[] = [];
+    for (const shown of doc.tools ?? []) {
+      const real = manifest.tools.find((t) => t.id === shown.id);
+      if (!real) {
+        offenders.push(`\`${String(shown.id)}\` is not a tool env.yml declares at all`);
+        continue;
+      }
+      const source = real as unknown as Record<string, unknown>;
+      for (const field of ["required", "check", "min_version"] as const) {
+        const spec = shown[field] ?? null;
+        const truth = source[field] ?? null;
+        if (spec !== truth) {
+          offenders.push(
+            `\`${real.id}\`.${field}: spec says ${JSON.stringify(spec)}, env.yml says ${JSON.stringify(truth)}`,
+          );
+        }
+      }
+    }
+    expect(
+      offenders,
+      `${SPEC_REL} §2.10 and env.yml disagree. env.yml is the file \`tldrx doctor\` actually runs,\n` +
+        `so it wins; fix the spec (this is how "min_version: 1.1.0" and "required: true" survived\n` +
+        `two changes to the real manifest):\n` +
+        offenders.map((o) => `  ${o}`).join("\n"),
     ).toEqual([]);
   });
 });
