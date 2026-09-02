@@ -107,6 +107,24 @@ same amount after it; what changed is that the page now says how big the bound i
     it writes (`.vitepress/dist/`, `.vitepress/cache/`, `reference/changelog.md`,
     `public/`) was already ignored.
 
+- **A surprised merge-wave assertion now prints the logs the script kept (#115, instrumentation
+  only — the flake is NOT fixed).** CI run 33653699970 (`b64950d`) caught one failure in 3161:
+  run A of the #44 concurrency test exiting 2 — *merge conflict* — in a sandbox whose only
+  merge adds a file nothing else touches. It could not be diagnosed, because merge-wave keeps
+  a red run's logs on purpose and `afterEach` deletes the sandbox they live in first. The
+  concurrency tests now assert through `expectExit`, which on any unexpected code raises the
+  exit, stdout, stderr **and every file in the `mw-<pid>` directory the script kept**,
+  `merge.log` first — the artifact #115 asked for. The next occurrence arrives explained.
+  - **What the search ruled out, so nobody repeats it.** Measured 2026-09-02 on macOS,
+    git 2.50.1: a truncated or empty `reference-transaction` hook does NOT fail a ref update
+    (both exit 0), and 800 real commits against 4000 concurrent `merge-guard.sh --install`
+    rewrites produced 0 failures — so the non-atomic hook install is not the cause. No test
+    in the suite sets `MW_LOCK_*`, so cross-file env contamination is not either. The one
+    mechanism that reproduces exit 2 exactly is the guard REFUSING (`fatal: ref updates
+    aborted by hook` → merge-wave's conflict branch), which needs the lock to carry a live
+    owner and a token that is not the merging run's. 40 runs of `test/merge-wave.test.ts`
+    four-way concurrent under 20 CPU spinners did not produce it.
+
 ### Changed
 
 - The staleness field is spelled `lastEventFrom`, not `lastEventSource`. The model is

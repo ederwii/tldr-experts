@@ -186,6 +186,32 @@ function gateShas(sb: Sandbox, branch: string): string[] {
   return gateLog(sb, branch).map((l) => l.split(" ")[1]!);
 }
 
+/**
+ * Everything an invocation left behind, as one string — for an assertion that has just
+ * been surprised (#115).
+ *
+ * CI run 33653699970 caught A's merge exiting 2, "merge conflict", in a sandbox where the
+ * only branch being merged touches one file nothing else has. The diagnosis stalled there:
+ * merge-wave keeps a red run's logs ON PURPOSE, and `afterEach` deletes the sandbox they
+ * sit in before any human can read them, so the one artifact that says what git actually
+ * refused was gone by the time anyone looked. Every assertion about an exit code in this
+ * file now carries it — `merge.log` included — so the next occurrence arrives explained.
+ */
+function evidence(run: Invocation, r: Result): string {
+  const parts = [`exit ${r.code}`, `stdout: ${r.stdout.trim()}`, `stderr: ${r.stderr.trim()}`];
+  for (const dir of readdirSync(run.logRoot).filter((f) => f.startsWith("mw-"))) {
+    for (const file of readdirSync(join(run.logRoot, dir))) {
+      parts.push(`--- ${dir}/${file} ---\n${readFileSync(join(run.logRoot, dir, file), "utf8").trim()}`);
+    }
+  }
+  return parts.join("\n");
+}
+
+/** `expect(r.code).toBe(want)`, and when it is not, say what the run left behind (#115). */
+function expectExit(run: Invocation, r: Result, want: number): void {
+  if (r.code !== want) throw new Error(`expected exit ${want}, got ${r.code}\n${evidence(run, r)}`);
+}
+
 /** Which gates ran, in order — the list this script promises to run before it pushes. */
 function gateNames(sb: Sandbox, branch: string): string[] {
   return gateLog(sb, branch).map((l) => l.split(" ")[0]!);
@@ -238,8 +264,8 @@ describe("two concurrent merges in one checkout (#44)", () => {
 
     writeFileSync(release, "go\n");
     const [ra, rb] = [await a.done, await b.done];
-    expect(ra.code).toBe(0);
-    expect(rb.code).toBe(0);
+    expectExit(a, ra, 0);
+    expectExit(b, rb, 0);
 
     const aShas = gateShas(sb, "wave-a");
     const bShas = gateShas(sb, "wave-b");
@@ -267,9 +293,9 @@ describe("two concurrent merges in one checkout (#44)", () => {
     writeFileSync(release, "go\n");
 
     const [ra, rb] = [await a.done, await b.done];
-    expect(ra.code).toBe(0);                       // pre-fix this was FAIL build=1, on wave-poison's file
+    expectExit(a, ra, 0);                          // pre-fix this was FAIL build=1, on wave-poison's file
     expect(ra.stdout).toContain("pushed");
-    expect(rb.code).toBe(3);
+    expectExit(b, rb, 3);
     expect(rb.stdout).toContain("NOT pushed");
     expect(originLog(sb)[0]).toBe("merge wave-a");
   });
@@ -460,6 +486,35 @@ describe("the dirty-tree guard and the pack artifact (#45)", () => {
     // It sits inside the sandbox, so afterEach takes it — no wave leaks a log dir into the
     // machine's tmpdir any more, which is the other half of #95.
     expect(named!.startsWith(`${red.logRoot}/`)).toBe(true);
+  });
+
+  /**
+   * #115 — the flake that could not be read.
+   *
+   * CI run 33653699970 (sha `b64950d`) caught ONE failure in 3161: run A of the #44
+   * concurrency test exiting 2, which merge-wave calls a merge conflict, in a sandbox
+   * whose only merge adds a file nothing else touches. Re-running the same sha turned it
+   * green. The diagnosis stopped there and it did not have to: the script KEEPS a red
+   * run's logs, and `afterEach` deleted the sandbox holding them before anyone could look.
+   *
+   * So the surprise now carries the evidence. `expectExit` is what the concurrency tests
+   * assert exit codes through, and this is the test that it actually reaches for the logs —
+   * otherwise the next occurrence is another `expect(0) got 2` with nothing behind it.
+   */
+  test("an unexpected exit arrives with the logs the script kept (#115)", async () => {
+    const red = invoke(sandbox(), "wave-poison");
+    const result = await red.done;
+    expect(result.code).toBe(3);
+    const said = evidence(red, result);
+    expect(said).toContain("exit 3");
+    expect(said).toContain("merge.log");
+    expect(said).toContain("Merge made by the 'ort' strategy");   // git's own words for what it did
+    expect(said).toContain("gate saw poison.txt");                // and the gate log that went red
+    // The failure message a surprised assertion would print, end to end.
+    let thrown = "";
+    try { expectExit(red, result, 0); } catch (e) { thrown = String(e); }
+    expect(thrown).toContain("expected exit 0, got 3");
+    expect(thrown).toContain("Merge made by the 'ort' strategy");
   });
 
   test("the guard keeps its teeth: a genuinely untracked file still refuses", async () => {
