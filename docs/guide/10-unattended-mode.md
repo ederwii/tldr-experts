@@ -434,6 +434,16 @@ evidence lives only in a gitignored directory is one nobody can audit from a clo
 records the note's `by:`, `gate.evidence` records the counts and the path, and one ordinary
 `gate.approved` is appended carrying `role: agent`.
 
+**`by:` is a name, not a kind — and here that name is yours.** An agent signs under the
+operator account it is running as, so an agent-closed gate can record `by: alanmartinez` for
+a stage no person read. The gate therefore also carries `executed_by: {type: agent, id: …}`
+and `authority: {type: delegated, policy: agent, authorized_by: …, source: run.created}` —
+the entity that did the checking, and who lent it the authority (you, at `run new --gates`,
+or whoever ran `run gates set`). `tldrx run status` and `tldrx replay` print it as
+`agent alanmartinez (delegated by alanmartinez, policy: agent)`, so nothing in the record
+reads as you having reviewed it yourself. See
+[3 — Runs and gates](03-runs-and-gates.md#who-closes-a-gate).
+
 `tldrx replay` then renders the check itself:
 
 ```

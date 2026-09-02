@@ -376,10 +376,16 @@ describe("the live client, and the static page that must not carry it", () => {
    * what moved.
    *
    * Measured twice on 2026-09-02 and equal both times: `23ba056` (main, before
-   * #108) and this branch both render 120,818 bytes hashing to `b71d521c…`. The
+   * #108) and that branch both rendered 120,818 bytes hashing to `b71d521c…`. The
    * first pin taken for #108 was `be3e7bfa…` at `e68d0af`; #118 landed
    * `startedAt`/`endedAt`/`gateNote` on `StageRowModel` in between, which is a
    * model change and moves the export by design.
+   *
+   * RE-PINNED 2026-09-02 for #122, deliberately: 120,818 → 121,707 bytes,
+   * `b71d521c…` → `14b3b6eb…`. Two model fields (`gateExecutedBy`,
+   * `gateAuthority`, null on this fixture) and one more serialised renderer
+   * function (`dashSignature`) — the same class of move as #118's, and the +889
+   * bytes are almost entirely that function's source riding to the browser.
    */
   test("--static is byte-identical to the export main renders without the live layer", () => {
     const temp = makeViewsWorkspace();
@@ -393,9 +399,9 @@ describe("the live client, and the static page that must not carry it", () => {
       };
       const html = renderDashboard(model);
       expect(model.live, "the static model is not a live one").toBe(false);
-      expect(Buffer.byteLength(html, "utf8")).toBe(120_818);
+      expect(Buffer.byteLength(html, "utf8")).toBe(121_707);
       expect(createHash("sha256").update(html, "utf8").digest("hex"))
-        .toBe("b71d521c379d95f9daa9810c2a87fd34cac199411b0411f605e45aedd6bb5274");
+        .toBe("14b3b6eb686178099062fdd5a13b106d4c81ac00fd8a41b1cafc7bbf47ec8ce8");
     } finally {
       temp.dispose();
     }

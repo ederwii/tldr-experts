@@ -288,12 +288,13 @@ phase and reach the model as `run.budget`), `gate` (string \| null, e.g.
 `gateBy` (string \| null — `auto` when the facilitator closed it, the operator's
 name when a person did, null while it is open), `gatePolicy` (`"human"` |
 `"auto"` | `"agent"` — who is MEANT to sign it, spec §2.2 `gates_policy`;
-absence reads as `human`), `gateEvidence` (below), `stale` (boolean — true
+absence reads as `human`), `gateEvidence` (below), `gateExecutedBy` /
+`gateAuthority` (below), `stale` (boolean — true
 when an EARLIER stage's gate was revoked after this one ran; its outputs are
 still on disk and still look current), `startedAt` / `endedAt` (string \| null)
 and `gateNote` (string \| null).
 
-The last three are #118's additions, and each carries a rule.
+`startedAt`, `endedAt` and `gateNote` are #118's additions, and each carries a rule.
 
 `startedAt` and `endedAt` are `run.yml`'s own `started_at` / `ended_at`,
 unconverted. **There is no `durationSeconds` beside them, on purpose.** A
@@ -311,12 +312,46 @@ stage has no gate at all, the gate is still open, or the note is the empty strin
 `run new` writes and `tldrx approve` never replaced. `""` is not a signature and
 does not reach a reader as one.
 
-`modelVersion` stays at **3** for the fourth time, by the same rule as #85, #93
-and #103: these are three additions, and no field that already existed reads
+### `gateExecutedBy` and `gateAuthority` (#122)
+
+`gateBy` is a **name**, and it is not a kind. On a gate an agent closed under a
+delegated policy that name is the *operator's* — the account the agent was
+running as, and the one its evidence note declares in `by:`. Drawn alone it reads
+as "that person reviewed this", which is not what happened. The policy tag beside
+it never covered the gap either: `gatePolicy` says who was *allowed* to sign, not
+who did.
+
+`gateExecutedBy` is `{ type, id }` or null — `type` is `"human"` \| `"agent"` \|
+`"auto"` (or whatever string a newer writer put there; nothing here narrows it),
+and `id` is null for `auto`, which is a role rather than somebody who can be
+looked up.
+
+`gateAuthority` is `{ type, policy, authorizedBy, source }` or null. `type` is
+`"direct"` (a person signing as themselves) or `"delegated"` (an agent or the
+harness acting on a policy somebody set); `policy` is the gate policy in force
+when it was signed; `authorizedBy` is who set it; `source` is `"self"` \|
+`"run.created"` \| `"gate.policy_changed"` \| `"unrecorded"`. `authorizedBy` is
+null **exactly when** `source` is `"unrecorded"` — the record saying the log does
+not name one — and the page prints that word rather than a plausible name.
+
+Both are null on every `run.yml` written before the keys existed, and null is
+"not recorded". The page then falls back to the bare name, which is what such a
+record actually says.
+
+`dashSignature` in `render.ts` turns the three into one line, and it is a
+**duplicate** of `describeGateSignature` in `core/run/gateAuthority.ts` — the same
+bargain `dashEscape` strikes with `escapeHtml`, because everything serialised to
+the browser may close over nothing. `test/dashboard-render.test.ts` asserts the
+two agree case for case.
+
+`modelVersion` stays at **3** for the fifth time, by the same rule as #85, #93,
+#103 and #118: these are three additions, and no field that already existed reads
 differently than it did at v3. The one with a case to answer is the render-side
 promise the page used to make — the phase timeline carried a paragraph saying
 these three facts were *not on the model* — and that paragraph is now gone,
-because it is no longer true. A documented absence is not a field.
+because it is no longer true. A documented absence is not a field. #122's two are
+additions in exactly the same sense: `gateBy` still reads as it did at v3, and
+what changed is that it is no longer the only thing a reader has.
 
 ### `GateEvidence`
 

@@ -17,6 +17,8 @@ import { runChecks, type CheckOutcome } from "./checks.ts";
 import { loadWorkflowPreset, PresetError, type PlannedStage } from "./workflowPreset.ts";
 import type { RunStore } from "./RunStore.ts";
 import type { RunFile, RunGate, RunGateEvidence, RunPhase, RunStage } from "./RunFile.ts";
+import { gatePolicyFor } from "./gatePolicy.ts";
+import { attributeGate } from "./gateAuthority.ts";
 import { closeRun, type RunCloseOutcome } from "./closeRun.ts";
 
 export class GateError extends Error {}
@@ -96,6 +98,19 @@ export async function approve(store: RunStore, ctx: GateContext): Promise<Approv
     ? null
     : copyEvidence(store.runDir, entry.phase.id, entry.stage.id, ctx.evidence);
 
+  // WHO signed, and under WHOSE authority — derived here, off the run's own
+  // frozen policy and its own log, so the two travel with the gate rather than
+  // being reconstructed later from the prose of `note:` (#122). `by` is
+  // untouched: it is what the note said, and the note is the agent's own claim
+  // about itself.
+  const attribution = attributeGate({
+    actor: ctx.actor,
+    policy: gatePolicyFor(store.run.gates_policy, entry.stage.id),
+    signedWithEvidence: evidence !== null,
+    stageId: entry.stage.id,
+    events: store.events.read(),
+  });
+
   const next = store.nextEntry();
   store.mutate((run) =>
     mapStage(run, entry.phase.id, entry.stage.id, (stage) => ({
@@ -109,6 +124,8 @@ export async function approve(store: RunStore, ctx: GateContext): Promise<Approv
         at: ctx.at,
         note: ctx.note,
         ...(evidence === null ? {} : { evidence }),
+        executed_by: attribution.executed_by,
+        authority: attribution.authority,
       } satisfies RunGate,
     })),
   );
@@ -133,6 +150,12 @@ export async function approve(store: RunStore, ctx: GateContext): Promise<Approv
     // already, and `by: fable` alone cannot tell a person from an agent that
     // happens to be called fable. The role and the path can.
     ...(evidence === null ? {} : { role: evidence.role, evidence: evidence.path }),
+    // Additive, and on EVERY gate (#122). The two above are an agent's own claim
+    // about what it read; these two are the framework's measurement of who acted
+    // and under what — the answer a reader needs when the name in `by` belongs to
+    // a person who was not there.
+    executed_by: attribution.executed_by,
+    authority: attribution.authority,
   }));
   store.append(event(ctx.at, store.runId, entry.stage.id, "stage.done", ctx.actor, { phase: entry.phase.id }));
   store.save();
@@ -279,7 +302,18 @@ export function revoke(store: RunStore, ctx: GateContext, target: string): Revok
       status: "ready",
       ended_at: null,
       stale: undefined,
-      gate: { ...stage.gate, status: "pending", by: null, at: null, note: ctx.note } satisfies RunGate,
+      // `by: null` says nobody has signed this gate. An `executed_by` left beside
+      // it would be a second, contradicting claim about the same fact, so the
+      // attribution goes with the signature it described (#122).
+      gate: {
+        ...stage.gate,
+        status: "pending",
+        by: null,
+        at: null,
+        note: ctx.note,
+        executed_by: undefined,
+        authority: undefined,
+      } satisfies RunGate,
     }));
     const stale = new Set(later);
     return {

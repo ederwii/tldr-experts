@@ -336,6 +336,36 @@ export interface WatchModel {
   readonly unreadable: readonly string[];
 }
 
+/**
+ * `run.yml` `gate.executed_by` (#122) — the KIND of entity that closed the gate.
+ *
+ * `id` is null for `auto`: the facilitator is a role and not somebody who can be
+ * looked up, and `gateBy` already carries the reserved literal.
+ */
+export interface GateExecutorModel {
+  /** `human` | `agent` | `auto` — or whatever a newer writer put there. */
+  readonly type: string;
+  readonly id: string | null;
+}
+
+/**
+ * `run.yml` `gate.authority` (#122) — who granted the authority, and how that was
+ * established.
+ *
+ * `authorizedBy` is null exactly when `source` is `unrecorded`, which is the
+ * record saying the log does not name one. The page prints that word rather than
+ * a plausible name.
+ */
+export interface GateAuthorityModel {
+  /** `direct` (the signer's own) | `delegated` (lent by the policy's author). */
+  readonly type: string;
+  /** The gate policy in force when it was signed. */
+  readonly policy: string;
+  readonly authorizedBy: string | null;
+  /** `self` | `run.created` | `gate.policy_changed` | `unrecorded`. */
+  readonly source: string;
+}
+
 export interface StageRowModel {
   readonly phase: string;
   readonly id: string;
@@ -363,6 +393,21 @@ export interface StageRowModel {
   readonly gatePolicy: string;
   /** What an `agent` policy signed this gate over, or null. */
   readonly gateEvidence: GateEvidenceModel | null;
+  /**
+   * Which entity actually evaluated this gate, and under whose authority (#122).
+   *
+   * `gateBy` is a NAME, and on a gate an agent closed under a delegated policy
+   * that name is the operator's — the account the agent was running as. Rendered
+   * alone it reads as "that person reviewed this". These two say what `gateBy`
+   * cannot: the kind of entity that did the checking, who lent it the authority,
+   * and under which policy.
+   *
+   * ADDITIVE, and null on every run.yml written before the keys existed. Null is
+   * "not recorded", and the page falls back to the bare name — which is what such
+   * a record actually says.
+   */
+  readonly gateExecutedBy: GateExecutorModel | null;
+  readonly gateAuthority: GateAuthorityModel | null;
   /**
    * True when an earlier stage's gate was revoked after this one ran (`run.yml`
    * `stage.stale`). The outputs are still on disk and still read as current.
@@ -1031,6 +1076,17 @@ export function toRunModel(
             resolved: stage.gate.evidence.resolved,
             refuted: stage.gate.evidence.refuted,
             outsideSurface: stage.gate.evidence.outside_surface,
+          },
+      gateExecutedBy: stage.gate?.executed_by == null
+        ? null
+        : { type: stage.gate.executed_by.type, id: stage.gate.executed_by.id },
+      gateAuthority: stage.gate?.authority == null
+        ? null
+        : {
+            type: stage.gate.authority.type,
+            policy: stage.gate.authority.policy,
+            authorizedBy: stage.gate.authority.authorized_by,
+            source: stage.gate.authority.source,
           },
       stale: stage.stale,
       startedAt: stage.started_at,

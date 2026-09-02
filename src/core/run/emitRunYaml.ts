@@ -9,7 +9,9 @@
 import { yamlScalar } from "../facts/emitFactsYaml.ts";
 import { DEFAULT_ECONOMY, type RunBudget, DEFAULT_ON_HOST_TOKENS_EXCEED } from "../budget/RunBudget.ts";
 import type { GatesPolicy } from "./gatePolicy.ts";
-import type { RunFile, RunGate, RunGateEvidence, RunStage, RunTask } from "./RunFile.ts";
+import type {
+  RunFile, RunGate, RunGateAuthority, RunGateEvidence, RunGateExecutor, RunStage, RunTask,
+} from "./RunFile.ts";
 
 function inlineList(values: readonly string[]): string {
   return `[${values.map((v) => yamlScalar(v)).join(", ")}]`;
@@ -45,15 +47,43 @@ function gateEvidence(e: RunGateEvidence): string {
 }
 
 /**
+ * `executed_by: {type, id}` — which entity actually evaluated the gate (#122).
+ *
+ * `id` is omitted for `auto`: the facilitator is a role, not an identity, and
+ * `by: auto` already carries it. Emitted only when the gate has the key, so every
+ * run.yml written before #122 round-trips byte-for-byte.
+ */
+function gateExecutor(e: RunGateExecutor): string {
+  const id = e.id === undefined ? "" : `, id: ${yamlScalar(e.id)}`;
+  return `{type: ${yamlScalar(e.type)}${id}}`;
+}
+
+/**
+ * `authority: {type, policy, authorized_by, source}` — under whose authority, and
+ * how that was established (#122).
+ *
+ * `authorized_by: null` is written out rather than omitted: paired with
+ * `source: unrecorded` it is the record SAYING it does not know, which is a
+ * different fact from a key nobody wrote.
+ */
+function gateAuthority(a: RunGateAuthority): string {
+  return `{type: ${yamlScalar(a.type)}, policy: ${yamlScalar(a.policy)}, ` +
+    `authorized_by: ${yamlScalar(a.authorized_by)}, source: ${yamlScalar(a.source)}}`;
+}
+
+/**
  * The gate mapping. It carried exactly five keys until `evidence` arrived — and a
  * sixth one held in memory but not written here would be DROPPED by the next
  * save, silently, which is the failure this emitter has to be extended for rather
- * than worked around.
+ * than worked around. `executed_by` and `authority` (#122) are the seventh and
+ * eighth, and carry the same warning.
  */
 function gate(g: RunGate): string {
   const evidence = g.evidence === undefined ? "" : `, evidence: ${gateEvidence(g.evidence)}`;
+  const executor = g.executed_by === undefined ? "" : `, executed_by: ${gateExecutor(g.executed_by)}`;
+  const authority = g.authority === undefined ? "" : `, authority: ${gateAuthority(g.authority)}`;
   return `{type: ${yamlScalar(g.type)}, status: ${yamlScalar(g.status)}, by: ${yamlScalar(g.by)}, ` +
-    `at: ${yamlScalar(g.at)}, note: ${yamlScalar(g.note)}${evidence}}`;
+    `at: ${yamlScalar(g.at)}, note: ${yamlScalar(g.note)}${evidence}${executor}${authority}}`;
 }
 
 function task(t: RunTask, indent: string): string {

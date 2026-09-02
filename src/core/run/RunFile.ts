@@ -13,7 +13,7 @@ import {
   asDocument, isRecord, requireArray, requireEnum, requireKeys, requireNumber, requireString,
   requireVersion, result, type ValidationIssue, type ValidationResult,
 } from "../schemas/validation.ts";
-import { validateGatesPolicy, type GatesPolicy } from "./gatePolicy.ts";
+import { GATE_POLICIES, validateGatesPolicy, type GatePolicy, type GatesPolicy } from "./gatePolicy.ts";
 import { BRANCH_MODELS, isBranchModelKind, type BranchModelKind } from "../plan/branchModel.ts";
 import {
   EVIDENCE_ROLES, EVIDENCE_VERDICTS, type EvidenceRole, type EvidenceVerdict,
@@ -78,6 +78,59 @@ export interface RunGateEvidence {
   readonly outside_surface: number;
 }
 
+/**
+ * WHAT KIND of entity evaluated a gate (issue #122).
+ *
+ * `human` is a person at a terminal. `auto` is the facilitator closing its own
+ * seven conditions. `agent` is a sub-agent that wrote an evidence note and signed
+ * over it — and it is the one that needed saying out loud, because the name such
+ * an agent records is the OPERATOR's, not its own.
+ */
+export const GATE_EXECUTOR_TYPES = ["human", "agent", "auto"] as const;
+export type GateExecutorType = (typeof GATE_EXECUTOR_TYPES)[number];
+
+/** Whether the executor held the authority itself, or was lent it (issue #122). */
+export const GATE_AUTHORITY_TYPES = ["direct", "delegated"] as const;
+export type GateAuthorityType = (typeof GATE_AUTHORITY_TYPES)[number];
+
+/**
+ * HOW the authorizer was established — the evidence, recorded beside the claim.
+ *
+ * `self` is a person signing as themselves. `run.created` is a policy frozen at
+ * `run new` by whoever opened the run. `gate.policy_changed` is a policy moved
+ * afterwards by `tldrx run gates set`, and names THAT signer. `unrecorded` is the
+ * honest fourth: the log does not say, so nothing is claimed and
+ * `authorized_by` is null.
+ */
+export const GATE_AUTHORITY_SOURCES = ["self", "run.created", "gate.policy_changed", "unrecorded"] as const;
+export type GateAuthoritySource = (typeof GATE_AUTHORITY_SOURCES)[number];
+
+/**
+ * Which entity actually evaluated this gate (issue #122).
+ *
+ * `id` is the name that entity signed under, and it is ABSENT for `auto`: the
+ * facilitator is a role, not an identity, and `by: auto` already carries it.
+ */
+export interface RunGateExecutor {
+  readonly type: GateExecutorType;
+  readonly id?: string;
+}
+
+/**
+ * The authority the executor acted under (issue #122).
+ *
+ * `policy` is the run's frozen `gates_policy` for this stage at the moment of
+ * signing. `authorized_by` is who granted it, and `source` says how that was
+ * established — including `unrecorded`, which is what an absence is called here
+ * rather than guessed at.
+ */
+export interface RunGateAuthority {
+  readonly type: GateAuthorityType;
+  readonly policy: GatePolicy;
+  readonly authorized_by: string | null;
+  readonly source: GateAuthoritySource;
+}
+
 export interface RunGate {
   readonly type: GateType;
   readonly status: GateStatus;
@@ -86,6 +139,18 @@ export interface RunGate {
   readonly note: string;
   /** Present only on a gate an `agent` policy closed (design §A.5). */
   readonly evidence?: RunGateEvidence;
+  /**
+   * Which entity evaluated this gate, and under whose authority (issue #122).
+   *
+   * ADDITIVE and optional, both of them. A `run.yml` written before these keys
+   * existed has neither, `by:` means exactly what it always meant, and every
+   * reader falls back to it — the gate mapping has never rejected an unknown
+   * key, so the two directions cross without a shim. Written together by
+   * `approve`, and cleared together by a revoke: a gate nobody has signed has no
+   * executor.
+   */
+  readonly executed_by?: RunGateExecutor;
+  readonly authority?: RunGateAuthority;
 }
 
 export interface RunTask {
@@ -535,6 +600,8 @@ export function validateRunFile(input: unknown): ValidationResult {
           issues.push({ path: `${path}.gate`, message: "an approved gate needs both `by` and `at`" });
         }
         validateGateEvidence(gate.evidence, `${path}.gate.evidence`, issues);
+        validateGateExecutor(gate.executed_by, `${path}.gate.executed_by`, issues);
+        validateGateAuthority(gate.authority, `${path}.gate.authority`, issues);
       } else if (stage.gate !== undefined) {
         issues.push({ path: `${path}.gate`, message: "expected a mapping" });
       }
@@ -613,6 +680,65 @@ export const GATE_EVIDENCE_KEYS = [
  * meant; present it must be complete, because a half-written record of what a
  * signature rested on is worse than none.
  */
+/** Keys of `gate.executed_by`. `id` is optional — see `RunGateExecutor`. */
+export const GATE_EXECUTOR_KEYS = ["type"] as const;
+
+/** Keys of `gate.authority`, in the order they are emitted. */
+export const GATE_AUTHORITY_KEYS = ["type", "policy", "authorized_by", "source"] as const;
+
+/**
+ * `gate.executed_by` (#122), when it is there. Absent is legal and means what a
+ * gate has always meant: read `by`. Present, its `type` must be one of the three
+ * — a kind of entity the reader does not understand is a schema error, never a
+ * silent downgrade to "assume a person".
+ */
+function validateGateExecutor(value: unknown, base: string, issues: ValidationIssue[]): void {
+  if (value === undefined || value === null) return;
+  if (!isRecord(value)) {
+    issues.push({ path: base, message: "expected a mapping" });
+    return;
+  }
+  requireKeys(value, GATE_EXECUTOR_KEYS, base, issues);
+  requireEnum(value.type, GATE_EXECUTOR_TYPES, `${base}.type`, issues);
+  if (value.id !== undefined) requireString(value.id, `${base}.id`, issues);
+  if (value.type === "auto" && value.id !== undefined) {
+    issues.push({
+      path: `${base}.id`,
+      message: "the facilitator is a role, not an identity — an `auto` executor carries no id",
+    });
+  }
+}
+
+/**
+ * `gate.authority` (#122), when it is there. Present it must be COMPLETE, for the
+ * same reason `gate.evidence` must be: a half-written record of what a signature
+ * rested on is worse than none.
+ *
+ * `authorized_by: null` is legal and is the honest case — paired with
+ * `source: unrecorded` it is the record saying the log does not name an
+ * authorizer, which is a different fact from a key nobody wrote.
+ */
+function validateGateAuthority(value: unknown, base: string, issues: ValidationIssue[]): void {
+  if (value === undefined || value === null) return;
+  if (!isRecord(value)) {
+    issues.push({ path: base, message: "expected a mapping" });
+    return;
+  }
+  requireKeys(value, GATE_AUTHORITY_KEYS, base, issues);
+  requireEnum(value.type, GATE_AUTHORITY_TYPES, `${base}.type`, issues);
+  requireEnum(value.policy, GATE_POLICIES, `${base}.policy`, issues);
+  requireEnum(value.source, GATE_AUTHORITY_SOURCES, `${base}.source`, issues);
+  if (value.authorized_by !== null) requireString(value.authorized_by, `${base}.authorized_by`, issues);
+  // The two travel together or the record contradicts itself: a named authorizer
+  // whose source is `unrecorded`, or an unnamed one the record claims to know.
+  if ((value.authorized_by === null) !== (value.source === "unrecorded")) {
+    issues.push({
+      path: base,
+      message: "`authorized_by: null` and `source: unrecorded` are the same fact and must travel together",
+    });
+  }
+}
+
 function validateGateEvidence(value: unknown, base: string, issues: ValidationIssue[]): void {
   if (value === undefined || value === null) return;
   if (!isRecord(value)) {

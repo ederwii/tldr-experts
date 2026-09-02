@@ -167,6 +167,8 @@ stage at `cursor`, or `done` when every phase is terminal.
 | `stages[].inputs` / `.outputs` | rel path[] | y | Declared inputs; files produced |
 | `stages[].gate` | {type, status, by, at, note} | y | `type` `approve\|checks\|auto`; `status` `pending\|approved\|rejected\|n-a`; `by` is `auto` on a gate the facilitator closed, and the note's `by:` on one an `agent` policy closed |
 | `stages[].gate.evidence` | {path, role, verdict, sampled, of, resolved, refuted, outside_surface} | n | **Additive.** Present only on a gate an `agent` policy closed (§5). `path` is run-relative and points at the COMMITTED copy of the §2.17 note, `<phase>/gate-evidence/<stage>.md`; the counts are the note's own. Absent on every gate a person or the facilitator closed, and on every run.yml written before this key existed — the gate mapping has never rejected an unknown key, so the two directions cross without a shim. Emitted only when present |
+| `stages[].gate.executed_by` | {type: `human\|agent\|auto`, id?} | n | **Additive.** WHICH ENTITY evaluated this gate, as against `by`, which is a NAME. On a gate an `agent` policy closed that name is the operator's — the account the agent ran as — so `by` alone cannot say a person did not review it. `id` is the name the entity signed under and is ABSENT for `auto`: the facilitator is a role, not an identity, and `by: auto` already carries it. Written by `approve` on every gate it closes; absent on every run.yml written before this key existed, where every reader falls back to `by`. Emitted only when present |
+| `stages[].gate.authority` | {type: `direct\|delegated`, policy, authorized_by, source} | n | **Additive.** UNDER WHOSE AUTHORITY. `direct` is a person signing as themselves; `delegated` is an agent or the facilitator acting on a policy somebody set. `policy` is §2.2 `gates_policy` for this stage at the moment of signing. `authorized_by` is who set it and `source` says how that was established: `self`, `run.created` (frozen at `run new` by whoever opened the run), `gate.policy_changed` (the actor of the `run gates set` that last moved it), or `unrecorded` — in which case `authorized_by` is `null`. Nothing here is inferred beyond those two events; an absence is NAMED, never filled in |
 | `attended_by` | `host` | n | **Additive.** Who DRIVES the run. Absent (the default, and every run.yml written before this key) ⇒ the framework may spawn. `host` ⇒ a host session is doing the turns: `tldrx next` refuses the headless mode with exit 4 naming the `--prepare` command, every executor exposes prepare/commit only, `run auto` is refused at the CLI (exit 1), and no run path can reach `spawnAgent`. Set at creation with `run new --attended-by host` or flipped later with `run attend`; emitted only when set |
 | `gates_policy` | {stage: `human\|auto\|agent`} | n | **Who** closes each gate. Resolved from §2.4 `gates:` and `run new --gates` at creation and frozen here, so the run keeps the policy it was opened with. `tldrx run gates set <stage>:<policy> --note <text>` is the ONLY sanctioned way to move it afterwards — one stage, a required note, one `gate.policy_changed` event carrying actor, moment, note and old→new. Absent, or a stage it does not name ⇒ `human`. `agent` (§5) is the third value: every `auto` condition PLUS a §2.17 evidence note that signs |
 | `stages[].stale` | bool | n | **Additive.** `true` when an EARLIER stage's gate was revoked after this one ran (§5). Its outputs stay on disk; nothing may treat them as current. Cleared when the stage runs again; emitted only when `true` |
@@ -179,6 +181,7 @@ stage at `cursor`, or `done` when every phase is terminal.
 **Validation.** Ids unique within parent; `cursor` resolves; ≤1 `running` stage (single-writer); `|spent_usd −
 Σ tasks.cost_usd| ≤ 0.01` (a `null` cost contributes 0); `started_at ≤ ended_at`; `approved` needs `by`+`at`; a `null`
 `cost_usd` needs `metered: false`; every `gates_policy` value is `human\|auto\|agent` and every key names a stage in the file; a `gate.evidence`, when present, is complete and its `role`/`verdict` are §2.17 values;
+a `gate.executed_by`, when present, has a `type` in `human\|agent\|auto` and no `id` when that type is `auto`; a `gate.authority`, when present, is complete, its `type`/`policy`/`source` are the values above, and `authorized_by: null` and `source: unrecorded` travel together — either without the other is a record contradicting itself;
 `attended_by`, when present, is `host` — a value the reader does not understand is a schema error, never a silent
 downgrade to "spawn anyway";
 ≤5 phases, ≤40 stages, ≤200 tasks.
@@ -2089,6 +2092,21 @@ note is copied to `<phase>/gate-evidence/<stage>.md` (committed — a gate whose
 directory is one nobody can audit from a clone), `gate.by` records the note's `by:`, `gate.evidence` records the
 headline counts and the path, and one ordinary `gate.approved` is appended carrying `role: agent` and that path.
 `AUTO_GATE_ACTOR` is untouched: `by: auto` still means "the facilitator closed it with no note but its own conditions".
+
+**Who signed, and under whose authority.** `by` is a NAME and never a kind, and on an agent-closed gate that name is
+the OPERATOR's — the account the agent was running as, and the one its §2.17 note declares in `by:`. A record that
+stops there says `by: alanmartinez` for a gate no person read (measured 2026-09-02, run `260902-discovery-pipeline-map`),
+and the delegation survives only as prose inside `note:`, which nothing parses and a hand-typed `--note "agent-gate: …"`
+can forge. So `approve` records two more §2.2 fields on EVERY gate it closes, and on the `gate.approved` event beside
+them: `executed_by: {type, id?}` — `human`, `agent` or `auto` — and
+`authority: {type, policy, authorized_by, source}`, where `type` is `direct` for a person signing as themselves and
+`delegated` for an agent or the facilitator acting on a policy somebody set. The executor's kind is read off HOW the
+gate is being closed, never off the policy: a person may always approve an `agent`-gated stage with no flag, and that
+is a human acting directly whatever the stage allows. `authorized_by` is derived from the run's own log — the actor of
+the last `gate.policy_changed` for that stage, else the actor of `run.created` — and where the log names neither it is
+`null` with `source: unrecorded`. Both fields are additive: a gate signed before they existed has neither, and every
+reader falls back to `by`. `tldrx run status`, `tldrx replay` and the dashboard render a delegated signature as
+`agent <id> (delegated by <authorizer>, policy: <policy>)` and a direct human one as the bare name it always was.
 
 Anything else ⇒ **exit `4`, the gate stays open, and every reason is named**. Four of those reasons are called out in
 their own right, because a person's next move differs for each: `questions` (a decision nobody has made), `budget-event`

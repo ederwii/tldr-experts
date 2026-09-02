@@ -786,8 +786,43 @@ export function dashGateSigner(stage: StageRowModel): string {
   const policy = `<span class="tag">${dashText(stage.gatePolicy)}</span>`;
   if (stage.gate === null) return '<span class="faint">—</span>';
   if (stage.gateBy === null) return policy;
-  return `${policy} <span class="signer">by ${dashText(stage.gateBy)}</span>`
+  return `${policy} <span class="signer">by ${dashText(dashSignature(stage))}</span>`
     + dashGateEvidence(stage);
+}
+
+/**
+ * Who actually signed it, in words (#122).
+ *
+ * `gateBy` is a NAME, and on a gate an agent closed under a delegated policy that
+ * name is the OPERATOR's — the account the agent was running as. Drawn alone it
+ * reads as "that person reviewed this", which is the thing this exists to stop.
+ * The policy tag beside it was never enough on its own: it says who was ALLOWED
+ * to sign, not who did.
+ *
+ * Two shapes, and nothing gets longer unless it was lying at the shorter length:
+ * a bare name for a person signing as themselves and for every record written
+ * before the fields existed, and `agent alan (delegated by alan, policy: agent)`
+ * otherwise.
+ *
+ * A DUPLICATE of `describeGateSignature` in `core/run/gateAuthority.ts`, for the
+ * same reason `dashEscape` duplicates `escapeHtml`: everything in this half of
+ * the file is serialised to the browser and may close over nothing. The two are
+ * asserted to agree, case for case, in `test/dashboard-render.test.ts`.
+ */
+export function dashSignature(stage: StageRowModel): string {
+  const by = stage.gateBy === null ? "?" : stage.gateBy;
+  const executed = stage.gateExecutedBy;
+  if (executed === null || executed === undefined) return by;
+  const authority = stage.gateAuthority;
+  const direct = authority === null || authority === undefined || authority.type === "direct";
+  if (executed.type === "human" && direct) return by;
+  const id = executed.id === null || executed.id === undefined ? by : executed.id;
+  const who = executed.type === "auto" ? "auto" : `${executed.type} ${id}`;
+  if (authority === null || authority === undefined) return who;
+  const granter = authority.authorizedBy === null || authority.authorizedBy === undefined
+    ? "unrecorded"
+    : authority.authorizedBy;
+  return `${who} (${authority.type} by ${granter}, policy: ${authority.policy})`;
 }
 
 /**
@@ -1749,7 +1784,7 @@ const TEMPLATE_FUNCTIONS = [
   dashRoute, dashWaiting, dashTitle, dashTopMeta, dashNav,
   dashMain, dashNoWorkspace,
   dashRunsView, dashUnreadable, dashFirstLine, dashRunRow, dashMeter,
-  dashRunView, dashGateSigner, dashGateEvidence, dashKv, dashEconomies,
+  dashRunView, dashGateSigner, dashSignature, dashGateEvidence, dashKv, dashEconomies,
   dashBudgetMeter, dashSpendText, dashBudgetSection, dashBudgetBlocks, dashNotesSection, dashStoryArcs,
   dashPreflightSection,
   dashPathSection, dashHandoffsSection, dashPanelId, dashQuestion,
