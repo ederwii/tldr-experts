@@ -170,7 +170,14 @@ retries are where the money is) and `tldrx budget show`. Quote them, never the a
    item: `- none [src: absent:<what you looked at>]`. Prose is refused.
 9. **`.tldrx/` and `tldrx-work/` are committed** — the files ARE the state. `init`
    gitignores only the machine-local scratch (`graphify-out/`, `cache/`,
-   `worktrees/`, `tldrx-work/*/.lock`, `tldrx-work/*/.agent/`).
+   `worktrees/`, `tldrx-work/*/.lock`, `tldrx-work/*/.agent/`, `**/*.bak`).
+   **The close commits them, and you do not.** Closing a run (`tldrx approve` on
+   the last gate, `tldrx next`, `tldrx run cancel`) commits `tldrx-work/<run>/`
+   and `.tldrx/memory/` in the workspace checkout, on the branch it is on, and
+   says so. Never commit them onto the epic branch: an epic under review carries
+   feature code, and run state on it collides with the same live files in the
+   operator's tree the moment the PR merges (gh #102 — `tldrx ship` refuses an
+   epic that carries any).
 
 ## The loop, for orientation
 

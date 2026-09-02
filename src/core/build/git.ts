@@ -297,6 +297,83 @@ export async function commitAll(cwd: string, message: string, exclude: readonly 
   return await git(["commit", "-m", message], cwd);
 }
 
+export interface PathCommit {
+  readonly ok: boolean;
+  /** True only when a commit was actually made — nothing to commit is `ok` and false. */
+  readonly committed: boolean;
+  /** What went in, repo-relative, as git named it. */
+  readonly files: readonly string[];
+  readonly detail: string;
+}
+
+/**
+ * Commit exactly these paths, and NOTHING else — not even what the operator has
+ * already staged.
+ *
+ * The inverse of `commitAll`, and it exists for the one place tldrx writes into a
+ * checkout that is not its own: the run's close, in the operator's live tree
+ * (gh #102). `commitAll`'s `git add -A` would sweep whatever the operator had in
+ * flight into the framework's commit, which is exactly the move that turned a
+ * refused pull into a divergent fork on aparece-v2.
+ *
+ * Two git behaviours carry it, both MEASURED rather than assumed (2026-09-02):
+ *
+ *   - `git commit -- <pathspec>` commits the given paths and leaves the rest of
+ *     the index alone. A `README.md` the operator had staged is still staged, and
+ *     still uncommitted, afterwards.
+ *   - it only picks up paths git already KNOWS, so the `git add` below is what
+ *     brings a run's brand-new files in — and an `:(exclude)` on that add really
+ *     does keep a path out of the commit, because `commit -- <path>` will not
+ *     resurrect a file that is neither tracked nor in the index.
+ *
+ * Two shapes are DROPPED rather than turned into a failed close, because git
+ * treats both as an error and neither is one:
+ *
+ *   - a path that does not exist (`git add` on an unmatched pathspec exits 1), and
+ *   - a path the repo gitignores. A workspace that deliberately ignores
+ *     `tldrx-work/` is not a workspace whose close should report a failure at it;
+ *     `git add <ignored dir>` exits 1 with "Use -f if you really want to add
+ *     them", and forcing is exactly what must not happen.
+ */
+export async function commitPathsOnly(
+  cwd: string,
+  message: string,
+  paths: readonly string[],
+  exclude: readonly string[] = [],
+): Promise<PathCommit> {
+  const onDisk = paths.filter((path) => existsSync(join(cwd, path)));
+  const present = onDisk.length === 0 ? [] : await notIgnored(cwd, onDisk);
+  if (present.length === 0) return { ok: true, committed: false, files: [], detail: "nothing git will take" };
+
+  const staged = await git(["add", "--", ...present, ...exclude.map((path) => `:(exclude)${path}`)], cwd);
+  if (!staged.ok) return { ok: false, committed: false, files: [], detail: firstLine(staged.stderr) };
+
+  const listed = await git(["diff", "--cached", "--name-only", "--", ...present], cwd);
+  const files = listed.stdout.split("\n").map((line) => line.trim()).filter((line) => line !== "");
+  if (files.length === 0) return { ok: true, committed: false, files: [], detail: "already committed" };
+
+  const committed = await git(["commit", "-m", message, "--", ...present], cwd);
+  if (!committed.ok) {
+    return { ok: false, committed: false, files, detail: firstLine(committed.stderr) || firstLine(committed.stdout) };
+  }
+  return { ok: true, committed: true, files, detail: firstLine(committed.stdout) };
+}
+
+/**
+ * The subset of `paths` this repo does NOT gitignore.
+ *
+ * `git check-ignore` prints the ones it DOES ignore and exits 1 when it matched
+ * nothing — which is the common case, and not a failure. A `check-ignore` that
+ * errors outright (128) answers "none of them are ignored": a probe that could not
+ * tell must not silently drop the state the caller asked to commit.
+ */
+async function notIgnored(cwd: string, paths: readonly string[]): Promise<readonly string[]> {
+  const asked = await git(["check-ignore", "--", ...paths], cwd);
+  if (asked.exitCode !== 0) return paths;
+  const ignored = new Set(asked.stdout.split("\n").map((line) => line.trim()).filter((line) => line !== ""));
+  return paths.filter((path) => !ignored.has(path));
+}
+
 export interface MergeOutcome {
   readonly ok: boolean;
   /** Paths left in conflict, when the merge stopped. */

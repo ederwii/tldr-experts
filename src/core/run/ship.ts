@@ -72,7 +72,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { runtime } from "../runtime/index.ts";
-import { PROJECT_WORK_DIR } from "../paths.ts";
+import { PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../paths.ts";
 import { RunStore } from "./RunStore.ts";
 import { ambiguousRunLines } from "./openRuns.ts";
 import { loadWorkspace, FALLBACK_DEFAULT_BRANCH } from "../../hooks/lib/workspace.ts";
@@ -470,7 +470,55 @@ async function prepareRepo(
   const base = options.base
     ?? loadWorkspace(options.root).defaultBranches.get(repo.name)
     ?? FALLBACK_DEFAULT_BRANCH;
+
+  const state = await stateOnBranch(options.transport, repo.dir, base, branch);
+  if (state.length > 0) {
+    const shown = state.slice(0, 5);
+    return {
+      ok: false,
+      lines: [
+        `\`${branch}\` carries ${String(state.length)} change(s) to tldrx's own state, and a PR that `
+          + "merges them will break the next `git pull` in this workspace",
+        ...shown.map((path) => `    ${path}`),
+        ...(state.length > shown.length ? [`    …and ${String(state.length - shown.length)} more`] : []),
+        `  \`${PROJECT_WORK_DIR}/\` and \`${PROJECT_FRAMEWORK_DIR}/\` are written LIVE into this checkout for the `
+          + "length of a run, so the same paths arriving in a merge meet a dirty tree — measured on",
+        "  aparece-v2, 2026-09-02: a refused pull over 5 modified and ~40 untracked paths (gh #102).",
+        "  An epic under review carries feature code; the run's state belongs on the branch it was",
+        `  written on, where \`tldrx approve\` now commits it. To take it back off the epic:`,
+        `    git -C ${repo.dir} checkout ${base} -- ${PROJECT_WORK_DIR} ${PROJECT_FRAMEWORK_DIR}`,
+        `    git -C ${repo.dir} commit -m "keep tldrx state off the epic"`,
+        "  (done on a checkout of the branch — a forward commit, never a rebase.)",
+      ],
+    };
+  }
   return { ok: true, remote, base };
+}
+
+/**
+ * Which of tldrx's own paths this branch changes that its base does not (#102).
+ *
+ * Three dots, so the answer is "what the BRANCH did" and not "how far the base has
+ * moved since" — a trunk that gained a run's state after the epic was cut must not
+ * read as the epic carrying it.
+ *
+ * A `git diff` that fails answers the empty list. "I could not tell" has to behave
+ * like "there is nothing here": a missing local base ref, or a git that is unwell,
+ * is not evidence that a PR should be refused.
+ */
+async function stateOnBranch(
+  transport: ShipTransport,
+  cwd: string,
+  base: string,
+  branch: string,
+): Promise<readonly string[]> {
+  const diff = await transport.run(
+    "git",
+    ["diff", "--name-only", `${base}...${branch}`, "--", PROJECT_WORK_DIR, PROJECT_FRAMEWORK_DIR],
+    cwd,
+  );
+  if (diff.exitCode !== 0) return [];
+  return diff.stdout.split("\n").map((line) => line.trim()).filter((line) => line !== "");
 }
 
 /**

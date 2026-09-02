@@ -802,6 +802,7 @@ const ENTRIES: readonly CommandHelp[] = [
       "It refuses cleanly, in a sentence, when there is no epic branch, no handoff, no remote, no `gh` on PATH, or when several epic branches leave the choice open.",
       "When the branch exists in SEVERAL repos \u2014 the normal shape of a chained multi-repo run, whose epics share one integration branch \u2014 it opens one PR per repo: the same handoff as the body, the repo name in the title, and every URL listed at the end. `--repo` narrows it to one.",
       "A partial failure names both sides: the PRs that were opened, with their URLs, and the repos that failed, with the reason. Run it again to retry the rest \u2014 a repo whose PR is already open is skipped, so re-running opens nothing twice.",
+      "It refuses an epic branch that carries changes under `tldrx-work/` or `.tldrx/`, and names them. Those paths are written LIVE into the workspace checkout for the length of a run, so a PR that merges them makes the next `git pull` there refuse. The refusal prints the two commands that take them back off the branch \u2014 a forward commit, never a rebase.",
     ],
   },
   {

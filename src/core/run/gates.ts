@@ -17,7 +17,7 @@ import { runChecks, type CheckOutcome } from "./checks.ts";
 import { loadWorkflowPreset, PresetError, type PlannedStage } from "./workflowPreset.ts";
 import type { RunStore } from "./RunStore.ts";
 import type { RunFile, RunGate, RunGateEvidence, RunPhase, RunStage } from "./RunFile.ts";
-import { closeRunWorktrees } from "./closeWorktrees.ts";
+import { closeRun, type RunCloseOutcome } from "./closeRun.ts";
 
 export class GateError extends Error {}
 
@@ -61,6 +61,8 @@ export interface ApproveOutcome {
   readonly runDone: boolean;
   /** Run-relative path of the committed evidence copy, when one was made. */
   readonly evidencePath: string | null;
+  /** What the close did with the worktrees and the run's own state (#16, #102). */
+  readonly closed: RunCloseOutcome | null;
 }
 
 export async function approve(store: RunStore, ctx: GateContext): Promise<ApproveOutcome> {
@@ -83,7 +85,7 @@ export async function approve(store: RunStore, ctx: GateContext): Promise<Approv
   if (failed !== null) {
     return {
       ok: false, stage: entry.stage.id, phase: entry.phase.id, checks, failed,
-      advancedTo: null, runDone: false, evidencePath: null,
+      advancedTo: null, runDone: false, evidencePath: null, closed: null,
     };
   }
 
@@ -136,17 +138,20 @@ export async function approve(store: RunStore, ctx: GateContext): Promise<Approv
   store.save();
 
   const runDone = store.run.status === "done";
+  let closed: RunCloseOutcome | null = null;
   if (runDone) {
     store.append(event(ctx.at, store.runId, null, "run.closed", ctx.actor, { reason: "every stage terminal" }));
     // Signing the last gate is the most ordinary way a run closes, so it is also
-    // where its epic worktrees are most ordinarily taken (#16).
-    await closeRunWorktrees(store.run, ctx.root, store.runDir);
+    // where its epic worktrees are most ordinarily taken (#16) and where its own
+    // state is most ordinarily committed (#102).
+    closed = await closeRun(store.run, ctx.root, store.runDir, store.runId);
   }
   return {
     ok: true, stage: entry.stage.id, phase: entry.phase.id, checks, failed: null,
     advancedTo: next === null ? null : { phase: next.phase.id, stage: next.stage.id },
     runDone,
     evidencePath: evidence === null ? null : evidence.path,
+    closed,
   };
 }
 

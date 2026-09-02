@@ -1,12 +1,12 @@
 /** The Build phase's machinery. The pipeline that drives it is `facilitator/executors/build.ts`. */
 export {
   git, repoDirOf, dirtyPaths, isDirty, branchExists, currentBranch, headSha, ensureBranch,
-  addWorktree, removeWorktree, cleanUpRunEpicWorktrees, commitAll, mergeNoFf, diffCommand,
+  addWorktree, removeWorktree, cleanUpRunEpicWorktrees, commitAll, commitPathsOnly, mergeNoFf, diffCommand,
   firstLine, GitError, GIT_TIMEOUT_MS,
   stateDirPrefixes, partitionDirty, porcelainPath, shaOf, baseStateOf, fastForward, commitsBetween,
   assertWorktreeOn, WorktreeBranchMismatchError,
 } from "./git.ts";
-export type { GitResult, MergeOutcome, DirtySplit, BaseState, BaseStaleness } from "./git.ts";
+export type { GitResult, MergeOutcome, PathCommit, DirtySplit, BaseState, BaseStaleness } from "./git.ts";
 export { loadBuildPlan, inOrder, PlanLoadError } from "./plan.ts";
 export type { BuildPlan, BuildWave, PlannedStory, PlannedEpic } from "./plan.ts";
 export { updateStoryFront, applyPlanPatch, evidenceFor, quote, StoryWriteError } from "./storyFile.ts";
