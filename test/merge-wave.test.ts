@@ -751,6 +751,11 @@ describe("a conflicted merge does not wedge the checkout (#76)", () => {
     writeFileSync(join(sb.main, "contested.txt"), "main's version\n");
     sb.git("add", "-A");
     sb.git("commit", "-q", "-m", "main touches the same file");
+    // PUBLISHED, not just committed. The scenario is "a branch that conflicts with the
+    // main everyone else already has", and since #116 a local `main` running ahead of
+    // origin/main is itself a refusable condition — an unpushed commit on `main` is the
+    // orphan a killed wave leaves. Pushing here keeps this fixture about conflicts.
+    sb.git("push", "-q", "origin", "main");
   }
 
   test("the conflicting paths are still named, and the exit code is still 2", async () => {
@@ -1058,5 +1063,139 @@ describe("the convention the guard only approximates is written down (#89)", () 
       expect(text).toContain("git reset --hard");
       expect(text).toContain("git checkout -B main");
     }
+  });
+});
+
+/**
+ * #116 — the wave OWNS its merge commit until the push.
+ *
+ * Measured live 2026-09-02, merging #109/#110 in the shared checkout: the caller's own
+ * 10-minute timeout sent SIGTERM at minute 10 of an ~8-minute gate run. The `TERM` trap
+ * handed back the lock and the marker and touched nothing else, so `main` was left like
+ * this — and stayed there for ~15 minutes, with nothing anywhere saying so:
+ *
+ *   $ git status --porcelain          # clean
+ *   $ git log --oneline -2
+ *   40e60a0 merge: … (#109, #110/#105)      <- created, never gated, never pushed
+ *   45b7709 fix(gates): …
+ *   $ git rev-parse --short origin/main
+ *   1770e9e
+ *   $ ls -d .git/merge-wave.lock            # gone
+ *
+ * None of the three existing defences has anything to say about it. The lock was released,
+ * so a sibling takes it freely. The tree is clean, so the dirty-tree guard is happy. And
+ * `git merge-base --is-ancestor origin/main HEAD` PASSES for the sibling — origin/main is
+ * an ancestor — so #44's fast-forward check waves it through too. The sibling merges on
+ * top, gates the combined tree, and pushes both commits: the interrupted run's commit
+ * reaches origin/main carrying somebody else's gate result and somebody else's summary
+ * line. #44's assertion protects the run that is still alive; this is about the one that
+ * is not.
+ *
+ * The invariant these tests pin: no commit reaches origin/main without ITS OWN gate having
+ * passed, and a wave that does not push leaves `main` exactly as it found it.
+ */
+describe("an interrupted wave leaves main exactly as it found it (#116)", () => {
+  /** Poll until the wave has committed its merge and entered its first gate. */
+  async function waitForMergeCommit(sb: Sandbox, branch: string): Promise<void> {
+    await waitUntil(() => gateShas(sb, branch).length > 0, 60_000, `${branch} to merge and start gating`);
+  }
+
+  test("SIGTERM between the merge and the push rewinds main to where the wave found it", async () => {
+    const sb = sandbox();
+    const before = sb.git("rev-parse", "HEAD");
+    const release = join(sb.dir, "release-a");
+    const a = invoke(sb, "wave-a", { GATE_HOLD_UNTIL: release, GATE_HOLD_ON: "typecheck" });
+    await waitForMergeCommit(sb, "wave-a");
+    // The merge commit exists right now — this is the window the whole bug lives in.
+    expect(sb.git("rev-parse", "HEAD")).not.toBe(before);
+
+    a.signal("SIGTERM");
+    // Bash runs a trap only once the FOREGROUND child returns, so the gate is let go right
+    // after the signal: the trap is already pending and fires before the next gate starts.
+    writeFileSync(release, "go\n");
+    const { code } = await a.done;
+    expect(code).toBe(143);
+    expect(existsSync(lockDir(sb))).toBe(false);           // #44's promise, already kept
+    expect(sb.git("rev-parse", "HEAD")).toBe(before);       // #116's, which was not
+    expect(sb.git("status", "--porcelain")).toBe("");
+    expect(gateShas(sb, "wave-a")).toHaveLength(1);         // and it never reached a second gate
+  });
+
+  test("so the next wave cannot push the interrupted one's commit under its own gate result", async () => {
+    const sb = sandbox();
+    const release = join(sb.dir, "release-a");
+    const a = invoke(sb, "wave-a", { GATE_HOLD_UNTIL: release, GATE_HOLD_ON: "typecheck" });
+    await waitForMergeCommit(sb, "wave-a");
+    a.signal("SIGTERM");
+    writeFileSync(release, "go\n");
+    expect((await a.done).code).toBe(143);
+
+    // The sibling that takes the lock next. Pre-fix it merged ON TOP of wave-a's orphan,
+    // gated the pair, and published both under one summary line naming only itself.
+    const b = await invoke(sb, "wave-b").done;
+    expect(b.code).toBe(0);
+    expect(b.stdout).toContain("pushed");
+    const published = originLog(sb);
+    expect(published[0]).toBe("merge wave-b");
+    expect(published).not.toContain("merge wave-a");
+    // And wave-a's own work is not lost — its branch is untouched, so it can just re-run.
+    expect(sb.git("rev-parse", "wave-a")).toBeTruthy();
+  });
+
+  test("a red gate rewinds too, so a failed wave leaves nothing for the next one to inherit", async () => {
+    const sb = sandbox();
+    const before = sb.git("rev-parse", "HEAD");
+    const red = await invoke(sb, "wave-poison").done;
+    expect(red.code).toBe(3);
+    expect(red.stdout).toContain("NOT pushed");
+    expect(sb.git("rev-parse", "HEAD")).toBe(before);
+    // The logs a red run keeps are the inspection surface; the commit is not, because the
+    // branch still holds every byte of it and the merge is one command away.
+    expect(/logs: (\S+);/.exec(red.stdout)?.[1]).toBeTruthy();
+
+    const green = await invoke(sb, "wave-a").done;
+    expect(green.code).toBe(0);
+    expect(originLog(sb)[0]).toBe("merge wave-a");
+    expect(originLog(sb)).not.toContain("merge wave-poison");
+  });
+
+  test("a HEAD that moved during the gates is NOT rewound — that tree is a human's to judge", async () => {
+    const sb = sandbox();
+    const { code, stdout } = await invoke(sb, "wave-a", { GATE_MOVE_HEAD: "build" }).done;
+    expect(code).toBe(5);
+    expect(stdout).toContain("HEAD moved during the gates");
+    // The rewind only ever undoes THIS run's own commit, and only while it is still the tip.
+    // A third party's commit sitting on top is exactly the state that needs looking at.
+    expect(sb.git("log", "--format=%s", "-1")).toBe("a third party moves HEAD mid-gate");
+  });
+
+  test("a pre-existing orphan on main is refused BY NAME rather than merged over", async () => {
+    const sb = sandbox();
+    // What SIGKILL, a power cut, or a pre-#116 wave leaves behind: a merge commit on the
+    // local `main`, absent from origin/main, with no lock and no marker to explain it.
+    sb.git("merge", "--no-ff", "wave-a", "-m", "merge wave-a");
+    const orphan = sb.git("rev-parse", "--short", "HEAD");
+    const before = originLog(sb);
+
+    const { code, stdout } = await invoke(sb, "wave-b").done;
+    expect(code).toBe(8);
+    expect(stdout).toContain(orphan);                 // named, because silence is the danger
+    expect(stdout).toContain("merge wave-a");
+    expect(stdout).toContain("nothing merged");
+    expect(originLog(sb)).toEqual(before);            // neither commit published
+    expect(gateShas(sb, "wave-b")).toEqual([]);       // and no gate was even spent on it
+    expect(existsSync(lockDir(sb))).toBe(false);      // the lock is handed back, not wedged
+  });
+
+  test("the refusal is about HEAD, not the `main` ref — a detached gated push still works", async () => {
+    const sb = sandbox();
+    // #44's case: a local `main` ahead of origin/main while HEAD sits ON origin/main. The
+    // wave merges into and pushes HEAD, so that stale ref is none of its business.
+    sb.git("commit", "-q", "--allow-empty", "-m", "never gated, never pushed");
+    sb.git("checkout", "-q", "--detach", "origin/main");
+    const { code, stdout } = await invoke(sb, "wave-a").done;
+    expect(code).toBe(0);
+    expect(stdout).toContain("pushed");
+    expect(originLog(sb)[0]).toBe("merge wave-a");
   });
 });

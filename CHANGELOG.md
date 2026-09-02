@@ -192,6 +192,39 @@ same amount after it; what changed is that the page now says how big the bound i
     the test asserts the two differ. A test that asks one process whether its own name is
     unique can only ever say yes.
 
+- **An interrupted merge wave no longer leaves an ungated commit on `main` for the next
+  sibling to push under its own gate result (#116).** Measured live 2026-09-02 while merging
+  #109/#110 in the shared checkout: the caller's own 10-minute timeout sent `SIGTERM` at
+  minute 10 of an ~8-minute gate run. The `TERM` trap handed back the lock and the marker
+  and touched nothing else, so `main` sat for ~15 minutes on a merge commit that no gate
+  ever finished and no lock, marker or log advertised — `git status` clean, `.git/merge-wave.lock`
+  gone, no `merge-wave.sh` running. All three existing defences are silent on it by
+  construction: the lock had been released, the tree was clean, and
+  `git merge-base --is-ancestor origin/main HEAD` PASSES for the next wave, because
+  origin/main genuinely is an ancestor of the orphan. So the sibling merged on top, gated
+  the pair, and published both under one summary line naming only itself. Nobody lied; the
+  gate record was simply attached to the wrong tree — the mirror image of the #44 race, and
+  about the run that is *dead* rather than the one still alive.
+  - **The wave now owns its merge commit until the push.** `merge-wave.sh` records `main`'s
+    sha before `git merge --no-ff`, and `unwind` puts it back on every path that does not
+    publish: the `INT`/`TERM` traps, a red gate, a failed push. Deliberately narrow on three
+    counts — it undoes only the sha *this* run created, only while that sha is still `HEAD`
+    (so a third party's commit landing on top, the exit-5 case, is left for a human instead
+    of being discarded), and only before `PUSHED=1`. It also runs *before* the lock is
+    released, while this invocation still matches the lock token, so the #89 ref guard waves
+    it through rather than vetoing the repair.
+  - **A red gate rewinds too.** It used to report "main left at merge commit `<sha>`", which
+    is the same landmine by another route: the branch still holds every byte of the work and
+    the merge is one command away, while the kept log directory is the real inspection
+    surface. The summary line now names the sha it rewound off `main`.
+  - **And a wave refuses to start on a `main` that is ahead of origin/main — exit 8, naming
+    the commits.** `SIGKILL` and a power cut run no trap at all, so the unwind alone cannot
+    close the hole. `HEAD`, not `refs/heads/main`, because `HEAD` is what gets merged into
+    and what `HEAD:main` pushes; behind or diverged is still the fast-forward check's job at
+    the push. Six tests in `test/merge-wave.test.ts` pin it, including the end-to-end repro:
+    a wave killed mid-gate, then a sibling wave whose `origin/main` must not contain the
+    dead run's commit.
+
 - **A docs-scope story bundle is no longer handed to a developer with nothing to write, no
   requirements it can open, and its core acceptance criterion deleted (#111).**
   All three were repaired BY HAND by the unattended driver of `260902-discovery-pipeline-map`
