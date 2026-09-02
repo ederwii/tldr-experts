@@ -45,6 +45,33 @@
   - A revoked gate DROPS both. `by: null` says nobody signed it, and an executor left beside
     that would be two contradicting claims about one fact.
 
+- **`tldrx run status` prints a stage's duration and says when a gate was signed with
+  words (#120).** `run.yml` has recorded `started_at`, `ended_at` and `gate.note` on every
+  stage since `run new` wrote the first one. #118 put all three on the dashboard's
+  `StageRowModel` and drew them; `runStatus.ts` built its own record from the same file and
+  was not touched, so the page and the CLI disagreed about what is knowable from one file —
+  a reader watching a stage that had been running for hours saw no sign of it in the
+  terminal. Each gate row (one per stage) now ends with a compact duration and a `✎` on a
+  signed note, and `--verbose` adds the two instants behind a duration, the sentence behind
+  an absent one, and the note itself.
+  - **One subtraction, not two.** `dashDuration` / `dashDurationAbsence` moved out of
+    `dashboard/render.ts` into `core/run/duration.ts`, a leaf that imports nothing and that
+    both surfaces read — rather than a second implementation of the same arithmetic. They
+    keep their `dash` names because `clientRenderer()` serialises the DEFINITION name into
+    the page, so a rename would be a `ReferenceError` on the live dashboard rather than a
+    build error; both are still closure-free and still serialised.
+  - **Still no stored duration, and still no synthesised zero.** A stage with a `started_at`
+    and no `ended_at` reads `not ended`, one with the reverse reads `no start`, and two
+    timestamps that do not yield a gap read `bad timestamps`. A stage with NEITHER end says
+    nothing on the line — it has no clock to account for and its status column already says
+    `pending`; printing "not timed" on every row of a fresh run is noise, not honesty, and
+    `--verbose` still names that case in full. `note: ""` is not a signature: it reads as
+    `null`, is never marked and is never quoted.
+  - **`--json` is additive.** `started_at`, `ended_at` and `note` are appended to each gate
+    row; every top-level key keeps its position, so a consumer reading `run`, `waiting.kind`
+    or `gates[i].by` is untouched. A new test pins the row's key order the way
+    `SINGLE_RUN_KEYS` pins the top level's.
+
 - **The docs site's demo dashboard now shows the story grid and the Waves view with
   something in them (#119).** `gen-demo.ts` composed its workspace from two fixtures,
   neither of which had ever reached the Plan phase, so `loadPlan` returned null for all

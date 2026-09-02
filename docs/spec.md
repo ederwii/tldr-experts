@@ -1642,6 +1642,49 @@ exactly what they have always been — `--json` is one top-level `RunStatusView`
 object with the keys `run, title, scope, workflow, repos, status, cursor,
 phases, budget, attempts, build, waiting`.
 
+#### A stage's duration, and the words on its gate
+
+Every gate row — one per stage, in execution order — carries the stage's own
+`started_at` and `ended_at` and its gate's `note`, and the screen ends each row
+with a compact duration and a `✎` on a gate somebody signed with words:
+
+```
+gates   4 human, 0 auto
+        1 signed gate carries a note (✎) — `run status --verbose` quotes it
+  01-what/what    human  approved by alan  2h 38m  ✎
+  02-how/how      human  approved by alan  1h 18m
+  03-build/build  human  approve: pending  not ended
+  04-watch/watch  human  approve: pending
+```
+
+Two rules govern that column, and they are the dashboard's (§12, #118) because
+both surfaces read the one file:
+
+- **A duration is a subtraction, and it exists only when both ends do.** No `0m`
+  is ever synthesised. A stage with a `started_at` and no `ended_at` reads `not
+  ended`; one with an `ended_at` and no `started_at` reads `no start`; two
+  timestamps that do not yield a gap read `bad timestamps`. A stage with NEITHER
+  end says nothing — it has no clock to account for and its status column
+  already says so. `run status --verbose` names all four cases in full, under the
+  row, in the same words the dashboard's stage drawer uses.
+- **`note: ""` is not a signature.** It is what `run new` writes on an unsigned
+  gate; it reads as `null` in `--json`, is never marked and is never quoted.
+
+`--verbose` adds only those lines: the two instants behind a duration, the
+sentence behind an absent one, and the note itself.
+
+```
+  01-what/what    human  approved by alan  2h 38m  ✎
+      2026-09-01T09:02:00Z → 2026-09-01T11:40:00Z
+      note: the dod blocks were resynced by hand
+  04-watch/watch  human  approve: pending
+      not recorded — run.yml carries neither started_at nor ended_at
+```
+
+`started_at`, `ended_at` and `note` are **appended** to each gate row, so a
+consumer reading `gates[i].by` is untouched. There is no `duration_seconds`
+beside them, for the reason above: the subtraction happens where it is drawn.
+
 With **several** open and no id:
 
 ```

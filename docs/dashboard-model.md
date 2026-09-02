@@ -302,7 +302,8 @@ duration is a subtraction; it exists only when both ends do, and a model field
 would have to pick some number for the case where one end is missing. Every
 number this layer could pick is wrong: `0` is a measurement of zero, `null` is
 what the two timestamps already say, and anything else is invented. So the
-subtraction happens where it is drawn — `dashDuration` in `render.ts` — and a
+subtraction happens where it is drawn — `dashDuration`, which since #120 lives
+in `core/run/duration.ts` because `tldrx run status` draws it too — and a
 stage that recorded neither end gets a sentence naming which end is missing
 rather than a blank cell that reads as "it took no time".
 
