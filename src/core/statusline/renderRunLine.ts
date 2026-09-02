@@ -30,20 +30,28 @@ export function renderRunLine(host: StatusLineHost, snapshot: RunSnapshot): stri
 }
 
 /**
- * ` att` when a host session is driving the run, ` auto:2` when the facilitator
+ * ` att` when a host session is driving the run, ` machine:2` when a machine
  * signed gates in it, ` stale:1` after an approval was revoked. Nothing at all
  * when none of the three happened, so the ordinary line is byte-identical to
  * what it always was.
  *
- * The first two exist for the same reason: `by: auto` and `attended_by: host`
- * both reached run.yml, the event log and `run status`, and never the place an
- * operator actually looks (2026-08-29 audit, §B). `att` leads because it is the
- * one that changes what `tldrx next` will do.
+ * The first two exist for the same reason: a machine-closed gate and
+ * `attended_by: host` both reached run.yml, the event log and `run status`, and
+ * never the place an operator actually looks (2026-08-29 audit, §B). `att` leads
+ * because it is the one that changes what `tldrx next` will do.
+ *
+ * The middle segment read `auto:N` until #127, and counted `by: auto` only — so
+ * an agent-signed gate, the one closure where the recorded name is a person who
+ * did not do the checking, was invisible here. It is `machine:` now rather than a
+ * widened `auto:` because `auto` is a specific actor in this system and a count
+ * labelled with it that included agents would be the next thing on this line that
+ * is not true. `machine` is the word `tldrx status` already uses one screen away:
+ * "N gate(s) closed by a machine, not by a person".
  */
 function markers(snapshot: RunSnapshot): string {
   const parts: string[] = [];
   if (snapshot.attendedByHost) parts.push("att");
-  if (snapshot.autoGates > 0) parts.push(`auto:${String(snapshot.autoGates)}`);
+  if (snapshot.machineGates > 0) parts.push(`machine:${String(snapshot.machineGates)}`);
   if (snapshot.staleStages > 0) parts.push(`stale:${String(snapshot.staleStages)}`);
   return parts.length === 0 ? "" : ` ${parts.join(" ")}`;
 }

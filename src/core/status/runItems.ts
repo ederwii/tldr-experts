@@ -25,8 +25,8 @@ import { whatIsWaiting, type Waiting } from "../run/runStatus.ts";
 import { questionsCard } from "../run/decisionCards.ts";
 import { renderDecisionCard } from "../ui/decisionCard.ts";
 import { isMovable } from "../run/waiting.ts";
-import { describeGateSignature } from "../run/gateAuthority.ts";
-import type { RunFile, RunGate } from "../run/RunFile.ts";
+import { closedByMachine, describeGateSignature } from "../run/gateAuthority.ts";
+import type { RunFile } from "../run/RunFile.ts";
 import type { PendingItem } from "./PendingItem.ts";
 
 /** The marker on the first run a human could actually move. */
@@ -170,34 +170,6 @@ function unreadableItem(root: string): PendingItem | null {
     command: `tldrx run status ${first}`,
     details: broken,
   };
-}
-
-/** The actor an auto-signed gate records (`run/autoGate.ts` AUTO_GATE_ACTOR). */
-const AUTO = "auto";
-
-/**
- * Did a MACHINE close this gate? (issue #124)
- *
- * The selector used to be `by === "auto"`, which catches every facilitator-closed
- * gate and no agent-closed one: an `agent` gate records the evidence note's
- * `by:`, which is the OPERATOR account the agent was running as — a person's
- * name. Measured on run `260902-discovery-pipeline-map`, that gate reads
- * `by: alanmartinez`, so a report whose whole job is naming the gates no person
- * evaluated counted it as human-signed and never offered the revoke.
- *
- * With #122's `executed_by` the question is answered directly, off the field
- * written on every gate `approve` closes. It asks `!== "human"` rather than
- * naming `agent` and `auto`: a kind this version has not heard of is a kind
- * nobody has shown to be a person, and listing the machines by name is exactly
- * how the `agent` case went missing the first time.
- *
- * `by === "auto"` stays as the UNION member, not as a replacement: a gate signed
- * before #122 has no `executed_by`, and there it is the only signal there is.
- */
-function closedByMachine(gate: RunGate): boolean {
-  const executed = gate.executed_by;
-  if (executed !== undefined) return executed.type !== "human";
-  return gate.by === AUTO;
 }
 
 /**

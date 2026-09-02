@@ -71,7 +71,7 @@ describe("renderRunLine", () => {
         {
           runDir: "/tmp/x", run: "260828-leaderboard", title: "", scope: "feature", status: "awaiting_gate",
           phase: "02-how", stage: "contracts", stageStatus: "awaiting_gate", expert: "architect",
-          done: 2, total: 5, ceilingUsd: 25, spentUsd: 3.75, openCount: 1, autoGates: 0, staleStages: 0, attendedByHost: false, source: "run-store",
+          done: 2, total: 5, ceilingUsd: 25, spentUsd: 3.75, openCount: 1, machineGates: 0, staleStages: 0, attendedByHost: false, source: "run-store",
         },
       ),
     ).toBe("[tldrx] 260828-leaderboard · 02-HOW [▓▓░░░] 2/5 > contracts — architect | Sonnet ctx:16% $3.75/$25");
@@ -83,7 +83,7 @@ describe("renderRunLine", () => {
       {
         runDir: "/tmp/x", run: "260828-x", title: "", scope: "docs", status: "ready",
         phase: "01-what", stage: "alpha", stageStatus: "ready", expert: null,
-        done: 0, total: 2, ceilingUsd: 10, spentUsd: 0, openCount: 1, autoGates: 0, staleStages: 0, attendedByHost: false, source: "run-store",
+        done: 0, total: 2, ceilingUsd: 10, spentUsd: 0, openCount: 1, machineGates: 0, staleStages: 0, attendedByHost: false, source: "run-store",
       },
     );
     expect(line).toBe("[tldrx] 260828-x · 01-WHAT [░░░░░] 0/2 > alpha | Opus ctx:3% $0/$10");

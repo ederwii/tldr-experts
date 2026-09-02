@@ -394,6 +394,53 @@ same amount after it; what changed is that the page now says how big the bound i
 
 ### Fixed
 
+- **`validateEnv` now enforces the two `env.yml` rules §2.10 designed, and §2.10 stops
+  designing the third (#126).** The spec stated four validation rules as fact; the schema
+  enforced none. #125 removed one with its field and reworded the rest into "designed and not
+  yet enforced" — honest, and it settled nothing.
+  - **Ids are unique across `tools`**, and the message says what a duplicate costs rather
+    than that it is untidy: `runDoctor` iterates `tools` and probes each entry, so a repeated
+    id ran the same `check` twice and printed two rows for one tool. Reported at
+    `tools[i].id`, naming where the id was first declared. A non-string id gets its type
+    error and no uniqueness complaint on top of it.
+  - **At most 64 tools**, `MAX_ENV_TOOLS`, interpolated into the message rather than typed
+    into it (gh #38). Nothing bounded the file before; `env.yml` declares 7.
+  - **The metacharacter rule is DELETED from the spec, not implemented.** "`check` free of
+    `; && | > \`" was not a missing check but a disagreement about what `check` is:
+    `ToolChecker.check` runs `runtime.spawn("sh", ["-c", tool.check])`, so every `check` in
+    every manifest that ever shipped has been executed BY a shell, and §2.10's own
+    `[assumption]` depends on it — `check: "test -n \"$VAR\""` is nothing without a shell to
+    expand `$VAR`. Enforcing it would have been a behaviour change that broke the manifest's
+    idiom in order to defend an owner against a file they wrote, committed and reviewed like
+    code, running on their own machine as themselves. §2.10 now says what `check` is instead,
+    and `test/env-validation.test.ts` pins that a metacharacter-bearing `check` validates AND
+    that the runtime really shells out — measured through `ToolChecker`, not read off the
+    source. The `result:` / `checked_at` prose is untouched: still designed, still not built,
+    still says so.
+
+- **The status line's gate counter is `machine:N`, and counts every gate a machine closed
+  (#127).** `runSnapshot` computed it with `gate.by === "auto"` — the selector #124 had just
+  removed from `tldrx status` — so an agent-signed gate was invisible on the one line an
+  operator actually watches. Measured on the #122 fixture after `runNext` closed an `agent`
+  gate: `gate.by=alanmartinez executed_by={"type":"agent","id":"alanmartinez"}` and
+  `autoGates=0`. A run whose only closed gate was signed by an agent showed no segment at all.
+  - **The label moved with the selector.** Widening the count and keeping `auto:` would have
+    replaced one untrue number with an untrue name: `auto` is a specific actor in this system
+    (`AUTO_GATE_ACTOR`), not a synonym for "the machine", and reusing it for the superset is
+    the exact ambiguity that hid the agent case the first time. `machine` is the word
+    `tldrx status` already uses one screen away — "N gate(s) closed by a machine, not by a
+    person" — so the glance and the report are now in one vocabulary.
+  - **One selector, in one place.** `closedByMachine` moved out of `status/runItems.ts` into
+    `core/run/gateAuthority.ts`, beside `describeGateSignature`, and both surfaces read it.
+    The report and the line answer the same question about the same field, and had already
+    drifted once: #124 fixed one copy, and #127 was the other copy, still saying `auto`.
+  - **The tolerant reader still claims nothing it cannot see.** It does not parse gates, its
+    `0` means "cannot see", and it renders as no segment — never as "no machine signed
+    anything". Pinned.
+  - Three rendered assertions changed, each because the rendering did:
+    `test/attended.test.ts` (`0/2 att auto:2 stale:1` → `machine:2`) and two in
+    `test/revoke.test.ts`. `test/statusline.test.ts` never asserted the segment.
+
 - **`docs/spec.md` §2.10 documented an `env.yml` field that does not exist, and two values
   that were stale (#125).** The example carried `version_re: "([0-9]+\\.[0-9]+\\.[0-9]+)"` on
   both of its tools. There is no such field: `src/core/schemas/env.ts` requires
@@ -491,8 +538,9 @@ same amount after it; what changed is that the page now says how big the bound i
   - **The executor's kind, never the policy.** A person approving an `agent`-gated stage with
     no flag is a human acting directly and is still not reported. Pinned, with the legacy
     fallback and the negative cases, in `test/machine-signed-gates.test.ts`.
-  - The statusline's `auto:N` counter is unchanged and still counts facilitator signatures
-    only — it is labelled `auto` and says what it counts. Filed separately.
+  - The statusline's counter was the same selector on a second surface, and was left alone
+    here because it is a different label. Filed as #127, and fixed below: it is `machine:N`
+    now, off this same `closedByMachine`.
 
 - **The merge-wave suite no longer plants its #95 fixture at a machine-global path (#113).**
   `b8d1fcb` gave each invocation a private `$TMPDIR`, so a run's own log root stopped being

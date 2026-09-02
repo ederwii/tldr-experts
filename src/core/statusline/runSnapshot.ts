@@ -12,6 +12,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { RunStore } from "../run/RunStore.ts";
 import { isAttendedByHost, isTerminal } from "../run/RunFile.ts";
+import { closedByMachine } from "../run/gateAuthority.ts";
 import { openRunViews, cursorStage, isAttendedByHostView } from "../../hooks/lib/runFile.ts";
 import { openQuestionIds, phaseDirs } from "../facilitator/skipIf.ts";
 
@@ -35,29 +36,37 @@ export interface RunSnapshot {
   /** How many runs are open right now, this one included. Never 0. */
   readonly openCount: number;
   /**
-   * Gates in this run signed by the facilitator rather than a person.
+   * Gates in this run a MACHINE closed — the facilitator's and an agent's alike.
    *
    * On the line because the audit measured `by: auto` reaching `run.yml`, the
-   * event log and `run status` — and nothing the operator glances at. A stage the
-   * machine approved is exactly the one worth a second look, and
+   * event log and `run status` — and nothing the operator glances at. A stage no
+   * person evaluated is exactly the one worth a second look, and
    * `tldrx reject --stage <phase>/<stage>` takes it back.
+   *
+   * It was `autoGates`, counted with `by === "auto"`, and it rendered as `auto:N`
+   * (#127). That selector sees the facilitator and never an agent — an `agent`
+   * gate records the operator account the agent ran as, which is a person's name
+   * — so a run whose only closed gate was signed by an agent showed no marker at
+   * all. Widening the count under the old name would have moved the lie rather
+   * than removed it: `auto` is a reserved actor literal here, and a segment
+   * labelled `auto:` that counted agents is the same mistake pointing the other
+   * way. The name, the label and the selector moved together, onto
+   * `closedByMachine` — the one `tldrx status` uses, so the glance and the report
+   * cannot disagree about the same run.
    */
-  readonly autoGates: number;
+  readonly machineGates: number;
   /** Stages marked `stale` by a revoked approval — their files are behind. */
   readonly staleStages: number;
   /**
    * `attended_by: host` — a host session is driving this run and the framework
    * does not spawn on it.
    *
-   * On the line for the same reason `auto:N` is: the operator who most needs to
+   * On the line for the same reason `machine:N` is: the operator who most needs to
    * know is the one about to type `tldrx next` and wonder why nothing happened.
    */
   readonly attendedByHost: boolean;
   readonly source: SnapshotSource;
 }
-
-/** The actor an auto-signed gate records, mirrored from `run/autoGate.ts`. */
-const AUTO = "auto";
 
 /** The newest OPEN run under `root`, or null when there is none. */
 export function runSnapshot(root: string): RunSnapshot | null {
@@ -102,7 +111,7 @@ function fromStore(root: string): RunSnapshot | null {
     ceilingUsd: run.budget.ceiling_usd,
     spentUsd: run.budget.spent_usd,
     openCount: open.length,
-    autoGates: stages.filter((s) => s.gate.status === "approved" && s.gate.by === AUTO).length,
+    machineGates: stages.filter((s) => s.gate.status === "approved" && closedByMachine(s.gate)).length,
     staleStages: stages.filter((s) => s.stale === true).length,
     attendedByHost: isAttendedByHost(run),
     source: "run-store",
@@ -133,8 +142,8 @@ function fromTolerantRead(root: string): RunSnapshot | null {
     openCount: open.length,
     // The tolerant reader does not parse gates. 0 here means "cannot see", and
     // showing nothing is the honest rendering of that — never a claim that no
-    // gate was auto-signed.
-    autoGates: 0,
+    // gate was machine-signed.
+    machineGates: 0,
     staleStages: 0,
     // Read for real since issue #22. It used to be hard-coded `false` with a
     // comment saying so — but a run.yml that fails §2.2 validation is exactly
