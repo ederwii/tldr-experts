@@ -2,6 +2,7 @@ export { buildModel, toRunModel, DASHBOARD_MODEL_VERSION } from "./model.ts";
 export type {
   DashboardModel, RunModel, PhaseModel, StageRowModel, QuestionModel, QuestionOptionModel,
   PlanModel, StoryModel, EpicModel, WaveModel, ExpertModel, AreaModel, FaqEntryModel, ModelOptions,
+  SpendModel, NextActionModel,
 } from "./model.ts";
 export {
   renderDashboard, clientRenderer, dashModelJson, dashMain, dashEscape, dashText, dashTitle,

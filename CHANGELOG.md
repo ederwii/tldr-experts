@@ -39,6 +39,65 @@
     is an undeclared network fetch. Measured 2026-09-02: `import "yaml"` from `src/` fails
     outright once the root `node_modules` is gone.
 
+- **The run headline shows BOTH economies, or says why it cannot (#103).** A cold
+  adversarial audit of a real host-attended run (`260830-ordering-inventory`,
+  aparece-v2, 2026-09-02) found every ledger surface reconciling to a perfect 0.00 delta
+  at **$14.60** — `run.yml` `spent_usd`, the `events.jsonl` sum, the stage sums, the task
+  sums and the `budget.yml` phase sums — over 34 turns of which **4** carried money. The
+  run's own watch gate note puts the real figure at "about 81 dollars". The framework was
+  not mis-metering; the front page was lying by omission, and the auditor's verdict line
+  was "they should re-derive the cost". This is that re-derivation, as a REPORTING change
+  and not a metering one.
+  - `Run.spend` carries the metered dollars, the turns the meter could not see, and what
+    was declared about them. **Both spellings of "this turn cost nothing" are counted**:
+    the `cost_usd: null` + `metered: false` one the model already knew (14 of that run's
+    turns), and the flat `cost_usd: 0.00` written by an executor turn a host session drove
+    (16 more), which reads as a measurement of zero and is not one. `unmeteredTasks` keeps
+    its exact old meaning and `zeroCostTasks` is a second count beside it — a file that
+    says `0.00` is not re-labelled, it is counted.
+  - **What is not in the files is named `absent`, never guessed.** `spend.basis` is one of
+    `measured` / `declared` / `partial` / `absent`, and `spend.reason` says which in a
+    sentence carrying the CLI's own words ("the metered total is a LOWER BOUND, not a
+    total"), so the page and `tldrx budget show` cannot word the same fact two ways. No
+    price table is consulted, no token is converted to a dollar, and no estimate is
+    synthesised from stage prices or turn counts. The audited run is the `absent` case:
+    all 920,641 of its declared tokens sit on turns that ALSO carried dollars, so they
+    describe none of the 30 turns that carried none.
+  - The run detail's `spent` row now names the whole gap. It used to read "+ 14 unmetered
+    turns (in-session)" beside $14.60 — 14 of the 30 turns that put nothing in the meter.
+- **A run says when it last moved (`lastEventAt`, `lastEventFrom`, `ageSeconds`).** The
+  `ts` of the last line of `events.jsonl`, falling back to the file's mtime when nothing
+  in it parses — and `lastEventFrom` NAMES which of the two, because an mtime is the
+  weaker fact: the file was touched, which is not the same as the run moving. `ageSeconds`
+  is a measurement with no threshold in it; nothing in the model decides what "stale"
+  means. It is not clamped either, so a ledger written after `now` reports a negative age
+  rather than a comfortable zero. The mtime is carried on `LoadedRun` by the reader that
+  already opens the path, so the ledger is still read exactly once per run.
+- **`Run.nextAction` — who is waited on right now, where, and what closes it.** `waiting`
+  answers that as prose, and a card that wanted the command in a button had to regex the
+  sentence. This is the same answer pre-split, and **nothing in it is a second
+  derivation**: `kind` and `message` are `waiting`'s verbatim, `command` and
+  `alternatives` are the backticked spans read OUT OF that message, and `waitingOn`
+  applies `isMovable` — the framework's own definition of "a human could move it right
+  now" — in the same precedence `dashPending` already uses. `unknown` is the honest fifth
+  value: a `blocked` run with no sibling named has a `run.yml` recording no cursor, and
+  the model will not guess who fixes that.
+
+`DASHBOARD_MODEL_VERSION` stays at **3**. Five additions, nothing removed, and no existing
+field reads differently: `spentUsd` is still the same `run.yml` key holding the same
+number, and has meant "METERED dollars, a lower bound when `unmeteredTasks > 0`" since v3.
+A consumer that read it as a total was wrong before this wave and is wrong by exactly the
+same amount after it; what changed is that the page now says how big the bound is.
+
+### Changed
+
+- The staleness field is spelled `lastEventFrom`, not `lastEventSource`. The model is
+  embedded in the static page verbatim, and one of this repo's oldest guards is that the
+  exported page contains no `EventSource` — a static export must make no network call. A
+  field named `lastEventSource` puts that substring in every page and makes a JSON key
+  indistinguishable from the live-reload script the guard exists to catch. The guard is
+  right; the name was wrong.
+
 ### Fixed
 
 - **A closed run no longer sets up the operator's next `git pull` to be refused (#102).**

@@ -786,23 +786,41 @@ export function dashKv(key: string, value: string): string {
  * against that ceiling as the PRIMARY meter, so repeating them here left the
  * card reading "184000 host tokens of 200000 allowed" twice in four lines. There
  * this reports only the turns nobody costed — the half the meter does not carry.
+ *
+ * **#103 widened what "the turns nobody costed" means, and moved the sentence
+ * into the model.** The row used to count `unmeteredTasks` alone, and on the
+ * audited host-attended run that was 14 of the 30 turns that put nothing in the
+ * meter — the other 16 wrote a flat `cost_usd: 0.00`, which reads as a
+ * measurement and is not one. So `spend.zeroCostTasks` is counted beside them
+ * and `spend.reason` supplies the prose: one wording, in `model.ts`, which is
+ * also where the four `basis` cases are decided. Nothing here re-decides them.
  */
 export function dashEconomies(run: RunModel): string {
-  if (run.unmeteredTasks === 0 && run.hostTokens === 0) return "";
+  const spend = run.spend;
+  if (spend.costlessTasks === 0 && run.hostTokens === 0) return "";
   const priced = run.budget !== null && run.budget.economy === "host-tokens";
   const allowance = run.budget === null || run.budget.ceilingHostTokens === null
     ? ""
     : ` of ${String(run.budget.ceilingHostTokens)} allowed`;
   const parts: string[] = [];
   if (run.hostTokens > 0 && !priced) parts.push(`${String(run.hostTokens)} host tokens${allowance}`);
-  if (parts.length === 0 && run.unmeteredTasks === 0) return "";
   if (run.unmeteredTasks > 0) {
     parts.push(`${String(run.unmeteredTasks)} unmetered `
       + `${run.unmeteredTasks === 1 ? "turn" : "turns"} (in-session)`);
   }
-  const bound = run.unmeteredTasks === 0
-    ? ""
-    : " Their cost was never declared, so spent is a LOWER BOUND, not a total.";
+  // The count #103 is about, and the one this row could not make before: turns
+  // recorded as METERED at a flat $0.00. On the audited run there were 16 of
+  // them beside the 14 unmetered ones, and the page named only the 14.
+  if (spend.zeroCostTasks > 0) {
+    parts.push(`${String(spend.zeroCostTasks)} `
+      + `${spend.zeroCostTasks === 1 ? "turn" : "turns"} at $0.00`);
+  }
+  if (parts.length === 0) return "";
+  // The sentence comes from the MODEL, not from here: `spend.reason` is worded
+  // once, carries the CLI's own "LOWER BOUND, not a total", and says which of
+  // the four bases this run is on — including `absent`, where the host-side
+  // figure is simply not in the files and no number pretends otherwise.
+  const bound = spend.costlessTasks === 0 ? "" : ` ${spend.reason}.`;
   return `<div class="econ"><strong>+ ${dashText(parts.join(" + "))}</strong>`
     + `<span class="faint">${dashText(bound)} Host tokens are a different currency `
     + "and are never converted to dollars.</span></div>";

@@ -43,6 +43,19 @@ export interface LoadedRun {
   readonly eventsError: string | null;
   /** Non-empty lines of `events.jsonl` that did not parse (a torn write). */
   readonly eventsSkipped: number;
+  /**
+   * When `events.jsonl` was last written, ISO-8601 to the second — null when
+   * there is no file, and null when the stat itself failed.
+   *
+   * Carried HERE rather than stat-ed by a caller, because this module is the one
+   * that owns the path. A viewer that wants to say how long a run has been
+   * untouched needs a fallback for a ledger whose lines it could not parse, and
+   * the alternative was every such viewer re-deriving `<dir>/events.jsonl` for
+   * itself. It is a WEAKER fact than the last event's own `ts` — the file was
+   * touched, which is not the same as the run moving — so a caller that uses it
+   * is expected to say which of the two it is showing.
+   */
+  readonly eventsMtime: string | null;
 }
 
 export function workDir(root: string): string {
@@ -108,10 +121,13 @@ export function loadRunResult(root: string, id: string): RunLoad {
     }
   }
 
-  const { events, error, skipped } = readEvents(dir);
+  const { events, error, skipped, mtime } = readEvents(dir);
   return {
     kind: "ok",
-    run: { root, dir, id, run, budget, events, eventsError: error, eventsSkipped: skipped },
+    run: {
+      root, dir, id, run, budget, events,
+      eventsError: error, eventsSkipped: skipped, eventsMtime: mtime,
+    },
   };
 }
 
@@ -130,18 +146,32 @@ export function loadRun(root: string, id: string): LoadedRun | null {
  * torn line no longer shifts every number after it — and the ones it had to skip
  * are counted rather than thrown, which is what `renderReplay` prints.
  */
-function readEvents(dir: string): { events: readonly NumberedEvent[]; error: string | null; skipped: number } {
+function readEvents(dir: string): {
+  events: readonly NumberedEvent[];
+  error: string | null;
+  skipped: number;
+  mtime: string | null;
+} {
   const path = join(dir, EVENTS_FILE);
-  if (!existsSync(path)) return { events: [], error: null, skipped: 0 };
+  if (!existsSync(path)) return { events: [], error: null, skipped: 0, mtime: null };
+  // One stat, on the file this function is already opening. To the second, like
+  // every other timestamp a viewer prints.
+  let mtime: string | null = null;
+  try {
+    mtime = `${new Date(statSync(path).mtimeMs).toISOString().slice(0, 19)}Z`;
+  } catch {
+    mtime = null;
+  }
   try {
     const parsed = new EventLog(path).readAll();
     return {
       events: parsed.events.map((event, index) => ({ line: parsed.lines[index] ?? index + 1, event })),
       error: null,
       skipped: parsed.skipped,
+      mtime,
     };
   } catch (error) {
-    return { events: [], error: error instanceof Error ? error.message : String(error), skipped: 0 };
+    return { events: [], error: error instanceof Error ? error.message : String(error), skipped: 0, mtime };
   }
 }
 

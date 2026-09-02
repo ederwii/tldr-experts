@@ -43,11 +43,14 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { MAX_LEVEL, loadExperts, driftWarnings, evidenceWarnings, type ExpertRecord } from "../experts/index.ts";
-import { listRuns, loadPhaseArtefacts, loadRunResult, type LoadedRun } from "../replay/index.ts";
+import {
+  listRuns, loadPhaseArtefacts, loadRunResult,
+  type LoadedRun, type RunDocument, type RunTask,
+} from "../replay/index.ts";
 import { DEFAULT_ECONOMY, DEFAULT_ON_HOST_TOKENS_EXCEED } from "../budget/RunBudget.ts";
 import { MAX_ATTEMPTS } from "../budget/remainingWork.ts";
 import { hasStarted, resolveDependencies, type DependencyInput, type ResolvedRun } from "../run/dependencies.ts";
-import { isMovable, waitingFor, type Waiting } from "../run/waiting.ts";
+import { isMovable, waitingFor, type Waiting, type WaitingKind } from "../run/waiting.ts";
 import { openBlocks, parseHandoff, parseQuestions } from "../text/index.ts";
 import { renderMarkdown } from "../markdown/index.ts";
 import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
@@ -471,6 +474,159 @@ export interface PlanModel {
   readonly unreadable: readonly string[];
 }
 
+/**
+ * BOTH economies of one run, and an explicit account of the half nobody metered
+ * (#103).
+ *
+ * `spentUsd` is a sum of dollars this process watched. On a host-attended run
+ * that number reconciles perfectly against every other ledger surface and is
+ * still nowhere near what the run cost, because the turns a host session paid
+ * for contribute nothing to it. Measured on `260830-ordering-inventory`
+ * (aparece-v2, audited 2026-09-02): `spent_usd`, the `events.jsonl` sum, the
+ * stage sums, the task sums and the `budget.yml` phase sums all agree at
+ * **$14.60** — over 34 turns of which **4** carried money. The run's own watch
+ * gate note puts the real figure at "about 81 dollars". The framework was not
+ * mis-metering; the FRONT PAGE was lying by omission.
+ *
+ * So this carries the metered figure, the turns it could not see, and what — if
+ * anything — was declared about them. Three rules hold it honest:
+ *
+ *  - **Nothing is converted.** A host token and a metered dollar have no
+ *    exchange rate, and inventing one would be a guess about a price. The two
+ *    currencies sit side by side and are never added.
+ *  - **A turn that produced no dollars is COUNTED, in both spellings.** The
+ *    model already knew `cost_usd: null` + `metered: false`
+ *    (`runNext.commitStage`). It did not know the other one: a flat
+ *    `cost_usd: 0.00` written by an executor turn a host session drove, which
+ *    is what 16 of that run's 34 turns wear and which reads as a MEASUREMENT of
+ *    zero. Both are counted here, separately, and `unmeteredTasks` keeps its
+ *    exact old meaning so nothing reading it has to change.
+ *  - **What is not in the files is named ABSENT, never guessed.** No estimate is
+ *    synthesised from stage prices, model rates or turn counts. `basis` says how
+ *    much of the host side is actually derivable and `reason` says it in words.
+ */
+export interface SpendModel {
+  /**
+   * The metered dollars — the same number as `RunModel.spentUsd`, restated so a
+   * consumer can read this record alone without being wrong.
+   */
+  readonly meteredUsd: number | null;
+  /** Every task on the run, across every stage. */
+  readonly totalTasks: number;
+  /**
+   * Turns whose cost nobody declared: `metered: false`, or a null `cost_usd`.
+   * Byte-for-byte the rule `RunModel.unmeteredTasks` has always used.
+   */
+  readonly unmeteredTasks: number;
+  /**
+   * Turns recorded as METERED at exactly `$0.00`.
+   *
+   * Not reclassified as unmetered — the file says a number was measured and this
+   * model does not overrule a file. But it is a fact worth counting: a spawned
+   * turn that really cost nothing is rare, and 16 of them in a row on a
+   * host-attended run is the shape of #103.
+   */
+  readonly zeroCostTasks: number;
+  /**
+   * `unmeteredTasks + zeroCostTasks` — every turn that put nothing in the meter.
+   *
+   * Carried rather than left as a sum because it is the number a headline
+   * prints, and the renderer runs closure-free in the browser: a figure it has
+   * to re-derive is a figure it can get wrong differently from this file.
+   */
+  readonly costlessTasks: number;
+  /**
+   * Host-session tokens declared with `--tokens` across ALL turns — the same
+   * number as `RunModel.hostTokens`, restated.
+   *
+   * Read it with `costlessTokens`, never instead of it. On the audited run all
+   * 920,641 declared tokens sit on turns that ALSO carried dollars, so this
+   * number says nothing whatever about the 30 turns that carried none.
+   */
+  readonly hostTokens: number;
+  /**
+   * The subset of `hostTokens` declared BY a costless turn — the only host-side
+   * figure the dollars do not already cover.
+   */
+  readonly costlessTokens: number;
+  /** Costless turns that declared nothing at all: no dollars, no tokens. */
+  readonly silentTasks: number;
+  /**
+   * How much of the host side the files actually carry:
+   *
+   *  - `measured` — no turn was costless, so the metered figure is the whole of it.
+   *  - `declared` — every costless turn declared its tokens: complete, in the
+   *    other currency.
+   *  - `partial` — some declared, some did not. A lower bound in both currencies.
+   *  - `absent` — costless turns exist and not one of them declared anything.
+   *    The host-side figure is NOT in the files, and no number here pretends it is.
+   */
+  readonly basis: string;
+  /**
+   * `basis` as a whole sentence, already worded for a reader — the same kind of
+   * field as `waiting.message`, and it carries the framework's own phrase
+   * (`budgetView.ts`: "`spent` is a LOWER BOUND, not a total") so the page and
+   * the CLI cannot word the same fact two ways.
+   *
+   * Counts only. No currency formatting: the model does not format money.
+   */
+  readonly reason: string;
+}
+
+/**
+ * Who is waited on RIGHT NOW, where, and what closes it — one record a hero card
+ * can render on its own.
+ *
+ * **Not a second derivation.** `waitingFor` (`src/core/run/waiting.ts`) is the
+ * single answer both this page and `tldrx run status` read, and every field here
+ * is a projection of it: `kind` and `message` are verbatim, `command` and
+ * `alternatives` are the backticked spans OF that message in order, and
+ * `waitingOn` applies `isMovable` — the framework's own definition of "a human
+ * could move it right now" — rather than a second opinion about it. Nothing here
+ * can disagree with `waiting`, because nothing here decides anything twice.
+ *
+ * It exists because `waiting` answers the question as prose. A card that wants
+ * the command in a button, the stage in a subtitle and the actor in a chip had
+ * to regex the sentence to get them, and a renderer that parses a sentence is a
+ * renderer that will one day parse it wrong.
+ */
+export interface NextActionModel {
+  /** `waiting.kind`, verbatim. One of `WAITING_KINDS`. */
+  readonly kind: string;
+  /**
+   * Who has to move: `person` | `process` | `run` | `nobody` | `unknown`.
+   *
+   * `run` comes first and wins, exactly as it does in `dashPending`: a run that
+   * has not STARTED and was proposed to follow an unfinished sibling is waiting
+   * on that sibling, whatever its own stage says, and an alert nobody can act on
+   * is the noise that makes the others ignorable. Then `isMovable` decides
+   * `person`. `running` is a live process holding the lock. `done` and
+   * `cancelled` wait on nobody.
+   *
+   * `unknown` is the honest fifth: a `blocked` run with no sibling named is one
+   * whose `run.yml` records no cursor, or a cursor that resolves to nothing.
+   * Somebody has to fix that file and this model will not guess who.
+   */
+  readonly waitingOn: string;
+  /**
+   * Where the waiting is, from `run.yml`'s cursor — null on the kinds that do
+   * not point at a stage (`done`, `cancelled`, and a `blocked` whose cursor is
+   * the thing that is broken).
+   */
+  readonly phase: string | null;
+  readonly stage: string | null;
+  /**
+   * The command that closes it: the FIRST backticked span of `message`, verbatim
+   * and unparsed. Null when the sentence offers none, which is every `done`,
+   * every `cancelled` run, and a `blocked` one with nothing to type.
+   */
+  readonly command: string | null;
+  /** The remaining backticked spans, in order — `tldrx reject`, and its kind. */
+  readonly alternatives: readonly string[];
+  /** `waiting.message`, verbatim. The whole sentence, worded once, in `waiting.ts`. */
+  readonly message: string;
+}
+
 export interface RunModel {
   readonly id: string;
   readonly title: string;
@@ -500,12 +656,62 @@ export interface RunModel {
   readonly unmeteredTasks: number;
   /** Host-session tokens declared with `--tokens`. A DIFFERENT currency: never added to dollars. */
   readonly hostTokens: number;
+  /**
+   * Both economies in one record, with the half nobody metered named rather than
+   * implied (#103).
+   *
+   * `spentUsd`, `unmeteredTasks` and `hostTokens` above are unchanged and mean
+   * exactly what they always did. This is the field that says how much of the
+   * run those three can actually see — and, on a host-attended run, how little.
+   */
+  readonly spend: SpendModel;
+  /**
+   * When anything last happened on this run: the `ts` of the LAST line of
+   * `events.jsonl`, or the file's mtime when nothing in it parses.
+   *
+   * The ledger is append-only, so the last LINE is the last thing written —
+   * which is what a `tail` shows and what a human means by "when did this move".
+   * Null on a run with no `events.jsonl` at all; `updatedAt` is `run.yml`'s own
+   * claim and remains the other clock, deliberately not merged into this one.
+   */
+  readonly lastEventAt: string | null;
+  /**
+   * Which of the two `lastEventAt` came from: `event` | `mtime` | `none`.
+   *
+   * Named rather than inferred, because the fallback is a WEAKER fact: an mtime
+   * is when the file was touched, not when the run moved, and a reader deciding
+   * whether a run is abandoned should know which of the two it is looking at.
+   *
+   * Spelled `From` and not `Source` for a mechanical reason worth writing down:
+   * the model is embedded in the static page verbatim, and one of this repo's
+   * oldest guards is that the exported page contains no `EventSource` — the
+   * static export must make no network call. A field called `lastEventSource`
+   * puts that exact substring in every page, and a JSON key would then be
+   * indistinguishable from the live-reload script the guard exists to catch. The
+   * guard is right; the name was wrong.
+   */
+  readonly lastEventFrom: string;
+  /**
+   * Seconds between `lastEventAt` and the model's `now`. Null when there is no
+   * timestamp to measure from.
+   *
+   * A MEASUREMENT, with no threshold in it: nothing here decides what "stale"
+   * means, and the renderer is free to. It is not clamped either — a ledger
+   * written after `now` (a clock skew, a fixture) reports a NEGATIVE age rather
+   * than a comfortable zero.
+   */
+  readonly ageSeconds: number | null;
   readonly stagesTotal: number;
   readonly stagesDone: number;
   /** 0–100, rounded. */
   readonly percent: number;
   /** What this run is waiting on. The one field to read; the two below alias it. */
   readonly waiting: WaitingModel;
+  /**
+   * `waiting`, taken apart into the pieces a card renders: who, where, and the
+   * command. A PROJECTION of `waiting` and never a second derivation of it.
+   */
+  readonly nextAction: NextActionModel;
   /**
    * The stage held at a gate, or null. DERIVED from `waiting`: non-null only
    * when `waiting.kind === "gate"`. Kept for one release for templates that
@@ -726,7 +932,7 @@ export function buildModel(root: string, generatedAt: string, options: ModelOpti
     live: options.live === true,
     maxLevel: MAX_LEVEL,
     maxAttempts: MAX_ATTEMPTS,
-    runs: loaded.map((run) => toRunModel(run, waiting.get(run.id), resolved.get(run.id))),
+    runs: loaded.map((run) => toRunModel(run, waiting.get(run.id), resolved.get(run.id), now)),
     unreadable,
     order: graph.order,
     chains: graph.chains,
@@ -747,8 +953,10 @@ export function toRunModel(
   loaded: LoadedRun,
   waiting?: Waiting,
   resolution?: ResolvedRun,
+  now?: Date,
 ): RunModel {
   const doc = loaded.run;
+  const at = now ?? new Date();
   const waits = waiting ?? waitingFor(doc, loaded.dir);
   const depends: ResolvedRun = resolution ?? {
     id: loaded.id,
@@ -810,6 +1018,7 @@ export function toRunModel(
   const tasks = doc.phases.flatMap((phase) => phase.stages).flatMap((stage) => stage.tasks);
   const unmeteredTasks = tasks.filter((task) => !task.metered).length;
   const hostTokens = tasks.reduce((sum, task) => sum + (task.tokens ?? 0), 0);
+  const spend = toSpendModel(doc, tasks, unmeteredTasks, hostTokens);
 
   const ledger = readLedger(loaded);
   const stages = doc.phases.flatMap((phase) => phase.stages);
@@ -824,6 +1033,7 @@ export function toRunModel(
     : open.find((item) => item.id === waits.questions[0]) ?? open[0];
   const stagesTotal = stages.length;
   const stagesDone = stages.filter((stage) => TERMINAL.has(stage.status)).length;
+  const stale = toStaleness(loaded, at);
 
   return {
     id: loaded.id,
@@ -839,10 +1049,15 @@ export function toRunModel(
     attendedBy: doc.attended_by,
     unmeteredTasks,
     hostTokens,
+    spend,
+    lastEventAt: stale.at,
+    lastEventFrom: stale.from,
+    ageSeconds: stale.ageSeconds,
     stagesTotal,
     stagesDone,
     percent: stagesTotal === 0 ? 0 : Math.round((stagesDone / stagesTotal) * 100),
     waiting: { kind: waits.kind, message: waits.message, questions: waits.questions },
+    nextAction: toNextAction(waits, doc, depends),
     pendingGate: held,
     pendingQuestion: asked === undefined ? null : `${asked.id} · ${asked.title}`,
     dependsOn: depends.dependsOn,
@@ -865,6 +1080,182 @@ export function toRunModel(
     eventsSkipped: loaded.eventsSkipped,
     filter: [doc.run, doc.title, doc.scope, doc.status].join(" ").toLowerCase(),
   };
+}
+
+/**
+ * Both economies of one run, counted once (#103).
+ *
+ * Reads `tasks` — the array `toRunModel` already flattened — and nothing else.
+ * No file is opened, no price is looked up, and no dollar figure is synthesised
+ * for a turn that declared none: the whole point of the issue is that the number
+ * a decision-maker reads must not be one this process invented.
+ *
+ * The one judgement call is what counts as a turn that "produced no dollars",
+ * and it is deliberately the WIDER reading: `metered: false` OR a metered
+ * `cost_usd` of exactly `0`. The narrow one — `metered` alone — is what the
+ * model had, and on the audited run it saw 14 of the 30 turns that put nothing
+ * in the meter. It does not RECLASSIFY the other 16: `unmeteredTasks` still
+ * means what it always meant, `zeroCostTasks` is a second count beside it, and a
+ * reader can see both numbers and decide. A file that says `0.00` is not
+ * overruled here; it is counted.
+ */
+function toSpendModel(
+  doc: RunDocument,
+  tasks: readonly RunTask[],
+  unmeteredTasks: number,
+  hostTokens: number,
+): SpendModel {
+  const costless = tasks.filter((task) => !task.metered || task.cost_usd === 0);
+  const costlessTokens = costless.reduce((sum, task) => sum + (task.tokens ?? 0), 0);
+  const silentTasks = costless.filter((task) => task.tokens === null).length;
+  const total = tasks.length;
+  const count = costless.length;
+  const basis = count === 0
+    ? "measured"
+    : silentTasks === 0
+      ? "declared"
+      : costlessTokens > 0 ? "partial" : "absent";
+  return {
+    meteredUsd: doc.spent_usd,
+    totalTasks: total,
+    unmeteredTasks,
+    zeroCostTasks: count - unmeteredTasks,
+    costlessTasks: count,
+    hostTokens,
+    costlessTokens,
+    silentTasks,
+    basis,
+    reason: spendReason(basis, total, count, silentTasks, hostTokens),
+  };
+}
+
+/**
+ * `basis` as the sentence a person reads, in TURN COUNTS only.
+ *
+ * No dollars and no token totals in here, for two reasons. The model does not
+ * format money — that rule is older than this field — and the page prints the
+ * token figure right beside this sentence, so repeating it would say the same
+ * number twice in one row. The phrase "LOWER BOUND, not a total" is lifted
+ * verbatim from `budgetView.ts`, which is what `tldrx budget show` prints for
+ * the identical fact: two screens, one wording.
+ */
+function spendReason(
+  basis: string,
+  total: number,
+  costless: number,
+  silent: number,
+  hostTokens: number,
+): string {
+  const of = `${String(costless)} of ${String(total)} turns produced no dollars`;
+  const metered = total - costless;
+  if (basis === "measured") {
+    return total === 0
+      ? "no turn has run yet, so nothing is missing from the metered total"
+      : `all ${String(total)} turns recorded a cost, so the metered total is a measurement `
+        + "rather than a lower bound";
+  }
+  if (basis === "declared") {
+    return `${of} and every one of them declared its host tokens instead, so the metered total `
+      + "is a LOWER BOUND on the dollars";
+  }
+  if (basis === "partial") {
+    return `${of}: ${String(costless - silent)} declared host tokens and ${String(silent)} declared `
+      + "nothing at all, so the metered total is a LOWER BOUND, not a total";
+  }
+  // `absent`. The clause about where the tokens DID land is the audited run's
+  // exact trap: 920,641 of them, every one on a turn that also carried dollars,
+  // so the token figure on the page describes none of the turns this sentence is
+  // about.
+  return `${of} and none of them declared host tokens`
+    + (hostTokens > 0 ? " — every token this run declared sits on a turn that also carried dollars" : "")
+    + ", so the metered total is a LOWER BOUND, not a total"
+    + (metered > 0 ? `: it is what the other ${String(metered)} turns cost, not what the run cost` : "");
+}
+
+/** When the run last moved, and how long ago — with the source of the answer named. */
+interface Staleness {
+  readonly at: string | null;
+  readonly from: string;
+  readonly ageSeconds: number | null;
+}
+
+/**
+ * The last thing that happened on this run.
+ *
+ * The ledger is append-only, so the answer is the LAST LINE of `events.jsonl` —
+ * not the newest `ts`, which would be a second opinion about the order a file
+ * already records, and which a clock skew could make disagree with a `tail`.
+ * `loadRunResult` has already parsed the file, so this opens nothing on the
+ * ordinary path.
+ *
+ * The fallback is the file's MTIME and it is NAMED rather than blended in
+ * (`lastEventSource`), because it is a weaker fact: it says when the file was
+ * touched, not when the run moved. `run.yml`'s `updated_at` is deliberately not
+ * a third source — it is the run's own claim about itself, it is already on the
+ * model as `updatedAt`, and quietly substituting it here would make one field
+ * mean two different things on two different runs.
+ */
+function toStaleness(loaded: LoadedRun, now: Date): Staleness {
+  const age = (at: string | null, from: string): Staleness => {
+    const stamp = at === null ? Number.NaN : Date.parse(at);
+    return {
+      at,
+      from,
+      ageSeconds: Number.isFinite(stamp) ? Math.round((now.getTime() - stamp) / 1000) : null,
+    };
+  };
+  for (let index = loaded.events.length - 1; index >= 0; index--) {
+    const ts = loaded.events[index]?.event.ts;
+    if (typeof ts === "string" && ts.trim() !== "") return age(ts, "event");
+  }
+  return loaded.eventsMtime === null ? age(null, "none") : age(loaded.eventsMtime, "mtime");
+}
+
+/**
+ * The waiting kinds that point AT the cursor stage.
+ *
+ * `done` and `cancelled` are not on the list even though the cursor still names
+ * a stage on both: nothing is waiting there, and a card that printed the last
+ * stage a finished run touched would be answering a question nobody asked. A
+ * `blocked` run is off it for the opposite reason — the cursor is usually the
+ * thing that is broken.
+ */
+const CURSOR_KINDS: readonly string[] = ["gate", "answer", "ready", "failed", "running", "prepared"];
+
+/** `waiting`, taken apart into the pieces a card renders. Never a second derivation. */
+function toNextAction(waits: Waiting, doc: RunDocument, depends: ResolvedRun): NextActionModel {
+  // The commands are read OUT OF the sentence rather than rebuilt beside it: one
+  // wording, in `waiting.ts`, and a card that shows a different command from the
+  // one the page prints is the exact failure `waitingFor` was extracted to stop.
+  const commands = [...waits.message.matchAll(/`([^`]+)`/g)].map((match) => match[1] ?? "");
+  const cursor = CURSOR_KINDS.includes(waits.kind) ? doc.cursor : null;
+  return {
+    kind: waits.kind,
+    waitingOn: waitingOn(waits.kind, depends),
+    phase: cursor === null ? null : cursor.phase,
+    stage: cursor === null ? null : cursor.stage,
+    command: commands[0] ?? null,
+    alternatives: commands.slice(1),
+    message: waits.message,
+  };
+}
+
+/**
+ * Who has to move, in the same precedence `dashPending` already applies.
+ *
+ * The proposal comes FIRST and the framework's own `isMovable` decides the rest,
+ * so this cannot disagree with the alert rule the page has today: a run that has
+ * not started and is queued behind a sibling is waiting on that sibling, not on
+ * a person, whatever its own stage says.
+ */
+function waitingOn(kind: WaitingKind, depends: ResolvedRun): string {
+  if (!depends.started && depends.blockedBy.length > 0) return "run";
+  if (isMovable(kind)) return "person";
+  if (kind === "running") return "process";
+  if (kind === "done" || kind === "cancelled") return "nobody";
+  // `blocked` with no sibling named: run.yml records no cursor, or one that
+  // resolves to nothing. Somebody has to fix that file and this will not guess who.
+  return "unknown";
 }
 
 /**
