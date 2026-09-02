@@ -4,9 +4,9 @@
   "type": "module",
   "description": "The public documentation site for tldr-experts. Not published to npm; not part of the tldr-experts package.",
   "scripts": {
-    "gen": "bun scripts/gen-changelog.ts",
-    "build": "bun scripts/gen-changelog.ts && vitepress build .",
-    "dev": "bun scripts/gen-changelog.ts && vitepress dev .",
+    "gen": "bun scripts/gen-changelog.ts && bun scripts/gen-demo.ts",
+    "build": "bun scripts/gen-changelog.ts && bun scripts/gen-demo.ts && vitepress build .",
+    "dev": "bun scripts/gen-changelog.ts && bun scripts/gen-demo.ts && vitepress dev .",
     "preview": "vitepress preview ."
   },
   "devDependencies": {

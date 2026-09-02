@@ -10,6 +10,7 @@ const sidebarEn = [
     items: [
       { text: "What tldrx is", link: "/" },
       { text: "Quickstart", link: "/quickstart" },
+      { text: "Live demo", link: "/demo" },
     ],
   },
   {
@@ -50,6 +51,7 @@ const sidebarEs = [
     items: [
       { text: "Qué es tldrx", link: "/es/" },
       { text: "Guía rápida", link: "/es/quickstart" },
+      { text: "Demo en vivo", link: "/es/demo" },
     ],
   },
   {
@@ -99,6 +101,7 @@ export default defineConfig({
       themeConfig: {
         nav: [
           { text: "Quickstart", link: "/quickstart" },
+          { text: "Demo", link: "/demo" },
           { text: "Concepts", link: "/concepts/stages" },
           { text: "Guides", link: "/guides/driving" },
           { text: "Reference", link: "/reference/cli" },
@@ -120,6 +123,7 @@ export default defineConfig({
       themeConfig: {
         nav: [
           { text: "Guía rápida", link: "/es/quickstart" },
+          { text: "Demo", link: "/es/demo" },
           { text: "Conceptos", link: "/es/concepts/stages" },
           { text: "Guías", link: "/es/guides/driving" },
           { text: "Referencia", link: "/es/reference/cli" },

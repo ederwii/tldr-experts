@@ -2,6 +2,43 @@
 
 ## 0.5.1 — unreleased
 
+### Added
+
+- **The docs site now SHOWS the dashboard instead of describing it (#106).** A new
+  [Live demo](https://ederwii.github.io/tldr-experts/demo) page in both languages frames a
+  real `tldrx dashboard --static` export — eight runs, two experts, gates, questions,
+  dollars — rendered at build time by `docs-site/scripts/gen-demo.ts` and served from
+  `/dashboard-demo/index.html`. It is the shipped `buildModel` and the shipped
+  `renderDashboard`, not a screenshot: change the renderer and the page on the website
+  changes on the next deploy, which the workflow's `paths` filter now guarantees by
+  redeploying on any change under `src/core/dashboard/` or the two fixtures behind it.
+  - **The data is synthetic, and that is enforced rather than promised.** The generator
+    composes its workspace from `test/fixtures/views/` (one detailed run — handoff, open
+    questions, budget ledger, events, two trained experts) and `test/fixtures/chain/` (seven
+    more, carrying every status a reader should learn to recognise and the dependency edges
+    between them). `assertSynthetic()` resolves every source path and refuses anything
+    outside `test/fixtures/` — including the framework's own checkout, which IS a tldrx
+    workspace and is where a careless default would land. The page is public and permanent;
+    a real run read here would publish a client's domain, and it would look like it worked.
+  - **Two things the first build got wrong, both caught by the tests that were written
+    first.** `model.root` is DRAWN on the page, so the export carried the build machine's
+    temp directory (`/var/folders/…/tldrx-demo-AUfHya/`) into a public document and changed
+    on every build; the demo now renders with the root it is about, and a test asserts no
+    path from the building machine appears anywhere on the page. And `public/demo/` collided
+    with `docs-site/demo.md` — `cleanUrls` builds that as `demo.html`, so a site holding both
+    asks GitHub Pages to guess what `/demo` means. The export moved to `/dashboard-demo/`.
+  - **One banner, and it is additive by construction.** A reader arriving from a search
+    result has none of the page's framing, so the export carries one line saying the numbers
+    are invented. Strip it and the bytes are identical to what the CLI writes — asserted, so
+    the demo cannot drift into being a mock-up of the command instead of a run of it. It
+    links nowhere: the export fetches nothing, and that is the property that lets it sit on a
+    static site at all.
+  - The docs workflow now installs the ROOT dependencies too. Module resolution for the
+    dashboard's `yaml` import walks up from `src/`, where `docs-site/node_modules` is not on
+    the path — without that step bun quietly auto-installs the package at build time, which
+    is an undeclared network fetch. Measured 2026-09-02: `import "yaml"` from `src/` fails
+    outright once the root `node_modules` is gone.
+
 ### Fixed
 
 - **A closed run no longer sets up the operator's next `git pull` to be refused (#102).**

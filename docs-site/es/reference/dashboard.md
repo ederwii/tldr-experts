@@ -4,6 +4,9 @@ title: Dashboard
 
 # Dashboard
 
+Hay una [demo en vivo de esta página](/es/demo) en este sitio, generada con datos
+sintéticos en cada despliegue.
+
 `tldrx dashboard` dibuja el workspace como una sola página web. Es de **solo lectura**: no
 hay un botón ahí que cambie un archivo, porque un dashboard que puede lanzar trabajo es una
 segunda fuente de verdad compitiendo con los archivos.

@@ -262,7 +262,10 @@ epic that carries any (#102).
 
 **[The documentation site](https://ederwii.github.io/tldr-experts/)** is the place to start if you have
 never used this: a landing page, a Quickstart and one short page per concept, written for a reader
-rather than for an agent. Source in [`docs-site/`](docs-site/).
+rather than for an agent. Source in [`docs-site/`](docs-site/). It carries a
+**[live demo of `tldrx dashboard`](https://ederwii.github.io/tldr-experts/demo)** — a real export,
+rendered from the test suite's synthetic fixtures on every deploy, so you can see what the tool
+draws before installing anything.
 
 The reference guide, in `docs/guide/`: [1 Quick start](docs/guide/01-quick-start.md) ·
 [2 The loop](docs/guide/02-the-loop.md) (the four steps, what a stage file controls, the two execution modes) ·

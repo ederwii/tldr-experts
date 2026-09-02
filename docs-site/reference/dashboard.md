@@ -4,6 +4,9 @@ title: Dashboard
 
 # Dashboard
 
+There is a [live demo of this page](/demo) on this site, rendered from synthetic fixture
+data on every deploy.
+
 `tldrx dashboard` draws the workspace as one web page. It is **read-only**: there is no
 button on it that changes a file, because a dashboard that can launch work is a second
 source of truth competing with the files.
