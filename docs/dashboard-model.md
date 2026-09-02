@@ -252,9 +252,35 @@ phase and reach the model as `run.budget`), `gate` (string \| null, e.g.
 `gateBy` (string \| null — `auto` when the facilitator closed it, the operator's
 name when a person did, null while it is open), `gatePolicy` (`"human"` |
 `"auto"` | `"agent"` — who is MEANT to sign it, spec §2.2 `gates_policy`;
-absence reads as `human`), `gateEvidence` (below), and `stale` (boolean — true
+absence reads as `human`), `gateEvidence` (below), `stale` (boolean — true
 when an EARLIER stage's gate was revoked after this one ran; its outputs are
-still on disk and still look current).
+still on disk and still look current), `startedAt` / `endedAt` (string \| null)
+and `gateNote` (string \| null).
+
+The last three are #118's additions, and each carries a rule.
+
+`startedAt` and `endedAt` are `run.yml`'s own `started_at` / `ended_at`,
+unconverted. **There is no `durationSeconds` beside them, on purpose.** A
+duration is a subtraction; it exists only when both ends do, and a model field
+would have to pick some number for the case where one end is missing. Every
+number this layer could pick is wrong: `0` is a measurement of zero, `null` is
+what the two timestamps already say, and anything else is invented. So the
+subtraction happens where it is drawn — `dashDuration` in `render.ts` — and a
+stage that recorded neither end gets a sentence naming which end is missing
+rather than a blank cell that reads as "it took no time".
+
+`gateNote` is `run.yml` `stage.gate.note`, or null. Null covers **all three**
+absences without distinguishing them, because a reader treats them the same: the
+stage has no gate at all, the gate is still open, or the note is the empty string
+`run new` writes and `tldrx approve` never replaced. `""` is not a signature and
+does not reach a reader as one.
+
+`modelVersion` stays at **3** for the fourth time, by the same rule as #85, #93
+and #103: these are three additions, and no field that already existed reads
+differently than it did at v3. The one with a case to answer is the render-side
+promise the page used to make — the phase timeline carried a paragraph saying
+these three facts were *not on the model* — and that paragraph is now gone,
+because it is no longer true. A documented absence is not a field.
 
 ### `GateEvidence`
 

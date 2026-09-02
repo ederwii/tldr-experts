@@ -209,6 +209,50 @@ export function dashAgo(iso: string | null, nowMs: number): string {
 }
 
 /**
+ * `"2h 38m"` from a stage's two timestamps — or `""` when they do not yield one.
+ *
+ * DERIVED HERE, and deliberately not stored on the model (#118). A duration is a
+ * subtraction, it exists only when both ends do, and a model field would have to
+ * pick a number for the case where one end is missing. `""` is that case, and
+ * `dashDurationAbsence` says which end it was; the caller never prints a `0`
+ * standing in for "nobody wrote it down".
+ *
+ * Pure, like `dashAgo` and for the same reason: the same model renders the same
+ * page. Neither `Date.now()` nor a timezone enters into it — this is the gap
+ * between two instants, and a gap has no locale.
+ */
+export function dashDuration(startedAt: string | null, endedAt: string | null): string {
+  if (startedAt === null || startedAt === "" || endedAt === null || endedAt === "") return "";
+  const from = new Date(startedAt).getTime();
+  const to = new Date(endedAt).getTime();
+  if (isNaN(from) || isNaN(to) || to < from) return "";
+  const total = Math.round((to - from) / 1000);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (hours > 0) return `${String(hours)}h ${String(minutes)}m`;
+  if (minutes > 0) return `${String(minutes)}m`;
+  return `${String(total)}s`;
+}
+
+/**
+ * Why there is no duration — named, never left blank.
+ *
+ * "The stage has not ended yet" and "nobody recorded either end" are different
+ * facts about a run, and a reader deciding whether a stage is stuck needs to
+ * know which one they are looking at. An empty cell tells them neither and reads
+ * as "it took no time".
+ */
+export function dashDurationAbsence(startedAt: string | null, endedAt: string | null): string {
+  const noStart = startedAt === null || startedAt === "";
+  const noEnd = endedAt === null || endedAt === "";
+  if (noStart && noEnd) return "not recorded — run.yml carries neither started_at nor ended_at";
+  if (noStart) return "not recorded — run.yml carries no started_at for this stage";
+  if (noEnd) return "not recorded — this stage has a started_at and no ended_at yet";
+  return "not recorded — run.yml's two timestamps do not yield one "
+    + "(unparseable, or ended_at before started_at)";
+}
+
+/**
  * One status vocabulary for the whole page.
  *
  * `run.yml`, stages, stories, epics and experts each spell status their own way.
@@ -1699,7 +1743,8 @@ export function dashFaqView(model: DashboardModel): string {
  * reader's page.
  */
 const TEMPLATE_FUNCTIONS = [
-  dashText, dashEscape, dashUsd, dashPlural, dashWords, dashDateTime, dashAgo, dashTone,
+  dashText, dashEscape, dashUsd, dashPlural, dashWords, dashDateTime, dashAgo,
+  dashDuration, dashDurationAbsence, dashTone,
   dashChip, dashCmd, dashPending, dashSlug, dashWaitingCell, dashNextRun, dashAttention, dashChains,
   dashRoute, dashWaiting, dashTitle, dashTopMeta, dashNav,
   dashMain, dashNoWorkspace,
@@ -2006,15 +2051,22 @@ export function dashKeyHelp(): string {
  * `agent` signature was given over (`dashGateEvidence`).
  */
 export function dashTimelineStage(run: RunModel, stage: StageRowModel): string {
+  const duration = dashDuration(stage.startedAt, stage.endedAt);
   return '<details class="panel lane__stage"'
     + (run.pendingGate === stage.id ? ' data-wait="1"' : "")
     + ` id="${dashEscape(`tl-${run.id}-${stage.phase}-${stage.id}`)}">`
     + '<summary><span class="caret">&#9656;</span>'
     + `<h3>${dashText(stage.id)}</h3>${dashChip(stage.status, null, false)}`
     + `<span class="tag">${dashText(stage.model === null ? "no model" : stage.model)}</span>`
+    + (duration === "" ? "" : `<span class="tag lane__dur">${dashText(duration)}</span>`)
     + `<span class="now__usd lane__cost">${dashText(dashUsd(stage.costUsd))}</span></summary>`
     + '<div class="panel__body"><div class="kv">'
     + dashKv("expert", dashText(stage.expert === null ? "—" : stage.expert))
+    + dashKv("duration", duration === ""
+      ? `<span class="faint">${dashText(dashDurationAbsence(stage.startedAt, stage.endedAt))}</span>`
+      : `${dashText(duration)} <span class="faint">`
+        + `${dashText(dashDateTime(stage.startedAt))} &rarr; `
+        + `${dashText(dashDateTime(stage.endedAt))}</span>`)
     + dashKv("cost", `<span class="now__usd">${dashText(dashUsd(stage.costUsd))}</span>`
       + (stage.budgetUsd === null
         ? ""
@@ -2023,6 +2075,9 @@ export function dashTimelineStage(run: RunModel, stage: StageRowModel): string {
       ? '<span class="faint">none</span>'
       : dashChip(stage.gate, stage.gate, false))
     + dashKv("signed by", dashGateSigner(stage))
+    + (stage.gateNote === null
+      ? ""
+      : dashKv("note", `<span class="gatenote">${dashText(stage.gateNote)}</span>`))
     + (stage.stale
       ? dashKv("stale", "an earlier gate was revoked after this stage ran — its outputs are "
         + "still on disk and still read as current")
@@ -2039,12 +2094,14 @@ export function dashTimelineStage(run: RunModel, stage: StageRowModel): string {
  * money went to, which stage is holding a gate, and a place to open one stage
  * without reading a row of eight columns.
  *
- * **What is missing is named.** `run.yml` records `started_at`, `ended_at` and the
- * gate's free-text `note`; `StageRowModel` carries none of the three, so this
- * section reports no duration and quotes no signature. A blank duration column
- * would read as "it took no time", which is the class of confident-wrong figure
- * this redesign exists to stop. Measured 2026-09-02: `tldrx run status` does not
- * print them either, so the honest pointer is the file.
+ * **What is missing is still named — per stage, not per page (#118).** `run.yml`'s
+ * `started_at`, `ended_at` and `gate.note` are on the model now, so a stage that
+ * recorded them shows its duration beside its cost and quotes its signature
+ * inside the drawer. A stage that recorded NEITHER end does not get a blank cell
+ * — a blank reads as "it took no time", which is the class of confident-wrong
+ * figure this redesign exists to stop. It gets `dashDurationAbsence`'s sentence,
+ * which says which end is missing. The duration itself is subtracted here rather
+ * than stored: it exists only when both ends do.
  */
 export function dashPhaseTimeline(run: RunModel): string {
   const lanes = run.phases.map((phase) => {
@@ -2063,11 +2120,6 @@ export function dashPhaseTimeline(run: RunModel): string {
   return '<div class="section"><div class="section__title"><h2>Phase timeline</h2>'
     + '<span class="eyebrow">run.yml order</span></div>'
     + `<div class="stack stack--sm">${lanes}</div>`
-    + '<p class="muted" style="margin-top:var(--space-sm);font-size:var(--text-xs)">'
-    + "A stage&#39;s <code>started_at</code>, its <code>ended_at</code> and the gate&#39;s "
-    + "free-text <code>note</code> are in <code>run.yml</code> and are <strong>not on the "
-    + "model</strong> this page reads, so nothing here reports a duration or quotes a "
-    + `signature. They are in <code>tldrx-work/${dashText(run.id)}/run.yml</code>.</p>`
     + '<details class="panel" style="margin-top:var(--space-md)">'
     + '<summary><span class="caret">&#9656;</span><h3>the same path, as a table</h3></summary>'
     + `<div class="panel__body">${dashPathSection(run)}</div></details></div>`;

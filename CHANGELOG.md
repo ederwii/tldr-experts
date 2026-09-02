@@ -4,6 +4,26 @@
 
 ### Added
 
+- **A stage now carries when it started, when it ended and what its gate said (#118).**
+  `run.yml` has recorded `started_at`, `ended_at` and `gate.note` on every stage since
+  `run new` wrote the first one, and `StageRowModel` carried none of the three — so the
+  phase timeline (#107) printed neither a duration nor a signature and had to carry a
+  paragraph explaining why. Three additive fields, read off the same `run.yml` object the
+  row was already built from. `DASHBOARD_MODEL_VERSION` stays at **3**: additions never
+  bump it, and no existing field reads differently than it did at v3.
+  - **No duration is stored.** A duration is a subtraction, it exists only when both ends
+    do, and a model field would have to pick a number for the case where one end is
+    missing — `0` is a measurement of zero, and inventing one is exactly the class of
+    confident-wrong figure this redesign exists to stop. `dashDuration` does the
+    subtraction where it is drawn, and a stage that recorded neither end gets a sentence
+    naming *which* end is missing rather than a blank cell reading as "it took no time".
+  - **An empty note is an absent one.** `note: ""` is what `run new` writes on a gate
+    nobody has signed. It reaches the model as `null` and is not quoted at a reader as if
+    it were a signature.
+  - The timeline draws the duration beside the cost on each stage's summary row and quotes
+    the gate's own words inside its drawer — the two of #107's four asks that could not be
+    met before.
+
 - **An answer that overtakes an earlier phase's document now says so on that document
   (#104).** A phase document is a point-in-time snapshot, and an owner answer recorded
   three phases later can flip a design it still asserts. Measured twice on

@@ -564,6 +564,15 @@ details.lane__stage > summary:hover{background:transparent;color:var(--text-disp
 details.lane__stage > summary h3{flex:none;font-family:var(--font-mono);font-size:var(--text-xs)}
 details.lane__stage[data-wait="1"] > summary{background:var(--st-wait-bg)}
 details.lane__stage > .panel__body{padding:var(--space-sm) 0 var(--space-md);border-top:0}
+/* a stage's duration, beside its cost — the pair #107 asked for and #118 supplied.
+   Pushed to the right edge WITH the cost so the two read as one column down the
+   lane; a stage that recorded no times simply has no chip here, and the drawer
+   says which end was missing rather than the summary printing a zero. */
+.lane__dur{margin-left:auto;color:var(--text-display)}
+.lane__dur + .lane__cost{margin-left:var(--space-sm)}
+/* the gate's own words. A quote, so it does not read as one more derived field. */
+.gatenote{display:inline-block;padding:2px var(--space-xs);border-left:2px solid var(--line-strong);
+  background:var(--surface-sunken);font-style:italic;line-height:var(--leading-normal)}
 
 /* the story grid: forty stories as forty cells is the one shape that answers
    "how much of this is done" without scrolling */

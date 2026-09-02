@@ -315,17 +315,42 @@ describe("5. the phase timeline: cost and model per stage, gate detail expandabl
     expect(timeline).toContain("<th>signed by</th>");
   });
 
-  test("a stage's duration and a gate's note are NOT on the model, and it says so", () => {
+  /**
+   * #118 closed the hole #107 named. The two facts a reader most wants beside a
+   * cost — how long the stage took, and what the person who signed it said — are
+   * on the model now, so the timeline prints them instead of a paragraph
+   * explaining why it cannot.
+   *
+   * The views fixture is the one with real values: `what` ran 09:02 → 11:40 and
+   * alan signed its gate "good now".
+   */
+  test("a stage with both timestamps reports its duration, and a signed gate quotes its note", () => {
+    const views = buildModel(
+      join(FRAMEWORK_ROOT, "test", "fixtures", "views", "workspace"), READ_AT, { now: NOW },
+    ).runs[0]!;
+    const timeline = dashPhaseTimeline(views);
+    const words = text(timeline);
+    // 09:02 -> 11:40 is 2h 38m. Derived where it is drawn, never stored.
+    expect(words).toContain("2h 38m");
+    expect(words).toContain("good now");
+    // And the paragraph that stood in for both is gone.
+    expect(words).not.toContain("not on the model");
+  });
+
+  /**
+   * The other half, and the one that must never regress: a stage that recorded
+   * neither timestamp gets NO duration. A blank cell reads as "it took no time"
+   * and `0m` is a measurement — of the two, the honest output is the sentence.
+   */
+  test("a stage that recorded no times reports no duration and says why, and quotes no signature", () => {
     const { root } = workspaceWith("260903-hero", AT_A_GATE);
-    const words = text(dashPhaseTimeline(onlyRun(root)));
-    // run.yml carries `started_at`, `ended_at` and `gate.note`; StageRowModel
-    // carries none of the three. A blank cell would read as "it took no time".
-    expect(words).toContain("not on the model");
-    expect(words).toContain("started_at");
-    expect(words).toContain("ended_at");
-    // And it points at the file, not at a command: `tldrx run status` does not
-    // print a duration or a gate note either — measured against runStatus.ts.
-    expect(words).toContain("run.yml");
+    const timeline = dashPhaseTimeline(onlyRun(root));
+    const words = text(timeline);
+    expect(words).toContain("not recorded");
+    // Never a synthesised zero, in any spelling.
+    expect(timeline).not.toMatch(/kv__v">\s*0[hms]/);
+    // `note: ""` on an unsigned gate is not a signature. Nothing is quoted.
+    expect(timeline).not.toContain('class="gatenote"');
   });
 });
 
@@ -521,6 +546,9 @@ describe("9. craft: keyboard reach, tabular money, still one file", () => {
     for (const name of [
       "dashNowStrip", "dashPhaseDots", "dashHeroSpend", "dashHeroAge",
       "dashPhaseTimeline", "dashStoryGrid", "dashEventStream", "dashWavesView", "dashKeyHelp",
+      // #118: the timeline calls both, and a helper that does not reach the
+      // browser is a blank panel on the live page rather than a build error.
+      "dashDuration", "dashDurationAbsence",
     ]) {
       expect(source).toContain(`function ${name}(`);
     }
