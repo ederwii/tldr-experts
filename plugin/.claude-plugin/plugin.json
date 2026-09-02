@@ -2,7 +2,7 @@
   "$doc": "Shape verified from https://code.claude.com/docs/en/plugins.md (Quickstart > Create the plugin manifest). Fields used here: name, description, version, author.name. Only plugin.json goes inside .claude-plugin/; skills/, agents/ and hooks/ live at the plugin root.",
   "name": "tldrx",
   "description": "tldr-experts: an evidence-first, file-based AI development framework. Five stages, a gate on every one, every claim cited or refused. Beta.",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "author": {
     "name": "Alan Martinez"
   }

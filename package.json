@@ -1,6 +1,6 @@
 {
   "name": "tldr-experts",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "tldr-experts: an evidence-first, file-based AI development framework - five stages, a gate on every one, and every claim cited or refused. Installs the `tldrx` (and `tldr-experts`) command. Beta.",
   "license": "MIT",
   "author": "Alan Martinez",
