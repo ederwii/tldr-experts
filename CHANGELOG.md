@@ -367,6 +367,38 @@ same amount after it; what changed is that the page now says how big the bound i
 
 ### Fixed
 
+- **`docs/spec.md` §2.10 documented an `env.yml` field that does not exist, and two values
+  that were stale (#125).** The example carried `version_re: "([0-9]+\\.[0-9]+\\.[0-9]+)"` on
+  both of its tools. There is no such field: `src/core/schemas/env.ts` requires
+  `["id", "required", "check", "install"]` and knows `min_version`, and extraction is
+  `extractVersion` in `src/core/doctor/version.ts` — "the first dotted numeric run in
+  stdout+stderr", one extractor for every tool, exactly as `env.yml`'s own header comment
+  has always said. It was designed and then dropped, and the spec kept teaching it. Nothing
+  reads `docs/spec.md` at runtime, so the cost was paid by a contributor who copied the
+  example; the two stale values were `min_version: "1.1.0"` for Bun (the manifest has said
+  `1.3.0` since native `Bun.YAML`) and `required: true` for Bun, which `ab90a71` (#121) had
+  just disproved — the published package runs on Node alone.
+  - Two more defects the sweep turned up in the same twenty lines, both measured: the
+    example's top-level `checked_at:` and its per-tool `result: {found, version, ok, checked_at}`
+    are written by nothing. `runDoctor` builds a `DoctorReport` and returns it, and
+    `ENV_MANIFEST_PATH` has exactly two readers and no writer. That design is kept and now
+    says so in prose ("designed, not built") instead of being shown as a file `doctor`
+    produces. `Required in v0: git, bun, claude` became the measured set — `node`, `git`,
+    `claude` required; `bun`, `python3`, `graphify`, `gh` optional.
+  - **The example is now asserted rather than proofread**, which is the part that stops it
+    happening a fourth time on the same line. Three assertions in
+    `test/public-surface-consistency.test.ts` (#121's drift guard, extended): it must satisfy
+    the same `validateEnv` `loadEnvManifest` runs on the real file; it may use no key the real
+    `env.yml` does not use; and it must carry the real manifest's own `required`, `check` and
+    `min_version` for every tool it names. `purpose` is deliberately not compared — an
+    illustration is allowed to abbreviate it, and to be an excerpt of two tools out of seven.
+    RED first, against the unedited spec: the field rule named all five invented keys and the
+    value rule named both stale values.
+  - The §2.10 Validation paragraph claimed four rules `validateEnv` does not implement. Three
+    are now marked as designed and not yet enforced rather than stated as fact; the fourth
+    (`check` free of shell metacharacters) is filed separately, because `ToolChecker` runs
+    `sh -c <check>` and honouring the rule would be a change of behaviour, not a check to add.
+
 - **The merge-wave suite no longer plants its #95 fixture at a machine-global path (#113).**
   `b8d1fcb` gave each invocation a private `$TMPDIR`, so a run's own log root stopped being
   a shared namespace — and the fixture that plants a *foreign* wave's kept log kept writing

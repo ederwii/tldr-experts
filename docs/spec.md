@@ -1081,34 +1081,40 @@ validates; a reader that refused a bad line would be the same outage in a differ
 
 ### 2.10 `.tldrx/env.yml`
 
-Tool manifest for `tldrx doctor`. The framework never installs anything: `doctor` probes, prints the exact install
-command, and records the result here.
+Tool manifest for `tldrx doctor`. The framework never installs anything: `doctor` probes, prints what it found and the
+exact install command, and exits 1 iff a REQUIRED tool is missing or below its `min_version`. It does not write back.
+A `result:` block recorded per tool is designed, not built — nothing under `src/core/doctor/` opens this file for
+writing — so the example below shows the file a human maintains, not a file `doctor` produces.
+
+The example is an EXCERPT of the framework's own `env.yml`, and is asserted against it:
+`test/public-surface-consistency.test.ts` refuses a field the real manifest does not use, and a value the real manifest
+does not carry. Every previous version of this block was restated by hand, and it drifted (#125).
 
 ```yaml
 version: 1
-checked_at: 2026-08-28T08:12:00Z
 tools:
-  - {id: bun, required: true, check: "bun --version", version_re: "([0-9]+\\.[0-9]+\\.[0-9]+)", min_version: "1.1.0",
+  - {id: bun, required: false, min_version: "1.3.0", check: "bun --version",
+     purpose: "Builds the published bundle and runs the test suite. NOT needed to run an installed tldrx.",
      install: {macos: "curl -fsSL https://bun.sh/install | bash", linux: "curl -fsSL https://bun.sh/install | bash",
-               windows: "npm install -g bun"},
-     result: {found: true, version: "1.2.4", ok: true, checked_at: 2026-08-28T08:12:00Z}}
-  - {id: graphify, required: false, check: "graphify --version", version_re: "([0-9]+\\.[0-9]+\\.[0-9]+)",
-     min_version: "0.8.0", install: {macos: "pip install graphify", linux: "pip install graphify",
-                                     windows: "pip install graphify"},
-     result: {found: false, version: null, ok: false, checked_at: 2026-08-28T08:12:00Z}}
+               windows: "powershell -c \"irm bun.sh/install.ps1 | iex\""}}
+  - {id: graphify, required: false, min_version: "0.8.0", check: "graphify --version",
+     purpose: "Deterministic tree-sitter code map. Absent, `tldrx map` cannot run; nothing else is affected.",
+     install: {all: "pip install graphify   (requires python3 >= 3.10)"}}
 ```
 
 | Field | Type | Req | Meaning |
 |---|---|---|---|
 | `tools[].id` / `.required` | slug / bool | y | Unique tool key; `false` ⇒ degrade gracefully, `doctor` warns only |
-| `check` | str | y | Probe command; single argv, no shell metacharacters |
-| `version_re` / `min_version` | regex / semver\|null | y | Exactly one capture group; compared segment by segment, numerically |
-| `install.{macos,linux,windows}` | str | y | Printed, never executed |
-| `result` | {found, version, ok, checked_at} | n | Written by `doctor`; absent before first run |
+| `check` | str | y | Probe command; must exit 0 and print something version-shaped |
+| `min_version` | semver\|null | n | Compared segment by segment, numerically, against the FIRST dotted numeric run in the check's `stdout`+`stderr`. One extractor serves every tool (`extractVersion`, `src/core/doctor/version.ts`); there is no per-tool regex |
+| `purpose` | str | n | One line naming what breaks without it; printed by `doctor` |
+| `install.{macos,linux,windows,all}` | str | y | Printed, never executed; `all` is the fallback when this OS has no key |
 
-**Validation.** Ids unique; `check` free of `; && | > \``; `version_re` compiles with one group; ≤64 tools. Required in
-v0: `git`, `bun`, `claude`; optional `graphify`, `gh`, and env vars `CONTEXT7_API_KEY` / `GEMINI_API_KEY` as tools with
-`check: "test -n \"$VAR\""` `[assumption]`.
+**Validation.** `validateEnv` (`src/core/schemas/env.ts`) requires `version`, `tools`, and per tool `id`, `required`,
+`check`, `install`. Required today: `node`, `git`, `claude`; optional `bun`, `python3`, `graphify`, `gh`. Designed and
+not yet enforced: ids unique, `check` free of `; && | > \``, ≤64 tools — and the metacharacter rule is a change of
+BEHAVIOUR, not just a check to add, because `ToolChecker` runs `sh -c <check>` today. Env vars `CONTEXT7_API_KEY` /
+`GEMINI_API_KEY` as tools with `check: "test -n \"$VAR\""` `[assumption]`.
 
 ### 2.11 `tldrx-work/<run>/budget.yml`
 
