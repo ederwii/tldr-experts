@@ -34,7 +34,7 @@ import { RunStore } from "../src/core/run/RunStore.ts";
 import { approve, revoke } from "../src/core/run/gates.ts";
 import { setGatePolicy } from "../src/core/run/setGatePolicy.ts";
 import { AUTO_GATE_ACTOR } from "../src/core/run/autoGate.ts";
-import { describeGateSignature } from "../src/core/run/gateAuthority.ts";
+import { attributeGate, describeGateSignature } from "../src/core/run/gateAuthority.ts";
 import { validateRunFile, type RunFile } from "../src/core/run/RunFile.ts";
 import { emitRunYaml } from "../src/core/run/emitRunYaml.ts";
 import { renderStatus, buildStatus } from "../src/core/run/runStatus.ts";
@@ -168,6 +168,20 @@ function statusLines(runDir: string): string {
 // ---------------------------------------------------------------------------
 
 describe("an agent signs under delegated authority (the 260902 record)", () => {
+  test("a provider session identity overrides the note's operator name for the executor only", () => {
+    expect(attributeGate({
+      actor: OWNER,
+      executorId: "01a06472-03bb-7ba3-abd2-820c96afe586",
+      policy: "agent",
+      signedWithEvidence: true,
+      stageId: "alpha",
+      events: [],
+    })).toEqual({
+      executed_by: { type: "agent", id: "01a06472-03bb-7ba3-abd2-820c96afe586" },
+      authority: { type: "delegated", policy: "agent", authorized_by: null, source: "unrecorded" },
+    });
+  });
+
   test("the record separates the entity that EVALUATED from the human who DELEGATED", async () => {
     const ws = workspace();
     writeNote(ws.runDir, "alpha", note());

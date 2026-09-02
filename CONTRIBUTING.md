@@ -163,38 +163,35 @@ behind an `if`, and a red build passed.
 
 ## Contributing a model-provider config
 
-**Status: [#27](https://github.com/ederwii/tldr-experts/issues/27) is closed as completed —
-its minimal slice, the `TLDRX_CLAUDE_BIN` seam, shipped; the full provider layer did not.** That
-layer waits for real demand for a second model provider — but the seam is described here precisely
-enough to build against, and a credible PR is the demand.
-Open an issue referencing #27 before you start, so scope is agreed once rather than in review.
+**Status: [#27](https://github.com/ederwii/tldr-experts/issues/27) established the executable
+seam. The automated runner now supports Claude Code and Codex through that same boundary.** Keep
+new provider work narrow: satisfy this contract at the spawn boundary instead of introducing a
+provider marketplace or moving Build orchestration into provider-specific code.
 
 ### What exists today
 
-One environment variable, shipped in `5e0f845`:
+Provider selection and executable overrides are late-bound on every call:
 
+- **`TLDRX_AGENT_PROVIDER`** selects `claude` (the default) or `codex`.
+- **`TLDRX_CODEX_BIN`** replaces the Codex executable name, with the same blank-is-unset
+  semantics as the Claude override.
 - **`TLDRX_CLAUDE_BIN`** replaces the executable **name** that a sub-agent spawn runs.
   Default `claude`, taken off `PATH`. Blank or whitespace counts as unset. Read on every call
   rather than captured at import, so a late `export` and a test that sets it are both obeyed
   — `claudeBin()`, `src/core/facilitator/spawnAgent.ts:37-56`.
-- Honoured everywhere the CLI is spawned: `spawnAgent` (`spawnAgent.ts:201`), the `--dry-run`
-  command line via `describeSpawn` (`spawnAgent.ts:173`), and `claude mcp list` in
-  `src/core/doctor/McpProbe.ts:52`.
-- **`tldrx doctor` is deliberately not covered.** It checks `claude --version` because
-  `env.yml` declares that string, and rewriting a manifest command is the provider layer's
-  job, not this variable's.
+- Honoured by the agent spawn and the `--dry-run` command line. `tldrx doctor` makes the
+  selected provider required and treats the other provider as optional.
 - Tests: `test/model-provider.test.ts`.
 
-**What it does not buy.** The argv is still Claude Code's argv, so whatever the variable
-points at has to speak it. It buys a pinned install, a wrapper that adds a proxy or
-credentials, and a stub in a sandbox. It buys nothing toward a stage targeting a genuinely
-different provider: no per-stage provider selection, no argv translation, no capability
-negotiation, no envelope adapter.
+Codex uses plain `codex exec` with JSONL and an output-schema file. Developer work runs in
+`workspace-write`; reviewer work runs in `read-only`. Codex reports token usage and a thread id,
+but no provider-metered USD amount or provider-side USD cap, so its turns are recorded with
+`metered: false` and budget ceilings are explicitly advisory.
 
-### The seam you would build against
+### The provider seam
 
-Everything a provider has to satisfy is in **two files**, and both were written from one real,
-measured `claude` call rather than from documentation:
+Everything a provider has to satisfy is in **two files**, and both adapters were written from
+real recorded calls rather than from documentation:
 
 **1. The spawn — `src/core/facilitator/spawnAgent.ts`.** `buildClaudeArgs()`
 (`spawnAgent.ts:142`) is the entire command surface. Today it emits, in this order:

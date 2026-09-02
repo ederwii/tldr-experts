@@ -47,6 +47,8 @@ export interface GateContext {
   readonly actor: string;
   readonly at: string;
   readonly note: string;
+  /** Measured provider identity for an automatically closed agent gate. */
+  readonly executorId?: string | null;
   /** Present only when an `agent` policy is closing this gate. */
   readonly evidence?: GateEvidenceInput;
 }
@@ -105,6 +107,7 @@ export async function approve(store: RunStore, ctx: GateContext): Promise<Approv
   // about itself.
   const attribution = attributeGate({
     actor: ctx.actor,
+    executorId: ctx.executorId,
     policy: gatePolicyFor(store.run.gates_policy, entry.stage.id),
     signedWithEvidence: evidence !== null,
     stageId: entry.stage.id,

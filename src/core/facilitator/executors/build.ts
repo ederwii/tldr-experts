@@ -1956,6 +1956,7 @@ class BuildSession {
       cwd: story.worktree,
       timeoutMs: this.ctx.spec.planned.timeout_s * 1000,
       lane: this.lane(story),
+      role: "developer",
     });
     if (agent.raw !== "") writeRaw(this.ctx.runDir, this.bundleKey(story.planned.story.id), agent.raw);
 
@@ -1966,6 +1967,7 @@ class BuildSession {
       sessionId: agent.sessionId,
       error: agent.error,
       outputs: agent.envelope?.outputs ?? [],
+      metered: agent.metered,
     });
     if (agent.ok) return { cost: round2(agent.costUsd), error: null };
 
@@ -2106,6 +2108,7 @@ class BuildSession {
         cwd: story.worktree,
         timeoutMs: this.ctx.spec.planned.timeout_s * 1000,
         lane: this.lane(story),
+        role: "reviewer",
       });
 
       // A reviewer that did not finish has not approved anything — and has not
@@ -2128,7 +2131,7 @@ class BuildSession {
       // (gh #78). Every other outcome — including the third refusal — falls
       // through to `recordReview` exactly as it always did.
       const again = this.formatRetry(story, review, {
-        costUsd: turn, sessionId: agent.sessionId, metered: true,
+        costUsd: turn, sessionId: agent.sessionId, metered: agent.metered,
       });
       if (again !== null) {
         refusal = again;
@@ -2140,7 +2143,7 @@ class BuildSession {
         costUsd: turn,
         sessionId: agent.sessionId,
         error: agent.error,
-        metered: true,
+        metered: agent.metered,
         source: "agent",
       });
       // The story's recorded cost is every turn this review took, not just the

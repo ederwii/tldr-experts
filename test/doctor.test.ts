@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { runDoctor } from "../src/core/doctor/runDoctor.ts";
+import { providerTools, runDoctor } from "../src/core/doctor/runDoctor.ts";
 import { doctorJson } from "../src/cli/commands/doctor.ts";
 import { DoctorReport } from "../src/core/doctor/DoctorReport.ts";
 import { loadEnvManifest } from "../src/core/doctor/loadEnvManifest.ts";
@@ -43,6 +43,16 @@ describe("env manifest", () => {
     expect(bun).toBeDefined();
     expect(bun!.required).toBe(false);
     expect(bun!.min_version).toBe("1.3.0");
+  });
+
+  test("doctor requires the selected runner and keeps the other one optional", async () => {
+    const manifest = await loadEnvManifest();
+    const claude = providerTools(manifest.tools, "claude");
+    const codex = providerTools(manifest.tools, "codex");
+    expect(claude.find((tool) => tool.id === "claude")?.required).toBe(true);
+    expect(claude.find((tool) => tool.id === "codex")?.required).toBe(false);
+    expect(codex.find((tool) => tool.id === "claude")?.required).toBe(false);
+    expect(codex.find((tool) => tool.id === "codex")?.required).toBe(true);
   });
 });
 

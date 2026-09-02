@@ -30,7 +30,8 @@ Un turno se puede pagar de dos maneras distintas, y tldrx se niega a fingir lo c
 
 | | quién corre el turno | quién paga | qué se registra |
 |---|---|---|---|
-| **metered** | el framework lanza `claude -p` | tu cuenta de API, por turno | la cifra exacta en dólares que reportó el CLI |
+| **metered** | el framework lanza Claude Code | tu cuenta de API, por turno | la cifra exacta en dólares que reportó el CLI |
+| **Codex** | el framework lanza `codex exec` | tu cuenta de Codex | tokens medidos; `cost_usd: null, metered: false` porque el CLI no reporta USD |
 | **host** | la sesión de Claude Code en la que ya estás, con sus propios subagentes | el plan de tu sesión | `cost_usd: null, metered: false` |
 
 Un turno host **no tiene medidor propio**. El framework no lo lanzó y nunca le dijeron

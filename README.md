@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/tldr-experts?label=npm%20tldr-experts)](https://www.npmjs.com/package/tldr-experts) [![ci](https://github.com/ederwii/tldr-experts/actions/workflows/ci.yml/badge.svg)](https://github.com/ederwii/tldr-experts/actions/workflows/ci.yml) ![status](https://img.shields.io/badge/status-beta-blue)
 
-**An evidence-first, file-based AI development framework: five stages, a gate on every one, and every claim cited or refused.** Open source. The workflow and the persisted state format are provider-independent; the automated runner currently supports Claude Code. **Beta:** every command is implemented and verified by running it, the `version: 1` file formats only grow from here, and `tldrx --help` is the authoritative command surface.
+**An evidence-first, file-based AI development framework: five stages, a gate on every one, and every claim cited or refused.** Open source. The workflow and the persisted state format are provider-independent; the automated runner currently supports Claude Code and Codex. **Beta:** every command is implemented and verified by running it, the `version: 1` file formats only grow from here, and `tldrx --help` is the authoritative command surface.
 
 One loop — *Investigate → Handoff → Interview → Gate* — five phases, **what · how · plan · build ·
 watch**, one stage per command, each stopping at a gate you own; the files ARE the state, the
@@ -59,7 +59,7 @@ and names the `--prepare` command instead.
 
 | | who executes each turn | what a turn costs | where it stops |
 |---|---|---|---|
-| `tldrx run auto` | the framework — `claude -p`, spawned stage after stage | metered per spawn, rolled up by `tldrx cost` | the first human gate or open question (`4`), stage failure (`5`), ceiling (`2`) |
+| `tldrx run auto` | the framework — Claude Code by default, or `codex exec` when selected | Claude reports metered USD; Codex reports tokens and is unmetered in dollars | the first human gate or open question (`4`), stage failure (`5`), ceiling (`2`) |
 | `tldrx run attend host`, driven from a session | your session's own sub-agents | host-billed; the framework records `cost_usd: null, metered: false` | every turn — `--prepare` writes the bundle, `--commit` settles it |
 | the same, under a **mandate** | your session's own sub-agents | host-billed | a new product decision, a ceiling raise, a boundary exit — nothing else |
 

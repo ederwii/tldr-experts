@@ -150,6 +150,7 @@ export async function watchExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
         yolo: ctx.yolo,
         cwd: ctx.root,
         timeoutMs: ctx.spec.planned.timeout_s * 1000,
+        role: "developer",
       });
       if (outcome.raw !== "") writeRaw(ctx.runDir, taskKey(ctx, feature), outcome.raw);
       tasks.push({
@@ -159,6 +160,7 @@ export async function watchExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
         sessionId: outcome.sessionId,
         error: outcome.error,
         outputs: outcome.envelope?.outputs ?? [],
+        metered: outcome.metered,
       });
       if (!outcome.ok) {
         return failed(ctx, `\`${feature.id}\`: ${outcome.error ?? "the sub-agent failed"}`, tasks);

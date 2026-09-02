@@ -61,6 +61,8 @@ export interface GateAttribution {
 export interface GateAttributionInput {
   /** The actor `approve` is signing with — the note's `by:` on an agent gate. */
   readonly actor: string;
+  /** Provider session/thread id when the framework measured one for this agent. */
+  readonly executorId?: string | null;
   /** The run's frozen `gates_policy` for this stage, resolved by `gatePolicyFor`. */
   readonly policy: GatePolicy;
   /** True when an evidence note is being recorded, which only an agent gate does. */
@@ -90,7 +92,7 @@ function executorOf(input: GateAttributionInput): RunGateExecutor {
   // literal the facilitator alone passes, and `by: auto` already carries it. An
   // `id` here would read as a name somebody could be looked up by.
   if (input.actor === AUTO_GATE_ACTOR) return { type: "auto" };
-  if (input.signedWithEvidence) return { type: "agent", id: input.actor };
+  if (input.signedWithEvidence) return { type: "agent", id: input.executorId ?? input.actor };
   return { type: "human", id: input.actor };
 }
 

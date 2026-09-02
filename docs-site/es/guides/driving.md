@@ -11,7 +11,7 @@ lanza al subagente?**
 
 | | quién corre cada turno | qué cuesta | dónde se detiene |
 |---|---|---|---|
-| `tldrx next` / `tldrx run auto` | el framework lanza `claude -p` | medido por turno | en la primera compuerta humana o pregunta abierta |
+| `tldrx next` / `tldrx run auto` | el framework lanza Claude Code, o Codex cuando se selecciona | Claude: USD medidos; Codex: tokens sin medición en USD | en la primera compuerta humana o pregunta abierta |
 | `tldrx run attend host`, manejado desde una sesión de Claude Code | los subagentes de esa sesión | se le cobra a tu sesión | en cada turno — tú lo manejas |
 | lo mismo, más el mandato de `tldrx drive` | los subagentes de esa sesión | se le cobra a tu sesión | solo ante una decisión de verdad |
 
@@ -19,7 +19,8 @@ lanza al subagente?**
 se combinan.
 
 - **`run auto` es un motor.** Llama a `next` una y otra vez, sin interfaz, lanzando un
-  subagente medido etapa tras etapa.
+  subagente etapa tras etapa. Claude reporta USD medidos; Codex reporta tokens y queda
+  explícitamente sin medición en dólares.
 - **`run attend host` es un candado.** Pone un campo, no gasta nada, no corre ninguna
   etapa. De ahí en adelante el framework nunca lanza nada en ese run: cada turno es un
   apretón de manos `tldrx next --prepare` / `tldrx next --commit` con una sesión que

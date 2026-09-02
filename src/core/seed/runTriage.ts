@@ -208,6 +208,7 @@ async function propose(
   let raw: unknown;
   let costUsd = 0;
   let sessionId: string | null = null;
+  let metered = true;
 
   if (mode === "commit") {
     try {
@@ -234,10 +235,12 @@ async function propose(
       cwd: options.root,
       timeoutMs: options.timeoutMs ?? TRIAGE_TIMEOUT_MS,
       schema: SPLIT_SCHEMA,
+      role: "developer",
     });
     if (outcome.raw !== "") writeRaw(outDir, PROPOSE_STAGE, outcome.raw);
     costUsd = round2(outcome.costUsd);
     sessionId = outcome.sessionId;
+    metered = outcome.metered;
     if (!outcome.ok) {
       return {
         code: EXIT_AGENT_FAILED,
@@ -246,7 +249,9 @@ async function propose(
         inventory,
         lines: [
           `the triage sub-agent failed — ${outcome.error ?? "no result"}`,
-          `  $${costUsd.toFixed(2)} of $${ceiling.toFixed(2)} spent; nothing was written to ${SPLIT_YML}`,
+          outcome.metered
+            ? `  $${costUsd.toFixed(2)} of $${ceiling.toFixed(2)} spent; nothing was written to ${SPLIT_YML}`
+            : `  the Codex turn was unmetered (USD unknown); nothing was written to ${SPLIT_YML}`,
         ],
       };
     }
@@ -286,7 +291,7 @@ async function propose(
   writeFileSync(join(outDir, SPLIT_YML), emitSplitYaml(file), "utf8");
   writeFileSync(join(outDir, SPLIT_MD), renderSplitMarkdown(file, where), "utf8");
 
-  const over = costUsd > ceiling + 1e-9;
+  const over = metered && costUsd > ceiling + 1e-9;
   return {
     code: EXIT_OK,
     costUsd,
@@ -294,7 +299,9 @@ async function propose(
     inventory,
     lines: [
       `proposed ${String(file.runs.length)} run(s) from ${inventory.source} — `
-        + `$${costUsd.toFixed(2)} of $${ceiling.toFixed(2)}`
+        + (metered
+          ? `$${costUsd.toFixed(2)} of $${ceiling.toFixed(2)}`
+          : "Codex tokens recorded; USD unmetered (the planning ceiling was not provider-enforced)")
         + (sessionId === null ? "" : ` · session ${sessionId}`),
       ...file.runs.map((run) =>
         `  ${run.slug} (${run.scope}, ${run.size}, $${run.budget_usd.toFixed(2)}, `

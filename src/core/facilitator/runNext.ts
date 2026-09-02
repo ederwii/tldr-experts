@@ -52,7 +52,7 @@ import {
   describeBundles, loadExpertBundles, untrainedNotes, type ExpertBundleSet,
 } from "../experts/expertBundle.ts";
 import { nearbyPathsFor } from "../experts/domainRank.ts";
-import { describeSpawn, spawnAgent } from "./spawnAgent.ts";
+import { agentProvider, describeSpawn, providerBudgetAdvisory, spawnAgent } from "./spawnAgent.ts";
 import { withAttendedGuard } from "./attended.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
 import { validateOutputs, describeProblems } from "./validateOutputs.ts";
@@ -454,7 +454,12 @@ async function runStage(
   if (ledger.overLimit) {
     return out(EXIT_REFUSED, [...notes, ...renderRefusal(ledger, stageId)]);
   }
-  const advisories = [...untrainedNotes(assembled.bundles), ...renderContextWarning(ledger)];
+  const providerAdvisory = providerBudgetAdvisory(agentProvider(), cap);
+  const advisories = [
+    ...untrainedNotes(assembled.bundles),
+    ...renderContextWarning(ledger),
+    ...(providerAdvisory === null ? [] : [providerAdvisory]),
+  ];
 
   // --- dry run (issue #17) -------------------------------------------------
   // The LAST thing that happens on a dry run, and it happens HERE: after the
@@ -570,7 +575,8 @@ async function runStage(
     status: agent.ok ? "done" : "failed",
     expert: stage.expert ?? spec.planned.experts[0] ?? null,
     model,
-    cost_usd: round2(agent.costUsd),
+    cost_usd: agent.metered ? round2(agent.costUsd) : null,
+    ...(agent.metered ? {} : { metered: false }),
     error: agent.error,
     session_id: agent.sessionId,
     started_at: options.at,
@@ -591,13 +597,14 @@ async function runStage(
     reads: agent.reads,
     max_reads: maxReads,
     stopped_by: agent.stoppedBy,
+    ...(agent.metered ? {} : { metered: false }),
     usage: {
       input_tokens: agent.usage.input_tokens,
       output_tokens: agent.usage.output_tokens,
       cache_creation_input_tokens: agent.usage.cache_creation_input_tokens,
       cache_read_input_tokens: agent.usage.cache_read_input_tokens,
     },
-  }, round2(agent.costUsd), stage.expert));
+  }, agent.metered ? round2(agent.costUsd) : 0, stage.expert));
   store.save();
 
   if (!agent.ok) {
@@ -1112,7 +1119,11 @@ async function runExecutor(
   if (!outcome.ok) {
     return failStage(store, options, phaseId, stageId, outcome.error ?? "the executor failed", notes);
   }
-  const advisories = outcome.stderr ?? [];
+  const providerAdvisory = providerBudgetAdvisory(agentProvider(), executorCtx.maxBudgetUsd);
+  const advisories = [
+    ...(outcome.stderr ?? []),
+    ...(providerAdvisory === null ? [] : [providerAdvisory]),
+  ];
   if (outcome.awaiting) return out(EXIT_OK, [...notes, ...outcome.lines], advisories);
   return withStderr(
     await finishStage(store, options, phaseId, stageId, spec, [...notes, ...outcome.lines], outcome.gate),
@@ -1359,6 +1370,16 @@ async function finishStage(
         events: store.events.read(),
       });
       if (agent.ok && agent.actor !== null && agent.record !== null && agent.text !== null) {
+        const provider = agentProvider();
+        const executorId = provider === "codex" ? codexGateExecutorId(requireStage(store, phaseId, stageId)) : null;
+        if (provider === "codex" && executorId === null) {
+          return out(EXIT_AWAITING_HUMAN, [
+            ...notes,
+            doneLine,
+            "agent gate not taken — the evidence cannot be bound to exactly one measured Codex thread",
+            "gate pending: tldrx approve",
+          ]);
+        }
         // The SAME door a person and the facilitator use: `approve` re-runs the
         // checks off disk, copies the note into the run tree, records
         // `by`/`at`/`note`/`evidence`, appends gate.approved + stage.done and
@@ -1366,6 +1387,7 @@ async function finishStage(
         const approved = await approve(store, {
           root: options.root,
           actor: agent.actor,
+          ...(executorId === null ? {} : { executorId }),
           at: nowish(options),
           note: agent.note,
           evidence: { text: agent.text, record: agent.record },
@@ -1491,6 +1513,16 @@ async function finishStage(
     moved === null ? `run ${store.runId} is finished` : `cursor → ${moved.phase}/${moved.stage} (ready)`,
     ...closing,
   ]);
+}
+
+/** A machine signature is attributable only when one measured Codex thread can own it. */
+export function codexGateExecutorId(stage: RunStage): string | null {
+  const identities = new Set(
+    stage.tasks.flatMap((task) => typeof task.session_id === "string" && task.session_id !== ""
+      ? [task.session_id]
+      : []),
+  );
+  return identities.size === 1 ? [...identities][0] ?? null : null;
 }
 
 function failStage(

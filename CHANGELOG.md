@@ -392,6 +392,17 @@
     correctly and is spliced into no prompt is the `templates/story.md` failure again (#48).
     6 red before, green after. `docs/spec.md` §2.13 and the `delivery` expert each carry one
     line pointing at the checklist.
+- **Codex is now a second honest automated runner.** Set `TLDRX_AGENT_PROVIDER=codex` to
+  run plain `codex exec --json` through the existing facilitator seam; `TLDRX_CODEX_BIN`
+  selects a wrapper or pinned executable. The adapter is pinned to a real codex-cli 0.152.0
+  JSONL transcript and a real executable stub, preserves thread identity and token usage,
+  feeds the existing structured envelopes, runs developers in `workspace-write`, and makes
+  Build reviewers mechanically `read-only`. Because Codex exposes neither provider-metered
+  USD nor a provider-side USD cap, every Codex turn is recorded `cost_usd: null,
+  metered: false`; no Codex prices were added and dollar totals remain lower bounds. Agent
+  gate provenance uses the measured Codex thread id as `executed_by.id`. Claude remains the
+  byte-identical default. File formats remain `version: 1`; `DASHBOARD_MODEL_VERSION` remains
+  `3`.
 
 - **The landing page now sells the unattended flow it never mentioned (#128).** Measured at
   `95a39db`: `grep -c 'tldrx drive' docs-site/index.md` returned `0`, and so did its Spanish

@@ -17,6 +17,8 @@ import { DoctorReport } from "./DoctorReport.ts";
 import { findLegacyVersionFiles } from "./legacyVersionKeys.ts";
 import { findGitignoreShadows, type GitignoreShadowResult } from "./gitignoreShadow.ts";
 import { findUnresolvedDefaultBranches, type DefaultBranchAudit } from "./recordedDefaultBranch.ts";
+import { agentProvider, type AgentProvider } from "../facilitator/spawnAgent.ts";
+import type { EnvTool } from "../schemas/env.ts";
 
 export interface DoctorOptions {
   /** Run `claude mcp list` and list servers. Off by default: it is slow. */
@@ -55,7 +57,7 @@ export interface DoctorOutcome {
 export async function runDoctor(options: DoctorOptions): Promise<DoctorOutcome> {
   const manifest = await loadEnvManifest(options.manifestPath);
   const checker = new ToolChecker();
-  const results = await Promise.all(manifest.tools.map((tool) => checker.check(tool)));
+  const results = await Promise.all(providerTools(manifest.tools, agentProvider()).map((tool) => checker.check(tool)));
 
   let mcp: McpProbeResult | null = null;
   if (options.mcp) mcp = await new McpProbe().probe();
@@ -76,4 +78,13 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorOutcome> 
     defaultBranches,
     healthy: report.healthy,
   };
+}
+
+/** Only the selected automated runner is required; both remain visible in the report. */
+export function providerTools(tools: readonly EnvTool[], provider: AgentProvider): readonly EnvTool[] {
+  return tools.map((tool) => {
+    if (tool.id === "claude") return { ...tool, required: provider === "claude" };
+    if (tool.id === "codex") return { ...tool, required: provider === "codex" };
+    return tool;
+  });
 }

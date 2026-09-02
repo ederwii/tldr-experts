@@ -197,7 +197,7 @@ describe("claims we have retired", () => {
       why:
         "an unqualified claim about software that has one working runner. Say the version that " +
         "survives inspection: the workflow and the persisted state format are provider-independent; " +
-        "the automated runner currently supports Claude Code.",
+        "the automated runner currently supports Claude Code and Codex.",
     },
   ];
 
@@ -213,6 +213,12 @@ describe("claims we have retired", () => {
 });
 
 describe("what the front door advertises", () => {
+  test("the automated runner names both implementations it actually ships", () => {
+    const claim = "the automated runner currently supports Claude Code and Codex.";
+    expect(README).toContain(claim);
+    expect(readFileSync(join(FRAMEWORK_ROOT, "docs", "concept.md"), "utf8")).toContain(claim);
+  });
+
   /**
    * #128: `tldrx drive` is the star operator command for unattended runs — it has a
    * guide in both locales and a chapter behind that — and on 2026-09-02 neither landing
