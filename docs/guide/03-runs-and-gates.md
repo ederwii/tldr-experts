@@ -222,12 +222,23 @@ the design. A perfectly sourced bad idea passes all seven conditions.
 **It cannot verify what it cannot reach.** A `doc` citation is never fetched — a gate that
 opened a socket would be a different kind of thing — so an https URL nothing in the
 workspace already names is `unverified`, and an `unverified` citation stops the gate rather
-than closing it. Same for an `absent:` over a file that exists.
+than closing it.
+
+**It cannot read the inside of a file it was only pointed at.** `absent:<path>` over a path
+that EXISTS and holds something is a claim about that path's *content*, and nothing in a
+gate reads it. That is `noted`: it does not fail the stage and does not stop the gate — a
+`- none [src: absent:.tldrx/memory/facts.yml]` is how you *are* meant to write an empty
+section — but it is counted and named by path in the check detail and in the gate note, so
+it never passes in silence either. Write `absent:<path>#<what you searched for>` and the
+absence is genuinely searched: not found is a checked pass, found is a refusal that names
+the line.
 
 **It cannot notice silence, unless it is told to expect noise.** A stage that was told to
-write a `questions.md` and wrote one nothing can parse used to satisfy "zero open
-questions". Now it does not. But a stage that was never asked to ask anything, and asks
-nothing, is still silent by right.
+write a `questions.md` and wrote one nothing can parse does not satisfy "zero open
+questions", and neither does a stage that never wrote the declared file at all. A stage
+that wrote it and raised nothing DOES — having no decision to ask for is the state an auto
+gate is for. And a stage that was never asked to ask anything, and asks nothing, is silent
+by right.
 
 **It cannot decide that unfinished work is worth shipping.** A Build stage whose stories are
 not all `done` falls to a human, naming the stories and their statuses. You may well approve
@@ -287,9 +298,10 @@ What you fill in is four sections — `Read`, `Citations checked`, `Touches audi
 by the same validator `claim-sources` runs on a handoff. A checklist whose own claims are
 unsourced is the thing that rule exists to refuse, and an evidence note is a claim about a
 claim. One rule is stricter here than on a handoff: a citation nothing could **check** —
-an https URL the workspace never names, an `absent:` over a file that exists — refuses the
-note outright, because a gate closed by an agent has to be stronger than one closed by the
-harness, never cheaper.
+an https URL the workspace never names, a `cmd` with no workspace command behind it —
+refuses the note outright, because a gate closed by an agent has to be stronger than one
+closed by the harness, never cheaper. An unchecked absence is not one of those: it is
+`noted` here as everywhere, named rather than fatal.
 
 Three verdicts, not two: `sign`, `sign-with-fixlist`, `refuse`. Only `sign` could ever close
 a gate; the other two are the note saying a person decides. That is not a hedge — a reviewer

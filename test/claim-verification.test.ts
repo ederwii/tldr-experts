@@ -227,10 +227,14 @@ describe("M1 · absent sources", () => {
     });
   });
 
-  test("citing a file that EXISTS is `unverified` — the absence is about its contents", () => {
+  // gh #110, 2026-09-02. This was `unverified`, and `unverified` was read as
+  // "fine" by claim-sources and as "stop" by the auto gate over the SAME file.
+  // `noted` is the one answer both give: legal, never fatal, never blocking —
+  // and always named. See test/gate-conditions.test.ts for both live cases.
+  test("citing a file that EXISTS with content is `noted` — the absence is about its contents", () => {
     expect(resolve("absent:.tldrx/memory/facts.yml", "Unknowns", "Retention period")).toMatchObject({
       ok: true,
-      outcome: "unverified",
+      outcome: "noted",
       message: expect.stringContaining("EXISTS"),
     });
   });

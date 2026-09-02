@@ -105,9 +105,17 @@ re-resolves every citation in the map and the init handoff — through the same 
 token `claim-sources` accepts is never reported as a problem there, and vice versa.
 
 **An auto gate did not close and the note says `unverified`.** Something could not be checked
-offline: an https doc nothing in the workspace names, an `absent:` over a file that exists, a
-`cmd` with no `workspace.yml` commands to check against. It never fails a stage; it stops the
-auto gate and hands the decision to you.
+offline: an https doc nothing in the workspace names, a `cmd` with no `workspace.yml` commands
+to check against. It never fails a stage; it stops the auto gate and hands the decision to you.
+
+**The note says `unchecked absence: N (…)`.** That is not a refusal and it did not stop the
+gate. It is every `absent:<path>` you wrote over a path that EXISTS and holds something —
+`- none [src: absent:.tldrx/memory/facts.yml]` is the correct way to write an empty section,
+and the framework will not read the inside of that file to confirm you looked. It is named so
+it cannot pass in silence: `- none [src: absent:04-build/log]` over a directory of seven files
+looks identical to the checker and very different to a reader. To have it actually checked,
+say what you searched for — `absent:.tldrx/memory/facts.yml#abandoned hunts`. If the needle
+turns out to be in there, the citation is refused and names the line.
 
 **An auto gate signed something it should not have.**
 `tldrx reject --stage <phase>/<stage> --note "…"`. The stage goes back to `ready` with your

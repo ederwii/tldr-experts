@@ -53,7 +53,10 @@ const KINDS: Readonly<Record<(typeof SRC_KINDS)[number], Omit<KindRow, "kind">>>
   fact: { shape: `\`F<nnn>\` (${readableSource(SRC_PATTERNS.fact)})`, example: "F102" },
   cmd: { shape: `\`$ <command> → exit <n>\` (${readableSource(SRC_PATTERNS.cmd)})`, example: "$ bun test → exit 0" },
   graph: { shape: "`graph:<node id>`", example: "graph:hunt-engine" },
-  absent: { shape: "`absent:<the path you looked at>`", example: "absent:docs/retention.md" },
+  absent: {
+    shape: "`absent:<the path you looked at>` — add `#<what you searched for>` to have it CHECKED",
+    example: "absent:docs/retention.md#retention",
+  },
   aidlc: {
     shape: `\`aidlc:<file>:<line>\` or \`aidlc:<file>#Q<n>\` (${readableSource(SRC_PATTERNS.aidlcLine)})`,
     example: "aidlc:intents/260821/design.md:14",

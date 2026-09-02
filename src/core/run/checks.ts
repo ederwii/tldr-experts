@@ -108,6 +108,11 @@ function checkClaimSources(ctx: CheckContext): CheckOutcome {
   // AUTO gate (spec §5, condition 5). The count is carried in `detail` because
   // `CheckOutcome` is a three-state contract every other check shares.
   let unverified = 0;
+  // `noted` — an `absent:` over a path that exists with content (spec §2.8). It
+  // does NOT fail this check and does NOT block the auto gate; both of those are
+  // the point. What it does is get NAMED, here, in the one string both readers
+  // print, so the two can never again disagree in silence (gh #110/#105).
+  const noted: string[] = [];
   let handoffs = 0;
   let others = 0;
 
@@ -132,12 +137,14 @@ function checkClaimSources(ctx: CheckContext): CheckOutcome {
         handoffs++;
         const validation = validateHandoff(text, srcCtx);
         unverified += validation.unverified.length;
+        noted.push(...notedPaths(validation.noted));
         failures.push(...describeHandoff(hit.path, validation, text));
         continue;
       }
       others++;
       const report = validateCitations(text, srcCtx);
       unverified += report.unverified.length;
+      noted.push(...notedPaths(report.noted));
       failures.push(...describeCitations(hit.path, report, text));
     }
   }
@@ -146,8 +153,32 @@ function checkClaimSources(ctx: CheckContext): CheckOutcome {
     return { id: "claim-sources", status: "failed", detail: failures.join(" · ") };
   }
   const tail = unverified === 0 ? "" : `, ${UNVERIFIED_PREFIX}${unverified}`;
+  const absences = noted.length === 0
+    ? ""
+    : `, ${NOTED_PREFIX}${String(noted.length)} (${some([...new Set(noted)])})`;
   const cited = others === 0 ? "" : ` + ${others} cited output(s)`;
-  return { id: "claim-sources", status: "passed", detail: `${handoffs} handoff(s) sourced${cited}${tail}` };
+  return {
+    id: "claim-sources",
+    status: "passed",
+    detail: `${handoffs} handoff(s) sourced${cited}${tail}${absences}`,
+  };
+}
+
+/**
+ * The `absent:<path>` each `noted` issue is about — the point is to NAME them.
+ *
+ * Read off `issue.src`, which the §2.8 reader already parsed. Re-extracting it
+ * here would mean a second regex over the `[src: …]` marker, which is #80 under a
+ * new name and is refused on shape by `test/map-citations.test.ts`.
+ */
+function notedPaths(issues: readonly { readonly src?: string }[]): readonly string[] {
+  return issues.map((issue) => {
+    const raw = issue.src ?? "";
+    if (!raw.startsWith("absent:")) return raw === "" ? "an absence" : raw;
+    const rest = raw.slice("absent:".length);
+    const hash = rest.indexOf("#");
+    return hash === -1 ? rest : rest.slice(0, hash);
+  });
 }
 
 /** How many of one category are named before the rest become a count. */
@@ -244,6 +275,25 @@ function unresolvedPhrase(issues: readonly HandoffIssue[]): readonly string[] {
 
 /** How an unverified count is written into `claim-sources`' detail, and read back out. */
 export const UNVERIFIED_PREFIX = "unverified: ";
+
+/**
+ * How an UNCHECKED ABSENCE is written into that same detail (gh #110).
+ *
+ * Deliberately a different prefix from `UNVERIFIED_PREFIX`, and deliberately read
+ * by a different function: the auto gate refuses to close over an `unverified`
+ * citation and closes over a `noted` one, and the two counts have to be tellable
+ * apart in the one string that carries both.
+ */
+export const NOTED_PREFIX = "unchecked absence: ";
+
+/** The number of unchecked absences a `claim-sources` outcome reported, or 0. */
+export function notedCount(outcome: CheckOutcome): number {
+  if (outcome.id !== "claim-sources") return 0;
+  const at = outcome.detail.indexOf(NOTED_PREFIX);
+  if (at === -1) return 0;
+  const parsed = Number.parseInt(outcome.detail.slice(at + NOTED_PREFIX.length), 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
 
 /** The number of unverified citations a `claim-sources` outcome reported, or 0. */
 export function unverifiedCount(outcome: CheckOutcome): number {

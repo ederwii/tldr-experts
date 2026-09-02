@@ -9,7 +9,7 @@
  *   fact   := "F" digit{3,6}
  *   cmd    := "$ " command " → exit " digit+
  *   graph  := "graph:" nodeid
- *   absent := "absent:" path
+ *   absent := "absent:" path ["#" needle]   # "I looked HERE"; the needle is what for
  *   aidlc  := "aidlc:" path (":" line | "#" "Q" digit+)   # spec §6 `[assumption]`
  *
  * Everything here is string slicing plus a handful of tiny anchored regexes, so a
@@ -30,7 +30,7 @@ export type SrcRef =
   | { readonly kind: "fact"; readonly raw: string; readonly id: string }
   | { readonly kind: "cmd"; readonly raw: string; readonly command: string; readonly exitCode: number }
   | { readonly kind: "graph"; readonly raw: string; readonly node: string }
-  | { readonly kind: "absent"; readonly raw: string; readonly path: string }
+  | { readonly kind: "absent"; readonly raw: string; readonly path: string; readonly needle: string | null }
   | { readonly kind: "aidlc"; readonly raw: string; readonly path: string; readonly line: number | null; readonly q: string | null };
 
 export interface SrcParseError {
@@ -219,6 +219,7 @@ export const SRC_RULE_IDS = [
   "id-shape",
   "graph-node",
   "absent-path",
+  "absent-needle",
   "aidlc-shape",
 ] as const;
 export type SrcRuleId = (typeof SRC_RULE_IDS)[number];
@@ -349,6 +350,14 @@ export const SRC_RULES: readonly SrcRule[] = [
     enforcedBy: ["absent:"],
     bad: "- no retention policy is recorded [src: absent:]",
     good: "- no retention policy is recorded [src: absent:docs/retention.md]",
+  },
+  {
+    id: "absent-needle",
+    rule: "`absent:<path>#<needle>` carries the words you searched for — `#` with nothing after it "
+      + "says you searched for nothing",
+    enforcedBy: ["absent:", "#"],
+    bad: "- no retention policy is recorded [src: absent:docs/retention.md#]",
+    good: "- no retention policy is recorded [src: absent:docs/retention.md#retention]",
   },
   {
     id: "aidlc-shape",
@@ -513,9 +522,17 @@ export function classifySrc(src: string, repos?: ReadonlySet<string>): SrcRef | 
   }
   if (raw.startsWith("aidlc:")) return parseAidlcSrc(raw);
   if (raw.startsWith("absent:")) {
-    const path = raw.slice("absent:".length);
+    const rest = raw.slice("absent:".length);
+    // The FIRST `#` splits, so a needle may itself contain one. A path that holds
+    // a `#` cannot be cited, and that trade is deliberate: a searched-for phrase
+    // is the thing an absence is actually about, and `#` is already the framework's
+    // separator for "inside this file" (`aidlc:<file>#Q<n>`).
+    const hash = rest.indexOf("#");
+    const path = hash === -1 ? rest : rest.slice(0, hash);
+    const needle = hash === -1 ? null : rest.slice(hash + 1);
     if (path === "") return refuse(raw, "absent-path");
-    return { kind: "absent", raw, path };
+    if (needle !== null && needle.trim() === "") return refuse(raw, "absent-needle");
+    return { kind: "absent", raw, path, needle };
   }
   if (ANSWER_RE.test(raw)) return { kind: "answer", raw, q: raw };
   if (FACT_RE.test(raw)) return { kind: "fact", raw, id: raw };
@@ -589,18 +606,28 @@ function parseFileSrc(raw: string, repos?: ReadonlySet<string>): SrcRef | SrcPar
 }
 
 /**
- * Three outcomes, not two (2026-08-29 audit, gap 2).
+ * Four outcomes (gh #110; three since the 2026-08-29 audit, gap 2).
  *
- * `ok` — checked, and it is there. `refused` — checked, and it is NOT there; the
- * claim is denied. `unverified` — the citation is well formed and the thing it
- * names cannot be checked from disk (an https URL nothing in the workspace
- * mentions; an `absent:` on a file that DOES exist, where the absence is a claim
- * about its content). An `unverified` citation never fails a stage — but it is
- * counted, and an auto gate will not close over one. Before this existed, six of
- * the eight src kinds returned `ok` unconditionally: a handoff citing `F999`,
- * `Q42` and `graph:i-made-this-up` validated clean and auto-approved itself.
+ * `ok` — checked, and it holds. `refused` — checked, and it does NOT; the claim is
+ * denied. `unverified` — the citation is well formed and the thing it names cannot
+ * be checked from disk at all (an https URL nothing in the workspace mentions, a
+ * `cmd` with no workspace commands to check against). An `unverified` citation
+ * never fails a stage, and an auto gate will not close over one.
+ *
+ * `noted` is the fourth, and it exists because `unverified` was being read as two
+ * different sentences by the two checkers that share this resolver. An
+ * `absent:<path>` over a path that EXISTS with content is a claim about that
+ * path's CONTENT — legal, honest, and the framework's own documented spelling of
+ * an empty section (`- none [src: absent:.tldrx/memory/facts.yml]`). Measured
+ * live 2026-09-02: `claim-sources` waved it through in silence while the auto
+ * gate on the very same file refused to close over it (gh #110, absorbing #105).
+ * `noted` is the ONE answer both now give — it never fails a stage and never
+ * blocks a gate, and it is named, by path, in every line either of them prints.
+ * Before any of this existed, six of the eight src kinds returned `ok`
+ * unconditionally: a handoff citing `F999`, `Q42` and `graph:i-made-this-up`
+ * validated clean and auto-approved itself.
  */
-export type SrcOutcome = "ok" | "unverified" | "refused";
+export type SrcOutcome = "ok" | "noted" | "unverified" | "refused";
 
 export interface SrcResolution {
   /** False only for `refused`. An `unverified` src does not fail the stage. */
@@ -625,6 +652,11 @@ function unverified(message: string): SrcResolution {
   return { ok: true, outcome: "unverified", message };
 }
 
+/** Legal, never fatal, never blocking — and never silent. See `SrcOutcome`. */
+function noted(message: string): SrcResolution {
+  return { ok: true, outcome: "noted", message };
+}
+
 /**
  * Resolve one ref against the workspace.
  *
@@ -639,7 +671,7 @@ export function resolveSrc(ref: SrcRef, ctx: SrcContext, section: string, claim 
       if (ref.repo !== null && !ctx.repos.has(ref.repo)) {
         return refused(`unknown repo \`${ref.repo}\` (not in workspace.yml)`);
       }
-      const bases = fileBases(ref, ctx);
+      const bases = pathBases(ref.repo, ref.path, ctx);
       // Every base is tried, and a base where the file EXISTS but is too short no
       // longer ends the search. Since issue #16 added the epic worktree ahead of
       // the working tree, stopping at the first existing copy would refuse a
@@ -688,7 +720,7 @@ export function resolveSrc(ref: SrcRef, ctx: SrcContext, section: string, claim 
     case "doc":
       return resolveDoc(ref.url, ctx);
     case "absent":
-      return resolveAbsent(ref.path, ctx, section, claim);
+      return resolveAbsent(ref, ctx, section, claim);
     case "aidlc":
       // Unchanged by design (§6): the AI-DLC intent folder is OUTSIDE the workspace
       // and may be gone. An `aidlc:` src records where a claim came from; it was
@@ -759,33 +791,176 @@ function resolveDoc(url: string, ctx: SrcContext): SrcResolution {
 }
 
 /**
- * `absent:<path>` — "looked here, found nothing". Two halves:
+ * `absent:<path>[#<needle>]` — "I looked HERE, and it is not there" (gh #110).
  *
- *  1. The claim must be NEGATIVE. An absence can source "no retention policy is
- *     recorded"; it cannot source "we removed the auth check from /admin". This is
- *     the half that catches the audit's probe, and it is a refusal.
+ * ONE semantic, because both checkers that matter — `claim-sources` and the auto
+ * gate's condition 5 — resolve through this function and had been reading its old
+ * `unverified` answer as two different sentences (gh #110, absorbing #105).
  *
- *     `## Unknowns` is exempt, because that heading IS the negation: §2.8's own
- *     example is `- Retention period for historical rankings [src: absent:…]`,
- *     which reads as a positive noun phrase and means "we do not know it". A
- *     word-level rule applied there would outlaw the spec's documented shape.
- *  2. The path itself. If it does not exist, the absence is literal and checked.
- *     If it DOES exist — the spec's other idiom is
- *     `- none [src: absent:.tldrx/memory/facts.yml]`, and facts.yml is a file that
- *     exists — then the claim is about that file's CONTENT, which nothing here can
- *     read. That is `unverified`, not a refusal: refusing it would outlaw §2.8's
- *     documented spelling of an empty section.
+ *  1. **The claim must be NEGATIVE.** An absence can source "no retention policy
+ *     is recorded"; it cannot source "we removed the auth check from /admin".
+ *     Refused. `## Unknowns` is exempt, because that heading IS the negation:
+ *     §2.8's own example, `- Retention period for historical rankings
+ *     [src: absent:…]`, reads as a positive noun phrase and means "we do not know
+ *     it". A word-level rule applied there would outlaw the spec's own shape.
+ *  2. **The path is resolved against the same bases a `file` src is.** This is
+ *     the mechanism behind #105: `absent:` used to try the workspace root and
+ *     nothing else, so the run-relative `absent:04-build/log` never even SAW the
+ *     directory it named — seven files sitting there, and the citation resolved
+ *     to a silent, literal `ok`. It is reached now, and answered.
+ *  3. **Nothing there to have missed ⇒ `ok`.** No such path, an empty or
+ *     whitespace-only file, a directory with no entries: the absence is literal,
+ *     and a reader confirms it in one look.
+ *  4. **A needle ⇒ the absence is actually SEARCHED.** `absent:<path>#<needle>`
+ *     says what was looked for, so this can look for it too: not found is a
+ *     verified `ok`, and found is a `refused` that names the line. This is the
+ *     only form in which an absence over a file with content is *checked*, and it
+ *     is the upgrade path out of (5).
+ *  5. **Otherwise ⇒ `noted`.** The path exists, holds content, and the citation
+ *     names no needle, so "it is not in there" is a claim about content that
+ *     nothing here read. It is legal — `- none [src: absent:.tldrx/memory/facts.yml]`
+ *     is the spec's own spelling of an empty section, and refusing it would
+ *     outlaw the negative-case discipline the mandate asks for. It never fails a
+ *     stage and never blocks a gate. What it does not do is pass in silence:
+ *     `noted` is counted and named, by path, wherever either checker prints.
  */
-function resolveAbsent(path: string, ctx: SrcContext, section: string, claim: string): SrcResolution {
+function resolveAbsent(
+  ref: Extract<SrcRef, { kind: "absent" }>,
+  ctx: SrcContext,
+  section: string,
+  claim: string,
+): SrcResolution {
+  const { path, needle } = ref;
   if (section !== "Unknowns" && claim !== "" && !isNegativeClaim(claim)) {
     return refused(
       `absent:${path} sources a positive claim — an absence can only support a negative one ` +
         "(say what is NOT there: `no`, `not`, `never`, `none`, `absent`), or move it under Unknowns",
     );
   }
-  const abs = isAbsolute(path) ? normalize(path) : normalize(join(ctx.root, path));
-  if (!existsSync(abs)) return OK;
-  return unverified(`${path} EXISTS — "found nothing in it" is a claim about its contents, unchecked here`);
+  const found = firstExisting(absentBases(path, ctx));
+  // (3a) nothing anywhere it could have been — the absence is literal.
+  if (found === null) return OK;
+  if (needle !== null) return searchForNeedle(found, needle, path);
+  const held = whatIsThere(found);
+  // (3b) it is there and it is empty, which is the same absence one level down.
+  if (held === null) return OK;
+  return noted(
+    `${path} EXISTS (${held}) — "it is not in there" is a claim about its CONTENT, unchecked here. ` +
+      `Cite \`absent:${path}#<what you searched for>\` to have it checked, or cite the line that proves it.`,
+  );
+}
+
+/** Cap on a file an `absent:…#<needle>` search will read. Beyond it, `noted`. */
+const NEEDLE_MAX_BYTES = 512 * 1024;
+
+/**
+ * Cap on the read that decides whether a bare `absent:` target is EMPTY.
+ *
+ * Deliberately much lower than the needle cap. Searching is opt-in — an author
+ * wrote `#<needle>` and asked for it — while this read happens on every bare
+ * `absent:` in every handoff, inside a hook with a 50 ms budget (§0). Anything
+ * bigger than this is not whitespace, so its size is answer enough.
+ */
+const EMPTY_PROBE_MAX_BYTES = 64 * 1024;
+
+/**
+ * Search `abs` for `needle`, case-insensitively.
+ *
+ * Case-insensitive on purpose: "you said it is not there" is disproved by the
+ * thing being there in ANY casing, and the direction that costs less is the one
+ * that sends a writer back to look again.
+ */
+function searchForNeedle(abs: string, needle: string, path: string): SrcResolution {
+  let stat;
+  try {
+    stat = statSync(abs);
+  } catch {
+    return OK;
+  }
+  if (stat.isDirectory()) {
+    return refused(
+      `absent:${path}#${needle} searches a DIRECTORY — a needle is searched in one file. ` +
+        `Cite the file you read (\`absent:${path}/<file>#${needle}\`), or drop the needle.`,
+    );
+  }
+  if (stat.size > NEEDLE_MAX_BYTES) {
+    return noted(`${path} is ${String(stat.size)} bytes — too large to search here for \`${needle}\``);
+  }
+  let text: string;
+  try {
+    text = readFileSync(abs, "utf8");
+  } catch {
+    return noted(`${path} could not be read here to search for \`${needle}\``);
+  }
+  const wanted = needle.toLowerCase();
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    if ((lines[i] ?? "").toLowerCase().includes(wanted)) {
+      return refused(
+        `\`${needle}\` IS at ${path}:${String(i + 1)} — that is a presence, not an absence`,
+        abs,
+      );
+    }
+  }
+  // The one shape in which an absence over an existing file is genuinely CHECKED.
+  return OK;
+}
+
+/**
+ * What the path holds, phrased for the message — or `null` when it holds nothing,
+ * which is the same absence one level down and resolves `ok`.
+ */
+function whatIsThere(abs: string): string | null {
+  let stat;
+  try {
+    stat = statSync(abs);
+  } catch {
+    return null;
+  }
+  if (stat.isDirectory()) {
+    let entries: readonly string[];
+    try {
+      entries = readdirSync(abs);
+    } catch {
+      return "a directory this check could not read";
+    }
+    if (entries.length === 0) return null;
+    return `${String(entries.length)} entr${entries.length === 1 ? "y" : "ies"}`;
+  }
+  if (!stat.isFile()) return "a path that is neither a file nor a directory";
+  if (stat.size === 0) return null;
+  if (stat.size > EMPTY_PROBE_MAX_BYTES) return `${String(stat.size)} bytes`;
+  let text: string;
+  try {
+    text = readFileSync(abs, "utf8");
+  } catch {
+    return `${String(stat.size)} bytes`;
+  }
+  if (text.trim() === "") return null;
+  const lines = text.split("\n").length;
+  return `${String(lines)} line${lines === 1 ? "" : "s"}`;
+}
+
+/**
+ * The bases an `absent:` path is tried against — the SAME ones a `file` src uses,
+ * plus the `repo:path` spelling the guide already documents
+ * (`absent:api:src/Places/Place.cs`). An absence is true only when it holds at
+ * EVERY base, so the first base where the path exists is the one that answers.
+ */
+function absentBases(path: string, ctx: SrcContext): readonly FileBase[] {
+  const colon = path.indexOf(":");
+  if (colon > 0) {
+    const repo = path.slice(0, colon);
+    if (ctx.repos.has(repo)) return pathBases(repo, path.slice(colon + 1), ctx);
+  }
+  return pathBases(null, path, ctx);
+}
+
+function firstExisting(bases: readonly FileBase[]): string | null {
+  for (const base of bases) {
+    if (existsSync(base.abs)) return base.abs;
+  }
+  return null;
 }
 
 /** Word-boundary negation. Substring matching would read "nothing" out of "notation". */
@@ -803,7 +978,11 @@ interface FileBase {
 }
 
 /**
- * The bases a `file` src is resolved against, in order — first existing wins (spec §2.8).
+ * The bases a path in a citation is resolved against, in order — first existing
+ * wins (spec §2.8). A `file` src and an `absent:` src share them, and that
+ * sharing is the fix for #105: an `absent:` that tried only the workspace root
+ * could not see a run-relative directory, so it reported an absence it had never
+ * looked for.
  *
  * A bare `path:line` is ambiguous by design: the sub-agent writing a handoff thinks
  * run-relatively (`01-what/intent.md:1`) while the workspace thinks root-relatively
@@ -821,34 +1000,31 @@ interface FileBase {
  * `repo:path` and an absolute path still resolve to exactly one place in the
  * working tree; the epic worktree adds one more, never a different repo's.
  */
-function fileBases(
-  ref: Extract<SrcRef, { kind: "file" }>,
-  ctx: SrcContext,
-): readonly FileBase[] {
-  if (isAbsolute(ref.path)) {
-    return [{ label: "the absolute path as written", abs: normalize(ref.path) }];
+function pathBases(repo: string | null, path: string, ctx: SrcContext): readonly FileBase[] {
+  if (isAbsolute(path)) {
+    return [{ label: "the absolute path as written", abs: normalize(path) }];
   }
-  if (ref.repo !== null) {
-    const rel = ctx.repos.get(ref.repo) ?? "";
+  if (repo !== null) {
+    const rel = ctx.repos.get(repo) ?? "";
     return [
-      ...epicBases(ctx, ref.repo, ref.path),
-      { label: repoLabel(ref.repo, rel), abs: normalize(join(ctx.root, rel, ref.path)) },
+      ...epicBases(ctx, repo, path),
+      { label: repoLabel(repo, rel), abs: normalize(join(ctx.root, rel, path)) },
     ];
   }
   const bases: FileBase[] = [];
-  const slash = ref.path.indexOf("/");
-  const named = slash > 0 ? ref.path.slice(0, slash) : "";
+  const slash = path.indexOf("/");
+  const named = slash > 0 ? path.slice(0, slash) : "";
   const rel = named === "" ? undefined : ctx.repos.get(named);
-  if (rel !== undefined) bases.push(...epicBases(ctx, named, ref.path.slice(slash + 1)));
-  bases.push({ label: "workspace root", abs: normalize(join(ctx.root, ref.path)) });
+  if (rel !== undefined) bases.push(...epicBases(ctx, named, path.slice(slash + 1)));
+  bases.push({ label: "workspace root", abs: normalize(join(ctx.root, path)) });
   const runDir = ctx.runDir ?? null;
   if (runDir !== null && runDir !== "") {
-    bases.push({ label: `run dir ${displayPath(ctx.root, runDir)}`, abs: normalize(join(runDir, ref.path)) });
+    bases.push({ label: `run dir ${displayPath(ctx.root, runDir)}`, abs: normalize(join(runDir, path)) });
   }
   if (rel !== undefined) {
     bases.push({
       label: repoLabel(named, rel),
-      abs: normalize(join(ctx.root, rel, ref.path.slice(slash + 1))),
+      abs: normalize(join(ctx.root, rel, path.slice(slash + 1))),
     });
   }
   return bases;

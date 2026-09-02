@@ -17,7 +17,9 @@ import {
   fixQuestions, parseLooseQuestions, parseQuestions, unreadableQuestionHeadings,
   validateQuestions,
 } from "../src/core/text/questions.ts";
-import { declaresQuestions, evaluateAutoGate, NO_PARSEABLE_QUESTIONS } from "../src/core/run/autoGate.ts";
+import {
+  declaresQuestions, evaluateAutoGate, MISSING_QUESTIONS, NO_PARSEABLE_QUESTIONS,
+} from "../src/core/run/autoGate.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { loadWorkflowPreset } from "../src/core/run/workflowPreset.ts";
 import { runNext } from "../src/core/facilitator/runNext.ts";
@@ -261,13 +263,27 @@ describe("M2 · the auto gate reads the unreadable file", () => {
     expect(verdict.why).toContain("Q1, Q2");
   });
 
-  test("an EMPTY questions.md the stage was told to write also refuses it", async () => {
+  // gh #109, 2026-09-02. This assertion used to read `ok: false`, and it was the
+  // rule the whole issue is about: an empty questions.md the stage WAS told to
+  // write is the stage saying it needs no decision, which is the state an auto
+  // gate exists to close over. A MISSING file is the failure, and it still is —
+  // the case below, and the pair in test/gate-conditions.test.ts.
+  test("an EMPTY questions.md the stage was told to write is an ANSWER, not silence", async () => {
     const ws = workspace([ASKER], { alpha: "auto" });
     writeFileSync(join(ws.runDir, "01-what", "handoff.md"), cannedHandoff(), "utf8");
     writeFileSync(join(ws.runDir, "01-what", "questions.md"), "# Questions\n\nNone.\n", "utf8");
     const verdict = await evaluateAutoGate(inputs(ws));
+    expect(verdict.ok).toBe(true);
+    expect(verdict.note).toContain("questions=0 open");
+  });
+
+  test("a questions.md the stage was told to write and never wrote still refuses it", async () => {
+    const ws = workspace([ASKER], { alpha: "auto" });
+    writeFileSync(join(ws.runDir, "01-what", "handoff.md"), cannedHandoff(), "utf8");
+    rmSync(join(ws.runDir, "01-what", "questions.md"), { force: true });
+    const verdict = await evaluateAutoGate(inputs(ws));
     expect(verdict.ok).toBe(false);
-    expect(verdict.why).toContain(NO_PARSEABLE_QUESTIONS);
+    expect(verdict.why).toContain(MISSING_QUESTIONS);
   });
 
   test("the same file in the grammar, with the question answered, lets it through", async () => {
