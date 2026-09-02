@@ -279,6 +279,7 @@ const ENTRIES: readonly CommandHelp[] = [
     exits: [EXIT_OK, EXIT_USAGE],
     notes: [
       "Exit 1 means a REQUIRED tool is missing or below its min_version. An optional tool is reported, never fatal.",
+      "It also reports two things about the WORKSPACE, both warnings that never move the exit code: committed state a `.gitignore` rule is swallowing, and any repo whose `default_branch` in `.tldrx/workspace.yml` does not resolve in that repo. The second one is otherwise invisible \u2014 it makes the Watch stage refuse and leaves the `boundary` gate condition `n/a` at every Build gate.",
     ],
   },
   {

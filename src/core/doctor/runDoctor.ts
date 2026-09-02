@@ -5,9 +5,10 @@
  * prints a table. Exit code 0 when every REQUIRED tool is present and meets its
  * min_version; 1 otherwise.
  *
- * Two warnings ride along and NEITHER moves the exit code, because the exit code
+ * Three warnings ride along and NONE moves the exit code, because the exit code
  * is about the tools this machine has: files still on the deprecated
- * `schema_version:` key, and committed state a `.gitignore` rule is swallowing.
+ * `schema_version:` key, committed state a `.gitignore` rule is swallowing, and
+ * a repo whose RECORDED `default_branch` its own checkout cannot find (gh #92).
  */
 import { loadEnvManifest } from "./loadEnvManifest.ts";
 import { ToolChecker, type ToolCheckResult } from "./ToolChecker.ts";
@@ -15,6 +16,7 @@ import { McpProbe, type McpProbeResult } from "./McpProbe.ts";
 import { DoctorReport } from "./DoctorReport.ts";
 import { findLegacyVersionFiles } from "./legacyVersionKeys.ts";
 import { findGitignoreShadows, type GitignoreShadowResult } from "./gitignoreShadow.ts";
+import { findUnresolvedDefaultBranches, type DefaultBranchAudit } from "./recordedDefaultBranch.ts";
 
 export interface DoctorOptions {
   /** Run `claude mcp list` and list servers. Off by default: it is slow. */
@@ -41,6 +43,12 @@ export interface DoctorOutcome {
    * no workspace to ask about — again not the same claim as "nothing is wrong".
    */
   readonly gitignoreShadow: GitignoreShadowResult | null;
+  /**
+   * Repos whose `default_branch` in `.tldrx/workspace.yml` does not resolve in
+   * the repo (gh #92). Null when there is no workspace to ask about — once more
+   * not the same claim as "every record is true".
+   */
+  readonly defaultBranches: DefaultBranchAudit | null;
   readonly healthy: boolean;
 }
 
@@ -55,8 +63,9 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorOutcome> 
   const root = options.root ?? null;
   const legacyVersionFiles = root === null ? null : findLegacyVersionFiles(root);
   const gitignoreShadow = root === null ? null : await findGitignoreShadows(root);
+  const defaultBranches = root === null ? null : await findUnresolvedDefaultBranches(root);
 
-  const report = new DoctorReport(results, mcp, legacyVersionFiles, gitignoreShadow);
+  const report = new DoctorReport(results, mcp, legacyVersionFiles, gitignoreShadow, defaultBranches);
   return {
     exitCode: report.healthy ? 0 : 1,
     output: report.render(),
@@ -64,6 +73,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorOutcome> 
     mcp,
     legacyVersionFiles,
     gitignoreShadow,
+    defaultBranches,
     healthy: report.healthy,
   };
 }

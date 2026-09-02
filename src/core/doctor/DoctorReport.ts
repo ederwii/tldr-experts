@@ -3,6 +3,7 @@ import { FRAMEWORK_ROOT } from "../paths.ts";
 import type { ToolCheckResult } from "./ToolChecker.ts";
 import type { McpProbeResult } from "./McpProbe.ts";
 import { describeRule, type GitignoreShadowResult } from "./gitignoreShadow.ts";
+import { WORKSPACE_YML_REL, type DefaultBranchAudit } from "./recordedDefaultBranch.ts";
 
 const HEADERS = ["TOOL", "REQUIRED", "FOUND", "MIN", "STATUS", "INSTALL HINT"] as const;
 
@@ -19,6 +20,7 @@ export class DoctorReport {
     private readonly mcp: McpProbeResult | null = null,
     private readonly legacyVersionFiles: readonly string[] | null = null,
     private readonly gitignoreShadow: GitignoreShadowResult | null = null,
+    private readonly defaultBranches: DefaultBranchAudit | null = null,
   ) {}
 
   /** True when every REQUIRED tool is present and at or above its min_version. */
@@ -66,6 +68,7 @@ export class DoctorReport {
 
     lines.push("", ...this.renderLegacyVersions());
     lines.push("", ...this.renderGitignoreShadow());
+    lines.push("", ...this.renderDefaultBranches());
 
     return lines.join("\n");
   }
@@ -109,6 +112,42 @@ export class DoctorReport {
       ...shadow.shadowed.map((s) => `  ${s.path.padEnd(width)}  ignored by  ${describeRule(s)}`),
       "Re-run `tldrx init` to refresh the `# >>> tldrx >>>` block, whose negations re-include them,",
       "or delete the rule. This does not change the exit code.",
+    ];
+  }
+
+  /**
+   * A `default_branch` the workspace RECORDS and the repo cannot find (gh #92).
+   *
+   * A warning, never a blocker, for the same reason as the two above: `healthy`
+   * is about the TOOLS this machine has. It is loud anyway, because the failure
+   * it reports is silent everywhere else — Watch refuses with one line about one
+   * repo, and `boundary` just says `n/a` at every Build gate for as long as the
+   * record stays wrong.
+   */
+  private renderDefaultBranches(): string[] {
+    const audit = this.defaultBranches;
+    if (audit === null) return ["Recorded default branches: no workspace here — nothing probed."];
+    if (!audit.ran) {
+      return [`Recorded default branches: not probed (${audit.error ?? "unknown error"})`];
+    }
+    const skippedPart = audit.skipped.map((row) => `  skipped ${row.repo}: ${row.reason}`);
+    if (audit.unresolved.length === 0) {
+      return [
+        `Recorded default branches: ${String(audit.probed.length)} probed, all resolve. \u2713`,
+        ...skippedPart,
+      ];
+    }
+    const width = Math.max(...audit.unresolved.map((row) => row.repo.length));
+    const n = audit.unresolved.length;
+    return [
+      `Recorded default branch: ${String(n)} of ${String(audit.probed.length)} probed repos `
+        + `${n === 1 ? "records" : "record"} a \`default_branch\` its checkout cannot find:`,
+      ...audit.unresolved.map((row) =>
+        `  ${row.repo.padEnd(width)}  ${WORKSPACE_YML_REL} records \`${row.branch}\`  —  ${row.detail}`),
+      ...skippedPart,
+      "Watch REFUSES to diff a feature against a base that is not there, and `boundary` reports n/a",
+      `at every Build gate while this is wrong. Fix \`default_branch:\` in ${WORKSPACE_YML_REL}, or`,
+      "fetch the branch into the repo. This does not change the exit code.",
     ];
   }
 

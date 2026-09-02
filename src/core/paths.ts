@@ -43,6 +43,17 @@ export const PROJECT_FRAMEWORK_DIR = ".tldrx";
 export const PROJECT_WORK_DIR = "tldrx-work";
 
 /**
+ * `.tldrx/workspace.yml` — the workspace's own RECORD of its repos (spec §2.1).
+ *
+ * Spelled once and shared, because three readers now name it in operator-facing
+ * text and they must all name the same path: the Watch refusal, the `boundary`
+ * note, and the `doctor` finding for a `default_branch` that does not resolve
+ * (gh #92). A path in a message the operator is meant to go and edit is not a
+ * place for three independent string literals.
+ */
+export const PROJECT_WORKSPACE_FILE = `${PROJECT_FRAMEWORK_DIR}/workspace.yml`;
+
+/**
  * `.tldrx/worktrees/` — where the Build phase opens its story and epic worktrees.
  * `init` gitignores it; it holds real checkouts, never framework state.
  */

@@ -8,9 +8,10 @@
  * so the table was the only reason a script could not read them.
  *
  * It also names any workspace file still opening with the deprecated
- * `schema_version:` key, and any committed state file a `.gitignore` rule is
- * swallowing. Both are warnings and neither changes the exit code: the exit code
- * is about the TOOLS this machine has.
+ * `schema_version:` key, any committed state file a `.gitignore` rule is
+ * swallowing, and any repo whose RECORDED `default_branch` its own checkout
+ * cannot find (gh #92). All three are warnings and none changes the exit code:
+ * the exit code is about the TOOLS this machine has.
  */
 import type { Command } from "../Command.ts";
 import { EXIT_FAILED } from "../exitCodes.ts";
@@ -67,6 +68,23 @@ export function doctorJson(outcome: DoctorOutcome): string {
             source: s.source,
             line: s.line,
             pattern: s.pattern,
+          })),
+        },
+      defaultBranches: outcome.defaultBranches === null
+        ? null
+        : {
+          ran: outcome.defaultBranches.ran,
+          error: outcome.defaultBranches.error,
+          probed: outcome.defaultBranches.probed,
+          unresolved: outcome.defaultBranches.unresolved.map((row) => ({
+            repo: row.repo,
+            path: row.path,
+            branch: row.branch,
+            detail: row.detail,
+          })),
+          skipped: outcome.defaultBranches.skipped.map((row) => ({
+            repo: row.repo,
+            reason: row.reason,
           })),
         },
       mcp: outcome.mcp === null

@@ -50,6 +50,18 @@
  * `storiesCondition` reports `n/a` outside Build. A condition that cannot measure
  * must not pretend it measured zero, and it must not refuse a gate for a reason
  * that has nothing to do with the boundary.
+ *
+ * That rule survived gh #92 unchanged, and deliberately. Watch REFUSES when
+ * `.tldrx/workspace.yml` records a `default_branch` a repo cannot find, because
+ * it would otherwise spend money spawning a watcher that writes an all-`absent:`
+ * card. This condition spawns nothing and writes nothing, so the same fault
+ * costs a measurement rather than producing a false one — and refusing every
+ * Build gate in a workspace with one stale record is exactly the "refuse a gate
+ * for a reason that has nothing to do with the boundary" the paragraph above
+ * forbids. What #92 changed here is only the WORDING: `diffRepo` now says which
+ * of the two refs went missing and where the record lives, so a stale
+ * `default_branch` (this condition is `n/a` until someone fixes it) no longer
+ * reads like a merged-and-deleted epic branch (nothing to fix).
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -59,6 +71,7 @@ import { parseFrontMatter } from "../schemas/frontMatter.ts";
 import { citedRepoPaths, isStatePath, IMPLICIT_PLAN_FILE } from "../build/implicitPlan.ts";
 import { git } from "../build/git.ts";
 import { loadWorkspace, repoPath, type WorkspaceContext } from "../../hooks/lib/workspace.ts";
+import { PROJECT_WORKSPACE_FILE } from "../paths.ts";
 import { BUILD_PHASE, PLAN_DIR } from "./buildProgress.ts";
 
 /**
@@ -328,13 +341,33 @@ export interface RepoBoundary {
 /**
  * `git diff --name-only <base>...<branch>` in one repo, with both refs verified
  * first so a missing branch is an ABSENCE rather than a git error read as a diff.
+ *
+ * The two refs get DIFFERENT wording, because they are different facts (gh #92).
+ * A missing `<branch>` is ordinary — the epic branch was merged and deleted, and
+ * "not diffed" is the whole story. A missing `<base>` means `.tldrx/workspace.yml`
+ * RECORDS a `default_branch` this repo has never had, which silently turns this
+ * condition into `n/a` at every Build gate for as long as it stays wrong. Both
+ * still return an absence and the verdict stays green either way (see
+ * `evaluateBoundary` — this condition never refuses on an absence); what changes
+ * is that the operator reading the note can tell the two apart and knows where
+ * to look.
  */
 export async function diffRepo(target: EpicTarget): Promise<{ changed: readonly string[] | null; reason: string | null }> {
-  if (target.dir === null) return { changed: null, reason: `${target.repo} is not in .tldrx/workspace.yml` };
+  if (target.dir === null) return { changed: null, reason: `${target.repo} is not in ${PROJECT_WORKSPACE_FILE}` };
   if (!existsSync(target.dir)) return { changed: null, reason: `${target.repo} is not on disk` };
-  for (const ref of [target.base, target.branch]) {
-    const check = await git(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], target.dir);
-    if (!check.ok) return { changed: null, reason: `\`${ref}\` does not resolve in ${target.repo}` };
+  const baseCheck = await git(["rev-parse", "--verify", "--quiet", `${target.base}^{commit}`], target.dir);
+  if (!baseCheck.ok) {
+    return {
+      changed: null,
+      reason:
+        `\`${target.base}\`, the \`default_branch\` ${PROJECT_WORKSPACE_FILE} records for ${target.repo}, does not `
+        + "resolve there — the record is stale, so nothing in this repo has a base to be diffed against "
+        + "(run `tldrx doctor`)",
+    };
+  }
+  const branchCheck = await git(["rev-parse", "--verify", "--quiet", `${target.branch}^{commit}`], target.dir);
+  if (!branchCheck.ok) {
+    return { changed: null, reason: `\`${target.branch}\` does not resolve in ${target.repo}` };
   }
   const range = `${target.base}...${target.branch}`;
   const diff = await git(["diff", "--name-only", range], target.dir);

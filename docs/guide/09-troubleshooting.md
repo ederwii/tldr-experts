@@ -309,6 +309,15 @@ branch, or correct `build.epic_branch` in `run.yml`, then run the stage again. A
 **no** branch at all is a different case and is not refused: the prompt says so, and the cards it
 produces come out `draft`.
 
+**``05-watch/watch refuses to start: .tldrx/workspace.yml records `default_branch: main` for `<repo>`, and it does
+not resolve there``, exit 2.** The Watch stage diffs `<default_branch>...<epic_branch>`, and the base is not in the
+repo. `default_branch` was DETECTED from that repo when the workspace was set up, so this means the record has gone
+stale — a `master`→`main` rename, a fresh clone with only remote branches, a misdetection. Every diff in that repo is
+against a base that is not there, so it refuses rather than telling the watcher the feature is unseen (#92, same
+reasoning as #90). Fix `default_branch:` for that repo in `.tldrx/workspace.yml`, or fetch the branch into the repo.
+`tldrx doctor` lists every repo this is true of. Note that `boundary` at the Build gate does NOT refuse on the same
+fault — it reports `n/a` with the reason, because a workspace with one stale record must not have every gate bricked.
+
 **`· S5: a SECOND fix-list round was refused — the bound is 1 per story`.** A story gets one
 `fixlist` round, and it is spent. This review was read as `changes` instead, which costs the
 attempt the free round did not. Nothing is lost: the findings are appended to the review's own
