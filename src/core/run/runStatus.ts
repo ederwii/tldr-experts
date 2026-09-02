@@ -6,6 +6,7 @@
  * blocking" line is derived from the cursor stage plus the open blocks in that
  * phase's questions.md.
  */
+import { dashDuration, dashDurationAbsence } from "./duration.ts";
 import { remaining } from "../budget/wouldExceed.ts";
 import { countUnmetered, unmeteredNote } from "../budget/budgetView.ts";
 import type { RunBudget } from "../budget/RunBudget.ts";
@@ -57,6 +58,30 @@ export interface GateRow {
    */
   readonly executed_by?: RunGateExecutor;
   readonly authority?: RunGateAuthority;
+  /**
+   * The STAGE's own clock, unconverted (#120). Appended, never inserted: a
+   * `--json` consumer reading `gates[i].by` is untouched, the same promise
+   * `SINGLE_RUN_KEYS` makes for the top level.
+   *
+   * There is no `duration_seconds` beside them, on purpose and for #118's reason:
+   * a duration is a subtraction, it exists only when both ends do, and every
+   * number this layer could pick for the one-ended case is wrong — `0` is a
+   * measurement of zero and `null` is what the two timestamps already say. The
+   * subtraction happens where it is drawn.
+   */
+  readonly started_at: string | null;
+  readonly ended_at: string | null;
+  /**
+   * What the person who signed this gate wrote, or null.
+   *
+   * Null covers all three absences without distinguishing them, because a reader
+   * treats them the same: the gate is still open, or the note is the empty string
+   * `run new` writes and `tldrx approve` never replaced. **`""` is not a
+   * signature** and does not reach a reader as one — the same mapping `gateNote`
+   * makes on the dashboard, so the two surfaces cannot disagree about whether a
+   * gate was signed.
+   */
+  readonly note: string | null;
 }
 
 /**
@@ -169,6 +194,9 @@ function gateRows(run: RunFile): readonly GateRow[] {
     at: entry.stage.gate.at,
     ...(entry.stage.gate.executed_by === undefined ? {} : { executed_by: entry.stage.gate.executed_by }),
     ...(entry.stage.gate.authority === undefined ? {} : { authority: entry.stage.gate.authority }),
+    started_at: entry.stage.started_at,
+    ended_at: entry.stage.ended_at,
+    note: entry.stage.gate.note === "" ? null : entry.stage.gate.note,
   }));
 }
 
@@ -214,8 +242,14 @@ export function whatIsWaiting(run: RunFile, runDir: string): Waiting {
   return waitingFor(run, runDir);
 }
 
-/** The human rendering. `--json` prints `RunStatusView` instead. */
-export function renderStatus(view: RunStatusView): string {
+/**
+ * The human rendering. `--json` prints `RunStatusView` instead.
+ *
+ * `verbose` (`run status --verbose`) only ever ADDS lines under the gate rows —
+ * the timestamps behind a duration, the sentence behind an absent one, and the
+ * words on a signed gate. The default screen stays a screen (#120).
+ */
+export function renderStatus(view: RunStatusView, verbose = false): string {
   const width = Math.max(...view.phases.map((p) => p.id.length), 7);
   const lines = [
     `${view.run} · ${view.title}`,
@@ -262,7 +296,7 @@ export function renderStatus(view: RunStatusView): string {
   // matters, and `cost_usd` alone cannot tell one $2.60 try from two $1.30 ones.
   const attempts = renderAttempts(view.attempts);
   if (attempts !== null) lines.push(`${view.cursor.stage.padEnd(7)} ${attempts}`);
-  lines.push("", ...renderGates(view.gates));
+  lines.push("", ...renderGates(view.gates, verbose));
   lines.push(...renderOperatorNotes(view.operator_notes));
   lines.push(`waiting ${view.waiting.message}`);
   return lines.join("\n");
@@ -275,7 +309,7 @@ export function renderStatus(view: RunStatusView): string {
  * for me" is the question `run auto` makes people ask, and an answer that only
  * appears once you have opted in is an answer nobody finds.
  */
-export function renderGates(rows: readonly GateRow[]): readonly string[] {
+export function renderGates(rows: readonly GateRow[], verbose = false): readonly string[] {
   if (rows.length === 0) return [];
   const where = rows.map((row) => `${row.phase}/${row.stage}`);
   const width = Math.max(...where.map((w) => w.length));
@@ -284,13 +318,88 @@ export function renderGates(rows: readonly GateRow[]): readonly string[] {
   const auto = rows.filter((row) => row.policy === "auto").length;
   const agent = rows.filter((row) => row.policy === "agent").length;
   const human = rows.length - auto - agent;
+  const noted = rows.filter((row) => row.note !== null).length;
   const lines = [
     `gates   ${String(human)} human, ${String(auto)} auto`
       + (agent === 0 ? "" : `, ${String(agent)} agent`),
   ];
+  // The marker's legend, under the header and only when a marker is drawn — the
+  // same shape `unmeteredNote` has under `budget`. A bare glyph nobody explained
+  // is a worse answer than no glyph at all.
+  if (noted > 0) {
+    lines.push(`        ${String(noted)} signed gate${noted === 1 ? " carries" : "s carry"} a note`
+      + ` (${NOTE_MARK})`
+      + (verbose ? "" : ` \u2014 \`run status --verbose\` quotes ${noted === 1 ? "it" : "them"}`));
+  }
+  const described = rows.map(describeGate);
+  const tails = rows.map(gateTail);
+  const tailWidth = Math.max(...described.map((text) => text.length));
   rows.forEach((row, i) => {
-    lines.push(`  ${(where[i] ?? "").padEnd(width)}  ${row.policy.padEnd(5)}  ${describeGate(row)}`);
+    const head = `  ${(where[i] ?? "").padEnd(width)}  ${row.policy.padEnd(5)}  `;
+    const tail = tails[i] ?? "";
+    const describe = described[i] ?? "";
+    // Padded only when something follows it, so a run with nothing to add is
+    // byte-identical to the screen before #120 — trailing spaces included.
+    lines.push(tail === "" ? head + describe : `${head}${describe.padEnd(tailWidth)}  ${tail}`);
+    if (verbose) lines.push(...gateDetail(row));
   });
+  return lines;
+}
+
+/** Marks a gate somebody signed with words. Explained in the header, never alone. */
+const NOTE_MARK = "\u270e";
+
+/**
+ * The compact right-hand end of a stage line: how long it took, and whether its
+ * gate was signed with words.
+ *
+ * The duration is a subtraction done HERE, off `run.yml`'s two timestamps, by the
+ * same `dashDuration` the dashboard draws with (`core/run/duration.ts`) — one
+ * implementation, so the page and the terminal cannot disagree about one file.
+ */
+function gateTail(row: GateRow): string {
+  const parts = [briefDuration(row.started_at, row.ended_at)];
+  if (row.note !== null) parts.push(NOTE_MARK);
+  return parts.filter((part) => part !== "").join("  ");
+}
+
+/**
+ * A duration, or a few words saying which end is missing — never a blank that
+ * reads as "it took no time", and never a synthesised `0m`.
+ *
+ * A stage with NEITHER end gets nothing rather than a phrase. That is not the
+ * blank #118 refused: on the page the duration has a CELL, and an empty cell is a
+ * claim; here it is a suffix on a line, and a stage nobody has started has no
+ * clock to account for — its status column already says `todo`. Printing "not
+ * timed" on all eight rows of a fresh run is noise, not honesty. `--verbose`
+ * spells out all four cases, including this one, with `dashDurationAbsence`.
+ */
+function briefDuration(startedAt: string | null, endedAt: string | null): string {
+  const measured = dashDuration(startedAt, endedAt);
+  if (measured !== "") return measured;
+  const noStart = startedAt === null || startedAt === "";
+  const noEnd = endedAt === null || endedAt === "";
+  if (noStart && noEnd) return "";
+  if (noEnd) return "not ended";
+  if (noStart) return "no start";
+  return "bad timestamps";
+}
+
+/**
+ * What `--verbose` adds under one stage line: the two instants behind a duration
+ * or the sentence behind an absent one, and the words on a signed gate.
+ *
+ * Timestamps are printed as `run.yml` holds them. This screen prints an operator
+ * note's `ts` raw for the same reason — a run is read across machines, and a
+ * localised instant is a different fact on each of them.
+ */
+function gateDetail(row: GateRow): readonly string[] {
+  const lines: string[] = [];
+  const measured = dashDuration(row.started_at, row.ended_at);
+  lines.push(measured === ""
+    ? `      ${dashDurationAbsence(row.started_at, row.ended_at)}`
+    : `      ${String(row.started_at)} \u2192 ${String(row.ended_at)}`);
+  if (row.note !== null) lines.push(`      note: ${row.note}`);
   return lines;
 }
 

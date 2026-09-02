@@ -51,7 +51,7 @@ export const runCommand: Command = {
     "                  [--from <aidlc-intent-dir> | --seed <file|dir> ...] [--gates <a,b|a:agent|all|none>]\n" +
     "                  [--attended-by host] [--root <path>]\n" +
     "       tldrx run attend <host|--none> [<run>] [--run <id>] [--root <path>]\n" +
-    "       tldrx run status [<run>] [--json] [--run <id>] [--root <path>]\n" +
+    "       tldrx run status [<run>] [--json] [--verbose] [--run <id>] [--root <path>]\n" +
     "       tldrx run estimate [<run>] [--json] [--run <id>] [--root <path>]\n" +
     "       tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]\n" +
     "                  [--yolo] [--parallel <n>] [--gate-agent] [--ui scene|compact|plain|off]\n" +
@@ -344,7 +344,13 @@ function runStatus(argv: readonly string[]): number {
 
     const store = resolution.store;
     const view = buildStatus(store.run, store.budget, store.runDir);
-    process.stdout.write(json ? `${JSON.stringify(view, null, 2)}\n` : `${renderStatus(view)}\n`);
+    // `--verbose` only ADDS lines under the gate rows: the two instants behind a
+    // stage's duration, the sentence naming which end is missing when there is
+    // none, and the words on a signed gate (#120). `--json` already carries all
+    // three per gate row, so it has nothing to be verbose about.
+    process.stdout.write(json
+      ? `${JSON.stringify(view, null, 2)}\n`
+      : `${renderStatus(view, boolFlag(args, "verbose"))}\n`);
     return EXIT_OK;
   } catch (error) {
     return fail("run status", error);
