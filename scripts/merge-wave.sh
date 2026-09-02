@@ -17,11 +17,60 @@
 #      `git reset --hard origin/main` into this same shared checkout, which is exactly what
 #      happened on 2026-09-02. See scripts/merge-guard.sh for what git lets it stop and
 #      what it demonstrably cannot.
+#   4. The merge commit belongs to THIS run until it is pushed (#116). Defences 1-3 all
+#      protect the run that is still alive; this one is about the run that is not. A wave
+#      killed mid-gate used to hand back the lock and leave its ungated merge commit on
+#      `main` — clean tree, no lock, no marker, nothing saying so — and the next sibling
+#      merged on top and published it under ITS gate result. So: `unwind` puts `main` back
+#      on every path that does not push (signal, red gate, failed push), and the preamble
+#      REFUSES to start on a `main` that is ahead of origin/main, naming the commits.
 #
 # Exit codes: 1 dirty tree · 2 merge conflict · 3 red gate · 4 push failed
 #             5 HEAD moved during the gates · 6 gave up waiting for the lock
 #             7 the gated commit is not a fast-forward of origin/main
+#             8 unpushed, ungated commits were already sitting on main
+#             9 could not snapshot this script before running it
 set -u
+
+# --- run from a SNAPSHOT of this file, never from the file itself (#117) ------
+# Bash reads a script incrementally and seeks back into it for each next command; it does
+# not snapshot. `git merge` sits about a third of the way through this file, and every
+# thing that makes the run honest — the four gates, the HEAD assertion, the fast-forward
+# check, the push, the summary line — lives after that byte. Measured, macOS, GNU bash
+# 3.2.57(1): a ~24 KB script rewritten IN PLACE while it slept printed its head, lost its
+# tail, and EXITED 0. Silently stopping early and reporting success is precisely the
+# failure this script exists to prevent, aimed at itself.
+#
+# The live merges of #113/#114 survived only by an accident of somebody else's program:
+# `git merge` unlinks and recreates a changed file rather than truncating it (measured, git
+# 2.50.1 — inode 192824934 -> 192824958), so the running shell kept reading the original
+# bytes off the unlinked inode. Nothing in this repo would notice that changing. So this
+# does not try to handle merges; it stops executing a file anyone can rewrite.
+#
+# An ARGV sentinel rather than an environment variable, deliberately: `bun test` below runs
+# this repo's own merge-wave suite, which spawns this script again. argv is not inherited,
+# so every invocation snapshots itself; an exported flag would have let the outer wave
+# switch off the inner ones' protection. `exec` keeps the pid, so the caller's timeout,
+# `kill`, `$$`, the lock owner line and $LOGS all still refer to this same process.
+if [ "${1:-}" = "--mw-snapshot" ]; then
+  MW_DIR="$2"                                   # the REAL scripts/ dir, for the two siblings
+  MW_SNAP="$(cd "$(dirname "$0")" && pwd)"      # this copy's private directory, ours to remove
+  shift 2
+  trap 'rm -rf "$MW_SNAP"' EXIT                 # replaced below, once there is more to undo
+else
+  MW_ORIG="$(cd "$(dirname "$0")" && pwd)"
+  MW_SNAP="$(mktemp -d "${TMPDIR:-/tmp}/mw-self.XXXXXX")" || {
+    echo "FAIL snapshot: mktemp -d under ${TMPDIR:-/tmp} failed — nothing merged"; exit 9
+  }
+  # Named `mw-*` on purpose: the suite's leak assertions scan this run's private $TMPDIR for
+  # exactly that prefix, so a snapshot this script forgets to remove fails a test (#95).
+  if cp "$0" "$MW_SNAP/merge-wave.sh"; then
+    exec bash "$MW_SNAP/merge-wave.sh" --mw-snapshot "$MW_ORIG" "$@"
+  fi
+  rm -rf "$MW_SNAP"
+  echo "FAIL snapshot: could not copy $0 into $MW_SNAP — nothing merged"; exit 9
+fi
+
 B="${1:?branch}"; M="${2:?message}"; R="$(git rev-parse --show-toplevel)"; cd "$R" || exit 1
 
 # --- the lock -----------------------------------------------------------------
@@ -31,7 +80,8 @@ B="${1:?branch}"; M="${2:?message}"; R="$(git rev-parse --show-toplevel)"; cd "$
 # also the right scope — every worktree of this repo pushes the same `main`. That
 # resolution, and the rules for when an owner counts as dead, live in merge-lock.sh
 # because scripts/merge-guard.sh has to answer both questions the same way.
-MW_DIR="$(cd "$(dirname "$0")" && pwd)"
+# MW_DIR is the REPOSITORY's scripts/ directory, handed over by the snapshot preamble —
+# `dirname "$0"` would name the temp copy, which has no siblings in it (#117).
 [ -f "$MW_DIR/merge-lock.sh" ] || { echo "FAIL lock: $MW_DIR/merge-lock.sh is missing — nothing merged"; exit 6; }
 # shellcheck source=scripts/merge-lock.sh
 . "$MW_DIR/merge-lock.sh"
@@ -51,14 +101,35 @@ bash "$MW_DIR/merge-guard.sh" --install; GUARD=$?
 MW_LOCK_TOKEN="mw-$$-$(date +%s)-${RANDOM:-0}"
 export MW_LOCK_TOKEN
 HELD=0
+# The tree half of the same promise (#116). Set around the merge, read by `unwind`, and
+# declared HERE so no path through the wait loop below can reach a trap with them unset.
+PRE=""        # where main stood before this run touched it
+MERGE_SHA=""  # the merge commit this run created, empty until it exists
+PUSHED=0      # 1 once that commit is published and therefore no longer this run's to undo
 # The marker goes with the lock, on every path out — including the INT/TERM traps below.
 release() { if [ "$HELD" = 1 ]; then rm -f "$MARKER" "$MARKER.tmp.$$"; rm -rf "$LOCK"; fi; return 0; }
-trap release EXIT
+# Put main back where this run found it. Deliberately narrow, on all three counts:
+#   - only OUR commit (HEAD is still exactly the sha we created), so a third party's work
+#     landing on top — the exit-5 case — is left for a human rather than discarded;
+#   - only before the push, because after it the commit is origin's, not ours;
+#   - `reset --hard` to a recorded sha, never to a ref, so it cannot follow a moved `main`.
+# Runs BEFORE release(), while this run still holds the lock and still matches its token:
+# the #89 ref guard waves through the invocation that owns the lock and refuses everyone
+# else, so unwinding after the handover could be vetoed by our own guard.
+# 0 when it rewound, 1 when there was nothing to rewind or it could not.
+unwind() {
+  [ -n "$MERGE_SHA" ] && [ "$PUSHED" = 0 ] && [ "$(git rev-parse HEAD 2>/dev/null)" = "$MERGE_SHA" ] || return 1
+  git reset -q --hard "$PRE" >/dev/null 2>&1 && return 0
+  echo "merge-wave: could NOT rewind $MERGE_SHA to $PRE — main is carrying an UNGATED commit and needs a human" >&2
+  return 1
+}
+trap 'unwind; release; rm -rf "$MW_SNAP"' EXIT
 # A signal that is not trapped kills bash WITHOUT running the EXIT trap, so an
 # interrupted merge would leave its lock behind. The stale rules below would break it
-# open a second later; releasing here means nobody has to.
-trap 'release; exit 130' INT
-trap 'release; exit 143' TERM
+# open a second later; releasing here means nobody has to. SIGKILL and a power cut run
+# no trap at all, which is precisely what the preamble's orphan check below is for.
+trap 'unwind; release; exit 130' INT
+trap 'unwind; release; exit 143' TERM
 
 waited=0; noted=0
 until mkdir "$LOCK" 2>/dev/null; do
@@ -119,6 +190,21 @@ LOGS="${TMPDIR:-/tmp}/mw-$$"; mkdir -p "$LOGS"
 # dirty tree" alone sends them looking in the wrong place, with nothing to look at.
 DIRT="$(git status --porcelain)"
 [ -z "$DIRT" ] || { echo "FAIL dirty tree — the lock is held, so this is more likely another run's residue in this SHARED checkout than your own: $(echo "$DIRT" | tr '\n' ' ' | cut -c1-300)"; exit 1; }
+# Defence 4's other half (#116). A clean tree is NOT the same as an unstarted one: a wave
+# killed by SIGKILL, or any wave from before this check existed, leaves a merge commit on
+# `main` that no gate ever finished and no lock or marker advertises. Merging on top of it
+# publishes it under this run's gate result, and #44's fast-forward check cannot object —
+# origin/main IS an ancestor of it. HEAD, not `refs/heads/main`: HEAD is what gets merged
+# into and what `HEAD:main` pushes, so a stale local `main` beside a detached HEAD is none
+# of this run's business. Behind or diverged is left to the fast-forward check at the push.
+if git rev-parse --verify -q origin/main >/dev/null; then
+  AHEAD="$(git log --oneline --no-decorate origin/main..HEAD 2>/dev/null | tr '\n' ' ' | cut -c1-300)"
+  [ -z "$AHEAD" ] || {
+    echo "FAIL unpushed commits already on main — nothing merged, nothing gated: ${AHEAD}(origin/main is $(git rev-parse --short origin/main)). No wave holds the lock, so nothing here finished gating those; merging on top would publish them under THIS run's summary line (#116). Re-run the wave that owns them, or 'git reset --hard origin/main' in this checkout once you know what they are."
+    exit 8
+  }
+fi
+PRE="$(git rev-parse HEAD)"
 git merge --no-ff "$B" -m "$M
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
@@ -142,6 +228,7 @@ Claude-Session: https://claude.ai/code/session_019gpPtEAhKfcQc7vfZtmT2L" >"$LOGS
   exit 2
 }
 GATED="$(git rev-parse HEAD)"
+MERGE_SHA="$GATED"   # from here to the push, main is this run's to put back (#116)
 bun install >/dev/null 2>&1
 bun run typecheck >"$LOGS/tc.log" 2>&1; TC=$?
 bun test >"$LOGS/test.log" 2>&1; TE=$?
@@ -161,7 +248,13 @@ if [ "$NOW" != "$GATED" ]; then
   echo "FAIL HEAD moved during the gates: gated $(git rev-parse --short "$GATED"), now $(git rev-parse --short "$NOW") — those gate results describe a tree this run is not pushing; NOT pushed. Logs: $LOGS"; exit 5
 fi
 if [ $TC -ne 0 ] || [ $TE -ne 0 ] || [ $BU -ne 0 ] || [ $DO -ne 0 ] || [ "$SEAM" != "0" ]; then
-  echo "FAIL typecheck=$TC test=$TE(fails=$FAILS) build=$BU docs=$DO seam=$SEAM — main left at merge commit $(git rev-parse --short HEAD), NOT pushed; logs: $LOGS; failing: $(grep '^(fail)' "$LOGS/test.log" | head -3 | cut -c1-80 | tr '\n' '|')"; exit 3
+  BAD="$(git rev-parse --short HEAD)"
+  # Rewound rather than left standing (#116): the branch still holds every byte of the work,
+  # so the merge is one command away, while a red commit left on `main` is a landmine for
+  # the next wave. The kept log directory named below is the inspection surface.
+  if unwind; then WHERE="merge commit $BAD rewound off main (back at $(git rev-parse --short HEAD)), NOT pushed"
+  else WHERE="main is STILL at $BAD and NOT pushed — rewind it before the next wave"; fi
+  echo "FAIL typecheck=$TC test=$TE(fails=$FAILS) build=$BU docs=$DO seam=$SEAM — $WHERE; logs: $LOGS; failing: $(grep '^(fail)' "$LOGS/test.log" | head -3 | cut -c1-80 | tr '\n' '|')"; exit 3
 fi
 # Push the commit that was GATED, not the `main` ref — which need not be the same object.
 # `git push origin main` publishes refs/heads/main whatever HEAD is: gate one tree, push
@@ -172,5 +265,6 @@ if git rev-parse --verify -q origin/main >/dev/null; then
   }
 fi
 git push -q origin HEAD:main || { echo "FAIL push"; exit 4; }
+PUSHED=1   # published: the commit is origin's now, and no trap may take it back (#116)
 rm -rf "$LOGS"   # a green run's logs are noise; every FAIL above names the directory it kept
 echo "OK $(git rev-parse --short HEAD) $TESTS 0 fail · typecheck/build/docs/seam clean · pushed"

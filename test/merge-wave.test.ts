@@ -18,7 +18,7 @@
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawn, execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { foreignWaveLogPath } from "./fixtures/foreignWaveLog.ts";
@@ -34,6 +34,12 @@ const MERGE_WAVE = join(REPO, "scripts", "merge-wave.sh");
 /** A stand-in gate that records the sha it ran against — and can be told to misbehave. */
 const GATE_SH = `#!/usr/bin/env bash
 echo "$1 $(git rev-parse HEAD)" >> "$GATE_LOG"
+# #117: clobber a file IN PLACE, from inside the window between the merge and the push.
+# Truncating rather than replacing is the whole point — see that describe block.
+if [ -n "\${GATE_TRUNCATE:-}" ] && [ "\${GATE_TRUNCATE_ON:-typecheck}" = "$1" ]; then
+  printf 'echo TRUNCATED\\n' > "$GATE_TRUNCATE"
+  echo "\$(stat -f %z "$GATE_TRUNCATE")" > "$GATE_LOG.truncated"
+fi
 if [ -f poison.txt ]; then echo "gate saw poison.txt"; exit 1; fi
 # Red in the DOCS build and nowhere else — the #114 shape: a dead link or a throwing
 # generator, on a tree whose typecheck, tests and build are all green.
@@ -142,7 +148,12 @@ type Invocation = {
 
 let invocations = 0;
 
-function invoke(sb: Sandbox, branch: string, env: Record<string, string> = {}): Invocation {
+/**
+ * `script` defaults to this repository's own `scripts/merge-wave.sh`. The #117 tests pass a
+ * COPY that lives inside the sandbox repo, because the only way to prove a wave survives
+ * its own merge is to let the merge rewrite the very file bash is reading.
+ */
+function invoke(sb: Sandbox, branch: string, env: Record<string, string> = {}, script = MERGE_WAVE): Invocation {
   let stdout = "";
   let stderr = "";
   // Per INVOCATION, not per sandbox: this file deliberately runs two waves at once, and a
@@ -151,7 +162,7 @@ function invoke(sb: Sandbox, branch: string, env: Record<string, string> = {}): 
   // tmpdir, where 1300 of them had piled up by the time #95 was filed.
   const logRoot = join(sb.dir, "tmpdirs", `invocation-${++invocations}`);
   mkdirSync(logRoot, { recursive: true });
-  const child = spawn("bash", [MERGE_WAVE, branch, `merge ${branch}`], {
+  const child = spawn("bash", [script, branch, `merge ${branch}`], {
     cwd: sb.main,
     env: { ...process.env, TMPDIR: logRoot, GATE_LOG: join(sb.dir, `gate-${branch}.log`), ...env },
   });
@@ -751,6 +762,11 @@ describe("a conflicted merge does not wedge the checkout (#76)", () => {
     writeFileSync(join(sb.main, "contested.txt"), "main's version\n");
     sb.git("add", "-A");
     sb.git("commit", "-q", "-m", "main touches the same file");
+    // PUBLISHED, not just committed. The scenario is "a branch that conflicts with the
+    // main everyone else already has", and since #116 a local `main` running ahead of
+    // origin/main is itself a refusable condition — an unpushed commit on `main` is the
+    // orphan a killed wave leaves. Pushing here keeps this fixture about conflicts.
+    sb.git("push", "-q", "origin", "main");
   }
 
   test("the conflicting paths are still named, and the exit code is still 2", async () => {
@@ -1058,5 +1074,279 @@ describe("the convention the guard only approximates is written down (#89)", () 
       expect(text).toContain("git reset --hard");
       expect(text).toContain("git checkout -B main");
     }
+  });
+});
+
+/**
+ * #116 — the wave OWNS its merge commit until the push.
+ *
+ * Measured live 2026-09-02, merging #109/#110 in the shared checkout: the caller's own
+ * 10-minute timeout sent SIGTERM at minute 10 of an ~8-minute gate run. The `TERM` trap
+ * handed back the lock and the marker and touched nothing else, so `main` was left like
+ * this — and stayed there for ~15 minutes, with nothing anywhere saying so:
+ *
+ *   $ git status --porcelain          # clean
+ *   $ git log --oneline -2
+ *   40e60a0 merge: … (#109, #110/#105)      <- created, never gated, never pushed
+ *   45b7709 fix(gates): …
+ *   $ git rev-parse --short origin/main
+ *   1770e9e
+ *   $ ls -d .git/merge-wave.lock            # gone
+ *
+ * None of the three existing defences has anything to say about it. The lock was released,
+ * so a sibling takes it freely. The tree is clean, so the dirty-tree guard is happy. And
+ * `git merge-base --is-ancestor origin/main HEAD` PASSES for the sibling — origin/main is
+ * an ancestor — so #44's fast-forward check waves it through too. The sibling merges on
+ * top, gates the combined tree, and pushes both commits: the interrupted run's commit
+ * reaches origin/main carrying somebody else's gate result and somebody else's summary
+ * line. #44's assertion protects the run that is still alive; this is about the one that
+ * is not.
+ *
+ * The invariant these tests pin: no commit reaches origin/main without ITS OWN gate having
+ * passed, and a wave that does not push leaves `main` exactly as it found it.
+ */
+describe("an interrupted wave leaves main exactly as it found it (#116)", () => {
+  /** Poll until the wave has committed its merge and entered its first gate. */
+  async function waitForMergeCommit(sb: Sandbox, branch: string): Promise<void> {
+    await waitUntil(() => gateShas(sb, branch).length > 0, 60_000, `${branch} to merge and start gating`);
+  }
+
+  test("SIGTERM between the merge and the push rewinds main to where the wave found it", async () => {
+    const sb = sandbox();
+    const before = sb.git("rev-parse", "HEAD");
+    const release = join(sb.dir, "release-a");
+    const a = invoke(sb, "wave-a", { GATE_HOLD_UNTIL: release, GATE_HOLD_ON: "typecheck" });
+    await waitForMergeCommit(sb, "wave-a");
+    // The merge commit exists right now — this is the window the whole bug lives in.
+    expect(sb.git("rev-parse", "HEAD")).not.toBe(before);
+
+    a.signal("SIGTERM");
+    // Bash runs a trap only once the FOREGROUND child returns, so the gate is let go right
+    // after the signal: the trap is already pending and fires before the next gate starts.
+    writeFileSync(release, "go\n");
+    const { code } = await a.done;
+    expect(code).toBe(143);
+    expect(existsSync(lockDir(sb))).toBe(false);           // #44's promise, already kept
+    expect(sb.git("rev-parse", "HEAD")).toBe(before);       // #116's, which was not
+    expect(sb.git("status", "--porcelain")).toBe("");
+    expect(gateShas(sb, "wave-a")).toHaveLength(1);         // and it never reached a second gate
+  });
+
+  test("so the next wave cannot push the interrupted one's commit under its own gate result", async () => {
+    const sb = sandbox();
+    const release = join(sb.dir, "release-a");
+    const a = invoke(sb, "wave-a", { GATE_HOLD_UNTIL: release, GATE_HOLD_ON: "typecheck" });
+    await waitForMergeCommit(sb, "wave-a");
+    a.signal("SIGTERM");
+    writeFileSync(release, "go\n");
+    expect((await a.done).code).toBe(143);
+
+    // The sibling that takes the lock next. Pre-fix it merged ON TOP of wave-a's orphan,
+    // gated the pair, and published both under one summary line naming only itself.
+    const b = await invoke(sb, "wave-b").done;
+    expect(b.code).toBe(0);
+    expect(b.stdout).toContain("pushed");
+    const published = originLog(sb);
+    expect(published[0]).toBe("merge wave-b");
+    expect(published).not.toContain("merge wave-a");
+    // And wave-a's own work is not lost — its branch is untouched, so it can just re-run.
+    expect(sb.git("rev-parse", "wave-a")).toBeTruthy();
+  });
+
+  test("a red gate rewinds too, so a failed wave leaves nothing for the next one to inherit", async () => {
+    const sb = sandbox();
+    const before = sb.git("rev-parse", "HEAD");
+    const red = await invoke(sb, "wave-poison").done;
+    expect(red.code).toBe(3);
+    expect(red.stdout).toContain("NOT pushed");
+    expect(sb.git("rev-parse", "HEAD")).toBe(before);
+    // The logs a red run keeps are the inspection surface; the commit is not, because the
+    // branch still holds every byte of it and the merge is one command away.
+    expect(/logs: (\S+);/.exec(red.stdout)?.[1]).toBeTruthy();
+
+    const green = await invoke(sb, "wave-a").done;
+    expect(green.code).toBe(0);
+    expect(originLog(sb)[0]).toBe("merge wave-a");
+    expect(originLog(sb)).not.toContain("merge wave-poison");
+  });
+
+  test("a HEAD that moved during the gates is NOT rewound — that tree is a human's to judge", async () => {
+    const sb = sandbox();
+    const { code, stdout } = await invoke(sb, "wave-a", { GATE_MOVE_HEAD: "build" }).done;
+    expect(code).toBe(5);
+    expect(stdout).toContain("HEAD moved during the gates");
+    // The rewind only ever undoes THIS run's own commit, and only while it is still the tip.
+    // A third party's commit sitting on top is exactly the state that needs looking at.
+    expect(sb.git("log", "--format=%s", "-1")).toBe("a third party moves HEAD mid-gate");
+  });
+
+  test("a pre-existing orphan on main is refused BY NAME rather than merged over", async () => {
+    const sb = sandbox();
+    // What SIGKILL, a power cut, or a pre-#116 wave leaves behind: a merge commit on the
+    // local `main`, absent from origin/main, with no lock and no marker to explain it.
+    sb.git("merge", "--no-ff", "wave-a", "-m", "merge wave-a");
+    const orphan = sb.git("rev-parse", "--short", "HEAD");
+    const before = originLog(sb);
+
+    const { code, stdout } = await invoke(sb, "wave-b").done;
+    expect(code).toBe(8);
+    expect(stdout).toContain(orphan);                 // named, because silence is the danger
+    expect(stdout).toContain("merge wave-a");
+    expect(stdout).toContain("nothing merged");
+    expect(originLog(sb)).toEqual(before);            // neither commit published
+    expect(gateShas(sb, "wave-b")).toEqual([]);       // and no gate was even spent on it
+    expect(existsSync(lockDir(sb))).toBe(false);      // the lock is handed back, not wedged
+  });
+
+  test("the refusal is about HEAD, not the `main` ref — a detached gated push still works", async () => {
+    const sb = sandbox();
+    // #44's case: a local `main` ahead of origin/main while HEAD sits ON origin/main. The
+    // wave merges into and pushes HEAD, so that stale ref is none of its business.
+    sb.git("commit", "-q", "--allow-empty", "-m", "never gated, never pushed");
+    sb.git("checkout", "-q", "--detach", "origin/main");
+    const { code, stdout } = await invoke(sb, "wave-a").done;
+    expect(code).toBe(0);
+    expect(stdout).toContain("pushed");
+    expect(originLog(sb)[0]).toBe("merge wave-a");
+  });
+});
+
+
+/**
+ * #117 — the wave must survive its own file being rewritten while it runs.
+ *
+ * `merge-wave.sh` reaches `git merge --no-ff` about a third of the way through its own
+ * file, and everything that makes the run honest lives after that byte: the four gates,
+ * the `HEAD moved` assertion, the fast-forward check, the push, and the summary line.
+ * Bash reads a script incrementally and seeks back into it for each next command; it does
+ * not snapshot. So anything that rewrites `scripts/merge-wave.sh` between the merge and
+ * the push is rewriting the file bash is reading, a third of the way in.
+ *
+ * MEASURED here, macOS, `GNU bash 3.2.57(1)-release (arm64-apple-darwin25)` — a ~24 KB
+ * script printing `START`, sleeping, then printing `TAIL REACHED`, clobbered 300 ms in:
+ *
+ *   rewritten IN PLACE (`> file`, same inode)   -> START, TAIL LOST, EXIT=0
+ *   replaced by a NEW inode (`rm` then create)  -> START, TAIL REACHED, EXIT=0
+ *
+ * Silently stopping early AND exiting 0 is exactly the failure this script exists to
+ * prevent, aimed at itself: merge, skip the gates, report success.
+ *
+ * WHY THE LIVE MERGE OF #113/#114 SURVIVED, and it is not luck this file should rely on:
+ * `git merge` does not truncate. Measured on git 2.50.1 — a merge that shrank a tracked
+ * file moved it from inode 192824934 to 192824958, so the running shell's open fd kept
+ * reading the ORIGINAL bytes off the now-unlinked inode. That is why merge `481540d` could
+ * print `typecheck/build/seam clean` while `git show 481540d:scripts/merge-wave.sh` already
+ * ended in `typecheck/build/docs/seam clean`: two versions, both intact, in the same second.
+ * The merge path is therefore safe only for as long as git keeps replacing rather than
+ * truncating — an implementation detail of somebody else's program, load-bearing for this
+ * script's honesty, and nothing in this repo would notice it changing.
+ *
+ * So the fix is not "handle merges", it is "do not execute a file anybody can rewrite":
+ * `merge-wave.sh` re-execs itself from a private snapshot before it does anything. These
+ * tests drive it from both ends — a real wave that merges a change to the script (green
+ * before the fix, by git's grace) and a gate that truncates the script IN PLACE mid-run
+ * (the measurement above, as a wave; silently green-and-unpushed before the fix).
+ */
+describe("a wave survives its own script being rewritten mid-run (#117)", () => {
+  const REWRITTEN = "REWRITTEN-BY-THE-MERGE";
+
+  /** This repo's three merge scripts, inside the sandbox and PUBLISHED (#116 refuses a main ahead of origin). */
+  function withScripts(sb: Sandbox): string {
+    const scripts = join(sb.main, "scripts");
+    mkdirSync(scripts, { recursive: true });
+    for (const f of ["merge-wave.sh", "merge-lock.sh", "merge-guard.sh"]) {
+      copyFileSync(join(REPO, "scripts", f), join(scripts, f));
+      chmodSync(join(scripts, f), 0o755);
+    }
+    sb.git("add", "-A");
+    sb.git("commit", "-q", "-m", "the wave script, inside the tree it merges into");
+    sb.git("push", "-q", "origin", "main");
+    return join(scripts, "merge-wave.sh");
+  }
+
+  /** …plus a branch that SHRINKS `merge-wave.sh` and rewrites its summary line. */
+  function selfMerging(sb: Sandbox, branch: string): string {
+    const path = withScripts(sb);
+    sb.git("checkout", "-q", "-b", branch, "main");
+    const before = readFileSync(path, "utf8");
+    const shrunk = before.split("\n")
+      .filter((l, i) => i === 0 || !l.trimStart().startsWith("#"))
+      .join("\n")
+      .replace("typecheck/build/docs/seam clean", REWRITTEN);
+    expect(shrunk.length).toBeLessThan(before.length * 0.7);
+    writeFileSync(path, shrunk);
+    sb.git("add", "-A");
+    sb.git("commit", "-q", "-m", `${branch} work`);
+    sb.git("checkout", "-q", "main");
+    return path;
+  }
+
+  /** The clobber really happened — asserted from OUTSIDE the repo, because #116's rewind restores the file. */
+  const clobbered = (sb: Sandbox, branch: string) => existsSync(join(sb.dir, `gate-${branch}.log.truncated`));
+
+  test("a script truncated IN PLACE mid-gate still gates, still pushes, and still reports", async () => {
+    const sb = sandbox();
+    const script = withScripts(sb);
+    // The measurement in this block's header, as a wave: the typecheck gate does
+    // `> scripts/merge-wave.sh`, truncating the running file WITHOUT changing its inode —
+    // so bash's next read comes back at EOF. Before the fix this run merged, ran ONE gate,
+    // pushed nothing, printed nothing, and exited 0. Verbatim, measured 2026-09-02:
+    //   gate log: "typecheck c606114"      (the other two never ran)
+    //   EXIT=0                             (silent)
+    //   origin log: "base"                 (nothing published)
+    const { code, stdout } = await invoke(sb, "wave-a", { GATE_TRUNCATE: script }, script).done;
+    expect(clobbered(sb, "wave-a")).toBe(true);
+    expect(code).toBe(0);
+    expect(stdout).toContain("pushed");
+    const shas = gateShas(sb, "wave-a");
+    expect(shas).toHaveLength(3);                        // all three, from AFTER the clobber
+    expect(new Set(shas).size).toBe(1);
+    expect(originLog(sb)[0]).toBe("merge wave-a");
+  });
+
+  test("and a RED one truncated the same way is honest about it, and rewinds (#116)", async () => {
+    const sb = sandbox();
+    const script = withScripts(sb);
+    const before = sb.git("rev-parse", "HEAD");
+    const published = originLog(sb);
+
+    const { code, stdout } = await invoke(sb, "wave-poison", { GATE_TRUNCATE: script }, script).done;
+    expect(clobbered(sb, "wave-poison")).toBe(true);
+    // A wave that fails silently and exits 0 is the worst outcome this script has: before
+    // the fix the merge landed, the first gate went red, and the branch that would have
+    // SAID so had been read off the end of the file.
+    expect(code).toBe(3);
+    expect(stdout).toContain("NOT pushed");
+    expect(originLog(sb)).toEqual(published);
+    expect(sb.git("rev-parse", "HEAD")).toBe(before);    // #116's rewind lives in that tail too
+  });
+
+  test("merging a change to merge-wave.sh works end to end — the issue's own scenario", async () => {
+    const sb = sandbox();
+    const script = selfMerging(sb, "wave-self");
+    const sizeBefore = readFileSync(script, "utf8").length;
+
+    const { code, stdout } = await invoke(sb, "wave-self", {}, script).done;
+    expect(code).toBe(0);
+    const after = readFileSync(script, "utf8");
+    expect(after.length).toBeLessThan(sizeBefore);       // the merge really did replace it
+    expect(after).toContain(REWRITTEN);
+    // …and the process ran to the end of the text it STARTED with, which is the honest
+    // outcome whether git replaces the inode or some future git truncates it.
+    expect(stdout).toContain("pushed");
+    expect(stdout).toContain("typecheck/build/docs/seam clean");
+    expect(stdout).not.toContain(REWRITTEN);
+    expect(gateShas(sb, "wave-self")).toHaveLength(3);
+    expect(originLog(sb)[0]).toBe("merge wave-self");
+  });
+
+  test("the snapshot is cleaned up like every other temp directory (#95)", async () => {
+    const sb = sandbox();
+    const script = withScripts(sb);
+    const run = invoke(sb, "wave-a", {}, script);
+    expect((await run.done).code).toBe(0);
+    // `waveLogs` scans this invocation's private $TMPDIR for `mw-*`, and the snapshot
+    // deliberately matches that prefix: a leaked snapshot fails HERE rather than piling up.
+    expect(waveLogs(run)).toEqual([]);
   });
 });
