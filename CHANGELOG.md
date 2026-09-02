@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.1 — unreleased
+
+### Added
+
+- **The landing page now sells the unattended flow it never mentioned (#128).** Measured at
+  `95a39db`: `grep -c 'tldrx drive' docs-site/index.md` returned `0`, and so did its Spanish
+  twin — a bare `grep drive` exited `1` on both. `tldrx drive` is the star command for handing
+  a run over for the night; it has a guide in each locale and a chapter behind that, and the
+  front door had still never named it. The landing walked a reader from `run new` through
+  `next` / `approve` / `reject` to `run auto` and stopped, which is where the reader stopped
+  too — the one flow that most needs explaining was reachable only by someone who already
+  knew to go looking for it.
+  - One compact section per locale — "When nobody is watching" / "Cuando nadie está viendo" —
+    led by the outcome rather than the flags: hand a run over inside boundaries you wrote
+    down, and get the run itself back instead of a summary you have to believe. It shows the
+    three-command path (`tldrx init` → `tldrx run new … --attended-by host --gates …` →
+    `tldrx drive --unattended`) and links to the guide for the rest.
+  - The hero is untouched in both locales, and both pages are pure insertions — no existing
+    line was edited.
+  - Pinned in `test/public-surface-consistency.test.ts`: each landing must name `tldrx drive`
+    and link to its guide. Red on both locales before the change, green after. The pin is on
+    the entry point, not the prose — heading, wording and placement stay free to change.
+
 ## 0.6.0 — 2026-09-02
 
 ### Added

@@ -212,6 +212,46 @@ describe("claims we have retired", () => {
   }
 });
 
+describe("what the front door advertises", () => {
+  /**
+   * #128: `tldrx drive` is the star operator command for unattended runs — it has a
+   * guide in both locales and a chapter behind that — and on 2026-09-02 neither landing
+   * page mentioned it. Measured, not estimated: `grep -c 'tldrx drive'` returned 0 on
+   * `docs-site/index.md` and on `docs-site/es/index.md`, and a bare `grep drive` exited
+   * 1 on both. The capability had shipped; the front door never said so.
+   *
+   * That is the expensive kind of gap. The landing walks a reader from `run new` through
+   * `next` / `approve` / `reject` to `run auto` — the attended loop — and stops. A reader
+   * stops where the page stops, so the one flow that most needs explaining was reachable
+   * only by someone who already knew to go looking for it.
+   *
+   * This pins the entry point, not the prose: each landing must name the command and link
+   * to the guide that explains it. It has no opinion about wording, heading, or placement,
+   * all of which stay free to change.
+   */
+  const LANDINGS = [
+    { rel: "index.md", guide: "/guides/driving" },
+    { rel: join("es", "index.md"), guide: "/es/guides/driving" },
+  ];
+
+  for (const { rel, guide } of LANDINGS) {
+    test(`docs-site/${rel} names \`tldrx drive\` and links to its guide`, () => {
+      const page = DOCS.find((d) => d.rel === rel);
+      expect(page, `docs-site/${rel} is not under docs-site any more`).toBeDefined();
+      expect(
+        page!.text.includes("tldrx drive"),
+        `docs-site/${rel} never mentions \`tldrx drive\`. The unattended flow is the one a ` +
+          `reader cannot discover on their own — if the landing ends at \`run auto\`, so do they.`,
+      ).toBe(true);
+      expect(
+        page!.text.includes(`](${guide})`),
+        `docs-site/${rel} names the command but never links to ${guide}, so a reader who ` +
+          `wants the detail has nowhere to go for it.`,
+      ).toBe(true);
+    });
+  }
+});
+
 describe("what you actually need installed", () => {
   /**
    * The measured truth, 2026-09-02: `node dist/tldrx.js --version` prints the

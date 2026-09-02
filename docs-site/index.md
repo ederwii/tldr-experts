@@ -69,6 +69,30 @@ the cursor on. `tldrx reject --note "…"` sends it back, and the next attempt r
 Repeat until the run is finished. `tldrx run auto` does the repeating for you and stops the
 first time something genuinely needs a person.
 
+## When nobody is watching
+
+The three steps above are you at the keyboard. The other case is the demanding one: you
+hand a run over for the night, inside boundaries you wrote down — which gates an agent may
+close, and what the whole thing may cost — and what comes back is not a summary you have to
+believe. It is the run itself: the files each stage wrote, the evidence note under every
+signature, the money it actually spent, all still on disk and readable in any order you
+like.
+
+```bash
+tldrx init            # deterministic and offline: filesystem and git only, $0.00
+tldrx run new payments --scope feature --budget 25 \
+  --attended-by host --gates what:agent,plan:agent,build:agent,watch:agent
+tldrx drive --unattended    # the mandate — paste it into a Claude Code session
+```
+
+That last command opens no run and spawns nothing: it prints the **mandate** the session
+drives from. The mandate is what keeps the night honest — a developer sub-agent, then a
+fresh reviewer that is never the author, a gate signed only over a written evidence note,
+and the four things it has to wake you for instead of deciding them.
+
+[Attended or unattended](/guides/driving) — the three ways to run a stage, which to pick,
+and what each one costs.
+
 ## Where this is
 
 **{{ theme.tldrxStatus }}, version {{ theme.tldrxVersion }}.** Every command is real and tested — the docs on this site were
