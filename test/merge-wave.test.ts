@@ -20,7 +20,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawn, execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
 // Each invocation runs a real `bun install`, a real `bun test` and a real merge, and the
@@ -118,21 +118,46 @@ function sandbox(): Sandbox {
 }
 
 type Result = { code: number; stdout: string; stderr: string };
-type Invocation = { done: Promise<Result>; stderrSoFar: () => string; signal: (sig: NodeJS.Signals) => void };
+type Invocation = {
+  done: Promise<Result>;
+  /** The private $TMPDIR this invocation's `mw-$$` goes in — see `waveLogs` (#95, #97). */
+  logRoot: string;
+  stderrSoFar: () => string;
+  signal: (sig: NodeJS.Signals) => void;
+};
+
+let invocations = 0;
 
 function invoke(sb: Sandbox, branch: string, env: Record<string, string> = {}): Invocation {
   let stdout = "";
   let stderr = "";
+  // Per INVOCATION, not per sandbox: this file deliberately runs two waves at once, and a
+  // run's cleanup is only ever its own to answer for. Inside `sb.dir`, so afterEach takes
+  // the log directories a RED run keeps on purpose instead of leaving them in the machine's
+  // tmpdir, where 1300 of them had piled up by the time #95 was filed.
+  const logRoot = join(sb.dir, "tmpdirs", `invocation-${++invocations}`);
+  mkdirSync(logRoot, { recursive: true });
   const child = spawn("bash", [MERGE_WAVE, branch, `merge ${branch}`], {
     cwd: sb.main,
-    env: { ...process.env, GATE_LOG: join(sb.dir, `gate-${branch}.log`), ...env },
+    env: { ...process.env, TMPDIR: logRoot, GATE_LOG: join(sb.dir, `gate-${branch}.log`), ...env },
   });
   child.stdout.on("data", (d) => { stdout += String(d); });
   child.stderr.on("data", (d) => { stderr += String(d); });
   const done = new Promise<Result>((resolve) => {
     child.on("close", (code) => resolve({ code: code ?? -1, stdout, stderr }));
   });
-  return { done, stderrSoFar: () => stderr, signal: (sig) => { child.kill(sig); } };
+  return { done, logRoot, stderrSoFar: () => stderr, signal: (sig) => { child.kill(sig); } };
+}
+
+/**
+ * The `mw-*` log directories THIS invocation left behind — never another process's.
+ *
+ * Read only after `done` resolves, so the run that owns this root has exited: anything
+ * still in here is a genuine leftover, and no liveness rule has to be guessed at. What a
+ * concurrent wave is holding in the shared $TMPDIR is, correctly, invisible from here.
+ */
+function waveLogs(run: Invocation): string[] {
+  return readdirSync(run.logRoot).filter((f) => f.startsWith("mw-"));
 }
 
 /** The shas the gates of `branch` actually ran against, in order. */
@@ -354,20 +379,22 @@ describe("the dirty-tree guard and the pack artifact (#45)", () => {
   });
 
   test("a green run leaves no log directory behind; a red one keeps the one it names", async () => {
-    const logRoot = tmpdir();
-    const before = new Set(readdirSync(logRoot).filter((f) => f.startsWith("mw-")));
+    const green = invoke(sandbox(), "wave-a");
+    expect((await green.done).code).toBe(0);
+    // Its OWN root, so this says "this run cleaned up after itself" and nothing else (#95, #97).
+    expect(waveLogs(green)).toEqual([]);
 
-    const green = await invoke(sandbox(), "wave-a").done;
-    expect(green.code).toBe(0);
-    const after = readdirSync(logRoot).filter((f) => f.startsWith("mw-") && !before.has(f));
-    expect(after).toEqual([]);
-
-    const red = await invoke(sandbox(), "wave-poison").done;
-    expect(red.code).toBe(3);
-    const named = /logs: (\S+);/.exec(red.stdout)?.[1];
+    const red = invoke(sandbox(), "wave-poison");
+    const result = await red.done;
+    expect(result.code).toBe(3);
+    const named = /logs: (\S+);/.exec(result.stdout)?.[1];
     expect(named).toBeTruthy();
-    expect(existsSync(named!)).toBe(true);   // kept, because someone has to read it
-    rmSync(named!, { recursive: true, force: true });
+    expect(existsSync(named!)).toBe(true);            // kept, because someone has to read it
+    // And the scoped scan still SEES its own: hermetic is not blind.
+    expect(waveLogs(red)).toEqual([basename(named!)]);
+    // It sits inside the sandbox, so afterEach takes it — no wave leaks a log dir into the
+    // machine's tmpdir any more, which is the other half of #95.
+    expect(named!.startsWith(`${red.logRoot}/`)).toBe(true);
   });
 
   test("the guard keeps its teeth: a genuinely untracked file still refuses", async () => {
@@ -377,6 +404,72 @@ describe("the dirty-tree guard and the pack artifact (#45)", () => {
     const { code, stdout } = await invoke(sb, "wave-a").done;
     expect(code).toBe(1);
     expect(stdout).toContain("FAIL dirty tree");
+  });
+});
+
+/**
+ * #95 and #97 — two waves, one machine, one $TMPDIR.
+ *
+ * `merge-wave.sh` writes its logs to `${TMPDIR:-/tmp}/mw-$$`, so under the machine's
+ * shared $TMPDIR every wave on the box lands in ONE directory: this file's other tests,
+ * every sibling agent's wave, and the REAL merge wave whose `bun test` is running this
+ * very file. A directory-listing diff over that root is a global-namespace diff, and it
+ * has now failed two waves on trees whose diff never touched this script:
+ *
+ *   #95 — a sibling's DELIBERATELY KEPT red log (`mw-35458`, carrying another run's
+ *         `poison.txt` merge) counted as the green run's residue. Merge-wave keeps a red
+ *         run's logs on purpose: "every FAIL above names the directory it kept".
+ *   #97 — a CONCURRENT invocation's LIVE `mw-15412` counted as the green run's residue,
+ *         12 minutes into #90's wave, leaving `main` at an unpushed merge commit.
+ *
+ * Same defect both times: the assertion is about ONE run's cleanup and it measured the
+ * whole machine. These two tests plant the foreign directory rather than racing a second
+ * live wave for it — a test that needs the box to be busy to prove its point is the
+ * disease, not the treatment.
+ */
+describe("the log-directory assertion is about THIS run, not the machine (#95, #97)", () => {
+  /**
+   * A foreign `mw-<pid>` in the machine's SHARED tmpdir — the real shape, real contents,
+   * removed again by the caller's `finally`.
+   *
+   * Overwriting an existing one costs nothing: a directory already at `mw-<this process's
+   * pid>` was written by something that held this pid, and this process holds it now, so
+   * that wave is dead and its log is stale.
+   */
+  function plantForeignWaveLog(pid: number): string {
+    const dir = join(tmpdir(), `mw-${pid}`);
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "merge.log"), "Merge made by the 'ort' strategy.\n poison.txt | 1 +\n");
+    writeFileSync(join(dir, "tc.log"), "$ bash gate.sh typecheck\ngate saw poison.txt\n");
+    return dir;
+  }
+
+  test("a sibling wave's deliberately KEPT red log is not this run's residue (#95)", async () => {
+    // A wave that has exited and left its log behind ON PURPOSE, for someone to read.
+    const foreign = plantForeignWaveLog(999_999);
+    try {
+      const green = invoke(sandbox(), "wave-a");
+      expect((await green.done).code).toBe(0);
+      expect(waveLogs(green)).toEqual([]);      // pre-fix: ["mw-999999"] — measured
+      expect(existsSync(foreign)).toBe(true);   // and it was never this run's to delete
+    } finally {
+      rmSync(foreign, { recursive: true, force: true });
+    }
+  });
+
+  test("a CONCURRENT wave's live log directory is not this run's residue either (#97)", async () => {
+    // This process's own pid: alive, on this host, for the whole of the run below — a
+    // wave still inside its gates, whose log directory is not a leftover of anything.
+    const foreign = plantForeignWaveLog(process.pid);
+    try {
+      const green = invoke(sandbox(), "wave-a");
+      expect((await green.done).code).toBe(0);
+      expect(waveLogs(green)).toEqual([]);      // pre-fix: ["mw-36550"], this process — measured
+      expect(existsSync(foreign)).toBe(true);
+    } finally {
+      rmSync(foreign, { recursive: true, force: true });
+    }
   });
 });
 
