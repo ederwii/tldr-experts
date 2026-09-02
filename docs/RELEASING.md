@@ -21,10 +21,26 @@ Package name `tldr-experts`; it installs the `tldrx` and `tldr-experts` commands
 3. `README.md` release table has the row `| X.Y.Z | YYYY-MM-DD | \`alpha|beta|stable\` | … |`
    with the status tag chosen deliberately (definitions live under that table).
 4. Working tree clean, on `main`, in sync with `origin/main`; tag not yet existing; version not
-   on npm.
+   on npm. When `release.sh` runs the gate the release commit is deliberately still local, so it
+   passes `--pre-push` and "in sync" is asserted as **`origin/main` is HEAD's parent** — the same
+   thing the check has always been for (nobody moved `main` under you, nothing but the release
+   commit is unpushed), stated for a tree that has not pushed yet. Every other item is identical
+   in both modes.
 5. `bun run typecheck`, `bun test`, `bun run build` green; no `Bun.*` under `src/` outside
    `src/core/runtime/` (the grep scans `src` only). Items 4 and 5 run on the local path only —
    `--ci` skips them, and the seam check runs in no CI workflow.
+
+## The order, and why it is this order
+
+`release.sh` makes the mechanical edits, commits them **locally**, runs the gate, and pushes only
+once the gate is green: commit → gate → push `main` → tag → push tag. Before 0.5.0 the push came
+*before* the gate (#100), so any red item — tests, typecheck, build, the seam grep, "tag exists",
+"already on npm" — left `origin/main` carrying a `release: X.Y.Z` commit with a dated CHANGELOG
+heading and a dated README row and no tag: exactly the half-released state item 4 exists to
+prevent, recoverable only by a revert commit on `main` or a hand-repaired CHANGELOG. Now a red
+gate leaves `origin/main`, the tags and npm **untouched**, and the entire damage is one local
+commit the script tells you how to drop (`git reset --hard HEAD~1`). `test/release-gate-order.test.ts`
+holds that ordering against a sandbox origin.
 
 ## What to consider (judgement, not automated)
 

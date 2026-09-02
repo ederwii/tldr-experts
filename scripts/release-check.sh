@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# release-check.sh [--ci]  — the hard release gate. Exit 0 only when EVERY check passes.
+# release-check.sh [--ci|--pre-push]  — the hard release gate. Exit 0 only when EVERY check passes.
 # Used by: scripts/release.sh, the Claude Code PreToolUse hook (.claude/settings.json) and publish.yml.
 set -u
 cd "$(git rev-parse --show-toplevel)" || exit 1
-CI=false; [ "${1:-}" = "--ci" ] && CI=true
+CI=false; PREPUSH=false
+case "${1:-}" in --ci) CI=true;; --pre-push) PREPUSH=true;; esac
 fail=(); ok(){ :; }; bad(){ fail+=("$1"); }
 V=$(node -p "require('./package.json').version")
 PV=$(node -p "require('./plugin/.claude-plugin/plugin.json').version")
@@ -14,7 +15,15 @@ grep -qE "unreleased" <(grep -E "^## $V" CHANGELOG.md) && bad "CHANGELOG.md $V s
 if ! $CI; then
   [ -z "$(git status --porcelain)" ] && ok || bad "working tree not clean"
   [ "$(git branch --show-current)" = "main" ] && ok || bad "not on main"
-  git fetch -q origin main && [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] && ok || bad "main is not in sync with origin/main (push or pull first)"
+  # --pre-push (scripts/release.sh, #100): the release commit is deliberately still LOCAL, so
+  # "HEAD equals origin/main" cannot hold and would make the gate permanently red. What that
+  # check is actually for — nobody else moved main under you, and nothing but the release
+  # commit itself is unpushed — restates exactly as "origin/main IS HEAD's parent".
+  if $PREPUSH; then
+    git fetch -q origin main && [ "$(git rev-parse HEAD^ 2>/dev/null)" = "$(git rev-parse origin/main)" ] && ok || bad "the release commit does not sit directly on origin/main (someone pushed, or more than the release commit is unpushed — fetch and rebase; do NOT push)"
+  else
+    git fetch -q origin main && [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] && ok || bad "main is not in sync with origin/main (push or pull first)"
+  fi
   git rev-parse -q --verify "refs/tags/v$V" >/dev/null && bad "tag v$V already exists locally"
   npm view "tldr-experts@$V" version >/dev/null 2>&1 && bad "tldr-experts@$V is already on npm"
   bun run typecheck >/dev/null 2>&1 || bad "typecheck red"
