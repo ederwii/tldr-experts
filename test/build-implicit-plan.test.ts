@@ -24,7 +24,7 @@ import {
   applyAcceptance, droppedNotes, epicBranchFor, implicitPlanContent, isWhatDeliverable, loadImplicitPlan, matchTextOf, planFacts,
   planIsSkipped, renderImplicitPlan, runFacts, satisfiedByImplicitPlan, updateImplicitPlan, wasTruncated,
   whatSignal, addedNotes, answerIndex, factRange, findDecisionDocuments, implicitPlanIsStale, implicitStoryNote,
-  touchesNamedByFacts, excludedNotes, isStatePath,
+  touchesNamedByFacts, excludedNotes, isStatePath, pathsIn, productPathsIn, MAX_SEED_CARRY_BYTES,
   IMPLICIT_PLAN_REL, IMPLICIT_STORY_NOTE, MAX_IMPLICIT_TOUCHES,
 } from "../src/core/build/implicitPlan.ts";
 import { MAX_FACT_CHARS } from "../src/core/facts/Fact.ts";
@@ -507,7 +507,11 @@ describe("a docs run that reaches Build with no 03-plan/", () => {
     expect(text).toContain('  - "04-build/log/S1.md"');
   }, 60_000);
 
-  test("a handoff that cites no repo path yields `touches: []`, and the prompt says so", async () => {
+  test("a run whose brief names no repo path yields `touches: []`, and the prompt says so", async () => {
+    // Neither document names a file: not the handoff (which cites a fact and a
+    // URL) and not the success metrics. That is the only shape that still leaves
+    // a story with no write surface — a path either document NAMES now reaches
+    // `touches` whether or not it is on disk (#111).
     const ws = workspace({
       ...DOCS_RUN,
       whatHandoff: [
@@ -519,6 +523,7 @@ describe("a docs run that reaches Build with no 03-plan/", () => {
         "- Out of scope: the API reference [src: https://example.com/adr-7]",
         "",
       ].join("\n"),
+      successMetrics: "# Success metrics — docs run\n\n1. **No dead link.** Measured by the lint command.\n",
     });
     const promptDir = join(ws.root, "prompts");
     process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
@@ -528,12 +533,18 @@ describe("a docs run that reaches Build with no 03-plan/", () => {
     expect(outcome.lines.join("\n")).toContain("0 touched path(s)");
 
     const text = plan(ws);
-    expect(text).toContain("  touches: []  # 01-what/handoff.md cites no path inside a declared repo");
+    const empty = "  touches: []  # neither 01-what/handoff.md nor 01-what/success-metrics.md "
+      + "names a path inside a declared repo";
+    expect(text).toContain(empty);
+    // An empty write surface forbids every change the story could make, so it is
+    // said out loud rather than left to a comment on an empty list.
+    expect(block(text, "notes")).toContain("touches is empty");
+    expect(block(text, "notes")).toContain("this story has no write surface");
     // The goal survives even though nothing it cites is a file.
     expect(text).toContain('    - "In scope: write the missing onboarding page [src: F001]"');
 
     const developer = readFileSync(join(promptDir, "developer-S1-1.md"), "utf8");
-    expect(developer).toContain("touches: []  # 01-what/handoff.md cites no path inside a declared repo");
+    expect(developer).toContain(empty);
   }, 60_000);
 
   test("a cited path the worktree cannot read is flagged in the prompt and warned about", async () => {
@@ -1460,5 +1471,185 @@ facts:
     const bad = validateFactsFile(parseYaml(row('\n    truncated: "yes"')));
     expect(bad.ok).toBe(false);
     expect(bad.issues[0]?.path).toBe("facts[0].truncated");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// gh #111 — a docs-scope run seeded from documents OUTSIDE the story's repo.
+//
+// The shape a live unattended driver met on 2026-09-02 and repaired by hand:
+// `tldrx run new --scope docs --seed <root document>`, where the seed is the
+// run's source of truth, lives at the WORKSPACE root, and the story's repo is a
+// sibling directory. Three separate things came out wrong, and the driver had to
+// fix all three inside the S1 brief before the story could be worked at all.
+// ---------------------------------------------------------------------------
+
+/** A stage file for `what`, so the fixture's workflow can run What then Build. */
+const WHAT_STAGE = `version: 1
+id: what
+title: "What"
+phase: 01-what
+experts: [developer]
+stack_experts: false
+model: sonnet
+budget_usd: 3
+timeout_s: 120
+dry_run_allowed: true
+inputs: {required: [], optional: []}
+outputs:
+  - {path: "01-what/handoff.md", sections: [Findings, Decisions, Unknowns, "Evidence ledger"]}
+gate: {type: approve, approvers: 1}
+checks: []
+`;
+
+/** The team's own document, at the workspace ROOT — never inside the repo. */
+const SEED_DOCUMENT = [
+  "# Discovery pipeline — seed questions",
+  "",
+  "## Goal",
+  "",
+  "Map how a place becomes a hunt stop.",
+  "",
+  "- Q1: where do places come from?",
+  "- Q2: what selects a stop?",
+  "- Q3: what scores a place?",
+  "- Q4: what serves a hunt?",
+  "",
+].join("\n");
+
+/** The run's real brief: it NAMES the document the run exists to write. */
+const SEEDED_METRICS = [
+  "# Success metrics",
+  "",
+  "1. **Every seed question has a section.** All four seed questions (Q1–Q4) have a dedicated",
+  "   section in `docs/discovery-pipeline-map.md`.",
+  "2. **Every claim is sourced.** Each claim in the map carries a `[src: …]` token.",
+  "",
+].join("\n");
+
+const SEEDED_DOCS_RUN: BuildWorkspaceOptions = {
+  scope: "docs",
+  skips: ["how", "plan", "watch"],
+  plan: false,
+  stories: [],
+  epics: [],
+  waves: [],
+  seed: ["seeds/pipeline-questions.md"],
+  successMetrics: SEEDED_METRICS,
+  commands: { build: null, test: null, lint: "npm run lint", typecheck: null, run: null },
+  repoFiles: { "docs/guide.md": "# Guide\n" },
+  files: {
+    "seeds/pipeline-questions.md": SEED_DOCUMENT,
+    ".tldrx/workflows/docs.yml": `version: 1
+name: docs
+title: "Write or repair documentation"
+depth: light
+default_budget_usd: 8
+skips: [how, plan, watch]
+stages:
+  - {id: what, phase: "01-what", budget_usd: 3}
+  - {id: build, phase: "04-build", budget_usd: 5}
+`,
+    ".tldrx/stages/what/stage.yml": WHAT_STAGE,
+    ".tldrx/stages/what/stage.md": "# What\n\n## Role\nThe What stage.\n",
+  },
+};
+
+function seededContent(ws: BuildWorkspace): ReturnType<typeof implicitPlanContent> {
+  return implicitPlanContent({
+    runDir: ws.runDir,
+    runId: ws.runId,
+    runTitle: "Discovery pipeline map",
+    scope: "docs",
+    repos: [ws.repoName],
+    workspace: loadWorkspace(ws.root),
+    facts: [],
+    budgetUsd: 6,
+  });
+}
+
+describe("a docs-scope run seeded from outside the story's repo (#111)", () => {
+  test("(1) the story gets the write surface its own brief names", () => {
+    const ws = workspace(SEEDED_DOCS_RUN);
+    const content = seededContent(ws);
+    // The run exists to write ONE document, and its success metrics say so by
+    // name. An empty `touches` forbids every change the story could make.
+    expect(content.touches).toContain("docs/discovery-pipeline-map.md");
+    expect(content.notes.join("\n")).toContain("docs/discovery-pipeline-map.md");
+    // A path the brief names but the repo has no directory for is still refused.
+    expect(content.touches).not.toContain("seeds/pipeline-questions.md");
+  });
+
+  test("(2) the seed documents are carried into the bundle, not left at a path the worktree cannot open", () => {
+    const ws = workspace(SEEDED_DOCS_RUN);
+    const content = seededContent(ws);
+    expect(content.inputs).toContain("seeds/pipeline-questions.md");
+
+    // Carried means CONTENT: the story worktree is `app/`, the seed is at the
+    // workspace root, so a relative read from the worktree can never find it.
+    const story = loadImplicitPlan({
+      runDir: ws.runDir,
+      runId: ws.runId,
+      runTitle: "Discovery pipeline map",
+      scope: "docs",
+      repos: [ws.repoName],
+      workspace: loadWorkspace(ws.root),
+      facts: [],
+      budgetUsd: 6,
+    }).stories.get("S1");
+    const carried = (story?.extraInputs ?? []).find((input) => input.path === "seeds/pipeline-questions.md");
+    expect(carried?.content).toContain("Q4: what serves a hunt?");
+    expect(existsSync(join(ws.repoDir, "seeds/pipeline-questions.md"))).toBe(false);
+  });
+
+  test("(3) an acceptance criterion is not dropped for naming a question id", () => {
+    const ws = workspace(SEEDED_DOCS_RUN);
+    const content = seededContent(ws);
+    expect(content.acceptance.join("\n")).toContain("All four seed questions (Q1–Q4) have a dedicated");
+    expect(content.notes.join("\n")).not.toContain("dropped from acceptance");
+  });
+
+  test("what counts as a path, and what is only prose that looks like one", () => {
+    // The write surface is derived from these, so a false positive puts a file
+    // nobody named on the story's allowlist.
+    expect(productPathsIn("a dedicated section in `docs/discovery-pipeline-map.md`"))
+      .toEqual(["docs/discovery-pipeline-map.md"]);
+    // Prose that merely looks path-shaped. An extension of one letter (`e.g.`)
+    // and a numeric one (`0.5.1`) are not extensions.
+    for (const prose of ["e.g. the install section", "bump to 0.5.1", "i.e. nothing at all"]) {
+      expect(pathsIn(prose), prose).toEqual([]);
+    }
+    // `Node.js` IS path-shaped, so the refusal that matters is the one in
+    // `touchesNamedInBrief`: a bare name the repo does not have never lands.
+    expect(pathsIn("built on Node.js")).toEqual(["Node.js"]);
+    // The framework's own documents are not product documents.
+    expect(productPathsIn("`01-what/questions.md` holds one block per item")).toEqual([]);
+    expect(productPathsIn("`questions.md` holds one block per item")).toEqual([]);
+    expect(productPathsIn("cited in `.tldrx/memory/facts.yml`")).toEqual([]);
+  });
+
+  test("a seed the bundle cannot fit is named, not silently dropped", () => {
+    const ws = workspace(SEEDED_DOCS_RUN);
+    const big = "x".repeat(MAX_SEED_CARRY_BYTES + 1);
+    writeFileSync(join(ws.root, "seeds", "pipeline-questions.md"), big, "utf8");
+    const content = seededContent(ws);
+    expect(content.inputs).not.toContain("seeds/pipeline-questions.md");
+    expect(content.notes.join("\n")).toContain("were NOT carried (seeds/pipeline-questions.md)");
+    expect(content.notes.join("\n")).toContain("inline budget");
+  });
+
+  test("(3b) the `questions.md` signal names the run's own file, not any file whose name ends in it", () => {
+    // `pipeline-questions.md` is the TEAM's document. Reading it as the What
+    // stage's own output emptied `goal:` on the run this issue was filed from.
+    expect(whatSignal(
+      '**measured** the seed covers open questions under "Discovery pipeline" [src: seeds/pipeline-questions.md:1]',
+    )).toBeNull();
+    // A bullet about a product document survives every signal, question id and all.
+    expect(whatSignal(
+      "All four seed questions (Q1–Q4) have a dedicated section in `docs/discovery-pipeline-map.md`",
+    )).toBeNull();
+    // The run's OWN questions file is still recognised, and still dropped.
+    expect(whatSignal("In scope: one `questions.md` block per item")).toBe("questions.md");
+    expect(whatSignal("**No recorded fact is re-asked.** None of Q1–Q6 duplicates F001.")).toBe("a question id");
   });
 });

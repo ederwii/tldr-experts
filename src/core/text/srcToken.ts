@@ -480,6 +480,26 @@ function trimTrailingClosers(line: string): string {
 }
 
 /**
+ * The line minus its `[src: …]` token: the CLAIM, without its evidence.
+ *
+ * Lives here rather than at the call site because this file is the ONE place that
+ * may hold the grammar (#80) — a caller that needs the prose half of a bullet
+ * gets it from the same parse everything else uses, and writes no second regex.
+ *
+ * A token says where a claim was CHECKED, not what it is about, so anything that
+ * classifies a bullet by its words has to read the prose alone: "In scope: one
+ * `questions.md` block per open ADR [src: app:docs/adr/ADR-D008-AUTH.md:1]" is
+ * about the What stage's own file and cites an ADR, and the reverse pairing is
+ * just as common (#111).
+ *
+ * A line with no parseable trailing token comes back unchanged.
+ */
+export function withoutSrcToken(line: string): string {
+  const token = parseSrcToken(line);
+  return token === null ? line : line.replace(token.raw, " ");
+}
+
+/**
  * True when the line TRIED to cite something — it holds a `[src:` marker — even if
  * the token does not parse. The two failures need different advice: "you wrote no
  * citation" and "your citation is malformed" are not the same mistake.
