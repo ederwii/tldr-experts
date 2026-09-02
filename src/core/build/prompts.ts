@@ -16,6 +16,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { SKIPPED_DIRS, toPosix } from "../detect/walk.ts";
 import { byteLength } from "../experts/expertKnowledge.ts";
+import { MAX_PAYLOAD_BYTES } from "../events/Event.ts";
 import { fenceFor, renderInputs, type PromptInput } from "../facilitator/prompt.ts";
 import { SRC_GRAMMAR_HEADING, renderSrcGrammarContract } from "../text/srcGrammarContract.ts";
 import { diffCommand } from "./git.ts";
@@ -411,19 +412,30 @@ export function buildReviewerPrompt(parts: ReviewerPromptParts): string {
       : [parts.refusal, ""]),
     "## Produce",
     "",
-    "Return the result envelope, nothing else:",
+    "Return the result envelope and nothing else. Its SHAPE is deliberately NOT described",
+    "here, and it must not be reconstructed from memory: the authority is the JSON schema",
+    "this handshake already carries — `result_schema` in the `pending.json` beside this",
+    "prompt when a host is dispatching you, and the `--json-schema` you were spawned with",
+    "when the framework is. Read it there and satisfy it verbatim.",
     "",
-    "- `verdict` — `approve` when every acceptance criterion is met by the diff and the",
-    "  conventions hold; `changes` when anything is missing, wrong or unconventional.",
+    ...payloadCapLines(),
+    "## Verdict",
+    "",
+    "Which verdict to return is the judgement you are here for — the schema says what the",
+    "envelope looks like, and nothing about which of these is true.",
+    "",
+    "- `approve` — every acceptance criterion is met by the diff and the conventions hold.",
+    "- `changes` — something is missing, wrong or unconventional. It costs a whole second",
+    "  attempt, so ask only for what the acceptance criteria or the conventions require.",
     ...verdictLines(parts.fixlistAvailable !== false),
-    "- `summary` — one or two sentences a human can act on.",
-    "- `findings` — one line per thing you want changed. Empty on `approve`.",
     "",
     "## Rules",
     "",
     "- Judge the DIFF, not the repository. Pre-existing problems are not this story's.",
-    "- `changes` costs a whole second attempt, so ask only for what the acceptance",
-    "  criteria or the conventions actually require.",
+    // The `changes` price used to be stated a second time here. gh #133 moved the
+    // verdicts into their own section and it is stated there, once, beside the
+    // verdict it prices — two copies of one sentence is how the envelope's shape
+    // came to be described twice in the first place.
     "- You have no write tool. Do not attempt to edit, commit or fix anything.",
     "",
     ...grammarSection(parts.fixlistAvailable !== false),
@@ -454,6 +466,30 @@ function grammarSection(fixlistAvailable: boolean): readonly string[] {
 }
 
 /**
+ * The one bound on the envelope that no JSON schema can express (gh #133).
+ *
+ * The verdict's own prose is copied into a `check.passed`/`check.failed` payload
+ * (`executors/build.ts`, `detail: review.summary`), `validateEvent` refuses any
+ * payload over `MAX_PAYLOAD_BYTES`, and `EventLog.append` THROWS on a refusal
+ * rather than writing a short line. So an essay-length verdict does not arrive
+ * trimmed; it takes the ledger entry down with it. The number is imported rather
+ * than typed, so a change to the cap reaches the prompt that promises it.
+ *
+ * The word REFUSED, in caps, is deliberately not used here: `renderFormatRefusal`'s
+ * heading owns it, and `test/attempt-cost.test.ts` asserts a FIRST reviewer prompt
+ * does not contain that word as its proxy for "carries no format refusal".
+ */
+function payloadCapLines(): readonly string[] {
+  return [
+    "One bound the schema cannot state: everything you write is copied into a single",
+    `\`events.jsonl\` payload, and a payload over ${String(MAX_PAYLOAD_BYTES)} bytes is not trimmed — it is`,
+    "thrown out whole, and the reasons for your verdict go with it. Two or three",
+    "sentences of prose per point, and this never comes up.",
+    "",
+  ];
+}
+
+/**
  * The `fixlist` bullet — or the sentence saying why it is not offered.
  *
  * Both spellings are deliberate. A reviewer told nothing about the third verdict
@@ -470,12 +506,12 @@ function verdictLines(available: boolean): readonly string[] {
   }
   return [
     "- `fixlist` — you would sign, AND you found defects the acceptance criteria never",
-    "  covered. Costs the story no attempt, and there is exactly one such round. Every",
-    "  finding goes in `fixlist[]` with a `disposition`: `fix-now` (this story's own",
-    "  correctness — it blocks `done`), `defer-with-log` (real, but somebody else's call),",
-    "  `out-of-scope`, or `refuted`. A `refuted` finding MUST carry an `[src: …]` citation",
-    "  proving it wrong, in `where` or `detail` — your verdict is a claim like any other.",
-    "  Put anything the author must NOT do about a finding in its `do_not` list.",
+    "  covered. Costs the story no attempt, and there is exactly one such round. The schema",
+    "  has a slot for each defect and for how it is to be treated: `fix-now` is this story's",
+    "  own correctness and blocks `done`, `defer-with-log` is real but somebody else's call,",
+    "  `out-of-scope` is neither, and `refuted` says the defect is not one. A `refuted` defect",
+    "  MUST carry an `[src: …]` citation proving it wrong — your verdict is a claim like any",
+    "  other. Anything the author must NOT do about a defect belongs in the schema\'s slot for it.",
   ];
 }
 

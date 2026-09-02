@@ -281,6 +281,11 @@ The bundle hands you the reviewer's `prompt.md` (the same one a spawn would get,
 renderer), the diff command and the merged commit, the DoD results the framework already re-ran
 — do not re-run them — and `result_schema`, the exact envelope your sub-agent must return.
 
+`result_schema` is the authority on that envelope and the only one: the prompt points at it and
+no longer describes it in prose, so hand it to your sub-agent rather than retyping the keys.
+Keep the verdict's prose short — everything in it is copied into one `events.jsonl` payload, and
+a payload over 4096 bytes is refused whole rather than trimmed.
+
 `--commit --review` reads that `result.json` through the same fail-closed parser a spawned
 verdict goes through: an envelope it cannot read is `changes`, **never** `approve`. The turn is
 recorded `cost_usd: null, metered: false` unless the envelope declares a cost, the review event

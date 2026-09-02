@@ -13,6 +13,12 @@ model: sonnet
 effort: medium
 budget_usd: 4
 
+# `.tldrx/map/workspace.md` carries NO `{repo}` token on purpose, and gh #131's
+# sweep left it alone: it is the one map document written at the map ROOT, and
+# only in multi-repo mode (`src/core/map/buildMap.ts:83-88`). It is not a
+# `MAP_DOCS` document, so `{repo}` would point it at a file that never exists.
+# On a SINGLE-repo workspace nothing writes it at all — and since gh #131 that
+# absence is named in the prompt and on stdout instead of being performed.
 inputs:
   - "02-how/design.md"
   - "02-how/contracts.md"

@@ -14,12 +14,19 @@ model: opus
 effort: high
 budget_usd: 6
 
+# `{repo}` expands per repo in the run (spec §2.3, `expandRepos`). It is NOT
+# decoration: `tldrx init` writes the map per repo — `.tldrx/map/<repo>/architecture.md`
+# — and there has never been a `.tldrx/map/architecture.md` for anything to resolve
+# to (`src/core/map/buildMap.ts:74-79`). These two were declared without the token
+# until gh #131, and because they are OPTIONAL inputs the miss was silent: How ran
+# with no map at all, on every feature-scope run, and nothing said so. 01-what and
+# 05-watch carried the token the whole time, which is why it survived.
 inputs:
   - "01-what/intent.md"
   - "01-what/scope.md"
   - "01-what/success-metrics.md"
-  - ".tldrx/map/architecture.md"
-  - ".tldrx/map/conventions.md"
+  - ".tldrx/map/{repo}/architecture.md"
+  - ".tldrx/map/{repo}/conventions.md"
   - ".tldrx/memory/facts.yml"
 
 outputs:
