@@ -194,6 +194,21 @@ expert that does not exist. `tldrx expert create <name> …`, or fix the name. I
 `domain` or `stack` you get one note instead: those were never expert names — they are the
 `stack_experts` and domain-match rules, and they load by rule, not by name.
 
+**`<name> has no area '<id>' (areas: none)`.** The expert exists and has no competency area, so
+there is nothing to train (#94). An area is a block under `areas:` in
+`.tldrx/experts/<name>/competencies.yml`, and the refusal prints the block to paste — `id`,
+`title`, `level: 0`, `train_prompt`, `evidence: []`. For a NEW expert,
+`tldrx expert create <name> --area <id> [--title <text>]` writes it for you. The title matters:
+light mode greps its words to choose which files the expert is shown.
+
+**Every citation in a training run reads `outside domain`.** Almost always the `## Domain`
+bullet grammar, not the domain itself. Bullets are **repo-relative with no repo prefix** —
+`` - `src/Checkout/` `` and not `` - `api/src/Checkout/` `` — because a citation arrives as
+`repo:path:line` and only the path half is matched. The repos those bullets are relative to are
+the front matter `repos:`. Measured 2026-09-02: a $2.10 full training earned zero evidence this
+way. The warning now names the grammar first whenever the path would match under the other
+spelling.
+
 **`tldrx expert list` warns that a stored level disagrees with the computed one.**
 `tldrx expert recompute <name>`. It happens when a human pasted a `--print-prompt` prompt into
 their own session: only the headless / `--commit` path ever wrote a level.
@@ -214,9 +229,10 @@ Cite the run: `[src: $ dotnet build → exit 0]`.
 
 **A knowledge bullet was accepted but earned no evidence.** One of three warnings fired:
 `paraphrase` (the bullet is ≥ 90% a verbatim substring of the ±3 lines around what it cites),
-`outside domain` (the path is outside this expert's `## Domain` — the warning names the expert
-that does own it; train that one), or `duplicate src` (this expert already has that source on
-record, in any area). Bullets under `## Sources` earn nothing by design. See
+`outside domain` (the path is outside this expert's `## Domain` — the warning names the *grammar*
+first when the path would match under the other spelling, then any expert whose domain does
+contain it, as a better home rather than an exclusive one), or `duplicate src` (this expert
+already has that source on record, in any area). Bullets under `## Sources` earn nothing by design. See
 [4 — Experts](04-experts.md#what-earns-a-place-on-a-knowledge-file).
 
 **`warning: shared citation <file:line> by <a>,<b> — check for contradiction`.** Two experts

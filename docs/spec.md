@@ -341,6 +341,14 @@ appear in the prompt:
    front-matter `repos:` intersects `run.repos`. This rule exists because a stage file is written once for every
    workspace and cannot know that THIS one has a `checkout` domain expert that has read the code the run touches.
 
+   **The `## Domain` grammar is repo-RELATIVE.** A path bullet carries no repo prefix (`` - `src/Checkout/` ``); the
+   repos it is relative to are the front-matter `repos:`; and a whole-repo claim is the bullet `` - repo `api` ``,
+   which is deliberately NOT read as the path `api` — that would make a repo-wide expert match every file in the
+   workspace by prefix. Citations arrive as `repo:path:line`, so only the path half is compared. A workspace-relative
+   bullet (`` - `api/src/Checkout/` ``) therefore matches nothing: measured 2026-09-02, that spelling cost a $2.10
+   full training all 13 of its code citations (#94). `tldrx expert create` writes this grammar into the `## Domain`
+   section of the file it creates, and writes `repos:` from `.tldrx/workspace.yml`.
+
    Rank is a **score**: a direct path match is worth 10, a graph neighbour 1, and scores add, so an expert that owns
    two cited paths outranks one that owns one. Ties break by name; capped at **8** — the same cap `init` puts on
    seeded domain experts — with the overflow named rather than dropped. An expert whose score is **0** loads (where
@@ -664,7 +672,7 @@ a lie — they are ways of being worth nothing, and the honest response to worth
 | Rule | Message contains | When |
 |---|---|---|
 | paraphrase | `paraphrase` | the bullet is ≥90% a verbatim substring of the ±3-line neighbourhood of the line it cites, normalised |
-| domain | `outside domain` | the cited path is outside the expert's own `## Domain`; the expert whose domain does contain it is named |
+| domain | `outside domain` | the cited path is outside the expert's own `## Domain`. When it would match with ONE leading segment dropped from either side, the **grammar** is named first — bullets are repo-relative, no repo prefix — and only then any expert whose domain does contain it, as a better home rather than an exclusive one (#94) |
 | dedup | `duplicate src` | the same `src` is already on record in this expert, here or in another of its areas |
 
 And `## Sources` derives **no** evidence at all. It is a recap — one line per citation already made above — so counting

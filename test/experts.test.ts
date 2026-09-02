@@ -6,6 +6,7 @@ import {
   createExpert, driftWarnings, evidenceNote, evidenceWarnings, loadExpert, loadExperts,
   checkEvidenceSrc, ignoredRowWarnings,
   readEvidenceRows, readExpertDocument, renderExpertList, renderTrainPrompt, stars, starChartLine,
+  readExpertDomain,
 } from "../src/core/experts/index.ts";
 import { CompetenciesError, writeCompetencies } from "../src/core/training/competenciesWrite.ts";
 import { EXIT_NOT_FOUND } from "../src/cli/exitCodes.ts";
@@ -631,6 +632,164 @@ describe("expert create", () => {
       expect(created.fromRoleTemplate).toBe(false);
       expect(created.areas).toEqual(["dotnet", "billing"]);
       expect(readFileSync(join(created.dir, "expert.md"), "utf8")).toContain("kind: stack");
+    } finally {
+      workspace.dispose();
+    }
+  });
+});
+
+/**
+ * gh #94 — `expert create` produced an expert nothing could train, and said
+ * neither how to fix it nor what the `## Domain` grammar is. The owner paid
+ * $2.10 for a full training whose 13 citations all landed `outside domain`
+ * because the bullets were workspace-relative (2026-09-02).
+ */
+describe("expert create yields a TRAINABLE expert (#94)", () => {
+  test("(a) --area seeds the first area, and --title names it", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      const created = await createExpert({
+        root: workspace.root, name: "discoverer", area: "discoverer",
+        title: "Google Places discovery, candidates and ranking",
+        createdAt: "2026-09-02T10:00:00Z",
+      });
+      expect(created.areas).toEqual(["discoverer"]);
+      const expert = loadExpert(workspace.root, "discoverer", VIEWS_NOW);
+      expect(expert.areas[0]!.id).toBe("discoverer");
+      expect(expert.areas[0]!.title).toBe("Google Places discovery, candidates and ranking");
+      expect(expert.areas[0]!.level).toBe(0);
+      expect(expert.areas[0]!.trainPrompt)
+        .toBe("tldrx expert train discoverer --area discoverer --mode light");
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("(a) --area with no --title still gets a title, and the CLI says so", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      const run = await tldrx(
+        "expert", "create", "discoverer", "--area", "discoverer", "--root", workspace.root,
+      );
+      expect(run.code).toBe(EXIT_OK);
+      expect(run.stdout).toContain("areas: discoverer");
+      // The title is what light mode greps for, so the command that set it by
+      // default says which words it just chose.
+      expect(run.stdout).toContain("--title");
+      const expert = loadExpert(workspace.root, "discoverer", VIEWS_NOW);
+      expect(expert.areas[0]!.title.length).toBeGreaterThan(0);
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("(a) an area id that is not a slug is refused, and nothing is written", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      const run = await tldrx(
+        "expert", "create", "discoverer", "--area", "Not A Slug", "--root", workspace.root,
+      );
+      expect(run.code).toBe(EXIT_FAILED);
+      expect(existsSync(join(workspace.root, ".tldrx", "experts", "discoverer"))).toBe(false);
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("(a) with NO area, the create output says how to add one", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      const run = await tldrx("expert", "create", "payments", "--root", workspace.root);
+      expect(run.code).toBe(EXIT_OK);
+      expect(run.stdout).toContain("no areas");
+      // The complaint the issue filed: the message knew the constraint and never
+      // said the remedy.
+      expect(run.stdout).toContain("--area");
+      expect(run.stdout).toContain("competencies.yml");
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("(b) `train` on a missing area names the FILE to edit and the block to add", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      await createExpert({
+        root: workspace.root, name: "discoverer", createdAt: "2026-09-02T10:00:00Z",
+      });
+      const run = await tldrx(
+        "expert", "train", "discoverer", "--area", "discoverer", "--root", workspace.root,
+      );
+      expect(run.code).toBe(EXIT_FAILED);
+      expect(run.stderr).toContain("has no area 'discoverer' (areas: none)");
+      expect(run.stderr).toContain(join(workspace.root, ".tldrx", "experts", "discoverer", "competencies.yml"));
+      expect(run.stderr).toContain("areas:");
+      expect(run.stderr).toContain("id: discoverer");
+      expect(run.stderr).toContain("evidence: []");
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("(e) the created expert.md declares the workspace's repos", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      const created = await createExpert({
+        root: workspace.root, name: "payments", createdAt: "2026-09-02T10:00:00Z",
+      });
+      expect(created.repos).toEqual(["api", "lab"]);
+      const markdown = readFileSync(join(created.dir, "expert.md"), "utf8");
+      expect(markdown).toContain("repos: [api, lab]");
+      expect(readExpertDomain(workspace.root, "payments").repos).toEqual(["api", "lab"]);
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("(e) the ROLE body gets the same repos, not an empty list", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      const created = await createExpert({
+        root: workspace.root, name: "architect", role: "architect",
+        createdAt: "2026-09-02T10:00:00Z",
+      });
+      expect(readFileSync(join(created.dir, "expert.md"), "utf8")).toContain("repos: [api, lab]");
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("(e) a workspace with no workspace.yml still creates, with `repos: []`", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      rmSync(join(workspace.root, ".tldrx", "workspace.yml"));
+      const created = await createExpert({
+        root: workspace.root, name: "payments", createdAt: "2026-09-02T10:00:00Z",
+      });
+      expect(created.repos).toEqual([]);
+      expect(readFileSync(join(created.dir, "expert.md"), "utf8")).toContain("repos: []");
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  test("(d) the created expert.md states the `## Domain` grammar it is read under", async () => {
+    const workspace = makeViewsWorkspace();
+    try {
+      const created = await createExpert({
+        root: workspace.root, name: "payments", createdAt: "2026-09-02T10:00:00Z",
+      });
+      const markdown = readFileSync(join(created.dir, "expert.md"), "utf8");
+      expect(markdown.toLowerCase()).toContain("repo-relative");
+      expect(markdown).toContain("repos:");
+      // The exact mistake that cost $2.10: a workspace-relative bullet.
+      expect(markdown).toContain("api/src/Checkout/");
+      expect(markdown).toContain("repo `api`");
+
+      // …and the prose that says it must not itself become a declared domain:
+      // an expert that silently claims `api/src/Checkout` would put every real
+      // citation outside its own domain, which is the bug, not the fix.
+      expect(readExpertDomain(workspace.root, "payments").paths).toEqual([]);
     } finally {
       workspace.dispose();
     }

@@ -36,7 +36,7 @@
 import { competencyLevel, type CompetencyEvidence, type EvidenceKind } from "../init/competencyLevel.ts";
 import { parseHandoff, type HandoffSection } from "../text/handoff.ts";
 import { parseSrcToken, resolveSrc, type SrcContext, type SrcRef } from "../text/srcToken.ts";
-import { pathsIntersect } from "../experts/expertDomain.ts";
+import { normalisePath, pathsIntersect } from "../experts/expertDomain.ts";
 import {
   claimText, confidenceOf, executionClaim, isParaphrase, neighbourhood, type Confidence,
 } from "./claimCheck.ts";
@@ -316,11 +316,64 @@ function outsideDomain(ref: SrcRef, scope: KnowledgeScope | undefined): string |
   const owner = [...scope.otherDomains.entries()]
     .filter(([name]) => name !== scope.expert)
     .find(([, paths]) => paths.some((domain) => pathsIntersect(ref.path, domain)));
+  // Named, and no longer as a verdict on ownership. The hint fires whenever this
+  // expert's OWN paths miss, which says nothing about whether the other expert is
+  // the only legitimate home — overlap is legal, and reading it as exclusivity is
+  // what sent a real operator off to train a different expert (gh #94).
   const hint = owner === undefined
     ? ""
-    : ` — \`${owner[0]}\` declares a domain that contains it, so train that expert on it instead`;
+    : ` — \`${owner[0]}\` also declares a domain that contains it, so it may be the better`
+      + ` home for this one (overlap is legal: this fired because none of \`${scope.expert}\`'s`
+      + " own paths match)";
   return `[src: ${ref.raw}] — outside domain: \`${scope.expert}\` declares `
-    + `${scope.domainPaths.map((path) => `\`${path}\``).join(", ")}, so this citation earns it no evidence${hint}`;
+    + `${scope.domainPaths.map((path) => `\`${path}\``).join(", ")}, so this citation earns it`
+    + ` no evidence${grammarHint(ref.path, scope)}${hint}`;
+}
+
+/**
+ * The one-segment spelling mistake, said BEFORE anything about other experts
+ * (gh #94, sub-fix f).
+ *
+ * What it cost, measured 2026-09-02: a $2.10 full training whose 13 code
+ * citations every one read `outside domain`, because the `## Domain` bullets were
+ * written WORKSPACE-relative (`Scavtopia.Workflows/src/…`) while a citation
+ * arrives repo-relative with the repo as a `repo:` prefix. The domain was right;
+ * its spelling was one segment long. Nothing said so — and the only hint that did
+ * fire pointed at a different expert, which reads as "you picked the wrong
+ * expert" when the truth was "you wrote the path the other way round".
+ *
+ * The test is arithmetic and it is stated as a measured fact rather than a
+ * diagnosis: does the path match once ONE leading segment is dropped, from either
+ * side? Dropping it from the DOMAIN means the bullet carries a repo prefix it
+ * should not; dropping it from the CITATION means the citation is
+ * workspace-relative where a `repo:path:line` was wanted. Both are answered, and
+ * neither claims more than "it would match under the other spelling".
+ */
+function grammarHint(refPath: string, scope: KnowledgeScope): string {
+  const cited = normalisePath(refPath);
+  for (const declared of scope.domainPaths) {
+    const stripped = withoutFirstSegment(normalisePath(declared));
+    if (stripped === "" || !pathsIntersect(cited, stripped)) continue;
+    return " — CHECK THE `## Domain` BULLET GRAMMAR FIRST: bullets are repo-relative,"
+      + ` with no repo prefix, and \`${declared}\` without its first segment (\`${stripped}\`)`
+      + " DOES contain this path. That bullet is workspace-relative, so it matches nothing;"
+      + ` write the bullet as: - \`${stripped}/\` — path only — and name the repo in the`
+      + " front matter `repos:`";
+  }
+  const strippedCite = withoutFirstSegment(cited);
+  if (strippedCite !== "" && scope.domainPaths.some((domain) => pathsIntersect(strippedCite, domain))) {
+    return " — CHECK THE CITATION'S GRAMMAR FIRST: a file src is `repo:path:line`, whose path"
+      + ` half is repo-relative, and \`${cited}\` without its first segment (\`${strippedCite}\`)`
+      + " IS inside the declared domain. This citation looks workspace-relative;"
+      + ` cite it as \`<repo>:${strippedCite}:<line>\``;
+  }
+  return "";
+}
+
+/** `api/src/Checkout` -> `src/Checkout`; a single-segment path -> `""`. */
+function withoutFirstSegment(path: string): string {
+  const at = path.indexOf("/");
+  return at === -1 ? "" : path.slice(at + 1);
 }
 
 /**

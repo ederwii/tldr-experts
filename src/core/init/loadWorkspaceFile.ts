@@ -8,7 +8,10 @@
 import { isAbsolute, join, resolve } from "node:path";
 import { readYamlFile } from "../yaml.ts";
 import { runtime } from "../runtime/index.ts";
-import { WORKSPACE_FILE } from "./runInit.ts";
+// From `paths.ts`, NOT from `runInit.ts` where `init` re-exports it: this module is
+// a leaf several commands read the repo list through, and importing the constant
+// from `runInit` dragged all of `init` into every one of their bundles (gh #94).
+import { PROJECT_WORKSPACE_FILE as WORKSPACE_FILE } from "../paths.ts";
 
 export interface LoadedWorkspace {
   /** Absolute path of the workspace root the repo paths are relative to. */

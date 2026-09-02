@@ -5,6 +5,7 @@ kind: domain            # domain | stack | role
 status: created         # created | training | in-use | inactive
 created_by: "tldrx init"
 created_at: null
+repos: []               # the repos the `## Domain` bullets below are relative to
 ---
 
 # <Expert name>
@@ -19,7 +20,18 @@ One paragraph. What this expert is responsible for, and what it is explicitly no
 
 ## Domain
 
-What part of the system this expert speaks for, named as real paths:
+What part of the system this expert speaks for, named as real paths. **The tool
+reads these bullets** (`src/core/experts/expertDomain.ts`): a training citation
+whose path falls outside them earns this expert nothing, and light mode never even
+reads a file outside them. So the grammar below is load-bearing, not decoration.
+
+**Grammar.** Each path bullet is REPO-RELATIVE — no repo prefix on the front — and
+the repos it is relative to are the front matter `repos:` list above. To claim a
+whole repo instead of a folder, the bullet is ``- repo `api` `` — that exact shape,
+with no path. Citations arrive as `repo:path:line`, so `api:src/Checkout/Cart.cs:12`
+is matched by the bullet `` `src/Checkout/` `` and is NOT matched by
+`` `api/src/Checkout/` ``: the second one is workspace-relative, it matches nothing,
+and every citation in the domain then reads `outside domain`.
 
 - `path/to/module` — …
 - `path/to/other` — …

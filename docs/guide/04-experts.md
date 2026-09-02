@@ -181,7 +181,7 @@ move:
 | Warning | When | Note |
 |---|---|---|
 | `paraphrase` | the bullet is ≥ 90% a verbatim substring of the ±3-line neighbourhood of the line it cites | restating a docstring is not a finding |
-| `outside domain` | the path is outside this expert's own `## Domain` | the expert whose domain *does* contain it is named — train that one |
+| `outside domain` | the path is outside this expert's own `## Domain` | when the path would match under the other spelling, the **grammar** is named first (repo-relative, no repo prefix); then the expert whose domain *does* contain it — as a better home, not an exclusive one |
 | `duplicate src` | this `src` is already on record for this expert, in any area | one reading cannot be sold twice by moving it to a second area |
 
 Measured on the real corpus: 57 outside-domain and 7 duplicate warnings across 248 bullets.
@@ -253,7 +253,8 @@ trained experts each, and nothing compared what the two said.
 ```bash
 tldrx expert list [--json]           # status, last_trained, areas, evidence count, levels, star chart
 tldrx expert recompute [<name>]      # recompute every level from evidence already on disk
-tldrx expert create <name> --role <slug> | --domain <slug> | --stack <lang>
+tldrx expert create <name> [--area <id>] [--title <text>]
+                          [--role <slug>] [--domain <slug>] [--stack <lang>]
 ```
 
 `list` recomputes every level from evidence with the formula above and **warns when the
@@ -266,3 +267,41 @@ arithmetic, not a training run. It spawns nothing and spends nothing.
 
 `create` writes `.tldrx/experts/<name>/{expert.md,competencies.yml}` at status `created` with
 one area per flag given, at level 0, and **refuses to overwrite** an existing expert (exit 1).
+
+**An expert with no area cannot be trained**, so `create` names the remedy where the gap shows
+(#94). `--area <id>` seeds the first area outright; `--title <text>` names it, and the title is
+not decoration — light mode greps the words of the area title to decide which files the expert
+is shown, so a default title is a search nobody tuned. Every area is also just a block in
+`competencies.yml`, and both refusals now print it:
+
+```yaml
+areas:
+  - id: discoverer
+    title: Google Places discovery, candidates and ranking
+    level: 0
+    train_prompt: tldrx expert train discoverer --area discoverer --mode light
+    evidence: []
+```
+
+`create` also writes the front matter `repos:` off `.tldrx/workspace.yml` (`repos: []` when
+there is no workspace file), because that list is what the `## Domain` bullets below it are
+relative to — see the grammar next.
+
+### The `## Domain` grammar
+
+This is read by the tool, not only by a human, and getting it wrong is expensive: measured
+2026-09-02, a $2.10 full training earned **zero** evidence because all 13 of its code citations
+landed `outside domain`.
+
+- **Every path bullet is repo-RELATIVE**, with no repo prefix: `` - `src/Checkout/` ``.
+- **The repos it is relative to are the front matter `repos:`** list.
+- **A whole-repo claim is `` - repo `api` ``** — that exact shape, carrying no path. It is
+  deliberately not a path, or a repo-wide expert would match every file in the workspace by
+  prefix.
+- Citations arrive as `repo:path:line`, so `api:src/Checkout/Cart.cs:12` is matched by
+  `` `src/Checkout/` `` and **is not matched by** `` `api/src/Checkout/` `` — the second is
+  workspace-relative and matches nothing.
+
+`tldrx expert create` writes this grammar into the `## Domain` section of the `expert.md` it
+creates, and the `outside domain` warning names it FIRST when the cited path would match under
+the other spelling.

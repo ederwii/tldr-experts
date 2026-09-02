@@ -50,6 +50,14 @@ export const PROJECT_WORK_DIR = "tldrx-work";
  * note, and the `doctor` finding for a `default_branch` that does not resolve
  * (gh #92). A path in a message the operator is meant to go and edit is not a
  * place for three independent string literals.
+ *
+ * It also has to live in a LEAF module, not in `init/runInit.ts` where the
+ * `init` copy of this string used to be declared (gh #94):
+ * `init/loadWorkspaceFile.ts` is the small module several commands read the
+ * repo list through, and taking the constant off `runInit` dragged all of
+ * `init` — detection, map providers, the MCP probe — into every module that
+ * read it. That pushed `dist/hooks/session-start.js` from 37,937 to 54,467
+ * bytes, past the 50 KB entry-point cap `test/build.test.ts` enforces.
  */
 export const PROJECT_WORKSPACE_FILE = `${PROJECT_FRAMEWORK_DIR}/workspace.yml`;
 

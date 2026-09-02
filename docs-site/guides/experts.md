@@ -73,7 +73,7 @@ filled first: an input the stage asked for outranks reference material nobody as
 ## Training one
 
 ```bash
-tldrx expert create billing --domain money
+tldrx expert create billing --area money --title "Invoicing, proration and refunds"
 tldrx expert train billing --area money --mode light --print-prompt   # free: prints and stops
 tldrx expert train billing --area money --mode light
 ```
@@ -88,7 +88,14 @@ Two things make the result trustworthy:
   everything over the cap **listed by name as "not read"**, so a sub-agent cannot describe
   a file it was never shown.
 - **The expert's declared domain is a hard boundary.** A citation outside it earns no
-  evidence for that expert, however true it is.
+  evidence for that expert, however true it is. The `## Domain` bullets in `expert.md` are
+  paths **relative to a repo**, with no repo prefix — `` - `src/Checkout/` ``, never
+  `` - `api/src/Checkout/` `` — because a citation arrives as `repo:path:line` and only the
+  path half is matched. `create` writes that rule, and the front matter `repos:`, into the
+  file it creates.
+
+An expert with no area cannot be trained at all, which is why `--area` is above: without one,
+`expert train` refuses and names the block to add to `competencies.yml`.
 
 `tldrx expert recompute` re-derives every level from the evidence on disk.
 

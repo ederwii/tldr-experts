@@ -26,6 +26,7 @@ import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
 import { loadWorkspace, toSrcContext, factsPath } from "../../hooks/lib/workspace.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
 import { loadExpert, expertDir, EXPERT_FILE } from "../experts/loadExperts.ts";
+import { missingAreaRefusal } from "../experts/missingArea.ts";
 import { readExpertDocument } from "../experts/expertDocument.ts";
 import { agentDir } from "../facilitator/paths.ts";
 import {
@@ -137,8 +138,15 @@ async function trainWithPreflight(options: TrainOptions, said: string[]): Promis
   }
   const area = expert.areas.find((candidate) => candidate.id === options.area);
   if (area === undefined) {
-    const known = expert.areas.map((candidate) => candidate.id).join(", ") || "none";
-    return fail(EXIT_USAGE, [`${options.expert} has no area '${options.area}' (areas: ${known})`]);
+    // gh #94: the refusal names the file to edit and the block to paste, rather
+    // than stating the constraint and leaving the remedy to be found in source.
+    return fail(EXIT_USAGE, missingAreaRefusal({
+      root: options.root,
+      expert: options.expert,
+      areaId: options.area,
+      known: expert.areas.map((candidate) => candidate.id),
+      mode: options.mode,
+    }));
   }
 
   // --- what kind of expert this is, before any money is committed ----------
