@@ -52,7 +52,8 @@ import {
 import { preparedBundles, reviewBundles, REVIEW_DIR } from "../../run/prepared.ts";
 import { spawnAgent, BASE_TOOLS } from "../spawnAgent.ts";
 import {
-  PendingError, PENDING_FILE, RAW_FILE, RESULT_FILE, readResult, readResultObject, writeBundle, writeRaw,
+  PendingError, PENDING_FILE, RAW_FILE, RESULT_FILE, readResult, readResultObject, resultPath,
+  writeBundle, writeRaw,
   dispatchNotesRecord, type PendingReview, type PendingStage,
 } from "../pending.ts";
 import {
@@ -841,14 +842,7 @@ class BuildSession {
     try {
       envelope = readResultObject(this.ctx.runDir, key);
     } catch (error) {
-      if (error instanceof PendingError) {
-        // `absent` is "write the file, then run the same command again" — a step
-        // of the handshake, not a failure of it (gh #82). An `unreadable` one is
-        // a file somebody wrote wrong, and costs what it always did.
-        return error.kind === "absent"
-          ? refusedOnSequence(this.ctx, error.message)
-          : failed(this.ctx, error.message, []);
-      }
+      if (error instanceof PendingError) return this.refuseOnEnvelope(error, key, "reviewer", planned.story.id);
       throw error;
     }
     const work = this.reviewWorkFromBundle(planned.story.id) ?? this.reviewWorkFromLedger(planned);
@@ -928,14 +922,7 @@ class BuildSession {
     try {
       result = readResult(this.ctx.runDir, key);
     } catch (error) {
-      if (error instanceof PendingError) {
-        // `absent` is "write the file, then run the same command again" — a step
-        // of the handshake, not a failure of it (gh #82). An `unreadable` one is
-        // a file somebody wrote wrong, and costs what it always did.
-        return error.kind === "absent"
-          ? refusedOnSequence(this.ctx, error.message)
-          : failed(this.ctx, error.message, []);
-      }
+      if (error instanceof PendingError) return this.refuseOnEnvelope(error, key, "developer", planned.story.id);
       throw error;
     }
 
@@ -3159,6 +3146,59 @@ class BuildSession {
 
   private logPaths(): readonly string[] {
     return [...this.outcomes.values()].map((outcome) => outcome.reviewRel);
+  }
+
+  /**
+   * The handshake's own `result.json` could not be read — one door for both ways
+   * that happens (gh #82, gh #88).
+   *
+   * `absent` was already a sequencing refusal: the host has not written the file
+   * yet, the fix is to write it and run the SAME command again, and nothing was
+   * attempted (#82).
+   *
+   * `unreadable` — the file is there and does not parse — now takes the same
+   * door, by owner decision on gh #88 (2026-09-02). The argument is that nothing
+   * was attempted here either: no sub-agent ran, no cent moved, no branch
+   * changed, and the fix is the same one command. Failing the stage actively
+   * OBSTRUCTED that fix, because it demoted the stage out of `running` and the
+   * phase-budget gate is skipped exactly when a stage is `running` — which is how
+   * #82's live run took a `budget.blocked` it had not earned. A host that
+   * fat-fingers its JSON must not pay that tax. It is #79's model — FORM never
+   * costs an attempt, CONTENT/WORK always does — applied to run state, and
+   * malformed JSON is as pure a FORM fault as exists.
+   *
+   * What stops that being a framework that shrugs at broken artefacts is the
+   * other half of the decision: corruption never passes SILENTLY. An `unreadable`
+   * envelope writes one `result.unreadable` event naming the file, the parse
+   * error, the role and the story — the only thing a sequencing refusal writes,
+   * and it goes in `events.jsonl`, never in `run.yml`, which still comes back
+   * byte for byte.
+   *
+   * `parseReview`'s own fail-closed rule is untouched and is a different
+   * contract: it governs an envelope that PARSES and is not a valid verdict
+   * (unreadable ⇒ `changes`, never `approve`). A file that does not parse at all
+   * never reaches it.
+   */
+  private refuseOnEnvelope(
+    error: PendingError,
+    key: string,
+    role: "developer" | "reviewer",
+    storyId: string,
+  ): ExecutorOutcome {
+    if (error.kind !== "unreadable") return refusedOnSequence(this.ctx, error.message);
+    const path = relative(this.ctx.runDir, resultPath(this.ctx.runDir, key));
+    this.ctx.emit("result.unreadable", {
+      phase: this.ctx.phaseId,
+      story: storyId,
+      role,
+      path,
+      error: error.message,
+    });
+    return refusedOnSequence(
+      this.ctx,
+      `${error.message} — nothing was attempted and nothing moved: rewrite ${path} and run `
+      + `\`tldrx next --commit${role === "reviewer" ? " --review" : ""}\` again`,
+    );
   }
 
   /** `.agent/<stage>/<story>/` — one bundle per sub-agent, never one per stage. */

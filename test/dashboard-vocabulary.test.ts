@@ -250,3 +250,51 @@ describe("what the page claims it read", () => {
     expect(rendered).toContain("tldrx replay");
   });
 });
+
+/**
+ * `cancelled:` — the run-level decision `tldrx run cancel` writes (gh #86).
+ *
+ * A failed stage kept as history, and the run closed over the top of it. The
+ * page read the stage and offered `tldrx next`.
+ */
+const CANCELLED_RUN = `version: 1
+run: 260901-cancelled
+title: "Closed by hand after a failure"
+scope: feature
+workflow: feature
+repos: [api]
+created_at: 2026-09-01T09:00:00Z
+updated_at: 2026-09-01T15:00:00Z
+status: cancelled
+cancelled: {by: alan, at: 2026-09-01T15:00:00Z, note: "superseded by 260902-v2"}
+cursor: {phase: 02-how, stage: how, task: null}
+budget: {ceiling_usd: 25.0, spent_usd: 4.0, per_agent_max_usd: 3.0}
+phases:
+  - id: 02-how
+    status: failed
+    stages:
+      - {id: how, status: failed, expert: architect, model: sonnet, budget_usd: 3.0, cost_usd: 4.0,
+         started_at: null, ended_at: null, inputs: [], outputs: [],
+         gate: {type: approve, status: pending, by: null, at: null, note: ""},
+         tasks: [{id: t1, status: failed, expert: architect, model: sonnet,
+                  cost_usd: 4.0, metered: true, error: "boom"}]}
+`;
+
+describe("a run that was closed by hand", () => {
+  test("the page says it was cancelled, and offers nothing to run", () => {
+    const { root } = workspaceWith("260901-cancelled", CANCELLED_RUN);
+    const run = onlyRun(root);
+
+    // The same derivation `tldrx run status` uses, so the two cannot disagree.
+    expect(run.waiting.kind).toBe("cancelled");
+    // Not a row anyone can be handed: no `← next`, and no alert card.
+    expect(run.runnable).toBe(false);
+    expect(dashPending(run)).toBeNull();
+
+    const cell = text(dashWaitingCell(run));
+    expect(cell).toContain("cancelled");
+    expect(cell).toContain("superseded by 260902-v2");
+    expect(cell).not.toContain("tldrx next");
+    expect(cell).not.toContain("retry");
+  });
+});

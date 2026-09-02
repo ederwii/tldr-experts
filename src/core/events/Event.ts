@@ -63,6 +63,15 @@ import {
  * is the bound — the third refusal is recorded as the `check.failed · changes` it
  * always was.
  *
+ * `result.unreadable` was added 2026-09-02 (gh #88, owner decision). An in-session
+ * `result.json` that EXISTS and does not parse no longer fails the stage — it is
+ * refused like an absent one, because nothing was attempted and the fix is to
+ * rewrite the file and run the same command again. The other half of that
+ * decision is this event: corruption never passes silently, so the log carries
+ * the run-dir-relative path of the file, the parser's own message, which role's
+ * envelope it was and which story it belonged to. It is the ONLY thing a
+ * sequencing refusal writes; `run.yml` still comes back byte for byte.
+ *
  * `story.base_fastforwarded` was added 2026-08-31, and is the only event in this
  * set that records tldrx MOVING A REF. Design §F.2: a story branch that sits
  * behind its epic tip is fast-forwarded before a developer is dispatched onto it,
@@ -82,6 +91,7 @@ export const EVENT_TYPES = [
   "question.asked", "question.answered",
   "gate.requested", "gate.approved", "gate.rejected", "gate.revoked", "gate.policy_changed",
   "story.reopened", "story.base_fastforwarded", "story.review_retried",
+  "result.unreadable",
   "operator_note",
   "check.passed", "check.failed",
   "budget.warned", "budget.blocked", "budget.raised",

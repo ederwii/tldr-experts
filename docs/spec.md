@@ -2427,8 +2427,15 @@ it by the wrong end — sending it back would throw away the state the next comm
 behaviour, on `260901-leaderboard-v2` (2026-09-02T00:36Z): one mistyped command marked the stage and the run `failed`,
 which demoted the stage out of `running` — and the phase-budget gate is skipped exactly when a stage is already
 `running` — so the next `--prepare` was priced as a fresh stage start and took a `budget.blocked` nothing had earned.
-A file the host DID write and got wrong is **not** this: unreadable JSON is broken rather than out of order, and still
-costs what it always did.
+A file the host DID write and got wrong takes the **same door, loudly** (gh #88, owner decision 2026-09-02): a
+`result.json` that exists and does not parse — invalid JSON, or valid JSON that is not an object — is refused exactly
+like an absent one (exit `1`, `run.yml` untouched, no stage failure), because nothing was attempted there either and
+the fix is the same one command. Failing it used to obstruct that fix by demoting the stage out of `running`, which is
+the state the phase-budget gate is skipped in. Corruption does not pass silently, though: a `result.unreadable` event
+is appended naming the run-dir-relative path, the parser's own message, the role and the story. It is the only thing a
+sequencing refusal ever writes. `parseReview`'s fail-closed rule is a different and harsher contract and is untouched:
+it governs an envelope that PARSES and is not a valid verdict (unreadable ⇒ `changes`, never `approve`), and a file
+that does not parse at all never reaches it.
 
 Two things route into it without the flag. A story **waiting on a review** — its last reviewer errored, or its review
 is already out with the host — gets its reviewer bundle from a bare `tldrx next --prepare`, because a `--prepare` that
