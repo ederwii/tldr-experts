@@ -570,6 +570,7 @@ describe("parseReview and the third verdict", () => {
       .toBe("approve");
     expect(parseReview("not an object", "fallback")).toEqual({
       verdict: "changes", summary: "fallback", findings: [], fixlist: [], fixlistProblems: [],
+      grammarProblems: [],
       // No envelope carried no verdict: the summary already says what happened,
       // so there is no second sentence to add (gh #36).
       verdictProblem: null,

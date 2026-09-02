@@ -93,6 +93,22 @@ export interface ParsedFixlist {
   readonly findings: readonly FixFinding[];
   /** Why this is not a readable fix list. Non-empty ⇒ the verdict is refused. */
   readonly problems: readonly string[];
+  /**
+   * The SUBSET of `problems` raised by the claim-sources citation check (gh #78).
+   *
+   * Every entry here is also in `problems` — this is a second index over the same
+   * refusals, not a second list of them, so nothing downstream can report one
+   * without the other. It exists because the two kinds of refusal cost the story
+   * different things: a `refuted` finding whose `[src: …]` does not PARSE is a
+   * fault in how the reviewer wrote its report, and gh #78 buys it a bounded
+   * re-prompt; an envelope that is not a fix list at all (no `disposition`, no
+   * `finding` text, not an array) is refused exactly as it was before.
+   *
+   * Typed rather than sniffed out of the strings on purpose. The strings are
+   * what gh #77 is rewriting; a caller that matched on them would break the
+   * moment the message improved, which is the opposite of what should happen.
+   */
+  readonly grammar: readonly string[];
 }
 
 /**
@@ -106,13 +122,19 @@ export interface ParsedFixlist {
  */
 export function parseFixFindings(value: unknown): ParsedFixlist {
   if (!Array.isArray(value)) {
-    return { findings: [], problems: ["`fixlist` is missing or is not an array"] };
+    return { findings: [], problems: ["`fixlist` is missing or is not an array"], grammar: [] };
   }
   if (value.length === 0) {
-    return { findings: [], problems: ["`fixlist` is empty — a fix list with no findings is an approval"] };
+    return {
+      findings: [],
+      problems: ["`fixlist` is empty — a fix list with no findings is an approval"],
+      grammar: [],
+    };
   }
   const findings: FixFinding[] = [];
   const problems: string[] = [];
+  // Also pushed to `problems`; see `ParsedFixlist.grammar` for why both.
+  const grammar: string[] = [];
   for (const [index, row] of (value as readonly unknown[]).entries()) {
     const at = index + 1;
     if (!isRecord(row)) {
@@ -139,7 +161,11 @@ export function parseFixFindings(value: unknown): ParsedFixlist {
     if (disposition === "refuted") {
       const why = citationProblem(where, detail);
       if (why !== null) {
-        problems.push(`finding ${String(at)} is \`refuted\` and its citation was not read — ${why}`);
+        // Both lists, one string: `grammar` is an INDEX over `problems`, and #78's
+        // free re-prompt carries #77's diagnosis to the reviewer verbatim.
+        const said = `finding ${String(at)} is \`refuted\` and its citation was not read — ${why}`;
+        problems.push(said);
+        grammar.push(said);
         continue;
       }
     }
@@ -159,7 +185,7 @@ export function parseFixFindings(value: unknown): ParsedFixlist {
   if (findings.length === 0 && problems.length === 0) {
     problems.push("`fixlist` yielded no readable findings");
   }
-  return { findings, problems };
+  return { findings, problems, grammar };
 }
 
 function isDisposition(value: string): value is Disposition {
