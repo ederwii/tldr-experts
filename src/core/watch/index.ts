@@ -13,6 +13,8 @@ export { collectFeatures, featureId, PLAN_PHASE } from "./features.ts";
 export type { Feature, DoneStory } from "./features.ts";
 export { epicDiff, renderDiffs, readRepoBases, GIT_BIN, MAX_DIFF_BYTES } from "./epicDiff.ts";
 export type { RepoDiff, DiffRequest, RepoBase } from "./epicDiff.ts";
+export { recordedEpicBranch } from "./recordedBranch.ts";
+export type { RecordedBranch, RecordedBuild } from "./recordedBranch.ts";
 export { featureInputs, featureBrief, renderWatchFacts, watcherRelPath, WATCH_FACT_AREAS } from "./watchPrompt.ts";
 export { renderWatchHandoff, NO_STORIES_SRC } from "./renderWatchHandoff.ts";
 export type { WrittenCard, HandoffContext } from "./renderWatchHandoff.ts";

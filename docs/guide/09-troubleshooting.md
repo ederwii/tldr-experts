@@ -300,6 +300,15 @@ impossible, adopting one is made deliberate: `tldrx next --reuse-epic`.
 
 **The build stage refuses before cutting anything.** The repo is dirty. Commit or stash first.
 
+**`05-watch/watch refuses to start: run.yml records `epic/<x>` for `<feature>`, and it does not
+resolve in `<repo>``, exit 2.** The Watch stage diffs the branch this run's own Build recorded in
+`build.epic_branch`, and that branch is not in the repo — merged and deleted, renamed, or in a
+clone that never fetched it. It refuses instead of telling the watcher the feature is unseen,
+because an all-`absent:` card passes `claim-sources` and covers nothing (#90). Fetch or restore the
+branch, or correct `build.epic_branch` in `run.yml`, then run the stage again. A run that recorded
+**no** branch at all is a different case and is not refused: the prompt says so, and the cards it
+produces come out `draft`.
+
 **`· S5: a SECOND fix-list round was refused — the bound is 1 per story`.** A story gets one
 `fixlist` round, and it is spent. This review was read as `changes` instead, which costs the
 attempt the free round did not. Nothing is lost: the findings are appended to the review's own
