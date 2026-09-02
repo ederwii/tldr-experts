@@ -11,8 +11,11 @@
 #
 # WHAT GIT ACTUALLY OFFERS. There is no pre-reset, pre-checkout or pre-merge hook. The one
 # hook git will let abort work in progress is `reference-transaction`, which fires for every
-# reference update and, in its `prepared` state ONLY, aborts the whole transaction when it
-# exits non-zero. Measured on git 2.50.1, with this guard refusing:
+# reference update and, in its PREPARE state only, aborts the whole transaction when it exits
+# non-zero. That state's NAME is not portable — git 2.50.1 on macOS passes `prepared`, the
+# Linux CI runner's git says `preparing` in its own error text — so this script recognises
+# `committed` and `aborted` and treats everything else as the prepare state. Measured on
+# git 2.50.1, with this guard refusing:
 #
 #   git reset --hard <ref>   → exit 128, `fatal: ref updates aborted by hook`, HEAD UNMOVED
 #   git checkout -B main …   → exit 128, ref unmoved
@@ -31,10 +34,10 @@
 # willing to run `git -c core.hooksPath=…`, delete the hook, or export MW_LOCK_TOKEN
 # defeats it. It is built against accidents, not against intent.
 #
-# Two entry points:
-#   --install [--force]   write the hook shim into this repository's common git dir
-#   --check               answer the same question with no transaction to hang it on
-#   prepared|committed|aborted   the hook itself; ref lines arrive on stdin
+# Three ways in:
+#   --install                     write the hook shim into this repository's common git dir
+#   --check                       answer the same question with no transaction to hang it on
+#   <reference-transaction state> the hook itself; ref lines arrive on stdin
 set -u
 
 MARK='tldr-experts merge guard (#89)'
@@ -91,9 +94,17 @@ case "${1:-}" in
     mw_in_shared_checkout || exit 0
     refuse "this is the shared checkout"
     ;;
-  prepared) ;;
-  committed|aborted) exit 0 ;;   # git ignores the exit code for these; only `prepared` can abort
-  *) echo "usage: merge-guard.sh --install | --check | <reference-transaction state>" >&2; exit 2 ;;
+  "") echo "usage: merge-guard.sh --install | --check | <reference-transaction state>" >&2; exit 2 ;;
+  committed|aborted) exit 0 ;;   # git ignores the exit code for these
+  # EVERY other state runs the decision, and the default is deliberate. This shipped red:
+  # macOS git 2.50.1 names the abortable state `prepared`, the CI runner's git names it
+  # something else (`fatal: in 'preparing' phase, update aborted by the reference-transaction
+  # hook`), and a `*)` arm that printed usage and exited 2 turned the guard into a blanket
+  # refusal of every ref update on that machine — the whole merge-wave suite went red at once.
+  # Falling through here cannot repeat that: git honours the exit code in the prepare state
+  # ONLY, so running the decision for an unrecognised state is either correct or ignored,
+  # and the decision itself refuses nothing unless a foreign wave actually holds the lock.
+  *) ;;
 esac
 
 # `prepared`. Drain stdin first, always: git is writing the ref lines into this pipe and a

@@ -301,6 +301,18 @@
     merge-wave cannot deadlock itself, and a lock whose owner is dead is ignored exactly as the
     waiting loop already ignores it — `scripts/merge-lock.sh` is that one vocabulary, shared by
     writer and guard so the two cannot drift apart.
+  - **The state name git passes is not portable, and assuming it was shipped a red CI.** macOS
+    git 2.50.1 calls the abortable state `prepared`; the Linux runner's git calls it something
+    else (`fatal: in 'preparing' phase, update aborted by the reference-transaction hook`, run
+    33589554234 on `e0e76a2`). The guard's `*)` arm printed a usage error and exited 2, so on
+    that machine every ref update in every sandbox was refused and the whole merge-wave suite
+    went red at once while macOS stayed green — #49's failure shape exactly. It now recognises
+    `committed` and `aborted` and treats **everything else** as the prepare state, which cannot
+    repeat the blanket refusal: git honours the exit code in the prepare state only, so an
+    unrecognised name is either handled correctly or ignored. The test asks git which states it
+    passes rather than hardcoding them, and additionally probes the names this machine does NOT
+    use — the only way the portability property is testable anywhere.
+
   - **And the convention it only approximates is now written down**, verbatim and identically,
     in `CONTRIBUTING.md` and `CLAUDE.md`: agents touch the shared checkout ONLY through
     `scripts/merge-wave.sh`, every other piece of work happens in their own worktree, and never
