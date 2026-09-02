@@ -247,8 +247,16 @@ their answers, `run.yml`, `budget.yml`, `events.jsonl`, the handoffs, the plan �
 the repo gets the run. The block `tldrx init` appends to `.gitignore` excludes eight paths and nothing
 else, because those eight are machine-local, regenerated, or a backup git already holds the history
 of: `.tldrx/graphify-out/`, `.tldrx/cache/`, `.tldrx/worktrees/`, `tldrx-work/*/.lock`,
-`tldrx-work/*/.agent/`, `tldrx-work/*/*.bak`, `.tldrx/memory/*.bak` and
+`tldrx-work/*/.agent/`, `tldrx-work/**/*.bak`, `.tldrx/**/*.bak` and
 `.claude/settings.json.bak-tldrx-*`.
+
+**You do not have to commit them by hand.** Closing a run — `tldrx approve` on the last gate,
+`tldrx next`, or `tldrx run cancel` — commits `tldrx-work/<run>/` and `.tldrx/memory/` in the
+workspace checkout, on the branch that checkout is on, and prints one line saying where they went.
+Only those paths: anything else you had staged is still staged afterwards. It is deliberately never
+the epic branch — an epic under review carries feature code, and run state on it collides with the
+same live files in your working tree the moment the PR merges, which is why `tldrx ship` refuses an
+epic that carries any (#102).
 
 ## Documentation
 

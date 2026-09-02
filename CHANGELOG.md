@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.5.1 — unreleased
+
+### Fixed
+
+- **A closed run no longer sets up the operator's next `git pull` to be refused (#102).**
+  Measured on aparece-v2, run `260830-ordering-inventory`, 2026-09-02: the run closed at
+  `14:14:00Z`; ninety-two seconds later a commit on `epic/ordering-inventory` carried a
+  snapshot of the whole live `tldrx-work/<run>/` tree plus `.tldrx/memory/facts.yml`; PR #10
+  merged it; the operator's `git pull` was refused over 5 modified and ~40 untracked paths,
+  and the recovery was a rebase.
+  - **The cause was a gap, not a bad line of code.** tldrx has never had a code path that
+    commits `tldrx-work/` to an epic — story commits have excluded the state dirs since
+    `stateDirPrefixes` landed, and the offending commit was authored by the operator's agent
+    after the close. What the framework did have was a hole: in a `root_is_repo` workspace it
+    writes `run.yml`, `events.jsonl`, `budget.yml` and every phase document straight into the
+    operator's WORKING TREE and left them uncommitted for the length of the run, said nothing
+    about them at close, and offered no verb for "the run is over, commit its docs". So an
+    agent invented one, and half the time invented it onto the epic.
+  - **The close now commits that state itself.** `closeRun` — one home for the policy, the
+    same three callers `closeRunWorktrees` had (`tldrx next`, `tldrx approve`, `tldrx run
+    cancel`) — commits `tldrx-work/<run>/` and `.tldrx/memory/` in the workspace checkout, on
+    the branch that checkout is on, and prints one line saying where they went. New
+    `commitPathsOnly` is the inverse of `commitAll`: `git commit -- <pathspec>`, so a
+    `README.md` the operator had STAGED is still staged and still uncommitted afterwards.
+    Two paths refuse rather than guess — a checkout sitting on the run's own epic branch
+    (`on-epic`) and a detached HEAD — and both report instead of failing the close. It never
+    pushes; spec §5 is unchanged.
+  - **`tldrx ship` refuses an epic that carries the framework's own state**, names the paths,
+    and prints the two-command repair (`git checkout <base> -- tldrx-work .tldrx` then a
+    commit — a forward commit, never a rebase). This is the last point tldrx holds the wheel
+    before a PR, and the diff is three-dot so a trunk that gained run state after the epic was
+    cut does not read as the epic carrying it. A `git diff` that fails answers "nothing here":
+    a probe that could not tell must never turn into a refusal.
+  - **Every `*.bak` tldrx writes is gitignored, at any depth.** `tldrx-work/*/*.bak` reached
+    one level and missed `tldrx-work/<run>/04-build/preflight.yml.bak`, which
+    `git check-ignore` matched against the block's own `!tldrx-work/**` re-include — measured,
+    and it was swept into the aparece-v2 rescue commit. Now `tldrx-work/**/*.bak` and
+    `.tldrx/**/*.bak`. Existing workspaces pick the block up on the next `tldrx init` (it is a
+    marked block, so re-running it is idempotent); until then the close excludes `*.bak` from
+    its own pathspec, so the one write path that could have committed them does not.
+
 ## 0.5.0 — 2026-09-02
 
 ### Added

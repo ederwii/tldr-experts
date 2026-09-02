@@ -19,7 +19,7 @@ import { attendRun } from "../../core/run/attend.ts";
 import { ATTENDED_BY, type AttendedBy } from "../../core/run/RunFile.ts";
 import { parallelFlag } from "./next.ts";
 import { cancelRun, unlockRun } from "../../core/run/rescue.ts";
-import { closeRunWorktrees } from "../../core/run/closeWorktrees.ts";
+import { closeRun, describeStateCommit } from "../../core/run/closeRun.ts";
 import { nowRfc3339 } from "../../hooks/lib/actor.ts";
 import { createRun } from "../../core/run/newRun.ts";
 import { setGatePolicy } from "../../core/run/setGatePolicy.ts";
@@ -431,7 +431,11 @@ async function runCancel(argv: readonly string[]): Promise<number> {
     if (outcome.code === EXIT_OK) {
       const resolved = RunStore.resolve(root, runId ?? undefined);
       if (resolved.kind === "one") {
-        await closeRunWorktrees(resolved.store.run, root, resolved.store.runDir);
+        const closed = await closeRun(
+          resolved.store.run, root, resolved.store.runDir, resolved.store.runId, "cancelled",
+        );
+        const said = describeStateCommit(closed.state);
+        if (said !== null) process.stdout.write(`run cancel: ${said}\n`);
       }
     }
     return report("run cancel", outcome);

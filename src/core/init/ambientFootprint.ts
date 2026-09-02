@@ -47,8 +47,14 @@ export const GITIGNORE_IGNORES = [
   // It is a recovery aid for the working copy, not history — git already holds
   // the history of these files, and committing the backups would put a second
   // copy of run.yml in every diff.
-  "tldrx-work/*/*.bak",
-  ".tldrx/memory/*.bak",
+  //
+  // `**` and not `*`: the depth these appear at is wherever the framework happens
+  // to save a yaml file, and the patterns that named one level missed
+  // `tldrx-work/<run>/04-build/preflight.yml.bak` — measured on aparece-v2
+  // 2026-09-02, where `git check-ignore` matched it against the block's OWN
+  // `!tldrx-work/**` re-include and it was swept into a rescue commit (gh #102).
+  "tldrx-work/**/*.bak",
+  ".tldrx/**/*.bak",
   // `tldrx install --claude` backs settings.json up before merging into it
   // (installClaude.ts). The backup is a full copy of a file that may hold local
   // env values, and it was the one thing the framework writes that nothing

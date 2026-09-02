@@ -25,6 +25,7 @@ import { workspaceRootFrom } from "../workspace.ts";
 import { fail } from "../report.ts";
 import { isResolved, resolveRunOrExplain } from "../resolveRun.ts";
 import { approve, GateError, type GateEvidenceInput } from "../../core/run/gates.ts";
+import { describeStateCommit } from "../../core/run/closeRun.ts";
 import { gatePolicyFor } from "../../core/run/gatePolicy.ts";
 import { evidencePath } from "../../core/facilitator/paths.ts";
 import { describeEvidenceIssues, validateEvidence } from "../../core/text/evidence.ts";
@@ -94,6 +95,10 @@ export const approveCommand: Command = {
             : `no stage follows ${outcome.stage}`
           : `cursor → ${outcome.advancedTo.phase}/${outcome.advancedTo.stage} (ready)`,
       );
+      // Where the run's own state went, said out loud (#102): an operator who is
+      // not told will commit it themselves, and half the time onto the epic.
+      const closing = outcome.closed === null ? null : describeStateCommit(outcome.closed.state);
+      if (closing !== null) lines.push(`  ${closing}`);
       process.stdout.write(`${lines.join("\n")}\n`);
       return EXIT_OK;
     } catch (error) {

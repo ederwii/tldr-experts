@@ -35,7 +35,7 @@ import {
 import { raiseCommand, shortBy } from "../budget/budgetView.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../hooks/lib/workspace.ts";
-import { closeRunWorktrees } from "../run/closeWorktrees.ts";
+import { closeRun, describeStateCommit } from "../run/closeRun.ts";
 import type { TldrxEvent } from "../events/Event.ts";
 import { setProgressCeiling, setProgressReadCap, setProgressTitle } from "../ui/bus.ts";
 import { acquireLock, releaseLock } from "./Lock.ts";
@@ -1471,15 +1471,20 @@ async function finishStage(
     checks: checks.map((c) => `${c.id}:${c.status}`),
   }));
   store.save();
+  const closing: string[] = [];
   if (store.run.status === "done") {
     store.append(event(options, store.runId, null, "run.closed", { reason: "every stage terminal" }));
-    // The run owns its epic worktrees, so the run's close is what takes them (#16).
-    await closeRunWorktrees(store.run, options.root, store.runDir);
+    // The run owns its epic worktrees and its own state, so the run's close is what
+    // takes the one (#16) and commits the other (#102).
+    const closed = await closeRun(store.run, options.root, store.runDir, store.runId);
+    const said = describeStateCommit(closed.state);
+    if (said !== null) closing.push(`  ${said}`);
   }
   return out(EXIT_OK, [
     ...notes,
     `${phaseId}/${stageId} done — ${costLine} (${checkSummary})`,
     moved === null ? `run ${store.runId} is finished` : `cursor → ${moved.phase}/${moved.stage} (ready)`,
+    ...closing,
   ]);
 }
 
