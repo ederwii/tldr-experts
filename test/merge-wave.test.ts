@@ -20,7 +20,8 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawn, execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { foreignWaveLogPath } from "./fixtures/foreignWaveLog.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
 // Each invocation runs a real `bun install`, a real `bun test` and a real merge, and the
@@ -34,6 +35,9 @@ const MERGE_WAVE = join(REPO, "scripts", "merge-wave.sh");
 const GATE_SH = `#!/usr/bin/env bash
 echo "$1 $(git rev-parse HEAD)" >> "$GATE_LOG"
 if [ -f poison.txt ]; then echo "gate saw poison.txt"; exit 1; fi
+# Red in the DOCS build and nowhere else — the #114 shape: a dead link or a throwing
+# generator, on a tree whose typecheck, tests and build are all green.
+if [ -f docs-poison.txt ] && [ "$1" = "docs:build" ]; then echo "gate saw docs-poison.txt"; exit 1; fi
 if [ -n "\${GATE_HOLD_UNTIL:-}" ] && [ "\${GATE_HOLD_ON:-typecheck}" = "$1" ]; then
   n=0
   while [ ! -f "$GATE_HOLD_UNTIL" ] && [ "$n" -lt 900 ]; do sleep 0.1; n=$((n+1)); done
@@ -44,7 +48,14 @@ exit 0
 
 const PACKAGE_JSON = JSON.stringify({
   name: "mw-sandbox", private: true, type: "module",
-  scripts: { typecheck: "bash gate.sh typecheck", build: "bash gate.sh build" },
+  scripts: {
+    typecheck: "bash gate.sh typecheck",
+    build: "bash gate.sh build",
+    // The real one is `cd docs-site && bun install --frozen-lockfile && bun run build`.
+    // Here it is a stand-in like the others, for the same reason: what this file proves is
+    // that the wave RUNS it, on the tree it is pushing, and refuses to push when it is red.
+    "docs:build": "bash gate.sh docs:build",
+  },
 }, null, 2);
 
 /**
@@ -105,9 +116,12 @@ function sandbox(): Sandbox {
   run(main, "remote", "add", "origin", originGit);
   run(main, "push", "-q", "origin", "main");
   run(main, "fetch", "-q", "origin");
-  for (const branch of ["wave-a", "wave-b", "wave-poison"]) {
+  // The file each branch carries. `wave-poison` is red in every gate; `wave-docs-poison`
+  // is red in the docs build ALONE (#114) — the case that used to reach `main` green.
+  const carries: Record<string, string> = { "wave-poison": "poison.txt", "wave-docs-poison": "docs-poison.txt" };
+  for (const branch of ["wave-a", "wave-b", "wave-poison", "wave-docs-poison"]) {
     run(main, "checkout", "-q", "-b", branch, "main");
-    writeFileSync(join(main, branch === "wave-poison" ? "poison.txt" : `${branch}.txt`), `${branch}\n`);
+    writeFileSync(join(main, carries[branch] ?? `${branch}.txt`), `${branch}\n`);
     run(main, "add", "-A");
     run(main, "commit", "-q", "-m", `${branch} work`);
     run(main, "checkout", "-q", "main");
@@ -160,11 +174,47 @@ function waveLogs(run: Invocation): string[] {
   return readdirSync(run.logRoot).filter((f) => f.startsWith("mw-"));
 }
 
-/** The shas the gates of `branch` actually ran against, in order. */
-function gateShas(sb: Sandbox, branch: string): string[] {
+/** Every line the gates of `branch` recorded, in order: `"<gate> <sha>"`. */
+function gateLog(sb: Sandbox, branch: string): string[] {
   const log = join(sb.dir, `gate-${branch}.log`);
   if (!existsSync(log)) return [];
-  return readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((l) => l.split(" ")[1]!);
+  return readFileSync(log, "utf8").trim().split("\n").filter(Boolean);
+}
+
+/** The shas the gates of `branch` actually ran against, in order. */
+function gateShas(sb: Sandbox, branch: string): string[] {
+  return gateLog(sb, branch).map((l) => l.split(" ")[1]!);
+}
+
+/**
+ * Everything an invocation left behind, as one string — for an assertion that has just
+ * been surprised (#115).
+ *
+ * CI run 33653699970 caught A's merge exiting 2, "merge conflict", in a sandbox where the
+ * only branch being merged touches one file nothing else has. The diagnosis stalled there:
+ * merge-wave keeps a red run's logs ON PURPOSE, and `afterEach` deletes the sandbox they
+ * sit in before any human can read them, so the one artifact that says what git actually
+ * refused was gone by the time anyone looked. Every assertion about an exit code in this
+ * file now carries it — `merge.log` included — so the next occurrence arrives explained.
+ */
+function evidence(run: Invocation, r: Result): string {
+  const parts = [`exit ${r.code}`, `stdout: ${r.stdout.trim()}`, `stderr: ${r.stderr.trim()}`];
+  for (const dir of readdirSync(run.logRoot).filter((f) => f.startsWith("mw-"))) {
+    for (const file of readdirSync(join(run.logRoot, dir))) {
+      parts.push(`--- ${dir}/${file} ---\n${readFileSync(join(run.logRoot, dir, file), "utf8").trim()}`);
+    }
+  }
+  return parts.join("\n");
+}
+
+/** `expect(r.code).toBe(want)`, and when it is not, say what the run left behind (#115). */
+function expectExit(run: Invocation, r: Result, want: number): void {
+  if (r.code !== want) throw new Error(`expected exit ${want}, got ${r.code}\n${evidence(run, r)}`);
+}
+
+/** Which gates ran, in order — the list this script promises to run before it pushes. */
+function gateNames(sb: Sandbox, branch: string): string[] {
+  return gateLog(sb, branch).map((l) => l.split(" ")[0]!);
 }
 
 function originLog(sb: Sandbox): string[] {
@@ -214,13 +264,14 @@ describe("two concurrent merges in one checkout (#44)", () => {
 
     writeFileSync(release, "go\n");
     const [ra, rb] = [await a.done, await b.done];
-    expect(ra.code).toBe(0);
-    expect(rb.code).toBe(0);
+    expectExit(a, ra, 0);
+    expectExit(b, rb, 0);
 
     const aShas = gateShas(sb, "wave-a");
     const bShas = gateShas(sb, "wave-b");
-    expect(aShas).toHaveLength(2);
-    expect(bShas).toHaveLength(2);
+    // One entry per gate that records a sha: typecheck, build, docs:build (#114).
+    expect(aShas).toHaveLength(3);
+    expect(bShas).toHaveLength(3);
     // The bug, precisely: every gate of a run must have seen ONE tree, and not the other run's.
     expect(new Set(aShas).size).toBe(1);
     expect(new Set(bShas).size).toBe(1);
@@ -242,10 +293,50 @@ describe("two concurrent merges in one checkout (#44)", () => {
     writeFileSync(release, "go\n");
 
     const [ra, rb] = [await a.done, await b.done];
-    expect(ra.code).toBe(0);                       // pre-fix this was FAIL build=1, on wave-poison's file
+    expectExit(a, ra, 0);                          // pre-fix this was FAIL build=1, on wave-poison's file
     expect(ra.stdout).toContain("pushed");
-    expect(rb.code).toBe(3);
+    expectExit(b, rb, 3);
     expect(rb.stdout).toContain("NOT pushed");
+    expect(originLog(sb)[0]).toBe("merge wave-a");
+  });
+});
+
+/**
+ * #114 — the documentation site is a build, and it was not gated.
+ *
+ * `merge-wave.sh` gated typecheck, `bun test`, `build` and the runtime seam, and pushed.
+ * The site was built AFTERWARDS, by `.github/workflows/docs.yml`, on the push to `main`.
+ * That is a build with two failure modes the suite cannot see: `ignoreDeadLinks: false`
+ * in `docs-site/.vitepress/config.mts` is deliberate, so a page somebody moved breaks it;
+ * and `docs-site/package.json` runs two generators (`gen-changelog.ts`, `gen-demo.ts`)
+ * before VitePress, either of which can throw on input the tests never feed it. Both land
+ * on `main` GREEN and go red as a failed DEPLOY — `main` broken, site stale.
+ *
+ * Measured on this repo 2026-09-02, warm: `bun run docs:build` exits 0 in 4 s wall
+ * (VitePress 2.91 s plus a no-op `bun install --frozen-lockfile` in `docs-site/`), and
+ * `git status --porcelain` is empty before AND after, so the fifth gate cannot leave dirt
+ * that fails the NEXT wave's dirty-tree guard. Against a wave whose `bun test` alone is
+ * ~440 s, that is noise. So it blocks — a docs build nobody may merge past.
+ */
+describe("the docs site is a gate, not an afterthought (#114)", () => {
+  test("a branch that breaks ONLY the docs build never reaches origin", async () => {
+    const sb = sandbox();
+    const before = originLog(sb);
+    const { code, stdout } = await invoke(sb, "wave-docs-poison").done;
+    // Pre-fix: code 0, "OK … pushed", and the breakage was origin/main's problem.
+    expect(code).toBe(3);
+    expect(stdout).toContain("docs=1");
+    expect(stdout).toContain("NOT pushed");
+    expect(originLog(sb)).toEqual(before);
+  });
+
+  test("every wave runs it, in order, against the one tree it is pushing", async () => {
+    const sb = sandbox();
+    const { code, stdout } = await invoke(sb, "wave-a").done;
+    expect(code).toBe(0);
+    expect(gateNames(sb, "wave-a")).toEqual(["typecheck", "build", "docs:build"]);
+    expect(new Set(gateShas(sb, "wave-a")).size).toBe(1);   // one tree, every gate
+    expect(stdout).toContain("docs");                       // and the summary line says so
     expect(originLog(sb)[0]).toBe("merge wave-a");
   });
 });
@@ -397,6 +488,35 @@ describe("the dirty-tree guard and the pack artifact (#45)", () => {
     expect(named!.startsWith(`${red.logRoot}/`)).toBe(true);
   });
 
+  /**
+   * #115 — the flake that could not be read.
+   *
+   * CI run 33653699970 (sha `b64950d`) caught ONE failure in 3161: run A of the #44
+   * concurrency test exiting 2, which merge-wave calls a merge conflict, in a sandbox
+   * whose only merge adds a file nothing else touches. Re-running the same sha turned it
+   * green. The diagnosis stopped there and it did not have to: the script KEEPS a red
+   * run's logs, and `afterEach` deleted the sandbox holding them before anyone could look.
+   *
+   * So the surprise now carries the evidence. `expectExit` is what the concurrency tests
+   * assert exit codes through, and this is the test that it actually reaches for the logs —
+   * otherwise the next occurrence is another `expect(0) got 2` with nothing behind it.
+   */
+  test("an unexpected exit arrives with the logs the script kept (#115)", async () => {
+    const red = invoke(sandbox(), "wave-poison");
+    const result = await red.done;
+    expect(result.code).toBe(3);
+    const said = evidence(red, result);
+    expect(said).toContain("exit 3");
+    expect(said).toContain("merge.log");
+    expect(said).toContain("Merge made by the 'ort' strategy");   // git's own words for what it did
+    expect(said).toContain("gate saw poison.txt");                // and the gate log that went red
+    // The failure message a surprised assertion would print, end to end.
+    let thrown = "";
+    try { expectExit(red, result, 0); } catch (e) { thrown = String(e); }
+    expect(thrown).toContain("expected exit 0, got 3");
+    expect(thrown).toContain("Merge made by the 'ort' strategy");
+  });
+
   test("the guard keeps its teeth: a genuinely untracked file still refuses", async () => {
     const sb = sandbox();
     writeFileSync(join(sb.main, "half-finished.ts"), "export const x = 1;\n");
@@ -422,22 +542,25 @@ describe("the dirty-tree guard and the pack artifact (#45)", () => {
  *   #97 — a CONCURRENT invocation's LIVE `mw-15412` counted as the green run's residue,
  *         12 minutes into #90's wave, leaving `main` at an unpushed merge commit.
  *
- * Same defect both times: the assertion is about ONE run's cleanup and it measured the
- * whole machine. These two tests plant the foreign directory rather than racing a second
- * live wave for it — a test that needs the box to be busy to prove its point is the
- * disease, not the treatment.
+ *   #113 — the same defect, one level down, in the FIXTURE below. The run's log root
+ *         went private in b8d1fcb; the planted "foreign" directory stayed at the constant
+ *         `mw-999999`, which every concurrent copy of this file planted AND deleted.
+ *
+ * Same defect all three times: something here is about ONE run and it names the whole
+ * machine. These tests plant the foreign directory rather than racing a second live wave
+ * for it — a test that needs the box to be busy to prove its point is the disease, not
+ * the treatment — and every name they plant under is now derived from a pid.
  */
-describe("the log-directory assertion is about THIS run, not the machine (#95, #97)", () => {
+describe("the log-directory assertion is about THIS run, not the machine (#95, #97, #113)", () => {
   /**
    * A foreign `mw-<pid>` in the machine's SHARED tmpdir — the real shape, real contents,
    * removed again by the caller's `finally`.
    *
-   * Overwriting an existing one costs nothing: a directory already at `mw-<this process's
-   * pid>` was written by something that held this pid, and this process holds it now, so
-   * that wave is dead and its log is stale.
+   * Overwriting an existing one costs nothing: every name passed here is derived from a
+   * pid, and a directory sitting at a name this process derives was written by something
+   * that held this pid before it — so that wave is long dead and its log is stale.
    */
-  function plantForeignWaveLog(pid: number): string {
-    const dir = join(tmpdir(), `mw-${pid}`);
+  function plantForeignWaveLog(dir: string): string {
     rmSync(dir, { recursive: true, force: true });
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "merge.log"), "Merge made by the 'ort' strategy.\n poison.txt | 1 +\n");
@@ -445,9 +568,39 @@ describe("the log-directory assertion is about THIS run, not the machine (#95, #
     return dir;
   }
 
+  /**
+   * #113 — the fix of b8d1fcb made the RUN's log root private, and left this FIXTURE
+   * writing to a machine-global name.
+   *
+   * `mw-999999` was one constant path for every process on the box, so four concurrent
+   * runs of this file planted it four times and deleted it four times, and the first one
+   * to reach its `finally` removed the directory the other three were still about to
+   * assert on. Measured 2026-09-02 at 965eb54, four concurrent `bun test
+   * test/merge-wave.test.ts`: 9 failures in 12, all of them line 455's
+   * `expect(existsSync(foreign)).toBe(true)` receiving false.
+   *
+   * This is the guard for it, and it is a two-PROCESS measurement on purpose: a test that
+   * asks THIS process whether its own name is unique can only ever say yes. The child
+   * imports the same fixture the test does and prints the path it would plant.
+   */
+  test("the KEPT log's directory is per-process, so concurrent runs cannot delete each other's (#113)", () => {
+    const mine = foreignWaveLogPath();
+    const fixture = join(import.meta.dir, "fixtures", "foreignWaveLog.ts");
+    const sibling = execFileSync(
+      process.execPath,
+      ["-e", `import { foreignWaveLogPath } from ${JSON.stringify(fixture)}; console.log(foreignWaveLogPath());`],
+      { encoding: "utf8" },
+    ).trim();
+    expect(sibling).not.toBe("");
+    expect(sibling).not.toBe(mine);                    // pre-fix: both `<tmpdir>/mw-999999` — measured
+    expect(dirname(sibling)).toBe(dirname(mine));      // and both still in the SHARED namespace
+    expect(dirname(mine)).toBe(tmpdir());              // which is the whole point of the plant
+    expect(basename(mine).startsWith("mw-")).toBe(true);   // in the shape a real wave leaves
+  });
+
   test("a sibling wave's deliberately KEPT red log is not this run's residue (#95)", async () => {
     // A wave that has exited and left its log behind ON PURPOSE, for someone to read.
-    const foreign = plantForeignWaveLog(999_999);
+    const foreign = plantForeignWaveLog(foreignWaveLogPath());
     try {
       const green = invoke(sandbox(), "wave-a");
       expect((await green.done).code).toBe(0);
@@ -461,7 +614,8 @@ describe("the log-directory assertion is about THIS run, not the machine (#95, #
   test("a CONCURRENT wave's live log directory is not this run's residue either (#97)", async () => {
     // This process's own pid: alive, on this host, for the whole of the run below — a
     // wave still inside its gates, whose log directory is not a leftover of anything.
-    const foreign = plantForeignWaveLog(process.pid);
+    // A live pid is unique among live processes, so this name never was a #113 collision.
+    const foreign = plantForeignWaveLog(join(tmpdir(), `mw-${process.pid}`));
     try {
       const green = invoke(sandbox(), "wave-a");
       expect((await green.done).code).toBe(0);

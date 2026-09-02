@@ -15,5 +15,6 @@
   `reference-transaction` hook, so git itself refuses ref updates in the shared checkout while the
   lock is held; it saves the commit, not the working tree, and it is bypassable. The rule above is
   the real protection.
-- Gates for any change: `bun run typecheck`, `bun test`, `bun run build`, and no `Bun.*` under `src/` outside `src/core/runtime/` (the grep scans `src` only — `scripts/build.ts` calls `Bun.build` by design). Run them without pipes and read the exit codes.
+- Gates for any change: `bun run typecheck`, `bun test`, `bun run build`, `bun run docs:build`, and no `Bun.*` under `src/` outside `src/core/runtime/` (the grep scans `src` only — `scripts/build.ts` calls `Bun.build` by design). Run them without pipes and read the exit codes.
+  `docs:build` is the fifth gate since #114: `ignoreDeadLinks: false` is deliberate, and the site runs two generators before VitePress, so a moved page or a throwing generator used to reach `main` green and go red as a failed DEPLOY. It costs ~4 s warm and leaves the tree clean.
 - Docs are part of the change: CHANGELOG (`## <next> — unreleased`), README status table + release table, `docs/spec.md` when a schema or command changes, `docs/ROADMAP.md` when scope moves.

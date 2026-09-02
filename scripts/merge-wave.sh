@@ -146,14 +146,22 @@ bun install >/dev/null 2>&1
 bun run typecheck >"$LOGS/tc.log" 2>&1; TC=$?
 bun test >"$LOGS/test.log" 2>&1; TE=$?
 bun run build >"$LOGS/build.log" 2>&1; BU=$?
+# The docs site is a BUILD, and until #114 it was the only one that ran after the push.
+# `ignoreDeadLinks: false` is deliberate, and `docs-site/package.json` runs two generators
+# before VitePress — so a moved page or a generator that throws used to reach `main` green
+# and go red as a failed DEPLOY, which is `main` broken AND the published site stale.
+# Measured 2026-09-02 on this repo, warm: 4 s wall, and `git status --porcelain` empty
+# before and after, so it cannot leave dirt that fails the NEXT wave's dirty-tree guard.
+# Against a `bun test` of ~440 s it is noise. It blocks, like every other gate here.
+bun run docs:build >"$LOGS/docs.log" 2>&1; DO=$?
 SEAM=$(grep -rn 'Bun\.' src | grep -v src/core/runtime/ | wc -l | tr -d ' ')
 FAILS=$(grep -c '^(fail)' "$LOGS/test.log"); TESTS=$(tail -1 "$LOGS/test.log" | grep -oE 'Ran [0-9]+ tests' )
 NOW="$(git rev-parse HEAD)"
 if [ "$NOW" != "$GATED" ]; then
   echo "FAIL HEAD moved during the gates: gated $(git rev-parse --short "$GATED"), now $(git rev-parse --short "$NOW") — those gate results describe a tree this run is not pushing; NOT pushed. Logs: $LOGS"; exit 5
 fi
-if [ $TC -ne 0 ] || [ $TE -ne 0 ] || [ $BU -ne 0 ] || [ "$SEAM" != "0" ]; then
-  echo "FAIL typecheck=$TC test=$TE(fails=$FAILS) build=$BU seam=$SEAM — main left at merge commit $(git rev-parse --short HEAD), NOT pushed; logs: $LOGS; failing: $(grep '^(fail)' "$LOGS/test.log" | head -3 | cut -c1-80 | tr '\n' '|')"; exit 3
+if [ $TC -ne 0 ] || [ $TE -ne 0 ] || [ $BU -ne 0 ] || [ $DO -ne 0 ] || [ "$SEAM" != "0" ]; then
+  echo "FAIL typecheck=$TC test=$TE(fails=$FAILS) build=$BU docs=$DO seam=$SEAM — main left at merge commit $(git rev-parse --short HEAD), NOT pushed; logs: $LOGS; failing: $(grep '^(fail)' "$LOGS/test.log" | head -3 | cut -c1-80 | tr '\n' '|')"; exit 3
 fi
 # Push the commit that was GATED, not the `main` ref — which need not be the same object.
 # `git push origin main` publishes refs/heads/main whatever HEAD is: gate one tree, push
@@ -165,4 +173,4 @@ if git rev-parse --verify -q origin/main >/dev/null; then
 fi
 git push -q origin HEAD:main || { echo "FAIL push"; exit 4; }
 rm -rf "$LOGS"   # a green run's logs are noise; every FAIL above names the directory it kept
-echo "OK $(git rev-parse --short HEAD) $TESTS 0 fail · typecheck/build/seam clean · pushed"
+echo "OK $(git rev-parse --short HEAD) $TESTS 0 fail · typecheck/build/docs/seam clean · pushed"
