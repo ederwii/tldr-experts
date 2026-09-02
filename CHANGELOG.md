@@ -503,6 +503,36 @@
     `docs/guide/08-cli-reference.md`, `docs/guide/09-troubleshooting.md` and both docs-site expert
     guides — the grammar had never been written down anywhere outside `expertDomain.ts`.
 
+- **`release.sh` ran the gate AFTER pushing the release commit to `main` (#100).** The order was
+  commit → push `main` → `release-check.sh` → tag → push tag, so every red item the gate has —
+  tests, typecheck, build, the `Bun.*` seam grep, "tag already exists", "already on npm", "tree
+  not clean" — landed a `release: X.Y.Z` commit on `origin/main` carrying a **dated** CHANGELOG
+  heading and a **dated** README row, with no tag behind it. That is precisely the half-released
+  state checklist item 4 exists to prevent, and it costs a revert commit on `main` or a
+  hand-repaired CHANGELOG to undo. The order is now commit → **gate** → push `main` → tag → push
+  tag: a red gate leaves `origin/main`, the tags and npm untouched, the whole of the damage is one
+  local commit, and the script says so and prints the one command that drops it.
+  - **The gate did not have to be weakened to move it.** Of its items only "in sync with
+    `origin/main`" assumes the push already happened; run against an unpushed release commit it
+    would be permanently red, which is the trap in the naive reorder. `release-check.sh` takes a
+    new `--pre-push` that restates that one item as **"`origin/main` is HEAD's parent"** — the same
+    assertion (nobody moved `main` under you, nothing but the release commit is unpushed) for a
+    tree that has not pushed yet, and one notch stronger, since it also refuses a second unpushed
+    commit. Items 1–3 already needed the edits, which exist by then; "working tree clean", "on
+    main", "tag does not exist", "not on npm", typecheck, tests, build and the seam grep are
+    untouched and all still run. **No flag, no default, no CI path changed**: bare
+    `release-check.sh` (the `release-gate-hook.sh` PreToolUse deny) and `--ci` (publish.yml)
+    behave exactly as before, and there is a test for each.
+  - **`sed -i ''` was macOS-only**, which is why this path had never had a test: measured against
+    GNU sed 4.9 in `debian:stable-slim`, `sed -i '' -E …` exits **2** with `sed: can't read
+    s/^## …/: No such file or directory`, so `release.sh` could not run on the ubuntu CI runner at
+    all. Both substitutions now go through a temp file outside the tree and are `cat` back (inode,
+    mode and a clean working tree preserved) — byte-identical output on BSD sed, and it runs on
+    GNU sed, which is what lets `test/release-gate-order.test.ts` hold the ordering in CI. The new
+    file runs the real two scripts against a real bare "origin" with only `bun` and `npm` stubbed,
+    and reads the ordering off the shas the gate actually ran against: pre-fix, HEAD and
+    `origin/main` were EQUAL at gate time; now they differ by the release commit.
+
 - **The prose was validated against the binary, top to bottom, and a lot of it was false.**
   The last docs QA (3ee3723) was a release ago; `watch check`/`watch arm`, `update` and
   its notice, the `drive` preflight, `plan schema`, `questions cards`, `story reopen --for-fix`,
