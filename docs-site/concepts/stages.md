@@ -5,7 +5,7 @@ title: The five stages
 # The five stages
 
 A piece of work goes through five stages, in order: **What → How → Plan → Build → Watch**.
-Each is one turn of the same small loop.
+Each is one turn of the same loop — Investigate, Handoff, Interview, Gate.
 
 > **Investigate** — read code, docs and memory; every finding carries a source.
 > **Handoff** — write one markdown file: what was found, what was decided, what is still unknown.
@@ -19,9 +19,9 @@ outputs are files on disk, and the next stage reads them.
 
 | Stage | It answers | It writes |
 |---|---|---|
-| **What** | What are we doing, and what are we deliberately not doing? | `intent.md`, `scope.md`, `success-metrics.md`, `open-questions.md`, `handoff.md` |
-| **How** | How does it fit this codebase — components, contracts, risks, tests? | `design.md`, `contracts.md`, `risks.md`, `test-strategy.md`, `handoff.md` |
-| **Plan** | What are the pieces, in what order? | `epics/`, `stories/`, `waves.yml`, `handoff.md` |
+| **What** | What are we doing, and what are we deliberately not doing? | `intent.md`, `scope.md`, `success-metrics.md`, `open-questions.md`, `handoff.md`, `questions.md` |
+| **How** | How does it fit this codebase — components, contracts, risks, tests? | `design.md`, `contracts.md`, `risks.md`, `test-strategy.md`, `handoff.md`, `questions.md` |
+| **Plan** | What are the pieces, in what order? | `epics/`, `stories/`, `waves.yml`, `budget.yml`, `handoff.md`, `questions.md` |
 | **Build** | The code. | a branch and a commit per story, plus `04-build/handoff.md` |
 | **Watch** | What could go wrong in production, and how would we know? | one watcher card per shipped thing |
 

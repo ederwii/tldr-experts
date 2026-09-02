@@ -56,7 +56,7 @@ tldrx approve --note "…"    # firma la compuerta; antes se vuelven a correr la
 | `tldrx gate template` | Escribe el esqueleto de la nota de evidencia sobre la que firma una compuerta agent. |
 | `tldrx run gates set <stage>:<policy> --note "…"` | La única manera sancionada de cambiar la política de compuertas después de `run new`. |
 | `tldrx questions cards` | Las preguntas ABIERTAS del run como tarjetas de decisión imprimibles: contexto, lo que los documentos ya deciden, las opciones. Solo lee. |
-| `tldrx questions lint` | Nombra cada bloque de pregunta que el parser no alcanza a ver: un `## Qn · Título` mal escrito se lee como *ausente*, así que todo lo que viene después reporta "0 preguntas abiertas" y una compuerta auto firma encima. `--fix` los reescribe a la gramática sin cambiarles una palabra. |
+| `tldrx questions lint` | Nombra cada bloque de pregunta que el parser no alcanza a ver: un `## Qn · Title` mal escrito se lee como *ausente*, así que todo lo que viene después reporta "0 preguntas abiertas" y una compuerta auto firma encima. `--fix` los reescribe a la gramática sin cambiarles una palabra. |
 | `tldrx answer <Qid> "…"` | Registra una respuesta como hecho numerado. `--supersede` revierte una. |
 | `tldrx interview` | Contesta en la terminal las preguntas abiertas de un run. |
 | `tldrx story reopen <id> --note "…"` | Le da a una story de Build otra tanda de intentos. `--for-fix` abre en cambio una ronda de arreglo sobre una story que ya está `done`: un defecto concreto, sin consumir intento, con el mismo DoD y el mismo revisor. |
@@ -83,7 +83,7 @@ tldrx approve --note "…"    # firma la compuerta; antes se vuelven a correr la
 | `tldrx replay [<run>]` | El log de eventos del run, contado como historia. |
 | `tldrx retro` | Cierra un run y captura lo que se aprendió. |
 | `tldrx retro --all` | Solo lectura, sobre TODOS los runs: qué clases de hallazgo te siguen agarrando, con conteos y un ejemplo citado de cada una. `--json` para la forma que lee una máquina. No escribe nada. |
-| `tldrx drive --attended \| --unattended [<run>]` | Imprime el mandato de sesión para manejar un run: el protocolo de tres papeles, la disciplina de evidencia, qué apartar, con cuánto rigor revisar y honestidad de presupuesto. Llena cada `<run>` con el id, o con el único run abierto. No necesita workspace. |
+| `tldrx drive --attended \| --unattended [<run>]` | Imprime el mandato de sesión para manejar un run: un preflight que establece si el run está atendido, la política de compuertas y el presupuesto (y se niega a empezar sin ellos), y luego el protocolo de tres papeles, la disciplina de evidencia, qué apartar, con cuánto rigor revisar y honestidad de presupuesto. Llena cada `<run>` con el id, o con el único run abierto. No necesita workspace. |
 | `tldrx ship` | Abre un PR desde la rama de la épica, con el handoff como cuerpo: un PR por repo cuando la rama está en varios, listados al final. Si lo vuelves a correr, se salta el repo cuyo PR ya está abierto. |
 | `tldrx tickets` | Refleja épicas y stories en una herramienta de tickets. Los archivos siguen siendo la fuente de verdad. |
 | `tldrx note <run> "…"` | Registra una anotación del operador, sin cambiar nada más. |
@@ -105,8 +105,14 @@ Cuáles de estos puede devolver un comando dado te lo dice `tldrx <command> --he
 ## Dos convenciones que aplican en casi todos lados
 
 - **Nunca adivina a qué run te referías.** Con varios abiertos y sin id, un comando que
-  apunta a un run sale con `2` y te los lista. Pásale un `<run>` posicional en `next`,
-  `run status`, `cost`, `replay` y `retro`; `--run <id>` en los demás.
+  apunta a un run te los lista y se niega — sale con `2`, salvo `cost`, que se niega con
+  `1`. `run status` es el que no se niega: te los lista y sale con `0`, porque es la
+  pantalla que lees para encontrar el id que todos los demás te van a pedir. Cómo se pasa
+  ese id también cambia. `next`, `cost`, `note`, `ship` y `run` sobre uno abierto
+  (`attend`, `status`, `estimate`, `auto`, `unlock`, `cancel`) aceptan un `<run>` posicional
+  o `--run <id>`; `replay` y `retro`, nada más el posicional; `approve`, `reject`, `answer`,
+  `interview` y `run gates set`, nada más `--run <id>`. Cualquiera de estos casos lo
+  resuelve `tldrx <command> --help`.
 - **La salida de progreso siempre va a stderr.** `--ui scene|compact|plain|off` (por
   omisión `auto`) cambia lo que ves mientras corre un subagente; stdout queda idéntico byte
   por byte en cualquier caso, así que `tldrx run status --json | jq` no se ve afectado.

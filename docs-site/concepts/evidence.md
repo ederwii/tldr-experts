@@ -34,6 +34,7 @@ not, the stage is refused — before the gate, not after.
 | `https://…` | a document; `http://` is rejected |
 | `graph:<node>` | a node in the code map |
 | `absent:path/to/file` | *we looked here and found nothing* |
+| `aidlc:intents/260821/design.md:14` | a line in the AI-DLC intent folder a `run new --from` distilled — or `#Q3`, one of its answered questions. Recorded, never resolved: that folder sits outside the workspace and may be gone by the time anyone reads the handoff |
 
 `absent:` is the one that makes honesty cheap. "There is no retry policy" is a claim, and
 this is how it gets sourced. It is refused on a **positive** claim outside the `Unknowns`

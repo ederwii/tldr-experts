@@ -11,23 +11,25 @@ segunda fuente de verdad compitiendo con los archivos.
 ```bash
 tldrx dashboard              # un servidor vivo en 127.0.0.1, que se redibuja al cambiar los archivos
 tldrx dashboard --static     # escribe un index.html autocontenido y se detiene
-tldrx dashboard --static --out ./somewhere/page.html
+tldrx dashboard --static --out ./somewhere/   # --out nombra un directorio, no un archivo
 ```
 
 El servidor vivo vigila el workspace y manda un reload cuando cambia algo debajo de él. La
 exportación estática es un solo archivo con el CSS, el JavaScript y los datos incrustados —
 ninguna referencia de red, de ningún tipo —, así que se ve igualito sin internet y no filtra
-nada sobre quién la abrió. Los dos son el mismo documento; lo único que cambia es si vigila.
+nada sobre quién la abrió. `--out` nombra el directorio donde escribirla, y se crea si no
+existe; la página que queda adentro siempre se llama `index.html`. Los dos son el mismo
+documento; lo único que cambia es si vigila.
 
 ## Qué muestra
 
 | Vista | Qué trae |
 |---|---|
 | Runs | Cada run, su estado, el avance por fase, el gasto, y **qué está esperando**. El que puedes retomar ahora mismo lleva `← next`, la misma marca que imprime `tldrx status`. |
-| Un run | El camino de ejecución etapa por etapa — experto, modelo, costo, compuerta, quién la firma y quién la firmó —, más los handoffs, las preguntas abiertas, el plan y las ramas que cortó el Build. Del ledger: las **notas de operador** que alguien dejó con `tldrx note`, el intento en el que va cada story y los reintentos de revisión gratuitos que se le concedieron, las reaperturas y sus motivos, y cada vez que el freno del presupuesto se negó a arrancar una etapa. De `budget.yml`: los techos por fase, las palancas y el **cupo de tokens de anfitrión**. De `04-build/preflight.yml`: las **compuertas base** — qué hizo cada comando de gate del workspace sobre el árbol intacto, para que un Build que se negó a arrancar no parezca una etapa que retrocedió sin motivo. Y, cuando están puestos, por qué se **canceló** un run (quién, cuándo, la nota) y si sus **worktrees** de épica se conservan. |
-| Expertos | Los niveles de competencia **recalculados desde la evidencia al momento de leer**, nunca el número guardado en disco, con la evidencia detrás de cada uno. |
+| One run | El camino de ejecución etapa por etapa — experto, modelo, costo, compuerta, quién la firma y quién la firmó —, más los handoffs, las preguntas abiertas, el plan y las ramas que cortó el Build. Del ledger: las **notas de operador** que alguien dejó con `tldrx note`, el intento en el que va cada story y los reintentos de revisión gratuitos que se le concedieron, las reaperturas y sus motivos, y cada vez que el freno del presupuesto se negó a arrancar una etapa. De `budget.yml`: los techos por fase, las palancas y el **cupo de tokens de anfitrión**. De `04-build/preflight.yml`: las **compuertas base** — qué hizo cada comando de gate del workspace sobre el árbol intacto, para que un Build que se negó a arrancar no parezca una etapa que retrocedió sin motivo. Y, cuando están puestos, por qué se **canceló** un run (quién, cuándo, la nota) y si sus **worktrees** de épica se conservan. |
+| Experts | Los niveles de competencia **recalculados desde la evidencia al momento de leer**, nunca el número guardado en disco, con la evidencia detrás de cada uno. |
 | Watchers | Una tarjeta por feature entregada, leída de `05-watch/watchers/*.md`: qué señal vigilar, quién la cuida, la épica y las stories detrás, y — en una `draft` — las citas `absent:` que dicen exactamente qué todavía no está instrumentado. La página **lee** las tarjetas; no las vuelve a checar contra el código de hoy. Eso es `tldrx watch check`. |
-| Cómo se usa | El loop de la terminal, como comandos para copiar y pegar. |
+| How to use | El loop de la terminal, como comandos para copiar y pegar. |
 
 Cuatro estados levantan una alerta, porque cada uno es un run esperando a una **persona**:
 una pregunta abierta, una compuerta pendiente, una etapa que falló, y un paquete
@@ -55,7 +57,7 @@ la página imprime la otra moneda a un lado: los tokens de anfitrión declarados
 
 Y cuando `budget.yml` cotiza el run en `host-tokens`, la página deja de citarle dólares por
 completo — igual en la lista de runs que en el detalle. Ahí `ceiling_usd` no gobierna nada,
-así que `$0.00 de $25.00`, en barra o en palabras, sería una afirmación segura sobre un
+así que `$0.00 of $25.00`, en barra o en palabras, sería una afirmación segura sobre un
 denominador que no aplica. El gasto se lee en tokens, contra `ceiling_host_tokens` — el
 techo contra el que esos tokens sí se miden, que vive en `budget.yml` y en ningún otro
 archivo.

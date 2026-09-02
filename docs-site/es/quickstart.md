@@ -14,10 +14,11 @@ npm i -g tldr-experts     # te deja `tldrx` y `tldr-experts`: el mismo binario
 tldrx doctor              # la autoridad sobre qué más te hace falta
 ```
 
-Necesitas **Node 20 o más nuevo**; el paquete es un bundle ya compilado, sin dependencias
-en tiempo de ejecución. `doctor` revisa lo demás — `git`, `claude`, un par de extras
-opcionales — y para cada cosa que falte imprime el comando de instalación en vez de
-instalarla por su cuenta. Una máquina limpia termina en `All required tools present. ✓`.
+Necesitas **Node 20 o más nuevo** y **Bun 1.3 o más nuevo**; el paquete es un bundle ya
+compilado, sin dependencias en tiempo de ejecución. `doctor` revisa lo demás — `git`,
+`claude`, un par de extras opcionales — y para cada cosa que falte imprime el comando de
+instalación en vez de instalarla por su cuenta. Una máquina limpia termina en
+`All required tools present. ✓`.
 
 ## Primero, pruébalo gratis
 
@@ -37,8 +38,8 @@ $0.00**, y no escribe nada fuera de su propio directorio de sandbox.
 3. the gate — an approval is a record, not a keystroke
 4. build one story — branch, agent, DoD, commit, merge, review
 5. when things go wrong — a red DoD, and the way back from it
-6. attend vs auto — who is allowed to spawn
-7. unattended — an agent gate, and what a signature has to rest on
+6. the agent gate — what a signature has to rest on
+7. attended — you write the code, the framework still keeps the record
 8. money — the ledger, the estimate, and the brake
 ```
 
@@ -63,10 +64,15 @@ tldrx init — single-repo, 1 repo(s) under /Users/you/acme-api
   questions  4 written to .tldrx/init-questions.md
 ```
 
-`init` escribe `.tldrx/`: lo que detectó, un mapa del código, seis expertos — cinco de rol y
-uno de tu stack — y la lista corta de preguntas que la detección no pudo responder. `interview --init` te las hace
-en la terminal — contéstalas ahí en lugar de editar el archivo, porque la entrevista es lo
-que registra cada respuesta como un hecho numerado en `.tldrx/memory/facts.yml`:
+Ahí va recortado: después de `questions` sigue un resumen de `files` — cuántos archivos se
+escribieron, cuántos se crearon y cuántos eran tuyos y se quedaron intactos.
+
+`init` escribe `.tldrx/`: lo que detectó, un mapa del código, los seis expertos de arriba —
+cinco expertos de rol siempre, un experto de stack por lenguaje y un experto de dominio por
+cada carpeta de código de primer nivel que encontró el mapa, con tope de ocho — y la lista
+corta de preguntas que la detección no pudo responder. `interview --init` te las hace en la
+terminal — contéstalas ahí en lugar de editar el archivo, porque la entrevista es lo que
+registra cada respuesta como un hecho numerado en `.tldrx/memory/facts.yml`:
 
 ```
 (3/4) Q3 · Who owns `acme-api`?

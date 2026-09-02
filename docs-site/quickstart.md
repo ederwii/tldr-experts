@@ -14,10 +14,10 @@ npm i -g tldr-experts     # gives you `tldrx` and `tldr-experts` — the same bi
 tldrx doctor              # the authority on what else you need
 ```
 
-You need **Node 20 or newer**; the package is a pre-built bundle with no runtime
-dependencies. `doctor` checks the rest — `git`, `claude`, a few optional extras — and
-prints the install command for anything missing rather than installing it. A clean machine
-ends on `All required tools present. ✓`.
+You need **Node 20 or newer** and **Bun 1.3 or newer**; the package is a pre-built
+bundle with no runtime dependencies. `doctor` checks the rest — `git`, `claude`, a few
+optional extras — and prints the install command for anything missing rather than
+installing it. A clean machine ends on `All required tools present. ✓`.
 
 ## First, try it for free
 
@@ -37,8 +37,8 @@ written outside its own sandbox directory.
 3. the gate — an approval is a record, not a keystroke
 4. build one story — branch, agent, DoD, commit, merge, review
 5. when things go wrong — a red DoD, and the way back from it
-6. attend vs auto — who is allowed to spawn
-7. unattended — an agent gate, and what a signature has to rest on
+6. the agent gate — what a signature has to rest on
+7. attended — you write the code, the framework still keeps the record
 8. money — the ledger, the estimate, and the brake
 ```
 
@@ -63,11 +63,15 @@ tldrx init — single-repo, 1 repo(s) under /Users/you/acme-api
   questions  4 written to .tldrx/init-questions.md
 ```
 
-`init` writes `.tldrx/`: what it detected, a code map, six experts — five roles and one for
-your stack — and the short
-list of questions detection could not answer. `interview --init` asks those in the
-terminal — answer there rather than editing the file, because the interview is what
-records each answer as a numbered fact in `.tldrx/memory/facts.yml`:
+Trimmed there: a `files` roll-up follows `questions` — how many were written, how many
+created, and how many were yours and left alone.
+
+`init` writes `.tldrx/`: what it detected, a code map, the six experts above — five role
+experts always, a stack expert per language, and a domain expert per top-level source
+folder the map found, capped at eight — and the short list of questions detection could
+not answer. `interview --init` asks those in the terminal — answer there rather than
+editing the file, because the interview is what records each answer as a numbered fact in
+`.tldrx/memory/facts.yml`:
 
 ```
 (3/4) Q3 · Who owns `acme-api`?

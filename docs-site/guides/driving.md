@@ -59,29 +59,38 @@ question, its options, the recommendation if there was one, and the single comma
 
 ## Overnight, with the checking kept
 
-The demanding case: nobody is watching, and you still want an adversarial review. Three
-commands, and the third one writes the mandate.
+The demanding case: nobody is watching, and you still want an adversarial review. Two
+commands, and the second one writes the mandate.
 
 ```bash
 tldrx run new payments --scope feature --budget 25 \
   --attended-by host --gates what:agent,plan:agent,build:agent,watch:agent
-tldrx run attend host 260101-payments       # or flip a run that is already open
 tldrx drive --unattended 260101-payments    # the mandate — paste it into the session
 ```
 
-`tldrx drive` prints plain text for the session that will drive the run. It carries the
-three-role protocol — a developer sub-agent, then a **fresh** read-only reviewer that is
-never the author, then you, verifying both in the code rather than in their reports — the
-evidence discipline (label every claim *measured* / *inferred* / *assumed*; never let a
+A run that is already open needs neither flag set in advance. The unattended mandate's
+preflight establishes both itself — `tldrx run attend host <run>` for attendedness, and
+`tldrx run gates set <stage>:agent` for each stage you delegated, over a note quoting your
+own delegation so the change is signed by your words rather than the driver's judgement.
+
+`tldrx drive` prints plain text for the session that will drive the run. It opens with the
+**preflight**: attendedness, gate policy, and a `budget.yml` whose ceiling the driver has to
+state in dollars. Where it cannot establish one of the three it refuses to start and names
+the command that failed — preconditions being the discipline, not the setup for it. Then
+the three-role protocol — a developer sub-agent, then a **fresh** read-only reviewer that
+is never the author, then you, verifying both in the code rather than in their reports —
+the evidence discipline (label every claim *measured* / *inferred* / *assumed*; never let a
 pipe eat an exit code; ask the remote about the remote), what to park rather than decide,
 how hard to review a story given its stakes, and what a signature has to rest on.
 
 It is versioned with the package, so it cannot drift from the binary the way a playbook
 pasted out of someone's chat history does. It needs no workspace, opens no run, spawns
 nothing and writes nothing. `--attended` prints the other mandate, for when you are at the
-keyboard closing every gate yourself. Given a run id it fills every `<run>` slot in at
-once; given none it uses the one open run, and where the CLI would refuse to choose between
-two it leaves the placeholder rather than aim a mandate at the wrong run.
+keyboard closing every gate yourself; its preflight reads the same three and moves none of
+them, because a driver that reset a gate there would be taking your signature rather than
+earning it. Given a run id it fills every `<run>` slot in at once; given none it uses the
+one open run, and where the CLI would refuse to choose between two it leaves the
+placeholder rather than aim a mandate at the wrong run.
 
 `--gates` replaces the scope's gates wholesale, so name every stage you want signed —
 anything you leave out becomes `auto`. `tldrx run attend --none <run>` hands the run back

@@ -2,8 +2,9 @@
 
 The rule is mechanical and enforced three times: by `scripts/release.sh` (does it), by the
 Claude Code hook `scripts/release-gate-hook.sh` (denies `git tag` / `git push … vX.Y.Z` /
-`npm publish` unless `scripts/release-check.sh` passes), and by `publish.yml` (runs the same
-check with `--ci` before publishing).
+`npm publish` unless `scripts/release-check.sh` passes), and by `publish.yml`, which runs
+`release-check.sh --ci` — the file checks (1–3) only, because 4 and 5 are local-path checks —
+and re-runs typecheck, tests and build as its own steps.
 
 ## What a release is
 
@@ -21,21 +22,25 @@ Package name `tldr-experts`; it installs the `tldrx` and `tldr-experts` commands
    with the status tag chosen deliberately (definitions live under that table).
 4. Working tree clean, on `main`, in sync with `origin/main`; tag not yet existing; version not
    on npm.
-5. `bun run typecheck`, `bun test`, `bun run build` green; no `Bun.*` outside `src/core/runtime/`.
+5. `bun run typecheck`, `bun test`, `bun run build` green; no `Bun.*` under `src/` outside
+   `src/core/runtime/` (the grep scans `src` only). Items 4 and 5 run on the local path only —
+   `--ci` skips them, and the seam check runs in no CI workflow.
 
 ## What to consider (judgement, not automated)
 
 - **Semver for an alpha**: bump *minor* when a command, file schema or hook changes behaviour;
   *patch* for fixes only. Breaking a `version: 1` file schema is a *major* once we are `beta`.
-- **Status tag**: stays `alpha` until file formats are frozen and two real workspaces have gone
-  through Build; `beta` needs an upgrade path documented; `stable` = 1.0.
+- **Status tag**: `alpha` until file formats are frozen and two real workspaces have gone
+  through Build; `beta` also needs an upgrade path documented; `stable` = 1.0. Releases through
+  0.3.1 were `alpha`; 0.4.0 was the first `beta`, so a `version: 1` schema break is a *major* now.
 - **Measured claims only** in CHANGELOG/README (costs, timings, limits): cite the run that
   measured them or say "not measured".
 - **npm name constraints** (learned the hard way): unscoped `tldrx` is refused by npm's
   similarity rule; a full unpublish blocks the name for 24 h and burns the version numbers
   forever — never unpublish, deprecate instead.
 - **After the tag**: watch `gh run list --workflow publish`; confirm `npm view tldr-experts version`;
-  the README badge updates on its own. If the trusted publisher is missing, the run fails at
+  the npm-version and CI badges update on their own — the `status-…` badge is a hardcoded
+  shields.io URL in `README.md` and must be moved by hand whenever the status tag changes. If the trusted publisher is missing, the run fails at
   the publish step — add it on npmjs.com (package → Settings → Trusted Publisher →
   GitHub Actions `ederwii/tldr-experts/publish.yml`) and re-run the workflow.
 
