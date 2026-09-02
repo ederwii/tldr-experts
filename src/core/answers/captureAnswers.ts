@@ -17,9 +17,10 @@ import { FactsStore } from "../facts/FactsStore.ts";
 import { isRetired, MAX_FACT_CHARS } from "../facts/Fact.ts";
 import {
   detectAnswered, parseQuestions, recordAnswer, recordSupersession, replaceBlock,
-  serializeQuestions, type QuestionsDoc,
+  serializeQuestions, type QuestionBlock, type QuestionsDoc,
 } from "../text/questions.ts";
 import { factsPath } from "../../hooks/lib/workspace.ts";
+import { stampSuperseded } from "./stampSuperseded.ts";
 
 export class AnswerError extends Error {}
 
@@ -86,6 +87,9 @@ export function captureAnswers(questionsPath: string, ctx: CaptureContext): read
 
   const log = EventLog.forRun(ctx.runDir);
   const captured: CapturedAnswer[] = [];
+  // Blocks paired with the fact they wrote, so the earlier phase documents each
+  // one overtakes can be stamped once the facts file is closed (gh #104).
+  const recorded: { block: QuestionBlock; fact: string }[] = [];
 
   // Load, append and save inside ONE workspace lock. `nextId()` is `max(id) + 1`
   // off the file, so two `answer` commands racing each other used to mint the
@@ -123,10 +127,65 @@ export function captureAnswers(questionsPath: string, ctx: CaptureContext): read
         payload: { fact: fact.id, area: fact.area, kind: fact.kind, q: block.id },
       });
       captured.push({ q: block.id, fact: fact.id, answer: block.answer, area });
+      recorded.push({ block, fact: fact.id });
     }
   });
   writeFileSync(questionsPath, serializeQuestions(doc), "utf8");
+  for (const item of recorded) {
+    markSuperseded(log, ctx, questionsPath, item.block, item.fact);
+  }
   return captured;
+}
+
+/**
+ * Stamp the earlier-phase documents this answer overtook, and say so in the log
+ * (gh #104).
+ *
+ * Outside the facts lock on purpose: the write is append-only and touches nothing
+ * `FactsStore` owns, and holding a workspace-wide lock across an arbitrary number
+ * of document writes would serialise far more than it protects.
+ *
+ * A failure here never fails the answer. The fact is recorded, the question is
+ * closed, the events are written — an unwritable phase document is a worse
+ * document, not a lost decision, and throwing would strand the questions file
+ * half-processed. It is not silent either: `stamp.failed` is not an event type, so
+ * the honest place for it is `error`, which `tldrx replay` renders.
+ */
+function markSuperseded(
+  log: EventLog,
+  ctx: CaptureContext,
+  questionsPath: string,
+  block: QuestionBlock,
+  fact: string,
+): void {
+  try {
+    for (const doc of stampSuperseded(ctx.runDir, questionsPath, block, fact, ctx.at)) {
+      log.tryAppend({
+        ts: ctx.at,
+        run: ctx.run,
+        stage: null,
+        type: "doc.superseded",
+        actor: ctx.actor,
+        cost_usd: 0,
+        payload: { doc: doc.rel, fact, q: block.id, by: doc.by },
+      });
+    }
+  } catch (error) {
+    log.tryAppend({
+      ts: ctx.at,
+      run: ctx.run,
+      stage: null,
+      type: "error",
+      actor: ctx.actor,
+      cost_usd: 0,
+      payload: {
+        message: `could not stamp the documents ${block.id} supersedes: `
+          + (error instanceof Error ? error.message : String(error)),
+        q: block.id,
+        fact,
+      },
+    });
+  }
 }
 
 /**
@@ -216,6 +275,9 @@ export function supersedeAnswer(
     ts: ctx.at, run: ctx.run, stage: null, type: "fact.superseded", actor: ctx.actor, cost_usd: 0,
     payload: { q: block.id, fact: result.fact, supersedes: result.supersedes, answer },
   });
+  // A reversal overtakes the same earlier documents an answer does — more of them,
+  // if anything, since by now those documents have been built on (gh #104).
+  markSuperseded(log, ctx, questionsPath, block, result.fact);
   return result;
 }
 

@@ -72,6 +72,18 @@ import {
  * envelope it was and which story it belonged to. It is the ONLY thing a
  * sequencing refusal writes; `run.yml` still comes back byte for byte.
  *
+ * `doc.superseded` was added 2026-09-02 (gh #104). A phase document is a
+ * point-in-time snapshot, and an owner answer that lands three phases later can
+ * flip a design the document still asserts — measured twice on
+ * `260830-ordering-inventory`, where the flip was in questions.md, facts.yml and
+ * retro.md and in none of the documents a reader opens. `src/core/answers/
+ * stampSuperseded.ts` now appends an honest marker to the earlier-phase documents
+ * the question names, and this is the line saying it did: the payload carries the
+ * run-dir-relative document, the fact that overtook it, the question, and whether
+ * the document was found by the question's own `Why asked:` citation (`cited`) or
+ * named in its `affects:` metadata (`affects`). It reports a marker, never a
+ * reconciliation — nothing in the document's own words is changed.
+ *
  * `story.base_fastforwarded` was added 2026-08-31, and is the only event in this
  * set that records tldrx MOVING A REF. Design §F.2: a story branch that sits
  * behind its epic tip is fast-forwarded before a developer is dispatched onto it,
@@ -95,7 +107,7 @@ export const EVENT_TYPES = [
   "operator_note",
   "check.passed", "check.failed",
   "budget.warned", "budget.blocked", "budget.raised",
-  "fact.added", "fact.retired", "fact.superseded",
+  "fact.added", "fact.retired", "fact.superseded", "doc.superseded",
   "map.refreshed",
   "ticket.synced",
   "error",

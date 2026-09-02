@@ -4,6 +4,44 @@
 
 ### Added
 
+- **An answer that overtakes an earlier phase's document now says so on that document
+  (#104).** A phase document is a point-in-time snapshot, and an owner answer recorded
+  three phases later can flip a design it still asserts. Measured twice on
+  `260830-ordering-inventory`: `03-plan/stories/S4.md` promised a `[Theory]` proving an
+  inert stock-effect default after F021 established Restock for 5 of 64 pairs and the
+  shipped test was a different one; `02-how/design.md` and its handoff said "no
+  order_number column is created" after F022 ordered one. Both flips were recorded — in
+  `questions.md`, in `facts.yml`, in `retro.md` — and neither was in the file a reader
+  opens. The audit's conclusion, "read `04-build/` rather than `03-plan/` for what
+  actually shipped", was tribal knowledge nothing on the page taught.
+  - **The question already names the document.** §2.7 requires `Why asked:` to end with a
+    `[src: …]` token proving the gap is real, and a question raised in Build about a plan
+    claim cites that plan claim — that is what the citation is for. So the affected set is
+    derived from data the grammar already makes mandatory: every `file` ref pointing at a
+    `.md` in an EARLIER phase of the run. No new schema, no new habit. A citation into the
+    question's own phase is not a supersession — that is an author reading their own
+    half-written page — and an optional `affects:` metadata key names documents explicitly
+    for when the honest citation is a source file rather than a document.
+  - **A marker, not a reconciliation.** One HTML comment carrying the fact id and one
+    blockquote line pointing at `questions.md` and `facts.yml`. Rewriting the stale
+    sentence would mean knowing which sentence, and guessing that is how a framework
+    starts inventing content. The issue asked for an honest marker; full reconciliation is
+    explicitly not required.
+  - **Three properties it had to have, each pinned by a test.** Append-only
+    (`appendFileSync`; the RED test asserts the phase's own bytes are still the file's
+    prefix). Idempotent per fact — the comment carries the id, so the `answer-capture`
+    hook firing twice on one edit stamps once, while a *different* fact stacks under the
+    first. And invisible to the checks that guard the document: the stamp is deliberately
+    not a list item and carries no `[src: …]`, because a bullet appended to a `handoff.md`
+    would land inside a §2.8 section where every item must be sourced, and `claim-sources`
+    would refuse the very document this makes honest. A stamped handoff validates with the
+    same `bulletCount` and the same verdict as before.
+  - Both recording paths stamp: a first answer and `tldrx answer … --supersede`. Each
+    stamped document appends a `doc.superseded` event (new, closed-set §2.9 type) carrying
+    the run-relative path, the fact, the question and whether the document was `cited` or
+    named in `affects`; `tldrx replay` renders it. A stamp that cannot be written never
+    fails the answer — the decision is recorded and the failure goes to the log as `error`.
+
 - **The docs site now SHOWS the dashboard instead of describing it (#106).** A new
   [Live demo](https://ederwii.github.io/tldr-experts/demo) page in both languages frames a
   real `tldrx dashboard --static` export — eight runs, two experts, gates, questions,

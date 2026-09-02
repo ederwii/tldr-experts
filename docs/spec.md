@@ -803,6 +803,7 @@ Why asked: Place.TenantId is nullable [src: api:src/Scavtopia.Domain/Places/Plac
 |---|---|
 | Heading | `^## (Q\d+) · (.+)$` — id then a one-sentence question |
 | Metadata comment | HTML comment, pipe-separated; keys `id status area asked_by asked_at` all required; `status` ∈ `open\|answered\|withdrawn` |
+| `affects:` (optional) | Extra metadata key; a comma- or space-separated list of run-relative documents this answer would overtake. See **Superseding an earlier phase's document** below |
 | `Why asked:` line | Required; must end with a `[src: …]` token (§2.8) — proves the gap is real |
 | Options | 2–5 bullets `- X) text`, letters A–E in order; the last may be free text |
 | `[Answer]:` slot | Exactly one per block, on its own line |
@@ -811,6 +812,34 @@ Why asked: Place.TenantId is nullable [src: api:src/Scavtopia.Domain/Places/Plac
 **Answer detection (hook).** A block is answered iff its metadata says `status: open` **and** the line matching
 `^\[Answer\]:[ \t]*(\S.*)$` inside it has a non-empty capture. The hook flips `status: answered` and appends the footer,
 a `facts.yml` entry (`kind: answer`, `source.q: Q4`) and a `question.answered` event, storing the text verbatim.
+
+**Superseding an earlier phase's document (gh #104).** A phase document is a point-in-time snapshot. When an answer
+recorded here flips a design an EARLIER phase already wrote down, `tldrx` appends an honest marker to that document —
+never a reconciliation:
+
+```markdown
+<!-- tldrx:superseded F021 | q: Q4 | at: 2026-08-30T10:00:00Z | see: 04-build/questions.md -->
+> **Superseded in part by F021** — Q4 was answered after this document was written; the answer is in
+> `04-build/questions.md` and `.tldrx/memory/facts.yml`. This document was not reconciled: where the two disagree,
+> the fact is what the workspace believes.
+```
+
+| Rule | Detail |
+|---|---|
+| Which documents | The `.md` files inside the run that the block NAMES: every `file` ref in its `Why asked:` `[src: …]` token that sits in an **earlier** phase, plus every path in its optional `affects:` metadata key (honoured in any phase — explicit intent is not second-guessed) |
+| When | At recording time, on both paths: a first answer (§2.7 capture) and a reversal (`tldrx answer … --supersede`, §3) |
+| Shape | An HTML comment carrying the fact id, then ONE blockquote line. Never a list item and never a `[src: …]` token — a bullet appended to a `handoff.md` would land inside a §2.8 section, where every item must be sourced, and `claim-sources` would refuse the document this is trying to make honest. A stamped handoff validates exactly as it did before |
+| Idempotency | The comment carries the fact id; a document already stamped for that fact is skipped. Recording the same answer twice stamps once |
+| Append-only | `appendFileSync`; not one byte the phase wrote is read back, rewritten or removed |
+| Log | One `doc.superseded` event per document (§2.9), carrying the run-relative path, the fact, the question and whether the document was `cited` or named in `affects` |
+
+A fact that overtakes a document the question neither cited nor named stays unmarked. That is the accepted cost of not
+spraying a footer across every earlier document in the run on every answer — the ask (gh #104) is an honest marker on
+the documents the answer NAMES, not full reconciliation. **Measured, and the reason this exists:** on
+`260830-ordering-inventory` an owner answer flipped a stock-effect design and an ordering column; both flips were in
+`questions.md`, `facts.yml` and `retro.md`, and neither was in `03-plan/stories/S4.md` or `02-how/design.md`, which a
+reader opens. The audit's workaround — "read `04-build/` rather than `03-plan/` for what actually shipped" — was
+tribal knowledge nothing on the page taught.
 
 **Validation.** Ids unique and ascending; block count ≤ `stage.yml questions.max`; all six elements present; ≤40 lines
 per block.
@@ -966,7 +995,7 @@ Append-only audit log: the cost ledger, the `replay`/`retro` input, and — with
 `stage.skipped` `task.started` `task.done` `agent.spawned` `agent.result` `question.asked` `question.answered`
 `gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `story.reopened` `story.base_fastforwarded` `story.review_retried`
 `check.passed` `check.failed` `budget.warned`
-`budget.blocked` `budget.raised` `fact.added` `fact.retired` `fact.superseded` `map.refreshed` `ticket.synced` `error`. Closed set: an
+`budget.blocked` `budget.raised` `fact.added` `fact.retired` `fact.superseded` `doc.superseded` `map.refreshed` `ticket.synced` `error`. Closed set: an
 unknown type is a validation error.
 
 **`gate.revoked` and `budget.raised` were added 2026-08-29.** Both name a moment the log could not previously describe.
@@ -1526,7 +1555,7 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx run estimate [<run>] [--json]` | everything `next --prepare` reads, plus every run's `events.jsonl` for cache-write / cache-read / output history | nothing (stdout) | 0,1,3 |
 | `tldrx run gates set <stage>:<human\|auto\|agent> --note <text> [<run>]` | `run.yml` | `run.yml`'s §2.2 `gates_policy` and `events.jsonl` (`gate.policy_changed`, carrying actor, moment, note and old→new). The ONLY sanctioned way to move a frozen `gates_policy`; `run.yml` stays hand-edit-forbidden (§1). ONE `<stage>:<policy>` per invocation — a comma list is refused, and the entry must name its policy outright, since under `--gates` a bare stage means `human` and a signature must not rest on a default. An empty or missing `--note` is refused, as is a no-op (`human` → `human`). A run whose `run.yml` has no `gates_policy` at all gets the FULL map written, every stage explicit, with the one change applied. Gates already signed are untouched | 0,1,2,3 |
 | `tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <l>] [--parallel <n>] [--gate-agent] [--yolo]` | everything `next` reads, once per stage | everything `next` writes. Refused with **exit 1** on a run marked `attended_by: host`, before the event log is opened so nothing is written: this loop's whole job is calling `next` headless, and on such a run that is a refusal. `--gate-agent` is RENDERING ONLY (§5, "Decision cards"): when the loop stops for a person at exit 4 it prints a decision card in place of the ordinary stop block, and it never upgrades a stage's frozen `gates_policy` | 0,1,2,3,4,5 |
-| `tldrx answer <Qid> <text> [--supersede] [--run <id>]` | `questions.md`, `facts.yml` | `questions.md`, `facts.yml`, `events.jsonl`. `--supersede` is the only writer of `superseded_by`: valid only on an **answered** question, it appends a fact carrying the new answer, sets the old fact's `superseded_by`, appends a superseding `[Answer …]:` line plus a footer to the block, and appends `fact.added` + `fact.superseded`. Without it an answered question is refused (3); with it an **open** one is refused (1) | 0,1,2,3 |
+| `tldrx answer <Qid> <text> [--supersede] [--run <id>]` | `questions.md`, `facts.yml` | `questions.md`, `facts.yml`, `events.jsonl`. `--supersede` is the only writer of `superseded_by`: valid only on an **answered** question, it appends a fact carrying the new answer, sets the old fact's `superseded_by`, appends a superseding `[Answer …]:` line plus a footer to the block, and appends `fact.added` + `fact.superseded`. Without it an answered question is refused (3); with it an **open** one is refused (1). **Both paths** then stamp the earlier-phase documents the block names and append `doc.superseded` (§2.7, *Superseding an earlier phase's document*) | 0,1,2,3 |
 | `tldrx interview [--run <id>\|--init] [--yes-to-defaults]` | the cursor phase's `questions.md` (or `.tldrx/init-questions.md`), `run.yml`, `.tldrx/process.yml`, `workspace.yml`, `git remote get-url origin` | the same three files `answer` writes, one per answer recorded; with `--init`, also `.tldrx/process.yml` (§2.12) when a process answer settles `methodology` or `ticket_tool.kind` | 0,1,2,3 |
 | `tldrx approve [--run <id>] [--note] [--as-agent] [--evidence <path>]` | `run.yml`, stage outputs, stage checks; with `--as-agent` also `.agent/<stage>/evidence.md` (§2.17) | `run.yml` gate, `events.jsonl`; with `--as-agent` also `<phase>/gate-evidence/<stage>.md` and `gate.evidence`. `--as-agent` is refused (1) unless the stage's policy is `agent`; `--evidence` without `--as-agent` is refused (1) — a note nobody signs with is not evidence for anything; a broken note is 2, a note whose verdict is not `sign` is 4, and nothing is signed in either case | 0,1,2,3,4 |
 | `tldrx gate template [--run <id>] [--force]` | `run.yml`, the cursor stage's declared outputs, `03-plan/stories/<id>.md` or `04-build/implicit-plan.yml` | `.agent/<stage>/evidence.md` (§2.17). Nothing else: no gate, no cursor, no event, no cost. An existing note is left alone (exit 2) unless `--force` | 0,1,2,3 |

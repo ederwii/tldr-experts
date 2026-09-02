@@ -54,6 +54,14 @@ Why asked: <what is blocked without it, concretely> [src: <a real citation>]
 
   Ids ascend and are unique; a block is at most 40 lines.
 
+  OPTIONAL, on the metadata line: `| affects: 02-how/design.md, 03-plan/stories/S4.md`
+  — the run documents this answer would OVERTAKE. When the answer is recorded, each
+  named document gets an appended "superseded in part by F0nn" marker so a reader who
+  opens it is not left with the flipped claim (gh #104). You rarely need it: the
+  `Why asked:` citation already names the document in the usual case, and any `.md` it
+  cites in an EARLIER phase is stamped without you saying anything. Use `affects:` when
+  the honest citation is a source file rather than a document.
+
   You write the `[Answer]:` text and nothing else. The hook flips `status:` to
   `answered`, appends the `<!-- answered_by: … | answered_at: … | fact: F0nn -->`
   footer, records the fact and appends the event. Do not write the footer by hand.
