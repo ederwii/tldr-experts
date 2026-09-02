@@ -48,12 +48,15 @@ import { DEFAULT_ECONOMY, DEFAULT_ON_HOST_TOKENS_EXCEED } from "../budget/RunBud
 import { MAX_ATTEMPTS } from "../budget/remainingWork.ts";
 import { hasStarted, resolveDependencies, type DependencyInput, type ResolvedRun } from "../run/dependencies.ts";
 import { isMovable, waitingFor, type Waiting } from "../run/waiting.ts";
-import { openBlocks, parseQuestions } from "../text/index.ts";
+import { openBlocks, parseHandoff, parseQuestions } from "../text/index.ts";
 import { renderMarkdown } from "../markdown/index.ts";
 import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
 import { asWavesFile, validateWaves } from "../schemas/waves.ts";
 import { validateStoryFile } from "../schemas/story.ts";
 import { validateEpicFile } from "../schemas/epic.ts";
+import { loadPreflight } from "../build/preflight.ts";
+import { asWatcher, validateWatcher, WATCHERS_DIR, WATCHER_SIGNAL_SECTION } from "../watch/Watcher.ts";
+import { parseFrontMatter } from "../schemas/frontMatter.ts";
 import { parseYaml } from "../yaml.ts";
 import { offlineHtml } from "./offlineHtml.ts";
 
@@ -230,6 +233,104 @@ export interface BuildModel {
   readonly branchModel: string | null;
   /** Epic branches this run cut or adopted. A list even under `integration`. */
   readonly epicBranches: readonly string[];
+}
+
+/**
+ * One row of `04-build/preflight.yml` — what a workspace gate command did on the
+ * UNTOUCHED base tree (#93 §2).
+ *
+ * A DoD block is a DELTA gate, so a command that is already red on base makes
+ * every story in the plan block for something no story caused. `preflight.ts`
+ * measures that once per run and REFUSES to enter Build; the refusal prints to
+ * stdout, rolls the stage back to `ready`, writes this file, and emits no event
+ * and no `run.yml` field. From the page the stage simply went backwards.
+ *
+ * So the file is read, exactly the way `budget.yml` is: read-only, additive, and
+ * through the reader that never throws. `status` is `ok` | `failed` |
+ * `unmeasured`, and the third is not a synonym for either of the first two — the
+ * gate declined to run the command at all, so nothing is known about the base and
+ * nothing may be inferred from it.
+ */
+export interface PreflightRowModel {
+  readonly repo: string;
+  /** Byte-identical to the `workspace.yml` command — the join key everywhere. */
+  readonly command: string;
+  /** The repo's `default_branch` — what an epic branch is cut from. */
+  readonly baseRef: string;
+  /** Short sha of `baseRef` when it was measured; `""` when git had no answer. */
+  readonly baseSha: string;
+  readonly exitCode: number;
+  readonly timedOut: boolean;
+  /** `ok` | `failed` | `unmeasured`. */
+  readonly status: string;
+  /** Last meaningful line of the output — the operator's first clue. */
+  readonly tail: string;
+}
+
+/**
+ * `04-build/preflight.yml`, when it is on disk and parses — null otherwise.
+ *
+ * Drawn as a RECORD, never as an attention card. The page's stated rule is that
+ * an alert means a run is waiting on a person right now, and what a run is
+ * waiting on is `waiting`, derived where it always was. A red base row is the
+ * same shape of fact as a `budget.blocked`: it explains a refusal that already
+ * happened, and the workspace may have been fixed since.
+ */
+export interface PreflightModel {
+  /** When the base was measured. `""` on a file that recorded no timestamp. */
+  readonly checkedAt: string;
+  readonly rows: readonly PreflightRowModel[];
+}
+
+/**
+ * One `05-watch/watchers/<feature>.md` card, as its own file reads it (#93 §1).
+ *
+ * The seven front-matter fields `Watcher` declares, plus `owner` (optional since
+ * #70), plus the one thing that explains the `status`: the `absent:` citations
+ * under `## Signal`.
+ *
+ * **What this deliberately is NOT** is the `CardChecklist` that `tldrx watch
+ * check` computes. That reader re-resolves every citation against today's code —
+ * a much bigger promise than "read the files", and it would make a read-only
+ * page the only screen in the product that runs something. The status here is
+ * therefore the one ON THE CARD, stamped by the write path
+ * (`setWatcherStatus`), and `absent` is the card's own account of why it is a
+ * draft. Where the two disagree, both are shown and neither is silently
+ * corrected: a `verified` stamp over an `absent:` Signal is a stale stamp, and
+ * that is a fact worth seeing rather than one to paper over.
+ */
+export interface WatcherModel {
+  /** The feature id — also the file name stem. */
+  readonly id: string;
+  readonly epic: string;
+  readonly title: string;
+  readonly stories: readonly string[];
+  readonly repos: readonly string[];
+  /** `draft` | `verified`, as written on the card. */
+  readonly status: string;
+  /** Who to ask, when the card names somebody (#70). Null when it does not. */
+  readonly owner: string | null;
+  /**
+   * The `absent:<path>` sources cited under `## Signal`, verbatim and in file
+   * order — each one a thing the feature does not instrument yet.
+   *
+   * Empty on a card whose every Signal item points at real code, which is the
+   * card's own rule for `verified`. Nothing here is resolved against the
+   * filesystem: an `absent:` token is a claim the AUTHOR made, and reading it
+   * back is not the same act as checking it.
+   */
+  readonly absent: readonly string[];
+  /** Run-relative path of the card. TEXT — the page fetches nothing. */
+  readonly path: string;
+}
+
+/** The Watch phase's cards, when the run has written any. */
+export interface WatchModel {
+  /** The phase folder the cards were found in, e.g. `05-watch`. */
+  readonly phase: string;
+  readonly watchers: readonly WatcherModel[];
+  /** Card files that are there but do not parse — shown, never swallowed. */
+  readonly unreadable: readonly string[];
 }
 
 export interface StageRowModel {
@@ -444,6 +545,30 @@ export interface RunModel {
   readonly plan: PlanModel | null;
   /** What the Build cut on disk, when it has cut anything. */
   readonly build: BuildModel | null;
+  /**
+   * The Watch phase's watcher cards, or null when the run has written none (#93).
+   *
+   * Attached to the RUN because that is where the files live — a card with no run
+   * beside it cannot be linked to, and the Watchers view composes them across
+   * `runs` exactly as it already composes the Watch stages.
+   */
+  readonly watch: WatchModel | null;
+  /**
+   * `04-build/preflight.yml`, or null when there is none or it does not parse.
+   *
+   * The base-gate measurements a Build entry refused on. History, not a state:
+   * `run.yml` records no field and the ledger no event, so the page has this file
+   * or it has nothing.
+   */
+  readonly preflight: PreflightModel | null;
+  /**
+   * `--keep-worktrees` was asked for and remembered (`run.yml` `keep_worktrees`,
+   * issue #16): the run's epic worktrees survive it closing.
+   *
+   * `false` on every run that never asked, which is nearly all of them — the key
+   * is written only when true, so an absent key and `false` are the same fact.
+   */
+  readonly keepWorktrees: boolean;
   /**
    * `budget.yml`, or null when there is none or it does not parse (#85).
    *
@@ -730,6 +855,9 @@ export function toRunModel(
     build: doc.build === null
       ? null
       : { branchModel: doc.build.branch_model, epicBranches: doc.build.epic_branch },
+    watch: loadWatch(loaded),
+    preflight: toPreflightModel(loaded),
+    keepWorktrees: doc.keep_worktrees,
     budget: toBudgetModel(loaded),
     notes: ledger.notes,
     budgetBlocks: ledger.blocks,
@@ -771,6 +899,120 @@ function toBudgetModel(loaded: LoadedRun): BudgetModel | null {
       ceilingHostTokens: phase.ceiling_host_tokens,
     })),
   };
+}
+
+/**
+ * `04-build/preflight.yml`, as the page needs it — or null, which is most runs.
+ *
+ * Unlike `budget.yml` and `events.jsonl`, this file is not already in memory:
+ * `loadRunResult` has never read it. So this opens ONE more file per run, and
+ * that is the whole cost of the feature. It is read through `loadPreflight`, the
+ * reader the Build path itself uses, which returns null for a missing file and
+ * null for one it cannot parse and never throws — so a damaged preflight.yml
+ * costs this panel and not the page.
+ *
+ * The rows are copied field for field rather than re-derived. `failedOnBase`
+ * exists and is deliberately not called: it is the ATTRIBUTION rule the Build
+ * uses to decide whose fault a red story is, and a dashboard that re-ran it
+ * would be a second opinion about that. The page reports `status` and lets a
+ * reader see the exit code beside it.
+ */
+function toPreflightModel(loaded: LoadedRun): PreflightModel | null {
+  const preflight = loadPreflight(loaded.dir);
+  if (preflight === null) return null;
+  return {
+    checkedAt: preflight.checkedAt,
+    rows: preflight.results.map((row) => ({
+      repo: row.repo,
+      command: row.command,
+      baseRef: row.baseRef,
+      baseSha: row.baseSha,
+      exitCode: row.exitCode,
+      timedOut: row.timedOut,
+      status: row.status,
+      tail: row.tail,
+    })),
+  };
+}
+
+/**
+ * The Watch phase's cards, when the run has written any.
+ *
+ * `[assumption]` The Watch phase is found the way `loadPlan` finds the Plan one
+ * — by looking for the folder that holds `watchers/`, rather than by hard-coding
+ * `05-watch` — because the phase id comes from the workflow preset and a custom
+ * workflow may name it differently.
+ *
+ * **Two readers exist for these files and this is the smaller one.**
+ * `parseWatcherCard` (`src/core/watch/watcherFile.ts`) parses the card AND
+ * resolves every `[src: …]` on it against the working tree, which is what
+ * `tldrx watch check` is for. Calling it here would make the dashboard re-check
+ * the code on every render and on every file-change reload — the one thing on a
+ * read-only page that would actually run something, and a promise far larger
+ * than "the page reads the files". So this uses the two PURE parsers underneath
+ * it: the front matter through `validateWatcher`, and the body through
+ * `parseHandoff`, whose `[src: …]` tokenizer is string slicing and touches no
+ * disk. What comes back is what the card SAYS, which is all the page claims.
+ */
+function loadWatch(loaded: LoadedRun): WatchModel | null {
+  for (const phase of loaded.run.phases) {
+    const dir = join(loaded.dir, phase.id, WATCHERS_DIR);
+    if (!existsSync(dir)) continue;
+
+    const unreadable: string[] = [];
+    const watchers: WatcherModel[] = [];
+    for (const name of markdownIn(dir)) {
+      const label = `${WATCHERS_DIR}/${name}`;
+      const text = read(join(dir, name), unreadable, label);
+      if (text === null) continue;
+      const parsed = parseFrontMatter(text);
+      if (parsed.issue !== null || !validateWatcher(parsed.doc).ok) {
+        unreadable.push(label);
+        continue;
+      }
+      const card = asWatcher(parsed.doc);
+      watchers.push({
+        id: card.id,
+        epic: card.epic,
+        title: card.title,
+        stories: card.stories,
+        repos: card.repos,
+        status: card.status,
+        owner: card.owner,
+        absent: absentSignals(text),
+        path: `${phase.id}/${label}`,
+      });
+    }
+
+    if (watchers.length === 0 && unreadable.length === 0) return null;
+    return { phase: phase.id, watchers, unreadable };
+  }
+  return null;
+}
+
+/**
+ * The `absent:<path>` sources cited under `## Signal`, in file order.
+ *
+ * This is the card's own reason for staying a `draft` (`watcherFile.ts`: a card
+ * is `verified` only when nothing under Signal cites `absent:`). Reading the
+ * tokens back is not the same act as resolving them — `parseSrcToken`, which
+ * `parseHandoff` runs on every bullet, is string slicing against the grammar in
+ * spec §2.8 and opens nothing.
+ */
+function absentSignals(text: string): readonly string[] {
+  const paths: string[] = [];
+  for (const section of parseHandoff(text).sections) {
+    if (section.name !== WATCHER_SIGNAL_SECTION) continue;
+    for (const bullet of section.bullets) {
+      for (const ref of bullet.token?.refs ?? []) {
+        if (ref.kind === "absent") paths.push(ref.path);
+      }
+    }
+    // The FIRST `## Signal` only: a second one is a malformed card, and
+    // `watch check` is the screen that says so.
+    break;
+  }
+  return paths;
 }
 
 /** One story's arc, as the ledger tells it. */

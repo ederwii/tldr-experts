@@ -24,14 +24,24 @@ who opened it. Both are the same document; only the watching differs.
 | View | What is on it |
 |---|---|
 | Runs | Every run, its status, phase progress, spend, and **what it is waiting on**. The one a human could pick up next wears `← next`, the same marker `tldrx status` prints. |
-| One run | The execution path stage by stage — expert, model, cost, gate, who signs it and who signed — plus the handoffs, the open questions, the plan and the branches the Build cut. From the ledger: the **operator notes** somebody left with `tldrx note`, each story's attempt and the free review retries it was granted, the reopens and their reasons, and every moment the budget brake refused a stage. From `budget.yml`: the per-phase ceilings, the levers, and the **host-token allowance**. |
+| One run | The execution path stage by stage — expert, model, cost, gate, who signs it and who signed — plus the handoffs, the open questions, the plan and the branches the Build cut. From the ledger: the **operator notes** somebody left with `tldrx note`, each story's attempt and the free review retries it was granted, the reopens and their reasons, and every moment the budget brake refused a stage. From `budget.yml`: the per-phase ceilings, the levers, and the **host-token allowance**. From `04-build/preflight.yml`: the **base gates** — what each of the workspace's own gate commands did on the untouched tree, so a Build that refused to start is not a stage that went backwards for no reason. Plus, when they are set, why a run was **cancelled** (who, when, the note) and whether its epic **worktrees are kept**. |
 | Experts | Competency levels **recomputed from evidence at read time**, never the number stored on disk, with the evidence behind each one. |
-| Watchers | Not yet: watcher cards are written by the Watch phase and the model does not read them, so the tab says so rather than inventing a card. Use `tldrx watch list`. |
+| Watchers | One card per shipped feature, read from `05-watch/watchers/*.md`: what to watch, who owns it, the epic and stories behind it, and — on a `draft` — the `absent:` citations that say exactly what is not instrumented yet. The page **reads** the cards; it does not re-check them against today's code. That is `tldrx watch check`. |
 | How to use it | The terminal loop, as copy-paste commands. |
 
 Four states raise an alert, because each is a run waiting on a **person**: an open
 question, a pending gate, a failed stage, and a `--prepare` bundle waiting to be run and
 committed. `ready` and `done` are states of the work, not asks.
+
+Nothing else raises one, and that is a rule rather than an oversight. A `draft` watcher, a
+red base gate and a past budget refusal are all drawn as panels: each is true for as long as
+nobody fixes it, and none of them is a run waiting on you right now. An alert that means
+"someone should look at this eventually" is an alert people stop reading.
+
+Runs with operator notes wear a small ✎ in the runs list, with the count in its tooltip —
+the notes themselves stay on the run detail. It is deliberately the smallest marker that is
+true, and it is provisional: the list is a list, and a count in a row is a design decision
+nobody has made yet.
 
 ## The money it shows is metered money
 
@@ -49,9 +59,16 @@ tokens really are judged against, which lives in `budget.yml` and in no other fi
 
 ::: info What is still only in `tldrx replay`
 The page reads the ledger, but not all of it: the narrative — per-attempt costs, the agent
-spawns, the checks, the order things happened in — is `tldrx replay <run>`'s job. Two files
-are read by nobody here: `04-build/preflight.yml`, so a DoD-delta refusal looks like a stage
-that went backwards for no reason, and `05-watch/watchers/*.md`.
+spawns, the checks, the order things happened in — is `tldrx replay <run>`'s job.
+:::
+
+::: info The page reads. It does not check.
+Every file it opens, it opens read-only, and it re-derives nothing the files already decide.
+A watcher card is the clearest case: `tldrx watch check` proves each `[src: …]` on a card
+still points at real code, and the dashboard does not — it prints the `status` the card
+carries and the `absent:` sources the card cites, side by side. A `verified` stamp sitting
+over an `absent:` signal is shown as what it is, a stale stamp, rather than quietly
+corrected by a third opinion.
 :::
 
 ## It cannot disagree with the CLI

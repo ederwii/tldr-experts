@@ -70,6 +70,12 @@ describe("the dashboard model", () => {
   // fixture has a `budget.yml` and an `events.jsonl`; `runs[].notes[]`,
   // `runs[].budgetBlocks[]` and the story arcs are empty in it, and
   // `dashboard-sources.test.ts` asserts those over fixtures that carry them.
+  //
+  // The #93 fields are the same shape again: `runs[].watch` and
+  // `runs[].preflight` are null here and `runs[].keepWorktrees` is false, so
+  // their names appear and their children do not. `dashboard-leftovers.test.ts`
+  // asserts the children over fixtures that carry a watcher card and a
+  // preflight.yml.
   test("its field names are the contract a designer targets", () => {
     expect([...fieldPaths(model)].sort()).toEqual([
       "experts[].areas[].evidenceCount",
@@ -114,6 +120,7 @@ describe("the dashboard model", () => {
       "runs[].filter",
       "runs[].hostTokens",
       "runs[].id",
+      "runs[].keepWorktrees",
       "runs[].path[].budgetUsd",
       "runs[].path[].costUsd",
       "runs[].path[].expert",
@@ -139,6 +146,7 @@ describe("the dashboard model", () => {
       "runs[].phases[].questions[].whyAsked",
       "runs[].phases[].status",
       "runs[].plan",
+      "runs[].preflight",
       "runs[].repos[]",
       "runs[].runnable",
       "runs[].scope",
@@ -152,6 +160,7 @@ describe("the dashboard model", () => {
       "runs[].updatedAt",
       "runs[].waiting.kind",
       "runs[].waiting.message",
+      "runs[].watch",
       "runs[].workflow",
       "workspace",
       "workspaceFound",
@@ -437,10 +446,16 @@ describe("the views it draws", () => {
     expect(svg).toContain('aria-label="wide competency: a 0 of 5, b 1 of 5, c 2 of 5"');
   });
 
+  // The reason it is empty CHANGED with #93, and the test has to change with it.
+  // It used to be "the model has no `watchers` field" — a statement about the
+  // model, which was true and is not any more. The model reads the cards now, so
+  // the only honest empty state is a statement about the WORKSPACE: this fixture
+  // has no Watch phase and no card on disk.
   test("watchers says what is missing instead of inventing a card", () => {
     const watchers = view("watchers");
     expect(watchers).toContain("No watchers in this model.");
-    expect(watchers).toContain("has no <code>watchers</code> field yet");
+    expect(watchers).toContain("no run in this workspace has written one yet");
+    expect(watchers).toContain("tldrx watch list");
   });
 
   test("the FAQ hands over the copy-paste loop", () => {

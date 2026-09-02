@@ -48,7 +48,7 @@ of it.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `modelVersion` | number | `3` today. `1 → 2`: `pendingQuestion` and `pendingGate` became aliases of `waiting` and no longer report an open question, or a gate object, that the run is not actually stopped on. `2 → 3` (#60): `runnable` reads `true` for a run that has STARTED and was proposed to follow an unfinished sibling — a proposal recorded before either run existed cannot un-start a running run. Additions never bump it, and #85 is the case that tested the rule: it gave the model two new files and eight new fields and stayed at **3**. `spentUsd` was the field with a case to answer, because a consumer reading it alone is demonstrably wrong about a host-attended run now that the page can show the token ceiling beside it — but it is computed from the same `run.yml` key, holds the same number, and has meant "METERED dollars, a lower bound when `unmeteredTasks > 0`" since v3. A field that gained NEIGHBOURS did not change meaning. |
+| `modelVersion` | number | `3` today. `1 → 2`: `pendingQuestion` and `pendingGate` became aliases of `waiting` and no longer report an open question, or a gate object, that the run is not actually stopped on. `2 → 3` (#60): `runnable` reads `true` for a run that has STARTED and was proposed to follow an unfinished sibling — a proposal recorded before either run existed cannot un-start a running run. Additions never bump it, and #85 is the case that tested the rule: it gave the model two new files and eight new fields and stayed at **3**. `spentUsd` was the field with a case to answer, because a consumer reading it alone is demonstrably wrong about a host-attended run now that the page can show the token ceiling beside it — but it is computed from the same `run.yml` key, holds the same number, and has meant "METERED dollars, a lower bound when `unmeteredTasks > 0`" since v3. A field that gained NEIGHBOURS did not change meaning. #93 stayed at **3** again and by the same rule: `watch`, `preflight` and `keepWorktrees` are three more additions, and nothing that already existed reads differently than it did at v3 — the argument the other way is that this doc used to promise, under *What is NOT in it*, that two named files were unread, and that promise is now void. But a documented absence is not a field, and no field's meaning moved. |
 | `generatedAt` | string | ISO-8601, to the second, when the files were read. |
 | `root` | string | Absolute path of the workspace that was read. |
 | `workspace` | string | Its basename — what the page calls itself. |
@@ -100,6 +100,9 @@ still carries the slug, which is where that fact belongs.
 | `phases` | `Phase[]` | Per phase: its handoff and its open questions. |
 | `plan` | `Plan` \| null | Stories, epics and waves, when the Plan phase wrote them. |
 | `build` | `Build` \| null | What the Build cut on disk (`run.yml` `build`): `branchModel` (`"per-epic"` \| `"integration"` \| null when the run predates the key — which is **not** the same as `per-epic`) and `epicBranches` (`string[]`). Null until a Build stage cuts or adopts a branch. |
+| `watch` | `Watch` \| null | **The Watch phase's watcher cards** (#93) — null when the run has written none, which is every run before its Watch phase. `phase` (the folder they were found in, e.g. `05-watch`), `watchers` (`Watcher[]`, below) and `unreadable` (`string[]` — card files that are there and do not parse, named rather than dropped). Attached to the RUN because that is where the files live. |
+| `preflight` | `Preflight` \| null | **`04-build/preflight.yml`** (#93) — what the workspace's own gate commands did on the UNTOUCHED base tree, or null when there is no file and null when it does not parse. `checkedAt` (string, `""` when the file recorded none) and `rows` (`PreflightRow[]`, below). This is the only file the model opens that `loadRunResult` had not already read. |
+| `keepWorktrees` | boolean | `--keep-worktrees` was asked for and remembered (`run.yml` `keep_worktrees`, #16): the run's epic worktrees survive it closing. `false` on nearly every run — the key is written only when true, so an absent key and `false` are the same fact. |
 | `budget` | `Budget` \| null | **`budget.yml`** (#85) — null when there is none, and null when the file does not parse. Distinct from `spentUsd`/`ceilingUsd`, which come from the run.yml MIRROR. Fields: `ceilingUsd`, `perAgentMaxUsd`, `warnAtPct`, `onExceed` (each number/string \| null), `economy` (`"metered-usd"` \| `"host-tokens"` — never null; a file with no key means `metered-usd`), `onHostTokensExceed` (`"warn"` \| `"block"` — never null; absence means `warn`), `ceilingHostTokens` (number \| null — **the ceiling `hostTokens` is judged against**, and the reason a host-attended run's dollar meter could not tell the truth without this file), and `phases` (`BudgetPhase[]`). |
 | `notes` | `Note[]` | Operator notes off the ledger, oldest first (#46): `ts`, `actor`, `stage` (string \| null), `phase` (string \| null), `note`. **All of them** — `tldrx run status` caps at three because a terminal has a bottom; a run detail page does not. |
 | `budgetBlocks` | `BudgetBlock[]` | Every `budget.blocked` on the ledger, oldest first. **History, not a state**: the ceiling may have been raised since, so this raises no attention card. `ts`, `stage`, `phase`, `economy` (`"metered-usd"` unless the event says otherwise), `remainingUsd`, `estimateUsd`, `hostTokens`, `ceilingTokens` (each number \| null — a dollar refusal carries the first two, a host-token refusal the last two, and they are never added), `reason` (string \| null). |
@@ -110,10 +113,15 @@ still carries the slug, which is where that fact belongs.
 ### `Waiting`
 
 `kind` — one of `gate` | `answer` | `ready` | `done` | `blocked` | `failed` |
-`running` | `prepared` (the list is `WAITING_KINDS` in
+`running` | `prepared` | `cancelled` (the list is `WAITING_KINDS` in
 `src/core/run/waiting.ts`) — plus `message` (a whole sentence, already worded for
 a reader, carrying the command to run) and `questions` (open question ids in the
 cursor phase, when it is waiting on answers).
+
+`cancelled` is the one whose `message` carries facts that are nowhere else on the
+model: **who** closed the run, **when**, and **why** (`run.yml` `cancelled.by` /
+`.at` / `.note`, gh #86). A renderer that prints only the status chip drops all
+three, which is what the run detail did until #93. Print the `message`.
 
 The last two are the ones a renderer forgets. `running` means a live `next`
 holds the run's `.lock`. `prepared` means a `--prepare` bundle is on disk and
@@ -209,6 +217,55 @@ null — this phase's own host-token allowance, #61).
   existed reads as `attempts`, which is the only kind that existed; it is
   resolved here rather than reported as a blank.
 
+### `Watcher` (a row of `run.watch.watchers`)
+
+`id` (the feature id, also the file name stem), `epic`, `title`, `stories`
+(`string[]`), `repos` (`string[]`), `status` (`"draft"` | `"verified"`, **as
+written on the card**), `owner` (string | null — optional since #70), `absent`
+(`string[]`) and `path` (run-relative, **text, never a link** — the page fetches
+nothing).
+
+`absent` is the card's own account of why it is a draft: the `absent:<path>`
+sources cited under `## Signal`, verbatim and in file order. A card is
+`verified` only when nothing under Signal cites one — that rule lives in
+`src/core/watch/watcherFile.ts` and the model does not re-run it.
+
+**What this is deliberately not.** `tldrx watch check` computes a
+`CardChecklist` by re-resolving every `[src: …]` on the card against today's
+working tree. The model does none of that: it reads the front matter through
+`validateWatcher` and the body through `parseHandoff`, both of which are string
+parsing and open nothing. Reading an `absent:` token back is not the same act as
+checking it. So a `verified` stamp sitting over an `absent:` Signal is shown as
+what it is — a stale stamp — rather than silently corrected, because `watch
+check` is the thing that re-stamps and a viewer that disagreed with the file
+would be a third opinion.
+
+A `draft` card raises **no attention card**. The page's rule is that an alert
+means a run is waiting on a person right now, derived once in `waiting.ts`; an
+uninstrumented signal is a fact about coverage, and it belongs in a panel the way
+`budgetBlocks` does.
+
+### `PreflightRow` (a row of `run.preflight.rows`)
+
+`repo`, `command` (byte-identical to the `.tldrx/workspace.yml` command — the
+join key everywhere), `baseRef` (the repo's `default_branch`), `baseSha` (short
+sha when git had an answer, `""` when it did not), `exitCode` (number),
+`timedOut` (boolean), `status` (`"ok"` | `"failed"` | `"unmeasured"`) and `tail`
+(the last meaningful line of the output).
+
+`unmeasured` is a third case and **not** a synonym for either of the other two:
+the gate declined to run the command at all, so nothing is known about the base
+and nothing may be inferred from it.
+
+Why it is on the page at all: a story's `dod` block is a **delta** gate, and it
+proves nothing if the base tree was already red. `preflight.ts` measures the base
+once per run and refuses to enter Build when a base command fails — it prints to
+stdout, rolls the stage back to `ready`, writes this file, and emits **no event
+and no `run.yml` field**. From the page the stage simply went backwards for no
+visible reason (#85 §5). Drawn as rows, never as an alert, for the same reason
+`budgetBlocks` is: the workspace may have been fixed since, and nothing
+re-measures on render.
+
 ## `Expert`
 
 `name`, `status`, `lastTrained` (string \| null), `warnings` (`string[]`, already
@@ -233,16 +290,24 @@ reasons, and every `budget.blocked`. What it does **not** give is the narrative 
 per-attempt costs, the agent spawns, the check results, the order things happened
 in. That is `tldrx replay <run>`, and the *How to use it* tab says so.
 
-Two files are still unread, and their absences are real:
+`04-build/preflight.yml` and `05-watch/watchers/*.md` **are** read too, since
+#93 — the same doctrine, one step further: read-only, additive, tolerant. Each
+was a design question rather than a patch, and each was answered the small way.
+A preflight refusal leaves its base-gate rows on the page and emits nothing new.
+A watcher card is read the way the file reads and **never re-checked**: the model
+resolves no `[src: …]`, calls no `parseWatcherCard`, and computes no
+`CardChecklist`. `tldrx watch check` remains the only thing that re-checks a card
+against today's code, and the page says so.
 
-- `04-build/preflight.yml` — a DoD-delta refusal rolls the stage back to `ready`
-  and writes this file, emitting no event and setting no `run.yml` field. From
-  the page the stage simply went backwards for no visible reason (#85 §5).
-- `05-watch/watchers/*.md` — the Watchers tab prints the shape it expects and a
-  list of Watch stages. Reading them is a decision about whether the page
-  re-checks the code or only reads the files (#85 §3).
+What is still not here:
 
-Neither file is opened here, and the page must not imply otherwise.
+- **The narrative.** Per-attempt costs, agent spawns, check results, the order
+  things happened in — `tldrx replay <run>`.
+- **Any verdict the files do not already carry.** The model reports a card's
+  `status` and its `absent:` citations side by side; it does not re-decide which
+  is right.
+- **Any write path.** Nothing in the model is a command, an action, or an id you
+  can POST back.
 
 ## Serving it
 

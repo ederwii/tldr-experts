@@ -139,6 +139,15 @@ export interface RunDocument {
   /** Null on every run nobody closed by hand, which is nearly all of them. */
   readonly cancelled: RunCancellation | null;
   /**
+   * `--keep-worktrees`, remembered on the run (issue #16).
+   *
+   * Projected here so a viewer can say it. `emitRunYaml` writes the key ONLY
+   * when it is true, so an absent key and `false` mean the same thing — the epic
+   * worktrees are removed when the run closes — and this reads both as `false`.
+   * Anything that is not the boolean `true` is not a promise to keep them.
+   */
+  readonly keep_worktrees: boolean;
+  /**
    * Stage id -> `human` | `auto` | `agent` (spec §2.2 `gates_policy`). An absent
    * key, or a run.yml written before the key existed, reads as `human` — the same
    * default `gatePolicyFor` applies, spelled here so a reader never has to know it.
@@ -224,6 +233,7 @@ export function toRunDocument(input: unknown, fallbackId: string): RunDocument |
     spent_usd: num(budget?.spent_usd),
     triage: toTriage(doc.triage),
     cancelled: toCancellation(doc.cancelled),
+    keep_worktrees: doc.keep_worktrees === true,
     gates_policy: toGatesPolicy(doc.gates_policy),
     attended_by: nullableStr(doc.attended_by),
     build: toBuild(doc.build),

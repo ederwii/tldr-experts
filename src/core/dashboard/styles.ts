@@ -330,6 +330,7 @@ tr[data-wait="1"] td{background:var(--st-wait-bg)}
 .runrow:hover{background:var(--surface-sunken)}
 .runrow__id{font-family:var(--font-mono);font-size:var(--text-2xs);color:var(--text-faint);
   letter-spacing:var(--tracking-wide)}
+.runrow__note{margin-left:var(--space-xs);color:var(--text-faint);cursor:help}
 .runrow__next{margin-left:var(--space-xs);padding:1px 6px;border-radius:var(--radius-pill);
   background:var(--surface-accent);color:var(--text-on-accent);font-weight:var(--weight-bold);
   letter-spacing:var(--tracking-wide)}
