@@ -45,6 +45,15 @@ filesystem and git only. `tldrx next` sends an assembled prompt to the model, li
 other AI coding tool. What is in that prompt is not a mystery: `tldrx next --prepare`
 writes it to a file and prints its byte-by-byte breakdown before anything is spawned.
 
+## How do I keep it up to date?
+
+`tldrx update` — it is `npm i -g tldr-experts@latest` run for you, and it prints the
+CHANGELOG between the version you had and the one you now have, read back from what npm
+installed rather than assumed. Any command also tells you in one line when a newer version
+exists: the registry is never called on the hot path, the answer is cached for a day, and
+it never appears in `--json` output or inside a hook. `TLDRX_UPDATE_CHECK=off` silences it
+for one shell, `update_check: off` in `~/.tldrx/config.yml` for the machine.
+
 ## How do I stop it?
 
 Ctrl-C. It kills the sub-agent's whole process tree, records a partial result with
@@ -64,6 +73,7 @@ rather than guessing which one you meant, exits `2`, and lists them. Pass the id
 tldrx reject --note "…"                    # send this stage back; the note reaches the next attempt
 tldrx reject --stage 02-how/how --note "…" # revoke an approval already given
 tldrx story reopen S3 --note "…"           # just this one build story
+tldrx story reopen S3 --for-fix --note "…" # one named defect in a story already done
 tldrx run cancel --note "superseded"       # close the run for good; nothing is deleted
 ```
 
@@ -77,6 +87,7 @@ tldrx run cancel --note "superseded"       # close the run for good; nothing is 
 | `3` | not found — no workspace, no run, no card by that name |
 | `4` | **awaiting a human** — the stage ran and stopped at its gate. Not a failure. |
 | `5` | the sub-agent failed |
+| `130` | Ctrl-C — the sub-agent was killed and the stage is back to `ready` |
 
 ## Do I have to commit `.tldrx/` and `tldrx-work/`?
 
@@ -85,9 +96,15 @@ teammate who clones the repo gets the run.
 
 ## Is it ready?
 
-**Alpha, 0.3.1.** Every command is real and tested; interfaces may change without notice.
+**Alpha, 0.4.0.** Every command is real and tested; interfaces may change without notice.
 `tldrx --help` on your machine is the authority, not this site. Beta means frozen file
 formats, two or more real workspaces through Build, and a documented upgrade path.
+
+## Can I contribute?
+
+[`CONTRIBUTING.md`](https://github.com/ederwii/tldr-experts/blob/main/CONTRIBUTING.md) has
+the loop a change goes through, the four gates and what CI actually runs, the red-first
+test rules, and the seam an outside model provider would plug into.
 
 ## Something is refusing and I do not know why
 

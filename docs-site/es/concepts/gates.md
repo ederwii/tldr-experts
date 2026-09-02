@@ -63,8 +63,8 @@ de evidencia firmada**: una lista de verificación donde cada punto trae una fue
 resuelve, validada por la misma maquinaria que revisa lo que la etapa escribió.
 
 ```bash
-tldrx gate template          # writes the skeleton note to fill in
-tldrx approve --as-agent     # validates it, then signs
+tldrx gate template          # escribe el esqueleto de la nota, para llenarlo
+tldrx approve --as-agent     # la valida, y entonces firma
 ```
 
 Se cae hacia una persona si hay una pregunta abierta, si se movió un techo, si hubo trabajo
@@ -79,9 +79,9 @@ Cada scope trae sus valores por omisión, y todos conservan al menos una compuer
 `feature` es `what: human, how: auto, plan: human, build: auto, watch: human`.
 
 ```bash
-tldrx run new pay --gates what,plan,build           # the list IS the human gates
-tldrx run new pay --gates plan:agent,build:agent    # qualified: name the policy outright
-tldrx run new pay --gates all                       # or: none
+tldrx run new pay --gates what,plan,build           # la lista SON las compuertas humanas
+tldrx run new pay --gates plan:agent,build:agent    # calificadas: nombra la política de frente
+tldrx run new pay --gates all                       # o bien: none
 ```
 
 `--gates` **reemplaza** las compuertas del scope por completo: una etapa que dejes fuera de
@@ -107,4 +107,9 @@ disco y dejan de contar como vigentes. No se borra nada, y no se reembolsa nada.
 
 Cuando con lo que no estás de acuerdo es con una sola *story* de Build,
 `tldrx story reopen <id> --note "…"` le da a esa story otra tanda de intentos y no toca
-nada más.
+nada más. Una story que ya está `done` se niega — deshacer trabajo terminado es una decisión
+sobre la etapa —, pero un defecto concreto en ella abre una **ronda de arreglo**:
+`tldrx story reopen S11 --for-fix --note "cuál defecto"`. No se consume ningún intento, el
+arreglo pasa el mismo DoD y el mismo revisor, no se tocan los criterios de aceptación, y
+solo puede haber una ronda abierta a la vez. Existe para que un defecto aceptado no le
+cueste el cierre a todas las demás stories de la etapa.

@@ -13,7 +13,7 @@ lanza al subagente?**
 |---|---|---|---|
 | `tldrx next` / `tldrx run auto` | el framework lanza `claude -p` | medido por turno | en la primera compuerta humana o pregunta abierta |
 | `tldrx run attend host`, manejado desde una sesión de Claude Code | los subagentes de esa sesión | se le cobra a tu sesión | en cada turno — tú lo manejas |
-| lo mismo, más un mandato por escrito | los subagentes de esa sesión | se le cobra a tu sesión | solo ante una decisión de verdad |
+| lo mismo, más el mandato de `tldrx drive` | los subagentes de esa sesión | se le cobra a tu sesión | solo ante una decisión de verdad |
 
 `run auto` y `run attend host` se leen como dos velocidades de lo mismo. Son opuestos, y no
 se combinan.
@@ -62,36 +62,30 @@ teclear — en lugar del bloque de estado de siempre.
 
 ## De noche, sin soltar la revisión
 
-El caso exigente: nadie está viendo, y aun así quieres una revisión adversarial. Dos
-comandos y un prompt. Para la tercera parte no hay palabra clave: el mandato es prosa que
-escribes tú.
+El caso exigente: nadie está viendo, y aun así quieres una revisión adversarial. Tres
+comandos, y el tercero escribe el mandato.
 
 ```bash
 tldrx run new payments --scope feature --budget 25 \
   --attended-by host --gates what:agent,plan:agent,build:agent,watch:agent
-tldrx run attend host 260101-payments      # or flip a run that is already open
+tldrx run attend host 260101-payments       # o cambia un run que ya está abierto
+tldrx drive --unattended 260101-payments    # el mandato: pégalo en la sesión
 ```
 
-Luego, dentro de la sesión, dile qué puede decidir y qué no. La forma que funciona:
+`tldrx drive` imprime texto plano para la sesión que va a manejar el run. Trae el protocolo
+de tres papeles — un subagente que programa, luego un revisor de solo lectura **nuevo**, que
+nunca es quien escribió el código, y luego tú, verificando a los dos en el código y no en
+sus reportes —, la disciplina de evidencia (etiqueta cada afirmación como *medida*,
+*inferida* o *supuesta*; nunca dejes que un pipe se coma un código de salida; pregúntale al
+remoto por el remoto), qué se aparta en vez de decidirse, con cuánto rigor revisar una story
+según lo que esté en juego, y sobre qué se tiene que sostener una firma.
 
-> Maneja tú mismo cada etapa — `tldrx next --prepare <run>` y `tldrx next --commit <run>` —
-> despachando tus propios subagentes. El framework nunca debe lanzar nada.
->
-> Para cada story de Build, corre una revisión adversarial independiente con el apretón de
-> manos `--review`: `tldrx next --prepare --review`, un subagente de solo lectura sobre el
-> diff, y después `tldrx next --commit --review`. Su trabajo es encontrar en qué se
-> equivocó quien programó.
->
-> Aprueba una compuerta solo después de revisarla tú mismo — que las citas resuelvan, que
-> cada ruta tocada sea una que este run declaró, que el diff corresponda a las stories que
-> dice implementar — y deja esa revisión por escrito: `tldrx gate template`, llénala, y
-> luego `tldrx approve --as-agent`.
->
-> Interrúmpeme solo por una decisión nueva de producto, por subir un techo de presupuesto,
-> o por trabajo que tenga que salirse del límite declarado. Todo lo demás lo decides tú, y
-> lo registras.
->
-> Nunca hagas push. El merge final es mío.
+Va versionado con el paquete, así que no se puede desviar del binario como sí se desvía un
+playbook pegado del historial de chat de alguien. No necesita workspace, no abre ningún run,
+no lanza nada y no escribe nada. `--attended` imprime el otro mandato, para cuando tú estás
+en el teclado cerrando cada compuerta. Si le das un id de run, llena de un jalón todos los
+huecos `<run>`; si no, usa el único run abierto, y donde el CLI se negaría a elegir entre
+dos, deja el marcador en lugar de apuntar un mandato al run equivocado.
 
 `--gates` reemplaza las compuertas del scope por completo, así que nombra todas las etapas
 que quieras firmadas: lo que dejes fuera se vuelve `auto`. `tldrx run attend --none <run>`

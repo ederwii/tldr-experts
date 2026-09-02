@@ -63,7 +63,8 @@ tldrx init — single-repo, 1 repo(s) under /Users/you/acme-api
   questions  4 written to .tldrx/init-questions.md
 ```
 
-`init` writes `.tldrx/`: what it detected, a code map, five role experts, and the short
+`init` writes `.tldrx/`: what it detected, a code map, six experts — five roles and one for
+your stack — and the short
 list of questions detection could not answer. `interview --init` asks those in the
 terminal — answer there rather than editing the file, because the interview is what
 records each answer as a numbered fact in `.tldrx/memory/facts.yml`:
@@ -100,9 +101,9 @@ gate pending: tldrx approve
 ```
 
 ::: tip Exit code 4 is not an error
-`next` exits `4` — *awaiting a human*. The work is done; the decision is yours. (That
-output is from the sandbox, where the agent is a stand-in. On your project the dollar
-figure is what the model actually charged.)
+`next` exits `4` — *awaiting a human*. The work is done; the decision is yours. (The second
+figure is that stage's own ceiling, not the run's. That output is from the sandbox, where
+the agent is a stand-in; on your project the dollar figure is what the model charged.)
 :::
 
 Read `tldrx-work/260901-bulk-pricing/01-what/handoff.md`. If the stage asked you

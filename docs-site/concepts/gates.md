@@ -102,4 +102,9 @@ later stages that already ran are marked `stale` — their files stay on disk an
 counting as current. Nothing is deleted, and no cost is refunded.
 
 When it is one *build story* you disagree with, `tldrx story reopen <id> --note "…"` gives
-that story another run of attempts and touches nothing else.
+that story another run of attempts and touches nothing else. A story already `done` refuses
+that — undoing finished work is a decision about the stage — but one named defect in it
+opens a **fix round**: `tldrx story reopen S11 --for-fix --note "which defect"`. No attempt
+is consumed, the fix passes the same definition of done and the same reviewer, the
+acceptance criteria are not touched, and only one round may be open at a time. It exists so
+that an accepted defect does not cost every other story in the stage its closure.

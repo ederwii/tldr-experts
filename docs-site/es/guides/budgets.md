@@ -10,7 +10,7 @@ actúan de verdad. Solo los dos primeros actúan *antes* del dinero.
 ## 1. Mira la cuenta antes de pagarla
 
 ```bash
-tldrx next --prepare        # or --dry-run: both spawn nothing and cost nothing
+tldrx next --prepare        # o --dry-run: ninguno lanza nada ni cuesta nada
 ```
 
 Los dos imprimen la **contabilidad del contexto**: el prompt ya armado, desglosado según de
@@ -56,7 +56,7 @@ y detiene el run al llegar al techo. Por omisión: **120** para What/How/Plan, *
 Build, **60** para Watch. El intento registra `stopped_by: max_reads`, y la vista en vivo
 muestra `reads 37/120`.
 
-## 4. `--max-budget-usd` es el más débil
+## 4. `--max-usd` es el más débil
 
 ```bash
 tldrx next --max-usd 3
@@ -77,6 +77,10 @@ tldrx budget show
 tldrx budget raise 04-build 25 --take-from 02-how --note "the plan grew to nine stories"
 ```
 
+Una fase que se cobra en tokens de sesión host tiene su propio techo — `ceiling_host_tokens`
+en `budget.yml`, que nunca se mezcla con `ceiling_usd`; ver
+[Presupuestos](/es/concepts/budgets).
+
 `raise` recibe un **delta**, no un techo nuevo: `raise 04-build 5` convierte $20 en $25.
 `--take-from` lo saca de otra fase en lugar de subir el total del run. El log de eventos
 guarda quién lo subió, por cuánto y por qué. Subir un techo a media etapa es además una de
@@ -85,9 +89,9 @@ las cosas que impide que una [compuerta agent](/es/concepts/gates) se firme sola
 ## Después
 
 ```bash
-tldrx cost                # per attempt, per stage, per run
-tldrx cost --all          # every run in the workspace
-tldrx run estimate        # the one command that guesses
+tldrx cost                # por intento, por etapa, por run
+tldrx cost --all          # todos los runs del workspace
+tldrx run estimate        # el único comando que adivina
 ```
 
 `cost` lee lo que de verdad se cobró, por intento: los reintentos nunca se doblan dentro

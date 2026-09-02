@@ -8,8 +8,8 @@ The authority is your own machine: `tldrx --help`, and `tldrx <command> --help` 
 command's flags, allowed values, examples and exit codes. This page is a map of the
 surface, not a copy of it.
 
-Every command below was checked against `tldrx 0.3.1`. For the exhaustive version — every
-flag, every refusal — see
+Every command below was checked by running its `--help` on `main`. For the exhaustive
+version — every flag, every refusal — see
 [8 — CLI reference](https://github.com/ederwii/tldr-experts/blob/main/docs/guide/08-cli-reference.md)
 in the repo.
 
@@ -32,7 +32,7 @@ tldrx approve --note "…"    # sign the gate; the checks are re-run first
 | `tldrx interview --init` | Answer the setup questions in the terminal. |
 | `tldrx install --claude` | Write the `/tldrx` skill, hooks and status line into `.claude/`. |
 | `tldrx learn` | The playable sandbox tutorial. No key, no network, $0.00. |
-| `tldrx update` | `npm i -g tldr-experts@latest`, plus the CHANGELOG between the version you had and the one you now have. Any command tells you, in one line, when a newer one exists — off the hot path, cached, silent on failure, never in `--json` or a hook. `TLDRX_UPDATE_CHECK=off` turns it off. |
+| `tldrx update` | `npm i -g tldr-experts@latest`, plus the CHANGELOG between the version you had and the one you now have. Any command tells you, in one line, when a newer one exists — off the hot path, cached, silent on failure, never in `--json` or a hook. `TLDRX_UPDATE_CHECK=off` turns it off for a shell, `update_check: off` in `~/.tldrx/config.yml` for the machine. |
 | `tldrx status` | Everything in this workspace waiting on a human, and the command for each. |
 
 ## Driving a run
@@ -56,9 +56,10 @@ tldrx approve --note "…"    # sign the gate; the checks are re-run first
 | `tldrx gate template` | Write the skeleton evidence note an agent gate is signed over. |
 | `tldrx run gates set <stage>:<policy> --note "…"` | The only sanctioned way to change gate policy after `run new`. |
 | `tldrx questions cards` | The run's OPEN questions as printable decision cards — context, what the docs already decide, the options. Reads only. |
+| `tldrx questions lint` | Name every question block the parser cannot see — a missed `## Qn · Title` reads as *absent*, so everything downstream reports "0 open questions" and an auto gate signs over them. `--fix` rewrites them into the grammar without changing a word. |
 | `tldrx answer <Qid> "…"` | Record an answer as a numbered fact. `--supersede` reverses one. |
 | `tldrx interview` | Answer a run's open questions in the terminal. |
-| `tldrx story reopen <id> --note "…"` | Give one build story another run of attempts. |
+| `tldrx story reopen <id> --note "…"` | Give one build story another run of attempts. `--for-fix` opens a fix round on a story already `done` — one named defect, no attempt consumed, same DoD and same reviewer. |
 
 ## Money
 
@@ -74,14 +75,14 @@ tldrx approve --note "…"    # sign the gate; the checks are re-run first
 |---|---|
 | `tldrx map --refresh \| --check` | Rebuild the code map, or check it against the code for drift. |
 | `tldrx expert list \| create \| train \| recompute` | See [Experts](/guides/experts). |
-| `tldrx seed triage` / `seed apply` | Split a big document into several runs. |
-| `tldrx watch list \| check [<feature>]` | The watcher cards a run produced: listed, or printed as the post-merge checklist and re-checked against the code now. |
+| `tldrx seed triage` / `seed answer` / `seed apply` | Split a big document into several runs. |
+| `tldrx watch list \| check [<feature>]` | The watcher cards a run produced: listed, or printed as the post-merge checklist and re-checked against the code now. `--execute` re-runs the commands the cards recorded, through the workspace allowlist. |
 | `tldrx watch arm` | Wait for the run's shipped PR to merge, then print that checklist. A bounded foreground poller over `gh pr view` — not a daemon. |
 | `tldrx plan sync-dod \| schema` | Repair story definitions of done after editing `workspace.yml`, or print the story/epic/waves contract the `plan` check enforces. |
 | `tldrx dashboard` | Watch the workspace live in a browser, or export one static page. |
 | `tldrx replay [<run>]` | The run's event log as a narrative. |
 | `tldrx retro` | Close a run and capture what was learned. |
-| `tldrx retro --all` | Read-only across EVERY run: which finding classes keep catching you, with counts and one cited example each. Writes nothing. |
+| `tldrx retro --all` | Read-only across EVERY run: which finding classes keep catching you, with counts and one cited example each. `--json` for the machine shape. Writes nothing. |
 | `tldrx drive --attended \| --unattended [<run>]` | Print the session mandate for driving a run — the three-role protocol, evidence discipline, parking, review calibration and budget honesty. Fills every `<run>` in from the id, or from the one open run. Needs no workspace. |
 | `tldrx ship` | Open a PR from the epic branch, with the handoff as the body — one PR per repo when the branch is in several, listed at the end. Re-running skips a repo whose PR is already open. |
 | `tldrx tickets` | Mirror epics and stories to a ticket tool. Files stay the source of truth. |
@@ -97,6 +98,7 @@ tldrx approve --note "…"    # sign the gate; the checks are re-run first
 | `3` | not found — no workspace, no run, no card by that name |
 | `4` | **awaiting a human** — the stage ran and stopped at its gate |
 | `5` | the sub-agent failed |
+| `130` | Ctrl-C — the sub-agent was killed and the stage is back to `ready` |
 
 Which of these a given command can return is listed by `tldrx <command> --help`.
 

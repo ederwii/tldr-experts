@@ -13,7 +13,7 @@ sub-agent?**
 |---|---|---|---|
 | `tldrx next` / `tldrx run auto` | the framework spawns `claude -p` | metered per turn | the first human gate or open question |
 | `tldrx run attend host`, driven from a Claude Code session | that session's own sub-agents | billed to your session | every turn — you drive it |
-| the same, plus a written mandate | that session's own sub-agents | billed to your session | only a real decision |
+| the same, plus the `tldrx drive` mandate | that session's own sub-agents | billed to your session | only a real decision |
 
 `run auto` and `run attend host` read like two speeds of the same thing. They are
 opposites, and they do not compose.
@@ -59,34 +59,29 @@ question, its options, the recommendation if there was one, and the single comma
 
 ## Overnight, with the checking kept
 
-The demanding case: nobody is watching, and you still want an adversarial review. Two
-commands and a prompt. There is no keyword for the third part — the mandate is prose you
-write.
+The demanding case: nobody is watching, and you still want an adversarial review. Three
+commands, and the third one writes the mandate.
 
 ```bash
 tldrx run new payments --scope feature --budget 25 \
   --attended-by host --gates what:agent,plan:agent,build:agent,watch:agent
-tldrx run attend host 260101-payments      # or flip a run that is already open
+tldrx run attend host 260101-payments       # or flip a run that is already open
+tldrx drive --unattended 260101-payments    # the mandate — paste it into the session
 ```
 
-Then, in the session, tell it what it may and may not decide. The shape that works:
+`tldrx drive` prints plain text for the session that will drive the run. It carries the
+three-role protocol — a developer sub-agent, then a **fresh** read-only reviewer that is
+never the author, then you, verifying both in the code rather than in their reports — the
+evidence discipline (label every claim *measured* / *inferred* / *assumed*; never let a
+pipe eat an exit code; ask the remote about the remote), what to park rather than decide,
+how hard to review a story given its stakes, and what a signature has to rest on.
 
-> Drive every stage yourself — `tldrx next --prepare <run>` and `tldrx next --commit <run>`
-> — dispatching your own sub-agents. The framework must never spawn.
->
-> For every build story, run an independent adversarial review through the `--review`
-> handshake: `tldrx next --prepare --review`, one read-only sub-agent over the diff, then
-> `tldrx next --commit --review`. Its job is to find what the developer got wrong.
->
-> Approve a gate only after checking it yourself — that the citations resolve, that every
-> touched path is one this run declared, that the diff matches the stories it claims to
-> implement — and write that check down: `tldrx gate template`, fill it in, then
-> `tldrx approve --as-agent`.
->
-> Interrupt me only for a new product decision, a budget-ceiling raise, or work that has to
-> go outside the declared boundary. Everything else you decide, and log.
->
-> Never push. The final merge is mine.
+It is versioned with the package, so it cannot drift from the binary the way a playbook
+pasted out of someone's chat history does. It needs no workspace, opens no run, spawns
+nothing and writes nothing. `--attended` prints the other mandate, for when you are at the
+keyboard closing every gate yourself. Given a run id it fills every `<run>` slot in at
+once; given none it uses the one open run, and where the CLI would refuse to choose between
+two it leaves the placeholder rather than aim a mandate at the wrong run.
 
 `--gates` replaces the scope's gates wholesale, so name every stage you want signed —
 anything you leave out becomes `auto`. `tldrx run attend --none <run>` hands the run back

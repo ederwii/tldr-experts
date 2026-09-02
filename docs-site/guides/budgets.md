@@ -54,7 +54,7 @@ the model is already sending — no extra call, no extra tokens — and stops th
 ceiling. Defaults: **120** for What/How/Plan, **200** for Build, **60** for Watch. The
 attempt records `stopped_by: max_reads`, and the live view shows `reads 37/120`.
 
-## 4. `--max-budget-usd` is the weakest one
+## 4. `--max-usd` is the weakest one
 
 ```bash
 tldrx next --max-usd 3
@@ -72,6 +72,9 @@ killed with `error_max_budget_usd` after `total_cost_usd: 5.15`, on one 597-seco
 tldrx budget show
 tldrx budget raise 04-build 25 --take-from 02-how --note "the plan grew to nine stories"
 ```
+
+A phase priced in host tokens has its own ceiling — `ceiling_host_tokens` in `budget.yml`,
+never mixed into `ceiling_usd`; see [Budgets](/concepts/budgets).
 
 `raise` takes a **delta**, not a new ceiling — `raise 04-build 5` turns $20 into $25.
 `--take-from` moves it out of another phase instead of raising the run's total. The event
