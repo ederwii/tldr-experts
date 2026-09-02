@@ -90,7 +90,7 @@ still carries the slug, which is where that fact belongs.
 | `spend` | `Spend` | **Both economies in one record, with the half nobody metered named rather than implied** (#103). The three fields above are unchanged; this is the one that says how much of the run they can see. See below. |
 | `lastEventAt` | string \| null | ISO-8601. When anything last happened: the `ts` of the **last line** of `events.jsonl`, or the file's mtime when nothing in it parses. Null when there is no ledger at all. |
 | `lastEventFrom` | string | Which of the two: `"event"` \| `"mtime"` \| `"none"`. Named, because an mtime is a **weaker fact** — the file was touched, which is not the same as the run moving. |
-| `ageSeconds` | number \| null | Seconds between `lastEventAt` and the model's `now`. Null when there is no timestamp. **No threshold is baked in** — nothing here decides what "stale" means. Not clamped either: a ledger written after `now` reports a negative age. |
+| `ageSeconds` | number \| null | Seconds between `lastEventAt` and the model's `now`. Null when there is no timestamp. **No threshold is baked in** — nothing here decides what "stale" means. The dashboard's own renderer picks 30 minutes and calls it `quiet` (#107, `dashHeroAge`); that is a RENDER decision, made in one comparison in one place, and a second consumer is free to disagree with it without touching this field. Not clamped either: a ledger written after `now` reports a negative age. |
 | `stagesTotal` / `stagesDone` | number | `done`/`failed`/`skipped`/`cancelled` count as done. |
 | `percent` | number | 0–100, rounded. |
 | `waiting` | `Waiting` | **What this run is waiting on.** The one field to read. |

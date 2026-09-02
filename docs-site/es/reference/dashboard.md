@@ -28,8 +28,9 @@ documento; lo único que cambia es si vigila.
 
 | Vista | Qué trae |
 |---|---|
-| Runs | Cada run, su estado, el avance por fase, el gasto, y **qué está esperando**. El que puedes retomar ahora mismo lleva `← next`, la misma marca que imprime `tldrx status`. |
-| One run | El camino de ejecución etapa por etapa — experto, modelo, costo, compuerta, quién la firma y quién la firmó —, más los handoffs, las preguntas abiertas, el plan y las ramas que cortó el Build. Del ledger: las **notas de operador** que alguien dejó con `tldrx note`, el intento en el que va cada story y los reintentos de revisión gratuitos que se le concedieron, las reaperturas y sus motivos, y cada vez que el freno del presupuesto se negó a arrancar una etapa. De `budget.yml`: los techos por fase, las palancas y el **cupo de tokens de anfitrión**. De `04-build/preflight.yml`: las **compuertas base** — qué hizo cada comando de gate del workspace sobre el árbol intacto, para que un Build que se negó a arrancar no parezca una etapa que retrocedió sin motivo. Y, cuando están puestos, por qué se **canceló** un run (quién, cuándo, la nota) y si sus **worktrees** de épica se conservan. |
+| Runs | Primero la **tira Now** — una tarjeta por run vivo, con sus puntos de fase, la petición, el gasto y cuánto lleva callado — y luego cada run como fila: estado, avance por fase, gasto, y **qué está esperando**. El que puedes retomar ahora mismo lleva `← next`, la misma marca que imprime `tldrx status`. |
+| Waves | El plan como barras: una fila por ola, una barra por story dentro de ella, para que el paralelismo y las rondas de arreglo se vean de un vistazo. **No hay eje de tiempo**: el modelo no trae inicio ni fin por story, y uno inventado se leería como medido. |
+| One run | La **línea de tiempo por fase** — un carril por fase, y cada etapa se abre a su costo, su compuerta y quién la firmó (el mismo camino sigue ahí como tabla, a un clic) —, la **rejilla de stories**, una celda de estado por story que se abre a lo que dicen el archivo del plan y el ledger, y el **flujo de eventos**, cada hecho con fecha que trae el modelo en un solo orden, filtrable por tipo. Más el camino de ejecución etapa por etapa — experto, modelo, costo, compuerta, quién la firma y quién la firmó —, más los handoffs, las preguntas abiertas, el plan y las ramas que cortó el Build. Del ledger: las **notas de operador** que alguien dejó con `tldrx note`, el intento en el que va cada story y los reintentos de revisión gratuitos que se le concedieron, las reaperturas y sus motivos, y cada vez que el freno del presupuesto se negó a arrancar una etapa. De `budget.yml`: los techos por fase, las palancas y el **cupo de tokens de anfitrión**. De `04-build/preflight.yml`: las **compuertas base** — qué hizo cada comando de gate del workspace sobre el árbol intacto, para que un Build que se negó a arrancar no parezca una etapa que retrocedió sin motivo. Y, cuando están puestos, por qué se **canceló** un run (quién, cuándo, la nota) y si sus **worktrees** de épica se conservan. |
 | Experts | Los niveles de competencia **recalculados desde la evidencia al momento de leer**, nunca el número guardado en disco, con la evidencia detrás de cada uno. |
 | Watchers | Una tarjeta por feature entregada, leída de `05-watch/watchers/*.md`: qué señal vigilar, quién la cuida, la épica y las stories detrás, y — en una `draft` — las citas `absent:` que dicen exactamente qué todavía no está instrumentado. La página **lee** las tarjetas; no las vuelve a checar contra el código de hoy. Eso es `tldrx watch check`. |
 | How to use | El loop de la terminal, como comandos para copiar y pegar. |
@@ -44,6 +45,38 @@ base en rojo y un rechazo de presupuesto pasado se dibujan como paneles: cada un
 siendo cierto mientras nadie lo arregle, y ninguno es un run que te esté esperando ahorita.
 Una alerta que significa "alguien debería ver esto algún día" es una alerta que la gente
 deja de leer.
+
+## La tira Now responde tres preguntas
+
+¿Está esperando a una **persona** ahorita?, ¿hay algo **roto o callado**?, y ¿cuánto ha
+**costado**? Una tarjeta por run vivo — vivo quiere decir todo run que no esté `done` ni
+`cancelled`, así que un run que nadie ha arrancado y uno que nada puede mover están los
+dos ahí. Las tarjetas que piden algo se van al frente.
+
+Tres de sus decisiones vale la pena conocerlas, porque cada una pudo haber sido al revés:
+
+- **Una cota inferior nunca lleva barra.** Una barra de progreso es una afirmación sobre un
+  denominador, y solo es honesta cuando el número encima es todo lo que se gastó. Cuando
+  `spend.basis` es cualquier cosa menos `measured` — cuando hubo turnos que no metieron
+  nada al medidor — la tarjeta muestra la cifra medida con una marca de **lower bound** y
+  *sin barra*, más cuántos de cuántos turnos no costaron nada. La frase completa, la del
+  propio modelo, va en el tooltip de la marca y en el detalle del run.
+- **"Callado" son 30 minutos, y esa línea es de la página, no del modelo.** El modelo
+  reporta `ageSeconds` y a propósito no trae umbral. Media hora sin nada en el ledger es o
+  una persona a la que nadie le ha preguntado o un proceso que se murió. Una lectura de
+  `mtime` dice **touched** y no "last event" — el archivo se escribió, que no es lo mismo
+  que el run haberse movido —, y un ledger fechado *después* de la lectura se nombra como
+  dos relojes que no coinciden en vez de convertirse en frescura.
+- **Los puntos son las fases que declara el propio `run.yml`.** `run new` escribe el
+  workflow completo de entrada, así que un run `feature` sí dibuja cinco, what → watch. Un
+  workflow que declara tres dibuja tres. Nada se rellena para que cuadre la forma.
+
+## Teclado
+
+Todo es un link, un botón o un `<details>`, así que Tab y Enter funcionan solos. Encima de
+eso: <kbd>j</kbd> / <kbd>k</kbd> se mueven entre tarjetas y filas, <kbd>enter</kbd> abre la
+que tiene el foco, y <kbd>/</kbd> salta a los filtros. Están impresos debajo de la fila de
+filtros — un atajo que nadie descubre no es una función.
 
 Los runs con notas de operador llevan una ✎ chiquita en la lista, con la cuenta en el
 tooltip — las notas siguen viviendo en el detalle del run. Es a propósito la marca más

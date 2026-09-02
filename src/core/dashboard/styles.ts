@@ -466,6 +466,174 @@ details.panel > summary h3{font-size:var(--text-sm);flex:1;min-width:0}
 .faq{display:grid;gap:var(--space-md);grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}
 .faq h3{font-size:var(--text-md);margin-bottom:var(--space-xs)}
 
+/* ============================================================
+   THE "NOW" STRIP (#107)
+   One card per live run. Everything on it answers one of three questions:
+   where is this, is a person waited on, and is it still moving. The card is a
+   grid rather than a row so a long title, a long ask and a long command each
+   get their own line at every width instead of squeezing the other two.
+   ============================================================ */
+.nowgrid{display:grid;gap:var(--space-md);
+  grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}
+.now{display:flex;flex-direction:column;gap:var(--space-xs);
+  background:var(--surface-card);border:1px solid var(--line-hairline);
+  border-left:3px solid var(--st-idle);border-radius:var(--radius-md);
+  padding:var(--space-md);scroll-margin-top:96px}
+/* The left rule is the status colour. It is the only thing on the card that is
+   colour-ONLY, and it is backed by the status chip two lines above it. */
+.now[data-st="done"]{border-left-color:var(--st-done)}
+.now[data-st="active"]{border-left-color:var(--st-active)}
+.now[data-st="wait"]{border-left-color:var(--st-wait)}
+.now[data-st="off"]{border-left-color:var(--st-off)}
+.now:focus-visible{outline:none;box-shadow:var(--focus-ring)}
+.now__top{display:flex;align-items:center;gap:var(--space-xs)}
+.now__id{font-family:var(--font-mono);font-size:var(--text-2xs);color:var(--text-faint);
+  letter-spacing:var(--tracking-wide)}
+.now__chip{margin-left:auto}
+.now__next{padding:1px 6px;border-radius:var(--radius-pill);font-family:var(--font-mono);
+  font-size:var(--text-2xs);background:var(--surface-accent);color:var(--text-on-accent);
+  font-weight:var(--weight-bold);letter-spacing:var(--tracking-wide)}
+.now__title{font-size:var(--text-lg);font-weight:var(--weight-semibold);
+  color:var(--text-display);letter-spacing:var(--tracking-snug);text-decoration:none;
+  line-height:var(--leading-snug)}
+.now__title:hover{text-decoration:underline;text-decoration-thickness:1px}
+.now__line{display:flex;flex-wrap:wrap;gap:6px;align-items:baseline;font-size:var(--text-sm);
+  line-height:var(--leading-normal)}
+.now__askt{color:var(--text-body)}
+.now__who{font-family:var(--font-mono);font-size:var(--text-2xs);text-transform:uppercase;
+  letter-spacing:var(--tracking-caps);color:var(--text-faint)}
+/* loud for an ASK, not for movability: a ready run is movable and is not an ask */
+.now__who[data-ask="1"]{color:var(--st-wait);font-weight:var(--weight-bold)}
+.now__note{font-family:var(--font-mono);font-size:var(--text-2xs);color:var(--text-muted);
+  line-height:var(--leading-normal)}
+.now__spend{display:flex;flex-wrap:wrap;gap:6px;align-items:baseline;
+  margin-top:var(--space-2xs)}
+/* Money and token counts, tabular so a column of cards reads as a column of
+   numbers rather than as ragged text. */
+.now__usd{font-family:var(--font-mono);font-variant-numeric:tabular-nums;
+  font-size:var(--text-md);color:var(--text-display);letter-spacing:var(--tracking-snug)}
+/* "lower bound" / "quiet": the two marks that say a figure is not what it looks
+   like. Deliberately a word, not a colour — the claim has to survive a
+   greyscale print and a reader who cannot tell amber from citron. */
+.bound{font-family:var(--font-mono);font-size:var(--text-2xs);text-transform:uppercase;
+  letter-spacing:var(--tracking-wide);padding:1px 5px;border-radius:var(--radius-xs);
+  background:var(--amber-100);color:#8A5D00;white-space:nowrap}
+@media (prefers-color-scheme: dark){:root[data-theme="auto"] .bound{background:#3A2C08;
+  color:var(--amber-500)}}
+:root[data-theme="dark"] .bound{background:#3A2C08;color:var(--amber-500)}
+.now__age{font-family:var(--font-mono);font-size:var(--text-2xs);color:var(--text-muted);
+  line-height:var(--leading-normal)}
+.now__age[data-quiet="1"]{color:var(--text-body)}
+.now__agek{text-transform:uppercase;letter-spacing:var(--tracking-caps);color:var(--text-faint)}
+.now .cmd{margin-top:var(--space-2xs)}
+
+/* phase dots: one per phase the run's own file declares */
+.pdots{display:flex;flex-wrap:wrap;gap:var(--space-2xs);align-items:center}
+.pdot{display:inline-flex;align-items:center;gap:4px;font-family:var(--font-mono);
+  font-size:var(--text-2xs);color:var(--text-faint);letter-spacing:var(--tracking-wide)}
+.pdot__i{width:14px;height:5px;border-radius:1px;background:var(--st-idle-bg);flex:none}
+.pdot[data-st="done"] .pdot__i{background:var(--st-done)}
+.pdot[data-st="active"] .pdot__i{background:var(--st-active)}
+.pdot[data-st="wait"] .pdot__i{background:var(--st-wait)}
+.pdot[data-st="off"] .pdot__i{background:var(--st-off)}
+.pdot[data-st="done"]{color:var(--text-muted)}
+.pdot[data-st="wait"]{color:var(--st-wait);font-weight:var(--weight-bold)}
+.pdot + .pdot{margin-left:2px}
+
+/* the shortcuts, printed. An undiscoverable key is not a feature. */
+.keyhelp{display:flex;flex-wrap:wrap;gap:6px;align-items:center;
+  font-size:var(--text-2xs);color:var(--text-faint);margin:calc(-1 * var(--space-xs)) 0 var(--space-md)}
+.keyhelp kbd{font-family:var(--font-mono);font-size:var(--text-2xs);padding:1px 5px;
+  border:1px solid var(--line-hairline);border-bottom-width:2px;border-radius:var(--radius-xs);
+  background:var(--surface-card);color:var(--text-muted)}
+
+/* ============================================================
+   DRILL-IN: PHASE TIMELINE, STORY GRID, EVENT STREAM (#107)
+   ============================================================ */
+.lane{border:1px solid var(--line-hairline);border-radius:var(--radius-md);
+  background:var(--surface-card);overflow:hidden}
+.lane__head{display:flex;flex-wrap:wrap;gap:var(--space-sm);align-items:center;
+  padding:var(--space-xs) var(--space-md);background:var(--surface-sunken)}
+.lane__id{font-size:var(--text-xs);color:var(--text-display)}
+.lane__cost{margin-left:auto;font-size:var(--text-sm)}
+.lane__body{padding:var(--space-xs) var(--space-md) var(--space-sm)}
+details.lane__stage{border:0;border-top:1px solid var(--line-hairline);border-radius:0}
+details.lane__stage:first-child{border-top:0}
+details.lane__stage > summary{padding:var(--space-xs) 0;background:transparent}
+details.lane__stage > summary:hover{background:transparent;color:var(--text-display)}
+details.lane__stage > summary h3{flex:none;font-family:var(--font-mono);font-size:var(--text-xs)}
+details.lane__stage[data-wait="1"] > summary{background:var(--st-wait-bg)}
+details.lane__stage > .panel__body{padding:var(--space-sm) 0 var(--space-md);border-top:0}
+
+/* the story grid: forty stories as forty cells is the one shape that answers
+   "how much of this is done" without scrolling */
+.sgrid{display:grid;gap:var(--space-xs);grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
+details.scell{border:1px solid var(--line-hairline);border-left:3px solid var(--st-idle);
+  border-radius:var(--radius-sm);background:var(--surface-card);overflow:hidden}
+details.scell[data-st="done"]{border-left-color:var(--st-done)}
+details.scell[data-st="active"]{border-left-color:var(--st-active)}
+details.scell[data-st="wait"]{border-left-color:var(--st-wait)}
+details.scell[data-st="off"]{border-left-color:var(--st-off)}
+details.scell > summary{list-style:none;cursor:pointer;padding:var(--space-xs) var(--space-sm);
+  display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+details.scell > summary::-webkit-details-marker{display:none}
+details.scell > summary:hover{background:var(--surface-sunken)}
+details.scell[open]{grid-column:1 / -1}
+.scell__id{font-family:var(--font-mono);font-size:var(--text-xs);color:var(--text-display);
+  font-weight:var(--weight-semibold)}
+.scell__fix{font-family:var(--font-mono);font-size:var(--text-2xs);color:var(--st-wait);
+  margin-left:auto}
+.scell__body{padding:var(--space-sm);border-top:1px solid var(--line-hairline);
+  display:flex;flex-direction:column;gap:var(--space-xs);font-size:var(--text-xs)}
+.scell__t{font-size:var(--text-sm);color:var(--text-display);font-weight:var(--weight-medium)}
+
+/* the event stream: one grid, so the timestamps line up down the page */
+.evlist{display:flex;flex-direction:column}
+.ev{display:grid;grid-template-columns:132px 84px 108px 120px minmax(0,1fr);
+  gap:var(--space-sm);align-items:baseline;padding:var(--space-xs) var(--space-md);
+  border-bottom:1px solid var(--line-hairline);font-size:var(--text-xs)}
+.ev:last-child{border-bottom:0}
+.ev__ts{font-size:var(--text-2xs);color:var(--text-faint);white-space:nowrap}
+.ev__who{font-family:var(--font-mono);font-size:var(--text-2xs);color:var(--text-muted)}
+.ev__where{font-size:var(--text-2xs);color:var(--text-faint);overflow:hidden;
+  text-overflow:ellipsis}
+.ev__what{color:var(--text-body);line-height:var(--leading-normal)}
+@media (max-width:860px){
+  .ev{grid-template-columns:1fr 1fr;gap:4px var(--space-sm)}
+  .ev__what{grid-column:1 / -1}
+}
+
+/* ============================================================
+   WAVES (#107) — Gantt-lite. The axis is the WAVE, not a clock:
+   the model carries no start or end per story, and an invented x-axis
+   would read as measured.
+   ============================================================ */
+.gantt{display:flex;flex-direction:column;gap:var(--space-xs)}
+.gantt__row{display:grid;grid-template-columns:96px minmax(0,1fr);gap:var(--space-sm);
+  align-items:start;padding-bottom:var(--space-xs);border-bottom:1px solid var(--line-hairline)}
+.gantt__row:last-child{border-bottom:0;padding-bottom:0}
+.gantt__w{display:flex;flex-direction:column;font-size:var(--text-xs);padding-top:3px}
+.gantt__w .faint{font-family:var(--font-mono);font-size:var(--text-2xs)}
+.gantt__bars{display:flex;flex-wrap:wrap;gap:var(--space-xs)}
+.gantt__bar{display:inline-flex;align-items:baseline;gap:6px;min-width:150px;
+  padding:5px var(--space-sm);border-radius:var(--radius-sm);
+  background:var(--surface-sunken);border-left:3px solid var(--st-idle);
+  font-size:var(--text-xs)}
+.gantt__bar[data-st="done"]{border-left-color:var(--st-done)}
+.gantt__bar[data-st="active"]{border-left-color:var(--st-active)}
+.gantt__bar[data-st="wait"]{border-left-color:var(--st-wait)}
+.gantt__bar[data-st="off"]{border-left-color:var(--st-off)}
+.gantt__id{font-family:var(--font-mono);font-size:var(--text-2xs);color:var(--text-display);
+  font-weight:var(--weight-semibold)}
+.gantt__t{color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  max-width:22ch}
+.gantt__fix,.gantt__retry{font-family:var(--font-mono);font-size:var(--text-2xs);
+  padding:0 5px;border-radius:var(--radius-xs);white-space:nowrap}
+.gantt__fix{background:var(--st-wait-bg);color:var(--st-wait)}
+.gantt__retry{background:var(--surface-card);color:var(--text-faint)}
+.gantt__run{color:inherit;text-decoration:none}
+.gantt__run:hover{text-decoration:underline}
+
 @media (max-width:600px){
   .shell{padding:0 var(--space-md) var(--space-2xl)}
   .topbar__in,.nav{padding-left:var(--space-md);padding-right:var(--space-md)}

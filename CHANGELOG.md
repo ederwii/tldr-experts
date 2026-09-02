@@ -41,6 +41,69 @@
     the run-relative path, the fact, the question and whether the document was `cited` or
     named in `affects`; `tldrx replay` renders it. A stamp that cannot be written never
     fails the answer — the decision is recorded and the failure goes to the log as `error`.
+- **The dashboard opens on a "Now" strip, and it says what it does not know (#107).** The
+  render half of the owner-approved redesign, on top of the model #103 shipped. The runs
+  view now leads with one card per **live** run — every run that is neither `done` nor
+  `cancelled`, so a run nobody has started and a run nothing can move are both on it, with
+  the ones that raise an ask sorted to the front. Each card carries the phase dots, the
+  status, the ask in the page's own words with the command that closes it, the spend, and
+  how long it has been quiet. It **replaces** the alert stack rather than sitting beside it:
+  it is a superset — the same `dashPending` ask, the same `alert__kind` badge, the same
+  sentence — over more runs.
+  - **A lower bound never gets a bar.** A progress bar is a claim about a denominator, and
+    it is honest only when the number over it is the whole of what was spent. On the run
+    #103 audited, 30 of 34 turns put nothing in the meter and not one declared a token, so
+    `$14.60 of $62.00` under a quarter-full bar was a confident wrong number drawn in the
+    one shape a reader cannot argue with. The bar is now reserved for `spend.basis ===
+    "measured"`; every other basis gets the metered figure, a **lower bound** mark carrying
+    `spend.reason` in its tooltip, and the count of costless turns out of the total — so the
+    size of the gap is a number and not an adjective. Host tokens are printed beside the
+    dollars and never added to them.
+  - **"Quiet" is 30 minutes, and it is the RENDER's threshold.** The model reports
+    `ageSeconds` unclamped and bakes in none, which is right — a workspace where a stage
+    takes forty minutes and one where it takes forty seconds cannot share a constant. So the
+    page picks, in one comparison, in one place, and says so on the reference page. An
+    `mtime` reading prints **touched** rather than "last event" (the file was written, which
+    is not the run moving) and a ledger dated after the read is named as two clocks
+    disagreeing rather than laundered into "0m ago".
+  - **The dots are the phases the run's own file declares.** `run new` writes the whole
+    workflow up front (`buildPhases`), so a `feature` run really does draw five, what →
+    watch, from the moment it exists — and a `docs` run draws what a `docs` run has. Nothing
+    is padded to five for the shape of it.
+- **Three drill-ins on the run detail, and each one names what it cannot show (#107).** A
+  **phase timeline** — a lane per phase with its cost, each stage a `<details>` opening onto
+  the gate, its policy, its signer and an agent signature's evidence, with the execution-path
+  table moved inside a closed panel rather than drawn twice. A **story grid** — one status
+  cell per story, forty of them legible without scrolling, each opening onto the plan file's
+  fields, the attempt the ledger last recorded, the free review retries and every reopen. An
+  **event stream** — the three timestamped kinds the model carries (operator notes,
+  `budget.blocked`, `story.reopened`) in one time order, filterable by kind with the same
+  button vocabulary the runs list uses. Reading a note next to the refusal two minutes before
+  it is how a person works out why somebody rebased a branch by hand.
+  - The absences are printed where the numbers would be. A stage's `started_at`, its
+    `ended_at` and a gate's free-text `note` are in `run.yml` and on no field of the
+    dashboard model, so the timeline reports no duration and quotes no signature. A story's
+    build log and its fix list are files the Build writes and the page does not read. The
+    stream says out loud that it is not the ledger — `tldrx replay <run>` is. A blank cell
+    reads as "nothing happened", and that is the failure mode this whole redesign is about.
+- **A Waves view (#107).** The plan as bars: a row per wave, a bar per story in it, fix
+  rounds and free review retries marked on the bar. Gantt-lite and deliberately not a Gantt —
+  the axis is the WAVE, because that is the only ordering the files actually assert;
+  `StoryModel` carries no start and no end, and an invented x-axis would read as measured. A
+  story the plan schedules into no wave gets its own row rather than being dropped.
+- **Craft: keyboard reach, tabular money, still one file.** <kbd>j</kbd>/<kbd>k</kbd> move
+  between cards and rows, <kbd>enter</kbd> opens the focused one, <kbd>/</kbd> jumps to the
+  filters — printed under the filter row, because an undiscoverable shortcut is not a
+  feature, and bound only to keys no browser or screen reader already owns. Money and token
+  counts are tabular, so a column of cards reads as a column of numbers. The two marks that
+  say "this figure is not what it looks like" — `lower bound` and `quiet` — are words, not
+  colours, so they survive a greyscale print and a reader who cannot tell amber from citron.
+  Both themes still come from `prefers-color-scheme`, the export is still one self-contained
+  file with no network reference of any kind, and there is still no framework: vanilla, CSS
+  grid, and `<details>`.
+  - `DASHBOARD_MODEL_VERSION` does not move. Nothing here reads a file, adds a field or
+    changes what one means — it is the drawing half, and the model it draws is #103's
+    unchanged.
 
 - **The docs site now SHOWS the dashboard instead of describing it (#106).** A new
   [Live demo](https://ederwii.github.io/tldr-experts/demo) page in both languages frames a

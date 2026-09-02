@@ -41,7 +41,7 @@ export const DASHBOARD_JS = `
   "use strict";
 
   // 'order' is the workspace's own answer to "what next" — see dashRunsView.
-  var state = { model: null, ui: { status: "all", sort: "order" } };
+  var state = { model: null, ui: { status: "all", sort: "order", stream: "all" } };
   var CITE = /\\[(src|assumption|inference|inferred):?\\s*([^\\]]*)\\]/gi;
 
   function readEmbeddedModel() {
@@ -173,7 +173,54 @@ export const DASHBOARD_JS = `
     var filter = event.target.closest("[data-filter]");
     if (filter) { state.ui.status = filter.getAttribute("data-filter"); tldrxRender(); return; }
     var sort = event.target.closest("[data-sort]");
-    if (sort) { state.ui.sort = sort.getAttribute("data-sort"); tldrxRender(); }
+    if (sort) { state.ui.sort = sort.getAttribute("data-sort"); tldrxRender(); return; }
+    var stream = event.target.closest("[data-stream]");
+    if (stream) { state.ui.stream = stream.getAttribute("data-stream"); tldrxRender(); }
+  });
+
+  /**
+   * Keyboard reach, the cheap half (#107).
+   *
+   * Everything on the page is already a link, a button or a <details>, so Tab and
+   * Enter work without help. What Tab does NOT give is a way to move card to card
+   * past the copy buttons inside them, which is the one motion a reader making
+   * the morning pass actually wants. So: j/k walk the elements marked
+   * data-nav="1", Enter follows the focused card's own link, and / jumps to the
+   * filters. No key is bound that a browser or a screen reader already owns, and
+   * every one of them is printed on the page by dashKeyHelp -- an undiscoverable
+   * shortcut is not a feature.
+   */
+  document.addEventListener("keydown", function (event) {
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    var target = event.target || document.body;
+    var tag = target.tagName || "";
+    if (tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable) return;
+    var key = event.key;
+    if (key === "/") {
+      var filter = document.querySelector(".fbtn");
+      if (filter) { filter.focus(); event.preventDefault(); }
+      return;
+    }
+    if (key === "Enter") {
+      var here = document.activeElement;
+      if (here && here.getAttribute && here.getAttribute("data-nav") === "1") {
+        var link = here.querySelector("a[href]");
+        if (link) { location.hash = link.getAttribute("href"); event.preventDefault(); }
+      }
+      return;
+    }
+    if (key !== "j" && key !== "k") return;
+    var stops = [];
+    var found = document.querySelectorAll('[data-nav="1"]');
+    for (var i = 0; i < found.length; i++) stops.push(found[i]);
+    if (stops.length === 0) return;
+    var at = stops.indexOf(document.activeElement);
+    var next = key === "j" ? at + 1 : at - 1;
+    if (at < 0) next = key === "j" ? 0 : stops.length - 1;
+    if (next < 0) next = 0;
+    if (next >= stops.length) next = stops.length - 1;
+    stops[next].focus();
+    event.preventDefault();
   });
 
   window.addEventListener("hashchange", function () {
