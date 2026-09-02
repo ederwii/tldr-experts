@@ -453,6 +453,39 @@
 
 ### Fixed
 
+- **A training pass with nothing to read is no longer paid for (#101).** `runTraining` had
+  exactly one "nothing to work on, refuse before the money" check and it guarded one half of one
+  mode: `nothingToMineRefusal` fires only for a ROLE expert with zero minable runs. The CODE pass
+  was pushed unconditionally and nothing ever looked at `selection.inlined.length`, so an expert
+  whose `## Domain` matched no file on disk spawned a sub-agent, was shown no code at all, and
+  wrote a knowledge file about nothing at full price. Measured on the training fixture before the
+  fix, with a domain of `src/does-not-exist/`: **`{ code: 0, costUsd: 0.37, wroteKnowledge: true }`**
+  — a successful run, priced, from zero input. Live cost, from #94's thread: two near-empty
+  trainings at $0.82 each whose "code sweeps found nothing in-domain".
+  - **The choice, named: SKIP a dead pass, REFUSE only when none survives.** That is
+    `nothingToMineRefusal`'s own idiom — refuse when there is nothing to train from — without
+    denying a `--mode full` run that still has one real pass. The skipped pass's reason goes to
+    stderr before the money, exactly like the #96 pre-start line, and rides back in
+    `TrainOutcome.warnings`; `--prepare` prints it too, and its `N sub-agent(s)` line was already
+    derived from the surviving passes so it stays honest by construction.
+  - **`roleTraining.ts:79`'s uncovered arm is closed.** Its guard reads
+    `if (!isRole || minedFiles > 0) return null`, so a NON-role `--mode full` run against zero
+    minable runs was never refused: it spawned a second sub-agent to write
+    `- none [src: absent:tldrx-work]` — no evidence, no level, full price. That case is now a
+    skip. The role case keeps its own, better-worded refusal untouched, because its runs pass is
+    the only pass it has.
+  - **It is NOT the #96/#98 preflight and does not touch it.** Underfunded and empty are different
+    refusals with different remedies, so they are different checks that never consult each other.
+    In particular a skipped pass does not re-divide the ceiling: the share `trainPreflight` priced
+    and printed is what the surviving sub-agent gets, and the skipped one is simply not spent.
+  - **Exit `1`, deliberately.** `2` is this codebase's MONEY refusal (the `MIN_TRAIN_USD` floor and
+    the #96 preflight). Every "you asked for something with nothing behind it" refusal in
+    `expert train` is `1` — `missingAreaRefusal`, `lightModeRefusal`, and `nothingToMineRefusal`,
+    this check's literal sibling, which `test/training.test.ts` pins as "refused (exit 1)".
+  - **One doc correction found while checking that.** `docs/guide/08-cli-reference.md` claimed
+    `--mode light` on a role expert exits `2`. It exits `1`: `lightModeRefusal` returns
+    `EXIT_USAGE`, and `src/cli/exitCodes.ts` defines `EXIT_USAGE = 1`.
+
 - **`expert create` now yields an expert that can actually be trained, and states the `## Domain`
   grammar it will be read under (#94).** Live 2026-09-02: `tldrx expert create discoverer` printed
   *"no areas — every level starts at 0"*, and `tldrx expert train discoverer --area discoverer`

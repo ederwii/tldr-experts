@@ -21,6 +21,7 @@ import {
   codeEvidence, runEvidence, mergeEvidence, LIGHT_SHAPE, RUNS_SHAPE, TrainingLog,
   trainingCacheDir, expertRepos, MIN_TRAIN_USD, DEFAULT_TRAIN_USD, DEFAULT_TRAIN_EFFORT, withGutter,
   isRoleExpertOnDisk, lightModeRefusal, nothingToMineRefusal,
+  emptyCodeSweepNote, emptyRunsNote, nothingToTrainRefusal,
   describeKnowledgeIssues, knowledgeErrors, knowledgeWarnings, executionClaimRule, repairPrompt,
   emptyKnowledgeScope, recapSectionRule, outputPath, MAX_PAYLOAD_BYTES,
   findStrayWrite, recoverStrayWrite, describeStrayRecovery,
@@ -1807,5 +1808,122 @@ describe("`## Sources` is taught as prose, with the refused shape shown", () => 
     for (const file of ["prompt-0.md", "prompt-1.md"]) {
       expect(readFileSync(join(promptDir, file), "utf8")).toContain("`## Sources` is PROSE");
     }
+  });
+});
+
+/**
+ * gh #101. `runTraining` had exactly one "nothing to work on, refuse before the
+ * money" check and it guarded the wrong half: the runs pass was refused when
+ * there was nothing to mine (and only for a ROLE expert), while the code pass
+ * was pushed unconditionally and never looked at `selection.inlined.length`.
+ * Measured cost, from #94's thread: two near-empty trainings at $0.82 each whose
+ * "code sweeps found nothing in-domain".
+ */
+describe("a pass with nothing to read is never paid for (#101)", () => {
+  /** A `## Domain` that names a folder no repo has — the sweep selects nothing. */
+  const EMPTY_DOMAIN_MD = [
+    "---",
+    `name: ${EXPERT}`,
+    "kind: domain",
+    "status: created",
+    'created_by: "tldrx init"',
+    "created_at: 2026-08-28T14:02:11Z",
+    "repos: [api]",
+    "---",
+    "",
+    `# ${EXPERT}`,
+    "",
+    "## Domain",
+    "",
+    "- `src/does-not-exist/`",
+    "",
+  ].join("\n");
+
+  function emptySweepWorkspace(options: TrainingWorkspaceOptions = {}): TrainingWorkspace {
+    return workspace({
+      ...options,
+      files: {
+        [`.tldrx/experts/${EXPERT}/expert.md`]: EMPTY_DOMAIN_MD,
+        ...(options.files ?? {}),
+      },
+    });
+  }
+
+  test("light mode whose sweep selected ZERO files refuses, spends nothing, writes nothing", async () => {
+    const ws = emptySweepWorkspace();
+    // The fake IS on PATH and IS priced: if this run still spawns, the cost and
+    // the knowledge file are the proof that it did.
+    fakeClaude(ws, [{ [KNOWLEDGE_WRITE]: knowledgeMd() }]);
+    const outcome = await train(ws, { mode: "light" });
+
+    expect(outcome.code).toBe(1);
+    expect(outcome.costUsd).toBe(0);
+    const text = outcome.lines.join("\n");
+    expect(text).toContain("nothing to read");
+    expect(text).toContain("src/does-not-exist");
+    expect(existsSync(join(ws.root, KNOWLEDGE_REL))).toBe(false);
+    expect(existsSync(join(ws.root, KNOWLEDGE_WRITE))).toBe(false);
+  });
+
+  test("full mode with BOTH passes empty refuses once, and names both reasons", async () => {
+    const ws = emptySweepWorkspace({ withoutRuns: true });
+    fakeClaude(ws, [{ [KNOWLEDGE_WRITE]: knowledgeMd() }, { [FROM_RUNS_WRITE]: fromRunsMd() }]);
+    const outcome = await train(ws, { mode: "full" });
+
+    expect(outcome.code).toBe(1);
+    expect(outcome.costUsd).toBe(0);
+    const text = outcome.lines.join("\n");
+    expect(text).toContain("nothing to read");
+    expect(text).toContain("nothing to mine");
+    expect(existsSync(join(ws.root, KNOWLEDGE_REL))).toBe(false);
+    expect(existsSync(join(ws.root, FROM_RUNS_REL))).toBe(false);
+  });
+
+  /**
+   * `roleTraining.ts:79` reads `if (!isRole || minedFiles > 0) return null`, so a
+   * NON-role full run against zero minable runs was never refused: it spawned a
+   * second sub-agent to write `- none [src: absent:tldrx-work]`, at full price.
+   */
+  test("a NON-role full run with nothing to mine skips that pass instead of paying for it", async () => {
+    const ws = workspace({ withoutRuns: true });
+    const argvLog = join(ws.root, "argv.log");
+    process.env.FAKE_TRAIN_ARGV_LOG = argvLog;
+    fakeClaude(ws, [{ [KNOWLEDGE_WRITE]: knowledgeMd() }, { [FROM_RUNS_WRITE]: fromRunsMd() }]);
+    const outcome = await train(ws, { mode: "full" });
+
+    // The code pass is real, so the run still succeeds — this is a SKIP, not a refusal.
+    expect(outcome.code).toBe(0);
+    expect(existsSync(join(ws.root, KNOWLEDGE_REL))).toBe(true);
+    // …and the runs pass never ran: no file, and exactly ONE sub-agent spawned.
+    expect(existsSync(join(ws.root, FROM_RUNS_REL))).toBe(false);
+    expect(readFileSync(argvLog, "utf8").trim().split("\n")).toHaveLength(1);
+    // Said out loud, never silently dropped.
+    expect((outcome.warnings ?? []).join("\n")).toContain("nothing to mine");
+  });
+
+  test("a full run whose CODE sweep is empty still trains from runs, and says the pass was skipped", async () => {
+    const ws = emptySweepWorkspace();
+    const argvLog = join(ws.root, "argv.log");
+    process.env.FAKE_TRAIN_ARGV_LOG = argvLog;
+    fakeClaude(ws, [{ [FROM_RUNS_WRITE]: fromRunsMd() }]);
+    const outcome = await train(ws, { mode: "full" });
+
+    expect(outcome.code).toBe(0);
+    expect(existsSync(join(ws.root, FROM_RUNS_REL))).toBe(true);
+    expect(existsSync(join(ws.root, KNOWLEDGE_REL))).toBe(false);
+    expect(readFileSync(argvLog, "utf8").trim().split("\n")).toHaveLength(1);
+    expect((outcome.warnings ?? []).join("\n")).toContain("nothing to read");
+  });
+
+  test("the skip and the refusal are pure functions of what the pre-pass found", () => {
+    // Nothing selected -> a reason; something selected -> null. No clock, no disk.
+    expect(emptyCodeSweepNote(EXPERT, AREA, 0, ["src/does-not-exist"], ["api"])).not.toBeNull();
+    expect(emptyCodeSweepNote(EXPERT, AREA, 4, ["src/auth"], ["api"])).toBeNull();
+    // The runs pass, for a NON-role expert, which roleTraining.ts:79 never covered.
+    expect(emptyRunsNote(EXPERT, AREA, 0)).not.toBeNull();
+    expect(emptyRunsNote(EXPERT, AREA, 2)).toBeNull();
+    // And the refusal only fires when NO pass survived.
+    expect(nothingToTrainRefusal(EXPERT, AREA, "light", [["a reason"]])).not.toBeNull();
+    expect(nothingToTrainRefusal(EXPERT, AREA, "light", [])).toBeNull();
   });
 });
