@@ -66,14 +66,34 @@ export function runDir(root: string, run: string): string {
   return join(workDir(root), run);
 }
 
-/** Every run folder that has a run.yml, newest folder name first (ids are date-prefixed). */
+/**
+ * Every run folder that has a run.yml, newest folder name first (ids are
+ * date-prefixed).
+ *
+ * Every filesystem call here is guarded, because a live reader asks this while
+ * something else is writing (#108). Two shapes used to throw straight through
+ * `buildModel` and take `tldrx dashboard` down with them: an entry removed
+ * between the `readdir` and its `stat` (ENOENT — which is also what a dangling
+ * symlink looks like), and a `tldrx-work` that is not a directory at all
+ * (ENOTDIR). Neither is a run, and neither is a reason to stop listing the
+ * others.
+ */
 export function listRuns(root: string): readonly string[] {
   const work = workDir(root);
-  if (!existsSync(work)) return [];
-  return readdirSync(work)
+  let entries: readonly string[];
+  try {
+    entries = readdirSync(work);
+  } catch {
+    return [];
+  }
+  return entries
     .filter((entry) => {
       const dir = join(work, entry);
-      return statSync(dir).isDirectory() && existsSync(join(dir, RUN_FILE));
+      try {
+        return statSync(dir).isDirectory() && existsSync(join(dir, RUN_FILE));
+      } catch {
+        return false;
+      }
     })
     .sort()
     .reverse();

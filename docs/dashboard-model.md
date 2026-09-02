@@ -12,9 +12,45 @@ draws it. Those are two steps and two files, on purpose:
 same document: an empty `<main>`, the model inline in a
 `<script type="application/json" id="model-data">`, and the renderer beside it.
 `tldrx dashboard --static` writes that file and stops. The live server serves it
-at `GET /`, the model alone at `GET /model.json`, and pushes a `reload` when a
-file changes; the page re-fetches the model and redraws itself. There is exactly
-one template in the product and exactly one place it runs.
+at `GET /`, the model alone at `GET /model.json`, and pushes down `GET /events`;
+the page re-fetches the model and redraws itself. There is exactly one template
+in the product and exactly one place it runs.
+
+Two events come down that stream, and they answer two different questions:
+
+| Event | Sent when | Data |
+|---|---|---|
+| `reload` | a rebuilt model differs from the one the page is showing | `{at, appended, runs, added, removed}` |
+| `age` | every 25 s, whatever the disk is doing | an ISO timestamp |
+
+**`reload` is decided by comparing models, not by watching files.** A file event
+is the trigger; the question "did anything the page shows change" is answered by
+building the model again — against a FIXED clock, so ages do not make every
+rebuild differ — and comparing the two documents. A digest of "the files that
+matter" would have to be kept in step with everything the model reads, and its
+failure mode is silent: the dashboard stops updating and says nothing. Comparing
+the built document cannot drift. The visible payoff is that writing into
+`.tldrx/cache/` — which is what `--static` does, inside the watched tree —
+pushes nothing at all.
+
+**`age` exists because silence is a state the files cannot announce.** Every age
+on the page, and the `quiet` mark the render puts on half an hour of nothing, is
+computed against a `now`. With only file-triggered pushes, a run that has stopped
+moving keeps saying "2m ago" until somebody writes a file — the one state worth
+seeing is the one state the page cannot reach. The tick is also the stream's
+keep-alive, so it replaces the comment heartbeat rather than being a second timer.
+
+**`events.jsonl` is read forward, not re-read.** It is append-only, so the live
+server keeps a byte offset per run (`src/core/dashboard/tail.ts`) and reads only
+what arrived since the last poll — holding back a line whose newline has not
+landed yet, and starting over if a ledger ever shrinks under it. That is what
+lets a `reload` say *three events landed on this run* instead of only *something
+changed*.
+
+The live page carries one extra inline script (`liveScript()`), and the static
+export carries none — no `EventSource`, no `fetch`, no reference to either route.
+A test hashes the static export against the bytes it had before the live layer
+existed.
 
 `render.ts` is TypeScript so `tsc --strict` holds the markup to the types below —
 rename a field here and the build breaks rather than a panel silently going
