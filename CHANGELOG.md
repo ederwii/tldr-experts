@@ -66,6 +66,9 @@
     `- no Definition of Done ran` is now written only when the stories declare no commands.
   - The degraded handoff PASSED the claim-sources check the whole time — it reads citations, not
     truth — so nothing downstream was ever going to catch this. Five tests now pin it.
+  - Answered and filed, not fixed: the header's `Cost:` line is invocation-scoped too, so the
+    second write reports `$0.00` for a stage that spent `$0.44` (measured). Different seam — the
+    number is not in the ledger this fix reads — so it is #138.
 
 - **The `feature` preset declared map inputs without `{repo}`, so 02-how and 03-plan ran with
   no map at all (#131).** `stages/how/stage.yml` asked for `.tldrx/map/architecture.md` and

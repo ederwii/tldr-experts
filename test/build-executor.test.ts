@@ -1984,7 +1984,11 @@ describe("honest merge rendering", () => {
  * `at (no commit)`.
  *
  * `FAKE_BUILD_COST` is pinned to zero for the same reason the #134 test pins it:
- * the budget gate refuses to restart a stage whose estimate no longer fits.
+ * the budget gate refuses to restart a stage whose estimate no longer fits. It has
+ * a side effect worth saying out loud — the header's `Cost:` is invocation-scoped
+ * too, and at zero both writes read `$0.00` and agree. At `0.11` they do not
+ * ($0.44 → $0.00, measured): that is the same defect one line higher, a different
+ * seam, and #138.
  */
 describe("a re-entered stage does not degrade its own handoff (#137)", () => {
   function section(handoff: string, name: string): string {
