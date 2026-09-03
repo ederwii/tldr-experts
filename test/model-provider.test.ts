@@ -19,8 +19,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   agentProvider, claudeBin, CLAUDE_BIN, codexBin, CODEX_BIN, describeSpawn, spawnAgent,
-  providerBudgetAdvisory,
+  providerBudgetAdvisory, buildClaudeArgs, interpret,
 } from "../src/core/facilitator/spawnAgent.ts";
+import { REVIEW_SCHEMA } from "../src/core/build/prompts.ts";
+import { parseReview } from "../src/core/build/review.ts";
 import { codexPromptMarker } from "../src/core/facilitator/fakeTranscript.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
@@ -35,6 +37,47 @@ afterEach(() => {
 });
 
 describe("the provider selection keeps Claude as the byte-identical default", () => {
+  test("Codex receives a strict reviewer schema without changing Claude's optional fields", async () => {
+    const dir = tmp();
+    const schemaLog = join(dir, "schema.json");
+    process.env.TLDRX_AGENT_PROVIDER = "codex";
+    process.env.TLDRX_CODEX_BIN = join(import.meta.dir, "fixtures", "agent", "fakeCodex.ts");
+    const before = JSON.stringify(REVIEW_SCHEMA);
+    await spawnAgent({ ...request(dir), role: "reviewer", schema: REVIEW_SCHEMA,
+      env: { ...process.env, FAKE_CODEX_SCHEMA_LOG: schemaLog } });
+    const schema = JSON.parse(readFileSync(schemaLog, "utf8"));
+    expect(schema.required).toEqual(["verdict", "summary", "findings", "fixlist"]);
+    expect(schema.properties.fixlist.anyOf[1]).toEqual({ type: "null" });
+    const item = schema.properties.fixlist.anyOf[0].items;
+    expect(item.required).toEqual(["n", "severity", "finding", "where", "disposition", "detail", "do_not"]);
+    expect(item.properties.n).toEqual({ anyOf: [{ type: "integer" }, { type: "null" }] });
+    expect(item.properties.disposition).toEqual(REVIEW_SCHEMA.properties.fixlist.items.properties.disposition);
+    expect(item.additionalProperties).toBe(false);
+    expect(JSON.stringify(REVIEW_SCHEMA)).toBe(before);
+    const claude = buildClaudeArgs({ ...request(dir), schema: REVIEW_SCHEMA });
+    expect(claude[claude.indexOf("--json-schema") + 1]).toBe(before);
+  });
+
+  test("multiline Codex errors stay on one handoff line without losing the reason", () => {
+    const raw = JSON.stringify({ type: "turn.failed", error: { message: "{\n  code: invalid_json_schema,\n  message: Missing n\n}" } });
+    const outcome = interpret(1, raw, "", false, "codex");
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toContain("invalid_json_schema");
+    expect(outcome.error).toContain("Missing n");
+    expect(outcome.error).not.toContain("\n");
+  });
+
+  test("nullable optional reviewer fields preserve approval and fail-closed fix-list parsing", () => {
+    expect(parseReview({ verdict: "approve", summary: "checked", findings: [], fixlist: null }, "").verdict).toBe("approve");
+    const review = parseReview({ verdict: "fixlist", summary: "one defect", findings: [], fixlist: [{
+      n: null, severity: null, finding: "Missing test", where: null,
+      disposition: "fix-now", detail: null, do_not: null,
+    }] }, "");
+    expect(review.verdict).toBe("fixlist");
+    expect(review.fixlist[0]).toMatchObject({ n: 1, severity: "unrated", where: "", detail: "", doNot: [] });
+    expect(parseReview({ verdict: "fixlist", summary: "empty", findings: [], fixlist: null }, "").verdict).toBe("changes");
+  });
+
   test("unset selects Claude; codex is an explicit opt-in", () => {
     expect(agentProvider()).toBe("claude");
     process.env.TLDRX_AGENT_PROVIDER = "codex";

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Codex Build reviews rejected before execution (#148).** The Codex spawn boundary
+  translates optional schema properties to required nullable values, including nested
+  fix-list entries. Claude and attended review schemas stay unchanged. Multiline Codex
+  errors are flattened for handoff rendering so a provider failure does not introduce
+  uncited continuation lines. Reproduced with published 0.7.0 and codex-cli 0.153.0.
+
 ## 0.7.0 — 2026-09-03
 
 ### Added
