@@ -1957,3 +1957,158 @@ describe("honest merge rendering", () => {
       .toContain("→ `epic/e1` (merged)");
   }, 60_000);
 });
+
+/**
+ * A re-entered stage must not overwrite its own handoff with a WORSE one (#137).
+ *
+ * `04-build/handoff.md` is rewritten by every invocation that reaches `finish()`,
+ * and its own docstring says it "describes the phase, not the invocation". Two of
+ * its sections were fed from invocation-scoped sources anyway, so the SECOND write
+ * over a re-entered stage replaced true statements with false ones. Measured on
+ * `340fb91`, `tldrx next` → `tldrx reject` → `tldrx next`:
+ *
+ *   ## Evidence ledger
+ *   - S1: `npm run test` in app [src: $ npm run test → exit 0]     first write
+ *   - S2: `npm run test` in app [src: $ npm run test → exit 0]
+ *   - no Definition of Done ran [src: absent:03-plan/stories]      second write
+ *
+ *   ## Gate
+ *   - `epic/e1` in app → `main` (S1, S2 merged)                    first write
+ *   - `epic/e1` in app → `main` (no story merged)                  second write
+ *
+ * while `git log epic/e1` carried `merge(S1)` and `merge(S2)` throughout. This is
+ * the audit record lying in the dangerous direction: the Gate section is the one a
+ * human reads before merging an epic by hand, and it told them a branch carrying
+ * two stories had nothing on it — the 2026-08-30 empty-merge defect from the other
+ * side. A third section degraded too: Findings lost each story's merged sha to
+ * `at (no commit)`.
+ *
+ * `FAKE_BUILD_COST` is pinned to zero for the same reason the #134 test pins it:
+ * the budget gate refuses to restart a stage whose estimate no longer fits.
+ */
+describe("a re-entered stage does not degrade its own handoff (#137)", () => {
+  function section(handoff: string, name: string): string {
+    const from = handoff.indexOf(`## ${name}`);
+    if (from === -1) return "";
+    const rest = handoff.slice(from + `## ${name}`.length);
+    const to = rest.indexOf("\n## ");
+    return (to === -1 ? rest : rest.slice(0, to)).trim();
+  }
+
+  const handoffPath = (ws: BuildWorkspace): string => join(ws.runDir, "04-build", "handoff.md");
+
+  /** `next` → `reject` → `next`, returning the handoff BEFORE and AFTER. */
+  async function reentered(
+    ws: BuildWorkspace,
+    between: (ws: BuildWorkspace) => void = () => {},
+  ): Promise<{ first: string; second: string }> {
+    process.env.FAKE_BUILD_COST = "0";
+    await next(ws);
+    const first = readFileSync(handoffPath(ws), "utf8");
+    reject(RunStore.open(ws.runDir), {
+      root: ws.root, actor: "alan", at: "2026-08-29T10:00:00Z", note: "run the stage again",
+    });
+    between(ws);
+    await next(ws, { at: "2026-08-29T10:05:00Z" });
+    return { first, second: readFileSync(handoffPath(ws), "utf8") };
+  }
+
+  test("the Evidence ledger keeps the DoD results the first invocation proved", async () => {
+    const ws = workspace(TWO_WAVES);
+    const { first, second } = await reentered(ws);
+
+    const proved = [
+      "- S1: `npm run test` in app [src: $ npm run test → exit 0]",
+      "- S2: `npm run test` in app [src: $ npm run test → exit 0]",
+    ];
+    for (const row of proved) expect(section(first, "Evidence ledger")).toContain(row);
+
+    // The false claim, which is what a story rebuilt from disk with `dod: []`
+    // rendered as. The results were in `events.jsonl` the whole time.
+    expect(section(second, "Evidence ledger")).not.toContain("no Definition of Done ran");
+    for (const row of proved) expect(section(second, "Evidence ledger")).toContain(row);
+  }, 120_000);
+
+  test("the Gate section does not report an epic carrying two merges as carrying none", async () => {
+    const ws = workspace(TWO_WAVES);
+    const { first, second } = await reentered(ws);
+
+    expect(section(first, "Gate")).toContain("(S1, S2 merged)");
+
+    // The repo, which never stopped being the source of truth.
+    const log = git(ws, ["log", "epic/e1", "--oneline"]);
+    expect(log).toContain("merge(S1)");
+    expect(log).toContain("merge(S2)");
+
+    const gate = section(second, "Gate");
+    expect(gate).not.toContain("no story merged");
+    // Named as merged, and named as NOT re-measured — this invocation watched
+    // neither merge, so it cannot say what they carried, and the row hands the
+    // reader the command that can.
+    expect(gate).toContain(
+      "(S1, S2 merged by an earlier `tldrx next` — what each carried was not re-measured here, "
+      + "run `git log epic/e1`)",
+    );
+  }, 120_000);
+
+  test("Findings keeps each story's merged commit instead of `(no commit)`", async () => {
+    const ws = workspace(TWO_WAVES);
+    const { first, second } = await reentered(ws);
+
+    expect(first).not.toContain("(no commit)");
+    expect(second).not.toContain("(no commit)");
+    // The same shas both times, and both resolve in the repo.
+    const shas = (text: string): readonly string[] =>
+      [...text.matchAll(/merged into `epic\/e1` at ([0-9a-f]{7,40})/g)].flatMap((m) => m[1] ?? []);
+    expect(shas(second)).toEqual(shas(first));
+    expect(shas(second)).toHaveLength(2);
+    for (const sha of shas(second)) expect(() => git(ws, ["cat-file", "-e", `${sha}^{commit}`])).not.toThrow();
+  }, 120_000);
+
+  // Not a RED: the degraded handoff was VALID, which is the point — the
+  // claim-sources check reads citations, not truth, so nothing downstream was
+  // ever going to catch this. It guards the rows this fix adds.
+  test("the second handoff still passes the claim-sources check", async () => {
+    const ws = workspace(TWO_WAVES);
+    const { second } = await reentered(ws);
+
+    const validation = validateHandoff(second, toSrcContext(loadWorkspace(ws.root), ws.runDir));
+    expect({ unsourced: validation.unsourced, unresolved: validation.unresolved, missing: validation.missingSections })
+      .toEqual({ unsourced: [], unresolved: [], missing: [] });
+  }, 120_000);
+
+  /**
+   * The unreconstructable half, said out loud rather than asserted away.
+   *
+   * `readReviewLedger` recovers a settled story's DoD from `events.jsonl`, so the
+   * ledger rows above are real. When the events are NOT there — a run recorded by
+   * an older binary — the honest answer is neither "no Definition of Done ran"
+   * (false: the story declares one and reached `done` on it) nor a fabricated
+   * exit code. It names the command, says the exit code is not in this run's log,
+   * and cites the log that recorded it. Simulated here by deleting exactly the
+   * `check` events for the dod commands.
+   */
+  test("a DoD whose result is NOT on disk is named, not denied", async () => {
+    const ws = workspace(TWO_WAVES);
+    const { second } = await reentered(ws, (w) => {
+      const path = join(w.runDir, "events.jsonl");
+      const kept = readFileSync(path, "utf8").split("\n").filter((line) => {
+        if (line.trim() === "") return false;
+        const event = JSON.parse(line) as { payload?: { check?: string } };
+        return event.payload?.check !== "dod";
+      });
+      writeFileSync(path, `${kept.join("\n")}\n`, "utf8");
+    });
+
+    const ledger = section(second, "Evidence ledger");
+    expect(ledger).not.toContain("no Definition of Done ran");
+    expect(ledger).toContain(
+      "- S1: `npm run test` in app ran in an earlier `tldrx next` and its exit code is not in "
+      + "this run's event log — not re-asserted here [src: 04-build/log/S1.md:1]",
+    );
+    // And no exit code was invented for it.
+    expect(ledger).not.toContain("- S1: `npm run test` in app [src:");
+    // The Gate section is unaffected: what merged is a different question.
+    expect(section(second, "Gate")).not.toContain("no story merged");
+  }, 120_000);
+});

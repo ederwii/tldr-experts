@@ -390,7 +390,16 @@ export function renderReviewLog(outcome: StoryOutcome): string {
     "## Definition of done",
     "",
     ...(outcome.dod.length === 0
-      ? ["- (the story declares no dod commands)"]
+      // The same two readings of an empty `dod` the handoff's ledger tells apart
+      // (#137). This log is written for a story settled by an earlier `tldrx
+      // next` only when no log exists yet, and "declares no dod commands" over a
+      // story that declares two is the wrong one of them.
+      ? (outcome.dodUnrecovered ?? []).length === 0
+        ? ["- (the story declares no dod commands)"]
+        : (outcome.dodUnrecovered ?? []).map((command) =>
+            `- \`${command}\` — ran in an earlier \`tldrx next\`; its exit code is not in this ` +
+            "run's event log, so it is not restated here",
+          )
       : outcome.dod.map((r) =>
           `- \`${r.command}\` → exit ${String(r.exitCode)}${r.timedOut ? " (timed out)" : ""}` +
           (r.exitCode === 0 ? "" : ` — ${r.tail}`),
