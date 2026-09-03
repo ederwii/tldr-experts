@@ -179,8 +179,12 @@ Provider selection and executable overrides are late-bound on every call:
   Default `claude`, taken off `PATH`. Blank or whitespace counts as unset. Read on every call
   rather than captured at import, so a late `export` and a test that sets it are both obeyed
   — `claudeBin()`, `src/core/facilitator/spawnAgent.ts:37-56`.
-- Honoured by the agent spawn and the `--dry-run` command line. `tldrx doctor` makes the
-  selected provider required and treats the other provider as optional.
+- Honoured by the agent spawn and the `--dry-run` command line. `tldrx doctor` **always requires
+  `claude`**, whichever provider is selected — hooks, the statusline and `doctor --mcp` are Claude Code
+  primitives, so the harness is needed even when Codex is the runner — and it *additionally* requires
+  `codex` when Codex is the selected provider. Selecting a provider never demotes the harness;
+  `providerTools()`, `src/core/doctor/runDoctor.ts:84-90`, with the purposes spelled out at
+  `env.yml:52-66`.
 - Tests: `test/model-provider.test.ts`.
 
 Codex uses plain `codex exec` with JSONL and an output-schema file. Developer work runs in
