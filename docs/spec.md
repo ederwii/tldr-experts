@@ -2446,6 +2446,23 @@ the dod commands as `[src: $ <cmd> → exit <n>]`. **Those logs are committed st
 block re-includes `tldrx-work/**` before it ignores anything: a project rule that hides them costs the run its record of
 what the reviewer said, and says nothing while it does.
 
+**The handoff describes the PHASE, not the invocation (#137).** It is rewritten by every `tldrx next` that reaches the
+end of the stage, and a stage is re-entered whenever a `tldrx reject` sends it back or a run's stories do not all settle
+in one invocation. So a section fed from what THIS process did degrades on the second write, and the degradation is a
+false claim rather than a gap: measured on `340fb91`, a re-entered stage replaced an Evidence ledger of two green DoD
+rows with `- no Definition of Done ran`, and a Gate row reading `(S1, S2 merged)` with `(no story merged)` over an
+`epic/e1` whose `git log` carried both merge commits. The Gate section is what a human reads before merging an epic by
+hand, so that is the 2026-08-30 empty-merge defect arriving from the other side.
+
+A row rebuilt for a story an earlier invocation settled is therefore READ, not defaulted. Its DoD results and its merged
+commit come from `events.jsonl` — the same ledger a resumed review trusts when it declines to re-run a DoD. What
+CANNOT be recovered is what each merge carried: it is counted before the merge and stored nowhere, and afterwards a
+merged branch is an ancestor of the epic either way. That one is stated as absent with its reason and the command that
+settles it — `S1, S2 merged by an earlier ``tldrx next`` — what each carried was not re-measured here, run
+``git log epic/e1`` ` — never folded into `merged` (which would overclaim) and never dropped (which is what printed
+`no story merged`). A declared dod command whose result is in no event is named the same way, against its log; the
+negative `- no Definition of Done ran` is written only when the stories declare no commands.
+
 **Safety.** A repo with uncommitted changes on the branch an epic would be cut from is refused **before** anything is
 cut (exit `2`, the stage stays `ready`, the message names the files and the fix) — counting PRODUCT paths only, since
 under `root_is_repo: true` the framework's own `tldrx-work/` and `.tldrx/` live inside that repo and this very command

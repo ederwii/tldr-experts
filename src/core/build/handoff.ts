@@ -30,6 +30,22 @@ export interface EpicSummaryRow {
    * `260830-tenancy-identity-customers`, 2026-08-30).
    */
   readonly emptyMerges?: readonly string[];
+  /**
+   * Stories known to be ON this epic branch whose merge THIS invocation did not
+   * watch — a story settled by an earlier `tldrx next`, or one whose errored
+   * review is being re-run over a diff that merged in an earlier process.
+   *
+   * They are a third list because they are a third fact. `merged` and
+   * `emptyMerges` are both MEASUREMENTS: `commitsBetween` was run before the
+   * merge, and afterwards it cannot be — once the story branch is an ancestor of
+   * the epic, `git diff <epic>...<story>` is empty whether it carried thirty
+   * commits or none. So what these stories carried is not recoverable, and the
+   * row says so instead of picking a side. Folding them into `merged` overclaims
+   * (the 2026-08-30 empty-merge trap); leaving them out UNDERclaims, and that is
+   * the direction #137 measured: a `epic/e1` carrying two merge commits was
+   * reported as `(no story merged)`.
+   */
+  readonly mergedEarlier?: readonly string[];
   readonly defaultBranches: readonly string[];
   /** Run-relative path of `03-plan/epics/<id>.md`. */
   readonly rel: string;
@@ -135,6 +151,7 @@ function gateRows(epics: readonly EpicSummaryRow[]): readonly EpicSummaryRow[] {
       repos: unique([...seen.repos, ...epic.repos]),
       merged: unique([...seen.merged, ...epic.merged]),
       emptyMerges: unique([...(seen.emptyMerges ?? []), ...(epic.emptyMerges ?? [])]),
+      mergedEarlier: unique([...(seen.mergedEarlier ?? []), ...(epic.mergedEarlier ?? [])]),
       defaultBranches: unique([...seen.defaultBranches, ...epic.defaultBranches]),
     });
   }
@@ -153,13 +170,27 @@ function unique(items: readonly string[]): readonly string[] {
  * an ancestor exits 0 and moves nothing, and the old rendering — one flat list
  * ending in "merged" — reported four such branches as landed work on
  * `260830-tenancy-identity-customers`.
+ *
+ * A merge this process did not WATCH is named as that, third (#137). The
+ * alternative on offer was to say nothing about it, and saying nothing is what
+ * printed `(no story merged)` over an epic branch carrying two merge commits —
+ * the same sentence as the 2026-08-30 defect, arriving from the other side.
+ * "Not re-measured" plus the command that settles it is the only claim this
+ * function has the evidence for.
  */
 function mergeSummary(epic: EpicSummaryRow): string {
   const empty = epic.emptyMerges ?? [];
+  const earlier = epic.mergedEarlier ?? [];
   const parts: string[] = [];
   if (epic.merged.length > 0) parts.push(`${epic.merged.join(", ")} merged`);
   if (empty.length > 0) {
     parts.push(`${empty.join(", ")} added nothing — identical to \`${epic.branch}\``);
+  }
+  if (earlier.length > 0) {
+    parts.push(
+      `${earlier.join(", ")} merged by an earlier \`tldrx next\` — what each carried was not ` +
+        `re-measured here, run \`git log ${epic.branch}\``,
+    );
   }
   return parts.length === 0 ? "no story merged" : parts.join("; ");
 }
@@ -212,6 +243,13 @@ function decisions(parts: BuildHandoffParts): readonly string[] {
  * Spec §2.8: `cmd` sources are legal only here, and only for a command
  * `workspace.yml` declares. A story's dod block is already checked against that
  * set by the §2.13 validator, so every command that reaches this point qualifies.
+ *
+ * The fallback row is a NEGATIVE claim, so it is only allowed to be written when
+ * the negative is what was found (#137). A story whose declared commands ran in
+ * an earlier `tldrx next` and whose exit codes this process could not read is
+ * not "no Definition of Done ran" — it is a row of its own, naming the command
+ * and the log that recorded the result, because an absence has to say what was
+ * looked at or it is not evidence.
  */
 function ledger(outcomes: readonly StoryOutcome[]): readonly string[] {
   const rows: string[] = [];
@@ -220,6 +258,13 @@ function ledger(outcomes: readonly StoryOutcome[]): readonly string[] {
       rows.push(
         `- ${outcome.id}: \`${result.command}\` in ${outcome.repo} ` +
           `[src: $ ${result.command} → exit ${String(result.exitCode)}]`,
+      );
+    }
+    for (const command of outcome.dodUnrecovered ?? []) {
+      rows.push(
+        `- ${outcome.id}: \`${command}\` in ${outcome.repo} ran in an earlier \`tldrx next\` and ` +
+          `its exit code is not in this run's event log — not re-asserted here ` +
+          `[src: ${outcome.reviewRel}:1]`,
       );
     }
   }

@@ -2619,7 +2619,7 @@ class BuildSession {
       budgetUsd: this.ctx.budgetUsd,
       at: this.ctx.at,
       outcomes,
-      epics: this.epicRows(),
+      epics: this.epicRows(outcomes),
       storiesRel: this.plan.implicit ? IMPLICIT_PLAN_REL : null,
     }), "utf8");
   }
@@ -2645,9 +2645,24 @@ class BuildSession {
     return rows;
   }
 
-  /** A story settled by an earlier `next`; its log is already on disk. */
+  /**
+   * A story settled by an earlier `next`; its log is already on disk.
+   *
+   * Every field here is READ, not defaulted, wherever the run recorded it (#137).
+   * The row used to be a thin sketch — `dod: []`, `commit: null` — and the
+   * handoff renders from it, so a re-entered stage overwrote its own Evidence
+   * ledger with `- no Definition of Done ran` over two green DoD runs and its
+   * Findings with `at (no commit)` over a merged sha. Both facts are in
+   * `events.jsonl`: `readReviewLedger` is the same reader `rereview` trusts when
+   * it declines to re-run a DoD, so trusting it here asserts nothing new.
+   *
+   * What is NOT reconstructed is `carried`. It is measured before the merge and
+   * stored nowhere, and afterwards it cannot be measured at all. It stays `null`
+   * and the Gate section says so in words — see `mergeSummary`.
+   */
   private fromDisk(planned: PlannedStory, status: PlanStatus): StoryOutcome {
     const epic = this.plan.epics.get(planned.story.epic);
+    const ledger = readReviewLedger(this.ctx.runDir, planned.story.id);
     const outcome: StoryOutcome = {
       id: planned.story.id,
       title: planned.story.title,
@@ -2661,8 +2676,12 @@ class BuildSession {
       branch: storyBranchOf(this.ctx.runId, planned.story.id),
       status,
       attempts: Math.max(this.reviewAttempts(planned.story.id), 1),
-      dod: [],
-      commit: null,
+      dod: ledger.dod,
+      // The commands the plan declares and the ledger could NOT account for. An
+      // empty `dod` beside an empty list is a story with no dod block; beside a
+      // populated one it is a gap, and the two must not render alike.
+      dodUnrecovered: ledger.dod.length === 0 ? planned.dod.commands : [],
+      commit: ledger.commit,
       merged: status === "done",
       carried: null,
       conflicts: [],
@@ -2681,14 +2700,14 @@ class BuildSession {
     return outcome;
   }
 
-  private epicRows(): readonly EpicSummaryRow[] {
+  private epicRows(outcomes: readonly StoryOutcome[]): readonly EpicSummaryRow[] {
     const rows: EpicSummaryRow[] = [];
     for (const [id, epic] of this.plan.epics) {
       const branch = epicBranchOf(this.branchModel, epic.epic.branch);
       // Attributed to the EPIC, not to the branch. Under `per-epic` the two are
       // the same set; under the integration model one branch carries every epic's
       // stories, and a row that claimed all of them for each epic would be false.
-      const merges = (this.merged.get(branch) ?? [])
+      const merges = this.mergesOnto(branch, outcomes)
         .filter((row) => this.plan.stories.get(row.id)?.story.epic === id);
       rows.push({
         id,
@@ -2698,11 +2717,42 @@ class BuildSession {
         // Gate section is what a human reads before merging an epic by hand, and
         // "S3, S4, S5, S7 merged" over four identical branches is the sentence
         // this split exists to stop writing (2026-08-30).
-        merged: merges.filter((row) => row.carried !== 0).map((row) => row.id),
+        merged: merges.filter((row) => row.carried !== null && row.carried !== 0).map((row) => row.id),
         emptyMerges: merges.filter((row) => row.carried === 0).map((row) => row.id),
+        // Merged, and this process did not watch it happen — see `mergedEarlier`.
+        mergedEarlier: merges.filter((row) => row.carried === null).map((row) => row.id),
         defaultBranches: epic.epic.repos.map((repo) => this.workspace.defaultBranches.get(repo) ?? "main"),
         rel: epic.rel,
       });
+    }
+    return rows;
+  }
+
+  /**
+   * Every story known to sit on this epic branch, from BOTH sources (#137).
+   *
+   * `this.merged` is what this process merged, and it is the only source the Gate
+   * section had. So a re-entered stage — every story already settled, nothing left
+   * to merge — printed `(no story merged)` over an epic branch carrying two merge
+   * commits, and that is the sentence a human reads before deciding what to ship.
+   *
+   * The second source is the outcomes themselves: a row rebuilt by `fromDisk`
+   * carries `merged: true` for a story disk says is `done`, which in this pipeline
+   * is a status only a merged story reaches. It carries `carried: null` with it,
+   * so the row is reported as merged-but-not-re-measured rather than as either
+   * kind of measurement. This process's own rows win on id — they are the ones
+   * that HAVE a measurement.
+   */
+  private mergesOnto(
+    branch: string,
+    outcomes: readonly StoryOutcome[],
+  ): readonly { id: string; carried: number | null }[] {
+    const rows = [...(this.merged.get(branch) ?? [])];
+    const seen = new Set(rows.map((row) => row.id));
+    for (const outcome of outcomes) {
+      if (outcome.epicBranch !== branch || !outcome.merged || seen.has(outcome.id)) continue;
+      seen.add(outcome.id);
+      rows.push({ id: outcome.id, carried: outcome.carried });
     }
     return rows;
   }

@@ -38,6 +38,38 @@
   - **Multi-repo semantics are unchanged** — `workspace.md` stays, and stays without `{repo}`.
     Its absence on a single-repo workspace is still SAID rather than performed (#131): there
     is no cross-repo view of one repo, and the `absent:` block reports exactly that.
+
+- **A re-entered Build stage OVERWROTE its own handoff with a degraded reconstruction (#137).**
+  `04-build/handoff.md` is rewritten by every `tldrx next` that reaches the end of the stage, and
+  its own docstring says it "describes the phase, not the invocation" — but two of its sections
+  were fed from what THIS process did. So the second write over a re-entered stage (`tldrx reject`
+  then `tldrx next`, or any run whose stories did not all settle at once) replaced true statements
+  with false ones. Measured on `340fb91`: an Evidence ledger of two green DoD rows became
+  `- no Definition of Done ran [src: absent:03-plan/stories]`, and a Gate row reading
+  `(S1, S2 merged)` became `(no story merged)` while `git log epic/e1` carried both merge commits
+  throughout. The Gate section is the one a human reads before merging an epic by hand, so this is
+  the 2026-08-30 empty-merge defect arriving from the other side; a third section degraded quietly
+  with them, Findings losing each story's merged sha to `at (no commit)`.
+  - **Reconstructed where the truth is durable.** The row `fromDisk` builds for a story an earlier
+    invocation settled now READS its DoD results and its merged commit from `events.jsonl` via
+    `readReviewLedger` — the same reader `rereview` already trusts when it declines to re-run a
+    DoD, so nothing new is being asserted. The Gate section learns what is on an epic branch from
+    both sources instead of one: this process's own merges, plus the stories disk says reached
+    `done`, which in this pipeline is a status only a merged story reaches.
+  - **Said as absent, with its reason, where it is not.** What a merge CARRIED is counted before
+    the merge and stored nowhere, and afterwards cannot be measured at all — a merged story branch
+    is an ancestor of the epic either way. Those stories get a third list of their own and a row
+    that names the gap and the command that closes it — *S1, S2 merged by an earlier `tldrx next`
+    — what each carried was not re-measured here, run `git log epic/e1`*. Folding them into
+    `merged` would overclaim; dropping them is what printed `no story merged`. A declared dod
+    command whose result is in no event is named the same way against its own log, and the negative
+    `- no Definition of Done ran` is now written only when the stories declare no commands.
+  - The degraded handoff PASSED the claim-sources check the whole time — it reads citations, not
+    truth — so nothing downstream was ever going to catch this. Five tests now pin it.
+  - Answered and filed, not fixed: the header's `Cost:` line is invocation-scoped too, so the
+    second write reports `$0.00` for a stage that spent `$0.44` (measured). Different seam — the
+    number is not in the ledger this fix reads — so it is #138.
+
 - **The `feature` preset declared map inputs without `{repo}`, so 02-how and 03-plan ran with
   no map at all (#131).** `stages/how/stage.yml` asked for `.tldrx/map/architecture.md` and
   `.tldrx/map/conventions.md`. `tldrx init` writes the map PER REPO —

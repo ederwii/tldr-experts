@@ -87,6 +87,18 @@ export interface StoryOutcome {
   /** How many developer attempts this story took (1 or 2). */
   readonly attempts: number;
   readonly dod: readonly DodResult[];
+  /**
+   * DoD commands the story's plan DECLARES whose results could not be recovered
+   * — set only on a row rebuilt from disk for a story an earlier `tldrx next`
+   * settled, and only when `events.jsonl` holds no `check` for them.
+   *
+   * It exists so that an empty `dod` has two readings and the documents can tell
+   * them apart. `dod: []` with this empty means the story declares no commands,
+   * and "no Definition of Done ran" is true. `dod: []` with commands listed here
+   * means results EXIST and this process could not read them — a different fact,
+   * and rendering it as the first is the false claim #137 was filed for.
+   */
+  readonly dodUnrecovered?: readonly string[];
   readonly commit: string | null;
   readonly merged: boolean;
   /**
