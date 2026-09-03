@@ -43,6 +43,11 @@
     boundary that already spawns git.
   - **It behaves like `noted`, not like `unverified`:** it passes the stage and it does not block an auto gate
     (spec §5, condition 5). It is a check that ran and came back true, of a branch nothing has merged.
+  - **The auto gate's NOTE carries the ref too.** `claimSourcesCondition` carried `outcome.detail` into its
+    note only when the unchecked-absence count was non-zero — #110's rule reading one of the two things that
+    detail now holds. So a stage whose handoff cited nothing but the epic and held no absence at all
+    auto-signed with a note that read, in full, `claim-sources=passed`. Both counts are consulted now, and
+    the branch reaches the sentence a person actually reads when a stage signs itself.
 
 ## 0.6.1 — 2026-09-03
 
