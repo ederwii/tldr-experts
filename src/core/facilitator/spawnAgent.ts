@@ -27,6 +27,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertNoAttendedSpawn } from "./attended.ts";
+import { codexSchema } from "./codexSchema.ts";
 import { emitAgentEvent } from "../ui/bus.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
 import { AgentStream, resolveCodexResultDoc, resolveResultDoc, type AgentEvent } from "./agentEvents.ts";
@@ -251,7 +252,7 @@ export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
 
   const schemaDir = provider === "codex" ? mkdtempSync(join(tmpdir(), "tldrx-codex-schema-")) : null;
   const schemaPath = schemaDir === null ? null : join(schemaDir, "output-schema.json");
-  if (schemaPath !== null) writeFileSync(schemaPath, `${JSON.stringify(request.schema ?? ENVELOPE_SCHEMA)}\n`, "utf8");
+  if (schemaPath !== null) writeFileSync(schemaPath, `${JSON.stringify(codexSchema(request.schema ?? ENVELOPE_SCHEMA))}\n`, "utf8");
   let spawned;
   try {
     spawned = await runtime.spawn(
@@ -369,7 +370,8 @@ function describe(
   }
   const errors = Array.isArray(doc.errors) ? (doc.errors as unknown[]).filter((e) => typeof e === "string") : [];
   const reason = errors[0] ?? (typeof doc.subtype === "string" ? doc.subtype : "") ?? "";
-  const suffix = reason === "" ? "" : `: ${String(reason)}`;
+  const detail = provider === "codex" ? String(reason).replace(/\s+/g, " ").trim() : String(reason);
+  const suffix = detail === "" ? "" : `: ${detail}`;
   return `${name} exited ${exitCode} with is_error=${String(doc.is_error === true)}${suffix}`;
 }
 

@@ -6,6 +6,8 @@ import { codexOutput, codexPromptMarker } from "../../../src/core/facilitator/fa
 const argv = process.argv.slice(2);
 const argvLog = process.env.FAKE_CODEX_ARGV_LOG;
 if (argvLog !== undefined && argvLog !== "") appendFileSync(argvLog, `${JSON.stringify(argv)}\n`);
+const schemaLog = process.env.FAKE_CODEX_SCHEMA_LOG;
+if (schemaLog) writeFileSync(schemaLog, readFileSync(argv[argv.indexOf("--output-schema") + 1]!, "utf8"));
 
 let prompt = "";
 for await (const chunk of process.stdin) prompt += String(chunk);

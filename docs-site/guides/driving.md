@@ -30,6 +30,12 @@ a bare `tldrx next` there exits `4` and prints the `--prepare` command you meant
 
 ## Which to pick
 
+Codex uses the same review contract, with optional fields represented as nullable
+values for its strict structured-output API. Developers remain in `workspace-write`
+and reviewers in `read-only`. If a linked worktree's Git metadata is not writable by
+the developer sandbox, Build can commit the changes after its own Definition of Done
+checks; do not disable the sandbox to make the agent's commit succeed.
+
 - **A small run you were going to watch anyway** → `tldrx run auto`. One command, and it
   stops the moment it needs you.
 - **A Claude Code session already open, and you care about cost or quality** →
