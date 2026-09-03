@@ -928,7 +928,7 @@ citation**, not as an unsourced bullet — the two need different advice.
 
 | kind | resolved against | `refused` when | `unverified` when |
 |---|---|---|---|
-| `file` | workspace root / run dir / repo | no such file, or the line is out of range | — |
+| `file` | workspace root / run dir / repo, plus this run's epic worktrees and its recorded epic refs | no such file on ANY of those, or the line is out of range everywhere | — |
 | `cmd` | `workspace.yml` `commands:` | not one of them, or cited outside `Evidence ledger` | the workspace declares no commands |
 | `fact` | `.tldrx/memory/facts.yml` | no such id, or the fact is **retired** | there is no facts.yml |
 | `answer` | every `questions.md` in the run | no block with that id | the caller passed no run dir |
@@ -970,7 +970,9 @@ same resolution, read as "fine" by `claim-sources` and as "stop" by the auto gat
 into a checked `ok`, add the needle — or cite the line that proves the point.
 
 **An `absent:` path resolves against the same bases a `file` path does** (workspace root, then the run directory, then a
-named repo, plus this run's epic worktrees), and `repo:path` is accepted. It used to try the workspace root and nothing
+named repo, plus this run's epic worktrees), and `repo:path` is accepted. It does **not** reach for the recorded epic
+refs the way a `file` src does (#140): an absence is a claim about where somebody LOOKED, and a branch nobody checked
+out is not somewhere anybody looked. It used to try the workspace root and nothing
 else, so the run-relative `absent:04-build/log` never even saw the directory it named and reported an absence it had
 never looked for.
 
@@ -989,6 +991,33 @@ when the path starts with a known repo name followed by `/`, that repo's directo
 `api/src/Hunt.cs` is a spelling of `api:src/Hunt.cs`. The line range is checked against whichever file resolved, and a
 failure names every base it tried. `tldrx next`, `tldrx approve` and the `claim-sources` hook resolve identically: all
 three are handed the run directory of the file they are judging.
+
+**A path that is only on an unmerged epic resolves, and the check NAMES the ref (#140).** The Build phase commits onto
+an epic branch and deliberately does not merge it, so a Watch stage or a retro written ABOUT that work cites code that
+is on no merged ref by construction (#16). Two more places are therefore tried after every base above, in order:
+
+1. **this run's epic worktrees** — `.tldrx/worktrees/<repo>/_epic-<run>-<epic>`, when they are still on disk (#16);
+2. **the branches this run RECORDED** — `run.yml`'s `build.epic_branch`, read as a git blob:
+   `git cat-file blob <ref>:<path>` in each declared repo. No worktree and no retention is needed for this, which is
+   why (2) exists: (1) is a temp directory, so before #140 the same citation had two silent answers. Measured live on
+   run `260830-money-and-payments`: `retro.md` was committed to `main` carrying 96 citations to files that exist only
+   on `epic/money-and-payments`; while the checkout lived they resolved and nothing said so, and after cleanup a reader
+   of `main` followed them to nothing.
+
+A citation that resolves ONLY in (1) or (2) is **`ok`** — it is true, and refusing it would refuse a stage for
+reporting its own evidence. What it is not is silent: the resolution carries the ref, and `claim-sources` names it in
+its detail (`on unmerged refs: 96 (epic/money-and-payments — unmerged)`), so a reader of the document on `main` knows
+which branch to look on. It does not fail a stage and does not block an auto gate. A path on no ref at all is still
+`refused`, and a cited line past the end of the epic's blob is still `refused` — naming the ref and the length it has
+there. Only branches the run's own `build.epic_branch` records are tried; a branch that merely exists in the repo is
+not a base.
+
+**The blob read is opt-in, and the `claim-sources` HOOK does not opt in.** It is the one subprocess the §2.8 reader
+spawns, and the hook runs on every PreToolUse write inside the 50 ms budget of §0. Measured 2026-09-03 on a handoff
+with 96 epic-only citations: **0.36 ms** on the hook path (the refs are not in its context, so the code is unreachable
+from a write), **1166 ms** cold on the gate path where all 96 blob reads are paid, and **0.36 ms** warm — reads are
+memoised per (repo, ref, path) for the process and capped at 256. The gate, `tldrx approve`, `tldrx next`'s auto gate,
+`tldrx watch` and `watch arm` opt in; they are boundaries that already spawn git.
 
 ### 2.9 `tldrx-work/<run>/events.jsonl`
 
@@ -2141,6 +2170,10 @@ Two of the others were tightened on 2026-08-29, both because an auto gate could 
   not `unverified`: it passes the stage AND the gate, and is named by path in both the check detail and the gate note.
   Blocking on it penalised the state-the-negative-case discipline §2.8 asks for, and waving it through in silence let a
   `- none [src: absent:04-build/log]` stand over a directory of seven files. See the §2.8 outcome table.
+  A `file` citation that resolves **only on an unmerged epic ref** (#140) behaves like `noted` and not like
+  `unverified`: it passes the stage AND the gate, and is named with its branch in the check detail
+  (`on unmerged refs: 96 (epic/money-and-payments — unmerged)`). It is a check that RAN and came back true — of a
+  branch nothing has merged, which is the fact the reader is owed, not a reason to stop.
 
 **`agent` gates.** A gate an agent may close, and only over a check it wrote down. It is **strictly stronger** than
 an auto gate, never a cheaper one — three things must hold, not one:

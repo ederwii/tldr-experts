@@ -299,6 +299,17 @@ export interface HandoffValidation {
    * cannot be waved through by one and refused by the other (gh #110).
    */
   readonly noted: readonly HandoffIssue[];
+  /**
+   * `file` citations that resolve ONLY somewhere unmerged — this run's recorded
+   * epic branch, or its epic checkout (gh #140).
+   *
+   * Valid, and deliberately not fatal: the Build phase ends at a human gate and
+   * nothing merges, so a Watch stage or a retro writing ABOUT that work cites code
+   * that is on no merged ref by construction. What #140 refuses is the SILENCE —
+   * `retro.md` was committed to `main` with 96 such citations and nobody was told,
+   * so a reader following them hit nothing. This is the list that names the branch.
+   */
+  readonly epicOnly: readonly HandoffIssue[];
   readonly bulletCount: number;
 }
 
@@ -316,6 +327,17 @@ export interface SectionReport {
   readonly unresolved: readonly HandoffIssue[];
   readonly unverified: readonly HandoffIssue[];
   readonly noted: readonly HandoffIssue[];
+  /**
+   * `file` citations that resolve ONLY somewhere unmerged — this run's recorded
+   * epic branch, or its epic checkout (gh #140).
+   *
+   * Valid, and deliberately not fatal: the Build phase ends at a human gate and
+   * nothing merges, so a Watch stage or a retro writing ABOUT that work cites code
+   * that is on no merged ref by construction. What #140 refuses is the SILENCE —
+   * `retro.md` was committed to `main` with 96 such citations and nobody was told,
+   * so a reader following them hit nothing. This is the list that names the branch.
+   */
+  readonly epicOnly: readonly HandoffIssue[];
   readonly bulletCount: number;
 }
 
@@ -374,6 +396,7 @@ export function validateSections(
   const unresolved: HandoffIssue[] = [];
   const unverified: HandoffIssue[] = [];
   const noted: HandoffIssue[] = [];
+  const epicOnly: HandoffIssue[] = [];
   let bulletCount = 0;
 
   const wanted = new Set<string>(required);
@@ -404,10 +427,12 @@ export function validateSections(
         if (resolution.outcome === "refused") unresolved.push(issue);
         else if (resolution.outcome === "unverified") unverified.push(issue);
         else if (resolution.outcome === "noted") noted.push({ ...issue, src: ref.raw });
+        // `ok`, and true of nothing merged (gh #140). Reported, never fatal.
+        else if (resolution.unmerged !== undefined) epicOnly.push({ ...issue, src: resolution.unmerged });
       }
     }
   }
-  return { emptySections, unsourced, malformed, unresolved, unverified, noted, bulletCount };
+  return { emptySections, unsourced, malformed, unresolved, unverified, noted, epicOnly, bulletCount };
 }
 
 export function validateHandoff(text: string, ctx: SrcContext): HandoffValidation {
@@ -431,6 +456,7 @@ export function validateHandoff(text: string, ctx: SrcContext): HandoffValidatio
     unresolved,
     unverified: report.unverified,
     noted: report.noted,
+    epicOnly: report.epicOnly,
     bulletCount: report.bulletCount,
   };
 }
@@ -442,6 +468,17 @@ export interface CitationReport {
   readonly unverified: readonly HandoffIssue[];
   /** `absent:` over a path that exists with content — see `HandoffValidation`. */
   readonly noted: readonly HandoffIssue[];
+  /**
+   * `file` citations that resolve ONLY somewhere unmerged — this run's recorded
+   * epic branch, or its epic checkout (gh #140).
+   *
+   * Valid, and deliberately not fatal: the Build phase ends at a human gate and
+   * nothing merges, so a Watch stage or a retro writing ABOUT that work cites code
+   * that is on no merged ref by construction. What #140 refuses is the SILENCE —
+   * `retro.md` was committed to `main` with 96 such citations and nobody was told,
+   * so a reader following them hit nothing. This is the list that names the branch.
+   */
+  readonly epicOnly: readonly HandoffIssue[];
   /** How many list items attempted a citation at all. */
   readonly cited: number;
 }
@@ -469,6 +506,7 @@ export function validateCitations(text: string, ctx: SrcContext): CitationReport
   const unresolved: HandoffIssue[] = [];
   const unverified: HandoffIssue[] = [];
   const noted: HandoffIssue[] = [];
+  const epicOnly: HandoffIssue[] = [];
   let cited = 0;
   for (const item of parseItems(text)) {
     if (item.token === null) {
@@ -488,9 +526,10 @@ export function validateCitations(text: string, ctx: SrcContext): CitationReport
       if (resolution.outcome === "refused") unresolved.push(issue);
       else if (resolution.outcome === "unverified") unverified.push(issue);
       else if (resolution.outcome === "noted") noted.push({ ...issue, src: ref.raw });
+      else if (resolution.unmerged !== undefined) epicOnly.push({ ...issue, src: resolution.unmerged });
     }
   }
-  return { malformed, unresolved, unverified, noted, cited };
+  return { malformed, unresolved, unverified, noted, epicOnly, cited };
 }
 
 /** Every `src` cited anywhere in the handoff — used by `replay` and the ledger. */

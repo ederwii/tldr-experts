@@ -15,6 +15,7 @@
  * Everything here is string slicing plus a handful of tiny anchored regexes, so a
  * hook can validate a 256 KB handoff well inside its 50 ms budget (spec §0).
  */
+import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, normalize, relative, sep } from "node:path";
 import { parseYaml } from "../yaml.ts";
@@ -87,6 +88,32 @@ export interface SrcContext {
    * Build and every run whose worktrees have been cleaned up.
    */
   readonly epicWorktrees?: readonly EpicWorktree[];
+  /**
+   * This run's recorded epic BRANCHES, resolved by a git blob read when no base
+   * on disk carries the path (issue #140).
+   *
+   * The last chance a `file` src gets, and the one that survives cleanup. #16's
+   * worktree base fixed the Watch stage while the checkout happened to be there;
+   * it is a temp directory, so the same citation had two silent answers. Live
+   * evidence, run `260830-money-and-payments`: `retro.md` was committed to `main`
+   * with 96 citations to files that exist only on `epic/money-and-payments`, and
+   * nothing ever said so — the worktree resolved them while it lived, and after
+   * cleanup a reader of `main` follows them to nothing.
+   *
+   * A blob read needs no worktree and no retention: `git cat-file blob <ref>:<path>`
+   * answers both questions this file asks of a path — does it exist, and does it
+   * have the cited line — from the ref the run itself recorded in `run.yml`
+   * (`build.epic_branch`). A citation that resolves ONLY there is VALID, and the
+   * resolution says WHERE, so the check that reads it can name the branch.
+   *
+   * **Opt-in, and empty by default.** This is the one place this file spawns a
+   * subprocess, and `hooks/claim-sources.ts` runs on every PreToolUse write
+   * inside a 50 ms budget (spec §0). The hook's `toSrcContext(workspace, runDir)`
+   * leaves this empty, so the write path cannot reach a `spawnSync` however a
+   * handoff is spelled; the gate and stage checks pass `{ epicRefs: true }` and
+   * pay for it once, at a boundary that already runs git.
+   */
+  readonly epicRefs?: readonly EpicRef[];
 }
 
 /** One epic checkout a `file` src may resolve against. */
@@ -97,8 +124,18 @@ export interface EpicWorktree {
   readonly dir: string;
 }
 
+/** One unmerged ref a `file` src may resolve against by git blob read (issue #140). */
+export interface EpicRef {
+  /** The `workspace.yml` repo whose history holds the ref. */
+  readonly repo: string;
+  /** Absolute path of that repo — the `cwd` the blob read runs in. */
+  readonly dir: string;
+  /** The branch, exactly as `run.yml`'s `build.epic_branch` records it. */
+  readonly ref: string;
+}
+
 export function emptySrcContext(root: string, runDir?: string | null): SrcContext {
-  return { root, repos: new Map(), commands: new Set(), runDir: runDir ?? null, epicWorktrees: [] };
+  return { root, repos: new Map(), commands: new Set(), runDir: runDir ?? null, epicWorktrees: [], epicRefs: [] };
 }
 
 const LINE_RE = /^\d{1,9}$/;
@@ -655,6 +692,16 @@ export interface SrcResolution {
   readonly outcome: SrcOutcome;
   /** Absolute path a `file` src resolved to, when it is a `file` src. */
   readonly resolved?: string;
+  /**
+   * Where an `ok` `file` src resolved when the ONLY place it resolves is
+   * unmerged — the recorded branch (`epic/money-and-payments`) or this run's epic
+   * checkout (issue #140).
+   *
+   * Set means: the citation is true, and it is not true of any merged ref, so
+   * every reader of it deserves to be told which branch to look on. Undefined is
+   * the ordinary case — the path is on the working tree, and nothing needs saying.
+   */
+  readonly unmerged?: string;
   readonly message?: string;
 }
 
@@ -708,10 +755,22 @@ export function resolveSrc(ref: SrcRef, ctx: SrcContext, section: string, claim 
           short ??= refused(`${ref.path} has ${lines} line(s); cited line ${highest}`, base.abs);
           continue;
         }
-        return { ok: true, outcome: "ok", resolved: base.abs };
+        if (base.unmerged === undefined) return { ok: true, outcome: "ok", resolved: base.abs };
+        // True, and true of nothing merged: say so rather than resolve in silence
+        // (issue #140). The base is a temp directory a reader of `main` does not
+        // have, which is exactly why the answer names it.
+        return {
+          ok: true, outcome: "ok", resolved: base.abs, unmerged: base.unmerged,
+          message: `resolves in ${base.label} — unmerged`,
+        };
       }
+      // No base on disk carries it. One more chance, on the refs this run RECORDED
+      // as its epic branches — a git blob read, so no worktree need survive for a
+      // citation to stay checkable (issue #140).
+      const onRef = resolveOnEpicRefs(ref, ctx);
+      if (onRef !== null) return onRef;
       if (short !== null) return short;
-      const tried = bases.map((b) => b.label).join(", ");
+      const tried = [...bases.map((b) => b.label), ...epicRefLabels(ref, ctx)].join(", ");
       return refused(`no such file: ${ref.path} — tried ${tried}`, bases[0]?.abs);
     }
     case "cmd": {
@@ -995,6 +1054,11 @@ interface FileBase {
   /** Human-readable name of the base, for the "tried …" half of a failure message. */
   readonly label: string;
   readonly abs: string;
+  /**
+   * Set when this base is an UNMERGED checkout — this run's epic worktree.
+   * A hit on it resolves and is NAMED, never resolved in silence (issue #140).
+   */
+  readonly unmerged?: string;
 }
 
 /**
@@ -1059,6 +1123,7 @@ function epicBases(ctx: SrcContext, repo: string, path: string): readonly FileBa
     bases.push({
       label: `epic worktree ${displayPath(ctx.root, tree.dir)}`,
       abs: normalize(join(tree.dir, path)),
+      unmerged: `the epic worktree ${displayPath(ctx.root, tree.dir)}`,
     });
   }
   return bases;
@@ -1078,10 +1143,158 @@ function displayPath(root: string, dir: string): string {
 function countLines(path: string): number {
   const cached = lineCountCache.get(path);
   if (cached !== undefined) return cached;
-  const text = readFileSync(path, "utf8");
-  const count = text === "" ? 0 : text.split("\n").length - (text.endsWith("\n") ? 1 : 0);
+  const count = countTextLines(readFileSync(path, "utf8"));
   lineCountCache.set(path, count);
   return count;
+}
+
+/** One formula, so a blob and a file on disk cannot count the same content differently. */
+function countTextLines(text: string): number {
+  return text === "" ? 0 : text.split("\n").length - (text.endsWith("\n") ? 1 : 0);
+}
+
+// --- the recorded epic refs (issue #140) ------------------------------------
+//
+// The ONE subprocess this file spawns, and the reason `SrcContext.epicRefs` is
+// opt-in: it is reached only from the gate and stage checks, never from the
+// PreToolUse hook, whose whole budget is 50 ms (spec §0). Measured on
+// `test/epic-citations.test.ts`: the hook spelling of the context leaves
+// `epicRefs` empty, so this code is unreachable from a write.
+
+const GIT_BIN = "git";
+/** A blob read that has not answered in this long is not going to help a check. */
+const EPIC_BLOB_TIMEOUT_MS = 5_000;
+/** A cited source file is not megabytes; a generous ceiling still bounds the read. */
+const EPIC_BLOB_MAX_BYTES = 4 * 1024 * 1024;
+/**
+ * Blob reads per process, memoised per (repo, ref, path).
+ *
+ * A handoff citing 96 epic-only paths — the live shape of #140 — costs 96 reads
+ * once and nothing thereafter. The cap is what stops a pathological document
+ * (a thousand distinct bad paths) from turning a gate into a fork bomb; past it
+ * the answer degrades to what it was before this existed, which is a refusal.
+ */
+const MAX_EPIC_BLOB_READS = 256;
+
+const epicBlobCache = new Map<string, number | null>();
+let epicBlobReads = 0;
+
+/** One (repo, ref, path) a `file` src could be read from. */
+interface EpicTarget {
+  readonly repo: string;
+  readonly dir: string;
+  readonly ref: string;
+  readonly path: string;
+}
+
+/**
+ * Line count of `<ref>:<path>` in `dir`, or null when it is not a blob there.
+ *
+ * `cat-file blob` and not `show`: `git show <ref>:<dir>` prints a TREE listing
+ * and exits 0, so `show` would resolve a citation to a directory as though it
+ * were a file. `cat-file blob` asserts the type — measured 2026-09-03 on this
+ * repo: exit 0 for a file, exit 128 for a directory, exit 128 for a path the ref
+ * does not have.
+ */
+function epicBlobLines(target: EpicTarget): number | null {
+  const key = `${target.dir}\u0000${target.ref}\u0000${target.path}`;
+  const cached = epicBlobCache.get(key);
+  if (cached !== undefined) return cached;
+  if (epicBlobReads >= MAX_EPIC_BLOB_READS) return null;
+  epicBlobReads += 1;
+  let lines: number | null = null;
+  try {
+    const out = spawnSync(GIT_BIN, ["--no-pager", "cat-file", "blob", `${target.ref}:${target.path}`], {
+      cwd: target.dir,
+      encoding: "utf8",
+      timeout: EPIC_BLOB_TIMEOUT_MS,
+      maxBuffer: EPIC_BLOB_MAX_BYTES,
+      stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
+    });
+    if (out.status === 0 && typeof out.stdout === "string") lines = countTextLines(out.stdout);
+  } catch {
+    // No git, no repo, a killed child: not a base. Never a throw out of a checker.
+    lines = null;
+  }
+  epicBlobCache.set(key, lines);
+  return lines;
+}
+
+/**
+ * The last chance a `file` src gets: the branches `run.yml` recorded for THIS run.
+ *
+ * Null means "the recorded refs had nothing to say" — either the caller did not
+ * opt in, or none of them holds the path — and the caller then refuses exactly as
+ * it did before. A hit is `ok` with `unmerged` set, because a citation that is
+ * true only on an unmerged branch is still true and must still be findable.
+ */
+function resolveOnEpicRefs(ref: SrcRef & { readonly kind: "file" }, ctx: SrcContext): SrcResolution | null {
+  const targets = epicTargets(ref, ctx);
+  if (targets.length === 0) return null;
+  let short: SrcResolution | null = null;
+  for (const target of targets) {
+    const lines = epicBlobLines(target);
+    if (lines === null) continue;
+    const highest = ref.endLine ?? ref.startLine;
+    if (highest > lines) {
+      short ??= refused(
+        `${target.path} has ${lines} line(s) on \`${target.ref}\` (unmerged, in ${target.repo}); `
+        + `cited line ${highest}`,
+      );
+      continue;
+    }
+    return {
+      ok: true, outcome: "ok", unmerged: target.ref,
+      message: `resolves on \`${target.ref}\` — unmerged`,
+    };
+  }
+  return short;
+}
+
+/**
+ * Which (repo, ref, path) the recorded branches offer for this citation.
+ *
+ * `build.epic_branch` is a flat list of branch names with no repo beside them, so
+ * `epicRefsOf` pairs every recorded branch with every declared repo and the ones
+ * that do not exist there simply do not resolve. The PATH mapping mirrors
+ * `pathBases` exactly — repo-qualified goes to that repo, a bare path goes to the
+ * repo checked out AT the workspace root and then to `<repo>/…` as a spelling of
+ * `repo:…` — so a citation cannot resolve on a ref under a mapping the working
+ * tree would have refused.
+ */
+function epicTargets(ref: SrcRef & { readonly kind: "file" }, ctx: SrcContext): readonly EpicTarget[] {
+  const refs = ctx.epicRefs ?? [];
+  if (refs.length === 0 || isAbsolute(ref.path)) return [];
+  const out: EpicTarget[] = [];
+  const push = (repo: string, path: string): void => {
+    for (const candidate of refs) {
+      if (candidate.repo === repo) out.push({ ...candidate, path });
+    }
+  };
+  if (ref.repo !== null) {
+    push(ref.repo, ref.path);
+    return out;
+  }
+  // (b) the workspace root — which is a repo only when one is checked out there.
+  for (const candidate of refs) {
+    const rel = ctx.repos.get(candidate.repo) ?? "";
+    if (rel === "" || rel === ".") out.push({ ...candidate, path: ref.path });
+  }
+  // (d) `api/src/Hunt.cs` as a spelling of `api:src/Hunt.cs`.
+  const slash = ref.path.indexOf("/");
+  const named = slash > 0 ? ref.path.slice(0, slash) : "";
+  if (named !== "" && ctx.repos.has(named)) push(named, ref.path.slice(slash + 1));
+  return out;
+}
+
+/** The recorded refs a refusal should admit it tried, for the "tried …" half. */
+function epicRefLabels(ref: SrcRef & { readonly kind: "file" }, ctx: SrcContext): readonly string[] {
+  const seen = new Set<string>();
+  for (const target of epicTargets(ref, ctx)) {
+    seen.add(`\`${target.ref}\` in ${target.repo} (recorded epic branch)`);
+  }
+  return [...seen];
 }
 
 // --- the evidence indexes ---------------------------------------------------
@@ -1299,4 +1512,6 @@ export function clearSrcCaches(): void {
   graphCache.clear();
   mapCache.clear();
   urlCache.clear();
+  epicBlobCache.clear();
+  epicBlobReads = 0;
 }

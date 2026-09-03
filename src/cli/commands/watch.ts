@@ -190,7 +190,9 @@ function open(args: ParsedArgs): OpenedOrExit {
     process.stderr.write(`tldrx watch: ${notFound(runId)} in ${PROJECT_WORK_DIR}/\n`);
     return { exit: EXIT_NOT_FOUND };
   }
-  const ctx = toSrcContext(loadWorkspace(root), store.runDir);
+  // The gate side of the #140 opt-in: a card may cite code that is only on this
+  // run's epic branch, and the worktree it used to be read from is a temp directory.
+  const ctx = toSrcContext(loadWorkspace(root), store.runDir, { epicRefs: true });
   return { runId: store.runId, runDir: store.runDir, root, ctx, cards: loadCards(store.runDir, ctx) };
 }
 

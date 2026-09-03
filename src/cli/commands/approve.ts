@@ -155,7 +155,7 @@ function readAgentEvidence(root: string, store: RunStore, override: string | und
   }
   const text = readFileSync(path, "utf8");
   const gate = `${entry.phase.id}/${entry.stage.id}`;
-  const validation = validateEvidence(text, toSrcContext(loadWorkspace(root), store.runDir), { gate });
+  const validation = validateEvidence(text, toSrcContext(loadWorkspace(root), store.runDir, { epicRefs: true }), { gate });
 
   // `verdict` is the ONE kind that means "a person decides" rather than "this
   // note is broken". Reported on its own, at its own exit, because the operator's

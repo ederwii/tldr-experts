@@ -17,7 +17,7 @@
  * The `git` in these tests is real: a stubbed one would let the blob read be wrong
  * in the same direction as the code under test.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -27,6 +27,11 @@ import { validateHandoff } from "../src/core/text/handoff.ts";
 import { loadWorkspace, toSrcContext } from "../src/hooks/lib/workspace.ts";
 import { clearSrcCaches } from "../src/core/text/index.ts";
 import { makeWorkspace, FIXTURE_RUN, type TempWorkspace } from "./fixtures/tempWorkspace.ts";
+import { fastestOf, perfBudgetMs, spawnTestTimeout } from "./fixtures/machineLoad.ts";
+
+// Every test here `git init`s a repo and the code under test spawns `git cat-file`,
+// so the budget is the load-aware one: a fixed number would measure the box (#43).
+setDefaultTimeout(spawnTestTimeout());
 
 /** The branch the live run cut, spelled exactly as `run.yml` recorded it. */
 const EPIC = "epic/money-and-payments";
@@ -187,6 +192,25 @@ describe("#140 — a citation that resolves only on the run's unmerged epic ref"
     const outcome = await check(w, ["02-how/handoff.md"]);
     expect(outcome.status).toBe("passed");
     expect(outcome.detail).toContain("unmerged");
+  });
+
+  /**
+   * The objection that made design (b) look expensive, measured rather than assumed.
+   *
+   * A blob read is a `spawnSync`, and `hooks/claim-sources.ts` runs this validator on
+   * EVERY PreToolUse Write/Edit inside a 50 ms budget (spec §0). The guard is not a
+   * cap, it is reachability: the hook's spelling of the context leaves `epicRefs`
+   * empty, so no amount of epic-only citations can reach a subprocess from a write.
+   * 200 of them are validated here — the live #140 document had 96 — and the budget
+   * is the same one `test/text.test.ts` holds a 256 KB handoff to.
+   */
+  test("200 epic-only citations stay inside the 50 ms write-time budget on the hook path", () => {
+    const w = withEpicBranch();
+    const hookCtx = toSrcContext(loadWorkspace(w.root), w.runDir);
+    const bullet = `- the handler validates [src: api:${EPIC_ONLY}:28]\n`;
+    const text = `# Handoff\n\n## Findings\n${bullet.repeat(200)}\n`
+      + "## Decisions\n\n## Unknowns\n\n## Evidence ledger\n";
+    expect(fastestOf(3, () => validateHandoff(text, hookCtx))).toBeLessThan(perfBudgetMs(50));
   });
 
   test("the PreToolUse hook spelling of the context carries NO epic refs, so it spawns no git", () => {
