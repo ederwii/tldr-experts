@@ -241,7 +241,7 @@ for files whose citations §2.6 would refuse to count.
 | `effort` | `low\|medium\|high\|xhigh\|max` | n (unset) | Passed to the sub-agent as `--effort`. **Unset ⇒ the flag is not passed at all** and the CLI uses its own default |
 | `budget_usd` | number >0 | y | Stage ceiling and the sub-agent's `--max-budget-usd` share |
 | `timeout_s` / `dry_run_allowed` | int >0 / bool | n (900 / `true`) | Wall clock for sub-agent and `cmd` checks `[assumption]`; `dry_run_allowed: false` refuses `--dry-run` on this stage |
-| `inputs.required` / `.optional` | path[] | y / n | **The only files the sub-agent gets**; `{repo}` expands per repo |
+| `inputs.required` / `.optional` | path[] | y / n | **The only files the sub-agent gets**; `{repo}` expands per repo. A declared path that resolves to NOTHING is NAMED — one `## Inputs` entry under `### Declared, but not on disk` with its own `[src: absent:<path>]` token, and one stdout line — never silently dropped (gh #131) |
 | `inputs.seed` | bool | n (`false`) | Also give this stage **the run's seed documents**, whatever `run new --seed` recorded for it in `run.yml` (§6.1) `[assumption]` |
 | `outputs[].path` / `.sections` | rel path / str[] | y | File written; H2 headings that must exist and be non-empty |
 | `questions` | {path, max} | n | Interview file and question cap |
@@ -1909,6 +1909,8 @@ next(run, dry_run):
   elif b.phase(st).remaining < sy.budget_usd and b.on_exceed == block: append(budget.blocked); exit 2
   if any(!exists(i) for i in sy.inputs.required): exit 1
   inputs = sy.inputs.required + present(sy.inputs.optional)          # ONLY these files
+  absent = missing(sy.inputs.required + sy.inputs.optional)          # NAMED in the prompt and on stdout,
+                                                                     # never dropped in silence (gh #131)
   prompt = render(stage.md, {run, repos, inputs, facts: grep(facts.yml, sy.area/r.repos), conventions,
            budget_usd}) + concat(expert_block(e) for e in select_experts(sy, r))
            + dispatch_notes(.agent/<st.id>/dispatch-notes.md, +/<story>/ on build)   # §5 prompt order
@@ -2648,7 +2650,11 @@ attempt and the **DoD results recovered from `events.jsonl`** — and it **spawn
 that `result.json` as the envelope, narrows it with the SAME fail-closed parser (unreadable ⇒ `changes`, never
 `approve`), and settles the story through the same code a spawned verdict goes through: `approve` ⇒ `done`, `changes`
 ⇒ one requeue then `blocked`, attempt accounting untouched. A host that never writes `result.json` has produced no
-verdict and spends no attempt. The turn is recorded `cost_usd: null, metered: false` (a `cost_usd`/`tokens` in the
+verdict and spends no attempt. **`result_schema` is the ONLY statement of the envelope's shape** (gh #133): the
+reviewer prompt points at it and deliberately does not paraphrase it — a second copy in prose is what let a host
+dictate the shape from memory and lose a cycle. The prompt does state the one bound the schema cannot: the verdict's
+prose is copied into a `check.passed`/`check.failed` payload, and §2.9's 4096-byte payload cap REFUSES an oversize
+one whole rather than truncating it. The turn is recorded `cost_usd: null, metered: false` (a `cost_usd`/`tokens` in the
 envelope declares it), the `check: review` event carries `source: host`, and **no `agent.spawned` is emitted** — a
 `task.started` with `role: reviewer, mode: prepare` is. A settled handshake removes the bundle; its presence is what
 says a review is outstanding, and `--discard-pending` bins it like any other.

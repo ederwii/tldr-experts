@@ -4,6 +4,53 @@
 
 ### Fixed
 
+- **The `feature` preset declared map inputs without `{repo}`, so 02-how and 03-plan ran with
+  no map at all (#131).** `stages/how/stage.yml` asked for `.tldrx/map/architecture.md` and
+  `.tldrx/map/conventions.md`. `tldrx init` writes the map PER REPO —
+  `.tldrx/map/<repo>/architecture.md`, one folder per repo, six `MAP_DOCS` documents each
+  (`src/core/map/buildMap.ts:74-79`) — so nothing on disk could ever answer either
+  declaration. They are OPTIONAL inputs, `declaredInputsOf` drops an optional input that is
+  not present, and the two stages the map exists FOR were dispatched without it on every
+  feature-scope run. 01-what and 05-watch carried the token the whole time, which is why two
+  stages of five went wrong quietly for as long as they did.
+  - Both paths gain `{repo}`. `03-plan`'s `.tldrx/map/workspace.md` deliberately does NOT:
+    it is the one map document written at the map ROOT, and only in multi-repo mode
+    (`buildMap.ts:83-88`), so the token would point it at a file that never exists. The
+    reasoning is now a comment in the file so the next sweep leaves it alone too.
+  - **Swept all thirteen scope presets.** `workflows/*.yml` compose the same five stage files
+    and declare no `inputs:` of their own, so `how` was the only offender — and both facts are
+    now pinned: one test asserts no shipped stage declares a `MAP_DOCS` document without
+    `{repo}` (derived from `MAP_DOCS`, so a seventh document is covered the day it is added),
+    another asserts no preset grows stage inputs that would bypass it.
+  - **And an absence is now SAID rather than performed.** A declared input that resolves to
+    nothing is named twice: as a `### Declared, but not on disk` block in the prompt's
+    `## Inputs`, carrying that path's own `[src: absent:<path>]` token so the stage's handoff
+    can source a negative claim on it, and as one line on stdout. This is the half that turns
+    the next such typo into a first-run report instead of a live incident — a sub-agent that is
+    not told what is missing cannot tell "the map says nothing about this" from "I was never
+    shown the map", and its handoff records the second as the first.
+
+- **The reviewer prompt described the result envelope in prose beside the schema that defines
+  it (#133).** `REVIEW_SCHEMA` is handed to `claude --json-schema` on the spawned path and
+  written verbatim into the bundle as `pending.json` → `result_schema` on the host path, so
+  both halves of the handshake already answered the same question — and the prompt then
+  described the same envelope again, key by key, in the one document a model reads most
+  carefully. Two live reviews lost cycles to it, one because the host dictated the shape from
+  memory, which is exactly what a prose paraphrase invites.
+  - `## Produce` now points at `result_schema` (and at `--json-schema` for a spawn) as the
+    single authority and states no field of it. The verdicts moved to their own `## Verdict`
+    section, because WHICH verdict to return is judgement and judgement is what the prompt is
+    for; #77's `refuted`-needs-a-citation contract is judgement too and is untouched.
+  - **The 4096-byte payload cap is now named.** The verdict's prose is copied into a
+    `check.passed`/`check.failed` payload, `validateEvent` refuses any payload over
+    `MAX_PAYLOAD_BYTES` (`src/core/events/Event.ts:121`) and `EventLog.append` THROWS rather
+    than writing a shortened line — so an essay-length verdict does not arrive trimmed, it
+    takes the ledger entry down with it. The number is imported into the prompt, never typed,
+    so changing the cap changes the promise.
+  - Pinned by a test that asserts the prompt REFERENCES rather than RESTATES, off the schema
+    itself: every field name in `REVIEW_SCHEMA` — top level and inside a `fixlist` row, minus
+    the verdict words — must not appear in the rendered prompt. A field added to the schema is
+    covered without anyone remembering to add it here.
 - **Pruning a blocked story's worktree destroyed the work inside it (#129).** Measured live
   2026-09-02 on run `260830-money-and-payments` (aparece-v2), reported by the unattended
   driver: a story's Definition of Done failed, the executor settled it `blocked`, and

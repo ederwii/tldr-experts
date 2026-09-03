@@ -192,6 +192,12 @@ them — and `result_schema`, the exact envelope your sub-agent must return. Wri
 `review/result.json`, optionally with `cost_usd` / `tokens` beside it; without a `cost_usd` the
 turn is recorded `cost_usd: null, metered: false`, which is what a host-billed turn is.
 
+**Read the shape out of `result_schema`; do not type it from memory.** It is the single
+statement of the envelope, the prompt points at it rather than paraphrasing it, and the one
+review that lost a cycle to this had a host that dictated the keys from recollection. The one
+thing the schema cannot say, and the prompt does: the verdict's prose ends up in an
+`events.jsonl` payload, and a payload over **4096 bytes is refused whole** — not truncated.
+
 Everything downstream is the ordinary path: `approve` finishes the story with its evidence,
 `changes` requeues it once and blocks it the second time, and an envelope that cannot be read
 is `changes` — never `approve`. A review you never write costs the story no attempt at all.

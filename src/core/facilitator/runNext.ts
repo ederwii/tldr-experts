@@ -444,6 +444,7 @@ async function runStage(
   // sent. `--prepare` and `--dry-run` also get the per-section breakdown.
   const ledger = assembled.ledger;
   notes.push(...assembled.truncatedNotes);
+  notes.push(...assembled.absentNotes);
   notes.push(...describeDispatchNotes(assembled.dispatchNotes));
   if (options.mode === "prepare" || options.dryRun) notes.push(...renderLedger(ledger));
 
@@ -1557,6 +1558,34 @@ export function declaredInputsOf(
   ]);
 }
 
+/**
+ * The declared inputs that resolve to NOTHING, in declaration order (gh #131).
+ *
+ * The complement of `declaredInputsOf`, off exactly the same list: `{repo}` is
+ * expanded first, so `.tldrx/map/{repo}/architecture.md` reports the repo that is
+ * missing one and not the token; a PATTERN keeps its shape, because `<id>.md`
+ * naming no file is a declaration that went unanswered rather than a file that is
+ * gone (the rule `missing` already follows).
+ *
+ * Required gaps are exit 1 before a prompt is ever assembled, so in practice this
+ * is the OPTIONAL half — the half that used to disappear in silence. It is derived
+ * from both lists anyway: which of them a path sits in is a fact about `stage.yml`,
+ * not about whether an absence is worth stating.
+ */
+export function absentDeclaredInputs(
+  store: RunStore,
+  spec: StageSpec,
+  ctx: PathContext,
+): readonly string[] {
+  const declared = expandAll([...spec.requiredInputs, ...spec.optionalInputs], store.run.repos);
+  return missing(declared, ctx);
+}
+
+/** One stdout line per declared input nothing resolves to. */
+export function describeAbsentInputs(absent: readonly string[]): readonly string[] {
+  return absent.map((path) => `declared input absent: ${path} — the stage runs without it`);
+}
+
 /** The run's seed documents for a stage that asked for them — see below. */
 export function seedInputsFor(spec: StageSpec, stage: RunStage, ctx: PathContext): readonly string[] {
   return seedInputsOf(spec, stage, ctx);
@@ -1574,6 +1603,8 @@ export interface AssembledPrompt {
   readonly ledger: ContextLedger;
   /** Declared inputs the shared byte budget could not fit whole. */
   readonly truncatedNotes: readonly string[];
+  /** Declared inputs that resolve to nothing — one stdout line each (gh #131). */
+  readonly absentNotes: readonly string[];
   /** The host's own context for this cycle, already read and capped. */
   readonly dispatchNotes: DispatchNotes;
 }
@@ -1622,8 +1653,10 @@ export function assemblePrompt(
   // the prompt's material, so every mode sees the same document: a note left for
   // a headless stage is as much a caveat as one left for a prepared bundle.
   const dispatchNotes = loadDispatchNotes(store.runDir, [stage.id]);
+  const absentInputs = absentDeclaredInputs(store, spec, ctx);
   const parts = renderParts({
     stageMd,
+    absentInputs,
     dispatchNotes: dispatchNotes.body,
     previousAttempt: describePreviousAttempt(stage, {
       outputs: expandAll(spec.planned.outputs, store.run.repos),
@@ -1656,6 +1689,7 @@ export function assemblePrompt(
     bundles,
     ledger,
     truncatedNotes: describeTruncatedInputs(inlined),
+    absentNotes: describeAbsentInputs(absentInputs),
     dispatchNotes,
   };
 }

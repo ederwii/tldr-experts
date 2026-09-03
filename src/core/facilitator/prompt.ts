@@ -99,6 +99,18 @@ export interface PromptParts {
   /** Prepended to `## Inputs` when something was cut to fit (see `seedInputs.ts`). */
   readonly inputsNote?: string;
   /**
+   * Declared inputs that resolve to NOTHING — the stage asked for them and no file
+   * on either base answers (gh #131).
+   *
+   * They cannot be carried in `inputs` because there is no content to carry, and
+   * dropping them was the bug: `stages/how/stage.yml` declared
+   * `.tldrx/map/architecture.md`, `tldrx init` writes `.tldrx/map/<repo>/…`, and
+   * two stages of every feature run silently had no map. An absence this framework
+   * knows about is stated, in the `absent:` grammar §2.8 already gives a handoff
+   * for sourcing a negative claim — never performed.
+   */
+  readonly absentInputs?: readonly string[];
+  /**
    * The rendered body of `## Dispatch notes` — the host's own context for this
    * cycle, already read and capped by `loadDispatchNotes`. Empty when the
    * operator left no file, and then no section is emitted at all.
@@ -154,7 +166,7 @@ export function renderParts(parts: PromptParts): readonly PromptPart[] {
   out.push({
     kind: "inputs",
     name: INPUTS_HEADING,
-    text: `\n## ${INPUTS_HEADING}\n\n${renderInputs(parts.inputs, parts.inputsNote).trimEnd()}\n`,
+    text: `\n## ${INPUTS_HEADING}\n\n${renderInputs(parts.inputs, parts.inputsNote, parts.absentInputs).trimEnd()}\n`,
   });
 
   // Between `## Inputs` and `## Previous attempt` (spec §5). Never substituted:
@@ -240,9 +252,14 @@ export function cutSection(markdown: string, heading: string): string {
   return [...lines.slice(0, start), ...lines.slice(end)].join("\n");
 }
 
-export function renderInputs(inputs: readonly PromptInput[], note?: string): string {
+export function renderInputs(
+  inputs: readonly PromptInput[],
+  note?: string,
+  absent: readonly string[] = [],
+): string {
   if (inputs.length === 0) {
-    return "_No input files are declared for this stage. Do not go looking for others._";
+    const none = "_No input files are declared for this stage. Do not go looking for others._";
+    return absent.length === 0 ? none : [none, "", ...absentBlocks(absent)].join("\n").trimEnd();
   }
   const out = [...preamble(inputs)];
   const trimmed = (note ?? "").trim();
@@ -271,7 +288,36 @@ export function renderInputs(inputs: readonly PromptInput[], note?: string): str
     }
     out.push(`${fence}`, input.content.replace(/\n$/, ""), `${fence}`, "");
   }
+  out.push(...absentBlocks(absent));
   return out.join("\n");
+}
+
+/** The heading the absent declared inputs are listed under. */
+export const ABSENT_INPUTS_HEADING = "Declared, but not on disk";
+
+/**
+ * The declared inputs nothing resolves to, said out loud (gh #131).
+ *
+ * Named rather than dropped, for the same reason `preamble` names the inputs the
+ * byte budget could not inline and `priorOutputs` names the outputs it could not
+ * re-show: a sub-agent that is not told what is missing cannot tell "the map says
+ * nothing about this" from "I was never shown the map", and its handoff records
+ * the second as the first. The `absent:` token is spelled here so the citation the
+ * agent needs is a copy rather than a recollection.
+ */
+function absentBlocks(absent: readonly string[]): readonly string[] {
+  if (absent.length === 0) return [];
+  const out = [`### ${ABSENT_INPUTS_HEADING}`, ""];
+  out.push(
+    "This stage declared the paths below and NOTHING resolves to them. There is no",
+    "content for them anywhere, so do not reconstruct it and do not treat their",
+    "subject as settled. A claim that needs one of them is a negative claim, and it",
+    "is sourced with that path's own `absent:` token:",
+    "",
+  );
+  for (const path of absent) out.push(`- \`${path}\` — cite as \`[src: absent:${path}]\``);
+  out.push("");
+  return out;
 }
 
 /** The flag on an input the story's own worktree has no copy of. */
