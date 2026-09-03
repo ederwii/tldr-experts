@@ -47,6 +47,55 @@ export interface FakeResult {
   readonly tools?: readonly FakeTool[];
 }
 
+export interface FakeCodexResult {
+  readonly sessionId: string;
+  readonly structured?: unknown;
+  readonly usage?: {
+    readonly input_tokens: number;
+    readonly cached_input_tokens?: number;
+    readonly output_tokens: number;
+  };
+  readonly error?: string;
+}
+
+/**
+ * One writer for every Codex stand-in and recorded-transcript replay.
+ *
+ * The object form emits the measured 0.152.0 event sequence. The string form
+ * validates and normalises a recorded JSONL transcript before replaying it, so
+ * neither fake owns a second newline/emission implementation.
+ */
+export function codexOutput(source: FakeCodexResult | string): string {
+  if (typeof source === "string") {
+    const lines = source.trim().split("\n").filter((line) => line.trim() !== "");
+    for (const line of lines) {
+      const parsed: unknown = JSON.parse(line);
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        throw new Error("recorded Codex transcript contains a non-object JSONL event");
+      }
+    }
+    return `${lines.join("\n")}\n`;
+  }
+
+  const lines: unknown[] = [
+    { type: "thread.started", thread_id: source.sessionId },
+    { type: "turn.started" },
+  ];
+  if (source.error !== undefined) {
+    lines.push({ type: "turn.failed", error: { message: source.error } });
+  } else {
+    lines.push({
+      type: "item.completed",
+      item: { id: "item_0", type: "agent_message", text: JSON.stringify(source.structured ?? {}) },
+    });
+    lines.push({
+      type: "turn.completed",
+      usage: source.usage ?? { input_tokens: 1234, cached_input_tokens: 0, output_tokens: 56 },
+    });
+  }
+  return `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`;
+}
+
 /** True when the caller asked for the streaming format. */
 export function wantsStream(argv: readonly string[]): boolean {
   const at = argv.indexOf("--output-format");

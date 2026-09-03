@@ -23,7 +23,7 @@ import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
 import { loadWorkspace } from "../../hooks/lib/workspace.ts";
 import { agentDir } from "../facilitator/paths.ts";
 import { PendingError, resultPath, writeBundle, writeRaw, type PendingStage } from "../facilitator/pending.ts";
-import { spawnAgent } from "../facilitator/spawnAgent.ts";
+import { agentProvider, providerBudgetAdvisory, spawnAgent } from "../facilitator/spawnAgent.ts";
 import { setProgressCeiling, setProgressTitle } from "../ui/bus.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
 import { yymmdd } from "../run/newRun.ts";
@@ -209,6 +209,7 @@ async function propose(
   let costUsd = 0;
   let sessionId: string | null = null;
   let metered = true;
+  const providerAdvisory = mode === "headless" ? providerBudgetAdvisory(agentProvider(), ceiling) : null;
 
   if (mode === "commit") {
     try {
@@ -251,7 +252,7 @@ async function propose(
           `the triage sub-agent failed — ${outcome.error ?? "no result"}`,
           outcome.metered
             ? `  $${costUsd.toFixed(2)} of $${ceiling.toFixed(2)} spent; nothing was written to ${SPLIT_YML}`
-            : `  the Codex turn was unmetered (USD unknown); nothing was written to ${SPLIT_YML}`,
+            : `  ${providerAdvisory ?? "the provider turn was unmetered in dollars"}; nothing was written to ${SPLIT_YML}`,
         ],
       };
     }
@@ -301,7 +302,7 @@ async function propose(
       `proposed ${String(file.runs.length)} run(s) from ${inventory.source} — `
         + (metered
           ? `$${costUsd.toFixed(2)} of $${ceiling.toFixed(2)}`
-          : "Codex tokens recorded; USD unmetered (the planning ceiling was not provider-enforced)")
+          : (providerAdvisory ?? "the provider turn was unmetered in dollars"))
         + (sessionId === null ? "" : ` · session ${sessionId}`),
       ...file.runs.map((run) =>
         `  ${run.slug} (${run.scope}, ${run.size}, $${run.budget_usd.toFixed(2)}, `

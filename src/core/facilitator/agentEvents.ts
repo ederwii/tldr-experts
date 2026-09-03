@@ -149,6 +149,9 @@ export function resolveCodexResultDoc(stdout: string): Record<string, unknown> |
     const parsed = parseLine(text);
     if (parsed !== null) structured = parsed;
   }
+  if (completed && structured === null && failure === null) {
+    failure = "the Codex structured output envelope was unreadable";
+  }
   if (!completed && failure === null) return null;
   return {
     result,

@@ -50,8 +50,12 @@ export function readsLabel(reads: number, cap: number): string {
  */
 export const STOPPED_BY_MAX_READS = "max_reads";
 
-export function readCapError(reads: number, cap: number): string {
-  return `stopped after ${String(reads)} reads: the stage's max_reads is ${String(cap)}. `
+export function readCapError(reads: number, cap: number, provider: "claude" | "codex" = "claude"): string {
+  const unit = provider === "codex" ? "command executions" : "reads";
+  const remedy = provider === "codex"
+    ? "or reduce the commands the stage needs to execute."
+    : "or give the stage the files it needs as declared inputs instead.";
+  return `stopped after ${String(reads)} ${unit}: the stage's max_reads is ${String(cap)}. `
     + "Raise `max_reads` in the stage file or `--max-reads <n>` for one run, "
-    + "or give the stage the files it needs as declared inputs instead.";
+    + remedy;
 }

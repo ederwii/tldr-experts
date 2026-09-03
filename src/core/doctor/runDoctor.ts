@@ -80,10 +80,10 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorOutcome> 
   };
 }
 
-/** Only the selected automated runner is required; both remain visible in the report. */
+/** Claude remains the pilot harness; Codex becomes an additional requirement when selected. */
 export function providerTools(tools: readonly EnvTool[], provider: AgentProvider): readonly EnvTool[] {
   return tools.map((tool) => {
-    if (tool.id === "claude") return { ...tool, required: provider === "claude" };
+    if (tool.id === "claude") return { ...tool, required: true };
     if (tool.id === "codex") return { ...tool, required: provider === "codex" };
     return tool;
   });

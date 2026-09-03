@@ -11,9 +11,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import {
-  AgentStream, detectStreamFormat, resolveResultDoc, toolTarget, type AgentEvent,
+  AgentStream, detectStreamFormat, resolveCodexResultDoc, resolveResultDoc, toolTarget, type AgentEvent,
 } from "../src/core/facilitator/agentEvents.ts";
 import { interpret } from "../src/core/facilitator/spawnAgent.ts";
+import { codexOutput } from "../src/core/facilitator/fakeTranscript.ts";
+import { readCapError } from "../src/core/facilitator/readCap.ts";
 import { LineSplitter } from "../src/core/runtime/lineSplitter.ts";
 
 const TRANSCRIPT = readFileSync(
@@ -134,6 +136,71 @@ describe("the real Codex transcript", () => {
     expect(outcome.costUsd).toBe(0);
     expect(outcome.sessionId).toBe("01a06472-03bb-7ba3-abd2-820c96afe586");
     expect(outcome.envelope?.outputs).toEqual(["tiny.md"]);
+  });
+
+  test("the shared Codex emitter produces a stream consumed by the real parser", () => {
+    const stdout = codexOutput({
+      sessionId: "01a06472-03bb-7ba3-abd2-820c96afe586",
+      structured: { outputs: ["answer.md"], questions_asked: [], notes: "done" },
+      usage: { input_tokens: 12, cached_input_tokens: 3, output_tokens: 4 },
+    });
+    const outcome = interpret(0, stdout, "", false, "codex");
+    expect(outcome.ok).toBe(true);
+    expect(outcome.sessionId).toBe("01a06472-03bb-7ba3-abd2-820c96afe586");
+    expect(outcome.envelope?.outputs).toEqual(["answer.md"]);
+    expect(outcome.usage.cache_read_input_tokens).toBe(3);
+  });
+
+  test("junk Codex lines are dropped without throwing", () => {
+    const stream = new AgentStream("codex");
+    for (const line of ["", "not json", "{broken", "[]", '{"type":"future.event"}']) {
+      expect(stream.push(line)).toEqual([]);
+    }
+  });
+
+  test("a Codex stream with no completed result event fails with a reason", () => {
+    const stdout = '{"type":"thread.started","thread_id":"session-only"}\n';
+    const outcome = interpret(0, stdout, "", false, "codex");
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toContain("without a parseable result event");
+  });
+
+  test("turn.failed carries the provider error and cannot report success", () => {
+    const stdout = codexOutput({
+      sessionId: "failed-session",
+      error: "the model provider refused the turn",
+    });
+    const outcome = interpret(1, stdout, "", false, "codex");
+    expect(outcome.ok).toBe(false);
+    expect(outcome.isError).toBe(true);
+    expect(outcome.error).toContain("the model provider refused the turn");
+  });
+
+  test("a timed-out Codex turn names the timeout", () => {
+    const outcome = interpret(143, "", "", true, "codex");
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toBe("codex timed out (killed after the stage's timeout_s)");
+  });
+
+  test("a completed Codex turn with an unreadable envelope fails closed", () => {
+    const stdout = [
+      '{"type":"thread.started","thread_id":"bad-envelope"}',
+      '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"```json\\n{\\\"outputs\\\":[]}\\n```"}}',
+      '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}',
+    ].join("\n");
+    const doc = resolveCodexResultDoc(stdout);
+    expect(doc?.is_error).toBe(true);
+    const outcome = interpret(0, stdout, "", false, "codex");
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toContain("structured output envelope was unreadable");
+  });
+
+  test("Codex max_reads reports command executions, not fictional file reads", () => {
+    expect(readCapError(20, 20, "codex")).toBe(
+      "stopped after 20 command executions: the stage's max_reads is 20. "
+      + "Raise `max_reads` in the stage file or `--max-reads <n>` for one run, "
+      + "or reduce the commands the stage needs to execute.",
+    );
   });
 });
 

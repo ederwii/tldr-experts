@@ -440,7 +440,7 @@ async function trainWithPreflight(options: TrainOptions, said: string[]): Promis
         `${options.expert}/${area.id}: the ${task.key} sub-agent failed — ${outcome.error ?? "no result"}`,
         outcome.metered
           ? `  $${round2(outcome.costUsd).toFixed(2)} spent and recorded; nothing was written to competencies.yml`
-          : "  the Codex turn was unmetered (tokens recorded, USD unknown); nothing was written to competencies.yml",
+          : `  ${providerWarning ?? "the provider turn was unmetered in dollars"}; nothing was written to competencies.yml`,
       ], sum(tasks));
     }
   }

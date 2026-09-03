@@ -182,6 +182,11 @@ export function buildClaudeArgs(request: AgentRequest): readonly string[] {
 }
 
 export function buildCodexArgs(request: AgentRequest, schemaPath: string): readonly string[] {
+  // Verified against `codex exec --help` in codex-cli 0.152.0: when the optional
+  // positional [PROMPT] is omitted, instructions are read from stdin. The same
+  // help output lists --ephemeral, --json, --color, --sandbox, --output-schema
+  // and --config. Keeping the prompt out of argv preserves the shared contract
+  // for large, multiline stage prompts.
   const args: string[] = [
     "exec", "--ephemeral", "--json", "--color", "never",
     "--sandbox", request.role === "reviewer" ? "read-only" : "workspace-write",
@@ -282,7 +287,7 @@ export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
               publish({ kind: "reads", count: reads, cap });
               if (cap > 0 && reads >= cap) {
                 capped = true;
-                publish({ kind: "error", message: readCapError(reads, cap) });
+                publish({ kind: "error", message: readCapError(reads, cap, provider) });
                 controller.abort();
               }
             }
@@ -303,7 +308,7 @@ export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
       reads,
       stoppedBy: STOPPED_BY_MAX_READS,
       // The cap is the reason, whatever the dying process said on its way out.
-      error: readCapError(reads, cap),
+      error: readCapError(reads, cap, provider),
     }
     : { ...interpreted, reads, stoppedBy: null };
   // A process that died before its `result` event never emitted `done`. Say so,

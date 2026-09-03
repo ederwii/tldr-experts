@@ -45,13 +45,13 @@ describe("env manifest", () => {
     expect(bun!.min_version).toBe("1.3.0");
   });
 
-  test("doctor requires the selected runner and keeps the other one optional", async () => {
+  test("doctor always requires its Claude harness and also requires Codex when selected", async () => {
     const manifest = await loadEnvManifest();
     const claude = providerTools(manifest.tools, "claude");
     const codex = providerTools(manifest.tools, "codex");
     expect(claude.find((tool) => tool.id === "claude")?.required).toBe(true);
     expect(claude.find((tool) => tool.id === "codex")?.required).toBe(false);
-    expect(codex.find((tool) => tool.id === "claude")?.required).toBe(false);
+    expect(codex.find((tool) => tool.id === "claude")?.required).toBe(true);
     expect(codex.find((tool) => tool.id === "codex")?.required).toBe(true);
   });
 });

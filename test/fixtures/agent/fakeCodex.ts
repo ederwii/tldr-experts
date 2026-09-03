@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { codexOutput } from "../../../src/core/facilitator/fakeTranscript.ts";
 
 const argv = process.argv.slice(2);
 const argvLog = process.env.FAKE_CODEX_ARGV_LOG;
@@ -22,16 +23,10 @@ if (base !== undefined && configured !== undefined) {
   const structured = JSON.stringify({
     outputs: Object.keys(files), questions_asked: [], notes: "canned by fakeCodex",
   });
-  const lines = [
-    { type: "thread.started", thread_id: sessionId },
-    { type: "turn.started" },
-    { type: "item.completed", item: { id: "item_0", type: "agent_message", text: structured } },
-    { type: "turn.completed", usage: { input_tokens: 1234, cached_input_tokens: 0, output_tokens: 56 } },
-  ];
-  process.stdout.write(`${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+  process.stdout.write(codexOutput({ sessionId, structured: JSON.parse(structured) }));
   process.exit(0);
 }
 
 void prompt;
 
-process.stdout.write(readFileSync(join(import.meta.dir, "codex-jsonl.jsonl"), "utf8"));
+process.stdout.write(codexOutput(readFileSync(join(import.meta.dir, "codex-jsonl.jsonl"), "utf8")));

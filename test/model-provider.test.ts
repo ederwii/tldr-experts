@@ -57,7 +57,9 @@ describe("the provider selection keeps Claude as the byte-identical default", ()
     process.env.TLDRX_AGENT_PROVIDER = "codex";
     const shown = describeSpawn(request(tmp()));
     expect(shown).toStartWith("codex exec ");
+    expect(shown).toContain("--ephemeral");
     expect(shown).toContain("--json");
+    expect(shown).toContain("--color never");
     expect(shown).toContain("--output-schema '<output-schema.json>'");
     expect(shown).toContain("--sandbox workspace-write");
     expect(shown).not.toContain(" exec review ");
@@ -68,6 +70,13 @@ describe("the provider selection keeps Claude as the byte-identical default", ()
     process.env.TLDRX_AGENT_PROVIDER = "codex";
     expect(describeSpawn({ ...request(tmp()), role: "reviewer" })).toContain("--sandbox read-only");
     expect(describeSpawn({ ...request(tmp()), role: "developer" })).toContain("--sandbox workspace-write");
+  });
+
+  test("configured Codex effort uses the CLI's config override", () => {
+    process.env.TLDRX_AGENT_PROVIDER = "codex";
+    expect(describeSpawn({ ...request(tmp()), effort: "low" })).toContain(
+      "--config 'model_reasoning_effort=\"low\"'",
+    );
   });
 
   test("the unsupported provider-side USD cap is warned, never presented as enforced", () => {
