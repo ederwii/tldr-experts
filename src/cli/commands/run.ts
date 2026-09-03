@@ -19,7 +19,7 @@ import { attendRun } from "../../core/run/attend.ts";
 import { ATTENDED_BY, type AttendedBy } from "../../core/run/RunFile.ts";
 import { parallelFlag } from "./next.ts";
 import { cancelRun, unlockRun } from "../../core/run/rescue.ts";
-import { closeRun, describeStateCommit } from "../../core/run/closeRun.ts";
+import { closeRun, describeOpenQuestions, describeStateCommit } from "../../core/run/closeRun.ts";
 import { nowRfc3339 } from "../../hooks/lib/actor.ts";
 import { createRun } from "../../core/run/newRun.ts";
 import { setGatePolicy } from "../../core/run/setGatePolicy.ts";
@@ -440,6 +440,10 @@ async function runCancel(argv: readonly string[]): Promise<number> {
         const closed = await closeRun(
           resolved.store.run, root, resolved.store.runDir, resolved.store.runId, "cancelled",
         );
+        // Cancelling IS closing, so an unanswered question is named here too
+        // (#141) — a run abandoned over one is the case that most needs saying.
+        const asked = describeOpenQuestions(closed.openQuestions);
+        if (asked !== null) process.stdout.write(`run cancel: ${asked}\n`);
         const said = describeStateCommit(closed.state);
         if (said !== null) process.stdout.write(`run cancel: ${said}\n`);
       }

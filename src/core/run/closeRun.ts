@@ -1,6 +1,7 @@
 /**
- * What a run does on its way out: take back the epic worktrees it opened, and
- * commit the state it wrote (issue #16 and issue #102).
+ * What a run does on its way out: take back the epic worktrees it opened, commit
+ * the state it wrote, and NAME the questions nobody answered (issues #16, #102
+ * and #141).
  *
  * The policy has one home because it has three callers and they are three
  * different commands: `tldrx next` closing the last stage, `tldrx approve`
@@ -47,10 +48,38 @@
  * It never pushes. Spec §5 — publishing a branch is the operator's decision — and
  * a local commit on their own branch is the smallest thing that makes the next
  * `git pull` clean.
+ *
+ * ## Unanswered questions (#141)
+ *
+ * Filed as "a question's declared default never fired". Measured, and the
+ * mechanism does not exist: §2.7's metadata keys are `id status area asked_by
+ * asked_at` plus the optional `affects:` — there is no `default:` and no
+ * `timeout:` to declare, and the only thing in the codebase called a default is
+ * `tldrx interview --yes-to-defaults` (`core/interview/reply.ts:46`), which an
+ * operator invokes by hand, takes option A, and says `[assumption]` about it.
+ * Nothing ages a question into an answer.
+ *
+ * The fail-open underneath the report IS real, and it is this: the auto gate's
+ * `questions` condition reads only the CURRENT stage's declared `questions.md`
+ * (`autoGate.ts:150`), a human `approve` does not look at questions at all, and
+ * before this the close read `run.yml` and git and nothing else. A question left
+ * open in `01-what` could age through every later stage, past a signed gate and
+ * out of the run without one word about it — on `260830-money-and-payments` the
+ * driver reported exactly that shape at close and blamed a default for not
+ * firing.
+ *
+ * So the close reads every phase's `questions.md` and names what is still open,
+ * saying in the same sentence that nothing was going to answer them. It is a
+ * REPORT: it changes no exit code, blocks no close and writes not one byte —
+ * a run that ends with a question open is allowed to, it just may not do it
+ * quietly.
  */
-import { relative, resolve, sep } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join, relative, resolve, sep } from "node:path";
 import { cleanUpRunEpicWorktrees, commitPathsOnly, currentBranch, git, headSha } from "../build/git.ts";
 import { PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../paths.ts";
+import { openBlocks, parseQuestions, unreadableQuestionHeadings } from "../text/questions.ts";
+import { QUESTION_PHASES } from "./questionCards.ts";
 import type { RunFile } from "./RunFile.ts";
 
 /** Where the run's own state ended up, and why, when it did not end up committed. */
@@ -66,10 +95,33 @@ export type StateCommit =
   | { readonly kind: "detached" }
   | { readonly kind: "failed"; readonly detail: string };
 
+/** One question the run is closing without an answer (gh #141). */
+export interface OpenQuestion {
+  readonly id: string;
+  /** Run-relative path of the `questions.md` it is parked in. */
+  readonly path: string;
+  readonly title: string;
+  /**
+   * The heading is one the §2.7 parser cannot read, so this question was never
+   * even ASKED — it is on disk and invisible to every reader in the framework.
+   * Worse than open, and reported apart so it cannot be mistaken for merely open.
+   */
+  readonly unreadable: boolean;
+}
+
+/** Stands in for the title of a block whose heading the §2.7 parser cannot read. */
+export const UNREADABLE_TITLE =
+  "the heading cannot be read — §2.7 wants `## Qn · Title`; `tldrx questions lint --fix` converts it";
+
 export interface RunCloseOutcome {
   /** Worktree paths actually removed — empty when the run says keep. */
   readonly worktreesRemoved: readonly string[];
   readonly state: StateCommit;
+  /**
+   * Questions still open as the run ends (gh #141). Never fatal — the close
+   * reports them, it does not refuse over them.
+   */
+  readonly openQuestions: readonly OpenQuestion[];
 }
 
 /** Which verb closed the run. It reaches the commit message and nothing else. */
@@ -83,8 +135,73 @@ export async function closeRun(
   reason: CloseReason = "closed",
 ): Promise<RunCloseOutcome> {
   const worktreesRemoved = run.keep_worktrees === true ? [] : await cleanUpRunEpicWorktrees(root, runDir);
+  // Read BEFORE the state commit, so the report describes the run as it was
+  // asked about rather than as the commit left it. Nothing here writes, so the
+  // order is a readability choice, not a correctness one.
+  const openQuestions = collectOpenQuestions(runDir);
   const state = await commitRunState(run, root, runDir, runId, reason);
-  return { worktreesRemoved, state };
+  return { worktreesRemoved, state, openQuestions };
+}
+
+/**
+ * Every question still open across the run's five phases, in phase order.
+ *
+ * `QUESTION_PHASES` is `questionCards.ts`'s list, imported rather than repeated:
+ * a close that walked four files and `tldrx questions` five would make "0 open"
+ * mean two different things, which is the defect its own comment warns about.
+ *
+ * `openBlocks` is `autoGate.ts`'s definition of open — `status: open` — for the
+ * same reason. A block whose `[Answer]:` slot has text but whose metadata still
+ * says `open` counts as open here, exactly as it does at the gate: the hook that
+ * flips the status is what records the fact, and until it has run the answer is
+ * in nobody's `facts.yml`.
+ */
+export function collectOpenQuestions(runDir: string): readonly OpenQuestion[] {
+  const out: OpenQuestion[] = [];
+  for (const phase of QUESTION_PHASES) {
+    const rel = `${phase}/questions.md`;
+    const abs = join(runDir, phase, "questions.md");
+    if (!existsSync(abs)) continue;
+    let text: string;
+    try {
+      text = readFileSync(abs, "utf8");
+    } catch {
+      continue;
+    }
+    // First, because a heading the parser cannot read is invisible to the loop
+    // below — `parseQuestions` reads it as absent, not as half a block (§2.7).
+    for (const id of unreadableQuestionHeadings(text)) {
+      out.push({ id, path: rel, title: UNREADABLE_TITLE, unreadable: true });
+    }
+    try {
+      for (const block of openBlocks(parseQuestions(text).blocks)) {
+        out.push({ id: block.id, path: rel, title: block.title, unreadable: false });
+      }
+    } catch {
+      // A questions.md nobody can read is not "no open questions" — it is a file
+      // that has to be looked at, which is exactly what this reports.
+      out.push({ id: "(the file)", path: rel, title: UNREADABLE_TITLE, unreadable: true });
+    }
+  }
+  return out;
+}
+
+/**
+ * The one sentence all three close routes print, or null when there is nothing
+ * to say.
+ *
+ * It NAMES the questions, and then it refuses the belief that produced #141: a
+ * reader who is told only "2 open" can still assume something was going to
+ * handle them. Nothing is, and the sentence says so where the assumption is
+ * made.
+ */
+export function describeOpenQuestions(open: readonly OpenQuestion[]): string | null {
+  if (open.length === 0) return null;
+  const named = open.map((q) => `${q.id} · ${q.title} (${q.path})`).join("; ");
+  return `${String(open.length)} question(s) never answered — ${named}. `
+    + "Nothing was going to answer them: a §2.7 question declares no default and no timeout, and "
+    + "`tldrx interview --yes-to-defaults` is invoked by hand. Answer them with `tldrx answer`, "
+    + "or record why they did not need answering.";
 }
 
 /**
