@@ -13,7 +13,9 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SrcContext } from "../text/srcToken.ts";
 import { WATCHERS_DIR, WATCH_PHASE } from "./Watcher.ts";
-import { describeWatcherIssues, parseWatcherCard, type WatcherCard } from "./watcherFile.ts";
+import {
+  describeUnmergedRefs, describeWatcherIssues, parseWatcherCard, unmergedRefsOf, type WatcherCard,
+} from "./watcherFile.ts";
 
 export interface LoadedCard {
   /** The file name stem — the feature id a `watch check` takes. */
@@ -81,6 +83,17 @@ export function renderWatchList(runId: string, cards: readonly LoadedCard[]): st
     + `${String(cards.length - verified)} draft${broken === 0 ? "" : `, ${String(broken)} not validating`}`,
     "",
   );
+  // gh #143 — the card is not wrong and its status is not downgraded, so this is
+  // a footer rather than a column: a reader of the trunk is told which branch the
+  // paths are on, and nothing about the table's meaning changes.
+  const unmerged = cards.filter((loaded) => loaded.card.epicOnly.length > 0);
+  if (unmerged.length > 0) {
+    out.push(
+      `${String(unmerged.length)} card(s) cite paths no merged ref has — follow them on the branch, not the trunk:`,
+      ...unmerged.map((loaded) => `  ${loaded.id}: ${describeUnmergedRefs(loaded.card) ?? ""}`),
+      "",
+    );
+  }
   return out.join("\n");
 }
 
@@ -101,9 +114,13 @@ export function watchListJson(runId: string, cards: readonly LoadedCard[]): stri
         status: statusOf(loaded),
         valid: loaded.card.ok,
         signal: loaded.card.signalLine,
+        // gh #143 — as DATA, not only as prose. A CI job that greps the table for
+        // "unmerged" is the thing `--json` exists to make unnecessary.
+        unmerged_refs: unmergedRefsOf(loaded.card),
       })),
       verified: cards.filter((card) => statusOf(card) === "verified").length,
       invalid: cards.filter((card) => !card.card.ok).length,
+      unmerged: cards.filter((card) => card.card.epicOnly.length > 0).length,
     },
     null,
     2,
@@ -130,6 +147,11 @@ export interface CheckReport {
  */
 export function checkCard(loaded: LoadedCard): CheckReport {
   const lines: string[] = [`${loaded.path}`];
+  // gh #143 — said on every outcome, because it is true on every outcome and it
+  // is the reader's answer to "where do I look?". It changes no verdict: a card
+  // whose only remark is this one is still `ok`.
+  const unmerged = describeUnmergedRefs(loaded.card);
+  const note = unmerged === null ? [] : [`  ${unmerged}`];
   const issues = loaded.card.issues;
   if (issues.length > 0) {
     const dead = issues.filter((issue) => issue.kind === "source").length;
@@ -137,7 +159,7 @@ export function checkCard(loaded: LoadedCard): CheckReport {
     const parts: string[] = [];
     if (dead > 0) parts.push(`${String(dead)} citation(s) that no longer resolve`);
     if (shape > 0) parts.push(`${String(shape)} problem(s) with the card itself`);
-    lines.push(`  ${parts.join(", ")}:`, ...describeWatcherIssues(issues));
+    lines.push(`  ${parts.join(", ")}:`, ...describeWatcherIssues(issues), ...note);
     return { ok: false, lines };
   }
   const stamped = loaded.card.watcher?.status ?? "draft";
@@ -147,12 +169,14 @@ export function checkCard(loaded: LoadedCard): CheckReport {
       + (loaded.card.decidedStatus === "draft"
         ? ` — still absent: ${loaded.card.absentSignals.join(", ")}`
         : " — re-run the stage or fix the front matter"),
+      ...note,
     );
     return { ok: false, lines };
   }
   lines.push(
     `  ok — ${stamped}; every source resolves`
     + (loaded.card.signalLine === null ? "" : `\n  signal: ${loaded.card.signalLine}`),
+    ...note,
   );
   return { ok: true, lines };
 }

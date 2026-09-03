@@ -40,11 +40,38 @@ export interface WatcherIssue extends ValidationIssue {
   readonly kind: WatcherIssueKind;
 }
 
+/**
+ * A citation that resolves, and resolves ONLY somewhere unmerged (gh #143).
+ *
+ * Kept off `issues` deliberately, and as its own list rather than a third
+ * `WatcherIssueKind`: every issue this file records makes `ok` false, and this
+ * one must not. A card whose Signal cites the epic's own code is the ORDINARY
+ * card — the Watch stage's whole subject is code that nothing has merged (#16) —
+ * so refusing it would refuse a card for being right.
+ *
+ * What #140 refuses is the SILENCE, and until now the cards were the one artefact
+ * it could not reach: `tldrx watch` and `watch arm` opt into the epic refs
+ * (`toSrcContext(…, { epicRefs: true })`), so such a citation resolved and nobody
+ * was told which branch it resolved on. This is the list that names the branch,
+ * shaped exactly like `handoff.ts`'s `epicOnly` so the two readers cannot drift.
+ */
+export interface WatcherEpicOnly extends ValidationIssue {
+  /** 1-based line in the card. */
+  readonly line: number;
+  /** The unmerged ref it resolved on — `SrcResolution.unmerged`, verbatim. */
+  readonly src: string;
+}
+
 export interface WatcherCard {
   /** Null when the front matter is missing or does not validate. */
   readonly watcher: Watcher | null;
   /** Everything wrong with the card. Empty means it may be written as-is. */
   readonly issues: readonly WatcherIssue[];
+  /**
+   * Citations that resolve only on an unmerged ref (gh #143). Non-fatal, and
+   * excluded from `ok` by construction — it is a separate list, not an issue.
+   */
+  readonly epicOnly: readonly WatcherEpicOnly[];
   /** The status the card DESERVES, computed from its Signal sources. */
   readonly decidedStatus: WatcherStatus;
   /** Signal items citing `absent:` — the reason a card stays `draft`. */
@@ -97,6 +124,7 @@ export function parseWatcherCard(text: string, ctx: SrcContext, fileStem?: strin
   }
 
   const absentSignals: string[] = [];
+  const epicOnly: WatcherEpicOnly[] = [];
   let signalLine: string | null = null;
 
   for (const name of WATCHER_CHECKED_SECTIONS) {
@@ -130,7 +158,20 @@ export function parseWatcherCard(text: string, ctx: SrcContext, fileStem?: strin
       for (const ref of bullet.token.refs) {
         if (name === WATCHER_SIGNAL_SECTION && ref.kind === "absent") absentSignals.push(ref.path);
         const resolution = resolveSrc(ref, ctx, SRC_SECTION);
-        if (resolution.ok) continue;
+        if (resolution.ok) {
+          // `ok`, and true of nothing merged (gh #143/#140). Named here, never
+          // pushed to `issues`: the citation is right, and a reader of the trunk
+          // still has to be told which branch to look on.
+          if (resolution.unmerged !== undefined) {
+            epicOnly.push({
+              path: name,
+              line: bullet.line,
+              src: resolution.unmerged,
+              message: `[src: ${ref.raw}] — ${resolution.message ?? "resolves on an unmerged ref"}`,
+            });
+          }
+          continue;
+        }
         issues.push({ path: name, line: bullet.line, kind: "source", message: `[src: ${ref.raw}] — ${resolution.message ?? "unresolvable"}` });
       }
     }
@@ -147,7 +188,28 @@ export function parseWatcherCard(text: string, ctx: SrcContext, fileStem?: strin
   }
 
   const decidedStatus: WatcherStatus = absentSignals.length === 0 ? "verified" : "draft";
-  return { watcher, issues, decidedStatus, absentSignals, signalLine, ok: issues.length === 0 };
+  // `ok` reads `issues` and nothing else, so `epicOnly` cannot fail a card no
+  // matter how long it gets — which is the whole point of it being a second list.
+  return { watcher, issues, epicOnly, decidedStatus, absentSignals, signalLine, ok: issues.length === 0 };
+}
+
+/** The distinct unmerged refs a card's citations resolved on, in first-seen order. */
+export function unmergedRefsOf(card: WatcherCard): readonly string[] {
+  return [...new Set(card.epicOnly.map((note) => note.src))];
+}
+
+/**
+ * The one phrase every card surface prints, or null when the card cites nothing
+ * unmerged.
+ *
+ * Spelled to match `claim-sources`' detail (`checks.ts`: `on unmerged refs: 4
+ * (epic/money-and-payments — unmerged)`) on purpose — a reader who has learned
+ * that sentence at a gate should not have to learn a second one at a card.
+ */
+export function describeUnmergedRefs(card: WatcherCard): string | null {
+  if (card.epicOnly.length === 0) return null;
+  const refs = unmergedRefsOf(card).map((ref) => `${ref} — unmerged`).join(", ");
+  return `on unmerged refs: ${String(card.epicOnly.length)} (${refs})`;
 }
 
 /** The first fenced block under `## Query`, without its fences. Null when there is none. */
