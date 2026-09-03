@@ -2463,6 +2463,19 @@ settles it — `S1, S2 merged by an earlier ``tldrx next`` — what each carried
 `no story merged`). A declared dod command whose result is in no event is named the same way, against its log; the
 negative `- no Definition of Done ran` is written only when the stories declare no commands.
 
+**And so does the `Cost:` header (#138).** The same defect, one line above the sections, and the reason neither #137's
+measurements nor its tests could see it: they pin `FAKE_BUILD_COST` to zero, and at zero both writes read `$0.00` and
+agree. At `0.11` they do not — measured on `f5936d2`, `next` → `reject` → `next` rewrote `Cost: $0.44 of $200.00
+ceiling` as `Cost: $0.00`, because the header was fed the sum of the tasks THAT process spawned. The header now reads
+the PHASE: `run.yml`'s `stage.cost_usd` for the stage, plus what this invocation has spent and has not yet handed back.
+`run.yml` is chosen over the `agent.result` events because it is the ledger the budget is derived from and it validates
+its own arithmetic — `rollUp` recomputes it from `stage.tasks` on every save, `budget.yml` mirrors it, `run status` and
+the dashboard read it, and a `run.yml` whose `budget.spent_usd` drifts from its task rows by more than a cent is
+refused outright. A `tldrx reject` does nothing to that number, which is the right answer: the money was spent.
+`ExecutorOutcome.costUsd` stays invocation-scoped, since that is what the facilitator ADDS to the run budget and a
+phase-to-date figure there would double-count every re-entry. When `run.yml` cannot be read at all, the header falls
+back to this invocation's spend and says so in brackets rather than presenting it as the phase's.
+
 **Safety.** A repo with uncommitted changes on the branch an epic would be cut from is refused **before** anything is
 cut (exit `2`, the stage stays `ready`, the message names the files and the fix) — counting PRODUCT paths only, since
 under `root_is_repo: true` the framework's own `tldrx-work/` and `.tldrx/` live inside that repo and this very command
