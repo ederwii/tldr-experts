@@ -84,7 +84,16 @@ import {
  * named in its `affects:` metadata (`affects`). It reports a marker, never a
  * reconciliation — nothing in the document's own words is changed.
  *
- * `story.base_fastforwarded` was added 2026-08-31, and is the only event in this
+ * `story.work_rescued` was added 2026-09-02 (#129) and is the SECOND event that
+ * records tldrx touching git on the operator's behalf: uncommitted changes found
+ * in a story worktree the framework was about to prune, committed to the story
+ * branch first so they reach a ref. Its payload carries the story, the repo, the
+ * branch, the sha and the status the story settled at. It is appended only when a
+ * commit was really made — a rescue that could not commit keeps the worktree
+ * instead, which is a line on stdout and in the review log, because nothing
+ * happened to git.
+ *
+ * `story.base_fastforwarded` was added 2026-08-31, and is the first event in this
  * set that records tldrx MOVING A REF. Design §F.2: a story branch that sits
  * behind its epic tip is fast-forwarded before a developer is dispatched onto it,
  * and a moved branch that left no line in the log would be the framework
@@ -102,7 +111,7 @@ export const EVENT_TYPES = [
   "agent.spawned", "agent.result",
   "question.asked", "question.answered",
   "gate.requested", "gate.approved", "gate.rejected", "gate.revoked", "gate.policy_changed",
-  "story.reopened", "story.base_fastforwarded", "story.review_retried",
+  "story.reopened", "story.base_fastforwarded", "story.review_retried", "story.work_rescued",
   "result.unreadable",
   "operator_note",
   "check.passed", "check.failed",

@@ -166,6 +166,13 @@ function bullet(item: NumberedEvent): string | null {
       return `${prefix}story ${text(payload.story) || "?"}'s base fast-forwarded to`
         + ` \`${text(payload.base) || "?"}\` — ${text(payload.from) || "?"} → ${text(payload.to) || "?"}`
         + ` (${String(payload.commits ?? "?")} commit(s))`;
+    // The other one (#129). A narrative that showed a story blocked and its
+    // worktree gone, with nothing in between, would be the narrative of the
+    // incident this event exists to make impossible: work destroyed in silence.
+    case "story.work_rescued":
+      return `${prefix}story ${text(payload.story) || "?"}'s UNCOMMITTED work rescued to`
+        + ` \`${text(payload.branch) || "?"}\` as ${text(payload.sha) || "?"}`
+        + ` before its worktree was pruned (settled \`${text(payload.status) || "?"}\`)`;
     // The only line in the narrative a PERSON wrote about themselves. It is
     // rendered in place, at its own timestamp, which is the entire point of the
     // event existing (issue #46) — the alternatives it replaced were a note

@@ -74,18 +74,64 @@ export interface FixFinding {
   readonly detail: string;
   /** Bounds the fix: things the author must NOT do about this finding. */
   readonly doNot: readonly string[];
-  /** Has the fix landed? Written `no`; a human sets it. */
+  /**
+   * Does the file CLAIM the fix has landed? Written `no`; a human sets it.
+   *
+   * A claim, deliberately — not a fact. `resolvedSha` is what turns it into one,
+   * and `isOpen` is where the difference is spent.
+   */
   readonly resolved: boolean;
+  /**
+   * The commit the claim points at — `Resolved: yes <sha>` — or null for a bare
+   * `Resolved: yes` that points at nothing (#130).
+   *
+   * Measured 2026-09-02 on run `260830-money-and-payments`: `S4-1.md` ended with
+   * a bare `Resolved: yes` and a result.json describing the fix in detail, over a
+   * branch that did not contain it — the worktree holding the fix had been pruned
+   * before anything reached a ref (#129). The audit trail said a live defect was
+   * closed. This field is the evidence half of that sentence; whether the sha is
+   * really on the branch is a git question, answered by the executor.
+   */
+  readonly resolvedSha: string | null;
 }
 
-/** A finding still owed work: `fix-now` and not yet resolved. */
+/**
+ * A finding still owed work: `fix-now`, and not closed by an EVIDENCED claim.
+ *
+ * The `resolvedSha !== null` half is the whole of #130 in one clause. A bare
+ * `Resolved: yes` is somebody's report that a fix landed; it closes nothing,
+ * because the framework that refuses an uncited claim everywhere else may not
+ * make an exception for claims about itself.
+ */
 export function isOpen(finding: FixFinding): boolean {
-  return finding.disposition === "fix-now" && !finding.resolved;
+  return finding.disposition === "fix-now" && !(finding.resolved && finding.resolvedSha !== null);
 }
 
 export function openFindings(findings: readonly FixFinding[]): readonly FixFinding[] {
   return findings.filter(isOpen);
 }
+
+/**
+ * Findings that CLAIM to be resolved and name no commit — the shape of the lie.
+ *
+ * Told apart from an ordinary open finding on purpose: "nobody has fixed this
+ * yet" and "somebody says they fixed this and there is nothing to look at" are
+ * different situations, and only the second one needs the record corrected.
+ */
+export function unevidencedClaims(findings: readonly FixFinding[]): readonly FixFinding[] {
+  return findings.filter((f) => f.disposition === "fix-now" && f.resolved && f.resolvedSha === null);
+}
+
+/**
+ * What a `Resolved:` line says when a claim was made and could not be verified.
+ *
+ * Not `no` — that would erase the fact that somebody reported a fix, which is
+ * itself information a human needs. Not `yes` either. The third word is the
+ * honest one, and it is the reason this is written back into the file at all: an
+ * audit record that keeps saying `yes` after the check failed is exactly the
+ * failure #130 is named after.
+ */
+export const CLAIMED_UNVERIFIED = "claimed-unverified";
 
 // --- the envelope ----------------------------------------------------------
 
@@ -192,6 +238,7 @@ export function parseFixFindings(value: unknown): ParsedFixlist {
         ? (row.do_not as readonly unknown[]).map(str).filter((line) => line !== "")
         : [],
       resolved: false,
+      resolvedSha: null,
     });
   }
   if (findings.length === 0 && problems.length === 0) {
@@ -279,9 +326,15 @@ export function renderFixlist(parts: FixlistParts): string {
     "> is a full one, `approve` or `changes`.",
     ">",
     "> **A `fix-now` finding keeps this story out of `done`.** Close it when the fix lands by",
-    "> setting its `Resolved:` line to `yes`, or route it elsewhere by changing its",
-    "> `Disposition:` — `defer-with-log` (it reaches the owner through `retro.md`),",
-    "> `out-of-scope`, or `refuted`, which must carry an `[src: …]` proving the finding wrong.",
+    "> writing `Resolved: yes <sha>` — the commit the fix landed as, on the STORY branch —",
+    "> or route it elsewhere by changing its `Disposition:`: `defer-with-log` (it reaches the",
+    "> owner through `retro.md`), `out-of-scope`, or `refuted`, which must carry an `[src: …]`",
+    "> proving the finding wrong.",
+    ">",
+    "> A bare `Resolved: yes` closes nothing. The sha is checked — it must be a commit in the",
+    "> repo and reachable from the story branch — and a claim that does not check out is",
+    `> rewritten here as \`Resolved: ${CLAIMED_UNVERIFIED}\`, with the reason. This record is`,
+    "> held to the same standard as every other claim the framework makes.",
     "",
   ];
   for (const finding of parts.findings) {
@@ -290,7 +343,7 @@ export function renderFixlist(parts: FixlistParts): string {
       "",
       `Where: ${finding.where === "" ? "(not stated)" : finding.where}`,
       `Disposition: **${finding.disposition}**`,
-      `Resolved: ${finding.resolved ? "yes" : "no"}`,
+      `Resolved: ${resolvedLine(finding)}`,
       "",
     );
     if (finding.detail !== "") lines.push(finding.detail, "");
@@ -299,10 +352,31 @@ export function renderFixlist(parts: FixlistParts): string {
   return `${lines.join("\n").trimEnd()}\n`;
 }
 
+/**
+ * `no`, `yes <sha>`, or a bare `yes` for a claim that came in without one.
+ *
+ * The bare form is rendered rather than corrected on purpose: this function's
+ * job is to write down what the finding says, and `isOpen` is what decides that
+ * it does not close anything.
+ */
+function resolvedLine(finding: FixFinding): string {
+  if (!finding.resolved) return "no";
+  return finding.resolvedSha === null ? "yes" : `yes ${finding.resolvedSha}`;
+}
+
 const HEADING_RE = /^##\s+(\d{1,4})\s+·\s+(.+?)(?:\s+\[([^\]]*)\])?\s*$/;
 const WHERE_RE = /^Where:\s*(.*)$/;
 const DISPOSITION_RE = /^Disposition:\s*\*\*([a-z-]+)\*\*\s*(?:—\s*(.*))?$/;
-const RESOLVED_RE = /^Resolved:\s*(\S+)/;
+const RESOLVED_RE = /^Resolved:\s*(\S+)\s*(.*)$/;
+/**
+ * The sha inside the REST of a `Resolved: yes …` line.
+ *
+ * Deliberately loose about what surrounds it — `yes 9f2c1ab`, `yes (9f2c1ab)`,
+ * `yes — commit 9f2c1ab` all read the same — and strict about the token itself.
+ * Seven hex characters is git's own abbreviation floor; anything shorter is not
+ * a sha somebody could look up.
+ */
+const RESOLVED_SHA_RE = /\b([0-9a-f]{7,40})\b/;
 const DO_NOT_RE = /^Do NOT:\s*(.*)$/;
 const STORY_RE = /^#\s+Fix list\s+—\s+(\S+)\s+·/;
 
@@ -320,7 +394,7 @@ export function parseFixlistFile(text: string): readonly FixFinding[] {
   const findings: FixFinding[] = [];
   let current: {
     n: number; finding: string; severity: string;
-    where: string; disposition: Disposition | null; resolved: boolean;
+    where: string; disposition: Disposition | null; resolved: boolean; resolvedSha: string | null;
     detail: string[]; doNot: string[];
   } | null = null;
   const flush = (): void => {
@@ -334,6 +408,7 @@ export function parseFixlistFile(text: string): readonly FixFinding[] {
       detail: current.detail.join("\n").trim(),
       doNot: current.doNot,
       resolved: current.resolved,
+      resolvedSha: current.resolvedSha,
     });
   };
   for (const line of text.split("\n")) {
@@ -344,7 +419,7 @@ export function parseFixlistFile(text: string): readonly FixFinding[] {
         n: Number(heading[1] ?? "0"),
         finding: (heading[2] ?? "").trim(),
         severity: (heading[3] ?? "unrated").trim(),
-        where: "", disposition: null, resolved: false, detail: [], doNot: [],
+        where: "", disposition: null, resolved: false, resolvedSha: null, detail: [], doNot: [],
       };
       continue;
     }
@@ -364,6 +439,11 @@ export function parseFixlistFile(text: string): readonly FixFinding[] {
     const resolved = RESOLVED_RE.exec(line);
     if (resolved !== null) {
       current.resolved = (resolved[1] ?? "").toLowerCase() === "yes";
+      // Only a `yes` may carry a sha. A `no` line with a hex word in it is prose,
+      // and reading a sha out of it would invent evidence for a claim nobody made.
+      current.resolvedSha = current.resolved
+        ? RESOLVED_SHA_RE.exec((resolved[2] ?? "").toLowerCase())?.[1] ?? null
+        : null;
       continue;
     }
     const doNot = DO_NOT_RE.exec(line);
@@ -386,6 +466,30 @@ export function fixlistStory(text: string): string | null {
     if (match !== null) return match[1] ?? null;
   }
   return null;
+}
+
+/**
+ * Rewrite finding `n`'s `Resolved:` line to say the claim did not check out (#130).
+ *
+ * The file is the state — a host closes a finding by writing one word in it — so
+ * correcting the state means correcting the file. Everything else about the
+ * finding is left exactly as it was: the disposition still routes it, the detail
+ * still describes it, and the next read sees an OPEN `fix-now` because
+ * `claimed-unverified` is not `yes`.
+ *
+ * Text in, text out, no I/O: the caller owns the file, and this owns the sentence.
+ */
+export function markUnverified(text: string, n: number, why: string): string {
+  let at: number | null = null;
+  return text.split("\n").map((line) => {
+    const heading = HEADING_RE.exec(line);
+    if (heading !== null) {
+      at = Number(heading[1] ?? "0");
+      return line;
+    }
+    if (at !== n || !RESOLVED_RE.test(line)) return line;
+    return `Resolved: ${CLAIMED_UNVERIFIED} — ${why}`;
+  }).join("\n");
 }
 
 // --- where it lives --------------------------------------------------------
@@ -507,7 +611,9 @@ export function renderFixlistSection(rel: string, findings: readonly FixFinding[
     for (const finding of rest) {
       lines.push(
         `- ${String(finding.n)}. ${finding.finding} — \`${finding.disposition}\``
-        + (finding.resolved ? " (resolved)" : ""),
+        + (finding.resolved
+          ? finding.resolvedSha === null ? " (claimed resolved, no sha — still open)" : ` (resolved ${finding.resolvedSha})`
+          : ""),
       );
     }
     lines.push("");
