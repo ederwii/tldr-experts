@@ -6,6 +6,15 @@ import { codexOutput, codexPromptMarker } from "../../../src/core/facilitator/fa
 const argv = process.argv.slice(2);
 const argvLog = process.env.FAKE_CODEX_ARGV_LOG;
 if (argvLog !== undefined && argvLog !== "") appendFileSync(argvLog, `${JSON.stringify(argv)}\n`);
+// The BYTES the child read out of `--output-schema`, copied back where a test can
+// assert on them. The schema travels as a temp FILE that the spawn deletes on exit
+// (#148), so a test asserting on the framework's own object would have proved
+// nothing about what Codex was actually handed. Off unless a test asks for it.
+const schemaLog = process.env.FAKE_CODEX_SCHEMA_LOG;
+if (schemaLog !== undefined && schemaLog !== "") {
+  const at = argv.indexOf("--output-schema");
+  writeFileSync(schemaLog, at === -1 ? "" : readFileSync(argv[at + 1]!, "utf8"), "utf8");
+}
 
 // What the CHILD actually inherited. The spawn's env is not in argv and not in
 // the transcript, so a marker that stopped being set (gh #196) would otherwise be

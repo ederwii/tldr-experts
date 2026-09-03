@@ -27,6 +27,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertNoAttendedSpawn } from "./attended.ts";
+import { codexSchema } from "./codexSchema.ts";
 import { emitAgentEvent } from "../ui/bus.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
 import {
@@ -385,7 +386,7 @@ export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
 
   const schemaDir = provider === "codex" ? mkdtempSync(join(tmpdir(), "tldrx-codex-schema-")) : null;
   const schemaPath = schemaDir === null ? null : join(schemaDir, "output-schema.json");
-  if (schemaPath !== null) writeFileSync(schemaPath, `${JSON.stringify(request.schema ?? ENVELOPE_SCHEMA)}\n`, "utf8");
+  if (schemaPath !== null) writeFileSync(schemaPath, `${JSON.stringify(codexSchema(request.schema ?? ENVELOPE_SCHEMA))}\n`, "utf8");
   let spawned;
   try {
     spawned = await runtime.spawn(
@@ -565,7 +566,13 @@ function describe(
   }
   const errors = Array.isArray(doc.errors) ? (doc.errors as unknown[]).filter((e) => typeof e === "string") : [];
   const verdict = `${name} exited ${exitCode} with is_error=${String(doc.is_error === true)}`;
-  const named = typeof errors[0] === "string" && errors[0] !== "" ? (errors[0] as string) : "";
+  // Codex names its refusal in a pretty-printed block — `{\n  code: invalid_json_schema,\n
+  // message: …\n}` — and this sentence lands in a handoff, where every line has to carry its
+  // own citation: a multi-line reason renders as uncited continuation lines. Collapse the
+  // whitespace instead of taking the first line, because the first line of that block is `{`
+  // and the WHY is two lines down (#148). Claude's text is passed through untouched.
+  const flatten = (text: string): string => (provider === "codex" ? text.replace(/\s+/g, " ").trim() : text);
+  const named = flatten(typeof errors[0] === "string" ? (errors[0] as string) : "");
   if (named !== "") return `${verdict}: ${named}`;
   const subtype = typeof doc.subtype === "string" ? doc.subtype : "";
   if (subtype !== "" && !SUCCESS_SUBTYPES.has(subtype)) return `${verdict}: ${subtype}`;

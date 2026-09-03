@@ -161,6 +161,37 @@
   kernel had not flushed. It is pinned by a real SIGKILL of a real `tldrx next`, never a simulated
   throw, which would only have re-tested #248.
 
+- **A Codex Build review no longer dies before the reviewer runs, and the provider's own refusal
+  arrives on one line (#148).** MEASURED on a live Build smoke run, published 0.7.0 +
+  codex-cli 0.153.0: the developer stage finished and 4 tests passed, then the review failed at
+  the API with `invalid_json_schema: fixlist.items.required must include every property (missing
+  n)`. Codex's structured-output API requires every DECLARED property to be listed as required;
+  `REVIEW_SCHEMA` declares optional fields at two levels — `fixlist` itself, and `n`, `severity`,
+  `where`, `detail`, `do_not` inside each item — and the spawn wrote that object to Codex's
+  `--output-schema` file verbatim. Every Codex review was refused before it began, so the story
+  paid an attempt for a turn the provider never ran. The translation happens at the Codex spawn
+  boundary ALONE (`codexSchema`, one implementation, §7): an optional property becomes
+  `anyOf: [<its schema>, {"type": "null"}]` and joins `required`, recursively, and the review
+  parser already reads a `null` exactly as it read the absent field — so nothing about
+  fail-closed moves, and a `fixlist` verdict with nothing readable in it is still `changes`.
+  `REVIEW_SCHEMA` itself is untouched and Claude's `--json-schema` still carries it byte for
+  byte; the test asserts both directions, because a fix at a provider seam that quietly edits the
+  shared contract is the failure this one was supposed to avoid. Second half, same issue: Codex
+  names its refusal in a pretty-printed block, and that sentence is quoted into a handoff where
+  every line must carry its own `[src: …]` — a multi-line reason became uncited continuation
+  lines that failed the claim-sources check. The Codex reason is now collapsed onto one line
+  rather than cut at the first, because the first line of that block is `{` and the WHY is two
+  lines down. Claude's failure text is passed through unchanged. The acceptance is MEASURED,
+  not argued from the error message: the pre-merge reviewer ran one real
+  `codex exec -s read-only --output-schema <the translated schema>` in an isolated directory
+  against an authenticated codex-cli 0.153.0 — the issue's own version — and it exited 0 with
+  no `invalid_json_schema` and the structured output `{"verdict": "approve", "summary":
+  "Approved with no findings.", "findings": [], "fixlist": null}`. That `"fixlist": null` is
+  the translation's whole point arriving back off the wire: the field the API refused to leave
+  optional comes home as the null this parser already reads as absent. Two readings, taken by
+  different hands — the schema bytes the child was handed, asserted in the test on every run,
+  and that one live call, which is not re-run by any gate.
+
 ## 0.29.0 — 2026-09-15
 
 ### Changed

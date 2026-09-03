@@ -21,6 +21,10 @@ opposites, and they do not compose.
 - **`run auto` is an engine.** It calls `next` over and over, headless, spawning a sub-agent
   stage after stage. Claude turns carry provider-metered USD; Codex turns carry measured tokens
   and remain explicitly unmetered in dollars.
+  Both read the same review contract. Codex's structured-output API requires every declared
+  property to be listed as required, so the schema is translated at the Codex spawn boundary
+  alone — an optional field becomes a nullable one — and a `null` reads back exactly as the
+  absent field did. Developers run in `workspace-write`, reviewers in `read-only`.
 - **`run attend host` is a lock.** It sets one field, spends nothing, runs no stage. From
   then on the framework never spawns on that run — every turn is a
   `tldrx next --prepare` / `tldrx next --commit` handshake with a session you drive.
