@@ -27,6 +27,10 @@ import { validateHandoff } from "../src/core/text/handoff.ts";
 import { loadWorkspace, toSrcContext } from "../src/hooks/lib/workspace.ts";
 import { clearSrcCaches } from "../src/core/text/index.ts";
 import { makeWorkspace, FIXTURE_RUN, type TempWorkspace } from "./fixtures/tempWorkspace.ts";
+import { evaluateAutoGate } from "../src/core/run/autoGate.ts";
+import { RunStore } from "../src/core/run/RunStore.ts";
+import { loadWorkflowPreset } from "../src/core/run/workflowPreset.ts";
+import { makeFacilitatorWorkspace, type FacilitatorWorkspace } from "./fixtures/facilitator/workspace.ts";
 import { fastestOf, perfBudgetMs, spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
 // Every test here `git init`s a repo and the code under test spawns `git cat-file`,
@@ -231,5 +235,89 @@ describe("#140 — a citation that resolves only on the run's unmerged epic ref"
     const gated = validateHandoff(text, gateCtx);
     expect(gated.unresolved).toEqual([]);
     expect(gated.epicOnly.map((i) => i.message).join(" ")).toContain(EPIC);
+  });
+});
+
+/**
+ * The loose end the first pass left: `claim-sources` names the ref, and the AUTO
+ * GATE'S NOTE — the thing a person actually reads when a stage signs itself —
+ * dropped it.
+ *
+ * `claimSourcesCondition` carried `outcome.detail` into its note only when the
+ * unchecked-absence count was non-zero (`absences === 0 ? "passed" : …`), which is
+ * #110's fix reading exactly one of the two things that detail now carries. So a
+ * stage whose handoff cites nothing but the epic and has no absences at all
+ * auto-signed with a note that said, in full, `passed`.
+ */
+describe("#140 — the auto gate's note carries the ref too", () => {
+  function autoGateWorkspace(): FacilitatorWorkspace {
+    const made = makeFacilitatorWorkspace({
+      scope: "demo",
+      stages: [{
+        id: "alpha", phase: "01-what", budgetUsd: 6, gate: "auto",
+        outputs: [{ path: "01-what/handoff.md", sections: ["Findings", "Decisions", "Unknowns", "Evidence ledger"] }],
+        checks: "[claim-sources]",
+      }],
+      budgetUsd: 10,
+      gates: { alpha: "auto" },
+    });
+    // Deliberately NOT `process.env.PATH = made.binDir`: only `claude` is shimmed
+    // there, and both this fixture's setup and the blob read under test need a real
+    // `git`. Nothing here spawns an agent, so the money guard has nothing to guard.
+    const repo = join(made.root, "api");
+    mkdirSync(repo, { recursive: true });
+    writeFile(repo, "README.md", "# api\n");
+    git(repo, ["init", "-b", "main", "-q"]);
+    git(repo, ["add", "-A"]);
+    git(repo, ["commit", "-q", "-m", "main"]);
+    git(repo, ["checkout", "-q", "-b", EPIC]);
+    writeFile(repo, EPIC_ONLY, `${Array.from({ length: 30 }, (_, i) => `// line ${String(i + 1)}`).join("\n")}\n`);
+    git(repo, ["add", "-A"]);
+    git(repo, ["commit", "-q", "-m", "epic"]);
+    git(repo, ["checkout", "-q", "main"]);
+    appendFileSync(
+      join(made.runDir, "run.yml"),
+      `build: {epic_branch: ["${EPIC}"], branch_model: integration}\n`,
+      "utf8",
+    );
+    // Epic-only citations and NOT ONE absence: the exact shape whose note read `passed`.
+    writeFile(made.runDir, "01-what/handoff.md", [
+      "# Handoff",
+      "",
+      "## Findings",
+      `- the charge handler validates the amount [src: api:${EPIC_ONLY}:28]`,
+      "",
+      "## Decisions",
+      `- keep the guard where it is [src: api:${EPIC_ONLY}:12]`,
+      "",
+      "## Unknowns",
+      `- the refund path is not covered [src: api:${EPIC_ONLY}:30]`,
+      "",
+      "## Evidence ledger",
+      `- the file is on the epic branch [src: api:${EPIC_ONLY}:1]`,
+      "",
+    ].join("\n"));
+    return made;
+  }
+
+  test("a stage that cites nothing but the epic does not auto-sign with a note that just says `passed`", async () => {
+    const made = autoGateWorkspace();
+    try {
+      const store = RunStore.open(made.runDir);
+      const verdict = await evaluateAutoGate({
+        root: made.root,
+        runDir: made.runDir,
+        phaseId: "01-what",
+        stage: store.run.phases[0]?.stages[0],
+        planned: loadWorkflowPreset(made.root, store.run.scope).stages[0],
+        budget: store.budget,
+        checks: [{ id: "claim-sources", status: "passed", detail: "1 handoff(s) sourced" }],
+      } as never);
+      expect(verdict.ok).toBe(true);
+      expect(verdict.note).toContain(EPIC);
+      expect(verdict.note).toContain("unmerged");
+    } finally {
+      made.dispose();
+    }
   });
 });
