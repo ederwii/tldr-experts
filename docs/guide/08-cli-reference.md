@@ -253,6 +253,13 @@ be qualified as `<stage>:<policy>` (`plan:agent`), and a bare entry still means 
 `--attended-by host` opens the run in **attended mode**: a host session does the turns and
 the framework never spawns on it (see below). Any other value is exit `1` and no run is made.
 
+**Every close names the questions nobody answered (#141).** `cancel`, `tldrx approve` signing the
+last gate and `tldrx next` closing the last stage all read every phase's `questions.md` and print
+the ids, titles and files of everything still `status: open` — and say, in the same sentence, that
+nothing was going to answer them: a §2.7 question declares no default and no timeout, and
+`tldrx interview --yes-to-defaults` is invoked by hand. It is a report: no exit code changes and
+no close is refused. A run is allowed to end with a question open; it may not do it quietly.
+
 **`attend`** flips that on a run that is already open. `tldrx run attend host` hands the run
 to a host session; `tldrx run attend --none` hands it back. It runs no agent, spends nothing,
 moves no stage and touches no branch — it sets one field and appends one `run.attended` event.
@@ -1045,6 +1052,15 @@ declares that exact command in a repo the item or the card names unambiguously. 
 re-runs those and reports the exit each gets now against the exit the card recorded; without
 it nothing is run. A `## Query` block is never runnable — it belongs to the console named
 under `## Where`.
+
+**A citation that resolves only on the epic is NAMED, never failed (#143).** `watch` resolves a
+card's `file` sources with this run's recorded epic refs switched on, so a card may legitimately
+cite code no merged ref has — the Watch stage's whole subject is code nothing has merged. `check`
+prints `on unmerged refs: 4 (epic/money-and-payments — unmerged)` beside the card's status, `list`
+prints the same phrase in a footer naming each card, and `list --json` carries `unmerged_refs` per
+card plus an `unmerged` count. None of it changes a verdict: a card whose only remark is this one
+is still `ok` and still exits `0`. It exists so a card committed to the trunk cannot point a reader
+at paths that are not there and say nothing.
 
 **It exits `1` when a citation no longer resolves**, or when an executed command disagrees
 with the card — a check that reported rot on stdout and exited `0` would be invisible to CI.

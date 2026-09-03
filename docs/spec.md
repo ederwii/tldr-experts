@@ -816,6 +816,16 @@ Why asked: Place.TenantId is nullable [src: api:src/Scavtopia.Domain/Places/Plac
 `^\[Answer\]:[ \t]*(\S.*)$` inside it has a non-empty capture. The hook flips `status: answered` and appends the footer,
 a `facts.yml` entry (`kind: answer`, `source.q: Q4`) and a `question.answered` event, storing the text verbatim.
 
+**A question declares no default and no timeout (gh #141).** The metadata keys are the six in the table above plus
+the optional `affects:` — there is no `default:`, no `timeout:` and no `expires:`, and nothing in the framework ages an
+open question into an answer. The one thing called a default is `tldrx interview --yes-to-defaults` (§3), which an
+operator invokes by hand, takes option **A** of whatever is open at that moment, and is labelled `[assumption]` in the
+code that implements it. **Measured, and the reason this paragraph exists:** the driver of `260830-money-and-payments`
+reported at close that a question "never got an answer and never fired its default" — on a money path. There was no
+such question (the id named was a Definition-of-Done criterion from the seeded documents, not a `Q<n>` block; every
+block in that run was `answered`), and there was no such default to fire. The belief was the defect. So the close names
+what is still open and says the same sentence back (§5, **What a close reports**), and this paragraph says it here.
+
 **Superseding an earlier phase's document (gh #104).** A phase document is a point-in-time snapshot. When an answer
 recorded here flips a design an EARLIER phase already wrote down, `tldrx` appends an honest marker to that document —
 never a reconciliation:
@@ -1503,11 +1513,22 @@ hand-edited to `verified`, or one whose code has moved since, is caught months a
 **`Query`** must hold a fenced block; a described query is not a copy-paste query. **`Sources`** is prose — each citation
 above, once, with what it establishes.
 
+**A card that cites the epic NAMES the branch (gh #143).** `tldrx watch`, `watch arm` and the Watch executor resolve a
+card's `file` sources with the recorded epic refs switched on (§2.8), because the stage's whole subject is code nothing
+has merged. Such a citation is `ok` — refusing it would refuse a card for being right — and it is now also **named**, in
+the same words `claim-sources` uses at a gate: `on unmerged refs: 4 (epic/money-and-payments — unmerged)`. It appears
+beside the card's status in `watch check`, as a footer under the `watch list` table, as `unmerged_refs` on each card in
+`watch list --json`, and on the executor's own per-card line. It is carried in a list of its own, separate from
+`issues`, so it can never fail a card however long it gets. Without it a card committed to the trunk could point a
+reader at paths no merged ref has and say nothing — the exact silence #140 closed for handoffs, retros and gate notes,
+one artefact over.
+
 **Validation.** Front matter present and parseable; keys, ids and enums as above; `id` equals the file name; the six
 sections present in order; each of the four checked sections holding at least one list item, and every item in them
 ending with a token that parses and resolves. Issues are reported in two kinds: `shape` (the card is malformed — the
 stage fails) and `source` (a citation does not resolve — usually the code moving under an old card, which is what
-`watch check` exists to find).
+`watch check` exists to find). A citation that resolves ONLY on an unmerged ref is neither — it is the non-fatal
+annotation above.
 
 ### 2.17 `tldrx-work/<run>/.agent/<stage>/evidence.md`
 
@@ -2540,6 +2561,16 @@ can only resolve such a `src` against a checkout that is still on disk; cleaning
 reach before the Build handoff was even written. Every close path takes them — `tldrx next` closing the last stage,
 `tldrx approve` signing the last gate, `tldrx run cancel` — and `--keep-worktrees`, remembered on the run as
 `keep_worktrees:`, means "survive even that".
+
+**What a close REPORTS: the questions nobody answered (gh #141).** All three close paths read every phase's
+`questions.md` (§2.7) and name what is still `status: open` — id, title and the file it is parked in — plus any heading
+the §2.7 parser cannot read, which is worse than open because the block was never visible to anything. The sentence
+ends by saying that nothing was going to answer them: a question declares no default and no timeout, and
+`--yes-to-defaults` is invoked by hand. It is a REPORT and nothing else — no exit code changes, no close is refused,
+not one byte is written. This exists because the guards upstream are all narrower than they look: the auto gate's
+`questions` condition (§5, condition 2) reads only the CURRENT stage's declared file, and a human `approve` does not
+look at questions at all, so a question raised in `01-what` could age through every later stage, past a signed gate and
+out of the run without one word about it.
 
 **Uncommitted work is never pruned (#129).** Before a story worktree is removed, anything in it that has reached no ref
 is committed to the STORY branch, with a `wip(<id>): rescued from a story that settled \`<status>\`` message naming the
