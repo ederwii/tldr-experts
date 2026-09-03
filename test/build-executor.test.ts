@@ -35,7 +35,7 @@ import {
   assertWorktreeOn, cleanUpRunEpicWorktrees, GitError, partitionDirty, porcelainPath, stateDirPrefixes,
   WorktreeBranchMismatchError,
 } from "../src/core/build/git.ts";
-import { PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../src/core/paths.ts";
+import { FRAMEWORK_ROOT, PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../src/core/paths.ts";
 import {
   addBuildRun, makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions,
 } from "./fixtures/build/workspace.ts";
@@ -1520,6 +1520,54 @@ describe("branch and worktree names carry the run id", () => {
     const ws = workspace(TWO_WAVES);
     await next(ws);
     expect(RunStore.open(ws.runDir).run.build?.epic_branch).toEqual(["epic/e1"]);
+  });
+
+  /**
+   * The handoff of a SECOND `tldrx next` names the branch the FIRST one cut
+   * (issue #134).
+   *
+   * `fromDisk` — the row the handoff gets for a story that settled in an earlier
+   * invocation — used to build its own branch name, `story/<story>`, without the
+   * run id `openStory` puts in. The handoff renders that name verbatim, so a
+   * multi-invocation Build wrote `git show story/S1` into an audit document for a
+   * ref no repo has. Measured before the fix: `git rev-parse --verify story/S1`
+   * → `fatal: Needed a single revision`, exit 128.
+   *
+   * The re-entered stage is the shortest way to the path: every story is settled
+   * ON DISK and none is in this process's `outcomes`, which is what `fromDisk`
+   * means. `FAKE_BUILD_COST` is pinned to zero for the same reason `reenter`
+   * pins it below — the budget gate refuses to restart a stage whose estimate no
+   * longer fits what the phase has left.
+   */
+  test("a story settled by an EARLIER `next` is reported on a branch that exists (#134)", async () => {
+    const ws = workspace(TWO_WAVES);
+    process.env.FAKE_BUILD_COST = "0";
+
+    await next(ws);
+    reject(RunStore.open(ws.runDir), {
+      root: ws.root, actor: "alan", at: "2026-08-29T10:00:00Z", note: "run the stage again",
+    });
+    await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    const handoff = readFileSync(join(ws.runDir, "04-build", "handoff.md"), "utf8");
+    expect(handoff).toContain(`\`story/${ws.runId}/S1\``);
+    expect(handoff).toContain(`\`story/${ws.runId}/S2\``);
+    // Not just the right shape — every story ref the document cites is one a
+    // reader can open. This is the assertion that was red.
+    const cited = [...handoff.matchAll(/`(story\/[^`]+)`/g)].flatMap((m) => m[1] ?? []);
+    expect(cited).toEqual([`story/${ws.runId}/S1`, `story/${ws.runId}/S2`]);
+    for (const ref of cited) expect(() => git(ws, ["rev-parse", "--verify", ref])).not.toThrow();
+  }, 120_000);
+
+  /**
+   * ONE derivation, not two. The bug was a second formula that agreed with the
+   * first until it did not; a matching copy would only postpone it, so the name
+   * is computed in exactly one place (`storyBranchOf`) and this asserts that no
+   * new caller quietly writes the template again.
+   */
+  test("the story branch name is derived in ONE place (#134)", () => {
+    const source = readFileSync(join(FRAMEWORK_ROOT, "src/core/facilitator/executors/build.ts"), "utf8");
+    expect(source).not.toMatch(/`story\/\$\{/);
   });
 });
 

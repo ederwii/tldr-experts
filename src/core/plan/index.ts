@@ -9,5 +9,6 @@ export type { PlanReport, PlanIssue } from "./validatePlan.ts";
 export {
   BRANCH_MODELS, INTEGRATION_EPIC_SLOT, branchModelFor, branchModelOfKind, describeBranchModel,
   detectEpicChain, epicBranchOf, epicWorktreeSlotOf, integrationBranchFor, isBranchModelKind, isChained,
+  storyBranchOf,
 } from "./branchModel.ts";
 export type { BranchModel, BranchModelKind, EpicDependencyEdge } from "./branchModel.ts";

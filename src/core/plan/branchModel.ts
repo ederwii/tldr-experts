@@ -140,6 +140,25 @@ export function branchModelOfKind(kind: BranchModelKind, runId: string): BranchM
 }
 
 /**
+ * `story/<run>/<story>` — the branch ONE story's developers work on.
+ *
+ * The run id is in the name deliberately (2026-08-29 audit, §B; #40): without it
+ * four runs of the same plan all cut `story/S1`, the second found it already
+ * there, `addWorktree` checked it out as it stood, and one run's commits landed
+ * on another run's branch.
+ *
+ * It is a function rather than a template written where it is needed because it
+ * was written twice: the executor cut `story/<run>/<story>` while the handoff's
+ * reconstruction path built `story/<story>`, and a multi-invocation Build then
+ * cited a ref no repo had (#134). It is not a MODEL question — a story branch has
+ * this name under `per-epic` and `integration` alike — but this is where the
+ * branches a Build cuts are named, and one place that says so is the fix.
+ */
+export function storyBranchOf(runId: string, storyId: string): string {
+  return `story/${runId}/${storyId}`;
+}
+
+/**
  * The branch an epic's stories are cut from and merged into.
  *
  * `declared` is the epic's own `branch:` — used as-is under `per-epic`, and

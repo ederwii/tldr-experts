@@ -35,7 +35,7 @@ import { isAbsolute, join, relative } from "node:path";
 import { PROJECT_FRAMEWORK_DIR, epicWorktreeName } from "../../paths.ts";
 import {
   branchModelFor, branchModelOfKind, describeBranchModel, detectEpicChain,
-  epicBranchOf, epicWorktreeSlotOf, type BranchModel, type BranchModelKind,
+  epicBranchOf, epicWorktreeSlotOf, storyBranchOf, type BranchModel, type BranchModelKind,
 } from "../../plan/branchModel.ts";
 import {
   FALLBACK_DEFAULT_BRANCH, factsPath, loadWorkspace, type WorkspaceContext,
@@ -439,7 +439,7 @@ async function rederiveImplicitPlan(
     return;
   }
   const content = implicitPlanContent(parts);
-  const storyBranch = `story/${ctx.runId}/${IMPLICIT_STORY_ID}`;
+  const storyBranch = storyBranchOf(ctx.runId, IMPLICIT_STORY_ID);
   const commits = await commitsBetween(repoDirOf(workspace, content.repo), content.branch, storyBranch);
   if (commits > 0) {
     kept(`\`${storyBranch}\` carries ${String(commits)} commit(s) beyond \`${content.branch}\``);
@@ -1764,11 +1764,12 @@ class BuildSession {
     // run.yml (`build.epic_branch`) so its NEXT invocation, and any other run,
     // can tell "I cut this" from "this was already here".
     this.claimedEpics.add(epicBranch);
-    // The run id is IN the branch name. Without it, four runs of the same plan
-    // all cut `story/S1` — the second found it already there, `addWorktree`
+    // The run id is IN the branch name — see `storyBranchOf`, which is the ONE
+    // place that name is derived. Without the run id, four runs of the same plan
+    // all cut `story/S1`: the second found it already there, `addWorktree`
     // checked it out as it stood, and one run's commits landed on another's
     // branch (2026-08-29 audit, §B). `story/<run>/<story>` cannot collide.
-    const branch = `story/${this.ctx.runId}/${planned.story.id}`;
+    const branch = storyBranchOf(this.ctx.runId, planned.story.id);
     const worktree = this.storyWorktree(planned);
     if (!existsSync(worktree)) {
       mkdirSync(join(worktree, ".."), { recursive: true });
@@ -2654,7 +2655,10 @@ class BuildSession {
       repo: planned.story.repo,
       epic: planned.story.epic,
       epicBranch: epic === undefined ? "" : epicBranchOf(this.branchModel, epic.epic.branch),
-      branch: `story/${planned.story.id}`,
+      // The SAME derivation the cut used. This row is read by a human who may
+      // `git show` the branch it names, and a name assembled a second way here
+      // named a ref no repo had (#134).
+      branch: storyBranchOf(this.ctx.runId, planned.story.id),
       status,
       attempts: Math.max(this.reviewAttempts(planned.story.id), 1),
       dod: [],

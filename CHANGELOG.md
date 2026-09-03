@@ -114,6 +114,34 @@
     tests that encoded the old contract were updated to name a real commit on the story branch;
     they still prove that closing every finding lets the same approve settle `done`.
 
+- **The Build handoff cited a story branch that does not exist (#134).** Any run whose stories
+  did not all settle in ONE `tldrx next` — the ordinary shape once a stage is re-entered — got
+  a Findings row reading ``done — repo `app`, `story/S1`, merged into `epic/e1` ``, and
+  `git show story/S1` fails, because the branch the executor cut and merged is
+  `story/<run-id>/S1`. The run id in that name is a deliberate invariant (§"Build branch and
+  worktree names carry the run id", after the 2026-08-29 audit and #40); the handoff's
+  reconstruction path for a story settled by an earlier invocation had its own copy of the
+  formula and the copy predated the invariant.
+  - Fixed as **one derivation, not two**: `storyBranchOf(runId, storyId)` in
+    `src/core/plan/branchModel.ts` is now the only place the name is written, and all three
+    callers — the cut in `openStory`, the reconstruction in `fromDisk`, and the
+    `--discard-pending` evidence check on an implicit plan — go through it. A second formula
+    that matched would only postpone this; the name is a pure function of two ids that are
+    both in scope, exactly like `integrationBranchFor` and `epicWorktreeName`, so there is
+    nothing to persist and re-read.
+  - **Reporting only, and checked rather than assumed.** `StoryOutcome.branch` has three
+    consumers and all three render text: the handoff's `finding()`, the review log's
+    `- Branch:` line, and the retro's merge-conflict line. Every git operation and every
+    command a host is handed to run — `addWorktree`, `commitsBetween`, the reviewer bundle's
+    `diff`, the fix list's `diff` — reads `StoryContext.branch`, which `openStory` cut. No
+    ref was resolved from the wrong name, so nothing merged, moved or deleted wrongly; it was
+    a wrong name in an audit document.
+  - Red first, in `test/build-executor.test.ts`: on `30737a5` a second invocation's handoff
+    contained ``story/S1`` where `story/260829-build/S1` was expected, and
+    `git rev-parse --verify story/S1` exited 128 (`fatal: Needed a single revision`). The test
+    now asserts every `story/…` ref the handoff cites resolves in the repo, and a second one
+    asserts the template is written nowhere in the executor.
+
 ### Added
 
 - **The Plan prompt now says how to make a `touches` list COMPLETE (#132).** Measured on one
