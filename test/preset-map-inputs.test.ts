@@ -248,3 +248,133 @@ describe("gh #131 · a declared input that resolves to nothing is NAMED", () => 
     expect(result.lines.join("\n")).not.toContain("declared and not on disk");
   });
 });
+
+// ---------------------------------------------------------------------------
+// gh #136 — what 03-plan takes on a SINGLE-repo workspace
+// ---------------------------------------------------------------------------
+
+/**
+ * MEASURED, on the fixture below, before this was fixed:
+ *
+ *   declared map paths : [".tldrx/map/workspace.md"]
+ *   map PRESENT        : []
+ *   map MISSING        : [".tldrx/map/workspace.md"]
+ *   prompt carries any map bullet: false
+ *
+ * `buildMap.ts:83-88` writes `workspace.md` only in multi-repo mode, and it was
+ * 03-plan's ONLY map declaration — so a single-repo Plan ran with no map at all,
+ * while all six `MAP_DOCS` sat on disk under `.tldrx/map/<repo>/` unread.
+ *
+ * The document it actually wants is `commands.md`, and that is a gate, not a
+ * preference. Plan writes `stories/<id>.md` with a `dod.commands` list; the `plan`
+ * check validates every one against the workspace allowlist and REFUSES the story
+ * when it cannot ("an empty allowlist is not a permit", `commandAllowlist.ts:33`).
+ * Plan is shown that allowlist NOWHERE else: `.tldrx/workspace.yml` is not one of
+ * its inputs, the generic stage prompt renders no commands section (only the
+ * DEVELOPER prompt does, `prompts.ts:175`), and multi-repo's `workspace.md` carries
+ * repo name, path, stack, branch and confidence — not commands (`renderWorkspaceMap`).
+ * `.tldrx/map/<repo>/commands.md` is by definition "the only commands `tldrx` may run
+ * in this repo (mirror of `workspace.yml`)" (`renderMap.ts:27`), and until #136 no
+ * stage declared it at all.
+ *
+ * Deliberately ONLY commands.md. Plan decomposes a design 02-how has already placed
+ * on real paths, so architecture is upstream work; six documents per repo on a stage
+ * whose job is splitting and ordering is the context nobody asked for that the wave-N
+ * lesson in `seedInputs.ts` is about. Measured cost of the one document: +120 B on a
+ * 20,777 B prompt, against budgets of 98,304 (inputs) and 163,840 (prompt).
+ */
+const SINGLE_REPO = "app";
+
+const SINGLE_REPO_YML = `version: 1
+mode: single-repo
+root_is_repo: true
+root: .
+detected_at: 2026-08-28T14:02:11Z
+detected_by: "tldrx 0.1.0"
+repos:
+  - name: ${SINGLE_REPO}
+    path: .
+    default_branch: main
+    stack: [typescript]
+    package_manager: npm
+    commands: {build: "true", test: "true", lint: null, typecheck: null, run: null}
+    ci: []
+    confidence: high
+`;
+
+/** What `tldrx init` leaves on a SINGLE-repo workspace: one folder, no workspace.md. */
+function singleRepoRun(): { root: string; ctx: PathContext } {
+  const files: Record<string, string> = { ".tldrx/workspace.yml": SINGLE_REPO_YML };
+  for (const doc of MAP_DOCS) {
+    files[`.tldrx/map/${SINGLE_REPO}/${doc}.md`] =
+      `# ${SINGLE_REPO} — ${doc}\n\n- A real bullet [src: file:src/main.ts:1]\n`;
+  }
+  const ws = makeRunWorkspace({ files });
+  workspaces.push(ws);
+  const outcome = createRun({
+    root: ws.root, slug: "leaderboard", scope: "feature", actor: "alan",
+    now: new Date("2026-09-02T09:00:00Z"),
+  });
+  return { root: ws.root, ctx: { root: ws.root, runDir: outcome.runDir } };
+}
+
+describe("gh #136 · 03-plan takes a map on a SINGLE-repo workspace too", () => {
+  test("Plan resolves at least one map document — it is no longer mapless", () => {
+    const { root, ctx } = singleRepoRun();
+    const declared = expandAll(
+      [...loadStageSpec(root, "feature", "plan").requiredInputs,
+       ...loadStageSpec(root, "feature", "plan").optionalInputs],
+      [SINGLE_REPO],
+    );
+    expect(present(declared, ctx).filter((p) => p.startsWith(".tldrx/map/"))).not.toEqual([]);
+  });
+
+  test("and the one it resolves is the command allowlist its DoD is gated on", () => {
+    const { root, ctx } = singleRepoRun();
+    const declared = expandAll(
+      [...loadStageSpec(root, "feature", "plan").requiredInputs,
+       ...loadStageSpec(root, "feature", "plan").optionalInputs],
+      [SINGLE_REPO],
+    );
+    expect(declared).toContain(`.tldrx/map/${SINGLE_REPO}/commands.md`);
+    expect(present(declared, ctx)).toContain(`.tldrx/map/${SINGLE_REPO}/commands.md`);
+  });
+
+  test("workspace.md stays multi-repo-only, and its absence here is still SAID", () => {
+    const { root, ctx } = singleRepoRun();
+    const declared = declaredFor(root, "plan");
+    // Not "fixed" by writing a cross-repo map for one repo: on a single-repo
+    // workspace there is no cross-repo view, and #131's absent block says so.
+    expect(declared).toContain(".tldrx/map/workspace.md");
+    expect(missing(declared, ctx)).toContain(".tldrx/map/workspace.md");
+  });
+
+  test("MULTI-repo semantics are unchanged: workspace.md AND a commands doc per repo", () => {
+    const { root, ctx } = featureRun();
+    const declared = declaredFor(root, "plan");
+    expect(present(declared, ctx)).toContain(".tldrx/map/workspace.md");
+    expect(present(declared, ctx)).toEqual(expect.arrayContaining([
+      ".tldrx/map/api/commands.md",
+      ".tldrx/map/lab/commands.md",
+    ]));
+  });
+
+  test("Plan's map declaration is EXACTLY these two — not the whole map", () => {
+    // The wave-N lesson: a stage whose job is splitting and ordering does not get
+    // six documents per repo because they exist. Adding one is a decision.
+    const spec = loadStageSpec(root0(), "feature", "plan");
+    const mapInputs = [...spec.requiredInputs, ...spec.optionalInputs]
+      .filter((p) => p.startsWith(".tldrx/map/"));
+    expect([...mapInputs].sort()).toEqual([
+      ".tldrx/map/workspace.md",
+      ".tldrx/map/{repo}/commands.md",
+    ].sort());
+  });
+});
+
+/** A bare workspace root, for reading a shipped stage file with no run attached. */
+function root0(): string {
+  const ws = makeRunWorkspace();
+  workspaces.push(ws);
+  return ws.root;
+}

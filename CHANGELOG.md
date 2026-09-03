@@ -4,6 +4,40 @@
 
 ### Fixed
 
+- **`test/attempt-cost.test.ts` proved "carries no format refusal" with the bare word
+  `REFUSED`, and unrelated prompt prose turned it red (#135).** The thing it means to detect
+  is `renderFormatRefusal`'s heading; what it detected was an eight-letter English word,
+  anywhere in a ~14 KB document. #133 added one sentence elsewhere in the same prompt that
+  happened to use it and the assertion went red over prose that has nothing to do with a
+  refusal — a wrong-instrument failure, not a behaviour change.
+  - The heading is now exported as `FORMAT_REFUSAL_HEADING` from `src/core/build/review.ts`
+    and asserted in place of the word, so the renderer and its test cannot spell it
+    differently. Same idiom, and same reason, as `SRC_GRAMMAR_HEADING` and
+    `REVIEWER_FOCUS_HEADING`. A test pins that the constant IS the rendered first line.
+  - The workaround went with it: `payloadCapLines`' docstring told the next author not to use
+    the word. A comment asking people to avoid an English word was never a guard, and the
+    prose is free to say `REFUSED` again.
+- **03-plan had NO map at all on a single-repo workspace (#136).** Its one map declaration was
+  `.tldrx/map/workspace.md`, which `buildMap.ts:83-88` writes only in multi-repo mode — so on
+  a single-repo workspace Plan's entire map input resolved to nothing, while all six
+  `MAP_DOCS` sat unread under `.tldrx/map/<repo>/`. Measured on a single-repo fixture with a
+  real map: `map PRESENT: []`, and the prompt carried no map content whatsoever.
+  - Plan now also declares `.tldrx/map/{repo}/commands.md`. This is a GATE, not a preference:
+    Plan writes each story's `dod.commands`, the `plan` check validates every one against the
+    workspace allowlist and refuses the story when it cannot ("an empty allowlist is not a
+    permit", `src/core/schemas/commandAllowlist.ts:33`) — and Plan was shown that allowlist
+    nowhere. `.tldrx/workspace.yml` is not one of its inputs, the generic stage prompt renders
+    no commands section (only the DEVELOPER prompt does, `prompts.ts:175`), and multi-repo's
+    `workspace.md` carries repo name, path, stack, branch and confidence, not commands. The
+    map document that mirrors the allowlist (`renderMap.ts:27`) was declared by no stage.
+  - **One document, not six.** Plan decomposes a design 02-how has already placed on real
+    paths, so architecture stays upstream; six documents per repo on a stage whose job is
+    splitting and ordering is the context nobody asked for that the wave-N lesson in
+    `seedInputs.ts` is about. Measured cost: +120 B on a 20,777 B prompt, against budgets of
+    98,304 (`inputs_max_bytes`) and 163,840 (`prompt_max_bytes`).
+  - **Multi-repo semantics are unchanged** — `workspace.md` stays, and stays without `{repo}`.
+    Its absence on a single-repo workspace is still SAID rather than performed (#131): there
+    is no cross-repo view of one repo, and the `absent:` block reports exactly that.
 - **The `feature` preset declared map inputs without `{repo}`, so 02-how and 03-plan ran with
   no map at all (#131).** `stages/how/stage.yml` asked for `.tldrx/map/architecture.md` and
   `.tldrx/map/conventions.md`. `tldrx init` writes the map PER REPO —

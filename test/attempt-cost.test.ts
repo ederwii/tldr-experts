@@ -35,7 +35,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import {
-  isFormatRejection, MAX_FORMAT_RETRIES, parseReview, renderFormatRefusal,
+  FORMAT_REFUSAL_HEADING, isFormatRejection, MAX_FORMAT_RETRIES, parseReview, renderFormatRefusal,
 } from "../src/core/build/review.ts";
 import { parseFixFindings } from "../src/core/build/fixlist.ts";
 import { SRC_GRAMMAR_HEADING } from "../src/core/text/srcGrammarContract.ts";
@@ -259,10 +259,12 @@ describe("#78 — a claim-sources rejection re-prompts and spends no attempt", (
     await next(ws);
 
     const second = readFileSync(join(promptDir, "reviewer-S1-2.md"), "utf8");
-    expect(second).toContain("REFUSED");
+    expect(second).toContain(FORMAT_REFUSAL_HEADING);
     expect(second).toContain("[src:");
     // The first prompt said nothing about a refusal, because nothing had been.
-    expect(readFileSync(join(promptDir, "reviewer-S1-1.md"), "utf8")).not.toContain("REFUSED");
+    // Asserted on the SECTION HEADING, never on the bare word: the word is ordinary
+    // English and appears in unrelated prompt prose (gh #135).
+    expect(readFileSync(join(promptDir, "reviewer-S1-1.md"), "utf8")).not.toContain(FORMAT_REFUSAL_HEADING);
   }, 90_000);
 
   test("the retries are BOUNDED: the third grammar failure costs the attempt, as today", async () => {
@@ -423,7 +425,7 @@ describe("#78 through the host handshake — the same rule, the other door", () 
     expect(existsSync(join(reviewDir(ws, "S1"), "result.json"))).toBe(false);
     expect(existsSync(join(reviewDir(ws, "S1"), "result.refused-1.json"))).toBe(true);
     // And the rewritten prompt carries the refusal, not the brief that produced it.
-    expect(readFileSync(join(reviewDir(ws, "S1"), "prompt.md"), "utf8")).toContain("REFUSED");
+    expect(readFileSync(join(reviewDir(ws, "S1"), "prompt.md"), "utf8")).toContain(FORMAT_REFUSAL_HEADING);
 
     // The corrected envelope settles it, on the SAME attempt.
     await settleHostReview(ws, signedWith(CITATION_FIXED), "2026-08-29T10:10:00Z");
@@ -566,5 +568,38 @@ describe("isFormatRejection — the scope guard, in one predicate", () => {
       expect(parsed.problems.length).toBeGreaterThan(0);
       expect(parsed.format).toEqual(parsed.problems);
     }
+  });
+});
+
+describe("#135 — the no-refusal instrument is the HEADING, not the bare word", () => {
+  // The proxy for "this prompt carries no format refusal" used to be the eight-letter
+  // word REFUSED, asserted absent from a ~14 KB document. gh #133 added one sentence of
+  // unrelated prose that happened to use it and the assertion went red on a prompt that
+  // was entirely correct — a wrong-instrument failure, not a behaviour change. The word
+  // is ordinary English; the SECTION is what "carries a refusal" means.
+  const INNOCENT_PROSE = [
+    "## Produce",
+    "",
+    "One bound the schema cannot state: a payload over the cap is not trimmed — it is",
+    "REFUSED whole, and the reasons for your verdict go with it.",
+  ].join("\n");
+
+  test("prose that merely uses the word does not read as a refusal section", () => {
+    // The old instrument trips here. That is the bug, stated as an assertion.
+    expect(INNOCENT_PROSE).toContain("REFUSED");
+    // The instrument that means what it says does not.
+    expect(INNOCENT_PROSE).not.toContain(FORMAT_REFUSAL_HEADING);
+  });
+
+  test("and a REAL refusal section is still caught — the guard did not go blind", () => {
+    const refusal = renderFormatRefusal(["the citation is in trailing position"]);
+    expect(refusal).toContain(FORMAT_REFUSAL_HEADING);
+  });
+
+  test("the renderer and its test cannot spell the heading differently", () => {
+    // Exported for the same reason `SRC_GRAMMAR_HEADING` and `REVIEWER_FOCUS_HEADING`
+    // are: so an absence can be asserted without spelling the string twice.
+    expect(renderFormatRefusal([]).split("\n")[0]).toBe(FORMAT_REFUSAL_HEADING);
+    expect(FORMAT_REFUSAL_HEADING.startsWith("## ")).toBe(true);
   });
 });

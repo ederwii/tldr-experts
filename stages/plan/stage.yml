@@ -19,12 +19,32 @@ budget_usd: 4
 # `MAP_DOCS` document, so `{repo}` would point it at a file that never exists.
 # On a SINGLE-repo workspace nothing writes it at all — and since gh #131 that
 # absence is named in the prompt and on stdout instead of being performed.
+#
+# Which left Plan with NO map at all on a single-repo workspace (gh #136), while
+# all six `MAP_DOCS` sat unread under `.tldrx/map/<repo>/`. `commands.md` closes
+# that, and it is a GATE rather than a preference: Plan writes each story's
+# `dod.commands`, the `plan` check validates every one against the workspace
+# allowlist and refuses the story when it cannot ("an empty allowlist is not a
+# permit", `src/core/schemas/commandAllowlist.ts:33`) — and Plan is shown that
+# allowlist nowhere else. `.tldrx/workspace.yml` is not one of its inputs, the
+# generic stage prompt renders no commands section (only the DEVELOPER prompt
+# does, `src/core/build/prompts.ts:175`), and `workspace.md` carries repo name,
+# path, stack, branch and confidence — not commands (`renderWorkspaceMap`).
+# `.tldrx/map/<repo>/commands.md` is "the only commands `tldrx` may run in this
+# repo (mirror of `workspace.yml`)" (`src/core/map/renderMap.ts:27`).
+#
+# ONE document, not six. Plan decomposes a design 02-how has already placed on
+# real paths, so architecture is upstream work; six per repo on a stage whose job
+# is splitting and ordering is the context nobody asked for that the wave-N lesson
+# in `seedInputs.ts` is about. Measured: +120 B on a 20,777 B single-repo prompt,
+# against budgets of 98,304 (`inputs_max_bytes`) and 163,840 (`prompt_max_bytes`).
 inputs:
   - "02-how/design.md"
   - "02-how/contracts.md"
   - "02-how/test-strategy.md"
   - ".tldrx/process.yml"
   - ".tldrx/map/workspace.md"
+  - ".tldrx/map/{repo}/commands.md"
 
 outputs:
   - "epics/<epic>.md"

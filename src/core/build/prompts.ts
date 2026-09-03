@@ -475,9 +475,12 @@ function grammarSection(fixlistAvailable: boolean): readonly string[] {
  * trimmed; it takes the ledger entry down with it. The number is imported rather
  * than typed, so a change to the cap reaches the prompt that promises it.
  *
- * The word REFUSED, in caps, is deliberately not used here: `renderFormatRefusal`'s
- * heading owns it, and `test/attempt-cost.test.ts` asserts a FIRST reviewer prompt
- * does not contain that word as its proxy for "carries no format refusal".
+ * This prose is free to use the word REFUSED (gh #135). It once was not: the test for
+ * "a first reviewer prompt carries no format refusal" asserted the bare WORD absent
+ * from the whole document, so any sentence anywhere in the prompt that used ordinary
+ * English could turn it red. That proxy is gone — `test/attempt-cost.test.ts` now
+ * asserts `FORMAT_REFUSAL_HEADING`, the section heading `renderFormatRefusal` actually
+ * emits. A comment asking authors to avoid a word was never a guard; the constant is.
  */
 function payloadCapLines(): readonly string[] {
   return [

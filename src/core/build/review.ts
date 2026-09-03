@@ -212,9 +212,23 @@ export function isFormatRejection(review: Review): boolean {
  * prompt; restating any of it here would be the second copy #77 exists to
  * abolish.
  */
+/**
+ * The heading `renderFormatRefusal` opens with — exported so a test can assert its
+ * ABSENCE without spelling it twice, the same reason `SRC_GRAMMAR_HEADING` and
+ * `REVIEWER_FOCUS_HEADING` are exported.
+ *
+ * The instrument matters (gh #135). "This prompt carries no format refusal" used to
+ * be proved by the bare word REFUSED being absent from a ~14 KB document — but the
+ * word is ordinary English, it appears in prompt prose that has nothing to do with a
+ * refusal, and the assertion went red over one such sentence while the prompt was
+ * correct. The SECTION is what "carries a refusal" means, so the section is what is
+ * asserted, and the renderer and the test now read the same constant.
+ */
+export const FORMAT_REFUSAL_HEADING = "## Your previous envelope was REFUSED";
+
 export function renderFormatRefusal(problems: readonly string[]): string {
   return [
-    "## Your previous envelope was REFUSED",
+    FORMAT_REFUSAL_HEADING,
     "",
     "It could not be read, so it did not reach the story. Nothing about your JUDGEMENT was",
     "refused — this is about the SHAPE of the envelope you returned. The round cost the story",
