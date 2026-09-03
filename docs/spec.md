@@ -2819,7 +2819,10 @@ another's branch — and the fourth walked into the third's LIVE worktree, two s
 in its name would be worse. Collision there is made DELIBERATE instead: a Build stage refuses to start when
 `epic/<slug>` already exists and this run's `run.yml` `build.epic_branch` (optional, additive, §2.2) does not claim
 it — `--reuse-epic` is the word that says "stack on it anyway", and either way the branch is recorded as claimed from
-then on, so the run's own second invocation is never refused its own branch.
+then on, so the run's own second invocation is never refused its own branch. The story branch name has exactly ONE
+derivation in the source (`storyBranchOf`), because it had two: the handoff's row for a story settled by an EARLIER
+`tldrx next` built `story/<story-id>` without the run id, so a multi-invocation Build wrote a ref no repo had into an
+audit document (#134, fixed 2026-09-02).
 
 The epic **worktree** is a different object from the epic branch, and it carries the run id for the same reason the
 story worktree does: it is `.tldrx/worktrees/<repo>/_epic-<run-id>-<epic-id>`. It was `_epic-<epic-id>` until
