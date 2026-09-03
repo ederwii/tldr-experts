@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a06472-03bb-7ba3-abd2-820c96afe586"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"{\"outputs\":[],\"questions_asked\":[],\"notes\":\"I’ll inspect tiny.md and report its contents concisely.\"}"}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc \"sed -n '1,200p' tiny.md\"","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc \"sed -n '1,200p' tiny.md\"","aggregated_output":"Outbox lives on line two.\n\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"{\"outputs\":[\"tiny.md\"],\"questions_asked\":[],\"notes\":\"tiny.md contains one line: Outbox lives on line two.\"}"}}
+{"type":"turn.completed","usage":{"input_tokens":37682,"cached_input_tokens":18176,"cache_write_input_tokens":0,"output_tokens":164,"reasoning_output_tokens":0}}

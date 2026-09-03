@@ -23,15 +23,29 @@
  * size nor the right shape for that.
  */
 import { runtime } from "../runtime/index.ts";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { assertNoAttendedSpawn } from "./attended.ts";
 import { emitAgentEvent } from "../ui/bus.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
-import { AgentStream, resolveResultDoc, type AgentEvent } from "./agentEvents.ts";
+import { AgentStream, resolveCodexResultDoc, resolveResultDoc, type AgentEvent } from "./agentEvents.ts";
 import { isReadTool, readCapError, STOPPED_BY_MAX_READS } from "./readCap.ts";
 import { ENVELOPE_SCHEMA, toEnvelope, toUsage, type AgentEnvelope, type AgentUsage, type ClaudeResultJson } from "./envelope.ts";
 
 /** The provider this file speaks to, when nobody says otherwise. */
 export const CLAUDE_BIN = "claude";
+export const CODEX_BIN = "codex";
+export type AgentProvider = "claude" | "codex";
+export const AGENT_PROVIDERS: readonly AgentProvider[] = ["claude", "codex"];
+
+/** The automated runner remains Claude unless a caller explicitly opts into Codex. */
+export function agentProvider(): AgentProvider {
+  const configured = process.env.TLDRX_AGENT_PROVIDER?.trim().toLowerCase();
+  if (configured === undefined || configured === "") return "claude";
+  if (configured === "claude" || configured === "codex") return configured;
+  throw new Error(`TLDRX_AGENT_PROVIDER must be one of ${AGENT_PROVIDERS.join(" | ")}; got ${JSON.stringify(configured)}`);
+}
 
 /**
  * Which binary the sub-agent spawn actually executes (#27, minimal slice).
@@ -53,6 +67,16 @@ export const CLAUDE_BIN = "claude";
  */
 export function claudeBin(): string {
   return process.env.TLDRX_CLAUDE_BIN?.trim() || CLAUDE_BIN;
+}
+
+export function codexBin(): string {
+  return process.env.TLDRX_CODEX_BIN?.trim() || CODEX_BIN;
+}
+
+export function providerBudgetAdvisory(provider: AgentProvider, ceilingUsd: number): string | null {
+  if (provider === "claude") return null;
+  return `budget: Codex has no provider-side USD cap; $${ceilingUsd.toFixed(2)} is a planning ceiling only, `
+    + "and this turn will be recorded unmetered in dollars";
 }
 
 /**
@@ -111,6 +135,8 @@ export interface AgentRequest {
    * one activity line per story instead of interleaving them into one.
    */
   readonly lane?: string;
+  /** Build's reviewer is enforced by Codex's sandbox, not merely by its prompt. */
+  readonly role?: "developer" | "reviewer";
 }
 
 export interface AgentOutcome {
@@ -120,6 +146,8 @@ export interface AgentOutcome {
   readonly isError: boolean;
   readonly sessionId: string | null;
   readonly costUsd: number;
+  /** False when the provider reports tokens but no provider-metered USD amount. */
+  readonly metered: boolean;
   readonly usage: AgentUsage;
   readonly envelope: AgentEnvelope | null;
   /** The raw `structured_output`, for a request that passed its own `schema`. */
@@ -153,8 +181,27 @@ export function buildClaudeArgs(request: AgentRequest): readonly string[] {
   return args;
 }
 
+export function buildCodexArgs(request: AgentRequest, schemaPath: string): readonly string[] {
+  // Verified against `codex exec --help` in codex-cli 0.152.0: when the optional
+  // positional [PROMPT] is omitted, instructions are read from stdin. The same
+  // help output lists --ephemeral, --json, --color, --sandbox, --output-schema
+  // and --config. Keeping the prompt out of argv preserves the shared contract
+  // for large, multiline stage prompts.
+  const args: string[] = [
+    "exec", "--ephemeral", "--json", "--color", "never",
+    "--sandbox", request.role === "reviewer" ? "read-only" : "workspace-write",
+    "--output-schema", schemaPath,
+  ];
+  if (request.model !== null && request.model !== "") args.push("--model", request.model);
+  if (request.effort !== null && request.effort !== undefined) {
+    args.push("--config", `model_reasoning_effort=${JSON.stringify(request.effort)}`);
+  }
+  return args;
+}
+
 /** What `--json-schema`'s value is replaced by in a printed command. */
 export const SCHEMA_PLACEHOLDER = "<envelope-schema>";
+export const CODEX_SCHEMA_PLACEHOLDER = "<output-schema.json>";
 
 /**
  * The command `spawnAgent` WOULD run, as one printable line — for `--dry-run`
@@ -168,6 +215,9 @@ export const SCHEMA_PLACEHOLDER = "<envelope-schema>";
  * which the caller says out loud.
  */
 export function describeSpawn(request: AgentRequest): string {
+  if (agentProvider() === "codex") {
+    return `${codexBin()} ${buildCodexArgs(request, CODEX_SCHEMA_PLACEHOLDER).map(shellQuote).join(" ")}`;
+  }
   const args = buildClaudeArgs(request);
   const shown = args.map((arg, i) => (args[i - 1] === "--json-schema" ? SCHEMA_PLACEHOLDER : arg));
   return `${claudeBin()} ${shown.map(shellQuote).join(" ")}`;
@@ -187,7 +237,8 @@ export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
   // The parser is attached ALWAYS, not only when someone is watching: a code path
   // that runs solely with the UI on is a code path nothing tests. Publishing into
   // an empty bus costs one null check per event.
-  const stream = new AgentStream();
+  const provider = agentProvider();
+  const stream = new AgentStream(provider);
   const publish = (event: AgentEvent): void => {
     request.onEvent?.(event);
     emitAgentEvent(event, request.lane);
@@ -198,46 +249,58 @@ export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
   let reads = 0;
   let capped = false;
 
-  const spawned = await runtime.spawn(claudeBin(), buildClaudeArgs(request), {
-    cwd: request.cwd,
-    stdin: request.prompt,
-    timeoutMs: request.timeoutMs,
-    ...(cap > 0 ? { signal: controller.signal } : {}),
-    // Explicit, live env: `claude` is resolved off PATH, and on Bun the default
-    // child environment is the one captured at process start.
-    env: request.env ?? { ...process.env },
-    onStdoutLine: (line) => {
-      for (const event of stream.push(line)) {
-        // Counted on COMPLETION, so the kill lands between tools rather than
-        // inside one, and a read whose result never arrived is not charged.
-        //
-        // `!capped` guards the COUNTER, not just the kill (issue #24). A chunk
-        // boundary is not a line boundary: `LineSplitter` hands every complete
-        // line in one chunk to this callback synchronously, so on a loaded
-        // machine — where the OS coalesces the child's writes — reads 4..20
-        // arrive in the same tick as read 3 and were counted, minutes of wall
-        // clock before the SIGKILL just ordered could possibly land. The
-        // recorded figure was therefore a function of scheduling, and the test
-        // that pinned it to the cap flaked twice in one night.
-        //
-        // Once the cap has fired the process is already being killed and this
-        // run is over. What belongs on the ledger is the number of reads the cap
-        // ALLOWED — which is the cap — not however many bytes were in flight.
-        if (!capped && event.kind === "tool-done" && isReadTool(event.name)) {
-          reads += 1;
-          publish({ kind: "reads", count: reads, cap });
-          if (cap > 0 && reads >= cap) {
-            capped = true;
-            publish({ kind: "error", message: readCapError(reads, cap) });
-            controller.abort();
+  const schemaDir = provider === "codex" ? mkdtempSync(join(tmpdir(), "tldrx-codex-schema-")) : null;
+  const schemaPath = schemaDir === null ? null : join(schemaDir, "output-schema.json");
+  if (schemaPath !== null) writeFileSync(schemaPath, `${JSON.stringify(request.schema ?? ENVELOPE_SCHEMA)}\n`, "utf8");
+  let spawned;
+  try {
+    spawned = await runtime.spawn(
+      provider === "codex" ? codexBin() : claudeBin(),
+      provider === "codex" ? buildCodexArgs(request, schemaPath ?? CODEX_SCHEMA_PLACEHOLDER) : buildClaudeArgs(request),
+      {
+        cwd: request.cwd,
+        stdin: request.prompt,
+        timeoutMs: request.timeoutMs,
+        ...(cap > 0 ? { signal: controller.signal } : {}),
+        // Explicit, live env: the provider is resolved off PATH, and on Bun the
+        // default child environment is the one captured at process start.
+        env: request.env ?? { ...process.env },
+        onStdoutLine: (line) => {
+          for (const event of stream.push(line)) {
+            // Counted on COMPLETION, so the kill lands between tools rather than
+            // inside one, and a read whose result never arrived is not charged.
+            //
+            // `!capped` guards the COUNTER, not just the kill (issue #24). A chunk
+            // boundary is not a line boundary: `LineSplitter` hands every complete
+            // line in one chunk to this callback synchronously, so on a loaded
+            // machine — where the OS coalesces the child's writes — reads 4..20
+            // arrive in the same tick as read 3 and were counted, minutes of wall
+            // clock before the SIGKILL just ordered could possibly land. The
+            // recorded figure was therefore a function of scheduling, and the test
+            // that pinned it to the cap flaked twice in one night.
+            //
+            // Once the cap has fired the process is already being killed and this
+            // run is over. What belongs on the ledger is the number of reads the cap
+            // ALLOWED — which is the cap — not however many bytes were in flight.
+            if (!capped && event.kind === "tool-done" && (event.countsAsRead === true || isReadTool(event.name))) {
+              reads += 1;
+              publish({ kind: "reads", count: reads, cap });
+              if (cap > 0 && reads >= cap) {
+                capped = true;
+                publish({ kind: "error", message: readCapError(reads, cap, provider) });
+                controller.abort();
+              }
+            }
+            publish(event);
           }
-        }
-        publish(event);
-      }
-    },
-  });
+        },
+      },
+    );
+  } finally {
+    if (schemaDir !== null) rmSync(schemaDir, { recursive: true, force: true });
+  }
 
-  const interpreted = interpret(spawned.exitCode, spawned.stdout, spawned.stderr, spawned.timedOut);
+  const interpreted = interpret(spawned.exitCode, spawned.stdout, spawned.stderr, spawned.timedOut, provider);
   const outcome: AgentOutcome = capped
     ? {
       ...interpreted,
@@ -245,7 +308,7 @@ export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
       reads,
       stoppedBy: STOPPED_BY_MAX_READS,
       // The cap is the reason, whatever the dying process said on its way out.
-      error: readCapError(reads, cap),
+      error: readCapError(reads, cap, provider),
     }
     : { ...interpreted, reads, stoppedBy: null };
   // A process that died before its `result` event never emitted `done`. Say so,
@@ -266,22 +329,24 @@ export function interpret(
   stdout: string,
   stderr: string,
   timedOut: boolean,
+  provider: AgentProvider = "claude",
 ): AgentOutcome {
   // Either format: a whole-buffer object (`--output-format json`, pretty or not)
   // or the last `type: "result"` line of a JSONL stream.
-  const doc = resolveResultDoc(stdout) as ClaudeResultJson | null;
+  const doc = (provider === "codex" ? resolveCodexResultDoc(stdout) : resolveResultDoc(stdout)) as ClaudeResultJson | null;
   const isError = doc?.is_error === true;
   const sessionId = typeof doc?.session_id === "string" ? doc.session_id : null;
   const costUsd = typeof doc?.total_cost_usd === "number" ? doc.total_cost_usd : 0;
+  const metered = provider === "claude";
   const usage = toUsage(doc?.usage);
   const envelope = toEnvelope(doc?.structured_output);
   const result = typeof doc?.result === "string" ? doc.result : "";
   const ok = exitCode === 0 && !isError && !timedOut && doc !== null;
 
   return {
-    ok, exitCode, timedOut, isError, sessionId, costUsd, usage, envelope,
+    ok, exitCode, timedOut, isError, sessionId, costUsd, metered, usage, envelope,
     structured: doc?.structured_output ?? null, result,
-    error: ok ? null : describe(exitCode, doc, stderr, timedOut, stdout),
+    error: ok ? null : describe(exitCode, doc, stderr, timedOut, stdout, provider),
     raw: stdout,
     reads: 0,
     stoppedBy: null,
@@ -294,16 +359,18 @@ function describe(
   stderr: string,
   timedOut: boolean,
   stdout: string,
+  provider: AgentProvider,
 ): string {
-  if (timedOut) return `claude timed out (killed after the stage's timeout_s)`;
+  const name = provider === "codex" ? "codex" : "claude";
+  if (timedOut) return `${name} timed out (killed after the stage's timeout_s)`;
   if (doc === null) {
     const tail = firstLine(stderr) || firstLine(stdout) || "(no output)";
-    return `claude exited ${exitCode} without a parseable result event: ${tail}`;
+    return `${name} exited ${exitCode} without a parseable result event: ${tail}`;
   }
   const errors = Array.isArray(doc.errors) ? (doc.errors as unknown[]).filter((e) => typeof e === "string") : [];
   const reason = errors[0] ?? (typeof doc.subtype === "string" ? doc.subtype : "") ?? "";
   const suffix = reason === "" ? "" : `: ${String(reason)}`;
-  return `claude exited ${exitCode} with is_error=${String(doc.is_error === true)}${suffix}`;
+  return `${name} exited ${exitCode} with is_error=${String(doc.is_error === true)}${suffix}`;
 }
 
 function firstLine(text: string): string {

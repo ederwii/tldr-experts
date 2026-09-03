@@ -11,13 +11,21 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import {
-  AgentStream, detectStreamFormat, resolveResultDoc, toolTarget, type AgentEvent,
+  AgentStream, detectStreamFormat, resolveCodexResultDoc, resolveResultDoc, toolTarget, type AgentEvent,
 } from "../src/core/facilitator/agentEvents.ts";
 import { interpret } from "../src/core/facilitator/spawnAgent.ts";
+import { codexOutput } from "../src/core/facilitator/fakeTranscript.ts";
+import { readCapError } from "../src/core/facilitator/readCap.ts";
 import { LineSplitter } from "../src/core/runtime/lineSplitter.ts";
 
 const TRANSCRIPT = readFileSync(
   join(FRAMEWORK_ROOT, "test", "fixtures", "agent", "stream-json.jsonl"),
+  "utf8",
+);
+
+/** Real `codex exec --ephemeral --json`, codex-cli 0.152.0, recorded 2026-09-02. */
+const CODEX_TRANSCRIPT = readFileSync(
+  join(FRAMEWORK_ROOT, "test", "fixtures", "agent", "codex-jsonl.jsonl"),
   "utf8",
 );
 
@@ -90,6 +98,109 @@ describe("the real transcript", () => {
     const cost = events.filter((e) => e.kind === "cost" && e.usd !== null);
     expect(cost).toHaveLength(1);
     expect(cost[0]).toMatchObject({ kind: "cost", usd: REAL_COST });
+  });
+});
+
+describe("the real Codex transcript", () => {
+  test("keeps thread identity, command pairs, structured output and token usage", () => {
+    const stream = new AgentStream("codex");
+    const events = CODEX_TRANSCRIPT.split("\n").flatMap((line) => stream.push(line));
+    expect(events[0]).toEqual({
+      kind: "start", model: null, sessionId: "01a06472-03bb-7ba3-abd2-820c96afe586",
+    });
+    expect(events.filter((event) => event.kind === "tool")).toEqual([{
+      kind: "tool", id: "item_1", name: "Bash", target: "/bin/zsh -lc \"sed -n '1,200p' tiny.md\"",
+    }]);
+    expect(events.filter((event) => event.kind === "tool-done")).toEqual([{
+      kind: "tool-done", id: "item_1", name: "Bash", ok: true, ms: null, countsAsRead: true,
+    }]);
+    expect(events.find((event) => event.kind === "cost")).toMatchObject({
+      kind: "cost", usd: null, inputTokens: 37682, outputTokens: 164,
+      cacheReadTokens: 18176, cacheCreationTokens: 0,
+    });
+    expect(events.at(-1)).toEqual({
+      kind: "done",
+      ok: true,
+      costUsd: 0,
+      structured: {
+        outputs: ["tiny.md"], questions_asked: [],
+        notes: "tiny.md contains one line: Outbox lives on line two.",
+      },
+    });
+  });
+
+  test("interpret uses the Codex thread as session identity and never invents dollars", () => {
+    const outcome = interpret(0, CODEX_TRANSCRIPT, "", false, "codex");
+    expect(outcome.ok).toBe(true);
+    expect(outcome.metered).toBe(false);
+    expect(outcome.costUsd).toBe(0);
+    expect(outcome.sessionId).toBe("01a06472-03bb-7ba3-abd2-820c96afe586");
+    expect(outcome.envelope?.outputs).toEqual(["tiny.md"]);
+  });
+
+  test("the shared Codex emitter produces a stream consumed by the real parser", () => {
+    const stdout = codexOutput({
+      sessionId: "01a06472-03bb-7ba3-abd2-820c96afe586",
+      structured: { outputs: ["answer.md"], questions_asked: [], notes: "done" },
+      usage: { input_tokens: 12, cached_input_tokens: 3, output_tokens: 4 },
+    });
+    const outcome = interpret(0, stdout, "", false, "codex");
+    expect(outcome.ok).toBe(true);
+    expect(outcome.sessionId).toBe("01a06472-03bb-7ba3-abd2-820c96afe586");
+    expect(outcome.envelope?.outputs).toEqual(["answer.md"]);
+    expect(outcome.usage.cache_read_input_tokens).toBe(3);
+  });
+
+  test("junk Codex lines are dropped without throwing", () => {
+    const stream = new AgentStream("codex");
+    for (const line of ["", "not json", "{broken", "[]", '{"type":"future.event"}']) {
+      expect(stream.push(line)).toEqual([]);
+    }
+  });
+
+  test("a Codex stream with no completed result event fails with a reason", () => {
+    const stdout = '{"type":"thread.started","thread_id":"session-only"}\n';
+    const outcome = interpret(0, stdout, "", false, "codex");
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toContain("without a parseable result event");
+  });
+
+  test("turn.failed carries the provider error and cannot report success", () => {
+    const stdout = codexOutput({
+      sessionId: "failed-session",
+      error: "the model provider refused the turn",
+    });
+    const outcome = interpret(1, stdout, "", false, "codex");
+    expect(outcome.ok).toBe(false);
+    expect(outcome.isError).toBe(true);
+    expect(outcome.error).toContain("the model provider refused the turn");
+  });
+
+  test("a timed-out Codex turn names the timeout", () => {
+    const outcome = interpret(143, "", "", true, "codex");
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toBe("codex timed out (killed after the stage's timeout_s)");
+  });
+
+  test("a completed Codex turn with an unreadable envelope fails closed", () => {
+    const stdout = [
+      '{"type":"thread.started","thread_id":"bad-envelope"}',
+      '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"```json\\n{\\\"outputs\\\":[]}\\n```"}}',
+      '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}',
+    ].join("\n");
+    const doc = resolveCodexResultDoc(stdout);
+    expect(doc?.is_error).toBe(true);
+    const outcome = interpret(0, stdout, "", false, "codex");
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toContain("structured output envelope was unreadable");
+  });
+
+  test("Codex max_reads reports command executions, not fictional file reads", () => {
+    expect(readCapError(20, 20, "codex")).toBe(
+      "stopped after 20 command executions: the stage's max_reads is 20. "
+      + "Raise `max_reads` in the stage file or `--max-reads <n>` for one run, "
+      + "or reduce the commands the stage needs to execute.",
+    );
   });
 });
 

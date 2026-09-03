@@ -33,7 +33,7 @@ import {
   promptPath, preflightRecord, readResult, writeBundle, writeRaw, PendingError,
   type PendingStage,
 } from "../facilitator/pending.ts";
-import { spawnAgent } from "../facilitator/spawnAgent.ts";
+import { agentProvider, providerBudgetAdvisory, spawnAgent } from "../facilitator/spawnAgent.ts";
 import { setProgressCeiling, setProgressTitle } from "../ui/bus.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
 import type { SrcContext } from "../text/srcToken.ts";
@@ -162,17 +162,18 @@ async function trainWithPreflight(options: TrainOptions, said: string[]): Promis
 
   // --- money, before anything is read --------------------------------------
   const ceiling = options.maxUsd ?? defaultTrainUsd(options.mode);
+  const provider = agentProvider();
   // A role expert in full mode runs the runs pass alone — one sub-agent, so the
   // whole ceiling is its share rather than half of it.
   const agents = options.mode === "full" && !isRole ? 2 : 1;
-  if (ceiling < MIN_TRAIN_USD) {
+  if (provider === "claude" && ceiling < MIN_TRAIN_USD) {
     return fail(EXIT_GATE_REFUSED, [
       `refusing to train under the $${MIN_TRAIN_USD.toFixed(2)} floor — --max-usd was $${ceiling.toFixed(2)}.`,
       "  A cold `claude -p` pays 10-26k cache-creation tokens before its first reply (measured 2026-08-29),",
       "  so a ceiling below the floor is a failed spawn, not a saving. Raise --max-usd or do not train.",
     ]);
   }
-  const share = round2(Math.max(MIN_TRAIN_USD, ceiling / agents));
+  const share = round2(provider === "claude" ? Math.max(MIN_TRAIN_USD, ceiling / agents) : ceiling / agents);
   const effort: EffortLevel = options.effort ?? DEFAULT_TRAIN_EFFORT;
 
   // Which model this will actually use, what that tier costs, and whether the
@@ -181,31 +182,37 @@ async function trainWithPreflight(options: TrainOptions, said: string[]): Promis
   // path spawns: `--prepare` hands the ceiling to the operator's own session and
   // `--commit` is reading a result that has already been paid for.
   const preflight = trainPreflight({
+    provider,
     mode: options.mode,
     agents,
     ceilingUsd: ceiling,
     ceilingExplicit: options.maxUsd !== undefined,
     model: options.model ?? null,
-    ambient: options.ambientModel === undefined
+    ambient: provider === "claude" && options.ambientModel === undefined
       ? resolveAmbientModel({
         env: process.env,
         home: homedir(),
         files: ambientModelFiles(options.root, homedir()),
       })
-      : options.ambientModel,
+      : options.ambientModel ?? null,
     run: options.run,
   });
   if (preflight.refusal !== null) return fail(EXIT_GATE_REFUSED, preflight.refusal);
+  const providerWarning = options.run === "headless" ? providerBudgetAdvisory(provider, share) : null;
+  const preflightNotice = [
+    ...preflight.notice,
+    ...(providerWarning === null ? [] : [providerWarning]),
+  ];
   // Written here rather than returned only at the end: a line an operator reads
   // after the money has been spent is a receipt, not a warning.
-  for (const line of preflight.notice) said.push(line);
+  for (const line of preflightNotice) said.push(line);
   // A headless run is about to spend, so the line goes to stderr the moment it is
   // known — before the pre-pass, never as a receipt afterwards. `--prepare` spends
   // nothing here: its audience is the operator reading the prepared block on
   // stdout and the host session reading `pending.json`, and it is written into
   // both below (#98) rather than into a stream nobody is reading yet.
   if (options.run === "headless") {
-    for (const line of preflight.notice) process.stderr.write(`${line}\n`);
+    for (const line of preflightNotice) process.stderr.write(`${line}\n`);
   }
 
   // --- the deterministic pre-pass ------------------------------------------
@@ -307,7 +314,7 @@ async function trainWithPreflight(options: TrainOptions, said: string[]): Promis
   // --- --prepare: hand the work to the host session and stop ----------------
   if (options.run === "prepare") {
     const lines = [
-      ...preflight.notice,
+      ...preflightNotice,
       ...skipped,
       `prepared training for ${options.expert}/${area.id} (${options.mode}) — `
         + `${String(prompts.length)} sub-agent(s), $${share.toFixed(2)} ceiling each, effort ${effort}`,
@@ -332,7 +339,7 @@ async function trainWithPreflight(options: TrainOptions, said: string[]): Promis
         // model line beside it is an assertion the reader cannot check. Nothing
         // at all when there is not, so an unremarkable bundle is byte-identical
         // to the one this command has always written.
-        ...preflightRecord(preflight.warnings.length === 0 ? [] : preflight.notice),
+        ...preflightRecord(preflight.warnings.length === 0 ? [] : preflightNotice),
       };
       writeBundle(bundleRoot, task.key, task.prompt, pending);
       lines.push(
@@ -397,6 +404,7 @@ async function trainWithPreflight(options: TrainOptions, said: string[]): Promis
       yolo: options.yolo ?? false,
       cwd: options.root,
       timeoutMs: options.timeoutMs ?? TRAIN_TIMEOUT_MS,
+      role: "developer",
     });
     if (outcome.raw !== "") writeRaw(bundleRoot, task.key, outcome.raw);
     tasks.push({
@@ -406,6 +414,7 @@ async function trainWithPreflight(options: TrainOptions, said: string[]): Promis
       sessionId: outcome.sessionId,
       error: outcome.error,
       outputs: outcome.envelope?.outputs ?? [],
+      metered: outcome.metered,
     });
     // Money spent is recorded whether or not the run is accepted (spec §5).
     log.append(record(options, area.id, "agent.result", round2(outcome.costUsd), {
@@ -423,12 +432,15 @@ async function trainWithPreflight(options: TrainOptions, said: string[]): Promis
         cache_read_input_tokens: outcome.usage.cache_read_input_tokens,
       },
       ok: outcome.ok,
+      ...(outcome.metered ? {} : { metered: false }),
     }));
     if (!outcome.ok) {
       rollback(previous);
       return fail(EXIT_AGENT_FAILED, [
         `${options.expert}/${area.id}: the ${task.key} sub-agent failed — ${outcome.error ?? "no result"}`,
-        `  $${round2(outcome.costUsd).toFixed(2)} spent and recorded; nothing was written to competencies.yml`,
+        outcome.metered
+          ? `  $${round2(outcome.costUsd).toFixed(2)} spent and recorded; nothing was written to competencies.yml`
+          : `  ${providerWarning ?? "the provider turn was unmetered in dollars"}; nothing was written to competencies.yml`,
       ], sum(tasks));
     }
   }
@@ -443,6 +455,7 @@ async function trainWithPreflight(options: TrainOptions, said: string[]): Promis
         max_budget_usd: share,
         outputs: task.outputs,
         in_session: true,
+        ...(task.metered === false ? { metered: false } : {}),
       }));
     }
   }
@@ -720,6 +733,7 @@ async function repairRound(input: RepairRoundInput): Promise<RepairRoundOutcome>
     yolo: options.yolo ?? false,
     cwd: options.root,
     timeoutMs: options.timeoutMs ?? TRAIN_TIMEOUT_MS,
+    role: "developer",
   });
 
   const spend: TrainingTask = {
@@ -729,6 +743,7 @@ async function repairRound(input: RepairRoundInput): Promise<RepairRoundOutcome>
     sessionId: outcome.sessionId,
     error: outcome.error,
     outputs: outcome.envelope?.outputs ?? [],
+    metered: outcome.metered,
   };
   input.log.append(record(options, input.areaId, "agent.result", spend.costUsd, {
     task: spend.key,
@@ -741,6 +756,7 @@ async function repairRound(input: RepairRoundInput): Promise<RepairRoundOutcome>
     outputs: spend.outputs,
     problems_sent: errors.length,
     ok: outcome.ok,
+    ...(outcome.metered ? {} : { metered: false }),
   }));
 
   const opened = `  repairing: ${String(errors.length)} problem(s) sent back to the trainer — `

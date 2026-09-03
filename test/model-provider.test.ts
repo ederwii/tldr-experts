@@ -17,7 +17,11 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { claudeBin, CLAUDE_BIN, describeSpawn, spawnAgent } from "../src/core/facilitator/spawnAgent.ts";
+import {
+  agentProvider, claudeBin, CLAUDE_BIN, codexBin, CODEX_BIN, describeSpawn, spawnAgent,
+  providerBudgetAdvisory,
+} from "../src/core/facilitator/spawnAgent.ts";
+import { codexPromptMarker } from "../src/core/facilitator/fakeTranscript.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
 setDefaultTimeout(spawnTestTimeout(30_000));
@@ -25,7 +29,119 @@ setDefaultTimeout(spawnTestTimeout(30_000));
 const scratch: string[] = [];
 afterEach(() => {
   delete process.env.TLDRX_CLAUDE_BIN;
+  delete process.env.TLDRX_CODEX_BIN;
+  delete process.env.TLDRX_AGENT_PROVIDER;
   for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+describe("the provider selection keeps Claude as the byte-identical default", () => {
+  test("unset selects Claude; codex is an explicit opt-in", () => {
+    expect(agentProvider()).toBe("claude");
+    process.env.TLDRX_AGENT_PROVIDER = "codex";
+    expect(agentProvider()).toBe("codex");
+  });
+
+  test("an unknown provider is refused instead of silently spending through Claude", () => {
+    process.env.TLDRX_AGENT_PROVIDER = "codxe";
+    expect(() => agentProvider()).toThrow("TLDRX_AGENT_PROVIDER must be one of claude | codex");
+  });
+
+  test("the Codex binary has the same late-bound, trimmed override seam", () => {
+    expect(codexBin()).toBe(CODEX_BIN);
+    process.env.TLDRX_CODEX_BIN = "  /opt/wrappers/codex-via-proxy  ";
+    expect(codexBin()).toBe("/opt/wrappers/codex-via-proxy");
+    process.env.TLDRX_CODEX_BIN = "   ";
+    expect(codexBin()).toBe("codex");
+  });
+
+  test("Codex dry-run uses plain exec, JSONL, schema file and workspace-write", () => {
+    process.env.TLDRX_AGENT_PROVIDER = "codex";
+    const shown = describeSpawn(request(tmp()));
+    expect(shown).toStartWith("codex exec ");
+    expect(shown).toContain("--ephemeral");
+    expect(shown).toContain("--json");
+    expect(shown).toContain("--color never");
+    expect(shown).toContain("--output-schema '<output-schema.json>'");
+    expect(shown).toContain("--sandbox workspace-write");
+    expect(shown).not.toContain(" exec review ");
+    expect(shown).not.toContain("--max-budget-usd");
+  });
+
+  test("reviewers get read-only while developer work remains workspace-write", () => {
+    process.env.TLDRX_AGENT_PROVIDER = "codex";
+    expect(describeSpawn({ ...request(tmp()), role: "reviewer" })).toContain("--sandbox read-only");
+    expect(describeSpawn({ ...request(tmp()), role: "developer" })).toContain("--sandbox workspace-write");
+  });
+
+  test("configured Codex effort uses the CLI's config override", () => {
+    process.env.TLDRX_AGENT_PROVIDER = "codex";
+    expect(describeSpawn({ ...request(tmp()), effort: "low" })).toContain(
+      "--config 'model_reasoning_effort=\"low\"'",
+    );
+  });
+
+  test("the unsupported provider-side USD cap is warned, never presented as enforced", () => {
+    expect(providerBudgetAdvisory("claude", 1.25)).toBeNull();
+    expect(providerBudgetAdvisory("codex", 1.25)).toBe(
+      "budget: Codex has no provider-side USD cap; $1.25 is a planning ceiling only, " +
+      "and this turn will be recorded unmetered in dollars",
+    );
+  });
+
+  test("Codex spawn executes a real stub and records the turn as unmetered", async () => {
+    const dir = tmp();
+    const argvLog = join(dir, "argv.jsonl");
+    process.env.TLDRX_AGENT_PROVIDER = "codex";
+    process.env.TLDRX_CODEX_BIN = join(import.meta.dir, "fixtures", "agent", "fakeCodex.ts");
+    const outcome = await spawnAgent({
+      ...request(dir),
+      env: { ...process.env, FAKE_CODEX_ARGV_LOG: argvLog },
+    });
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.metered).toBe(false);
+    expect(outcome.costUsd).toBe(0);
+    expect(outcome.sessionId).toBe("01a06472-03bb-7ba3-abd2-820c96afe586");
+    expect(outcome.envelope?.outputs).toEqual(["tiny.md"]);
+    expect(outcome.usage.input_tokens).toBe(37682);
+    expect(outcome.reads).toBe(1);
+
+    const argv = JSON.parse(readFileSync(argvLog, "utf8").trim()) as string[];
+    expect(argv[0]).toBe("exec");
+    expect(argv).toContain("--json");
+    expect(argv).toContain("workspace-write");
+    const schemaPath = argv[argv.indexOf("--output-schema") + 1];
+    expect(typeof schemaPath).toBe("string");
+    expect(schemaPath).not.toBe("<output-schema.json>");
+  });
+
+  test("the prompt actually REACHES the Codex stub, and is not on the command line", async () => {
+    const dir = tmp();
+    const argvLog = join(dir, "argv.jsonl");
+    process.env.TLDRX_AGENT_PROVIDER = "codex";
+    process.env.TLDRX_CODEX_BIN = join(import.meta.dir, "fixtures", "agent", "fakeCodex.ts");
+    const prompt = "name the line Outbox lives on, and nothing else";
+
+    const outcome = await spawnAgent({
+      ...request(dir),
+      prompt,
+      env: { ...process.env, FAKE_CODEX_ARGV_LOG: argvLog },
+    });
+
+    // `buildCodexArgs` emits no positional prompt and no `-`, so stdin is the
+    // ONLY delivery path. Nothing pinned that: the fake read stdin and dropped
+    // it, so cutting the stdin wiring, or adding a positional [PROMPT] the real
+    // CLI would then take instead, left the suite green. The fake now echoes a
+    // digest of what it received into the envelope the real parser returns, so
+    // the assertion below fails if the prompt stops arriving.
+    expect(outcome.ok).toBe(true);
+    expect(outcome.envelope?.notes).toContain(codexPromptMarker(prompt));
+
+    // The other half of the same contract: it must NOT travel as an argument.
+    const argv = JSON.parse(readFileSync(argvLog, "utf8").trim()) as string[];
+    expect(argv).not.toContain("-");
+    expect(argv.filter((arg) => arg.includes(prompt))).toEqual([]);
+  });
 });
 
 function tmp(): string {

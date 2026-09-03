@@ -39,7 +39,15 @@ export type AgentEvent =
    * moment is BOTH — "`$ bun test` → running" is what you want on screen for the
    * ninety seconds it runs, and "→ ok (92 s)" is what you want after.
    */
-  | { readonly kind: "tool-done"; readonly id: string | null; readonly name: string; readonly ok: boolean; readonly ms: number | null }
+  | {
+      readonly kind: "tool-done";
+      readonly id: string | null;
+      readonly name: string;
+      readonly ok: boolean;
+      readonly ms: number | null;
+      /** A provider may expose repository reads through a coarser command event. */
+      readonly countsAsRead?: boolean;
+    }
   | { readonly kind: "text"; readonly text: string }
   | { readonly kind: "question"; readonly index: number; readonly text: string }
   /**
@@ -114,6 +122,53 @@ export function resolveResultDoc(stdout: string): Record<string, unknown> | null
   return null;
 }
 
+/** Normalize a completed Codex JSONL turn into the result shape the facilitator consumes. */
+export function resolveCodexResultDoc(stdout: string): Record<string, unknown> | null {
+  let threadId: string | null = null;
+  let result = "";
+  let structured: Record<string, unknown> | null = null;
+  let usage: Record<string, unknown> | null = null;
+  let failure: string | null = null;
+  let completed = false;
+
+  for (const line of stdout.trim().split("\n")) {
+    const doc = parseLine(line);
+    if (doc === null) continue;
+    if (doc.type === "thread.started") threadId = str(doc.thread_id);
+    if (doc.type === "turn.failed") failure = str(obj(doc.error)?.message) ?? "the Codex turn failed";
+    if (doc.type === "turn.completed") {
+      completed = true;
+      usage = obj(doc.usage);
+    }
+    if (doc.type !== "item.completed") continue;
+    const item = obj(doc.item);
+    if (item?.type !== "agent_message") continue;
+    const text = str(item.text);
+    if (text === null) continue;
+    result = text;
+    const parsed = parseLine(text);
+    if (parsed !== null) structured = parsed;
+  }
+  if (completed && structured === null && failure === null) {
+    failure = "the Codex structured output envelope was unreadable";
+  }
+  if (!completed && failure === null) return null;
+  return {
+    result,
+    session_id: threadId,
+    total_cost_usd: 0,
+    usage: {
+      input_tokens: num(usage?.input_tokens),
+      output_tokens: num(usage?.output_tokens),
+      cache_creation_input_tokens: num(usage?.cache_write_input_tokens),
+      cache_read_input_tokens: num(usage?.cached_input_tokens),
+    },
+    structured_output: structured,
+    is_error: failure !== null,
+    errors: failure === null ? [] : [failure],
+  };
+}
+
 /**
  * The stateful half: a JSONL line in, zero or more `AgentEvent`s out.
  *
@@ -125,12 +180,19 @@ export function resolveResultDoc(stdout: string): Record<string, unknown> | null
 export class AgentStream {
   private readonly openTools = new Map<string, { name: string; at: number | null }>();
   private readonly seenQuestions = new Set<string>();
+  private readonly provider: "claude" | "codex";
+  private codexStructured: unknown = null;
   private questionCount = 0;
+
+  constructor(provider: "claude" | "codex" = "claude") {
+    this.provider = provider;
+  }
 
   /** Parse one line. Returns [] for a line that is noise, unparseable, or unknown. */
   push(line: string): readonly AgentEvent[] {
     const doc = parseLine(line);
     if (doc === null) return [];
+    if (this.provider === "codex") return this.codex(doc);
     switch (doc.type) {
       case "system": return this.system(doc);
       case "assistant": return this.assistant(doc);
@@ -138,6 +200,59 @@ export class AgentStream {
       case "result": return this.result(doc);
       default: return [];
     }
+  }
+
+  /** `codex exec --json`, measured from codex-cli 0.152.0 on 2026-09-02. */
+  private codex(doc: Record<string, unknown>): readonly AgentEvent[] {
+    if (doc.type === "thread.started") {
+      return [{ kind: "start", model: null, sessionId: str(doc.thread_id) }];
+    }
+    if (doc.type === "turn.failed") {
+      return [{ kind: "error", message: str(obj(doc.error)?.message) ?? "the Codex turn failed" }];
+    }
+    if (doc.type === "turn.completed") {
+      const usage = obj(doc.usage);
+      const structured = this.codexStructured;
+      return [
+        {
+          kind: "cost",
+          usd: null,
+          inputTokens: num(usage?.input_tokens),
+          outputTokens: num(usage?.output_tokens),
+          cacheCreationTokens: num(usage?.cache_write_input_tokens),
+          cacheReadTokens: num(usage?.cached_input_tokens),
+        },
+        ...this.questions(obj(structured)?.questions_asked),
+        { kind: "done", ok: true, structured, costUsd: 0 },
+      ];
+    }
+    if (doc.type !== "item.started" && doc.type !== "item.completed") return [];
+    const item = obj(doc.item);
+    if (item === null) return [];
+    const id = str(item.id);
+    if (item.type === "agent_message") {
+      const message = str(item.text);
+      if (message === null) return [];
+      const structured = parseLine(message);
+      if (structured !== null) this.codexStructured = structured;
+      return [{ kind: "text", text: message }];
+    }
+    if (item.type !== "command_execution") return [];
+    const command = str(item.command);
+    if (doc.type === "item.started") {
+      return [{ kind: "tool", id, name: "Bash", target: command }];
+    }
+    return [{
+      kind: "tool-done",
+      id,
+      name: "Bash",
+      ok: item.status === "completed" && (item.exit_code === 0 || item.exit_code === null),
+      ms: null,
+      // Codex reports one command primitive rather than separate Read/Glob/Grep
+      // tools. Counting completions is conservative, provider-enforceable, and
+      // keeps max_reads meaningful without pretending the command was a Read.
+      countsAsRead: true,
+    }];
   }
 
   private system(doc: Record<string, unknown>): readonly AgentEvent[] {

@@ -115,6 +115,8 @@ export interface AmbientModel {
 }
 
 export interface PreflightInput {
+  /** Provider whose model and dollar controls this preflight may reason about. */
+  readonly provider?: "claude" | "codex";
   readonly mode: TrainingMode;
   /** How many sub-agents this run will spawn — the ceiling is split between them. */
   readonly agents: number;
@@ -173,7 +175,9 @@ export function trainPreflight(input: PreflightInput): TrainPreflight {
   if (input.run === "commit") return { ...base, notice: [], warnings: [], refusal: null };
 
   const share = input.ceilingUsd / Math.max(1, input.agents);
-  const expected = perAgentExpectedUsd(tier);
+  // The measured bands and model families in this module are Claude-specific.
+  // Applying them to Codex would turn an unknown USD cost into a fake refusal.
+  const expected = input.provider === "codex" ? null : perAgentExpectedUsd(tier);
   // The whole test, and it is arithmetic rather than a category: does the share
   // this run can hand ONE sub-agent reach what a pass on this tier is expected to
   // cost? On the shipped full-mode default that is $1.50 against $1.76 for a
@@ -195,7 +199,7 @@ export function trainPreflight(input: PreflightInput): TrainPreflight {
   //    stdout, and the operator decides.
   const mayRefuse = input.run === "headless" || input.model !== null;
 
-  const named = describeModel(model, tier, inherited ? input.ambient : null);
+  const named = describeModel(model, tier, inherited ? input.ambient : null, input.provider ?? "claude");
   if (cannotFit && !input.ceilingExplicit && mayRefuse) {
     return {
       ...base, notice: [], warnings: [], refusal: refusal(input, named, share, expected ?? 0),
@@ -241,9 +245,14 @@ function warning(
  * to override`, or `model sonnet (mid, --model)`, or the honest "could not read
  * it" line when nothing on this box says what the CLI will pick.
  */
-function describeModel(model: string | null, tier: ModelTier, inherited: AmbientModel | null): string {
+function describeModel(
+  model: string | null,
+  tier: ModelTier,
+  inherited: AmbientModel | null,
+  provider: "claude" | "codex",
+): string {
   if (model === null) {
-    return "model: whatever your claude CLI defaults to — tldrx could not read it here;"
+    return `model: whatever your ${provider} CLI defaults to — tldrx could not read it here;`
       + " pass --model to pin it";
   }
   // `inherited` is non-null only when the model came from the environment. An

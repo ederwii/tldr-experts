@@ -1038,6 +1038,7 @@ describe("the price/context table (N7)", () => {
     expect(priceFor("claude-haiku-4-5-20251001")?.id).toBe("haiku");
     expect(priceFor("opus[1m]")?.id).toBe("opus[1m]");
     expect(priceFor("gpt-nothing")).toBeNull();
+    expect(priceFor("gpt-5.6-sol")).toBeNull();
     expect(priceFor(null)).toBeNull();
   });
 

@@ -16,9 +16,9 @@
  * boundary case. Only the sub-agent is faked.
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
+import { codexGateExecutorId, runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { approve } from "../src/core/run/gates.ts";
 import { approveCommand } from "../src/cli/commands/approve.ts";
@@ -53,7 +53,7 @@ setDefaultTimeout(spawnTestTimeout());
 const ORIGINAL_PATH = process.env.PATH ?? "";
 const FAKE_KEYS = [
   "FAKE_CLAUDE_RUNDIR", "FAKE_CLAUDE_OUTPUTS", "FAKE_CLAUDE_COST",
-  "FAKE_BUILD_WRITE", "FAKE_BUILD_STATE",
+  "FAKE_BUILD_WRITE", "FAKE_BUILD_STATE", "FAKE_CODEX_SESSION",
 ] as const;
 
 let open: FacilitatorWorkspace[] = [];
@@ -61,6 +61,8 @@ let builds: BuildWorkspace[] = [];
 
 afterEach(() => {
   process.env.PATH = ORIGINAL_PATH;
+  delete process.env.TLDRX_AGENT_PROVIDER;
+  delete process.env.TLDRX_CODEX_BIN;
   for (const key of FAKE_KEYS) delete process.env[key];
   for (const ws of open) ws.dispose();
   for (const ws of builds) ws.dispose();
@@ -340,6 +342,37 @@ describe("gate.evidence in run.yml", () => {
 // ---------------------------------------------------------------------------
 
 describe("an agent gate that closes", () => {
+  test("a Codex gate records the one measured thread that executed it", async () => {
+    const ws = workspace();
+    writeNote(ws.runDir, "alpha", note());
+    process.env.TLDRX_AGENT_PROVIDER = "codex";
+    const codex = join(ws.binDir, "codex");
+    writeFileSync(codex, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} `
+      + `${JSON.stringify(join(import.meta.dir, "fixtures", "agent", "fakeCodex.ts"))} "$@"\n`, "utf8");
+    chmodSync(codex, 0o755);
+    process.env.TLDRX_CODEX_BIN = codex;
+    process.env.FAKE_CODEX_SESSION = "01a06472-03bb-7ba3-abd2-820c96afe586";
+
+    const outcome = await next(ws);
+
+    expect({ code: outcome.code, lines: outcome.lines }).toMatchObject({ code: 0 });
+    expect(stageOf(ws.runDir)?.gate.executed_by).toEqual({
+      type: "agent", id: "01a06472-03bb-7ba3-abd2-820c96afe586",
+    });
+  });
+
+  test("ambiguous or missing Codex identities cannot sign automatically", () => {
+    const stage = stageOf(workspace().runDir)!;
+    expect(codexGateExecutorId(stage)).toBeNull();
+    expect(codexGateExecutorId({
+      ...stage,
+      tasks: [
+        { ...stage.tasks[0]!, session_id: "thread-a" },
+        { ...stage.tasks[0]!, session_id: "thread-b" },
+      ],
+    })).toBeNull();
+  });
+
   test("all seven conditions + a note that signs ⇒ approved, recorded as the AGENT", async () => {
     const ws = workspace();
     writeNote(ws.runDir, "alpha", note());

@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/tldr-experts?label=npm%20tldr-experts)](https://www.npmjs.com/package/tldr-experts) [![ci](https://github.com/ederwii/tldr-experts/actions/workflows/ci.yml/badge.svg)](https://github.com/ederwii/tldr-experts/actions/workflows/ci.yml) ![status](https://img.shields.io/badge/status-beta-blue)
 
-**An evidence-first, file-based AI development framework: five stages, a gate on every one, and every claim cited or refused.** Open source. The workflow and the persisted state format are provider-independent; the automated runner currently supports Claude Code. **Beta:** every command is implemented and verified by running it, the `version: 1` file formats only grow from here, and `tldrx --help` is the authoritative command surface.
+**An evidence-first, file-based AI development framework: five stages, a gate on every one, and every claim cited or refused.** Open source. The workflow and the persisted state format are provider-independent; the automated runner currently supports Claude Code and Codex. **Beta:** every command is implemented and verified by running it, the `version: 1` file formats only grow from here, and `tldrx --help` is the authoritative command surface.
 
 One loop — *Investigate → Handoff → Interview → Gate* — five phases, **what · how · plan · build ·
 watch**, one stage per command, each stopping at a gate you own; the files ARE the state, the
@@ -59,7 +59,7 @@ and names the `--prepare` command instead.
 
 | | who executes each turn | what a turn costs | where it stops |
 |---|---|---|---|
-| `tldrx run auto` | the framework — `claude -p`, spawned stage after stage | metered per spawn, rolled up by `tldrx cost` | the first human gate or open question (`4`), stage failure (`5`), ceiling (`2`) |
+| `tldrx run auto` | the framework — Claude Code by default, or `codex exec` when selected | Claude reports metered USD; Codex reports tokens and is unmetered in dollars | the first human gate or open question (`4`), stage failure (`5`), ceiling (`2`) |
 | `tldrx run attend host`, driven from a session | your session's own sub-agents | host-billed; the framework records `cost_usd: null, metered: false` | every turn — `--prepare` writes the bundle, `--commit` settles it |
 | the same, under a **mandate** | your session's own sub-agents | host-billed | a new product decision, a ceiling raise, a boundary exit — nothing else |
 
@@ -298,6 +298,7 @@ back on the registry is 0.3.0.
 
 | Version | Date | Status | Contains |
 |---|---|---|---|
+| 0.7.0 | unreleased | `beta` | Codex as a second honest automated runner: recorded JSONL contract, structured envelopes, role-based sandboxes, token/session provenance, and explicitly unmetered USD accounting; Claude remains the default and the pilot harness. Also absorbs the citation-honesty work previously staged as 0.6.2: a `file` src resolves against the branches the run RECORDED and NAMES the unmerged ref instead of passing in silence or breaking with the temp dir (#140), watcher cards name it the same way (#143), and every run close reports the questions nobody answered (#141) |
 | 0.6.1 | 2026-09-03 | `beta` | dogfooding fixes from the first fully-unattended runs: blocked stories never lose uncommitted work (rescue commits + `story.work_rescued`), a fix is only Resolved with a reachable sha, re-entered stages reconstruct their handoff from the ledger instead of degrading it, the Cost header reports the phase and names its lower bound (shared `spendBasis`), feature presets resolve their per-repo maps, Plan sees the command allowlist its gate enforces, the landing sells the unattended flow |
 | 0.6.0 | 2026-09-02 | `beta` | the dashboard suite — a "Now" hero strip, `--serve` live refresh, stage durations and gate notes on page and CLI, and a public demo generated from fixtures; honest dual-economy spend (metered + host, lower-bound named); gate provenance — `executed_by` + `authority` so a delegated signature never reads as a personal one, machine-signed reporting fixed; ONE `absent:` semantic shared by claim-sources and the auto gate; superseded stamps when an owner answer flips an earlier phase doc; run close commits its state and `ship` refuses a state-carrying epic; merge-wave gates `docs:build`, survives interruption and self-rewrite; a public-surface drift guard; env.yml validation (unique ids, tool cap) |
 | 0.5.0 | 2026-09-02 | `beta` | `tldrx drive` and its own preflight, `watch check` / `watch arm`, `questions cards`, `plan schema`, `retro --all` (with its findings fed back into every reviewer prompt) and `story reopen --for-fix`; `tldrx update` plus a cached newer-version notice; the dashboard reads `budget.yml` and `events.jsonl` — operator notes, reopens and retries, the per-phase budget panel, and a host-attended run metered in tokens against `ceiling_host_tokens`; a rejected review envelope no longer burns a story attempt; `ship` opens one PR per repo; merge-wave lock + ref guard; five golden-transcript evals, one per stage; `CONTRIBUTING.md` and a model-provider contract |

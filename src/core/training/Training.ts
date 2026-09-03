@@ -153,4 +153,5 @@ export interface TrainingTask {
   readonly sessionId: string | null;
   readonly error: string | null;
   readonly outputs: readonly string[];
+  readonly metered?: boolean;
 }

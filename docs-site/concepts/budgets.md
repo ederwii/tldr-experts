@@ -30,7 +30,8 @@ A turn can be paid for in two different ways, and tldrx refuses to pretend other
 
 | | who runs the turn | who pays | what is recorded |
 |---|---|---|---|
-| **metered** | the framework spawns `claude -p` | your API account, per turn | the exact dollar figure the CLI reported |
+| **metered** | the framework spawns Claude Code | your API account, per turn | the exact dollar figure the CLI reported |
+| **Codex** | the framework spawns `codex exec` | your Codex account | measured tokens; `cost_usd: null, metered: false` because the CLI reports no USD |
 | **host** | the Claude Code session you are already in, using its own sub-agents | your session's plan | `cost_usd: null, metered: false` |
 
 A host turn has **no meter of its own**. The framework did not spawn it and was never told

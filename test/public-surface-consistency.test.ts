@@ -44,6 +44,7 @@ const pkg = JSON.parse(readFileSync(join(FRAMEWORK_ROOT, "package.json"), "utf8"
   version: string;
 };
 const README = readFileSync(join(FRAMEWORK_ROOT, "README.md"), "utf8");
+const CHANGELOG = readFileSync(join(FRAMEWORK_ROOT, "CHANGELOG.md"), "utf8");
 
 /**
  * `docs-site/reference/changelog.md` is GENERATED from CHANGELOG.md at build time
@@ -159,15 +160,17 @@ describe("the version the docs advertise", () => {
     expect(config.match(RELEASE_LITERAL) ?? []).toEqual([]);
   });
 
-  test("the top row of the README release table is the version in package.json", () => {
+  test("the README leads with either the installed release or the one staged as unreleased", () => {
     const row = README.split("\n").find((l) => /^\|\s*\d+\.\d+\.\d+\s*\|/.test(l));
     expect(row, "README.md has no release-table row at all").toBeDefined();
     const top = /^\|\s*(\d+\.\d+\.\d+)\s*\|/.exec(row!)![1];
+    if (top === pkg.version) return;
+    expect(row).toMatch(/^\|\s*\d+\.\d+\.\d+\s*\|\s*unreleased\s*\|/);
+    expect(CHANGELOG).toContain(`## ${top} — unreleased`);
     expect(
-      top,
-      `README.md's release table leads with ${top} but package.json says ${pkg.version}. ` +
-        `Every release adds a row; this one is missing or out of order.`,
-    ).toBe(pkg.version);
+      README.split("\n").some((line) => new RegExp(`^\\|\\s*${pkg.version.replaceAll(".", "\\.")}\\s*\\|`).test(line)),
+      `README.md stages ${top}, but has no row for installed version ${pkg.version}.`,
+    ).toBe(true);
   });
 });
 
@@ -195,9 +198,9 @@ describe("claims we have retired", () => {
     {
       re: /\b(?:tool|provider|model)-agnostic\b/i,
       why:
-        "an unqualified claim about software that has one working runner. Say the version that " +
+        "an unqualified claim about software whose runner support is finite and explicit. Say the version that " +
         "survives inspection: the workflow and the persisted state format are provider-independent; " +
-        "the automated runner currently supports Claude Code.",
+        "the automated runner currently supports Claude Code and Codex.",
     },
   ];
 
@@ -213,6 +216,12 @@ describe("claims we have retired", () => {
 });
 
 describe("what the front door advertises", () => {
+  test("the automated runner names both implementations it actually ships", () => {
+    const claim = "the automated runner currently supports Claude Code and Codex.";
+    expect(README).toContain(claim);
+    expect(readFileSync(join(FRAMEWORK_ROOT, "docs", "concept.md"), "utf8")).toContain(claim);
+  });
+
   /**
    * #128: `tldrx drive` is the star operator command for unattended runs — it has a
    * guide in both locales and a chapter behind that — and on 2026-09-02 neither landing

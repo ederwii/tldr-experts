@@ -11,15 +11,16 @@ sub-agent?**
 
 | | who runs each turn | what it costs | where it stops |
 |---|---|---|---|
-| `tldrx next` / `tldrx run auto` | the framework spawns `claude -p` | metered per turn | the first human gate or open question |
+| `tldrx next` / `tldrx run auto` | the framework spawns Claude Code, or Codex when selected | Claude: metered USD; Codex: unmetered tokens | the first human gate or open question |
 | `tldrx run attend host`, driven from a Claude Code session | that session's own sub-agents | billed to your session | every turn — you drive it |
 | the same, plus the `tldrx drive` mandate | that session's own sub-agents | billed to your session | only a real decision |
 
 `run auto` and `run attend host` read like two speeds of the same thing. They are
 opposites, and they do not compose.
 
-- **`run auto` is an engine.** It calls `next` over and over, headless, spawning a metered
-  sub-agent stage after stage.
+- **`run auto` is an engine.** It calls `next` over and over, headless, spawning a sub-agent
+  stage after stage. Claude turns carry provider-metered USD; Codex turns carry measured tokens
+  and remain explicitly unmetered in dollars.
 - **`run attend host` is a lock.** It sets one field, spends nothing, runs no stage. From
   then on the framework never spawns on that run — every turn is a
   `tldrx next --prepare` / `tldrx next --commit` handshake with a session you drive.

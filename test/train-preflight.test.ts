@@ -120,6 +120,18 @@ describe("model tiers", () => {
   });
 });
 
+describe("Codex cost knowability", () => {
+  test("Claude price bands never refuse or price a Codex training turn", () => {
+    const checked = trainPreflight({
+      provider: "codex", mode: "full", agents: 2, ceilingUsd: 0.02,
+      ceilingExplicit: false, model: null, ambient: null, run: "headless",
+    });
+    expect(checked.refusal).toBeNull();
+    expect(checked.notice[0]).toContain("whatever your codex CLI defaults to");
+    expect(checked.warnings).toEqual([]);
+  });
+});
+
 // --- (a) the refusal ---------------------------------------------------------
 
 describe("premium model + full mode + the DEFAULT ceiling", () => {

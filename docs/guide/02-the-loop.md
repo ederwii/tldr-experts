@@ -53,11 +53,16 @@ read, as the same **total**. `skip_if` and `questions.max` come from the workflo
 `tldrx next` can do the work itself or supervise someone else doing it, and it judges both
 by the same rules.
 
-**Headless** — `tldrx next` — spawns `claude -p --output-format stream-json --verbose
---json-schema …` through the runtime seam, with `--allowedTools` limited to the file tools
-plus one `Bash(<command>)` grant per command `workspace.yml` declares, and
-`--dangerously-skip-permissions` only when you pass `--yolo`. Use it from a terminal, CI
-or a chat bridge.
+**Headless** — `tldrx next` — uses Claude Code by default, or plain `codex exec --json`
+when `TLDRX_AGENT_PROVIDER=codex`. Both receive the prompt on stdin and a structured-output
+schema. Codex's invocation deliberately omits the optional positional `[PROMPT]`; codex-cli
+0.152.0 documents that exact shape as reading instructions from stdin. Its complete adapter
+argv is `exec --ephemeral --json --color never --sandbox <role> --output-schema <file>`, plus
+`--model <model>` and `--config model_reasoning_effort=<effort>` when configured. Claude keeps
+its existing allowlisted-tool and provider USD-cap path. Codex runs
+developers in `workspace-write` and Build reviewers in an enforced `read-only` sandbox; it
+reports tokens and a thread id, not metered USD, so those turns are explicitly unmetered.
+Use it from a terminal, CI or a chat bridge.
 
 **In-session** — `tldrx next --prepare` then `tldrx next --commit` — writes the same prompt
 bundle to `tldrx-work/<run>/.agent/<stage>/` and lets the Claude Code session you are

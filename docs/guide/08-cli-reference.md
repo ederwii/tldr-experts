@@ -47,7 +47,9 @@ Ctrl-C on a spawning command exits `130`.
 | Variable | What it does |
 |---|---|
 | `TLDRX_UI` | The progress view, same values as `--ui`. The flag wins where both are given. |
+| `TLDRX_AGENT_PROVIDER` | Automated runner: `claude` (default) or `codex`. |
 | `TLDRX_CLAUDE_BIN` | Which binary a sub-agent spawn executes. Default `claude`, taken off `PATH`. |
+| `TLDRX_CODEX_BIN` | Which Codex binary the runner executes. Default `codex`, taken off `PATH`. |
 | `TLDRX_UPDATE_CHECK` | `off` (also `0`, `false`, `no`, `never`) silences the new-version notice. |
 
 `TLDRX_CLAUDE_BIN` replaces the executable **name only** — the arguments are still Claude
@@ -55,8 +57,12 @@ Code's (`-p --output-format stream-json --verbose --json-schema …`), so whatev
 has to speak them. It is for a pinned install, a wrapper that adds a proxy or credentials, or
 a stand-in in a sandbox; it is not a provider switch. Blank or whitespace counts as unset.
 `tldrx run --dry-run` prints the command it would run, so it is also how you check the
-variable took. `tldrx doctor` is not affected: it checks `claude --version` because `env.yml`
-declares that, and that stays true of the tool this framework is built on.
+variable took. With `TLDRX_AGENT_PROVIDER=codex`, the same seam runs plain `codex exec --json`
+with `--output-schema`: developer turns use `workspace-write`; Build reviewers use an enforced
+`read-only` sandbox. Codex reports token usage and a thread id but no provider-metered USD or
+provider-side USD cap, so its tasks are `cost_usd: null, metered: false` and every reported dollar
+total remains a lower bound. `TLDRX_CODEX_BIN` has the same late-bound wrapper/pinned-install use.
+No Codex model prices are inferred.
 
 ---
 
