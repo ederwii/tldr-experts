@@ -28,7 +28,9 @@ import { collectFeatures, PLAN_PHASE, type Feature } from "../../watch/features.
 import { epicDiff, readRepoBases, WORKSPACE_YML, type RepoDiff } from "../../watch/epicDiff.ts";
 import { recordedEpicBranch, type RecordedBuild } from "../../watch/recordedBranch.ts";
 import { featureBrief, featureInputs, watcherRelPath } from "../../watch/watchPrompt.ts";
-import { describeWatcherIssues, parseWatcherCard, setWatcherStatus } from "../../watch/watcherFile.ts";
+import {
+  describeUnmergedRefs, describeWatcherIssues, parseWatcherCard, setWatcherStatus,
+} from "../../watch/watcherFile.ts";
 import { renderWatchHandoff, type WrittenCard } from "../../watch/renderWatchHandoff.ts";
 import { WATCH_PHASE } from "../../watch/Watcher.ts";
 import { buildPrompt, renderConventions, replaceSection, stackExpertNames } from "../prompt.ts";
@@ -202,9 +204,14 @@ export async function watchExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
     lines: [
       `${ctx.phaseId}/${ctx.stageId}: ${String(written.length)} watcher card(s) — `
         + `${String(verified)} verified, ${String(written.length - verified)} draft`,
-      ...written.map((w) =>
-        `  ${w.card.decidedStatus === "verified" ? "✓" : "·"} ${w.feature.id} (${w.feature.epicId}) — ${w.card.decidedStatus}`,
-      ),
+      // The `— on unmerged refs: …` tail is gh #143: the stage's own report is
+      // where the driver reads a card's status, so it is where a card that cites
+      // the epic and only the epic has to say so.
+      ...written.map((w) => {
+        const unmerged = describeUnmergedRefs(w.card);
+        return `  ${w.card.decidedStatus === "verified" ? "✓" : "·"} ${w.feature.id} (${w.feature.epicId}) — `
+          + `${w.card.decidedStatus}${unmerged === null ? "" : `, ${unmerged}`}`;
+      }),
       `wrote ${HANDOFF_REL}`,
     ],
     error: null,

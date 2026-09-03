@@ -35,7 +35,7 @@ import {
 import { raiseCommand, shortBy } from "../budget/budgetView.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../hooks/lib/workspace.ts";
-import { closeRun, describeStateCommit } from "../run/closeRun.ts";
+import { closeRun, describeOpenQuestions, describeStateCommit } from "../run/closeRun.ts";
 import type { TldrxEvent } from "../events/Event.ts";
 import { setProgressCeiling, setProgressReadCap, setProgressTitle } from "../ui/bus.ts";
 import { acquireLock, releaseLock } from "./Lock.ts";
@@ -1478,6 +1478,10 @@ async function finishStage(
     // The run owns its epic worktrees and its own state, so the run's close is what
     // takes the one (#16) and commits the other (#102).
     const closed = await closeRun(store.run, options.root, store.runDir, store.runId);
+    // First, and above the bookkeeping: an unanswered question is a decision
+    // nobody made, and the close is the last moment anyone is looking (#141).
+    const asked = describeOpenQuestions(closed.openQuestions);
+    if (asked !== null) closing.push(`  ${asked}`);
     const said = describeStateCommit(closed.state);
     if (said !== null) closing.push(`  ${said}`);
   }

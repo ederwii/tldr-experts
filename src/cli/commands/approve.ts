@@ -25,7 +25,7 @@ import { workspaceRootFrom } from "../workspace.ts";
 import { fail } from "../report.ts";
 import { isResolved, resolveRunOrExplain } from "../resolveRun.ts";
 import { approve, GateError, type GateEvidenceInput } from "../../core/run/gates.ts";
-import { describeStateCommit } from "../../core/run/closeRun.ts";
+import { describeOpenQuestions, describeStateCommit } from "../../core/run/closeRun.ts";
 import { gatePolicyFor } from "../../core/run/gatePolicy.ts";
 import { evidencePath } from "../../core/facilitator/paths.ts";
 import { describeEvidenceIssues, validateEvidence } from "../../core/text/evidence.ts";
@@ -97,6 +97,10 @@ export const approveCommand: Command = {
       );
       // Where the run's own state went, said out loud (#102): an operator who is
       // not told will commit it themselves, and half the time onto the epic.
+      // Signing the last gate is the most ordinary way a run closes, so it is
+      // also the most ordinary way a question ages out of one unanswered (#141).
+      const asked = outcome.closed === null ? null : describeOpenQuestions(outcome.closed.openQuestions);
+      if (asked !== null) lines.push(`  ${asked}`);
       const closing = outcome.closed === null ? null : describeStateCommit(outcome.closed.state);
       if (closing !== null) lines.push(`  ${closing}`);
       process.stdout.write(`${lines.join("\n")}\n`);

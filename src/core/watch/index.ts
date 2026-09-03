@@ -7,8 +7,9 @@ export type { ItemOwner } from "./itemOwner.ts";
 export type { Watcher, WatcherStatus, WatcherSectionName } from "./Watcher.ts";
 export {
   parseWatcherCard, queryBlock, setWatcherStatus, describeWatcherIssues,
+  describeUnmergedRefs, unmergedRefsOf,
 } from "./watcherFile.ts";
-export type { WatcherCard, WatcherIssue } from "./watcherFile.ts";
+export type { WatcherCard, WatcherEpicOnly, WatcherIssue } from "./watcherFile.ts";
 export { collectFeatures, featureId, PLAN_PHASE } from "./features.ts";
 export type { Feature, DoneStory } from "./features.ts";
 export { epicDiff, renderDiffs, readRepoBases, GIT_BIN, MAX_DIFF_BYTES, WORKSPACE_YML } from "./epicDiff.ts";

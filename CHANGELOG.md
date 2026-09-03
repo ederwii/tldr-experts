@@ -48,6 +48,48 @@
     detail now holds. So a stage whose handoff cited nothing but the epic and held no absence at all
     auto-signed with a note that read, in full, `claim-sources=passed`. Both counts are consulted now, and
     the branch reaches the sentence a person actually reads when a stage signs itself.
+- **A watcher card could cite a path only the unmerged epic has, and say nothing (#143).** The one artefact
+  #140's annotation did not reach. `watcherFile.ts` recorded an issue only when a resolution was NOT `ok`,
+  and every issue it records makes the card fail — so "true, and true only on `epic/…`" could not be said
+  without failing a card that is not wrong. Since `tldrx watch`, `watch arm` and the Watch executor opt into
+  the recorded epic refs (`toSrcContext(…, { epicRefs: true })`), such a citation resolved in silence, and a
+  card committed to the trunk could point a reader at paths no merged ref has. Measured RED, on a card whose
+  four checked sections all cite `epic/money-and-payments`: `watch check` said `ok — verified; every source
+  resolves` and `watch list`'s footer said `1 card(s): 1 verified, 0 draft`, neither naming the branch.
+  - The card now carries a **separate, non-fatal `epicOnly` list** — the shape `handoff.ts` already uses for
+    the same reason, rather than a third `WatcherIssueKind`, because `ok` reads `issues` and nothing else, so
+    the annotation cannot fail a card however long it gets.
+  - It is printed in the words `claim-sources` already uses at a gate — `on unmerged refs: 4
+    (epic/money-and-payments — unmerged)` — beside the card's status in `watch check`, as a footer under the
+    `watch list` table, as `unmerged_refs` (plus an `unmerged` count) in `watch list --json`, and on the Watch
+    executor's own per-card line, which is where the driver reads a card's status.
+  - Three guards say it is not a rubber stamp, and all three were green before the change: a path on a
+    **merged** ref gets no annotation, a citation that resolves **nowhere** is still a failing `source` issue,
+    and with epic refs **off** — the context the PreToolUse hook builds — nothing resolves and nothing is
+    annotated.
+- **A run could close with a question nobody ever answered, and nothing said so (#141).** Filed from the
+  driver of `260830-money-and-payments` (aparece-v2) as *"D7.6 nunca recibió respuesta ni disparó su
+  default"*, labelled INFERRED. **Measured first, and the reported mechanism does not exist:**
+  - `D7.6` was never a question. The §2.7 heading grammar is `^## (Q\d{1,6}) · ` — `D7.6` is a
+    Definition-of-Done criterion in that run's own seeded documents
+    (`docs/domain-design/docs/12-DEFINITION-OF-DONE.md:118-125`). The run's `questions.md` files hold exactly
+    three blocks — `Q1`, `Q2`, `Q3` — and every one is `status: answered`.
+  - A question **cannot declare** a default. §2.7's metadata keys are `id status area asked_by asked_at` plus
+    the optional `affects:`; there is no `default:` and no `timeout:`.
+  - **Nothing fires one.** The only thing in the codebase called a default is `tldrx interview
+    --yes-to-defaults`, which an operator invokes by hand, takes option A, and is labelled `[assumption]` in
+    its own implementation. No timer, no gate and no close applies anything to an open question.
+
+  The fail-open the report was reaching for is real, and narrower guards had hidden it: the auto gate's
+  `questions` condition reads only the CURRENT stage's declared file, a human `approve` does not look at
+  questions at all, and `closeRun` read `run.yml` and git and nothing else. A question raised in `01-what`
+  could age through every later stage, past a signed gate and out of the run in silence. Measured RED, on a
+  run cancelled with `Q1` open: `cancelled 260828-demo — 1 stage(s) closed: 01-what/alpha` and not one word
+  about the question. **All three close paths** — `tldrx next` closing the last stage, `tldrx approve` signing
+  the last gate, `tldrx run cancel` — now name every open block by id, title and file, plus any heading the
+  §2.7 parser cannot read (worse than open: the block was never visible to anything). The sentence ends by
+  saying that nothing was going to answer them, because that belief is what produced the report. It is a
+  report and nothing else: no exit code changes, no close is refused, not one byte is written.
 
 ## 0.6.1 — 2026-09-03
 
