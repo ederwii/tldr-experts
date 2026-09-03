@@ -43,6 +43,7 @@ import {
 import { DodCommandRefused, runDodCommand } from "../../../hooks/lib/story.ts";
 import { FactsStore } from "../../facts/FactsStore.ts";
 import { RunStore } from "../../run/RunStore.ts";
+import { stageAt } from "../../run/RunFile.ts";
 import { renderConventions, renderFacts, stackExpertNames } from "../prompt.ts";
 import { loadExpertBundles } from "../../experts/expertBundle.ts";
 import { agentDir } from "../paths.ts";
@@ -2611,11 +2612,17 @@ class BuildSession {
   private writeHandoff(outcomes: readonly StoryOutcome[]): void {
     const path = join(this.ctx.runDir, HANDOFF_REL);
     mkdirSync(join(path, ".."), { recursive: true });
+    // The PHASE's spend, not this process's — the header sits on a document whose
+    // own docstring says it describes the phase (#138). `ExecutorOutcome.costUsd`
+    // below stays `this.spent()` on purpose: that one is ADDED to the run budget,
+    // and a phase-to-date number there would double-count on every re-entry.
+    const cost = phaseCostToDate(this.ctx.runDir, this.ctx.phaseId, this.ctx.stageId, this.spent());
     writeFileSync(path, renderBuildHandoff({
       runId: this.ctx.runId,
       stageId: this.ctx.stageId,
       model: this.model(),
-      costUsd: this.spent(),
+      costUsd: cost.usd,
+      costNote: cost.note,
       budgetUsd: this.ctx.budgetUsd,
       at: this.ctx.at,
       outcomes,
@@ -3900,6 +3907,72 @@ export interface ReviewLedger {
    * handed the brief that produced the broken one.
    */
   readonly formatRefusal: string | null;
+}
+
+/**
+ * What the PHASE has spent so far, for the handoff header — never what THIS
+ * process spent (#138).
+ *
+ * `04-build/handoff.md` is rewritten by every invocation that reaches `finish()`,
+ * over a document whose own docstring says it "describes the phase, not the
+ * invocation". The header was fed `this.spent()`, the sum of the tasks this
+ * process spawned, so a `tldrx next` → `tldrx reject` → `tldrx next` rewrote a
+ * phase that had spent $0.44 as one that had spent `$0.00`: the second invocation
+ * settled nothing, spent nothing, and said so about the whole phase.
+ *
+ * **The durable source is `run.yml`'s `stage.cost_usd`**, and it is chosen over
+ * the `agent.result` events for one reason: it is the ledger the BUDGET is
+ * derived from, and it validates its own arithmetic. `rollUp` recomputes it from
+ * `stage.tasks` on every save (`RunStore.ts:378`), `rollUpBudget` mirrors it into
+ * `budget.yml`, `run status` and the dashboard both read it (`dashboard/model.ts`,
+ * `stage.cost_usd`), and `validateRunFile` REFUSES a `run.yml` whose
+ * `budget.spent_usd` drifts from the sum of its task rows by more than a cent
+ * (`RunFile.ts:647`). The events ledger carries the same numbers — every
+ * `recordTask` is paired with an `agent.result` written from the same task in the
+ * same loop — but nothing checks that it still does, so reading it here would put
+ * a second, unpoliced derivation of the budget on the page beside the first.
+ *
+ * Three properties this relies on, each verified rather than assumed:
+ *
+ *  - **`tldrx reject` does not touch it.** It rewrites `status`, `ended_at` and
+ *    `gate` and nothing else (`run/gates.ts`), so a rejected stage keeps every
+ *    dollar it spent. That is the right answer to "what should a reject do to the
+ *    number a re-run reports": nothing. The money was spent.
+ *  - **This invocation is not in it yet.** `recordExecutorTasks` runs in
+ *    `runNext` AFTER the executor returns, so at `writeHandoff` time `run.yml`
+ *    holds the earlier invocations and `invocationUsd` holds this one. Adding
+ *    them cannot double-count.
+ *  - **Opening the store mid-stage is the established shape here**, not a new
+ *    coupling: the executor already does exactly `RunStore.open(runDir).run` for
+ *    the run title and for the epic-branch state.
+ *
+ * When the ledger cannot be read at all — no `run.yml`, one that fails schema
+ * validation, or a stage id that does not resolve — the answer is NOT a confident
+ * total. It falls back to this invocation's own spend and says which of the two
+ * numbers the reader is looking at.
+ */
+export function phaseCostToDate(
+  runDir: string,
+  phaseId: string,
+  stageId: string,
+  invocationUsd: number,
+): { readonly usd: number; readonly note: string | null } {
+  let recorded: number | null = null;
+  try {
+    const found = stageAt(RunStore.open(runDir).run, { phase: phaseId, stage: stageId, task: null });
+    if (found !== null) recorded = found.stage.cost_usd;
+  } catch {
+    // A run.yml that is missing, torn, or invalid. The handoff is still worth
+    // writing; the header just has to stop pretending it knows the phase total.
+    recorded = null;
+  }
+  if (recorded === null) {
+    return {
+      usd: round2(invocationUsd),
+      note: "this invocation only — `run.yml` could not be read for what the stage spent before it",
+    };
+  }
+  return { usd: round2(recorded + invocationUsd), note: null };
 }
 
 /** Everything the two resume paths and the requeue counter need, in one pass. */

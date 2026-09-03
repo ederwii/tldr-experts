@@ -19,7 +19,7 @@ import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { executorFor, EXECUTORS } from "../src/core/facilitator/executors/index.ts";
 import {
-  buildExecutor, developerTools, readReviewLedger, REVIEWER_TOOLS,
+  buildExecutor, developerTools, phaseCostToDate, readReviewLedger, REVIEWER_TOOLS,
 } from "../src/core/facilitator/executors/build.ts";
 import { looksLikeReviewerError, reviewerFailed } from "../src/core/build/review.ts";
 import { UNFINISHED_STORIES } from "../src/core/run/autoGate.ts";
@@ -1985,10 +1985,11 @@ describe("honest merge rendering", () => {
  *
  * `FAKE_BUILD_COST` is pinned to zero for the same reason the #134 test pins it:
  * the budget gate refuses to restart a stage whose estimate no longer fits. It has
- * a side effect worth saying out loud — the header's `Cost:` is invocation-scoped
- * too, and at zero both writes read `$0.00` and agree. At `0.11` they do not
- * ($0.44 → $0.00, measured): that is the same defect one line higher, a different
- * seam, and #138.
+ * a side effect worth saying out loud — the header's `Cost:` was invocation-scoped
+ * too, and at zero both writes read `$0.00` and agree. At `0.11` they did not
+ * ($0.44 → $0.00, measured): that was the same defect one line higher, on a
+ * different seam, and it is #138 — fixed in the block at the end of this file,
+ * which is the one place here that does NOT pin the cost to zero.
  */
 describe("a re-entered stage does not degrade its own handoff (#137)", () => {
   function section(handoff: string, name: string): string {
@@ -2115,4 +2116,171 @@ describe("a re-entered stage does not degrade its own handoff (#137)", () => {
     // The Gate section is unaffected: what merged is a different question.
     expect(section(second, "Gate")).not.toContain("no story merged");
   }, 120_000);
+});
+
+/**
+ * The handoff's `Cost:` header reports the PHASE, not the invocation (#138).
+ *
+ * The sibling of the three sections #137 fixed, one line higher up. `writeHandoff`
+ * fed the header `this.spent()` — the sum of the tasks THIS process spawned — into
+ * a document whose own docstring says it "describes the phase, not the invocation".
+ * So the second write over a re-entered stage rewrote a phase that had spent $0.44
+ * as one that had spent nothing. Measured on `f5936d2`, `FAKE_BUILD_COST=0.11`,
+ * `tldrx next` → `tldrx reject` → `tldrx next`:
+ *
+ *   Stage: build · … · Cost: $0.44 of $200.00 ceiling · 2026-08-29T09:00:00Z   first
+ *   Stage: build · … · Cost: $0.00 of $200.00 ceiling · 2026-08-29T10:05:00Z   second
+ *
+ * `FAKE_BUILD_COST=0` in every other re-entry test is why neither #137 nor its
+ * measurements could see it: at zero both writes read `$0.00` and agree. These
+ * tests set it to `0.11` and buy the headroom that needs with a $200 stage ceiling
+ * — the budget gate refuses to RESTART a stage whose estimate no longer fits what
+ * the phase has left, so a fixture whose stage estimate IS the phase ceiling
+ * cannot re-enter at all once a cent is recorded.
+ *
+ * `ExecutorOutcome.costUsd` is deliberately NOT changed: it is what the
+ * facilitator ADDS to the run budget, so a phase-to-date number there would
+ * double-count every re-entry. Only the value handed to `renderBuildHandoff`
+ * moves — and the last test here pins it to `run.yml`, the ledger the budget
+ * itself is derived from, so the two can never drift apart in silence.
+ */
+describe("the handoff's Cost line reports the phase, not the invocation (#138)", () => {
+  /** The filer's fixture: a stage ceiling roomy enough to re-enter after a spend. */
+  const PAID: BuildWorkspaceOptions = { ...TWO_WAVES, budgetUsd: 200, perAgentMaxUsd: 200 };
+
+  const handoffPath = (ws: BuildWorkspace): string => join(ws.runDir, "04-build", "handoff.md");
+
+  function costLine(handoff: string): string {
+    return handoff.split("\n").find((line) => line.startsWith("Stage: ")) ?? "";
+  }
+
+  /** `next` → `reject` → `next`, with real money on both invocations. */
+  async function reentered(
+    ws: BuildWorkspace,
+    between: (ws: BuildWorkspace) => void = () => {},
+  ): Promise<{ first: string; second: string }> {
+    await next(ws);
+    const first = readFileSync(handoffPath(ws), "utf8");
+    reject(RunStore.open(ws.runDir), {
+      root: ws.root, actor: "alan", at: "2026-08-29T10:00:00Z", note: "run the stage again",
+    });
+    between(ws);
+    await next(ws, { at: "2026-08-29T10:05:00Z" });
+    return { first, second: readFileSync(handoffPath(ws), "utf8") };
+  }
+
+  test("a re-entered stage does not rewrite $0.44 as $0.00", async () => {
+    const ws = workspace(PAID);
+    process.env.FAKE_BUILD_COST = "0.11";
+
+    const { first, second } = await reentered(ws);
+
+    // Four sub-agents at $0.11 — two developers and two reviewers.
+    expect(costLine(first)).toContain("Cost: $0.44 of $200.00 ceiling");
+    // The false claim: a phase that spent $0.44 reported as having spent nothing.
+    expect(costLine(second)).not.toContain("Cost: $0.00");
+    // The second invocation settled nothing and spent nothing, so the phase total
+    // is unchanged — not zero, and not doubled either.
+    expect(costLine(second)).toContain("Cost: $0.44 of $200.00 ceiling");
+  }, 120_000);
+
+  test("the header equals `run.yml`'s stage cost — the ledger the budget is derived from", async () => {
+    const ws = workspace(PAID);
+    process.env.FAKE_BUILD_COST = "0.11";
+
+    const { second } = await reentered(ws);
+
+    const run = RunStore.open(ws.runDir).run;
+    const stage = run.phases.flatMap((p) => p.stages).find((s) => s.id === "build");
+    expect(stage?.cost_usd).toBe(0.44);
+    expect(costLine(second)).toContain(`Cost: $${(stage?.cost_usd ?? -1).toFixed(2)} of $200.00 ceiling`);
+    // And `run.yml` is not double-counting either: four tasks, one per sub-agent.
+    expect(stage?.tasks).toHaveLength(4);
+  }, 120_000);
+
+  // Not a RED: a first invocation was always right, because there is nothing
+  // earlier to lose. It guards the other half of the fix — that reading the phase
+  // does not double-count the turns this process just spawned.
+  test("a FIRST invocation still reports what it spent, with no note attached", async () => {
+    const ws = workspace(PAID);
+    process.env.FAKE_BUILD_COST = "0.11";
+
+    await next(ws);
+
+    const line = costLine(readFileSync(handoffPath(ws), "utf8"));
+    expect(line).toContain("Cost: $0.44 of $200.00 ceiling");
+    expect(line).not.toContain("not counted here");
+  }, 120_000);
+
+  /**
+   * A re-entry that DOES spend adds to the phase instead of replacing it.
+   *
+   * The other direction of the same bug, and the one that would catch a fix that
+   * simply read `run.yml` and forgot this process: S1's first reviewer dies, the
+   * operator re-enters, and the second reviewer is a real spawn with real money on
+   * it. The header has to be the sum — not the earlier turns alone, and not this
+   * turn alone.
+   */
+  test("a re-entry that spends adds to the phase total instead of replacing it", async () => {
+    const ws = workspace({
+      stories: [{ id: "S1", epic: "E1", title: "First story" }],
+      epics: [{ id: "E1", stories: ["S1"], branch: "epic/e1" }],
+      waves: [["S1"]],
+      budgetUsd: 200,
+      perAgentMaxUsd: 200,
+    });
+    process.env.FAKE_BUILD_COST = "0.11";
+    process.env.FAKE_BUILD_FAIL_REASON = "Reached maximum budget ($0.26)";
+    process.env.FAKE_BUILD_FAIL = "reviewer:S1#1";
+
+    await next(ws);
+    // The developer plus the reviewer that died — a spawn that FAILS still costs,
+    // and both turns are on the phase (measured, not assumed).
+    expect(costLine(readFileSync(handoffPath(ws), "utf8"))).toContain("Cost: $0.22 of $200.00 ceiling");
+
+    reject(RunStore.open(ws.runDir), {
+      root: ws.root, actor: "alan", at: "2026-08-29T10:00:00Z", note: "the reviewer died",
+    });
+    await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    // The replacement reviewer is this invocation's $0.11, on top of the $0.22
+    // `run.yml` already held. Neither number alone is the phase.
+    const second = readFileSync(handoffPath(ws), "utf8");
+    expect(costLine(second)).toContain("Cost: $0.33 of $200.00 ceiling");
+    const stage = RunStore.open(ws.runDir).run.phases.flatMap((p) => p.stages).find((s) => s.id === "build");
+    expect(stage?.cost_usd).toBe(0.33);
+  }, 120_000);
+
+  /**
+   * The unreadable case, said out loud rather than printed as a confident total.
+   *
+   * `run.yml` is the source, and when it cannot be read there is no phase figure
+   * to report — only this invocation's own spend, which is a DIFFERENT number and
+   * must not be dressed up as the same one. Tested against the exported helper
+   * because the states are `run.yml`-level (missing, invalid, a stage id that does
+   * not resolve) and cannot be reached through a run that still loads: a hand-edit
+   * that zeroes the task rows is refused outright by `validateRunFile`, whose
+   * `budget.spent_usd` cross-check is the very property that makes this the
+   * trustworthy source.
+   */
+  test("an unreadable `run.yml` yields this invocation's spend, labelled as such", () => {
+    const empty = mkdtempSync(join(tmpdir(), "tldrx-138-"));
+    try {
+      // No run.yml at all.
+      expect(phaseCostToDate(empty, "04-build", "build", 0.44)).toEqual({
+        usd: 0.44,
+        note: "this invocation only — `run.yml` could not be read for what the stage spent before it",
+      });
+      // Present and loadable, but the stage id does not resolve.
+      const ws = workspace(PAID);
+      expect(phaseCostToDate(ws.runDir, "04-build", "no-such-stage", 0.44).note)
+        .toContain("`run.yml` could not be read");
+      // And the resolving stage on that same untouched run is $0.00 with NO note:
+      // a stage that has genuinely spent nothing reads differently from one whose
+      // ledger is missing.
+      expect(phaseCostToDate(ws.runDir, "04-build", "build", 0)).toEqual({ usd: 0, note: null });
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
 });

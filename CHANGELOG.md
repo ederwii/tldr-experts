@@ -4,6 +4,43 @@
 
 ### Fixed
 
+- **The Build handoff's `Cost:` header was invocation-scoped, so a re-entered stage reported
+  `$0.00` for a phase that had spent `$0.44` (#138).** The sibling of #137's two sections, one
+  line higher up, on a document whose own docstring says it "describes the phase, not the
+  invocation". `writeHandoff` fed the header `this.spent()` — the sum of the tasks THIS process
+  spawned — so a `tldrx next` → `tldrx reject` → `tldrx next` rewrote the same file's
+  `Cost: $0.44 of $200.00 ceiling` as `Cost: $0.00`: the second invocation settled nothing,
+  spent nothing, and said so about the whole phase. Measured on `f5936d2` with the `TWO_WAVES`
+  fixture at `FAKE_BUILD_COST=0.11`.
+  - **`FAKE_BUILD_COST=0` is why nobody saw it.** Every other re-entry test in
+    `test/build-executor.test.ts` pins the cost to zero, where both writes read `$0.00` and
+    agree. The new block does not, and buys the headroom that needs with a $200 stage ceiling —
+    the budget gate refuses to RESTART a stage whose estimate no longer fits, so a fixture whose
+    stage estimate IS the phase ceiling cannot re-enter once a cent is recorded. Raising the
+    default in the shared fixture instead was rejected: it would have rewritten the pinned
+    expectations of every re-entry test in the file for a defect one block now covers head-on.
+  - **The durable source is `run.yml`'s `stage.cost_usd`**, plus what this invocation has spent
+    and not yet handed back (`phaseCostToDate`, exported from `executors/build.ts`). Chosen over
+    the `agent.result` events because it is the ledger the budget is derived from AND it
+    validates its own arithmetic: `rollUp` recomputes it from `stage.tasks` on every save,
+    `rollUpBudget` mirrors it into `budget.yml`, `run status` and the dashboard read it, and
+    `validateRunFile` refuses a `run.yml` whose `budget.spent_usd` drifts from the sum of its
+    task rows by more than a cent. The events carry the same numbers — every `recordTask` is
+    paired with an `agent.result` written from the same task in the same loop — but nothing
+    checks that they still do.
+  - **Three properties it rests on, verified rather than assumed.** `tldrx reject` does not touch
+    the number (it rewrites `status`, `ended_at` and `gate` and nothing else), which answers the
+    open question in the issue: a re-run reports the earlier spend, because the money was spent.
+    This invocation is not in `run.yml` yet, because `recordExecutorTasks` runs after the
+    executor returns — so adding the two cannot double-count, and a re-entry that DOES spend is
+    pinned at `$0.22 + $0.11 = $0.33`. And opening the store mid-stage is the shape the executor
+    already uses twice, not a new coupling.
+  - **`ExecutorOutcome.costUsd` stays invocation-scoped.** It is what the facilitator adds to the
+    run budget; a phase-to-date figure there would double-count on every re-entry.
+  - **Unreadable is not zero.** No `run.yml`, one that fails schema validation, or a stage id
+    that does not resolve gives this invocation's own spend with the reason in brackets — never
+    a confident total. A stage that has genuinely spent nothing still reads `$0.00` with no note.
+
 - **`test/attempt-cost.test.ts` proved "carries no format refusal" with the bare word
   `REFUSED`, and unrelated prompt prose turned it red (#135).** The thing it means to detect
   is `renderFormatRefusal`'s heading; what it detected was an eight-letter English word,

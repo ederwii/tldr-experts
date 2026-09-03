@@ -55,7 +55,20 @@ export interface BuildHandoffParts {
   readonly runId: string;
   readonly stageId: string;
   readonly model: string | null;
+  /**
+   * What the PHASE has spent, not what the invocation that wrote this file spent
+   * (#138). The executor sources it from `run.yml`; see `phaseCostToDate`.
+   */
   readonly costUsd: number;
+  /**
+   * Why `costUsd` is not the whole answer, when it is not — rendered in brackets
+   * after the ceiling. `null`/absent means the figure needs no caveat.
+   *
+   * The absent-with-reason idiom, on a line that had been printing a confident
+   * `$0.00` for a phase that had spent $0.44. A number this run cannot produce
+   * and a number that is genuinely zero must not read identically.
+   */
+  readonly costNote?: string | null;
   readonly budgetUsd: number;
   readonly at: string;
   readonly outcomes: readonly StoryOutcome[];
@@ -76,7 +89,8 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
   const lines = [
     `# Handoff — 04-build / ${parts.stageId} — run ${parts.runId}`,
     `Stage: ${parts.stageId} · Expert: developer + reviewer · Model: ${parts.model ?? "default"} · ` +
-      `Cost: $${parts.costUsd.toFixed(2)} of $${parts.budgetUsd.toFixed(2)} ceiling · ${parts.at}`,
+      `Cost: $${parts.costUsd.toFixed(2)} of $${parts.budgetUsd.toFixed(2)} ceiling` +
+      `${parts.costNote == null ? "" : ` (${parts.costNote})`} · ${parts.at}`,
     "",
     "## Findings",
     "",
