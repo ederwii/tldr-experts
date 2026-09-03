@@ -49,6 +49,7 @@ import {
 } from "../replay/index.ts";
 import { DEFAULT_ECONOMY, DEFAULT_ON_HOST_TOKENS_EXCEED } from "../budget/RunBudget.ts";
 import { MAX_ATTEMPTS } from "../budget/remainingWork.ts";
+import { spendBasisOf } from "../budget/spendBasis.ts";
 import { hasStarted, resolveDependencies, type DependencyInput, type ResolvedRun } from "../run/dependencies.ts";
 import { isMovable, waitingFor, type Waiting, type WaitingKind } from "../run/waiting.ts";
 import { openBlocks, parseHandoff, parseQuestions } from "../text/index.ts";
@@ -1174,14 +1175,11 @@ export function toRunModel(
  * for a turn that declared none: the whole point of the issue is that the number
  * a decision-maker reads must not be one this process invented.
  *
- * The one judgement call is what counts as a turn that "produced no dollars",
- * and it is deliberately the WIDER reading: `metered: false` OR a metered
- * `cost_usd` of exactly `0`. The narrow one — `metered` alone — is what the
- * model had, and on the audited run it saw 14 of the 30 turns that put nothing
- * in the meter. It does not RECLASSIFY the other 16: `unmeteredTasks` still
- * means what it always meant, `zeroCostTasks` is a second count beside it, and a
- * reader can see both numbers and decide. A file that says `0.00` is not
- * overruled here; it is counted.
+ * The counting and the sentence moved to `budget/spendBasis.ts` when the Build
+ * handoff needed the same caveat (#139) — one derivation, three surfaces, so the
+ * page and the header cannot word one fact two ways. What is decided HERE is
+ * unchanged: `unmeteredTasks` still means what it always meant, `zeroCostTasks`
+ * is a second count beside it, and a reader can see both numbers and decide.
  */
 function toSpendModel(
   doc: RunDocument,
@@ -1189,71 +1187,22 @@ function toSpendModel(
   unmeteredTasks: number,
   hostTokens: number,
 ): SpendModel {
-  const costless = tasks.filter((task) => !task.metered || task.cost_usd === 0);
-  const costlessTokens = costless.reduce((sum, task) => sum + (task.tokens ?? 0), 0);
-  const silentTasks = costless.filter((task) => task.tokens === null).length;
-  const total = tasks.length;
-  const count = costless.length;
-  const basis = count === 0
-    ? "measured"
-    : silentTasks === 0
-      ? "declared"
-      : costlessTokens > 0 ? "partial" : "absent";
+  const counted = spendBasisOf(
+    tasks.map((task) => ({ costUsd: task.cost_usd, metered: task.metered, tokens: task.tokens })),
+    hostTokens,
+  );
   return {
     meteredUsd: doc.spent_usd,
-    totalTasks: total,
+    totalTasks: counted.totalTasks,
     unmeteredTasks,
-    zeroCostTasks: count - unmeteredTasks,
-    costlessTasks: count,
+    zeroCostTasks: counted.costlessTasks - unmeteredTasks,
+    costlessTasks: counted.costlessTasks,
     hostTokens,
-    costlessTokens,
-    silentTasks,
-    basis,
-    reason: spendReason(basis, total, count, silentTasks, hostTokens),
+    costlessTokens: counted.costlessTokens,
+    silentTasks: counted.silentTasks,
+    basis: counted.basis,
+    reason: counted.reason,
   };
-}
-
-/**
- * `basis` as the sentence a person reads, in TURN COUNTS only.
- *
- * No dollars and no token totals in here, for two reasons. The model does not
- * format money — that rule is older than this field — and the page prints the
- * token figure right beside this sentence, so repeating it would say the same
- * number twice in one row. The phrase "LOWER BOUND, not a total" is lifted
- * verbatim from `budgetView.ts`, which is what `tldrx budget show` prints for
- * the identical fact: two screens, one wording.
- */
-function spendReason(
-  basis: string,
-  total: number,
-  costless: number,
-  silent: number,
-  hostTokens: number,
-): string {
-  const of = `${String(costless)} of ${String(total)} turns produced no dollars`;
-  const metered = total - costless;
-  if (basis === "measured") {
-    return total === 0
-      ? "no turn has run yet, so nothing is missing from the metered total"
-      : `all ${String(total)} turns recorded a cost, so the metered total is a measurement `
-        + "rather than a lower bound";
-  }
-  if (basis === "declared") {
-    return `${of} and every one of them declared its host tokens instead, so the metered total `
-      + "is a LOWER BOUND on the dollars";
-  }
-  if (basis === "partial") {
-    return `${of}: ${String(costless - silent)} declared host tokens and ${String(silent)} declared `
-      + "nothing at all, so the metered total is a LOWER BOUND, not a total";
-  }
-  // `absent`. The clause about where the tokens DID land is the audited run's
-  // exact trap: 920,641 of them, every one on a turn that also carried dollars,
-  // so the token figure on the page describes none of the turns this sentence is
-  // about.
-  return `${of} and none of them declared host tokens`
-    + (hostTokens > 0 ? " — every token this run declared sits on a turn that also carried dollars" : "")
-    + ", so the metered total is a LOWER BOUND, not a total"
-    + (metered > 0 ? `: it is what the other ${String(metered)} turns cost, not what the run cost` : "");
 }
 
 /** When the run last moved, and how long ago — with the source of the answer named. */

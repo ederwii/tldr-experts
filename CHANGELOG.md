@@ -41,6 +41,34 @@
     that does not resolve gives this invocation's own spend with the reason in brackets — never
     a confident total. A stage that has genuinely spent nothing still reads `$0.00` with no note.
 
+- **That same header was a LOWER BOUND whenever a turn ran in-session, and nothing on the line
+  said so (#139).** A host session driving `--prepare` / `--commit` without `--cost-usd` is
+  recorded as `cost_usd: null` + `metered: false`, and `rollUp` sums it as nothing — so the phase
+  figure is what the METERED turns cost, not what the phase cost. The dashboard has marked
+  exactly this case as a `lower bound` since #103 and `tldrx budget show` prints it in words; the
+  handoff header was the one cost surface that stayed silent, on the FIRST write as well as a
+  re-entry. Filed as *inferred* and **measured before it was fixed**, which is what the issue
+  asked for: a fixture driving the real host path — `--prepare`, a `result.json` with no
+  `cost_usd`, `--commit` — put one unmetered turn beside one `$0.11` spawn and wrote
+  `Cost: $0.11 of $200.00 ceiling`, a bare figure indistinguishable from a fully metered phase.
+  - **One derivation, three surfaces.** The counting and the sentence moved out of
+    `dashboard/model.ts` into `core/budget/spendBasis.ts`, and the header prints what it returns.
+    The dashboard's model imports the page renderer, so the executor could not import IT — and
+    fixing the wording in place is how two spellings of one caveat get born, which the issue
+    named as the reason not to. Only the SUBJECT differs: a stage-scoped header says "the stage".
+    Dashboard output is unchanged.
+  - **The counts come from the same rows the sum does** — `run.yml`'s `stage.tasks`, plus this
+    invocation's, for the same reason `invocationUsd` is added to the total: `recordExecutorTasks`
+    runs after the executor returns, so counting `run.yml` alone would report the first write of a
+    host-driven handoff as fully metered.
+  - **A fully metered stage keeps its clean line.** `measured` is the one basis with nothing to
+    caveat. A turn counts as having produced no dollars if it is `metered: false` OR a metered
+    `cost_usd` of exactly `0` — the wider of the two readings, inherited unchanged from #103, so
+    the two surfaces cannot classify the same turn differently. It is also the conservative
+    direction: #138 and #139 both flattered the number.
+  - **Both caveats when both apply.** An unreadable `run.yml` (#138) and an unmetered turn (#139)
+    are different facts about the same figure, and the note now carries both rather than one.
+
 - **`test/attempt-cost.test.ts` proved "carries no format refusal" with the bare word
   `REFUSED`, and unrelated prompt prose turned it red (#135).** The thing it means to detect
   is `renderFormatRefusal`'s heading; what it detected was an eight-letter English word,

@@ -2476,6 +2476,21 @@ refused outright. A `tldrx reject` does nothing to that number, which is the rig
 phase-to-date figure there would double-count every re-entry. When `run.yml` cannot be read at all, the header falls
 back to this invocation's spend and says so in brackets rather than presenting it as the phase's.
 
+**And that phase figure is a LOWER BOUND whenever a turn ran in-session (#139).** A host session driving `--prepare` /
+`--commit` without `--cost-usd` is recorded as `cost_usd: null` + `metered: false`, and every sum treats it as
+contributing nothing — so `stage.cost_usd` is what the METERED turns cost, not what the stage cost. Measured before it
+was fixed: a stage whose developer was the host's and whose reviewer was a `$0.11` spawn wrote `Cost: $0.11 of $200.00
+ceiling`, a bare figure indistinguishable from one where every turn was billed here. The header now carries the same
+caveat the dashboard's `lower bound` marker and `tldrx budget show` already carried, in the same words — `1 of 2 turns
+produced no dollars … so the metered total is a LOWER BOUND, not a total` — because the counting and the sentence both
+come from `core/budget/spendBasis.ts`, which is where the dashboard's `spend.reason` (#103) was extracted to. Three
+surfaces, one derivation; only the subject noun differs, so a stage-scoped header says "the stage". The turns counted
+are the rows the sum is made of, plus this invocation's, for the same reason `invocationUsd` is added to it: the FIRST
+write of a handoff happens before `recordExecutorTasks` puts them in the file, and that write is one the defect was
+present on. A turn counts as having produced no dollars if it is `metered: false` OR a metered `cost_usd` of exactly
+`0` — the wider of the two readings, inherited unchanged from #103. A stage whose every turn WAS metered gets no note
+at all: `measured` is the one basis with nothing to caveat, and a caveat on every header is a caveat nobody reads.
+
 **Safety.** A repo with uncommitted changes on the branch an epic would be cut from is refused **before** anything is
 cut (exit `2`, the stage stays `ready`, the message names the files and the fix) — counting PRODUCT paths only, since
 under `root_is_repo: true` the framework's own `tldrx-work/` and `.tldrx/` live inside that repo and this very command
