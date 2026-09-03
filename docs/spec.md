@@ -2173,7 +2173,9 @@ Two of the others were tightened on 2026-08-29, both because an auto gate could 
   A `file` citation that resolves **only on an unmerged epic ref** (#140) behaves like `noted` and not like
   `unverified`: it passes the stage AND the gate, and is named with its branch in the check detail
   (`on unmerged refs: 96 (epic/money-and-payments — unmerged)`). It is a check that RAN and came back true — of a
-  branch nothing has merged, which is the fact the reader is owed, not a reason to stop.
+  branch nothing has merged, which is the fact the reader is owed, not a reason to stop. Like an unchecked
+  absence, it is carried into the **gate note** by name: a stage that auto-signs over epic-only citations says
+  which branch they are on, rather than `claim-sources=passed`.
 
 **`agent` gates.** A gate an agent may close, and only over a check it wrote down. It is **strictly stronger** than
 an auto gate, never a cheaper one — three things must hold, not one:

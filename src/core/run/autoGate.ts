@@ -34,7 +34,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { openBlocks, parseQuestions, unreadableQuestionHeadings } from "../text/questions.ts";
 import { isHostTokens, type RunBudget } from "../budget/RunBudget.ts";
-import { notedCount, runCheck, unverifiedCount, type CheckOutcome } from "./checks.ts";
+import { epicOnlyCount, notedCount, runCheck, unverifiedCount, type CheckOutcome } from "./checks.ts";
 import { buildProgress, BUILD_PHASE } from "./buildProgress.ts";
 import { evaluateBoundary } from "./boundary.ts";
 import type { PlannedStage } from "./workflowPreset.ts";
@@ -269,11 +269,18 @@ async function claimSourcesCondition(input: AutoGateInput): Promise<AutoGateCond
   // name, so `claim-sources` and this condition say the same words about the same
   // file instead of one waving it through while the other refuses it.
   const absences = notedCount(outcome);
+  // The same rule for the same reason, one category over (gh #140): a `file`
+  // citation that resolves ONLY on this run's unmerged epic ref is `ok` and does
+  // not refuse the gate, and the branch it resolved on is carried into the note
+  // by name. Reading only `absences` here is how the first pass at #140 left the
+  // annotation in the check's detail and out of the sentence a person actually
+  // reads when a stage signs itself: `claim-sources=passed`, in full.
+  const unmerged = epicOnlyCount(outcome);
   if (outcome.status === "passed") {
     return {
       id: "claim-sources",
       ok: true,
-      detail: absences === 0 ? "passed" : `passed, ${outcome.detail}`,
+      detail: absences === 0 && unmerged === 0 ? "passed" : `passed, ${outcome.detail}`,
     };
   }
   return { id: "claim-sources", ok: true, detail: `${outcome.status}: ${outcome.detail}` };
