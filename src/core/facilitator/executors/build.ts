@@ -44,6 +44,7 @@ import { DodCommandRefused, runDodCommand } from "../../../hooks/lib/story.ts";
 import { FactsStore } from "../../facts/FactsStore.ts";
 import { RunStore } from "../../run/RunStore.ts";
 import { stageAt } from "../../run/RunFile.ts";
+import { spendBasisOf, type SpendTurn } from "../../budget/spendBasis.ts";
 import { renderConventions, renderFacts, stackExpertNames } from "../prompt.ts";
 import { loadExpertBundles } from "../../experts/expertBundle.ts";
 import { agentDir } from "../paths.ts";
@@ -2616,7 +2617,9 @@ class BuildSession {
     // own docstring says it describes the phase (#138). `ExecutorOutcome.costUsd`
     // below stays `this.spent()` on purpose: that one is ADDED to the run budget,
     // and a phase-to-date number there would double-count on every re-entry.
-    const cost = phaseCostToDate(this.ctx.runDir, this.ctx.phaseId, this.ctx.stageId, this.spent());
+    const cost = phaseCostToDate(
+      this.ctx.runDir, this.ctx.phaseId, this.ctx.stageId, this.spent(), this.tasks,
+    );
     writeFileSync(path, renderBuildHandoff({
       runId: this.ctx.runId,
       stageId: this.ctx.stageId,
@@ -3950,29 +3953,78 @@ export interface ReviewLedger {
  * validation, or a stage id that does not resolve — the answer is NOT a confident
  * total. It falls back to this invocation's own spend and says which of the two
  * numbers the reader is looking at.
+ *
+ * **And the total it CAN read is a lower bound whenever a turn ran in-session**
+ * (#139). A host session driving `--prepare`/`--commit` without `--cost-usd` is
+ * recorded as `cost_usd: null` + `metered: false`, and `rollUp` sums that as
+ * nothing — so `stage.cost_usd` is what the METERED turns cost, not what the
+ * stage cost. Measured, not inferred: a run whose developer was the host's and
+ * whose reviewer was a $0.11 spawn wrote `Cost: $0.11 of $200.00 ceiling`, a bare
+ * figure indistinguishable from a stage where every turn was billed here.
+ *
+ * The counting and the sentence come from `budget/spendBasis.ts`, which is also
+ * where the dashboard's `spend.reason` comes from (#103) and where `budget show`'s
+ * "LOWER BOUND, not a total" is spelled — the caveat is one derivation on three
+ * surfaces rather than three wordings of one fact. The turns are the same rows
+ * the sum above is made of, plus this invocation's, for the same reason
+ * `invocationUsd` is added to it: the first write of a handoff happens before
+ * `recordExecutorTasks` puts them in the file.
+ *
+ * A stage whose every turn WAS metered gets no note at all. `measured` is the one
+ * basis with nothing to say, and a caveat on every header is a caveat nobody reads.
  */
 export function phaseCostToDate(
   runDir: string,
   phaseId: string,
   stageId: string,
   invocationUsd: number,
+  invocationTurns: readonly ExecutorTask[] = [],
 ): { readonly usd: number; readonly note: string | null } {
   let recorded: number | null = null;
+  let turns: SpendTurn[] = [];
   try {
     const found = stageAt(RunStore.open(runDir).run, { phase: phaseId, stage: stageId, task: null });
-    if (found !== null) recorded = found.stage.cost_usd;
+    if (found !== null) {
+      recorded = found.stage.cost_usd;
+      // The rows the sum above is made of. `metered` is written only when it is
+      // `false`, so an absent one means metered — every row from before the field
+      // existed, and every headless spawn.
+      turns = found.stage.tasks.map((task) => ({
+        costUsd: task.cost_usd,
+        metered: task.metered !== false,
+        tokens: task.tokens ?? null,
+      }));
+    }
   } catch {
     // A run.yml that is missing, torn, or invalid. The handoff is still worth
     // writing; the header just has to stop pretending it knows the phase total.
     recorded = null;
   }
+  // This invocation's turns are not in `run.yml` yet — `recordExecutorTasks` runs
+  // after the executor returns — so they are counted from the executor's own list,
+  // exactly as `invocationUsd` is added to the sum. Without them the FIRST write
+  // of a handoff would count nothing at all and report a host-driven stage as
+  // fully metered (#139).
+  turns = [
+    ...turns,
+    ...invocationTurns.map((task) => ({
+      costUsd: task.metered === false ? null : round2(task.costUsd),
+      metered: task.metered !== false,
+      tokens: task.tokens ?? null,
+    })),
+  ];
+  const counted = spendBasisOf(turns, turns.reduce((sum, t) => sum + (t.tokens ?? 0), 0), "stage");
+  // A fully metered stage keeps its clean line: `measured` is the one basis with
+  // nothing to caveat, and a caveat on every header is a caveat nobody reads.
+  const bound = counted.basis === "measured" ? null : counted.reason;
   if (recorded === null) {
     return {
       usd: round2(invocationUsd),
-      note: "this invocation only — `run.yml` could not be read for what the stage spent before it",
+      note: "this invocation only — `run.yml` could not be read for what the stage spent before it"
+        + (bound === null ? "" : `; ${bound}`),
     };
   }
-  return { usd: round2(recorded + invocationUsd), note: null };
+  return { usd: round2(recorded + invocationUsd), note: bound };
 }
 
 /** Everything the two resume paths and the requeue counter need, in one pass. */

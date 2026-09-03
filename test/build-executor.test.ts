@@ -28,6 +28,7 @@ import { updateStoryFront, evidenceFor } from "../src/core/build/storyFile.ts";
 import { renderBuildProgress, buildProgress } from "../src/core/run/buildProgress.ts";
 import { buildStatus, renderStatus } from "../src/core/run/runStatus.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
+import { spendReason } from "../src/core/budget/spendBasis.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { validateHandoff } from "../src/core/text/handoff.ts";
 import { loadWorkspace, toSrcContext } from "../src/hooks/lib/workspace.ts";
@@ -2279,6 +2280,161 @@ describe("the handoff's Cost line reports the phase, not the invocation (#138)",
       // a stage that has genuinely spent nothing reads differently from one whose
       // ledger is missing.
       expect(phaseCostToDate(ws.runDir, "04-build", "build", 0)).toEqual({ usd: 0, note: null });
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * The `Cost:` header is a LOWER BOUND when a turn ran in-session, and says so (#139).
+ *
+ * MEASURED before it was fixed, which is what #138's close comment asked for: the
+ * fixture below drives the real host path — `--prepare`, a `result.json` with NO
+ * `cost_usd`, `--commit` — so the phase carries one unmetered turn beside one
+ * metered spawn, and the header read
+ *
+ *   Stage: build · … · Cost: $0.11 of $200.00 ceiling · 2026-08-29T09:30:00Z
+ *
+ * A bare figure, indistinguishable from a phase where every turn was billed here.
+ * `rollUp` sums a `cost_usd: null` task as nothing (`RunStore.ts:374`), so the
+ * number is what the METERED turns cost, not what the phase cost — the same fact
+ * the dashboard marks as a `lower bound` and `tldrx budget show` prints in words.
+ * This was the third cost surface and the only one that stayed silent.
+ *
+ * The sentence is NOT written here. It comes from `budget/spendBasis.ts`, which is
+ * where the dashboard's `spend.reason` was extracted to, so the page and the header
+ * cannot word one fact two ways — the thing the issue said would happen if this was
+ * fixed in place. Only the SUBJECT differs: a stage-scoped header says "the stage".
+ *
+ * That shared derivation brings its judgement call with it, and it is worth being
+ * explicit about: a turn "produced no dollars" if it is `metered: false` OR a
+ * metered `cost_usd` of exactly `0`. So the fixtures that pin `FAKE_BUILD_COST=0`
+ * now write a caveated header too. That is the conservative direction on purpose —
+ * both #138 and #139 flattered the number, and a run whose task rows all read
+ * `0.00` is one where the header should not be the surface claiming certainty.
+ */
+describe("the handoff's Cost line marks an unmetered phase as a lower bound (#139)", () => {
+  /** One story, a ceiling roomy enough that the host path is not budget-blocked. */
+  const HOSTED: BuildWorkspaceOptions = {
+    stories: [{ id: "S1", epic: "E1", title: "First story" }],
+    epics: [{ id: "E1", stories: ["S1"], branch: "epic/e1" }],
+    waves: [["S1"]],
+    budgetUsd: 200,
+    perAgentMaxUsd: 200,
+  };
+
+  const handoffPath = (ws: BuildWorkspace): string => join(ws.runDir, "04-build", "handoff.md");
+
+  function costLine(handoff: string): string {
+    return handoff.split("\n").find((line) => line.startsWith("Stage: ")) ?? "";
+  }
+
+  /**
+   * The host drives the developer in-session and declares NO cost — `cost_usd`
+   * absent from `result.json` and no `--cost-usd` — which is the `null` +
+   * `metered: false` row the whole issue is about.
+   */
+  function hostDeveloper(ws: BuildWorkspace, story: string): void {
+    writeFileSync(
+      join(ws.root, ".tldrx", "worktrees", "app", `${ws.runId}-${story}`, `${story.toLowerCase()}.txt`),
+      `${story} in-session\n`,
+      "utf8",
+    );
+    writeFileSync(
+      join(ws.runDir, ".agent", "build", story, "result.json"),
+      JSON.stringify({ outputs: [`${story.toLowerCase()}.txt`], questions_asked: [], notes: "" }),
+      "utf8",
+    );
+  }
+
+  test("a phase with one unmetered turn does not print a bare total", async () => {
+    const ws = workspace(HOSTED);
+    process.env.FAKE_BUILD_COST = "0.11";
+
+    expect((await next(ws, { mode: "prepare" })).lines.join("\n")).toContain("prepared S1");
+    hostDeveloper(ws, "S1");
+    await next(ws, { mode: "commit", at: "2026-08-29T09:30:00Z" });
+
+    // The fixture's shape, measured off `run.yml` rather than assumed: two turns
+    // on the stage, and exactly one of them put nothing in the meter.
+    const stage = RunStore.open(ws.runDir).run.phases.flatMap((p) => p.stages).find((s) => s.id === "build");
+    expect(stage?.tasks.map((t) => [t.cost_usd, t.metered ?? true])).toEqual([[null, false], [0.11, true]]);
+    expect(stage?.cost_usd).toBe(0.11);
+
+    const line = costLine(readFileSync(handoffPath(ws), "utf8"));
+    // The metered half is still reported, unchanged.
+    expect(line).toContain("Cost: $0.11 of $200.00 ceiling");
+    // What it must no longer read as: a complete measurement.
+    expect(line).toContain("1 of 2 turns produced no dollars");
+    expect(line).toContain("LOWER BOUND, not a total");
+    // And it is the dashboard's sentence, not a second one written for this header:
+    // same function, same arguments, only the subject noun differs.
+    expect(line).toContain(spendReason("absent", 2, 1, 1, 0, "stage"));
+  }, 120_000);
+
+  /**
+   * A genuinely fully-metered stage keeps its clean line.
+   *
+   * Not a RED — it passed before the fix, because before the fix nothing was ever
+   * added. It guards the other direction: `measured` is
+   * the one basis with nothing to caveat, and a caveat on every header is a caveat
+   * nobody reads. Four headless spawns at $0.11, every dollar of it watched here.
+   */
+  test("a stage whose every turn was metered gets no caveat at all", async () => {
+    const ws = workspace({ ...TWO_WAVES, budgetUsd: 200, perAgentMaxUsd: 200 });
+    process.env.FAKE_BUILD_COST = "0.11";
+
+    await next(ws);
+
+    const line = costLine(readFileSync(handoffPath(ws), "utf8"));
+    expect(line).toContain("Cost: $0.44 of $200.00 ceiling · 2026-08-29T09:00:00Z");
+    expect(line).not.toContain("LOWER BOUND");
+    expect(line).not.toContain("produced no dollars");
+  }, 120_000);
+
+  /**
+   * The counts come from the SAME rows the sum does — `run.yml`'s, plus this
+   * invocation's, for the same reason `invocationUsd` is added to the total.
+   *
+   * `recordExecutorTasks` runs after the executor returns, so at `writeHandoff`
+   * time the turns this process just ran are not in the file yet. Counting
+   * `run.yml` alone would report the FIRST write of a host-driven handoff as fully
+   * metered — which is the write the issue says the defect is present on.
+   */
+  test("this invocation's own unmetered turns are counted, not just `run.yml`'s", () => {
+    const ws = workspace(HOSTED);
+    const host = { key: "S1", model: null, costUsd: 0, sessionId: null, error: null, outputs: [], metered: false };
+
+    // The stage is untouched on disk: every turn in this count is the invocation's.
+    expect(phaseCostToDate(ws.runDir, "04-build", "build", 0, [host])).toEqual({
+      usd: 0,
+      note: spendReason("absent", 1, 1, 1, 0, "stage"),
+    });
+    // One host turn and one metered spawn — the fixture the measurement above ran.
+    expect(phaseCostToDate(ws.runDir, "04-build", "build", 0.11, [
+      host, { key: "S1", model: "sonnet", costUsd: 0.11, sessionId: null, error: null, outputs: [] },
+    ])).toEqual({ usd: 0.11, note: spendReason("absent", 2, 1, 1, 0, "stage") });
+    // And with no turn passed at all the line is clean, as it was before #139.
+    expect(phaseCostToDate(ws.runDir, "04-build", "build", 0)).toEqual({ usd: 0, note: null });
+  });
+
+  /**
+   * Both caveats, when both apply — neither one silences the other.
+   *
+   * An unreadable `run.yml` (#138) says the figure is this invocation's alone; an
+   * unmetered turn (#139) says even THAT is a lower bound. They are different
+   * facts about the same number and a reader owed one is owed both.
+   */
+  test("an unreadable `run.yml` and an unmetered turn are both said, not one or the other", () => {
+    const empty = mkdtempSync(join(tmpdir(), "tldrx-139-"));
+    try {
+      const note = phaseCostToDate(empty, "04-build", "build", 0.11, [
+        { key: "S1", model: null, costUsd: 0, sessionId: null, error: null, outputs: [], metered: false },
+        { key: "S1", model: "sonnet", costUsd: 0.11, sessionId: null, error: null, outputs: [] },
+      ]).note;
+      expect(note).toContain("this invocation only — `run.yml` could not be read");
+      expect(note).toContain("1 of 2 turns produced no dollars");
     } finally {
       rmSync(empty, { recursive: true, force: true });
     }
