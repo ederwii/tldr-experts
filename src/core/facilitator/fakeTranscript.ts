@@ -24,6 +24,8 @@
  * format — which is the same guarantee an older `claude` gets.
  */
 
+import { createHash } from "node:crypto";
+
 export interface FakeTool {
   readonly name: string;
   readonly input: Record<string, unknown>;
@@ -47,6 +49,23 @@ export interface FakeResult {
   readonly tools?: readonly FakeTool[];
 }
 
+/**
+ * How a Codex stand-in states, INSIDE its transcript, which prompt it received.
+ *
+ * A digest and a length rather than the prompt itself: bounded no matter how big
+ * the prompt is, carries nothing secret, and changes if a single byte does. The
+ * marker rides in the envelope's `notes` — the one free-text field the parser
+ * preserves end to end (`resolveCodexResultDoc` -> `structured_output`) and the
+ * schema allows (`ENVELOPE_SCHEMA` is `additionalProperties: false`).
+ *
+ * It exists so the hermetic suite can answer the one question it structurally
+ * could not: a fake that reads stdin and throws it away is indistinguishable
+ * from a spawn that never sent a prompt. With the marker, it is not.
+ */
+export function codexPromptMarker(prompt: string): string {
+  return `prompt-sha256=${createHash("sha256").update(prompt, "utf8").digest("hex").slice(0, 16)}/${prompt.length}`;
+}
+
 export interface FakeCodexResult {
   readonly sessionId: string;
   readonly structured?: unknown;
@@ -64,17 +83,27 @@ export interface FakeCodexResult {
  * The object form emits the measured 0.152.0 event sequence. The string form
  * validates and normalises a recorded JSONL transcript before replaying it, so
  * neither fake owns a second newline/emission implementation.
+ *
+ * `promptEcho` — a `codexPromptMarker()` — is folded into the `agent_message`
+ * envelope's `notes` by BOTH forms, so the echo has one implementation rather
+ * than one per fake. Omitted, a recorded transcript is replayed byte for byte.
  */
-export function codexOutput(source: FakeCodexResult | string): string {
+export function codexOutput(source: FakeCodexResult | string, promptEcho?: string): string {
   if (typeof source === "string") {
     const lines = source.trim().split("\n").filter((line) => line.trim() !== "");
+    const replayed: string[] = [];
     for (const line of lines) {
       const parsed: unknown = JSON.parse(line);
       if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
         throw new Error("recorded Codex transcript contains a non-object JSONL event");
       }
+      replayed.push(
+        promptEcho === undefined
+          ? line
+          : JSON.stringify(withPromptEcho(parsed as Record<string, unknown>, promptEcho)),
+      );
     }
-    return `${lines.join("\n")}\n`;
+    return `${replayed.join("\n")}\n`;
   }
 
   const lines: unknown[] = [
@@ -93,7 +122,34 @@ export function codexOutput(source: FakeCodexResult | string): string {
       usage: source.usage ?? { input_tokens: 1234, cached_input_tokens: 0, output_tokens: 56 },
     });
   }
-  return `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`;
+  const echoed = promptEcho === undefined
+    ? lines
+    : lines.map((line) => withPromptEcho(line as Record<string, unknown>, promptEcho));
+  return `${echoed.map((line) => JSON.stringify(line)).join("\n")}\n`;
+}
+
+/**
+ * Fold a prompt marker into the one event field the Codex parser preserves.
+ *
+ * Anything that is not the `agent_message` carrying a JSON object envelope is
+ * returned untouched, so this can be run over a whole recorded transcript.
+ */
+function withPromptEcho(doc: Record<string, unknown>, marker: string): Record<string, unknown> {
+  if (doc.type !== "item.completed") return doc;
+  const item = doc.item;
+  if (typeof item !== "object" || item === null || Array.isArray(item)) return doc;
+  const rec = item as Record<string, unknown>;
+  if (rec.type !== "agent_message" || typeof rec.text !== "string") return doc;
+  let envelope: unknown;
+  try {
+    envelope = JSON.parse(rec.text);
+  } catch {
+    return doc;
+  }
+  if (typeof envelope !== "object" || envelope === null || Array.isArray(envelope)) return doc;
+  const fields = envelope as Record<string, unknown>;
+  const notes = typeof fields.notes === "string" && fields.notes !== "" ? `${fields.notes} ` : "";
+  return { ...doc, item: { ...rec, text: JSON.stringify({ ...fields, notes: `${notes}[${marker}]` }) } };
 }
 
 /** True when the caller asked for the streaming format. */

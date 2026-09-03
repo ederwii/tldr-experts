@@ -21,6 +21,7 @@ import {
   agentProvider, claudeBin, CLAUDE_BIN, codexBin, CODEX_BIN, describeSpawn, spawnAgent,
   providerBudgetAdvisory,
 } from "../src/core/facilitator/spawnAgent.ts";
+import { codexPromptMarker } from "../src/core/facilitator/fakeTranscript.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
 setDefaultTimeout(spawnTestTimeout(30_000));
@@ -112,6 +113,34 @@ describe("the provider selection keeps Claude as the byte-identical default", ()
     const schemaPath = argv[argv.indexOf("--output-schema") + 1];
     expect(typeof schemaPath).toBe("string");
     expect(schemaPath).not.toBe("<output-schema.json>");
+  });
+
+  test("the prompt actually REACHES the Codex stub, and is not on the command line", async () => {
+    const dir = tmp();
+    const argvLog = join(dir, "argv.jsonl");
+    process.env.TLDRX_AGENT_PROVIDER = "codex";
+    process.env.TLDRX_CODEX_BIN = join(import.meta.dir, "fixtures", "agent", "fakeCodex.ts");
+    const prompt = "name the line Outbox lives on, and nothing else";
+
+    const outcome = await spawnAgent({
+      ...request(dir),
+      prompt,
+      env: { ...process.env, FAKE_CODEX_ARGV_LOG: argvLog },
+    });
+
+    // `buildCodexArgs` emits no positional prompt and no `-`, so stdin is the
+    // ONLY delivery path. Nothing pinned that: the fake read stdin and dropped
+    // it, so cutting the stdin wiring, or adding a positional [PROMPT] the real
+    // CLI would then take instead, left the suite green. The fake now echoes a
+    // digest of what it received into the envelope the real parser returns, so
+    // the assertion below fails if the prompt stops arriving.
+    expect(outcome.ok).toBe(true);
+    expect(outcome.envelope?.notes).toContain(codexPromptMarker(prompt));
+
+    // The other half of the same contract: it must NOT travel as an argument.
+    const argv = JSON.parse(readFileSync(argvLog, "utf8").trim()) as string[];
+    expect(argv).not.toContain("-");
+    expect(argv.filter((arg) => arg.includes(prompt))).toEqual([]);
   });
 });
 

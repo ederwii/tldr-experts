@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { codexOutput } from "../../../src/core/facilitator/fakeTranscript.ts";
+import { codexOutput, codexPromptMarker } from "../../../src/core/facilitator/fakeTranscript.ts";
 
 const argv = process.argv.slice(2);
 const argvLog = process.env.FAKE_CODEX_ARGV_LOG;
@@ -9,6 +9,12 @@ if (argvLog !== undefined && argvLog !== "") appendFileSync(argvLog, `${JSON.str
 
 let prompt = "";
 for await (const chunk of process.stdin) prompt += String(chunk);
+
+// The prompt is DELIVERED on stdin and appears nowhere in argv, so a fake that
+// dropped it was indistinguishable from a spawn that never sent one. Echo a
+// digest of what actually arrived into the transcript — through the shared
+// emitter, which owns the fold for the synthesized and the replayed path alike.
+const echo = codexPromptMarker(prompt);
 
 const base = process.env.FAKE_CLAUDE_RUNDIR;
 const configured = process.env.FAKE_CLAUDE_OUTPUTS;
@@ -23,10 +29,8 @@ if (base !== undefined && configured !== undefined) {
   const structured = JSON.stringify({
     outputs: Object.keys(files), questions_asked: [], notes: "canned by fakeCodex",
   });
-  process.stdout.write(codexOutput({ sessionId, structured: JSON.parse(structured) }));
+  process.stdout.write(codexOutput({ sessionId, structured: JSON.parse(structured) }, echo));
   process.exit(0);
 }
 
-void prompt;
-
-process.stdout.write(codexOutput(readFileSync(join(import.meta.dir, "codex-jsonl.jsonl"), "utf8")));
+process.stdout.write(codexOutput(readFileSync(join(import.meta.dir, "codex-jsonl.jsonl"), "utf8"), echo));
