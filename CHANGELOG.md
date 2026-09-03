@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.6.2 — unreleased
+
+### Fixed
+
+- **A citation to a file that exists only on the run's unmerged epic branch passed unflagged, or broke,
+  depending on whether a temp directory still existed (#140).** Live evidence, run
+  `260830-money-and-payments` (aparece-v2, closed 2026-09-03): `retro.md` was committed to `main` carrying
+  96 `[src: src/Modules/Payments/…:28]` citations to files that exist on `epic/money-and-payments` and on
+  no merged ref. The driver's words: *"cuatro de mis citas apuntaban a archivos que solo existen en el epic.
+  Nadie me las señaló."* #16 had made those resolve against the epic WORKTREE
+  (`.tldrx/worktrees/<repo>/_epic-<run>-<epic>`), and that is a temp directory, so the same citation had two
+  silent answers — measured on `24e9358` with the new fixture:
+  - worktree **present** (the state the retro was written in): the whole check detail read
+    `1 handoff(s) sourced`, with no mention of the branch the path is only on;
+  - worktree **gone** (the state `main` is always in, and the state after cleanup):
+    `no such file: src/Modules/Payments/CreateChargeHandler.cs — tried repo \`api\` (api)` — the stage's own
+    evidence refused for being true.
+- **A `file` src now gets one more chance after every base on disk: the branches the run RECORDED.**
+  `run.yml`'s `build.epic_branch` — the same record `tldrx ship` opens its PR from — read as a git blob with
+  `git cat-file blob <ref>:<path>` in each declared repo. No worktree, and no retention policy needed for
+  this purpose. `cat-file blob` and not `show`: `git show <ref>:<dir>` prints a tree listing and exits 0, so
+  `show` would resolve a citation to a directory as though it were a file (measured 2026-09-03: `cat-file blob`
+  exits 0 for a blob, 128 for a tree, 128 for a path the ref does not have).
+  - **It resolves, and it is NAMED.** A citation whose only home is unmerged is `ok` — refusing it would refuse
+    a stage for reporting its own evidence — and the resolution carries the ref, so `claim-sources` prints
+    `on unmerged refs: 96 (epic/money-and-payments — unmerged)` in the one detail string the gate, `tldrx next`
+    and the run record all read. A reader of `main` is told which branch to look on. A hit on the epic
+    worktree is named the same way, so the "passes in silence" half is closed too.
+  - **Still refused:** a path on no ref at all (the failure now admits it tried the recorded branches), and a
+    cited line past the end of the epic's blob — which names the ref and the length the file has there. Only
+    branches `build.epic_branch` records are tried; a branch that merely exists in the repo is not a base.
+    An `absent:` src deliberately does NOT reach for the refs: an absence is a claim about where somebody
+    looked, and a branch nobody checked out is not somewhere anybody looked.
+  - **The blob read is opt-in, and the `claim-sources` hook does not opt in.** It is the one subprocess the
+    §2.8 reader spawns, and that hook runs on every PreToolUse write inside the 50 ms budget of spec §0. The
+    guard is reachability rather than a cap: `toSrcContext(workspace, runDir)` — the hook's spelling — leaves
+    `epicRefs` empty, so no handoff can reach a `spawnSync` from a write. Measured 2026-09-03 on 96 epic-only
+    citations: **0.36 ms** on the hook path, **1166 ms** cold on the gate path with all 96 reads paid, **0.36 ms**
+    warm (memoised per repo/ref/path, capped at 256 reads per process). `tldrx approve`, the stage/gate
+    `claim-sources` check, `tldrx next`'s auto gate, `tldrx watch` and `watch arm` opt in — every one of them a
+    boundary that already spawns git.
+  - **It behaves like `noted`, not like `unverified`:** it passes the stage and it does not block an auto gate
+    (spec §5, condition 5). It is a check that ran and came back true, of a branch nothing has merged.
+
 ## 0.6.1 — 2026-09-03
 
 ### Fixed

@@ -165,7 +165,10 @@ export async function watchExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
   }
 
   // --- validate every card off disk, then stamp its status ------------------
-  const srcCtx = toSrcContext(loadWorkspace(ctx.root), ctx.runDir);
+  // `{ epicRefs: true }`: this stage's whole subject is the epic's unmerged code
+  // (#16), so its citations must resolve from the recorded ref and not from a
+  // worktree that outlives nothing (#140).
+  const srcCtx = toSrcContext(loadWorkspace(ctx.root), ctx.runDir, { epicRefs: true });
   const written: WrittenCard[] = [];
   for (const feature of features) {
     const rel = watcherRelPath(feature.id);

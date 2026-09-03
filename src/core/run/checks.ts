@@ -101,7 +101,10 @@ function checkClaimSources(ctx: CheckContext): CheckOutcome {
   if (declared.length === 0) {
     return { id: "claim-sources", status: "skipped", detail: "the stage declares no .md output" };
   }
-  const srcCtx = toSrcContext(loadWorkspace(ctx.root), ctx.runDir);
+  // `{ epicRefs: true }` — the gate/stage side of the #140 opt-in. This check runs
+  // at a stage boundary that already spawns git, so it may pay for a blob read; the
+  // PreToolUse hook running the same validator on every write may not (spec §0).
+  const srcCtx = toSrcContext(loadWorkspace(ctx.root), ctx.runDir, { epicRefs: true });
   const pathCtx: PathContext = { root: ctx.root, runDir: ctx.runDir };
   const failures: string[] = [];
   // Counted, never fatal: an `unverified` citation passes the check and blocks the
@@ -113,6 +116,12 @@ function checkClaimSources(ctx: CheckContext): CheckOutcome {
   // the point. What it does is get NAMED, here, in the one string both readers
   // print, so the two can never again disagree in silence (gh #110/#105).
   const noted: string[] = [];
+  // `file` citations that resolve ONLY on something unmerged (gh #140). Like
+  // `noted` they neither fail this check nor block the auto gate — a Watch stage
+  // or a retro written about an unmerged epic cites that code by construction.
+  // What they must not be is SILENT, so the ref is named here, in the one string
+  // the gate, `next` and the run record all print.
+  const epicOnly: string[] = [];
   let handoffs = 0;
   let others = 0;
 
@@ -138,6 +147,7 @@ function checkClaimSources(ctx: CheckContext): CheckOutcome {
         const validation = validateHandoff(text, srcCtx);
         unverified += validation.unverified.length;
         noted.push(...notedPaths(validation.noted));
+        epicOnly.push(...unmergedRefs(validation.epicOnly));
         failures.push(...describeHandoff(hit.path, validation, text));
         continue;
       }
@@ -145,6 +155,7 @@ function checkClaimSources(ctx: CheckContext): CheckOutcome {
       const report = validateCitations(text, srcCtx);
       unverified += report.unverified.length;
       noted.push(...notedPaths(report.noted));
+      epicOnly.push(...unmergedRefs(report.epicOnly));
       failures.push(...describeCitations(hit.path, report, text));
     }
   }
@@ -157,10 +168,15 @@ function checkClaimSources(ctx: CheckContext): CheckOutcome {
     ? ""
     : `, ${NOTED_PREFIX}${String(noted.length)} (${some([...new Set(noted)])})`;
   const cited = others === 0 ? "" : ` + ${others} cited output(s)`;
+  // Last, and after both counts that are parsed back out of this string, so a new
+  // segment can never be mistaken for one of theirs.
+  const unmerged = epicOnly.length === 0
+    ? ""
+    : `, ${EPIC_ONLY_PREFIX}${String(epicOnly.length)} (${some([...new Set(epicOnly)])})`;
   return {
     id: "claim-sources",
     status: "passed",
-    detail: `${handoffs} handoff(s) sourced${cited}${tail}${absences}`,
+    detail: `${handoffs} handoff(s) sourced${cited}${tail}${absences}${unmerged}`,
   };
 }
 
@@ -178,6 +194,21 @@ function notedPaths(issues: readonly { readonly src?: string }[]): readonly stri
     const rest = raw.slice("absent:".length);
     const hash = rest.indexOf("#");
     return hash === -1 ? rest : rest.slice(0, hash);
+  });
+}
+
+/**
+ * The unmerged ref each epic-only citation resolved on — the point is to NAME it
+ * (gh #140), so a reader of the document on `main` knows which branch to look on.
+ *
+ * Read off `issue.src`, which the resolver already filled with the ref (or the
+ * epic checkout) it resolved against. Re-deriving it from the `[src: …]` marker
+ * here would be a second reader of the grammar, which is #80 under a new name.
+ */
+function unmergedRefs(issues: readonly { readonly src?: string }[]): readonly string[] {
+  return issues.map((issue) => {
+    const raw = issue.src ?? "";
+    return raw === "" ? "an unmerged ref" : `${raw} — unmerged`;
   });
 }
 
@@ -285,6 +316,26 @@ export const UNVERIFIED_PREFIX = "unverified: ";
  * apart in the one string that carries both.
  */
 export const NOTED_PREFIX = "unchecked absence: ";
+
+/**
+ * How an EPIC-ONLY citation is written into that same detail (gh #140).
+ *
+ * A third prefix, for a third answer: `unverified` blocks an auto gate, `noted`
+ * does not and is about an absence, and this one does not and is about a
+ * PRESENCE — on a branch nothing has merged. The whole reason it exists is that
+ * the alternative was silence: `retro.md` reached `main` with 96 citations to
+ * `epic/money-and-payments` and no reader was ever told where to look.
+ */
+export const EPIC_ONLY_PREFIX = "on unmerged refs: ";
+
+/** The number of epic-only citations a `claim-sources` outcome reported, or 0. */
+export function epicOnlyCount(outcome: CheckOutcome): number {
+  if (outcome.id !== "claim-sources") return 0;
+  const at = outcome.detail.indexOf(EPIC_ONLY_PREFIX);
+  if (at === -1) return 0;
+  const parsed = Number.parseInt(outcome.detail.slice(at + EPIC_ONLY_PREFIX.length), 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
 
 /** The number of unchecked absences a `claim-sources` outcome reported, or 0. */
 export function notedCount(outcome: CheckOutcome): number {

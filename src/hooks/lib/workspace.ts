@@ -11,7 +11,10 @@ import { parseYaml } from "../../core/yaml.ts";
 import {
   PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR, PROJECT_WORKTREES_DIR, isEpicWorktreeOf,
 } from "../../core/paths.ts";
-import type { EpicWorktree, SrcContext } from "../../core/text/srcToken.ts";
+import type { EpicRef, EpicWorktree, SrcContext } from "../../core/text/srcToken.ts";
+
+/** The run's own record — where `build.epic_branch` is written (issue #140). */
+const RUN_YML = "run.yml";
 
 export interface WorkLocation {
   /** Workspace root — the parent of `tldrx-work/`. */
@@ -185,14 +188,73 @@ export function loadWorkspace(root: string): WorkspaceContext {
  * as well as workspace-relatively (spec §2.8) — every caller that knows the run
  * dir must pass it, or `next`, `approve` and the hook disagree about the same file.
  */
-export function toSrcContext(workspace: WorkspaceContext, runDir?: string | null): SrcContext {
+export interface SrcContextOptions {
+  /**
+   * Opt in to resolving a `file` src against this run's recorded epic branches by
+   * git blob read (issue #140).
+   *
+   * OFF by default, and that default is the performance guard, not a preference.
+   * `hooks/claim-sources.ts` runs this same validator on every PreToolUse write
+   * inside a 50 ms budget (spec §0), and a blob read is a `spawnSync`. The hook
+   * omits this; the gate and the stage checks pass it, at a boundary that already
+   * spawns git and where the answer is worth a fork.
+   */
+  readonly epicRefs?: boolean;
+}
+
+export function toSrcContext(
+  workspace: WorkspaceContext,
+  runDir?: string | null,
+  options: SrcContextOptions = {},
+): SrcContext {
   return {
     root: workspace.root,
     repos: workspace.repos,
     commands: workspace.commands,
     runDir: runDir ?? null,
     epicWorktrees: epicWorktreesOf(workspace, runDir ?? null),
+    epicRefs: options.epicRefs === true ? epicRefsOf(workspace, runDir ?? null) : [],
   };
+}
+
+/**
+ * The epic branches THIS run RECORDED, paired with every repo they could live in
+ * (issue #140).
+ *
+ * `run.yml`'s `build.epic_branch` is the same record `tldrx ship` opens its PR
+ * from and `watch arm` polls (`watch/recordedBranch.ts`) — the only artefact that
+ * knows what Build actually cut. It is a flat list of branch NAMES with no repo
+ * beside them, so this pairs each with each declared repo and lets the blob read
+ * decide: a branch that is not in a repo's history simply does not resolve there.
+ *
+ * Read off the FILE and not a loaded run: this is a leaf the citation reader calls,
+ * and pulling the run store in would make `core/text/` depend on the facilitator.
+ * One `readFileSync` of a file the caller has almost always already read, and only
+ * when the caller opted in.
+ */
+export function epicRefsOf(workspace: WorkspaceContext, runDir: string | null): readonly EpicRef[] {
+  if (runDir === null || runDir === "") return [];
+  const path = join(runDir, RUN_YML);
+  if (!existsSync(path)) return [];
+  let doc: unknown;
+  try {
+    doc = parseYaml(readFileSync(path, "utf8"));
+  } catch {
+    return [];
+  }
+  const recorded = (doc as { build?: { epic_branch?: unknown } } | null)?.build?.epic_branch;
+  if (!Array.isArray(recorded)) return [];
+  const branches: string[] = [];
+  for (const entry of recorded as unknown[]) {
+    if (typeof entry === "string" && entry !== "" && !branches.includes(entry)) branches.push(entry);
+  }
+  if (branches.length === 0) return [];
+  const refs: EpicRef[] = [];
+  for (const [repo, rel] of workspace.repos) {
+    const dir = join(workspace.root, rel);
+    for (const ref of branches) refs.push({ repo, dir, ref });
+  }
+  return refs;
 }
 
 /**
@@ -260,7 +322,7 @@ export function listRunDirs(root: string): readonly string[] {
   const dirs: string[] = [];
   for (const entry of readdirSync(work)) {
     const dir = join(work, entry);
-    if (existsSync(join(dir, "run.yml")) && statSync(dir).isDirectory()) dirs.push(dir);
+    if (existsSync(join(dir, RUN_YML)) && statSync(dir).isDirectory()) dirs.push(dir);
   }
   return dirs.sort().reverse();
 }

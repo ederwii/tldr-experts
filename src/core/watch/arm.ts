@@ -319,7 +319,7 @@ function merged(
     "",
   ];
 
-  const ctx = toSrcContext(loadWorkspace(root), runDir);
+  const ctx = toSrcContext(loadWorkspace(root), runDir, { epicRefs: true });
   const cards = loadCards(runDir, ctx);
   const refusal = nothingToCheck(runDir, runId, cards);
   if (refusal !== null) {

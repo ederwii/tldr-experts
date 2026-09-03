@@ -1355,7 +1355,7 @@ async function finishStage(
         checks,
         gate: `${phaseId}/${stageId}`,
         evidencePath: evidencePath(store.runDir, stageId),
-        srcCtx: toSrcContext(loadWorkspace(options.root), store.runDir),
+        srcCtx: toSrcContext(loadWorkspace(options.root), store.runDir, { epicRefs: true }),
         events: store.events.read(),
       });
       if (agent.ok && agent.actor !== null && agent.record !== null && agent.text !== null) {
