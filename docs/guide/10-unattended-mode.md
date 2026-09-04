@@ -106,10 +106,30 @@ tldrx run new payments --scope feature --budget 25 \
 > implement — and write that check down as evidence: `tldrx gate template`, fill it in, then
 > `tldrx approve --as-agent`.
 >
+> Do not stop. Halt only on a STRICT blocker — one where no remaining turn can proceed until I
+> answer. Before you call one strict, name the work it does NOT block and go do that first.
+>
 > Interrupt me ONLY for a new product decision, a budget-ceiling raise, or work that has to go
-> outside the declared boundary. Everything else you decide, and log.
+> outside the declared boundary — and always as a GUIDED question: one sentence, what it blocks
+> and what it does not, 2–5 lettered options with their consequences, and the one you would take.
+> Ask on the console unless I named another channel. Everything else you decide, and log.
 >
 > Never push. The final merge is mine.
+
+**A stop is not free, and the mandate now says so.** Measured across the eight runs that drove the
+`aparece-v2` workspace: 26 `budget.raised` and 26 `question.answered` events, and an owner who had
+to type *"sigue con todas desatendido, no esperes por mi"* **inside** an unattended run to restart a
+session the text had correctly halted. The shipped mandate carried four instructions to stop and
+none to continue, so `tldrx drive --unattended` now leads with a **`## Do not stop`** section that
+defines what "strict" means, and requires the driver to name the work a blocker does *not* block
+before it may halt for it. A question blocking one story is a question; it is not a stop.
+
+**A guided question is answerable in one letter.** The parking section asks for lettered options and
+the driver's own recommendation, because an open prompt cannot be answered from a phone. The channel
+is deliberately not the framework's business: the default is the console, and anything else — a chat
+bridge, a pager, a bot — is named in your launch message and used without the framework knowing what
+it is. And a default the driver falls back on when no answer arrives is recorded as the **driver's**
+decision, never quoted back as yours.
 
 The four interrupts in that last paragraph are not a style choice — they are the right-hand column
 of [The one insight](#the-one-insight), and the framework independently falls through to a person
@@ -559,6 +579,30 @@ Worth stating, because the whole value of the mode is that it is additive:
   reviewer's read-only mandate and that re-run are complements; neither subsumes the other.
 - **No shipped scope uses `agent`**, and `--gates` with a bare stage id still means `human`. Every
   invocation you have already typed means what it meant.
+
+## `--tldr`: the runs you will not audit
+
+Some unattended runs exist to produce a branch, not a record. For those, the trail is a cost with
+no reader — measured across ten real runs, of ~4.0 MB written 2.16 MB is trail, and every one of
+the **261** declared stage `inputs:` contains **zero** references to `handoff.md`, `retro.md` or
+`gate-evidence`. Operator notes alone are 133,689 B that no prompt ever reads back.
+
+```bash
+tldrx drive --unattended --tldr 260830-tenancy
+```
+
+The mandate gains one section, `## Report terse`, and the header is stamped `· tldr ·` so a pasted
+prompt says which one it is. The session then reports in a fixed shape — what `tldrx run status`
+prints, plus at most three bullets of delta — and stops narrating: no recaps, no diff summaries,
+no `tldrx note`. It is a **reporting** contract, not a quality one; the evidence discipline, the
+three roles, the review calibration and the gate checks are untouched, and a test asserts it.
+
+The handoff keeps being written, and the mandate explains why to the session rather than leaving
+it to guess: `claim-sources` is condition 5 of the seven `auto` conditions, so a handoff trimmed
+of its `[src: …]` tokens fails the gate the run needs to close by itself. Trim the prose, never
+the citations.
+
+`--tldr` works on `--attended` too — terse output is orthogonal to who signs.
 
 ## Cheat sheet
 

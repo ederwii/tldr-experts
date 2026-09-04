@@ -33,13 +33,33 @@
  * `MANDATE_MAX_LINES` is a real bound, asserted by the tests. A mandate long
  * enough to skim is one nobody follows, and the failure mode of prose in a prompt
  * is that it loses to recency — so the budget is part of the artifact.
+ *
+ * The bound moved ONCE, from 120 to 140, and this is the reason: the text had four
+ * instructions to STOP and not one to continue. Measured 2026-09-04 over the eight
+ * runs of the aparece-v2 workspace — 26 `budget.raised`, 26 `question.answered`,
+ * and an owner who had to type "sigue con todas desatendido, no esperes por mi"
+ * INSIDE an unattended run to restart a session the mandate had correctly halted.
+ * A prompt that licenses stopping four times and never says "keep going" produces
+ * exactly that, and no amount of brevity fixes it. See `continuation()`.
  */
 
 export const DRIVE_MODES = ["attended", "unattended"] as const;
 export type DriveMode = (typeof DRIVE_MODES)[number];
 
 /** Each mode's text must fit in this, and the tests hold it to it. */
-export const MANDATE_MAX_LINES = 120;
+export const MANDATE_MAX_LINES = 140;
+
+/**
+ * The bound for a `--tldr` mandate, which carries one section the others do not.
+ *
+ * Deliberately a SECOND constant rather than a bigger first one. The reporting
+ * contract is ~23 lines of prompt paid once, and what it buys is a session that
+ * stops writing prose on every turn for the rest of the run — measured on the
+ * aparece-v2 workspace, 133,689 B of operator notes and 99,689 B of gate evidence
+ * that no prompt ever reads back. Letting the standard mandate drift to fit it
+ * would spend the skimmability budget of every run to pay for the terse one.
+ */
+export const MANDATE_TLDR_MAX_LINES = 165;
 
 const RULE = "-".repeat(78);
 
@@ -60,15 +80,16 @@ export const RUN_PLACEHOLDER = "<run>";
  * Deterministic either way: nothing is read from disk, no workspace is needed,
  * and the same arguments always produce the same bytes.
  */
-export function renderMandate(mode: DriveMode, version: string, run?: string): string {
-  const text = [...header(mode, version, run), ...preflight(mode), ...roles(), ...evidence(),
-    ...parking(), ...calibration(), ...budget(), ...driving(mode), ...gate(mode)].join("\n").trimEnd();
+export function renderMandate(mode: DriveMode, version: string, run?: string, tldr = false): string {
+  const text = [...header(mode, version, run, tldr), ...preflight(mode), ...roles(), ...evidence(),
+    ...continuation(mode), ...parking(), ...calibration(), ...budget(), ...reporting(tldr),
+    ...driving(mode), ...gate(mode)].join("\n").trimEnd();
   return run === undefined ? text : text.replaceAll(RUN_PLACEHOLDER, run);
 }
 
-function header(mode: DriveMode, version: string, run?: string): readonly string[] {
+function header(mode: DriveMode, version: string, run?: string, tldr = false): readonly string[] {
   return [
-    `tldrx drive — session mandate · ${mode} · tldrx ${version}`,
+    `tldrx drive — session mandate · ${mode}${tldr ? " · tldr" : ""} · tldrx ${version}`,
     "",
     // With an id there is nothing left to find-replace, so saying so would be a
     // false instruction — and the reader has one fewer thing to get wrong.
@@ -125,7 +146,8 @@ function preflight(mode: DriveMode): readonly string[] {
       "  `tldrx run gates set <stage>:agent --note \"…\"`, quoting MY delegation from the launch message.",
       "- BUDGET: `tldrx-work/<run>/budget.yml` exists. State the ceiling you will honour, in dollars.",
       "",
-      "Any one of the three you cannot establish: REFUSE to start, and name the command that failed.",
+      "Any one of the three you cannot establish: REFUSE to start, name the command that failed,",
+      "and put it to me as a guided question — a strict blocker is asked, never gone quiet on.",
       "",
     ];
   }
@@ -184,20 +206,152 @@ function evidence(): readonly string[] {
   ];
 }
 
+/**
+ * The rule the mandate did not have — and the whole reason the bound moved.
+ *
+ * Unattended only, and it is the governing sentence of that mode: the framework
+ * already refuses to spawn, so the ONLY thing that can end a run early is the
+ * session deciding to. Measured over the eight driven runs of the aparece-v2
+ * workspace on 2026-09-04, the old text contained four instructions to stop
+ * (the preflight refusal, "do nothing yet", the budget "and wait", and the
+ * four-item interrupt list) and zero instructions to continue — `grep -ic
+ * "continue|keep going|proceed|do not stop|resume"` over this file returned 0.
+ * A session obeying it exactly halts at the first ambiguity, which is what
+ * happened: the owner had to type "yes, extend S8's touches when you get there —
+ * keep going" and later "sigue con todas desatendido, no esperes por mi" into
+ * runs that were supposed to need neither.
+ *
+ * The definition of "strict" is the load-bearing half. Without it, "blocker"
+ * means "something I would like an answer about", and every question is one. A
+ * blocker that leaves another story, wave or stage runnable is a question to
+ * park, not a stop — so the text makes the driver NAME the unblocked work before
+ * it is allowed to call anything strict.
+ */
+function continuation(mode: DriveMode): readonly string[] {
+  if (mode !== "unattended") return [];
+  return [
+    "## Do not stop",
+    "",
+    "Stopping is the failure this mandate exists to prevent, and \"I had a question\" is not one.",
+    "Halt only on a STRICT blocker: one where no remaining turn can proceed until I answer. Before",
+    "you call one strict, name the work it does NOT block — the next story, wave, stage or review —",
+    "and go do that first. Everything short of that you park as below, or decide and log; then",
+    "carry on. If you are truly blocked on every front, that is one line and a guided question, not",
+    "silence.",
+    "",
+  ];
+}
+
+/**
+ * Parking, in the shape an owner can answer in seconds — and WITHOUT the halt the
+ * old text licensed.
+ *
+ * Two things were wrong here and both were measured on the aparece-v2 runs.
+ *
+ * The first was the sentence "if the only safe version is `do nothing yet`, do
+ * nothing yet and park it". It is true about the WRITE and was read as true about
+ * the RUN: a session that hit one product question stopped the whole run rather
+ * than the one path the question blocked. Not shipping an unguarded write is not
+ * the same as not shipping anything, and the text now says which it means.
+ *
+ * The second was the shape. "State the question in one sentence" gets an open
+ * prompt, and an open prompt cannot be answered from a phone at midnight. The §2.7
+ * grammar already wants 2–5 lettered options; the mandate now wants the same, plus
+ * the option the driver would take. That last line is what makes the question
+ * answerable with one letter, and it is the thing run 260830-billing-entitlements
+ * invented for itself on 2026-09-04 because the mandate did not ask for it.
+ *
+ * The CHANNEL stays out of the framework, deliberately. The default is the console,
+ * because that is the one surface every driver has; anything else — a chat bridge,
+ * a pager, a bot — is named in the owner's launch message and the mandate defers to
+ * it without knowing what it is. A framework that hard-codes one operator's chat
+ * tool has made that operator's setup a dependency of everybody's run.
+ *
+ * The last line is the one that keeps the record honest: a default the driver takes
+ * because no answer came is the DRIVER's decision, recorded as the driver's, and may
+ * never be cited back as the owner's. That distinction was drawn by hand at
+ * `260830-billing-entitlements` 2026-09-04T08:00:45Z ("NOT Alan's decision, and must
+ * never be cited as one") and is now part of the text.
+ */
 function parking(): readonly string[] {
   return [
-    "## Park product questions; do not decide them",
+    "## Park product questions as GUIDED ones; do not decide them, and do not halt for them",
     "",
-    "A product decision is not yours. Park it as a card the same turn you hit it:",
+    "A product decision is not yours to make — and it is not a reason to stop the run. Park it",
+    "the same turn you hit it, then carry on down every path it does not block:",
     "",
-    "- state the question in one sentence, and what it blocks;",
-    "- say what the docs and the run's own facts ALREADY decide about it, with the citation, so",
-    "  I am choosing between real options instead of re-deriving them;",
-    "- name the smallest guarded thing you can ship without the answer — or say there is none.",
+    "- the question in one sentence, and exactly what it blocks — and what it does NOT;",
+    "- 2–5 lettered options, each with its consequence. Never an open prompt;",
+    "- what the docs and the run's own facts ALREADY decide, cited, so I pick between real options;",
+    "- the option you would take and why, and what you will do if no answer reaches you;",
+    "- the smallest guarded thing you can ship without the answer — or say there is none.",
     "",
-    "An open question is never a licence to ship an unguarded write. If the only safe version is",
-    "\"do nothing yet\", do nothing yet and park it. `tldrx note <run> \"…\"` records the moment;",
+    "Ask on the console, unless my launch message named another channel; then use that one and say",
+    "so. An answer I never gave is not my decision: if you act on your own default, record it as",
+    "YOURS in those words, and never cite it back to me as mine.",
+    "",
+    "An open question is never a licence to ship an unguarded write — but not shipping the write is",
+    "not the same as not shipping anything. `tldrx note <run> \"…\"` records the moment;",
     "`tldrx answer <Qid> \"…\"` is mine to type.",
+    "",
+  ];
+}
+
+/**
+ * `--tldr` — the reporting contract, for a run whose trail nobody will read.
+ *
+ * It exists because of a measurement and a habit. The measurement, taken over the
+ * ten runs of the aparece-v2 workspace on 2026-09-04: of ~4.0 MB the runs wrote,
+ * 2.16 MB is trail, and the majority of that trail is never read by anything. All
+ * 261 declared stage `inputs:` across those runs contain ZERO occurrences of
+ * `handoff.md`, `retro.md` or `gate-evidence` — they are written at output-token
+ * cost for a human who, on these runs, was never going to open them. Operator
+ * notes alone are 133,689 B, one run's share being 76,382 B of prose no prompt
+ * reads back.
+ *
+ * The habit is the other half: the owner kept typing "tl;dr, what is going on,
+ * remaining work, percentages" into a session that had just written six paragraphs
+ * about it. `tldrx run status` already prints exactly that — phases, percentages,
+ * spend against the ceiling, what is next — so the contract points at the command
+ * rather than asking for the same content in sentences.
+ *
+ * What it may NOT do is stop the handoff being written. `claim-sources` is
+ * condition 5 of the seven `auto` conditions and `autoGate.ts` runs it whether or
+ * not a stage declared it as a check, so a run with no handoff cannot close an
+ * `auto` or `agent` gate and every gate falls to the person this mode exists to
+ * leave alone. The contract therefore asks for a handoff trimmed of PROSE and
+ * never of citations, and says why in the text — a sub-agent that trims the wrong
+ * half fails the validator and costs the gate.
+ *
+ * Both modes get it. Terse output is orthogonal to who signs, and an owner at the
+ * keyboard may want the status block instead of the essay just as much.
+ */
+function reporting(tldr: boolean): readonly string[] {
+  if (!tldr) return [];
+  return [
+    "## Report terse; do not narrate",
+    "",
+    "I am not reading this session for its prose, so write none. After every `--commit` and at",
+    "every gate, show me two things and nothing else:",
+    "",
+    "1. what `tldrx run status <run>` prints — it already carries the phases, the percentages, the",
+    "   spend against the ceiling and what is next. Do not retype any of it in words.",
+    "2. at most three bullets of DELTA since the last one: what landed, what is next, what was",
+    "   deferred or decided. Three is a cap, not a target.",
+    "",
+    "Free text is for two things only: a strict blocker's guided question, and a correction to",
+    "something you already told me. Not a recap of a sub-agent's report, not a summary of a diff I",
+    "can read myself, not the status block again in sentences.",
+    "",
+    "Write no `tldrx note` on this run. Nobody will audit it, and no prompt ever reads one back — a",
+    "fact that must outlive the turn is `tldrx facts add`, which every later prompt DOES read.",
+    "",
+    "Brief every sub-agent to keep its handoff minimal: the sections and the `[src: …]` citations",
+    "`claim-sources` validates, and nothing past them. Trim the prose, never the citations — the",
+    "handoff is a gate input, and one that fails the validator costs the gate you need to close.",
+    "",
+    "Same for the evidence note: the four H2 sections, the counts you actually measured, and",
+    "`caveats: []` when there are none. It is a signature, not a report.",
     "",
   ];
 }
@@ -229,8 +383,9 @@ function budget(): readonly string[] {
     "  $0.00 is a measurement, and a false one.",
     "- When the records are incomplete, report a floor and say it is one — \"at least $4.10 across",
     "  the 6 turns that reported\" — never a total that reads as complete.",
-    "- A ceiling raise is my decision. Do not raise one, and do not route around one: stop, say",
-    "  what the remaining work costs and why, and wait.",
+    "- A ceiling raise is my decision: do not raise one, and do not route around one. That is not",
+    "  a reason to halt the run — ask it as a guided question, say what the remaining work costs,",
+    "  and keep spending what the ceiling still funds. Stop only when the next turn has none left.",
     "",
   ];
 }
@@ -286,9 +441,10 @@ function gate(mode: DriveMode): readonly string[] {
       "`refuse` and `sign-with-fixlist` are real verdicts — use them. A note that signs everything",
       "is a rubber stamp the framework will believe.",
       "",
-      "Interrupt me ONLY for: a new product decision · a budget-ceiling raise · work outside the",
-      "declared boundary · the final merge. Everything else you decide, and log. Never push — the",
-      "final merge is mine.",
+      "Interrupt me ONLY for a STRICT blocker — a new product decision, a ceiling raise, or work",
+      "outside the declared boundary that nothing else can proceed around — and always as the",
+      "guided question above, never as a bare halt. Everything else you decide, and log.",
+      "Never push — the final merge is mine.",
       "",
     ];
   }

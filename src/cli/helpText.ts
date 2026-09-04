@@ -1080,10 +1080,16 @@ const ENTRIES: readonly CommandHelp[] = [
         arg: null,
         meaning: "Nobody is watching. The mandate is for a session driving an `attended_by: host` run with `agent` gates: it drives every turn, signs a gate only over a written evidence note, and wakes a person for the four things that are still theirs.",
       },
+      {
+        name: "tldr",
+        arg: null,
+        meaning: "Essentials only, for a run whose trail you will not read. The mandate gains a reporting contract: after every commit and at every gate the session shows what `tldrx run status` prints plus at most three bullets of delta, and nothing else — no recaps, no diff summaries, no `tldrx note`. Sub-agents are briefed to keep handoffs and evidence notes at the minimum `claim-sources` still validates. Prose is trimmed; citations and gates are not. Works with either mode.",
+      },
     ],
     examples: [
       "tldrx drive --unattended",
       "tldrx drive --unattended 260901-leaderboard",
+      "tldrx drive --unattended --tldr",
       "tldrx drive --attended",
     ],
     exits: [EXIT_OK, EXIT_USAGE],

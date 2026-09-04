@@ -33,7 +33,7 @@ import { RunStore } from "../../core/run/RunStore.ts";
 export const driveCommand: Command = {
   name: "drive",
   summary: "Print the session mandate for driving a run",
-  usage: "tldrx drive <--attended|--unattended> [<run>] [--run <id>]",
+  usage: "tldrx drive <--attended|--unattended> [--tldr] [<run>] [--run <id>]",
   subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
@@ -59,7 +59,11 @@ export const driveCommand: Command = {
 
     const mode: DriveMode = attended ? "attended" : "unattended";
     const run = args.positionals[0] ?? stringFlag(args, "run") ?? theOneOpenRun();
-    process.stdout.write(`${renderMandate(mode, await frameworkVersion(), run)}\n`);
+    // `--tldr` is orthogonal to the mode on purpose: it changes what the session
+    // WRITES, not who may sign, and an owner at the keyboard may want the status
+    // block instead of the essay just as much as one who is not reading at all.
+    const tldr = boolFlag(args, "tldr");
+    process.stdout.write(`${renderMandate(mode, await frameworkVersion(), run, tldr)}\n`);
     return EXIT_OK;
   },
 };
