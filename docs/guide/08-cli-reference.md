@@ -961,7 +961,7 @@ being read finds out, and no story loses an attempt to a YAML typo.
 Print the session mandate for driving a run — the discipline, not the manual.
 
 ```
-tldrx drive <--attended|--unattended> [<run>] [--run <id>]
+tldrx drive <--attended|--unattended> [--tldr] [<run>] [--run <id>]
 ```
 
 The output is plain text you paste into the session that will drive a run (or read yourself
@@ -975,17 +975,42 @@ actually driven by: the three-role
 protocol (developer sub-agent → a **fresh** adversarial reviewer, never the author → the host
 verifying both **in the code**, not in their reports), evidence discipline (measured / inferred
 / assumed labelled in the same sentence as the claim, exit codes never read through a pipe,
-verification from the source, remote shas via `git ls-remote`), parking product questions
-instead of deciding them, calibrating the reviewer to the story's **stakes**, and declaring a
+verification from the source, remote shas via `git ls-remote`), parking product questions as
+**guided** ones — lettered options and a recommendation, asked on the console unless the launch
+message named another channel — instead of deciding them or halting for them, calibrating the
+reviewer to the story's **stakes**, and declaring a
 turn's cost once — with a floor rather than a total when the records are incomplete.
 
-The two modes share that spine and differ in exactly three sections:
+The two modes share that spine and differ in exactly four sections:
 
 | | `--attended` | `--unattended` |
 |---|---|---|
 | the preflight | checks attendedness and the budget, and **moves no gate policy** — a stage that is not `human` where you expected it is reported to you, not fixed | sets what it finds wrong: `tldrx run attend host <run>`, and `tldrx run gates set <stage>:agent --note "…"` for a stage you delegated, over a note quoting **your** delegation from the launch message |
+| when it may stop | no rule — you are at the keyboard, so stopping costs a sentence | **`## Do not stop`**: halt only on a STRICT blocker, one where no remaining turn can proceed until you answer, and name the work it does NOT block before calling it one |
 | who drives the turns | you say which, and do not switch mid-run | the session, through `--prepare`/`--commit`; the framework never spawns |
 | who closes a gate | **you** — the session does the check, writes the note and hands you the command | the session, over a validated evidence note (`tldrx approve --as-agent`) |
+
+**`--tldr`** adds one section to either mode, for a run whose trail nobody is going to read. It
+is a **reporting contract**, not a quality setting: after every `--commit` and at every gate the
+session shows what `tldrx run status` prints — the phases, the percentages, the spend against the
+ceiling and what is next — plus **at most three bullets of delta**, and nothing else. No recap of
+a sub-agent's report, no summary of a diff you can read, no restating the status block in prose.
+Free text is reserved for a strict blocker's guided question and for a correction to something it
+already told you.
+
+It also turns off the half of the trail nothing consumes. Measured on a real workspace of ten
+runs: of ~4.0 MB written, 2.16 MB is trail, and all **261** declared stage `inputs:` contain
+**zero** occurrences of `handoff.md`, `retro.md` or `gate-evidence` — they are written for a human
+who, on these runs, was never going to open them. `--tldr` says to write no `tldrx note`
+(133,689 B of them across those runs, read back by nothing) and to keep gate evidence at the
+template's minimum; a fact that must outlive the turn goes to `tldrx facts add`, which every later
+prompt **does** read.
+
+What it may not do is drop the handoff. `claim-sources` is condition 5 of the seven `auto`
+conditions and runs whether or not a stage declared it as a check, so a run with no handoff cannot
+close an `auto` or `agent` gate — every gate would fall to the person the mode exists to leave
+alone. `--tldr` therefore briefs sub-agents to trim the **prose** and never the `[src: …]`
+citations, and the mandate says why in as many words.
 
 A mode is **required and never guessed** (exit `1`) — the same refusal `tldrx run attend` makes,
 and for the same reason: handing an attended session the unattended text tells it to sign gates

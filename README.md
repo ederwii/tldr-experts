@@ -75,14 +75,30 @@ Two commands and a prompt — and the prompt now ships with the package:
 ```bash
 tldrx drive --unattended        # print the mandate; paste it into the session that drives the run
 tldrx drive --attended          # the same disciplines, but every gate stays yours to sign
+tldrx drive --unattended --tldr # essentials only, for a run whose trail you will not read
 ```
 
 `tldrx drive` needs no workspace, opens no run and writes nothing: it prints the discipline the
 first real runs were driven by — the three-role protocol (developer → a **fresh** adversarial
 reviewer, never the author → the host verifying both in the code, not in their reports), evidence
-labelled `measured` / `inferred` / `assumed`, product questions parked rather than decided, the
-reviewer calibrated to the story's stakes, and the cost declared once. The two modes differ in
-exactly two places: who drives the turns, and who may close a gate.
+labelled `measured` / `inferred` / `assumed`, product questions parked as **guided** ones rather
+than decided, the reviewer calibrated to the story's stakes, and the cost declared once. The two
+modes differ in exactly two places: who drives the turns, and who may close a gate.
+
+**The unattended mandate leads with `## Do not stop`.** A run only ends early because the session
+decides to, so the text defines the one thing that may end it — a strict blocker, where no
+remaining turn can proceed until you answer — and makes the driver name the work a blocker does
+*not* block before it may halt for it. Everything short of that is parked as a guided question
+(lettered options, the option the driver would take, asked on the console unless your launch
+message names another channel) and the run carries on down every path the question does not block.
+
+**`--tldr` is for the runs you will not audit.** The session reports what `tldrx run status`
+already prints — phases, percentages, spend against the ceiling, what is next — plus at most three
+bullets of delta, and stops narrating. It also drops the half of the trail nothing consumes:
+measured across ten real runs, of ~4.0 MB written 2.16 MB is trail, and all 261 declared stage
+`inputs:` contain **zero** references to `handoff.md`, `retro.md` or `gate-evidence`. It is a
+reporting contract, not a quality setting — the evidence discipline and the gate checks are
+untouched, and handoffs keep their citations because `claim-sources` gates on them.
 
 The rest of this section is what that mandate says, in the shape you would type it by hand.
 
@@ -298,6 +314,7 @@ back on the registry is 0.3.0.
 
 | Version | Date | Status | Contains |
 |---|---|---|---|
+| 0.8.0 | unreleased | `beta` | the unattended mandate learns to keep going: a `## Do not stop` section that defines the one thing allowed to end a run early (a strict blocker, named against the work it does not block), product questions parked as **guided** ones with lettered options and a pre-declared fallback, and a budget stop that asks instead of halting — written against 26 `budget.raised` and 26 `question.answered` events on a real ten-run workspace where the owner had to re-authorise "unattended" mid-run. Plus `tldrx drive --tldr`: a reporting contract for runs nobody will audit — the `run status` block plus three bullets of delta, no operator notes, minimal gate evidence, handoffs trimmed of prose but never of the citations `claim-sources` gates on. The ask channel stays the console and the framework names no chat vendor |
 | 0.7.0 | 2026-09-03 | `beta` | Codex as a second honest automated runner: recorded JSONL contract, structured envelopes, role-based sandboxes, token/session provenance, and explicitly unmetered USD accounting; Claude remains the default and the pilot harness. Also absorbs the citation-honesty work previously staged as 0.6.2: a `file` src resolves against the branches the run RECORDED and NAMES the unmerged ref instead of passing in silence or breaking with the temp dir (#140), watcher cards name it the same way (#143), and every run close reports the questions nobody answered (#141) |
 | 0.6.1 | 2026-09-03 | `beta` | dogfooding fixes from the first fully-unattended runs: blocked stories never lose uncommitted work (rescue commits + `story.work_rescued`), a fix is only Resolved with a reachable sha, re-entered stages reconstruct their handoff from the ledger instead of degrading it, the Cost header reports the phase and names its lower bound (shared `spendBasis`), feature presets resolve their per-repo maps, Plan sees the command allowlist its gate enforces, the landing sells the unattended flow |
 | 0.6.0 | 2026-09-02 | `beta` | the dashboard suite — a "Now" hero strip, `--serve` live refresh, stage durations and gate notes on page and CLI, and a public demo generated from fixtures; honest dual-economy spend (metered + host, lower-bound named); gate provenance — `executed_by` + `authority` so a delegated signature never reads as a personal one, machine-signed reporting fixed; ONE `absent:` semantic shared by claim-sources and the auto gate; superseded stamps when an owner answer flips an earlier phase doc; run close commits its state and `ship` refuses a state-carrying epic; merge-wave gates `docs:build`, survives interruption and self-rewrite; a public-surface drift guard; env.yml validation (unique ids, tool cap) |

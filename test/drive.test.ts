@@ -14,7 +14,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { EXIT_OK, EXIT_USAGE } from "../src/cli/exitCodes.ts";
-import { DRIVE_MODES, MANDATE_MAX_LINES, renderMandate, type DriveMode } from "../src/core/drive/index.ts";
+import {
+  DRIVE_MODES, MANDATE_MAX_LINES, MANDATE_TLDR_MAX_LINES, renderMandate, type DriveMode,
+} from "../src/core/drive/index.ts";
 import { createRun } from "../src/core/run/newRun.ts";
 import { makeRunWorkspace, type TempRunWorkspace } from "./fixtures/tempRunWorkspace.ts";
 import { noSpawnEnv } from "./fixtures/noSpawnPath.ts";
@@ -407,5 +409,214 @@ describe("the mandate carries its own preflight (#84)", () => {
       expect(renderMandate(mode, VERSION, "260901-leaderboard").split("\n").length)
         .toBeLessThanOrEqual(MANDATE_MAX_LINES);
     }
+  });
+});
+
+/**
+ * The continuation rule (2026-09-04).
+ *
+ * The mandate used to license stopping four times and never once say "keep going",
+ * and the runs it drove did exactly that: measured over the eight driven runs of
+ * the aparece-v2 workspace, 26 `budget.raised` and 26 `question.answered` events,
+ * and an owner who had to type "sigue con todas desatendido, no esperes por mi"
+ * INSIDE an unattended run to restart a session the old text had correctly halted.
+ *
+ * What is asserted here is the contract, not the prose: that the unattended mode
+ * carries a stop rule with a DEFINITION of strict, that a parked question is
+ * shaped so it can be answered in one letter, that the driver's own default is
+ * never laundered as the owner's, and — the one that keeps the framework portable —
+ * that no operator's chat tool has been baked into the shipped text.
+ */
+describe("the mandate tells the driver to keep going (#63 follow-up)", () => {
+  const unattended = renderMandate("unattended", VERSION);
+  const attended = renderMandate("attended", VERSION);
+
+  test("unattended: it says not to stop, and defines what may stop it", () => {
+    expect(unattended).toContain("## Do not stop");
+    expect(unattended).toContain("STRICT blocker");
+    expect(unattended).toContain("no remaining turn can proceed");
+  });
+
+  test("unattended: a blocker is not strict until the unblocked work is named", () => {
+    expect(unattended).toContain("name the work it does NOT block");
+  });
+
+  test("unattended: the old unconditional halts are gone", () => {
+    // "do nothing yet, do nothing yet and park it" halted the RUN over a question
+    // that blocked one path, and the budget bullet halted it outright.
+    expect(unattended).not.toContain("do nothing yet");
+    expect(unattended).not.toContain("and wait.");
+  });
+
+  test("attended: the stop rule is unattended-only — a person at the keyboard is the stop", () => {
+    expect(attended).not.toContain("## Do not stop");
+  });
+
+  for (const [mode, text] of [["unattended", unattended], ["attended", attended]] as const) {
+    test(`${mode}: a parked question is GUIDED — lettered options, never an open prompt`, () => {
+      expect(text).toContain("lettered options");
+      expect(text).toContain("Never an open prompt");
+      expect(text).toContain("the option you would take");
+    });
+
+    test(`${mode}: parking says what it does not block, so the run continues around it`, () => {
+      expect(text).toContain("carry on down every path it does not block");
+    });
+
+    test(`${mode}: a default the driver took is the DRIVER's, never quoted back as mine`, () => {
+      expect(text).toContain("An answer I never gave is not my decision");
+      expect(text).toContain("never cite it back to me as mine");
+    });
+
+    test(`${mode}: the ask channel is the console, overridable only by the launch message`, () => {
+      expect(text).toContain("Ask on the console");
+      expect(text).toContain("unless my launch message named another channel");
+    });
+
+    /**
+     * The framework may not know one operator's chat tool. The owner names a
+     * channel in the launch message or gets the console; baking a vendor in here
+     * would make one person's setup a dependency of everybody's run.
+     */
+    test(`${mode}: names no chat vendor — the framework stays channel-agnostic`, () => {
+      for (const vendor of ["slack", "pumble", "discord", "teams", "telegram", "webhook"]) {
+        expect(text.toLowerCase()).not.toContain(vendor);
+      }
+    });
+  }
+
+  test("unattended: the budget stop asks instead of halting, and still forbids a raise", () => {
+    expect(unattended).toContain("A ceiling raise is my decision");
+    expect(unattended).toContain("do not route around one");
+    expect(unattended).toContain("ask it as a guided question");
+    expect(unattended).toContain("keep spending what the ceiling still funds");
+  });
+
+  test("unattended: the interrupt list is strict blockers only, asked as questions", () => {
+    expect(unattended).toContain("Interrupt me ONLY for a STRICT blocker");
+    expect(unattended).toContain("never as a bare halt");
+    expect(unattended).toContain("Never push");
+  });
+
+  test("the preflight refusal is asked, not gone quiet on", () => {
+    expect(unattended).toContain("REFUSE to start");
+    expect(unattended).toContain("a strict blocker is asked, never gone quiet on");
+  });
+});
+
+/**
+ * `--tldr` — the reporting contract (2026-09-04).
+ *
+ * Measured over the ten runs of a real workspace: of ~4.0 MB written, 2.16 MB is
+ * trail, and all 261 declared stage `inputs:` across those runs contain ZERO
+ * occurrences of `handoff.md`, `retro.md` or `gate-evidence`. Operator notes alone
+ * are 133,689 B that no prompt ever reads back. `--tldr` is for the runs whose
+ * trail nobody will open, and what it buys is a session that stops narrating.
+ *
+ * The contract asserted here has a hard edge: `--tldr` may trim PROSE and may not
+ * trim CITATIONS. `claim-sources` is condition 5 of the seven `auto` conditions and
+ * runs whether or not a stage declared it, so a handoff stripped of `[src: …]`
+ * tokens fails the gate this mode exists to close unattended.
+ */
+describe("tldrx drive --tldr (essentials-only reporting)", () => {
+  test("absence is today: no --tldr renders byte-identically to before", () => {
+    for (const mode of DRIVE_MODES) {
+      expect(renderMandate(mode, VERSION, undefined, false)).toBe(renderMandate(mode, VERSION));
+      expect(renderMandate(mode, VERSION, "260901-leaderboard", false))
+        .toBe(renderMandate(mode, VERSION, "260901-leaderboard"));
+    }
+  });
+
+  test("the standard mandate carries no reporting contract at all", () => {
+    for (const mode of DRIVE_MODES) {
+      expect(renderMandate(mode, VERSION)).not.toContain("## Report terse");
+      expect(renderMandate(mode, VERSION)).not.toContain("· tldr ·");
+    }
+  });
+
+  for (const mode of DRIVE_MODES) {
+    const text = renderMandate(mode, VERSION, undefined, true);
+
+    test(`${mode}: --tldr is stamped in the header, so a pasted mandate says which it is`, () => {
+      expect(text).toContain(`· ${mode} · tldr · tldrx ${VERSION}`);
+    });
+
+    test(`${mode}: it points at the command that already prints the tl;dr`, () => {
+      expect(text).toContain("## Report terse");
+      expect(text).toContain("tldrx run status <run>");
+      expect(text).toContain("Do not retype any of it in words");
+    });
+
+    test(`${mode}: the delta is capped at three bullets, and the cap is not a target`, () => {
+      expect(text).toContain("at most three bullets of DELTA");
+      expect(text).toContain("Three is a cap, not a target");
+    });
+
+    test(`${mode}: free text is reserved for a blocker and a correction`, () => {
+      expect(text).toContain("Free text is for two things only");
+      expect(text).toContain("not a summary of a diff I");
+    });
+
+    test(`${mode}: operator notes are off, and facts — which ARE read — are the alternative`, () => {
+      expect(text).toContain("Write no `tldrx note` on this run");
+      expect(text).toContain("no prompt ever reads one back");
+      expect(text).toContain("tldrx facts add");
+    });
+
+    /**
+     * The load-bearing assertion of the whole flag. A terse handoff is fine; an
+     * uncited one is a gate that cannot close.
+     */
+    test(`${mode}: it trims prose and explicitly NOT citations, naming claim-sources`, () => {
+      expect(text).toContain("keep its handoff minimal");
+      expect(text).toContain("`claim-sources` validates");
+      expect(text).toContain("Trim the prose, never the citations");
+      expect(text).toContain("costs the gate you need to close");
+    });
+
+    test(`${mode}: the evidence note is minimised too, but still signed`, () => {
+      expect(text).toContain("the four H2 sections");
+      expect(text).toContain("It is a signature, not a report");
+    });
+
+    test(`${mode}: --tldr never weakens the disciplines the mandate exists for`, () => {
+      expect(text).toContain("measured");
+      expect(text).toContain("Never push");
+      expect(text).toContain("Three roles");
+      expect(text.toLowerCase()).toContain("stakes");
+    });
+
+    test(`${mode}: --tldr fits its own line budget`, () => {
+      expect(text.split("\n").length).toBeLessThanOrEqual(MANDATE_TLDR_MAX_LINES);
+      expect(renderMandate(mode, VERSION, "260901-leaderboard", true).split("\n").length)
+        .toBeLessThanOrEqual(MANDATE_TLDR_MAX_LINES);
+    });
+
+    test(`${mode}: the standard mandate stays inside the tighter bound`, () => {
+      expect(renderMandate(mode, VERSION).split("\n").length).toBeLessThanOrEqual(MANDATE_MAX_LINES);
+    });
+  }
+
+  test("the reporting contract substitutes <run> like every other section (#75)", () => {
+    const filled = renderMandate("unattended", VERSION, "260901-leaderboard", true);
+    expect(filled).toContain("tldrx run status 260901-leaderboard");
+    expect(filled).not.toContain("<run>");
+  });
+
+  test("the CLI accepts --tldr on both modes and exits 0", async () => {
+    const dir = bareDir();
+    for (const mode of DRIVE_MODES) {
+      const run = await tldrxIn(dir, "drive", `--${mode}`, "--tldr");
+      expect(run.code).toBe(EXIT_OK);
+      expect(run.stdout).toContain("## Report terse");
+      expect(run.stdout.split("\n").length).toBeLessThanOrEqual(MANDATE_TLDR_MAX_LINES + 1);
+    }
+  });
+
+  test("the CLI without --tldr prints no reporting contract", async () => {
+    const dir = bareDir();
+    const run = await tldrxIn(dir, "drive", "--unattended");
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).not.toContain("## Report terse");
   });
 });

@@ -1,5 +1,71 @@
 # Changelog
 
+## 0.8.0 — unreleased
+
+### Added
+
+- **`tldrx drive --tldr` — essentials only, for a run whose trail nobody will read.** It adds
+  one section to either mandate and stamps the header `· tldr ·`. The session reports in a
+  fixed shape — what `tldrx run status` already prints (phases, percentages, spend against the
+  ceiling, what is next) plus **at most three bullets of delta** — and stops narrating: no
+  recap of a sub-agent's report, no summary of a diff, no restating the status block in prose.
+  Free text is reserved for a strict blocker's guided question and for a correction.
+  It also turns off the half of the trail nothing consumes: no `tldrx note`, and gate evidence
+  at the template's minimum. A fact that must outlive the turn goes to `tldrx facts add`, which
+  every later prompt **does** read.
+  Measured on a ten-run workspace: of ~4.0 MB written, 2.16 MB is trail, and all **261**
+  declared stage `inputs:` contain **zero** occurrences of `handoff.md`, `retro.md` or
+  `gate-evidence` — ~445k tokens of output across those runs that no prompt ever reads back.
+  Operator notes alone are 133,689 B.
+  What `--tldr` deliberately does **not** do is drop the handoff: `claim-sources` is condition 5
+  of the seven `auto` conditions and runs whether or not a stage declared it, so a run without
+  one cannot close an `auto` or `agent` gate. The mandate briefs sub-agents to trim the *prose*
+  and never the `[src: …]` citations, and says why. `--tldr` works on `--attended` too — terse
+  output is orthogonal to who signs. Absence is today: without the flag both mandates render
+  byte-identically to before, and a test asserts it.
+- `MANDATE_TLDR_MAX_LINES` (`165`) bounds the `--tldr` variants; the standard mandate keeps the
+  tighter `MANDATE_MAX_LINES`. Two constants rather than one looser one, so the terse mode does
+  not spend every other run's skimmability budget.
+
+### Fixed
+
+- **`tldrx drive --unattended` told the driver four times to stop and never once to
+  continue, and the runs it drove did exactly that.** Measured over the eight driven runs
+  of a real workspace: 26 `budget.raised` and 26 `question.answered` events, and an owner
+  who had to type *"sigue con todas desatendido, no esperes por mi"* **inside** an
+  unattended run to restart a session the mandate had correctly halted. `grep -ic
+  "continue|keep going|proceed|do not stop|resume"` over `mandate.ts` returned `0`. The
+  unattended mandate now opens the discipline with a **`## Do not stop`** section that
+  defines the only thing that may halt a run — a STRICT blocker, one where no remaining
+  turn can proceed until the owner answers — and makes the driver **name the work the
+  blocker does not block** before it may call one strict. The three remaining halts are
+  narrowed to match: the preflight refusal is now *asked* rather than gone quiet on, the
+  budget bullet keeps "do not raise one, do not route around one" but no longer halts the
+  run (it asks, then keeps spending what the ceiling still funds), and the interrupt list
+  is strict blockers only, "never as a bare halt".
+- **A parked question is now a GUIDED question.** "State the question in one sentence" got
+  open prompts nobody could answer from a phone, so a product question stopped a run for
+  hours. Parking now asks for 2–5 lettered options with their consequences, what the run's
+  own docs and facts already decide, the option the driver would take, and what it will do
+  if no answer arrives. Both modes carry it.
+- **The old halt licence is gone.** "If the only safe version is *do nothing yet*, do
+  nothing yet and park it" was true about the write and read as true about the run. The
+  text now says which it means: not shipping an unguarded write is not the same as not
+  shipping anything.
+
+### Changed
+
+- **The ask channel is the console, and the framework stays agnostic about anything else.**
+  The mandate says *"Ask on the console, unless my launch message named another channel"* —
+  no chat vendor is named in shipped text, and a test asserts none ever is, so one
+  operator's bridge never becomes a dependency of everybody's run. A default the driver
+  falls back on when no answer reaches it is recorded as the **driver's** decision and may
+  never be cited back as the owner's — the distinction one run drew by hand and the text
+  now carries.
+- `MANDATE_MAX_LINES` moved once, `120` → `140`, with the reason recorded in the source.
+  The bound is still real and still asserted; the unattended mandate renders 137 lines and
+  the attended one 123. File formats remain `version: 1`.
+
 ## 0.7.0 — 2026-09-03
 
 ### Added
