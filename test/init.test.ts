@@ -96,14 +96,25 @@ describe("tldrx init — multi-repo workspace", () => {
   });
 
   test("stack_packs is carried forward across a re-init, byte for byte", async () => {
-    const path = join(fixture.root, ".tldrx/workspace.yml");
-    const before = await readYaml(path);
-    writeFileSync(path, readFileSync(path, "utf8")
-      + "stack_packs:\n  enabled: true\n  enabled_at: 2026-09-05T10:00:00Z\n", "utf8");
-    await init(fixture.root);
-    const after = await readYaml(path);
-    expect(after.stack_packs).toEqual({ enabled: true, enabled_at: "2026-09-05T10:00:00Z" });
-    expect(after.repos).toEqual(before.repos);
+    // Own fixture, not the shared `fixture` above: this test hand-edits `workspace.yml` on
+    // disk and re-runs init, leaving `stack_packs` present afterward — sharing the `describe`
+    // block's fixture would leak that into every later test in this file (found in review:
+    // the preceding test's `expect(document.stack_packs).toBeUndefined()` was passing only
+    // because it happened to run first, not because a first init never writes the key).
+    const local = await multiRepoFixture();
+    try {
+      const path = join(local.root, ".tldrx/workspace.yml");
+      await init(local.root);
+      const before = await readYaml(path);
+      writeFileSync(path, readFileSync(path, "utf8")
+        + "stack_packs:\n  enabled: true\n  enabled_at: 2026-09-05T10:00:00Z\n", "utf8");
+      await init(local.root);
+      const after = await readYaml(path);
+      expect(after.stack_packs).toEqual({ enabled: true, enabled_at: "2026-09-05T10:00:00Z" });
+      expect(after.repos).toEqual(before.repos);
+    } finally {
+      await local.cleanup();
+    }
   });
 
   test("the emitted workspace document passes the shipped validator", () => {

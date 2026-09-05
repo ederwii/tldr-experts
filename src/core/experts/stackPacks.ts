@@ -5,11 +5,11 @@
  *
  * Not folded into `hooks/lib/workspace.ts`: that loader is bundled into every hook and
  * `test/build.test.ts` caps a hook entry at 50 KB (gh #94). Prompt assembly is not a hook.
+ *
+ * Reading `workspace.yml` and walking `repos[]` is `./workspaceRepos.ts` — shared with
+ * `stackExperts.ts`, which derives a different per-repo fact from the same file.
  */
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
-import { parseYaml } from "../yaml.ts";
+import { readWorkspaceDocument, strings, workspaceRepoRows } from "./workspaceRepos.ts";
 import type { DetectedOverlay } from "../detect/overlays.ts";
 import type { DetectedSkill } from "../detect/skills.ts";
 
@@ -33,14 +33,7 @@ export const NO_STACK_PACKS: StackPacksState = { present: false, enabled: false,
 
 /** `root` is the directory holding `.tldrx/` — the same `root` `expertDir` takes. */
 export function readStackPacks(root: string): StackPacksState {
-  const path = join(root, PROJECT_FRAMEWORK_DIR, "workspace.yml");
-  if (!existsSync(path)) return NO_STACK_PACKS;
-  let doc: unknown;
-  try {
-    doc = parseYaml(readFileSync(path, "utf8"));
-  } catch {
-    return NO_STACK_PACKS;
-  }
+  const doc = readWorkspaceDocument(root);
   if (typeof doc !== "object" || doc === null) return NO_STACK_PACKS;
   const record = doc as Record<string, unknown>;
 
@@ -49,25 +42,14 @@ export function readStackPacks(root: string): StackPacksState {
   const enabled = present && (block as Record<string, unknown>).enabled === true;
   const at = present ? (block as Record<string, unknown>).enabled_at : null;
 
-  const repos: RepoPacks[] = [];
-  if (Array.isArray(record.repos)) {
-    for (const row of record.repos as unknown[]) {
-      if (typeof row !== "object" || row === null) continue;
-      const repo = row as Record<string, unknown>;
-      if (typeof repo.name !== "string") continue;
-      repos.push({
-        name: repo.name,
-        stack: strings(repo.stack),
-        overlays: overlaysOf(repo.overlays),
-        skills: skillsOf(repo.skills),
-      });
-    }
-  }
-  return { present, enabled, enabledAt: typeof at === "string" ? at : null, repos };
-}
+  const repos: RepoPacks[] = workspaceRepoRows(doc).map((row) => ({
+    name: row.name,
+    stack: strings(row.stack),
+    overlays: overlaysOf(row.overlays),
+    skills: skillsOf(row.skills),
+  }));
 
-function strings(value: unknown): readonly string[] {
-  return Array.isArray(value) ? (value as unknown[]).filter((item): item is string => typeof item === "string") : [];
+  return { present, enabled, enabledAt: typeof at === "string" ? at : null, repos };
 }
 
 function overlaysOf(value: unknown): readonly DetectedOverlay[] {
