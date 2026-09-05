@@ -1066,8 +1066,12 @@ describe("the convention the guard only approximates is written down (#89)", () 
 
   const rule = (file: string) => readFileSync(join(REPO, file), "utf8");
 
-  test("CONTRIBUTING and CLAUDE.md both state the rule in the same words", () => {
-    for (const file of ["CONTRIBUTING.md", "CLAUDE.md"]) {
+  test("CONTRIBUTING and AGENTS.md both state the rule, and CLAUDE.md imports AGENTS.md", () => {
+    // The rule's canonical home moved to AGENTS.md (every agent, Codex included, reads it);
+    // CLAUDE.md reaches it via the @-import, and THAT is pinned too — a CLAUDE.md that stops
+    // importing would silently orphan Claude sessions from the whole rulebook.
+    expect(rule("CLAUDE.md")).toContain("@AGENTS.md");
+    for (const file of ["CONTRIBUTING.md", "AGENTS.md"]) {
       const text = rule(file);
       expect(text).toContain("ONLY through `scripts/merge-wave.sh`");
       expect(text).toContain("own worktree");
