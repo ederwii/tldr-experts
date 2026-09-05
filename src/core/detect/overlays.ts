@@ -86,12 +86,18 @@ function netEvidence(pkg: NetPackage): string {
   return `${pkg.file}: Include="${pkg.name}"`;
 }
 
-/** `fastapi` → `pyproject.toml: dependencies fastapi` or `<requirements file>: fastapi`. */
-function pyDep(manifests: Manifests, prefix: string): string | null {
-  const lower = prefix.toLowerCase();
-  if (manifests.pyproject.some((name) => name.startsWith(lower))) return `pyproject.toml: dependencies ${prefix}`;
+/**
+ * `fastapi` → `pyproject.toml: dependencies fastapi` or `<requirements file>: fastapi`.
+ *
+ * Exact match on the normalised name, never a prefix: `fastapi-users` and
+ * `sqlalchemy-utils` are real, unrelated PyPI packages, and a prefix match would fire
+ * this rule's evidence for a name that isn't actually in the file.
+ */
+function pyDep(manifests: Manifests, name: string): string | null {
+  const lower = name.toLowerCase();
+  if (manifests.pyproject.includes(lower)) return `pyproject.toml: dependencies ${name}`;
   for (const [file, names] of manifests.requirements) {
-    if (names.some((name) => name.startsWith(lower))) return `${file}: ${prefix}`;
+    if (names.includes(lower)) return `${file}: ${name}`;
   }
   return null;
 }
@@ -107,7 +113,12 @@ interface Signal {
   readonly name: string;
 }
 
-/** The first of these signals present, searched .NET → npm → Python, for the cross-stack rule. */
+/**
+ * The first of these signals present, searched .NET → npm → Python, for the cross-stack
+ * rule. .NET stays prefix-matched (a provider package like `Npgsql.EntityFrameworkCore.
+ * PostgreSQL` is meant to be found by its `Npgsql` namespace root); Python is exact —
+ * see `pyDep` for why a prefix match on Python names is wrong.
+ */
 function firstSignal(
   manifests: Manifests,
   names: { readonly net: readonly string[]; readonly npm: readonly string[]; readonly py: readonly string[] },
@@ -119,11 +130,11 @@ function firstSignal(
   for (const name of names.npm) {
     if (npmDep(manifests.packageJson, name) !== null) return { file: "package.json", name };
   }
-  for (const prefix of names.py) {
-    const lower = prefix.toLowerCase();
-    if (manifests.pyproject.some((name) => name.startsWith(lower))) return { file: "pyproject.toml", name: prefix };
+  for (const name of names.py) {
+    const lower = name.toLowerCase();
+    if (manifests.pyproject.includes(lower)) return { file: "pyproject.toml", name };
     for (const [file, list] of manifests.requirements) {
-      if (list.some((name) => name.startsWith(lower))) return { file, name: prefix };
+      if (list.includes(lower)) return { file, name };
     }
   }
   return null;
@@ -210,12 +221,18 @@ export const OVERLAY_RULES: readonly OverlayRule[] = [
   {
     id: "postgres-testcontainers", languages: [...PACK_LANGUAGES],
     applies: (m) => {
-      const driver = firstSignal(m, { net: ["Npgsql"], npm: ["pg", "@prisma/adapter-pg"], py: ["asyncpg", "psycopg"] });
+      const driver = firstSignal(m, {
+        net: ["Npgsql"], npm: ["pg", "@prisma/adapter-pg"], py: ["asyncpg", "psycopg", "psycopg2", "psycopg2-binary"],
+      });
       const containers = firstSignal(m, {
         net: ["Testcontainers"], npm: ["testcontainers", "@testcontainers/postgresql"], py: ["testcontainers"],
       });
       if (driver === null || containers === null) return null;
-      return `${driver.file}: ${driver.name} + ${containers.name}`;
+      // Same manifest: name both packages, one file. Different manifests (the driver in
+      // one ecosystem, testcontainers in another): name both files, or the evidence
+      // would claim a package lives in a file that never mentions it.
+      const containerSide = containers.file === driver.file ? containers.name : `${containers.file}: ${containers.name}`;
+      return `${driver.file}: ${driver.name} + ${containerSide}`;
     },
   },
 ];

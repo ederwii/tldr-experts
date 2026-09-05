@@ -158,6 +158,13 @@ describe("Python rules", () => {
     const found = await overlays(repo({ "pyproject.toml": "[tool.poetry.dependencies]\nfastapi = \"*\"\n" }));
     expect(found.fastapi).toBeUndefined();
   });
+
+  test("a different package sharing a prefix does not fire — matching is exact, not startsWith", async () => {
+    expect((await overlays(repo({ "pyproject.toml": "[project]\ndependencies = [\"fastapi-users\"]\n" }))).fastapi)
+      .toBeUndefined();
+    expect((await overlays(repo({ "pyproject.toml": "[project]\ndependencies = [\"sqlalchemy-utils\"]\n" })))["sqlalchemy-alembic"])
+      .toBeUndefined();
+  });
 });
 
 describe("postgres-testcontainers spans the three ecosystems", () => {
@@ -183,6 +190,22 @@ describe("postgres-testcontainers spans the three ecosystems", () => {
 
   test("a driver alone is not a testcontainers setup", async () => {
     expect((await overlays(repo({ "package.json": pkg({ pg: "*" }) })))["postgres-testcontainers"]).toBeUndefined();
+  });
+
+  test("psycopg2-binary is a Postgres driver too", async () => {
+    const found = await overlays(repo({
+      "pyproject.toml": "[project]\ndependencies = [\"psycopg2-binary\", \"testcontainers\"]\n",
+    }));
+    expect(found["postgres-testcontainers"]).toBe("pyproject.toml: psycopg2-binary + testcontainers");
+  });
+
+  test("driver and containers in different files: the evidence names both files, never a package the file doesn't have", async () => {
+    const found = await overlays(repo({
+      "package.json": pkg({ pg: "*" }),
+      "src/T/T.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup>"
+        + "<PackageReference Include=\"Testcontainers.PostgreSql\" Version=\"1\" /></ItemGroup></Project>\n",
+    }));
+    expect(found["postgres-testcontainers"]).toBe("package.json: pg + src/T/T.csproj: Testcontainers.PostgreSql");
   });
 });
 
