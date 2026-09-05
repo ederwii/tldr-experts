@@ -103,7 +103,9 @@ Un experto sin área no se puede entrenar, y por eso `--area` va arriba: sin ell
 `expert train` se niega y nombra el bloque que hay que agregar a `competencies.yml`.
 
 `tldrx expert recompute` vuelve a derivar cada nivel a partir de la evidencia que hay en
-disco.
+disco. `tldrx expert rescore` va un paso más atrás: vuelve a leer los propios archivos de
+conocimiento y deriva su evidencia otra vez, que es lo que quieres después de un cambio en lo
+que cuenta como evidencia. Ninguno de los dos lanza nada ni gasta nada.
 
 ## ¿De verdad hace falta?
 

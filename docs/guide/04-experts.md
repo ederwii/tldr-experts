@@ -259,6 +259,7 @@ trained experts each, and nothing compared what the two said.
 ```bash
 tldrx expert list [--json]           # status, last_trained, areas, evidence count, levels, star chart
 tldrx expert recompute [<name>]      # recompute every level from evidence already on disk
+tldrx expert rescore [<name>]        # re-read knowledge/*.md and derive its evidence again
 tldrx expert create <name> [--area <id>] [--title <text>]
                           [--role <slug>] [--domain <slug>] [--stack <lang>]
 ```
@@ -270,6 +271,19 @@ pasted the `--print-prompt` prompt into their own session ended with `level: 0` 
 the formula computed 5. `recompute` prints one line per area — `name/area: level 0 → 5 (17
 evidence)` — is idempotent, and does **not** touch `status` or `last_trained`: it is
 arithmetic, not a training run. It spawns nothing and spends nothing.
+
+`rescore` is the other half of that, and the two are easy to confuse. `recompute` re-adds up
+the evidence rows that are already in `competencies.yml`; `rescore` **makes** the rows, by
+re-reading `knowledge/*.md` and deriving their evidence again under today's rules. Reach for it
+after a change to what counts as evidence — otherwise a workspace has to pay for readings it
+already bought. It prints one line per knowledge file, is idempotent (rows dedupe by `src`),
+and like `recompute` it spawns nothing, spends nothing and leaves `status` and `last_trained`
+alone.
+
+Rescored rows are dated by the knowledge file's own `trained_at`, or by the expert's
+`last_trained` when the file has none — never by the clock, because the formula weighs recency
+and a reading taken in August is not evidence gathered today. A file that dates itself nowhere
+is skipped with that as the reason, and so is one that no longer validates.
 
 `create` writes `.tldrx/experts/<name>/{expert.md,competencies.yml}` at status `created` with
 one area per flag given, at level 0, and **refuses to overwrite** an existing expert (exit 1).

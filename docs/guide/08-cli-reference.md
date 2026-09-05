@@ -733,6 +733,7 @@ tldrx expert train     <name> --area <area> [--mode light|full] [--max-usd <n>] 
                               [--effort <level>] [--prepare|--commit] [--yolo] [--print-prompt]
                               [--ui <mode>]
 tldrx expert recompute [<name>] [--json]
+tldrx expert rescore   [<name>] [--area <area>] [--json]
 ```
 
 `create --area <id>` seeds the expert's first competency area and `--title <text>` names it —

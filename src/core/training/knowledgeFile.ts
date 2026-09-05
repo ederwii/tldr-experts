@@ -37,6 +37,7 @@ import { competencyLevel, type CompetencyEvidence, type EvidenceKind } from "../
 import { parseHandoff, type HandoffSection } from "../text/handoff.ts";
 import { parseSrcToken, resolveSrc, type SrcContext, type SrcRef } from "../text/srcToken.ts";
 import { normalisePath, pathsIntersect } from "../experts/expertDomain.ts";
+import { PROJECT_WORK_DIR } from "../paths.ts";
 import {
   claimText, confidenceOf, executionClaim, isParaphrase, neighbourhood, type Confidence,
 } from "./claimCheck.ts";
@@ -115,16 +116,29 @@ export interface KnowledgeFile {
 export interface KnowledgeShape {
   readonly sections: readonly string[];
   readonly checked: readonly string[];
+  /**
+   * This file was written FROM the run record, so `tldrx-work/**` is its subject
+   * and not a citation that wandered out of the expert's folder (gh #154).
+   *
+   * The flag lives on the shape rather than on the scope because it is a fact
+   * about which pre-pass produced the file, not about which expert owns it:
+   * `mineRuns` is what put those handoffs in front of the sub-agent, and a gate
+   * that then refuses what the framework itself supplied is a category error the
+   * expert's `kind:` has no bearing on.
+   */
+  readonly minesRunRecord: boolean;
 }
 
 export const LIGHT_SHAPE: KnowledgeShape = {
   sections: KNOWLEDGE_SECTIONS,
   checked: KNOWLEDGE_CHECKED_SECTIONS,
+  minesRunRecord: false,
 };
 
 export const RUNS_SHAPE: KnowledgeShape = {
   sections: FROM_RUNS_SECTIONS,
   checked: FROM_RUNS_CHECKED_SECTIONS,
+  minesRunRecord: true,
 };
 
 /**
@@ -271,7 +285,7 @@ export function parseKnowledgeFile(
 
       for (const ref of candidates) {
         if (echoes || recap) break;
-        const outside = outsideDomain(ref, scope);
+        const outside = outsideDomain(ref, scope, shape.minesRunRecord);
         if (outside !== null) {
           issues.push({ line: bullet.line, section: name, severity: "warning", message: outside });
           continue;
@@ -307,10 +321,30 @@ export function parseKnowledgeFile(
   return { ok: !issues.some((issue) => issue.severity === "error"), issues, refs, bullets, items, itemCount };
 }
 
-/** `outside domain — …`, or null when the ref is inside the declared domain. */
-function outsideDomain(ref: SrcRef, scope: KnowledgeScope | undefined): string | null {
+/**
+ * `outside domain — …`, or null when the ref is inside the declared domain.
+ *
+ * `minesRunRecord` is the gh #154 arm. `roleTraining.ts` already says what the
+ * runs pass is for — the run record "IS a role's domain" — and this is the line
+ * that has to agree with it. Measured before the fix, on `~/scavtopia` at 0.8.0:
+ * four role experts trained `--mode full` for $9.47 and earned ONE evidence row,
+ * because every citation `mineRuns` handed them read `tldrx-work/…` and every
+ * `## Domain` a role template ships names `.tldrx/…` instead. Three of those runs
+ * recorded `check.passed` with `evidence_added: 0`.
+ *
+ * Scoped to the pass and not to the expert, deliberately: a LIGHT file citing a
+ * handoff is still out of domain (a claim about code sourced to a meeting note),
+ * and the gate keeps saying so. This narrows the rule to the one file whose whole
+ * input was the run record.
+ */
+function outsideDomain(
+  ref: SrcRef,
+  scope: KnowledgeScope | undefined,
+  minesRunRecord: boolean,
+): string | null {
   if (scope === undefined || scope.domainPaths.length === 0) return null;
   if (ref.kind !== "file") return null;
+  if (minesRunRecord && pathsIntersect(ref.path, PROJECT_WORK_DIR)) return null;
   if (scope.domainPaths.some((domain) => pathsIntersect(ref.path, domain))) return null;
 
   const owner = [...scope.otherDomains.entries()]

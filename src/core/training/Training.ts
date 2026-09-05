@@ -124,8 +124,32 @@ export function knowledgeRelPath(area: string): string {
   return `${KNOWLEDGE_DIRNAME}/${area}.md`;
 }
 
+/** The from-runs file's name prefix — spelled once, read back by `knowledgeFileArea`. */
+export const FROM_RUNS_PREFIX = "from-runs-";
+
 export function fromRunsRelPath(area: string): string {
-  return `${KNOWLEDGE_DIRNAME}/from-runs-${area}.md`;
+  return `${KNOWLEDGE_DIRNAME}/${FROM_RUNS_PREFIX}${area}.md`;
+}
+
+/** What a knowledge file's basename says it is. */
+export interface KnowledgeFileName {
+  readonly area: string;
+  /** True for a `from-runs-<area>.md`, which is judged under `RUNS_SHAPE`. */
+  readonly minesRunRecord: boolean;
+}
+
+/**
+ * `<area>` -> the light file's area; `from-runs-<area>` -> the runs file's area.
+ *
+ * The inverse of the two builders above, and it lives beside them because the
+ * naming grammar gets exactly one home (§7). `rescore` is the only reader today:
+ * it walks `knowledge/*.md` and has to know which shape judged each file.
+ */
+export function knowledgeFileArea(basename: string): KnowledgeFileName {
+  const base = basename.replace(/\.md$/, "");
+  return base.startsWith(FROM_RUNS_PREFIX)
+    ? { area: base.slice(FROM_RUNS_PREFIX.length), minesRunRecord: true }
+    : { area: base, minesRunRecord: false };
 }
 
 export const PARTIAL_SUFFIX = ".partial";

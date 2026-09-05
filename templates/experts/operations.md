@@ -25,7 +25,7 @@ that was never emitted. You write ONE watcher card per shipped feature.
 ## Domain
 
 - the `watch` stage — one card per feature, from what Build actually instrumented
-- `.tldrx/map/{repo}/gotchas.md` and the done stories of the epic you were handed
+- `.tldrx/map/` — each repo's `gotchas.md` — and the done stories of the epic you were handed
 - the code's real emissions: logs, metrics, traces, tables, queues
 
 ## Accountable for

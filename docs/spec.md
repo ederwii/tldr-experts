@@ -654,6 +654,11 @@ an undeclared command fails the knowledge file whole. It is also exactly the set
 list. A workspace that declares no command grants no `Bash` at all: no `run` row is reachable there, and the run cap
 holds every area of it at level 3. Full mode additionally mints `run` rows from `from-runs-<area>.md` citations into
 past runs (`tldrx-work/<run>/<file>:<line>`) — decisions that were made while something was actually being built.
+Those citations are **in domain by construction**: the run record is what full mode's pre-pass put in front of the
+sub-agent, so the `## Domain` boundary does not apply to them on that file. The rule is scoped to the pass and not to
+the expert's `kind:` — the same citation on a light-mode `<area>.md` is still `outside domain`, because there it is a
+claim about code sourced to a meeting note. Before gh #154 the boundary applied to both, which made every role expert
+unable to earn evidence at all.
 
 `absent:` sources are legal in a knowledge file and produce **no** evidence: "I looked here and there is nothing" is a
 finding, not a measurement. A knowledge file is accepted or rejected **whole** — one unsourced item, one cited line
@@ -1644,6 +1649,7 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx expert create <name>` | `workspace.yml`, `map/**` | `experts/<name>/{expert.md,competencies.yml}` | 0,1 |
 | `tldrx expert train <name> --area <a> [--mode light\|full] [--max-usd <n>] [--model <m>] [--prepare\|--commit] [--print-prompt]` | `expert.md`, `competencies.yml`, `map/<repo>/domains.md`, `graphify-out/<repo>/graph.json`, repo code, `tldrx-work/**/{handoff,retro}.md`, `facts.yml` | `knowledge/<area>.md` (+ `knowledge/from-runs-<area>.md` in full mode), `competencies.yml`, `training.jsonl` (§2.6.1) | 0,1,2,3,5 |
 | `tldrx expert recompute [<name>] [--json]` | `experts/*/competencies.yml` | `competencies.yml` (`areas[].level` only) | 0,1,3 |
+| `tldrx expert rescore [<name>] [--area <a>] [--json]` | `experts/*/competencies.yml`, `experts/*/knowledge/*.md`, `expert.md` (`## Domain`), the cited files | `competencies.yml` (`areas[].evidence` + `level`; never `status` or `last_trained`) | 0,1,3 |
 | `tldrx dashboard [--serve] [--static]` | `tldrx-work/**`, `.tldrx/**` (watch) | nothing, or `dist/` with `--static` | 0,1,2 |
 | `tldrx watch list [--run <id>]` | `05-watch/watchers/*.md`, `workspace.yml` | nothing (stdout table) | 0,1,2,3 |
 | `tldrx watch check <feature> [--run <id>]` | one card, the files it cites | nothing (stdout report) | 0,1,2,3 |

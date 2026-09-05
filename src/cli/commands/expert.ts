@@ -21,7 +21,8 @@ import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
 import type { EffortLevel } from "../../core/schemas/stage.ts";
 import {
   ExpertNotFound, isRoleExpertOnDisk, isTrainingMode, lightModeRefusal, recomputeExperts,
-  recomputeJson, renderRecompute, runTraining, type TrainingRunMode,
+  recomputeJson, renderRecompute, rescoreExperts, rescoreJson, renderRescore, runTraining,
+  type TrainingRunMode,
 } from "../../core/training/index.ts";
 import { loadWorkspaceFile } from "../../core/init/loadWorkspaceFile.ts";
 import {
@@ -41,6 +42,7 @@ const USAGE = [
   "                                          [--ui scene|compact|plain|off] [--root <path>]",
   "  tldrx expert train <name> --area <area> [--mode light|full] --print-prompt [--root <path>]",
   "  tldrx expert recompute [<name>] [--root <path>] [--json]",
+  "  tldrx expert rescore [<name>] [--area <area>] [--root <path>] [--json]",
 ].join("\n");
 
 export const expertCommand: Command = {
@@ -52,8 +54,9 @@ export const expertCommand: Command = {
     "       tldrx expert train <name> --area <area> [--mode light|full] [--max-usd <n>] [--model <m>]\n" +
     "                                               [--effort <level>] [--prepare|--commit] [--yolo] [--print-prompt]\n" +
     "                                               [--ui scene|compact|plain|off] [--root <path>]\n" +
-    "       tldrx expert recompute [<name>] [--root <path>] [--json]",
-  subcommands: ["list", "create", "train", "recompute"],
+    "       tldrx expert recompute [<name>] [--root <path>] [--json]\n" +
+    "       tldrx expert rescore [<name>] [--area <area>] [--root <path>] [--json]",
+  subcommands: ["list", "create", "train", "recompute", "rescore"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const [sub, ...rest] = argv;
@@ -62,8 +65,11 @@ export const expertCommand: Command = {
       case "create": return create(rest);
       case "train": return train(rest);
       case "recompute": return recompute(rest);
+      case "rescore": return rescore(rest);
       default:
-        process.stderr.write(`tldrx expert: expected list, create, train or recompute\n${USAGE}\n`);
+        process.stderr.write(
+          `tldrx expert: expected list, create, train, recompute or rescore\n${USAGE}\n`,
+        );
         return EXIT_FAILED;
     }
   },
@@ -110,6 +116,37 @@ function recompute(argv: readonly string[]): number {
   const lines = argv.includes("--json") ? [recomputeJson(results)] : renderRecompute(results);
   if (lines.length > 0) process.stdout.write(`${lines.join("\n")}\n`);
   for (const warning of results.flatMap((result) => result.warnings)) process.stderr.write(`${warning}\n`);
+  return EXIT_OK;
+}
+
+/**
+ * `rescore` re-reads the knowledge files already on disk and derives their
+ * evidence again, under today's rules (gh #154).
+ *
+ * Its sibling `recompute` is arithmetic over rows that already exist; this one
+ * makes the rows. That distinction is the whole reason it is a second command
+ * and not a flag: after a change to what counts as evidence — a domain gate that
+ * was refusing the run record, say — an affected workspace otherwise has to buy
+ * every reading a second time. Like `recompute` it spawns nothing, spends
+ * nothing, and leaves `status` and `last_trained` alone.
+ */
+function rescore(argv: readonly string[]): number {
+  const root = resolveWorkspaceRoot(option(argv, "--root"));
+  let results;
+  try {
+    results = rescoreExperts({
+      root, expert: positional(argv), area: option(argv, "--area"), now: new Date(),
+    });
+  } catch (error) {
+    if (error instanceof ExpertNotFound) {
+      process.stderr.write(`tldrx expert rescore: ${error.message}\n`);
+      return EXIT_NOT_FOUND;
+    }
+    process.stderr.write(`tldrx expert rescore: ${message(error)}\n`);
+    return EXIT_FAILED;
+  }
+  const lines = argv.includes("--json") ? [rescoreJson(results)] : renderRescore(results);
+  if (lines.length > 0) process.stdout.write(`${lines.join("\n")}\n`);
   return EXIT_OK;
 }
 

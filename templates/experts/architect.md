@@ -26,7 +26,7 @@ is the role that refuses to write one.
 
 - the `how` stage — design, contracts, risks, test strategy
 - the `plan` stage, as the reviewer of whether a story's decomposition is buildable
-- `.tldrx/map/**` — architecture, conventions and domains, as already recorded
+- `.tldrx/map/` — architecture, conventions and domains, as already recorded
 
 ## Accountable for
 

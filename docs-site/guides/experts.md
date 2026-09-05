@@ -98,6 +98,9 @@ An expert with no area cannot be trained at all, which is why `--area` is above:
 `expert train` refuses and names the block to add to `competencies.yml`.
 
 `tldrx expert recompute` re-derives every level from the evidence on disk.
+`tldrx expert rescore` goes one step further back: it re-reads the knowledge files themselves
+and derives their evidence again, which is what you want after a change to what counts as
+evidence. Neither spawns anything or spends anything.
 
 ## Do you need to?
 
