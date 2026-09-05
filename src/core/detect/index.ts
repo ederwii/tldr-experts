@@ -22,3 +22,4 @@ export {
   requirementName, requirementNames, isPackLanguage, OVERLAY_RULES, PACK_LANGUAGES,
   type DetectedOverlay, type Manifests, type NetPackage, type OverlayRule, type PackLanguage,
 } from "./overlays.ts";
+export { detectSkills, SKILLS_DIR, SKILL_FILE, type DetectedSkill } from "./skills.ts";
