@@ -1,5 +1,19 @@
 # Changelog
 
+
+## 0.8.1 — unreleased
+
+### Added
+
+- **`AGENTS.md` is the canonical agent context, and `CLAUDE.md` imports it.** Four days of
+  live-maintenance tribal knowledge written down where every agent — Claude Code sessions in
+  fresh windows, Codex, anything reading `AGENTS.md` — starts with it: the golden evidence
+  rules (including "never quote a CLI flag from memory"), worktree+merge-wave discipline, the
+  five gates, the `gh run list --commit` lie and the non-empty-checks assertion, CHANGELOG
+  union and release ritual, the pinned house invariants, hermetic test rules, public-surface
+  guard rules, provider facts, and the known live traps. One file; the other imports it,
+  because two rule files drifting apart is the failure mode this repo exists to kill.
+
 ## 0.8.0 — 2026-09-04
 
 ### Added
