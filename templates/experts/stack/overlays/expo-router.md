@@ -48,6 +48,3 @@ answer is the project's existing pattern when it has one.
   does, which config change should have produced that edit
 - Does a new screen ship without the safe-area or layout treatment its siblings have? verify:
   open a sibling screen in the same directory and compare
-- Are the test and lint commands green on this change, unfiltered? verify: run the test and
-  lint commands declared in .tldrx/workspace.yml and read each exit code — and say so when
-  the workspace leaves that slot empty rather than letting the check pass

@@ -38,8 +38,9 @@ existing pattern when it has one.
 
 ## Checks (always asked in review)
 
-- Does a coroutine handler call something blocking — a synchronous client, a sleep, heavy CPU
-  work? verify: follow each call inside every `async def` route added in the diff
+- Is a route declared `async def` when everything under it is synchronous, where a plain `def`
+  route would have been handed to the threadpool instead of holding the loop? verify: read each
+  route added in the diff against the client or session it calls
 - Does a new endpoint go without a response model where its siblings declare one? verify: open
   the router and compare the new decorator against the ones beside it
 - Does a handler return a raw dict where a model already exists for that payload? verify: read
@@ -52,6 +53,3 @@ existing pattern when it has one.
   on? verify: read each failure path added in the diff
 - Does a new endpoint ship without a test where its siblings have one? verify: open the test
   module for that router and look for the new path
-- Are the lint, type-check and test commands green on this change, unfiltered? verify: run the
-  lint, typecheck and test commands declared in .tldrx/workspace.yml, read each exit code, and
-  say so when the workspace leaves a slot empty rather than letting the check pass

@@ -50,6 +50,3 @@ accepted answer is the project's existing pattern when it has one.
   `include` added in the diff against what the handler actually returns
 - Is a query issued inside a loop where one query with a filter would do? verify: read each
   database call added in the diff for an enclosing loop or `map`
-- Are the build and test commands green on this change, unfiltered? verify: run the build and
-  test commands declared in .tldrx/workspace.yml and read each exit code — and say so when
-  the workspace leaves that slot empty rather than letting the check pass

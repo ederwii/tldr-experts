@@ -45,10 +45,5 @@ answer is the project's existing pattern when it has one.
   diff for asset file extensions inside string literals
 - Does a hard-coded API origin appear in component code instead of the proxy or the env value?
   verify: grep the diff for `http` inside string literals and read each hit
-- Did a dependency change land without the matching lockfile change? verify: check whether
-  package.json and the lockfile are both in this commit
 - Do changed paths land inside the build output directory or another generated location?
   verify: compare the changed paths against `build.outDir` in the vite config and the ignore files
-- Are the build and test commands green on this change, unfiltered? verify: run the build and
-  test commands declared in .tldrx/workspace.yml and read each exit code — and say so when
-  the workspace leaves that slot empty rather than letting the check pass

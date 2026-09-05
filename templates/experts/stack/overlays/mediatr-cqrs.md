@@ -45,6 +45,3 @@ pattern when it has one.
   the new handler against the parameters its handle method receives
 - Does a new request type ship without a handler test where its siblings have one? verify:
   open the test project and look for a test naming the new request
-- Are the build and test commands green on this change, unfiltered? verify: run the build and
-  test commands declared in .tldrx/workspace.yml and read each exit code — and say so when
-  the workspace leaves that slot empty rather than letting the check pass

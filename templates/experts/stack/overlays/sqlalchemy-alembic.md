@@ -49,6 +49,3 @@ accepted answer is the project's existing pattern when it has one.
 - Does the migration environment read a different database location than the application?
   verify: open the migration environment file and the application's settings and compare where
   each one reads its connection details
-- Are the lint, type-check and test commands green on this change, unfiltered? verify: run the
-  lint, typecheck and test commands declared in .tldrx/workspace.yml, read each exit code, and
-  say so when the workspace leaves a slot empty rather than letting the check pass

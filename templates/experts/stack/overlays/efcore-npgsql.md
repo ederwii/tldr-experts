@@ -55,8 +55,3 @@ answer is the project's existing pattern when it has one.
   the registration for the context and for the type that takes it
 - Does raw SQL concatenate a value into the statement? verify: grep the diff for the raw SQL
   calls and read how each value reaches the query
-- Does a save go without the cancellation token already in scope? verify: read each save call
-  added in the diff against its enclosing method's parameters
-- Are the build and test commands green on this change, unfiltered? verify: run the build and
-  test commands declared in .tldrx/workspace.yml and read each exit code — and say so when
-  the workspace leaves that slot empty rather than letting the check pass

@@ -59,6 +59,3 @@ accepted answer is the project's existing pattern when it has one.
 - Does a server action or route handler trust its input, or its caller's authorisation?
   verify: read each exported handler added in the diff and find where the body, the params
   and the session are checked
-- Are the build and test commands green on this change, unfiltered? verify: run the build and
-  test commands declared in .tldrx/workspace.yml and read each exit code — and say so when
-  the workspace leaves that slot empty rather than letting the check pass

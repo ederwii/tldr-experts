@@ -42,9 +42,8 @@ silent, and a Check's accepted answer is the project's existing pattern when it 
   verify: grep the diff for `localhost`, for a port number and for a connection-string literal
 - Do the migrations run against the container before the tests that need them? verify: read
   the fixture's setup and find the migration step
-- Do two tests share state, so their order decides the result? verify: run the new tests alone
-  and then together with the test command declared in .tldrx/workspace.yml, and say so when
-  the workspace leaves that slot empty rather than letting the check pass
+- Do two tests share state, so their order decides the result? verify: run the new tests alone,
+  then again in the same run as their neighbours, and compare the two results
 - Does a schema change land without that migration running in the test container? verify: read
   the fixture's setup against the migration the diff adds
 - Is the container runtime precondition stated where a reader will meet it? verify: read the

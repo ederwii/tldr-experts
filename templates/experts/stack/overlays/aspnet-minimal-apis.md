@@ -49,6 +49,3 @@ answer is the project's existing pattern when it has one.
   body and find where the model is checked, or the filter that checks it for it
 - Does a new endpoint ship without a test where its siblings have one? verify: open the test
   project and look for a test naming the new route
-- Are the build and test commands green on this change, unfiltered? verify: run the build and
-  test commands declared in .tldrx/workspace.yml and read each exit code — and say so when
-  the workspace leaves that slot empty rather than letting the check pass

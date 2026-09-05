@@ -14,9 +14,11 @@ answer is the project's existing pattern when it has one.
 - Give the error handler the four-parameter signature the framework recognises; a
   three-parameter function is registered as ordinary middleware and never sees an error.
   — overridden by: an error-handling package the repo already installs for this
-- Route an async handler's rejection to the error handler — through the wrapper the repo uses
-  or an explicit catch that forwards it — so a rejected promise is not lost.
-  — overridden by: an async wrapper or router the repo already routes its handlers through
+- Check whether a rejected promise from an async handler reaches the error handler on its own
+  before relying on it: the older majors of the framework do not forward one, and on those a
+  handler needs the wrapper the repo uses or an explicit catch that calls into the error path.
+  — overridden by: the express major declared in package.json, and the async wrapper or router
+  the repo already routes its handlers through
 - Validate the body, query and params at the boundary with the validator the repo already
   depends on, and hand the handler a value it can trust.
   — overridden by: the validation library and schema location already in the repo
@@ -36,8 +38,9 @@ answer is the project's existing pattern when it has one.
 
 ## Checks (always asked in review)
 
-- Can an async handler in the diff reject without reaching the error handler? verify: read
-  each async route handler added and find its catch or the wrapper it is registered through
+- Can an async handler in the diff reject without reaching the error handler? verify: read the
+  express major in package.json first — the older majors do not forward a rejected promise on
+  their own — then read each async handler added for the wrapper or catch it relies on
 - Is a route mounted after the not-found handler or after the error handler? verify: read the
   application setup file in order and locate where the new mount lands
 - Is a request body, query or param used without being validated first? verify: read each use
@@ -50,6 +53,3 @@ answer is the project's existing pattern when it has one.
   files for the neighbouring routes and look for the new path
 - Is a secret or a connection string written as a literal in the source? verify: grep the diff
   for quoted strings that look like URLs, keys or passwords
-- Are the test and lint commands green on this change, unfiltered? verify: run the test and
-  lint commands declared in .tldrx/workspace.yml and read each exit code — and say so when
-  the workspace leaves that slot empty rather than letting the check pass

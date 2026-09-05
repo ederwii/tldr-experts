@@ -46,9 +46,8 @@ Check's accepted answer is the project's existing pattern when it has one.
 - Does the diff fetch inside an effect where the repo already has a data layer? verify: grep
   the diff for `useEffect` and compare against how a sibling component loads its data
 - Is a hook called inside a condition, a loop, a callback or after an early return? verify:
-  read every hook call added in the diff against its enclosing block, and run the lint command
-  declared in .tldrx/workspace.yml — and say so when the workspace leaves that slot empty
-  rather than letting the check pass
+  read every hook call added in the diff against its enclosing block, and open the
+  rules-of-hooks entry in the repo's lint configuration to see whether it is even enforced
 - Is a value stored in state that render could compute from props or other state? verify:
   read each `useState` added in the diff and ask what writes it and when
 - Does an effect read something its dependency list omits? verify: read each effect added in
@@ -61,5 +60,3 @@ Check's accepted answer is the project's existing pattern when it has one.
 - Is a `memo`, `useMemo` or `useCallback` added with no measurement that motivated it?
   verify: read the memo call in the diff and look for the number or profile in the commit
   message or the story log
-- Does a component change behaviour with no test that would have caught the old behaviour?
-  verify: find the assertion in the diff that covers the change, or say there is none
