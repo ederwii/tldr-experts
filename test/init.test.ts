@@ -80,6 +80,32 @@ describe("tldrx init — multi-repo workspace", () => {
     expect((api?.commands as Record<string, unknown>).typecheck).toBeNull();
   });
 
+  test("every repo carries its detected overlays with evidence, and its skills (stack packs design §4.3)", async () => {
+    const document = await readYaml(join(fixture.root, ".tldrx/workspace.yml"));
+    const repos = document.repos as Record<string, unknown>[];
+    const lab = repos.find((repo) => repo.name === "lab");
+    expect(lab?.overlays).toEqual([
+      { id: "react", evidence: "package.json: dependencies.react" },
+      { id: "vite-react-spa", evidence: "package.json: devDependencies.vite + dependencies.react" },
+    ]);
+    expect(lab?.skills).toEqual([]);
+    const api = repos.find((repo) => repo.name === "api-service");
+    expect(api?.overlays).toEqual([{ id: "aspnet-minimal-apis", evidence: "src/Api/Api.csproj: Sdk=Web; no Controllers/" }]);
+    // Off by default: a first init writes no switch at all.
+    expect(document.stack_packs).toBeUndefined();
+  });
+
+  test("stack_packs is carried forward across a re-init, byte for byte", async () => {
+    const path = join(fixture.root, ".tldrx/workspace.yml");
+    const before = await readYaml(path);
+    writeFileSync(path, readFileSync(path, "utf8")
+      + "stack_packs:\n  enabled: true\n  enabled_at: 2026-09-05T10:00:00Z\n", "utf8");
+    await init(fixture.root);
+    const after = await readYaml(path);
+    expect(after.stack_packs).toEqual({ enabled: true, enabled_at: "2026-09-05T10:00:00Z" });
+    expect(after.repos).toEqual(before.repos);
+  });
+
   test("the emitted workspace document passes the shipped validator", () => {
     const document = buildWorkspaceDocument({
       workspace: report.workspace, root: ".", detectedAt: "2026-08-28T12:00:00Z",
@@ -269,7 +295,7 @@ describe("interview planning", () => {
     name, path: name, absPath: `/tmp/${name}`, defaultBranch: "main", stack: [], languages: [],
     packageManager: null, manifests: [], codeFiles,
     commands: { build: null, test: null, lint: null, typecheck: null, run: null },
-    ci: [], confidence, evidence: [],
+    ci: [], overlays: [], skills: [], confidence, evidence: [],
   });
 
   test("a low-confidence repo gets a commands question; a high-confidence one does not", () => {

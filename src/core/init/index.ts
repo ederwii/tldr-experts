@@ -1,6 +1,9 @@
 export { runInit, chooseProviders, rfc3339, describeRepo, countCommands, WORKSPACE_FILE, PROCESS_FILE, HANDOFF_FILE, type InitReport, type InitDependencies } from "./runInit.ts";
 export { PROVIDER_PREFERENCES, isMethodology, isProviderPreference, type InitOptions, type ProviderPreference } from "./InitOptions.ts";
-export { buildWorkspaceDocument, type WorkspaceDocument, type WorkspaceRepoDocument } from "./workspaceDocument.ts";
+export {
+  buildWorkspaceDocument, renderWorkspaceFile, WORKSPACE_FILE_HEADER,
+  type WorkspaceDocument, type WorkspaceRepoDocument, type StackPacksDocument,
+} from "./workspaceDocument.ts";
 export { buildProcessDocument, type ProcessDocument } from "./processDocument.ts";
 export { buildCompetenciesDocument, type CompetenciesDocument, type AreaSeed } from "./competenciesDocument.ts";
 export { buildFactsDocument, FACTS_FILE } from "./factsDocument.ts";

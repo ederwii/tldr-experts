@@ -44,3 +44,5 @@ export { nearbyPathsFor, graphPath, MAX_GRAPH_BYTES } from "./domainRank.ts";
 export {
   sharedCitations, sharedCitationWarnings, type SharedCitation,
 } from "./sharedCitations.ts";
+export { readStackPacks, NO_STACK_PACKS } from "./stackPacks.ts";
+export type { StackPacksState, RepoPacks } from "./stackPacks.ts";
