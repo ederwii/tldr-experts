@@ -18,6 +18,10 @@
  * applied only to the body itself, and only defensively (a body is capped at 8 KiB by a
  * shape test, well under the 24 KiB pack cap, so this only matters for a caller-supplied
  * `maxBytes` far smaller than that).
+ *
+ * `ComposedPack.truncated` reports ONLY whether that body cut happened — an overlay left
+ * out whole is not "truncated", it's "not inlined", and `notInlined` already says so. A
+ * caller that wants "was anything left out at all" checks both.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -54,6 +58,14 @@ export interface ComposedPack {
   readonly text: string;
   readonly inlined: readonly string[];
   readonly notInlined: readonly string[];
+  /**
+   * Whether the BODY ITSELF was cut by `truncateAtHeading` — not whether any overlay was
+   * left out. An overlay left out whole is already fully described by `notInlined` being
+   * non-empty; nothing there was cut, so folding it into `truncated` would call "left out
+   * whole" the same thing as "cut in half", and would make a real body cut unobservable
+   * whenever it happened to coincide with a dropped overlay. A caller that wants "was
+   * anything left out, cut or whole" combines `truncated || notInlined.length > 0` itself.
+   */
   readonly truncated: boolean;
 }
 
@@ -103,7 +115,7 @@ export function composePackBody(
   }
 
   const composedText = `${parts.join("\n\n")}\n`;
-  const truncated = bodyTruncated || notInlined.length > 0;
+  const truncated = bodyTruncated;
 
   if (notInlined.length === 0) {
     return { text: composedText, inlined, notInlined, truncated };

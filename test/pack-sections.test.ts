@@ -77,7 +77,10 @@ describe("composePackBody", () => {
 
     expect(composed.inlined).toEqual(["alpha"]);
     expect(composed.notInlined).toEqual(["beta", "zeta"]);
-    expect(composed.truncated).toBe(true);
+    // Nothing was CUT — beta and zeta were left out WHOLE, and `notInlined` already says
+    // so. `truncated` reports only a real cut of the body itself (none happened here), so
+    // it stays false; a caller wanting "was anything left out at all" checks both fields.
+    expect(composed.truncated).toBe(false);
     // alpha is present WHOLE, its own Checks section included — not a same-content
     // overlay that got dropped, since only alpha is inlined.
     expect(composed.text).toContain(overlayMarker("alpha"));
@@ -89,11 +92,34 @@ describe("composePackBody", () => {
     expect(composed.text.endsWith("(not inlined: 2 overlays — beta, zeta)\n")).toBe(true);
   });
 
-  test("a cap smaller than the body still yields the body IN FULL, with the dropped overlay named in a marker", () => {
+  test("a cap smaller than the body still yields the body IN FULL (not truncated — no cut point fit), with the dropped overlay named in a marker", () => {
     const composed = composePackBody(BODY, [overlay("react")], 10);
     expect(composed.text).toBe(`${BODY.trimEnd()}\n\n(not inlined: 1 overlay — react)\n`);
     expect(composed.notInlined).toEqual(["react"]);
+    // The body was kept WHOLE (no `## ` boundary fit under 10 bytes, so `truncateAtHeading`
+    // fell back to the untouched body) — nothing was actually cut, so `truncated` is false
+    // even though the cap was blown and an overlay got left out.
+    expect(composed.truncated).toBe(false);
+  });
+
+  test("a body that genuinely exceeds the cap IS cut by truncateAtHeading, and only THAT counts as truncated", () => {
+    const bigBody = [
+      "# Big", "", "Scope.", "",
+      `## ${DEFAULTS_HEADING}`, "", "- d — overridden by: x", "",
+      `## ${CHECKS_HEADING}`, "", `- c verify: y${"x".repeat(2000)}`, "",
+    ].join("\n");
+    const fullBig = `${bigBody.trimEnd()}\n`;
+    // Everything up to (not including) the `## Checks` heading — the largest whole
+    // section `truncateAtHeading` can keep once the Checks section alone blows the cap.
+    const beforeChecks = fullBig.slice(0, fullBig.indexOf(`## ${CHECKS_HEADING}`)).replace(/\n+$/, "\n");
+    const maxBytes = byteLength(beforeChecks) + 5;
+    expect(maxBytes).toBeLessThan(byteLength(fullBig)); // sanity: the cap really is smaller
+
+    const composed = composePackBody(bigBody, [], maxBytes);
+
     expect(composed.truncated).toBe(true);
+    expect(composed.text).not.toContain(CHECKS_HEADING);
+    expect(byteLength(composed.text)).toBeLessThan(byteLength(fullBig));
   });
 });
 
