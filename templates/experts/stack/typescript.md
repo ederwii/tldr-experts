@@ -63,14 +63,19 @@ answer is the project's own convention when it has one.
 - Does a `switch` over a union cover every member, and break the build when a member is
   added? verify: open the union's declaration and count its members against the arms
 - Can each new test fail? verify: change the line under test, re-run the test command
-  declared in .tldrx/workspace.yml, and confirm it goes red
+  declared in .tldrx/workspace.yml, and confirm it goes red — and say so when the workspace
+  leaves that slot empty rather than letting the check pass
 - Are the typecheck and lint commands green on this change, unfiltered? verify: run the
-  typecheck and lint commands declared in .tldrx/workspace.yml and read each exit code
+  typecheck and lint commands declared in .tldrx/workspace.yml and read each exit code —
+  and say so when the workspace leaves that slot empty rather than letting the check pass
 - Did a changed exported type leave a consumer unadjusted? verify: grep the repo for the
   exported name and open each hit
 - Is a `console` call left on a path that ships? verify: grep the diff for `console.`
 - Does a new file's import style match its neighbours — extension in the specifier,
   type-only imports, relative path or alias? verify: open a sibling file in the same directory
+- Does the diff introduce an `enum` where the surrounding code models a closed set as a
+  `const` object with a literal union, or the reverse? verify: grep the diff for `enum `
+  and for `as const`, and compare against the prevailing style in that directory
 - Is `process.env` read directly in new code instead of through the repo's config module?
   verify: grep the diff for `process.env`
 - Does the change widen the package's public surface unintentionally? verify: open the

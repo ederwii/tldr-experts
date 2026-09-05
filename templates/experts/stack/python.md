@@ -63,7 +63,8 @@ project's own convention when it has one.
   and compare the new signatures against the ones already there
 - Is `print` used in library code rather than the logger? verify: grep the diff for `print(`
 - Can each new test fail? verify: change the line under test, re-run the test command
-  declared in .tldrx/workspace.yml, and confirm it goes red
+  declared in .tldrx/workspace.yml, and confirm it goes red — and say so when the workspace
+  leaves that slot empty rather than letting the check pass
 - Does the diff pass an interpolated string to `subprocess` with `shell=True`? verify: grep
   the diff for `subprocess` and read the arguments at each hit
 - Does new code create mutable state at import time — a module-level list, dict or client?
@@ -71,7 +72,8 @@ project's own convention when it has one.
 - Is a mutable default argument introduced? verify: grep the diff for `=[]`, `= []`, `={}`, `= {}`
   and `set()` inside parameter lists
 - Are the lint, type-check and test commands green on this change, unfiltered? verify: run
-  the lint, typecheck and test commands declared in .tldrx/workspace.yml and read each exit code
+  the lint, typecheck and test commands declared in .tldrx/workspace.yml, read each exit
+  code, and say so when the workspace leaves a slot empty rather than letting the check pass
 - Is a file, connection or lock opened without `with` and closed only on the happy path?
   verify: read each `open(` and connection call added in the diff
 - Does a coroutine call something blocking — a synchronous client, a sleep, heavy CPU work?

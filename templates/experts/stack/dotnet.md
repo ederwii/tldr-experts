@@ -76,8 +76,9 @@ convention when it has one.
 - Is a nullable warning silenced with the null-forgiving operator rather than handled?
   verify: grep the diff for `!` directly after an identifier or member access —
   `!.`, `!;`, `!)`, `!,` — and read what each value can actually be
-- Are the build and test commands green on this change, unfiltered? verify: run the build
-  and test commands declared in .tldrx/workspace.yml and read each exit code
+- Are the build, test and lint commands green on this change, unfiltered? verify: run the
+  build, test and lint commands declared in .tldrx/workspace.yml and read each exit code —
+  and say so when the workspace leaves that slot empty rather than letting the check pass
 - Is a disposable created without `using` or an explicit dispose on every path? verify: read
   each `new` of a disposable type added in the diff
 - Does new code read configuration straight from the configuration root instead of the bound
@@ -86,7 +87,8 @@ convention when it has one.
 - Does a new project file skip the repo's shared properties or analyzer package? verify:
   compare the new project file against an existing sibling project file
 - Can each new test fail? verify: change the line under test, re-run the test command
-  declared in .tldrx/workspace.yml, and confirm it goes red
+  declared in .tldrx/workspace.yml, and confirm it goes red — and say so when the workspace
+  leaves that slot empty rather than letting the check pass
 - Is a failure hidden behind a default return value from a call that failed? verify: read
   each fallback added in the diff and ask what a real failure would look like to the caller
 - Does this change alter behaviour with no test that would have caught the old behaviour?

@@ -70,9 +70,11 @@ answer is the project's own convention when it has one.
 - Is a loose equality comparison added where the operands can differ in type? verify: grep
   the diff for `==` and `!=` and read every hit that is not `===` or `!==`
 - Can each new test fail? verify: change the line under test, re-run the test command
-  declared in .tldrx/workspace.yml, and confirm it goes red
+  declared in .tldrx/workspace.yml, and confirm it goes red — and say so when the workspace
+  leaves that slot empty rather than letting the check pass
 - Are the test and lint commands green on this change, unfiltered? verify: run the test and
-  lint commands declared in .tldrx/workspace.yml and read each exit code
+  lint commands declared in .tldrx/workspace.yml and read each exit code — and say so when
+  the workspace leaves that slot empty rather than letting the check pass
 - Is a `console` call left on a path that ships? verify: grep the diff for `console.`
 - Does the diff build code from a string at run time? verify: grep the diff for `eval(`
   and `new Function(`
