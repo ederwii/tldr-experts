@@ -641,6 +641,7 @@ areas:
 | `areas[].evidence[].{kind,src,at}` | `code\|run\|test\|doc\|answer` / src token (§2.8) / `YYYY-MM-DD` | y | Evidence class, citation (must satisfy the grammar), date produced |
 | `areas[].evidence[].cross` | bool | n | The bullet this row came from cited **two or more distinct files**. Weighs double |
 | `areas[].evidence[].confidence` | `measured\|inferred\|assumed` | n | The bullet's own annotation. `assumed` weighs half |
+| `areas[].evidence[].rescored_at` | `YYYY-MM-DD` | n | The day `tldrx expert rescore` derived this row from a knowledge file already on disk, for $0 with nothing spawned. **Absent means a live training turn wrote it**, which is what every row meant before this field existed. It weighs nothing and no step of the formula reads it: `at` is when the CLAIM was read and is the only date recency uses, this is when the SCORING happened. Two dates because there are two facts, and a row that carried only one made a free re-derivation indistinguishable from a paid reading (gh #154) |
 
 **Level formula** (deterministic, integer table). Per evidence item aged `d` days:
 `recency = max(0.25, 1 - d/365)`; `weight = code 1.0 · run 1.0 · test 1.0 · answer 0.8 · doc 0.5`, **× 2 when the row
@@ -738,6 +739,11 @@ an undeclared command fails the knowledge file whole. It is also exactly the set
 list. A workspace that declares no command grants no `Bash` at all: no `run` row is reachable there, and the run cap
 holds every area of it at level 3. Full mode additionally mints `run` rows from `from-runs-<area>.md` citations into
 past runs (`tldrx-work/<run>/<file>:<line>`) — decisions that were made while something was actually being built.
+Those citations are **in domain by construction**: the run record is what full mode's pre-pass put in front of the
+sub-agent, so the `## Domain` boundary does not apply to them on that file. The rule is scoped to the pass and not to
+the expert's `kind:` — the same citation on a light-mode `<area>.md` is still `outside domain`, because there it is a
+claim about code sourced to a meeting note. Before gh #154 the boundary applied to both, which made every role expert
+unable to earn evidence at all.
 
 `absent:` sources are legal in a knowledge file and produce **no** evidence: "I looked here and there is nothing" is a
 finding, not a measurement. A knowledge file is accepted or rejected **whole** — one unsourced item, one cited line
@@ -792,8 +798,19 @@ outlives every run, so it gets its own file beside the expert, with §2.9's exac
 {"ts":"2026-09-01T12:00:00Z","expert":"dotnet-stack","area":"ef-core","type":"check.passed","actor":"alan","cost_usd":0,"payload":{"mode":"light","evidence_added":7,"evidence_total":7,"level_before":0,"level_after":3,"cost_usd":1.02}}
 ```
 
-`type` ∈ `agent.spawned` `agent.result` `check.passed` `check.failed`. A run that is REFUSED still writes its
-`agent.result`: money spent is recorded whether or not the knowledge was kept (spec §5, "never rolls back cost").
+`type` ∈ `agent.spawned` `agent.result` `check.passed` `check.failed` `evidence.rescored`. A run that is REFUSED still
+writes its `agent.result`: money spent is recorded whether or not the knowledge was kept (spec §5, "never rolls back
+cost").
+
+`evidence.rescored` is the one line nothing spawned. `tldrx expert rescore` appends it whenever a re-read of
+`knowledge/*.md` actually changed an area — rows added or a level moved — and never when it changed nothing, because an
+idempotent re-run contradicts no record and a ledger that grows on every no-op is one nobody reads. Its `ts` is when
+the rescore RAN and its `cost_usd` is `0`; the payload carries `file`, `spawned: 0`, `evidence_added`,
+`evidence_total`, `level_before`, `level_after`, and — so the two clocks can never be read as one — `dated_at`, the
+date the rows it wrote actually carry, with `dated_by` naming where that date came from. It is never backdated to match
+those rows. Without it, the workspaces this command exists to rescue were left holding a `check.passed` asserting
+`evidence_added: 0` on a date their `competencies.yml` now disproved, with nothing on disk to explain the difference
+(§7 — an audit record never lies in the dangerous direction).
 
 **`--max-budget-usd` is a stop, not a cap — measured.** Pilot smoke, 2026-08-29,
 `tldrx expert train typescript-stack --area typescript --mode light --max-usd 1.5` over
@@ -2088,6 +2105,7 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx expert create <name>` | `workspace.yml`, `map/**` | `experts/<name>/{expert.md,competencies.yml}` | 0,1 |
 | `tldrx expert train <name> --area <a> [--mode light\|full] [--max-usd <n>] [--model <m>] [--prepare\|--commit] [--print-prompt]` | `expert.md`, `competencies.yml`, `map/<repo>/domains.md`, `graphify-out/<repo>/graph.json`, repo code, `tldrx-work/**/{handoff,retro}.md`, `facts.yml` | `knowledge/<area>.md` (+ `knowledge/from-runs-<area>.md` in full mode), `competencies.yml`, `training.jsonl` (§2.6.1) | 0,1,2,3,5 |
 | `tldrx expert recompute [<name>] [--json]` | `experts/*/competencies.yml` | `competencies.yml` (`areas[].level` only) | 0,1,3 |
+| `tldrx expert rescore [<name>] [--area <a>] [--json]` | `experts/*/competencies.yml`, `experts/*/knowledge/*.md`, `expert.md` (`## Domain`), the cited files | `competencies.yml` (`areas[].evidence` + `level`; never `status` or `last_trained`), and `training.jsonl` — one `evidence.rescored` line per file whose rescore actually changed the area, at `cost_usd: 0` and dated when it RAN. Every row it writes carries `rescored_at` beside its `at` (§2.6): the claim keeps the date it was read on, the scoring carries its own, and neither stands in for the other. Spawns nothing and spends nothing | 0,1,3 |
 | `tldrx expert packs <enable\|disable\|status>` | `workspace.yml`, the repos' manifests (`package.json`, `*.csproj`, `Directory.Packages.props`, `pyproject.toml`, `requirements*.txt`), `.claude/skills/**`, `experts/<lang>-stack/**`, `templates/experts/stack/**` | `enable`: `workspace.yml` (`stack_packs`, `repos[].overlays`, `repos[].skills`), any missing `<lang>-stack` expert seeded, `experts/<lang>-stack/expert.md` (its BODY only when that body is the untouched stub, an empty body, or one shipment stale — an edited body is kept and named), `experts/<lang>-stack/overlays/*.md` (emptied and rewritten every time — they are the framework's, not yours); `disable`: `workspace.yml` (`enabled: false`, `enabled_at: null`) and removes `overlays/` and nothing else; `status`: **nothing** (stdout). `knowledge/` is never touched by any of the three. `status` exits `0` always, naming a missing `workspace.yml` rather than refusing; `enable` exits `1` when no repo has a detectable language or the workspace is unreadable; `disable` exits `0` when there is nothing to disable and `1` only on a `workspace.yml` too broken to read | 0,1 |
 | `tldrx dashboard [--serve] [--static]` | `tldrx-work/**`, `.tldrx/**` (watch) | nothing, or `dist/` with `--static` | 0,1,2 |
 | `tldrx ship [<run>] [--branch <name>] [--repo <name>] [--base <branch>] [--draft] [--dry-run] [--run <id>]` | `run.yml` (`build.epic_branch`), `workspace.yml` (`default_branch`), the run's LAST phase handoff, `04-build/fixlist/*.md`, `03-plan/stories/*.md` (for `touches:` and `status:`), and `git`/`gh` for the branch, the remote and any PR already open | **Nothing in the workspace** — no event, no gate, no cursor, no `run.yml` field. Outside it: one `gh pr create` per repo the branch is in, with a body RENDERED for a PR (§2.8's handoff inside a `<details>` block) and handed over as `--body-file`, never as an argument. `--dry-run` prints the exact `gh` command and creates nothing, keeping the staged body file so the printed line stays runnable. It NEVER pushes (§5). **It REFUSES (2) an epic branch carrying `tldrx-work/`/`.tldrx/` changes**, minus the paths a story at `status: done` declared in its `touches:` (§2.13), and its remedy names only what is still refused. No epic branch, no handoff, no remote, no `gh`, an unpushed branch and an ambiguous branch choice are refusals; a repo whose PR is already open is skipped, so re-running opens nothing twice | 0,1,2,3 |

@@ -3,6 +3,36 @@
 
 ## 0.13.0 — unreleased
 
+### Added
+
+- **`tldrx expert rescore [<name>] [--area <a>]` — score the knowledge you already paid for.**
+  Its sibling `recompute` is arithmetic over the evidence rows already in `competencies.yml`;
+  `rescore` RE-READS `knowledge/*.md` and derives their evidence again under today's rules. It
+  exists because the gate fix below changes what the NEXT training run earns and can do nothing
+  for the files already on disk: for every expert the bug hit, `evidence:` is `[]`, so the only
+  other recovery is to buy the same readings a second time — **$9.47** of them in the measured
+  case. Like `recompute` it reads no code, spawns nothing, spends nothing, and leaves `status`
+  and `last_trained` exactly as it found them.
+  Rows are dated by the knowledge file's own `trained_at`, or by the expert's `last_trained`
+  when it has none — **never by the clock**, because §2.6 weighs recency and a reading taken in
+  August is not evidence gathered today. When neither date exists the file is skipped with that
+  as the reason, and so is a file that no longer validates: rescoring is a re-read under
+  today's rules, and keeping rows an older tldrx once accepted is the drift this refuses.
+  **A rescored row carries two dates, and the rescore writes itself into the ledger** — because
+  the workspaces this command exists to rescue are exactly the ones whose `training.jsonl`
+  already asserts `check.passed` with `evidence_added: 0`. Built and measured on the first cut:
+  a $0 rescore turned that ledger's own August date into real August-dated rows and moved the
+  level 0 → 1, leaving `training.jsonl` byte-identical — two files that contradict each other,
+  with nothing on disk saying a free re-derivation weeks later is what wrote the rows. So
+  `areas[].evidence[].rescored_at` is additive and optional beside `at`, and its ABSENCE keeps
+  the meaning every row already had: a paid training turn earned it. `at` still says when the
+  CLAIM was read and is still the only date the level formula weighs; `rescored_at` says when
+  the SCORING happened. And `training.jsonl` gains one `evidence.rescored` line per file whose
+  rescore actually moved something — `cost_usd: 0`, `spawned: 0`, dated when it RAN and never
+  backdated to match the rows, carrying `dated_at`/`dated_by` so the two clocks in one record
+  can never be read as one. A rescore that changes nothing writes no line: it contradicts
+  nothing, and a ledger that grows on every idempotent re-run is one nobody reads.
+
 ### Fixed
 
 - **The mutation check is asked of the developer, which can run it, instead of the reviewer,
@@ -25,6 +55,43 @@
   message is a surface it cannot read, and beside the test, in the test file, is the one place
   that is both the developer's to write and the reviewer's to cite. The developer prompt's bytes
   change and `test/build-golden.test.ts` moves with them; the reviewer prompt's own bytes do not.
+- **A role expert could never earn evidence — `--mode full` mines the run record and the domain
+  gate refused it** (gh #154). `roleTraining.ts` states the premise: full mode's pre-pass reads
+  `tldrx-work/<run>/**/{handoff,retro}.md`, "the record of how this workflow actually ran, which
+  IS a role's domain". `outsideDomain` then judged every one of those citations against the
+  `## Domain` bullets of `expert.md`, which name folders of CODE — so 100% of what the runs pass
+  produced was discarded as `outside domain`, in every workspace, every time.
+  Measured on a real workspace at 0.8.0: four role experts, `--mode full`, **$9.47 spent and one
+  evidence row** — and that row is a fact token, the one citation kind the gate never inspects.
+  And it was not fixable from the workspace: `domainPaths()` drops any single-segment bullet, so
+  `tldrx-work` — the only spelling the matcher would match — cannot be declared, while every
+  spelling that DOES register (`tldrx-work/**`, `tldrx-work/<run>`) is a literal the
+  no-globbing matcher can never reach. The two sets are disjoint.
+  Re-measured on 0.12.0 before the fix: `domainPaths()` over the five shipped role templates
+  still yields `.tldrx/map/**`, `.tldrx/process.yml` + `.tldrx/map/workspace.md`,
+  `.tldrx/conventions/shared.md`, `.tldrx/map/{repo}/gotchas.md` and `.tldrx/memory/facts.yml`,
+  and `pathsIntersect` is `false` against every one of them for a citation to
+  `tldrx-work/<run>/03-build/handoff.md` — so no role expert could earn a row from the runs
+  pass at 0.12.0 either.
+  The gate now treats the run record as in-domain for the file mined FROM it, scoped to the pass
+  and not to the expert's `kind:` — a light file citing a handoff is still out of domain, and
+  still says so.
+- **Two shipped role templates declared a `## Domain` path that matched nothing at all.**
+  `pathsIntersect` is segment-prefix matching with no globbing, so architect's `.tldrx/map/**`
+  and operations' `.tldrx/map/{repo}/gotchas.md` were literal strings: even a citation to the
+  map itself was refused. Both are now spelled `.tldrx/map/`, which the matcher reaches; the
+  nuance each carried stays in the bullet's prose. Globs and `{repo}` placeholders remain
+  unsupported in a `## Domain` bullet — a test now refuses one in any shipped role template
+  rather than letting it look like it works.
+- **A paid training pass that earned nothing said so nowhere durable.** The ledger recorded
+  `problems` only on the failure path, so a file that validated, cost $1.61 and added zero
+  evidence rows was written down as `check.passed` with `evidence_added: 0` and no reason beside
+  it — the operator's next signal being `tldrx status` telling them to train it again. The
+  `check.passed` record now carries its `warnings`, and the run prints `the level did not move —
+  $X.XX bought 0 evidence row(s)` with the reasons under it. It stays exit `0` and the file is
+  still kept: a warning is a way of being worth nothing, not a lie, and quarantining an honest
+  file would destroy the one thing that was paid for. (The sibling of #101 on the output side —
+  that one refuses an empty INPUT before the money; nothing asked the question after.)
 
 ## 0.12.0 — 2026-09-08
 

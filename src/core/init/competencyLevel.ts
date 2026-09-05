@@ -103,6 +103,22 @@ export interface CompetencyEvidence {
   readonly cross?: boolean;
   /** The bullet's own confidence label. `assumed` halves the row's weight. */
   readonly confidence?: EvidenceConfidence;
+  /**
+   * `YYYY-MM-DD` — the day a `tldrx expert rescore` DERIVED this row from a
+   * knowledge file already on disk, for $0 and with nothing spawned.
+   *
+   * ADDITIVE and optional, and its absence carries the meaning it always had: a
+   * live training turn, which paid for the reading, wrote this row. It exists
+   * because `at` cannot answer both questions at once — `at` is when the CLAIM
+   * was read (what §2.6 weighs for recency, so a rescore must never move it),
+   * and this is when the SCORING happened. Without the second date a workspace
+   * whose ledger says `evidence_added: 0` on some August day and whose
+   * `competencies.yml` holds August-dated rows is a pair of files that
+   * contradict each other with nothing on disk to explain the difference.
+   *
+   * It changes no weight and no level. Nothing in the formula reads it.
+   */
+  readonly rescored_at?: string;
 }
 
 const WEIGHTS: Readonly<Record<EvidenceKind, number>> = { code: 1, run: 1, test: 1, doc: 0.5, answer: 0.8 };

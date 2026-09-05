@@ -68,16 +68,25 @@ export function readEvidenceRows(input: unknown): EvidenceRows {
       refuse(problem.reason, kind, src);
       continue;
     }
-    // `cross` and `confidence` are ADDITIVE (§2.6): a row written before they
-    // existed simply carries neither, and an unrecognised confidence value is
-    // dropped rather than refused — it changes a weight, it is not a citation.
+    // `cross`, `confidence` and `rescored_at` are ADDITIVE (§2.6): a row written
+    // before they existed simply carries none of them, and an unrecognised
+    // confidence value is dropped rather than refused — it changes a weight, it
+    // is not a citation.
+    //
+    // `rescored_at` is the one field here that is NOT dropped when it fails to
+    // parse: it is kept verbatim whenever it is a non-empty string. Dropping it
+    // would turn a row that was scored for free into one that reads as paid for,
+    // which is the dangerous direction (§7) and the exact confusion the field
+    // was added to end.
     const confidence = str(row.confidence);
+    const rescoredAt = str(row.rescored_at);
     evidence.push({
       kind: kind as EvidenceKind,
       src,
       at,
       ...(row.cross === true ? { cross: true } : {}),
       ...(isEvidenceConfidence(confidence) ? { confidence } : {}),
+      ...(rescoredAt === "" ? {} : { rescored_at: rescoredAt }),
     });
   }
 

@@ -950,7 +950,7 @@ which run it filed under; with no open run it records nothing and still exits `0
 
 ## `tldrx expert`
 
-List or create experts, recompute their levels, or train one. See
+List or create experts, recompute or rescore their levels, or train one. See
 [4 — Experts](04-experts.md).
 
 ```
@@ -961,6 +961,7 @@ tldrx expert train     <name> --area <area> [--mode light|full] [--max-usd <n>] 
                               [--effort <level>] [--prepare|--commit] [--yolo] [--print-prompt]
                               [--ui <mode>]
 tldrx expert recompute [<name>] [--json]
+tldrx expert rescore   [<name>] [--area <area>] [--json]
 tldrx expert packs     <enable|disable|status>
 ```
 
@@ -978,6 +979,14 @@ permission prompts.
 handoffs — a role expert only trains `full`. `--print-prompt` prints the training prompt and
 stops: it spawns nothing and costs nothing. `recompute` is arithmetic over evidence already
 on disk: it spawns nothing, spends nothing, and does not touch `status` or `last_trained`.
+
+`rescore` goes one step further back: it re-reads `knowledge/*.md` and derives their evidence
+again under today's rules, which is the remedy after a change to what COUNTS as evidence — so a
+workspace does not pay a second time for readings it already bought. Rows are dated by the
+knowledge file's own `trained_at`, or by the expert's `last_trained` when it has none, never by
+the clock; a file that dates itself nowhere, or that no longer validates, is skipped with that
+as the reason. Like `recompute` it spawns nothing, spends nothing, and leaves `status` and
+`last_trained` alone.
 
 `packs` is the one switch for the **stack packs**, off by default. `enable` re-runs detection,
 seeds any missing `<lang>-stack` expert, gives each one whose body is still the seeded stub the

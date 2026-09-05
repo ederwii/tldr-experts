@@ -17,8 +17,21 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "n
 import { dirname, join } from "node:path";
 import { TRAINING_LOG_FILE } from "./Training.ts";
 
-/** The subset of §2.9's enum that a training run can honestly emit. */
-export const TRAINING_EVENT_TYPES = ["agent.spawned", "agent.result", "check.failed", "check.passed"] as const;
+/**
+ * The subset of §2.9's enum that a training run can honestly emit, plus the one
+ * type nothing spawned wrote.
+ *
+ * `evidence.rescored` is `tldrx expert rescore`'s record (gh #154). It is in
+ * this file rather than a second ledger because it is the same fact the other
+ * four carry — an expert's level moved, and here is what moved it — and because
+ * a rescue command whose whole subject is a ledger that already says
+ * `evidence_added: 0` must write into THAT ledger or leave the contradiction
+ * standing. The enum only ever GROWS (§7): a reader that does not know this type
+ * sees an unrecognised line, never a changed one.
+ */
+export const TRAINING_EVENT_TYPES = [
+  "agent.spawned", "agent.result", "check.failed", "check.passed", "evidence.rescored",
+] as const;
 export type TrainingEventType = (typeof TRAINING_EVENT_TYPES)[number];
 
 export const TRAINING_KEYS = ["ts", "expert", "area", "type", "actor", "cost_usd", "payload"] as const;
