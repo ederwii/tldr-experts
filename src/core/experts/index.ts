@@ -46,3 +46,13 @@ export {
 } from "./sharedCitations.ts";
 export { readStackPacks, NO_STACK_PACKS } from "./stackPacks.ts";
 export type { StackPacksState, RepoPacks } from "./stackPacks.ts";
+export {
+  DEFAULTS_HEADING, CHECKS_HEADING, OVERRIDDEN_BY, VERIFY_HINT, OVERLAYS_DIRNAME, PACK_MAX_BYTES,
+  composePackBody, checksOf, overlayMarker, readOverlayFiles,
+} from "./packSections.ts";
+export type { OverlayFile, ComposedPack } from "./packSections.ts";
+export {
+  PACK_TEMPLATES_DIR, OVERLAY_TEMPLATES_DIR, PACK_BODY_MAX_BYTES, OVERLAY_MAX_BYTES,
+  packBodyPath, overlayTemplatePath, readPackBody, readOverlayTemplate, packTemplateFiles, hashTemplates, templatesHash,
+} from "./packTemplates.ts";
+export type { TemplateFile } from "./packTemplates.ts";
