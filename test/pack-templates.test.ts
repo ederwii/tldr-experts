@@ -6,11 +6,17 @@
  */
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { PACK_LANGUAGES } from "../src/core/detect/overlays.ts";
+import { join, relative } from "node:path";
+import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
+import { walkFiles } from "../src/core/detect/walk.ts";
+import { OVERLAY_RULES, PACK_LANGUAGES } from "../src/core/detect/overlays.ts";
 import {
   CHECKS_HEADING, DEFAULTS_HEADING, OVERRIDDEN_BY, VERIFY_HINT,
 } from "../src/core/experts/packSections.ts";
-import { PACK_BODY_MAX_BYTES, PACK_TEMPLATES_DIR, packBodyPath } from "../src/core/experts/packTemplates.ts";
+import {
+  OVERLAY_MAX_BYTES, OVERLAY_TEMPLATES_DIR, PACK_BODY_MAX_BYTES, PACK_TEMPLATES_DIR,
+  overlayTemplatePath, packBodyPath,
+} from "../src/core/experts/packTemplates.ts";
 import { section } from "../src/core/experts/expertDocument.ts";
 import { byteLength } from "../src/core/experts/expertKnowledge.ts";
 
@@ -42,7 +48,17 @@ export function assertPackShape(label: string, text: string, maxBytes: number): 
   const defaults = bullets(section(text, DEFAULTS_HEADING));
   expect(defaults.length, `${label}: at least one Default`).toBeGreaterThan(0);
   for (const item of defaults) {
-    expect(item, `${label}: Default must end with "${OVERRIDDEN_BY} <signal>"`).toMatch(new RegExp(`${OVERRIDDEN_BY.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\S.*$`));
+    // "Ends with" is asserted as an end, not as a containment. A regex that merely finds
+    // the marker somewhere passes a bullet that names its override in the middle and then
+    // trails off into another sentence — exactly the shape this format exists to forbid,
+    // because a reader takes everything after the marker to BE the overriding signal. So:
+    // the marker appears once, and what follows it runs to the bullet's last character
+    // (no trailing full stop, which would read as a sentence inviting another one).
+    const markers = item.split(OVERRIDDEN_BY).length - 1;
+    expect(markers, `${label}: exactly one "${OVERRIDDEN_BY}" per Default — ${item}`).toBe(1);
+    const signal = item.slice(item.indexOf(OVERRIDDEN_BY) + OVERRIDDEN_BY.length);
+    expect(signal, `${label}: Default names a signal after "${OVERRIDDEN_BY}" — ${item}`).toMatch(/^ \S/);
+    expect(signal, `${label}: the signal is the END of the Default, not a clause inside it — ${item}`).toMatch(/[^\s.]$/);
   }
   const checks = bullets(section(text, CHECKS_HEADING));
   expect(checks.length, `${label}: at least one Check`).toBeGreaterThan(0);
@@ -75,5 +91,63 @@ describe("language pack bodies", () => {
     for (const lang of PACK_LANGUAGES) {
       expect(readFileSync(packBodyPath(lang), "utf8").startsWith("---"), lang).toBe(false);
     }
+  });
+});
+
+describe("framework overlays mirror the detection table one-to-one (one derivation)", () => {
+  const ids = OVERLAY_RULES.map((rule) => rule.id).sort();
+
+  /**
+   * `src/core/detect/overlays.ts` is the table. `src/core/detect/stack.ts` is excluded too,
+   * and only it: its `react` / `vite` / `expo` / `next` literals are the PRE-EXISTING
+   * framework list behind `workspace.yml`'s `stack` field — a different concept that
+   * happens to share one spelling with an overlay id, not a second copy of this table.
+   * The two naming schemes are tracked by issue #152; nothing here edits that file.
+   */
+  const MAY_SPELL_AN_ID: ReadonlySet<string> = new Set(["core/detect/overlays.ts", "core/detect/stack.ts"]);
+
+  test("every rule has a template, every template has a rule, and each one ships", () => {
+    expect(ids.length, "the detection table names at least one overlay").toBeGreaterThan(0);
+    const files = readdirSync(OVERLAY_TEMPLATES_DIR)
+      .filter((entry) => entry.endsWith(".md"))
+      .map((entry) => entry.replace(/\.md$/, ""))
+      .sort();
+    expect(files).toEqual(ids);
+    // Shipment guard: an empty overlays directory still hashes to a valid-looking
+    // `pack: <lang>@<hash>`, so every file is asserted present by name, never counted.
+    for (const id of ids) {
+      expect(existsSync(overlayTemplatePath(id)), `overlays/${id}.md ships`).toBe(true);
+    }
+  });
+
+  for (const id of OVERLAY_RULES.map((rule) => rule.id)) {
+    test(`overlays/${id}.md has the §4.1 shape and fits in ${String(OVERLAY_MAX_BYTES)} bytes`, () => {
+      const path = overlayTemplatePath(id);
+      expect(existsSync(path), path).toBe(true);
+      assertPackShape(`overlays/${id}.md`, readFileSync(path, "utf8"), OVERLAY_MAX_BYTES);
+    });
+  }
+
+  /**
+   * The table is the ONE list of ids. A second copy in a renderer, a status printer or a
+   * docs generator would be #80 again under a new name, so the guard is on the literal:
+   * no other file under `src/` may spell an overlay id in quotes. Tests and templates are
+   * allowed — they are the readers this pins for.
+   */
+  test("no file under src/ other than the table spells an overlay id as a string literal", async () => {
+    const files = await walkFiles(join(FRAMEWORK_ROOT, "src"));
+    expect(files.length, "the walk found source files at all").toBeGreaterThan(0);
+    const offenders: string[] = [];
+    for (const file of files) {
+      if (!file.path.endsWith(".ts") || MAY_SPELL_AN_ID.has(file.path)) continue;
+      const text = readFileSync(join(FRAMEWORK_ROOT, "src", file.path), "utf8");
+      for (const id of ids) {
+        if (text.includes(`"${id}"`) || text.includes(`'${id}'`)) offenders.push(`${file.path}: ${id}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+    // Not vacuous: the table itself does spell them.
+    expect(readFileSync(join(FRAMEWORK_ROOT, "src/core/detect/overlays.ts"), "utf8")).toContain(`"${ids[0] ?? ""}"`);
+    expect(relative(FRAMEWORK_ROOT, OVERLAY_TEMPLATES_DIR)).toBe("templates/experts/stack/overlays");
   });
 });
