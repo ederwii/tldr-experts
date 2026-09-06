@@ -246,9 +246,11 @@ Three things to know:
   cut and the cut is named in the prompt, on stdout and in `pending.json`.
 - **It is per-cycle scratch.** It survives `--discard-pending` — it is an input to the
   rendering, not an output of the one being binned — and nothing else. A caveat that must
-  outlive this cycle is a **fact**, and a fact is written by answering an open question —
-  `tldrx answer <Qid> "…"`, which lands a numbered row in `.tldrx/memory/facts.yml` that
-  reaches every later prompt with attribution behind it.
+  outlive this cycle is a **fact**, and a fact has two doors: `tldrx answer <Qid> "…"` when
+  a question asked for it, and `tldrx facts add "<text>" --area <id> --decided-by driver`
+  when nothing did — `--decided-by owner` for a caveat the owner ruled on, because a
+  driver's own call is never cited later as theirs. Both land a numbered row in
+  `.tldrx/memory/facts.yml` that reaches every later prompt with attribution behind it.
 
 ### 3 · The developer turn, and `--commit`
 

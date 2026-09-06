@@ -56,6 +56,12 @@ etapa te pregunte algo, se busca en este archivo: volver a preguntar algo que ya
 registrado aquí se trata como un bug del framework, no como una maña. Los hechos se
 sustituyen o se retiran, nunca se editan encima.
 
+No todo hecho nace de una pregunta. `tldrx facts add "…" --area <id> --decided-by owner`
+registra uno directo: lo que mediste, lo que resultó ser cierto del workspace.
+`--decided-by` es obligatorio a propósito: dice quién **decidió**, que no es lo mismo que
+quién lo escribió, para que la decisión propia de un driver nunca se te cite después como
+tuya. Todo prompt que lee el hecho lee esa atribución junto con él.
+
 **`events.jsonl`** es un objeto JSON por línea, al que solo se le agrega al final, en el
 orden en que pasaron las cosas:
 

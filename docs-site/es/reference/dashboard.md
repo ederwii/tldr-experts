@@ -46,6 +46,13 @@ siendo cierto mientras nadie lo arregle, y ninguno es un run que te esté espera
 Una alerta que significa "alguien debería ver esto algún día" es una alerta que la gente
 deja de leer.
 
+La compuerta base en rojo es el único panel que se puede quedar viejo solo, y la página no
+lo esconde. Dibuja lo que diga `04-build/preflight.yml`; el siguiente Build **vuelve a
+medir** una fila roja cuando cambiaron los comandos declarados del workspace, cuando la fila
+tiene más de 30 minutos, o en cualquier `--prepare` — así que un rojo que acabas de arreglar
+no es un veredicto que el archivo repita para siempre. Una fila verde no se vuelve a medir
+por vieja: está clavada al sha base sobre el que se tomó, y otra base es otra pregunta.
+
 ## La tira Now responde tres preguntas
 
 ¿Está esperando a una **persona** ahorita?, ¿hay algo **roto o callado**?, y ¿cuánto ha

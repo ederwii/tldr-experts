@@ -30,7 +30,7 @@ Un turno se puede pagar de dos maneras distintas, y tldrx se niega a fingir lo c
 
 | | quién corre el turno | quién paga | qué se registra |
 |---|---|---|---|
-| **metered** | el framework lanza Claude Code | tu cuenta de API, por turno | la cifra exacta en dólares que reportó el CLI |
+| **metered** | el framework lanza Claude Code | tu cuenta de API, por turno | la cifra exacta en dólares que reportó el CLI — y cuando un turno vuelve sin ninguna (por ejemplo, un proceso que se murió antes de escribir su documento de resultado), `cost_usd: null, metered: false` como cualquier otro turno sin medir, nunca un `$0.00` que nadie midió |
 | **Codex** | el framework lanza `codex exec` | tu cuenta de Codex | tokens medidos; `cost_usd: null, metered: false` porque el CLI no reporta USD |
 | **host** | la sesión de Claude Code en la que ya estás, con sus propios subagentes | el plan de tu sesión | `cost_usd: null, metered: false` |
 
@@ -70,6 +70,13 @@ se multiplica un conteo de tokens por un precio.** Los reintentos jamás se fund
 total de la etapa: una etapa que falló dos veces costó tres turnos, y ese reintento suele
 ser justo el dinero que andabas buscando. Todo aquello de lo que el proceso nunca vio un
 costo se imprime como `UNMETERED`.
+
+Cuando el proveedor reporta su propio desglose de tokens de un turno, las dos mitades caen
+en la fila de ese turno en `run.yml` — `input_tokens` y `output_tokens`, escritas juntas o
+no escritas —, porque un desglose al que le falta un lado no se distingue de uno que nadie
+reportó. Son **la procedencia de la cifra en dólares que va al lado**, para que quien lea
+después pueda cotejarla contra una tabla de precios en vez de creérsela. No son una segunda
+forma de ponerle precio al turno.
 
 `tldrx run estimate` tiene permiso de adivinar, y se etiqueta a sí mismo `ESTIMATE`. La
 mitad está medida: el prompt de la siguiente etapa, armado por el mismo código que la

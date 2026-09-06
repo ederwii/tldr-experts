@@ -54,6 +54,12 @@ asks you something, this file is searched — re-asking a question already recor
 treated as a bug in the framework, not a quirk. Facts are superseded or retired, never
 edited in place.
 
+Not every fact starts as a question. `tldrx facts add "…" --area <id> --decided-by owner`
+records one directly — what you measured, what the workspace turned out to be. `--decided-by`
+is required on purpose: it says who **decided**, as against who typed it, so a driver's own
+call is never cited back to you later as your ruling. Every prompt that reads the fact reads
+that attribution with it.
+
 **`events.jsonl`** is one JSON object per line, append-only, in the order things happened:
 
 ```json

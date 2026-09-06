@@ -30,7 +30,7 @@ A turn can be paid for in two different ways, and tldrx refuses to pretend other
 
 | | who runs the turn | who pays | what is recorded |
 |---|---|---|---|
-| **metered** | the framework spawns Claude Code | your API account, per turn | the exact dollar figure the CLI reported |
+| **metered** | the framework spawns Claude Code | your API account, per turn | the exact dollar figure the CLI reported — and when a turn comes back without one (a process that died before writing its result document, say), `cost_usd: null, metered: false` like any other unmetered turn, never a `$0.00` nobody measured |
 | **Codex** | the framework spawns `codex exec` | your Codex account | measured tokens; `cost_usd: null, metered: false` because the CLI reports no USD |
 | **host** | the Claude Code session you are already in, using its own sub-agents | your session's plan | `cost_usd: null, metered: false` |
 
@@ -69,6 +69,12 @@ tldrx run estimate        # the one command that guesses — it says so in words
 count is ever multiplied by a price.** Retries are never merged into the stage total — a
 stage that failed twice cost three turns, and that retry is usually the money you were
 looking for. Anything the process never saw a cost for prints as `UNMETERED`.
+
+When the provider reports its own token split for a turn, both halves land on that turn's
+row in `run.yml` — `input_tokens` and `output_tokens`, written together or not at all,
+because a split with one side missing cannot be told apart from one nobody reported. They
+are **provenance for the dollar figure beside them**, so a later reader can check it against
+a price table instead of taking it on faith. They are not a second way to price the turn.
 
 `tldrx run estimate` is allowed to guess and labels itself `ESTIMATE`. Half of it is
 measured — the next stage's prompt, assembled by the same code that would run it. The
