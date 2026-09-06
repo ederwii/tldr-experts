@@ -38,9 +38,8 @@ import {
   epicBranchOf, epicWorktreeSlotOf, storyBranchOf, type BranchModel, type BranchModelKind,
 } from "../../plan/branchModel.ts";
 import {
-  FALLBACK_DEFAULT_BRANCH, factsPath, loadWorkspace, type WorkspaceContext,
+  factsPath, loadWorkspace, type WorkspaceContext,
 } from "../../../hooks/lib/workspace.ts";
-import { DodCommandRefused, runDodCommand } from "../../../hooks/lib/story.ts";
 import { FactsStore } from "../../facts/FactsStore.ts";
 import { RunStore } from "../../run/RunStore.ts";
 import { renderConventions, renderFacts, stackExpertNames } from "../prompt.ts";
@@ -63,12 +62,9 @@ import {
 import {
   addWorktree, assertWorktreeOn, baseStateOf, branchExists, commitAll, commitsBetween, currentBranch, diffCommand,
   dirtyPaths, ensureBranch, fastForward, firstLine, GitError, headSha, isDirty, mergeNoFf, partitionDirty, pathAtRef,
-  removeWorktree, repoDirOf, shaOf, shaReachability, stateDirPrefixes,
+  removeWorktree, repoDirOf, shaReachability, stateDirPrefixes,
 } from "../../build/git.ts";
-import {
-  BaseGateFailure, baseRefusalLines, baseResultFor, commandHash, EMPTY_PREFLIGHT, loadPreflight, PREFLIGHT_REL,
-  savePreflight, withResult, type BaseCommandResult, type BasePreflight,
-} from "../../build/preflight.ts";
+import { BaseGateFailure, baseRefusalLines } from "../../build/preflight.ts";
 import {
   loadBuildPlan, PlanLoadError, BUILD_PHASE, LOG_DIR, PLAN_PHASE, WORKTREES,
   type BuildPlan, type BuildWave, type PlannedEpic, type PlannedStory,
@@ -96,6 +92,9 @@ import {
   type FixFinding, type FixlistOnDisk,
 } from "../../build/fixlist.ts";
 import { renderBuildHandoff, type EpicSummaryRow } from "../../build/handoff.ts";
+import {
+  baseResultOf, PreflightCache, redBaseRefusal, runStoryDod, type BaseParts,
+} from "../../build/dodRunner.ts";
 import { readReviewLedger, type ReviewLedger } from "../../build/reviewLedger.ts";
 import { phaseCostToDate } from "../../build/phaseCost.ts";
 import { appendBuildRetro, buildRetroPath, gateRetroLines, storyRetroLines } from "../../build/retroLog.ts";
@@ -492,8 +491,7 @@ class BuildSession {
    * `dotnet test`, and a run that entered Build before this file existed must
    * not error on its absence.
    */
-  private preflight: BasePreflight | null = null;
-  private preflightLoaded = false;
+  private readonly preflight: PreflightCache;
   /** How many stories of one wave may be in flight at once. */
   private readonly lanes: number;
 
@@ -504,6 +502,7 @@ class BuildSession {
     opening: readonly string[] = [],
   ) {
     this.lines.push(...opening);
+    this.preflight = new PreflightCache(ctx.runDir);
     this.lanes = clampParallel(ctx.parallel);
     this.branchModel = this.resolveBranchModel();
     if (this.branchModel.kind === "integration") {
@@ -1930,49 +1929,17 @@ class BuildSession {
 
   /** (e) the story's ```dod block, in the worktree, via the gate's own runner. */
   private async runDod(story: StoryContext): Promise<readonly DodResult[]> {
-    const timeoutMs = this.ctx.spec.planned.timeout_s * 1000;
-    const results: DodResult[] = [];
-    for (const command of story.planned.dod.commands) {
-      // Same allowlist the hook uses, same refusal. The Build executor runs a dod
-      // block in a worktree for real; an undeclared command is a failed check
-      // here, not a spawn.
-      let outcome;
-      try {
-        outcome = await runDodCommand(command, story.worktree, timeoutMs, this.workspace.commands);
-      } catch (error) {
-        if (!(error instanceof DodCommandRefused)) throw error;
-        outcome = { command, exitCode: 126, timedOut: false, tail: error.message };
-      }
-      const result: DodResult = {
-        command,
-        exitCode: outcome.timedOut ? 124 : outcome.exitCode,
-        timedOut: outcome.timedOut,
-        tail: outcome.tail,
-      };
-      results.push(result);
-      const green = result.exitCode === 0 && !result.timedOut;
-      this.ctx.emit(green ? "check.passed" : "check.failed", {
-        phase: this.ctx.phaseId,
-        check: "dod",
-        story: story.planned.story.id,
-        command,
-        exit_code: result.exitCode,
-        detail: green ? "" : result.tail,
-      });
-      if (green) continue;
-      // Issue #41, the second reader: a red command only faults the STORY if it
-      // is green on the untouched base tree. The answer is normally already in
-      // the run's cache — the Build-entry pre-flight put it there — and when it
-      // is not (a run that entered Build on an older binary, a base that moved
-      // under a reopened story) it is measured now rather than assumed. A base
-      // that shares the failure halts the build instead of blocking the story.
-      const base = await this.baseResult(story.planned.story.repo, command);
-      if (base !== null && base.status === "failed") {
-        throw new BaseGateFailure(base, story.planned.story.id);
-      }
-      break;
-    }
-    return results;
+    return await runStoryDod({
+      storyId: story.planned.story.id,
+      repo: story.planned.story.repo,
+      worktree: story.worktree,
+      commands: story.planned.dod.commands,
+      workspaceCommands: this.workspace.commands,
+      timeoutMs: this.ctx.spec.planned.timeout_s * 1000,
+      phaseId: this.ctx.phaseId,
+      emit: (type, payload) => { this.ctx.emit(type, payload); },
+      baseResult: (repo, command) => baseResultOf(this.baseParts, repo, command),
+    });
   }
 
   private async commitIfDirty(story: StoryContext): Promise<string | null> {
@@ -2829,139 +2796,26 @@ class BuildSession {
     return fromPlan;
   }
 
-  /**
-   * Issue #41: the gate commands, on the UNTOUCHED base tree, before anything is
-   * dispatched or charged.
-   *
-   * A DoD is a delta gate — "this story did not break the tree" — and a command
-   * that is already red on main makes every story in the plan block for something
-   * no story caused. Measured on `260829-scoring-leaderboard`: two of three
-   * declared commands were red on pristine main, so all 15 stories would have
-   * blocked identically, each having spent a developer turn, and one of the two
-   * was running paid live AI tests as a routine gate.
-   *
-   * **Where it runs.** In the repo's own checkout, not a fresh worktree. That is
-   * the tree a human calls "the base": it has the installed dependencies, the
-   * build cache and the tool state that make the command mean what the team
-   * thinks it means, and a pristine worktree would fail half the world's repos
-   * for want of `node_modules` — turning this safety net into an outage. The
-   * dirty-tree refusal has already run, so the tree is product-clean. The trade
-   * is that a gate command which writes build output into a repo that does not
-   * gitignore it now leaves that output in the repo rather than in a worktree —
-   * a repo shaped like that was already broken for Build, whose commit step
-   * would have swept the same files into a story's diff.
-   *
-   * **What it costs.** Once per run: every result is written to
-   * `04-build/preflight.yml` and read back by the next invocation.
-   *
-   * A command the gate DECLINES to run (undeclared, or needing a shell) is
-   * recorded `unmeasured` and refuses nothing — the story-level DoD already has
-   * its own refusal for that, and inventing a base failure out of one would block
-   * a build for a rule that is enforced elsewhere.
-   */
-  private async refuseOnRedBase(): Promise<ExecutorOutcome | null> {
-    const failures: BaseCommandResult[] = [];
-    const seen = new Set<string>();
-    for (const planned of this.pendingStories()) {
-      for (const command of planned.dod.commands) {
-        const key = `${planned.story.repo}\u0000${command}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const result = await this.baseResult(planned.story.repo, command);
-        if (result !== null && result.status === "failed") failures.push(result);
-      }
-    }
-    if (failures.length === 0) return null;
-    const first = failures[0];
+  /** What `build/dodRunner.ts` needs to measure or recall the base tree. */
+  private get baseParts(): BaseParts {
     return {
-      ok: false,
-      refused: true,
-      awaiting: false,
-      tasks: [],
-      costUsd: 0,
-      outputs: [],
-      lines: [...baseRefusalLines(failures)],
-      error: first === undefined
-        ? "a workspace command fails on the base tree"
-        : `\`${first.command}\` exits ${String(first.exitCode)} on the base tree of ${first.repo}`,
+      runDir: this.ctx.runDir,
+      workspace: this.workspace,
+      cache: this.preflight,
+      at: this.ctx.at,
+      preparing: this.ctx.mode === "prepare",
+      timeoutMs: this.ctx.spec.planned.timeout_s * 1000,
+      write: (work) => this.writes.run(work),
+      advisories: this.advisories,
     };
   }
 
-  /**
-   * One gate command's result on one repo's base tree — from the run's cache when
-   * this run already paid for it, measured and written down when it did not.
-   *
-   * `null` means the question could not be asked at all (a `repo:` the workspace
-   * does not declare). Every caller treats that as "no evidence", never as a
-   * verdict.
-   */
-  private async baseResult(repo: string, command: string): Promise<BaseCommandResult | null> {
-    let repoDir: string;
-    try {
-      repoDir = repoDirOf(this.workspace, repo);
-    } catch {
-      return null;
-    }
-    const baseRef = this.workspace.defaultBranches.get(repo) ?? FALLBACK_DEFAULT_BRANCH;
-    const baseSha = await shaOf(repoDir, baseRef);
-    const hash = commandHash(command, [...this.workspace.commands]);
-    const cached = baseResultFor(this.basePreflight(), repo, command, baseSha, {
-      commandHash: hash,
-      at: this.ctx.at,
-      prepare: this.ctx.mode === "prepare",
-    });
-    if (cached !== null) return cached;
-
-    const timeoutMs = this.ctx.spec.planned.timeout_s * 1000;
-    let measured: BaseCommandResult;
-    try {
-      const outcome = await runDodCommand(command, repoDir, timeoutMs, this.workspace.commands);
-      const exitCode = outcome.timedOut ? 124 : outcome.exitCode;
-      measured = {
-        repo, command, baseRef, baseSha, exitCode, timedOut: outcome.timedOut, tail: outcome.tail,
-        status: exitCode === 0 && !outcome.timedOut ? "ok" : "failed", commandHash: hash,
-      };
-    } catch (error) {
-      if (!(error instanceof DodCommandRefused)) throw error;
-      // The gate would not run it, so nothing was learned ABOUT THE BASE. The
-      // story-level DoD refuses it on its own terms; this must not double as a
-      // second, differently-worded veto.
-      measured = {
-        repo, command, baseRef, baseSha, exitCode: 126, timedOut: false,
-        tail: error.message, status: "unmeasured", commandHash: hash,
-      };
-    }
-    await this.writes.run(() => this.rememberBase(measured));
-    return measured;
-  }
-
-  /** The run's cached base results, read once per process. */
-  private basePreflight(): BasePreflight {
-    if (!this.preflightLoaded) {
-      this.preflight = loadPreflight(this.ctx.runDir);
-      this.preflightLoaded = true;
-    }
-    return this.preflight ?? EMPTY_PREFLIGHT;
-  }
-
-  /**
-   * Write one measurement into `04-build/preflight.yml`.
-   *
-   * Through the single writer, and best-effort: a cache that cannot be saved
-   * costs the NEXT invocation a re-run, and that is never a reason to fail a
-   * build that is otherwise fine.
-   */
-  private rememberBase(result: BaseCommandResult): void {
-    const next = withResult(this.basePreflight(), result, this.ctx.at);
-    this.preflight = next;
-    this.preflightLoaded = true;
-    try {
-      savePreflight(this.ctx.runDir, next);
-    } catch (error) {
-      this.advisories.push(
-        `could not write ${PREFLIGHT_REL}: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+  private async refuseOnRedBase(): Promise<ExecutorOutcome | null> {
+    const refusal = await redBaseRefusal(this.baseParts, this.pendingStories());
+    return refusal === null ? null : {
+      ok: false, refused: true, awaiting: false, tasks: [], costUsd: 0, outputs: [],
+      lines: refusal.lines, error: refusal.error,
+    };
   }
 
   /**
@@ -3781,3 +3635,4 @@ export {
   clampParallel, developerPriceDivisor,
   DEFAULT_PARALLEL, MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE,
 };
+export { PreflightCache, runStoryDod };

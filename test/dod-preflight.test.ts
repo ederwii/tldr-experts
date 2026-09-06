@@ -28,6 +28,7 @@ import {
   preExistingFailureReason, PREFLIGHT_REL as SOURCE_PREFLIGHT_REL, PREFLIGHT_RED_TTL_MS, savePreflight, withResult,
   type BaseCommandResult, type BasePreflight,
 } from "../src/core/build/preflight.ts";
+import { PreflightCache } from "../src/core/build/dodRunner.ts";
 import {
   makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions,
 } from "./fixtures/build/workspace.ts";
@@ -468,5 +469,28 @@ describe("when a cached RED may still be trusted", () => {
       results: [row({ commandHash: "0e1234567890", checkedAt: "2026-08-31T09:00:00Z" })],
     };
     expect(parsePreflight(emitPreflightYaml(zeroE))).toEqual(zeroE);
+  });
+});
+
+describe("the base pre-flight is read from disk once per process", () => {
+  /**
+   * `basePreflight()` was lazy AND memoised: first call loads
+   * `04-build/preflight.yml`, every later one reads memory. A `PreflightCache`
+   * that reloaded per call would make a resumed run re-pay for the exact command
+   * the file exists to remember — a `dotnet test` charged twice, silently. The
+   * counter is on the class for this test and for nothing else.
+   */
+  test("ten reads and a write are one disk load", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-preflight-"));
+    const cache = new PreflightCache(dir);
+    for (let i = 0; i < 10; i++) cache.read();
+    cache.remember({
+      repo: "app", command: "npm run test", baseRef: "main", baseSha: "abc1234",
+      exitCode: 0, timedOut: false, tail: "", status: "ok",
+      commandHash: commandHash("npm run test", ["npm run test"]),
+    }, "2026-08-29T09:00:00Z");
+    cache.read();
+    expect(cache.loads).toBe(1);
+    rmSync(dir, { recursive: true, force: true });
   });
 });

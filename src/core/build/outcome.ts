@@ -160,3 +160,14 @@ export function dodGreen(outcome: Pick<StoryOutcome, "dod">): boolean {
 export function describeOutcome(outcome: StoryOutcome): string {
   return `${outcome.id} ${outcome.status}`;
 }
+
+/**
+ * A refusal a Build step raises, as DATA: the operator lines and the one-line
+ * `stage.error`. `src/core/build/` never builds an `ExecutorOutcome` — the
+ * executor owns the shape of what it returns, and a refusal that could be
+ * assembled in two places would be two refusals.
+ */
+export interface BuildRefusal {
+  readonly lines: readonly string[];
+  readonly error: string;
+}
