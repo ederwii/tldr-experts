@@ -392,6 +392,33 @@ describe("a story cannot settle `done` over an open `fix-now`", () => {
     expect(readFileSync(path, "utf8")).toContain(`Resolved: yes ${sha}`);
   }, 90_000);
 
+  test("a claim that names an ABBREVIATION of the landed sha closes it, and the record is rewritten to the full object id", async () => {
+    const ws = workspace();
+    await handOffReview(ws);
+    await fixlistRound(ws, "2026-08-29T10:00:00Z");
+    const sha = execFileSync("git", ["rev-parse", `story/${ws.runId}/S1`], {
+      cwd: join(ws.root, "app"), encoding: "utf8",
+    }).trim();
+    const abbrev = sha.slice(0, 7);
+    const path = fixlistPath(ws, "S1", 1);
+    // The human typed a real, valid abbreviation of the fix's own commit — git
+    // resolves it exactly as happily as the full sha, which is the whole reason
+    // this needs a written-back answer rather than an accepted claim.
+    writeFileSync(path, readFileSync(path, "utf8").replaceAll("Resolved: no", `Resolved: yes ${abbrev}`), "utf8");
+    await next(ws, { mode: "prepare", review: true, at: "2026-08-29T10:20:00Z" });
+
+    answerReview(ws, "S1", { verdict: "approve", summary: "re-read the diff", findings: [] });
+    await next(ws, { mode: "commit", review: true, at: "2026-08-29T10:30:00Z" });
+
+    expect(story(ws, "S1")).toContain("status: done");
+    // The claim checked out — and the record now names the FULL commit git
+    // actually resolved it to, not the 7 characters a person typed, so a later
+    // reader cannot mistake it for a deliberate abbreviation of another commit.
+    const after = readFileSync(path, "utf8");
+    expect(after).toContain(`Resolved: yes ${sha}`);
+    expect(after).not.toMatch(new RegExp(`Resolved: yes ${abbrev}$`, "m"));
+  }, 90_000);
+
   test("re-routing a finding away from `fix-now` closes it too", async () => {
     const ws = workspace();
     await handOffReview(ws);

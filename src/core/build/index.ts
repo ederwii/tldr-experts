@@ -4,7 +4,7 @@ export {
   addWorktree, removeWorktree, cleanUpRunEpicWorktrees, commitAll, commitPathsOnly, mergeNoFf, diffCommand,
   firstLine, GitError, GIT_TIMEOUT_MS,
   stateDirPrefixes, partitionDirty, porcelainPath, shaOf, baseStateOf, fastForward, commitsBetween,
-  assertWorktreeOn, WorktreeBranchMismatchError, shaReachability,
+  assertWorktreeOn, WorktreeBranchMismatchError, shaReachability, canonicalSha,
 } from "./git.ts";
 export type {
   GitResult, MergeOutcome, PathCommit, DirtySplit, BaseState, BaseStaleness, ShaReachability,
@@ -39,7 +39,7 @@ export type { StoryOutcome, DodResult, Verdict, RescuedWork } from "./outcome.ts
 export {
   parseFixFindings, parseFixlistFile, renderFixlist, renderFixlistSection, writeFixlist,
   fixlistRounds, fixlistRel, fixlistStory, latestFixlist, readFixlistAt, openFindings, isOpen,
-  fixlistRetroLines, unevidencedClaims, markUnverified,
+  fixlistRetroLines, unevidencedClaims, markUnverified, canonicalizeResolvedSha, canonicalizeResolutions,
   CLAIMED_UNVERIFIED, DISPOSITIONS, FIXLIST_DIR, MAX_FIXLIST_ROUNDS,
 } from "./fixlist.ts";
 export type { FixFinding, Disposition, FixlistParts, FixlistOnDisk, ParsedFixlist } from "./fixlist.ts";

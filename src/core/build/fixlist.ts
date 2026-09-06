@@ -33,6 +33,7 @@ import { join } from "node:path";
 import { isRecord } from "../schemas/validation.ts";
 import { describeSrcFailure, diagnoseSrcToken, parseSrcToken, srcRule } from "../text/srcToken.ts";
 import { SRC_GRAMMAR_HEADING } from "../text/srcGrammarContract.ts";
+import { canonicalSha } from "./git.ts";
 
 /** `04-build/fixlist/` — a sibling of `04-build/log/`, and tracked like it. */
 export const FIXLIST_DIR = "fixlist";
@@ -490,6 +491,104 @@ export function markUnverified(text: string, n: number, why: string): string {
     if (at !== n || !RESOLVED_RE.test(line)) return line;
     return `Resolved: ${CLAIMED_UNVERIFIED} — ${why}`;
   }).join("\n");
+}
+
+/**
+ * Locates the sha token inside a `Resolved: yes …` line — case-insensitively,
+ * unlike `RESOLVED_SHA_RE`, since this one is about finding the token's own span
+ * to replace it, not about deciding what the claim means.
+ */
+const RESOLVED_SHA_TOKEN_RE = /\b[0-9a-fA-F]{7,40}\b/;
+
+/**
+ * Rewrite finding `n`'s `Resolved: yes …` line so its sha names the FULL 40-hex
+ * object id, touching nothing else the line says.
+ *
+ * The 7-40 grammar stays: demanding 40 at parse time would refuse the `yes
+ * 9f2c1ab` a person legitimately types. What that grammar cannot tell apart is a
+ * deliberate abbreviation and a sha that lost a character in transit — a 39-hex
+ * string resolves in git exactly as happily as a 7-hex one, and the record then
+ * keeps a spelling no later reader can check against anything. Canonicalising
+ * AFTER the verification is strictly stronger and refuses nobody.
+ *
+ * Only the sha TOKEN is replaced — `yes (9f2c1ab)` becomes `yes (<40hex>)`, `yes
+ * — commit 9f2c1ab` becomes `yes — commit <40hex>` — so whatever prose the
+ * grammar tolerates around it survives untouched.
+ *
+ * A sibling of `markUnverified`, and deliberately its mirror image: that one can
+ * only move a finding from closed to open, this one changes nothing but the
+ * sha's spelling. Text in, text out, no I/O — the caller owns the file, this
+ * owns the line.
+ */
+export function canonicalizeResolvedSha(text: string, n: number, sha: string): string {
+  let at: number | null = null;
+  return text.split("\n").map((line) => {
+    const heading = HEADING_RE.exec(line);
+    if (heading !== null) {
+      at = Number(heading[1] ?? "0");
+      return line;
+    }
+    if (at !== n) return line;
+    const resolved = RESOLVED_RE.exec(line);
+    // Only a `yes` may carry a sha, so only a `yes` is rewritten. A `no` line
+    // with a hex word in it is prose.
+    if (resolved === null || (resolved[1] ?? "").toLowerCase() !== "yes") return line;
+    const rest = resolved[2] ?? "";
+    const token = RESOLVED_SHA_TOKEN_RE.exec(rest);
+    if (token === null) return line;
+    // `rest` is `(.*)$` in `RESOLVED_RE` — it is always the line's own tail, so
+    // its start position in `line` is exact without a second search.
+    const start = line.length - rest.length + token.index;
+    return `${line.slice(0, start)}${sha}${line.slice(start + token[0].length)}`;
+  }).join("\n");
+}
+
+/**
+ * Make every `Resolved: yes` claim's RECORD checkable, not only the claim itself
+ * (#130 follow-up, measured 2026-09-06: `RESOLVED_SHA_RE` accepts 7-40 hex, so a
+ * 39-character sha reads as an abbreviation, `git rev-parse` resolves it exactly
+ * as happily as a real one, and the record kept the truncated form — a sha a
+ * later reader cannot tell from a deliberate prefix of a DIFFERENT commit).
+ *
+ * Walks the SURVIVORS of verification — a finding still `resolved` with a
+ * non-null `resolvedSha` — and for each whose sha git resolves to something
+ * OTHER than what is already written, rewrites both the in-memory finding and
+ * the text to the full object id. A finding that failed verification arrives
+ * here with `resolvedSha: null` already, so it is left alone; a finding whose
+ * sha already IS the 40-hex object id costs one `rev-parse` and changes
+ * nothing — which is what makes a second run idempotent.
+ *
+ * The git resolution and the "did anything change" conditional both live HERE,
+ * not at the call site: the caller (`verifyResolutions`) makes one call and
+ * routes the three things back — the possibly-rewritten findings, the
+ * possibly-rewritten text, and the report lines to say what happened.
+ */
+export async function canonicalizeResolutions(
+  repoDir: string,
+  findings: readonly FixFinding[],
+  text: string,
+): Promise<{ findings: readonly FixFinding[]; text: string; lines: readonly string[] }> {
+  const out: FixFinding[] = [];
+  const rewrites: string[] = [];
+  let body = text;
+  for (const finding of findings) {
+    if (!finding.resolved || finding.resolvedSha === null) {
+      out.push(finding);
+      continue;
+    }
+    const full = await canonicalSha(repoDir, finding.resolvedSha);
+    if (full === null || full === finding.resolvedSha) {
+      out.push(finding);
+      continue;
+    }
+    out.push({ ...finding, resolvedSha: full });
+    body = canonicalizeResolvedSha(body, finding.n, full);
+    rewrites.push(
+      `fix-list finding #${String(finding.n)} named \`${finding.resolvedSha}\` — `
+      + `rewritten to the full object id \`${full}\`, so the record names one commit and not a prefix`,
+    );
+  }
+  return { findings: out, text: body, lines: rewrites };
 }
 
 // --- where it lives --------------------------------------------------------

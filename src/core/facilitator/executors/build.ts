@@ -93,8 +93,8 @@ import {
   DEVELOPER_FAILED, dodGreen, type DodResult, type RescuedWork, type StoryOutcome,
 } from "../../build/outcome.ts";
 import {
-  CLAIMED_UNVERIFIED, fixlistRel, fixlistRetroLines, latestFixlist, markUnverified, MAX_FIXLIST_ROUNDS,
-  openFindings, readFixlistAt, renderFixlistSection, writeFixlist,
+  CLAIMED_UNVERIFIED, canonicalizeResolutions, fixlistRel, fixlistRetroLines, latestFixlist, markUnverified,
+  MAX_FIXLIST_ROUNDS, openFindings, readFixlistAt, renderFixlistSection, writeFixlist,
   type FixFinding, type FixlistOnDisk,
 } from "../../build/fixlist.ts";
 import { renderBuildHandoff, type EpicSummaryRow } from "../../build/handoff.ts";
@@ -1474,8 +1474,23 @@ class BuildSession {
         + `${why} — recorded as \`${CLAIMED_UNVERIFIED}\`, and it still blocks \`done\``,
       );
     }
+    // Records never lie (#130 follow-up): a claim that DID check out may still
+    // name a truncated sha — git resolves 39 hex characters exactly as happily as
+    // 7, and a later reader cannot tell that apart from a deliberate abbreviation
+    // of a DIFFERENT commit. `canonicalizeResolutions` owns both the git
+    // resolution and the text edit; this call site only routes its answer into
+    // the same single write below.
+    const canonicalized = await canonicalizeResolutions(
+      story.repoDir,
+      findings,
+      text ?? readFileSync(fixlist.path, "utf8"),
+    );
+    if (canonicalized.lines.length > 0) {
+      text = canonicalized.text;
+      for (const line of canonicalized.lines) this.lines.push(`  · ${id}: ${line}`);
+    }
     if (text !== null) writeFileSync(fixlist.path, text, "utf8");
-    return { findings, refused };
+    return { findings: canonicalized.findings, refused };
   }
 
   /** Why a `Resolved: yes` does not check out, or null when it does. */
