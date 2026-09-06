@@ -12,7 +12,7 @@
  * fails keeps its cost, because the API call happened whether we liked it or not.
  */
 import { rmSync } from "node:fs";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { PROJECT_WORK_DIR } from "../paths.ts";
 import { ambiguousRunLines } from "../run/openRuns.ts";
@@ -36,8 +36,8 @@ import { raiseCommand, shortBy } from "../budget/budgetView.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../hooks/lib/workspace.ts";
 import { closeRun, describeOpenQuestions, describeStateCommit } from "../run/closeRun.ts";
-import { capPayload, type TldrxEvent } from "../events/Event.ts";
-import { BUILD_PHASE, LOG_DIR } from "../build/plan.ts";
+import { capPayload, type EventType, type TldrxEvent } from "../events/Event.ts";
+import { LOG_DIR } from "../build/plan.ts";
 import { setProgressCeiling, setProgressReadCap, setProgressTitle } from "../ui/bus.ts";
 import { acquireLock, releaseLock } from "./Lock.ts";
 import { onInterrupt, stopInFlightRun } from "./interrupt.ts";
@@ -1052,6 +1052,57 @@ async function runExecutor(
     store.save();
   }
   announce(store.runId, stageId, nextTaskId(store, phaseId, stageId), agentCap(options, store, stage));
+
+  // Payload-cap sidecar bookkeeping for THIS invocation (spec §2.9, fix round 1).
+  // A counter, not just a timestamp: the bug this closes was measured as TWO
+  // oversized verdicts for the same story (an attempt-1 `changes`, an attempt-2
+  // `approve`) — a timestamp alone can collide within the same wall-clock second,
+  // and the second write must never silently overwrite the first.
+  let overflowSeq = 0;
+
+  /**
+   * Save omitted text to a sidecar file BEFORE the event that names it is built,
+   * so the pointer `capPayload` writes is true by construction — never a promise
+   * about a file that does not exist yet (`writeLog` runs later, inside
+   * `settle`), never one that later holds a DIFFERENT verdict's prose (only the
+   * FINAL review's summary survives in the story's own log), and never one that
+   * is simply never written at all (a story that does not settle this
+   * invocation). A failed write is named, never a path that does not exist.
+   *
+   * Keyed on THIS invocation's own `phaseId`, not the `BUILD_PHASE` constant:
+   * `runExecutor` also runs Watch stages, and a Watch failure's sidecar must not
+   * be filed under a directory named `04-build`. `LOG_DIR` ("log") is the
+   * generic convention both phases already share for their own artefacts.
+   */
+  const saveOverflow = (type: EventType, text: string): string => {
+    overflowSeq += 1;
+    const stamp = nowish(options).replace(/:/g, "-");
+    const relPath = `${phaseId}/${LOG_DIR}/overflow/${stamp}-${String(overflowSeq)}-${type}-detail.txt`;
+    try {
+      mkdirSync(join(store.runDir, phaseId, LOG_DIR, "overflow"), { recursive: true });
+      writeFileSync(join(store.runDir, relPath), text, "utf8");
+      return `omitted text saved at ${relPath}`;
+    } catch (error) {
+      return `could not be saved: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  };
+
+  /**
+   * Cap, THEN append — the ONE seam every executor event goes through, and the
+   * same one this function's own catch block below uses for its `error` event,
+   * so a giant thrown message is bounded by the exact same byte-accurate rule
+   * (fix round 1, finding 2) rather than a second, character-based one.
+   */
+  const appendCapped = (
+    type: EventType,
+    payload: Record<string, unknown>,
+    costUsd = 0,
+    actor: string | null = null,
+  ): void => {
+    const capped = capPayload(payload, (text) => saveOverflow(type, text));
+    store.append(event(options, store.runId, stageId, type, capped, costUsd, actor));
+  };
+
   const executorCtx: ExecutorContext = {
     root: options.root,
     runId: store.runId,
@@ -1082,14 +1133,7 @@ async function runExecutor(
     tokens: options.tokens ?? null,
     agentCap: (share = 1) => agentCap(options, store, stage, share),
     emit: (type, payload, costUsd = 0, actor = null) => {
-      // The cap is honoured HERE, at the one seam every executor event goes
-      // through, so no executor has to know about it and none can be killed by it.
-      // The pointer is composed only from keys the payload already carries; with
-      // either one missing the sentence says the text is elsewhere rather than
-      // naming a file that may not exist.
-      const story = typeof payload.story === "string" ? payload.story : null;
-      const pointer = story === null ? null : `${BUILD_PHASE}/${LOG_DIR}/${story}.md`;
-      store.append(event(options, store.runId, stageId, type, capPayload(payload, pointer), costUsd, actor));
+      appendCapped(type, payload, costUsd, actor);
     },
   };
 
@@ -1109,15 +1153,16 @@ async function runExecutor(
     // row here, and the message says so instead of inventing a count or implying
     // the ledger is whole.
     const why = error instanceof Error ? error.message : String(error);
-    // `oneLine` bounds this well under the §2.9 cap: an error thrown FOR being
-    // oversized (a giant reviewer verdict, say) must not turn into a second,
-    // unrecoverable throw right here by carrying that same size into `message`.
-    store.append(event(options, store.runId, stageId, "error", {
+    // `detail`, not a bespoke field: `appendCapped` runs this through the SAME
+    // `capPayload` every other event does, so a giant thrown message (an error
+    // thrown FOR being oversized, say) is bounded by bytes, not characters, and
+    // is never lost to a second, unrecoverable throw right here.
+    appendCapped("error", {
       phase: phaseId,
       where: "executor",
-      message: oneLine(why, 1000),
+      detail: why,
       tasks_recorded: false,
-    }, 0));
+    }, 0);
     store.save();
     return failStage(store, options, phaseId, stageId,
       `the executor threw before returning its task rows — this invocation's turn costs are not in run.yml: ${why}`,
