@@ -1221,12 +1221,97 @@ async function commitStage(
     throw error;
   }
 
+  // The cost of an in-session turn is DECLARED, never measured: the sub-agent ran
+  // inside the host's session and was billed to it. `--cost-usd` is the host
+  // saying what it was; `result.json`'s own `cost_usd` is the other way to say it.
+  // With neither, this is `null` + `metered: false` — not `0`, which is a
+  // measurement and a false one (2026-08-29 audit, §A: a run's ledger read
+  // "$0.00 spent" after real money had gone).
+  const declared = options.costUsd ?? result.cost_usd;
+  const cost = declared === null || declared === undefined ? null : round2(declared);
+
+  // Recorded BEFORE any refusal below. The turn RAN: a refusal that exits first
+  // is the ledger forgetting money it saw, which is the failure this file's own
+  // `cost_usd: null` rule exists to prevent, pointing the other way.
+  //
+  // Which makes the second `--commit` the hazard. The questions refusal leaves
+  // the stage `running`, so the operator fixes `questions.md` and runs the same
+  // command over the same `result.json` — and nothing but this would stop a
+  // second row for one turn. `banked` is the fingerprint of THIS result document
+  // among the rows already on the stage: same session, same declared cost, same
+  // outputs. Matching means it is the same artefact, not a second turn.
+  //
+  // Only ever checked when `session_id` is non-null. A null session id
+  // identifies nothing — two genuinely distinct unmetered turns look identical
+  // to a null-session fingerprint — so it is NEVER used to collapse two rows
+  // into one; a null-session result is always recorded as its own row. When
+  // that row's cost and outputs happen to match an earlier one, the note below
+  // says so, rather than silently letting two different turns look deduped or
+  // silently letting one turn look banked twice.
+  const banked = result.session_id === null ? null : alreadyBanked(stage, result, cost);
+  const taskId = banked === null ? nextTaskId(store, phaseId, stageId) : banked;
+  if (banked === null) {
+    const looksLikeARepeat = result.session_id === null
+      && stage.tasks.some((t) => t.cost_usd === cost && sameOutputs(t.outputs, result.outputs));
+    recordTask(store, phaseId, stageId, {
+      id: taskId,
+      status: "done",
+      expert: stage.expert ?? spec.planned.experts[0] ?? null,
+      model: options.model ?? stage.model ?? spec.planned.model,
+      cost_usd: cost,
+      ...(cost === null ? { metered: false } : {}),
+      ...(options.tokens === undefined ? {} : { tokens: options.tokens }),
+      error: null,
+      session_id: result.session_id,
+      started_at: stage.started_at ?? options.at,
+      ended_at: options.at,
+      outputs: result.outputs,
+    });
+    store.append(event(options, store.runId, stageId, "agent.result", {
+      phase: phaseId,
+      task: taskId,
+      session_id: result.session_id,
+      model: options.model ?? stage.model ?? spec.planned.model,
+      effort: options.effort ?? spec.planned.effort ?? null,
+      outputs: result.outputs,
+      mode: "in-session",
+      // `cost_usd` on the ENVELOPE must stay a number ≥ 0 (spec §2.9), so the fact
+      // that nothing was declared lives in the payload where it can be null.
+      metered: cost !== null,
+      ...(options.tokens === undefined ? {} : { tokens: options.tokens }),
+    }, cost ?? 0, stage.expert));
+    store.save();
+    if (looksLikeARepeat) {
+      notes.push(
+        `dedupe: none — no session id. This turn's cost and outputs match an earlier row on `
+        + `this stage, but with no \`session_id\` to fingerprint it, it cannot be told apart from `
+        + "a second, genuinely distinct unmetered turn — so it is recorded as its own row "
+        + `(${taskId}) rather than assumed identical. Declare a session id (or \`--cost-usd\`) to `
+        + "make a re-run safe to dedupe.",
+      );
+    }
+  } else {
+    notes.push(
+      `this turn's cost is already recorded as ${banked} — an earlier \`--commit\` banked it `
+      + "before refusing, so it is not recorded a second time.",
+    );
+  }
+  if (cost === null && banked === null) {
+    notes.push(
+      `cost is unmetered (in-session): nothing declared it, so this turn is recorded as `
+      + "`cost_usd: null, metered: false` rather than $0.00. Pass `--cost-usd <n>` when you know it.",
+    );
+  }
+
   // A questions.md the §2.7 parser cannot read is not "no questions" — it is a
   // file nobody, including the gate, can see into. Refused HERE rather than at the
   // gate because `--commit` is the last moment the host session that wrote it is
   // still around to fix it. Measured 2026-08-29: an in-session stage wrote
   // `### Q1 — …` / `**Answer:**` from the old template, and four questions
   // vanished between the sub-agent and the run.
+  //
+  // AFTER the recording block, not before it: this refusal used to return with
+  // the turn's money unrecorded anywhere.
   const unreadable = unreadableHeadings(join(store.runDir, phaseId, "questions.md"));
   if (unreadable.length > 0) {
     return out(EXIT_AGENT_FAILED, [
@@ -1239,51 +1324,35 @@ async function commitStage(
     ]);
   }
 
-  // The cost of an in-session turn is DECLARED, never measured: the sub-agent ran
-  // inside the host's session and was billed to it. `--cost-usd` is the host
-  // saying what it was; `result.json`'s own `cost_usd` is the other way to say it.
-  // With neither, this is `null` + `metered: false` — not `0`, which is a
-  // measurement and a false one (2026-08-29 audit, §A: a run's ledger read
-  // "$0.00 spent" after real money had gone).
-  const declared = options.costUsd ?? result.cost_usd;
-  const cost = declared === null || declared === undefined ? null : round2(declared);
-  const taskId = nextTaskId(store, phaseId, stageId);
-  recordTask(store, phaseId, stageId, {
-    id: taskId,
-    status: "done",
-    expert: stage.expert ?? spec.planned.experts[0] ?? null,
-    model: options.model ?? stage.model ?? spec.planned.model,
-    cost_usd: cost,
-    ...(cost === null ? { metered: false } : {}),
-    ...(options.tokens === undefined ? {} : { tokens: options.tokens }),
-    error: null,
-    session_id: result.session_id,
-    started_at: stage.started_at ?? options.at,
-    ended_at: options.at,
-    outputs: result.outputs,
-  });
-  store.append(event(options, store.runId, stageId, "agent.result", {
-    phase: phaseId,
-    task: taskId,
-    session_id: result.session_id,
-    model: options.model ?? stage.model ?? spec.planned.model,
-    effort: options.effort ?? spec.planned.effort ?? null,
-    outputs: result.outputs,
-    mode: "in-session",
-    // `cost_usd` on the ENVELOPE must stay a number ≥ 0 (spec §2.9), so the fact
-    // that nothing was declared lives in the payload where it can be null.
-    metered: cost !== null,
-    ...(options.tokens === undefined ? {} : { tokens: options.tokens }),
-  }, cost ?? 0, stage.expert));
-  store.save();
-  if (cost === null) {
-    notes.push(
-      `cost is unmetered (in-session): nothing declared it, so this turn is recorded as `
-      + "`cost_usd: null, metered: false` rather than $0.00. Pass `--cost-usd <n>` when you know it.",
-    );
-  }
-
   return await finishStage(store, options, phaseId, stageId, spec, notes);
+}
+
+/**
+ * The id of the task row that already banked THIS `result.json`, or null when
+ * none has.
+ *
+ * Only called when `result.session_id` is non-null (see `commitStage` above) —
+ * a null session id is never used to fingerprint a re-run. The fingerprint is
+ * every part of the result a second turn would have changed — the session it
+ * ran in, the cost it declared, and the outputs it named. All three matching is
+ * the same artefact being re-read, not a second turn that happened to cost the
+ * same.
+ */
+function alreadyBanked(
+  stage: RunStage,
+  result: { session_id: string | null; outputs: readonly string[] },
+  cost: number | null,
+): string | null {
+  const hit = stage.tasks.find((task) =>
+    task.session_id === result.session_id
+    && task.cost_usd === cost
+    && sameOutputs(task.outputs, result.outputs));
+  return hit?.id ?? null;
+}
+
+/** Element by element, so no separator character has to be chosen or escaped. */
+function sameOutputs(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
 /**

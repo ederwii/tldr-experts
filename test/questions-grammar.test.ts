@@ -21,6 +21,7 @@ import {
   declaresQuestions, evaluateAutoGate, MISSING_QUESTIONS, NO_PARSEABLE_QUESTIONS,
 } from "../src/core/run/autoGate.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
+import { EventLog } from "../src/core/events/EventLog.ts";
 import { loadWorkflowPreset } from "../src/core/run/workflowPreset.ts";
 import { runNext } from "../src/core/facilitator/runNext.ts";
 import { questionsCommand } from "../src/cli/commands/questions.ts";
@@ -343,6 +344,115 @@ describe("M2 · --commit refuses an unreadable questions.md (exit 5)", () => {
     expect(text).toContain("the parser cannot read");
     expect(text).toContain("Q1, Q2");
     expect(text).toContain("tldrx questions lint");
+
+    // The refusal is real and it still exits 5 — and the money is recorded anyway.
+    // The turn RAN. A refusal that discards the row is the ledger forgetting a
+    // dollar it saw, which is the one thing this file's own subject forbids.
+    const store = RunStore.open(ws.runDir);
+    const stage = store.run.phases.flatMap((p) => p.stages).find((s) => s.id === "alpha");
+    expect(stage?.tasks).toHaveLength(1);
+    expect(stage?.tasks[0]?.cost_usd).toBe(0.4);
+    expect(stage?.tasks[0]?.session_id).toBeNull();
+    const results = EventLog.forRun(ws.runDir).read()
+      .filter((e) => e.type === "agent.result");
+    expect(results).toHaveLength(1);
+    expect(results[0]?.cost_usd).toBe(0.4);
+  });
+
+  /**
+   * The other half, and the one that decides whether the fix is honest: the
+   * operator fixes `questions.md` and runs `--commit` again over the SAME
+   * `result.json`. The stage is still `running`, so nothing else stops a second
+   * row — and two rows for one turn double-counts the money, which is the same
+   * lie pointing the other way.
+   *
+   * This turn's `result.json` carries a real `session_id`, so the fingerprint
+   * (session + cost + outputs) can tell "the same artefact, re-read" apart from
+   * "a second turn that happened to cost the same" — and collapses the re-run
+   * to one row.
+   */
+  test("a re-run with the same session id after the fix does not bank the same turn twice", async () => {
+    const ws = workspace([ASKER], { alpha: "auto" });
+    await runNext({
+      root: ws.root, dryRun: false, mode: "prepare", yolo: false,
+      actor: "alan", at: "2026-08-29T09:00:00Z",
+    });
+    writeFileSync(join(ws.runDir, "01-what", "intent.md"), cannedIntent(), "utf8");
+    writeFileSync(join(ws.runDir, "01-what", "handoff.md"), cannedHandoff(), "utf8");
+    writeFileSync(join(ws.runDir, "01-what", "questions.md"), PROSE_QUESTIONS, "utf8");
+    mkdirSync(join(ws.runDir, ".agent", "alpha"), { recursive: true });
+    writeFileSync(
+      join(ws.runDir, ".agent", "alpha", "result.json"),
+      JSON.stringify({
+        outputs: ["01-what/intent.md"], questions_asked: [], notes: "", cost_usd: 0.4,
+        session_id: "sess-abc",
+      }),
+      "utf8",
+    );
+
+    const refused = await runNext({
+      root: ws.root, dryRun: false, mode: "commit", yolo: false,
+      actor: "alan", at: "2026-08-29T09:05:00Z",
+    });
+    expect(refused.code).toBe(5);
+
+    // The operator's fix, then the same command again.
+    expect(await questionsCommand.run(["lint", "--root", ws.root, "--fix"])).toBe(0);
+    const again = await runNext({
+      root: ws.root, dryRun: false, mode: "commit", yolo: false,
+      actor: "alan", at: "2026-08-29T09:10:00Z",
+    });
+
+    const stage = RunStore.open(ws.runDir).run.phases
+      .flatMap((p) => p.stages).find((s) => s.id === "alpha");
+    expect(stage?.tasks).toHaveLength(1);
+    expect(stage?.cost_usd).toBe(0.4);
+    expect(again.lines.join("\n")).toContain("already recorded as t1");
+  });
+
+  /**
+   * The case the controller ruling exists for: a null `session_id` identifies
+   * NOTHING, so it must never be used to collapse two rows into one — even when
+   * a re-run's cost and outputs happen to match an earlier row exactly. Both
+   * turns are banked, and the second row's note names why it was not deduped:
+   * a null session id cannot tell "the same artefact, re-read" apart from "a
+   * second, genuinely distinct unmetered turn."
+   */
+  test("a null session id is never used to fingerprint a re-run — both turns are banked", async () => {
+    const ws = workspace([ASKER], { alpha: "auto" });
+    await runNext({
+      root: ws.root, dryRun: false, mode: "prepare", yolo: false,
+      actor: "alan", at: "2026-08-29T09:00:00Z",
+    });
+    writeFileSync(join(ws.runDir, "01-what", "intent.md"), cannedIntent(), "utf8");
+    writeFileSync(join(ws.runDir, "01-what", "handoff.md"), cannedHandoff(), "utf8");
+    writeFileSync(join(ws.runDir, "01-what", "questions.md"), PROSE_QUESTIONS, "utf8");
+    mkdirSync(join(ws.runDir, ".agent", "alpha"), { recursive: true });
+    writeFileSync(
+      join(ws.runDir, ".agent", "alpha", "result.json"),
+      JSON.stringify({ outputs: ["01-what/intent.md"], questions_asked: [], notes: "", cost_usd: 0.4 }),
+      "utf8",
+    );
+
+    const refused = await runNext({
+      root: ws.root, dryRun: false, mode: "commit", yolo: false,
+      actor: "alan", at: "2026-08-29T09:05:00Z",
+    });
+    expect(refused.code).toBe(5);
+
+    // The operator's fix, then the same command again — still no session id.
+    expect(await questionsCommand.run(["lint", "--root", ws.root, "--fix"])).toBe(0);
+    const again = await runNext({
+      root: ws.root, dryRun: false, mode: "commit", yolo: false,
+      actor: "alan", at: "2026-08-29T09:10:00Z",
+    });
+
+    const stage = RunStore.open(ws.runDir).run.phases
+      .flatMap((p) => p.stages).find((s) => s.id === "alpha");
+    expect(stage?.tasks).toHaveLength(2);
+    expect(stage?.tasks.every((t) => t.cost_usd === 0.4)).toBe(true);
+    expect(stage?.tasks.every((t) => t.session_id === null)).toBe(true);
+    expect(again.lines.join("\n")).toContain("dedupe: none — no session id");
   });
 });
 
