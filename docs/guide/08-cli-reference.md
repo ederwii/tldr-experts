@@ -753,7 +753,10 @@ shipped pack body — an edited body is kept and said so; delete the body to re-
 framework overlay detection can prove under `overlays/` with its evidence recorded in
 `workspace.yml`, and names the project's `.claude/skills`. `disable` removes the overlays and
 touches neither bodies nor knowledge. `status` prints all of it and always exits `0`; `enable`
-exits `1` when no repo has a detectable language. See [4 — Experts](04-experts.md#stack-packs).
+exits `1` when no repo has a detectable language. `disable` is idempotent: no `workspace.yml`
+yet means nothing to disable — exit `0`, a named line, the same as `status` — and it exits `1`
+only when `workspace.yml` exists but is too broken to read. See
+[4 — Experts](04-experts.md#stack-packs).
 
 `expert train` **refuses before it spawns** whenever the run has nothing to work on — exit `1`,
 nothing spent, nothing written: no such area (#94), `--mode light` on a role expert, and — since

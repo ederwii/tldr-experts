@@ -11,6 +11,7 @@
  * session themselves. `recompute` is that path's other half: it settles the level
  * such a session leaves behind, without pretending a training run happened.
  */
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Command } from "../Command.ts";
 import { EXIT_FAILED, EXIT_NOT_FOUND, EXIT_OK } from "../exitCodes.ts";
@@ -18,6 +19,7 @@ import { boolFlag, numberFlag, parseArgs, stringFlag, UsageError, type ParsedArg
 import { effortFlag } from "../effort.ts";
 import { startUi } from "../ui.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
+import { PROJECT_WORKSPACE_FILE } from "../../core/paths.ts";
 import type { EffortLevel } from "../../core/schemas/stage.ts";
 import {
   ExpertNotFound, isRoleExpertOnDisk, isTrainingMode, lightModeRefusal, recomputeExperts,
@@ -127,9 +129,11 @@ function recompute(argv: readonly string[]): number {
  * `workspace.yml`. `disable` clears the switch and removes only the overlays. `status`
  * reports and always exits 0 — even when `.tldrx/workspace.yml` does not exist yet,
  * which is a THROW through `loadWorkspaceFile` rather than a `PacksOutcome`, so it is
- * caught here rather than left to read as a crash. `enable` with no detectable
- * language, or a `workspace.yml` too malformed to patch, is a usage error (exit 1);
- * never a stack trace on stderr either way.
+ * caught here rather than left to read as a crash. `disable` is idempotent the same
+ * way: no `workspace.yml` means "nothing to disable" (exit 0, named line), not a
+ * refusal. `enable` with no detectable language, or a `workspace.yml` too malformed to
+ * patch, is a usage error (exit 1); so is `disable` on a `workspace.yml` that EXISTS
+ * but is too broken to read. Never a stack trace on stderr either way.
  */
 async function packs(argv: readonly string[]): Promise<number> {
   const [action, ...rest] = argv;
@@ -161,7 +165,24 @@ async function packsEnable(workspaceDir: string): Promise<number> {
   return EXIT_FAILED;
 }
 
+/**
+ * `disable` is idempotent (review round 1, Critical): a MISSING `workspace.yml` means
+ * "nothing to disable", not a refusal — parallel to `status`. Checked BEFORE calling
+ * `disableStackPacks`, which would otherwise throw through the same `loadWorkspaceFile`
+ * `status` throws through, and land on the catch below as a false `error:`/exit 1. The
+ * check reuses `PROJECT_WORKSPACE_FILE` — the same constant `loadWorkspaceFile` resolves
+ * the path from (`core/paths.ts`) — rather than deriving the path a second time or
+ * string-matching the thrown message. A workspace.yml that EXISTS but is too broken to
+ * read (not a mapping, invalid YAML) still throws through `disableStackPacks` and is a
+ * real refusal: `error: <message>`, exit 1.
+ */
 async function packsDisable(workspaceDir: string): Promise<number> {
+  if (!existsSync(join(workspaceDir, PROJECT_WORKSPACE_FILE))) {
+    process.stdout.write(
+      `nothing to disable — no ${PROJECT_WORKSPACE_FILE} in ${workspaceDir} (run \`tldrx init\` first)\n`,
+    );
+    return EXIT_OK;
+  }
   let outcome: PacksOutcome;
   try {
     outcome = await disableStackPacks({ workspaceDir });

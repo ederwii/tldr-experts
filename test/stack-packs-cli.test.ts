@@ -3,10 +3,10 @@
  * the lines an operator reads, and `--help` as the authoritative surface.
  */
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
+import { FRAMEWORK_ROOT, PROJECT_FRAMEWORK_DIR, PROJECT_WORKSPACE_FILE } from "../src/core/paths.ts";
 import { EXIT_OK, EXIT_USAGE } from "../src/cli/exitCodes.ts";
 import { SpawnCommandRunner } from "../src/core/detect/index.ts";
 import { runInit, type InitOptions } from "../src/core/init/index.ts";
@@ -102,11 +102,38 @@ describe("enable with nothing detectable", () => {
   });
 });
 
-describe("status with no workspace.yml at all", () => {
-  test("still exits 0 and names the missing file", async () => {
+describe("with no workspace.yml at all", () => {
+  test("status still exits 0 and names the missing file", async () => {
     const scratch = mkdtempSync(join(tmpdir(), "tldrx-packs-cli-noworkspace-"));
     const run = await tldrx(scratch, "expert", "packs", "status", "--root", scratch);
     expect(run.code).toBe(EXIT_OK);
     expect(run.stdout).toContain("run `tldrx init` first");
+  });
+
+  // Review round 1 (Critical): `disable` is idempotent — no workspace.yml means nothing
+  // to disable, not a refusal, the same as `status`.
+  test("disable is a no-op: exits 0 and says there is nothing to disable", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "tldrx-packs-cli-noworkspace-"));
+    const run = await tldrx(scratch, "expert", "packs", "disable", "--root", scratch);
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).toContain("nothing to disable");
+    expect(run.stdout).toContain("run `tldrx init` first");
+    expect(run.stderr).toBe("");
+  });
+});
+
+describe("disable with a workspace.yml too broken to read", () => {
+  test("exits 1 and names the error — never a stack trace", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "tldrx-packs-cli-malformed-"));
+    mkdirSync(join(scratch, PROJECT_FRAMEWORK_DIR), { recursive: true });
+    // A bare scalar, not a mapping — `loadWorkspaceFile` throws "… is not a mapping"
+    // for exactly this, which is the distinguishing signal `packsDisable` reuses
+    // rather than string-matching "not found".
+    writeFileSync(join(scratch, PROJECT_WORKSPACE_FILE), "broken\n");
+    const run = await tldrx(scratch, "expert", "packs", "disable", "--root", scratch);
+    expect(run.code).toBe(EXIT_USAGE);
+    expect(run.stderr).toContain("error:");
+    expect(run.stderr).toContain("is not a mapping");
+    expect(run.stdout).toBe("");
   });
 });
