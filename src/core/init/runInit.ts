@@ -31,7 +31,7 @@ import { buildProcessDocument, PROCESS_HEADER } from "./processDocument.ts";
 import { gitUserName } from "./gitUserName.ts";
 import { QUESTIONS_FILE, planQuestions, renderQuestions, type Question } from "./questions.ts";
 import { seedExperts } from "./seedExperts.ts";
-import { applyStackPacks } from "./stackPacks.ts";
+import { applyStackPacks, describePacking } from "./stackPacks.ts";
 import { readStackPacks } from "../experts/stackPacks.ts";
 import { buildWorkspaceDocument, renderWorkspaceFile } from "./workspaceDocument.ts";
 import { formatIssues, validateProcessDocument, validateWorkspaceDocument } from "./validateEmitted.ts";
@@ -159,8 +159,10 @@ export async function runInit(options: InitOptions, deps: InitDependencies): Pro
   // language that appeared since the last init gets its pack body on its fresh stub.
   if (readStackPacks(out).enabled) {
     const packing = steps.begin("applying stack packs");
-    const report = await applyStackPacks({ workspaceDir: out, workspace, log });
-    packing.done(`${plural(report.applied, "pack body")} applied, ${plural(report.overlays, "overlay")} written`);
+    // `describePacking` and not two counts: a body this re-init did NOT replace because
+    // someone edited it, and a language no pack ships for, are invisible as numbers, and
+    // an operator who never sees them reads a kept body as a successful apply.
+    packing.done(describePacking(await applyStackPacks({ workspaceDir: out, workspace, log })));
   }
 
   const conventions = steps.begin("reading conventions");

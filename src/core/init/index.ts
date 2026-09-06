@@ -12,7 +12,7 @@ export { planExperts, MAX_DOMAIN_EXPERTS, PRODUCT_EXPERT, type ExpertPlan, type 
 export { STACK_CHOICES, normaliseStack, parseStackFlag } from "./stackChoices.ts";
 export { seedExperts, EXPERTS_DIR } from "./seedExperts.ts";
 export {
-  applyStackPacks, bodyState, describeRepos, disableStackPacks, enableStackPacks, packBodyText,
+  applyStackPacks, bodyState, describePacking, describeRepos, disableStackPacks, enableStackPacks, packBodyText,
   patchWorkspaceDocument, stackPacksStatus, stubBodyFor,
   type ApplyReport, type BodyState, type PacksOutcome,
 } from "./stackPacks.ts";

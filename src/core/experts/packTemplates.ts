@@ -60,11 +60,27 @@ export function packTemplateFiles(): readonly TemplateFile[] {
   return out;
 }
 
-/** First 12 hex of sha256 over `rel\n<text>\n` for every entry, in the given order. */
+/**
+ * First 12 hex of sha256 over `text` — the ONE way anything in the packs names bytes.
+ *
+ * Two callers, deliberately one function (AGENTS.md §7): `hashTemplates` names a whole
+ * shipment, and `init/stackPacks.ts` names the exact body it wrote into an `expert.md`
+ * (`pack_body:`), which is what lets a materialised body from an older shipment be told
+ * apart from one a human edited.
+ */
+export function hashText(text: string): string {
+  return createHash("sha256").update(text).digest("hex").slice(0, 12);
+}
+
+/**
+ * First 12 hex of sha256 over `rel\n<text>\n` for every entry, in the given order.
+ *
+ * Joining and hashing once is byte-identical to streaming one `update` per entry — the
+ * digest is over the concatenation either way — so this keeps the existing hash values
+ * while having exactly one place that says "sha256, first 12 hex".
+ */
 export function hashTemplates(entries: readonly { readonly rel: string; readonly text: string }[]): string {
-  const hash = createHash("sha256");
-  for (const entry of entries) hash.update(`${entry.rel}\n${entry.text}\n`);
-  return hash.digest("hex").slice(0, 12);
+  return hashText(entries.map((entry) => `${entry.rel}\n${entry.text}\n`).join(""));
 }
 
 export function templatesHash(): string {

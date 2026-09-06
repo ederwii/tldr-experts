@@ -32,8 +32,9 @@ import { expertDir, expertsDir, EXPERT_FILE } from "../experts/loadExperts.ts";
 import { splitFrontMatter } from "../experts/expertDocument.ts";
 import { parseList } from "../experts/expertDomain.ts";
 import { OVERLAYS_DIRNAME, readOverlayFiles } from "../experts/packSections.ts";
-import { readOverlayTemplate, readPackBody, templatesHash } from "../experts/packTemplates.ts";
+import { hashText, readOverlayTemplate, readPackBody, templatesHash } from "../experts/packTemplates.ts";
 import { readStackPacks } from "../experts/stackPacks.ts";
+import { plural } from "../map/plural.ts";
 import { PROJECT_WORKSPACE_FILE } from "../paths.ts";
 import { runtime } from "../runtime/index.ts";
 import { readYamlFile } from "../yaml.ts";
@@ -43,11 +44,13 @@ import { renderExpert } from "./renderExpert.ts";
 import { EXPERTS_DIR, seedExperts } from "./seedExperts.ts";
 import { formatIssues, validateWorkspaceDocument } from "./validateEmitted.ts";
 import { renderWorkspaceFile, type StackPacksDocument, type WorkspaceDocument } from "./workspaceDocument.ts";
-import { WriteLog } from "./writeFile.ts";
+import { endWithNewline, WriteLog } from "./writeFile.ts";
 
 export type BodyState =
   | { readonly kind: "stub" }
   | { readonly kind: "pack"; readonly hash: string }
+  /** Materialised, untouched, but from an EARLIER shipment: `was` is its hash, `hash` is today's. */
+  | { readonly kind: "stale"; readonly was: string; readonly hash: string }
   | { readonly kind: "edited"; readonly was: string | null };
 
 /** The body `init` would seed for this stack expert today — derived by calling the seeder, never re-typed. */
@@ -60,26 +63,70 @@ export function packBodyText(template: string): string {
   return `\n${template}`;
 }
 
+/** Exactly the bytes a materialised body has on disk — what `pack_body:` is the sha of. */
+function writtenBody(template: string): string {
+  // `WriteLog.overwrite` newline-terminates the whole file, and the body is its tail, so
+  // this is what will actually be there — hashing the un-terminated text would name bytes
+  // that never reach the disk for a template that happens not to end in a newline.
+  return endWithNewline(packBodyText(template));
+}
+
 /**
- * Which of the three states `expert.md` is in.
+ * Which of the four states `expert.md` is in.
+ *
+ * The front matter carries TWO facts, and keeping them separate is the whole point:
+ * `pack_body:` names the body's own bytes, `pack:` names the shipment they came from. So
+ * "a human edited this" (bytes differ) and "this is one release behind" (bytes match,
+ * shipment differs) are different answers instead of both reading as `edited` — which is
+ * what comparing against the current template alone did, and it made packs un-upgradeable
+ * the moment any template changed.
  *
  * An EMPTY body reads as `stub` on purpose: §4.2's remedy for an edited body is "delete
  * the body to re-seed", and that remedy only works if an empty body is re-seedable.
  */
 export function bodyState(expertMd: string, lang: PackLanguage): BodyState {
   const { frontMatter, body } = splitFrontMatter(expertMd);
+  const shipment = templatesHash();
+  const declaredBody = frontMatter.get("pack_body") ?? null;
+  const declaredPack = frontMatter.get("pack") ?? null;
+
+  if (declaredBody !== null && hashText(body) === declaredBody) {
+    const was = shipmentOf(declaredPack);
+    if (was === shipment) return { kind: "pack", hash: shipment };
+    return { kind: "stale", was: was ?? "unknown", hash: shipment };
+  }
+  // Tolerant read of a record written before `pack_body:` existed (AGENTS.md §7 — formats
+  // only grow): a body byte-identical to what ships TODAY is a current pack, and the next
+  // apply stamps the missing key onto it.
   const template = readPackBody(lang);
-  if (template !== null && body === packBodyText(template)) return { kind: "pack", hash: templatesHash() };
+  if (declaredBody === null && template !== null && body === writtenBody(template)) {
+    return { kind: "pack", hash: shipment };
+  }
+
   const name = frontMatter.get("name") ?? `${lang}-stack`;
   if (body.trim() === "" || body === stubBodyFor(name, parseList(frontMatter.get("repos") ?? ""))) return { kind: "stub" };
-  return { kind: "edited", was: frontMatter.get("pack") ?? null };
+  return { kind: "edited", was: declaredPack };
 }
 
-/** The front matter block (through its closing fence) with `pack: <lang>@<hash>` set or added. */
-function headWithPack(head: string, lang: PackLanguage, hash: string): string {
-  const line = `pack: ${lang}@${hash}`;
+/** `typescript@abc123def456` → `abc123def456`. Null in, null out — never a guessed hash. */
+function shipmentOf(pack: string | null): string | null {
+  if (pack === null) return null;
+  const at = pack.indexOf("@");
+  return at === -1 ? pack : pack.slice(at + 1);
+}
+
+/** The front matter block (through its closing fence) with `pack:` and `pack_body:` set or added. */
+function headWithPack(head: string, lang: PackLanguage, hash: string, bodyHash: string): string {
+  return withKey(withKey(head, "pack", `${lang}@${hash}`), "pack_body", bodyHash);
+}
+
+/** One `key: value` line, replaced where it already is or added just above the closing fence. */
+function withKey(head: string, key: string, value: string): string {
+  const line = `${key}: ${value}`;
   if (head === "") return `---\n${line}\n---\n`;
-  if (/^pack:.*$/m.test(head)) return head.replace(/^pack:.*$/m, line);
+  // Anchored to the whole line, so `pack:` never matches `pack_body:` and vice versa.
+  const existing = new RegExp(`^${key}:.*$`, "m");
+  if (existing.test(head)) return head.replace(existing, line);
   const close = head.lastIndexOf("\n---");
   return `${head.slice(0, close)}\n${line}${head.slice(close)}`;
 }
@@ -93,15 +140,42 @@ export interface ApplyInput {
 
 export interface ApplyReport {
   readonly lines: readonly string[];
+  /** Bodies written — a fresh stub materialised, or a stale one upgraded. */
   readonly applied: number;
   readonly overlays: number;
+  /** Experts whose edited body was left alone. Names, not a count: the operator has to act. */
   readonly kept: readonly string[];
+  /** Experts whose body was replaced with a newer shipment. */
+  readonly upgraded: readonly string[];
+  /** Detected languages no pack ships for. Named for the same reason `kept` is. */
+  readonly noPack: readonly string[];
+}
+
+/**
+ * The one line `tldrx init` prints for the packs.
+ *
+ * `kept` and `noPack` are NAMED here rather than counted, because they are the two
+ * outcomes an operator has to do something about, and a re-init that silently drops them
+ * leaves an edited body looking like a successful apply (found in review, round 1).
+ */
+export function describePacking(report: ApplyReport): string {
+  const parts = [
+    `${plural(report.applied, "pack body", "pack bodies")} applied`,
+    `${plural(report.overlays, "overlay")} written`,
+  ];
+  if (report.upgraded.length > 0) parts.push(`upgraded: ${report.upgraded.join(", ")}`);
+  if (report.kept.length > 0) {
+    parts.push(`kept: ${report.kept.join(", ")} — body edited, pack body not applied`);
+  }
+  if (report.noPack.length > 0) parts.push(`no pack ships for ${report.noPack.join(", ")}`);
+  return parts.join("; ");
 }
 
 /** Bodies first, then overlays, for every `<lang>-stack` the workspace's languages name. */
 export async function applyStackPacks(input: ApplyInput): Promise<ApplyReport> {
   const lines: string[] = [];
   const kept: string[] = [];
+  const upgraded: string[] = [];
   let applied = 0;
   const languages = PACK_LANGUAGES.filter((lang) =>
     input.workspace.repos.some((repo) => repo.languages.includes(lang)));
@@ -118,15 +192,24 @@ export async function applyStackPacks(input: ApplyInput): Promise<ApplyReport> {
     const state = bodyState(text, lang);
     const { body } = splitFrontMatter(text);
     const head = text.slice(0, text.length - body.length);
+    const fresh = writtenBody(template);
     switch (state.kind) {
       case "pack":
-        if (!head.includes(`pack: ${lang}@${hash}`)) {
-          await input.log.overwrite(path, rel, headWithPack(head, lang, hash) + body);
+        // Nothing to write unless the record predates `pack_body:` — then stamp it, so the
+        // next shipment can tell this untouched body from an edited one.
+        if (!head.includes(`pack: ${lang}@${hash}`) || !/^pack_body:/m.test(head)) {
+          await input.log.overwrite(path, rel, headWithPack(head, lang, hash, hashText(body)) + body);
         }
         lines.push(`${name}: pack already at pack@${hash}`);
         break;
+      case "stale":
+        await input.log.overwrite(path, rel, headWithPack(head, lang, hash, hashText(fresh)) + fresh);
+        lines.push(`upgraded: ${name} pack@${state.was} → pack@${hash}`);
+        upgraded.push(name);
+        applied += 1;
+        break;
       case "stub":
-        await input.log.overwrite(path, rel, headWithPack(head, lang, hash) + packBodyText(template));
+        await input.log.overwrite(path, rel, headWithPack(head, lang, hash, hashText(fresh)) + fresh);
         lines.push(`${name}: pack applied (pack@${hash})`);
         applied += 1;
         break;
@@ -143,7 +226,7 @@ export async function applyStackPacks(input: ApplyInput): Promise<ApplyReport> {
     .filter((lang) => !isPackLanguage(lang))
     .sort();
   for (const lang of noPack) lines.push(`no pack ships for ${lang}`);
-  return { lines, applied, overlays, kept };
+  return { lines, applied, overlays, kept, upgraded, noPack };
 }
 
 /** One detected overlay that no `<lang>-stack` expert could claim, and why not. */
@@ -236,6 +319,40 @@ export function patchWorkspaceDocument(
   return { document: { ...existing, repos, stack_packs: stackPacks }, unmatched };
 }
 
+/**
+ * The shape `validateWorkspaceDocument` PRESUMES but does not check — returned as a
+ * sentence naming the file and the missing key, or null when the file is usable.
+ *
+ * Every other caller of that validator hands it a `buildWorkspaceDocument` result, which
+ * cannot be missing a key. `enableStackPacks` is the only one that hands it a parsed FILE,
+ * so reaching its unguarded dereferences is THIS module's exposure and this module's job
+ * to refuse. Measured on a hand-edited fixture before this guard existed: a repo row with
+ * no `commands:` died at `validateEmitted.ts:49` with
+ * `TypeError: Object.entries requires that input parameter not be null or undefined`; no
+ * `path:` died at `:43` with `undefined is not an object (evaluating 'repo.path.includes')`;
+ * a non-list `repos:` died at `:35` with `doc.repos.forEach is not a function`.
+ * `loadWorkspaceFile` does not cover this — it skips malformed rows rather than rejecting
+ * them, so a file it accepts can still carry every one of those three shapes.
+ */
+function malformedWorkspace(doc: Record<string, unknown>): string | null {
+  const file = PROJECT_WORKSPACE_FILE;
+  if (!Array.isArray(doc.repos)) {
+    return `${file}: \`repos:\` is missing or is not a list — nothing to enable the packs against.`;
+  }
+  for (const [index, row] of (doc.repos as unknown[]).entries()) {
+    const at = `${file}: repos[${index}]`;
+    if (typeof row !== "object" || row === null || Array.isArray(row)) return `${at} is not a mapping.`;
+    const repo = row as Record<string, unknown>;
+    if (typeof repo.name !== "string") return `${at} has no \`name:\`.`;
+    const named = `${at} (${repo.name})`;
+    if (typeof repo.path !== "string") return `${named} has no \`path:\`.`;
+    if (typeof repo.commands !== "object" || repo.commands === null || Array.isArray(repo.commands)) {
+      return `${named} has no \`commands:\` mapping.`;
+    }
+  }
+  return null;
+}
+
 export interface PacksOutcome {
   /** False ⇒ the CLI exits 1 (usage family) and prints `lines` on stderr. */
   readonly ok: boolean;
@@ -278,9 +395,17 @@ export async function enableStackPacks(input: {
   }
   const path = join(input.workspaceDir, PROJECT_WORKSPACE_FILE);
   const existing = (await readYamlFile(path)) as Record<string, unknown>;
+  // Before anything is written, and before the validator is handed a hand-editable file.
+  const malformed = malformedWorkspace(existing);
+  if (malformed !== null) {
+    return {
+      ok: false,
+      lines: [malformed, `Fix it, or re-run \`tldrx init\` to regenerate ${PROJECT_WORKSPACE_FILE} from detection.`],
+    };
+  }
   const { document, unmatched } = patchWorkspaceDocument(existing, workspace, { enabled: true, enabled_at: input.now });
-  // The on-disk document already has every §2.1 field; the emitted-document validator
-  // projects `mode` onto the skeleton, so it is the right one for a patched raw file.
+  // The guard above has established every field this validator dereferences; it projects
+  // `mode` onto the skeleton, so it is the right one for a patched raw file.
   const validation = validateWorkspaceDocument(document as unknown as WorkspaceDocument);
   if (!validation.ok) throw new Error(formatIssues(PROJECT_WORKSPACE_FILE, validation));
   await runtime.writeText(path, renderWorkspaceFile(document));
@@ -338,7 +463,8 @@ export async function stackPacksStatus(input: { readonly workspaceDir: string })
 function describeBody(state: BodyState): string {
   switch (state.kind) {
     case "pack": return `pack@${state.hash}`;
+    case "stale": return `pack@${state.was} (stale — shipment is pack@${state.hash})`;
     case "stub": return "stub";
-    case "edited": return state.was === null ? "edited" : `edited (was pack@${state.was.split("@")[1] ?? state.was})`;
+    case "edited": return state.was === null ? "edited" : `edited (was pack@${shipmentOf(state.was) ?? state.was})`;
   }
 }

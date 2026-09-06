@@ -53,6 +53,6 @@ export {
 export type { OverlayFile, ComposedPack } from "./packSections.ts";
 export {
   PACK_TEMPLATES_DIR, OVERLAY_TEMPLATES_DIR, PACK_BODY_MAX_BYTES, OVERLAY_MAX_BYTES,
-  packBodyPath, overlayTemplatePath, readPackBody, readOverlayTemplate, packTemplateFiles, hashTemplates, templatesHash,
+  packBodyPath, overlayTemplatePath, readPackBody, readOverlayTemplate, packTemplateFiles, hashText, hashTemplates, templatesHash,
 } from "./packTemplates.ts";
 export type { TemplateFile } from "./packTemplates.ts";
