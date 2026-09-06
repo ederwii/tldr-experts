@@ -25,7 +25,7 @@ import { MIN_AGENT_USD, floorOverrun } from "../src/core/facilitator/executors/w
 import {
   MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE, developerPriceDivisor,
 } from "../src/core/facilitator/executors/build.ts";
-import { validateRunFile } from "../src/core/run/RunFile.ts";
+import { validateRunFile, type RunTask } from "../src/core/run/RunFile.ts";
 import { emitRunYaml } from "../src/core/run/emitRunYaml.ts";
 import { parseYaml } from "../src/core/yaml.ts";
 import { makeRunWorkspace, gatedScope, type TempRunWorkspace } from "./fixtures/tempRunWorkspace.ts";
@@ -203,6 +203,113 @@ describe("M7 · unmetered is not zero", () => {
     expect(text).toContain("cost_usd: 1.25");
     expect(text).not.toContain("metered:");
     expect(RunStore.open(store.runDir).run.budget.spent_usd).toBe(1.25);
+  });
+});
+
+describe("the provider's token split on a run.yml task row", () => {
+  /**
+   * The split is PARSED on every provider turn and used to reach the event log
+   * only, so `run.yml` — the file every cost report and every resumed run reads —
+   * could say what a turn cost in dollars and never what it cost in tokens. A
+   * dollar figure with no token figure beside it cannot be checked against a
+   * price table, which makes it an unfalsifiable bound.
+   */
+  const DEFAULT_TASK: RunTask = {
+    id: "t1", status: "done", expert: null, model: null,
+    cost_usd: 0.01, error: null, session_id: "s1",
+    started_at: "2026-08-29T09:00:00Z", ended_at: "2026-08-29T09:01:00Z",
+    outputs: [],
+  };
+
+  /**
+   * Replace the run's first task with `fn`'s result, seeding a default valid one
+   * first when the run has none yet (a freshly created run's stage starts with
+   * `tasks: []`) — same reach `withUnmetered` above uses, generalized with a
+   * transform instead of a fixed literal.
+   */
+  function mapFirstTask(store: RunStore, fn: (task: RunTask) => RunTask): void {
+    store.mutate((run) => ({
+      ...run,
+      phases: run.phases.map((phase, i) => i !== 0 ? phase : {
+        ...phase,
+        stages: phase.stages.map((stage, j) => j !== 0 ? stage : {
+          ...stage,
+          tasks: [fn(stage.tasks[0] ?? DEFAULT_TASK)],
+        }),
+      }),
+    }));
+  }
+
+  /**
+   * The same reach as `mapFirstTask`, but for a plain JSON doc rather than a
+   * `RunStore` — seeds a default task in place (mutating `doc`) when the run has
+   * none yet, and returns a reference the caller can corrupt a field on directly.
+   */
+  function firstTaskOf(doc: Record<string, unknown>): Record<string, unknown> | undefined {
+    const phases = doc.phases as Array<Record<string, unknown>> | undefined;
+    const stages = phases?.[0]?.stages as Array<Record<string, unknown>> | undefined;
+    const tasks = stages?.[0]?.tasks as Array<Record<string, unknown>> | undefined;
+    if (tasks === undefined) return undefined;
+    if (tasks.length === 0) {
+      const seeded = { ...DEFAULT_TASK } as unknown as Record<string, unknown>;
+      tasks.push(seeded);
+      return seeded;
+    }
+    return tasks[0];
+  }
+
+  test("round-trips through the emitter and the parser", () => {
+    const ws = workspace();
+    const store = newRun(ws.root);
+    mapFirstTask(store, (task) => ({ ...task, input_tokens: 184_203, output_tokens: 9_114 }));
+    store.save();
+
+    const text = readFileSync(join(store.runDir, "run.yml"), "utf8");
+    expect(text).toContain("input_tokens: 184203");
+    expect(text).toContain("output_tokens: 9114");
+
+    const reread = RunStore.open(store.runDir).run.phases[0]?.stages[0]?.tasks[0];
+    expect(reread?.input_tokens).toBe(184_203);
+    expect(reread?.output_tokens).toBe(9_114);
+  });
+
+  test("a run with no tasks yet says nothing about tokens either", () => {
+    const ws = workspace();
+    const store = newRun(ws.root);
+    store.save();
+    const text = readFileSync(join(store.runDir, "run.yml"), "utf8");
+    expect(text).not.toContain("input_tokens");
+    expect(text).not.toContain("output_tokens");
+  });
+
+  test("a TASK row without them is byte-identical to what it was, and still loads", () => {
+    const ws = workspace();
+    const store = newRun(ws.root);
+    // A real, already-recorded task row — same shape a run.yml written before
+    // this field existed would have — so the emitter actually runs `task()` on
+    // it rather than mapping an empty array. Without this, a mutation as blunt
+    // as writing `input_tokens: ${t.input_tokens ?? 0}` unconditionally would
+    // pass every test in this block (measured: it did, before this test existed).
+    mapFirstTask(store, (task) => task);
+    store.save();
+    const text = readFileSync(join(store.runDir, "run.yml"), "utf8");
+    // The keys are written only when there is something to write. Every run.yml
+    // produced before this field existed round-trips unchanged.
+    expect(text).not.toContain("input_tokens");
+    expect(text).not.toContain("output_tokens");
+    expect(RunStore.open(store.runDir).run.phases[0]?.stages[0]?.tasks[0]?.input_tokens)
+      .toBeUndefined();
+  });
+
+  test("a non-number is a schema error, so the field cannot hold prose", () => {
+    const ws = workspace();
+    const store = newRun(ws.root);
+    const doc = JSON.parse(JSON.stringify(store.run)) as Record<string, unknown>;
+    const task = firstTaskOf(doc);
+    if (task !== undefined) task.input_tokens = "lots";
+    const report = validateRunFile(doc);
+    expect(report.ok).toBe(false);
+    expect(report.issues.map((i) => i.message).join(" ")).toContain("expected a number >= 0");
   });
 });
 

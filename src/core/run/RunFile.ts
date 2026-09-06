@@ -192,6 +192,20 @@ export interface RunTask {
   /** Tokens the host declared with `--tokens`, when it knew them. */
   readonly tokens?: number;
   /**
+   * The PROVIDER's own token split for this turn, when a turn this process watched
+   * reported one (`AgentOutcome.usage`).
+   *
+   * ADDITIVE and optional, and deliberately NOT the same field as `tokens`: that
+   * one is what a HOST declared with `--tokens` for a turn nothing here metered.
+   * These two are a measurement, and they are what makes a dollar figure
+   * checkable against a price table instead of a number nobody can falsify.
+   * Absent on every row written before this existed and on every turn whose
+   * result document reported no usage at all — absent means "not recorded", never
+   * "zero".
+   */
+  readonly input_tokens?: number;
+  readonly output_tokens?: number;
+  /**
    * True when `--commit` recorded this row AHEAD of refusing on an unreadable
    * `questions.md` (spec's ledger-before-refusal rule, gh #124) — the ONLY
    * case where the same `result.json` is expected to come back through
@@ -665,6 +679,15 @@ export function validateRunFile(input: unknown): ValidationResult {
           }
           if (task.dedupe !== undefined && typeof task.dedupe !== "string") {
             issues.push({ path: `${tp}.dedupe`, message: "expected a string" });
+          }
+          // Additive: absence is fine, a wrong TYPE is not. A token count that is
+          // not a non-negative finite number is a record that cannot be arithmetic.
+          for (const key of ["input_tokens", "output_tokens"] as const) {
+            const value = task[key];
+            if (value === undefined) continue;
+            if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+              issues.push({ path: `${tp}.${key}`, message: "expected a number >= 0" });
+            }
           }
           if (typeof task.cost_usd === "number") spentFromTasks += task.cost_usd;
           checkOrder(task.started_at, task.ended_at, tp, issues);

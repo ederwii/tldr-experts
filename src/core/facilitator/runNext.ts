@@ -588,6 +588,7 @@ async function runStage(
     // unless a cap actually bit. "It ran out of reads" and "it crashed" are
     // different stories and the file has to be able to tell them apart.
     stopped_by: agent.stoppedBy,
+    ...tokenSplit(agent.usage.input_tokens, agent.usage.output_tokens),
   });
   store.append(event(options, store.runId, stageId, "agent.result", {
     phase: phaseId,
@@ -1183,6 +1184,7 @@ function recordExecutorTasks(
       started_at: options.at,
       ended_at: nowish(options),
       outputs: task.outputs,
+      ...tokenSplit(task.inputTokens, task.outputTokens),
     });
     store.append(event(options, store.runId, stageId, "agent.result", {
       phase: phaseId,
@@ -2281,6 +2283,27 @@ function phaseMoney(store: RunStore, phaseId: string): Money | null {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/**
+ * `input_tokens`/`output_tokens` for a run.yml task row — written together or
+ * not at all, and never an invented zero (a Task 2/3-class bug: `null` cost_usd
+ * written as `$0.00` was exactly this shape of lie).
+ *
+ * `AgentUsage` (and `ExecutorTask.inputTokens`/`outputTokens`, copied from it)
+ * already collapse "the provider's result document carried no usage object at
+ * all" into `{0, 0}` — `envelope.ts`'s `toUsage`/`EMPTY_USAGE` — the same shape
+ * a turn that genuinely moved zero tokens would have. There is no signal left
+ * at THIS layer to tell the two apart, so this treats "both zero" as "not
+ * reported": no real turn spends without reading its own prompt, so a
+ * genuinely-{0,0} turn is not a real case this loses.
+ */
+function tokenSplit(
+  inputTokens: number | undefined, outputTokens: number | undefined,
+): { input_tokens: number; output_tokens: number } | Record<string, never> {
+  if (inputTokens === undefined || outputTokens === undefined) return {};
+  if (inputTokens <= 0 && outputTokens <= 0) return {};
+  return { input_tokens: inputTokens, output_tokens: outputTokens };
 }
 
 function out(code: number, lines: readonly string[], stderr: readonly string[] = []): NextOutcome {

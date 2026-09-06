@@ -95,9 +95,14 @@ function task(t: RunTask, indent: string): string {
   const cost = t.cost_usd === null ? "null" : money(t.cost_usd);
   const metered = t.metered === false ? ", metered: false" : "";
   const tokens = t.tokens === undefined ? "" : `, tokens: ${String(t.tokens)}`;
+  // Written only when the turn reported them. A run.yml from before this field
+  // existed, and a turn whose result document carried no usage, are byte-identical
+  // to what they were.
+  const inTokens = t.input_tokens === undefined ? "" : `, input_tokens: ${String(t.input_tokens)}`;
+  const outTokens = t.output_tokens === undefined ? "" : `, output_tokens: ${String(t.output_tokens)}`;
   return [
     `${indent} - {id: ${yamlScalar(t.id)}, status: ${yamlScalar(t.status)}, expert: ${yamlScalar(t.expert)}, ` +
-      `model: ${yamlScalar(t.model)}, cost_usd: ${cost}${metered}${tokens},`,
+      `model: ${yamlScalar(t.model)}, cost_usd: ${cost}${metered}${tokens}${inTokens}${outTokens},`,
     `${inner}error: ${yamlScalar(t.error)}, session_id: ${yamlScalar(t.session_id)},`,
     `${inner}started_at: ${yamlScalar(t.started_at)}, ended_at: ${yamlScalar(t.ended_at)},`,
     // Written only when a limit stopped the attempt: every existing run.yml stays

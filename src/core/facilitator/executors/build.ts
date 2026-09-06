@@ -1979,6 +1979,8 @@ class BuildSession {
       error: agent.error,
       outputs: agent.envelope?.outputs ?? [],
       metered: agent.metered,
+      inputTokens: agent.usage.input_tokens,
+      outputTokens: agent.usage.output_tokens,
     });
     if (agent.ok) return { cost: round2(agent.costUsd), error: null };
 
@@ -2183,6 +2185,13 @@ class BuildSession {
   private formatRetry(
     story: StoryContext,
     review: Review,
+    // KNOWN LIMITATION: this narrows the reviewer's `AgentOutcome` before it
+    // reaches `this.tasks.push` (same as `recordReview` below), so a reviewer
+    // turn's `agent.usage` never becomes a run.yml row's `input_tokens` /
+    // `output_tokens` — only the developer and Watch paths carry the split.
+    // Widening this struct (and `recordReview`'s) to thread it through is a
+    // `build.ts` change of a different size than this field's own task; filed
+    // as a follow-up rather than done here (AGENTS.md §1, §12).
     task: {
       costUsd: number;
       sessionId: string | null;
@@ -2389,6 +2398,10 @@ class BuildSession {
   private recordReview(
     story: StoryContext,
     review: Review,
+    // KNOWN LIMITATION: same narrowing as `formatRetry`'s `task` param above —
+    // a reviewer turn's `agent.usage` (input/output token split) never reaches
+    // this struct, so it never reaches the run.yml row `this.tasks.push`
+    // writes below. See that comment; not restructured here (AGENTS.md §1, §12).
     task: {
       costUsd: number;
       sessionId: string | null;
