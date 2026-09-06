@@ -2398,10 +2398,7 @@ class BuildSession {
   private recordReview(
     story: StoryContext,
     review: Review,
-    // KNOWN LIMITATION: same narrowing as `formatRetry`'s `task` param above —
-    // a reviewer turn's `agent.usage` (input/output token split) never reaches
-    // this struct, so it never reaches the run.yml row `this.tasks.push`
-    // writes below. See that comment; not restructured here (AGENTS.md §1, §12).
+    // KNOWN LIMITATION: same narrowing as `formatRetry`'s `task` param — see that comment.
     task: {
       costUsd: number;
       sessionId: string | null;

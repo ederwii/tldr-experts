@@ -2292,18 +2292,23 @@ function round2(n: number): number {
  *
  * `AgentUsage` (and `ExecutorTask.inputTokens`/`outputTokens`, copied from it)
  * already collapse "the provider's result document carried no usage object at
- * all" into `{0, 0}` — `envelope.ts`'s `toUsage`/`EMPTY_USAGE` — the same shape
- * a turn that genuinely moved zero tokens would have. There is no signal left
- * at THIS layer to tell the two apart, so this treats "both zero" as "not
- * reported": no real turn spends without reading its own prompt, so a
- * genuinely-{0,0} turn is not a real case this loses.
+ * all" into `{0, 0}` via `envelope.ts`'s `toUsage`/`EMPTY_USAGE` — the same
+ * shape a turn that genuinely reported zero, or reported only ONE side of the
+ * split, would leave the other side at (`number()`'s own default, 0). There is
+ * no signal left at THIS layer to split "not reported" from "reported as 0" apart,
+ * so a HALF-known split (`{0, 56}`) is exactly as untrustworthy as a fully
+ * unknown one: writing the reported 56 next to an invented 0 would still be
+ * one manufactured number on the row. Requiring BOTH strictly positive is the
+ * only rule that never writes a number nothing measured — negative inputs
+ * (never legitimately produced, but not this function's job to assume that)
+ * are absent for the same reason.
  */
-function tokenSplit(
+export function tokenSplit(
   inputTokens: number | undefined, outputTokens: number | undefined,
 ): { input_tokens: number; output_tokens: number } | Record<string, never> {
   if (inputTokens === undefined || outputTokens === undefined) return {};
-  if (inputTokens <= 0 && outputTokens <= 0) return {};
-  return { input_tokens: inputTokens, output_tokens: outputTokens };
+  if (inputTokens > 0 && outputTokens > 0) return { input_tokens: inputTokens, output_tokens: outputTokens };
+  return {};
 }
 
 function out(code: number, lines: readonly string[], stderr: readonly string[] = []): NextOutcome {

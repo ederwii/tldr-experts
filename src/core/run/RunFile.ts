@@ -193,15 +193,23 @@ export interface RunTask {
   readonly tokens?: number;
   /**
    * The PROVIDER's own token split for this turn, when a turn this process watched
-   * reported one (`AgentOutcome.usage`).
+   * reported one (`AgentOutcome.usage`), and reported it as a POSITIVE number on
+   * both sides.
    *
    * ADDITIVE and optional, and deliberately NOT the same field as `tokens`: that
    * one is what a HOST declared with `--tokens` for a turn nothing here metered.
    * These two are a measurement, and they are what makes a dollar figure
    * checkable against a price table instead of a number nobody can falsify.
+   *
    * Absent on every row written before this existed and on every turn whose
-   * result document reported no usage at all — absent means "not recorded", never
-   * "zero".
+   * result document reported no usage at all — but the parse that produces
+   * `AgentOutcome.usage` (`envelope.ts`'s `toUsage`/`EMPTY_USAGE`) collapses "no
+   * usage object at all" and "usage reported as exactly 0" into the identical
+   * shape, so this layer cannot tell those two apart, and a HALF-reported split
+   * (one side a real number, the other defaulted by the parse) is exactly as
+   * unverifiable as a fully-absent one. Absent therefore means "no POSITIVE
+   * split reached the ledger" — an honest absence covering all three of those
+   * cases, never an invented number standing in for any of them.
    */
   readonly input_tokens?: number;
   readonly output_tokens?: number;

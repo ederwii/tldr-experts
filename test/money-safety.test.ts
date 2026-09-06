@@ -25,6 +25,7 @@ import { MIN_AGENT_USD, floorOverrun } from "../src/core/facilitator/executors/w
 import {
   MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE, developerPriceDivisor,
 } from "../src/core/facilitator/executors/build.ts";
+import { tokenSplit } from "../src/core/facilitator/runNext.ts";
 import { validateRunFile, type RunTask } from "../src/core/run/RunFile.ts";
 import { emitRunYaml } from "../src/core/run/emitRunYaml.ts";
 import { parseYaml } from "../src/core/yaml.ts";
@@ -203,6 +204,42 @@ describe("M7 · unmetered is not zero", () => {
     expect(text).toContain("cost_usd: 1.25");
     expect(text).not.toContain("metered:");
     expect(RunStore.open(store.runDir).run.budget.spent_usd).toBe(1.25);
+  });
+});
+
+describe("tokenSplit — both-or-nothing, and never an invented number", () => {
+  /**
+   * `AgentUsage`'s parse collapses "no usage object at all" and "usage reported
+   * as exactly 0" into the identical `{0, 0}` shape (`envelope.ts`'s
+   * `toUsage`/`EMPTY_USAGE`), so this layer cannot tell those two apart — and a
+   * HALF-reported split (`{0, 56}`) hands the same problem to just one side: the
+   * 56 might be real, but the 0 next to it is `number()`'s default, not a
+   * measurement. Requiring BOTH strictly positive is the only rule under which
+   * every number this writes is one the provider actually reported.
+   */
+  test("a fully-unreported split ({0, 0}) is absent", () => {
+    expect(tokenSplit(0, 0)).toEqual({});
+  });
+
+  test("a half-reported split ({0, N}) is absent — the 0 would be invented", () => {
+    expect(tokenSplit(0, 56)).toEqual({});
+    expect(tokenSplit(56, 0)).toEqual({});
+  });
+
+  test("a fully-reported split ({N, M}, both positive) writes both together", () => {
+    expect(tokenSplit(12, 56)).toEqual({ input_tokens: 12, output_tokens: 56 });
+  });
+
+  test("a negative on either side is absent, never clamped into a schema error", () => {
+    expect(tokenSplit(-1, 56)).toEqual({});
+    expect(tokenSplit(12, -1)).toEqual({});
+    expect(tokenSplit(-1, -1)).toEqual({});
+  });
+
+  test("either side missing is absent", () => {
+    expect(tokenSplit(undefined, 56)).toEqual({});
+    expect(tokenSplit(12, undefined)).toEqual({});
+    expect(tokenSplit(undefined, undefined)).toEqual({});
   });
 });
 
