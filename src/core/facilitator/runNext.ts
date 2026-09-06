@@ -662,7 +662,10 @@ function bundleSummary(set: ExpertBundleSet): PendingStage["experts"] {
     name: expert.name,
     reason: expert.reason,
     ...(expert.match === undefined ? {} : { match: expert.match }),
-    expert_md_bytes: expert.bodyBytes,
+    // `expert_md_bytes` stays `expert.md`'s own bytes, never the composed one — a
+    // stack expert's overlay bytes are a SEPARATE additive key (AGENTS.md §7).
+    expert_md_bytes: expert.expertMdBytes,
+    ...(expert.overlays.length === 0 ? {} : { overlays: expert.overlays, overlay_bytes: expert.overlayBytes }),
     knowledge_bytes: expert.knowledgeBytes,
     knowledge_files: expert.files.map((file) => file.path),
     truncated: expert.truncated,

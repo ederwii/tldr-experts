@@ -37,11 +37,43 @@ export interface ExpertBundle {
   readonly match?: string;
   /** Bytes of the shared knowledge budget this expert was given. */
   readonly knowledgeAllowance: number;
-  /** `expert.md`, verbatim. */
+  /**
+   * `expert.md`, verbatim — or, for a `kind: stack` expert with stack packs on, that
+   * body composed with its inlined overlays (see `overlays`/`notInlined`). Every
+   * renderer prints this one field, which is what makes composing here reach all of
+   * them without a change of their own.
+   */
   readonly body: string;
+  /** Bytes of `body` — `expertMdBytes + overlayBytes`, always. */
   readonly bodyBytes: number;
+  /**
+   * `expert.md`'s own bytes on disk, before any pack composition. UNAFFECTED by
+   * the stack-packs switch — this is the number `pending.json`'s `expert_md_bytes`
+   * must keep meaning (AGENTS.md §7: a `version: 1` field never changes meaning).
+   */
+  readonly expertMdBytes: number;
+  /**
+   * Bytes `body` carries beyond `expert.md` itself: inlined overlays plus
+   * composition overhead. `0` when packs are off, the expert isn't `kind: stack`,
+   * or nothing was inlined.
+   */
+  readonly overlayBytes: number;
   /** Overlay ids inlined into `body` (stack packs, switch on and `kind: stack` only). Empty otherwise. */
   readonly overlays: readonly string[];
+  /**
+   * Overlay ids the 24 KiB pack cap left OUT of `body` whole (never cut) — named so
+   * an operator sees what did not fit instead of a bundle that quietly said less
+   * than the repo declared. Empty when packs are off or nothing was left out.
+   */
+  readonly notInlined: readonly string[];
+  /**
+   * True only when the pack cap cut the BODY ITSELF (`ComposedPack.truncated`,
+   * `packSections.ts`) — the defensive case that only matters for a body larger
+   * than the whole 24 KiB cap. Distinct from `truncated` below, which is about
+   * KNOWLEDGE only; overloading one flag for two different cuts would make a real
+   * knowledge truncation and a body truncation indistinguishable to a caller.
+   */
+  readonly packBodyTruncated: boolean;
   /** The rendered star chart + knowledge block, appended after the body. `""` when empty. */
   readonly knowledge: string;
   /** Bytes of knowledge-FILE content inlined (not the framing prose). */
@@ -120,6 +152,7 @@ export function loadExpertBundles(input: LoadBundlesInput): ExpertBundleSet {
     const path = join(expertDir(input.root, chosen.name), EXPERT_FILE);
     if (!existsSync(path)) continue;
     const raw = readFileSync(path, "utf8");
+    const expertMdBytes = byteLength(raw);
     // Packs live inside the stack expert (design decision 5): with the switch on, a
     // `kind: stack` body carries its overlays, and every renderer that prints `body`
     // — stage prompts, the developer — gets them without a change of its own.
@@ -127,6 +160,7 @@ export function loadExpertBundles(input: LoadBundlesInput): ExpertBundleSet {
       ? composePackBody(raw, readOverlayFiles(expertDir(input.root, chosen.name)))
       : null;
     const body = composed === null ? raw : composed.text;
+    const bodyBytes = byteLength(body);
     const record = loadExpert(input.root, chosen.name);
     const allowance = (shares[index] ?? 0) + carry;
     const knowledge = loadExpertKnowledge({
@@ -142,8 +176,12 @@ export function loadExpertBundles(input: LoadBundlesInput): ExpertBundleSet {
       ...(chosen.match === undefined ? {} : { match: chosen.match }),
       knowledgeAllowance: allowance,
       body,
-      bodyBytes: byteLength(body),
+      bodyBytes,
+      expertMdBytes,
+      overlayBytes: composed === null ? 0 : bodyBytes - expertMdBytes,
       overlays: composed === null ? [] : composed.inlined,
+      notInlined: composed === null ? [] : composed.notInlined,
+      packBodyTruncated: composed !== null && composed.truncated,
       knowledge: knowledge.text,
       knowledgeBytes: knowledge.inlinedBytes,
       files: knowledge.files,
@@ -188,9 +226,13 @@ export function describeBundles(set: ExpertBundleSet): readonly string[] {
         ? "no knowledge"
         : `knowledge ${bytes(expert.knowledgeBytes)} of ${bytes(expert.knowledgeAllowance)}`
           + ` over ${plural(expert.files.length, "area")}`;
+    const notInlinedNote = expert.notInlined.length === 0
+      ? ""
+      : `, ${plural(expert.notInlined.length, "overlay")} not inlined: ${expert.notInlined.join(", ")}`;
+    const packTruncatedNote = expert.packBodyTruncated ? ", pack body truncated" : "";
     lines.push(
       `expert ${expert.name} (${expert.reason}${expert.match === undefined ? "" : `: ${expert.match}`})`
-      + ` — expert.md ${bytes(expert.bodyBytes)}${expert.overlays.length === 0 ? "" : ` (overlays: ${expert.overlays.join(", ")})`}, ${files}${expert.truncated ? ", truncated" : ""}`,
+      + ` — expert.md ${bytes(expert.bodyBytes)}${expert.overlays.length === 0 ? "" : ` (overlays: ${expert.overlays.join(", ")})`}, ${files}${expert.truncated ? ", truncated" : ""}${notInlinedNote}${packTruncatedNote}`,
     );
   }
   for (const name of set.missing) {

@@ -4,11 +4,13 @@
  * reaches stage prompts and the Build developer. With the switch off, bytes are today's.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describeBundles, loadExpertBundles } from "../src/core/experts/expertBundle.ts";
-import { CHECKS_HEADING, DEFAULTS_HEADING, overlayMarker, OVERLAYS_DIRNAME } from "../src/core/experts/packSections.ts";
+import {
+  CHECKS_HEADING, DEFAULTS_HEADING, overlayMarker, OVERLAYS_DIRNAME, PACK_MAX_BYTES,
+} from "../src/core/experts/packSections.ts";
 import { renderParts, buildPrompt } from "../src/core/facilitator/prompt.ts";
 import { buildDeveloperPrompt } from "../src/core/build/prompts.ts";
 import type { PlannedEpic, PlannedStory } from "../src/core/build/plan.ts";
@@ -65,6 +67,11 @@ function bundlesOf(root: string) {
   return loadExpertBundles({ root, staged: [], repos: ["lab"], stackExperts: true, stackNames: ["typescript-stack"] });
 }
 
+/** Where `packRoot` put the raw `expert.md` — the exact bytes an unaffected bundle must match. */
+function expertMdPathOf(root: string): string {
+  return join(root, ".tldrx", "experts", "typescript-stack", "expert.md");
+}
+
 const EPIC: PlannedEpic = {
   epic: { version: 1, id: "E1", title: "Tenancy", repos: ["lab"], stories: ["S5"], branch: "epic/tenancy", status: "todo" },
   text: "# E1\n", path: "/nowhere/E1.md", rel: "03-plan/epics/E1.md",
@@ -112,13 +119,63 @@ describe("loadExpertBundles with the switch on", () => {
 });
 
 describe("loadExpertBundles with the switch off or absent", () => {
-  test("overlay files on disk are NOT inlined — bodies render as today", () => {
-    for (const enabled of [false, null]) {
-      const root = packRoot({ enabled, overlays: ["react"] });
-      const set = bundlesOf(root);
-      expect(set.experts[0]?.body).not.toContain(overlayMarker("react"));
-      expect(set.experts[0]?.overlays).toEqual([]);
-      expect(describeBundles(set).join("\n")).not.toContain("overlays:");
-    }
+  test("switch explicitly false: body is byte-identical to expert.md on disk", () => {
+    const root = packRoot({ enabled: false, overlays: ["react"] });
+    const set = bundlesOf(root);
+    expect(set.experts[0]?.body).toBe(readFileSync(expertMdPathOf(root), "utf8"));
+    expect(set.experts[0]?.overlays).toEqual([]);
+    expect(describeBundles(set).join("\n")).not.toContain("overlays:");
+  });
+
+  test("no stack_packs block at all: body is byte-identical to expert.md on disk", () => {
+    const root = packRoot({ enabled: null, overlays: ["react"] });
+    const set = bundlesOf(root);
+    expect(set.experts[0]?.body).toBe(readFileSync(expertMdPathOf(root), "utf8"));
+    expect(set.experts[0]?.overlays).toEqual([]);
+    expect(describeBundles(set).join("\n")).not.toContain("overlays:");
+  });
+});
+
+describe("loadExpertBundles when the 24 KiB cap drops an overlay", () => {
+  test("overlays the cap leaves out are named on the operator line, not silently dropped", () => {
+    const root = packRoot({ enabled: true, overlays: ["aaa-big", "zzz-small"] });
+    // Sorted order puts `aaa-big` first; make it alone bigger than the whole cap so
+    // BOTH it and everything sorted after it are left out (composePackBody's ATOMIC
+    // rule: the first overlay that doesn't fit, and every later one, is left whole).
+    const bigOverlayPath = join(root, ".tldrx", "experts", "typescript-stack", OVERLAYS_DIRNAME, "aaa-big.md");
+    writeFileSync(bigOverlayPath, "#".repeat(PACK_MAX_BYTES + 100), "utf8");
+
+    const set = bundlesOf(root);
+    const expert = set.experts[0];
+    expect(expert?.overlays).toEqual([]);
+    expect(expert?.notInlined).toEqual(["aaa-big", "zzz-small"]);
+    expect(expert?.body).not.toContain(overlayMarker("aaa-big"));
+    expect(expert?.body).not.toContain(overlayMarker("zzz-small"));
+
+    const line = describeBundles(set).join("\n");
+    expect(line).toContain("2 overlays not inlined: aaa-big, zzz-small");
+  });
+
+  test("a body the pack cap itself had to cut is also named on the operator line", () => {
+    const root = packRoot({ enabled: true, overlays: [] });
+    // A body over PACK_MAX_BYTES, with an H2 boundary inside the limit so
+    // `truncateAtHeading` has somewhere valid to cut — the defensive case
+    // `packSections.ts` documents as "only matters ... far smaller than [24 KiB]",
+    // reproduced here by making the body itself the oversized thing.
+    const hugeExpertMd = [
+      "---", "name: typescript-stack", "kind: stack", "status: created", "repos: [lab]", "---", "",
+      "# TypeScript", "", `## ${DEFAULTS_HEADING}`, "", "x".repeat(20000), "",
+      `## ${CHECKS_HEADING}`, "", "y".repeat(20000), "",
+    ].join("\n");
+    writeFileSync(expertMdPathOf(root), hugeExpertMd, "utf8");
+
+    const set = bundlesOf(root);
+    const expert = set.experts[0];
+    expect(expert?.packBodyTruncated).toBe(true);
+    // Knowledge truncation is a DIFFERENT flag — this body cut must not set it.
+    expect(expert?.truncated).toBe(false);
+
+    const line = describeBundles(set).join("\n");
+    expect(line).toContain("pack body truncated");
   });
 });
