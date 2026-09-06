@@ -11,6 +11,8 @@ export type {
 } from "./git.ts";
 export { loadBuildPlan, inOrder, PlanLoadError } from "./plan.ts";
 export type { BuildPlan, BuildWave, PlannedStory, PlannedEpic } from "./plan.ts";
+export { commandHash, PREFLIGHT_RED_TTL_MS } from "./preflight.ts";
+export type { BaseFreshness } from "./preflight.ts";
 export { updateStoryFront, applyPlanPatch, evidenceFor, quote, StoryWriteError } from "./storyFile.ts";
 export {
   loadImplicitPlan, implicitPlanContent, renderImplicitPlan, describeImplicitPlan, updateImplicitPlan,

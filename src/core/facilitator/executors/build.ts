@@ -68,7 +68,7 @@ import {
   removeWorktree, repoDirOf, shaOf, shaReachability, stateDirPrefixes,
 } from "../../build/git.ts";
 import {
-  BaseGateFailure, baseRefusalLines, baseResultFor, EMPTY_PREFLIGHT, loadPreflight, PREFLIGHT_REL,
+  BaseGateFailure, baseRefusalLines, baseResultFor, commandHash, EMPTY_PREFLIGHT, loadPreflight, PREFLIGHT_REL,
   savePreflight, withResult, type BaseCommandResult, type BasePreflight,
 } from "../../build/preflight.ts";
 import {
@@ -2978,7 +2978,12 @@ class BuildSession {
     }
     const baseRef = this.workspace.defaultBranches.get(repo) ?? FALLBACK_DEFAULT_BRANCH;
     const baseSha = await shaOf(repoDir, baseRef);
-    const cached = baseResultFor(this.basePreflight(), repo, command, baseSha);
+    const hash = commandHash(command, [...this.workspace.commands]);
+    const cached = baseResultFor(this.basePreflight(), repo, command, baseSha, {
+      commandHash: hash,
+      at: this.ctx.at,
+      prepare: this.ctx.mode === "prepare",
+    });
     if (cached !== null) return cached;
 
     const timeoutMs = this.ctx.spec.planned.timeout_s * 1000;
@@ -2988,7 +2993,7 @@ class BuildSession {
       const exitCode = outcome.timedOut ? 124 : outcome.exitCode;
       measured = {
         repo, command, baseRef, baseSha, exitCode, timedOut: outcome.timedOut, tail: outcome.tail,
-        status: exitCode === 0 && !outcome.timedOut ? "ok" : "failed",
+        status: exitCode === 0 && !outcome.timedOut ? "ok" : "failed", commandHash: hash,
       };
     } catch (error) {
       if (!(error instanceof DodCommandRefused)) throw error;
@@ -2997,7 +3002,7 @@ class BuildSession {
       // second, differently-worded veto.
       measured = {
         repo, command, baseRef, baseSha, exitCode: 126, timedOut: false,
-        tail: error.message, status: "unmeasured",
+        tail: error.message, status: "unmeasured", commandHash: hash,
       };
     }
     await this.writes.run(() => this.rememberBase(measured));
