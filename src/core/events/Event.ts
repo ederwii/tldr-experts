@@ -175,6 +175,42 @@ export function validateEvent(input: unknown): ValidationResult {
   return result(issues);
 }
 
+/**
+ * Fit a payload inside the §2.9 cap by NAMING what was left out, not by raising it.
+ *
+ * One field overflows in practice and it is always the same one: a reviewer's
+ * verdict prose, copied into `check.passed`/`check.failed` as `detail`. Until now
+ * `EventLog.append` threw on it, which turned "this verdict was wordy" into "this
+ * invocation loses every task row it had earned".
+ *
+ * So the prose is replaced by a sentence that says how big it was, what the cap is,
+ * and where the full text lives — it is already on disk, written by the executor's
+ * own log — and the rest of the payload, including the VERDICT, survives intact. A
+ * payload that is oversized for any other reason is returned untouched and the
+ * append still refuses it: this function knows how to name exactly one absence, and
+ * trimming a field it does not understand would be the framework editing its own
+ * record.
+ *
+ * Identity is the contract for the ordinary case: an in-cap payload comes back as
+ * the SAME object, so every event this framework has ever written is byte-identical.
+ */
+export function capPayload(
+  payload: Readonly<Record<string, unknown>>,
+  pointer: string | null = null,
+): Readonly<Record<string, unknown>> {
+  const size = Buffer.byteLength(JSON.stringify(payload), "utf8");
+  if (size <= MAX_PAYLOAD_BYTES) return payload;
+  if (typeof payload.detail !== "string") return payload;
+  const { detail: _dropped, ...rest } = payload;
+  const where = pointer === null || pointer === ""
+    ? "the full text is on disk in the stage's own artefacts, not in this event"
+    : `full text in ${pointer}`;
+  return {
+    ...rest,
+    detail_omitted: `${String(size)} bytes exceeds the ${String(MAX_PAYLOAD_BYTES)}-byte cap — ${where}`,
+  };
+}
+
 /** Serialize with the seven keys in spec order — the file is diffed by humans. */
 export function serializeEvent(event: TldrxEvent): string {
   return JSON.stringify({

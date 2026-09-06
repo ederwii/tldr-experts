@@ -36,7 +36,8 @@ import { raiseCommand, shortBy } from "../budget/budgetView.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../hooks/lib/workspace.ts";
 import { closeRun, describeOpenQuestions, describeStateCommit } from "../run/closeRun.ts";
-import type { TldrxEvent } from "../events/Event.ts";
+import { capPayload, type TldrxEvent } from "../events/Event.ts";
+import { BUILD_PHASE, LOG_DIR } from "../build/plan.ts";
 import { setProgressCeiling, setProgressReadCap, setProgressTitle } from "../ui/bus.ts";
 import { acquireLock, releaseLock } from "./Lock.ts";
 import { onInterrupt, stopInFlightRun } from "./interrupt.ts";
@@ -1081,11 +1082,47 @@ async function runExecutor(
     tokens: options.tokens ?? null,
     agentCap: (share = 1) => agentCap(options, store, stage, share),
     emit: (type, payload, costUsd = 0, actor = null) => {
-      store.append(event(options, store.runId, stageId, type, payload, costUsd, actor));
+      // The cap is honoured HERE, at the one seam every executor event goes
+      // through, so no executor has to know about it and none can be killed by it.
+      // The pointer is composed only from keys the payload already carries; with
+      // either one missing the sentence says the text is elsewhere rather than
+      // naming a file that may not exist.
+      const story = typeof payload.story === "string" ? payload.story : null;
+      const pointer = story === null ? null : `${BUILD_PHASE}/${LOG_DIR}/${story}.md`;
+      store.append(event(options, store.runId, stageId, type, capPayload(payload, pointer), costUsd, actor));
     },
   };
 
-  const outcome = await executor(executorCtx);
+  let outcome: ExecutorOutcome;
+  try {
+    outcome = await executor(executorCtx);
+  } catch (error) {
+    // A throw out of an executor used to escape past everything below: the stage
+    // stayed `running` in a file nobody saved, and whatever the executor had
+    // already put on disk — an epic merge, a story marked done — stood with no
+    // record of what it cost.
+    //
+    // What CAN be recovered here is recovered: the stage is failed by name, the
+    // throw is recorded as an `error` event, and the store is saved. What cannot
+    // is said out loud rather than guessed at — `ExecutorOutcome.tasks` only
+    // exists at RETURN, so a turn the executor completed before the throw has no
+    // row here, and the message says so instead of inventing a count or implying
+    // the ledger is whole.
+    const why = error instanceof Error ? error.message : String(error);
+    // `oneLine` bounds this well under the §2.9 cap: an error thrown FOR being
+    // oversized (a giant reviewer verdict, say) must not turn into a second,
+    // unrecoverable throw right here by carrying that same size into `message`.
+    store.append(event(options, store.runId, stageId, "error", {
+      phase: phaseId,
+      where: "executor",
+      message: oneLine(why, 1000),
+      tasks_recorded: false,
+    }, 0));
+    store.save();
+    return failStage(store, options, phaseId, stageId,
+      `the executor threw before returning its task rows — this invocation's turn costs are not in run.yml: ${why}`,
+      notes);
+  }
 
   // The handshake called by the wrong end, and nothing else wrong (gh #82). Its
   // door is HERE, before anything is recorded or saved, because the property it
