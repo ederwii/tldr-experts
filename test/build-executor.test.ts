@@ -2528,11 +2528,18 @@ describe("stack packs reach the Build reviewer (stack packs design §4.5)", () =
     process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
     process.env.FAKE_BUILD_ARGV_LOG = argvLog;
     const outcome = await next(ws);
-    expect(outcome.lines.join("\n")).toContain("warning: project skill scratch is untracked");
+    // The repo is in the line because the path is repo-relative (fix round 1, ruled in).
+    expect(outcome.lines.join("\n")).toContain(
+      "warning: project skill scratch in app is untracked (.claude/skills/scratch/SKILL.md)");
     const developer = readFileSync(join(promptDir, "developer-S1-1.md"), "utf8");
     expect(developer).toContain("## Project skills");
-    expect(developer).toContain("- impeccable — Use when designing a page");
-    expect(developer).toContain("- scratch — Not committed (untracked: not present in story worktrees)");
+    expect(developer).toContain(
+      "- impeccable — Use when designing a page — `.claude/skills/impeccable/SKILL.md`");
+    expect(developer).toContain(
+      "- scratch — Not committed — `.claude/skills/scratch/SKILL.md` (untracked: not present in story worktrees)");
+    // Provider-neutral: the developer is pointed at a file, not at one provider's tool.
+    expect(developer).toContain("READ that file at the path shown");
+    expect(developer).not.toContain("Skill tool");
     const calls = readFileSync(argvLog, "utf8").trim().split("\n").map((l) => JSON.parse(l) as string[]);
     const devAllowance = calls[0]?.[calls[0].indexOf("--allowedTools") + 1] ?? "";
     expect(devAllowance.split(",")).toContain("Skill");

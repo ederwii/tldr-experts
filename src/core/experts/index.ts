@@ -46,9 +46,9 @@ export {
 } from "./sharedCitations.ts";
 export {
   readStackPacks, renderProjectSkills, skillsFor, untrackedSkillWarnings,
-  NO_STACK_PACKS, PROJECT_SKILLS_HEADING,
+  NO_STACK_PACKS, PROJECT_SKILLS_HEADING, SKILL_DESCRIPTION_MAX_CHARS,
 } from "./stackPacks.ts";
-export type { StackPacksState, RepoPacks } from "./stackPacks.ts";
+export type { StackPacksState, RepoPacks, RepoSkill } from "./stackPacks.ts";
 export {
   DEFAULTS_HEADING, CHECKS_HEADING, OVERRIDDEN_BY, VERIFY_HINT, OVERLAYS_DIRNAME, PACK_MAX_BYTES,
   composePackBody, checksOf, overlayMarker, readOverlayFiles, stackChecks,
