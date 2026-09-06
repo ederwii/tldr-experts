@@ -152,7 +152,7 @@ export function readOverlayFiles(expertDirAbs: string): readonly OverlayFile[] {
 /**
  * The `## Checks` of every active pack for `repos` — body first, then each overlay —
  * or null when the switch is off or nothing has checks. This ONE helper feeds the
- * reviewer prompt and `tldrx expert packs status`; it never returns Defaults.
+ * reviewer prompt; it never returns Defaults.
  */
 export function stackChecks(root: string, repos: readonly string[]): string | null {
   if (!readStackPacks(root).enabled) return null;

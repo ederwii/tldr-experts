@@ -435,7 +435,11 @@ export async function disableStackPacks(input: { readonly workspaceDir: string }
     await rm(dir, { recursive: true, force: true });
     lines.push(`  removed ${EXPERTS_DIR}/${lang}-stack/${OVERLAYS_DIRNAME}/ (regenerable by \`tldrx expert packs enable\`)`);
   }
-  lines.push("  bodies and knowledge/ untouched");
+  // Said explicitly, not left implied (fix round 2, ruled): a body `enable` already
+  // materialised into `expert.md` is NOT rolled back by `disable` — only `overlays/` and
+  // the switch go away — so "untouched" alone would read as "this takes it all back."
+  lines.push(
+    "  bodies and knowledge/ untouched (a pack body already applied stays in expert.md — delete it, then `enable`, to remove it)");
   return { ok: true, lines };
 }
 

@@ -45,7 +45,14 @@ export interface TemplateFile {
   readonly abs: string;
 }
 
-/** Every shipped `.md` under the pack templates dir, sorted by `rel`. Missing dir ⇒ empty. */
+/**
+ * Every shipped `.md` under the pack templates dir: top-level bodies (`typescript.md`, …)
+ * sorted among themselves, THEN `overlays/*.md` sorted among themselves — not one sort
+ * over the whole list by `rel` (that would interleave `overlays/react.md` ahead of a
+ * later top-level body). Missing dir ⇒ empty. Left as-is on purpose: this order is the
+ * shipment-hash input (`hashTemplates`/`templatesHash`), and re-sorting it would change
+ * every `pack: <lang>@<hash>` this ships for no benefit.
+ */
 export function packTemplateFiles(): readonly TemplateFile[] {
   const out: TemplateFile[] = [];
   if (!existsSync(PACK_TEMPLATES_DIR)) return out;

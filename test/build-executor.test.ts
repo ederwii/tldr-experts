@@ -2533,10 +2533,13 @@ describe("stack packs reach the Build reviewer (stack packs design §4.5)", () =
       "warning: project skill scratch in app is untracked (.claude/skills/scratch/SKILL.md)");
     const developer = readFileSync(join(promptDir, "developer-S1-1.md"), "utf8");
     expect(developer).toContain("## Project skills");
+    // The row carries the repo too (fix round 2, Important) — same reason as the
+    // untracked warning above: the path is repo-relative, and a multi-repo run's stage
+    // passes every repo, so the bare path alone does not say which checkout to open.
     expect(developer).toContain(
-      "- impeccable — Use when designing a page — `.claude/skills/impeccable/SKILL.md`");
+      "- impeccable — Use when designing a page — `app/.claude/skills/impeccable/SKILL.md`");
     expect(developer).toContain(
-      "- scratch — Not committed — `.claude/skills/scratch/SKILL.md` (untracked: not present in story worktrees)");
+      "- scratch — Not committed — `app/.claude/skills/scratch/SKILL.md` (untracked: not present in story worktrees)");
     // Provider-neutral: the developer is pointed at a file, not at one provider's tool.
     expect(developer).toContain("READ that file at the path shown");
     expect(developer).not.toContain("Skill tool");

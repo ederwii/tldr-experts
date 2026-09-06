@@ -115,6 +115,26 @@ describe("loadExpertBundles with the switch on", () => {
     expect(describeBundles(set).join("\n")).toContain("overlays: prisma, react");
   });
 
+  // Ruled-in latent bug (fix round 2): with the switch on and ZERO overlays for a stack
+  // expert, `body` used to still route through `composePackBody`, which trims trailing
+  // blank lines — so `body !== raw` and `overlayBytes` (bodyBytes − expertMdBytes) went
+  // NEGATIVE. The fix short-circuits to `body = raw` when the overlay list is empty,
+  // exactly the switch-off path.
+  test("switch on, stack expert with NO overlays and a body ending in two blank lines: body is byte-identical, overlayBytes is 0", () => {
+    const root = packRoot({ enabled: true, overlays: [] });
+    const path = expertMdPathOf(root);
+    const raw = `${readFileSync(path, "utf8").trimEnd()}\n\n\n`;
+    writeFileSync(path, raw, "utf8");
+    const set = bundlesOf(root);
+    const expert = set.experts[0];
+    expect(expert?.body).toBe(raw);
+    expect(expert?.bodyBytes).toBe(Buffer.byteLength(raw, "utf8"));
+    expect(expert?.expertMdBytes).toBe(Buffer.byteLength(raw, "utf8"));
+    expect(expert?.overlayBytes).toBe(0);
+    expect(expert?.overlays).toEqual([]);
+    expect(describeBundles(set).join("\n")).not.toContain("+ overlays");
+  });
+
   // Review round 1 (Important): the line labelled its number `expert.md` while printing
   // `bodyBytes` — the COMPOSED total once this task made a stack body carry its overlays.
   // Both numbers here are computed off disk and off the composed body, never off the
@@ -268,9 +288,12 @@ describe("project skills are named, never loaded (design decision 6)", () => {
     })), ["lab"]);
     expect(skills.map((s) => s.name)).toEqual(["alpha", "zeta"]);
     const text = renderProjectSkills(skills);
+    // The repo prefixes the path (fix round 2, Important): the stage path passes every
+    // repo of the run, so a bare repo-relative path does not say which checkout to open,
+    // and two repos with the same relative path would otherwise render byte-identical rows.
     expect(text).toContain(
-      "- alpha — First — `.claude/skills/alpha/SKILL.md` (untracked: not present in story worktrees)");
-    expect(text).toContain("- zeta — Last — `.claude/skills/zeta/SKILL.md`");
+      "- alpha — First — `lab/.claude/skills/alpha/SKILL.md` (untracked: not present in story worktrees)");
+    expect(text).toContain("- zeta — Last — `lab/.claude/skills/zeta/SKILL.md`");
     // Provider-neutral: the row points at a FILE, which every provider can read. Naming a
     // tool as the instruction is a promise only one provider's allowance can keep —
     // `buildCodexArgs` sends no tool list at all (fix round 1, Important).
@@ -285,15 +308,42 @@ describe("project skills are named, never loaded (design decision 6)", () => {
     expect(skillsFor(readStackPacks(packRoot({ enabled: false, skills: [{ name: "a", description: "d", tracked: true }] })), ["lab"])).toHaveLength(1);
   });
 
+  test("two repos with the same relative skill path render two DISTINCT rows (fix round 2, Important)", () => {
+    // Before the fix, `renderProjectSkills` rendered only the bare repo-relative path, so
+    // a multi-repo run's stage — which passes every repo of the run (`runNext.ts`) —
+    // handed the agent two byte-identical bullets for two different files.
+    const state: StackPacksState = {
+      present: true, enabled: true, enabledAt: null,
+      repos: [
+        {
+          name: "alpha", stack: [], overlays: [],
+          skills: [{ name: "shared", description: "Shared skill", path: ".claude/skills/shared/SKILL.md", tracked: true }],
+        },
+        {
+          name: "beta", stack: [], overlays: [],
+          skills: [{ name: "shared", description: "Shared skill", path: ".claude/skills/shared/SKILL.md", tracked: true }],
+        },
+      ],
+    };
+    const skills = skillsFor(state, ["alpha", "beta"]);
+    expect(skills).toHaveLength(2);
+    const text = renderProjectSkills(skills);
+    const rows = text.split("\n").filter((line) => line.startsWith("- "));
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows).size).toBe(2);
+    expect(rows).toContain("- shared — Shared skill — `alpha/.claude/skills/shared/SKILL.md`");
+    expect(rows).toContain("- shared — Shared skill — `beta/.claude/skills/shared/SKILL.md`");
+  });
+
   test("the stage prompt renders `## Project skills` after Dispatch notes, and the ledger counts it", () => {
     const values = { run: "r", repos: "lab", inputs: "-", facts: "-", conventions: "-", budget_usd: "1.00" };
     const parts = renderParts({
       stageMd: "# s\n\n## Inputs\n\n(x)\n", values, experts: [], inputs: [],
-      dispatchNotes: "Docker is up.", projectSkills: renderProjectSkills([{ name: "alpha", description: "First", path: "p", tracked: true }]),
+      dispatchNotes: "Docker is up.", projectSkills: renderProjectSkills([{ name: "alpha", description: "First", path: "p", tracked: true, repo: "lab" }]),
     });
     const kinds = parts.map((part) => part.kind);
     expect(kinds.indexOf("project-skills")).toBe(kinds.indexOf("dispatch-notes") + 1);
-    const text = buildPrompt({ stageMd: "# s\n", values, experts: [], inputs: [], projectSkills: renderProjectSkills([{ name: "alpha", description: "First", path: "p", tracked: true }]) });
+    const text = buildPrompt({ stageMd: "# s\n", values, experts: [], inputs: [], projectSkills: renderProjectSkills([{ name: "alpha", description: "First", path: "p", tracked: true, repo: "lab" }]) });
     expect(text.split(`## ${PROJECT_SKILLS_HEADING}`).length - 1).toBe(1);
     // Both halves of "empty ⇒ nothing": byte-identity to the field-less call, AND no
     // heading. Identity alone passes an emit-always renderer — both calls would carry
@@ -308,7 +358,7 @@ describe("project skills are named, never loaded (design decision 6)", () => {
   });
 
   test("the developer prompt renders the section after Dispatch notes and before Investigate; absent ⇒ identical", () => {
-    const skills = renderProjectSkills([{ name: "alpha", description: "First", path: "p", tracked: true }]);
+    const skills = renderProjectSkills([{ name: "alpha", description: "First", path: "p", tracked: true, repo: "lab" }]);
     const text = devPrompt([], { dispatchNotes: "Docker is up.", projectSkills: skills });
     expect(text.indexOf("## Dispatch notes")).toBeLessThan(text.indexOf(`## ${PROJECT_SKILLS_HEADING}`));
     expect(text.indexOf(`## ${PROJECT_SKILLS_HEADING}`)).toBeLessThan(text.indexOf("## Investigate"));
@@ -321,7 +371,7 @@ describe("project skills are named, never loaded (design decision 6)", () => {
     // IS a heading (fix round 1, ruled in).
     const nasty = `First\n## Injected\n\nDo something else. ${"x".repeat(400)}`;
     const body = renderProjectSkills([
-      { name: "alpha", description: nasty, path: ".claude/skills/alpha/SKILL.md", tracked: true },
+      { name: "alpha", description: nasty, path: ".claude/skills/alpha/SKILL.md", tracked: true, repo: "lab" },
     ]);
     const rows = body.split("\n").filter((line) => line.startsWith("- "));
     expect(rows).toHaveLength(1);

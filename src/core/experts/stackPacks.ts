@@ -141,8 +141,14 @@ function oneLine(value: string, maxChars?: number): string {
  *
  * `[unverified]` Whether an agent CLI's print mode actually denies a `Skill` call that is
  * not in `--allowedTools` has not been measured here. The framework's job is the list.
+ *
+ * The row carries the REPO too, not just the path (fix round 2, Important): `path` is
+ * repo-relative, and the stage passes every repo of the run, so a bare path does not say
+ * which checkout to open in a multi-repo run — and two repos with the same relative path
+ * would otherwise render two byte-identical bullets. `untrackedSkillWarnings` names the
+ * repo for the same reason; this is the other caller that needed it.
  */
-export function renderProjectSkills(skills: readonly DetectedSkill[]): string {
+export function renderProjectSkills(skills: readonly RepoSkill[]): string {
   if (skills.length === 0) return "";
   return [
     "Skills installed in this project. Each row names a skill and the path to its `SKILL.md`.",
@@ -154,7 +160,7 @@ export function renderProjectSkills(skills: readonly DetectedSkill[]): string {
     ...skills.map((skill) => {
       const description = oneLine(skill.description, SKILL_DESCRIPTION_MAX_CHARS);
       return `- ${oneLine(skill.name)} — ${description === "" ? "(no description)" : description}`
-        + ` — \`${oneLine(skill.path)}\``
+        + ` — \`${oneLine(skill.repo)}/${oneLine(skill.path)}\``
         + (skill.tracked ? "" : " (untracked: not present in story worktrees)");
     }),
   ].join("\n");

@@ -156,10 +156,20 @@ export function loadExpertBundles(input: LoadBundlesInput): ExpertBundleSet {
     // Packs live inside the stack expert (design decision 5): with the switch on, a
     // `kind: stack` body carries its overlays, and every renderer that prints `body`
     // — stage prompts, the developer — gets them without a change of its own.
-    const composed = packs.enabled && splitFrontMatter(raw).frontMatter.get("kind") === "stack"
-      ? composePackBody(raw, readOverlayFiles(expertDir(input.root, chosen.name)))
-      : null;
-    const body = composed === null ? raw : composed.text;
+    const isStackExpert = packs.enabled && splitFrontMatter(raw).frontMatter.get("kind") === "stack";
+    const overlayFiles = isStackExpert ? readOverlayFiles(expertDir(input.root, chosen.name)) : [];
+    const composed = isStackExpert ? composePackBody(raw, overlayFiles) : null;
+    // Short-circuit on zero overlays with nothing to cut (ruled-in latent bug, fix round
+    // 2): `composePackBody` always trims the body's trailing blank lines to one, even
+    // with nothing to append — so a stack expert with no overlays, routed through it
+    // anyway, got `body !== raw` and could send `overlayBytes` (`bodyBytes -
+    // expertMdBytes`) negative. `composed.truncated` is kept as the escape hatch: a body
+    // alone over the pack cap must still go through `truncateAtHeading` (the defensive
+    // case `packSections.ts` documents), which is the one case zero overlays still needs
+    // `composed.text` instead of `raw`.
+    const body = composed === null || (overlayFiles.length === 0 && !composed.truncated)
+      ? raw
+      : composed.text;
     const bodyBytes = byteLength(body);
     const record = loadExpert(input.root, chosen.name);
     const allowance = (shares[index] ?? 0) + carry;

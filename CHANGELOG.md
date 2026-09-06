@@ -45,7 +45,11 @@
   turn that was never shown a stack expert is never graded against Checks it was never briefed
   on. `workspace.yml` gains `stack_packs` and `repos[].overlays` (each with its evidence string)
   — additive, `version: 1` unchanged, and read back on every re-init so a regenerate never
-  silently turns the switch off. Switch off is today's bytes, byte for byte.
+  silently turns the switch off. For a workspace that never threw the switch, this is today's
+  bytes, byte for byte. Once `enable` has run, `disable` stops the overlays and the reviewer's
+  Checks, but a pack body already materialised into `expert.md` stays there until you delete
+  it — `disable` removes only `overlays/`, by design (fix round 2, ruled) — and `enable` re-seeds
+  a body it finds missing or still an untouched stub.
 - **Project skills are named to the developer, independent of the packs switch.** A repo's own
   `.claude/skills/*/SKILL.md` files are detected into `repos[].skills` and rendered under
   `## Project skills` in every stage prompt and the Build developer's — name, description, and

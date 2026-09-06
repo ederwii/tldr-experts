@@ -179,7 +179,11 @@ describe("single repo: enable → status → disable", () => {
     const bodyBefore = readFileSync(expertPath(fixture.root, "typescript-stack"), "utf8");
     const outcome = await disableStackPacks({ workspaceDir: fixture.root });
     expect(outcome.ok).toBe(true);
-    expect(outcome.lines.join("\n")).toContain("bodies and knowledge/ untouched");
+    // A body already applied by `enable` is NOT rolled back — only `overlays/` and the
+    // switch go away — so the line says so rather than letting "untouched" alone read as
+    // "disable takes it all back" (fix round 2, ruled).
+    expect(outcome.lines.join("\n")).toContain(
+      "bodies and knowledge/ untouched (a pack body already applied stays in expert.md — delete it, then `enable`, to remove it)");
     expect(existsSync(join(fixture.root, ".tldrx", "experts", "typescript-stack", OVERLAYS_DIRNAME))).toBe(false);
     expect(readFileSync(expertPath(fixture.root, "typescript-stack"), "utf8")).toBe(bodyBefore);
     expect(readFileSync(competencies, "utf8")).toBe(competenciesBefore);

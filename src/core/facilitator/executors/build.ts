@@ -2332,9 +2332,9 @@ class BuildSession {
       // both doors, which is what keeps the bundle's prompt byte-identical to the
       // one a spawn would have sent.
       fixlistAvailable: this.fixlistRoundsSpent(story.planned.story.id) < MAX_FIXLIST_ROUNDS,
-      // The active packs' checks for this story's repo (stack packs design §4.5): the
-      // same helper `expert packs status` prints, so the reviewer and the operator read
-      // one list. Null when the packs switch is off, which renders nothing.
+      // The active packs' checks for this story's repo (stack packs design §4.5), fed
+      // straight into the reviewer's prompt. Null when the packs switch is off, which
+      // renders nothing.
       //
       // Gated on `spec.stackExperts` too (issue review, fix round 1): the developer's
       // OWN pack content is gated on that same stage-yaml switch two calls down, via
