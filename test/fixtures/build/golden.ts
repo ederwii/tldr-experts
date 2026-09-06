@@ -3,9 +3,8 @@
  *
  * Wave 2 cuts a 4,351-line file into modules and claims it changed nothing. That
  * claim is only worth what proves it, and the existing suite proves PROPERTIES —
- * this proves BYTES. Two fake-agent builds over the same one-story plan produce
- * ten artifacts that are compared, byte for byte, against files committed under
- * `golden/`:
+ * this proves BYTES. THREE fake-agent builds produce eighteen artifacts that are
+ * compared, byte for byte, against files committed under `golden/`:
  *
  *   HEADLESS (`tldrx next`) — the path that spawns both sub-agents:
  *     1. the developer prompt the SPAWNED developer was handed
@@ -21,6 +20,19 @@
  *     8. the ordered event stream
  *     9. `run.yml`'s task rows (the HOST-declared developer turn, `session_id: null`)
  *    10. the two exit codes
+ *
+ *   ROUNDS (`GOLDEN_ROUNDS`, headless) — the two UNHAPPY paths, which the
+ *   all-green captures above pin nothing about:
+ *    11-15. five spawned prompts — S1's two developer turns (the second carrying
+ *           `## Previous attempt`), S1's two reviewer turns, and S2's one
+ *    16. the ordered event stream: a `changes` verdict, a `story.base_fastforwarded`,
+ *        a second `task.started` at `attempt: 2`, and a developer that errored
+ *    17. five task rows, one of them `status: "failed"` with the error verbatim
+ *    18. the exit code
+ *
+ * Why a third scenario: every path tasks 4 and 5 move was covered by an existing
+ * pin EXCEPT `blockedByFailedDeveloper`. `GOLDEN_ROUNDS` is that path, beside the
+ * second review round that `ReviewCounters` exists to bound.
  *
  * Both cycles are needed and neither is redundant. Measured at e48f4a0: a
  * `--prepare` spawns NOTHING and a `--commit` spawns only the reviewer, so the
@@ -48,20 +60,23 @@
  * | Artifact | Normalised | Why |
  * |---|---|---|
  * | prompts | the workspace root → `<ROOT>` (and its `realpath`, since macOS's `/var/folders` is a symlink to `/private/var/folders`) | `mkdtempSync(join(tmpdir(), "tldrx-build-"))` (`workspace.ts:122`) — a fresh temp dir per invocation. Both are EXACT strings read from the machine, long and unique, so nothing incidental can match. |
- * | events | the workspace root, plus the epic/story branch shas | `task.done`'s `commit` is the story branch's tip, abbreviated by git; commit timestamps move it every run. |
- * | task rows | the workspace root, plus `"ended_at": "<TS>"` | `ended_at` is the wall clock at the moment the row was written. `started_at` is NOT normalised — measured, it is `options.at` verbatim, so it is a real assertion. |
+ * | events | the workspace root, plus every commit sha → `<SHA>` | Git shas move with commit timestamps every run. |
+ * | task rows | the workspace root, every commit sha, plus `"ended_at": "<TS>"` | `ended_at` is the wall clock at the moment the row was written. `started_at` is NOT normalised — measured, it is `options.at` verbatim, so it is a real assertion. |
  *
- * The sha normaliser is deliberately narrow, because a blunt "replace any 7-char
- * hex prefix" pass over 400 lines of prose is a normalisation that could hide a
- * real byte change:
- *   - a payload value that is a WHOLE string of >= 7 chars and is a prefix of the
- *     epic or story sha becomes `<SHA:epic>` / `<SHA:story>` — this is what
- *     catches `"commit": "200819e"`;
+ * The sha normaliser is narrow in the sense that matters — every replacement is
+ * VERIFIED against the machine before it happens, never inferred from a pattern:
+ *   - a payload value that is a WHOLE string of 7-40 hex characters AND is a
+ *     prefix of a sha `git rev-list --all` reports in the fixture repo becomes
+ *     `<SHA>`. A hex-looking value that is not a commit in that repo stays raw;
  *   - the full 40-char sha is replaced as a substring anywhere, because a
  *     40-char hex string cannot occur innocently.
- * Any other hex — including `main`'s sha, which measured does not appear in any
- * artifact — is left raw. If a refactor ever puts one somewhere new, the golden
- * goes RED, which is the answer we want.
+ * Prose is untouchable by construction: the short rule only ever compares WHOLE
+ * string values, so it cannot reach inside a sentence.
+ *
+ * It reads the whole commit list and not the branch tips because of a bug the
+ * `GOLDEN_ROUNDS` capture found: attempt 1's `task.done.commit` is a commit the
+ * story branch has already moved past by capture time, so a tips-only normaliser
+ * wrote a RAW sha into the golden. See `machineOf`.
  *
  * NOT normalised, on purpose, each one a live assertion:
  *   - the run id. `createRun` derives it as `yymmdd(now)-slug` (`newRun.ts`) and
@@ -72,6 +87,9 @@
  *   - the session ids. The fake emits `fake-developer-S1` / `fake-reviewer-S1`
  *     deterministically (`fakeClaude.ts:105`), and `null` for the host turn — it
  *     is a real assertion that the right role produced the row.
+ *   - the per-agent ceilings, including the one inside the failed developer's
+ *     error text (`Reached maximum budget ($1.60)`), which pins the cap
+ *     arithmetic task 2 moves.
  *   - `started_at`, costs, token counts, `max_budget_usd`, verdicts, exit codes.
  *   - an event's `ts`, which is not rendered at all rather than blanked: it is
  *     the wall clock, and `validateEvent` already refuses an event without one.
@@ -100,6 +118,37 @@ export const GOLDEN_STORY: BuildWorkspaceOptions = {
   stories: [{ id: "S1", epic: "E1", title: "First story" }],
   epics: [{ id: "E1", stories: ["S1"], branch: "epic/e1" }],
   waves: [["S1"]],
+};
+
+/**
+ * Two stories in ONE wave, and the two unhappy paths the wave's later steps move.
+ *
+ * `GOLDEN_STORY` is all-green, so on its own it pins nothing about a second
+ * review round or a developer that never ran — and those are exactly the
+ * clusters tasks 4 (`worktrees`/`branchClaims`) and 5 (`reviewBundle`/
+ * `reviewRound`) cut apart. Driven with:
+ *
+ *   FAKE_BUILD_VERDICTS = {"S1": ["changes", "approve"]}   S1 is sent back once,
+ *     then signed off — two developer turns, two reviewer turns, and the
+ *     `## Previous attempt` block that `renderPreviousAttempt` builds.
+ *   FAKE_BUILD_FAIL      = "developer:S2"                  S2's developer dies
+ *     having written nothing, which is the `blockedByFailedDeveloper` /
+ *     `parkDeveloperFailure` path: a TRANSPORT failure, not a story that could
+ *     not be built, so the attempt is not consumed.
+ */
+export const GOLDEN_ROUNDS: BuildWorkspaceOptions = {
+  stories: [
+    { id: "S1", epic: "E1", title: "First story" },
+    { id: "S2", epic: "E1", title: "Second story" },
+  ],
+  epics: [{ id: "E1", stories: ["S1", "S2"], branch: "epic/e1" }],
+  waves: [["S1", "S2"]],
+};
+
+/** The fake-agent scripting `GOLDEN_ROUNDS` needs. Set by `captureRoundsBuild`. */
+export const GOLDEN_ROUNDS_ENV: Readonly<Record<string, string>> = {
+  FAKE_BUILD_VERDICTS: JSON.stringify({ S1: ["changes", "approve"] }),
+  FAKE_BUILD_FAIL: "developer:S2",
 };
 
 /**
@@ -145,6 +194,33 @@ export const INSESSION_GOLDEN: Readonly<Record<keyof CapturedInSession, string>>
   reviewerPrompt: "insession-reviewer-prompt.md",
   events: "insession-events.txt",
   runTasks: "insession-run-tasks.txt",
+};
+
+/**
+ * What one headless `tldrx next` over `GOLDEN_ROUNDS` produced. Five prompts:
+ * both of S1's developer turns, both of its reviewer turns, and S2's one
+ * developer turn — the one that died.
+ */
+export type CapturedRounds = {
+  readonly developerS1Round1: string;
+  readonly developerS1Round2: string;
+  readonly reviewerS1Round1: string;
+  readonly reviewerS1Round2: string;
+  readonly developerS2: string;
+  readonly events: string;
+  readonly runTasks: string;
+  readonly exitCodes: string;
+};
+
+export const ROUNDS_GOLDEN: Readonly<Record<keyof CapturedRounds, string>> = {
+  exitCodes: "rounds-exit-codes.txt",
+  developerS1Round1: "rounds-developer-S1-1.md",
+  developerS1Round2: "rounds-developer-S1-2.md",
+  reviewerS1Round1: "rounds-reviewer-S1-1.md",
+  reviewerS1Round2: "rounds-reviewer-S1-2.md",
+  developerS2: "rounds-developer-S2-1.md",
+  events: "rounds-events.txt",
+  runTasks: "rounds-run-tasks.txt",
 };
 
 /**
@@ -200,6 +276,37 @@ export async function captureInSessionBuild(
   };
 }
 
+/**
+ * One headless `tldrx next` over `GOLDEN_ROUNDS`: S1 sent back once and then
+ * approved, S2's developer dying with nothing written.
+ *
+ * The fake-agent scripting is set here rather than in the test because it IS the
+ * scenario — `GOLDEN_ROUNDS` without `GOLDEN_ROUNDS_ENV` is a different capture
+ * entirely. The test clears both keys in its `afterEach`.
+ */
+export async function captureRoundsBuild(
+  ws: BuildWorkspace,
+  promptDir: string,
+): Promise<CapturedRounds> {
+  for (const [key, value] of Object.entries(GOLDEN_ROUNDS_ENV)) process.env[key] = value;
+
+  const headless = await next(ws, { mode: "headless" });
+  const machine = machineOf(ws);
+  const prompt = (name: string): string =>
+    scrubPaths(readFileSync(join(promptDir, name), "utf8"), machine);
+
+  return {
+    developerS1Round1: prompt("developer-S1-1.md"),
+    developerS1Round2: prompt("developer-S1-2.md"),
+    reviewerS1Round1: prompt("reviewer-S1-1.md"),
+    reviewerS1Round2: prompt("reviewer-S1-2.md"),
+    developerS2: prompt("developer-S2-1.md"),
+    events: eventStream(ws, machine),
+    runTasks: taskRows(ws, machine),
+    exitCodes: `headless ${String(headless.code)}\n`,
+  };
+}
+
 /** Read a committed golden, or the empty string when it has not been generated yet. */
 export function readGolden(name: string): string {
   const path = join(GOLDEN_DIR, name);
@@ -223,21 +330,43 @@ export function writeGolden(name: string, content: string): void {
 interface Machine {
   /** The workspace root, and its realpath when the two differ (macOS `/var` → `/private/var`). */
   readonly roots: readonly string[];
-  /** Branch tips, longest sha first so a prefix pass can never shadow a full one. */
-  readonly shas: readonly { readonly name: string; readonly sha: string }[];
+  /** EVERY commit the fixture repo holds — see `machineOf`. */
+  readonly shas: readonly string[];
 }
 
+/**
+ * The workspace root and EVERY commit sha the fixture repo holds.
+ *
+ * The first version resolved two refs — the epic tip and the story tip — and
+ * replaced values that were a prefix of one of them. That was wrong, and the
+ * two-story capture proved it: `task.done`'s `commit` for attempt 1 is the
+ * commit that attempt made, and by capture time the story branch has moved on to
+ * attempt 2, so attempt 1's sha is a tip no longer. It went into the golden RAW
+ * (`"commit":"05ed8c5"`) and would have moved on the next run. A normaliser that
+ * only knows where the branches ENDED cannot see the history they walked.
+ *
+ * So: `git rev-list --all` in the fixture repo, once, and a value is normalised
+ * when it is a >= 7-character prefix of a sha that repo actually contains. Every
+ * replacement is still an EXACT string VERIFIED against the machine — stronger
+ * than a hex pattern, which would eventually eat a word — and it can no longer
+ * miss a commit just because nothing points at it any more.
+ *
+ * One marker, `<SHA>`, for all of them. The earlier `<SHA:epic>` / `<SHA:story>`
+ * naming read as more information than it carried: attempt 2's story commit IS
+ * the epic tip after a fast-forward merge, so it rendered as `<SHA:epic>` while
+ * being the story's commit. A label that can be wrong in a guard is worse than
+ * no label.
+ */
 function machineOf(ws: BuildWorkspace): Machine {
   const roots = [ws.root];
   const real = realpathOrNull(ws.root);
   if (real !== null && real !== ws.root) roots.push(real);
-  const shas = [
-    { name: "epic", sha: rev(ws.repoDir, "epic/e1") },
-    { name: "story", sha: rev(ws.repoDir, `story/${ws.runId}/S1`) },
-  ].filter((entry) => entry.sha !== "");
   // Longest first: `roots` may hold `/var/…` and `/private/var/…` for the same
   // directory, and replacing the SHORT one first would leave `/private<ROOT>`.
-  return { roots: [...roots].sort((a, b) => b.length - a.length), shas };
+  return {
+    roots: [...roots].sort((a, b) => b.length - a.length),
+    shas: revList(ws.repoDir),
+  };
 }
 
 /** The one normalisation a prompt gets: the temp workspace root, by exact string. */
@@ -252,15 +381,36 @@ function scrubPaths(text: string, machine: Machine): string {
  * full 40-char sha embedded anywhere. Nothing else — see the header.
  */
 function scrubShaValue(value: string, machine: Machine): string {
-  for (const { name, sha } of machine.shas) {
-    if (value.length >= 7 && sha.startsWith(value)) return `<SHA:${name}>`;
+  if (value.length < 7 || value.length > 40 || !/^[0-9a-f]+$/.test(value)) return value;
+  return machine.shas.some((sha) => sha.startsWith(value)) ? "<SHA>" : value;
+}
+
+/**
+ * `scrubShaValue`, but reaching every string ANYWHERE in a payload — inside
+ * arrays, inside nested objects, at any depth.
+ *
+ * The first version only reached top-level strings, which was enough for the
+ * payloads that exist today (measured) and would have gone quietly wrong the
+ * first time a later task moved a sha into `conflicts: [...]` or a nested
+ * `merge: {...}`. A guard whose normalisation depends on the shape not changing
+ * is a guard that flakes exactly when the wave gets interesting.
+ */
+function scrubDeep(value: unknown, machine: Machine): unknown {
+  if (typeof value === "string") return scrubShaValue(value, machine);
+  if (Array.isArray(value)) return value.map((item) => scrubDeep(item, machine));
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = scrubDeep(nested, machine);
+    }
+    return out;
   }
   return value;
 }
 
 function scrubFullShas(text: string, machine: Machine): string {
   let out = text;
-  for (const { name, sha } of machine.shas) out = out.split(sha).join(`<SHA:${name}>`);
+  for (const sha of machine.shas) out = out.split(sha).join("<SHA>");
   return out;
 }
 
@@ -294,10 +444,7 @@ function eventStream(ws: BuildWorkspace, machine: Machine): string {
     const payload = event.payload ?? {};
     const keys = Object.keys(payload).sort();
     const scrubbed: Record<string, unknown> = {};
-    for (const key of keys) {
-      const value = payload[key];
-      scrubbed[key] = typeof value === "string" ? scrubShaValue(value, machine) : value;
-    }
+    for (const key of keys) scrubbed[key] = scrubDeep(payload[key], machine);
     return [
       `#${String(index).padStart(2, "0")}`,
       event.type,
@@ -320,10 +467,7 @@ function taskRows(ws: BuildWorkspace, machine: Machine): string {
       for (const task of stage.tasks) {
         const source = task as unknown as Record<string, unknown>;
         const sorted: Record<string, unknown> = {};
-        for (const key of Object.keys(source).sort()) {
-          const value = source[key];
-          sorted[key] = typeof value === "string" ? scrubShaValue(value, machine) : value;
-        }
+        for (const key of Object.keys(source).sort()) sorted[key] = scrubDeep(source[key], machine);
         rows.push(JSON.stringify(sorted));
       }
     }
@@ -336,11 +480,15 @@ function taskRows(ws: BuildWorkspace, machine: Machine): string {
 
 // --- plumbing ----------------------------------------------------------------
 
-function rev(repoDir: string, ref: string): string {
+/** Every commit in the fixture repo, on any ref. Empty when git says nothing. */
+function revList(repoDir: string): readonly string[] {
   try {
-    return execFileSync("git", ["rev-parse", ref], { cwd: repoDir, encoding: "utf8" }).trim();
+    return execFileSync("git", ["rev-list", "--all"], { cwd: repoDir, encoding: "utf8" })
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line !== "");
   } catch {
-    return "";
+    return [];
   }
 }
 

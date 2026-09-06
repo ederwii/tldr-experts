@@ -488,40 +488,31 @@ body.** It is the proof the comparison can fail.
 
 - [ ] **Step 4: Generate the golden files, ONCE**
 
-```bash
-mkdir -p test/fixtures/build/golden
-cat > /tmp/gen-golden.ts <<'TS'
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
-import { makeBuildWorkspace } from "./test/fixtures/build/workspace.ts";
-import { captureBuild, GOLDEN_STORY, writeGolden } from "./test/fixtures/build/golden.ts";
-
-const ws = makeBuildWorkspace(GOLDEN_STORY);
-process.env.PATH = ws.binDir;
-process.env.FAKE_BUILD_STATE = ws.statePath;
-process.env.FAKE_BUILD_COST = "0.10";
-const promptDir = join(ws.root, "prompts");
-mkdirSync(promptDir, { recursive: true });
-process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
-const got = await captureBuild(ws, promptDir);
-writeGolden("developer-prompt.md", got.developerPrompt);
-writeGolden("reviewer-prompt.md", got.reviewerPrompt);
-writeGolden("events.txt", got.events);
-writeGolden("run-tasks.txt", got.runTasks);
-writeGolden("exit-codes.txt", got.exitCodes);
-ws.dispose();
-console.log("golden written");
-TS
-bun /tmp/gen-golden.ts
-echo "generate exit: $?"
-rm /tmp/gen-golden.ts
-```
-
-Expected: `golden written` and `generate exit: 0`.
-
-The generator lives in `/tmp` on purpose and is deleted: a committed regenerator is a button
-labelled "make the guard agree with me", and the whole value of this guard is that there is no
-such button.
+> **SUPERSEDED as implemented (round-1 review, task 0b).** This step originally wrote a generator
+> to `/tmp/gen-golden.ts`, ran it and deleted it, reasoning that a committed regenerator is "a
+> button labelled *make the guard agree with me*". Two measured problems: a script in `/tmp`
+> cannot resolve this repo's ESM specifiers (its own snippet imports
+> `./test/fixtures/build/workspace.ts` relative to the script), and a generator that lives apart
+> from the assertion can DRIFT from it — a drifted generator is a guard that agrees with itself.
+>
+> As shipped, the regenerator is inside `test/build-golden.test.ts` behind an environment flag,
+> and **a regeneration run FAILS after writing** so that an exported variable can never produce a
+> passing suite:
+>
+> ```bash
+> TLDRX_GOLDEN_UPDATE=1 bun test test/build-golden.test.ts   # writes golden/, then exits 1
+> echo "regenerate exit: $?"                                  # 1, with
+>                                                             # "golden regenerated — re-run
+>                                                             #  without TLDRX_GOLDEN_UPDATE"
+> bun test test/build-golden.test.ts
+> echo "compare exit: $?"                                     # 0
+> ```
+>
+> The concern the `/tmp` script was answering is real, and it is answered in the words a future
+> agent actually reads — the headers of `test/build-golden.test.ts` and
+> `test/fixtures/build/golden.ts`: regeneration is only ever legitimate for a deliberate,
+> separately reviewed BEHAVIOUR change. **Inside this wave a golden byte change means the move was
+> wrong, and the fix is to revert the move, never to regenerate.**
 
 - [ ] **Step 5: Read every generated file before committing it**
 
@@ -597,17 +588,18 @@ keys carry the contract (`source: "host"` present or absent, attempt, retry,
 verdict, commit) and the contract is what a move can break.
 
 Three normalisations, each genuinely nondeterministic and each replacing an
-EXACT string read from the machine so nothing incidental is caught: the
-mkdtemp workspace root, the epic/story shas (read with `git rev-parse`, full
-value and 7-12 char prefixes of THAT sha only), and a task row's
-started_at/ended_at (wall clock, not options.at). The run id is NOT
+EXACT string VERIFIED against the machine so nothing incidental is caught: the
+mkdtemp workspace root (and its realpath), every commit sha the fixture repo
+holds (`git rev-list --all`, whole values only, plus the full 40-char sha as a
+substring), and a task row's ended_at (wall clock; started_at is options.at
+verbatim and stays a real assertion). The run id is NOT
 normalised and the test asserts `260829-build`: createRun derives it from the
 fixture's pinned `now`, so the day that stops holding is a red test rather
 than a golden that quietly stops being stable.
 
-There is no committed regenerator. A button labelled "make the guard agree
-with me" is exactly what this guard is worth nothing with. A golden byte
-change from here on is a BEHAVIOUR change: revert the step.
+The regenerator is committed, behind TLDRX_GOLDEN_UPDATE=1, and a regeneration
+run FAILS after writing so an exported variable can never make the suite green.
+A golden byte change from here on is a BEHAVIOUR change: revert the step.
 
 RED first, verbatim (five failures against `""` before the golden existed):
 <paste the Step 3 output here>
