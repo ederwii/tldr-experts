@@ -29,17 +29,23 @@
   the project's own convention when it has one. `enable` replaces a body only when it is an
   untouched stub — an edited body is `kept:` and the command says so — and a body one shipment
   behind is `upgraded:` rather than silently frozen at the version it was first materialised
-  with. `disable` removes `overlays/` and nothing else. Overlays are detected from manifests
-  (`package.json`'s two dependency groups kept apart, `*.csproj` / `Directory.Packages.props`,
-  `pyproject.toml` and `requirements*.txt`) and never inferred from the language, because two
-  workspaces of the same language can run opposite architectures — one prescriptive ".NET pack"
-  would be wrong for whichever one it disagreed with. No new prompt mechanism: every renderer
-  already prints an expert's body, so `body + overlays` composes once in `loadExpertBundles` and
-  reaches every stage prompt and the Build developer unchanged; the reviewer, which carried no
-  expert content at all, gets the packs' Checks explicitly. `workspace.yml` gains `stack_packs`
-  and `repos[].overlays` (each with its evidence string) — additive, `version: 1` unchanged, and
-  read back on every re-init so a regenerate never silently turns the switch off. Switch off is
-  today's bytes, byte for byte.
+  with, told apart by two additive front-matter keys the materialised body carries: `pack:
+  <lang>@<hash>` names the shipment and `pack_body:` names the body's own bytes, so "somebody
+  edited this" (bytes differ) and "this is one shipment behind" (bytes match, shipment differs)
+  are never the same answer. `disable` removes `overlays/` and nothing else. Overlays are
+  detected from manifests (`package.json`'s two dependency groups kept apart, `*.csproj` /
+  `Directory.Packages.props`, `pyproject.toml` and `requirements*.txt`) and never inferred from
+  the language, because two workspaces of the same language can run opposite architectures — one
+  prescriptive ".NET pack" would be wrong for whichever one it disagreed with. No new prompt
+  mechanism: every renderer already prints an expert's body, so `body + overlays` composes once
+  in `loadExpertBundles` and reaches every stage prompt and the Build developer unchanged; the
+  reviewer, which carried no expert content at all, is handed the active packs' Checks explicitly
+  under a new `## Stack checks (the repo's own conventions win)` section, rendered only when BOTH
+  the workspace switch and the story's own stage-level `stack_experts` are on — so a developer
+  turn that was never shown a stack expert is never graded against Checks it was never briefed
+  on. `workspace.yml` gains `stack_packs` and `repos[].overlays` (each with its evidence string)
+  — additive, `version: 1` unchanged, and read back on every re-init so a regenerate never
+  silently turns the switch off. Switch off is today's bytes, byte for byte.
 - **Project skills are named to the developer, independent of the packs switch.** A repo's own
   `.claude/skills/*/SKILL.md` files are detected into `repos[].skills` and rendered under
   `## Project skills` in every stage prompt and the Build developer's — name, description, and
@@ -51,11 +57,12 @@
   a story worktree carries tracked files only and the path the prompt names would not exist
   there.
 - **The context ledger separates `expert.md` bytes from overlay bytes.** `pending.json` gains
-  `overlays`/`overlay_bytes` on a stack expert's row and `project_skills_bytes` alongside the
-  other context groups — all additive and absent (not `0` or `[]`) when nothing was inlined, so a
-  bundle the switch never touched stays byte-identical to one written before packs existed.
-  `expert_md_bytes` keeps the meaning it has always had, `expert.md`'s own bytes and never the
-  composed total, and the operator line prints the two counts separately for the same reason.
+  `overlays`/`overlay_bytes` on a stack expert's row — additive and absent (not `0` or `[]`) when
+  nothing was inlined, so a bundle the switch never touched stays byte-identical to one written
+  before packs existed — and a new `project_skills_bytes` beside the other context groups, a
+  required count like its siblings, `0` when the workspace detected no project skills rather than
+  absent. `expert_md_bytes` keeps the meaning it has always had, `expert.md`'s own bytes and never
+  the composed total, and the operator line prints the two counts separately for the same reason.
 - Two out-of-scope findings from building this: stack-expert naming has two independent
   derivations that agree today only because a mismatch fails silently (#152), and a project's own
   `AGENTS.md`/`CLAUDE.md`/`CONTRIBUTING.md` are detected by presence only — their content never
