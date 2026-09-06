@@ -24,6 +24,27 @@
   and the generated page carries every command, flag, allowed value and exit code, with
   `--yolo` explained on each of the four commands that take it rather than left bare in a
   usage line. It also holds the env-var table against a grep of `src/` in both directions.
+- **`tldrx facts add` — the command the drive mandate has been naming since 0.8.0 (#161).** The
+  mandate tells the driver "a fact that must outlive the turn is `tldrx facts add`, which every
+  later prompt DOES read", and no such command was dispatched. What drivers did instead was edit
+  `.tldrx/memory/facts.yml` by hand, which walks past `FactsStore.append`'s 2000-character cap,
+  past its `…` marker and its `truncated: true` flag, and past `save()`'s validation — and a
+  fact cut mid-word with no marker is a record that does not know it is incomplete. It writes
+  through the store, under the workspace lock, with `--area` and `--decided-by owner|driver`
+  both required — a driver's default is never cited as the owner's decision, so the command
+  never lets the caller skip saying which of the two it was. The underlying `source.decided_by`
+  field stays additive (rows written before it existed, or by another writer, still validate)
+  and renders in every `{{facts}}` block as `· decided by owner` / `· decided by driver`,
+  appended only when present. Without `--run` it uses the one open run and refuses to guess
+  between several, recording the absence with its reason.
+- **The provider's token split on the `run.yml` task row (#159).** `input_tokens` and `output_tokens`
+  were parsed on every provider turn and reached the event log only, so `run.yml` — the file
+  every cost report and every resumed run reads — carried a dollar figure with no token figure
+  beside it, which is a number nobody can check against a price table. Both fields are additive,
+  written only when a turn reported them and only together — a half-reported split is exactly
+  as unverifiable as an absent one, so it is dropped rather than have the parse's own zero
+  default stand in for a real count — and distinct from `tokens`, which keeps its meaning as a
+  host declaration. `version: 1` is unchanged and every older row loads.
 
 ### Fixed
 
@@ -45,6 +66,48 @@
   `--ui`, `--prepare`/`--commit`, `--yolo` — now point from `run auto`, `seed triage` and
   `expert train` at the one place they are explained, instead of appearing as bare tokens in
   a usage line.
+- **A turn with no provider USD figure is unmetered, not a metered `$0.00` (#159).** `interpret`
+  wrote `cost_usd: 0, metered: true` for a Claude result document that carried no
+  `total_cost_usd` — contradicting the `metered` field's own contract three lines above it, and
+  letting a stage, and then a whole run, read `$0.00` after real turns had run. `metered` is now
+  derived from the presence of the figure, so those turns reach `cost_usd: null` +
+  `metered: false` and every report that already knows how to say "LOWER BOUND, not a total"
+  says it. No new `spendBasis` word: `absent` already meant this, and the fix is to make more
+  turns reach it honestly. Codex keeps its pin — its synthesized result document carries a
+  `total_cost_usd: 0` that is a placeholder, and reading it as a measurement would be the same
+  lie under a different provider.
+- **A refusal no longer discards a cost (#159).** `tldrx next --commit` returned
+  `EXIT_AGENT_FAILED` on a `questions.md` the §2.7 parser cannot read BEFORE it recorded the
+  task — so a turn that had already been paid for left no row anywhere, and the run's own ledger
+  was short by exactly the amount nobody could see. The row lands first and the refusal exits
+  after it. Because that refusal deliberately leaves the stage `running` so the operator can fix
+  the file and re-run, the row is fingerprinted by session, declared cost and outputs, and the
+  same turn is never banked twice.
+- **An oversized reviewer verdict no longer takes the whole invocation's ledger with it
+  (#160).** The 4096-byte payload cap was enforced by `EventLog.append` throwing, nothing
+  wrapped the executor call, and the reviewer's verdict prose is the field that overflows — so
+  one wordy review escaped past `recordExecutorTasks` and `store.save()`, leaving the epic merge
+  on disk and every task's cost gone from `run.yml`. The cap is honoured, never raised: at the
+  emit seam the oversized `detail` becomes `detail_omitted`, carrying its own byte count and
+  pointing at the review log that already holds the prose, while the verdict itself survives.
+  The executor call is wrapped so a throw fails the stage by name, saves, and says plainly which
+  rows it could not recover rather than implying the ledger is whole.
+- **A cached red base is no longer trusted forever (#162).** `04-build/preflight.yml` was
+  invalidated only by a base-sha comparison that no-ops when either sha is empty, and
+  `checked_at` was written and never read — so a red measured once came back from every later
+  `--prepare` in 0 seconds, over a base a live probe would show green, and the
+  `.tldrx/workspace.yml` fix that the refusal itself asks the operator to make was the one thing
+  the cache could not see. A red is now re-probed when the command hash differs, when the row is
+  older than 30 minutes, or always under `--prepare`. The hash covers the command together with
+  the workspace's whole declared command list, because the command string was already the join
+  key and hashing it alone would have changed nothing. A cached green keeps the rule it had, and
+  both new row fields are additive — an absent one invalidates nothing.
+- **A fix list records the canonical 40-hex sha (#163).** `Resolved: yes <sha>` accepted 7-40
+  hex, so a sha that had lost a character read as a deliberate abbreviation: git resolved it,
+  the claim verified, and the audit record kept a form no later reader can tell from a prefix of
+  a different commit. The grammar is unchanged — demanding 40 would refuse the abbreviation a
+  person legitimately types — and the full object id is written back after the verification,
+  which is strictly stronger and refuses nobody.
 
 ### Changed
 
