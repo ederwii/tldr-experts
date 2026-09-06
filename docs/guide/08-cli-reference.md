@@ -733,6 +733,7 @@ tldrx expert train     <name> --area <area> [--mode light|full] [--max-usd <n>] 
                               [--effort <level>] [--prepare|--commit] [--yolo] [--print-prompt]
                               [--ui <mode>]
 tldrx expert recompute [<name>] [--json]
+tldrx expert packs     <enable|disable|status>
 ```
 
 `create --area <id>` seeds the expert's first competency area and `--title <text>` names it —
@@ -745,6 +746,14 @@ repo prefix.
 handoffs — a role expert only trains `full`. `--print-prompt` prints the training prompt and
 stops: it spawns nothing and costs nothing. `recompute` is arithmetic over evidence already
 on disk: it spawns nothing, spends nothing, and does not touch `status` or `last_trained`.
+
+`packs` is the one switch for the **stack packs**, off by default. `enable` re-runs detection,
+seeds any missing `<lang>-stack` expert, gives each one whose body is still the seeded stub the
+shipped pack body — an edited body is kept and said so; delete the body to re-seed — writes every
+framework overlay detection can prove under `overlays/` with its evidence recorded in
+`workspace.yml`, and names the project's `.claude/skills`. `disable` removes the overlays and
+touches neither bodies nor knowledge. `status` prints all of it and always exits `0`; `enable`
+exits `1` when no repo has a detectable language. See [4 — Experts](04-experts.md#stack-packs).
 
 `expert train` **refuses before it spawns** whenever the run has nothing to work on — exit `1`,
 nothing spent, nothing written: no such area (#94), `--mode light` on a role expert, and — since

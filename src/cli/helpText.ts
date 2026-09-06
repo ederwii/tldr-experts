@@ -940,9 +940,10 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "expert",
-    description: "List or create experts, recompute their levels, or train one.",
+    description: "List or create experts, recompute their levels, train one, or switch the stack packs on.",
     args: [
       { name: "<name>", meaning: "expert create / train: the expert. expert recompute: optional — all of them by default." },
+      { name: "<enable|disable|status>", meaning: "expert packs: turn the stack packs on or off for this workspace, or print their state." },
     ],
     flags: [
       json("the table", "list"),
@@ -976,6 +977,8 @@ const ENTRIES: readonly CommandHelp[] = [
       "tldrx expert train billing --area money --mode light --print-prompt",
       "tldrx expert train billing --area money --mode full --model sonnet",
       "tldrx expert recompute --json",
+      "tldrx expert packs enable",
+      "tldrx expert packs status",
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_AGENT_FAILED],
     notes: [
@@ -983,6 +986,7 @@ const ENTRIES: readonly CommandHelp[] = [
       "`--prepare` gets the same line and the same arithmetic: it does not spawn, but it freezes the ceiling into `pending.json` and into the prompt a host session spends against. An explicit `--model` that cannot fit is refused there too; an inherited one warns, because tldrx cannot see which model the host session will pick.",
       "An expert with no competency area cannot be trained: `expert train` refuses it and prints the `areas:` block to add to `.tldrx/experts/<name>/competencies.yml`. `create --area <id>` writes that block for you. `create` also writes the front-matter `repos:` from `.tldrx/workspace.yml` — the `## Domain` bullets are paths RELATIVE to those repos, with no repo prefix.",
       "With no `--model`, the sub-agent inherits whatever your claude CLI is set to — which can be a premium tier at premium prices. `train` now says which model it resolved and what tier that is BEFORE it spawns, and REFUSES (exit 2, nothing spent) when the per-sub-agent share cannot reach what a pass on that tier costs. Pass `--model sonnet` or an explicit `--max-usd` to proceed.",
+      "`packs enable` is the one switch for the stack packs, off by default. It re-runs detection, seeds any missing `<lang>-stack` expert, gives each one whose body is still the seeded stub the shipped pack body (an edited body is kept and said so — delete the body to re-seed), writes every framework overlay detection can prove under `overlays/` with its evidence in `workspace.yml`, and names the project's `.claude/skills`. `disable` removes the overlays and touches neither bodies nor knowledge. `status` prints all of it and always exits 0; `enable` exits 1 when no repo has a detectable language.",
     ],
   },
   {
