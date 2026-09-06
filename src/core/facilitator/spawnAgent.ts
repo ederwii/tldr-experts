@@ -146,7 +146,12 @@ export interface AgentOutcome {
   readonly isError: boolean;
   readonly sessionId: string | null;
   readonly costUsd: number;
-  /** False when the provider reports tokens but no provider-metered USD amount. */
+  /**
+   * True only when the provider's result document carried a USD figure. False for a
+   * turn that reported tokens and no dollars, for a Codex turn (metered in tokens),
+   * and for a process that died before it produced a result document at all. A
+   * `false` here means `costUsd` is not a measurement and nothing may sum it.
+   */
   readonly metered: boolean;
   readonly usage: AgentUsage;
   readonly envelope: AgentEnvelope | null;
@@ -336,8 +341,17 @@ export function interpret(
   const doc = (provider === "codex" ? resolveCodexResultDoc(stdout) : resolveResultDoc(stdout)) as ClaudeResultJson | null;
   const isError = doc?.is_error === true;
   const sessionId = typeof doc?.session_id === "string" ? doc.session_id : null;
-  const costUsd = typeof doc?.total_cost_usd === "number" ? doc.total_cost_usd : 0;
-  const metered = provider === "claude";
+  // `metered` is DERIVED from the presence of a USD figure, not from the provider's
+  // name. A result document with no `total_cost_usd` is a turn whose dollars nothing
+  // in this process saw, and `costUsd: 0` on it is a measurement and a false one —
+  // `runNext` turns this pair into the `cost_usd: null` + `metered: false` row the
+  // schema already requires. The `provider === "claude"` half stays because
+  // `resolveCodexResultDoc` synthesizes `total_cost_usd: 0` for a turn Codex meters
+  // in tokens only (`agentEvents.ts:159`): dropping the guard would read that
+  // synthesized zero as a measurement and re-introduce the same lie for Codex.
+  const hasUsd = typeof doc?.total_cost_usd === "number";
+  const costUsd = hasUsd ? (doc?.total_cost_usd as number) : 0;
+  const metered = provider === "claude" && hasUsd;
   const usage = toUsage(doc?.usage);
   const envelope = toEnvelope(doc?.structured_output);
   const result = typeof doc?.result === "string" ? doc.result : "";
