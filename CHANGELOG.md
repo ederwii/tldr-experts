@@ -1,7 +1,7 @@
 # Changelog
 
 
-## 0.8.1 — unreleased
+## 0.9.0 — unreleased
 
 ### Added
 
@@ -13,6 +13,53 @@
   union and release ritual, the pinned house invariants, hermetic test rules, public-surface
   guard rules, provider facts, and the known live traps. One file; the other imports it,
   because two rule files drifting apart is the failure mode this repo exists to kill.
+- **Stack packs — `tldrx expert packs <enable|disable|status>`.** A `<lang>-stack` expert was a
+  name-only stub: the language name was the only stack-specific token in its body, so the
+  developer built from the model's habits and the reviewer had no stack checklist to hold a
+  story against (the repo's own audit scored the experts' knowledge 6/10). Off by default,
+  behind one per-project switch: `enable` materialises four language packs (TypeScript,
+  JavaScript, Python, .NET) and thirteen manifest-detected framework overlays (`react`,
+  `next-app-router`, `vite-react-spa`, `expo-router`, `node-express`, `prisma`,
+  `aspnet-minimal-apis`, `aspnet-controllers`, `mediatr-cqrs`, `efcore-npgsql`, `fastapi`,
+  `sqlalchemy-alembic`, `postgres-testcontainers`) into `.tldrx/experts/<lang>-stack/`, kept apart
+  from `knowledge/`, which no packs command ever touches. A pack is interrogative by owner
+  decision, never prescriptive over a repo's own conventions: **Defaults** apply only where the
+  project is silent and each one names the signal that overrides it, and **Checks** are questions
+  the Build reviewer now asks under every diff, each carrying a `verify:` hint and yielding to
+  the project's own convention when it has one. `enable` replaces a body only when it is an
+  untouched stub — an edited body is `kept:` and the command says so — and a body one shipment
+  behind is `upgraded:` rather than silently frozen at the version it was first materialised
+  with. `disable` removes `overlays/` and nothing else. Overlays are detected from manifests
+  (`package.json`'s two dependency groups kept apart, `*.csproj` / `Directory.Packages.props`,
+  `pyproject.toml` and `requirements*.txt`) and never inferred from the language, because two
+  workspaces of the same language can run opposite architectures — one prescriptive ".NET pack"
+  would be wrong for whichever one it disagreed with. No new prompt mechanism: every renderer
+  already prints an expert's body, so `body + overlays` composes once in `loadExpertBundles` and
+  reaches every stage prompt and the Build developer unchanged; the reviewer, which carried no
+  expert content at all, gets the packs' Checks explicitly. `workspace.yml` gains `stack_packs`
+  and `repos[].overlays` (each with its evidence string) — additive, `version: 1` unchanged, and
+  read back on every re-init so a regenerate never silently turns the switch off. Switch off is
+  today's bytes, byte for byte.
+- **Project skills are named to the developer, independent of the packs switch.** A repo's own
+  `.claude/skills/*/SKILL.md` files are detected into `repos[].skills` and rendered under
+  `## Project skills` in every stage prompt and the Build developer's — name, description, and
+  the path to read — because skills are for doing and packs are for checking: the harness runs a
+  skill, the framework only says it exists. The Build developer's allowed tools gain `Skill` only
+  when that story's repo has one (whether an agent CLI's print mode actually denies an unlisted
+  `Skill` call is unverified — the framework's job is the list, not the enforcement). A skill git
+  does not track is flagged in the prompt and warned at Build start, by name and by repo, because
+  a story worktree carries tracked files only and the path the prompt names would not exist
+  there.
+- **The context ledger separates `expert.md` bytes from overlay bytes.** `pending.json` gains
+  `overlays`/`overlay_bytes` on a stack expert's row and `project_skills_bytes` alongside the
+  other context groups — all additive and absent (not `0` or `[]`) when nothing was inlined, so a
+  bundle the switch never touched stays byte-identical to one written before packs existed.
+  `expert_md_bytes` keeps the meaning it has always had, `expert.md`'s own bytes and never the
+  composed total, and the operator line prints the two counts separately for the same reason.
+- Two out-of-scope findings from building this: stack-expert naming has two independent
+  derivations that agree today only because a mismatch fails silently (#152), and a project's own
+  `AGENTS.md`/`CLAUDE.md`/`CONTRIBUTING.md` are detected by presence only — their content never
+  reaches a stage prompt (#153).
 
 ## 0.8.0 — 2026-09-04
 
