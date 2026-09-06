@@ -16,6 +16,9 @@ import type { ExpertRecord } from "./ExpertRecord.ts";
 import {
   byteLength, DEFAULT_KNOWLEDGE_MAX_BYTES, loadExpertKnowledge, type KnowledgeFileView,
 } from "./expertKnowledge.ts";
+import { splitFrontMatter } from "./expertDocument.ts";
+import { composePackBody, readOverlayFiles } from "./packSections.ts";
+import { readStackPacks } from "./stackPacks.ts";
 
 /**
  * What `--prepare` says when a stage file still names `domain` or `stack`.
@@ -37,6 +40,8 @@ export interface ExpertBundle {
   /** `expert.md`, verbatim. */
   readonly body: string;
   readonly bodyBytes: number;
+  /** Overlay ids inlined into `body` (stack packs, switch on and `kind: stack` only). Empty otherwise. */
+  readonly overlays: readonly string[];
   /** The rendered star chart + knowledge block, appended after the body. `""` when empty. */
   readonly knowledge: string;
   /** Bytes of knowledge-FILE content inlined (not the framing prose). */
@@ -108,11 +113,20 @@ export function loadExpertBundles(input: LoadBundlesInput): ExpertBundleSet {
   // Carried forward, never re-divided: the arithmetic stays one pass and the
   // result does not depend on how many experts happened to be cheap.
   let carry = 0;
+  // Read once: the switch is one fact about the workspace, not one per expert.
+  const packs = readStackPacks(input.root);
 
   for (const [index, chosen] of selection.experts.entries()) {
     const path = join(expertDir(input.root, chosen.name), EXPERT_FILE);
     if (!existsSync(path)) continue;
-    const body = readFileSync(path, "utf8");
+    const raw = readFileSync(path, "utf8");
+    // Packs live inside the stack expert (design decision 5): with the switch on, a
+    // `kind: stack` body carries its overlays, and every renderer that prints `body`
+    // — stage prompts, the developer — gets them without a change of its own.
+    const composed = packs.enabled && splitFrontMatter(raw).frontMatter.get("kind") === "stack"
+      ? composePackBody(raw, readOverlayFiles(expertDir(input.root, chosen.name)))
+      : null;
+    const body = composed === null ? raw : composed.text;
     const record = loadExpert(input.root, chosen.name);
     const allowance = (shares[index] ?? 0) + carry;
     const knowledge = loadExpertKnowledge({
@@ -129,6 +143,7 @@ export function loadExpertBundles(input: LoadBundlesInput): ExpertBundleSet {
       knowledgeAllowance: allowance,
       body,
       bodyBytes: byteLength(body),
+      overlays: composed === null ? [] : composed.inlined,
       knowledge: knowledge.text,
       knowledgeBytes: knowledge.inlinedBytes,
       files: knowledge.files,
@@ -175,7 +190,7 @@ export function describeBundles(set: ExpertBundleSet): readonly string[] {
           + ` over ${plural(expert.files.length, "area")}`;
     lines.push(
       `expert ${expert.name} (${expert.reason}${expert.match === undefined ? "" : `: ${expert.match}`})`
-      + ` — expert.md ${bytes(expert.bodyBytes)}, ${files}${expert.truncated ? ", truncated" : ""}`,
+      + ` — expert.md ${bytes(expert.bodyBytes)}${expert.overlays.length === 0 ? "" : ` (overlays: ${expert.overlays.join(", ")})`}, ${files}${expert.truncated ? ", truncated" : ""}`,
     );
   }
   for (const name of set.missing) {
