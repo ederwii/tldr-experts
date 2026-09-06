@@ -127,11 +127,7 @@ export function emitPreflightYaml(preflight: BasePreflight): string {
         `    status: ${yamlScalar(row.status)}`,
         `    tail: ${yamlScalar(row.tail)}`,
       );
-      // Raw, not `yamlScalar`: `commandHash` is always exactly twelve lowercase hex
-      // characters (the one thing that produces it is `commandHash` below), so it
-      // never needs escaping — and quoting it would just be noise in a file meant
-      // to be read by a human.
-      if (row.commandHash !== undefined) lines.push(`    command_hash: ${row.commandHash}`);
+      if (row.commandHash !== undefined) lines.push(`    command_hash: ${yamlScalar(row.commandHash)}`);
       if (row.checkedAt !== undefined) lines.push(`    checked_at: ${yamlScalar(row.checkedAt)}`);
     }
   }
@@ -216,7 +212,16 @@ export function savePreflight(runDir: string, preflight: BasePreflight): void {
  */
 export const PREFLIGHT_RED_TTL_MS = 30 * 60 * 1000;
 
-/** The command AND the allowlist it ran under, as twelve hex characters. */
+/**
+ * The command AND the allowlist it ran under, as twelve hex characters.
+ *
+ * `workspaceCommands` is the WHOLE workspace's flat command set (every repo's, not
+ * just the row's own repo) — so editing any one repo's `commands:` in
+ * `.tldrx/workspace.yml` changes the hash, and therefore invalidates, every red row
+ * in the file, not only the repo that changed. Conservative by design: a narrower
+ * per-repo hash would miss a workspace-level edit (a renamed script shared across
+ * repos, a global default) that changes what a command actually runs.
+ */
 export function commandHash(command: string, workspaceCommands: readonly string[]): string {
   return hashText(JSON.stringify([command, [...workspaceCommands].sort()]));
 }

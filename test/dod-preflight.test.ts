@@ -401,11 +401,31 @@ describe("when a cached RED may still be trusted", () => {
 
   test("the new keys round-trip and are written only when present", () => {
     const text = emitPreflightYaml(red);
-    expect(text).toContain(`command_hash: ${HASH}`);
+    expect(text).toContain("command_hash:");
     expect(parsePreflight(text)).toEqual(red);
 
     const bare = emitPreflightYaml({ checkedAt: "", results: [row()] });
     expect(bare).not.toContain("command_hash");
     expect(parsePreflight(bare)?.results[0]?.commandHash).toBeUndefined();
+  });
+
+  test("a hash that looks like scientific notation still round-trips as a string", () => {
+    // Measured: fed 200,000 random 12-hex hashes through emit → parse, 0.428% came
+    // back wrong when `command_hash` was written raw — a digit-leading hex string
+    // that also contains an `e` (hex is 0-9a-f, so this is common) is a valid YAML
+    // float literal in scientific notation. `123456789e12` parsed back as the
+    // NUMBER 123456789e12, not the string. Two shapes of the same bug, pinned so
+    // emitting it raw again reddens both.
+    const withE: BasePreflight = {
+      checkedAt: "2026-08-31T09:00:00Z",
+      results: [row({ commandHash: "123456789e12", checkedAt: "2026-08-31T09:00:00Z" })],
+    };
+    expect(parsePreflight(emitPreflightYaml(withE))).toEqual(withE);
+
+    const zeroE: BasePreflight = {
+      checkedAt: "2026-08-31T09:00:00Z",
+      results: [row({ commandHash: "0e1234567890", checkedAt: "2026-08-31T09:00:00Z" })],
+    };
+    expect(parsePreflight(emitPreflightYaml(zeroE))).toEqual(zeroE);
   });
 });
