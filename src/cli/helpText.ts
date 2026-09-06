@@ -22,6 +22,7 @@ import { knownScopes } from "../core/seed/splitFile.ts";
 import { RUNNABLE_SCRIPTS } from "../core/install/managedEntries.ts";
 import { EFFORT_LEVELS } from "../core/schemas/stage.ts";
 import { UI_MODES } from "../core/ui/index.ts";
+import { FACT_CONFIDENCES, FACT_DECIDERS, FACT_KINDS } from "../core/facts/Fact.ts";
 import {
   EXIT_AGENT_FAILED, EXIT_AWAITING_HUMAN, EXIT_FAILED, EXIT_GATE_REFUSED, EXIT_NOT_FOUND,
   EXIT_NOT_IMPLEMENTED, EXIT_OK, EXIT_USAGE,
@@ -777,6 +778,34 @@ const ENTRIES: readonly CommandHelp[] = [
       "It appends exactly one `operator_note` event and touches NOTHING else: run.yml and budget.yml are byte-identical across the call, no gate is signed or revoked, no cursor moves and no money is spent.",
       "It exists because there was no honest carrier for a maintenance action at the moment it happened. The alternatives people reached for were a FUTURE gate note (late, and attached to a decision the note is not about) and `tldrx reject` (which undoes work).",
       "The note shows up in `tldrx run status` (the last few) and in `tldrx replay` (every one, in place).",
+    ],
+  },
+  {
+    name: "facts",
+    subcommands: ["add"],
+    description: "Record one durable, provenanced fact the later prompts will read.",
+    args: [
+      { name: '"<text>"', meaning: "The assertion, one sentence. Required." },
+    ],
+    flags: [
+      { name: "area", arg: "<id>", meaning: "Which area the fact is about. Required — it is how every reader of facts.yml scopes a match.", sub: "add" },
+      { name: "decided-by", arg: "<who>", meaning: "Who decided, as against who typed it. Required — a driver default is never cited as the owner's.", values: FACT_DECIDERS, sub: "add" },
+      { name: "kind", arg: "<kind>", meaning: "What sort of fact this is.", values: FACT_KINDS, sub: "add" },
+      { name: "confidence", arg: "<level>", meaning: "How well it is known. `measured` means you ran the check.", values: FACT_CONFIDENCES, sub: "add" },
+      { name: "repo", arg: "<name>", meaning: "Scope the fact to one repo. Repeatable.", repeatable: true, sub: "add" },
+      { name: "run", arg: "<id>", meaning: "Attribute it to this run. An id no run in tldrx-work/ answers to is refused (exit 3) before anything is written — asking for provenance by name and getting `run: null` instead is worse than not asking. Without it, one open run is used; with several open, the fact is still recorded and its run is left absent with a named reason on stdout, because provenance nobody can establish is written as missing, never guessed.", sub: "add" },
+      root(),
+    ],
+    examples: [
+      'tldrx facts add "The outbox lives in the billing repo." --area billing --decided-by owner --kind observed --confidence measured',
+      'tldrx facts add "Retries are capped at three." --area billing --decided-by driver',
+    ],
+    exits: [EXIT_OK, EXIT_USAGE, EXIT_NOT_FOUND],
+    notes: [
+      "A fact is one assertion, capped at 2000 characters. Over the cap it is cut, ends in `…`, and carries `truncated: true` — and the command says so on stdout, because a marker only a later reader sees is one the author never acts on.",
+      "It writes through `FactsStore`, under the workspace lock: load, mint the id, cap, validate, save. Editing `.tldrx/memory/facts.yml` by hand walks past all four.",
+      "`--decided-by` is required, never defaulted: a fact gets cited later, and a row that cannot say which of the two decided it must not imply the stronger one (the owner's) by silence.",
+      "`--run <id>` that names nothing is exit 3, not a silently unattributed fact: `RunStore.resolve` answers `none` both to 'no run is open' and to 'that id is not here', and writing the second one as the first printed a sentence that is false whenever a run IS open.",
     ],
   },
   {

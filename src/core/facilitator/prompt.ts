@@ -400,6 +400,13 @@ export function fenceFor(content: string): string {
  * (neither retired nor superseded) scoped to a repo in this run, or scoped to none
  * at all (workspace-wide). A superseded fact is what the workspace used to
  * believe; putting it in a prompt is handing a sub-agent a reversed decision.
+ *
+ * `decided_by`, when the fact carries it, is appended as `· decided by owner` /
+ * `· decided by driver` — this is the ONE place a prompt sees it. Without it,
+ * `--decided-by driver` (task 5's required flag, precisely because a driver's
+ * default must never be read as the owner's) reaches every downstream prompt
+ * indistinguishable from an owner ruling, which is the mistake the flag exists to
+ * prevent. Absent, the line is unchanged from before the field existed.
  */
 export function renderFacts(facts: readonly Fact[], repos: readonly string[]): string {
   const relevant = facts.filter(
@@ -407,7 +414,10 @@ export function renderFacts(facts: readonly Fact[], repos: readonly string[]): s
   );
   if (relevant.length === 0) return "_No recorded facts match this run's repos._";
   return relevant
-    .map((fact) => `- [${fact.id}] ${fact.fact} (${fact.area} · ${fact.confidence})`)
+    .map((fact) => {
+      const decidedBy = fact.source.decided_by === undefined ? "" : ` · decided by ${fact.source.decided_by}`;
+      return `- [${fact.id}] ${fact.fact} (${fact.area} · ${fact.confidence})${decidedBy}`;
+    })
     .join("\n");
 }
 

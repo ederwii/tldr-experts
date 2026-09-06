@@ -251,7 +251,7 @@ Most run-targeting commands take the id either way, a positional `<run>` or `--r
 `cost`, `note`, `gate template`, `questions`, `budget show`, `ship`, `tickets`, and `run attend` ·
 `status` · `estimate` · `auto` · `unlock` · `cancel`. `replay` and `retro` take the positional only
 — `--run` there is an unknown flag. `approve`, `reject`, `answer`, `interview`, `plan`,
-`story reopen`, `watch` and `run gates set` take `--run <id>` only.
+`story reopen`, `facts add`, `watch` and `run gates set` take `--run <id>` only.
 
 `tldrx retro --all` goes the other way: it reads **every** run in the workspace and prints one
 table of what keeps catching you — finding class × count × how many runs × one example with its

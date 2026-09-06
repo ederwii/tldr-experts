@@ -4,13 +4,15 @@ export {
   addWorktree, removeWorktree, cleanUpRunEpicWorktrees, commitAll, commitPathsOnly, mergeNoFf, diffCommand,
   firstLine, GitError, GIT_TIMEOUT_MS,
   stateDirPrefixes, partitionDirty, porcelainPath, shaOf, baseStateOf, fastForward, commitsBetween,
-  assertWorktreeOn, WorktreeBranchMismatchError, shaReachability,
+  assertWorktreeOn, WorktreeBranchMismatchError, shaReachability, canonicalSha,
 } from "./git.ts";
 export type {
   GitResult, MergeOutcome, PathCommit, DirtySplit, BaseState, BaseStaleness, ShaReachability,
 } from "./git.ts";
 export { loadBuildPlan, inOrder, PlanLoadError } from "./plan.ts";
 export type { BuildPlan, BuildWave, PlannedStory, PlannedEpic } from "./plan.ts";
+export { commandHash, PREFLIGHT_RED_TTL_MS } from "./preflight.ts";
+export type { BaseFreshness } from "./preflight.ts";
 export { updateStoryFront, applyPlanPatch, evidenceFor, quote, StoryWriteError } from "./storyFile.ts";
 export {
   loadImplicitPlan, implicitPlanContent, renderImplicitPlan, describeImplicitPlan, updateImplicitPlan,
@@ -37,7 +39,7 @@ export type { StoryOutcome, DodResult, Verdict, RescuedWork } from "./outcome.ts
 export {
   parseFixFindings, parseFixlistFile, renderFixlist, renderFixlistSection, writeFixlist,
   fixlistRounds, fixlistRel, fixlistStory, latestFixlist, readFixlistAt, openFindings, isOpen,
-  fixlistRetroLines, unevidencedClaims, markUnverified,
+  fixlistRetroLines, unevidencedClaims, markUnverified, canonicalizeResolvedSha, canonicalizeResolutions,
   CLAIMED_UNVERIFIED, DISPOSITIONS, FIXLIST_DIR, MAX_FIXLIST_ROUNDS,
 } from "./fixlist.ts";
 export type { FixFinding, Disposition, FixlistParts, FixlistOnDisk, ParsedFixlist } from "./fixlist.ts";

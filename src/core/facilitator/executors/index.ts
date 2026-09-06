@@ -52,6 +52,13 @@ export interface ExecutorTask {
   readonly metered?: boolean;
   /** `--tokens`-style declaration for an unmetered turn, when the host gave one. */
   readonly tokens?: number;
+  /**
+   * The provider's measured token split for this turn, when the executor spawned
+   * one and read its `AgentOutcome.usage`. Absent for a HOST turn — nothing here
+   * watched it — and absent is "not recorded", never zero.
+   */
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
 }
 
 export interface ExecutorContext {

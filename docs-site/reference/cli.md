@@ -91,6 +91,7 @@ tldrx approve --note "…"    # sign the gate; the checks are re-run first
 | `tldrx ship` | Open a PR from the epic branch, with the handoff as the body — one PR per repo when the branch is in several, listed at the end. Re-running skips a repo whose PR is already open. |
 | `tldrx tickets` | Mirror epics and stories to a ticket tool. Files stay the source of truth. |
 | `tldrx note <run> "…"` | Record one operator annotation, changing nothing else. |
+| `tldrx facts add "…" --area <id> --decided-by <owner\|driver>` | Record one durable, provenanced fact — what later prompts actually read back, for something no question asked about. `--area` is how every reader scopes a match; `--decided-by` records who **decided**, as against who typed it. Capped at 2000 characters: past that the text is cut, marked `truncated:`, and the cut is named on stdout. |
 
 ## Exit codes
 

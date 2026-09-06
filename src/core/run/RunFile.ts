@@ -191,6 +191,68 @@ export interface RunTask {
   readonly stopped_by?: string | null;
   /** Tokens the host declared with `--tokens`, when it knew them. */
   readonly tokens?: number;
+  /**
+   * The PROVIDER's own token split for this turn, when a turn this process watched
+   * reported one (`AgentOutcome.usage`), and reported it as a POSITIVE number on
+   * both sides.
+   *
+   * ADDITIVE and optional, and deliberately NOT the same field as `tokens`: that
+   * one is what a HOST declared with `--tokens` for a turn nothing here metered.
+   * These two are a measurement, and they are what makes a dollar figure
+   * checkable against a price table instead of a number nobody can falsify.
+   *
+   * Absent on every row written before this existed and on every turn whose
+   * result document reported no usage at all — but the parse that produces
+   * `AgentOutcome.usage` (`envelope.ts`'s `toUsage`/`EMPTY_USAGE`) collapses "no
+   * usage object at all" and "usage reported as exactly 0" into the identical
+   * shape, so this layer cannot tell those two apart, and a HALF-reported split
+   * (one side a real number, the other defaulted by the parse) is exactly as
+   * unverifiable as a fully-absent one. Absent therefore means "no POSITIVE
+   * split reached the ledger" — an honest absence covering all three of those
+   * cases, never an invented number standing in for any of them.
+   */
+  readonly input_tokens?: number;
+  readonly output_tokens?: number;
+  /**
+   * True when `--commit` recorded this row AHEAD of refusing on an unreadable
+   * `questions.md` (spec's ledger-before-refusal rule, gh #124) — the ONLY
+   * case where the same `result.json` is expected to come back through
+   * `--commit` a second time, because the refusal leaves the stage `running`
+   * for the operator to fix the file and re-run. ADDITIVE and optional: absent
+   * on every ordinary completed task (including one later sent back by a gate
+   * reject and retried) and on every `run.yml` written before this existed.
+   *
+   * This is what a re-run's fingerprint (`runNext.ts`'s `alreadyBanked`) is
+   * allowed to match against — and ONLY this. A stage that was gate-rejected
+   * and retried leaves its earlier task rows in place with `status: "done"`
+   * and no refusal ever attached to them; without this marker a second,
+   * genuinely distinct attempt that happened to share a cost (most plausibly
+   * `null`, the unmetered case) and the same output paths would silently match
+   * an unrelated earlier row and be dropped — the ledger forgetting a turn,
+   * which is the exact failure this field exists to prevent.
+   */
+  readonly banked_before_refusal?: true;
+  /**
+   * One sentence about this row's part in the banked-turn dedupe, in the two
+   * cases where the file would otherwise not explain itself:
+   *
+   *   - `"none — no session id"` on a row recorded as its OWN rather than
+   *     matched against an earlier `banked_before_refusal` row its cost and
+   *     outputs resemble, because the result carried no `session_id` to
+   *     fingerprint on — so it could not be told apart from a second, genuinely
+   *     distinct unmetered turn (a null session id is NEVER used to dedupe, see
+   *     `alreadyBanked`).
+   *   - `"matched by the re-run committed at <at> — the marker is spent"` on a
+   *     `banked_before_refusal` row whose re-run has ARRIVED and been matched to
+   *     it. The marker is a claim ticket for exactly one re-run; leaving it
+   *     armed made the row match every later turn of the same shape for the life
+   *     of the stage, and the ledger dropped real turns for it. Its presence is
+   *     what `alreadyBanked` reads as "already claimed".
+   *
+   * ADDITIVE and optional: absent on every row neither thing happened to, and on
+   * every `run.yml` written before this existed.
+   */
+  readonly dedupe?: string;
 }
 
 export interface RunStage {
@@ -630,6 +692,21 @@ export function validateRunFile(input: unknown): ValidationResult {
           }
           if (task.cost_usd === null && task.metered !== false) {
             issues.push({ path: `${tp}.metered`, message: "a null cost_usd must be marked `metered: false`" });
+          }
+          if (task.banked_before_refusal !== undefined && task.banked_before_refusal !== true) {
+            issues.push({ path: `${tp}.banked_before_refusal`, message: "expected `true` or absent" });
+          }
+          if (task.dedupe !== undefined && typeof task.dedupe !== "string") {
+            issues.push({ path: `${tp}.dedupe`, message: "expected a string" });
+          }
+          // Additive: absence is fine, a wrong TYPE is not. A token count that is
+          // not a non-negative finite number is a record that cannot be arithmetic.
+          for (const key of ["input_tokens", "output_tokens"] as const) {
+            const value = task[key];
+            if (value === undefined) continue;
+            if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+              issues.push({ path: `${tp}.${key}`, message: "expected a number >= 0" });
+            }
           }
           if (typeof task.cost_usd === "number") spentFromTasks += task.cost_usd;
           checkOrder(task.started_at, task.ended_at, tp, issues);

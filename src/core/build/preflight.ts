@@ -35,6 +35,7 @@ import { join } from "node:path";
 import { parseYaml } from "../yaml.ts";
 import { yamlScalar } from "../facts/emitFactsYaml.ts";
 import { writeAtomic } from "../fs/writeAtomic.ts";
+import { hashText } from "../experts/packTemplates.ts";
 import { BUILD_PHASE } from "./plan.ts";
 
 /** The file that decides what a red story means, run-relative. */
@@ -65,6 +66,31 @@ export interface BaseCommandResult {
   /** Last meaningful line of the output — the operator's first clue. */
   readonly tail: string;
   readonly status: BaseStatus;
+  /**
+   * What the row was measured UNDER, beyond the command string itself.
+   *
+   * The command string is already the join key, so a hash OF IT would never
+   * differ for a row that matched. This hashes the command together with the
+   * workspace's whole declared command list — because the refusal's own advice is
+   * "fix `.tldrx/workspace.yml`", and that edit can leave one command byte-identical
+   * while changing what the gate will run at all. Without this, the fix the tool
+   * asked for was the one thing the cache could not see.
+   *
+   * ADDITIVE and optional. Absent on every preflight.yml written before it existed,
+   * and an absence never invalidates anything — the same rule the sha comparison
+   * follows: a missing answer is not a mismatch.
+   */
+  readonly commandHash?: string;
+  /**
+   * When THIS row was measured, as against the file-level `checked_at`, which is
+   * only ever the newest write in the file. Per-row because the freshness rule
+   * below is per-row: with one shared clock, re-probing the first stale red would
+   * stamp the file `now` and make every other stale red in it look fresh.
+   *
+   * ADDITIVE and optional; absent falls back to the file-level `checked_at`, and
+   * with neither the row is never invalidated by age.
+   */
+  readonly checkedAt?: string;
 }
 
 export interface BasePreflight {
@@ -101,6 +127,8 @@ export function emitPreflightYaml(preflight: BasePreflight): string {
         `    status: ${yamlScalar(row.status)}`,
         `    tail: ${yamlScalar(row.tail)}`,
       );
+      if (row.commandHash !== undefined) lines.push(`    command_hash: ${yamlScalar(row.commandHash)}`);
+      if (row.checkedAt !== undefined) lines.push(`    checked_at: ${yamlScalar(row.checkedAt)}`);
     }
   }
   return `${lines.join("\n")}\n`;
@@ -125,6 +153,8 @@ export function parsePreflight(text: string): BasePreflight | null {
     const command = asText(row.command);
     const exitCode = typeof row.exit_code === "number" && Number.isFinite(row.exit_code) ? row.exit_code : null;
     if (repo === "" || command === "" || exitCode === null) return null;
+    const hash = asText(row.command_hash);
+    const rowCheckedAt = asText(row.checked_at);
     results.push({
       repo,
       command,
@@ -134,6 +164,8 @@ export function parsePreflight(text: string): BasePreflight | null {
       timedOut: row.timed_out === true,
       tail: asText(row.tail),
       status: row.status === "ok" || row.status === "failed" ? row.status : "unmeasured",
+      ...(hash === "" ? {} : { commandHash: hash }),
+      ...(rowCheckedAt === "" ? {} : { checkedAt: rowCheckedAt }),
     });
   }
   return { checkedAt: asText((doc as { checked_at?: unknown }).checked_at), results };
@@ -170,26 +202,93 @@ export function savePreflight(runDir: string, preflight: BasePreflight): void {
 // --- reading it -------------------------------------------------------------
 
 /**
+ * How long a MEASURED RED may be trusted before it is probed again.
+ *
+ * Only a red has a TTL. A green base that has not moved is the same green base —
+ * the sha rule already covers the case where it moved. A red is the answer that
+ * costs the most to be wrong about: it blocks every story in the plan for something
+ * no story caused, and the operator is being told to go fix the workspace, so the
+ * cache has to be willing to notice that they did.
+ */
+export const PREFLIGHT_RED_TTL_MS = 30 * 60 * 1000;
+
+/**
+ * The command AND the allowlist it ran under, as twelve hex characters.
+ *
+ * `workspaceCommands` is the WHOLE workspace's flat command set (every repo's, not
+ * just the row's own repo) — so editing any one repo's `commands:` in
+ * `.tldrx/workspace.yml` changes the hash, and therefore invalidates, every red row
+ * in the file, not only the repo that changed. Conservative by design: a narrower
+ * per-repo hash would miss a workspace-level edit (a renamed script shared across
+ * repos, a global default) that changes what a command actually runs.
+ */
+export function commandHash(command: string, workspaceCommands: readonly string[]): string {
+  return hashText(JSON.stringify([command, [...workspaceCommands].sort()]));
+}
+
+/** What THIS invocation knows about itself, for deciding whether a red still holds. */
+export interface BaseFreshness {
+  /** `commandHash(command, workspace.commands)` for this invocation. */
+  readonly commandHash?: string;
+  /** The invocation's own `at` (RFC3339) — never a clock this function reads. */
+  readonly at?: string;
+  /** True under `tldrx next --prepare`: a 0-second prepare over a red is the lie. */
+  readonly prepare?: boolean;
+}
+
+/**
  * What this run measured for one repo's command, or `null` for "not measured".
  *
  * `baseSha` narrows it: a result taken at a base that has since moved is a
  * measurement of a tree that is no longer the base, so the caller re-measures
  * rather than trusting it. An empty sha on either side does not narrow anything
  * — git had no answer, and a missing answer is not a mismatch.
+ *
+ * A MEASURED RED is narrowed further by `freshness`: it is re-probed when the
+ * command hash differs (the operator's `.tldrx/workspace.yml` fix can leave the
+ * command string byte-identical), when it is older than `PREFLIGHT_RED_TTL_MS`,
+ * or unconditionally under `--prepare` (a 0-second prepare over a red nobody
+ * measured today is the lie this exists to stop). A green keeps today's rule —
+ * only the sha narrows it — and `unmeasured` is not evidence of anything, so
+ * re-running a command the gate already declined to run would buy nothing.
  */
 export function baseResultFor(
   preflight: BasePreflight | null,
   repo: string,
   command: string,
   baseSha = "",
+  freshness: BaseFreshness = {},
 ): BaseCommandResult | null {
   if (preflight === null) return null;
   for (const row of preflight.results) {
     if (row.repo !== repo || row.command !== command) continue;
     if (baseSha !== "" && row.baseSha !== "" && row.baseSha !== baseSha) continue;
+    if (row.status !== "failed") return row;
+    if (freshness.prepare === true) continue;
+    if (
+      freshness.commandHash !== undefined && row.commandHash !== undefined
+      && freshness.commandHash !== row.commandHash
+    ) continue;
+    if (isStale(row.checkedAt ?? preflight.checkedAt, freshness.at)) continue;
     return row;
   }
   return null;
+}
+
+/**
+ * Is a red older than the TTL?
+ *
+ * Both clocks come from the CALLER — the row's own stamp and the invocation's `at`
+ * — so this reads no clock of its own and a test can drive it. A clock that is
+ * missing or unparseable makes nothing stale: a missing answer is not a mismatch,
+ * the same rule an empty sha already follows.
+ */
+function isStale(measuredAt: string, at: string | undefined): boolean {
+  if (measuredAt === "" || at === undefined || at === "") return false;
+  const then = Date.parse(measuredAt);
+  const now = Date.parse(at);
+  if (!Number.isFinite(then) || !Number.isFinite(now)) return false;
+  return now - then > PREFLIGHT_RED_TTL_MS;
 }
 
 /** True only for a MEASURED red. `unmeasured` is not evidence of anything. */
@@ -204,7 +303,11 @@ export function withResult(
   checkedAt: string,
 ): BasePreflight {
   const kept = preflight.results.filter((row) => !(row.repo === result.repo && row.command === result.command));
-  return { checkedAt: checkedAt === "" ? preflight.checkedAt : checkedAt, results: [...kept, result] };
+  // The row carries the moment it was measured, beside the file-level stamp: the
+  // freshness rule is per row, and one shared clock would make re-probing the
+  // first stale red look like a re-probe of every other row in the file.
+  const stamped = checkedAt === "" ? result : { ...result, checkedAt };
+  return { checkedAt: checkedAt === "" ? preflight.checkedAt : checkedAt, results: [...kept, stamped] };
 }
 
 // --- what the operator reads ------------------------------------------------

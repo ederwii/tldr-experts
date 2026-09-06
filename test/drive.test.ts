@@ -560,7 +560,12 @@ describe("tldrx drive --tldr (essentials-only reporting)", () => {
     test(`${mode}: operator notes are off, and facts — which ARE read — are the alternative`, () => {
       expect(text).toContain("Write no `tldrx note` on this run");
       expect(text).toContain("no prompt ever reads one back");
-      expect(text).toContain("tldrx facts add");
+      // A runnable example, not a bare command name: `--area` and `--decided-by` are both
+      // REQUIRED by `tldrx facts add` (task 5's controller ruling), so a driver following a
+      // bare `tldrx facts add` would hit exit 1 twice. The driver is the one running this, so
+      // the shown form is `--decided-by driver`; the owner-decided alternative is named too.
+      expect(text).toContain('tldrx facts add "<text>" --area <id> --decided-by driver');
+      expect(text).toContain("--decided-by owner");
     });
 
     /**

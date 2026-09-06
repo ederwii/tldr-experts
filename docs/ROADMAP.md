@@ -101,6 +101,18 @@ Everything in this section is written and tested on main; none of it is tagged.
   sits in an earlier wave, so the inner loop can become a fan-out without changing anything else.
 - **Multi-model.** `spawnAgent.ts:32` is `const CLAUDE_BIN = "claude"` with no provider seam, so
   "which model" means "which Claude". A provider adapter behind that constant is the whole change.
+- **Decompose `src/core/facilitator/executors/build.ts`.** 4,351 lines in one class by design debt.
+  `AGENTS.md` §12 already tells every agent not to restructure it inside another change — which only holds
+  as long as there is a change that WILL, and the roadmap has never named one. The seams are visible from
+  outside: the story pipeline, the reviewer handshake, the fix-list round, the pre-flight cache and the
+  worktree/branch mechanics are five subjects sharing one object. Two defects it has to carry with it,
+  both measured during wave 1a and both consequences of the size rather than of any one line:
+  `ExecutorOutcome.tasks` exists only at RETURN, so a throw part-way through still loses every task row the
+  invocation had earned — the seam now catches the throw, fails the stage by name and SAYS the rows are
+  missing (`src/core/facilitator/runNext.ts`, the `runExecutor` catch), which is honest but not whole; and
+  the reviewer path narrows its `AgentOutcome` into a local struct before `this.tasks.push`
+  (`build.ts:2200`, `:2413` — both marked `KNOWN LIMITATION`), so the provider's token split reaches a
+  developer row and never a reviewer's.
 - **Outcome evals.** `test/evals/` (v1, #26) now proves each STAGE's output contract — the
   artifacts, the checks, the parsers, the side effects — against a scripted stand-in. What it
   still does not measure is whether a run produces better software than a bare `claude -p`:

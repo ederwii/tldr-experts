@@ -249,6 +249,59 @@ describe("interpret, over either format", () => {
     expect(outcome.error).toContain("without a parseable result event");
     expect(outcome.error).toContain("command not found");
   });
+
+  /**
+   * The invented `$0.00`. A Claude result event WITHOUT `total_cost_usd` is a turn
+   * whose dollars nothing here saw — and `metered: true` on it made `runNext` write
+   * `cost_usd: 0`, a measurement, and a false one. The field's own contract
+   * (`spawnAgent.ts` `AgentOutcome.metered`) always said what this now does.
+   */
+  test("a Claude result with no total_cost_usd is UNMETERED, not a metered $0.00", () => {
+    const line = JSON.stringify({
+      type: "result", subtype: "success", is_error: false,
+      session_id: "sess-nousd",
+      usage: { input_tokens: 11, output_tokens: 22 },
+      structured_output: { outputs: [], questions_asked: [], notes: "" },
+    });
+
+    const outcome = interpret(0, line, "", false);
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.metered).toBe(false);
+    expect(outcome.costUsd).toBe(0);
+    // The tokens are still real: "no dollars" is not "no turn".
+    expect(outcome.usage.input_tokens).toBe(11);
+    expect(outcome.usage.output_tokens).toBe(22);
+  });
+
+  test("a Claude result that DOES carry total_cost_usd is metered, including a real zero", () => {
+    const withCost = interpret(0, TRANSCRIPT, "", false);
+    expect(withCost.metered).toBe(true);
+    expect(withCost.costUsd).toBe(REAL_COST);
+
+    // A provider that reports an honest zero is still a MEASUREMENT — the
+    // difference this fix is about is the absence of the key, not its value.
+    const zero = JSON.stringify({
+      type: "result", subtype: "success", is_error: false,
+      total_cost_usd: 0, session_id: "sess-zero",
+      structured_output: { outputs: [], questions_asked: [], notes: "" },
+    });
+    expect(interpret(0, zero, "", false).metered).toBe(true);
+  });
+
+  test("a process that produced no result document at all is unmetered", () => {
+    // Nothing was parsed, so nothing reported a cost. `cost_usd: 0` here would be
+    // the same lie in its loudest form: a crashed turn recorded as a free one.
+    const outcome = interpret(1, "", "claude: command not found", false);
+    expect(outcome.ok).toBe(false);
+    expect(outcome.metered).toBe(false);
+  });
+
+  test("Codex is unchanged — its synthesized result doc still reports no dollars", () => {
+    const outcome = interpret(0, CODEX_TRANSCRIPT, "", false, "codex");
+    expect(outcome.metered).toBe(false);
+    expect(outcome.costUsd).toBe(0);
+  });
 });
 
 describe("what a tool is doing to", () => {

@@ -68,7 +68,7 @@ import {
   removeWorktree, repoDirOf, shaOf, shaReachability, stateDirPrefixes,
 } from "../../build/git.ts";
 import {
-  BaseGateFailure, baseRefusalLines, baseResultFor, EMPTY_PREFLIGHT, loadPreflight, PREFLIGHT_REL,
+  BaseGateFailure, baseRefusalLines, baseResultFor, commandHash, EMPTY_PREFLIGHT, loadPreflight, PREFLIGHT_REL,
   savePreflight, withResult, type BaseCommandResult, type BasePreflight,
 } from "../../build/preflight.ts";
 import {
@@ -93,8 +93,8 @@ import {
   DEVELOPER_FAILED, dodGreen, type DodResult, type RescuedWork, type StoryOutcome,
 } from "../../build/outcome.ts";
 import {
-  CLAIMED_UNVERIFIED, fixlistRel, fixlistRetroLines, latestFixlist, markUnverified, MAX_FIXLIST_ROUNDS,
-  openFindings, readFixlistAt, renderFixlistSection, writeFixlist,
+  CLAIMED_UNVERIFIED, canonicalizeResolutions, fixlistRel, fixlistRetroLines, latestFixlist, markUnverified,
+  MAX_FIXLIST_ROUNDS, openFindings, readFixlistAt, renderFixlistSection, writeFixlist,
   type FixFinding, type FixlistOnDisk,
 } from "../../build/fixlist.ts";
 import { renderBuildHandoff, type EpicSummaryRow } from "../../build/handoff.ts";
@@ -1474,8 +1474,23 @@ class BuildSession {
         + `${why} — recorded as \`${CLAIMED_UNVERIFIED}\`, and it still blocks \`done\``,
       );
     }
+    // Records never lie (#130 follow-up): a claim that DID check out may still
+    // name a truncated sha — git resolves 39 hex characters exactly as happily as
+    // 7, and a later reader cannot tell that apart from a deliberate abbreviation
+    // of a DIFFERENT commit. `canonicalizeResolutions` owns both the git
+    // resolution and the text edit; this call site only routes its answer into
+    // the same single write below.
+    const canonicalized = await canonicalizeResolutions(
+      story.repoDir,
+      findings,
+      text ?? readFileSync(fixlist.path, "utf8"),
+    );
+    if (canonicalized.lines.length > 0) {
+      text = canonicalized.text;
+      for (const line of canonicalized.lines) this.lines.push(`  · ${id}: ${line}`);
+    }
     if (text !== null) writeFileSync(fixlist.path, text, "utf8");
-    return { findings, refused };
+    return { findings: canonicalized.findings, refused };
   }
 
   /** Why a `Resolved: yes` does not check out, or null when it does. */
@@ -1979,6 +1994,8 @@ class BuildSession {
       error: agent.error,
       outputs: agent.envelope?.outputs ?? [],
       metered: agent.metered,
+      inputTokens: agent.usage.input_tokens,
+      outputTokens: agent.usage.output_tokens,
     });
     if (agent.ok) return { cost: round2(agent.costUsd), error: null };
 
@@ -2183,6 +2200,13 @@ class BuildSession {
   private formatRetry(
     story: StoryContext,
     review: Review,
+    // KNOWN LIMITATION: this narrows the reviewer's `AgentOutcome` before it
+    // reaches `this.tasks.push` (same as `recordReview` below), so a reviewer
+    // turn's `agent.usage` never becomes a run.yml row's `input_tokens` /
+    // `output_tokens` — only the developer and Watch paths carry the split.
+    // Widening this struct (and `recordReview`'s) to thread it through is a
+    // `build.ts` change of a different size than this field's own task; filed
+    // as a follow-up rather than done here (AGENTS.md §1, §12).
     task: {
       costUsd: number;
       sessionId: string | null;
@@ -2389,6 +2413,7 @@ class BuildSession {
   private recordReview(
     story: StoryContext,
     review: Review,
+    // KNOWN LIMITATION: same narrowing as `formatRetry`'s `task` param — see that comment.
     task: {
       costUsd: number;
       sessionId: string | null;
@@ -2968,7 +2993,12 @@ class BuildSession {
     }
     const baseRef = this.workspace.defaultBranches.get(repo) ?? FALLBACK_DEFAULT_BRANCH;
     const baseSha = await shaOf(repoDir, baseRef);
-    const cached = baseResultFor(this.basePreflight(), repo, command, baseSha);
+    const hash = commandHash(command, [...this.workspace.commands]);
+    const cached = baseResultFor(this.basePreflight(), repo, command, baseSha, {
+      commandHash: hash,
+      at: this.ctx.at,
+      prepare: this.ctx.mode === "prepare",
+    });
     if (cached !== null) return cached;
 
     const timeoutMs = this.ctx.spec.planned.timeout_s * 1000;
@@ -2978,7 +3008,7 @@ class BuildSession {
       const exitCode = outcome.timedOut ? 124 : outcome.exitCode;
       measured = {
         repo, command, baseRef, baseSha, exitCode, timedOut: outcome.timedOut, tail: outcome.tail,
-        status: exitCode === 0 && !outcome.timedOut ? "ok" : "failed",
+        status: exitCode === 0 && !outcome.timedOut ? "ok" : "failed", commandHash: hash,
       };
     } catch (error) {
       if (!(error instanceof DodCommandRefused)) throw error;
@@ -2987,7 +3017,7 @@ class BuildSession {
       // second, differently-worded veto.
       measured = {
         repo, command, baseRef, baseSha, exitCode: 126, timedOut: false,
-        tail: error.message, status: "unmeasured",
+        tail: error.message, status: "unmeasured", commandHash: hash,
       };
     }
     await this.writes.run(() => this.rememberBase(measured));

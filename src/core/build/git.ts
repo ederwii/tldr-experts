@@ -256,6 +256,23 @@ export async function shaReachability(cwd: string, sha: string, ref: string): Pr
   return (await git(["merge-base", "--is-ancestor", sha, ref], cwd)).ok ? "reachable" : "unreachable";
 }
 
+/**
+ * The full 40-hex object id `sha` names, or null when git will not resolve it to a
+ * commit.
+ *
+ * `shaReachability` already runs this exact `rev-parse` and throws the answer away.
+ * A second call rather than a changed return type, on purpose: the three-value
+ * reachability answer is what every caller switches on, and widening it to carry a
+ * payload would make every one of them handle a shape it does not need. The cost is
+ * one extra `rev-parse` on a path that already ran one — a local, sub-millisecond
+ * plumbing command, not a network round trip.
+ */
+export async function canonicalSha(cwd: string, sha: string): Promise<string | null> {
+  const resolved = await git(["rev-parse", "--verify", "--quiet", `${sha}^{commit}`], cwd);
+  const full = resolved.stdout.trim();
+  return resolved.ok && /^[0-9a-f]{40}$/.test(full) ? full : null;
+}
+
 /** Best effort: a worktree that will not go away is a warning, never a failure. */
 export async function removeWorktree(cwd: string, path: string): Promise<boolean> {
   if (!existsSync(path)) return true;

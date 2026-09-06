@@ -24,8 +24,8 @@ import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import {
-  baseResultFor, emitPreflightYaml, failedOnBase, loadPreflight, parsePreflight,
-  preExistingFailureReason, PREFLIGHT_REL as SOURCE_PREFLIGHT_REL, savePreflight, withResult,
+  baseResultFor, commandHash, emitPreflightYaml, failedOnBase, loadPreflight, parsePreflight,
+  preExistingFailureReason, PREFLIGHT_REL as SOURCE_PREFLIGHT_REL, PREFLIGHT_RED_TTL_MS, savePreflight, withResult,
   type BaseCommandResult, type BasePreflight,
 } from "../src/core/build/preflight.ts";
 import {
@@ -57,6 +57,19 @@ const ORIGINAL_PATH = process.env.PATH ?? "";
 const TICKS_MARK = "__TICKS__";
 const RED_ON_BASE =
   `node -e "require('fs').appendFileSync('${TICKS_MARK}', 'x'); process.exit(1)"`;
+
+/**
+ * Green wherever it runs, and it counts its own runs — `RED_ON_BASE`'s mirror.
+ *
+ * The red cases pin that a stale red is re-measured; nothing pinned the other
+ * half END TO END, and the green rule is the one the cache leans on hardest: a
+ * green survives the 30-minute red TTL, a changed command hash and `--prepare`,
+ * all three of which invalidate a red. `baseResultFor`'s unit tests assert that
+ * from a hand-built `BasePreflight`; this asserts the real pipeline reads it
+ * back off `04-build/preflight.yml` and does not touch the repo again.
+ */
+const GREEN_ON_BASE =
+  `node -e "require('fs').appendFileSync('${TICKS_MARK}', 'x'); process.exit(0)"`;
 
 /**
  * Green on the untouched tree, red once a developer has written its story file.
@@ -156,7 +169,7 @@ describe("the base-tree pre-flight", () => {
     expect(() => git(ws, ["rev-parse", "--verify", "epic/e1"])).toThrow();
   }, 60_000);
 
-  test("the base check is paid for once per run and cached in the run's own files", async () => {
+  test("a fresh cached red refuses again without re-running the command", async () => {
     const ws = workspace({ ...ONE, testScript: RED_ON_BASE });
 
     await next(ws);
@@ -164,11 +177,53 @@ describe("the base-tree pre-flight", () => {
     expect(existsSync(join(ws.runDir, PREFLIGHT_REL))).toBe(true);
     const cached = readFileSync(join(ws.runDir, PREFLIGHT_REL), "utf8");
     expect(cached).toContain("npm run test");
+    expect(cached).toContain("command_hash:");
 
-    // A second invocation refuses again — from the cache, without re-running it.
-    const again = await next(ws, { at: "2026-08-29T10:05:00Z" });
+    // Five minutes later, same workspace: the cache answers and the repo is not touched.
+    const again = await next(ws, { at: "2026-08-29T09:05:00Z" });
     expect(again.code).toBe(2);
     expect(tickCount()).toBe(1);
+  }, 90_000);
+
+  test("a red older than the TTL is measured again rather than trusted", async () => {
+    // The whole point: a base tree moves, and a red is the answer that costs the
+    // most to be wrong about — it blocks every story in the plan.
+    const ws = workspace({ ...ONE, testScript: RED_ON_BASE });
+
+    await next(ws);
+    expect(tickCount()).toBe(1);
+
+    const again = await next(ws, { at: "2026-08-29T10:05:00Z" });
+    expect(again.code).toBe(2);
+    expect(tickCount()).toBe(2);
+  }, 90_000);
+
+  test("a cached GREEN is not re-measured either — a second invocation never touches the repo", async () => {
+    // `--prepare`, deliberately: it is the mode that ALWAYS re-probes a red, so
+    // a green surviving it is the strongest form of the rule — and it is also
+    // the only mode that leaves the story pending, which is what keeps this
+    // instrument honest. `refuseOnRedBase` walks `pendingStories()`, so if the
+    // story had settled, tick count 1 would mean "nothing asked", not "the cache
+    // answered". S1 is still `in_progress` on the second call, so the question
+    // IS asked both times.
+    const ws = workspace({ ...ONE, testScript: GREEN_ON_BASE });
+
+    const first = await next(ws, { mode: "prepare" });
+    expect(first.code).toBe(0);
+    expect(tickCount()).toBe(1);
+    const cached = readFileSync(join(ws.runDir, PREFLIGHT_REL), "utf8");
+    expect(cached).toContain("npm run test");
+    expect(cached).toContain("exit_code: 0");
+    expect(story(ws, "S1")).toContain("status: in_progress");
+
+    // Fourteen hours later — well past the 30-minute TTL that invalidates a RED.
+    const again = await next(ws, { mode: "prepare", at: "2026-08-29T23:00:00Z" });
+
+    expect(tickCount()).toBe(1);
+    // Not a refusal, and not because nothing was asked: the story is still the
+    // pending one this invocation looked the base up for.
+    expect(again.code).not.toBe(2);
+    expect(story(ws, "S1")).toContain("status: in_progress");
   }, 90_000);
 
   test("gates green on base and red on the story tree block the story, exactly as before", async () => {
@@ -296,5 +351,122 @@ describe("attributing a red DoD command", () => {
     expect(updated.results.filter((r) => r.command === "npm run test").length).toBe(1);
     expect(failedOnBase(baseResultFor(updated, "app", "npm run test"))).toBe(false);
     expect(updated.checkedAt).toBe("2026-08-31T10:00:00Z");
+  });
+});
+
+describe("when a cached RED may still be trusted", () => {
+  const HASH = "0123456789ab";
+  const red: BasePreflight = {
+    checkedAt: "2026-08-31T09:00:00Z",
+    results: [row({ commandHash: HASH, checkedAt: "2026-08-31T09:00:00Z" })],
+  };
+  const green: BasePreflight = {
+    checkedAt: "2026-08-31T09:00:00Z",
+    results: [row({
+      exitCode: 0, status: "ok", tail: "",
+      commandHash: HASH, checkedAt: "2026-08-31T09:00:00Z",
+    })],
+  };
+
+  test("a fresh red, same command hash, is served from the cache", () => {
+    const hit = baseResultFor(red, "app", "npm run test", "", {
+      commandHash: HASH, at: "2026-08-31T09:20:00Z",
+    });
+    expect(failedOnBase(hit)).toBe(true);
+  });
+
+  test("a red older than the TTL is null, so the caller re-probes", () => {
+    // 30 minutes. A base tree is a moving thing and a red is the answer that
+    // costs the most to be wrong about: every story blocks for it.
+    expect(PREFLIGHT_RED_TTL_MS).toBe(30 * 60 * 1000);
+    const hit = baseResultFor(red, "app", "npm run test", "", {
+      commandHash: HASH, at: "2026-08-31T09:31:00Z",
+    });
+    expect(hit).toBeNull();
+  });
+
+  test("a red measured under a different command hash is null — the operator's fix is visible", () => {
+    // The refusal tells the operator to fix `.tldrx/workspace.yml`. The command
+    // string can come back byte-identical from that edit while everything AROUND
+    // it changed, and joining on the string alone made the fix invisible.
+    const hit = baseResultFor(red, "app", "npm run test", "", {
+      commandHash: "ffffffffffff", at: "2026-08-31T09:01:00Z",
+    });
+    expect(hit).toBeNull();
+  });
+
+  test("under --prepare a red is always re-probed, however fresh", () => {
+    // A `--prepare` that returns a refusal in 0 seconds over a base nobody
+    // measured today is the lie this is about.
+    const hit = baseResultFor(red, "app", "npm run test", "", {
+      commandHash: HASH, at: "2026-08-31T09:00:30Z", prepare: true,
+    });
+    expect(hit).toBeNull();
+  });
+
+  test("a cached GREEN keeps today's rule — hash, age and --prepare change nothing", () => {
+    for (const freshness of [
+      { commandHash: "ffffffffffff", at: "2026-09-30T09:00:00Z" },
+      { commandHash: HASH, at: "2026-09-30T09:00:00Z", prepare: true },
+    ]) {
+      expect(baseResultFor(green, "app", "npm run test", "", freshness)?.exitCode).toBe(0);
+    }
+  });
+
+  test("an unmeasured row is not re-probed either — the gate declined to run it", () => {
+    const unmeasured: BasePreflight = {
+      checkedAt: "2026-08-31T09:00:00Z",
+      results: [row({ exitCode: 126, status: "unmeasured", tail: "needs a shell" })],
+    };
+    expect(baseResultFor(unmeasured, "app", "npm run test", "", {
+      at: "2026-09-30T09:00:00Z", prepare: true,
+    })?.status).toBe("unmeasured");
+  });
+
+  test("a row with no clock and no hash is never invalidated by their absence", () => {
+    // The same rule the sha comparison already follows: a missing answer is not a
+    // mismatch. Every preflight.yml written before these fields existed is in
+    // exactly this shape.
+    const old: BasePreflight = { checkedAt: "", results: [row()] };
+    expect(failedOnBase(baseResultFor(old, "app", "npm run test", "", {
+      commandHash: HASH, at: "2026-09-30T09:00:00Z",
+    }))).toBe(true);
+  });
+
+  test("the hash covers the workspace allowlist, not only the command string", () => {
+    expect(commandHash("npm run test", ["npm run test"]))
+      .not.toBe(commandHash("npm run test", ["npm run test", "npm run lint"]));
+    expect(commandHash("npm run test", ["a", "b"])).toBe(commandHash("npm run test", ["b", "a"]));
+    expect(commandHash("npm run test", [])).toMatch(/^[0-9a-f]{12}$/);
+  });
+
+  test("the new keys round-trip and are written only when present", () => {
+    const text = emitPreflightYaml(red);
+    expect(text).toContain("command_hash:");
+    expect(parsePreflight(text)).toEqual(red);
+
+    const bare = emitPreflightYaml({ checkedAt: "", results: [row()] });
+    expect(bare).not.toContain("command_hash");
+    expect(parsePreflight(bare)?.results[0]?.commandHash).toBeUndefined();
+  });
+
+  test("a hash that looks like scientific notation still round-trips as a string", () => {
+    // Measured: fed 200,000 random 12-hex hashes through emit → parse, 0.428% came
+    // back wrong when `command_hash` was written raw — a digit-leading hex string
+    // that also contains an `e` (hex is 0-9a-f, so this is common) is a valid YAML
+    // float literal in scientific notation. `123456789e12` parsed back as the
+    // NUMBER 123456789e12, not the string. Two shapes of the same bug, pinned so
+    // emitting it raw again reddens both.
+    const withE: BasePreflight = {
+      checkedAt: "2026-08-31T09:00:00Z",
+      results: [row({ commandHash: "123456789e12", checkedAt: "2026-08-31T09:00:00Z" })],
+    };
+    expect(parsePreflight(emitPreflightYaml(withE))).toEqual(withE);
+
+    const zeroE: BasePreflight = {
+      checkedAt: "2026-08-31T09:00:00Z",
+      results: [row({ commandHash: "0e1234567890", checkedAt: "2026-08-31T09:00:00Z" })],
+    };
+    expect(parsePreflight(emitPreflightYaml(zeroE))).toEqual(zeroE);
   });
 });

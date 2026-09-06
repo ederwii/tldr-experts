@@ -608,6 +608,50 @@ and attached to a decision the note is not about) and `tldrx reject`, which undo
 note then shows up in `tldrx status` (the last few) and in `tldrx replay` (every one, in
 place). Exits: `0` `1` `2` `3`.
 
+## `tldrx facts`
+
+Record one durable, provenanced fact — the thing later prompts actually read back.
+
+```
+tldrx facts add "<text>" --area <id> --decided-by <owner|driver>
+                [--kind <kind>] [--confidence <level>] [--repo <name>]
+                [--run <id>] [--root <path>]
+```
+
+`tldrx answer` writes a fact the moment a question is answered. This is the other door: a
+fact nobody asked a question about — something you measured, something the workspace turned
+out to be true about — recorded on purpose rather than left in a chat scrollback.
+
+Two flags are **required** and neither is defaulted. `--area` is how every reader of
+`facts.yml` scopes a match — the no-re-ask hook, the `{{facts}}` block of every prepared
+prompt, the training miner — so a fact filed under nothing is a fact nothing will find.
+`--decided-by` is `owner` or `driver`: attribution for the DECISION, as against `who`, which
+is whoever typed it. A fact gets cited later, and a driver's default must never be read as
+the owner's ruling, so an invocation that cannot say which it was is refused — exit `1`, with
+nothing written — rather than allowed to imply the stronger one by silence. It shows up in
+every `{{facts}}` line as `· decided by owner` /
+`· decided by driver`, appended only when the fact carries it.
+
+`--kind` is `answer`, `observed` or `derived` (default `observed`); `--confidence` is
+`measured`, `inferred` or `stated` (default `stated`) — `measured` means you ran the check.
+`--repo` is repeatable and scopes the fact to those repos; with none it is workspace-wide.
+
+A fact is one assertion, capped at 2000 characters. Over the cap it is cut, ends in `…`,
+carries `truncated: true`, **and the command says so on stdout** — a marker only a later
+reader sees is one the author never acts on.
+
+`--run` attributes the fact to a run and appends one `fact.added` to that run's event log.
+An id no run in `tldrx-work/` answers to is **refused** — exit `3`, nothing written, nothing
+logged — because asking for provenance by name and getting `run: null` back is worse than
+not asking, and "no open run to attribute it to" is a false sentence whenever a run IS open.
+Without `--run`, one open run is used; with several open, the fact is still recorded but its
+run is left **absent**, and stdout names the reason and the flag that fixes it. The run is
+provenance, and provenance nobody can establish is written as missing, never guessed.
+
+It writes through `FactsStore`, under the workspace lock: load, mint the id, cap, validate,
+save. Editing `.tldrx/memory/facts.yml` by hand walks past all four, and a fact cut mid-word
+with no marker is a record that does not know it is incomplete. Exits: `0` `1` `3`.
+
 ## `tldrx story`
 
 Give one Build story another run of attempts, or open a fix round on a done one.
@@ -1035,9 +1079,10 @@ runs: of ~4.0 MB written, 2.16 MB is trail, and all **261** declared stage `inpu
 **zero** occurrences of `handoff.md`, `retro.md` or `gate-evidence` — they are written for a human
 who, on these runs, was never going to open them. `--tldr` says to write no `tldrx note`
 (133,689 B of them across those runs, read back by nothing) and to keep gate evidence at the
-template's minimum; a fact that must outlive the turn goes into `.tldrx/memory/facts.yml`
-by answering an open question — `tldrx answer <Qid> "…"` — which every later prompt **does**
-read.
+template's minimum; a fact that must outlive the turn goes into `.tldrx/memory/facts.yml`,
+which every later prompt **does** read — `tldrx answer <Qid> "…"` when a question asked for
+it, and `tldrx facts add "<text>" --area <id> --decided-by driver` when nothing did, which
+is the exact line the mandate prints (`--decided-by owner` for a fact the owner ruled on).
 
 What it may not do is drop the handoff. `claim-sources` is condition 5 of the seven `auto`
 conditions and runs whether or not a stage declared it as a check, so a run with no handoff cannot

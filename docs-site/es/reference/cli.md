@@ -92,6 +92,7 @@ tldrx approve --note "…"    # firma la compuerta; antes se vuelven a correr la
 | `tldrx ship` | Abre un PR desde la rama de la épica, con el handoff como cuerpo: un PR por repo cuando la rama está en varios, listados al final. Si lo vuelves a correr, se salta el repo cuyo PR ya está abierto. |
 | `tldrx tickets` | Refleja épicas y stories en una herramienta de tickets. Los archivos siguen siendo la fuente de verdad. |
 | `tldrx note <run> "…"` | Registra una anotación del operador, sin cambiar nada más. |
+| `tldrx facts add "…" --area <id> --decided-by <owner\|driver>` | Registra un hecho durable y con procedencia — lo que los prompts posteriores sí vuelven a leer, para algo que ninguna pregunta pidió. `--area` es como cada lector le acota una coincidencia; `--decided-by` registra quién **decidió**, que no es lo mismo que quién lo escribió. Tope de 2000 caracteres: pasado eso el texto se corta, queda marcado con `truncated:`, y el corte se dice en stdout. |
 
 ## Códigos de salida
 

@@ -12,7 +12,7 @@
  * fails keeps its cost, because the API call happened whether we liked it or not.
  */
 import { rmSync } from "node:fs";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { PROJECT_WORK_DIR } from "../paths.ts";
 import { ambiguousRunLines } from "../run/openRuns.ts";
@@ -36,7 +36,8 @@ import { raiseCommand, shortBy } from "../budget/budgetView.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../hooks/lib/workspace.ts";
 import { closeRun, describeOpenQuestions, describeStateCommit } from "../run/closeRun.ts";
-import type { TldrxEvent } from "../events/Event.ts";
+import { capPayload, type EventType, type TldrxEvent } from "../events/Event.ts";
+import { LOG_DIR } from "../build/plan.ts";
 import { setProgressCeiling, setProgressReadCap, setProgressTitle } from "../ui/bus.ts";
 import { acquireLock, releaseLock } from "./Lock.ts";
 import { onInterrupt, stopInFlightRun } from "./interrupt.ts";
@@ -588,6 +589,7 @@ async function runStage(
     // unless a cap actually bit. "It ran out of reads" and "it crashed" are
     // different stories and the file has to be able to tell them apart.
     stopped_by: agent.stoppedBy,
+    ...tokenSplit(agent.usage.input_tokens, agent.usage.output_tokens),
   });
   store.append(event(options, store.runId, stageId, "agent.result", {
     phase: phaseId,
@@ -1050,6 +1052,57 @@ async function runExecutor(
     store.save();
   }
   announce(store.runId, stageId, nextTaskId(store, phaseId, stageId), agentCap(options, store, stage));
+
+  // Payload-cap sidecar bookkeeping for THIS invocation (spec §2.9, fix round 1).
+  // A counter, not just a timestamp: the bug this closes was measured as TWO
+  // oversized verdicts for the same story (an attempt-1 `changes`, an attempt-2
+  // `approve`) — a timestamp alone can collide within the same wall-clock second,
+  // and the second write must never silently overwrite the first.
+  let overflowSeq = 0;
+
+  /**
+   * Save omitted text to a sidecar file BEFORE the event that names it is built,
+   * so the pointer `capPayload` writes is true by construction — never a promise
+   * about a file that does not exist yet (`writeLog` runs later, inside
+   * `settle`), never one that later holds a DIFFERENT verdict's prose (only the
+   * FINAL review's summary survives in the story's own log), and never one that
+   * is simply never written at all (a story that does not settle this
+   * invocation). A failed write is named, never a path that does not exist.
+   *
+   * Keyed on THIS invocation's own `phaseId`, not the `BUILD_PHASE` constant:
+   * `runExecutor` also runs Watch stages, and a Watch failure's sidecar must not
+   * be filed under a directory named `04-build`. `LOG_DIR` ("log") is the
+   * generic convention both phases already share for their own artefacts.
+   */
+  const saveOverflow = (type: EventType, text: string): string => {
+    overflowSeq += 1;
+    const stamp = nowish(options).replace(/:/g, "-");
+    const relPath = `${phaseId}/${LOG_DIR}/overflow/${stamp}-${String(overflowSeq)}-${type}-detail.txt`;
+    try {
+      mkdirSync(join(store.runDir, phaseId, LOG_DIR, "overflow"), { recursive: true });
+      writeFileSync(join(store.runDir, relPath), text, "utf8");
+      return `omitted text saved at ${relPath}`;
+    } catch (error) {
+      return `could not be saved: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  };
+
+  /**
+   * Cap, THEN append — the ONE seam every executor event goes through, and the
+   * same one this function's own catch block below uses for its `error` event,
+   * so a giant thrown message is bounded by the exact same byte-accurate rule
+   * (fix round 1, finding 2) rather than a second, character-based one.
+   */
+  const appendCapped = (
+    type: EventType,
+    payload: Record<string, unknown>,
+    costUsd = 0,
+    actor: string | null = null,
+  ): void => {
+    const capped = capPayload(payload, (text) => saveOverflow(type, text));
+    store.append(event(options, store.runId, stageId, type, capped, costUsd, actor));
+  };
+
   const executorCtx: ExecutorContext = {
     root: options.root,
     runId: store.runId,
@@ -1080,11 +1133,50 @@ async function runExecutor(
     tokens: options.tokens ?? null,
     agentCap: (share = 1) => agentCap(options, store, stage, share),
     emit: (type, payload, costUsd = 0, actor = null) => {
-      store.append(event(options, store.runId, stageId, type, payload, costUsd, actor));
+      appendCapped(type, payload, costUsd, actor);
     },
   };
 
-  const outcome = await executor(executorCtx);
+  // How many rows this stage already had before the executor ran. `failStage`
+  // rewrites the LAST row as `failed`, which is right only for a row THIS
+  // invocation put there — and on the throw path below there is never one, since
+  // `ExecutorOutcome.tasks` exists only at return. A retried stage keeps its
+  // earlier attempts' rows (a gate reject, an in-session cycle that finished a
+  // story), so without this floor the throw repainted a `done` turn as `failed`
+  // with an error it did not produce.
+  const tasksBefore = requireStage(store, phaseId, stageId).tasks.length;
+
+  let outcome: ExecutorOutcome;
+  try {
+    outcome = await executor(executorCtx);
+  } catch (error) {
+    // A throw out of an executor used to escape past everything below: the stage
+    // stayed `running` in a file nobody saved, and whatever the executor had
+    // already put on disk — an epic merge, a story marked done — stood with no
+    // record of what it cost.
+    //
+    // What CAN be recovered here is recovered: the stage is failed by name, the
+    // throw is recorded as an `error` event, and the store is saved. What cannot
+    // is said out loud rather than guessed at — `ExecutorOutcome.tasks` only
+    // exists at RETURN, so a turn the executor completed before the throw has no
+    // row here, and the message says so instead of inventing a count or implying
+    // the ledger is whole.
+    const why = error instanceof Error ? error.message : String(error);
+    // `detail`, not a bespoke field: `appendCapped` runs this through the SAME
+    // `capPayload` every other event does, so a giant thrown message (an error
+    // thrown FOR being oversized, say) is bounded by bytes, not characters, and
+    // is never lost to a second, unrecoverable throw right here.
+    appendCapped("error", {
+      phase: phaseId,
+      where: "executor",
+      detail: why,
+      tasks_recorded: false,
+    }, 0);
+    store.save();
+    return failStage(store, options, phaseId, stageId,
+      `the executor threw before returning its task rows — this invocation's turn costs are not in run.yml: ${why}`,
+      notes, tasksBefore);
+  }
 
   // The handshake called by the wrong end, and nothing else wrong (gh #82). Its
   // door is HERE, before anything is recorded or saved, because the property it
@@ -1183,6 +1275,7 @@ function recordExecutorTasks(
       started_at: options.at,
       ended_at: nowish(options),
       outputs: task.outputs,
+      ...tokenSplit(task.inputTokens, task.outputTokens),
     });
     store.append(event(options, store.runId, stageId, "agent.result", {
       phase: phaseId,
@@ -1221,14 +1314,134 @@ async function commitStage(
     throw error;
   }
 
+  // The cost of an in-session turn is DECLARED, never measured: the sub-agent ran
+  // inside the host's session and was billed to it. `--cost-usd` is the host
+  // saying what it was; `result.json`'s own `cost_usd` is the other way to say it.
+  // With neither, this is `null` + `metered: false` — not `0`, which is a
+  // measurement and a false one (2026-08-29 audit, §A: a run's ledger read
+  // "$0.00 spent" after real money had gone).
+  const declared = options.costUsd ?? result.cost_usd;
+  const cost = declared === null || declared === undefined ? null : round2(declared);
+
+  // Decided BEFORE the recording block below, not after: whether THIS row is
+  // about to be followed by the refusal is exactly what marks it
+  // `banked_before_refusal` — the one fact that makes a later re-run's
+  // fingerprint safe to match against. Recomputing this after recording would
+  // record the row blind to its own fate.
+  //
   // A questions.md the §2.7 parser cannot read is not "no questions" — it is a
-  // file nobody, including the gate, can see into. Refused HERE rather than at the
-  // gate because `--commit` is the last moment the host session that wrote it is
-  // still around to fix it. Measured 2026-08-29: an in-session stage wrote
-  // `### Q1 — …` / `**Answer:**` from the old template, and four questions
-  // vanished between the sub-agent and the run.
+  // file nobody, including the gate, can see into. Refused BELOW rather than at
+  // the gate because `--commit` is the last moment the host session that wrote
+  // it is still around to fix it. Measured 2026-08-29: an in-session stage
+  // wrote `### Q1 — …` / `**Answer:**` from the old template, and four
+  // questions vanished between the sub-agent and the run.
   const unreadable = unreadableHeadings(join(store.runDir, phaseId, "questions.md"));
-  if (unreadable.length > 0) {
+  const willRefuseOnQuestions = unreadable.length > 0;
+
+  // Recorded BEFORE the refusal returned below. The turn RAN: a refusal that
+  // exits first is the ledger forgetting money it saw, which is the failure
+  // this file's own `cost_usd: null` rule exists to prevent, pointing the
+  // other way.
+  //
+  // Which makes the second `--commit` the hazard — but ONLY when this refusal
+  // is what the operator is fixing and re-running over. The questions refusal
+  // leaves the stage `running`, so the operator fixes `questions.md` and runs
+  // the same command over the same `result.json`, and nothing but a fingerprint
+  // would stop a second row for that one turn. `banked` is that fingerprint:
+  // same session, same declared cost, same outputs, against rows this file
+  // itself marked `banked_before_refusal` — and ONLY those. An ordinary
+  // completed task (including one a gate rejected and sent back for a genuine
+  // retry — `--prepare` re-marks the stage `running` without clearing `tasks`,
+  // spec §5) is never a candidate: it never refused anything, so a second,
+  // real attempt that happens to share a cost (`null` is the common case) and
+  // the same output paths must NOT be mistaken for a re-read of it.
+  //
+  // Fresh `requireStage` rather than the `stage` snapshot from the top of this
+  // function: `banked` must see whatever `tasks` holds right now.
+  const currentStage = requireStage(store, phaseId, stageId);
+  const banked = result.session_id === null ? null : alreadyBanked(currentStage, result, cost);
+  const taskId = banked === null ? nextTaskId(store, phaseId, stageId) : banked;
+  if (banked === null) {
+    // Only ever true for a null session id, and only against a row THIS file
+    // marked `banked_before_refusal` — an ordinary completed task sharing a
+    // cost and outputs is unremarkable (a retry after a gate reject looks
+    // exactly like this) and gets no note. A null session id identifies
+    // nothing, so it is NEVER used to collapse two rows into one; when it also
+    // happens to resemble an earlier BANKED row, the resemblance is named
+    // rather than silently left for an auditor to wonder about.
+    const looksLikeARepeat = result.session_id === null
+      && currentStage.tasks.some((t) =>
+        t.banked_before_refusal === true && t.cost_usd === cost && sameOutputs(t.outputs, result.outputs));
+    recordTask(store, phaseId, stageId, {
+      id: taskId,
+      status: "done",
+      expert: currentStage.expert ?? spec.planned.experts[0] ?? null,
+      model: options.model ?? currentStage.model ?? spec.planned.model,
+      cost_usd: cost,
+      ...(cost === null ? { metered: false } : {}),
+      ...(options.tokens === undefined ? {} : { tokens: options.tokens }),
+      error: null,
+      session_id: result.session_id,
+      started_at: currentStage.started_at ?? options.at,
+      ended_at: options.at,
+      outputs: result.outputs,
+      ...(willRefuseOnQuestions ? { banked_before_refusal: true } : {}),
+      ...(looksLikeARepeat ? { dedupe: "none — no session id" } : {}),
+    });
+    store.append(event(options, store.runId, stageId, "agent.result", {
+      phase: phaseId,
+      task: taskId,
+      session_id: result.session_id,
+      model: options.model ?? currentStage.model ?? spec.planned.model,
+      effort: options.effort ?? spec.planned.effort ?? null,
+      outputs: result.outputs,
+      mode: "in-session",
+      // `cost_usd` on the ENVELOPE must stay a number ≥ 0 (spec §2.9), so the fact
+      // that nothing was declared lives in the payload where it can be null.
+      metered: cost !== null,
+      ...(options.tokens === undefined ? {} : { tokens: options.tokens }),
+    }, cost ?? 0, currentStage.expert));
+    store.save();
+    if (looksLikeARepeat) {
+      notes.push(
+        `dedupe: none — no session id. This turn's cost and outputs match an earlier row on `
+        + `this stage, but with no \`session_id\` to fingerprint it, it cannot be told apart from `
+        + "a second, genuinely distinct unmetered turn — so it is recorded as its own row "
+        + `(${taskId}) rather than assumed identical. Declare a session id (or \`--cost-usd\`) to `
+        + "make a re-run safe to dedupe.",
+      );
+    }
+  } else {
+    // The marker is a claim ticket, and it is SINGLE-USE. It was written and
+    // never consumed: the re-run the refusal was waiting for matched the row and
+    // left it armed, so the row stayed a legitimate fingerprint target forever —
+    // and the NEXT genuinely distinct turn on this stage with the same shape (a
+    // gate reject, `--prepare`, the same host session, the same outputs, the
+    // same `null` cost — the ordinary unmetered retry) was dropped as "already
+    // recorded". That is the ledger forgetting a turn, which is the exact
+    // failure the marker exists to prevent, pointing the other way.
+    //
+    // The marker itself STAYS: "this row was banked ahead of a refusal" is a
+    // fact about how it got there and it does not stop being true. What is added
+    // is that the re-run it was holding a place for has now been taken, which
+    // `alreadyBanked` requires to be absent — so the ticket cannot be spent
+    // twice, and a reader of `run.yml` alone can see why.
+    claimBankedRow(store, phaseId, stageId, banked, options.at);
+    store.save();
+    notes.push(
+      `this turn's cost is already recorded as ${banked} — an earlier \`--commit\` banked it `
+      + "before refusing, so it is not recorded a second time. That row's marker is now spent: "
+      + "a later attempt on this stage is recorded as its own row, however much it resembles this one.",
+    );
+  }
+  if (cost === null && banked === null) {
+    notes.push(
+      `cost is unmetered (in-session): nothing declared it, so this turn is recorded as `
+      + "`cost_usd: null, metered: false` rather than $0.00. Pass `--cost-usd <n>` when you know it.",
+    );
+  }
+
+  if (willRefuseOnQuestions) {
     return out(EXIT_AGENT_FAILED, [
       ...notes,
       `${phaseId}/questions.md has ${unreadable.length} question(s) the parser cannot read `
@@ -1239,51 +1452,74 @@ async function commitStage(
     ]);
   }
 
-  // The cost of an in-session turn is DECLARED, never measured: the sub-agent ran
-  // inside the host's session and was billed to it. `--cost-usd` is the host
-  // saying what it was; `result.json`'s own `cost_usd` is the other way to say it.
-  // With neither, this is `null` + `metered: false` — not `0`, which is a
-  // measurement and a false one (2026-08-29 audit, §A: a run's ledger read
-  // "$0.00 spent" after real money had gone).
-  const declared = options.costUsd ?? result.cost_usd;
-  const cost = declared === null || declared === undefined ? null : round2(declared);
-  const taskId = nextTaskId(store, phaseId, stageId);
-  recordTask(store, phaseId, stageId, {
-    id: taskId,
-    status: "done",
-    expert: stage.expert ?? spec.planned.experts[0] ?? null,
-    model: options.model ?? stage.model ?? spec.planned.model,
-    cost_usd: cost,
-    ...(cost === null ? { metered: false } : {}),
-    ...(options.tokens === undefined ? {} : { tokens: options.tokens }),
-    error: null,
-    session_id: result.session_id,
-    started_at: stage.started_at ?? options.at,
-    ended_at: options.at,
-    outputs: result.outputs,
-  });
-  store.append(event(options, store.runId, stageId, "agent.result", {
-    phase: phaseId,
-    task: taskId,
-    session_id: result.session_id,
-    model: options.model ?? stage.model ?? spec.planned.model,
-    effort: options.effort ?? spec.planned.effort ?? null,
-    outputs: result.outputs,
-    mode: "in-session",
-    // `cost_usd` on the ENVELOPE must stay a number ≥ 0 (spec §2.9), so the fact
-    // that nothing was declared lives in the payload where it can be null.
-    metered: cost !== null,
-    ...(options.tokens === undefined ? {} : { tokens: options.tokens }),
-  }, cost ?? 0, stage.expert));
-  store.save();
-  if (cost === null) {
-    notes.push(
-      `cost is unmetered (in-session): nothing declared it, so this turn is recorded as `
-      + "`cost_usd: null, metered: false` rather than $0.00. Pass `--cost-usd <n>` when you know it.",
-    );
-  }
-
   return await finishStage(store, options, phaseId, stageId, spec, notes);
+}
+
+/**
+ * The id of the task row that already banked THIS `result.json`, or null when
+ * none has.
+ *
+ * Only called when `result.session_id` is non-null (see `commitStage` above) —
+ * a null session id is never used to fingerprint a re-run. And even then, only
+ * rows carrying `banked_before_refusal: true` are candidates: that flag is the
+ * ONLY thing that tells "a row a refusal already recorded, expecting this exact
+ * `result.json` back" apart from "an ordinary completed task that a gate sent
+ * back for a genuine retry" — `--prepare` re-marks a rejected stage `running`
+ * without clearing `tasks` (spec §5), so an ordinary row is always still there
+ * to be mismatched against, and a retry commonly shares both the previous
+ * cost (`null`, the unmetered case, most plausibly) and the same output paths.
+ * Scanning every task, marked or not, was exactly that bug (found in review):
+ * a real second turn silently dropped because it looked like the first.
+ *
+ * The fingerprint itself is every part of the result a second turn would have
+ * changed — the session it ran in, the cost it declared, and the outputs it
+ * named. All three matching a MARKED row is the same artefact being re-read,
+ * not a second turn that happened to cost the same.
+ */
+function alreadyBanked(
+  stage: RunStage,
+  result: { session_id: string | null; outputs: readonly string[] },
+  cost: number | null,
+): string | null {
+  const hit = stage.tasks.find((task) =>
+    task.banked_before_refusal === true
+    // …and UNCLAIMED. `claimBankedRow` stamps a row the moment its re-run
+    // matches it, and a spent marker is not a second licence: without this the
+    // row matched every later turn of the same shape for the life of the stage.
+    && task.dedupe === undefined
+    && task.session_id === result.session_id
+    && task.cost_usd === cost
+    && sameOutputs(task.outputs, result.outputs));
+  return hit?.id ?? null;
+}
+
+/**
+ * Spend the `banked_before_refusal` marker on the row a re-run just matched.
+ *
+ * Additive, in the field that already carries "why this row was or was not
+ * deduped": the marker stays (it says how the row got there), and the row gains
+ * the fact that the re-run it was holding a place for has arrived. `at` is the
+ * `--commit` that claimed it, which is the one thing the row could not otherwise
+ * say — its own `ended_at` belongs to the turn, not to the match.
+ */
+function claimBankedRow(
+  store: RunStore,
+  phaseId: string,
+  stageId: string,
+  taskId: string,
+  at: string,
+): void {
+  mapStage(store, phaseId, stageId, (stage) => ({
+    ...stage,
+    tasks: stage.tasks.map((task) => (task.id === taskId
+      ? { ...task, dedupe: `matched by the re-run committed at ${at} — the marker is spent` }
+      : task)),
+  }));
+}
+
+/** Element by element, so no separator character has to be chosen or escaped. */
+function sameOutputs(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
 /**
@@ -1530,6 +1766,20 @@ export function codexGateExecutorId(stage: RunStage): string | null {
   return identities.size === 1 ? [...identities][0] ?? null : null;
 }
 
+/**
+ * Fail the stage by name, and attribute the failure to the row that earned it.
+ *
+ * `tasksBefore` is how many rows the stage had when THIS invocation entered the
+ * executor. Given one, the last row is rewritten `failed` only when the stage
+ * GREW since — because the last row is otherwise a previous, completed attempt's
+ * (a gate reject and an in-session cycle both leave finished rows in place,
+ * spec §5), and repainting a `done` turn `failed` puts an error in the ledger
+ * that that turn did not produce. Omitted, the old behaviour stands: every other
+ * caller runs after `recordExecutorTasks`, so the last row IS this invocation's.
+ *
+ * The stage still fails and the reason is still said out loud either way — what
+ * a nameless loss may not do is borrow someone else's row to be named on.
+ */
 function failStage(
   store: RunStore,
   options: NextOptions,
@@ -1537,14 +1787,19 @@ function failStage(
   stageId: string,
   reason: string,
   notes: readonly string[],
+  tasksBefore?: number,
 ): NextOutcome {
   mapStage(store, phaseId, stageId, (stage) => ({
     ...stage,
     status: "failed",
     ended_at: nowish(options),
-    tasks: stage.tasks.map((task, i) =>
-      i === stage.tasks.length - 1 ? { ...task, status: "failed" as const, error: task.error ?? oneLine(reason) } : task,
-    ),
+    tasks: tasksBefore !== undefined && stage.tasks.length <= tasksBefore
+      ? stage.tasks
+      : stage.tasks.map((task, i) =>
+        i === stage.tasks.length - 1
+          ? { ...task, status: "failed" as const, error: task.error ?? oneLine(reason) }
+          : task,
+      ),
   }));
   store.append(event(options, store.runId, stageId, "stage.failed", { phase: phaseId, reason: oneLine(reason) }));
   store.save();
@@ -2183,6 +2438,32 @@ function phaseMoney(store: RunStore, phaseId: string): Money | null {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/**
+ * `input_tokens`/`output_tokens` for a run.yml task row — written together or
+ * not at all, and never an invented zero (a Task 2/3-class bug: `null` cost_usd
+ * written as `$0.00` was exactly this shape of lie).
+ *
+ * `AgentUsage` (and `ExecutorTask.inputTokens`/`outputTokens`, copied from it)
+ * already collapse "the provider's result document carried no usage object at
+ * all" into `{0, 0}` via `envelope.ts`'s `toUsage`/`EMPTY_USAGE` — the same
+ * shape a turn that genuinely reported zero, or reported only ONE side of the
+ * split, would leave the other side at (`number()`'s own default, 0). There is
+ * no signal left at THIS layer to split "not reported" from "reported as 0" apart,
+ * so a HALF-known split (`{0, 56}`) is exactly as untrustworthy as a fully
+ * unknown one: writing the reported 56 next to an invented 0 would still be
+ * one manufactured number on the row. Requiring BOTH strictly positive is the
+ * only rule that never writes a number nothing measured — negative inputs
+ * (never legitimately produced, but not this function's job to assume that)
+ * are absent for the same reason.
+ */
+export function tokenSplit(
+  inputTokens: number | undefined, outputTokens: number | undefined,
+): { input_tokens: number; output_tokens: number } | Record<string, never> {
+  if (inputTokens === undefined || outputTokens === undefined) return {};
+  if (inputTokens > 0 && outputTokens > 0) return { input_tokens: inputTokens, output_tokens: outputTokens };
+  return {};
 }
 
 function out(code: number, lines: readonly string[], stderr: readonly string[] = []): NextOutcome {

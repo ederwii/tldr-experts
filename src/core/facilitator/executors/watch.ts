@@ -161,6 +161,8 @@ export async function watchExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
         error: outcome.error,
         outputs: outcome.envelope?.outputs ?? [],
         metered: outcome.metered,
+        inputTokens: outcome.usage.input_tokens,
+        outputTokens: outcome.usage.output_tokens,
       });
       if (!outcome.ok) {
         return failed(ctx, `\`${feature.id}\`: ${outcome.error ?? "the sub-agent failed"}`, tasks);

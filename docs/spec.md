@@ -185,14 +185,17 @@ stage at `cursor`, or `done` when every phase is terminal.
 | `gates_policy` | {stage: `human\|auto\|agent`} | n | **Who** closes each gate. Resolved from §2.4 `gates:` and `run new --gates` at creation and frozen here, so the run keeps the policy it was opened with. `tldrx run gates set <stage>:<policy> --note <text>` is the ONLY sanctioned way to move it afterwards — one stage, a required note, one `gate.policy_changed` event carrying actor, moment, note and old→new. Absent, or a stage it does not name ⇒ `human`. `agent` (§5) is the third value: every `auto` condition PLUS a §2.17 evidence note that signs |
 | `stages[].stale` | bool | n | **Additive.** `true` when an EARLIER stage's gate was revoked after this one ran (§5). Its outputs stay on disk; nothing may treat them as current. Cleared when the stage runs again; emitted only when `true` |
 | `tasks[].id` / `.status` | `^t\d+$` / enum | y | One sub-agent invocation |
-| `tasks[].cost_usd` | number ≥0 \| `null` | y | `null` = **unmetered**: an in-session `--commit` turn nobody declared a cost for. Contributes nothing to any sum, so `spent_usd` is then a LOWER BOUND, and every report says so |
-| `tasks[].metered` | bool | n | **Additive.** `false` iff `cost_usd` is `null`; absent means metered. The two always travel together, and a `null` cost without it is a schema error |
+| `tasks[].cost_usd` | number ≥0 \| `null` | y | `null` = **unmetered**: no provider-metered dollar figure ever reached this row. Three ways in, and they are not distinguished here — an in-session `--commit` turn nobody declared a cost for, a Codex turn (metered in tokens, never USD), and a SPAWNED turn whose result document carried no `total_cost_usd` at all, including one that died before writing a result document. Contributes nothing to any sum, so `spent_usd` is then a LOWER BOUND, and every report says so. A `0` here is a CLAIM — a provider that reported zero, or a host that declared it with `--cost-usd 0` — never a stand-in for an absence |
+| `tasks[].metered` | bool | n | **Additive.** `false` iff `cost_usd` is `null`; absent means metered. The two always travel together, and a `null` cost without it is a schema error. For a SPAWNED turn it is decided in one place (`spawnAgent.ts`'s `interpret`), from whether the result document actually carried a USD figure — never from the provider's name ALONE, which is what let a Claude turn read as metered whether or not a dollar figure ever came back. The `provider === "claude"` guard stays only to keep Codex's synthesized `total_cost_usd: 0` (`agentEvents.ts`'s `resolveCodexResultDoc`) from reading as a measurement. For an in-session turn it is whether a cost was DECLARED |
 | `tasks[].tokens` | number | n | **Additive.** What `tldrx next --commit --tokens <n>` declared, when the host knew |
+| `tasks[].input_tokens` / `.output_tokens` | number ≥0 | n | **Additive.** The PROVIDER's own token split for a turn this process watched, read off the result document's `usage`. Distinct from `tokens`, which is a HOST declaration for a turn nothing here metered. Written only when BOTH sides came back strictly positive, and only together: the parse that produces them defaults a missing side to `0`, so a HALF-reported split is exactly as unverifiable as an absent one. Absent therefore means "no positive split reached the ledger" — never a zero standing in for one. Together with `cost_usd` they are what makes a dollar figure checkable against a price table instead of a number nobody can falsify |
+| `tasks[].banked_before_refusal` | `true` | n | **Additive.** This row was recorded AHEAD of a refusal on an unreadable `questions.md` — the turn ran, so its cost is in the ledger before `--commit` refuses on the way out. It is also the ONLY row a re-run's fingerprint may match against: the refusal leaves the stage `running` for the operator to fix the file and re-run, so this is the one case where the same `result.json` is expected back. It is a claim ticket for exactly ONE re-run — once matched, the row is stamped `dedupe` and stops being a candidate, because a marker left armed matched every later turn of the same shape for the life of the stage. Absent on every ordinary completed task, including one a gate reject sent back and a retry re-ran |
+| `tasks[].dedupe` | str | n | **Additive.** This row's part in the banked-turn dedupe, in the two cases the file would otherwise not explain: `none — no session id` on a row recorded as its OWN rather than matched against an earlier `banked_before_refusal` row its cost and outputs resemble, because a result with no `session_id` cannot be told apart from a second, genuinely distinct unmetered turn; and `matched by the re-run committed at <at> — the marker is spent` on a `banked_before_refusal` row whose re-run has arrived and been matched to it, which is what makes the marker single-use. Absent when neither happened. The alternative to both was to guess, and a guess here drops a turn out of the ledger |
 | `tasks[].session_id` / `.error` | str\|null | y | Session from `claude -p --output-format json`; one-line reason when `failed` |
 
 **Validation.** Ids unique within parent; `cursor` resolves; ≤1 `running` stage (single-writer); `|spent_usd −
 Σ tasks.cost_usd| ≤ 0.01` (a `null` cost contributes 0); `started_at ≤ ended_at`; `approved` needs `by`+`at`; a `null`
-`cost_usd` needs `metered: false`; every `gates_policy` value is `human\|auto\|agent` and every key names a stage in the file; a `gate.evidence`, when present, is complete and its `role`/`verdict` are §2.17 values;
+`cost_usd` needs `metered: false`; an `input_tokens`/`output_tokens`, when present, is a finite number ≥ 0, a `banked_before_refusal` is `true` and a `dedupe` is a string — each absent-or-valid, so a `run.yml` written before any of them existed still loads; every `gates_policy` value is `human\|auto\|agent` and every key names a stage in the file; a `gate.evidence`, when present, is complete and its `role`/`verdict` are §2.17 values;
 a `gate.executed_by`, when present, has a `type` in `human\|agent\|auto` and no `id` when that type is `auto`; a `gate.authority`, when present, is complete, its `type`/`policy`/`source` are the values above, and `authorized_by: null` and `source: unrecorded` travel together — either without the other is a record contradicting itself;
 `attended_by`, when present, is `host` — a value the reader does not understand is a schema error, never a silent
 downgrade to "spawn anyway";
@@ -496,6 +499,8 @@ because `retro.md` existed only when a human happened to type `tldrx retro`.
 ### 2.5 `.tldrx/memory/facts.yml`
 
 Durable, provenanced answers, read before any question is posed. Append-mostly: superseded or retired, never edited.
+Two writers, both going through `FactsStore` under the workspace lock: `tldrx answer` (and the `answer-capture` hook),
+which records what a question asked for, and `tldrx facts add` (§3), which records a fact no question asked for.
 
 ```yaml
 version: 1
@@ -519,6 +524,7 @@ facts:
 | `kind` / `confidence` | `answer\|observed\|derived` / `measured\|inferred\|stated` | y | Human answer, check output or stage conclusion; evidence class |
 | `source.who` / `.when` | str / RFC3339 | y | Human id or expert slug; capture time |
 | `source.run` / `.q` | run id\|`init` / `^Q\d+$`\|null | y | Where learned; originating question |
+| `source.decided_by` | `owner\|driver` | n | **Additive.** WHO DECIDED, as against `who`, which is who typed it. A fact is exactly the artefact that gets cited later, so a row that cannot say which of the two it was says nothing rather than implying the stronger one: absent means "not stated", never "owner". Written by `tldrx facts add --decided-by`, where the flag is REQUIRED — the field stays optional so every row written before it existed keeps validating. Rendered in every `{{facts}}` block as `· decided by owner` / `· decided by driver`, appended only when present, so a fact without it reaches a prompt byte-identical to before |
 | `supersedes` / `superseded_by` | fact id\|null | y | Single-link chain, reciprocal. Written by `tldrx answer <Qn> "…" --supersede` (§3), which walks to the head of the chain, so repeated reversal stays single-link |
 | `retired` | {at, by, reason}\|null | y | Ignored by no-re-ask, kept for replay |
 
@@ -530,7 +536,9 @@ Until 2026-08-31 every reader filtered on retirement alone, which was safe only 
 
 **Validation.** Ids unique and ascending; supersede links reciprocal and resolvable within this file; no fact both
 superseded and retired; ≤5000 facts (beyond that `tldrx` shards by `area`). `truncated` is optional and additive: a row
-written before it existed still validates, and only a non-boolean value is an issue.
+written before it existed still validates, and only a non-boolean value is an issue. `source.decided_by` is optional
+and additive the same way, and only a value outside `owner\|driver` is an issue — absent is the honest state, not a
+defect.
 
 **The cap was 300 until 2026-08-30.** `captureAnswers` writes a fact as `"<question> — <answer>"`, so 300 cut a real
 answer mid-clause: on the aparece run every one of six was cut, and four lost the very words — "Accepts ADR-D009 as
@@ -1130,9 +1138,17 @@ guard: the free round is granted only when every reason the envelope was refused
 | `actor` | str | y | Human id, expert slug, `facilitator`, or `hook:<id>` |
 | `cost_usd` | number ≥0 | y | `0` when not a spend event; sums to `run.budget.spent_usd` |
 | `payload` | object ≤4 KB | y | Free-form; object nesting ≤3 |
+| `payload.detail_omitted` | str | n | **Additive.** Written by the emit seam INSTEAD of `detail` when the payload would clear the 4096-BYTE cap (bytes, not characters — a thousand astral characters is four thousand bytes). It names the omitted field's byte count, the cap, and where the full text went. The text is saved FIRST — `<phase>/log/overflow/<ts>-<seq>-<type>-detail.txt`, run-relative — and only then is the event built, so the pointer is true by construction rather than a promise about a file written later; a save that fails says it failed instead of naming a path that does not exist, and the per-invocation counter is what stops two oversize events in the same second from sharing a file. The cap is never raised and the rest of the payload — the verdict included — survives |
 
 **Validation (appended line only).** One-line JSON ≤8 KB; exactly these seven keys; `type` in enum; append-only
 enforced by comparing file byte length before/after — a write that shortens the file is rejected.
+
+**An oversize payload the cap cannot rescue is still refused whole**, and that is the case `detail_omitted` does not
+cover: a payload with no `detail` to drop, or one whose REMAINDER is already over the cap on its own. The refusal
+throws out of `EventLog.append`, and an executor's emit seam catches it and fails the stage BY NAME rather than
+letting it escape past the ledger — which is what it used to do, taking the invocation's unsaved task rows with it.
+What was earned and what was lost are both named: `ExecutorOutcome.tasks` exists only at RETURN, so the rows the
+turn had already earned are gone, and the failure SAYS so rather than implying the ledger is whole.
 
 **Reading is tolerant, and says so.** A reader SKIPS any non-empty line that does not parse and keeps going — a
 process killed between the `{` and the `\n` leaves a torn last line, and one torn byte must not cost the other
@@ -1641,6 +1657,7 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx run gates set <stage>:<human\|auto\|agent> --note <text> [<run>]` | `run.yml` | `run.yml`'s §2.2 `gates_policy` and `events.jsonl` (`gate.policy_changed`, carrying actor, moment, note and old→new). The ONLY sanctioned way to move a frozen `gates_policy`; `run.yml` stays hand-edit-forbidden (§1). ONE `<stage>:<policy>` per invocation — a comma list is refused, and the entry must name its policy outright, since under `--gates` a bare stage means `human` and a signature must not rest on a default. An empty or missing `--note` is refused, as is a no-op (`human` → `human`). A run whose `run.yml` has no `gates_policy` at all gets the FULL map written, every stage explicit, with the one change applied. Gates already signed are untouched | 0,1,2,3 |
 | `tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <l>] [--parallel <n>] [--gate-agent] [--yolo]` | everything `next` reads, once per stage | everything `next` writes. Refused with **exit 1** on a run marked `attended_by: host`, before the event log is opened so nothing is written: this loop's whole job is calling `next` headless, and on such a run that is a refusal. `--gate-agent` is RENDERING ONLY (§5, "Decision cards"): when the loop stops for a person at exit 4 it prints a decision card in place of the ordinary stop block, and it never upgrades a stage's frozen `gates_policy` | 0,1,2,3,4,5 |
 | `tldrx answer <Qid> <text> [--supersede] [--run <id>]` | `questions.md`, `facts.yml` | `questions.md`, `facts.yml`, `events.jsonl`. `--supersede` is the only writer of `superseded_by`: valid only on an **answered** question, it appends a fact carrying the new answer, sets the old fact's `superseded_by`, appends a superseding `[Answer …]:` line plus a footer to the block, and appends `fact.added` + `fact.superseded`. Without it an answered question is refused (3); with it an **open** one is refused (1). **Both paths** then stamp the earlier-phase documents the block names and append `doc.superseded` (§2.7, *Superseding an earlier phase's document*) | 0,1,2,3 |
+| `tldrx facts add "<text>" --area <id> --decided-by <owner\|driver> [--kind <k>] [--confidence <c>] [--repo <r>] [--run <id>]` | `facts.yml`; the open runs, only to establish which one to attribute the fact to | `facts.yml` (one appended row, through `FactsStore` under the workspace lock — load, mint the id, cap, validate, save) and, when a run was established, that run's `events.jsonl` (`fact.added`). The direct writer beside `answer`, for a fact no question asked for. `--area` and `--decided-by` are both REQUIRED: without an area no `{{facts}}` block or no-re-ask hook can scope a match, and without a decider a row that gets cited later cannot say which of the two it was. Over the §2.5 cap the text is cut, marked `truncated: true`, and the cut is named on stdout — a marker only a later reader sees is one the author never acts on. The run is provenance and is ABSENT WITH A REASON when it cannot be established: one open run is used, several are never guessed between, and either way the row is written and stdout says which happened. `--run <id>` naming a run that does not exist is REFUSED (exit 3) before the store is opened — `RunStore.resolve` answers `none` both to “no run is open” and to “that id is not here”, and writing the second as the first attributed the fact to nothing while telling the operator there was nothing to attribute it to | 0,1,3 |
 | `tldrx interview [--run <id>\|--init] [--yes-to-defaults]` | the cursor phase's `questions.md` (or `.tldrx/init-questions.md`), `run.yml`, `.tldrx/process.yml`, `workspace.yml`, `git remote get-url origin` | the same three files `answer` writes, one per answer recorded; with `--init`, also `.tldrx/process.yml` (§2.12) when a process answer settles `methodology` or `ticket_tool.kind` | 0,1,2,3 |
 | `tldrx approve [--run <id>] [--note] [--as-agent] [--evidence <path>]` | `run.yml`, stage outputs, stage checks; with `--as-agent` also `.agent/<stage>/evidence.md` (§2.17) | `run.yml` gate, `events.jsonl`; with `--as-agent` also `<phase>/gate-evidence/<stage>.md` and `gate.evidence`. `--as-agent` is refused (1) unless the stage's policy is `agent`; `--evidence` without `--as-agent` is refused (1) — a note nobody signs with is not evidence for anything; a broken note is 2, a note whose verdict is not `sign` is 4, and nothing is signed in either case | 0,1,2,3,4 |
 | `tldrx gate template [--run <id>] [--force]` | `run.yml`, the cursor stage's declared outputs, `03-plan/stories/<id>.md` or `04-build/implicit-plan.yml` | `.agent/<stage>/evidence.md` (§2.17). Nothing else: no gate, no cursor, no event, no cost. An existing note is left alone (exit 2) unless `--force` | 0,1,2,3 |
@@ -2494,7 +2511,21 @@ one story never varies:
    error**: Build refuses with exit 2, naming the command, its exit code and the repo, and no story attempt is spent.
    Results are written to `04-build/preflight.yml` (files are the state) and read back by later invocations, so a
    resumed run never re-pays for them; a command the gate declines to run at all is recorded `unmeasured` and refuses
-   nothing. When a story's DoD then fails, the cached base result decides ATTRIBUTION: a command red on the base too
+   nothing.
+
+   **A cached RED is narrower than a cached green (2026-09-06).** A row may additionally carry `command_hash` — the
+   command hashed together with the workspace's WHOLE declared command list, because the refusal's own advice is "fix
+   `.tldrx/workspace.yml`" and that edit can leave one command byte-identical while changing what the gate will run at
+   all — and its own `checked_at`, per-row because re-probing the first stale red would otherwise stamp the file `now`
+   and make every other stale red in it look fresh. A cached green keeps today's rule, the base-sha match, and so does
+   an `unmeasured` row, which is not evidence of anything and would buy nothing by being re-run. A cached **red** is
+   re-probed when the hash differs, when it is older than **30 minutes**, or unconditionally under `--prepare`: a
+   `--prepare` that returns a refusal in 0 seconds over a base nobody measured today is not evidence, and the
+   `workspace.yml` fix that refusal asks for has to be something the cache can see. Both fields are additive — an
+   absent `command_hash` is a missing answer, not a mismatch, and an absent per-row `checked_at` falls back to the
+   file-level one, with neither making a row stale.
+
+   When a story's DoD then fails, the cached base result decides ATTRIBUTION: a command red on the base too
    halts the build with the same config error instead of blocking the story. Measured on `260829-scoring-leaderboard`:
    two of three declared commands already failed on pristine main — one of them running paid `Live` AI tests the repo's
    own CI excludes — so all 15 stories would have blocked identically, each having spent a developer turn on it. Then anything still uncommitted is committed as `feat(<story-id>): <title>` — the agent may
@@ -2824,8 +2855,10 @@ that `result.json` as the envelope, narrows it with the SAME fail-closed parser 
 verdict and spends no attempt. **`result_schema` is the ONLY statement of the envelope's shape** (gh #133): the
 reviewer prompt points at it and deliberately does not paraphrase it — a second copy in prose is what let a host
 dictate the shape from memory and lose a cycle. The prompt does state the one bound the schema cannot: the verdict's
-prose is copied into a `check.passed`/`check.failed` payload, and §2.9's 4096-byte payload cap REFUSES an oversize
-one whole rather than truncating it. The turn is recorded `cost_usd: null, metered: false` (a `cost_usd`/`tokens` in the
+prose is copied into a `check.passed`/`check.failed` payload, and §2.9's 4096-byte payload cap will not carry an
+oversize one: the prose is replaced by `detail_omitted`, which names its byte count and points at the overflow file
+that already holds it, while the verdict itself is kept. It used to REFUSE the event whole, which threw out of
+`EventLog.append` and took the invocation's unsaved task rows with it. The turn is recorded `cost_usd: null, metered: false` (a `cost_usd`/`tokens` in the
 envelope declares it), the `check: review` event carries `source: host`, and **no `agent.spawned` is emitted** — a
 `task.started` with `role: reviewer, mode: prepare` is. A settled handshake removes the bundle; its presence is what
 says a review is outstanding, and `--discard-pending` bins it like any other.
@@ -2889,6 +2922,15 @@ them does not parse, and the finding it belongs to is dropped rather than half-r
   approval away from `done` with the defect alive. The accounting was written from an agent's REPORT rather than from
   a verified code state, which is the one thing the framework refuses everywhere else. Verification only ever moves a
   finding from closed to OPEN; nothing here closes one, and a `Resolved: no` is never touched.
+- **A `Resolved:` sha that VERIFIES is rewritten to the canonical 40-hex object id (2026-09-06).** The same
+  `rev-parse --verify <sha>^{commit}` that checks the claim already knows the full id, and the record was keeping the
+  abbreviation instead — so `Resolved: yes (9f2c1ab)` named a PREFIX, which is a different thing from a commit: a
+  prefix is ambiguous the moment the repo grows into it, and no later reader can compare it against another record
+  without asking git again. Only the sha TOKEN is replaced, in place, so whatever prose the grammar tolerates around
+  it survives — `yes — commit 9f2c1ab` becomes `yes — commit <40hex>` — and a bare `yes`, a `Resolved: no`, a claim
+  verification already downgraded, and every other finding in the file stay byte-identical. Each rewrite is named on
+  stdout. A sha git cannot resolve is never rewritten: that is the failure path above, which WITHDRAWS the claim
+  rather than tidying it.
 - **One round per story** (`MAX_FIXLIST_ROUNDS`, reset by `story reopen` like every other count in the review ledger).
   A free round that could be taken twice is a story that never has to settle, so a second `fixlist` is refused out
   loud and read as `changes` — which costs the attempt the first one did not — and the SECOND reviewer's prompt
