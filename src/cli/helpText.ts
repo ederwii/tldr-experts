@@ -793,7 +793,7 @@ const ENTRIES: readonly CommandHelp[] = [
       { name: "kind", arg: "<kind>", meaning: "What sort of fact this is.", values: FACT_KINDS, sub: "add" },
       { name: "confidence", arg: "<level>", meaning: "How well it is known. `measured` means you ran the check.", values: FACT_CONFIDENCES, sub: "add" },
       { name: "repo", arg: "<name>", meaning: "Scope the fact to one repo. Repeatable.", repeatable: true, sub: "add" },
-      { name: "run", arg: "<id>", meaning: "Attribute it to this run. Without it, one open run is used and several are refused rather than guessed between.", sub: "add" },
+      { name: "run", arg: "<id>", meaning: "Attribute it to this run. Without it, one open run is used; with several open, the fact is still recorded and its run is left absent with a named reason on stdout, because provenance nobody can establish is written as missing, never guessed.", sub: "add" },
       root(),
     ],
     examples: [
