@@ -2458,8 +2458,14 @@ describe("stack packs reach the Build reviewer (stack packs design §4.5)", () =
   // from the workspace-level `stack_packs.enabled` these tests also flip.
   // Without it the developer's `loadExpertBundles` never selects
   // `typescript-stack` at all, so it could never carry an overlay regardless
-  // of the packs switch; the reviewer's `stackChecks` does not go through
-  // `selectExperts` and is unaffected either way.
+  // of the packs switch.
+  //
+  // The reviewer's `stackChecks` does not go through `selectExperts` itself,
+  // but `reviewerPrompt()` in `build.ts` gates it on this SAME switch (issue
+  // review, fix round 1): without that gate, `stack_packs.enabled: true` +
+  // `stack_experts: false` would hand the reviewer `## Stack checks` for
+  // content the developer was never shown — one turn grading against text
+  // the other turn never saw.
   const ONE: BuildWorkspaceOptions = {
     stories: [{ id: "S1", epic: "E1", title: "First story" }],
     epics: [{ id: "E1", stories: ["S1"], branch: "epic/e1" }],
@@ -2481,6 +2487,27 @@ describe("stack packs reach the Build reviewer (stack packs design §4.5)", () =
 
   test("switch off: neither prompt mentions the overlay or the checks section", async () => {
     const ws = workspace({ ...ONE, overlays: [{ id: "react", evidence: "package.json: dependencies.react" }] });
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+    await next(ws);
+    expect(readFileSync(join(promptDir, "reviewer-S1-1.md"), "utf8")).not.toContain("## Stack checks");
+    expect(readFileSync(join(promptDir, "developer-S1-1.md"), "utf8")).not.toContain("<!-- overlay: react -->");
+  });
+
+  /**
+   * The combination the review found (issue review, fix round 1): packs ARE on for the
+   * workspace, but this stage's OWN `stack_experts` is off. Before the fix,
+   * `reviewerPrompt()` read only `readStackPacks(root).enabled` — true here — so the
+   * reviewer got `## Stack checks` for content the developer, gated by `selectExperts`
+   * on `spec.stackExperts`, never received at all. The two turns must agree on whether
+   * packs are in play for THIS story; neither getting anything is the correct agreement,
+   * not "reviewer gets it, developer doesn't."
+   */
+  test("packs on but the stage's stack_experts is false: neither turn gets pack content — the two agree", async () => {
+    const ws = workspace({
+      ...ONE, stackExperts: false, stackPacks: true,
+      overlays: [{ id: "react", evidence: "package.json: dependencies.react" }],
+    });
     const promptDir = join(ws.root, "prompts");
     process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
     await next(ws);

@@ -2324,8 +2324,19 @@ class BuildSession {
       fixlistAvailable: this.fixlistRoundsSpent(story.planned.story.id) < MAX_FIXLIST_ROUNDS,
       // The active packs' checks for this story's repo (stack packs design §4.5): the
       // same helper `expert packs status` prints, so the reviewer and the operator read
-      // one list. Null when the switch is off, which renders nothing.
-      stackChecks: stackChecks(this.ctx.root, [story.planned.story.repo]),
+      // one list. Null when the packs switch is off, which renders nothing.
+      //
+      // Gated on `spec.stackExperts` too (issue review, fix round 1): the developer's
+      // OWN pack content is gated on that same stage-yaml switch two calls down, via
+      // `loadExpertBundles({ stackExperts: this.ctx.spec.stackExperts, ... })` ->
+      // `selectExperts` (`selectExperts.ts:140` — a `kind: stack` expert is never even
+      // SELECTED without it). With `stack_packs.enabled: true` and `stack_experts: false`
+      // in one story, the developer would get no pack content at all while the reviewer
+      // graded against `## Stack checks` text it was never shown. Checking both switches
+      // here is what keeps the two turns agreeing on whether packs are in play at all.
+      stackChecks: this.ctx.spec.stackExperts
+        ? stackChecks(this.ctx.root, [story.planned.story.repo])
+        : null,
     });
   }
 

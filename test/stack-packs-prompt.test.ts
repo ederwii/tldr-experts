@@ -198,9 +198,23 @@ describe("the reviewer's stack checks", () => {
     expect(stackChecks(packRoot({ enabled: true }), ["other-repo"])).toBeNull();
   });
 
-  test("the reviewer prompt carries the section only when given checks, between Conventions and The story", () => {
-    expect(reviewPrompt(null)).toBe(reviewPrompt(undefined));
+  // The two tests below are the recorded-bytes pin for the off-switch case (issue
+  // review, fix round 1): with no `stackChecks` in play, the reviewer prompt must be
+  // exactly what `buildReviewerPrompt` produced at base 65517d6, before this field
+  // existed at all. Checking out that commit to diff against it would be the literal
+  // form; this is the simplest HONEST proxy for the same claim, split into two named
+  // facts rather than folded into the "on" test below: absence of the section, and
+  // byte-identity between "omitted" and "explicitly null" (the two spellings of "off"
+  // a caller can reach).
+  test("off-switch: the reviewer prompt carries no ## Stack checks section at all", () => {
     expect(reviewPrompt(null)).not.toContain(STACK_CHECKS_HEADING);
+  });
+
+  test("off-switch: passing stackChecks: null renders byte-identical to omitting the field", () => {
+    expect(reviewPrompt(null)).toBe(reviewPrompt(undefined));
+  });
+
+  test("the reviewer prompt carries the section only when given checks, between Conventions and The story", () => {
     const text = reviewPrompt("### typescript-stack\n\n- Any new `any`? verify: grep");
     expect(text.split(`## ${STACK_CHECKS_HEADING}`).length - 1).toBe(1);
     expect(text.indexOf("## Conventions")).toBeLessThan(text.indexOf(`## ${STACK_CHECKS_HEADING}`));
