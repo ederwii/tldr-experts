@@ -1,0 +1,150 @@
+/**
+ * What the PHASE has spent so far, for `04-build/handoff.md`'s header — never
+ * what THIS process spent (#138), and never a confident total when the ledger
+ * cannot be read (#139).
+ */
+import { RunStore } from "../run/RunStore.ts";
+import { stageAt } from "../run/RunFile.ts";
+import { spendBasisOf, type SpendTurn } from "../budget/spendBasis.ts";
+
+/** One turn's accounting — as much of an executor task as the cost line reads. */
+export interface PhaseCostTurn {
+  readonly costUsd: number;
+  /** False ⇒ billed to a host session; `run.yml` records no dollars for it. */
+  readonly metered?: boolean;
+  readonly tokens?: number;
+}
+
+export interface PhaseCost {
+  readonly usd: number;
+  readonly note: string | null;
+}
+
+/** Local, as in every other module here (nine files define their own — measured). */
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/**
+ * What the PHASE has spent so far, for the handoff header — never what THIS
+ * process spent (#138).
+ *
+ * `04-build/handoff.md` is rewritten by every invocation that reaches `finish()`,
+ * over a document whose own docstring says it "describes the phase, not the
+ * invocation". The header was fed `this.spent()`, the sum of the tasks this
+ * process spawned, so a `tldrx next` → `tldrx reject` → `tldrx next` rewrote a
+ * phase that had spent $0.44 as one that had spent `$0.00`: the second invocation
+ * settled nothing, spent nothing, and said so about the whole phase.
+ *
+ * **The durable source is `run.yml`'s `stage.cost_usd`**, and it is chosen over
+ * the `agent.result` events for one reason: it is the ledger the BUDGET is
+ * derived from, and it validates its own arithmetic. `rollUp` recomputes it from
+ * `stage.tasks` on every save (`RunStore.ts:378`), `rollUpBudget` mirrors it into
+ * `budget.yml`, `run status` and the dashboard both read it (`dashboard/model.ts`,
+ * `stage.cost_usd`), and `validateRunFile` REFUSES a `run.yml` whose
+ * `budget.spent_usd` drifts from the sum of its task rows by more than a cent
+ * (`RunFile.ts:647`). The events ledger carries the same numbers — every
+ * `recordTask` is paired with an `agent.result` written from the same task in the
+ * same loop — but nothing checks that it still does, so reading it here would put
+ * a second, unpoliced derivation of the budget on the page beside the first.
+ *
+ * Three properties this relies on, each verified rather than assumed:
+ *
+ *  - **`tldrx reject` does not touch it.** It rewrites `status`, `ended_at` and
+ *    `gate` and nothing else (`run/gates.ts`), so a rejected stage keeps every
+ *    dollar it spent. That is the right answer to "what should a reject do to the
+ *    number a re-run reports": nothing. The money was spent.
+ *  - **This invocation is not in it yet.** `recordExecutorTasks` runs in
+ *    `runNext` AFTER the executor returns, so at `writeHandoff` time `run.yml`
+ *    holds the earlier invocations and `invocationUsd` holds this one. Adding
+ *    them cannot double-count.
+ *  - **Opening the store mid-stage is the established shape here**, not a new
+ *    coupling: the executor already does exactly `RunStore.open(runDir).run` for
+ *    the run title and for the epic-branch state.
+ *
+ * When the ledger cannot be read at all — no `run.yml`, one that fails schema
+ * validation, or a stage id that does not resolve — the answer is NOT a confident
+ * total. It falls back to this invocation's own spend and says which of the two
+ * numbers the reader is looking at.
+ *
+ * **And the total it CAN read is a lower bound whenever a turn ran in-session**
+ * (#139). A host session driving `--prepare`/`--commit` without `--cost-usd` is
+ * recorded as `cost_usd: null` + `metered: false`, and `rollUp` sums that as
+ * nothing — so `stage.cost_usd` is what the METERED turns cost, not what the
+ * stage cost. Measured, not inferred: a run whose developer was the host's and
+ * whose reviewer was a $0.11 spawn wrote `Cost: $0.11 of $200.00 ceiling`, a bare
+ * figure indistinguishable from a stage where every turn was billed here.
+ *
+ * The counting and the sentence come from `budget/spendBasis.ts`, which is also
+ * where the dashboard's `spend.reason` comes from (#103) and where `budget show`'s
+ * "LOWER BOUND, not a total" is spelled — the caveat is one derivation on three
+ * surfaces rather than three wordings of one fact. The turns are the same rows
+ * the sum above is made of, plus this invocation's, for the same reason
+ * `invocationUsd` is added to it: the first write of a handoff happens before
+ * `recordExecutorTasks` puts them in the file.
+ *
+ * A stage whose every turn WAS metered gets no note at all. `measured` is the one
+ * basis with nothing to say, and a caveat on every header is a caveat nobody reads.
+ */
+// `<T extends PhaseCostTurn>` rather than a bare `readonly PhaseCostTurn[]`
+// parameter: `build.ts`'s own call site passes `this.tasks: ExecutorTask[]` (a
+// typed variable, structurally a `PhaseCostTurn[]` already), but
+// `test/build-executor.test.ts` passes several FRESH `ExecutorTask`-shaped
+// object literals inline, and TS's excess-property check rejects a fresh
+// literal's extra fields against a plain object type even when the same value
+// held in a variable would pass. Inferring `T` from the literal itself sidesteps
+// that check while still enforcing the constraint — the body reads only
+// `costUsd`, `metered` and `tokens`, exactly as it did before this file moved.
+export function phaseCostToDate<T extends PhaseCostTurn>(
+  runDir: string,
+  phaseId: string,
+  stageId: string,
+  invocationUsd: number,
+  invocationTurns: readonly T[] = [],
+): PhaseCost {
+  let recorded: number | null = null;
+  let turns: SpendTurn[] = [];
+  try {
+    const found = stageAt(RunStore.open(runDir).run, { phase: phaseId, stage: stageId, task: null });
+    if (found !== null) {
+      recorded = found.stage.cost_usd;
+      // The rows the sum above is made of. `metered` is written only when it is
+      // `false`, so an absent one means metered — every row from before the field
+      // existed, and every headless spawn.
+      turns = found.stage.tasks.map((task) => ({
+        costUsd: task.cost_usd,
+        metered: task.metered !== false,
+        tokens: task.tokens ?? null,
+      }));
+    }
+  } catch {
+    // A run.yml that is missing, torn, or invalid. The handoff is still worth
+    // writing; the header just has to stop pretending it knows the phase total.
+    recorded = null;
+  }
+  // This invocation's turns are not in `run.yml` yet — `recordExecutorTasks` runs
+  // after the executor returns — so they are counted from the executor's own list,
+  // exactly as `invocationUsd` is added to the sum. Without them the FIRST write
+  // of a handoff would count nothing at all and report a host-driven stage as
+  // fully metered (#139).
+  turns = [
+    ...turns,
+    ...invocationTurns.map((task) => ({
+      costUsd: task.metered === false ? null : round2(task.costUsd),
+      metered: task.metered !== false,
+      tokens: task.tokens ?? null,
+    })),
+  ];
+  const counted = spendBasisOf(turns, turns.reduce((sum, t) => sum + (t.tokens ?? 0), 0), "stage");
+  // A fully metered stage keeps its clean line: `measured` is the one basis with
+  // nothing to caveat, and a caveat on every header is a caveat nobody reads.
+  const bound = counted.basis === "measured" ? null : counted.reason;
+  if (recorded === null) {
+    return {
+      usd: round2(invocationUsd),
+      note: "this invocation only — `run.yml` could not be read for what the stage spent before it"
+        + (bound === null ? "" : `; ${bound}`),
+    };
+  }
+  return { usd: round2(recorded + invocationUsd), note: bound };
+}

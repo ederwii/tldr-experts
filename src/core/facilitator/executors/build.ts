@@ -43,8 +43,6 @@ import {
 import { DodCommandRefused, runDodCommand } from "../../../hooks/lib/story.ts";
 import { FactsStore } from "../../facts/FactsStore.ts";
 import { RunStore } from "../../run/RunStore.ts";
-import { stageAt } from "../../run/RunFile.ts";
-import { spendBasisOf, type SpendTurn } from "../../budget/spendBasis.ts";
 import { renderConventions, renderFacts, stackExpertNames } from "../prompt.ts";
 import { loadExpertBundles } from "../../experts/expertBundle.ts";
 import { stackChecks } from "../../experts/packSections.ts";
@@ -86,7 +84,7 @@ import {
 } from "../../build/prompts.ts";
 import { workspaceRecurring } from "../../retro/reviewerFocus.ts";
 import {
-  isFormatRejection, looksLikeReviewerError, MAX_FORMAT_RETRIES, parseReview, renderFormatRefusal,
+  isFormatRejection, MAX_FORMAT_RETRIES, parseReview, renderFormatRefusal,
   renderPreviousAttempt, renderReviewLog, reviewerFailed, type Review,
 } from "../../build/review.ts";
 import {
@@ -98,6 +96,8 @@ import {
   type FixFinding, type FixlistOnDisk,
 } from "../../build/fixlist.ts";
 import { renderBuildHandoff, type EpicSummaryRow } from "../../build/handoff.ts";
+import { readReviewLedger, type ReviewLedger } from "../../build/reviewLedger.ts";
+import { phaseCostToDate } from "../../build/phaseCost.ts";
 import { appendBuildRetro, buildRetroPath, gateRetroLines, storyRetroLines } from "../../build/retroLog.ts";
 import { MAX_STORIES_PER_WAVE, type PlanStatus } from "../../schemas/planCommon.ts";
 import type { ExecutorContext, ExecutorOutcome, ExecutorTask } from "./index.ts";
@@ -3877,425 +3877,10 @@ function numberOf(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-/**
- * What `events.jsonl` already says about one story, for the questions a fresh
- * process cannot answer from memory: how many times has it really been REVIEWED,
- * is it waiting on a review that FAILED, and did its last DEVELOPER ever run?
- */
-export interface ReviewLedger {
-  /**
-   * Real verdicts — `approve` or `changes`. This is the requeue counter, and an
-   * errored review is deliberately not one of them.
-   */
-  readonly verdicts: number;
-  /**
-   * Fix-list rounds this story has been GRANTED (design §B.4) — the bound's
-   * counter.
-   *
-   * Deliberately separate from `verdicts`: a `fixlist` is a real verdict that
-   * costs no attempt, so counting it there would spend the requeue it exists not
-   * to spend, and not counting it anywhere would make the one-round bound
-   * unenforceable across processes. Reset by `story.reopened` like every other
-   * count here — a person who reopens a story hands it a fresh run of attempts,
-   * and a fresh fix-list round with them.
-   */
-  readonly fixlistRounds: number;
-  /** The error of the LAST review, when it errored and nothing judged it since. */
-  readonly erroredWith: string | null;
-  /** The story commit the last `task.done` recorded — the diff already merged. */
-  readonly commit: string | null;
-  /** The DoD results of the last developer attempt that actually ran one. */
-  readonly dod: readonly DodResult[];
-  /**
-   * The error the LAST developer died with, when it died and nothing has run
-   * since — read off the `check: "developer"` event this executor writes.
-   */
-  readonly developerErroredWith: string | null;
-  /**
-   * COMPAT: the story's last attempt was blocked having produced nothing the
-   * PIPELINE recorded — no commit at `task.done`, no check of any kind, no
-   * reviewer spawned.
-   *
-   * A run recorded before `check: "developer"` existed wrote an errored
-   * developer spawn exactly like this and left no other trace in
-   * `events.jsonl`; the error itself went only to `run.yml`'s task row.
-   * Measured 2026-08-30 in `260830-tenancy-identity-customers`, five times:
-   *
-   *   {"type":"task.started","payload":{"story":"S2","attempt":1}}
-   *   {"type":"agent.spawned","payload":{"story":"S2","role":"developer"}}
-   *   {"type":"task.done","payload":{"story":"S2","status":"blocked",
-   *                                  "verdict":"n-a","commit":null}}
-   *
-   * "Nothing the pipeline recorded" is the careful phrasing, and the same run is
-   * why: two of those five story branches (S4, S5) DO carry a commit the dying
-   * developer made with its own `git commit` before the budget bit. Nothing ran
-   * a DoD over it, nothing merged it and nothing read it — which is exactly why
-   * the story is owed the attempt again rather than blocked on it.
-   *
-   * It is NOT on its own proof of a failed spawn — a story with an empty dod
-   * block blocks identically — so the caller pairs it with the story's own plan.
-   */
-  readonly blockedWithNothingRun: boolean;
-  /**
-   * The last `story.reopened` — a person giving this story another run of
-   * attempts (`tldrx story reopen`, `run/reopenStory.ts`) — or null.
-   *
-   * It is a RESET BOUNDARY, not a field with a reader: every count above starts
-   * again at it, so a verdict recorded before a reopen does not spend an attempt
-   * of the reopened story. Nothing is erased to achieve that. The events are all
-   * still in the log; this reads the last boundary in it.
-   */
-  readonly reopened: { readonly at: string; readonly actor: string; readonly note: string } | null;
-  /**
-   * The OPEN fix round on this story (issue #58), or null when there is none.
-   *
-   * A fix round is `tldrx story reopen <id> --for-fix --note "<defect>"`: a DONE
-   * story reopened to land one named defect, consuming no attempt. It OPENS on
-   * that event and CLOSES when the story is `done` again — nothing else closes
-   * it, and a plain reopen deliberately does not: a fix round that blocked and
-   * was granted more attempts is still the same unfixed defect.
-   *
-   * One story may have exactly one open at a time (owner constraint,
-   * 2026-09-01), and this is the field that enforces it across processes. It is
-   * the bound's counter in the same way `fixlistRounds` is — read from the log,
-   * because a second `tldrx` invocation remembers nothing.
-   */
-  readonly fixRound: { readonly at: string; readonly actor: string; readonly note: string } | null;
-  /**
-   * Free re-prompts already granted for the story's OPEN envelope round (#78).
-   *
-   * The bound's counter, and the reason it is read from the log: `--commit
-   * --review` settles one envelope per process, so a limit this process alone
-   * remembered would reset on every host correction. It restarts at zero the
-   * moment any review verdict is recorded — including an errored one — because
-   * the bound is per envelope round, not per story.
-   */
-  readonly formatRetries: number;
-  /**
-   * What the format check said about the last refused envelope, or null.
-   *
-   * Cleared by the same events that reset `formatRetries`, so it is never advice
-   * about a round that has already closed. `--prepare --review` splices it back
-   * into a rewritten prompt: a host asked for a corrected envelope must not be
-   * handed the brief that produced the broken one.
-   */
-  readonly formatRefusal: string | null;
-}
-
-/**
- * What the PHASE has spent so far, for the handoff header — never what THIS
- * process spent (#138).
- *
- * `04-build/handoff.md` is rewritten by every invocation that reaches `finish()`,
- * over a document whose own docstring says it "describes the phase, not the
- * invocation". The header was fed `this.spent()`, the sum of the tasks this
- * process spawned, so a `tldrx next` → `tldrx reject` → `tldrx next` rewrote a
- * phase that had spent $0.44 as one that had spent `$0.00`: the second invocation
- * settled nothing, spent nothing, and said so about the whole phase.
- *
- * **The durable source is `run.yml`'s `stage.cost_usd`**, and it is chosen over
- * the `agent.result` events for one reason: it is the ledger the BUDGET is
- * derived from, and it validates its own arithmetic. `rollUp` recomputes it from
- * `stage.tasks` on every save (`RunStore.ts:378`), `rollUpBudget` mirrors it into
- * `budget.yml`, `run status` and the dashboard both read it (`dashboard/model.ts`,
- * `stage.cost_usd`), and `validateRunFile` REFUSES a `run.yml` whose
- * `budget.spent_usd` drifts from the sum of its task rows by more than a cent
- * (`RunFile.ts:647`). The events ledger carries the same numbers — every
- * `recordTask` is paired with an `agent.result` written from the same task in the
- * same loop — but nothing checks that it still does, so reading it here would put
- * a second, unpoliced derivation of the budget on the page beside the first.
- *
- * Three properties this relies on, each verified rather than assumed:
- *
- *  - **`tldrx reject` does not touch it.** It rewrites `status`, `ended_at` and
- *    `gate` and nothing else (`run/gates.ts`), so a rejected stage keeps every
- *    dollar it spent. That is the right answer to "what should a reject do to the
- *    number a re-run reports": nothing. The money was spent.
- *  - **This invocation is not in it yet.** `recordExecutorTasks` runs in
- *    `runNext` AFTER the executor returns, so at `writeHandoff` time `run.yml`
- *    holds the earlier invocations and `invocationUsd` holds this one. Adding
- *    them cannot double-count.
- *  - **Opening the store mid-stage is the established shape here**, not a new
- *    coupling: the executor already does exactly `RunStore.open(runDir).run` for
- *    the run title and for the epic-branch state.
- *
- * When the ledger cannot be read at all — no `run.yml`, one that fails schema
- * validation, or a stage id that does not resolve — the answer is NOT a confident
- * total. It falls back to this invocation's own spend and says which of the two
- * numbers the reader is looking at.
- *
- * **And the total it CAN read is a lower bound whenever a turn ran in-session**
- * (#139). A host session driving `--prepare`/`--commit` without `--cost-usd` is
- * recorded as `cost_usd: null` + `metered: false`, and `rollUp` sums that as
- * nothing — so `stage.cost_usd` is what the METERED turns cost, not what the
- * stage cost. Measured, not inferred: a run whose developer was the host's and
- * whose reviewer was a $0.11 spawn wrote `Cost: $0.11 of $200.00 ceiling`, a bare
- * figure indistinguishable from a stage where every turn was billed here.
- *
- * The counting and the sentence come from `budget/spendBasis.ts`, which is also
- * where the dashboard's `spend.reason` comes from (#103) and where `budget show`'s
- * "LOWER BOUND, not a total" is spelled — the caveat is one derivation on three
- * surfaces rather than three wordings of one fact. The turns are the same rows
- * the sum above is made of, plus this invocation's, for the same reason
- * `invocationUsd` is added to it: the first write of a handoff happens before
- * `recordExecutorTasks` puts them in the file.
- *
- * A stage whose every turn WAS metered gets no note at all. `measured` is the one
- * basis with nothing to say, and a caveat on every header is a caveat nobody reads.
- */
-export function phaseCostToDate(
-  runDir: string,
-  phaseId: string,
-  stageId: string,
-  invocationUsd: number,
-  invocationTurns: readonly ExecutorTask[] = [],
-): { readonly usd: number; readonly note: string | null } {
-  let recorded: number | null = null;
-  let turns: SpendTurn[] = [];
-  try {
-    const found = stageAt(RunStore.open(runDir).run, { phase: phaseId, stage: stageId, task: null });
-    if (found !== null) {
-      recorded = found.stage.cost_usd;
-      // The rows the sum above is made of. `metered` is written only when it is
-      // `false`, so an absent one means metered — every row from before the field
-      // existed, and every headless spawn.
-      turns = found.stage.tasks.map((task) => ({
-        costUsd: task.cost_usd,
-        metered: task.metered !== false,
-        tokens: task.tokens ?? null,
-      }));
-    }
-  } catch {
-    // A run.yml that is missing, torn, or invalid. The handoff is still worth
-    // writing; the header just has to stop pretending it knows the phase total.
-    recorded = null;
-  }
-  // This invocation's turns are not in `run.yml` yet — `recordExecutorTasks` runs
-  // after the executor returns — so they are counted from the executor's own list,
-  // exactly as `invocationUsd` is added to the sum. Without them the FIRST write
-  // of a handoff would count nothing at all and report a host-driven stage as
-  // fully metered (#139).
-  turns = [
-    ...turns,
-    ...invocationTurns.map((task) => ({
-      costUsd: task.metered === false ? null : round2(task.costUsd),
-      metered: task.metered !== false,
-      tokens: task.tokens ?? null,
-    })),
-  ];
-  const counted = spendBasisOf(turns, turns.reduce((sum, t) => sum + (t.tokens ?? 0), 0), "stage");
-  // A fully metered stage keeps its clean line: `measured` is the one basis with
-  // nothing to caveat, and a caveat on every header is a caveat nobody reads.
-  const bound = counted.basis === "measured" ? null : counted.reason;
-  if (recorded === null) {
-    return {
-      usd: round2(invocationUsd),
-      note: "this invocation only — `run.yml` could not be read for what the stage spent before it"
-        + (bound === null ? "" : `; ${bound}`),
-    };
-  }
-  return { usd: round2(recorded + invocationUsd), note: bound };
-}
-
-/** Everything the two resume paths and the requeue counter need, in one pass. */
-export function readReviewLedger(runDir: string, storyId: string): ReviewLedger {
-  const path = join(runDir, "events.jsonl");
-  const empty: ReviewLedger = {
-    verdicts: 0, fixlistRounds: 0, erroredWith: null, commit: null, dod: [],
-    developerErroredWith: null, blockedWithNothingRun: false, reopened: null, fixRound: null,
-    formatRetries: 0, formatRefusal: null,
-  };
-  if (!existsSync(path)) return empty;
-
-  let verdicts = 0;
-  let fixlistRounds = 0;
-  let erroredWith: string | null = null;
-  let commit: string | null = null;
-  // The three the DEVELOPER side needs, all scoped to the story's LAST attempt:
-  // what its developer died with, whether ANY check ran under it, and whether a
-  // reviewer was ever spawned. Together they separate "the turn never happened"
-  // from every other way a story blocks.
-  let developerErroredWith: string | null = null;
-  let ranACheck = false;
-  let sawReviewer = false;
-  let blockedWithNothingRun = false;
-  // `dod` is the last attempt that got as far as running its DoD; `current` is
-  // what THIS attempt has run so far. An attempt that was started and produced
-  // nothing must not erase the proof of the one before it — measured on the live
-  // run, where the wrongly-prepared "attempt 2" left S1 with no DoD at all.
-  let dod: DodResult[] = [];
-  let current: DodResult[] = [];
-  let reopened: ReviewLedger["reopened"] = null;
-  let fixRound: ReviewLedger["fixRound"] = null;
-  let formatRetries = 0;
-  let formatRefusal: string | null = null;
-
-  for (const line of readFileSync(path, "utf8").split("\n")) {
-    if (line.trim() === "") continue;
-    let event: { ts?: string; actor?: string; type?: string; payload?: Record<string, unknown> };
-    try {
-      event = JSON.parse(line) as typeof event;
-    } catch {
-      // A half-written last line is not a reason to lose the count.
-      continue;
-    }
-    const payload = event.payload ?? {};
-    if (payload.story !== storyId) continue;
-
-    // A person reopened the story: everything before this line belongs to a run
-    // of attempts an owner has closed by hand, and none of it counts against the
-    // one starting here. This is the only branch that resets `verdicts` — the
-    // requeue counter — and it is deliberately the only one that can, because it
-    // is the only one a human signs (`run/reopenStory.ts`). Nothing is erased:
-    // the events it steps over are still in this file and still read by `replay`,
-    // `cost` and `retro`, and the reopen event itself records the count it reset.
-    if (event.type === "story.reopened") {
-      verdicts = 0;
-      fixlistRounds = 0;
-      erroredWith = null;
-      commit = null;
-      dod = [];
-      current = [];
-      developerErroredWith = null;
-      ranACheck = false;
-      sawReviewer = false;
-      blockedWithNothingRun = false;
-      reopened = {
-        at: typeof event.ts === "string" ? event.ts : "",
-        actor: typeof event.actor === "string" ? event.actor : "",
-        note: typeof payload.note === "string" ? payload.note : "",
-      };
-      // A FIX round opens here and is not closed by the reset above (#58): the
-      // counters restart, the defect does not stop existing. Deliberately NOT
-      // cleared by a plain reopen either — a fix that blocked and was granted
-      // more attempts is the same fix round, still owed.
-      if (payload.reason === "fix") fixRound = reopened;
-      formatRetries = 0;
-      formatRefusal = null;
-      continue;
-    }
-
-    // One envelope refused on its FORMAT and sent back, costing no attempt (#78).
-    // Counted here and nowhere else: the grant is what this event records, and a
-    // grant that a fresh `tldrx next` could not see would not be a bound.
-    if (event.type === "story.review_retried") {
-      formatRetries++;
-      formatRefusal = typeof payload.detail === "string" && payload.detail.trim() !== ""
-        ? payload.detail.trim()
-        : null;
-      continue;
-    }
-
-    // A new attempt starts a new DoD run; only the latest one that RAN describes
-    // the diff on the branch now.
-    if (event.type === "task.started") {
-      if (current.length > 0) dod = current;
-      current = [];
-      // Everything the developer side asks is about the LAST attempt, so every
-      // attempt starts the question again. An attempt that RUNS clears the
-      // failure the one before it recorded.
-      developerErroredWith = null;
-      ranACheck = false;
-      sawReviewer = false;
-      blockedWithNothingRun = false;
-    }
-    if (event.type === "agent.spawned" && payload.role === "reviewer") sawReviewer = true;
-    if (event.type === "task.done") {
-      if (typeof payload.commit === "string" && payload.commit !== "") commit = payload.commit;
-      // The story finished again: whatever fix round was open has landed, and the
-      // next named defect may open one of its own (#58). This is the ONLY thing
-      // that closes one — the same handshake that closed the story the first time.
-      if (payload.status === "done") fixRound = null;
-      // The COMPAT shape, decided at the moment the attempt ended: blocked with
-      // nothing to show for itself and nothing that could have judged it.
-      blockedWithNothingRun = payload.status === "blocked"
-        && payload.verdict === "n-a"
-        && (payload.commit === null || payload.commit === undefined || payload.commit === "")
-        && !ranACheck
-        && !sawReviewer;
-    }
-    if (event.type !== "check.passed" && event.type !== "check.failed") continue;
-
-    // The developer's own check, and the only outcome it has is `error` — a
-    // developer that RAN is judged by its DoD and its reviewer, never by this.
-    // It is deliberately not counted as a check that RAN: the record of a spawn
-    // that never happened is not evidence that something happened.
-    if (payload.check === "developer") {
-      developerErroredWith = typeof payload.detail === "string" && payload.detail.trim() !== ""
-        ? payload.detail.trim()
-        : DEVELOPER_FAILED;
-      continue;
-    }
-    ranACheck = true;
-
-    if (payload.check === "dod" && typeof payload.command === "string") {
-      const exitCode = typeof payload.exit_code === "number" ? payload.exit_code : 0;
-      current.push({
-        command: payload.command,
-        exitCode,
-        timedOut: exitCode === 124,
-        tail: typeof payload.detail === "string" ? payload.detail : "",
-      });
-      continue;
-    }
-    if (payload.check !== "review") continue;
-
-    // Any recorded review CLOSES the envelope round — an error and a fix list as
-    // much as a counted verdict — so the next one starts with its corrections
-    // again. Mirrors `recordReview`, which resets the in-process counter for
-    // exactly the same set of outcomes (#78).
-    formatRetries = 0;
-    formatRefusal = null;
-
-    if (reviewEventErrored(payload)) {
-      erroredWith = typeof payload.detail === "string" && payload.detail.trim() !== ""
-        ? payload.detail.trim()
-        : "the reviewer sub-agent failed";
-      continue;
-    }
-    // A fix list is a verdict that spent no attempt. It clears the errored-review
-    // flag like any other judgement — something DID read the diff — and it is
-    // counted only against its own bound.
-    if (payload.verdict === "fixlist") {
-      fixlistRounds++;
-      erroredWith = null;
-      continue;
-    }
-    verdicts++;
-    erroredWith = null;
-  }
-  return {
-    verdicts,
-    fixlistRounds,
-    erroredWith,
-    commit,
-    dod: current.length > 0 ? current : dod,
-    developerErroredWith,
-    blockedWithNothingRun,
-    reopened,
-    fixRound,
-    formatRetries,
-    formatRefusal,
-  };
-}
-
 /** One event payload's `detail`, bounded — spec §2.9 caps a payload at 4 KB. */
 function clipDetail(detail: string): string {
   const text = detail.replace(/\s+/g, " ").trim();
   return text.length <= 1200 ? text : `${text.slice(0, 1197)}…`;
-}
-
-/**
- * Did this recorded review event describe a reviewer that FAILED?
- *
- * Two shapes, because two eras. A run written by this code says so:
- * `verdict: "error"`. A run written before it existed said `verdict: "changes"`
- * and put the spawn layer's error in `detail` — see `looksLikeReviewerError`.
- */
-function reviewEventErrored(payload: Record<string, unknown>): boolean {
-  if (payload.verdict === "error") return true;
-  if (payload.verdict !== "changes") return false;
-  return typeof payload.detail === "string" && looksLikeReviewerError(payload.detail);
 }
 
 function isPlanStatus(value: string | undefined): value is PlanStatus {
@@ -4349,3 +3934,12 @@ function failed(ctx: ExecutorContext, error: string, tasks: readonly ExecutorTas
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
+
+// --- re-exports: the public surface does not move -------------------------
+//
+// Ten test files, `src/core/run/reopenStory.ts:54` and
+// `src/core/facilitator/index.ts:34` import these FROM HERE. Wave 2 moves where
+// they are defined and nothing else; a re-export is how "the same symbol, a
+// different file" stays true for every caller.
+export { readReviewLedger, phaseCostToDate };
+export type { ReviewLedger };
