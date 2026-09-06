@@ -39,6 +39,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { factsCommand } from "../src/cli/commands/facts.ts";
+import { subcommandsOf } from "../src/cli/helpText.ts";
 import { FactsStore } from "../src/core/facts/FactsStore.ts";
 import { MAX_FACT_CHARS, type Fact } from "../src/core/facts/Fact.ts";
 import { validateFactsFile } from "../src/core/facts/validateFactsFile.ts";
@@ -204,7 +205,11 @@ describe("tldrx facts add", () => {
     // `tldrx facts add`; this pins that saying it is not a lie.
     expect(renderMandate("unattended", VERSION, undefined, true)).toContain("tldrx facts add");
     expect(factsCommand.name).toBe("facts");
-    expect(factsCommand.subcommands).toContain("add");
+    // `Command.subcommands` moved to `helpText.ts` (`subcommandsOf`) when the
+    // docs-site CLI page started generating from the registry (main@3431a9e) — a
+    // command's own subcommands live beside the flags they scope, not on the
+    // dispatch-table object, so the docs generator never had to keep a third copy.
+    expect(subcommandsOf("facts")).toContain("add");
     expect(factsCommand.implemented).toBe(true);
   });
 });

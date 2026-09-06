@@ -44,7 +44,6 @@ export const factsCommand: Command = {
   usage:
     'tldrx facts add "<text>" --area <id> --decided-by <owner|driver> [--kind <kind>] '
     + "[--confidence <level>] [--repo <name>] [--run <id>] [--root <path>]",
-  subcommands: ["add"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     try {

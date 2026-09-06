@@ -782,9 +782,9 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "facts",
+    subcommands: ["add"],
     description: "Record one durable, provenanced fact the later prompts will read.",
     args: [
-      { name: "add", meaning: "The only subcommand today." },
       { name: '"<text>"', meaning: "The assertion, one sentence. Required." },
     ],
     flags: [
