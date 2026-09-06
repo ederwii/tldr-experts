@@ -46,7 +46,6 @@ export const watchCommand: Command = {
     + "       tldrx watch check [<feature>] [--execute] [--run <id>] [--root <path>]\n"
     + "       tldrx watch arm [--interval <s>] [--timeout <s>] [--branch <name>] [--repo <name>]\n"
     + "                       [--run <id>] [--root <path>]",
-  subcommands: ["list", "check", "arm"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     try {

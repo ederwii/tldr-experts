@@ -45,7 +45,6 @@ export const questionsCommand: Command = {
   summary: "Read this run's open questions as decision cards, or check the file parses",
   usage: "tldrx questions cards [<run>] [--run <id>] [--root <path>]\n"
     + "       tldrx questions lint  [<run>] [--run <id>] [--fix] [--area <a>] [--root <path>]",
-  subcommands: ["lint", "cards"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const [sub, ...rest] = argv;

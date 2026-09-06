@@ -3,7 +3,8 @@ import type { Command } from "../Command.ts";
 import { EXIT_OK } from "../exitCodes.ts";
 import { frameworkVersion } from "../../core/frameworkVersion.ts";
 import {
-  ALL_EXIT_CODES, exitLines, helpFor, renderFlagTable, supportsJson, wrap, type FlagHelp,
+  ALL_EXIT_CODES, exitLines, helpFor, renderFlagTable, subcommandsOf, supportsJson, wrap,
+  type FlagHelp,
 } from "../helpText.ts";
 
 export function renderHelp(version: string, commands: readonly Command[]): string {
@@ -68,8 +69,9 @@ export function renderCommandHelp(command: Command): string {
   // Not `trimStart()`: the usage strings align their continuation lines by hand,
   // and flattening them turns one wrapped invocation into two that look separate.
   for (const line of command.usage.split("\n")) lines.push(`  ${line}`);
-  if (command.subcommands.length > 0) {
-    lines.push("", `Subcommands: ${command.subcommands.join(", ")}`);
+  const subcommands = subcommandsOf(command.name);
+  if (subcommands.length > 0) {
+    lines.push("", `Subcommands: ${subcommands.join(", ")}`);
   }
 
   if (help !== undefined) {
@@ -116,7 +118,6 @@ export function makeHelpCommand(commands: () => readonly Command[]): Command {
     name: "help",
     summary: "Print this help",
     usage: "tldrx --help\n       tldrx <command> --help",
-    subcommands: [],
     implemented: true,
     async run(): Promise<number> {
       process.stdout.write(renderHelp(await frameworkVersion(), commands()) + "\n");

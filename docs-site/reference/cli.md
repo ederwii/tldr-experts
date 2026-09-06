@@ -8,10 +8,14 @@ The authority is your own machine: `tldrx --help`, and `tldrx <command> --help` 
 command's flags, allowed values, examples and exit codes. This page is a map of the
 surface, not a copy of it.
 
-Every command below was checked by running its `--help` on `main`. For the exhaustive
-version — every flag, every refusal — see
-[8 — CLI reference](https://github.com/ederwii/tldr-experts/blob/main/docs/guide/08-cli-reference.md)
-in the repo.
+This page is a curated tour: the commands you reach for, grouped by what you are trying to
+do. It names some flags and not others, on purpose.
+
+**For every flag — including the ones this page leaves out — see
+[Every command and flag](/reference/cli-flags).** That page is generated at build time from
+`src/cli/helpText.ts`, the same registry `--help` prints and the argv guard refuses unknown
+flags from, so it lists all 33 commands with every flag, every allowed value, every exit
+code and the environment variables, and it cannot fall behind the code.
 
 ## The five you will actually type
 

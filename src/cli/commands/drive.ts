@@ -34,7 +34,6 @@ export const driveCommand: Command = {
   name: "drive",
   summary: "Print the session mandate for driving a run",
   usage: "tldrx drive <--attended|--unattended> [--tldr] [<run>] [--run <id>]",
-  subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const args = parseArgs(argv, ["run"]);

@@ -8,10 +8,15 @@ La autoridad es tu propia máquina: `tldrx --help`, y `tldrx <command> --help` p
 banderas de un comando, sus valores permitidos, ejemplos y códigos de salida. Esta página
 es un mapa de la superficie, no una copia de ella.
 
-Todos los comandos de aquí abajo se verificaron corriendo su `--help` sobre `main`. Para la
-versión exhaustiva — cada bandera, cada rechazo — ver
-[8 — CLI reference](https://github.com/ederwii/tldr-experts/blob/main/docs/guide/08-cli-reference.md)
-en el repo.
+Esta página es un recorrido curado: los comandos que de verdad vas a usar, agrupados por lo
+que estás intentando hacer. Nombra algunas banderas y otras no, a propósito.
+
+**Para todas las banderas — incluidas las que esta página deja fuera — mira
+[Todos los comandos y flags](/es/reference/cli-flags).** Esa página se genera al compilar
+desde `src/cli/helpText.ts`, el mismo registro que imprime `--help` y del que el guardián de
+argv rechaza banderas desconocidas, así que lista los 33 comandos con todas sus banderas,
+todos los valores permitidos, todos los códigos de salida y las variables de entorno, y no
+puede quedarse atrás del código.
 
 ## Los cinco que de verdad vas a escribir
 

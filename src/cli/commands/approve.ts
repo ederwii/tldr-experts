@@ -42,7 +42,6 @@ export const approveCommand: Command = {
   name: "approve",
   summary: "Approve the current gate",
   usage: "tldrx approve [--run <id>] [--as-agent] [--evidence <path>] [--note <text>] [--root <path>]",
-  subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     try {

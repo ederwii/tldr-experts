@@ -246,8 +246,9 @@ Three things to know:
   cut and the cut is named in the prompt, on stdout and in `pending.json`.
 - **It is per-cycle scratch.** It survives `--discard-pending` — it is an input to the
   rendering, not an output of the one being binned — and nothing else. A caveat that must
-  outlive this cycle is a **fact**: `tldrx facts add`, which reaches every prompt with
-  attribution behind it.
+  outlive this cycle is a **fact**, and a fact is written by answering an open question —
+  `tldrx answer <Qid> "…"`, which lands a numbered row in `.tldrx/memory/facts.yml` that
+  reaches every later prompt with attribution behind it.
 
 ### 3 · The developer turn, and `--commit`
 

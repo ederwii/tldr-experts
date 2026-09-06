@@ -32,7 +32,6 @@ export const installCommand: Command = {
   usage:
     "tldrx install --claude [--project | --user] [--skill-only] [--no-hooks] [--no-statusline]\n"
     + "               [--force-statusline] [--uninstall] [--dry-run]",
-  subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     try {

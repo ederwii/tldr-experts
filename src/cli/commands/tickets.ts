@@ -47,7 +47,6 @@ export const ticketsCommand: Command = {
   usage:
     "tldrx tickets sync [<run>] [--run <id>] [--apply] [--provider github|jira] [--root <path>]\n"
     + "       tldrx tickets status [<run>] [--run <id>] [--root <path>]",
-  subcommands: ["sync", "status"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const [sub, ...rest] = argv;

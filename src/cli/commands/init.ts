@@ -52,7 +52,6 @@ export const initCommand: Command = {
   usage: "tldrx init [--root <path>] [--out <path>] [--no-interview] [--process <scrum|kanban|shape-up|none>]\n"
     + "                  [--stack <ts,dotnet,python,go,rust,…>] [--mcp] [--provider <auto|graphify|static>]\n"
     + "                  [--ui scene|compact|plain|off] [--quiet]",
-  subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     let options: InitCliOptions;

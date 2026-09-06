@@ -26,7 +26,6 @@ export const dashboardCommand: Command = {
   name: "dashboard",
   summary: "Watch the workspace live in a browser, or export it as one static page",
   usage: "tldrx dashboard [--serve] [--port <n>] [--open] [--root <path>] | tldrx dashboard --static [--out <dir>]",
-  subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     let args;

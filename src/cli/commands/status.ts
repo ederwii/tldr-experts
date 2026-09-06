@@ -24,7 +24,6 @@ export const statusCommand: Command = {
   name: "status",
   summary: "What is pending in this workspace, and the command for each",
   usage: "tldrx status [--json] [--root <path>]",
-  subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     try {

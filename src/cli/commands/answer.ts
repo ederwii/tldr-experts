@@ -36,7 +36,6 @@ export const answerCommand: Command = {
   name: "answer",
   summary: "Answer an open interview question",
   usage: "tldrx answer <Qid> <text> [--supersede] [--run <id>] [--root <path>]",
-  subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     try {

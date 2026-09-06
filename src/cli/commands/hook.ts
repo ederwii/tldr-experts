@@ -33,7 +33,6 @@ export const hookCommand: Command = {
   name: "hook",
   summary: "Run one tldrx hook script (stdin in, decision out)",
   usage: `tldrx hook <${RUNNABLE_SCRIPTS.join("|")}>`,
-  subcommands: [...RUNNABLE_SCRIPTS],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     try {
@@ -59,7 +58,6 @@ export const statuslineCommand: Command = {
   name: "statusline",
   summary: "Render the tldrx status line (for the statusLine settings key)",
   usage: "tldrx statusline",
-  subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     try {

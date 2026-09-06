@@ -60,7 +60,6 @@ export const expertCommand: Command = {
     "                                               [--ui scene|compact|plain|off] [--root <path>]\n" +
     "       tldrx expert recompute [<name>] [--root <path>] [--json]\n" +
     "       tldrx expert packs <enable|disable|status> [--root <path>]",
-  subcommands: ["list", "create", "train", "recompute", "packs"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const [sub, ...rest] = argv;

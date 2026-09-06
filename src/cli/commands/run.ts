@@ -59,7 +59,6 @@ export const runCommand: Command = {
     "       tldrx run gates set <stage>:<human|auto|agent> --note <text> [--run <id>] [--root <path>]\n" +
     "       tldrx run unlock [<run>] [--force] [--run <id>] [--root <path>]\n" +
     "       tldrx run cancel [<run>] --note <text> [--force] [--run <id>] [--root <path>]",
-  subcommands: ["new", "attend", "status", "estimate", "gates", "auto", "unlock", "cancel"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const [sub, ...rest] = argv;

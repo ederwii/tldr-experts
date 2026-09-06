@@ -19,6 +19,7 @@
  * values the validator does not accept is worse than no help screen.
  */
 import { knownScopes } from "../core/seed/splitFile.ts";
+import { RUNNABLE_SCRIPTS } from "../core/install/managedEntries.ts";
 import { EFFORT_LEVELS } from "../core/schemas/stage.ts";
 import { UI_MODES } from "../core/ui/index.ts";
 import {
@@ -55,6 +56,8 @@ export interface CommandHelp {
   /** One line, in plain language, of what the command is for. */
   readonly description: string;
   readonly args: readonly ArgHelp[];
+  /** The verbs this command dispatches on, in the order help lists them. Absent means none. */
+  readonly subcommands?: readonly string[];
   readonly flags: readonly FlagHelp[];
   /** One or two real invocations. */
   readonly examples: readonly string[];
@@ -336,6 +339,7 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "run",
+    subcommands: ["new", "attend", "status", "estimate", "gates", "auto", "unlock", "cancel"],
     description: "Create a piece of work, look at one, drive one to its next human gate, hand it to a host session or back, or get a stuck one moving again.",
     args: [
       { name: "<slug>", meaning: "run new: the short name. The id becomes <yymmdd>-<slug>." },
@@ -460,6 +464,7 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "seed",
+    subcommands: ["triage", "answer", "apply"],
     description: "Triage a seed too big for one run into several, then create them.",
     args: [
       { name: "<path>", meaning: "seed triage: the document or directory to inventory." },
@@ -610,6 +615,7 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "questions",
+    subcommands: ["lint", "cards"],
     description: "Read this run's open questions as decision cards, or check the file the \u00a72.7 parser reads.",
     args: [{ name: "[<run>]", meaning: "A run id. Omit it and the one open run is used." }],
     flags: [
@@ -671,6 +677,7 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "gate",
+    subcommands: ["template"],
     description: "Write the skeleton evidence note an agent gate is closed over.",
     args: [{ name: "[<run>]", meaning: "A run id. Omit it and the one open run is used." }],
     flags: [
@@ -715,6 +722,7 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "story",
+    subcommands: ["reopen"],
     description: "Give one Build story another run of attempts, or open a fix round on a done one, signed with a note.",
     args: [{ name: "<id>", meaning: "The story id, e.g. S3." }],
     flags: [
@@ -814,6 +822,7 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "plan",
+    subcommands: ["sync-dod", "schema"],
     description: "Carry an edited workspace.yml into approved stories' dod blocks, or print the plan schema.",
     args: [],
     flags: [
@@ -860,6 +869,7 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "budget",
+    subcommands: ["show", "raise"],
     description: "What the run may still spend, and where to move a ceiling from.",
     args: [
       { name: "[<run>]", meaning: "budget show: a run id. Omit it and the one open run is used." },
@@ -918,6 +928,7 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "map",
+    subcommands: ["--refresh", "--check"],
     description: "Build, refresh or drift-check the code knowledge base under .tldrx/map/.",
     args: [],
     flags: [
@@ -940,6 +951,7 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "expert",
+    subcommands: ["list", "create", "train", "recompute", "packs"],
     description: "List or create experts, recompute their levels, train one, or switch the stack packs on.",
     args: [
       { name: "<name>", meaning: "expert create / train: the expert. expert recompute: optional — all of them by default." },
@@ -1106,6 +1118,7 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "watch",
+    subcommands: ["list", "check", "arm"],
     description: "List the watcher cards a run produced, work through them as a post-merge checklist, or wait for the shipped PR to merge and print it.",
     args: [{ name: "[<feature>]", meaning: "watch check: which card to check. Omit it and every card in the run is checked; unused by list and arm." }],
     flags: [
@@ -1161,6 +1174,7 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "tickets",
+    subcommands: ["sync", "status"],
     description: "Mirror the plan's epics and stories to a ticket tool. The files stay the source of truth.",
     args: [{ name: "[<run>]", meaning: "A run id. Omit it and the one open run is used." }],
     flags: [
@@ -1191,6 +1205,7 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "hook",
+    subcommands: [...RUNNABLE_SCRIPTS],
     description: "Run one tldrx hook script: payload on stdin, decision on stdout.",
     args: [{ name: "<script>", meaning: "Which hook to run. See Subcommands below." }],
     flags: [],
@@ -1244,6 +1259,11 @@ export const HELP_ENTRIES: readonly CommandHelp[] = ENTRIES;
  * the command cannot read AT ALL — a typo — not to police which subcommand a
  * legal flag belongs to, which would be a behaviour change dressed as a fix.
  */
+/** The verbs `<cmd> --help` lists, and the dispatcher scopes a flag by. Empty when none. */
+export function subcommandsOf(name: string): readonly string[] {
+  return helpFor(name)?.subcommands ?? [];
+}
+
 export function declaredFlags(name: string): ReadonlySet<string> {
   return new Set((helpFor(name)?.flags ?? []).map((flag) => flag.name));
 }
