@@ -40,7 +40,6 @@ export const seedCommand: Command = {
     "                                          [--yolo] [--out <dir>] [--root <path>]\n" +
     "       tldrx seed answer <split.yml> <Qid> \"<text>\" [--root <path>]\n" +
     "       tldrx seed apply <split.yml> [--dry-run] [--root <path>]",
-  subcommands: ["triage", "answer", "apply"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const [sub, ...rest] = argv;

@@ -44,6 +44,7 @@ const sidebarEn = [
     text: "Reference",
     items: [
       { text: "CLI overview", link: "/reference/cli" },
+      { text: "Every command and flag", link: "/reference/cli-flags" },
       { text: "Dashboard", link: "/reference/dashboard" },
       { text: "Release notes", link: "/reference/changelog" },
     ],
@@ -85,6 +86,7 @@ const sidebarEs = [
     text: "Referencia",
     items: [
       { text: "Resumen de la CLI", link: "/es/reference/cli" },
+      { text: "Todos los comandos y flags", link: "/es/reference/cli-flags" },
       { text: "Dashboard", link: "/es/reference/dashboard" },
       { text: "Notas de versión (en inglés)", link: "/reference/changelog" },
     ],

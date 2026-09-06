@@ -33,7 +33,6 @@ export const mapCommand: Command = {
   name: "map",
   summary: "Build, refresh or drift-check the code knowledge base",
   usage: "tldrx map <--refresh|--check> [--root <path>] [--provider <auto|graphify|static>]",
-  subcommands: ["--refresh", "--check"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     let args: MapArgs;

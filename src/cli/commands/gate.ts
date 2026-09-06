@@ -36,7 +36,6 @@ export const gateCommand: Command = {
   name: "gate",
   summary: "Write the skeleton evidence note an agent gate is closed over",
   usage: "tldrx gate template [<run>] [--run <id>] [--force] [--root <path>]",
-  subcommands: ["template"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const [sub, ...rest] = argv;

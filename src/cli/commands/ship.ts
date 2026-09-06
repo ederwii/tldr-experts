@@ -23,7 +23,6 @@ export const shipCommand: Command = {
   summary: "Open a PR from the run's epic branch (one per repo), handoff as the body",
   usage: "tldrx ship [<run>] [--branch <name>] [--repo <name>] [--base <branch>]\n"
     + "                  [--draft] [--dry-run] [--run <id>] [--root <path>]",
-  subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     try {

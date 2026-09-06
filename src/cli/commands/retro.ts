@@ -34,7 +34,6 @@ export const retroCommand: Command = {
   summary: "Close a run and capture what was learned",
   usage: "tldrx retro [<run-id>] [--apply] [--root <path>]\n"
     + "tldrx retro --all [--json] [--root <path>]",
-  subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const root = resolveWorkspaceRoot(option(argv, "--root"));

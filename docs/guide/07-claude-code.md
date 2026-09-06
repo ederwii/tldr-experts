@@ -117,8 +117,8 @@ Three things to know about it:
   `dispatch notes`.
 - **It is per-cycle scratch.** `.agent/` is gitignored, and the file survives
   `--discard-pending` but nothing else. Anything that should outlive this cycle belongs in
-  `.tldrx/memory/facts.yml` (`tldrx facts add`), which reaches *every* prompt with
-  attribution behind it.
+  `.tldrx/memory/facts.yml`, where `tldrx answer <Qid> "…"` puts it — a numbered row that
+  reaches *every* later prompt with attribution behind it.
 
 Leave the file out and the prompt is byte-identical to what it always was.
 

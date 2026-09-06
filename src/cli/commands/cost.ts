@@ -24,7 +24,6 @@ export const costCommand: Command = {
   name: "cost",
   summary: "What has been spent — per attempt, per stage, per run",
   usage: "tldrx cost [<run>] [--run <id>] [--all] [--json] [--root <path>]",
-  subcommands: [],
   implemented: true,
   run(argv: readonly string[]): Promise<number> {
     return Promise.resolve(costReport(argv));

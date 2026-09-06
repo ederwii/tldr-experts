@@ -29,7 +29,6 @@ export const noteCommand: Command = {
   name: "note",
   summary: "Record one operator annotation on a run, changing nothing else",
   usage: 'tldrx note [<run>] [--stage <id>] "<text>" [--run <id>] [--root <path>]',
-  subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     try {

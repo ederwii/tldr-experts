@@ -17,7 +17,6 @@ export const updateCommand: Command = {
   name: "update",
   summary: "Update tldrx to the latest published version, and print what changed",
   usage: "tldrx update [--dry-run]",
-  subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     try {

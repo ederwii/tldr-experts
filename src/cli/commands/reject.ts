@@ -30,7 +30,6 @@ export const rejectCommand: Command = {
   name: "reject",
   summary: "Request changes at the current gate, or revoke an approval already given",
   usage: "tldrx reject --note <text> [--stage <phase>/<stage>] [--run <id>] [--root <path>]",
-  subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     try {

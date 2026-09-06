@@ -22,7 +22,6 @@ export const doctorCommand: Command = {
   name: "doctor",
   summary: "Check the local environment against env.yml",
   usage: "tldrx doctor [--mcp] [--json]",
-  subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const mcp = argv.includes("--mcp");

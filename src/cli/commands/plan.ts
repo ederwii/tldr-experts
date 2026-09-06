@@ -42,7 +42,6 @@ export const planCommand: Command = {
   name: "plan",
   summary: "Resync approved story dod blocks with workspace.yml, or print the plan schema",
   usage: "tldrx plan sync-dod [--dry-run] [--run <id>] [--root <path>]\ntldrx plan schema [--story | --epic | --waves]",
-  subcommands: ["sync-dod", "schema"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const [sub, ...rest] = argv;

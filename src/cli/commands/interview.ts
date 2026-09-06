@@ -47,7 +47,6 @@ export const interviewCommand: Command = {
   name: "interview",
   summary: "Answer a run's open questions in the terminal",
   usage: "tldrx interview [--run <id> | --init] [--yes-to-defaults] [--root <path>]",
-  subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     try {

@@ -26,7 +26,6 @@ export const budgetCommand: Command = {
   usage:
     "tldrx budget show [<run>] [--run <id>] [--json] [--root <path>]\n" +
     "       tldrx budget raise <phase> <usd> [--run <id>] [--take-from <phase>] [--note <text>] [--root <path>]",
-  subcommands: ["show", "raise"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const [sub, ...rest] = argv;

@@ -30,7 +30,6 @@ export const storyCommand: Command = {
   name: "story",
   summary: "Give one Build story another run of attempts",
   usage: "tldrx story reopen <id> --note <text> [--for-fix] [--run <id>] [--root <path>]",
-  subcommands: ["reopen"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const [sub, ...rest] = argv;

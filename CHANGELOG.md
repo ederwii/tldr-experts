@@ -1,6 +1,59 @@
 # Changelog
 
 
+## 0.9.1 — unreleased
+
+### Added
+
+- **The docs site carries the whole CLI, generated from the registry.** The site's
+  `reference/cli.md` was a curated map that named about half the flags and pointed at
+  `docs/guide/08-cli-reference.md` for the rest — a file the site never builds, because
+  `docs/` is not in its `srcDir`. So the "exhaustive version" was not on the website at all,
+  and the owner went looking for `--yolo`, the flag that drops per-tool permission prompts,
+  and found it only in the changelog. `docs-site/scripts/gen-cli.ts` now writes
+  `/reference/cli-flags` and `/es/reference/cli-flags` at build time out of
+  `src/cli/helpText.ts` — all 33 commands, every flag with its meaning, every allowed value
+  spelled out from where it is enforced, every exit code, the environment variables, and the
+  rules that hold everywhere. Generated, gitignored and never hand-edited, for the same
+  reason the changelog page is: a second copy of 180 flags drifts on its first edit. The
+  Spanish page is framed in Spanish and keeps the meanings in English, like the release notes
+  and the sample CLI strings.
+- **`test/docs-cli-coverage.test.ts` — the docs are now a gate.** Nothing asserted that a
+  declared flag was EXPLAINED anywhere a reader who is not typing `--help` would look. It now
+  asserts both surfaces: the repo guide names every flag inside its own command's section,
+  and the generated page carries every command, flag, allowed value and exit code, with
+  `--yolo` explained on each of the four commands that take it rather than left bare in a
+  usage line. It also holds the env-var table against a grep of `src/` in both directions.
+
+### Fixed
+
+- **Two commands the docs told you to run that do not exist.** `tldrx facts add` was
+  instructed three times, in `07-claude-code.md`, `10-unattended-mode.md` and
+  `08-cli-reference.md`, as the way to record something that must outlive a turn — measured:
+  `tldrx facts` is `unknown command 'facts'`, exit 1. A row in `.tldrx/memory/facts.yml` is
+  written by answering an open question, so all three now say `tldrx answer <Qid> "…"`. And
+  the environment-variable section told you to check that `TLDRX_CLAUDE_BIN` took with
+  `tldrx run --dry-run`; `--dry-run` is `next`'s flag, not `run`'s. The guard that found them
+  is now part of the suite: every `tldrx …` line inside a code span or a fenced block, on
+  every page of the site and the guide plus the README, is parsed and held against the
+  registry — an unknown command or a flag its command does not declare fails the build.
+- **Two flags the guide never documented**, found by that test on its first run:
+  `tldrx dashboard --serve` (the default mode, and half of the two-modes refusal that
+  `--static` is the other half of) and `tldrx run status --verbose` (the two instants behind
+  a gate row). Both were real, both were reachable, and neither appeared in the page that
+  claims to be exhaustive. The shared spawn flags — `--model`, `--effort`, `--max-usd`,
+  `--ui`, `--prepare`/`--commit`, `--yolo` — now point from `run auto`, `seed triage` and
+  `expert train` at the one place they are explained, instead of appearing as bare tokens in
+  a usage line.
+
+### Changed
+
+- **A command's subcommands are declared once.** They were written in the command module AND
+  needed by the docs generator, which would have made three copies of the same list. They now
+  live in `helpText.ts` beside the flags that are scoped by them, `subcommandsOf(name)` reads
+  them, and `Command.subcommands` is gone — one derivation, one implementation, per the house
+  invariant that the rest of the repo is already held to.
+
 ## 0.9.0 — 2026-09-06
 
 ### Added

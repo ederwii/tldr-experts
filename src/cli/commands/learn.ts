@@ -35,7 +35,6 @@ export const learnCommand: Command = {
   name: "learn",
   summary: "Play the framework: a sandbox tutorial that runs the real commands",
   usage: "tldrx learn [--chapter <n>] [--reset] [--list] [--sandbox <path>] [--ui scene|compact|plain|off]",
-  subcommands: [],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const args = parseArgs(argv, VALUE_FLAGS);

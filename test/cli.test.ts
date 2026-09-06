@@ -7,7 +7,7 @@ import type { Command } from "../src/cli/Command.ts";
 import { flagNames } from "../src/cli/argv.ts";
 import { EXIT_FAILED, EXIT_NOT_FOUND, EXIT_NOT_IMPLEMENTED, EXIT_OK, EXIT_USAGE } from "../src/cli/exitCodes.ts";
 import {
-  declaredFlags, EXIT_MEANINGS, helpFor, HELP_ENTRIES, scopeValues, supportsJson,
+  declaredFlags, EXIT_MEANINGS, helpFor, HELP_ENTRIES, scopeValues, subcommandsOf, supportsJson,
 } from "../src/cli/helpText.ts";
 import { EFFORT_LEVELS } from "../src/core/schemas/stage.ts";
 import { UI_MODES } from "../src/core/ui/index.ts";
@@ -421,7 +421,7 @@ describe("<command> --help carries flags, values, examples and exit codes", () =
       if (command === undefined) continue;
       // A heading, not a passing mention: the page is navigated by its `##` list.
       expect(reference).toContain(`## \`tldrx ${name}\``);
-      expect(command.subcommands.filter((sub) => !reference.includes(`tldrx ${name} ${sub}`))).toEqual([]);
+      expect(subcommandsOf(name).filter((sub) => !reference.includes(`tldrx ${name} ${sub}`))).toEqual([]);
     }
     // The audit trail is the half a reader cannot infer from the usage line: a
     // mandatory --note, and one event carrying who moved the policy and why.
@@ -460,11 +460,11 @@ describe("<command> --help carries flags, values, examples and exit codes", () =
  * `dashboard --out {sub: "static"}` is a MODE selected by `--static`, and there is
  * no `tldrx dashboard static` line for it to live under — scoping that one would
  * report a gap that is not there (it did, on the first draft of this guard). So
- * `command.subcommands` decides: a real subcommand is scoped, a mode is checked
+ * `subcommandsOf(name)` decides: a real subcommand is scoped, a mode is checked
  * against the whole usage.
  */
 function usageBlock(command: Command, sub: string | undefined): string {
-  if (sub === undefined || !command.subcommands.includes(sub)) return command.usage;
+  if (sub === undefined || !subcommandsOf(command.name).includes(sub)) return command.usage;
   const opens = new RegExp(`^\\s*tldrx\\s+${command.name}\\s+${sub}\\b`);
   const block: string[] = [];
   let inside = false;
@@ -558,7 +558,7 @@ describe("every usage line is as wide as its own --help (#25, #51)", () => {
     const dashboard = COMMANDS.find((command) => command.name === "dashboard");
     expect(dashboard).toBeDefined();
     if (dashboard === undefined) return;
-    expect(dashboard.subcommands).not.toContain("static");
+    expect(subcommandsOf("dashboard")).not.toContain("static");
     expect(usageBlock(dashboard, "static")).toBe(dashboard.usage);
   });
 });

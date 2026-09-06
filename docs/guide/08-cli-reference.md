@@ -56,7 +56,7 @@ Ctrl-C on a spawning command exits `130`.
 Code's (`-p --output-format stream-json --verbose --json-schema …`), so whatever it points at
 has to speak them. It is for a pinned install, a wrapper that adds a proxy or credentials, or
 a stand-in in a sandbox; it is not a provider switch. Blank or whitespace counts as unset.
-`tldrx run --dry-run` prints the command it would run, so it is also how you check the
+`tldrx next --dry-run` prints the command it would run, so it is also how you check the
 variable took. With `TLDRX_AGENT_PROVIDER=codex`, the same seam runs plain `codex exec --json`
 with `--output-schema`: developer turns use `workspace-write`; Build reviewers use an enforced
 `read-only` sandbox. Codex reports token usage and a thread id but no provider-metered USD or
@@ -241,7 +241,7 @@ tldrx run new <slug> [--title <t>] [--scope <s>] [--budget <usd>] [--repos a,b]
                      [--from <dir> | --seed <file|dir> …] [--gates <a,b|a:agent|all|none>]
                      [--attended-by host]
 tldrx run attend   <host|--none> [<run>] [--run <id>]
-tldrx run status   [<run>] [--json] [--run <id>]
+tldrx run status   [<run>] [--json] [--verbose] [--run <id>]
 tldrx run estimate [<run>] [--json] [--run <id>]
 tldrx run auto     [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]
                           [--parallel <n>] [--yolo] [--gate-agent] [--ui <mode>] [--run <id>]
@@ -290,7 +290,10 @@ Everything else is untouched: the prepare/commit contract, `pending.json`/`resul
 an ordinary run.
 
 **`status`** with several runs open LISTS them and exits `0` — it is the screen you read to
-find the id every other command wants.
+find the id every other command wants. `--verbose` only ADDS lines under the gate rows: the
+two instants behind a gate — when the stage finished and when the gate was signed — which the
+one-line form has no room for. It changes nothing else, and it is ignored by `--json`, whose
+shape already carries all three.
 
 **`estimate`** is the one command here that GUESSES, and it says so in its own output. For
 what was actually spent, use `tldrx cost`.
@@ -301,6 +304,10 @@ LOOP's spend, checked between stages. Headless only — which is why it is refus
 (exit `1`) on a run marked `attended_by: host`. `--gate-agent` prints a **decision card** at
 the stop instead of the ordinary status block (guide 03); it is rendering only and never
 upgrades a stage's gate policy.
+
+`auto`'s `--model`, `--effort`, `--max-usd`, `--ui` and `--yolo` are the same flags
+[`tldrx next`](#tldrx-next) explains, passed to every stage the loop runs — so `--yolo` here
+drops per-tool permission prompts for the whole loop, not one turn.
 
 **`gates set`** is the **only sanctioned way to move `gates_policy` after `run new` froze
 it** — the case it exists for is a run opened before the `agent` policy existed, which can
@@ -381,6 +388,10 @@ tldrx seed triage <path> --propose [--model <m>] [--effort <level>] [--max-usd <
 tldrx seed answer <split.yml> <Qid> "<text>"
 tldrx seed apply  <split.yml> [--dry-run]
 ```
+
+`--model`, `--effort`, `--max-usd`, `--ui`, `--prepare`/`--commit` and `--yolo` mean here
+exactly what they mean under [`tldrx next`](#tldrx-next), where they are explained once —
+`--yolo` in particular lets the sub-agent run without per-tool permission prompts.
 
 `triage` without `--propose` is free: no model, no network. `--propose` spawns ONE sub-agent
 (effort `low`, `--max-usd 1.00` by default) and **never creates a run**. `apply` creates the
@@ -742,6 +753,10 @@ mode greps the code for, so it is worth writing. `create` also writes the front 
 from `.tldrx/workspace.yml`; the `## Domain` bullets are paths relative to those repos, with no
 repo prefix.
 
+`--max-usd`, `--model`, `--effort`, `--ui`, `--prepare`/`--commit` and `--yolo` are the flags
+[`tldrx next`](#tldrx-next) explains; `--yolo` lets the training sub-agent run without per-tool
+permission prompts.
+
 `train --area` is required. `--mode light` reads the code; `full` also mines finished runs'
 handoffs — a role expert only trains `full`. `--print-prompt` prints the training prompt and
 stops: it spawns nothing and costs nothing. `recompute` is arithmetic over evidence already
@@ -778,9 +793,14 @@ spawn floor and the preflight.)*
 ## `tldrx dashboard`
 
 ```
-tldrx dashboard [--port <n>] [--open] [--root <path>]
+tldrx dashboard [--serve] [--port <n>] [--open] [--root <path>]
 tldrx dashboard --static [--out <dir>] [--root <path>]
 ```
+
+`--serve` and `--static` are the two modes and only one of them can be meant: passing both is
+exit `1`, not a silent winner. `--serve` is the DEFAULT, so it is a flag you never have to
+type — it exists to be written down in a script that should still mean "serve" the day a
+default changes. `--open` launches a browser at the served URL.
 
 Read-only: it serves GET and writes nothing into the workspace. Default port `4477`; `--port 0`
 takes any free one. `--static` writes one self-contained page instead of serving — no server,
@@ -1015,8 +1035,9 @@ runs: of ~4.0 MB written, 2.16 MB is trail, and all **261** declared stage `inpu
 **zero** occurrences of `handoff.md`, `retro.md` or `gate-evidence` — they are written for a human
 who, on these runs, was never going to open them. `--tldr` says to write no `tldrx note`
 (133,689 B of them across those runs, read back by nothing) and to keep gate evidence at the
-template's minimum; a fact that must outlive the turn goes to `tldrx facts add`, which every later
-prompt **does** read.
+template's minimum; a fact that must outlive the turn goes into `.tldrx/memory/facts.yml`
+by answering an open question — `tldrx answer <Qid> "…"` — which every later prompt **does**
+read.
 
 What it may not do is drop the handoff. `claim-sources` is condition 5 of the seven `auto`
 conditions and runs whether or not a stage declared it as a check, so a run with no handoff cannot
