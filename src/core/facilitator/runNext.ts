@@ -1137,6 +1137,15 @@ async function runExecutor(
     },
   };
 
+  // How many rows this stage already had before the executor ran. `failStage`
+  // rewrites the LAST row as `failed`, which is right only for a row THIS
+  // invocation put there — and on the throw path below there is never one, since
+  // `ExecutorOutcome.tasks` exists only at return. A retried stage keeps its
+  // earlier attempts' rows (a gate reject, an in-session cycle that finished a
+  // story), so without this floor the throw repainted a `done` turn as `failed`
+  // with an error it did not produce.
+  const tasksBefore = requireStage(store, phaseId, stageId).tasks.length;
+
   let outcome: ExecutorOutcome;
   try {
     outcome = await executor(executorCtx);
@@ -1166,7 +1175,7 @@ async function runExecutor(
     store.save();
     return failStage(store, options, phaseId, stageId,
       `the executor threw before returning its task rows — this invocation's turn costs are not in run.yml: ${why}`,
-      notes);
+      notes, tasksBefore);
   }
 
   // The handshake called by the wrong end, and nothing else wrong (gh #82). Its
@@ -1403,9 +1412,26 @@ async function commitStage(
       );
     }
   } else {
+    // The marker is a claim ticket, and it is SINGLE-USE. It was written and
+    // never consumed: the re-run the refusal was waiting for matched the row and
+    // left it armed, so the row stayed a legitimate fingerprint target forever —
+    // and the NEXT genuinely distinct turn on this stage with the same shape (a
+    // gate reject, `--prepare`, the same host session, the same outputs, the
+    // same `null` cost — the ordinary unmetered retry) was dropped as "already
+    // recorded". That is the ledger forgetting a turn, which is the exact
+    // failure the marker exists to prevent, pointing the other way.
+    //
+    // The marker itself STAYS: "this row was banked ahead of a refusal" is a
+    // fact about how it got there and it does not stop being true. What is added
+    // is that the re-run it was holding a place for has now been taken, which
+    // `alreadyBanked` requires to be absent — so the ticket cannot be spent
+    // twice, and a reader of `run.yml` alone can see why.
+    claimBankedRow(store, phaseId, stageId, banked, options.at);
+    store.save();
     notes.push(
       `this turn's cost is already recorded as ${banked} — an earlier \`--commit\` banked it `
-      + "before refusing, so it is not recorded a second time.",
+      + "before refusing, so it is not recorded a second time. That row's marker is now spent: "
+      + "a later attempt on this stage is recorded as its own row, however much it resembles this one.",
     );
   }
   if (cost === null && banked === null) {
@@ -1457,10 +1483,38 @@ function alreadyBanked(
 ): string | null {
   const hit = stage.tasks.find((task) =>
     task.banked_before_refusal === true
+    // …and UNCLAIMED. `claimBankedRow` stamps a row the moment its re-run
+    // matches it, and a spent marker is not a second licence: without this the
+    // row matched every later turn of the same shape for the life of the stage.
+    && task.dedupe === undefined
     && task.session_id === result.session_id
     && task.cost_usd === cost
     && sameOutputs(task.outputs, result.outputs));
   return hit?.id ?? null;
+}
+
+/**
+ * Spend the `banked_before_refusal` marker on the row a re-run just matched.
+ *
+ * Additive, in the field that already carries "why this row was or was not
+ * deduped": the marker stays (it says how the row got there), and the row gains
+ * the fact that the re-run it was holding a place for has arrived. `at` is the
+ * `--commit` that claimed it, which is the one thing the row could not otherwise
+ * say — its own `ended_at` belongs to the turn, not to the match.
+ */
+function claimBankedRow(
+  store: RunStore,
+  phaseId: string,
+  stageId: string,
+  taskId: string,
+  at: string,
+): void {
+  mapStage(store, phaseId, stageId, (stage) => ({
+    ...stage,
+    tasks: stage.tasks.map((task) => (task.id === taskId
+      ? { ...task, dedupe: `matched by the re-run committed at ${at} — the marker is spent` }
+      : task)),
+  }));
 }
 
 /** Element by element, so no separator character has to be chosen or escaped. */
@@ -1712,6 +1766,20 @@ export function codexGateExecutorId(stage: RunStage): string | null {
   return identities.size === 1 ? [...identities][0] ?? null : null;
 }
 
+/**
+ * Fail the stage by name, and attribute the failure to the row that earned it.
+ *
+ * `tasksBefore` is how many rows the stage had when THIS invocation entered the
+ * executor. Given one, the last row is rewritten `failed` only when the stage
+ * GREW since — because the last row is otherwise a previous, completed attempt's
+ * (a gate reject and an in-session cycle both leave finished rows in place,
+ * spec §5), and repainting a `done` turn `failed` puts an error in the ledger
+ * that that turn did not produce. Omitted, the old behaviour stands: every other
+ * caller runs after `recordExecutorTasks`, so the last row IS this invocation's.
+ *
+ * The stage still fails and the reason is still said out loud either way — what
+ * a nameless loss may not do is borrow someone else's row to be named on.
+ */
 function failStage(
   store: RunStore,
   options: NextOptions,
@@ -1719,14 +1787,19 @@ function failStage(
   stageId: string,
   reason: string,
   notes: readonly string[],
+  tasksBefore?: number,
 ): NextOutcome {
   mapStage(store, phaseId, stageId, (stage) => ({
     ...stage,
     status: "failed",
     ended_at: nowish(options),
-    tasks: stage.tasks.map((task, i) =>
-      i === stage.tasks.length - 1 ? { ...task, status: "failed" as const, error: task.error ?? oneLine(reason) } : task,
-    ),
+    tasks: tasksBefore !== undefined && stage.tasks.length <= tasksBefore
+      ? stage.tasks
+      : stage.tasks.map((task, i) =>
+        i === stage.tasks.length - 1
+          ? { ...task, status: "failed" as const, error: task.error ?? oneLine(reason) }
+          : task,
+      ),
   }));
   store.append(event(options, store.runId, stageId, "stage.failed", { phase: phaseId, reason: oneLine(reason) }));
   store.save();

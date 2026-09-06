@@ -198,6 +198,12 @@ function events(ws: BuildWorkspace): readonly { type: string; payload: Record<st
   return EventLog.forRun(ws.runDir).read() as never;
 }
 
+/** The `04-build/build` stage as it is ON DISK — a fresh read, never the in-memory store. */
+function buildStage(ws: BuildWorkspace) {
+  return RunStore.open(ws.runDir).run.phases
+    .find((p) => p.id === "04-build")?.stages.find((s) => s.id === "build");
+}
+
 function reviewDir(ws: BuildWorkspace, id: string): string {
   return join(ws.runDir, ".agent", "build", id, REVIEW_DIR);
 }
@@ -339,6 +345,59 @@ describe("the emit seam under a real build run — a non-cap throw", () => {
     expect(String(errorEvent?.payload.detail)).toContain("TLDRX_AGENT_PROVIDER must be one of");
     expect(events(ws).some((e) => e.type === "stage.failed")).toBe(true);
   }, 60_000);
+
+  /**
+   * Fix-round finding: the catch above calls `failStage`, and `failStage`
+   * rewrites the LAST task row of the stage as `failed` with the throw's own
+   * message. That row belongs to THIS invocation only when this invocation
+   * recorded one — and the catch runs with `ExecutorOutcome.tasks` unreturned,
+   * so it never has. On a stage that is being RETRIED, the last row is the
+   * previous, completed attempt's: a `done` turn was rewritten `failed`,
+   * carrying an error it did not produce and could not have.
+   *
+   * Measured before the fix, on exactly this flow: `t2` (S1's own in-session
+   * turn, `status: done, error: null`) came back `status: failed` with
+   * `error: the executor threw before returning its task rows …`.
+   *
+   * The invocation still fails the stage and still names the loss — what it may
+   * not do is repaint someone else's row to say so.
+   */
+  test("a retry whose executor throws leaves the PREVIOUS attempt's `done` row alone", async () => {
+    const ws = workspace(TWO_WAVES);
+
+    // Invocation 1 and 2: an in-session cycle that carries S1 all the way to
+    // `done`, so the stage owns finished task rows before anything throws.
+    await next(ws, { mode: "prepare" });
+    writeFileSync(
+      join(ws.root, ".tldrx", "worktrees", "app", `${ws.runId}-S1`, "s1.txt"), "S1 in-session\n", "utf8",
+    );
+    writeFileSync(
+      join(ws.runDir, ".agent", "build", "S1", "result.json"),
+      JSON.stringify({ outputs: ["s1.txt"], questions_asked: [], notes: "", cost_usd: 0.3 }),
+      "utf8",
+    );
+    const committed = await next(ws, { mode: "commit", at: "2026-08-29T09:30:00Z" });
+    expect(committed.code).toBe(0);
+    const before = buildStage(ws);
+    expect(before?.tasks.length).toBeGreaterThan(0);
+    expect(before?.tasks.at(-1)?.status).toBe("done");
+    const untouched = before?.tasks.map((t) => ({ id: t.id, status: t.status, error: t.error }));
+
+    // Invocation 3: S2 is still pending, and the executor throws before it can
+    // return a single row for this invocation.
+    process.env.TLDRX_AGENT_PROVIDER = "bogus";
+    const threw = await next(ws, { at: "2026-08-29T11:00:00Z" });
+
+    expect(threw.code).toBe(5);
+    // The loss is still named — that half is not what changed.
+    expect(threw.lines.join("\n")).toContain("executor threw before returning its task rows");
+    const after = buildStage(ws);
+    expect(after?.status).toBe("failed");
+    // Every row the earlier attempts earned is byte-for-byte what it was.
+    expect(after?.tasks.map((t) => ({ id: t.id, status: t.status, error: t.error }))).toEqual(untouched);
+    expect(after?.tasks.at(-1)?.status).toBe("done");
+    expect(after?.tasks.at(-1)?.error).toBeNull();
+  }, 90_000);
 
   test("a HUGE thrown message is capped and saved to a sidecar too — the SAME mechanism, not a second one", async () => {
     // Fix round 1, finding 2: the first version of this bounded a thrown

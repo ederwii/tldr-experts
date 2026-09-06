@@ -39,7 +39,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { factsCommand } from "../src/cli/commands/facts.ts";
-import { subcommandsOf } from "../src/cli/helpText.ts";
+import { helpFor, subcommandsOf } from "../src/cli/helpText.ts";
+import { EXIT_NOT_FOUND } from "../src/cli/exitCodes.ts";
 import { FactsStore } from "../src/core/facts/FactsStore.ts";
 import { MAX_FACT_CHARS, type Fact } from "../src/core/facts/Fact.ts";
 import { validateFactsFile } from "../src/core/facts/validateFactsFile.ts";
@@ -212,6 +213,13 @@ describe("tldrx facts add", () => {
     expect(subcommandsOf("facts")).toContain("add");
     expect(factsCommand.implemented).toBe(true);
   });
+
+  test("the not-found exit is DECLARED, so `--help` and the docs page carry it", () => {
+    // `<cmd> --help`, the generated site page and the argv guard all read this
+    // one registry: a refusal the code can return and the registry does not
+    // declare is a code nobody is told about.
+    expect(helpFor("facts")?.exits).toContain(EXIT_NOT_FOUND);
+  });
 });
 
 /**
@@ -267,6 +275,30 @@ describe("tldrx facts add — run provenance", () => {
     const betaEvents = EventLog.forRun(beta.runDir).read().filter((e) => e.type === "fact.added");
     expect(alphaEvents).toHaveLength(1);
     expect(betaEvents).toHaveLength(0);
+  });
+
+  test("`--run` naming a run that does not exist refuses — nothing is written, nothing is logged", async () => {
+    // `RunStore.resolve` answers `{kind: "none"}` to BOTH "no run is open" and
+    // "the id you named is not there", and this command used to take that one
+    // branch for both: the fact was written with `source.run: null` and stdout
+    // said "no open run to attribute it to" — a sentence that is false while a
+    // run IS open, over a fact whose provenance was silently dropped. An id
+    // nobody can find is spec §3's not-found, refused before the store is
+    // touched.
+    const ws = makeRunnableWorkspace();
+    const alpha = openRun(ws.root, "alpha");
+
+    const printed = capture();
+    const code = await factsCommand.run([
+      "add", "Something true.", "--area", "billing", "--decided-by", "owner",
+      "--run", "260101-nope", "--root", ws.root,
+    ]);
+    const out = printed();
+
+    expect(code).toBe(3);
+    expect(out).toBe("");
+    expect(FactsStore.load(factsFileOf(ws)).facts).toHaveLength(0);
+    expect(EventLog.forRun(alpha.runDir).read().filter((e) => e.type === "fact.added")).toHaveLength(0);
   });
 
   test("two open runs with no `--run` refuse to guess, name the flag, and still record the fact", async () => {

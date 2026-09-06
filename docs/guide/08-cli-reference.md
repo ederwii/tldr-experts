@@ -641,13 +641,16 @@ carries `truncated: true`, **and the command says so on stdout** — a marker on
 reader sees is one the author never acts on.
 
 `--run` attributes the fact to a run and appends one `fact.added` to that run's event log.
-Without it, one open run is used; with several open, the fact is still recorded but its run
-is left **absent**, and stdout names the reason and the flag that fixes it. The run is
+An id no run in `tldrx-work/` answers to is **refused** — exit `3`, nothing written, nothing
+logged — because asking for provenance by name and getting `run: null` back is worse than
+not asking, and "no open run to attribute it to" is a false sentence whenever a run IS open.
+Without `--run`, one open run is used; with several open, the fact is still recorded but its
+run is left **absent**, and stdout names the reason and the flag that fixes it. The run is
 provenance, and provenance nobody can establish is written as missing, never guessed.
 
 It writes through `FactsStore`, under the workspace lock: load, mint the id, cap, validate,
 save. Editing `.tldrx/memory/facts.yml` by hand walks past all four, and a fact cut mid-word
-with no marker is a record that does not know it is incomplete. Exits: `0` `1`.
+with no marker is a record that does not know it is incomplete. Exits: `0` `1` `3`.
 
 ## `tldrx story`
 

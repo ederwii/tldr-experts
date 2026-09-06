@@ -81,17 +81,34 @@
   task — so a turn that had already been paid for left no row anywhere, and the run's own ledger
   was short by exactly the amount nobody could see. The row lands first and the refusal exits
   after it. Because that refusal deliberately leaves the stage `running` so the operator can fix
-  the file and re-run, the row is fingerprinted by session, declared cost and outputs, and the
-  same turn is never banked twice.
+  the file and re-run, the banked row is marked `banked_before_refusal`, and the re-run is
+  matched to it by session id, declared cost and outputs — against MARKED rows only, so an
+  ordinary attempt a gate sent back is never mistaken for a re-read. Two things it deliberately
+  does NOT do. A result with no `session_id` is never fingerprinted at all: a null id identifies
+  nothing, so the second turn gets its own row carrying `dedupe: "none — no session id"` and the
+  reason is in `run.yml`, not only on the console — recording it twice is a smaller lie than
+  dropping a turn that ran. And the marker is single-use: the re-run that matches it stamps the
+  row `matched by the re-run committed at <at> — the marker is spent`, because a marker left
+  armed matched every later turn of the same shape for the life of the stage, and a real retry
+  after a gate reject — same session, same outputs, the same `null` cost — was silently dropped
+  as already recorded.
 - **An oversized reviewer verdict no longer takes the whole invocation's ledger with it
   (#160).** The 4096-byte payload cap was enforced by `EventLog.append` throwing, nothing
   wrapped the executor call, and the reviewer's verdict prose is the field that overflows — so
   one wordy review escaped past `recordExecutorTasks` and `store.save()`, leaving the epic merge
   on disk and every task's cost gone from `run.yml`. The cap is honoured, never raised: at the
   emit seam the oversized `detail` becomes `detail_omitted`, carrying its own byte count and
-  pointing at the review log that already holds the prose, while the verdict itself survives.
-  The executor call is wrapped so a throw fails the stage by name, saves, and says plainly which
-  rows it could not recover rather than implying the ledger is whole.
+  pointing at a sidecar the seam wrote FIRST — `<phase>/log/overflow/<stamp>-<n>-<type>-detail.txt`,
+  one file per omission — while the verdict itself survives. It is not the review log: that file
+  does not exist yet when the event is built, it later holds only the final verdict's prose, and
+  a story that does not settle never gets one, so pointing at it was a promise about a file that
+  might never arrive. Around all of it, the executor call is now wrapped: ANY throw out of an
+  executor exits 5 with the stage failed by name and the loss said plainly — which rows this
+  invocation could not recover — where before the throw simply escaped, leaving the stage
+  `running` in a file nobody saved. It attributes that failure to nothing it did not do, either:
+  the row it marks `failed` is one THIS invocation recorded, so a retry whose executor throws
+  leaves the previous attempt's `done` turn exactly as it was rather than repainting it with an
+  error it never produced.
 - **A cached red base is no longer trusted forever (#162).** `04-build/preflight.yml` was
   invalidated only by a base-sha comparison that no-ops when either sha is empty, and
   `checked_at` was written and never read — so a red measured once came back from every later
@@ -102,6 +119,14 @@
   the workspace's whole declared command list, because the command string was already the join
   key and hashing it alone would have changed nothing. A cached green keeps the rule it had, and
   both new row fields are additive — an absent one invalidates nothing.
+- **`tldrx facts add --run <id>` no longer invents an absence.** `RunStore.resolve` answers
+  `{kind: "none"}` both to "no run is open" and to "there is no run by that id", and the command
+  took the one branch for both: a typo'd `--run` wrote the fact with `source.run: null` under the
+  stdout line "no run recorded: no open run to attribute it to" — a sentence that is false
+  whenever a run IS open, over provenance the operator had asked for by name and silently did not
+  get. An id nothing in `tldrx-work/` answers to is now refused before the store is opened: exit
+  3, nothing written, no event, and the id named back. The other two branches are unchanged —
+  one open run is used, several are still never guessed between.
 - **A fix list records the canonical 40-hex sha (#163).** `Resolved: yes <sha>` accepted 7-40
   hex, so a sha that had lost a character read as a deliberate abbreviation: git resolved it,
   the claim verified, and the audit record kept a form no later reader can tell from a prefix of

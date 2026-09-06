@@ -793,18 +793,19 @@ const ENTRIES: readonly CommandHelp[] = [
       { name: "kind", arg: "<kind>", meaning: "What sort of fact this is.", values: FACT_KINDS, sub: "add" },
       { name: "confidence", arg: "<level>", meaning: "How well it is known. `measured` means you ran the check.", values: FACT_CONFIDENCES, sub: "add" },
       { name: "repo", arg: "<name>", meaning: "Scope the fact to one repo. Repeatable.", repeatable: true, sub: "add" },
-      { name: "run", arg: "<id>", meaning: "Attribute it to this run. Without it, one open run is used; with several open, the fact is still recorded and its run is left absent with a named reason on stdout, because provenance nobody can establish is written as missing, never guessed.", sub: "add" },
+      { name: "run", arg: "<id>", meaning: "Attribute it to this run. An id no run in tldrx-work/ answers to is refused (exit 3) before anything is written — asking for provenance by name and getting `run: null` instead is worse than not asking. Without it, one open run is used; with several open, the fact is still recorded and its run is left absent with a named reason on stdout, because provenance nobody can establish is written as missing, never guessed.", sub: "add" },
       root(),
     ],
     examples: [
       'tldrx facts add "The outbox lives in the billing repo." --area billing --decided-by owner --kind observed --confidence measured',
       'tldrx facts add "Retries are capped at three." --area billing --decided-by driver',
     ],
-    exits: [EXIT_OK, EXIT_USAGE],
+    exits: [EXIT_OK, EXIT_USAGE, EXIT_NOT_FOUND],
     notes: [
       "A fact is one assertion, capped at 2000 characters. Over the cap it is cut, ends in `…`, and carries `truncated: true` — and the command says so on stdout, because a marker only a later reader sees is one the author never acts on.",
       "It writes through `FactsStore`, under the workspace lock: load, mint the id, cap, validate, save. Editing `.tldrx/memory/facts.yml` by hand walks past all four.",
       "`--decided-by` is required, never defaulted: a fact gets cited later, and a row that cannot say which of the two decided it must not imply the stronger one (the owner's) by silence.",
+      "`--run <id>` that names nothing is exit 3, not a silently unattributed fact: `RunStore.resolve` answers `none` both to 'no run is open' and to 'that id is not here', and writing the second one as the first printed a sentence that is false whenever a run IS open.",
     ],
   },
   {

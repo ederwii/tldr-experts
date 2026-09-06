@@ -494,9 +494,11 @@ export function markUnverified(text: string, n: number, why: string): string {
 }
 
 /**
- * Locates the sha token inside a `Resolved: yes …` line — case-insensitively,
- * unlike `RESOLVED_SHA_RE`, since this one is about finding the token's own span
- * to replace it, not about deciding what the claim means.
+ * Locates the sha token inside a `Resolved: yes …` line — accepting `A-F` because
+ * it runs against the line's ORIGINAL casing, which is the only text whose spans
+ * line up with the line being rewritten. Not a difference in strictness from
+ * `RESOLVED_SHA_RE`: the parser lowercases the tail before matching it, so both
+ * are case-insensitive in effect.
  */
 const RESOLVED_SHA_TOKEN_RE = /\b[0-9a-fA-F]{7,40}\b/;
 

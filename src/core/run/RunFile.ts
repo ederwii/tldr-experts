@@ -233,13 +233,24 @@ export interface RunTask {
    */
   readonly banked_before_refusal?: true;
   /**
-   * Why this row was recorded as its own, rather than matched against an
-   * earlier `banked_before_refusal` row that its cost and outputs resemble:
-   * `"none — no session id"` when the result carried no `session_id` to
-   * fingerprint on, so it could not be told apart from a second, genuinely
-   * distinct unmetered turn (a null session id is NEVER used to dedupe — see
-   * `alreadyBanked`). ADDITIVE and optional: absent on every row that isn't
-   * ambiguous this way and on every `run.yml` written before this existed.
+   * One sentence about this row's part in the banked-turn dedupe, in the two
+   * cases where the file would otherwise not explain itself:
+   *
+   *   - `"none — no session id"` on a row recorded as its OWN rather than
+   *     matched against an earlier `banked_before_refusal` row its cost and
+   *     outputs resemble, because the result carried no `session_id` to
+   *     fingerprint on — so it could not be told apart from a second, genuinely
+   *     distinct unmetered turn (a null session id is NEVER used to dedupe, see
+   *     `alreadyBanked`).
+   *   - `"matched by the re-run committed at <at> — the marker is spent"` on a
+   *     `banked_before_refusal` row whose re-run has ARRIVED and been matched to
+   *     it. The marker is a claim ticket for exactly one re-run; leaving it
+   *     armed made the row match every later turn of the same shape for the life
+   *     of the stage, and the ledger dropped real turns for it. Its presence is
+   *     what `alreadyBanked` reads as "already claimed".
+   *
+   * ADDITIVE and optional: absent on every row neither thing happened to, and on
+   * every `run.yml` written before this existed.
    */
   readonly dedupe?: string;
 }

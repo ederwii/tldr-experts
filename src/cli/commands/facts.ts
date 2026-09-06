@@ -22,7 +22,7 @@
  * the file and two writers without the lock both mint `F001`.
  */
 import type { Command } from "../Command.ts";
-import { EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
+import { EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
 import { parseArgs, repeatedFlag, stringFlag } from "../argv.ts";
 import { workspaceRootFrom } from "../workspace.ts";
 import { fail } from "../report.ts";
@@ -32,6 +32,7 @@ import {
   type FactConfidence, type FactDecider, type FactKind,
 } from "../../core/facts/Fact.ts";
 import { factsPath } from "../../hooks/lib/workspace.ts";
+import { PROJECT_WORK_DIR } from "../../core/paths.ts";
 import { RunStore } from "../../core/run/RunStore.ts";
 import { EventLog } from "../../core/events/EventLog.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
@@ -73,7 +74,21 @@ export const factsCommand: Command = {
       // The run is provenance, and it is ABSENT WITH A REASON when it cannot be
       // established: `--run` names one, one open run is unambiguous, and several
       // open runs are not something to guess between.
-      const resolved = RunStore.resolve(root, stringFlag(args, "run"));
+      const runId = stringFlag(args, "run");
+      const resolved = RunStore.resolve(root, runId);
+      // An id that resolves to nothing is NOT "no run is open". `RunStore.resolve`
+      // answers `{kind: "none"}` to both, and taking that one branch for both wrote
+      // the fact with `source.run: null` under a stdout line — "no open run to
+      // attribute it to" — that is simply false while a run IS open, over
+      // provenance the operator had asked for by name and silently did not get.
+      // Spec §3: the thing asked for does not exist, and it is refused BEFORE the
+      // store is opened, so a typo'd id writes nothing rather than writing a fact
+      // that misremembers where it came from. The empty-string case is left to
+      // `resolve`'s own rule, which treats `--run ""` as no id at all.
+      if (runId !== undefined && runId !== "" && resolved.kind === "none") {
+        process.stderr.write(`tldrx facts add: no run '${runId}' in ${PROJECT_WORK_DIR}/\n`);
+        return EXIT_NOT_FOUND;
+      }
       const runStore = resolved.kind === "one" ? resolved.store : null;
 
       const fact = FactsStore.update(factsPath(root), (store) => store.append({

@@ -59,6 +59,19 @@ const RED_ON_BASE =
   `node -e "require('fs').appendFileSync('${TICKS_MARK}', 'x'); process.exit(1)"`;
 
 /**
+ * Green wherever it runs, and it counts its own runs — `RED_ON_BASE`'s mirror.
+ *
+ * The red cases pin that a stale red is re-measured; nothing pinned the other
+ * half END TO END, and the green rule is the one the cache leans on hardest: a
+ * green survives the 30-minute red TTL, a changed command hash and `--prepare`,
+ * all three of which invalidate a red. `baseResultFor`'s unit tests assert that
+ * from a hand-built `BasePreflight`; this asserts the real pipeline reads it
+ * back off `04-build/preflight.yml` and does not touch the repo again.
+ */
+const GREEN_ON_BASE =
+  `node -e "require('fs').appendFileSync('${TICKS_MARK}', 'x'); process.exit(0)"`;
+
+/**
  * Green on the untouched tree, red once a developer has written its story file.
  *
  * This is what the fixture's old `process.exit(1)` script MEANT — "the story
@@ -183,6 +196,34 @@ describe("the base-tree pre-flight", () => {
     const again = await next(ws, { at: "2026-08-29T10:05:00Z" });
     expect(again.code).toBe(2);
     expect(tickCount()).toBe(2);
+  }, 90_000);
+
+  test("a cached GREEN is not re-measured either — a second invocation never touches the repo", async () => {
+    // `--prepare`, deliberately: it is the mode that ALWAYS re-probes a red, so
+    // a green surviving it is the strongest form of the rule — and it is also
+    // the only mode that leaves the story pending, which is what keeps this
+    // instrument honest. `refuseOnRedBase` walks `pendingStories()`, so if the
+    // story had settled, tick count 1 would mean "nothing asked", not "the cache
+    // answered". S1 is still `in_progress` on the second call, so the question
+    // IS asked both times.
+    const ws = workspace({ ...ONE, testScript: GREEN_ON_BASE });
+
+    const first = await next(ws, { mode: "prepare" });
+    expect(first.code).toBe(0);
+    expect(tickCount()).toBe(1);
+    const cached = readFileSync(join(ws.runDir, PREFLIGHT_REL), "utf8");
+    expect(cached).toContain("npm run test");
+    expect(cached).toContain("exit_code: 0");
+    expect(story(ws, "S1")).toContain("status: in_progress");
+
+    // Fourteen hours later — well past the 30-minute TTL that invalidates a RED.
+    const again = await next(ws, { mode: "prepare", at: "2026-08-29T23:00:00Z" });
+
+    expect(tickCount()).toBe(1);
+    // Not a refusal, and not because nothing was asked: the story is still the
+    // pending one this invocation looked the base up for.
+    expect(again.code).not.toBe(2);
+    expect(story(ws, "S1")).toContain("status: in_progress");
   }, 90_000);
 
   test("gates green on base and red on the story tree block the story, exactly as before", async () => {
