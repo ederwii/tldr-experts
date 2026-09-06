@@ -72,6 +72,11 @@ function inlineList(values: readonly string[]): string {
 
 export function emitFact(fact: Fact, indent = "  "): string {
   const inner = `${indent}  `;
+  // Written only when present. `decided_by: null` on every row whose source never
+  // said would be noise in a diff nobody asked for — same rule as `truncated` below.
+  const decidedBy = fact.source.decided_by === undefined
+    ? ""
+    : `, decided_by: ${yamlScalar(fact.source.decided_by)}`;
   const lines = [
     `${indent}- id: ${yamlScalar(fact.id)}`,
     `${inner}fact: ${yamlScalar(fact.fact)}`,
@@ -80,7 +85,7 @@ export function emitFact(fact: Fact, indent = "  "): string {
     `${inner}kind: ${yamlScalar(fact.kind)}`,
     `${inner}confidence: ${yamlScalar(fact.confidence)}`,
     `${inner}source: {who: ${yamlScalar(fact.source.who)}, when: ${yamlScalar(fact.source.when)}, ` +
-      `run: ${yamlScalar(fact.source.run)}, q: ${yamlScalar(fact.source.q)}}`,
+      `run: ${yamlScalar(fact.source.run)}, q: ${yamlScalar(fact.source.q)}${decidedBy}}`,
     `${inner}supersedes: ${yamlScalar(fact.supersedes)}`,
     `${inner}superseded_by: ${yamlScalar(fact.superseded_by)}`,
   ];

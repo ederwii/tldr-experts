@@ -89,6 +89,15 @@ export function validateFactsFile(input: unknown): ValidationResult {
         // shape's third spelling, and the one that had already drifted (#81).
         issues.push({ path: `${path}.source.q`, message: `expected ${readableSource(Q_RE)} or null` });
       }
+      // Additive, so absence is fine and only a value outside the closed set is an
+      // issue: a row written before the field existed must keep validating.
+      const decidedBy = row.source.decided_by;
+      if (decidedBy !== undefined && decidedBy !== "owner" && decidedBy !== "driver") {
+        issues.push({
+          path: `${path}.source.decided_by`,
+          message: "expected owner, driver or absent",
+        });
+      }
     } else if (row.source !== undefined) {
       issues.push({ path: `${path}.source`, message: "expected a mapping" });
     }

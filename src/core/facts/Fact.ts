@@ -27,7 +27,19 @@ export interface FactSource {
   readonly when: string;
   readonly run: string | null;
   readonly q: string | null;
+  /**
+   * WHO DECIDED, as against `who`, which is the account that typed it.
+   *
+   * ADDITIVE and optional. 0.8.0's rule is that a driver's default is never cited
+   * as the owner's decision, and a fact is exactly the artefact that gets cited
+   * later — so a row that cannot say which of the two it was says nothing rather
+   * than implying the stronger one. Absent means "not stated", never "owner".
+   */
+  readonly decided_by?: "owner" | "driver";
 }
+
+export const FACT_DECIDERS = ["owner", "driver"] as const;
+export type FactDecider = (typeof FACT_DECIDERS)[number];
 
 export interface FactRetirement {
   readonly at: string | null;
