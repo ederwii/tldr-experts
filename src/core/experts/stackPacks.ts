@@ -78,3 +78,47 @@ function skillsOf(value: unknown): readonly DetectedSkill[] {
   }
   return out;
 }
+
+/** The heading the rendered section carries, in every prompt shape (precedent: `## Dispatch notes`). */
+export const PROJECT_SKILLS_HEADING = "Project skills";
+
+/** Skills of `repos`, deduplicated by path, sorted by name — the list every prompt renders. */
+export function skillsFor(state: StackPacksState, repos: readonly string[]): readonly DetectedSkill[] {
+  const byPath = new Map<string, DetectedSkill>();
+  for (const repo of state.repos) {
+    if (!repos.includes(repo.name)) continue;
+    for (const skill of repo.skills) if (!byPath.has(skill.path)) byPath.set(skill.path, skill);
+  }
+  return [...byPath.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+}
+
+/**
+ * The body of `## Project skills`, or `""` when there are none — and then no section is
+ * emitted at all. Skills are for DOING: the harness loads and invokes them; this only
+ * says they exist, in the skill's own words (decision 6). Independent of the switch:
+ * `stack_packs.enabled` governs pack CONTENT (overlays, Checks), and a project's own
+ * skills are not pack content — they are the project, and they exist either way.
+ *
+ * `[unverified]` Whether an agent CLI's print mode actually denies a `Skill` call that
+ * is not in `--allowedTools` has not been measured here. The framework's job is the
+ * list: name the skills, and put `Skill` in the allowance when there is one to invoke.
+ */
+export function renderProjectSkills(skills: readonly DetectedSkill[]): string {
+  if (skills.length === 0) return "";
+  return [
+    "Skills installed in this project (`.claude/skills/<name>/SKILL.md`). When a skill's",
+    "description matches the work, invoke it with the Skill tool: it is how this project wants",
+    "that job done, and it outranks the Defaults of any expert above.",
+    "",
+    ...skills.map((skill) =>
+      `- ${skill.name} — ${skill.description === "" ? "(no description)" : skill.description}`
+      + (skill.tracked ? "" : " (untracked: not present in story worktrees)")),
+  ].join("\n");
+}
+
+/** One line per untracked skill, for the Build opening lines: a skill the worktree cannot see. */
+export function untrackedSkillWarnings(skills: readonly DetectedSkill[]): readonly string[] {
+  return skills
+    .filter((skill) => !skill.tracked)
+    .map((skill) => `warning: project skill ${skill.name} is untracked (${skill.path}) — not present in story worktrees`);
+}

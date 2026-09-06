@@ -44,7 +44,10 @@ export { nearbyPathsFor, graphPath, MAX_GRAPH_BYTES } from "./domainRank.ts";
 export {
   sharedCitations, sharedCitationWarnings, type SharedCitation,
 } from "./sharedCitations.ts";
-export { readStackPacks, NO_STACK_PACKS } from "./stackPacks.ts";
+export {
+  readStackPacks, renderProjectSkills, skillsFor, untrackedSkillWarnings,
+  NO_STACK_PACKS, PROJECT_SKILLS_HEADING,
+} from "./stackPacks.ts";
 export type { StackPacksState, RepoPacks } from "./stackPacks.ts";
 export {
   DEFAULTS_HEADING, CHECKS_HEADING, OVERRIDDEN_BY, VERIFY_HINT, OVERLAYS_DIRNAME, PACK_MAX_BYTES,

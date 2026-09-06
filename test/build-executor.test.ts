@@ -2514,4 +2514,40 @@ describe("stack packs reach the Build reviewer (stack packs design §4.5)", () =
     expect(readFileSync(join(promptDir, "reviewer-S1-1.md"), "utf8")).not.toContain("## Stack checks");
     expect(readFileSync(join(promptDir, "developer-S1-1.md"), "utf8")).not.toContain("<!-- overlay: react -->");
   });
+
+  test("a detected skill is named to the developer, `Skill` joins its allowance, and an untracked one is warned at Build start", async () => {
+    const ws = workspace({
+      ...ONE,
+      skills: [
+        { name: "impeccable", description: "Use when designing a page", path: ".claude/skills/impeccable/SKILL.md", tracked: true },
+        { name: "scratch", description: "Not committed", path: ".claude/skills/scratch/SKILL.md", tracked: false },
+      ],
+    });
+    const promptDir = join(ws.root, "prompts");
+    const argvLog = join(ws.root, "argv.log");
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+    process.env.FAKE_BUILD_ARGV_LOG = argvLog;
+    const outcome = await next(ws);
+    expect(outcome.lines.join("\n")).toContain("warning: project skill scratch is untracked");
+    const developer = readFileSync(join(promptDir, "developer-S1-1.md"), "utf8");
+    expect(developer).toContain("## Project skills");
+    expect(developer).toContain("- impeccable — Use when designing a page");
+    expect(developer).toContain("- scratch — Not committed (untracked: not present in story worktrees)");
+    const calls = readFileSync(argvLog, "utf8").trim().split("\n").map((l) => JSON.parse(l) as string[]);
+    const devAllowance = calls[0]?.[calls[0].indexOf("--allowedTools") + 1] ?? "";
+    expect(devAllowance.split(",")).toContain("Skill");
+    expect(calls[1]?.[calls[1].indexOf("--allowedTools") + 1]).toBe("Read,Grep,Glob,Bash(git diff *)");
+  });
+
+  test("no skills ⇒ no section, no `Skill` in the allowance", async () => {
+    const ws = workspace(ONE);
+    const promptDir = join(ws.root, "prompts");
+    const argvLog = join(ws.root, "argv.log");
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+    process.env.FAKE_BUILD_ARGV_LOG = argvLog;
+    await next(ws);
+    expect(readFileSync(join(promptDir, "developer-S1-1.md"), "utf8")).not.toContain("## Project skills");
+    const calls = readFileSync(argvLog, "utf8").trim().split("\n").map((l) => JSON.parse(l) as string[]);
+    expect((calls[0]?.[calls[0].indexOf("--allowedTools") + 1] ?? "").split(",")).not.toContain("Skill");
+  });
 });

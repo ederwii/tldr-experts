@@ -73,6 +73,14 @@ export interface PendingContext {
   readonly expert_knowledge_bytes: number;
   /** The host's `## Dispatch notes` section — 0 when the operator left no file. */
   readonly dispatch_notes_bytes: number;
+  /**
+   * The `## Project skills` section — 0 when the workspace detected none.
+   *
+   * Carried for the invariant this block is documented by: the groups must SUM to
+   * `total_bytes`. A section counted in the total and named in no row would make the
+   * record quietly unaddable, which is the one thing a ledger may not be.
+   */
+  readonly project_skills_bytes: number;
   readonly previous_attempt_bytes: number;
   /** Declared inputs the shared inline budget could not fit whole. */
   readonly truncated_inputs: readonly string[];

@@ -16,6 +16,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { SKIPPED_DIRS, toPosix } from "../detect/walk.ts";
 import { byteLength } from "../experts/expertKnowledge.ts";
+import { PROJECT_SKILLS_HEADING } from "../experts/stackPacks.ts";
 import { MAX_PAYLOAD_BYTES } from "../events/Event.ts";
 import { fenceFor, renderInputs, type PromptInput } from "../facilitator/prompt.ts";
 import { SRC_GRAMMAR_HEADING, renderSrcGrammarContract } from "../text/srcGrammarContract.ts";
@@ -69,6 +70,8 @@ export interface DeveloperPromptParts {
    * when the operator left no file.
    */
   readonly dispatchNotes?: string;
+  /** The rendered body of `## Project skills` (`experts/stackPacks.ts`); empty ⇒ no section. */
+  readonly projectSkills?: string;
   /**
    * One line under Objective saying where this story came from, when it did not
    * come from a Plan phase. An implicit story (`build/implicitPlan.ts`) is the
@@ -158,6 +161,7 @@ export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
     renderInputs(inputs),
     "",
     ...dispatchNotesSection(parts.dispatchNotes),
+    ...projectSkillsSection(parts.projectSkills),
     "## Investigate",
     "",
     "1. Read the story and the inlined files above. They are the whole brief.",
@@ -238,6 +242,18 @@ export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
 function dispatchNotesSection(body: string | undefined): readonly string[] {
   const text = (body ?? "").trim();
   return text === "" ? [] : ["## Dispatch notes", "", text, ""];
+}
+
+/**
+ * `## Project skills`, or nothing — after the notes, before the brief's own steps.
+ *
+ * The same reasoning that puts the notes there puts this here: `## Investigate` step 1
+ * says the inlined files ARE the whole brief, and "this project has a skill for that"
+ * arriving after that sentence would read as something to disregard.
+ */
+function projectSkillsSection(body: string | undefined): readonly string[] {
+  const text = (body ?? "").trim();
+  return text === "" ? [] : [`## ${PROJECT_SKILLS_HEADING}`, "", text, ""];
 }
 
 export interface ReviewerPromptParts {

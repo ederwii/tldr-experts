@@ -11,7 +11,17 @@ import { describeBundles, loadExpertBundles } from "../src/core/experts/expertBu
 import {
   CHECKS_HEADING, DEFAULTS_HEADING, overlayMarker, OVERLAYS_DIRNAME, PACK_MAX_BYTES, stackChecks,
 } from "../src/core/experts/packSections.ts";
+import {
+  PROJECT_SKILLS_HEADING, readStackPacks, renderProjectSkills, skillsFor, untrackedSkillWarnings,
+} from "../src/core/experts/stackPacks.ts";
 import { renderParts, buildPrompt } from "../src/core/facilitator/prompt.ts";
+import { buildLedger } from "../src/core/facilitator/contextLedger.ts";
+import { developerTools } from "../src/core/facilitator/executors/build.ts";
+import { BASE_TOOLS } from "../src/core/facilitator/spawnAgent.ts";
+import { runNext } from "../src/core/facilitator/runNext.ts";
+import type { PendingStage } from "../src/core/facilitator/pending.ts";
+import { makeFacilitatorWorkspace, type FacilitatorWorkspace } from "./fixtures/facilitator/workspace.ts";
+import { WORKSPACE_YML } from "./fixtures/tempRunWorkspace.ts";
 import { buildDeveloperPrompt, buildReviewerPrompt, STACK_CHECKS_HEADING } from "../src/core/build/prompts.ts";
 import type { PlannedEpic, PlannedStory } from "../src/core/build/plan.ts";
 
@@ -220,5 +230,137 @@ describe("the reviewer's stack checks", () => {
     expect(text.indexOf("## Conventions")).toBeLessThan(text.indexOf(`## ${STACK_CHECKS_HEADING}`));
     expect(text.indexOf(`## ${STACK_CHECKS_HEADING}`)).toBeLessThan(text.indexOf("## The story"));
     expect(text).toContain("the project's own convention");
+  });
+});
+
+describe("project skills are named, never loaded (design decision 6)", () => {
+  test("renderProjectSkills lists name — description, flags untracked, and is empty for none", () => {
+    const skills = skillsFor(readStackPacks(packRoot({
+      enabled: null,
+      skills: [{ name: "zeta", description: "Last", tracked: true }, { name: "alpha", description: "First", tracked: false }],
+    })), ["lab"]);
+    expect(skills.map((s) => s.name)).toEqual(["alpha", "zeta"]);
+    const text = renderProjectSkills(skills);
+    expect(text).toContain("- alpha — First (untracked: not present in story worktrees)");
+    expect(text).toContain("- zeta — Last");
+    expect(text).toContain("Skill tool");
+    expect(renderProjectSkills([])).toBe("");
+    expect(untrackedSkillWarnings(skills)).toEqual([
+      "warning: project skill alpha is untracked (.claude/skills/alpha/SKILL.md) — not present in story worktrees",
+    ]);
+    // Independent of the switch: off, on, absent all name the skills.
+    expect(skillsFor(readStackPacks(packRoot({ enabled: false, skills: [{ name: "a", description: "d", tracked: true }] })), ["lab"])).toHaveLength(1);
+  });
+
+  test("the stage prompt renders `## Project skills` after Dispatch notes, and the ledger counts it", () => {
+    const values = { run: "r", repos: "lab", inputs: "-", facts: "-", conventions: "-", budget_usd: "1.00" };
+    const parts = renderParts({
+      stageMd: "# s\n\n## Inputs\n\n(x)\n", values, experts: [], inputs: [],
+      dispatchNotes: "Docker is up.", projectSkills: renderProjectSkills([{ name: "alpha", description: "First", path: "p", tracked: true }]),
+    });
+    const kinds = parts.map((part) => part.kind);
+    expect(kinds.indexOf("project-skills")).toBe(kinds.indexOf("dispatch-notes") + 1);
+    const text = buildPrompt({ stageMd: "# s\n", values, experts: [], inputs: [], projectSkills: renderProjectSkills([{ name: "alpha", description: "First", path: "p", tracked: true }]) });
+    expect(text.split(`## ${PROJECT_SKILLS_HEADING}`).length - 1).toBe(1);
+    // Both halves of "empty ⇒ nothing": byte-identity to the field-less call, AND no
+    // heading. Identity alone passes an emit-always renderer — both calls would carry
+    // the same empty section — which is exactly what the mutation run showed.
+    expect(buildPrompt({ stageMd: "# s\n", values, experts: [], inputs: [], projectSkills: "" }))
+      .toBe(buildPrompt({ stageMd: "# s\n", values, experts: [], inputs: [] }));
+    expect(buildPrompt({ stageMd: "# s\n", values, experts: [], inputs: [], projectSkills: "" }))
+      .not.toContain(`## ${PROJECT_SKILLS_HEADING}`);
+    const ledger = buildLedger({ parts, inputBytes: [], truncatedInputs: [], limitBytes: 160_000, model: null });
+    expect(ledger.groups.projectSkills).toBeGreaterThan(0);
+    expect(ledger.totalBytes).toBe(parts.reduce((sum, part) => sum + Buffer.byteLength(part.text, "utf8"), 0));
+  });
+
+  test("the developer prompt renders the section after Dispatch notes and before Investigate; absent ⇒ identical", () => {
+    const skills = renderProjectSkills([{ name: "alpha", description: "First", path: "p", tracked: true }]);
+    const text = devPrompt([], { dispatchNotes: "Docker is up.", projectSkills: skills });
+    expect(text.indexOf("## Dispatch notes")).toBeLessThan(text.indexOf(`## ${PROJECT_SKILLS_HEADING}`));
+    expect(text.indexOf(`## ${PROJECT_SKILLS_HEADING}`)).toBeLessThan(text.indexOf("## Investigate"));
+    expect(devPrompt([], { projectSkills: "" })).toBe(devPrompt([]));
+  });
+
+  test("developerTools adds `Skill` only when asked", () => {
+    expect(developerTools(["npm test"])).not.toContain("Skill");
+    expect(developerTools(["npm test"], { skills: false })).toEqual(developerTools(["npm test"]));
+    const withSkill = developerTools(["npm test"], { skills: true });
+    expect(withSkill).toContain("Skill");
+    expect(withSkill.filter((tool) => !BASE_TOOLS.includes(tool) && tool !== "Skill")).toEqual(["Bash(npm test)", "Bash(git add *)", "Bash(git commit *)"]);
+  });
+});
+
+/**
+ * The wiring, not the renderer: `assemblePrompt` is the only place the stage path reads
+ * the skills, and a unit test on `renderParts` cannot see whether it was ever called.
+ * That is the "wrong instrument" failure — so this one runs `tldrx next --prepare` for
+ * real and reads the prompt off disk.
+ */
+describe("`tldrx next --prepare` puts the project's skills in the stage prompt", () => {
+  let workspaces: FacilitatorWorkspace[] = [];
+  afterEach(() => {
+    for (const ws of workspaces) ws.dispose();
+    workspaces = [];
+  });
+
+  /** The fixture workspace, with `repos[].skills` written on `lab` as detection would. */
+  function facWorkspace(skills: readonly { name: string; description: string; tracked: boolean }[]): FacilitatorWorkspace {
+    const rows = skills.map((skill) =>
+      `      - {name: ${skill.name}, description: "${skill.description}", `
+      + `path: .claude/skills/${skill.name}/SKILL.md, tracked: ${String(skill.tracked)}}`);
+    const made = makeFacilitatorWorkspace({
+      scope: "demo",
+      stages: [{ id: "what", phase: "01-what", budgetUsd: 4, outputs: [{ path: "01-what/handoff.md" }] }],
+      budgetUsd: 10,
+      files: {
+        ".tldrx/workspace.yml": WORKSPACE_YML.replace(
+          "    stack: [typescript]\n",
+          `    stack: [typescript]\n${rows.length === 0 ? "" : `    skills:\n${rows.join("\n")}\n`}`,
+        ),
+      },
+    });
+    workspaces.push(made);
+    return made;
+  }
+
+  function prepare(ws: FacilitatorWorkspace) {
+    return runNext({ root: ws.root, dryRun: false, mode: "prepare", yolo: false, actor: "alan", at: "2026-08-30T09:00:00Z" });
+  }
+
+  function promptOf(ws: FacilitatorWorkspace): string {
+    return readFileSync(join(ws.runDir, ".agent", "what", "prompt.md"), "utf8");
+  }
+
+  function contextOf(ws: FacilitatorWorkspace): PendingStage["context"] {
+    return (JSON.parse(readFileSync(join(ws.runDir, ".agent", "what", "pending.json"), "utf8")) as PendingStage).context;
+  }
+
+  test("a detected skill reaches the prompt and the ledger; none ⇒ the prompt is byte-identical", async () => {
+    const withSkill = facWorkspace([{ name: "impeccable", description: "Use when designing a page", tracked: true }]);
+    expect((await prepare(withSkill)).code).toBe(0);
+    const text = promptOf(withSkill);
+    expect(text.split(`## ${PROJECT_SKILLS_HEADING}`).length - 1).toBe(1);
+    expect(text).toContain("- impeccable — Use when designing a page");
+    expect(text.indexOf(`## ${PROJECT_SKILLS_HEADING}`)).toBeGreaterThan(text.indexOf("## Inputs"));
+    const context = contextOf(withSkill);
+    expect(context?.project_skills_bytes ?? 0).toBeGreaterThan(0);
+    // `pending.ts`: "context is the LEDGER — its groups must sum to `total_bytes`".
+    expect(
+      (context?.stage_bytes ?? 0) + (context?.inputs_bytes ?? 0) + (context?.expert_body_bytes ?? 0)
+      + (context?.expert_knowledge_bytes ?? 0) + (context?.dispatch_notes_bytes ?? 0)
+      + (context?.project_skills_bytes ?? 0) + (context?.previous_attempt_bytes ?? 0),
+    ).toBe(context?.total_bytes ?? -1);
+
+    const none = facWorkspace([]);
+    expect((await prepare(none)).code).toBe(0);
+    expect(promptOf(none)).not.toContain(`## ${PROJECT_SKILLS_HEADING}`);
+    expect(contextOf(none)?.project_skills_bytes).toBe(0);
+    // The run id is the only thing that differs between the two prompts.
+    expect(promptOf(none).replace(none.runId, "RUN")).toBe(
+      promptOf(withSkill)
+        .replace(withSkill.runId, "RUN")
+        .replace(new RegExp(`\\n## ${PROJECT_SKILLS_HEADING}\\n\\n[\\s\\S]*?\\n(?=\\n?$)`), ""),
+    );
   });
 });

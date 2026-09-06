@@ -54,6 +54,8 @@ export interface LedgerGroups {
   readonly expertKnowledge: number;
   /** The host's own `## Dispatch notes` section — 0 when it left no file. */
   readonly dispatchNotes: number;
+  /** The `## Project skills` section — 0 when the workspace detected none. */
+  readonly projectSkills: number;
   readonly previousAttempt: number;
   /** The `## Questions` section of `stage.md`, counted out of the stage total. */
   readonly questions: number;
@@ -93,6 +95,7 @@ export function buildLedger(input: LedgerInput): ContextLedger {
   let expertBodies = 0;
   let expertKnowledge = 0;
   let dispatchNotes = 0;
+  let projectSkills = 0;
   let previousAttempt = 0;
 
   for (const part of input.parts) {
@@ -116,6 +119,12 @@ export function buildLedger(input: LedgerInput): ContextLedger {
         dispatchNotes += bytes;
         rows.push({ kind: part.kind, name: part.name, bytes });
         break;
+      case "project-skills":
+        // Same rule as the notes above: a section the framework computes rather
+        // than reads is still bytes the model is billed for.
+        projectSkills += bytes;
+        rows.push({ kind: part.kind, name: part.name, bytes });
+        break;
       case "previous-attempt":
         previousAttempt += bytes;
         rows.push({ kind: part.kind, name: part.name, bytes });
@@ -133,7 +142,8 @@ export function buildLedger(input: LedgerInput): ContextLedger {
     }
   }
 
-  const totalBytes = stage + inputs + expertBodies + expertKnowledge + dispatchNotes + previousAttempt;
+  const totalBytes = stage + inputs + expertBodies + expertKnowledge + dispatchNotes
+    + projectSkills + previousAttempt;
   const estimatedTokens = estimateTokensFromBytes(totalBytes);
   const contextTokens = contextTokensFor(input.model);
   const contextPct = contextTokens === 0 ? 0 : (estimatedTokens / contextTokens) * 100;
@@ -148,6 +158,7 @@ export function buildLedger(input: LedgerInput): ContextLedger {
       expertBodies,
       expertKnowledge,
       dispatchNotes,
+      projectSkills,
       previousAttempt,
       questions: input.questionsBytes ?? 0,
     },
@@ -188,6 +199,7 @@ export function renderLedger(ledger: ContextLedger, maxRows = 8): readonly strin
       + ` · inputs ${bytes(g.inputs)} · experts ${bytes(g.experts)}`
       + ` (bodies ${bytes(g.expertBodies)}, knowledge ${bytes(g.expertKnowledge)})`
       + (g.dispatchNotes === 0 ? "" : ` · dispatch notes ${bytes(g.dispatchNotes)}`)
+      + (g.projectSkills === 0 ? "" : ` · project skills ${bytes(g.projectSkills)}`)
       + (g.previousAttempt === 0 ? "" : ` · previous attempt ${bytes(g.previousAttempt)}`),
   ];
   const biggest = [...ledger.rows]
@@ -251,6 +263,7 @@ function label(row: LedgerRow): string {
     case "expert-body": return `expert ${row.name} body`;
     case "expert-knowledge": return `expert ${row.name} knowledge`;
     case "dispatch-notes": return "dispatch notes";
+    case "project-skills": return "project skills";
     case "previous-attempt": return "previous attempt";
   }
 }
