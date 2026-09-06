@@ -72,6 +72,138 @@ The two placeholder names older stage files used, `domain` and `stack`, are reti
 were rules 2 and 3 above written as though they were folders. A stage file that still lists
 them gets one note saying so instead of a NOT LOADED line on every run.
 
+## Stack packs
+
+A `<language>-stack` expert is seeded as a name-only stub: until you train it, the language
+name is the only stack-specific token in its body. **Stack packs** give it a shipped body
+instead — off by default, one switch per project:
+
+```bash
+tldrx expert packs enable
+tldrx expert packs status
+tldrx expert packs disable
+```
+
+### What a pack says, and what it refuses to say
+
+A pack has two sections and nothing else. **`## Defaults (when the repo is silent)`** apply
+only where the repo has no signal on the topic, and every bullet names the signal that
+overrides it — `— overridden by: the compilerOptions block in the repo's tsconfig`.
+**`## Checks (always asked in review)`** are questions asked of every diff, each with a
+`verify:` hint naming what to open or run; a miss is a finding with a cited file, and the
+project's own convention is the accepted answer whenever it has one.
+
+That shape is the design decision, not a style choice. **Measured repo conventions win over
+pack content, always** — a pack that argued with the repo it is installed in would be worse
+than no pack at all. So the packs are interrogative by default and prescriptive only in the
+gaps: they ask, and they yield to any signal.
+
+### Two layers
+
+The **language pack** becomes the expert's body. Four ship: `typescript`, `javascript`,
+`python`, `dotnet`. A stack expert for a language with no pack is untouched and said so —
+`no pack ships for go`, not a silent skip.
+
+**Framework overlays** are detected from manifests and from nothing else, never inferred from
+the language: two .NET workspaces can use opposite architectures, and one prescriptive
+".NET pack" would be wrong for one of them. Thirteen rules ship, each firing on a named signal
+and recording the evidence a reader can go open:
+
+| overlay | fires on |
+|---|---|
+| `react` | `react` in package.json `dependencies` or `devDependencies` |
+| `next-app-router` | `next` declared **and** an `app/` or `src/app/` directory present |
+| `vite-react-spa` | `vite` and `react` declared, and `next` not |
+| `expo-router` | `expo-router` or `expo` declared |
+| `node-express` | `express` declared |
+| `prisma` | `prisma` or `@prisma/client` declared |
+| `aspnet-minimal-apis` | a `Microsoft.NET.Sdk.Web` csproj with **no** `Controllers/` beside it |
+| `aspnet-controllers` | a `Microsoft.NET.Sdk.Web` csproj **with** a `Controllers/` directory beside it |
+| `mediatr-cqrs` | `MediatR` in any `PackageReference` / `PackageVersion` |
+| `efcore-npgsql` | a `Microsoft.EntityFrameworkCore*` package **and** an `Npgsql*` one |
+| `fastapi` | `fastapi` in pyproject's `[project] dependencies` or in a `requirements*.txt` |
+| `sqlalchemy-alembic` | `sqlalchemy` declared — whether `alembic` is there too is noted in the evidence |
+| `postgres-testcontainers` | a Postgres driver **and** a Testcontainers package, in any of the three ecosystems |
+
+`src/core/detect/overlays.ts` is the one list of those ids in the tree, and the template files
+mirror it one-to-one. A manifest that says nothing produces no overlay: unknown is never a guess.
+
+### Where the files are
+
+Templates ship inside the package, at `templates/experts/stack/<lang>.md` and
+`templates/experts/stack/overlays/<id>.md`. With the switch on, `enable` — and every later
+`tldrx init` — materialises them:
+
+```
+.tldrx/experts/typescript-stack/
+  expert.md               front matter preserved, the pack body under it
+  overlays/react.md       framework-managed: emptied and rewritten on every enable and re-init
+  overlays/prisma.md
+  knowledge/              never touched by any packs command
+```
+
+Detected overlays are written into `workspace.yml` with their evidence **whether or not the
+switch is on** — detection is a measurement, and the switch governs only whether the files get
+written. `stack_packs: {enabled, enabled_at}` is read out of the file being regenerated and
+carried forward, so a re-init never quietly turns your packs off.
+
+### The body is yours
+
+`enable` replaces `expert.md`'s body only when there is nothing of yours in it: the untouched
+stub `init` seeded, or an empty body. An edited body is kept, and the command says which —
+`kept: typescript-stack body was edited — pack body not applied (delete the body to re-seed)`.
+
+A materialised body records two additive front-matter keys: `pack: <lang>@<hash>` names the
+shipment it came from and `pack_body: <sha>` names the bytes. Keeping those apart is what makes
+"somebody edited this" (bytes differ) a different answer from "this is one shipment behind"
+(bytes match, shipment differs). The second one `enable` upgrades and says so —
+`upgraded: typescript-stack pack@<old> → pack@<new>` — and `status` names the state rather than
+rounding it off: `body pack@<old> (stale — shipment is pack@<new>)`. Comparing a body against
+today's template alone would have called every untouched file *edited* the first time a template
+changed, and frozen every pack at the shipment it was first materialised with.
+
+`disable` removes the `overlays/` folders and nothing else. Bodies stay, `knowledge/` stays, and
+the command says so on its way out.
+
+### Where a pack lands in a prompt
+
+Every renderer already prints an expert's body, so one composition point reaches every stage
+prompt and the Build developer: `expert.md` first, then each overlay behind a
+`<!-- overlay: <id> -->` marker, sorted by id, under a 24 KB cap kept separate from the 48 KB
+knowledge budget so pack prose cannot crowd out what training found. An overlay goes in whole or
+not at all — the first that does not fit, and every later one, is named in a `(not inlined: …)`
+marker instead of being cut in half.
+
+The Build **reviewer** carries no expert bodies at all, so it is handed the active packs' Checks
+explicitly, under `## Stack checks (the repo's own conventions win)`. That section needs BOTH
+switches on: the packs switch, and the stage's own `stack_experts`. Under `stack_experts: false`
+the developer was never shown a stack expert, and holding a diff to Checks that were never in the
+brief is grading against a document nobody wrote from.
+
+### Project skills are not part of the switch
+
+A repo's own `.claude/skills/<name>/SKILL.md` files are detected alongside and named to the
+developer under `## Project skills` — name, description, and the path to read — **independent of
+the packs switch**, because a project's own skills are not pack content: they are the project.
+Skills are for doing and packs are for checking. The harness loads and invokes a skill; tldrx
+only says it is there.
+
+A skill git does not track is marked `(untracked: not present in story worktrees)`, because Build
+runs in a worktree that carries tracked files only, and Build's opening lines warn about each one
+by name and by repo. On a Build story the developer turn gets `Skill` among its allowed tools when
+that story's repo has skills, and not otherwise. `[unverified]`: whether an agent CLI's print mode
+actually DENIES a `Skill` call absent from that list has not been measured — the framework's job
+is the list.
+
+### Exit codes
+
+`status` exits `0` always: with no `.tldrx/workspace.yml` it prints the line naming the missing
+file and the `tldrx init` that fixes it rather than refusing. `enable` exits `1` when no repo has
+a detectable language — there is nothing to enable, and nothing is written — or when the workspace
+cannot be read, printing `error: <message>` rather than a stack trace. `disable` is idempotent:
+nothing to disable is exit `0` and a named line, and only a `workspace.yml` that exists but is too
+broken to read is exit `1`.
+
 ## Training
 
 ```bash

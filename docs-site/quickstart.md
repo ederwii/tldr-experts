@@ -68,6 +68,10 @@ tldrx init — single-repo, 1 repo(s) under /Users/you/acme-api
 Trimmed there: a `files` roll-up follows `questions` — how many were written, how many
 created, and how many were yours and left alone.
 
+The stack expert is seeded as a stub. `tldrx expert packs enable` gives it a shipped body and
+the framework overlays your manifests prove — off by default, one switch, and the repo's own
+conventions still win over anything a pack says.
+
 `init` writes `.tldrx/`: what it detected, a code map, the six experts above — five role
 experts always, a stack expert per language, and a domain expert per top-level source
 folder the map found, capped at eight — and the short list of questions detection could

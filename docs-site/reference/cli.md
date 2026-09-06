@@ -74,7 +74,7 @@ tldrx approve --note "…"    # sign the gate; the checks are re-run first
 | Command | Does |
 |---|---|
 | `tldrx map --refresh \| --check` | Rebuild the code map, or check it against the code for drift. |
-| `tldrx expert list \| create \| train \| recompute` | See [Experts](/guides/experts). |
+| `tldrx expert list \| create \| train \| recompute \| packs` | See [Experts](/guides/experts). `packs enable\|disable\|status` is the one switch for the stack packs — off by default. |
 | `tldrx seed triage` / `seed answer` / `seed apply` | Split a big document into several runs. |
 | `tldrx watch list \| check [<feature>]` | The watcher cards a run produced: listed, or printed as the post-merge checklist and re-checked against the code now. `--execute` re-runs the commands the cards recorded, through the workspace allowlist. |
 | `tldrx watch arm` | Wait for the run's shipped PR to merge, then print that checklist. A bounded foreground poller over `gh pr view` — not a daemon. |

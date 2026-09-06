@@ -69,6 +69,11 @@ tldrx init — single-repo, 1 repo(s) under /Users/you/acme-api
 Ahí va recortado: después de `questions` sigue un resumen de `files` — cuántos archivos se
 escribieron, cuántos se crearon y cuántos eran tuyos y se quedaron intactos.
 
+El experto de stack se siembra como un esbozo. `tldrx expert packs enable` le da un cuerpo que
+ya viene con la herramienta y los overlays de framework que tus manifiestos demuestren — apagado
+por defecto, un solo interruptor, y las convenciones de tu repo le siguen ganando a cualquier
+cosa que diga un pack.
+
 `init` escribe `.tldrx/`: lo que detectó, un mapa del código, los seis expertos de arriba —
 cinco expertos de rol siempre, un experto de stack por lenguaje y un experto de dominio por
 cada carpeta de código de primer nivel que encontró el mapa, con tope de ocho — y la lista

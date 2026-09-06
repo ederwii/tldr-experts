@@ -70,6 +70,43 @@ All the loaded experts share **one** 48 KB knowledge budget, split by how releva
 to this run, rather than getting a budget each. Files the stage declared as inputs are
 filled first: an input the stage asked for outranks reference material nobody asked for.
 
+## Stack packs
+
+A `<language>-stack` expert starts as a stub with nothing stack-specific in it. Turn the
+**stack packs** on and it gets a shipped body — TypeScript, JavaScript, Python or .NET — plus
+one **overlay** for every framework your manifests prove. Thirteen ship: `react`,
+`next-app-router`, `vite-react-spa`, `expo-router`, `node-express`, `prisma`,
+`aspnet-minimal-apis`, `aspnet-controllers`, `mediatr-cqrs`, `efcore-npgsql`, `fastapi`,
+`sqlalchemy-alembic` and `postgres-testcontainers`.
+
+```bash
+tldrx expert packs enable     # one switch, off by default
+tldrx expert packs status     # overlays with their evidence, skills, each body's state
+tldrx expert packs disable    # removes the overlays; bodies and knowledge stay
+```
+
+Overlays are read out of `package.json`, the `.csproj` files and `Directory.Packages.props`,
+`pyproject.toml` or a `requirements*.txt` — never out of the language name, because two
+projects in the same language can be built on opposite architectures. Each one detected is
+written into `workspace.yml` with the line that proved it, whether the switch is on or not:
+detection is a measurement, and the switch only decides whether the files get written.
+
+A pack is interrogative. Its **Checks** are questions asked of every diff, each with a
+`verify:` hint for what to open or run; its **Defaults** apply only where your repo is silent,
+and each one names the signal that overrides it. Your repo's own conventions win — a pack that
+argued with them would be worse than no pack. The Build reviewer sees no expert bodies at all,
+so it is handed those Checks under a heading that says exactly that.
+
+The body is yours the moment you touch it. `enable` replaces it only while it is still the stub
+`init` seeded; an edited body is kept, and the command tells you which one it left alone. The
+overlays are the framework's: rewritten on every `enable` and every `init`, removed by
+`disable`. `knowledge/` is never touched by any of it.
+
+Your project's own skills (`.claude/skills/*/SKILL.md`) are named to the developer too, switch
+or no switch, each with the path to its `SKILL.md`: the harness runs a skill, and tldrx only
+says it is there. One that git does not track is flagged, because a story worktree carries
+tracked files only.
+
 ## Training one
 
 ```bash

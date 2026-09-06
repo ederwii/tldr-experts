@@ -23,6 +23,7 @@ That has three practical consequences.
   map/                           # the code map, one folder per repo
   memory/facts.yml               # every answer you have ever given, numbered
   experts/                       # who the stages lean on, and what they have learned
+  experts/<lang>-stack/overlays/ # framework overlays, written by `expert packs enable`
   conventions/                   # how this repo is written
 
 tldrx-work/260901-bulk-pricing/  # one folder per piece of work

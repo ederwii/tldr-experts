@@ -74,11 +74,18 @@ repos:
      ci: [".github/workflows/deploy.yml"], confidence: high}
   - {name: lab, path: scavtopia-lab, default_branch: main, stack: [typescript, react, vite], package_manager: npm,
      commands: {build: "npm run build", test: "npm run test", lint: "npm run lint",
-                typecheck: "npm run typecheck", run: "npm run dev"}, ci: [], confidence: medium}
+                typecheck: "npm run typecheck", run: "npm run dev"}, ci: [], confidence: medium,
+     overlays: [{id: react, evidence: "package.json: dependencies.react"},
+                {id: vite-react-spa, evidence: "package.json: devDependencies.vite + dependencies.react"}],
+     skills: [{name: story-review, description: "Use when reviewing a component story",
+               path: ".claude/skills/story-review/SKILL.md", tracked: true}]}
 contracts:
   - {id: C1, title: "API surface change requires SDK regeneration",
      when: {repo: api, paths: ["src/Scavtopia.Contracts/**", "src/Scavtopia.Api/**/*Controller.cs"]},
      then: [{repo: lab, command: "npm run generate:api"}]}
+stack_packs:                 # the one opt-in switch for the stack expert packs; absent = off
+  enabled: true
+  enabled_at: 2026-09-05T10:00:00Z
 ```
 
 | Field | Type | Req | Meaning |
@@ -91,11 +98,16 @@ contracts:
 | `repos[].commands.{build,test,lint,typecheck,run}` | str\|null | y (all keys) | Run from `path`; `null` = unavailable |
 | `repos[].ci` | rel path[] | n | CI definition files found |
 | `repos[].confidence` | `high\|medium\|low` | y | `low` forces an interview question at init |
+| `repos[].overlays[].{id,evidence}` | str / str | n | Framework overlays detection can PROVE from this repo's manifests (`src/core/detect/overlays.ts` is the one table of ids), each with the manifest signal that fired it. Always written, whatever the switch says: the evidence is a detection result. `stack_packs.enabled` gates only whether they are MATERIALISED under `experts/<lang>-stack/overlays/` |
+| `repos[].skills[].{name,description,path,tracked}` | str / str / rel path / bool | n | The repo's own `.claude/skills/*/SKILL.md`, named to the developer and never loaded by tldrx. `name`/`description` come from the skill's own front matter; `path` is repo-relative; `tracked: false` (nothing in `git ls-files`) ⇒ absent from story worktrees, which carry tracked files only. Always written, independent of the switch |
+| `stack_packs.{enabled,enabled_at}` | bool / RFC3339\|null | n | The stack packs switch (`tldrx expert packs`). Absent means off — the default. Read from the file being regenerated and carried forward across `init`, so a re-init never silently turns the packs off. `disable` writes `enabled: false` with `enabled_at: null` |
 | `contracts[].{id,title,when,then}` | `^C\d+$` / str / {repo,paths[]} / [{repo,command}] | y | Cross-repo obligation: source repo + globs ⇒ dependent commands auto-spawned at Plan time |
 | `mcp_servers[].{name,transport,status,checked_at}` | str / str / `connected\|auth_required\|failed` / RFC3339 | n | Cached parse of `claude mcp list` (slow: runs health checks) — used only to *suggest* `process.yml ticket_tool`, never to act |
 
 **Validation.** `name` unique; `path` exists, relative, inside root; enums as above; commands non-empty when non-null
 and free of `&& ; | > \`` (single argv, auditable); contract repos resolve; ≤64 repos, ≤128 contracts.
+`repos[].overlays`, `repos[].skills` and `stack_packs` are **additive**: a file written before they existed loads
+unchanged (absent ⇒ empty lists, switch off), and `version:` stays `1` — a format that only grows does not bump it.
 
 **Greenfield.** `mode: greenfield` is a specialisation of `single-repo`, not a fourth workspace shape: one repo, no child
 repos, and **no code file** in it. "Code file" is decided by extension against one fixed set shared with the map
@@ -1644,6 +1656,7 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx expert create <name>` | `workspace.yml`, `map/**` | `experts/<name>/{expert.md,competencies.yml}` | 0,1 |
 | `tldrx expert train <name> --area <a> [--mode light\|full] [--max-usd <n>] [--model <m>] [--prepare\|--commit] [--print-prompt]` | `expert.md`, `competencies.yml`, `map/<repo>/domains.md`, `graphify-out/<repo>/graph.json`, repo code, `tldrx-work/**/{handoff,retro}.md`, `facts.yml` | `knowledge/<area>.md` (+ `knowledge/from-runs-<area>.md` in full mode), `competencies.yml`, `training.jsonl` (§2.6.1) | 0,1,2,3,5 |
 | `tldrx expert recompute [<name>] [--json]` | `experts/*/competencies.yml` | `competencies.yml` (`areas[].level` only) | 0,1,3 |
+| `tldrx expert packs <enable\|disable\|status>` | `workspace.yml`, the repos' manifests (`package.json`, `*.csproj`, `Directory.Packages.props`, `pyproject.toml`, `requirements*.txt`), `.claude/skills/**`, `experts/<lang>-stack/**`, `templates/experts/stack/**` | `enable`: `workspace.yml` (`stack_packs`, `repos[].overlays`, `repos[].skills`), any missing `<lang>-stack` expert seeded, `experts/<lang>-stack/expert.md` (its BODY only when that body is the untouched stub, an empty body, or one shipment stale — an edited body is kept and named), `experts/<lang>-stack/overlays/*.md` (emptied and rewritten every time — they are the framework's, not yours); `disable`: `workspace.yml` (`enabled: false`, `enabled_at: null`) and removes `overlays/` and nothing else; `status`: **nothing** (stdout). `knowledge/` is never touched by any of the three. `status` exits `0` always, naming a missing `workspace.yml` rather than refusing; `enable` exits `1` when no repo has a detectable language or the workspace is unreadable; `disable` exits `0` when there is nothing to disable and `1` only on a `workspace.yml` too broken to read | 0,1 |
 | `tldrx dashboard [--serve] [--static]` | `tldrx-work/**`, `.tldrx/**` (watch) | nothing, or `dist/` with `--static` | 0,1,2 |
 | `tldrx watch list [--run <id>]` | `05-watch/watchers/*.md`, `workspace.yml` | nothing (stdout table) | 0,1,2,3 |
 | `tldrx watch check <feature> [--run <id>]` | one card, the files it cites | nothing (stdout report) | 0,1,2,3 |
@@ -1991,6 +2004,9 @@ parts of that block are in this exact order:
 <!-- expert: <name> -->
 <expert.md, verbatim, front matter included>
 
+<!-- overlay: <id> -->
+<that overlay file, verbatim>          — kind: stack experts only, and only when stack_packs.enabled
+
 ### Competencies
 <one star-chart line per area: `<area>  ★★★☆☆ 3  (17 evidence, newest 2026-08-20)`>
 
@@ -2001,6 +2017,32 @@ parts of that block are in this exact order:
 <that file's BODY, front matter stripped>
 ```
 
+**Where the overlays fit.** The `<!-- overlay: … -->` lines appear only for a `kind: stack` expert, and only
+when §2.1's `stack_packs.enabled` is true — one per `overlays/<id>.md` the project has, in sorted-id order.
+Composition is **atomic per overlay** under a 24 KB cap (`PACK_MAX_BYTES`, separate from the 48 KB knowledge
+budget on purpose, so pack prose cannot crowd out what training found): the body goes in whole, then each
+overlay whole while the total fits, and the first one that does not fit — with every later one in that order —
+is left out entirely and named in a trailing `(not inlined: <n> overlays — <ids>)` marker. Nothing is ever cut
+mid-overlay, because half an overlay's Checks reads to the next reader as all of them. With the switch off,
+every body renders byte-for-byte as it did before packs existed.
+
+**The Build reviewer**, which carries no expert bodies at all, gets the active packs' `## Checks` sections —
+the pack body's and each overlay's — under `## Stack checks (the repo's own conventions win)`. That section
+is gated on BOTH switches: §2.1's `stack_packs.enabled` AND the stage's own §2.3 `stack_experts`. Under
+`stack_experts: false` the developer is shown no stack expert at all, and a reviewer holding the story to
+Checks that were never in the developer's brief is grading against a document nobody wrote from.
+
+**`## Project skills`** is INDEPENDENT of the packs switch, because a project's own skills are not pack
+content — they are the project. It names each `.claude/skills/<name>/SKILL.md` the run's repos declare, with
+the skill's own description and the path to read, and marks a skill git does not track
+`(untracked: not present in story worktrees)`. Skills are for DOING and packs are for CHECKING: the harness
+loads and invokes a skill; tldrx only says it is there. On a Build story the developer turn additionally gets
+`Skill` in its allowed tools when — and only when — that story's repo has skills, and Build's opening lines
+carry one `warning:` per untracked skill, naming the repo to look in. `[unverified]` whether an agent CLI's
+print mode actually DENIES a `Skill` call absent from the allowed list has not been measured here; the
+framework's job is the list. The Watch executor assembles its prompt directly and is not wired for this
+section.
+
 **Prompt order — most stable first.** The pieces are concatenated in exactly this order:
 
 ```
@@ -2010,6 +2052,8 @@ parts of that block are in this exact order:
 <the declared inputs' content>
 ## Dispatch notes
 <the host's own context for this cycle — omitted when there is none>
+## Project skills
+<the project's .claude/skills, named — omitted when there are none>
 ## Previous attempt
 <the retry note, and the refused outputs>
 ```
@@ -2079,9 +2123,12 @@ fact, and `.tldrx/memory/facts.yml` is the durable channel that already reaches 
 behind it.
 
 **The context ledger.** `--prepare` and `--dry-run` print bytes per section — stage (and its `## Questions`), each
-declared input, each expert's body and knowledge, the dispatch notes, the previous attempt — and `pending.json` carries
-the same numbers under `context:` (the dispatch-notes row is `dispatch_notes_bytes`, and reads `0 B` when the file is
-absent). `prompt_max_bytes` (§2.3, default 163840) is a **refusal**: over it `next` exits `2` before a
+declared input, each expert's body and knowledge, the dispatch notes, the project skills, the previous attempt — and
+`pending.json` carries the same numbers under `context:` (the dispatch-notes row is `dispatch_notes_bytes` and the
+project-skills row is `project_skills_bytes`, each reading `0 B` when that section was not emitted). The rows must SUM
+to `total_bytes`: a section counted in the total and named in no row makes the record unaddable, which is why
+`project_skills_bytes` is additive here rather than folded into another group.
+`prompt_max_bytes` (§2.3, default 163840) is a **refusal**: over it `next` exits `2` before a
 sub-agent is spawned, names the biggest sections, and prints the key or command that shrinks each one — the same
 shape as the §2.11 money gate. The model's context window is only ever a **stderr warning** at 80%, never a refusal,
 because both the window and the bytes-per-token ratio are `[assumption]` (`src/core/budget/modelPrices.ts`) and
@@ -2122,6 +2169,13 @@ occurrence of the word "knowledge".
 
 **Visibility.** `--prepare` and `--dry-run` print one line per loaded expert — name, reason, `expert.md` bytes,
 knowledge bytes, and `truncated` when the budget bit — and `pending.json` carries the same as an `experts:` array.
+A stack expert whose overlays were inlined adds `overlays:` (the ids) and `overlay_bytes` (what the body carried
+beyond `expert.md` itself) to its row, and its operator line names the ids, any the cap left out, and a body the cap
+itself had to cut. Both keys are **additive and absent — not `[]` and `0`** — when nothing was inlined, so a bundle
+the switch never touched is byte-identical to one written before packs existed. `expert_md_bytes` keeps the meaning
+it has always had: `expert.md`'s own bytes, never the composed total — a `version: 1` field's meaning never changes,
+so the composed extra had to arrive as its own key rather than quietly widen that one.
+
 An expert loaded with **zero** evidence in every area produces one **stderr** line, `note: expert <name> has no
 evidence — \`tldrx expert train <name> --area <area>\` before this stage would help`. It never blocks and never changes
 an exit code; stdout stays parseable for the host session.

@@ -288,7 +288,7 @@ draws before installing anything.
 The reference guide, in `docs/guide/`: [1 Quick start](docs/guide/01-quick-start.md) ·
 [2 The loop](docs/guide/02-the-loop.md) (the four steps, what a stage file controls, the two execution modes) ·
 [3 Runs and gates](docs/guide/03-runs-and-gates.md) (`run new`→`retro`, gate policy, `run auto`, unlock/cancel, dashboard, tickets) ·
-[4 Experts](docs/guide/04-experts.md) (loading rules, role experts, training, levels) ·
+[4 Experts](docs/guide/04-experts.md) (loading rules, role experts, stack packs, training, levels) ·
 [5 Seeds and triage](docs/guide/05-seeds-and-triage.md) (`--seed`, `--from`, splitting a big seed) ·
 [6 Budgets and cost](docs/guide/06-budgets-and-cost.md) · [7 Claude Code](docs/guide/07-claude-code.md) (plugin, hooks, `/tldrx`) ·
 [8 CLI reference](docs/guide/08-cli-reference.md) (every command, flag and exit code) ·

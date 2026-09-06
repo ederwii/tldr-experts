@@ -25,6 +25,7 @@ Eso trae tres consecuencias prácticas.
   map/                           # el mapa del código, una carpeta por repo
   memory/facts.yml               # cada respuesta que has dado, numerada
   experts/                       # en quién se apoyan las etapas, y qué han aprendido
+  experts/<lang>-stack/overlays/ # overlays de framework, escritos por `expert packs enable`
   conventions/                   # cómo se escribe este repo
 
 tldrx-work/260901-bulk-pricing/  # una carpeta por pieza de trabajo
