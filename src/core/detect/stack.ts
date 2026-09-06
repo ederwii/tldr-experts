@@ -34,7 +34,14 @@ export interface PackageJson {
   readonly path: string;
   readonly text: string;
   readonly scripts: Readonly<Record<string, string>>;
+  /** `dependencies` ∪ `devDependencies` — the list every existing reader keys on. */
   readonly dependencies: readonly string[];
+  /**
+   * The two groups apart, for a reader that must SAY which one a name came from:
+   * an overlay's evidence string (`package.json: devDependencies.vite`) is written
+   * into `workspace.yml`, and a merged list cannot produce it.
+   */
+  readonly groups: Readonly<Record<"dependencies" | "devDependencies", readonly string[]>>;
 }
 
 export async function detectStack(repoDir: string): Promise<StackDetection> {
@@ -103,11 +110,14 @@ async function readPackageJson(repoDir: string): Promise<PackageJson | null> {
   }
   if (typeof parsed !== "object" || parsed === null) return null;
   const record = parsed as Record<string, unknown>;
+  const dependencies = Object.keys(stringMap(record.dependencies));
+  const devDependencies = Object.keys(stringMap(record.devDependencies));
   return {
     path: "package.json",
     text,
     scripts: stringMap(record.scripts),
-    dependencies: [...Object.keys(stringMap(record.dependencies)), ...Object.keys(stringMap(record.devDependencies))],
+    dependencies: [...dependencies, ...devDependencies],
+    groups: { dependencies, devDependencies },
   };
 }
 

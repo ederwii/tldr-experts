@@ -321,3 +321,21 @@ describe("version: 1, with schema_version tolerated for one release", () => {
     expect(env.version).toBe(1);
   });
 });
+
+describe("workspace.yml: stack_packs is additive and validated when present (stack packs design §4.3)", () => {
+  const base = { version: 1, mode: "single", root: ".", repos: [] };
+
+  test("a workspace written before the key existed loads with no issue", () => {
+    expect(validate("workspace", base).ok).toBe(true);
+  });
+
+  test("a well-formed block is accepted", () => {
+    expect(validate("workspace", { ...base, stack_packs: { enabled: true, enabled_at: "2026-09-05T10:00:00Z" } }).ok).toBe(true);
+    expect(validate("workspace", { ...base, stack_packs: { enabled: false, enabled_at: null } }).ok).toBe(true);
+  });
+
+  test("enabled must be a boolean, and the block must be a mapping", () => {
+    expect(issueText("workspace", { ...base, stack_packs: { enabled: "yes" } })).toContain("stack_packs.enabled: expected a boolean");
+    expect(issueText("workspace", { ...base, stack_packs: "on" })).toContain("stack_packs: expected a mapping");
+  });
+});

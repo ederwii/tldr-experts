@@ -13,7 +13,7 @@ export {
 export type { PathContext, ResolvedPath } from "./paths.ts";
 export {
   buildPrompt, substitute, replaceSection, renderInputs, fenceFor, renderFacts, renderConventions,
-  loadExpertBodies, stackExpertNames, PLACEHOLDERS,
+  loadExpertBodies, stackExpertNames, PLACEHOLDERS, PROJECT_SKILLS_HEADING,
 } from "./prompt.ts";
 export type { PromptParts, Placeholder } from "./prompt.ts";
 export { ENVELOPE_SCHEMA, parseClaudeJson, toEnvelope, toUsage } from "./envelope.ts";

@@ -44,3 +44,18 @@ export { nearbyPathsFor, graphPath, MAX_GRAPH_BYTES } from "./domainRank.ts";
 export {
   sharedCitations, sharedCitationWarnings, type SharedCitation,
 } from "./sharedCitations.ts";
+export {
+  readStackPacks, renderProjectSkills, skillsFor, untrackedSkillWarnings,
+  NO_STACK_PACKS, PROJECT_SKILLS_HEADING, SKILL_DESCRIPTION_MAX_CHARS,
+} from "./stackPacks.ts";
+export type { StackPacksState, RepoPacks, RepoSkill } from "./stackPacks.ts";
+export {
+  DEFAULTS_HEADING, CHECKS_HEADING, OVERRIDDEN_BY, VERIFY_HINT, OVERLAYS_DIRNAME, PACK_MAX_BYTES,
+  composePackBody, checksOf, overlayMarker, readOverlayFiles, stackChecks,
+} from "./packSections.ts";
+export type { OverlayFile, ComposedPack } from "./packSections.ts";
+export {
+  PACK_TEMPLATES_DIR, OVERLAY_TEMPLATES_DIR, PACK_BODY_MAX_BYTES, OVERLAY_MAX_BYTES,
+  packBodyPath, overlayTemplatePath, readPackBody, readOverlayTemplate, packTemplateFiles, hashText, hashTemplates, templatesHash,
+} from "./packTemplates.ts";
+export type { TemplateFile } from "./packTemplates.ts";

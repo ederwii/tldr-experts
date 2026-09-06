@@ -31,7 +31,9 @@ import { buildProcessDocument, PROCESS_HEADER } from "./processDocument.ts";
 import { gitUserName } from "./gitUserName.ts";
 import { QUESTIONS_FILE, planQuestions, renderQuestions, type Question } from "./questions.ts";
 import { seedExperts } from "./seedExperts.ts";
-import { buildWorkspaceDocument } from "./workspaceDocument.ts";
+import { applyStackPacks, describePacking } from "./stackPacks.ts";
+import { readStackPacks } from "../experts/stackPacks.ts";
+import { buildWorkspaceDocument, renderWorkspaceFile } from "./workspaceDocument.ts";
 import { formatIssues, validateProcessDocument, validateWorkspaceDocument } from "./validateEmitted.ts";
 import { writeAmbientFootprint } from "./ambientFootprint.ts";
 import { WriteLog } from "./writeFile.ts";
@@ -152,6 +154,17 @@ export async function runInit(options: InitOptions, deps: InitDependencies): Pro
   await seedExperts({ outDir: out, plans: experts, createdAt: timestamp, log });
   seeding.done(`${plural(experts.length, "expert")} at level 0`);
 
+  // The switch was carried into the file just written; with it on, the overlays are
+  // framework-managed and must be regenerated like every other detection output, and a
+  // language that appeared since the last init gets its pack body on its fresh stub.
+  if (readStackPacks(out).enabled) {
+    const packing = steps.begin("applying stack packs");
+    // `describePacking` and not two counts: a body this re-init did NOT replace because
+    // someone edited it, and a language no pack ships for, are invisible as numbers, and
+    // an operator who never sees them reads a kept body as a successful apply.
+    packing.done(describePacking(await applyStackPacks({ workspaceDir: out, workspace, log })));
+  }
+
   const conventions = steps.begin("reading conventions");
   await writeConventions(workspace, out, log, (repo) => { conventions.tick(repo); });
   conventions.done(`${plural(workspace.repos.length + 1, "convention file")} under ${CONVENTIONS_DIR}/`);
@@ -211,6 +224,9 @@ interface WorkspaceWriteInput {
 }
 
 async function writeWorkspaceFile(input: WorkspaceWriteInput): Promise<void> {
+  // The switch outlives detection: `workspace.yml` is regenerated on every init, and a
+  // team that turned the packs on must not find them off after re-running it.
+  const carried = readStackPacks(input.out);
   const document = buildWorkspaceDocument({
     workspace: input.workspace,
     root: input.root === input.out ? "." : toPosix(relative(input.out, input.root)) || input.root,
@@ -218,17 +234,12 @@ async function writeWorkspaceFile(input: WorkspaceWriteInput): Promise<void> {
     cliVersion: input.deps.cliVersion,
     provider: input.map.providers.join(", ") || "none",
     mcpServers: input.mcpServers,
+    stackPacks: carried.present ? { enabled: carried.enabled, enabled_at: carried.enabledAt } : null,
   });
   const validation = validateWorkspaceDocument(document);
   if (!validation.ok) throw new Error(formatIssues(WORKSPACE_FILE, validation));
 
-  await input.log.overwrite(
-    join(input.out, WORKSPACE_FILE), WORKSPACE_FILE,
-    "# Written by `tldrx init` (spec §2.1). Detection result: which repos exist, their\n"
-    + "# stack, and the ONLY commands the DoD gate and the map may run. Regenerated on\n"
-    + "# every `tldrx init`; hand edits to detected values are overwritten.\n"
-    + stringifyYaml(document),
-  );
+  await input.log.overwrite(join(input.out, WORKSPACE_FILE), WORKSPACE_FILE, renderWorkspaceFile(document));
 }
 
 async function writeConventions(

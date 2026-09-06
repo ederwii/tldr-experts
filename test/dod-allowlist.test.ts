@@ -140,9 +140,12 @@ describe("M5 · --yolo never reaches the reviewer", () => {
   });
 
   test("the DEVELOPER still gets it — that one is meant to write", () => {
-    const at = source.indexOf("tools: developerTools(commands)");
+    // Anchored on the call's PREFIX, not its whole argument list: the subject of this
+    // pin is `yolo`, and `developerTools` grew a second argument (the `Skill` allowance)
+    // without any of that changing.
+    const at = source.indexOf("tools: developerTools(commands");
     expect(at).toBeGreaterThan(-1);
-    expect(source.slice(at, at + 200)).toContain("yolo: this.ctx.yolo");
+    expect(source.slice(at, at + 300)).toContain("yolo: this.ctx.yolo");
   });
 
   test("exactly one `yolo: this.ctx.yolo` remains in the file", () => {

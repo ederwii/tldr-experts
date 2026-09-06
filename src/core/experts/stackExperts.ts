@@ -7,30 +7,19 @@
  * (where it lived until the knowledge wave) so `src/core/experts/` can compose the
  * whole selection rule without importing the facilitator; `prompt.ts` still
  * re-exports it, so every existing import keeps working.
+ *
+ * Reading `workspace.yml` and walking `repos[]` is `./workspaceRepos.ts` — shared with
+ * `stackPacks.ts`, which derives a different per-repo fact from the same file.
  */
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
-import { parseYaml } from "../yaml.ts";
+import { readWorkspaceDocument, strings, workspaceRepoRows } from "./workspaceRepos.ts";
 
 export function stackExpertNames(root: string, repos: readonly string[]): readonly string[] {
-  const path = join(root, PROJECT_FRAMEWORK_DIR, "workspace.yml");
-  if (!existsSync(path)) return [];
-  let doc: unknown;
-  try {
-    doc = parseYaml(readFileSync(path, "utf8"));
-  } catch {
-    return [];
-  }
-  const list = (doc as { repos?: unknown } | null)?.repos;
-  if (!Array.isArray(list)) return [];
-
   const names: string[] = [];
-  for (const row of list as { name?: unknown; stack?: unknown }[]) {
-    if (typeof row?.name !== "string" || !repos.includes(row.name)) continue;
-    const stack = Array.isArray(row.stack) ? (row.stack as unknown[]) : [];
-    for (const language of stack) {
-      if (typeof language !== "string" || language === "") continue;
+  for (const row of workspaceRepoRows(readWorkspaceDocument(root))) {
+    if (!repos.includes(row.name)) continue;
+    // Empty-string entries name no expert; excluded here rather than in the shared
+    // `strings()` coercion, which every other caller wants unfiltered.
+    for (const language of strings(row.stack).filter((item) => item !== "")) {
       const expert = `${language}-stack`;
       if (!names.includes(expert)) names.push(expert);
     }

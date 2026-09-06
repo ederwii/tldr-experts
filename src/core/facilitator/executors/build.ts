@@ -47,6 +47,10 @@ import { stageAt } from "../../run/RunFile.ts";
 import { spendBasisOf, type SpendTurn } from "../../budget/spendBasis.ts";
 import { renderConventions, renderFacts, stackExpertNames } from "../prompt.ts";
 import { loadExpertBundles } from "../../experts/expertBundle.ts";
+import { stackChecks } from "../../experts/packSections.ts";
+import {
+  readStackPacks, renderProjectSkills, skillsFor, untrackedSkillWarnings,
+} from "../../experts/stackPacks.ts";
 import { agentDir } from "../paths.ts";
 import {
   describeDispatchNotes, loadDispatchNotes, type DispatchNotes,
@@ -302,6 +306,9 @@ export async function buildExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
   const workspace = loadWorkspace(ctx.root);
   let plan: BuildPlan;
   const opening: string[] = [];
+  // A skill git does not track is absent from every story worktree; say so once, at the
+  // start, rather than letting the developer discover a file the prompt named is missing.
+  opening.push(...untrackedSkillWarnings(skillsFor(readStackPacks(ctx.root), ctx.repos)));
   if (ctx.mode === "prepare" && ctx.discardPending) opening.push(...discardBundles(ctx));
   try {
     plan = await openPlan(ctx, workspace, opening);
@@ -1951,7 +1958,11 @@ class BuildSession {
       effort: this.ctx.effort,
       maxBudgetUsd: cap,
       workspaceCommands: commands,
-      tools: developerTools(commands),
+      // `Skill` only when there is one to invoke: an allowance for a tool nothing needs
+      // is a wider surface for no reason.
+      tools: developerTools(commands, {
+        skills: skillsFor(readStackPacks(this.ctx.root), [story.planned.story.repo]).length > 0,
+      }),
       yolo: this.ctx.yolo,
       cwd: story.worktree,
       timeoutMs: this.ctx.spec.planned.timeout_s * 1000,
@@ -2321,6 +2332,21 @@ class BuildSession {
       // both doors, which is what keeps the bundle's prompt byte-identical to the
       // one a spawn would have sent.
       fixlistAvailable: this.fixlistRoundsSpent(story.planned.story.id) < MAX_FIXLIST_ROUNDS,
+      // The active packs' checks for this story's repo (stack packs design §4.5), fed
+      // straight into the reviewer's prompt. Null when the packs switch is off, which
+      // renders nothing.
+      //
+      // Gated on `spec.stackExperts` too (issue review, fix round 1): the developer's
+      // OWN pack content is gated on that same stage-yaml switch two calls down, via
+      // `loadExpertBundles({ stackExperts: this.ctx.spec.stackExperts, ... })` ->
+      // `selectExperts` (`selectExperts.ts:140` — a `kind: stack` expert is never even
+      // SELECTED without it). With `stack_packs.enabled: true` and `stack_experts: false`
+      // in one story, the developer would get no pack content at all while the reviewer
+      // graded against `## Stack checks` text it was never shown. Checking both switches
+      // here is what keeps the two turns agreeing on whether packs are in play at all.
+      stackChecks: this.ctx.spec.stackExperts
+        ? stackChecks(this.ctx.root, [story.planned.story.repo])
+        : null,
     });
   }
 
@@ -3155,6 +3181,8 @@ class BuildSession {
       previousAttempt: story.previousAttempt,
       notInWorktree: story.notInWorktree,
       dispatchNotes: this.dispatchNotesFor(story.planned.story.id).body,
+      // This repo's skills only: the worktree carries one repo's `.claude/skills`.
+      projectSkills: renderProjectSkills(skillsFor(readStackPacks(this.ctx.root), [repo])),
       ...(fixlist === null
         ? {}
         : { fixlist: renderFixlistSection(fixlist.rel, fixlist.findings) }),
@@ -3778,10 +3806,19 @@ class BuildSession {
  * What a story's developer may do: the file tools, exactly the commands its OWN
  * repo declares in `workspace.yml`, and the two git verbs that make a commit.
  * Not `git push`, not `git merge`, not another repo's commands.
+ *
+ * `Skill` joins the list only when `options.skills` says this repo HAS one — the caller
+ * asks `skillsFor(...)` rather than this function guessing. `[unverified]` whether the
+ * agent CLI's print mode denies an unlisted `Skill` call; listing it is what this
+ * framework controls, and an allowance for a tool nothing needs is surface for nothing.
  */
-export function developerTools(repoCommands: readonly string[]): readonly string[] {
+export function developerTools(
+  repoCommands: readonly string[],
+  options: { readonly skills?: boolean } = {},
+): readonly string[] {
   return [
     ...BASE_TOOLS,
+    ...(options.skills === true ? ["Skill"] : []),
     ...repoCommands.map((command) => `Bash(${command})`),
     "Bash(git add *)",
     "Bash(git commit *)",

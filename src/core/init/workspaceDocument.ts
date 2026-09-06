@@ -19,7 +19,10 @@
  */
 import { type DetectedRepo, type DetectedWorkspace } from "../detect/types.ts";
 import { workspaceMode } from "../detect/greenfield.ts";
+import type { DetectedOverlay } from "../detect/overlays.ts";
+import type { DetectedSkill } from "../detect/skills.ts";
 import type { McpServer } from "../doctor/McpProbe.ts";
+import { stringifyYaml } from "../yaml.ts";
 
 export interface WorkspaceRepoDocument {
   readonly name: string;
@@ -29,7 +32,15 @@ export interface WorkspaceRepoDocument {
   readonly package_manager: string | null;
   readonly commands: Readonly<Record<string, string | null>>;
   readonly ci: readonly string[];
+  readonly overlays: readonly DetectedOverlay[];
+  readonly skills: readonly DetectedSkill[];
   readonly confidence: string;
+}
+
+/** `stack_packs:` — the one stack-packs switch (stack packs design §4.3). Absent means off. */
+export interface StackPacksDocument {
+  readonly enabled: boolean;
+  readonly enabled_at: string | null;
 }
 
 export interface WorkspaceDocument {
@@ -43,6 +54,7 @@ export interface WorkspaceDocument {
   readonly repos: readonly WorkspaceRepoDocument[];
   readonly contracts: readonly unknown[];
   readonly mcp_servers: readonly McpServerDocument[];
+  readonly stack_packs?: StackPacksDocument;
 }
 
 export interface McpServerDocument {
@@ -60,6 +72,8 @@ export interface BuildWorkspaceInput {
   readonly cliVersion: string;
   readonly provider: string;
   readonly mcpServers: readonly McpServer[];
+  /** Carried forward from the file being regenerated; null when it never had one. */
+  readonly stackPacks?: StackPacksDocument | null;
 }
 
 export function buildWorkspaceDocument(input: BuildWorkspaceInput): WorkspaceDocument {
@@ -79,6 +93,7 @@ export function buildWorkspaceDocument(input: BuildWorkspaceInput): WorkspaceDoc
       status: server.status,
       checked_at: input.detectedAt,
     })),
+    ...(input.stackPacks === undefined || input.stackPacks === null ? {} : { stack_packs: input.stackPacks }),
   };
 }
 
@@ -97,6 +112,20 @@ function toRepoDocument(repo: DetectedRepo): WorkspaceRepoDocument {
       run: repo.commands.run,
     },
     ci: repo.ci,
+    overlays: repo.overlays.map((item) => ({ id: item.id, evidence: item.evidence })),
+    skills: repo.skills.map((item) => ({
+      name: item.name, description: item.description, path: item.path, tracked: item.tracked,
+    })),
     confidence: repo.confidence,
   };
+}
+
+/** The comment `tldrx init` puts above the YAML — spelled once, for every writer of this file. */
+export const WORKSPACE_FILE_HEADER =
+  "# Written by `tldrx init` (spec §2.1). Detection result: which repos exist, their\n"
+  + "# stack, and the ONLY commands the DoD gate and the map may run. Regenerated on\n"
+  + "# every `tldrx init`; hand edits to detected values are overwritten.\n";
+
+export function renderWorkspaceFile(document: unknown): string {
+  return WORKSPACE_FILE_HEADER + stringifyYaml(document);
 }

@@ -17,3 +17,9 @@ export {
   type CommandSlot, type Confidence, type DetectedMode, type DetectedRepo,
   type DetectedWorkspace, type Evidence, type RepoCommands,
 } from "./types.ts";
+export {
+  detectOverlays, readManifests, applyOverlayRules, overlayRule, includeNames, pyprojectDependencies,
+  requirementName, requirementNames, isPackLanguage, OVERLAY_RULES, PACK_LANGUAGES,
+  type DetectedOverlay, type Manifests, type NetPackage, type OverlayRule, type PackLanguage,
+} from "./overlays.ts";
+export { detectSkills, SKILLS_DIR, SKILL_FILE, type DetectedSkill } from "./skills.ts";

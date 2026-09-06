@@ -26,6 +26,12 @@ export interface SeedTriageSettings {
   readonly threshold_tokens?: number;
 }
 
+/** `stack_packs:` — the one opt-in switch for stack expert packs. Additive; absent means off. */
+export interface StackPacksSettings {
+  readonly enabled: boolean;
+  readonly enabled_at?: string | null;
+}
+
 export interface Workspace {
   /**
    * `version: 1`. A file still saying `schema_version` loads and is reported;
@@ -40,6 +46,7 @@ export interface Workspace {
   readonly detected_at?: string | null;
   readonly mcp_servers?: readonly string[];
   readonly seed_triage?: SeedTriageSettings;
+  readonly stack_packs?: StackPacksSettings;
 }
 
 export function validateWorkspace(input: unknown): ValidationResult {
@@ -73,6 +80,20 @@ export function validateWorkspace(input: unknown): ValidationResult {
       }
     } else {
       issues.push({ path: "seed_triage", message: "expected a mapping" });
+    }
+  }
+
+  if (doc.stack_packs !== undefined) {
+    if (isRecord(doc.stack_packs)) {
+      if (typeof doc.stack_packs.enabled !== "boolean") {
+        issues.push({ path: "stack_packs.enabled", message: "expected a boolean" });
+      }
+      const at = doc.stack_packs.enabled_at;
+      if (at !== undefined && at !== null && typeof at !== "string") {
+        issues.push({ path: "stack_packs.enabled_at", message: "expected an RFC3339 string or null" });
+      }
+    } else {
+      issues.push({ path: "stack_packs", message: "expected a mapping" });
     }
   }
   return result(issues, deprecations);

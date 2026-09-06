@@ -100,7 +100,7 @@ describe("the two process questions", () => {
       stack: ["typescript"], languages: ["typescript"], packageManager: "npm",
       manifests: ["package.json"], codeFiles: 3,
       commands: { build: "npm run build", test: null, lint: null, typecheck: null, run: null },
-      ci: [], confidence: "high", evidence: [],
+      ci: [], overlays: [], skills: [], confidence: "high", evidence: [],
     }],
   };
 

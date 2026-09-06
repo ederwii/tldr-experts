@@ -52,6 +52,7 @@ import {
   describeBundles, loadExpertBundles, untrainedNotes, type ExpertBundleSet,
 } from "../experts/expertBundle.ts";
 import { nearbyPathsFor } from "../experts/domainRank.ts";
+import { readStackPacks, renderProjectSkills, skillsFor } from "../experts/stackPacks.ts";
 import { agentProvider, describeSpawn, providerBudgetAdvisory, spawnAgent } from "./spawnAgent.ts";
 import { withAttendedGuard } from "./attended.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
@@ -515,6 +516,7 @@ async function runStage(
       expert_body_bytes: ledger.groups.expertBodies,
       expert_knowledge_bytes: ledger.groups.expertKnowledge,
       dispatch_notes_bytes: ledger.groups.dispatchNotes,
+      project_skills_bytes: ledger.groups.projectSkills,
       previous_attempt_bytes: ledger.groups.previousAttempt,
       truncated_inputs: ledger.truncatedInputs.map((entry) => entry.path),
     },
@@ -662,7 +664,10 @@ function bundleSummary(set: ExpertBundleSet): PendingStage["experts"] {
     name: expert.name,
     reason: expert.reason,
     ...(expert.match === undefined ? {} : { match: expert.match }),
-    expert_md_bytes: expert.bodyBytes,
+    // `expert_md_bytes` stays `expert.md`'s own bytes, never the composed one — a
+    // stack expert's overlay bytes are a SEPARATE additive key (AGENTS.md §7).
+    expert_md_bytes: expert.expertMdBytes,
+    ...(expert.overlays.length === 0 ? {} : { overlays: expert.overlays, overlay_bytes: expert.overlayBytes }),
     knowledge_bytes: expert.knowledgeBytes,
     knowledge_files: expert.files.map((file) => file.path),
     truncated: expert.truncated,
@@ -1694,6 +1699,10 @@ export function assemblePrompt(
     stageMd,
     absentInputs,
     dispatchNotes: dispatchNotes.body,
+    // The project's own skills, named to every stage — not gated on the packs
+    // switch: `stack_packs.enabled` governs pack CONTENT, and a repo's
+    // `.claude/skills` is the repo, not a pack (design §4.5, decision 6).
+    projectSkills: renderProjectSkills(skillsFor(readStackPacks(options.root), store.run.repos)),
     previousAttempt: describePreviousAttempt(stage, {
       outputs: expandAll(spec.planned.outputs, store.run.repos),
       ctx,

@@ -2440,3 +2440,124 @@ describe("the handoff's Cost line marks an unmetered phase as a lower bound (#13
     }
   });
 });
+
+describe("stack packs reach the Build reviewer (stack packs design §4.5)", () => {
+  const STACK_EXPERT: Readonly<Record<string, string>> = {
+    ".tldrx/experts/typescript-stack/expert.md": [
+      "---", "name: typescript-stack", "kind: stack", "status: created", "repos: [app]", "---", "",
+      "# TypeScript", "", "Scope.", "", "## Defaults (when the repo is silent)", "", "- d — overridden by: x", "",
+      "## Checks (always asked in review)", "", "- Any new `any`? verify: grep `: any`", "",
+    ].join("\n"),
+    ".tldrx/experts/typescript-stack/competencies.yml": "version: 1\nexpert: typescript-stack\nstatus: created\nareas: []\n",
+    ".tldrx/experts/typescript-stack/overlays/react.md":
+      "# react\n\nScope.\n\n## Defaults (when the repo is silent)\n\n- d — overridden by: x\n\n## Checks (always asked in review)\n\n- Index keys? verify: grep key=\n",
+  };
+  // `stackExperts: true` puts `stack_experts: true` in the STAGE yaml — the
+  // per-stage switch `selectExperts` gates `<lang>-stack` inclusion on
+  // (`src/core/experts/selectExperts.ts:140`) — which is a DIFFERENT switch
+  // from the workspace-level `stack_packs.enabled` these tests also flip.
+  // Without it the developer's `loadExpertBundles` never selects
+  // `typescript-stack` at all, so it could never carry an overlay regardless
+  // of the packs switch.
+  //
+  // The reviewer's `stackChecks` does not go through `selectExperts` itself,
+  // but `reviewerPrompt()` in `build.ts` gates it on this SAME switch (issue
+  // review, fix round 1): without that gate, `stack_packs.enabled: true` +
+  // `stack_experts: false` would hand the reviewer `## Stack checks` for
+  // content the developer was never shown — one turn grading against text
+  // the other turn never saw.
+  const ONE: BuildWorkspaceOptions = {
+    stories: [{ id: "S1", epic: "E1", title: "First story" }],
+    epics: [{ id: "E1", stories: ["S1"], branch: "epic/e1" }],
+    waves: [["S1"]],
+    files: STACK_EXPERT,
+    stackExperts: true,
+  };
+
+  test("switch on: the reviewer prompt carries `## Stack checks` with the overlay's checks; the developer carries the overlay", async () => {
+    const ws = workspace({ ...ONE, stackPacks: true, overlays: [{ id: "react", evidence: "package.json: dependencies.react" }] });
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+    await next(ws);
+    const reviewer = readFileSync(join(promptDir, "reviewer-S1-1.md"), "utf8");
+    expect(reviewer).toContain("## Stack checks (the repo's own conventions win)");
+    expect(reviewer).toContain("- Index keys? verify: grep key=");
+    expect(readFileSync(join(promptDir, "developer-S1-1.md"), "utf8")).toContain("<!-- overlay: react -->");
+  });
+
+  test("switch off: neither prompt mentions the overlay or the checks section", async () => {
+    const ws = workspace({ ...ONE, overlays: [{ id: "react", evidence: "package.json: dependencies.react" }] });
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+    await next(ws);
+    expect(readFileSync(join(promptDir, "reviewer-S1-1.md"), "utf8")).not.toContain("## Stack checks");
+    expect(readFileSync(join(promptDir, "developer-S1-1.md"), "utf8")).not.toContain("<!-- overlay: react -->");
+  });
+
+  /**
+   * The combination the review found (issue review, fix round 1): packs ARE on for the
+   * workspace, but this stage's OWN `stack_experts` is off. Before the fix,
+   * `reviewerPrompt()` read only `readStackPacks(root).enabled` — true here — so the
+   * reviewer got `## Stack checks` for content the developer, gated by `selectExperts`
+   * on `spec.stackExperts`, never received at all. The two turns must agree on whether
+   * packs are in play for THIS story; neither getting anything is the correct agreement,
+   * not "reviewer gets it, developer doesn't."
+   */
+  test("packs on but the stage's stack_experts is false: neither turn gets pack content — the two agree", async () => {
+    const ws = workspace({
+      ...ONE, stackExperts: false, stackPacks: true,
+      overlays: [{ id: "react", evidence: "package.json: dependencies.react" }],
+    });
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+    await next(ws);
+    expect(readFileSync(join(promptDir, "reviewer-S1-1.md"), "utf8")).not.toContain("## Stack checks");
+    expect(readFileSync(join(promptDir, "developer-S1-1.md"), "utf8")).not.toContain("<!-- overlay: react -->");
+  });
+
+  test("a detected skill is named to the developer, `Skill` joins its allowance, and an untracked one is warned at Build start", async () => {
+    const ws = workspace({
+      ...ONE,
+      skills: [
+        { name: "impeccable", description: "Use when designing a page", path: ".claude/skills/impeccable/SKILL.md", tracked: true },
+        { name: "scratch", description: "Not committed", path: ".claude/skills/scratch/SKILL.md", tracked: false },
+      ],
+    });
+    const promptDir = join(ws.root, "prompts");
+    const argvLog = join(ws.root, "argv.log");
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+    process.env.FAKE_BUILD_ARGV_LOG = argvLog;
+    const outcome = await next(ws);
+    // The repo is in the line because the path is repo-relative (fix round 1, ruled in).
+    expect(outcome.lines.join("\n")).toContain(
+      "warning: project skill scratch in app is untracked (.claude/skills/scratch/SKILL.md)");
+    const developer = readFileSync(join(promptDir, "developer-S1-1.md"), "utf8");
+    expect(developer).toContain("## Project skills");
+    // The row carries the repo too (fix round 2, Important) — same reason as the
+    // untracked warning above: the path is repo-relative, and a multi-repo run's stage
+    // passes every repo, so the bare path alone does not say which checkout to open.
+    expect(developer).toContain(
+      "- impeccable — Use when designing a page — `app/.claude/skills/impeccable/SKILL.md`");
+    expect(developer).toContain(
+      "- scratch — Not committed — `app/.claude/skills/scratch/SKILL.md` (untracked: not present in story worktrees)");
+    // Provider-neutral: the developer is pointed at a file, not at one provider's tool.
+    expect(developer).toContain("READ that file at the path shown");
+    expect(developer).not.toContain("Skill tool");
+    const calls = readFileSync(argvLog, "utf8").trim().split("\n").map((l) => JSON.parse(l) as string[]);
+    const devAllowance = calls[0]?.[calls[0].indexOf("--allowedTools") + 1] ?? "";
+    expect(devAllowance.split(",")).toContain("Skill");
+    expect(calls[1]?.[calls[1].indexOf("--allowedTools") + 1]).toBe("Read,Grep,Glob,Bash(git diff *)");
+  });
+
+  test("no skills ⇒ no section, no `Skill` in the allowance", async () => {
+    const ws = workspace(ONE);
+    const promptDir = join(ws.root, "prompts");
+    const argvLog = join(ws.root, "argv.log");
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+    process.env.FAKE_BUILD_ARGV_LOG = argvLog;
+    await next(ws);
+    expect(readFileSync(join(promptDir, "developer-S1-1.md"), "utf8")).not.toContain("## Project skills");
+    const calls = readFileSync(argvLog, "utf8").trim().split("\n").map((l) => JSON.parse(l) as string[]);
+    expect((calls[0]?.[calls[0].indexOf("--allowedTools") + 1] ?? "").split(",")).not.toContain("Skill");
+  });
+});

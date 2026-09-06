@@ -74,7 +74,7 @@ tldrx approve --note "…"    # firma la compuerta; antes se vuelven a correr la
 | Comando | Qué hace |
 |---|---|
 | `tldrx map --refresh \| --check` | Reconstruye el mapa de código, o revísalo contra el código para detectar desfases. |
-| `tldrx expert list \| create \| train \| recompute` | Ver [Expertos](/es/guides/experts). |
+| `tldrx expert list \| create \| train \| recompute \| packs` | Ver [Expertos](/es/guides/experts). `packs enable\|disable\|status` es el único interruptor de los packs de stack — apagado por defecto. |
 | `tldrx seed triage` / `seed answer` / `seed apply` | Parte un documento grande en varios runs. |
 | `tldrx watch list \| check [<feature>]` | Las tarjetas de vigilancia que produjo un run: listadas, o impresas como la checklist de post-merge y revisadas contra el código de hoy. `--execute` vuelve a correr los comandos que registraron las tarjetas, a través de la lista blanca del workspace. |
 | `tldrx watch arm` | Espera a que el PR del run se mergee y entonces imprime esa checklist. Un poller acotado en primer plano sobre `gh pr view`, no un demonio. |

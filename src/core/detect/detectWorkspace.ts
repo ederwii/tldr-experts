@@ -10,6 +10,8 @@ import { detectCommands } from "./commands.ts";
 import { detectDefaultBranch } from "./defaultBranch.ts";
 import { findRepos } from "./findRepos.ts";
 import { detectStack } from "./stack.ts";
+import { detectOverlays } from "./overlays.ts";
+import { detectSkills } from "./skills.ts";
 import { countCodeFiles } from "./codeFiles.ts";
 import { scoreConfidence } from "./confidence.ts";
 import { repoSlug, uniqueSlug } from "./repoSlug.ts";
@@ -64,6 +66,8 @@ export async function detectWorkspace(
     const ci = await detectCi(absPath);
     const branch = await detectDefaultBranch(runner, absPath);
     const codeFiles = await countCodeFiles(absPath);
+    const overlays = await detectOverlays(absPath, stack.packageJson);
+    const skills = await detectSkills(absPath, runner);
 
     const repoEvidence: Evidence[] = [...stack.evidence, ...commands.evidence];
     repoEvidence.push(
@@ -95,6 +99,8 @@ export async function detectWorkspace(
       codeFiles,
       commands: commands.commands,
       ci,
+      overlays,
+      skills,
       confidence: scoreConfidence(commands.commands, stack.manifests.length),
       evidence: repoEvidence,
     };

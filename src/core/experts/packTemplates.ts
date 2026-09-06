@@ -1,0 +1,95 @@
+/**
+ * Where the shipped packs live and how a shipment is named.
+ *
+ * `templates/experts/stack/<lang>.md` is a language pack body; `overlays/<id>.md` is a
+ * framework overlay. Both ship in the npm package (`files: templates`) and are read from
+ * `TEMPLATES_DIR` at run time, exactly as role bodies are. `pack: <lang>@<hash>` in a
+ * materialised expert's front matter names one exact shipment: the hash covers every
+ * template's path and bytes, so a changed template is a different hash.
+ */
+import { createHash } from "node:crypto";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { TEMPLATES_DIR } from "../paths.ts";
+import type { PackLanguage } from "../detect/overlays.ts";
+
+export const PACK_TEMPLATES_DIR: string = join(TEMPLATES_DIR, "experts", "stack");
+export const OVERLAY_TEMPLATES_DIR: string = join(PACK_TEMPLATES_DIR, "overlays");
+
+/** Caps a shape test enforces (stack packs design §4.1). */
+export const PACK_BODY_MAX_BYTES = 8 * 1024;
+export const OVERLAY_MAX_BYTES = 6 * 1024;
+
+export function packBodyPath(lang: PackLanguage): string {
+  return join(PACK_TEMPLATES_DIR, `${lang}.md`);
+}
+
+export function overlayTemplatePath(id: string): string {
+  return join(OVERLAY_TEMPLATES_DIR, `${id}.md`);
+}
+
+/** The shipped body for a language, or null when none ships — the caller says so, never guesses. */
+export function readPackBody(lang: PackLanguage): string | null {
+  const path = packBodyPath(lang);
+  return existsSync(path) ? readFileSync(path, "utf8") : null;
+}
+
+export function readOverlayTemplate(id: string): string | null {
+  const path = overlayTemplatePath(id);
+  return existsSync(path) ? readFileSync(path, "utf8") : null;
+}
+
+export interface TemplateFile {
+  /** Relative to `PACK_TEMPLATES_DIR`, POSIX: `typescript.md`, `overlays/react.md`. */
+  readonly rel: string;
+  readonly abs: string;
+}
+
+/**
+ * Every shipped `.md` under the pack templates dir: top-level bodies (`typescript.md`, …)
+ * sorted among themselves, THEN `overlays/*.md` sorted among themselves — not one sort
+ * over the whole list by `rel` (that would interleave `overlays/react.md` ahead of a
+ * later top-level body). Missing dir ⇒ empty. Left as-is on purpose: this order is the
+ * shipment-hash input (`hashTemplates`/`templatesHash`), and re-sorting it would change
+ * every `pack: <lang>@<hash>` this ships for no benefit.
+ */
+export function packTemplateFiles(): readonly TemplateFile[] {
+  const out: TemplateFile[] = [];
+  if (!existsSync(PACK_TEMPLATES_DIR)) return out;
+  for (const entry of readdirSync(PACK_TEMPLATES_DIR).sort()) {
+    if (entry.endsWith(".md")) out.push({ rel: entry, abs: join(PACK_TEMPLATES_DIR, entry) });
+  }
+  if (existsSync(OVERLAY_TEMPLATES_DIR)) {
+    for (const entry of readdirSync(OVERLAY_TEMPLATES_DIR).sort()) {
+      if (entry.endsWith(".md")) out.push({ rel: `overlays/${entry}`, abs: join(OVERLAY_TEMPLATES_DIR, entry) });
+    }
+  }
+  return out;
+}
+
+/**
+ * First 12 hex of sha256 over `text` — the ONE way anything in the packs names bytes.
+ *
+ * Two callers, deliberately one function (AGENTS.md §7): `hashTemplates` names a whole
+ * shipment, and `init/stackPacks.ts` names the exact body it wrote into an `expert.md`
+ * (`pack_body:`), which is what lets a materialised body from an older shipment be told
+ * apart from one a human edited.
+ */
+export function hashText(text: string): string {
+  return createHash("sha256").update(text).digest("hex").slice(0, 12);
+}
+
+/**
+ * First 12 hex of sha256 over `rel\n<text>\n` for every entry, in the given order.
+ *
+ * Joining and hashing once is byte-identical to streaming one `update` per entry — the
+ * digest is over the concatenation either way — so this keeps the existing hash values
+ * while having exactly one place that says "sha256, first 12 hex".
+ */
+export function hashTemplates(entries: readonly { readonly rel: string; readonly text: string }[]): string {
+  return hashText(entries.map((entry) => `${entry.rel}\n${entry.text}\n`).join(""));
+}
+
+export function templatesHash(): string {
+  return hashTemplates(packTemplateFiles().map((file) => ({ rel: file.rel, text: readFileSync(file.abs, "utf8") })));
+}

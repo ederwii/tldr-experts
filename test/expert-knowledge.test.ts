@@ -14,9 +14,9 @@ import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import type { PendingExpert } from "../src/core/facilitator/pending.ts";
 import {
-  countFindings, describeStageLoads, domainPaths, LEGACY_NOTE, loadExpertBundles,
-  loadExpertKnowledge, pathsIntersect, readExpertDomain, selectExperts, stagesLoadingExperts,
-  truncateAtHeading,
+  byteLength, composePackBody, countFindings, describeStageLoads, domainPaths, LEGACY_NOTE,
+  loadExpertBundles, loadExpertKnowledge, pathsIntersect, readExpertDomain, selectExperts,
+  stagesLoadingExperts, truncateAtHeading,
 } from "../src/core/experts/index.ts";
 import {
   makeFacilitatorWorkspace, type FacilitatorWorkspace, type StageOptions,
@@ -370,6 +370,82 @@ describe("visibility", () => {
     });
     const outcome = await prepare(ws);
     expect(outcome.stderr ?? []).toEqual([]);
+  });
+
+  test("with stack packs on, expert_md_bytes stays expert.md's own size — overlay_bytes carries the composed extra", async () => {
+    const rawExpertMd = [
+      "---", "name: typescript-stack", "kind: stack", "status: created", "repos: [lab]", "---", "",
+      "# TypeScript", "", "Scope.", "", "## Defaults (when the repo is silent)", "",
+      "- Strict on. — overridden by: tsconfig.json", "",
+      "## Checks (always asked in review)", "",
+      "- Any new `any`? verify: grep `: any`", "",
+    ].join("\n");
+    const overlayMd = [
+      "# react", "", "Scope.", "", "## Defaults (when the repo is silent)", "",
+      "- react default — overridden by: x", "",
+      "## Checks (always asked in review)", "",
+      "- react check? verify: y", "",
+    ].join("\n");
+
+    const ws = workspace({
+      ".tldrx/workspace.yml": [
+        "version: 1", "mode: multi-repo", "root_is_repo: true",
+        "detected_at: 2026-08-28T14:02:11Z", "detected_by: \"tldrx 0.1.0\"",
+        "repos:",
+        "  - name: api", "    path: api", "    default_branch: main", "    stack: [dotnet]",
+        "    package_manager: nuget",
+        "    commands: {build: \"true\", test: \"false\", lint: null, typecheck: null, run: null}",
+        "    ci: []", "    confidence: high",
+        "  - name: lab", "    path: lab", "    default_branch: main", "    stack: [typescript]",
+        "    package_manager: npm",
+        "    commands: {build: \"true\", test: \"true\", lint: null, typecheck: null, run: null}",
+        "    ci: []",
+        "    overlays: [{id: react, evidence: \"package.json: dependencies.react\"}]",
+        "    confidence: high",
+        "stack_packs:",
+        "  enabled: true",
+        "  enabled_at: 2026-09-05T10:00:00Z",
+        "",
+      ].join("\n"),
+      ".tldrx/experts/typescript-stack/expert.md": rawExpertMd,
+      ".tldrx/experts/typescript-stack/overlays/react.md": overlayMd,
+    });
+
+    const outcome = await prepare(ws);
+    expect(outcome.code).toBe(0);
+
+    const expert = pendingExperts(ws).find((e) => e.name === "typescript-stack");
+    expect(expert).toBeDefined();
+    // `expert_md_bytes` is the RAW file's own size — never the composed one
+    // (AGENTS.md §7: a `version: 1` field never changes meaning).
+    expect(expert?.expert_md_bytes).toBe(byteLength(rawExpertMd));
+    expect(expert?.overlays).toEqual(["react"]);
+    expect(expert?.overlay_bytes).toBeGreaterThan(0);
+
+    // The two counts recover exactly what `composePackBody` (the one derivation,
+    // already pinned by `test/pack-sections.test.ts`) says the composed body is —
+    // proving the split is a correct partition, not just two numbers that look right.
+    const expectedComposed = composePackBody(rawExpertMd, [{ id: "react", text: overlayMd }]);
+    expect((expert?.expert_md_bytes ?? 0) + (expert?.overlay_bytes ?? 0)).toBe(byteLength(expectedComposed.text));
+
+    // And the prompt actually sent to the sub-agent carries the overlay, so the
+    // split bytes describe what was really spent, not a number computed on the side.
+    expect(promptOf(ws)).toContain("<!-- overlay: react -->");
+  });
+
+  test("with stack packs off, expert_md_bytes is unchanged and no overlay keys appear", async () => {
+    const ws = workspace({
+      ".tldrx/experts/typescript-stack/expert.md": "---\nname: typescript-stack\nkind: stack\nstatus: created\nrepos: [lab]\n---\n\n# TypeScript\n",
+    });
+    const outcome = await prepare(ws);
+    expect(outcome.code).toBe(0);
+    const expert = pendingExperts(ws).find((e) => e.name === "typescript-stack");
+    expect(expert).toBeDefined();
+    expect(expert?.expert_md_bytes).toBe(byteLength(
+      "---\nname: typescript-stack\nkind: stack\nstatus: created\nrepos: [lab]\n---\n\n# TypeScript\n",
+    ));
+    expect(expert?.overlays).toBeUndefined();
+    expect(expert?.overlay_bytes).toBeUndefined();
   });
 
   test("`expert list` says which stages load each expert", async () => {

@@ -16,6 +16,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { SKIPPED_DIRS, toPosix } from "../detect/walk.ts";
 import { byteLength } from "../experts/expertKnowledge.ts";
+import { PROJECT_SKILLS_HEADING } from "../experts/stackPacks.ts";
 import { MAX_PAYLOAD_BYTES } from "../events/Event.ts";
 import { fenceFor, renderInputs, type PromptInput } from "../facilitator/prompt.ts";
 import { SRC_GRAMMAR_HEADING, renderSrcGrammarContract } from "../text/srcGrammarContract.ts";
@@ -69,6 +70,8 @@ export interface DeveloperPromptParts {
    * when the operator left no file.
    */
   readonly dispatchNotes?: string;
+  /** The rendered body of `## Project skills` (`experts/stackPacks.ts`); empty ⇒ no section. */
+  readonly projectSkills?: string;
   /**
    * One line under Objective saying where this story came from, when it did not
    * come from a Plan phase. An implicit story (`build/implicitPlan.ts`) is the
@@ -158,6 +161,7 @@ export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
     renderInputs(inputs),
     "",
     ...dispatchNotesSection(parts.dispatchNotes),
+    ...projectSkillsSection(parts.projectSkills),
     "## Investigate",
     "",
     "1. Read the story and the inlined files above. They are the whole brief.",
@@ -240,6 +244,18 @@ function dispatchNotesSection(body: string | undefined): readonly string[] {
   return text === "" ? [] : ["## Dispatch notes", "", text, ""];
 }
 
+/**
+ * `## Project skills`, or nothing — after the notes, before the brief's own steps.
+ *
+ * The same reasoning that puts the notes there puts this here: `## Investigate` step 1
+ * says the inlined files ARE the whole brief, and "this project has a skill for that"
+ * arriving after that sentence would read as something to disregard.
+ */
+function projectSkillsSection(body: string | undefined): readonly string[] {
+  const text = (body ?? "").trim();
+  return text === "" ? [] : [`## ${PROJECT_SKILLS_HEADING}`, "", text, ""];
+}
+
 export interface ReviewerPromptParts {
   readonly runId: string;
   readonly story: PlannedStory;
@@ -281,6 +297,12 @@ export interface ReviewerPromptParts {
    * envelope, not for a different one, and the prompt says so in those words.
    */
   readonly refusal?: string | null;
+  /**
+   * The active stack packs' `## Checks`, rendered by `experts/packSections.ts stackChecks`
+   * (stack packs design §4.5). Null or absent renders NOTHING: the reviewer prompt had
+   * no expert content before this existed and a switched-off workspace keeps those bytes.
+   */
+  readonly stackChecks?: string | null;
 }
 
 /**
@@ -352,6 +374,24 @@ function truncate(text: string): string {
   return text.length <= FOCUS_EXAMPLE_MAX ? text : `${text.slice(0, FOCUS_EXAMPLE_MAX - 1)}\u2026`;
 }
 
+export const STACK_CHECKS_HEADING = "Stack checks (the repo's own conventions win)";
+
+/** `## Stack checks …`, or nothing at all — measured conventions outrank pack content, and the prompt says so. */
+function stackChecksSection(body: string | null | undefined): readonly string[] {
+  const text = (body ?? "").trim();
+  if (text === "") return [];
+  return [
+    `## ${STACK_CHECKS_HEADING}`,
+    "",
+    "Ask each of these of the diff. A miss is a finding with a cited file. Where the project",
+    "already has a convention on the topic — in the conventions above, or in the code the diff",
+    "sits in — the project's own convention is the accepted answer, not the pack's.",
+    "",
+    text,
+    "",
+  ];
+}
+
 /**
  * Read-only by construction: the reviewer's allowance is `Read`, `Grep`, `Glob`
  * and `Bash(git diff *)`, and it returns its verdict in the result envelope. The
@@ -401,6 +441,7 @@ export function buildReviewerPrompt(parts: ReviewerPromptParts): string {
     "",
     parts.conventions,
     "",
+    ...stackChecksSection(parts.stackChecks),
     "## The story",
     "",
     `${fenceFor(parts.story.text)}markdown`,

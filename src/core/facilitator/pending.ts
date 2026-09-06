@@ -28,7 +28,25 @@ export interface PendingExpert {
   readonly reason: "stage" | "stack" | "domain";
   /** For `domain`: the cited path or repo it matched on. */
   readonly match?: string;
+  /**
+   * `expert.md`'s own bytes — UNCHANGED meaning since before stack packs, and
+   * NEVER the composed pack body (AGENTS.md §7: a `version: 1` field never
+   * changes meaning). A stack expert's overlay bytes are `overlay_bytes` below.
+   */
   readonly expert_md_bytes: number;
+  /**
+   * Overlay ids inlined into the prompt body (stack packs on, `kind: stack`
+   * only). Additive — ABSENT (not `[]`) when nothing was inlined, so a bundle
+   * the switch never touched stays byte-identical to one written before stack
+   * packs existed, and absent on a `pending.json` written before this field did.
+   */
+  readonly overlays?: readonly string[];
+  /**
+   * Bytes `body` carried beyond `expert.md` itself: the inlined overlays plus
+   * composition overhead. Additive, present exactly when `overlays` is (see
+   * `overlays` above) — absent, not `0`, when nothing was inlined.
+   */
+  readonly overlay_bytes?: number;
   /** Bytes of `knowledge/*.md` content inlined — 0 for an expert never trained. */
   readonly knowledge_bytes: number;
   readonly knowledge_files: readonly string[];
@@ -55,6 +73,14 @@ export interface PendingContext {
   readonly expert_knowledge_bytes: number;
   /** The host's `## Dispatch notes` section — 0 when the operator left no file. */
   readonly dispatch_notes_bytes: number;
+  /**
+   * The `## Project skills` section — 0 when the workspace detected none.
+   *
+   * Carried for the invariant this block is documented by: the groups must SUM to
+   * `total_bytes`. A section counted in the total and named in no row would make the
+   * record quietly unaddable, which is the one thing a ledger may not be.
+   */
+  readonly project_skills_bytes: number;
   readonly previous_attempt_bytes: number;
   /** Declared inputs the shared inline budget could not fit whole. */
   readonly truncated_inputs: readonly string[];

@@ -20,7 +20,8 @@
  *   2. expert blocks         `expert.md` + trained knowledge; the big stable mass
  *   3. `## Inputs`           the declared inputs' content; per stage
  *   4. `## Dispatch notes`   the host's own context for THIS cycle; per cycle
- *   5. `## Previous attempt` the retry note and the refused outputs; per attempt
+ *   5. `## Project skills`   the project's own `.claude/skills`, named; per workspace
+ *   6. `## Previous attempt` the retry note and the refused outputs; per attempt
  *
  * strictly most-stable to least-stable. The dispatch-notes slot
  * (`facilitator/dispatchNotes.ts`) is the most volatile thing in the document —
@@ -28,17 +29,26 @@
  * inputs and never ahead of the expert blocks, where it would pay the
  * cache-WRITE price on the largest stable section of every stage.
  *
- * All three of `## Inputs`, `## Dispatch notes` and `## Previous attempt` are CUT
- * out of `stage.md` wherever its author put them and re-emitted at the tail, so a
- * spec-shaped stage file with `## Inputs` in the middle produces exactly one of
- * that heading and it is at the end. Nothing is duplicated and nothing that a
- * stage author wrote under those headings survived before either: the old
- * assembly replaced their bodies outright.
+ * `## Project skills` is the one entry the stability order does not explain by
+ * itself: it is workspace-stable and still sits BEHIND the per-cycle notes. It is
+ * emitted only when a project has skills at all, so putting it ahead of the notes
+ * would shift their offset in every prompt of every workspace that has any — a
+ * cache write on a few hundred bytes, to save one on the same few hundred. Behind
+ * the notes it costs nothing, and it stays ahead of the retry note, which is the
+ * one thing in the document that changes within a single stage.
+ *
+ * All four of `## Inputs`, `## Dispatch notes`, `## Project skills` and
+ * `## Previous attempt` are CUT out of `stage.md` wherever its author put them and
+ * re-emitted at the tail, so a spec-shaped stage file with `## Inputs` in the
+ * middle produces exactly one of that heading and it is at the end. Nothing is
+ * duplicated and nothing that a stage author wrote under those headings survived
+ * before either: the old assembly replaced their bodies outright.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
 import { DISPATCH_NOTES_HEADING } from "./dispatchNotes.ts";
+import { PROJECT_SKILLS_HEADING } from "../experts/stackPacks.ts";
 import { isLive, type Fact } from "../facts/Fact.ts";
 import { stackExpertNames } from "../experts/stackExperts.ts";
 
@@ -117,6 +127,12 @@ export interface PromptParts {
    */
   readonly dispatchNotes?: string;
   /**
+   * The rendered body of `## Project skills` — the project's own Claude skills, named
+   * (`experts/stackPacks.ts renderProjectSkills`). Empty when there are none, and then
+   * no section is emitted. Independent of the stack-packs switch.
+   */
+  readonly projectSkills?: string;
+  /**
    * Why this stage is being run again — a previous failure, an operator's reject
    * note, or both. Empty on a first attempt, and then no section is emitted at
    * all: a heading saying "nothing went wrong last time" is noise in every prompt.
@@ -126,7 +142,7 @@ export interface PromptParts {
 
 export const INPUTS_HEADING = "Inputs";
 export const PREVIOUS_ATTEMPT_HEADING = "Previous attempt";
-export { DISPATCH_NOTES_HEADING };
+export { DISPATCH_NOTES_HEADING, PROJECT_SKILLS_HEADING };
 
 export function buildPrompt(parts: PromptParts): string {
   return renderParts(parts).map((part) => part.text).join("");
@@ -142,8 +158,11 @@ export function buildPrompt(parts: PromptParts): string {
 export function renderParts(parts: PromptParts): readonly PromptPart[] {
   const substituted = cutSection(
     cutSection(
-      cutSection(substitute(parts.stageMd, parts.values), INPUTS_HEADING),
-      DISPATCH_NOTES_HEADING,
+      cutSection(
+        cutSection(substitute(parts.stageMd, parts.values), INPUTS_HEADING),
+        DISPATCH_NOTES_HEADING,
+      ),
+      PROJECT_SKILLS_HEADING,
     ),
     PREVIOUS_ATTEMPT_HEADING,
   );
@@ -181,6 +200,17 @@ export function renderParts(parts: PromptParts): readonly PromptPart[] {
     });
   }
 
+  // Behind the notes and ahead of the retry note: what this project's skills ARE changes
+  // only when a skill is added, so it is the more stable of the two tail sections.
+  const skills = (parts.projectSkills ?? "").trim();
+  if (skills !== "") {
+    out.push({
+      kind: "project-skills",
+      name: PROJECT_SKILLS_HEADING,
+      text: `\n## ${PROJECT_SKILLS_HEADING}\n\n${skills}\n`,
+    });
+  }
+
   const previous = (parts.previousAttempt ?? "").trim();
   if (previous !== "") {
     out.push({
@@ -193,7 +223,8 @@ export function renderParts(parts: PromptParts): readonly PromptPart[] {
 }
 
 export type PromptPartKind =
-  | "stage" | "expert-body" | "expert-knowledge" | "inputs" | "dispatch-notes" | "previous-attempt";
+  | "stage" | "expert-body" | "expert-knowledge" | "inputs" | "dispatch-notes" | "project-skills"
+  | "previous-attempt";
 
 export interface PromptPart {
   readonly kind: PromptPartKind;

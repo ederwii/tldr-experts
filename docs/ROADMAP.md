@@ -42,7 +42,15 @@ Everything in this section is written and tested on main; none of it is tagged.
 - `expert train --mode light|full` (targeted reverse-engineering; mining past runs), evidence
   written with provenance, competency levels recomputed from evidence (formula in spec §2.6).
 - Star chart from real evidence in the dashboard; "train me on X" prompts wired to it.
-- Stack expertise shared by every expert by default.
+- **Stack packs** (on main, unreleased): shipped as OPT-IN bodies for the `<lang>-stack` experts —
+  TypeScript, JavaScript, Python, .NET — plus framework overlays detected from a repo's manifests,
+  never inferred from its language, because two workspaces on one language can use opposite
+  architectures. A pack is interrogative by default: its Defaults apply only where the repo is silent
+  and each names the signal that overrides it, its Checks are questions the reviewer asks with a
+  `verify:` hint. One switch, `tldrx expert packs enable`, off until you throw it. Not "shared by
+  every expert by default": measured repo conventions win, and a pack that argued with them would be
+  worse than no pack at all. Project skills (`.claude/skills/*/SKILL.md`) are named to the developer
+  alongside, switch or no switch — skills for doing, packs for checking.
 - **Role experts** (on main, unreleased): `init` seeds `product`, `architect`, `delivery`,
   `developer`, `operations` — the names the shipped stage files name — with `kind: role` and
   an editable body at `templates/experts/<role>.md`. Their domain is the workflow, so they

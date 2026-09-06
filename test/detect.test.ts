@@ -76,6 +76,7 @@ describe("stack and commands", () => {
     expect(stack.stack).toEqual(["typescript", "react", "vite"]);
     expect(stack.packageManager).toBe("npm");
     expect(stack.manifests).toContain("package.json");
+    expect(stack.packageJson?.groups.devDependencies).toContain("vite");
   });
 
   test("a .sln/.csproj gives dotnet and nuget", async () => {

@@ -6,6 +6,9 @@
  * `src` token behind it. `Evidence.src` is that token's payload, not prose.
  */
 
+import type { DetectedOverlay } from "./overlays.ts";
+import type { DetectedSkill } from "./skills.ts";
+
 export const WORKSPACE_MODES = ["single-repo", "multi-repo"] as const;
 export type DetectedMode = (typeof WORKSPACE_MODES)[number];
 
@@ -47,6 +50,10 @@ export interface DetectedRepo {
   readonly codeFiles: number;
   readonly commands: RepoCommands;
   readonly ci: readonly string[];
+  /** Framework overlays detection can PROVE from manifests, with their evidence (`detect/overlays.ts`). */
+  readonly overlays: readonly DetectedOverlay[];
+  /** `.claude/skills/<name>/SKILL.md` in this repo, named and flagged tracked/untracked (`detect/skills.ts`). */
+  readonly skills: readonly DetectedSkill[];
   readonly confidence: Confidence;
   readonly evidence: readonly Evidence[];
 }

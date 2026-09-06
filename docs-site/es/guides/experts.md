@@ -74,6 +74,45 @@ repartido según qué tan relevante es cada uno para este run, en vez de darle u
 cada quien. Los archivos que la etapa declaró como entradas se llenan primero: una entrada
 que la etapa pidió le gana a material de referencia que nadie pidió.
 
+## Packs de stack
+
+Un experto `<language>-stack` arranca como un esbozo, sin nada específico del stack adentro.
+Prende los **packs de stack** y recibe un cuerpo que ya viene con la herramienta — TypeScript,
+JavaScript, Python o .NET — más un **overlay** por cada framework que tus manifiestos
+demuestren. Vienen trece: `react`, `next-app-router`, `vite-react-spa`, `expo-router`,
+`node-express`, `prisma`, `aspnet-minimal-apis`, `aspnet-controllers`, `mediatr-cqrs`,
+`efcore-npgsql`, `fastapi`, `sqlalchemy-alembic` y `postgres-testcontainers`.
+
+```bash
+tldrx expert packs enable     # un solo interruptor, apagado por defecto
+tldrx expert packs status     # overlays con su evidencia, skills, y el estado de cada cuerpo
+tldrx expert packs disable    # quita los overlays; los cuerpos y el conocimiento se quedan
+```
+
+Los overlays se leen del `package.json`, de los `.csproj` y del `Directory.Packages.props`, del
+`pyproject.toml` o de un `requirements*.txt` — nunca del nombre del lenguaje, porque dos
+proyectos en el mismo lenguaje pueden estar construidos sobre arquitecturas opuestas. Cada uno
+que se detecta queda escrito en `workspace.yml` con la línea que lo demostró, esté el
+interruptor prendido o no: la detección es una medición, y el interruptor solo decide si los
+archivos se escriben.
+
+Un pack es interrogativo. Sus **Checks** son preguntas que se le hacen a cada diff, cada una con
+una pista `verify:` de qué abrir o qué correr; sus **Defaults** aplican solo donde tu repo no
+dice nada, y cada uno nombra la señal que lo anula. Las convenciones de tu repo ganan — un pack
+que discutiera con ellas sería peor que ningún pack. El revisor de Build no ve ningún cuerpo de
+experto, así que esos Checks le llegan bajo un encabezado que dice justamente eso.
+
+El cuerpo es tuyo desde el momento en que lo tocas. `enable` solo reemplaza el esbozo que sembró
+`init`, o un cuerpo de pack suyo que se quedó una entrega atrás; un cuerpo que editaste se
+conserva, y el comando te dice cuál dejó en paz. Los overlays son de la herramienta: se reescriben
+en cada `enable`, y en cada `init` que corra con el interruptor prendido, y `disable` los quita.
+A `knowledge/` no lo toca nada de esto.
+
+Los skills de tu propio proyecto (`.claude/skills/*/SKILL.md`) también se le nombran al
+desarrollador, con interruptor o sin él, cada uno con la ruta a su `SKILL.md`: el harness corre
+un skill, y tldrx nada más avisa que está ahí. Uno que git no rastrea queda marcado, porque un
+worktree de story se lleva solo los archivos rastreados.
+
 ## Cómo entrenar uno
 
 ```bash

@@ -411,9 +411,9 @@ describe("<command> --help carries flags, values, examples and exit codes", () =
    * so a generalised assertion would go red for `hook` and say nothing about the
    * four it is here to hold.
    */
-  const DOCUMENTED_SUBCOMMANDS = ["run", "plan", "note", "ship"] as const;
+  const DOCUMENTED_SUBCOMMANDS = ["run", "plan", "note", "ship", "expert"] as const;
 
-  test("the CLI reference documents every subcommand of `run`, `plan`, `note` and `ship` (#54, #55, #72)", () => {
+  test("the CLI reference documents every subcommand of `run`, `plan`, `note`, `ship` and `expert` (#54, #55, #72, stack packs)", () => {
     const reference = readFileSync(join(FRAMEWORK_ROOT, "docs/guide/08-cli-reference.md"), "utf8");
     for (const name of DOCUMENTED_SUBCOMMANDS) {
       const command = COMMANDS.find((entry) => entry.name === name);

@@ -11,6 +11,7 @@
  * session themselves. `recompute` is that path's other half: it settles the level
  * such a session leaves behind, without pretending a training run happened.
  */
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Command } from "../Command.ts";
 import { EXIT_FAILED, EXIT_NOT_FOUND, EXIT_OK } from "../exitCodes.ts";
@@ -18,12 +19,16 @@ import { boolFlag, numberFlag, parseArgs, stringFlag, UsageError, type ParsedArg
 import { effortFlag } from "../effort.ts";
 import { startUi } from "../ui.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
+import { PROJECT_WORKSPACE_FILE } from "../../core/paths.ts";
 import type { EffortLevel } from "../../core/schemas/stage.ts";
 import {
   ExpertNotFound, isRoleExpertOnDisk, isTrainingMode, lightModeRefusal, recomputeExperts,
   recomputeJson, renderRecompute, runTraining, type TrainingRunMode,
 } from "../../core/training/index.ts";
 import { loadWorkspaceFile } from "../../core/init/loadWorkspaceFile.ts";
+import { rfc3339 } from "../../core/init/index.ts";
+import { disableStackPacks, enableStackPacks, stackPacksStatus, type PacksOutcome } from "../../core/init/stackPacks.ts";
+import { SpawnCommandRunner } from "../../core/detect/CommandRunner.ts";
 import {
   areaTitle, createExpert, evidenceWarnings, expertListJson, loadExpert, loadExperts,
   missingAreaRefusal, readExpertDocument, renderExpertList, renderTrainPrompt, resolveWorkspaceRoot,
@@ -41,6 +46,7 @@ const USAGE = [
   "                                          [--ui scene|compact|plain|off] [--root <path>]",
   "  tldrx expert train <name> --area <area> [--mode light|full] --print-prompt [--root <path>]",
   "  tldrx expert recompute [<name>] [--root <path>] [--json]",
+  "  tldrx expert packs <enable|disable|status> [--root <path>]",
 ].join("\n");
 
 export const expertCommand: Command = {
@@ -52,8 +58,9 @@ export const expertCommand: Command = {
     "       tldrx expert train <name> --area <area> [--mode light|full] [--max-usd <n>] [--model <m>]\n" +
     "                                               [--effort <level>] [--prepare|--commit] [--yolo] [--print-prompt]\n" +
     "                                               [--ui scene|compact|plain|off] [--root <path>]\n" +
-    "       tldrx expert recompute [<name>] [--root <path>] [--json]",
-  subcommands: ["list", "create", "train", "recompute"],
+    "       tldrx expert recompute [<name>] [--root <path>] [--json]\n" +
+    "       tldrx expert packs <enable|disable|status> [--root <path>]",
+  subcommands: ["list", "create", "train", "recompute", "packs"],
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     const [sub, ...rest] = argv;
@@ -62,8 +69,9 @@ export const expertCommand: Command = {
       case "create": return create(rest);
       case "train": return train(rest);
       case "recompute": return recompute(rest);
+      case "packs": return packs(rest);
       default:
-        process.stderr.write(`tldrx expert: expected list, create, train or recompute\n${USAGE}\n`);
+        process.stderr.write(`tldrx expert: expected list, create, train, recompute or packs\n${USAGE}\n`);
         return EXIT_FAILED;
     }
   },
@@ -110,6 +118,95 @@ function recompute(argv: readonly string[]): number {
   const lines = argv.includes("--json") ? [recomputeJson(results)] : renderRecompute(results);
   if (lines.length > 0) process.stdout.write(`${lines.join("\n")}\n`);
   for (const warning of results.flatMap((result) => result.warnings)) process.stderr.write(`${warning}\n`);
+  return EXIT_OK;
+}
+
+/**
+ * `packs` — the one switch for the stack packs (stack packs design §4.6).
+ *
+ * `enable` re-runs detection, seeds any missing `<lang>-stack`, applies the pack body
+ * where the stub is untouched, writes the overlays and records everything in
+ * `workspace.yml`. `disable` clears the switch and removes only the overlays. `status`
+ * reports and always exits 0 — even when `.tldrx/workspace.yml` does not exist yet,
+ * which is a THROW through `loadWorkspaceFile` rather than a `PacksOutcome`, so it is
+ * caught here rather than left to read as a crash. `disable` is idempotent the same
+ * way: no `workspace.yml` means "nothing to disable" (exit 0, named line), not a
+ * refusal. `enable` with no detectable language, or a `workspace.yml` too malformed to
+ * patch, is a usage error (exit 1); so is `disable` on a `workspace.yml` that EXISTS
+ * but is too broken to read. Never a stack trace on stderr either way.
+ */
+async function packs(argv: readonly string[]): Promise<number> {
+  const [action, ...rest] = argv;
+  const workspaceDir = resolveWorkspaceRoot(option(rest, "--root"));
+  switch (action) {
+    case "enable": return packsEnable(workspaceDir);
+    case "disable": return packsDisable(workspaceDir);
+    case "status": return packsStatus(workspaceDir);
+    default:
+      process.stderr.write(`tldrx expert packs: expected enable, disable or status\n${USAGE}\n`);
+      return EXIT_FAILED;
+  }
+}
+
+async function packsEnable(workspaceDir: string): Promise<number> {
+  let outcome: PacksOutcome;
+  try {
+    outcome = await enableStackPacks({ workspaceDir, runner: new SpawnCommandRunner(), now: rfc3339(new Date()) });
+  } catch (error) {
+    process.stderr.write(`tldrx expert packs enable: error: ${message(error)}\n`);
+    return EXIT_FAILED;
+  }
+  const text = `${outcome.lines.join("\n")}\n`;
+  if (outcome.ok) {
+    process.stdout.write(text);
+    return EXIT_OK;
+  }
+  process.stderr.write(text);
+  return EXIT_FAILED;
+}
+
+/**
+ * `disable` is idempotent (review round 1, Critical): a MISSING `workspace.yml` means
+ * "nothing to disable", not a refusal — parallel to `status`. Checked BEFORE calling
+ * `disableStackPacks`, which would otherwise throw through the same `loadWorkspaceFile`
+ * `status` throws through, and land on the catch below as a false `error:`/exit 1. The
+ * check reuses `PROJECT_WORKSPACE_FILE` — the same constant `loadWorkspaceFile` resolves
+ * the path from (`core/paths.ts`) — rather than deriving the path a second time or
+ * string-matching the thrown message. A workspace.yml that EXISTS but is too broken to
+ * read (not a mapping, invalid YAML) still throws through `disableStackPacks` and is a
+ * real refusal: `error: <message>`, exit 1.
+ */
+async function packsDisable(workspaceDir: string): Promise<number> {
+  if (!existsSync(join(workspaceDir, PROJECT_WORKSPACE_FILE))) {
+    process.stdout.write(
+      `nothing to disable — no ${PROJECT_WORKSPACE_FILE} in ${workspaceDir} (run \`tldrx init\` first)\n`,
+    );
+    return EXIT_OK;
+  }
+  let outcome: PacksOutcome;
+  try {
+    outcome = await disableStackPacks({ workspaceDir });
+  } catch (error) {
+    process.stderr.write(`tldrx expert packs disable: error: ${message(error)}\n`);
+    return EXIT_FAILED;
+  }
+  process.stdout.write(`${outcome.lines.join("\n")}\n`);
+  return EXIT_OK;
+}
+
+/**
+ * `status` always exits 0 (spec §4.6). `stackPacksStatus` throws through
+ * `loadWorkspaceFile` when `.tldrx/workspace.yml` does not exist — measured in Task 7's
+ * review — so that is caught HERE and printed as a named line rather than an uncaught
+ * rejection, instead of reusing the enable/disable usage-error path.
+ */
+async function packsStatus(workspaceDir: string): Promise<number> {
+  try {
+    const outcome = await stackPacksStatus({ workspaceDir });
+    process.stdout.write(`${outcome.lines.join("\n")}\n`);
+  } catch (error) {
+    process.stdout.write(`${message(error)}\n`);
+  }
   return EXIT_OK;
 }
 
