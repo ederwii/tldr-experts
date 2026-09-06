@@ -21,19 +21,33 @@
  * asserted as "still zero facts", not as `existsSync(...) === false` — the file
  * always exists once the workspace is made.
  *
+ * The run-provenance tests need a REAL run on disk (`run.source.run`, the
+ * `fact.added` event, `--run` picking one of several) — `RunStore.resolve` sees
+ * nothing to resolve against a bare `makeRunWorkspace()`, since that fixture
+ * creates no `tldrx-work/`. For those, `createRun` (`src/core/run/newRun.ts`) +
+ * `gatedScope` (`./fixtures/tempRunWorkspace.ts`) mint a real one-stage run, the
+ * same pairing `test/money-safety.test.ts`'s own `newRun` helper uses — lighter
+ * than the facilitator fixture, and it needs no stage to actually run.
+ *
  * Neither this file's helpers nor `factsCommand.run` spawn a subprocess or reach
  * for a heavier fixture that shells out to git — so this file is not a
  * machine-load spawner (`test/machine-load.test.ts`'s own spawner detection) and
- * needs no `spawnTestTimeout` guard row.
+ * needs no `spawnTestTimeout` guard row. `createRun` writes files under a
+ * workspace lock; it starts no process either.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { factsCommand } from "../src/cli/commands/facts.ts";
 import { FactsStore } from "../src/core/facts/FactsStore.ts";
-import { MAX_FACT_CHARS } from "../src/core/facts/Fact.ts";
+import { MAX_FACT_CHARS, type Fact } from "../src/core/facts/Fact.ts";
+import { validateFactsFile } from "../src/core/facts/validateFactsFile.ts";
 import { renderMandate } from "../src/core/drive/mandate.ts";
-import { makeRunWorkspace, type TempRunWorkspace } from "./fixtures/tempRunWorkspace.ts";
+import { renderFacts } from "../src/core/facilitator/prompt.ts";
+import { createRun } from "../src/core/run/newRun.ts";
+import { RunStore } from "../src/core/run/RunStore.ts";
+import { EventLog } from "../src/core/events/EventLog.ts";
+import { gatedScope, makeRunWorkspace, type TempRunWorkspace } from "./fixtures/tempRunWorkspace.ts";
 
 /** Placeholder only: `renderMandate` interpolates it as text and asserts nothing about it. */
 const VERSION = "0.0.0-test";
@@ -66,6 +80,37 @@ function capture(): () => string {
 
 function factsFileOf(ws: TempRunWorkspace): string {
   return join(ws.root, ".tldrx", "memory", "facts.yml");
+}
+
+/** A workspace whose `.tldrx/workflows/gated.yml` lets `createRun` mint a real run. */
+function makeRunnableWorkspace(): TempRunWorkspace {
+  const made = makeRunWorkspace({ files: gatedScope("true") });
+  workspaces.push(made);
+  return made;
+}
+
+/** A real, open run — `RunStore.resolve` has something to find. */
+function openRun(root: string, slug: string): RunStore {
+  const created = createRun({
+    root, slug, title: slug, scope: "gated", budgetUsd: 5,
+    actor: "alan", now: new Date("2026-09-06T09:00:00Z"),
+  });
+  return RunStore.open(created.runDir);
+}
+
+/** A minimal, valid `Fact`, for `renderFacts` — everything but `id`/`fact`/`source` defaulted. */
+function fact(overrides: Pick<Fact, "id" | "fact"> & Partial<Fact>): Fact {
+  return {
+    area: "billing",
+    repos: [],
+    kind: "observed",
+    confidence: "measured",
+    source: { who: "alan", when: "2026-09-06T09:00:00Z", run: null, q: null },
+    supersedes: null,
+    superseded_by: null,
+    retired: null,
+    ...overrides,
+  };
 }
 
 describe("tldrx facts add", () => {
@@ -161,5 +206,139 @@ describe("tldrx facts add", () => {
     expect(factsCommand.name).toBe("facts");
     expect(factsCommand.subcommands).toContain("add");
     expect(factsCommand.implemented).toBe(true);
+  });
+});
+
+/**
+ * The run-provenance block (`facts.ts`'s `RunStore.resolve` branch) — untested
+ * before this fix round, because `makeWorkspace()`/`makeRunWorkspace()` creates no
+ * `tldrx-work/`, so every prior test hit `resolved.kind === "none"` and never
+ * exercised `--run`, the ambiguous-run refusal, or the `fact.added` event (which
+ * `tryAppend` writes best-effort — a silent failure there would have gone
+ * unnoticed). `makeRunnableWorkspace`/`openRun` (above) mint a real run via
+ * `createRun`, the same helper `test/money-safety.test.ts` uses.
+ */
+describe("tldrx facts add — run provenance", () => {
+  test("with exactly one open run, the fact is attributed to it and the event lands on it", async () => {
+    const ws = makeRunnableWorkspace();
+    const run = openRun(ws.root, "alpha");
+
+    const printed = capture();
+    const code = await factsCommand.run([
+      "add", "The outbox lives in the billing repo.", "--area", "billing",
+      "--decided-by", "owner", "--root", ws.root,
+    ]);
+    const out = printed();
+
+    expect(code).toBe(0);
+    expect(out).not.toContain("no run recorded");
+    const fact1 = FactsStore.load(factsFileOf(ws)).facts[0];
+    expect(fact1?.source.run).toBe(run.runId);
+
+    const events = EventLog.forRun(run.runDir).read().filter((e) => e.type === "fact.added");
+    expect(events).toHaveLength(1);
+    expect(events[0]?.run).toBe(run.runId);
+    expect(events[0]?.actor).toBe(fact1?.source.who);
+    expect(events[0]?.payload).toEqual({
+      fact: fact1?.id, area: "billing", kind: fact1?.kind, q: null,
+    });
+  });
+
+  test("`--run` selects the named run among two open ones, and only that run's log gains the event", async () => {
+    const ws = makeRunnableWorkspace();
+    const alpha = openRun(ws.root, "alpha");
+    const beta = openRun(ws.root, "beta");
+
+    const code = await factsCommand.run([
+      "add", "Retries are capped at three.", "--area", "billing",
+      "--decided-by", "driver", "--run", alpha.runId, "--root", ws.root,
+    ]);
+
+    expect(code).toBe(0);
+    const fact1 = FactsStore.load(factsFileOf(ws)).facts[0];
+    expect(fact1?.source.run).toBe(alpha.runId);
+
+    const alphaEvents = EventLog.forRun(alpha.runDir).read().filter((e) => e.type === "fact.added");
+    const betaEvents = EventLog.forRun(beta.runDir).read().filter((e) => e.type === "fact.added");
+    expect(alphaEvents).toHaveLength(1);
+    expect(betaEvents).toHaveLength(0);
+  });
+
+  test("two open runs with no `--run` refuse to guess, name the flag, and still record the fact", async () => {
+    const ws = makeRunnableWorkspace();
+    const alpha = openRun(ws.root, "alpha");
+    const beta = openRun(ws.root, "beta");
+
+    const printed = capture();
+    const code = await factsCommand.run([
+      "add", "Something true.", "--area", "billing", "--decided-by", "owner", "--root", ws.root,
+    ]);
+    const out = printed();
+
+    expect(code).toBe(0);
+    expect(out).toContain("several runs are open and this will not guess between them");
+    expect(out).toContain("--run <id>");
+    const fact1 = FactsStore.load(factsFileOf(ws)).facts[0];
+    expect(fact1?.source.run).toBeNull();
+
+    const alphaEvents = EventLog.forRun(alpha.runDir).read().filter((e) => e.type === "fact.added");
+    const betaEvents = EventLog.forRun(beta.runDir).read().filter((e) => e.type === "fact.added");
+    expect(alphaEvents).toHaveLength(0);
+    expect(betaEvents).toHaveLength(0);
+  });
+});
+
+/**
+ * `renderFacts` (`src/core/facilitator/prompt.ts`) — the ONE place a prompt sees
+ * `decided_by`. Before this fix round it was written by `facts add` but never
+ * rendered, so a `--decided-by driver` fact reached every prompt indistinguishable
+ * from an owner ruling — exactly the mistake the required flag exists to prevent.
+ * No test pinned `renderFacts` at all before this (measured: `grep -rl renderFacts
+ * test/` found no matches), so both the byte-identical absent case and the
+ * present case are pinned here, from scratch.
+ */
+describe("renderFacts — {{facts}} carries decided_by attribution", () => {
+  test("a fact with no decided_by renders byte-identically to before the field existed", () => {
+    const f = fact({
+      id: "F001", fact: "The outbox lives in the billing repo.", confidence: "measured",
+    });
+    expect(renderFacts([f], [])).toBe("- [F001] The outbox lives in the billing repo. (billing · measured)");
+  });
+
+  test("decided_by is appended only when present, and both values are pinned", () => {
+    const driver = fact({
+      id: "F001", fact: "Retries are capped at three.", confidence: "stated",
+      source: { who: "alan", when: "2026-09-06T09:00:00Z", run: null, q: null, decided_by: "driver" },
+    });
+    const owner = fact({
+      id: "F002", fact: "We ship weekly.", confidence: "stated",
+      source: { who: "alan", when: "2026-09-06T09:00:00Z", run: null, q: null, decided_by: "owner" },
+    });
+    expect(renderFacts([driver], []))
+      .toBe("- [F001] Retries are capped at three. (billing · stated) · decided by driver");
+    expect(renderFacts([owner], []))
+      .toBe("- [F002] We ship weekly. (billing · stated) · decided by owner");
+  });
+});
+
+/** `validateFactsFile` — the closed-set check on `source.decided_by` (task 5, fix round finding 4). */
+describe("validateFactsFile — decided_by is a closed set", () => {
+  test("a value outside owner/driver is rejected with a named issue", () => {
+    const doc = {
+      version: 1,
+      facts: [{
+        id: "F001", fact: "x", area: "billing", repos: [], kind: "observed", confidence: "measured",
+        source: {
+          who: "alan", when: "2026-09-06T09:00:00Z", run: null, q: null, decided_by: "bogus",
+        },
+        supersedes: null, superseded_by: null, retired: null,
+      }],
+    };
+    const outcome = validateFactsFile(doc);
+    expect(outcome.ok).toBe(false);
+    expect(outcome.issues).toContainEqual({
+      path: "facts[0].source.decided_by",
+      message: "expected owner, driver or absent",
+    });
   });
 });

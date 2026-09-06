@@ -1,13 +1,14 @@
 /**
  * `tldrx facts add` — record one durable, provenanced fact (spec §2.5).
  *
- * The command the drive mandate has been naming since 0.8.0 (`mandate.ts`: "a fact
- * that must outlive the turn is `tldrx facts add`, which every later prompt DOES
- * read"). Without it, a driver's only way to write one was to edit
- * `.tldrx/memory/facts.yml` by hand — which walks past `FactsStore.append`'s cap,
- * past its `…` marker and its `truncated: true` flag, and past `save()`'s
- * validation. A fact cut mid-word with no marker is a record that does not know it
- * is incomplete.
+ * The command the drive mandate has been naming since 0.8.0 (`mandate.ts`'s `--tldr`
+ * reporting section, now a runnable example rather than a bare name — a fix-round
+ * finding, since `--area`/`--decided-by` are both required and a driver following a
+ * bare `tldrx facts add` would hit exit 1 twice). Without it, a driver's only way to
+ * write a fact was to edit `.tldrx/memory/facts.yml` by hand — which walks past
+ * `FactsStore.append`'s cap, past its `…` marker and its `truncated: true` flag, and
+ * past `save()`'s validation. A fact cut mid-word with no marker is a record that
+ * does not know it is incomplete.
  *
  * `--decided-by` is REQUIRED, not optional: 0.8.0's rule is that a driver's default
  * is never cited as the owner's decision, so this command never lets the caller
