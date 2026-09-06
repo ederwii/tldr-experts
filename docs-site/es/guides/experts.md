@@ -102,10 +102,11 @@ dice nada, y cada uno nombra la señal que lo anula. Las convenciones de tu repo
 que discutiera con ellas sería peor que ningún pack. El revisor de Build no ve ningún cuerpo de
 experto, así que esos Checks le llegan bajo un encabezado que dice justamente eso.
 
-El cuerpo es tuyo desde el momento en que lo tocas. `enable` lo reemplaza solo mientras siga
-siendo el esbozo que sembró `init`; un cuerpo editado se conserva, y el comando te dice cuál
-dejó en paz. Los overlays son de la herramienta: se reescriben en cada `enable` y en cada
-`init`, y `disable` los quita. A `knowledge/` no lo toca nada de esto.
+El cuerpo es tuyo desde el momento en que lo tocas. `enable` solo reemplaza el esbozo que sembró
+`init`, o un cuerpo de pack suyo que se quedó una entrega atrás; un cuerpo que editaste se
+conserva, y el comando te dice cuál dejó en paz. Los overlays son de la herramienta: se reescriben
+en cada `enable`, y en cada `init` que corra con el interruptor prendido, y `disable` los quita.
+A `knowledge/` no lo toca nada de esto.
 
 Los skills de tu propio proyecto (`.claude/skills/*/SKILL.md`) también se le nombran al
 desarrollador, con interruptor o sin él, cada uno con la ruta a su `SKILL.md`: el harness corre

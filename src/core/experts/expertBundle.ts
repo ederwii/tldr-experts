@@ -230,9 +230,19 @@ export function describeBundles(set: ExpertBundleSet): readonly string[] {
       ? ""
       : `, ${plural(expert.notInlined.length, "overlay")} not inlined: ${expert.notInlined.join(", ")}`;
     const packTruncatedNote = expert.packBodyTruncated ? ", pack body truncated" : "";
+    // The `expert.md` label names `expert.md`, so it gets `expertMdBytes` and never
+    // `bodyBytes` — which became the COMPOSED total the moment a stack body started
+    // carrying its overlays, leaving the label naming one file and the number naming
+    // several. The composed extra is its own term, off the field the bundle already
+    // computed; nothing here re-derives a byte count. Same condition as the id list, so
+    // the size and the ids appear together or not at all — and with the switch off
+    // `expertMdBytes === bodyBytes`, so the line is byte-identical to what it always was.
+    const overlayNote = expert.overlays.length === 0
+      ? ""
+      : ` + overlays ${bytes(expert.overlayBytes)} (overlays: ${expert.overlays.join(", ")})`;
     lines.push(
       `expert ${expert.name} (${expert.reason}${expert.match === undefined ? "" : `: ${expert.match}`})`
-      + ` — expert.md ${bytes(expert.bodyBytes)}${expert.overlays.length === 0 ? "" : ` (overlays: ${expert.overlays.join(", ")})`}, ${files}${expert.truncated ? ", truncated" : ""}${notInlinedNote}${packTruncatedNote}`,
+      + ` — expert.md ${bytes(expert.expertMdBytes)}${overlayNote}, ${files}${expert.truncated ? ", truncated" : ""}${notInlinedNote}${packTruncatedNote}`,
     );
   }
   for (const name of set.missing) {

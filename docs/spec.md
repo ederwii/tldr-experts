@@ -2167,14 +2167,20 @@ decline to cite it. Measured 2026-08-29 before this existed: a prepared What pro
 level-3 expert was 1,493 bytes and contained zero of that expert's 646 bytes of findings, zero stars, and not one
 occurrence of the word "knowledge".
 
-**Visibility.** `--prepare` and `--dry-run` print one line per loaded expert — name, reason, `expert.md` bytes,
-knowledge bytes, and `truncated` when the budget bit — and `pending.json` carries the same as an `experts:` array.
-A stack expert whose overlays were inlined adds `overlays:` (the ids) and `overlay_bytes` (what the body carried
-beyond `expert.md` itself) to its row, and its operator line names the ids, any the cap left out, and a body the cap
-itself had to cut. Both keys are **additive and absent — not `[]` and `0`** — when nothing was inlined, so a bundle
-the switch never touched is byte-identical to one written before packs existed. `expert_md_bytes` keeps the meaning
-it has always had: `expert.md`'s own bytes, never the composed total — a `version: 1` field's meaning never changes,
-so the composed extra had to arrive as its own key rather than quietly widen that one.
+**Visibility.** `--prepare` and `--dry-run` print one line per loaded expert — name, reason, `expert.md`'s OWN
+bytes, then ` + overlays <bytes> (overlays: <ids>)` when any were inlined, knowledge bytes, and `truncated` when the
+budget bit — and `pending.json` carries the same as an `experts:` array. The `expert.md` label names `expert.md`: the
+number beside it is that file's bytes even for a stack expert whose body carries overlays, and the composed extra is
+the second term rather than a wider first one. With no overlays inlined there is no second term and the line is
+what it always was.
+
+That split is the same one `pending.json` records: a stack expert whose overlays were inlined adds `overlays:` (the
+ids) and `overlay_bytes` (what the body carried beyond `expert.md` itself) to its row, and its operator line also
+names any overlay the cap left out whole and a body the cap itself had to cut. Both keys are **additive and absent —
+not `[]` and `0`** — when nothing was inlined, so a bundle the switch never touched is byte-identical to one written
+before packs existed. `expert_md_bytes` keeps the meaning it has always had: `expert.md`'s own bytes, never the
+composed total — a `version: 1` field's meaning never changes, so the composed extra had to arrive as its own key
+rather than quietly widen that one.
 
 An expert loaded with **zero** evidence in every area produces one **stderr** line, `note: expert <name> has no
 evidence — \`tldrx expert train <name> --area <area>\` before this stage would help`. It never blocks and never changes

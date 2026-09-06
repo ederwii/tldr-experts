@@ -115,6 +115,22 @@ describe("loadExpertBundles with the switch on", () => {
     expect(describeBundles(set).join("\n")).toContain("overlays: prisma, react");
   });
 
+  // Review round 1 (Important): the line labelled its number `expert.md` while printing
+  // `bodyBytes` — the COMPOSED total once this task made a stack body carry its overlays.
+  // Both numbers here are computed off disk and off the composed body, never off the
+  // `expertMdBytes`/`overlayBytes` fields the line renders from, so a line that goes back
+  // to printing one total under the `expert.md` label fails on the first number.
+  test("the operator line splits expert.md's own bytes from the overlays it carries", () => {
+    const root = packRoot({ enabled: true, overlays: ["react", "prisma"] });
+    const set = bundlesOf(root);
+    const own = Buffer.byteLength(readFileSync(expertMdPathOf(root), "utf8"), "utf8");
+    const composed = Buffer.byteLength(set.experts[0]?.body ?? "", "utf8");
+    expect(composed).toBeGreaterThan(own);
+    expect(describeBundles(set).join("\n")).toContain(
+      `expert.md ${String(own)} B + overlays ${String(composed - own)} B`,
+    );
+  });
+
   test("the stage prompt and the developer prompt both contain the overlay — no renderer changed", () => {
     const root = packRoot({ enabled: true, overlays: ["react"] });
     const experts = bundlesOf(root).experts;
@@ -135,7 +151,12 @@ describe("loadExpertBundles with the switch off or absent", () => {
     const set = bundlesOf(root);
     expect(set.experts[0]?.body).toBe(readFileSync(expertMdPathOf(root), "utf8"));
     expect(set.experts[0]?.overlays).toEqual([]);
-    expect(describeBundles(set).join("\n")).not.toContain("overlays:");
+    const line = describeBundles(set).join("\n");
+    expect(line).not.toContain("overlays:");
+    // The line is what it was before packs existed: expert.md's own bytes, no overlay term.
+    const own = Buffer.byteLength(readFileSync(expertMdPathOf(root), "utf8"), "utf8");
+    expect(line).toContain(`expert.md ${String(own)} B,`);
+    expect(line).not.toContain("+ overlays");
   });
 
   test("no stack_packs block at all: body is byte-identical to expert.md on disk", () => {
@@ -143,7 +164,12 @@ describe("loadExpertBundles with the switch off or absent", () => {
     const set = bundlesOf(root);
     expect(set.experts[0]?.body).toBe(readFileSync(expertMdPathOf(root), "utf8"));
     expect(set.experts[0]?.overlays).toEqual([]);
-    expect(describeBundles(set).join("\n")).not.toContain("overlays:");
+    const line = describeBundles(set).join("\n");
+    expect(line).not.toContain("overlays:");
+    // The line is what it was before packs existed: expert.md's own bytes, no overlay term.
+    const own = Buffer.byteLength(readFileSync(expertMdPathOf(root), "utf8"), "utf8");
+    expect(line).toContain(`expert.md ${String(own)} B,`);
+    expect(line).not.toContain("+ overlays");
   });
 });
 

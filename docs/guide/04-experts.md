@@ -150,7 +150,8 @@ carried forward, so a re-init never quietly turns your packs off.
 ### The body is yours
 
 `enable` replaces `expert.md`'s body only when there is nothing of yours in it: the untouched
-stub `init` seeded, or an empty body. An edited body is kept, and the command says which —
+stub `init` seeded, an empty body, or a pack body it wrote itself that is now one shipment behind
+(the upgrade path, below). An edited body is kept, and the command says which —
 `kept: typescript-stack body was edited — pack body not applied (delete the body to re-seed)`.
 
 A materialised body records two additive front-matter keys: `pack: <lang>@<hash>` names the

@@ -97,10 +97,11 @@ and each one names the signal that overrides it. Your repo's own conventions win
 argued with them would be worse than no pack. The Build reviewer sees no expert bodies at all,
 so it is handed those Checks under a heading that says exactly that.
 
-The body is yours the moment you touch it. `enable` replaces it only while it is still the stub
-`init` seeded; an edited body is kept, and the command tells you which one it left alone. The
-overlays are the framework's: rewritten on every `enable` and every `init`, removed by
-`disable`. `knowledge/` is never touched by any of it.
+The body is yours the moment you touch it. `enable` only ever replaces the stub `init` seeded, or
+a pack body of its own that is a shipment behind; a body you edited is kept, and the command tells
+you which one it left alone. The overlays are the framework's: rewritten on every `enable`, and on
+every `init` that runs with the switch on, removed by `disable`. `knowledge/` is never touched by
+any of it.
 
 Your project's own skills (`.claude/skills/*/SKILL.md`) are named to the developer too, switch
 or no switch, each with the path to its `SKILL.md`: the harness runs a skill, and tldrx only
