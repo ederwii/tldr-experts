@@ -27,6 +27,9 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { section, splitFrontMatter } from "./expertDocument.ts";
 import { byteLength, truncateAtHeading } from "./expertKnowledge.ts";
+import { stackExpertNames } from "./stackExperts.ts";
+import { expertDir, EXPERT_FILE } from "./loadExperts.ts";
+import { readStackPacks } from "./stackPacks.ts";
 
 export const DEFAULTS_HEADING = "Defaults (when the repo is silent)";
 export const CHECKS_HEADING = "Checks (always asked in review)";
@@ -144,4 +147,27 @@ export function readOverlayFiles(expertDirAbs: string): readonly OverlayFile[] {
     .filter((entry) => entry.endsWith(".md"))
     .sort()
     .map((entry) => ({ id: entry.replace(/\.md$/, ""), text: readFileSync(join(dir, entry), "utf8") }));
+}
+
+/**
+ * The `## Checks` of every active pack for `repos` — body first, then each overlay —
+ * or null when the switch is off or nothing has checks. This ONE helper feeds the
+ * reviewer prompt and `tldrx expert packs status`; it never returns Defaults.
+ */
+export function stackChecks(root: string, repos: readonly string[]): string | null {
+  if (!readStackPacks(root).enabled) return null;
+  const chunks: string[] = [];
+  for (const name of stackExpertNames(root, repos)) {
+    const path = join(expertDir(root, name), EXPERT_FILE);
+    if (!existsSync(path)) continue;
+    const text = readFileSync(path, "utf8");
+    if (splitFrontMatter(text).frontMatter.get("kind") !== "stack") continue;
+    const own = checksOf(text);
+    if (own !== "") chunks.push(`### ${name}\n\n${own}`);
+    for (const overlay of readOverlayFiles(expertDir(root, name))) {
+      const checks = checksOf(overlay.text);
+      if (checks !== "") chunks.push(`### ${name} · overlay ${overlay.id}\n\n${checks}`);
+    }
+  }
+  return chunks.length === 0 ? null : chunks.join("\n\n");
 }

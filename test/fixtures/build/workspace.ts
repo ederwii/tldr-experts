@@ -89,6 +89,21 @@ export interface BuildWorkspaceOptions {
    * dirty exactly the paths it means to.
    */
   readonly rootIsRepo?: boolean;
+  /**
+   * `stack_experts: true` in the STAGE yaml — the per-stage switch
+   * `selectExperts` gates `<lang>-stack` inclusion on. Distinct from
+   * `stackPacks` below (the WORKSPACE-level `stack_packs.enabled`, stack packs
+   * design §4.3): a developer's `loadExpertBundles` never selects a stack
+   * expert at all without this one, packs switch or not. Default false, matching
+   * the fixture's behaviour before stack packs existed.
+   */
+  readonly stackExperts?: boolean;
+  /** `stack_packs: {enabled: true}` in workspace.yml — the packs switch (stack packs design §4.3). */
+  readonly stackPacks?: boolean;
+  /** `repos[].overlays` as detection would have written them. */
+  readonly overlays?: readonly { readonly id: string; readonly evidence: string }[];
+  /** `repos[].skills` as detection would have written them. */
+  readonly skills?: readonly { readonly name: string; readonly description: string; readonly path: string; readonly tracked: boolean }[];
 }
 
 export interface BuildWorkspace {
@@ -122,13 +137,15 @@ export function makeBuildWorkspace(options: BuildWorkspaceOptions): BuildWorkspa
   if (!rootIsRepo) gitInit(repoDir);
 
   // --- the workspace --------------------------------------------------------
-  write(root, ".tldrx/workspace.yml", workspaceYaml(repoName, options.commands, rootIsRepo));
+  write(root, ".tldrx/workspace.yml", workspaceYaml(repoName, options.commands, rootIsRepo, {
+    stackPacks: options.stackPacks ?? false, overlays: options.overlays ?? [], skills: options.skills ?? [],
+  }));
   write(root, ".tldrx/memory/facts.yml", "version: 1\nfacts: []\n");
   write(root, ".tldrx/conventions/shared.md", "# Shared conventions\n\n- Done means proven.\n");
   write(root, ".tldrx/experts/developer/expert.md", "# Developer\n\nSmall diffs, tests first.\n");
   const scope = options.scope ?? "build-only";
   write(root, `.tldrx/workflows/${scope}.yml`, workflowYaml(scope, options.skips ?? []));
-  write(root, ".tldrx/stages/build/stage.yml", stageYaml(options.budgetUsd ?? 8));
+  write(root, ".tldrx/stages/build/stage.yml", stageYaml(options.budgetUsd ?? 8, options.stackExperts ?? false));
   write(root, ".tldrx/stages/build/stage.md", "# Build\n\n## Role\nThe wave executor runs this stage.\n");
   for (const [rel, content] of Object.entries(options.files ?? {})) write(root, rel, content);
 
@@ -261,13 +278,13 @@ stages:
 `;
 }
 
-function stageYaml(budgetUsd: number): string {
+function stageYaml(budgetUsd: number, stackExperts = false): string {
   return `version: 1
 id: build
 title: "Build"
 phase: 04-build
 experts: [developer]
-stack_experts: false
+stack_experts: ${String(stackExperts)}
 model: sonnet
 budget_usd: ${String(budgetUsd)}
 timeout_s: 120
@@ -284,11 +301,19 @@ function workspaceYaml(
   repo: string,
   commands?: Readonly<Record<string, string | null>>,
   rootIsRepo = false,
+  packs: {
+    readonly stackPacks: boolean;
+    readonly overlays: readonly { readonly id: string; readonly evidence: string }[];
+    readonly skills: readonly { readonly name: string; readonly description: string; readonly path: string; readonly tracked: boolean }[];
+  } = { stackPacks: false, overlays: [], skills: [] },
 ): string {
   const declared = commands ?? { build: null, test: "npm run test", lint: null, typecheck: null, run: null };
   const rendered = Object.entries(declared)
     .map(([key, value]) => `${key}: ${value === null ? "null" : JSON.stringify(value)}`)
     .join(", ");
+  const overlays = packs.overlays.map((o) => `      - {id: ${o.id}, evidence: ${JSON.stringify(o.evidence)}}`);
+  const skills = packs.skills.map((s) =>
+    `      - {name: ${s.name}, description: ${JSON.stringify(s.description)}, path: ${s.path}, tracked: ${String(s.tracked)}}`);
   return `version: 1
 mode: single-repo
 root_is_repo: ${String(rootIsRepo)}
@@ -302,8 +327,10 @@ repos:
     package_manager: npm
     commands: {${rendered}}
     ci: []
+${overlays.length === 0 ? "    overlays: []" : `    overlays:\n${overlays.join("\n")}`}
+${skills.length === 0 ? "    skills: []" : `    skills:\n${skills.join("\n")}`}
     confidence: high
-`;
+${packs.stackPacks ? "stack_packs:\n  enabled: true\n  enabled_at: 2026-09-05T10:00:00Z\n" : ""}`;
 }
 
 export function storyMarkdown(story: StorySpec, repo: string): string {

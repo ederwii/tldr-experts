@@ -2440,3 +2440,51 @@ describe("the handoff's Cost line marks an unmetered phase as a lower bound (#13
     }
   });
 });
+
+describe("stack packs reach the Build reviewer (stack packs design §4.5)", () => {
+  const STACK_EXPERT: Readonly<Record<string, string>> = {
+    ".tldrx/experts/typescript-stack/expert.md": [
+      "---", "name: typescript-stack", "kind: stack", "status: created", "repos: [app]", "---", "",
+      "# TypeScript", "", "Scope.", "", "## Defaults (when the repo is silent)", "", "- d — overridden by: x", "",
+      "## Checks (always asked in review)", "", "- Any new `any`? verify: grep `: any`", "",
+    ].join("\n"),
+    ".tldrx/experts/typescript-stack/competencies.yml": "version: 1\nexpert: typescript-stack\nstatus: created\nareas: []\n",
+    ".tldrx/experts/typescript-stack/overlays/react.md":
+      "# react\n\nScope.\n\n## Defaults (when the repo is silent)\n\n- d — overridden by: x\n\n## Checks (always asked in review)\n\n- Index keys? verify: grep key=\n",
+  };
+  // `stackExperts: true` puts `stack_experts: true` in the STAGE yaml — the
+  // per-stage switch `selectExperts` gates `<lang>-stack` inclusion on
+  // (`src/core/experts/selectExperts.ts:140`) — which is a DIFFERENT switch
+  // from the workspace-level `stack_packs.enabled` these tests also flip.
+  // Without it the developer's `loadExpertBundles` never selects
+  // `typescript-stack` at all, so it could never carry an overlay regardless
+  // of the packs switch; the reviewer's `stackChecks` does not go through
+  // `selectExperts` and is unaffected either way.
+  const ONE: BuildWorkspaceOptions = {
+    stories: [{ id: "S1", epic: "E1", title: "First story" }],
+    epics: [{ id: "E1", stories: ["S1"], branch: "epic/e1" }],
+    waves: [["S1"]],
+    files: STACK_EXPERT,
+    stackExperts: true,
+  };
+
+  test("switch on: the reviewer prompt carries `## Stack checks` with the overlay's checks; the developer carries the overlay", async () => {
+    const ws = workspace({ ...ONE, stackPacks: true, overlays: [{ id: "react", evidence: "package.json: dependencies.react" }] });
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+    await next(ws);
+    const reviewer = readFileSync(join(promptDir, "reviewer-S1-1.md"), "utf8");
+    expect(reviewer).toContain("## Stack checks (the repo's own conventions win)");
+    expect(reviewer).toContain("- Index keys? verify: grep key=");
+    expect(readFileSync(join(promptDir, "developer-S1-1.md"), "utf8")).toContain("<!-- overlay: react -->");
+  });
+
+  test("switch off: neither prompt mentions the overlay or the checks section", async () => {
+    const ws = workspace({ ...ONE, overlays: [{ id: "react", evidence: "package.json: dependencies.react" }] });
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+    await next(ws);
+    expect(readFileSync(join(promptDir, "reviewer-S1-1.md"), "utf8")).not.toContain("## Stack checks");
+    expect(readFileSync(join(promptDir, "developer-S1-1.md"), "utf8")).not.toContain("<!-- overlay: react -->");
+  });
+});

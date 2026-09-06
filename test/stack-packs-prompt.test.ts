@@ -9,10 +9,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describeBundles, loadExpertBundles } from "../src/core/experts/expertBundle.ts";
 import {
-  CHECKS_HEADING, DEFAULTS_HEADING, overlayMarker, OVERLAYS_DIRNAME, PACK_MAX_BYTES,
+  CHECKS_HEADING, DEFAULTS_HEADING, overlayMarker, OVERLAYS_DIRNAME, PACK_MAX_BYTES, stackChecks,
 } from "../src/core/experts/packSections.ts";
 import { renderParts, buildPrompt } from "../src/core/facilitator/prompt.ts";
-import { buildDeveloperPrompt } from "../src/core/build/prompts.ts";
+import { buildDeveloperPrompt, buildReviewerPrompt, STACK_CHECKS_HEADING } from "../src/core/build/prompts.ts";
 import type { PlannedEpic, PlannedStory } from "../src/core/build/plan.ts";
 
 let roots: string[] = [];
@@ -177,5 +177,34 @@ describe("loadExpertBundles when the 24 KiB cap drops an overlay", () => {
 
     const line = describeBundles(set).join("\n");
     expect(line).toContain("pack body truncated");
+  });
+});
+
+function reviewPrompt(checks: string | null | undefined): string {
+  return buildReviewerPrompt({
+    runId: "260905-x", story: STORY, repoName: "lab", branch: "story/x/S5", epicBranch: "epic/tenancy",
+    worktree: "/nowhere", conventions: "_none_", dodResults: [], stackChecks: checks,
+  });
+}
+
+describe("the reviewer's stack checks", () => {
+  test("stackChecks collects the Checks of the body and of each overlay — enabled only, Defaults never", () => {
+    const on = packRoot({ enabled: true, overlays: ["react"] });
+    const text = stackChecks(on, ["lab"]) ?? "";
+    expect(text).toContain("### typescript-stack\n\n- Any new `any`? verify: grep `: any`");
+    expect(text).toContain("### typescript-stack · overlay react\n\n- react check? verify: y");
+    expect(text).not.toContain(DEFAULTS_HEADING);
+    expect(stackChecks(packRoot({ enabled: false, overlays: ["react"] }), ["lab"])).toBeNull();
+    expect(stackChecks(packRoot({ enabled: true }), ["other-repo"])).toBeNull();
+  });
+
+  test("the reviewer prompt carries the section only when given checks, between Conventions and The story", () => {
+    expect(reviewPrompt(null)).toBe(reviewPrompt(undefined));
+    expect(reviewPrompt(null)).not.toContain(STACK_CHECKS_HEADING);
+    const text = reviewPrompt("### typescript-stack\n\n- Any new `any`? verify: grep");
+    expect(text.split(`## ${STACK_CHECKS_HEADING}`).length - 1).toBe(1);
+    expect(text.indexOf("## Conventions")).toBeLessThan(text.indexOf(`## ${STACK_CHECKS_HEADING}`));
+    expect(text.indexOf(`## ${STACK_CHECKS_HEADING}`)).toBeLessThan(text.indexOf("## The story"));
+    expect(text).toContain("the project's own convention");
   });
 });

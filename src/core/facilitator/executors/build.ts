@@ -47,6 +47,7 @@ import { stageAt } from "../../run/RunFile.ts";
 import { spendBasisOf, type SpendTurn } from "../../budget/spendBasis.ts";
 import { renderConventions, renderFacts, stackExpertNames } from "../prompt.ts";
 import { loadExpertBundles } from "../../experts/expertBundle.ts";
+import { stackChecks } from "../../experts/packSections.ts";
 import { agentDir } from "../paths.ts";
 import {
   describeDispatchNotes, loadDispatchNotes, type DispatchNotes,
@@ -2321,6 +2322,10 @@ class BuildSession {
       // both doors, which is what keeps the bundle's prompt byte-identical to the
       // one a spawn would have sent.
       fixlistAvailable: this.fixlistRoundsSpent(story.planned.story.id) < MAX_FIXLIST_ROUNDS,
+      // The active packs' checks for this story's repo (stack packs design §4.5): the
+      // same helper `expert packs status` prints, so the reviewer and the operator read
+      // one list. Null when the switch is off, which renders nothing.
+      stackChecks: stackChecks(this.ctx.root, [story.planned.story.repo]),
     });
   }
 

@@ -48,7 +48,7 @@ export { readStackPacks, NO_STACK_PACKS } from "./stackPacks.ts";
 export type { StackPacksState, RepoPacks } from "./stackPacks.ts";
 export {
   DEFAULTS_HEADING, CHECKS_HEADING, OVERRIDDEN_BY, VERIFY_HINT, OVERLAYS_DIRNAME, PACK_MAX_BYTES,
-  composePackBody, checksOf, overlayMarker, readOverlayFiles,
+  composePackBody, checksOf, overlayMarker, readOverlayFiles, stackChecks,
 } from "./packSections.ts";
 export type { OverlayFile, ComposedPack } from "./packSections.ts";
 export {
