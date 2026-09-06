@@ -31,6 +31,7 @@ import { buildProcessDocument, PROCESS_HEADER } from "./processDocument.ts";
 import { gitUserName } from "./gitUserName.ts";
 import { QUESTIONS_FILE, planQuestions, renderQuestions, type Question } from "./questions.ts";
 import { seedExperts } from "./seedExperts.ts";
+import { applyStackPacks } from "./stackPacks.ts";
 import { readStackPacks } from "../experts/stackPacks.ts";
 import { buildWorkspaceDocument, renderWorkspaceFile } from "./workspaceDocument.ts";
 import { formatIssues, validateProcessDocument, validateWorkspaceDocument } from "./validateEmitted.ts";
@@ -152,6 +153,15 @@ export async function runInit(options: InitOptions, deps: InitDependencies): Pro
   for (const plan of experts) seeding.tick(plan.name);
   await seedExperts({ outDir: out, plans: experts, createdAt: timestamp, log });
   seeding.done(`${plural(experts.length, "expert")} at level 0`);
+
+  // The switch was carried into the file just written; with it on, the overlays are
+  // framework-managed and must be regenerated like every other detection output, and a
+  // language that appeared since the last init gets its pack body on its fresh stub.
+  if (readStackPacks(out).enabled) {
+    const packing = steps.begin("applying stack packs");
+    const report = await applyStackPacks({ workspaceDir: out, workspace, log });
+    packing.done(`${plural(report.applied, "pack body")} applied, ${plural(report.overlays, "overlay")} written`);
+  }
 
   const conventions = steps.begin("reading conventions");
   await writeConventions(workspace, out, log, (repo) => { conventions.tick(repo); });

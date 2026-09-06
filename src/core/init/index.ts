@@ -11,6 +11,11 @@ export { competencyLevel, type CompetencyEvidence, type EvidenceKind } from "./c
 export { planExperts, MAX_DOMAIN_EXPERTS, PRODUCT_EXPERT, type ExpertPlan, type ExpertKind, type ExpertPlanOptions } from "./planExperts.ts";
 export { STACK_CHOICES, normaliseStack, parseStackFlag } from "./stackChoices.ts";
 export { seedExperts, EXPERTS_DIR } from "./seedExperts.ts";
+export {
+  applyStackPacks, bodyState, describeRepos, disableStackPacks, enableStackPacks, packBodyText,
+  patchWorkspaceDocument, stackPacksStatus, stubBodyFor,
+  type ApplyReport, type BodyState, type PacksOutcome,
+} from "./stackPacks.ts";
 export { planQuestions, renderQuestions, suggestTicketTool, QUESTIONS_FILE, MAX_QUESTIONS, type Question } from "./questions.ts";
 export { renderInitHandoff } from "./handoff.ts";
 export { renderSharedConventions, renderRepoConventions, CONVENTIONS_DIR } from "./conventions.ts";
