@@ -21,10 +21,14 @@ import {
   declaresQuestions, evaluateAutoGate, MISSING_QUESTIONS, NO_PARSEABLE_QUESTIONS,
 } from "../src/core/run/autoGate.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
+import { validateRunFile } from "../src/core/run/RunFile.ts";
+import { emitRunYaml } from "../src/core/run/emitRunYaml.ts";
+import { parseYaml } from "../src/core/yaml.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { loadWorkflowPreset } from "../src/core/run/workflowPreset.ts";
 import { runNext } from "../src/core/facilitator/runNext.ts";
 import { questionsCommand } from "../src/cli/commands/questions.ts";
+import { rejectCommand } from "../src/cli/commands/reject.ts";
 import { TEMPLATES_DIR } from "../src/core/paths.ts";
 import {
   cannedHandoff, cannedIntent, makeFacilitatorWorkspace, type FacilitatorWorkspace, type StageOptions,
@@ -407,6 +411,10 @@ describe("M2 · --commit refuses an unreadable questions.md (exit 5)", () => {
       .flatMap((p) => p.stages).find((s) => s.id === "alpha");
     expect(stage?.tasks).toHaveLength(1);
     expect(stage?.cost_usd).toBe(0.4);
+    // The row the refusal banked is the ONLY thing a re-run's fingerprint may
+    // ever match against — it must carry the marker for the match above to be
+    // legitimate, not incidental.
+    expect(stage?.tasks[0]?.banked_before_refusal).toBe(true);
     expect(again.lines.join("\n")).toContain("already recorded as t1");
   });
 
@@ -417,6 +425,11 @@ describe("M2 · --commit refuses an unreadable questions.md (exit 5)", () => {
    * turns are banked, and the second row's note names why it was not deduped:
    * a null session id cannot tell "the same artefact, re-read" apart from "a
    * second, genuinely distinct unmetered turn."
+   *
+   * The reason lives in `run.yml` itself (`dedupe`), not only in the console
+   * transcript of the `--commit` that wrote it — §7's absent-with-reason rule:
+   * a reader of the file alone, months later, must be able to see why two
+   * identical-looking rows are not a double-count.
    */
   test("a null session id is never used to fingerprint a re-run — both turns are banked", async () => {
     const ws = workspace([ASKER], { alpha: "auto" });
@@ -453,6 +466,144 @@ describe("M2 · --commit refuses an unreadable questions.md (exit 5)", () => {
     expect(stage?.tasks.every((t) => t.cost_usd === 0.4)).toBe(true);
     expect(stage?.tasks.every((t) => t.session_id === null)).toBe(true);
     expect(again.lines.join("\n")).toContain("dedupe: none — no session id");
+
+    // Persisted, not just printed: the first row banked the refusal and
+    // carries the marker; the second carries the reason it was NOT matched
+    // against the first, in `run.yml` itself.
+    expect(stage?.tasks[0]?.banked_before_refusal).toBe(true);
+    expect(stage?.tasks[1]?.dedupe).toBe("none — no session id");
+    const raw = readFileSync(join(ws.runDir, "run.yml"), "utf8");
+    expect(raw).toContain("banked_before_refusal: true");
+    expect(raw).toContain('dedupe: "none — no session id"');
+  });
+});
+
+describe("M2 · the fingerprint only matches a row a refusal itself banked", () => {
+  /**
+   * The bug review found: `alreadyBanked` scanned EVERY task on the stage, not
+   * only ones a refusal had banked. `--prepare` re-marks a gate-rejected stage
+   * `running` without clearing `tasks` (spec §5) — so an ordinary, already-done
+   * row from attempt 1 is still sitting there when attempt 2 commits. When that
+   * second, genuinely distinct attempt happens to share a session id (the host
+   * resuming the same session across the retry), a declared cost (`null`, the
+   * common unmetered case) and the same output paths, the OLD code matched it
+   * to attempt 1 and dropped it — a real turn's cost silently missing from the
+   * ledger, the exact failure this task exists to prevent, pointing the other
+   * way. Attempt 1 here never refuses anything — no `questions.md` is even
+   * declared — so it never earns `banked_before_refusal`, and is therefore
+   * never a legitimate match for attempt 2.
+   */
+  test("a retry after a gate reject, same session, same cost, same outputs, is a NEW row — not dropped", async () => {
+    const NO_QUESTIONS: StageOptions = {
+      id: "alpha", phase: "01-what", budgetUsd: 6, gate: "approve",
+      outputs: [
+        { path: "01-what/intent.md", sections: ["Intent", "Scope"] },
+        { path: "01-what/handoff.md", sections: ["Findings", "Decisions", "Unknowns", "Evidence ledger"] },
+      ],
+      checks: "[claim-sources]",
+    };
+    const ws = workspace([NO_QUESTIONS]);
+    const resultJson = JSON.stringify({
+      outputs: ["01-what/intent.md"], questions_asked: [], notes: "", cost_usd: null,
+      session_id: "sess-retry",
+    });
+
+    // Attempt 1: an ORDINARY commit. Nothing refuses — questions.md is not even
+    // declared — so this row is never marked `banked_before_refusal`.
+    await runNext({
+      root: ws.root, dryRun: false, mode: "prepare", yolo: false,
+      actor: "alan", at: "2026-08-29T09:00:00Z",
+    });
+    writeFileSync(join(ws.runDir, "01-what", "intent.md"), cannedIntent(), "utf8");
+    writeFileSync(join(ws.runDir, "01-what", "handoff.md"), cannedHandoff(), "utf8");
+    mkdirSync(join(ws.runDir, ".agent", "alpha"), { recursive: true });
+    writeFileSync(join(ws.runDir, ".agent", "alpha", "result.json"), resultJson, "utf8");
+    await runNext({
+      root: ws.root, dryRun: false, mode: "commit", yolo: false,
+      actor: "alan", at: "2026-08-29T09:05:00Z",
+    });
+
+    const afterFirst = RunStore.open(ws.runDir).run.phases
+      .flatMap((p) => p.stages).find((s) => s.id === "alpha");
+    expect(afterFirst?.status).toBe("awaiting_gate");
+    expect(afterFirst?.tasks).toHaveLength(1);
+    expect(afterFirst?.tasks[0]?.banked_before_refusal).toBeUndefined();
+
+    // A gate reject sends it back to `ready` without touching `tasks` — the
+    // money already spent is not refunded (spec §5).
+    const rejected = await rejectCommand.run(["--root", ws.root, "--note", "needs another pass"]);
+    expect(rejected).toBe(0);
+    expect(RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.status).toBe("ready");
+    expect(RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.tasks).toHaveLength(1);
+
+    // Attempt 2, retried: `--prepare` re-marks it `running`, `tasks` untouched.
+    await runNext({
+      root: ws.root, dryRun: false, mode: "prepare", yolo: false,
+      actor: "alan", at: "2026-08-29T09:10:00Z",
+    });
+    expect(RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.status).toBe("running");
+    expect(RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.tasks).toHaveLength(1);
+
+    // Same host session, same declared (null) cost, same output paths as
+    // attempt 1 — the exact shape that used to collapse into attempt 1's row.
+    writeFileSync(join(ws.runDir, ".agent", "alpha", "result.json"), resultJson, "utf8");
+    const second = await runNext({
+      root: ws.root, dryRun: false, mode: "commit", yolo: false,
+      actor: "alan", at: "2026-08-29T09:15:00Z",
+    });
+
+    const afterSecond = RunStore.open(ws.runDir).run.phases
+      .flatMap((p) => p.stages).find((s) => s.id === "alpha");
+    // The turn RAN a second time and must have its OWN row — not be silently
+    // matched to the first and dropped.
+    expect(afterSecond?.tasks).toHaveLength(2);
+    expect(afterSecond?.tasks.map((t) => t.id)).toEqual(["t1", "t2"]);
+    expect(afterSecond?.tasks[1]?.session_id).toBe("sess-retry");
+    expect(afterSecond?.tasks[1]?.cost_usd).toBeNull();
+    expect(second.lines.join("\n")).not.toContain("already recorded as t1");
+  });
+});
+
+describe("M2 · banked_before_refusal / dedupe are additive RunTask fields", () => {
+  test("a run.yml with neither key still validates and round-trips byte-identically", () => {
+    const ws = workspace([ASKER]);
+    const raw = readFileSync(join(ws.runDir, "run.yml"), "utf8");
+    expect(raw).not.toContain("banked_before_refusal");
+    expect(raw).not.toContain("dedupe");
+    expect(validateRunFile(parseYaml(raw)).ok).toBe(true);
+    expect(emitRunYaml(RunStore.open(ws.runDir).run)).toBe(raw);
+  });
+
+  test("both keys round-trip when present: emit, parse, emit again, byte for byte", () => {
+    const ws = workspace([ASKER]);
+    const store = RunStore.open(ws.runDir);
+    store.mutate((run) => ({
+      ...run,
+      phases: run.phases.map((phase, i) => i !== 0 ? phase : {
+        ...phase,
+        stages: phase.stages.map((stage, j) => j !== 0 ? stage : {
+          ...stage,
+          tasks: [{
+            id: "t1", status: "done" as const, expert: null, model: null,
+            cost_usd: null, metered: false,
+            error: null, session_id: null,
+            started_at: "2026-08-29T09:00:00Z", ended_at: "2026-08-29T09:01:00Z",
+            outputs: [],
+            banked_before_refusal: true as const,
+            dedupe: "none — no session id",
+          }],
+        }),
+      }),
+    }));
+    store.save();
+
+    const first = readFileSync(join(store.runDir, "run.yml"), "utf8");
+    expect(first).toContain("banked_before_refusal: true");
+    expect(first).toContain('dedupe: "none — no session id"');
+    expect(validateRunFile(parseYaml(first)).ok).toBe(true);
+
+    const reopened = RunStore.open(store.runDir);
+    expect(emitRunYaml(reopened.run)).toBe(first);
   });
 });
 

@@ -105,6 +105,10 @@ function task(t: RunTask, indent: string): string {
     ...(t.stopped_by === undefined || t.stopped_by === null
       ? []
       : [`${inner}stopped_by: ${yamlScalar(t.stopped_by)},`]),
+    // Both additive, both written only when present — a row from before either
+    // existed, or one that never earned either, round-trips byte-for-byte.
+    ...(t.banked_before_refusal === undefined ? [] : [`${inner}banked_before_refusal: true,`]),
+    ...(t.dedupe === undefined ? [] : [`${inner}dedupe: ${yamlScalar(t.dedupe)},`]),
     `${inner}outputs: ${inlineList(t.outputs)}}`,
   ].join("\n");
 }

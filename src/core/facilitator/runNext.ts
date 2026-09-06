@@ -1230,48 +1230,76 @@ async function commitStage(
   const declared = options.costUsd ?? result.cost_usd;
   const cost = declared === null || declared === undefined ? null : round2(declared);
 
-  // Recorded BEFORE any refusal below. The turn RAN: a refusal that exits first
-  // is the ledger forgetting money it saw, which is the failure this file's own
-  // `cost_usd: null` rule exists to prevent, pointing the other way.
+  // Decided BEFORE the recording block below, not after: whether THIS row is
+  // about to be followed by the refusal is exactly what marks it
+  // `banked_before_refusal` — the one fact that makes a later re-run's
+  // fingerprint safe to match against. Recomputing this after recording would
+  // record the row blind to its own fate.
   //
-  // Which makes the second `--commit` the hazard. The questions refusal leaves
-  // the stage `running`, so the operator fixes `questions.md` and runs the same
-  // command over the same `result.json` — and nothing but this would stop a
-  // second row for one turn. `banked` is the fingerprint of THIS result document
-  // among the rows already on the stage: same session, same declared cost, same
-  // outputs. Matching means it is the same artefact, not a second turn.
+  // A questions.md the §2.7 parser cannot read is not "no questions" — it is a
+  // file nobody, including the gate, can see into. Refused BELOW rather than at
+  // the gate because `--commit` is the last moment the host session that wrote
+  // it is still around to fix it. Measured 2026-08-29: an in-session stage
+  // wrote `### Q1 — …` / `**Answer:**` from the old template, and four
+  // questions vanished between the sub-agent and the run.
+  const unreadable = unreadableHeadings(join(store.runDir, phaseId, "questions.md"));
+  const willRefuseOnQuestions = unreadable.length > 0;
+
+  // Recorded BEFORE the refusal returned below. The turn RAN: a refusal that
+  // exits first is the ledger forgetting money it saw, which is the failure
+  // this file's own `cost_usd: null` rule exists to prevent, pointing the
+  // other way.
   //
-  // Only ever checked when `session_id` is non-null. A null session id
-  // identifies nothing — two genuinely distinct unmetered turns look identical
-  // to a null-session fingerprint — so it is NEVER used to collapse two rows
-  // into one; a null-session result is always recorded as its own row. When
-  // that row's cost and outputs happen to match an earlier one, the note below
-  // says so, rather than silently letting two different turns look deduped or
-  // silently letting one turn look banked twice.
-  const banked = result.session_id === null ? null : alreadyBanked(stage, result, cost);
+  // Which makes the second `--commit` the hazard — but ONLY when this refusal
+  // is what the operator is fixing and re-running over. The questions refusal
+  // leaves the stage `running`, so the operator fixes `questions.md` and runs
+  // the same command over the same `result.json`, and nothing but a fingerprint
+  // would stop a second row for that one turn. `banked` is that fingerprint:
+  // same session, same declared cost, same outputs, against rows this file
+  // itself marked `banked_before_refusal` — and ONLY those. An ordinary
+  // completed task (including one a gate rejected and sent back for a genuine
+  // retry — `--prepare` re-marks the stage `running` without clearing `tasks`,
+  // spec §5) is never a candidate: it never refused anything, so a second,
+  // real attempt that happens to share a cost (`null` is the common case) and
+  // the same output paths must NOT be mistaken for a re-read of it.
+  //
+  // Fresh `requireStage` rather than the `stage` snapshot from the top of this
+  // function: `banked` must see whatever `tasks` holds right now.
+  const currentStage = requireStage(store, phaseId, stageId);
+  const banked = result.session_id === null ? null : alreadyBanked(currentStage, result, cost);
   const taskId = banked === null ? nextTaskId(store, phaseId, stageId) : banked;
   if (banked === null) {
+    // Only ever true for a null session id, and only against a row THIS file
+    // marked `banked_before_refusal` — an ordinary completed task sharing a
+    // cost and outputs is unremarkable (a retry after a gate reject looks
+    // exactly like this) and gets no note. A null session id identifies
+    // nothing, so it is NEVER used to collapse two rows into one; when it also
+    // happens to resemble an earlier BANKED row, the resemblance is named
+    // rather than silently left for an auditor to wonder about.
     const looksLikeARepeat = result.session_id === null
-      && stage.tasks.some((t) => t.cost_usd === cost && sameOutputs(t.outputs, result.outputs));
+      && currentStage.tasks.some((t) =>
+        t.banked_before_refusal === true && t.cost_usd === cost && sameOutputs(t.outputs, result.outputs));
     recordTask(store, phaseId, stageId, {
       id: taskId,
       status: "done",
-      expert: stage.expert ?? spec.planned.experts[0] ?? null,
-      model: options.model ?? stage.model ?? spec.planned.model,
+      expert: currentStage.expert ?? spec.planned.experts[0] ?? null,
+      model: options.model ?? currentStage.model ?? spec.planned.model,
       cost_usd: cost,
       ...(cost === null ? { metered: false } : {}),
       ...(options.tokens === undefined ? {} : { tokens: options.tokens }),
       error: null,
       session_id: result.session_id,
-      started_at: stage.started_at ?? options.at,
+      started_at: currentStage.started_at ?? options.at,
       ended_at: options.at,
       outputs: result.outputs,
+      ...(willRefuseOnQuestions ? { banked_before_refusal: true } : {}),
+      ...(looksLikeARepeat ? { dedupe: "none — no session id" } : {}),
     });
     store.append(event(options, store.runId, stageId, "agent.result", {
       phase: phaseId,
       task: taskId,
       session_id: result.session_id,
-      model: options.model ?? stage.model ?? spec.planned.model,
+      model: options.model ?? currentStage.model ?? spec.planned.model,
       effort: options.effort ?? spec.planned.effort ?? null,
       outputs: result.outputs,
       mode: "in-session",
@@ -1279,7 +1307,7 @@ async function commitStage(
       // that nothing was declared lives in the payload where it can be null.
       metered: cost !== null,
       ...(options.tokens === undefined ? {} : { tokens: options.tokens }),
-    }, cost ?? 0, stage.expert));
+    }, cost ?? 0, currentStage.expert));
     store.save();
     if (looksLikeARepeat) {
       notes.push(
@@ -1303,17 +1331,7 @@ async function commitStage(
     );
   }
 
-  // A questions.md the §2.7 parser cannot read is not "no questions" — it is a
-  // file nobody, including the gate, can see into. Refused HERE rather than at the
-  // gate because `--commit` is the last moment the host session that wrote it is
-  // still around to fix it. Measured 2026-08-29: an in-session stage wrote
-  // `### Q1 — …` / `**Answer:**` from the old template, and four questions
-  // vanished between the sub-agent and the run.
-  //
-  // AFTER the recording block, not before it: this refusal used to return with
-  // the turn's money unrecorded anywhere.
-  const unreadable = unreadableHeadings(join(store.runDir, phaseId, "questions.md"));
-  if (unreadable.length > 0) {
+  if (willRefuseOnQuestions) {
     return out(EXIT_AGENT_FAILED, [
       ...notes,
       `${phaseId}/questions.md has ${unreadable.length} question(s) the parser cannot read `
@@ -1332,11 +1350,21 @@ async function commitStage(
  * none has.
  *
  * Only called when `result.session_id` is non-null (see `commitStage` above) —
- * a null session id is never used to fingerprint a re-run. The fingerprint is
- * every part of the result a second turn would have changed — the session it
- * ran in, the cost it declared, and the outputs it named. All three matching is
- * the same artefact being re-read, not a second turn that happened to cost the
- * same.
+ * a null session id is never used to fingerprint a re-run. And even then, only
+ * rows carrying `banked_before_refusal: true` are candidates: that flag is the
+ * ONLY thing that tells "a row a refusal already recorded, expecting this exact
+ * `result.json` back" apart from "an ordinary completed task that a gate sent
+ * back for a genuine retry" — `--prepare` re-marks a rejected stage `running`
+ * without clearing `tasks` (spec §5), so an ordinary row is always still there
+ * to be mismatched against, and a retry commonly shares both the previous
+ * cost (`null`, the unmetered case, most plausibly) and the same output paths.
+ * Scanning every task, marked or not, was exactly that bug (found in review):
+ * a real second turn silently dropped because it looked like the first.
+ *
+ * The fingerprint itself is every part of the result a second turn would have
+ * changed — the session it ran in, the cost it declared, and the outputs it
+ * named. All three matching a MARKED row is the same artefact being re-read,
+ * not a second turn that happened to cost the same.
  */
 function alreadyBanked(
   stage: RunStage,
@@ -1344,7 +1372,8 @@ function alreadyBanked(
   cost: number | null,
 ): string | null {
   const hit = stage.tasks.find((task) =>
-    task.session_id === result.session_id
+    task.banked_before_refusal === true
+    && task.session_id === result.session_id
     && task.cost_usd === cost
     && sameOutputs(task.outputs, result.outputs));
   return hit?.id ?? null;

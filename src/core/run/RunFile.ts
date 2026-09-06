@@ -191,6 +191,35 @@ export interface RunTask {
   readonly stopped_by?: string | null;
   /** Tokens the host declared with `--tokens`, when it knew them. */
   readonly tokens?: number;
+  /**
+   * True when `--commit` recorded this row AHEAD of refusing on an unreadable
+   * `questions.md` (spec's ledger-before-refusal rule, gh #124) — the ONLY
+   * case where the same `result.json` is expected to come back through
+   * `--commit` a second time, because the refusal leaves the stage `running`
+   * for the operator to fix the file and re-run. ADDITIVE and optional: absent
+   * on every ordinary completed task (including one later sent back by a gate
+   * reject and retried) and on every `run.yml` written before this existed.
+   *
+   * This is what a re-run's fingerprint (`runNext.ts`'s `alreadyBanked`) is
+   * allowed to match against — and ONLY this. A stage that was gate-rejected
+   * and retried leaves its earlier task rows in place with `status: "done"`
+   * and no refusal ever attached to them; without this marker a second,
+   * genuinely distinct attempt that happened to share a cost (most plausibly
+   * `null`, the unmetered case) and the same output paths would silently match
+   * an unrelated earlier row and be dropped — the ledger forgetting a turn,
+   * which is the exact failure this field exists to prevent.
+   */
+  readonly banked_before_refusal?: true;
+  /**
+   * Why this row was recorded as its own, rather than matched against an
+   * earlier `banked_before_refusal` row that its cost and outputs resemble:
+   * `"none — no session id"` when the result carried no `session_id` to
+   * fingerprint on, so it could not be told apart from a second, genuinely
+   * distinct unmetered turn (a null session id is NEVER used to dedupe — see
+   * `alreadyBanked`). ADDITIVE and optional: absent on every row that isn't
+   * ambiguous this way and on every `run.yml` written before this existed.
+   */
+  readonly dedupe?: string;
 }
 
 export interface RunStage {
@@ -630,6 +659,12 @@ export function validateRunFile(input: unknown): ValidationResult {
           }
           if (task.cost_usd === null && task.metered !== false) {
             issues.push({ path: `${tp}.metered`, message: "a null cost_usd must be marked `metered: false`" });
+          }
+          if (task.banked_before_refusal !== undefined && task.banked_before_refusal !== true) {
+            issues.push({ path: `${tp}.banked_before_refusal`, message: "expected `true` or absent" });
+          }
+          if (task.dedupe !== undefined && typeof task.dedupe !== "string") {
+            issues.push({ path: `${tp}.dedupe`, message: "expected a string" });
           }
           if (typeof task.cost_usd === "number") spentFromTasks += task.cost_usd;
           checkOrder(task.started_at, task.ended_at, tp, issues);
