@@ -17,7 +17,7 @@
 import { isRecord } from "../schemas/validation.ts";
 import { SRC_GRAMMAR_HEADING } from "../text/srcGrammarContract.ts";
 import { parseFixFindings, type FixFinding } from "./fixlist.ts";
-import { dodRefused } from "./outcome.ts";
+import { DOD_REFUSAL_FALLBACK, dodRefused } from "./outcome.ts";
 import type { StoryOutcome, Verdict } from "./outcome.ts";
 
 export interface Review {
@@ -406,7 +406,7 @@ export function renderReviewLog(outcome: StoryOutcome): string {
           // ran it, and printing a number here made a fabricated 126 read as a
           // measurement (#165).
           dodRefused(r)
-            ? `- \`${r.command}\` → REFUSED, never ran — ${r.refusedBecause ?? "the gate declined to run it"}`
+            ? `- \`${r.command}\` → REFUSED, never ran — ${r.refusedBecause ?? DOD_REFUSAL_FALLBACK}`
             : `- \`${r.command}\` → exit ${String(r.exitCode)}${r.timedOut ? " (timed out)" : ""}`
               + (r.exitCode === 0 ? "" : ` — ${r.tail}`),
         )),

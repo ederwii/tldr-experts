@@ -388,13 +388,22 @@ describe("the live client, and the static page that must not carry it", () => {
    * bytes are almost entirely that function's source riding to the browser.
    *
    * RE-PINNED 2026-09-06 for #165, deliberately: 121,707 → 121,743 bytes,
-   * `14b3b6eb…` → `c6675f98…`. `dashPreflightSection` draws an absent exit code
-   * as `not run` instead of `String(null)` — a base gate the workspace REFUSED
+   * `14b3b6eb…` → `70fcc986…`. `dashPreflightSection` draws an absent exit code
+   * as `REFUSED` instead of `String(null)` — a base gate the workspace REFUSED
    * to run has no exit code, and the page carries the absence. The delta is
    * attributed rather than assumed: measured on this branch,
    * `dashPreflightSection.toString()` went 1,749 → 1,785 bytes — exactly the
    * +36 above, so nothing else moved. (Comments are stripped before the source
    * rides to the browser; measured `has comment: false` on the same probe.)
+   *
+   * The marker moved once more inside the same change, `not run` → `REFUSED`
+   * (fix round 1), which is why the hash here is not the one the first pass
+   * recorded. Both strings are seven characters, so the BYTE count did not move
+   * — measured, `dashPreflightSection.toString()` is 1,785 either way. That is
+   * also the reason this pin cannot stand in for a semantic one: it would have
+   * passed just as happily if the cell drew `0`. The test that would not is
+   * `test/dashboard-leftovers.test.ts`'s "the page draws REFUSED for it,
+   * never a 0".
    */
   test("--static is byte-identical to the export main renders without the live layer", () => {
     const temp = makeViewsWorkspace();
@@ -410,7 +419,7 @@ describe("the live client, and the static page that must not carry it", () => {
       expect(model.live, "the static model is not a live one").toBe(false);
       expect(Buffer.byteLength(html, "utf8")).toBe(121_743);
       expect(createHash("sha256").update(html, "utf8").digest("hex"))
-        .toBe("c6675f986aba5672d902aafc232561ceb7d8a6d8cd961a4d81e074215c9a0f54");
+        .toBe("70fcc98627011f83e123d1c782e571b23bddd32ac1ce6c7e0f0fc508b1ede97b");
     } finally {
       temp.dispose();
     }

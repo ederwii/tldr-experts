@@ -64,6 +64,17 @@ export function dodRefused(result: Pick<DodResult, "status">): boolean {
 }
 
 /**
+ * What a refusal says when the gate's own sentence did not survive the round
+ * trip — one string, five readers (the handoff, the review log, the retro, the
+ * blocked-story reason and the reviewer's bundle).
+ *
+ * It exists because absent-with-reason (§7) has to hold even when the reason is
+ * the thing that went missing: "refused, and we no longer know why" is still a
+ * refusal, and it must never degrade into an unexplained non-green row.
+ */
+export const DOD_REFUSAL_FALLBACK = "the gate declined to run it";
+
+/**
  * Work that was in the story worktree and in no ref, when the framework was
  * about to delete the worktree (#129).
  *
@@ -188,7 +199,7 @@ export function dodGreen(outcome: Pick<StoryOutcome, "dod">): boolean {
 export function dodFailureReason(result: DodResult, repo: string): string {
   if (dodRefused(result)) {
     return `\`${result.command}\` was REFUSED in repo ${repo} and never ran — `
-      + `${result.refusedBecause ?? "the gate declined to run it"}`;
+      + `${result.refusedBecause ?? DOD_REFUSAL_FALLBACK}`;
   }
   return `\`${result.command}\` exited ${String(result.exitCode ?? "?")} in repo ${repo}`
     + `${result.timedOut ? " (timed out)" : ""} — ${result.tail}`;

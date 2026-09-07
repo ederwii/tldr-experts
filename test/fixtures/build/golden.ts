@@ -237,8 +237,13 @@ const REFUSED_COMMAND = "npm run test | tee lint.log";
  * spawned — a red DoD blocks the story before the review (build.ts:1069) — so
  * this scenario is exactly the one the other three cannot stand in for.
  *
- * It also covers the BASE side: the Build-entry pre-flight probes the same
- * command and records it `unmeasured`, refusing nothing.
+ * What it does NOT freeze, said out loud because the header is this guard's own
+ * account of itself: the BASE side. The scenario genuinely EXERCISES it — the
+ * Build-entry pre-flight probes the same command and records it `unmeasured` in
+ * `04-build/preflight.yml` — but that file is in none of the four artifacts, and
+ * the base pre-flight deliberately emits no event (docs/spec.md §2.5), so
+ * `refused-events.txt` cannot reach it either. The base side is pinned by
+ * `test/dod-preflight.test.ts`'s `#165` describes instead.
  */
 export const GOLDEN_REFUSED: BuildWorkspaceOptions = {
   stories: [{ id: "S1", epic: "E1", title: "First story", dod: [REFUSED_COMMAND] }],

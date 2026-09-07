@@ -21,6 +21,7 @@ import { MAX_PAYLOAD_BYTES } from "../events/Event.ts";
 import { fenceFor, renderInputs, type PromptInput } from "../facilitator/prompt.ts";
 import { SRC_GRAMMAR_HEADING, renderSrcGrammarContract } from "../text/srcGrammarContract.ts";
 import { diffCommand } from "./git.ts";
+import { dodRefused } from "./outcome.ts";
 import type { PlannedEpic, PlannedStory } from "./plan.ts";
 
 /**
@@ -444,7 +445,7 @@ export function buildReviewerPrompt(parts: ReviewerPromptParts): string {
     "",
     ...(parts.dodResults.length === 0
       ? ["- (no dod commands)"]
-      : parts.dodResults.map((r) => (r.status === "refused"
+      : parts.dodResults.map((r) => (dodRefused(r)
         ? `- \`${r.command}\` → REFUSED, never ran`
         : `- \`${r.command}\` → exit ${String(r.exitCode)}`))),
     "",

@@ -552,3 +552,65 @@ describe("#165 · a refused base probe carries no exit code", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+/**
+ * #165 fix round 1 — the tolerance is EXACTLY the hole the ruling opened.
+ *
+ * The first version dropped `exit_code` from the row guard entirely, which let
+ * two corrupt shapes through where the file used to be rejected and re-measured:
+ * a PRESENT but non-numeric `exit_code`, and an `exit_code`-less `status: ok`.
+ * The second is the dangerous one — `baseResultFor` returns every non-`failed`
+ * row as a cached answer, so a hand-edited or truncated `status: ok` row became
+ * a cached GREEN base and the Build-entry gate skipped that command.
+ *
+ * The rule: a row is valid iff it carries a finite INTEGER `exit_code`, or it is
+ * `unmeasured` with a non-empty `refused_because` and no `exit_code` at all.
+ * Anything else invalidates the whole file, exactly as before.
+ */
+describe("#165 · only a refusal may lack an exit code", () => {
+  /** One `results:` entry, as raw YAML lines under a `version: 1` header. */
+  function fileWith(lines: readonly string[]): string {
+    return `version: 1\nchecked_at: '2026-08-31T09:00:00Z'\nresults:\n${lines.join("\n")}\n`;
+  }
+
+  const HEAD = ["  - repo: app", "    command: npm run test", "    base_ref: main", "    base_sha: abc1234"];
+
+  test("a PRESENT but non-numeric `exit_code` invalidates the file, as it always did", () => {
+    for (const junk of ['    exit_code: "0"', "    exit_code: null", "    exit_code: not-a-number"]) {
+      expect(parsePreflight(fileWith([...HEAD, junk, "    timed_out: false", "    status: ok", "    tail: ''"])))
+        .toBeNull();
+    }
+  });
+
+  test("a fractional exit code is not an exit code either", () => {
+    expect(parsePreflight(fileWith([...HEAD, "    exit_code: 1.5", "    timed_out: false", "    status: failed", "    tail: ''"])))
+      .toBeNull();
+  });
+
+  test("an `exit_code`-less `status: ok` row invalidates the file — it would read as a cached GREEN base", () => {
+    for (const status of ["ok", "failed"]) {
+      expect(parsePreflight(fileWith([...HEAD, "    timed_out: false", `    status: ${status}`, "    tail: ''"])))
+        .toBeNull();
+    }
+  });
+
+  test("an `exit_code`-less `unmeasured` row with NO reason is malformed too — absent-WITH-REASON or nothing", () => {
+    expect(parsePreflight(fileWith([...HEAD, "    timed_out: false", "    status: unmeasured", "    tail: ''"])))
+      .toBeNull();
+  });
+
+  test("a well-formed refused row loads, and is neither a pass nor a failure", () => {
+    const loaded = parsePreflight(fileWith([
+      ...HEAD, "    timed_out: false", "    status: unmeasured", "    tail: needs a shell",
+      "    refused_because: needs a shell",
+    ]));
+    const only = loaded?.results[0];
+    expect(only?.status).toBe("unmeasured");
+    expect(only?.exitCode).toBeUndefined();
+    expect(only?.refusedBecause).toBe("needs a shell");
+    // Not green, and not red: `baseResultFor` hands it back as "nothing was
+    // learned", which excuses nothing and refuses nothing.
+    expect(failedOnBase(baseResultFor(loaded, "app", "npm run test"))).toBe(false);
+    expect(baseResultFor(loaded, "app", "npm run test")?.exitCode).toBeUndefined();
+  });
+});

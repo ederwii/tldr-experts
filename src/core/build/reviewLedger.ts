@@ -266,7 +266,10 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
         ...(refused
           ? { status: "refused" as const, refusedBecause: payload.refused as string }
           : { status: "ran" as const, ...(exitCode === null ? {} : { exitCode }) }),
-        timedOut: exitCode === 124,
+        // Explicit, matching `reviewWorkFromBundle`: `null === 124` is already
+        // false, but a future `refused` payload that also carried an exit code
+        // must not be able to flip it.
+        timedOut: !refused && exitCode === 124,
         tail: typeof payload.detail === "string" ? payload.detail : "",
       });
       continue;

@@ -166,16 +166,32 @@ export function parsePreflight(text: string): BasePreflight | null {
     const row = entry as Record<string, unknown>;
     const repo = asText(row.repo);
     const command = asText(row.command);
+    const refusedBecause = asText(row.refused_because);
+    const exitCode = Number.isInteger(row.exit_code) ? row.exit_code as number : null;
     // `repo` and `command` are the join key, so a row without them is not a row.
-    // A missing `exit_code` is NOT malformed any more: it is what a refused probe
-    // writes (#165), and dropping the whole FILE for it would lose every measured
-    // row beside it. Any other malformed row still invalidates the file, exactly
-    // as before.
-    const exitCode = typeof row.exit_code === "number" && Number.isFinite(row.exit_code) ? row.exit_code : null;
     if (repo === "" || command === "") return null;
+    // Exactly ONE new hole, and it is the one a refusal needs (#165): a row that
+    // says `unmeasured` and says WHY may carry no `exit_code`, because nothing
+    // ran. Every other shape invalidates the FILE exactly as it always did, and
+    // the two that matter are:
+    //
+    //   - a PRESENT but non-integer `exit_code` (`"0"`, `null`, `1.5`) — reading
+    //     that as "no exit code" would silently promote corruption to a refusal;
+    //   - an `exit_code`-less `ok`/`failed` row — those two statuses ARE
+    //     measurements, and `baseResultFor` hands back every non-`failed` row as
+    //     a cached answer, so a truncated `status: ok` would become a cached
+    //     GREEN base and the Build-entry gate would skip that command.
+    //
+    // A rejected file is not a loss: `loadPreflight` returns null, the caller
+    // falls back to `EMPTY_PREFLIGHT`, and the base is re-measured.
+    if (exitCode === null) {
+      if (row.exit_code !== undefined) return null;
+      if (row.status === "ok" || row.status === "failed") return null;
+      // Absent-WITH-REASON or nothing: an unexplained absence is not a record.
+      if (refusedBecause === "") return null;
+    }
     const hash = asText(row.command_hash);
     const rowCheckedAt = asText(row.checked_at);
-    const refusedBecause = asText(row.refused_because);
     results.push({
       repo,
       command,

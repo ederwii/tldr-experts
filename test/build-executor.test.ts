@@ -25,7 +25,8 @@ import { looksLikeReviewerError, renderReviewLog, reviewerFailed } from "../src/
 import { renderBuildHandoff, type BuildHandoffParts } from "../src/core/build/handoff.ts";
 import { storyRetroLines } from "../src/core/build/retroLog.ts";
 import { buildReviewerPrompt } from "../src/core/build/prompts.ts";
-import { dodGreen, type StoryOutcome } from "../src/core/build/outcome.ts";
+import { DOD_REFUSAL_FALLBACK, dodGreen, type StoryOutcome } from "../src/core/build/outcome.ts";
+import { reviewBundleKeyOf, reviewWorkFromBundle, writeReviewBundle } from "../src/core/build/reviewBundle.ts";
 import type { PlannedStory } from "../src/core/build/plan.ts";
 import { endsWithToken } from "../src/core/text/srcToken.ts";
 import { UNFINISHED_STORIES } from "../src/core/run/autoGate.ts";
@@ -2732,6 +2733,41 @@ describe("#165 · a refused DoD command is recorded as refused", () => {
     // the gate, and `$ cmd → exit n` is not available to a command that never ran.
     const row = handoff.split("\n").find((line) => line.includes("npm run lint")) ?? "";
     expect(endsWithToken(row)).toBe(true);
+  });
+
+  /**
+   * The bundle is the contract read back from the host, so a refusal has to
+   * survive it as a refusal — including the case where the gate's own sentence
+   * is the thing that went missing.
+   *
+   * Keying the written row off `refusedBecause` rather than off `status` wrote
+   * NEITHER `exit_code` nor `refused` for such a row, and it came back
+   * `{status: "ran"}` with no exit code: safe for greenness (`undefined === 0`
+   * is false) but a named refusal downgraded to an unexplained non-green, which
+   * is absent-with-reason losing its reason.
+   */
+  test("a refusal whose reason went missing still round-trips through the bundle as a refusal", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-bundle-refused-"));
+    const key = reviewBundleKeyOf("build", "S1");
+    writeReviewBundle({
+      runDir: dir, root: dir, runId: "260906-x", phaseId: "04-build", stageId: "build",
+      storyId: "S1", repo: "app", branch: "story/S1", epicBranch: "epic/e1",
+      worktree: join(dir, "wt"), attempt: 1, model: null, effort: null,
+      budgetUsd: 1, reviewerCapUsd: 1, preparedAt: "2026-09-06T09:00:00Z",
+      work: {
+        commit: "abc1234",
+        dod: [{ command: "npm run lint", status: "refused", timedOut: false, tail: "" }],
+        why: "its review is outstanding",
+      },
+      prompt: "# prompt\n",
+      lines: [],
+    });
+
+    const only = reviewWorkFromBundle(dir, key)?.dod[0];
+    expect(only?.status).toBe("refused");
+    expect(only?.refusedBecause).toBe(DOD_REFUSAL_FALLBACK);
+    expect(only?.exitCode).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
   });
 
   /**

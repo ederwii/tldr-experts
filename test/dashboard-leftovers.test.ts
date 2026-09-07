@@ -261,6 +261,32 @@ results:
     tail: "Build succeeded"
 `;
 
+/**
+ * The same file with a REFUSED row beside a measured one (#165): no `exit_code`
+ * at all, `status: unmeasured`, and the gate's own sentence in
+ * `refused_because`. This is exactly what `emitPreflightYaml` writes today.
+ */
+const PREFLIGHT_REFUSED_YML = `version: 1
+checked_at: 2026-09-03T10:00:00Z
+results:
+  - repo: api
+    command: dotnet test
+    base_ref: main
+    base_sha: abc1234
+    exit_code: 1
+    timed_out: false
+    status: failed
+    tail: "2 failed, 118 passed"
+  - repo: api
+    command: dotnet format --verify-no-changes
+    base_ref: main
+    base_sha: abc1234
+    timed_out: false
+    status: unmeasured
+    tail: "it needs a shell to run"
+    refused_because: "it needs a shell to run"
+`;
+
 describe("2. a preflight refusal leaves the base gate rows on the page", () => {
   test("the model reads 04-build/preflight.yml", () => {
     const { run } = modelOf({ preflight: PREFLIGHT_YML });
@@ -291,6 +317,40 @@ describe("2. a preflight refusal leaves the base gate rows on the page", () => {
     const { model, run } = modelOf({ preflight: PREFLIGHT_YML });
     expect(dashPending(run)?.kind).toBe("gate");
     expect(text(dashAttention(model))).not.toContain("preflight");
+  });
+
+  /**
+   * #165 — the page carries the ABSENCE, and it says which absence it is.
+   *
+   * A base gate the workspace REFUSED has no exit code: nothing spawned. The
+   * framework used to write a fabricated `126` into `preflight.yml` and this
+   * panel drew it as a measurement. The model now carries `null` and the page
+   * draws the REFUSED marker — a `0` here would say "green on base", which is
+   * the one thing a command that never ran must never read as.
+   *
+   * The `dashboard-live` byte/hash pin cannot stand in for this: it asserts
+   * bytes, and it would pass identically if the cell drew `0`.
+   */
+  test("a refused base probe reaches the model as an absence, not a number", () => {
+    const { run } = modelOf({ preflight: PREFLIGHT_REFUSED_YML });
+    const refused = run.preflight?.rows[1];
+    expect(refused?.command).toBe("dotnet format --verify-no-changes");
+    expect(refused?.status).toBe("unmeasured");
+    expect(refused?.exitCode).toBeNull();
+    expect(refused?.refusedBecause).toContain("needs a shell");
+    // The measured row beside it is untouched — the absence is per row.
+    expect(run.preflight?.rows[0]?.exitCode).toBe(1);
+  });
+
+  test("and the page draws REFUSED for it, never a 0", () => {
+    const { run } = modelOf({ preflight: PREFLIGHT_REFUSED_YML });
+    const html = dashPreflightSection(run);
+    // The cell itself, not the whole section: `0` appears elsewhere on the page
+    // (the other row's own exit code is `1`, but a count or a date could be `0`),
+    // and a bare-digit search over the section would false-positive on prose.
+    const cells = [...html.matchAll(/<td class="num">([^<]*)<\/td>/g)].map((m) => m[1]);
+    expect(cells).toEqual(["1", "REFUSED"]);
+    expect(text(html)).toContain("needs a shell");
   });
 
   test("a preflight.yml that does not parse is a null, never a throw", () => {

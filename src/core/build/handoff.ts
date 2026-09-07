@@ -12,7 +12,7 @@
  *   Unknowns        the stories that are not done, or `- none` with what was looked at
  *   Evidence ledger every dod command that ran, as `[src: $ <cmd> → exit <n>]`
  */
-import { dodRefused } from "./outcome.ts";
+import { DOD_REFUSAL_FALLBACK, dodRefused } from "./outcome.ts";
 import type { StoryOutcome } from "./outcome.ts";
 
 export interface EpicSummaryRow {
@@ -278,7 +278,7 @@ function ledger(outcomes: readonly StoryOutcome[]): readonly string[] {
       rows.push(
         dodRefused(result)
           ? `- ${outcome.id}: \`${result.command}\` in ${outcome.repo} was REFUSED and never ran — `
-            + `${result.refusedBecause ?? "the gate declined to run it"} [src: ${outcome.reviewRel}:1]`
+            + `${result.refusedBecause ?? DOD_REFUSAL_FALLBACK} [src: ${outcome.reviewRel}:1]`
           : `- ${outcome.id}: \`${result.command}\` in ${outcome.repo} `
             + `[src: $ ${result.command} → exit ${String(result.exitCode)}]`,
       );

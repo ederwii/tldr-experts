@@ -28,7 +28,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { dodGreen, dodRefused, type StoryOutcome } from "./outcome.ts";
+import { DOD_REFUSAL_FALLBACK, dodGreen, dodRefused, type StoryOutcome } from "./outcome.ts";
 
 /**
  * `tldrx-work/<run>/retro.md`. The name lives HERE rather than in `retro/`
@@ -102,7 +102,7 @@ export function storyRetroLines(outcome: StoryOutcome, runId: string): readonly 
         // was a sentence about a command that never started (#165).
         lines.push(
           `- \`${outcome.id}\` — dod \`${result.command}\` was REFUSED and never ran on the first `
-          + `attempt: ${oneLine(result.refusedBecause ?? "the gate declined to run it")} ${src}`,
+          + `attempt: ${oneLine(result.refusedBecause ?? DOD_REFUSAL_FALLBACK)} ${src}`,
         );
         continue;
       }

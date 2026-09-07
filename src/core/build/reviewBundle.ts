@@ -28,6 +28,7 @@ import { MAX_ATTEMPTS } from "./caps.ts";
 import { diffCommand } from "./git.ts";
 import { REVIEW_SCHEMA } from "./prompts.ts";
 import { readReviewLedger } from "./reviewLedger.ts";
+import { DOD_REFUSAL_FALLBACK, dodRefused } from "./outcome.ts";
 import type { DodResult, StoryOutcome } from "./outcome.ts";
 import type { PlannedStory } from "./plan.ts";
 import type { PlanStatus } from "../schemas/planCommon.ts";
@@ -146,12 +147,14 @@ export function writeReviewBundle(parts: ReviewBundleParts): string {
     worktree: relative(parts.root, parts.worktree),
     // A refused row hands the host `refused` and NO `exit_code`: the bundle is
     // the contract read back from the host, so an invented number here would
-    // come back as a measurement (#165).
-    dod: parts.work.dod.map((r) => ({
-      command: r.command,
-      ...(r.exitCode === undefined ? {} : { exit_code: r.exitCode }),
-      ...(r.refusedBecause === undefined ? {} : { refused: r.refusedBecause }),
-    })),
+    // come back as a measurement (#165). Keyed off `status`, not off whether a
+    // reason happens to be set — a refusal with an empty reason would otherwise
+    // write NEITHER key and read back as an unexplained non-green, which is
+    // absent-with-reason losing its reason. Same fallback sentence the handoff,
+    // the review log and the retro use.
+    dod: parts.work.dod.map((r) => (dodRefused(r)
+      ? { command: r.command, refused: r.refusedBecause ?? DOD_REFUSAL_FALLBACK }
+      : { command: r.command, ...(r.exitCode === undefined ? {} : { exit_code: r.exitCode }) })),
     resumed_from: parts.work.why,
   };
   const pending: PendingStage = {

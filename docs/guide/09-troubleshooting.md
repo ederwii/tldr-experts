@@ -386,11 +386,12 @@ Three facts about that, measured rather than asserted:
   So `sh -c "npm run test | tee out.txt"` is already expressible — **when the whole string is
   declared verbatim in `.tldrx/workspace.yml`**. The allowlist is the control; the syntax is
   not.
-- **A BARE token carrying `| & ; < > $ ` ( ) { } * ? ~ \` makes the command unsplittable**, and
-  it is refused with "needs a shell to run". The convention for anything that genuinely needs
-  one is a checked-in script — `scripts/gate/<slot>.sh` — declared under the repo's
-  `commands:` and cited by the story's `dod` block. Note that plan validation checks only
-  allowlist MEMBERSHIP, so a declared pipeline passes the plan and is refused at the gate.
+- **A BARE token carrying a shell metacharacter makes the command unsplittable**, and it is
+  refused with "needs a shell to run". The fifteen are ``| & ; < > $ ` ( ) { } * ? ~ \``
+  (`src/hooks/lib/story.ts:84`). The convention for anything that genuinely needs a shell is
+  a checked-in script — `scripts/gate/<slot>.sh` — declared under the repo's `commands:` and
+  cited by the story's `dod` block. Note that plan validation checks only allowlist
+  MEMBERSHIP, so a declared pipeline passes the plan and is refused at the gate.
 - **A refused command is recorded as refused, never as an exit code.** It never ran, so there
   is nothing to measure: the check carries `refused` and no `exit_code`, and the handoff, the
   review log and the retro all say "was REFUSED and never ran" with the gate's own sentence.

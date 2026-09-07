@@ -2525,6 +2525,18 @@ one story never varies:
    absent `command_hash` is a missing answer, not a mismatch, and an absent per-row `checked_at` falls back to the
    file-level one, with neither making a row stale.
 
+   **A REFUSED probe carries no exit code (2026-09-06, #165).** A command the gate declines to run never spawned, so
+   the `unmeasured` row it writes has **no `exit_code` at all** and carries the gate's own sentence in a new
+   `refused_because` instead. Before this the framework wrote a fabricated `exit_code: 126` there and every reader
+   rendered it as a measurement. Both changes are additive to `version: 1` and the read is tolerant in one direction
+   only: a `preflight.yml` written before this — `exit_code: 126` beside `status: unmeasured` — still loads with the
+   number it recorded, because the reader reports what the file says and rewriting history is not a read's job. What
+   is NOT tolerated, because it never was: a present-but-non-integer `exit_code`, and an `exit_code`-less `ok` or
+   `failed` row. Those two statuses ARE measurements, and every non-`failed` row is handed back as a cached answer, so
+   a truncated `status: ok` would become a cached GREEN base and the entry gate would skip that command. Either shape
+   invalidates the whole file, which costs a re-measurement and nothing else. An `unmeasured` row with neither an
+   `exit_code` nor a `refused_because` is malformed for the same reason: absent-with-reason, or not a record.
+
    When a story's DoD then fails, the cached base result decides ATTRIBUTION: a command red on the base too
    halts the build with the same config error instead of blocking the story. Measured on `260829-scoring-leaderboard`:
    two of three declared commands already failed on pristine main — one of them running paid `Live` AI tests the repo's
