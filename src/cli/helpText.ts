@@ -772,6 +772,7 @@ const ENTRIES: readonly CommandHelp[] = [
         name: "for-fix",
         arg: null,
         meaning: "Open a FIX ROUND on a story that is `done`: one named defect in work a reviewer already approved. No attempt is consumed, the fix passes the same dod and the same reviewer as the original, and the story's acceptance criteria are not touched \u2014 it is not a way to relitigate scope. Refused when the story is not done, when --note is missing, and when that story already has a fix round open (the bound is one).",
+        sub: "reopen",
       },
       runFlag(),
       root(),

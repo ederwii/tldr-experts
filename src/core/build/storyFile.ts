@@ -3,10 +3,15 @@
  *
  * The story file is the Build phase's state, so the executor has to edit it — but
  * it is also a document a human wrote and reads, so it is edited **surgically**:
- * the `status:` line is replaced and the `evidence:` block is rewritten, and every
- * other byte of the front matter, the prose and the ```dod block is left exactly
- * as it was. Round-tripping the YAML would reflow comments and quoting that nobody
- * asked us to touch.
+ * the `status:` line is replaced, and the `evidence:` and `touches:` blocks are
+ * rewritten, and every other byte of the front matter, the prose and the ```dod
+ * block is left exactly as it was. Round-tripping the YAML would reflow comments
+ * and quoting that nobody asked us to touch.
+ *
+ * Three keys, and only three, because exactly three are STATE that something
+ * other than their author writes: `status:` and `evidence:` are what the Build
+ * executor records, and `touches:` is what `tldrx story widen` declares (#171).
+ * Everything else in the front matter belongs to whoever wrote the story.
  *
  * Only the front matter is scanned. A `status:` inside the body — a line of prose,
  * a line of a dod block — is not the story's status and is never rewritten.
@@ -57,13 +62,19 @@ export function updateStoryFront(text: string, patch: StoryPatch): string {
 }
 
 /**
- * The same two surgical edits, over a bare block of YAML lines.
+ * The same three surgical edits, over a bare block of YAML lines.
  *
  * Split out because a run whose scope SKIPPED the Plan phase has no
  * `stories/<id>.md` to hold front matter: its state lives in
  * `04-build/implicit-plan.yml`, which is YAML all the way down
  * (`src/core/build/implicitPlan.ts`). One writer, so the two documents cannot
- * disagree about what `status: done` plus an `evidence:` list looks like.
+ * disagree about what `status: done` plus an `evidence:` list, or a widened
+ * `touches:` list, looks like.
+ *
+ * Both `replaceEvidence` and `replaceTouches` consume the list items that FOLLOW
+ * their key, so whatever key comes next in either document must not be a bare
+ * list. `renderImplicitPlan` says the same thing from the other side, and its
+ * layout is what makes it true there.
  */
 export function applyPlanPatch(input: readonly string[], patch: StoryPatch): string[] {
   let lines = [...input];

@@ -45,6 +45,7 @@ import { PROJECT_WORK_DIR } from "../paths.ts";
 import { parseYaml } from "../yaml.ts";
 import { splitFrontMatter } from "../schemas/frontMatter.ts";
 import { MAX_TOUCHES } from "../schemas/planCommon.ts";
+import { TOUCHED_PATH_TRAVERSAL, touchedPathTraverses } from "../schemas/story.ts";
 import { RunStore } from "./RunStore.ts";
 import { ambiguousRunLines } from "./openRuns.ts";
 import { normalisePath } from "./boundary.ts";
@@ -110,10 +111,15 @@ export function widenStory(options: WidenOptions): WidenOutcome {
       "  the paths are what the widening IS — there is nothing else in it",
     ]);
   }
-  const traversing = asked.filter((path) => path.split("/").includes(".."));
+  // `validateStory`'s OWN predicate, imported rather than restated. It was
+  // restated for one commit and the two drifted immediately — the copy tested
+  // `..` as a path segment, the schema tests it as a substring, and `src/a..b.ts`
+  // passed here and failed there, which wrote the file this refusal exists to
+  // prevent (review round 1). One derivation, and the message is the schema's too.
+  const traversing = asked.filter(touchedPathTraverses);
   if (traversing.length > 0) {
     return refuse([
-      `\`..\` is not allowed in a touched path: ${traversing.join(", ")}`,
+      `${TOUCHED_PATH_TRAVERSAL}: ${traversing.join(", ")}`,
       "  spec §2.13 refuses one, so writing it would leave a story file this framework's own",
       "  check rejects — the path is refused here instead, and nothing was written",
     ]);
@@ -201,7 +207,18 @@ export function widenStory(options: WidenOptions): WidenOutcome {
 
   const added: string[] = [];
   for (const candidate of asked) {
-    if (declared.includes(candidate) || added.includes(candidate)) {
+    // Two different facts, and they had one sentence between them for a commit:
+    // "S1 already declares `a.ts`" printed beside "it touches src/in.ts" is a
+    // refusal contradicting itself about what is on disk, and it sends the
+    // operator to the story file to look for something that is not there.
+    if (added.includes(candidate)) {
+      return refuse([
+        `\`${candidate}\` was passed twice in one \`story widen\``,
+        `  ${id} does not declare it — you named it twice in this invocation, which is a typo and not a`,
+        "  second declaration. Name each path once and run it again; nothing was written.",
+      ]);
+    }
+    if (declared.includes(candidate)) {
       return refuse([
         `${id} already declares \`${candidate}\``,
         `  it touches ${before.join(", ")}`,

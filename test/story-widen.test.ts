@@ -26,7 +26,7 @@ import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { widenStory } from "../src/core/run/widenStory.ts";
 import { reopenStory } from "../src/core/run/reopenStory.ts";
 import { storyCommand } from "../src/cli/commands/story.ts";
-import { applyPlanPatch } from "../src/core/build/storyFile.ts";
+import { applyPlanPatch, StoryWriteError } from "../src/core/build/storyFile.ts";
 import { readReviewLedger } from "../src/core/build/reviewLedger.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { validateEvent } from "../src/core/events/Event.ts";
@@ -35,6 +35,7 @@ import { evaluateBoundary } from "../src/core/run/boundary.ts";
 import { splitFrontMatter } from "../src/core/schemas/frontMatter.ts";
 import { parseYaml } from "../src/core/yaml.ts";
 import { MAX_TOUCHES } from "../src/core/schemas/planCommon.ts";
+import { TOUCHED_PATH_TRAVERSAL, touchedPathTraverses } from "../src/core/schemas/story.ts";
 import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
@@ -146,6 +147,16 @@ function capture(): () => { stdout: string; stderr: string } {
   };
 }
 
+/**
+ * Every refusal in this verb says nothing was written. This is what makes that a
+ * pin rather than a promise: the story file byte-identical, and no widening in
+ * the log. Called on every refusal that claims it.
+ */
+function expectWroteNothing(ws: BuildWorkspace, before: string): void {
+  expect(readFileSync(storyPath(ws, "S1"), "utf8")).toBe(before);
+  expect(eventsOf(ws).filter((e) => e.type === "story.touches_widened")).toHaveLength(0);
+}
+
 const WHY = "the defect is here";
 
 // ---------------------------------------------------------------------------
@@ -253,6 +264,18 @@ describe("tldrx story widen — the sanctioned way to grow a story's surface", (
    * the refusal prints, and this test walks it end to end: refuse, reopen for the
    * defect, widen, and the same branch and the same diff now pass.
    */
+  /**
+   * GUARD, not a proof — it was green before this round. `widenStory` refuses an
+   * empty `paths` list long before the writer sees one, so this line is
+   * unreachable from the verb; it is pinned so the house invariant "a story's
+   * `touches:` may never be empty" rests on an exercised line rather than an
+   * assumed one (review round 1, F6).
+   */
+  test("the writer refuses an empty touches: rather than writing one the validator rejects", () => {
+    const lines = ["status: todo", "touches:", '  - "docs/a.md"'];
+    expect(() => applyPlanPatch(lines, { touches: [] })).toThrow(StoryWriteError);
+  });
+
   test("a widened story turns the boundary refusal into a pass", async () => {
     const ws = workspace(DECLARED);
     process.env.FAKE_BUILD_WRITE = JSON.stringify({
@@ -286,18 +309,65 @@ describe("tldrx story widen — the sanctioned way to grow a story's surface", (
 });
 
 describe("what widen refuses, and with which code", () => {
-  test("a done story is refused (2) and the refusal names --for-fix", () => {
+  test("a done story is refused (2), it names --for-fix, and nothing is written", () => {
     const ws = planWorkspace({ S1: "done" });
+    const before = readFileSync(storyPath(ws, "S1"), "utf8");
     const out = widenStory({ ...base(ws), storyId: "S1", paths: ["a.ts"], note: "n" });
     expect(out.code).toBe(2);
     expect(out.lines.join("\n")).toContain("--for-fix");
+    expectWroteNothing(ws, before);
   });
 
-  test("an unknown story, a missing --note and a path already declared are each 2", () => {
+  test("an unknown story, a missing --note and a path already declared are each 2, and each writes nothing", () => {
     const ws = planWorkspace();
+    const before = readFileSync(storyPath(ws, "S1"), "utf8");
     expect(widenStory({ ...base(ws), storyId: "S9", paths: ["a.ts"], note: "n" }).code).toBe(2);
     expect(widenStory({ ...base(ws), storyId: "S1", paths: ["a.ts"], note: "" }).code).toBe(2);
     expect(widenStory({ ...base(ws), storyId: "S1", paths: ["src/in.ts"], note: "n" }).code).toBe(2);
+    expectWroteNothing(ws, before);
+  });
+
+  /**
+   * ONE rule about a touched path, and it lives in the schema (#171, review round
+   * 1). `validateStory` refuses `..` as a SUBSTRING (`schemas/story.ts`), so a
+   * segment-wise copy of the rule here would accept `src/a..b.ts`, write it, and
+   * leave a story file this framework's own check rejects — which is the exact
+   * outcome the refusal exists to prevent. Both cases are asserted, and the
+   * substring one is the case a second implementation gets wrong.
+   */
+  test("a `..` anywhere in a path is refused (2) — the schema's rule, not a second one", () => {
+    const ws = planWorkspace();
+    const before = readFileSync(storyPath(ws, "S1"), "utf8");
+
+    const segment = widenStory({ ...base(ws), storyId: "S1", paths: ["../outside.ts"], note: "n" });
+    expect(segment.code).toBe(2);
+    expect(segment.lines.join("\n")).toContain(TOUCHED_PATH_TRAVERSAL);
+    expectWroteNothing(ws, before);
+
+    const substring = widenStory({ ...base(ws), storyId: "S1", paths: ["src/a..b.ts"], note: "n" });
+    expect(substring.code).toBe(2);
+    expect(substring.lines.join("\n")).toContain(TOUCHED_PATH_TRAVERSAL);
+    expectWroteNothing(ws, before);
+
+    // And the two agree because they ARE one function.
+    expect(touchedPathTraverses("src/a..b.ts")).toBe(true);
+    expect(touchedPathTraverses("src/ab.ts")).toBe(false);
+  });
+
+  /**
+   * A path typed twice is a typo, not a declaration. The refusal used to say
+   * "S1 already declares `a.ts`" beside "it touches src/in.ts" — two lines that
+   * contradict each other about what is on disk (review round 1, F2).
+   */
+  test("a path repeated in one invocation says so, and does not claim the story declares it", () => {
+    const ws = planWorkspace();
+    const before = readFileSync(storyPath(ws, "S1"), "utf8");
+    const out = widenStory({ ...base(ws), storyId: "S1", paths: ["a.ts", "a.ts"], note: "n" });
+    expect(out.code).toBe(2);
+    const said = out.lines.join("\n");
+    expect(said).toContain("twice");
+    expect(said).not.toContain("already declares");
+    expectWroteNothing(ws, before);
   });
 
   test("more than MAX_TOUCHES entries is refused (2), and nothing is written", () => {
@@ -337,6 +407,25 @@ describe("what widen refuses, and with which code", () => {
     expect(out.stdout).toBe("");
     expect(out.stderr).toContain("tldrx story widen:");
     expect(out.stderr).toContain("--for-fix");
+  });
+
+  /**
+   * `--for-fix` belongs to `reopen` and is declared `sub: "reopen"`. The argv
+   * guard is command-level, so nothing upstream stops it reaching `widen` — and
+   * silently applying a plain widening to an operator who believes they opened a
+   * fix round is the framework lying about what it did (review round 1, F3).
+   */
+  test("through the command: --for-fix is not a flag of widen, and is a usage error (1)", async () => {
+    const ws = planWorkspace();
+    const before = readFileSync(storyPath(ws, "S1"), "utf8");
+    const printed = capture();
+    const code = await storyCommand.run(["widen", "S1", "a.ts", "--for-fix", "--root", ws.root, "--note", "n"]);
+    const out = printed();
+
+    expect(code).toBe(1);
+    expect(out.stdout).toBe("");
+    expect(out.stderr).toContain("--for-fix");
+    expectWroteNothing(ws, before);
   });
 
   test("through the command: a subcommand that is neither reopen nor widen is a usage error (1)", async () => {

@@ -84,6 +84,21 @@ function storyReopen(argv: readonly string[]): number {
 function storyWiden(argv: readonly string[]): number {
   try {
     const args = parseArgs(argv, VALUE_FLAGS);
+    // `--for-fix` is `reopen`'s, and `helpText.ts` scopes it there — but the argv
+    // guard (`cli/index.ts`, `declaredFlags`) is COMMAND-level, so nothing
+    // upstream stops it arriving here. Refused rather than ignored: an operator
+    // who typed it believes they opened a fix round on a done story, and quietly
+    // performing a plain widening instead would be the CLI reporting success for
+    // work it did not do. A flag this subcommand does not take is a usage error.
+    if (boolFlag(args, "for-fix")) {
+      process.stderr.write(
+        "tldrx story widen: --for-fix is a flag of `reopen`, not of `widen` — nothing was written\n"
+        + "  widening declares a path; `--for-fix` reopens finished work for one named defect.\n"
+        + `  \`tldrx story reopen <id> --for-fix --note "<the defect>"\` first, then widen the reopened story.\n`
+        + `${storyCommand.usage}\n`,
+      );
+      return EXIT_USAGE;
+    }
     const outcome = widenStory({
       root: workspaceRootFrom(args),
       storyId: args.positionals[0] ?? "",

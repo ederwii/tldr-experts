@@ -418,6 +418,13 @@ export function implicitPlanContent(parts: ImplicitPlanParts): ImplicitPlanConte
  * `status:` and `evidence:` sit ABOVE the lists on purpose: `applyPlanPatch`
  * rewrites `evidence:` plus the list items directly under it, so the key that
  * follows it must not be a list of anything else.
+ *
+ * **The same constraint now binds `touches:` (#171)**, which `tldrx story widen`
+ * rewrites through the same writer: `replaceTouches` eats every list item under
+ * the key, so the key AFTER `touches:` must be a key line and not a bare list.
+ * Today it is `inputs:` and the constraint holds by layout — reorder this
+ * renderer and it stops holding, silently, at the moment an operator widens a
+ * Plan-skipping run.
  */
 export function renderImplicitPlan(content: ImplicitPlanContent, status: PlanStatus = "todo"): string {
   const lines = [

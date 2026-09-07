@@ -43,6 +43,26 @@ export const STORY_KEYS = [
   "depends_on", "touches", "acceptance", "test_plan", "evidence",
 ] as const;
 
+/**
+ * The one rule about a touched path, and the one sentence for breaking it.
+ *
+ * Exported because `validateStory` is no longer its only reader: `tldrx story
+ * widen` (`src/core/run/widenStory.ts`) has to refuse the same path BEFORE it
+ * writes it, or it leaves a story file this very function then rejects. It was a
+ * second implementation for one commit and the two disagreed — the copy tested
+ * `..` as a path SEGMENT, this tests it as a SUBSTRING, and `src/a..b.ts` passed
+ * one and failed the other (#171, review round 1). One derivation, two callers.
+ *
+ * A substring test on purpose: `..` inside a name is not traversal, but it is
+ * also not a path anyone means, and a rule a reader can hold in their head beats
+ * a rule that is exactly right.
+ */
+export const TOUCHED_PATH_TRAVERSAL = "`..` is not allowed in a touched path";
+
+export function touchedPathTraverses(path: string): boolean {
+  return path.includes("..");
+}
+
 /** The front matter only. Fast: required keys, enums, id shapes, list caps. */
 export function validateStory(input: unknown): ValidationResult {
   const issues: ValidationIssue[] = [];
@@ -65,8 +85,8 @@ export function validateStory(input: unknown): ValidationResult {
   }
   requireStringList(doc.touches, "touches", issues, { nonEmpty: true, max: MAX_TOUCHES });
   for (const [i, path] of (Array.isArray(doc.touches) ? doc.touches : []).entries()) {
-    if (typeof path === "string" && path.includes("..")) {
-      issues.push({ path: `touches[${i}]`, message: "`..` is not allowed in a touched path" });
+    if (typeof path === "string" && touchedPathTraverses(path)) {
+      issues.push({ path: `touches[${i}]`, message: TOUCHED_PATH_TRAVERSAL });
     }
   }
   requireStringList(doc.acceptance, "acceptance", issues, { nonEmpty: true });
