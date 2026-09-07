@@ -74,6 +74,14 @@ import {
 } from "../../build/implicitPlan.ts";
 import { evidenceFor, updateStoryFront } from "../../build/storyFile.ts";
 import { buildDeveloperPrompt, REVIEW_SCHEMA } from "../../build/prompts.ts";
+import { ITERATION_ONLY_SLOT } from "../../schemas/commandAllowlist.ts";
+
+/** `testFast` as an optional prompt field: present only when the repo declares one. */
+function testFastPart(
+  found: { readonly fast: string; readonly full: string | null } | null,
+): { readonly testFast?: { readonly fast: string; readonly full: string | null } } {
+  return found === null ? {} : { testFast: found };
+}
 import {
   MAX_FORMAT_RETRIES, parseReview, renderPreviousAttempt, renderReviewLog, reviewerFailed,
   type Review,
@@ -290,7 +298,7 @@ async function openPlan(
 ): Promise<BuildPlan> {
   const wavesOnDisk = existsSync(join(ctx.runDir, PLAN_PHASE, "waves.yml"));
   if (!planIsSkipped(ctx.spec.skips) || wavesOnDisk) {
-    return loadBuildPlan(join(ctx.runDir, PLAN_PHASE), workspace.commands);
+    return loadBuildPlan(join(ctx.runDir, PLAN_PHASE), workspace.commands, workspace.iterationCommands);
   }
   const parts = {
     runDir: ctx.runDir,
@@ -2566,6 +2574,7 @@ class BuildSession {
       epicBranch: story.epicBranch,
       worktree: story.worktree,
       commands: this.repoCommands(repo),
+      ...testFastPart(this.testFastFor(repo)),
       conventions: renderConventions(this.ctx.root, [repo]),
       facts: renderFacts(facts.facts, [repo]),
       experts: bundles.experts,
@@ -2676,6 +2685,22 @@ class BuildSession {
 
   private repoCommands(repo: string): readonly string[] {
     return this.workspace.repoCommands.get(repo) ?? [];
+  }
+
+  /**
+   * This repo's two test speeds, or null when it declares only one.
+   *
+   * Read off `commandRoles`, which keeps the SLOT keys: which of a repo's commands is
+   * the fast one is the key the operator wrote in `workspace.yml`, never something to
+   * read out of the command text (`hooks/lib/workspace.ts` records what that guess cost
+   * on a real .NET workspace). `full` may be null — a repo may declare a fast test and
+   * no suite — and the prompt says so rather than pointing at a command that is not there.
+   */
+  private testFastFor(repo: string): { readonly fast: string; readonly full: string | null } | null {
+    const roles = this.workspace.commandRoles.get(repo);
+    const fast = roles?.get(ITERATION_ONLY_SLOT);
+    if (fast === undefined) return null;
+    return { fast, full: roles?.get("test") ?? null };
   }
 
   /** The ledger's runDir and the operator-line sink, for `build/reviewRound.ts`. */

@@ -3,6 +3,29 @@
 
 ## 0.10.1 — unreleased
 
+### Added
+
+- **`workspace.yml` gains an optional `test_fast:` command — the developer iterates on it, and
+  the suite runs once at the Definition of Done.** A story's ```dod block must be byte-equal to
+  a `workspace.yml` command, and the developer prompt hands the sub-agent that same list with
+  "these commands are the only ones you may run". Between them, the only test instrument the
+  framework offered was the whole suite. Measured this week on three real workspaces: in one of
+  them that suite is 11,929 tests over 855 files, and a developer iterating a story ran it six
+  to ten times, on top of the two or three the Definition of Done itself pays for (preflight
+  once per run, cached; then once per attempt). The waste was never the gate — it was the
+  iteration loop, for which there was no faster instrument. `test_fast` is that instrument, and
+  it is deliberately not evidence: it is declared, so the developer may run it, and a ```dod
+  line equal to it is REFUSED with a sentence that names the slot rather than the generic "not
+  one of workspace.yml's commands", which would be false about a command the file plainly
+  declares. `tldrx init` does not guess it — no manifest says which subset of a suite is the
+  fast one, and a synthesised answer is exactly the conventional wisdom `command_probes:` exists
+  to keep out of this file — so the emitted `workspace.yml` carries the slot commented out with
+  a line saying what it is for, and nothing probes a slot nobody declared. When the workspace
+  declares one, the developer prompt says both halves: iterate on the fast command, and run the
+  declared full command once before you stop, because the gate re-runs it after. When it does
+  not, the prompt is byte-identical to the one before this existed. Additive: `version:` stays
+  `1`, and every workspace written without the slot loads and behaves exactly as it did.
+
 ### Changed
 
 - **The Build stage ships `parallel: 2`, so a wave runs two stories at a time out of the box.**

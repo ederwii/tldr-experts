@@ -45,6 +45,18 @@ stage measured $1.20–1.40. Nothing is charged until you run a stage, and
 `tldrx next --dry-run` shows you the prompt and the ceiling without spawning anything. See
 [Budgets and estimates](/guides/budgets).
 
+## My test suite takes minutes. Does the developer have to run all of it?
+
+Only once. A story's definition of done must name commands your `workspace.yml` declares,
+so for a long time the whole suite was the only test command a Build sub-agent was allowed
+to run — and it ran it every time it wanted to know whether it was close. Declare a
+`test_fast:` beside `test:` in `workspace.yml` and the developer is told to iterate on the
+fast one and run the declared full command once before it stops. `test_fast` is never a
+definition-of-done command: a `dod` block that names it is refused at plan time, with a
+sentence saying which slot it came from. Nothing detects it for you — no manifest says
+which subset of your suite is the fast one — so `tldrx init` leaves the slot commented out
+and you write it, or you leave it out and nothing changes.
+
 ## Is my code sent anywhere?
 
 `run new`, `answer`, `approve`, `status`, `cost` and `learn` are offline — filesystem and

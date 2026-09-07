@@ -372,6 +372,7 @@ function calibration(): readonly string[] {
     "  re-run only the test file that covers it — not the declared suite, which runs once, at the",
     "  Definition of Done — and watch it go red.",
     "- COSMETIC: an ordinary review. Do not spend a security reviewer on a label.",
+    "- If workspace.yml declares `test_fast`, brief the builder: iterate on it, run `test` once.",
     "",
   ];
 }

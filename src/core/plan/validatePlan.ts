@@ -64,8 +64,19 @@ export interface PlanReport {
  * `planDir` is the run's `03-plan/` folder. `allowed` is the set of commands
  * `.tldrx/workspace.yml` declares; an empty set skips the membership rule (same
  * `[assumption]` as `validateStoryDod`).
+ *
+ * `iterationOnly` is the subset of those the Definition of Done may NOT name — the
+ * repos' `test_fast` commands (`schemas/commandAllowlist.ts`). Passed rather than
+ * derived here because this function opens files and resolves nothing: the caller
+ * already has the loaded workspace, and it is the only reader that knows which
+ * declared string sits in which slot. Empty ⇒ every declared command is dod-legal,
+ * which is every workspace written before the slot existed.
  */
-export function validatePlan(planDir: string, allowed: ReadonlySet<string> = new Set()): PlanReport {
+export function validatePlan(
+  planDir: string,
+  allowed: ReadonlySet<string> = new Set(),
+  iterationOnly: ReadonlySet<string> = new Set(),
+): PlanReport {
   const issues: PlanIssue[] = [];
   const add = (file: string, list: readonly ValidationIssue[]): void => {
     for (const issue of list) issues.push({ ...issue, file });
@@ -91,7 +102,9 @@ export function validatePlan(planDir: string, allowed: ReadonlySet<string> = new
   }
   for (const name of storyFiles) {
     const rel = `${STORIES_DIR}/${name}`;
-    const parsed = validateStoryFile(readFileSync(join(planDir, STORIES_DIR, name), "utf8"), allowed);
+    const parsed = validateStoryFile(
+      readFileSync(join(planDir, STORIES_DIR, name), "utf8"), allowed, iterationOnly,
+    );
     add(rel, parsed.validation.issues);
     const story = parsed.story;
     if (story === null) {

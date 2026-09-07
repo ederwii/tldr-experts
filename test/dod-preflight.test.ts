@@ -640,6 +640,7 @@ describe("the base refusal cites init's probe when one exists", () => {
       repoCommands: new Map([["app", ["npm run test"]]]),
       commandRoles: new Map([["app", new Map([["test", "npm run test"]])]]),
       commandProbes: new Map([["app", new Map(Object.entries(probes))]]),
+      iterationCommands: new Set<string>(),
       defaultBranches: new Map([["app", "main"]]),
       seedTriageThresholdTokens: null,
     };

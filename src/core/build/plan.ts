@@ -121,10 +121,16 @@ export class PlanLoadError extends Error {}
 
 /**
  * `planDir` is the run's `03-plan/`; `allowed` is `workspace.yml`'s command set,
- * which the story validator checks every dod line against.
+ * which the story validator checks every dod line against. `iterationOnly` is the
+ * declared subset a Definition of Done may not name — the repos' `test_fast`
+ * commands (`schemas/commandAllowlist.ts`); empty is every pre-slot workspace.
  */
-export function loadBuildPlan(planDir: string, allowed: ReadonlySet<string>): BuildPlan {
-  const report = validatePlan(planDir, allowed);
+export function loadBuildPlan(
+  planDir: string,
+  allowed: ReadonlySet<string>,
+  iterationOnly: ReadonlySet<string> = new Set(),
+): BuildPlan {
+  const report = validatePlan(planDir, allowed, iterationOnly);
   if (!report.ok) {
     throw new PlanLoadError(`03-plan/ does not validate — ${describePlanIssues(report.issues)}`);
   }
@@ -145,7 +151,7 @@ export function loadBuildPlan(planDir: string, allowed: ReadonlySet<string>): Bu
       const path = join(planDir, STORIES_DIR, `${id}.md`);
       if (!existsSync(path)) throw new PlanLoadError(`${STORIES_DIR}/${id}.md is scheduled in ${wave.id} but missing`);
       const text = readFileSync(path, "utf8");
-      const parsed = validateStoryFile(text, allowed);
+      const parsed = validateStoryFile(text, allowed, iterationOnly);
       if (parsed.story === null) throw new PlanLoadError(`${STORIES_DIR}/${id}.md does not validate`);
       const planned: PlannedStory = {
         story: parsed.story,

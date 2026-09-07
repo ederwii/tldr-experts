@@ -13,6 +13,7 @@ import {
 } from "../../core/paths.ts";
 import type { EpicRef, EpicWorktree, SrcContext } from "../../core/text/srcToken.ts";
 import { commandProbeIssues, type CommandProbeRecord } from "../../core/schemas/workspace.ts";
+import { ITERATION_ONLY_SLOT } from "../../core/schemas/commandAllowlist.ts";
 
 /** The run's own record — where `build.epic_branch` is written (issue #140). */
 const RUN_YML = "run.yml";
@@ -97,6 +98,18 @@ export interface WorkspaceContext {
    * Absent from every `workspace.yml` written before #168, which loads as an empty map.
    */
   readonly commandProbes: ReadonlyMap<string, ReadonlyMap<string, CommandProbeRecord>>;
+  /**
+   * Every declared `test_fast` command — the ones a Definition of Done may NOT name.
+   *
+   * A SUBSET of `commands` above, never a replacement for it: `test_fast` is declared,
+   * so it is runnable and citable like any other command, and the developer is meant to
+   * run it. What it is not is evidence, so `validatePlan` refuses a ```dod line equal to
+   * one (`schemas/commandAllowlist.ts`). Derived here, where the slot keys are still
+   * attached, because every reader downstream sees only flat strings.
+   *
+   * Empty for every workspace.yml written before the slot existed.
+   */
+  readonly iterationCommands: ReadonlySet<string>;
   /** repo name -> `default_branch` — the base an epic branch is cut from (spec §2.1). */
   readonly defaultBranches: ReadonlyMap<string, string>;
   /**
@@ -185,11 +198,12 @@ export function loadWorkspace(root: string): WorkspaceContext {
   const repoCommands = new Map<string, readonly string[]>();
   const commandRoles = new Map<string, ReadonlyMap<string, string>>();
   const commandProbes = new Map<string, ReadonlyMap<string, CommandProbeRecord>>();
+  const iterationCommands = new Set<string>();
   const defaultBranches = new Map<string, string>();
   let seedTriageThresholdTokens: number | null = null;
   const empty = (): WorkspaceContext => ({
-    root, repos, commands, repoCommands, commandRoles, commandProbes, defaultBranches,
-    seedTriageThresholdTokens,
+    root, repos, commands, repoCommands, commandRoles, commandProbes, iterationCommands,
+    defaultBranches, seedTriageThresholdTokens,
   });
   const path = join(root, PROJECT_FRAMEWORK_DIR, "workspace.yml");
   if (!existsSync(path)) return empty();
@@ -227,6 +241,8 @@ export function loadWorkspace(root: string): WorkspaceContext {
     }
     repoCommands.set(entry.name, own);
     commandRoles.set(entry.name, roles);
+    const fast = roles.get(ITERATION_ONLY_SLOT);
+    if (fast !== undefined) iterationCommands.add(fast);
     commandProbes.set(entry.name, measured.get(entry.name) ?? new Map<string, CommandProbeRecord>());
   }
   return empty();
