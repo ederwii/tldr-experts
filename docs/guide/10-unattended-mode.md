@@ -261,6 +261,47 @@ notes}` to `result.json`, and:
 $ tldrx next --commit 260830-tenancy
 ```
 
+**Read that envelope's shape out of the bundle, not out of this page.** The developer
+`pending.json` carries `result_schema` too — the `{outputs, questions_asked, notes}` envelope
+the spawned half is handed, plus the `cost_usd` and `session_id` a host may declare — derived
+from that schema rather than retyped, so a change to the envelope cannot reach a spawn without
+reaching the bundle. It was the reviewer's alone until a real run measured the cost: the one
+role told to read its shape off the bundle could, and the other guessed by copying a sibling
+story's `result.json`.
+
+The two halves are read with deliberately different strictness, and that is the thing to know
+before you write one. A **reviewer** envelope is refused on its form. A **developer** envelope
+is coerced: a missing `outputs` reads as `[]`, a non-string `notes` as `""`, and — the coercion
+that hides best — `outputs` and `questions_asked` are declared arrays of strings, so the reader
+silently drops every element that is not one. `["good", 42, null, "also-good"]` passes any
+whole-field type check and still arrives as two entries.
+
+### Rehearsing it: `--commit --check`
+
+```
+$ tldrx next --commit --check 260830-tenancy
+```
+
+`--check` validates the prepared bundle's `result.json` through the **same reader** `--commit`
+uses — no second implementation of the grammar, the dispositions or the verdict enum — prints
+every refusal verbatim with the offending line, and exits `0` when `--commit` would read the
+envelope and `1` when it would not. It takes no lock, moves no cursor, records no event and
+spends no attempt: `run.yml`, the story file and `events.jsonl` are byte-identical either side
+of it.
+
+It exists for a refusal that used to arrive too late. Two reviews were refused at
+`--commit --review` because a `[src: …]` citation inside a `refuted` finding was not the last
+thing on its line — both refusals correct, both arriving after the turn had been paid for, and
+the host's answer was to stop using `refuted` at all. The reviewer cannot check itself: its
+tools are `Read`, `Grep`, `Glob` and `Bash(git diff *)`, so there is no door to run a validator
+through. The affordance belongs to you, while the turn is still open.
+
+On a developer bundle, where the reader coerces rather than refuses, `--check` exits `0` and
+**names what is about to be coerced** — each dropped element by index and by the JSON of its
+value — rather than inventing a refusal the framework does not make. It answers for the result
+envelope only: the declared outputs are still re-read off disk at `--commit`, and the stage's
+checks still run there.
+
 The framework picks the story's pipeline up at the DoD step: it re-runs the definition of done
 in the story's own worktree, commits, and merges into the epic. Then — because this run is
 attended — it does **not** spawn a reviewer. It writes the reviewer's bundle and stops:
