@@ -129,8 +129,13 @@ language, and inference is not measurement. So `init` runs each `build`, `test`,
 is `null` for every other non-`ok` status, because nothing exited: a command whose binary is
 missing is `unspawnable` with the system's message, never a fabricated code.
 
-`run` is never probed — it starts a server. `command_probes:` gates nothing: `commands:` is
-still the only allowlist the Definition of Done may run, and a red probe blocks no story.
+Two things are `not-probed`, and the `reason` says which. `run` is never probed — it starts a
+server, so a probe of it hangs or leaves a process behind. And a command that needs a shell is
+never probed either: the probe argv-splits through the same splitter the DoD gate uses and opens
+no shell, so `npm run test | tee out.txt` is recorded rather than run.
+
+`command_probes:` gates nothing: `commands:` is still the only allowlist the Definition of Done
+may run, and a red probe blocks no story.
 
 `--no-probe` skips the probing. Every slot that would have been probed then carries
 `skipped: --no-probe` as its reason — because "not measured" and "chose not to measure" are
@@ -1169,6 +1174,21 @@ run's own; an unrelated branch is refused). `--base` overrides what the PR opens
 which defaults to that repo's `default_branch` from `.tldrx/workspace.yml`. A partial failure
 names both sides — the PRs that were opened, with their URLs, and the repos that failed, with
 the reason — and re-running retries the rest, skipping any repo whose PR is already open.
+
+The success line names how the body was made rather than leaving you to open the PR to find
+out: `body: rendered from 04-build/handoff.md · 2 open findings`, or `· no open findings` when
+there are none. A `--dry-run` prints the same recipe with the body's byte count beside it.
+
+**It refuses an epic branch that carries tldrx's own state**, because `tldrx-work/` and
+`.tldrx/` are written LIVE into the workspace checkout for the length of a run, and a PR that
+merges them makes the next `git pull` there refuse (measured on a real workspace, 2026-09-02:
+a refused pull over 5 modified and ~40 untracked paths). The refusal names up to five of the
+paths and prints the two commands that take them off the branch — a `git checkout` then a commit,
+a forward commit and never a rebase. Since #167 that refusal has an ALLOWED move: a path a
+story at `status: done` declares in its `touches:` is subtracted first, the refusal says which
+story excused which path, and the remedy command names only the paths still refused — so the
+fix cannot revert the `workspace.yml` edit the settled story was written to make. A story at
+`review` or `blocked` excuses nothing: that is a plan, not a verdict. Exit `2`.
 
 `--dry-run` runs every check and prints the exact `gh` command, creating nothing. It is
 read-only about the run either way: no event, no gate, no cursor. To mirror the plan's epics

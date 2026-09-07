@@ -41,6 +41,14 @@ afirmación, y así es como se le pone fuente. Se rechaza en una afirmación **p
 fuera de la sección `Unknowns`: no puedes citar un directorio vacío como prueba de que algo
 existe.
 
+**Un comando rechazado no lleva ninguna cita `$ … → exit <n>`.** Esa forma necesita un
+código de salida, y un comando del Definition of Done que tu `workspace.yml` no declara — o uno
+que necesita un shell, que la compuerta nunca abre — nunca corrió, así que no hay ninguno que
+escribir. Tampoco se registra como `exit 126`. El Evidence ledger dice
+`was REFUSED and never ran`, cita textualmente la frase de la compuerta, y en lugar del comando
+apunta al log de revisión de la story. Un rechazo y un build en rojo son hechos distintos, y
+solo uno de los dos es una medición.
+
 ## Tres resultados, no dos
 
 Cada fuente resuelve a `ok`, `refused` o `unverified`.

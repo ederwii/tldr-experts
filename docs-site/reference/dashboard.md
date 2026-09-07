@@ -51,6 +51,10 @@ or on any `--prepare` — so a red you fixed a moment ago is not a verdict the f
 repeating. A green row is not re-measured on age: it is pinned to the base sha it was taken
 on, and a different base is a different question.
 
+A row the gate declined to run at all reads `REFUSED` where the exit code goes, with the gate's
+own sentence beside it. Nothing spawned, so there is no exit code to draw, and the page carries
+that absence rather than the `126` it used to invent for it.
+
 ## The Now strip answers three questions
 
 Is a **human** waited on right now, is anything **broken or quiet**, and what has it

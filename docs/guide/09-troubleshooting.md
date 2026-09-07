@@ -328,6 +328,17 @@ fast-forward was attempted and git refused it — a file in the way is the usual
 atomic-or-nothing, so nothing needs repairing: the second line says the branch was left where
 it was and how far behind. Clear whatever git named and run `tldrx next --prepare` again.
 
+**``· S3: no `epic_base` was recorded for this story — its Build predates the fix (#166), so
+the reviewer is handed `git diff epic/…...`, which is EMPTY for a story that is already
+merged``.** A warning, not a refusal, and only on a story built before 2026-09-06. Since #166
+the executor records the epic's sha as it was *immediately before* the story merged, and every
+reviewer diffs against that; a run from before it recorded no such sha, and the only fallback
+is the epic branch — which git resolves at read time to the epic AFTER the merge, so the range
+is empty. Both resume doors say so (`tldrx next --prepare --review`, and a re-review after a
+reviewer failed) rather than passing an empty diff off as a review. Read that verdict as a
+judgement over nothing. Nothing is invented to fill the gap: the record carries no base at all
+rather than today's epic sha, which is the bug #166 fixed.
+
 **`auto gate not taken — stories=1 of 7 done — S2:blocked, …`.** A Build stage does not sign
 its own gate while any story is unfinished. Approve it yourself if half the epic is what you
 mean to ship (`tldrx approve --note "…"`), or fix the stories and run the stage again.
@@ -336,7 +347,25 @@ mean to ship (`tldrx approve --note "…"`), or fix the stories and run the stag
 keeps its plain name on purpose — it is the unit a team merges — so instead of making collision
 impossible, adopting one is made deliberate: `tldrx next --reuse-epic`.
 
-**The build stage refuses before cutting anything.** The repo is dirty. Commit or stash first.
+**``[tldrx] build: repo `lab` has 3 uncommitted change(s) on `main` — refusing to cut an epic
+branch from a dirty tree``.** The next line names up to five of them. **The reason is the base
+pre-flight, not the worktree** (corrected 2026-09-06, #164): a new worktree is a fresh checkout
+and inherits nothing, but the #41 base pre-flight runs the workspace's own gate commands in the
+repo's ordinary checkout — deliberately, because that is the tree with the installed
+dependencies — so uncommitted product changes sit *inside* the measurement that decides whether
+a story's red Definition of Done is the story's fault or the base's.
+
+**Only PRODUCT dirt counts.** `tldrx-work/` and `.tldrx/` are the framework's own state, and in
+a `root_is_repo: true` workspace they live inside the product repo; counting them made the
+command refuse the files it had just written itself. The refusal prints the two literal commands
+and **stashes nothing on its own** — a framework-owned stash left behind by a crash mid-wave
+would strand your work somewhere you did not put it:
+
+```bash
+git -C <repo> stash push -u -m "tldrx <run-id> foreign work"
+tldrx next
+git -C <repo> stash pop
+```
 
 **`05-watch/watch refuses to start: run.yml records `epic/<x>` for `<feature>`, and it does not
 resolve in `<repo>``, exit 2.** The Watch stage diffs the branch this run's own Build recorded in

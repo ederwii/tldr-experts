@@ -101,7 +101,7 @@ stack_packs:                 # the one opt-in switch for the stack expert packs;
 | `repos[].path` | rel path | y | Inside root, no `..`; `.` in single-repo mode |
 | `repos[].default_branch` / `.stack` / `.package_manager` | str / str[] / str\|null | y | Epic-branch base; detected languages (may be empty); `npm`, `nuget`, `pip`, … |
 | `repos[].commands.{build,test,lint,typecheck,run}` | str\|null | y (all keys) | Run from `path`; `null` = unavailable |
-| `repos[].command_probes.<slot>.{status,verified,exit_code,at,reason}` | enum / bool / int\|null / RFC3339 / str | n | What `init` MEASURED about the command in that slot: it ran each `build`/`test`/`lint`/`typecheck` command once. `status` is the field to branch on — `ok` \| `failed` \| `timed-out` \| `unspawnable` \| `not-probed` \| `skipped` — and `verified` is `status == ok`. Only `failed` is a measured red. `exit_code` is non-null ONLY for `ok`/`failed`, because only those mean a process exited: a command whose binary is missing is `unspawnable` with the system's own message, never a fabricated `127`. `reason` is REQUIRED in every case, so a non-`ok` row always says why. `run` is never probed (it starts a server) ⇒ `not-probed`. `--no-probe` writes `skipped` on every slot it would have probed; `run` keeps its own `not-probed`, and a synthesised command's reason still says it was synthesised. Records only: `commands` above is still the sole allowlist, and a red probe refuses nothing |
+| `repos[].command_probes.<slot>.{status,verified,exit_code,at,reason}` | enum / bool / int\|null / RFC3339 / str | n | What `init` MEASURED about the command in that slot: it ran each `build`/`test`/`lint`/`typecheck` command once. `status` is the field to branch on — `ok` \| `failed` \| `timed-out` \| `unspawnable` \| `not-probed` \| `skipped` — and `verified` is `status == ok`. Only `failed` is a measured red. `exit_code` is non-null ONLY for `ok`/`failed`, because only those mean a process exited: a command whose binary is missing is `unspawnable` with the system's own message, never a fabricated `127`. `reason` is REQUIRED in every case, so a non-`ok` row always says why. `not-probed` has exactly two causes, and the `reason` says which: `run` (it starts a server, so a probe of it hangs or leaves a process behind) and a command that needs a shell, which the probe does not open — it argv-splits through the same `splitArgv` the DoD gate uses. `--no-probe` writes `skipped` on every slot it would have probed; `run` keeps its own `not-probed`, and a synthesised command's reason still says it was synthesised. Records only: `commands` above is still the sole allowlist, and a red probe refuses nothing |
 | `repos[].ci` | rel path[] | n | CI definition files found |
 | `repos[].confidence` | `high\|medium\|low` | y | `low` forces an interview question at init |
 | `repos[].overlays[].{id,evidence}` | str / str | n | Framework overlays detection can PROVE from this repo's manifests (`src/core/detect/overlays.ts` is the one table of ids), each with the manifest signal that fired it. Always written, whatever the switch says: the evidence is a detection result. `stack_packs.enabled` gates only whether they are MATERIALISED under `experts/<lang>-stack/overlays/` |
@@ -957,6 +957,23 @@ soft-wrapped citation on an indented continuation line still counts. An ordered 
 (`…global since` / `  2019. That has not changed` is one wrapped item, not two). `file` paths exist with the line in
 range; `cmd` tokens only in `Evidence ledger`; `doc` requires https; ≤200 items.
 
+**A command that never RAN has no legal `cmd` citation (2026-09-06, #165).** The production is
+`cmd := "$ " command " → exit " digit+`, so the token cannot be written at all without an exit code, and a DoD command
+the gate REFUSED — not byte-equal to a `workspace.yml` command, or needing a shell — produced no exit code to write.
+The Build handoff's `Evidence ledger` therefore carries a different row for it, and the row is a NEGATIVE claim that
+names what was looked at rather than a citation-shaped guess:
+
+```markdown
+## Evidence ledger
+- S3: `npm run e2e` in lab was REFUSED and never ran — `npm run e2e` is not one of .tldrx/workspace.yml's commands. Declared: `npm run build`, `npm run test`. [src: 04-build/log/S3.md:1]
+```
+
+The middle is the gate's OWN refusal sentence, verbatim, and the `[src: …]` is a `file` src pointing at the story's
+review log (`04-build/log/<story>.md`), where that refusal is also written — the same shape the "ran in an earlier
+`tldrx next`" row already used for a command whose exit code this process could not read. A ledger that cited
+`$ npm run e2e → exit 126` instead would be a measurement of a process that was never started, and three documents
+rendered it as one before this.
+
 **A token may be followed by punctuation, and only by punctuation.** It must be the LAST semantic element of the line;
 closing quotes, backticks, brackets and a terminal `.` / `,` / `;` / `!` / `?` after the `]` are ignored. Measured
 2026-08-29: a real user's first `tldrx next` was refused with "9 unsourced bullet(s)" when all nine carried a citation
@@ -1134,6 +1151,32 @@ price). Still costs the attempt, unchanged: a verdict's CONTENT, a red DoD, a se
 bound, a reviewer that never answered — and **any refusal the format index does not claim.** That last one is the
 guard: the free round is granted only when every reason the envelope was refused is indexed as form
 (`isFormatRejection`), so a future refusal about the WORK costs the attempt until somebody deliberately says otherwise.
+
+**A `check: "dod"` result carries `exit_code` OR `refused` — never both, and never a fabricated code (2026-09-06,
+#165).** Both `check.passed` and `check.failed` for a Definition-of-Done command carry `phase`, `check: "dod"`,
+`story`, `command` and `detail`. What varies is the one field that says what happened to the process:
+
+- the command RAN ⇒ `exit_code` (an integer; a command killed at its deadline is recorded as `124`, the conventional
+  code for a timeout, on a process that really did start), and no `refused` key;
+- the gate REFUSED it ⇒ `refused`, the gate's own sentence, and **no `exit_code` key at all**, because nothing spawned.
+  `detail` carries the same sentence.
+
+A refused command is always a `check.failed`: the pass/fail choice asks for a result that RAN, exited `0` and did not
+time out, so a refusal can never be read as a pass. Both keys are OMITTED rather than nulled, so a reader that asks
+"is there an exit code" gets the right answer without knowing this rule. Before this the emitter wrote `exit_code: 126`
+on a refusal, and the handoff, the review log, the retro and the dashboard all rendered it as a measurement of a
+command that never started.
+
+**`task.done` carries `epic_base` (2026-09-06, #166).** ADDITIVE and optional: the FULL 40-character sha the story's
+epic branch pointed at *immediately before* the story merged into it — the base the reviewer's diff was computed from.
+Full, not abbreviated, because the record is durable and a prefix that is unambiguous today can go ambiguous as the
+repo grows, at which point the `git diff <base>...<branch>` a re-review is handed simply fails. It is **omitted, never
+blanked**, on every settle that did not watch a merge happen, and it is absent from every event written before it
+existed. A reader that finds it absent falls back to `epic_branch` — which renders the bytes an old record was
+reviewed against, and whose range is EMPTY for a story that is already merged — so both resume doors
+(`next --prepare --review` and a re-review) print one line naming the absence, its reason and its consequence rather
+than passing the empty diff off as a review. Absent-with-reason: the omitted key is the honest half, the line is the
+other half. See §5's Build-executor review section for the same fact from the reviewer's side.
 
 ```json
 {"ts":"2026-08-28T14:29:58Z","run":"260828-leaderboard","stage":"contracts","type":"agent.result","actor":"architect","cost_usd":2.61,"payload":{"phase":"02-how","task":"t1","session_id":"1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d","model":"sonnet","outputs":["02-how/contracts.md"],"usage":{"input_tokens":184203,"output_tokens":9114}}}
@@ -1391,11 +1434,11 @@ Filled by Build, one bullet per proof. [src: $ npm run test → exit 0]
 | `repo` | `^[a-z0-9-]{1,32}$` | y | A `workspace.yml` repo name — the worktree's repo and the DoD's cwd |
 | `status` | `todo\|in_progress\|review\|done\|blocked` | y | The line `dod-gate` watches for `done` |
 | `depends_on` | `S<n>[]` (≤64, unique) | y | Stories that must be done first; may not contain this story. `waves.yml` must place every one of them in an earlier wave |
-| `touches` | rel path[] (≥1, ≤128) | y | Files/dirs this story is expected to change; no `..`. Two stories in one wave touching the same path is a plan smell, not a schema error. **Completeness is not schema-checkable** — a short list is a valid list, and the cost lands one stage later, at the developer prompt's "change only what `touches` names" and auto-gate condition 7 — so the Plan prompt carries a three-sweep completeness checklist (tests · registration sites · files a gate reads), generated beside this table by `renderPlanSchemaContract()` (gh #132) |
+| `touches` | rel path[] (≥1, ≤128) | y | Files/dirs this story is expected to change; no `..`. Two stories in one wave touching the same path is a plan smell, not a schema error. **Completeness is not schema-checkable** — a short list is a valid list, and the cost lands one stage later, at the developer prompt's "change only what `touches` names" and auto-gate condition 7 — so the Plan prompt carries a three-sweep completeness checklist (tests · registration sites · files a gate reads), generated beside this table by `renderPlanSchemaContract()` (gh #132). **A SETTLED story's declaration is also read by `tldrx ship` (#167)**: a `tldrx-work/`/`.tldrx/` path on the epic branch that a story at `status: done` declared here is excused from ship's state refusal, named with the story that excused it, and left out of the remedy command. `done` and only `done` — a story at `review` or `blocked` has a declaration and no verdict — and an excuse answers only for the `repo:` its own story names, since `touches:` is relative to that repo |
 | `acceptance` | str[] (≥1, ≤64) | y | What must be true for a human to accept it |
 | `test_plan` | str[] (≥1, ≤64) | y | How it will be proven, before it is written |
 | `evidence` | str[] (≤64) | y | Filled by Build. **Required non-empty when `status: done`** — done means proven, not asserted. May cite `04-build/fixlist/<id>-<n>.md` beside the review log when the story went through a fix-list round |
-| ` ```dod ` block | fenced, ≥1 command | y | Each line must equal a `workspace.yml` command **verbatim**; `dod-gate` re-runs all of them from `repo` and every one must exit `0`. Editing `workspace.yml` therefore orphans every approved story that cited the old string — `tldrx plan sync-dod` is the mechanical repair, and the drift message names it |
+| ` ```dod ` block | fenced, ≥1 command | y | Each line must equal a `workspace.yml` command **verbatim**; `dod-gate` re-runs all of them from `repo` and every one must exit `0`. A command the gate REFUSES — not byte-equal to a declared one, or needing a shell — never runs, so it can never be green: it is recorded as REFUSED with the gate's own sentence and **no exit code at all**, in the event, the handoff, the review log and the retro alike (§2.8, §2.9). Editing `workspace.yml` therefore orphans every approved story that cited the old string — `tldrx plan sync-dod` is the mechanical repair, and the drift message names it |
 
 **Validation.** Front matter present and parseable; keys and enums as above; `id` matches the file name; `depends_on`
 free of self-reference and duplicates; every ` ```dod ` command in `workspace.yml` (skipped when there are no commands to
@@ -1650,7 +1693,7 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 
 | Command | Reads | Writes | Exit |
 |---|---|---|---|
-| `tldrx init [--stack <a,b>]` | cwd tree, git dirs, package/build files, `env.yml` | `workspace.yml` (incl. `mode: greenfield`), `map/**`, `conventions/**`, `experts/*/` (always a `product`, one `<lang>-stack` per detected **or declared** language), `facts.yml`, `.gitignore`, `CLAUDE.md` pointer | 0,1 |
+| `tldrx init [--stack <a,b>] [--no-probe]` | cwd tree, git dirs, package/build files, `env.yml`; and it RUNS each repo's detected `build`/`test`/`lint`/`typecheck` command once, argv-only, to record whether it works (`--no-probe` skips that and records the skip) | `workspace.yml` (incl. `mode: greenfield` and §2.1's `command_probes`), `map/**`, `conventions/**`, `experts/*/` (always a `product`, one `<lang>-stack` per detected **or declared** language), `facts.yml`, `.gitignore`, `CLAUDE.md` pointer | 0,1 |
 | `tldrx doctor [--mcp] [--json]` | `env.yml`, `workspace.yml`, `.tldrx/stages/**`, `.claude/settings.json`, plus a shallow scan of `.tldrx/**` + `tldrx-work/*/{run,budget}.yml` for the deprecated `schema_version:` key, plus `git check-ignore` over four `[c]` state paths | `env.yml.result`, `cache/doctor.json` | 0,1 |
 | `tldrx install --claude [--project\|--user] [--skill-only] [--no-hooks] [--no-statusline] [--force-statusline] [--uninstall] [--dry-run]` | `plugin/skills/tldrx/SKILL.md`, the target `.claude/settings.json` | `.claude/skills/tldrx/SKILL.md` (marked `<!-- tldrx-managed -->`), `.claude/settings.json` (the §4 hooks as `tldrx hook <name>` + `statusLine`), `settings.json.bak-tldrx-<ts>` | 0,1 |
 | `tldrx status [--json]` | `.tldrx/init-questions.md`, `.tldrx/triage/*/{split.yml,inventory.json}` and the seed documents those name, `tldrx-work/*/run.yml` (incl. `triage.depends_on`), `.tldrx/experts/**`, every `stage.yml` | nothing (stdout) | 0,3 |
