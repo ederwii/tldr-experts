@@ -144,7 +144,14 @@ export function writeReviewBundle(parts: ReviewBundleParts): string {
     attempt: parts.attempt,
     max_attempts: MAX_ATTEMPTS,
     worktree: relative(parts.root, parts.worktree),
-    dod: parts.work.dod.map((r) => ({ command: r.command, exit_code: r.exitCode })),
+    // A refused row hands the host `refused` and NO `exit_code`: the bundle is
+    // the contract read back from the host, so an invented number here would
+    // come back as a measurement (#165).
+    dod: parts.work.dod.map((r) => ({
+      command: r.command,
+      ...(r.exitCode === undefined ? {} : { exit_code: r.exitCode }),
+      ...(r.refusedBecause === undefined ? {} : { refused: r.refusedBecause }),
+    })),
     resumed_from: parts.work.why,
   };
   const pending: PendingStage = {
@@ -254,9 +261,20 @@ export function reviewWorkFromBundle(runDir: string, key: string): ReviewWork | 
   if (review === undefined || typeof review.commit !== "string" || review.commit === "") return null;
   return {
     commit: review.commit,
-    dod: (review.dod ?? []).map((r) => ({
-      command: r.command, exitCode: r.exit_code, timedOut: r.exit_code === 124, tail: "",
-    })),
+    dod: (review.dod ?? []).map((r) => {
+      // `undefined === 124` is false, which is the right answer by accident and
+      // the wrong thing to rely on. The refusal is explicit, and a missing
+      // `exit_code` is never defaulted to anything (#165).
+      const refused = typeof r.refused === "string" && r.refused !== "";
+      return {
+        command: r.command,
+        ...(refused
+          ? { status: "refused" as const, refusedBecause: r.refused as string }
+          : { status: "ran" as const, ...(r.exit_code === undefined ? {} : { exitCode: r.exit_code }) }),
+        timedOut: !refused && r.exit_code === 124,
+        tail: "",
+      };
+    }),
     why: review.resumed_from ?? "its review is outstanding",
   };
 }

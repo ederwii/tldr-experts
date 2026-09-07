@@ -17,6 +17,7 @@ import { DodCommandRefused, runDodCommand } from "../../hooks/lib/story.ts";
 import { FALLBACK_DEFAULT_BRANCH, type WorkspaceContext } from "../../hooks/lib/workspace.ts";
 import type { EventType } from "../events/Event.ts";
 import { repoDirOf, shaOf } from "./git.ts";
+import { dodRefused } from "./outcome.ts";
 import type { BuildRefusal, DodResult, SerialWrite } from "./outcome.ts";
 import type { PlannedStory } from "./plan.ts";
 import {
@@ -123,12 +124,15 @@ export async function baseResultOf(
     };
   } catch (error) {
     if (!(error instanceof DodCommandRefused)) throw error;
-    // The gate would not run it, so nothing was learned ABOUT THE BASE. The
+    // The gate would not run it, so nothing was learned ABOUT THE BASE — and no
+    // exit code is invented to say so (#165). `unmeasured` is the status that
+    // already means this, and it still refuses nothing and excuses nothing. The
     // story-level DoD refuses it on its own terms; this must not double as a
     // second, differently-worded veto.
     measured = {
-      repo, command, baseRef, baseSha, exitCode: 126, timedOut: false,
-      tail: error.message, status: "unmeasured", commandHash: hash,
+      repo, command, baseRef, baseSha, timedOut: false,
+      tail: error.message, refusedBecause: error.message,
+      status: "unmeasured", commandHash: hash,
     };
   }
   await parts.write(() => {
@@ -188,7 +192,7 @@ export async function redBaseRefusal(
     lines: [...baseRefusalLines(failures)],
     error: first === undefined
       ? "a workspace command fails on the base tree"
-      : `\`${first.command}\` exits ${String(first.exitCode)} on the base tree of ${first.repo}`,
+      : `\`${first.command}\` exits ${String(first.exitCode ?? "?")} on the base tree of ${first.repo}`,
   };
 }
 
@@ -212,28 +216,32 @@ export async function runStoryDod(parts: DodParts): Promise<readonly DodResult[]
     // Same allowlist the hook uses, same refusal. The Build executor runs a dod
     // block in a worktree for real; an undeclared command is a failed check
     // here, not a spawn.
-    let outcome;
+    let result: DodResult;
     try {
-      outcome = await runDodCommand(command, parts.worktree, timeoutMs, parts.workspaceCommands);
+      const outcome = await runDodCommand(command, parts.worktree, timeoutMs, parts.workspaceCommands);
+      result = {
+        command,
+        status: "ran",
+        exitCode: outcome.timedOut ? 124 : outcome.exitCode,
+        timedOut: outcome.timedOut,
+        tail: outcome.tail,
+      };
     } catch (error) {
       if (!(error instanceof DodCommandRefused)) throw error;
-      outcome = { command, exitCode: 126, timedOut: false, tail: error.message };
+      // NOTHING RAN. There is no exit code, so none is written — a fabricated
+      // 126 was rendered as a measurement by three documents (#165).
+      result = { command, status: "refused", refusedBecause: error.message, timedOut: false, tail: "" };
     }
-    const result: DodResult = {
-      command,
-      exitCode: outcome.timedOut ? 124 : outcome.exitCode,
-      timedOut: outcome.timedOut,
-      tail: outcome.tail,
-    };
     results.push(result);
-    const green = result.exitCode === 0 && !result.timedOut;
+    const green = !dodRefused(result) && result.exitCode === 0 && !result.timedOut;
     parts.emit(green ? "check.passed" : "check.failed", {
       phase: parts.phaseId,
       check: "dod",
       story: parts.storyId,
       command,
-      exit_code: result.exitCode,
-      detail: green ? "" : result.tail,
+      ...(dodRefused(result) ? {} : { exit_code: result.exitCode }),
+      ...(dodRefused(result) ? { refused: result.refusedBecause ?? "" } : {}),
+      detail: green ? "" : (result.refusedBecause ?? result.tail),
     });
     if (green) continue;
     // Issue #41, the second reader: a red command only faults the STORY if it

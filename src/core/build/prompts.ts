@@ -264,7 +264,18 @@ export interface ReviewerPromptParts {
   readonly epicBranch: string;
   readonly worktree: string;
   readonly conventions: string;
-  readonly dodResults: readonly { readonly command: string; readonly exitCode: number }[];
+  /**
+   * What the facilitator's own DoD run found. `exitCode` is absent on a row the
+   * gate REFUSED — nothing ran, so there is no exit to quote, and quoting a
+   * fabricated one told the reviewer a command had failed when it had never
+   * started (#165).
+   */
+  readonly dodResults: readonly {
+    readonly command: string;
+    readonly exitCode?: number;
+    readonly status?: "ran" | "refused";
+    readonly refusedBecause?: string;
+  }[];
   /**
    * Is the third verdict still on the table for this story? (design §B.4)
    *
@@ -433,7 +444,9 @@ export function buildReviewerPrompt(parts: ReviewerPromptParts): string {
     "",
     ...(parts.dodResults.length === 0
       ? ["- (no dod commands)"]
-      : parts.dodResults.map((r) => `- \`${r.command}\` → exit ${String(r.exitCode)}`)),
+      : parts.dodResults.map((r) => (r.status === "refused"
+        ? `- \`${r.command}\` → REFUSED, never ran`
+        : `- \`${r.command}\` → exit ${String(r.exitCode)}`))),
     "",
     "Do not re-run them. They passed; that is why you are being asked.",
     "",

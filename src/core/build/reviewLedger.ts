@@ -251,10 +251,21 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     ranACheck = true;
 
     if (payload.check === "dod" && typeof payload.command === "string") {
-      const exitCode = typeof payload.exit_code === "number" ? payload.exit_code : 0;
+      const refused = typeof payload.refused === "string" && payload.refused !== "";
+      const exitCode = typeof payload.exit_code === "number" ? payload.exit_code : null;
       current.push({
         command: payload.command,
-        exitCode,
+        // A refused check has no exit code, and defaulting one to 0 would
+        // recover a command that never ran as a GREEN one (#165). Measured
+        // before the fix: a `check.failed` carrying only `refused` came back
+        // `{exitCode: 0}` and `dodGreen` said true.
+        //
+        // A pre-#165 event (`exit_code: 126`, no `refused`) still loads as a
+        // `ran` row with exit 126 — the file said that, and the reader reports
+        // what the file says.
+        ...(refused
+          ? { status: "refused" as const, refusedBecause: payload.refused as string }
+          : { status: "ran" as const, ...(exitCode === null ? {} : { exitCode }) }),
         timedOut: exitCode === 124,
         tail: typeof payload.detail === "string" ? payload.detail : "",
       });

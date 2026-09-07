@@ -3,7 +3,7 @@
  *
  * Wave 2 cuts a 4,351-line file into modules and claims it changed nothing. That
  * claim is only worth what proves it, and the existing suite proves PROPERTIES —
- * this proves BYTES. THREE fake-agent builds produce eighteen artifacts that are
+ * this proves BYTES. FOUR fake-agent builds produce twenty-two artifacts that are
  * compared, byte for byte, against files committed under `golden/`:
  *
  *   HEADLESS (`tldrx next`) — the path that spawns both sub-agents:
@@ -30,9 +30,25 @@
  *    17. five task rows, one of them `status: "failed"` with the error verbatim
  *    18. the exit code
  *
+ *   REFUSED (`GOLDEN_REFUSED`, headless) — a DoD command the gate DECLINES to
+ *   run, which the three above pin nothing about because all three run theirs:
+ *    19. the developer prompt (the only spawned turn — a red DoD blocks the story
+ *        before a reviewer is asked for, so there is no reviewer prompt here)
+ *    20. the ordered event stream: a `check.failed` whose `keys=[…]` carries
+ *        `refused` and does NOT carry `exit_code`, and a `task.done` at
+ *        `status: "blocked"` with `commit: null`
+ *    21. one task row — the developer's; there is no reviewer row to have
+ *    22. the exit code (`4`, `EXIT_AWAITING_HUMAN`: the stage still reached its
+ *        human gate, exactly as the two green headless scenarios do — a blocked
+ *        story is not a usage error and not a gate refusal)
+ *
  * Why a third scenario: every path tasks 4 and 5 move was covered by an existing
  * pin EXCEPT `blockedByFailedDeveloper`. `GOLDEN_ROUNDS` is that path, beside the
  * second review round that `ReviewCounters` exists to bound.
+ *
+ * Why a fourth: the other three all record a command that RAN, so none of them
+ * can show what an ABSENCE looks like on the wire. `GOLDEN_REFUSED` freezes the
+ * one record #165 was about — a check with no exit code in it at all.
  *
  * Both cycles are needed and neither is redundant. Measured at e48f4a0: a
  * `--prepare` spawns NOTHING and a `--commit` spawns only the reviewer, so the
@@ -196,6 +212,55 @@ export const INSESSION_GOLDEN: Readonly<Record<keyof CapturedInSession, string>>
   runTasks: "insession-run-tasks.txt",
 };
 
+/** The pipeline `GOLDEN_REFUSED` declares and the gate then declines to run. */
+const REFUSED_COMMAND = "npm run test | tee lint.log";
+
+/**
+ * A story whose DoD command the gate will not run — the fourth scenario (#165).
+ *
+ * The command is DECLARED under the repo's `commands:` and still refused, and
+ * that combination is the only one that reaches the DoD gate at all. Measured
+ * 2026-09-06 with an UNDECLARED command (`npm run lint` against the default
+ * fixture allowlist): `loadBuildPlan` calls `validatePlan(planDir, allowed)`
+ * (`src/core/build/plan.ts:127`), which refuses the whole plan —
+ * `04-build/build failed: 03-plan/ does not validate — stories/S1.md dod[0]:
+ * \`npm run lint\` is not one of .tldrx/workspace.yml's commands`, exit 5 —
+ * so nothing is dispatched and there is no refusal to capture. Plan validation
+ * checks allowlist MEMBERSHIP only (`schemas/commandAllowlist.ts:69`, a
+ * `Set.has`); `runDodCommand` is the one that also refuses a command it cannot
+ * argv-split (`hooks/lib/story.ts:145`). A declared pipeline is exactly the gap
+ * between the two.
+ *
+ * Nothing ran, so the capture is what an ABSENCE looks like end to end: a
+ * `check.failed` with no `exit_code` and a `refused` sentence, a story blocked
+ * with a reason that says REFUSED, and one developer task row. No reviewer is
+ * spawned — a red DoD blocks the story before the review (build.ts:1069) — so
+ * this scenario is exactly the one the other three cannot stand in for.
+ *
+ * It also covers the BASE side: the Build-entry pre-flight probes the same
+ * command and records it `unmeasured`, refusing nothing.
+ */
+export const GOLDEN_REFUSED: BuildWorkspaceOptions = {
+  stories: [{ id: "S1", epic: "E1", title: "First story", dod: [REFUSED_COMMAND] }],
+  epics: [{ id: "E1", stories: ["S1"], branch: "epic/e1" }],
+  waves: [["S1"]],
+  commands: { build: null, test: "npm run test", lint: REFUSED_COMMAND, typecheck: null, run: null },
+};
+
+export type CapturedRefused = {
+  readonly developerPrompt: string;
+  readonly events: string;
+  readonly runTasks: string;
+  readonly exitCodes: string;
+};
+
+export const REFUSED_GOLDEN: Readonly<Record<keyof CapturedRefused, string>> = {
+  exitCodes: "refused-exit-codes.txt",
+  developerPrompt: "refused-developer-S1-1.md",
+  events: "refused-events.txt",
+  runTasks: "refused-run-tasks.txt",
+};
+
 /**
  * What one headless `tldrx next` over `GOLDEN_ROUNDS` produced. Five prompts:
  * both of S1's developer turns, both of its reviewer turns, and S2's one
@@ -301,6 +366,24 @@ export async function captureRoundsBuild(
     reviewerS1Round1: prompt("reviewer-S1-1.md"),
     reviewerS1Round2: prompt("reviewer-S1-2.md"),
     developerS2: prompt("developer-S2-1.md"),
+    events: eventStream(ws, machine),
+    runTasks: taskRows(ws, machine),
+    exitCodes: `headless ${String(headless.code)}\n`,
+  };
+}
+
+/**
+ * One headless `tldrx next` over `GOLDEN_REFUSED`: the developer runs, its DoD
+ * command is REFUSED, and the story blocks before a reviewer is ever asked for.
+ */
+export async function captureRefusedBuild(
+  ws: BuildWorkspace,
+  promptDir: string,
+): Promise<CapturedRefused> {
+  const headless = await next(ws, { mode: "headless" });
+  const machine = machineOf(ws);
+  return {
+    developerPrompt: scrubPaths(readFileSync(join(promptDir, "developer-S1-1.md"), "utf8"), machine),
     events: eventStream(ws, machine),
     runTasks: taskRows(ws, machine),
     exitCodes: `headless ${String(headless.code)}\n`,

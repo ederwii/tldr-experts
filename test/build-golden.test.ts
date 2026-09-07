@@ -9,14 +9,16 @@
  * claims that changed nothing; this is what makes the claim checkable rather
  * than argued.
  *
- * THREE scenarios, none of which can stand in for another (measured at e48f4a0):
+ * FOUR scenarios, none of which can stand in for another (measured at e48f4a0):
  * `--prepare` spawns nothing and `--commit` spawns only the reviewer, so the
  * developer's own prompt bytes exist only on the headless path; the headless
  * path writes no bundle, so `prepare()`/`commit()` and the unmetered host turn
  * exist only in-session; and both of those are all-green, so a second review
- * round and a developer that never ran exist only in `GOLDEN_ROUNDS`. What is
- * normalised, and why each byte is genuinely nondeterministic, is in
- * `fixtures/build/golden.ts`'s header.
+ * round and a developer that never ran exist only in `GOLDEN_ROUNDS`. All three
+ * of those record commands that RAN, so the fourth (`GOLDEN_REFUSED`, #165) is
+ * the only one that freezes an ABSENCE: a `check.failed` with no `exit_code` in
+ * it at all. What is normalised, and why each byte is genuinely
+ * nondeterministic, is in `fixtures/build/golden.ts`'s header.
  *
  * **If this test goes red during a move step, the step is wrong. Revert it. Do
  * not regenerate the golden.**
@@ -46,8 +48,9 @@ import {
   makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions,
 } from "./fixtures/build/workspace.ts";
 import {
-  captureHeadlessBuild, captureInSessionBuild, captureRoundsBuild, GOLDEN_ROUNDS, GOLDEN_STORY,
-  HEADLESS_GOLDEN, INSESSION_GOLDEN, readGolden, ROUNDS_GOLDEN, writeGolden,
+  captureHeadlessBuild, captureInSessionBuild, captureRefusedBuild, captureRoundsBuild,
+  GOLDEN_REFUSED, GOLDEN_ROUNDS, GOLDEN_STORY,
+  HEADLESS_GOLDEN, INSESSION_GOLDEN, readGolden, REFUSED_GOLDEN, ROUNDS_GOLDEN, writeGolden,
 } from "./fixtures/build/golden.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
@@ -200,4 +203,21 @@ describe("the Build executor's observable output is byte-frozen", () => {
     ]);
     agrees(got, ROUNDS_GOLDEN);
   }, 180_000);
+
+  /**
+   * A DoD command the gate REFUSES: nothing runs, and the whole point is that
+   * nothing in the record says otherwise. The all-green captures pin no absence
+   * at all, and the rounds capture's unhappy paths are both about turns that DID
+   * run.
+   */
+  test("refused: a DoD command the allowlist does not carry blocks the story with no exit code", async () => {
+    const { ws, promptDir } = workspace(GOLDEN_REFUSED);
+
+    const got = await captureRefusedBuild(ws, promptDir);
+
+    // The premise: one developer turn and no reviewer — a red DoD blocks the
+    // story before the review is asked for.
+    expect(readdirSync(promptDir).sort()).toEqual(["developer-S1-1.md"]);
+    agrees(got, REFUSED_GOLDEN);
+  }, 120_000);
 });

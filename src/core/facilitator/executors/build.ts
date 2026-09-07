@@ -76,7 +76,8 @@ import {
   type Review,
 } from "../../build/review.ts";
 import {
-  DEVELOPER_FAILED, dodGreen, type DodResult, type RescuedWork, type StoryOutcome,
+  DEVELOPER_FAILED, dodFailureReason, dodGreen, dodRefused,
+  type DodResult, type RescuedWork, type StoryOutcome,
 } from "../../build/outcome.ts";
 import {
   CLAIMED_UNVERIFIED, canonicalizeResolutions, fixlistRel, fixlistRetroLines, latestFixlist, markUnverified,
@@ -1068,7 +1069,7 @@ class BuildSession {
     const dod = await this.runDod(story);
     const green = dod.length === 0 ? dodIsSatisfiedEmpty(this.plan) : dodGreen({ dod });
     if (!green) {
-      const failing = dod.find((r) => r.exitCode !== 0 || r.timedOut);
+      const failing = dod.find((r) => dodRefused(r) || r.exitCode !== 0 || r.timedOut);
       return {
         story,
         cost: spent,
@@ -1076,8 +1077,7 @@ class BuildSession {
         commit: null,
         failure: failing === undefined
           ? "the story declares no dod commands, so nothing could prove it"
-          : `\`${failing.command}\` exited ${String(failing.exitCode)} in repo ${story.planned.story.repo}` +
-            `${failing.timedOut ? " (timed out)" : ""} — ${failing.tail}`,
+          : dodFailureReason(failing, story.planned.story.repo),
         developerError: null,
         before,
       };
@@ -1527,13 +1527,12 @@ class BuildSession {
     const dod = await this.runDod(story);
     const green = dod.length === 0 ? dodIsSatisfiedEmpty(this.plan) : dodGreen({ dod });
     if (!green) {
-      const failing = dod.find((r) => r.exitCode !== 0 || r.timedOut);
+      const failing = dod.find((r) => dodRefused(r) || r.exitCode !== 0 || r.timedOut);
       await this.block(
         story,
         failing === undefined
           ? "the story declares no dod commands, so nothing could prove it"
-          : `\`${failing.command}\` exited ${String(failing.exitCode)} in repo ${story.planned.story.repo}` +
-            `${failing.timedOut ? " (timed out)" : ""} — ${failing.tail}`,
+          : dodFailureReason(failing, story.planned.story.repo),
         developerCost,
         dod,
       );

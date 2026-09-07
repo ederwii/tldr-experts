@@ -1092,7 +1092,10 @@ export function dashPreflightSection(run: RunModel): string {
     return `<tr><td class="mono">${dashText(row.command)}</td>`
       + `<td>${dashText(row.repo)}</td>`
       + `<td class="mono">${dashText(at)}</td>`
-      + `<td class="num">${String(row.exitCode)}${row.timedOut ? " (timed out)" : ""}</td>`
+      // An absent exit code is drawn as an absence with its reason beside it —
+      // the `tail` column already carries the gate's sentence (#165).
+      + `<td class="num">${row.exitCode === null ? "not run" : String(row.exitCode)}`
+      + `${row.timedOut ? " (timed out)" : ""}</td>`
       + `<td><span class="chip" data-st="${dashEscape(tone)}">${dashText(row.status)}</span></td>`
       + `<td class="faint">${dashText(row.tail)}</td></tr>`;
   }).join("");

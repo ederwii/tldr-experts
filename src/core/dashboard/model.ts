@@ -264,12 +264,23 @@ export interface PreflightRowModel {
   readonly baseRef: string;
   /** Short sha of `baseRef` when it was measured; `""` when git had no answer. */
   readonly baseSha: string;
-  readonly exitCode: number;
+  /**
+   * The measured exit, or `null` when there is none to report.
+   *
+   * `null` is the ABSENCE, not a zero and not a failure: the gate refused to run
+   * the command, so nothing spawned (#165). The page carries the absence rather
+   * than inventing a number, and `status`/`refusedBecause` beside it say why.
+   * ADDITIVE — a widened type, no field's meaning moved, so
+   * `DASHBOARD_MODEL_VERSION` does not bump.
+   */
+  readonly exitCode: number | null;
   readonly timedOut: boolean;
   /** `ok` | `failed` | `unmeasured`. */
   readonly status: string;
   /** Last meaningful line of the output — the operator's first clue. */
   readonly tail: string;
+  /** Present only on a REFUSED probe: the gate's own sentence, verbatim. */
+  readonly refusedBecause?: string;
 }
 
 /**
@@ -1360,10 +1371,14 @@ function toPreflightModel(loaded: LoadedRun): PreflightModel | null {
       command: row.command,
       baseRef: row.baseRef,
       baseSha: row.baseSha,
-      exitCode: row.exitCode,
+      // The absence is CARRIED, never filled in: a row the gate refused has no
+      // exit code, and `?? 0` here would draw a green base for a command that
+      // never ran (#165).
+      exitCode: row.exitCode ?? null,
       timedOut: row.timedOut,
       status: row.status,
       tail: row.tail,
+      ...(row.refusedBecause === undefined ? {} : { refusedBecause: row.refusedBecause }),
     })),
   };
 }

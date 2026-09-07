@@ -386,6 +386,15 @@ describe("the live client, and the static page that must not carry it", () => {
    * `gateAuthority`, null on this fixture) and one more serialised renderer
    * function (`dashSignature`) — the same class of move as #118's, and the +889
    * bytes are almost entirely that function's source riding to the browser.
+   *
+   * RE-PINNED 2026-09-06 for #165, deliberately: 121,707 → 121,743 bytes,
+   * `14b3b6eb…` → `c6675f98…`. `dashPreflightSection` draws an absent exit code
+   * as `not run` instead of `String(null)` — a base gate the workspace REFUSED
+   * to run has no exit code, and the page carries the absence. The delta is
+   * attributed rather than assumed: measured on this branch,
+   * `dashPreflightSection.toString()` went 1,749 → 1,785 bytes — exactly the
+   * +36 above, so nothing else moved. (Comments are stripped before the source
+   * rides to the browser; measured `has comment: false` on the same probe.)
    */
   test("--static is byte-identical to the export main renders without the live layer", () => {
     const temp = makeViewsWorkspace();
@@ -399,9 +408,9 @@ describe("the live client, and the static page that must not carry it", () => {
       };
       const html = renderDashboard(model);
       expect(model.live, "the static model is not a live one").toBe(false);
-      expect(Buffer.byteLength(html, "utf8")).toBe(121_707);
+      expect(Buffer.byteLength(html, "utf8")).toBe(121_743);
       expect(createHash("sha256").update(html, "utf8").digest("hex"))
-        .toBe("14b3b6eb686178099062fdd5a13b106d4c81ac00fd8a41b1cafc7bbf47ec8ce8");
+        .toBe("c6675f986aba5672d902aafc232561ceb7d8a6d8cd961a4d81e074215c9a0f54");
     } finally {
       temp.dispose();
     }

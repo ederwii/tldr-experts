@@ -259,8 +259,19 @@ export interface PendingReview {
   readonly max_attempts: number;
   /** Run-root-relative cwd the reviewer runs in. */
   readonly worktree: string;
-  /** The Definition of Done the facilitator already re-ran — do not re-run it. */
-  readonly dod: readonly { readonly command: string; readonly exit_code: number }[];
+  /**
+   * The Definition of Done the facilitator already re-ran — do not re-run it.
+   *
+   * `exit_code` is ADDITIVE-optional and `refused` is new (#165): a command the
+   * gate declined to run never produced an exit code, and writing one made the
+   * host read a refusal as a measured failure. A row carries one or the other,
+   * never both.
+   */
+  readonly dod: readonly {
+    readonly command: string;
+    readonly exit_code?: number;
+    readonly refused?: string;
+  }[];
   /** Why this review is being asked for again, when it is. */
   readonly resumed_from?: string;
 }

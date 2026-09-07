@@ -255,12 +255,16 @@ describe("the base-tree pre-flight", () => {
 
 /** One measured row, with a tail nasty enough to be worth escaping. */
 function row(over: Partial<BaseCommandResult> = {}): BaseCommandResult {
+  // The builder obeys the rule the type states (#165): a row that was REFUSED
+  // carries no exit code, so an override saying so gets none rather than the
+  // default 1. One builder, not two, so every caller is the same shape.
+  const refused = over.refusedBecause !== undefined;
   return {
     repo: "app",
     command: "npm run test",
     baseRef: "main",
     baseSha: "68e4d21",
-    exitCode: 1,
+    ...(refused ? {} : { exitCode: 1 }),
     timedOut: false,
     tail: 'FAIL "two" lines\nand a second one',
     status: "failed",
@@ -315,7 +319,7 @@ describe("attributing a red DoD command", () => {
     results: [
       row(),
       row({ command: "npm run build", exitCode: 0, tail: "", status: "ok" }),
-      row({ command: "npm run lint", exitCode: 126, tail: "needs a shell", status: "unmeasured" }),
+      row({ command: "npm run lint", status: "unmeasured", refusedBecause: "needs a shell", tail: "needs a shell" }),
     ],
   };
 
@@ -417,7 +421,7 @@ describe("when a cached RED may still be trusted", () => {
   test("an unmeasured row is not re-probed either — the gate declined to run it", () => {
     const unmeasured: BasePreflight = {
       checkedAt: "2026-08-31T09:00:00Z",
-      results: [row({ exitCode: 126, status: "unmeasured", tail: "needs a shell" })],
+      results: [row({ status: "unmeasured", refusedBecause: "needs a shell", tail: "needs a shell" })],
     };
     expect(baseResultFor(unmeasured, "app", "npm run test", "", {
       at: "2026-09-30T09:00:00Z", prepare: true,
@@ -491,6 +495,60 @@ describe("the base pre-flight is read from disk once per process", () => {
     }, "2026-08-29T09:00:00Z");
     cache.read();
     expect(cache.loads).toBe(1);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+/**
+ * #165 — the base side of a REFUSED command.
+ *
+ * `baseResultOf` used to write `exit_code: 126` beside `status: unmeasured`:
+ * nothing ran, so the number was a fabrication that `preflight.yml` then carried
+ * as a record. `unmeasured` already means "nothing was learned about the base",
+ * and it now carries no exit code and the gate's own sentence instead.
+ *
+ * Both directions of the `version: 1` rule are pinned here: a file written
+ * BEFORE this change still loads with its 126 intact (rewriting history is not
+ * this change's job), and a file written after it round-trips without growing one.
+ */
+describe("#165 · a refused base probe carries no exit code", () => {
+  test("the base side records a refusal as `unmeasured` with no exit code either", () => {
+    const preflight: BasePreflight = {
+      checkedAt: "2026-08-31T09:00:00Z",
+      results: [row({ command: "npm run lint", status: "unmeasured", refusedBecause: "needs a shell" })],
+    };
+    const hit = baseResultFor(preflight, "app", "npm run lint");
+    expect(hit?.status).toBe("unmeasured");
+    expect(hit?.exitCode).toBeUndefined();
+    // `unmeasured` still excuses nothing — the rule this file already pins.
+    expect(failedOnBase(hit)).toBe(false);
+  });
+
+  test("a preflight.yml written BEFORE this — `exit_code: 126` + unmeasured — still loads", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-preflight-compat-"));
+    mkdirSync(join(dir, "04-build"), { recursive: true });
+    writeFileSync(join(dir, PREFLIGHT_REL),
+      "version: 1\nchecked_at: '2026-08-31T09:00:00Z'\nresults:\n"
+      + "  - repo: app\n    command: npm run lint\n    base_ref: main\n    base_sha: abc1234\n"
+      + "    exit_code: 126\n    timed_out: false\n    tail: needs a shell\n    status: unmeasured\n",
+      "utf8");
+    const loaded = loadPreflight(dir);
+    expect(loaded?.results[0]?.status).toBe("unmeasured");
+    expect(loaded?.results[0]?.command).toBe("npm run lint");
+    expect(loaded?.results[0]?.exitCode).toBe(126);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("a refused row round-trips through the file without growing an exit code", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-preflight-refused-"));
+    mkdirSync(join(dir, "04-build"), { recursive: true });
+    savePreflight(dir, {
+      checkedAt: "2026-09-06T09:00:00Z",
+      results: [row({ command: "npm run lint", status: "unmeasured", refusedBecause: "needs a shell" })],
+    });
+    const back = loadPreflight(dir)?.results[0];
+    expect(back?.exitCode).toBeUndefined();
+    expect(back?.refusedBecause).toBe("needs a shell");
     rmSync(dir, { recursive: true, force: true });
   });
 });

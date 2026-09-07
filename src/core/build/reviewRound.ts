@@ -210,7 +210,14 @@ export function reviewerPromptFor(parts: ReviewerPromptParts): string {
     epicBranch: parts.epicBranch,
     worktree: parts.worktree,
     conventions: renderConventions(parts.root, [parts.story.story.repo]),
-    dodResults: parts.dod.map((r) => ({ command: r.command, exitCode: r.exitCode })),
+    // Every field, including the ABSENCE of an exit code on a refused row —
+    // reconstructing one here is the bug #165 fixed one layer down.
+    dodResults: parts.dod.map((r) => ({
+      command: r.command,
+      ...(r.status === undefined ? {} : { status: r.status }),
+      ...(r.refusedBecause === undefined ? {} : { refusedBecause: r.refusedBecause }),
+      ...(r.exitCode === undefined ? {} : { exitCode: r.exitCode }),
+    })),
     // Withdrawn once the story's one round is spent, so the prompt never offers
     // a verdict `narrowFixlist` is about to refuse. Computed the same way on
     // both doors, which is what keeps the bundle's prompt byte-identical to the

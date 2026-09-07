@@ -12,6 +12,7 @@
  *   Unknowns        the stories that are not done, or `- none` with what was looked at
  *   Evidence ledger every dod command that ran, as `[src: $ <cmd> → exit <n>]`
  */
+import { dodRefused } from "./outcome.ts";
 import type { StoryOutcome } from "./outcome.ts";
 
 export interface EpicSummaryRow {
@@ -269,9 +270,17 @@ function ledger(outcomes: readonly StoryOutcome[]): readonly string[] {
   const rows: string[] = [];
   for (const outcome of outcomes) {
     for (const result of outcome.dod) {
+      // A command the gate REFUSED never ran, so it has no `cmd` citation to
+      // give: `src/core/text/srcToken.ts:10` defines `cmd := "$ " command
+      // " → exit " digit+`, and there is no exit. The citation is the review
+      // log, where the refusal is written verbatim — the same shape the
+      // `dodUnrecovered` rows below already use (#165).
       rows.push(
-        `- ${outcome.id}: \`${result.command}\` in ${outcome.repo} ` +
-          `[src: $ ${result.command} → exit ${String(result.exitCode)}]`,
+        dodRefused(result)
+          ? `- ${outcome.id}: \`${result.command}\` in ${outcome.repo} was REFUSED and never ran — `
+            + `${result.refusedBecause ?? "the gate declined to run it"} [src: ${outcome.reviewRel}:1]`
+          : `- ${outcome.id}: \`${result.command}\` in ${outcome.repo} `
+            + `[src: $ ${result.command} → exit ${String(result.exitCode)}]`,
       );
     }
     for (const command of outcome.dodUnrecovered ?? []) {

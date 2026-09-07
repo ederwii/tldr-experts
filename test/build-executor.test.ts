@@ -21,7 +21,13 @@ import { executorFor, EXECUTORS } from "../src/core/facilitator/executors/index.
 import {
   buildExecutor, developerTools, phaseCostToDate, readReviewLedger, REVIEWER_TOOLS,
 } from "../src/core/facilitator/executors/build.ts";
-import { looksLikeReviewerError, reviewerFailed } from "../src/core/build/review.ts";
+import { looksLikeReviewerError, renderReviewLog, reviewerFailed } from "../src/core/build/review.ts";
+import { renderBuildHandoff, type BuildHandoffParts } from "../src/core/build/handoff.ts";
+import { storyRetroLines } from "../src/core/build/retroLog.ts";
+import { buildReviewerPrompt } from "../src/core/build/prompts.ts";
+import { dodGreen, type StoryOutcome } from "../src/core/build/outcome.ts";
+import type { PlannedStory } from "../src/core/build/plan.ts";
+import { endsWithToken } from "../src/core/text/srcToken.ts";
 import { UNFINISHED_STORIES } from "../src/core/run/autoGate.ts";
 import { approve, reject } from "../src/core/run/gates.ts";
 import { updateStoryFront, evidenceFor } from "../src/core/build/storyFile.ts";
@@ -1093,7 +1099,10 @@ describe("reading a review off the ledger", () => {
     expect(s1.verdicts).toBe(0);              // an errored review is not a verdict
     expect(s1.erroredWith).toBe("claude timed out (…)");
     expect(s1.commit).toBe("abc1234");
-    expect(s1.dod).toEqual([{ command: "npm run test", exitCode: 0, timedOut: false, tail: "" }]);
+    // `status: "ran"` is the #165 addition: an event carrying an `exit_code` is a
+    // MEASUREMENT, and the row now says so rather than leaving a reader to infer
+    // it from a number that a refusal used to fabricate.
+    expect(s1.dod).toEqual([{ command: "npm run test", status: "ran", exitCode: 0, timedOut: false, tail: "" }]);
 
     const s2 = readReviewLedger(dir, "S2");
     expect(s2.verdicts).toBe(1);              // a real `changes` is
@@ -2628,5 +2637,134 @@ describe("stack packs reach the Build reviewer (stack packs design §4.5)", () =
     expect(readFileSync(join(promptDir, "developer-S1-1.md"), "utf8")).not.toContain("## Project skills");
     const calls = readFileSync(argvLog, "utf8").trim().split("\n").map((l) => JSON.parse(l) as string[]);
     expect((calls[0]?.[calls[0].indexOf("--allowedTools") + 1] ?? "").split(",")).not.toContain("Skill");
+  });
+});
+
+/**
+ * #165 — a DoD command the gate REFUSED is never rendered as a measured exit.
+ *
+ * `runDodCommand` throwing `DodCommandRefused` was turned into
+ * `{exitCode: 126}` and three documents printed that fabrication as a
+ * measurement: the handoff's evidence ledger as `[src: $ cmd → exit 126]`, the
+ * review log as `→ exit 126`, the retro log as "exited 126 on the first attempt".
+ * A fourth reader was worse still — `readReviewLedger` DEFAULTED a missing
+ * `exit_code` to 0, so a command that never ran came back GREEN.
+ */
+describe("#165 · a refused DoD command is recorded as refused", () => {
+  /** A `StoryOutcome` in the shape the three renderers read. */
+  function outcomeWith(overrides: Partial<StoryOutcome> = {}): StoryOutcome {
+    return {
+      id: "S1", title: "First story", wave: "W1", repo: "app", epic: "E1",
+      epicBranch: "epic/e1", branch: "story/S1", status: "blocked", attempts: 1,
+      dod: [{ command: "npm run test", status: "ran", exitCode: 0, timedOut: false, tail: "" }],
+      commit: null, merged: false, carried: null, conflicts: [], verdict: "n-a",
+      developerError: null, reviewSummary: "", reviewFindings: [],
+      reviewRel: "04-build/log/S1.md", reason: null, rescued: null, cost_usd: 0,
+      ...overrides,
+    };
+  }
+
+  function handoffPartsFor(outcomes: readonly StoryOutcome[]): BuildHandoffParts {
+    return {
+      runId: "260906-x", stageId: "build", model: null, costUsd: 0, budgetUsd: 8,
+      at: "2026-09-06T09:00:00Z", outcomes,
+      epics: [{
+        id: "E1", branch: "epic/e1", repos: ["app"], merged: [], defaultBranches: ["main"],
+        rel: "03-plan/epics/E1.md",
+      }],
+    };
+  }
+
+  test("a refused check recovered from the ledger is NOT read as exit 0", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-ledger-refused-"));
+    writeFileSync(join(dir, "events.jsonl"),
+      `${JSON.stringify({
+        ts: "2026-09-06T09:00:00Z", run: "260906-x", stage: "build", type: "check.failed",
+        actor: "facilitator", cost_usd: 0,
+        payload: { phase: "04-build", check: "dod", story: "S1", command: "npm run lint",
+                   refused: "`npm run lint` is not one of .tldrx/workspace.yml's commands." },
+      })}\n`, "utf8");
+
+    const ledger = readReviewLedger(dir, "S1");
+    const only = ledger.dod[0];
+    expect(only?.status).toBe("refused");
+    expect(only?.exitCode).toBeUndefined();
+    expect(dodGreen({ dod: ledger.dod })).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("a pre-#165 `check.failed` with an exit code still reads as a measurement", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-ledger-old-"));
+    writeFileSync(join(dir, "events.jsonl"),
+      `${JSON.stringify({
+        ts: "2026-09-06T09:00:00Z", run: "260906-x", stage: "build", type: "check.failed",
+        actor: "facilitator", cost_usd: 0,
+        payload: { phase: "04-build", check: "dod", story: "S1", command: "npm run lint",
+                   exit_code: 126, detail: "needs a shell" },
+      })}\n`, "utf8");
+
+    const only = readReviewLedger(dir, "S1").dod[0];
+    expect(only?.status).toBe("ran");
+    expect(only?.exitCode).toBe(126);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("the three documents print `refused:` and never an `[src: $ … → exit 126]`", () => {
+    const outcome = outcomeWith({
+      dod: [{ command: "npm run lint", status: "refused", timedOut: false, tail: "",
+              refusedBecause: "`npm run lint` is not one of .tldrx/workspace.yml's commands." }],
+      status: "blocked",
+    });
+
+    const handoff = renderBuildHandoff(handoffPartsFor([outcome]));
+    const log = renderReviewLog(outcome);
+    const retro = storyRetroLines(outcome, "260906-x").join("\n");
+
+    for (const text of [handoff, log, retro]) {
+      expect(text).not.toContain("exit 126");
+      expect(text).not.toContain("exited 126");
+      // The MARKER the three renderers write, not the bare English word: a
+      // lowercase "refused" would false-positive on any innocent prose that
+      // happened to use it (AGENTS.md §8).
+      expect(text).toContain("REFUSED");
+    }
+    // The handoff's row still ends in a legal `[src: …]` token — the grammar is
+    // the gate, and `$ cmd → exit n` is not available to a command that never ran.
+    const row = handoff.split("\n").find((line) => line.includes("npm run lint")) ?? "";
+    expect(endsWithToken(row)).toBe(true);
+  });
+
+  /**
+   * The reviewer prompt's refused line, pinned here rather than in the golden.
+   *
+   * A red DoD blocks the story at `buildHalf` BEFORE a reviewer is spawned
+   * (`build.ts:1069`), so no end-to-end capture can reach this rendering — it is
+   * reachable only through a resumed review whose ledger already carries a
+   * refused row.
+   */
+  test("the reviewer prompt says REFUSED rather than inventing an exit", () => {
+    const story: PlannedStory = {
+      story: {
+        version: 1, id: "S1", epic: "E1", title: "First story", repo: "app",
+        status: "todo", depends_on: [], touches: ["s1.txt"],
+        acceptance: ["S1 exists"], test_plan: [], evidence: [],
+      },
+      dod: { present: true, commands: ["npm run lint"] },
+      text: "---\nid: S1\n---\n",
+      path: "/tmp/S1.md",
+      rel: "03-plan/stories/S1.md",
+      wave: "W1",
+    };
+    const prompt = buildReviewerPrompt({
+      runId: "260906-x", story, repoName: "app", branch: "story/S1", epicBranch: "epic/e1",
+      worktree: "/tmp/wt", conventions: "- one class per file",
+      dodResults: [
+        { command: "npm run test", status: "ran", exitCode: 0 },
+        { command: "npm run lint", status: "refused", refusedBecause: "it needs a shell" },
+      ],
+    });
+    expect(prompt).toContain("- `npm run test` → exit 0");
+    expect(prompt).toContain("- `npm run lint` → REFUSED, never ran");
+    expect(prompt).not.toContain("`npm run lint` → exit");
   });
 });

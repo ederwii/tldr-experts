@@ -445,13 +445,22 @@ uninstrumented signal is a fact about coverage, and it belongs in a panel the wa
 
 `repo`, `command` (byte-identical to the `.tldrx/workspace.yml` command — the
 join key everywhere), `baseRef` (the repo's `default_branch`), `baseSha` (short
-sha when git had an answer, `""` when it did not), `exitCode` (number),
-`timedOut` (boolean), `status` (`"ok"` | `"failed"` | `"unmeasured"`) and `tail`
-(the last meaningful line of the output).
+sha when git had an answer, `""` when it did not), `exitCode` (number \| null),
+`timedOut` (boolean), `status` (`"ok"` | `"failed"` | `"unmeasured"`), `tail`
+(the last meaningful line of the output) and `refusedBecause` (string,
+present only on a refused probe).
 
 `unmeasured` is a third case and **not** a synonym for either of the other two:
 the gate declined to run the command at all, so nothing is known about the base
 and nothing may be inferred from it.
+
+`exitCode` is `null` on exactly that row (#165). Nothing spawned, so there is no
+exit code to report, and the page carries the ABSENCE rather than inventing a
+number — it draws `not run`, with `refusedBecause` and `tail` beside it saying
+why. Before this, the framework wrote a fabricated `126` there and the page drew
+it as a measurement. **`DASHBOARD_MODEL_VERSION` does not bump**: the type
+widened and a field was added, and no existing field's meaning moved — the same
+additive rule #85, #93 and #103 were held to.
 
 Why it is on the page at all: a story's `dod` block is a **delta** gate, and it
 proves nothing if the base tree was already red. `preflight.ts` measures the base

@@ -61,10 +61,21 @@ export interface BaseCommandResult {
   readonly baseRef: string;
   /** Short sha of `baseRef` when it was measured; `""` when git had no answer. */
   readonly baseSha: string;
-  readonly exitCode: number;
+  /**
+   * The measured exit. Absent — and only ever absent — on an `unmeasured` row
+   * the gate REFUSED to run: nothing spawned, so there is nothing to report.
+   *
+   * ADDITIVE and optional in the tolerant direction only. Every `preflight.yml`
+   * written before 2026-09-06 carries one on every row, including the refused
+   * ones (a fabricated `126`, #165), and those files still load with the number
+   * they recorded — the reader reports what the file says.
+   */
+  readonly exitCode?: number;
   readonly timedOut: boolean;
   /** Last meaningful line of the output — the operator's first clue. */
   readonly tail: string;
+  /** Present only on a REFUSED probe: the gate's own sentence, verbatim. */
+  readonly refusedBecause?: string;
   readonly status: BaseStatus;
   /**
    * What the row was measured UNDER, beyond the command string itself.
@@ -122,11 +133,15 @@ export function emitPreflightYaml(preflight: BasePreflight): string {
         `    command: ${yamlScalar(row.command)}`,
         `    base_ref: ${yamlScalar(row.baseRef)}`,
         `    base_sha: ${yamlScalar(row.baseSha)}`,
-        `    exit_code: ${String(row.exitCode)}`,
+        // Absent-with-reason: a row the gate REFUSED writes no `exit_code` at all
+        // and writes WHY instead. A zero here would read as a green base (#165).
+        // Emitted in place so a measured row's bytes are exactly what they were.
+        ...(typeof row.exitCode === "number" ? [`    exit_code: ${String(row.exitCode)}`] : []),
         `    timed_out: ${row.timedOut ? "true" : "false"}`,
         `    status: ${yamlScalar(row.status)}`,
         `    tail: ${yamlScalar(row.tail)}`,
       );
+      if (row.refusedBecause !== undefined) lines.push(`    refused_because: ${yamlScalar(row.refusedBecause)}`);
       if (row.commandHash !== undefined) lines.push(`    command_hash: ${yamlScalar(row.commandHash)}`);
       if (row.checkedAt !== undefined) lines.push(`    checked_at: ${yamlScalar(row.checkedAt)}`);
     }
@@ -151,18 +166,25 @@ export function parsePreflight(text: string): BasePreflight | null {
     const row = entry as Record<string, unknown>;
     const repo = asText(row.repo);
     const command = asText(row.command);
+    // `repo` and `command` are the join key, so a row without them is not a row.
+    // A missing `exit_code` is NOT malformed any more: it is what a refused probe
+    // writes (#165), and dropping the whole FILE for it would lose every measured
+    // row beside it. Any other malformed row still invalidates the file, exactly
+    // as before.
     const exitCode = typeof row.exit_code === "number" && Number.isFinite(row.exit_code) ? row.exit_code : null;
-    if (repo === "" || command === "" || exitCode === null) return null;
+    if (repo === "" || command === "") return null;
     const hash = asText(row.command_hash);
     const rowCheckedAt = asText(row.checked_at);
+    const refusedBecause = asText(row.refused_because);
     results.push({
       repo,
       command,
       baseRef: asText(row.base_ref),
       baseSha: asText(row.base_sha),
-      exitCode,
+      ...(exitCode === null ? {} : { exitCode }),
       timedOut: row.timed_out === true,
       tail: asText(row.tail),
+      ...(refusedBecause === "" ? {} : { refusedBecause }),
       status: row.status === "ok" || row.status === "failed" ? row.status : "unmeasured",
       ...(hash === "" ? {} : { commandHash: hash }),
       ...(rowCheckedAt === "" ? {} : { checkedAt: rowCheckedAt }),
@@ -315,7 +337,12 @@ export function withResult(
 export function baseFailureLine(result: BaseCommandResult): string {
   const at = result.baseSha === "" ? "" : ` (${result.baseSha})`;
   const why = result.tail === "" ? "" : ` — ${result.tail}`;
-  return `  · \`${result.command}\` exited ${String(result.exitCode)}`
+  // Only ever called for a `failed` row, which always carries an exit code — but
+  // total anyway, because "exited undefined" is the shape of a record that lies.
+  const ran = result.exitCode === undefined
+    ? "was refused and never ran"
+    : `exited ${String(result.exitCode)}`;
+  return `  · \`${result.command}\` ${ran}`
     + `${result.timedOut ? " (timed out)" : ""} in repo ${result.repo}`
     + ` on \`${result.baseRef}\`${at}${why}`;
 }
@@ -337,8 +364,9 @@ export function baseRefusalLines(failures: readonly BaseCommandResult[]): readon
 
 /** The attribution, when a story's DoD went red for a reason the base shares. */
 export function preExistingFailureReason(result: BaseCommandResult): string {
-  return `\`${result.command}\` exited ${String(result.exitCode)} — and it exits `
-    + `${String(result.exitCode)} on the untouched base tree too (${result.repo} @ \`${result.baseRef}\`), `
+  const code = String(result.exitCode ?? "?");
+  return `\`${result.command}\` exited ${code} — and it exits `
+    + `${code} on the untouched base tree too (${result.repo} @ \`${result.baseRef}\`), `
     + `so this is a pre-existing failure on the base tree, not this story's. Fix ${WORKSPACE_FILE} or the base.`;
 }
 
