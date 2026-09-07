@@ -298,13 +298,26 @@ export class RunStore {
       // Only CEILINGS come from disk. Actuals are ours: `rollUpBudget` overwrites
       // every `spent_usd` from the run we are about to write.
       //
-      // A phase's ceiling is THREE fields, not one (#61): the dollar figure, the
-      // host-token allowance, and the `economy:` that says which of them governs.
-      // Taking the number without the label would be the worse half of both — a
-      // token allowance preserved into a phase this reader has been told is
-      // priced in dollars, where `hostTokenCeiling` can no longer see it. For a
-      // file with no labels and no token ceilings, every one of the three is
-      // identical on both sides and this is the same object it always was.
+      // A phase's ceiling is FOUR fields, not one. Three of them (#61): the
+      // dollar figure, the host-token allowance, and the `economy:` that says
+      // which of them governs — taking the number without the label would be the
+      // worse half of both, a token allowance preserved into a phase this reader
+      // has been told is priced in dollars, where `hostTokenCeiling` can no
+      // longer see it.
+      //
+      // The fourth is `authorized_usd` (#170), and it is here for the same
+      // reason with a sharper failure. The run-level grant keys ride in on
+      // `{...onDisk}`, so a phase amount left off THIS list is erased by any
+      // ordinary save — `tldrx next`, the Build executor, `approve`, `close` —
+      // while `authorized_by` and `authorized_at` survive. That is worse than a
+      // clean loss: budget.yml is left naming a fact as the authorizer of an
+      // amount that is nowhere, `grantFor` returns null, and the phase silently
+      // stops being governed. It is exactly the "recorded number that silently
+      // governs nothing" state `grantFor`'s own docstring exists to prevent.
+      //
+      // For a file with no labels, no token ceilings and no grant, every one of
+      // the four is identical on both sides and this is the same object it
+      // always was.
       return {
         ...onDisk,
         phases: this.currentBudget.phases.map((mine) => {
@@ -314,6 +327,7 @@ export class RunStore {
             ceiling_usd: theirs.ceiling_usd,
             ceiling_host_tokens: theirs.ceiling_host_tokens,
             economy: theirs.economy,
+            authorized_usd: theirs.authorized_usd,
           };
         }),
       };

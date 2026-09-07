@@ -23,7 +23,7 @@
  */
 import type { Command } from "../Command.ts";
 import { EXIT_GATE_REFUSED, EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
-import { boolFlag, parseArgs, stringFlag, UsageError } from "../argv.ts";
+import { boolFlag, parseArgs, stringFlag, UsageError, type ParsedArgs } from "../argv.ts";
 import { workspaceRootFrom } from "../workspace.ts";
 import { fail } from "../report.ts";
 import { isResolved, resolveRunOrExplain, type RunOrExit } from "../resolveRun.ts";
@@ -40,7 +40,7 @@ const VALUE_FLAGS = ["run", "root", "take-from", "note", "fact", "phase", "on-ex
 
 export const budgetCommand: Command = {
   name: "budget",
-  summary: "Show what the run may still spend, or raise a phase ceiling",
+  summary: "Show what the run may still spend, raise a phase ceiling, or record what the owner authorized",
   usage:
     "tldrx budget show [<run>] [--run <id>] [--json] [--root <path>]\n" +
     "       tldrx budget raise <phase> <usd> [--run <id>] [--take-from <phase>] [--note <text>] [--root <path>]\n" +
@@ -62,9 +62,34 @@ export const budgetCommand: Command = {
   },
 };
 
+/**
+ * `--fact`, `--phase` and `--on-exceed` belong to `grant` and to nothing else.
+ *
+ * `VALUE_FLAGS` is one list for all three subcommands and `flagRefusal`
+ * (`cli/index.ts`) judges flags per COMMAND, not per subcommand — so without this
+ * `budget raise --on-exceed block` parses, exits 0, raises the ceiling and writes
+ * no policy at all. A flag that reads like a policy switch on the very command
+ * the policy governs, and changes nothing, is worse than an unknown flag: the
+ * unknown one at least says so. Refused rather than wired, because a raise does
+ * not set policy — recording one is `grant`'s whole job.
+ */
+const GRANT_ONLY_FLAGS = ["fact", "phase", "on-exceed"] as const;
+
+function refuseGrantFlags(args: ParsedArgs, verb: string): void {
+  for (const flag of GRANT_ONLY_FLAGS) {
+    if (!boolFlag(args, flag)) continue;
+    throw new UsageError(
+      `--${flag} is \`budget grant\`'s flag, not \`budget ${verb}\`'s — ` +
+        "record an authorization with `tldrx budget grant <usd> --fact <F> [--phase <p>] " +
+        "[--on-exceed <warn|block>]`",
+    );
+  }
+}
+
 function budgetShow(argv: readonly string[]): number {
   try {
     const args = parseArgs(argv, VALUE_FLAGS);
+    refuseGrantFlags(args, "show");
     const resolved = openRun(args.positionals[0] ?? stringFlag(args, "run"), workspaceRootFrom(args));
     if (!isResolved(resolved)) return resolved.exit;
     const store = resolved.store;
@@ -82,6 +107,7 @@ function budgetShow(argv: readonly string[]): number {
 function budgetRaise(argv: readonly string[]): number {
   try {
     const args = parseArgs(argv, VALUE_FLAGS);
+    refuseGrantFlags(args, "raise");
     const phaseId = args.positionals[0];
     const amountText = args.positionals[1];
     if (phaseId === undefined || amountText === undefined) {
@@ -193,11 +219,18 @@ function budgetGrant(argv: readonly string[]): number {
     if (!Number.isFinite(amountUsd)) {
       throw new UsageError(`the amount must be a number of dollars, got '${amountText}'`);
     }
-    // A negative authorization is not a small one — it is a figure with no
-    // meaning, and recording it would put a number in the ledger that no
-    // reconciliation could ever read honestly.
-    if (amountUsd < 0) {
-      throw new UsageError(`a grant cannot be negative, got '${amountText}'`);
+    // Neither a negative nor a zero authorization is a small one. A negative
+    // figure has no meaning at all; a $0 one is far likelier to be a typo or an
+    // unset shell variable than an owner deciding the run may spend nothing —
+    // and under `on_grant_exceed: block` it would refuse every later raise.
+    // Absence already says "no grant recorded"; "authorized, and the answer is
+    // no" is a sentence to write in a FACT, not a number to slip in through an
+    // amount argument.
+    if (amountUsd <= 0) {
+      throw new UsageError(
+        `a grant must be more than $0.00, got '${amountText}' — if the owner authorized nothing, ` +
+          "record that as a fact and leave budget.yml with no grant",
+      );
     }
     // REQUIRED, and this is the whole point of the verb: a grant that cannot
     // name the decision behind it is a number nobody said. `--fact` must name a
@@ -236,6 +269,15 @@ function budgetGrant(argv: readonly string[]): number {
       );
     }
 
+    // What this grant REPLACES, read before the mutation. Replacement is the rule
+    // — a later decision supersedes an earlier one, and an owner may reduce as
+    // well as raise — but it may not change the ledger's number in silence, so
+    // the figure goes on the event and into the sentence. Null on the first
+    // grant, which is a different fact from "replaced $0".
+    const previousUsd = phaseId === null
+      ? store.budget.authorized_usd
+      : store.budget.phases.find((p) => p.id === phaseId)?.authorized_usd ?? null;
+
     const at = nowRfc3339();
     store.mutateBudget((budget) => ({
       ...budget,
@@ -271,14 +313,18 @@ function budgetGrant(argv: readonly string[]): number {
         phase: phaseId,
         note,
         ceiling_usd: store.budget.ceiling_usd,
+        previous_usd: previousUsd,
       },
     });
     store.save();
 
     const scope = phaseId === null ? "the run" : phaseId;
+    const replaces = previousUsd === null
+      ? ""
+      : ` — replaces ${money(previousUsd)} → ${money(amountUsd)}`;
     const lines = [
       `recorded: ${factId} authorizes ${money(amountUsd)} for ${scope} ` +
-        `(on_grant_exceed: ${store.budget.on_grant_exceed}).`,
+        `(on_grant_exceed: ${store.budget.on_grant_exceed})${replaces}.`,
     ];
     // The ceiling this grant is measured against — the phase's own when the grant
     // names one, the run's otherwise. Same two branches `raise` uses, and for the

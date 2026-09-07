@@ -1358,14 +1358,14 @@ phases: [{id: 01-what, ceiling_usd: 4.0, spent_usd: 1.14}, {id: 02-how, ceiling_
 | `economy` | `metered-usd\|host-tokens` | n (`metered-usd`) | **What the numbers here are denominated in.** Run level; a phase may override it |
 | `on_host_tokens_exceed` | `warn\|block` | n (`warn`) | What crossing a HOST-TOKEN ceiling does. `block` is the explicit opt-in |
 | `ceiling_host_tokens` | number ≥0 | n | **The run's host-token allowance** — the ceiling `ceiling_usd` is not. Separate economy, separate ceiling |
-| `authorized_usd` | number ≥0 | n | **What the owner AUTHORIZED for this run** — a recorded grant, not a ceiling. Absent means no grant recorded, never `$0` |
-| `authorized_by` | fact id | n | The live fact the grant cites (`F031`). A grant that cannot name a decision is not recorded |
+| `authorized_usd` | number >0 | n | **What the owner AUTHORIZED for this run** — a recorded grant, not a ceiling. Absent means no grant recorded, never `$0`; `0` itself is refused when granting |
+| `authorized_by` | fact id | n | The LIVE fact the grant cites (`F031`). A grant that cannot name a decision is not recorded. Run-level even under `--phase`, so it MAY stand with no `authorized_usd` beside it — that is a phase-scoped grant, not a damaged file |
 | `authorized_at` | RFC3339 | n | When the grant was recorded |
 | `on_grant_exceed` | `warn\|block` | n (`warn`) | What WRITING a ceiling above the grant does. Never `on_exceed` |
 | `phases[].{id,ceiling_usd,spent_usd}` | slug / number ≥0 | y | Per-phase ceiling and rolled-up actual |
 | `phases[].economy` | `metered-usd\|host-tokens` | n (inherit) | This phase's own economy |
 | `phases[].ceiling_host_tokens` | number ≥0 | n | This phase's host-token allowance, read only under `economy: host-tokens` |
-| `phases[].authorized_usd` | number ≥0 | n | This phase's OWN authorization. Absent means the run's grant governs it |
+| `phases[].authorized_usd` | number >0 | n | This phase's OWN authorization, cited by the run-level `authorized_by`. Absent means the run's grant governs it |
 
 **Validation.** Every phase id appears in `run.yml`; `spent_usd ≤ ceiling_usd` per phase unless `on_exceed: warn`; ≤5
 phases. An `economy` naming a value this reader does not know is REFUSED, never defaulted to dollars — a unit nothing
@@ -1427,6 +1427,32 @@ grant never rewrites a ceiling and never refuses one: a grant the current ceilin
 is still recorded, because the money is committed and there is nothing left to refuse.
 `budget grant` appends `budget.granted` (§2.9), and the keys round-trip through `budget raise` —
 a key that did not would be erased by the one command an operator reaches for when a ceiling binds.
+They round-trip through every OTHER writer too: `RunStore` re-reads a phase's ceilings from disk
+before each save, and `authorized_usd` is one of the four per-phase fields it carries, so a grant
+recorded while a stage runs is not clobbered by the copy that process opened with.
+
+**A second grant on the same scope REPLACES the first, and says what it replaced.** A later
+decision supersedes an earlier one and an owner may reduce as well as raise, so the amount is
+overwritten — but never in silence: `budget.granted` carries `previous_usd` (null on the first
+grant, which is a different fact from "replaced $0") and the command prints
+`replaces $40.00 → $20.00`. `on_grant_exceed` is the exception: a grant that names no
+`--on-exceed` leaves the policy where it was, because a second grant is not a place to silently
+downgrade an operator's `block` back to `warn`.
+
+**`0` is refused, and so is a negative.** Absence already says "no grant recorded"; a `$0` row
+says "authorized, and the answer is no", which under `block` refuses every later raise and is far
+likelier to be a typo or an unset shell variable than a decision. If the owner authorized nothing,
+that is a sentence for `facts.yml`, not a number in an amount argument. `--fact` must name a LIVE
+fact for the same reason: a retired or superseded decision is one that has been taken back.
+
+**`--fact`, `--phase` and `--on-exceed` are `grant`'s alone.** `budget show` and `budget raise`
+REFUSE them (exit 1) rather than accepting and ignoring them — a flag that reads like a policy
+switch on the very command the policy governs, and changes nothing, is worse than an unknown one.
+
+`tldrx budget show` reads the grant back where an operator actually looks: one line naming the
+fact, each authorized scope and the policy, and the same fields in `--json`. It is silent when no
+grant is recorded, because a report printing `$0.00 authorized` would invent the one figure these
+keys refuse to guess.
 
 **Budget semantics — measured 2026-08-29.** `claude -p --max-budget-usd` is a *stop after the current turn*, not a
 hard cap: a single long turn ran 597 s and spent **$5.15 against a $1.50 ceiling** (`error_max_budget_usd`, 105 k
@@ -1846,9 +1872,9 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx story reopen <id> [--run <id>] --note <text> [--for-fix]` | `03-plan/waves.yml` + `03-plan/stories/<id>.md` (or `04-build/implicit-plan.yml`), `events.jsonl` | that story file's `status:` ⇒ `todo`, `events.jsonl` (`story.reopened`). Nothing else: no agent, no cost, no stage moved, no worktree or branch touched, and no line of the story but `status:`. Refuses (2) an unknown story id, a `done` story (that is `reject --stage`, or `--for-fix`), a `todo` story, and a missing `--note`. With `--for-fix` it opens a FIX ROUND on a `done` story instead (`reason: fix`, no attempt consumed, same DoD + reviewer), refusing (2) a story that is NOT done, a missing `--note`, and a story that already has a fix round open | 0,1,2,3 |
 | `tldrx questions lint [--run <id>] [--fix] [--area <a>]` | every `<phase>/questions.md` in the run | nothing, or those files rewritten to the §2.7 grammar with `--fix` (no wording changed) | 0,2,3 |
 | `tldrx questions cards [<run>] [--run <id>]` | every `<phase>/questions.md` in the run | **nothing** (stdout cards). One printable decision card per OPEN question: two lines of context, the block's own `Why asked:` note verbatim with its `[src: …]` — flagged when it cites nothing, and named as absent when there is no note — and the block's lettered options, or a `NEEDS OPTIONS` marker when it has none, since manufacturing them would answer the question in the act of asking it. Answers still flow through `tldrx answer`, whose command every card prints. No open question is a sentence and an exit 0 | 0,1,3 |
-| `tldrx budget show [<run>] [--run <id>] [--json]` | `run.yml`, `budget.yml` | nothing (stdout) | 0,1,2,3 |
+| `tldrx budget show [<run>] [--run <id>] [--json]` | `run.yml`, `budget.yml` | nothing (stdout). Names the recorded grant (§2.11) — the fact, each authorized scope and `on_grant_exceed` — and is silent when none is recorded | 0,1,2,3 |
 | `tldrx budget raise <phase> <usd> [--run <id>] [--take-from <phase>] [--note <text>]` | `run.yml`, `budget.yml` | `budget.yml` ceilings, `run.yml` ceiling mirror, `events.jsonl` (`budget.raised`, with before/after/actor/note). The RESULTING ceiling is reconciled against the recorded grant (§2.11) BEFORE anything is written — a phase grant against the phase ceiling, the run grant against the run ceiling; above it under `on_grant_exceed: block` is a refusal (2) that writes nothing, and under `warn` one sentence naming the grant, the fact and the figure | 0,1,2,3 |
-| `tldrx budget grant <usd> --fact <F> [--phase <p>] [--on-exceed <warn\|block>] [--note <text>] [--run <id>]` | `run.yml`, `budget.yml`, `facts.yml` | `budget.yml` `authorized_usd`/`authorized_by`/`authorized_at`/`on_grant_exceed` (or `phases[].authorized_usd` under `--phase`, the fact id still at run level), `events.jsonl` (`budget.granted`). Moves no money and refuses no ceiling; `--fact` must name a LIVE fact or it is a usage error and nothing is written | 0,1,2,3 |
+| `tldrx budget grant <usd> --fact <F> [--phase <p>] [--on-exceed <warn\|block>] [--note <text>] [--run <id>]` | `run.yml`, `budget.yml`, `facts.yml` | `budget.yml` `authorized_usd`/`authorized_by`/`authorized_at`/`on_grant_exceed` (or `phases[].authorized_usd` under `--phase`, the fact id still at run level), `events.jsonl` (`budget.granted`, carrying `previous_usd` — null on the first grant). Moves no money and refuses no ceiling. A second grant on the same scope REPLACES the amount and prints `replaces $X → $Y`. `--fact` must name a LIVE fact, and the amount must be >0, or it is a usage error and nothing is written | 0,1,2,3 |
 | `tldrx map --refresh` | `workspace.yml`, repos, `graphify-out/` | `map/**`, `graphify-out/`, `events.jsonl` | 0,1 |
 | `tldrx map --check` | `map/**` citations, filesystem | `cache/map-drift.json` (stdout report) | 0,1 |
 | `tldrx expert list` | `experts/*/competencies.yml`, `experts/*/knowledge/*.md` | nothing (stdout star chart; stderr warnings) | 0 |

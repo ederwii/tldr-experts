@@ -957,6 +957,11 @@ const ENTRIES: readonly CommandHelp[] = [
       json("the budget view", "show"),
       { name: "take-from", arg: "<phase>", meaning: "Move the money out of this phase instead of raising the run's total.", sub: "raise" },
       { name: "note", arg: "<text>", meaning: "Why the ceiling moved. Recorded on the budget.raised event beside the before/after and the actor.", sub: "raise" },
+      // A SECOND entry rather than dropping `sub`: `grant` records the note on
+      // its own event and `show` records nothing, so "every subcommand" would
+      // advertise it where it is ignored — which is the fault this fixes, not a
+      // shape to spread.
+      { name: "note", arg: "<text>", meaning: "Why the grant was recorded. Kept on the budget.granted event beside the amount, the fact and the actor.", sub: "grant" },
       {
         name: "fact",
         arg: "<F>",

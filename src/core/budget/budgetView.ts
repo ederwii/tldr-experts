@@ -41,6 +41,12 @@ export interface BudgetPhaseView {
   /** What the ceiling is short by, rounded up to the cent. `0` when it is not. */
   readonly short_by_usd: number;
   readonly is_cursor: boolean;
+  /**
+   * This phase's OWN authorization (#170), or null when it declares none — in
+   * which case the run's grant governs it. Passed through, never defaulted: null
+   * is "nobody wrote a figure on this phase", not `$0`.
+   */
+  readonly authorized_usd: number | null;
 }
 
 export interface BudgetView {
@@ -51,6 +57,20 @@ export interface BudgetView {
   readonly remaining_usd: number;
   readonly per_agent_max_usd: number;
   readonly on_exceed: string;
+  /**
+   * What the owner AUTHORIZED for this run and the fact that says so (#170), or
+   * null when no grant is recorded — which is every run until somebody runs
+   * `tldrx budget grant`.
+   *
+   * Read back HERE because this is the report an operator opens when a ceiling
+   * binds. A grant that only `budget.yml` and the dashboard model knew about
+   * would be recorded and never read at the moment it matters, which is the
+   * failure the key exists to remove.
+   */
+  readonly authorized_usd: number | null;
+  readonly authorized_by: string | null;
+  /** `warn` | `block`. Never null: absence means `warn`, resolved in `asRunBudget`. */
+  readonly on_grant_exceed: string;
   readonly phases: readonly BudgetPhaseView[];
   /** The cursor phase, when `next` would be blocked there. */
   readonly blocked: BudgetPhaseView | null;
@@ -103,6 +123,7 @@ export function buildBudgetView(run: RunFile, budget: RunBudget, runDir?: string
       blocked: next !== null && decision.blocked,
       short_by_usd: next === null || !decision.exceeds ? 0 : shortBy(estimate, decision.remaining),
       is_cursor: phase.id === run.cursor.phase,
+      authorized_usd: phase.authorized_usd,
     } satisfies BudgetPhaseView;
   });
 
@@ -115,11 +136,39 @@ export function buildBudgetView(run: RunFile, budget: RunBudget, runDir?: string
     remaining_usd: round(budget.ceiling_usd - totalSpent(budget)),
     per_agent_max_usd: budget.per_agent_max_usd,
     on_exceed: budget.on_exceed,
+    authorized_usd: budget.authorized_usd,
+    authorized_by: budget.authorized_by,
+    on_grant_exceed: budget.on_grant_exceed,
     phases,
     blocked,
     fix_command: blocked === null ? null : raiseCommand(run.run, blocked.id, blocked.short_by_usd),
     unmetered_tasks: countUnmetered(run),
   };
+}
+
+/**
+ * What the owner authorized, when anything was recorded — one line, or none.
+ *
+ * Derived from the VIEW and nowhere else, so this sentence and
+ * `budget show --json` cannot disagree about what is authorized. Silent when no
+ * grant exists, because absence means "no grant recorded" and a report that said
+ * `$0.00 authorized` would be inventing the one figure the key refuses to guess.
+ *
+ * A grant needs BOTH an amount and the fact behind it to be shown: an amount
+ * with no citation governs nothing (`grantFor`), so drawing it would advertise a
+ * bound that is not enforced.
+ */
+function grantLine(view: BudgetView): readonly string[] {
+  const by = view.authorized_by;
+  if (by === null) return [];
+  const scopes = [
+    ...(view.authorized_usd === null ? [] : [`the run ${usd(view.authorized_usd)}`]),
+    ...view.phases
+      .filter((phase) => phase.authorized_usd !== null)
+      .map((phase) => `${phase.id} ${usd(phase.authorized_usd ?? 0)}`),
+  ];
+  if (scopes.length === 0) return [];
+  return [`authorized by ${by}: ${scopes.join(" · ")} · on_grant_exceed ${view.on_grant_exceed}`];
 }
 
 /** In-session turns nobody costed. See `BudgetView.unmetered_tasks`. */
@@ -167,6 +216,7 @@ export function renderBudget(view: BudgetView): string {
       ` · left ${usd(view.remaining_usd)} · ` +
       `per-agent max ${usd(view.per_agent_max_usd)} · on_exceed ${view.on_exceed}`,
     ...(view.unmetered_tasks === 0 ? [] : [unmeteredNote(view.unmetered_tasks)]),
+    ...grantLine(view),
     "",
     `  ${"phase".padEnd(width)}  ${pad("ceiling")}  ${pad("spent")}  ${pad("left")}  ` +
       `${"next stage".padEnd(stageWidth)}  ${pad("est.")}  next`,

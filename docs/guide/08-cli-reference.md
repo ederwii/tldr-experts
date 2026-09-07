@@ -872,7 +872,18 @@ one the owner forbade.
 against the phase ceiling, the run grant against the run ceiling. Two exit families: a bad
 amount, an unknown phase, an unknown `--on-exceed` value or a `--fact` naming no live fact is
 a usage error (`1`, nothing written); a ceiling above the grant under `on_grant_exceed: block`
-is a gate refusal (`2`, `budget.yml` byte-identical). Exits: `0` `1` `2` `3`.
+is a gate refusal (`2`, `budget.yml` byte-identical).
+
+A second grant on the same scope REPLACES the first — a later decision supersedes an earlier
+one, and an owner may reduce as well as raise — but never in silence: the command prints
+`replaces $40.00 → $20.00` and the `budget.granted` event carries `previous_usd`. An amount of
+`0` or less is refused (`1`): absence already means "no grant recorded", and "authorized, and
+the answer is no" belongs in a fact. `--fact`, `--phase` and `--on-exceed` are `grant`'s alone —
+`show` and `raise` refuse them rather than accepting and ignoring them.
+
+`budget show` names the recorded grant on its own line — the fact, each authorized scope and
+`on_grant_exceed` — and in `--json`; it says nothing when no grant is recorded.
+Exits: `0` `1` `2` `3`.
 
 ## `tldrx cost`
 
