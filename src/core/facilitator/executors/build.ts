@@ -104,7 +104,7 @@ import {
   blockedByFailedDeveloper, formatRetryDecision, narrowFixlist, pendingRefusal, reviewerPromptFor,
   RecurringFocus, ReviewCounters, type RoundParts,
 } from "../../build/reviewRound.ts";
-import { readReviewLedger, type ReviewLedger } from "../../build/reviewLedger.ts";
+import { readReviewLedger } from "../../build/reviewLedger.ts";
 import { phaseCostToDate } from "../../build/phaseCost.ts";
 import { appendBuildRetro, buildRetroPath, gateRetroLines, storyRetroLines } from "../../build/retroLog.ts";
 import {
@@ -2917,7 +2917,6 @@ function failed(ctx: ExecutorContext, error: string, tasks: readonly ExecutorTas
 // they are defined and nothing else; a re-export is how "the same symbol, a
 // different file" stays true for every caller.
 export { readReviewLedger, phaseCostToDate };
-export type { ReviewLedger };
 export {
   clampParallel, developerPriceDivisor,
   DEFAULT_PARALLEL, MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE,
