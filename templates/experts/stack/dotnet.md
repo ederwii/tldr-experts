@@ -86,9 +86,10 @@ convention when it has one.
   `Configuration["…"]`
 - Does a new project file skip the repo's shared properties or analyzer package? verify:
   compare the new project file against an existing sibling project file
-- Can each new test fail? verify: change the line under test, re-run the test command
-  declared in .tldrx/workspace.yml, and confirm it goes red — and say so when the workspace
-  leaves that slot empty rather than letting the check pass
+- Can each new test fail? verify: change the line under test, re-run only that test's file —
+  the full command declared in .tldrx/workspace.yml runs once, at the Definition of Done — and
+  confirm it goes red; and say so when the workspace leaves that slot empty rather than letting
+  the check pass
 - Is a failure hidden behind a default return value from a call that failed? verify: read
   each fallback added in the diff and ask what a real failure would look like to the caller
 - Does this change alter behaviour with no test that would have caught the old behaviour?

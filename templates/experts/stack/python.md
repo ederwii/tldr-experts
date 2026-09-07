@@ -62,9 +62,10 @@ project's own convention when it has one.
 - Does a new function in an annotated module go without annotations? verify: open the file
   and compare the new signatures against the ones already there
 - Is `print` used in library code rather than the logger? verify: grep the diff for `print(`
-- Can each new test fail? verify: change the line under test, re-run the test command
-  declared in .tldrx/workspace.yml, and confirm it goes red — and say so when the workspace
-  leaves that slot empty rather than letting the check pass
+- Can each new test fail? verify: change the line under test, re-run only that test's file —
+  the full command declared in .tldrx/workspace.yml runs once, at the Definition of Done — and
+  confirm it goes red; and say so when the workspace leaves that slot empty rather than letting
+  the check pass
 - Does the diff pass an interpolated string to `subprocess` with `shell=True`? verify: grep
   the diff for `subprocess` and read the arguments at each hit
 - Does new code create mutable state at import time — a module-level list, dict or client?

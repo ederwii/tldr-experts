@@ -1,6 +1,25 @@
 # Changelog
 
 
+## 0.10.1 — unreleased
+
+### Changed
+
+- **The "can this test fail?" check now names its instrument: one test file, not the whole
+  declared suite.** The drive mandate asked for the one check a reviewer cannot do — break the
+  line a new test covers and watch it go red — and the four stack packs asked the same question
+  under `## Checks`, telling the reader to "re-run the test command declared in
+  `.tldrx/workspace.yml`". That command IS the full suite by construction: a story's Definition
+  of Done is byte-equal to a `workspace.yml` command. So the words nobody read as "full suite"
+  bought exactly that, once per mutation — measured over a week of unattended runs on three real
+  workspaces, five mutations in a story meant five extra full suites, six to ten suite runs per
+  story, against a suite of 11,929 tests over 855 files in one of those workspaces. The check
+  keeps earning its place (it caught a test that only passed because base64 hid a raw id); what
+  was expensive was the instrument. The mandate and all four packs now scope the mutation re-run
+  to the single test file that covers the broken line, and say where the declared command
+  belongs: once, at the Definition of Done. The empty-slot clause is untouched — a workspace
+  that declares no test command is still named rather than quietly passed.
+
 ## 0.10.0 — 2026-09-07
 
 ### Fixed

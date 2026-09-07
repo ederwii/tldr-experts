@@ -625,3 +625,36 @@ describe("tldrx drive --tldr (essentials-only reporting)", () => {
     expect(run.stdout).not.toContain("## Report terse");
   });
 });
+
+/**
+ * The can-it-fail check names its instrument (2026-09-07).
+ *
+ * Measured over a week of unattended runs on three real workspaces: hosts read
+ * "Break the line it covers and watch it go red", looked for a test command, found
+ * only the one the workspace declares — which IS the full suite by construction, a
+ * story's Definition of Done being byte-equal to a `workspace.yml` command — and ran
+ * it once per mutation. One workspace's suite is 11,929 tests over 855 files; five
+ * mutations bought five extra full suites in a single story, six to ten suite runs
+ * per story in total. The check itself earns its place (it caught a test that only
+ * passed because base64 hid a raw id); the INSTRUMENT was the cost. So the mandate
+ * now names the instrument: one test file for the mutation, the declared suite once,
+ * at the Definition of Done.
+ */
+describe("the can-it-fail check names its instrument, not the declared suite", () => {
+  /** Wrapped prose is one sentence — assert on the text with its wrapping removed. */
+  const unwrapped = (mode: DriveMode): string =>
+    renderMandate(mode, VERSION).split("\n").map((line) => line.trim()).join(" ");
+
+  for (const mode of DRIVE_MODES) {
+    test(`${mode}: the mutation is re-run against one test file`, () => {
+      expect(unwrapped(mode)).toContain("re-run only the test file that covers it");
+    });
+
+    test(`${mode}: the declared suite is placed at the Definition of Done, not per mutation`, () => {
+      const text = unwrapped(mode);
+      expect(text).toContain("not the declared suite, which runs once, at the Definition of Done");
+      // Not vacuous: the check itself must still be asked.
+      expect(text).toContain("that a test can fail");
+    });
+  }
+});
