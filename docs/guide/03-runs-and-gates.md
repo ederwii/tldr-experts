@@ -135,9 +135,14 @@ its siblings, but the wave ends `failed` and the next wave does not start — it
 stories may need what this one did not land. Ctrl-C kills every running sub-agent,
 not just the first.
 
-The default is 1, and at 1 nothing about the build is different from before. Set it
-per scope instead of per command with `build: {parallel: 3}` at the top of your
-`.tldrx/workflows/<scope>.yml`.
+**The shipped default is 2.** `stages/build/stage.yml` declares `parallel: 2`, so a
+workspace that overrides nothing already builds two stories at a time — two rather than
+more because one real workspace hit OOM kills at a wider fan-out. The code fallback is
+still 1, and it is what a stage file that says nothing about `parallel:` gets. The order
+of precedence, widest first: `--parallel` on the command, then `build: {parallel: N}` at
+the top of your `.tldrx/workflows/<scope>.yml` (per scope instead of per command), then
+`parallel:` in your own `.tldrx/stages/build/stage.yml`, then 1. At 1 nothing about the
+build is different from before.
 
 ## Who closes a gate
 

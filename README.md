@@ -163,8 +163,10 @@ its own refusal. See [10 Unattended mode](docs/guide/10-unattended-mode.md).
 | `security-patch` | auto | auto | — | human | human |
 | `migration` | auto | auto | auto | human | human |
 
-`--parallel <n>` on `next` / `run auto` builds that many of a wave's stories at once
-(merges still land in the wave's listed order; default 1 is unchanged).
+`--parallel <n>` on `next` / `run auto` builds that many of a wave's stories at once. The
+shipped Build stage declares `parallel: 2`, so a workspace that overrides nothing already runs
+two lanes; the code fallback stays 1, for a stage file that says nothing. Merges still land in
+the wave's listed order whatever the number is.
 
 A scope with `—` under `plan` does not run the Plan phase, and Build writes the one story that
 decision implies (`04-build/implicit-plan.yml`) from your What handoff rather than refusing;
