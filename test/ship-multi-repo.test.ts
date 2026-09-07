@@ -206,10 +206,12 @@ describe("tldrx ship across the repos a chained run shares a branch name in (#66
     // The repo name is IN the title, so a reviewer with three tabs open can tell them apart.
     expect(valueOf(opened[0], "--title")).toContain("app");
     expect(valueOf(opened[1], "--title")).toContain("api");
-    // Same handoff, byte for byte, as the body of every one of them.
+    // One rendered body, carrying the handoff byte for byte, in every one of them
+    // — and the SAME file, so "the same one in every repo" is a fact, not a hope.
+    expect(new Set(opened.map((call) => valueOf(call, "--body-file"))).size).toBe(1);
     for (const call of opened) {
       expect(valueOf(call, "--head")).toBe(BRANCH);
-      expect(readFileSync(valueOf(call, "--body-file"), "utf8")).toBe(HANDOFF);
+      expect(readFileSync(valueOf(call, "--body-file"), "utf8")).toContain(HANDOFF);
       // `Closes #66` and every other link in the handoff survives untouched.
       expect(readFileSync(valueOf(call, "--body-file"), "utf8")).toContain("Closes #66");
     }

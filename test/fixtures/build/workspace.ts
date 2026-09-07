@@ -33,6 +33,14 @@ export interface StorySpec {
   readonly touches?: readonly string[];
   readonly dod?: readonly string[];
   readonly status?: string;
+  /**
+   * `evidence:` — required by the story schema at `status: done` ("done means
+   * proven, not asserted", `schemas/story.ts`), so a fixture that wants a SETTLED
+   * story has to carry it or the file stops validating and every tolerant reader
+   * drops it. Empty by default, which is byte-identical to what this rendered
+   * before the field existed.
+   */
+  readonly evidence?: readonly string[];
 }
 
 export interface EpicSpec {
@@ -349,7 +357,7 @@ export function storyMarkdown(story: StorySpec, repo: string): string {
     `  - "${story.id} exists and the suite is green"`,
     "test_plan:",
     `  - "Unit: the ${story.id} file is written"`,
-    "evidence: []",
+    `evidence: [${(story.evidence ?? []).map((e) => `"${e}"`).join(", ")}]`,
     "---",
     "",
     `# ${story.id} · ${story.title ?? `Story ${story.id}`}`,

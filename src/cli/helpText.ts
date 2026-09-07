@@ -816,7 +816,7 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "ship",
-    description: "Open a pull request from the run's epic branch \u2014 one per repo the branch is in \u2014 with the run's handoff as the body.",
+    description: "Open a pull request from the run's epic branch \u2014 one per repo the branch is in \u2014 with a body written from the run's handoff.",
     args: [{ name: "[<run>]", meaning: "A run id. Omit it and the one open run is used." }],
     flags: [
       {
@@ -847,12 +847,12 @@ const ENTRIES: readonly CommandHelp[] = [
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
     notes: [
       "It NEVER pushes. tldrx does not publish a branch on its own (spec \u00a75), so a branch the remote has not seen is a refusal that names the `git push` command rather than running it.",
-      "The body is the LAST phase handoff the run has on disk \u2014 `04-build/handoff.md` on a run that built something \u2014 sent to `gh` as a file, never as an argument, so a long handoff cannot overflow an argv limit.",
+      "The body is WRITTEN for a PR (#167): what shipped and what did not, from the handoff's own done/not-done split; the reviewer findings still open, read from the run's fix lists; and the LAST phase handoff the run has on disk \u2014 `04-build/handoff.md` on a run that built something \u2014 verbatim and complete, inside a `<details>` block. It goes to `gh` as a file, never as an argument, so a long body cannot overflow an argv limit.",
       "It is read-only about the run: no event, no gate, no cursor. To mirror the plan's epics and stories to a ticket tool, `tldrx tickets sync` is the verb that does that, and it stays separate.",
       "It refuses cleanly, in a sentence, when there is no epic branch, no handoff, no remote, no `gh` on PATH, or when several epic branches leave the choice open.",
-      "When the branch exists in SEVERAL repos \u2014 the normal shape of a chained multi-repo run, whose epics share one integration branch \u2014 it opens one PR per repo: the same handoff as the body, the repo name in the title, and every URL listed at the end. `--repo` narrows it to one.",
+      "When the branch exists in SEVERAL repos \u2014 the normal shape of a chained multi-repo run, whose epics share one integration branch \u2014 it opens one PR per repo: the same body, the repo name in the title, and every URL listed at the end. `--repo` narrows it to one.",
       "A partial failure names both sides: the PRs that were opened, with their URLs, and the repos that failed, with the reason. Run it again to retry the rest \u2014 a repo whose PR is already open is skipped, so re-running opens nothing twice.",
-      "It refuses an epic branch that carries changes under `tldrx-work/` or `.tldrx/`, and names them. Those paths are written LIVE into the workspace checkout for the length of a run, so a PR that merges them makes the next `git pull` there refuse. The refusal prints the two commands that take them back off the branch \u2014 a forward commit, never a rebase.",
+      "It refuses an epic branch that carries changes under `tldrx-work/` or `.tldrx/`, and names them. Those paths are written LIVE into the workspace checkout for the length of a run, so a PR that merges them makes the next `git pull` there refuse. The refusal prints the two commands that take them back off the branch \u2014 a forward commit, never a rebase. A path a story at `status: done` DECLARES in its `touches:` is subtracted first and the refusal says which story excused it; an unsettled story's declaration excuses nothing.",
     ],
   },
   {

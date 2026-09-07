@@ -1,6 +1,6 @@
 /**
- * `tldrx ship` — open a pull request from the run's epic branch, with the run's
- * handoff as the body (issue #15).
+ * `tldrx ship` — open a pull request from the run's epic branch, with a body
+ * written for a PR (issues #15, #167).
  *
  * ## The gap
  *
@@ -12,8 +12,20 @@
  * ## What it does, and the three things it will not do
  *
  * It reads the epic branch off `run.yml` (`build.epic_branch`, written by the
- * Build executor), finds the repo (or repos) that branch lives in, takes the LAST
- * phase handoff on disk as the body, and runs one `gh pr create` per repo.
+ * Build executor), finds the repo (or repos) that branch lives in, renders the
+ * PR body from the LAST phase handoff on disk, and runs one `gh pr create` per
+ * repo.
+ *
+ * ## The body is rendered, not forwarded (issue #167)
+ *
+ * It used to BE that handoff, sent unedited. A Build handoff is a gate document —
+ * it opens `Blocked on: **human approval**` with instructions for the operator of
+ * the run — so every PR this verb opened led with an instruction to somebody who
+ * was not reading it, and said nothing about the stories that did not settle or
+ * the reviewer findings still open. `run/shipBody.ts` is now the ONE renderer:
+ * dry-run and the real `--body-file` are the same bytes, and the handoff still
+ * travels whole, inside a `<details>` block. The no-handoff refusal is unchanged —
+ * the body still cannot be invented.
  *
  * ## One branch, several repos (issue #66)
  *
@@ -69,7 +81,8 @@
  * the unit cases and a stub `gh` on PATH for the one end-to-end case; the real
  * `gh` is never invoked by a test.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { runtime } from "../runtime/index.ts";
 import { PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../paths.ts";
@@ -79,6 +92,16 @@ import { loadWorkspace, FALLBACK_DEFAULT_BRANCH } from "../../hooks/lib/workspac
 // One name for one binary. `adapters/github.ts` already had to decide what the
 // GitHub CLI is called; a second spelling here would be a second thing to keep true.
 import { GH_BIN } from "../adapters/github.ts";
+import { renderShipBody, type OpenFindingRow } from "./shipBody.ts";
+import { latestFixlist, openFindings } from "../build/fixlist.ts";
+import { BUILD_PHASE, PLAN_PHASE } from "../build/plan.ts";
+import { validateStoryFile } from "../schemas/story.ts";
+import { STORIES_DIR } from "../plan/validatePlan.ts";
+import type { PlanStatus } from "../schemas/planCommon.ts";
+// Spec §3's table, from the file that owns it. This module used to spell the
+// three numbers itself; `EXIT_GATE_REFUSED` is the same 2 every other gate
+// refusal in the CLI exits with, and one spelling is what keeps it that way.
+import { EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_OK } from "../../cli/exitCodes.ts";
 
 /** One external command, with the working directory it must run in. */
 export interface ShipTransport {
@@ -126,15 +149,10 @@ export interface ShipOutcome {
   readonly lines: readonly string[];
 }
 
-const EXIT_OK = 0;
-/** Spec §3. Every refusal below is a refusal to act, which is `2`. */
-const EXIT_REFUSED = 2;
-const EXIT_NOT_FOUND = 3;
-
 export async function shipRun(options: ShipOptions): Promise<ShipOutcome> {
   const resolution = RunStore.resolve(options.root, options.runId);
   if (resolution.kind === "ambiguous") {
-    return { code: EXIT_REFUSED, lines: [...ambiguousRunLines(resolution.open)] };
+    return { code: EXIT_GATE_REFUSED, lines: [...ambiguousRunLines(resolution.open)] };
   }
   if (resolution.kind === "none") {
     return {
@@ -169,6 +187,12 @@ export async function shipRun(options: ShipOptions): Promise<ShipOutcome> {
     ]);
   }
 
+  // The stories are read once, here, and travel down as DATA: the body needs the
+  // fix lists they own, and the state refusal needs the paths the settled ones
+  // declare. Two reads would be two answers to "what did this run plan".
+  const stories = runStories(store);
+  const body = writeShipBody(store, branch, handoff, stories);
+
   // --- the outside world ----------------------------------------------------
 
   const gh = await options.transport.run(GH_BIN, ["--version"], options.root);
@@ -184,11 +208,12 @@ export async function shipRun(options: ShipOptions): Promise<ShipOutcome> {
   const repos = await findRepos(options, store, branch);
   if ("code" in repos) return repos;
 
+  const excuses = settledTouches(stories);
   const only = repos[0];
   if (repos.length === 1 && only !== undefined) {
-    return await shipOne(options, store, branch, only, handoff);
+    return await shipOne(options, store, branch, only, body, excuses);
   }
-  return await shipMany(options, store, branch, repos, handoff);
+  return await shipMany(options, store, branch, repos, body, excuses);
 }
 
 /**
@@ -204,13 +229,14 @@ async function shipOne(
   store: RunStore,
   branch: string,
   repo: ShipRepo,
-  handoff: Handoff,
+  body: ShipBody,
+  excuses: readonly StateExcuse[],
 ): Promise<ShipOutcome> {
-  const prepared = await prepareRepo(options, repo, branch);
+  const prepared = await prepareRepo(options, repo, branch, excuses);
   if (!prepared.ok) return refuse(prepared.lines);
   const base = prepared.base;
 
-  const args = createArgs(branch, base, store.run.title, handoff.path, options.draft === true);
+  const args = createArgs(branch, base, store.run.title, body.path, options.draft === true);
   const command = `gh ${args.map(quote).join(" ")}`;
 
   if (options.dryRun === true) {
@@ -218,7 +244,7 @@ async function shipOne(
       code: EXIT_OK,
       lines: [
         `would open a PR for ${store.runId} from \`${branch}\` into \`${base}\` (${repo.name})`,
-        `  body: ${handoff.rel} (${String(handoff.bytes)} B)`,
+        `  body: ${bodyRecipe(body)}`,
         `  cwd:  ${repo.dir}`,
         `  ${command}`,
         "  --dry-run: nothing was created.",
@@ -241,7 +267,7 @@ async function shipOne(
     lines: [
       `opened a PR for ${store.runId} from \`${branch}\` into \`${base}\` (${repo.name})`,
       `  ${url ?? "gh printed no URL — check `gh pr list`"}`,
-      `  body: ${handoff.rel}`,
+      `  body: ${body.handoffRel}`,
       `  next: \`tldrx tickets sync --run ${store.runId}\` mirrors the plan's epics and stories, `
         + "if this workspace configures a ticket tool.",
     ],
@@ -273,18 +299,19 @@ async function shipMany(
   store: RunStore,
   branch: string,
   repos: readonly ShipRepo[],
-  handoff: Handoff,
+  body: ShipBody,
+  excuses: readonly StateExcuse[],
 ): Promise<ShipOutcome> {
   const results: RepoOutcome[] = [];
   for (const repo of repos) {
-    const prepared = await prepareRepo(options, repo, branch);
+    const prepared = await prepareRepo(options, repo, branch, excuses);
     if (!prepared.ok) {
       results.push({ repo, kind: "failed", detail: prepared.lines });
       continue;
     }
     // The repo name goes IN the title, so three tabs of the same PR are tellable apart.
     const title = `${store.run.title} (${repo.name})`;
-    const args = createArgs(branch, prepared.base, title, handoff.path, options.draft === true);
+    const args = createArgs(branch, prepared.base, title, body.path, options.draft === true);
     const command = `gh ${args.map(quote).join(" ")}`;
 
     if (options.dryRun === true) {
@@ -322,7 +349,7 @@ async function shipMany(
       url: lastUrl(created.stdout) ?? lastUrl(created.stderr) ?? undefined,
     });
   }
-  return renderMany(store, branch, handoff, results, options.dryRun === true);
+  return renderMany(store, branch, body, results, options.dryRun === true);
 }
 
 /**
@@ -335,7 +362,7 @@ async function shipMany(
 function renderMany(
   store: RunStore,
   branch: string,
-  handoff: Handoff,
+  shipBody: ShipBody,
   results: readonly RepoOutcome[],
   dryRun: boolean,
 ): ShipOutcome {
@@ -347,14 +374,14 @@ function renderMany(
   const failed = results.filter((result) => result.kind === "failed");
   const total = String(results.length);
   const names = results.map((result) => result.repo.name).join(", ");
-  const body = `  body: ${handoff.rel}, the same one in every repo`;
+  const body = `  body: ${shipBody.handoffRel}, the same one in every repo`;
 
   if (dryRun) {
     return {
       code: EXIT_OK,
       lines: [
         `would open ${total} PRs for ${store.runId} from \`${branch}\` (${names})`,
-        `  body: ${handoff.rel} (${String(handoff.bytes)} B), the same one in every repo`,
+        `  body: ${bodyRecipe(shipBody)}, the same one in every repo`,
         ...results.flatMap((result) => result.kind === "failed"
           ? [`  ${pad(result.repo.name)}  cannot: ${result.detail?.[0] ?? ""}`]
           : [
@@ -396,7 +423,7 @@ function renderMany(
         + "so re-running opens nothing twice.",
     ];
 
-  return { code: failed.length === 0 ? EXIT_OK : EXIT_REFUSED, lines: [head, ...rows, ...tail] };
+  return { code: failed.length === 0 ? EXIT_OK : EXIT_GATE_REFUSED, lines: [head, ...rows, ...tail] };
 }
 
 /** The `gh pr create` argv. Identical for one repo and for many but the title. */
@@ -435,6 +462,7 @@ async function prepareRepo(
   options: ShipOptions,
   repo: ShipRepo,
   branch: string,
+  excuses: readonly StateExcuse[],
 ): Promise<Prepared | { readonly ok: false; readonly lines: readonly string[] }> {
   const remotes = await listRemotes(options.transport, repo.dir);
   const remote = remotes.includes("origin") ? "origin" : remotes.length === 1 ? remotes[0] : null;
@@ -472,15 +500,16 @@ async function prepareRepo(
     ?? FALLBACK_DEFAULT_BRANCH;
 
   const state = await stateOnBranch(options.transport, repo.dir, base, branch);
-  if (state.length > 0) {
-    const shown = state.slice(0, 5);
+  const { refused, excused } = subtractExcused(state, excuses);
+  if (refused.length > 0) {
+    const shown = refused.slice(0, 5);
     return {
       ok: false,
       lines: [
-        `\`${branch}\` carries ${String(state.length)} change(s) to tldrx's own state, and a PR that `
+        `\`${branch}\` carries ${String(refused.length)} change(s) to tldrx's own state, and a PR that `
           + "merges them will break the next `git pull` in this workspace",
         ...shown.map((path) => `    ${path}`),
-        ...(state.length > shown.length ? [`    …and ${String(state.length - shown.length)} more`] : []),
+        ...(refused.length > shown.length ? [`    …and ${String(refused.length - shown.length)} more`] : []),
         `  \`${PROJECT_WORK_DIR}/\` and \`${PROJECT_FRAMEWORK_DIR}/\` are written LIVE into this checkout for the `
           + "length of a run, so the same paths arriving in a merge meet a dirty tree — measured on",
         "  aparece-v2, 2026-09-02: a refused pull over 5 modified and ~40 untracked paths (gh #102).",
@@ -489,10 +518,70 @@ async function prepareRepo(
         `    git -C ${repo.dir} checkout ${base} -- ${PROJECT_WORK_DIR} ${PROJECT_FRAMEWORK_DIR}`,
         `    git -C ${repo.dir} commit -m "keep tldrx state off the epic"`,
         "  (done on a checkout of the branch — a forward commit, never a rebase.)",
+        // The subtraction is shown rather than left silent: an operator who reads
+        // this list needs to know why a path they can see on the branch is not in
+        // it, and a refusal that quietly drops evidence is the harder one to trust.
+        ...excused.map((row) =>
+          `  (\`${row.path}\` is excused by ${row.storyId}, which declares it in \`touches:\`)`),
       ],
     };
   }
   return { ok: true, remote, base };
+}
+
+/**
+ * A path a SETTLED story declares in `touches:`, and the story that declares it.
+ *
+ * The #102 refusal had no allowed move (#167): a story that legitimately edits
+ * `.tldrx/workspace.yml` — adding a repo, declaring a command — could not be
+ * shipped at all, because the branch carrying its work carries the edit the plan
+ * asked for. A DECLARED path is not accidental state: `touches:` is the story's
+ * own statement of what it would change, written before the work and validated
+ * with the plan.
+ *
+ * Settled means `done`, and only `done`. A story at `review` or `blocked` has a
+ * declaration and no verdict — a plan, not a fact — and excusing on it would let
+ * an unfinished story's intention wave through a real state change.
+ */
+interface StateExcuse {
+  readonly path: string;
+  readonly storyId: string;
+}
+
+function settledTouches(stories: readonly ShipStory[]): readonly StateExcuse[] {
+  const rows: StateExcuse[] = [];
+  for (const story of stories) {
+    if (story.status !== "done") continue;
+    for (const path of story.touches) rows.push({ path, storyId: story.id });
+  }
+  return rows;
+}
+
+/**
+ * The state changes still refused, and the ones a settled story answers for.
+ *
+ * Prefix-matched at a SEGMENT boundary, because `touches:` may name a directory
+ * (`.tldrx/experts/`) as readily as a file. `path.startsWith(declared)` on its
+ * own would let a declared `.tldrx/work` excuse `.tldrx/workspace.yml`, which is
+ * a different file with a different meaning.
+ */
+function subtractExcused(
+  state: readonly string[],
+  excuses: readonly StateExcuse[],
+): { readonly refused: readonly string[]; readonly excused: readonly StateExcuse[] } {
+  const refused: string[] = [];
+  const excused: StateExcuse[] = [];
+  for (const path of state) {
+    const by = excuses.find((excuse) => covers(excuse.path, path));
+    if (by === undefined) refused.push(path);
+    else excused.push({ path, storyId: by.storyId });
+  }
+  return { refused, excused };
+}
+
+function covers(declared: string, path: string): boolean {
+  const trimmed = declared.replace(/\/+$/, "");
+  return trimmed !== "" && (path === trimmed || path.startsWith(`${trimmed}/`));
 }
 
 /**
@@ -653,6 +742,8 @@ interface Handoff {
   readonly rel: string;
   readonly path: string;
   readonly bytes: number;
+  /** The document itself — `run/shipBody.ts` folds it into the PR body whole. */
+  readonly text: string;
 }
 
 /**
@@ -676,9 +767,137 @@ function lastHandoff(runDir: string, phases: readonly string[]): Handoff | null 
       continue;
     }
     if (text.trim() === "") continue;
-    found = { rel: `${phase}/${HANDOFF_FILE}`, path, bytes: Buffer.byteLength(text, "utf8") };
+    found = { rel: `${phase}/${HANDOFF_FILE}`, path, bytes: Buffer.byteLength(text, "utf8"), text };
   }
   return found;
+}
+
+/** The PR body: rendered once, written once, the same file in every repo. */
+interface ShipBody {
+  /** Absolute path of the file `--body-file` is given. */
+  readonly path: string;
+  readonly bytes: number;
+  /** The handoff it folds in, run-relative — what the output lines name. */
+  readonly handoffRel: string;
+  /** How many open fix-list findings it lists. `0` is a measurement, not a silence. */
+  readonly open: number;
+}
+
+/**
+ * Render the body and put it somewhere `gh` can read it.
+ *
+ * The file goes in a fresh OS temp directory and NOT in the run tree, for the two
+ * reasons this verb already lives by: `tldrx ship` never writes to the run, and a
+ * file written under `tldrx-work/` or into a repo would become the next `git
+ * status` line — over the very paths `prepareRepo` refuses a branch for.
+ */
+function writeShipBody(
+  store: RunStore,
+  branch: string,
+  handoff: Handoff,
+  stories: readonly ShipStory[],
+): ShipBody {
+  const rows = openFixFindings(store, stories);
+  const text = renderShipBody({
+    runId: store.runId,
+    title: store.run.title,
+    branch,
+    handoff: handoff.text,
+    handoffRel: handoff.rel,
+    openFindings: rows,
+  });
+  const path = join(mkdtempSync(join(tmpdir(), "tldrx-ship-")), "pr-body.md");
+  writeFileSync(path, text, "utf8");
+  return { path, bytes: Buffer.byteLength(text, "utf8"), handoffRel: handoff.rel, open: rows.length };
+}
+
+/** One line saying what the body is made of — the `--dry-run` recipe. */
+function bodyRecipe(body: ShipBody): string {
+  return `the PR summary (${String(body.bytes)} B) — what shipped, what did not, `
+    + `${String(body.open)} open finding(s), and ${body.handoffRel} whole`;
+}
+
+/** The two questions `ship` asks of a story: is it settled, and what does it touch. */
+interface ShipStory {
+  readonly id: string;
+  readonly status: PlanStatus;
+  readonly touches: readonly string[];
+}
+
+/**
+ * Directories to look in for a phase's artefacts — the run's declared phases,
+ * plus the two the Build executor addresses by name.
+ *
+ * Both halves are needed, measured: a `build-only` run's `run.yml` declares the
+ * single phase `04-build` and its plan still sits in `03-plan/stories/`, because
+ * that is where `build/plan.ts` reads it from whatever the workflow declares. So
+ * walking only the declared phases finds no story at all on the commonest shape
+ * this verb ships, and hard-coding only `03-plan` would miss a workflow that
+ * names its phases differently.
+ */
+function phaseDirs(store: RunStore): readonly string[] {
+  return [...new Set([PLAN_PHASE, BUILD_PHASE, ...store.run.phases.map((phase) => phase.id)])];
+}
+
+/**
+ * The run's stories, read tolerantly from whichever phase directory holds them.
+ *
+ * A story file that does not validate is SKIPPED, not guessed at. That is the
+ * fail-closed direction for both readers: an unreadable story excuses no state
+ * path and vouches for no fix list, so the worst a broken file can do is leave a
+ * refusal standing.
+ */
+function runStories(store: RunStore): readonly ShipStory[] {
+  const stories: ShipStory[] = [];
+  for (const phase of phaseDirs(store)) {
+    const dir = join(store.runDir, phase, STORIES_DIR);
+    if (!existsSync(dir)) continue;
+    let names: readonly string[];
+    try {
+      names = readdirSync(dir).filter((name) => name.endsWith(".md")).sort();
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      let text: string;
+      try {
+        text = readFileSync(join(dir, name), "utf8");
+      } catch {
+        continue;
+      }
+      // No workspace commands passed: the dod-allowlist rule is about EXECUTING a
+      // story, and this only ever reads its front matter (`adapters/collect.ts`
+      // reads one the same way, for the same reason).
+      const story = validateStoryFile(text).story;
+      if (story === null) continue;
+      stories.push({ id: story.id, status: story.status, touches: story.touches });
+    }
+  }
+  return stories;
+}
+
+/**
+ * Every fix-list finding still open, in run order, with the file it is open in.
+ *
+ * `build/fixlist.ts` is called, never re-implemented: `latestFixlist` finds the
+ * document and `openFindings` decides what "open" means — `fix-now`, and no
+ * resolution the file can point a commit at (#130). A PR body that decided that
+ * for itself would be a second answer to the question a story's own settle path
+ * already asks.
+ *
+ * The LATEST round only, which is what the executor's own reader does: an earlier
+ * round is superseded by the one written after it.
+ */
+function openFixFindings(store: RunStore, stories: readonly ShipStory[]): readonly OpenFindingRow[] {
+  const rows: OpenFindingRow[] = [];
+  for (const phase of phaseDirs(store)) {
+    for (const story of stories) {
+      const latest = latestFixlist(store.runDir, phase, story.id);
+      if (latest === null) continue;
+      for (const finding of openFindings(latest.findings)) rows.push({ rel: latest.rel, finding });
+    }
+  }
+  return rows;
 }
 
 async function listRemotes(transport: ShipTransport, cwd: string): Promise<readonly string[]> {
@@ -703,5 +922,5 @@ function quote(arg: string): string {
 }
 
 function refuse(lines: readonly string[]): ShipOutcome {
-  return { code: EXIT_REFUSED, lines };
+  return { code: EXIT_GATE_REFUSED, lines };
 }

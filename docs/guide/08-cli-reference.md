@@ -1145,8 +1145,8 @@ is [10 — Unattended mode](10-unattended-mode.md). Exits: `0` `1`.
 
 ## `tldrx ship`
 
-Open a pull request from the run's epic branch — one per repo the branch is in — with the run's
-handoff as the body.
+Open a pull request from the run's epic branch — one per repo the branch is in — with a body
+written from the run's handoff.
 
 ```
 tldrx ship [<run>] [--branch <name>] [--repo <name>] [--base <branch>]
@@ -1155,12 +1155,14 @@ tldrx ship [<run>] [--branch <name>] [--repo <name>] [--base <branch>]
 
 It NEVER pushes. tldrx does not publish a branch on its own (spec §5), so a branch the remote
 has not seen is a refusal that names the `git push` command rather than running it. The body is
-the LAST phase handoff the run has on disk — `04-build/handoff.md` on a run that built
-something — handed to `gh` as a file, never as an argument, so a long handoff cannot overflow
-an argv limit.
+WRITTEN for a PR (#167): what shipped and what did not, from the handoff's own done/not-done
+split; the reviewer findings still open, read from the run's fix lists; and the LAST phase
+handoff the run has on disk — `04-build/handoff.md` on a run that built something — verbatim
+and complete, inside a `<details>` block. It is handed to `gh` as a file, never as an argument,
+so a long body cannot overflow an argv limit.
 
 When the branch exists in SEVERAL repos — the normal shape of a chained multi-repo run, whose
-epics share one integration branch — it opens one PR per repo: the same handoff as the body,
+epics share one integration branch — it opens one PR per repo: the same body,
 the repo name in the title, and every URL listed at the end. `--repo` narrows that to one, and
 `--branch` picks between epic branches when the run cut more than one (it must be one of the
 run's own; an unrelated branch is refused). `--base` overrides what the PR opens against,

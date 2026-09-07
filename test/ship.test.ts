@@ -18,6 +18,12 @@
  * remote, an absent `gh` and an unpushed branch are all ordinary situations, and
  * the assertions below check both the exit code and that stderr carries no
  * exception text.
+ *
+ * **The handoff fixture is a REAL Build handoff** (issue #167). It is rendered by
+ * `renderBuildHandoff`, not typed out here, because the whole finding behind #167
+ * is that a Build handoff is a GATE document — it opens `Blocked on: **human
+ * approval**` and carries operator instructions — and a hand-written stand-in
+ * would have let the PR body be tested against a document Build never writes.
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
@@ -26,6 +32,9 @@ import { join } from "node:path";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { shipRun, type ShipTransport } from "../src/core/run/ship.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
+import { renderBuildHandoff } from "../src/core/build/handoff.ts";
+import type { StoryOutcome } from "../src/core/build/outcome.ts";
+import { renderFixlist, type FixFinding } from "../src/core/build/fixlist.ts";
 import { EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_OK } from "../src/cli/exitCodes.ts";
 import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
@@ -49,14 +58,49 @@ const ONE: BuildWorkspaceOptions = {
   waves: [["S1"]],
 };
 
-const HANDOFF = [
-  "# Build handoff",
-  "",
-  "## Findings",
-  "",
-  "- The leaderboard sorts by score, then by name [src: app:README.md:1]",
-  "",
-].join("\n");
+/** One `StoryOutcome`, with everything the handoff does not read left inert. */
+function outcome(id: string, title: string, status: "done" | "review"): StoryOutcome {
+  return {
+    id, title, status,
+    wave: "W1",
+    repo: "app",
+    epic: "E1",
+    epicBranch: "epic/e1",
+    branch: `story/${id}`,
+    attempts: 1,
+    dod: [{ command: "npm run test", exitCode: 0, timedOut: false, tail: "ok" }],
+    commit: status === "done" ? "abc1234" : null,
+    merged: status === "done",
+    carried: status === "done" ? 3 : 0,
+    conflicts: [],
+    verdict: status === "done" ? "approve" : "changes",
+    developerError: null,
+    reviewSummary: "",
+    reviewFindings: [],
+    reviewRel: `04-build/log/${id}.md`,
+    reason: status === "done" ? null : "the reviewer asked for changes",
+    rescued: null,
+    cost_usd: 0.21,
+  };
+}
+
+/**
+ * The document `04-build` really writes: S1 done, S2 not, and a `## Gate` section
+ * whose first line is `Blocked on: **human approval**`.
+ */
+const HANDOFF = renderBuildHandoff({
+  runId: "260829-build",
+  stageId: "build",
+  model: "sonnet",
+  costUsd: 0.42,
+  budgetUsd: 8,
+  at: "2026-08-31T10:00:00Z",
+  outcomes: [outcome("S1", "First story", "done"), outcome("S2", "Second story", "review")],
+  epics: [{
+    id: "E1", branch: "epic/e1", repos: ["app"], merged: ["S1"],
+    defaultBranches: ["main"], rel: "03-plan/epics/E1.md",
+  }],
+});
 
 function workspace(options: BuildWorkspaceOptions = ONE): BuildWorkspace {
   const made = makeBuildWorkspace(options);
@@ -128,8 +172,82 @@ async function ship(ws: BuildWorkspace, transport: ShipTransport, extra: Record<
   });
 }
 
+/** What `--body-file` was actually handed, read off the recorded `gh pr create`. */
+function bodyOf(transport: { calls: Call[] }): string {
+  const create = transport.calls.find((call) => call.cmd === "gh" && call.args[0] === "pr");
+  const args = create?.args ?? [];
+  const at = args.indexOf("--body-file");
+  return at === -1 ? "" : readFileSync(args[at + 1] ?? "", "utf8");
+}
+
+/**
+ * One H2 section of the rendered body, heading included, up to the next H2 or the
+ * `<details>` block — so "S2 is not under `## What shipped`" is a claim that can
+ * fail, which `body.toContain("S2")` over the whole document could not make.
+ */
+function section(body: string, heading: string): string {
+  const from = body.indexOf(`${heading}\n`);
+  if (from === -1) return "";
+  const rest = body.slice(from + heading.length + 1);
+  const ends = [rest.indexOf("\n## "), rest.indexOf("\n<details>")].filter((at) => at !== -1);
+  return heading + (ends.length === 0 ? rest : rest.slice(0, Math.min(...ends)));
+}
+
+/**
+ * A healthy repo whose epic branch DOES carry changes to tldrx's own state.
+ *
+ * The answer is scripted rather than committed: `stateOnBranch` asks
+ * `git diff --name-only <base>...<branch> -- tldrx-work .tldrx`, and the fake
+ * transport keys on `<cmd> <arg0> <arg1>`, so this is the same repo with one
+ * different reading — which is exactly the case #102's refusal is about.
+ */
+function withStatePaths(paths: readonly string[]) {
+  return healthy({ "git diff --name-only": { stdout: `${paths.join("\n")}\n` } });
+}
+
+/**
+ * A fix list on disk for one story, written by the REAL renderer.
+ *
+ * `renderFixlist` rather than a literal so the test is anchored to the format
+ * `fixlist.ts` parses back — a body that listed findings a fix list no longer
+ * writes that way would be a body that lists nothing.
+ */
+function writeFixlistFixture(
+  ws: BuildWorkspace,
+  storyId: string,
+  findings: readonly Partial<FixFinding>[],
+): void {
+  mkdirSync(join(ws.runDir, "04-build", "fixlist"), { recursive: true });
+  writeFileSync(
+    join(ws.runDir, "04-build", "fixlist", `${storyId}-1.md`),
+    renderFixlist({
+      storyId,
+      title: "First story",
+      round: 1,
+      attempt: 1,
+      maxAttempts: 2,
+      diff: "git diff main...epic/e1",
+      commit: "abc1234",
+      summary: "signed, with findings",
+      findings: findings.map((partial, i) => ({
+        n: i + 1,
+        severity: "high",
+        finding: "a finding",
+        where: "src/app.ts:1",
+        disposition: "fix-now",
+        detail: "",
+        doNot: [],
+        resolved: false,
+        resolvedSha: null,
+        ...partial,
+      })),
+    }),
+    "utf8",
+  );
+}
+
 describe("tldrx ship", () => {
-  test("opens the PR from the epic branch with the handoff as the body", async () => {
+  test("opens the PR from the epic branch, with the handoff carried whole in the body", async () => {
     const ws = workspace();
     readyToShip(ws);
     const transport = healthy();
@@ -147,10 +265,134 @@ describe("tldrx ship", () => {
     expect(args).toContain("--body-file");
     const bodyFile = args[args.indexOf("--body-file") + 1] ?? "";
     expect(existsSync(bodyFile)).toBe(true);
-    expect(readFileSync(bodyFile, "utf8")).toBe(HANDOFF);
+    // Every byte of the handoff is in the body — nothing paraphrased, nothing dropped.
+    expect(readFileSync(bodyFile, "utf8")).toContain(HANDOFF);
+    // The body is not written into the workspace, where it would become a diff.
+    expect(bodyFile.startsWith(ws.root)).toBe(false);
     // Run in the repo the branch lives in, never in the workspace root.
     expect(create?.cwd).toBe(ws.repoDir);
     expect(outcome.lines.join("\n")).toContain("https://github.com/ederwii/app/pull/7");
+  });
+
+  test("the PR body is written for a PR: what shipped, what did not, handoff folded away", async () => {
+    const ws = workspace();
+    readyToShip(ws);
+    const transport = healthy();
+
+    await ship(ws, transport);
+    const body = bodyOf(transport);
+
+    // Not the raw gate document: the operator instruction is not what a reviewer meets.
+    const head = body.slice(0, body.indexOf("<details>"));
+    expect(head).not.toContain("Blocked on: **human approval**");
+    expect(body.startsWith("# Handoff —")).toBe(false);
+
+    expect(body).toContain("## What shipped");
+    const shipped = section(body, "## What shipped");
+    expect(shipped).toContain("S1");
+    expect(shipped).not.toContain("S2");
+
+    expect(body).toContain("## Not done");
+    expect(section(body, "## Not done")).toContain("S2");
+
+    // The handoff is still there, in full, folded away.
+    expect(body).toContain("<details>");
+    expect(body).toContain("04-build/handoff.md");
+    const details = body.slice(body.indexOf("<details>"));
+    expect(details).toContain("Blocked on: **human approval**");
+  });
+
+  test("open fix-list findings are listed, and come from fixlist.ts", async () => {
+    const ws = workspace();
+    readyToShip(ws);
+    writeFixlistFixture(ws, "S1", [{ disposition: "fix-now", finding: "the token is logged" }]);
+
+    const transport = healthy();
+    await ship(ws, transport);
+    const body = bodyOf(transport);
+
+    expect(body).toContain("## Open findings");
+    expect(body).toContain("the token is logged");
+    expect(body).toContain("04-build/fixlist/S1-1.md");
+  });
+
+  test("a finding closed by an EVIDENCED resolution is not listed as open", async () => {
+    const ws = workspace();
+    readyToShip(ws);
+    writeFixlistFixture(ws, "S1", [
+      { finding: "the token is logged", resolved: true, resolvedSha: "9f2c1ab" },
+      { finding: "the confirm is not atomic" },
+    ]);
+
+    const transport = healthy();
+    await ship(ws, transport);
+    const body = bodyOf(transport);
+
+    // `isOpen` is the one implementation of "settled": a sha, not a claim.
+    expect(body).toContain("the confirm is not atomic");
+    expect(section(body, "## Open findings")).not.toContain("the token is logged");
+  });
+
+  test("no fix list at all leaves the section out rather than asserting an empty one", async () => {
+    const ws = workspace();
+    readyToShip(ws);
+    const transport = healthy();
+    await ship(ws, transport);
+    expect(bodyOf(transport)).not.toContain("## Open findings");
+  });
+
+  test("a state path a SETTLED story declares in `touches:` is excused, and the ship proceeds", async () => {
+    const ws = workspace({
+      ...ONE,
+      stories: [{
+        id: "S1", epic: "E1", title: "First story", status: "done",
+        touches: [".tldrx/workspace.yml"], evidence: ["04-build/log/S1.md:1"],
+      }],
+    });
+    readyToShip(ws);
+
+    const outcome = await ship(ws, withStatePaths([".tldrx/workspace.yml"]));
+    expect(outcome.code).toBe(EXIT_OK);
+  });
+
+  test("an UNDECLARED state path still refuses, and the message says which story excused which", async () => {
+    const ws = workspace({
+      ...ONE,
+      stories: [{
+        id: "S1", epic: "E1", title: "First story", status: "done",
+        touches: [".tldrx/workspace.yml"], evidence: ["04-build/log/S1.md:1"],
+      }],
+    });
+    readyToShip(ws);
+
+    const outcome = await ship(
+      ws,
+      withStatePaths([".tldrx/workspace.yml", "tldrx-work/260829-x/run.yml"]),
+    );
+    expect(outcome.code).toBe(EXIT_GATE_REFUSED);
+    const text = outcome.lines.join("\n");
+    expect(text).toContain("tldrx-work/260829-x/run.yml");
+    expect(text).toContain("excused by S1");
+    // The excused path is subtracted, not listed among the refused ones.
+    expect(text).not.toMatch(/^\s+\.tldrx\/workspace\.yml$/m);
+    expect(text).toContain("1 change(s)");
+  });
+
+  test("an UNSETTLED story's `touches:` excuses nothing — a plan is not a fact", async () => {
+    const ws = workspace({
+      ...ONE,
+      stories: [{
+        id: "S1", epic: "E1", title: "First story", status: "review",
+        touches: [".tldrx/workspace.yml"],
+      }],
+    });
+    readyToShip(ws);
+
+    const outcome = await ship(ws, withStatePaths([".tldrx/workspace.yml"]));
+    expect(outcome.code).toBe(EXIT_GATE_REFUSED);
+    const text = outcome.lines.join("\n");
+    expect(text).toMatch(/^\s+\.tldrx\/workspace\.yml$/m);
+    expect(text).not.toContain("excused by");
   });
 
   test("refuses when the run has cut no epic branch, and calls nothing", async () => {
