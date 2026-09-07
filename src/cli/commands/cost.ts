@@ -1,9 +1,13 @@
-/** `tldrx cost` — What the work actually cost, per attempt, per stage, per run.
+/** `tldrx cost` — What the work actually cost, per attempt, per stage, per run,
+ * and — with `--stories` — per story against the ceiling its spawns were given.
  *
- * Reads `events.jsonl` and nothing else. Every dollar it prints is one the Claude
- * CLI reported on an `agent.result` line; nothing here multiplies a token count by
- * a price. `tldrx run estimate` is the command that is allowed to guess, and it
- * says "ESTIMATE" in words when it does.
+ * Reads `events.jsonl` and nothing else. Every dollar it prints is one the LOG
+ * recorded, and the log records two kinds: the MEASURED ones the Claude CLI
+ * reported on an `agent.result` line, and the SPAWN CEILINGS the executor handed
+ * `agent.spawned` — a cap it computed, never a charge. They are printed in
+ * separate columns and never added to each other. Nothing here multiplies a token
+ * count by a price; `tldrx run estimate` is the command that is allowed to guess,
+ * and it says "ESTIMATE" in words when it does.
  *
  * Spends nothing, spawns nothing, advances nothing.
  */
@@ -36,6 +40,21 @@ function costReport(argv: readonly string[]): number {
     const args = parseArgs(argv, VALUE_FLAGS);
     const root = workspaceRootFrom(args);
     const json = boolFlag(args, "json");
+
+    const stories = boolFlag(args, "stories");
+    // Two different reports, not a modifier and a report: `--all` totals every run
+    // in the workspace, `--stories` breaks ONE run down by story. Accepting both
+    // and running one of them taught a script that the flag it passed did
+    // something. Three lines below, the same file refuses an ambiguous run rather
+    // than guess which one an operator meant; this is the same refusal.
+    if (stories && boolFlag(args, "all")) {
+      process.stderr.write(
+        "tldrx cost: --all and --stories are two different reports — --all totals every run in "
+        + "this workspace, --stories breaks ONE run down by story. Pick one "
+        + "(see `tldrx cost --help`).\n",
+      );
+      return EXIT_USAGE;
+    }
 
     // `--all` is the PROGRAM view: every run under tldrx-work/, open or finished.
     // A workspace's total is the number an operator is asked about, and it was
@@ -72,7 +91,7 @@ function costReport(argv: readonly string[]): number {
     // no plan document, no price table. It is deliberately a CEILING and not "the
     // plan's share": `STORY_KEYS` has no budget key, so there is no plan figure to
     // take a share of, and naming one would invent it.
-    if (boolFlag(args, "stories")) {
+    if (stories) {
       const stories = buildStoryCost(resolution.store.runDir);
       if (stories === null) {
         process.stderr.write(

@@ -33,7 +33,7 @@ import {
 import { emitBudgetYaml } from "../src/core/run/emitRunYaml.ts";
 import { raiseBudget } from "../src/core/budget/raiseBudget.ts";
 import { buildRunCost, buildStoryCost, renderRunCost, renderStoryCost } from "../src/core/budget/costView.ts";
-import { overShareSentence } from "../src/core/build/planVsMeasured.ts";
+import { overShareSentence, ratioOf } from "../src/core/build/planVsMeasured.ts";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { loadPlanPrices } from "../src/core/build/plan.ts";
 import { parseYaml } from "../src/core/yaml.ts";
@@ -45,6 +45,7 @@ import {
   type FacilitatorWorkspace, type StageOptions,
 } from "./fixtures/facilitator/workspace.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
+import { noSpawnEnv } from "./fixtures/noSpawnPath.ts";
 
 // `tldrx cost --stories` is driven through the REAL CLI below, so this file now
 // spawns a process; process start-up is a property of the machine, not of the
@@ -1107,8 +1108,12 @@ describe("`tldrx cost --stories` (#170)", () => {
     expect(out.stdout).toContain("ceiling");
   });
 
+  // S1 is here to make the run a BUILD run at all: rows are Build stories, and a
+  // story is one when a spawn named it or when a spawn in its phase named
+  // another. Without it S2 is indistinguishable from a Watch feature, which is
+  // the whole point of the row-axis fix.
   test("a story with no spawned ceiling is reported as absent, not as a zero", async () => {
-    const ws = runWithEvents([storyResult("S2", 1.0)]);
+    const ws = runWithEvents([storySpawned("S1", 0.39), storyResult("S1", 2.27), storyResult("S2", 1.0)]);
     const out = await tldrx(ws.root, "cost", "--stories");
     expect(out.stdout).toContain("S2");
     expect(out.stdout.toLowerCase()).toContain("not recorded");
@@ -1152,6 +1157,91 @@ describe("`tldrx cost --stories` (#170)", () => {
   });
 
   /**
+   * FIX 8 — `--all` returned before the story branch, so `--all --stories` ran the
+   * PROGRAM table and said nothing about the flag it dropped. Three lines below,
+   * the same file refuses an ambiguous run rather than guess; the house idiom is
+   * to refuse, not to pick a winner in silence.
+   */
+  test("`--all --stories` is refused rather than silently ignored", async () => {
+    const ws = runWithEvents([storySpawned("S1", 0.39), storyResult("S1", 2.27)]);
+    const out = await tldrx(ws.root, "cost", "--all", "--stories");
+    expect(out.code).toBe(1);
+    expect(out.stderr).toContain("--all");
+    expect(out.stderr).toContain("--stories");
+    expect(out.stdout).toBe("");
+  });
+
+  /**
+   * FIX 1 — the concluding line is the answer an operator reads, and it must not
+   * assert that every story came in under its ceiling over a measurement the line
+   * above it just called a LOWER BOUND. The unmetered dollars could put the story
+   * well over; nothing here can see them. That is the confident claim in the
+   * dangerous direction AGENTS §7 forbids by name.
+   */
+  test("a lower bound never gets the unqualified `inside the ceiling` verdict", () => {
+    const ws = runWithEvents([
+      storySpawned("S1", 5), storyResult("S1", 1), storyResult("S1", 0, { metered: false }),
+    ]);
+    const verdict = lastLine(renderStoryCost(buildStoryCost(ws.runDir)!));
+    expect(verdict).not.toContain("every story measured inside");
+    expect(verdict.toLowerCase()).toContain("at least");
+    expect(verdict).toContain("1 turn unmetered");
+  });
+
+  test("and an over-ceiling total over a lower bound is named a floor, not a measurement", () => {
+    const ws = runWithEvents([
+      storySpawned("S1", 0.39), storyResult("S1", 2.27), storyResult("S1", 0, { metered: false }),
+    ]);
+    const verdict = lastLine(renderStoryCost(buildStoryCost(ws.runDir)!));
+    expect(verdict).toContain("5.8");
+    expect(verdict.toLowerCase()).toContain("at least");
+    expect(verdict).toContain("1 turn unmetered");
+  });
+
+  /**
+   * FIX 2 — `ExecutorTask.key` is "the feature or story the task was for", and
+   * `watch.ts:157`/`:279` fill it with a FEATURE id. Watch emits no
+   * `agent.spawned` at all (`grep -rn '"agent.spawned"' src/` → three emitters,
+   * `runNext.ts:555` with no `story`, `build.ts:1713` and `:1825`), so on any run
+   * that reached 05-watch every feature arrived as a "story" with no ceiling —
+   * and `sumOrNull` then refused the whole sum, deleting the headline sentence on
+   * exactly the finished runs this corpus is drawn from.
+   */
+  test("a Watch feature is not a story, and does not take the headline sentence with it", () => {
+    const ws = runWithEvents([
+      storySpawned("S1", 0.39),
+      storyResult("S1", 2.27),
+      // A Watch turn: a `key`, a cost, no `agent.spawned` and a different phase.
+      storyResult("F1", 1.0, { phase: "05-watch" }),
+    ]);
+    const story = buildStoryCost(ws.runDir)!;
+    expect(story.rows.map((row) => row.story)).toEqual(["S1"]);
+    expect(story.note ?? "").toContain("5.8");
+    const text = renderStoryCost(story);
+    expect(text).not.toContain("F1");
+    // Excluded, and SAID to be excluded — a silent drop is its own dishonesty.
+    expect(text).toContain("1 keyed result");
+  });
+
+  /**
+   * FIX 6 — one division, one rounding. The row ratio used to be a second copy of
+   * the leaf's arithmetic (its own `> 0` guard included) and reached `--json`
+   * unrounded as `5.820512820512821` while the text beside it said `5.8`.
+   */
+  test("the row ratio comes from the leaf, rounded the way the text prints it", () => {
+    const ws = runWithEvents([storySpawned("S1", 0.39), storyResult("S1", 2.27)]);
+    const row = buildStoryCost(ws.runDir)!.rows[0];
+    expect(row?.ratio).toBe(5.8);
+    expect(JSON.stringify(row)).toContain("5.8");
+    expect(JSON.stringify(row)).not.toContain("5.8205");
+    // The leaf owns the guard as well as the division.
+    expect(ratioOf(0, 2)).toBeNull();
+    expect(ratioOf(null, 2)).toBeNull();
+    expect(ratioOf(2, null)).toBeNull();
+    expect(ratioOf(0.39, 2.27)).toBeCloseTo(5.8205, 3);
+  });
+
+  /**
    * The whole point of the report: the total sentence is the same one the Build
    * handoff's cost line carries, from the same leaf.
    */
@@ -1168,10 +1258,20 @@ describe("`tldrx cost --stories` (#170)", () => {
 
 // --- #170 fixtures ---------------------------------------------------------
 
+/** The verdict line: the last thing the report says, and the one a reader keeps. */
+function lastLine(text: string): string {
+  const lines = text.trimEnd().split("\n");
+  return lines[lines.length - 1] ?? "";
+}
+
 const BIN = join(FRAMEWORK_ROOT, "bin", "tldrx.ts");
 
+/** The CLI, with a private `$TMPDIR` per invocation and a `claude` that refuses (#95/#97). */
 async function tldrx(cwd: string, ...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
-  const proc = Bun.spawn(["bun", BIN, ...args], { stdout: "pipe", stderr: "pipe", cwd });
+  const scratch = mkdtempSync(join(tmpdir(), "tldrx-economy-cli-"));
+  const proc = Bun.spawn(["bun", BIN, ...args], {
+    stdout: "pipe", stderr: "pipe", cwd, env: { ...noSpawnEnv(), TMPDIR: scratch },
+  });
   const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),

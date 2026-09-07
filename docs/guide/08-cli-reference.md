@@ -904,7 +904,9 @@ ceiling and not "the plan's share" — a story file carries no budget key, so no
 holds a per-story dollar figure to take a share of, and the report never invents one. A story
 missing either side reads `not recorded` with the reason, never `$0.00`, and no total is
 printed over a figure that could not be formed. It changes no ceiling and spends nothing; it
-is the measurement a recalibration of those ceilings would be argued from. Exits: `0` `1` `3`.
+is the measurement a recalibration of those ceilings would be argued from. `--all` and
+`--stories` are two different reports and cannot be combined — the pair is refused, never
+silently resolved in favour of one. Exits: `0` `1` `3`.
 
 ## `tldrx map`
 

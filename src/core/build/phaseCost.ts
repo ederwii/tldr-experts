@@ -9,6 +9,7 @@ import { spendBasisOf, type SpendTurn } from "../budget/spendBasis.ts";
 import { turnTokens } from "../budget/turnTokens.ts";
 import { round2 } from "./caps.ts";
 import { overShareSentence, sumOrNull } from "./planVsMeasured.ts";
+import { storyLedger, type StoryTurn } from "../budget/costView.ts";
 
 /** One turn's accounting — as much of an executor task as the cost line reads. */
 export interface PhaseCostTurn {
@@ -42,6 +43,45 @@ export interface StorySpend {
 export interface PhaseCost {
   readonly usd: number;
   readonly note: string | null;
+}
+
+/**
+ * The PHASE's story ledger, in the shape the cost line reads — ONE SCOPE.
+ *
+ * `Cost: $X of $Y ceiling` is deliberately the phase to date, not this process's
+ * spend (#138), so the clause that qualifies it has to be phase-to-date too. It
+ * was not: built from a per-`BuildSession` map of caps and the session's own
+ * tasks, it covered only the stories THIS invocation re-ran. On a re-entered
+ * Build — the fix-round case, which is exactly when somebody reads this line — a
+ * story that overran 5x in invocation 1 vanished from the clause while its
+ * dollars stayed in the figure in front of it. Two scopes on one line, neither
+ * named.
+ *
+ * The ceilings come back out of `events.jsonl` instead, where `agent.spawned`
+ * recorded each one AT the spawn (`ctx.emit` appends synchronously, so this
+ * invocation's are already on disk when the handoff is written). That is reading
+ * the record, not re-deriving it — `developerCap` reads the attempt and
+ * `reviewerCap` reads what had been spent by then, so a recomputation would be a
+ * different number wearing the same name. `invocationTurns` supplies the money
+ * side for THIS invocation, whose `agent.result` rows `recordExecutorTasks` has
+ * not written yet — the same reason `invocationUsd` is added to the sum below.
+ *
+ * Both feeders now walk one ledger (`budget/costView.ts`'s `storyLedger`), so
+ * `tldrx cost --stories` and this header cannot disagree about what a story is.
+ */
+export function storySpendToDate<T extends StoryTurn>(
+  runDir: string,
+  phaseId: string,
+  stageId: string,
+  invocationTurns: readonly T[] = [],
+): readonly StorySpend[] {
+  return storyLedger(
+    runDir,
+    { phaseId, stageId },
+    invocationTurns.map((turn) => ({
+      key: turn.key, costUsd: turn.costUsd, metered: turn.metered,
+    })),
+  ).rows.map((row) => ({ ceilingUsd: row.ceilingUsd, measuredUsd: row.measuredUsd }));
 }
 
 /**

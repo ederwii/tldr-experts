@@ -1030,7 +1030,7 @@ const ENTRIES: readonly CommandHelp[] = [
       "Read off `agent.result` events and nothing else: every dollar printed here is one the Claude CLI reported. No token count is ever multiplied by a price — `tldrx run estimate` is the command allowed to guess, and it says ESTIMATE in words.",
       "Attempts are never merged. A stage that failed twice cost three turns, and that retry is usually the money you are looking for.",
       "Work this process never saw a cost for is reported as UNMETERED rather than summed as $0.00 — a missing number and a free turn are not the same claim.",
-      "`--stories` changes no ceiling and spends nothing. It is the measurement side: the ceiling a story is reported against is the one the executor computed and handed the spawn, never a share of a plan \u2014 story files carry no budget key at all \u2014 and it is the input a recalibration of those ceilings would need.",
+      "`--all` and `--stories` are two different reports and cannot be combined: the pair is refused (exit 1), never silently resolved in favour of one. `--stories` changes no ceiling and spends nothing. It is the measurement side: the ceiling a story is reported against is the one the executor computed and handed the spawn, never a share of a plan \u2014 story files carry no budget key at all \u2014 and it is the input a recalibration of those ceilings would need.",
     ],
   },
   {

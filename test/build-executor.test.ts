@@ -2718,13 +2718,19 @@ describe("the Build handoff's cost line carries the over-ceiling clause (#170)",
     return workspace(TWO_WAVES);
   }
 
+  /** The `Stage:` line of the handoff this stage last wrote. */
+  function headerOf(ws: BuildWorkspace): string {
+    return readFileSync(join(ws.runDir, "04-build", "handoff.md"), "utf8")
+      .split("\n").find((line) => line.startsWith("Stage: ")) ?? "";
+  }
+
   test("phaseCostToDate's note carries the over-ceiling clause when the stories overran", () => {
     const ws = stageWithSpend();
     const cost = phaseCostToDate(ws.runDir, "04-build", "build", 0, [], [
       { ceilingUsd: 0.39, measuredUsd: 2.27 },
     ]);
     expect(cost.note ?? "").toContain("5.8");
-    expect(cost.note ?? "").toContain("ceiling");
+    expect(cost.note ?? "").toContain("spawn ceiling");
     expect(cost.note ?? "").not.toContain("plan");
   });
 
@@ -2764,11 +2770,45 @@ describe("the Build handoff's cost line carries the over-ceiling clause (#170)",
 
     await next(ws);
 
-    const header = readFileSync(join(ws.runDir, "04-build", "handoff.md"), "utf8")
-      .split("\n").find((line) => line.startsWith("Stage: ")) ?? "";
-    expect(header).toContain("ceiling their spawns were given");
+    const header = headerOf(ws);
+    // FIX 5: "ceiling" appears twice on this line and used to mean two different
+    // things — the PHASE budget in `$6.00 of $200.00 ceiling`, and the sum of the
+    // per-spawn caps in the clause. The clause now says which one it means.
+    expect(header).toContain("of $200.00 ceiling");
+    expect(header).toContain("spawn ceilings");
     expect(header).toContain("2 stories measured");
     expect(header).not.toContain("plan");
+  }, 120_000);
+
+  /**
+   * FIX 4 — ONE scope. `$X of $Y ceiling` is the PHASE to date (#138); the clause
+   * that qualifies it must be too.
+   *
+   * It was built from `this.storyCeilings` and `this.tasks`, both per-invocation,
+   * so on a re-entered Build — precisely the fix-round case — a story that
+   * overran in invocation 1 vanished from the clause while its dollars stayed in
+   * the figure in front of it. Two scopes on one line, neither of them named.
+   *
+   * The re-entry below spends NOTHING (`FAKE_BUILD_COST=0` and every story is
+   * already `done`), so an invocation-scoped clause has no rows at all and says
+   * nothing; the phase-to-date one still reports what invocation 1 did.
+   */
+  test("the clause is phase-to-date, so an earlier invocation's overrun stays on the line", async () => {
+    const ws = workspace({ ...TWO_WAVES, budgetUsd: 200, perAgentMaxUsd: 0.5 });
+    process.env.FAKE_BUILD_COST = "1.5";
+
+    await next(ws);
+    expect(headerOf(ws)).toContain("2 stories measured");
+
+    reject(RunStore.open(ws.runDir), {
+      root: ws.root, actor: "alan", at: "2026-08-29T10:00:00Z", note: "look again",
+    });
+    process.env.FAKE_BUILD_COST = "0";
+    await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    const second = headerOf(ws);
+    expect(second).toContain("2 stories measured");
+    expect(second).toContain("spawn ceilings");
   }, 120_000);
 
   test("GUARD (green before this change): a note reaches the handoff header, and a null one changes nothing", () => {

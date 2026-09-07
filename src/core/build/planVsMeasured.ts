@@ -21,18 +21,42 @@
  */
 import { round2 } from "./caps.ts";
 
+/**
+ * Measured over ceiling — the ONE division, with the ONE guard on it.
+ *
+ * Both the per-story row and the sentence below go through this. They used to
+ * divide separately, each with its own `> 0` check, which is the drift AGENTS §7
+ * names: the row and the sentence could disagree about what a ratio even is.
+ * The sentence keeps its OWN extra refusals (a zero measurement, a ratio at or
+ * under 1) on top of this; those are editorial, not arithmetic.
+ */
+export function ratioOf(ceilingUsd: number | null, measuredUsd: number | null): number | null {
+  if (ceilingUsd === null || measuredUsd === null) return null;
+  if (!(ceilingUsd > 0)) return null;
+  return measuredUsd / ceilingUsd;
+}
+
+/** One decimal — the precision the text prints, so a JSON reader sees the same number. */
+export function round1(n: number): number {
+  return Math.round(n * 10) / 10;
+}
+
 export function overShareSentence(
   ceilingUsd: number | null,
   measuredUsd: number | null,
   stories: number,
 ): string | null {
-  if (ceilingUsd === null || measuredUsd === null) return null;
-  if (!(ceilingUsd > 0) || !(measuredUsd > 0)) return null;
-  const ratio = measuredUsd / ceilingUsd;
+  const ratio = ratioOf(ceilingUsd, measuredUsd);
+  if (ratio === null || measuredUsd === null || ceilingUsd === null) return null;
+  if (!(measuredUsd > 0)) return null;
   if (ratio <= 1) return null;
   const over = stories === 1 ? "1 story" : `${String(stories)} stories`;
-  return `${over} measured $${round2(measuredUsd).toFixed(2)} against the `
-    + `$${round2(ceilingUsd).toFixed(2)} ceiling their spawns were given — ${ratio.toFixed(1)}x`;
+  // "SPAWN ceilings", not "ceiling": this sentence rides on a handoff header that
+  // already says `$6.00 of $200.00 ceiling`, where the ceiling is the PHASE
+  // budget. One load-bearing word meaning two things eleven characters apart is
+  // the failure this change exists to stop, so the adjective is not optional.
+  return `${over} measured $${round2(measuredUsd).toFixed(2)} against `
+    + `$${round2(ceilingUsd).toFixed(2)} of spawn ceilings — ${ratio.toFixed(1)}x`;
 }
 
 /**
