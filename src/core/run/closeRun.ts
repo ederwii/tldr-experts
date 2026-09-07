@@ -1,7 +1,7 @@
 /**
  * What a run does on its way out: take back the epic worktrees it opened, commit
- * the state it wrote, and NAME the questions nobody answered (issues #16, #102
- * and #141).
+ * the state it wrote, NAME the questions nobody answered, and say how many of the
+ * run's decisions name a decider (issues #16, #102, #141 and #169).
  *
  * The policy has one home because it has three callers and they are three
  * different commands: `tldrx next` closing the last stage, `tldrx approve`

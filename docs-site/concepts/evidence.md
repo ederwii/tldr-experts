@@ -114,9 +114,10 @@ The new fact also carries `conflicts_with`, so a prompt that quotes it says so.
 It raises; it never refuses. The check is lexical — the same word-overlap rule the no-re-ask
 hook uses — so it can miss two differently-worded answers that disagree, and it can fire on two
 that do not. Refusing on that would let a word count deadlock an unattended run. For the same
-reason the raised question is marked `advisory:` and does not hold an [auto
-gate](/concepts/gates): the gate says how many it skipped, and every other reader lists the
-question exactly like any other. Nothing is retired, nothing is reconciled, and the absence of
+reason the raised question is marked `advisory:` and stops nothing that runs unattended — not
+an [auto gate](/concepts/gates), not a stage waiting on answers, not a skip rule: the gate says
+how many it skipped, and every reader that LISTS questions shows this one exactly like any
+other. Nothing is retired, nothing is reconciled, and the absence of
 `conflicts_with` on a fact means *no contradiction was detected* — never *checked and agreed*.
 
 ## The same rule applies to money

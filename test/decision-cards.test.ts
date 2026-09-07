@@ -403,6 +403,39 @@ describe("a card per fallthrough kind", () => {
     expect(call.slice(0, call.indexOf("));"))).toContain("carriedDetailLines(");
   });
 
+  /**
+   * #171, fix round 2 — the fix list is walked only when a boundary card fires.
+   *
+   * `cardForTriggers` took the carried lines as an ARRAY, so `runNext` computed
+   * them — a directory walk plus a fix-list parse per story — before every card,
+   * on a path that previously did neither, and then handed them to the one branch
+   * in five that reads them. A thunk moves the work behind the branch without
+   * moving the judgement: the caller still owns the derivation, the card still
+   * scrapes nothing.
+   *
+   * The counter is the assertion. A test that only checked the boundary card
+   * still rendered would pass over an eager call, which is the whole defect.
+   */
+  test("only a boundary card reads the fix list — every other card leaves it unread", () => {
+    let reads = 0;
+    const carried = (): readonly string[] => {
+      reads += 1;
+      return carriedDetailLines({ rows: [CARRIED_ROW], unreadable: [] });
+    };
+    const money = { spentUsd: 1, ceilingUsd: 2 };
+
+    expect(cardForTriggers(ctx(), [{ trigger: "condition", detail: "c" }], money, carried)?.kind).toBe("gate");
+    expect(cardForTriggers(ctx(), [{ trigger: "budget-event", detail: "m" }], money, carried)?.kind)
+      .toBe("budget");
+    expect(cardForTriggers(ctx(), [], money, carried)).toBeNull();
+    expect(reads).toBe(0);
+
+    const card = cardForTriggers(ctx(), [{ trigger: "boundary", detail: "d" }], money, carried);
+    expect(card?.kind).toBe("boundary");
+    expect(reads).toBe(1);
+    expect(card?.detail).toEqual(["d", carriedCardLine(CARRIED_ROW)]);
+  });
+
   test("no carried rows leaves the card byte-identical to the two-argument call", () => {
     // A GUARD: both sides go through the new parameter, so it cannot catch a
     // changed advice line. The `toEqual` above is the test that can.

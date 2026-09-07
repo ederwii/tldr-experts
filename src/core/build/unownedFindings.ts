@@ -5,7 +5,7 @@
  * handoff's `## Unknowns`, `tldrx ship`'s PR body, and a decision card when one
  * already fires — and `ship` runs in its own process, so it calls this leaf with
  * the story rows it already holds rather than applying a predicate of its own.
- * Nothing re-scrapes a string another parser built (`decisionCards.ts:88-95`).
+ * Nothing re-scrapes a string another parser built (`decisionCards.ts:92-94`).
  *
  * It takes DATA — the carried rows, the declared surfaces, the workspace repo
  * names — and never `ctx`, never the session. It reuses two derivations and

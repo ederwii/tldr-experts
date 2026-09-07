@@ -14,7 +14,7 @@ do. It names some flags and not others, on purpose.
 **For every flag — including the ones this page leaves out — see
 [Every command and flag](/reference/cli-flags).** That page is generated at build time from
 `src/cli/helpText.ts`, the same registry `--help` prints and the argv guard refuses unknown
-flags from, so it lists all 33 commands with every flag, every allowed value, every exit
+flags from, so it lists every command with every flag, every allowed value, every exit
 code and the environment variables, and it cannot fall behind the code.
 
 ## The five you will actually type

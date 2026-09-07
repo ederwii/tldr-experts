@@ -367,6 +367,56 @@ describe("the format only grows", () => {
     expect(back.on_grant_exceed).toBe("block");
   });
 
+  /**
+   * #170, fix round 2 — `docs/spec.md` §2.11 types both grant amounts `number >0`
+   * and the validator only required `number`.
+   *
+   * The gap is reachable by hand-editing `budget.yml`, which is why the final
+   * review filed it Minor — and it is exactly the state `budget grant`'s own
+   * refusal argues against: a recorded `$0` authorization is far likelier to be a
+   * typo or an unset shell variable than an owner deciding the run may spend
+   * nothing, and under `on_grant_exceed: block` it refuses every later raise. The
+   * record must not be able to say something the verb refuses to write.
+   *
+   * ABSENCE is untouched: absent still means "no grant recorded", never `$0`.
+   * Only a number that is present and non-positive is refused.
+   */
+  test("a hand-edited `authorized_usd: 0` is refused by the VALIDATOR, not only by the verb", () => {
+    const zero = parseYaml(LEGACY_BUDGET_YML) as Record<string, unknown>;
+    zero.authorized_usd = 0;
+    zero.authorized_by = "F001";
+    expect(validateRunBudget(zero).ok).toBe(false);
+    expect(validateRunBudget(zero).issues).toContainEqual({
+      path: "authorized_usd",
+      message: "expected a grant greater than 0 — absence, not 0, means no grant was recorded",
+    });
+
+    const negative = parseYaml(LEGACY_BUDGET_YML) as Record<string, unknown>;
+    negative.authorized_usd = -5;
+    expect(validateRunBudget(negative).ok).toBe(false);
+
+    // The positive case still validates, and so does the file with no grant at all.
+    const granted = parseYaml(LEGACY_BUDGET_YML) as Record<string, unknown>;
+    granted.authorized_usd = 40;
+    granted.authorized_by = "F001";
+    expect(validateRunBudget(granted).issues).toEqual([]);
+    expect(validateRunBudget(parseYaml(LEGACY_BUDGET_YML)).issues).toEqual([]);
+  });
+
+  test("a hand-edited `phases[].authorized_usd: 0` is refused the same way", () => {
+    const doc = parseYaml(LEGACY_BUDGET_YML) as { phases: Record<string, unknown>[] };
+    const phase = doc.phases[0] as Record<string, unknown>;
+    phase.authorized_usd = 0;
+    expect(validateRunBudget(doc).ok).toBe(false);
+    expect(validateRunBudget(doc).issues).toContainEqual({
+      path: "phases[0].authorized_usd",
+      message: "expected a grant greater than 0 — absence, not 0, means no grant was recorded",
+    });
+
+    phase.authorized_usd = 5;
+    expect(validateRunBudget(doc).issues).toEqual([]);
+  });
+
   test("a PHASE grant round-trips too", () => {
     const base = asRunBudget(parseYaml(LEGACY_BUDGET_YML));
     const granted = {

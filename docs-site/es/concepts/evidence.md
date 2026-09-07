@@ -119,9 +119,10 @@ Levanta la pregunta; nunca rechaza. La comprobación es léxica —la misma regl
 de palabras que usa el hook de no-volver-a-preguntar— así que puede no ver dos respuestas
 redactadas distinto que sí se contradicen, y puede saltar con dos que no. Rechazar por eso
 dejaría que un conteo de palabras trabe un run sin nadie mirando. Por la misma razón la pregunta
-levantada queda marcada `advisory:` y no detiene una [compuerta auto](/es/concepts/gates): la
-compuerta dice cuántas se saltó, y todos los demás lectores listan la pregunta igual que a
-cualquier otra. No se retira nada, no se reconcilia nada, y la ausencia de `conflicts_with` en
+levantada queda marcada `advisory:` y no detiene nada de lo que corre sin nadie mirando: ni una
+[compuerta auto](/es/concepts/gates), ni una etapa esperando respuestas, ni una regla de salto.
+La compuerta dice cuántas se saltó, y todos los lectores que LISTAN preguntas muestran esta
+igual que a cualquier otra. No se retira nada, no se reconcilia nada, y la ausencia de `conflicts_with` en
 un hecho significa *no se detectó contradicción* — nunca *se comparó y coinciden*.
 
 ## La misma regla aplica al dinero

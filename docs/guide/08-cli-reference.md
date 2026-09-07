@@ -454,7 +454,9 @@ Answer one open question from the command line, recording it as a fact.
 tldrx answer <Qid> <text> [--supersede] [--decided-by <who>] [--repo <name>] [--run <id>] [--root <path>]
 ```
 
-Exits: `0` `1` `3`.
+Exits: `0` `1` `2` `3`. The `2` is the ambiguous-run refusal every run-scoped command
+shares: several runs are open and none was named, so it declines to choose rather than
+answer into the wrong one.
 
 ### Who decided, and what it binds — `--decided-by` and `--repo`
 

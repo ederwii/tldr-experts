@@ -177,6 +177,31 @@ export function isHostTokens(budget: RunBudget | null, phaseId?: string | null):
   return economyFor(budget, phaseId) === "host-tokens";
 }
 
+/**
+ * A recorded grant must be greater than zero (spec §2.11, fix round 2).
+ *
+ * `budget grant` has refused a non-positive amount since #170, and §2.11 types
+ * both grant keys `number >0` — but the VALIDATOR only required a number, so a
+ * hand-edited `authorized_usd: 0` loaded cleanly and `grantFor` returned a $0
+ * grant that, under `on_grant_exceed: block`, refuses every later raise. That is
+ * the state the CLI's own refusal argues against, reached by the other door: a
+ * record must not be able to say what the verb that writes it will not write.
+ *
+ * Only a number that is PRESENT and non-positive is refused. Absence is untouched
+ * and still means "no grant recorded", never `$0` — which is why this is a
+ * separate check rather than a stricter `requireNumber`, and why it runs after
+ * one: a non-number has already been reported by its own issue and does not need
+ * a second, confusing one.
+ */
+function requirePositiveGrant(value: unknown, path: string, issues: ValidationIssue[]): void {
+  if (typeof value !== "number") return;
+  if (value > 0) return;
+  issues.push({
+    path,
+    message: "expected a grant greater than 0 — absence, not 0, means no grant was recorded",
+  });
+}
+
 export function validateRunBudget(input: unknown): ValidationResult {
   const issues: ValidationIssue[] = [];
   const deprecations: string[] = [];
@@ -222,6 +247,7 @@ export function validateRunBudget(input: unknown): ValidationResult {
   // error.
   if (doc.authorized_usd !== undefined && doc.authorized_usd !== null) {
     requireNumber(doc.authorized_usd, "authorized_usd", issues);
+    requirePositiveGrant(doc.authorized_usd, "authorized_usd", issues);
   }
   if (doc.authorized_by !== undefined && doc.authorized_by !== null) {
     requireString(doc.authorized_by, "authorized_by", issues);
@@ -277,6 +303,7 @@ export function validateRunBudget(input: unknown): ValidationResult {
     // grant, because they answer two different questions.
     if (phase.authorized_usd !== undefined && phase.authorized_usd !== null) {
       requireNumber(phase.authorized_usd, `${path}.authorized_usd`, issues);
+      requirePositiveGrant(phase.authorized_usd, `${path}.authorized_usd`, issues);
     }
     const economy = (ECONOMIES as readonly unknown[]).includes(phase.economy)
       ? phase.economy as Economy

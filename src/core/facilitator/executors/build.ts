@@ -2348,7 +2348,7 @@ class BuildSession {
   /**
    * Carried findings this phase leaves owed that no story's surface covers (#171).
    *
-   * Computed nowhere here: `carriedRowsFor` walks the fix lists and the declared
+   * Computed nowhere here: `carriedReportFor` walks the fix lists and the declared
    * surfaces, and the two predicates behind it live in `build/fixlist.ts` and
    * `build/unownedFindings.ts`. The executor stays an orchestrator — it hands
    * over the run directory and the workspace's repo names, which is the same set

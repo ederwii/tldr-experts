@@ -13,10 +13,21 @@
  * `questions` condition counts those — so the raise stopped the next auto gate for
  * a human. That is the same unattended deadlock the paragraph above says a refusal
  * would cause, arriving by a different door, and on the same unmeasured near-match.
- * `isAdvisory` (`text/questions.ts`) is the one predicate, and the gate is its ONE
- * reader: the run close, `tldrx questions`, the decision cards and `replay` all go
- * on listing the block, because declining to stop for a question is not the same as
- * hiding it, and the gate's own detail names what it did not count.
+ * `isAdvisory` (`text/questions.ts`) is the one predicate, and every reader that
+ * COUNTS an open question goes through it: the auto gate, `runNext`'s
+ * `awaiting_answer` branch, the `skip_if: questions<=N` counter and `waiting.ts`'s
+ * "what is this run waiting on" — the last three via `skipIf.blockingQuestionIds`.
+ * The readers that LIST — the run close, `tldrx questions`, the decision cards,
+ * `replay`, the status line — all go on naming the block, because declining to stop
+ * for a question is not the same as hiding it, and the gate's own detail names what
+ * it did not count.
+ *
+ * The enumeration above is the corrected one: until the wave's final review it read
+ * "the gate is its ONE reader", and three counting readers were neither listed nor
+ * advisory-aware. Nothing parked in practice — nothing in `src/` ever wrote
+ * `awaiting_answer` and no shipped preset uses `skip_if` — so the guard held for a
+ * reason other than the one stated, which is the failure this paragraph exists to
+ * stop repeating.
  *
  * The block is rendered through `renderQuestionBlock` (`text/questions.ts`),
  * which is the canonical §2.7 authoring renderer and the ONE implementation of
@@ -27,6 +38,13 @@
  * makes the wrong block answerable.
  *
  * Ids are minted across the WHOLE run, not the file, for that same reason.
+ *
+ * WHO ANNOUNCES IT. Both capture routes RAISE — the block, the `conflicts_with`
+ * link and the `fact.conflict_raised` event are written whether the answer came
+ * through `tldrx answer` or through the `answer-capture` hook. Only the CLI path
+ * PRINTS a sentence about it (`cli/commands/answer.ts`); the hook records the
+ * fact and the question block and says nothing, so on that route the raise is
+ * read off `questions.md` and `events.jsonl`.
  *
  * DATA in, per AGENTS §12: paths, ids and strings. No `ctx`, no session, no store.
  */
@@ -117,7 +135,8 @@ export function raiseConflictQuestion(args: RaiseConflictArgs): RaisedConflict {
     metadata: {
       id, status: "open", area: args.area, asked_by: RAISED_BY, asked_at: args.at,
       // The one thing that keeps this advisory rather than blocking. See
-      // `isAdvisory` for why the gate reads it and nothing else does.
+      // `isAdvisory` for the four readers that count open questions and
+      // therefore honour it, and the ones that only list and do not.
       extra: [[ADVISORY_KEY, "true"]],
     },
     metadataIndex: -1,

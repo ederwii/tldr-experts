@@ -44,7 +44,7 @@ import { setProgressCeiling, setProgressReadCap, setProgressTitle } from "../ui/
 import { acquireLock, releaseLock } from "./Lock.ts";
 import { onInterrupt, stopInFlightRun } from "./interrupt.ts";
 import { loadStageSpec, type StageSpec } from "./stageSpec.ts";
-import { countSkipInputs, evaluateSkipIf, openQuestionIds, SkipIfError } from "./skipIf.ts";
+import { blockingQuestionIds, countSkipInputs, evaluateSkipIf, SkipIfError } from "./skipIf.ts";
 import {
   agentDir, evidencePath, expandAll, expandPatterns, missing, present, resolveMany, type PathContext,
 } from "./paths.ts";
@@ -381,7 +381,15 @@ async function advance(store: RunStore, options: NextOptions, notes: string[]): 
     }
 
     if (entry.stage.status === "awaiting_answer") {
-      const open = openQuestionIds(join(store.runDir, phaseId, "questions.md"));
+      // BLOCKING ids, not every open one (#169, fix round 2). An `advisory: true`
+      // block is a question the framework raised off an unmeasured lexical
+      // near-match; parking an unattended run on one here is the same deadlock
+      // `raiseConflict.ts` refuses to cause by refusing the answer, one door
+      // along. `isAdvisory` is the one predicate and `blockingQuestionIds` the one
+      // reader of it that counts — the same function `skip_if` and `waiting.ts`
+      // take. Skipped is not hidden: the block stays `status: open` on disk and
+      // every listing surface goes on naming it.
+      const open = blockingQuestionIds(join(store.runDir, phaseId, "questions.md"));
       if (open.length > 0) {
         return out(EXIT_AWAITING_HUMAN, [
           ...notes,
@@ -1729,6 +1737,12 @@ async function finishStage(
       // do. They are an ADDITION to a card that is already printing: this branch
       // was reached because the gate fell to a person, and nothing here can make
       // that happen.
+      //
+      // Handed as a THUNK (fix round 2): only `boundaryCard` reads it, and this
+      // branch draws four other kinds of card. Evaluating it eagerly walked the
+      // phase directories and parsed every fix list on a path that previously
+      // touched neither, to hand the result to a branch that was not taken. The
+      // derivation still belongs to this caller — the card scrapes nothing.
       const card = cardForTriggers(
         {
           runDir: store.runDir,
@@ -1738,7 +1752,7 @@ async function finishStage(
         },
         agent.fallthroughs,
         phaseMoney(store, phaseId),
-        carriedDetailLines(
+        () => carriedDetailLines(
           carriedReportFor(store.runDir, new Set(loadWorkspace(options.root).repos.keys())),
         ),
       );

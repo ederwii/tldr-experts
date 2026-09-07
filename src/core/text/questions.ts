@@ -330,10 +330,26 @@ export const ADVISORY_KEY = "advisory";
  * True when the block declares `advisory: true` — a question the FRAMEWORK raised
  * that must not stop an unattended run (#169).
  *
- * The one reader that acts on it is `autoGate`'s `questions` condition, which does
- * not count these blocks. Everything else — the run close, `tldrx questions`, the
- * decision cards, `replay`'s standing section — goes on listing them, because
- * declining to STOP for a question is not the same as hiding it.
+ * FOUR readers act on it, and they are the four that COUNT open questions rather
+ * than list them (the fourth was found by the wave's final review, which measured
+ * that the enumeration this docstring used to give was wrong — it named one):
+ *
+ *   `autoGate`'s `questions` condition   does not count them, and NAMES how many
+ *                                        it skipped, so a gate never reports "0
+ *                                        open" over a block that exists.
+ *   `runNext`'s `awaiting_answer` branch does not park the run on one.
+ *   `skip_if: questions<=N`              does not count them.
+ *   `waiting.ts`'s cursor view           does not name one as what the run is
+ *                                        waiting on.
+ *
+ * The last three go through `skipIf.blockingQuestionIds`, which is the one reader
+ * of this predicate they share; the auto gate applies it directly because it needs
+ * both halves back to name what it skipped. One predicate, never two definitions.
+ *
+ * Everything that LISTS goes on listing them — the run close, `tldrx questions`,
+ * the decision cards, `replay`'s standing section, the status line and the
+ * session-start nudge (both through the unfiltered `skipIf.openQuestionIds`) —
+ * because declining to STOP for a question is not the same as hiding it.
  *
  * Written by `tldrx answer`'s contradiction check, whose false-positive rate is
  * unmeasured: an open block minted off a lexical near-match used to flip that gate

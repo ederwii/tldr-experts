@@ -866,7 +866,7 @@ function writeShipBody(
     handoff: handoff.text,
     handoffRel: handoff.rel,
     openFindings: rows,
-    // `ship` applies NO predicate of its own here (#171). `carriedRowsFor` is the
+    // `ship` applies NO predicate of its own here (#171). `carriedReportFor` is the
     // one implementation of "carried, and nobody's story owns it" — it calls
     // `carriedFindings` and `unownedFindings`, and reads the story surfaces from
     // the same pair the boundary gate reads, `03-plan/stories/` first and

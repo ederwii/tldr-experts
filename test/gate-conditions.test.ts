@@ -26,6 +26,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { evaluateAutoGate } from "../src/core/run/autoGate.ts";
+import {
+  blockingQuestionIds, countSkipInputs, openQuestionIds,
+} from "../src/core/facilitator/skipIf.ts";
+import { waitingFor } from "../src/core/run/waiting.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { loadWorkflowPreset } from "../src/core/run/workflowPreset.ts";
 import { runCheck } from "../src/core/run/checks.ts";
@@ -203,6 +207,54 @@ describe("#169 · an advisory question does not stop an auto gate, and is not hi
     expect(verdict.ok).toBe(false);
     expect(verdict.why).toContain("1 open (Q1)");
     expect(verdict.why).toContain("1 advisory not counted (Q2)");
+  });
+});
+
+/**
+ * #169, fix round 2 — the other readers that COUNT an open question.
+ *
+ * The final review measured that `advisory:` was honoured by exactly one of four
+ * readers, while `isAdvisory`'s docstring claimed the other three were listing
+ * surfaces by design. They are not: `skip_if: questions<=N` and `waiting.ts`'s
+ * cursor view both COUNT, and `runNext`'s `awaiting_answer` branch (pinned in
+ * `test/facilitator.test.ts`) parks a run on the count. All four now go through
+ * the one `isAdvisory` predicate; the listing surfaces — the run close,
+ * `tldrx questions`, the decision cards, `replay`, the status line and the
+ * session-start nudge — go on reading unfiltered `openQuestionIds`, which is the
+ * distinction the two functions in `skipIf.ts` exist to keep.
+ *
+ * Each pin asserts BOTH directions on the same fixture: an advisory block does
+ * not count, a normal one does. One without the other would pass over a reader
+ * that simply stopped counting anything.
+ */
+describe("#169 fix round 2 · every counter of open questions skips advisory, and only advisory", () => {
+  function withQuestions(blocks: string): FacilitatorWorkspace {
+    const ws = workspace([ASKER]);
+    writeFileSync(join(ws.runDir, "01-what", "questions.md"), `# Questions — 01-what\n\n${blocks}`, "utf8");
+    return ws;
+  }
+
+  test("`skip_if`'s questions counter does not count an advisory block, and does count a normal one", () => {
+    const advisoryOnly = withQuestions(questionBlock("Q2", true));
+    const path = join(advisoryOnly.runDir, "01-what", "questions.md");
+    expect(countSkipInputs(advisoryOnly.runDir, RunStore.open(advisoryOnly.runDir).run).questions).toBe(0);
+    expect(blockingQuestionIds(path)).toEqual([]);
+    // The unfiltered reader — the status line and the session-start nudge — still
+    // names it. Declining to STOP for a question is not the same as hiding it.
+    expect(openQuestionIds(path)).toEqual(["Q2"]);
+
+    const both = withQuestions(`${questionBlock("Q1", false)}\n${questionBlock("Q2", true)}`);
+    expect(countSkipInputs(both.runDir, RunStore.open(both.runDir).run).questions).toBe(1);
+    expect(blockingQuestionIds(join(both.runDir, "01-what", "questions.md"))).toEqual(["Q1"]);
+    expect(openQuestionIds(join(both.runDir, "01-what", "questions.md"))).toEqual(["Q1", "Q2"]);
+  });
+
+  test("`tldrx status`'s waiting view names the blocking question and not the advisory one", () => {
+    const advisoryOnly = withQuestions(questionBlock("Q2", true));
+    expect(waitingFor(RunStore.open(advisoryOnly.runDir).run, advisoryOnly.runDir).questions).toEqual([]);
+
+    const both = withQuestions(`${questionBlock("Q1", false)}\n${questionBlock("Q2", true)}`);
+    expect(waitingFor(RunStore.open(both.runDir).run, both.runDir).questions).toEqual(["Q1"]);
   });
 });
 

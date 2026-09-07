@@ -14,7 +14,7 @@ que estás intentando hacer. Nombra algunas banderas y otras no, a propósito.
 **Para todas las banderas — incluidas las que esta página deja fuera — mira
 [Todos los comandos y flags](/es/reference/cli-flags).** Esa página se genera al compilar
 desde `src/cli/helpText.ts`, el mismo registro que imprime `--help` y del que el guardián de
-argv rechaza banderas desconocidas, así que lista los 33 comandos con todas sus banderas,
+argv rechaza banderas desconocidas, así que lista todos los comandos con todas sus banderas,
 todos los valores permitidos, todos los códigos de salida y las variables de entorno, y no
 puede quedarse atrás del código.
 

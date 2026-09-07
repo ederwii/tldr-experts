@@ -170,11 +170,17 @@ export function cardForTriggers(
   triggers: readonly CardTrigger[],
   money: Money | null = null,
   /**
-   * Carried findings nobody's story owns, already computed by the caller with
+   * Carried findings nobody's story owns, computed by the caller with
    * `build/carriedRows.ts` (#171). They reach the boundary card only, and only
    * when a boundary trigger was already going to draw one.
+   *
+   * A THUNK, not an array (#171, fix round 2). The derivation is a directory walk
+   * plus a fix-list parse per story, on a gate path that previously did neither,
+   * and four of the five branches below never look at it. Deferring the CALL
+   * moves the I/O behind the branch that uses it without moving the judgement:
+   * the caller still owns the derivation and this card still scrapes nothing.
    */
-  carried: readonly string[] = [],
+  carried: () => readonly string[] = () => [],
 ): DecisionCard | null {
   if (triggers.length === 0) return null;
   if (triggers.some((t) => t.trigger === "questions")) {
@@ -185,7 +191,7 @@ export function cardForTriggers(
     if (card !== null) return card;
   }
   const boundary = triggers.find((t) => t.trigger === "boundary");
-  if (boundary !== undefined) return boundaryCard(ctx, boundary.detail, carried);
+  if (boundary !== undefined) return boundaryCard(ctx, boundary.detail, carried());
   const budget = triggers.find((t) => t.trigger === "budget-event");
   if (budget !== undefined) return budgetCard(ctx, budget.detail, money);
   return gateCard(

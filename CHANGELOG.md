@@ -15,10 +15,12 @@
   guessed owner. `Fact.decided_by` is additive on `facts.yml`; `Fact.repos` already existed
   and is required, not additive. (#169)
 - **Two signed facts that disagree produce a question, without an agent choosing to
-  notice.** The `affects:`-scoped contradiction check now runs on every `answer`, scores the
+  notice.** The contradiction check now runs on every `answer`, scores the
   new fact against the live ones in the same `area`, and — on a hit — RAISES an advisory
-  question (`asked_by: tldrx`, a new `advisory:` metadata key that opts a block out of the
-  auto gate without hiding it from `tldrx questions`) rather than refusing the answer. The
+  question (`asked_by: tldrx`, a new `advisory:` metadata key that opts a block out of
+  every reader that COUNTS open questions — the auto gate, `next`'s `awaiting_answer`
+  branch, `skip_if` and `tldrx status` — without hiding it from the readers that LIST
+  them, `tldrx questions` among them) rather than refusing the answer. The
   new fact keeps `conflicts_with: [<id>]` naming the fact it contradicts (additive,
   empty-omitted, unquoted) — which one is right is left to the question it raises, nothing in
   the mechanism decides a "loser." "Not detected" never reads as "checked and agreed" — the
@@ -57,7 +59,7 @@
   `story.touches_widened` (`{story, paths, note, before, after}`, joining the closed event
   enum) and rewrites `touches:` through the same validated write every other command uses.
   Refused (exit 2, nothing written) for a `done` story — naming `reopen --for-fix` as the
-  remedy — a `..` path segment, a path already declared, an unknown story, or a plan the
+  remedy — a `..` anywhere in a path (a substring test, not a segment one), a path already declared, an unknown story, or a plan the
   story doesn't have; an unresolved run is exit 3 (not found), and `--for-fix` is not a flag
   of `widen` itself and passing it is a usage refusal (exit 1). (#171)
 - **`tldrx budget grant <amount> --fact <id>`** — a ceiling that answers to a recorded
@@ -67,7 +69,10 @@
   `budget.granted` (`{amount_usd, fact, phase, note, ceiling_usd, previous_usd}`, joining the
   closed event enum) — a second grant replaces the amount and the event records what it
   replaced, `null` on the first grant; a non-positive amount is refused (exit 1, nothing
-  written). `on_grant_exceed` (default `warn`, distinct from and never confused with
+  written), by the VALIDATOR as well as by the verb, so a hand-edited `authorized_usd: 0` —
+  which `grantFor` would otherwise read as a real $0 grant that blocks every later raise —
+  is a schema error rather than a record that quietly governs nothing. Absence is untouched:
+  no key still means no grant recorded, never `$0`. `on_grant_exceed` (default `warn`, distinct from and never confused with
   `on_exceed`) says what a later `budget raise` past the grant does; `budget show` renders
   the grant back and stays silent
   when none is recorded. `--fact`/`--phase`/`--on-exceed` are refused (exit 1) on

@@ -53,6 +53,17 @@ await runHook("answer-capture", async () => {
   // capture route, so `repos: []` would read as "no repo was named" on most of
   // the facts the workspace ever writes. Same sentence the CLI prints, from the
   // same renderer — a second spelling is the only bug either could have.
+  //
+  // A raised CONFLICT is deliberately not in this line (#169, fix round 2, and
+  // stated rather than closed). `captureAnswers` raises identically on both
+  // routes — the fact, the `conflicts_with` link, the `advisory:` question block
+  // and the `fact.conflict_raised` event are all written here exactly as they are
+  // under `tldrx answer` — but the SENTENCE announcing it is printed only by the
+  // CLI path (`cli/commands/answer.ts`). So on this route the raise is visible in
+  // `questions.md` and `events.jsonl`, not in the context posted back. Spec §3
+  // requires the announcement of `tldrx answer` and of nothing else; widening it
+  // is a change to what the framework promises, not a bug fix, so it is written
+  // down here rather than slipped in.
   const unresolved = unresolvedEntries(captured);
   postContext(
     `tldrx: recorded ${captured.map((c) => `${c.q} → ${c.fact}`).join(", ")}`
