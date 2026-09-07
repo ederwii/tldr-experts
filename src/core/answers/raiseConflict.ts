@@ -6,6 +6,18 @@
  * "Raise, do not refuse". A refusal here could deadlock an unattended run over a
  * lexical near-match nobody has measured a false-positive rate for.
  *
+ * ## And the block is `advisory: true`, because an open question is not free
+ *
+ * Exiting 0 is not the whole of "it does not block". Until this key existed, the
+ * question minted here was an ordinary `status: open` block, and `autoGate`'s
+ * `questions` condition counts those — so the raise stopped the next auto gate for
+ * a human. That is the same unattended deadlock the paragraph above says a refusal
+ * would cause, arriving by a different door, and on the same unmeasured near-match.
+ * `isAdvisory` (`text/questions.ts`) is the one predicate, and the gate is its ONE
+ * reader: the run close, `tldrx questions`, the decision cards and `replay` all go
+ * on listing the block, because declining to stop for a question is not the same as
+ * hiding it, and the gate's own detail names what it did not count.
+ *
  * The block is rendered through `renderQuestionBlock` (`text/questions.ts`),
  * which is the canonical §2.7 authoring renderer and the ONE implementation of
  * the block. `renderDistill.renderQuestions` is deliberately NOT used: it renders
@@ -20,9 +32,22 @@
  */
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseQuestions, renderQuestionBlock } from "../text/questions.ts";
+import { ADVISORY_KEY, parseQuestions, renderQuestionBlock } from "../text/questions.ts";
 import { QUESTION_PHASES } from "../run/questionCards.ts";
 import { formatJaccard } from "../facts/findDuplicate.ts";
+
+/**
+ * `asked_by` on a block the FRAMEWORK raised.
+ *
+ * Never the operator: they answered a question, and tldrx detected the overlap and
+ * minted this one. `questionCards.ts` puts this value straight onto the decision
+ * card as the asker, so their name here shows them as having asked a question they
+ * never asked — the "absent-with-reason, never invented" rule pointed at
+ * attribution. The sibling that mints machine questions off the very same
+ * `conflictOf` derivation already does this: `renderDistill.ts` writes
+ * `asked_by: distill`, and `init/questions.ts` writes `asked_by: facilitator`.
+ */
+export const RAISED_BY = "tldrx";
 
 export interface RaisedConflict {
   /** The id of the question this raised. */
@@ -39,7 +64,6 @@ export interface RaiseConflictArgs {
   /** The `questions.md` the answered block lives in — the block is appended here. */
   readonly questionsPath: string;
   readonly area: string;
-  readonly askedBy: string;
   readonly at: string;
   readonly newFactId: string;
   readonly oldFactId: string;
@@ -75,19 +99,40 @@ export function nextQuestionId(runDir: string): string {
   return `Q${String(highest + 1)}`;
 }
 
+/**
+ * Mint the block and append it. Returns what was raised, for the caller to log and print.
+ *
+ * The `QuestionBlock` below is filled with sentinels — `metadataIndex: -1`,
+ * `answerIndex: -1`, `startLine: -1`, `lines: []`, `whySrc: null` — purely to
+ * satisfy the parameter type. `renderQuestionBlock` reads NONE of them (they are
+ * the parsed-position fields, meaningless for a block that has never been in a
+ * file). They mean nothing; a narrower authoring type would be a change to
+ * `text/questions.ts` that nothing else in this wave needs.
+ */
 export function raiseConflictQuestion(args: RaiseConflictArgs): RaisedConflict {
   const id = nextQuestionId(args.runDir);
   const block = renderQuestionBlock({
     id,
     title: `Which is right about ${args.area}: ${args.newFactId} or ${args.oldFactId}?`,
     metadata: {
-      id, status: "open", area: args.area, asked_by: args.askedBy, asked_at: args.at, extra: [],
+      id, status: "open", area: args.area, asked_by: RAISED_BY, asked_at: args.at,
+      // The one thing that keeps this advisory rather than blocking. See
+      // `isAdvisory` for why the gate reads it and nothing else does.
+      extra: [[ADVISORY_KEY, "true"]],
     },
     metadataIndex: -1,
+    // Says exactly what the number measures. The score compares this question's
+    // TITLE with the old fact's WHOLE TEXT, so it reads 1.00 whenever the title's
+    // tokens are a subset of the fact's — which is the common case, since the fact
+    // IS "<title> — <answer>". "overlaps F002 at Jaccard 1.00 … and says something
+    // different" therefore read as a contradiction in terms; measured in review on
+    // a real two-clash sweep, where the discriminating token (`SQS`) had been
+    // dropped by `MIN_TOKEN_LENGTH` anyway.
     whyAsked:
-      `answering ${args.answeredQ} recorded ${args.newFactId}, which overlaps ${args.oldFactId} `
-      + `at Jaccard ${formatJaccard(args.score)} in the same area and says something different — `
-      + `${args.oldFactId}: "${oneLine(args.oldFactText)}" [src: ${args.oldFactId}]`,
+      `answering ${args.answeredQ} recorded ${args.newFactId}, which overlaps ${args.oldFactId}'s `
+      + `text at Jaccard ${formatJaccard(args.score)} on the question's wording, in the same area, `
+      + `and answers it differently — ${args.oldFactId}: "${oneLine(args.oldFactText)}" `
+      + `[src: ${args.oldFactId}]`,
     whySrc: null,
     options: [
       { letter: "A", text: `${args.newFactId} is right — supersede ${args.oldFactId}` },

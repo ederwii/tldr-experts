@@ -203,10 +203,16 @@ function bullet(item: NumberedEvent): string | null {
     // renders NO line at all — and an honesty guard invisible in `tldrx replay`
     // is a weak guard. The score is rendered because the check is LEXICAL: a
     // reader who can see 0.62 can tell a near-miss from an obvious clash.
+    //
+    // BOTH ids, and labelled. `payload.q` is the question that was ANSWERED and
+    // `payload.raised` the one this minted; the line used to render `q` alone as
+    // "raised as Q1" while the same narrative said "Q1 answered" two lines above,
+    // so a reader concluded the raise had gone nowhere. `raised` is additive, so
+    // an event written before it existed renders the fallback rather than a lie.
     case "fact.conflict_raised":
       return `${prefix}fact ${text(payload.fact) || "?"} contradicts ${text(payload.conflicts_with) || "?"} `
         + `(Jaccard ${typeof payload.score === "number" ? formatJaccard(payload.score) : "?"})`
-        + ` — raised as ${q || "a question"}`;
+        + ` — answering ${q || "a question"} raised ${text(payload.raised) || "a question"}`;
     // The moment an earlier phase's document stopped being current. A narrative
     // that showed the answer and not the documents it overtook is exactly the gap
     // gh #104 measured — the flip was in the log and in none of the pages.

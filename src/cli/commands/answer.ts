@@ -204,6 +204,13 @@ function sayWhatWasNotStated(
  * (`test/answer-conflict.test.ts` carries the protocol for measuring one). A
  * reader who is told "contradiction" and not told "nothing was refused" would
  * reasonably think the command had blocked; it exits 0 either way.
+ *
+ * And "nothing was refused" is the whole of it, which took a fix round to make
+ * true: the question named here is minted `advisory: true`, so it does not stop
+ * the next auto gate either (`autoGate`'s `questions` condition skips advisory
+ * blocks). It IS listed by the run close and by `tldrx questions`, so the
+ * disagreement reaches a person — just not by halting an unattended run on a
+ * lexical near-match.
  */
 function sayConflict(conflict: RaisedConflict | undefined): void {
   if (conflict === undefined) return;

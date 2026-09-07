@@ -133,6 +133,79 @@ describe("#109 · a stage with nothing to ask can still close an auto gate", () 
   });
 });
 
+// --- #169 · advisory questions ------------------------------------------------
+
+/**
+ * A §2.7 block, with the optional `advisory:` metadata key when asked for.
+ *
+ * `advisory: true` is what `tldrx answer`'s contradiction check stamps on the
+ * question it RAISES (#169). The check is advisory by design — its false-positive
+ * rate is unmeasured — so the question it mints must not stop an unattended run at
+ * the next gate. Absent means "not advisory": every block written before the key
+ * existed still counts, which is the `version: 1`-only-grows rule pointed at a
+ * markdown grammar.
+ */
+function questionBlock(id: string, advisory: boolean): string {
+  const extra = advisory ? " | advisory: true" : "";
+  return [
+    `## ${id} · Which is right about data-model: F002 or F001?`,
+    `<!-- id: ${id} | status: open | area: data-model | asked_by: tldrx | `
+      + `asked_at: 2026-09-07T09:00:00Z${extra} -->`,
+    "Why asked: they disagree [src: absent:.tldrx/map/domains.md]",
+    "",
+    "- A) One",
+    "- B) The other",
+    "",
+    "[Answer]:",
+    "",
+  ].join("\n");
+}
+
+describe("#169 · an advisory question does not stop an auto gate, and is not hidden either", () => {
+  test("an ADVISORY open block leaves the questions condition ok, and says it skipped one", async () => {
+    const ws = workspace([ASKER]);
+    writeFileSync(join(ws.runDir, "01-what", "handoff.md"), cannedHandoff(), "utf8");
+    writeFileSync(
+      join(ws.runDir, "01-what", "questions.md"),
+      `# Questions — 01-what\n\n${questionBlock("Q2", true)}`,
+      "utf8",
+    );
+    const verdict = await evaluateAutoGate(inputs(ws));
+    expect(verdict.why).toBe("");
+    expect(verdict.ok).toBe(true);
+    // Skipped, not hidden: the gate names what it did not count, so a reader of
+    // the note is never told "0 open" over a question that exists.
+    expect(verdict.note).toContain("questions=0 open · 1 advisory not counted (Q2)");
+  });
+
+  test("a NORMAL open block still refuses it — the skip is the key, not the raise", async () => {
+    const ws = workspace([ASKER]);
+    writeFileSync(join(ws.runDir, "01-what", "handoff.md"), cannedHandoff(), "utf8");
+    writeFileSync(
+      join(ws.runDir, "01-what", "questions.md"),
+      `# Questions — 01-what\n\n${questionBlock("Q2", false)}`,
+      "utf8",
+    );
+    const verdict = await evaluateAutoGate(inputs(ws));
+    expect(verdict.ok).toBe(false);
+    expect(verdict.why).toContain("Q2");
+  });
+
+  test("one of each: the normal one still refuses, and the advisory one is still named", async () => {
+    const ws = workspace([ASKER]);
+    writeFileSync(join(ws.runDir, "01-what", "handoff.md"), cannedHandoff(), "utf8");
+    writeFileSync(
+      join(ws.runDir, "01-what", "questions.md"),
+      `# Questions — 01-what\n\n${questionBlock("Q1", false)}\n${questionBlock("Q2", true)}`,
+      "utf8",
+    );
+    const verdict = await evaluateAutoGate(inputs(ws));
+    expect(verdict.ok).toBe(false);
+    expect(verdict.why).toContain("1 open (Q1)");
+    expect(verdict.why).toContain("1 advisory not counted (Q2)");
+  });
+});
+
 // --- #110 / #105 · the one `absent:` semantic ---------------------------------
 
 interface AbsentProbe {

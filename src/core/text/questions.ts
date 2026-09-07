@@ -323,6 +323,32 @@ export function openBlocks(blocks: readonly QuestionBlock[]): readonly QuestionB
   return blocks.filter((b) => b.metadata?.status === "open");
 }
 
+/** The optional §2.7 metadata key a machine-raised, non-blocking question carries. */
+export const ADVISORY_KEY = "advisory";
+
+/**
+ * True when the block declares `advisory: true` — a question the FRAMEWORK raised
+ * that must not stop an unattended run (#169).
+ *
+ * The one reader that acts on it is `autoGate`'s `questions` condition, which does
+ * not count these blocks. Everything else — the run close, `tldrx questions`, the
+ * decision cards, `replay`'s standing section — goes on listing them, because
+ * declining to STOP for a question is not the same as hiding it.
+ *
+ * Written by `tldrx answer`'s contradiction check, whose false-positive rate is
+ * unmeasured: an open block minted off a lexical near-match used to flip that gate
+ * condition, which is exactly the unattended deadlock the check's own docstring
+ * says a refusal would cause, arriving by another door.
+ *
+ * Additive and TOLERANT, like every `version: 1` field here: absence means "not
+ * advisory", never "checked and found blocking", so every block written before the
+ * key existed counts exactly as it always did. Only the literal `true` opts out —
+ * a typo'd value is not a silent exemption from a gate.
+ */
+export function isAdvisory(block: QuestionBlock): boolean {
+  return block.metadata?.extra.some(([key, value]) => key === ADVISORY_KEY && value === "true") === true;
+}
+
 /**
  * Flip `status: open` to `answered` and append the footer, changing nothing else.
  * Returns a new block; the input is untouched.

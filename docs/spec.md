@@ -840,6 +840,7 @@ Why asked: Place.TenantId is nullable [src: api:src/Scavtopia.Domain/Places/Plac
 | Heading | `^## (Q\d+) · (.+)$` — id then a one-sentence question |
 | Metadata comment | HTML comment, pipe-separated; keys `id status area asked_by asked_at` all required; `status` ∈ `open\|answered\|withdrawn` |
 | `affects:` (optional) | Extra metadata key; a comma- or space-separated list of run-relative documents this answer would overtake. See **Superseding an earlier phase's document** below |
+| `advisory:` (optional) | Extra metadata key; `true` marks a question the FRAMEWORK raised rather than a stage — today only `tldrx answer`'s contradiction check (§3). The auto gate's `questions` condition does not count these blocks, and names how many it skipped; every other reader (the run close, `tldrx questions`, the decision cards, `tldrx replay`) lists them like any other open question. Absent means "not advisory" — a block written before the key existed counts exactly as it always did |
 | `Why asked:` line | Required; must end with a `[src: …]` token (§2.8) — proves the gap is real |
 | Options | 2–5 bullets `- X) text`, letters A–E in order; the last may be free text |
 | `[Answer]:` slot | Exactly one per block, on its own line |

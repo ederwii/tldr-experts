@@ -10,6 +10,7 @@
  * folder, carrying the tag that says where it was.
  */
 import { HANDOFF_SECTIONS, MAX_BULLETS, noneBullet } from "../text/handoff.ts";
+import { formatJaccard } from "../facts/findDuplicate.ts";
 import type { Conflict, DistillResult, ImportedClaim } from "./distill.ts";
 
 /** `[assumption]` — spec §6 names the two prose outputs but not which source feeds which. */
@@ -153,7 +154,7 @@ export function renderQuestions(
     lines.push(
       `## ${id} · Which is right about ${conflict.claim.area}: the imported claim or ${conflict.factId}?`,
       `<!-- id: ${id} | status: open | area: ${conflict.claim.area} | asked_by: distill | asked_at: ${at} -->`,
-      `Why asked: an imported claim overlaps this fact at Jaccard ${conflict.score.toFixed(2)} ` +
+      `Why asked: an imported claim overlaps this fact at Jaccard ${formatJaccard(conflict.score)} ` +
         `and says something different — imported: "${excerpt}" [src: ${conflict.factId}]`,
       "",
       `- A) The imported claim is right — retire ${conflict.factId} and keep the import`,
