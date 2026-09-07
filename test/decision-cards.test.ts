@@ -311,7 +311,7 @@ describe("a card per fallthrough kind", () => {
       "DECISION — 260830-tenancy · 01-what/what",
       "Boundary — the epic changed paths nobody scoped",
       `  ${detail}`,
-      "  widen the scope: add the path to a story's `touches:`, or cite it in a handoff, then re-run the stage",
+      "  tldrx story widen <id> <path> --note \"<why>\" — or cite the path in a handoff, then re-run the stage",
       "  tldrx approve --run 260830-tenancy",
       '  tldrx reject --run 260830-tenancy --note "<why>"',
     ]);

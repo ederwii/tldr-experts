@@ -749,14 +749,24 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "story",
-    subcommands: ["reopen"],
-    description: "Give one Build story another run of attempts, or open a fix round on a done one, signed with a note.",
-    args: [{ name: "<id>", meaning: "The story id, e.g. S3." }],
+    subcommands: ["reopen", "widen"],
+    description: "Give one Build story another run of attempts, open a fix round on a done one, or widen the paths it declares \u2014 each signed with a note.",
+    args: [
+      { name: "<id>", meaning: "The story id, e.g. S3." },
+      { name: "<path>\u2026", meaning: "widen only: one or more repo-relative paths to add to the story's `touches:`. Positional, and repeatable by writing them one after another." },
+    ],
     flags: [
       {
         name: "note",
         arg: "<text>",
         meaning: "Why this story must be built anyway \u2014 or, with --for-fix, WHICH DEFECT is being fixed. Required \u2014 a reopen with no reason is not actionable. It is recorded on the story.reopened event and printed by the Build stage when the story runs again.",
+        sub: "reopen",
+      },
+      {
+        name: "note",
+        arg: "<text>",
+        meaning: "WHY the surface grew \u2014 what the story turned out to have to touch, and why that is this story's work and not another's. Required, and recorded on the story.touches_widened event beside the list before and after, so a surface never grows without a stated reason.",
+        sub: "widen",
       },
       {
         name: "for-fix",
@@ -769,6 +779,7 @@ const ENTRIES: readonly CommandHelp[] = [
     examples: [
       'tldrx story reopen S3 --note "it gates wave 3 (S4, S6) and the owner has decided it ships"',
       'tldrx story reopen S11 --for-fix --note "linkEmail succeeds then setDisplayName fails: account linked, score never claimable"',
+      'tldrx story widen S3 platform/Auth.cs --note "the tenancy check the story is for lives here too"',
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
     notes: [
@@ -777,6 +788,8 @@ const ENTRIES: readonly CommandHelp[] = [
       "The story goes back to `todo` and its attempt counter restarts at 1 of 2. Nothing is erased to make that true: `story.reopened` is a reset boundary the review ledger reads, every earlier attempt stays in events.jsonl, and the event records how many verdicts the closed run consumed.",
       "It runs no agent, spends nothing, deletes nothing and refunds nothing. The story's branch is kept \u2014 that is what carries the last developer's commits forward \u2014 and its worktree is left exactly as the build left it, to be reopened from the branch if the build had removed it.",
       "It does NOT make the stage runnable. If the Build stage is at its gate, `tldrx reject --note \"\u2026\"` sends it back to `ready` first; if the gate is already signed, `tldrx reject --stage` takes that back.",
+      "`widen` adds paths to a story's `touches:` \u2014 the sanctioned form of the advice the boundary decision card gives when a Build stage changed a path nobody scoped. Widenable states are `todo`, `in_progress`, `review` and `blocked`. A `done` story refuses: its evidence was written against the surface it DECLARED, and widening it afterwards would make the record say the plan declared a path it did not \u2014 reopen it with `--for-fix` first. A path the story already declares refuses too, because a widening that widened nothing is a record of something that did not happen.",
+      "`widen` runs no agent, spends nothing, consumes no attempt, changes no status and moves no cursor \u2014 it declares scope and nothing else. No gate code knows about it: the boundary condition re-reads `touches:` off disk at evaluation time, so the same run, the same branch and the same diff simply stop counting the widened path as outside the surface at the next evaluation. One `story.touches_widened` records the paths, the note and the list before and after.",
     ],
   },
   {

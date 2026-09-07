@@ -160,6 +160,17 @@ function bullet(item: NumberedEvent): string | null {
       return `${prefix}story ${text(payload.story) || "?"} REOPENED by ${actor}`
         + ` — back to \`${text(payload.to_status) || "todo"}\` from \`${text(payload.from_status) || "?"}\``
         + `${note(payload.note)}`;
+    // A person growing a story's declared surface (#171). Rendered because the
+    // alternative is a narrative in which a Build gate refuses a path as outside
+    // the surface and then, later, the same path is inside it — with nothing in
+    // between saying who decided that or why. `bullet` ends in
+    // `default: return null`, so a type with no case here is a decision that
+    // happened and cannot be read back.
+    case "story.touches_widened":
+      return `${prefix}story ${text(payload.story) || "?"}'s \`touches:\` WIDENED by ${actor}`
+        + ` — +${pathList(payload.paths)}`
+        + ` (${String(lengthOf(payload.before))} → ${String(lengthOf(payload.after))} path(s))`
+        + `${note(payload.note)}`;
     // The one event in the set that records tldrx moving a ref (design §F.2). A
     // narrative that showed a story's diff base change with nothing in between
     // would read as the framework editing the operator's git state behind them.
@@ -315,6 +326,18 @@ function note(value: unknown): string {
 
 function text(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+/** A payload list of paths, named rather than counted — a count is not actionable. */
+function pathList(value: unknown): string {
+  if (!Array.isArray(value)) return "?";
+  const items = value.filter((item): item is string => typeof item === "string");
+  return items.length === 0 ? "?" : items.join(", ");
+}
+
+/** How long a payload list is, or 0 when the payload does not carry one. */
+function lengthOf(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0;
 }
 
 /**

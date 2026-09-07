@@ -112,6 +112,7 @@ export const EVENT_TYPES = [
   "question.asked", "question.answered",
   "gate.requested", "gate.approved", "gate.rejected", "gate.revoked", "gate.policy_changed",
   "story.reopened", "story.base_fastforwarded", "story.review_retried", "story.work_rescued",
+  "story.touches_widened",
   "result.unreadable",
   "operator_note",
   "check.passed", "check.failed",

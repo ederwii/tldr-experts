@@ -92,6 +92,14 @@ export interface Money {
  * The offending paths are already named in the condition's own detail, so it is
  * carried verbatim rather than scraped and re-rendered: a second parser over a
  * string the first one built is how two readings of one fact start.
+ *
+ * The first command is a PLACEHOLDER — `<id> <path>` and not a real story id and
+ * path — and that is forced, not lazy: this function holds `runId`, `phaseId`,
+ * `stageId` and one opaque detail string, so there is no story in scope to name,
+ * and scraping one out of `detail` is the second parser the paragraph above
+ * refuses. What changed in #171 is that the line names a real VERB: it used to
+ * say "add the path to a story's `touches:`", which is precisely the hand edit
+ * `cli/commands/story.ts` forbids by design.
  */
 export function boundaryCard(ctx: CardContext, detail: string): DecisionCard {
   return {
@@ -102,7 +110,7 @@ export function boundaryCard(ctx: CardContext, detail: string): DecisionCard {
     headline: "Boundary — the epic changed paths nobody scoped",
     detail: [detail],
     commands: [
-      "widen the scope: add the path to a story's `touches:`, or cite it in a handoff, then re-run the stage",
+      "tldrx story widen <id> <path> --note \"<why>\" \u2014 or cite the path in a handoff, then re-run the stage",
       `tldrx approve --run ${ctx.runId}`,
       `tldrx reject --run ${ctx.runId} --note "<why>"`,
     ],

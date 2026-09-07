@@ -720,10 +720,12 @@ with no marker is a record that does not know it is incomplete. Exits: `0` `1` `
 
 ## `tldrx story`
 
-Give one Build story another run of attempts, or open a fix round on a done one.
+Give one Build story another run of attempts, open a fix round on a done one, or widen the
+paths it declares.
 
 ```
 tldrx story reopen <id> --note <text> [--for-fix] [--run <id>] [--root <path>]
+tldrx story widen  <id> <path>… --note <text> [--run <id>] [--root <path>]
 ```
 
 `--note` is required — a reopen with no reason is not actionable. The story goes back to
@@ -761,6 +763,35 @@ closes when the story is `done` again.
 Refuses (`2`) a story that is **not** `done` (that is the plain reopen), a missing `--note`,
 and a story that already has a fix round open — the refusal names who opened it and with
 which defect.
+
+### `tldrx story widen` — the sanctioned way to grow a story's surface
+
+When a Build stage changes a path nobody scoped, the auto gate refuses and the decision card
+says so. The remedy it names is this verb — it used to say *"add the path to a story's
+`touches:`"*, which is precisely the hand edit this CLI forbids by design:
+
+```
+tldrx story widen S3 platform/Auth.cs --note "the tenancy check the story is for lives here too"
+```
+
+The paths are **positionals**, one or more, repo-relative. `--note` is required and says WHY
+the surface grew; it is recorded on one `story.touches_widened` carrying the paths and the
+list **before** and **after**, so a surface never grows silently. Nothing else in the story
+moves: the status, the acceptance criteria, the prose and the dod block come back
+byte-identical, and the `touches:` entries already there are written back exactly as their
+author wrote them.
+
+It runs no agent, spends nothing, consumes no attempt and moves no cursor. **No gate code
+knows about it**: the boundary condition re-reads `touches:` off disk at evaluation time, so
+the same run, the same branch and the same diff simply stop counting the widened path as
+outside the declared surface at the next evaluation.
+
+Widenable states are `todo`, `in_progress`, `review` and `blocked`. Refuses (`2`) a `done`
+story — its evidence was written against the surface it declared, and widening it afterwards
+would make the record say the plan declared a path it did not, so the refusal names
+`reopen --for-fix` — an unknown story id, a missing `--note`, no path at all, a `..` in a
+path, a path the story **already** declares, and a widening that would take the story over
+the 128-path cap. Nothing is written on any of them. An unknown `--run` is `3`.
 
 ## `tldrx plan`
 

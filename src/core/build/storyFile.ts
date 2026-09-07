@@ -18,10 +18,30 @@ export interface StoryPatch {
   readonly status?: PlanStatus;
   /** Replaces the whole list. Spec §2.13: required non-empty at `status: done`. */
   readonly evidence?: readonly string[];
+  /**
+   * Replaces the whole list, exactly as `evidence` does (#171). `touches` is
+   * already required, non-empty and capped at MAX_TOUCHES, so this changes a
+   * VALUE and no schema: `STORY_KEYS` is untouched. It lives here, and not in a
+   * second writer, so the story file and `04-build/implicit-plan.yml` cannot
+   * disagree about what a widened list looks like.
+   */
+  readonly touches?: readonly string[];
 }
 
 const STATUS_RE = /^status\s*:/;
 const EVIDENCE_RE = /^evidence\s*:/;
+/**
+ * Indent-capturing, and `status:`/`evidence:` are not.
+ *
+ * Measured: in `03-plan/stories/<id>.md` all three keys are front-matter
+ * top-level, but in `04-build/implicit-plan.yml` `status:` and `evidence:` stay
+ * top-level while `touches:` is nested under `story:` at indent 2
+ * (`implicitPlan.ts` renders it through `block()`). One writer serves both
+ * documents, so the key's own indentation is read off the line and given back to
+ * the block that replaces it — anchoring at column 0 would leave the verb unable
+ * to widen the plan a Plan-skipping scope actually runs on.
+ */
+const TOUCHES_RE = /^(\s*)touches\s*:/;
 const LIST_ITEM_RE = /^\s+-\s/;
 
 export class StoryWriteError extends Error {}
@@ -49,6 +69,7 @@ export function applyPlanPatch(input: readonly string[], patch: StoryPatch): str
   let lines = [...input];
   if (patch.status !== undefined) lines = replaceStatus(lines, patch.status);
   if (patch.evidence !== undefined) lines = replaceEvidence(lines, patch.evidence);
+  if (patch.touches !== undefined) lines = replaceTouches(lines, patch.touches);
   return lines;
 }
 
@@ -75,6 +96,29 @@ function replaceEvidence(lines: readonly string[], evidence: readonly string[]):
     ? ["evidence: []"]
     : ["evidence:", ...evidence.map((item) => `  - ${quote(item)}`)];
   out.splice(at, end - at, ...block);
+  return out;
+}
+
+/**
+ * Rewrite `touches:` and the block of list items under it (#171). Unlike
+ * `evidence`, there is no `[]` shape: spec §2.13 requires a non-empty list, so an
+ * empty one is refused here rather than written and refused later by the
+ * validator — a story file this wrote and the schema rejects is the framework
+ * breaking its own state.
+ *
+ * The key's own indentation is preserved, and the items are indented two further:
+ * the same block shape both documents already carry (`touches: []` inline in a
+ * story's front matter, `  touches:` under `story:` in the implicit plan).
+ */
+function replaceTouches(lines: readonly string[], touches: readonly string[]): string[] {
+  if (touches.length === 0) throw new StoryWriteError("a story's `touches:` may not be empty");
+  const out = [...lines];
+  const at = out.findIndex((line) => TOUCHES_RE.test(line));
+  if (at === -1) throw new StoryWriteError("the story front matter has no `touches:` key");
+  const indent = TOUCHES_RE.exec(out[at] ?? "")?.[1] ?? "";
+  let end = at + 1;
+  while (end < out.length && LIST_ITEM_RE.test(out[end] ?? "")) end++;
+  out.splice(at, end - at, `${indent}touches:`, ...touches.map((item) => `${indent}  - ${quote(item)}`));
   return out;
 }
 
