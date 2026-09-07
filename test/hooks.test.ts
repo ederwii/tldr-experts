@@ -6,6 +6,7 @@ import { FRAMEWORK_ROOT, PLUGIN_DIR } from "../src/core/paths.ts";
 import { parseHookInput } from "../src/core/hooks/passthrough.ts";
 import { parseQuestions } from "../src/core/text/questions.ts";
 import { FactsStore } from "../src/core/facts/FactsStore.ts";
+import { renderFacts } from "../src/core/facilitator/prompt.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { makeWorkspace, FIXTURE_RUN, type TempWorkspace } from "./fixtures/tempWorkspace.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
@@ -430,6 +431,37 @@ describe("no-re-ask (PreToolUse Write|Edit)", () => {
     // crash looks like, and this test would pass for the wrong reason.
     expect(run.stderr).toBe("");
     expect(run.stdout).toBe("");
+  });
+
+  /**
+   * The other half of what `--repo` buys (#169), through the FILE rather than a
+   * literal: an answered fact written with `repos: ["api"]` is emitted by
+   * `emitFactsYaml`, parsed back by `FactsStore.load`, and only THEN filtered by
+   * `renderFacts`. Both directions, because "it appears" alone would also pass
+   * if the filter were removed.
+   */
+  test("an answered fact scoped to one repo is in that run's {{facts}} block and absent from another's", () => {
+    const path = join(workspace().root, ".tldrx", "memory", "facts.yml");
+    const store = FactsStore.load(path);
+    store.append({
+      fact: "Sessions live in Redis, one key per tenant.",
+      area: "data-model",
+      repos: ["api"],
+      kind: "answer",
+      confidence: "stated",
+      source: {
+        who: "alan", when: "2026-08-31T09:00:00Z", run: "260831-envs", q: "Q1", decided_by: "owner",
+      },
+    });
+    store.save();
+
+    // Re-read from disk: this is the round trip, not the in-memory row.
+    const written = FactsStore.load(path).facts;
+    const scoped = written.find((f) => f.fact.startsWith("Sessions live in Redis"));
+    expect(scoped?.repos).toEqual(["api"]);
+    expect(scoped?.source.decided_by).toBe("owner");
+    expect(renderFacts(written, ["api"])).toContain(scoped?.id ?? "MISSING");
+    expect(renderFacts(written, ["lab"])).not.toContain(scoped?.id ?? "MISSING");
   });
 
   test("fails open when facts.yml cannot be read", async () => {

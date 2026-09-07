@@ -14,15 +14,31 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { EventLog } from "../events/EventLog.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
-import { isRetired, MAX_FACT_CHARS } from "../facts/Fact.ts";
+import { isRetired, MAX_FACT_CHARS, type FactDecider } from "../facts/Fact.ts";
 import {
   detectAnswered, parseQuestions, recordAnswer, recordSupersession, replaceBlock,
   serializeQuestions, type QuestionBlock, type QuestionsDoc,
 } from "../text/questions.ts";
 import { factsPath } from "../../hooks/lib/workspace.ts";
-import { stampSuperseded } from "./stampSuperseded.ts";
+import { declaredAffects, stampSuperseded } from "./stampSuperseded.ts";
+import { reposFromAffects } from "./reposFromAffects.ts";
 
 export class AnswerError extends Error {}
+
+/**
+ * Provenance the INVOCATION named, for ONE question.
+ *
+ * Per-question and never per-context, because `captureAnswers` sweeps every
+ * answered-but-uncaptured block in the file (`detectAnswered`, the loop below) —
+ * including one a human filled in by hand before the command ran. Stamping those
+ * with what the operator said about a different question is the same lie the
+ * flags exist to prevent.
+ */
+export interface AnswerOverride {
+  readonly decidedBy?: FactDecider;
+  /** Explicit `--repo` values. Wins over the question's `affects:`. */
+  readonly repos?: readonly string[];
+}
 
 export interface CaptureContext {
   /** Workspace root — where `.tldrx/memory/facts.yml` lives. */
@@ -32,6 +48,18 @@ export interface CaptureContext {
   readonly run: string;
   readonly actor: string;
   readonly at: string;
+  /**
+   * Keyed by question id. A block not in the map is recorded exactly as it was
+   * before this key existed — which is what the `answer-capture` hook passes,
+   * because it cannot tell an agent's Write from a human's edit.
+   */
+  readonly overrides?: ReadonlyMap<string, AnswerOverride>;
+  /**
+   * Declared workspace repo names, for resolving a question's `affects:`.
+   * Absent means no `affects:` entry can be resolved, so `repos` stays `[]` —
+   * exactly today's behaviour, and it hides nothing.
+   */
+  readonly repoNames?: ReadonlySet<string>;
 }
 
 export interface CapturedAnswer {
@@ -39,6 +67,8 @@ export interface CapturedAnswer {
   readonly fact: string;
   readonly answer: string;
   readonly area: string;
+  /** `affects:` entries shaped `repo:path` whose prefix names no workspace repo. */
+  readonly unresolvedAffects: readonly string[];
 }
 
 /** What one `--supersede` did, for the caller to print. */
@@ -50,6 +80,8 @@ export interface SupersededAnswer {
   readonly supersedes: string;
   readonly answer: string;
   readonly area: string;
+  /** `affects:` entries shaped `repo:path` whose prefix names no workspace repo. */
+  readonly unresolvedAffects: readonly string[];
 }
 
 /**
@@ -98,14 +130,22 @@ export function captureAnswers(questionsPath: string, ctx: CaptureContext): read
     for (const block of answered) {
       const area = block.metadata?.area ?? "unscoped";
       const truncated = factWasTruncated(block.title, block.answer);
+      const override = ctx.overrides?.get(block.id);
+      const named = reposFromAffects(declaredAffects(block), ctx.repoNames ?? new Set());
+      const repos = override?.repos ?? named.repos;
       const fact = store.append({
         fact: factTextFor(block.title, block.answer),
         ...(truncated ? { truncated: true as const } : {}),
         area,
-        repos: [],
+        repos,
         kind: "answer",
         confidence: "stated",
-        source: { who: ctx.actor, when: ctx.at, run: ctx.run, q: block.id },
+        source: {
+          who: ctx.actor, when: ctx.at, run: ctx.run, q: block.id,
+          // Absent means "not stated", never "owner" (`Fact.ts:36`). Only an
+          // invocation that NAMED this question can state it.
+          ...(override?.decidedBy === undefined ? {} : { decided_by: override.decidedBy }),
+        },
       });
       doc = replaceBlock(doc, recordAnswer(block, { answered_by: ctx.actor, answered_at: ctx.at, fact: fact.id }));
       log.tryAppend({
@@ -126,7 +166,10 @@ export function captureAnswers(questionsPath: string, ctx: CaptureContext): read
         cost_usd: 0,
         payload: { fact: fact.id, area: fact.area, kind: fact.kind, q: block.id },
       });
-      captured.push({ q: block.id, fact: fact.id, answer: block.answer, area });
+      captured.push({
+        q: block.id, fact: fact.id, answer: block.answer, area,
+        unresolvedAffects: named.unresolved,
+      });
       recorded.push({ block, fact: fact.id });
     }
   });
@@ -237,6 +280,8 @@ export function supersedeAnswer(
 
   const area = block.metadata.area === "" ? "unscoped" : block.metadata.area;
   const truncated = factWasTruncated(block.title, answer);
+  const override = ctx.overrides?.get(block.id);
+  const named = reposFromAffects(declaredAffects(block), ctx.repoNames ?? new Set());
 
   const result = FactsStore.update(factsPath(ctx.root), (store): SupersededAnswer => {
     const head = store.headOf(recorded);
@@ -250,12 +295,22 @@ export function supersedeAnswer(
       fact: factTextFor(block.title, answer),
       ...(truncated ? { truncated: true as const } : {}),
       area,
-      repos: [...head.repos],
+      // A supersession is a NEW decision and may legitimately rescope; with no
+      // `--repo` it keeps inheriting what the fact it replaces bound to.
+      repos: override?.repos ?? [...head.repos],
       kind: "answer",
       confidence: "stated",
-      source: { who: ctx.actor, when: ctx.at, run: ctx.run, q: block.id },
+      source: {
+        who: ctx.actor, when: ctx.at, run: ctx.run, q: block.id,
+        // Absent means "not stated", never "owner" (`Fact.ts:36`). Only an
+        // invocation that NAMED this question can state it.
+        ...(override?.decidedBy === undefined ? {} : { decided_by: override.decidedBy }),
+      },
     });
-    return { q: block.id, fact: fact.id, supersedes: head.id, answer, area };
+    return {
+      q: block.id, fact: fact.id, supersedes: head.id, answer, area,
+      unresolvedAffects: named.unresolved,
+    };
   });
 
   const updated = replaceBlock(doc, recordSupersession(block, answer, {

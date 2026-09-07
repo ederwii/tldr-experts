@@ -292,7 +292,8 @@ function parking(): readonly string[] {
     "",
     "An open question is never a licence to ship an unguarded write — but not shipping the write is",
     "not the same as not shipping anything. `tldrx note <run> \"…\"` records the moment;",
-    "`tldrx answer <Qid> \"…\"` is mine to type.",
+    "`tldrx answer <Qid> \"…\" --decided-by owner` is mine to type; if you ever answer on my behalf it is",
+    "`--decided-by driver`, and it is recorded as yours.",
     "",
   ];
 }

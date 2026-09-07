@@ -151,8 +151,14 @@ export function stampSuperseded(
   return stamped;
 }
 
-/** `affects: a.md, b.md` off the block's §2.7 metadata, or nothing. */
-function declaredAffects(block: QuestionBlock): readonly string[] {
+/**
+ * `affects: a.md, b.md` off the block's §2.7 metadata, or nothing.
+ *
+ * Exported since #169 so the key has exactly ONE parse with two disjoint
+ * consumers: `affectedDocs` above takes the run-relative `.md` documents, and
+ * `answers/reposFromAffects.ts` takes the repo names.
+ */
+export function declaredAffects(block: QuestionBlock): readonly string[] {
   const raw = block.metadata?.extra.find(([key]) => key === AFFECTS_KEY)?.[1] ?? "";
   return raw.split(/[,\s]+/).map((part) => part.trim()).filter((part) => part !== "");
 }

@@ -20,12 +20,16 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Command } from "../Command.ts";
 import { EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
-import { boolFlag, parseArgs, stringFlag, UsageError } from "../argv.ts";
+import { boolFlag, parseArgs, repeatedFlag, stringFlag, UsageError } from "../argv.ts";
 import { workspaceRootFrom } from "../workspace.ts";
 import { fail } from "../report.ts";
 import { RunStore } from "../../core/run/RunStore.ts";
 import { isResolved, resolveRunOrExplain } from "../resolveRun.ts";
-import { captureAnswers, supersedeAnswer, writeAnswerSlot } from "../../core/answers/captureAnswers.ts";
+import {
+  captureAnswers, supersedeAnswer, writeAnswerSlot, type AnswerOverride,
+} from "../../core/answers/captureAnswers.ts";
+import { FACT_DECIDERS, type FactDecider } from "../../core/facts/Fact.ts";
+import { loadWorkspace } from "../../hooks/lib/workspace.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
 import { parseQuestions, type QuestionBlock } from "../../core/text/questions.ts";
 import { readFileSync } from "node:fs";
@@ -35,11 +39,11 @@ const QUESTION_ID_RE = /^Q\d{1,6}$/;
 export const answerCommand: Command = {
   name: "answer",
   summary: "Answer an open interview question",
-  usage: "tldrx answer <Qid> <text> [--supersede] [--run <id>] [--root <path>]",
+  usage: "tldrx answer <Qid> <text> [--supersede] [--decided-by <who>] [--repo <name>] [--run <id>] [--root <path>]",
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     try {
-      const args = parseArgs(argv, ["run", "root"]);
+      const args = parseArgs(argv, ["run", "root", "decided-by", "repo"]);
       const [qid, ...words] = args.positionals;
       if (qid === undefined || !QUESTION_ID_RE.test(qid)) {
         throw new UsageError("answer needs a question id: `tldrx answer Q4 \"the answer\"`");
@@ -48,6 +52,33 @@ export const answerCommand: Command = {
       if (text === "") throw new UsageError(`answer ${qid} needs the answer text`);
 
       const root = workspaceRootFrom(args);
+
+      // Validated BEFORE the write, both of them, because a fact scoped to a repo
+      // that does not exist is invisible to `renderFacts`'s filter forever and a
+      // decider outside the closed set is a row `validateFactsFile` would refuse
+      // on the next read. The argument is `facts add --run`'s, transplanted:
+      // asking for provenance by name and getting nothing instead is worse than
+      // not asking.
+      const decidedBy = stringFlag(args, "decided-by");
+      if (decidedBy !== undefined && !(FACT_DECIDERS as readonly string[]).includes(decidedBy)) {
+        throw new UsageError(
+          `--decided-by expects one of ${FACT_DECIDERS.join(", ")}, got '${decidedBy}'`,
+        );
+      }
+      const repoNames = new Set(loadWorkspace(root).repos.keys());
+      const wantedRepos = repeatedFlag(args, "repo");
+      for (const repo of wantedRepos) {
+        if (!repoNames.has(repo)) {
+          throw new UsageError(
+            `--repo ${repo} is not a repo in this workspace — it has ${[...repoNames].join(", ")}`,
+          );
+        }
+      }
+      const overrides = new Map<string, AnswerOverride>([[qid, {
+        ...(decidedBy === undefined ? {} : { decidedBy: decidedBy as FactDecider }),
+        ...(wantedRepos.length === 0 ? {} : { repos: wantedRepos }),
+      }]]);
+
       const wanted = stringFlag(args, "run");
       const resolved = resolveRunOrExplain("tldrx answer", root, wanted);
       if (!isResolved(resolved)) return resolved.exit;
@@ -83,10 +114,13 @@ export const answerCommand: Command = {
           run: store.runId,
           actor: currentActor(),
           at: nowRfc3339(),
+          overrides,
+          repoNames,
         });
         process.stdout.write(
           `${qid} superseded → ${done.fact} replaces ${done.supersedes} (area ${done.area}) in ${path}\n`,
         );
+        sayWhatWasNotStated(decidedBy, done.unresolvedAffects);
         return EXIT_OK;
       }
 
@@ -97,6 +131,8 @@ export const answerCommand: Command = {
         run: store.runId,
         actor: currentActor(),
         at: nowRfc3339(),
+        overrides,
+        repoNames,
       });
       const recorded = captured.find((c) => c.q === qid);
       if (recorded === undefined) {
@@ -104,12 +140,41 @@ export const answerCommand: Command = {
         return EXIT_USAGE;
       }
       process.stdout.write(`${qid} answered → ${recorded.fact} (area ${recorded.area}) in ${path}\n`);
+      sayWhatWasNotStated(decidedBy, recorded.unresolvedAffects);
       return EXIT_OK;
     } catch (error) {
       return fail("answer", error);
     }
   },
 };
+
+/**
+ * Say, on stdout, what this invocation did NOT state — absent-with-reason.
+ *
+ * The reason a fact carries no decider cannot live in the row: a second field
+ * would only re-derive `decided_by !== undefined`, and could contradict it. So
+ * it is said where a person can act on it, in the same breath as the fact id.
+ *
+ * The same goes for an `affects:` entry shaped `repo:path` that matched no repo:
+ * `repos: []` after one of those would read as "no repo was named" when one WAS
+ * named and was wrong.
+ */
+function sayWhatWasNotStated(
+  decidedBy: string | undefined,
+  unresolvedAffects: readonly string[],
+): void {
+  if (decidedBy === undefined) {
+    process.stdout.write(
+      `  no decider recorded — this invocation passed no --decided-by, so the fact says `
+      + `"not stated", which is never read as "owner"\n`,
+    );
+  }
+  for (const entry of unresolvedAffects) {
+    process.stdout.write(
+      `  affects: ${entry} names no repo in this workspace — it scoped nothing\n`,
+    );
+  }
+}
 
 /** The phase questions.md that holds `qid` in `status`, with the block, or null. */
 function locateQuestion(

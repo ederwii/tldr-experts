@@ -389,8 +389,8 @@ describe("collectProcessAnswers", () => {
     const path = join(root, ".tldrx", "init-questions.md");
     writeFileSync(path, initQuestionsFile(), "utf8");
     const collected = collectProcessAnswers(path, [
-      { q: "Q2", fact: "F002", answer: label.github, area: "process" },
-      { q: "Q1", fact: "F001", answer: "six-week cycles", area: "process" },
+      { q: "Q2", fact: "F002", answer: label.github, area: "process", unresolvedAffects: [] },
+      { q: "Q1", fact: "F001", answer: "six-week cycles", area: "process", unresolvedAffects: [] },
     ]);
     expect(collected).toEqual({
       methodology: "six-week cycles", ticketTool: label.github, questionId: "Q1",

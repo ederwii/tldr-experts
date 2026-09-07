@@ -13,7 +13,7 @@
 import { existsSync } from "node:fs";
 import { runHook, postContext, allow } from "./lib/decide.ts";
 import { readPayload, filePathOf } from "./lib/payload.ts";
-import { locateWork } from "./lib/workspace.ts";
+import { locateWork, loadWorkspace } from "./lib/workspace.ts";
 import { currentActor, nowRfc3339 } from "./lib/actor.ts";
 import { captureAnswers } from "../core/answers/captureAnswers.ts";
 
@@ -28,12 +28,22 @@ await runHook("answer-capture", async () => {
   if (location === null) return;
 
   // PostToolUse runs after the write, so the file on disk IS the new content.
+  //
+  // NO `overrides`, deliberately (#169). This hook fires on PostToolUse for an
+  // agent's own `Write`/`Edit` AND on a human's `FileChanged` (the guard at the
+  // top of this function), so it cannot say which of the two answered — and
+  // telling them apart would be an inference written into an audit record. The
+  // rows it writes therefore carry no `decided_by` at all, which is the
+  // documented absence: "not stated", never "owner". `repoNames` is passed
+  // because it states nothing about WHO — it only lets a question's own
+  // `affects:` resolve to the repos it already names.
   const captured = captureAnswers(filePath, {
     root: location.root,
     runDir: location.runDir,
     run: location.run,
     actor: currentActor(),
     at: nowRfc3339(),
+    repoNames: new Set(loadWorkspace(location.root).repos.keys()),
   });
   if (captured.length === 0) return;
   postContext(`tldrx: recorded ${captured.map((c) => `${c.q} → ${c.fact}`).join(", ")}`);

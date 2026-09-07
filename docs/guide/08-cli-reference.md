@@ -443,10 +443,28 @@ runs and **never asks a model**. Exits: `0` `1` `2` `3` `5`.
 Answer one open question from the command line, recording it as a fact.
 
 ```
-tldrx answer <Qid> <text> [--supersede] [--run <id>] [--root <path>]
+tldrx answer <Qid> <text> [--supersede] [--decided-by <who>] [--repo <name>] [--run <id>] [--root <path>]
 ```
 
 Exits: `0` `1` `3`.
+
+### Who decided, and what it binds — `--decided-by` and `--repo`
+
+`--decided-by owner|driver` records **who decided**, as against `who`, which is only the account
+that typed it. It is optional here and required on `tldrx facts add`, and the difference is
+honest: this same code path is also driven by the answer-capture hook, which fires on an agent's
+own `Write` as well as on a human's edit and so cannot say which of the two answered. Absent means
+*not stated* — never `owner` — and the command says so on stdout rather than leaving you to notice.
+
+`--repo <name>` scopes the answered fact to one repo (repeatable), so every `{{facts}}` block
+outside it stops carrying a decision that was never about it. A name no repo in `workspace.yml`
+answers to is refused, exit `1`, before anything is written. Without it, the fact is scoped by the
+question's own `affects:` when an entry there names a repo (`api`, or `api:src/db.ts`), and by
+nothing otherwise: `repos: []` means *no repo was named*, never *every repo*.
+
+Both flags apply **only to the question id in the invocation**. Recording an answer sweeps every
+answered-but-uncaptured block in that file, including one a human filled in by hand beforehand, and
+those are recorded exactly as they were before these flags existed.
 
 ### Reversing a decision — `--supersede`
 

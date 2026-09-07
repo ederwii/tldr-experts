@@ -595,6 +595,18 @@ const ENTRIES: readonly CommandHelp[] = [
         arg: null,
         meaning: "REVERSE a decision this question already recorded. Only valid on an ANSWERED question. The old fact keeps its text and gains superseded_by; a new fact carries this answer with the same area and repos; the block keeps its original [Answer]: line and gains a superseding one plus a footer. Everything that FEEDS a decision \u2014 no-re-ask, every {{facts}} block, the training miner, the implicit plan \u2014 then reads the new fact and not the old one. Without it, answering an answered question is refused, because an answer is recorded once.",
       },
+      {
+        name: "decided-by",
+        arg: "<who>",
+        meaning: "Who decided, as against who typed it. OPTIONAL here, and required on `facts add`: this command is also driven by the answer-capture hook, which fires on an agent's own Write and on a human's edit and so cannot honestly say either. Absent means \u201cnot stated\u201d, never \u201cowner\u201d, and the command says so on stdout.",
+        values: FACT_DECIDERS,
+      },
+      {
+        name: "repo",
+        arg: "<name>",
+        meaning: "Scope the answered fact to one repo, so every {{facts}} block outside it stops carrying a decision that was never about it. Repeatable. A name no repo in workspace.yml answers to is refused before anything is written.",
+        repeatable: true,
+      },
       runFlag(),
       root(),
     ],
@@ -606,6 +618,7 @@ const ENTRIES: readonly CommandHelp[] = [
     notes: [
       "A second reversal supersedes the SECOND answer, not the first: the chain is walked to its head, so `--supersede` can be used as many times as an owner changes their mind and facts.yml stays a single-link reciprocal chain.",
       "Nothing is erased. `tldrx replay` renders the reversal as its own line (`fact.superseded`), `tldrx retro` still lists the old fact and labels it `(superseded by F<n>)`, and the words originally typed stay in questions.md.",
+      "Without `--repo`, the fact is scoped by the question's own `affects:` when an entry there names a repo (`api` or `api:src/db.ts`), and by nothing otherwise \u2014 `repos: []` means \u201cno repo was named\u201d, never \u201cevery repo\u201d. An `affects:` entry that looks like `repo:path` and matches no repo is named on stdout rather than dropped in silence.",
     ],
   },
   {
