@@ -6,6 +6,7 @@
 import { RunStore } from "../run/RunStore.ts";
 import { stageAt } from "../run/RunFile.ts";
 import { spendBasisOf, type SpendTurn } from "../budget/spendBasis.ts";
+import { round2 } from "./caps.ts";
 
 /** One turn's accounting — as much of an executor task as the cost line reads. */
 export interface PhaseCostTurn {
@@ -18,11 +19,6 @@ export interface PhaseCostTurn {
 export interface PhaseCost {
   readonly usd: number;
   readonly note: string | null;
-}
-
-/** Local, as in every other module here (nine files define their own — measured). */
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
 }
 
 /**

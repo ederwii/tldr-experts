@@ -2912,10 +2912,9 @@ function failed(ctx: ExecutorContext, error: string, tasks: readonly ExecutorTas
 
 // --- re-exports: the public surface does not move -------------------------
 //
-// Ten test files, `src/core/run/reopenStory.ts:54` and
-// `src/core/facilitator/index.ts:34` import these FROM HERE. Wave 2 moves where
-// they are defined and nothing else; a re-export is how "the same symbol, a
-// different file" stays true for every caller.
+// `src/core/run/reopenStory.ts:54` and nine test files import these FROM HERE.
+// Wave 2 moves where they are defined and nothing else; a re-export is how
+// "the same symbol, a different file" stays true for every caller.
 export { readReviewLedger, phaseCostToDate };
 export {
   clampParallel, developerPriceDivisor,
