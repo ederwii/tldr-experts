@@ -96,9 +96,16 @@ Everything in this section is written and tested on main; none of it is tagged.
   the map to produce one. The k-hop walk is the missing half.
 - **Discovery by sampling** — pick reads by centrality + churn (both already computed by the
   map) instead of reading whole repos.
-- **Parallel stories in Build.** Sequential on purpose today
-  (`src/core/facilitator/executors/build.ts:17-19`): `waves.yml` already guarantees a dependency
-  sits in an earlier wave, so the inner loop can become a fan-out without changing anything else.
+- **Parallel stories in Build — done; on main, unreleased.** `waves.yml` guarantees a dependency
+  sits in an EARLIER wave, so a wave's stories are independent by construction and the fan-out
+  changed the schedule, not the result: `--parallel N` per run, and `stages/build/stage.yml` now
+  ships `parallel: 2` so a workspace that says nothing gets two lanes (the code fallback,
+  `DEFAULT_PARALLEL`, stays 1 for a stage file that declares none). Three real workspaces measured
+  runs of 34-43 h wall clock whose per-story medians were 0.6-1.35 h — the wall clock was
+  serialization. Two rather than more because one of those workspaces hit OOM kills wider. The one
+  real limitation left: the `--prepare`/`--commit` handshake is **per story** and stays sequential
+  whatever `parallel` says (spec §5) — that side cannot know how many sub-agents the host session
+  is willing to run.
 - **Multi-model.** `spawnAgent.ts:32` is `const CLAUDE_BIN = "claude"` with no provider seam, so
   "which model" means "which Claude". A provider adapter behind that constant is the whole change.
 - **Decompose `src/core/facilitator/executors/build.ts` — done; on main, unreleased.** It was 4,351

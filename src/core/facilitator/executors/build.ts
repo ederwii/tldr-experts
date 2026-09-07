@@ -14,7 +14,9 @@
  * ever merged into a default branch — the phase ends at a human gate that lists
  * the epic branches waiting.
  *
- * **Parallel within a wave (`--parallel N`, default 1).** `waves.yml` guarantees a
+ * **Parallel within a wave (`--parallel N`; the shipped `stages/build/stage.yml`
+ * declares 2, and `DEFAULT_PARALLEL` here stays 1 for a stage file that declares
+ * none).** `waves.yml` guarantees a
  * dependency is in an EARLIER wave, so the stories of one wave are independent by
  * construction and may run at once. At `N = 1` the executor takes exactly the
  * path it always did, story by story — byte-identical, because "the default must

@@ -18,14 +18,17 @@
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { clampParallel, DEFAULT_PARALLEL, REVIEWER_FLOOR_USD } from "../src/core/facilitator/executors/build.ts";
 import { parallelFlag } from "../src/cli/commands/next.ts";
 import { parseArgs, UsageError } from "../src/cli/argv.ts";
 import { declaredFlags, declaredValueFlags } from "../src/cli/helpText.ts";
-import { loadStageSpec } from "../src/core/facilitator/stageSpec.ts";
+import { loadStageSpec, stageOrder } from "../src/core/facilitator/stageSpec.ts";
+import { loadWorkflowPreset } from "../src/core/run/workflowPreset.ts";
+import { FRAMEWORK_ROOT, WORKFLOWS_DIR } from "../src/core/paths.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { UiState } from "../src/core/ui/state.ts";
@@ -46,9 +49,13 @@ const FAKE_KEYS = [
 ] as const;
 
 let open: BuildWorkspace[] = [];
+/** Bare roots made by the shipped-defaults tests — their own dirs, removed here. */
+let bare: string[] = [];
 
 afterEach(() => {
   process.env.PATH = ORIGINAL_PATH;
+  for (const root of bare) rmSync(root, { recursive: true, force: true });
+  bare = [];
   for (const key of FAKE_KEYS) delete process.env[key];
   for (const ws of open) ws.dispose();
   open = [];
@@ -173,6 +180,71 @@ describe("the flag", () => {
     // The shipped `build-only` workflow says nothing, and the fixture's stage.yml
     // says nothing either — so the answer is "the run decides", i.e. null ⇒ 1.
     expect(loadStageSpec(ws.root, "build-only", "build").parallel).toBeNull();
+  });
+});
+
+describe("what the SHIPPED build stage says", () => {
+  /**
+   * The framework's own opinion, read through the real resolution off a root that
+   * overrides nothing — so `stagePath`/`workflowPath` fall through to `stages/`
+   * and `workflows/` exactly as an installed workspace does.
+   */
+  function shippedRoot(): string {
+    const root = mkdtempSync(join(tmpdir(), "tldrx-shipped-"));
+    bare.push(root);
+    return root;
+  }
+
+  test("a workspace that overrides nothing gets two lanes in Build", () => {
+    // `waves.yml` guarantees a dependency is in an EARLIER wave, so the stories of
+    // one wave are independent by construction (`plan/validatePlan.ts`, spec §5) —
+    // running two is a scheduling change, not a correctness one.
+    expect(loadStageSpec(shippedRoot(), "feature", "build").parallel).toBe(2);
+  });
+
+  /** `workflows/retro.yml` lists no stages at all and REFUSES to load — not a build scope. */
+  function hasBuild(root: string, scope: string): boolean {
+    try {
+      return stageOrder(loadWorkflowPreset(root, scope)).includes("build");
+    } catch {
+      return false;
+    }
+  }
+
+  test("every shipped workflow with a Build stage inherits it — none resets it", () => {
+    const root = shippedRoot();
+    const withBuild = readdirSync(WORKFLOWS_DIR)
+      .filter((file) => file.endsWith(".yml"))
+      .map((file) => file.replace(/\.yml$/, ""))
+      .filter((scope) => hasBuild(root, scope));
+    expect(withBuild.length).toBeGreaterThan(0);
+    for (const scope of withBuild) {
+      expect([scope, loadStageSpec(root, scope, "build").parallel]).toEqual([scope, 2]);
+    }
+  });
+
+  test("a workflow still outranks it, and the code fallback is still 1", () => {
+    const root = shippedRoot();
+    mkdirSync(join(root, ".tldrx", "workflows"), { recursive: true });
+    writeFileSync(
+      join(root, ".tldrx", "workflows", "wider.yml"),
+      [
+        "version: 1", "name: wider", 'title: "wider"', "depth: minimal", "default_budget_usd: 8",
+        "skips: []", "build: {parallel: 3}",
+        "stages:", '  - {id: build, phase: "04-build", budget_usd: 8}', "",
+      ].join("\n"),
+    );
+    expect(loadStageSpec(root, "wider", "build").parallel).toBe(3);
+    // The shipped stage carries the opinion; the CODE default stays the last
+    // resort, for a workspace whose stage.yml says nothing at all.
+    expect(DEFAULT_PARALLEL).toBe(1);
+    // And the flag still wins over both, at the only place it is read.
+    expect(clampParallel(1)).toBe(1);
+  });
+
+  test("the ROADMAP no longer calls Build sequential", () => {
+    const roadmap = readFileSync(join(FRAMEWORK_ROOT, "docs", "ROADMAP.md"), "utf8");
+    expect(roadmap).not.toContain("Sequential on purpose");
   });
 });
 
