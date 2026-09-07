@@ -522,6 +522,30 @@ export function diffCommand(base: string, branch: string): string {
   return `git diff ${base}...${branch}`;
 }
 
+/**
+ * The reviewer's diff command, and the ONE place its BASE is derived (#166).
+ *
+ * `diffBase` is the epic's sha as it was immediately before the story merged.
+ * Unknown — absent, null or empty — falls back to the epic BRANCH, which is
+ * byte-for-byte the command this produced before the field existed: a bundle or
+ * a ledger written by an older binary reads exactly as it did.
+ *
+ * It lives here, beside `diffCommand`, because THREE readers need the same
+ * answer and a second copy of the fallback is how they would come to disagree:
+ * `buildReviewerPrompt` renders it into the prompt, `writeReviewBundle` records
+ * it in `pending.json`, and the handshake's whole claim is that those two are
+ * the same string. `diffCommand` itself is unchanged — a sha and a branch are
+ * both refs.
+ */
+export function reviewDiffCommand(
+  diffBase: string | null | undefined, epicBranch: string, branch: string,
+): string {
+  return diffCommand(
+    diffBase === undefined || diffBase === null || diffBase === "" ? epicBranch : diffBase,
+    branch,
+  );
+}
+
 export function firstLine(text: string, max = 200): string {
   const line = text.split("\n").map((l) => l.trim()).find((l) => l !== "") ?? "";
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;

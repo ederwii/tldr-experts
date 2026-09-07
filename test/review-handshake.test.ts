@@ -198,7 +198,10 @@ describe("--prepare on a story awaiting review", () => {
 
     const pending = JSON.parse(readFileSync(join(reviewDir(ws, "S1"), "pending.json"), "utf8")) as {
       expert: string; role: string; story: string; result_schema: unknown;
-      review: { diff: string; commit: string; branch: string; epic_branch: string; dod: unknown[] };
+      review: {
+        diff: string; commit: string; branch: string; epic_branch: string; epic_base?: string;
+        dod: unknown[];
+      };
     };
     expect(pending.expert).toBe("reviewer");
     expect(pending.role).toBe("reviewer");
@@ -207,7 +210,11 @@ describe("--prepare on a story awaiting review", () => {
     expect(pending.result_schema).toEqual(REVIEW_SCHEMA as unknown as Record<string, unknown>);
     expect(pending.review.epic_branch).toBe("epic/e1");
     expect(pending.review.branch).toBe(`story/${ws.runId}/S1`);
-    expect(pending.review.diff).toContain("epic/e1");
+    // The diff starts from the epic's SHA, not its branch: this story is already
+    // merged, so `git diff epic/e1...story/…` is empty (#166). `epic_branch` is
+    // still recorded — it says which branch this landed on — and it is no longer
+    // what the diff is computed from.
+    expect(pending.review.diff).toBe(`git diff ${pending.review.epic_base ?? "NOPE"}...story/${ws.runId}/S1`);
     expect(pending.review.diff).toContain(`story/${ws.runId}/S1`);
     // Recovered from the ledger, not re-run: the DoD went green in the cycle that
     // produced the commit, and that fact has not changed.
@@ -233,7 +240,35 @@ describe("--prepare on a story awaiting review", () => {
     const bundled = readFileSync(join(reviewDir(ws, "S1"), "prompt.md"), "utf8");
     const withoutStatus = (text: string): string => text.replace(/^status: \w+$/m, "status: <state>");
     expect(withoutStatus(bundled)).toBe(withoutStatus(spawned));
-    expect(bundled).toContain(`git diff epic/e1...story/${ws.runId}/S1`);
+    // A SHA, not `epic/e1` — and the same sha the spawned reviewer was given,
+    // which the byte-identity above has just proved (#166).
+    expect(bundled).toMatch(new RegExp(`git diff [0-9a-f]{7,40}\\.\\.\\.story/${ws.runId}/S1`));
+  }, 60_000);
+
+  test("the bundle records the epic base, so `--commit --review` reviews the same range", async () => {
+    const ws = workspace(ONE_STORY);
+    await stallAtReview(ws);
+
+    await next(ws, { mode: "prepare", at: "2026-08-29T10:05:00Z" });
+
+    const pending = JSON.parse(readFileSync(
+      join(ws.runDir, ".agent", "build", "S1", "review", "pending.json"), "utf8",
+    )) as { review?: { epic_base?: string; diff?: string } };
+
+    // Recovered off the ledger, not re-derived: `git diff epic/e1...story/…` is
+    // empty by now, so a bundle that named the branch would hand the host an
+    // empty range to certify (#166).
+    expect(pending.review?.epic_base).toMatch(/^[0-9a-f]{7,40}$/);
+    expect(pending.review?.diff).toContain(pending.review?.epic_base ?? "NOPE");
+
+    // And the base survives the round trip: `--commit --review` reads it back OFF
+    // THE BUNDLE and records it again, so the next door down the line recovers
+    // the same range rather than re-deriving an empty one.
+    answerReview(ws, "S1", { verdict: "approve", summary: "read the diff by hand", findings: [] });
+    await next(ws, { mode: "commit", review: true, at: "2026-08-29T10:20:00Z" });
+    const done = events(ws).filter((e) => e.type === "task.done" && e.payload.story === "S1");
+    expect(done.at(-1)?.payload.status).toBe("done");
+    expect(done.at(-1)?.payload.epic_base).toBe(pending.review?.epic_base);
   }, 60_000);
 
   test("--prepare --review names the story with no merged commit rather than preparing one", async () => {
@@ -502,6 +537,26 @@ describe("the live run's shape", () => {
 
     expect(spawns(ws)).toEqual([]);
     expect(story(ws, "S1")).toContain("status: done");
+  }, 60_000);
+
+  test("a re-review recovers the epic base from the ledger rather than diffing an empty range", async () => {
+    const ws = workspace(ONE_STORY);
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+    // The first reviewer errored; `reenter` makes the stage re-enterable, and a
+    // bare `tldrx next` re-runs the REVIEW only (`rereview`) off the ledger.
+    await stallAtReview(ws);
+
+    await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    const first = readFileSync(join(promptDir, "reviewer-S1-1.md"), "utf8");
+    const second = readFileSync(join(promptDir, "reviewer-S1-2.md"), "utf8");
+    const shaOf = (text: string): string => /git diff (\S+)\.\.\./.exec(text)?.[1] ?? "";
+    // A sha, not `epic/e1` — the range the SECOND reviewer is handed has to be
+    // the one the first was handed, and by now the branch form is empty (#166).
+    expect(shaOf(first)).toMatch(/^[0-9a-f]{7,40}$/);
+    expect(shaOf(second)).toBe(shaOf(first));
+    expect(shaOf(second)).not.toBe("");
   }, 60_000);
 
   test("a re-prepare KEEPS an answer already in the bundle, and says so", async () => {

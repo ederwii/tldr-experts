@@ -41,6 +41,16 @@ export interface ReviewLedger {
   readonly erroredWith: string | null;
   /** The story commit the last `task.done` recorded — the diff already merged. */
   readonly commit: string | null;
+  /**
+   * The epic sha the last `task.done` recorded (`epic_base`) — where the
+   * reviewer's diff STARTS — or null on a run whose Build predates #166.
+   *
+   * Null is the honest answer and it has a reader: every consumer falls back to
+   * the epic BRANCH, which is the range those runs were actually reviewed
+   * against. It is never guessed from the branch's sha TODAY — that is the epic
+   * after the merge, and diffing from it is the bug this field exists to fix.
+   */
+  readonly epicBase: string | null;
   /** The DoD results of the last developer attempt that actually ran one. */
   readonly dod: readonly DodResult[];
   /**
@@ -123,7 +133,7 @@ export interface ReviewLedger {
 export function readReviewLedger(runDir: string, storyId: string): ReviewLedger {
   const path = join(runDir, "events.jsonl");
   const empty: ReviewLedger = {
-    verdicts: 0, fixlistRounds: 0, erroredWith: null, commit: null, dod: [],
+    verdicts: 0, fixlistRounds: 0, erroredWith: null, commit: null, epicBase: null, dod: [],
     developerErroredWith: null, blockedWithNothingRun: false, reopened: null, fixRound: null,
     formatRetries: 0, formatRefusal: null,
   };
@@ -133,6 +143,11 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
   let fixlistRounds = 0;
   let erroredWith: string | null = null;
   let commit: string | null = null;
+  // The epic AS IT WAS before the merge (#166). A reset boundary clears it with
+  // `commit`, because the two describe the same merge and half of one is worse
+  // than neither: a base without its commit would name a range for a diff that
+  // no longer belongs to this run of attempts.
+  let epicBase: string | null = null;
   // The three the DEVELOPER side needs, all scoped to the story's LAST attempt:
   // what its developer died with, whether ANY check ran under it, and whether a
   // reviewer was ever spawned. Together they separate "the turn never happened"
@@ -176,6 +191,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
       fixlistRounds = 0;
       erroredWith = null;
       commit = null;
+      epicBase = null;
       dod = [];
       current = [];
       developerErroredWith = null;
@@ -224,6 +240,9 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     if (event.type === "agent.spawned" && payload.role === "reviewer") sawReviewer = true;
     if (event.type === "task.done") {
       if (typeof payload.commit === "string" && payload.commit !== "") commit = payload.commit;
+      // ADDITIVE: absent on every `task.done` written before #166, and absent
+      // leaves this null rather than defaulting to anything.
+      if (typeof payload.epic_base === "string" && payload.epic_base !== "") epicBase = payload.epic_base;
       // The story finished again: whatever fix round was open has landed, and the
       // next named defect may open one of its own (#58). This is the ONLY thing
       // that closes one — the same handshake that closed the story the first time.
@@ -305,6 +324,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     fixlistRounds,
     erroredWith,
     commit,
+    epicBase,
     dod: current.length > 0 ? current : dod,
     developerErroredWith,
     blockedWithNothingRun,

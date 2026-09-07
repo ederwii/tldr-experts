@@ -11,7 +11,7 @@ Judge the diff of `story/260829-build/S1` against the acceptance criteria of **S
 
 Read the diff with, from this working directory:
 
-    git diff epic/e1...story/260829-build/S1
+    git diff <SHA>...story/260829-build/S1
 
 ## Acceptance criteria
 

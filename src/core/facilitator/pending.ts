@@ -251,6 +251,13 @@ export interface PendingReview {
   readonly repo: string;
   readonly branch: string;
   readonly epic_branch: string;
+  /**
+   * The epic's sha immediately before this story merged — what `diff` below is
+   * computed from (#166). ADDITIVE and optional: absent on every bundle written
+   * before this existed, and a reader that finds none falls back to
+   * `epic_branch`, which is what those bundles meant.
+   */
+  readonly epic_base?: string;
   /** The exact command that produces the diff under review. */
   readonly diff: string;
   /** The merged story commit the verdict is about. */

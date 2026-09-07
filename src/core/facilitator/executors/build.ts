@@ -57,7 +57,8 @@ import {
   dispatchNotesRecord, type PendingStage,
 } from "../pending.ts";
 import {
-  addWorktree, commitsBetween, diffCommand, ensureBranch, GitError, removeWorktree, repoDirOf, shaReachability,
+  addWorktree, commitsBetween, diffCommand, ensureBranch, GitError, removeWorktree, repoDirOf, shaOf,
+  shaReachability,
 } from "../../build/git.ts";
 import { BaseGateFailure, baseRefusalLines } from "../../build/preflight.ts";
 import {
@@ -816,7 +817,7 @@ class BuildSession {
       tokens: this.ctx.tokens ?? numberOf(envelope.tokens),
       source: "host",
     });
-    await this.reviewAndSettle(story, work.dod, work.commit, 0, null, review);
+    await this.reviewAndSettle(story, work.dod, work.commit, 0, null, work.epicBase ?? null, review);
     // A settled handshake leaves the LOG, not the bundle: the bundle's presence
     // is what says "a review is outstanding", and one left behind would offer a
     // verdict that has already been counted.
@@ -1128,6 +1129,12 @@ class BuildSession {
     // it cannot be: once the story branch is an ancestor of the epic, `git diff
     // <epic>...<story>` is empty whether it carried thirty commits or none.
     const carried = await commitsBetween(story.repoDir, story.epicBranch, story.branch);
+    // The epic AS IT WAS. Captured here and nowhere else: after the merge the
+    // story branch is an ancestor, and `git diff <epic>...<story>` — the command
+    // the reviewer's prompt hands it — is empty whether the story carried thirty
+    // commits or none (#166). `""` when git had no answer, which renders the
+    // branch name exactly as it did before this existed.
+    const epicShaBefore = await shaOf(story.repoDir, story.epicBranch);
     const merge = await this.mergeIntoEpic(story);
     if (!merge.ok) {
       await this.block(story, `merge into \`${story.epicBranch}\` failed: ${merge.detail}`, half.cost, dod, {
@@ -1139,7 +1146,7 @@ class BuildSession {
     this.noteMerged(story, carried);
 
     // (g)(h) the reviewer, and whatever it decides.
-    return await this.reviewAndSettle(story, dod, commit, half.cost, carried);
+    return await this.reviewAndSettle(story, dod, commit, half.cost, carried, epicShaBefore);
   }
 
   /**
@@ -1158,17 +1165,24 @@ class BuildSession {
     commit: string,
     priorCost: number,
     carried: number | null,
+    /**
+     * The epic's sha immediately before this story merged (#166) — the base the
+     * reviewer's `git diff` starts from. `null` (and `""`) mean it could not be
+     * named, which renders the epic BRANCH: the bytes every review had before
+     * this existed, and what a run resumed off a pre-#166 ledger still gets.
+     */
+    epicBase: string | null,
     supplied?: Review,
   ): Promise<ReviewRoute> {
     // The HOST's review, already parsed and already recorded by `commitReview`.
     // It reaches the same three branches below by the same rules — that is the
     // whole point of injecting it here rather than settling it somewhere else.
     if (supplied === undefined && this.ctx.attendedByHost) {
-      await this.handOffReview(story, dod, commit, priorCost, carried);
+      await this.handOffReview(story, dod, commit, priorCost, carried, epicBase);
       return "handed-off";
     }
     const outcome = supplied === undefined
-      ? await this.spawnReviewer(story, dod)
+      ? await this.spawnReviewer(story, dod, epicBase)
       : { review: supplied, cost: 0 };
     const review = outcome.review;
     const cost = round2(priorCost + outcome.cost);
@@ -1178,7 +1192,7 @@ class BuildSession {
     // `tldrx next` re-runs the REVIEW, not the developer.
     if (review.verdict === "error") {
       await this.settle(story, "review", {
-        dod, commit, merged: true, carried, verdict: "error", review, cost,
+        dod, commit, merged: true, carried, epicBase, verdict: "error", review, cost,
         reason: `the reviewer FAILED and returned no verdict — ${review.summary}`,
       });
       return "settled";
@@ -1194,7 +1208,7 @@ class BuildSession {
       const rel = this.writeFixlistFor(story, review, commit);
       const open = openFindings(review.fixlist).length;
       await this.settle(story, "review", {
-        dod, commit, merged: true, carried, verdict: "fixlist", review, cost,
+        dod, commit, merged: true, carried, epicBase, verdict: "fixlist", review, cost,
         reason: `the reviewer SIGNED with a fix list — ${String(review.fixlist.length)} finding(s), `
           + `${String(open)} to fix now (${rel})`,
       });
@@ -1204,7 +1218,7 @@ class BuildSession {
     const requeue = review.verdict === "changes" && story.attempt < MAX_ATTEMPTS;
     if (review.verdict === "changes") {
       await this.settle(story, requeue ? "review" : "blocked", {
-        dod, commit, merged: true, carried, verdict: "changes", review, cost,
+        dod, commit, merged: true, carried, epicBase, verdict: "changes", review, cost,
         reason: requeue
           ? `the reviewer asked for changes: ${review.summary}`
           : `the reviewer asked for changes twice: ${review.summary}`,
@@ -1224,14 +1238,14 @@ class BuildSession {
       // and a merge that happened. The story is blocked on the fix list and on
       // nothing else, and the log has to say exactly that.
       await this.settle(story, "blocked", {
-        dod, commit, merged: true, carried, verdict: "approve", review, cost, reason: open,
+        dod, commit, merged: true, carried, epicBase, verdict: "approve", review, cost, reason: open,
       });
       return "settled";
     }
 
     // (h) done — DoD green AND the reviewer approved. Write the evidence.
     await this.settle(story, "done", {
-      dod, commit, merged: true, carried, verdict: "approve", review, cost, reason: null,
+      dod, commit, merged: true, carried, epicBase, verdict: "approve", review, cost, reason: null,
     });
     return "settled";
   }
@@ -1399,9 +1413,13 @@ class BuildSession {
     commit: string,
     priorCost: number,
     carried: number | null,
+    epicBase: string | null,
   ): Promise<void> {
     const key = this.writeReviewBundle(story, {
       commit, dod, why: "the run is `attended_by: host`, so the framework does not spawn a reviewer",
+      // Recorded on the bundle so `--commit --review` reviews the range this
+      // merge actually moved, not an empty one (#166).
+      ...(epicBase === null || epicBase === "" ? {} : { epicBase }),
     });
     this.setStoryStatus(story.planned, "review");
     this.ctx.emit("task.started", {
@@ -1494,7 +1512,10 @@ class BuildSession {
       `  · ${planned.story.id}: the previous reviewer FAILED (${resume.error}) — `
       + `re-running the REVIEW only; \`${resume.commit}\` is already merged into \`${story.epicBranch}\``,
     );
-    await this.reviewAndSettle(story, resume.dod, resume.commit, 0, null);
+    // Off the LEDGER: this process did not watch the merge, so the base it hands
+    // the second reviewer is the one the first was handed (#166). Null on a run
+    // built before `epic_base` existed, which renders the epic branch.
+    await this.reviewAndSettle(story, resume.dod, resume.commit, 0, null, resume.epicBase ?? null);
   }
 
   /**
@@ -1763,6 +1784,7 @@ class BuildSession {
   private async spawnReviewer(
     story: StoryContext,
     dod: readonly DodResult[],
+    epicBase: string | null,
   ): Promise<{ review: Review; cost: number }> {
     const id = story.planned.story.id;
     let refusal: string | null = null;
@@ -1782,7 +1804,7 @@ class BuildSession {
       }, 0, "reviewer");
 
       const agent = await spawnAgent({
-        prompt: this.reviewerPrompt(story, dod, refusal),
+        prompt: this.reviewerPrompt(story, dod, refusal, epicBase),
         model: this.model(),
         effort: this.ctx.effort,
         maxBudgetUsd: cap,
@@ -1945,8 +1967,10 @@ class BuildSession {
     story: StoryContext,
     dod: readonly DodResult[],
     refusal: string | null = null,
+    diffBase: string | null = null,
   ): string {
     return reviewerPromptFor({
+      diffBase,
       runDir: this.ctx.runDir,
       root: this.ctx.root,
       runId: this.ctx.runId,
@@ -2069,6 +2093,13 @@ class BuildSession {
       merged: boolean;
       /** Commits the merge moved: `0` for a no-op, `null` when not measured. */
       carried: number | null;
+      /**
+       * The epic's sha immediately before the merge — the base the reviewer's
+       * diff was computed from (#166). `null` on every settle that did not watch
+       * a merge happen, and OMITTED from `task.done` when it is: absent means
+       * "not recorded", which readers turn back into the epic branch.
+       */
+      epicBase?: string | null;
       conflicts?: readonly string[];
       verdict: StoryOutcome["verdict"];
       review: Review;
@@ -2143,6 +2174,11 @@ class BuildSession {
       verdict: parts.verdict,
       commit: parts.commit,
       attempt: story.attempt,
+      // ADDITIVE and omitted when unknown — never an empty string in the ledger,
+      // because absent is what a reader falls back from (#166).
+      ...(parts.epicBase === null || parts.epicBase === undefined || parts.epicBase === ""
+        ? {}
+        : { epic_base: parts.epicBase }),
     });
     // Worktrees survive a `review` on purpose: the second attempt continues in
     // the same tree rather than re-cutting the branch it just wrote. A parked
@@ -2721,7 +2757,10 @@ class BuildSession {
       reviewerCapUsd: reviewerCap(this.capParts, this.spent(), story.planned.story.id),
       preparedAt: this.ctx.at,
       work,
-      prompt: this.reviewerPrompt(story, work.dod, refusal),
+      // The bundle's prompt and the bundle's recorded `diff` are derived from the
+      // SAME base, which is what makes "byte-identical to what a spawn would have
+      // sent" still true after #166.
+      prompt: this.reviewerPrompt(story, work.dod, refusal, work.epicBase ?? null),
       lines: this.lines,
     });
   }

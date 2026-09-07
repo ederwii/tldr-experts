@@ -186,6 +186,15 @@ export interface ReviewerPromptParts {
   readonly focus: RecurringFocus;
   /** Appended to, never replaced. */
   readonly lines: string[];
+  /**
+   * What the reviewer's `git diff` starts FROM — the epic's sha immediately
+   * before this story was merged into it (#166).
+   *
+   * ADDITIVE and optional. Absent, null or empty ⇒ `epicBranch`, which is
+   * byte-for-byte the prompt this rendered before the field existed: a story
+   * reviewed out of a bundle written by an older binary reads exactly as it did.
+   */
+  readonly diffBase?: string | null;
 }
 
 /**
@@ -208,6 +217,9 @@ export function reviewerPromptFor(parts: ReviewerPromptParts): string {
     repoName: parts.story.story.repo,
     branch: parts.branch,
     epicBranch: parts.epicBranch,
+    // Straight through: `buildReviewerPrompt` owns the fallback, so the spawned
+    // door and the bundle door cannot disagree about what a missing base means.
+    diffBase: parts.diffBase,
     worktree: parts.worktree,
     conventions: renderConventions(parts.root, [parts.story.story.repo]),
     // Every field, including the ABSENCE of an exit code on a refused row —

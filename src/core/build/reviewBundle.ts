@@ -25,7 +25,7 @@ import {
 } from "../facilitator/pending.ts";
 import { REVIEW_DIR } from "../run/prepared.ts";
 import { MAX_ATTEMPTS } from "./caps.ts";
-import { diffCommand } from "./git.ts";
+import { reviewDiffCommand } from "./git.ts";
 import { REVIEW_SCHEMA } from "./prompts.ts";
 import { readReviewLedger } from "./reviewLedger.ts";
 import { DOD_REFUSAL_FALLBACK, dodRefused } from "./outcome.ts";
@@ -45,6 +45,12 @@ export interface ResumableReview {
   readonly dod: readonly DodResult[];
   /** What the reviewer died with — quoted to the operator, never as a verdict. */
   readonly error: string;
+  /**
+   * The epic's sha before this story merged, from the ledger's `task.done`
+   * (#166). Absent on a run whose Build predates the field, which renders the
+   * epic BRANCH — exactly what those runs were reviewed against.
+   */
+  readonly epicBase?: string;
 }
 
 /**
@@ -62,6 +68,15 @@ export interface ReviewWork {
   readonly dod: readonly DodResult[];
   /** Why the review is outstanding, in the words the operator reads. */
   readonly why: string;
+  /**
+   * The epic's sha immediately before the story merged — the base the reviewer's
+   * `git diff` starts from (#166).
+   *
+   * Optional, and absent means the epic BRANCH: a bundle or a ledger written
+   * before this field existed carries none, and the prompt it produces is
+   * byte-identical to the one it produced then.
+   */
+  readonly epicBase?: string;
 }
 
 /** Everything `writeReviewBundle` records, as values rather than as a session. */
@@ -140,7 +155,15 @@ export function writeReviewBundle(parts: ReviewBundleParts): string {
     repo: parts.repo,
     branch: parts.branch,
     epic_branch: parts.epicBranch,
-    diff: diffCommand(parts.epicBranch, parts.branch),
+    // Omitted when unknown, never an empty string: absent means "this bundle
+    // cannot name the base", which the reader turns back into `epic_branch`.
+    ...(parts.work.epicBase === undefined || parts.work.epicBase === ""
+      ? {}
+      : { epic_base: parts.work.epicBase }),
+    // The SAME derivation `buildReviewerPrompt` uses, called rather than copied,
+    // so the bundle's recorded command and the prompt's command are the same
+    // string — which is the property the handshake's whole claim rests on (#166).
+    diff: reviewDiffCommand(parts.work.epicBase, parts.epicBranch, parts.branch),
     commit: parts.work.commit,
     attempt: parts.attempt,
     max_attempts: MAX_ATTEMPTS,
@@ -234,7 +257,12 @@ export function stashRefusedEnvelope(runDir: string, key: string, spent: number)
 export function reviewWorkFor(parts: ReviewLookup): ReviewWork | null {
   const resume = resumableReview(parts.runDir, parts.storyId, parts.status, parts.fresh);
   if (resume !== null) {
-    return { commit: resume.commit, dod: resume.dod, why: `the previous reviewer FAILED (${resume.error})` };
+    return {
+      commit: resume.commit,
+      dod: resume.dod,
+      why: `the previous reviewer FAILED (${resume.error})`,
+      ...(resume.epicBase === undefined ? {} : { epicBase: resume.epicBase }),
+    };
   }
   const key = reviewBundleKeyOf(parts.stageId, parts.storyId);
   if (!reviewBundleOut(parts.runDir, key)) return null;
@@ -264,6 +292,11 @@ export function reviewWorkFromBundle(runDir: string, key: string): ReviewWork | 
   if (review === undefined || typeof review.commit !== "string" || review.commit === "") return null;
   return {
     commit: review.commit,
+    // Absent on a bundle written before #166, and absent is the answer: the
+    // reader falls back to `epic_branch`, which is what that bundle meant.
+    ...(typeof review.epic_base === "string" && review.epic_base !== ""
+      ? { epicBase: review.epic_base }
+      : {}),
     dod: (review.dod ?? []).map((r) => {
       // `undefined === 124` is false, which is the right answer by accident and
       // the wrong thing to rely on. The refusal is explicit, and a missing
@@ -297,6 +330,7 @@ export function reviewWorkFromLedger(
     commit: ledger.commit,
     dod: ledger.dod,
     why: "its review is outstanding",
+    ...(ledger.epicBase === null ? {} : { epicBase: ledger.epicBase }),
   };
 }
 
@@ -329,5 +363,10 @@ export function resumableReview(
   if (fresh !== undefined && fresh.verdict !== "error") return null;
   const ledger = readReviewLedger(runDir, storyId);
   if (ledger.erroredWith === null || ledger.commit === null) return null;
-  return { commit: ledger.commit, dod: ledger.dod, error: ledger.erroredWith };
+  return {
+    commit: ledger.commit,
+    dod: ledger.dod,
+    error: ledger.erroredWith,
+    ...(ledger.epicBase === null ? {} : { epicBase: ledger.epicBase }),
+  };
 }

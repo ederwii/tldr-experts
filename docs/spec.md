@@ -2860,7 +2860,18 @@ directory down — `.agent/<stage>/<story-id>/review/{prompt.md,pending.json,res
 can never be read as a developer one. `--prepare --review` writes the prompt a spawned reviewer would have been sent
 (the same renderer), plus `role: reviewer`, `result_schema` (the reviewer's `--json-schema` envelope, verbatim, so the
 host needs no source to know the shape) and a `review:` block carrying the diff command, the merged commit, the
-attempt and the **DoD results recovered from `events.jsonl`** — and it **spawns nothing**. `--commit --review` reads
+attempt and the **DoD results recovered from `events.jsonl`** — and it **spawns nothing**.
+
+**The diff is computed from the epic AS IT WAS before the story merged** (#166). The story is merged into the epic
+BEFORE the reviewer is asked for anything, and once it is an ancestor `git diff <epic_branch>...<story_branch>` is
+empty whether the story carried thirty commits or none — so the executor captures the epic's sha immediately before
+the merge and every door uses that. It is recorded twice, both ADDITIVE and both **omitted when it is not known**:
+`review.epic_base` in the bundle's `pending.json`, and `epic_base` on the `task.done` payload, which is where
+`--prepare --review` and a re-review recover it from. `epic_branch` is still recorded and still means what it said —
+which branch this landed on — it is simply no longer what the diff is measured against. A bundle or a ledger with no
+`epic_base` — every run built before this — falls back to `epic_branch` and renders byte-identical bytes, which is
+what those runs were actually reviewed against; a base that cannot be named is absent, never guessed from the epic's
+sha TODAY (that is the epic AFTER the merge, and is the bug itself). `--commit --review` reads
 that `result.json` as the envelope, narrows it with the SAME fail-closed parser (unreadable ⇒ `changes`, never
 `approve`), and settles the story through the same code a spawned verdict goes through: `approve` ⇒ `done`, `changes`
 ⇒ one requeue then `blocked`, attempt accounting untouched. A host that never writes `result.json` has produced no

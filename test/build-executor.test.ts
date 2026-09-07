@@ -40,8 +40,8 @@ import { EventLog } from "../src/core/events/EventLog.ts";
 import { validateHandoff } from "../src/core/text/handoff.ts";
 import { loadWorkspace, toSrcContext } from "../src/hooks/lib/workspace.ts";
 import {
-  assertWorktreeOn, cleanUpRunEpicWorktrees, GitError, partitionDirty, porcelainPath, stateDirPrefixes,
-  WorktreeBranchMismatchError,
+  assertWorktreeOn, cleanUpRunEpicWorktrees, diffCommand, GitError, partitionDirty, porcelainPath,
+  stateDirPrefixes, WorktreeBranchMismatchError,
 } from "../src/core/build/git.ts";
 import { FRAMEWORK_ROOT, PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../src/core/paths.ts";
 import {
@@ -619,6 +619,42 @@ describe("the reviewer", () => {
     expect(events(ws).filter((e) => e.payload.check === "review").map((e) => e.payload.verdict))
       .toEqual(["changes", "changes"]);
   });
+
+  test("the reviewer is asked to diff the epic as it was BEFORE the merge (#166)", async () => {
+    const ws = workspace(ONE_STORY);
+    const promptDir = join(ws.root, "prompts");
+    mkdirSync(promptDir, { recursive: true });
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+
+    await next(ws);
+
+    const prompt = readFileSync(join(promptDir, "reviewer-S1-1.md"), "utf8");
+    const diffLine = prompt.split("\n").find((line) => line.includes("git diff")) ?? "";
+    // A sha, not the branch name: `git diff epic/e1...story/...` is EMPTY once the
+    // story is an ancestor of the epic, which it is by the time the reviewer runs.
+    expect(diffLine).not.toContain("epic/e1...");
+    expect(diffLine).toMatch(/git diff [0-9a-f]{7,40}\.\.\./);
+
+    // And the range is non-empty in the real repo — the whole point.
+    const range = /git diff (\S+)/.exec(diffLine)?.[1] ?? "";
+    const out = execFileSync("git", ["diff", "--name-only", range], { cwd: ws.repoDir, encoding: "utf8" });
+    expect(out.trim()).not.toBe("");
+  });
+
+  /**
+   * A GUARD, not a proof: it passes before the fix as well as after. It is here
+   * because #166 moves what the prompt puts on that line from a branch name to a
+   * sha, and the reviewer's allowance is a PREFIX glob — the cheap way to catch a
+   * whole class of mistake where a diff command the reviewer cannot run reads
+   * exactly like one it can.
+   */
+  test("the sha-form diff command is still inside the reviewer's `Bash(git diff *)` allowance", () => {
+    const command = diffCommand("0123456789abcdef0123456789abcdef01234567", "story/260829-build/S1");
+    const pattern = REVIEWER_TOOLS.find((tool) => tool.startsWith("Bash("));
+    expect(pattern).toBe("Bash(git diff *)");
+    // The allowance is a prefix-glob: everything after `git diff ` is the wildcard.
+    expect(command.startsWith("git diff ")).toBe(true);
+  });
 });
 
 /**
@@ -1130,6 +1166,50 @@ describe("reading a review off the ledger", () => {
 
     expect(readReviewLedger(dir, "S1").dod.map((r) => r.command)).toEqual(["dotnet build", "dotnet test"]);
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  /**
+   * The COMPAT half of #166, and the one that matters most: every run built
+   * before `epic_base` existed has a `task.done` without one, and those runs must
+   * keep reviewing exactly the range they always did — the epic BRANCH.
+   */
+  test("a `task.done` with no `epic_base` reads as null, and null renders the branch (#166)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-ledger-"));
+    // Verbatim the shape a pre-#166 run wrote: a merged commit, no epic base.
+    const rows = [
+      { type: "task.started", payload: { story: "S1", attempt: 1 } },
+      { type: "check.passed", payload: { story: "S1", check: "dod", command: "npm run test", exit_code: 0, detail: "" } },
+      { type: "check.failed", payload: { story: "S1", check: "review", verdict: "error", detail: "claude timed out (…)" } },
+      { type: "task.done", payload: { story: "S1", status: "review", commit: "abc1234" } },
+    ];
+    writeFileSync(join(dir, "events.jsonl"), `${rows.map((r) => JSON.stringify(r)).join("\n")}\n`, "utf8");
+
+    expect(readReviewLedger(dir, "S1").epicBase).toBeNull();
+    rmSync(dir, { recursive: true, force: true });
+
+    const story: PlannedStory = {
+      story: {
+        version: 1, id: "S1", epic: "E1", title: "First story", repo: "app",
+        status: "todo", depends_on: [], touches: ["s1.txt"],
+        acceptance: ["S1 exists"], test_plan: [], evidence: [],
+      },
+      dod: { present: true, commands: ["npm run test"] },
+      text: "---\nid: S1\n---\n",
+      path: "/tmp/S1.md",
+      rel: "03-plan/stories/S1.md",
+      wave: "W1",
+    };
+    const base = {
+      runId: "260906-x", story, repoName: "app", branch: "story/S1", epicBranch: "epic/e1",
+      worktree: "/tmp/wt", conventions: "- one class per file",
+      dodResults: [{ command: "npm run test", status: "ran" as const, exitCode: 0 }],
+    };
+    // Absent, null and "" are the three ways a base can be unknown, and all three
+    // are the same prompt the renderer produced before the field existed.
+    const withoutField = buildReviewerPrompt(base);
+    expect(withoutField).toContain("git diff epic/e1...story/S1");
+    expect(buildReviewerPrompt({ ...base, diffBase: null })).toBe(withoutField);
+    expect(buildReviewerPrompt({ ...base, diffBase: "" })).toBe(withoutField);
   });
 
   test("a later real verdict clears an earlier error", () => {
