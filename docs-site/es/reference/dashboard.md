@@ -111,8 +111,20 @@ archivo.
 
 ::: info Lo que sigue estando solo en `tldrx replay`
 La página lee el ledger, pero no entero: la narrativa — los costos por intento, los agentes
-que se lanzaron, los checks, el orden en que pasaron las cosas — es trabajo de
-`tldrx replay <run>`.
+que se lanzaron, los checks — es trabajo de `tldrx replay <run>`. El **event stream** del
+detalle del run pone en un solo orden temporal las tres clases que el modelo *sí* lee (notas
+de operador, frenadas de presupuesto y stories reabiertas), y en la página misma dice que no
+es el log.
+:::
+
+::: info Lo que la página no puede mostrar, y nombra en su lugar
+El build log de una story y su fix list son archivos que escribe Build y que la página no
+lee; la cuadrícula de stories lo dice, en vez de dejar el hueco en blanco. Una celda vacía se
+lee como "aquí no pasó nada", que es justo la clase de cifra segura-y-equivocada que esta
+página existe para evitar: donde faltaría un número, la ausencia va escrita. La duración de
+una etapa es esa misma regla al revés: es una resta, solo existe cuando quedaron registrados
+los dos extremos, y cuando falta uno la página nombra cuál falta en lugar de dibujar un
+tramo.
 :::
 
 ::: info La página lee. No checa.
