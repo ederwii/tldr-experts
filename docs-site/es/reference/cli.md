@@ -62,9 +62,10 @@ tldrx approve --note "…"    # firma la compuerta; antes se vuelven a correr la
 | `tldrx run gates set <stage>:<policy> --note "…"` | La única manera sancionada de cambiar la política de compuertas después de `run new`. |
 | `tldrx questions cards` | Las preguntas ABIERTAS del run como tarjetas de decisión imprimibles: contexto, lo que los documentos ya deciden, las opciones. Solo lee. |
 | `tldrx questions lint` | Nombra cada bloque de pregunta que el parser no alcanza a ver: un `## Qn · Title` mal escrito se lee como *ausente*, así que todo lo que viene después reporta "0 preguntas abiertas" y una compuerta auto firma encima. `--fix` los reescribe a la gramática sin cambiarles una palabra. |
-| `tldrx answer <Qid> "…"` | Registra una respuesta como hecho numerado. `--supersede` revierte una. |
+| `tldrx answer <Qid> "…"` | Registra una respuesta como hecho numerado. `--supersede` revierte una. `--decided-by owner\|driver` registra quién **decidió**, que no es quien lo tecleó — opcional aquí, y su ausencia significa *not stated*, nunca *owner*. `--repo <name>` (repetible) acota el hecho; sin ella el alcance sale del propio `affects:` de la pregunta, y de nada en caso contrario. Una respuesta que contradice a un hecho vivo igual se registra, y levanta una pregunta sobre cuál vale. |
 | `tldrx interview` | Contesta en la terminal las preguntas abiertas de un run. |
 | `tldrx story reopen <id> --note "…"` | Le da a una story de Build otra tanda de intentos. `--for-fix` abre en cambio una ronda de arreglo sobre una story que ya está `done`: un defecto concreto, sin consumir intento, con el mismo DoD y el mismo revisor. |
+| `tldrx story widen <id> <path>… --note "…"` | Agrega rutas al `touches:` de una story — la forma sancionada de pasar un rechazo por límite declarado. Registra las rutas, la nota y la lista antes y después. No corre ningún agente, no gasta nada, no consume intento y no mueve el cursor. Se niega con una story `done`: reábrela antes con `--for-fix`. |
 
 ## Dinero
 

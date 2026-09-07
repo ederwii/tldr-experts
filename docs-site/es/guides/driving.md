@@ -90,6 +90,14 @@ un pipe se coma un código de salida; pregúntale al remoto por el remoto), qué
 vez de decidirse, con cuánto rigor revisar una story según lo que esté en juego, y sobre qué
 se tiene que sostener una firma.
 
+**Quien conduce registra sus propias decisiones como del driver.** Una respuesta que tú nunca
+diste no es tu decisión, y el mandato lo dice con esas palabras: `tldrx answer <Qid> "…"
+--decided-by owner` te toca teclearlo a ti, y una sesión que responda en tu nombre escribe
+`--decided-by driver` — el hecho dice entonces *driver* dondequiera que se lo cite de vuelta, y
+nunca se te atribuye a ti. La misma regla ya gobernaba a `tldrx facts add`, que exige la bandera
+de plano. Y cuando la sesión está estacionando una pregunta en vez de contestarla,
+`tldrx note <run> "…"` deja constancia del momento y no decide nada.
+
 Va versionado con el paquete, así que no se puede desviar del binario como sí se desvía un
 playbook pegado del historial de chat de alguien. No necesita workspace, no abre ningún run,
 no lanza nada y no escribe nada. `--attended` imprime el otro mandato, para cuando tú estás

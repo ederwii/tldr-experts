@@ -613,12 +613,15 @@ const ENTRIES: readonly CommandHelp[] = [
     examples: [
       'tldrx answer Q3 "Redis sorted set, one key per tenant"',
       'tldrx answer Q3 "Postgres table after all \u2014 the contention risk was refuted" --supersede',
+      'tldrx answer Q4 "B \u2014 rankings are global" --decided-by owner --repo api',
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_NOT_FOUND],
     notes: [
       "A second reversal supersedes the SECOND answer, not the first: the chain is walked to its head, so `--supersede` can be used as many times as an owner changes their mind and facts.yml stays a single-link reciprocal chain.",
       "Nothing is erased. `tldrx replay` renders the reversal as its own line (`fact.superseded`), `tldrx retro` still lists the old fact and labels it `(superseded by F<n>)`, and the words originally typed stay in questions.md.",
       "Without `--repo`, the fact is scoped by the question's own `affects:` when an entry there names a repo (`api` or `api:src/db.ts`), and by nothing otherwise \u2014 `repos: []` means \u201cno repo was named\u201d, never \u201cevery repo\u201d. An `affects:` entry that looks like `repo:path` and matches no repo is named on stdout \u2014 for every block the invocation captured, not just the one it named, each line carrying its question id. The answer-capture hook reports the same thing through the context it posts.",
+      "A recorded answer is checked against the facts already live, on both paths, and a hit RAISES \u2014 it never refuses. The answer stands, this command still exits 0, the new fact carries `conflicts_with`, one question is appended to the same questions.md asking which of the two holds, and one `fact.conflict_raised` goes on the ledger. That block is marked `advisory:`, so it does not hold an auto gate; the gate says how many it skipped, and every other reader lists it like any other open question.",
+      "What that check can and cannot see, stated because a raise you cannot calibrate is worse than none: it is LEXICAL \u2014 Jaccard \u2265 0.6 on tokens of 4 characters or more, scoring the QUESTION's title against each candidate fact's whole text, and only within the SAME `area`. So it cannot see two differently-worded answers that contradict in meaning, it drops short words entirely, and an answer identical to the recorded one is read as agreement rather than a clash. Refusing on a signal like that could deadlock an unattended run, which is why it raises instead.",
     ],
   },
   {

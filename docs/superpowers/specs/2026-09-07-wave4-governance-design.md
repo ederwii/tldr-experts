@@ -491,6 +491,14 @@ board"* — the gates passed. So:
    `## Unknowns` is also where it belongs by meaning: it already holds "this needs a human". The
    `MAX_BULLETS` cap applies; beyond it the rows are summarised with a count and the fix-list
    citation.
+
+   **Shipped differently, and deliberately (measured, 2026-09-07):** the citation is
+   `[src: <fixlist rel>:1]`, RUN-RELATIVE, not `[src: tldrx-work/<run>/<fixlist rel>:1]`. The
+   `## Unknowns` bullets already on that page cite the run-relative path (`build/handoff.ts`,
+   `` `[src: ${o.reviewRel}:1]` ``) and `pathBases` resolves a bare `file` path against the
+   workspace root first and the run directory second, so both spellings resolve — but one document
+   carrying two spellings of one citation is worse than one disagreeing with this sentence. The
+   reason is recorded beside the code, in `carriedBullets`' own docstring.
 2. **The PR body** — `shipBody` gains `carriedFindings: readonly OpenFindingRow[]` and a
    `## Carried findings` section. The rows come from the shared leaf, called by `ship.ts` with the
    `ShipStory` surface it already has (`ship.ts:890-896`, `:963`), not from a second predicate

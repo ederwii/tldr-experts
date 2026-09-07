@@ -55,6 +55,46 @@ Que falle cualquiera de ellas la regresa a la compuerta humana, diciendo cuál f
 midió. Una cita que nadie pudo comprobar no reprueba la etapa, pero sí detiene una
 compuerta auto: esa es justo la línea que una persona debería mirar.
 
+### Pasar el límite declarado: `tldrx story widen`
+
+La séptima condición es la que más vas a encontrarte. Una story terminó tocando una ruta que el
+plan nunca declaró, así que la compuerta se niega y nombra las rutas. Trabajo que nadie declaró
+suele ser el trabajo correcto — y decirlo es una decisión, con su verbo:
+
+```bash
+tldrx story widen S3 platform/Auth.cs --note "the tenancy check the story is for lives here too"
+```
+
+Agrega las rutas al `touches:` de esa story y deja registrada la enmienda —las rutas, tu nota, y
+la lista antes y después—, para que una superficie declarada nunca crezca en silencio. No corre
+ningún agente, no gasta nada, no consume ningún intento y no mueve el cursor. La compuerta no
+necesita ayuda de él: la condición de límite vuelve a leer `touches:` del disco, así que la
+siguiente evaluación del mismo run, la misma rama y el mismo diff simplemente deja de contar esa
+ruta como fuera de la superficie.
+
+Una story que ya está `done` se niega —su evidencia se escribió contra la superficie que había
+declarado— y ese es el caso común aquí, porque una compuerta de Build que se niega por el límite
+normalmente ya terminó sus stories. Reábrela primero:
+
+```bash
+tldrx story reopen S3 --for-fix --note "the tenancy check misses the Platform path"
+tldrx story widen  S3 platform/Auth.cs --note "…"
+```
+
+La tarjeta de decisión imprime los dos comandos, en ese orden.
+
+### Un hallazgo que ninguna story posee se reporta, no bloquea
+
+Un revisor puede marcar un hallazgo como *real, y no le toca arreglarlo a esta story*. Si el
+archivo que cita cae fuera de la superficie declarada de todas las stories, nadie se hizo cargo
+de él. Esa fila ahora aparece en el `## Unknowns` del handoff de Build, en el cuerpo del PR de
+`tldrx ship`, y en la tarjeta de decisión cuando la compuerta ya se estaba deteniendo por otra
+cosa — cada una con la razón por la que no se le pudo asignar dueño, que puede ser que ninguna
+story declare esa ruta, que la cita no nombre repo (y un repo nunca se adivina), o que el
+hallazgo no cite ninguna ruta. Un archivo de story que no se pudo leer también se nombra, porque
+una story sin leer se lleva sus hallazgos fuera del reporte. Nada de esto bloquea una compuerta:
+es un reporte, y es un agregado a una tarjeta que de todos modos iba a imprimirse.
+
 ## `agent` — un agente puede firmar, sobre evidencia escrita
 
 La política más fuerte, y nunca llega por omisión. Esas mismas siete condiciones, más que

@@ -512,8 +512,13 @@ because `retro.md` existed only when a human happened to type `tldrx retro`.
 ### 2.5 `.tldrx/memory/facts.yml`
 
 Durable, provenanced answers, read before any question is posed. Append-mostly: superseded or retired, never edited.
-Two writers, both going through `FactsStore` under the workspace lock: `tldrx answer` (and the `answer-capture` hook),
-which records what a question asked for, and `tldrx facts add` (§3), which records a fact no question asked for.
+Four writers, every one of them minting through `FactsStore` inside the workspace lock: `tldrx answer` (and the
+`answer-capture` hook), which records what a question asked for; that same command's `--supersede` path, which records
+a reversal; `tldrx facts add` (§3), which records a fact no question asked for; and `run new --from`'s distill
+importer, which mints the claims an intent folder already settled — `createRun` holds the lock across the whole
+creation, so the ids it writes into `fact.added` events and the ids it writes to the file are the same ids. This said
+"Two writers" until 2026-09-07. The SAFETY half was always true — every writer really does hold the lock — but a
+reader counting writers to go find them would have looked for half of them.
 
 ```yaml
 version: 1
@@ -533,11 +538,12 @@ facts:
 | `id` | `^F\d{3,6}$` | y | Immutable; cited as `[src: F019]` |
 | `fact` | str ≤2000 | y | One assertion, present tense, no hedging |
 | `truncated` | bool\|absent | n | The text is the head of a longer answer, cut at the cap. Absent means "not known to be cut" |
+| `conflicts_with` | fact id[] | n | **Additive.** The live facts this one was DETECTED to contradict when it was recorded, written only when non-empty — an empty list is refused by the validator and the key is simply absent instead. Absent means "no contradiction was detected", never "checked and agreed": the check is LEXICAL (`conflictOf` — Jaccard ≥ 0.6 on ≥4-character tokens, within the same `area`, scoring the QUESTION's title against the whole of each candidate fact) and it cannot see two differently-titled answers that disagree in meaning. Written by the `tldrx answer` path, capture and `--supersede` alike; a supersession never scores itself against the head it replaces |
 | `area` / `repos` | slug / slug[] | y | Matching key for the no-re-ask hook; scope (empty = workspace-wide) |
 | `kind` / `confidence` | `answer\|observed\|derived` / `measured\|inferred\|stated` | y | Human answer, check output or stage conclusion; evidence class |
 | `source.who` / `.when` | str / RFC3339 | y | Human id or expert slug; capture time |
 | `source.run` / `.q` | run id\|`init` / `^Q\d+$`\|null | y | Where learned; originating question |
-| `source.decided_by` | `owner\|driver` | n | **Additive.** WHO DECIDED, as against `who`, which is who typed it. A fact is exactly the artefact that gets cited later, so a row that cannot say which of the two it was says nothing rather than implying the stronger one: absent means "not stated", never "owner". Written by `tldrx facts add --decided-by`, where the flag is REQUIRED — the field stays optional so every row written before it existed keeps validating. Rendered in every `{{facts}}` block as `· decided by owner` / `· decided by driver`, appended only when present, so a fact without it reaches a prompt byte-identical to before |
+| `source.decided_by` | `owner\|driver` | n | **Additive.** WHO DECIDED, as against `who`, which is who typed it. A fact is exactly the artefact that gets cited later, so a row that cannot say which of the two it was says nothing rather than implying the stronger one: absent means "not stated", never "owner". Written by `tldrx facts add --decided-by`, where the flag is REQUIRED, and by `tldrx answer --decided-by`, where it is OPTIONAL: that path is also driven by the `answer-capture` hook, which fires on an agent's own `Write` and on a person's edit alike (§4) and so cannot honestly say which of the two answered. The field stays optional so every row written before it existed keeps validating, and `tldrx answer` prints the absence and its reason on stdout rather than leaving a reader to notice it. Rendered in every `{{facts}}` block as `· decided by owner` / `· decided by driver`, appended only when present, so a fact without it reaches a prompt byte-identical to before |
 | `supersedes` / `superseded_by` | fact id\|null | y | Single-link chain, reciprocal. Written by `tldrx answer <Qn> "…" --supersede` (§3), which walks to the head of the chain, so repeated reversal stays single-link |
 | `retired` | {at, by, reason}\|null | y | Ignored by no-re-ask, kept for replay |
 
@@ -551,7 +557,16 @@ Until 2026-08-31 every reader filtered on retirement alone, which was safe only 
 superseded and retired; ≤5000 facts (beyond that `tldrx` shards by `area`). `truncated` is optional and additive: a row
 written before it existed still validates, and only a non-boolean value is an issue. `source.decided_by` is optional
 and additive the same way, and only a value outside `owner\|driver` is an issue — absent is the honest state, not a
-defect.
+defect. `conflicts_with` is optional and additive too, and refuses exactly two shapes: something that is not an array
+of strings, and an EMPTY array — `expected at least one fact id, or the key absent`, because a row that lists no
+conflict and a row that says it has none are the same row and must be written the same way.
+
+**A detected contradiction is RAISED, never refused.** When the `tldrx answer` path finds a live fact above the
+threshold, the answer is still recorded — with `conflicts_with` on the new row — and a question is minted in the
+answered block's own `questions.md` asking which of the two holds (§2.7, `advisory:`), with one
+`fact.conflict_raised` on the ledger (§2.9). Two facts that disagree become one thing a person is ASKED, rather than
+two live rows nobody compares. Nothing is retired, nothing is superseded and no exit code changes: the check is
+lexical, so a refusal on its say-so would be the framework betting a run on a word count.
 
 **The cap was 300 until 2026-08-30.** `captureAnswers` writes a fact as `"<question> — <answer>"`, so 300 cut a real
 answer mid-clause: on the aparece run every one of six was cut, and four lost the very words — "Accepts ADR-D009 as
@@ -839,7 +854,7 @@ Why asked: Place.TenantId is nullable [src: api:src/Scavtopia.Domain/Places/Plac
 |---|---|
 | Heading | `^## (Q\d+) · (.+)$` — id then a one-sentence question |
 | Metadata comment | HTML comment, pipe-separated; keys `id status area asked_by asked_at` all required; `status` ∈ `open\|answered\|withdrawn` |
-| `affects:` (optional) | Extra metadata key; a comma- or space-separated list of run-relative documents this answer would overtake. See **Superseding an earlier phase's document** below |
+| `affects:` (optional) | Extra metadata key; a comma- or space-separated list of what this answer reaches. TWO disjoint readers, each taking only what it understands: the run-relative `.md` documents this answer would overtake (see **Superseding an earlier phase's document** below), and the workspace REPOS the recorded fact binds to — an entry that IS a declared repo name (`api`), or whose half before the first `:` is one (`api:src/db.ts`, the `repo:path` production of the §2.8 grammar). An existing line full of document paths therefore means exactly what it always meant. An unqualified path contributes no repo and raises nothing; a `repo:path` whose prefix matches no declared repo is NAMED on stdout rather than dropped, because `repos: []` written after a repo was named and got wrong is the one direction that must not be silent |
 | `advisory:` (optional) | Extra metadata key; `true` marks a question the FRAMEWORK raised rather than a stage — today only `tldrx answer`'s contradiction check (§3). The auto gate's `questions` condition does not count these blocks, and names how many it skipped; every other reader (the run close, `tldrx questions`, the decision cards, `tldrx replay`) lists them like any other open question. Absent means "not advisory" — a block written before the key existed counts exactly as it always did |
 | `Why asked:` line | Required; must end with a `[src: …]` token (§2.8) — proves the gap is real |
 | Options | 2–5 bullets `- X) text`, letters A–E in order; the last may be free text |
@@ -850,9 +865,21 @@ Why asked: Place.TenantId is nullable [src: api:src/Scavtopia.Domain/Places/Plac
 `^\[Answer\]:[ \t]*(\S.*)$` inside it has a non-empty capture. The hook flips `status: answered` and appends the footer,
 a `facts.yml` entry (`kind: answer`, `source.q: Q4`) and a `question.answered` event, storing the text verbatim.
 
-**A question declares no default and no timeout (gh #141).** The metadata keys are the six in the table above plus
-the optional `affects:` — there is no `default:`, no `timeout:` and no `expires:`, and nothing in the framework ages an
-open question into an answer. The one thing called a default is `tldrx interview --yes-to-defaults` (§3), which an
+**A block the framework raised: the detected contradiction (#169).** When `tldrx answer` records an answer that
+lexically contradicts a live fact (§2.5), it appends one block to the very `questions.md` the answered block lives in
+— never a new file, and never through the whole-file renderer, whose ids restart at `Q1`. It is an ordinary §2.7
+block in every respect but two: `asked_by` is `tldrx`, because the operator answered a question and did not ask this
+one, and the metadata carries `advisory: true`. Its id is minted across the WHOLE run rather than the file, because
+`tldrx answer` resolves an id by scanning every phase and taking the first hit, so a duplicate id across two files
+makes one block unanswerable. Its title is `Which is right about <area>: <new fact> or <old fact>?`, its `Why asked:`
+quotes the older fact on ONE line and cites it as `[src: F<n>]`, and its three options are: supersede the old fact,
+supersede the new one, or write a correction. The score in that sentence compares the answered question's TITLE with
+the older fact's WHOLE TEXT, and the sentence says so, because a fact is written as `"<title> — <answer>"` and the
+number therefore reads `1.00` in the ordinary case.
+
+**A question declares no default and no timeout (gh #141).** The metadata comment requires exactly `id status area
+asked_by asked_at`, and the only optional keys anything reads are `affects:` and `advisory:` — there is no `default:`,
+no `timeout:` and no `expires:`, and nothing in the framework ages an open question into an answer. The one thing called a default is `tldrx interview --yes-to-defaults` (§3), which an
 operator invokes by hand, takes option **A** of whatever is open at that moment, and is labelled `[assumption]` in the
 code that implements it. **Measured, and the reason this paragraph exists:** the driver of `260830-money-and-payments`
 reported at close that a question "never got an answer and never fired its default" — on a money path. There was no
@@ -1008,6 +1035,29 @@ closed its own auto gate and advanced the cursor (measured probe, 2026-08-29).
 (`- Retention period for historical rankings [src: absent:…]`) reads as a positive noun phrase and means "we do not
 know it".
 
+**`## Unknowns` also carries what no story owns (#171).** In the Build handoff the section holds four kinds of bullet,
+each one cited like every other bullet in the four sections:
+
+- a scheduled story that did not reach `done`, citing its review log;
+- **a carried finding no story could be shown to own** — a reviewer finding dispositioned `defer-with-log` that no
+  evidenced commit closed, and that no story's declared surface could be shown to cover. Three reasons, and the bullet
+  carries the one that applies rather than asserting a cause: no story declares that path in the repo the citation
+  names; the citation names no repo, and a repo is not guessed at; or `where:` carries no `[src: …]` path at all, so
+  there is nothing to check a surface against. One bullet each, with the severity, citing the fix list it came from;
+- when there are more of those than the cap of 25, ONE closing bullet naming how many were not listed and pointing at
+  the fix list — the rows are never dropped, only the listing is bounded;
+- a story file the walk could not READ, named with why and cited `[src: absent:<rel>]`, because an unread story takes
+  its fix list's findings out of this report with it and a silent omission there is the dangerous direction.
+
+The `none` sentence answers for all four: it is written only when every one of those lists is empty, since a document
+saying "nothing here needs a human" while listing a finding nobody owns would be worse than one that said neither.
+
+**And it is not a fifth section, deliberately.** `validateSections` iterates only the sections named in the required
+list and `continue`s past every other heading (`text/handoff.ts:403-404`), so a `## Carried findings` H2 in a handoff
+would be the one part of the document whose claims nothing checks — no `[src: …]` requirement, no resolution, no
+count. The four-section list is the contract; a report that wants to be validated goes inside it. The `ship` PR body,
+which no validator reads, does carry its own `## Carried findings` section (§3) for exactly the opposite reason.
+
 #### `absent:` — one semantic, both checkers
 
 `absent:<path>[#<needle>]` means **"I looked HERE, and it is not there."** It is resolved the same way everywhere, and
@@ -1086,10 +1136,20 @@ Append-only audit log: the cost ledger, the `replay`/`retro` input, and — with
 
 **Type enum:** `run.created` `run.closed` `run.unlocked` `run.cancelled` `run.attended` `phase.started` `phase.done` `stage.started` `stage.done` `stage.failed`
 `stage.skipped` `task.started` `task.done` `agent.spawned` `agent.result` `question.asked` `question.answered`
-`gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `story.reopened` `story.base_fastforwarded` `story.review_retried` `story.work_rescued`
-`check.passed` `check.failed` `budget.warned`
-`budget.blocked` `budget.raised` `fact.added` `fact.retired` `fact.superseded` `doc.superseded` `map.refreshed` `ticket.synced` `error`. Closed set: an
+`gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `gate.policy_changed` `story.reopened` `story.base_fastforwarded` `story.review_retried` `story.work_rescued`
+`story.touches_widened` `result.unreadable` `operator_note` `check.passed` `check.failed` `budget.warned`
+`budget.blocked` `budget.raised` `fact.added` `fact.retired` `fact.superseded` `fact.conflict_raised` `doc.superseded` `map.refreshed` `ticket.synced` `error`. Closed set: an
 unknown type is a validation error.
+
+**This list is the enum, and a test says so.** It is `EVENT_TYPES` (`src/core/events/Event.ts`), in that order, and
+`test/spec-event-enum.test.ts` compares the two on every run — because a name missing here is a line a conforming
+reader was told could never arrive. It had drifted: on 2026-09-07 five names the code writes were absent from this
+paragraph, three of them (`gate.policy_changed`, `result.unreadable`, `operator_note`) described in this document's own
+prose elsewhere while the paragraph claiming to be closed did not carry them. The closure is enforced on the WRITE
+path only — `validateEvent` runs `requireEnum` and `EventLog.append` refuses the line, so an unknown type never
+reaches the file. Readers stay tolerant by design (see **Reading is tolerant** below): a reader older than an event
+type renders nothing for it rather than refusing the file, which is why the enum is a promise the writer keeps and
+not a check the reader repeats.
 
 **`gate.revoked` and `budget.raised` were added 2026-08-29.** Both name a moment the log could not previously describe.
 `gate.revoked` is `tldrx reject --stage <phase>/<stage>` taking an approval back (§5, "Revoking an approval"); its
@@ -1155,6 +1215,25 @@ price). Still costs the attempt, unchanged: a verdict's CONTENT, a red DoD, a se
 bound, a reviewer that never answered — and **any refusal the format index does not claim.** That last one is the
 guard: the free round is granted only when every reason the envelope was refused is indexed as form
 (`isFormatRejection`), so a future refusal about the WORK costs the attempt until somebody deliberately says otherwise.
+
+**`story.touches_widened` was added 2026-09-07 (#171).** It is `tldrx story widen <id> <path>… --note "…"` — a
+person declaring that ONE Build story's surface grew (§3, §2.13). Its payload carries `story`, `paths` (what this
+widening ADDED), `note`, and `before` and `after` — the whole `touches:` list at each end, because a reader asking
+"what surface was this story approved over" must not have to replay every widening in order to find out. `stage` on
+the envelope is `null` and `cost_usd` is `0`: the operator acted outside a stage run, and the verb runs no agent,
+consumes no attempt and moves no cursor. It is the ONLY record that a `touches:` list changed — §2.13 gains no key
+saying a story was amended — and it is written only when the file was really patched: every refusal writes nothing at
+all, this event included, and the event is validated BEFORE the story file is touched so a payload that would not
+validate cannot leave a widened story behind it.
+
+**`fact.conflict_raised` was added 2026-09-07 (#169).** The `tldrx answer` path runs the lexical duplicate check
+against the live facts before it appends (§2.5), and a hit RAISES rather than refuses: the answer is recorded, the
+command exits `0`, and a §2.7 question is minted asking which of the two holds. Its payload carries `fact` (the fact
+just recorded), `conflicts_with` (the live fact it was detected to contradict), `score` (the Jaccard), `q` (the
+question ANSWERED) and `raised` (the question this MINTED). Both ids, because they are different questions: a log
+carrying only the first cannot answer "which question did this raise", and a narrative that assumed they were the same
+told a reader the raise had gone nowhere. `stage` is `null` and `cost_usd` is `0` — nothing was spawned and nothing
+was spent.
 
 **A `check: "dod"` result carries `exit_code` OR `refused` — never both, and never a fabricated code (2026-09-06,
 #165).** Both `check.passed` and `check.failed` for a Definition-of-Done command carry `phase`, `check: "dod"`,
@@ -1444,6 +1523,18 @@ Filled by Build, one bullet per proof. [src: $ npm run test → exit 0]
 | `evidence` | str[] (≤64) | y | Filled by Build. **Required non-empty when `status: done`** — done means proven, not asserted. May cite `04-build/fixlist/<id>-<n>.md` beside the review log when the story went through a fix-list round |
 | ` ```dod ` block | fenced, ≥1 command | y | Each line must equal a `workspace.yml` command **verbatim**; `dod-gate` re-runs all of them from `repo` and every one must exit `0`. A command the gate REFUSES — not byte-equal to a declared one, or needing a shell — never runs, so it can never be green: it is recorded as REFUSED with the gate's own sentence and **no exit code at all**, in the event, the handoff, the review log and the retro alike (§2.8, §2.9). Editing `workspace.yml` therefore orphans every approved story that cited the old string — `tldrx plan sync-dod` is the mechanical repair, and the drift message names it. A `test_fast:` command is the one declared command a dod block may **not** name: it is the developer's iteration instrument, not the proof of a story, and the refusal names the slot so the reader is not sent looking for a command that is plainly in `workspace.yml` (§2.1). |
 
+**`touches:` may be AMENDED, and only by `tldrx story widen` (#171).** A story that turns out to have to change a path
+nobody scoped is the commonest way a Build stage meets auto-gate condition 7, and the only remedy the decision card
+used to name was a hand edit of this file — which §1 forbids. The verb (§3) appends paths to the list and nothing
+else: the status, `acceptance`, `test_plan`, `evidence`, the prose and the ` ```dod ` block come back byte-identical,
+and the entries already on disk are written back exactly as their author wrote them. **No key is added to this
+schema**: `touches` was already required, non-empty and capped at 128, so a widening changes a VALUE and every pin on
+the shape stays as it was. The RECORD of the amendment lives in the ledger instead — one `story.touches_widened`
+carrying the paths, the note and the list before and after (§2.9) — because a surface that grew with nothing in the
+log is a plan claiming to have declared something it did not. A `done` story is refused: its `evidence` was written
+against the surface it DECLARED, and widening it afterwards would make this document say the plan declared a path it
+did not. `tldrx story reopen <id> --for-fix` is what answers that, and the refusal says so.
+
 **Validation.** Front matter present and parseable; keys and enums as above; `id` matches the file name; `depends_on`
 free of self-reference and duplicates; every ` ```dod ` command in `workspace.yml` (skipped when there are no commands to
 check against, same `[assumption]` as a `cmd` source). `[assumption]` — the wave brief names the five story states and
@@ -1713,12 +1804,13 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx run estimate [<run>] [--json]` | everything `next --prepare` reads, plus every run's `events.jsonl` for cache-write / cache-read / output history | nothing (stdout) | 0,1,3 |
 | `tldrx run gates set <stage>:<human\|auto\|agent> --note <text> [<run>]` | `run.yml` | `run.yml`'s §2.2 `gates_policy` and `events.jsonl` (`gate.policy_changed`, carrying actor, moment, note and old→new). The ONLY sanctioned way to move a frozen `gates_policy`; `run.yml` stays hand-edit-forbidden (§1). ONE `<stage>:<policy>` per invocation — a comma list is refused, and the entry must name its policy outright, since under `--gates` a bare stage means `human` and a signature must not rest on a default. An empty or missing `--note` is refused, as is a no-op (`human` → `human`). A run whose `run.yml` has no `gates_policy` at all gets the FULL map written, every stage explicit, with the one change applied. Gates already signed are untouched | 0,1,2,3 |
 | `tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <l>] [--parallel <n>] [--gate-agent] [--yolo]` | everything `next` reads, once per stage | everything `next` writes. Refused with **exit 1** on a run marked `attended_by: host`, before the event log is opened so nothing is written: this loop's whole job is calling `next` headless, and on such a run that is a refusal. `--gate-agent` is RENDERING ONLY (§5, "Decision cards"): when the loop stops for a person at exit 4 it prints a decision card in place of the ordinary stop block, and it never upgrades a stage's frozen `gates_policy` | 0,1,2,3,4,5 |
-| `tldrx answer <Qid> <text> [--supersede] [--run <id>]` | `questions.md`, `facts.yml` | `questions.md`, `facts.yml`, `events.jsonl`. `--supersede` is the only writer of `superseded_by`: valid only on an **answered** question, it appends a fact carrying the new answer, sets the old fact's `superseded_by`, appends a superseding `[Answer …]:` line plus a footer to the block, and appends `fact.added` + `fact.superseded`. Without it an answered question is refused (3); with it an **open** one is refused (1). **Both paths** then stamp the earlier-phase documents the block names and append `doc.superseded` (§2.7, *Superseding an earlier phase's document*) | 0,1,2,3 |
+| `tldrx answer <Qid> <text> [--supersede] [--decided-by <owner\|driver>] [--repo <name>]… [--run <id>]` | `questions.md`, `facts.yml`, `workspace.yml` (for the declared repo names) | `questions.md`, `facts.yml`, `events.jsonl`. `--supersede` is the only writer of `superseded_by`: valid only on an **answered** question, it appends a fact carrying the new answer, sets the old fact's `superseded_by`, appends a superseding `[Answer …]:` line plus a footer to the block, and appends `fact.added` + `fact.superseded`. Without it an answered question is refused (3); with it an **open** one is refused (1). **Both paths** then stamp the earlier-phase documents the block names and append `doc.superseded` (§2.7, *Superseding an earlier phase's document*). `--decided-by` records §2.5's `source.decided_by` and is OPTIONAL here (`facts add` requires it — this path is also the `answer-capture` hook's, which cannot say who answered); absent means "not stated", and stdout says so with the reason. `--repo` is repeatable and scopes the fact's `repos`; without it the scope comes from the question's own `affects:` (§2.7), and from nothing otherwise. Both flags apply to the question the invocation NAMED and to no other block the same call sweeps. New refusals, both **1** and both before anything is written: a `--decided-by` outside `owner\|driver`, and a `--repo` no `workspace.yml` repo answers to. A detected contradiction (§2.5) is RAISED, never refused: one extra §2.7 block, one `fact.conflict_raised`, exit unchanged | 0,1,2,3 |
 | `tldrx facts add "<text>" --area <id> --decided-by <owner\|driver> [--kind <k>] [--confidence <c>] [--repo <r>] [--run <id>]` | `facts.yml`; the open runs, only to establish which one to attribute the fact to | `facts.yml` (one appended row, through `FactsStore` under the workspace lock — load, mint the id, cap, validate, save) and, when a run was established, that run's `events.jsonl` (`fact.added`). The direct writer beside `answer`, for a fact no question asked for. `--area` and `--decided-by` are both REQUIRED: without an area no `{{facts}}` block or no-re-ask hook can scope a match, and without a decider a row that gets cited later cannot say which of the two it was. Over the §2.5 cap the text is cut, marked `truncated: true`, and the cut is named on stdout — a marker only a later reader sees is one the author never acts on. The run is provenance and is ABSENT WITH A REASON when it cannot be established: one open run is used, several are never guessed between, and either way the row is written and stdout says which happened. `--run <id>` naming a run that does not exist is REFUSED (exit 3) before the store is opened — `RunStore.resolve` answers `none` both to “no run is open” and to “that id is not here”, and writing the second as the first attributed the fact to nothing while telling the operator there was nothing to attribute it to | 0,1,3 |
 | `tldrx interview [--run <id>\|--init] [--yes-to-defaults]` | the cursor phase's `questions.md` (or `.tldrx/init-questions.md`), `run.yml`, `.tldrx/process.yml`, `workspace.yml`, `git remote get-url origin` | the same three files `answer` writes, one per answer recorded; with `--init`, also `.tldrx/process.yml` (§2.12) when a process answer settles `methodology` or `ticket_tool.kind` | 0,1,2,3 |
 | `tldrx approve [--run <id>] [--note] [--as-agent] [--evidence <path>]` | `run.yml`, stage outputs, stage checks; with `--as-agent` also `.agent/<stage>/evidence.md` (§2.17) | `run.yml` gate, `events.jsonl`; with `--as-agent` also `<phase>/gate-evidence/<stage>.md` and `gate.evidence`. `--as-agent` is refused (1) unless the stage's policy is `agent`; `--evidence` without `--as-agent` is refused (1) — a note nobody signs with is not evidence for anything; a broken note is 2, a note whose verdict is not `sign` is 4, and nothing is signed in either case | 0,1,2,3,4 |
 | `tldrx gate template [--run <id>] [--force]` | `run.yml`, the cursor stage's declared outputs, `03-plan/stories/<id>.md` or `04-build/implicit-plan.yml` | `.agent/<stage>/evidence.md` (§2.17). Nothing else: no gate, no cursor, no event, no cost. An existing note is left alone (exit 2) unless `--force` | 0,1,2,3 |
 | `tldrx reject [--run <id>] --note <text> [--stage <phase>/<stage>]` | `run.yml` | `run.yml` gate, `events.jsonl`, stage status ⇒ `ready`. With `--stage` it REVOKES an approval already given (§5): `gate.revoked`, the cursor moves back, later stages that had run are marked `stale: true`, nothing is deleted. `--stage` may target a FINISHED run | 0,2,3 |
+| `tldrx story widen <id> <path>… --note <text> [--run <id>]` | `03-plan/waves.yml` + `03-plan/stories/<id>.md` (or `04-build/implicit-plan.yml`), `.tldrx/workspace.yml` | that story's `touches:` — the named paths APPENDED, the entries already there written back verbatim — and `events.jsonl` (`story.touches_widened`, carrying the paths, the note and the list before and after). Nothing else: no agent, no cost, no attempt consumed, no status change, no cursor moved, and no line of the story but `touches:`. The boundary gate needs no change — it re-reads `touches:` off disk, so the next evaluation simply stops counting the widened path as outside the declared surface. Widenable states are `todo`, `in_progress`, `review` and `blocked`. Refuses (**2**), writing nothing: a `done` story (the refusal names `reopen --for-fix`, because that story's evidence was written against the surface it declared), an unknown story id, a run with no plan at all, a story file not on disk, an unreadable `touches:`, a missing or empty `--note`, no path at all, a `..` segment in a path, a path named twice in one invocation, a path the story ALREADY declares, a widening that would take it past the 128-path cap, and an event that does not validate. An unknown `--run` is **3** | 0,1,2,3 |
 | `tldrx story reopen <id> [--run <id>] --note <text> [--for-fix]` | `03-plan/waves.yml` + `03-plan/stories/<id>.md` (or `04-build/implicit-plan.yml`), `events.jsonl` | that story file's `status:` ⇒ `todo`, `events.jsonl` (`story.reopened`). Nothing else: no agent, no cost, no stage moved, no worktree or branch touched, and no line of the story but `status:`. Refuses (2) an unknown story id, a `done` story (that is `reject --stage`, or `--for-fix`), a `todo` story, and a missing `--note`. With `--for-fix` it opens a FIX ROUND on a `done` story instead (`reason: fix`, no attempt consumed, same DoD + reviewer), refusing (2) a story that is NOT done, a missing `--note`, and a story that already has a fix round open | 0,1,2,3 |
 | `tldrx questions lint [--run <id>] [--fix] [--area <a>]` | every `<phase>/questions.md` in the run | nothing, or those files rewritten to the §2.7 grammar with `--fix` (no wording changed) | 0,2,3 |
 | `tldrx questions cards [<run>] [--run <id>]` | every `<phase>/questions.md` in the run | **nothing** (stdout cards). One printable decision card per OPEN question: two lines of context, the block's own `Why asked:` note verbatim with its `[src: …]` — flagged when it cites nothing, and named as absent when there is no note — and the block's lettered options, or a `NEEDS OPTIONS` marker when it has none, since manufacturing them would answer the question in the act of asking it. Answers still flow through `tldrx answer`, whose command every card prints. No open question is a sentence and an exit 0 | 0,1,3 |

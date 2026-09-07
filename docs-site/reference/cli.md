@@ -61,9 +61,10 @@ tldrx approve --note "…"    # sign the gate; the checks are re-run first
 | `tldrx run gates set <stage>:<policy> --note "…"` | The only sanctioned way to change gate policy after `run new`. |
 | `tldrx questions cards` | The run's OPEN questions as printable decision cards — context, what the docs already decide, the options. Reads only. |
 | `tldrx questions lint` | Name every question block the parser cannot see — a missed `## Qn · Title` reads as *absent*, so everything downstream reports "0 open questions" and an auto gate signs over them. `--fix` rewrites them into the grammar without changing a word. |
-| `tldrx answer <Qid> "…"` | Record an answer as a numbered fact. `--supersede` reverses one. |
+| `tldrx answer <Qid> "…"` | Record an answer as a numbered fact. `--supersede` reverses one. `--decided-by owner\|driver` records who **decided** it, as against who typed it — optional here, and absent means *not stated*, never *owner*. `--repo <name>` (repeatable) scopes the fact; without it the scope comes from the question's own `affects:`, and from nothing otherwise. An answer that contradicts a live fact is still recorded, and raises a question asking which holds. |
 | `tldrx interview` | Answer a run's open questions in the terminal. |
 | `tldrx story reopen <id> --note "…"` | Give one build story another run of attempts. `--for-fix` opens a fix round on a story already `done` — one named defect, no attempt consumed, same DoD and same reviewer. |
+| `tldrx story widen <id> <path>… --note "…"` | Add paths to a story's `touches:` — the sanctioned way past a boundary refusal. Records the paths, the note and the list before and after. Runs no agent, spends nothing, consumes no attempt, moves no cursor. Refuses a `done` story: reopen it with `--for-fix` first. |
 
 ## Money
 

@@ -84,6 +84,14 @@ the evidence discipline (label every claim *measured* / *inferred* / *assumed*; 
 pipe eat an exit code; ask the remote about the remote), what to park rather than decide,
 how hard to review a story given its stakes, and what a signature has to rest on.
 
+**A driver records its own decisions as the driver's.** An answer you never gave is not your
+decision, and the mandate says so in those words: `tldrx answer <Qid> "…" --decided-by owner`
+is yours to type, and a driver that answers on your behalf writes `--decided-by driver` — the
+fact then says *driver* wherever it is quoted back, and it is never cited to you as yours. The
+same rule already governed `tldrx facts add`, which requires the flag outright. Where the
+driver is parking a question rather than answering it, `tldrx note <run> "…"` records the
+moment and decides nothing.
+
 It is versioned with the package, so it cannot drift from the binary the way a playbook
 pasted out of someone's chat history does. It needs no workspace, opens no run, spawns
 nothing and writes nothing. `--attended` prints the other mandate, for when you are at the

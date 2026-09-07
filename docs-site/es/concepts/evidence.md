@@ -84,6 +84,46 @@ Dos reglas chicas que vale la pena conocer, las dos salidas de rechazos reales:
   nunca como una frase en prosa. "No hay incógnitas que alcancemos a ver" es justamente la
   afirmación que más necesita una fuente.
 
+## Una decisión dice quién la tomó, o dice que no lo dice
+
+Una respuesta que registras es un hecho, y un hecho es justo lo que se le cita de vuelta a
+cada etapa posterior. Por eso lleva quién **decidió**, que no es lo mismo que quién lo tecleó.
+
+```bash
+tldrx answer Q4 "B — rankings are global" --decided-by owner --repo api
+```
+
+`--decided-by owner|driver` es opcional en `answer` y obligatorio en `tldrx facts add`, y la
+diferencia es honesta antes que prolija: el mismo camino de código también lo maneja el hook de
+captura de respuestas, que se dispara con la edición de un agente igual que con la tuya, así
+que no puede decir cuál de los dos contestó. Cuando nadie lo dijo, el hecho dice **not stated**
+—nunca *owner*— y el comando lo imprime en stdout en lugar de dejar que lo descubras después.
+Cada cierre del run, y el encabezado del handoff de Build, dicen después cuántas de las
+decisiones del run nombran a quien decidió y cuántas no.
+
+`--repo` acota el hecho, para que una decisión sobre un repo deje de aparecer en los prompts de
+los demás. Sin la bandera, el alcance sale del propio `affects:` de la pregunta cuando alguna
+entrada nombra un repo, y de nada en caso contrario: un alcance vacío significa *no se nombró
+ningún repo*, nunca *todos los repos*. Un `--repo` que tu `workspace.yml` no declara se rechaza
+antes de escribir nada.
+
+## Una contradicción se vuelve una pregunta, no dos hechos vivos
+
+Cuando una respuesta contradice léxicamente a un hecho ya registrado, la respuesta igual queda
+registrada — y tldrx levanta una pregunta sobre cuál de los dos vale, en el mismo archivo donde
+acabas de responder, con las opciones *reemplazar el viejo*, *reemplazar el nuevo* o *escribir
+la corrección*. El hecho nuevo además lleva `conflicts_with`, así que un prompt que lo cite lo
+dice.
+
+Levanta la pregunta; nunca rechaza. La comprobación es léxica —la misma regla de solapamiento
+de palabras que usa el hook de no-volver-a-preguntar— así que puede no ver dos respuestas
+redactadas distinto que sí se contradicen, y puede saltar con dos que no. Rechazar por eso
+dejaría que un conteo de palabras trabe un run sin nadie mirando. Por la misma razón la pregunta
+levantada queda marcada `advisory:` y no detiene una [compuerta auto](/es/concepts/gates): la
+compuerta dice cuántas se saltó, y todos los demás lectores listan la pregunta igual que a
+cualquier otra. No se retira nada, no se reconcilia nada, y la ausencia de `conflicts_with` en
+un hecho significa *no se detectó contradicción* — nunca *se comparó y coinciden*.
+
 ## La misma regla aplica al dinero
 
 Cada dólar que imprime `tldrx cost` lo reportó el proveedor del modelo y se leyó de un

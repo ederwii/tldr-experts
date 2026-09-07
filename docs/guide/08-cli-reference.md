@@ -305,6 +305,14 @@ nothing was going to answer them: a §2.7 question declares no default and no ti
 `tldrx interview --yes-to-defaults` is invoked by hand. It is a report: no exit code changes and
 no close is refused. A run is allowed to end with a question open; it may not do it quietly.
 
+**And every close says who decided (#169).** The same three closes print one more line: how many
+decisions this run recorded, split into owner, driver and not stated — `3 decision(s) recorded on
+this run: 2 owner, 0 driver, 1 not stated.` A run that recorded none prints nothing rather than a
+confident zero, and the sentence ends by saying what the third number means: a row with no
+decider says "not stated", and is never read as the owner's. The Build handoff's header carries
+the same sentence, after the cost clause. It is a count over `.tldrx/memory/facts.yml`, so it is
+a report and changes nothing.
+
 **`attend`** flips that on a run that is already open. `tldrx run attend host` hands the run
 to a host session; `tldrx run attend --none` hands it back. It runs no agent, spends nothing,
 moves no stage and touches no branch — it sets one field and appends one `run.attended` event.
@@ -786,12 +794,23 @@ knows about it**: the boundary condition re-reads `touches:` off disk at evaluat
 the same run, the same branch and the same diff simply stop counting the widened path as
 outside the declared surface at the next evaluation.
 
-Widenable states are `todo`, `in_progress`, `review` and `blocked`. Refuses (`2`) a `done`
+Widenable states are `todo`, `in_progress`, `review` and `blocked`. It refuses (`2`) a `done`
 story — its evidence was written against the surface it declared, and widening it afterwards
-would make the record say the plan declared a path it did not, so the refusal names
-`reopen --for-fix` — an unknown story id, a missing `--note`, no path at all, a `..` in a
-path, a path the story **already** declares, and a widening that would take the story over
-the 128-path cap. Nothing is written on any of them. An unknown `--run` is `3`.
+would make the record say the plan declared a path it did not. That is the commonest case,
+because a Build auto gate that refuses on the boundary condition leaves its stories `done`, so
+the order is:
+
+```
+tldrx story reopen S3 --for-fix --note "the tenancy check misses the Platform path"
+tldrx story widen  S3 platform/Auth.cs --note "the tenancy check the story is for lives here too"
+```
+
+It also refuses (`2`) an unknown story id, a run with no plan at all, a story file not on disk,
+a `touches:` it cannot read, a missing `--note`, no path at all, a `..` in a path, a path named
+twice in one invocation, a path the story **already** declares, and a widening that would take
+the story over the 128-path cap. Nothing is written on any of them — the event is validated
+before the file is touched, so a refusal cannot leave a widened story behind it. An unknown
+`--run` is `3`.
 
 ## `tldrx plan`
 
@@ -1223,6 +1242,16 @@ split; the reviewer findings still open, read from the run's fix lists; and the 
 handoff the run has on disk — `04-build/handoff.md` on a run that built something — verbatim
 and complete, inside a `<details>` block. It is handed to `gh` as a file, never as an argument,
 so a long body cannot overflow an argv limit.
+
+**And it names what nobody was given.** Beside `## Open findings` — the reviewer findings still
+dispositioned `fix-now` with no resolution commit behind them — the body carries
+`## Carried findings` when there are any: findings this run deliberately did NOT fix
+(`defer-with-log`) that no story's declared surface could be shown to cover, each row saying why
+it could not be attributed, plus any story file the walk could not read. The section is left out
+entirely when there is nothing to say, because an empty section under that heading would read as
+"checked, and found none" — a different claim. `ship` applies no predicate of its own here: it
+calls the same derivation the Build handoff's `## Unknowns` calls, so the PR and the handoff
+cannot hold two opinions about what "carried" or "unowned" means.
 
 When the branch exists in SEVERAL repos — the normal shape of a chained multi-repo run, whose
 epics share one integration branch — it opens one PR per repo: the same body,

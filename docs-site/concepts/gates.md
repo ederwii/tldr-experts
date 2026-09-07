@@ -51,6 +51,44 @@ Any one of them failing falls back to the human gate and says which one, and wha
 measured. A citation that nothing could check does not fail the stage, but it does stop an
 auto gate — that is exactly the line a person should look at.
 
+### Getting past the boundary: `tldrx story widen`
+
+The seventh condition is the one you will meet most. A story had to change a path the plan
+never scoped, so the gate refuses and names the paths. Work nobody scoped is often the right
+work — and saying so is a decision, with a verb:
+
+```bash
+tldrx story widen S3 platform/Auth.cs --note "the tenancy check the story is for lives here too"
+```
+
+It adds the paths to that story's `touches:` and records the amendment — the paths, your note,
+and the list before and after — so a declared surface never grows silently. It runs no agent,
+spends nothing, consumes no attempt and moves no cursor. The gate needs no help from it: the
+boundary condition re-reads `touches:` off disk, so the next evaluation of the same run, the
+same branch and the same diff simply stops counting that path as outside the surface.
+
+A story that is already `done` refuses — its evidence was written against the surface it
+declared — and that is the common case here, because a Build gate that refuses on the boundary
+has usually finished its stories. Reopen it first:
+
+```bash
+tldrx story reopen S3 --for-fix --note "the tenancy check misses the Platform path"
+tldrx story widen  S3 platform/Auth.cs --note "…"
+```
+
+The decision card prints both commands, in that order.
+
+### A finding no story owns is reported, not blocking
+
+A reviewer may mark a finding *real, and not this story's to fix*. If the file it cites falls
+outside every story's declared surface, nobody has been handed it. That row is now named in the
+Build handoff's `## Unknowns`, in the `tldrx ship` PR body, and on the decision card when the
+gate was already stopping for something else — each with the reason it could not be attributed,
+which may be that no story declares that path, that the citation names no repo (and a repo is
+never guessed at), or that the finding cites no path at all. A story file that could not be read
+is named too, because an unread story takes its findings out of the report with it. None of it
+blocks a gate: it is a report, and it is an addition to a card that was going to print anyway.
+
 ## `agent` — an agent may sign, over written evidence
 
 The strongest policy, and it never arrives by default. Those same seven conditions, plus
