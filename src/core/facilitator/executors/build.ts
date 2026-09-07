@@ -1823,6 +1823,7 @@ class BuildSession {
       // through to `recordReview` exactly as it always did.
       const again = this.formatRetry(story, review, {
         costUsd: turn, sessionId: agent.sessionId, metered: agent.metered,
+        inputTokens: agent.usage.input_tokens, outputTokens: agent.usage.output_tokens,
       });
       if (again !== null) {
         refusal = again;
@@ -1835,6 +1836,8 @@ class BuildSession {
         sessionId: agent.sessionId,
         error: agent.error,
         metered: agent.metered,
+        inputTokens: agent.usage.input_tokens,
+        outputTokens: agent.usage.output_tokens,
         source: "agent",
       });
       // The story's recorded cost is every turn this review took, not just the
@@ -1853,19 +1856,15 @@ class BuildSession {
   private formatRetry(
     story: StoryContext,
     review: Review,
-    // KNOWN LIMITATION: this narrows the reviewer's `AgentOutcome` before it
-    // reaches `this.tasks.push` (same as `recordReview` below), so a reviewer
-    // turn's `agent.usage` never becomes a run.yml row's `input_tokens` /
-    // `output_tokens` — only the developer and Watch paths carry the split.
-    // Widening this struct (and `recordReview`'s) to thread it through is a
-    // `build.ts` change of a different size than this field's own task; filed
-    // as a follow-up rather than done here (AGENTS.md §1, §12).
     task: {
       costUsd: number;
       sessionId: string | null;
       /** False ⇒ the turn was billed to the host session, as in `recordReview`. */
       metered: boolean;
       tokens?: number;
+      /** The provider's own split for this turn, when it reported one. */
+      inputTokens?: number;
+      outputTokens?: number;
     },
   ): string | null {
     const id = story.planned.story.id;
@@ -1880,6 +1879,8 @@ class BuildSession {
       outputs: [],
       ...(task.metered ? {} : { metered: false }),
       ...(task.tokens === undefined ? {} : { tokens: task.tokens }),
+      inputTokens: task.inputTokens,
+      outputTokens: task.outputTokens,
     });
     this.ctx.emit("story.review_retried", {
       phase: this.ctx.phaseId,
@@ -1976,7 +1977,6 @@ class BuildSession {
   private recordReview(
     story: StoryContext,
     review: Review,
-    // KNOWN LIMITATION: same narrowing as `formatRetry`'s `task` param — see that comment.
     task: {
       costUsd: number;
       sessionId: string | null;
@@ -1984,6 +1984,9 @@ class BuildSession {
       /** False ⇒ the turn was billed to the host session; `run.yml` records no dollars. */
       metered: boolean;
       tokens?: number;
+      /** The provider's own split for this turn, when it reported one. */
+      inputTokens?: number;
+      outputTokens?: number;
       source: "agent" | "host";
     },
   ): void {
@@ -1996,6 +1999,8 @@ class BuildSession {
       outputs: [],
       ...(task.metered ? {} : { metered: false }),
       ...(task.tokens === undefined ? {} : { tokens: task.tokens }),
+      inputTokens: task.inputTokens,
+      outputTokens: task.outputTokens,
     });
     const id = story.planned.story.id;
     // The requeue counter counts VERDICTS THAT COST AN ATTEMPT — two of the five

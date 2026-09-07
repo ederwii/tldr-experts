@@ -615,6 +615,33 @@ describe("the reviewer", () => {
 });
 
 /**
+ * `formatRetry` and `recordReview` used to narrow the reviewer's `AgentOutcome`
+ * before it reached `this.tasks.push`, so a spawned reviewer's `agent.usage`
+ * never became a run.yml row's `input_tokens`/`output_tokens` — only the
+ * developer and Watch paths carried the split (gh #173).
+ */
+describe("a spawned reviewer's task row carries its token split (#173)", () => {
+  test("a spawned reviewer's row carries the provider's token split, like the developer's", async () => {
+    const ws = workspace(ONE_STORY);
+
+    const outcome = await next(ws);
+    expect(outcome.code).toBe(4);
+
+    const run = RunStore.open(ws.runDir).run;
+    const rows = run.phases.flatMap((p) => p.stages).flatMap((s) => s.tasks);
+    const reviewer = rows.find((row) => row.session_id === "fake-reviewer-S1");
+    expect(reviewer, "the spawned reviewer wrote a task row").toBeDefined();
+    // The fake emits the same usage for both roles (fakeClaude.ts:107), so the
+    // reviewer's row is compared against the DEVELOPER's — behaviour, not a
+    // constant typed twice.
+    const developer = rows.find((row) => row.session_id === "fake-developer-S1");
+    expect(reviewer?.input_tokens).toBe(developer?.input_tokens);
+    expect(reviewer?.output_tokens).toBe(developer?.output_tokens);
+    expect(reviewer?.input_tokens).toBeGreaterThan(0);
+  });
+});
+
+/**
  * The Plan's own prices decide the caps (2026-08-30), and the FIRST attempt gets
  * the whole of what the plan priced (gh #91, 2026-09-02).
  *
