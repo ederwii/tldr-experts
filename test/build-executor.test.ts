@@ -1567,8 +1567,18 @@ describe("branch and worktree names carry the run id", () => {
    * new caller quietly writes the template again.
    */
   test("the story branch name is derived in ONE place (#134)", () => {
-    const source = readFileSync(join(FRAMEWORK_ROOT, "src/core/facilitator/executors/build.ts"), "utf8");
-    expect(source).not.toMatch(/`story\/\$\{/);
+    // Wave 2 moved the worktree and branch-claim mechanics out of build.ts. A
+    // NEGATIVE pin on ONE file gets weaker every time code leaves it, so it now
+    // reads every file that could hold such a template.
+    for (const rel of [
+      "src/core/facilitator/executors/build.ts",
+      "src/core/build/worktrees.ts",
+      "src/core/build/branchClaims.ts",
+    ]) {
+      const source = readFileSync(join(FRAMEWORK_ROOT, rel), "utf8");
+      // One string per assertion: `toMatch` over an ARRAY throws on bun.
+      expect(source).not.toMatch(/`story\/\$\{/);
+    }
   });
 });
 

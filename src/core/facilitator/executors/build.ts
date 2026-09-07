@@ -32,10 +32,8 @@
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
-import { PROJECT_FRAMEWORK_DIR, epicWorktreeName } from "../../paths.ts";
 import {
-  branchModelFor, branchModelOfKind, describeBranchModel, detectEpicChain,
-  epicBranchOf, epicWorktreeSlotOf, storyBranchOf, type BranchModel, type BranchModelKind,
+  describeBranchModel, epicBranchOf, storyBranchOf, type BranchModel,
 } from "../../plan/branchModel.ts";
 import {
   factsPath, loadWorkspace, type WorkspaceContext,
@@ -60,13 +58,11 @@ import {
   dispatchNotesRecord, type PendingReview, type PendingStage,
 } from "../pending.ts";
 import {
-  addWorktree, assertWorktreeOn, baseStateOf, branchExists, commitAll, commitsBetween, currentBranch, diffCommand,
-  dirtyPaths, ensureBranch, fastForward, firstLine, GitError, headSha, isDirty, mergeNoFf, partitionDirty, pathAtRef,
-  removeWorktree, repoDirOf, shaReachability, stateDirPrefixes,
+  addWorktree, commitsBetween, diffCommand, ensureBranch, GitError, removeWorktree, repoDirOf, shaReachability,
 } from "../../build/git.ts";
 import { BaseGateFailure, baseRefusalLines } from "../../build/preflight.ts";
 import {
-  loadBuildPlan, PlanLoadError, BUILD_PHASE, LOG_DIR, PLAN_PHASE, WORKTREES,
+  loadBuildPlan, PlanLoadError, BUILD_PHASE, LOG_DIR, PLAN_PHASE,
   type BuildPlan, type BuildWave, type PlannedEpic, type PlannedStory,
 } from "../../build/plan.ts";
 import {
@@ -95,6 +91,13 @@ import { renderBuildHandoff, type EpicSummaryRow } from "../../build/handoff.ts"
 import {
   baseResultOf, PreflightCache, redBaseRefusal, runStoryDod, type BaseParts,
 } from "../../build/dodRunner.ts";
+import {
+  commitIfDirty, EpicState, mergeIntoEpic, refreshStoryBase, rescueUncommitted, storyWorktreePath,
+  unreadableTouches, type EpicWorktreeParts,
+} from "../../build/worktrees.ts";
+import {
+  dirtyRepoRefusal, epicRows, foreignEpicRefusal, resolveBranchModel, type ClaimParts,
+} from "../../build/branchClaims.ts";
 import { readReviewLedger, type ReviewLedger } from "../../build/reviewLedger.ts";
 import { phaseCostToDate } from "../../build/phaseCost.ts";
 import { appendBuildRetro, buildRetroPath, gateRetroLines, storyRetroLines } from "../../build/retroLog.ts";
@@ -431,13 +434,12 @@ class BuildSession {
   /** Every sub-agent this stage ran; `runNext` turns them into `run.yml` tasks. */
   readonly tasks: ExecutorTask[] = [];
   private readonly outcomes = new Map<string, StoryOutcome>();
-  private readonly epicWorktrees = new Map<string, string>();
   /**
-   * Per epic branch, the stories merged into it and what each merge CARRIED —
-   * `0` for a branch that was already identical to the epic, `null` when an
-   * earlier invocation did the merging.
+   * The epic branches, worktrees and merges this invocation accumulated
+   * (`build/worktrees.ts`). ONE instance, created here and passed by reference
+   * everywhere the three private maps used to be read.
    */
-  private readonly merged = new Map<string, { id: string; carried: number | null }[]>();
+  private readonly epics = new EpicState();
   private readonly lines: string[] = [];
   /** Per-story reviewer verdicts seen in THIS process, for the requeue counter. */
   private readonly reviews = new Map<string, number>();
@@ -465,8 +467,10 @@ class BuildSession {
    * a bound this process alone remembered would be no bound at all.
    */
   private readonly formatRetries = new Map<string, number>();
-  /** Epic branches this run cut or adopted; `runNext` writes them to run.yml. */
-  readonly claimedEpics = new Set<string>();
+  /** `buildExecutor`'s `withClaims` reads this on every exit path — including failures. */
+  get claimedEpics(): ReadonlySet<string> {
+    return this.epics.claimed;
+  }
   /**
    * One branch per epic, or ONE branch for the run (issue #57).
    *
@@ -504,7 +508,7 @@ class BuildSession {
     this.lines.push(...opening);
     this.preflight = new PreflightCache(ctx.runDir);
     this.lanes = clampParallel(ctx.parallel);
-    this.branchModel = this.resolveBranchModel();
+    this.branchModel = resolveBranchModel(ctx.runDir, ctx.runId, plan.stories);
     if (this.branchModel.kind === "integration") {
       this.lines.push(`  · ${describeBranchModel(this.branchModel)}`);
     }
@@ -1697,7 +1701,7 @@ class BuildSession {
     // Whatever happened above, this run is now working on that branch: say so in
     // run.yml (`build.epic_branch`) so its NEXT invocation, and any other run,
     // can tell "I cut this" from "this was already here".
-    this.claimedEpics.add(epicBranch);
+    this.epics.claimed.add(epicBranch);
     // The run id is IN the branch name — see `storyBranchOf`, which is the ONE
     // place that name is derived. Without the run id, four runs of the same plan
     // all cut `story/S1`: the second found it already there, `addWorktree`
@@ -1725,38 +1729,6 @@ class BuildSession {
     };
   }
 
-  /**
-   * A story's branch, brought up to its epic's tip before a developer is
-   * dispatched onto it — or the precise reason it was left exactly where it is.
-   *
-   * The live case, notes §11 on `260830-tenancy-identity-customers`: `story
-   * reopen` keeps the branch by design, and S3's branch still sat at the S1-era
-   * epic tip while the epic had since gained S2 and S5. S3's handlers needed S2's
-   * contract, so a dispatch on that base would not have compiled. The host
-   * fast-forwarded by hand before dispatching; this is that move, automated, and
-   * only in the case where it is a move and not a decision.
-   *
-   * Three shapes, and only the first changes anything:
-   *
-   *   - **behind, and the worktree is clean** — the branch is an ancestor of the
-   *     epic tip, so `git merge --ff-only` is the entire operation: no commit
-   *     written, no history rewritten, and it refuses rather than inventing a
-   *     merge. Measured atomic-or-nothing (see `fastForward`).
-   *   - **diverged** — commits on both sides. Warn with both counts and both
-   *     shas, change NOTHING, and let the dispatch proceed on the old base. This
-   *     is the second live case: a dead spawn had left a partial commit on a
-   *     stale base, no fast-forward was possible, and the host preserved the
-   *     partial on a backup branch and re-pointed the story branch BY HAND. That
-   *     is a decision — which of the two histories survives — and the framework
-   *     does not get to make it. **Never a rebase**: rewriting a branch a
-   *     developer already committed to is the class of move the
-   *     run-id-in-branch-name fix exists to prevent (2026-08-29 audit §B).
-   *   - **the worktree is dirty** — left alone whatever the topology says. A
-   *     dirty tree is the operator's, not ours.
-   *
-   * An `up to date` branch is silent and emits nothing: this path is byte-for-byte
-   * what it was before design §F.2 whenever there was nothing to say.
-   */
   private async refreshStoryBase(
     planned: PlannedStory,
     repoDir: string,
@@ -1764,98 +1736,32 @@ class BuildSession {
     branch: string,
     epicBranch: string,
   ): Promise<void> {
-    const id = planned.story.id;
-    const base = await baseStateOf(repoDir, branch, epicBranch);
-    if (base.state === "current") return;
-
-    const where = relative(this.ctx.root, worktree) || worktree;
-    if (base.state === "diverged") {
-      this.lines.push(
-        `  · ${id}: \`${branch}\` (${base.branchSha}) has DIVERGED from \`${epicBranch}\` `
-        + `(${base.baseSha}) — ${String(base.ahead)} commit(s) the epic lacks, `
-        + `${String(base.behind)} the story lacks`,
-        `  · ${id}: nothing was changed — tldrx never rebases a branch a developer has committed to. `
-        + `In ${where}: \`git merge ${epicBranch}\`, or preserve the divergent commit(s) on a backup `
-        + `branch and re-point \`${branch}\` at \`${epicBranch}\` by hand`,
-        `  · ${id}: the dispatch below is on the OLD base (${base.branchSha}), `
-        + `${String(base.behind)} commit(s) behind \`${epicBranch}\``,
-      );
-      return;
-    }
-
-    // A story worktree is its own checkout of the SAME repo, so in a
-    // `root_is_repo` workspace it holds `tldrx-work/` and `.tldrx/` too. Neither
-    // counts as the operator's dirt — the same split `commitIfDirty` makes, from
-    // the same prefixes.
-    const state = stateDirPrefixes(this.workspace.root, repoDir);
-    const dirty = partitionDirty(await dirtyPaths(worktree), state).product;
-    if (dirty.length > 0) {
-      this.lines.push(
-        `  · ${id}: \`${branch}\` (${base.branchSha}) is ${String(base.behind)} commit(s) behind `
-        + `\`${epicBranch}\` (${base.baseSha}), but its worktree has ${String(dirty.length)} `
-        + "uncommitted change(s) — left alone; a dirty tree is the operator's",
-        `  · ${id}: ${dirty.slice(0, 5).join(", ")}`
-        + `${dirty.length > 5 ? `, +${String(dirty.length - 5)} more` : ""} in ${where}`,
-      );
-      return;
-    }
-
-    const moved = await fastForward(worktree, epicBranch);
-    if (!moved.ok) {
-      // `--ff-only` is atomic-or-nothing, so there is nothing to repair: the
-      // branch is still at `from` and the dispatch proceeds on it. What would be
-      // wrong is a silent one.
-      this.lines.push(
-        `  · ${id}: \`git merge --ff-only ${epicBranch}\` failed in ${where} — `
-        + `${firstLine(moved.stderr) || firstLine(moved.stdout) || `exit ${String(moved.exitCode)}`}`,
-        `  · ${id}: \`${branch}\` was left at ${base.branchSha}, `
-        + `${String(base.behind)} commit(s) behind \`${epicBranch}\``,
-      );
-      return;
-    }
-    this.lines.push(
-      `  · ${id}: fast-forwarded \`${branch}\` to \`${epicBranch}\` — `
-      + `${String(base.behind)} commit(s), ${base.branchSha} → ${base.baseSha}`,
-    );
-    this.ctx.emit("story.base_fastforwarded", {
-      phase: this.ctx.phaseId,
-      story: id,
-      repo: planned.story.repo,
+    await refreshStoryBase({
+      storyId: planned.story.id,
+      root: this.ctx.root,
+      workspaceRoot: this.workspace.root,
+      repoDir,
+      worktree,
       branch,
-      base: epicBranch,
-      from: base.branchSha,
-      to: base.baseSha,
-      commits: base.behind,
+      epicBranch,
+      repo: planned.story.repo,
+      phaseId: this.ctx.phaseId,
+      lines: this.lines,
+      emit: (type, payload) => { this.ctx.emit(type, payload); },
     });
   }
 
-  /**
-   * Touched paths that exist in the repo but are NOT in the tree at the story's
-   * branch, so the worktree cannot open them.
-   *
-   * A path that exists nowhere is left out: that one really is a file the story
-   * creates, and the prompt already says so. The difference is the whole point —
-   * "this story creates it" and "you were shown a quote of it and nothing more"
-   * are opposite instructions, and `existsSync(worktree/path)` cannot tell them
-   * apart.
-   */
   private async unreadableTouches(
     planned: PlannedStory,
     repoDir: string,
     branch: string,
   ): Promise<ReadonlySet<string>> {
-    const out = new Set<string>();
-    for (const path of planned.story.touches) {
-      // A path that is nowhere in the repo is the ordinary "this story creates
-      // it", and cheap to rule out before a git call.
-      if (!existsSync(join(repoDir, path))) continue;
-      if (await pathAtRef(repoDir, branch, path)) continue;
-      out.add(path);
-      this.advisories.push(
-        `warning: input ${path} is not committed, so the story worktree cannot read it`,
-      );
-    }
-    return out;
+    return await unreadableTouches({
+      repoDir,
+      branch,
+      touches: planned.story.touches,
+      advisories: this.advisories,
+    });
   }
 
   /**
@@ -1943,36 +1849,26 @@ class BuildSession {
   }
 
   private async commitIfDirty(story: StoryContext): Promise<string | null> {
-    // A story worktree is its own checkout, but of the SAME repo — so when the
-    // workspace root is the repo it holds `tldrx-work/` and `.tldrx/` too. Neither
-    // the "is there anything to commit" question nor the commit itself may include
-    // them: a run that swept its own state into a story commit would put the run
-    // log inside the diff a reviewer reads.
-    const state = stateDirPrefixes(this.workspace.root, story.repoDir);
-    if (await isDirty(story.worktree, state)) {
-      const message = `feat(${story.planned.story.id}): ${story.planned.story.title}`;
-      const committed = await commitAll(story.worktree, message, state);
-      if (!committed.ok) {
-        this.lines.push(
-          `  · ${story.planned.story.id}: \`git commit\` failed — ` +
-            `${firstLine(committed.stderr) || firstLine(committed.stdout)}`,
-        );
-        return null;
-      }
-    }
-    const sha = await headSha(story.worktree);
-    return sha === "" ? null : sha;
+    return await commitIfDirty({
+      storyId: story.planned.story.id,
+      title: story.planned.story.title,
+      workspaceRoot: this.workspace.root,
+      repoDir: story.repoDir,
+      worktree: story.worktree,
+      lines: this.lines,
+    });
   }
 
   /** (f) `git merge --no-ff story/<id>` inside the epic's own worktree. */
   private async mergeIntoEpic(
     story: StoryContext,
   ): Promise<{ ok: boolean; conflicts: readonly string[]; detail: string }> {
-    return await mergeNoFf(
-      await this.openEpicWorktree(story),
-      story.branch,
-      `merge(${story.planned.story.id}): ${story.planned.story.title}`,
-    );
+    return await mergeIntoEpic(this.epics, {
+      ...this.epicParts(story),
+      storyBranch: story.branch,
+      storyId: story.planned.story.id,
+      storyTitle: story.planned.story.title,
+    });
   }
 
   /** (g) the reviewer, read-only, judging the story diff. */
@@ -2643,157 +2539,50 @@ class BuildSession {
   }
 
   private epicRows(outcomes: readonly StoryOutcome[]): readonly EpicSummaryRow[] {
-    const rows: EpicSummaryRow[] = [];
-    for (const [id, epic] of this.plan.epics) {
-      const branch = epicBranchOf(this.branchModel, epic.epic.branch);
-      // Attributed to the EPIC, not to the branch. Under `per-epic` the two are
-      // the same set; under the integration model one branch carries every epic's
-      // stories, and a row that claimed all of them for each epic would be false.
-      const merges = this.mergesOnto(branch, outcomes)
-        .filter((row) => this.plan.stories.get(row.id)?.story.epic === id);
-      rows.push({
-        id,
-        branch,
-        repos: epic.epic.repos,
-        // A merge that moved nothing is not listed with the ones that did. The
-        // Gate section is what a human reads before merging an epic by hand, and
-        // "S3, S4, S5, S7 merged" over four identical branches is the sentence
-        // this split exists to stop writing (2026-08-30).
-        merged: merges.filter((row) => row.carried !== null && row.carried !== 0).map((row) => row.id),
-        emptyMerges: merges.filter((row) => row.carried === 0).map((row) => row.id),
-        // Merged, and this process did not watch it happen — see `mergedEarlier`.
-        mergedEarlier: merges.filter((row) => row.carried === null).map((row) => row.id),
-        defaultBranches: epic.epic.repos.map((repo) => this.workspace.defaultBranches.get(repo) ?? "main"),
-        rel: epic.rel,
-      });
-    }
-    return rows;
-  }
-
-  /**
-   * Every story known to sit on this epic branch, from BOTH sources (#137).
-   *
-   * `this.merged` is what this process merged, and it is the only source the Gate
-   * section had. So a re-entered stage — every story already settled, nothing left
-   * to merge — printed `(no story merged)` over an epic branch carrying two merge
-   * commits, and that is the sentence a human reads before deciding what to ship.
-   *
-   * The second source is the outcomes themselves: a row rebuilt by `fromDisk`
-   * carries `merged: true` for a story disk says is `done`, which in this pipeline
-   * is a status only a merged story reaches. It carries `carried: null` with it,
-   * so the row is reported as merged-but-not-re-measured rather than as either
-   * kind of measurement. This process's own rows win on id — they are the ones
-   * that HAVE a measurement.
-   */
-  private mergesOnto(
-    branch: string,
-    outcomes: readonly StoryOutcome[],
-  ): readonly { id: string; carried: number | null }[] {
-    const rows = [...(this.merged.get(branch) ?? [])];
-    const seen = new Set(rows.map((row) => row.id));
-    for (const outcome of outcomes) {
-      if (outcome.epicBranch !== branch || !outcome.merged || seen.has(outcome.id)) continue;
-      seen.add(outcome.id);
-      rows.push({ id: outcome.id, carried: outcome.carried });
-    }
-    return rows;
+    return epicRows(this.epics, {
+      workspace: this.workspace,
+      epics: this.plan.epics,
+      branchModel: this.branchModel,
+      stories: this.plan.stories,
+    }, outcomes);
   }
 
   // --- helpers --------------------------------------------------------------
 
-  /**
-   * An `epic/<slug>` that already exists and was NOT cut by this run.
-   *
-   * Story branches and worktrees now carry the run id, so they cannot collide.
-   * The epic branch deliberately does not — an epic is the unit a team merges,
-   * and `epic/260829-x-leaderboard` would be a worse name for it. So instead of
-   * making collision impossible, this makes it DELIBERATE: a branch this run's
-   * `build.epic_branch` does not claim is refused, and `--reuse-epic` is the word
-   * that says "yes, stack on it". Measured 2026-08-29: four runs piled onto one
-   * `epic/leaderboard` with nothing said.
-   *
-   * `commit` never asks: it continues a story whose epic was claimed at prepare.
-   */
   private async refuseOnForeignEpic(): Promise<ExecutorOutcome | null> {
-    const claimed = new Set(this.claimedBranchesOnFile());
-    const seen = new Set<string>();
-    for (const planned of this.pendingStories()) {
-      const epic = this.plan.epics.get(planned.story.epic);
-      if (epic === undefined) continue;
-      const branch = epicBranchOf(this.branchModel, epic.epic.branch);
-      const key = `${planned.story.repo}:${branch}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const repoDir = repoDirOf(this.workspace, planned.story.repo);
-      if (!(await branchExists(repoDir, branch))) continue;   // we are about to cut it
-      if (claimed.has(branch)) continue;                       // this run cut it earlier
-      if (this.ctx.reuseEpic) {
-        this.claimedEpics.add(branch);
-        this.lines.push(`  · adopting existing \`${branch}\` in ${planned.story.repo} (--reuse-epic)`);
-        continue;
-      }
-      return {
-        ok: false,
-        refused: true,
-        awaiting: false,
-        tasks: [],
-        costUsd: 0,
-        outputs: [],
-        lines: [
-          `[tldrx] build: \`${branch}\` already exists in ${planned.story.repo} and run ${this.ctx.runId} ` +
-            "did not cut it — refusing to stack this run's commits onto someone else's epic.",
-          "  either delete or rename that branch, or run `tldrx next --reuse-epic` to work on it deliberately.",
-        ],
-        error: `epic branch \`${branch}\` was not created by this run`,
-      };
-    }
-    return null;
+    const refusal = await foreignEpicRefusal(this.epics, this.claimParts, this.pendingStories());
+    return refusal === null ? null : {
+      ok: false, refused: true, awaiting: false, tasks: [], costUsd: 0, outputs: [],
+      lines: refusal.lines, error: refusal.error,
+    };
   }
 
-  /** `run.yml`'s `build.epic_branch`, or nothing when the file will not open. */
-  private claimedBranchesOnFile(): readonly string[] {
-    return this.buildOnFile().epic_branch;
+  /** What `build/branchClaims.ts` needs to claim, refuse or report an epic branch. */
+  private get claimParts(): ClaimParts {
+    return {
+      runId: this.ctx.runId,
+      runDir: this.ctx.runDir,
+      root: this.ctx.root,
+      workspace: this.workspace,
+      epics: this.plan.epics,
+      branchModel: this.branchModel,
+      reuseEpic: this.ctx.reuseEpic,
+      lines: this.lines,
+    };
   }
 
-  /** `run.yml`'s whole `build:` block, or an empty one when the file will not open. */
-  private buildOnFile(): { epic_branch: readonly string[]; branch_model?: BranchModelKind } {
-    try {
-      return RunStore.open(this.ctx.runDir).run.build ?? { epic_branch: [] };
-    } catch {
-      return { epic_branch: [] };
-    }
-  }
-
-  /**
-   * One branch per epic, or ONE for the run — issue #57, owner decision (a).
-   *
-   * The chain is read from the SAME story front matter `validatePlan` reads, so
-   * the branch the Plan gate announced is the branch this cuts. What can override
-   * it is the run's own history, and only in the safe direction: a run that has
-   * already recorded a model keeps it, and a run that cut branches before the key
-   * existed is treated as `per-epic` rather than re-pointed at a branch that was
-   * never cut.
-   */
-  private resolveBranchModel(): BranchModel {
-    const epicOf = new Map<string, string>();
-    const dependsOn = new Map<string, readonly string[]>();
-    for (const [id, planned] of this.plan.stories) {
-      epicOf.set(id, planned.story.epic);
-      dependsOn.set(id, planned.story.depends_on);
-    }
-    const chain = detectEpicChain(epicOf, dependsOn);
-    const fromPlan = branchModelFor(this.ctx.runId, chain);
-
-    const onFile = this.buildOnFile();
-    if (onFile.branch_model !== undefined) {
-      return { ...branchModelOfKind(onFile.branch_model, this.ctx.runId), chain };
-    }
-    if (onFile.epic_branch.length > 0) {
-      // A run that entered Build before `branch_model` existed. Its stories are
-      // already on branches it cut; re-deciding now would strand them.
-      return { kind: "per-epic", integrationBranch: null, chain };
-    }
-    return fromPlan;
+  /** What `build/worktrees.ts` needs to open — or merge into — an epic worktree. */
+  private epicParts(story: StoryContext): EpicWorktreeParts {
+    return {
+      root: this.ctx.root,
+      runId: this.ctx.runId,
+      repo: story.planned.story.repo,
+      repoDir: story.repoDir,
+      epicId: story.planned.story.epic,
+      epicBranch: story.epicBranch,
+      branchModel: this.branchModel,
+      defaultBranch: this.workspace.defaultBranches.get(story.planned.story.repo) ?? "main",
+    };
   }
 
   /** What `build/dodRunner.ts` needs to measure or recall the base tree. */
@@ -2818,45 +2607,12 @@ class BuildSession {
     };
   }
 
-  /**
-   * Spec §5, Build executor safety: a repo whose tree is dirty is refused BEFORE
-   * anything is cut, because the epic branch is cut from that tree's branch and
-   * `git worktree add` would carry the mess forward.
-   *
-   * PRODUCT dirt only. `tldrx-work/` and `.tldrx/` are the framework's own state,
-   * and in a `root_is_repo: true` workspace they sit inside the product repo — so
-   * counting them made this command refuse the files it had just written itself
-   * (`run.yml`, `events.jsonl`, `.lock`, the freshly synthesised `04-build/`), and
-   * made a user's uncommitted answers a precondition of Build. Product dirt still
-   * refuses exactly as before, with the same message and the same fix.
-   */
   private async refuseOnDirtyRepos(): Promise<ExecutorOutcome | null> {
-    const seen = new Set<string>();
-    let ignored = 0;
-    for (const planned of this.pendingStories()) {
-      const name = planned.story.repo;
-      if (seen.has(name)) continue;
-      seen.add(name);
-      const dir = repoDirOf(this.workspace, name);
-      const split = partitionDirty(await dirtyPaths(dir), stateDirPrefixes(this.workspace.root, dir));
-      ignored += split.state.length;
-      const dirty = split.product;
-      if (dirty.length === 0) continue;
-      const branch = await currentBranch(dir);
+    const { refusal, ignored } = await dirtyRepoRefusal(this.claimParts, this.pendingStories());
+    if (refusal !== null) {
       return {
-        ok: false,
-        refused: true,
-        awaiting: false,
-        tasks: [],
-        costUsd: 0,
-        outputs: [],
-        lines: [
-          `[tldrx] build: repo \`${name}\` has ${String(dirty.length)} uncommitted change(s) on ` +
-            `\`${branch}\` — refusing to cut an epic branch from a dirty tree.`,
-          `  ${dirty.slice(0, 5).join(", ")}${dirty.length > 5 ? `, +${String(dirty.length - 5)} more` : ""}`,
-          `Commit or stash them in ${relative(this.ctx.root, dir) || "."}/, then run \`tldrx next\` again.`,
-        ],
-        error: `repo \`${name}\` has uncommitted changes`,
+        ok: false, refused: true, awaiting: false, tasks: [], costUsd: 0, outputs: [],
+        lines: refusal.lines, error: refusal.error,
       };
     }
     if (ignored > 0) {
@@ -2930,17 +2686,8 @@ class BuildSession {
     writeFileSync(epic.path, updateStoryFront(readFileSync(epic.path, "utf8"), { status }), "utf8");
   }
 
-  /**
-   * Record that this story's branch went onto its epic, and WHAT the merge
-   * moved: a count, or `null` when this invocation did not watch it happen.
-   */
   private noteMerged(story: StoryContext, carried: number | null): void {
-    const list = this.merged.get(story.epicBranch) ?? [];
-    const id = story.planned.story.id;
-    const at = list.findIndex((row) => row.id === id);
-    if (at === -1) list.push({ id, carried });
-    else list[at] = { id, carried };
-    this.merged.set(story.epicBranch, list);
+    this.epics.noteMerged(story.epicBranch, story.planned.story.id, carried);
   }
 
   private developerPrompt(story: StoryContext, fixlist: FixlistOnDisk | null = null): string {
@@ -3390,131 +3137,28 @@ class BuildSession {
     return readFileSync(path, "utf8").trimEnd().split("\n").map((line) => `> ${line}`).join("\n");
   }
 
-  /**
-   * `.tldrx/worktrees/<repo>/<run>-<story>` — the run id is in the PATH too.
-   *
-   * Same collision, worse: the fourth run of one plan reused the third's LIVE
-   * worktree, so two sub-agents were editing the same files at the same time
-   * (2026-08-29 audit, §B). A path that names the run cannot be walked into.
-   */
   private storyWorktree(planned: PlannedStory): string {
-    return join(
-      this.ctx.root, PROJECT_FRAMEWORK_DIR, WORKTREES,
-      planned.story.repo, `${this.ctx.runId}-${planned.story.id}`,
-    );
+    return storyWorktreePath(this.ctx.root, planned.story.repo, this.ctx.runId, planned.story.id);
   }
 
-  /**
-   * `.tldrx/worktrees/<repo>/_epic-<run>-<epic>` — the run id is in THIS path too.
-   *
-   * Same collision as the story worktree above, and worse in kind, because this
-   * is the worktree a story MERGES in. Every plan names its first epic `E1`, so
-   * `_epic-E1` was a path two runs both computed: the second run's `existsSync`
-   * hit the first run's live worktree, `addWorktree` was skipped, and
-   * `git merge --no-ff` ran inside a checkout of ANOTHER run's epic branch. It
-   * never failed — `commitsBetween` and every handoff line render
-   * `story.epicBranch`, so three stories reported "merged into
-   * `epic/hardening-d1`" while the commits landed on a closed run's
-   * `epic/d1-tenancy-identity-customers` and the run closed with an empty epic
-   * (issue #40, measured 2026-08-31).
-   *
-   * Both halves are load-bearing. The path makes the collision impossible; the
-   * `assertWorktreeOn` on EVERY reuse — the remembered path and the one found on
-   * disk — makes it impossible to repeat SILENTLY. A mismatch refuses; it never
-   * re-points the worktree and never merges anyway.
-   */
-  private async openEpicWorktree(story: StoryContext): Promise<string> {
-    const key = `${story.planned.story.repo}:${story.epicBranch}`;
-    const known = this.epicWorktrees.get(key);
-    if (known !== undefined && existsSync(known)) {
-      await assertWorktreeOn(known, story.epicBranch, "epic worktree");
-      return known;
-    }
-    const path = join(
-      this.ctx.root, PROJECT_FRAMEWORK_DIR, WORKTREES,
-      story.planned.story.repo,
-      // Under the integration model every epic shares one branch, and git will
-      // not check one branch out in two worktrees — so they share one slot too.
-      epicWorktreeName(this.ctx.runId, epicWorktreeSlotOf(this.branchModel, story.planned.story.epic)),
-    );
-    if (existsSync(path)) {
-      await assertWorktreeOn(path, story.epicBranch, "epic worktree");
-    } else {
-      mkdirSync(join(path, ".."), { recursive: true });
-      const base = this.workspace.defaultBranches.get(story.planned.story.repo) ?? "main";
-      await addWorktree(story.repoDir, path, story.epicBranch, base);
-    }
-    this.epicWorktrees.set(key, path);
-    return path;
-  }
-
-  /**
-   * Get anything the worktree holds and no ref does onto the story branch, before
-   * the worktree is deleted (#129).
-   *
-   * The invariant, and it has no exceptions in it: **the framework never deletes a
-   * worktree holding changes that reached no ref.** Measured live 2026-09-02 on
-   * run `260830-money-and-payments` (aparece-v2) — a story's DoD failed, the
-   * executor settled it `blocked`, and `git worktree remove --force` took the
-   * developer's uncommitted fix with it. The work was gone: no branch, no stash,
-   * no reflog, nothing to `git show`. `blocked` is precisely the state a human is
-   * going to want to inspect, and it was the one state that destroyed the evidence.
-   *
-   * Commit-then-prune rather than never-prune, because "recoverable" has to mean
-   * recoverable by SHA. A kept directory is recoverable only until somebody runs
-   * `tldrx run close`, cleans a temp dir, or opens the next run; a commit on the
-   * story branch is recoverable in a year. The message says `wip:` and names the
-   * verdict, because this commit is not a story delivered and an audit trail that
-   * implied otherwise would be #130 in a different file.
-   *
-   * Returns null when there was nothing to rescue — the ordinary case, since
-   * `commitIfDirty` has already run on every path that reaches `done`.
-   */
   private async rescueUncommitted(
     story: StoryContext,
     status: PlanStatus,
     reason: string | null,
   ): Promise<RescuedWork | null> {
-    const id = story.planned.story.id;
-    // The framework's own state dirs are excluded from the question and from the
-    // commit, exactly as `commitIfDirty` excludes them: a worktree of a repo that
-    // IS the workspace root also holds `tldrx-work/`, and a rescue that swept the
-    // run log into a commit would be a worse record than none.
-    const state = stateDirPrefixes(this.workspace.root, story.repoDir);
-    return await this.writes.run(async () => {
-      if (!existsSync(story.worktree)) return null;
-      if (!(await isDirty(story.worktree, state))) return null;
-      const committed = await commitAll(
-        story.worktree,
-        `wip(${id}): rescued from a story that settled \`${status}\`\n\n`
-        + `${reason ?? "no reason was recorded"}\n\n`
-        + "Committed by tldrx before its worktree was pruned, so the work reaches a ref.\n"
-        + "Nothing reviewed this and nothing merged it (gh #129).",
-        state,
-      );
-      const sha = committed.ok ? await headSha(story.worktree) : "";
-      if (sha === "") {
-        const failure = firstLine(committed.stderr) || firstLine(committed.stdout)
-          || "git wrote no commit and said nothing";
-        this.lines.push(
-          `  · ${id}: its worktree holds changes that reached NO ref and could not be committed `
-          + `(${failure}) — KEEPING ${story.worktree} rather than deleting the only copy`,
-        );
-        return { sha: null, branch: story.branch, worktree: story.worktree, failure };
-      }
-      this.lines.push(
-        `  · ${id}: uncommitted work RESCUED to \`${story.branch}\` as \`${sha}\` `
-        + "before its worktree was pruned — `git show " + sha + "`",
-      );
-      this.ctx.emit("story.work_rescued", {
-        phase: this.ctx.phaseId,
-        story: id,
-        repo: story.planned.story.repo,
-        branch: story.branch,
-        sha,
-        status,
-      });
-      return { sha, branch: story.branch, worktree: null, failure: null };
+    return await rescueUncommitted({
+      storyId: story.planned.story.id,
+      repo: story.planned.story.repo,
+      workspaceRoot: this.workspace.root,
+      repoDir: story.repoDir,
+      worktree: story.worktree,
+      branch: story.branch,
+      phaseId: this.ctx.phaseId,
+      status,
+      reason,
+      lines: this.lines,
+      emit: (type, payload) => { this.ctx.emit(type, payload); },
+      write: (work) => this.writes.run(work),
     });
   }
 
@@ -3636,3 +3280,4 @@ export {
   DEFAULT_PARALLEL, MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE,
 };
 export { PreflightCache, runStoryDod };
+export { EpicState, storyWorktreePath, resolveBranchModel };
