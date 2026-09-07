@@ -35,8 +35,9 @@
   summed a task's host `tokens` scalar only, so a turn that reported a real
   `input_tokens`/`output_tokens` split but never set the host field read as zero, tripping
   `costlessTokens` and landing on `basis: "absent"` for a turn that was fully measured. One
-  leaf, `turnTokens(task)` (host `tokens` when positive, else the input+output split when
-  both are positive, else `null`), is now read by both feeders; `costlessTokens` widens to
+  leaf, `turnTokens(task)` (host `tokens` when declared — present as a finite number,
+  including an explicit `0` — else the input+output split when both are positive, else
+  `null`), is now read by both feeders; `costlessTokens` widens to
   "host-declared or provider-reported", and an explicit `tokens: 0` still reads as a
   declaration, not an absence. The host-token sum that feeds the `absent` sentence's own
   count keeps summing the raw scalar only, so a provider split can never inflate what
@@ -73,14 +74,16 @@
   `build`/`test`/`lint`/`typecheck` command once (`run` is excluded by name — starting a
   long-running process is not a probe) and records `command_probes:` rows per repo:
   `{status, verified, exit_code, at, reason}`, one status vocabulary for the whole surface
-  so a genuine `exit 127` (the command was found, ran, and failed) and an unspawnable
-  command (never started — ENOENT, or a bare metacharacter with no shell to open) are
-  different, honestly labelled rows instead of the same fabricated 127. `--no-probe` skips
-  entirely and records the skip as its own reason (`skipped: --no-probe`); the base
-  pre-flight cites a probe only when it is a corroborating `verified: false` with a real
-  exit code, never an unrun one. `tldrx learn`'s sandboxed walkthrough and `tldrx map` both
-  pass `--no-probe` — probing is a real spawn, and neither claims to be offline; the
-  `--help` "Deterministic and offline" claim is corrected for `init` itself. Additive on
+  so a genuine `exit 127` (found, ran, failed) and a command that never started — either
+  `unspawnable` (ENOENT/EACCES) or `not-probed` (a bare metacharacter needing a shell this
+  probe does not open) — are different, honestly labelled rows instead of the same
+  fabricated 127. `--no-probe` skips entirely and records the skip as its own reason
+  (`skipped: --no-probe`); the base pre-flight cites a probe only when it is a corroborating
+  `verified: false` with a real exit code, never an unrun one. `tldrx learn`'s sandboxed
+  walkthrough passes `--no-probe` to the `init` it runs; `tldrx map` never requests a probe
+  at all — it omits `detectWorkspace`'s `probe` option entirely, as before. Probing is a real
+  spawn, and `init`'s own `--help` "Deterministic and offline" claim is corrected to say so.
+  Additive on
   `WorkspaceRepoDocument`; every pre-#168 `workspace.yml` still validates. (#168)
 
 ### Changed
