@@ -369,7 +369,8 @@ function calibration(): readonly string[] {
     "  authorization that did NOT widen with the new scope. Re-read its verdict yourself.",
     "- CORRECTNESS-BEARING (schema, migrations, concurrency, retries): a full review, plus one",
     "  check the reviewer cannot do for you — that a test can fail. Break the line it covers and",
-    "  watch it go red.",
+    "  re-run only the test file that covers it — not the declared suite, which runs once, at the",
+    "  Definition of Done — and watch it go red.",
     "- COSMETIC: an ordinary review. Do not spend a security reviewer on a label.",
     "",
   ];

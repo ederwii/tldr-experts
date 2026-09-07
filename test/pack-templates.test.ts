@@ -240,3 +240,37 @@ describe("framework overlays mirror the detection table one-to-one (one derivati
     expect(repeats).toEqual([]);
   });
 });
+
+/**
+ * The can-it-fail Check names its instrument (2026-09-07).
+ *
+ * The Check used to say "re-run the test command declared in .tldrx/workspace.yml".
+ * That command is the FULL suite by construction — a story's Definition of Done is
+ * byte-equal to a `workspace.yml` command — so, measured over a week of unattended
+ * runs on three real workspaces, a host paid one whole suite per mutation: five
+ * mutations, five extra suites, six to ten suite runs in one story, against a suite
+ * of 11,929 tests over 855 files in one of them. The question stays; the instrument
+ * shrinks to the one file that covers the broken line, and the declared command keeps
+ * its single run at the Definition of Done.
+ */
+describe("the can-it-fail Check names one test file, not the declared suite", () => {
+  const CAN_FAIL = "Can each new test fail?";
+  const INSTRUMENT = "re-run only that test's file";
+  const RETIRED = "re-run the test command declared";
+
+  for (const lang of PACK_LANGUAGES) {
+    test(`${lang}.md scopes the mutation re-run to one file`, () => {
+      const text = readFileSync(packBodyPath(lang), "utf8");
+      const check = bullets(section(text, CHECKS_HEADING)).find((item) => item.startsWith(CAN_FAIL));
+      expect(check, `${lang}.md still asks "${CAN_FAIL}"`).toBeDefined();
+      expect(check ?? "", `${lang}.md names the instrument`).toContain(INSTRUMENT);
+      expect(check ?? "", `${lang}.md places the declared command at the Definition of Done`)
+        .toContain("runs once, at the Definition of Done");
+      expect(check ?? "", `${lang}.md no longer sends the reviewer to the declared command per mutation`)
+        .not.toContain(RETIRED);
+      // The empty-slot clause survives the rewrite — a workspace declaring nothing
+      // must still be named, not quietly passed.
+      expect(check ?? "", `${lang}.md keeps the empty-slot clause`).toContain("leaves that slot empty");
+    });
+  }
+});
