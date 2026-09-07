@@ -115,12 +115,12 @@ one time order, and says on the page that it is not the log.
 :::
 
 ::: info What the page cannot show, and names instead
-A stage's `started_at`, its `ended_at` and a gate's free-text `note` are in `run.yml` and
-are not on the dashboard model, so the phase timeline reports no duration and quotes no
-signature — it says so where the numbers would be. A story's build log and its fix list are
-files the Build writes and the page does not read; the story grid says that too. A blank
-cell reads as "nothing happened", which is the class of confident-wrong figure this page is
-built to avoid.
+A story's build log and its fix list are files the Build writes and the page does not read;
+the story grid says so rather than leaving the space blank. A blank cell reads as "nothing
+happened", which is the class of confident-wrong figure this page is built to avoid — so an
+absence is written out wherever a number would otherwise be missing. A stage duration is the
+same rule the other way up: it is a subtraction, it exists only when both ends were recorded,
+and where one is missing the page names which end rather than drawing a length.
 :::
 
 ::: info The page reads. It does not check.

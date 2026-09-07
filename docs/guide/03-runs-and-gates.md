@@ -135,9 +135,46 @@ its siblings, but the wave ends `failed` and the next wave does not start — it
 stories may need what this one did not land. Ctrl-C kills every running sub-agent,
 not just the first.
 
-The default is 1, and at 1 nothing about the build is different from before. Set it
-per scope instead of per command with `build: {parallel: 3}` at the top of your
-`.tldrx/workflows/<scope>.yml`.
+**The shipped default is 2.** `stages/build/stage.yml` declares `parallel: 2`, so a
+workspace that overrides nothing already builds two stories at a time — two rather than
+more because one real workspace hit OOM kills at a wider fan-out. The code fallback is
+still 1, and it is what a stage file that says nothing about `parallel:` gets. The order
+of precedence, widest first: `--parallel` on the command, then `build: {parallel: N}` at
+the top of your `.tldrx/workflows/<scope>.yml` (per scope instead of per command), then
+`parallel:` in your own `.tldrx/stages/build/stage.yml`, then 1. At 1 nothing about the
+build is different from before.
+
+## Two test speeds: `test_fast`
+
+A story's ```dod block has to be byte-equal to a command your `workspace.yml` declares, and
+the developer's prompt hands the sub-agent that same list with *these are the only ones you
+may run*. Between them, the whole suite used to be the only test instrument the framework
+offered — so a developer iterating a story ran it every time it wanted to know whether it was
+close. Measured across three real workspaces: six to ten full-suite runs per story, on top of
+the two or three the Definition of Done itself pays for, against a suite of 11,929 tests over
+855 files in one of them. The gate was never the waste; the iteration loop was.
+
+Declare the fast subset beside `test:` and the developer gets a second speed:
+
+```yaml
+    commands:
+      test: "npm run test"
+      test_fast: "npm run test -- --changed"
+```
+
+`test_fast` is **declared, therefore runnable — and deliberately not evidence.** The prompt
+says both halves: iterate on the fast command, and run the declared full one ONCE before you
+stop, reading its exit code, because the Definition of Done re-runs that same command
+afterwards and *that* run is the one that decides. A ```dod line naming the fast command is
+**refused at Plan time**, with a sentence that names the slot rather than the generic "not one
+of `workspace.yml`'s commands" — which would be a false thing to say about a command the file
+plainly declares.
+
+Nothing detects it for you. No manifest says which subset of a suite is the fast one, and a
+synthesised answer is exactly the conventional wisdom `command_probes:` exists to keep out of
+this file — so `tldrx init` writes the slot **commented out**, with a line saying what it is
+for, and probes nothing nobody declared. Leave it out and every prompt is byte-identical to
+what it was before the slot existed.
 
 ## Who closes a gate
 

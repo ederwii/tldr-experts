@@ -88,7 +88,7 @@ tldrx init [--root <path>] [--out <path>] [--no-interview] [--process <name>]
 | `--stack <a,b,…>` | Declare the stack instead of detecting it, e.g. `ts,dotnet,python` |
 | `--mcp` | Also ask `claude mcp list` which servers are configured. Slower: it health-checks each one |
 | `--provider <name>` | Map provider. One of: `auto` `graphify` `static`. `auto` picks graphify when it is on PATH |
-| `--no-probe` | Do not run the detected build/test/typecheck commands. Each one is recorded as skipped rather than measured. Use it on a repo you have not read: probing executes that repo's own commands |
+| `--no-probe` | Do not run the detected build/test/lint/typecheck commands. Each one is recorded as skipped rather than measured. Use it on a repo you have not read: probing executes that repo's own commands |
 | `--ui <mode>` | What to show while it works. One of: `auto` `scene` `compact` `plain` `off`. `TLDRX_UI` sets it too |
 | `--quiet` | No live progress. The report at the end is still printed |
 
@@ -399,7 +399,7 @@ tldrx next [<run>] [--run <id>] [--dry-run] [--prepare|--commit] [--review] [--c
 | `--review` | With `--prepare`/`--commit`, addresses the story's **reviewer** half instead of its developer half: the bundle is one directory down, at `.agent/<stage>/<story>/review/`. Spawns nothing ([10 — Unattended mode](10-unattended-mode.md)) |
 | `--check` | With `--commit`, REHEARSES it: validates the prepared bundle's `result.json` through the same reader `--commit` uses, prints every refusal with the offending line, and **writes nothing** — no state, no event, no attempt spent. Exit `0` when `--commit` would read the envelope, `1` when it would not. It is how a reviewer's `[src: …]` citation gets checked while the turn is still open. On a developer bundle the reader coerces rather than refuses, so `--check` exits `0` and names what is about to be coerced |
 | `--fixlist <path>` | With `--prepare`, re-prepares the AUTHOR's bundle carrying that fix list's open findings under `## Fix list`. Omit it and the latest round on disk with anything still open is carried by itself |
-| `--parallel <n>` | How many stories of ONE wave to build at a time. Merges still land in the wave's listed order; default `1` |
+| `--parallel <n>` | How many stories of ONE wave to build at a time. Merges still land in the wave's listed order. It overrides `build: {parallel: N}` in the workflow, which overrides `parallel:` in `stage.yml` — and the shipped Build stage says `2`, so that is what a workspace overriding nothing gets. The code fallback, for a stage file that declares none, is `1` |
 | `--model <m>` | Passed through to `claude --model`. Default: the stage's own `model:` |
 | `--effort <level>` | `low` `medium` `high` `xhigh` `max`. The cost lever `--max-usd` is not |
 | `--max-usd <n>` | Stop after the turn that crosses this. A ceiling on the run, not a brake on the turn in flight |
