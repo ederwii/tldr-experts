@@ -464,7 +464,7 @@ stages:
 | `stages[].budget_usd` | number >0 | n | Overrides `stage.yml` |
 | `stages[].skip_if` | str | n | `^(stories\|repos\|questions)(<=\|>=\|==\|<\|>)\d{1,4}$` `[assumption]` |
 | `skips` | slug[] | n | Stages this scope deliberately does NOT run, so the omission is on record. **Read, not decorative:** Build asks it (below) |
-| `<stage>.parallel` | int ≥1 | n | How many units of that stage may run at once — for `build`, stories per wave (§5). `--parallel` overrides it; absent ⇒ `stage.yml`'s `parallel:`, then 1 |
+| `<stage>.parallel` | int ≥1 | n | How many units of that stage may run at once — for `build`, stories per wave (§5). `--parallel` overrides it; absent ⇒ `stage.yml`'s `parallel:` (the shipped Build stage says 2), then 1 |
 
 **Validation.** `name` = filename stem; stage ids unique and present in `.tldrx/stages/`; Σ `budget_usd` ≤
 `default_budget_usd`; `skip_if` matches the pattern above; every `gates` key (other than `collapse`) names a stage
@@ -2481,7 +2481,9 @@ sub-agent's *result envelope* is structured via `--json-schema` (`{outputs: [], 
 `next` parses deterministically. (b) Map providers: `graphify` first; when absent, `map --refresh` falls back to a
 `static` provider (git log, file tree, package manifests) and records `provider:` in `workspace.yml` — the framework
 degrades, never installs. (c) Parallelism: v0 runs tasks sequentially; v1 runs independent stories of one wave in
-parallel, one worktree per story.
+parallel, one worktree per story. Since 2026-09-07 the SHIPPED `stages/build/stage.yml` declares
+`parallel: 2`, so a workspace that overrides nothing gets two lanes; the CODE fallback
+(`DEFAULT_PARALLEL`) stays 1, for a stage file that declares none.
 
 **Streaming and the progress view (2026-08-29).** The spawn is
 `claude -p --output-format stream-json --verbose` rather than `--output-format json`.
@@ -2849,11 +2851,14 @@ Build's declared input `03-plan/waves.yml` is treated as satisfied by the implic
 `03-plan/` — that is the phase the scope skipped. **Every other missing input is still exit 1**: skipping Plan is not
 an excuse for a missing `.tldrx/conventions/shared.md`.
 
-**Parallel within a wave — `--parallel N`, default 1 (2026-08-30).** `waves.yml` guarantees a dependency is in an
+**Parallel within a wave — `--parallel N`, shipped default 2 (2026-08-30; the shipped stage says 2 since
+2026-09-07).** `waves.yml` guarantees a dependency is in an
 EARLIER wave, so the stories of one wave are independent by construction and may run at once. The number is resolved
 `--parallel` > the workflow's `<stage>: {parallel: N}` (§2.4) > `stage.yml`'s `parallel:` > 1, refused rather than
 clamped at the CLI when it is not a whole number ≥ 1, and clamped in the executor to `[1, MAX_STORIES_PER_WAVE]`.
-`run auto --parallel N` passes it to every `next` it makes.
+`run auto --parallel N` passes it to every `next` it makes. `stages/build/stage.yml` ships `parallel: 2` — the
+framework's opinion, since three real workspaces measured runs of 34-43 h wall clock over per-story medians of
+0.6-1.35 h, and one of them hit OOM kills at a wider fan-out. The last resort behind every spelling is still 1.
 
 At **N = 1 the executor takes the path it always did**, story by story — measured byte-identical on the event
 sequence, because "the default does not change" is not a claim to make loosely. Above 1 the wave runs in two halves:

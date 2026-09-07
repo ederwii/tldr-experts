@@ -35,6 +35,14 @@ corrida del DoD (*definition of done*) de esa story, un commit, un merge a la é
 después un revisor aparte, de solo lectura, cuyo trabajo es no estar de acuerdo. La rama de
 la épica te espera a ti; el framework nunca hace push.
 
+Las stories de una misma ola son independientes por construcción — el plan deja cada
+`depends_on` en una ola **anterior** —, así que Build corre **dos a la vez por omisión** y
+las mergea a la épica en el orden en que el plan las lista, terminen como terminen. `tldrx
+next --parallel N` (y `tldrx run auto --parallel N`) lo cambia para un run; `parallel: N` en
+tu propio `.tldrx/stages/build/stage.yml`, o `build: {parallel: N}` en un workflow, lo
+cambia de forma permanente. Dos y no más porque un abanico más ancho es lo primero que
+sufre una laptop.
+
 Una rama por épica da por hecho que las épicas son independientes. Cuando una story lleva
 `depends_on` a una story de **otra** épica, las épicas forman una cadena y el run corta una
 sola **rama de integración**, `epic/<run-id>`, y las épicas se quedan en el plan como

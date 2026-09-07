@@ -35,6 +35,13 @@ story's own definition of done, a commit, a merge into the epic — and then a s
 read-only reviewer whose job is to disagree. The epic branch waits for you; the framework
 never pushes.
 
+Stories inside one wave are independent by construction — the plan puts every `depends_on`
+in an **earlier** wave — so Build runs **two at a time by default**, and merges them into
+the epic in the wave's listed order however the two finish. `tldrx next --parallel N` (and
+`tldrx run auto --parallel N`) changes it per run; `parallel: N` in your own
+`.tldrx/stages/build/stage.yml`, or `build: {parallel: N}` in a workflow, changes it for
+good. Two rather than more because a wider fan-out is what a laptop notices first.
+
 One branch per epic assumes the epics are independent. When a story `depends_on` a story in
 **another** epic, the epics form a chain and the run cuts a single **integration branch**,
 `epic/<run-id>`, with the epics staying in the plan as labels. That is decided at Plan time

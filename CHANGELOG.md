@@ -5,6 +5,21 @@
 
 ### Changed
 
+- **The Build stage ships `parallel: 2`, so a wave runs two stories at a time out of the box.**
+  `--parallel N` shipped in 0.3.1 and nothing used it: no shipped workflow and no shipped
+  stage file set it, so every workspace ran one story at a time by inheriting a code constant
+  nobody chose. Measured across three real workspaces over one week and 23 runs: runs of 34-43 h
+  wall clock whose per-story medians were 0.6-1.35 h — the wall clock was serialization, not work.
+  The stories of one wave are independent by construction (`waves.yml` puts every `depends_on` in
+  an EARLIER wave, and `validatePlan` refuses a plan that does not), so this is a schedule change
+  and not a correctness one; merges into the epic still happen serially, in the wave's listed
+  order, and so do the reviewers, whose merge base moves under them otherwise. Two rather than
+  more because one of those workspaces hit OOM kills at a wider fan-out — raise it per run with
+  `--parallel N`, or for good with `parallel: N` in your own `.tldrx/stages/build/stage.yml`.
+  `DEFAULT_PARALLEL` in code stays 1: the opinion belongs in the stage file an operator can read
+  and override, and the last resort stays the value that surprises nobody. The one thing
+  `parallel:` does not change is the `--prepare`/`--commit` handshake, which is per story and
+  stays sequential — that side cannot know how many sub-agents the host session will run. (#176)
 - **The "can this test fail?" check now names its instrument: one test file, not the whole
   declared suite.** The drive mandate asked for the one check a reviewer cannot do — break the
   line a new test covers and watch it go red — and the four stack packs asked the same question

@@ -86,10 +86,14 @@ export function developerPriceDivisor(attempt: number): number {
 }
 
 /**
- * The default degree of parallelism inside a wave: one story at a time.
+ * The LAST RESORT degree of parallelism inside a wave: one story at a time.
  *
- * Spec §5 decision (c) shipped v1 sequential, and this stays the default so a
- * workspace that says nothing keeps the behaviour it has been running.
+ * Spec §5 decision (c) shipped v1 sequential. The framework's opinion now lives in
+ * the shipped `stages/build/stage.yml` (`parallel: 2`), where an operator can read
+ * it, argue with it and override it per workspace or per run. This constant is
+ * what is left when every spelling is silent — a stage file that declares no
+ * `parallel:` at all — and it stays 1, because the value nobody chose should be
+ * the one that surprises nobody.
  */
 export const DEFAULT_PARALLEL = 1;
 

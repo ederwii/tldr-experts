@@ -22,6 +22,14 @@ model: sonnet
 effort: high
 budget_usd: 9
 timeout_s: 1800
+# Stories of one wave are independent by construction — `waves.yml` puts every
+# `depends_on` in an EARLIER wave (`core/plan/validatePlan.ts`, spec §5) — so the
+# serialization here was schedule, not correctness: real runs of 34-43 h wall clock
+# had per-story medians of 0.6-1.35 h. Two, not more: one workspace hit OOM kills
+# with a wider fan-out, and two keeps a laptop's load sane. Raise it per run with
+# `--parallel N`; the code fallback (`DEFAULT_PARALLEL`) stays 1 for a stage file
+# that says nothing.
+parallel: 2
 # A stage that cuts branches and fans out per-story sub-agents has no ONE dispatch to
 # describe, so a dry run is refused
 # rather than half-honoured (spec §5, Build executor).
