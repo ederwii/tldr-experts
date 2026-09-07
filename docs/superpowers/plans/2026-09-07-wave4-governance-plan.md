@@ -12,6 +12,20 @@
 
 **Base:** worktree `wt-wave4`, branch `feat/wave4-governance`, base = `77dbf29` (`release: 0.10.0`), with the spec commit `8b6890f` on top. **Every file:line below was re-opened and quoted in this worktree at `8b6890f`.** Where the spec's own anchor did not survive that check, the correction is stated in the task and again in `## Notes for the controller`.
 
+**Revision, 2026-09-07** — this plan was revised once, after a pre-flight conflict scan
+(`.superpowers/sdd/2026-09-07-wave4-governance-plan/preflight.md`: 2 Critical, 7 Important, 7 Minor)
+measured 36 task pairs against the code. Every ruling was applied and **in every case the code or
+the spec won over the plan**: three round-trip assertions quoted YAML the emitters do not produce
+(they emit plain, unquoted scalars); the red-by-design card string now uses the spec's placeholder
+form, which is the only form `boundaryCard` can produce; four `bun test` commands named test files
+that do not exist; the `[assumption]` guard was strengthened because the version this plan first
+carried was already green for five of eighteen files; two assertions that were green at the base
+are now labelled guards and a real failing assertion sits beside them; the grant reconciliation now
+distinguishes a phase ceiling from a run ceiling, with a pin that tells them apart; `dist/cli.js`
+became `dist/tldrx.js`; a changed handoff sentence is now pinned; and `agent.result`'s `cost_usd` is
+recorded as the ENVELOPE field it is. The Minors were anchor drift, four out-of-scope identifiers
+in test snippets, and the missing `bun install` this worktree needs before any gate.
+
 ## Global Constraints
 
 Copied from `AGENTS.md` and from the spec's section 4; every task's requirements implicitly include this section.
@@ -23,9 +37,10 @@ Copied from `AGENTS.md` and from the spec's section 4; every task's requirements
 - **`version: 1` file formats only grow — and a field is not "added" until the code that WRITES the file carries it.** Every format here is emitted key-by-key by a hand-written emitter, and two have a mapper in front. The mapper/emitter pairs this wave MUST teach, verbatim from spec §4.1:
   - `facts.yml` · `conflicts_with` → **`FactsStore.append` (`src/core/facts/FactsStore.ts:83-101`) and `emitFact` (`src/core/facts/emitFactsYaml.ts:73-104`)**, both of which enumerate keys, so a `NewFact` carrying the field is dropped **with no type error**. Pin: a `NewFact` → `append` → `emitFactsYaml` → `parse` → `validateFactsFile` round-trip test. (Measured correction to the spec: `FactsStore.supersede` is not a second writer — it delegates to `append` at `FactsStore.ts:135`, `const replacement = this.append({ ...input, supersedes: oldId });`. One edit covers both paths; the round-trip test still covers both.)
   - `facts.yml` · `source.decided_by` and `repos` → **no emitter work.** `append` spreads `source` (`FactsStore.ts:92`, `source: { ...input.source }`) and copies `repos` (`:89`); `emitFact` already emits `decided_by` when present (`emitFactsYaml.ts:76-79`).
-  - `budget.yml` · `authorized_usd`, `authorized_by`, `authorized_at`, `on_grant_exceed`, `BudgetPhase.authorized_usd` → **`asRunBudget` (`src/core/budget/RunBudget.ts:234-254`) and `emitBudgetYaml` (`src/core/run/emitRunYaml.ts:217-261`)**. The emitter's own comments say why (`emitRunYaml.ts:227-232`): *"`budget raise` rewrites this file through this emitter, so a label that did not round-trip would be ERASED by the one command an operator reaches for when a ceiling binds"* — and `budget raise` is the command being made grant-aware. Pin: `grant` → `raise` → re-read, the grant intact.
+  - `budget.yml` · `authorized_usd`, `authorized_by`, `authorized_at`, `on_grant_exceed`, `BudgetPhase.authorized_usd` → **`asRunBudget` (`src/core/budget/RunBudget.ts:234-254`) and `emitBudgetYaml` (`src/core/run/emitRunYaml.ts:217-262`)**. The emitter's own comments say why (`emitRunYaml.ts:227-232`): *"`budget raise` rewrites this file through this emitter, so a label that did not round-trip would be ERASED by the one command an operator reaches for when a ceiling binds"* — and `budget raise` is the command being made grant-aware. Pin: `grant` → `raise` → re-read, the grant intact.
   - `run.yml` · `triage.budget_basis` → **`emitRunYaml.ts:167-169`**, which emits `triage:` as a fixed inline mapping of `split` and `depends_on`. Pin: a triaged run.yml round-trips the basis; an untriaged one stays byte-identical.
   - `events.jsonl` · `fact.conflict_raised`, `story.touches_widened`, `budget.granted` → **`EVENT_TYPES` is a CLOSED enum** (`src/core/events/Event.ts:106-124`) and `validateEvent` runs `requireEnum(doc.type, EVENT_TYPES, "type", issues)` at `:157`. A new type must be ADDED to that list. Before each lands, check `renderReplay` and `readReviewLedger` against it and pin that both survive.
+- **Never force quoting in an emitter to satisfy a test.** `yamlScalar` emits a PLAIN, unquoted scalar whenever `PLAIN_SAFE` (`/^[A-Za-z][A-Za-z0-9_./-]*$/`, `src/core/facts/emitFactsYaml.ts:11`, and the same pair at `src/core/run/emitRunYaml.ts:16-18`) matches — so `F001`, `api`, `model-guess` and `s.yml` all emit bare. Assert the bytes the emitter actually produces, or assert only the parse-back half. Quoting them to make an assertion pass would change every `repos:` line in every `facts.yml` on disk and break `test/facts-add.test.ts`'s byte pins.
 - **Absent-with-reason, never invented.** `decided_by` absent means "not stated", never "owner"; `repos: []` means "no repo was named", never the run's repos; absent `conflicts_with` means "not detected", never "checked and agreed"; absent `authorized_usd` means "no grant recorded", never `$0`; a carried finding with no `[src:]` path is `no-src` and one whose citation names no repo is `unqualified`, and neither is ever counted as `owned`; `overShareSentence` returns **null** rather than a ratio over a figure it does not have.
 - **One implementation per derivation.** The leaves this wave adds, and nothing else: `facts/decidedTally.ts` (`decidedTally`), `answers/reposFromAffects.ts` (`reposFromAffects`), `build/unownedFindings.ts` (`ownershipOf` + `unownedFindings`, with `carriedFindings` living in `fixlist.ts` beside its siblings), `build/planVsMeasured.ts` (`overShareSentence`), `budget/grant.ts` (`grantFor` + `wouldExceedGrant`). Each takes DATA, never `ctx` and never the session (AGENTS §12). Two things that are deliberately NOT leaves: the provenance clause (one consumer — it stays inline in `renderFacts`) and `conflictOf` (already one definition and one call site at `distill.ts:160-164`; moving it is scope no issue asked for).
 - **Exit-code families, and no condition split across two.** `story widen`'s own refusals are **2**, matching `reopenStory.ts:82-83` (`/** Spec §3: `refused`. Every one of this verb's own refusals is a refusal to act. */ const EXIT_REFUSED = 2;`); **1** only for the subcommand-dispatch error; **3** for an unknown run. `budget grant`/`budget raise`: a bad amount or an unknown phase is **1**; a ceiling above the recorded grant under `on_grant_exceed: block` is **2** (`EXIT_GATE_REFUSED`, `src/cli/exitCodes.ts:19`). `tldrx answer`'s new refusals are all **1**; the contradiction advisory exits **0**.
@@ -44,6 +59,7 @@ Copied from `AGENTS.md` and from the spec's section 4; every task's requirements
   ```
 
   (Add your own `Claude-Session:` line beneath it if your session has a URL.)
+- **`bun install` before the first gate command.** Measured in this worktree: with no `node_modules`, `bun run typecheck` exits **127** (`tsc: command not found`) and `bun test <file>` errors at module resolution — a 127 is not a red test, and reading it as one would be the wrong instrument. Run `bun install` once, read its exit code, and only then start Task 1's Step 2.
 - **No release steps.** This plan ends at a green gate and a clean tree. `scripts/merge-wave.sh feat/wave4-governance "<merge message>"` — two arguments — is somebody else's decision.
 
 ---
@@ -85,7 +101,7 @@ Files modified (each task names its own list): `src/core/facts/{Fact,FactsStore,
 - Test: `test/answer-attribution.test.ts` (new), `test/run.test.ts` (`describe("tldrx answer")` at `:536`, its first test at `:549` — read, expect green), `test/hooks.test.ts:418` (the `repos: ["api","lab"]` fixture — read, add a sibling)
 
 **Interfaces:**
-- Consumes: `declaredAffects(block: QuestionBlock): readonly string[]` (newly exported from `stampSuperseded.ts`); `loadWorkspace(root).repos: ReadonlyMap<string, string>` (`src/hooks/lib/workspace.ts:62`, `:182`); `FACT_DECIDERS` / `FactDecider` (`src/core/facts/Fact.ts:44-45`).
+- Consumes: `declaredAffects(block: QuestionBlock): readonly string[]` (newly exported from `stampSuperseded.ts`); `loadWorkspace(root).repos: ReadonlyMap<string, string>` (`src/hooks/lib/workspace.ts:62`, `:182`); `FACT_DECIDERS` / `FactDecider` (`src/core/facts/Fact.ts:41-42` — `:44` is `FactRetirement`).
 - Produces:
   - `reposFromAffects(affects: readonly string[], repoNames: ReadonlySet<string>): { repos: readonly string[]; unresolved: readonly string[] }`
   - `interface AnswerOverride { readonly decidedBy?: FactDecider; readonly repos?: readonly string[] }` exported from `captureAnswers.ts`
@@ -484,7 +500,7 @@ Then say the absence out loud. After `process.stdout.write(\`${qid} answered →
       }
 ```
 
-Add the same two blocks to the `--supersede` branch after its stdout line at `:88`. New imports: `repeatedFlag` from `../argv.ts`, `FACT_DECIDERS`/`type FactDecider` from `../../core/facts/Fact.ts`, `type AnswerOverride` from `../../core/answers/captureAnswers.ts`, `loadWorkspace` from `../../hooks/lib/workspace.ts`.
+Add the same two blocks to the `--supersede` branch after its stdout line at `:88` — **reading `done`, not `recorded`**: `recorded` exists only on the capture path (`answer.ts:101`), and the supersede branch's variable is `done` (`:80`), so `SupersededAnswer` is the interface that has to carry `unresolvedAffects` and `conflict` there. New imports: `repeatedFlag` from `../argv.ts`, `FACT_DECIDERS`/`type FactDecider` from `../../core/facts/Fact.ts`, `type AnswerOverride` from `../../core/answers/captureAnswers.ts`, `loadWorkspace` from `../../hooks/lib/workspace.ts`.
 
 In `src/hooks/answer-capture.ts:31-37`, add `repoNames: new Set(loadWorkspace(location.root).repos.keys()),` to the context and **nothing else** — no `overrides`. Put the reason in a comment there: PostToolUse fires on an agent's own `Write`/`Edit` as well as on a human's `FileChanged`, so this hook cannot say which of the two answered, and it says nothing rather than guessing.
 
@@ -621,9 +637,9 @@ EOF
 - Create: `src/core/answers/raiseConflict.ts`
 - Modify: `src/core/facts/Fact.ts` — the `Fact` interface, after `truncated?` (`:60-69`)
 - Modify: `src/core/facts/FactsStore.ts:83-101` — `append`, whose last line today is `...(cut || input.truncated === true ? { truncated: true as const } : {}),` (`:97`)
-- Modify: `src/core/facts/emitFactsYaml.ts:73-104` — `emitFact`, after `if (fact.truncated === true) lines.push(\`${inner}truncated: true\`);` (`:96`)
+- Modify: `src/core/facts/emitFactsYaml.ts:73-104` — `emitFact`, after `if (fact.truncated === true) lines.push(\`${inner}truncated: true\`);` (`:94`)
 - Modify: `src/core/facts/validateFactsFile.ts` — after the `truncated` block (`:105-109`)
-- Modify: `src/core/facilitator/prompt.ts:411-423` — `renderFacts`'s one rendered line
+- Modify: `src/core/facilitator/prompt.ts:411-422` — `renderFacts`'s one rendered line
 - Modify: `src/core/distill/distill.ts:160-164` — `conflictOf`'s parameter type only
 - Modify: `src/core/answers/captureAnswers.ts` — both fact-construction sites, and the post-write raise
 - Modify: `src/core/events/Event.ts:106-124` — `EVENT_TYPES` gains `"fact.conflict_raised"`
@@ -747,6 +763,7 @@ describe("a contradicting answer RAISES — it never refuses", () => {
 
 describe("conflicts_with survives the round trip — the one C2 exists for", () => {
   test("append → emit → parse → validate keeps the field", () => {
+    const ws = runWorkspace();                                   // the file's own fixture
     const store = FactsStore.loadOrEmpty(factsPath(ws.root));
     const written = store.append({
       fact: "A — B", area: "data-model", repos: [], kind: "answer", confidence: "stated",
@@ -756,7 +773,11 @@ describe("conflicts_with survives the round trip — the one C2 exists for", () 
     expect(written.conflicts_with).toEqual(["F001"]);            // `append` did not drop it
 
     const text = emitFactsYaml({ version: 1, facts: [written] });
-    expect(text).toContain("conflicts_with: [\"F001\"]");          // `emitFact` wrote it
+    // UNQUOTED, and asserted that way deliberately: `yamlScalar` emits a PLAIN
+    // scalar whenever PLAIN_SAFE matches (`emitFactsYaml.ts:11`), and `F001`
+    // does. Forcing quotes in the emitter to make an assertion pass would change
+    // the bytes of every `repos:` line in every facts.yml on disk.
+    expect(text).toContain("conflicts_with: [F001]");              // `emitFact` wrote it
 
     const parsed = parseYaml(text);
     expect(validateFactsFile(parsed).ok).toBe(true);
@@ -820,7 +841,7 @@ Expected: FAIL. The round-trip test fails at `expect(written.conflicts_with).toE
 
 `supersede` needs no edit: it delegates (`:135`, `const replacement = this.append({ ...input, supersedes: oldId });`) — say that in the commit, because the spec expected two writers.
 
-`src/core/facts/emitFactsYaml.ts`, in `emitFact`, directly after the `truncated` push (`:96`) and BEFORE the `retired` branch:
+`src/core/facts/emitFactsYaml.ts`, in `emitFact`, directly after the `truncated` push (`:94`) and BEFORE the `retired` branch:
 
 ```ts
   // Written only when non-empty, for `truncated`'s reason and one more: an
@@ -1020,9 +1041,9 @@ then add `...(clash === null ? {} : { conflicts_with: [clash.fact.id] }),` to th
       if (clash !== null) clashes.push({ block, factId: fact.id, hit: clash });
 ```
 
-with `const clashes: { block: QuestionBlock; factId: string; hit: DuplicateHit }[] = [];` declared beside `recorded` (`:94`).
+with `const clashes: { block: QuestionBlock; factId: string; hit: DuplicateHit }[] = [];` declared beside `recorded` (`:92`).
 
-After `writeFileSync(questionsPath, serializeQuestions(doc), "utf8")` (`:130`) — the raise must come after, because it appends to the same file:
+After `writeFileSync(questionsPath, serializeQuestions(doc), "utf8")` (`:133`) — the raise must come after, because it appends to the same file:
 
 ```ts
   const raised = new Map<string, RaisedConflict>();
@@ -1053,7 +1074,7 @@ Do the same in `supersedeAnswer`, with one difference stated in a comment: a sup
 
 - [ ] **Step 7: Open the event enum, and give replay a line**
 
-`src/core/events/Event.ts:118` — the `"fact.added", "fact.retired", "fact.superseded", "doc.superseded",` line becomes:
+`src/core/events/Event.ts:119` — the `"fact.added", "fact.retired", "fact.superseded", "doc.superseded",` line becomes:
 
 ```ts
   "fact.added", "fact.retired", "fact.superseded", "fact.conflict_raised", "doc.superseded",
@@ -1067,7 +1088,7 @@ Do the same in `supersedeAnswer`, with one difference stated in a comment: a sup
         + `(Jaccard ${text(payload.score)}) — raised as ${q || "a question"}`;
 ```
 
-**Why a case rather than nothing:** `bullet` ends in `default: return null` (`renderReplay.ts:216`), so an unlisted type renders no line at all. An honesty guard that is invisible in `tldrx replay` is a weak guard. Same treatment for the other two new types in Tasks 3 and 7. Read `readReviewLedger` (`src/core/build/reviewLedger.ts:189-241`) and confirm it matches on `story.reopened` / `story.review_retried` / `task.started` / `agent.spawned` / `task.done` and ignores everything else — an unknown type reaches no branch there. Add one assertion in `test/answer-conflict.test.ts` that a run carrying the new event still replays and still reads its ledger.
+**Why a case rather than nothing:** `bullet` ends in `default: return null` (`renderReplay.ts:215`), so an unlisted type renders no line at all. An honesty guard that is invisible in `tldrx replay` is a weak guard. Same treatment for the other two new types in Tasks 3 and 7. Read `readReviewLedger` (`src/core/build/reviewLedger.ts:133`, whose type matching is at `:189-241`) and confirm it matches on `story.reopened` / `story.review_retried` / `task.started` / `agent.spawned` / `task.done` and ignores everything else — an unknown type reaches no branch there. Add one assertion in `test/answer-conflict.test.ts` that a run carrying the new event still replays and still reads its ledger.
 
 - [ ] **Step 8: Say it on stdout**
 
@@ -1166,11 +1187,11 @@ EOF
 
 **Files:**
 - Create: `src/core/facts/decidedTally.ts`
-- Modify: `src/core/run/closeRun.ts` — `RunCloseOutcome` (`:115-125`), `closeRun` (`:130-142`), beside `describeOpenQuestions` (`:198-205`)
+- Modify: `src/core/run/closeRun.ts` — `RunCloseOutcome` (`:116-125`), `closeRun` (`:130-144`), beside `describeOpenQuestions` (`:198-205`)
 - Modify: `src/core/facilitator/runNext.ts:1746`, `src/cli/commands/run.ts:444`, `src/cli/commands/approve.ts:101` — the three close routes that print `describeOpenQuestions(closed.openQuestions)`
-- Modify: `src/core/build/handoff.ts` — `BuildHandoffParts` (`:56-85`) and the header line (`:91-94`)
+- Modify: `src/core/build/handoff.ts` — `BuildHandoffParts` (`:56-85`) and the header line (`:93-95`)
 - Modify: `src/core/facilitator/executors/build.ts:2303-2314` — the `renderBuildHandoff({...})` call
-- Test: `test/close-open-questions.test.ts` (the `:125` test — **red by design is claimed by the spec and is NOT true**; see below), `test/build-handoff.test.ts` (or whichever file pins `renderBuildHandoff`'s header — `grep -rln renderBuildHandoff test/`)
+- Test: `test/close-open-questions.test.ts` (the `:125` test — **red by design is claimed by the spec and is NOT true**; see below), `test/build-executor.test.ts` and `test/ship.test.ts` — **measured: those two are the only files in `test/` that import `renderBuildHandoff`**, and there is no `test/build-handoff.test.ts`
 
 **Interfaces:**
 - Consumes: `FactsStore.loadOrEmpty(factsPath(root)).facts` (`src/hooks/lib/workspace.ts:360`); `Fact.source.run` and `Fact.source.decided_by` (`Fact.ts:26-42`).
@@ -1231,7 +1252,7 @@ describe("#169 — the close says how many of this run's decisions name a decide
 });
 ```
 
-And in the handoff test file, one test: `renderBuildHandoff` with `decidedNote: "3 decision(s) recorded: 1 owner, 0 driver, 2 not stated"` puts it on the header line after the cost, and with `decidedNote: null` the header is byte-identical to today's.
+And in `test/build-executor.test.ts` — the `renderBuildHandoff` home — one test: `renderBuildHandoff` with `decidedNote: "3 decision(s) recorded: 1 owner, 0 driver, 2 not stated"` puts it on the header line after the cost, and with `decidedNote: null` the header is byte-identical to today's.
 
 - [ ] **Step 2: Run them and keep the RED verbatim**
 
@@ -1328,7 +1349,7 @@ Read each call site first: `approve.ts:101` guards on `outcome.closed === null`,
   readonly decidedNote?: string | null;
 ```
 
-and in the header line (`:91-94`), after the cost clause and before ` · ${parts.at}`:
+and in the header line (`:93-95`), after the cost clause and before ` · ${parts.at}`:
 
 ```ts
       `${parts.costNote == null ? "" : ` (${parts.costNote})`}` +
@@ -1340,7 +1361,7 @@ In `build.ts:2303-2314`, add `decidedNote: describeDecidedTally(decidedTally(Fac
 - [ ] **Step 6: Run the named tests, prove teeth, gate and commit**
 
 ```
-bun test test/close-open-questions.test.ts test/build-handoff.test.ts test/build-executor.test.ts test/facts-add.test.ts
+bun test test/close-open-questions.test.ts test/build-executor.test.ts test/ship.test.ts test/facts-add.test.ts
 ```
 Expected: PASS. `:125` is a GUARD here, not a proof — it stays green because it asserts only `toContain`.
 
@@ -1406,7 +1427,7 @@ EOF
 - Modify: `src/core/build/storyFile.ts` — `StoryPatch` (`:17-21`), `applyPlanPatch` (`:48-53`), a `replaceTouches` beside `replaceEvidence` (`:68-79`)
 - Modify: `src/cli/commands/story.ts` — the docstring (`:1-18`), `usage` (`:32`), the dispatch (`:35-39`)
 - Modify: `src/core/run/decisionCards.ts:105` — `"widen the scope: add the path to a story's \`touches:\`, or cite it in a handoff, then re-run the stage",`
-- Modify: `src/core/events/Event.ts:115` — `"story.reopened", "story.base_fastforwarded", …` gains `"story.touches_widened"`
+- Modify: `src/core/events/Event.ts:114` — `"story.reopened", "story.base_fastforwarded", …` gains `"story.touches_widened"`
 - Modify: `src/core/replay/renderReplay.ts` — one `case`
 - Modify: `src/cli/helpText.ts` — the `story` entry (`:731-761`): `subcommands: ["reopen", "widen"]` at `:732`, flags scoped with `sub:`, no new exit code (`:753` already declares `EXIT_GATE_REFUSED`)
 - Modify: `docs/guide/08-cli-reference.md` — the `## \`tldrx story\`` section names `--path` and the `widen` subcommand
@@ -1522,13 +1543,13 @@ describe("what widen refuses, and with which code", () => {
 });
 ```
 
-Also change `test/decision-cards.test.ts:314` **now**, to the string the card will print, and keep its RED:
+Also change `test/decision-cards.test.ts:314` **now**, to the exact string the card will print, and keep its RED:
 
 ```ts
-      "  tldrx story widen S1 platform/Auth.cs --note \"<why>\" — or cite the path in a handoff, then re-run the stage",
+      "  tldrx story widen <id> <path> --note \"<why>\" — or cite the path in a handoff, then re-run the stage",
 ```
 
-(The card has no story id in hand — write the line the implementation actually produces; read `boundaryCard` before choosing between a literal `<id>` placeholder and a real id, and make the test match the code, not the other way round.)
+A PLACEHOLDER, and not a real story id, because `boundaryCard(ctx: CardContext, detail: string)` (`decisionCards.ts:96-110`) holds `runId`/`phaseId`/`stageId` and one opaque detail string — there is no story id and no path in scope, and it must not scrape one out of `detail` (`decisionCards.ts:88-95`: *"a second parser over a string the first one built is how two readings of one fact start"*). This is the form spec §3.2 states, and it is byte-for-byte what Step 5 writes into `decisionCards.ts:105`.
 
 - [ ] **Step 2: Run them and keep the RED verbatim**
 
@@ -1642,9 +1663,15 @@ Extend the file's docstring: two subcommands now, and `widen` is the verb `decis
 
 `docs/guide/08-cli-reference.md`: the `## \`tldrx story\`` section names `widen` and every flag it declares (`test/docs-cli-coverage.test.ts:62`).
 
-`decisionCards.ts:105`: replace the forbidden-hand-edit line with the verb, matching the string the test now expects.
+`decisionCards.ts:105`: replace the forbidden-hand-edit line with
 
-`Event.ts:115`: `"story.reopened", "story.base_fastforwarded", "story.review_retried", "story.work_rescued",` gains `"story.touches_widened"`.
+```ts
+      "tldrx story widen <id> <path> --note \"<why>\" — or cite the path in a handoff, then re-run the stage",
+```
+
+— byte-for-byte what Step 1 put into `test/decision-cards.test.ts:314`, minus the two-space indent `renderDecisionCard` adds.
+
+`Event.ts:114`: `"story.reopened", "story.base_fastforwarded", "story.review_retried", "story.work_rescued",` gains `"story.touches_widened"`.
 
 `renderReplay.ts`, beside `case "story.reopened"` (`:158`):
 
@@ -1738,7 +1765,7 @@ EOF
 - Produces:
   - `carriedFindings(findings: readonly FixFinding[]): readonly FixFinding[]`
   - `type Ownership = "owned" | "unowned" | "unqualified" | "no-src"`
-  - `interface DeclaredSurface { readonly story: string; readonly repo: string; readonly touches: readonly string[] }`
+  - `interface DeclaredSurface { readonly story: string; readonly repo: string; readonly touches: readonly string[] }` — **note the field is `story`, while `ShipStory` (`ship.ts:890-896`) calls the same value `id`, so every caller maps: `stories.map((s) => ({ story: s.id, repo: s.repo, touches: s.touches }))`. Structural typing will NOT accept a `ShipStory[]` here.**
   - `ownershipOf(finding: FixFinding, declared: readonly DeclaredSurface[], repoNames: ReadonlySet<string>): Ownership`
   - `interface UnownedRow { readonly finding: FixFinding; readonly ownership: Exclude<Ownership, "owned">; readonly reason: string }`
   - `unownedFindings(carried, declared, repoNames): readonly UnownedRow[]` — Task 6's three surfaces all read THIS and nothing else.
@@ -1910,7 +1937,12 @@ import { inSurface } from "../run/boundary.ts";
 /** `owned` and three ways of not being ownable, each with a reason. */
 export type Ownership = "owned" | "unowned" | "unqualified" | "no-src";
 
-/** One story's declared surface. Exactly what `ship.ts`'s ShipStory already holds. */
+/**
+ * One story's declared surface — the three things `ship.ts`'s `ShipStory`
+ * already holds, under this leaf's own names. `ShipStory` calls the first one
+ * `id`, so every caller maps rather than passing the array through: structural
+ * typing does not rename a field.
+ */
 export interface DeclaredSurface {
   readonly story: string;
   /** The repo its `touches:` are relative to, and the only one they answer for. */
@@ -1959,7 +1991,7 @@ export function unownedFindings(
 }
 ```
 
-Before writing it, open `src/core/text/srcToken.ts:28` and confirm the `kind: "file"` member's field names (`repo`, `path`) and that `parseSrcToken` returns `{raw, refs, errors}` — narrow with a type guard the way `boundary.ts` does at `:174` rather than casting.
+Before writing it, open `src/core/text/srcToken.ts:28` and confirm the `kind: "file"` member's field names (`repo`, `path`) and that `parseSrcToken` returns `{raw, refs, errors}` — narrow with a type guard the way `boundary.ts` does at `:178` rather than casting.
 
 - [ ] **Step 5: Run the named tests, prove teeth, gate and commit**
 
@@ -2033,15 +2065,15 @@ EOF
 ## Task 6: #171 — carried and unowned findings reach the handoff, the PR body and the card
 
 **Files:**
-- Modify: `src/core/build/handoff.ts` — `BuildHandoffParts` (`:56-85`) and the `## Unknowns` block (`:105-113`)
+- Modify: `src/core/build/handoff.ts` — `BuildHandoffParts` (`:56-85`) and the `## Unknowns` block (`:109-115`, and ~10 lines lower once Task 3's header clause has landed)
 - Modify: `src/core/facilitator/executors/build.ts` — the `renderBuildHandoff({...})` call (`:2303-2314`); the fix lists it already reads (`fixlistFor`) and the story surfaces it already holds
 - Modify: `src/core/run/shipBody.ts` — `ShipBodyParts` (`:44-53`) and the section after `## Open findings` (`:88-99`)
 - Modify: `src/core/run/ship.ts` — `writeShipBody` (`:853-870`), a `carriedFor` beside `openFixFindings` (`:993-1006`)
 - Modify: `src/core/run/decisionCards.ts` — `boundaryCard` (`:96-110`) takes an optional extra detail
-- Test: `test/ship.test.ts` (a `## Carried findings` describe beside `:333`; the absent-case sibling beside `:404`), `test/build-handoff.test.ts`, `test/decision-cards.test.ts` (the two-arg call at `:310` stays green)
+- Test: `test/ship.test.ts` (a `## Carried findings` describe beside `:333`; the absent-case sibling beside `:404`), `test/build-executor.test.ts` (the `renderBuildHandoff` home — measured: it and `test/ship.test.ts` are the only importers; there is no `test/build-handoff.test.ts`), `test/decision-cards.test.ts` (the two-arg call at `:310` stays green)
 
 **Interfaces:**
-- Consumes: `carriedFindings`, `unownedFindings`, `UnownedRow`, `DeclaredSurface` (Task 5); `latestFixlist` (`fixlist.ts:642`); `ShipStory` (`ship.ts:890-896`, populated at `:963`); `OpenFindingRow` (`shipBody.ts:38-42`).
+- Consumes: `carriedFindings`, `unownedFindings`, `UnownedRow`, `DeclaredSurface` (Task 5); `latestFixlist` (`fixlist.ts:642`); `ShipStory` (`ship.ts:890-896`, populated at `:963`) — mapped to `DeclaredSurface` with `{story: s.id, repo: s.repo, touches: s.touches}`, because the leaf's field is `story` and `ShipStory`'s is `id`; `OpenFindingRow` (`shipBody.ts:38-42`).
 - Produces: `BuildHandoffParts.carried?: readonly CarriedRow[]` where `CarriedRow = { rel: string; row: UnownedRow }`; `ShipBodyParts.carriedFindings: readonly CarriedRow[]`; `boundaryCard(ctx, detail, extra?: readonly string[])`.
 
 ### The measured problem, and where the report can actually land
@@ -2050,12 +2082,12 @@ Under the ruled default — **report only** — there is no eighth auto-gate con
 
 So the report lands where a PASSING gate still shows it:
 
-1. **The Build handoff's `## Unknowns`** — the primary surface, and the one the reviewer, the gate and `ship` all already read. **Not a fifth H2 section**: `missingSections` requires the four in order but tolerates extras (`text/handoff.ts:213-225`) while `validateSections` only checks bullets *inside the required four* (`:441`, `BULLET_RULE` at `:262`) — so a fifth section's claims would be the one part of the document nothing validates, which is the hole §2.8 exists to close. `## Unknowns` is also where it belongs by meaning: it already holds "this needs a human". `MAX_BULLETS` is 200 (`text/handoff.ts:345`); beyond the cap, summarise with a count and the fix-list citation.
+1. **The Build handoff's `## Unknowns`** — the primary surface, and the one the reviewer, the gate and `ship` all already read. **Not a fifth H2 section**: `missingSections` requires the four in order but tolerates extras (`text/handoff.ts:213-225`) while `validateSections` (`:387`) only checks bullets *inside the required four* (`BULLET_RULE` at `:261`, the cap check at `:443`) — so a fifth section's claims would be the one part of the document nothing validates, which is the hole §2.8 exists to close. `## Unknowns` is also where it belongs by meaning: it already holds "this needs a human". `MAX_BULLETS` is 200 (`text/handoff.ts:345`); beyond the cap, summarise with a count and the fix-list citation.
 2. **The PR body** — `shipBody` gains a `## Carried findings` section fed from the shared leaf.
 3. **The decision card — only when a card already fires.** `boundaryCard`'s detail gains the rows so the person deciding sees them. An addition to a card that was going to print, never the reason one prints.
 4. **`retro.md` — unchanged.** `fixlistRetroLines` already writes one bullet per `defer-with-log` (`fixlist.ts:737-751`); this adds destinations, not a second writer.
 
-**One deviation from the spec, measured.** Spec §3.2 says each bullet ends `[src: tldrx-work/<run>/<fixlist rel>:1]`. The existing `## Unknowns` bullets cite the RUN-RELATIVE path (`handoff.ts:112`, `` `[src: ${o.reviewRel}:1]` ``), and `pathBases` resolves a `[src:]` file path against the workspace root first and the run dir second (`srcToken.ts:1087`). This follows the existing convention — `[src: ${row.rel}:1]` — so one document does not carry two spellings of the same citation.
+**One deviation from the spec, measured.** Spec §3.2 says each bullet ends `[src: tldrx-work/<run>/<fixlist rel>:1]`. The existing `## Unknowns` bullets cite the RUN-RELATIVE path (`handoff.ts:114`, `` `[src: ${o.reviewRel}:1]` ``), and `pathBases` resolves a `[src:]` file path against the workspace root first and the run dir second (`srcToken.ts:1087`). This follows the existing convention — `[src: ${row.rel}:1]` — so one document does not carry two spellings of the same citation.
 
 ### The golden statement
 
@@ -2088,19 +2120,23 @@ test("a carried finding a story DOES own is not listed — the section is about 
   writeFixlistFixture(ws, "S1", [
     { disposition: "defer-with-log", finding: "a nit inside the surface", where: "[src: api:src/in.ts:1]" },
   ]);
-  await ship(ws, healthy());
+
+  const transport = healthy();
+  await ship(ws, transport);
   expect(bodyOf(transport)).not.toContain("## Carried findings");
 });
 
 test("no carried findings leaves the section out rather than asserting an empty one", async () => {
   const ws = workspace();
   readyToShip(ws);
-  await ship(ws, healthy());
+
+  const transport = healthy();
+  await ship(ws, transport);
   expect(bodyOf(transport)).not.toContain("## Carried findings");
 });
 ```
 
-In the handoff test file:
+In `test/build-executor.test.ts`:
 
 ```ts
 test("an unowned carried finding is a `## Unknowns` bullet with its reason and its citation", () => {
@@ -2118,8 +2154,23 @@ test("an unowned carried finding is a `## Unknowns` bullet with its reason and i
   expect(text).not.toContain("## Carried findings");
 });
 
-test("with none, the Unknowns section is byte-identical to before the field existed", () => {
+test("absent behaves exactly as empty — the field adds no state of its own", () => {
+  // A GUARD, not a proof: both sides go through the new code, so it cannot catch
+  // a changed "none" sentence. The test below is the one that can.
   expect(renderBuildHandoff(parts({}))).toBe(renderBuildHandoff(parts({ carried: [] })));
+});
+
+test("with nothing owed and nothing carried, the `none` bullet says BOTH, verbatim", () => {
+  // The sentence is user-visible, it is not in any golden artifact, and nothing
+  // pinned it before (measured: `grep -rn "every scheduled story reached" test/`
+  // returns no hit — the only occurrence is `src/core/build/handoff.ts:110`). A
+  // document that says "nothing needs a human" while listing something that does
+  // is worse than one that says neither, so the new wording is pinned literally.
+  const text = renderBuildHandoff(parts({ outcomes: [doneStory()], carried: [] }));
+  expect(sectionOf(text, "Unknowns")).toContain(
+    "- none — every scheduled story reached `done` and no carried finding is unowned "
+    + "[src: absent:04-build/log]",
+  );
 });
 
 test("beyond MAX_BULLETS the rows are summarised with a count and the citation, never dropped", () => {
@@ -2133,7 +2184,7 @@ test("beyond MAX_BULLETS the rows are summarised with a count and the citation, 
 - [ ] **Step 2: Run them and keep the RED verbatim**
 
 ```
-bun test test/ship.test.ts test/build-handoff.test.ts
+bun test test/ship.test.ts test/build-executor.test.ts
 ```
 Expected: FAIL — `expect(received).toContain("## Carried findings")` over a body that has no such section, and an excess-property / missing-property TypeScript error on `carried` in the handoff parts. Paste it.
 
@@ -2157,7 +2208,7 @@ export interface CarriedRow {
    *
    * They go in `## Unknowns` and not in a fifth section on purpose:
    * `validateSections` only checks bullets inside the four required sections
-   * (`text/handoff.ts:441`), so a fifth section's claims would be the one part of
+   * (`text/handoff.ts:387`), so a fifth section's claims would be the one part of
    * the document nothing validates. `## Unknowns` is also where they belong —
    * it already holds "this needs a human".
    *
@@ -2166,7 +2217,7 @@ export interface CarriedRow {
   readonly carried?: readonly CarriedRow[];
 ```
 
-and in the `## Unknowns` block (`:105-113`), append after the existing `notDone` mapping — noting that the "none" line must now consider both lists:
+and in the `## Unknowns` block (`:109-115`), append after the existing `notDone` mapping — noting that the "none" line must now consider both lists:
 
 ```ts
     ...(notDone.length === 0 && (parts.carried ?? []).length === 0
@@ -2215,7 +2266,7 @@ In `build.ts`, where the handoff is written (`:2303`), build the rows from what 
   }
 ```
 
-`ship.ts` — add a `carriedFor(store, stories)` beside `openFixFindings` (`:993-1006`), built the same way (same `phaseDirs` walk, same one-story-once guard, same `latestFixlist`), but calling `carriedFindings` + `unownedFindings` with the `ShipStory` rows it already has (`:963` populates `{id, status, repo, touches}` — exactly `DeclaredSurface`) and the workspace repo names. Its docstring says explicitly: `ship` applies no predicate of its own; the leaf is the one implementation, and `ship` calls it because it runs in a separate process, not because it has a second opinion. Pass the rows into `renderShipBody` at `:860-867`.
+`ship.ts` — add a `carriedFor(store, stories)` beside `openFixFindings` (`:993-1006`), built the same way (same `phaseDirs` walk, same one-story-once guard, same `latestFixlist`), but calling `carriedFindings` + `unownedFindings` with the `ShipStory` rows it already has (`:963` populates `{id, status, repo, touches}`), **mapped** to the leaf's shape — `stories.map((s) => ({ story: s.id, repo: s.repo, touches: s.touches }))`, because the leaf's field is `story` and `ShipStory`'s is `id` — and the workspace repo names. Its docstring says explicitly: `ship` applies no predicate of its own; the leaf is the one implementation, and `ship` calls it because it runs in a separate process, not because it has a second opinion. Pass the rows into `renderShipBody` at `:860-867`.
 
 - [ ] **Step 6: The card, only when one already fires**
 
@@ -2233,7 +2284,7 @@ Extend its docstring: the extra lines are carried findings nobody's story owns, 
 - [ ] **Step 7: Run the named tests, prove teeth, gate and commit**
 
 ```
-bun test test/ship.test.ts test/build-handoff.test.ts test/decision-cards.test.ts test/fixlist.test.ts test/handoff.test.ts test/build-executor.test.ts
+bun test test/ship.test.ts test/build-executor.test.ts test/decision-cards.test.ts test/fixlist.test.ts test/handoff-sections.test.ts
 ```
 Expected: PASS. `test/ship.test.ts:333` and `:404` stay green (`isOpen` untouched, `## Open findings` unchanged); `test/fixlist.test.ts:259` stays green (retro is unchanged and the PR body is an ADDITIONAL destination).
 
@@ -2308,11 +2359,11 @@ EOF
 
 **Files:**
 - Create: `src/core/budget/grant.ts`
-- Modify: `src/core/budget/RunBudget.ts` — `BudgetPhase` (`:63-75`), `RunBudget` (`:77-110`), `validateRunBudget` (`:132-232`), `asRunBudget` (`:234-254`)
-- Modify: `src/core/run/emitRunYaml.ts:217-261` — `emitBudgetYaml`, its conditional lines (`:227-247`) and the phase mapping (`:250-259`)
+- Modify: `src/core/budget/RunBudget.ts` — `BudgetPhase` (`:62-74`), `RunBudget` (`:76-110`), `validateRunBudget` (`:132-232`), `asRunBudget` (`:234-254`)
+- Modify: `src/core/run/emitRunYaml.ts:217-262` — `emitBudgetYaml`, its conditional lines (`:227-248`) and the phase mapping (`:250-259`)
 - Modify: `src/core/run/newRun.ts:216-239` — the ONE construction site of a `RunBudget` and its `BudgetPhase` literals
 - Modify: `src/cli/commands/budget.ts` — the dispatch (`:32-41`), `budgetRaise` (`:61-121`), a new `budgetGrant`
-- Modify: `src/core/events/Event.ts:117` — `"budget.warned", "budget.blocked", "budget.raised",` gains `"budget.granted"`
+- Modify: `src/core/events/Event.ts:118` — `"budget.warned", "budget.blocked", "budget.raised",` gains `"budget.granted"`
 - Modify: `src/core/replay/renderReplay.ts` — one `case`
 - Modify: `src/core/dashboard/model.ts` — `BudgetModel` (`:194-210`), `BudgetPhaseModel` (`:170-180`), the projection (`:1330-1345`)
 - Modify: `src/cli/helpText.ts` — the `budget` entry (`:906-932`)
@@ -2344,7 +2395,7 @@ Three places write a dollar ceiling — the preset (`newRun.ts:432-455`), a tria
 
 ### The golden statement
 
-**Expected: no golden byte moves.** No cap arithmetic moves, no stage literal moves, and `budget.granted` fires in no scenario. The frozen values a cap change WOULD move, stated completely: `$3.20` in `headless-developer-prompt.md:109`, `insession-bundle-prompt.md:109` and `refused-developer-S1-1.md:110`; `max_budget_usd` in `headless-events.txt` `#03`, `refused-events.txt:4` and four times in `rounds-events.txt`; plus `gate.requested`'s frozen `keys=[checks,cost_usd,outputs,phase]`, which any new payload key would break.
+**Expected: no golden byte moves.** No cap arithmetic moves, no stage literal moves, and `budget.granted` fires in no scenario. The frozen values a cap change WOULD move, stated completely: `$3.20` in `headless-developer-prompt.md:109`, `insession-bundle-prompt.md:109` and `refused-developer-S1-1.md:110`; `max_budget_usd` in `headless-events.txt` `#03`, `refused-events.txt:4`, **five lines of `rounds-events.txt`** and one line of `insession-events.txt` (measured; an earlier draft said four and omitted `insession`); plus `gate.requested`'s frozen `keys=[checks,cost_usd,outputs,phase]`, which any new payload key would break.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2423,6 +2474,20 @@ describe("tldrx budget grant — a ceiling that answers to a decision", () => {
     await tldrx(ws.root, "budget", "grant", "5", "--fact", "F001", "--phase", "04-build", "--on-exceed", "block");
     expect((await tldrx(ws.root, "budget", "raise", "04-build", "20")).code).toBe(2);
     expect((await tldrx(ws.root, "budget", "raise", "01-what", "0.50", "--take-from", "05-watch")).code).toBe(0);
+  });
+
+  test("a phase grant is measured against the PHASE ceiling, not the run's", async () => {
+    // The pin that tells the two branches apart. `04-build` is granted $5 and
+    // sits at $4; raising it by $0.50 keeps the PHASE at $4.50 — inside its
+    // grant — while the RUN ceiling ends well above $5. A reconciliation that
+    // compared `runCeilingAfter` against the phase grant would refuse this, and
+    // every other test in this file would still pass.
+    const ws = await runWithFact("F001");                     // run ceiling $10
+    await tldrx(ws.root, "budget", "grant", "5", "--fact", "F001", "--phase", "04-build", "--on-exceed", "block");
+    const raised = await tldrx(ws.root, "budget", "raise", "04-build", "0.50");
+    expect(raised.code).toBe(0);
+    expect(loadBudgetFile(onlyRunDir(ws.root)).phases.find((p) => p.id === "04-build")?.ceiling_usd)
+      .toBeCloseTo(4.5, 2);
   });
 
   test("a budget.granted event is appended, with the fact and the amount", async () => {
@@ -2512,7 +2577,7 @@ export const DEFAULT_ON_GRANT_EXCEED: OnGrantExceed = "warn";
 
 `asRunBudget` (`:234-254`) — `authorized_usd: doc.authorized_usd ?? null,` and siblings, `on_grant_exceed: doc.on_grant_exceed ?? DEFAULT_ON_GRANT_EXCEED,`, and `authorized_usd: phase.authorized_usd ?? null,` inside the phase map.
 
-`emitBudgetYaml` (`:217-261`) — three conditional lines beside the existing three, each carrying the same comment those do (a key that does not round-trip is erased by `budget raise`):
+`emitBudgetYaml` (`:217-262`) — three conditional lines beside the existing three, each carrying the same comment those do (a key that does not round-trip is erased by `budget raise`):
 
 ```ts
     ...(budget.authorized_usd === null ? [] : [`authorized_usd: ${money(budget.authorized_usd)}`]),
@@ -2556,7 +2621,7 @@ export interface Grant {
  * The grant governing `phaseId`: the phase's own, else the run's, else null.
  *
  * Phase-then-run and never anything cleverer — the same precedence `economyFor`
- * uses one file over (`RunBudget.ts:117-129`), for the same reason.
+ * uses one file over (`RunBudget.ts:112-125`), for the same reason.
  */
 export function grantFor(budget: RunBudget, phaseId?: string | null): Grant | null {
   if (phaseId !== undefined && phaseId !== null) {
@@ -2610,7 +2675,7 @@ export function wouldExceedGrant(
 
 - the amount parses the same way `budgetRaise` does (`:69-72`) — a bad one is `UsageError` → **1**;
 - `--fact` is required and must name a LIVE fact in `.tldrx/memory/facts.yml` — otherwise `UsageError` → **1**, with the sentence saying that a grant with no decision behind it is a number nobody said;
-- `--phase` absent means the run ceiling — the common case;
+- `--phase` absent means the run ceiling — the common case; **`--phase` present still writes the run-level `authorized_by` and `authorized_at`**, because `grantFor`'s phase branch reads `phase.authorized_usd != null && budget.authorized_by !== null` — a phase amount with no fact id beside it resolves to no grant at all, which is a recorded number that silently governs nothing;
 - `--on-exceed` (values `ON_GRANT_EXCEED`) sets `on_grant_exceed`; absent leaves it as it was;
 - if the CURRENT ceiling already exceeds the grant being recorded, print the `wouldExceedGrant` sentence — recording a grant never rewrites a ceiling, and it never refuses (there is nothing to refuse: the money is already committed);
 - append `budget.granted` with `{amount_usd, fact, phase, note, ceiling_usd}` before `store.save()`, exactly as `budget raise` does at `:89-107`, so a grant that fails validation leaves no event claiming it happened.
@@ -2618,22 +2683,33 @@ export function wouldExceedGrant(
 In `budgetRaise`, immediately after `raiseBudget(...)` returns and **before** `store.mutateBudget(...)` (`:77-82`):
 
 ```ts
-    // The RESULTING ceiling, against what the owner authorized. Checked before
+    // The RESULTING ceiling, against what the owner authorized — checked before
     // anything is written, so a refusal leaves budget.yml byte-identical.
-    const verdict = wouldExceedGrant(store.budget, phaseId, outcome.runCeilingAfter);
+    //
+    // TWO BRANCHES, and they are not interchangeable. `grantFor` prefers a PHASE
+    // grant when the phase declares one, and a phase grant governs that phase's
+    // ceiling — not the run's. `--take-from` is the case that separates them: it
+    // moves money between phases and leaves the run ceiling exactly where it was,
+    // so measuring a phase grant against `runCeilingAfter` would refuse a move
+    // that changed nothing the grant is about. Written out rather than folded
+    // into one expression, because the wrong one is invisible in a diff.
+    const phaseGrant = grantFor(store.budget, phaseId);
+    const verdict = phaseGrant !== null && phaseGrant.level === "phase"
+      ? wouldExceedGrant(store.budget, phaseId, outcome.phaseCeilingAfter)
+      : wouldExceedGrant(store.budget, null, outcome.runCeilingAfter);
     if (verdict.blocked) {
       process.stderr.write(`tldrx budget raise: ${verdict.sentence ?? ""}\n`);
       return EXIT_GATE_REFUSED;
     }
 ```
 
-and after the success write, `if (verdict.sentence !== null) lines.push(verdict.sentence);` so a `warn` says so on stdout. Import `EXIT_GATE_REFUSED` (`:12` currently imports `EXIT_OK, EXIT_USAGE`).
+and after the success write, `if (verdict.sentence !== null) lines.push(verdict.sentence);` so a `warn` says so on stdout. Import `EXIT_GATE_REFUSED` (`:12` currently imports `EXIT_OK, EXIT_USAGE`) and `grantFor` + `wouldExceedGrant` from `../../core/budget/grant.ts`.
 
-Take the phase-vs-run reconciliation seriously: when `--take-from` moved money and the run ceiling did NOT grow, the run grant is untouched — pass `phaseId` so `grantFor` prefers a phase grant, and compare `outcome.phaseCeilingAfter` against a phase-level grant and `outcome.runCeilingAfter` against a run-level one. Write that as two clear branches with a comment, not as one clever expression.
+That is the whole of the phase-vs-run reconciliation, and Step 1's last test is the pin the one-expression version fails.
 
 - [ ] **Step 6: Event, replay, dashboard, help, guide**
 
-`Event.ts:117`: `"budget.warned", "budget.blocked", "budget.raised", "budget.granted",`.
+`Event.ts:118`: `"budget.warned", "budget.blocked", "budget.raised", "budget.granted",`.
 
 `renderReplay.ts`, beside `case "budget.blocked"` (`:190`):
 
@@ -2734,10 +2810,10 @@ EOF
 - Modify: `src/core/run/RunFile.ts` — `RunTriage` (`:311-316`), the `triage` validation (`:563-575`, `requireKeys(doc.triage, ["split", "depends_on"], …)` at `:565`)
 - Modify: `src/core/run/emitRunYaml.ts:167-169` — the fixed inline `triage:` mapping
 - Modify: `src/core/run/newRun.ts:76`, `:207` — `options.triage` passes straight through
-- Modify: `src/core/seed/applySplit.ts:136` — `triage: { split: splitRef, depends_on: run.depends_on },`
+- Modify: `src/core/seed/applySplit.ts:137` — `triage: { split: splitRef, depends_on: run.depends_on },`
 - Modify: `stages/what/stage.yml:15`, `stages/how/stage.yml:15`, `stages/plan/stage.yml:14`, `stages/build/stage.yml:23`, `stages/watch/stage.yml:25` — comments only
 - Modify: `workflows/*.yml` × 13, each `default_budget_usd:` on line 14 — comments only
-- Test: `test/seed-triage.test.ts` (the validation describe at `:278`), `test/run-file.test.ts` or wherever `emitRunYaml`'s round trip is pinned (`grep -rln emitRunYaml test/`), `test/schemas.test.ts`, `test/stage-override.test.ts`, `test/preset-map-inputs.test.ts`, `test/plan-contract.test.ts`, `test/build-implicit-plan.test.ts` (the five that read the shipped preset files — run them after the comment edit)
+- Test: `test/seed-triage.test.ts` (the validation describe at `:278`); `test/state-corruption.test.ts` for the `run.yml` round trip — **measured: `:282` is `expect(emitRunYaml(second.run)).toBe(first)`, the byte pin; there is no `test/run-file.test.ts`**; and `test/schemas.test.ts`, `test/stage-override.test.ts`, `test/preset-map-inputs.test.ts`, `test/plan-contract.test.ts`, `test/build-implicit-plan.test.ts` — the five that read the shipped preset files, run after the comment edit
 
 **Interfaces:**
 - Consumes: `requireKeys` (`src/core/schemas/validation.ts:102-113`, which checks required keys and ignores extras), `requireEnum`.
@@ -2774,20 +2850,23 @@ test("a run created by `run new` has no basis at all — absent means what every
 });
 ```
 
-In the run.yml round-trip test file:
+In `test/state-corruption.test.ts`, beside its existing `emitRunYaml` byte pin (`:282`):
 
 ```ts
 test("triage.budget_basis round-trips through the emitter", () => {
   const run = { ...triagedRun(), triage: { split: "s.yml", depends_on: [], budget_basis: "model-guess" } };
   const text = emitRunYaml(run);
-  expect(text).toContain("budget_basis: \"model-guess\"");
+  // Unquoted: `yamlScalar` emits a plain scalar when PLAIN_SAFE matches
+  // (`emitRunYaml.ts:16-18`), and `model-guess` does. Never force quoting in an
+  // emitter to satisfy a test.
+  expect(text).toContain("budget_basis: model-guess");
   expect(validateRunFile(parseYaml(text)).ok).toBe(true);
   expect(asRunFile(parseYaml(text)).triage?.budget_basis).toBe("model-guess");
 });
 
 test("a triaged run WITHOUT a basis is emitted byte-identically to before the key existed", () => {
   const run = { ...triagedRun(), triage: { split: "s.yml", depends_on: [] } };
-  expect(emitRunYaml(run)).toContain("triage: {split: \"s.yml\", depends_on: []}");
+  expect(emitRunYaml(run)).toContain("triage: {split: s.yml, depends_on: []}");
 });
 
 test("a value outside the closed set is refused", () => {
@@ -2800,14 +2879,28 @@ test("a value outside the closed set is refused", () => {
 And one test that the money literals now say what they are — assert the marker, never a bare English word:
 
 ```ts
-test("every shipped money literal carries an [assumption] label (#170 ask 3)", () => {
+test("every shipped money literal carries an [assumption] label ON the money (#170 ask 3)", () => {
+  // The marker is asserted by its EXACT TEXT, inside the contiguous comment block
+  // immediately above the key — not by a lookback window. Measured at the base: a
+  // six-line window is already GREEN for all five `stages/*/stage.yml`, because it
+  // catches the `effort:` [assumption] comments those files already carry
+  // (`stages/what/stage.yml:11` against `budget_usd:` at `:15`), and a guard that
+  // passes before the change is not a guard. Measured too: the line IMMEDIATELY
+  // above every one of the eighteen money keys is another key (`effort:` in the
+  // five stages, `depth:` in the thirteen workflows), so the label has to be a
+  // comment block written directly above the key and nowhere else.
   for (const file of [...stageFiles(), ...workflowFiles()]) {
-    const text = readFileSync(file, "utf8");
-    const money = text.split("\n").findIndex((l) => /^(budget_usd|default_budget_usd)\s*:/.test(l));
-    expect(money, `${file} declares a money literal`).toBeGreaterThan(0);
-    // The label must be ON the money, not the `effort:` two keys up.
-    const above = text.split("\n").slice(Math.max(0, money - 6), money).join("\n");
-    expect(above, `${file} labels its money literal`).toContain("[assumption]");
+    const lines = readFileSync(file, "utf8").split("\n");
+    const key = lines.findIndex((l) => /^(budget_usd|default_budget_usd)\s*:/.test(l));
+    expect(key, `${file} declares a money literal`).toBeGreaterThan(0);
+    const marker = (lines[key] ?? "").startsWith("default_budget_usd")
+      ? "`default_budget_usd` [assumption]"
+      : "`budget_usd` [assumption]";
+    const block: string[] = [];
+    for (let i = key - 1; i >= 0 && (lines[i] ?? "").trimStart().startsWith("#"); i--) {
+      block.unshift(lines[i] ?? "");
+    }
+    expect(block.join("\n"), `${file} labels its money literal`).toContain(marker);
   }
 });
 ```
@@ -2819,7 +2912,9 @@ Put that test in `test/schemas.test.ts` or wherever the shipped presets are alre
 ```
 bun test test/seed-triage.test.ts test/schemas.test.ts
 ```
-Expected: FAIL — `expect(received).toBe(expected)` with `received: undefined, expected: "model-guess"`, and 18 failures of the form `expect(received).toContain("[assumption]")` naming each preset file. Paste a representative slice plus the count.
+Expected: FAIL — `expect(received).toBe(expected)` with `received: undefined, expected: "model-guess"`, and **18** failures of the form `expect(received).toContain("\`budget_usd\` [assumption]")` / `…("\`default_budget_usd\` [assumption]")`, one per preset file. Paste a representative slice plus the count.
+
+**Both numbers, so the count is not mistaken for drift.** 18 is the RED for the predicate written above, and it is measured: `grep -rn 'budget_usd\` \[assumption\]' stages workflows` returns **0** hits today. The pre-flight scan measured **13** for the plan's earlier six-line-window predicate — 5 of the 18 already passed, because that window reached the `effort:` labels — and that is exactly why the predicate was replaced rather than the number corrected. If your run reports 13, you are running the old predicate.
 
 - [ ] **Step 3: The additive key, its validator and its emitter**
 
@@ -2869,7 +2964,7 @@ Validation (`:563-575`) — `requireKeys` checks required keys and ignores extra
   }
 ```
 
-`applySplit.ts:136`: `triage: { split: splitRef, depends_on: run.depends_on, budget_basis: "model-guess" },`. `newRun.ts:207` spreads `options.triage` wholesale, so nothing there changes — confirm that by reading `:76` and `:207` rather than assuming it.
+`applySplit.ts:137`: `triage: { split: splitRef, depends_on: run.depends_on, budget_basis: "model-guess" },`. `newRun.ts:207` spreads `options.triage` wholesale, so nothing there changes — confirm that by reading `:76` and `:207` rather than assuming it.
 
 - [ ] **Step 4: Label the eighteen literals — comments only, no number moves**
 
@@ -2889,7 +2984,7 @@ and in each of the thirteen `workflows/*.yml`, above `default_budget_usd:` on li
 - [ ] **Step 5: Run the named tests, prove teeth, gate and commit**
 
 ```
-bun test test/seed-triage.test.ts test/schemas.test.ts test/stage-override.test.ts test/preset-map-inputs.test.ts test/plan-contract.test.ts test/build-implicit-plan.test.ts test/run-file.test.ts
+bun test test/seed-triage.test.ts test/schemas.test.ts test/stage-override.test.ts test/preset-map-inputs.test.ts test/plan-contract.test.ts test/build-implicit-plan.test.ts test/state-corruption.test.ts
 ```
 Expected: PASS. The five preset readers parse YAML, so comments are invisible to them — but run them, because "comments are ignored" is a claim about a parser and this repo's rule is to check the instrument.
 
@@ -2967,10 +3062,10 @@ EOF
 - Modify: `src/core/facilitator/executors/build.ts:2300-2302` — the `phaseCostToDate(...)` call
 - Modify: `src/cli/helpText.ts` — the `cost` entry (`:934-963`)
 - Modify: `docs/guide/08-cli-reference.md` — the `## \`tldrx cost\`` section names `--stories`
-- Test: `test/cost.test.ts` (or wherever `buildRunCost` is pinned), a `planVsMeasured` describe in `test/attempt-cost.test.ts` or its own place in `test/economy.test.ts`, `test/build-handoff.test.ts`
+- Test: `test/economy.test.ts` and `test/token-economy.test.ts` — **measured: those two are the only files that import `buildRunCost`/`renderRunCost`; there is no `test/cost.test.ts`** — plus `test/build-executor.test.ts`, which is the only file that imports `phaseCostToDate` AND `renderBuildHandoff`
 
 **Interfaces:**
-- Consumes: `agent.spawned` payloads carrying `{story, role, max_budget_usd}` and `agent.result` payloads carrying `{key, cost_usd}` — **both verified in the committed golden stream** (`test/fixtures/build/golden/rounds-events.txt:4` and `:20`); `round2` (`caps.ts:122-125`).
+- Consumes: `agent.spawned` payloads carrying `{story, role, max_budget_usd}`, and `agent.result` rows whose story key is the payload's `key` and whose dollars are the **ENVELOPE's `cost_usd`** — measured in the committed golden stream, where `rounds-events.txt` `#19` reads `agent.result … cost_usd=0.1 keys=[effort,key,model,outputs,phase,session_id,task]`: `cost_usd` is NOT a payload key. `costView.toAttempt` (`:188-198`) is the precedent — it reads `event.cost_usd` and gates on `payload.metered !== false`. `round2` (`caps.ts:122-125`).
 - Produces:
   - `overShareSentence(ceilingUsd: number | null, measuredUsd: number | null, stories: number): string | null`
   - `buildStoryCost(runDir): { rows: readonly StoryCostRow[]; note: string | null } | null` where `StoryCostRow = { story: string; ceilingUsd: number | null; measuredUsd: number | null; ratio: number | null }`
@@ -3020,8 +3115,11 @@ describe("overShareSentence — one arithmetic, and null when a side is missing"
 describe("tldrx cost --stories", () => {
   test("per story: measured, the ceiling its spawn was given, and the ratio — off events only", async () => {
     const ws = await runWithEvents([
-      spawned({ story: "S1", role: "developer", max_budget_usd: 0.39 }),
-      result({ key: "S1", cost_usd: 2.27 }),
+      spawned({ payload: { story: "S1", role: "developer", max_budget_usd: 0.39 } }),
+      // `cost_usd` on the ENVELOPE, not in the payload — that is where it lives
+      // in the real stream, and a fixture built the other way would go green
+      // against a reader that sums nothing.
+      result({ cost_usd: 2.27, payload: { key: "S1" } }),
     ]);
     const out = await tldrx(ws.root, "cost", "--stories");
     expect(out.code).toBe(0);
@@ -3032,7 +3130,7 @@ describe("tldrx cost --stories", () => {
   });
 
   test("a story with no spawned ceiling is reported as absent, not as a zero", async () => {
-    const ws = await runWithEvents([result({ key: "S2", cost_usd: 1.0 })]);
+    const ws = await runWithEvents([result({ cost_usd: 1.0, payload: { key: "S2" } })]);
     const out = await tldrx(ws.root, "cost", "--stories");
     expect(out.stdout).toContain("S2");
     expect(out.stdout.toLowerCase()).toContain("not recorded");
@@ -3045,7 +3143,30 @@ describe("tldrx cost --stories", () => {
   });
 });
 
-test("the Build handoff's cost line carries the clause when there is one, and is unchanged when there is not", () => {
+// THE failing assertion for this task's handoff half: it goes through the real
+// path — `phaseCostToDate`'s `note`, which is what `build.ts:2308` hands to
+// `renderBuildHandoff` as `costNote`. The two `renderBuildHandoff` assertions
+// below are GUARDS: both are already green at the base (`handoff.ts:95` renders
+// ` (${costNote})`, and the check is `== null`, so `parts({})` already equals
+// `parts({costNote: null})`), so neither can fail for the reason this task
+// exists — assert against behaviour, not against the constant that produced it.
+test("phaseCostToDate's note carries the over-ceiling clause when the stories overran", () => {
+  const ws = stageWithSpend();                          // one story, $2.27 metered
+  const cost = phaseCostToDate(ws.runDir, "04-build", "build", 0, [], [
+    { ceilingUsd: 0.39, measuredUsd: 2.27 },
+  ]);
+  expect(cost.note ?? "").toContain("5.8");
+  expect(cost.note ?? "").toContain("ceiling");
+});
+
+test("and says nothing when the stories fit — no clause, and the fully-metered stage keeps its clean line", () => {
+  const ws = stageWithSpend();
+  expect(phaseCostToDate(ws.runDir, "04-build", "build", 0, [], [
+    { ceilingUsd: 5, measuredUsd: 1 },
+  ]).note).toBeNull();
+});
+
+test("GUARD (green before this change): a note reaches the handoff header, and a null one changes nothing", () => {
   expect(renderBuildHandoff(parts({ costNote: "5.8x over" }))).toContain("5.8x over");
   expect(renderBuildHandoff(parts({ costNote: null }))).toBe(renderBuildHandoff(parts({})));
 });
@@ -3054,7 +3175,7 @@ test("the Build handoff's cost line carries the clause when there is one, and is
 - [ ] **Step 2: Run them and keep the RED verbatim**
 
 ```
-bun test test/cost.test.ts test/economy.test.ts
+bun test test/economy.test.ts test/build-executor.test.ts
 ```
 Expected: FAIL — `Cannot find module '../src/core/build/planVsMeasured.ts'`, and `tldrx cost: unknown flag --stories (see \`tldrx cost --help\`)` with exit `1` where `0` was expected. That second one is `flagRefusal` doing its job and is worth keeping in the message: it is the proof that declaring a flag in `helpText.ts` is dispatch, not documentation.
 
@@ -3103,7 +3224,7 @@ export function overShareSentence(
 
 - [ ] **Step 4: The report, off events and nothing else**
 
-In `src/core/budget/costView.ts`, beside `buildRunCost` (`:122`), add `buildStoryCost(runDir)`: read the same event stream `buildRunCost` reads, take `max_budget_usd` off each `agent.spawned` keyed by `story`, sum `cost_usd` off each `agent.result` keyed by `key`, and return one row per story with `ceilingUsd`, `measuredUsd` and `ratio` — each `number | null`. A story that spawned but reported no cost, or reported a cost with no spawn, gets a `null` on that side and the renderer says **"not recorded"** with the reason, never `$0.00`. `renderStoryCost` prints the table plus the `overShareSentence` total; with no story rows at all it says so in a sentence. Read `toAttempt` (`:188`) and `renderRunCost` (`:265`) first and follow their idiom exactly — the existing file already distinguishes UNMETERED from zero and that distinction must survive.
+In `src/core/budget/costView.ts`, beside `buildRunCost` (`:122`), add `buildStoryCost(runDir)`: read the same event stream `buildRunCost` reads, take `max_budget_usd` off each `agent.spawned` payload keyed by its `story`, and sum the money **through `toAttempt`'s precedent** (`:188-198`) — the **envelope's** `event.cost_usd`, keyed by the `agent.result` payload's `key`, with `payload.metered !== false` deciding whether the row counts at all. Return one row per story with `ceilingUsd`, `measuredUsd` and `ratio` — each `number | null`. **Summing `payload.cost_usd` would produce `0` for exactly the metered rows this report exists for**: measured, `cost_usd` is an envelope field and appears in no `agent.result` payload key list in the golden stream. An UNMETERED turn contributes `null`, never `0` — `toAttempt` already draws that line and this must not redraw it. A story that spawned but reported no cost, or reported a cost with no spawn, gets a `null` on that side and the renderer says **"not recorded"** with the reason, never `$0.00`. `renderStoryCost` prints the table plus the `overShareSentence` total; with no story rows at all it says so in a sentence. Read `toAttempt` (`:188`) and `renderRunCost` (`:265`) first and follow their idiom exactly — the existing file already distinguishes UNMETERED from zero and that distinction must survive.
 
 In `src/cli/commands/cost.ts`, add the branch beside `--all` (`:42-48`), before the run resolution (a story report is per-run, so it goes after `RunStore.resolve` — read the surrounding code and put it where the store is in hand), and extend `usage` (`:26`).
 
@@ -3151,7 +3272,7 @@ In `build.ts:2300-2302`, pass the executor's own rows: the caps it applied per s
 `helpText.ts`, the `cost` entry: a `stories` flag (`arg: null`) whose meaning names the CEILING explicitly — *"per story: what it measurably cost, beside the ceiling its spawn was given (`agent.spawned.max_budget_usd`), and the ratio. Off `events.jsonl` only; no plan document carries a per-story dollar figure, so none is invented."* — and one note saying this changes no ceiling and is the input a recalibration would need. `docs/guide/08-cli-reference.md`: the `## \`tldrx cost\`` section names `--stories`.
 
 ```
-bun test test/cost.test.ts test/economy.test.ts test/token-economy.test.ts test/attempt-cost.test.ts test/estimate-remaining.test.ts test/build-handoff.test.ts test/build-executor.test.ts test/money-safety.test.ts test/remaining-work.test.ts
+bun test test/economy.test.ts test/token-economy.test.ts test/attempt-cost.test.ts test/estimate-remaining.test.ts test/build-executor.test.ts test/money-safety.test.ts test/remaining-work.test.ts
 ```
 Expected: PASS. The four economy/estimate files are second-order — run them and READ the code, do not assume.
 
@@ -3266,13 +3387,13 @@ echo "build: $?"
 then read the real output of each:
 
 ```
-node dist/cli.js answer --help
-node dist/cli.js story --help
-node dist/cli.js budget --help
-node dist/cli.js cost --help
+node dist/tldrx.js answer --help
+node dist/tldrx.js story --help
+node dist/tldrx.js budget --help
+node dist/tldrx.js cost --help
 ```
 
-(Check the built entry point's real name in `package.json`'s `bin` and `scripts/build.ts` before running these.) Quote **the output**, not your recollection of it, when writing:
+(**`dist/tldrx.js`, measured**: `package.json`'s `bin` maps to it and `scripts/build.ts:10` says `dist/tldrx.js <- bin/tldrx.ts`. There is no `dist/cli.js`. Re-check both before running, because quoting a command from memory is exactly what AGENTS §1 forbids — this line was wrong in an earlier draft for that reason.) Quote **the output**, not your recollection of it, when writing:
 
 - `answer` — why `--decided-by` is optional here and required on `facts add` (the hook cannot honestly say either); what absence means; that the contradiction check RAISES and never refuses, and what it can and cannot see.
 - `story` — which statuses may be widened, why `done` refuses and what answers it (`--for-fix`); that widen runs no agent, spends nothing, moves no cursor; that the boundary gate re-reads `touches:` off disk, so the next evaluation simply passes.
@@ -3414,6 +3535,12 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - [ ] **Step 1: Run every gate, each exit code on its own line**
 
 ```bash
+bun install
+echo "install: $?"
+```
+(Expected `0`. Without it `bun run typecheck` exits **127** — `tsc: command not found` — and a 127 read as a gate result is the wrong instrument, not a red gate.)
+
+```bash
 bun run typecheck
 echo "typecheck: $?"
 ```
@@ -3471,7 +3598,7 @@ ls test/*.test.ts | while read -r f; do if grep -qE 'node:child_process|Bun\.spa
 ```
 Expected at the base: **75**. Two of this plan's five new test files spawn (`test/story-widen.test.ts`, `test/budget-grant.test.ts`); three do not (`test/answer-attribution.test.ts`, `test/answer-conflict.test.ts`, `test/unowned-findings.test.ts`). So the expected end count is **77**, and `test/machine-load.test.ts:125`'s floor of 40 is untouched — it is a vacuity guard, not a count. **If your files spawn differently from that, reconcile the number; do not hand-wave it, and do not edit the floor to make a number fit.**
 
-State both ends, measured, in whatever close is written for these issues.
+State both ends, measured, in whatever close is written for these issues. **No test file beyond the five in the File Structure table is created by this plan** — every other assertion lands in a file that already exists (`test/build-executor.test.ts`, `test/ship.test.ts`, `test/economy.test.ts`, `test/state-corruption.test.ts`, `test/close-open-questions.test.ts`, `test/fixlist.test.ts`, `test/schemas.test.ts`) — so the 75 → 77 arithmetic above is complete. If you find yourself creating a sixth, add it to the File Structure table and re-derive this number before you run it.
 
 - [ ] **Step 4: File the out-of-scope bug found while reading**
 
@@ -3500,7 +3627,9 @@ No tag, no `npm publish`, no `scripts/release.sh` — the PreToolUse release gat
 
 ## Self-Review
 
-**Spec coverage.** §3.1 (#169) → Tasks 1, 2 and 3: the two flags and their refusals (T1), `repos` from explicit signals only with `reposFromAffects` as the leaf (T1), the deviation about the hook made mechanical (T1), the advisory check with its measured limit and its unmeasured false-positive rate (T2), `conflicts_with` with the round-trip pin C2 asked for (T2), `decidedTally` on the close and the handoff header (T3), and the explicit non-goal of a third `FACT_DECIDERS` value (nowhere — `FACT_DECIDERS` is not touched, and `test/facts-add.test.ts:362` is named as staying green). §3.2 (#171) → Tasks 4, 5 and 6: the operator-only verb with its `done` refusal and its 2/3/1 exit table (T4), the two predicates and the repo-aware `ownershipOf` with four labels (T5), the three destinations with the card demoted to secondary and the measured reason (T6), and no fifth disposition, no stored `owner`, no eighth auto-gate condition anywhere. §3.3 (#170) → Tasks 7, 8 and 9: the required-and-nullable grant keys with mapper AND emitter AND the `grant` → `raise` pin (T7), `on_grant_exceed` separate from `on_exceed` (T7), the 1-vs-2 exit table stated as two conditions rather than one split (T7), `triage.budget_basis` (T8), the eighteen `[assumption]` labels with no literal moved (T8), `cost --stories` named for the ceiling it reads (T9), the N× clause on the cost line and not in an event (T9), and `caps.ts`/`remainingWork.ts` untouched with `test/remaining-work.test.ts` named as the tripwire in T7 and T9. §4.1 → Global Constraints' mapper/emitter table, and a round-trip pin in T2, T7 and T8. §4.2 → the absent-with-reason list in Global Constraints, and a test for every entry. §4.3 → the five leaves, each named with its consumers. §4.4 → red-first in every task, with the red-by-design set corrected from three to two and the correction argued. §4.5 → the cadence rule, and T12's measured spawner reconciliation. §5 → a golden statement per task and the whole-wave proof in T12 Step 2. §6 → the task order is the spec's (#169 → #171 → #170), and the `build/handoff.ts` collision is sequenced: T3 adds the header clause, T6 the `## Unknowns` block, T9 extends the note through `phaseCost.ts` rather than the handoff. §7's three PENDINGs are resolved to the defaults section 9 records, and no alternative is implemented.
+**Spec coverage.** §3.1 (#169) → Tasks 1, 2 and 3: the two flags and their refusals (T1), `repos` from explicit signals only with `reposFromAffects` as the leaf (T1), the deviation about the hook made mechanical (T1), the advisory check with its measured limit and its unmeasured false-positive rate (T2), `conflicts_with` with the round-trip pin C2 asked for (T2), `decidedTally` on the close and the handoff header (T3), and the explicit non-goal of a third `FACT_DECIDERS` value (nowhere — `FACT_DECIDERS` is not touched, and `test/facts-add.test.ts:363` — the test inside the `:362` describe — is named as staying green). §3.2 (#171) → Tasks 4, 5 and 6: the operator-only verb with its `done` refusal and its 2/3/1 exit table (T4), the two predicates and the repo-aware `ownershipOf` with four labels (T5), the three destinations with the card demoted to secondary and the measured reason (T6), and no fifth disposition, no stored `owner`, no eighth auto-gate condition anywhere. §3.3 (#170) → Tasks 7, 8 and 9: the required-and-nullable grant keys with mapper AND emitter AND the `grant` → `raise` pin (T7), `on_grant_exceed` separate from `on_exceed` (T7), the 1-vs-2 exit table stated as two conditions rather than one split (T7), `triage.budget_basis` (T8), the eighteen `[assumption]` labels with no literal moved (T8), `cost --stories` named for the ceiling it reads (T9), the N× clause on the cost line and not in an event (T9), and `caps.ts`/`remainingWork.ts` untouched with `test/remaining-work.test.ts` named as the tripwire in T7 and T9. §4.1 → Global Constraints' mapper/emitter table, and a round-trip pin in T2, T7 and T8. §4.2 → the absent-with-reason list in Global Constraints, and a test for every entry. §4.3 → the five leaves, each named with its consumers. §4.4 → red-first in every task, with the red-by-design set corrected from three to two and the correction argued. §4.5 → the cadence rule, and T12's measured spawner reconciliation. §5 → a golden statement per task and the whole-wave proof in T12 Step 2. §6 → the task order is the spec's (#169 → #171 → #170), and the `build/handoff.ts` collision is sequenced: T3 adds the header clause, T6 the `## Unknowns` block, T9 extends the note through `phaseCost.ts` rather than the handoff. §7's three PENDINGs are resolved to the defaults section 9 records, and no alternative is implemented.
+
+**Re-review after the pre-flight revision, over the changed tasks only (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12).** Spec coverage is unchanged by the revision — no requirement moved, and no task lost a step. Placeholder scan: the two hedges the scan found are gone (Task 4 no longer says "read `boundaryCard` before choosing"; Task 7 no longer states the reconciliation twice, once in code and once contradicting it in prose), and no new "TBD"/"or whichever file" phrasing was introduced — every `bun test` command now names a file that exists at the base, measured. Type consistency across the changed tasks: `DeclaredSurface.story` is now stated as a RENAME of `ShipStory.id` in all three places it is mentioned (T5's Interfaces, T5's leaf docstring, T6's `ship` prose), so no caller passes the array through unmapped; `phaseCostToDate(runDir, phaseId, stageId, invocationUsd, invocationTurns, stories)` is called with six arguments in T9's new test and declared with six in T9's Step 5; `grantFor`/`wouldExceedGrant` are both imported where T7 Step 5 now uses them; `StorySpend {ceilingUsd, measuredUsd}` is the shape T9's test passes and the shape its leaf reads. Red-first, re-checked task by task: every task now has at least one assertion that is red at the base for the reason the task exists — T9's was the one that did not (both its handoff assertions were already green) and it now asserts through `phaseCostToDate`'s `note`; T6's changed "none" sentence had nothing pinning it and now has a literal pin; T8's guard was already green for five of eighteen files and now asserts the marker text.
 
 **Where the plan meets the code awkwardly, stated rather than smoothed over.** All six are also in `## Notes for the controller` with a proposed resolution: `renderQuestions` cannot mint an appended block; `test/close-open-questions.test.ts:125` cannot go red as claimed; the machine-load floor does not move; `FactsStore.supersede` is not a second writer; the `## Unknowns` citation spelling follows the file's existing convention rather than the spec's; and `overShareSentence`'s third argument had no stated shape.
 
@@ -3523,6 +3652,8 @@ Six places where the spec could not be turned into an unambiguous step, each wit
 5. **The `## Unknowns` citation spelling.** Spec §3.2 says each new bullet ends `[src: tldrx-work/<run>/<fixlist rel>:1]`. Measured: the existing `## Unknowns` bullets cite the RUN-RELATIVE path (`build/handoff.ts:112`, `` `[src: ${o.reviewRel}:1]` ``), and `pathBases` resolves a `[src:]` file path against the workspace root first and the run dir second, so both resolve. **Proposed and implemented:** follow the file's existing convention, so one document does not carry two spellings of one citation. Reverse it by changing one template string in Task 6 Step 3.
 
 6. **`overShareSentence`'s third argument had no stated shape.** Spec §3.3 gives `overShareSentence(ceilingUsd, measuredUsd, stories)` without saying what `stories` is. **Proposed and implemented:** `stories: number` — how many stories the two totals cover, used only for the sentence's plural, with the two amounts as SUMS over those stories and `null` returned when either sum cannot be formed (any missing side, or a non-positive ceiling). If the controller intended per-story rows instead, the leaf takes a row list and returns the worst ratio — one signature change in Task 9 Step 3 and its two feeders.
+
+7. **Task 8's expected RED is 18, not the 13 the pre-flight scan named.** The scan measured 13 against the plan's ORIGINAL six-line-window predicate (5 of the 18 files already passed, because that window reached the `effort:` `[assumption]` comments) and ruled that the predicate be strengthened AND the count corrected to 13. Those two halves cannot both hold: with the strengthened predicate — the exact marker text `` `budget_usd` [assumption] `` inside the contiguous comment block immediately above the key — **all eighteen fail**, measured (`grep -rn 'budget_usd\` \[assumption\]' stages workflows` → 0 hits, and the line immediately above every one of the eighteen money keys is another key: `effort:` in the five stages, `depth:` in the thirteen workflows). **Proposed and implemented:** keep the strengthened predicate, since a guard already green for five of eighteen files is the thing the finding was about, and state BOTH numbers in the step so a reviewer seeing 13 knows they are running the old predicate. Reverse it by restoring the six-line window, at the cost of the guard.
 
 Two further items the controller should acknowledge rather than decide:
 
