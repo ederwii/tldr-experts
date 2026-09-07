@@ -35,8 +35,8 @@ import { REVIEW_DIR } from "../src/core/run/prepared.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { parseReview } from "../src/core/build/review.ts";
 import {
-  DISPOSITIONS, MAX_FIXLIST_ROUNDS, openFindings, parseFixFindings, parseFixlistFile, renderFixlist,
-  unevidencedClaims,
+  DISPOSITIONS, MAX_FIXLIST_ROUNDS, carriedFindings, openFindings, parseFixFindings, parseFixlistFile,
+  renderFixlist, unevidencedClaims, type FixFinding,
 } from "../src/core/build/fixlist.ts";
 import { readReviewLedger } from "../src/core/facilitator/executors/build.ts";
 import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
@@ -56,6 +56,24 @@ const FAKE_KEYS = [
 ] as const;
 
 const DIED = "Reached maximum budget ($1)";
+
+/** A minimal `FixFinding`, defaults filled, for tests that need no run around it. */
+let findingSeq = 0;
+function finding(overrides: Partial<FixFinding>): FixFinding {
+  findingSeq += 1;
+  return {
+    n: findingSeq,
+    severity: "medium",
+    finding: "a finding",
+    where: "",
+    disposition: "fix-now",
+    detail: "",
+    doNot: [],
+    resolved: false,
+    resolvedSha: null,
+    ...overrides,
+  };
+}
 
 /** The three defects S5's reviewer actually raised, in envelope shape. */
 const THREE_DEFECTS: readonly Record<string, unknown>[] = [
@@ -616,6 +634,25 @@ describe("the artifact round-trips", () => {
     expect(read[0]?.disposition).toBe("fix-now");
     expect(openFindings(read).map((f) => f.n)).toEqual([2]);
     expect(unevidencedClaims(read)).toEqual([]);
+  });
+});
+
+describe("carriedFindings — 'carried forward' is not 'still owed'", () => {
+  test("an unresolved defer-with-log is carried; a fix-now is not", () => {
+    const deferred = finding({ disposition: "defer-with-log", resolved: false });
+    const owed = finding({ disposition: "fix-now", resolved: false });
+    expect(carriedFindings([deferred, owed])).toEqual([deferred]);
+    expect(openFindings([deferred, owed])).toEqual([owed]); // isOpen is UNCHANGED
+  });
+
+  test("a defer-with-log closed by an EVIDENCED claim is not carried", () => {
+    const closed = finding({ disposition: "defer-with-log", resolved: true, resolvedSha: "abc1234" });
+    expect(carriedFindings([closed])).toEqual([]);
+  });
+
+  test("a bare `Resolved: yes` with no sha is still carried — #130's clause, reused", () => {
+    const bare = finding({ disposition: "defer-with-log", resolved: true, resolvedSha: null });
+    expect(carriedFindings([bare])).toEqual([bare]);
   });
 });
 
