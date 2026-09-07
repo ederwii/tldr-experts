@@ -383,7 +383,8 @@ Run the run's next stage and stop at its gate. Exit `4` is the normal end of a s
 stage.
 
 ```
-tldrx next [<run>] [--run <id>] [--dry-run] [--prepare|--commit] [--review] [--fixlist <path>]
+tldrx next [<run>] [--run <id>] [--dry-run] [--prepare|--commit] [--review] [--check]
+           [--fixlist <path>]
            [--parallel <n>] [--model <m>] [--effort <level>]
            [--max-usd <n>] [--prompt-max-bytes <n>] [--max-reads <n>] [--cost-usd <n>]
            [--tokens <n>] [--yolo] [--keep-worktrees] [--discard-pending] [--reuse-epic]
@@ -396,6 +397,7 @@ tldrx next [<run>] [--run <id>] [--dry-run] [--prepare|--commit] [--review] [--f
 | `--prepare` | Write the prompt bundle and stop, spawning nothing |
 | `--commit` | Record the result of a `--prepare` cycle run by hand. Spawns nothing |
 | `--review` | With `--prepare`/`--commit`, addresses the story's **reviewer** half instead of its developer half: the bundle is one directory down, at `.agent/<stage>/<story>/review/`. Spawns nothing ([10 — Unattended mode](10-unattended-mode.md)) |
+| `--check` | With `--commit`, REHEARSES it: validates the prepared bundle's `result.json` through the same reader `--commit` uses, prints every refusal with the offending line, and **writes nothing** — no state, no event, no attempt spent. Exit `0` when `--commit` would read the envelope, `1` when it would not. It is how a reviewer's `[src: …]` citation gets checked while the turn is still open. On a developer bundle the reader coerces rather than refuses, so `--check` exits `0` and names what is about to be coerced |
 | `--fixlist <path>` | With `--prepare`, re-prepares the AUTHOR's bundle carrying that fix list's open findings under `## Fix list`. Omit it and the latest round on disk with anything still open is carried by itself |
 | `--parallel <n>` | How many stories of ONE wave to build at a time. Merges still land in the wave's listed order; default `1` |
 | `--model <m>` | Passed through to `claude --model`. Default: the stage's own `model:` |

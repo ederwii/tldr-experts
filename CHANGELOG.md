@@ -25,6 +25,42 @@
   declared full command once before you stop, because the gate re-runs it after. When it does
   not, the prompt is byte-identical to the one before this existed. Additive: `version:` stays
   `1`, and every workspace written without the slot loads and behaves exactly as it did.
+- **`tldrx next --commit --check` rehearses the commit and writes nothing, so a bad envelope
+  is caught while the turn is still open.** Measured on a real workspace this week: two reviews
+  were refused at `tldrx next --commit --review` because a `[src: …]` citation inside a `refuted`
+  finding was not the last thing on its line. Both refusals were correct; both arrived after the
+  turn had been paid for, and the host's answer was to ban `refuted` from the next thirty briefs
+  — a protocol feature switched off to dodge a late validator, which is the most expensive
+  possible outcome for a rule the framework got right. The reviewer cannot check itself: its
+  tools are `Read`, `Grep`, `Glob` and `Bash(git diff *)`, so there is no door to run a validator
+  through, and its prompt already states the end-of-line rule with a refused and an accepted
+  example generated from the reader's own patterns. What was missing was a way for the host to
+  ask "is this readable?" before saying the turn is done. `--check` validates the prepared
+  bundle's `result.json` through the SAME reader `--commit` uses — no second implementation of
+  the grammar, the dispositions or the verdict enum — prints every refusal verbatim with the
+  offending line, and exits `0` when `--commit` would read the envelope and `1` when it would
+  not. It takes no lock, moves no cursor, records no event and spends no attempt; the tests
+  compare `run.yml`, the story file and `events.jsonl` as bytes either side of the call. On a
+  developer bundle the reader is deliberately tolerant — a missing `outputs` is read as `[]` —
+  so `--check` exits `0` and NAMES what is about to be coerced rather than inventing a refusal
+  the framework does not make.
+
+### Fixed
+
+- **The developer bundle carries `result_schema` too, so both halves of one handshake make the
+  same promise.** Measured on disk in a real run: `.agent/<story>/pending.json` had no
+  `result_schema` while the reviewer bundle one directory down had one. The reviewer prompt says
+  in as many words to read the envelope shape out of the bundle and never from memory; the
+  developer had nothing to read it out of, so a host guessed the shape by copying a sibling
+  story's `result.json`, and a reviewer later "corrected" it from the other file. A developer
+  bundle — the Build story's, and every single-agent stage's — now carries the
+  `{outputs, questions_asked, notes}` envelope the spawned half is handed through
+  `claude --json-schema`, plus the `cost_usd` and `session_id` a host may declare and
+  `readResult` reads back. It is DERIVED from that schema rather than retyped, so a change to
+  the envelope cannot reach the spawn without reaching the bundle. The one thing the two halves
+  do not share is how strictly the schema is read, and that is now written down instead of
+  implied: a reviewer envelope is refused on its form, a developer envelope is coerced, and
+  `--commit --check` is what reports the difference.
 
 ### Changed
 

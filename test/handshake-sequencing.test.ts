@@ -487,3 +487,149 @@ describe("an unreadable result.json refuses loudly instead of failing the stage 
     expect(String(loud[0]!.payload.role)).toBe("reviewer");
   });
 });
+
+/**
+ * `--commit --check` — the same reader, before the turn is spent.
+ *
+ * The measurement: on a real workspace this week two reviews were REFUSED at
+ * `tldrx next --commit --review` because a `[src: …]` citation inside a `refuted`
+ * finding was not the last thing on its line. Both refusals were correct and both
+ * landed after the turn had been paid for, so the host banned `refuted` from the
+ * next thirty briefs rather than pay the cycle again — a protocol feature turned
+ * off to dodge a late validator.
+ *
+ * The reviewer cannot check itself (`REVIEWER_TOOLS` is Read/Grep/Glob and
+ * `Bash(git diff *)` — no door to run a validator through) and its prompt already
+ * states the end-of-line rule with a refused and an accepted example, generated
+ * from the reader's own patterns. So the affordance that was missing is on the
+ * HOST side, and these are its two halves: it refuses what `--commit` would
+ * refuse, it accepts what `--commit` would accept, and either way it writes
+ * NOTHING — measured as bytes over `run.yml`, the story file and `events.jsonl`.
+ */
+describe("`--commit --check` validates before the turn is spent", () => {
+  /** Everything a check must never move, as bytes. */
+  function frozen(ws: BuildWorkspace, id = "S1"): string {
+    return JSON.stringify({
+      run: runYaml(ws),
+      story: storyFile(ws, id),
+      events: readFileSync(join(ws.runDir, "events.jsonl"), "utf8"),
+    });
+  }
+
+  /** A `fixlist` envelope whose one `refuted` finding cites `where`. */
+  function refutedEnvelope(where: string): unknown {
+    return {
+      verdict: "fixlist",
+      summary: "signed, with one finding the criteria did not cover",
+      findings: [],
+      fixlist: [{
+        n: 1,
+        severity: "minor",
+        finding: "the selector is said to drop places before ranking",
+        where,
+        disposition: "refuted",
+        detail: "",
+      }],
+    };
+  }
+
+  test("it REFUSES a `[src: …]` that is not at the end of its line, and writes nothing", async () => {
+    const ws = workspace();
+    await stallAtReviewInSession(ws);
+    expect((await next(ws, { mode: "prepare", review: true, at: "2026-09-02T09:10:00Z" })).code).toBe(0);
+    countSpawns(ws);
+    // The exact mistake the live reviews were refused for: the token is written
+    // mid-sentence, so the `$` anchor never sees it.
+    writeFileSync(
+      join(ws.runDir, ".agent", "build", "S1", "review", "result.json"),
+      `${JSON.stringify(refutedEnvelope("it drops places [src: app:s1.txt:1] before ranking"))}\n`,
+      "utf8",
+    );
+    const before = frozen(ws);
+
+    const checked = await next(ws, { mode: "commit", review: true, check: true, at: "2026-09-02T09:20:00Z" });
+
+    expect(checked.code).toBe(1);
+    const said = checked.lines.join("\n");
+    expect(said).toContain("REFUSED");
+    // The offending line, verbatim, and the rule that refused it — not "no
+    // `[src: …]`", which is the symptom the reviewer had already satisfied.
+    expect(said).toContain("it drops places [src: app:s1.txt:1] before ranking");
+    expect(said).toContain("wrote nothing");
+    // Nothing moved. Bytes, not fields.
+    expect(frozen(ws)).toBe(before);
+    expect(spawns(ws)).toEqual([]);
+    // And the bundle is still out, so the SAME command settles it once fixed.
+    expect(existsSync(join(ws.runDir, ".agent", "build", "S1", "review", "pending.json"))).toBe(true);
+    expect(stageStatus(ws)).toBe("running");
+  });
+
+  test("it ACCEPTS the same claim written to the grammar, and still writes nothing", async () => {
+    const ws = workspace();
+    await stallAtReviewInSession(ws);
+    expect((await next(ws, { mode: "prepare", review: true, at: "2026-09-02T09:10:00Z" })).code).toBe(0);
+    countSpawns(ws);
+    writeFileSync(
+      join(ws.runDir, ".agent", "build", "S1", "review", "result.json"),
+      `${JSON.stringify(refutedEnvelope("it drops places before ranking [src: app:s1.txt:1]"))}\n`,
+      "utf8",
+    );
+    const before = frozen(ws);
+
+    const checked = await next(ws, { mode: "commit", review: true, check: true, at: "2026-09-02T09:20:00Z" });
+
+    expect(checked.code).toBe(0);
+    expect(checked.lines.join("\n")).toContain("would accept it");
+    expect(frozen(ws)).toBe(before);
+    expect(spawns(ws)).toEqual([]);
+    expect(existsSync(join(ws.runDir, ".agent", "build", "S1", "review", "pending.json"))).toBe(true);
+  });
+
+  test("an unreadable file is refused by the same reader, and no `result.unreadable` is logged", async () => {
+    const ws = workspace();
+    expect((await next(ws, { mode: "prepare" })).code).toBe(0);
+    writeFileSync(join(ws.runDir, ".agent", "build", "S1", "result.json"), "{ not json\n", "utf8");
+    const before = frozen(ws);
+
+    const checked = await next(ws, { mode: "commit", check: true, at: "2026-09-02T09:10:00Z" });
+
+    expect(checked.code).toBe(1);
+    expect(checked.lines.join("\n")).toContain("is not valid JSON");
+    // `--commit` logs `result.unreadable` for this. A check is not a commit.
+    expect(countOf(ws, "result.unreadable")).toBe(0);
+    expect(frozen(ws)).toBe(before);
+  });
+
+  test("a developer envelope is accepted with its coercions NAMED, because the reader coerces", async () => {
+    const ws = workspace();
+    expect((await next(ws, { mode: "prepare" })).code).toBe(0);
+    writeFileSync(
+      join(ws.runDir, ".agent", "build", "S1", "result.json"),
+      `${JSON.stringify({ notes: "done" })}\n`,
+      "utf8",
+    );
+    const before = frozen(ws);
+
+    const checked = await next(ws, { mode: "commit", check: true, at: "2026-09-02T09:10:00Z" });
+
+    // Exit 0, because `--commit` would accept it: `readResult` coerces a missing
+    // `outputs` to `[]`. Saying 1 here would be inventing a refusal the framework
+    // does not make.
+    expect(checked.code).toBe(0);
+    const said = checked.lines.join("\n");
+    expect(said).toContain("`outputs` is missing or not an array");
+    expect(said).toContain("`questions_asked` is missing or not an array");
+    expect(frozen(ws)).toBe(before);
+  });
+
+  test("with no bundle out it says so and still writes nothing", async () => {
+    const ws = workspace();
+    const before = frozen(ws);
+
+    const checked = await next(ws, { mode: "commit", review: true, check: true, at: "2026-09-02T09:10:00Z" });
+
+    expect(checked.code).toBe(1);
+    expect(checked.lines.join("\n")).toContain("no reviewer bundle is out");
+    expect(frozen(ws)).toBe(before);
+  });
+});

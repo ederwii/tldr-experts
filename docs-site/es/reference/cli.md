@@ -46,7 +46,7 @@ tldrx approve --note "…"    # firma la compuerta; antes se vuelven a correr la
 |---|---|
 | `tldrx run new <slug>` | Abre una pieza de trabajo. `--scope`, `--budget`, `--seed`, `--gates`, `--attended-by host`. |
 | `tldrx run status [<run>]` | Dónde va, qué está esperando, cuánto costó. `--json`. |
-| `tldrx next [<run>]` | Corre la siguiente etapa. `--dry-run`, `--prepare`/`--commit`, `--review`, `--effort`, `--max-reads`. |
+| `tldrx next [<run>]` | Corre la siguiente etapa. `--dry-run`, `--prepare`/`--commit`, `--review`, `--check`, `--effort`, `--max-reads`. |
 | `tldrx run auto [<run>]` | Llama a `next` una y otra vez hasta que algo te necesite. `--max-usd`, `--until`, `--parallel`. |
 | `tldrx run attend host \| --none` | Entrega el run a una sesión host, o recupéralo. |
 | `tldrx run estimate` | El único comando que adivina. Lo dice: `ESTIMATE`. |
