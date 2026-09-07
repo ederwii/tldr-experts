@@ -41,9 +41,17 @@
   offending line, and exits `0` when `--commit` would read the envelope and `1` when it would
   not. It takes no lock, moves no cursor, records no event and spends no attempt; the tests
   compare `run.yml`, the story file and `events.jsonl` as bytes either side of the call. On a
-  developer bundle the reader is deliberately tolerant — a missing `outputs` is read as `[]` —
-  so `--check` exits `0` and NAMES what is about to be coerced rather than inventing a refusal
-  the framework does not make.
+  developer bundle the reader is deliberately tolerant — a missing `outputs` is read as `[]`, a
+  non-string `notes` as `""` — so `--check` exits `0` and NAMES what is about to be coerced
+  rather than inventing a refusal the framework does not make. That naming goes down to the
+  ELEMENT, because the coercion that hides best is the one inside an array: `outputs` and
+  `questions_asked` are declared `items: {type: "string"}` and the reader silently FILTERS every
+  element that is not one, so `["good", 42, null, "also-good"]` is an array, passes any
+  whole-field type test, and still reaches the run as two entries. `--check` names each dropped
+  element by index and by the JSON of its value, through the same one-line predicate the reader
+  filters on — called, not restated, so the check cannot name a set the reader does not drop.
+  Nothing citable is lost in the bargain: a dropped element is by definition not a string, and a
+  `[src: …]` citation is a token inside one.
 
 ### Fixed
 
