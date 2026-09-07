@@ -356,6 +356,12 @@ describe("renderFacts — {{facts}} carries decided_by attribution", () => {
     expect(renderFacts([owner], []))
       .toBe("- [F002] We ship weekly. (billing · stated) · decided by owner");
   });
+
+  test("conflicts_with is named in the prompt, so a reader handed both is told they disagree", () => {
+    const f = fact({ id: "F002", fact: "State lives in Postgres.", confidence: "stated" });
+    expect(renderFacts([{ ...f, conflicts_with: ["F001"] }], []))
+      .toBe("- [F002] State lives in Postgres. (billing · stated) · conflicts with F001");
+  });
 });
 
 /** `validateFactsFile` — the closed-set check on `source.decided_by` (task 5, fix round finding 4). */

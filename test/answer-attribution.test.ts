@@ -2,7 +2,9 @@
  * `tldrx answer --decided-by / --repo` — provenance the answer path can state (#169).
  *
  * Until this landed, the capture loop in `captureAnswers.ts` (the `store.append`
- * call, `:140`/`:147` after the change) wrote `repos: []` and a `source`
+ * call — `:202` at `6d92d11`, where it moved to when `answerProvenance` was
+ * extracted; the anchor these lines carried, `:140`/`:147`, was never a line this
+ * file's `store.append` sat on) wrote `repos: []` and a `source`
  * with no `decided_by`, so a driver's answer and the owner's were byte-identical
  * in provenance and no answered decision ever said what it bound to. The flags
  * are OPTIONAL because the `answer-capture` hook cannot honestly say which of

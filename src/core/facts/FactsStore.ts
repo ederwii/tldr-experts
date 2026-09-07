@@ -95,6 +95,12 @@ export class FactsStore {
       retired: input.retired ?? null,
       // Either the caller already knows it cut the text, or this store just did.
       ...(cut || input.truncated === true ? { truncated: true as const } : {}),
+      // Same rule as `truncated`: written only when there is something to say.
+      // This store builds the row key-by-key, so a `NewFact` carrying the field
+      // and no line here is dropped with no type error at all.
+      ...(input.conflicts_with !== undefined && input.conflicts_with.length > 0
+        ? { conflicts_with: [...input.conflicts_with] }
+        : {}),
     };
     this.rows.push(fact);
     return fact;

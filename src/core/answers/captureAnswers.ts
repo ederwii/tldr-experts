@@ -22,6 +22,9 @@ import {
 import { factsPath } from "../../hooks/lib/workspace.ts";
 import { declaredAffects, stampSuperseded } from "./stampSuperseded.ts";
 import { reposFromAffects } from "./reposFromAffects.ts";
+import { raiseConflictQuestion, type RaisedConflict } from "./raiseConflict.ts";
+import { conflictOf } from "../distill/distill.ts";
+import type { DuplicateHit } from "../facts/findDuplicate.ts";
 
 export class AnswerError extends Error {}
 
@@ -113,6 +116,12 @@ export interface CapturedAnswer {
   readonly area: string;
   /** `affects:` entries shaped `repo:path` whose prefix names no workspace repo. */
   readonly unresolvedAffects: readonly string[];
+  /**
+   * The contradiction this answer was DETECTED to create, and the question it
+   * raised (#169). Absent means the check found nothing — never "checked and
+   * agreed"; see `Fact.conflicts_with`.
+   */
+  readonly conflict?: RaisedConflict;
 }
 
 /**
@@ -148,6 +157,8 @@ export interface SupersededAnswer {
   readonly area: string;
   /** `affects:` entries shaped `repo:path` whose prefix names no workspace repo. */
   readonly unresolvedAffects: readonly string[];
+  /** As `CapturedAnswer.conflict` — a reversal can contradict a THIRD fact too. */
+  readonly conflict?: RaisedConflict;
 }
 
 /**
@@ -188,6 +199,10 @@ export function captureAnswers(questionsPath: string, ctx: CaptureContext): read
   // Blocks paired with the fact they wrote, so the earlier phase documents each
   // one overtakes can be stamped once the facts file is closed (gh #104).
   const recorded: { block: QuestionBlock; fact: string }[] = [];
+  // Detected contradictions, held until the questions file is written: the raise
+  // APPENDS to that same file, so doing it inside the loop would be overwritten
+  // by the `serializeQuestions` write below (#169).
+  const clashes: { block: QuestionBlock; factId: string; hit: DuplicateHit }[] = [];
 
   // Load, append and save inside ONE workspace lock. `nextId()` is `max(id) + 1`
   // off the file, so two `answer` commands racing each other used to mint the
@@ -199,15 +214,27 @@ export function captureAnswers(questionsPath: string, ctx: CaptureContext): read
       // Nothing to fall back on here: a first answer binds to what was stated or
       // to nothing, and `[]` means "no repo was named", never the run's repos.
       const prov = answerProvenance(block, ctx.overrides, ctx.repoNames, []);
+      const text = factTextFor(block.title, block.answer);
+      // Advisory (#169). It RAISES and never refuses, so it runs before the
+      // append only to get the link onto the row being written — the answer
+      // stands either way. `conflictOf` is the one implementation and the
+      // threshold is its own constant; a second number here would be a second
+      // derivation of "these two disagree". The `text` handed to it is the FACT
+      // text, exactly what `distill.ts` builds for an answered question, so an
+      // answer that reproduces the recorded one lands on `conflictOf`'s
+      // identical-text-is-agreement rule instead of raising against itself.
+      const clash = conflictOf({ match: block.title, area, text }, store.active);
       const fact = store.append({
-        fact: factTextFor(block.title, block.answer),
+        fact: text,
         ...(truncated ? { truncated: true as const } : {}),
+        ...(clash === null ? {} : { conflicts_with: [clash.fact.id] }),
         area,
         repos: prov.repos,
         kind: "answer",
         confidence: "stated",
         source: { who: ctx.actor, when: ctx.at, run: ctx.run, q: block.id, ...prov.source },
       });
+      if (clash !== null) clashes.push({ block, factId: fact.id, hit: clash });
       doc = replaceBlock(doc, recordAnswer(block, { answered_by: ctx.actor, answered_at: ctx.at, fact: fact.id }));
       log.tryAppend({
         ts: ctx.at,
@@ -235,10 +262,57 @@ export function captureAnswers(questionsPath: string, ctx: CaptureContext): read
     }
   });
   writeFileSync(questionsPath, serializeQuestions(doc), "utf8");
+  const raised = raiseAll(log, ctx, questionsPath, clashes);
   for (const item of recorded) {
     markSuperseded(log, ctx, questionsPath, item.block, item.fact);
   }
-  return captured;
+  // Rebuilt rather than mutated: the raise can only happen after the file is
+  // written, and the conflict is computed exactly once, inside the lock.
+  return captured.map((answer) => {
+    const conflict = raised.get(answer.q);
+    return conflict === undefined ? answer : { ...answer, conflict };
+  });
+}
+
+/**
+ * Mint one §2.7 question per detected contradiction, and log one event each.
+ *
+ * AFTER the questions file is written, never before: `raiseConflictQuestion`
+ * APPENDS to that same path, and `serializeQuestions` rewrites it whole — a raise
+ * inside the capture loop would be erased by the write that follows it.
+ *
+ * Shared by both answer paths so the block, the id rule and the event are minted
+ * one way. Advisory throughout: nothing here changes an exit code.
+ */
+function raiseAll(
+  log: EventLog,
+  ctx: CaptureContext,
+  questionsPath: string,
+  clashes: readonly { block: QuestionBlock; factId: string; hit: DuplicateHit }[],
+): ReadonlyMap<string, RaisedConflict> {
+  const raised = new Map<string, RaisedConflict>();
+  for (const clash of clashes) {
+    const conflict = raiseConflictQuestion({
+      runDir: ctx.runDir,
+      questionsPath,
+      area: clash.block.metadata?.area ?? "unscoped",
+      askedBy: ctx.actor,
+      at: ctx.at,
+      newFactId: clash.factId,
+      oldFactId: clash.hit.fact.id,
+      oldFactText: clash.hit.fact.fact,
+      score: clash.hit.score,
+      answeredQ: clash.block.id,
+    });
+    raised.set(clash.block.id, conflict);
+    log.tryAppend({
+      ts: ctx.at, run: ctx.run, stage: null, type: "fact.conflict_raised", actor: ctx.actor, cost_usd: 0,
+      payload: {
+        fact: clash.factId, conflicts_with: clash.hit.fact.id, score: clash.hit.score, q: clash.block.id,
+      },
+    });
+  }
+  return raised;
 }
 
 /**
@@ -342,6 +416,7 @@ export function supersedeAnswer(
   const area = block.metadata.area === "" ? "unscoped" : block.metadata.area;
   const truncated = factWasTruncated(block.title, answer);
 
+  let clash: DuplicateHit | null = null;
   const result = FactsStore.update(factsPath(ctx.root), (store): SupersededAnswer => {
     const head = store.headOf(recorded);
     if (head === undefined) {
@@ -357,9 +432,20 @@ export function supersedeAnswer(
     // `affects:` half was computed here and thrown away, so a question that said
     // which repo it was about was ignored the moment its answer was reversed.
     const prov = answerProvenance(block, ctx.overrides, ctx.repoNames, head.repos);
+    const text = factTextFor(block.title, answer);
+    // The same advisory as the capture path, with ONE difference: a supersession
+    // NAMES the fact it replaces, and that fact is still live here (the link is
+    // written below), so it is the top hit every time. A hit on the head is the
+    // reversal itself, not a contradiction — without this skip every
+    // `--supersede` would mint a question asking which of the two is right.
+    // A hit on a THIRD fact is a real contradiction and is raised.
+    const found = conflictOf({ match: block.title, area, text }, store.active);
+    const hit = found === null || found.fact.id === head.id ? null : found;
+    clash = hit;
     const fact = store.supersede(head.id, {
-      fact: factTextFor(block.title, answer),
+      fact: text,
       ...(truncated ? { truncated: true as const } : {}),
+      ...(hit === null ? {} : { conflicts_with: [hit.fact.id] }),
       area,
       repos: [...prov.repos],
       kind: "answer",
@@ -389,10 +475,15 @@ export function supersedeAnswer(
     ts: ctx.at, run: ctx.run, stage: null, type: "fact.superseded", actor: ctx.actor, cost_usd: 0,
     payload: { q: block.id, fact: result.fact, supersedes: result.supersedes, answer },
   });
+  // The raise goes through the SAME leaf the capture path uses, after the file is
+  // written for the same reason (#169).
+  const raised = raiseAll(log, ctx, questionsPath,
+    clash === null ? [] : [{ block, factId: result.fact, hit: clash }]);
   // A reversal overtakes the same earlier documents an answer does — more of them,
   // if anything, since by now those documents have been built on (gh #104).
   markSuperseded(log, ctx, questionsPath, block, result.fact);
-  return result;
+  const conflict = raised.get(block.id);
+  return conflict === undefined ? result : { ...result, conflict };
 }
 
 /**

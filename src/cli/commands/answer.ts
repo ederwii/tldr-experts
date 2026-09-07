@@ -29,6 +29,8 @@ import {
   captureAnswers, supersedeAnswer, unresolvedEntries, writeAnswerSlot, type AnswerOverride,
 } from "../../core/answers/captureAnswers.ts";
 import { FACT_DECIDERS, type FactDecider } from "../../core/facts/Fact.ts";
+import { formatJaccard } from "../../core/facts/findDuplicate.ts";
+import type { RaisedConflict } from "../../core/answers/raiseConflict.ts";
 import { uniqueRepos } from "../../core/answers/reposFromAffects.ts";
 import { loadWorkspace } from "../../hooks/lib/workspace.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
@@ -126,6 +128,7 @@ export const answerCommand: Command = {
         process.stdout.write(
           `${qid} superseded → ${done.fact} replaces ${done.supersedes} (area ${done.area}) in ${path}\n`,
         );
+        sayConflict(done.conflict);
         sayWhatWasNotStated(decidedBy, [done]);
         return EXIT_OK;
       }
@@ -146,6 +149,7 @@ export const answerCommand: Command = {
         return EXIT_USAGE;
       }
       process.stdout.write(`${qid} answered → ${recorded.fact} (area ${recorded.area}) in ${path}\n`);
+      for (const answer of captured) sayConflict(answer.conflict);
       // EVERY block this invocation captured, not just `recorded` — the sweep's
       // blocks have unresolved entries too, and they are the reader's only clue.
       sayWhatWasNotStated(decidedBy, captured);
@@ -187,6 +191,27 @@ function sayWhatWasNotStated(
   for (const entry of unresolvedEntries(captured)) {
     process.stdout.write(`  ${entry}\n`);
   }
+}
+
+/**
+ * Say, on stdout, that a contradiction was DETECTED and what was done about it (#169).
+ *
+ * The last sentence is not decoration. The check is advisory and lexical —
+ * `conflictOf` compares this question's TITLE against a live fact's whole text
+ * inside one `area`, at Jaccard ≥ 0.6 — so it catches a question answered twice,
+ * differently, in one area, and it CANNOT catch differently-titled answers that
+ * contradict semantically. Its false-positive rate is unmeasured
+ * (`test/answer-conflict.test.ts` carries the protocol for measuring one). A
+ * reader who is told "contradiction" and not told "nothing was refused" would
+ * reasonably think the command had blocked; it exits 0 either way.
+ */
+function sayConflict(conflict: RaisedConflict | undefined): void {
+  if (conflict === undefined) return;
+  process.stdout.write(
+    `  ${conflict.fact} contradicts ${conflict.conflictsWith} `
+    + `(Jaccard ${formatJaccard(conflict.score)}) — raised as ${conflict.q}. `
+    + "The answer stands; nothing was refused.\n",
+  );
 }
 
 /** The phase questions.md that holds `qid` in `status`, with the block, or null. */

@@ -108,6 +108,23 @@ export function validateFactsFile(input: unknown): ValidationResult {
       issues.push({ path: `${path}.truncated`, message: "expected true, false or absent" });
     }
 
+    // Additive, so absence is fine and only a wrong shape is an issue — a row
+    // written before the field existed must keep validating. An EMPTY list is
+    // refused rather than tolerated: on disk it would say a check ran and found
+    // nothing, which is exactly what absence must not be read as.
+    if (row.conflicts_with !== undefined) {
+      if (requireArray(row.conflicts_with, `${path}.conflicts_with`, issues)) {
+        const links = row.conflicts_with as unknown[];
+        if (links.length === 0) {
+          issues.push({
+            path: `${path}.conflicts_with`,
+            message: "expected at least one fact id, or the key absent",
+          });
+        }
+        links.forEach((id, i) => requireString(id, `${path}.conflicts_with[${i}]`, issues));
+      }
+    }
+
     const superseded = typeof row.superseded_by === "string";
     const retired = isRecord(row.retired) && row.retired.at !== null && row.retired.at !== undefined;
     if (superseded && retired) {

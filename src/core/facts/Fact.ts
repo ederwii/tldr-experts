@@ -66,6 +66,17 @@ export interface Fact {
    * that sees it knows to go to `01-what/questions.md` for the rest.
    */
   readonly truncated?: boolean;
+  /**
+   * Facts this one was DETECTED to contradict when it was recorded (#169).
+   *
+   * Additive and optional, written only when non-empty — the `truncated` rule
+   * above, for the same reason: a `conflicts_with: []` on every row is noise in
+   * a diff nobody asked for, and it would also read as "checked and agreed".
+   * Absent means the check found nothing, never that two facts were compared and
+   * reconciled: the check is lexical (`conflictOf` — Jaccard ≥ 0.6 within one
+   * `area`) and cannot see two differently-titled answers that disagree.
+   */
+  readonly conflicts_with?: readonly string[];
 }
 
 export interface FactsFile {

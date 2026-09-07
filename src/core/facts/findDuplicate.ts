@@ -36,6 +36,20 @@ export interface DuplicateHit {
 }
 
 /**
+ * A `DuplicateHit.score` as a person reads it — ONE spelling, next to the
+ * arithmetic that produces it.
+ *
+ * Three readers today (#169): the `Why asked:` sentence of a raised conflict, the
+ * `tldrx answer` operator line, and the `fact.conflict_raised` replay bullet. Two
+ * digits, because the threshold is one digit and the reader's question is "how far
+ * past 0.6 was this" — and because three spellings of `.toFixed(2)` is how a
+ * narrative and a question card start disagreeing about the same number.
+ */
+export function formatJaccard(score: number): string {
+  return score.toFixed(2);
+}
+
+/**
  * The fact that already answers `question`, or null.
  * `area` must match exactly — the same words in a different area are a different question.
  */

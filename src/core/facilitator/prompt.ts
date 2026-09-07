@@ -407,6 +407,13 @@ export function fenceFor(content: string): string {
  * default must never be read as the owner's) reaches every downstream prompt
  * indistinguishable from an owner ruling, which is the mistake the flag exists to
  * prevent. Absent, the line is unchanged from before the field existed.
+ *
+ * `conflicts_with` is rendered here too, and this is likewise the ONE place a
+ * prompt sees it (#169): a sub-agent handed two facts that were DETECTED to
+ * disagree is told so instead of being left to pick one. Absent means "not
+ * detected" — never "checked and agreed" — because the detection is lexical
+ * (`conflictOf`, Jaccard ≥ 0.6 inside one `area`) and cannot see two
+ * differently-titled answers that contradict.
  */
 export function renderFacts(facts: readonly Fact[], repos: readonly string[]): string {
   const relevant = facts.filter(
@@ -416,7 +423,12 @@ export function renderFacts(facts: readonly Fact[], repos: readonly string[]): s
   return relevant
     .map((fact) => {
       const decidedBy = fact.source.decided_by === undefined ? "" : ` · decided by ${fact.source.decided_by}`;
-      return `- [${fact.id}] ${fact.fact} (${fact.area} · ${fact.confidence})${decidedBy}`;
+      // Detected contradictions, named — a prompt handed both facts is told they
+      // disagree instead of being left to pick one.
+      const conflicts = fact.conflicts_with === undefined || fact.conflicts_with.length === 0
+        ? ""
+        : ` · conflicts with ${fact.conflicts_with.join(", ")}`;
+      return `- [${fact.id}] ${fact.fact} (${fact.area} · ${fact.confidence})${decidedBy}${conflicts}`;
     })
     .join("\n");
 }

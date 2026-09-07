@@ -9,6 +9,7 @@ import { openBlocks, parseQuestions } from "../text/index.ts";
 import { parseEvidence } from "../text/evidence.ts";
 import { skippedNote } from "../events/EventLog.ts";
 import { describeGateSignature } from "../run/gateAuthority.ts";
+import { formatJaccard } from "../facts/findDuplicate.ts";
 import {
   loadGateEvidence, loadPhaseArtefacts, runLevelEvents, stageEvents,
   type LoadedRun, type NumberedEvent,
@@ -197,6 +198,15 @@ function bullet(item: NumberedEvent): string | null {
       return `${prefix}fact ${text(payload.supersedes) || "?"} SUPERSEDED by `
         + `${text(payload.fact) || "?"} (${q || "a question"}), ${actor}: `
         + `${text(payload.answer) || "no answer recorded"}`;
+    // The advisory that raised a question instead of refusing an answer (#169).
+    // `bullet` ends in `default: return null`, so a type with no case here
+    // renders NO line at all — and an honesty guard invisible in `tldrx replay`
+    // is a weak guard. The score is rendered because the check is LEXICAL: a
+    // reader who can see 0.62 can tell a near-miss from an obvious clash.
+    case "fact.conflict_raised":
+      return `${prefix}fact ${text(payload.fact) || "?"} contradicts ${text(payload.conflicts_with) || "?"} `
+        + `(Jaccard ${typeof payload.score === "number" ? formatJaccard(payload.score) : "?"})`
+        + ` — raised as ${q || "a question"}`;
     // The moment an earlier phase's document stopped being current. A narrative
     // that showed the answer and not the documents it overtook is exactly the gap
     // gh #104 measured — the flip was in the log and in none of the pages.
