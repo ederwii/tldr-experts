@@ -3594,11 +3594,18 @@ listed first goes first), each through the same `createRun` `tldrx run new` call
 `shared_context + seeds` as the repeated `--seed`. Each created `run.yml` gains one optional, additive block:
 
 ```yaml
-triage: {split: ".tldrx/triage/260830-domain-design/split.yml", depends_on: ["core-entities"]}
+triage: {split: ".tldrx/triage/260830-domain-design/split.yml", depends_on: ["core-entities"], budget_basis: model-guess}
 ```
 
 Absent on every run `run new` creates, so an untriaged `run.yml` is byte-identical to what it was before this section
 existed. `run status` does not mention it.
+
+`triage.budget_basis` (#170) is a further optional, additive key inside that block: where the `--budget` figure
+`apply` handed to `run new` came from, one of `model-guess` | `owner-grant` | `preset`. `apply` always writes
+`model-guess`, because that is measurably what produced the number — the propose prompt tells the model
+`budget_usd` is a guess (S ≈ $10, M ≈ $25, L ≈ $50) and `split.yml` validation accepts anything finite and `> 0`.
+Absent means what every run written before this key existed means: nothing recorded, not "a person set it".
+Outside the closed set, the run fails validation.
 
 Output: one line per run —
 

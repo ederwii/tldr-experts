@@ -128,6 +128,14 @@ export interface RunTriage {
   readonly split: string;
   /** SLUGS of the sibling runs this one was proposed to follow. */
   readonly depends_on: readonly string[];
+  /**
+   * What produced this run's ceiling (#170): a bare string, read as tolerantly
+   * as the rest of this reader — `RunFile.ts`'s validator is the one that
+   * enforces the closed set on write; a viewer must not refuse to show a file
+   * it can otherwise read. Null when absent, which is what every run written
+   * before this key existed means.
+   */
+  readonly budget_basis: string | null;
 }
 
 /**
@@ -339,7 +347,11 @@ export function toBudgetDocument(input: unknown): BudgetDocument | null {
 function toTriage(input: unknown): RunTriage | null {
   const triage = record(input);
   if (triage === null) return null;
-  return { split: str(triage.split), depends_on: strings(triage.depends_on) };
+  return {
+    split: str(triage.split),
+    depends_on: strings(triage.depends_on),
+    budget_basis: nullableStr(triage.budget_basis),
+  };
 }
 
 /** Read tolerantly: a value outside the three policies is dropped, not shown. */

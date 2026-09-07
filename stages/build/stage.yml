@@ -20,6 +20,12 @@ model: sonnet
 # `[assumption]` — Build writes code that a DoD and a reviewer will judge. A cheap
 # turn here is not a saving: it is a `changes` verdict and a second, paid attempt.
 effort: high
+# `budget_usd` [assumption]: a scoped guess, never a measurement. No calibration
+# corpus exists in this repo, and the one measurement we do have runs the other
+# way — a story measured $2.27 against the $0.39 ceiling its spawn was given
+# (5.8x). `tldrx cost --stories` is the command that produces the corpus a
+# recalibration would need. Changing this number moves the ceiling of every
+# workspace that never wrote a `.tldrx/stages/<id>/stage.yml` override.
 budget_usd: 9
 timeout_s: 1800
 # Stories of one wave are independent by construction — `waves.yml` puts every

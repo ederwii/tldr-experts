@@ -11,6 +11,13 @@ description: "Move a runtime, framework, dependency or data set from A to B."
 stages: [what, how, plan, build, watch]
 skips: []
 depth: deep
+# `default_budget_usd` [assumption]: a scoped guess for the whole run, never a
+# measurement — `planBudget` splits it across the stages this workflow runs. No
+# calibration corpus exists in this repo, and the one measurement we do have runs
+# the other way — a story measured $2.27 against the $0.39 ceiling its spawn was
+# given (5.8x). `tldrx cost --stories` is the command that produces the corpus a
+# recalibration would need. Changing this number moves the ceiling of every
+# workspace that never wrote a local override.
 default_budget_usd: 60
 # gates  — who closes each stage's gate: `human` waits for `tldrx approve`,
 #           `auto` lets the facilitator close it when ALL SEVEN conditions of

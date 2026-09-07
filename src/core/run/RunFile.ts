@@ -313,7 +313,21 @@ export interface RunTriage {
   readonly split: string;
   /** Slugs of the sibling runs this one was proposed to follow. */
   readonly depends_on: readonly string[];
+  /**
+   * What produced this run's ceiling (#170), or absent — which is what every
+   * run written before this key existed means.
+   *
+   * `applySplit` writes `model-guess` because that is measurably what produced
+   * it: `triagePrompt.ts:249` tells the model "`budget_usd` is a guess … S ≈ $10,
+   * M ≈ $25, L ≈ $50", and `splitFile.ts:213-215` validates only "finite and > 0".
+   * A ceiling that enforces every spawn in the run should say when it was a guess.
+   */
+  readonly budget_basis?: TriageBudgetBasis;
 }
+
+/** Where a triaged run's `--budget` figure came from. */
+export const TRIAGE_BUDGET_BASES = ["model-guess", "owner-grant", "preset"] as const;
+export type TriageBudgetBasis = (typeof TRIAGE_BUDGET_BASES)[number];
 
 /**
  * Why this run was closed by hand (`tldrx run cancel`).
@@ -568,6 +582,11 @@ export function validateRunFile(input: unknown): ValidationResult {
         (doc.triage.depends_on as unknown[]).forEach((slug, i) => {
           requireString(slug, `triage.depends_on[${i}]`, issues);
         });
+      }
+      // Optional and additive: absence is what every existing run means, and only
+      // a value this reader does not understand is an issue.
+      if (doc.triage.budget_basis !== undefined) {
+        requireEnum(doc.triage.budget_basis, TRIAGE_BUDGET_BASES, "triage.budget_basis", issues);
       }
     } else {
       issues.push({ path: "triage", message: "expected a mapping" });

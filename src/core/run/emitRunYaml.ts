@@ -167,8 +167,14 @@ export function emitRunYaml(run: RunFile): string {
   // Optional §6.2 provenance. Emitted only when it is there, so a run.yml written
   // by `run new` is byte-identical to the one it wrote before triage existed.
   if (run.triage !== undefined) {
+    // Emitted only when it is set, so a run.yml written before this key existed
+    // round-trips byte-for-byte — the same rule `triage` itself and
+    // `build.branch_model` follow two lines down.
+    const basis = run.triage.budget_basis === undefined
+      ? ""
+      : `, budget_basis: ${yamlScalar(run.triage.budget_basis)}`;
     lines.push(
-      `triage: {split: ${yamlScalar(run.triage.split)}, depends_on: ${inlineList(run.triage.depends_on)}}`,
+      `triage: {split: ${yamlScalar(run.triage.split)}, depends_on: ${inlineList(run.triage.depends_on)}${basis}}`,
     );
   }
   if (run.build !== undefined && run.build.epic_branch.length > 0) {
