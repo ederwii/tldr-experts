@@ -63,7 +63,11 @@ holds that ordering against a sandbox origin.
 ## How
 
 ```bash
-# 1. make sure CHANGELOG has "## X.Y.Z — unreleased" and README has "| X.Y.Z | unreleased | `alpha` | … |"
-scripts/release.sh X.Y.Z --tag alpha
+# 1. make sure CHANGELOG has "## X.Y.Z — unreleased" and README has "| X.Y.Z | unreleased | `beta` | … |"
+scripts/release.sh X.Y.Z --tag beta
 ```
 That is the whole ceremony. The script refuses to run when the two lines above are missing.
+
+**`--tag` is not optional in practice.** Omit it and `release.sh` writes `alpha`
+(`scripts/release.sh:12`, `TAG="alpha"`), which stopped being this project's status at 0.4.0 —
+so the flag has to be passed with the status you actually mean, and today that is `beta`.
