@@ -1,6 +1,46 @@
 # Changelog
 
 
+## 0.9.2 — unreleased
+
+### Changed
+
+- **The Build executor is no longer one 4,351-line file.** `BuildSession` was a single class
+  (`:520-3833`) over five subjects — the story pipeline, the reviewer handshake, the fix-list
+  round, the base-tree pre-flight and the worktree/branch mechanics — and the methods that
+  reached three or more of them were the ones every change had to touch. That is not an
+  aesthetic complaint: every remaining hardening fix lands inside this file, and a 4,000-line
+  diff context is exactly where the review loop is weakest, because the reviewer reads the
+  change and cannot see what the change sits next to. Eight modules now hold the machinery —
+  `build/reviewLedger.ts` (`events.jsonl` read once into the bounds a fresh process cannot
+  remember), `build/phaseCost.ts` (the handoff's cost line), `build/caps.ts` (the money
+  constants and every ceiling), `build/dodRunner.ts` (the story DoD and the #41 base
+  pre-flight), `build/worktrees.ts` (the git side of a story), `build/branchClaims.ts` (which
+  epic branch this run owns and the two refusals that protect the tree), `build/reviewBundle.ts`
+  (the reviewer's bundle on disk) and `build/reviewRound.ts` (one review round, one reviewer
+  prompt) — each taking DATA rather than the session, which is the rule the rest of
+  `src/core/build/` already kept without exception. The mutable state the orchestrator used to
+  hide in private maps is now explicit and passed in: `PreflightCache`, `EpicState` and
+  `ReviewCounters` — three counters of three different things, reset on three different events,
+  still never merged. `executors/build.ts` is down to ~2.9k lines and keeps the orchestration: the
+  entry points, the wave drivers, the story-state cluster, the log and handoff cluster, the
+  refusal helpers and `SerialQueue`. Nothing moved that a caller can see — every symbol anything
+  imports is still exported from `executors/build.ts`, so the nine importing test files,
+  `run/reopenStory.ts` and `facilitator/index.ts` did not change one line of import (the
+  re-exports nothing imported were dropped rather than carried, which is the opposite of drift).
+  The one test edit is a widening: `build-executor.test.ts`'s #134 pin that no file builds a
+  `story/${…}` name by hand now reads `worktrees.ts` and `branchClaims.ts` too, because a
+  NEGATIVE pin on one file gets weaker every time code leaves it.
+  Zero behaviour change, and it is proved rather than argued. A golden guard captured before the
+  first move — `test/build-golden.test.ts`, 18 committed artifacts across three scenarios that
+  cannot stand in for one another — freezes byte for byte the developer prompt, the reviewer
+  prompt, the `--prepare` bundle's own prompt, the ordered event stream with its payload keys
+  and values, `run.yml`'s task rows and the exit codes of a real fake-agent build, and every one
+  of the five move steps — and the surface-polish pass after them — had to keep it identical. It
+  is kept, because it is the cheapest regression net this file has ever had. The rule while the
+  wave ran, and the rule now: a golden byte change means REVERT — never "update the golden" to
+  make a diff go away.
+
 ## 0.9.1 — 2026-09-06
 
 ### Added
