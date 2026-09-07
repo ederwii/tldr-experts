@@ -229,8 +229,8 @@ describe("the economy label (§E.2)", () => {
     const mixed = budget({
       economy: "host-tokens",
       phases: [
-        { id: "01-what", ceiling_usd: 4, spent_usd: 0, economy: "metered-usd", ceiling_host_tokens: null },
-        { id: "04-build", ceiling_usd: 8, spent_usd: 0, economy: null, ceiling_host_tokens: null },
+        { id: "01-what", ceiling_usd: 4, spent_usd: 0, economy: "metered-usd", ceiling_host_tokens: null, authorized_usd: null },
+        { id: "04-build", ceiling_usd: 8, spent_usd: 0, economy: null, ceiling_host_tokens: null, authorized_usd: null },
       ],
     });
     expect(economyFor(mixed, "01-what")).toBe("metered-usd");
@@ -248,8 +248,8 @@ describe("the economy label (§E.2)", () => {
     const before = budget({
       economy: "host-tokens",
       phases: [
-        { id: "01-what", ceiling_usd: 4, spent_usd: 0, economy: null, ceiling_host_tokens: null },
-        { id: "04-build", ceiling_usd: 8, spent_usd: 0, economy: "metered-usd", ceiling_host_tokens: null },
+        { id: "01-what", ceiling_usd: 4, spent_usd: 0, economy: null, ceiling_host_tokens: null, authorized_usd: null },
+        { id: "04-build", ceiling_usd: 8, spent_usd: 0, economy: "metered-usd", ceiling_host_tokens: null, authorized_usd: null },
       ],
     });
     const after = raiseBudget(before, { phaseId: "04-build", amountUsd: 2 }).budget;

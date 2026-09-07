@@ -1358,9 +1358,14 @@ phases: [{id: 01-what, ceiling_usd: 4.0, spent_usd: 1.14}, {id: 02-how, ceiling_
 | `economy` | `metered-usd\|host-tokens` | n (`metered-usd`) | **What the numbers here are denominated in.** Run level; a phase may override it |
 | `on_host_tokens_exceed` | `warn\|block` | n (`warn`) | What crossing a HOST-TOKEN ceiling does. `block` is the explicit opt-in |
 | `ceiling_host_tokens` | number ≥0 | n | **The run's host-token allowance** — the ceiling `ceiling_usd` is not. Separate economy, separate ceiling |
+| `authorized_usd` | number ≥0 | n | **What the owner AUTHORIZED for this run** — a recorded grant, not a ceiling. Absent means no grant recorded, never `$0` |
+| `authorized_by` | fact id | n | The live fact the grant cites (`F031`). A grant that cannot name a decision is not recorded |
+| `authorized_at` | RFC3339 | n | When the grant was recorded |
+| `on_grant_exceed` | `warn\|block` | n (`warn`) | What WRITING a ceiling above the grant does. Never `on_exceed` |
 | `phases[].{id,ceiling_usd,spent_usd}` | slug / number ≥0 | y | Per-phase ceiling and rolled-up actual |
 | `phases[].economy` | `metered-usd\|host-tokens` | n (inherit) | This phase's own economy |
 | `phases[].ceiling_host_tokens` | number ≥0 | n | This phase's host-token allowance, read only under `economy: host-tokens` |
+| `phases[].authorized_usd` | number ≥0 | n | This phase's OWN authorization. Absent means the run's grant governs it |
 
 **Validation.** Every phase id appears in `run.yml`; `spent_usd ≤ ceiling_usd` per phase unless `on_exceed: warn`; ≤5
 phases. An `economy` naming a value this reader does not know is REFUSED, never defaulted to dollars — a unit nothing
@@ -1395,6 +1400,33 @@ single scalar with no unit on it and had no way to say *"this number is not doll
 The two are **never converted into one another**. There is no exchange rate here, and inventing one would be a guess
 about a price — which is the whole reason the label exists. `tldrx budget raise` rewrites this file through the same
 emitter, and the label round-trips: a raise that erased it would turn a token budget back into dollars silently.
+
+**A grant is a recorded number, and a ceiling answers to it (#170).** A fact granting money
+("you have up to $20 for this") was prose the framework never read: three places wrote a dollar
+ceiling and nothing reconciled any of them to what the owner had said they would pay.
+`tldrx budget grant <usd> --fact <F> [--phase <p>]` writes the four keys above — the amount, the
+live fact that authorizes it, when, and the policy — and `tldrx budget raise` then measures the
+ceiling it is ABOUT to write against them, before anything lands: a PHASE grant against the phase
+ceiling, the RUN grant against the run ceiling. They are two questions, and `--take-from` is what
+separates them — it moves money between phases and leaves the run ceiling exactly where it was.
+
+Absence is deliberately the LAX side, on every one of the keys: absent means "no grant recorded,
+so nothing is reconciled and nothing is refused". Reading absence as `$0` would refuse every raise
+on every `budget.yml` already on disk — the same argument `ceiling_host_tokens` won one key over.
+There is no arithmetic between a phase grant, a run grant and `ceiling_usd`: a grant is what
+somebody said they would pay, a ceiling is what the run will spend, and relating them would
+enforce a rule nobody stated.
+
+`on_grant_exceed` is never `on_exceed`. `on_exceed` governs SPENDING past a ceiling;
+`on_grant_exceed` governs WRITING one above what was authorized. A run that blocks on dollars has
+said nothing about the second. Under the default `warn` the ceiling is written and one sentence
+names the grant, the fact and the figure; under `block` the raise is refused with exit **2** and
+`budget.yml` is byte-identical. A bad amount, an unknown phase, an unknown policy or a `--fact`
+naming no live fact is exit **1** — two conditions, each wholly inside one family. Recording a
+grant never rewrites a ceiling and never refuses one: a grant the current ceiling already exceeds
+is still recorded, because the money is committed and there is nothing left to refuse.
+`budget grant` appends `budget.granted` (§2.9), and the keys round-trip through `budget raise` —
+a key that did not would be erased by the one command an operator reaches for when a ceiling binds.
 
 **Budget semantics — measured 2026-08-29.** `claude -p --max-budget-usd` is a *stop after the current turn*, not a
 hard cap: a single long turn ran 597 s and spent **$5.15 against a $1.50 ceiling** (`error_max_budget_usd`, 105 k
@@ -1815,7 +1847,8 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx questions lint [--run <id>] [--fix] [--area <a>]` | every `<phase>/questions.md` in the run | nothing, or those files rewritten to the §2.7 grammar with `--fix` (no wording changed) | 0,2,3 |
 | `tldrx questions cards [<run>] [--run <id>]` | every `<phase>/questions.md` in the run | **nothing** (stdout cards). One printable decision card per OPEN question: two lines of context, the block's own `Why asked:` note verbatim with its `[src: …]` — flagged when it cites nothing, and named as absent when there is no note — and the block's lettered options, or a `NEEDS OPTIONS` marker when it has none, since manufacturing them would answer the question in the act of asking it. Answers still flow through `tldrx answer`, whose command every card prints. No open question is a sentence and an exit 0 | 0,1,3 |
 | `tldrx budget show [<run>] [--run <id>] [--json]` | `run.yml`, `budget.yml` | nothing (stdout) | 0,1,2,3 |
-| `tldrx budget raise <phase> <usd> [--run <id>] [--take-from <phase>] [--note <text>]` | `run.yml`, `budget.yml` | `budget.yml` ceilings, `run.yml` ceiling mirror, `events.jsonl` (`budget.raised`, with before/after/actor/note) | 0,1,2,3 |
+| `tldrx budget raise <phase> <usd> [--run <id>] [--take-from <phase>] [--note <text>]` | `run.yml`, `budget.yml` | `budget.yml` ceilings, `run.yml` ceiling mirror, `events.jsonl` (`budget.raised`, with before/after/actor/note). The RESULTING ceiling is reconciled against the recorded grant (§2.11) BEFORE anything is written — a phase grant against the phase ceiling, the run grant against the run ceiling; above it under `on_grant_exceed: block` is a refusal (2) that writes nothing, and under `warn` one sentence naming the grant, the fact and the figure | 0,1,2,3 |
+| `tldrx budget grant <usd> --fact <F> [--phase <p>] [--on-exceed <warn\|block>] [--note <text>] [--run <id>]` | `run.yml`, `budget.yml`, `facts.yml` | `budget.yml` `authorized_usd`/`authorized_by`/`authorized_at`/`on_grant_exceed` (or `phases[].authorized_usd` under `--phase`, the fact id still at run level), `events.jsonl` (`budget.granted`). Moves no money and refuses no ceiling; `--fact` must name a LIVE fact or it is a usage error and nothing is written | 0,1,2,3 |
 | `tldrx map --refresh` | `workspace.yml`, repos, `graphify-out/` | `map/**`, `graphify-out/`, `events.jsonl` | 0,1 |
 | `tldrx map --check` | `map/**` citations, filesystem | `cache/map-drift.json` (stdout report) | 0,1 |
 | `tldrx expert list` | `experts/*/competencies.yml`, `experts/*/knowledge/*.md` | nothing (stdout star chart; stderr warnings) | 0 |

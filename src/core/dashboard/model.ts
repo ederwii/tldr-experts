@@ -47,7 +47,9 @@ import {
   listRuns, loadPhaseArtefacts, loadRunResult,
   type LoadedRun, type RunDocument, type RunTask,
 } from "../replay/index.ts";
-import { DEFAULT_ECONOMY, DEFAULT_ON_HOST_TOKENS_EXCEED } from "../budget/RunBudget.ts";
+import {
+  DEFAULT_ECONOMY, DEFAULT_ON_GRANT_EXCEED, DEFAULT_ON_HOST_TOKENS_EXCEED,
+} from "../budget/RunBudget.ts";
 import { MAX_ATTEMPTS } from "../budget/remainingWork.ts";
 import { spendBasisOf } from "../budget/spendBasis.ts";
 import { turnTokens } from "../budget/turnTokens.ts";
@@ -177,6 +179,12 @@ export interface BudgetPhaseModel {
    */
   readonly economy: string | null;
   readonly ceilingHostTokens: number | null;
+  /**
+   * This phase's OWN authorization, or null when it declares none — in which
+   * case the run's grant governs it (#170). Null is not 0: nobody wrote a figure
+   * on this phase.
+   */
+  readonly authorizedUsd: number | null;
 }
 
 /**
@@ -206,6 +214,20 @@ export interface BudgetModel {
   readonly onHostTokensExceed: string;
   /** The run's host-token allowance, or null when the file declares none. */
   readonly ceilingHostTokens: number | null;
+  /**
+   * What the owner AUTHORIZED for this run, or null when no grant is recorded
+   * (#170). A recorded grant the run's own page could not see would be exactly
+   * the written-but-never-read-back failure the key exists to remove.
+   */
+  readonly authorizedUsd: number | null;
+  /** The fact id the grant cites, or null when none is recorded. */
+  readonly authorizedBy: string | null;
+  /**
+   * `warn` | `block` (#170). Never null: absence means `warn`, resolved here
+   * against the constant the ENFORCEMENT path uses, so the renderer cannot
+   * re-derive a default that disagrees with `budget raise`.
+   */
+  readonly onGrantExceed: string;
   readonly phases: readonly BudgetPhaseModel[];
 }
 
@@ -1333,6 +1355,12 @@ function toBudgetModel(loaded: LoadedRun): BudgetModel | null {
     economy: budget.economy ?? DEFAULT_ECONOMY,
     onHostTokensExceed: budget.on_host_tokens_exceed ?? DEFAULT_ON_HOST_TOKENS_EXCEED,
     ceilingHostTokens: budget.ceiling_host_tokens,
+    // #170, and the same rule as the two above: the AMOUNTS pass through as
+    // null when absent — no grant recorded is not a grant of $0 — while the
+    // POLICY is resolved here against the enforcement path's own default.
+    authorizedUsd: budget.authorized_usd,
+    authorizedBy: budget.authorized_by,
+    onGrantExceed: budget.on_grant_exceed ?? DEFAULT_ON_GRANT_EXCEED,
     phases: budget.phases.map((phase) => ({
       id: phase.id,
       ceilingUsd: phase.ceiling_usd,
@@ -1341,6 +1369,7 @@ function toBudgetModel(loaded: LoadedRun): BudgetModel | null {
       // statement from "this phase chose metered-usd".
       economy: phase.economy,
       ceilingHostTokens: phase.ceiling_host_tokens,
+      authorizedUsd: phase.authorized_usd,
     })),
   };
 }

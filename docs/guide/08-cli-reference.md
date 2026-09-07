@@ -853,11 +853,26 @@ nothing, because the question comes before any of that exists. Exits: `0` `1` `2
 ```
 tldrx budget show  [--run <id>] [--json]
 tldrx budget raise <phase> <usd> [--run <id>] [--take-from <phase>] [--note <text>]
+tldrx budget grant <usd> --fact <F> [--phase <p>] [--on-exceed <warn|block>] [--note <text>] [--run <id>]
 ```
 
 `--take-from <phase>` moves the money out of that phase instead of raising the run's total,
 refusing to cut a donor below what it has already spent. `--note` is recorded on the
-`budget.raised` event beside the before/after and the actor. Exits: `0` `1` `2` `3`.
+`budget.raised` event beside the before/after and the actor.
+
+`grant` records what the owner AUTHORIZED as a number in `budget.yml`, so a ceiling has
+something to answer to. `<usd>` here is a total, not a delta, and nothing is spent or moved.
+`--fact <F>` is required and must name a live fact: a grant that cannot cite a decision is a
+number nobody said. `--phase <p>` scopes the amount to one phase — the fact id is still
+recorded at run level. `--on-exceed <warn|block>` says what a ceiling above the grant does,
+and it is never `on_exceed`: one governs spending past a ceiling, the other governs writing
+one the owner forbade.
+
+`raise` then measures the ceiling it is about to write against the grant — a phase grant
+against the phase ceiling, the run grant against the run ceiling. Two exit families: a bad
+amount, an unknown phase, an unknown `--on-exceed` value or a `--fact` naming no live fact is
+a usage error (`1`, nothing written); a ceiling above the grant under `on_grant_exceed: block`
+is a gate refusal (`2`, `budget.yml` byte-identical). Exits: `0` `1` `2` `3`.
 
 ## `tldrx cost`
 

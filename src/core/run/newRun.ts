@@ -32,7 +32,10 @@ import { parseYaml } from "../yaml.ts";
 import { validateHandoff } from "../text/handoff.ts";
 import { parseQuestions, validateQuestions } from "../text/questions.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../hooks/lib/workspace.ts";
-import { validateRunBudget, DEFAULT_ECONOMY, type RunBudget, DEFAULT_ON_HOST_TOKENS_EXCEED } from "../budget/RunBudget.ts";
+import {
+  validateRunBudget, DEFAULT_ECONOMY, type RunBudget, DEFAULT_ON_HOST_TOKENS_EXCEED,
+  DEFAULT_ON_GRANT_EXCEED,
+} from "../budget/RunBudget.ts";
 import { distill, type DistillResult } from "../distill/distill.ts";
 import { collectSeeds, type SeedSet } from "../seed/collectSeed.ts";
 import { allSeedHeadings, seedClaims } from "../seed/seedClaims.ts";
@@ -227,6 +230,14 @@ function createRunLocked(options: NewRunOptions): NewRunOutcome {
     economy: DEFAULT_ECONOMY,
     // No host-token allowance: a metered run has none to declare (#61).
     ceiling_host_tokens: null,
+    // A new run carries no GRANT (#170): nobody has said what they would pay for
+    // it yet, and null is not 0 — 0 would be an authorization of nothing, which
+    // would refuse the first raise on a run whose owner has said nothing at all.
+    // `tldrx budget grant <usd> --fact <F>` is what writes these.
+    authorized_usd: null,
+    authorized_by: null,
+    authorized_at: null,
+    on_grant_exceed: DEFAULT_ON_GRANT_EXCEED,
     phases: phases.map((p) => ({
       id: p.id,
       ceiling_usd: budgetPlan.perPhase.get(p.id) ?? 0,
@@ -235,6 +246,8 @@ function createRunLocked(options: NewRunOptions): NewRunOutcome {
       // Same reason (#61): a new run prices in dollars, so it declares no token
       // allowance. Null, not 0 — 0 would be a ceiling nothing could ever fit.
       ceiling_host_tokens: null,
+      // Same reason again (#170): no phase of a new run carries its own grant.
+      authorized_usd: null,
     })),
   };
 

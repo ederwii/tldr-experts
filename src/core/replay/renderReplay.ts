@@ -200,6 +200,12 @@ function bullet(item: NumberedEvent): string | null {
     case "check.failed": return `${prefix}check failed: ${checkName(payload)}${note(payload.detail)}`;
     case "budget.warned": return `${prefix}budget warning: ${text(payload.message) || `${money(cost_usd)} spent`}`;
     case "budget.blocked": return `${prefix}budget BLOCKED: ${text(payload.message) || "the spawn was refused"}`;
+    // The moment a ceiling stopped being the framework's own guess (#170). A
+    // narrative that showed a raise past $20 and never showed the $20 being
+    // authorized would read as the framework having decided it alone.
+    case "budget.granted":
+      return `${prefix}budget granted: ${money(Number(payload.amount_usd ?? 0))} authorized by `
+        + `${text(payload.fact) || "?"}${payload.phase == null ? "" : ` for ${text(payload.phase)}`}`;
     case "fact.added": return `${prefix}fact ${text(payload.fact) || text(payload.id) || "recorded"} added`;
     case "fact.retired": return `${prefix}fact ${text(payload.fact) || text(payload.id) || ""} retired`.trimEnd();
     // The one moment the workspace's durable memory changes its mind. A narrative

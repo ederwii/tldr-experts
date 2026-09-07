@@ -7,7 +7,9 @@
  * under Bun are byte-identical, so a diff only ever shows what actually changed.
  */
 import { yamlScalar } from "../facts/emitFactsYaml.ts";
-import { DEFAULT_ECONOMY, type RunBudget, DEFAULT_ON_HOST_TOKENS_EXCEED } from "../budget/RunBudget.ts";
+import {
+  DEFAULT_ECONOMY, type RunBudget, DEFAULT_ON_HOST_TOKENS_EXCEED, DEFAULT_ON_GRANT_EXCEED,
+} from "../budget/RunBudget.ts";
 import type { GatesPolicy } from "./gatePolicy.ts";
 import type {
   RunFile, RunGate, RunGateAuthority, RunGateEvidence, RunGateExecutor, RunStage, RunTask,
@@ -246,6 +248,21 @@ export function emitBudgetYaml(budget: RunBudget): string {
     ...(budget.ceiling_host_tokens === null
       ? []
       : [`ceiling_host_tokens: ${tokens(budget.ceiling_host_tokens)}`]),
+    // Same rule a fourth time, and this one is the sharpest case of it (#170).
+    // What the owner AUTHORIZED cannot be recovered from anything else in this
+    // file, and `budget raise` — the one command an operator reaches for when a
+    // ceiling binds, and now the command that RECONCILES against these keys —
+    // rewrites the file through here. A key that did not round-trip would be
+    // erased by the very act it governs: the first raise after a grant would
+    // silently un-record the grant it had just been checked against, and every
+    // unit test of the reconciliation would still pass. Absent stays absent, so
+    // a file that never declared a grant is byte-identical to what it was.
+    ...(budget.authorized_usd === null ? [] : [`authorized_usd: ${money(budget.authorized_usd)}`]),
+    ...(budget.authorized_by === null ? [] : [`authorized_by: ${yamlScalar(budget.authorized_by)}`]),
+    ...(budget.authorized_at === null ? [] : [`authorized_at: ${yamlScalar(budget.authorized_at)}`]),
+    ...(budget.on_grant_exceed === DEFAULT_ON_GRANT_EXCEED
+      ? []
+      : [`on_grant_exceed: ${yamlScalar(budget.on_grant_exceed)}`]),
     "phases:",
   ];
   for (const phase of budget.phases) {
@@ -253,9 +270,14 @@ export function emitBudgetYaml(budget: RunBudget): string {
     const hostTokens = phase.ceiling_host_tokens === null
       ? ""
       : `, ceiling_host_tokens: ${tokens(phase.ceiling_host_tokens)}`;
+    // A phase's own authorization, appended only when it has one — same reason
+    // as the run-level keys, and the same "absent stays absent" guarantee.
+    const grant = phase.authorized_usd === null
+      ? ""
+      : `, authorized_usd: ${money(phase.authorized_usd)}`;
     lines.push(
       `  - {id: ${yamlScalar(phase.id)}, ceiling_usd: ${money(phase.ceiling_usd)}, ` +
-        `spent_usd: ${money(phase.spent_usd)}${economy}${hostTokens}}`,
+        `spent_usd: ${money(phase.spent_usd)}${economy}${hostTokens}${grant}}`,
     );
   }
   return `${lines.join("\n")}\n`;

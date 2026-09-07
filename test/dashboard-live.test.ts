@@ -404,6 +404,17 @@ describe("the live client, and the static page that must not carry it", () => {
    * passed just as happily if the cell drew `0`. The test that would not is
    * `test/dashboard-leftovers.test.ts`'s "the page draws REFUSED for it,
    * never a 0".
+   *
+   * RE-PINNED 2026-09-07 for #170, deliberately: 121,743 → 121,912 bytes,
+   * `70fcc986…` → `d35af636…`. Four ADDITIVE model fields — `authorizedUsd`,
+   * `authorizedBy` and `onGrantExceed` on `BudgetModel`, `authorizedUsd` on
+   * `BudgetPhaseModel` — all absent on this fixture, and the page embeds the
+   * model as JSON. The delta is attributed rather than assumed: measured on this
+   * branch, the run-level trio serialises to 64 bytes
+   * (`"authorizedUsd":null,"authorizedBy":null,"onGrantExceed":"warn",`) and the
+   * five phase rows to 5 × 21 = 105 (`"authorizedUsd":null,`) — 169 exactly, so
+   * nothing else moved. No renderer function changed, and
+   * `DASHBOARD_MODEL_VERSION` stays 3: additions never bump it.
    */
   test("--static is byte-identical to the export main renders without the live layer", () => {
     const temp = makeViewsWorkspace();
@@ -417,9 +428,9 @@ describe("the live client, and the static page that must not carry it", () => {
       };
       const html = renderDashboard(model);
       expect(model.live, "the static model is not a live one").toBe(false);
-      expect(Buffer.byteLength(html, "utf8")).toBe(121_743);
+      expect(Buffer.byteLength(html, "utf8")).toBe(121_912);
       expect(createHash("sha256").update(html, "utf8").digest("hex"))
-        .toBe("70fcc98627011f83e123d1c782e571b23bddd32ac1ce6c7e0f0fc508b1ede97b");
+        .toBe("d35af636fab921e8a79af4fe0361652e59183a28d4ae20e79e9c08f2e087fc23");
     } finally {
       temp.dispose();
     }

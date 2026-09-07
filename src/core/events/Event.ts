@@ -116,7 +116,7 @@ export const EVENT_TYPES = [
   "result.unreadable",
   "operator_note",
   "check.passed", "check.failed",
-  "budget.warned", "budget.blocked", "budget.raised",
+  "budget.warned", "budget.blocked", "budget.raised", "budget.granted",
   "fact.added", "fact.retired", "fact.superseded", "fact.conflict_raised", "doc.superseded",
   "map.refreshed",
   "ticket.synced",

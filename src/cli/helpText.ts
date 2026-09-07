@@ -23,6 +23,7 @@ import { RUNNABLE_SCRIPTS } from "../core/install/managedEntries.ts";
 import { EFFORT_LEVELS } from "../core/schemas/stage.ts";
 import { UI_MODES } from "../core/ui/index.ts";
 import { FACT_CONFIDENCES, FACT_DECIDERS, FACT_KINDS } from "../core/facts/Fact.ts";
+import { ON_GRANT_EXCEED } from "../core/budget/RunBudget.ts";
 import {
   EXIT_AGENT_FAILED, EXIT_AWAITING_HUMAN, EXIT_FAILED, EXIT_GATE_REFUSED, EXIT_NOT_FOUND,
   EXIT_NOT_IMPLEMENTED, EXIT_OK, EXIT_USAGE,
@@ -941,14 +942,14 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "budget",
-    subcommands: ["show", "raise"],
-    description: "What the run may still spend, and where to move a ceiling from.",
+    subcommands: ["show", "raise", "grant"],
+    description: "What the run may still spend, where to move a ceiling from, and what the owner authorized.",
     args: [
       { name: "[<run>]", meaning: "budget show: a run id. Omit it and the one open run is used." },
       { name: "<phase>", meaning: "budget raise: the phase whose ceiling goes up, e.g. 04-build." },
       {
         name: "<usd>",
-        meaning: "budget raise: how much to ADD to that phase's ceiling \u2014 a delta, not a new ceiling. `raise 04-build 5` turns a $20 ceiling into $25.",
+        meaning: "budget raise: how much to ADD to that phase's ceiling \u2014 a delta, not a new ceiling. `raise 04-build 5` turns a $20 ceiling into $25. budget grant: the CEILING the owner authorized \u2014 a total, not a delta, and it moves no money.",
       },
     ],
     flags: [
@@ -956,15 +957,37 @@ const ENTRIES: readonly CommandHelp[] = [
       json("the budget view", "show"),
       { name: "take-from", arg: "<phase>", meaning: "Move the money out of this phase instead of raising the run's total.", sub: "raise" },
       { name: "note", arg: "<text>", meaning: "Why the ceiling moved. Recorded on the budget.raised event beside the before/after and the actor.", sub: "raise" },
+      {
+        name: "fact",
+        arg: "<F>",
+        meaning: "REQUIRED by grant: the live fact id the authorization cites, e.g. F031. A grant with no decision behind it is a number nobody said.",
+        sub: "grant",
+      },
+      {
+        name: "phase",
+        arg: "<phase>",
+        meaning: "Scope the grant to one phase instead of the whole run. The fact id is still recorded at run level.",
+        sub: "grant",
+      },
+      {
+        name: "on-exceed",
+        arg: "<policy>",
+        meaning: "What a ceiling ABOVE the grant does. Default: warn. Never on_exceed, which governs spending past a ceiling rather than writing one.",
+        values: ON_GRANT_EXCEED,
+        sub: "grant",
+      },
       root(),
     ],
     examples: [
       "tldrx budget show",
       "tldrx budget raise 04-build 25 --take-from 02-how",
+      "tldrx budget grant 20 --fact F031 --on-exceed block",
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
     notes: [
       "`raise` ADDS. `raise 04-build 25` on a phase already ceilinged at $10 leaves it at $35, not $25 \u2014 the amount is a delta, and the run ceiling grows with it unless --take-from moves the money. `budget show` prints the exact command, already sized to the shortfall, when a stage is blocked; pasting that is the way to raise without doing the arithmetic.",
+      "`grant` RECORDS, it does not spend: it writes authorized_usd, authorized_by, authorized_at and on_grant_exceed into budget.yml and appends a budget.granted event. No ceiling moves, and a grant the current ceiling already exceeds is still recorded \u2014 the money is committed, there is nothing left to refuse. `raise` then measures the ceiling it is about to write against it: a PHASE grant against the phase ceiling, the RUN grant against the run ceiling.",
+      "Two exit families, two conditions. A bad amount, an unknown phase, an unknown --on-exceed value, or a --fact naming no live fact is a USAGE error: exit 1, nothing written. A ceiling above the recorded grant under on_grant_exceed: block is a GATE refusal: exit 2, budget.yml byte-identical. Under the default warn the ceiling is written and one sentence names the grant, the fact and the figure.",
     ],
   },
   {
