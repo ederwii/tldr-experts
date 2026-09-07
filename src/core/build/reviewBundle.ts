@@ -27,7 +27,6 @@ import { REVIEW_DIR } from "../run/prepared.ts";
 import { MAX_ATTEMPTS } from "./caps.ts";
 import { diffCommand } from "./git.ts";
 import { REVIEW_SCHEMA } from "./prompts.ts";
-import { renderFormatRefusal } from "./review.ts";
 import { readReviewLedger } from "./reviewLedger.ts";
 import type { DodResult, StoryOutcome } from "./outcome.ts";
 import type { PlannedStory } from "./plan.ts";
@@ -310,17 +309,4 @@ export function resumableReview(
   const ledger = readReviewLedger(runDir, storyId);
   if (ledger.erroredWith === null || ledger.commit === null) return null;
   return { commit: ledger.commit, dod: ledger.dod, error: ledger.erroredWith };
-}
-
-/**
- * The refusal a previous envelope of this story's open round earned, rendered
- * for a prompt — or null when the last envelope was not refused that way (#78).
- *
- * Read off the ledger rather than off this process, because the only caller is
- * `--prepare --review`, which by definition runs after the invocation that
- * recorded the refusal has exited.
- */
-export function pendingRefusal(runDir: string, storyId: string): string | null {
-  const said = readReviewLedger(runDir, storyId).formatRefusal;
-  return said === null ? null : renderFormatRefusal([said]);
 }

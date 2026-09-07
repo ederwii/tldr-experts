@@ -49,7 +49,7 @@ export class ReviewCounters {
    *
    * A `fixlist` verdict spends no attempt, so it must not touch `reviews`; and it
    * is bounded at `MAX_FIXLIST_ROUNDS`, so it must be counted somewhere. Read
-   * through `fixlistRoundsSpent`, which falls back to the ledger for a fresh
+   * through `fixlistRounds`, which falls back to the ledger for a fresh
    * process — a bound a restart forgets is not a bound.
    */
   private readonly fixlists = new Map<string, number>();
@@ -81,7 +81,7 @@ export class ReviewCounters {
    * How many fix-list rounds this story has already been granted.
    *
    * This process first, then the ledger — the same two-source shape
-   * `reviewAttempts` uses, and for the same reason: a bound that a fresh `tldrx
+   * `verdicts` uses, and for the same reason: a bound that a fresh `tldrx
    * next` forgets is not a bound, and a story settled inside THIS invocation has
    * not written its event to a file this can re-read yet.
    */
@@ -107,7 +107,7 @@ export class ReviewCounters {
   /**
    * Free re-prompts already granted for this story's CURRENT envelope round.
    *
-   * The same two-source shape `reviewAttempts` and `fixlistRoundsSpent` use, and
+   * The same two-source shape `verdicts` and `fixlistRounds` use, and
    * for the same reason — except that here the ledger side is load-bearing rather
    * than a fallback: `--commit --review` settles one envelope per process, so
    * every host correction is read back off the log.
@@ -385,6 +385,19 @@ export function blockedByFailedDeveloper(
   if (ledger.developerErroredWith !== null) return ledger.developerErroredWith;
   if (ledger.blockedWithNothingRun && planned.dod.commands.length > 0) return DEVELOPER_FAILED;
   return null;
+}
+
+/**
+ * The refusal a previous envelope of this story's open round earned, rendered
+ * for a prompt — or null when the last envelope was not refused that way (#78).
+ *
+ * Read off the ledger rather than off this process, because the only caller is
+ * `--prepare --review`, which by definition runs after the invocation that
+ * recorded the refusal has exited.
+ */
+export function pendingRefusal(runDir: string, storyId: string): string | null {
+  const said = readReviewLedger(runDir, storyId).formatRefusal;
+  return said === null ? null : renderFormatRefusal([said]);
 }
 
 /** One event payload's `detail`, bounded — spec §2.9 caps a payload at 4 KB. */

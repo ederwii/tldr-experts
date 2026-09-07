@@ -1,13 +1,6 @@
 /**
  * Which epic branch this run owns, and the two refusals that protect the tree it
  * is cut from.
- *
- * An epic branch deliberately does NOT carry the run id — an epic is the unit a
- * team merges, and `epic/260829-x-leaderboard` would be a worse name for it. So
- * collision is not made impossible, it is made DELIBERATE: a branch this run's
- * `build.epic_branch` does not claim is refused, and `--reuse-epic` is the word
- * that says "yes, stack on it". Measured 2026-08-29: four runs piled onto one
- * `epic/leaderboard` with nothing said.
  */
 import { relative } from "node:path";
 import type { WorkspaceContext } from "../../hooks/lib/workspace.ts";

@@ -119,8 +119,8 @@ export interface CapParts {
   readonly agentCap: (share?: number) => number;
 }
 
-/** Local, as in every other module here (nine files define their own — measured). */
-function round2(n: number): number {
+/** The one `round2` — every other module imports this instead of redefining it. */
+export function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 

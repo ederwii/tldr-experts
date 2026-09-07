@@ -95,20 +95,20 @@ import {
   dirtyRepoRefusal, epicRows, foreignEpicRefusal, resolveBranchModel, type ClaimParts,
 } from "../../build/branchClaims.ts";
 import {
-  awaitingReview, bundleKeyOf, clearReviewBundle, pendingRefusal, resumableReview,
+  awaitingReview, bundleKeyOf, clearReviewBundle, resumableReview,
   reviewBundleKeyOf, reviewWorkFor, reviewWorkFromBundle, reviewWorkFromLedger,
   stashRefusedEnvelope, writeReviewBundle,
   type ResumableReview, type ReviewLookup, type ReviewWork,
 } from "../../build/reviewBundle.ts";
 import {
-  blockedByFailedDeveloper, formatRetryDecision, narrowFixlist, reviewerPromptFor,
+  blockedByFailedDeveloper, formatRetryDecision, narrowFixlist, pendingRefusal, reviewerPromptFor,
   RecurringFocus, ReviewCounters, type RoundParts,
 } from "../../build/reviewRound.ts";
 import { readReviewLedger, type ReviewLedger } from "../../build/reviewLedger.ts";
 import { phaseCostToDate } from "../../build/phaseCost.ts";
 import { appendBuildRetro, buildRetroPath, gateRetroLines, storyRetroLines } from "../../build/retroLog.ts";
 import {
-  clampParallel, developerCap, developerPriceDivisor, reviewerCap,
+  clampParallel, developerCap, developerPriceDivisor, reviewerCap, round2,
   DEFAULT_PARALLEL, MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE,
   type CapParts,
 } from "../../build/caps.ts";
@@ -2377,7 +2377,6 @@ class BuildSession {
   /** What `build/dodRunner.ts` needs to measure or recall the base tree. */
   private get baseParts(): BaseParts {
     return {
-      runDir: this.ctx.runDir,
       workspace: this.workspace,
       cache: this.preflight,
       at: this.ctx.at,
@@ -2911,10 +2910,6 @@ function failed(ctx: ExecutorContext, error: string, tasks: readonly ExecutorTas
   };
 }
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
-
 // --- re-exports: the public surface does not move -------------------------
 //
 // Ten test files, `src/core/run/reopenStory.ts:54` and
@@ -2927,6 +2922,3 @@ export {
   clampParallel, developerPriceDivisor,
   DEFAULT_PARALLEL, MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE,
 };
-export { PreflightCache, runStoryDod };
-export { EpicState, storyWorktreePath, resolveBranchModel };
-export { ReviewCounters };

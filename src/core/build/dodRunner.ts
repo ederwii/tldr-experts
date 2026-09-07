@@ -17,7 +17,7 @@ import { DodCommandRefused, runDodCommand } from "../../hooks/lib/story.ts";
 import { FALLBACK_DEFAULT_BRANCH, type WorkspaceContext } from "../../hooks/lib/workspace.ts";
 import type { EventType } from "../events/Event.ts";
 import { repoDirOf, shaOf } from "./git.ts";
-import type { BuildRefusal, DodResult } from "./outcome.ts";
+import type { BuildRefusal, DodResult, SerialWrite } from "./outcome.ts";
 import type { PlannedStory } from "./plan.ts";
 import {
   BaseGateFailure, baseRefusalLines, baseResultFor, commandHash, EMPTY_PREFLIGHT, loadPreflight, PREFLIGHT_REL,
@@ -33,17 +33,21 @@ import {
 export class PreflightCache {
   private preflight: BasePreflight | null = null;
   private loaded = false;
-  /** Disk reads so far — read by ONE test, to pin "once". */
-  loads = 0;
+  private loadCount = 0;
 
   constructor(private readonly runDir: string) {}
+
+  /** Disk reads so far — read by ONE test, to pin "once". */
+  get loads(): number {
+    return this.loadCount;
+  }
 
   /** The run's cached base results, read once per process. */
   read(): BasePreflight {
     if (!this.loaded) {
       this.preflight = loadPreflight(this.runDir);
       this.loaded = true;
-      this.loads++;
+      this.loadCount++;
     }
     return this.preflight ?? EMPTY_PREFLIGHT;
   }
@@ -70,14 +74,13 @@ export class PreflightCache {
 
 /** What `baseResultOf` and `redBaseRefusal` need, as data the executor owns. */
 export interface BaseParts {
-  readonly runDir: string;
   readonly workspace: WorkspaceContext;
   readonly cache: PreflightCache;
   readonly at: string;
   readonly preparing: boolean;
   readonly timeoutMs: number;
   /** The executor's single writer — passed, never duplicated. */
-  readonly write: <T>(work: () => Promise<T> | T) => Promise<T>;
+  readonly write: SerialWrite;
   /** stderr sink, append-only, owned by the executor. */
   readonly advisories: string[];
 }

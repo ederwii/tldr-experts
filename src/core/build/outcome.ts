@@ -171,3 +171,10 @@ export interface BuildRefusal {
   readonly lines: readonly string[];
   readonly error: string;
 }
+
+/**
+ * The executor's single writer (`SerialQueue.run` in `executors/build.ts`),
+ * passed in wherever a leaf needs to serialize a disk or `run.yml` write —
+ * never re-implemented alongside it.
+ */
+export type SerialWrite = <T>(work: () => Promise<T> | T) => Promise<T>;

@@ -24,7 +24,7 @@ import {
   addWorktree, assertWorktreeOn, baseStateOf, commitAll, dirtyPaths, fastForward, firstLine, headSha,
   isDirty, mergeNoFf, partitionDirty, pathAtRef, stateDirPrefixes,
 } from "./git.ts";
-import type { RescuedWork, StoryOutcome } from "./outcome.ts";
+import type { RescuedWork, SerialWrite, StoryOutcome } from "./outcome.ts";
 import { WORKTREES } from "./plan.ts";
 
 /**
@@ -50,10 +50,9 @@ export class EpicState {
    */
   noteMerged(epicBranch: string, storyId: string, carried: number | null): void {
     const list = this.merged.get(epicBranch) ?? [];
-    const id = storyId;
-    const at = list.findIndex((row) => row.id === id);
-    if (at === -1) list.push({ id, carried });
-    else list[at] = { id, carried };
+    const at = list.findIndex((row) => row.id === storyId);
+    if (at === -1) list.push({ id: storyId, carried });
+    else list[at] = { id: storyId, carried };
     this.merged.set(epicBranch, list);
   }
 
@@ -377,7 +376,7 @@ export interface RescueParts {
   readonly reason: string | null;
   readonly lines: string[];
   readonly emit: (type: EventType, payload: Record<string, unknown>) => void;
-  readonly write: <T>(work: () => Promise<T> | T) => Promise<T>;
+  readonly write: SerialWrite;
 }
 
 /**
