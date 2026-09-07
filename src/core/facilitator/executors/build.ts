@@ -30,7 +30,7 @@
  * changed under them. Serial B costs the reviewers' wall-clock and buys a review
  * that means something.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import {
   describeBranchModel, epicBranchOf, storyBranchOf, type BranchModel,
@@ -42,7 +42,6 @@ import { FactsStore } from "../../facts/FactsStore.ts";
 import { RunStore } from "../../run/RunStore.ts";
 import { renderConventions, renderFacts, stackExpertNames } from "../prompt.ts";
 import { loadExpertBundles } from "../../experts/expertBundle.ts";
-import { stackChecks } from "../../experts/packSections.ts";
 import {
   readStackPacks, renderProjectSkills, skillsFor, untrackedSkillWarnings,
 } from "../../experts/stackPacks.ts";
@@ -50,12 +49,12 @@ import { agentDir } from "../paths.ts";
 import {
   describeDispatchNotes, loadDispatchNotes, type DispatchNotes,
 } from "../dispatchNotes.ts";
-import { preparedBundles, reviewBundles, REVIEW_DIR } from "../../run/prepared.ts";
+import { preparedBundles, reviewBundles } from "../../run/prepared.ts";
 import { spawnAgent, BASE_TOOLS } from "../spawnAgent.ts";
 import {
   PendingError, PENDING_FILE, RAW_FILE, RESULT_FILE, readResult, readResultObject, resultPath,
   writeBundle, writeRaw,
-  dispatchNotesRecord, type PendingReview, type PendingStage,
+  dispatchNotesRecord, type PendingStage,
 } from "../pending.ts";
 import {
   addWorktree, commitsBetween, diffCommand, ensureBranch, GitError, removeWorktree, repoDirOf, shaReachability,
@@ -71,13 +70,10 @@ import {
   IMPLICIT_PLAN_REL, IMPLICIT_STORY_ID, IMPLICIT_STORY_NOTE,
 } from "../../build/implicitPlan.ts";
 import { evidenceFor, updateStoryFront } from "../../build/storyFile.ts";
+import { buildDeveloperPrompt, REVIEW_SCHEMA } from "../../build/prompts.ts";
 import {
-  buildDeveloperPrompt, buildReviewerPrompt, REVIEW_SCHEMA, type RecurringClass,
-} from "../../build/prompts.ts";
-import { workspaceRecurring } from "../../retro/reviewerFocus.ts";
-import {
-  isFormatRejection, MAX_FORMAT_RETRIES, parseReview, renderFormatRefusal,
-  renderPreviousAttempt, renderReviewLog, reviewerFailed, type Review,
+  MAX_FORMAT_RETRIES, parseReview, renderPreviousAttempt, renderReviewLog, reviewerFailed,
+  type Review,
 } from "../../build/review.ts";
 import {
   DEVELOPER_FAILED, dodGreen, type DodResult, type RescuedWork, type StoryOutcome,
@@ -98,6 +94,16 @@ import {
 import {
   dirtyRepoRefusal, epicRows, foreignEpicRefusal, resolveBranchModel, type ClaimParts,
 } from "../../build/branchClaims.ts";
+import {
+  awaitingReview, bundleKeyOf, clearReviewBundle, pendingRefusal, resumableReview,
+  reviewBundleKeyOf, reviewWorkFor, reviewWorkFromBundle, reviewWorkFromLedger,
+  stashRefusedEnvelope, writeReviewBundle,
+  type ResumableReview, type ReviewLookup, type ReviewWork,
+} from "../../build/reviewBundle.ts";
+import {
+  blockedByFailedDeveloper, formatRetryDecision, narrowFixlist, reviewerPromptFor,
+  RecurringFocus, ReviewCounters, type RoundParts,
+} from "../../build/reviewRound.ts";
 import { readReviewLedger, type ReviewLedger } from "../../build/reviewLedger.ts";
 import { phaseCostToDate } from "../../build/phaseCost.ts";
 import { appendBuildRetro, buildRetroPath, gateRetroLines, storyRetroLines } from "../../build/retroLog.ts";
@@ -133,36 +139,6 @@ class SerialQueue {
     this.tail = next.then(() => undefined, () => undefined);
     return next;
   }
-}
-
-/**
- * A story that needs its REVIEW re-run and nothing else: the developer half is
- * done, its DoD was green, and the commit is already merged into the epic.
- */
-interface ResumableReview {
-  /** The merged story commit, from the ledger's `task.done`. */
-  readonly commit: string;
-  /** The DoD results of the attempt that produced it, from the ledger. */
-  readonly dod: readonly DodResult[];
-  /** What the reviewer died with — quoted to the operator, never as a verdict. */
-  readonly error: string;
-}
-
-/**
- * A story whose REVIEW is the only thing outstanding, and everything a reviewer
- * needs to do it — recovered from the run's own ledger, never re-measured.
- *
- * The superset of `ResumableReview`: that one is the narrow "the last reviewer
- * died" case, this one also covers "the review was handed to the host and has
- * not come back", which is what a reviewer bundle on disk means.
- */
-interface ReviewWork {
-  /** The merged story commit the verdict is about. */
-  readonly commit: string;
-  /** The DoD results of the attempt that produced it. */
-  readonly dod: readonly DodResult[];
-  /** Why the review is outstanding, in the words the operator reads. */
-  readonly why: string;
 }
 
 /** What half A of a parallel wave produced for one story. */
@@ -441,32 +417,15 @@ class BuildSession {
    */
   private readonly epics = new EpicState();
   private readonly lines: string[] = [];
-  /** Per-story reviewer verdicts seen in THIS process, for the requeue counter. */
-  private readonly reviews = new Map<string, number>();
-
   /**
-   * Fix-list rounds this process has granted, per story — the bound's own
-   * counter, deliberately NOT the requeue one.
-   *
-   * A `fixlist` verdict spends no attempt, so it must not touch `reviews`; and it
-   * is bounded at `MAX_FIXLIST_ROUNDS`, so it must be counted somewhere. Read
-   * through `fixlistRoundsSpent`, which falls back to the ledger for a fresh
-   * process — a bound a restart forgets is not a bound.
+   * The three bounds this invocation holds a review round to — the requeue
+   * counter, the fix-list counter and the format-retry counter, three maps of
+   * three different things (`build/reviewRound.ts`, where all three docstrings
+   * went with their maps). ONE instance, created here and passed by reference.
    */
-  private readonly fixlists = new Map<string, number>();
-  /**
-   * Free re-prompts this process has granted THIS review round, per story (#78).
-   *
-   * A third counter rather than a flag on one of the other two, because it counts
-   * a third thing: `reviews` counts verdicts that cost an attempt, `fixlists`
-   * counts free rounds granted to the AUTHOR, and this counts envelopes the
-   * format check sent back to the REVIEWER. It is reset — not incremented
-   * — the moment a verdict is finally counted, because the bound is per envelope
-   * round (see `MAX_FORMAT_RETRIES`). Read through `formatRetriesSpent`, which
-   * falls back to the ledger: the host door settles one envelope per process, so
-   * a bound this process alone remembered would be no bound at all.
-   */
-  private readonly formatRetries = new Map<string, number>();
+  private readonly counters = new ReviewCounters();
+  /** The workspace prior every reviewer of THIS invocation is primed with (#74). */
+  private readonly focus = new RecurringFocus();
   /** `buildExecutor`'s `withClaims` reads this on every exit path — including failures. */
   get claimedEpics(): ReadonlySet<string> {
     return this.epics.claimed;
@@ -1293,7 +1252,7 @@ class BuildSession {
   private writeFixlistFor(story: StoryContext, review: Review, commit: string): string {
     const id = story.planned.story.id;
     // Allocated by `narrowFixlist`, which is the only thing that may grant one.
-    const round = this.fixlists.get(id) ?? MAX_FIXLIST_ROUNDS;
+    const round = this.counters.fixlistRoundGranted(id) ?? MAX_FIXLIST_ROUNDS;
     const rel = writeFixlist(this.ctx.runDir, BUILD_PHASE, {
       storyId: id,
       title: story.planned.story.title,
@@ -1420,78 +1379,8 @@ class BuildSession {
     }
   }
 
-  /**
-   * How many fix-list rounds this story has already been granted.
-   *
-   * This process first, then the ledger — the same two-source shape
-   * `reviewAttempts` uses, and for the same reason: a bound that a fresh `tldrx
-   * next` forgets is not a bound, and a story settled inside THIS invocation has
-   * not written its event to a file this can re-read yet.
-   */
-  private fixlistRoundsSpent(storyId: string): number {
-    return this.fixlists.get(storyId) ?? readReviewLedger(this.ctx.runDir, storyId).fixlistRounds;
-  }
-
-  /**
-   * The bound, applied to a verdict before anything records it (design §B.4).
-   *
-   * One fix-list round per story. A second `fixlist` is refused and read as
-   * `changes` — the fail-closed direction, and the honest one: the reviewer asked
-   * for a free round it does not have, and what it actually said was "this diff
-   * is not finished". Refused HERE, between the parse and `recordReview`, so the
-   * downgraded verdict is the one that lands on the requeue counter, the ledger
-   * line and the story's fate alike.
-   *
-   * A declared fix list `parseReview` could not read has already fallen to
-   * `changes` by the time this runs; its reasons come through on
-   * `fixlistProblems` and are said out loud rather than swallowed.
-   */
   private narrowFixlist(storyId: string, review: Review): Review {
-    // Printed HERE because both doors — a spawned reviewer and a host's
-    // `--commit --review` — reach the record through this one call (gh #36).
-    if (review.verdictProblem !== null) {
-      this.lines.push(`  · ${storyId}: ${review.verdictProblem}`);
-    }
-    for (const problem of review.fixlistProblems) {
-      this.lines.push(`  · ${storyId}: the reviewer's fix list was REFUSED — ${problem}`);
-    }
-    if (review.fixlistProblems.length > 0) {
-      this.lines.push(
-        // Not "does not buy a free round", which is what this said before #78:
-        // an unreadable envelope DOES buy a bounded free CORRECTION now. What it
-        // still cannot buy is the third VERDICT — a fix-list round is granted on
-        // a fix list somebody can read, and on nothing else.
-        `  · ${storyId}: an unreadable fix list does not grant a fix-list round — read as \`changes\``,
-      );
-    }
-    if (review.verdict !== "fixlist") return review;
-    const spent = this.fixlistRoundsSpent(storyId);
-    if (spent < MAX_FIXLIST_ROUNDS) {
-      // The round is ALLOCATED here, where it is granted — not counted off the
-      // ledger later. `recordReview` writes the `verdict: fixlist` event between
-      // this and the artifact, so a later re-count would read this very round as
-      // one already spent and number the file `-2`.
-      this.fixlists.set(storyId, spent + 1);
-      return review;
-    }
-    const previous = latestFixlist(this.ctx.runDir, BUILD_PHASE, storyId);
-    this.lines.push(
-      `  · ${storyId}: a SECOND fix-list round was refused — the bound is `
-      + `${String(MAX_FIXLIST_ROUNDS)} per story`
-      + (previous === null ? "" : ` (round ${String(previous.round)} is ${previous.rel})`)
-      + ", so this review is a full one and its verdict is read as `changes`",
-    );
-    return {
-      ...review,
-      verdict: "changes",
-      summary: `a second fix-list round was refused (the bound is ${String(MAX_FIXLIST_ROUNDS)} `
-        + `per story): ${review.summary}`,
-      findings: [
-        ...review.findings,
-        ...review.fixlist.map((f) => `${String(f.n)}. ${f.finding} [${f.severity}]`),
-      ],
-      fixlist: [],
-    };
+    return narrowFixlist(this.counters, this.roundParts, storyId, review);
   }
 
   /**
@@ -1955,21 +1844,11 @@ class BuildSession {
   }
 
   /**
-   * Grant one free re-prompt for a FORMAT-refused envelope, or refuse to (#78, #79).
-   *
-   * Returns the refusal to carry into the corrected envelope's prompt, or null —
-   * and null is the answer for every case except the narrow one this exists for,
-   * which is why the caller can treat it as "carry on exactly as before".
-   *
-   * The grant is RECORDED before it is used, in both places a bound has to live:
-   * `this.formatRetries` for this process, and a `story.review_retried` event for
-   * every process after it. Attempt bookkeeping that moved with nothing in the log
-   * would be unauditable, and this is the one path where an attempt is deliberately
-   * not spent.
-   *
-   * The turn's money is pushed as its own task row here rather than at
-   * `recordReview`, because that turn happened and was billed: what it did not
-   * produce is a VERDICT.
+   * The MONEY and the EVENT of a format retry — the decision is
+   * `formatRetryDecision` (`build/reviewRound.ts`), which reads the bound and
+   * records the grant. What stays here is what only the executor can do: the
+   * turn's own task row, and the `story.review_retried` that makes an attempt
+   * deliberately not spent auditable by every process after this one.
    */
   private formatRetry(
     story: StoryContext,
@@ -1990,17 +1869,8 @@ class BuildSession {
     },
   ): string | null {
     const id = story.planned.story.id;
-    if (!isFormatRejection(review)) return null;
-    const spent = this.formatRetriesSpent(id);
-    if (spent >= MAX_FORMAT_RETRIES) {
-      this.lines.push(
-        `  · ${id}: a ${String(MAX_FORMAT_RETRIES + 1)}th envelope was refused on its FORMAT — the `
-        + `bound is ${String(MAX_FORMAT_RETRIES)} free correction(s), so this one is `
-        + "recorded as `changes` and costs the attempt",
-      );
-      return null;
-    }
-    this.formatRetries.set(id, spent + 1);
+    const again = formatRetryDecision(this.counters, { ...this.roundParts, storyId: id, review });
+    if (again === null) return null;
     this.tasks.push({
       key: id,
       model: task.metered ? this.model() : null,
@@ -2011,38 +1881,21 @@ class BuildSession {
       ...(task.metered ? {} : { metered: false }),
       ...(task.tokens === undefined ? {} : { tokens: task.tokens }),
     });
-    // `formatProblems`, not `fixlistProblems`: a verdict WORD outside the enum
-    // (gh #36) is a format refusal that raises no fix-list problem at all, and
-    // reading the narrower list would record — and re-prompt with — nothing.
-    const detail = review.formatProblems.join(" · ");
     this.ctx.emit("story.review_retried", {
       phase: this.ctx.phaseId,
       story: id,
       // The attempt this did NOT spend. That is the whole point of the event.
       attempt: story.attempt,
-      retry: spent + 1,
+      retry: again.retry,
       max_retries: MAX_FORMAT_RETRIES,
-      detail: clipDetail(detail),
+      detail: again.detail,
     }, task.costUsd, "reviewer");
-    this.lines.push(
-      `  · ${id}: the review envelope was REFUSED as malformed — ${detail}`,
-      `  · ${id}: asking for a corrected envelope; this cost the story NO attempt `
-      + `(correction ${String(spent + 1)} of ${String(MAX_FORMAT_RETRIES)})`,
-    );
-    return renderFormatRefusal(review.formatProblems);
+    this.lines.push(...again.lines);
+    return again.refusal;
   }
 
-  /**
-   * The refusal a previous envelope of this story's open round earned, rendered
-   * for a prompt — or null when the last envelope was not refused that way (#78).
-   *
-   * Read off the ledger rather than off this process, because the only caller is
-   * `--prepare --review`, which by definition runs after the invocation that
-   * recorded the refusal has exited.
-   */
   private pendingRefusal(storyId: string): string | null {
-    const said = readReviewLedger(this.ctx.runDir, storyId).formatRefusal;
-    return said === null ? null : renderFormatRefusal([said]);
+    return pendingRefusal(this.ctx.runDir, storyId);
   }
 
   /**
@@ -2061,9 +1914,7 @@ class BuildSession {
     const id = story.planned.story.id;
     const key = this.reviewBundleKey(id);
     const dir = agentDir(this.ctx.runDir, key);
-    const kept = `result.refused-${String(this.formatRetriesSpent(id))}.json`;
-    renameSync(join(dir, RESULT_FILE), join(dir, kept));
-    rmSync(join(dir, RAW_FILE), { force: true });
+    const kept = stashRefusedEnvelope(this.ctx.runDir, key, this.formatRetriesSpent(id));
     this.writeReviewBundle(story, work, refusal);
     const rel = relative(this.ctx.root, dir);
     this.lines.push(
@@ -2086,92 +1937,30 @@ class BuildSession {
     };
   }
 
-  /**
-   * Free re-prompts already granted for this story's CURRENT envelope round.
-   *
-   * The same two-source shape `reviewAttempts` and `fixlistRoundsSpent` use, and
-   * for the same reason — except that here the ledger side is load-bearing rather
-   * than a fallback: `--commit --review` settles one envelope per process, so
-   * every host correction is read back off the log.
-   */
   private formatRetriesSpent(storyId: string): number {
-    return this.formatRetries.get(storyId) ?? readReviewLedger(this.ctx.runDir, storyId).formatRetries;
+    return this.counters.formatRetriesSpent(this.ctx.runDir, storyId);
   }
 
-  /**
-   * The reviewer's prompt — ONE renderer, whichever door the review comes
-   * through.
-   *
-   * A host review that judged a different brief from the one a spawn would have
-   * been given is not the same review, and the bundle's whole claim is that it
-   * is. Sharing the call is how that stays true without a test having to keep
-   * two copies in step.
-   */
   private reviewerPrompt(
     story: StoryContext,
     dod: readonly DodResult[],
     refusal: string | null = null,
   ): string {
-    return buildReviewerPrompt({
-      // What this workspace's own reviews keep finding (#74). Empty on a workspace
-      // with no history, which renders no section at all.
-      recurring: this.recurringClasses(),
-      refusal,
+    return reviewerPromptFor({
+      runDir: this.ctx.runDir,
+      root: this.ctx.root,
       runId: this.ctx.runId,
       story: story.planned,
-      repoName: story.planned.story.repo,
       branch: story.branch,
       epicBranch: story.epicBranch,
       worktree: story.worktree,
-      conventions: renderConventions(this.ctx.root, [story.planned.story.repo]),
-      dodResults: dod.map((r) => ({ command: r.command, exitCode: r.exitCode })),
-      // Withdrawn once the story's one round is spent, so the prompt never offers
-      // a verdict `narrowFixlist` is about to refuse. Computed the same way on
-      // both doors, which is what keeps the bundle's prompt byte-identical to the
-      // one a spawn would have sent.
-      fixlistAvailable: this.fixlistRoundsSpent(story.planned.story.id) < MAX_FIXLIST_ROUNDS,
-      // The active packs' checks for this story's repo (stack packs design §4.5), fed
-      // straight into the reviewer's prompt. Null when the packs switch is off, which
-      // renders nothing.
-      //
-      // Gated on `spec.stackExperts` too (issue review, fix round 1): the developer's
-      // OWN pack content is gated on that same stage-yaml switch two calls down, via
-      // `loadExpertBundles({ stackExperts: this.ctx.spec.stackExperts, ... })` ->
-      // `selectExperts` (`selectExperts.ts:140` — a `kind: stack` expert is never even
-      // SELECTED without it). With `stack_packs.enabled: true` and `stack_experts: false`
-      // in one story, the developer would get no pack content at all while the reviewer
-      // graded against `## Stack checks` text it was never shown. Checking both switches
-      // here is what keeps the two turns agreeing on whether packs are in play at all.
-      stackChecks: this.ctx.spec.stackExperts
-        ? stackChecks(this.ctx.root, [story.planned.story.repo])
-        : null,
+      dod,
+      refusal,
+      stackExperts: this.ctx.spec.stackExperts,
+      counters: this.counters,
+      focus: this.focus,
+      lines: this.lines,
     });
-  }
-
-  /**
-   * The workspace's recurring finding classes, mined ONCE per invocation (#74).
-   *
-   * Once, not per story, for two reasons. It reads every artefact of every run in
-   * the workspace, and a wave of six stories would pay that six times. And every
-   * reviewer in one invocation should be primed with the SAME prior — an
-   * aggregate that shifted between story three and story four would make two
-   * reviews incomparable for a reason neither log records.
-   *
-   * `workspaceRecurring` never throws: the worst case is no prior. A refused
-   * `finding-classes.yml` is said out loud here rather than swallowed, because a
-   * team editing a file that has silently stopped being read is the failure this
-   * whole feature exists to end.
-   */
-  private recurring: readonly RecurringClass[] | null = null;
-
-  private recurringClasses(): readonly RecurringClass[] {
-    if (this.recurring !== null) return this.recurring;
-    const focus = workspaceRecurring(this.ctx.root);
-    if (focus.error !== null) {
-      this.lines.push(`  \u00b7 reviewer focus skipped \u2014 ${focus.error}`);
-    }
-    this.recurring = focus.classes;
-    return this.recurring;
   }
 
   /**
@@ -2215,13 +2004,13 @@ class BuildSession {
     // diff was not faulted, so no second developer attempt is owed for it, and
     // the round it does buy is bounded by `narrowFixlist` instead.
     if (review.verdict !== "error" && review.verdict !== "fixlist") {
-      this.reviews.set(id, (this.reviews.get(id) ?? 0) + 1);
+      this.counters.countVerdict(id);
     }
     // A verdict — any verdict — closes this envelope round, and the next one
     // starts with its corrections again (gh #78). Set to `0` rather than deleted
     // so this process's own answer keeps winning over a ledger it has not
     // finished writing; `readReviewLedger` resets on exactly the same events.
-    this.formatRetries.set(id, 0);
+    this.counters.closeEnvelopeRound(id);
     // The reviewer IS a check: `approve` is the pass, `changes` and `error` the
     // two failures. `verdict` is what tells a ledger which one it is reading, and
     // `detail` on an errored review is the ERROR, verbatim.
@@ -2825,6 +2614,11 @@ class BuildSession {
     return this.workspace.repoCommands.get(repo) ?? [];
   }
 
+  /** The ledger's runDir and the operator-line sink, for `build/reviewRound.ts`. */
+  private get roundParts(): RoundParts {
+    return { runDir: this.ctx.runDir, lines: this.lines };
+  }
+
   /** The plan's prices and this stage's money, for `build/caps.ts`. */
   private get capParts(): CapParts {
     return {
@@ -2897,225 +2691,85 @@ class BuildSession {
     );
   }
 
-  /** `.agent/<stage>/<story>/` — one bundle per sub-agent, never one per stage. */
   private bundleKey(storyId: string): string {
-    return join(this.ctx.stageId, storyId);
+    return bundleKeyOf(this.ctx.stageId, storyId);
   }
 
-  /**
-   * `.agent/<stage>/<story>/review/` — the reviewer's own bundle, one level below
-   * the developer's.
-   *
-   * Nested rather than suffixed so `preparedBundles` (which walks exactly one
-   * level) cannot read a reviewer bundle as a developer one. Two roles, two
-   * directories, no flag to get wrong.
-   */
   private reviewBundleKey(storyId: string): string {
-    return join(this.ctx.stageId, storyId, REVIEW_DIR);
+    return reviewBundleKeyOf(this.ctx.stageId, storyId);
   }
 
-  /** Is a reviewer bundle out for this story? Its presence IS the state. */
-  private reviewBundleOut(storyId: string): boolean {
-    return existsSync(join(agentDir(this.ctx.runDir, this.reviewBundleKey(storyId)), PENDING_FILE));
-  }
-
-  /**
-   * Write the reviewer bundle: the prompt a spawn would have been given, plus the
-   * facts that make it dispatchable — the diff refs, the merged commit, the DoD
-   * already re-run, and the envelope schema `--commit --review` will parse.
-   *
-   * No cap is spent and no meter starts. `max_budget_usd` is still recorded,
-   * because the host is entitled to know what the framework would have paid for
-   * this read — but it is a number to compare against, not one to enforce here.
-   */
   private writeReviewBundle(story: StoryContext, work: ReviewWork, refusal: string | null = null): string {
-    const id = story.planned.story.id;
-    const key = this.reviewBundleKey(id);
-    const review: PendingReview = {
-      story: id,
+    return writeReviewBundle({
+      runDir: this.ctx.runDir,
+      root: this.ctx.root,
+      runId: this.ctx.runId,
+      phaseId: this.ctx.phaseId,
+      stageId: this.ctx.stageId,
+      storyId: story.planned.story.id,
       repo: story.planned.story.repo,
       branch: story.branch,
-      epic_branch: story.epicBranch,
-      diff: diffCommand(story.epicBranch, story.branch),
-      commit: work.commit,
+      epicBranch: story.epicBranch,
+      worktree: story.worktree,
       attempt: story.attempt,
-      max_attempts: MAX_ATTEMPTS,
-      worktree: relative(this.ctx.root, story.worktree),
-      dod: work.dod.map((r) => ({ command: r.command, exit_code: r.exitCode })),
-      resumed_from: work.why,
-    };
-    const pending: PendingStage = {
-      version: 1,
-      run: this.ctx.runId,
-      phase: this.ctx.phaseId,
-      stage: this.ctx.stageId,
-      expert: "reviewer",
       model: this.model(),
       effort: this.ctx.effort,
-      budget_usd: this.ctx.budgetUsd,
-      max_budget_usd: reviewerCap(this.capParts, this.spent(), id),
-      prompt: "prompt.md",
-      outputs: [],
-      sections: {},
-      // The story's own dod is re-run by the executor, never by the reviewer —
-      // the prompt says so in as many words. The stage's checks are the gate's.
-      checks: [],
-      prepared_at: this.ctx.at,
-      story: id,
-      role: "reviewer",
-      result_schema: REVIEW_SCHEMA,
-      review,
-    };
-    // An answer already sitting here is NOT binned. `--prepare` overwrites the
-    // prompt and the pending record and leaves `result.json` exactly as the
-    // developer half does — a turn somebody has already paid for is not this
-    // command's to throw away (`preparedRefusal`'s rule). It is said out loud
-    // instead, because a stale answer read as a fresh verdict is the other half
-    // of that hazard and `--discard-pending` is the door for it.
-    const answered = existsSync(join(agentDir(this.ctx.runDir, key), RESULT_FILE));
-    writeBundle(this.ctx.runDir, key, this.reviewerPrompt(story, work.dod, refusal), pending);
-    if (answered) {
-      this.lines.push(
-        `  · ${id}: a ${RESULT_FILE} was already in the reviewer bundle and was KEPT — `
-        + "settle it with `tldrx next --commit --review`, or bin it with `--discard-pending`",
-      );
-    }
-    return key;
+      budgetUsd: this.ctx.budgetUsd,
+      reviewerCapUsd: reviewerCap(this.capParts, this.spent(), story.planned.story.id),
+      preparedAt: this.ctx.at,
+      work,
+      prompt: this.reviewerPrompt(story, work.dod, refusal),
+      lines: this.lines,
+    });
   }
 
-  /** A settled handshake leaves the log, not the bundle. */
   private clearReviewBundle(key: string): void {
-    const dir = agentDir(this.ctx.runDir, key);
-    for (const file of [PENDING_FILE, RESULT_FILE, RAW_FILE]) rmSync(join(dir, file), { force: true });
+    clearReviewBundle(this.ctx.runDir, key);
   }
 
-  /**
-   * Is this story waiting on nothing but a REVIEW — and if so, what does the
-   * reviewer need?
-   *
-   * Two histories, one answer. `resumableReview` is the narrow "the last reviewer
-   * died" case that landed on 2026-08-30. The second is a review this framework
-   * already handed to the host: the bundle on disk is the record of that, and it
-   * is removed the moment `--commit --review` counts a verdict, so its presence
-   * is exact rather than a guess about the ledger's shape.
-   *
-   * A story whose reviewer asked for CHANGES is deliberately NOT here: that one
-   * is owed a developer attempt, its bundle was cleared when the verdict was
-   * counted, and `prepare()` hands it a developer exactly as it always did.
-   */
   private reviewWorkFor(planned: PlannedStory): ReviewWork | null {
-    const resume = this.resumableReview(planned);
-    if (resume !== null) {
-      return { commit: resume.commit, dod: resume.dod, why: `the previous reviewer FAILED (${resume.error})` };
-    }
-    if (!this.reviewBundleOut(planned.story.id)) return null;
-    return this.reviewWorkFromBundle(planned.story.id) ?? this.reviewWorkFromLedger(planned);
+    return reviewWorkFor(this.lookupFor(planned));
   }
 
-  /**
-   * The bundle's own account of what it is a review OF.
-   *
-   * Read in preference to the ledger, and not as a convenience: a story handed
-   * over mid-pipeline has NOT settled, so no `task.done` records its commit yet
-   * and the ledger genuinely does not know it. The bundle does — it was written
-   * from the merge that had just happened. The contract handed to the host is the
-   * contract read back from it.
-   */
   private reviewWorkFromBundle(storyId: string): ReviewWork | null {
-    const path = join(agentDir(this.ctx.runDir, this.reviewBundleKey(storyId)), PENDING_FILE);
-    if (!existsSync(path)) return null;
-    let doc: PendingStage;
-    try {
-      doc = JSON.parse(readFileSync(path, "utf8")) as PendingStage;
-    } catch {
-      return null;
-    }
-    const review = doc.review;
-    if (review === undefined || typeof review.commit !== "string" || review.commit === "") return null;
-    return {
-      commit: review.commit,
-      dod: (review.dod ?? []).map((r) => ({
-        command: r.command, exitCode: r.exit_code, timedOut: r.exit_code === 124, tail: "",
-      })),
-      why: review.resumed_from ?? "its review is outstanding",
-    };
+    return reviewWorkFromBundle(this.ctx.runDir, this.reviewBundleKey(storyId));
   }
 
-  /**
-   * The same facts, read off the ledger with no opinion about whether a review is
-   * OWED — for the paths where the operator has already said so by typing
-   * `--review`, or where a bundle is being settled.
-   */
   private reviewWorkFromLedger(planned: PlannedStory): ReviewWork | null {
-    const status = this.statusOf(planned);
-    if (status !== "review" && status !== "in_progress") return null;
-    const ledger = readReviewLedger(this.ctx.runDir, planned.story.id);
-    if (ledger.commit === null) return null;
-    return {
-      commit: ledger.commit,
-      dod: ledger.dod,
-      why: "its review is outstanding",
-    };
+    return reviewWorkFromLedger(this.ctx.runDir, planned.story.id, this.statusOf(planned));
   }
 
-  /** The story whose reviewer bundle is out, if any. */
   private awaitingReview(): PlannedStory | null {
-    return this.pendingStories().find((p) => this.reviewBundleOut(p.story.id)) ?? null;
+    return awaitingReview(this.ctx.runDir, this.ctx.stageId, this.pendingStories());
   }
 
-  /** How many reviewers have already JUDGED this story, from the ledger. */
   private reviewAttempts(storyId: string): number {
-    return this.reviews.get(storyId) ?? readReviewLedger(this.ctx.runDir, storyId).verdicts;
+    return this.counters.verdicts(this.ctx.runDir, storyId);
   }
 
-  /**
-   * Was this story's `blocked` caused by a developer that never RAN?
-   *
-   * Returns the error it died with, or null when the block was earned. This is
-   * the migration for Fix 1, and it exists because `blocked` is terminal in-run:
-   * a run recorded by the old code has stories parked there that were never
-   * really attempted, and nothing would ever offer them again.
-   *
-   * Two recorded shapes, because two eras — see `readReviewLedger`. The old one
-   * is only trusted when the story DECLARES dod commands and none ran: a story
-   * with an empty dod block blocks with exactly the same event shape (no commit,
-   * no check, no reviewer), and that block is a plan bug the developer had
-   * nothing to do with.
-   *
-   * `this.outcomes` is consulted first so a story THIS process just settled is
-   * read from its own outcome rather than from a log line it has not written yet.
-   */
   private blockedByFailedDeveloper(planned: PlannedStory): string | null {
-    const fresh = this.outcomes.get(planned.story.id);
-    if (fresh !== undefined) return fresh.developerError;
-    const ledger = readReviewLedger(this.ctx.runDir, planned.story.id);
-    if (ledger.developerErroredWith !== null) return ledger.developerErroredWith;
-    if (ledger.blockedWithNothingRun && planned.dod.commands.length > 0) return DEVELOPER_FAILED;
-    return null;
+    return blockedByFailedDeveloper(this.ctx.runDir, planned, this.outcomes.get(planned.story.id));
+  }
+
+  private resumableReview(planned: PlannedStory): ResumableReview | null {
+    return resumableReview(
+      this.ctx.runDir, planned.story.id, this.statusOf(planned), this.outcomes.get(planned.story.id),
+    );
   }
 
   /**
-   * Is this story waiting on nothing but a review that FAILED?
-   *
-   * Three things have to hold, and all three are read off disk so a fresh process
-   * reaches the same answer: the story is not settled, the last review in the
-   * ledger errored (nothing has judged it since), and a commit was merged. Miss
-   * any one and this returns null and the ordinary pipeline runs.
-   *
-   * `in_progress` counts as well as `review`, and that is not a nicety: on the
-   * run that found this bug the in-session path had already handed the host a
-   * developer bundle for "attempt 2", which set the story to `in_progress`. That
-   * attempt was never owed and this is where it stops being offered.
+   * Everything `build/reviewBundle.ts` needs to say whether a review is
+   * outstanding and what it is OF — the story's status on disk and this
+   * process's own outcome for it, which the executor alone can answer.
    */
-  private resumableReview(planned: PlannedStory): ResumableReview | null {
-    const status = this.statusOf(planned);
-    if (status !== "review" && status !== "in_progress") return null;
-    // Once THIS process has settled the story, its own outcome is the truth.
-    const fresh = this.outcomes.get(planned.story.id);
-    if (fresh !== undefined && fresh.verdict !== "error") return null;
-    const ledger = readReviewLedger(this.ctx.runDir, planned.story.id);
-    if (ledger.erroredWith === null || ledger.commit === null) return null;
-    return { commit: ledger.commit, dod: ledger.dod, error: ledger.erroredWith };
+  private lookupFor(planned: PlannedStory): ReviewLookup {
+    return {
+      runDir: this.ctx.runDir,
+      stageId: this.ctx.stageId,
+      storyId: planned.story.id,
+      status: this.statusOf(planned),
+      fresh: this.outcomes.get(planned.story.id),
+    };
   }
 
   /** The last `changes` verdict, rendered for the next prompt's Previous attempt. */
@@ -3209,12 +2863,6 @@ function numberOf(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-/** One event payload's `detail`, bounded — spec §2.9 caps a payload at 4 KB. */
-function clipDetail(detail: string): string {
-  const text = detail.replace(/\s+/g, " ").trim();
-  return text.length <= 1200 ? text : `${text.slice(0, 1197)}…`;
-}
-
 function isPlanStatus(value: string | undefined): value is PlanStatus {
   return value !== undefined && ["todo", "in_progress", "review", "done", "blocked"].includes(value);
 }
@@ -3281,3 +2929,4 @@ export {
 };
 export { PreflightCache, runStoryDod };
 export { EpicState, storyWorktreePath, resolveBranchModel };
+export { ReviewCounters };
