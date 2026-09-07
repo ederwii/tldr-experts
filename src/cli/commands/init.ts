@@ -1,7 +1,9 @@
 /** `tldrx init` — Detect the workspace, build the code map, interview the gaps
  *
- * Concept §4, spec §3. Deterministic and offline: filesystem + git only, no LLM
- * and no network. Writes `.tldrx/workspace.yml`, `.tldrx/map/**`, the init
+ * Concept §4, spec §3. Deterministic: filesystem, git, and the repo's own declared
+ * build/test/lint/typecheck commands, each run once so `command_probes:` can record
+ * whether they work (#168; `--no-probe` skips them). No LLM, and tldrx itself sends
+ * nothing anywhere. Writes `.tldrx/workspace.yml`, `.tldrx/map/**`, the init
  * handoff, the interview, seeded experts, conventions and `process.yml`, plus a
  * marked block in `.gitignore` and `CLAUDE.md`.
  *
@@ -51,7 +53,7 @@ export const initCommand: Command = {
   summary: "Detect the workspace, build the code map, interview the gaps",
   usage: "tldrx init [--root <path>] [--out <path>] [--no-interview] [--process <scrum|kanban|shape-up|none>]\n"
     + "                  [--stack <ts,dotnet,python,go,rust,…>] [--mcp] [--provider <auto|graphify|static>]\n"
-    + "                  [--ui scene|compact|plain|off] [--quiet]",
+    + "                  [--no-probe] [--ui scene|compact|plain|off] [--quiet]",
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     let options: InitCliOptions;
@@ -122,6 +124,9 @@ export function parseInitArgs(argv: readonly string[]): InitCliOptions {
   let mcp = false;
   let stack: string[] = [];
   let provider: ProviderPreference = "auto";
+  // On by default: `init` writing a `build:` it never ran is the bug (#168), so the
+  // measurement is the default and opting out is the thing you have to type.
+  let probe = true;
   let ui: string | undefined;
   let quiet = false;
 
@@ -132,6 +137,7 @@ export function parseInitArgs(argv: readonly string[]): InitCliOptions {
       case "--root": root = requireValue(argv, ++i, "--root"); break;
       case "--out": out = requireValue(argv, ++i, "--out"); break;
       case "--no-interview": interview = false; break;
+      case "--no-probe": probe = false; break;
       case "--mcp": mcp = true; break;
       case "--quiet": quiet = true; break;
       case "--ui": {
@@ -164,7 +170,10 @@ export function parseInitArgs(argv: readonly string[]): InitCliOptions {
       default: throw new Error(`unknown option '${arg}'`);
     }
   }
-  return { root: resolve(root), out: resolve(out ?? root), interview, methodology, mcp, stack, provider, ui, quiet };
+  return {
+    root: resolve(root), out: resolve(out ?? root), interview, methodology, mcp, stack, provider,
+    probe, ui, quiet,
+  };
 }
 
 function requireValue(argv: readonly string[], index: number, flag: string): string {

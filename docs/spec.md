@@ -74,7 +74,12 @@ repos:
      ci: [".github/workflows/deploy.yml"], confidence: high}
   - {name: lab, path: scavtopia-lab, default_branch: main, stack: [typescript, react, vite], package_manager: npm,
      commands: {build: "npm run build", test: "npm run test", lint: "npm run lint",
-                typecheck: "npm run typecheck", run: "npm run dev"}, ci: [], confidence: medium,
+                typecheck: "npm run typecheck", run: "npm run dev"},
+     command_probes: {build: {verified: true, exit_code: 0, at: 2026-08-28T14:02:11Z,
+                              reason: "verified: `npm run build` exited 0"},
+                      run: {verified: false, exit_code: null, at: 2026-08-28T14:02:11Z,
+                            reason: "not probed: `run` starts a long-running process"}},
+     ci: [], confidence: medium,
      overlays: [{id: react, evidence: "package.json: dependencies.react"},
                 {id: vite-react-spa, evidence: "package.json: devDependencies.vite + dependencies.react"}],
      skills: [{name: story-review, description: "Use when reviewing a component story",
@@ -96,6 +101,7 @@ stack_packs:                 # the one opt-in switch for the stack expert packs;
 | `repos[].path` | rel path | y | Inside root, no `..`; `.` in single-repo mode |
 | `repos[].default_branch` / `.stack` / `.package_manager` | str / str[] / str\|null | y | Epic-branch base; detected languages (may be empty); `npm`, `nuget`, `pip`, … |
 | `repos[].commands.{build,test,lint,typecheck,run}` | str\|null | y (all keys) | Run from `path`; `null` = unavailable |
+| `repos[].command_probes.<slot>.{verified,exit_code,at,reason}` | bool / int\|null / RFC3339 / str | n | What `init` MEASURED about the command in that slot: it ran each `build`/`test`/`lint`/`typecheck` command once. `verified: true` only when it exited 0. `exit_code: null` exactly when nothing exited — timed out, could not be started, or was never probed — and `reason` is REQUIRED in every case, so a `false` always says why. `run` is never probed (it starts a server) and its row says so. `--no-probe` writes every row as `skipped: --no-probe`. Records only: `commands` above is still the sole allowlist, and a red probe refuses nothing |
 | `repos[].ci` | rel path[] | n | CI definition files found |
 | `repos[].confidence` | `high\|medium\|low` | y | `low` forces an interview question at init |
 | `repos[].overlays[].{id,evidence}` | str / str | n | Framework overlays detection can PROVE from this repo's manifests (`src/core/detect/overlays.ts` is the one table of ids), each with the manifest signal that fired it. Always written, whatever the switch says: the evidence is a detection result. `stack_packs.enabled` gates only whether they are MATERIALISED under `experts/<lang>-stack/overlays/` |
@@ -106,8 +112,10 @@ stack_packs:                 # the one opt-in switch for the stack expert packs;
 
 **Validation.** `name` unique; `path` exists, relative, inside root; enums as above; commands non-empty when non-null
 and free of `&& ; | > \`` (single argv, auditable); contract repos resolve; ≤64 repos, ≤128 contracts.
-`repos[].overlays`, `repos[].skills` and `stack_packs` are **additive**: a file written before they existed loads
-unchanged (absent ⇒ empty lists, switch off), and `version:` stays `1` — a format that only grows does not bump it.
+`repos[].overlays`, `repos[].skills`, `repos[].command_probes` and `stack_packs` are **additive**: a file written
+before they existed loads unchanged (absent ⇒ empty lists, no probes, switch off), and `version:` stays `1` — a format
+that only grows does not bump it. A `command_probes` that is present is checked: a mapping of slot to
+`{verified: bool, exit_code: int|null, at: str, reason: non-empty str}`.
 
 **Greenfield.** `mode: greenfield` is a specialisation of `single-repo`, not a fourth workspace shape: one repo, no child
 repos, and **no code file** in it. "Code file" is decided by extension against one fixed set shared with the map

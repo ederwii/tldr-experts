@@ -24,10 +24,12 @@ import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import {
-  baseResultFor, commandHash, emitPreflightYaml, failedOnBase, loadPreflight, parsePreflight,
+  baseRefusalLines, baseResultFor, commandHash, emitPreflightYaml, failedOnBase, loadPreflight, parsePreflight,
   preExistingFailureReason, PREFLIGHT_REL as SOURCE_PREFLIGHT_REL, PREFLIGHT_RED_TTL_MS, savePreflight, withResult,
   type BaseCommandResult, type BasePreflight,
 } from "../src/core/build/preflight.ts";
+import type { WorkspaceContext } from "../src/hooks/lib/workspace.ts";
+import type { CommandProbeRecord } from "../src/core/schemas/workspace.ts";
 import { PreflightCache } from "../src/core/build/dodRunner.ts";
 import {
   makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions,
@@ -612,5 +614,63 @@ describe("#165 · only a refusal may lack an exit code", () => {
     // learned", which excuses nothing and refuses nothing.
     expect(failedOnBase(baseResultFor(loaded, "app", "npm run test"))).toBe(false);
     expect(baseResultFor(loaded, "app", "npm run test")?.exitCode).toBeUndefined();
+  });
+});
+
+/**
+ * The refusal cites `tldrx init`'s own probe when there is one (#168).
+ *
+ * The base-tree refusal already tells the operator WHICH command is red. When
+ * `workspace.yml` carries a `command_probes:` row saying `init` measured the same
+ * command red on the day the workspace was created, saying so costs one line and saves
+ * the search. It changes no verdict, and it is silent for every file written before the
+ * key existed.
+ */
+describe("the base refusal cites init's probe when one exists", () => {
+  const failure: BaseCommandResult = {
+    repo: "app", command: "npm run test", status: "failed", exitCode: 1, timedOut: false,
+    baseRef: "main", baseSha: "abc1234", tail: "1 failing",
+  };
+
+  function context(probes: Record<string, CommandProbeRecord>): WorkspaceContext {
+    return {
+      root: "/w",
+      repos: new Map([["app", "."]]),
+      commands: new Set(["npm run test"]),
+      repoCommands: new Map([["app", ["npm run test"]]]),
+      commandRoles: new Map([["app", new Map([["test", "npm run test"]])]]),
+      commandProbes: new Map([["app", new Map(Object.entries(probes))]]),
+      defaultBranches: new Map([["app", "main"]]),
+      seedTriageThresholdTokens: null,
+    };
+  }
+
+  test("a probe that measured the same command red is quoted, once", () => {
+    const lines = baseRefusalLines([failure], context({
+      test: {
+        verified: false, exit_code: 1, at: "2026-09-06T09:00:00Z",
+        reason: "not verified: `npm run test` exited 1",
+      },
+    }));
+    const cited = lines.filter((line) => line.includes("`tldrx init` measured this red too"));
+    expect(cited).toHaveLength(1);
+    expect(cited[0]).toContain("2026-09-06T09:00:00Z");
+    expect(cited[0]).toContain("not verified: `npm run test` exited 1");
+  });
+
+  test("a green probe, an unrun one, and no workspace at all each say nothing", () => {
+    const green = baseRefusalLines([failure], context({
+      test: { verified: true, exit_code: 0, at: "2026-09-06T09:00:00Z", reason: "verified: exited 0" },
+    }));
+    // `exit_code: null` is "we did not look" — a timeout, a skip. Not corroboration.
+    const unrun = baseRefusalLines([failure], context({
+      test: { verified: false, exit_code: null, at: "2026-09-06T09:00:00Z", reason: "skipped: --no-probe" },
+    }));
+    const none = baseRefusalLines([failure]);
+    for (const lines of [green, unrun, none]) {
+      expect(lines.some((line) => line.includes("measured this red too"))).toBe(false);
+    }
+    // And the refusal itself is unchanged in every case — the citation is additive.
+    expect(none).toEqual(baseRefusalLines([failure], context({})));
   });
 });

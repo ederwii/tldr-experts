@@ -91,7 +91,12 @@ async function refresh(args: MapArgs): Promise<number> {
     workspace,
     workspaceDir: args.workspaceDir,
     providers: chooseProviders(
-      { root: loaded.root, out: args.workspaceDir, interview: false, methodology: null, mcp: false, stack: [], provider: args.provider },
+      // `probe: false`: `map --refresh` re-detects to pick the providers and writes no
+      // `workspace.yml`. It has no business starting a build behind the operator's back.
+      {
+        root: loaded.root, out: args.workspaceDir, interview: false, methodology: null, mcp: false,
+        stack: [], provider: args.provider, probe: false,
+      },
       runner,
     ),
   });

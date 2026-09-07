@@ -203,6 +203,11 @@ const ENTRIES: readonly CommandHelp[] = [
       { name: "stack", arg: "<a,b,…>", meaning: "Declare the stack instead of detecting it. Comma-separated, e.g. ts,dotnet,python." },
       { name: "mcp", arg: null, meaning: "Also ask `claude mcp list` which servers are configured. Slower: it health-checks each one." },
       {
+        name: "no-probe",
+        arg: null,
+        meaning: "Do not run the detected build/test/typecheck commands. Each one is recorded as skipped rather than measured.",
+      },
+      {
         name: "provider",
         arg: "<name>",
         meaning: "Which map provider to use. auto picks graphify when it is on PATH, else static.",
@@ -223,8 +228,9 @@ const ENTRIES: readonly CommandHelp[] = [
     ],
     exits: [EXIT_OK, EXIT_USAGE],
     notes: [
-      "Deterministic and offline: filesystem and git only. No model runs and nothing is sent anywhere.",
+      "Deterministic: filesystem, git, and the repo's own build/test/lint/typecheck commands, each run ONCE to record whether it works (`--no-probe` skips them). No model runs and tldrx itself sends nothing anywhere.",
       "Most of the wait is the code map: `graphify update` runs once per repo. `--provider static` is much faster and still cites every claim.",
+      "It PROBES what it detected: each build/test/lint/typecheck command is run once, and the outcome is written to `command_probes:` in workspace.yml. `run` is never probed — it starts a server.",
     ],
   },
   {

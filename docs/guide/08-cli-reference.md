@@ -69,12 +69,13 @@ No Codex model prices are inferred.
 ## `tldrx init`
 
 Detect the workspace, build the code map, and write down the questions detection could not
-answer. Deterministic and offline: filesystem and git only. No model runs and nothing is sent
-anywhere.
+answer. Deterministic: filesystem, git, and the repo's own build/test/lint/typecheck commands,
+each run once so the file records whether they work. No model runs and tldrx itself sends
+nothing anywhere.
 
 ```
 tldrx init [--root <path>] [--out <path>] [--no-interview] [--process <name>]
-           [--stack <a,b,…>] [--mcp] [--provider <name>]
+           [--stack <a,b,…>] [--mcp] [--provider <name>] [--no-probe]
            [--ui scene|compact|plain|off] [--quiet]
 ```
 
@@ -87,6 +88,7 @@ tldrx init [--root <path>] [--out <path>] [--no-interview] [--process <name>]
 | `--stack <a,b,…>` | Declare the stack instead of detecting it, e.g. `ts,dotnet,python` |
 | `--mcp` | Also ask `claude mcp list` which servers are configured. Slower: it health-checks each one |
 | `--provider <name>` | Map provider. One of: `auto` `graphify` `static`. `auto` picks graphify when it is on PATH |
+| `--no-probe` | Do not run the detected build/test/typecheck commands. Each one is recorded as skipped rather than measured |
 | `--ui <mode>` | What to show while it works. One of: `auto` `scene` `compact` `plain` `off`. `TLDRX_UI` sets it too |
 | `--quiet` | No live progress. The report at the end is still printed |
 
@@ -103,6 +105,31 @@ a pipe or a CI job it is plain lines with no escape codes.
 per repo. Measured on a five-repo workspace: **36.0 s** with `--provider auto` against
 **1.3 s** with `--provider static`. `--provider static` is much faster and still cites every
 claim it makes; `--provider auto` buys you graph-derived structure for the wait.
+
+### What it PROBED, beside what it detected
+
+`commands:` is what a manifest declares. Some of it is not read from a declaration at all:
+`go build ./...`, `cargo test`, `dotnet build` and python's tools are inferred from the
+language, and inference is not measurement. So `init` runs each `build`, `test`, `lint` and
+`typecheck` command once and writes what happened beside it:
+
+```yaml
+    commands:
+      build: npm run build
+      test: npm run test
+      run: npm run dev
+    command_probes:
+      build: {verified: true,  exit_code: 0,    at: 2026-09-06T09:00:00Z, reason: "verified: `npm run build` exited 0"}
+      test:  {verified: false, exit_code: 1,    at: 2026-09-06T09:00:00Z, reason: "not verified: `npm run test` exited 1"}
+      run:   {verified: false, exit_code: null, at: 2026-09-06T09:00:00Z, reason: "not probed: `run` starts a long-running process"}
+```
+
+`run` is never probed — it starts a server. A probe that timed out is `verified: false` with
+`exit_code: null` and a reason saying so, never a guessed zero. `command_probes:` gates
+nothing: `commands:` is still the only allowlist the Definition of Done may run, and a red
+probe blocks no story. Pass `--no-probe` to skip the whole thing; every row then carries
+`skipped: --no-probe` as its reason, because "not measured" and "chose not to measure" are
+different facts.
 
 
 ## `tldrx install --claude`

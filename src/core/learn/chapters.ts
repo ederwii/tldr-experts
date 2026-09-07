@@ -179,8 +179,11 @@ const CHAPTER_1: Chapter = {
         "`--provider static` keeps the code map offline (the default would shell out to graphify).",
         "`--no-interview` skips init's OWN setup interview — the handful of questions detection",
         "could not answer. On a real repo it is worth answering; here they would be about a toy.",
+        "`--no-probe` is the one thing this sandbox does differently from your repo: normally init",
+        "RUNS each build/test command once and records the outcome under `command_probes:`, so a",
+        "command that does not work is a fact on day one rather than a surprise in the first build.",
       ],
-      command: ["init", "--provider", "static", "--no-interview"],
+      command: ["init", "--provider", "static", "--no-interview", "--no-probe"],
     },
   ],
   debrief: [

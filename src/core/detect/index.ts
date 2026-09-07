@@ -1,7 +1,11 @@
-export { detectWorkspace, type DetectProgress } from "./detectWorkspace.ts";
+export { detectWorkspace, type DetectOptions, type DetectProgress, type ProbeRequest } from "./detectWorkspace.ts";
 export { findRepos, isGitRepo, type FoundRepos } from "./findRepos.ts";
 export { detectStack, type StackDetection, type PackageJson } from "./stack.ts";
 export { detectCommands, isSingleArgvCommand, type DetectedCommands } from "./commands.ts";
+export {
+  probeCommands, PROBED_SLOTS, PROBE_TIMEOUT_MS,
+  type CommandProbe, type CommandProbes, type ProbeOptions,
+} from "./probeCommands.ts";
 export { detectCi } from "./ci.ts";
 export { detectDefaultBranch, FALLBACK_BRANCH, type DefaultBranch } from "./defaultBranch.ts";
 export { scoreConfidence } from "./confidence.ts";

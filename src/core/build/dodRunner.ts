@@ -189,7 +189,7 @@ export async function redBaseRefusal(
   if (failures.length === 0) return null;
   const first = failures[0];
   return {
-    lines: [...baseRefusalLines(failures)],
+    lines: [...baseRefusalLines(failures, parts.workspace)],
     error: first === undefined
       ? "a workspace command fails on the base tree"
       : `\`${first.command}\` exits ${String(first.exitCode ?? "?")} on the base tree of ${first.repo}`,

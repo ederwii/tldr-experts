@@ -47,8 +47,11 @@ stage measured $1.20–1.40. Nothing is charged until you run a stage, and
 
 ## Is my code sent anywhere?
 
-`tldrx init`, `run new`, `answer`, `approve`, `status`, `cost` and `learn` are offline —
-filesystem and git only. `tldrx next` sends an assembled prompt to the model, like any
+`run new`, `answer`, `approve`, `status`, `cost` and `learn` are offline — filesystem and
+git only. `tldrx init` is too, with one exception it makes on purpose: it runs your repo's
+own `build`, `test`, `lint` and `typecheck` commands once each, so `workspace.yml` records
+whether they work instead of asserting it. That is your build, doing whatever your build
+does; `--no-probe` skips it. `tldrx next` sends an assembled prompt to the model, like any
 other AI coding tool. What is in that prompt is not a mystery: `tldrx next --prepare`
 writes it to a file and prints its byte-by-byte breakdown before anything is spawned.
 

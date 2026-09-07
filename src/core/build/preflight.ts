@@ -37,6 +37,7 @@ import { yamlScalar } from "../facts/emitFactsYaml.ts";
 import { writeAtomic } from "../fs/writeAtomic.ts";
 import { hashText } from "../experts/packTemplates.ts";
 import { BUILD_PHASE } from "./plan.ts";
+import type { WorkspaceContext } from "../../hooks/lib/workspace.ts";
 
 /** The file that decides what a red story means, run-relative. */
 export const PREFLIGHT_REL = `${BUILD_PHASE}/preflight.yml`;
@@ -368,14 +369,50 @@ export function baseFailureLine(result: BaseCommandResult): string {
  * it is — because the whole failure this fixes was a config error reported as a
  * story that could not prove itself.
  */
-export function baseRefusalLines(failures: readonly BaseCommandResult[]): readonly string[] {
+export function baseRefusalLines(
+  failures: readonly BaseCommandResult[],
+  workspace?: WorkspaceContext,
+): readonly string[] {
+  const failed: string[] = [];
+  for (const result of failures) {
+    failed.push(baseFailureLine(result));
+    const probe = initProbeLine(workspace, result);
+    if (probe !== null) failed.push(probe);
+  }
   return [
     "[tldrx] build: a Definition of Done is a DELTA gate, and these commands already fail on the "
       + "untouched base tree — every story would block for something no story caused:",
-    ...failures.map(baseFailureLine),
+    ...failed,
     `Fix ${WORKSPACE_FILE} (or the base tree), then run \`tldrx next\` again. `
       + "Nothing was dispatched and nothing was charged.",
   ];
+}
+
+/**
+ * One line, and only when `tldrx init` ALREADY measured this same command red (#168).
+ *
+ * It costs nothing and it saves the operator the search: the command was broken before
+ * any story existed, and `workspace.yml` has said so since the day it was written. It
+ * changes no verdict — the refusal above stands on the preflight's own measurement —
+ * and it is silent whenever there is no probe, which is every `workspace.yml` written
+ * before `command_probes:` existed.
+ */
+export function initProbeLine(
+  workspace: WorkspaceContext | undefined, result: BaseCommandResult,
+): string | null {
+  if (workspace === undefined) return null;
+  const roles = workspace.commandRoles.get(result.repo);
+  const probes = workspace.commandProbes.get(result.repo);
+  if (roles === undefined || probes === undefined) return null;
+  for (const [slot, command] of roles) {
+    if (command !== result.command) continue;
+    const probe = probes.get(slot);
+    // Only a MEASURED red is worth saying. A row with `exit_code: null` was never run
+    // — not probed, timed out, skipped — and "we did not look" is not corroboration.
+    if (probe === undefined || probe.verified || probe.exit_code === null) return null;
+    return `    · \`tldrx init\` measured this red too, at ${probe.at}: ${probe.reason}`;
+  }
+  return null;
 }
 
 /** The attribution, when a story's DoD went red for a reason the base shares. */

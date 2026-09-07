@@ -7,12 +7,29 @@ import {
 export const WORKSPACE_MODES = ["single", "multi"] as const;
 export type WorkspaceMode = (typeof WORKSPACE_MODES)[number];
 
+/**
+ * `command_probes.<slot>` — what `tldrx init` MEASURED about a declared command (#168).
+ *
+ * Additive and optional. It permits nothing: `commands` above is still the allowlist,
+ * and no gate reads this. `exit_code` is null exactly when nothing exited — a timeout,
+ * a command that could not be started, or a slot that was never probed — and `reason`
+ * is required in every case, because a `verified: false` with no sentence behind it is
+ * the confident-nothing this key exists to replace.
+ */
+export interface CommandProbeRecord {
+  readonly verified: boolean;
+  readonly exit_code: number | null;
+  readonly at: string;
+  readonly reason: string;
+}
+
 export interface DetectedRepo {
   readonly name: string;
   readonly path: string;
   readonly languages?: readonly string[];
   readonly frameworks?: readonly string[];
   readonly commands?: Readonly<Record<string, string>>;
+  readonly command_probes?: Readonly<Record<string, CommandProbeRecord>>;
 }
 
 /**
@@ -68,6 +85,7 @@ export function validateWorkspace(input: unknown): ValidationResult {
         return;
       }
       requireKeys(repo, ["name", "path"], path, issues);
+      requireCommandProbes(repo.command_probes, `${path}.command_probes`, issues);
     });
   }
 
@@ -97,4 +115,42 @@ export function validateWorkspace(input: unknown): ValidationResult {
     }
   }
   return result(issues, deprecations);
+}
+
+/**
+ * A mapping of slot -> probe, or nothing at all.
+ *
+ * Held to the same strictness `stack_packs` is above, and for the same reason: a key
+ * this file will not check is a key a hand edit can turn into a lie. Absent is fine —
+ * every `workspace.yml` written before #168 has no such key and must load unchanged.
+ */
+function requireCommandProbes(value: unknown, path: string, issues: ValidationIssue[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    issues.push({ path, message: "expected a mapping of command slot to probe" });
+    return;
+  }
+  for (const [slot, probe] of Object.entries(value)) {
+    const at = `${path}.${slot}`;
+    if (!isRecord(probe)) {
+      issues.push({ path: at, message: "expected a mapping" });
+      continue;
+    }
+    if (typeof probe.verified !== "boolean") {
+      issues.push({ path: `${at}.verified`, message: "expected a boolean" });
+    }
+    if (probe.exit_code !== null && typeof probe.exit_code !== "number") {
+      issues.push({ path: `${at}.exit_code`, message: "expected a number or null" });
+    }
+    // Both REQUIRED, and checked for presence rather than through `requireString`,
+    // which tolerates `undefined`. `reason` is the "absent with a reason" half of the
+    // record: a row without it says something happened without saying what, which is
+    // the confident-nothing this key exists to replace.
+    if (typeof probe.at !== "string" || probe.at === "") {
+      issues.push({ path: `${at}.at`, message: "expected a non-empty RFC3339 string" });
+    }
+    if (typeof probe.reason !== "string" || probe.reason === "") {
+      issues.push({ path: `${at}.reason`, message: "expected a non-empty sentence saying why" });
+    }
+  }
 }

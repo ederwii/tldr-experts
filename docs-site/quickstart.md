@@ -53,7 +53,7 @@ starts over. To understand tldrx while touching nothing you own, stop here.
 
 ```bash
 cd your-project
-tldrx init            # deterministic and offline: filesystem and git only, $0.00
+tldrx init            # detect, map, and probe your build/test commands. $0.00
 tldrx interview --init
 ```
 

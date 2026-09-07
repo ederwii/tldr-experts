@@ -81,7 +81,7 @@ etapa, la nota de evidencia debajo de cada firma, el dinero que de verdad gastó
 disco y en el orden que quieras leerlo.
 
 ```bash
-tldrx init            # determinista y sin conexión: archivos y git nada más, $0.00
+tldrx init            # detecta, mapea y prueba tus comandos de build/test. $0.00
 tldrx run new payments --scope feature --budget 25 \
   --attended-by host --gates what:agent,plan:agent,build:agent,watch:agent
 tldrx drive --unattended    # el mandato: pégalo en una sesión de Claude Code

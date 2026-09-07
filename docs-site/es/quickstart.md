@@ -54,7 +54,7 @@ empieza de cero. Si lo que quieres es entender tldrx sin tocar nada tuyo, quéda
 
 ```bash
 cd your-project
-tldrx init            # determinista y sin conexión: archivos y git nada más, $0.00
+tldrx init            # detecta, mapea y prueba tus comandos de build/test. $0.00
 tldrx interview --init
 ```
 

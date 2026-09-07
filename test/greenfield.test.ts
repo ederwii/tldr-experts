@@ -46,7 +46,12 @@ async function greenfield(files?: Readonly<Record<string, string>>): Promise<Fix
 
 function options(root: string, overrides: Partial<InitOptions> = {}): InitOptions {
   return {
-    root, out: root, interview: true, methodology: null, mcp: false, stack: [], provider: "static", ...overrides,
+    // `probe: false` — these fixtures hold real `package.json` scripts (`vite build`,
+    // `vitest run`), and a probe would spawn npm inside a temp dir and measure the
+    // box's cache. The probe's own behaviour is tested against a fake runner, and the
+    // default (`probe: true`) is pinned on `parseInitArgs`.
+    root, out: root, interview: true, methodology: null, mcp: false, stack: [], provider: "static",
+    probe: false, ...overrides,
   };
 }
 

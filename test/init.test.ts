@@ -4,7 +4,8 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { parseYaml } from "../src/core/yaml.ts";
 import { validate } from "../src/core/schemas/index.ts";
-import { SpawnCommandRunner } from "../src/core/detect/index.ts";
+import { SpawnCommandRunner, type CommandResult, type CommandRunner } from "../src/core/detect/index.ts";
+import { validateWorkspace } from "../src/core/schemas/workspace.ts";
 import { endsWithToken, isBullet } from "../src/core/map/index.ts";
 import {
   competencyLevel, planExperts, planQuestions, renderQuestions, runInit, upsertBlock,
@@ -27,7 +28,12 @@ const NOW = new Date("2026-08-28T12:00:00Z");
 
 function options(root: string, overrides: Partial<InitOptions> = {}): InitOptions {
   return {
-    root, out: root, interview: true, methodology: null, mcp: false, stack: [], provider: "static", ...overrides,
+    // `probe: false` — these fixtures hold real `package.json` scripts (`vite build`,
+    // `vitest run`), and a probe would spawn npm inside a temp dir and measure the
+    // box's cache. The probe's own behaviour is tested against a fake runner, and the
+    // default (`probe: true`) is pinned on `parseInitArgs`.
+    root, out: root, interview: true, methodology: null, mcp: false, stack: [], provider: "static",
+    probe: false, ...overrides,
   };
 }
 
@@ -306,6 +312,7 @@ describe("interview planning", () => {
     name, path: name, absPath: `/tmp/${name}`, defaultBranch: "main", stack: [], languages: [],
     packageManager: null, manifests: [], codeFiles,
     commands: { build: null, test: null, lint: null, typecheck: null, run: null },
+    commandProbes: {},
     ci: [], overlays: [], skills: [], confidence, evidence: [],
   });
 
@@ -576,5 +583,117 @@ describe("init seeds the role experts the stage files name", () => {
     expect(readFileSync(productPath, "utf8")).toBe(edited);
     expect(report.created).toContain(".tldrx/experts/architect/expert.md");
     expect(report.kept).toContain(".tldrx/experts/product/expert.md");
+  });
+});
+
+/**
+ * `command_probes:` — what `init` actually RAN, beside a `commands:` it did not touch (#168).
+ *
+ * The runner is faked here on purpose and it is the same seam detection already spawns git
+ * through: a probe that ran a real `npm run build` inside a fixture would be a test that
+ * measures the box's npm cache. What is under test is that the probe goes through the
+ * runner at all, that `run` never does, and that a skip is recorded as a reason.
+ */
+describe("tldrx init — command probes (#168)", () => {
+  const AT = "2026-08-28T12:00:00Z";
+
+  /** Exit 0 for everything, with `git symbolic-ref` answered so the branch is still measured. */
+  function recordingRunner(): CommandRunner & { readonly calls: string[] } {
+    const calls: string[] = [];
+    return {
+      calls,
+      run(argv: readonly string[]): Promise<CommandResult> {
+        const key = argv.join(" ");
+        calls.push(key);
+        if (key.startsWith("git symbolic-ref")) {
+          return Promise.resolve({ exitCode: 0, stdout: "refs/remotes/origin/main\n", stderr: "" });
+        }
+        return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+      },
+    };
+  }
+
+  async function initWith(
+    root: string, runner: CommandRunner, overrides: Partial<InitOptions> = {},
+  ): Promise<void> {
+    await runInit(options(root, overrides), { runner, cliVersion: "0.0.1", now: NOW });
+  }
+
+  function probesOf(document: Record<string, unknown>, name: string): Record<string, {
+    verified: boolean; exit_code: number | null; at: string; reason: string;
+  }> {
+    const repo = (document.repos as Record<string, unknown>[]).find((row) => row.name === name);
+    return (repo?.command_probes ?? {}) as Record<string, {
+      verified: boolean; exit_code: number | null; at: string; reason: string;
+    }>;
+  }
+
+  test("workspace.yml carries command_probes beside a byte-identical commands map", async () => {
+    const local = await multiRepoFixture();
+    try {
+      const runner = recordingRunner();
+      await initWith(local.root, runner, { probe: true });
+      const document = await readYaml(join(local.root, ".tldrx/workspace.yml"));
+      const lab = (document.repos as Record<string, unknown>[]).find((row) => row.name === "lab");
+
+      // Unchanged. `commands:` is the DoD allowlist and nothing here edits it.
+      expect(lab?.commands).toEqual({
+        build: "npm run build", test: "npm run test", lint: "npm run lint",
+        typecheck: "npm run typecheck", run: "npm run dev",
+      });
+
+      const probes = probesOf(document, "lab");
+      expect(Object.keys(probes).sort()).toEqual(["build", "lint", "run", "test", "typecheck"]);
+      expect(probes.build).toEqual({
+        verified: true, exit_code: 0, at: AT, reason: "verified: `npm run build` exited 0",
+      });
+      expect(probes.run?.verified).toBe(false);
+      expect(probes.run?.reason).toContain("not probed");
+
+      // Through the runner, and `run` never — a probe of it starts a server.
+      expect(runner.calls).toContain("npm run build");
+      expect(runner.calls).toContain("npm run typecheck");
+      expect(runner.calls).not.toContain("npm run dev");
+    } finally {
+      await local.cleanup();
+    }
+  });
+
+  test("--no-probe records the skip as a reason, never a confident row", async () => {
+    const local = await multiRepoFixture();
+    try {
+      const runner = recordingRunner();
+      await initWith(local.root, runner, { probe: false });
+      const document = await readYaml(join(local.root, ".tldrx/workspace.yml"));
+      const probes = probesOf(document, "lab");
+      expect(probes.build).toEqual({
+        verified: false, exit_code: null, at: AT, reason: "skipped: --no-probe",
+      });
+      expect(probes.test?.verified).toBe(false);
+      expect(runner.calls).not.toContain("npm run build");
+    } finally {
+      await local.cleanup();
+    }
+  });
+
+  test("a workspace.yml written before command_probes existed still validates and loads", () => {
+    const older = { version: 1, mode: "single", root: ".", repos: [{ name: "app", path: "." }] };
+    expect(validateWorkspace(older).ok).toBe(true);
+  });
+
+  test("a command_probes that is not the recorded shape is refused, additively", () => {
+    const base = { version: 1, mode: "single", root: ".", repos: [{ name: "app", path: "." }] };
+    const withProbes = (probes: unknown): ReturnType<typeof validateWorkspace> =>
+      validateWorkspace({ ...base, repos: [{ name: "app", path: ".", command_probes: probes }] });
+
+    expect(withProbes({ build: { verified: true, exit_code: 0, at: AT, reason: "verified: ok" } }).ok).toBe(true);
+    // A row with no reason is a confident value with nothing behind it.
+    expect(withProbes({ build: { verified: true, exit_code: 0, at: AT } }).ok).toBe(false);
+    expect(withProbes({ build: { verified: "yes", exit_code: 0, at: AT, reason: "r" } }).ok).toBe(false);
+    expect(withProbes({ build: { verified: true, exit_code: "0", at: AT, reason: "r" } }).ok).toBe(false);
+    // `exit_code: null` is legal — it is how a timeout says nothing exited.
+    expect(withProbes({ build: { verified: false, exit_code: null, at: AT, reason: "timed out" } }).ok).toBe(true);
+    expect(withProbes({ build: "verified" }).ok).toBe(false);
+    expect(withProbes([]).ok).toBe(false);
   });
 });

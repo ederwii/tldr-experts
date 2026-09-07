@@ -79,7 +79,7 @@ signature, the money it actually spent, all still on disk and readable in any or
 like.
 
 ```bash
-tldrx init            # deterministic and offline: filesystem and git only, $0.00
+tldrx init            # detect, map, and probe your build/test commands. $0.00
 tldrx run new payments --scope feature --budget 25 \
   --attended-by host --gates what:agent,plan:agent,build:agent,watch:agent
 tldrx drive --unattended    # the mandate — paste it into a Claude Code session

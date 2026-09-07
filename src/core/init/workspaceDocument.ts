@@ -18,6 +18,7 @@
  * skeleton's `single` so the shipped validator still runs. `[assumption]`
  */
 import { type DetectedRepo, type DetectedWorkspace } from "../detect/types.ts";
+import type { CommandProbe } from "../detect/probeCommands.ts";
 import { workspaceMode } from "../detect/greenfield.ts";
 import type { DetectedOverlay } from "../detect/overlays.ts";
 import type { DetectedSkill } from "../detect/skills.ts";
@@ -31,6 +32,14 @@ export interface WorkspaceRepoDocument {
   readonly stack: readonly string[];
   readonly package_manager: string | null;
   readonly commands: Readonly<Record<string, string | null>>;
+  /**
+   * `command_probes:` — what `init` MEASURED about each command above (#168).
+   *
+   * Additive and optional: absent when nothing was probed, and every reader that
+   * never heard of the key is unaffected. It is not an allowlist and it permits
+   * nothing — `commands` above is still the only thing the DoD gate may run.
+   */
+  readonly command_probes?: Readonly<Record<string, CommandProbe>>;
   readonly ci: readonly string[];
   readonly overlays: readonly DetectedOverlay[];
   readonly skills: readonly DetectedSkill[];
@@ -111,6 +120,9 @@ function toRepoDocument(repo: DetectedRepo): WorkspaceRepoDocument {
       typecheck: repo.commands.typecheck,
       run: repo.commands.run,
     },
+    // Only when there is something to say. A workspace detected without probing
+    // writes no key at all, rather than a row of confident nothing.
+    ...(Object.keys(repo.commandProbes).length === 0 ? {} : { command_probes: repo.commandProbes }),
     ci: repo.ci,
     overlays: repo.overlays.map((item) => ({ id: item.id, evidence: item.evidence })),
     skills: repo.skills.map((item) => ({
