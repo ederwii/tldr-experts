@@ -2457,6 +2457,10 @@ function round2(n: number): number {
  * only rule that never writes a number nothing measured — negative inputs
  * (never legitimately produced, but not this function's job to assume that)
  * are absent for the same reason.
+ *
+ * This is the WRITE-side rule; `budget/turnTokens.ts`'s `turnTokens` is the
+ * READ-side rule that decides what a row — this one's or an older one's —
+ * counts as having declared, and the two headers name each other on purpose.
  */
 export function tokenSplit(
   inputTokens: number | undefined, outputTokens: number | undefined,

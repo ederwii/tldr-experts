@@ -26,6 +26,7 @@ import {
   MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE, developerPriceDivisor,
 } from "../src/core/facilitator/executors/build.ts";
 import { tokenSplit } from "../src/core/facilitator/runNext.ts";
+import { turnTokens } from "../src/core/budget/turnTokens.ts";
 import { validateRunFile, type RunTask } from "../src/core/run/RunFile.ts";
 import { emitRunYaml } from "../src/core/run/emitRunYaml.ts";
 import { parseYaml } from "../src/core/yaml.ts";
@@ -347,6 +348,36 @@ describe("the provider's token split on a run.yml task row", () => {
     const report = validateRunFile(doc);
     expect(report.ok).toBe(false);
     expect(report.issues.map((i) => i.message).join(" ")).toContain("expected a number >= 0");
+  });
+});
+
+describe("turnTokens — the scalar, else the provider's split, never a half (#159)", () => {
+  /**
+   * The READ-side pair of `tokenSplit` above: that one decides what a row
+   * WRITES, this one decides what a row — this one's or an older one's —
+   * counts as having DECLARED, for `spendBasisOf`'s two feeders.
+   */
+  test("a host-declared `tokens` wins, because it is what the host said", () => {
+    expect(turnTokens({ tokens: 900, input_tokens: 100, output_tokens: 10 })).toBe(900);
+  });
+
+  test("no scalar, both sides of the split present: their sum", () => {
+    expect(turnTokens({ input_tokens: 100, output_tokens: 10 })).toBe(110);
+  });
+
+  test("a HALF split is absent — the same rule `tokenSplit` writes rows by", () => {
+    expect(turnTokens({ input_tokens: 100 })).toBeNull();
+    expect(turnTokens({ output_tokens: 10 })).toBeNull();
+    expect(turnTokens({ input_tokens: 100, output_tokens: 0 })).toBeNull();
+  });
+
+  test("nothing declared is null, never a confident zero", () => {
+    expect(turnTokens({})).toBeNull();
+  });
+
+  test("a negative or non-finite side is absent, never arithmetic", () => {
+    expect(turnTokens({ input_tokens: -1, output_tokens: 10 })).toBeNull();
+    expect(turnTokens({ input_tokens: Number.NaN, output_tokens: 10 })).toBeNull();
   });
 });
 

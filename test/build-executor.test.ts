@@ -2457,6 +2457,38 @@ describe("the handoff's Cost line marks an unmetered phase as a lower bound (#13
   });
 
   /**
+   * A turn that declared only a PROVIDER split is no longer counted silent, and
+   * the split does not leak into the separate "host declared N tokens" figure
+   * the `absent` sentence quotes (#159) — exactly the shape every Codex Build
+   * turn has: unmetered, no host `tokens`, a full `inputTokens`/`outputTokens`.
+   */
+  test("a provider split is declared, and it never inflates the host-declared figure (#159)", () => {
+    const ws = workspace(HOSTED);
+    // Silent: no tokens of any kind — keeps the stage `absent` on its own.
+    const silent = { key: "S1", model: null, costUsd: 0, sessionId: null, error: null, outputs: [], metered: false };
+    // A SEPARATE, metered turn that carries a full provider split and no host
+    // `tokens` scalar. If the split leaked into the host-declared figure, this
+    // stage would wrongly claim every declared token sits on a turn that also
+    // carried dollars — but nothing here was ever HOST-declared.
+    const splitOnly = {
+      key: "S1", model: "sonnet", costUsd: 1, sessionId: null, error: null, outputs: [],
+      inputTokens: 200, outputTokens: 20,
+    };
+    const result = phaseCostToDate(ws.runDir, "04-build", "build", 1, [silent, splitOnly]);
+    expect(result.note).toBe(spendReason("absent", 2, 1, 1, 0, "stage"));
+    expect(result.note).not.toContain("sits on a turn that also carried dollars");
+
+    // And an UNMETERED turn whose only declaration is the split is `declared`,
+    // not silent — the shape every Codex Build turn has.
+    const unmeteredSplit = {
+      key: "S1", model: "sonnet", costUsd: 0, sessionId: null, error: null, outputs: [],
+      metered: false, inputTokens: 200, outputTokens: 20,
+    };
+    const onlySplit = phaseCostToDate(ws.runDir, "04-build", "build", 0, [unmeteredSplit]);
+    expect(onlySplit.note).toBe(spendReason("declared", 1, 1, 0, 0, "stage"));
+  });
+
+  /**
    * Both caveats, when both apply — neither one silences the other.
    *
    * An unreadable `run.yml` (#138) says the figure is this invocation's alone; an

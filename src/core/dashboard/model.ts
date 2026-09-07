@@ -50,6 +50,7 @@ import {
 import { DEFAULT_ECONOMY, DEFAULT_ON_HOST_TOKENS_EXCEED } from "../budget/RunBudget.ts";
 import { MAX_ATTEMPTS } from "../budget/remainingWork.ts";
 import { spendBasisOf } from "../budget/spendBasis.ts";
+import { turnTokens } from "../budget/turnTokens.ts";
 import { hasStarted, resolveDependencies, type DependencyInput, type ResolvedRun } from "../run/dependencies.ts";
 import { isMovable, waitingFor, type Waiting, type WaitingKind } from "../run/waiting.ts";
 import { openBlocks, parseHandoff, parseQuestions } from "../text/index.ts";
@@ -1188,7 +1189,11 @@ function toSpendModel(
   hostTokens: number,
 ): SpendModel {
   const counted = spendBasisOf(
-    tasks.map((task) => ({ costUsd: task.cost_usd, metered: task.metered, tokens: task.tokens })),
+    // `tokens` is `turnTokens(task)` (#159): the host scalar when the task
+    // declared one, else the provider's own split when both sides of it are
+    // positive. `hostTokens` above stays the raw `task.tokens ?? 0` sum — the
+    // two currencies are never mixed in the same figure.
+    tasks.map((task) => ({ costUsd: task.cost_usd, metered: task.metered, tokens: turnTokens(task) })),
     hostTokens,
   );
   return {

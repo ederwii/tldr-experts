@@ -22,6 +22,8 @@ export {
 export type { CostAttempt, CostStage, CostRun, CostProgram, CostTokens } from "./costView.ts";
 export { estimateNextStage, renderEstimate, EstimateError } from "./estimateView.ts";
 export type { StageEstimate, HistoryBasis, RunRemaining } from "./estimateView.ts";
+export { turnTokens } from "./turnTokens.ts";
+export type { TokenBearing } from "./turnTokens.ts";
 export {
   MODEL_PRICES, priceFor, contextTokensFor, estimateTokensFromBytes,
   BYTES_PER_TOKEN, CACHE_READ_MULTIPLIER, CACHE_WRITE_MULTIPLIER, DEFAULT_CONTEXT_TOKENS,
