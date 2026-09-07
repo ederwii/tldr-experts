@@ -75,9 +75,9 @@ repos:
   - {name: lab, path: scavtopia-lab, default_branch: main, stack: [typescript, react, vite], package_manager: npm,
      commands: {build: "npm run build", test: "npm run test", lint: "npm run lint",
                 typecheck: "npm run typecheck", run: "npm run dev"},
-     command_probes: {build: {verified: true, exit_code: 0, at: 2026-08-28T14:02:11Z,
+     command_probes: {build: {status: ok, verified: true, exit_code: 0, at: 2026-08-28T14:02:11Z,
                               reason: "verified: `npm run build` exited 0"},
-                      run: {verified: false, exit_code: null, at: 2026-08-28T14:02:11Z,
+                      run: {status: not-probed, verified: false, exit_code: null, at: 2026-08-28T14:02:11Z,
                             reason: "not probed: `run` starts a long-running process"}},
      ci: [], confidence: medium,
      overlays: [{id: react, evidence: "package.json: dependencies.react"},
@@ -101,7 +101,7 @@ stack_packs:                 # the one opt-in switch for the stack expert packs;
 | `repos[].path` | rel path | y | Inside root, no `..`; `.` in single-repo mode |
 | `repos[].default_branch` / `.stack` / `.package_manager` | str / str[] / str\|null | y | Epic-branch base; detected languages (may be empty); `npm`, `nuget`, `pip`, … |
 | `repos[].commands.{build,test,lint,typecheck,run}` | str\|null | y (all keys) | Run from `path`; `null` = unavailable |
-| `repos[].command_probes.<slot>.{verified,exit_code,at,reason}` | bool / int\|null / RFC3339 / str | n | What `init` MEASURED about the command in that slot: it ran each `build`/`test`/`lint`/`typecheck` command once. `verified: true` only when it exited 0. `exit_code: null` exactly when nothing exited — timed out, could not be started, or was never probed — and `reason` is REQUIRED in every case, so a `false` always says why. `run` is never probed (it starts a server) and its row says so. `--no-probe` writes every row as `skipped: --no-probe`. Records only: `commands` above is still the sole allowlist, and a red probe refuses nothing |
+| `repos[].command_probes.<slot>.{status,verified,exit_code,at,reason}` | enum / bool / int\|null / RFC3339 / str | n | What `init` MEASURED about the command in that slot: it ran each `build`/`test`/`lint`/`typecheck` command once. `status` is the field to branch on — `ok` \| `failed` \| `timed-out` \| `unspawnable` \| `not-probed` \| `skipped` — and `verified` is `status == ok`. Only `failed` is a measured red. `exit_code` is non-null ONLY for `ok`/`failed`, because only those mean a process exited: a command whose binary is missing is `unspawnable` with the system's own message, never a fabricated `127`. `reason` is REQUIRED in every case, so a non-`ok` row always says why. `run` is never probed (it starts a server) ⇒ `not-probed`. `--no-probe` writes `skipped` on every slot it would have probed; `run` keeps its own `not-probed`, and a synthesised command's reason still says it was synthesised. Records only: `commands` above is still the sole allowlist, and a red probe refuses nothing |
 | `repos[].ci` | rel path[] | n | CI definition files found |
 | `repos[].confidence` | `high\|medium\|low` | y | `low` forces an interview question at init |
 | `repos[].overlays[].{id,evidence}` | str / str | n | Framework overlays detection can PROVE from this repo's manifests (`src/core/detect/overlays.ts` is the one table of ids), each with the manifest signal that fired it. Always written, whatever the switch says: the evidence is a detection result. `stack_packs.enabled` gates only whether they are MATERIALISED under `experts/<lang>-stack/overlays/` |
@@ -115,7 +115,9 @@ and free of `&& ; | > \`` (single argv, auditable); contract repos resolve; ≤6
 `repos[].overlays`, `repos[].skills`, `repos[].command_probes` and `stack_packs` are **additive**: a file written
 before they existed loads unchanged (absent ⇒ empty lists, no probes, switch off), and `version:` stays `1` — a format
 that only grows does not bump it. A `command_probes` that is present is checked: a mapping of slot to
-`{verified: bool, exit_code: int|null, at: str, reason: non-empty str}`.
+`{status: one of the six above, verified: bool, exit_code: int|null, at: non-empty str, reason: non-empty str}`.
+One predicate decides that shape for both readers — the validator, which REFUSES a malformed file, and the hook
+loader, which SKIPS a malformed row rather than defaulting it into a verdict.
 
 **Greenfield.** `mode: greenfield` is a specialisation of `single-repo`, not a fourth workspace shape: one repo, no child
 repos, and **no code file** in it. "Code file" is decided by extension against one fixed set shared with the map

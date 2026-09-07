@@ -4,7 +4,10 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { parseYaml } from "../src/core/yaml.ts";
 import { validate } from "../src/core/schemas/index.ts";
-import { SpawnCommandRunner, type CommandResult, type CommandRunner } from "../src/core/detect/index.ts";
+import {
+  PROBE_STATUSES, SpawnCommandRunner,
+  type CommandProbe, type CommandResult, type CommandRunner,
+} from "../src/core/detect/index.ts";
 import { validateWorkspace } from "../src/core/schemas/workspace.ts";
 import { endsWithToken, isBullet } from "../src/core/map/index.ts";
 import {
@@ -462,7 +465,14 @@ describe("the CLI end to end", () => {
   }
 
   test("init exits 0, then map --check confirms every citation resolves", async () => {
-    const initRun = await tldrx("init", "--root", fixture.root, "--no-interview", "--provider", "static");
+    // `--no-probe`: this fixture's package.json declares `vite build`/`vitest run` and its
+    // .csproj files make init synthesise `dotnet build`. Without the flag this assertion about
+    // exit codes silently runs the BOX's npm and dotnet inside a temp dir (measured: five such
+    // children). `test/init-probe-hermeticity.test.ts` is the guard; the probe itself is tested
+    // against a fake runner and end to end in `describe("tldrx init — command probes (#168)")`.
+    const initRun = await tldrx(
+      "init", "--root", fixture.root, "--no-interview", "--provider", "static", "--no-probe",
+    );
     expect(initRun.code).toBe(0);
     expect(initRun.stdout).toContain("multi-repo, 2 repo(s)");
 
@@ -495,12 +505,14 @@ describe("the CLI end to end", () => {
   // `process.yml`, so "then answer .tldrx/init-questions.md" was an instruction
   // to do the one thing that does not work.
   test("the Next line names `tldrx interview --init`, and --no-interview says there is nothing to answer", async () => {
-    const withInterview = await tldrx("init", "--root", fixture.root, "--provider", "static");
+    const withInterview = await tldrx("init", "--root", fixture.root, "--provider", "static", "--no-probe");
     expect(withInterview.code).toBe(0);
     expect(withInterview.stdout)
       .toContain("Next: read .tldrx/init-handoff.md, then run `tldrx interview --init` to answer the setup questions.");
 
-    const without = await tldrx("init", "--root", fixture.root, "--no-interview", "--provider", "static");
+    const without = await tldrx(
+      "init", "--root", fixture.root, "--no-interview", "--provider", "static", "--no-probe",
+    );
     expect(without.code).toBe(0);
     expect(without.stdout).toContain("No questions were written (--no-interview).");
     expect(without.stdout).not.toContain("tldrx interview --init");
@@ -619,13 +631,9 @@ describe("tldrx init — command probes (#168)", () => {
     await runInit(options(root, overrides), { runner, cliVersion: "0.0.1", now: NOW });
   }
 
-  function probesOf(document: Record<string, unknown>, name: string): Record<string, {
-    verified: boolean; exit_code: number | null; at: string; reason: string;
-  }> {
+  function probesOf(document: Record<string, unknown>, name: string): Record<string, CommandProbe> {
     const repo = (document.repos as Record<string, unknown>[]).find((row) => row.name === name);
-    return (repo?.command_probes ?? {}) as Record<string, {
-      verified: boolean; exit_code: number | null; at: string; reason: string;
-    }>;
+    return (repo?.command_probes ?? {}) as Record<string, CommandProbe>;
   }
 
   test("workspace.yml carries command_probes beside a byte-identical commands map", async () => {
@@ -645,7 +653,8 @@ describe("tldrx init — command probes (#168)", () => {
       const probes = probesOf(document, "lab");
       expect(Object.keys(probes).sort()).toEqual(["build", "lint", "run", "test", "typecheck"]);
       expect(probes.build).toEqual({
-        verified: true, exit_code: 0, at: AT, reason: "verified: `npm run build` exited 0",
+        status: "ok", verified: true, exit_code: 0, at: AT,
+        reason: "verified: `npm run build` exited 0",
       });
       expect(probes.run?.verified).toBe(false);
       expect(probes.run?.reason).toContain("not probed");
@@ -667,7 +676,7 @@ describe("tldrx init — command probes (#168)", () => {
       const document = await readYaml(join(local.root, ".tldrx/workspace.yml"));
       const probes = probesOf(document, "lab");
       expect(probes.build).toEqual({
-        verified: false, exit_code: null, at: AT, reason: "skipped: --no-probe",
+        status: "skipped", verified: false, exit_code: null, at: AT, reason: "skipped: --no-probe",
       });
       expect(probes.test?.verified).toBe(false);
       expect(runner.calls).not.toContain("npm run build");
@@ -686,13 +695,23 @@ describe("tldrx init — command probes (#168)", () => {
     const withProbes = (probes: unknown): ReturnType<typeof validateWorkspace> =>
       validateWorkspace({ ...base, repos: [{ name: "app", path: ".", command_probes: probes }] });
 
-    expect(withProbes({ build: { verified: true, exit_code: 0, at: AT, reason: "verified: ok" } }).ok).toBe(true);
+    const ok = { status: "ok", verified: true, exit_code: 0, at: AT, reason: "verified: ok" };
+    expect(withProbes({ build: ok }).ok).toBe(true);
     // A row with no reason is a confident value with nothing behind it.
-    expect(withProbes({ build: { verified: true, exit_code: 0, at: AT } }).ok).toBe(false);
-    expect(withProbes({ build: { verified: "yes", exit_code: 0, at: AT, reason: "r" } }).ok).toBe(false);
-    expect(withProbes({ build: { verified: true, exit_code: "0", at: AT, reason: "r" } }).ok).toBe(false);
+    expect(withProbes({ build: { ...ok, reason: undefined } }).ok).toBe(false);
+    expect(withProbes({ build: { ...ok, at: "" } }).ok).toBe(false);
+    expect(withProbes({ build: { ...ok, verified: "yes" } }).ok).toBe(false);
+    expect(withProbes({ build: { ...ok, exit_code: "0" } }).ok).toBe(false);
+    // The status vocabulary is closed, and a row without one is not a record.
+    expect(withProbes({ build: { ...ok, status: "green" } }).ok).toBe(false);
+    expect(withProbes({ build: { ...ok, status: undefined } }).ok).toBe(false);
+    for (const status of PROBE_STATUSES) {
+      expect(withProbes({ build: { ...ok, status } }).ok, status).toBe(true);
+    }
     // `exit_code: null` is legal — it is how a timeout says nothing exited.
-    expect(withProbes({ build: { verified: false, exit_code: null, at: AT, reason: "timed out" } }).ok).toBe(true);
+    expect(withProbes({
+      build: { status: "timed-out", verified: false, exit_code: null, at: AT, reason: "timed out" },
+    }).ok).toBe(true);
     expect(withProbes({ build: "verified" }).ok).toBe(false);
     expect(withProbes([]).ok).toBe(false);
   });

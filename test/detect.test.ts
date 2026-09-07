@@ -4,7 +4,7 @@ import { rm } from "node:fs/promises";
 import {
   detectCi, detectCommands, detectDefaultBranch, detectStack, detectWorkspace,
   findRepos, isSingleArgvCommand, probeCommands, repoSlug, scoreConfidence, uniqueSlug, walkFiles,
-  PROBED_SLOTS, SpawnCommandRunner, FALLBACK_BRANCH,
+  PROBED_SLOTS, PROBE_STATUSES, SpawnCommandRunner, FALLBACK_BRANCH,
   type CommandResult, type CommandRunner, type ProbeOptions, type RepoCommands,
 } from "../src/core/detect/index.ts";
 import { emptyFixture, fakeRunner, multiRepoFixture, okResult, singleRepoFixture, type Fixture } from "./init-fixture.ts";
@@ -312,10 +312,97 @@ describe("command probes", () => {
       { ...defaults(), skip: "skipped: --no-probe" });
     expect(runner.calls).toEqual([]);
     expect(probes.build).toEqual({
-      verified: false, exit_code: null, at: AT, reason: "skipped: --no-probe",
+      status: "skipped", verified: false, exit_code: null, at: AT, reason: "skipped: --no-probe",
     });
     // `run` is never probed for its own reason, which stays the more specific truth.
     expect(probes.run?.reason).toContain("not probed");
+  });
+
+  /**
+   * `exited 127` and `never started` are DIFFERENT rows (#168, review round 1).
+   *
+   * Both reach the probe as exit 127, because both runtimes settle a failed spawn that
+   * way. Before `spawnFailed` was carried through the seam, a machine with no `go` on
+   * PATH got `exit_code: 127` in `workspace.yml` — a measurement of a process that was
+   * never started, which `initProbeLine` would then quote back in a build refusal.
+   */
+  describe("a command that never started is not a command that exited", () => {
+    /** What `SpawnCommandRunner` really returns for ENOENT: 127, and `spawnFailed`. */
+    function enoentRunner(): CommandRunner {
+      return {
+        run: (): Promise<CommandResult> => Promise.resolve({
+          exitCode: 127, stdout: "", stderr: "spawn go ENOENT\n", spawnFailed: true,
+        }),
+      };
+    }
+
+    test("a spawn failure is `unspawnable`, with no exit code and the system's own message", async () => {
+      const probes = await probeCommands(enoentRunner(), "/repo", { build: "go build ./..." },
+        { ...defaults(), synthesised: new Set(["build"]) });
+      expect(probes.build?.status).toBe("unspawnable");
+      expect(probes.build?.verified).toBe(false);
+      expect(probes.build?.exit_code).toBeNull();
+      expect(probes.build?.reason).toContain("could not be started");
+      expect(probes.build?.reason).toContain("spawn go ENOENT");
+      // Still says where the command came from, which is the whole point for a go repo.
+      expect(probes.build?.reason).toContain("synthesised from the language id");
+    });
+
+    test("a real exit 127 stays a measurement, and the reason says what 127 means", async () => {
+      // `npm run build` whose `vite` is missing: npm STARTED and exited 127.
+      const probes = await probeCommands(recordingRunner({ exitCode: 127 }), "/repo",
+        { build: "npm run build" }, defaults());
+      expect(probes.build?.status).toBe("failed");
+      expect(probes.build?.exit_code).toBe(127);
+      expect(probes.build?.reason).toContain("exited 127");
+      expect(probes.build?.reason).toContain("not found");
+    });
+
+    test("a runner that rejects lands in the same row, never in the timeout row", async () => {
+      const throwing: CommandRunner = { run: () => Promise.reject(new Error("EACCES: permission denied")) };
+      const probes = await probeCommands(throwing, "/repo", { test: "npm run test" }, defaults());
+      expect(probes.test?.status).toBe("unspawnable");
+      expect(probes.test?.exit_code).toBeNull();
+      expect(probes.test?.reason).toContain("could not be started");
+      expect(probes.test?.reason).toContain("EACCES");
+      expect(probes.test?.reason).not.toContain("timed out");
+    });
+
+    test("a runner that reports its OWN timeout is a timeout, not an exit", async () => {
+      const killed: CommandRunner = {
+        run: (): Promise<CommandResult> => Promise.resolve({
+          exitCode: 143, stdout: "", stderr: "", timedOut: true,
+        }),
+      };
+      const probes = await probeCommands(killed, "/repo", { test: "npm run test" }, defaults());
+      expect(probes.test?.status).toBe("timed-out");
+      expect(probes.test?.exit_code).toBeNull();
+      expect(probes.test?.reason).toContain("timed out");
+    });
+
+    test("an unbounded system message is capped — `reason` is the only free text in the file", async () => {
+      const shouty: CommandRunner = {
+        run: (): Promise<CommandResult> => Promise.resolve({
+          exitCode: 127, stdout: "", stderr: `${"x".repeat(5000)}\nsecond line`, spawnFailed: true,
+        }),
+      };
+      const probes = await probeCommands(shouty, "/repo", { test: "npm run test" }, defaults());
+      expect(probes.test?.reason.length).toBeLessThan(400);
+      expect(probes.test?.reason).not.toContain("second line");
+    });
+  });
+
+  test("every row's `verified` and `exit_code` are decided by its status, in one place", async () => {
+    // The single derivation: nothing can emit `verified: true` beside a red status, or a
+    // confident exit code beside a status that means nothing exited.
+    const probes = await probeCommands(recordingRunner({ exitCode: 0 }), "/repo", {
+      build: "npm run build", test: "npm run test", run: "npm run dev",
+    }, { ...defaults(), skip: "skipped: --no-probe" });
+    for (const probe of Object.values(probes)) {
+      expect(PROBE_STATUSES).toContain(probe.status);
+      expect(probe.verified).toBe(probe.status === "ok");
+      if (probe.status !== "ok" && probe.status !== "failed") expect(probe.exit_code).toBeNull();
+    }
   });
 
   test("`run` is not in the probed set — the exclusion is data, not a branch someone can drop", () => {

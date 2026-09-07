@@ -33,7 +33,7 @@ tldrx approve --note "…"    # firma la compuerta; antes se vuelven a correr la
 | Comando | Qué hace |
 |---|---|
 | `tldrx doctor` | Revisa el entorno local. Es la autoridad sobre lo que hace falta. |
-| `tldrx init` | Detecta repos, arma el mapa de código, escribe `.tldrx/`, lista los huecos. Offline. |
+| `tldrx init` | Detecta repos, arma el mapa de código, escribe `.tldrx/`, lista los huecos. Corre una vez tus comandos de build/test para comprobarlos; `--no-probe` lo salta. |
 | `tldrx interview --init` | Contesta las preguntas de configuración en la terminal. |
 | `tldrx install --claude` | Escribe la skill `/tldrx`, los hooks y la status line dentro de `.claude/`. |
 | `tldrx learn` | El tutorial jugable en sandbox. Sin llave, sin red, $0.00. |

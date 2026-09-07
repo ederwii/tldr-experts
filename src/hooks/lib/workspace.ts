@@ -12,7 +12,7 @@ import {
   PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR, PROJECT_WORKTREES_DIR, isEpicWorktreeOf,
 } from "../../core/paths.ts";
 import type { EpicRef, EpicWorktree, SrcContext } from "../../core/text/srcToken.ts";
-import type { CommandProbeRecord } from "../../core/schemas/workspace.ts";
+import { commandProbeIssues, type CommandProbeRecord } from "../../core/schemas/workspace.ts";
 
 /** The run's own record — where `build.epic_branch` is written (issue #140). */
 const RUN_YML = "run.yml";
@@ -154,6 +154,10 @@ export function commandRolesOf(doc: unknown): ReadonlyMap<string, ReadonlyMap<st
  * the wrong shape, is SKIPPED rather than defaulted. `validateWorkspace` is what
  * refuses a malformed file; this reader's job is that a hand-edited one can never make
  * a hook invent a `verified: true` out of a half-written row.
+ *
+ * "Malformed" is decided by `commandProbeIssues` — the SAME predicate the validator
+ * uses, imported rather than re-spelled. Two spellings of it meant two answers: this
+ * loader used to accept `at: ""` while `validateWorkspace` refused it.
  */
 export function commandProbesOf(doc: unknown): ReadonlyMap<string, ReadonlyMap<string, CommandProbeRecord>> {
   const out = new Map<string, ReadonlyMap<string, CommandProbeRecord>>();
@@ -165,14 +169,8 @@ export function commandProbesOf(doc: unknown): ReadonlyMap<string, ReadonlyMap<s
     const raw = entry.command_probes;
     if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
       for (const [slot, value] of Object.entries(raw as Record<string, unknown>)) {
-        if (value === null || typeof value !== "object" || Array.isArray(value)) continue;
-        const row = value as Record<string, unknown>;
-        if (typeof row.verified !== "boolean") continue;
-        if (row.exit_code !== null && typeof row.exit_code !== "number") continue;
-        if (typeof row.at !== "string" || typeof row.reason !== "string" || row.reason === "") continue;
-        probes.set(slot, {
-          verified: row.verified, exit_code: row.exit_code, at: row.at, reason: row.reason,
-        });
+        if (commandProbeIssues(value, slot).length > 0) continue;
+        probes.set(slot, value as unknown as CommandProbeRecord);
       }
     }
     out.set(entry.name, probes);

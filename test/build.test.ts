@@ -154,8 +154,9 @@ describe("running the build under node", () => {
       // `--quiet` because this test is about the SEAM, not the view: init's live
       // step lines are a legitimate stderr write (spec: every progress byte goes
       // to stderr), and asserting an empty stderr is how we notice a real one.
+      // `--no-probe`: this test is about the node seam, not about the fixture's npm scripts.
       const init = await run([
-        "node", join(DIST, "tldrx.js"), "init", "--quiet",
+        "node", join(DIST, "tldrx.js"), "init", "--quiet", "--no-probe",
         "--no-interview", "--provider", "static", "--root", fixture.root, "--out", out,
       ]);
       expect(init.stderr, init.stderr).toBe("");
@@ -208,7 +209,7 @@ describe("non-ASCII survives both runtimes", () => {
     const out = await mkdtemp(join(tmpdir(), "tldrx-encoding-"));
     try {
       const init = await run([
-        "bun", join(DIST, "tldrx.js"), "init", "--quiet",
+        "bun", join(DIST, "tldrx.js"), "init", "--quiet", "--no-probe",
         "--no-interview", "--provider", "static", "--root", fixture.root, "--out", out,
       ]);
       expect(init.stderr, init.stderr).toBe("");

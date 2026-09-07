@@ -28,7 +28,7 @@ import {
   preExistingFailureReason, PREFLIGHT_REL as SOURCE_PREFLIGHT_REL, PREFLIGHT_RED_TTL_MS, savePreflight, withResult,
   type BaseCommandResult, type BasePreflight,
 } from "../src/core/build/preflight.ts";
-import type { WorkspaceContext } from "../src/hooks/lib/workspace.ts";
+import { loadWorkspace, type WorkspaceContext } from "../src/hooks/lib/workspace.ts";
 import type { CommandProbeRecord } from "../src/core/schemas/workspace.ts";
 import { PreflightCache } from "../src/core/build/dodRunner.ts";
 import {
@@ -648,7 +648,7 @@ describe("the base refusal cites init's probe when one exists", () => {
   test("a probe that measured the same command red is quoted, once", () => {
     const lines = baseRefusalLines([failure], context({
       test: {
-        verified: false, exit_code: 1, at: "2026-09-06T09:00:00Z",
+        status: "failed", verified: false, exit_code: 1, at: "2026-09-06T09:00:00Z",
         reason: "not verified: `npm run test` exited 1",
       },
     }));
@@ -660,11 +660,16 @@ describe("the base refusal cites init's probe when one exists", () => {
 
   test("a green probe, an unrun one, and no workspace at all each say nothing", () => {
     const green = baseRefusalLines([failure], context({
-      test: { verified: true, exit_code: 0, at: "2026-09-06T09:00:00Z", reason: "verified: exited 0" },
+      test: {
+        status: "ok", verified: true, exit_code: 0, at: "2026-09-06T09:00:00Z", reason: "verified: exited 0",
+      },
     }));
     // `exit_code: null` is "we did not look" — a timeout, a skip. Not corroboration.
     const unrun = baseRefusalLines([failure], context({
-      test: { verified: false, exit_code: null, at: "2026-09-06T09:00:00Z", reason: "skipped: --no-probe" },
+      test: {
+        status: "skipped", verified: false, exit_code: null, at: "2026-09-06T09:00:00Z",
+        reason: "skipped: --no-probe",
+      },
     }));
     const none = baseRefusalLines([failure]);
     for (const lines of [green, unrun, none]) {
@@ -672,5 +677,87 @@ describe("the base refusal cites init's probe when one exists", () => {
     }
     // And the refusal itself is unchanged in every case — the citation is additive.
     expect(none).toEqual(baseRefusalLines([failure], context({})));
+  });
+});
+
+/**
+ * The whole path, off disk: `workspace.yml` → `loadWorkspace` → the refusal line (#168).
+ *
+ * Everything above builds a `WorkspaceContext` by hand, so nothing proved that
+ * `command_probes:` written by `init` is read back the way the refusal expects — and the
+ * loader's "a malformed row is skipped, never defaulted" claim was a docstring, not a
+ * result. This writes the YAML, reads it with the shipped loader, and feeds the context
+ * it produces to the shipped refusal.
+ */
+describe("command_probes survives the round trip from workspace.yml", () => {
+  const AT = "2026-09-06T09:00:00Z";
+  let root = "";
+
+  afterEach(() => {
+    if (root !== "") rmSync(root, { recursive: true, force: true });
+    root = "";
+  });
+
+  function workspaceWith(probes: string): string {
+    root = mkdtempSync(join(tmpdir(), "tldrx-probe-load-"));
+    mkdirSync(join(root, ".tldrx"), { recursive: true });
+    writeFileSync(join(root, ".tldrx", "workspace.yml"),
+      "version: 1\nmode: single-repo\nroot: .\nrepos:\n"
+      + "  - name: app\n    path: .\n    default_branch: main\n"
+      + "    commands:\n      build: npm run build\n      test: npm run test\n"
+      + probes, "utf8");
+    return root;
+  }
+
+  test("a well-formed row is read into the context and reaches the refusal line", () => {
+    const dir = workspaceWith(
+      "    command_probes:\n"
+      + "      test:\n        status: failed\n        verified: false\n        exit_code: 1\n"
+      + `        at: ${AT}\n        reason: "not verified: npm run test exited 1"\n`,
+    );
+    const workspace = loadWorkspace(dir);
+    const probe = workspace.commandProbes.get("app")?.get("test");
+    expect(probe?.status).toBe("failed");
+    expect(probe?.exit_code).toBe(1);
+    expect(probe?.at).toBe(AT);
+
+    const failure: BaseCommandResult = {
+      repo: "app", command: "npm run test", status: "failed", exitCode: 1, timedOut: false,
+      baseRef: "main", baseSha: "abc1234", tail: "1 failing",
+    };
+    const cited = baseRefusalLines([failure], workspace)
+      .filter((line) => line.includes("`tldrx init` measured this red too"));
+    expect(cited).toHaveLength(1);
+    expect(cited[0]).toContain(AT);
+  });
+
+  test("a malformed row is skipped, never defaulted into a verdict", () => {
+    // Every one of these is a hand edit that must not become a `status` the refusal trusts:
+    // no reason, an empty `at`, a status outside the vocabulary, and a scalar where a
+    // mapping belongs. The good row beside them still loads, so this is not a blanket skip.
+    const dir = workspaceWith(
+      "    command_probes:\n"
+      // no `reason` — something happened, and the row does not say what
+      + `      build:\n        status: failed\n        verified: false\n        exit_code: 1\n        at: ${AT}\n`
+      // an empty `at` — the case the two readers used to disagree about
+      + "      test:\n        status: failed\n        verified: false\n        exit_code: 1\n"
+      + '        at: ""\n        reason: "red"\n'
+      // a status outside the closed vocabulary
+      + `      lint:\n        status: green\n        verified: true\n        exit_code: 0\n        at: ${AT}\n        reason: "ok"\n`
+      // a scalar where a mapping belongs
+      + "      typecheck: broken\n"
+      // …and one good row, so this is a per-row skip and not a blanket one
+      + `      run:\n        status: not-probed\n        verified: false\n        exit_code: null\n        at: ${AT}\n        reason: "not probed"\n`,
+    );
+    const probes = loadWorkspace(dir).commandProbes.get("app") ?? new Map();
+    expect([...probes].map(([slot]) => slot)).toEqual(["run"]);
+    expect(probes.get("run")?.status).toBe("not-probed");
+  });
+
+  test("a workspace.yml with no command_probes at all loads to an empty map, not to undefined", () => {
+    const workspace = loadWorkspace(workspaceWith(""));
+    expect(workspace.commandProbes.get("app")).toEqual(new Map());
+    // And the allowlist it shares the file with is untouched.
+    expect(workspace.commandRoles.get("app")?.get("build")).toBe("npm run build");
   });
 });

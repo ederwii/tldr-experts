@@ -88,7 +88,7 @@ tldrx init [--root <path>] [--out <path>] [--no-interview] [--process <name>]
 | `--stack <a,b,…>` | Declare the stack instead of detecting it, e.g. `ts,dotnet,python` |
 | `--mcp` | Also ask `claude mcp list` which servers are configured. Slower: it health-checks each one |
 | `--provider <name>` | Map provider. One of: `auto` `graphify` `static`. `auto` picks graphify when it is on PATH |
-| `--no-probe` | Do not run the detected build/test/typecheck commands. Each one is recorded as skipped rather than measured |
+| `--no-probe` | Do not run the detected build/test/typecheck commands. Each one is recorded as skipped rather than measured. Use it on a repo you have not read: probing executes that repo's own commands |
 | `--ui <mode>` | What to show while it works. One of: `auto` `scene` `compact` `plain` `off`. `TLDRX_UI` sets it too |
 | `--quiet` | No live progress. The report at the end is still printed |
 
@@ -119,17 +119,24 @@ language, and inference is not measurement. So `init` runs each `build`, `test`,
       test: npm run test
       run: npm run dev
     command_probes:
-      build: {verified: true,  exit_code: 0,    at: 2026-09-06T09:00:00Z, reason: "verified: `npm run build` exited 0"}
-      test:  {verified: false, exit_code: 1,    at: 2026-09-06T09:00:00Z, reason: "not verified: `npm run test` exited 1"}
-      run:   {verified: false, exit_code: null, at: 2026-09-06T09:00:00Z, reason: "not probed: `run` starts a long-running process"}
+      build: {status: ok,     verified: true,  exit_code: 0,    at: 2026-09-06T09:00:00Z, reason: "verified: `npm run build` exited 0"}
+      test:  {status: failed, verified: false, exit_code: 1,    at: 2026-09-06T09:00:00Z, reason: "not verified: `npm run test` exited 1"}
+      run:   {status: not-probed, verified: false, exit_code: null, at: 2026-09-06T09:00:00Z, reason: "not probed: `run` starts a long-running process"}
 ```
 
-`run` is never probed — it starts a server. A probe that timed out is `verified: false` with
-`exit_code: null` and a reason saying so, never a guessed zero. `command_probes:` gates
-nothing: `commands:` is still the only allowlist the Definition of Done may run, and a red
-probe blocks no story. Pass `--no-probe` to skip the whole thing; every row then carries
-`skipped: --no-probe` as its reason, because "not measured" and "chose not to measure" are
-different facts.
+`status` is the field to branch on: `ok` `failed` `timed-out` `unspawnable` `not-probed`
+`skipped`. Only `failed` is a measured red — the command ran and exited non-zero. `exit_code`
+is `null` for every other non-`ok` status, because nothing exited: a command whose binary is
+missing is `unspawnable` with the system's message, never a fabricated code.
+
+`run` is never probed — it starts a server. `command_probes:` gates nothing: `commands:` is
+still the only allowlist the Definition of Done may run, and a red probe blocks no story.
+
+`--no-probe` skips the probing. Every slot that would have been probed then carries
+`skipped: --no-probe` as its reason — because "not measured" and "chose not to measure" are
+different facts. `run` keeps its own reason, since it is never probed either way, and a
+command synthesised from the language id still says so at the end of its reason. Use
+`--no-probe` on a repo you have not read yet: probing executes that repo's own commands.
 
 
 ## `tldrx install --claude`

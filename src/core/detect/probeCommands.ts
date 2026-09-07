@@ -22,10 +22,19 @@
  *     completion-before-deadline. A slow-but-successful probe is a pass, never a
  *     timeout; and a runner that hangs forever still produces a row, because the
  *     probe does not borrow its notion of "too long" from whatever it was handed.
- *   - Nothing is inferred. A timeout is `verified: false` with `exit_code: null` and
- *     "timed out after Ns"; a non-zero exit is `verified: false` with the real code; a
- *     command that could not be started says that, and not that it timed out. None of
- *     those is an absence and none of them is a guess.
+ *   - Nothing is inferred, and in particular **`exited 127` and `never started` are
+ *     not the same row**. Both reach this file as exit 127, because both runtimes
+ *     settle a failed spawn that way; the seam now reports `spawnFailed` beside it
+ *     (`runtime/Runtime.ts`), so a machine with no `go` on PATH gets
+ *     `status: unspawnable`, `exit_code: null` and "could not be started — spawn go
+ *     ENOENT", while `npm run build` whose `vite` is missing gets the 127 it really
+ *     exited with. Writing the first as a measurement is the dangerous direction
+ *     (AGENTS.md §7), and it is what shipped before review round 1 caught it.
+ *
+ * There is exactly ONE derivation of a row — `probeRow` below. Status, `verified`,
+ * `exit_code` and `reason` are decided together, in one place, so they cannot drift:
+ * `verified` is `status === "ok"` by construction, and `exit_code` is non-null only
+ * for a status that means a process actually exited.
  */
 import { splitArgv } from "../../hooks/lib/story.ts";
 import type { CommandRunner } from "./CommandRunner.ts";
@@ -40,6 +49,28 @@ import { COMMAND_SLOTS, type CommandSlot } from "./types.ts";
 export const PROBED_SLOTS: readonly CommandSlot[] = ["build", "test", "lint", "typecheck"];
 
 /**
+ * Every outcome a probe can have, named once (§7: one implementation per derivation).
+ *
+ * Before this existed the six states lived only in the `reason` sentence, and
+ * `build/preflight.ts` had to ask `verified === false && exit_code !== null` to mean
+ * "measured red" — a machine reading a sentence's side effect. `status` is additive
+ * and does not bump `version:` (§7, formats only grow).
+ *
+ *   `ok`          the command ran and exited 0
+ *   `failed`      it ran and exited non-zero — a MEASURED red, and the only status
+ *                 anything is entitled to cite as evidence that a command is broken
+ *   `timed-out`   it was still running at the deadline; nothing exited
+ *   `unspawnable` it never started (ENOENT/EACCES); nothing exited
+ *   `not-probed`  it was never going to be run — `run`, or a command needing a shell
+ *   `skipped`     the operator said not to (`--no-probe`)
+ */
+export const PROBE_STATUSES = ["ok", "failed", "timed-out", "unspawnable", "not-probed", "skipped"] as const;
+export type ProbeStatus = (typeof PROBE_STATUSES)[number];
+
+/** The statuses in which a process really exited, so `exit_code` is a measurement. */
+const EXITED: readonly ProbeStatus[] = ["ok", "failed"];
+
+/**
  * How long a single probe may take before it is recorded as a timeout.
  *
  * Two minutes: `init` is already a minutes-long command (measured 36.0 s on a
@@ -51,13 +82,15 @@ export const PROBED_SLOTS: readonly CommandSlot[] = ["build", "test", "lint", "t
 export const PROBE_TIMEOUT_MS = 120_000;
 
 export interface CommandProbe {
-  /** True only when the command ran to completion and exited 0. */
+  /** Which of the six outcomes this was. The field every consumer should branch on. */
+  readonly status: ProbeStatus;
+  /** True only when the command ran to completion and exited 0 — i.e. `status === "ok"`. */
   readonly verified: boolean;
   /** The measured exit code, or null when nothing exited (timeout, unspawnable, not probed). */
   readonly exit_code: number | null;
   /** When this probe was taken. The caller's clock — this file reads none. */
   readonly at: string;
-  /** Why `verified` is what it is — always a sentence, never empty. */
+  /** Why `status` is what it is — always a sentence, never empty. */
   readonly reason: string;
 }
 
@@ -79,6 +112,23 @@ export interface ProbeOptions {
   readonly skip?: string;
 }
 
+/**
+ * The ONE derivation of a probe row.
+ *
+ * `verified` and `exit_code` are decided FROM `status` here and nowhere else, so a row
+ * can never say `status: "timed-out"` beside a confident exit code, or `verified: true`
+ * beside a red one.
+ */
+function probeRow(status: ProbeStatus, exitCode: number, at: string, reason: string): CommandProbe {
+  return {
+    status,
+    verified: status === "ok",
+    exit_code: EXITED.includes(status) ? exitCode : null,
+    at,
+    reason,
+  };
+}
+
 export async function probeCommands(
   runner: CommandRunner,
   repoDir: string,
@@ -92,41 +142,43 @@ export async function probeCommands(
     const origin = options.synthesised.has(slot)
       ? " (this command was synthesised from the language id, not read from a file)"
       : "";
-    const absent = (reason: string): void => {
-      probes[slot] = { verified: false, exit_code: null, at: options.at, reason };
+    const row = (status: ProbeStatus, exitCode: number, reason: string): void => {
+      probes[slot] = probeRow(status, exitCode, options.at, `${reason}${origin}`);
     };
 
     if (!PROBED_SLOTS.includes(slot)) {
-      absent(`not probed: \`${slot}\` starts a long-running process${origin}`);
+      row("not-probed", 0, `not probed: \`${slot}\` starts a long-running process`);
       continue;
     }
     if (options.skip !== undefined) {
-      absent(`${options.skip}${origin}`);
+      row("skipped", 0, options.skip);
       continue;
     }
     const argv = splitArgv(command);
     if (argv === null) {
-      absent(`not probed: \`${command}\` needs a shell and this probe does not open one${origin}`);
+      row("not-probed", 0, `not probed: \`${command}\` needs a shell and this probe does not open one`);
       continue;
     }
 
     const outcome = await raceDeadline(runner, argv, repoDir, options.timeoutMs);
     if (outcome.kind === "timeout") {
-      absent(`not verified: \`${command}\` timed out after ${seconds(options.timeoutMs)}${origin}`);
+      row("timed-out", 0, `not verified: \`${command}\` timed out after ${seconds(options.timeoutMs)}`);
       continue;
     }
     if (outcome.kind === "unspawnable") {
-      absent(`not probed: \`${command}\` could not be started — ${outcome.why}${origin}`);
+      row("unspawnable", 0, `not probed: \`${command}\` could not be started — ${outcome.why}`);
       continue;
     }
-    probes[slot] = {
-      verified: outcome.exitCode === 0,
-      exit_code: outcome.exitCode,
-      at: options.at,
-      reason: outcome.exitCode === 0
-        ? `verified: \`${command}\` exited 0${origin}`
-        : `not verified: \`${command}\` exited ${String(outcome.exitCode)}${origin}`,
-    };
+    if (outcome.exitCode === 0) {
+      row("ok", 0, `verified: \`${command}\` exited 0`);
+      continue;
+    }
+    // 127 is a real exit code here — the command STARTED and exited 127, which is what
+    // `npm run build` does when the script's own binary is missing. Naming that is the
+    // difference between "your build is red" and "your toolchain is not installed", and
+    // the operator needs the second one first.
+    const missing = outcome.exitCode === 127 ? " — the command, or something it runs, was not found" : "";
+    row("failed", outcome.exitCode, `not verified: \`${command}\` exited ${String(outcome.exitCode)}${missing}`);
   }
   return probes;
 }
@@ -141,6 +193,11 @@ type Outcome =
  *
  * The timer is cleared on every path: a pending `setTimeout` keeps node's event loop
  * alive, and `tldrx init` would sit for two minutes after printing its report.
+ *
+ * Three things can come back from the runner, and they are told apart by what the seam
+ * reports rather than by the exit code: `spawnFailed` (nothing started), `timedOut` (the
+ * runner killed it at ITS deadline, which is not this one), and an ordinary exit. A
+ * runner that rejects outright is the fourth, and it lands in the same `unspawnable` row.
  */
 async function raceDeadline(
   runner: CommandRunner,
@@ -153,7 +210,13 @@ async function raceDeadline(
     timer = setTimeout(() => { resolve({ kind: "timeout" }); }, Math.max(0, timeoutMs));
   });
   const ran = runner.run(argv, repoDir).then(
-    (result): Outcome => ({ kind: "exited", exitCode: result.exitCode }),
+    (result): Outcome => {
+      if (result.spawnFailed === true) {
+        return { kind: "unspawnable", why: firstLine(result.stderr) };
+      }
+      if (result.timedOut === true) return { kind: "timeout" };
+      return { kind: "exited", exitCode: result.exitCode };
+    },
     (error: unknown): Outcome => ({ kind: "unspawnable", why: messageOf(error) }),
   );
   try {
@@ -165,7 +228,20 @@ async function raceDeadline(
 
 function messageOf(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error);
-  return text === "" ? "no reason given" : text;
+  return firstLine(text);
+}
+
+/**
+ * One line, trimmed and capped.
+ *
+ * `reason` is the only free text in `workspace.yml`, and this is the only input to it
+ * that is not built from the command string: a system message goes in, so it is bounded
+ * here rather than trusted.
+ */
+function firstLine(text: string): string {
+  const line = (text.split("\n").find((entry) => entry.trim() !== "") ?? "").trim();
+  if (line === "") return "no reason given";
+  return line.length > 200 ? `${line.slice(0, 200)}…` : line;
 }
 
 /** `120s`, `20ms` — never a rounded-to-zero "0s" for a sub-second budget. */

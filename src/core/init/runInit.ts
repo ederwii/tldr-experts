@@ -225,8 +225,16 @@ export async function runInit(options: InitOptions, deps: InitDependencies): Pro
   };
 }
 
-/** graphify first when it is on PATH, static otherwise (spec §5 decision (b)). */
-export function chooseProviders(options: InitOptions, runner: CommandRunner): MapProvider[] {
+/**
+ * graphify first when it is on PATH, static otherwise (spec §5 decision (b)).
+ *
+ * Takes the ONE field it reads rather than the whole `InitOptions`. `map --refresh` calls
+ * this too, and while it was typed as the full options a caller had to invent values for
+ * everything else — including a `probe: false` that read as "this call will not start a
+ * build" when nothing at that call site could have started one anyway. A parameter that
+ * says what it uses cannot be misread that way.
+ */
+export function chooseProviders(options: Pick<InitOptions, "provider">, runner: CommandRunner): MapProvider[] {
   const staticProvider = new StaticProvider(runner);
   if (options.provider === "static") return [staticProvider];
   return [new GraphifyProvider(runner, staticProvider), staticProvider];

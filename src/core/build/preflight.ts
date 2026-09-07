@@ -407,9 +407,11 @@ export function initProbeLine(
   for (const [slot, command] of roles) {
     if (command !== result.command) continue;
     const probe = probes.get(slot);
-    // Only a MEASURED red is worth saying. A row with `exit_code: null` was never run
-    // — not probed, timed out, skipped — and "we did not look" is not corroboration.
-    if (probe === undefined || probe.verified || probe.exit_code === null) return null;
+    // Only a MEASURED red is worth saying, and `status` says so exactly. This used to
+    // read `verified === false && exit_code !== null`, which is a machine inferring a
+    // verdict from two fields' side effect; `timed-out`, `skipped`, `not-probed` and
+    // `unspawnable` all mean "we did not look", which is not corroboration.
+    if (probe === undefined || probe.status !== "failed") return null;
     return `    · \`tldrx init\` measured this red too, at ${probe.at}: ${probe.reason}`;
   }
   return null;

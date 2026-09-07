@@ -87,6 +87,20 @@ export interface SpawnResult {
    * "your test suite failed" from "your test suite hung", so the seam reports it.
    */
   readonly timedOut: boolean;
+  /**
+   * The child never STARTED — ENOENT, EACCES, a throw out of the spawn itself (#168).
+   *
+   * Both runtimes settle such a failure as `exitCode: 127` so every existing caller keeps
+   * working, and 127 is a genuine exit code a real process produces (a shell, or `npm run`
+   * whose script's binary is missing). Without this flag the two are indistinguishable, and
+   * `tldrx init` wrote "`go build ./...` exited 127" into `workspace.yml` for a machine with
+   * no `go` on PATH — a measurement of something that never ran. `stderr` carries the
+   * system's own message ("spawn go ENOENT").
+   *
+   * Absent means the process started, which is the honest default for any producer that has
+   * not been taught to report it.
+   */
+  readonly spawnFailed?: boolean;
 }
 
 export interface Runtime {

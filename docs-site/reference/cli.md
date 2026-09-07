@@ -32,7 +32,7 @@ tldrx approve --note "…"    # sign the gate; the checks are re-run first
 | Command | Does |
 |---|---|
 | `tldrx doctor` | Check the local environment. The authority on what is required. |
-| `tldrx init` | Detect repos, build the code map, write `.tldrx/`, list the gaps. Offline. |
+| `tldrx init` | Detect repos, build the code map, write `.tldrx/`, list the gaps. Runs your build/test commands once to check them; `--no-probe` skips that. |
 | `tldrx interview --init` | Answer the setup questions in the terminal. |
 | `tldrx install --claude` | Write the `/tldrx` skill, hooks and status line into `.claude/`. |
 | `tldrx learn` | The playable sandbox tutorial. No key, no network, $0.00. |

@@ -38,6 +38,9 @@ export const nodeRuntime: Runtime = {
   spawn(cmd: string, args: readonly string[], opts: SpawnOptions = {}): Promise<SpawnResult> {
     return new Promise((resolve) => {
       let timedOut = false;
+      // The child never started (ENOENT/EACCES). Reported beside the 127 the caller has always
+      // been given, so a probe can tell "exited 127" from "never ran" (#168).
+      let spawnFailed = false;
       let settled = false;
       let stdout = "";
       let stderr = "";
@@ -91,7 +94,7 @@ export const nodeRuntime: Runtime = {
         opts.signal?.removeEventListener("abort", onAbort);
         if (timer !== null) clearTimeout(timer);
         if (graceTimer !== null) clearTimeout(graceTimer);
-        resolve({ exitCode, stdout, stderr, timedOut });
+        resolve({ exitCode, stdout, stderr, timedOut, spawnFailed });
       };
 
       child.stdout?.on("data", (chunk: Buffer) => {
@@ -108,6 +111,7 @@ export const nodeRuntime: Runtime = {
       child.stderr?.on("end", () => errSplitter?.end());
       child.on("error", (error: Error) => {
         stderr += error.message;
+        spawnFailed = true;
         finish(127);
       });
       // `close` waits for the pipes to reach EOF; `exit` does not. Something the

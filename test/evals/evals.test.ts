@@ -46,7 +46,8 @@ let scratch = "";
 /**
  * ONE synthetic workspace for all five evals, detected once.
  *
- * `tldrx init` is offline (`--provider static`) and deterministic, and the runs
+ * `tldrx init` runs no model here (`--provider static`) and spawns nothing of the toy
+ * repo's own (`--no-probe`), so it is deterministic, and the runs
  * are independent of each other — each opens its own run on its own one-stage
  * preset — so paying for detection five times would buy nothing. What the evals
  * DO share is the toy repo's git history, and Build is the only stage that
@@ -57,10 +58,11 @@ beforeAll(async () => {
   scratch = mkdtempSync(join(tmpdir(), "tldrx-evals-"));
   sandbox = await makeSandbox({ root: scratch, reset: true, selfCommand: SELF });
 
-  const init = await runtime.spawn(SELF[0], [SELF[1], "init", "--provider", "static", "--no-interview"], {
-    cwd: sandbox.workspace,
-    env: sandboxEnv(sandbox),
-  });
+  const init = await runtime.spawn(
+    SELF[0],
+    [SELF[1], "init", "--provider", "static", "--no-interview", "--no-probe"],
+    { cwd: sandbox.workspace, env: sandboxEnv(sandbox) },
+  );
   if (init.exitCode !== 0) {
     throw new Error(`the eval workspace could not be initialised (exit ${String(init.exitCode)}):\n${init.stdout}\n${init.stderr}`);
   }
