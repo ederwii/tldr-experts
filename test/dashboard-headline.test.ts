@@ -284,7 +284,9 @@ ${stage("01-what", "what", "awaiting_gate", "pending", [
     expect(run.spend.basis).toBe("declared");
     expect(run.spend.silentTasks).toBe(0);
     expect(run.spend.costlessTokens).toBe(110);
-    expect(run.spend.reason).not.toContain("declared host tokens");
+    // The sentence now says what actually happened: the turn declared no HOST
+    // tokens at all, only a provider-measured split.
+    expect(run.spend.reason).toContain("host-declared or provider-reported tokens");
   });
 
   /**

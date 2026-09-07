@@ -240,10 +240,18 @@ framework was not mis-metering; the front page was lying by omission.
 | `zeroCostTasks` | number | Turns recorded as **metered** at exactly `$0.00`. |
 | `costlessTasks` | number | `unmeteredTasks + zeroCostTasks` — every turn that put nothing in the meter. |
 | `hostTokens` | number | Tokens declared with `--tokens` across **all** turns — the same number as `Run.hostTokens`. |
-| `costlessTokens` | number | The subset declared **by a costless turn** — the only host-side figure the dollars do not already cover. |
+| `costlessTokens` | number | Tokens KNOWN **for a costless turn** — host-declared or provider-reported (#159) — the only figure the dollars do not already cover. NOT a subset of `hostTokens` above; see the note below the table. |
 | `silentTasks` | number | Costless turns that declared nothing at all: no dollars, no tokens. |
 | `basis` | string | `"measured"` \| `"declared"` \| `"partial"` \| `"absent"`. |
 | `reason` | string | `basis` as a whole sentence, already worded for a reader. |
+
+`costlessTokens`'s source widened at #159: a turn's PROVIDER-reported split
+(`input_tokens`/`output_tokens`, both positive) now counts beside its
+HOST-declared `tokens` scalar — `budget/turnTokens.ts` picks one, never both.
+`modelVersion` does not move for it: the type is still `number`, the role is
+still "tokens known for a costless turn", and the two currencies were already
+never summed together — only the source set a costless turn can satisfy that
+role FROM grew.
 
 **Both spellings of "this turn cost nothing" are counted, and neither is
 overruled.** The model already knew `cost_usd: null` + `metered: false`

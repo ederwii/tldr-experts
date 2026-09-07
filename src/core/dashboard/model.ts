@@ -616,8 +616,12 @@ export interface SpendModel {
    */
   readonly hostTokens: number;
   /**
-   * The subset of `hostTokens` declared BY a costless turn — the only host-side
-   * figure the dollars do not already cover.
+   * Tokens KNOWN for a costless turn — host-declared (`turn.tokens`) or
+   * provider-reported (`turnTokens`'s split, #159) — the only figure the
+   * dollars do not already cover. NOT a subset of `hostTokens` above: a
+   * provider split counts here without ever being added to that host-only
+   * sum (`budget/turnTokens.ts` is where the two are read together, never
+   * merged into one currency).
    */
   readonly costlessTokens: number;
   /** Costless turns that declared nothing at all: no dollars, no tokens. */

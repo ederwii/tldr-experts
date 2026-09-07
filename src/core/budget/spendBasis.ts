@@ -49,7 +49,13 @@ export interface SpendBasis {
    * file that says `0.00` is not overruled here; it is counted.
    */
   readonly costlessTasks: number;
-  /** Host tokens declared BY a costless turn — the only figure the dollars miss. */
+  /**
+   * Tokens KNOWN for a costless turn — host-declared or provider-reported
+   * (`budget/turnTokens.ts`, #159) — the only figure the dollars miss. NOT a
+   * subset of a host-only total: a provider split counts here without ever
+   * being added to one (see `hostTokens` at the two call sites, which stays
+   * host-scalar-only on purpose).
+   */
   readonly costlessTokens: number;
   /** Costless turns that declared nothing at all: no dollars, no tokens. */
   readonly silentTasks: number;

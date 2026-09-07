@@ -17,10 +17,18 @@
  * they are never both descriptions of the same spend, and adding them would
  * double-count.
  *
- * A HALF-known split is absent, for the same reason `tokenSplit` refuses to
- * write one: `envelope.ts`'s parse collapses "no usage object" and "usage
- * reported as 0" into the same shape, so one real number beside one defaulted
- * zero is a manufactured total. Absent is honest; a confident number is not.
+ * The two fields are gated DIFFERENTLY, on purpose. `tokens` counts on
+ * PRESENCE — a finite number, including an explicit `0` — because `--tokens 0`
+ * is a host DECLARING it burned nothing, the same fact `metered: false` +
+ * `cost_usd: 0` already treats as a measurement rather than a hole; this is
+ * also the pre-#159 behaviour (`task.tokens ?? null`), preserved rather than
+ * narrowed. `input_tokens`/`output_tokens` count only on BOTH sides being
+ * STRICTLY POSITIVE, and a HALF-known split is absent, for the reason
+ * `tokenSplit` refuses to write one: `envelope.ts`'s parse collapses "no usage
+ * object" and "usage reported as 0" into the same shape, so one real number
+ * beside one defaulted zero is a manufactured total. Absent is honest; a
+ * confident number is not — and there is no such ambiguity on the host side,
+ * where a `0` only ever reaches the row because something wrote it on purpose.
  */
 
 /** As much of a `run.yml` task row as this reads. Every field optional — old rows have none. */
@@ -31,13 +39,19 @@ export interface TokenBearing {
 }
 
 export function turnTokens(task: TokenBearing): number | null {
-  if (positive(task.tokens)) return task.tokens as number;
+  if (declared(task.tokens)) return task.tokens as number;
   const input = task.input_tokens;
   const output = task.output_tokens;
   if (!positive(input) || !positive(output)) return null;
   return (input as number) + (output as number);
 }
 
+/** A host `tokens` value counts once it EXISTS as a real number — an explicit `0` is a declaration, not an absence. */
+function declared(value: number | null | undefined): boolean {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+/** A provider split side counts only when it is POSITIVE — see the module docstring for why `0` cannot. */
 function positive(value: number | null | undefined): boolean {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }

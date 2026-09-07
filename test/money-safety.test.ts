@@ -379,6 +379,22 @@ describe("turnTokens — the scalar, else the provider's split, never a half (#1
     expect(turnTokens({ input_tokens: -1, output_tokens: 10 })).toBeNull();
     expect(turnTokens({ input_tokens: Number.NaN, output_tokens: 10 })).toBeNull();
   });
+
+  /**
+   * `tokens` is gated on PRESENCE, not on being positive — an explicit
+   * `--tokens 0` is a host DECLARING it burned nothing, the pre-#159 behaviour
+   * (`task.tokens ?? null`), not a hole to fall through to the split. Only the
+   * PROVIDER split uses the strictly-positive rule, because a `0` there is
+   * indistinguishable from "not reported" (`envelope.ts`'s `EMPTY_USAGE`).
+   */
+  test("an explicit host `tokens: 0` is a declaration of zero, not an absence", () => {
+    expect(turnTokens({ tokens: 0 })).toBe(0);
+    expect(turnTokens({ tokens: 0, input_tokens: 100, output_tokens: 10 })).toBe(0);
+  });
+
+  test("a zero on the PROVIDER side is still absent — only the host scalar reads a bare 0", () => {
+    expect(turnTokens({ tokens: undefined, input_tokens: 0, output_tokens: 5 })).toBeNull();
+  });
 });
 
 describe("M9 · a phase ceiling is a ceiling", () => {
