@@ -71,11 +71,14 @@
  *
  * Measured at e48f4a0 by capturing two headless cycles back to back and diffing
  * them raw: the ONLY byte that moved in either prompt was the workspace root
- * path. No sha, timestamp or duration appears in a prompt at all. So:
+ * path. No sha, timestamp or duration appeared in a prompt at all. Since #166 a
+ * reviewer prompt DOES name a sha — the epic's, as it was immediately before the
+ * story merged, because the branch name it used to carry produces an empty diff
+ * once the story is an ancestor — so shas are scrubbed out of prompts too. So:
  *
  * | Artifact | Normalised | Why |
  * |---|---|---|
- * | prompts | the workspace root → `<ROOT>` (and its `realpath`, since macOS's `/var/folders` is a symlink to `/private/var/folders`) | `mkdtempSync(join(tmpdir(), "tldrx-build-"))` (`workspace.ts:122`) — a fresh temp dir per invocation. Both are EXACT strings read from the machine, long and unique, so nothing incidental can match. |
+ * | prompts | the workspace root → `<ROOT>` (and its `realpath`, since macOS's `/var/folders` is a symlink to `/private/var/folders`), plus every commit sha → `<SHA>` (#166) | `mkdtempSync(join(tmpdir(), "tldrx-build-"))` (`workspace.ts:122`) — a fresh temp dir per invocation. Both are EXACT strings read from the machine, long and unique, so nothing incidental can match. The sha is the reviewer's diff base, which git derives from commit timestamps and so moves every run; it is replaced by the same VERIFIED rule the event normaliser uses (`scrubPrompt`). |
  * | events | the workspace root, plus every commit sha → `<SHA>` | Git shas move with commit timestamps every run. |
  * | task rows | the workspace root, every commit sha, plus `"ended_at": "<TS>"` | `ended_at` is the wall clock at the moment the row was written. `started_at` is NOT normalised — measured, it is `options.at` verbatim, so it is a real assertion. |
  *
@@ -305,8 +308,8 @@ export async function captureHeadlessBuild(
   const headless = await next(ws, { mode: "headless" });
   const machine = machineOf(ws);
   return {
-    developerPrompt: scrubPaths(readFileSync(join(promptDir, "developer-S1-1.md"), "utf8"), machine),
-    reviewerPrompt: scrubPaths(readFileSync(join(promptDir, "reviewer-S1-1.md"), "utf8"), machine),
+    developerPrompt: scrubPrompt(readFileSync(join(promptDir, "developer-S1-1.md"), "utf8"), machine),
+    reviewerPrompt: scrubPrompt(readFileSync(join(promptDir, "reviewer-S1-1.md"), "utf8"), machine),
     events: eventStream(ws, machine),
     runTasks: taskRows(ws, machine),
     exitCodes: `headless ${String(headless.code)}\n`,
@@ -335,11 +338,11 @@ export async function captureInSessionBuild(
   const commit = await next(ws, { mode: "commit", at: "2026-08-29T09:30:00Z", costUsd: 0.1 });
   const machine = machineOf(ws);
   return {
-    bundlePrompt: scrubPaths(
+    bundlePrompt: scrubPrompt(
       readFileSync(join(ws.runDir, ".agent", "build", "S1", "prompt.md"), "utf8"),
       machine,
     ),
-    reviewerPrompt: scrubPaths(readFileSync(join(promptDir, "reviewer-S1-1.md"), "utf8"), machine),
+    reviewerPrompt: scrubPrompt(readFileSync(join(promptDir, "reviewer-S1-1.md"), "utf8"), machine),
     events: eventStream(ws, machine),
     runTasks: taskRows(ws, machine),
     exitCodes: `prepare ${String(prepare.code)}\ncommit ${String(commit.code)}\n`,
@@ -363,7 +366,7 @@ export async function captureRoundsBuild(
   const headless = await next(ws, { mode: "headless" });
   const machine = machineOf(ws);
   const prompt = (name: string): string =>
-    scrubPaths(readFileSync(join(promptDir, name), "utf8"), machine);
+    scrubPrompt(readFileSync(join(promptDir, name), "utf8"), machine);
 
   return {
     developerS1Round1: prompt("developer-S1-1.md"),
@@ -388,7 +391,7 @@ export async function captureRefusedBuild(
   const headless = await next(ws, { mode: "headless" });
   const machine = machineOf(ws);
   return {
-    developerPrompt: scrubPaths(readFileSync(join(promptDir, "developer-S1-1.md"), "utf8"), machine),
+    developerPrompt: scrubPrompt(readFileSync(join(promptDir, "developer-S1-1.md"), "utf8"), machine),
     events: eventStream(ws, machine),
     runTasks: taskRows(ws, machine),
     exitCodes: `headless ${String(headless.code)}\n`,
@@ -457,10 +460,37 @@ function machineOf(ws: BuildWorkspace): Machine {
   };
 }
 
-/** The one normalisation a prompt gets: the temp workspace root, by exact string. */
+/** The temp workspace root, by exact string. */
 function scrubPaths(text: string, machine: Machine): string {
   let out = text;
   for (const root of machine.roots) out = out.split(root).join("<ROOT>");
+  return out;
+}
+
+/**
+ * The normalisation a prompt gets: the temp workspace root — and, since #166,
+ * commit shas, because a reviewer prompt now names the epic's sha before the
+ * merge instead of the epic BRANCH (a branch name is deterministic; a sha is
+ * not).
+ *
+ * The same verified rule the event/task normaliser uses, applied to text rather
+ * than to values: only a >= 7-char prefix of a sha `git rev-list --all` reports
+ * in THIS fixture repo is replaced, so a hex-looking word that is not a commit
+ * here stays raw. `scrubFullShas` handles the 40-char form; the short form is
+ * matched with a word boundary so `abc1234` inside a longer token is untouched.
+ *
+ * Landed as a NO-OP: at the commit that introduced it no prompt contained a sha
+ * at all, and `bun test test/build-golden.test.ts` passed over the unchanged
+ * golden files — which is the property that makes it safe to rely on next.
+ */
+function scrubPrompt(text: string, machine: Machine): string {
+  let out = scrubFullShas(scrubPaths(text, machine), machine);
+  for (const sha of machine.shas) {
+    for (let n = 40; n >= 7; n--) {
+      const prefix = sha.slice(0, n);
+      out = out.replace(new RegExp(`\\b${prefix}\\b`, "g"), "<SHA>");
+    }
+  }
   return out;
 }
 
