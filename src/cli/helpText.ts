@@ -205,7 +205,7 @@ const ENTRIES: readonly CommandHelp[] = [
       {
         name: "no-probe",
         arg: null,
-        meaning: "Do not run the detected build/test/typecheck commands. Each one is recorded as skipped rather than measured. Use it on a repo you have not read: probing EXECUTES that repo's own commands.",
+        meaning: "Do not run the detected build/test/lint/typecheck commands. Each one is recorded as skipped rather than measured. Use it on a repo you have not read: probing EXECUTES that repo's own commands.",
       },
       {
         name: "provider",

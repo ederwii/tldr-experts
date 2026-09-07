@@ -88,7 +88,7 @@ tldrx init [--root <path>] [--out <path>] [--no-interview] [--process <name>]
 | `--stack <a,b,…>` | Declare the stack instead of detecting it, e.g. `ts,dotnet,python` |
 | `--mcp` | Also ask `claude mcp list` which servers are configured. Slower: it health-checks each one |
 | `--provider <name>` | Map provider. One of: `auto` `graphify` `static`. `auto` picks graphify when it is on PATH |
-| `--no-probe` | Do not run the detected build/test/typecheck commands. Each one is recorded as skipped rather than measured. Use it on a repo you have not read: probing executes that repo's own commands |
+| `--no-probe` | Do not run the detected build/test/lint/typecheck commands. Each one is recorded as skipped rather than measured. Use it on a repo you have not read: probing executes that repo's own commands |
 | `--ui <mode>` | What to show while it works. One of: `auto` `scene` `compact` `plain` `off`. `TLDRX_UI` sets it too |
 | `--quiet` | No live progress. The report at the end is still printed |
 
