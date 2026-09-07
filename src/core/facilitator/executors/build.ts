@@ -30,24 +30,18 @@
  * changed under them. Serial B costs the reviewers' wall-clock and buys a review
  * that means something.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
-import { PROJECT_FRAMEWORK_DIR, epicWorktreeName } from "../../paths.ts";
 import {
-  branchModelFor, branchModelOfKind, describeBranchModel, detectEpicChain,
-  epicBranchOf, epicWorktreeSlotOf, storyBranchOf, type BranchModel, type BranchModelKind,
+  describeBranchModel, epicBranchOf, storyBranchOf, type BranchModel,
 } from "../../plan/branchModel.ts";
 import {
-  FALLBACK_DEFAULT_BRANCH, factsPath, loadWorkspace, type WorkspaceContext,
+  factsPath, loadWorkspace, type WorkspaceContext,
 } from "../../../hooks/lib/workspace.ts";
-import { DodCommandRefused, runDodCommand } from "../../../hooks/lib/story.ts";
 import { FactsStore } from "../../facts/FactsStore.ts";
 import { RunStore } from "../../run/RunStore.ts";
-import { stageAt } from "../../run/RunFile.ts";
-import { spendBasisOf, type SpendTurn } from "../../budget/spendBasis.ts";
 import { renderConventions, renderFacts, stackExpertNames } from "../prompt.ts";
 import { loadExpertBundles } from "../../experts/expertBundle.ts";
-import { stackChecks } from "../../experts/packSections.ts";
 import {
   readStackPacks, renderProjectSkills, skillsFor, untrackedSkillWarnings,
 } from "../../experts/stackPacks.ts";
@@ -55,24 +49,19 @@ import { agentDir } from "../paths.ts";
 import {
   describeDispatchNotes, loadDispatchNotes, type DispatchNotes,
 } from "../dispatchNotes.ts";
-import { preparedBundles, reviewBundles, REVIEW_DIR } from "../../run/prepared.ts";
+import { preparedBundles, reviewBundles } from "../../run/prepared.ts";
 import { spawnAgent, BASE_TOOLS } from "../spawnAgent.ts";
 import {
   PendingError, PENDING_FILE, RAW_FILE, RESULT_FILE, readResult, readResultObject, resultPath,
   writeBundle, writeRaw,
-  dispatchNotesRecord, type PendingReview, type PendingStage,
+  dispatchNotesRecord, type PendingStage,
 } from "../pending.ts";
 import {
-  addWorktree, assertWorktreeOn, baseStateOf, branchExists, commitAll, commitsBetween, currentBranch, diffCommand,
-  dirtyPaths, ensureBranch, fastForward, firstLine, GitError, headSha, isDirty, mergeNoFf, partitionDirty, pathAtRef,
-  removeWorktree, repoDirOf, shaOf, shaReachability, stateDirPrefixes,
+  addWorktree, commitsBetween, diffCommand, ensureBranch, GitError, removeWorktree, repoDirOf, shaReachability,
 } from "../../build/git.ts";
+import { BaseGateFailure, baseRefusalLines } from "../../build/preflight.ts";
 import {
-  BaseGateFailure, baseRefusalLines, baseResultFor, commandHash, EMPTY_PREFLIGHT, loadPreflight, PREFLIGHT_REL,
-  savePreflight, withResult, type BaseCommandResult, type BasePreflight,
-} from "../../build/preflight.ts";
-import {
-  loadBuildPlan, PlanLoadError, BUILD_PHASE, LOG_DIR, PLAN_PHASE, WORKTREES,
+  loadBuildPlan, PlanLoadError, BUILD_PHASE, LOG_DIR, PLAN_PHASE,
   type BuildPlan, type BuildWave, type PlannedEpic, type PlannedStory,
 } from "../../build/plan.ts";
 import {
@@ -81,13 +70,10 @@ import {
   IMPLICIT_PLAN_REL, IMPLICIT_STORY_ID, IMPLICIT_STORY_NOTE,
 } from "../../build/implicitPlan.ts";
 import { evidenceFor, updateStoryFront } from "../../build/storyFile.ts";
+import { buildDeveloperPrompt, REVIEW_SCHEMA } from "../../build/prompts.ts";
 import {
-  buildDeveloperPrompt, buildReviewerPrompt, REVIEW_SCHEMA, type RecurringClass,
-} from "../../build/prompts.ts";
-import { workspaceRecurring } from "../../retro/reviewerFocus.ts";
-import {
-  isFormatRejection, looksLikeReviewerError, MAX_FORMAT_RETRIES, parseReview, renderFormatRefusal,
-  renderPreviousAttempt, renderReviewLog, reviewerFailed, type Review,
+  MAX_FORMAT_RETRIES, parseReview, renderPreviousAttempt, renderReviewLog, reviewerFailed,
+  type Review,
 } from "../../build/review.ts";
 import {
   DEVELOPER_FAILED, dodGreen, type DodResult, type RescuedWork, type StoryOutcome,
@@ -98,107 +84,40 @@ import {
   type FixFinding, type FixlistOnDisk,
 } from "../../build/fixlist.ts";
 import { renderBuildHandoff, type EpicSummaryRow } from "../../build/handoff.ts";
+import {
+  baseResultOf, PreflightCache, redBaseRefusal, runStoryDod, type BaseParts,
+} from "../../build/dodRunner.ts";
+import {
+  commitIfDirty, EpicState, mergeIntoEpic, refreshStoryBase, rescueUncommitted, storyWorktreePath,
+  unreadableTouches, type EpicWorktreeParts,
+} from "../../build/worktrees.ts";
+import {
+  dirtyRepoRefusal, epicRows, foreignEpicRefusal, resolveBranchModel, type ClaimParts,
+} from "../../build/branchClaims.ts";
+import {
+  awaitingReview, bundleKeyOf, clearReviewBundle, resumableReview,
+  reviewBundleKeyOf, reviewWorkFor, reviewWorkFromBundle, reviewWorkFromLedger,
+  stashRefusedEnvelope, writeReviewBundle,
+  type ResumableReview, type ReviewLookup, type ReviewWork,
+} from "../../build/reviewBundle.ts";
+import {
+  blockedByFailedDeveloper, formatRetryDecision, narrowFixlist, pendingRefusal, reviewerPromptFor,
+  RecurringFocus, ReviewCounters, type RoundParts,
+} from "../../build/reviewRound.ts";
+import { readReviewLedger } from "../../build/reviewLedger.ts";
+import { phaseCostToDate } from "../../build/phaseCost.ts";
 import { appendBuildRetro, buildRetroPath, gateRetroLines, storyRetroLines } from "../../build/retroLog.ts";
-import { MAX_STORIES_PER_WAVE, type PlanStatus } from "../../schemas/planCommon.ts";
+import {
+  clampParallel, developerCap, developerPriceDivisor, reviewerCap, round2,
+  DEFAULT_PARALLEL, MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE,
+  type CapParts,
+} from "../../build/caps.ts";
+import type { PlanStatus } from "../../schemas/planCommon.ts";
 import type { ExecutorContext, ExecutorOutcome, ExecutorTask } from "./index.ts";
 
 export const HANDOFF_REL = `${BUILD_PHASE}/handoff.md`;
 /** Run-relative, and the path `mineRuns` looks for — see `build/retroLog.ts`. */
 export const RETRO_REL = "retro.md";
-
-/**
- * A story gets one developer attempt, plus one more if the reviewer asks for
- * changes. A second `changes` blocks it — a third try is an operator's decision,
- * not the framework's.
- */
-export const MAX_ATTEMPTS = 2;
-
-/**
- * `[assumption]` — the brief splits the stage budget "by story count", which is the
- * DEVELOPER's share; the reviewer needs its own and the spec never sizes one. A
- * quarter of a story's share reads a diff comfortably and cannot quietly double
- * the phase's cost.
- */
-export const REVIEWER_SHARE = 0.25;
-
-/**
- * The least a reviewer may be given, whatever the arithmetic says.
- *
- * Measured 2026-08-30, run `260830-tenancy-identity-customers`: the uniform split
- * handed the reviewer of a 39-file, +1879-line story $0.26, and it died mid-read
- * with `Reached maximum budget ($0.26)`. A reviewer that cannot finish reading
- * the diff approves nothing, blocks nothing and judges nothing — it converts the
- * developer's spend into a story stuck at `review`. A floor is the cheapest thing
- * that makes a review mean something, and it is deliberately traded against the
- * strict "every worst-case cap sums inside the stage ceiling" arithmetic below:
- * the worst case only materialises when reviewers keep asking for changes, and
- * `budget.yml`'s own gate is what actually stops a stage that runs out.
- */
-export const REVIEWER_FLOOR_USD = 1.00;
-
-/**
- * The divisor a PRICED story's per-attempt developer ceiling is derived with
- * (gh #91, 2026-09-02).
- *
- * `03-plan/budget.yml` prices a story at what Delivery measured the WORK to
- * cost. Until now the executor divided that by the worst case one story can be
- * asked for — `MAX_ATTEMPTS x (1 + REVIEWER_SHARE)` = 2.5 — before the first
- * attempt had run. Measured on run `260901-leaderboard-v2` (finding F-4): the
- * plan priced S2 at $2.10 of a $3.85 Build stage and the developer was
- * dispatched under $0.84. A deliberately-atomic large story starved on the one
- * attempt that mattered while trivial ones carried slack.
- *
- * Two attempts, two different things:
- *
- *  - **Attempt 1 is the pass the plan priced.** It gets `price / (1 +
- *    REVIEWER_SHARE)` — the whole price less the reviewer's derived quarter —
- *    so a story is dispatched at what Delivery said it was worth.
- *  - **Attempt 2 is a CONTINGENCY nobody priced.** It keeps the pre-#91 figure,
- *    `price / (MAX_ATTEMPTS x (1 + REVIEWER_SHARE))`. Handing it attempt 1's
- *    ceiling again would double the stage's worst case, which is the "Build 2.5x
- *    su fase" overrun `worstCaseShares` exists to stop.
- *
- * Why the second attempt is not the measured REMAINDER of the story's price,
- * which would be tighter still: the spend is recoverable (`agent.result` events
- * carry `key` = the story id and a row-level `cost_usd`), but the brake in
- * `budget/remainingWork.ts` mirrors this arithmetic on the budget-gate hook's
- * hot path and would have to read the same ledger to stay in step. It buys
- * nothing at the worst case — `0.8 + 0.4` either way — so the schedule is fixed
- * and the ledger stays unread.
- *
- * What this does NOT change: the reviewer's own share and its floor, the uniform
- * split an unpriced plan still gets, and `priceScale`, which keeps the sum of the
- * declared prices inside the stage ceiling. What it does change is the worst case
- * ONE priced story can be asked for: `0.8 x price` becomes `1.2 x price`. The
- * phase ceiling is metered once, at stage entry (`runNext.runExecutor` skips the
- * brake while a stage is `running`), so nothing re-checks the envelope between
- * two spawns of the same headless `runAll` — the same window `REVIEWER_FLOOR_USD`
- * already opens by design, and `remainingWork` still clamps the brake's estimate
- * to the stage's own price so it can never refuse more often than it used to.
- */
-export function developerPriceDivisor(attempt: number): number {
-  return attempt <= 1 ? 1 + REVIEWER_SHARE : MAX_ATTEMPTS * (1 + REVIEWER_SHARE);
-}
-
-/**
- * The default degree of parallelism inside a wave: one story at a time.
- *
- * Spec §5 decision (c) shipped v1 sequential, and this stays the default so a
- * workspace that says nothing keeps the behaviour it has been running.
- */
-export const DEFAULT_PARALLEL = 1;
-
-/**
- * Whatever this run may do at once inside a wave, clamped to something sane.
- *
- * The ceiling is `MAX_STORIES_PER_WAVE`, since a number above it can never be
- * reached; the floor is 1, because "0 lanes" is not a slower build, it is a
- * build that never starts.
- */
-export function clampParallel(requested: number | undefined): number {
-  if (requested === undefined || !Number.isFinite(requested)) return DEFAULT_PARALLEL;
-  return Math.max(1, Math.min(MAX_STORIES_PER_WAVE, Math.trunc(requested)));
-}
 
 /**
  * One writer, in order, for everything that touches disk or `run.yml`.
@@ -220,36 +139,6 @@ class SerialQueue {
     this.tail = next.then(() => undefined, () => undefined);
     return next;
   }
-}
-
-/**
- * A story that needs its REVIEW re-run and nothing else: the developer half is
- * done, its DoD was green, and the commit is already merged into the epic.
- */
-interface ResumableReview {
-  /** The merged story commit, from the ledger's `task.done`. */
-  readonly commit: string;
-  /** The DoD results of the attempt that produced it, from the ledger. */
-  readonly dod: readonly DodResult[];
-  /** What the reviewer died with — quoted to the operator, never as a verdict. */
-  readonly error: string;
-}
-
-/**
- * A story whose REVIEW is the only thing outstanding, and everything a reviewer
- * needs to do it — recovered from the run's own ledger, never re-measured.
- *
- * The superset of `ResumableReview`: that one is the narrow "the last reviewer
- * died" case, this one also covers "the review was handed to the host and has
- * not come back", which is what a reviewer bundle on disk means.
- */
-interface ReviewWork {
-  /** The merged story commit the verdict is about. */
-  readonly commit: string;
-  /** The DoD results of the attempt that produced it. */
-  readonly dod: readonly DodResult[];
-  /** Why the review is outstanding, in the words the operator reads. */
-  readonly why: string;
 }
 
 /** What half A of a parallel wave produced for one story. */
@@ -521,42 +410,26 @@ class BuildSession {
   /** Every sub-agent this stage ran; `runNext` turns them into `run.yml` tasks. */
   readonly tasks: ExecutorTask[] = [];
   private readonly outcomes = new Map<string, StoryOutcome>();
-  private readonly epicWorktrees = new Map<string, string>();
   /**
-   * Per epic branch, the stories merged into it and what each merge CARRIED —
-   * `0` for a branch that was already identical to the epic, `null` when an
-   * earlier invocation did the merging.
+   * The epic branches, worktrees and merges this invocation accumulated
+   * (`build/worktrees.ts`). ONE instance, created here and passed by reference
+   * everywhere the three private maps used to be read.
    */
-  private readonly merged = new Map<string, { id: string; carried: number | null }[]>();
+  private readonly epics = new EpicState();
   private readonly lines: string[] = [];
-  /** Per-story reviewer verdicts seen in THIS process, for the requeue counter. */
-  private readonly reviews = new Map<string, number>();
-
   /**
-   * Fix-list rounds this process has granted, per story — the bound's own
-   * counter, deliberately NOT the requeue one.
-   *
-   * A `fixlist` verdict spends no attempt, so it must not touch `reviews`; and it
-   * is bounded at `MAX_FIXLIST_ROUNDS`, so it must be counted somewhere. Read
-   * through `fixlistRoundsSpent`, which falls back to the ledger for a fresh
-   * process — a bound a restart forgets is not a bound.
+   * The three bounds this invocation holds a review round to — the requeue
+   * counter, the fix-list counter and the format-retry counter, three maps of
+   * three different things (`build/reviewRound.ts`, where all three docstrings
+   * went with their maps). ONE instance, created here and passed by reference.
    */
-  private readonly fixlists = new Map<string, number>();
-  /**
-   * Free re-prompts this process has granted THIS review round, per story (#78).
-   *
-   * A third counter rather than a flag on one of the other two, because it counts
-   * a third thing: `reviews` counts verdicts that cost an attempt, `fixlists`
-   * counts free rounds granted to the AUTHOR, and this counts envelopes the
-   * format check sent back to the REVIEWER. It is reset — not incremented
-   * — the moment a verdict is finally counted, because the bound is per envelope
-   * round (see `MAX_FORMAT_RETRIES`). Read through `formatRetriesSpent`, which
-   * falls back to the ledger: the host door settles one envelope per process, so
-   * a bound this process alone remembered would be no bound at all.
-   */
-  private readonly formatRetries = new Map<string, number>();
-  /** Epic branches this run cut or adopted; `runNext` writes them to run.yml. */
-  readonly claimedEpics = new Set<string>();
+  private readonly counters = new ReviewCounters();
+  /** The workspace prior every reviewer of THIS invocation is primed with (#74). */
+  private readonly focus = new RecurringFocus();
+  /** `buildExecutor`'s `withClaims` reads this on every exit path — including failures. */
+  get claimedEpics(): ReadonlySet<string> {
+    return this.epics.claimed;
+  }
   /**
    * One branch per epic, or ONE branch for the run (issue #57).
    *
@@ -581,8 +454,7 @@ class BuildSession {
    * `dotnet test`, and a run that entered Build before this file existed must
    * not error on its absence.
    */
-  private preflight: BasePreflight | null = null;
-  private preflightLoaded = false;
+  private readonly preflight: PreflightCache;
   /** How many stories of one wave may be in flight at once. */
   private readonly lanes: number;
 
@@ -593,8 +465,9 @@ class BuildSession {
     opening: readonly string[] = [],
   ) {
     this.lines.push(...opening);
+    this.preflight = new PreflightCache(ctx.runDir);
     this.lanes = clampParallel(ctx.parallel);
-    this.branchModel = this.resolveBranchModel();
+    this.branchModel = resolveBranchModel(ctx.runDir, ctx.runId, plan.stories);
     if (this.branchModel.kind === "integration") {
       this.lines.push(`  · ${describeBranchModel(this.branchModel)}`);
     }
@@ -705,7 +578,7 @@ class BuildSession {
     // `true`: a developer is about to be dispatched onto this branch, so it is
     // one of the two openings that may bring the base up to the epic tip (§F.2).
     const story = await this.openStory(planned, true);
-    const cap = this.developerCap(planned.story.id, story.attempt);
+    const cap = developerCap(this.capParts, planned.story.id, story.attempt);
     const key = this.bundleKey(planned.story.id);
     const notes = this.dispatchNotesFor(planned.story.id);
     this.lines.push(...describeDispatchNotes(notes));
@@ -1379,7 +1252,7 @@ class BuildSession {
   private writeFixlistFor(story: StoryContext, review: Review, commit: string): string {
     const id = story.planned.story.id;
     // Allocated by `narrowFixlist`, which is the only thing that may grant one.
-    const round = this.fixlists.get(id) ?? MAX_FIXLIST_ROUNDS;
+    const round = this.counters.fixlistRoundGranted(id) ?? MAX_FIXLIST_ROUNDS;
     const rel = writeFixlist(this.ctx.runDir, BUILD_PHASE, {
       storyId: id,
       title: story.planned.story.title,
@@ -1506,78 +1379,8 @@ class BuildSession {
     }
   }
 
-  /**
-   * How many fix-list rounds this story has already been granted.
-   *
-   * This process first, then the ledger — the same two-source shape
-   * `reviewAttempts` uses, and for the same reason: a bound that a fresh `tldrx
-   * next` forgets is not a bound, and a story settled inside THIS invocation has
-   * not written its event to a file this can re-read yet.
-   */
-  private fixlistRoundsSpent(storyId: string): number {
-    return this.fixlists.get(storyId) ?? readReviewLedger(this.ctx.runDir, storyId).fixlistRounds;
-  }
-
-  /**
-   * The bound, applied to a verdict before anything records it (design §B.4).
-   *
-   * One fix-list round per story. A second `fixlist` is refused and read as
-   * `changes` — the fail-closed direction, and the honest one: the reviewer asked
-   * for a free round it does not have, and what it actually said was "this diff
-   * is not finished". Refused HERE, between the parse and `recordReview`, so the
-   * downgraded verdict is the one that lands on the requeue counter, the ledger
-   * line and the story's fate alike.
-   *
-   * A declared fix list `parseReview` could not read has already fallen to
-   * `changes` by the time this runs; its reasons come through on
-   * `fixlistProblems` and are said out loud rather than swallowed.
-   */
   private narrowFixlist(storyId: string, review: Review): Review {
-    // Printed HERE because both doors — a spawned reviewer and a host's
-    // `--commit --review` — reach the record through this one call (gh #36).
-    if (review.verdictProblem !== null) {
-      this.lines.push(`  · ${storyId}: ${review.verdictProblem}`);
-    }
-    for (const problem of review.fixlistProblems) {
-      this.lines.push(`  · ${storyId}: the reviewer's fix list was REFUSED — ${problem}`);
-    }
-    if (review.fixlistProblems.length > 0) {
-      this.lines.push(
-        // Not "does not buy a free round", which is what this said before #78:
-        // an unreadable envelope DOES buy a bounded free CORRECTION now. What it
-        // still cannot buy is the third VERDICT — a fix-list round is granted on
-        // a fix list somebody can read, and on nothing else.
-        `  · ${storyId}: an unreadable fix list does not grant a fix-list round — read as \`changes\``,
-      );
-    }
-    if (review.verdict !== "fixlist") return review;
-    const spent = this.fixlistRoundsSpent(storyId);
-    if (spent < MAX_FIXLIST_ROUNDS) {
-      // The round is ALLOCATED here, where it is granted — not counted off the
-      // ledger later. `recordReview` writes the `verdict: fixlist` event between
-      // this and the artifact, so a later re-count would read this very round as
-      // one already spent and number the file `-2`.
-      this.fixlists.set(storyId, spent + 1);
-      return review;
-    }
-    const previous = latestFixlist(this.ctx.runDir, BUILD_PHASE, storyId);
-    this.lines.push(
-      `  · ${storyId}: a SECOND fix-list round was refused — the bound is `
-      + `${String(MAX_FIXLIST_ROUNDS)} per story`
-      + (previous === null ? "" : ` (round ${String(previous.round)} is ${previous.rel})`)
-      + ", so this review is a full one and its verdict is read as `changes`",
-    );
-    return {
-      ...review,
-      verdict: "changes",
-      summary: `a second fix-list round was refused (the bound is ${String(MAX_FIXLIST_ROUNDS)} `
-        + `per story): ${review.summary}`,
-      findings: [
-        ...review.findings,
-        ...review.fixlist.map((f) => `${String(f.n)}. ${f.finding} [${f.severity}]`),
-      ],
-      fixlist: [],
-    };
+    return narrowFixlist(this.counters, this.roundParts, storyId, review);
   }
 
   /**
@@ -1787,7 +1590,7 @@ class BuildSession {
     // Whatever happened above, this run is now working on that branch: say so in
     // run.yml (`build.epic_branch`) so its NEXT invocation, and any other run,
     // can tell "I cut this" from "this was already here".
-    this.claimedEpics.add(epicBranch);
+    this.epics.claimed.add(epicBranch);
     // The run id is IN the branch name — see `storyBranchOf`, which is the ONE
     // place that name is derived. Without the run id, four runs of the same plan
     // all cut `story/S1`: the second found it already there, `addWorktree`
@@ -1815,38 +1618,6 @@ class BuildSession {
     };
   }
 
-  /**
-   * A story's branch, brought up to its epic's tip before a developer is
-   * dispatched onto it — or the precise reason it was left exactly where it is.
-   *
-   * The live case, notes §11 on `260830-tenancy-identity-customers`: `story
-   * reopen` keeps the branch by design, and S3's branch still sat at the S1-era
-   * epic tip while the epic had since gained S2 and S5. S3's handlers needed S2's
-   * contract, so a dispatch on that base would not have compiled. The host
-   * fast-forwarded by hand before dispatching; this is that move, automated, and
-   * only in the case where it is a move and not a decision.
-   *
-   * Three shapes, and only the first changes anything:
-   *
-   *   - **behind, and the worktree is clean** — the branch is an ancestor of the
-   *     epic tip, so `git merge --ff-only` is the entire operation: no commit
-   *     written, no history rewritten, and it refuses rather than inventing a
-   *     merge. Measured atomic-or-nothing (see `fastForward`).
-   *   - **diverged** — commits on both sides. Warn with both counts and both
-   *     shas, change NOTHING, and let the dispatch proceed on the old base. This
-   *     is the second live case: a dead spawn had left a partial commit on a
-   *     stale base, no fast-forward was possible, and the host preserved the
-   *     partial on a backup branch and re-pointed the story branch BY HAND. That
-   *     is a decision — which of the two histories survives — and the framework
-   *     does not get to make it. **Never a rebase**: rewriting a branch a
-   *     developer already committed to is the class of move the
-   *     run-id-in-branch-name fix exists to prevent (2026-08-29 audit §B).
-   *   - **the worktree is dirty** — left alone whatever the topology says. A
-   *     dirty tree is the operator's, not ours.
-   *
-   * An `up to date` branch is silent and emits nothing: this path is byte-for-byte
-   * what it was before design §F.2 whenever there was nothing to say.
-   */
   private async refreshStoryBase(
     planned: PlannedStory,
     repoDir: string,
@@ -1854,98 +1625,32 @@ class BuildSession {
     branch: string,
     epicBranch: string,
   ): Promise<void> {
-    const id = planned.story.id;
-    const base = await baseStateOf(repoDir, branch, epicBranch);
-    if (base.state === "current") return;
-
-    const where = relative(this.ctx.root, worktree) || worktree;
-    if (base.state === "diverged") {
-      this.lines.push(
-        `  · ${id}: \`${branch}\` (${base.branchSha}) has DIVERGED from \`${epicBranch}\` `
-        + `(${base.baseSha}) — ${String(base.ahead)} commit(s) the epic lacks, `
-        + `${String(base.behind)} the story lacks`,
-        `  · ${id}: nothing was changed — tldrx never rebases a branch a developer has committed to. `
-        + `In ${where}: \`git merge ${epicBranch}\`, or preserve the divergent commit(s) on a backup `
-        + `branch and re-point \`${branch}\` at \`${epicBranch}\` by hand`,
-        `  · ${id}: the dispatch below is on the OLD base (${base.branchSha}), `
-        + `${String(base.behind)} commit(s) behind \`${epicBranch}\``,
-      );
-      return;
-    }
-
-    // A story worktree is its own checkout of the SAME repo, so in a
-    // `root_is_repo` workspace it holds `tldrx-work/` and `.tldrx/` too. Neither
-    // counts as the operator's dirt — the same split `commitIfDirty` makes, from
-    // the same prefixes.
-    const state = stateDirPrefixes(this.workspace.root, repoDir);
-    const dirty = partitionDirty(await dirtyPaths(worktree), state).product;
-    if (dirty.length > 0) {
-      this.lines.push(
-        `  · ${id}: \`${branch}\` (${base.branchSha}) is ${String(base.behind)} commit(s) behind `
-        + `\`${epicBranch}\` (${base.baseSha}), but its worktree has ${String(dirty.length)} `
-        + "uncommitted change(s) — left alone; a dirty tree is the operator's",
-        `  · ${id}: ${dirty.slice(0, 5).join(", ")}`
-        + `${dirty.length > 5 ? `, +${String(dirty.length - 5)} more` : ""} in ${where}`,
-      );
-      return;
-    }
-
-    const moved = await fastForward(worktree, epicBranch);
-    if (!moved.ok) {
-      // `--ff-only` is atomic-or-nothing, so there is nothing to repair: the
-      // branch is still at `from` and the dispatch proceeds on it. What would be
-      // wrong is a silent one.
-      this.lines.push(
-        `  · ${id}: \`git merge --ff-only ${epicBranch}\` failed in ${where} — `
-        + `${firstLine(moved.stderr) || firstLine(moved.stdout) || `exit ${String(moved.exitCode)}`}`,
-        `  · ${id}: \`${branch}\` was left at ${base.branchSha}, `
-        + `${String(base.behind)} commit(s) behind \`${epicBranch}\``,
-      );
-      return;
-    }
-    this.lines.push(
-      `  · ${id}: fast-forwarded \`${branch}\` to \`${epicBranch}\` — `
-      + `${String(base.behind)} commit(s), ${base.branchSha} → ${base.baseSha}`,
-    );
-    this.ctx.emit("story.base_fastforwarded", {
-      phase: this.ctx.phaseId,
-      story: id,
-      repo: planned.story.repo,
+    await refreshStoryBase({
+      storyId: planned.story.id,
+      root: this.ctx.root,
+      workspaceRoot: this.workspace.root,
+      repoDir,
+      worktree,
       branch,
-      base: epicBranch,
-      from: base.branchSha,
-      to: base.baseSha,
-      commits: base.behind,
+      epicBranch,
+      repo: planned.story.repo,
+      phaseId: this.ctx.phaseId,
+      lines: this.lines,
+      emit: (type, payload) => { this.ctx.emit(type, payload); },
     });
   }
 
-  /**
-   * Touched paths that exist in the repo but are NOT in the tree at the story's
-   * branch, so the worktree cannot open them.
-   *
-   * A path that exists nowhere is left out: that one really is a file the story
-   * creates, and the prompt already says so. The difference is the whole point —
-   * "this story creates it" and "you were shown a quote of it and nothing more"
-   * are opposite instructions, and `existsSync(worktree/path)` cannot tell them
-   * apart.
-   */
   private async unreadableTouches(
     planned: PlannedStory,
     repoDir: string,
     branch: string,
   ): Promise<ReadonlySet<string>> {
-    const out = new Set<string>();
-    for (const path of planned.story.touches) {
-      // A path that is nowhere in the repo is the ordinary "this story creates
-      // it", and cheap to rule out before a git call.
-      if (!existsSync(join(repoDir, path))) continue;
-      if (await pathAtRef(repoDir, branch, path)) continue;
-      out.add(path);
-      this.advisories.push(
-        `warning: input ${path} is not committed, so the story worktree cannot read it`,
-      );
-    }
-    return out;
+    return await unreadableTouches({
+      repoDir,
+      branch,
+      touches: planned.story.touches,
+      advisories: this.advisories,
+    });
   }
 
   /**
@@ -1956,7 +1661,7 @@ class BuildSession {
    * money is the operator's clue about why it errored.
    */
   private async spawnDeveloper(story: StoryContext): Promise<{ cost: number; error: string | null }> {
-    const cap = this.developerCap(story.planned.story.id, story.attempt);
+    const cap = developerCap(this.capParts, story.planned.story.id, story.attempt);
     const commands = this.repoCommands(story.planned.story.repo);
     this.ctx.emit("agent.spawned", {
       phase: this.ctx.phaseId,
@@ -2019,82 +1724,40 @@ class BuildSession {
 
   /** (e) the story's ```dod block, in the worktree, via the gate's own runner. */
   private async runDod(story: StoryContext): Promise<readonly DodResult[]> {
-    const timeoutMs = this.ctx.spec.planned.timeout_s * 1000;
-    const results: DodResult[] = [];
-    for (const command of story.planned.dod.commands) {
-      // Same allowlist the hook uses, same refusal. The Build executor runs a dod
-      // block in a worktree for real; an undeclared command is a failed check
-      // here, not a spawn.
-      let outcome;
-      try {
-        outcome = await runDodCommand(command, story.worktree, timeoutMs, this.workspace.commands);
-      } catch (error) {
-        if (!(error instanceof DodCommandRefused)) throw error;
-        outcome = { command, exitCode: 126, timedOut: false, tail: error.message };
-      }
-      const result: DodResult = {
-        command,
-        exitCode: outcome.timedOut ? 124 : outcome.exitCode,
-        timedOut: outcome.timedOut,
-        tail: outcome.tail,
-      };
-      results.push(result);
-      const green = result.exitCode === 0 && !result.timedOut;
-      this.ctx.emit(green ? "check.passed" : "check.failed", {
-        phase: this.ctx.phaseId,
-        check: "dod",
-        story: story.planned.story.id,
-        command,
-        exit_code: result.exitCode,
-        detail: green ? "" : result.tail,
-      });
-      if (green) continue;
-      // Issue #41, the second reader: a red command only faults the STORY if it
-      // is green on the untouched base tree. The answer is normally already in
-      // the run's cache — the Build-entry pre-flight put it there — and when it
-      // is not (a run that entered Build on an older binary, a base that moved
-      // under a reopened story) it is measured now rather than assumed. A base
-      // that shares the failure halts the build instead of blocking the story.
-      const base = await this.baseResult(story.planned.story.repo, command);
-      if (base !== null && base.status === "failed") {
-        throw new BaseGateFailure(base, story.planned.story.id);
-      }
-      break;
-    }
-    return results;
+    return await runStoryDod({
+      storyId: story.planned.story.id,
+      repo: story.planned.story.repo,
+      worktree: story.worktree,
+      commands: story.planned.dod.commands,
+      workspaceCommands: this.workspace.commands,
+      timeoutMs: this.ctx.spec.planned.timeout_s * 1000,
+      phaseId: this.ctx.phaseId,
+      emit: (type, payload) => { this.ctx.emit(type, payload); },
+      baseResult: (repo, command) => baseResultOf(this.baseParts, repo, command),
+    });
   }
 
   private async commitIfDirty(story: StoryContext): Promise<string | null> {
-    // A story worktree is its own checkout, but of the SAME repo — so when the
-    // workspace root is the repo it holds `tldrx-work/` and `.tldrx/` too. Neither
-    // the "is there anything to commit" question nor the commit itself may include
-    // them: a run that swept its own state into a story commit would put the run
-    // log inside the diff a reviewer reads.
-    const state = stateDirPrefixes(this.workspace.root, story.repoDir);
-    if (await isDirty(story.worktree, state)) {
-      const message = `feat(${story.planned.story.id}): ${story.planned.story.title}`;
-      const committed = await commitAll(story.worktree, message, state);
-      if (!committed.ok) {
-        this.lines.push(
-          `  · ${story.planned.story.id}: \`git commit\` failed — ` +
-            `${firstLine(committed.stderr) || firstLine(committed.stdout)}`,
-        );
-        return null;
-      }
-    }
-    const sha = await headSha(story.worktree);
-    return sha === "" ? null : sha;
+    return await commitIfDirty({
+      storyId: story.planned.story.id,
+      title: story.planned.story.title,
+      workspaceRoot: this.workspace.root,
+      repoDir: story.repoDir,
+      worktree: story.worktree,
+      lines: this.lines,
+    });
   }
 
   /** (f) `git merge --no-ff story/<id>` inside the epic's own worktree. */
   private async mergeIntoEpic(
     story: StoryContext,
   ): Promise<{ ok: boolean; conflicts: readonly string[]; detail: string }> {
-    return await mergeNoFf(
-      await this.openEpicWorktree(story),
-      story.branch,
-      `merge(${story.planned.story.id}): ${story.planned.story.title}`,
-    );
+    return await mergeIntoEpic(this.epics, {
+      ...this.epicParts(story),
+      storyBranch: story.branch,
+      storyId: story.planned.story.id,
+      storyTitle: story.planned.story.title,
+    });
   }
 
   /** (g) the reviewer, read-only, judging the story diff. */
@@ -2109,7 +1772,7 @@ class BuildSession {
     // go round again on the one outcome `formatRetry` grants, and that grant is
     // counted on disk before this line is reached a second time (gh #78).
     for (;;) {
-      const cap = this.reviewerCap(id);
+      const cap = reviewerCap(this.capParts, this.spent(), id);
       this.ctx.emit("agent.spawned", {
         phase: this.ctx.phaseId,
         story: id,
@@ -2181,21 +1844,11 @@ class BuildSession {
   }
 
   /**
-   * Grant one free re-prompt for a FORMAT-refused envelope, or refuse to (#78, #79).
-   *
-   * Returns the refusal to carry into the corrected envelope's prompt, or null —
-   * and null is the answer for every case except the narrow one this exists for,
-   * which is why the caller can treat it as "carry on exactly as before".
-   *
-   * The grant is RECORDED before it is used, in both places a bound has to live:
-   * `this.formatRetries` for this process, and a `story.review_retried` event for
-   * every process after it. Attempt bookkeeping that moved with nothing in the log
-   * would be unauditable, and this is the one path where an attempt is deliberately
-   * not spent.
-   *
-   * The turn's money is pushed as its own task row here rather than at
-   * `recordReview`, because that turn happened and was billed: what it did not
-   * produce is a VERDICT.
+   * The MONEY and the EVENT of a format retry — the decision is
+   * `formatRetryDecision` (`build/reviewRound.ts`), which reads the bound and
+   * records the grant. What stays here is what only the executor can do: the
+   * turn's own task row, and the `story.review_retried` that makes an attempt
+   * deliberately not spent auditable by every process after this one.
    */
   private formatRetry(
     story: StoryContext,
@@ -2216,17 +1869,8 @@ class BuildSession {
     },
   ): string | null {
     const id = story.planned.story.id;
-    if (!isFormatRejection(review)) return null;
-    const spent = this.formatRetriesSpent(id);
-    if (spent >= MAX_FORMAT_RETRIES) {
-      this.lines.push(
-        `  · ${id}: a ${String(MAX_FORMAT_RETRIES + 1)}th envelope was refused on its FORMAT — the `
-        + `bound is ${String(MAX_FORMAT_RETRIES)} free correction(s), so this one is `
-        + "recorded as `changes` and costs the attempt",
-      );
-      return null;
-    }
-    this.formatRetries.set(id, spent + 1);
+    const again = formatRetryDecision(this.counters, { ...this.roundParts, storyId: id, review });
+    if (again === null) return null;
     this.tasks.push({
       key: id,
       model: task.metered ? this.model() : null,
@@ -2237,38 +1881,21 @@ class BuildSession {
       ...(task.metered ? {} : { metered: false }),
       ...(task.tokens === undefined ? {} : { tokens: task.tokens }),
     });
-    // `formatProblems`, not `fixlistProblems`: a verdict WORD outside the enum
-    // (gh #36) is a format refusal that raises no fix-list problem at all, and
-    // reading the narrower list would record — and re-prompt with — nothing.
-    const detail = review.formatProblems.join(" · ");
     this.ctx.emit("story.review_retried", {
       phase: this.ctx.phaseId,
       story: id,
       // The attempt this did NOT spend. That is the whole point of the event.
       attempt: story.attempt,
-      retry: spent + 1,
+      retry: again.retry,
       max_retries: MAX_FORMAT_RETRIES,
-      detail: clipDetail(detail),
+      detail: again.detail,
     }, task.costUsd, "reviewer");
-    this.lines.push(
-      `  · ${id}: the review envelope was REFUSED as malformed — ${detail}`,
-      `  · ${id}: asking for a corrected envelope; this cost the story NO attempt `
-      + `(correction ${String(spent + 1)} of ${String(MAX_FORMAT_RETRIES)})`,
-    );
-    return renderFormatRefusal(review.formatProblems);
+    this.lines.push(...again.lines);
+    return again.refusal;
   }
 
-  /**
-   * The refusal a previous envelope of this story's open round earned, rendered
-   * for a prompt — or null when the last envelope was not refused that way (#78).
-   *
-   * Read off the ledger rather than off this process, because the only caller is
-   * `--prepare --review`, which by definition runs after the invocation that
-   * recorded the refusal has exited.
-   */
   private pendingRefusal(storyId: string): string | null {
-    const said = readReviewLedger(this.ctx.runDir, storyId).formatRefusal;
-    return said === null ? null : renderFormatRefusal([said]);
+    return pendingRefusal(this.ctx.runDir, storyId);
   }
 
   /**
@@ -2287,9 +1914,7 @@ class BuildSession {
     const id = story.planned.story.id;
     const key = this.reviewBundleKey(id);
     const dir = agentDir(this.ctx.runDir, key);
-    const kept = `result.refused-${String(this.formatRetriesSpent(id))}.json`;
-    renameSync(join(dir, RESULT_FILE), join(dir, kept));
-    rmSync(join(dir, RAW_FILE), { force: true });
+    const kept = stashRefusedEnvelope(this.ctx.runDir, key, this.formatRetriesSpent(id));
     this.writeReviewBundle(story, work, refusal);
     const rel = relative(this.ctx.root, dir);
     this.lines.push(
@@ -2312,92 +1937,30 @@ class BuildSession {
     };
   }
 
-  /**
-   * Free re-prompts already granted for this story's CURRENT envelope round.
-   *
-   * The same two-source shape `reviewAttempts` and `fixlistRoundsSpent` use, and
-   * for the same reason — except that here the ledger side is load-bearing rather
-   * than a fallback: `--commit --review` settles one envelope per process, so
-   * every host correction is read back off the log.
-   */
   private formatRetriesSpent(storyId: string): number {
-    return this.formatRetries.get(storyId) ?? readReviewLedger(this.ctx.runDir, storyId).formatRetries;
+    return this.counters.formatRetriesSpent(this.ctx.runDir, storyId);
   }
 
-  /**
-   * The reviewer's prompt — ONE renderer, whichever door the review comes
-   * through.
-   *
-   * A host review that judged a different brief from the one a spawn would have
-   * been given is not the same review, and the bundle's whole claim is that it
-   * is. Sharing the call is how that stays true without a test having to keep
-   * two copies in step.
-   */
   private reviewerPrompt(
     story: StoryContext,
     dod: readonly DodResult[],
     refusal: string | null = null,
   ): string {
-    return buildReviewerPrompt({
-      // What this workspace's own reviews keep finding (#74). Empty on a workspace
-      // with no history, which renders no section at all.
-      recurring: this.recurringClasses(),
-      refusal,
+    return reviewerPromptFor({
+      runDir: this.ctx.runDir,
+      root: this.ctx.root,
       runId: this.ctx.runId,
       story: story.planned,
-      repoName: story.planned.story.repo,
       branch: story.branch,
       epicBranch: story.epicBranch,
       worktree: story.worktree,
-      conventions: renderConventions(this.ctx.root, [story.planned.story.repo]),
-      dodResults: dod.map((r) => ({ command: r.command, exitCode: r.exitCode })),
-      // Withdrawn once the story's one round is spent, so the prompt never offers
-      // a verdict `narrowFixlist` is about to refuse. Computed the same way on
-      // both doors, which is what keeps the bundle's prompt byte-identical to the
-      // one a spawn would have sent.
-      fixlistAvailable: this.fixlistRoundsSpent(story.planned.story.id) < MAX_FIXLIST_ROUNDS,
-      // The active packs' checks for this story's repo (stack packs design §4.5), fed
-      // straight into the reviewer's prompt. Null when the packs switch is off, which
-      // renders nothing.
-      //
-      // Gated on `spec.stackExperts` too (issue review, fix round 1): the developer's
-      // OWN pack content is gated on that same stage-yaml switch two calls down, via
-      // `loadExpertBundles({ stackExperts: this.ctx.spec.stackExperts, ... })` ->
-      // `selectExperts` (`selectExperts.ts:140` — a `kind: stack` expert is never even
-      // SELECTED without it). With `stack_packs.enabled: true` and `stack_experts: false`
-      // in one story, the developer would get no pack content at all while the reviewer
-      // graded against `## Stack checks` text it was never shown. Checking both switches
-      // here is what keeps the two turns agreeing on whether packs are in play at all.
-      stackChecks: this.ctx.spec.stackExperts
-        ? stackChecks(this.ctx.root, [story.planned.story.repo])
-        : null,
+      dod,
+      refusal,
+      stackExperts: this.ctx.spec.stackExperts,
+      counters: this.counters,
+      focus: this.focus,
+      lines: this.lines,
     });
-  }
-
-  /**
-   * The workspace's recurring finding classes, mined ONCE per invocation (#74).
-   *
-   * Once, not per story, for two reasons. It reads every artefact of every run in
-   * the workspace, and a wave of six stories would pay that six times. And every
-   * reviewer in one invocation should be primed with the SAME prior — an
-   * aggregate that shifted between story three and story four would make two
-   * reviews incomparable for a reason neither log records.
-   *
-   * `workspaceRecurring` never throws: the worst case is no prior. A refused
-   * `finding-classes.yml` is said out loud here rather than swallowed, because a
-   * team editing a file that has silently stopped being read is the failure this
-   * whole feature exists to end.
-   */
-  private recurring: readonly RecurringClass[] | null = null;
-
-  private recurringClasses(): readonly RecurringClass[] {
-    if (this.recurring !== null) return this.recurring;
-    const focus = workspaceRecurring(this.ctx.root);
-    if (focus.error !== null) {
-      this.lines.push(`  \u00b7 reviewer focus skipped \u2014 ${focus.error}`);
-    }
-    this.recurring = focus.classes;
-    return this.recurring;
   }
 
   /**
@@ -2441,13 +2004,13 @@ class BuildSession {
     // diff was not faulted, so no second developer attempt is owed for it, and
     // the round it does buy is bounded by `narrowFixlist` instead.
     if (review.verdict !== "error" && review.verdict !== "fixlist") {
-      this.reviews.set(id, (this.reviews.get(id) ?? 0) + 1);
+      this.counters.countVerdict(id);
     }
     // A verdict — any verdict — closes this envelope round, and the next one
     // starts with its corrections again (gh #78). Set to `0` rather than deleted
     // so this process's own answer keeps winning over a ledger it has not
     // finished writing; `readReviewLedger` resets on exactly the same events.
-    this.formatRetries.set(id, 0);
+    this.counters.closeEnvelopeRound(id);
     // The reviewer IS a check: `approve` is the pass, `changes` and `error` the
     // two failures. `verdict` is what tells a ledger which one it is reading, and
     // `detail` on an errored review is the ERROR, verbatim.
@@ -2765,333 +2328,79 @@ class BuildSession {
   }
 
   private epicRows(outcomes: readonly StoryOutcome[]): readonly EpicSummaryRow[] {
-    const rows: EpicSummaryRow[] = [];
-    for (const [id, epic] of this.plan.epics) {
-      const branch = epicBranchOf(this.branchModel, epic.epic.branch);
-      // Attributed to the EPIC, not to the branch. Under `per-epic` the two are
-      // the same set; under the integration model one branch carries every epic's
-      // stories, and a row that claimed all of them for each epic would be false.
-      const merges = this.mergesOnto(branch, outcomes)
-        .filter((row) => this.plan.stories.get(row.id)?.story.epic === id);
-      rows.push({
-        id,
-        branch,
-        repos: epic.epic.repos,
-        // A merge that moved nothing is not listed with the ones that did. The
-        // Gate section is what a human reads before merging an epic by hand, and
-        // "S3, S4, S5, S7 merged" over four identical branches is the sentence
-        // this split exists to stop writing (2026-08-30).
-        merged: merges.filter((row) => row.carried !== null && row.carried !== 0).map((row) => row.id),
-        emptyMerges: merges.filter((row) => row.carried === 0).map((row) => row.id),
-        // Merged, and this process did not watch it happen — see `mergedEarlier`.
-        mergedEarlier: merges.filter((row) => row.carried === null).map((row) => row.id),
-        defaultBranches: epic.epic.repos.map((repo) => this.workspace.defaultBranches.get(repo) ?? "main"),
-        rel: epic.rel,
-      });
-    }
-    return rows;
-  }
-
-  /**
-   * Every story known to sit on this epic branch, from BOTH sources (#137).
-   *
-   * `this.merged` is what this process merged, and it is the only source the Gate
-   * section had. So a re-entered stage — every story already settled, nothing left
-   * to merge — printed `(no story merged)` over an epic branch carrying two merge
-   * commits, and that is the sentence a human reads before deciding what to ship.
-   *
-   * The second source is the outcomes themselves: a row rebuilt by `fromDisk`
-   * carries `merged: true` for a story disk says is `done`, which in this pipeline
-   * is a status only a merged story reaches. It carries `carried: null` with it,
-   * so the row is reported as merged-but-not-re-measured rather than as either
-   * kind of measurement. This process's own rows win on id — they are the ones
-   * that HAVE a measurement.
-   */
-  private mergesOnto(
-    branch: string,
-    outcomes: readonly StoryOutcome[],
-  ): readonly { id: string; carried: number | null }[] {
-    const rows = [...(this.merged.get(branch) ?? [])];
-    const seen = new Set(rows.map((row) => row.id));
-    for (const outcome of outcomes) {
-      if (outcome.epicBranch !== branch || !outcome.merged || seen.has(outcome.id)) continue;
-      seen.add(outcome.id);
-      rows.push({ id: outcome.id, carried: outcome.carried });
-    }
-    return rows;
+    return epicRows(this.epics, {
+      workspace: this.workspace,
+      epics: this.plan.epics,
+      branchModel: this.branchModel,
+      stories: this.plan.stories,
+    }, outcomes);
   }
 
   // --- helpers --------------------------------------------------------------
 
-  /**
-   * An `epic/<slug>` that already exists and was NOT cut by this run.
-   *
-   * Story branches and worktrees now carry the run id, so they cannot collide.
-   * The epic branch deliberately does not — an epic is the unit a team merges,
-   * and `epic/260829-x-leaderboard` would be a worse name for it. So instead of
-   * making collision impossible, this makes it DELIBERATE: a branch this run's
-   * `build.epic_branch` does not claim is refused, and `--reuse-epic` is the word
-   * that says "yes, stack on it". Measured 2026-08-29: four runs piled onto one
-   * `epic/leaderboard` with nothing said.
-   *
-   * `commit` never asks: it continues a story whose epic was claimed at prepare.
-   */
   private async refuseOnForeignEpic(): Promise<ExecutorOutcome | null> {
-    const claimed = new Set(this.claimedBranchesOnFile());
-    const seen = new Set<string>();
-    for (const planned of this.pendingStories()) {
-      const epic = this.plan.epics.get(planned.story.epic);
-      if (epic === undefined) continue;
-      const branch = epicBranchOf(this.branchModel, epic.epic.branch);
-      const key = `${planned.story.repo}:${branch}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const repoDir = repoDirOf(this.workspace, planned.story.repo);
-      if (!(await branchExists(repoDir, branch))) continue;   // we are about to cut it
-      if (claimed.has(branch)) continue;                       // this run cut it earlier
-      if (this.ctx.reuseEpic) {
-        this.claimedEpics.add(branch);
-        this.lines.push(`  · adopting existing \`${branch}\` in ${planned.story.repo} (--reuse-epic)`);
-        continue;
-      }
-      return {
-        ok: false,
-        refused: true,
-        awaiting: false,
-        tasks: [],
-        costUsd: 0,
-        outputs: [],
-        lines: [
-          `[tldrx] build: \`${branch}\` already exists in ${planned.story.repo} and run ${this.ctx.runId} ` +
-            "did not cut it — refusing to stack this run's commits onto someone else's epic.",
-          "  either delete or rename that branch, or run `tldrx next --reuse-epic` to work on it deliberately.",
-        ],
-        error: `epic branch \`${branch}\` was not created by this run`,
-      };
-    }
-    return null;
-  }
-
-  /** `run.yml`'s `build.epic_branch`, or nothing when the file will not open. */
-  private claimedBranchesOnFile(): readonly string[] {
-    return this.buildOnFile().epic_branch;
-  }
-
-  /** `run.yml`'s whole `build:` block, or an empty one when the file will not open. */
-  private buildOnFile(): { epic_branch: readonly string[]; branch_model?: BranchModelKind } {
-    try {
-      return RunStore.open(this.ctx.runDir).run.build ?? { epic_branch: [] };
-    } catch {
-      return { epic_branch: [] };
-    }
-  }
-
-  /**
-   * One branch per epic, or ONE for the run — issue #57, owner decision (a).
-   *
-   * The chain is read from the SAME story front matter `validatePlan` reads, so
-   * the branch the Plan gate announced is the branch this cuts. What can override
-   * it is the run's own history, and only in the safe direction: a run that has
-   * already recorded a model keeps it, and a run that cut branches before the key
-   * existed is treated as `per-epic` rather than re-pointed at a branch that was
-   * never cut.
-   */
-  private resolveBranchModel(): BranchModel {
-    const epicOf = new Map<string, string>();
-    const dependsOn = new Map<string, readonly string[]>();
-    for (const [id, planned] of this.plan.stories) {
-      epicOf.set(id, planned.story.epic);
-      dependsOn.set(id, planned.story.depends_on);
-    }
-    const chain = detectEpicChain(epicOf, dependsOn);
-    const fromPlan = branchModelFor(this.ctx.runId, chain);
-
-    const onFile = this.buildOnFile();
-    if (onFile.branch_model !== undefined) {
-      return { ...branchModelOfKind(onFile.branch_model, this.ctx.runId), chain };
-    }
-    if (onFile.epic_branch.length > 0) {
-      // A run that entered Build before `branch_model` existed. Its stories are
-      // already on branches it cut; re-deciding now would strand them.
-      return { kind: "per-epic", integrationBranch: null, chain };
-    }
-    return fromPlan;
-  }
-
-  /**
-   * Issue #41: the gate commands, on the UNTOUCHED base tree, before anything is
-   * dispatched or charged.
-   *
-   * A DoD is a delta gate — "this story did not break the tree" — and a command
-   * that is already red on main makes every story in the plan block for something
-   * no story caused. Measured on `260829-scoring-leaderboard`: two of three
-   * declared commands were red on pristine main, so all 15 stories would have
-   * blocked identically, each having spent a developer turn, and one of the two
-   * was running paid live AI tests as a routine gate.
-   *
-   * **Where it runs.** In the repo's own checkout, not a fresh worktree. That is
-   * the tree a human calls "the base": it has the installed dependencies, the
-   * build cache and the tool state that make the command mean what the team
-   * thinks it means, and a pristine worktree would fail half the world's repos
-   * for want of `node_modules` — turning this safety net into an outage. The
-   * dirty-tree refusal has already run, so the tree is product-clean. The trade
-   * is that a gate command which writes build output into a repo that does not
-   * gitignore it now leaves that output in the repo rather than in a worktree —
-   * a repo shaped like that was already broken for Build, whose commit step
-   * would have swept the same files into a story's diff.
-   *
-   * **What it costs.** Once per run: every result is written to
-   * `04-build/preflight.yml` and read back by the next invocation.
-   *
-   * A command the gate DECLINES to run (undeclared, or needing a shell) is
-   * recorded `unmeasured` and refuses nothing — the story-level DoD already has
-   * its own refusal for that, and inventing a base failure out of one would block
-   * a build for a rule that is enforced elsewhere.
-   */
-  private async refuseOnRedBase(): Promise<ExecutorOutcome | null> {
-    const failures: BaseCommandResult[] = [];
-    const seen = new Set<string>();
-    for (const planned of this.pendingStories()) {
-      for (const command of planned.dod.commands) {
-        const key = `${planned.story.repo}\u0000${command}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const result = await this.baseResult(planned.story.repo, command);
-        if (result !== null && result.status === "failed") failures.push(result);
-      }
-    }
-    if (failures.length === 0) return null;
-    const first = failures[0];
-    return {
-      ok: false,
-      refused: true,
-      awaiting: false,
-      tasks: [],
-      costUsd: 0,
-      outputs: [],
-      lines: [...baseRefusalLines(failures)],
-      error: first === undefined
-        ? "a workspace command fails on the base tree"
-        : `\`${first.command}\` exits ${String(first.exitCode)} on the base tree of ${first.repo}`,
+    const refusal = await foreignEpicRefusal(this.epics, this.claimParts, this.pendingStories());
+    return refusal === null ? null : {
+      ok: false, refused: true, awaiting: false, tasks: [], costUsd: 0, outputs: [],
+      lines: refusal.lines, error: refusal.error,
     };
   }
 
-  /**
-   * One gate command's result on one repo's base tree — from the run's cache when
-   * this run already paid for it, measured and written down when it did not.
-   *
-   * `null` means the question could not be asked at all (a `repo:` the workspace
-   * does not declare). Every caller treats that as "no evidence", never as a
-   * verdict.
-   */
-  private async baseResult(repo: string, command: string): Promise<BaseCommandResult | null> {
-    let repoDir: string;
-    try {
-      repoDir = repoDirOf(this.workspace, repo);
-    } catch {
-      return null;
-    }
-    const baseRef = this.workspace.defaultBranches.get(repo) ?? FALLBACK_DEFAULT_BRANCH;
-    const baseSha = await shaOf(repoDir, baseRef);
-    const hash = commandHash(command, [...this.workspace.commands]);
-    const cached = baseResultFor(this.basePreflight(), repo, command, baseSha, {
-      commandHash: hash,
+  /** What `build/branchClaims.ts` needs to claim, refuse or report an epic branch. */
+  private get claimParts(): ClaimParts {
+    return {
+      runId: this.ctx.runId,
+      runDir: this.ctx.runDir,
+      root: this.ctx.root,
+      workspace: this.workspace,
+      epics: this.plan.epics,
+      branchModel: this.branchModel,
+      reuseEpic: this.ctx.reuseEpic,
+      lines: this.lines,
+    };
+  }
+
+  /** What `build/worktrees.ts` needs to open — or merge into — an epic worktree. */
+  private epicParts(story: StoryContext): EpicWorktreeParts {
+    return {
+      root: this.ctx.root,
+      runId: this.ctx.runId,
+      repo: story.planned.story.repo,
+      repoDir: story.repoDir,
+      epicId: story.planned.story.epic,
+      epicBranch: story.epicBranch,
+      branchModel: this.branchModel,
+      defaultBranch: this.workspace.defaultBranches.get(story.planned.story.repo) ?? "main",
+    };
+  }
+
+  /** What `build/dodRunner.ts` needs to measure or recall the base tree. */
+  private get baseParts(): BaseParts {
+    return {
+      workspace: this.workspace,
+      cache: this.preflight,
       at: this.ctx.at,
-      prepare: this.ctx.mode === "prepare",
-    });
-    if (cached !== null) return cached;
-
-    const timeoutMs = this.ctx.spec.planned.timeout_s * 1000;
-    let measured: BaseCommandResult;
-    try {
-      const outcome = await runDodCommand(command, repoDir, timeoutMs, this.workspace.commands);
-      const exitCode = outcome.timedOut ? 124 : outcome.exitCode;
-      measured = {
-        repo, command, baseRef, baseSha, exitCode, timedOut: outcome.timedOut, tail: outcome.tail,
-        status: exitCode === 0 && !outcome.timedOut ? "ok" : "failed", commandHash: hash,
-      };
-    } catch (error) {
-      if (!(error instanceof DodCommandRefused)) throw error;
-      // The gate would not run it, so nothing was learned ABOUT THE BASE. The
-      // story-level DoD refuses it on its own terms; this must not double as a
-      // second, differently-worded veto.
-      measured = {
-        repo, command, baseRef, baseSha, exitCode: 126, timedOut: false,
-        tail: error.message, status: "unmeasured", commandHash: hash,
-      };
-    }
-    await this.writes.run(() => this.rememberBase(measured));
-    return measured;
+      preparing: this.ctx.mode === "prepare",
+      timeoutMs: this.ctx.spec.planned.timeout_s * 1000,
+      write: (work) => this.writes.run(work),
+      advisories: this.advisories,
+    };
   }
 
-  /** The run's cached base results, read once per process. */
-  private basePreflight(): BasePreflight {
-    if (!this.preflightLoaded) {
-      this.preflight = loadPreflight(this.ctx.runDir);
-      this.preflightLoaded = true;
-    }
-    return this.preflight ?? EMPTY_PREFLIGHT;
+  private async refuseOnRedBase(): Promise<ExecutorOutcome | null> {
+    const refusal = await redBaseRefusal(this.baseParts, this.pendingStories());
+    return refusal === null ? null : {
+      ok: false, refused: true, awaiting: false, tasks: [], costUsd: 0, outputs: [],
+      lines: refusal.lines, error: refusal.error,
+    };
   }
 
-  /**
-   * Write one measurement into `04-build/preflight.yml`.
-   *
-   * Through the single writer, and best-effort: a cache that cannot be saved
-   * costs the NEXT invocation a re-run, and that is never a reason to fail a
-   * build that is otherwise fine.
-   */
-  private rememberBase(result: BaseCommandResult): void {
-    const next = withResult(this.basePreflight(), result, this.ctx.at);
-    this.preflight = next;
-    this.preflightLoaded = true;
-    try {
-      savePreflight(this.ctx.runDir, next);
-    } catch (error) {
-      this.advisories.push(
-        `could not write ${PREFLIGHT_REL}: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  }
-
-  /**
-   * Spec §5, Build executor safety: a repo whose tree is dirty is refused BEFORE
-   * anything is cut, because the epic branch is cut from that tree's branch and
-   * `git worktree add` would carry the mess forward.
-   *
-   * PRODUCT dirt only. `tldrx-work/` and `.tldrx/` are the framework's own state,
-   * and in a `root_is_repo: true` workspace they sit inside the product repo — so
-   * counting them made this command refuse the files it had just written itself
-   * (`run.yml`, `events.jsonl`, `.lock`, the freshly synthesised `04-build/`), and
-   * made a user's uncommitted answers a precondition of Build. Product dirt still
-   * refuses exactly as before, with the same message and the same fix.
-   */
   private async refuseOnDirtyRepos(): Promise<ExecutorOutcome | null> {
-    const seen = new Set<string>();
-    let ignored = 0;
-    for (const planned of this.pendingStories()) {
-      const name = planned.story.repo;
-      if (seen.has(name)) continue;
-      seen.add(name);
-      const dir = repoDirOf(this.workspace, name);
-      const split = partitionDirty(await dirtyPaths(dir), stateDirPrefixes(this.workspace.root, dir));
-      ignored += split.state.length;
-      const dirty = split.product;
-      if (dirty.length === 0) continue;
-      const branch = await currentBranch(dir);
+    const { refusal, ignored } = await dirtyRepoRefusal(this.claimParts, this.pendingStories());
+    if (refusal !== null) {
       return {
-        ok: false,
-        refused: true,
-        awaiting: false,
-        tasks: [],
-        costUsd: 0,
-        outputs: [],
-        lines: [
-          `[tldrx] build: repo \`${name}\` has ${String(dirty.length)} uncommitted change(s) on ` +
-            `\`${branch}\` — refusing to cut an epic branch from a dirty tree.`,
-          `  ${dirty.slice(0, 5).join(", ")}${dirty.length > 5 ? `, +${String(dirty.length - 5)} more` : ""}`,
-          `Commit or stash them in ${relative(this.ctx.root, dir) || "."}/, then run \`tldrx next\` again.`,
-        ],
-        error: `repo \`${name}\` has uncommitted changes`,
+        ok: false, refused: true, awaiting: false, tasks: [], costUsd: 0, outputs: [],
+        lines: refusal.lines, error: refusal.error,
       };
     }
     if (ignored > 0) {
@@ -3165,17 +2474,8 @@ class BuildSession {
     writeFileSync(epic.path, updateStoryFront(readFileSync(epic.path, "utf8"), { status }), "utf8");
   }
 
-  /**
-   * Record that this story's branch went onto its epic, and WHAT the merge
-   * moved: a count, or `null` when this invocation did not watch it happen.
-   */
   private noteMerged(story: StoryContext, carried: number | null): void {
-    const list = this.merged.get(story.epicBranch) ?? [];
-    const id = story.planned.story.id;
-    const at = list.findIndex((row) => row.id === id);
-    if (at === -1) list.push({ id, carried });
-    else list[at] = { id, carried };
-    this.merged.set(story.epicBranch, list);
+    this.epics.noteMerged(story.epicBranch, story.planned.story.id, carried);
   }
 
   private developerPrompt(story: StoryContext, fixlist: FixlistOnDisk | null = null): string {
@@ -3204,7 +2504,7 @@ class BuildSession {
       conventions: renderConventions(this.ctx.root, [repo]),
       facts: renderFacts(facts.facts, [repo]),
       experts: bundles.experts,
-      budgetUsd: this.developerCap(story.planned.story.id, story.attempt),
+      budgetUsd: developerCap(this.capParts, story.planned.story.id, story.attempt),
       // The implicit plan writes its own note, naming the facts this story is
       // for; the constant is the fallback for a plan built before it did.
       planNote: this.plan.implicit ? (story.planned.note ?? IMPLICIT_STORY_NOTE) : undefined,
@@ -3313,92 +2613,20 @@ class BuildSession {
     return this.workspace.repoCommands.get(repo) ?? [];
   }
 
-  /**
-   * The developer's ceiling for ONE story.
-   *
-   * Two sources, in order.
-   *
-   * **The Plan's own price**, when `03-plan/budget.yml` gave this story one. That
-   * file is Delivery pricing each story against the stage ceiling, and until
-   * 2026-08-30 it was read by nothing: on
-   * `260830-tenancy-identity-customers` the executor handed $1.03 to the story
-   * priced at $4.75 and the same $1.03 to the one priced at $0.75. The price is
-   * divided by `developerPriceDivisor(attempt)`: the whole price less the
-   * reviewer's derived quarter on attempt 1 — the pass Delivery priced — and the
-   * worst-case share `MAX_ATTEMPTS × (1 + REVIEWER_SHARE)` on the contingency
-   * attempt after it (gh #91; before it, both attempts got the worst-case share
-   * and a $2.10 story was dispatched under $0.84).
-   *
-   * **A uniform share**, otherwise, exactly as before. Measured 2026-08-29: a
-   * story's spend was `developer (1/N) + reviewer (0.25/N)` and the whole pipeline
-   * could run TWICE, so N stories could charge 2.5x the stage ceiling — the
-   * audit's "Build 2.5x su fase". Dividing by the worst case up front fixes that,
-   * and a plan with no prices still gets it.
-   */
-  private developerCap(storyId?: string, attempt = 1): number {
-    const price = this.priceOf(storyId);
-    if (price === null) return this.ctx.agentCap(1 / this.worstCaseShares());
-    return this.ctx.agentCap(this.shareOf(price / developerPriceDivisor(attempt)));
+  /** The ledger's runDir and the operator-line sink, for `build/reviewRound.ts`. */
+  private get roundParts(): RoundParts {
+    return { runDir: this.ctx.runDir, lines: this.lines };
   }
 
-  /**
-   * The reviewer's ceiling for ONE story: its derived quarter-share, never below
-   * `REVIEWER_FLOOR_USD`, never above what the stage has left or what
-   * `per_agent_max_usd` / `--max-usd` allow.
-   *
-   * The floor is the fix for the failure that produced this code: $0.26 cannot
-   * read a 39-file diff, and a reviewer that runs out mid-read costs the whole
-   * developer turn it was supposed to judge (`REVIEWER_FLOOR_USD`).
-   */
-  private reviewerCap(storyId?: string): number {
-    const price = this.priceOf(storyId);
-    const derived = price === null
-      ? this.ctx.agentCap(REVIEWER_SHARE / this.worstCaseShares())
-      : this.ctx.agentCap(this.shareOf(price * REVIEWER_SHARE / (MAX_ATTEMPTS * (1 + REVIEWER_SHARE))));
-    const floor = Math.min(REVIEWER_FLOOR_USD, Math.max(this.ctx.budgetUsd - this.spent(), 0));
-    return round2(Math.min(Math.max(derived, floor), this.ctx.maxBudgetUsd));
-  }
-
-  /**
-   * What the Plan priced this story at, scaled to fit the stage — or null when it
-   * priced nothing, so the uniform share applies.
-   */
-  private priceOf(storyId: string | undefined): number | null {
-    if (storyId === undefined) return null;
-    const price = this.plan.prices.get(storyId);
-    if (price === undefined || !Number.isFinite(price) || price <= 0) return null;
-    return price * this.priceScale();
-  }
-
-  /**
-   * ≤ 1: what every declared price is multiplied by so the priced stories cannot
-   * add up to more than the stage was given.
-   *
-   * A Plan that prices $22 of stories into an $18 stage is not refused — it is
-   * scaled down proportionally, which keeps the RATIO Delivery decided (the
-   * useful half) without letting the total escape the ceiling.
-   */
-  private priceScale(): number {
-    if (this.ctx.budgetUsd <= 0) return 1;
-    let sum = 0;
-    for (const price of this.plan.prices.values()) {
-      if (Number.isFinite(price) && price > 0) sum += price;
-    }
-    return sum <= this.ctx.budgetUsd ? 1 : this.ctx.budgetUsd / sum;
-  }
-
-  /** Dollars expressed as the fraction of the stage budget `agentCap` wants. */
-  private shareOf(usd: number): number {
-    return this.ctx.budgetUsd <= 0 ? 1 : usd / this.ctx.budgetUsd;
-  }
-
-  /**
-   * How many developer-shares the phase can be asked for at worst:
-   * `stories × attempts × (1 + REVIEWER_SHARE)`. Dividing by this makes the sum
-   * of every uniform cap the executor can hand out ≤ the stage ceiling.
-   */
-  private worstCaseShares(): number {
-    return Math.max(this.plan.storyCount, 1) * MAX_ATTEMPTS * (1 + REVIEWER_SHARE);
+  /** The plan's prices and this stage's money, for `build/caps.ts`. */
+  private get capParts(): CapParts {
+    return {
+      prices: this.plan.prices,
+      storyCount: this.plan.storyCount,
+      budgetUsd: this.ctx.budgetUsd,
+      maxBudgetUsd: this.ctx.maxBudgetUsd,
+      agentCap: this.ctx.agentCap,
+    };
   }
 
   private spent(): number {
@@ -3462,225 +2690,85 @@ class BuildSession {
     );
   }
 
-  /** `.agent/<stage>/<story>/` — one bundle per sub-agent, never one per stage. */
   private bundleKey(storyId: string): string {
-    return join(this.ctx.stageId, storyId);
+    return bundleKeyOf(this.ctx.stageId, storyId);
   }
 
-  /**
-   * `.agent/<stage>/<story>/review/` — the reviewer's own bundle, one level below
-   * the developer's.
-   *
-   * Nested rather than suffixed so `preparedBundles` (which walks exactly one
-   * level) cannot read a reviewer bundle as a developer one. Two roles, two
-   * directories, no flag to get wrong.
-   */
   private reviewBundleKey(storyId: string): string {
-    return join(this.ctx.stageId, storyId, REVIEW_DIR);
+    return reviewBundleKeyOf(this.ctx.stageId, storyId);
   }
 
-  /** Is a reviewer bundle out for this story? Its presence IS the state. */
-  private reviewBundleOut(storyId: string): boolean {
-    return existsSync(join(agentDir(this.ctx.runDir, this.reviewBundleKey(storyId)), PENDING_FILE));
-  }
-
-  /**
-   * Write the reviewer bundle: the prompt a spawn would have been given, plus the
-   * facts that make it dispatchable — the diff refs, the merged commit, the DoD
-   * already re-run, and the envelope schema `--commit --review` will parse.
-   *
-   * No cap is spent and no meter starts. `max_budget_usd` is still recorded,
-   * because the host is entitled to know what the framework would have paid for
-   * this read — but it is a number to compare against, not one to enforce here.
-   */
   private writeReviewBundle(story: StoryContext, work: ReviewWork, refusal: string | null = null): string {
-    const id = story.planned.story.id;
-    const key = this.reviewBundleKey(id);
-    const review: PendingReview = {
-      story: id,
+    return writeReviewBundle({
+      runDir: this.ctx.runDir,
+      root: this.ctx.root,
+      runId: this.ctx.runId,
+      phaseId: this.ctx.phaseId,
+      stageId: this.ctx.stageId,
+      storyId: story.planned.story.id,
       repo: story.planned.story.repo,
       branch: story.branch,
-      epic_branch: story.epicBranch,
-      diff: diffCommand(story.epicBranch, story.branch),
-      commit: work.commit,
+      epicBranch: story.epicBranch,
+      worktree: story.worktree,
       attempt: story.attempt,
-      max_attempts: MAX_ATTEMPTS,
-      worktree: relative(this.ctx.root, story.worktree),
-      dod: work.dod.map((r) => ({ command: r.command, exit_code: r.exitCode })),
-      resumed_from: work.why,
-    };
-    const pending: PendingStage = {
-      version: 1,
-      run: this.ctx.runId,
-      phase: this.ctx.phaseId,
-      stage: this.ctx.stageId,
-      expert: "reviewer",
       model: this.model(),
       effort: this.ctx.effort,
-      budget_usd: this.ctx.budgetUsd,
-      max_budget_usd: this.reviewerCap(id),
-      prompt: "prompt.md",
-      outputs: [],
-      sections: {},
-      // The story's own dod is re-run by the executor, never by the reviewer —
-      // the prompt says so in as many words. The stage's checks are the gate's.
-      checks: [],
-      prepared_at: this.ctx.at,
-      story: id,
-      role: "reviewer",
-      result_schema: REVIEW_SCHEMA,
-      review,
-    };
-    // An answer already sitting here is NOT binned. `--prepare` overwrites the
-    // prompt and the pending record and leaves `result.json` exactly as the
-    // developer half does — a turn somebody has already paid for is not this
-    // command's to throw away (`preparedRefusal`'s rule). It is said out loud
-    // instead, because a stale answer read as a fresh verdict is the other half
-    // of that hazard and `--discard-pending` is the door for it.
-    const answered = existsSync(join(agentDir(this.ctx.runDir, key), RESULT_FILE));
-    writeBundle(this.ctx.runDir, key, this.reviewerPrompt(story, work.dod, refusal), pending);
-    if (answered) {
-      this.lines.push(
-        `  · ${id}: a ${RESULT_FILE} was already in the reviewer bundle and was KEPT — `
-        + "settle it with `tldrx next --commit --review`, or bin it with `--discard-pending`",
-      );
-    }
-    return key;
+      budgetUsd: this.ctx.budgetUsd,
+      reviewerCapUsd: reviewerCap(this.capParts, this.spent(), story.planned.story.id),
+      preparedAt: this.ctx.at,
+      work,
+      prompt: this.reviewerPrompt(story, work.dod, refusal),
+      lines: this.lines,
+    });
   }
 
-  /** A settled handshake leaves the log, not the bundle. */
   private clearReviewBundle(key: string): void {
-    const dir = agentDir(this.ctx.runDir, key);
-    for (const file of [PENDING_FILE, RESULT_FILE, RAW_FILE]) rmSync(join(dir, file), { force: true });
+    clearReviewBundle(this.ctx.runDir, key);
   }
 
-  /**
-   * Is this story waiting on nothing but a REVIEW — and if so, what does the
-   * reviewer need?
-   *
-   * Two histories, one answer. `resumableReview` is the narrow "the last reviewer
-   * died" case that landed on 2026-08-30. The second is a review this framework
-   * already handed to the host: the bundle on disk is the record of that, and it
-   * is removed the moment `--commit --review` counts a verdict, so its presence
-   * is exact rather than a guess about the ledger's shape.
-   *
-   * A story whose reviewer asked for CHANGES is deliberately NOT here: that one
-   * is owed a developer attempt, its bundle was cleared when the verdict was
-   * counted, and `prepare()` hands it a developer exactly as it always did.
-   */
   private reviewWorkFor(planned: PlannedStory): ReviewWork | null {
-    const resume = this.resumableReview(planned);
-    if (resume !== null) {
-      return { commit: resume.commit, dod: resume.dod, why: `the previous reviewer FAILED (${resume.error})` };
-    }
-    if (!this.reviewBundleOut(planned.story.id)) return null;
-    return this.reviewWorkFromBundle(planned.story.id) ?? this.reviewWorkFromLedger(planned);
+    return reviewWorkFor(this.lookupFor(planned));
   }
 
-  /**
-   * The bundle's own account of what it is a review OF.
-   *
-   * Read in preference to the ledger, and not as a convenience: a story handed
-   * over mid-pipeline has NOT settled, so no `task.done` records its commit yet
-   * and the ledger genuinely does not know it. The bundle does — it was written
-   * from the merge that had just happened. The contract handed to the host is the
-   * contract read back from it.
-   */
   private reviewWorkFromBundle(storyId: string): ReviewWork | null {
-    const path = join(agentDir(this.ctx.runDir, this.reviewBundleKey(storyId)), PENDING_FILE);
-    if (!existsSync(path)) return null;
-    let doc: PendingStage;
-    try {
-      doc = JSON.parse(readFileSync(path, "utf8")) as PendingStage;
-    } catch {
-      return null;
-    }
-    const review = doc.review;
-    if (review === undefined || typeof review.commit !== "string" || review.commit === "") return null;
-    return {
-      commit: review.commit,
-      dod: (review.dod ?? []).map((r) => ({
-        command: r.command, exitCode: r.exit_code, timedOut: r.exit_code === 124, tail: "",
-      })),
-      why: review.resumed_from ?? "its review is outstanding",
-    };
+    return reviewWorkFromBundle(this.ctx.runDir, this.reviewBundleKey(storyId));
   }
 
-  /**
-   * The same facts, read off the ledger with no opinion about whether a review is
-   * OWED — for the paths where the operator has already said so by typing
-   * `--review`, or where a bundle is being settled.
-   */
   private reviewWorkFromLedger(planned: PlannedStory): ReviewWork | null {
-    const status = this.statusOf(planned);
-    if (status !== "review" && status !== "in_progress") return null;
-    const ledger = readReviewLedger(this.ctx.runDir, planned.story.id);
-    if (ledger.commit === null) return null;
-    return {
-      commit: ledger.commit,
-      dod: ledger.dod,
-      why: "its review is outstanding",
-    };
+    return reviewWorkFromLedger(this.ctx.runDir, planned.story.id, this.statusOf(planned));
   }
 
-  /** The story whose reviewer bundle is out, if any. */
   private awaitingReview(): PlannedStory | null {
-    return this.pendingStories().find((p) => this.reviewBundleOut(p.story.id)) ?? null;
+    return awaitingReview(this.ctx.runDir, this.ctx.stageId, this.pendingStories());
   }
 
-  /** How many reviewers have already JUDGED this story, from the ledger. */
   private reviewAttempts(storyId: string): number {
-    return this.reviews.get(storyId) ?? readReviewLedger(this.ctx.runDir, storyId).verdicts;
+    return this.counters.verdicts(this.ctx.runDir, storyId);
   }
 
-  /**
-   * Was this story's `blocked` caused by a developer that never RAN?
-   *
-   * Returns the error it died with, or null when the block was earned. This is
-   * the migration for Fix 1, and it exists because `blocked` is terminal in-run:
-   * a run recorded by the old code has stories parked there that were never
-   * really attempted, and nothing would ever offer them again.
-   *
-   * Two recorded shapes, because two eras — see `readReviewLedger`. The old one
-   * is only trusted when the story DECLARES dod commands and none ran: a story
-   * with an empty dod block blocks with exactly the same event shape (no commit,
-   * no check, no reviewer), and that block is a plan bug the developer had
-   * nothing to do with.
-   *
-   * `this.outcomes` is consulted first so a story THIS process just settled is
-   * read from its own outcome rather than from a log line it has not written yet.
-   */
   private blockedByFailedDeveloper(planned: PlannedStory): string | null {
-    const fresh = this.outcomes.get(planned.story.id);
-    if (fresh !== undefined) return fresh.developerError;
-    const ledger = readReviewLedger(this.ctx.runDir, planned.story.id);
-    if (ledger.developerErroredWith !== null) return ledger.developerErroredWith;
-    if (ledger.blockedWithNothingRun && planned.dod.commands.length > 0) return DEVELOPER_FAILED;
-    return null;
+    return blockedByFailedDeveloper(this.ctx.runDir, planned, this.outcomes.get(planned.story.id));
+  }
+
+  private resumableReview(planned: PlannedStory): ResumableReview | null {
+    return resumableReview(
+      this.ctx.runDir, planned.story.id, this.statusOf(planned), this.outcomes.get(planned.story.id),
+    );
   }
 
   /**
-   * Is this story waiting on nothing but a review that FAILED?
-   *
-   * Three things have to hold, and all three are read off disk so a fresh process
-   * reaches the same answer: the story is not settled, the last review in the
-   * ledger errored (nothing has judged it since), and a commit was merged. Miss
-   * any one and this returns null and the ordinary pipeline runs.
-   *
-   * `in_progress` counts as well as `review`, and that is not a nicety: on the
-   * run that found this bug the in-session path had already handed the host a
-   * developer bundle for "attempt 2", which set the story to `in_progress`. That
-   * attempt was never owed and this is where it stops being offered.
+   * Everything `build/reviewBundle.ts` needs to say whether a review is
+   * outstanding and what it is OF — the story's status on disk and this
+   * process's own outcome for it, which the executor alone can answer.
    */
-  private resumableReview(planned: PlannedStory): ResumableReview | null {
-    const status = this.statusOf(planned);
-    if (status !== "review" && status !== "in_progress") return null;
-    // Once THIS process has settled the story, its own outcome is the truth.
-    const fresh = this.outcomes.get(planned.story.id);
-    if (fresh !== undefined && fresh.verdict !== "error") return null;
-    const ledger = readReviewLedger(this.ctx.runDir, planned.story.id);
-    if (ledger.erroredWith === null || ledger.commit === null) return null;
-    return { commit: ledger.commit, dod: ledger.dod, error: ledger.erroredWith };
+  private lookupFor(planned: PlannedStory): ReviewLookup {
+    return {
+      runDir: this.ctx.runDir,
+      stageId: this.ctx.stageId,
+      storyId: planned.story.id,
+      status: this.statusOf(planned),
+      fresh: this.outcomes.get(planned.story.id),
+    };
   }
 
   /** The last `changes` verdict, rendered for the next prompt's Previous attempt. */
@@ -3702,131 +2790,28 @@ class BuildSession {
     return readFileSync(path, "utf8").trimEnd().split("\n").map((line) => `> ${line}`).join("\n");
   }
 
-  /**
-   * `.tldrx/worktrees/<repo>/<run>-<story>` — the run id is in the PATH too.
-   *
-   * Same collision, worse: the fourth run of one plan reused the third's LIVE
-   * worktree, so two sub-agents were editing the same files at the same time
-   * (2026-08-29 audit, §B). A path that names the run cannot be walked into.
-   */
   private storyWorktree(planned: PlannedStory): string {
-    return join(
-      this.ctx.root, PROJECT_FRAMEWORK_DIR, WORKTREES,
-      planned.story.repo, `${this.ctx.runId}-${planned.story.id}`,
-    );
+    return storyWorktreePath(this.ctx.root, planned.story.repo, this.ctx.runId, planned.story.id);
   }
 
-  /**
-   * `.tldrx/worktrees/<repo>/_epic-<run>-<epic>` — the run id is in THIS path too.
-   *
-   * Same collision as the story worktree above, and worse in kind, because this
-   * is the worktree a story MERGES in. Every plan names its first epic `E1`, so
-   * `_epic-E1` was a path two runs both computed: the second run's `existsSync`
-   * hit the first run's live worktree, `addWorktree` was skipped, and
-   * `git merge --no-ff` ran inside a checkout of ANOTHER run's epic branch. It
-   * never failed — `commitsBetween` and every handoff line render
-   * `story.epicBranch`, so three stories reported "merged into
-   * `epic/hardening-d1`" while the commits landed on a closed run's
-   * `epic/d1-tenancy-identity-customers` and the run closed with an empty epic
-   * (issue #40, measured 2026-08-31).
-   *
-   * Both halves are load-bearing. The path makes the collision impossible; the
-   * `assertWorktreeOn` on EVERY reuse — the remembered path and the one found on
-   * disk — makes it impossible to repeat SILENTLY. A mismatch refuses; it never
-   * re-points the worktree and never merges anyway.
-   */
-  private async openEpicWorktree(story: StoryContext): Promise<string> {
-    const key = `${story.planned.story.repo}:${story.epicBranch}`;
-    const known = this.epicWorktrees.get(key);
-    if (known !== undefined && existsSync(known)) {
-      await assertWorktreeOn(known, story.epicBranch, "epic worktree");
-      return known;
-    }
-    const path = join(
-      this.ctx.root, PROJECT_FRAMEWORK_DIR, WORKTREES,
-      story.planned.story.repo,
-      // Under the integration model every epic shares one branch, and git will
-      // not check one branch out in two worktrees — so they share one slot too.
-      epicWorktreeName(this.ctx.runId, epicWorktreeSlotOf(this.branchModel, story.planned.story.epic)),
-    );
-    if (existsSync(path)) {
-      await assertWorktreeOn(path, story.epicBranch, "epic worktree");
-    } else {
-      mkdirSync(join(path, ".."), { recursive: true });
-      const base = this.workspace.defaultBranches.get(story.planned.story.repo) ?? "main";
-      await addWorktree(story.repoDir, path, story.epicBranch, base);
-    }
-    this.epicWorktrees.set(key, path);
-    return path;
-  }
-
-  /**
-   * Get anything the worktree holds and no ref does onto the story branch, before
-   * the worktree is deleted (#129).
-   *
-   * The invariant, and it has no exceptions in it: **the framework never deletes a
-   * worktree holding changes that reached no ref.** Measured live 2026-09-02 on
-   * run `260830-money-and-payments` (aparece-v2) — a story's DoD failed, the
-   * executor settled it `blocked`, and `git worktree remove --force` took the
-   * developer's uncommitted fix with it. The work was gone: no branch, no stash,
-   * no reflog, nothing to `git show`. `blocked` is precisely the state a human is
-   * going to want to inspect, and it was the one state that destroyed the evidence.
-   *
-   * Commit-then-prune rather than never-prune, because "recoverable" has to mean
-   * recoverable by SHA. A kept directory is recoverable only until somebody runs
-   * `tldrx run close`, cleans a temp dir, or opens the next run; a commit on the
-   * story branch is recoverable in a year. The message says `wip:` and names the
-   * verdict, because this commit is not a story delivered and an audit trail that
-   * implied otherwise would be #130 in a different file.
-   *
-   * Returns null when there was nothing to rescue — the ordinary case, since
-   * `commitIfDirty` has already run on every path that reaches `done`.
-   */
   private async rescueUncommitted(
     story: StoryContext,
     status: PlanStatus,
     reason: string | null,
   ): Promise<RescuedWork | null> {
-    const id = story.planned.story.id;
-    // The framework's own state dirs are excluded from the question and from the
-    // commit, exactly as `commitIfDirty` excludes them: a worktree of a repo that
-    // IS the workspace root also holds `tldrx-work/`, and a rescue that swept the
-    // run log into a commit would be a worse record than none.
-    const state = stateDirPrefixes(this.workspace.root, story.repoDir);
-    return await this.writes.run(async () => {
-      if (!existsSync(story.worktree)) return null;
-      if (!(await isDirty(story.worktree, state))) return null;
-      const committed = await commitAll(
-        story.worktree,
-        `wip(${id}): rescued from a story that settled \`${status}\`\n\n`
-        + `${reason ?? "no reason was recorded"}\n\n`
-        + "Committed by tldrx before its worktree was pruned, so the work reaches a ref.\n"
-        + "Nothing reviewed this and nothing merged it (gh #129).",
-        state,
-      );
-      const sha = committed.ok ? await headSha(story.worktree) : "";
-      if (sha === "") {
-        const failure = firstLine(committed.stderr) || firstLine(committed.stdout)
-          || "git wrote no commit and said nothing";
-        this.lines.push(
-          `  · ${id}: its worktree holds changes that reached NO ref and could not be committed `
-          + `(${failure}) — KEEPING ${story.worktree} rather than deleting the only copy`,
-        );
-        return { sha: null, branch: story.branch, worktree: story.worktree, failure };
-      }
-      this.lines.push(
-        `  · ${id}: uncommitted work RESCUED to \`${story.branch}\` as \`${sha}\` `
-        + "before its worktree was pruned — `git show " + sha + "`",
-      );
-      this.ctx.emit("story.work_rescued", {
-        phase: this.ctx.phaseId,
-        story: id,
-        repo: story.planned.story.repo,
-        branch: story.branch,
-        sha,
-        status,
-      });
-      return { sha, branch: story.branch, worktree: null, failure: null };
+    return await rescueUncommitted({
+      storyId: story.planned.story.id,
+      repo: story.planned.story.repo,
+      workspaceRoot: this.workspace.root,
+      repoDir: story.repoDir,
+      worktree: story.worktree,
+      branch: story.branch,
+      phaseId: this.ctx.phaseId,
+      status,
+      reason,
+      lines: this.lines,
+      emit: (type, payload) => { this.ctx.emit(type, payload); },
+      write: (work) => this.writes.run(work),
     });
   }
 
@@ -3877,427 +2862,6 @@ function numberOf(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-/**
- * What `events.jsonl` already says about one story, for the questions a fresh
- * process cannot answer from memory: how many times has it really been REVIEWED,
- * is it waiting on a review that FAILED, and did its last DEVELOPER ever run?
- */
-export interface ReviewLedger {
-  /**
-   * Real verdicts — `approve` or `changes`. This is the requeue counter, and an
-   * errored review is deliberately not one of them.
-   */
-  readonly verdicts: number;
-  /**
-   * Fix-list rounds this story has been GRANTED (design §B.4) — the bound's
-   * counter.
-   *
-   * Deliberately separate from `verdicts`: a `fixlist` is a real verdict that
-   * costs no attempt, so counting it there would spend the requeue it exists not
-   * to spend, and not counting it anywhere would make the one-round bound
-   * unenforceable across processes. Reset by `story.reopened` like every other
-   * count here — a person who reopens a story hands it a fresh run of attempts,
-   * and a fresh fix-list round with them.
-   */
-  readonly fixlistRounds: number;
-  /** The error of the LAST review, when it errored and nothing judged it since. */
-  readonly erroredWith: string | null;
-  /** The story commit the last `task.done` recorded — the diff already merged. */
-  readonly commit: string | null;
-  /** The DoD results of the last developer attempt that actually ran one. */
-  readonly dod: readonly DodResult[];
-  /**
-   * The error the LAST developer died with, when it died and nothing has run
-   * since — read off the `check: "developer"` event this executor writes.
-   */
-  readonly developerErroredWith: string | null;
-  /**
-   * COMPAT: the story's last attempt was blocked having produced nothing the
-   * PIPELINE recorded — no commit at `task.done`, no check of any kind, no
-   * reviewer spawned.
-   *
-   * A run recorded before `check: "developer"` existed wrote an errored
-   * developer spawn exactly like this and left no other trace in
-   * `events.jsonl`; the error itself went only to `run.yml`'s task row.
-   * Measured 2026-08-30 in `260830-tenancy-identity-customers`, five times:
-   *
-   *   {"type":"task.started","payload":{"story":"S2","attempt":1}}
-   *   {"type":"agent.spawned","payload":{"story":"S2","role":"developer"}}
-   *   {"type":"task.done","payload":{"story":"S2","status":"blocked",
-   *                                  "verdict":"n-a","commit":null}}
-   *
-   * "Nothing the pipeline recorded" is the careful phrasing, and the same run is
-   * why: two of those five story branches (S4, S5) DO carry a commit the dying
-   * developer made with its own `git commit` before the budget bit. Nothing ran
-   * a DoD over it, nothing merged it and nothing read it — which is exactly why
-   * the story is owed the attempt again rather than blocked on it.
-   *
-   * It is NOT on its own proof of a failed spawn — a story with an empty dod
-   * block blocks identically — so the caller pairs it with the story's own plan.
-   */
-  readonly blockedWithNothingRun: boolean;
-  /**
-   * The last `story.reopened` — a person giving this story another run of
-   * attempts (`tldrx story reopen`, `run/reopenStory.ts`) — or null.
-   *
-   * It is a RESET BOUNDARY, not a field with a reader: every count above starts
-   * again at it, so a verdict recorded before a reopen does not spend an attempt
-   * of the reopened story. Nothing is erased to achieve that. The events are all
-   * still in the log; this reads the last boundary in it.
-   */
-  readonly reopened: { readonly at: string; readonly actor: string; readonly note: string } | null;
-  /**
-   * The OPEN fix round on this story (issue #58), or null when there is none.
-   *
-   * A fix round is `tldrx story reopen <id> --for-fix --note "<defect>"`: a DONE
-   * story reopened to land one named defect, consuming no attempt. It OPENS on
-   * that event and CLOSES when the story is `done` again — nothing else closes
-   * it, and a plain reopen deliberately does not: a fix round that blocked and
-   * was granted more attempts is still the same unfixed defect.
-   *
-   * One story may have exactly one open at a time (owner constraint,
-   * 2026-09-01), and this is the field that enforces it across processes. It is
-   * the bound's counter in the same way `fixlistRounds` is — read from the log,
-   * because a second `tldrx` invocation remembers nothing.
-   */
-  readonly fixRound: { readonly at: string; readonly actor: string; readonly note: string } | null;
-  /**
-   * Free re-prompts already granted for the story's OPEN envelope round (#78).
-   *
-   * The bound's counter, and the reason it is read from the log: `--commit
-   * --review` settles one envelope per process, so a limit this process alone
-   * remembered would reset on every host correction. It restarts at zero the
-   * moment any review verdict is recorded — including an errored one — because
-   * the bound is per envelope round, not per story.
-   */
-  readonly formatRetries: number;
-  /**
-   * What the format check said about the last refused envelope, or null.
-   *
-   * Cleared by the same events that reset `formatRetries`, so it is never advice
-   * about a round that has already closed. `--prepare --review` splices it back
-   * into a rewritten prompt: a host asked for a corrected envelope must not be
-   * handed the brief that produced the broken one.
-   */
-  readonly formatRefusal: string | null;
-}
-
-/**
- * What the PHASE has spent so far, for the handoff header — never what THIS
- * process spent (#138).
- *
- * `04-build/handoff.md` is rewritten by every invocation that reaches `finish()`,
- * over a document whose own docstring says it "describes the phase, not the
- * invocation". The header was fed `this.spent()`, the sum of the tasks this
- * process spawned, so a `tldrx next` → `tldrx reject` → `tldrx next` rewrote a
- * phase that had spent $0.44 as one that had spent `$0.00`: the second invocation
- * settled nothing, spent nothing, and said so about the whole phase.
- *
- * **The durable source is `run.yml`'s `stage.cost_usd`**, and it is chosen over
- * the `agent.result` events for one reason: it is the ledger the BUDGET is
- * derived from, and it validates its own arithmetic. `rollUp` recomputes it from
- * `stage.tasks` on every save (`RunStore.ts:378`), `rollUpBudget` mirrors it into
- * `budget.yml`, `run status` and the dashboard both read it (`dashboard/model.ts`,
- * `stage.cost_usd`), and `validateRunFile` REFUSES a `run.yml` whose
- * `budget.spent_usd` drifts from the sum of its task rows by more than a cent
- * (`RunFile.ts:647`). The events ledger carries the same numbers — every
- * `recordTask` is paired with an `agent.result` written from the same task in the
- * same loop — but nothing checks that it still does, so reading it here would put
- * a second, unpoliced derivation of the budget on the page beside the first.
- *
- * Three properties this relies on, each verified rather than assumed:
- *
- *  - **`tldrx reject` does not touch it.** It rewrites `status`, `ended_at` and
- *    `gate` and nothing else (`run/gates.ts`), so a rejected stage keeps every
- *    dollar it spent. That is the right answer to "what should a reject do to the
- *    number a re-run reports": nothing. The money was spent.
- *  - **This invocation is not in it yet.** `recordExecutorTasks` runs in
- *    `runNext` AFTER the executor returns, so at `writeHandoff` time `run.yml`
- *    holds the earlier invocations and `invocationUsd` holds this one. Adding
- *    them cannot double-count.
- *  - **Opening the store mid-stage is the established shape here**, not a new
- *    coupling: the executor already does exactly `RunStore.open(runDir).run` for
- *    the run title and for the epic-branch state.
- *
- * When the ledger cannot be read at all — no `run.yml`, one that fails schema
- * validation, or a stage id that does not resolve — the answer is NOT a confident
- * total. It falls back to this invocation's own spend and says which of the two
- * numbers the reader is looking at.
- *
- * **And the total it CAN read is a lower bound whenever a turn ran in-session**
- * (#139). A host session driving `--prepare`/`--commit` without `--cost-usd` is
- * recorded as `cost_usd: null` + `metered: false`, and `rollUp` sums that as
- * nothing — so `stage.cost_usd` is what the METERED turns cost, not what the
- * stage cost. Measured, not inferred: a run whose developer was the host's and
- * whose reviewer was a $0.11 spawn wrote `Cost: $0.11 of $200.00 ceiling`, a bare
- * figure indistinguishable from a stage where every turn was billed here.
- *
- * The counting and the sentence come from `budget/spendBasis.ts`, which is also
- * where the dashboard's `spend.reason` comes from (#103) and where `budget show`'s
- * "LOWER BOUND, not a total" is spelled — the caveat is one derivation on three
- * surfaces rather than three wordings of one fact. The turns are the same rows
- * the sum above is made of, plus this invocation's, for the same reason
- * `invocationUsd` is added to it: the first write of a handoff happens before
- * `recordExecutorTasks` puts them in the file.
- *
- * A stage whose every turn WAS metered gets no note at all. `measured` is the one
- * basis with nothing to say, and a caveat on every header is a caveat nobody reads.
- */
-export function phaseCostToDate(
-  runDir: string,
-  phaseId: string,
-  stageId: string,
-  invocationUsd: number,
-  invocationTurns: readonly ExecutorTask[] = [],
-): { readonly usd: number; readonly note: string | null } {
-  let recorded: number | null = null;
-  let turns: SpendTurn[] = [];
-  try {
-    const found = stageAt(RunStore.open(runDir).run, { phase: phaseId, stage: stageId, task: null });
-    if (found !== null) {
-      recorded = found.stage.cost_usd;
-      // The rows the sum above is made of. `metered` is written only when it is
-      // `false`, so an absent one means metered — every row from before the field
-      // existed, and every headless spawn.
-      turns = found.stage.tasks.map((task) => ({
-        costUsd: task.cost_usd,
-        metered: task.metered !== false,
-        tokens: task.tokens ?? null,
-      }));
-    }
-  } catch {
-    // A run.yml that is missing, torn, or invalid. The handoff is still worth
-    // writing; the header just has to stop pretending it knows the phase total.
-    recorded = null;
-  }
-  // This invocation's turns are not in `run.yml` yet — `recordExecutorTasks` runs
-  // after the executor returns — so they are counted from the executor's own list,
-  // exactly as `invocationUsd` is added to the sum. Without them the FIRST write
-  // of a handoff would count nothing at all and report a host-driven stage as
-  // fully metered (#139).
-  turns = [
-    ...turns,
-    ...invocationTurns.map((task) => ({
-      costUsd: task.metered === false ? null : round2(task.costUsd),
-      metered: task.metered !== false,
-      tokens: task.tokens ?? null,
-    })),
-  ];
-  const counted = spendBasisOf(turns, turns.reduce((sum, t) => sum + (t.tokens ?? 0), 0), "stage");
-  // A fully metered stage keeps its clean line: `measured` is the one basis with
-  // nothing to caveat, and a caveat on every header is a caveat nobody reads.
-  const bound = counted.basis === "measured" ? null : counted.reason;
-  if (recorded === null) {
-    return {
-      usd: round2(invocationUsd),
-      note: "this invocation only — `run.yml` could not be read for what the stage spent before it"
-        + (bound === null ? "" : `; ${bound}`),
-    };
-  }
-  return { usd: round2(recorded + invocationUsd), note: bound };
-}
-
-/** Everything the two resume paths and the requeue counter need, in one pass. */
-export function readReviewLedger(runDir: string, storyId: string): ReviewLedger {
-  const path = join(runDir, "events.jsonl");
-  const empty: ReviewLedger = {
-    verdicts: 0, fixlistRounds: 0, erroredWith: null, commit: null, dod: [],
-    developerErroredWith: null, blockedWithNothingRun: false, reopened: null, fixRound: null,
-    formatRetries: 0, formatRefusal: null,
-  };
-  if (!existsSync(path)) return empty;
-
-  let verdicts = 0;
-  let fixlistRounds = 0;
-  let erroredWith: string | null = null;
-  let commit: string | null = null;
-  // The three the DEVELOPER side needs, all scoped to the story's LAST attempt:
-  // what its developer died with, whether ANY check ran under it, and whether a
-  // reviewer was ever spawned. Together they separate "the turn never happened"
-  // from every other way a story blocks.
-  let developerErroredWith: string | null = null;
-  let ranACheck = false;
-  let sawReviewer = false;
-  let blockedWithNothingRun = false;
-  // `dod` is the last attempt that got as far as running its DoD; `current` is
-  // what THIS attempt has run so far. An attempt that was started and produced
-  // nothing must not erase the proof of the one before it — measured on the live
-  // run, where the wrongly-prepared "attempt 2" left S1 with no DoD at all.
-  let dod: DodResult[] = [];
-  let current: DodResult[] = [];
-  let reopened: ReviewLedger["reopened"] = null;
-  let fixRound: ReviewLedger["fixRound"] = null;
-  let formatRetries = 0;
-  let formatRefusal: string | null = null;
-
-  for (const line of readFileSync(path, "utf8").split("\n")) {
-    if (line.trim() === "") continue;
-    let event: { ts?: string; actor?: string; type?: string; payload?: Record<string, unknown> };
-    try {
-      event = JSON.parse(line) as typeof event;
-    } catch {
-      // A half-written last line is not a reason to lose the count.
-      continue;
-    }
-    const payload = event.payload ?? {};
-    if (payload.story !== storyId) continue;
-
-    // A person reopened the story: everything before this line belongs to a run
-    // of attempts an owner has closed by hand, and none of it counts against the
-    // one starting here. This is the only branch that resets `verdicts` — the
-    // requeue counter — and it is deliberately the only one that can, because it
-    // is the only one a human signs (`run/reopenStory.ts`). Nothing is erased:
-    // the events it steps over are still in this file and still read by `replay`,
-    // `cost` and `retro`, and the reopen event itself records the count it reset.
-    if (event.type === "story.reopened") {
-      verdicts = 0;
-      fixlistRounds = 0;
-      erroredWith = null;
-      commit = null;
-      dod = [];
-      current = [];
-      developerErroredWith = null;
-      ranACheck = false;
-      sawReviewer = false;
-      blockedWithNothingRun = false;
-      reopened = {
-        at: typeof event.ts === "string" ? event.ts : "",
-        actor: typeof event.actor === "string" ? event.actor : "",
-        note: typeof payload.note === "string" ? payload.note : "",
-      };
-      // A FIX round opens here and is not closed by the reset above (#58): the
-      // counters restart, the defect does not stop existing. Deliberately NOT
-      // cleared by a plain reopen either — a fix that blocked and was granted
-      // more attempts is the same fix round, still owed.
-      if (payload.reason === "fix") fixRound = reopened;
-      formatRetries = 0;
-      formatRefusal = null;
-      continue;
-    }
-
-    // One envelope refused on its FORMAT and sent back, costing no attempt (#78).
-    // Counted here and nowhere else: the grant is what this event records, and a
-    // grant that a fresh `tldrx next` could not see would not be a bound.
-    if (event.type === "story.review_retried") {
-      formatRetries++;
-      formatRefusal = typeof payload.detail === "string" && payload.detail.trim() !== ""
-        ? payload.detail.trim()
-        : null;
-      continue;
-    }
-
-    // A new attempt starts a new DoD run; only the latest one that RAN describes
-    // the diff on the branch now.
-    if (event.type === "task.started") {
-      if (current.length > 0) dod = current;
-      current = [];
-      // Everything the developer side asks is about the LAST attempt, so every
-      // attempt starts the question again. An attempt that RUNS clears the
-      // failure the one before it recorded.
-      developerErroredWith = null;
-      ranACheck = false;
-      sawReviewer = false;
-      blockedWithNothingRun = false;
-    }
-    if (event.type === "agent.spawned" && payload.role === "reviewer") sawReviewer = true;
-    if (event.type === "task.done") {
-      if (typeof payload.commit === "string" && payload.commit !== "") commit = payload.commit;
-      // The story finished again: whatever fix round was open has landed, and the
-      // next named defect may open one of its own (#58). This is the ONLY thing
-      // that closes one — the same handshake that closed the story the first time.
-      if (payload.status === "done") fixRound = null;
-      // The COMPAT shape, decided at the moment the attempt ended: blocked with
-      // nothing to show for itself and nothing that could have judged it.
-      blockedWithNothingRun = payload.status === "blocked"
-        && payload.verdict === "n-a"
-        && (payload.commit === null || payload.commit === undefined || payload.commit === "")
-        && !ranACheck
-        && !sawReviewer;
-    }
-    if (event.type !== "check.passed" && event.type !== "check.failed") continue;
-
-    // The developer's own check, and the only outcome it has is `error` — a
-    // developer that RAN is judged by its DoD and its reviewer, never by this.
-    // It is deliberately not counted as a check that RAN: the record of a spawn
-    // that never happened is not evidence that something happened.
-    if (payload.check === "developer") {
-      developerErroredWith = typeof payload.detail === "string" && payload.detail.trim() !== ""
-        ? payload.detail.trim()
-        : DEVELOPER_FAILED;
-      continue;
-    }
-    ranACheck = true;
-
-    if (payload.check === "dod" && typeof payload.command === "string") {
-      const exitCode = typeof payload.exit_code === "number" ? payload.exit_code : 0;
-      current.push({
-        command: payload.command,
-        exitCode,
-        timedOut: exitCode === 124,
-        tail: typeof payload.detail === "string" ? payload.detail : "",
-      });
-      continue;
-    }
-    if (payload.check !== "review") continue;
-
-    // Any recorded review CLOSES the envelope round — an error and a fix list as
-    // much as a counted verdict — so the next one starts with its corrections
-    // again. Mirrors `recordReview`, which resets the in-process counter for
-    // exactly the same set of outcomes (#78).
-    formatRetries = 0;
-    formatRefusal = null;
-
-    if (reviewEventErrored(payload)) {
-      erroredWith = typeof payload.detail === "string" && payload.detail.trim() !== ""
-        ? payload.detail.trim()
-        : "the reviewer sub-agent failed";
-      continue;
-    }
-    // A fix list is a verdict that spent no attempt. It clears the errored-review
-    // flag like any other judgement — something DID read the diff — and it is
-    // counted only against its own bound.
-    if (payload.verdict === "fixlist") {
-      fixlistRounds++;
-      erroredWith = null;
-      continue;
-    }
-    verdicts++;
-    erroredWith = null;
-  }
-  return {
-    verdicts,
-    fixlistRounds,
-    erroredWith,
-    commit,
-    dod: current.length > 0 ? current : dod,
-    developerErroredWith,
-    blockedWithNothingRun,
-    reopened,
-    fixRound,
-    formatRetries,
-    formatRefusal,
-  };
-}
-
-/** One event payload's `detail`, bounded — spec §2.9 caps a payload at 4 KB. */
-function clipDetail(detail: string): string {
-  const text = detail.replace(/\s+/g, " ").trim();
-  return text.length <= 1200 ? text : `${text.slice(0, 1197)}…`;
-}
-
-/**
- * Did this recorded review event describe a reviewer that FAILED?
- *
- * Two shapes, because two eras. A run written by this code says so:
- * `verdict: "error"`. A run written before it existed said `verdict: "changes"`
- * and put the spawn layer's error in `detail` — see `looksLikeReviewerError`.
- */
-function reviewEventErrored(payload: Record<string, unknown>): boolean {
-  if (payload.verdict === "error") return true;
-  if (payload.verdict !== "changes") return false;
-  return typeof payload.detail === "string" && looksLikeReviewerError(payload.detail);
-}
-
 function isPlanStatus(value: string | undefined): value is PlanStatus {
   return value !== undefined && ["todo", "in_progress", "review", "done", "blocked"].includes(value);
 }
@@ -4346,6 +2910,13 @@ function failed(ctx: ExecutorContext, error: string, tasks: readonly ExecutorTas
   };
 }
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
+// --- re-exports: the public surface does not move -------------------------
+//
+// `src/core/run/reopenStory.ts:54` and nine test files import these FROM HERE.
+// Wave 2 moves where they are defined and nothing else; a re-export is how
+// "the same symbol, a different file" stays true for every caller.
+export { readReviewLedger, phaseCostToDate };
+export {
+  clampParallel, developerPriceDivisor,
+  DEFAULT_PARALLEL, MAX_ATTEMPTS, REVIEWER_FLOOR_USD, REVIEWER_SHARE,
+};

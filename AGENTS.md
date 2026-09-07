@@ -195,5 +195,16 @@ history is the style guide — read a few recent closes before writing yours.
 - `dotnet`-style multi-command wrappers, `timeout` missing on macOS, `echo` mangling `\n`
   before `jq` — when an instrument gives a weird reading, suspect the instrument first and say
   you did.
-- `src/core/facilitator/executors/build.ts` is ~4k lines by design debt; its decomposition is a
-  planned roadmap item — do not drive-by restructure it inside another change.
+- `src/core/facilitator/executors/build.ts` was ~4k lines of design debt and was decomposed in
+  wave 2: it is now a ~2.9k-line ORCHESTRATOR over `src/core/build/` — `reviewLedger.ts`,
+  `phaseCost.ts`, `caps.ts`, `dodRunner.ts`, `worktrees.ts`, `branchClaims.ts`,
+  `reviewBundle.ts`, `reviewRound.ts` — and it still exports every moved symbol anything
+  imports, so importers keep writing `from ".../executors/build.ts"` and must keep working.
+  Two house rules came out of that wave and hold for whatever you move next. **An extracted
+  function takes DATA, never `ctx` and never the session** — mutable state the orchestrator used
+  to hide becomes an explicit value it owns and passes (`PreflightCache`, `EpicState`,
+  `ReviewCounters`). And **`test/build-golden.test.ts` is the byte-level proof**: it freezes both
+  spawned prompts, the `--prepare` bundle's prompt, the ordered events with their payload keys
+  and values, `run.yml`'s task rows and the exit codes of a real fake-agent build, so a golden
+  byte change IS a behaviour change — either it is the change you meant and you say so in the
+  commit, or you REVERT. Never "update the golden" to make a diff go away.

@@ -160,3 +160,21 @@ export function dodGreen(outcome: Pick<StoryOutcome, "dod">): boolean {
 export function describeOutcome(outcome: StoryOutcome): string {
   return `${outcome.id} ${outcome.status}`;
 }
+
+/**
+ * A refusal a Build step raises, as DATA: the operator lines and the one-line
+ * `stage.error`. `src/core/build/` never builds an `ExecutorOutcome` — the
+ * executor owns the shape of what it returns, and a refusal that could be
+ * assembled in two places would be two refusals.
+ */
+export interface BuildRefusal {
+  readonly lines: readonly string[];
+  readonly error: string;
+}
+
+/**
+ * The executor's single writer (`SerialQueue.run` in `executors/build.ts`),
+ * passed in wherever a leaf needs to serialize a disk or `run.yml` write —
+ * never re-implemented alongside it.
+ */
+export type SerialWrite = <T>(work: () => Promise<T> | T) => Promise<T>;
