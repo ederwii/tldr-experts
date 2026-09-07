@@ -410,7 +410,7 @@ const ENTRIES: readonly CommandHelp[] = [
       { ...runFlag(), sub: "auto" },
       maxUsd("auto"),
       { name: "until", arg: "<stage>", meaning: "Stop the loop before this stage rather than at the first human gate.", sub: "auto" },
-      { name: "parallel", arg: "<n>", meaning: "How many stories of ONE build wave run at once. `waves.yml` already guarantees a dependency is in an earlier wave, so a wave's stories are independent by construction. Merges into the epic still happen in the wave's listed order, after every story of that wave has finished, and each sub-agent keeps its own budget share. Default 1: one story at a time, exactly as before. Overrides the workflow's `build: {parallel: N}` and stage.yml's `parallel:`.", sub: "auto" },
+      { name: "parallel", arg: "<n>", meaning: "How many stories of ONE build wave run at once. `waves.yml` already guarantees a dependency is in an earlier wave, so a wave's stories are independent by construction. Merges into the epic still happen in the wave's listed order, after every story of that wave has finished, and each sub-agent keeps its own budget share. The shipped `stages/build/stage.yml` declares `parallel: 2`, so two at a time is what a workspace overriding nothing gets; the code fallback, for a stage file that declares none, is 1. Overrides the workflow's `build: {parallel: N}` and stage.yml's `parallel:`.", sub: "auto" },
       {
         name: "gate-agent",
         arg: null,
@@ -549,7 +549,7 @@ const ENTRIES: readonly CommandHelp[] = [
       },
       yolo(),
       { name: "keep-worktrees", arg: null, meaning: "Leave the per-story worktrees on disk after the build stage finishes with them, and the run's epic worktrees on disk after the run closes. The epic checkouts survive the Build stage either way (a later Watch stage cites code that is committed on the epic branch and merged nowhere); this flag is what makes them survive the run itself. Remembered on the run, so a close by `tldrx approve` or `tldrx run cancel` honours it too." },
-      { name: "parallel", arg: "<n>", meaning: "How many stories of ONE build wave run at once. `waves.yml` already guarantees a dependency is in an earlier wave, so a wave's stories are independent by construction. Merges into the epic still happen in the wave's listed order, after every story of that wave has finished, and each sub-agent keeps its own budget share. Default 1: one story at a time, exactly as before. Overrides the workflow's `build: {parallel: N}` and stage.yml's `parallel:`." },
+      { name: "parallel", arg: "<n>", meaning: "How many stories of ONE build wave run at once. `waves.yml` already guarantees a dependency is in an earlier wave, so a wave's stories are independent by construction. Merges into the epic still happen in the wave's listed order, after every story of that wave has finished, and each sub-agent keeps its own budget share. The shipped `stages/build/stage.yml` declares `parallel: 2`, so two at a time is what a workspace overriding nothing gets; the code fallback, for a stage file that declares none, is 1. Overrides the workflow's `build: {parallel: N}` and stage.yml's `parallel:`." },
       {
         name: "discard-pending",
         arg: null,
