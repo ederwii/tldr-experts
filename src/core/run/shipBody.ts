@@ -33,6 +33,7 @@
 import { parseHandoff } from "../text/handoff.ts";
 import { findingStatus } from "../build/handoff.ts";
 import type { FixFinding } from "../build/fixlist.ts";
+import type { CarriedRow } from "../build/carriedRows.ts";
 
 /** One open fix-list finding, with the file it is still open in. */
 export interface OpenFindingRow {
@@ -50,6 +51,17 @@ export interface ShipBodyParts {
   readonly handoffRel: string;
   /** Open fix-list findings, from `build/fixlist.ts`. NEVER re-parsed here. */
   readonly openFindings: readonly OpenFindingRow[];
+  /**
+   * Carried findings (`defer-with-log`, unresolved) no story's `touches:` covers,
+   * from `build/carriedRows.ts` (#171). NEVER re-derived here.
+   *
+   * The same rows the Build handoff's `## Unknowns` carries, from the same leaf:
+   * `ship` runs in its own process, so it CALLS that leaf rather than holding a
+   * second opinion about what "carried" or "unowned" means. Empty leaves the
+   * section out entirely — an empty section would be a claim that this was
+   * checked and found none, which is a different sentence from "nothing to say".
+   */
+  readonly carriedFindings: readonly CarriedRow[];
 }
 
 /** `## Findings` in a handoff: one bullet per story, with its status in it. */
@@ -94,6 +106,20 @@ export function renderShipBody(parts: ShipBodyParts): string {
       "",
       ...parts.openFindings.map((row) =>
         `- ${String(row.finding.n)} · ${row.finding.finding} [${row.finding.severity}] — \`${row.rel}\``),
+      "",
+    );
+  }
+
+  if (parts.carriedFindings.length > 0) {
+    lines.push(
+      "## Carried findings",
+      "",
+      "Reviewer findings this run deliberately did NOT fix (`defer-with-log`), whose path no",
+      "story's `touches:` covers — so no story could have closed them:",
+      "",
+      ...parts.carriedFindings.map((row) =>
+        `- ${String(row.row.finding.n)} · ${row.row.finding.finding} [${row.row.finding.severity}] — `
+        + `${row.row.reason} — \`${row.rel}\``),
       "",
     );
   }

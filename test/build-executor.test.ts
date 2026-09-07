@@ -23,6 +23,8 @@ import {
 } from "../src/core/facilitator/executors/build.ts";
 import { looksLikeReviewerError, renderReviewLog, reviewerFailed } from "../src/core/build/review.ts";
 import { renderBuildHandoff, type BuildHandoffParts } from "../src/core/build/handoff.ts";
+import { renderFixlist, type FixFinding } from "../src/core/build/fixlist.ts";
+import type { CarriedRow } from "../src/core/build/carriedRows.ts";
 import { storyRetroLines } from "../src/core/build/retroLog.ts";
 import { buildReviewerPrompt } from "../src/core/build/prompts.ts";
 import { DOD_REFUSAL_FALLBACK, dodGreen, type StoryOutcome } from "../src/core/build/outcome.ts";
@@ -37,7 +39,7 @@ import { buildStatus, renderStatus } from "../src/core/run/runStatus.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { spendReason } from "../src/core/budget/spendBasis.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
-import { validateHandoff } from "../src/core/text/handoff.ts";
+import { emptySrcContext, MAX_BULLETS, validateHandoff } from "../src/core/text/handoff.ts";
 import { loadWorkspace, toSrcContext } from "../src/hooks/lib/workspace.ts";
 import {
   assertWorktreeOn, cleanUpRunEpicWorktrees, diffCommand, GitError, partitionDirty, porcelainPath,
@@ -3021,5 +3023,164 @@ describe("#165 · a refused DoD command is recorded as refused", () => {
     expect(prompt).toContain("- `npm run test` → exit 0");
     expect(prompt).toContain("- `npm run lint` → REFUSED, never ran");
     expect(prompt).not.toContain("`npm run lint` → exit");
+  });
+});
+
+/**
+ * A carried finding no story's declared surface covers reaches `## Unknowns` (#171).
+ *
+ * `renderBuildHandoff` places the rows and nothing else: the judgement lives in
+ * `build/unownedFindings.ts` (`ownershipOf` + `unownedFindings`) and the disk
+ * walk in `build/carriedRows.ts`. What is pinned here is the RENDER half — where
+ * the bullets land, that they carry a reason and a citation, that the `none`
+ * sentence now answers for both lists, and that the cap summarises rather than
+ * drops.
+ *
+ * `## Unknowns` and not a fifth H2 section, deliberately: `missingSections`
+ * tolerates extras but `validateSections` only checks bullets INSIDE the four
+ * required sections, so a fifth section's claims would be the one part of the
+ * document nothing validates — the hole §2.8 exists to close.
+ */
+describe("a carried finding nobody's story owns reaches `## Unknowns` (#171)", () => {
+  const CARRIED_BASE: BuildHandoffParts = {
+    runId: "260907-x", stageId: "build", model: null, costUsd: 0, budgetUsd: 8,
+    at: "2026-09-07T09:00:00Z", outcomes: [], epics: [],
+  };
+
+  function parts(overrides: Partial<BuildHandoffParts>): BuildHandoffParts {
+    return { ...CARRIED_BASE, ...overrides };
+  }
+
+  /** One H2 section of the handoff, heading included, up to the next H2. */
+  function sectionOf(text: string, name: string): string {
+    const from = text.indexOf(`## ${name}\n`);
+    if (from === -1) return "";
+    const rest = text.slice(from + name.length + 4);
+    const ends = rest.indexOf("\n## ");
+    return `## ${name}\n${ends === -1 ? rest : rest.slice(0, ends)}`;
+  }
+
+  function finding(overrides: Partial<FixFinding> = {}): FixFinding {
+    return {
+      n: 1, severity: "high", finding: "a finding", where: "[src: app:platform/Auth.cs:3]",
+      disposition: "defer-with-log", detail: "", doNot: [], resolved: false, resolvedSha: null,
+      ...overrides,
+    };
+  }
+
+  function carriedRow(overrides: Partial<FixFinding> = {}, rel = "04-build/fixlist/S1-1.md"): CarriedRow {
+    return {
+      rel,
+      row: {
+        finding: finding(overrides),
+        ownership: "unowned",
+        reason: "no story declares this path in the repo it names",
+      },
+    };
+  }
+
+  /** A settled story, so `notDone` is empty and the `none` bullet is reachable. */
+  function doneStory(): StoryOutcome {
+    return {
+      id: "S1", title: "First story", wave: "W1", repo: "app", epic: "E1",
+      epicBranch: "epic/e1", branch: "story/S1", status: "done", attempts: 1,
+      dod: [{ command: "npm run test", status: "ran", exitCode: 0, timedOut: false, tail: "" }],
+      commit: "abc1234", merged: true, carried: 3, conflicts: [], verdict: "approve",
+      developerError: null, reviewSummary: "", reviewFindings: [],
+      reviewRel: "04-build/log/S1.md", reason: null, rescued: null, cost_usd: 0,
+    };
+  }
+
+  test("an unowned carried finding is a `## Unknowns` bullet with its reason and its citation", () => {
+    const text = renderBuildHandoff(parts({
+      carried: [{ rel: "04-build/fixlist/S1-1.md", row: {
+        finding: finding({ finding: "the token is logged" }),
+        ownership: "unowned", reason: "no story declares this path in the repo it names",
+      } }],
+    }));
+    const unknowns = sectionOf(text, "Unknowns");
+    expect(unknowns).toContain("the token is logged");
+    expect(unknowns).toContain("no story declares this path");
+    expect(unknowns).toContain("[src: 04-build/fixlist/S1-1.md:1]");
+    // And the section does NOT also claim nothing needs a human: a document that
+    // says `none` while listing something that does is worse than one that says
+    // neither, which is why the `none` sentence answers for both lists.
+    expect(unknowns).not.toContain("- none —");
+    // Not a fifth section: `validateSections` only checks bullets inside the four.
+    expect(text).not.toContain("## Carried findings");
+  });
+
+  test("absent behaves exactly as empty — the field adds no state of its own", () => {
+    // A GUARD, not a proof: both sides go through the new code, so it cannot catch
+    // a changed "none" sentence. The test below is the one that can.
+    expect(renderBuildHandoff(parts({}))).toBe(renderBuildHandoff(parts({ carried: [] })));
+  });
+
+  test("with nothing owed and nothing carried, the `none` bullet says BOTH, verbatim", () => {
+    // The sentence is user-visible, it is not in any golden artifact, and nothing
+    // pinned it before (measured: `grep -rn "every scheduled story reached" test/`
+    // returned no hit — the only occurrence was `src/core/build/handoff.ts:110`). A
+    // document that says "nothing needs a human" while listing something that does
+    // is worse than one that says neither, so the new wording is pinned literally.
+    const text = renderBuildHandoff(parts({ outcomes: [doneStory()], carried: [] }));
+    expect(sectionOf(text, "Unknowns")).toContain(
+      "- none — every scheduled story reached `done` and no carried finding is unowned "
+      + "[src: absent:04-build/log]",
+    );
+  });
+
+  test("beyond the cap the rows are summarised with a count and the citation, never dropped", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-171-cap-"));
+    try {
+      mkdirSync(join(dir, "04-build", "fixlist"), { recursive: true });
+      writeFileSync(join(dir, "04-build", "fixlist", "S1-1.md"), "# Fix list — S1\n", "utf8");
+      const many = Array.from({ length: 250 }, () => carriedRow());
+      const text = renderBuildHandoff(parts({ carried: many }));
+      const validation = validateHandoff(text, emptySrcContext(dir, dir));
+      expect({ ok: validation.ok, unsourced: validation.unsourced, unresolved: validation.unresolved })
+        .toEqual({ ok: true, unsourced: [], unresolved: [] });
+      expect(text).toContain("250");
+      expect(validation.bulletCount).toBeLessThanOrEqual(MAX_BULLETS);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * The §2.8 proof asked for by the controller: a handoff carrying REAL carried
+   * rows, over a real fix list on disk, passes `validateHandoff` — which is
+   * `validateSections` plus the cap, the same reader `claim-sources` runs. Every
+   * bullet in a checked section must end in a readable `[src: …]` token or the
+   * document is refused, and a citation nothing can resolve is `unresolved`.
+   */
+  test("a handoff with real carried rows passes the handoff validator", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-171-valid-"));
+    try {
+      mkdirSync(join(dir, "04-build", "fixlist"), { recursive: true });
+      mkdirSync(join(dir, "04-build", "log"), { recursive: true });
+      writeFileSync(join(dir, "04-build", "log", "S1.md"), "# Review log — S1\n", "utf8");
+      writeFileSync(join(dir, "04-build", "fixlist", "S1-1.md"), renderFixlist({
+        storyId: "S1", title: "First story", round: 1, attempt: 1, maxAttempts: 2,
+        diff: "git diff main...epic/e1", commit: "abc1234", summary: "signed, with findings",
+        findings: [finding({ finding: "the token is logged" })],
+      }), "utf8");
+
+      const text = renderBuildHandoff(parts({
+        outcomes: [doneStory()],
+        carried: [carriedRow({ finding: "the token is logged" })],
+      }));
+      const validation = validateHandoff(text, emptySrcContext(dir, dir));
+      expect({
+        ok: validation.ok,
+        unsourced: validation.unsourced,
+        malformed: validation.malformed,
+        unresolved: validation.unresolved,
+        emptySections: validation.emptySections,
+      }).toEqual({ ok: true, unsourced: [], malformed: [], unresolved: [], emptySections: [] });
+      // And the row really is in the checked section, not merely in the document.
+      expect(sectionOf(text, "Unknowns")).toContain("the token is logged");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

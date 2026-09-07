@@ -94,6 +94,7 @@ import { loadWorkspace, FALLBACK_DEFAULT_BRANCH } from "../../hooks/lib/workspac
 import { GH_BIN } from "../adapters/github.ts";
 import { renderShipBody, type OpenFindingRow } from "./shipBody.ts";
 import { latestFixlist, openFindings } from "../build/fixlist.ts";
+import { carriedRowsFor } from "../build/carriedRows.ts";
 import { BUILD_PHASE, PLAN_PHASE } from "../build/plan.ts";
 import { validateStoryFile } from "../schemas/story.ts";
 import { STORIES_DIR } from "../plan/validatePlan.ts";
@@ -191,7 +192,9 @@ export async function shipRun(options: ShipOptions): Promise<ShipOutcome> {
   // fix lists they own, and the state refusal needs the paths the settled ones
   // declare. Two reads would be two answers to "what did this run plan".
   const stories = runStories(store);
-  const body = writeShipBody(store, branch, handoff, stories);
+  const body = writeShipBody(
+    store, branch, handoff, stories, new Set(loadWorkspace(options.root).repos.keys()),
+  );
   try {
     return await shipTo(options, store, branch, body, stories);
   } finally {
@@ -855,6 +858,7 @@ function writeShipBody(
   branch: string,
   handoff: Handoff,
   stories: readonly ShipStory[],
+  repoNames: ReadonlySet<string>,
 ): ShipBody {
   const rows = openFixFindings(store, stories);
   const text = renderShipBody({
@@ -864,6 +868,13 @@ function writeShipBody(
     handoff: handoff.text,
     handoffRel: handoff.rel,
     openFindings: rows,
+    // `ship` applies NO predicate of its own here (#171). `carriedRowsFor` is the
+    // one implementation of "carried, and nobody's story owns it" — it calls
+    // `carriedFindings` and `unownedFindings`, and reads the story surfaces from
+    // the same pair the boundary gate reads, `03-plan/stories/` first and
+    // `04-build/implicit-plan.yml` on a Plan-skipped run. This verb calls it
+    // because it runs in a separate process, not because it has a second opinion.
+    carriedFindings: carriedRowsFor(store.runDir, repoNames, store.run.phases.map((phase) => phase.id)),
   });
   const path = join(mkdtempSync(join(tmpdir(), "tldrx-ship-")), "pr-body.md");
   writeFileSync(path, text, "utf8");

@@ -14,6 +14,7 @@
  */
 import { DOD_REFUSAL_FALLBACK, dodRefused } from "./outcome.ts";
 import type { StoryOutcome } from "./outcome.ts";
+import type { CarriedRow } from "./carriedRows.ts";
 import { PLAN_STATUSES, type PlanStatus } from "../schemas/planCommon.ts";
 
 export interface EpicSummaryRow {
@@ -92,7 +93,33 @@ export interface BuildHandoffParts {
    * Absent or null means the ordinary per-story path.
    */
   readonly storiesRel?: string | null;
+  /**
+   * Carried findings (`defer-with-log`, unresolved) that no story's `touches:`
+   * covers, computed by `build/carriedRows.ts` and HANDED here — this file parses
+   * no fix list and applies no predicate of its own (#171).
+   *
+   * They go in `## Unknowns` and not in a fifth section on purpose:
+   * `validateSections` only checks bullets inside the four required sections
+   * (`text/handoff.ts:387`), so a fifth section's claims would be the one part of
+   * the document nothing validates — precisely the hole §2.8 exists to close.
+   * `## Unknowns` is also where they belong by meaning: it already holds "this
+   * needs a human".
+   *
+   * Absent or empty leaves the section byte-identical to before this existed.
+   */
+  readonly carried?: readonly CarriedRow[];
 }
+
+/**
+ * How many carried rows get a bullet of their own before the rest are summarised.
+ *
+ * `MAX_BULLETS` is 200 across the four sections (`text/handoff.ts`), and the
+ * other three sections grow with the story count, so this cannot be the whole
+ * budget. Past the cap the rows are NEVER dropped: one bullet names the total and
+ * cites the first fix list, which is a claim with evidence behind it rather than
+ * a truncated list that silently under-reports what is owed.
+ */
+export const MAX_CARRIED_BULLETS = 25;
 
 export function renderBuildHandoff(parts: BuildHandoffParts): string {
   const done = parts.outcomes.filter((o) => o.status === "done");
@@ -117,13 +144,19 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
     "",
     "## Unknowns",
     "",
-    ...(notDone.length === 0
-      ? [`- none — every scheduled story reached \`done\` [src: absent:04-build/log]`]
-      : notDone.map(
-          (o) =>
-            `- ${o.id} is \`${o.status}\` and needs a human: ${o.reason ?? "see the review"} ` +
-            `[src: ${o.reviewRel}:1]`,
-        )),
+    // The `none` sentence answers for BOTH lists, because it is read as "nothing
+    // here needs a human": a document that said so while listing a carried
+    // finding nobody owns would be worse than one that said neither.
+    ...(notDone.length === 0 && (parts.carried ?? []).length === 0
+      ? [`- none — every scheduled story reached \`done\` and no carried finding is unowned `
+        + `[src: absent:04-build/log]`]
+      : []),
+    ...notDone.map(
+      (o) =>
+        `- ${o.id} is \`${o.status}\` and needs a human: ${o.reason ?? "see the review"} ` +
+        `[src: ${o.reviewRel}:1]`,
+    ),
+    ...carriedBullets(parts.carried ?? []),
     "",
     "## Evidence ledger",
     "",
@@ -255,6 +288,32 @@ function finding(outcome: StoryOutcome): string {
     ? landed
     : `${outcome.status} — ${where}: ${outcome.reason ?? "see the review"}`;
   return `- ${outcome.id} · ${outcome.title} — ${head} [src: ${outcome.reviewRel}:1]`;
+}
+
+/**
+ * One `## Unknowns` bullet per carried row, capped and never truncated (#171).
+ *
+ * The citation is the RUN-RELATIVE fix-list path — `[src: <rel>:1]` — which is
+ * how every other bullet in this document spells one (`finding()` cites
+ * `o.reviewRel` the same way), and `pathBases` resolves a bare `file` path
+ * against the workspace root first and the run dir second. Spec §3.2 suggested a
+ * `tldrx-work/<run>/…` prefix; one document carrying two spellings of one
+ * citation is worse than a document that disagrees with a sentence in the spec,
+ * and this deviation is deliberate.
+ */
+function carriedBullets(rows: readonly CarriedRow[]): readonly string[] {
+  const shown = rows.slice(0, MAX_CARRIED_BULLETS);
+  const bullets = shown.map((row) =>
+    `- a carried finding nobody's story owns: ${row.row.finding.finding} `
+    + `[${row.row.finding.severity}] — ${row.row.reason} [src: ${row.rel}:1]`);
+  if (rows.length <= MAX_CARRIED_BULLETS) return bullets;
+  const first = rows[0];
+  return [
+    ...bullets,
+    `- and ${String(rows.length - MAX_CARRIED_BULLETS)} more carried finding(s) nobody's story owns — `
+    + `${String(rows.length)} in all, listed in the fix lists themselves `
+    + `[src: ${first === undefined ? "absent:04-build/fixlist" : `${first.rel}:1`}]`,
+  ];
 }
 
 function decisions(parts: BuildHandoffParts): readonly string[] {

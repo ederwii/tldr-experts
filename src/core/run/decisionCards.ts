@@ -100,17 +100,35 @@ export interface Money {
  * refuses. What changed in #171 is that the line names a real VERB: it used to
  * say "add the path to a story's `touches:`", which is precisely the hand edit
  * `cli/commands/story.ts` forbids by design.
+ *
+ * `--for-fix` gets a line of its OWN rather than a clause inside the widen line,
+ * because it is a different command and the widen line is pinned byte-for-byte.
+ * Measured (Task 4, this wave): a Build auto gate that refuses on condition 7
+ * leaves its stories `done`, and `widenStory` refuses a `done` story — "its
+ * evidence was written against the surface it DECLARED". So the advice as it
+ * stood led an operator straight into a refusal on the commonest path there is.
+ *
+ * `extra` is carried findings nobody's story owns (#171), HANDED in by the
+ * caller from `build/carriedRows.ts` — this card still scrapes nothing, and it
+ * is an ADDITION to a card that was already going to print, never the reason one
+ * prints. The default `[]` keeps every two-argument call byte-identical.
  */
-export function boundaryCard(ctx: CardContext, detail: string): DecisionCard {
+export function boundaryCard(
+  ctx: CardContext,
+  detail: string,
+  extra: readonly string[] = [],
+): DecisionCard {
   return {
     kind: "boundary",
     run: ctx.runId,
     gate: `${ctx.phaseId}/${ctx.stageId}`,
     questions: [],
     headline: "Boundary — the epic changed paths nobody scoped",
-    detail: [detail],
+    detail: [detail, ...extra],
     commands: [
       "tldrx story widen <id> <path> --note \"<why>\" \u2014 or cite the path in a handoff, then re-run the stage",
+      "tldrx story reopen <id> --for-fix --note \"<the defect>\" \u2014 first, when the story is already "
+        + "`done`: widening finished work is refused",
       `tldrx approve --run ${ctx.runId}`,
       `tldrx reject --run ${ctx.runId} --note "<why>"`,
     ],
@@ -151,6 +169,12 @@ export function cardForTriggers(
   ctx: CardContext,
   triggers: readonly CardTrigger[],
   money: Money | null = null,
+  /**
+   * Carried findings nobody's story owns, already computed by the caller with
+   * `build/carriedRows.ts` (#171). They reach the boundary card only, and only
+   * when a boundary trigger was already going to draw one.
+   */
+  carried: readonly string[] = [],
 ): DecisionCard | null {
   if (triggers.length === 0) return null;
   if (triggers.some((t) => t.trigger === "questions")) {
@@ -161,7 +185,7 @@ export function cardForTriggers(
     if (card !== null) return card;
   }
   const boundary = triggers.find((t) => t.trigger === "boundary");
-  if (boundary !== undefined) return boundaryCard(ctx, boundary.detail);
+  if (boundary !== undefined) return boundaryCard(ctx, boundary.detail, carried);
   const budget = triggers.find((t) => t.trigger === "budget-event");
   if (budget !== undefined) return budgetCard(ctx, budget.detail, money);
   return gateCard(

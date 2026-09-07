@@ -98,6 +98,7 @@ import {
   type FixFinding, type FixlistOnDisk,
 } from "../../build/fixlist.ts";
 import { renderBuildHandoff, type EpicSummaryRow } from "../../build/handoff.ts";
+import { carriedRowsFor, type CarriedRow } from "../../build/carriedRows.ts";
 import {
   baseResultOf, PreflightCache, redBaseRefusal, runStoryDod, type BaseParts,
 } from "../../build/dodRunner.ts";
@@ -2331,7 +2332,21 @@ class BuildSession {
       outcomes,
       epics: this.epicRows(outcomes),
       storiesRel: this.plan.implicit ? IMPLICIT_PLAN_REL : null,
+      carried: this.carriedRows(),
     }), "utf8");
+  }
+
+  /**
+   * Carried findings this phase leaves owed that no story's surface covers (#171).
+   *
+   * Computed nowhere here: `carriedRowsFor` walks the fix lists and the declared
+   * surfaces, and the two predicates behind it live in `build/fixlist.ts` and
+   * `build/unownedFindings.ts`. The executor stays an orchestrator — it hands
+   * over the run directory and the workspace's repo names, which is the same set
+   * `toSrcContext` gives the `[src:]` grammar, and renders whatever comes back.
+   */
+  private carriedRows(): readonly CarriedRow[] {
+    return carriedRowsFor(this.ctx.runDir, new Set(this.workspace.repos.keys()));
   }
 
   /**

@@ -312,9 +312,43 @@ describe("a card per fallthrough kind", () => {
       "Boundary — the epic changed paths nobody scoped",
       `  ${detail}`,
       "  tldrx story widen <id> <path> --note \"<why>\" — or cite the path in a handoff, then re-run the stage",
+      "  tldrx story reopen <id> --for-fix --note \"<the defect>\" — first, when the story is already `done`: "
+        + "widening finished work is refused",
       "  tldrx approve --run 260830-tenancy",
       '  tldrx reject --run 260830-tenancy --note "<why>"',
     ]);
+  });
+
+  /**
+   * The carried rows a boundary card carries (#171).
+   *
+   * HANDED in, never scraped: `cardForTriggers`'s caller computes them with
+   * `build/carriedRows.ts`, the same leaf the Build handoff and the PR body read.
+   * The card is a SECONDARY surface — an addition to a card that was already
+   * going to print, never the reason one prints — so the no-extra call still
+   * renders exactly what it rendered before.
+   */
+  test("carried rows handed to the boundary card land under its detail", () => {
+    const detail = "13 changed path(s), 1 outside the surface: api:platform/Auth.cs";
+    const lines = renderDecisionCard(boundaryCard(ctx(), detail, [
+      "carried, unowned: 1 · the token is logged [high] — no story declares this path in the repo it names",
+    ]));
+    expect(lines[2]).toBe(`  ${detail}`);
+    expect(lines[3]).toBe(
+      "  carried, unowned: 1 · the token is logged [high] — no story declares this path in the repo it names",
+    );
+    // The advice still follows the detail, unchanged.
+    expect(lines[4]).toBe(
+      "  tldrx story widen <id> <path> --note \"<why>\" — or cite the path in a handoff, then re-run the stage",
+    );
+  });
+
+  test("no carried rows leaves the card byte-identical to the two-argument call", () => {
+    // A GUARD: both sides go through the new parameter, so it cannot catch a
+    // changed advice line. The `toEqual` above is the test that can.
+    const detail = "13 changed path(s), 1 outside the surface: api:platform/Auth.cs";
+    expect(renderDecisionCard(boundaryCard(ctx(), detail, [])))
+      .toEqual(renderDecisionCard(boundaryCard(ctx(), detail)));
   });
 
   test("gate — every other reason, carried with its reason", () => {

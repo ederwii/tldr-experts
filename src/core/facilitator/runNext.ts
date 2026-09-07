@@ -23,6 +23,7 @@ import { approve } from "../run/gates.ts";
 import { AUTO_GATE_ACTOR, evaluateAutoGate, unreadableHeadings } from "../run/autoGate.ts";
 import { describeAgentFallthroughs, evaluateAgentGate } from "../run/agentGate.ts";
 import { cardForTriggers, type Money } from "../run/decisionCards.ts";
+import { carriedCardLine, carriedRowsFor } from "../build/carriedRows.ts";
 import { renderDecisionCard } from "../ui/decisionCard.ts";
 import { gatePolicyFor } from "../run/gatePolicy.ts";
 import type { BranchModelKind } from "../plan/branchModel.ts";
@@ -1722,6 +1723,12 @@ async function finishStage(
       // shape a host hand-composed in chat on 2026-08-30 and an owner answered in
       // seconds. Appended, never substituted: nothing that reads these lines today
       // loses a byte, and a fallthrough the card cannot shape still reports itself.
+      // The carried rows the card carries (#171) come from the one leaf every
+      // other surface reads — the Build handoff's `## Unknowns` and the `ship` PR
+      // body — so a person deciding this gate sees the same list the documents
+      // do. They are an ADDITION to a card that is already printing: this branch
+      // was reached because the gate fell to a person, and nothing here can make
+      // that happen.
       const card = cardForTriggers(
         {
           runDir: store.runDir,
@@ -1731,6 +1738,11 @@ async function finishStage(
         },
         agent.fallthroughs,
         phaseMoney(store, phaseId),
+        carriedRowsFor(
+          store.runDir,
+          new Set(loadWorkspace(options.root).repos.keys()),
+          store.run.phases.map((phase) => phase.id),
+        ).map(carriedCardLine),
       );
       return out(EXIT_AWAITING_HUMAN, [
         ...notes,

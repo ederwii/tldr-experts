@@ -748,3 +748,130 @@ describe("tldrx ship", () => {
     expect(stderr).not.toContain("TypeError");
   });
 });
+
+/**
+ * `## Carried findings` — the defects this run deliberately did NOT fix, that no
+ * story's declared surface covers (#171).
+ *
+ * `ship` applies no predicate of its own here. The rows come from
+ * `build/carriedRows.ts`, which calls `carriedFindings` (`build/fixlist.ts`) and
+ * `unownedFindings` (`build/unownedFindings.ts`) — the one implementation of both
+ * judgements. `ship` calls the leaf because it runs in a separate process, not
+ * because it has a second opinion.
+ *
+ * Ownership is REPO-THEN-PATH, so both directions are asserted: a finding at a
+ * path S1 declares is not listed, and one at a path nobody declares is.
+ */
+describe("tldrx ship — carried findings nobody's story owns (#171)", () => {
+  test("carried findings nobody's story owns are listed, and come from the shared leaf", async () => {
+    const ws = workspace();
+    readyToShip(ws);                                     // S1 · repo app · touches ["s1.txt"]
+    writeFixlistFixture(ws, "S1", [
+      { disposition: "defer-with-log", finding: "the token is logged", where: "[src: app:platform/Auth.cs:3]" },
+    ]);
+
+    const transport = healthy();
+    await ship(ws, transport);
+    const body = bodyOf(transport);
+
+    expect(body).toContain("## Carried findings");
+    expect(body).toContain("the token is logged");
+    expect(body).toContain("no story declares this path in the repo it names");
+  });
+
+  test("a carried finding a story DOES own is not listed — the section is about ownership", async () => {
+    const ws = workspace();
+    readyToShip(ws);
+    writeFixlistFixture(ws, "S1", [
+      { disposition: "defer-with-log", finding: "a nit inside the surface", where: "[src: app:s1.txt:1]" },
+    ]);
+
+    const transport = healthy();
+    await ship(ws, transport);
+    expect(bodyOf(transport)).not.toContain("## Carried findings");
+  });
+
+  test("no carried findings leaves the section out rather than asserting an empty one", async () => {
+    const ws = workspace();
+    readyToShip(ws);
+
+    const transport = healthy();
+    await ship(ws, transport);
+    expect(bodyOf(transport)).not.toContain("## Carried findings");
+  });
+
+  test("a `fix-now` finding is NOT carried — the two dispositions are two questions", async () => {
+    const ws = workspace();
+    readyToShip(ws);
+    writeFixlistFixture(ws, "S1", [
+      { disposition: "fix-now", finding: "the token is logged", where: "[src: app:platform/Auth.cs:3]" },
+    ]);
+
+    const transport = healthy();
+    await ship(ws, transport);
+    const body = bodyOf(transport);
+    expect(body).toContain("## Open findings");
+    expect(body).not.toContain("## Carried findings");
+  });
+
+  /**
+   * The Plan-skipped shape, BOTH ways.
+   *
+   * `runStories` walks `<phase>/stories/` and a scope that skips Plan writes no
+   * story file at all — its one story lives in `04-build/implicit-plan.yml`. So
+   * without the implicit source every carried finding on such a run would be
+   * reported unowned, including one squarely inside the surface the implicit plan
+   * declared. The leaf reads the same pair the boundary gate reads, real plan
+   * first (`run/boundary.ts` `deriveSurface`).
+   */
+  describe("a run whose scope skipped Plan", () => {
+    const SKIPPED: BuildWorkspaceOptions = { ...ONE, plan: false, skips: ["plan"] };
+
+    function implicitPlan(ws: BuildWorkspace, touches: readonly string[]): void {
+      mkdirSync(join(ws.runDir, "04-build"), { recursive: true });
+      writeFileSync(join(ws.runDir, "04-build", "implicit-plan.yml"), [
+        "version: 1",
+        "implicit: true",
+        "status: todo",
+        "epic:",
+        "  id: E1",
+        "  branch: epic/e1",
+        "  repos: [app]",
+        "story:",
+        "  id: S1",
+        "  repo: app",
+        "  touches:",
+        ...touches.map((path) => `    - "${path}"`),
+        "",
+      ].join("\n"), "utf8");
+    }
+
+    test("a finding inside the implicit story's surface is OWNED, not falsely reported", async () => {
+      const ws = workspace(SKIPPED);
+      readyToShip(ws);
+      implicitPlan(ws, ["src/in.ts"]);
+      writeFixlistFixture(ws, "S1", [
+        { disposition: "defer-with-log", finding: "a nit inside the surface", where: "[src: app:src/in.ts:1]" },
+      ]);
+
+      const transport = healthy();
+      await ship(ws, transport);
+      expect(bodyOf(transport)).not.toContain("## Carried findings");
+    });
+
+    test("a finding outside it is still reported, so the source is not a blanket excuse", async () => {
+      const ws = workspace(SKIPPED);
+      readyToShip(ws);
+      implicitPlan(ws, ["src/in.ts"]);
+      writeFixlistFixture(ws, "S1", [
+        { disposition: "defer-with-log", finding: "the token is logged", where: "[src: app:platform/Auth.cs:3]" },
+      ]);
+
+      const transport = healthy();
+      await ship(ws, transport);
+      const body = bodyOf(transport);
+      expect(body).toContain("## Carried findings");
+      expect(body).toContain("the token is logged");
+    });
+  });
+});
