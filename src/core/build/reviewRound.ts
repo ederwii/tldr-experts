@@ -255,6 +255,36 @@ export function reviewerPromptFor(parts: ReviewerPromptParts): string {
 }
 
 /**
+ * The words an absent `epic_base` is announced with, exported so a test asserts
+ * the MARKER rather than a sentence it retyped.
+ */
+export const UNRECORDED_BASE = "no `epic_base` was recorded";
+
+/**
+ * The operator line for a review whose diff base could not be recovered, or null
+ * when it could (#166).
+ *
+ * Absent-with-reason, said out loud (AGENTS.md §7). Omitting the key from the
+ * record is the honest half; this is the other half. The fallback renders
+ * `epic_branch`, and for a story that is ALREADY MERGED — which every story on
+ * this path is — `git diff <epic_branch>...<story>` resolves to nothing at all.
+ * That is the exact condition #166 exists to kill, so the one path where it
+ * survives has to name itself rather than read like an ordinary re-review.
+ *
+ * It is kept whole and in ONE place because both resume doors say it —
+ * `rereview` and `prepareReview` — and two copies of a warning are two chances
+ * for one of them to go quiet.
+ */
+export function unrecordedBaseLine(
+  storyId: string, epicBranch: string, epicBase: string | null | undefined,
+): string | null {
+  if (epicBase !== null && epicBase !== undefined && epicBase !== "") return null;
+  return `  · ${storyId}: ${UNRECORDED_BASE} for this story — its Build predates the fix (#166), `
+    + `so the reviewer is handed \`git diff ${epicBranch}...\`, which is EMPTY for a story that is `
+    + "already merged. Read the verdict as a judgement over nothing, not as a sign-off.";
+}
+
+/**
  * The bound, applied to a verdict before anything records it (design §B.4).
  *
  * One fix-list round per story. A second `fixlist` is refused and read as

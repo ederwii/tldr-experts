@@ -173,6 +173,24 @@ export async function shaOf(cwd: string, ref: string): Promise<string> {
   return result.ok ? result.stdout.trim() : "";
 }
 
+/**
+ * The FULL 40-character sha `ref` resolves to, or `""` when it resolves to
+ * nothing.
+ *
+ * `shaOf`'s sibling, and the difference is which side of a record it is for.
+ * `shaOf` is `--short` and feeds OPERATOR LINES, where an abbreviation is the
+ * readable thing. This one feeds DURABLE RECORDS — `review.epic_base` in a
+ * bundle, `epic_base` on `task.done` — where an abbreviation is a prefix, and a
+ * prefix that is unambiguous the day it is written can go ambiguous as the repo
+ * grows, at which point the `git diff <base>...<branch>` a reviewer was handed
+ * simply fails (task 5 review, M2). Same `""`-not-throw contract as `shaOf`, for
+ * the same reason: a caller that needs the difference asks `branchExists`.
+ */
+export async function fullShaOf(cwd: string, ref: string): Promise<string> {
+  const result = await git(["rev-parse", ref], cwd);
+  return result.ok ? result.stdout.trim() : "";
+}
+
 /** Create `branch` off `base` when it is not already there. Returns true if created. */
 export async function ensureBranch(cwd: string, branch: string, base: string): Promise<boolean> {
   if (await branchExists(cwd, branch)) return false;

@@ -2871,7 +2871,15 @@ the merge and every door uses that. It is recorded twice, both ADDITIVE and both
 which branch this landed on — it is simply no longer what the diff is measured against. A bundle or a ledger with no
 `epic_base` — every run built before this — falls back to `epic_branch` and renders byte-identical bytes, which is
 what those runs were actually reviewed against; a base that cannot be named is absent, never guessed from the epic's
-sha TODAY (that is the epic AFTER the merge, and is the bug itself). `--commit --review` reads
+sha TODAY (that is the epic AFTER the merge, and is the bug itself).
+
+**That fallback range is EMPTY, and both resume doors say so out loud.** `epic_branch` is preserved on the unknown
+path because it renders the bytes an old record was reviewed against — not because it is a usable base: git resolves
+it at read time to the epic AFTER the merge, so for a story that is already merged (which every story on this path
+is) `git diff <epic_branch>...<story_branch>` reports nothing. So `--prepare --review` and a re-review over a record
+with no `epic_base` each print one line naming the absence, its reason and its consequence, and the record still
+carries no base rather than an invented one. Absent-with-reason: the omitted key is the honest half, the line is the
+other half. `--commit --review` reads
 that `result.json` as the envelope, narrows it with the SAME fail-closed parser (unreadable ⇒ `changes`, never
 `approve`), and settles the story through the same code a spawned verdict goes through: `approve` ⇒ `done`, `changes`
 ⇒ one requeue then `blocked`, attempt accounting untouched. A host that never writes `result.json` has produced no

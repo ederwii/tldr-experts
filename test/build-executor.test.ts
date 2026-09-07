@@ -642,6 +642,48 @@ describe("the reviewer", () => {
   });
 
   /**
+   * The two rounds' bases must DIFFER, and no golden can see it.
+   *
+   * `rounds-reviewer-S1-1.md` and `-2.md` are byte-identical in
+   * `test/fixtures/build/golden/` because the normaliser collapses both bases to
+   * `<SHA>` — so a regression that handed round 2 the base round 1 was given
+   * would pass that guard silently. This is the pin for the DIFFERENCE case
+   * (`build-golden` residual, task 5 review M3).
+   *
+   * The mechanism: attempt 1's `changes` verdict is followed by a
+   * `story.base_fastforwarded` that moves the story's base onto the epic tip,
+   * which now carries attempt 1's merge — so the epic sha attempt 2 captures is
+   * strictly ahead of the one attempt 1 captured.
+   */
+  test("a second review round diffs from a LATER base than the first (#166)", async () => {
+    const ws = workspace(ONE_STORY);
+    const promptDir = join(ws.root, "prompts");
+    mkdirSync(promptDir, { recursive: true });
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes", "approve"] });
+
+    await next(ws);
+    expect(story(ws, "S1")).toContain("status: done");
+
+    // The RECORD: two `task.done` rows, two different bases.
+    const bases = events(ws)
+      .filter((e) => e.type === "task.done" && e.payload.story === "S1")
+      .map((e) => String(e.payload.epic_base ?? ""));
+    expect(bases).toHaveLength(2);
+    expect(bases[0]).toMatch(/^[0-9a-f]{40}$/);
+    expect(bases[1]).toMatch(/^[0-9a-f]{40}$/);
+    expect(bases[1]).not.toBe(bases[0]);
+
+    // And the PROMPTS the two reviewers actually read, which is the half the
+    // golden cannot show.
+    const baseOf = (name: string): string =>
+      /git diff (\S+)\.\.\./.exec(readFileSync(join(promptDir, name), "utf8"))?.[1] ?? "";
+    expect(baseOf("reviewer-S1-1.md")).toBe(bases[0] ?? "");
+    expect(baseOf("reviewer-S1-2.md")).toBe(bases[1] ?? "");
+    expect(baseOf("reviewer-S1-2.md")).not.toBe(baseOf("reviewer-S1-1.md"));
+  });
+
+  /**
    * A GUARD, not a proof: it passes before the fix as well as after. It is here
    * because #166 moves what the prompt puts on that line from a branch name to a
    * sha, and the reviewer's allowance is a PREFIX glob — the cheap way to catch a

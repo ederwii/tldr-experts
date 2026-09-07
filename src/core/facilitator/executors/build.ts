@@ -57,7 +57,7 @@ import {
   dispatchNotesRecord, type PendingStage,
 } from "../pending.ts";
 import {
-  addWorktree, commitsBetween, diffCommand, ensureBranch, GitError, removeWorktree, repoDirOf, shaOf,
+  addWorktree, commitsBetween, diffCommand, ensureBranch, fullShaOf, GitError, removeWorktree, repoDirOf,
   shaReachability,
 } from "../../build/git.ts";
 import { BaseGateFailure, baseRefusalLines } from "../../build/preflight.ts";
@@ -104,6 +104,7 @@ import {
 } from "../../build/reviewBundle.ts";
 import {
   blockedByFailedDeveloper, formatRetryDecision, narrowFixlist, pendingRefusal, reviewerPromptFor,
+  unrecordedBaseLine,
   RecurringFocus, ReviewCounters, type RoundParts,
 } from "../../build/reviewRound.ts";
 import { readReviewLedger } from "../../build/reviewLedger.ts";
@@ -707,6 +708,7 @@ class BuildSession {
       `  · ${planned.story.id}: ${work.why} — preparing the REVIEW only; `
       + `\`${work.commit}\` is already merged into \`${story.epicBranch}\``,
     );
+    this.noteUnrecordedBase(planned.story.id, story.epicBranch, work.epicBase);
     // A `--prepare --review` over a story whose LAST envelope was refused must
     // not quietly drop the refusal: rewriting the prompt without it would hand
     // the host the same brief that produced the unreadable envelope (gh #78).
@@ -1134,7 +1136,11 @@ class BuildSession {
     // the reviewer's prompt hands it — is empty whether the story carried thirty
     // commits or none (#166). `""` when git had no answer, which renders the
     // branch name exactly as it did before this existed.
-    const epicShaBefore = await shaOf(story.repoDir, story.epicBranch);
+    //
+    // FULL sha, not `shaOf`'s abbreviation: this value is written into records
+    // that outlive the process and are read back by a reviewer as a ref, and an
+    // abbreviation is a prefix that can go ambiguous as the repo grows.
+    const epicShaBefore = await fullShaOf(story.repoDir, story.epicBranch);
     const merge = await this.mergeIntoEpic(story);
     if (!merge.ok) {
       await this.block(story, `merge into \`${story.epicBranch}\` failed: ${merge.detail}`, half.cost, dod, {
@@ -1512,6 +1518,7 @@ class BuildSession {
       `  · ${planned.story.id}: the previous reviewer FAILED (${resume.error}) — `
       + `re-running the REVIEW only; \`${resume.commit}\` is already merged into \`${story.epicBranch}\``,
     );
+    this.noteUnrecordedBase(planned.story.id, story.epicBranch, resume.epicBase);
     // Off the LEDGER: this process did not watch the merge, so the base it hands
     // the second reviewer is the one the first was handed (#166). Null on a run
     // built before `epic_base` existed, which renders the epic branch.
@@ -1966,8 +1973,14 @@ class BuildSession {
   private reviewerPrompt(
     story: StoryContext,
     dod: readonly DodResult[],
-    refusal: string | null = null,
-    diffBase: string | null = null,
+    refusal: string | null,
+    /**
+     * REQUIRED, with no default, on purpose: the bug #166 fixed is "somebody
+     * forgot the base", and an optional parameter would let the next call site
+     * forget it and silently render the epic branch again. A forgotten argument
+     * is a typecheck failure instead.
+     */
+    diffBase: string | null,
   ): string {
     return reviewerPromptFor({
       diffBase,
@@ -2728,6 +2741,19 @@ class BuildSession {
       `${error.message} — nothing was attempted and nothing moved: rewrite ${path} and run `
       + `\`tldrx next --commit${role === "reviewer" ? " --review" : ""}\` again`,
     );
+  }
+
+  /**
+   * Say out loud that this review's diff base could not be recovered (#166).
+   *
+   * Both resume doors call it and neither owns the sentence: `unrecordedBaseLine`
+   * is one implementation in `build/reviewRound.ts`, and a review whose base is
+   * known adds no line at all — so nothing is said on the path where there is
+   * nothing to warn about.
+   */
+  private noteUnrecordedBase(storyId: string, epicBranch: string, epicBase: string | undefined): void {
+    const line = unrecordedBaseLine(storyId, epicBranch, epicBase);
+    if (line !== null) this.lines.push(line);
   }
 
   private bundleKey(storyId: string): string {
