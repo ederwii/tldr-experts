@@ -22,7 +22,7 @@ import {
   requirePattern, requireStringList, requireText, requireVersion1, type PlanStatus,
 } from "./planCommon.ts";
 import { parseFrontMatter } from "./frontMatter.ts";
-import { allowlistIssue } from "./commandAllowlist.ts";
+import { allowlistIssue, iterationOnlyDodMessage } from "./commandAllowlist.ts";
 
 export interface Story {
   readonly version: number;
@@ -161,6 +161,7 @@ export function validateStoryDod(
   dod: DodBlock,
   allowed: ReadonlySet<string>,
   base = "dod",
+  iterationOnly: ReadonlySet<string> = new Set(),
 ): readonly ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   if (!dod.present) {
@@ -172,7 +173,12 @@ export function validateStoryDod(
     return issues;
   }
   dod.commands.forEach((command, i) => {
-    const message = allowlistIssue(command, allowed, "story");
+    // Checked BEFORE the allowlist, because a `test_fast` command passes the allowlist:
+    // it is declared. The narrower refusal is the true one, and the generic sentence
+    // ("not one of workspace.yml's commands") would be false about it.
+    const message = iterationOnly.has(command)
+      ? iterationOnlyDodMessage(command)
+      : allowlistIssue(command, allowed, "story");
     if (message !== null) issues.push({ path: `${base}[${i}]`, message });
   });
   return issues;
@@ -183,7 +189,7 @@ export function validateStoryDod(
  * rule itself moved to `commandAllowlist.ts` when a stage's `preconditions:`
  * became the third data file that names a command to run (design §F.1).
  */
-export { noAllowlistMessage } from "./commandAllowlist.ts";
+export { ITERATION_ONLY_SLOT, iterationOnlyDodMessage, noAllowlistMessage } from "./commandAllowlist.ts";
 
 export interface StoryFile {
   readonly story: Story | null;
@@ -192,14 +198,18 @@ export interface StoryFile {
 }
 
 /** Read one `stories/<id>.md`: front matter + dod block, validated together. */
-export function validateStoryFile(text: string, allowed: ReadonlySet<string> = new Set()): StoryFile {
+export function validateStoryFile(
+  text: string,
+  allowed: ReadonlySet<string> = new Set(),
+  iterationOnly: ReadonlySet<string> = new Set(),
+): StoryFile {
   const parsed = parseFrontMatter(text);
   const dod = parseDodBlock(parsed.frontMatter.body);
   if (parsed.issue !== null) {
     return { story: null, dod, validation: result([parsed.issue]) };
   }
   const front = validateStory(parsed.doc);
-  const issues = [...front.issues, ...validateStoryDod(dod, allowed)];
+  const issues = [...front.issues, ...validateStoryDod(dod, allowed, "dod", iterationOnly)];
   return {
     story: front.ok ? asStory(parsed.doc) : null,
     dod,

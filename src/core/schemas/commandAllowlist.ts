@@ -74,3 +74,28 @@ export function allowlistIssue(
   if (allowed.size === 0) return noAllowlistMessage(command);
   return allowed.has(command) ? null : notDeclaredMessage(command, subject);
 }
+
+/**
+ * The one `commands:` slot a Definition of Done may NOT name (2026-09-07).
+ *
+ * A story's ```dod block must be byte-equal to a declared command, and the developer
+ * prompt hands the sub-agent the same list with "these are the only ones you may run".
+ * On three real workspaces that made the whole suite the developer's only instrument —
+ * one of them 11,929 tests across 855 files, run 6–10 times per story while iterating,
+ * on top of the 2–3 runs the Definition of Done itself pays for.
+ *
+ * `test_fast` is the second speed: declared, therefore runnable, and deliberately NOT
+ * evidence. Done means the declared suite exited 0, so a dod block naming the fast
+ * subset would quietly lower the bar the whole framework rests on. The refusal below
+ * is what stops it, and it names the slot: the generic "not one of workspace.yml's
+ * commands" would be a false sentence about a command the file plainly declares.
+ */
+export const ITERATION_ONLY_SLOT = "test_fast";
+
+/** The refusal when a dod line names the repo's `test_fast` command. */
+export function iterationOnlyDodMessage(command: string): string {
+  return `\`${command}\` is this repo's \`${ITERATION_ONLY_SLOT}\` command, and a Definition of Done `
+    + `may not name it: \`${ITERATION_ONLY_SLOT}\` is the fast subset the developer ITERATES on, not `
+    + "the suite that proves the story. Name the repo's `test` command instead — the gate re-runs "
+    + "what the dod block names, after the developer has stopped.";
+}

@@ -132,11 +132,23 @@ function toRepoDocument(repo: DetectedRepo): WorkspaceRepoDocument {
   };
 }
 
-/** The comment `tldrx init` puts above the YAML — spelled once, for every writer of this file. */
+/**
+ * The comment `tldrx init` puts above the YAML — spelled once, for every writer of this file.
+ *
+ * The last three lines are the `test_fast` slot, offered COMMENTED OUT. Detection cannot
+ * find it: no manifest declares "the fast subset of my suite", and a synthesised one would
+ * be exactly the conventional wisdom `detect/probeCommands.ts` exists to keep out of this
+ * file. So init names the slot, says what it is for, and leaves the operator to write it —
+ * absent stays absent, and nothing is probed that nobody declared.
+ */
 export const WORKSPACE_FILE_HEADER =
   "# Written by `tldrx init` (spec §2.1). Detection result: which repos exist, their\n"
   + "# stack, and the ONLY commands the DoD gate and the map may run. Regenerated on\n"
-  + "# every `tldrx init`; hand edits to detected values are overwritten.\n";
+  + "# every `tldrx init`; hand edits to detected values are overwritten.\n"
+  + "#\n"
+  + "# Optional, per repo, and never detected — add it yourself under `commands:`:\n"
+  + "#   test_fast: \"\"   # the fast subset the Build developer iterates on. NOT a\n"
+  + "#                   # Definition of Done command: the DoD re-runs `test:`.\n";
 
 export function renderWorkspaceFile(document: unknown): string {
   return WORKSPACE_FILE_HEADER + stringifyYaml(document);

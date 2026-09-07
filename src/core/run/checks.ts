@@ -371,7 +371,8 @@ function checkPlan(ctx: CheckContext): CheckOutcome {
     return { id: "plan", status: "skipped", detail: "the stage declares no waves.yml output" };
   }
   const planDir = join(ctx.runDir, ctx.stage.phase);
-  const report = validatePlan(planDir, loadWorkspace(ctx.root).commands);
+  const workspace = loadWorkspace(ctx.root);
+  const report = validatePlan(planDir, workspace.commands, workspace.iterationCommands);
   if (!report.ok) {
     return { id: "plan", status: "failed", detail: describePlanIssues(report.issues) };
   }

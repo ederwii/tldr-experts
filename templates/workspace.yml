@@ -24,6 +24,12 @@ repos:
       test: ""
       lint: ""
       typecheck: ""
+      # Optional, and never detected — write it yourself or leave it out. The fast
+      # subset the Build developer iterates on while working. It is NOT a Definition
+      # of Done command and a story's ```dod block that names it is refused: `test:`
+      # above is what proves the story, and the gate re-runs that after the developer
+      # stops.
+      # test_fast: ""
 
 # Cached from `claude mcp list` at init (it runs live health checks and is slow).
 # .mcp.json is the fast path; this is the verified one.

@@ -74,7 +74,8 @@ repos:
      ci: [".github/workflows/deploy.yml"], confidence: high}
   - {name: lab, path: scavtopia-lab, default_branch: main, stack: [typescript, react, vite], package_manager: npm,
      commands: {build: "npm run build", test: "npm run test", lint: "npm run lint",
-                typecheck: "npm run typecheck", run: "npm run dev"},
+                typecheck: "npm run typecheck", run: "npm run dev",
+                test_fast: "npm run test -- --changed"},   # iteration only; never a dod command
      command_probes: {build: {status: ok, verified: true, exit_code: 0, at: 2026-08-28T14:02:11Z,
                               reason: "verified: `npm run build` exited 0"},
                       run: {status: not-probed, verified: false, exit_code: null, at: 2026-08-28T14:02:11Z,
@@ -101,6 +102,7 @@ stack_packs:                 # the one opt-in switch for the stack expert packs;
 | `repos[].path` | rel path | y | Inside root, no `..`; `.` in single-repo mode |
 | `repos[].default_branch` / `.stack` / `.package_manager` | str / str[] / str\|null | y | Epic-branch base; detected languages (may be empty); `npm`, `nuget`, `pip`, … |
 | `repos[].commands.{build,test,lint,typecheck,run}` | str\|null | y (all keys) | Run from `path`; `null` = unavailable |
+| `repos[].commands.test_fast` | str | n | **Additive, and never detected.** The fast subset of this repo's suite — the command the Build developer ITERATES on while working. It is a declared command like any other: it is in the allowlist, the developer prompt lists it, a `cmd` src may cite it. What it is NOT is evidence — a story's ```dod block that names it is **refused at Plan time**, with a sentence naming the slot rather than the generic "not one of workspace.yml's commands", which would be false about a command this file declares. `tldrx init` never writes a value: no manifest says which subset of a suite is the fast one, and a synthesised one would be the conventional wisdom `command_probes` exists to keep out of this file — init emits the slot commented out, with a line saying what it is for. Never probed, for the same reason: nothing was declared to probe |
 | `repos[].command_probes.<slot>.{status,verified,exit_code,at,reason}` | enum / bool / int\|null / RFC3339 / str | n | What `init` MEASURED about the command in that slot: it ran each `build`/`test`/`lint`/`typecheck` command once. `status` is the field to branch on — `ok` \| `failed` \| `timed-out` \| `unspawnable` \| `not-probed` \| `skipped` — and `verified` is `status == ok`. Only `failed` is a measured red. `exit_code` is non-null ONLY for `ok`/`failed`, because only those mean a process exited: a command whose binary is missing is `unspawnable` with the system's own message, never a fabricated `127`. `reason` is REQUIRED in every case, so a non-`ok` row always says why. `not-probed` has exactly two causes, and the `reason` says which: `run` (it starts a server, so a probe of it hangs or leaves a process behind) and a command that needs a shell, which the probe does not open — it argv-splits through the same `splitArgv` the DoD gate uses. `--no-probe` writes `skipped` on every slot it would have probed; `run` keeps its own `not-probed`, and a synthesised command's reason still says it was synthesised. **One row per DECLARED slot** — every slot whose `commands:` entry is non-null gets one, `run` included, so a repo declaring all five is written with five rows; the example above is abridged to two. Records only: `commands` above is still the sole allowlist, and a red probe refuses nothing |
 | `repos[].ci` | rel path[] | n | CI definition files found |
 | `repos[].confidence` | `high\|medium\|low` | y | `low` forces an interview question at init |
@@ -112,7 +114,8 @@ stack_packs:                 # the one opt-in switch for the stack expert packs;
 
 **Validation.** `name` unique; `path` exists, relative, inside root; enums as above; commands non-empty when non-null
 and free of `&& ; | > \`` (single argv, auditable); contract repos resolve; ≤64 repos, ≤128 contracts.
-`repos[].overlays`, `repos[].skills`, `repos[].command_probes` and `stack_packs` are **additive**: a file written
+`repos[].overlays`, `repos[].skills`, `repos[].command_probes`, `repos[].commands.test_fast` and `stack_packs` are
+**additive**: a file written
 before they existed loads unchanged (absent ⇒ empty lists, no probes, switch off), and `version:` stays `1` — a format
 that only grows does not bump it. A `command_probes` that is present is checked: a mapping of slot to
 `{status: one of the six above, verified: bool, exit_code: int|null, at: non-empty str, reason: non-empty str}`.
@@ -1438,7 +1441,7 @@ Filled by Build, one bullet per proof. [src: $ npm run test → exit 0]
 | `acceptance` | str[] (≥1, ≤64) | y | What must be true for a human to accept it |
 | `test_plan` | str[] (≥1, ≤64) | y | How it will be proven, before it is written |
 | `evidence` | str[] (≤64) | y | Filled by Build. **Required non-empty when `status: done`** — done means proven, not asserted. May cite `04-build/fixlist/<id>-<n>.md` beside the review log when the story went through a fix-list round |
-| ` ```dod ` block | fenced, ≥1 command | y | Each line must equal a `workspace.yml` command **verbatim**; `dod-gate` re-runs all of them from `repo` and every one must exit `0`. A command the gate REFUSES — not byte-equal to a declared one, or needing a shell — never runs, so it can never be green: it is recorded as REFUSED with the gate's own sentence and **no exit code at all**, in the event, the handoff, the review log and the retro alike (§2.8, §2.9). Editing `workspace.yml` therefore orphans every approved story that cited the old string — `tldrx plan sync-dod` is the mechanical repair, and the drift message names it |
+| ` ```dod ` block | fenced, ≥1 command | y | Each line must equal a `workspace.yml` command **verbatim**; `dod-gate` re-runs all of them from `repo` and every one must exit `0`. A command the gate REFUSES — not byte-equal to a declared one, or needing a shell — never runs, so it can never be green: it is recorded as REFUSED with the gate's own sentence and **no exit code at all**, in the event, the handoff, the review log and the retro alike (§2.8, §2.9). Editing `workspace.yml` therefore orphans every approved story that cited the old string — `tldrx plan sync-dod` is the mechanical repair, and the drift message names it A `test_fast:` command is the one declared command a dod block may **not** name: it is the developer's iteration instrument, not the proof of a story, and the refusal names the slot so the reader is not sent looking for a command that is plainly in `workspace.yml` (§2.1). |
 
 **Validation.** Front matter present and parseable; keys and enums as above; `id` matches the file name; `depends_on`
 free of self-reference and duplicates; every ` ```dod ` command in `workspace.yml` (skipped when there are no commands to

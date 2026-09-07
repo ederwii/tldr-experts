@@ -51,6 +51,35 @@ export const VALIDATE_CRITERION_RULE: readonly string[] = [
   "not yours to edit).",
 ];
 
+/**
+ * The two-speed instruction, when the repo declares a `test_fast` command (2026-09-07).
+ *
+ * Measured on three real workspaces: the developer's only test instrument was the
+ * declared suite, because a ```dod line must be byte-equal to a workspace command and
+ * this prompt hands over that same list. One of them is 11,929 tests across 855 files,
+ * run 6–10 times per story while iterating; the Definition of Done adds 2–3 more. The
+ * fast slot is the iteration instrument and is refused in a dod block, so the prompt has
+ * to say both halves or the sub-agent will reasonably assume the fast one suffices.
+ *
+ * Emitted as a function rather than inlined so the test asserts the produced lines
+ * instead of a paraphrase, and so the prompt has ONE spelling of the rule. Nothing is
+ * emitted when the slot is absent — the prompt is then byte-identical to the one before
+ * this existed, which `test/build-golden.test.ts` freezes.
+ *
+ * The can-it-fail check is NOT restated here: it already names its instrument in the
+ * drive mandate and the stack expert packs, and a second spelling is how the two drift.
+ */
+export function testFastRule(fast: string, full: string | null): readonly string[] {
+  return [
+    `\`${fast}\` is this repo's fast test command. It is NOT part of the Definition of Done:`,
+    "iterate on it while you work — that is what it is for — and it proves nothing on its own.",
+    ...(full === null
+      ? ["This repo declares no full test command, so nothing slower is owed before you stop."]
+      : [`Run \`${full}\` ONCE before you stop, and read its exit code; the Definition of Done`,
+        "re-runs it after you stop, and that run is the one that decides."]),
+  ];
+}
+
 export interface DeveloperPromptParts {
   readonly runId: string;
   readonly story: PlannedStory;
@@ -60,6 +89,12 @@ export interface DeveloperPromptParts {
   readonly epicBranch: string;
   readonly worktree: string;
   readonly commands: readonly string[];
+  /**
+   * This repo's `test_fast` command and the full `test` command it is a subset of
+   * (`hooks/lib/workspace.ts` `commandRoles`), when `workspace.yml` declares the fast
+   * one. Absent — every workspace that declares no `test_fast` — emits nothing at all.
+   */
+  readonly testFast?: { readonly fast: string; readonly full: string | null };
   readonly conventions: string;
   readonly facts: string;
   readonly experts: readonly { readonly name: string; readonly body: string }[];
@@ -174,12 +209,20 @@ export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
     "## Produce",
     "",
     "Working code and its tests, committed on this branch. These commands are the only",
-    "ones you may run, and they are the same ones the Definition of Done re-runs:",
+    // With a `test_fast` declared the second clause would be FALSE — the fast command is
+    // in this list and the Definition of Done never runs it — so the sentence that names
+    // the difference replaces it, and `testFastRule` below draws the line.
+    ...(parts.testFast === undefined
+      ? ["ones you may run, and they are the same ones the Definition of Done re-runs:"]
+      : ["ones you may run. One of them is not a Definition of Done command; see below:"]),
     "",
     ...(parts.commands.length === 0
       ? ["- (this repo declares no commands in workspace.yml — the DoD will run nothing)"]
       : parts.commands.map((command) => `- \`${command}\``)),
     "",
+    ...(parts.testFast === undefined
+      ? []
+      : [...testFastRule(parts.testFast.fast, parts.testFast.full), ""]),
     "Commit with `git add` and `git commit`. Nothing else about git is yours to do.",
     "",
     "## Rules",

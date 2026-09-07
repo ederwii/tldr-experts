@@ -45,6 +45,18 @@ workspace real una etapa What midió entre $1.20 y $1.40. No se cobra nada hasta
 una etapa, y `tldrx next --dry-run` te enseña el prompt y el techo sin lanzar nada. Ver
 [Presupuestos y estimaciones](/es/guides/budgets).
 
+## Mi suite tarda minutos. ¿El developer tiene que correrla entera?
+
+Una sola vez. El definition of done de una story solo puede nombrar comandos que tu
+`workspace.yml` declara, así que durante mucho tiempo la suite completa era el único comando
+de pruebas que un subagente de Build tenía permitido correr — y lo corría cada vez que quería
+saber si ya iba bien. Declara un `test_fast:` junto a `test:` en `workspace.yml` y al
+developer se le indica que itere con el rápido y corra el comando completo declarado una vez
+antes de parar. `test_fast` nunca es un comando del definition of done: un bloque `dod` que lo
+nombre se rechaza en la etapa Plan, con una frase que dice de qué slot salió. Nada lo detecta
+por ti — ningún manifiesto dice cuál es el subconjunto rápido de tu suite — así que `tldrx
+init` deja el slot comentado y tú lo escribes, o lo dejas fuera y nada cambia.
+
 ## ¿Mi código se manda a algún lado?
 
 `run new`, `answer`, `approve`, `status`, `cost` y `learn` son offline: nada más sistema de
