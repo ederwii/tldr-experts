@@ -439,7 +439,14 @@ export function buildReviewerPrompt(parts: ReviewerPromptParts): string {
     "",
     "## Objective",
     "",
-    `Judge the diff of \`${parts.branch}\` against the acceptance criteria of ` +
+    // NOT "the diff of `<branch>`". The range is `<diffBase>...<branch>`, and on a
+    // re-review `diffBase` is the epic as it was immediately before THAT attempt
+    // merged (`epicShaBefore`, executors/build.ts) — so it shows that attempt's
+    // delta, not the story's whole diff. One sentence for every round: making it
+    // true only for round ≥ 2 would need a second spelling of the objective, and
+    // two spellings of one sentence is how they stop agreeing.
+    `Judge the diff the command below prints — on a re-review, what changed since the ` +
+      `previous attempt merged rather than the whole story — against the acceptance criteria of ` +
       `**${story.id} · ${story.title}** and the conventions below.`,
     "",
     "Read the diff with, from this working directory:",
@@ -458,7 +465,9 @@ export function buildReviewerPrompt(parts: ReviewerPromptParts): string {
       ? ["- (no dod commands)"]
       : parts.dodResults.map((r) => (dodRefused(r)
         ? `- \`${r.command}\` → REFUSED, never ran`
-        : `- \`${r.command}\` → exit ${String(r.exitCode)}`))),
+        // `?? "?"` — the base side's spelling, for the row only a truncated
+        // `events.jsonl` can produce (`ran`, no exit code).
+        : `- \`${r.command}\` → exit ${String(r.exitCode ?? "?")}`))),
     "",
     "Do not re-run them. They passed; that is why you are being asked.",
     "",

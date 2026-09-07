@@ -7,7 +7,7 @@ story is done, so it is the only thing you are asked for.
 
 ## Objective
 
-Judge the diff of `story/260829-build/S1` against the acceptance criteria of **S1 · First story** and the conventions below.
+Judge the diff the command below prints — on a re-review, what changed since the previous attempt merged rather than the whole story — against the acceptance criteria of **S1 · First story** and the conventions below.
 
 Read the diff with, from this working directory:
 

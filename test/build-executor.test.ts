@@ -2784,6 +2784,20 @@ describe("stack packs reach the Build reviewer (stack packs design §4.5)", () =
  * `exit_code` to 0, so a command that never ran came back GREEN.
  */
 describe("#165 · a refused DoD command is recorded as refused", () => {
+  /** The story the reviewer prompt is rendered for; nothing about it is under test. */
+  const PLANNED_S1: PlannedStory = {
+    story: {
+      version: 1, id: "S1", epic: "E1", title: "First story", repo: "app",
+      status: "todo", depends_on: [], touches: ["s1.txt"],
+      acceptance: ["S1 exists"], test_plan: [], evidence: [],
+    },
+    dod: { present: true, commands: ["npm run lint"] },
+    text: "---\nid: S1\n---\n",
+    path: "/tmp/S1.md",
+    rel: "03-plan/stories/S1.md",
+    wave: "W1",
+  };
+
   /** A `StoryOutcome` in the shape the three renderers read. */
   function outcomeWith(overrides: Partial<StoryOutcome> = {}): StoryOutcome {
     return {
@@ -2824,6 +2838,60 @@ describe("#165 · a refused DoD command is recorded as refused", () => {
     expect(only?.exitCode).toBeUndefined();
     expect(dodGreen({ dod: ledger.dod })).toBe(false);
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  /**
+   * The degenerate row the READ-BACK path can build, and the four renderers'
+   * totality over it (wave-3 final review, M1).
+   *
+   * `dodRunner` writes one of two shapes and never this one, so it is
+   * unreachable from any writer. `reviewLedger` is not a writer: a hand-edited
+   * or truncated `events.jsonl` — a `check.failed` carrying `check: "dod"` and a
+   * `command` but NEITHER `exit_code` NOR `refused` — reconstructs
+   * `{status: "ran"}` with no exit code, and the four story-side renderers
+   * interpolated it straight into their sentences as the literal word
+   * `undefined`: `exit undefined` in the review log, the retro and the reviewer
+   * prompt, and `[src: $ cmd → exit undefined]` in the handoff, which is not a
+   * legal `cmd` token at all. The base side has always printed `?` here
+   * (`outcome.ts` `dodFailureReason`, `preflight.ts` `baseFailureLine`), and `?`
+   * is the honest answer: it fails the `digit+` grammar closed rather than
+   * asserting a number nothing measured.
+   */
+  test("a truncated `check.failed` — no exit code, no refusal — never renders `exit undefined`", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-ledger-degenerate-"));
+    writeFileSync(join(dir, "events.jsonl"),
+      `${JSON.stringify({
+        ts: "2026-09-06T09:00:00Z", run: "260906-x", stage: "build", type: "check.failed",
+        actor: "facilitator", cost_usd: 0,
+        payload: { phase: "04-build", check: "dod", story: "S1", command: "npm run lint" },
+      })}\n`, "utf8");
+
+    const recovered = readReviewLedger(dir, "S1").dod;
+    rmSync(dir, { recursive: true, force: true });
+    const only = recovered[0];
+    expect(only?.status).toBe("ran");
+    expect(only?.exitCode).toBeUndefined();
+
+    const outcome = outcomeWith({ dod: recovered, status: "blocked" });
+    const handoff = renderBuildHandoff(handoffPartsFor([outcome]));
+    const log = renderReviewLog(outcome);
+    const retro = storyRetroLines(outcome, "260906-x").join("\n");
+    const prompt = buildReviewerPrompt({
+      runId: "260906-x", story: PLANNED_S1, repoName: "app", branch: "story/S1",
+      epicBranch: "epic/e1", worktree: "/tmp/wt", conventions: "- one class per file",
+      dodResults: recovered,
+    });
+
+    for (const text of [handoff, log, retro, prompt]) expect(text).not.toContain("undefined");
+    // Each document's own sentence, so this cannot pass on a shared substring.
+    expect(handoff).toContain("[src: $ npm run lint → exit ?]");
+    expect(log).toContain("- `npm run lint` → exit ?");
+    expect(retro).toContain("dod `npm run lint` exited ? on the first attempt");
+    expect(prompt).toContain("- `npm run lint` → exit ?");
+    // And `?` is not a legal `cmd` token, so the handoff's row fails the
+    // grammar closed instead of passing an invented exit code off as measured.
+    const row = handoff.split("\n").find((line) => line.includes("npm run lint")) ?? "";
+    expect(endsWithToken(row)).toBe(false);
   });
 
   test("a pre-#165 `check.failed` with an exit code still reads as a measurement", () => {
@@ -2911,20 +2979,8 @@ describe("#165 · a refused DoD command is recorded as refused", () => {
    * refused row.
    */
   test("the reviewer prompt says REFUSED rather than inventing an exit", () => {
-    const story: PlannedStory = {
-      story: {
-        version: 1, id: "S1", epic: "E1", title: "First story", repo: "app",
-        status: "todo", depends_on: [], touches: ["s1.txt"],
-        acceptance: ["S1 exists"], test_plan: [], evidence: [],
-      },
-      dod: { present: true, commands: ["npm run lint"] },
-      text: "---\nid: S1\n---\n",
-      path: "/tmp/S1.md",
-      rel: "03-plan/stories/S1.md",
-      wave: "W1",
-    };
     const prompt = buildReviewerPrompt({
-      runId: "260906-x", story, repoName: "app", branch: "story/S1", epicBranch: "epic/e1",
+      runId: "260906-x", story: PLANNED_S1, repoName: "app", branch: "story/S1", epicBranch: "epic/e1",
       worktree: "/tmp/wt", conventions: "- one class per file",
       dodResults: [
         { command: "npm run test", status: "ran", exitCode: 0 },

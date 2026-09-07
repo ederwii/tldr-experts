@@ -30,8 +30,10 @@ tldrx learn
 Eight chapters, about fifteen minutes, in a throwaway sandbox with a toy repo and a
 stand-in agent. Every command in it is the real one — `init`, `run new`, `next`, `answer`,
 `approve`, and a Build that cuts a branch and runs a real definition of done — so nothing
-it shows you can drift from the binary. **No API key, no network, $0.00**, and nothing is
-written outside its own sandbox directory.
+it shows you can drift from the binary. What the sandbox changes is flags, and the chapter
+names each one it passes: `init` runs with `--no-probe`, so it skips the build/test commands
+it would otherwise RUN once against your own repo. **No API key, no network, $0.00**, and
+nothing is written outside its own sandbox directory.
 
 ```
 1. init — what the framework knows before you tell it anything

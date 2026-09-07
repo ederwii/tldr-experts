@@ -25,6 +25,14 @@
  *     unknown flag before `init` does any work at all. Add a real flag to that call and this
  *     guard starts asking about it, which is the behaviour we want.
  *
+ * What it CANNOT see, so nobody reads it as a proof it is not: it keys on the double-quoted
+ * literal `"init"` and on double-quoted `"--flag"` tokens, so a single-quoted `'init'`, a
+ * template literal, an argv array assembled from a `const` outside the bracketed region, and
+ * a one-token `--root=<path>` form are all outside its reach. `measured` 2026-09-07, by
+ * sweeping every one of those quoting forms across `test/`: no invocation in any of those
+ * shapes exists today, so widening the two regexes would buy nothing now — it is the fix the
+ * moment one appears, and this paragraph is here so that fix is obvious rather than archaeology.
+ *
  * Reads files and calls one pure function. Spawns nothing, so it takes no load-aware timeout.
  */
 import { describe, expect, test } from "bun:test";

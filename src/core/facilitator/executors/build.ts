@@ -57,8 +57,8 @@ import {
   dispatchNotesRecord, type PendingStage,
 } from "../pending.ts";
 import {
-  addWorktree, commitsBetween, diffCommand, ensureBranch, fullShaOf, GitError, removeWorktree, repoDirOf,
-  shaReachability,
+  addWorktree, commitsBetween, ensureBranch, fullShaOf, GitError, removeWorktree, repoDirOf,
+  reviewDiffCommand, shaReachability,
 } from "../../build/git.ts";
 import { BaseGateFailure, baseRefusalLines } from "../../build/preflight.ts";
 import {
@@ -1211,7 +1211,7 @@ class BuildSession {
     // attempt. `recordReview` has already declined to count it against the
     // requeue counter; here it is declined against the story's fate too.
     if (review.verdict === "fixlist") {
-      const rel = this.writeFixlistFor(story, review, commit);
+      const rel = this.writeFixlistFor(story, review, commit, epicBase);
       const open = openFindings(review.fixlist).length;
       await this.settle(story, "review", {
         dod, commit, merged: true, carried, epicBase, verdict: "fixlist", review, cost,
@@ -1268,8 +1268,18 @@ class BuildSession {
    * the team decided not to fix yet is exactly the push-back that section carries
    * to a role expert, and it should reach the owner through a channel that
    * already exists rather than a new one.
+   *
+   * `epicBase` is the review's OWN base and travels in as data, because the fix
+   * list is the second artifact of one review and has to name the range the
+   * reviewer was actually handed (#166). It rendered `epicBranch...branch` until
+   * this fix — the post-merge range, which resolves to nothing for a story that
+   * has already merged — so the record said one thing and the prompt another,
+   * and the developer sent to fix the findings got an empty diff. One
+   * derivation of the base, `reviewDiffCommand`, for both (AGENTS.md §7).
    */
-  private writeFixlistFor(story: StoryContext, review: Review, commit: string): string {
+  private writeFixlistFor(
+    story: StoryContext, review: Review, commit: string, epicBase: string | null,
+  ): string {
     const id = story.planned.story.id;
     // Allocated by `narrowFixlist`, which is the only thing that may grant one.
     const round = this.counters.fixlistRoundGranted(id) ?? MAX_FIXLIST_ROUNDS;
@@ -1279,7 +1289,7 @@ class BuildSession {
       round,
       attempt: story.attempt,
       maxAttempts: MAX_ATTEMPTS,
-      diff: diffCommand(story.epicBranch, story.branch),
+      diff: reviewDiffCommand(epicBase, story.epicBranch, story.branch),
       commit,
       summary: review.summary,
       findings: review.fixlist,

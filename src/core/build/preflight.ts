@@ -396,6 +396,11 @@ export function baseRefusalLines(
  * changes no verdict — the refusal above stands on the preflight's own measurement —
  * and it is silent whenever there is no probe, which is every `workspace.yml` written
  * before `command_probes:` existed.
+ *
+ * EVERY slot is scanned, not the first that matches by command: `probeCommands` writes
+ * a row per SLOT, and a repo may declare one command in two of them (`test:` and `lint:`
+ * both `npm run test`), so the measured red can sit in the second. This used to return
+ * out of the loop on the first match and read as a scan while behaving as a lookup.
  */
 export function initProbeLine(
   workspace: WorkspaceContext | undefined, result: BaseCommandResult,
@@ -411,7 +416,7 @@ export function initProbeLine(
     // read `verified === false && exit_code !== null`, which is a machine inferring a
     // verdict from two fields' side effect; `timed-out`, `skipped`, `not-probed` and
     // `unspawnable` all mean "we did not look", which is not corroboration.
-    if (probe === undefined || probe.status !== "failed") return null;
+    if (probe === undefined || probe.status !== "failed") continue;
     return `    · \`tldrx init\` measured this red too, at ${probe.at}: ${probe.reason}`;
   }
   return null;

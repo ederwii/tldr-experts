@@ -422,8 +422,9 @@ Three facts about that, measured rather than asserted:
   cited by the story's `dod` block. Note that plan validation checks only allowlist
   MEMBERSHIP, so a declared pipeline passes the plan and is refused at the gate.
 - **A refused command is recorded as refused, never as an exit code.** It never ran, so there
-  is nothing to measure: the check carries `refused` and no `exit_code`, and the handoff, the
-  review log and the retro all say "was REFUSED and never ran" with the gate's own sentence.
+  is nothing to measure: the check carries `refused` and no `exit_code`, and all three documents
+  print the refusal in place of a number, each with the gate's own sentence beside it — the
+  handoff and the retro as "was REFUSED and never ran", the review log as "REFUSED, never ran".
   On the base-tree side the same refusal is recorded `unmeasured`, which excuses nothing and
   refuses nothing.
 

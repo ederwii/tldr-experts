@@ -108,7 +108,9 @@ export function storyRetroLines(outcome: StoryOutcome, runId: string): readonly 
       }
       if (result.exitCode === 0 && !result.timedOut) continue;
       lines.push(
-        `- \`${outcome.id}\` — dod \`${result.command}\` exited ${String(result.exitCode)} on the first `
+        // `?? "?"` — the base side's spelling, for the row only a truncated
+        // `events.jsonl` can produce (`ran`, no exit code).
+        `- \`${outcome.id}\` — dod \`${result.command}\` exited ${String(result.exitCode ?? "?")} on the first `
         + `attempt${result.timedOut ? " (timed out)" : ""} ${src}`,
       );
     }

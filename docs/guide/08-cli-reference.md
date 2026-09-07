@@ -1190,11 +1190,15 @@ story excused which path, and the remedy command names only the paths still refu
 fix cannot revert the `workspace.yml` edit the settled story was written to make. A story at
 `review` or `blocked` excuses nothing: that is a plan, not a verdict. Exit `2`.
 
-`--dry-run` runs every check and prints the exact `gh` command, creating nothing. It is
-read-only about the run either way: no event, no gate, no cursor. To mirror the plan's epics
-and stories to a ticket tool, `tldrx tickets sync` is the verb that does that, and it stays
-separate. It refuses cleanly, in a sentence, when there is no epic branch, no handoff, no
-remote, no `gh` on PATH, or when several epic branches leave the choice open.
+`--dry-run` runs every check and prints the exact `gh` command, creating nothing. It LEAVES the
+staged body file where it named it, on purpose — the printed line has to stay runnable, and a
+`--body-file` pointing at a directory that has been cleaned up is not a command. That is one
+temporary directory per dry run, and nothing reads it again; the real create writes the same file
+and removes it in a `finally`, refusals included. It is read-only about the run either way: no
+event, no gate, no cursor. To mirror the plan's epics and stories to a ticket tool,
+`tldrx tickets sync` is the verb that does that, and it stays separate. It refuses cleanly, in
+a sentence, when there is no epic branch, no handoff, no remote, no `gh` on PATH, or when
+several epic branches leave the choice open.
 Exits: `0` `1` `2` `3`.
 
 ## `tldrx watch`

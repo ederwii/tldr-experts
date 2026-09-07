@@ -30,7 +30,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
-import { shipRun, type ShipTransport } from "../src/core/run/ship.ts";
+import { runStories, shipRun, type ShipTransport } from "../src/core/run/ship.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { renderBuildHandoff } from "../src/core/build/handoff.ts";
 import type { StoryOutcome } from "../src/core/build/outcome.ts";
@@ -456,6 +456,38 @@ describe("tldrx ship", () => {
     expect(remedy).not.toMatch(/checkout main -- tldrx-work \.tldrx\s*$/);
   });
 
+  /**
+   * The remedy is a command an operator PASTES. `refused.join(" ")` made a path
+   * with a space in it into two pathspecs — `git checkout main -- a b.yml` —
+   * which either fails or checks out something nobody asked for. The blanket
+   * two-directory form it replaced could not have the problem, so this arrived
+   * with #167's path list.
+   */
+  test("a refused path with a SPACE is quoted, so the remedy line stays pasteable", async () => {
+    const ws = workspace({
+      ...ONE,
+      stories: [{
+        id: "S1", epic: "E1", title: "First story", status: "done",
+        touches: [".tldrx/workspace.yml"], evidence: ["04-build/log/S1.md:1"],
+      }],
+    });
+    readyToShip(ws);
+
+    // An excuse is what puts the remedy on its path-list branch at all.
+    const outcome = await ship(ws, withStatePaths([
+      ".tldrx/workspace.yml",
+      "tldrx-work/260829-x/notes with spaces.md",
+    ]));
+    expect(outcome.code).toBe(EXIT_GATE_REFUSED);
+
+    const remedy = outcome.lines.find(
+      (line) => line.trim().startsWith("git -C") && line.includes("checkout"),
+    ) ?? "";
+    expect(remedy).toContain('"tldrx-work/260829-x/notes with spaces.md"');
+    // One pathspec, not two: the bare path must not appear unquoted anywhere.
+    expect(remedy).not.toMatch(/ tldrx-work\/260829-x\/notes with/);
+  });
+
   test("`touches: .tldrx/work` does not excuse `.tldrx/workspace.yml`, and does excuse `.tldrx/work/x`", async () => {
     const ws = workspace({
       ...ONE,
@@ -494,6 +526,47 @@ describe("tldrx ship", () => {
     const text = outcome.lines.join("\n");
     expect(text).toMatch(/^\s+\.tldrx\/workspace\.yml$/m);
     expect(text).not.toContain("excused by");
+  });
+
+  /**
+   * ONE row per story id (wave-3 final review, M5).
+   *
+   * `runStories` walked every phase directory and pushed whatever it found, so a
+   * story file present under two of them became two rows and `settledTouches`
+   * built two excuses from them — taking the one that said `done` even when the
+   * copy in the directory that wins every other tie said `review`. Nothing writes
+   * a story outside `03-plan/stories/` today, which is exactly why this is pinned
+   * rather than left to be noticed: the guard is against a second writer, not
+   * against today's tree.
+   *
+   * The surviving row is the FIRST phase directory's — `04-build`, the same
+   * tie-break `openFixFindings` documents — so the two readers of this list read
+   * one file per story, and a stale `done` copy cannot excuse a state path the
+   * live one still has under review.
+   */
+  test("a story file duplicated across phase directories is read once, first directory winning", () => {
+    const ws = workspace({
+      ...ONE,
+      stories: [{
+        id: "S1", epic: "E1", title: "First story", status: "done",
+        touches: [".tldrx/workspace.yml"], evidence: ["04-build/log/S1.md:1"],
+      }],
+    });
+    readyToShip(ws);
+    // The decoy: the same story, still under review, under the phase directory
+    // that comes first.
+    const planned = readFileSync(join(ws.runDir, "03-plan", "stories", "S1.md"), "utf8");
+    mkdirSync(join(ws.runDir, "04-build", "stories"), { recursive: true });
+    writeFileSync(
+      join(ws.runDir, "04-build", "stories", "S1.md"),
+      planned.replace("status: done", "status: review"),
+      "utf8",
+    );
+
+    const rows = runStories(RunStore.open(ws.runDir));
+
+    expect(rows.filter((row) => row.id === "S1")).toHaveLength(1);
+    expect(rows.find((row) => row.id === "S1")?.status).toBe("review");
   });
 
   test("refuses when the run has cut no epic branch, and calls nothing", async () => {

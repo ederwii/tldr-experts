@@ -658,6 +658,39 @@ describe("the base refusal cites init's probe when one exists", () => {
     expect(cited[0]).toContain("not verified: `npm run test` exited 1");
   });
 
+  /**
+   * TWO slots can declare the same command (`test:` and `lint:` both `npm run
+   * test`), and `probeCommands` writes a row per SLOT — so the probe that
+   * measured this command red may sit in the second one. `initProbeLine`
+   * returned `null` from inside the loop on the first slot that matched by
+   * command, which read as "scan the slots" and behaved as "consult one".
+   * Cosmetic — a missing line, never a wrong one — but a loop that stops on its
+   * first match is the shape a later reader trusts to be a scan.
+   */
+  test("the same command in TWO slots is cited from whichever slot was probed red", () => {
+    const twoSlots: WorkspaceContext = {
+      ...context({}),
+      commandRoles: new Map([["app", new Map([["test", "npm run test"], ["lint", "npm run test"]])]]),
+      commandProbes: new Map([["app", new Map(Object.entries({
+        // `test:` was skipped, so it corroborates nothing; `lint:` ran the SAME
+        // command and measured it red.
+        test: {
+          status: "skipped", verified: false, exit_code: null, at: "2026-09-06T09:00:00Z",
+          reason: "skipped: --no-probe",
+        },
+        lint: {
+          status: "failed", verified: false, exit_code: 1, at: "2026-09-06T09:30:00Z",
+          reason: "not verified: `npm run test` exited 1",
+        },
+      }))]]),
+    };
+
+    const cited = baseRefusalLines([failure], twoSlots)
+      .filter((line) => line.includes("`tldrx init` measured this red too"));
+    expect(cited).toHaveLength(1);
+    expect(cited[0]).toContain("2026-09-06T09:30:00Z");
+  });
+
   test("a green probe, an unrun one, and no workspace at all each say nothing", () => {
     const green = baseRefusalLines([failure], context({
       test: {

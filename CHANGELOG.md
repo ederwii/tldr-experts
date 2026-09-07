@@ -78,11 +78,12 @@
   `unspawnable` (ENOENT/EACCES) or `not-probed` (a bare metacharacter needing a shell this
   probe does not open) — are different, honestly labelled rows instead of the same
   fabricated 127. `--no-probe` skips entirely and records the skip as its own reason
-  (`skipped: --no-probe`); the base pre-flight cites a probe only when it is a corroborating
-  `verified: false` with a real exit code, never an unrun one. `tldrx learn`'s sandboxed
-  walkthrough passes `--no-probe` to the `init` it runs; `tldrx map` never requests a probe
-  at all — it omits `detectWorkspace`'s `probe` option entirely, as before. Probing is a real
-  spawn, and `init`'s own `--help` "Deterministic and offline" claim is corrected to say so.
+  (`skipped: --no-probe`); the base pre-flight cites a probe only when its `status` is
+  `failed` — the one status that means the command ran and exited non-zero. `tldrx learn`'s
+  sandboxed walkthrough passes `--no-probe` to the `init` it runs; `tldrx map` never requests
+  a probe at all — it omits `detectWorkspace`'s `probe` option entirely, as before. Probing is
+  a real spawn, and `init`'s own `--help` "Deterministic and offline" claim is corrected to
+  say so.
   Additive on
   `WorkspaceRepoDocument`; every pre-#168 `workspace.yml` still validates. (#168)
 
@@ -94,11 +95,16 @@
   for. `renderShipBody` is now the one renderer: what shipped (the handoff's `done`
   findings), what did not (its unknowns), the fix-list findings still open, and the full
   handoff moved inside a collapsed `<details>` block rather than dropped. Dry-run and the
-  real create path share the one rendered body file, so what you preview is what posts. The
-  state refusal — an unsettled story whose `touches:` would otherwise excuse a dirty path —
-  now matches an excuse per `(repo, path)`, so a settled story's `touches:` excuses only its
-  own repo, and names only the paths still unsettled in its remedy; it exits the money/gate
-  family (`EXIT_GATE_REFUSED`), not a module-local code. (#167)
+  real create path share the one rendered body file, so what you preview is what posts. And
+  the state refusal has an allowed move at last: a story at `status: done` EXCUSES the state
+  paths its own `touches:` declared, so a story written to edit `.tldrx/workspace.yml` —
+  adding a repo, declaring a command — can finally be shipped, where before #102's refusal
+  had no way through at all. A story at `review` or `blocked` excuses nothing: a declaration
+  with no verdict behind it is a plan, not a fact. The excuse is matched per `(repo, path)`,
+  since `touches:` is relative to the story's own `repo:`, and the remedy names only the
+  paths still REFUSED — never the blanket `tldrx-work .tldrx`, which would revert the very
+  edit printed three lines above it as excused. It exits the money/gate family
+  (`EXIT_GATE_REFUSED`), not a module-local code. (#167)
 
 ## 0.9.2 — 2026-09-07
 

@@ -570,7 +570,13 @@ function remedyPaths(
   excused: readonly StateExcuse[],
 ): string {
   if (excused.length === 0) return `${PROJECT_WORK_DIR} ${PROJECT_FRAMEWORK_DIR}`;
-  return refused.join(" ");
+  // Quoted PER PATH. These are real paths off `git diff`, and joining them with a
+  // bare space turned one containing a space into two pathspecs — `git checkout
+  // main -- a b.yml` — a line the operator cannot paste. `quote` is the same
+  // echo-only quoter the printed `gh` command uses, and it leaves an ordinary
+  // path bare; nothing here is ever run by a shell. The two constants above need
+  // none: they are literals with no metacharacter in them.
+  return refused.map(quote).join(" ");
 }
 
 /**
@@ -915,9 +921,23 @@ function phaseDirs(store: RunStore): readonly string[] {
  * fail-closed direction for both readers: an unreadable story excuses no state
  * path and vouches for no fix list, so the worst a broken file can do is leave a
  * refusal standing.
+ *
+ * ONE ROW PER STORY ID, and the FIRST phase directory that holds it wins — the
+ * same tie-break `openFixFindings` states for the fix lists, so the two readers
+ * of this list cannot end up reading two different files for one story. Without
+ * it a story found in two phase directories was pushed twice, and `settledTouches`
+ * built a duplicate excuse from whichever copy said `done`: a stale copy could
+ * excuse a state path the live one still has under review. Deduping here can only
+ * ever remove an excuse, never add one, which is the direction a state refusal is
+ * allowed to move in.
+ *
+ * Exported for `test/ship.test.ts`: the duplicate is invisible downstream —
+ * `subtractExcused` reports one row per state path and `openFixFindings` dedups by
+ * id — so the property has to be asserted where it lives.
  */
-function runStories(store: RunStore): readonly ShipStory[] {
+export function runStories(store: RunStore): readonly ShipStory[] {
   const stories: ShipStory[] = [];
+  const seen = new Set<string>();
   for (const phase of phaseDirs(store)) {
     const dir = join(store.runDir, phase, STORIES_DIR);
     if (!existsSync(dir)) continue;
@@ -938,7 +958,8 @@ function runStories(store: RunStore): readonly ShipStory[] {
       // story, and this only ever reads its front matter (`adapters/collect.ts`
       // reads one the same way, for the same reason).
       const story = validateStoryFile(text).story;
-      if (story === null) continue;
+      if (story === null || seen.has(story.id)) continue;
+      seen.add(story.id);
       stories.push({ id: story.id, status: story.status, repo: story.repo, touches: story.touches });
     }
   }

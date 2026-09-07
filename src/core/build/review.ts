@@ -407,7 +407,9 @@ export function renderReviewLog(outcome: StoryOutcome): string {
           // measurement (#165).
           dodRefused(r)
             ? `- \`${r.command}\` → REFUSED, never ran — ${r.refusedBecause ?? DOD_REFUSAL_FALLBACK}`
-            : `- \`${r.command}\` → exit ${String(r.exitCode)}${r.timedOut ? " (timed out)" : ""}`
+            // `?? "?"` — the base side's spelling, for the row only a
+            // truncated `events.jsonl` can produce (`ran`, no exit code).
+            : `- \`${r.command}\` → exit ${String(r.exitCode ?? "?")}${r.timedOut ? " (timed out)" : ""}`
               + (r.exitCode === 0 ? "" : ` — ${r.tail}`),
         )),
     "",

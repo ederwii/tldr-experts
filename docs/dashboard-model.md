@@ -459,9 +459,9 @@ exit code to report, and the page carries the ABSENCE rather than inventing a
 number — it draws `REFUSED`, the same marker the handoff, the review log and the
 retro use, with `refusedBecause` and `tail` beside it saying why. Before this, the
 framework wrote a fabricated `126` there and the page drew it as a measurement.
-**`DASHBOARD_MODEL_VERSION` does not bump**: the type
-widened and a field was added, and no existing field's meaning moved — the same
-additive rule #85, #93 and #103 were held to.
+**`DASHBOARD_MODEL_VERSION` does not bump**: the type widened and a field was
+added, and no existing field's meaning moved — the same additive rule #85, #93
+and #103 were held to.
 
 Why it is on the page at all: a story's `dod` block is a **delta** gate, and it
 proves nothing if the base tree was already red. `preflight.ts` measures the base

@@ -302,8 +302,12 @@ function ledger(outcomes: readonly StoryOutcome[]): readonly string[] {
         dodRefused(result)
           ? `- ${outcome.id}: \`${result.command}\` in ${outcome.repo} was REFUSED and never ran — `
             + `${result.refusedBecause ?? DOD_REFUSAL_FALLBACK} [src: ${outcome.reviewRel}:1]`
+          // `?? "?"`, the spelling the base side already uses: a `ran` row with
+          // no exit code is only reachable from a truncated `events.jsonl`, and
+          // `?` fails the `digit+` grammar CLOSED rather than printing the word
+          // `undefined` as if it were a measurement.
           : `- ${outcome.id}: \`${result.command}\` in ${outcome.repo} `
-            + `[src: $ ${result.command} → exit ${String(result.exitCode)}]`,
+            + `[src: $ ${result.command} → exit ${String(result.exitCode ?? "?")}]`,
       );
     }
     for (const command of outcome.dodUnrecovered ?? []) {

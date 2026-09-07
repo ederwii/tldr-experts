@@ -138,7 +138,10 @@ export async function foreignEpicRefusal(
  * counting them made this command refuse the files it had just written itself
  * (`run.yml`, `events.jsonl`, `.lock`, the freshly synthesised `04-build/`), and
  * made a user's uncommitted answers a precondition of Build. Product dirt still
- * refuses exactly as before, with the same message and the same fix.
+ * refuses, by the same rule and with the same two-command fix. Two things about the
+ * message DID move: the count and the path list, which no longer include framework
+ * state, and the `Why:` line, which now names the pre-flight rather than the
+ * worktree it used to blame.
  *
  * The refusal prints the two literal commands, with this run's id in the stash
  * message, and does NOT stash anything itself: a framework-owned stash that a
