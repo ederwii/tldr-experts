@@ -15,7 +15,8 @@ import { fail } from "../report.ts";
 import { RunStore } from "../../core/run/RunStore.ts";
 import { ambiguousRunLines } from "../../core/run/openRuns.ts";
 import {
-  buildProgramCost, buildRunCost, renderProgramCost, renderRunCost,
+  buildProgramCost, buildRunCost, buildStoryCost,
+  renderProgramCost, renderRunCost, renderStoryCost,
 } from "../../core/budget/costView.ts";
 
 const VALUE_FLAGS = ["run", "root"];
@@ -23,7 +24,7 @@ const VALUE_FLAGS = ["run", "root"];
 export const costCommand: Command = {
   name: "cost",
   summary: "What has been spent — per attempt, per stage, per run",
-  usage: "tldrx cost [<run>] [--run <id>] [--all] [--json] [--root <path>]",
+  usage: "tldrx cost [<run>] [--run <id>] [--all] [--stories] [--json] [--root <path>]",
   implemented: true,
   run(argv: readonly string[]): Promise<number> {
     return Promise.resolve(costReport(argv));
@@ -62,6 +63,27 @@ function costReport(argv: readonly string[]): number {
           : `no run '${runId}' in tldrx-work/`}\n`,
       );
       return EXIT_NOT_FOUND;
+    }
+
+    // `--stories` is the same events on a different axis (#170): per STORY, what
+    // it measurably cost beside the CEILING its spawns were given. Both sides are
+    // in the log — `agent.spawned.max_budget_usd` and the `agent.result` envelope's
+    // `cost_usd` — so the promise at the top of this file survives it: no run.yml,
+    // no plan document, no price table. It is deliberately a CEILING and not "the
+    // plan's share": `STORY_KEYS` has no budget key, so there is no plan figure to
+    // take a share of, and naming one would invent it.
+    if (boolFlag(args, "stories")) {
+      const stories = buildStoryCost(resolution.store.runDir);
+      if (stories === null) {
+        process.stderr.write(
+          `tldrx cost: ${resolution.store.runId} has no readable run.yml or events.jsonl\n`,
+        );
+        return EXIT_NOT_FOUND;
+      }
+      process.stdout.write(
+        json ? `${JSON.stringify(stories, null, 2)}\n` : `${renderStoryCost(stories)}\n`,
+      );
+      return EXIT_OK;
     }
 
     const cost = buildRunCost(resolution.store.runDir);

@@ -8,6 +8,7 @@ import { stageAt } from "../run/RunFile.ts";
 import { spendBasisOf, type SpendTurn } from "../budget/spendBasis.ts";
 import { turnTokens } from "../budget/turnTokens.ts";
 import { round2 } from "./caps.ts";
+import { overShareSentence, sumOrNull } from "./planVsMeasured.ts";
 
 /** One turn's accounting — as much of an executor task as the cost line reads. */
 export interface PhaseCostTurn {
@@ -22,6 +23,20 @@ export interface PhaseCostTurn {
    */
   readonly inputTokens?: number;
   readonly outputTokens?: number;
+}
+
+/**
+ * One story's ceiling-vs-measured, as much of it as the cost line reads.
+ *
+ * Two nullable numbers and nothing else: the orchestrator owns the join (which
+ * caps it applied to which story, which turns it ran for them) and hands DATA
+ * down, exactly as `PreflightCache` and `ReviewCounters` do.
+ */
+export interface StorySpend {
+  /** What the executor handed this story's spawns as `--max-budget-usd`. */
+  readonly ceilingUsd: number | null;
+  /** What this process actually metered for it. Null is "never metered", not zero. */
+  readonly measuredUsd: number | null;
 }
 
 export interface PhaseCost {
@@ -105,6 +120,7 @@ export function phaseCostToDate<T extends PhaseCostTurn>(
   stageId: string,
   invocationUsd: number,
   invocationTurns: readonly T[] = [],
+  stories: readonly StorySpend[] = [],
 ): PhaseCost {
   let recorded: number | null = null;
   let turns: SpendTurn[] = [];
@@ -152,12 +168,24 @@ export function phaseCostToDate<T extends PhaseCostTurn>(
   // A fully metered stage keeps its clean line: `measured` is the one basis with
   // nothing to caveat, and a caveat on every header is a caveat nobody reads.
   const bound = counted.basis === "measured" ? null : counted.reason;
+  // One clause, from the ONE arithmetic (`build/planVsMeasured.ts`) — the same
+  // sentence `tldrx cost --stories` prints, so the header and the report cannot
+  // word one fact two ways. Absent when either side is missing or the stories
+  // fit, the same discipline `bound` follows above: `sumOrNull` refuses to add a
+  // `null` as a zero, so a story whose ceiling was never recorded takes the
+  // whole clause with it rather than shrinking the denominator.
+  const over = overShareSentence(
+    sumOrNull(stories.map((story) => story.ceilingUsd)),
+    sumOrNull(stories.map((story) => story.measuredUsd)),
+    stories.length,
+  );
+  const note = [bound, over].filter((part) => part !== null).join("; ") || null;
   if (recorded === null) {
     return {
       usd: round2(invocationUsd),
       note: "this invocation only — `run.yml` could not be read for what the stage spent before it"
-        + (bound === null ? "" : `; ${bound}`),
+        + (note === null ? "" : `; ${note}`),
     };
   }
-  return { usd: round2(recorded + invocationUsd), note: bound };
+  return { usd: round2(recorded + invocationUsd), note };
 }

@@ -39,6 +39,7 @@ import { listRunDirs } from "../../hooks/lib/workspace.ts";
 import { RunStore } from "../run/RunStore.ts";
 import { economyFor, DEFAULT_ECONOMY, type Economy, type RunBudget } from "./RunBudget.ts";
 import { loadRunBudget } from "./loadBudget.ts";
+import { overShareSentence, sumOrNull } from "../build/planVsMeasured.ts";
 
 export interface CostTokens {
   readonly input: number;
@@ -98,6 +99,33 @@ export interface CostProgram {
   readonly tokens: CostTokens;
   readonly declaredTokens: number;
   readonly unmeteredAttempts: number;
+}
+
+/**
+ * One story's money, both sides of it, each `null` rather than `0` when absent.
+ *
+ * `ceilingUsd` is the sum of the `max_budget_usd` figures this run's
+ * `agent.spawned` events carried for the story — the CEILING the executor
+ * computed and handed each spawn. It is not "the plan's share": `STORY_KEYS`
+ * (`src/core/schemas/story.ts`) has no budget key, so no plan document holds a
+ * per-story dollar figure at all, and naming one would be inventing it.
+ */
+export interface StoryCostRow {
+  readonly story: string;
+  readonly ceilingUsd: number | null;
+  readonly measuredUsd: number | null;
+  /** `measuredUsd / ceilingUsd`, or null when either side is absent. */
+  readonly ratio: number | null;
+}
+
+export interface StoryCost {
+  readonly run: string;
+  readonly title: string;
+  readonly rows: readonly StoryCostRow[];
+  /** The one over-ceiling sentence, or null — `overShareSentence`, not a second copy. */
+  readonly note: string | null;
+  /** Stories at least one of whose turns this process never metered. */
+  readonly unmeteredStories: readonly string[];
 }
 
 const ZERO: CostTokens = { input: 0, output: 0, cacheCreation: 0, cacheRead: 0 };
@@ -175,6 +203,98 @@ export function buildRunCost(runDir: string): CostRun | null {
     declaredTokens: stages.reduce((sum, s) => sum + s.declaredTokens, 0),
     stages,
     unmeteredAttempts: attempts.filter((a) => a.usd === null).length,
+  };
+}
+
+/**
+ * Per story: what it measurably cost, and the ceiling its spawns were given.
+ *
+ * Off `events.jsonl` and NOTHING else, which is what keeps `cost.ts`'s opening
+ * sentence true. Both sides are already in the stream (measured in the committed
+ * golden, `test/fixtures/build/golden/rounds-events.txt`):
+ *
+ *   #03 agent.spawned … payload={"max_budget_usd":1.6,…,"role":"developer","story":"S1"}
+ *   #19 agent.result  … cost_usd=0.1 keys=[effort,key,model,outputs,phase,session_id,task]
+ *
+ * Note WHERE the dollars are: `cost_usd` is the event ENVELOPE's field and
+ * appears in no `agent.result` payload key list. Summing `payload.cost_usd`
+ * would return `0` for exactly the metered rows this report exists for, so the
+ * money is taken through `toAttempt` — the same reader `buildRunCost` uses, with
+ * the same `metered !== false` gate.
+ *
+ * That gate is why an UNMETERED turn contributes NOTHING rather than `0`: a turn
+ * this process never metered is a cost it did not see, and a story whose every
+ * turn was unmetered is `measuredUsd: null` with a reason printed under the
+ * table. Same on the other side — a story that reported a cost with no spawn
+ * carrying `max_budget_usd` has no ceiling to be measured against, and gets a
+ * named absence instead of a `$0.00` that reads as "it was given nothing".
+ */
+export function buildStoryCost(runDir: string): StoryCost | null {
+  let title = "";
+  let runId = basename(runDir);
+  let readable = false;
+  try {
+    const store = RunStore.open(runDir);
+    title = store.run.title;
+    runId = store.run.run;
+    readable = true;
+  } catch {
+    // A run.yml that will not parse still has an events log worth adding up.
+  }
+
+  const order: string[] = [];
+  const ceilings = new Map<string, number>();
+  const measured = new Map<string, number>();
+  const unmetered = new Set<string>();
+  let seen = 0;
+  const first = (story: string): void => { if (!order.includes(story)) order.push(story); };
+
+  for (const event of EventLog.forRun(runDir).read()) {
+    seen += 1;
+    const payload = event.payload;
+    if (event.type === "agent.spawned") {
+      const story = str(payload.story);
+      const cap = payload.max_budget_usd;
+      if (story === null || typeof cap !== "number" || !Number.isFinite(cap)) continue;
+      first(story);
+      ceilings.set(story, (ceilings.get(story) ?? 0) + cap);
+      continue;
+    }
+    const attempt = toAttempt(event);
+    if (attempt === null) continue;
+    // The story key an `agent.result` carries is `key` (`runNext.ts`'s
+    // `recordExecutorTasks`); `task` is the run.yml row id and joins nothing.
+    const story = str(payload.key);
+    if (story === null) continue;
+    first(story);
+    if (attempt.usd === null) unmetered.add(story);
+    else measured.set(story, round((measured.get(story) ?? 0) + attempt.usd));
+  }
+  if (!readable && seen === 0) return null;
+
+  const rows: StoryCostRow[] = order.map((story) => {
+    const ceilingUsd = ceilings.has(story) ? round(ceilings.get(story) ?? 0) : null;
+    const measuredUsd = measured.has(story) ? round(measured.get(story) ?? 0) : null;
+    return {
+      story,
+      ceilingUsd,
+      measuredUsd,
+      ratio: ceilingUsd !== null && ceilingUsd > 0 && measuredUsd !== null
+        ? measuredUsd / ceilingUsd
+        : null,
+    };
+  });
+  return {
+    run: runId,
+    title,
+    rows,
+    // ONE arithmetic — the same leaf the Build handoff's cost line goes through.
+    note: overShareSentence(
+      sumOrNull(rows.map((row) => row.ceilingUsd)),
+      sumOrNull(rows.map((row) => row.measuredUsd)),
+      rows.length,
+    ),
+    unmeteredStories: [...unmetered],
   };
 }
 
@@ -298,6 +418,79 @@ export function renderRunCost(cost: CostRun): string {
   return lines.join("\n");
 }
 
+/** Why there is no over-ceiling sentence: nothing to add up, or nothing to say. */
+function noTotalReason(rows: readonly StoryCostRow[]): string {
+  const ceilings = sumOrNull(rows.map((row) => row.ceilingUsd));
+  const measured = sumOrNull(rows.map((row) => row.measuredUsd));
+  if (ceilings === null || measured === null) {
+    return "no total: a story above is missing one side, and an absent figure is not summed as zero.";
+  }
+  return "every story measured inside the ceiling its spawns were given.";
+}
+
+/**
+ * The per-story ledger: what it cost, the ceiling its spawns were given, the ratio.
+ *
+ * The header names the figure for what it IS. A ceiling is what the executor
+ * computed and handed the spawn (`caps.ts`, surfaced as
+ * `agent.spawned.max_budget_usd`); it is NOT a share of a plan, because no plan
+ * document carries a per-story dollar figure to take a share of. Getting that
+ * name wrong is the failure #170 is about, so it is in the header rather than in
+ * a footnote.
+ *
+ * Absences are named with their reason and never printed as `$0.00` — the same
+ * rule the run ledger above follows for an unmetered attempt, one level down.
+ */
+export function renderStoryCost(cost: StoryCost): string {
+  const lines = [
+    `${cost.run}${cost.title === "" ? "" : ` · ${cost.title}`} — per story, against the `
+    + "ceiling its spawns were given",
+    "",
+  ];
+  if (cost.rows.length === 0) {
+    lines.push(
+      "  no story spawns and no story-keyed `agent.result` in this run's events.jsonl — "
+      + "nothing to measure against a ceiling.",
+    );
+    return lines.join("\n");
+  }
+  const width = Math.max(...cost.rows.map((row) => row.story.length), "STORY".length);
+  lines.push(`  ${"STORY".padEnd(width)}  ${storyCell("MEASURED")}  ${storyCell("CEILING")}  RATIO`);
+  for (const row of cost.rows) {
+    lines.push(
+      `  ${row.story.padEnd(width)}  `
+      + `${storyCell(row.measuredUsd === null ? NOT_RECORDED : `$${row.measuredUsd.toFixed(2)}`)}  `
+      + `${storyCell(row.ceilingUsd === null ? NOT_RECORDED : `$${row.ceilingUsd.toFixed(2)}`)}  `
+      + `${row.ratio === null ? DASH : `${row.ratio.toFixed(1)}x`}`,
+    );
+  }
+  lines.push("");
+  if (cost.rows.some((row) => row.ceilingUsd === null)) {
+    lines.push(
+      "  ceiling not recorded — no `agent.spawned` for that story carried `max_budget_usd`. "
+      + "The ceiling is the figure the executor handed the spawn; nothing here invents one.",
+    );
+  }
+  if (cost.rows.some((row) => row.measuredUsd === null)) {
+    lines.push(
+      "  measured not recorded — no metered `agent.result` carried a cost for that story. "
+      + "A turn this process never metered is a cost it did not see, never a free one.",
+    );
+  }
+  if (cost.unmeteredStories.length > 0) {
+    lines.push(
+      `  ${cost.unmeteredStories.join(", ")}: at least one turn was UNMETERED, so the `
+      + "measurement is a LOWER BOUND, not a total.",
+    );
+  }
+  // The footer is three different sentences, not one with a fallback: a total
+  // that could not be FORMED and a total that came out under the ceiling are
+  // different facts, and printing the reassuring one for the missing case is the
+  // dangerous direction.
+  lines.push(`  ${cost.note ?? noTotalReason(cost.rows)}`);
+  return lines.join("\n");
+}
+
 export function renderProgramCost(program: CostProgram): string {
   const lines = [
     `${plural(program.runs.length, "run")} in this workspace`,
@@ -390,6 +583,7 @@ function readBudget(runDir: string): RunBudget | null {
 
 const ECONOMY_WIDTH = 12;
 const DASH = "—";
+const NOT_RECORDED = "not recorded";
 
 /**
  * The four counters in one column group — the same order at every level — plus
@@ -442,6 +636,11 @@ function round(n: number): number {
 
 function padCell(text: string): string {
   return text.padEnd(11);
+}
+
+/** Wider than `padCell`: `not recorded` is twelve characters and must not push a column. */
+function storyCell(text: string): string {
+  return text.padEnd(13);
 }
 
 /**

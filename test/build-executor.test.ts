@@ -2688,6 +2688,95 @@ describe("the Build handoff header carries the decided tally (#169)", () => {
   });
 });
 
+/**
+ * The Build handoff's cost line says when the stories overran the CEILING their
+ * spawns were given (#170 ask 4).
+ *
+ * The clause lands on `phaseCostToDate`'s `note` — the ONE place — and the note
+ * is what `build.ts`'s `writeHandoff` hands `renderBuildHandoff` as `costNote`.
+ * So the failing assertion goes through the real path rather than through the
+ * renderer: the two `renderBuildHandoff` lines at the bottom are GUARDS, already
+ * green at the base (`handoff.ts` renders ` (${costNote})` behind a `== null`
+ * check, so `parts({})` already equals `parts({ costNote: null })`), and neither
+ * can fail for the reason this change exists.
+ *
+ * It is a CEILING and the sentence says so: `STORY_KEYS` carries no budget key,
+ * so no plan document holds a per-story dollar figure to call "the plan's share".
+ */
+describe("the Build handoff's cost line carries the over-ceiling clause (#170)", () => {
+  const HANDOFF: BuildHandoffParts = {
+    runId: "260907-x", stageId: "build", model: null, costUsd: 2.27, budgetUsd: 8,
+    at: "2026-09-07T09:00:00Z", outcomes: [], epics: [],
+  };
+
+  function parts(over: Partial<BuildHandoffParts>): BuildHandoffParts {
+    return { ...HANDOFF, ...over };
+  }
+
+  /** An untouched Build stage: `run.yml` reads, nothing was spent, note is null. */
+  function stageWithSpend(): BuildWorkspace {
+    return workspace(TWO_WAVES);
+  }
+
+  test("phaseCostToDate's note carries the over-ceiling clause when the stories overran", () => {
+    const ws = stageWithSpend();
+    const cost = phaseCostToDate(ws.runDir, "04-build", "build", 0, [], [
+      { ceilingUsd: 0.39, measuredUsd: 2.27 },
+    ]);
+    expect(cost.note ?? "").toContain("5.8");
+    expect(cost.note ?? "").toContain("ceiling");
+    expect(cost.note ?? "").not.toContain("plan");
+  });
+
+  test("and says nothing when the stories fit — no clause, and the fully-metered stage keeps its clean line", () => {
+    const ws = stageWithSpend();
+    expect(phaseCostToDate(ws.runDir, "04-build", "build", 0, [], [
+      { ceilingUsd: 5, measuredUsd: 1 },
+    ]).note).toBeNull();
+  });
+
+  /**
+   * An absent side is never summed as zero — the sum itself refuses, so the
+   * clause is absent rather than a ratio over a figure nothing recorded.
+   */
+  test("a story whose ceiling was never recorded takes the whole clause with it", () => {
+    const ws = stageWithSpend();
+    expect(phaseCostToDate(ws.runDir, "04-build", "build", 0, [], [
+      { ceilingUsd: 0.39, measuredUsd: 2.27 },
+      { ceilingUsd: null, measuredUsd: 1 },
+    ]).note).toBeNull();
+    // And with no story rows at all the line is exactly what it was before this.
+    expect(phaseCostToDate(ws.runDir, "04-build", "build", 0, [], []).note).toBeNull();
+  });
+
+  /**
+   * The WIRE, end to end: the executor's own caps and turns reach the header.
+   *
+   * The three tests above pin the leaf and the note; this one is the only proof
+   * that `build.ts` hands the right rows down. `perAgentMaxUsd: 0.5` clamps every
+   * cap the executor computes; `FAKE_BUILD_COST=1.5` makes every turn cost three
+   * times it; the run budget stays roomy so nothing is refused for money and the
+   * stage reaches `finish()` and writes the handoff.
+   */
+  test("the clause reaches the REAL handoff header, off the caps the executor applied", async () => {
+    const ws = workspace({ ...TWO_WAVES, budgetUsd: 200, perAgentMaxUsd: 0.5 });
+    process.env.FAKE_BUILD_COST = "1.5";
+
+    await next(ws);
+
+    const header = readFileSync(join(ws.runDir, "04-build", "handoff.md"), "utf8")
+      .split("\n").find((line) => line.startsWith("Stage: ")) ?? "";
+    expect(header).toContain("ceiling their spawns were given");
+    expect(header).toContain("2 stories measured");
+    expect(header).not.toContain("plan");
+  }, 120_000);
+
+  test("GUARD (green before this change): a note reaches the handoff header, and a null one changes nothing", () => {
+    expect(renderBuildHandoff(parts({ costNote: "5.8x over" }))).toContain("5.8x over");
+    expect(renderBuildHandoff(parts({ costNote: null }))).toBe(renderBuildHandoff(parts({})));
+  });
+});
+
 describe("stack packs reach the Build reviewer (stack packs design §4.5)", () => {
   const STACK_EXPERT: Readonly<Record<string, string>> = {
     ".tldrx/experts/typescript-stack/expert.md": [

@@ -890,13 +890,21 @@ Exits: `0` `1` `2` `3`.
 What the work actually cost — per attempt, per stage, per run.
 
 ```
-tldrx cost [<run>] [--run <id>] [--all] [--json] [--root <path>]
+tldrx cost [<run>] [--run <id>] [--all] [--stories] [--json] [--root <path>]
 ```
 
 Read off `agent.result` events and nothing else: every dollar printed here is one the Claude
 CLI reported. No token count is ever multiplied by a price. Attempts are never merged. Work
 this process never saw a cost for is UNMETERED, never $0.00. `--all` covers every run in the
-workspace, finished ones included, and the run argument is ignored. Exits: `0` `1` `3`.
+workspace, finished ones included, and the run argument is ignored.
+
+`--stories` changes the axis, not the source: one row per story with what it measurably cost,
+the **ceiling** its spawns were given (`agent.spawned.max_budget_usd`), and the ratio. It is a
+ceiling and not "the plan's share" — a story file carries no budget key, so no plan document
+holds a per-story dollar figure to take a share of, and the report never invents one. A story
+missing either side reads `not recorded` with the reason, never `$0.00`, and no total is
+printed over a figure that could not be formed. It changes no ceiling and spends nothing; it
+is the measurement a recalibration of those ceilings would be argued from. Exits: `0` `1` `3`.
 
 ## `tldrx map`
 

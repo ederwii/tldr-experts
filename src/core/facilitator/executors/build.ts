@@ -121,7 +121,7 @@ import {
   RecurringFocus, ReviewCounters, type RoundParts,
 } from "../../build/reviewRound.ts";
 import { readReviewLedger } from "../../build/reviewLedger.ts";
-import { phaseCostToDate } from "../../build/phaseCost.ts";
+import { phaseCostToDate, type StorySpend } from "../../build/phaseCost.ts";
 import { appendBuildRetro, buildRetroPath, gateRetroLines, storyRetroLines } from "../../build/retroLog.ts";
 import {
   clampParallel, developerCap, developerPriceDivisor, reviewerCap, round2,
@@ -425,6 +425,14 @@ interface StoryContext {
 class BuildSession {
   /** Every sub-agent this stage ran; `runNext` turns them into `run.yml` tasks. */
   readonly tasks: ExecutorTask[] = [];
+  /**
+   * The ceilings this invocation actually handed each story's spawns, summed
+   * per story — recorded AT the spawn rather than recomputed, because
+   * `developerCap` reads the attempt and `reviewerCap` reads what had been spent
+   * by then, so a later re-derivation would be a different number wearing the
+   * same name (#170).
+   */
+  private readonly storyCeilings = new Map<string, number>();
   private readonly outcomes = new Map<string, StoryOutcome>();
   /**
    * The epic branches, worktrees and merges this invocation accumulated
@@ -1717,6 +1725,7 @@ class BuildSession {
    */
   private async spawnDeveloper(story: StoryContext): Promise<{ cost: number; error: string | null }> {
     const cap = developerCap(this.capParts, story.planned.story.id, story.attempt);
+    this.recordCeiling(story.planned.story.id, cap);
     const commands = this.repoCommands(story.planned.story.repo);
     this.ctx.emit("agent.spawned", {
       phase: this.ctx.phaseId,
@@ -1829,6 +1838,7 @@ class BuildSession {
     // counted on disk before this line is reached a second time (gh #78).
     for (;;) {
       const cap = reviewerCap(this.capParts, this.spent(), id);
+      this.recordCeiling(id, cap);
       this.ctx.emit("agent.spawned", {
         phase: this.ctx.phaseId,
         story: id,
@@ -2317,6 +2327,7 @@ class BuildSession {
     // and a phase-to-date number there would double-count on every re-entry.
     const cost = phaseCostToDate(
       this.ctx.runDir, this.ctx.phaseId, this.ctx.stageId, this.spent(), this.tasks,
+      this.storySpend(),
     );
     // ONE walk for both fields, and the leaf derives its own phase list from the
     // run dir — the executor's `ctx` carries none, and passing one from here is
@@ -2751,6 +2762,32 @@ class BuildSession {
 
   private spent(): number {
     return round2(this.tasks.reduce((sum, task) => sum + task.costUsd, 0));
+  }
+
+  /** One spawn's ceiling, added to what this story's earlier spawns were given. */
+  private recordCeiling(story: string, capUsd: number): void {
+    this.storyCeilings.set(story, round2((this.storyCeilings.get(story) ?? 0) + capUsd));
+  }
+
+  /**
+   * The rows the handoff's cost line measures against its ceilings (#170).
+   *
+   * DATA, not `ctx` and not the session: the orchestrator owns the join — which
+   * caps it handed which story, which turns it ran for them — and
+   * `overShareSentence` owns the arithmetic. An UNMETERED turn contributes
+   * nothing rather than `$0.00`, so a story whose every turn was host-billed is
+   * `measuredUsd: null` and takes the whole clause with it.
+   */
+  private storySpend(): readonly StorySpend[] {
+    return [...this.storyCeilings].map(([story, ceilingUsd]) => {
+      const turns = this.tasks.filter((task) => task.key === story && task.metered !== false);
+      return {
+        ceilingUsd,
+        measuredUsd: turns.length === 0
+          ? null
+          : round2(turns.reduce((sum, task) => sum + task.costUsd, 0)),
+      };
+    });
   }
 
   private logPaths(): readonly string[] {
