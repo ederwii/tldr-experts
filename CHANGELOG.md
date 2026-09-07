@@ -8,29 +8,32 @@
 - **An answered decision now says who decided it, and what it binds to.** `tldrx answer`
   wrote a fact with no attribution and no repo scope, so a superseded owner call and an
   unattended driver default read identically in `facts.yml` and in every prompt built from
-  it. Repeatable `--decided-by <owner|driver>` and `--repo <name>` land on the fact `answer`
-  writes — `--decided-by` outside the closed set, or `--repo` naming no workspace repo, is a
-  usage refusal (exit 1) with nothing written, and `--repo` passed twice scopes once. With
-  neither flag the fact says "not stated," never a guessed owner. `Fact.decided_by` and
-  `Fact.repos` are additive on `facts.yml`: a pre-existing file still loads and renders
-  unchanged. (#169)
+  it. `--decided-by <owner|driver>` (last one wins, like any ordinary flag) and repeatable
+  `--repo <name>` land on the fact `answer` writes — `--decided-by` outside the closed set,
+  or `--repo` naming no workspace repo, is a usage refusal (exit 1) with nothing written, and
+  `--repo` passed twice scopes once. With neither flag the fact says "not stated," never a
+  guessed owner. `Fact.decided_by` is additive on `facts.yml`; `Fact.repos` already existed
+  and is required, not additive. (#169)
 - **Two signed facts that disagree produce a question, without an agent choosing to
   notice.** The `affects:`-scoped contradiction check now runs on every `answer`, scores the
-  new fact against the live ones it shares a repo with, and — on a hit — RAISES an advisory
+  new fact against the live ones in the same `area`, and — on a hit — RAISES an advisory
   question (`asked_by: tldrx`, a new `advisory:` metadata key that opts a block out of the
   auto gate without hiding it from `tldrx questions`) rather than refusing the answer. The
-  losing fact keeps `conflicts_with: [<id>]` (additive, empty-omitted, unquoted), so
-  "not detected" never reads as "checked and agreed" — the check is lexical, and honestly
-  cannot catch what its own transcript produced here: three differently-titled answers whose
-  contents actually disagree. The new `fact.conflict_raised` event
-  (`{fact, conflicts_with, score, q, raised}`) joins the closed `EVENT_TYPES` enum. (#169)
+  new fact keeps `conflicts_with: [<id>]` naming the fact it contradicts (additive,
+  empty-omitted, unquoted) — which one is right is left to the question it raises, nothing in
+  the mechanism decides a "loser." "Not detected" never reads as "checked and agreed" — the
+  check is lexical, and honestly cannot catch what its own transcript produced here: three
+  differently-titled answers whose contents actually disagree. The new `fact.conflict_raised`
+  event (`{fact, conflicts_with, score, q, raised}`) joins the closed `EVENT_TYPES` enum.
+  (#169)
 - **A defect in a file no story declared has a sanctioned remedy and a visible home.**
   Reaching it used to mean a hand edit to a story's `touches:` while the boundary card
   described exactly the verb that edit needed and the CLI forbade it. Separately, and by
   owner decision REPORT ONLY — no new gate condition, no new refusal, no new exit code — a
   Build finding whose file matches no story's declared surface now reaches the Build
-  handoff, the PR body and the fix-list card, named as unowned rather than silently absorbed
-  by whichever story happened to run last. (#171)
+  handoff, the PR body and the boundary card (only when a boundary trigger already draws
+  one), named as unowned rather than silently absorbed by whichever story happened to run
+  last. (#171)
 
 - **The developer bundle carries `result_schema` too, so both halves of one handshake make the
   same promise.** Measured on disk in a real run: `.agent/<story>/pending.json` had no
@@ -54,16 +57,19 @@
   `story.touches_widened` (`{story, paths, note, before, after}`, joining the closed event
   enum) and rewrites `touches:` through the same validated write every other command uses.
   Refused (exit 2, nothing written) for a `done` story — naming `reopen --for-fix` as the
-  remedy — a `..` path segment, a path already declared, an unknown story or run, or a plan
-  the story doesn't have; `--for-fix` is not a flag of `widen` itself and passing it is a
-  usage refusal (exit 1). (#171)
+  remedy — a `..` path segment, a path already declared, an unknown story, or a plan the
+  story doesn't have; an unresolved run is exit 3 (not found), and `--for-fix` is not a flag
+  of `widen` itself and passing it is a usage refusal (exit 1). (#171)
 - **`tldrx budget grant <amount> --fact <id>`** — a ceiling that answers to a recorded
-  authorization instead of a bare number. Writes `authorized_usd`, `authorized_by` (the fact
-  id — not duplicated under a second key) and `authorized_at` at run or phase scope, and
-  fires `budget.granted` (`{amount_usd, fact, phase, note, ceiling_usd}`, joining the closed
-  event enum); a non-positive amount is refused (exit 1, nothing written). `on_grant_exceed`
-  (default `warn`, distinct from and never confused with `on_exceed`) says what a later
-  `budget raise` past the grant does; `budget show` renders the grant back and stays silent
+  authorization instead of a bare number. Writes `authorized_usd` at run or phase scope, and
+  `authorized_by`/`authorized_at` always at the run level, citing the fact behind it (not
+  duplicated under a second key) — `--phase` scopes the amount, never the citation. Fires
+  `budget.granted` (`{amount_usd, fact, phase, note, ceiling_usd, previous_usd}`, joining the
+  closed event enum) — a second grant replaces the amount and the event records what it
+  replaced, `null` on the first grant; a non-positive amount is refused (exit 1, nothing
+  written). `on_grant_exceed` (default `warn`, distinct from and never confused with
+  `on_exceed`) says what a later `budget raise` past the grant does; `budget show` renders
+  the grant back and stays silent
   when none is recorded. `--fact`/`--phase`/`--on-exceed` are refused (exit 1) on
   `budget show` and `budget raise`, where recording a policy is not their job. All four keys
   are additive on `budget.yml` — a file written before this change still loads and means no
