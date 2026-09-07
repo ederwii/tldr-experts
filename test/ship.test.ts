@@ -126,6 +126,15 @@ interface Call {
   readonly cmd: string;
   readonly args: readonly string[];
   readonly cwd: string;
+  /**
+   * `--body-file`'s content, read AT CALL TIME — the bytes `gh` would have seen.
+   *
+   * Snapshotted rather than read from disk afterwards because `shipRun` removes
+   * the body's temp directory when it is done with it. Reading it later would
+   * assert that the file OUTLIVED the command, which is not the property that
+   * matters; this asserts it existed while the command ran, which is.
+   */
+  readonly body?: string;
 }
 
 /** A transport that records every call and answers from a scripted table. */
@@ -136,7 +145,7 @@ function fakeTransport(
   return {
     calls,
     async run(cmd, args, cwd) {
-      calls.push({ cmd, args: [...args], cwd });
+      calls.push({ cmd, args: [...args], cwd, ...snapshotBody(args) });
       const key = `${cmd} ${args.slice(0, 2).join(" ")}`;
       const answer = answers[key] ?? answers[cmd];
       return {
@@ -146,6 +155,24 @@ function fakeTransport(
       };
     },
   };
+}
+
+/** `{ body }` when this argv carries a readable `--body-file`, `{}` otherwise. */
+function snapshotBody(args: readonly string[]): { body?: string } {
+  const at = args.indexOf("--body-file");
+  const path = at === -1 ? "" : args[at + 1] ?? "";
+  if (path === "") return {};
+  try {
+    return { body: readFileSync(path, "utf8") };
+  } catch {
+    return {};
+  }
+}
+
+/** The `--body-file` path of the `gh pr create` that ran, quoting stripped. */
+function bodyPathIn(text: string): string {
+  const found = /--body-file (?:"([^"]+)"|(\S+))/.exec(text);
+  return found?.[1] ?? found?.[2] ?? "";
 }
 
 /** The answers a healthy repo gives: gh present, an origin, the branch pushed. */
@@ -172,12 +199,9 @@ async function ship(ws: BuildWorkspace, transport: ShipTransport, extra: Record<
   });
 }
 
-/** What `--body-file` was actually handed, read off the recorded `gh pr create`. */
+/** What `--body-file` was actually handed, as `gh` saw it. */
 function bodyOf(transport: { calls: Call[] }): string {
-  const create = transport.calls.find((call) => call.cmd === "gh" && call.args[0] === "pr");
-  const args = create?.args ?? [];
-  const at = args.indexOf("--body-file");
-  return at === -1 ? "" : readFileSync(args[at + 1] ?? "", "utf8");
+  return transport.calls.find((call) => call.cmd === "gh" && call.args[0] === "pr")?.body ?? "";
 }
 
 /**
@@ -216,10 +240,11 @@ function writeFixlistFixture(
   ws: BuildWorkspace,
   storyId: string,
   findings: readonly Partial<FixFinding>[],
+  phase = "04-build",
 ): void {
-  mkdirSync(join(ws.runDir, "04-build", "fixlist"), { recursive: true });
+  mkdirSync(join(ws.runDir, phase, "fixlist"), { recursive: true });
   writeFileSync(
-    join(ws.runDir, "04-build", "fixlist", `${storyId}-1.md`),
+    join(ws.runDir, phase, "fixlist", `${storyId}-1.md`),
     renderFixlist({
       storyId,
       title: "First story",
@@ -264,11 +289,14 @@ describe("tldrx ship", () => {
     expect(args[args.indexOf("--base") + 1]).toBe("main");
     expect(args).toContain("--body-file");
     const bodyFile = args[args.indexOf("--body-file") + 1] ?? "";
-    expect(existsSync(bodyFile)).toBe(true);
-    // Every byte of the handoff is in the body — nothing paraphrased, nothing dropped.
-    expect(readFileSync(bodyFile, "utf8")).toContain(HANDOFF);
-    // The body is not written into the workspace, where it would become a diff.
+    // The file was THERE when `gh` ran, and every byte of the handoff was in it —
+    // nothing paraphrased, nothing dropped.
+    expect(create?.body).toBeDefined();
+    expect(create?.body ?? "").toContain(HANDOFF);
+    // The body is not written into the workspace, where it would become a diff,
+    // and it does not outlive the command that needed it.
     expect(bodyFile.startsWith(ws.root)).toBe(false);
+    expect(existsSync(bodyFile)).toBe(false);
     // Run in the repo the branch lives in, never in the workspace root.
     expect(create?.cwd).toBe(ws.repoDir);
     expect(outcome.lines.join("\n")).toContain("https://github.com/ederwii/app/pull/7");
@@ -333,6 +361,46 @@ describe("tldrx ship", () => {
     expect(section(body, "## Open findings")).not.toContain("the token is logged");
   });
 
+  test("a story whose fix list turns up under two phase directories is listed once", async () => {
+    const ws = workspace();
+    readyToShip(ws);
+    // The real home, and a decoy under the Plan phase. Nothing writes one there
+    // today (`writeFixlist`'s only caller passes `BUILD_PHASE`) — this pins the
+    // loop that would otherwise report one story's findings twice, once per
+    // directory, with two different citations.
+    writeFixlistFixture(ws, "S1", [{ finding: "the token is logged" }]);
+    writeFixlistFixture(ws, "S1", [{ finding: "a decoy nobody wrote" }], "03-plan");
+
+    const transport = healthy();
+    await ship(ws, transport);
+    const body = bodyOf(transport);
+
+    expect(body.split("the token is logged").length - 1).toBe(1);
+    expect(body).not.toContain("a decoy nobody wrote");
+    // The fix list's real home wins, not whichever directory came first.
+    expect(body).toContain("04-build/fixlist/S1-1.md");
+  });
+
+  test("--dry-run names a body file that IS the body, byte for byte", async () => {
+    const ws = workspace();
+    readyToShip(ws);
+
+    const dry = await ship(ws, healthy(), { dryRun: true });
+    const named = bodyPathIn(dry.lines.join("\n"));
+    expect(named).not.toBe("");
+    // The printed command has to be runnable: the file it names must be there,
+    // and must be the body — not merely a path that parses.
+    expect(existsSync(named)).toBe(true);
+    const printed = readFileSync(named, "utf8");
+    expect(printed).toContain("## What shipped");
+    expect(printed).toContain(HANDOFF);
+
+    // And it is what a real `gh pr create` would have been handed.
+    const transport = healthy();
+    await ship(ws, transport);
+    expect(bodyOf(transport)).toBe(printed);
+  });
+
   test("no fix list at all leaves the section out rather than asserting an empty one", async () => {
     const ws = workspace();
     readyToShip(ws);
@@ -376,6 +444,39 @@ describe("tldrx ship", () => {
     // The excused path is subtracted, not listed among the refused ones.
     expect(text).not.toMatch(/^\s+\.tldrx\/workspace\.yml$/m);
     expect(text).toContain("1 change(s)");
+
+    // …and the remedy it prints must not undo the excuse three lines above it.
+    // `git checkout <base> -- .tldrx` would discard S1's declared work and ship
+    // a branch that no longer carries the thing the story was written to do.
+    const remedy = outcome.lines.find(
+      (line) => line.trim().startsWith("git -C") && line.includes("checkout"),
+    ) ?? "";
+    expect(remedy).toContain("tldrx-work/260829-x/run.yml");
+    expect(remedy).not.toContain(".tldrx/workspace.yml");
+    expect(remedy).not.toMatch(/checkout main -- tldrx-work \.tldrx\s*$/);
+  });
+
+  test("`touches: .tldrx/work` does not excuse `.tldrx/workspace.yml`, and does excuse `.tldrx/work/x`", async () => {
+    const ws = workspace({
+      ...ONE,
+      stories: [{
+        id: "S1", epic: "E1", title: "First story", status: "done",
+        touches: [".tldrx/work"], evidence: ["04-build/log/S1.md:1"],
+      }],
+    });
+    readyToShip(ws);
+
+    // A declared path is a path, not a prefix: `.tldrx/work` and
+    // `.tldrx/workspace.yml` are two different files, and reading one as the
+    // other would wave an UNDECLARED state change through as an excuse.
+    const refusal = await ship(ws, withStatePaths([".tldrx/workspace.yml"]));
+    expect(refusal.code).toBe(EXIT_GATE_REFUSED);
+    expect(refusal.lines.join("\n")).toMatch(/^\s+\.tldrx\/workspace\.yml$/m);
+    expect(refusal.lines.join("\n")).not.toContain("excused by");
+
+    // A declared DIRECTORY does cover what is under it — `touches:` may name one.
+    const proceeds = await ship(ws, withStatePaths([".tldrx/work/notes.yml"]));
+    expect(proceeds.code).toBe(EXIT_OK);
   });
 
   test("an UNSETTLED story's `touches:` excuses nothing — a plan is not a fact", async () => {

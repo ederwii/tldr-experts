@@ -38,7 +38,7 @@ import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { shipRun, type ShipTransport } from "../src/core/run/ship.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { EXIT_GATE_REFUSED, EXIT_OK } from "../src/cli/exitCodes.ts";
-import { makeBuildWorkspace, type BuildWorkspace } from "./fixtures/build/workspace.ts";
+import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
 setDefaultTimeout(spawnTestTimeout());
@@ -72,11 +72,12 @@ function git(dir: string, args: readonly string[]): string {
   return execFileSync("git", [...args], { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
-function workspace(): BuildWorkspace {
+function workspace(over: Partial<BuildWorkspaceOptions> = {}): BuildWorkspace {
   const made = makeBuildWorkspace({
     stories: [{ id: "S1", epic: "E1", title: "First story" }],
     epics: [{ id: "E1", stories: ["S1"], branch: BRANCH }],
     waves: [["S1"]],
+    ...over,
   });
   open.push(made);
   return made;
@@ -129,6 +130,12 @@ interface Call {
   readonly cmd: string;
   readonly args: readonly string[];
   readonly cwd: string;
+  /**
+   * `--body-file`'s content, read AT CALL TIME — the bytes `gh` would have seen.
+   * `shipRun` removes the body's temp directory once it is done with it, so
+   * reading the path afterwards would assert the wrong property.
+   */
+  readonly body?: string;
 }
 
 type Answer = { exitCode?: number; stdout?: string; stderr?: string };
@@ -143,13 +150,25 @@ function fakeTransport(answers: Readonly<Record<string, Answer>> = {}): ShipTran
   return {
     calls,
     async run(cmd, args, cwd) {
-      calls.push({ cmd, args: [...args], cwd });
+      calls.push({ cmd, args: [...args], cwd, ...snapshotBody(args) });
       const key = `${cmd} ${args.slice(0, 2).join(" ")}`;
       const repo = cwd.split("/").at(-1) ?? "";
       const answer = answers[`${key}@${repo}`] ?? answers[key] ?? answers[cmd];
       return { exitCode: answer?.exitCode ?? 0, stdout: answer?.stdout ?? "", stderr: answer?.stderr ?? "" };
     },
   };
+}
+
+/** `{ body }` when this argv carries a readable `--body-file`, `{}` otherwise. */
+function snapshotBody(args: readonly string[]): { body?: string } {
+  const at = args.indexOf("--body-file");
+  const path = at === -1 ? "" : args[at + 1] ?? "";
+  if (path === "") return {};
+  try {
+    return { body: readFileSync(path, "utf8") };
+  } catch {
+    return {};
+  }
 }
 
 /** Healthy answers: gh present, an origin, the branch pushed, no PR open yet. */
@@ -211,9 +230,10 @@ describe("tldrx ship across the repos a chained run shares a branch name in (#66
     expect(new Set(opened.map((call) => valueOf(call, "--body-file"))).size).toBe(1);
     for (const call of opened) {
       expect(valueOf(call, "--head")).toBe(BRANCH);
-      expect(readFileSync(valueOf(call, "--body-file"), "utf8")).toContain(HANDOFF);
+      expect(call.body).toBeDefined();
+      expect(call.body ?? "").toContain(HANDOFF);
       // `Closes #66` and every other link in the handoff survives untouched.
-      expect(readFileSync(valueOf(call, "--body-file"), "utf8")).toContain("Closes #66");
+      expect(call.body ?? "").toContain("Closes #66");
     }
     // Both URLs are printed at the end — the list is the point of the change.
     const text = outcome.lines.join("\n");
@@ -221,7 +241,17 @@ describe("tldrx ship across the repos a chained run shares a branch name in (#66
     expect(text).toContain("https://github.com/ederwii/api/pull/3");
   });
 
-  test("one repo is byte-identical to what it printed before (the common case)", async () => {
+  /**
+   * The `body:` line MOVED in #167 and the other three did not.
+   *
+   * It used to read `body: 04-build/handoff.md`, which was true while the handoff
+   * WAS the body. It stopped being true when the body became a rendered document
+   * with the handoff as one section of it, so the line now says what the body is
+   * rather than naming a file it merely contains. The rest of the block is still
+   * asserted as exact strings, which is what makes "we did not change the common
+   * case" a claim this test can make.
+   */
+  test("one repo prints exactly the four lines it always did (the common case)", async () => {
     const ws = workspace();
     readyToShip(ws, [ws.repoDir]);
     const transport = healthy();
@@ -231,7 +261,7 @@ describe("tldrx ship across the repos a chained run shares a branch name in (#66
     expect(outcome.lines).toEqual([
       `opened a PR for ${ws.runId} from \`${BRANCH}\` into \`main\` (app)`,
       "  https://github.com/ederwii/app/pull/7",
-      "  body: 04-build/handoff.md",
+      "  body: rendered from 04-build/handoff.md · no open findings",
       `  next: \`tldrx tickets sync --run ${ws.runId}\` mirrors the plan's epics and stories, `
         + "if this workspace configures a ticket tool.",
     ]);
@@ -339,6 +369,34 @@ describe("tldrx ship across the repos a chained run shares a branch name in (#66
     expect(text).toContain("api");
     expect(text).toContain("gh pr create");
     expect(creates(transport).length).toBe(0);
+  });
+
+  test("a settled story's `touches:` excuses ITS OWN repo, and no other (#167)", async () => {
+    const ws = workspace({
+      stories: [{
+        id: "S1", epic: "E1", title: "First story", repo: "app", status: "done",
+        touches: [".tldrx/workspace.yml"], evidence: ["04-build/log/S1.md:1"],
+      }],
+    });
+    const api = addRepo(ws, "api");
+    readyToShip(ws, [ws.repoDir, api]);
+
+    // The SAME state change on the branch in both repos. `touches:` is
+    // repo-relative on a story that names one repo, so it answers for that repo
+    // and says nothing at all about the branch in the other.
+    const transport = healthy({ "git diff --name-only": { stdout: ".tldrx/workspace.yml\n" } });
+    const outcome = await ship(ws, transport);
+
+    expect(outcome.code).toBe(EXIT_GATE_REFUSED);
+    // `app` is excused and gets its PR; `api` is refused and gets none.
+    const opened = creates(transport);
+    expect(opened.length).toBe(1);
+    expect(opened[0]?.cwd).toBe(ws.repoDir);
+    const text = outcome.lines.join("\n");
+    expect(text).toContain("api");
+    expect(text).toContain(".tldrx/workspace.yml");
+    // Nobody is told that S1 excused a repo it never touched.
+    expect(text).not.toContain("excused by S1");
   });
 
   test("each repo's PR opens against ITS OWN default branch", async () => {
