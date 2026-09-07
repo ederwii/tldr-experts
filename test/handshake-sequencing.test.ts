@@ -39,6 +39,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
+import { readResult } from "../src/core/facilitator/pending.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
@@ -620,6 +621,43 @@ describe("`--commit --check` validates before the turn is spent", () => {
     expect(said).toContain("`outputs` is missing or not an array");
     expect(said).toContain("`questions_asked` is missing or not an array");
     expect(frozen(ws)).toBe(before);
+  });
+
+  test("it names every ELEMENT the reader would drop, index and value, and still exits 0", async () => {
+    const ws = workspace();
+    expect((await next(ws, { mode: "prepare" })).code).toBe(0);
+    const resultFile = join(ws.runDir, ".agent", "build", "S1", "result.json");
+    writeFileSync(
+      resultFile,
+      `${JSON.stringify({
+        outputs: ["good", 42, null, "also-good"],
+        questions_asked: [{ q: "?" }, "real question"],
+        notes: "done",
+      })}\n`,
+      "utf8",
+    );
+    const before = frozen(ws);
+
+    const checked = await next(ws, { mode: "commit", check: true, at: "2026-09-02T09:10:00Z" });
+
+    // The reader FILTERS non-string elements out of both arrays, silently. An
+    // array that IS an array passed the old check, so the loss was invisible at
+    // exactly the moment `--check` exists to make it visible.
+    expect(checked.code).toBe(0);
+    const said = checked.lines.join("\n");
+    expect(said).toContain("`outputs[1]` is not a string (`42`) — dropped by the reader");
+    expect(said).toContain("`outputs[2]` is not a string (`null`) — dropped by the reader");
+    expect(said).toContain("`questions_asked[0]` is not a string (`{\"q\":\"?\"}`) — dropped by the reader");
+    // The string elements are NOT named: nothing is lost about them.
+    expect(said).not.toContain("`outputs[0]`");
+    expect(said).not.toContain("`outputs[3]`");
+    expect(frozen(ws)).toBe(before);
+
+    // GUARD (passes before this change too): the reader's own behaviour on the
+    // same bytes is untouched — `--check` reports the drop, it does not change it.
+    const read = readResult(ws.runDir, "build/S1");
+    expect(read.outputs).toEqual(["good", "also-good"]);
+    expect(read.questions_asked).toEqual(["real question"]);
   });
 
   test("with no bundle out it says so and still writes nothing", async () => {

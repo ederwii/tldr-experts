@@ -411,6 +411,21 @@ export function readResult(runDir: string, stageId: string): StageResult {
   };
 }
 
+/**
+ * The ONE test for "is this array element a string the reader will keep?".
+ *
+ * `strings()` below filters an array through it, silently — an element that
+ * fails it is simply not in what `readResult` returns. `tldrx next --commit
+ * --check` names those elements before the turn is spent, and it must name
+ * exactly the ones this reader drops, so it calls this rather than restating
+ * `typeof v === "string"` a second time (`checkDeveloper`, resultCheck.ts).
+ * One implementation per derivation: a second predicate here is the only bug
+ * either side can have.
+ */
+export function isResultStringElement(value: unknown): value is string {
+  return typeof value === "string";
+}
+
 function strings(value: unknown): readonly string[] {
-  return Array.isArray(value) ? (value as unknown[]).filter((v): v is string => typeof v === "string") : [];
+  return Array.isArray(value) ? (value as unknown[]).filter(isResultStringElement) : [];
 }

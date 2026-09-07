@@ -29,7 +29,7 @@
 import { relative } from "node:path";
 
 import { agentDir } from "../facilitator/paths.ts";
-import { PendingError, readResultObject } from "../facilitator/pending.ts";
+import { isResultStringElement, PendingError, readResultObject } from "../facilitator/pending.ts";
 import { preparedBundles, reviewBundles } from "../run/prepared.ts";
 import { parseReview } from "./review.ts";
 
@@ -129,15 +129,35 @@ function checkReviewer(envelope: Record<string, unknown>, where: string): Result
  * rather than inventing a refusal `--commit` would not make. The keys are the ones
  * `readResult` reads, in its own order.
  *
+ * The coercion that hides best is the one INSIDE an array. `outputs` and
+ * `questions_asked` are declared `items: {type: "string"}`, and the reader's
+ * `strings()` FILTERS every element that is not one — so
+ * `["good", 42, null, "also-good"]` is an array, satisfies "is it an array", and
+ * still reaches the run as two entries. Whole-field typing could not see that, so
+ * each surviving element is named here by index and by the JSON of its value,
+ * through `isResultStringElement` — the same predicate `strings()` filters on,
+ * called rather than restated, so the check cannot name a set the reader does not
+ * drop. Exit stays 0: the reader accepts the file, and `--check` names, it never
+ * invents a refusal. Nothing citable is lost either — a dropped element is by
+ * definition not a string, and a `[src: …]` citation is a token inside a string.
+ *
  * `--check` is about the result ENVELOPE, not about the gate behind it: the
  * declared outputs are re-read off disk at `--commit` and the stage's checks run
  * there. A clean check is not a promise the stage will pass.
  */
 function checkDeveloper(envelope: Record<string, unknown>, where: string): ResultCheck {
   const coerced: string[] = [];
-  if (!Array.isArray(envelope.outputs)) coerced.push("`outputs` is missing or not an array — read as `[]`");
-  if (!Array.isArray(envelope.questions_asked)) {
-    coerced.push("`questions_asked` is missing or not an array — read as `[]`");
+  for (const field of ["outputs", "questions_asked"] as const) {
+    const value = envelope[field];
+    if (!Array.isArray(value)) {
+      coerced.push(`\`${field}\` is missing or not an array — read as \`[]\``);
+      continue;
+    }
+    for (const [index, element] of (value as unknown[]).entries()) {
+      if (isResultStringElement(element)) continue;
+      const shown = JSON.stringify(element) ?? "undefined";
+      coerced.push(`\`${field}[${index}]\` is not a string (\`${shown}\`) — dropped by the reader`);
+    }
   }
   if (typeof envelope.notes !== "string") coerced.push("`notes` is missing or not a string — read as `\"\"`");
   if (envelope.cost_usd !== undefined && typeof envelope.cost_usd !== "number") {
@@ -149,8 +169,8 @@ function checkDeveloper(envelope: Record<string, unknown>, where: string): Resul
       ? [`${where}: reads as a developer envelope — \`tldrx next --commit\` would accept it`]
       : [
         `${where}: \`tldrx next --commit\` would accept this — its reader coerces rather than`,
-        "  refuses — but these parts of `result_schema` are not satisfied and will be read as",
-        "  their empty value:",
+        "  refuses — but these parts of `result_schema` are not satisfied, so each is read as",
+        "  its empty value, or dropped from the array it is in:",
         ...coerced.map((said) => `  - ${said}`),
       ],
   };
