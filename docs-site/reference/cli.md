@@ -70,9 +70,10 @@ tldrx approve --note "…"    # sign the gate; the checks are re-run first
 
 | Command | Does |
 |---|---|
-| `tldrx cost [<run>]` | What was actually charged, per attempt. `--all`, `--json`. |
-| `tldrx budget show` | What the run may still spend. |
-| `tldrx budget raise <phase> <usd>` | Move a ceiling. `--take-from <phase>`, `--note`. |
+| `tldrx cost [<run>]` | What was actually charged, per attempt. `--all`, `--json`. `--stories` breaks ONE run down by build story: what it measurably cost, the **spawn ceiling** the executor handed its spawns, and the ratio — a charge and a cap, in separate columns, never added. It changes no ceiling and spends nothing; `--all` and `--stories` are two different reports and the pair is refused. |
+| `tldrx budget show` | What the run may still spend, and the grant it answers to: the fact, each authorized scope and the policy. Silent when no grant is recorded. |
+| `tldrx budget raise <phase> <usd>` | Move a ceiling. `--take-from <phase>`, `--note`. The resulting ceiling is measured against the recorded grant before anything is written. |
+| `tldrx budget grant <usd> --fact <F>` | Record what the owner AUTHORIZED, so a ceiling has something to answer to. A **total**, not a delta; it spends nothing and moves no ceiling. `--fact` must name a live fact — an authorization that cites no decision is a number nobody said. `--phase <p>` scopes it; `--on-exceed <warn\|block>` says what a ceiling ABOVE the grant does, and is never `on_exceed`. A second grant replaces the first and says what it replaced. |
 
 ## Knowledge, output and the rest
 

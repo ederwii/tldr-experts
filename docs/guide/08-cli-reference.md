@@ -893,10 +893,13 @@ What the work actually cost — per attempt, per stage, per run.
 tldrx cost [<run>] [--run <id>] [--all] [--stories] [--json] [--root <path>]
 ```
 
-Read off `agent.result` events and nothing else: every dollar printed here is one the Claude
-CLI reported. No token count is ever multiplied by a price. Attempts are never merged. Work
-this process never saw a cost for is UNMETERED, never $0.00. `--all` covers every run in the
-workspace, finished ones included, and the run argument is ignored.
+Read off `events.jsonl` and nothing else. Two kinds of number live in that log and they are
+never added to each other: the MEASURED dollars a metered turn reported on an `agent.result`
+line, and the SPAWN CEILINGS the executor handed `agent.spawned` — caps it computed, never
+charges — which only `--stories` prints. No token count is ever multiplied by a price.
+Attempts are never merged. Work this process never saw a cost for is UNMETERED, never $0.00.
+`--all` covers every run in the workspace, finished ones included, and the run argument is
+ignored.
 
 `--stories` changes the axis, not the source: one row per story with what it measurably cost,
 the **ceiling** its spawns were given (`agent.spawned.max_budget_usd`), and the ratio. It is a

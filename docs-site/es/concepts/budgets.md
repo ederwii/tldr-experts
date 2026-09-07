@@ -4,7 +4,7 @@ title: Presupuestos
 
 # Presupuestos
 
-Aquí hay dos ideas, y la segunda toma a la gente por sorpresa.
+Aquí hay tres ideas, y la segunda toma a la gente por sorpresa.
 
 ## 1. Los techos son por run, por fase y por etapa
 
@@ -57,6 +57,40 @@ precio. Pasarse del techo avisa; `on_host_tokens_exceed: block` es la opción ex
 hace que en vez de avisar, niegue. Si no declaras techo de tokens, no hay contra qué
 comparar, así que no se revisa nada.
 
+## 3. Un techo no es lo que alguien autorizó
+
+`ceiling_usd` dice lo que el run va a gastar. Nunca ha dicho lo que alguien aceptó pagar. Eso
+vivía en prosa — un hecho, un mensaje, un hilo — y nada lo volvía a leer, así que tres lugares
+distintos podían escribir un techo en dólares y ninguno le respondía a la decisión que había
+detrás.
+
+`tldrx budget grant` escribe esa decisión como un número:
+
+```bash
+tldrx budget grant 20 --fact F031
+tldrx budget grant 5 --fact F031 --phase 04-build --on-exceed block
+```
+
+**Registra**: no gasta nada y no mueve ningún techo. `--fact` es obligatoria y tiene que nombrar
+un hecho vivo, porque una autorización que no puede citar una decisión es un número que nadie
+dijo. El `<usd>` es un total, no un delta.
+
+Después, `tldrx budget raise` mide el techo que está a punto de escribir contra la autorización,
+antes de que se escriba nada: una autorización de fase contra el techo de la fase, la del run
+contra el techo del run. Con el valor por omisión `on_grant_exceed: warn` el techo se escribe y
+una frase nombra la autorización, el hecho y la cifra; con `block` el `raise` se rechaza y
+`budget.yml` queda idéntico byte por byte.
+
+**Dos preguntas distintas, dos llaves distintas.** `on_exceed` gobierna *gastar* por encima de
+un techo. `on_grant_exceed` gobierna *escribir* uno por encima de lo autorizado. Un run que
+bloquea por dólares no ha dicho nada sobre lo segundo, así que nunca se deduce de lo primero.
+
+Que no haya autorización registrada significa que no se concilia nada y no se rechaza nada. La
+ausencia jamás se lee como `$0`: todos los `budget.yml` escritos antes de estas llaves existen,
+y tomar su silencio por una autorización de nada rechazaría cada `raise` en todos ellos. Una
+segunda autorización sobre el mismo alcance reemplaza a la primera — una decisión posterior
+sustituye a una anterior — y dice qué reemplazó, en vez de cambiar el número en silencio.
+
 ## Cómo leer la cuenta
 
 ```bash
@@ -65,11 +99,17 @@ tldrx cost --all          # todos los runs del workspace, sumados por economía
 tldrx run estimate        # el único que adivina — y lo dice con todas sus letras
 ```
 
-`tldrx cost` lee las cifras en dólares del log de eventos del run, y de nada más. **Nunca
-se multiplica un conteo de tokens por un precio.** Los reintentos jamás se funden en el
-total de la etapa: una etapa que falló dos veces costó tres turnos, y ese reintento suele
-ser justo el dinero que andabas buscando. Todo aquello de lo que el proceso nunca vio un
-costo se imprime como `UNMETERED`.
+`tldrx cost` lee el log de eventos del run, y nada más. **Nunca se multiplica un conteo de
+tokens por un precio.** Los reintentos jamás se funden en el total de la etapa: una etapa que
+falló dos veces costó tres turnos, y ese reintento suele ser justo el dinero que andabas
+buscando. Todo aquello de lo que el proceso nunca vio un costo se imprime como `UNMETERED`.
+
+`tldrx cost --stories` cambia el eje, no la fuente: una fila por cada story de build, con lo
+que costó de forma medible al lado del **techo de spawn** que el ejecutor le entregó a sus
+spawns, y la razón entre ambos. Son dos tipos de número distintos — un cobro y un tope —, así
+que van en columnas separadas y nunca se suman. A una story a la que le falta uno de los dos
+lados le aparece `not recorded` con el motivo, y una medición que incluye un turno sin medir se
+nombra como cota inferior en vez de recibir un veredicto.
 
 Cuando el proveedor reporta su propio desglose de tokens de un turno, las dos mitades caen
 en la fila de ese turno en `run.yml` — `input_tokens` y `output_tokens`, escritas juntas o

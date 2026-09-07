@@ -71,9 +71,10 @@ tldrx approve --note "…"    # firma la compuerta; antes se vuelven a correr la
 
 | Comando | Qué hace |
 |---|---|
-| `tldrx cost [<run>]` | Lo que de verdad se cobró, por intento. `--all`, `--json`. |
-| `tldrx budget show` | Lo que al run le queda por gastar. |
-| `tldrx budget raise <phase> <usd>` | Mueve un techo. `--take-from <phase>`, `--note`. |
+| `tldrx cost [<run>]` | Lo que de verdad se cobró, por intento. `--all`, `--json`. `--stories` desglosa UN run por story de build: lo que costó de forma medible, el **techo de spawn** que el ejecutor le entregó a sus spawns, y la razón entre ambos — un cobro y un tope, en columnas separadas, que nunca se suman. No cambia ningún techo y no gasta nada; `--all` y `--stories` son dos reportes distintos y la combinación se rechaza. |
+| `tldrx budget show` | Lo que al run le queda por gastar, y la autorización a la que le responde: el hecho, cada alcance autorizado y la política. Calla cuando no hay ninguna registrada. |
+| `tldrx budget raise <phase> <usd>` | Mueve un techo. `--take-from <phase>`, `--note`. El techo resultante se mide contra la autorización registrada antes de que se escriba nada. |
+| `tldrx budget grant <usd> --fact <F>` | Registra lo que el dueño AUTORIZÓ, para que un techo tenga a qué responderle. Es un **total**, no un delta; no gasta nada y no mueve ningún techo. `--fact` tiene que nombrar un hecho vivo: una autorización que no cita una decisión es un número que nadie dijo. `--phase <p>` la acota; `--on-exceed <warn\|block>` dice qué pasa con un techo POR ENCIMA de lo autorizado, y nunca es `on_exceed`. Una segunda autorización reemplaza a la primera y dice qué reemplazó. |
 
 ## Conocimiento, salida y lo demás
 

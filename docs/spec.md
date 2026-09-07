@@ -195,6 +195,7 @@ stage at `cursor`, or `done` when every phase is terminal.
 | `stages[].gate.executed_by` | {type: `human\|agent\|auto`, id?} | n | **Additive.** WHICH ENTITY evaluated this gate, as against `by`, which is a NAME. On a gate an `agent` policy closed that name is the operator's — the account the agent ran as — so `by` alone cannot say a person did not review it. `id` is the name the entity signed under and is ABSENT for `auto`: the facilitator is a role, not an identity, and `by: auto` already carries it. Written by `approve` on every gate it closes; absent on every run.yml written before this key existed, where every reader falls back to `by`. Emitted only when present |
 | `stages[].gate.authority` | {type: `direct\|delegated`, policy, authorized_by, source} | n | **Additive.** UNDER WHOSE AUTHORITY. `direct` is a person signing as themselves; `delegated` is an agent or the facilitator acting on a policy somebody set. `policy` is §2.2 `gates_policy` for this stage at the moment of signing. `authorized_by` is who set it and `source` says how that was established: `self`, `run.created` (frozen at `run new` by whoever opened the run), `gate.policy_changed` (the actor of the `run gates set` that last moved it), or `unrecorded` — in which case `authorized_by` is `null`. Nothing here is inferred beyond those two events; an absence is NAMED, never filled in |
 | `attended_by` | `host` | n | **Additive.** Who DRIVES the run. Absent (the default, and every run.yml written before this key) ⇒ the framework may spawn. `host` ⇒ a host session is doing the turns: `tldrx next` refuses the headless mode with exit 4 naming the `--prepare` command, every executor exposes prepare/commit only, `run auto` is refused at the CLI (exit 1), and no run path can reach `spawnAgent`. Set at creation with `run new --attended-by host` or flipped later with `run attend`; emitted only when set |
+| `triage` | {split, depends_on, budget_basis?} | n | **Additive.** Where this run came from, written by `tldrx seed apply` alone (§6.2) — `split` is the workspace-relative path of the `split.yml` that proposed it and `depends_on` names the sibling SLUGS it was proposed to follow. Absent on every run `run new` creates, and `run status` does not mention it. `budget_basis` is a further optional key inside the block: WHERE the `--budget` figure came from, one of `model-guess` \| `owner-grant` \| `preset`. `apply` writes `model-guess`, because that is measurably what produced the number — the propose prompt tells the model `budget_usd` is a guess and `split.yml` validation accepts anything finite and `> 0`. Absent means what every run.yml written before this key means: nothing recorded, never "a person set it". A value outside the closed set is a schema error, not a silent default |
 | `gates_policy` | {stage: `human\|auto\|agent`} | n | **Who** closes each gate. Resolved from §2.4 `gates:` and `run new --gates` at creation and frozen here, so the run keeps the policy it was opened with. `tldrx run gates set <stage>:<policy> --note <text>` is the ONLY sanctioned way to move it afterwards — one stage, a required note, one `gate.policy_changed` event carrying actor, moment, note and old→new. Absent, or a stage it does not name ⇒ `human`. `agent` (§5) is the third value: every `auto` condition PLUS a §2.17 evidence note that signs |
 | `stages[].stale` | bool | n | **Additive.** `true` when an EARLIER stage's gate was revoked after this one ran (§5). Its outputs stay on disk; nothing may treat them as current. Cleared when the stage runs again; emitted only when `true` |
 | `tasks[].id` / `.status` | `^t\d+$` / enum | y | One sub-agent invocation |
@@ -212,6 +213,8 @@ stage at `cursor`, or `done` when every phase is terminal.
 a `gate.executed_by`, when present, has a `type` in `human\|agent\|auto` and no `id` when that type is `auto`; a `gate.authority`, when present, is complete, its `type`/`policy`/`source` are the values above, and `authorized_by: null` and `source: unrecorded` travel together — either without the other is a record contradicting itself;
 `attended_by`, when present, is `host` — a value the reader does not understand is a schema error, never a silent
 downgrade to "spawn anyway";
+a `triage.budget_basis`, when present, is one of `model-guess` \| `owner-grant` \| `preset` — checked only when the
+key is there, so a `triage:` block written before it existed still loads;
 ≤5 phases, ≤40 stages, ≤200 tasks.
 
 ### 2.3 `.tldrx/stages/<slug>/stage.yml` + `stage.md`
@@ -1138,7 +1141,7 @@ Append-only audit log: the cost ledger, the `replay`/`retro` input, and — with
 `stage.skipped` `task.started` `task.done` `agent.spawned` `agent.result` `question.asked` `question.answered`
 `gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `gate.policy_changed` `story.reopened` `story.base_fastforwarded` `story.review_retried` `story.work_rescued`
 `story.touches_widened` `result.unreadable` `operator_note` `check.passed` `check.failed` `budget.warned`
-`budget.blocked` `budget.raised` `fact.added` `fact.retired` `fact.superseded` `fact.conflict_raised` `doc.superseded` `map.refreshed` `ticket.synced` `error`. Closed set: an
+`budget.blocked` `budget.raised` `budget.granted` `fact.added` `fact.retired` `fact.superseded` `fact.conflict_raised` `doc.superseded` `map.refreshed` `ticket.synced` `error`. Closed set: an
 unknown type is a validation error.
 
 **This list is the enum, and a test says so.** It is `EVENT_TYPES` (`src/core/events/Event.ts`), in that order, and
@@ -1234,6 +1237,17 @@ question ANSWERED) and `raised` (the question this MINTED). Both ids, because th
 carrying only the first cannot answer "which question did this raise", and a narrative that assumed they were the same
 told a reader the raise had gone nowhere. `stage` is `null` and `cost_usd` is `0` — nothing was spawned and nothing
 was spent.
+
+**`budget.granted` was added 2026-09-07 (#170).** It is `tldrx budget grant <usd> --fact <F> [--phase <p>]` — the
+owner's authorization written down as a number a ceiling can be measured against (§2.11). Its payload carries
+`amount_usd`, `fact` (the live fact id the grant cites, which IS `budget.yml`'s `authorized_by` — it is not repeated
+under a second key), `phase` (`null` for a run-scoped grant, a phase id for a phase-scoped one), `note`, `ceiling_usd`
+(the run ceiling standing at the moment of the grant, so a later reader can see what the decision was made against)
+and `previous_usd` — the amount this grant REPLACED on the same scope, `null` on the first grant, which is a different
+fact from "replaced $0". `stage` on the envelope is `null` and `cost_usd` is `0`: recording a decision spawns nothing
+and spends nothing. It is appended BEFORE the save, like `budget.raised`, so a grant that fails validation leaves no
+event claiming it happened; and it is the ONLY record that an authorization changed — `budget.yml` holds the current
+amount and this log holds the sequence that produced it.
 
 **A `check: "dod"` result carries `exit_code` OR `refused` — never both, and never a fabricated code (2026-09-06,
 #165).** Both `check.passed` and `check.failed` for a Definition-of-Done command carry `phase`, `check: "dod"`,
@@ -1430,6 +1444,12 @@ a key that did not would be erased by the one command an operator reaches for wh
 They round-trip through every OTHER writer too: `RunStore` re-reads a phase's ceilings from disk
 before each save, and `authorized_usd` is one of the four per-phase fields it carries, so a grant
 recorded while a stage runs is not clobbered by the copy that process opened with.
+
+**Every grant key is written only when there is something to write.** `authorized_usd`, `authorized_by`,
+`authorized_at` and `phases[].authorized_usd` are emitted only when they are set, and `on_grant_exceed` only when it
+is not the default `warn` — so a `budget.yml` with no grant is BYTE-IDENTICAL to the file that would have been written
+before these keys existed. `economy`, `on_host_tokens_exceed` and `ceiling_host_tokens` each carry the same guarantee,
+and it is what lets absence be the lax side with no migration behind it.
 
 **A second grant on the same scope REPLACES the first, and says what it replaced.** A later
 decision supersedes an earlier one and an owner may reduce as well as raise, so the amount is
@@ -1858,7 +1878,7 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx run attend <host\|--none> [<run>]` | `run.yml` | `run.yml`'s `attended_by` (§2.2), `events.jsonl` (`run.attended`, carrying the new value and the old). Nothing else: no agent, no cost, no stage moved, no branch touched. `--none` REMOVES the key rather than blanking it — `null` is not a legal value. A direction is required and is never guessed (exit 1); setting what is already set is a silent no-op; a `done` or `cancelled` run is refused (exit 2) | 0,1,2,3 |
 | `tldrx run status [<run>]` | `run.yml`, `events.jsonl` | nothing (stdout) | 0,3 |
 | `tldrx next [<run>] [--dry-run] [--prepare\|--commit] [--review] [--check] [--fixlist <path>] [--parallel <n>] [--prompt-max-bytes <n>] [--max-reads <n>] [--commit --cost-usd <n>] [--tokens <n>]` | `run.yml`, `stage.yml`, `stage.md`, `expert.md`, declared inputs, `graphify-out/<repo>/graph.json` | stage outputs, `run.yml`, `events.jsonl`. `--cost-usd` is the in-session turn's DECLARED cost (§2.2); with none the task is `cost_usd: null, metered: false`. Both flags are `--commit`-only — headless reconciles a real `total_cost_usd` and a flag must not overwrite a measurement. On a run marked `attended_by: host` (§2.2) the headless mode — `--dry-run` included, which spawns nothing (issue #17) but describes a dispatch this run never makes — is refused with **exit 4** before the budget gate, before an input is read and before a prompt is assembled; the message names the exact half of the handshake the stage is waiting for | 0,1,2,3,4,5 |
-| `tldrx cost [<run>] [--run <id>] [--all] [--stories] [--json]` | every run's `events.jsonl` (+ `run.yml` for the title) | nothing (stdout) | 0,1,3 |
+| `tldrx cost [<run>] [--run <id>] [--all] [--stories] [--json]` | every run's `events.jsonl` (+ `run.yml` for the title) | nothing (stdout). `--stories` changes the AXIS, not the source: one row per Build story with what it measurably cost (metered `agent.result` lines keyed to it), the SPAWN CEILING the executor handed its spawns (`agent.spawned.max_budget_usd` — a cap it computed, never a charge) and the ratio. The two are separate columns and are never added to each other. A story missing either side reads `not recorded` with the reason, never `$0.00`, and no total is printed over a figure that could not be formed; a measurement with an unmetered turn in it is named a LOWER BOUND rather than given the inside-the-ceiling verdict. Keyed results no Build spawn accounts for — a Watch feature id is not a story — are excluded and the exclusion is COUNTED on stdout. It changes no ceiling and spends nothing. `--all` and `--stories` are two different reports: the pair is refused (**1**), never silently resolved in favour of one | 0,1,3 |
 | `tldrx run estimate [<run>] [--json]` | everything `next --prepare` reads, plus every run's `events.jsonl` for cache-write / cache-read / output history | nothing (stdout) | 0,1,3 |
 | `tldrx run gates set <stage>:<human\|auto\|agent> --note <text> [<run>]` | `run.yml` | `run.yml`'s §2.2 `gates_policy` and `events.jsonl` (`gate.policy_changed`, carrying actor, moment, note and old→new). The ONLY sanctioned way to move a frozen `gates_policy`; `run.yml` stays hand-edit-forbidden (§1). ONE `<stage>:<policy>` per invocation — a comma list is refused, and the entry must name its policy outright, since under `--gates` a bare stage means `human` and a signature must not rest on a default. An empty or missing `--note` is refused, as is a no-op (`human` → `human`). A run whose `run.yml` has no `gates_policy` at all gets the FULL map written, every stage explicit, with the one change applied. Gates already signed are untouched | 0,1,2,3 |
 | `tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <l>] [--parallel <n>] [--gate-agent] [--yolo]` | everything `next` reads, once per stage | everything `next` writes. Refused with **exit 1** on a run marked `attended_by: host`, before the event log is opened so nothing is written: this loop's whole job is calling `next` headless, and on such a run that is a refusal. `--gate-agent` is RENDERING ONLY (§5, "Decision cards"): when the loop stops for a person at exit 4 it prints a decision card in place of the ordinary stop block, and it never upgrades a stage's frozen `gates_policy` | 0,1,2,3,4,5 |
