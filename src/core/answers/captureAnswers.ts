@@ -40,6 +40,50 @@ export interface AnswerOverride {
   readonly repos?: readonly string[];
 }
 
+/**
+ * What one block's provenance comes to — the ONE place the three signals are combined.
+ *
+ * Extracted in fix round 1 because the triple (the `overrides` lookup, the
+ * `affects:` resolution, the conditional `decided_by`) stood twice, at the capture
+ * loop and again in `supersedeAnswer`, and the next change to this file adds a
+ * FOURTH field to both. Written once, it is written once.
+ *
+ * DATA in, per AGENTS §12 — a block, two lookup tables and the repos to fall back
+ * on. No `ctx`, no session, nothing mutable: the caller owns the state and passes
+ * the values.
+ */
+export interface AnswerProvenance {
+  /** What the fact binds to: `--repo`, else the question's `affects:`, else `fallbackRepos`. */
+  readonly repos: readonly string[];
+  /** `affects:` entries shaped `repo:path` whose prefix names no workspace repo. */
+  readonly unresolved: readonly string[];
+  /**
+   * Spread into a `FactSource`. `{}` when the invocation stated nothing — absence
+   * is recorded as absence, and means "not stated", never "owner" (`Fact.ts:36`).
+   */
+  readonly source: { readonly decided_by?: FactDecider };
+}
+
+export function answerProvenance(
+  block: QuestionBlock,
+  overrides: ReadonlyMap<string, AnswerOverride> | undefined,
+  repoNames: ReadonlySet<string> | undefined,
+  fallbackRepos: readonly string[],
+): AnswerProvenance {
+  const override = overrides?.get(block.id);
+  const named = reposFromAffects(declaredAffects(block), repoNames ?? new Set());
+  // Precedence, most specific first: what THIS invocation said, then what the
+  // question itself declares, then whatever the caller says to fall back on
+  // (nothing on the capture path; the superseded fact's own repos on the other).
+  const repos = override?.repos
+    ?? (named.repos.length > 0 ? named.repos : fallbackRepos);
+  return {
+    repos,
+    unresolved: named.unresolved,
+    source: override?.decidedBy === undefined ? {} : { decided_by: override.decidedBy },
+  };
+}
+
 export interface CaptureContext {
   /** Workspace root — where `.tldrx/memory/facts.yml` lives. */
   readonly root: string;
@@ -69,6 +113,28 @@ export interface CapturedAnswer {
   readonly area: string;
   /** `affects:` entries shaped `repo:path` whose prefix names no workspace repo. */
   readonly unresolvedAffects: readonly string[];
+}
+
+/**
+ * `"<Qid>: affects: <entry> names no repo in this workspace — it scoped nothing"`
+ * for every unresolved entry across every captured block.
+ *
+ * ONE rendering with two callers — `tldrx answer` prints it on stdout, and the
+ * `answer-capture` hook says the same thing through `postContext`, which is its
+ * only channel to the operator. A second spelling would be the only bug either
+ * could have. It lives here, in the module that owns `CapturedAnswer`, rather
+ * than in the command: a hook reaching into `src/cli/` for a sentence would put
+ * the whole command surface in the hook bundle.
+ *
+ * Structurally typed on purpose — it takes anything carrying `q` and
+ * `unresolvedAffects`, which is both `CapturedAnswer` and `SupersededAnswer`.
+ */
+export function unresolvedEntries(
+  captured: readonly { readonly q: string; readonly unresolvedAffects: readonly string[] }[],
+): readonly string[] {
+  return captured.flatMap((c) => c.unresolvedAffects.map(
+    (entry) => `${c.q}: affects: ${entry} names no repo in this workspace — it scoped nothing`,
+  ));
 }
 
 /** What one `--supersede` did, for the caller to print. */
@@ -130,22 +196,17 @@ export function captureAnswers(questionsPath: string, ctx: CaptureContext): read
     for (const block of answered) {
       const area = block.metadata?.area ?? "unscoped";
       const truncated = factWasTruncated(block.title, block.answer);
-      const override = ctx.overrides?.get(block.id);
-      const named = reposFromAffects(declaredAffects(block), ctx.repoNames ?? new Set());
-      const repos = override?.repos ?? named.repos;
+      // Nothing to fall back on here: a first answer binds to what was stated or
+      // to nothing, and `[]` means "no repo was named", never the run's repos.
+      const prov = answerProvenance(block, ctx.overrides, ctx.repoNames, []);
       const fact = store.append({
         fact: factTextFor(block.title, block.answer),
         ...(truncated ? { truncated: true as const } : {}),
         area,
-        repos,
+        repos: prov.repos,
         kind: "answer",
         confidence: "stated",
-        source: {
-          who: ctx.actor, when: ctx.at, run: ctx.run, q: block.id,
-          // Absent means "not stated", never "owner" (`Fact.ts:36`). Only an
-          // invocation that NAMED this question can state it.
-          ...(override?.decidedBy === undefined ? {} : { decided_by: override.decidedBy }),
-        },
+        source: { who: ctx.actor, when: ctx.at, run: ctx.run, q: block.id, ...prov.source },
       });
       doc = replaceBlock(doc, recordAnswer(block, { answered_by: ctx.actor, answered_at: ctx.at, fact: fact.id }));
       log.tryAppend({
@@ -168,7 +229,7 @@ export function captureAnswers(questionsPath: string, ctx: CaptureContext): read
       });
       captured.push({
         q: block.id, fact: fact.id, answer: block.answer, area,
-        unresolvedAffects: named.unresolved,
+        unresolvedAffects: prov.unresolved,
       });
       recorded.push({ block, fact: fact.id });
     }
@@ -280,8 +341,6 @@ export function supersedeAnswer(
 
   const area = block.metadata.area === "" ? "unscoped" : block.metadata.area;
   const truncated = factWasTruncated(block.title, answer);
-  const override = ctx.overrides?.get(block.id);
-  const named = reposFromAffects(declaredAffects(block), ctx.repoNames ?? new Set());
 
   const result = FactsStore.update(factsPath(ctx.root), (store): SupersededAnswer => {
     const head = store.headOf(recorded);
@@ -291,25 +350,25 @@ export function supersedeAnswer(
     if (isRetired(head)) {
       throw new AnswerError(`${head.id} is retired; a retired fact is not superseded`);
     }
+    // A supersession is a NEW decision and may legitimately rescope, so it takes
+    // the same precedence as a first answer — `--repo`, else the question's own
+    // `affects:` — and only falls back to inheriting what the fact it replaces
+    // bound to. Inheritance is the floor, not the rule: until fix round 1 the
+    // `affects:` half was computed here and thrown away, so a question that said
+    // which repo it was about was ignored the moment its answer was reversed.
+    const prov = answerProvenance(block, ctx.overrides, ctx.repoNames, head.repos);
     const fact = store.supersede(head.id, {
       fact: factTextFor(block.title, answer),
       ...(truncated ? { truncated: true as const } : {}),
       area,
-      // A supersession is a NEW decision and may legitimately rescope; with no
-      // `--repo` it keeps inheriting what the fact it replaces bound to.
-      repos: override?.repos ?? [...head.repos],
+      repos: [...prov.repos],
       kind: "answer",
       confidence: "stated",
-      source: {
-        who: ctx.actor, when: ctx.at, run: ctx.run, q: block.id,
-        // Absent means "not stated", never "owner" (`Fact.ts:36`). Only an
-        // invocation that NAMED this question can state it.
-        ...(override?.decidedBy === undefined ? {} : { decided_by: override.decidedBy }),
-      },
+      source: { who: ctx.actor, when: ctx.at, run: ctx.run, q: block.id, ...prov.source },
     });
     return {
       q: block.id, fact: fact.id, supersedes: head.id, answer, area,
-      unresolvedAffects: named.unresolved,
+      unresolvedAffects: prov.unresolved,
     };
   });
 

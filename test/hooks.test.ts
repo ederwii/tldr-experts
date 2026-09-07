@@ -482,6 +482,68 @@ describe("answer-capture (PostToolUse + FileChanged)", () => {
     writeFileSync(path, readFileSync(path, "utf8").replace("[Answer]:\n", "[Answer]: B) Redis sorted set\n"), "utf8");
   }
 
+  /** A questions.md whose single open block carries an `affects:` key. */
+  function questionsAffecting(affects: string): string {
+    return [
+      "# Questions — 02-how — run 260828-leaderboard",
+      "",
+      "## Q9 · Where do sessions live?",
+      `<!-- id: Q9 | status: open | area: data-model | asked_by: architect | asked_at: 2026-08-28T14:02:11Z | affects: ${affects} -->`,
+      "Why asked: nothing in memory covers it [src: absent:.tldrx/memory/facts.yml]",
+      "",
+      "- A) yes",
+      "- B) no",
+      "",
+      "[Answer]: B) Redis sorted set",
+      "",
+    ].join("\n");
+  }
+
+  /**
+   * The hook's `repoNames` (#169, review M8). Removing it from
+   * `answer-capture.ts` used to leave this whole file green, while it is a real
+   * behaviour change on the framework's PRIMARY capture path: hook-written facts
+   * used to get `repos: []` always, and now take the repos the question's own
+   * `affects:` names. Read back off disk, so it is the emitted bytes.
+   */
+  test("a hook-captured answer takes the repos its affects: names", async () => {
+    const path = questionsPath();
+    writeFileSync(path, questionsAffecting("api:src/db.ts"), "utf8");
+    const run = await hook("answer-capture", {
+      hook_event_name: "FileChanged", file_path: path,
+    });
+    expect(run.code).toBe(0);
+    expect(run.stderr).toBe("");
+
+    const written = FactsStore.load(join(workspace().root, ".tldrx", "memory", "facts.yml")).facts;
+    const q9 = written.find((f) => f.source.q === "Q9");
+    expect(q9?.repos).toEqual(["api"]);
+    // The hook still says nothing about WHO — it cannot tell an agent's Write
+    // from a human's edit, so the absence stands.
+    expect(q9?.source.decided_by).toBeUndefined();
+  });
+
+  /**
+   * The hook half of review I1. `postContext` is this hook's ONLY channel to the
+   * operator, so an `affects:` entry that named a repo and got it wrong is named
+   * there — otherwise `repos: []` reads as "no repo was named" on the path that
+   * writes most of the framework's facts.
+   */
+  test("a hook-captured answer names an affects: entry that matched no repo", async () => {
+    const path = questionsPath();
+    writeFileSync(path, questionsAffecting("ghost:src/db.ts"), "utf8");
+    const run = await hook("answer-capture", {
+      hook_event_name: "FileChanged", file_path: path,
+    });
+    expect(run.code).toBe(0);
+
+    const posted = context(run) ?? "";
+    expect(posted).toContain("Q9 →");
+    expect(posted).toContain("Q9: affects: ghost:src/db.ts names no repo in this workspace");
+    expect(FactsStore.load(join(workspace().root, ".tldrx", "memory", "facts.yml")).facts
+      .find((f) => f.source.q === "Q9")?.repos).toEqual([]);
+  });
+
   test("records the answer, the fact and the event, and never blocks", async () => {
     answerQ4();
     const run = await hook("answer-capture", {

@@ -26,9 +26,10 @@ import { fail } from "../report.ts";
 import { RunStore } from "../../core/run/RunStore.ts";
 import { isResolved, resolveRunOrExplain } from "../resolveRun.ts";
 import {
-  captureAnswers, supersedeAnswer, writeAnswerSlot, type AnswerOverride,
+  captureAnswers, supersedeAnswer, unresolvedEntries, writeAnswerSlot, type AnswerOverride,
 } from "../../core/answers/captureAnswers.ts";
 import { FACT_DECIDERS, type FactDecider } from "../../core/facts/Fact.ts";
+import { uniqueRepos } from "../../core/answers/reposFromAffects.ts";
 import { loadWorkspace } from "../../hooks/lib/workspace.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
 import { parseQuestions, type QuestionBlock } from "../../core/text/questions.ts";
@@ -66,11 +67,16 @@ export const answerCommand: Command = {
         );
       }
       const repoNames = new Set(loadWorkspace(root).repos.keys());
-      const wantedRepos = repeatedFlag(args, "repo");
+      const wantedRepos = uniqueRepos(repeatedFlag(args, "repo"));
       for (const repo of wantedRepos) {
         if (!repoNames.has(repo)) {
+          // A workspace with no declared repos is its own sentence: "— it has "
+          // with nothing after it reads as a truncated message, not as an answer.
           throw new UsageError(
-            `--repo ${repo} is not a repo in this workspace — it has ${[...repoNames].join(", ")}`,
+            `--repo ${repo} is not a repo in this workspace — `
+            + (repoNames.size === 0
+              ? "this workspace declares no repos"
+              : `it has ${[...repoNames].join(", ")}`),
           );
         }
       }
@@ -120,7 +126,7 @@ export const answerCommand: Command = {
         process.stdout.write(
           `${qid} superseded → ${done.fact} replaces ${done.supersedes} (area ${done.area}) in ${path}\n`,
         );
-        sayWhatWasNotStated(decidedBy, done.unresolvedAffects);
+        sayWhatWasNotStated(decidedBy, [done]);
         return EXIT_OK;
       }
 
@@ -140,7 +146,9 @@ export const answerCommand: Command = {
         return EXIT_USAGE;
       }
       process.stdout.write(`${qid} answered → ${recorded.fact} (area ${recorded.area}) in ${path}\n`);
-      sayWhatWasNotStated(decidedBy, recorded.unresolvedAffects);
+      // EVERY block this invocation captured, not just `recorded` — the sweep's
+      // blocks have unresolved entries too, and they are the reader's only clue.
+      sayWhatWasNotStated(decidedBy, captured);
       return EXIT_OK;
     } catch (error) {
       return fail("answer", error);
@@ -158,10 +166,17 @@ export const answerCommand: Command = {
  * The same goes for an `affects:` entry shaped `repo:path` that matched no repo:
  * `repos: []` after one of those would read as "no repo was named" when one WAS
  * named and was wrong.
+ *
+ * It takes EVERY block the invocation captured, not just the one it named. A
+ * `tldrx answer` sweeps every answered-but-uncaptured block in the file, and
+ * until fix round 1 the swept ones had their unresolved entries computed and
+ * dropped — while `helpText.ts` and the guide both promised they were named.
+ * Every line carries its question id, so "which row is this about" is never
+ * inferred from position.
  */
 function sayWhatWasNotStated(
   decidedBy: string | undefined,
-  unresolvedAffects: readonly string[],
+  captured: readonly { readonly q: string; readonly unresolvedAffects: readonly string[] }[],
 ): void {
   if (decidedBy === undefined) {
     process.stdout.write(
@@ -169,10 +184,8 @@ function sayWhatWasNotStated(
       + `"not stated", which is never read as "owner"\n`,
     );
   }
-  for (const entry of unresolvedAffects) {
-    process.stdout.write(
-      `  affects: ${entry} names no repo in this workspace — it scoped nothing\n`,
-    );
+  for (const entry of unresolvedEntries(captured)) {
+    process.stdout.write(`  ${entry}\n`);
   }
 }
 

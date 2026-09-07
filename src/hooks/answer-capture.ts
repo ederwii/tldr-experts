@@ -15,7 +15,7 @@ import { runHook, postContext, allow } from "./lib/decide.ts";
 import { readPayload, filePathOf } from "./lib/payload.ts";
 import { locateWork, loadWorkspace } from "./lib/workspace.ts";
 import { currentActor, nowRfc3339 } from "./lib/actor.ts";
-import { captureAnswers } from "../core/answers/captureAnswers.ts";
+import { captureAnswers, unresolvedEntries } from "../core/answers/captureAnswers.ts";
 
 await runHook("answer-capture", async () => {
   const payload = await readPayload();
@@ -36,7 +36,8 @@ await runHook("answer-capture", async () => {
   // rows it writes therefore carry no `decided_by` at all, which is the
   // documented absence: "not stated", never "owner". `repoNames` is passed
   // because it states nothing about WHO — it only lets a question's own
-  // `affects:` resolve to the repos it already names.
+  // `affects:` resolve to the repos it already names, and lets an entry that
+  // resolved to NOTHING be named below rather than dropped.
   const captured = captureAnswers(filePath, {
     root: location.root,
     runDir: location.runDir,
@@ -46,7 +47,17 @@ await runHook("answer-capture", async () => {
     repoNames: new Set(loadWorkspace(location.root).repos.keys()),
   });
   if (captured.length === 0) return;
-  postContext(`tldrx: recorded ${captured.map((c) => `${c.q} → ${c.fact}`).join(", ")}`);
+  // `postContext` is this hook's ONLY channel to the operator, so the unresolved
+  // `affects:` entries go through it (#169, fix round 1). Dropping them here
+  // would be the worst place to drop them: this is the framework's primary
+  // capture route, so `repos: []` would read as "no repo was named" on most of
+  // the facts the workspace ever writes. Same sentence the CLI prints, from the
+  // same renderer — a second spelling is the only bug either could have.
+  const unresolved = unresolvedEntries(captured);
+  postContext(
+    `tldrx: recorded ${captured.map((c) => `${c.q} → ${c.fact}`).join(", ")}`
+    + (unresolved.length === 0 ? "" : ` — ${unresolved.join("; ")}`),
+  );
 });
 
 allow();

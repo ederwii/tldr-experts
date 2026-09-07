@@ -462,9 +462,14 @@ answers to is refused, exit `1`, before anything is written. Without it, the fac
 question's own `affects:` when an entry there names a repo (`api`, or `api:src/db.ts`), and by
 nothing otherwise: `repos: []` means *no repo was named*, never *every repo*.
 
-Both flags apply **only to the question id in the invocation**. Recording an answer sweeps every
-answered-but-uncaptured block in that file, including one a human filled in by hand beforehand, and
-those are recorded exactly as they were before these flags existed.
+Both flags apply **only to the question id in the invocation**, and both work with `--supersede`
+too. Recording an answer sweeps every answered-but-uncaptured block in that file, including one a
+human filled in by hand beforehand, and those are recorded exactly as they were before these flags
+existed — with one exception that is reporting, not provenance: an `affects:` entry that looks like
+`repo:path` and matches no repo is named on stdout for **every** block the invocation captured,
+each line carrying its question id. The `answer-capture` hook says the same thing through the
+context it posts, because `repos: []` after a repo WAS named and got wrong is the one direction
+that must never be silent.
 
 ### Reversing a decision — `--supersede`
 
@@ -479,8 +484,10 @@ tldrx answer Q3 "Redis sorted set — the load test refuted the contention risk"
 It is only valid on an **answered** question (on an open one it exits `1` and tells you to
 answer it normally). What it does:
 
-- appends a **new fact** carrying the whole new answer, with the same `area` and `repos` and
-  ordinary provenance (`who`, `when`, `run`, `q`);
+- appends a **new fact** carrying the whole new answer, with the same `area` and ordinary
+  provenance (`who`, `when`, `run`, `q`). Its `repos` are the ones its predecessor bound to,
+  unless `--repo` or the question's own `affects:` rescopes it — a reversal is a new decision and
+  may legitimately bind somewhere else;
 - sets the old fact's `superseded_by` to the new id — and `supersedes` on the new one, so the
   §2.5 chain stays reciprocal. **The old fact's text is never edited.**
 - appends to the question block: the superseding answer and its footer. The original

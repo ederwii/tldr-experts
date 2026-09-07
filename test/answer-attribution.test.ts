@@ -1,7 +1,8 @@
 /**
  * `tldrx answer --decided-by / --repo` — provenance the answer path can state (#169).
  *
- * Until this landed, `captureAnswers.ts:105` wrote `repos: []` and a `source`
+ * Until this landed, the capture loop in `captureAnswers.ts` (the `store.append`
+ * call, `:140`/`:147` after the change) wrote `repos: []` and a `source`
  * with no `decided_by`, so a driver's answer and the owner's were byte-identical
  * in provenance and no answered decision ever said what it bound to. The flags
  * are OPTIONAL because the `answer-capture` hook cannot honestly say which of
@@ -88,6 +89,39 @@ Why asked: nothing in the map answers it [src: absent:.tldrx/map/domains.md]
 /** Still `status: open`, but its slot is already filled — what the sweep captures. */
 function answeredByHand(id: string, title: string, area: string, answer: string): string {
   return block(id, title, area).replace("[Answer]:\n", `[Answer]: ${answer}\n`);
+}
+
+/**
+ * Swap stdout for a buffer; returns a reader that restores it.
+ * Pattern lifted from `test/facts-add.test.ts:69-81`, which lifted it from
+ * `questions-grammar.test.ts` — the operator lines this command prints are the
+ * only place the REASON for an absence lives, so they have to be assertable.
+ */
+function capture(): () => string {
+  const original = process.stdout.write.bind(process.stdout);
+  let buffer = "";
+  process.stdout.write = ((chunk: string | Uint8Array): boolean => {
+    buffer += typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
+    return true;
+  }) as typeof process.stdout.write;
+  return () => {
+    process.stdout.write = original;
+    return buffer;
+  };
+}
+
+/** The same, for stderr — where `fail()` writes a refusal (`src/cli/report.ts:27`). */
+function captureStderr(): () => string {
+  const original = process.stderr.write.bind(process.stderr);
+  let buffer = "";
+  process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+    buffer += typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
+    return true;
+  }) as typeof process.stderr.write;
+  return () => {
+    process.stderr.write = original;
+    return buffer;
+  };
 }
 
 /** A minimal, valid `Fact` for `renderFacts` — the shape `test/facts-add.test.ts` uses. */
@@ -243,5 +277,152 @@ describe("reposFromAffects — what it keeps, and what it refuses to guess", () 
     const out = reposFromAffects(["ghost:src/db.ts"], repos);
     expect(out.repos).toEqual([]);
     expect(out.unresolved).toEqual(["ghost:src/db.ts"]);
+  });
+});
+
+/**
+ * Fix round 1. Everything below was RED before the fix that follows it, and each
+ * one closes a path the review found could be deleted while the whole plausible
+ * test subset stayed green (review I1, I2, I3, M1, M3, M4).
+ *
+ * `answerCommand.run` never throws — it catches everything and returns a number
+ * (`answer.ts`'s `try`/`fail`) — so the capture helpers are read straight after
+ * the call, the same way `test/facts-add.test.ts` reads them.
+ */
+describe("what the command SAYS, not just what it writes", () => {
+  test("the absence carries its reason on stdout, and says nothing when a decider was given", async () => {
+    const ws = runWorkspace();
+    writeQuestions(ws, "01-what", block("Q1", "Where does state live?", "data-model"));
+    const read = capture();
+    await answerCommand.run(["Q1", "Redis", "--root", ws.root]);
+    const withoutFlag = read();
+
+    // The whole clause, not the word "decider": AGENTS §8 — a bare English word
+    // false-positives on innocent prose, and this sentence IS the mechanism by
+    // which the absence carries its reason.
+    expect(withoutFlag).toContain(
+      "no decider recorded — this invocation passed no --decided-by, so the fact says "
+      + '"not stated", which is never read as "owner"',
+    );
+
+    const ws2 = runWorkspace();
+    writeQuestions(ws2, "01-what", block("Q1", "Where does state live?", "data-model"));
+    const read2 = capture();
+    await answerCommand.run(["Q1", "Redis", "--decided-by", "owner", "--root", ws2.root]);
+    // Both directions: an invocation that DID state it must not print the absence.
+    expect(read2()).not.toContain("no decider recorded");
+  });
+
+  test("every block the invocation captured reports its unresolved affects:, named by question id", async () => {
+    const ws = runWorkspace();
+    // Q1 is the one named; Q2 was filled in by hand and is swept. BOTH carry an
+    // `affects:` that names no repo, and before this fix only Q1's was printed.
+    writeQuestions(ws, "01-what", [
+      blockWithAffects("Q1", "Where?", "data-model", "ghost:src/db.ts"),
+      blockWithAffects("Q2", "Which currency?", "billing", "ghost2:src/x.ts")
+        .replace("[Answer]:\n", "[Answer]: EUR\n"),
+    ].join("\n"));
+
+    const read = capture();
+    await answerCommand.run(["Q1", "Redis", "--decided-by", "owner", "--root", ws.root]);
+    const out = read();
+
+    expect(out).toContain("Q1: affects: ghost:src/db.ts names no repo in this workspace — it scoped nothing");
+    // The swept one. Its row says `repos: []`, and without this line a reader has
+    // no way to learn that a repo WAS named and was wrong.
+    expect(out).toContain("Q2: affects: ghost2:src/x.ts names no repo in this workspace — it scoped nothing");
+    const facts = FactsStore.loadOrEmpty(factsPath(ws.root)).facts;
+    expect(facts.find((f) => f.source.q === "Q2")?.repos).toEqual([]);
+  });
+
+  test("--repo passed twice scopes once", async () => {
+    const ws = runWorkspace();
+    writeQuestions(ws, "01-what", block("Q1", "Where?", "data-model"));
+
+    const read = capture();
+    await answerCommand.run(["Q1", "Redis", "--repo", "api", "--repo", "api", "--root", ws.root]);
+    read();
+
+    // The `affects:` half de-duplicates (`reposFromAffects`), so the explicit half
+    // must too, or the same scoping is spelled two ways depending on its source.
+    expect(FactsStore.loadOrEmpty(factsPath(ws.root)).facts[0]?.repos).toEqual(["api"]);
+  });
+
+  test("the --repo refusal names the empty case instead of dangling", async () => {
+    const ws = runWorkspace();
+    writeQuestions(ws, "01-what", block("Q1", "Where?", "data-model"));
+    writeFileSync(
+      join(ws.root, ".tldrx", "workspace.yml"),
+      "version: 1\nmode: multi-repo\nroot_is_repo: false\nrepos: []\n",
+      "utf8",
+    );
+
+    const err = captureStderr();
+    const code = await answerCommand.run(["Q1", "Redis", "--repo", "api", "--root", ws.root]);
+    const text = err();
+
+    expect(code).toBe(1);
+    expect(text).toContain("--repo api is not a repo in this workspace — this workspace declares no repos");
+  });
+});
+
+describe("--supersede carries the same provenance, and says what it inherited", () => {
+  /** Answer Q1 once (owner, scoped to `api`) so there is a decision to reverse. */
+  async function answered(ws: AnswerWorkspace, affects?: string): Promise<void> {
+    writeQuestions(ws, "01-what", affects === undefined
+      ? block("Q1", "Where does state live?", "data-model")
+      : blockWithAffects("Q1", "Where does state live?", "data-model", affects));
+    const read = capture();
+    await answerCommand.run(["Q1", "Redis", "--decided-by", "owner", "--repo", "api", "--root", ws.root]);
+    read();
+  }
+
+  test("--supersede --decided-by --repo lands on the NEW fact", async () => {
+    const ws = runWorkspace();
+    await answered(ws);
+
+    const read = capture();
+    const code = await answerCommand.run([
+      "Q1", "Postgres after all", "--supersede", "--decided-by", "driver", "--repo", "lab", "--root", ws.root,
+    ]);
+    read();
+
+    expect(code).toBe(0);
+    const facts = FactsStore.loadOrEmpty(factsPath(ws.root)).facts;
+    const old = facts.find((f) => f.id === "F001");
+    const fresh = facts.find((f) => f.supersedes === "F001");
+    expect(old?.repos).toEqual(["api"]);              // untouched, as always
+    expect(old?.source.decided_by).toBe("owner");
+    expect(fresh?.repos).toEqual(["lab"]);            // a supersession may rescope
+    expect(fresh?.source.decided_by).toBe("driver");  // and it is recorded as the driver's
+  });
+
+  test("--supersede with no --repo and no affects: inherits the repos it replaces", async () => {
+    const ws = runWorkspace();
+    await answered(ws);
+
+    const read = capture();
+    await answerCommand.run(["Q1", "Postgres after all", "--supersede", "--root", ws.root]);
+    read();
+
+    const fresh = FactsStore.loadOrEmpty(factsPath(ws.root)).facts.find((f) => f.supersedes === "F001");
+    expect(fresh?.repos).toEqual(["api"]);
+    expect(fresh?.source.decided_by).toBeUndefined();
+  });
+
+  test("--supersede with no --repo takes the question's affects: when it names a repo", async () => {
+    const ws = runWorkspace();
+    await answered(ws, "lab:src/a.ts");            // answered with --repo api, so head.repos is [api]
+
+    const read = capture();
+    await answerCommand.run(["Q1", "Postgres after all", "--supersede", "--root", ws.root]);
+    read();
+
+    // The question's own declaration is a present signal about THIS question;
+    // inheriting the predecessor's repos is the fallback for when there is none,
+    // not the other way round. Before this fix `named.repos` was computed here
+    // and thrown away.
+    const fresh = FactsStore.loadOrEmpty(factsPath(ws.root)).facts.find((f) => f.supersedes === "F001");
+    expect(fresh?.repos).toEqual(["lab"]);
   });
 });
