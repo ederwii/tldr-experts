@@ -24,7 +24,8 @@ import {
 import { looksLikeReviewerError, renderReviewLog, reviewerFailed } from "../src/core/build/review.ts";
 import { renderBuildHandoff, type BuildHandoffParts } from "../src/core/build/handoff.ts";
 import { renderFixlist, type FixFinding } from "../src/core/build/fixlist.ts";
-import type { CarriedRow } from "../src/core/build/carriedRows.ts";
+import { carriedReportFor, phaseDirsOf, type CarriedRow } from "../src/core/build/carriedRows.ts";
+import { renderShipBody } from "../src/core/run/shipBody.ts";
 import { storyRetroLines } from "../src/core/build/retroLog.ts";
 import { buildReviewerPrompt } from "../src/core/build/prompts.ts";
 import { DOD_REFUSAL_FALLBACK, dodGreen, type StoryOutcome } from "../src/core/build/outcome.ts";
@@ -40,6 +41,7 @@ import { RunStore } from "../src/core/run/RunStore.ts";
 import { spendReason } from "../src/core/budget/spendBasis.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { emptySrcContext, MAX_BULLETS, validateHandoff } from "../src/core/text/handoff.ts";
+import { MAX_CARRIED_BULLETS } from "../src/core/build/handoff.ts";
 import { loadWorkspace, toSrcContext } from "../src/hooks/lib/workspace.ts";
 import {
   assertWorktreeOn, cleanUpRunEpicWorktrees, diffCommand, GitError, partitionDirty, porcelainPath,
@@ -48,6 +50,7 @@ import {
 import { FRAMEWORK_ROOT, PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../src/core/paths.ts";
 import {
   addBuildRun, makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions,
+  storyMarkdown,
 } from "./fixtures/build/workspace.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
@@ -3139,7 +3142,7 @@ describe("a carried finding nobody's story owns reaches `## Unknowns` (#171)", (
       const validation = validateHandoff(text, emptySrcContext(dir, dir));
       expect({ ok: validation.ok, unsourced: validation.unsourced, unresolved: validation.unresolved })
         .toEqual({ ok: true, unsourced: [], unresolved: [] });
-      expect(text).toContain("250");
+      expect(text).toContain("+225 more carried findings — see the fix list");
       expect(validation.bulletCount).toBeLessThanOrEqual(MAX_BULLETS);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -3179,6 +3182,146 @@ describe("a carried finding nobody's story owns reaches `## Unknowns` (#171)", (
       }).toEqual({ ok: true, unsourced: [], malformed: [], unresolved: [], emptySections: [] });
       // And the row really is in the checked section, not merely in the document.
       expect(sectionOf(text, "Unknowns")).toContain("the token is logged");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * Fix round 1 over #171 — the leaf's own contract, tested directly.
+ *
+ * `carriedReportFor` is the ONE reader every surface calls, so its phase list, its
+ * absent-with-reason row for an unreadable story file, and the bounded shape of
+ * the `## Unknowns` section belong here rather than being inferred three times
+ * from three renderers.
+ */
+describe("the carried-findings leaf, and what every surface gets from it (#171, fix 1)", () => {
+  const LEAF_BASE: BuildHandoffParts = {
+    runId: "260907-x", stageId: "build", model: null, costUsd: 0, budgetUsd: 8,
+    at: "2026-09-07T09:00:00Z", outcomes: [], epics: [],
+  };
+
+  function unknownsOf(text: string): readonly string[] {
+    const from = text.indexOf("## Unknowns\n");
+    const rest = text.slice(from);
+    const end = rest.indexOf("\n## ", 1);
+    return (end === -1 ? rest : rest.slice(0, end)).split("\n").filter((line) => line.startsWith("- "));
+  }
+
+  function carriedFinding(overrides: Partial<FixFinding> = {}): FixFinding {
+    return {
+      n: 1, severity: "high", finding: "the token is logged", where: "[src: app:platform/Auth.cs:3]",
+      disposition: "defer-with-log", detail: "", doNot: [], resolved: false, resolvedSha: null,
+      ...overrides,
+    };
+  }
+
+  function row(rel = "04-build/fixlist/S1-1.md"): CarriedRow {
+    return {
+      rel,
+      row: {
+        finding: carriedFinding(), ownership: "unowned",
+        reason: "no story declares this path in the repo it names",
+      },
+    };
+  }
+
+  /** A run dir with `run.yml`'s declared phases, a story and a fix list under `phase`. */
+  function runDirWith(
+    phase: string,
+    opts: { story?: string | null; where?: string; declared?: readonly string[] } = {},
+  ): string {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-171-leaf-"));
+    mkdirSync(join(dir, phase, "stories"), { recursive: true });
+    mkdirSync(join(dir, phase, "fixlist"), { recursive: true });
+    writeFileSync(join(dir, "run.yml"), [
+      "version: 1",
+      'run: "260907-x"',
+      "phases:",
+      ...(opts.declared ?? [phase]).map((id) => `  - id: "${id}"`),
+      "",
+    ].join("\n"), "utf8");
+    const story = opts.story === undefined
+      ? storyMarkdown({ id: "S1", epic: "E1", title: "First story", touches: ["src/in.ts"] }, "app")
+      : opts.story;
+    if (story !== null) writeFileSync(join(dir, phase, "stories", "S1.md"), story, "utf8");
+    writeFileSync(join(dir, phase, "fixlist", "S1-1.md"), renderFixlist({
+      storyId: "S1", title: "First story", round: 1, attempt: 1, maxAttempts: 2,
+      diff: "git diff main...epic/e1", commit: "abc1234", summary: "signed",
+      findings: [carriedFinding({ where: opts.where ?? "[src: app:platform/Auth.cs:3]" })],
+    }), "utf8");
+    return dir;
+  }
+
+  test("the phase list is derived from `run.yml`, so a story under a declared phase is found", () => {
+    const dir = runDirWith("07-extra");
+    try {
+      const report = carriedReportFor(dir, new Set(["app"]));
+      expect(report.rows.map((r) => r.row.finding.finding)).toEqual(["the token is logged"]);
+      expect(report.rows[0]?.rel).toBe("07-extra/fixlist/S1-1.md");
+      expect(phaseDirsOf(dir)).toContain("07-extra");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the handoff and the PR body are fed the SAME rows on a run with a custom phase", () => {
+    const dir = runDirWith("07-extra");
+    try {
+      const report = carriedReportFor(dir, new Set(["app"]));
+      const handoff = renderBuildHandoff({ ...LEAF_BASE, carried: report.rows, unreadableStories: report.unreadable });
+      const body = renderShipBody({
+        runId: "260907-x", title: "t", branch: "epic/e1", handoff, handoffRel: "04-build/handoff.md",
+        openFindings: [], carriedFindings: report.rows, unreadableStories: report.unreadable,
+      });
+      expect(unknownsOf(handoff).join("\n")).toContain("the token is logged");
+      expect(body).toContain("## Carried findings");
+      expect(body).toContain("the token is logged");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a story file that does not validate is NAMED with its reason, never dropped", () => {
+    // Its fix list is still on disk and still carries a defect. Dropping the story
+    // silently would drop the finding with it — the one place in this feature where
+    // something can vanish rather than be reported.
+    const dir = runDirWith("04-build", { story: "---\nversion: 1\nid: S1\n---\n\n# broken\n" });
+    try {
+      const report = carriedReportFor(dir, new Set(["app"]));
+      expect(report.unreadable.map((u) => u.rel)).toEqual(["04-build/stories/S1.md"]);
+      expect(report.unreadable[0]?.reason).toContain("does not validate");
+
+      const handoff = renderBuildHandoff({ ...LEAF_BASE, carried: report.rows, unreadableStories: report.unreadable });
+      const bullets = unknownsOf(handoff);
+      expect(bullets.some((b) => b.includes("04-build/stories/S1.md"))).toBe(true);
+      expect(bullets.some((b) => b.includes("[src: absent:04-build/stories/S1.md]"))).toBe(true);
+      // Named, and it does not fail the document: an `absent:` over a path that
+      // exists is `noted` — legal, never fatal, never silent.
+      expect(validateHandoff(handoff, emptySrcContext(dir, dir)).ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("at the cap the section closes with ONE `+N more` bullet carrying a `[src:]` token", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-171-cap26-"));
+    try {
+      mkdirSync(join(dir, "04-build", "fixlist"), { recursive: true });
+      writeFileSync(join(dir, "04-build", "fixlist", "S1-1.md"), "# Fix list — S1\n", "utf8");
+      const text = renderBuildHandoff({
+        ...LEAF_BASE, carried: Array.from({ length: 26 }, () => row()),
+      });
+      const bullets = unknownsOf(text);
+      // 25 rows + ONE closing bullet, and never more than that however many arrive:
+      // past `MAX_BULLETS` a handoff fails `claim-sources`, and a report-only
+      // feature must not be able to block a stage through arithmetic.
+      expect(bullets.length).toBe(MAX_CARRIED_BULLETS + 1);
+      expect(bullets.at(-1)).toBe(
+        "- +1 more carried findings — see the fix list [src: 04-build/fixlist/S1-1.md:1]",
+      );
+      expect(validateHandoff(text, emptySrcContext(dir, dir)).ok).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

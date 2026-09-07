@@ -81,7 +81,7 @@
  * the unit cases and a stub `gh` on PATH for the one end-to-end case; the real
  * `gh` is never invoked by a test.
  */
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { runtime } from "../runtime/index.ts";
@@ -94,10 +94,7 @@ import { loadWorkspace, FALLBACK_DEFAULT_BRANCH } from "../../hooks/lib/workspac
 import { GH_BIN } from "../adapters/github.ts";
 import { renderShipBody, type OpenFindingRow } from "./shipBody.ts";
 import { latestFixlist, openFindings } from "../build/fixlist.ts";
-import { carriedRowsFor } from "../build/carriedRows.ts";
-import { BUILD_PHASE, PLAN_PHASE } from "../build/plan.ts";
-import { validateStoryFile } from "../schemas/story.ts";
-import { STORIES_DIR } from "../plan/validatePlan.ts";
+import { carriedReportFor, phaseDirsOf, scanStories } from "../build/carriedRows.ts";
 import type { PlanStatus } from "../schemas/planCommon.ts";
 // Spec §3's table, from the file that owns it. This module used to spell the
 // three numbers itself; `EXIT_GATE_REFUSED` is the same 2 every other gate
@@ -861,6 +858,7 @@ function writeShipBody(
   repoNames: ReadonlySet<string>,
 ): ShipBody {
   const rows = openFixFindings(store, stories);
+  const carried = carriedReportFor(store.runDir, repoNames);
   const text = renderShipBody({
     runId: store.runId,
     title: store.run.title,
@@ -874,7 +872,8 @@ function writeShipBody(
     // the same pair the boundary gate reads, `03-plan/stories/` first and
     // `04-build/implicit-plan.yml` on a Plan-skipped run. This verb calls it
     // because it runs in a separate process, not because it has a second opinion.
-    carriedFindings: carriedRowsFor(store.runDir, repoNames, store.run.phases.map((phase) => phase.id)),
+    carriedFindings: carried.rows,
+    unreadableStories: carried.unreadable,
   });
   const path = join(mkdtempSync(join(tmpdir(), "tldrx-ship-")), "pr-body.md");
   writeFileSync(path, text, "utf8");
@@ -922,7 +921,12 @@ interface ShipStory {
  * so the real home has to win any tie.
  */
 function phaseDirs(store: RunStore): readonly string[] {
-  return [...new Set([BUILD_PHASE, PLAN_PHASE, ...store.run.phases.map((phase) => phase.id)])];
+  // ONE list, and it is the LEAF's (#171 fix round 1). It used to be built here
+  // and again in `build/carriedRows.ts`, which is how the Build handoff and this
+  // PR body became able to see different sets of stories. `phaseDirsOf` reads the
+  // run's declared phases off `run.yml` rather than off a `RunStore` the leaf's
+  // other callers do not have.
+  return phaseDirsOf(store.runDir);
 }
 
 /**
@@ -947,34 +951,16 @@ function phaseDirs(store: RunStore): readonly string[] {
  * id — so the property has to be asserted where it lives.
  */
 export function runStories(store: RunStore): readonly ShipStory[] {
-  const stories: ShipStory[] = [];
-  const seen = new Set<string>();
-  for (const phase of phaseDirs(store)) {
-    const dir = join(store.runDir, phase, STORIES_DIR);
-    if (!existsSync(dir)) continue;
-    let names: readonly string[];
-    try {
-      names = readdirSync(dir).filter((name) => name.endsWith(".md")).sort();
-    } catch {
-      continue;
-    }
-    for (const name of names) {
-      let text: string;
-      try {
-        text = readFileSync(join(dir, name), "utf8");
-      } catch {
-        continue;
-      }
-      // No workspace commands passed: the dod-allowlist rule is about EXECUTING a
-      // story, and this only ever reads its front matter (`adapters/collect.ts`
-      // reads one the same way, for the same reason).
-      const story = validateStoryFile(text).story;
-      if (story === null || seen.has(story.id)) continue;
-      seen.add(story.id);
-      stories.push({ id: story.id, status: story.status, repo: story.repo, touches: story.touches });
-    }
-  }
-  return stories;
+  // The WALK is `build/carriedRows.ts`'s `scanStories` and this is a rename on top
+  // of it (#171 fix round 1). It used to be a near-line-by-line clone — same
+  // `existsSync` guard, same `readdirSync(...).filter(".md").sort()`, same
+  // `validateStoryFile`, same one-row-per-id guard — and two copies of a walk is
+  // how the story list this verb ships and the story list its carried findings are
+  // judged against would eventually stop agreeing. `status` is the only thing
+  // `ship` needs that the surface does not carry.
+  return scanStories(store.runDir).stories.map((row) => ({
+    id: row.story, status: row.status, repo: row.repo, touches: row.touches,
+  }));
 }
 
 /**

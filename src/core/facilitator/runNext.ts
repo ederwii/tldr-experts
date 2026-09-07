@@ -23,7 +23,7 @@ import { approve } from "../run/gates.ts";
 import { AUTO_GATE_ACTOR, evaluateAutoGate, unreadableHeadings } from "../run/autoGate.ts";
 import { describeAgentFallthroughs, evaluateAgentGate } from "../run/agentGate.ts";
 import { cardForTriggers, type Money } from "../run/decisionCards.ts";
-import { carriedCardLine, carriedRowsFor } from "../build/carriedRows.ts";
+import { carriedDetailLines, carriedReportFor } from "../build/carriedRows.ts";
 import { renderDecisionCard } from "../ui/decisionCard.ts";
 import { gatePolicyFor } from "../run/gatePolicy.ts";
 import type { BranchModelKind } from "../plan/branchModel.ts";
@@ -1738,11 +1738,9 @@ async function finishStage(
         },
         agent.fallthroughs,
         phaseMoney(store, phaseId),
-        carriedRowsFor(
-          store.runDir,
-          new Set(loadWorkspace(options.root).repos.keys()),
-          store.run.phases.map((phase) => phase.id),
-        ).map(carriedCardLine),
+        carriedDetailLines(
+          carriedReportFor(store.runDir, new Set(loadWorkspace(options.root).repos.keys())),
+        ),
       );
       return out(EXIT_AWAITING_HUMAN, [
         ...notes,

@@ -20,7 +20,7 @@
  *                        recommendation line, rather than with a manufactured one.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -30,6 +30,10 @@ import {
 import {
   decisionHeader, renderDecisionCard, renderRecommendation, DECISION_KINDS,
 } from "../src/core/ui/decisionCard.ts";
+import {
+  carriedCardLine, carriedDetailLines, type CarriedRow,
+} from "../src/core/build/carriedRows.ts";
+import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { parseQuestions, serializeQuestions } from "../src/core/text/questions.ts";
 import { runAuto, type AutoOptions } from "../src/core/facilitator/runAuto.ts";
 import { runNext } from "../src/core/facilitator/runNext.ts";
@@ -328,19 +332,75 @@ describe("a card per fallthrough kind", () => {
    * going to print, never the reason one prints — so the no-extra call still
    * renders exactly what it rendered before.
    */
+  /**
+   * The card's detail lines come from the LEAF's own renderer (#171, fix round 1).
+   *
+   * These are GUARDS, not proofs — they pin behaviour that is already green, which
+   * is the point: `carriedCardLine` had zero coverage, so its format could change
+   * and nothing went red. The mutations recorded in the fix-round report are what
+   * give them teeth.
+   */
+  const CARRIED_ROW: CarriedRow = {
+    rel: "04-build/fixlist/S1-1.md",
+    row: {
+      finding: {
+        n: 1, severity: "high", finding: "the token is logged",
+        where: "[src: api:platform/Auth.cs:3]", disposition: "defer-with-log",
+        detail: "", doNot: [], resolved: false, resolvedSha: null,
+      },
+      ownership: "unowned",
+      reason: "no story declares this path in the repo it names",
+    },
+  };
+
+  test("carriedCardLine renders one carried row as one line, with its fix list", () => {
+    expect(carriedCardLine(CARRIED_ROW)).toBe(
+      "carried, unowned: 1 · the token is logged [high] — no story declares this path in the repo "
+      + "it names — `04-build/fixlist/S1-1.md`",
+    );
+  });
+
+  test("carriedDetailLines carries BOTH lists — an unread story file is never left out", () => {
+    expect(carriedDetailLines({
+      rows: [CARRIED_ROW],
+      unreadable: [{ rel: "03-plan/stories/S2.md", reason: "the file does not validate as a story" }],
+    })).toEqual([
+      carriedCardLine(CARRIED_ROW),
+      "story file not read: `03-plan/stories/S2.md` — the file does not validate as a story",
+    ]);
+  });
+
   test("carried rows handed to the boundary card land under its detail", () => {
     const detail = "13 changed path(s), 1 outside the surface: api:platform/Auth.cs";
-    const lines = renderDecisionCard(boundaryCard(ctx(), detail, [
-      "carried, unowned: 1 · the token is logged [high] — no story declares this path in the repo it names",
-    ]));
+    const lines = renderDecisionCard(boundaryCard(ctx(), detail, carriedDetailLines({
+      rows: [CARRIED_ROW], unreadable: [],
+    })));
     expect(lines[2]).toBe(`  ${detail}`);
-    expect(lines[3]).toBe(
-      "  carried, unowned: 1 · the token is logged [high] — no story declares this path in the repo it names",
-    );
+    expect(lines[3]).toBe(`  ${carriedCardLine(CARRIED_ROW)}`);
+    expect(lines[3]).toContain("the token is logged");
     // The advice still follows the detail, unchanged.
     expect(lines[4]).toBe(
       "  tldrx story widen <id> <path> --note \"<why>\" — or cite the path in a handoff, then re-run the stage",
     );
+  });
+
+  /**
+   * The `runNext` wiring itself (#171, fix round 1).
+   *
+   * Reaching it behaviourally needs an agent gate that falls to a person with a
+   * BOUNDARY trigger — a real epic diff over a real repo — which is a whole Build
+   * run for two lines. So the wiring is pinned structurally, the way
+   * `test/dod-allowlist.test.ts` pins `build.ts`'s allowlist call: delete the
+   * argument and this goes red. It is a shape pin and it is labelled one; what it
+   * cannot do is prove the rendering, which the three tests above do.
+   */
+  test("`next`'s agent-gate card is handed the leaf's rows, not an empty list", () => {
+    const source = readFileSync(join(FRAMEWORK_ROOT, "src", "core", "facilitator", "runNext.ts"), "utf8");
+    expect(source).toContain("carriedDetailLines(");
+    expect(source).toContain("carriedReportFor(store.runDir");
+    // and it is the SAME call `cardForTriggers` receives, not a stray import
+    const call = source.slice(source.indexOf("const card = cardForTriggers("));
+    expect(call.slice(0, call.indexOf("));"))).toContain("carriedDetailLines(");
   });
 
   test("no carried rows leaves the card byte-identical to the two-argument call", () => {

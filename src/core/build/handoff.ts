@@ -14,7 +14,7 @@
  */
 import { DOD_REFUSAL_FALLBACK, dodRefused } from "./outcome.ts";
 import type { StoryOutcome } from "./outcome.ts";
-import type { CarriedRow } from "./carriedRows.ts";
+import type { CarriedRow, UnreadableStory } from "./carriedRows.ts";
 import { PLAN_STATUSES, type PlanStatus } from "../schemas/planCommon.ts";
 
 export interface EpicSummaryRow {
@@ -94,9 +94,17 @@ export interface BuildHandoffParts {
    */
   readonly storiesRel?: string | null;
   /**
-   * Carried findings (`defer-with-log`, unresolved) that no story's `touches:`
-   * covers, computed by `build/carriedRows.ts` and HANDED here — this file parses
-   * no fix list and applies no predicate of its own (#171).
+   * Carried findings (`defer-with-log`, unresolved) that no story's declared
+   * surface could be shown to cover, computed by `build/carriedRows.ts` and
+   * HANDED here — this file parses no fix list and applies no predicate of its
+   * own (#171).
+   *
+   * "Could be shown to cover", not "whose path no `touches:` covers": the leaf
+   * emits THREE kinds and only one of them is about a path a story missed
+   * (`unownedFindings.ts` `REASONS`). The other two are `unqualified` (the
+   * citation names no repo) and `no-src` (there is no path in `where:` at all),
+   * and a heading asserting a path would contradict the reason the row itself
+   * carries. Each bullet states its own reason; the framing states none.
    *
    * They go in `## Unknowns` and not in a fifth section on purpose:
    * `validateSections` only checks bullets inside the four required sections
@@ -105,19 +113,38 @@ export interface BuildHandoffParts {
    * `## Unknowns` is also where they belong by meaning: it already holds "this
    * needs a human".
    *
-   * Absent or empty leaves the section byte-identical to before this existed.
+   * Absent behaves exactly as empty. It is NOT byte-identical to the section
+   * before this field existed, and must not be: the `none` sentence now answers
+   * for both lists, because a document that says "nothing needs a human" while
+   * listing something that does is worse than one that says neither.
    */
   readonly carried?: readonly CarriedRow[];
+  /**
+   * Story files the walk could not read, from the same leaf (#171).
+   *
+   * Their fix lists are still on disk and still carry defects, so an unread story
+   * silently takes carried findings out of this report with it. Named here with
+   * WHY — absent-with-reason — and cited `[src: absent:<rel>]`, which resolves as
+   * `noted`: legal, never fatal, never silent (gh #110). A report-only feature
+   * must not be able to fail a document.
+   */
+  readonly unreadableStories?: readonly UnreadableStory[];
 }
 
 /**
- * How many carried rows get a bullet of their own before the rest are summarised.
+ * How many carried rows get a bullet of their own before the rest close with one
+ * summarising line.
  *
- * `MAX_BULLETS` is 200 across the four sections (`text/handoff.ts`), and the
- * other three sections grow with the story count, so this cannot be the whole
- * budget. Past the cap the rows are NEVER dropped: one bullet names the total and
- * cites the first fix list, which is a claim with evidence behind it rather than
- * a truncated list that silently under-reports what is owed.
+ * A BOUND, not a preference. `validateHandoff` turns a document of more than
+ * `MAX_BULLETS` (200) list items into an `unresolved` entry (`text/handoff.ts`),
+ * and `run/checks.ts` turns any `describeHandoff` failure into
+ * `claim-sources = failed` — so an uncapped list would let a REPORT-ONLY feature
+ * block a stage through arithmetic. Carried findings therefore contribute at most
+ * `MAX_CARRIED_BULLETS + 1` bullets to `## Unknowns`, however many arrive.
+ *
+ * Past the cap nothing is dropped: the closing bullet names how many more there
+ * are and cites the fix list, which is a claim with evidence behind it rather
+ * than a truncated list that silently under-reports what is owed.
  */
 export const MAX_CARRIED_BULLETS = 25;
 
@@ -144,10 +171,12 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
     "",
     "## Unknowns",
     "",
-    // The `none` sentence answers for BOTH lists, because it is read as "nothing
-    // here needs a human": a document that said so while listing a carried
-    // finding nobody owns would be worse than one that said neither.
+    // The `none` sentence answers for EVERY list this section carries, because it
+    // is read as "nothing here needs a human": a document that said so while
+    // listing a carried finding nobody owns, or a story file it could not read,
+    // would be worse than one that said neither.
     ...(notDone.length === 0 && (parts.carried ?? []).length === 0
+      && (parts.unreadableStories ?? []).length === 0
       ? [`- none — every scheduled story reached \`done\` and no carried finding is unowned `
         + `[src: absent:04-build/log]`]
       : []),
@@ -157,6 +186,9 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
         `[src: ${o.reviewRel}:1]`,
     ),
     ...carriedBullets(parts.carried ?? []),
+    ...(parts.unreadableStories ?? []).map((row) =>
+      `- a story file could not be read, so its carried findings were not checked: ` +
+      `\`${row.rel}\` — ${row.reason} [src: absent:${row.rel}]`),
     "",
     "## Evidence ledger",
     "",
@@ -304,14 +336,13 @@ function finding(outcome: StoryOutcome): string {
 function carriedBullets(rows: readonly CarriedRow[]): readonly string[] {
   const shown = rows.slice(0, MAX_CARRIED_BULLETS);
   const bullets = shown.map((row) =>
-    `- a carried finding nobody's story owns: ${row.row.finding.finding} `
+    `- a carried finding no story could be shown to own: ${row.row.finding.finding} `
     + `[${row.row.finding.severity}] — ${row.row.reason} [src: ${row.rel}:1]`);
   if (rows.length <= MAX_CARRIED_BULLETS) return bullets;
   const first = rows[0];
   return [
     ...bullets,
-    `- and ${String(rows.length - MAX_CARRIED_BULLETS)} more carried finding(s) nobody's story owns — `
-    + `${String(rows.length)} in all, listed in the fix lists themselves `
+    `- +${String(rows.length - MAX_CARRIED_BULLETS)} more carried findings — see the fix list `
     + `[src: ${first === undefined ? "absent:04-build/fixlist" : `${first.rel}:1`}]`,
   ];
 }

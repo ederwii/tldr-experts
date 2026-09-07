@@ -98,7 +98,7 @@ import {
   type FixFinding, type FixlistOnDisk,
 } from "../../build/fixlist.ts";
 import { renderBuildHandoff, type EpicSummaryRow } from "../../build/handoff.ts";
-import { carriedRowsFor, type CarriedRow } from "../../build/carriedRows.ts";
+import { carriedReportFor, type CarriedReport } from "../../build/carriedRows.ts";
 import {
   baseResultOf, PreflightCache, redBaseRefusal, runStoryDod, type BaseParts,
 } from "../../build/dodRunner.ts";
@@ -2318,6 +2318,10 @@ class BuildSession {
     const cost = phaseCostToDate(
       this.ctx.runDir, this.ctx.phaseId, this.ctx.stageId, this.spent(), this.tasks,
     );
+    // ONE walk for both fields, and the leaf derives its own phase list from the
+    // run dir — the executor's `ctx` carries none, and passing one from here is
+    // how the handoff and the PR body became able to see different stories.
+    const carried = this.carriedRows();
     writeFileSync(path, renderBuildHandoff({
       runId: this.ctx.runId,
       stageId: this.ctx.stageId,
@@ -2332,7 +2336,8 @@ class BuildSession {
       outcomes,
       epics: this.epicRows(outcomes),
       storiesRel: this.plan.implicit ? IMPLICIT_PLAN_REL : null,
-      carried: this.carriedRows(),
+      carried: carried.rows,
+      unreadableStories: carried.unreadable,
     }), "utf8");
   }
 
@@ -2345,8 +2350,8 @@ class BuildSession {
    * over the run directory and the workspace's repo names, which is the same set
    * `toSrcContext` gives the `[src:]` grammar, and renders whatever comes back.
    */
-  private carriedRows(): readonly CarriedRow[] {
-    return carriedRowsFor(this.ctx.runDir, new Set(this.workspace.repos.keys()));
+  private carriedRows(): CarriedReport {
+    return carriedReportFor(this.ctx.runDir, new Set(this.workspace.repos.keys()));
   }
 
   /**

@@ -33,7 +33,7 @@
 import { parseHandoff } from "../text/handoff.ts";
 import { findingStatus } from "../build/handoff.ts";
 import type { FixFinding } from "../build/fixlist.ts";
-import type { CarriedRow } from "../build/carriedRows.ts";
+import type { CarriedRow, UnreadableStory } from "../build/carriedRows.ts";
 
 /** One open fix-list finding, with the file it is still open in. */
 export interface OpenFindingRow {
@@ -52,8 +52,15 @@ export interface ShipBodyParts {
   /** Open fix-list findings, from `build/fixlist.ts`. NEVER re-parsed here. */
   readonly openFindings: readonly OpenFindingRow[];
   /**
-   * Carried findings (`defer-with-log`, unresolved) no story's `touches:` covers,
-   * from `build/carriedRows.ts` (#171). NEVER re-derived here.
+   * Carried findings (`defer-with-log`, unresolved) no story's declared surface
+   * could be shown to cover, from `build/carriedRows.ts` (#171). NEVER re-derived
+   * here.
+   *
+   * "Could be shown to cover" and not "whose path no `touches:` covers": the leaf
+   * emits three kinds (`unownedFindings.ts` `REASONS`), and a `no-src` row's own
+   * reason says there is no path to check at all — so a heading asserting a path
+   * would contradict, in the same document, the row it introduces. Each row
+   * carries its reason; the framing asserts no cause.
    *
    * The same rows the Build handoff's `## Unknowns` carries, from the same leaf:
    * `ship` runs in its own process, so it CALLS that leaf rather than holding a
@@ -62,6 +69,14 @@ export interface ShipBodyParts {
    * checked and found none, which is a different sentence from "nothing to say".
    */
   readonly carriedFindings: readonly CarriedRow[];
+  /**
+   * Story files the leaf could not read, with why (#171).
+   *
+   * Listed for the same reason the handoff lists them: an unread story takes its
+   * fix list's carried findings out of the report with it, and a reader deciding
+   * on this PR is owed the fact that something was not checked.
+   */
+  readonly unreadableStories: readonly UnreadableStory[];
 }
 
 /** `## Findings` in a handoff: one bullet per story, with its status in it. */
@@ -110,16 +125,19 @@ export function renderShipBody(parts: ShipBodyParts): string {
     );
   }
 
-  if (parts.carriedFindings.length > 0) {
+  if (parts.carriedFindings.length > 0 || parts.unreadableStories.length > 0) {
     lines.push(
       "## Carried findings",
       "",
-      "Reviewer findings this run deliberately did NOT fix (`defer-with-log`), whose path no",
-      "story's `touches:` covers — so no story could have closed them:",
+      "Reviewer findings this run deliberately did NOT fix (`defer-with-log`) that no story's declared",
+      "surface could be shown to cover — each row says why:",
       "",
       ...parts.carriedFindings.map((row) =>
         `- ${String(row.row.finding.n)} · ${row.row.finding.finding} [${row.row.finding.severity}] — `
         + `${row.row.reason} — \`${row.rel}\``),
+      ...parts.unreadableStories.map((row) =>
+        `- a story file could not be read, so its carried findings were not checked: `
+        + `\`${row.rel}\` — ${row.reason}`),
       "",
     );
   }

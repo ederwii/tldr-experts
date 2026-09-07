@@ -31,6 +31,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { join } from "node:path";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { runStories, shipRun, type ShipTransport } from "../src/core/run/ship.ts";
+import { declaredSurfaces } from "../src/core/build/carriedRows.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { renderBuildHandoff } from "../src/core/build/handoff.ts";
 import type { StoryOutcome } from "../src/core/build/outcome.ts";
@@ -789,6 +790,52 @@ describe("tldrx ship — carried findings nobody's story owns (#171)", () => {
     const transport = healthy();
     await ship(ws, transport);
     expect(bodyOf(transport)).not.toContain("## Carried findings");
+  });
+
+  /**
+   * ONE story reader, not two that happen to agree (fix round 1, F4).
+   *
+   * `runStories` and the leaf used to be near-line-by-line clones of the same
+   * walk. Now `ship` calls the leaf's `scanStories` and adds `status` on top, so
+   * the two cannot drift: the equality below is the property, and the source
+   * assertion is what makes it structural rather than coincidental.
+   */
+  test("`ship` and the carried-findings leaf read the SAME story surfaces, from ONE reader", () => {
+    const ws = workspace();
+    const store = RunStore.open(ws.runDir);
+
+    expect(runStories(store).map((s) => ({ story: s.id, repo: s.repo, touches: s.touches })))
+      .toEqual(declaredSurfaces(ws.runDir).map((s) => ({ story: s.story, repo: s.repo, touches: s.touches })));
+
+    const source = readFileSync(join(FRAMEWORK_ROOT, "src", "core", "run", "ship.ts"), "utf8");
+    expect(source).toContain("scanStories(");
+    expect(source).not.toContain('readdirSync(dir).filter((name) => name.endsWith(".md"))');
+  });
+
+  /**
+   * The framing of `## Carried findings` must not assert a cause the leaf did not
+   * measure (fix round 1, F2). `unownedFindings` emits THREE kinds — `unowned`,
+   * `unqualified`, `no-src` — and a `no-src` row's own reason says there is no
+   * path at all, which the old heading ("whose path no story's `touches:` covers")
+   * flatly contradicted in a document a human reads to decide something.
+   */
+  test("a `no-src` carried finding is listed under a heading that does not contradict its reason", async () => {
+    const ws = workspace();
+    readyToShip(ws);
+    writeFixlistFixture(ws, "S1", [
+      { disposition: "defer-with-log", finding: "the token is logged", where: "somewhere in the auth code" },
+    ]);
+
+    const transport = healthy();
+    await ship(ws, transport);
+    const body = bodyOf(transport);
+
+    expect(body).toContain(
+      "Reviewer findings this run deliberately did NOT fix (`defer-with-log`) that no story's declared",
+    );
+    expect(body).toContain("surface could be shown to cover — each row says why:");
+    expect(body).not.toContain("whose path no");
+    expect(body).toContain("`where:` carries no `[src: …]` path, so nothing can be checked against it");
   });
 
   test("no carried findings leaves the section out rather than asserting an empty one", async () => {
