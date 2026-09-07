@@ -71,6 +71,16 @@ export interface BuildHandoffParts {
    * and a number that is genuinely zero must not read identically.
    */
   readonly costNote?: string | null;
+  /**
+   * How many of this run's recorded decisions name a decider (#169) — the same
+   * sentence the close prints, on the header rather than as a `## Decisions`
+   * bullet. Deliberately the header: every list item in a §2.8 section must
+   * carry a `[src: …]` token or `claim-sources` refuses the document, and a
+   * count over a whole file has no one line to cite.
+   *
+   * Absent or null means the run recorded no facts, and the header says nothing.
+   */
+  readonly decidedNote?: string | null;
   readonly budgetUsd: number;
   readonly at: string;
   readonly outcomes: readonly StoryOutcome[];
@@ -92,7 +102,8 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
     `# Handoff — 04-build / ${parts.stageId} — run ${parts.runId}`,
     `Stage: ${parts.stageId} · Expert: developer + reviewer · Model: ${parts.model ?? "default"} · ` +
       `Cost: $${parts.costUsd.toFixed(2)} of $${parts.budgetUsd.toFixed(2)} ceiling` +
-      `${parts.costNote == null ? "" : ` (${parts.costNote})`} · ${parts.at}`,
+      `${parts.costNote == null ? "" : ` (${parts.costNote})`}` +
+      `${parts.decidedNote == null ? "" : ` · ${parts.decidedNote}`} · ${parts.at}`,
     "",
     "## Findings",
     "",

@@ -41,6 +41,7 @@ import {
   factsPath, loadWorkspace, type WorkspaceContext,
 } from "../../../hooks/lib/workspace.ts";
 import { FactsStore } from "../../facts/FactsStore.ts";
+import { decidedTally, describeDecidedTally } from "../../facts/decidedTally.ts";
 import { RunStore } from "../../run/RunStore.ts";
 import { renderConventions, renderFacts, stackExpertNames } from "../prompt.ts";
 import { loadExpertBundles } from "../../experts/expertBundle.ts";
@@ -2322,6 +2323,9 @@ class BuildSession {
       model: this.model(),
       costUsd: cost.usd,
       costNote: cost.note,
+      decidedNote: describeDecidedTally(
+        decidedTally(FactsStore.loadOrEmpty(factsPath(this.ctx.root)).facts, this.ctx.runId),
+      ),
       budgetUsd: this.ctx.budgetUsd,
       at: this.ctx.at,
       outcomes,

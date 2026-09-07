@@ -26,6 +26,7 @@ import { fail } from "../report.ts";
 import { isResolved, resolveRunOrExplain } from "../resolveRun.ts";
 import { approve, GateError, type GateEvidenceInput } from "../../core/run/gates.ts";
 import { describeOpenQuestions, describeStateCommit } from "../../core/run/closeRun.ts";
+import { describeDecidedTally } from "../../core/facts/decidedTally.ts";
 import { gatePolicyFor } from "../../core/run/gatePolicy.ts";
 import { evidencePath } from "../../core/facilitator/paths.ts";
 import { describeEvidenceIssues, validateEvidence } from "../../core/text/evidence.ts";
@@ -100,6 +101,8 @@ export const approveCommand: Command = {
       // also the most ordinary way a question ages out of one unanswered (#141).
       const asked = outcome.closed === null ? null : describeOpenQuestions(outcome.closed.openQuestions);
       if (asked !== null) lines.push(`  ${asked}`);
+      const decided = outcome.closed === null ? null : describeDecidedTally(outcome.closed.decided);
+      if (decided !== null) lines.push(`  ${decided}`);
       const closing = outcome.closed === null ? null : describeStateCommit(outcome.closed.state);
       if (closing !== null) lines.push(`  ${closing}`);
       process.stdout.write(`${lines.join("\n")}\n`);

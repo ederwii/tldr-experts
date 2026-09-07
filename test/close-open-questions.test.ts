@@ -41,6 +41,10 @@ import { join } from "node:path";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { closeRun, describeOpenQuestions } from "../src/core/run/closeRun.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
+import { decidedTally, describeDecidedTally } from "../src/core/facts/decidedTally.ts";
+import { FactsStore } from "../src/core/facts/FactsStore.ts";
+import { factsPath } from "../src/hooks/lib/workspace.ts";
+import type { Fact, FactSource } from "../src/core/facts/Fact.ts";
 import { makeFacilitatorWorkspace, type FacilitatorWorkspace } from "./fixtures/facilitator/workspace.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
@@ -102,6 +106,47 @@ async function tldrx(cwd: string, ...args: string[]): Promise<{ code: number; st
 async function close(ws: FacilitatorWorkspace) {
   const store = RunStore.open(ws.runDir);
   return closeRun(store.run, ws.root, store.runDir, store.runId);
+}
+
+/** A minimal `FactSource` naming only `run`, for the pure `decidedTally` cases. */
+function src(run: string): FactSource {
+  return { who: "alan", when: "2026-09-06T09:00:00Z", run, q: null };
+}
+
+/** A minimal live `Fact`, for the calls that need facts and no workspace. */
+function liveFact(overrides: Pick<Fact, "id" | "source"> & Partial<Fact>): Fact {
+  return {
+    fact: "seeded for #169",
+    area: "governance",
+    repos: [],
+    kind: "answer",
+    confidence: "stated",
+    supersedes: null,
+    superseded_by: null,
+    retired: null,
+    ...overrides,
+  };
+}
+
+/** A fact recorded on `ws`'s real store, so `closeRun` reads it back for real. */
+function seedFact(
+  ws: FacilitatorWorkspace,
+  input: { readonly id: string; readonly run: string; readonly decided_by?: "owner" | "driver" },
+): Fact {
+  return FactsStore.update(factsPath(ws.root), (store) => store.append({
+    fact: `${input.id} seeded for #169`,
+    area: "governance",
+    repos: [],
+    kind: "answer",
+    confidence: "stated",
+    source: {
+      who: "alan",
+      when: "2026-09-06T09:00:00Z",
+      run: input.run,
+      q: null,
+      ...(input.decided_by === undefined ? {} : { decided_by: input.decided_by }),
+    },
+  }));
 }
 
 describe("#141 — a run close names the questions nobody answered", () => {
@@ -182,5 +227,38 @@ describe("#141 — the guards that keep the guard quiet", () => {
     const said = describeOpenQuestions(closed.openQuestions);
     expect(said).toContain("01-what/questions.md");
     expect(said).toContain("cannot be read");
+  });
+});
+
+describe("#169 — the close says how many of this run's decisions name a decider", () => {
+  test("owner, driver and not-stated are counted, and absence is the count", () => {
+    const facts = [
+      liveFact({ id: "F001", source: { ...src("R"), decided_by: "owner" } }),
+      liveFact({ id: "F002", source: { ...src("R"), decided_by: "driver" } }),
+      liveFact({ id: "F003", source: src("R") }),                 // nothing said
+      liveFact({ id: "F004", source: src("OTHER-RUN") }),         // another run's
+    ];
+    expect(decidedTally(facts, "R")).toEqual({ owner: 1, driver: 1, notStated: 1 });
+  });
+
+  test("the sentence names all three and claims no timeout mechanism", () => {
+    const said = describeDecidedTally({ owner: 1, driver: 2, notStated: 3 }) ?? "";
+    expect(said).toContain("6");
+    expect(said).toContain("3");
+    // It must not imply a default fired: nothing ages a question into an answer
+    // (`closeRun.ts:52-60`), and a row with no decider says "not stated".
+    expect(said).toContain("not stated");
+    expect(said).not.toContain("default");
+  });
+
+  test("a run that recorded no facts says nothing rather than a confident zero", () => {
+    expect(describeDecidedTally({ owner: 0, driver: 0, notStated: 0 })).toBeNull();
+  });
+
+  test("closing a run carries the tally, and changes no exit code", async () => {
+    const ws = workspace();
+    seedFact(ws, { id: "F001", run: ws.runId, decided_by: "owner" });
+    const closed = await close(ws);
+    expect(closed.decided).toEqual({ owner: 1, driver: 0, notStated: 0 });
   });
 });

@@ -2652,6 +2652,37 @@ describe("the handoff's Cost line marks an unmetered phase as a lower bound (#13
   });
 });
 
+/**
+ * The Build handoff header carries the decided tally beside `Cost:` (#169).
+ *
+ * `renderBuildHandoff` only reads `parts.decidedNote` and places it — the
+ * derivation (`decidedTally` + `describeDecidedTally`) lives in
+ * `src/core/facts/decidedTally.ts` and is pinned there. This is the render half:
+ * where the sentence lands, and that its absence changes nothing.
+ */
+describe("the Build handoff header carries the decided tally (#169)", () => {
+  const BASE: BuildHandoffParts = {
+    runId: "260906-x", stageId: "build", model: null, costUsd: 1.5, budgetUsd: 8,
+    at: "2026-09-06T09:00:00Z", outcomes: [], epics: [],
+  };
+
+  function headerOf(handoff: string): string {
+    return handoff.split("\n").find((line) => line.startsWith("Stage: ")) ?? "";
+  }
+
+  test("a decidedNote lands on the header after the cost clause", () => {
+    const note = "3 decision(s) recorded: 1 owner, 0 driver, 2 not stated";
+    const header = headerOf(renderBuildHandoff({ ...BASE, decidedNote: note }));
+    expect(header).toContain("Cost: $1.50 of $8.00 ceiling");
+    expect(header.indexOf(note)).toBeGreaterThan(header.indexOf("ceiling"));
+    expect(header).toContain(` · ${note} · 2026-09-06T09:00:00Z`);
+  });
+
+  test("decidedNote: null leaves the header byte-identical to today's", () => {
+    expect(renderBuildHandoff({ ...BASE, decidedNote: null })).toBe(renderBuildHandoff(BASE));
+  });
+});
+
 describe("stack packs reach the Build reviewer (stack packs design §4.5)", () => {
   const STACK_EXPERT: Readonly<Record<string, string>> = {
     ".tldrx/experts/typescript-stack/expert.md": [

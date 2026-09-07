@@ -36,6 +36,7 @@ import { raiseCommand, shortBy } from "../budget/budgetView.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../hooks/lib/workspace.ts";
 import { closeRun, describeOpenQuestions, describeStateCommit } from "../run/closeRun.ts";
+import { describeDecidedTally } from "../facts/decidedTally.ts";
 import { capPayload, type EventType, type TldrxEvent } from "../events/Event.ts";
 import { LOG_DIR } from "../build/plan.ts";
 import { setProgressCeiling, setProgressReadCap, setProgressTitle } from "../ui/bus.ts";
@@ -1809,6 +1810,8 @@ async function finishStage(
     // nobody made, and the close is the last moment anyone is looking (#141).
     const asked = describeOpenQuestions(closed.openQuestions);
     if (asked !== null) closing.push(`  ${asked}`);
+    const decided = describeDecidedTally(closed.decided);
+    if (decided !== null) closing.push(`  ${decided}`);
     const said = describeStateCommit(closed.state);
     if (said !== null) closing.push(`  ${said}`);
   }
