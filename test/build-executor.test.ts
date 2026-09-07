@@ -1382,7 +1382,14 @@ describe("safety", () => {
     expect(outcome.code).toBe(2);
     const text = outcome.lines.join("\n");
     expect(text).toContain("uncommitted change(s)");
-    expect(text).toContain("Commit or stash them");
+    // The literal, runnable commands — not the verb. A message that names a verb
+    // makes the operator compose the command, and this one has a run-specific
+    // stash message in it.
+    expect(text).toContain(`git -C ${ws.repoDir} stash push -u -m "tldrx ${ws.runId} foreign work"`);
+    expect(text).toContain(`git -C ${ws.repoDir} stash pop`);
+    // And the true reason: the base pre-flight runs in THIS checkout.
+    expect(text).toContain("the base pre-flight runs in this checkout");
+    expect(text).not.toContain("worktree add");
     // Nothing was cut.
     expect(() => git(ws, ["rev-parse", "--verify", "epic/e1"])).toThrow();
     expect(story(ws, "S1")).toContain("status: todo");
@@ -1426,7 +1433,10 @@ describe("safety", () => {
     expect(text).toContain("README.md");
     expect(text).not.toContain(PROJECT_WORK_DIR);
     expect(text).not.toContain(PROJECT_FRAMEWORK_DIR);
-    expect(text).toContain("Commit or stash them");
+    expect(text).toContain(`git -C ${ws.repoDir} stash push -u -m "tldrx ${ws.runId} foreign work"`);
+    expect(text).toContain(`git -C ${ws.repoDir} stash pop`);
+    expect(text).toContain("the base pre-flight runs in this checkout");
+    expect(text).not.toContain("worktree add");
     expect(() => git(ws, ["rev-parse", "--verify", "epic/e1"])).toThrow();
     expect(story(ws, "S1")).toContain("status: todo");
   });

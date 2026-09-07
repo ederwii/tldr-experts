@@ -2,7 +2,6 @@
  * Which epic branch this run owns, and the two refusals that protect the tree it
  * is cut from.
  */
-import { relative } from "node:path";
 import type { WorkspaceContext } from "../../hooks/lib/workspace.ts";
 import {
   branchModelFor, branchModelOfKind, detectEpicChain, epicBranchOf,
@@ -123,8 +122,16 @@ export async function foreignEpicRefusal(
 
 /**
  * Spec §5, Build executor safety: a repo whose tree is dirty is refused BEFORE
- * anything is cut, because the epic branch is cut from that tree's branch and
- * `git worktree add` would carry the mess forward.
+ * anything is cut.
+ *
+ * **The reason, corrected 2026-09-06 (#164).** This used to say the refusal was
+ * because `git worktree add` would carry the mess forward. It would not — a new
+ * worktree is a fresh checkout and does not inherit an unstaged tree or an
+ * index. The real reason is that the #41 base pre-flight runs the workspace's
+ * gate commands IN THE REPO'S OWN CHECKOUT (`build/dodRunner.ts` —
+ * deliberately, because that is the tree with the installed dependencies), so
+ * uncommitted product changes there are silently INSIDE the measurement that
+ * decides whether a story's red DoD is the story's fault or the base's.
  *
  * PRODUCT dirt only. `tldrx-work/` and `.tldrx/` are the framework's own state,
  * and in a `root_is_repo: true` workspace they sit inside the product repo — so
@@ -132,9 +139,14 @@ export async function foreignEpicRefusal(
  * (`run.yml`, `events.jsonl`, `.lock`, the freshly synthesised `04-build/`), and
  * made a user's uncommitted answers a precondition of Build. Product dirt still
  * refuses exactly as before, with the same message and the same fix.
+ *
+ * The refusal prints the two literal commands, with this run's id in the stash
+ * message, and does NOT stash anything itself: a framework-owned stash that a
+ * crash mid-wave left behind would strand somebody's work in a place they did
+ * not put it (the #129 shape). The operator's tree stays the operator's.
  */
 export async function dirtyRepoRefusal(
-  parts: Pick<ClaimParts, "root" | "workspace">,
+  parts: Pick<ClaimParts, "root" | "workspace" | "runId">,
   stories: readonly PlannedStory[],
 ): Promise<{ readonly refusal: BuildRefusal | null; readonly ignored: number }> {
   const seen = new Set<string>();
@@ -154,7 +166,12 @@ export async function dirtyRepoRefusal(
         `[tldrx] build: repo \`${name}\` has ${String(dirty.length)} uncommitted change(s) on ` +
           `\`${branch}\` — refusing to cut an epic branch from a dirty tree.`,
         `  ${dirty.slice(0, 5).join(", ")}${dirty.length > 5 ? `, +${String(dirty.length - 5)} more` : ""}`,
-        `Commit or stash them in ${relative(parts.root, dir) || "."}/, then run \`tldrx next\` again.`,
+        "  Why: the base pre-flight runs in this checkout, so uncommitted product changes here",
+        "  land inside the measurement that decides whether a red DoD is the story's fault.",
+        "  Commit them, or set them aside and take them back afterwards:",
+        `    git -C ${dir} stash push -u -m "tldrx ${parts.runId} foreign work"`,
+        "    tldrx next",
+        `    git -C ${dir} stash pop`,
       ],
       error: `repo \`${name}\` has uncommitted changes`,
     } };
