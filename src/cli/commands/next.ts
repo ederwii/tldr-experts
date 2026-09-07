@@ -30,7 +30,7 @@ const INFORMATIONAL: readonly number[] = [EXIT_OK, EXIT_AWAITING_HUMAN];
 export const nextCommand: Command = {
   name: "next",
   summary: "Advance the active run to its next stage",
-  usage: "tldrx next [<run>] [--dry-run] [--prepare|--commit] [--review] [--fixlist <path>]\n"
+  usage: "tldrx next [<run>] [--dry-run] [--prepare|--commit] [--review] [--check] [--fixlist <path>]\n"
     + "                  [--model <m>] [--effort <level>]\n"
     + "                  [--max-usd <n>] [--prompt-max-bytes <n>] [--max-reads <n>] [--cost-usd <n>] [--tokens <n>]\n"
     + "                  [--yolo] [--keep-worktrees] [--discard-pending] [--reuse-epic] [--parallel <n>]\n"
@@ -73,6 +73,20 @@ export const nextCommand: Command = {
           + "reviewer bundle, then `tldrx next --commit --review` to settle its verdict",
         );
       }
+      // `--check` is a rehearsal of `--commit`'s envelope reader and nothing else:
+      // it validates the prepared bundle's result.json through the same code the
+      // commit does, prints every refusal with the offending line, and WRITES
+      // NOTHING. So it is meaningless without the half it rehearses — a bare
+      // `tldrx next --check` that quietly ran the headless pipeline would be the
+      // one mistake a read-only flag must not be able to make.
+      const check = boolFlag(args, "check");
+      if (check && mode !== "commit") {
+        throw new UsageError(
+          "--check rehearses `tldrx next --commit`: use `tldrx next --commit --check` for the developer "
+          + "bundle, or `tldrx next --commit --review --check` for the reviewer's. It validates the "
+          + "prepared result.json and writes nothing",
+        );
+      }
       // `--fixlist <path>` routes a reviewer's fix list back to the AUTHOR, which
       // is a `--prepare` and only a `--prepare`. On `--commit` there is no bundle
       // left to shape, and headless has no host to route anything to — a flag that
@@ -99,6 +113,7 @@ export const nextCommand: Command = {
           dryRun,
           mode,
           review,
+          check,
           fixlist,
           model: stringFlag(args, "model"),
           effort: effortFlag(args),

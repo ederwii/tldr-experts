@@ -515,6 +515,11 @@ const ENTRIES: readonly CommandHelp[] = [
         meaning: "--prepare/--commit only: this half of the handshake is for the story's REVIEWER, not its developer. --prepare --review writes the reviewer bundle (prompt, diff refs, the DoD already re-run, and the result schema) into .agent/<stage>/<story>/review/ and spawns nothing; --commit --review reads that bundle's result.json as the {verdict, summary, findings} envelope and settles the story by the same rules a spawned review does. Bare --prepare already routes here on its own when a story is waiting on a review.",
       },
       {
+        name: "check",
+        arg: null,
+        meaning: "--commit only: REHEARSE the commit. Validates the prepared bundle's result.json through the same reader --commit uses, prints every refusal with the offending line, and WRITES NOTHING \u2014 no state, no event, no attempt spent. Exit 0 when --commit would read the envelope, 1 when it would not. Its reason for existing is the reviewer envelope: a `refuted` finding whose `[src: \u2026]` citation is not the last thing on its line is refused at --commit --review, and until now that refusal could only arrive after the turn had been paid for. On a DEVELOPER bundle the reader is deliberately tolerant \u2014 a missing `outputs` is read as `[]`, not refused \u2014 so --check exits 0 and NAMES what is about to be coerced. It checks the result envelope, not the stage's gate.",
+      },
+      {
         name: "fixlist",
         arg: "<path>",
         meaning: "--prepare only: re-prepare the story's DEVELOPER bundle around a reviewer's fix list (04-build/fixlist/<story>-<n>.md). The numbered findings still marked `fix-now` are rendered under `## Fix list` in the prompt with their `Do NOT` lines verbatim, and the prior turn's session_id is carried in pending.json as `resume_session` so the host can resume that sub-agent rather than pay to rebuild its context — the framework resumes nothing itself. Omit it and the latest round on disk is carried by itself; the flag is for naming a different file.",
@@ -568,10 +573,12 @@ const ENTRIES: readonly CommandHelp[] = [
       "tldrx next --prepare --review",
       "tldrx next --prepare --fixlist 04-build/fixlist/S5-1.md",
       "tldrx next --commit --review",
+      "tldrx next --commit --review --check",
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_AWAITING_HUMAN, EXIT_AGENT_FAILED],
     notes: [
       "Exit 4 is the normal end of a successful stage: it ran, it wrote its outputs, and a person now has to approve.",
+      "Both halves of the handshake now write `result_schema` into pending.json \u2014 the reviewer's REVIEW_SCHEMA and the developer's {outputs, questions_asked, notes} envelope plus the `cost_usd`/`session_id` a host may declare. Read the shape out of the bundle; do not reconstruct it from memory or from a sibling story.",
       "--prepare and --dry-run print the CONTEXT LEDGER: bytes per section of the prompt, the total against prompt_max_bytes, and any declared input that had to be truncated. `tldrx run estimate` prints the same ledger with a price on it.",
     ],
   },

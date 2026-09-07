@@ -32,6 +32,7 @@ import { attendRun } from "../src/core/run/attend.ts";
 import { reject } from "../src/core/run/gates.ts";
 import { REVIEW_DIR, reviewBundles } from "../src/core/run/prepared.ts";
 import { REVIEW_SCHEMA } from "../src/core/build/prompts.ts";
+import { DEVELOPER_RESULT_SCHEMA } from "../src/core/facilitator/envelope.ts";
 import { UNRECORDED_BASE } from "../src/core/build/reviewRound.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
@@ -239,6 +240,43 @@ describe("--prepare on a story awaiting review", () => {
     // produced the commit, and that fact has not changed.
     expect(pending.review.dod).toEqual([{ command: "npm run test", exit_code: 0 }]);
     expect(pending.review.commit).toMatch(/^[0-9a-f]{7,40}$/);
+  }, 60_000);
+
+  /**
+   * The DEVELOPER half of the same handshake — measured on a real workspace this
+   * week: `.agent/build/<story>/pending.json` had NO `result_schema` while the
+   * reviewer bundle beside it had one. So the two roles of one handshake made
+   * opposite promises: the reviewer was told to read its envelope shape off the
+   * bundle and never from memory, and the developer was told nothing at all. A
+   * host copied a sibling story's `result.json` to guess the shape, and a
+   * reviewer later "corrected" it from the other file.
+   *
+   * `--commit` on a developer bundle reads `{outputs, questions_asked, notes}`
+   * plus the two keys a host may DECLARE (`cost_usd`, `session_id`), and the
+   * spawned half of the same path is handed `ENVELOPE_SCHEMA` verbatim through
+   * `claude --json-schema`. `DEVELOPER_RESULT_SCHEMA` is that schema plus those
+   * two keys, derived from it rather than retyped — so this asserts the object,
+   * not a shape that happens to look like it.
+   */
+  test("the DEVELOPER bundle carries its result schema too", async () => {
+    const ws = workspace();
+
+    const prepared = await next(ws, { mode: "prepare" });
+
+    expect(prepared.code).toBe(0);
+    const pending = JSON.parse(readFileSync(
+      join(ws.runDir, ".agent", "build", "S1", "pending.json"), "utf8",
+    )) as { story?: string; result_schema?: Record<string, unknown> };
+    expect(pending.story).toBe("S1");
+    expect(pending.result_schema).toEqual(DEVELOPER_RESULT_SCHEMA as unknown as Record<string, unknown>);
+    // The same KIND of thing the reviewer bundle carries: a JSON schema object,
+    // not a boolean and not a path to one.
+    expect(pending.result_schema?.type).toBe("object");
+    expect(Object.keys(pending.result_schema?.properties as object))
+      .toEqual(expect.arrayContaining(["outputs", "questions_asked", "notes"]));
+    expect(pending.result_schema?.required).toEqual(["outputs", "questions_asked", "notes"]);
+    // And it is NOT the reviewer's: two roles, two contracts.
+    expect(pending.result_schema).not.toEqual(REVIEW_SCHEMA as unknown as Record<string, unknown>);
   }, 60_000);
 
   test("the bundle's prompt is byte-identical to what a spawn would have sent", async () => {

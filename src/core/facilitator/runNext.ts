@@ -70,6 +70,8 @@ import {
   buildLedger, questionsBytesOf, renderContextWarning, renderLedger, renderRefusal,
   type ContextLedger,
 } from "./contextLedger.ts";
+import { DEVELOPER_RESULT_SCHEMA } from "./envelope.ts";
+import { bundlesToCheck, checkBundleResult } from "../build/resultCheck.ts";
 import { byteLength } from "../experts/expertKnowledge.ts";
 import { SEED_INDEX } from "../seed/renderSeed.ts";
 
@@ -88,6 +90,15 @@ export interface NextOptions {
    * `tldrx next`. Phases with no reviewer ignore it.
    */
   readonly review?: boolean;
+  /**
+   * `--commit --check` — validate the prepared bundle's `result.json` and STOP.
+   *
+   * A read-only rehearsal of the commit's envelope reader. It moves no cursor,
+   * writes no event, takes no `.lock` and settles nothing; it exists so the
+   * author of a turn can find out that its envelope is unreadable while the turn
+   * is still open. See `core/build/resultCheck.ts` for the measurement.
+   */
+  readonly check?: boolean;
   /**
    * `--fixlist <path>` — the fix-list artifact this `--prepare` is a round of
    * (design §B.4). Carried straight to the executor; nothing here reads it.
@@ -174,6 +185,11 @@ export async function runNext(options: NextOptions): Promise<NextOutcome> {
   }
   const store = resolution.store;
 
+  // BEFORE the lock, and that placement is the contract: `--check` writes
+  // nothing at all, and `.lock` is a file. A check runs happily beside a `next`
+  // that is spending money, because it cannot touch anything that one owns.
+  if (options.check === true) return checkPrepared(store, options);
+
   const lock = acquireLock(store.runDir, options.at);
   if (!lock.ok) {
     const holder = lock.holder;
@@ -204,6 +220,49 @@ export async function runNext(options: NextOptions): Promise<NextOutcome> {
     forget();
     releaseLock(store.runDir);
   }
+}
+
+/**
+ * `tldrx next --commit --check` — is the prepared bundle's `result.json` one
+ * `--commit` could read?
+ *
+ * Read-only, and the tests measure that as bytes: `run.yml`, the story file and
+ * `events.jsonl` are compared whole either side of the call. The refusal exit is
+ * 1 — the "you asked for something that has nothing behind it" family, the same
+ * one an out-of-order handshake returns (gh #82). Not 2: nothing was gated and no
+ * attempt was charged, because nothing was settled.
+ *
+ * The stage is the CURSOR's, so this answers for the bundle a `--commit` typed in
+ * the same second would settle. Which bundles those are, and whether each reads,
+ * is `core/build/resultCheck.ts` — this function is the plumbing around it.
+ */
+function checkPrepared(store: RunStore, options: NextOptions): NextOutcome {
+  const review = options.review === true;
+  const half = review ? "reviewer" : "developer";
+  const entry = store.cursorEntry();
+  if (entry === null) {
+    return out(EXIT_USAGE, [`${store.runId} has no stage at its cursor — there is no bundle to check`]);
+  }
+  const bundles = bundlesToCheck(store.runDir, entry.stage.id, review);
+  if (bundles.length === 0) {
+    const where = relative(options.root, agentDir(store.runDir, entry.stage.id));
+    return out(EXIT_USAGE, [
+      `no ${half} bundle is out under ${where}/ — `
+        + `run \`tldrx next --prepare${review ? " --review" : ""}\` first`,
+    ]);
+  }
+  const lines: string[] = [];
+  let ok = true;
+  for (const bundle of bundles) {
+    const where = relative(options.root, agentDir(store.runDir, bundle.key));
+    const checked = checkBundleResult(store.runDir, bundle, where);
+    if (!checked.ok) ok = false;
+    lines.push(...checked.lines);
+  }
+  lines.push(ok
+    ? "checked and wrote nothing — no state moved, no event was recorded, no attempt was spent"
+    : `wrote nothing — no attempt was spent. Fix the envelope and run \`tldrx next --commit${review ? " --review" : ""} --check\` again`);
+  return out(ok ? EXIT_OK : EXIT_USAGE, lines);
 }
 
 /**
@@ -523,6 +582,11 @@ async function runStage(
     },
     ...dispatchNotesRecord(assembled.dispatchNotes),
     max_reads: maxReads,
+    // The same contract the Build developer bundle carries, for the same reason:
+    // a host answering by hand must not have to read this file to learn what
+    // `--commit` will read back. `commitStage` below goes through `readResult`,
+    // which is what this schema describes.
+    result_schema: DEVELOPER_RESULT_SCHEMA,
   };
   writeBundle(store.runDir, stageId, prompt, pending);
 

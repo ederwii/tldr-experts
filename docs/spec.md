@@ -1707,7 +1707,7 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx seed apply <split.yml> [--dry-run]` | `split.yml`, `inventory.json` beside it, `workflows/*.yml` | one `tldrx-work/<run>/` per proposed run (via `run new`'s own path) each with a `triage:` block, and `split.yml` rewritten to `status: applied`. Questions with no `answer:` are listed on **stderr** as a warning — never a refusal | 0,1,3 |
 | `tldrx run attend <host\|--none> [<run>]` | `run.yml` | `run.yml`'s `attended_by` (§2.2), `events.jsonl` (`run.attended`, carrying the new value and the old). Nothing else: no agent, no cost, no stage moved, no branch touched. `--none` REMOVES the key rather than blanking it — `null` is not a legal value. A direction is required and is never guessed (exit 1); setting what is already set is a silent no-op; a `done` or `cancelled` run is refused (exit 2) | 0,1,2,3 |
 | `tldrx run status [<run>]` | `run.yml`, `events.jsonl` | nothing (stdout) | 0,3 |
-| `tldrx next [<run>] [--dry-run] [--prepare\|--commit] [--review] [--fixlist <path>] [--parallel <n>] [--prompt-max-bytes <n>] [--max-reads <n>] [--commit --cost-usd <n>] [--tokens <n>]` | `run.yml`, `stage.yml`, `stage.md`, `expert.md`, declared inputs, `graphify-out/<repo>/graph.json` | stage outputs, `run.yml`, `events.jsonl`. `--cost-usd` is the in-session turn's DECLARED cost (§2.2); with none the task is `cost_usd: null, metered: false`. Both flags are `--commit`-only — headless reconciles a real `total_cost_usd` and a flag must not overwrite a measurement. On a run marked `attended_by: host` (§2.2) the headless mode — `--dry-run` included, which spawns nothing (issue #17) but describes a dispatch this run never makes — is refused with **exit 4** before the budget gate, before an input is read and before a prompt is assembled; the message names the exact half of the handshake the stage is waiting for | 0,1,2,3,4,5 |
+| `tldrx next [<run>] [--dry-run] [--prepare\|--commit] [--review] [--check] [--fixlist <path>] [--parallel <n>] [--prompt-max-bytes <n>] [--max-reads <n>] [--commit --cost-usd <n>] [--tokens <n>]` | `run.yml`, `stage.yml`, `stage.md`, `expert.md`, declared inputs, `graphify-out/<repo>/graph.json` | stage outputs, `run.yml`, `events.jsonl`. `--cost-usd` is the in-session turn's DECLARED cost (§2.2); with none the task is `cost_usd: null, metered: false`. Both flags are `--commit`-only — headless reconciles a real `total_cost_usd` and a flag must not overwrite a measurement. On a run marked `attended_by: host` (§2.2) the headless mode — `--dry-run` included, which spawns nothing (issue #17) but describes a dispatch this run never makes — is refused with **exit 4** before the budget gate, before an input is read and before a prompt is assembled; the message names the exact half of the handshake the stage is waiting for | 0,1,2,3,4,5 |
 | `tldrx cost [<run>] [--run <id>] [--all] [--json]` | every run's `events.jsonl` (+ `run.yml` for the title) | nothing (stdout) | 0,1,3 |
 | `tldrx run estimate [<run>] [--json]` | everything `next --prepare` reads, plus every run's `events.jsonl` for cache-write / cache-read / output history | nothing (stdout) | 0,1,3 |
 | `tldrx run gates set <stage>:<human\|auto\|agent> --note <text> [<run>]` | `run.yml` | `run.yml`'s §2.2 `gates_policy` and `events.jsonl` (`gate.policy_changed`, carrying actor, moment, note and old→new). The ONLY sanctioned way to move a frozen `gates_policy`; `run.yml` stays hand-edit-forbidden (§1). ONE `<stage>:<policy>` per invocation — a comma list is refused, and the entry must name its policy outright, since under `--gates` a bare stage means `human` and a signature must not rest on a default. An empty or missing `--note` is refused, as is a no-op (`human` → `human`). A run whose `run.yml` has no `gates_policy` at all gets the FULL map written, every stage explicit, with the one change applied. Gates already signed are untouched | 0,1,2,3 |
@@ -2955,6 +2955,28 @@ that already holds it, while the verdict itself is kept. It used to REFUSE the e
 envelope declares it), the `check: review` event carries `source: host`, and **no `agent.spawned` is emitted** — a
 `task.started` with `role: reviewer, mode: prepare` is. A settled handshake removes the bundle; its presence is what
 says a review is outstanding, and `--discard-pending` bins it like any other.
+
+**Both halves of the handshake carry `result_schema`.** It was the reviewer's alone until a real workspace measured
+the consequence: the developer bundle had none, so the one role told to read its envelope shape off the bundle could,
+and the other guessed by copying a sibling story's `result.json`. A developer bundle now carries the
+`{outputs, questions_asked, notes}` envelope the spawned half is handed through `--json-schema`, plus the `cost_usd`
+and `session_id` a HOST may declare and `readResult` reads back — derived from that schema, not a second copy of it.
+It is a JSON schema object in both bundles, never a boolean and never a path. What the two halves do NOT share is how
+strictly it is read: a reviewer envelope is refused on its form, and a developer envelope is COERCED (a missing
+`outputs` reads as `[]`), which is why `--check` below reports the two differently rather than pretending one rule.
+
+**`tldrx next --commit --check` rehearses the commit and writes nothing.** The measurement it exists for: two reviews
+were refused at `--commit --review` because a `[src: …]` citation inside a `refuted` finding was not the last thing on
+its line, both refusals correct, both arriving after the turn had been paid for — and the host's answer was to stop
+using `refuted` at all. The reviewer cannot check itself (its tools are `Read`, `Grep`, `Glob` and `Bash(git diff *)`)
+and its prompt already states the rule with a refused and an accepted example, so the affordance belongs to the host.
+`--check` validates the prepared bundle's `result.json` through the SAME reader `--commit` uses — `readResultObject`,
+then `parseReview` for a reviewer envelope — prints every refusal verbatim, and exits `0` when `--commit` would read
+the envelope and `1` when it would not. It takes no `.lock`, moves no cursor, records no event and spends no attempt:
+`run.yml`, the story file and `events.jsonl` are byte-identical either side of it. It answers for the result ENVELOPE
+only; the declared outputs are still re-read off disk at `--commit` and the stage's checks still run there. On a
+developer bundle it exits `0` and NAMES what the tolerant reader is about to coerce, rather than inventing a refusal
+the framework does not make.
 
 **A handshake called by the wrong end is a SEQUENCING refusal: exit `1`, and the run is left untouched (gh #82).**
 `--commit --review` with no reviewer bundle out, `--commit` with no story `in_progress`, `--prepare --review` over a

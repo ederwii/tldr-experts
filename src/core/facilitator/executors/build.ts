@@ -53,6 +53,7 @@ import {
 } from "../dispatchNotes.ts";
 import { preparedBundles, reviewBundles } from "../../run/prepared.ts";
 import { spawnAgent, BASE_TOOLS } from "../spawnAgent.ts";
+import { DEVELOPER_RESULT_SCHEMA } from "../envelope.ts";
 import {
   PendingError, PENDING_FILE, RAW_FILE, RESULT_FILE, readResult, readResultObject, resultPath,
   writeBundle, writeRaw,
@@ -614,6 +615,11 @@ class BuildSession {
       checks: this.ctx.spec.planned.checks,
       prepared_at: this.ctx.at,
       story: planned.story.id,
+      // The developer's half of what the reviewer bundle has always carried. Its
+      // absence was measured on a real workspace: `result_schema: false` on the
+      // developer bundle, `true` on the reviewer's beside it, and a host guessing
+      // the shape by copying a sibling story's `result.json`.
+      result_schema: DEVELOPER_RESULT_SCHEMA,
       ...dispatchNotesRecord(notes),
       ...(fixlist === null ? {} : {
         fixlist: {

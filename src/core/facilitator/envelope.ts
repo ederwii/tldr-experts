@@ -22,6 +22,39 @@ export const ENVELOPE_SCHEMA = {
   additionalProperties: false,
 } as const;
 
+/**
+ * `result_schema` for a DEVELOPER bundle — what `--commit` reads back, stated so
+ * a host does not have to read this file for it.
+ *
+ * Measured on a real workspace, 2026-09: the reviewer bundle carried its schema
+ * and the developer bundle beside it carried none, so one handshake made two
+ * different promises — the reviewer prompt says "read the shape out of
+ * `result_schema` and never from memory", and the developer had nothing to read
+ * it out of. A host guessed the shape by copying a sibling story's file.
+ *
+ * DERIVED from `ENVELOPE_SCHEMA` rather than retyped, because the spawned half of
+ * this same path is handed `ENVELOPE_SCHEMA` verbatim through
+ * `claude --json-schema`: one grammar, one file, and a change to the envelope
+ * cannot reach the spawn without reaching the bundle.
+ *
+ * The two added keys are the ones a HOST may declare and the framework reads
+ * back (`readResult`: `cost_usd`, `session_id`). They are not part of what a
+ * sub-agent returns — which is exactly why the spawned schema does not carry
+ * them and this one does. `--commit`'s own reader is TOLERANT: it coerces a
+ * missing `outputs` to `[]` rather than refusing, so this schema is the contract
+ * asked for and enforced literally on the spawned path, and
+ * `tldrx next --commit --check` is what says which parts of it a host's file is
+ * about to have coerced.
+ */
+export const DEVELOPER_RESULT_SCHEMA = {
+  ...ENVELOPE_SCHEMA,
+  properties: {
+    ...ENVELOPE_SCHEMA.properties,
+    cost_usd: { type: ["number", "null"] },
+    session_id: { type: ["string", "null"] },
+  },
+} as const;
+
 export interface AgentEnvelope {
   readonly outputs: readonly string[];
   readonly questions_asked: readonly string[];

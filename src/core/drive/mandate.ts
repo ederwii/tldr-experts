@@ -406,6 +406,7 @@ function driving(mode: DriveMode): readonly string[] {
       "    tldrx next --prepare --review <run>   # the reviewer's bundle: read-only, fresh agent",
       "    tldrx next --commit  --review <run>",
       "",
+      "Add `--check` to either `--commit` to rehearse it: same reader, every refusal named, writes nothing.",
       "A bare `tldrx next` exits 4 here, and `tldrx run auto` is refused — the refusal is the point.",
       "",
     ];
