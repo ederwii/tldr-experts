@@ -1,6 +1,9 @@
-/** `tldrx ship` — open a PR from the run's epic branch, handoff as the body
+/** `tldrx ship` — open a PR from the run's epic branch, with a body written for a PR
  *
  * The last step of the loop, which until now was "merge by hand" (issue #15).
+ * The body is rendered by `core/run/shipBody.ts` — what shipped, what did not,
+ * the open reviewer findings, and the handoff whole inside a `<details>` block
+ * (issue #167).
  *
  * Every refusal it can make — no epic branch, no handoff, no `gh`, no remote, an
  * unpushed branch, several epic branches — comes back as a `ShipOutcome` with a
@@ -20,7 +23,7 @@ const VALUE_FLAGS = ["run", "root", "branch", "repo", "base"];
 
 export const shipCommand: Command = {
   name: "ship",
-  summary: "Open a PR from the run's epic branch (one per repo), handoff as the body",
+  summary: "Open a PR from the run's epic branch (one per repo), body written from the handoff",
   usage: "tldrx ship [<run>] [--branch <name>] [--repo <name>] [--base <branch>]\n"
     + "                  [--draft] [--dry-run] [--run <id>] [--root <path>]",
   implemented: true,

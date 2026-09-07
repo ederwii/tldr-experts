@@ -3,9 +3,13 @@
  * (concept §4): detect -> map -> handoff -> interview -> seed experts ->
  * conventions.
  *
- * Deterministic: filesystem and `git` only. No LLM, no network, no build. Every
- * document it writes is validated before it is written, and every claim it makes
- * carries a `[src: …]` token a reviewer can open.
+ * Deterministic: filesystem, `git`, and — since #168 — the repo's OWN declared
+ * build/test/lint/typecheck commands, run once each so `command_probes:` records
+ * whether they work instead of `commands:` asserting it (`--no-probe` skips them,
+ * and the skip is written into every row as its reason). No LLM, and tldrx itself
+ * sends nothing anywhere; what the repo's own build does is the repo's business.
+ * Every document it writes is validated before it is written, and every claim it
+ * makes carries a `[src: …]` token a reviewer can open.
  *
  * Re-runnable: detection output is regenerated, human-owned files are kept.
  */
@@ -51,6 +55,14 @@ import { PROJECT_WORKSPACE_FILE } from "../paths.ts";
  */
 export const WORKSPACE_FILE = PROJECT_WORKSPACE_FILE;
 export const PROCESS_FILE = ".tldrx/process.yml";
+
+/**
+ * What `--no-probe` writes into every slot it did not run.
+ *
+ * Spelled once and named after the flag, so the row says which decision produced it
+ * — "nothing was measured" and "we chose not to measure" are different facts.
+ */
+export const NO_PROBE_REASON = "skipped: --no-probe";
 export const HANDOFF_FILE = ".tldrx/init-handoff.md";
 
 export interface InitDependencies {
@@ -85,9 +97,17 @@ export async function runInit(options: InitOptions, deps: InitDependencies): Pro
   const steps = deps.steps ?? silentSteps();
 
   const detecting = steps.begin("detecting repos");
+  // The probe's clock is THIS run's `timestamp`, not a second `new Date()` inside
+  // detection: `detected_at` and every `command_probes.*.at` in the same document have
+  // to be one answer to "when was this taken".
   const workspace = await detectWorkspace(root, deps.runner, {
     repoStart: (name) => { detecting.tick(name); },
     repoDone: (repo) => { detecting.note(describeRepo(repo)); },
+  }, {
+    probe: {
+      at: rfc3339(deps.now),
+      ...(options.probe ? {} : { skip: NO_PROBE_REASON }),
+    },
   });
 
   if (workspace.repos.length === 0) {
@@ -205,8 +225,16 @@ export async function runInit(options: InitOptions, deps: InitDependencies): Pro
   };
 }
 
-/** graphify first when it is on PATH, static otherwise (spec §5 decision (b)). */
-export function chooseProviders(options: InitOptions, runner: CommandRunner): MapProvider[] {
+/**
+ * graphify first when it is on PATH, static otherwise (spec §5 decision (b)).
+ *
+ * Takes the ONE field it reads rather than the whole `InitOptions`. `map --refresh` calls
+ * this too, and while it was typed as the full options a caller had to invent values for
+ * everything else — including a `probe: false` that read as "this call will not start a
+ * build" when nothing at that call site could have started one anyway. A parameter that
+ * says what it uses cannot be misread that way.
+ */
+export function chooseProviders(options: Pick<InitOptions, "provider">, runner: CommandRunner): MapProvider[] {
   const staticProvider = new StaticProvider(runner);
   if (options.provider === "static") return [staticProvider];
   return [new GraphifyProvider(runner, staticProvider), staticProvider];

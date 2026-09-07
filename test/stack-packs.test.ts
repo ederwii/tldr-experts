@@ -40,7 +40,11 @@ const AT = rfc3339(NOW);
 const FROZEN = (): number => 1_757_066_400_000;
 
 function options(root: string): InitOptions {
-  return { root, out: root, interview: false, methodology: null, mcp: false, stack: [], provider: "static" };
+  // `probe: false`: the fixture's scripts are real, and this file is not testing them.
+  return {
+    root, out: root, interview: false, methodology: null, mcp: false, stack: [], provider: "static",
+    probe: false,
+  };
 }
 async function init(root: string, steps?: StepReporter): Promise<void> {
   await runInit(options(root), { runner, cliVersion: "0.0.1", now: NOW, ...(steps === undefined ? {} : { steps }) });

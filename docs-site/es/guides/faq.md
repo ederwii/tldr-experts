@@ -47,9 +47,12 @@ una etapa, y `tldrx next --dry-run` te enseña el prompt y el techo sin lanzar n
 
 ## ¿Mi código se manda a algún lado?
 
-`tldrx init`, `run new`, `answer`, `approve`, `status`, `cost` y `learn` son offline: nada
-más sistema de archivos y git. `tldrx next` manda un prompt ya armado al modelo, como
-cualquier otra herramienta de programación con IA. Lo que va en ese prompt no es un
+`run new`, `answer`, `approve`, `status`, `cost` y `learn` son offline: nada más sistema de
+archivos y git. `tldrx init` también, con una excepción a propósito: corre una vez cada
+comando `build`, `test`, `lint` y `typecheck` de tu repo, para que `workspace.yml` registre
+si funcionan en vez de afirmarlo. Eso es tu build haciendo lo que haga tu build; `--no-probe`
+lo salta. `tldrx next` manda un prompt ya armado al modelo, como cualquier otra herramienta
+de programación con IA. Lo que va en ese prompt no es un
 misterio: `tldrx next --prepare` lo escribe a un archivo e imprime su desglose byte por
 byte antes de lanzar nada.
 

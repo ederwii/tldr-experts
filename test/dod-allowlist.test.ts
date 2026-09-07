@@ -13,11 +13,14 @@
  * reviewer (`executors/build.ts:477`).
  */
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   DodCommandRefused, isAllowedDodCommand, runDodCommand, splitArgv,
 } from "../src/hooks/lib/story.ts";
+import { runStoryDod } from "../src/core/build/dodRunner.ts";
+import { dodGreen } from "../src/core/build/outcome.ts";
 import { parseDodBlock, validateStoryDod, validateStoryFile } from "../src/core/schemas/story.ts";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 
@@ -150,5 +153,44 @@ describe("M5 · --yolo never reaches the reviewer", () => {
 
   test("exactly one `yolo: this.ctx.yolo` remains in the file", () => {
     expect(source.split("yolo: this.ctx.yolo").length - 1).toBe(1);
+  });
+});
+
+/**
+ * #165 — a command the gate REFUSES to run is recorded as refused, not as an exit.
+ *
+ * Until 2026-09-06 `runStoryDod` caught `DodCommandRefused` and fabricated
+ * `{exitCode: 126}`. Nothing ran, and three documents then rendered that number
+ * as a measurement. The record now carries the ABSENCE.
+ */
+describe("#165 · a refused dod command invents no exit code", () => {
+  test("a refused command is recorded as REFUSED — no exit code is invented", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-dod-refused-"));
+    const events: { type: string; payload: Record<string, unknown> }[] = [];
+
+    const results = await runStoryDod({
+      storyId: "S1",
+      repo: "app",
+      worktree: dir,
+      commands: ["npm run lint"],
+      workspaceCommands: new Set(["npm run test"]),
+      timeoutMs: 5_000,
+      phaseId: "04-build",
+      emit: (type, payload) => { events.push({ type, payload }); },
+      baseResult: async () => null,
+    });
+
+    const only = results[0];
+    expect(only?.status).toBe("refused");
+    expect(only?.exitCode).toBeUndefined();
+    expect(only?.refusedBecause).toContain("not one of");
+    expect(dodGreen({ dod: results })).toBe(false);
+
+    const failed = events.find((e) => e.type === "check.failed");
+    expect(failed).toBeDefined();
+    expect("exit_code" in (failed?.payload ?? {})).toBe(false);
+    expect(failed?.payload.refused).toContain("not one of");
+
+    rmSync(dir, { recursive: true, force: true });
   });
 });

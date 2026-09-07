@@ -12,6 +12,7 @@ import {
   PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR, PROJECT_WORKTREES_DIR, isEpicWorktreeOf,
 } from "../../core/paths.ts";
 import type { EpicRef, EpicWorktree, SrcContext } from "../../core/text/srcToken.ts";
+import { commandProbeIssues, type CommandProbeRecord } from "../../core/schemas/workspace.ts";
 
 /** The run's own record — where `build.epic_branch` is written (issue #140). */
 const RUN_YML = "run.yml";
@@ -83,6 +84,19 @@ export interface WorkspaceContext {
    * for (`build/implicitPlan.ts`).
    */
   readonly commandRoles: ReadonlyMap<string, ReadonlyMap<string, string>>;
+  /**
+   * repo name -> that repo's `command_probes:` map, keyed by the same slot as
+   * `commandRoles` above: `{build: {verified: true, exit_code: 0, …}}` (#168).
+   *
+   * Read for REPORTING only, and the DoD reads nothing new: the allowlist is still
+   * `commands`, and a probe never permits or refuses anything. What it is worth is
+   * the refusal in `build/preflight.ts` — when a gate command fails on the untouched
+   * base tree and `init` already measured it red, the operator gets told that in the
+   * same breath instead of going looking.
+   *
+   * Absent from every `workspace.yml` written before #168, which loads as an empty map.
+   */
+  readonly commandProbes: ReadonlyMap<string, ReadonlyMap<string, CommandProbeRecord>>;
   /** repo name -> `default_branch` — the base an epic branch is cut from (spec §2.1). */
   readonly defaultBranches: ReadonlyMap<string, string>;
   /**
@@ -98,6 +112,7 @@ interface RawRepo {
   readonly name?: unknown;
   readonly path?: unknown;
   readonly commands?: unknown;
+  readonly command_probes?: unknown;
   readonly default_branch?: unknown;
 }
 
@@ -132,16 +147,49 @@ export function commandRolesOf(doc: unknown): ReadonlyMap<string, ReadonlyMap<st
   return out;
 }
 
+/**
+ * `repo -> {slot -> probe}` out of a PARSED workspace.yml document (#168).
+ *
+ * Tolerant by design, the way `commandRolesOf` above is: a row missing a field, or of
+ * the wrong shape, is SKIPPED rather than defaulted. `validateWorkspace` is what
+ * refuses a malformed file; this reader's job is that a hand-edited one can never make
+ * a hook invent a `verified: true` out of a half-written row.
+ *
+ * "Malformed" is decided by `commandProbeIssues` — the SAME predicate the validator
+ * uses, imported rather than re-spelled. Two spellings of it meant two answers: this
+ * loader used to accept `at: ""` while `validateWorkspace` refused it.
+ */
+export function commandProbesOf(doc: unknown): ReadonlyMap<string, ReadonlyMap<string, CommandProbeRecord>> {
+  const out = new Map<string, ReadonlyMap<string, CommandProbeRecord>>();
+  const list = (doc as { repos?: unknown } | null)?.repos;
+  if (!Array.isArray(list)) return out;
+  for (const entry of list as RawRepo[]) {
+    if (typeof entry?.name !== "string") continue;
+    const probes = new Map<string, CommandProbeRecord>();
+    const raw = entry.command_probes;
+    if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+      for (const [slot, value] of Object.entries(raw as Record<string, unknown>)) {
+        if (commandProbeIssues(value, slot).length > 0) continue;
+        probes.set(slot, value as unknown as CommandProbeRecord);
+      }
+    }
+    out.set(entry.name, probes);
+  }
+  return out;
+}
+
 /** Read `.tldrx/workspace.yml`. A missing or unreadable file yields an empty context. */
 export function loadWorkspace(root: string): WorkspaceContext {
   const repos = new Map<string, string>();
   const commands = new Set<string>();
   const repoCommands = new Map<string, readonly string[]>();
   const commandRoles = new Map<string, ReadonlyMap<string, string>>();
+  const commandProbes = new Map<string, ReadonlyMap<string, CommandProbeRecord>>();
   const defaultBranches = new Map<string, string>();
   let seedTriageThresholdTokens: number | null = null;
   const empty = (): WorkspaceContext => ({
-    root, repos, commands, repoCommands, commandRoles, defaultBranches, seedTriageThresholdTokens,
+    root, repos, commands, repoCommands, commandRoles, commandProbes, defaultBranches,
+    seedTriageThresholdTokens,
   });
   const path = join(root, PROJECT_FRAMEWORK_DIR, "workspace.yml");
   if (!existsSync(path)) return empty();
@@ -161,6 +209,7 @@ export function loadWorkspace(root: string): WorkspaceContext {
   const list = (doc as { repos?: unknown } | null)?.repos;
   if (!Array.isArray(list)) return empty();
   const declared = commandRolesOf(doc);
+  const measured = commandProbesOf(doc);
   for (const entry of list as RawRepo[]) {
     if (typeof entry?.name !== "string") continue;
     repos.set(entry.name, typeof entry.path === "string" ? entry.path : ".");
@@ -178,6 +227,7 @@ export function loadWorkspace(root: string): WorkspaceContext {
     }
     repoCommands.set(entry.name, own);
     commandRoles.set(entry.name, roles);
+    commandProbes.set(entry.name, measured.get(entry.name) ?? new Map<string, CommandProbeRecord>());
   }
   return empty();
 }

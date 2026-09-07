@@ -24,10 +24,12 @@ import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import {
-  baseResultFor, commandHash, emitPreflightYaml, failedOnBase, loadPreflight, parsePreflight,
+  baseRefusalLines, baseResultFor, commandHash, emitPreflightYaml, failedOnBase, loadPreflight, parsePreflight,
   preExistingFailureReason, PREFLIGHT_REL as SOURCE_PREFLIGHT_REL, PREFLIGHT_RED_TTL_MS, savePreflight, withResult,
   type BaseCommandResult, type BasePreflight,
 } from "../src/core/build/preflight.ts";
+import { loadWorkspace, type WorkspaceContext } from "../src/hooks/lib/workspace.ts";
+import type { CommandProbeRecord } from "../src/core/schemas/workspace.ts";
 import { PreflightCache } from "../src/core/build/dodRunner.ts";
 import {
   makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions,
@@ -255,12 +257,16 @@ describe("the base-tree pre-flight", () => {
 
 /** One measured row, with a tail nasty enough to be worth escaping. */
 function row(over: Partial<BaseCommandResult> = {}): BaseCommandResult {
+  // The builder obeys the rule the type states (#165): a row that was REFUSED
+  // carries no exit code, so an override saying so gets none rather than the
+  // default 1. One builder, not two, so every caller is the same shape.
+  const refused = over.refusedBecause !== undefined;
   return {
     repo: "app",
     command: "npm run test",
     baseRef: "main",
     baseSha: "68e4d21",
-    exitCode: 1,
+    ...(refused ? {} : { exitCode: 1 }),
     timedOut: false,
     tail: 'FAIL "two" lines\nand a second one',
     status: "failed",
@@ -315,7 +321,7 @@ describe("attributing a red DoD command", () => {
     results: [
       row(),
       row({ command: "npm run build", exitCode: 0, tail: "", status: "ok" }),
-      row({ command: "npm run lint", exitCode: 126, tail: "needs a shell", status: "unmeasured" }),
+      row({ command: "npm run lint", status: "unmeasured", refusedBecause: "needs a shell", tail: "needs a shell" }),
     ],
   };
 
@@ -417,7 +423,7 @@ describe("when a cached RED may still be trusted", () => {
   test("an unmeasured row is not re-probed either — the gate declined to run it", () => {
     const unmeasured: BasePreflight = {
       checkedAt: "2026-08-31T09:00:00Z",
-      results: [row({ exitCode: 126, status: "unmeasured", tail: "needs a shell" })],
+      results: [row({ status: "unmeasured", refusedBecause: "needs a shell", tail: "needs a shell" })],
     };
     expect(baseResultFor(unmeasured, "app", "npm run test", "", {
       at: "2026-09-30T09:00:00Z", prepare: true,
@@ -492,5 +498,299 @@ describe("the base pre-flight is read from disk once per process", () => {
     cache.read();
     expect(cache.loads).toBe(1);
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+/**
+ * #165 — the base side of a REFUSED command.
+ *
+ * `baseResultOf` used to write `exit_code: 126` beside `status: unmeasured`:
+ * nothing ran, so the number was a fabrication that `preflight.yml` then carried
+ * as a record. `unmeasured` already means "nothing was learned about the base",
+ * and it now carries no exit code and the gate's own sentence instead.
+ *
+ * Both directions of the `version: 1` rule are pinned here: a file written
+ * BEFORE this change still loads with its 126 intact (rewriting history is not
+ * this change's job), and a file written after it round-trips without growing one.
+ */
+describe("#165 · a refused base probe carries no exit code", () => {
+  test("the base side records a refusal as `unmeasured` with no exit code either", () => {
+    const preflight: BasePreflight = {
+      checkedAt: "2026-08-31T09:00:00Z",
+      results: [row({ command: "npm run lint", status: "unmeasured", refusedBecause: "needs a shell" })],
+    };
+    const hit = baseResultFor(preflight, "app", "npm run lint");
+    expect(hit?.status).toBe("unmeasured");
+    expect(hit?.exitCode).toBeUndefined();
+    // `unmeasured` still excuses nothing — the rule this file already pins.
+    expect(failedOnBase(hit)).toBe(false);
+  });
+
+  test("a preflight.yml written BEFORE this — `exit_code: 126` + unmeasured — still loads", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-preflight-compat-"));
+    mkdirSync(join(dir, "04-build"), { recursive: true });
+    writeFileSync(join(dir, PREFLIGHT_REL),
+      "version: 1\nchecked_at: '2026-08-31T09:00:00Z'\nresults:\n"
+      + "  - repo: app\n    command: npm run lint\n    base_ref: main\n    base_sha: abc1234\n"
+      + "    exit_code: 126\n    timed_out: false\n    tail: needs a shell\n    status: unmeasured\n",
+      "utf8");
+    const loaded = loadPreflight(dir);
+    expect(loaded?.results[0]?.status).toBe("unmeasured");
+    expect(loaded?.results[0]?.command).toBe("npm run lint");
+    expect(loaded?.results[0]?.exitCode).toBe(126);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("a refused row round-trips through the file without growing an exit code", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-preflight-refused-"));
+    mkdirSync(join(dir, "04-build"), { recursive: true });
+    savePreflight(dir, {
+      checkedAt: "2026-09-06T09:00:00Z",
+      results: [row({ command: "npm run lint", status: "unmeasured", refusedBecause: "needs a shell" })],
+    });
+    const back = loadPreflight(dir)?.results[0];
+    expect(back?.exitCode).toBeUndefined();
+    expect(back?.refusedBecause).toBe("needs a shell");
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+/**
+ * #165 fix round 1 — the tolerance is EXACTLY the hole the ruling opened.
+ *
+ * The first version dropped `exit_code` from the row guard entirely, which let
+ * two corrupt shapes through where the file used to be rejected and re-measured:
+ * a PRESENT but non-numeric `exit_code`, and an `exit_code`-less `status: ok`.
+ * The second is the dangerous one — `baseResultFor` returns every non-`failed`
+ * row as a cached answer, so a hand-edited or truncated `status: ok` row became
+ * a cached GREEN base and the Build-entry gate skipped that command.
+ *
+ * The rule: a row is valid iff it carries a finite INTEGER `exit_code`, or it is
+ * `unmeasured` with a non-empty `refused_because` and no `exit_code` at all.
+ * Anything else invalidates the whole file, exactly as before.
+ */
+describe("#165 · only a refusal may lack an exit code", () => {
+  /** One `results:` entry, as raw YAML lines under a `version: 1` header. */
+  function fileWith(lines: readonly string[]): string {
+    return `version: 1\nchecked_at: '2026-08-31T09:00:00Z'\nresults:\n${lines.join("\n")}\n`;
+  }
+
+  const HEAD = ["  - repo: app", "    command: npm run test", "    base_ref: main", "    base_sha: abc1234"];
+
+  test("a PRESENT but non-numeric `exit_code` invalidates the file, as it always did", () => {
+    for (const junk of ['    exit_code: "0"', "    exit_code: null", "    exit_code: not-a-number"]) {
+      expect(parsePreflight(fileWith([...HEAD, junk, "    timed_out: false", "    status: ok", "    tail: ''"])))
+        .toBeNull();
+    }
+  });
+
+  test("a fractional exit code is not an exit code either", () => {
+    expect(parsePreflight(fileWith([...HEAD, "    exit_code: 1.5", "    timed_out: false", "    status: failed", "    tail: ''"])))
+      .toBeNull();
+  });
+
+  test("an `exit_code`-less `status: ok` row invalidates the file — it would read as a cached GREEN base", () => {
+    for (const status of ["ok", "failed"]) {
+      expect(parsePreflight(fileWith([...HEAD, "    timed_out: false", `    status: ${status}`, "    tail: ''"])))
+        .toBeNull();
+    }
+  });
+
+  test("an `exit_code`-less `unmeasured` row with NO reason is malformed too — absent-WITH-REASON or nothing", () => {
+    expect(parsePreflight(fileWith([...HEAD, "    timed_out: false", "    status: unmeasured", "    tail: ''"])))
+      .toBeNull();
+  });
+
+  test("a well-formed refused row loads, and is neither a pass nor a failure", () => {
+    const loaded = parsePreflight(fileWith([
+      ...HEAD, "    timed_out: false", "    status: unmeasured", "    tail: needs a shell",
+      "    refused_because: needs a shell",
+    ]));
+    const only = loaded?.results[0];
+    expect(only?.status).toBe("unmeasured");
+    expect(only?.exitCode).toBeUndefined();
+    expect(only?.refusedBecause).toBe("needs a shell");
+    // Not green, and not red: `baseResultFor` hands it back as "nothing was
+    // learned", which excuses nothing and refuses nothing.
+    expect(failedOnBase(baseResultFor(loaded, "app", "npm run test"))).toBe(false);
+    expect(baseResultFor(loaded, "app", "npm run test")?.exitCode).toBeUndefined();
+  });
+});
+
+/**
+ * The refusal cites `tldrx init`'s own probe when there is one (#168).
+ *
+ * The base-tree refusal already tells the operator WHICH command is red. When
+ * `workspace.yml` carries a `command_probes:` row saying `init` measured the same
+ * command red on the day the workspace was created, saying so costs one line and saves
+ * the search. It changes no verdict, and it is silent for every file written before the
+ * key existed.
+ */
+describe("the base refusal cites init's probe when one exists", () => {
+  const failure: BaseCommandResult = {
+    repo: "app", command: "npm run test", status: "failed", exitCode: 1, timedOut: false,
+    baseRef: "main", baseSha: "abc1234", tail: "1 failing",
+  };
+
+  function context(probes: Record<string, CommandProbeRecord>): WorkspaceContext {
+    return {
+      root: "/w",
+      repos: new Map([["app", "."]]),
+      commands: new Set(["npm run test"]),
+      repoCommands: new Map([["app", ["npm run test"]]]),
+      commandRoles: new Map([["app", new Map([["test", "npm run test"]])]]),
+      commandProbes: new Map([["app", new Map(Object.entries(probes))]]),
+      defaultBranches: new Map([["app", "main"]]),
+      seedTriageThresholdTokens: null,
+    };
+  }
+
+  test("a probe that measured the same command red is quoted, once", () => {
+    const lines = baseRefusalLines([failure], context({
+      test: {
+        status: "failed", verified: false, exit_code: 1, at: "2026-09-06T09:00:00Z",
+        reason: "not verified: `npm run test` exited 1",
+      },
+    }));
+    const cited = lines.filter((line) => line.includes("`tldrx init` measured this red too"));
+    expect(cited).toHaveLength(1);
+    expect(cited[0]).toContain("2026-09-06T09:00:00Z");
+    expect(cited[0]).toContain("not verified: `npm run test` exited 1");
+  });
+
+  /**
+   * TWO slots can declare the same command (`test:` and `lint:` both `npm run
+   * test`), and `probeCommands` writes a row per SLOT — so the probe that
+   * measured this command red may sit in the second one. `initProbeLine`
+   * returned `null` from inside the loop on the first slot that matched by
+   * command, which read as "scan the slots" and behaved as "consult one".
+   * Cosmetic — a missing line, never a wrong one — but a loop that stops on its
+   * first match is the shape a later reader trusts to be a scan.
+   */
+  test("the same command in TWO slots is cited from whichever slot was probed red", () => {
+    const twoSlots: WorkspaceContext = {
+      ...context({}),
+      commandRoles: new Map([["app", new Map([["test", "npm run test"], ["lint", "npm run test"]])]]),
+      commandProbes: new Map([["app", new Map(Object.entries({
+        // `test:` was skipped, so it corroborates nothing; `lint:` ran the SAME
+        // command and measured it red.
+        test: {
+          status: "skipped", verified: false, exit_code: null, at: "2026-09-06T09:00:00Z",
+          reason: "skipped: --no-probe",
+        },
+        lint: {
+          status: "failed", verified: false, exit_code: 1, at: "2026-09-06T09:30:00Z",
+          reason: "not verified: `npm run test` exited 1",
+        },
+      }))]]),
+    };
+
+    const cited = baseRefusalLines([failure], twoSlots)
+      .filter((line) => line.includes("`tldrx init` measured this red too"));
+    expect(cited).toHaveLength(1);
+    expect(cited[0]).toContain("2026-09-06T09:30:00Z");
+  });
+
+  test("a green probe, an unrun one, and no workspace at all each say nothing", () => {
+    const green = baseRefusalLines([failure], context({
+      test: {
+        status: "ok", verified: true, exit_code: 0, at: "2026-09-06T09:00:00Z", reason: "verified: exited 0",
+      },
+    }));
+    // `exit_code: null` is "we did not look" — a timeout, a skip. Not corroboration.
+    const unrun = baseRefusalLines([failure], context({
+      test: {
+        status: "skipped", verified: false, exit_code: null, at: "2026-09-06T09:00:00Z",
+        reason: "skipped: --no-probe",
+      },
+    }));
+    const none = baseRefusalLines([failure]);
+    for (const lines of [green, unrun, none]) {
+      expect(lines.some((line) => line.includes("measured this red too"))).toBe(false);
+    }
+    // And the refusal itself is unchanged in every case — the citation is additive.
+    expect(none).toEqual(baseRefusalLines([failure], context({})));
+  });
+});
+
+/**
+ * The whole path, off disk: `workspace.yml` → `loadWorkspace` → the refusal line (#168).
+ *
+ * Everything above builds a `WorkspaceContext` by hand, so nothing proved that
+ * `command_probes:` written by `init` is read back the way the refusal expects — and the
+ * loader's "a malformed row is skipped, never defaulted" claim was a docstring, not a
+ * result. This writes the YAML, reads it with the shipped loader, and feeds the context
+ * it produces to the shipped refusal.
+ */
+describe("command_probes survives the round trip from workspace.yml", () => {
+  const AT = "2026-09-06T09:00:00Z";
+  let root = "";
+
+  afterEach(() => {
+    if (root !== "") rmSync(root, { recursive: true, force: true });
+    root = "";
+  });
+
+  function workspaceWith(probes: string): string {
+    root = mkdtempSync(join(tmpdir(), "tldrx-probe-load-"));
+    mkdirSync(join(root, ".tldrx"), { recursive: true });
+    writeFileSync(join(root, ".tldrx", "workspace.yml"),
+      "version: 1\nmode: single-repo\nroot: .\nrepos:\n"
+      + "  - name: app\n    path: .\n    default_branch: main\n"
+      + "    commands:\n      build: npm run build\n      test: npm run test\n"
+      + probes, "utf8");
+    return root;
+  }
+
+  test("a well-formed row is read into the context and reaches the refusal line", () => {
+    const dir = workspaceWith(
+      "    command_probes:\n"
+      + "      test:\n        status: failed\n        verified: false\n        exit_code: 1\n"
+      + `        at: ${AT}\n        reason: "not verified: npm run test exited 1"\n`,
+    );
+    const workspace = loadWorkspace(dir);
+    const probe = workspace.commandProbes.get("app")?.get("test");
+    expect(probe?.status).toBe("failed");
+    expect(probe?.exit_code).toBe(1);
+    expect(probe?.at).toBe(AT);
+
+    const failure: BaseCommandResult = {
+      repo: "app", command: "npm run test", status: "failed", exitCode: 1, timedOut: false,
+      baseRef: "main", baseSha: "abc1234", tail: "1 failing",
+    };
+    const cited = baseRefusalLines([failure], workspace)
+      .filter((line) => line.includes("`tldrx init` measured this red too"));
+    expect(cited).toHaveLength(1);
+    expect(cited[0]).toContain(AT);
+  });
+
+  test("a malformed row is skipped, never defaulted into a verdict", () => {
+    // Every one of these is a hand edit that must not become a `status` the refusal trusts:
+    // no reason, an empty `at`, a status outside the vocabulary, and a scalar where a
+    // mapping belongs. The good row beside them still loads, so this is not a blanket skip.
+    const dir = workspaceWith(
+      "    command_probes:\n"
+      // no `reason` — something happened, and the row does not say what
+      + `      build:\n        status: failed\n        verified: false\n        exit_code: 1\n        at: ${AT}\n`
+      // an empty `at` — the case the two readers used to disagree about
+      + "      test:\n        status: failed\n        verified: false\n        exit_code: 1\n"
+      + '        at: ""\n        reason: "red"\n'
+      // a status outside the closed vocabulary
+      + `      lint:\n        status: green\n        verified: true\n        exit_code: 0\n        at: ${AT}\n        reason: "ok"\n`
+      // a scalar where a mapping belongs
+      + "      typecheck: broken\n"
+      // …and one good row, so this is a per-row skip and not a blanket one
+      + `      run:\n        status: not-probed\n        verified: false\n        exit_code: null\n        at: ${AT}\n        reason: "not probed"\n`,
+    );
+    const probes = loadWorkspace(dir).commandProbes.get("app") ?? new Map();
+    expect([...probes].map(([slot]) => slot)).toEqual(["run"]);
+    expect(probes.get("run")?.status).toBe("not-probed");
+  });
+
+  test("a workspace.yml with no command_probes at all loads to an empty map, not to undefined", () => {
+    const workspace = loadWorkspace(workspaceWith(""));
+    expect(workspace.commandProbes.get("app")).toEqual(new Map());
+    // And the allowlist it shares the file with is untouched.
+    expect(workspace.commandRoles.get("app")?.get("build")).toBe("npm run build");
   });
 });

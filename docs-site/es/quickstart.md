@@ -31,8 +31,10 @@ tldrx learn
 Ocho capítulos, unos quince minutos, en un sandbox desechable con un repo de juguete y un
 agente de utilería. Cada comando ahí dentro es el de verdad — `init`, `run new`, `next`,
 `answer`, `approve`, y un Build que corta una rama y corre un DoD real — así que nada de lo
-que te enseña puede desviarse de lo que hace el binario. **Sin llave de API, sin red,
-$0.00**, y no escribe nada fuera de su propio directorio de sandbox.
+que te enseña puede desviarse de lo que hace el binario. Lo que el sandbox sí cambia son las
+banderas, y el capítulo nombra cada una que pasa: `init` corre con `--no-probe`, así que se
+salta los comandos de build/test que sí CORRERÍA una vez contra tu propio repo. **Sin llave
+de API, sin red, $0.00**, y no escribe nada fuera de su propio directorio de sandbox.
 
 ```
 1. init — what the framework knows before you tell it anything
@@ -54,7 +56,7 @@ empieza de cero. Si lo que quieres es entender tldrx sin tocar nada tuyo, quéda
 
 ```bash
 cd your-project
-tldrx init            # determinista y sin conexión: archivos y git nada más, $0.00
+tldrx init            # detecta, mapea y prueba tus comandos de build/test. $0.00
 tldrx interview --init
 ```
 

@@ -40,6 +40,13 @@ not, the stage is refused — before the gate, not after.
 this is how it gets sourced. It is refused on a **positive** claim outside the `Unknowns`
 section — you cannot cite an empty directory as proof that something exists.
 
+**A command that was refused gets no `$ … → exit <n>` citation at all.** That shape needs an
+exit code, and a Definition-of-Done command your `workspace.yml` does not declare — or one that
+needs a shell, which the gate never opens — never ran, so there is none to write. It is not
+recorded as `exit 126` either. The Evidence ledger says `was REFUSED and never ran`, quotes the
+gate's own sentence, and cites the story's review log instead. A refusal and a red build are
+different facts, and only one of them is a measurement.
+
 ## Three outcomes, not two
 
 Each source resolves to `ok`, `refused`, or `unverified`.

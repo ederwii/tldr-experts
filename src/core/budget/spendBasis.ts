@@ -49,7 +49,13 @@ export interface SpendBasis {
    * file that says `0.00` is not overruled here; it is counted.
    */
   readonly costlessTasks: number;
-  /** Host tokens declared BY a costless turn — the only figure the dollars miss. */
+  /**
+   * Tokens KNOWN for a costless turn — host-declared or provider-reported
+   * (`budget/turnTokens.ts`, #159) — the only figure the dollars miss. NOT a
+   * subset of a host-only total: a provider split counts here without ever
+   * being added to one (see `hostTokens` at the two call sites, which stays
+   * host-scalar-only on purpose).
+   */
   readonly costlessTokens: number;
   /** Costless turns that declared nothing at all: no dollars, no tokens. */
   readonly silentTasks: number;
@@ -122,18 +128,18 @@ export function spendReason(
         + "rather than a lower bound";
   }
   if (basis === "declared") {
-    return `${of} and every one of them declared its host tokens instead, so the metered total `
-      + "is a LOWER BOUND on the dollars";
+    return `${of} and every one of them has host-declared or provider-reported tokens instead, so the `
+      + "metered total is a LOWER BOUND on the dollars";
   }
   if (basis === "partial") {
-    return `${of}: ${String(costless - silent)} declared host tokens and ${String(silent)} declared `
-      + "nothing at all, so the metered total is a LOWER BOUND, not a total";
+    return `${of}: ${String(costless - silent)} have host-declared or provider-reported tokens and `
+      + `${String(silent)} declared nothing at all, so the metered total is a LOWER BOUND, not a total`;
   }
   // `absent`. The clause about where the tokens DID land is the audited run's
   // exact trap: 920,641 of them, every one on a turn that also carried dollars,
   // so the token figure on the page describes none of the turns this sentence is
   // about.
-  return `${of} and none of them declared host tokens`
+  return `${of} and none of them have host-declared or provider-reported tokens`
     + (hostTokens > 0 ? ` — every token this ${subject} declared sits on a turn that also carried dollars` : "")
     + ", so the metered total is a LOWER BOUND, not a total"
     + (metered > 0 ? `: it is what the other ${String(metered)} turns cost, not what the ${subject} cost` : "");

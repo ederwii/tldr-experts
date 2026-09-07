@@ -69,12 +69,13 @@ No Codex model prices are inferred.
 ## `tldrx init`
 
 Detect the workspace, build the code map, and write down the questions detection could not
-answer. Deterministic and offline: filesystem and git only. No model runs and nothing is sent
-anywhere.
+answer. Deterministic: filesystem, git, and the repo's own build/test/lint/typecheck commands,
+each run once so the file records whether they work. No model runs and tldrx itself sends
+nothing anywhere.
 
 ```
 tldrx init [--root <path>] [--out <path>] [--no-interview] [--process <name>]
-           [--stack <a,b,…>] [--mcp] [--provider <name>]
+           [--stack <a,b,…>] [--mcp] [--provider <name>] [--no-probe]
            [--ui scene|compact|plain|off] [--quiet]
 ```
 
@@ -87,6 +88,7 @@ tldrx init [--root <path>] [--out <path>] [--no-interview] [--process <name>]
 | `--stack <a,b,…>` | Declare the stack instead of detecting it, e.g. `ts,dotnet,python` |
 | `--mcp` | Also ask `claude mcp list` which servers are configured. Slower: it health-checks each one |
 | `--provider <name>` | Map provider. One of: `auto` `graphify` `static`. `auto` picks graphify when it is on PATH |
+| `--no-probe` | Do not run the detected build/test/typecheck commands. Each one is recorded as skipped rather than measured. Use it on a repo you have not read: probing executes that repo's own commands |
 | `--ui <mode>` | What to show while it works. One of: `auto` `scene` `compact` `plain` `off`. `TLDRX_UI` sets it too |
 | `--quiet` | No live progress. The report at the end is still printed |
 
@@ -103,6 +105,43 @@ a pipe or a CI job it is plain lines with no escape codes.
 per repo. Measured on a five-repo workspace: **36.0 s** with `--provider auto` against
 **1.3 s** with `--provider static`. `--provider static` is much faster and still cites every
 claim it makes; `--provider auto` buys you graph-derived structure for the wait.
+
+### What it PROBED, beside what it detected
+
+`commands:` is what a manifest declares. Some of it is not read from a declaration at all:
+`go build ./...`, `cargo test`, `dotnet build` and python's tools are inferred from the
+language, and inference is not measurement. So `init` runs each `build`, `test`, `lint` and
+`typecheck` command once and writes what happened beside it:
+
+```yaml
+    commands:
+      build: npm run build
+      test: npm run test
+      run: npm run dev
+    command_probes:
+      build: {status: ok,     verified: true,  exit_code: 0,    at: 2026-09-06T09:00:00Z, reason: "verified: `npm run build` exited 0"}
+      test:  {status: failed, verified: false, exit_code: 1,    at: 2026-09-06T09:00:00Z, reason: "not verified: `npm run test` exited 1"}
+      run:   {status: not-probed, verified: false, exit_code: null, at: 2026-09-06T09:00:00Z, reason: "not probed: `run` starts a long-running process"}
+```
+
+`status` is the field to branch on: `ok` `failed` `timed-out` `unspawnable` `not-probed`
+`skipped`. Only `failed` is a measured red — the command ran and exited non-zero. `exit_code`
+is `null` for every other non-`ok` status, because nothing exited: a command whose binary is
+missing is `unspawnable` with the system's message, never a fabricated code.
+
+Two things are `not-probed`, and the `reason` says which. `run` is never probed — it starts a
+server, so a probe of it hangs or leaves a process behind. And a command that needs a shell is
+never probed either: the probe argv-splits through the same splitter the DoD gate uses and opens
+no shell, so `npm run test | tee out.txt` is recorded rather than run.
+
+`command_probes:` gates nothing: `commands:` is still the only allowlist the Definition of Done
+may run, and a red probe blocks no story.
+
+`--no-probe` skips the probing. Every slot that would have been probed then carries
+`skipped: --no-probe` as its reason — because "not measured" and "chose not to measure" are
+different facts. `run` keeps its own reason, since it is never probed either way, and a
+command synthesised from the language id still says so at the end of its reason. Use
+`--no-probe` on a repo you have not read yet: probing executes that repo's own commands.
 
 
 ## `tldrx install --claude`
@@ -1111,8 +1150,8 @@ is [10 — Unattended mode](10-unattended-mode.md). Exits: `0` `1`.
 
 ## `tldrx ship`
 
-Open a pull request from the run's epic branch — one per repo the branch is in — with the run's
-handoff as the body.
+Open a pull request from the run's epic branch — one per repo the branch is in — with a body
+written from the run's handoff.
 
 ```
 tldrx ship [<run>] [--branch <name>] [--repo <name>] [--base <branch>]
@@ -1121,12 +1160,14 @@ tldrx ship [<run>] [--branch <name>] [--repo <name>] [--base <branch>]
 
 It NEVER pushes. tldrx does not publish a branch on its own (spec §5), so a branch the remote
 has not seen is a refusal that names the `git push` command rather than running it. The body is
-the LAST phase handoff the run has on disk — `04-build/handoff.md` on a run that built
-something — handed to `gh` as a file, never as an argument, so a long handoff cannot overflow
-an argv limit.
+WRITTEN for a PR (#167): what shipped and what did not, from the handoff's own done/not-done
+split; the reviewer findings still open, read from the run's fix lists; and the LAST phase
+handoff the run has on disk — `04-build/handoff.md` on a run that built something — verbatim
+and complete, inside a `<details>` block. It is handed to `gh` as a file, never as an argument,
+so a long body cannot overflow an argv limit.
 
 When the branch exists in SEVERAL repos — the normal shape of a chained multi-repo run, whose
-epics share one integration branch — it opens one PR per repo: the same handoff as the body,
+epics share one integration branch — it opens one PR per repo: the same body,
 the repo name in the title, and every URL listed at the end. `--repo` narrows that to one, and
 `--branch` picks between epic branches when the run cut more than one (it must be one of the
 run's own; an unrelated branch is refused). `--base` overrides what the PR opens against,
@@ -1134,11 +1175,30 @@ which defaults to that repo's `default_branch` from `.tldrx/workspace.yml`. A pa
 names both sides — the PRs that were opened, with their URLs, and the repos that failed, with
 the reason — and re-running retries the rest, skipping any repo whose PR is already open.
 
-`--dry-run` runs every check and prints the exact `gh` command, creating nothing. It is
-read-only about the run either way: no event, no gate, no cursor. To mirror the plan's epics
-and stories to a ticket tool, `tldrx tickets sync` is the verb that does that, and it stays
-separate. It refuses cleanly, in a sentence, when there is no epic branch, no handoff, no
-remote, no `gh` on PATH, or when several epic branches leave the choice open.
+The success line names how the body was made rather than leaving you to open the PR to find
+out: `body: rendered from 04-build/handoff.md · 2 open findings`, or `· no open findings` when
+there are none. A `--dry-run` prints the same recipe with the body's byte count beside it.
+
+**It refuses an epic branch that carries tldrx's own state**, because `tldrx-work/` and
+`.tldrx/` are written LIVE into the workspace checkout for the length of a run, and a PR that
+merges them makes the next `git pull` there refuse (measured on a real workspace, 2026-09-02:
+a refused pull over 5 modified and ~40 untracked paths). The refusal names up to five of the
+paths and prints the two commands that take them off the branch — a `git checkout` then a commit,
+a forward commit and never a rebase. Since #167 that refusal has an ALLOWED move: a path a
+story at `status: done` declares in its `touches:` is subtracted first, the refusal says which
+story excused which path, and the remedy command names only the paths still refused — so the
+fix cannot revert the `workspace.yml` edit the settled story was written to make. A story at
+`review` or `blocked` excuses nothing: that is a plan, not a verdict. Exit `2`.
+
+`--dry-run` runs every check and prints the exact `gh` command, creating nothing. It LEAVES the
+staged body file where it named it, on purpose — the printed line has to stay runnable, and a
+`--body-file` pointing at a directory that has been cleaned up is not a command. That is one
+temporary directory per dry run, and nothing reads it again; the real create writes the same file
+and removes it in a `finally`, refusals included. It is read-only about the run either way: no
+event, no gate, no cursor. To mirror the plan's epics and stories to a ticket tool,
+`tldrx tickets sync` is the verb that does that, and it stays separate. It refuses cleanly, in
+a sentence, when there is no epic branch, no handoff, no remote, no `gh` on PATH, or when
+several epic branches leave the choice open.
 Exits: `0` `1` `2` `3`.
 
 ## `tldrx watch`

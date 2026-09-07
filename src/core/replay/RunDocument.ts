@@ -77,6 +77,16 @@ export interface RunTask {
   readonly metered: boolean;
   /** Host-session tokens declared with `--tokens`. Never converted to dollars. */
   readonly tokens: number | null;
+  /**
+   * The provider's own split for this turn (#159), when the executor spawned
+   * one and read its `AgentOutcome.usage` — written together or not at all
+   * (`runNext.ts`'s `tokenSplit`). A DIFFERENT currency from `tokens` above:
+   * that one is what a HOST declared, this is what was measured for a turn
+   * nothing here metered. `budget/turnTokens.ts` is where the two are read
+   * together.
+   */
+  readonly input_tokens: number | null;
+  readonly output_tokens: number | null;
 }
 
 export interface RunStage {
@@ -412,6 +422,8 @@ function toStage(input: unknown): RunStage | null {
         // means the number in `cost_usd` is not a measurement.
         metered: task.metered !== false && num(task.cost_usd) !== null,
         tokens: num(task.tokens),
+        input_tokens: num(task.input_tokens),
+        output_tokens: num(task.output_tokens),
       })),
   };
 }

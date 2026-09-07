@@ -12,7 +12,9 @@
  *   Unknowns        the stories that are not done, or `- none` with what was looked at
  *   Evidence ledger every dod command that ran, as `[src: $ <cmd> → exit <n>]`
  */
+import { DOD_REFUSAL_FALLBACK, dodRefused } from "./outcome.ts";
 import type { StoryOutcome } from "./outcome.ts";
+import { PLAN_STATUSES, type PlanStatus } from "../schemas/planCommon.ts";
 
 export interface EpicSummaryRow {
   readonly id: string;
@@ -209,6 +211,28 @@ function mergeSummary(epic: EpicSummaryRow): string {
   return parts.length === 0 ? "no story merged" : parts.join("; ");
 }
 
+/**
+ * How a `## Findings` bullet states its story's status, as a pattern.
+ *
+ * `finding()` below writes `<id> · <title> — <status> — …`, and `run/shipBody.ts`
+ * reads it back to say what SHIPPED in a PR body. That is one derivation with two
+ * users, so it lives here, beside the renderer it has to agree with: a second
+ * regex over in `run/` would go on matching the day this sentence changed shape,
+ * and a PR body that quietly reports nothing as done is worse than one that
+ * reports the wrong thing loudly.
+ *
+ * `[assumption]` the first ` — <status> — ` in a bullet is the story's status.
+ * A title carrying one of the five status words between em dashes would fool it;
+ * the whole handoff sits in the body below, so the reader can always check.
+ */
+const FINDING_STATUS_RE = new RegExp(`—\\s+(${PLAN_STATUSES.join("|")})\\s+—`);
+
+/** The status a Findings bullet reports, or null when it names none. */
+export function findingStatus(bullet: string): PlanStatus | null {
+  const found = FINDING_STATUS_RE.exec(bullet)?.[1];
+  return found === undefined ? null : (found as PlanStatus);
+}
+
 function finding(outcome: StoryOutcome): string {
   const where = `repo \`${outcome.repo}\`, \`${outcome.branch}\``;
   const landed = outcome.carried === 0
@@ -269,9 +293,21 @@ function ledger(outcomes: readonly StoryOutcome[]): readonly string[] {
   const rows: string[] = [];
   for (const outcome of outcomes) {
     for (const result of outcome.dod) {
+      // A command the gate REFUSED never ran, so it has no `cmd` citation to
+      // give: `src/core/text/srcToken.ts:10` defines `cmd := "$ " command
+      // " → exit " digit+`, and there is no exit. The citation is the review
+      // log, where the refusal is written verbatim — the same shape the
+      // `dodUnrecovered` rows below already use (#165).
       rows.push(
-        `- ${outcome.id}: \`${result.command}\` in ${outcome.repo} ` +
-          `[src: $ ${result.command} → exit ${String(result.exitCode)}]`,
+        dodRefused(result)
+          ? `- ${outcome.id}: \`${result.command}\` in ${outcome.repo} was REFUSED and never ran — `
+            + `${result.refusedBecause ?? DOD_REFUSAL_FALLBACK} [src: ${outcome.reviewRel}:1]`
+          // `?? "?"`, the spelling the base side already uses: a `ran` row with
+          // no exit code is only reachable from a truncated `events.jsonl`, and
+          // `?` fails the `digit+` grammar CLOSED rather than printing the word
+          // `undefined` as if it were a measurement.
+          : `- ${outcome.id}: \`${result.command}\` in ${outcome.repo} `
+            + `[src: $ ${result.command} → exit ${String(result.exitCode ?? "?")}]`,
       );
     }
     for (const command of outcome.dodUnrecovered ?? []) {

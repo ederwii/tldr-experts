@@ -37,6 +37,7 @@ import { yamlScalar } from "../facts/emitFactsYaml.ts";
 import { writeAtomic } from "../fs/writeAtomic.ts";
 import { hashText } from "../experts/packTemplates.ts";
 import { BUILD_PHASE } from "./plan.ts";
+import type { WorkspaceContext } from "../../hooks/lib/workspace.ts";
 
 /** The file that decides what a red story means, run-relative. */
 export const PREFLIGHT_REL = `${BUILD_PHASE}/preflight.yml`;
@@ -61,10 +62,21 @@ export interface BaseCommandResult {
   readonly baseRef: string;
   /** Short sha of `baseRef` when it was measured; `""` when git had no answer. */
   readonly baseSha: string;
-  readonly exitCode: number;
+  /**
+   * The measured exit. Absent — and only ever absent — on an `unmeasured` row
+   * the gate REFUSED to run: nothing spawned, so there is nothing to report.
+   *
+   * ADDITIVE and optional in the tolerant direction only. Every `preflight.yml`
+   * written before 2026-09-06 carries one on every row, including the refused
+   * ones (a fabricated `126`, #165), and those files still load with the number
+   * they recorded — the reader reports what the file says.
+   */
+  readonly exitCode?: number;
   readonly timedOut: boolean;
   /** Last meaningful line of the output — the operator's first clue. */
   readonly tail: string;
+  /** Present only on a REFUSED probe: the gate's own sentence, verbatim. */
+  readonly refusedBecause?: string;
   readonly status: BaseStatus;
   /**
    * What the row was measured UNDER, beyond the command string itself.
@@ -122,11 +134,15 @@ export function emitPreflightYaml(preflight: BasePreflight): string {
         `    command: ${yamlScalar(row.command)}`,
         `    base_ref: ${yamlScalar(row.baseRef)}`,
         `    base_sha: ${yamlScalar(row.baseSha)}`,
-        `    exit_code: ${String(row.exitCode)}`,
+        // Absent-with-reason: a row the gate REFUSED writes no `exit_code` at all
+        // and writes WHY instead. A zero here would read as a green base (#165).
+        // Emitted in place so a measured row's bytes are exactly what they were.
+        ...(typeof row.exitCode === "number" ? [`    exit_code: ${String(row.exitCode)}`] : []),
         `    timed_out: ${row.timedOut ? "true" : "false"}`,
         `    status: ${yamlScalar(row.status)}`,
         `    tail: ${yamlScalar(row.tail)}`,
       );
+      if (row.refusedBecause !== undefined) lines.push(`    refused_because: ${yamlScalar(row.refusedBecause)}`);
       if (row.commandHash !== undefined) lines.push(`    command_hash: ${yamlScalar(row.commandHash)}`);
       if (row.checkedAt !== undefined) lines.push(`    checked_at: ${yamlScalar(row.checkedAt)}`);
     }
@@ -151,8 +167,30 @@ export function parsePreflight(text: string): BasePreflight | null {
     const row = entry as Record<string, unknown>;
     const repo = asText(row.repo);
     const command = asText(row.command);
-    const exitCode = typeof row.exit_code === "number" && Number.isFinite(row.exit_code) ? row.exit_code : null;
-    if (repo === "" || command === "" || exitCode === null) return null;
+    const refusedBecause = asText(row.refused_because);
+    const exitCode = Number.isInteger(row.exit_code) ? row.exit_code as number : null;
+    // `repo` and `command` are the join key, so a row without them is not a row.
+    if (repo === "" || command === "") return null;
+    // Exactly ONE new hole, and it is the one a refusal needs (#165): a row that
+    // says `unmeasured` and says WHY may carry no `exit_code`, because nothing
+    // ran. Every other shape invalidates the FILE exactly as it always did, and
+    // the two that matter are:
+    //
+    //   - a PRESENT but non-integer `exit_code` (`"0"`, `null`, `1.5`) — reading
+    //     that as "no exit code" would silently promote corruption to a refusal;
+    //   - an `exit_code`-less `ok`/`failed` row — those two statuses ARE
+    //     measurements, and `baseResultFor` hands back every non-`failed` row as
+    //     a cached answer, so a truncated `status: ok` would become a cached
+    //     GREEN base and the Build-entry gate would skip that command.
+    //
+    // A rejected file is not a loss: `loadPreflight` returns null, the caller
+    // falls back to `EMPTY_PREFLIGHT`, and the base is re-measured.
+    if (exitCode === null) {
+      if (row.exit_code !== undefined) return null;
+      if (row.status === "ok" || row.status === "failed") return null;
+      // Absent-WITH-REASON or nothing: an unexplained absence is not a record.
+      if (refusedBecause === "") return null;
+    }
     const hash = asText(row.command_hash);
     const rowCheckedAt = asText(row.checked_at);
     results.push({
@@ -160,9 +198,10 @@ export function parsePreflight(text: string): BasePreflight | null {
       command,
       baseRef: asText(row.base_ref),
       baseSha: asText(row.base_sha),
-      exitCode,
+      ...(exitCode === null ? {} : { exitCode }),
       timedOut: row.timed_out === true,
       tail: asText(row.tail),
+      ...(refusedBecause === "" ? {} : { refusedBecause }),
       status: row.status === "ok" || row.status === "failed" ? row.status : "unmeasured",
       ...(hash === "" ? {} : { commandHash: hash }),
       ...(rowCheckedAt === "" ? {} : { checkedAt: rowCheckedAt }),
@@ -315,7 +354,12 @@ export function withResult(
 export function baseFailureLine(result: BaseCommandResult): string {
   const at = result.baseSha === "" ? "" : ` (${result.baseSha})`;
   const why = result.tail === "" ? "" : ` — ${result.tail}`;
-  return `  · \`${result.command}\` exited ${String(result.exitCode)}`
+  // Only ever called for a `failed` row, which always carries an exit code — but
+  // total anyway, because "exited undefined" is the shape of a record that lies.
+  const ran = result.exitCode === undefined
+    ? "was refused and never ran"
+    : `exited ${String(result.exitCode)}`;
+  return `  · \`${result.command}\` ${ran}`
     + `${result.timedOut ? " (timed out)" : ""} in repo ${result.repo}`
     + ` on \`${result.baseRef}\`${at}${why}`;
 }
@@ -325,20 +369,64 @@ export function baseFailureLine(result: BaseCommandResult): string {
  * it is — because the whole failure this fixes was a config error reported as a
  * story that could not prove itself.
  */
-export function baseRefusalLines(failures: readonly BaseCommandResult[]): readonly string[] {
+export function baseRefusalLines(
+  failures: readonly BaseCommandResult[],
+  workspace?: WorkspaceContext,
+): readonly string[] {
+  const failed: string[] = [];
+  for (const result of failures) {
+    failed.push(baseFailureLine(result));
+    const probe = initProbeLine(workspace, result);
+    if (probe !== null) failed.push(probe);
+  }
   return [
     "[tldrx] build: a Definition of Done is a DELTA gate, and these commands already fail on the "
       + "untouched base tree — every story would block for something no story caused:",
-    ...failures.map(baseFailureLine),
+    ...failed,
     `Fix ${WORKSPACE_FILE} (or the base tree), then run \`tldrx next\` again. `
       + "Nothing was dispatched and nothing was charged.",
   ];
 }
 
+/**
+ * One line, and only when `tldrx init` ALREADY measured this same command red (#168).
+ *
+ * It costs nothing and it saves the operator the search: the command was broken before
+ * any story existed, and `workspace.yml` has said so since the day it was written. It
+ * changes no verdict — the refusal above stands on the preflight's own measurement —
+ * and it is silent whenever there is no probe, which is every `workspace.yml` written
+ * before `command_probes:` existed.
+ *
+ * EVERY slot is scanned, not the first that matches by command: `probeCommands` writes
+ * a row per SLOT, and a repo may declare one command in two of them (`test:` and `lint:`
+ * both `npm run test`), so the measured red can sit in the second. This used to return
+ * out of the loop on the first match and read as a scan while behaving as a lookup.
+ */
+export function initProbeLine(
+  workspace: WorkspaceContext | undefined, result: BaseCommandResult,
+): string | null {
+  if (workspace === undefined) return null;
+  const roles = workspace.commandRoles.get(result.repo);
+  const probes = workspace.commandProbes.get(result.repo);
+  if (roles === undefined || probes === undefined) return null;
+  for (const [slot, command] of roles) {
+    if (command !== result.command) continue;
+    const probe = probes.get(slot);
+    // Only a MEASURED red is worth saying, and `status` says so exactly. This used to
+    // read `verified === false && exit_code !== null`, which is a machine inferring a
+    // verdict from two fields' side effect; `timed-out`, `skipped`, `not-probed` and
+    // `unspawnable` all mean "we did not look", which is not corroboration.
+    if (probe === undefined || probe.status !== "failed") continue;
+    return `    · \`tldrx init\` measured this red too, at ${probe.at}: ${probe.reason}`;
+  }
+  return null;
+}
+
 /** The attribution, when a story's DoD went red for a reason the base shares. */
 export function preExistingFailureReason(result: BaseCommandResult): string {
-  return `\`${result.command}\` exited ${String(result.exitCode)} — and it exits `
-    + `${String(result.exitCode)} on the untouched base tree too (${result.repo} @ \`${result.baseRef}\`), `
+  const code = String(result.exitCode ?? "?");
+  return `\`${result.command}\` exited ${code} — and it exits `
+    + `${code} on the untouched base tree too (${result.repo} @ \`${result.baseRef}\`), `
     + `so this is a pre-existing failure on the base tree, not this story's. Fix ${WORKSPACE_FILE} or the base.`;
 }
 

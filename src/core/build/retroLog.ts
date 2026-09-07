@@ -28,7 +28,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { dodGreen, type StoryOutcome } from "./outcome.ts";
+import { DOD_REFUSAL_FALLBACK, dodGreen, dodRefused, type StoryOutcome } from "./outcome.ts";
 
 /**
  * `tldrx-work/<run>/retro.md`. The name lives HERE rather than in `retro/`
@@ -97,9 +97,20 @@ export function storyRetroLines(outcome: StoryOutcome, runId: string): readonly 
 
   if (outcome.attempts === 1 && !dodGreen(outcome)) {
     for (const result of outcome.dod) {
+      if (dodRefused(result)) {
+        // Nothing ran, so nothing exited — "exited 126 on the first attempt"
+        // was a sentence about a command that never started (#165).
+        lines.push(
+          `- \`${outcome.id}\` — dod \`${result.command}\` was REFUSED and never ran on the first `
+          + `attempt: ${oneLine(result.refusedBecause ?? DOD_REFUSAL_FALLBACK)} ${src}`,
+        );
+        continue;
+      }
       if (result.exitCode === 0 && !result.timedOut) continue;
       lines.push(
-        `- \`${outcome.id}\` — dod \`${result.command}\` exited ${String(result.exitCode)} on the first `
+        // `?? "?"` — the base side's spelling, for the row only a truncated
+        // `events.jsonl` can produce (`ran`, no exit code).
+        `- \`${outcome.id}\` — dod \`${result.command}\` exited ${String(result.exitCode ?? "?")} on the first `
         + `attempt${result.timedOut ? " (timed out)" : ""} ${src}`,
       );
     }

@@ -186,6 +186,15 @@ export interface ReviewerPromptParts {
   readonly focus: RecurringFocus;
   /** Appended to, never replaced. */
   readonly lines: string[];
+  /**
+   * What the reviewer's `git diff` starts FROM — the epic's sha immediately
+   * before this story was merged into it (#166).
+   *
+   * ADDITIVE and optional. Absent, null or empty ⇒ `epicBranch`, which is
+   * byte-for-byte the prompt this rendered before the field existed: a story
+   * reviewed out of a bundle written by an older binary reads exactly as it did.
+   */
+  readonly diffBase?: string | null;
 }
 
 /**
@@ -208,9 +217,19 @@ export function reviewerPromptFor(parts: ReviewerPromptParts): string {
     repoName: parts.story.story.repo,
     branch: parts.branch,
     epicBranch: parts.epicBranch,
+    // Straight through: `buildReviewerPrompt` owns the fallback, so the spawned
+    // door and the bundle door cannot disagree about what a missing base means.
+    diffBase: parts.diffBase,
     worktree: parts.worktree,
     conventions: renderConventions(parts.root, [parts.story.story.repo]),
-    dodResults: parts.dod.map((r) => ({ command: r.command, exitCode: r.exitCode })),
+    // Every field, including the ABSENCE of an exit code on a refused row —
+    // reconstructing one here is the bug #165 fixed one layer down.
+    dodResults: parts.dod.map((r) => ({
+      command: r.command,
+      ...(r.status === undefined ? {} : { status: r.status }),
+      ...(r.refusedBecause === undefined ? {} : { refusedBecause: r.refusedBecause }),
+      ...(r.exitCode === undefined ? {} : { exitCode: r.exitCode }),
+    })),
     // Withdrawn once the story's one round is spent, so the prompt never offers
     // a verdict `narrowFixlist` is about to refuse. Computed the same way on
     // both doors, which is what keeps the bundle's prompt byte-identical to the
@@ -233,6 +252,36 @@ export function reviewerPromptFor(parts: ReviewerPromptParts): string {
       ? stackChecks(parts.root, [parts.story.story.repo])
       : null,
   });
+}
+
+/**
+ * The words an absent `epic_base` is announced with, exported so a test asserts
+ * the MARKER rather than a sentence it retyped.
+ */
+export const UNRECORDED_BASE = "no `epic_base` was recorded";
+
+/**
+ * The operator line for a review whose diff base could not be recovered, or null
+ * when it could (#166).
+ *
+ * Absent-with-reason, said out loud (AGENTS.md §7). Omitting the key from the
+ * record is the honest half; this is the other half. The fallback renders
+ * `epic_branch`, and for a story that is ALREADY MERGED — which every story on
+ * this path is — `git diff <epic_branch>...<story>` resolves to nothing at all.
+ * That is the exact condition #166 exists to kill, so the one path where it
+ * survives has to name itself rather than read like an ordinary re-review.
+ *
+ * It is kept whole and in ONE place because both resume doors say it —
+ * `rereview` and `prepareReview` — and two copies of a warning are two chances
+ * for one of them to go quiet.
+ */
+export function unrecordedBaseLine(
+  storyId: string, epicBranch: string, epicBase: string | null | undefined,
+): string | null {
+  if (epicBase !== null && epicBase !== undefined && epicBase !== "") return null;
+  return `  · ${storyId}: ${UNRECORDED_BASE} for this story — its Build predates the fix (#166), `
+    + `so the reviewer is handed \`git diff ${epicBranch}...\`, which is EMPTY for a story that is `
+    + "already merged. Read the verdict as a judgement over nothing, not as a sign-off.";
 }
 
 /**

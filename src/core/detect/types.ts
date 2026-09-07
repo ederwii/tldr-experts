@@ -8,6 +8,7 @@
 
 import type { DetectedOverlay } from "./overlays.ts";
 import type { DetectedSkill } from "./skills.ts";
+import type { CommandProbes } from "./probeCommands.ts";
 
 export const WORKSPACE_MODES = ["single-repo", "multi-repo"] as const;
 export type DetectedMode = (typeof WORKSPACE_MODES)[number];
@@ -49,6 +50,14 @@ export interface DetectedRepo {
   /** How many CODE files this repo holds (`detect/codeFiles.ts`); `0` ⇒ greenfield. */
   readonly codeFiles: number;
   readonly commands: RepoCommands;
+  /**
+   * What was MEASURED about each of those commands (`detect/probeCommands.ts`, #168).
+   *
+   * Empty when nobody asked for a probe — `map` and `stack-packs` re-detect without
+   * one, and an empty map writes no key at all rather than a row of confident
+   * nothing. It never gates anything: `commands` is still the allowlist.
+   */
+  readonly commandProbes: CommandProbes;
   readonly ci: readonly string[];
   /** Framework overlays detection can PROVE from manifests, with their evidence (`detect/overlays.ts`). */
   readonly overlays: readonly DetectedOverlay[];

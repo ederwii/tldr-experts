@@ -7,7 +7,9 @@
  *                                                code files … (no LLM needed)",
  *                                                "--no-cluster … raw extraction only")
  * No flag here was invented. The LLM stages of graphify's pipeline are never
- * invoked: `tldrx init` is deterministic and offline.
+ * invoked: nothing on this path runs a model or reaches the network. (`tldrx init`
+ * as a whole is no longer offline — since #168 it runs the repo's own build/test
+ * commands once — but that is `detect/probeCommands.ts`, not this file.)
  *
  * graphify writes its own `graphify-out/` beside the path it was given, so the
  * graph is copied into `.tldrx/graphify-out/<repo>/graph.json` and read from

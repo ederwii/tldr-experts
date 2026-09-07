@@ -75,9 +75,10 @@ export const bunRuntime: Runtime = {
       // The process is gone; anything still holding its pipes is not ours to
       // wait for. Settle on what was read rather than hang. See killProcessTree.
       const [stdout, stderr] = await withinGrace(collected);
-      return { exitCode, stdout, stderr, timedOut };
+      return { exitCode, stdout, stderr, timedOut, spawnFailed: false };
     } catch (error) {
-      return { exitCode: 127, stdout: "", stderr: messageOf(error), timedOut };
+      // The spawn threw: nothing started, so the 127 below is this seam's, not a process's (#168).
+      return { exitCode: 127, stdout: "", stderr: messageOf(error), timedOut, spawnFailed: true };
     }
   },
 

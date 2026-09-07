@@ -3,7 +3,7 @@
  *
  * Wave 2 cuts a 4,351-line file into modules and claims it changed nothing. That
  * claim is only worth what proves it, and the existing suite proves PROPERTIES —
- * this proves BYTES. THREE fake-agent builds produce eighteen artifacts that are
+ * this proves BYTES. FOUR fake-agent builds produce twenty-two artifacts that are
  * compared, byte for byte, against files committed under `golden/`:
  *
  *   HEADLESS (`tldrx next`) — the path that spawns both sub-agents:
@@ -30,9 +30,25 @@
  *    17. five task rows, one of them `status: "failed"` with the error verbatim
  *    18. the exit code
  *
+ *   REFUSED (`GOLDEN_REFUSED`, headless) — a DoD command the gate DECLINES to
+ *   run, which the three above pin nothing about because all three run theirs:
+ *    19. the developer prompt (the only spawned turn — a red DoD blocks the story
+ *        before a reviewer is asked for, so there is no reviewer prompt here)
+ *    20. the ordered event stream: a `check.failed` whose `keys=[…]` carries
+ *        `refused` and does NOT carry `exit_code`, and a `task.done` at
+ *        `status: "blocked"` with `commit: null`
+ *    21. one task row — the developer's; there is no reviewer row to have
+ *    22. the exit code (`4`, `EXIT_AWAITING_HUMAN`: the stage still reached its
+ *        human gate, exactly as the two green headless scenarios do — a blocked
+ *        story is not a usage error and not a gate refusal)
+ *
  * Why a third scenario: every path tasks 4 and 5 move was covered by an existing
  * pin EXCEPT `blockedByFailedDeveloper`. `GOLDEN_ROUNDS` is that path, beside the
  * second review round that `ReviewCounters` exists to bound.
+ *
+ * Why a fourth: the other three all record a command that RAN, so none of them
+ * can show what an ABSENCE looks like on the wire. `GOLDEN_REFUSED` freezes the
+ * one record #165 was about — a check with no exit code in it at all.
  *
  * Both cycles are needed and neither is redundant. Measured at e48f4a0: a
  * `--prepare` spawns NOTHING and a `--commit` spawns only the reviewer, so the
@@ -55,11 +71,14 @@
  *
  * Measured at e48f4a0 by capturing two headless cycles back to back and diffing
  * them raw: the ONLY byte that moved in either prompt was the workspace root
- * path. No sha, timestamp or duration appears in a prompt at all. So:
+ * path. No sha, timestamp or duration appeared in a prompt at all. Since #166 a
+ * reviewer prompt DOES name a sha — the epic's, as it was immediately before the
+ * story merged, because the branch name it used to carry produces an empty diff
+ * once the story is an ancestor — so shas are scrubbed out of prompts too. So:
  *
  * | Artifact | Normalised | Why |
  * |---|---|---|
- * | prompts | the workspace root → `<ROOT>` (and its `realpath`, since macOS's `/var/folders` is a symlink to `/private/var/folders`) | `mkdtempSync(join(tmpdir(), "tldrx-build-"))` (`workspace.ts:122`) — a fresh temp dir per invocation. Both are EXACT strings read from the machine, long and unique, so nothing incidental can match. |
+ * | prompts | the workspace root → `<ROOT>` (and its `realpath`, since macOS's `/var/folders` is a symlink to `/private/var/folders`), plus every commit sha → `<SHA>` (#166) | `mkdtempSync(join(tmpdir(), "tldrx-build-"))` (`workspace.ts:122`) — a fresh temp dir per invocation. Both are EXACT strings read from the machine, long and unique, so nothing incidental can match. The sha is the reviewer's diff base, which git derives from commit timestamps and so moves every run; it is replaced by the same VERIFIED rule the event normaliser uses (`scrubPrompt`). |
  * | events | the workspace root, plus every commit sha → `<SHA>` | Git shas move with commit timestamps every run. |
  * | task rows | the workspace root, every commit sha, plus `"ended_at": "<TS>"` | `ended_at` is the wall clock at the moment the row was written. `started_at` is NOT normalised — measured, it is `options.at` verbatim, so it is a real assertion. |
  *
@@ -196,6 +215,60 @@ export const INSESSION_GOLDEN: Readonly<Record<keyof CapturedInSession, string>>
   runTasks: "insession-run-tasks.txt",
 };
 
+/** The pipeline `GOLDEN_REFUSED` declares and the gate then declines to run. */
+const REFUSED_COMMAND = "npm run test | tee lint.log";
+
+/**
+ * A story whose DoD command the gate will not run — the fourth scenario (#165).
+ *
+ * The command is DECLARED under the repo's `commands:` and still refused, and
+ * that combination is the only one that reaches the DoD gate at all. Measured
+ * 2026-09-06 with an UNDECLARED command (`npm run lint` against the default
+ * fixture allowlist): `loadBuildPlan` calls `validatePlan(planDir, allowed)`
+ * (`src/core/build/plan.ts:127`), which refuses the whole plan —
+ * `04-build/build failed: 03-plan/ does not validate — stories/S1.md dod[0]:
+ * \`npm run lint\` is not one of .tldrx/workspace.yml's commands`, exit 5 —
+ * so nothing is dispatched and there is no refusal to capture. Plan validation
+ * checks allowlist MEMBERSHIP only (`schemas/commandAllowlist.ts:69`, a
+ * `Set.has`); `runDodCommand` is the one that also refuses a command it cannot
+ * argv-split (`hooks/lib/story.ts:145`). A declared pipeline is exactly the gap
+ * between the two.
+ *
+ * Nothing ran, so the capture is what an ABSENCE looks like end to end: a
+ * `check.failed` with no `exit_code` and a `refused` sentence, a story blocked
+ * with a reason that says REFUSED, and one developer task row. No reviewer is
+ * spawned — a red DoD blocks the story before the review (build.ts:1069) — so
+ * this scenario is exactly the one the other three cannot stand in for.
+ *
+ * What it does NOT freeze, said out loud because the header is this guard's own
+ * account of itself: the BASE side. The scenario genuinely EXERCISES it — the
+ * Build-entry pre-flight probes the same command and records it `unmeasured` in
+ * `04-build/preflight.yml` — but that file is in none of the four artifacts, and
+ * the base pre-flight deliberately emits no event (docs/spec.md §2.5), so
+ * `refused-events.txt` cannot reach it either. The base side is pinned by
+ * `test/dod-preflight.test.ts`'s `#165` describes instead.
+ */
+export const GOLDEN_REFUSED: BuildWorkspaceOptions = {
+  stories: [{ id: "S1", epic: "E1", title: "First story", dod: [REFUSED_COMMAND] }],
+  epics: [{ id: "E1", stories: ["S1"], branch: "epic/e1" }],
+  waves: [["S1"]],
+  commands: { build: null, test: "npm run test", lint: REFUSED_COMMAND, typecheck: null, run: null },
+};
+
+export type CapturedRefused = {
+  readonly developerPrompt: string;
+  readonly events: string;
+  readonly runTasks: string;
+  readonly exitCodes: string;
+};
+
+export const REFUSED_GOLDEN: Readonly<Record<keyof CapturedRefused, string>> = {
+  exitCodes: "refused-exit-codes.txt",
+  developerPrompt: "refused-developer-S1-1.md",
+  events: "refused-events.txt",
+  runTasks: "refused-run-tasks.txt",
+};
+
 /**
  * What one headless `tldrx next` over `GOLDEN_ROUNDS` produced. Five prompts:
  * both of S1's developer turns, both of its reviewer turns, and S2's one
@@ -235,8 +308,8 @@ export async function captureHeadlessBuild(
   const headless = await next(ws, { mode: "headless" });
   const machine = machineOf(ws);
   return {
-    developerPrompt: scrubPaths(readFileSync(join(promptDir, "developer-S1-1.md"), "utf8"), machine),
-    reviewerPrompt: scrubPaths(readFileSync(join(promptDir, "reviewer-S1-1.md"), "utf8"), machine),
+    developerPrompt: scrubPrompt(readFileSync(join(promptDir, "developer-S1-1.md"), "utf8"), machine),
+    reviewerPrompt: scrubPrompt(readFileSync(join(promptDir, "reviewer-S1-1.md"), "utf8"), machine),
     events: eventStream(ws, machine),
     runTasks: taskRows(ws, machine),
     exitCodes: `headless ${String(headless.code)}\n`,
@@ -265,11 +338,11 @@ export async function captureInSessionBuild(
   const commit = await next(ws, { mode: "commit", at: "2026-08-29T09:30:00Z", costUsd: 0.1 });
   const machine = machineOf(ws);
   return {
-    bundlePrompt: scrubPaths(
+    bundlePrompt: scrubPrompt(
       readFileSync(join(ws.runDir, ".agent", "build", "S1", "prompt.md"), "utf8"),
       machine,
     ),
-    reviewerPrompt: scrubPaths(readFileSync(join(promptDir, "reviewer-S1-1.md"), "utf8"), machine),
+    reviewerPrompt: scrubPrompt(readFileSync(join(promptDir, "reviewer-S1-1.md"), "utf8"), machine),
     events: eventStream(ws, machine),
     runTasks: taskRows(ws, machine),
     exitCodes: `prepare ${String(prepare.code)}\ncommit ${String(commit.code)}\n`,
@@ -293,7 +366,7 @@ export async function captureRoundsBuild(
   const headless = await next(ws, { mode: "headless" });
   const machine = machineOf(ws);
   const prompt = (name: string): string =>
-    scrubPaths(readFileSync(join(promptDir, name), "utf8"), machine);
+    scrubPrompt(readFileSync(join(promptDir, name), "utf8"), machine);
 
   return {
     developerS1Round1: prompt("developer-S1-1.md"),
@@ -301,6 +374,24 @@ export async function captureRoundsBuild(
     reviewerS1Round1: prompt("reviewer-S1-1.md"),
     reviewerS1Round2: prompt("reviewer-S1-2.md"),
     developerS2: prompt("developer-S2-1.md"),
+    events: eventStream(ws, machine),
+    runTasks: taskRows(ws, machine),
+    exitCodes: `headless ${String(headless.code)}\n`,
+  };
+}
+
+/**
+ * One headless `tldrx next` over `GOLDEN_REFUSED`: the developer runs, its DoD
+ * command is REFUSED, and the story blocks before a reviewer is ever asked for.
+ */
+export async function captureRefusedBuild(
+  ws: BuildWorkspace,
+  promptDir: string,
+): Promise<CapturedRefused> {
+  const headless = await next(ws, { mode: "headless" });
+  const machine = machineOf(ws);
+  return {
+    developerPrompt: scrubPrompt(readFileSync(join(promptDir, "developer-S1-1.md"), "utf8"), machine),
     events: eventStream(ws, machine),
     runTasks: taskRows(ws, machine),
     exitCodes: `headless ${String(headless.code)}\n`,
@@ -369,10 +460,37 @@ function machineOf(ws: BuildWorkspace): Machine {
   };
 }
 
-/** The one normalisation a prompt gets: the temp workspace root, by exact string. */
+/** The temp workspace root, by exact string. */
 function scrubPaths(text: string, machine: Machine): string {
   let out = text;
   for (const root of machine.roots) out = out.split(root).join("<ROOT>");
+  return out;
+}
+
+/**
+ * The normalisation a prompt gets: the temp workspace root — and, since #166,
+ * commit shas, because a reviewer prompt now names the epic's sha before the
+ * merge instead of the epic BRANCH (a branch name is deterministic; a sha is
+ * not).
+ *
+ * The same verified rule the event/task normaliser uses, applied to text rather
+ * than to values: only a >= 7-char prefix of a sha `git rev-list --all` reports
+ * in THIS fixture repo is replaced, so a hex-looking word that is not a commit
+ * here stays raw. `scrubFullShas` handles the 40-char form; the short form is
+ * matched with a word boundary so `abc1234` inside a longer token is untouched.
+ *
+ * Landed as a NO-OP: at the commit that introduced it no prompt contained a sha
+ * at all, and `bun test test/build-golden.test.ts` passed over the unchanged
+ * golden files — which is the property that makes it safe to rely on next.
+ */
+function scrubPrompt(text: string, machine: Machine): string {
+  let out = scrubFullShas(scrubPaths(text, machine), machine);
+  for (const sha of machine.shas) {
+    for (let n = 40; n >= 7; n--) {
+      const prefix = sha.slice(0, n);
+      out = out.replace(new RegExp(`\\b${prefix}\\b`, "g"), "<SHA>");
+    }
+  }
   return out;
 }
 

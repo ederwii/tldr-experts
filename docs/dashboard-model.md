@@ -240,10 +240,18 @@ framework was not mis-metering; the front page was lying by omission.
 | `zeroCostTasks` | number | Turns recorded as **metered** at exactly `$0.00`. |
 | `costlessTasks` | number | `unmeteredTasks + zeroCostTasks` — every turn that put nothing in the meter. |
 | `hostTokens` | number | Tokens declared with `--tokens` across **all** turns — the same number as `Run.hostTokens`. |
-| `costlessTokens` | number | The subset declared **by a costless turn** — the only host-side figure the dollars do not already cover. |
+| `costlessTokens` | number | Tokens KNOWN **for a costless turn** — host-declared or provider-reported (#159) — the only figure the dollars do not already cover. NOT a subset of `hostTokens` above; see the note below the table. |
 | `silentTasks` | number | Costless turns that declared nothing at all: no dollars, no tokens. |
 | `basis` | string | `"measured"` \| `"declared"` \| `"partial"` \| `"absent"`. |
 | `reason` | string | `basis` as a whole sentence, already worded for a reader. |
+
+`costlessTokens`'s source widened at #159: a turn's PROVIDER-reported split
+(`input_tokens`/`output_tokens`, both positive) now counts beside its
+HOST-declared `tokens` scalar — `budget/turnTokens.ts` picks one, never both.
+`modelVersion` does not move for it: the type is still `number`, the role is
+still "tokens known for a costless turn", and the two currencies were already
+never summed together — only the source set a costless turn can satisfy that
+role FROM grew.
 
 **Both spellings of "this turn cost nothing" are counted, and neither is
 overruled.** The model already knew `cost_usd: null` + `metered: false`
@@ -437,13 +445,23 @@ uninstrumented signal is a fact about coverage, and it belongs in a panel the wa
 
 `repo`, `command` (byte-identical to the `.tldrx/workspace.yml` command — the
 join key everywhere), `baseRef` (the repo's `default_branch`), `baseSha` (short
-sha when git had an answer, `""` when it did not), `exitCode` (number),
-`timedOut` (boolean), `status` (`"ok"` | `"failed"` | `"unmeasured"`) and `tail`
-(the last meaningful line of the output).
+sha when git had an answer, `""` when it did not), `exitCode` (number \| null),
+`timedOut` (boolean), `status` (`"ok"` | `"failed"` | `"unmeasured"`), `tail`
+(the last meaningful line of the output) and `refusedBecause` (string,
+present only on a refused probe).
 
 `unmeasured` is a third case and **not** a synonym for either of the other two:
 the gate declined to run the command at all, so nothing is known about the base
 and nothing may be inferred from it.
+
+`exitCode` is `null` on exactly that row (#165). Nothing spawned, so there is no
+exit code to report, and the page carries the ABSENCE rather than inventing a
+number — it draws `REFUSED`, the same marker the handoff, the review log and the
+retro use, with `refusedBecause` and `tail` beside it saying why. Before this, the
+framework wrote a fabricated `126` there and the page drew it as a measurement.
+**`DASHBOARD_MODEL_VERSION` does not bump**: the type widened and a field was
+added, and no existing field's meaning moved — the same additive rule #85, #93
+and #103 were held to.
 
 Why it is on the page at all: a story's `dod` block is a **delta** gate, and it
 proves nothing if the base tree was already red. `preflight.ts` measures the base

@@ -173,6 +173,24 @@ export async function shaOf(cwd: string, ref: string): Promise<string> {
   return result.ok ? result.stdout.trim() : "";
 }
 
+/**
+ * The FULL 40-character sha `ref` resolves to, or `""` when it resolves to
+ * nothing.
+ *
+ * `shaOf`'s sibling, and the difference is which side of a record it is for.
+ * `shaOf` is `--short` and feeds OPERATOR LINES, where an abbreviation is the
+ * readable thing. This one feeds DURABLE RECORDS — `review.epic_base` in a
+ * bundle, `epic_base` on `task.done` — where an abbreviation is a prefix, and a
+ * prefix that is unambiguous the day it is written can go ambiguous as the repo
+ * grows, at which point the `git diff <base>...<branch>` a reviewer was handed
+ * simply fails (task 5 review, M2). Same `""`-not-throw contract as `shaOf`, for
+ * the same reason: a caller that needs the difference asks `branchExists`.
+ */
+export async function fullShaOf(cwd: string, ref: string): Promise<string> {
+  const result = await git(["rev-parse", ref], cwd);
+  return result.ok ? result.stdout.trim() : "";
+}
+
 /** Create `branch` off `base` when it is not already there. Returns true if created. */
 export async function ensureBranch(cwd: string, branch: string, base: string): Promise<boolean> {
   if (await branchExists(cwd, branch)) return false;
@@ -520,6 +538,30 @@ export async function fastForward(cwd: string, onto: string): Promise<GitResult>
 
 export function diffCommand(base: string, branch: string): string {
   return `git diff ${base}...${branch}`;
+}
+
+/**
+ * The reviewer's diff command, and the ONE place its BASE is derived (#166).
+ *
+ * `diffBase` is the epic's sha as it was immediately before the story merged.
+ * Unknown — absent, null or empty — falls back to the epic BRANCH, which is
+ * byte-for-byte the command this produced before the field existed: a bundle or
+ * a ledger written by an older binary reads exactly as it did.
+ *
+ * It lives here, beside `diffCommand`, because THREE readers need the same
+ * answer and a second copy of the fallback is how they would come to disagree:
+ * `buildReviewerPrompt` renders it into the prompt, `writeReviewBundle` records
+ * it in `pending.json`, and the handshake's whole claim is that those two are
+ * the same string. `diffCommand` itself is unchanged — a sha and a branch are
+ * both refs.
+ */
+export function reviewDiffCommand(
+  diffBase: string | null | undefined, epicBranch: string, branch: string,
+): string {
+  return diffCommand(
+    diffBase === undefined || diffBase === null || diffBase === "" ? epicBranch : diffBase,
+    branch,
+  );
 }
 
 export function firstLine(text: string, max = 200): string {

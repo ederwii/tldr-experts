@@ -90,10 +90,9 @@ async function refresh(args: MapArgs): Promise<number> {
   const result = await buildMap({
     workspace,
     workspaceDir: args.workspaceDir,
-    providers: chooseProviders(
-      { root: loaded.root, out: args.workspaceDir, interview: false, methodology: null, mcp: false, stack: [], provider: args.provider },
-      runner,
-    ),
+    // `map --refresh` re-detects to pick a provider and writes no `workspace.yml`; it
+    // passes no `probe` to `detectWorkspace`, so nothing here starts a build.
+    providers: chooseProviders({ provider: args.provider }, runner),
   });
   const recorded = recordRefresh(loaded.root, result);
   process.stdout.write(

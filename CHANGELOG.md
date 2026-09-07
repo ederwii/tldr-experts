@@ -1,6 +1,111 @@
 # Changelog
 
 
+## 0.10.0 — unreleased
+
+### Fixed
+
+- **A refused Definition-of-Done command is no longer recorded as `exit 126`.** When the
+  sandbox declined to run a `dod` or base command — a bare shell metacharacter with no
+  shell open to interpret it, an unsplittable pipeline — `runStoryDod` wrote
+  `{exitCode: 126}` for it, a fabricated exit code that told the ledger, the reviewer
+  prompt and bundle, the dashboard and the ship gate that the command RAN and failed with
+  126, rather than that it never ran at all. `DodResult` grows `status?: "ran" | "refused"`
+  (absent stays `ran`, so every pre-existing record loads unchanged) and
+  `refusedBecause?: string`; a refused row carries no `exitCode` anywhere it is read or
+  rendered. `dodFailureReason` is the one derivation of the sentence a reader prints for a
+  refused command versus a failed one. `parsePreflight` tolerates exactly this one new hole
+  — a refused row has no `exit_code` and is never read as green — and a fourth golden build
+  scenario (`refused`) pins the shape. `PreflightRowModel.exitCode` widens to
+  `number | null`; `DASHBOARD_MODEL_VERSION` does not bump (a widened type and an added
+  field, no existing field's meaning moved). (#165)
+- **The reviewer no longer diffs an empty range.** The reviewer's diff base was always
+  `epicBranch`'s current tip, but by the time review runs the story's own commits are
+  already merged onto that branch — so the reviewer diffed a range that had shrunk to
+  nothing, or silently picked up work from a story that landed after. `epic_base` (the full
+  40-hex sha, captured immediately before the merge) is now recorded additively on
+  `task.done` and in the review bundle, omitted rather than guessed when unknown, and
+  recovered on resume from the ledger or the bundle; `reviewDiffCommand(diffBase,
+  epicBranch, branch)` is the one place the fallback to `epicBranch` lives, so a record with
+  no base still falls back to the branch and says so rather than diffing nothing. Seven
+  golden prompt/event artifacts moved — a prompt normaliser learned to scrub verified shas
+  first, so the sha itself never becomes a golden byte. (#166)
+- **A costless turn that declared only a provider token split is no longer counted silent.**
+  Both spend-basis feeders — the handoff's cost line and the dashboard's spend model —
+  summed a task's host `tokens` scalar only, so a turn that reported a real
+  `input_tokens`/`output_tokens` split but never set the host field read as zero, tripping
+  `costlessTokens` and landing on `basis: "absent"` for a turn that was fully measured. One
+  leaf, `turnTokens(task)` (host `tokens` when declared — present as a finite number,
+  including an explicit `0` — else the input+output split when both are positive, else
+  `null`), is now read by both feeders; `costlessTokens` widens to
+  "host-declared or provider-reported", and an explicit `tokens: 0` still reads as a
+  declaration, not an absence. The host-token sum that feeds the `absent` sentence's own
+  count keeps summing the raw scalar only, so a provider split can never inflate what
+  "declared host tokens" means. The dashboard's own `RunTask` projection — a hand-tolerant
+  duplicate of `RunFile.ts`'s type, not a re-export, on the identical seam — gained the same
+  two fields it was silently dropping; without that half, the dashboard side of this fix
+  would not have fired at all. `DASHBOARD_MODEL_VERSION` unchanged. (#159)
+- **A reviewer turn's token split reaches its `run.yml` row.** 0.9.1 wired the provider's
+  input/output split into the Build executor's own task rows; the reviewer's two spawn call
+  sites never got the same two fields, so a reviewer turn kept `run.yml`'s per-task tokens
+  blank even when the provider reported them — the sibling of the gap #159 closes for spend
+  basis. `formatRetry` and `recordReview`'s task structs both carry
+  `input_tokens`/`output_tokens` now, read at the same call sites the build path already
+  used; a host-envelope review (no provider usage to read) is left alone. Three golden
+  run-tasks artifacts moved. (#173)
+- **The dirty-tree refusal prints the commands, and the reason it gives is true.** The
+  message said stashing would "carry the mess forward" through `git worktree add`, and told
+  you to "commit or stash" with no command to run — but the #41 base pre-flight runs the
+  gate commands in the repo's OWN checkout, not a worktree, so an uncommitted product change
+  sits inside the very measurement that decides whether a red DoD is the story's fault or
+  the base's; that was the real reason, and neither the docstring nor the message said it.
+  The refusal now prints the two literal commands (`git -C <dir> stash push -u -m "tldrx
+  <runId> foreign work"` / `git -C <dir> stash pop`, the run id in the stash message so a
+  resumed run's mess stays traceable) and stashes nothing itself; the docstring states the
+  true mechanism. (#164)
+
+### Added
+
+- **`command_probes:` — what `tldrx init` actually ran, not what it guessed.**
+  `workspace.yml`'s `commands:` block came from pattern-matching a repo's files — a
+  `package.json` script name, a Makefile target — and was never executed, so a stack pack,
+  the dashboard and the base pre-flight all treated a detected command as verified when
+  "verified" had never been checked. `tldrx init` now probes each detected
+  `build`/`test`/`lint`/`typecheck` command once (`run` is excluded by name — starting a
+  long-running process is not a probe) and records `command_probes:` rows per repo:
+  `{status, verified, exit_code, at, reason}`, one status vocabulary for the whole surface
+  so a genuine `exit 127` (found, ran, failed) and a command that never started — either
+  `unspawnable` (ENOENT/EACCES) or `not-probed` (a bare metacharacter needing a shell this
+  probe does not open) — are different, honestly labelled rows instead of the same
+  fabricated 127. `--no-probe` skips entirely and records the skip as its own reason
+  (`skipped: --no-probe`); the base pre-flight cites a probe only when its `status` is
+  `failed` — the one status that means the command ran and exited non-zero. `tldrx learn`'s
+  sandboxed walkthrough passes `--no-probe` to the `init` it runs; `tldrx map` never requests
+  a probe at all — it omits `detectWorkspace`'s `probe` option entirely, as before. Probing is
+  a real spawn, and `init`'s own `--help` "Deterministic and offline" claim is corrected to
+  say so.
+  Additive on
+  `WorkspaceRepoDocument`; every pre-#168 `workspace.yml` still validates. (#168)
+
+### Changed
+
+- **`tldrx ship`'s PR body is written for a PR, not forwarded from the last handoff
+  verbatim.** The body was the raw `04-build/handoff.md` text — a build log addressed to
+  the next Build turn, headed by phase names and gate jargon nobody opening the PR asked
+  for. `renderShipBody` is now the one renderer: what shipped (the handoff's `done`
+  findings), what did not (its unknowns), the fix-list findings still open, and the full
+  handoff moved inside a collapsed `<details>` block rather than dropped. Dry-run and the
+  real create path share the one rendered body file, so what you preview is what posts. And
+  the state refusal has an allowed move at last: a story at `status: done` EXCUSES the state
+  paths its own `touches:` declared, so a story written to edit `.tldrx/workspace.yml` —
+  adding a repo, declaring a command — can finally be shipped, where before #102's refusal
+  had no way through at all. A story at `review` or `blocked` excuses nothing: a declaration
+  with no verdict behind it is a plan, not a fact. The excuse is matched per `(repo, path)`,
+  since `touches:` is relative to the story's own `repo:`, and the remedy names only the
+  paths still REFUSED — never the blanket `tldrx-work .tldrx`, which would revert the very
+  edit printed three lines above it as excused. It exits the money/gate family
+  (`EXIT_GATE_REFUSED`), not a module-local code. (#167)
+
 ## 0.9.2 — 2026-09-07
 
 ### Changed

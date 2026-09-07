@@ -36,11 +36,43 @@ export type Verdict = "approve" | "changes" | "n-a" | "error" | "fixlist";
 
 export interface DodResult {
   readonly command: string;
-  readonly exitCode: number;
+  /**
+   * `ran` ⇒ the command was spawned and this row is a MEASUREMENT. `refused` ⇒
+   * the gate declined to run it (not on `.tldrx/workspace.yml`'s allowlist, or
+   * it needs a shell this gate does not open), so nothing ran and there is no
+   * exit code to report.
+   *
+   * ADDITIVE and optional: absent means `ran`, which is every record written
+   * before this field existed. The invariant readers may rely on is `ran`
+   * carries an `exitCode` and `refused` never does — until 2026-09-06 a refusal
+   * was written as a fabricated `exitCode: 126` and three documents rendered
+   * that fabrication as a measured exit (#165).
+   */
+  readonly status?: "ran" | "refused";
+  /** Present only on `refused`: the gate's own sentence, verbatim. */
+  readonly refusedBecause?: string;
+  /** The measured exit. Absent — and only ever absent — when `status` is `refused`. */
+  readonly exitCode?: number;
   readonly timedOut: boolean;
   /** Last meaningful line of the combined output — the operator's first clue. */
   readonly tail: string;
 }
+
+/** True when the gate DECLINED to run this command. Absent status means it ran. */
+export function dodRefused(result: Pick<DodResult, "status">): boolean {
+  return result.status === "refused";
+}
+
+/**
+ * What a refusal says when the gate's own sentence did not survive the round
+ * trip — one string, five readers (the handoff, the review log, the retro, the
+ * blocked-story reason and the reviewer's bundle).
+ *
+ * It exists because absent-with-reason (§7) has to hold even when the reason is
+ * the thing that went missing: "refused, and we no longer know why" is still a
+ * refusal, and it must never degrade into an unexplained non-green row.
+ */
+export const DOD_REFUSAL_FALLBACK = "the gate declined to run it";
 
 /**
  * Work that was in the story worktree and in no ref, when the framework was
@@ -153,7 +185,24 @@ export function mergedNothing(outcome: Pick<StoryOutcome, "carried">): boolean {
 }
 
 export function dodGreen(outcome: Pick<StoryOutcome, "dod">): boolean {
-  return outcome.dod.length > 0 && outcome.dod.every((r) => r.exitCode === 0 && !r.timedOut);
+  return outcome.dod.length > 0
+    && outcome.dod.every((r) => !dodRefused(r) && r.exitCode === 0 && !r.timedOut);
+}
+
+/**
+ * Why a story blocked on its Definition of Done — one sentence, one derivation.
+ *
+ * Two call sites in the executor built this string independently
+ * (`buildHalf` and `pipelineFromDod`); a refusal has to read differently from a
+ * red exit in both, and two copies of one sentence is how they stop agreeing.
+ */
+export function dodFailureReason(result: DodResult, repo: string): string {
+  if (dodRefused(result)) {
+    return `\`${result.command}\` was REFUSED in repo ${repo} and never ran — `
+      + `${result.refusedBecause ?? DOD_REFUSAL_FALLBACK}`;
+  }
+  return `\`${result.command}\` exited ${String(result.exitCode ?? "?")} in repo ${repo}`
+    + `${result.timedOut ? " (timed out)" : ""} — ${result.tail}`;
 }
 
 /** One line for `run status` and the executor's stdout: `S1 done`, `S2 blocked`. */

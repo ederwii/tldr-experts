@@ -21,7 +21,14 @@ import { executorFor, EXECUTORS } from "../src/core/facilitator/executors/index.
 import {
   buildExecutor, developerTools, phaseCostToDate, readReviewLedger, REVIEWER_TOOLS,
 } from "../src/core/facilitator/executors/build.ts";
-import { looksLikeReviewerError, reviewerFailed } from "../src/core/build/review.ts";
+import { looksLikeReviewerError, renderReviewLog, reviewerFailed } from "../src/core/build/review.ts";
+import { renderBuildHandoff, type BuildHandoffParts } from "../src/core/build/handoff.ts";
+import { storyRetroLines } from "../src/core/build/retroLog.ts";
+import { buildReviewerPrompt } from "../src/core/build/prompts.ts";
+import { DOD_REFUSAL_FALLBACK, dodGreen, type StoryOutcome } from "../src/core/build/outcome.ts";
+import { reviewBundleKeyOf, reviewWorkFromBundle, writeReviewBundle } from "../src/core/build/reviewBundle.ts";
+import type { PlannedStory } from "../src/core/build/plan.ts";
+import { endsWithToken } from "../src/core/text/srcToken.ts";
 import { UNFINISHED_STORIES } from "../src/core/run/autoGate.ts";
 import { approve, reject } from "../src/core/run/gates.ts";
 import { updateStoryFront, evidenceFor } from "../src/core/build/storyFile.ts";
@@ -33,8 +40,8 @@ import { EventLog } from "../src/core/events/EventLog.ts";
 import { validateHandoff } from "../src/core/text/handoff.ts";
 import { loadWorkspace, toSrcContext } from "../src/hooks/lib/workspace.ts";
 import {
-  assertWorktreeOn, cleanUpRunEpicWorktrees, GitError, partitionDirty, porcelainPath, stateDirPrefixes,
-  WorktreeBranchMismatchError,
+  assertWorktreeOn, cleanUpRunEpicWorktrees, diffCommand, GitError, partitionDirty, porcelainPath,
+  stateDirPrefixes, WorktreeBranchMismatchError,
 } from "../src/core/build/git.ts";
 import { FRAMEWORK_ROOT, PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../src/core/paths.ts";
 import {
@@ -612,6 +619,111 @@ describe("the reviewer", () => {
     expect(events(ws).filter((e) => e.payload.check === "review").map((e) => e.payload.verdict))
       .toEqual(["changes", "changes"]);
   });
+
+  test("the reviewer is asked to diff the epic as it was BEFORE the merge (#166)", async () => {
+    const ws = workspace(ONE_STORY);
+    const promptDir = join(ws.root, "prompts");
+    mkdirSync(promptDir, { recursive: true });
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+
+    await next(ws);
+
+    const prompt = readFileSync(join(promptDir, "reviewer-S1-1.md"), "utf8");
+    const diffLine = prompt.split("\n").find((line) => line.includes("git diff")) ?? "";
+    // A sha, not the branch name: `git diff epic/e1...story/...` is EMPTY once the
+    // story is an ancestor of the epic, which it is by the time the reviewer runs.
+    expect(diffLine).not.toContain("epic/e1...");
+    expect(diffLine).toMatch(/git diff [0-9a-f]{7,40}\.\.\./);
+
+    // And the range is non-empty in the real repo — the whole point.
+    const range = /git diff (\S+)/.exec(diffLine)?.[1] ?? "";
+    const out = execFileSync("git", ["diff", "--name-only", range], { cwd: ws.repoDir, encoding: "utf8" });
+    expect(out.trim()).not.toBe("");
+  });
+
+  /**
+   * The two rounds' bases must DIFFER, and no golden can see it.
+   *
+   * `rounds-reviewer-S1-1.md` and `-2.md` are byte-identical in
+   * `test/fixtures/build/golden/` because the normaliser collapses both bases to
+   * `<SHA>` — so a regression that handed round 2 the base round 1 was given
+   * would pass that guard silently. This is the pin for the DIFFERENCE case
+   * (`build-golden` residual, task 5 review M3).
+   *
+   * The mechanism: attempt 1's `changes` verdict is followed by a
+   * `story.base_fastforwarded` that moves the story's base onto the epic tip,
+   * which now carries attempt 1's merge — so the epic sha attempt 2 captures is
+   * strictly ahead of the one attempt 1 captured.
+   */
+  test("a second review round diffs from a LATER base than the first (#166)", async () => {
+    const ws = workspace(ONE_STORY);
+    const promptDir = join(ws.root, "prompts");
+    mkdirSync(promptDir, { recursive: true });
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes", "approve"] });
+
+    await next(ws);
+    expect(story(ws, "S1")).toContain("status: done");
+
+    // The RECORD: two `task.done` rows, two different bases.
+    const bases = events(ws)
+      .filter((e) => e.type === "task.done" && e.payload.story === "S1")
+      .map((e) => String(e.payload.epic_base ?? ""));
+    expect(bases).toHaveLength(2);
+    expect(bases[0]).toMatch(/^[0-9a-f]{40}$/);
+    expect(bases[1]).toMatch(/^[0-9a-f]{40}$/);
+    expect(bases[1]).not.toBe(bases[0]);
+
+    // And the PROMPTS the two reviewers actually read, which is the half the
+    // golden cannot show.
+    const baseOf = (name: string): string =>
+      /git diff (\S+)\.\.\./.exec(readFileSync(join(promptDir, name), "utf8"))?.[1] ?? "";
+    expect(baseOf("reviewer-S1-1.md")).toBe(bases[0] ?? "");
+    expect(baseOf("reviewer-S1-2.md")).toBe(bases[1] ?? "");
+    expect(baseOf("reviewer-S1-2.md")).not.toBe(baseOf("reviewer-S1-1.md"));
+  });
+
+  /**
+   * A GUARD, not a proof: it passes before the fix as well as after. It is here
+   * because #166 moves what the prompt puts on that line from a branch name to a
+   * sha, and the reviewer's allowance is a PREFIX glob — the cheap way to catch a
+   * whole class of mistake where a diff command the reviewer cannot run reads
+   * exactly like one it can.
+   */
+  test("the sha-form diff command is still inside the reviewer's `Bash(git diff *)` allowance", () => {
+    const command = diffCommand("0123456789abcdef0123456789abcdef01234567", "story/260829-build/S1");
+    const pattern = REVIEWER_TOOLS.find((tool) => tool.startsWith("Bash("));
+    expect(pattern).toBe("Bash(git diff *)");
+    // The allowance is a prefix-glob: everything after `git diff ` is the wildcard.
+    expect(command.startsWith("git diff ")).toBe(true);
+  });
+});
+
+/**
+ * `formatRetry` and `recordReview` used to narrow the reviewer's `AgentOutcome`
+ * before it reached `this.tasks.push`, so a spawned reviewer's `agent.usage`
+ * never became a run.yml row's `input_tokens`/`output_tokens` — only the
+ * developer and Watch paths carried the split (gh #173).
+ */
+describe("a spawned reviewer's task row carries its token split (#173)", () => {
+  test("a spawned reviewer's row carries the provider's token split, like the developer's", async () => {
+    const ws = workspace(ONE_STORY);
+
+    const outcome = await next(ws);
+    expect(outcome.code).toBe(4);
+
+    const run = RunStore.open(ws.runDir).run;
+    const rows = run.phases.flatMap((p) => p.stages).flatMap((s) => s.tasks);
+    const reviewer = rows.find((row) => row.session_id === "fake-reviewer-S1");
+    expect(reviewer, "the spawned reviewer wrote a task row").toBeDefined();
+    // The fake emits the same usage for both roles (fakeClaude.ts:107), so the
+    // reviewer's row is compared against the DEVELOPER's — behaviour, not a
+    // constant typed twice.
+    const developer = rows.find((row) => row.session_id === "fake-developer-S1");
+    expect(reviewer?.input_tokens).toBe(developer?.input_tokens);
+    expect(reviewer?.output_tokens).toBe(developer?.output_tokens);
+    expect(reviewer?.input_tokens).toBeGreaterThan(0);
+  });
 });
 
 /**
@@ -1066,7 +1178,10 @@ describe("reading a review off the ledger", () => {
     expect(s1.verdicts).toBe(0);              // an errored review is not a verdict
     expect(s1.erroredWith).toBe("claude timed out (…)");
     expect(s1.commit).toBe("abc1234");
-    expect(s1.dod).toEqual([{ command: "npm run test", exitCode: 0, timedOut: false, tail: "" }]);
+    // `status: "ran"` is the #165 addition: an event carrying an `exit_code` is a
+    // MEASUREMENT, and the row now says so rather than leaving a reader to infer
+    // it from a number that a refusal used to fabricate.
+    expect(s1.dod).toEqual([{ command: "npm run test", status: "ran", exitCode: 0, timedOut: false, tail: "" }]);
 
     const s2 = readReviewLedger(dir, "S2");
     expect(s2.verdicts).toBe(1);              // a real `changes` is
@@ -1093,6 +1208,50 @@ describe("reading a review off the ledger", () => {
 
     expect(readReviewLedger(dir, "S1").dod.map((r) => r.command)).toEqual(["dotnet build", "dotnet test"]);
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  /**
+   * The COMPAT half of #166, and the one that matters most: every run built
+   * before `epic_base` existed has a `task.done` without one, and those runs must
+   * keep reviewing exactly the range they always did — the epic BRANCH.
+   */
+  test("a `task.done` with no `epic_base` reads as null, and null renders the branch (#166)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-ledger-"));
+    // Verbatim the shape a pre-#166 run wrote: a merged commit, no epic base.
+    const rows = [
+      { type: "task.started", payload: { story: "S1", attempt: 1 } },
+      { type: "check.passed", payload: { story: "S1", check: "dod", command: "npm run test", exit_code: 0, detail: "" } },
+      { type: "check.failed", payload: { story: "S1", check: "review", verdict: "error", detail: "claude timed out (…)" } },
+      { type: "task.done", payload: { story: "S1", status: "review", commit: "abc1234" } },
+    ];
+    writeFileSync(join(dir, "events.jsonl"), `${rows.map((r) => JSON.stringify(r)).join("\n")}\n`, "utf8");
+
+    expect(readReviewLedger(dir, "S1").epicBase).toBeNull();
+    rmSync(dir, { recursive: true, force: true });
+
+    const story: PlannedStory = {
+      story: {
+        version: 1, id: "S1", epic: "E1", title: "First story", repo: "app",
+        status: "todo", depends_on: [], touches: ["s1.txt"],
+        acceptance: ["S1 exists"], test_plan: [], evidence: [],
+      },
+      dod: { present: true, commands: ["npm run test"] },
+      text: "---\nid: S1\n---\n",
+      path: "/tmp/S1.md",
+      rel: "03-plan/stories/S1.md",
+      wave: "W1",
+    };
+    const base = {
+      runId: "260906-x", story, repoName: "app", branch: "story/S1", epicBranch: "epic/e1",
+      worktree: "/tmp/wt", conventions: "- one class per file",
+      dodResults: [{ command: "npm run test", status: "ran" as const, exitCode: 0 }],
+    };
+    // Absent, null and "" are the three ways a base can be unknown, and all three
+    // are the same prompt the renderer produced before the field existed.
+    const withoutField = buildReviewerPrompt(base);
+    expect(withoutField).toContain("git diff epic/e1...story/S1");
+    expect(buildReviewerPrompt({ ...base, diffBase: null })).toBe(withoutField);
+    expect(buildReviewerPrompt({ ...base, diffBase: "" })).toBe(withoutField);
   });
 
   test("a later real verdict clears an earlier error", () => {
@@ -1345,7 +1504,14 @@ describe("safety", () => {
     expect(outcome.code).toBe(2);
     const text = outcome.lines.join("\n");
     expect(text).toContain("uncommitted change(s)");
-    expect(text).toContain("Commit or stash them");
+    // The literal, runnable commands — not the verb. A message that names a verb
+    // makes the operator compose the command, and this one has a run-specific
+    // stash message in it.
+    expect(text).toContain(`git -C ${ws.repoDir} stash push -u -m "tldrx ${ws.runId} foreign work"`);
+    expect(text).toContain(`git -C ${ws.repoDir} stash pop`);
+    // And the true reason: the base pre-flight runs in THIS checkout.
+    expect(text).toContain("the base pre-flight runs in this checkout");
+    expect(text).not.toContain("worktree add");
     // Nothing was cut.
     expect(() => git(ws, ["rev-parse", "--verify", "epic/e1"])).toThrow();
     expect(story(ws, "S1")).toContain("status: todo");
@@ -1389,7 +1555,10 @@ describe("safety", () => {
     expect(text).toContain("README.md");
     expect(text).not.toContain(PROJECT_WORK_DIR);
     expect(text).not.toContain(PROJECT_FRAMEWORK_DIR);
-    expect(text).toContain("Commit or stash them");
+    expect(text).toContain(`git -C ${ws.repoDir} stash push -u -m "tldrx ${ws.runId} foreign work"`);
+    expect(text).toContain(`git -C ${ws.repoDir} stash pop`);
+    expect(text).toContain("the base pre-flight runs in this checkout");
+    expect(text).not.toContain("worktree add");
     expect(() => git(ws, ["rev-parse", "--verify", "epic/e1"])).toThrow();
     expect(story(ws, "S1")).toContain("status: todo");
   });
@@ -2430,6 +2599,38 @@ describe("the handoff's Cost line marks an unmetered phase as a lower bound (#13
   });
 
   /**
+   * A turn that declared only a PROVIDER split is no longer counted silent, and
+   * the split does not leak into the separate "host declared N tokens" figure
+   * the `absent` sentence quotes (#159) — exactly the shape every Codex Build
+   * turn has: unmetered, no host `tokens`, a full `inputTokens`/`outputTokens`.
+   */
+  test("a provider split is declared, and it never inflates the host-declared figure (#159)", () => {
+    const ws = workspace(HOSTED);
+    // Silent: no tokens of any kind — keeps the stage `absent` on its own.
+    const silent = { key: "S1", model: null, costUsd: 0, sessionId: null, error: null, outputs: [], metered: false };
+    // A SEPARATE, metered turn that carries a full provider split and no host
+    // `tokens` scalar. If the split leaked into the host-declared figure, this
+    // stage would wrongly claim every declared token sits on a turn that also
+    // carried dollars — but nothing here was ever HOST-declared.
+    const splitOnly = {
+      key: "S1", model: "sonnet", costUsd: 1, sessionId: null, error: null, outputs: [],
+      inputTokens: 200, outputTokens: 20,
+    };
+    const result = phaseCostToDate(ws.runDir, "04-build", "build", 1, [silent, splitOnly]);
+    expect(result.note).toBe(spendReason("absent", 2, 1, 1, 0, "stage"));
+    expect(result.note).not.toContain("sits on a turn that also carried dollars");
+
+    // And an UNMETERED turn whose only declaration is the split is `declared`,
+    // not silent — the shape every Codex Build turn has.
+    const unmeteredSplit = {
+      key: "S1", model: "sonnet", costUsd: 0, sessionId: null, error: null, outputs: [],
+      metered: false, inputTokens: 200, outputTokens: 20,
+    };
+    const onlySplit = phaseCostToDate(ws.runDir, "04-build", "build", 0, [unmeteredSplit]);
+    expect(onlySplit.note).toBe(spendReason("declared", 1, 1, 0, 0, "stage"));
+  });
+
+  /**
    * Both caveats, when both apply — neither one silences the other.
    *
    * An unreadable `run.yml` (#138) says the figure is this invocation's alone; an
@@ -2569,5 +2770,225 @@ describe("stack packs reach the Build reviewer (stack packs design §4.5)", () =
     expect(readFileSync(join(promptDir, "developer-S1-1.md"), "utf8")).not.toContain("## Project skills");
     const calls = readFileSync(argvLog, "utf8").trim().split("\n").map((l) => JSON.parse(l) as string[]);
     expect((calls[0]?.[calls[0].indexOf("--allowedTools") + 1] ?? "").split(",")).not.toContain("Skill");
+  });
+});
+
+/**
+ * #165 — a DoD command the gate REFUSED is never rendered as a measured exit.
+ *
+ * `runDodCommand` throwing `DodCommandRefused` was turned into
+ * `{exitCode: 126}` and three documents printed that fabrication as a
+ * measurement: the handoff's evidence ledger as `[src: $ cmd → exit 126]`, the
+ * review log as `→ exit 126`, the retro log as "exited 126 on the first attempt".
+ * A fourth reader was worse still — `readReviewLedger` DEFAULTED a missing
+ * `exit_code` to 0, so a command that never ran came back GREEN.
+ */
+describe("#165 · a refused DoD command is recorded as refused", () => {
+  /** The story the reviewer prompt is rendered for; nothing about it is under test. */
+  const PLANNED_S1: PlannedStory = {
+    story: {
+      version: 1, id: "S1", epic: "E1", title: "First story", repo: "app",
+      status: "todo", depends_on: [], touches: ["s1.txt"],
+      acceptance: ["S1 exists"], test_plan: [], evidence: [],
+    },
+    dod: { present: true, commands: ["npm run lint"] },
+    text: "---\nid: S1\n---\n",
+    path: "/tmp/S1.md",
+    rel: "03-plan/stories/S1.md",
+    wave: "W1",
+  };
+
+  /** A `StoryOutcome` in the shape the three renderers read. */
+  function outcomeWith(overrides: Partial<StoryOutcome> = {}): StoryOutcome {
+    return {
+      id: "S1", title: "First story", wave: "W1", repo: "app", epic: "E1",
+      epicBranch: "epic/e1", branch: "story/S1", status: "blocked", attempts: 1,
+      dod: [{ command: "npm run test", status: "ran", exitCode: 0, timedOut: false, tail: "" }],
+      commit: null, merged: false, carried: null, conflicts: [], verdict: "n-a",
+      developerError: null, reviewSummary: "", reviewFindings: [],
+      reviewRel: "04-build/log/S1.md", reason: null, rescued: null, cost_usd: 0,
+      ...overrides,
+    };
+  }
+
+  function handoffPartsFor(outcomes: readonly StoryOutcome[]): BuildHandoffParts {
+    return {
+      runId: "260906-x", stageId: "build", model: null, costUsd: 0, budgetUsd: 8,
+      at: "2026-09-06T09:00:00Z", outcomes,
+      epics: [{
+        id: "E1", branch: "epic/e1", repos: ["app"], merged: [], defaultBranches: ["main"],
+        rel: "03-plan/epics/E1.md",
+      }],
+    };
+  }
+
+  test("a refused check recovered from the ledger is NOT read as exit 0", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-ledger-refused-"));
+    writeFileSync(join(dir, "events.jsonl"),
+      `${JSON.stringify({
+        ts: "2026-09-06T09:00:00Z", run: "260906-x", stage: "build", type: "check.failed",
+        actor: "facilitator", cost_usd: 0,
+        payload: { phase: "04-build", check: "dod", story: "S1", command: "npm run lint",
+                   refused: "`npm run lint` is not one of .tldrx/workspace.yml's commands." },
+      })}\n`, "utf8");
+
+    const ledger = readReviewLedger(dir, "S1");
+    const only = ledger.dod[0];
+    expect(only?.status).toBe("refused");
+    expect(only?.exitCode).toBeUndefined();
+    expect(dodGreen({ dod: ledger.dod })).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  /**
+   * The degenerate row the READ-BACK path can build, and the four renderers'
+   * totality over it (wave-3 final review, M1).
+   *
+   * `dodRunner` writes one of two shapes and never this one, so it is
+   * unreachable from any writer. `reviewLedger` is not a writer: a hand-edited
+   * or truncated `events.jsonl` — a `check.failed` carrying `check: "dod"` and a
+   * `command` but NEITHER `exit_code` NOR `refused` — reconstructs
+   * `{status: "ran"}` with no exit code, and the four story-side renderers
+   * interpolated it straight into their sentences as the literal word
+   * `undefined`: `exit undefined` in the review log, the retro and the reviewer
+   * prompt, and `[src: $ cmd → exit undefined]` in the handoff, which is not a
+   * legal `cmd` token at all. The base side has always printed `?` here
+   * (`outcome.ts` `dodFailureReason`, `preflight.ts` `baseFailureLine`), and `?`
+   * is the honest answer: it fails the `digit+` grammar closed rather than
+   * asserting a number nothing measured.
+   */
+  test("a truncated `check.failed` — no exit code, no refusal — never renders `exit undefined`", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-ledger-degenerate-"));
+    writeFileSync(join(dir, "events.jsonl"),
+      `${JSON.stringify({
+        ts: "2026-09-06T09:00:00Z", run: "260906-x", stage: "build", type: "check.failed",
+        actor: "facilitator", cost_usd: 0,
+        payload: { phase: "04-build", check: "dod", story: "S1", command: "npm run lint" },
+      })}\n`, "utf8");
+
+    const recovered = readReviewLedger(dir, "S1").dod;
+    rmSync(dir, { recursive: true, force: true });
+    const only = recovered[0];
+    expect(only?.status).toBe("ran");
+    expect(only?.exitCode).toBeUndefined();
+
+    const outcome = outcomeWith({ dod: recovered, status: "blocked" });
+    const handoff = renderBuildHandoff(handoffPartsFor([outcome]));
+    const log = renderReviewLog(outcome);
+    const retro = storyRetroLines(outcome, "260906-x").join("\n");
+    const prompt = buildReviewerPrompt({
+      runId: "260906-x", story: PLANNED_S1, repoName: "app", branch: "story/S1",
+      epicBranch: "epic/e1", worktree: "/tmp/wt", conventions: "- one class per file",
+      dodResults: recovered,
+    });
+
+    for (const text of [handoff, log, retro, prompt]) expect(text).not.toContain("undefined");
+    // Each document's own sentence, so this cannot pass on a shared substring.
+    expect(handoff).toContain("[src: $ npm run lint → exit ?]");
+    expect(log).toContain("- `npm run lint` → exit ?");
+    expect(retro).toContain("dod `npm run lint` exited ? on the first attempt");
+    expect(prompt).toContain("- `npm run lint` → exit ?");
+    // And `?` is not a legal `cmd` token, so the handoff's row fails the
+    // grammar closed instead of passing an invented exit code off as measured.
+    const row = handoff.split("\n").find((line) => line.includes("npm run lint")) ?? "";
+    expect(endsWithToken(row)).toBe(false);
+  });
+
+  test("a pre-#165 `check.failed` with an exit code still reads as a measurement", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-ledger-old-"));
+    writeFileSync(join(dir, "events.jsonl"),
+      `${JSON.stringify({
+        ts: "2026-09-06T09:00:00Z", run: "260906-x", stage: "build", type: "check.failed",
+        actor: "facilitator", cost_usd: 0,
+        payload: { phase: "04-build", check: "dod", story: "S1", command: "npm run lint",
+                   exit_code: 126, detail: "needs a shell" },
+      })}\n`, "utf8");
+
+    const only = readReviewLedger(dir, "S1").dod[0];
+    expect(only?.status).toBe("ran");
+    expect(only?.exitCode).toBe(126);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("the three documents print `refused:` and never an `[src: $ … → exit 126]`", () => {
+    const outcome = outcomeWith({
+      dod: [{ command: "npm run lint", status: "refused", timedOut: false, tail: "",
+              refusedBecause: "`npm run lint` is not one of .tldrx/workspace.yml's commands." }],
+      status: "blocked",
+    });
+
+    const handoff = renderBuildHandoff(handoffPartsFor([outcome]));
+    const log = renderReviewLog(outcome);
+    const retro = storyRetroLines(outcome, "260906-x").join("\n");
+
+    for (const text of [handoff, log, retro]) {
+      expect(text).not.toContain("exit 126");
+      expect(text).not.toContain("exited 126");
+      // The MARKER the three renderers write, not the bare English word: a
+      // lowercase "refused" would false-positive on any innocent prose that
+      // happened to use it (AGENTS.md §8).
+      expect(text).toContain("REFUSED");
+    }
+    // The handoff's row still ends in a legal `[src: …]` token — the grammar is
+    // the gate, and `$ cmd → exit n` is not available to a command that never ran.
+    const row = handoff.split("\n").find((line) => line.includes("npm run lint")) ?? "";
+    expect(endsWithToken(row)).toBe(true);
+  });
+
+  /**
+   * The bundle is the contract read back from the host, so a refusal has to
+   * survive it as a refusal — including the case where the gate's own sentence
+   * is the thing that went missing.
+   *
+   * Keying the written row off `refusedBecause` rather than off `status` wrote
+   * NEITHER `exit_code` nor `refused` for such a row, and it came back
+   * `{status: "ran"}` with no exit code: safe for greenness (`undefined === 0`
+   * is false) but a named refusal downgraded to an unexplained non-green, which
+   * is absent-with-reason losing its reason.
+   */
+  test("a refusal whose reason went missing still round-trips through the bundle as a refusal", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-bundle-refused-"));
+    const key = reviewBundleKeyOf("build", "S1");
+    writeReviewBundle({
+      runDir: dir, root: dir, runId: "260906-x", phaseId: "04-build", stageId: "build",
+      storyId: "S1", repo: "app", branch: "story/S1", epicBranch: "epic/e1",
+      worktree: join(dir, "wt"), attempt: 1, model: null, effort: null,
+      budgetUsd: 1, reviewerCapUsd: 1, preparedAt: "2026-09-06T09:00:00Z",
+      work: {
+        commit: "abc1234",
+        dod: [{ command: "npm run lint", status: "refused", timedOut: false, tail: "" }],
+        why: "its review is outstanding",
+      },
+      prompt: "# prompt\n",
+      lines: [],
+    });
+
+    const only = reviewWorkFromBundle(dir, key)?.dod[0];
+    expect(only?.status).toBe("refused");
+    expect(only?.refusedBecause).toBe(DOD_REFUSAL_FALLBACK);
+    expect(only?.exitCode).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  /**
+   * The reviewer prompt's refused line, pinned here rather than in the golden.
+   *
+   * A red DoD blocks the story at `buildHalf` BEFORE a reviewer is spawned
+   * (`build.ts:1069`), so no end-to-end capture can reach this rendering — it is
+   * reachable only through a resumed review whose ledger already carries a
+   * refused row.
+   */
+  test("the reviewer prompt says REFUSED rather than inventing an exit", () => {
+    const prompt = buildReviewerPrompt({
+      runId: "260906-x", story: PLANNED_S1, repoName: "app", branch: "story/S1", epicBranch: "epic/e1",
+      worktree: "/tmp/wt", conventions: "- one class per file",
+      dodResults: [
+        { command: "npm run test", status: "ran", exitCode: 0 },
+        { command: "npm run lint", status: "refused", refusedBecause: "it needs a shell" },
+      ],
+    });
+    expect(prompt).toContain("- `npm run test` → exit 0");
+    expect(prompt).toContain("- `npm run lint` → REFUSED, never ran");
+    expect(prompt).not.toContain("`npm run lint` → exit");
   });
 });

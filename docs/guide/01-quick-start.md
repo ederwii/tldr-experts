@@ -30,7 +30,9 @@ tldrx init                 # detect repos, map the code, write .tldrx/, ask only
 tldrx interview --init     # answer what detection could not
 ```
 
-`init` is deterministic and offline: filesystem and git only, no model, no network. It
+`init` is deterministic: filesystem, git, and your repo's own build/test commands, each run
+once so `.tldrx/workspace.yml` records whether they work (`--no-probe` skips them). No model,
+and tldrx itself sends nothing anywhere. It
 writes `.tldrx/workspace.yml`, the code map under `.tldrx/map/`, `.tldrx/init-handoff.md`,
 `.tldrx/init-questions.md` (only real gaps), `process.yml`, an empty `facts.yml`, and it
 seeds the five role experts. Re-running regenerates the detection output and keeps

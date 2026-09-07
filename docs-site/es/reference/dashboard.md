@@ -53,6 +53,10 @@ tiene más de 30 minutos, o en cualquier `--prepare` — así que un rojo que ac
 no es un veredicto que el archivo repita para siempre. Una fila verde no se vuelve a medir
 por vieja: está clavada al sha base sobre el que se tomó, y otra base es otra pregunta.
 
+Una fila que la compuerta se negó a correr dice `REFUSED` donde va el código de salida, con la
+frase de la propia compuerta al lado. No se lanzó ningún proceso, así que no hay código de
+salida que dibujar, y la página lleva esa ausencia en vez del `126` que antes se inventaba.
+
 ## La tira Now responde tres preguntas
 
 ¿Está esperando a una **persona** ahorita?, ¿hay algo **roto o callado**?, y ¿cuánto ha

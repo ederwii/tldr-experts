@@ -255,6 +255,69 @@ ${stage("01-what", "what", "awaiting_gate", "pending", [task("t1", 2.4)])}
   });
 });
 
+describe("#159 — a provider split declares tokens the host scalar never sees", () => {
+  /**
+   * The exact shape every Codex Build turn has: unmetered, no host `tokens`,
+   * a full provider split. Before the fix `spendBasisOf` read only the host
+   * scalar, so this counted as SILENT — nothing declared — and a whole
+   * Codex-driven Build stage read `absent` over rows that hold the tokens.
+   */
+  test("a costless turn with a provider split is `declared`, not `absent`", () => {
+    const runYaml = `version: 1
+run: ${RUN_ID}
+title: "A Codex Build stage: no host tokens, a full provider split"
+scope: feature
+workflow: feature
+repos: [aparece]
+status: awaiting_gate
+attended_by: host
+cursor: {phase: 01-what, stage: what, task: null}
+budget: {ceiling_usd: 25.0, spent_usd: 0.0, per_agent_max_usd: 3.0}
+phases:
+${stage("01-what", "what", "awaiting_gate", "pending", [
+      "{id: t1, status: done, expert: developer, model: sonnet, cost_usd: null, metered: false, "
+        + "input_tokens: 100, output_tokens: 10, error: null}",
+    ])}
+`;
+    const { run } = modelOf({ runYaml });
+    expect(run.spend.basis).not.toBe("absent");
+    expect(run.spend.basis).toBe("declared");
+    expect(run.spend.silentTasks).toBe(0);
+    expect(run.spend.costlessTokens).toBe(110);
+    // The sentence now says what actually happened: the turn declared no HOST
+    // tokens at all, only a provider-measured split.
+    expect(run.spend.reason).toContain("host-declared or provider-reported tokens");
+  });
+
+  /**
+   * `run.hostTokens`/`run.spend.hostTokens` are the OTHER currency (#22): the
+   * scope's own `tokens` scalar, summed raw. A provider split must never
+   * inflate that figure — it is a measurement of an unmetered turn, not
+   * something the host declared.
+   */
+  test("the host-token sum ignores the split — it counts only the `tokens` scalar", () => {
+    const runYaml = `version: 1
+run: ${RUN_ID}
+title: "A Codex Build stage: no host tokens anywhere, only a provider split"
+scope: feature
+workflow: feature
+repos: [aparece]
+status: awaiting_gate
+attended_by: host
+cursor: {phase: 01-what, stage: what, task: null}
+budget: {ceiling_usd: 25.0, spent_usd: 1.0, per_agent_max_usd: 3.0}
+phases:
+${stage("01-what", "what", "awaiting_gate", "pending", [
+      "{id: t1, status: done, expert: developer, model: sonnet, cost_usd: 1.0, "
+        + "input_tokens: 200, output_tokens: 20, error: null}",
+    ])}
+`;
+    const { run } = modelOf({ runYaml });
+    expect(run.hostTokens).toBe(0);
+    expect(run.spend.hostTokens).toBe(0);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // 2 · Staleness — when did anything last happen, and how long ago
 // ---------------------------------------------------------------------------

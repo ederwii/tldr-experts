@@ -31,6 +31,15 @@ export interface InitOptions {
    */
   readonly stack: readonly string[];
   readonly provider: ProviderPreference;
+  /**
+   * Run each detected build/test/typecheck command once and record the outcome under
+   * `command_probes:` (#168). `--no-probe` turns it off, and the skip is written into
+   * every row as its reason rather than leaving the key absent.
+   *
+   * Required, not defaulted: `init` writing commands it never ran is the bug this
+   * fixes, and an optional field would let a new caller reintroduce it silently.
+   */
+  readonly probe: boolean;
 }
 
 export function isMethodology(value: string): value is Methodology {

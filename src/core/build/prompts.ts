@@ -20,7 +20,8 @@ import { PROJECT_SKILLS_HEADING } from "../experts/stackPacks.ts";
 import { MAX_PAYLOAD_BYTES } from "../events/Event.ts";
 import { fenceFor, renderInputs, type PromptInput } from "../facilitator/prompt.ts";
 import { SRC_GRAMMAR_HEADING, renderSrcGrammarContract } from "../text/srcGrammarContract.ts";
-import { diffCommand } from "./git.ts";
+import { reviewDiffCommand } from "./git.ts";
+import { dodRefused } from "./outcome.ts";
 import type { PlannedEpic, PlannedStory } from "./plan.ts";
 
 /**
@@ -264,7 +265,18 @@ export interface ReviewerPromptParts {
   readonly epicBranch: string;
   readonly worktree: string;
   readonly conventions: string;
-  readonly dodResults: readonly { readonly command: string; readonly exitCode: number }[];
+  /**
+   * What the facilitator's own DoD run found. `exitCode` is absent on a row the
+   * gate REFUSED — nothing ran, so there is no exit to quote, and quoting a
+   * fabricated one told the reviewer a command had failed when it had never
+   * started (#165).
+   */
+  readonly dodResults: readonly {
+    readonly command: string;
+    readonly exitCode?: number;
+    readonly status?: "ran" | "refused";
+    readonly refusedBecause?: string;
+  }[];
   /**
    * Is the third verdict still on the table for this story? (design §B.4)
    *
@@ -303,6 +315,15 @@ export interface ReviewerPromptParts {
    * no expert content before this existed and a switched-off workspace keeps those bytes.
    */
   readonly stackChecks?: string | null;
+  /**
+   * What the reviewer's `git diff` starts FROM — the epic's sha immediately
+   * before this story was merged into it (#166).
+   *
+   * ADDITIVE and optional. Absent, null or empty ⇒ `epicBranch`, which is
+   * byte-for-byte the prompt this rendered before the field existed: a story
+   * reviewed out of a bundle written by an older binary reads exactly as it did.
+   */
+  readonly diffBase?: string | null;
 }
 
 /**
@@ -405,7 +426,9 @@ function stackChecksSection(body: string | null | undefined): readonly string[] 
  */
 export function buildReviewerPrompt(parts: ReviewerPromptParts): string {
   const { story } = parts.story;
-  const diff = diffCommand(parts.epicBranch, parts.branch);
+  // The base is derived in `reviewDiffCommand` and nowhere else, so this prompt
+  // and the bundle's recorded `diff` cannot drift (#166).
+  const diff = reviewDiffCommand(parts.diffBase, parts.epicBranch, parts.branch);
   const lines = [
     `# Review — story ${story.id} — run ${parts.runId}`,
     "",
@@ -416,7 +439,14 @@ export function buildReviewerPrompt(parts: ReviewerPromptParts): string {
     "",
     "## Objective",
     "",
-    `Judge the diff of \`${parts.branch}\` against the acceptance criteria of ` +
+    // NOT "the diff of `<branch>`". The range is `<diffBase>...<branch>`, and on a
+    // re-review `diffBase` is the epic as it was immediately before THAT attempt
+    // merged (`epicShaBefore`, executors/build.ts) — so it shows that attempt's
+    // delta, not the story's whole diff. One sentence for every round: making it
+    // true only for round ≥ 2 would need a second spelling of the objective, and
+    // two spellings of one sentence is how they stop agreeing.
+    `Judge the diff the command below prints — on a re-review, what changed since the ` +
+      `previous attempt merged rather than the whole story — against the acceptance criteria of ` +
       `**${story.id} · ${story.title}** and the conventions below.`,
     "",
     "Read the diff with, from this working directory:",
@@ -433,7 +463,11 @@ export function buildReviewerPrompt(parts: ReviewerPromptParts): string {
     "",
     ...(parts.dodResults.length === 0
       ? ["- (no dod commands)"]
-      : parts.dodResults.map((r) => `- \`${r.command}\` → exit ${String(r.exitCode)}`)),
+      : parts.dodResults.map((r) => (dodRefused(r)
+        ? `- \`${r.command}\` → REFUSED, never ran`
+        // `?? "?"` — the base side's spelling, for the row only a truncated
+        // `events.jsonl` can produce (`ran`, no exit code).
+        : `- \`${r.command}\` → exit ${String(r.exitCode ?? "?")}`))),
     "",
     "Do not re-run them. They passed; that is why you are being asked.",
     "",

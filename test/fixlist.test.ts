@@ -224,6 +224,38 @@ describe("the fixlist verdict, through the host handshake", () => {
     expect(review[1]?.payload.source).toBe("host");
   }, 60_000);
 
+  /**
+   * The two artifacts of ONE review name the SAME range (#166 follow-up).
+   *
+   * The reviewer that produced these findings was handed `git diff
+   * <epic_base>...<branch>` — the epic as it was immediately before this story
+   * merged. The fix list rendered `git diff <epic_branch>...<branch>` instead,
+   * which by then resolves to NOTHING: the story is already merged, so the
+   * developer sent to fix the findings was told to run a command that outputs
+   * an empty diff, in a document whose whole job is saying what was reviewed.
+   * Both artifacts go through `reviewDiffCommand`, so there is one derivation of
+   * the base and they cannot drift again (AGENTS.md §7).
+   */
+  test("the fix list names the range the REVIEWER was given, not the merged-out one", async () => {
+    const ws = workspace();
+    await handOffReview(ws);
+    // The base recorded for this very review, off the bundle the reviewer read.
+    const pending = JSON.parse(readFileSync(
+      join(reviewDir(ws, "S1"), "pending.json"), "utf8",
+    )) as { review?: { epic_base?: string; diff?: string } };
+    const base = pending.review?.epic_base ?? "";
+    expect(base).toMatch(/^[0-9a-f]{40}$/);
+
+    await fixlistRound(ws, "2026-08-29T10:00:00Z");
+
+    const text = readFileSync(fixlistPath(ws, "S1", 1), "utf8");
+    expect(text).toContain(`- Diff reviewed: \`git diff ${base}...story/${ws.runId}/S1\``);
+    // And it is the reviewer's own line, byte for byte — the assertion above
+    // could pass over a second derivation that happened to agree today.
+    expect(text).toContain(`- Diff reviewed: \`${pending.review?.diff ?? "NOPE"}\``);
+    expect(text).not.toContain("git diff epic/e1...");
+  }, 60_000);
+
   test("`defer-with-log` reaches the owner through retro.md, `fix-now` does not", async () => {
     const ws = workspace();
     await handOffReview(ws);

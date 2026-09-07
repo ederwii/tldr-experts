@@ -1092,7 +1092,12 @@ export function dashPreflightSection(run: RunModel): string {
     return `<tr><td class="mono">${dashText(row.command)}</td>`
       + `<td>${dashText(row.repo)}</td>`
       + `<td class="mono">${dashText(at)}</td>`
-      + `<td class="num">${String(row.exitCode)}${row.timedOut ? " (timed out)" : ""}</td>`
+      // An absent exit code is drawn as the same marker the handoff, the review
+      // log and the retro use for it — never a number, and never a `0`, which
+      // would read as "green on base" for a command that never ran (#165). The
+      // `tail` column carries the gate's own sentence beside it.
+      + `<td class="num">${row.exitCode === null ? "REFUSED" : String(row.exitCode)}`
+      + `${row.timedOut ? " (timed out)" : ""}</td>`
       + `<td><span class="chip" data-st="${dashEscape(tone)}">${dashText(row.status)}</span></td>`
       + `<td class="faint">${dashText(row.tail)}</td></tr>`;
   }).join("");

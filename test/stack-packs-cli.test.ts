@@ -35,7 +35,11 @@ async function tldrx(cwd: string, ...args: string[]): Promise<Run> {
 }
 
 function options(root: string): InitOptions {
-  return { root, out: root, interview: false, methodology: null, mcp: false, stack: [], provider: "static" };
+  // `probe: false`: the fixture's scripts are real, and this file is not testing them.
+  return {
+    root, out: root, interview: false, methodology: null, mcp: false, stack: [], provider: "static",
+    probe: false,
+  };
 }
 
 describe("tldrx expert packs", () => {

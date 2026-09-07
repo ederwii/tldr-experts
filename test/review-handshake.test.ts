@@ -32,6 +32,7 @@ import { attendRun } from "../src/core/run/attend.ts";
 import { reject } from "../src/core/run/gates.ts";
 import { REVIEW_DIR, reviewBundles } from "../src/core/run/prepared.ts";
 import { REVIEW_SCHEMA } from "../src/core/build/prompts.ts";
+import { UNRECORDED_BASE } from "../src/core/build/reviewRound.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
 import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
@@ -129,6 +130,24 @@ function answerReview(ws: BuildWorkspace, id: string, envelope: unknown): void {
   writeFileSync(join(reviewDir(ws, id), "result.json"), `${JSON.stringify(envelope)}\n`, "utf8");
 }
 
+/**
+ * Rewrite the run's ledger as a run built BEFORE #166 wrote it: every `task.done`
+ * loses its `epic_base`.
+ *
+ * The events are otherwise this run's own, so the shape is real rather than
+ * hand-typed — the only difference from a genuine legacy run is the one key.
+ */
+function stripEpicBase(ws: BuildWorkspace): void {
+  const path = join(ws.runDir, "events.jsonl");
+  const rewritten = readFileSync(path, "utf8").split("\n").map((line) => {
+    if (line.trim() === "") return line;
+    const event = JSON.parse(line) as { payload?: Record<string, unknown> };
+    if (event.payload !== undefined) delete event.payload.epic_base;
+    return JSON.stringify(event);
+  });
+  writeFileSync(path, rewritten.join("\n"), "utf8");
+}
+
 /** Send the stage back so the next invocation re-enters it (the operator's move). */
 function reenter(ws: BuildWorkspace, note: string): void {
   reject(RunStore.open(ws.runDir), { root: ws.root, actor: "alan", at: "2026-08-29T10:00:00Z", note });
@@ -198,7 +217,10 @@ describe("--prepare on a story awaiting review", () => {
 
     const pending = JSON.parse(readFileSync(join(reviewDir(ws, "S1"), "pending.json"), "utf8")) as {
       expert: string; role: string; story: string; result_schema: unknown;
-      review: { diff: string; commit: string; branch: string; epic_branch: string; dod: unknown[] };
+      review: {
+        diff: string; commit: string; branch: string; epic_branch: string; epic_base?: string;
+        dod: unknown[];
+      };
     };
     expect(pending.expert).toBe("reviewer");
     expect(pending.role).toBe("reviewer");
@@ -207,7 +229,11 @@ describe("--prepare on a story awaiting review", () => {
     expect(pending.result_schema).toEqual(REVIEW_SCHEMA as unknown as Record<string, unknown>);
     expect(pending.review.epic_branch).toBe("epic/e1");
     expect(pending.review.branch).toBe(`story/${ws.runId}/S1`);
-    expect(pending.review.diff).toContain("epic/e1");
+    // The diff starts from the epic's SHA, not its branch: this story is already
+    // merged, so `git diff epic/e1...story/…` is empty (#166). `epic_branch` is
+    // still recorded — it says which branch this landed on — and it is no longer
+    // what the diff is computed from.
+    expect(pending.review.diff).toBe(`git diff ${pending.review.epic_base ?? "NOPE"}...story/${ws.runId}/S1`);
     expect(pending.review.diff).toContain(`story/${ws.runId}/S1`);
     // Recovered from the ledger, not re-run: the DoD went green in the cycle that
     // produced the commit, and that fact has not changed.
@@ -233,7 +259,61 @@ describe("--prepare on a story awaiting review", () => {
     const bundled = readFileSync(join(reviewDir(ws, "S1"), "prompt.md"), "utf8");
     const withoutStatus = (text: string): string => text.replace(/^status: \w+$/m, "status: <state>");
     expect(withoutStatus(bundled)).toBe(withoutStatus(spawned));
-    expect(bundled).toContain(`git diff epic/e1...story/${ws.runId}/S1`);
+    // A SHA, not `epic/e1` — and the same sha the spawned reviewer was given,
+    // which the byte-identity above has just proved (#166).
+    expect(bundled).toMatch(new RegExp(`git diff [0-9a-f]{7,40}\\.\\.\\.story/${ws.runId}/S1`));
+  }, 60_000);
+
+  test("the bundle records the epic base, so `--commit --review` reviews the same range", async () => {
+    const ws = workspace(ONE_STORY);
+    await stallAtReview(ws);
+
+    await next(ws, { mode: "prepare", at: "2026-08-29T10:05:00Z" });
+
+    const pending = JSON.parse(readFileSync(
+      join(ws.runDir, ".agent", "build", "S1", "review", "pending.json"), "utf8",
+    )) as { review?: { epic_base?: string; diff?: string } };
+
+    // Recovered off the ledger, not re-derived: `git diff epic/e1...story/…` is
+    // empty by now, so a bundle that named the branch would hand the host an
+    // empty range to certify (#166).
+    // A FULL 40-hex sha, not an abbreviation: this is a durable record, and a
+    // short sha is a prefix that can go ambiguous as the repo grows — at which
+    // point `git diff <base>...<branch>` fails for the reviewer holding it.
+    expect(pending.review?.epic_base).toMatch(/^[0-9a-f]{40}$/);
+    expect(pending.review?.diff).toContain(pending.review?.epic_base ?? "NOPE");
+
+    // And the base survives the round trip: `--commit --review` reads it back OFF
+    // THE BUNDLE and records it again, so the next door down the line recovers
+    // the same range rather than re-deriving an empty one.
+    answerReview(ws, "S1", { verdict: "approve", summary: "read the diff by hand", findings: [] });
+    await next(ws, { mode: "commit", review: true, at: "2026-08-29T10:20:00Z" });
+    const done = events(ws).filter((e) => e.type === "task.done" && e.payload.story === "S1");
+    expect(done.at(-1)?.payload.status).toBe("done");
+    expect(done.at(-1)?.payload.epic_base).toBe(pending.review?.epic_base);
+  }, 60_000);
+
+  test("a bundle with no recorded base SAYS the fallback range is empty (#166)", async () => {
+    const ws = workspace(ONE_STORY);
+    await stallAtReview(ws);
+    // A run built before `epic_base` existed. The fallback is deliberate — it
+    // renders the bytes those runs were reviewed against — but for an
+    // already-merged story `git diff epic/e1...story/…` resolves to NOTHING, and
+    // the operator has to be told that rather than left to find out.
+    stripEpicBase(ws);
+
+    const prepared = await next(ws, { mode: "prepare", at: "2026-08-29T10:05:00Z" });
+
+    const said = prepared.lines.join("\n");
+    expect(said).toContain(UNRECORDED_BASE);
+    expect(said).toContain("epic/e1");
+    expect(said).toContain("EMPTY");
+    // And the record still does not invent one.
+    const pending = JSON.parse(readFileSync(
+      join(reviewDir(ws, "S1"), "pending.json"), "utf8",
+    )) as { review?: { epic_base?: string; diff?: string } };
+    expect(pending.review?.epic_base).toBeUndefined();
+    expect(pending.review?.diff).toBe(`git diff epic/e1...story/${ws.runId}/S1`);
   }, 60_000);
 
   test("--prepare --review names the story with no merged commit rather than preparing one", async () => {
@@ -502,6 +582,41 @@ describe("the live run's shape", () => {
 
     expect(spawns(ws)).toEqual([]);
     expect(story(ws, "S1")).toContain("status: done");
+  }, 60_000);
+
+  test("a re-review recovers the epic base from the ledger rather than diffing an empty range", async () => {
+    const ws = workspace(ONE_STORY);
+    const promptDir = join(ws.root, "prompts");
+    process.env.FAKE_BUILD_PROMPT_DIR = promptDir;
+    // The first reviewer errored; `reenter` makes the stage re-enterable, and a
+    // bare `tldrx next` re-runs the REVIEW only (`rereview`) off the ledger.
+    await stallAtReview(ws);
+
+    const again = await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    const first = readFileSync(join(promptDir, "reviewer-S1-1.md"), "utf8");
+    const second = readFileSync(join(promptDir, "reviewer-S1-2.md"), "utf8");
+    const shaOf = (text: string): string => /git diff (\S+)\.\.\./.exec(text)?.[1] ?? "";
+    // A sha, not `epic/e1` — the range the SECOND reviewer is handed has to be
+    // the one the first was handed, and by now the branch form is empty (#166).
+    expect(shaOf(first)).toMatch(/^[0-9a-f]{40}$/);
+    expect(shaOf(second)).toBe(shaOf(first));
+    expect(shaOf(second)).not.toBe("");
+    // The other direction of the warning: a base that IS recorded says nothing.
+    // Without this, the two tests above could pass over a line printed always.
+    expect(again.lines.join("\n")).not.toContain(UNRECORDED_BASE);
+  }, 60_000);
+
+  test("a re-review with no recorded base SAYS the fallback range is empty (#166)", async () => {
+    const ws = workspace(ONE_STORY);
+    await stallAtReview(ws);
+    stripEpicBase(ws);
+
+    const again = await next(ws, { at: "2026-08-29T10:05:00Z" });
+
+    const said = again.lines.join("\n");
+    expect(said).toContain(UNRECORDED_BASE);
+    expect(said).toContain("EMPTY");
   }, 60_000);
 
   test("a re-prepare KEEPS an answer already in the bundle, and says so", async () => {

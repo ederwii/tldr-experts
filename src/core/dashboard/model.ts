@@ -50,6 +50,7 @@ import {
 import { DEFAULT_ECONOMY, DEFAULT_ON_HOST_TOKENS_EXCEED } from "../budget/RunBudget.ts";
 import { MAX_ATTEMPTS } from "../budget/remainingWork.ts";
 import { spendBasisOf } from "../budget/spendBasis.ts";
+import { turnTokens } from "../budget/turnTokens.ts";
 import { hasStarted, resolveDependencies, type DependencyInput, type ResolvedRun } from "../run/dependencies.ts";
 import { isMovable, waitingFor, type Waiting, type WaitingKind } from "../run/waiting.ts";
 import { openBlocks, parseHandoff, parseQuestions } from "../text/index.ts";
@@ -263,12 +264,23 @@ export interface PreflightRowModel {
   readonly baseRef: string;
   /** Short sha of `baseRef` when it was measured; `""` when git had no answer. */
   readonly baseSha: string;
-  readonly exitCode: number;
+  /**
+   * The measured exit, or `null` when there is none to report.
+   *
+   * `null` is the ABSENCE, not a zero and not a failure: the gate refused to run
+   * the command, so nothing spawned (#165). The page carries the absence rather
+   * than inventing a number, and `status`/`refusedBecause` beside it say why.
+   * ADDITIVE — a widened type, no field's meaning moved, so
+   * `DASHBOARD_MODEL_VERSION` does not bump.
+   */
+  readonly exitCode: number | null;
   readonly timedOut: boolean;
   /** `ok` | `failed` | `unmeasured`. */
   readonly status: string;
   /** Last meaningful line of the output — the operator's first clue. */
   readonly tail: string;
+  /** Present only on a REFUSED probe: the gate's own sentence, verbatim. */
+  readonly refusedBecause?: string;
 }
 
 /**
@@ -615,8 +627,12 @@ export interface SpendModel {
    */
   readonly hostTokens: number;
   /**
-   * The subset of `hostTokens` declared BY a costless turn — the only host-side
-   * figure the dollars do not already cover.
+   * Tokens KNOWN for a costless turn — host-declared (`turn.tokens`) or
+   * provider-reported (`turnTokens`'s split, #159) — the only figure the
+   * dollars do not already cover. NOT a subset of `hostTokens` above: a
+   * provider split counts here without ever being added to that host-only
+   * sum (`budget/turnTokens.ts` is where the two are read together, never
+   * merged into one currency).
    */
   readonly costlessTokens: number;
   /** Costless turns that declared nothing at all: no dollars, no tokens. */
@@ -1188,7 +1204,11 @@ function toSpendModel(
   hostTokens: number,
 ): SpendModel {
   const counted = spendBasisOf(
-    tasks.map((task) => ({ costUsd: task.cost_usd, metered: task.metered, tokens: task.tokens })),
+    // `tokens` is `turnTokens(task)` (#159): the host scalar when the task
+    // declared one, else the provider's own split when both sides of it are
+    // positive. `hostTokens` above stays the raw `task.tokens ?? 0` sum — the
+    // two currencies are never mixed in the same figure.
+    tasks.map((task) => ({ costUsd: task.cost_usd, metered: task.metered, tokens: turnTokens(task) })),
     hostTokens,
   );
   return {
@@ -1351,10 +1371,14 @@ function toPreflightModel(loaded: LoadedRun): PreflightModel | null {
       command: row.command,
       baseRef: row.baseRef,
       baseSha: row.baseSha,
-      exitCode: row.exitCode,
+      // The absence is CARRIED, never filled in: a row the gate refused has no
+      // exit code, and `?? 0` here would draw a green base for a command that
+      // never ran (#165).
+      exitCode: row.exitCode ?? null,
       timedOut: row.timedOut,
       status: row.status,
       tail: row.tail,
+      ...(row.refusedBecause === undefined ? {} : { refusedBecause: row.refusedBecause }),
     })),
   };
 }

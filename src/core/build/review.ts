@@ -17,6 +17,7 @@
 import { isRecord } from "../schemas/validation.ts";
 import { SRC_GRAMMAR_HEADING } from "../text/srcGrammarContract.ts";
 import { parseFixFindings, type FixFinding } from "./fixlist.ts";
+import { DOD_REFUSAL_FALLBACK, dodRefused } from "./outcome.ts";
 import type { StoryOutcome, Verdict } from "./outcome.ts";
 
 export interface Review {
@@ -401,8 +402,15 @@ export function renderReviewLog(outcome: StoryOutcome): string {
             "run's event log, so it is not restated here",
           )
       : outcome.dod.map((r) =>
-          `- \`${r.command}\` → exit ${String(r.exitCode)}${r.timedOut ? " (timed out)" : ""}` +
-          (r.exitCode === 0 ? "" : ` — ${r.tail}`),
+          // A refused command produced no exit code to print — the gate never
+          // ran it, and printing a number here made a fabricated 126 read as a
+          // measurement (#165).
+          dodRefused(r)
+            ? `- \`${r.command}\` → REFUSED, never ran — ${r.refusedBecause ?? DOD_REFUSAL_FALLBACK}`
+            // `?? "?"` — the base side's spelling, for the row only a
+            // truncated `events.jsonl` can produce (`ran`, no exit code).
+            : `- \`${r.command}\` → exit ${String(r.exitCode ?? "?")}${r.timedOut ? " (timed out)" : ""}`
+              + (r.exitCode === 0 ? "" : ` — ${r.tail}`),
         )),
     "",
     "## Summary",

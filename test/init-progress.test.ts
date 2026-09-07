@@ -278,6 +278,14 @@ describe("`--quiet` and `--ui` on the command line", () => {
     expect(() => parseInitArgs(["--ui", "nope"])).toThrow(/--ui expects/);
     expect(() => parseInitArgs(["--ui"])).toThrow(/--ui needs a value/);
   });
+
+  test("probing is ON by default and `--no-probe` is what turns it off (#168)", () => {
+    // The default is the whole point: `init` writing a `build:` it never ran is the bug,
+    // so the measurement is what you get for free and opting out is what you type.
+    expect(parseInitArgs([]).probe).toBe(true);
+    expect(parseInitArgs(["--no-probe"]).probe).toBe(false);
+    expect(parseInitArgs(["--no-interview"]).probe).toBe(true);
+  });
 });
 
 describe("tldrx init reports every step as it happens", () => {
@@ -391,6 +399,11 @@ describe("the walk never enters a vendored or generated tree", () => {
 
 function options(root: string, overrides: Partial<InitOptions> = {}): InitOptions {
   return {
-    root, out: root, interview: true, methodology: null, mcp: false, stack: [], provider: "static", ...overrides,
+    // `probe: false` — these fixtures hold real `package.json` scripts (`vite build`,
+    // `vitest run`), and a probe would spawn npm inside a temp dir and measure the
+    // box's cache. The probe's own behaviour is tested against a fake runner, and the
+    // default (`probe: true`) is pinned on `parseInitArgs`.
+    root, out: root, interview: true, methodology: null, mcp: false, stack: [], provider: "static",
+    probe: false, ...overrides,
   };
 }

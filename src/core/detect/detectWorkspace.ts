@@ -1,8 +1,10 @@
 /**
  * `tldrx init` step 1: detect (concept §4.1).
  *
- * Deterministic and offline. Reads the filesystem and runs `git`; never an LLM,
- * never the network, never a build.
+ * Deterministic. Reads the filesystem and runs `git`; never an LLM, never the
+ * network of its own. It runs a BUILD only when a caller asks for one: `options.probe`
+ * is how `tldrx init` gets `command_probes:` (#168), and every other caller — `map`,
+ * `stack-packs` — omits it and starts nothing.
  */
 import { join } from "node:path";
 import { detectCi } from "./ci.ts";
@@ -13,6 +15,7 @@ import { detectStack } from "./stack.ts";
 import { detectOverlays } from "./overlays.ts";
 import { detectSkills } from "./skills.ts";
 import { countCodeFiles } from "./codeFiles.ts";
+import { probeCommands, PROBE_TIMEOUT_MS } from "./probeCommands.ts";
 import { scoreConfidence } from "./confidence.ts";
 import { repoSlug, uniqueSlug } from "./repoSlug.ts";
 import { toPosix } from "./walk.ts";
@@ -34,10 +37,36 @@ export interface DetectProgress {
   readonly repoDone?: (repo: DetectedRepo) => void;
 }
 
+/**
+ * Probe the detected commands, and stamp the rows with THIS clock (#168).
+ *
+ * Absent means no probing at all and an empty `commandProbes` — which is what `map`
+ * and `stack-packs` want, because neither is writing a fresh detection record and
+ * neither should be starting builds behind an operator's back. Only `tldrx init`
+ * passes it.
+ *
+ * `at` is REQUIRED when probing rather than defaulted from `new Date()` here: the
+ * same `init` writes `detected_at` from its own clock, and a second clock in one
+ * document is two answers to "when was this taken".
+ */
+export interface ProbeRequest {
+  /** RFC3339, the caller's — this file reads no clock. */
+  readonly at: string;
+  /** Default: `PROBE_TIMEOUT_MS`. */
+  readonly timeoutMs?: number;
+  /** Record this reason on every slot instead of probing it (`--no-probe`). */
+  readonly skip?: string;
+}
+
+export interface DetectOptions {
+  readonly probe?: ProbeRequest;
+}
+
 export async function detectWorkspace(
   root: string,
   runner: CommandRunner,
   progress: DetectProgress = {},
+  options: DetectOptions = {},
 ): Promise<DetectedWorkspace> {
   const { mode, rootIsRepo, repoDirs } = await findRepos(root);
   const evidence: Evidence[] = [
@@ -63,6 +92,16 @@ export async function detectWorkspace(
 
     const stack = await detectStack(absPath);
     const commands = await detectCommands(absPath, stack);
+    // Through the SAME runner the rest of detection spawns git with, so a test that
+    // injects a fake gets a fake here too and nothing in a fixture ever really builds.
+    const commandProbes = options.probe === undefined ? {} : await probeCommands(
+      runner, absPath, commands.commands, {
+        at: options.probe.at,
+        timeoutMs: options.probe.timeoutMs ?? PROBE_TIMEOUT_MS,
+        synthesised: commands.synthesised,
+        ...(options.probe.skip === undefined ? {} : { skip: options.probe.skip }),
+      },
+    );
     const ci = await detectCi(absPath);
     const branch = await detectDefaultBranch(runner, absPath);
     const codeFiles = await countCodeFiles(absPath);
@@ -98,6 +137,7 @@ export async function detectWorkspace(
       manifests: stack.manifests,
       codeFiles,
       commands: commands.commands,
+      commandProbes,
       ci,
       overlays,
       skills,

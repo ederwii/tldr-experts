@@ -3,8 +3,17 @@
  * run (spec §2.1).
  *
  * `null` means "not found", which is NOT the same as "there is none" — the
- * handoff and the interview say which. A command is only recorded when a file on
- * disk declares it; nothing here is conventional wisdom about a stack.
+ * handoff and the interview say which.
+ *
+ * A command comes from one of TWO places and this file now says which (#168). Most
+ * are DECLARED: a `package.json` script, a `Makefile` target — a line on disk a
+ * reader can open. The rest are SYNTHESISED from the language id alone —
+ * `go build ./...`, `cargo test`, `dotnet build`, and python's tools from a mention
+ * in a manifest, which proves the tool is named, not that it runs. Those are
+ * conventional wisdom about a stack, this header used to claim there was none of it
+ * here, and the claim was the thing that was false. `synthesised` is the flag that
+ * makes the difference readable, and `detect/probeCommands.ts` is what turns it into
+ * a record instead of a hope.
  */
 import { join } from "node:path";
 import { lineOf } from "./lineOf.ts";
@@ -30,6 +39,12 @@ export interface DetectedCommands {
   readonly evidence: readonly Evidence[];
   /** Slots no file on disk declared. */
   readonly missing: readonly CommandSlot[];
+  /**
+   * Slots whose command was inferred from the language id rather than read from a
+   * declaration — the convention half of this file, named so nothing downstream has
+   * to guess which half it is holding.
+   */
+  readonly synthesised: ReadonlySet<CommandSlot>;
 }
 
 export function isSingleArgvCommand(command: string): boolean {
@@ -37,7 +52,7 @@ export function isSingleArgvCommand(command: string): boolean {
 }
 
 export async function detectCommands(repoDir: string, stack: StackDetection): Promise<DetectedCommands> {
-  const found = new Map<CommandSlot, { command: string; evidence: Evidence }>();
+  const found: Found = new Map();
 
   addPackageScripts(found, stack);
   await addDotnet(found, repoDir, stack);
@@ -50,6 +65,7 @@ export async function detectCommands(repoDir: string, stack: StackDetection): Pr
   };
   const evidence: Evidence[] = [];
   const missing: CommandSlot[] = [];
+  const synthesised = new Set<CommandSlot>();
 
   for (const slot of COMMAND_SLOTS) {
     const hit = found.get(slot);
@@ -59,15 +75,23 @@ export async function detectCommands(repoDir: string, stack: StackDetection): Pr
     }
     commands[slot] = hit.command;
     evidence.push(hit.evidence);
+    if (hit.synthesised) synthesised.add(slot);
   }
-  return { commands, evidence, missing };
+  return { commands, evidence, missing, synthesised };
 }
 
-type Found = Map<CommandSlot, { command: string; evidence: Evidence }>;
+type Found = Map<CommandSlot, { command: string; evidence: Evidence; synthesised: boolean }>;
 
-function record(found: Found, slot: CommandSlot, command: string, evidence: Evidence): void {
+/**
+ * `synthesised` is a fourth ARGUMENT rather than a second map on purpose: a slot's
+ * origin is a property of the row that won, and two containers would let them drift
+ * the moment "first source wins" picks a different source.
+ */
+function record(
+  found: Found, slot: CommandSlot, command: string, evidence: Evidence, synthesised = false,
+): void {
   if (found.has(slot)) return; // first source wins; detection order is the preference order
-  found.set(slot, { command, evidence });
+  found.set(slot, { command, evidence, synthesised });
 }
 
 function addPackageScripts(found: Found, stack: StackDetection): void {
@@ -94,21 +118,23 @@ async function addDotnet(found: Found, repoDir: string, stack: StackDetection): 
   const anchor = solution ?? projects[0];
   if (anchor === undefined) return;
 
-  record(found, "build", "dotnet build", { claim: "`build` runs `dotnet build`", src: `${anchor}:1` });
+  // Synthesised: a `.sln`/`.csproj` proves a .NET project exists, not that `dotnet
+  // build` is how this team builds it.
+  record(found, "build", "dotnet build", { claim: "`build` runs `dotnet build`", src: `${anchor}:1` }, true);
   record(found, "lint", "dotnet format --verify-no-changes", {
     claim: "`lint` runs `dotnet format --verify-no-changes`", src: `${anchor}:1`,
-  });
+  }, true);
 
   const testProject = projects.find((path) => /test/i.test(path));
   if (testProject !== undefined) {
-    record(found, "test", "dotnet test", { claim: "`test` runs `dotnet test`", src: `${testProject}:1` });
+    record(found, "test", "dotnet test", { claim: "`test` runs `dotnet test`", src: `${testProject}:1` }, true);
   }
   const runnable = projects.filter((path) => !/test/i.test(path));
   const only = runnable.length === 1 ? runnable[0] : undefined;
   if (only !== undefined) {
     record(found, "run", `dotnet run --project ${only}`, {
       claim: `\`run\` starts the only non-test project`, src: `${only}:1`,
-    });
+    }, true);
   }
 }
 
@@ -124,21 +150,27 @@ async function addPython(found: Found, repoDir: string, stack: StackDetection): 
       ["mypy", "typecheck", "mypy ."],
     ] as const) {
       if (!text.includes(needle)) continue;
+      // Synthesised: `pytest` appearing in `requirements.txt` proves the package is a
+      // dependency. It does not prove `pytest` runs, or that it is how tests are run here.
       record(found, slot, command, {
         claim: `\`${slot}\` runs \`${command}\``, src: `${manifest}:${lineOf(text, needle)}`,
-      });
+      }, true);
     }
   }
 }
 
+/**
+ * The most synthesised of all: nothing is read but the language id. `go.mod:1` and
+ * `Cargo.toml:1` cite the manifest's existence, not a line that declares a command.
+ */
 function addGoAndRust(found: Found, stack: StackDetection): void {
   if (stack.languages.includes("go")) {
-    record(found, "build", "go build ./...", { claim: "`build` runs `go build ./...`", src: "go.mod:1" });
-    record(found, "test", "go test ./...", { claim: "`test` runs `go test ./...`", src: "go.mod:1" });
+    record(found, "build", "go build ./...", { claim: "`build` runs `go build ./...`", src: "go.mod:1" }, true);
+    record(found, "test", "go test ./...", { claim: "`test` runs `go test ./...`", src: "go.mod:1" }, true);
   }
   if (stack.languages.includes("rust")) {
-    record(found, "build", "cargo build", { claim: "`build` runs `cargo build`", src: "Cargo.toml:1" });
-    record(found, "test", "cargo test", { claim: "`test` runs `cargo test`", src: "Cargo.toml:1" });
+    record(found, "build", "cargo build", { claim: "`build` runs `cargo build`", src: "Cargo.toml:1" }, true);
+    record(found, "test", "cargo test", { claim: "`test` runs `cargo test`", src: "Cargo.toml:1" }, true);
   }
 }
 

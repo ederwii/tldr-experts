@@ -6,6 +6,7 @@
 import { RunStore } from "../run/RunStore.ts";
 import { stageAt } from "../run/RunFile.ts";
 import { spendBasisOf, type SpendTurn } from "../budget/spendBasis.ts";
+import { turnTokens } from "../budget/turnTokens.ts";
 import { round2 } from "./caps.ts";
 
 /** One turn's accounting — as much of an executor task as the cost line reads. */
@@ -14,6 +15,13 @@ export interface PhaseCostTurn {
   /** False ⇒ billed to a host session; `run.yml` records no dollars for it. */
   readonly metered?: boolean;
   readonly tokens?: number;
+  /**
+   * The provider's measured split for this turn (#159), when the executor
+   * spawned one and read its `AgentOutcome.usage`. Absent for a HOST turn —
+   * nothing here watched it.
+   */
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
 }
 
 export interface PhaseCost {
@@ -100,6 +108,13 @@ export function phaseCostToDate<T extends PhaseCostTurn>(
 ): PhaseCost {
   let recorded: number | null = null;
   let turns: SpendTurn[] = [];
+  // The HOST-declared side only (#159) — a SEPARATE sum from `turns[].tokens`
+  // above, because that field is now `turnTokens(task)` and can be filled from
+  // a provider's split. Folding the split into this figure would let a
+  // measurement stand in for something the host never declared; see the
+  // `absent` sentence's dash-clause in `spendBasis.ts`, which is the only place
+  // this number is read.
+  let hostTokens = 0;
   try {
     const found = stageAt(RunStore.open(runDir).run, { phase: phaseId, stage: stageId, task: null });
     if (found !== null) {
@@ -110,8 +125,9 @@ export function phaseCostToDate<T extends PhaseCostTurn>(
       turns = found.stage.tasks.map((task) => ({
         costUsd: task.cost_usd,
         metered: task.metered !== false,
-        tokens: task.tokens ?? null,
+        tokens: turnTokens(task),
       }));
+      hostTokens += found.stage.tasks.reduce((sum, task) => sum + (task.tokens ?? 0), 0);
     }
   } catch {
     // A run.yml that is missing, torn, or invalid. The handoff is still worth
@@ -128,10 +144,11 @@ export function phaseCostToDate<T extends PhaseCostTurn>(
     ...invocationTurns.map((task) => ({
       costUsd: task.metered === false ? null : round2(task.costUsd),
       metered: task.metered !== false,
-      tokens: task.tokens ?? null,
+      tokens: turnTokens({ tokens: task.tokens, input_tokens: task.inputTokens, output_tokens: task.outputTokens }),
     })),
   ];
-  const counted = spendBasisOf(turns, turns.reduce((sum, t) => sum + (t.tokens ?? 0), 0), "stage");
+  hostTokens += invocationTurns.reduce((sum, task) => sum + (task.tokens ?? 0), 0);
+  const counted = spendBasisOf(turns, hostTokens, "stage");
   // A fully metered stage keeps its clean line: `measured` is the one basis with
   // nothing to caveat, and a caveat on every header is a caveat nobody reads.
   const bound = counted.basis === "measured" ? null : counted.reason;
