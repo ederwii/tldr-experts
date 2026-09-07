@@ -108,13 +108,15 @@ Everything in this section is written and tested on main; none of it is tagged.
   every ceiling), `dodRunner.ts` (the story DoD, the #41 base pre-flight and its `PreflightCache`),
   `worktrees.ts` (story and epic worktrees, base refresh, commit, merge, the #129 rescue, `EpicState`),
   `branchClaims.ts` (epic claims, the branch model, the two tree refusals, the epic rows),
-  `reviewBundle.ts` (the reviewer's bundle on disk) and `reviewRound.ts` (`ReviewCounters`,
-  `REVIEWER_TOOLS`, the one reviewer-prompt renderer, the two bounds). `executors/build.ts` is down to
-  ~2.9k lines and keeps the orchestration — the entry points, the wave drivers, the story-state
-  cluster, the log and handoff cluster, the refusal helpers and `SerialQueue` — and still exports
-  every moved symbol anything imports, so no caller moved. `test/build-golden.test.ts` is the guard
-  that made "no behaviour changed" checkable instead of argued, and it is kept: it is the cheapest
-  regression net this file has.
+  `reviewBundle.ts` (the reviewer's bundle on disk) and `reviewRound.ts` (`ReviewCounters`, the one
+  reviewer-prompt renderer, the two bounds). `executors/build.ts` is down to ~2.9k lines and keeps
+  the orchestration — the entry points, the wave drivers, the story-state cluster, the log and
+  handoff cluster, the refusal helpers, `SerialQueue`, and the two tool allowlists `developerTools`
+  and `REVIEWER_TOOLS` (`:2830`, `:2844`), which stay put because `test/dod-allowlist.test.ts:127`
+  reads THIS file as source text to pin them — and it still exports every moved symbol anything
+  imports, so no caller moved. `test/build-golden.test.ts` is the guard that made "no behaviour
+  changed" checkable instead of argued, and it is kept: it is the cheapest regression net this
+  file has.
   Two defects it carried through unchanged, both measured during wave 1a, both consequences of the size
   rather than of any one line, and both left alone on purpose because a pure refactor that fixes things
   is not one: `ExecutorOutcome.tasks` exists only at RETURN, so a throw part-way through still loses
