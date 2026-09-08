@@ -92,6 +92,11 @@ export function emitFact(fact: Fact, indent = "  "): string {
   // Written only when it is true. A `truncated: false` on every row of a file
   // whose facts are all whole is noise in a diff nobody asked for.
   if (fact.truncated === true) lines.push(`${inner}truncated: true`);
+  // Written only when non-empty, for `truncated`'s reason and one more: an
+  // emitted `conflicts_with: []` would claim a check ran and cleared the row.
+  if (fact.conflicts_with !== undefined && fact.conflicts_with.length > 0) {
+    lines.push(`${inner}conflicts_with: ${inlineList(fact.conflicts_with)}`);
+  }
   if (fact.retired === null) {
     lines.push(`${inner}retired: null`);
   } else {

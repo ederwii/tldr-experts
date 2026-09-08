@@ -20,6 +20,7 @@ import { ATTENDED_BY, type AttendedBy } from "../../core/run/RunFile.ts";
 import { parallelFlag } from "./next.ts";
 import { cancelRun, unlockRun } from "../../core/run/rescue.ts";
 import { closeRun, describeOpenQuestions, describeStateCommit } from "../../core/run/closeRun.ts";
+import { describeDecidedTally } from "../../core/facts/decidedTally.ts";
 import { nowRfc3339 } from "../../hooks/lib/actor.ts";
 import { createRun } from "../../core/run/newRun.ts";
 import { setGatePolicy } from "../../core/run/setGatePolicy.ts";
@@ -443,6 +444,8 @@ async function runCancel(argv: readonly string[]): Promise<number> {
         // (#141) — a run abandoned over one is the case that most needs saying.
         const asked = describeOpenQuestions(closed.openQuestions);
         if (asked !== null) process.stdout.write(`run cancel: ${asked}\n`);
+        const decided = describeDecidedTally(closed.decided);
+        if (decided !== null) process.stdout.write(`run cancel: ${decided}\n`);
         const said = describeStateCommit(closed.state);
         if (said !== null) process.stdout.write(`run cancel: ${said}\n`);
       }

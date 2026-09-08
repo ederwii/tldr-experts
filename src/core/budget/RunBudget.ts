@@ -28,6 +28,24 @@ export type OnHostTokensExceed = (typeof ON_HOST_TOKENS_EXCEED)[number];
 export const DEFAULT_ON_HOST_TOKENS_EXCEED: OnHostTokensExceed = "warn";
 
 /**
+ * What happens when a ceiling is WRITTEN above what the owner authorized (#170).
+ *
+ * Never `on_exceed`, and the argument is `ON_HOST_TOKENS_EXCEED`'s one domain
+ * over: `on_exceed` governs SPENDING past a ceiling, this governs WRITING one
+ * the owner forbade. A run that blocks on dollars has said nothing about
+ * whether a ceiling above an authorization should be refused, and inferring one
+ * from the other enforces a policy nobody asked for.
+ *
+ * `warn` is the default because it is what this file did before the key existed:
+ * say so, never stop. `block` is the explicit opt-in.
+ */
+export const ON_GRANT_EXCEED = ["warn", "block"] as const;
+export type OnGrantExceed = (typeof ON_GRANT_EXCEED)[number];
+
+/** Absence means this: say so, never stop. */
+export const DEFAULT_ON_GRANT_EXCEED: OnGrantExceed = "warn";
+
+/**
  * What the numbers in this file are DENOMINATED IN (spec §2.11, design §E).
  *
  * The money model was a single scalar with no unit on it, and on 2026-08-30 that
@@ -71,6 +89,13 @@ export interface BudgetPhase {
    * what governs; see `hostTokenCeiling` for the compat fallback.
    */
   readonly ceiling_host_tokens: number | null;
+  /**
+   * This phase's own authorization, or null when it declares none — in which
+   * case the RUN's grant governs it (#170). Null, never 0: 0 is a ceiling
+   * nothing could ever fit, and absent must never read as "the owner authorized
+   * nothing".
+   */
+  readonly authorized_usd: number | null;
 }
 
 export interface RunBudget {
@@ -106,6 +131,29 @@ export interface RunBudget {
    * to a dollar figure, which is the bug.
    */
   readonly ceiling_host_tokens: number | null;
+  /**
+   * What the owner AUTHORIZED for this run, or null when no grant is recorded
+   * (#170).
+   *
+   * ADDITIVE. Absent — every budget.yml on disk before this key — means "no
+   * grant recorded, and nothing is reconciled". That is deliberately the LAX
+   * side: absent read as `$0` would refuse every raise on every existing run,
+   * which is exactly the argument `ceiling_host_tokens` won one domain over.
+   */
+  readonly authorized_usd: number | null;
+  /**
+   * The fact id the grant cites (`F031`), or null. A grant that cannot name a
+   * decision is not recorded at all — `budget grant` refuses without `--fact`,
+   * because a number with no decision behind it is a number nobody said.
+   */
+  readonly authorized_by: string | null;
+  /** RFC3339, or null when unknown — every file written before this key. */
+  readonly authorized_at: string | null;
+  /**
+   * Whether a ceiling above the grant warns or refuses. Absent means `warn`,
+   * which is what this file did before the key existed.
+   */
+  readonly on_grant_exceed: OnGrantExceed;
   readonly phases: readonly BudgetPhase[];
 }
 
@@ -127,6 +175,31 @@ export function economyFor(budget: RunBudget | null, phaseId?: string | null): E
 /** True when the numbers governing this phase are not dollars. */
 export function isHostTokens(budget: RunBudget | null, phaseId?: string | null): boolean {
   return economyFor(budget, phaseId) === "host-tokens";
+}
+
+/**
+ * A recorded grant must be greater than zero (spec §2.11, fix round 2).
+ *
+ * `budget grant` has refused a non-positive amount since #170, and §2.11 types
+ * both grant keys `number >0` — but the VALIDATOR only required a number, so a
+ * hand-edited `authorized_usd: 0` loaded cleanly and `grantFor` returned a $0
+ * grant that, under `on_grant_exceed: block`, refuses every later raise. That is
+ * the state the CLI's own refusal argues against, reached by the other door: a
+ * record must not be able to say what the verb that writes it will not write.
+ *
+ * Only a number that is PRESENT and non-positive is refused. Absence is untouched
+ * and still means "no grant recorded", never `$0` — which is why this is a
+ * separate check rather than a stricter `requireNumber`, and why it runs after
+ * one: a non-number has already been reported by its own issue and does not need
+ * a second, confusing one.
+ */
+function requirePositiveGrant(value: unknown, path: string, issues: ValidationIssue[]): void {
+  if (typeof value !== "number") return;
+  if (value > 0) return;
+  issues.push({
+    path,
+    message: "expected a grant greater than 0 — absence, not 0, means no grant was recorded",
+  });
 }
 
 export function validateRunBudget(input: unknown): ValidationResult {
@@ -161,6 +234,31 @@ export function validateRunBudget(input: unknown): ValidationResult {
   // is declared", never "zero" and never "read `ceiling_usd` instead".
   if (doc.ceiling_host_tokens !== undefined && doc.ceiling_host_tokens !== null) {
     requireNumber(doc.ceiling_host_tokens, "ceiling_host_tokens", issues);
+  }
+  // Optional, additive (#170): what the owner AUTHORIZED, and the fact that says
+  // so. Checked only when present and non-null — absent means "no grant
+  // recorded", never `$0`, which would refuse every raise on every file on disk.
+  //
+  // There is deliberately NO rule relating a phase grant to the run grant, and
+  // none relating either to `ceiling_usd`. A grant is what somebody said they
+  // would pay; a ceiling is what this file will spend. Inventing arithmetic
+  // between them would be enforcing a rule nobody stated — the reconciliation
+  // lives in `budget/grant.ts`, where it is a policy with an enum, not a schema
+  // error.
+  if (doc.authorized_usd !== undefined && doc.authorized_usd !== null) {
+    requireNumber(doc.authorized_usd, "authorized_usd", issues);
+    requirePositiveGrant(doc.authorized_usd, "authorized_usd", issues);
+  }
+  if (doc.authorized_by !== undefined && doc.authorized_by !== null) {
+    requireString(doc.authorized_by, "authorized_by", issues);
+  }
+  if (doc.authorized_at !== undefined && doc.authorized_at !== null) {
+    requireString(doc.authorized_at, "authorized_at", issues);
+  }
+  // Refused rather than defaulted, for the same reason `on_host_tokens_exceed`
+  // is: a policy this reader cannot honour is not one it may quietly downgrade.
+  if (doc.on_grant_exceed !== undefined && doc.on_grant_exceed !== null) {
+    requireEnum(doc.on_grant_exceed, ON_GRANT_EXCEED, "on_grant_exceed", issues);
   }
   if (doc.warn_at_pct !== undefined) {
     requireNumber(doc.warn_at_pct, "warn_at_pct", issues);
@@ -199,6 +297,13 @@ export function validateRunBudget(input: unknown): ValidationResult {
     }
     if (phase.ceiling_host_tokens !== undefined && phase.ceiling_host_tokens !== null) {
       requireNumber(phase.ceiling_host_tokens, `${path}.ceiling_host_tokens`, issues);
+    }
+    // Same rule, same reason (#170): checked only when present and non-null, and
+    // never summed into anything — a phase grant is not required to fit the run
+    // grant, because they answer two different questions.
+    if (phase.authorized_usd !== undefined && phase.authorized_usd !== null) {
+      requireNumber(phase.authorized_usd, `${path}.authorized_usd`, issues);
+      requirePositiveGrant(phase.authorized_usd, `${path}.authorized_usd`, issues);
     }
     const economy = (ECONOMIES as readonly unknown[]).includes(phase.economy)
       ? phase.economy as Economy
@@ -243,12 +348,20 @@ export function asRunBudget(input: unknown): RunBudget {
     economy: doc.economy ?? DEFAULT_ECONOMY,
     on_host_tokens_exceed: doc.on_host_tokens_exceed ?? DEFAULT_ON_HOST_TOKENS_EXCEED,
     ceiling_host_tokens: doc.ceiling_host_tokens ?? null,
+    // #170. The defaults live HERE, not in a `?:` on the interface: `?: T | null`
+    // would make three states — missing, null, value — with no stated difference
+    // between the first two and no mapper to collapse them.
+    authorized_usd: doc.authorized_usd ?? null,
+    authorized_by: doc.authorized_by ?? null,
+    authorized_at: doc.authorized_at ?? null,
+    on_grant_exceed: doc.on_grant_exceed ?? DEFAULT_ON_GRANT_EXCEED,
     phases: (doc.phases ?? []).map((phase) => ({
       id: phase.id,
       ceiling_usd: phase.ceiling_usd,
       spent_usd: phase.spent_usd,
       economy: phase.economy ?? null,
       ceiling_host_tokens: phase.ceiling_host_tokens ?? null,
+      authorized_usd: phase.authorized_usd ?? null,
     })),
   };
 }

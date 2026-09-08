@@ -4,7 +4,9 @@ export { acquireLock, releaseLock, readLock, isAlive, lockPath, LOCK_FILE } from
 export type { LockHolder, LockAcquisition } from "./Lock.ts";
 export { loadStageSpec, stageOrder, DEFAULT_STACK_EXPERTS, DEFAULT_DRY_RUN_ALLOWED } from "./stageSpec.ts";
 export type { StageSpec } from "./stageSpec.ts";
-export { evaluateSkipIf, countSkipInputs, openQuestionIds, phaseDirs, SkipIfError, SKIP_IF_RE } from "./skipIf.ts";
+export {
+  evaluateSkipIf, countSkipInputs, openQuestionIds, blockingQuestionIds, phaseDirs, SkipIfError, SKIP_IF_RE,
+} from "./skipIf.ts";
 export type { SkipCounts } from "./skipIf.ts";
 export {
   resolveDeclared, isWorkspaceRelative, expandRepos, expandAll, present, missing, agentDir,

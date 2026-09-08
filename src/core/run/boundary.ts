@@ -68,7 +68,7 @@ import { join } from "node:path";
 import { parseYaml } from "../yaml.ts";
 import { parseSrcToken } from "../text/srcToken.ts";
 import { parseFrontMatter } from "../schemas/frontMatter.ts";
-import { citedRepoPaths, isStatePath, IMPLICIT_PLAN_FILE } from "../build/implicitPlan.ts";
+import { citedRepoPaths, isStatePath, IMPLICIT_PLAN_FILE, IMPLICIT_STORY_ID } from "../build/implicitPlan.ts";
 import { git } from "../build/git.ts";
 import { loadWorkspace, repoPath, type WorkspaceContext } from "../../hooks/lib/workspace.ts";
 import { PROJECT_WORKSPACE_FILE } from "../paths.ts";
@@ -205,13 +205,33 @@ function storyTouches(runDir: string): readonly { repo: string; touches: readonl
   return out;
 }
 
-/** `04-build/implicit-plan.yml`'s one story, as `{repo, touches}`, or null. */
-function implicitTouches(runDir: string): { repo: string; touches: readonly string[] } | null {
+/**
+ * `04-build/implicit-plan.yml`'s one story, as `{story, repo, touches}`, or null.
+ *
+ * Exported since #171: ownership of a carried finding asks the same question the
+ * surface does — "what did this run declare it would write" — and a Plan-skipped
+ * run answers it HERE and nowhere else. A second reader of this file would be a
+ * second answer, and the direction it would fail in is known: with no implicit
+ * source every finding on such a run reads `unowned`, including one squarely
+ * inside the surface the implicit plan declared.
+ *
+ * `story` is the label, not a judgement: the file's own `id:` when it has one
+ * (`renderImplicitPlan` always writes `IMPLICIT_STORY_ID`), and that constant when
+ * it does not. `deriveSurface` ignores the field; `ImplicitPlanContent` carries no
+ * id at all, which is why the label is synthesised rather than derived.
+ */
+export function implicitStorySurface(
+  runDir: string,
+): { story: string; repo: string; touches: readonly string[] } | null {
   const doc = readYaml(join(runDir, BUILD_PHASE, IMPLICIT_PLAN_FILE));
   const story = (doc as { story?: unknown } | null)?.story;
   if (story === null || typeof story !== "object") return null;
-  const row = story as { repo?: unknown; touches?: unknown };
-  return { repo: typeof row.repo === "string" ? row.repo : "", touches: stringList(row.touches) };
+  const row = story as { id?: unknown; repo?: unknown; touches?: unknown };
+  return {
+    story: typeof row.id === "string" && row.id !== "" ? row.id : IMPLICIT_STORY_ID,
+    repo: typeof row.repo === "string" ? row.repo : "",
+    touches: stringList(row.touches),
+  };
 }
 
 /**
@@ -260,7 +280,7 @@ export function deriveSurface(runDir: string, workspace: WorkspaceContext): Boun
   // (2) what the plan declared it would write. The real plan wins over the
   // implicit one, exactly as `buildProgress` resolves the same pair.
   const stories = storyTouches(runDir);
-  const sources = stories.length > 0 ? stories : [implicitTouches(runDir)].filter((s) => s !== null);
+  const sources = stories.length > 0 ? stories : [implicitStorySurface(runDir)].filter((s) => s !== null);
   for (const story of sources) {
     for (const path of story.touches) {
       add(story.repo, path, () => { declared += 1; });

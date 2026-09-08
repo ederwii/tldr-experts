@@ -23,6 +23,7 @@ import { RUNNABLE_SCRIPTS } from "../core/install/managedEntries.ts";
 import { EFFORT_LEVELS } from "../core/schemas/stage.ts";
 import { UI_MODES } from "../core/ui/index.ts";
 import { FACT_CONFIDENCES, FACT_DECIDERS, FACT_KINDS } from "../core/facts/Fact.ts";
+import { ON_GRANT_EXCEED } from "../core/budget/RunBudget.ts";
 import {
   EXIT_AGENT_FAILED, EXIT_AWAITING_HUMAN, EXIT_FAILED, EXIT_GATE_REFUSED, EXIT_NOT_FOUND,
   EXIT_NOT_IMPLEMENTED, EXIT_OK, EXIT_USAGE,
@@ -593,7 +594,19 @@ const ENTRIES: readonly CommandHelp[] = [
       {
         name: "supersede",
         arg: null,
-        meaning: "REVERSE a decision this question already recorded. Only valid on an ANSWERED question. The old fact keeps its text and gains superseded_by; a new fact carries this answer with the same area and repos; the block keeps its original [Answer]: line and gains a superseding one plus a footer. Everything that FEEDS a decision \u2014 no-re-ask, every {{facts}} block, the training miner, the implicit plan \u2014 then reads the new fact and not the old one. Without it, answering an answered question is refused, because an answer is recorded once.",
+        meaning: "REVERSE a decision this question already recorded. Only valid on an ANSWERED question. The old fact keeps its text and gains superseded_by; a new fact carries this answer with the same area, and with the repos its predecessor bound to unless --repo or the question's own affects: rescopes it; the block keeps its original [Answer]: line and gains a superseding one plus a footer. Everything that FEEDS a decision \u2014 no-re-ask, every {{facts}} block, the training miner, the implicit plan \u2014 then reads the new fact and not the old one. Without it, answering an answered question is refused, because an answer is recorded once.",
+      },
+      {
+        name: "decided-by",
+        arg: "<who>",
+        meaning: "Who decided, as against who typed it. OPTIONAL here, and required on `facts add`: this command is also driven by the answer-capture hook, which fires on an agent's own Write and on a human's edit and so cannot honestly say either. Absent means \u201cnot stated\u201d, never \u201cowner\u201d, and the command says so on stdout.",
+        values: FACT_DECIDERS,
+      },
+      {
+        name: "repo",
+        arg: "<name>",
+        meaning: "Scope the answered fact to one repo, so every {{facts}} block outside it stops carrying a decision that was never about it. Repeatable. A name no repo in workspace.yml answers to is refused before anything is written.",
+        repeatable: true,
       },
       runFlag(),
       root(),
@@ -601,11 +614,17 @@ const ENTRIES: readonly CommandHelp[] = [
     examples: [
       'tldrx answer Q3 "Redis sorted set, one key per tenant"',
       'tldrx answer Q3 "Postgres table after all \u2014 the contention risk was refuted" --supersede',
+      'tldrx answer Q4 "B \u2014 rankings are global" --decided-by owner --repo api',
     ],
-    exits: [EXIT_OK, EXIT_USAGE, EXIT_NOT_FOUND],
+    // 2 is `resolveRunOrExplain`'s: several runs are open and none was named, so
+    // the command declines to choose one rather than answer into the wrong run.
+    exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
     notes: [
       "A second reversal supersedes the SECOND answer, not the first: the chain is walked to its head, so `--supersede` can be used as many times as an owner changes their mind and facts.yml stays a single-link reciprocal chain.",
       "Nothing is erased. `tldrx replay` renders the reversal as its own line (`fact.superseded`), `tldrx retro` still lists the old fact and labels it `(superseded by F<n>)`, and the words originally typed stay in questions.md.",
+      "Without `--repo`, the fact is scoped by the question's own `affects:` when an entry there names a repo (`api` or `api:src/db.ts`), and by nothing otherwise \u2014 `repos: []` means \u201cno repo was named\u201d, never \u201cevery repo\u201d. An `affects:` entry that looks like `repo:path` and matches no repo is named on stdout \u2014 for every block the invocation captured, not just the one it named, each line carrying its question id. The answer-capture hook reports the same thing through the context it posts.",
+      "A recorded answer is checked against the facts already live, on both paths, and a hit RAISES \u2014 it never refuses. The answer stands, this command still exits 0, the new fact carries `conflicts_with`, one question is appended to the same questions.md asking which of the two holds, and one `fact.conflict_raised` goes on the ledger. That block is marked `advisory:`, so it does not hold an auto gate, does not park a run at `awaiting_answer`, is not counted by `skip_if` and is not what `tldrx status` says the run is waiting on \u2014 the gate says how many it skipped, and every reader that LISTS questions (`tldrx questions`, the run close, the decision cards, `tldrx replay`, the status line) names it like any other open question.",
+      "What that check can and cannot see, stated because a raise you cannot calibrate is worse than none: it is LEXICAL \u2014 Jaccard \u2265 0.6 on tokens of 4 characters or more, scoring the QUESTION's title against each candidate fact's whole text, and only within the SAME `area`. So it cannot see two differently-worded answers that contradict in meaning, it drops short words entirely, and an answer identical to the recorded one is read as agreement rather than a clash. Refusing on a signal like that could deadlock an unattended run, which is why it raises instead.",
     ],
   },
   {
@@ -736,19 +755,30 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "story",
-    subcommands: ["reopen"],
-    description: "Give one Build story another run of attempts, or open a fix round on a done one, signed with a note.",
-    args: [{ name: "<id>", meaning: "The story id, e.g. S3." }],
+    subcommands: ["reopen", "widen"],
+    description: "Give one Build story another run of attempts, open a fix round on a done one, or widen the paths it declares \u2014 each signed with a note.",
+    args: [
+      { name: "<id>", meaning: "The story id, e.g. S3." },
+      { name: "<path>\u2026", meaning: "widen only: one or more repo-relative paths to add to the story's `touches:`. Positional, and repeatable by writing them one after another." },
+    ],
     flags: [
       {
         name: "note",
         arg: "<text>",
         meaning: "Why this story must be built anyway \u2014 or, with --for-fix, WHICH DEFECT is being fixed. Required \u2014 a reopen with no reason is not actionable. It is recorded on the story.reopened event and printed by the Build stage when the story runs again.",
+        sub: "reopen",
+      },
+      {
+        name: "note",
+        arg: "<text>",
+        meaning: "WHY the surface grew \u2014 what the story turned out to have to touch, and why that is this story's work and not another's. Required, and recorded on the story.touches_widened event beside the list before and after, so a surface never grows without a stated reason.",
+        sub: "widen",
       },
       {
         name: "for-fix",
         arg: null,
         meaning: "Open a FIX ROUND on a story that is `done`: one named defect in work a reviewer already approved. No attempt is consumed, the fix passes the same dod and the same reviewer as the original, and the story's acceptance criteria are not touched \u2014 it is not a way to relitigate scope. Refused when the story is not done, when --note is missing, and when that story already has a fix round open (the bound is one).",
+        sub: "reopen",
       },
       runFlag(),
       root(),
@@ -756,6 +786,7 @@ const ENTRIES: readonly CommandHelp[] = [
     examples: [
       'tldrx story reopen S3 --note "it gates wave 3 (S4, S6) and the owner has decided it ships"',
       'tldrx story reopen S11 --for-fix --note "linkEmail succeeds then setDisplayName fails: account linked, score never claimable"',
+      'tldrx story widen S3 platform/Auth.cs --note "the tenancy check the story is for lives here too"',
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
     notes: [
@@ -764,6 +795,8 @@ const ENTRIES: readonly CommandHelp[] = [
       "The story goes back to `todo` and its attempt counter restarts at 1 of 2. Nothing is erased to make that true: `story.reopened` is a reset boundary the review ledger reads, every earlier attempt stays in events.jsonl, and the event records how many verdicts the closed run consumed.",
       "It runs no agent, spends nothing, deletes nothing and refunds nothing. The story's branch is kept \u2014 that is what carries the last developer's commits forward \u2014 and its worktree is left exactly as the build left it, to be reopened from the branch if the build had removed it.",
       "It does NOT make the stage runnable. If the Build stage is at its gate, `tldrx reject --note \"\u2026\"` sends it back to `ready` first; if the gate is already signed, `tldrx reject --stage` takes that back.",
+      "`widen` adds paths to a story's `touches:` \u2014 the sanctioned form of the advice the boundary decision card gives when a Build stage changed a path nobody scoped. Widenable states are `todo`, `in_progress`, `review` and `blocked`. A `done` story refuses: its evidence was written against the surface it DECLARED, and widening it afterwards would make the record say the plan declared a path it did not \u2014 reopen it with `--for-fix` first. A path the story already declares refuses too, because a widening that widened nothing is a record of something that did not happen.",
+      "`widen` runs no agent, spends nothing, consumes no attempt, changes no status and moves no cursor \u2014 it declares scope and nothing else. No gate code knows about it: the boundary condition re-reads `touches:` off disk at evaluation time, so the same run, the same branch and the same diff simply stop counting the widened path as outside the surface at the next evaluation. One `story.touches_widened` records the paths, the note and the list before and after.",
     ],
   },
   {
@@ -911,14 +944,14 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "budget",
-    subcommands: ["show", "raise"],
-    description: "What the run may still spend, and where to move a ceiling from.",
+    subcommands: ["show", "raise", "grant"],
+    description: "What the run may still spend, where to move a ceiling from, and what the owner authorized.",
     args: [
       { name: "[<run>]", meaning: "budget show: a run id. Omit it and the one open run is used." },
       { name: "<phase>", meaning: "budget raise: the phase whose ceiling goes up, e.g. 04-build." },
       {
         name: "<usd>",
-        meaning: "budget raise: how much to ADD to that phase's ceiling \u2014 a delta, not a new ceiling. `raise 04-build 5` turns a $20 ceiling into $25.",
+        meaning: "budget raise: how much to ADD to that phase's ceiling \u2014 a delta, not a new ceiling. `raise 04-build 5` turns a $20 ceiling into $25. budget grant: the CEILING the owner authorized \u2014 a total, not a delta, and it moves no money.",
       },
     ],
     flags: [
@@ -926,15 +959,42 @@ const ENTRIES: readonly CommandHelp[] = [
       json("the budget view", "show"),
       { name: "take-from", arg: "<phase>", meaning: "Move the money out of this phase instead of raising the run's total.", sub: "raise" },
       { name: "note", arg: "<text>", meaning: "Why the ceiling moved. Recorded on the budget.raised event beside the before/after and the actor.", sub: "raise" },
+      // A SECOND entry rather than dropping `sub`: `grant` records the note on
+      // its own event and `show` records nothing, so "every subcommand" would
+      // advertise it where it is ignored — which is the fault this fixes, not a
+      // shape to spread.
+      { name: "note", arg: "<text>", meaning: "Why the grant was recorded. Kept on the budget.granted event beside the amount, the fact and the actor.", sub: "grant" },
+      {
+        name: "fact",
+        arg: "<F>",
+        meaning: "REQUIRED by grant: the live fact id the authorization cites, e.g. F031. A grant with no decision behind it is a number nobody said.",
+        sub: "grant",
+      },
+      {
+        name: "phase",
+        arg: "<phase>",
+        meaning: "Scope the grant to one phase instead of the whole run. The fact id is still recorded at run level.",
+        sub: "grant",
+      },
+      {
+        name: "on-exceed",
+        arg: "<policy>",
+        meaning: "What a ceiling ABOVE the grant does. Default: warn. Never on_exceed, which governs spending past a ceiling rather than writing one.",
+        values: ON_GRANT_EXCEED,
+        sub: "grant",
+      },
       root(),
     ],
     examples: [
       "tldrx budget show",
       "tldrx budget raise 04-build 25 --take-from 02-how",
+      "tldrx budget grant 20 --fact F031 --on-exceed block",
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND],
     notes: [
       "`raise` ADDS. `raise 04-build 25` on a phase already ceilinged at $10 leaves it at $35, not $25 \u2014 the amount is a delta, and the run ceiling grows with it unless --take-from moves the money. `budget show` prints the exact command, already sized to the shortfall, when a stage is blocked; pasting that is the way to raise without doing the arithmetic.",
+      "`grant` RECORDS, it does not spend: it writes authorized_usd, authorized_by, authorized_at and on_grant_exceed into budget.yml and appends a budget.granted event. No ceiling moves, and a grant the current ceiling already exceeds is still recorded \u2014 the money is committed, there is nothing left to refuse. `raise` then measures the ceiling it is about to write against it: a PHASE grant against the phase ceiling, the RUN grant against the run ceiling.",
+      "Two exit families, two conditions. A bad amount, an unknown phase, an unknown --on-exceed value, or a --fact naming no live fact is a USAGE error: exit 1, nothing written. A ceiling above the recorded grant under on_grant_exceed: block is a GATE refusal: exit 2, budget.yml byte-identical. Under the default warn the ceiling is written and one sentence names the grant, the fact and the figure.",
     ],
   },
   {
@@ -953,19 +1013,26 @@ const ENTRIES: readonly CommandHelp[] = [
         arg: null,
         meaning: "Every run in the workspace, finished ones included, totalled per economy. The run argument is ignored.",
       },
+      {
+        name: "stories",
+        arg: null,
+        meaning: "Per story: what it measurably cost, beside the ceiling its spawn was given (`agent.spawned.max_budget_usd`), and the ratio. Off `events.jsonl` only; no plan document carries a per-story dollar figure, so none is invented.",
+      },
       json("the cost breakdown"),
       root(),
     ],
     examples: [
       "tldrx cost",
       "tldrx cost --all",
+      "tldrx cost --stories",
       "tldrx cost 260101-checkout --json",
     ],
     exits: [EXIT_OK, EXIT_USAGE, EXIT_NOT_FOUND],
     notes: [
-      "Read off `agent.result` events and nothing else: every dollar printed here is one the Claude CLI reported. No token count is ever multiplied by a price — `tldrx run estimate` is the command allowed to guess, and it says ESTIMATE in words.",
+      "Read off `events.jsonl` and nothing else, and the log holds two kinds of number that are never added to each other: the MEASURED dollars a metered turn reported on an `agent.result` line, and — with `--stories` — the SPAWN CEILINGS the executor handed `agent.spawned`, which are caps it computed rather than charges. No token count is ever multiplied by a price — `tldrx run estimate` is the command allowed to guess, and it says ESTIMATE in words.",
       "Attempts are never merged. A stage that failed twice cost three turns, and that retry is usually the money you are looking for.",
       "Work this process never saw a cost for is reported as UNMETERED rather than summed as $0.00 — a missing number and a free turn are not the same claim.",
+      "`--all` and `--stories` are two different reports and cannot be combined: the pair is refused (exit 1), never silently resolved in favour of one. `--stories` changes no ceiling and spends nothing. It is the measurement side: the ceiling a story is reported against is the one the executor computed and handed the spawn, never a share of a plan \u2014 story files carry no budget key at all \u2014 and it is the input a recalibration of those ceilings would need.",
     ],
   },
   {

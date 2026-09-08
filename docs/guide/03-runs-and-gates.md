@@ -329,6 +329,17 @@ before `+N more`. Work nobody scoped may well be the right work — a module sto
 change a Platform file usually is — but widening a boundary is a decision, and it is yours.
 Approve over it and the reason lives in your note.
 
+**And there is a verb for saying yes.** `tldrx story widen <id> <path> --note "<why>"` adds the
+path to that story's `touches:` and records one `story.touches_widened` carrying the paths, the
+note and the list before and after. It is the sanctioned form of what the decision card used to
+advise — "add the path to a story's `touches:`" — which was a hand edit of a plan file the CLI
+forbids by design. It runs no agent, spends nothing, consumes no attempt and moves no cursor,
+and the gate needs no help from it: the `boundary` condition re-reads `touches:` off disk, so
+the same run, the same branch and the same diff simply stop counting that path as outside the
+surface at the next evaluation. A `done` story is refused — its evidence was written against the
+surface it declared — so a story that already finished is reopened with
+`tldrx story reopen <id> --for-fix --note "<the defect>"` first. Both commands are on the card.
+
 It never refuses on an absence: no epic branch cut yet, no repo on disk, no plan, or a run
 whose What cited no repo path at all each read as `n/a` with the reason spelled out, because
 a condition that could not measure must not pretend it measured zero. `tldrx-work/`,
@@ -499,10 +510,17 @@ measured fact, and the commands that settle them:
 DECISION — 260830-tenancy · 04-build/build
 Boundary — the epic changed paths nobody scoped
   13 changed path(s), 2 outside the surface: api:src/Billing/Invoice.cs, api:src/Billing/Ledger.cs
-  widen the scope: add the path to a story's `touches:`, or cite it in a handoff, then re-run the stage
+  carried, unowned: 4 · retry backoff is unbounded [minor] — no story declares this path in the repo it names — `04-build/fixlist/S2-1.md`
+  tldrx story widen <id> <path> --note "<why>" — or cite the path in a handoff, then re-run the stage
+  tldrx story reopen <id> --for-fix --note "<the defect>" — first, when the story is already `done`: widening finished work is refused
   tldrx approve --run 260830-tenancy
   tldrx reject --run 260830-tenancy --note "<why>"
 ```
+
+The `<id> <path>` in that first line is a placeholder and stays one: the card holds the run, the
+phase and the stage and one opaque detail string, so there is no story in scope for it to name,
+and scraping one out of the detail would be a second reading of a sentence the condition already
+built. The `carried, unowned:` line is the other half of the same card — see below.
 
 ```
 DECISION — 260830-tenancy · 04-build/build
@@ -518,6 +536,20 @@ Budget — a person moved the ceiling while this stage ran
 
 The `gate` card is the fallback: `Gate — N reason(s) an agent gate could not close this`, one
 `<trigger>: <detail>` line each, then approve and reject.
+
+**A finding no story owns is REPORTED, never blocking.** A reviewer may dispose of a finding as
+`defer-with-log` — "real, and not this story's to fix". If the path it cites falls outside the
+`touches:` of every story the plan declares, nobody has been given it, and until now it lived
+only in a fix-list file. It is now named in three places, all from one derivation: the Build
+handoff's `## Unknowns`, the `tldrx ship` PR body's `## Carried findings`, and — when the gate
+was already falling to a person for some other reason — the boundary card, as the
+`carried, unowned:` lines above. Each row says WHY it could not be attributed rather than
+asserting a cause: no story declares that path in the repo the citation names, or the citation
+names no repo and a repo is not guessed at, or the finding carries no `[src: …]` path at all.
+A story file the walk could not read is named too, with its reason, because an unread story
+takes its fix list's findings out of the report with it. None of this changes a gate, a status,
+an attempt or a cost: it is a report, and it is an addition to a card that was going to print
+anyway — never the reason one prints.
 
 `tldrx answer`, `questions.md`, the live dashboard and every exit code are unchanged —
 `--gate-agent` is rendering, and it never upgrades a stage to `gates_policy: agent`, which is

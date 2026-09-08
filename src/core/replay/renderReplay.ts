@@ -9,6 +9,7 @@ import { openBlocks, parseQuestions } from "../text/index.ts";
 import { parseEvidence } from "../text/evidence.ts";
 import { skippedNote } from "../events/EventLog.ts";
 import { describeGateSignature } from "../run/gateAuthority.ts";
+import { formatJaccard } from "../facts/findDuplicate.ts";
 import {
   loadGateEvidence, loadPhaseArtefacts, runLevelEvents, stageEvents,
   type LoadedRun, type NumberedEvent,
@@ -159,6 +160,17 @@ function bullet(item: NumberedEvent): string | null {
       return `${prefix}story ${text(payload.story) || "?"} REOPENED by ${actor}`
         + ` — back to \`${text(payload.to_status) || "todo"}\` from \`${text(payload.from_status) || "?"}\``
         + `${note(payload.note)}`;
+    // A person growing a story's declared surface (#171). Rendered because the
+    // alternative is a narrative in which a Build gate refuses a path as outside
+    // the surface and then, later, the same path is inside it — with nothing in
+    // between saying who decided that or why. `bullet` ends in
+    // `default: return null`, so a type with no case here is a decision that
+    // happened and cannot be read back.
+    case "story.touches_widened":
+      return `${prefix}story ${text(payload.story) || "?"}'s \`touches:\` WIDENED by ${actor}`
+        + ` — +${pathList(payload.paths)}`
+        + ` (${String(lengthOf(payload.before))} → ${String(lengthOf(payload.after))} path(s))`
+        + `${note(payload.note)}`;
     // The one event in the set that records tldrx moving a ref (design §F.2). A
     // narrative that showed a story's diff base change with nothing in between
     // would read as the framework editing the operator's git state behind them.
@@ -188,6 +200,12 @@ function bullet(item: NumberedEvent): string | null {
     case "check.failed": return `${prefix}check failed: ${checkName(payload)}${note(payload.detail)}`;
     case "budget.warned": return `${prefix}budget warning: ${text(payload.message) || `${money(cost_usd)} spent`}`;
     case "budget.blocked": return `${prefix}budget BLOCKED: ${text(payload.message) || "the spawn was refused"}`;
+    // The moment a ceiling stopped being the framework's own guess (#170). A
+    // narrative that showed a raise past $20 and never showed the $20 being
+    // authorized would read as the framework having decided it alone.
+    case "budget.granted":
+      return `${prefix}budget granted: ${money(Number(payload.amount_usd ?? 0))} authorized by `
+        + `${text(payload.fact) || "?"}${payload.phase == null ? "" : ` for ${text(payload.phase)}`}`;
     case "fact.added": return `${prefix}fact ${text(payload.fact) || text(payload.id) || "recorded"} added`;
     case "fact.retired": return `${prefix}fact ${text(payload.fact) || text(payload.id) || ""} retired`.trimEnd();
     // The one moment the workspace's durable memory changes its mind. A narrative
@@ -197,6 +215,21 @@ function bullet(item: NumberedEvent): string | null {
       return `${prefix}fact ${text(payload.supersedes) || "?"} SUPERSEDED by `
         + `${text(payload.fact) || "?"} (${q || "a question"}), ${actor}: `
         + `${text(payload.answer) || "no answer recorded"}`;
+    // The advisory that raised a question instead of refusing an answer (#169).
+    // `bullet` ends in `default: return null`, so a type with no case here
+    // renders NO line at all — and an honesty guard invisible in `tldrx replay`
+    // is a weak guard. The score is rendered because the check is LEXICAL: a
+    // reader who can see 0.62 can tell a near-miss from an obvious clash.
+    //
+    // BOTH ids, and labelled. `payload.q` is the question that was ANSWERED and
+    // `payload.raised` the one this minted; the line used to render `q` alone as
+    // "raised as Q1" while the same narrative said "Q1 answered" two lines above,
+    // so a reader concluded the raise had gone nowhere. `raised` is additive, so
+    // an event written before it existed renders the fallback rather than a lie.
+    case "fact.conflict_raised":
+      return `${prefix}fact ${text(payload.fact) || "?"} contradicts ${text(payload.conflicts_with) || "?"} `
+        + `(Jaccard ${typeof payload.score === "number" ? formatJaccard(payload.score) : "?"})`
+        + ` — answering ${q || "a question"} raised ${text(payload.raised) || "a question"}`;
     // The moment an earlier phase's document stopped being current. A narrative
     // that showed the answer and not the documents it overtook is exactly the gap
     // gh #104 measured — the flip was in the log and in none of the pages.
@@ -299,6 +332,18 @@ function note(value: unknown): string {
 
 function text(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+/** A payload list of paths, named rather than counted — a count is not actionable. */
+function pathList(value: unknown): string {
+  if (!Array.isArray(value)) return "?";
+  const items = value.filter((item): item is string => typeof item === "string");
+  return items.length === 0 ? "?" : items.join(", ");
+}
+
+/** How long a payload list is, or 0 when the payload does not carry one. */
+function lengthOf(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0;
 }
 
 /**

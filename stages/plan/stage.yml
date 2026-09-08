@@ -11,6 +11,12 @@ model: sonnet
 # `[assumption]` — Plan is decomposition against a design that already exists:
 # split, order, size, cite. Medium; the hard judgement was made upstream in How.
 effort: medium
+# `budget_usd` [assumption]: a scoped guess, never a measurement. No calibration
+# corpus exists in this repo, and the one measurement we do have runs the other
+# way — a story measured $2.27 against the $0.39 ceiling its spawn was given
+# (5.8x). `tldrx cost --stories` is the command that produces the corpus a
+# recalibration would need. Changing this number moves the ceiling of every
+# workspace that never wrote a `.tldrx/stages/<id>/stage.yml` override.
 budget_usd: 4
 
 # `.tldrx/map/workspace.md` carries NO `{repo}` token on purpose, and gh #131's

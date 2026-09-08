@@ -1,9 +1,13 @@
-/** `tldrx cost` — What the work actually cost, per attempt, per stage, per run.
+/** `tldrx cost` — What the work actually cost, per attempt, per stage, per run,
+ * and — with `--stories` — per story against the ceiling its spawns were given.
  *
- * Reads `events.jsonl` and nothing else. Every dollar it prints is one the Claude
- * CLI reported on an `agent.result` line; nothing here multiplies a token count by
- * a price. `tldrx run estimate` is the command that is allowed to guess, and it
- * says "ESTIMATE" in words when it does.
+ * Reads `events.jsonl` and nothing else. Every dollar it prints is one the LOG
+ * recorded, and the log records two kinds: the MEASURED ones the Claude CLI
+ * reported on an `agent.result` line, and the SPAWN CEILINGS the executor handed
+ * `agent.spawned` — a cap it computed, never a charge. They are printed in
+ * separate columns and never added to each other. Nothing here multiplies a token
+ * count by a price; `tldrx run estimate` is the command that is allowed to guess,
+ * and it says "ESTIMATE" in words when it does.
  *
  * Spends nothing, spawns nothing, advances nothing.
  */
@@ -15,7 +19,8 @@ import { fail } from "../report.ts";
 import { RunStore } from "../../core/run/RunStore.ts";
 import { ambiguousRunLines } from "../../core/run/openRuns.ts";
 import {
-  buildProgramCost, buildRunCost, renderProgramCost, renderRunCost,
+  buildProgramCost, buildRunCost, buildStoryCost,
+  renderProgramCost, renderRunCost, renderStoryCost,
 } from "../../core/budget/costView.ts";
 
 const VALUE_FLAGS = ["run", "root"];
@@ -23,7 +28,7 @@ const VALUE_FLAGS = ["run", "root"];
 export const costCommand: Command = {
   name: "cost",
   summary: "What has been spent — per attempt, per stage, per run",
-  usage: "tldrx cost [<run>] [--run <id>] [--all] [--json] [--root <path>]",
+  usage: "tldrx cost [<run>] [--run <id>] [--all] [--stories] [--json] [--root <path>]",
   implemented: true,
   run(argv: readonly string[]): Promise<number> {
     return Promise.resolve(costReport(argv));
@@ -35,6 +40,21 @@ function costReport(argv: readonly string[]): number {
     const args = parseArgs(argv, VALUE_FLAGS);
     const root = workspaceRootFrom(args);
     const json = boolFlag(args, "json");
+
+    const stories = boolFlag(args, "stories");
+    // Two different reports, not a modifier and a report: `--all` totals every run
+    // in the workspace, `--stories` breaks ONE run down by story. Accepting both
+    // and running one of them taught a script that the flag it passed did
+    // something. Three lines below, the same file refuses an ambiguous run rather
+    // than guess which one an operator meant; this is the same refusal.
+    if (stories && boolFlag(args, "all")) {
+      process.stderr.write(
+        "tldrx cost: --all and --stories are two different reports — --all totals every run in "
+        + "this workspace, --stories breaks ONE run down by story. Pick one "
+        + "(see `tldrx cost --help`).\n",
+      );
+      return EXIT_USAGE;
+    }
 
     // `--all` is the PROGRAM view: every run under tldrx-work/, open or finished.
     // A workspace's total is the number an operator is asked about, and it was
@@ -62,6 +82,27 @@ function costReport(argv: readonly string[]): number {
           : `no run '${runId}' in tldrx-work/`}\n`,
       );
       return EXIT_NOT_FOUND;
+    }
+
+    // `--stories` is the same events on a different axis (#170): per STORY, what
+    // it measurably cost beside the CEILING its spawns were given. Both sides are
+    // in the log — `agent.spawned.max_budget_usd` and the `agent.result` envelope's
+    // `cost_usd` — so the promise at the top of this file survives it: no run.yml,
+    // no plan document, no price table. It is deliberately a CEILING and not "the
+    // plan's share": `STORY_KEYS` has no budget key, so there is no plan figure to
+    // take a share of, and naming one would invent it.
+    if (stories) {
+      const stories = buildStoryCost(resolution.store.runDir);
+      if (stories === null) {
+        process.stderr.write(
+          `tldrx cost: ${resolution.store.runId} has no readable run.yml or events.jsonl\n`,
+        );
+        return EXIT_NOT_FOUND;
+      }
+      process.stdout.write(
+        json ? `${JSON.stringify(stories, null, 2)}\n` : `${renderStoryCost(stories)}\n`,
+      );
+      return EXIT_OK;
     }
 
     const cost = buildRunCost(resolution.store.runDir);

@@ -22,6 +22,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { join } from "node:path";
 import { createRun } from "../src/core/run/newRun.ts";
 import { RunStore, RunStoreError } from "../src/core/run/RunStore.ts";
+import { asRunFile, validateRunFile } from "../src/core/run/RunFile.ts";
 import { approve, reject } from "../src/core/run/gates.ts";
 import { cancelRun } from "../src/core/run/rescue.ts";
 import { buildStatus, renderStatus } from "../src/core/run/runStatus.ts";
@@ -288,6 +289,48 @@ describe("emit(load(x)) is stable — a repaired file stays repaired", () => {
     expect(third.run.phases[0]!.stages[0]!.gate.note).toBe(NASTY_NOTE);
     // Nothing needed repairing on the way in: the file was always valid YAML.
     expect(parseYamlRepairing(readFileSync(path, "utf8")).repaired).toBe(false);
+  });
+
+  test("triage.budget_basis round-trips through the emitter (#170)", () => {
+    const ws = workspace();
+    const runId = createRun({
+      root: ws.root, slug: "t", scope: "feature", actor: "alan", now: NOW,
+    }).runId;
+    const store = RunStore.find(ws.root, runId)!;
+    const run = {
+      ...store.run,
+      triage: { split: "s.yml", depends_on: [], budget_basis: "model-guess" as const },
+    };
+    const text = emitRunYaml(run);
+    // Unquoted: `yamlScalar` emits a plain scalar when PLAIN_SAFE matches
+    // (`emitRunYaml.ts:16-18`), and `model-guess` does. Never force quoting in an
+    // emitter to satisfy a test.
+    expect(text).toContain("budget_basis: model-guess");
+    const doc = parseYaml(text);
+    expect(validateRunFile(doc).ok).toBe(true);
+    expect(asRunFile(doc).triage?.budget_basis).toBe("model-guess");
+  });
+
+  test("a triaged run WITHOUT a basis is emitted byte-identically to before the key existed", () => {
+    const ws = workspace();
+    const runId = createRun({
+      root: ws.root, slug: "t2", scope: "feature", actor: "alan", now: NOW,
+    }).runId;
+    const store = RunStore.find(ws.root, runId)!;
+    const run = { ...store.run, triage: { split: "s.yml", depends_on: [] } };
+    expect(emitRunYaml(run)).toContain("triage: {split: s.yml, depends_on: []}");
+  });
+
+  test("a triage.budget_basis value outside the closed set is refused", () => {
+    const ws = workspace();
+    const runId = createRun({
+      root: ws.root, slug: "t3", scope: "feature", actor: "alan", now: NOW,
+    }).runId;
+    const store = RunStore.find(ws.root, runId)!;
+    const run = { ...store.run, triage: { split: "s.yml", depends_on: [] } };
+    const doc = parseYaml(emitRunYaml(run)) as { triage: Record<string, unknown> };
+    doc.triage = { split: "s.yml", depends_on: [], budget_basis: "vibes" };
+    expect(validateRunFile(doc).ok).toBe(false);
   });
 });
 

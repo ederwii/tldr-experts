@@ -26,7 +26,9 @@ import {
 } from "../src/core/dashboard/render.ts";
 import { MAX_ATTEMPTS } from "../src/core/budget/remainingWork.ts";
 import { raiseCommand, shortBy } from "../src/core/budget/budgetView.ts";
-import { DEFAULT_ECONOMY, DEFAULT_ON_HOST_TOKENS_EXCEED } from "../src/core/budget/RunBudget.ts";
+import {
+  DEFAULT_ECONOMY, DEFAULT_ON_GRANT_EXCEED, DEFAULT_ON_HOST_TOKENS_EXCEED,
+} from "../src/core/budget/RunBudget.ts";
 
 const READ_AT = "2026-09-03T08:00:00Z";
 const NOW_MS = Date.parse("2026-09-03T09:00:00Z");
@@ -92,6 +94,24 @@ on_exceed: block
 ceiling_host_tokens: 200000
 phases: [{id: 03-plan, ceiling_usd: 4.0, spent_usd: 1.5},
          {id: 04-build, ceiling_usd: 12.0, spent_usd: 3.25}]
+`;
+
+/**
+ * Dollars, with a GRANT recorded (#170): what the owner authorized, the fact that
+ * says so, a per-phase authorization and an explicit `block`.
+ */
+const GRANT_BUDGET = `version: 1
+run: ${RUN_ID}
+ceiling_usd: 25.0
+per_agent_max_usd: 3.0
+warn_at_pct: 80
+on_exceed: block
+authorized_usd: 20.0
+authorized_by: F031
+authorized_at: 2026-09-05T09:00:00Z
+on_grant_exceed: block
+phases: [{id: 03-plan, ceiling_usd: 4.0, spent_usd: 1.5},
+         {id: 04-build, ceiling_usd: 12.0, spent_usd: 3.25, authorized_usd: 8.0}]
 `;
 
 /** The ordinary one: dollars, no token ceiling, no economy key at all. */
@@ -318,6 +338,38 @@ describe("`budget.blocked` occurrences are shown", () => {
   test("a run the brake never stopped says nothing about it", () => {
     const { run } = modelOf({ events: [event("budget.warned", { phase: "04-build" })] });
     expect(run.budgetBlocks).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4b · What the owner AUTHORIZED, from budget.yml (#170)
+// ---------------------------------------------------------------------------
+
+describe("the grant the ceiling answers to reaches the page's model", () => {
+  test("the model reads the run grant, the fact behind it and the policy", () => {
+    // A recorded grant the run's own page cannot see would be exactly the
+    // written-but-never-read-back failure the keys exist to remove.
+    const { run } = modelOf({ budget: GRANT_BUDGET });
+    expect(run.budget?.authorizedUsd).toBe(20);
+    expect(run.budget?.authorizedBy).toBe("F031");
+    expect(run.budget?.onGrantExceed).toBe("block");
+  });
+
+  test("it reads a PHASE's own authorization, and null where none was written", () => {
+    // Null is "no figure was written on this phase, so the run's grant governs
+    // it" — a different statement from an authorization of $0.
+    const { run } = modelOf({ budget: GRANT_BUDGET });
+    expect(run.budget?.phases.find((phase) => phase.id === "04-build")?.authorizedUsd).toBe(8);
+    expect(run.budget?.phases.find((phase) => phase.id === "03-plan")?.authorizedUsd).toBeNull();
+  });
+
+  test("a budget.yml with no grant keys means NO grant, never $0", () => {
+    const { run } = modelOf({ budget: USD_BUDGET });
+    expect(run.budget?.authorizedUsd).toBeNull();
+    expect(run.budget?.authorizedBy).toBeNull();
+    // Resolved here against the enforcement path's own default, so the renderer
+    // cannot re-derive a policy that disagrees with `budget raise`.
+    expect(run.budget?.onGrantExceed).toBe(DEFAULT_ON_GRANT_EXCEED);
   });
 });
 

@@ -113,6 +113,25 @@ export function openFindings(findings: readonly FixFinding[]): readonly FixFindi
 }
 
 /**
+ * A finding CARRIED FORWARD: `defer-with-log`, and not closed by an evidenced claim.
+ *
+ * A second predicate rather than a widening of `isOpen`, and this file already
+ * argues why at the top: a disposition ROUTES a finding, `Resolved:` CLOSES it,
+ * and they are two questions. "Still owed" gates a story reaching `done`
+ * (`isOpen`); "carried forward" does not gate anything — it is a defect the
+ * story deliberately did not fix, which somebody outside the story has to own.
+ * Widening `isOpen` to cover it would silently change what blocks `done`.
+ *
+ * The `resolvedSha !== null` half is #130's clause reused verbatim: a bare
+ * `Resolved: yes` closes nothing.
+ */
+export function carriedFindings(findings: readonly FixFinding[]): readonly FixFinding[] {
+  return findings.filter(
+    (f) => f.disposition === "defer-with-log" && !(f.resolved && f.resolvedSha !== null),
+  );
+}
+
+/**
  * Findings that CLAIM to be resolved and name no commit — the shape of the lie.
  *
  * Told apart from an ordinary open finding on purpose: "nobody has fixed this

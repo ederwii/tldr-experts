@@ -14,15 +14,78 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { EventLog } from "../events/EventLog.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
-import { isRetired, MAX_FACT_CHARS } from "../facts/Fact.ts";
+import { isRetired, MAX_FACT_CHARS, type FactDecider } from "../facts/Fact.ts";
 import {
   detectAnswered, parseQuestions, recordAnswer, recordSupersession, replaceBlock,
   serializeQuestions, type QuestionBlock, type QuestionsDoc,
 } from "../text/questions.ts";
 import { factsPath } from "../../hooks/lib/workspace.ts";
-import { stampSuperseded } from "./stampSuperseded.ts";
+import { declaredAffects, stampSuperseded } from "./stampSuperseded.ts";
+import { reposFromAffects } from "./reposFromAffects.ts";
+import { raiseConflictQuestion, type RaisedConflict } from "./raiseConflict.ts";
+import { conflictOf } from "../distill/distill.ts";
+import type { DuplicateHit } from "../facts/findDuplicate.ts";
 
 export class AnswerError extends Error {}
+
+/**
+ * Provenance the INVOCATION named, for ONE question.
+ *
+ * Per-question and never per-context, because `captureAnswers` sweeps every
+ * answered-but-uncaptured block in the file (`detectAnswered`, the loop below) —
+ * including one a human filled in by hand before the command ran. Stamping those
+ * with what the operator said about a different question is the same lie the
+ * flags exist to prevent.
+ */
+export interface AnswerOverride {
+  readonly decidedBy?: FactDecider;
+  /** Explicit `--repo` values. Wins over the question's `affects:`. */
+  readonly repos?: readonly string[];
+}
+
+/**
+ * What one block's provenance comes to — the ONE place the three signals are combined.
+ *
+ * Extracted in fix round 1 because the triple (the `overrides` lookup, the
+ * `affects:` resolution, the conditional `decided_by`) stood twice, at the capture
+ * loop and again in `supersedeAnswer`, and the next change to this file adds a
+ * FOURTH field to both. Written once, it is written once.
+ *
+ * DATA in, per AGENTS §12 — a block, two lookup tables and the repos to fall back
+ * on. No `ctx`, no session, nothing mutable: the caller owns the state and passes
+ * the values.
+ */
+export interface AnswerProvenance {
+  /** What the fact binds to: `--repo`, else the question's `affects:`, else `fallbackRepos`. */
+  readonly repos: readonly string[];
+  /** `affects:` entries shaped `repo:path` whose prefix names no workspace repo. */
+  readonly unresolved: readonly string[];
+  /**
+   * Spread into a `FactSource`. `{}` when the invocation stated nothing — absence
+   * is recorded as absence, and means "not stated", never "owner" (`Fact.ts:36`).
+   */
+  readonly source: { readonly decided_by?: FactDecider };
+}
+
+export function answerProvenance(
+  block: QuestionBlock,
+  overrides: ReadonlyMap<string, AnswerOverride> | undefined,
+  repoNames: ReadonlySet<string> | undefined,
+  fallbackRepos: readonly string[],
+): AnswerProvenance {
+  const override = overrides?.get(block.id);
+  const named = reposFromAffects(declaredAffects(block), repoNames ?? new Set());
+  // Precedence, most specific first: what THIS invocation said, then what the
+  // question itself declares, then whatever the caller says to fall back on
+  // (nothing on the capture path; the superseded fact's own repos on the other).
+  const repos = override?.repos
+    ?? (named.repos.length > 0 ? named.repos : fallbackRepos);
+  return {
+    repos,
+    unresolved: named.unresolved,
+    source: override?.decidedBy === undefined ? {} : { decided_by: override.decidedBy },
+  };
+}
 
 export interface CaptureContext {
   /** Workspace root — where `.tldrx/memory/facts.yml` lives. */
@@ -32,6 +95,18 @@ export interface CaptureContext {
   readonly run: string;
   readonly actor: string;
   readonly at: string;
+  /**
+   * Keyed by question id. A block not in the map is recorded exactly as it was
+   * before this key existed — which is what the `answer-capture` hook passes,
+   * because it cannot tell an agent's Write from a human's edit.
+   */
+  readonly overrides?: ReadonlyMap<string, AnswerOverride>;
+  /**
+   * Declared workspace repo names, for resolving a question's `affects:`.
+   * Absent means no `affects:` entry can be resolved, so `repos` stays `[]` —
+   * exactly today's behaviour, and it hides nothing.
+   */
+  readonly repoNames?: ReadonlySet<string>;
 }
 
 export interface CapturedAnswer {
@@ -39,6 +114,36 @@ export interface CapturedAnswer {
   readonly fact: string;
   readonly answer: string;
   readonly area: string;
+  /** `affects:` entries shaped `repo:path` whose prefix names no workspace repo. */
+  readonly unresolvedAffects: readonly string[];
+  /**
+   * The contradiction this answer was DETECTED to create, and the question it
+   * raised (#169). Absent means the check found nothing — never "checked and
+   * agreed"; see `Fact.conflicts_with`.
+   */
+  readonly conflict?: RaisedConflict;
+}
+
+/**
+ * `"<Qid>: affects: <entry> names no repo in this workspace — it scoped nothing"`
+ * for every unresolved entry across every captured block.
+ *
+ * ONE rendering with two callers — `tldrx answer` prints it on stdout, and the
+ * `answer-capture` hook says the same thing through `postContext`, which is its
+ * only channel to the operator. A second spelling would be the only bug either
+ * could have. It lives here, in the module that owns `CapturedAnswer`, rather
+ * than in the command: a hook reaching into `src/cli/` for a sentence would put
+ * the whole command surface in the hook bundle.
+ *
+ * Structurally typed on purpose — it takes anything carrying `q` and
+ * `unresolvedAffects`, which is both `CapturedAnswer` and `SupersededAnswer`.
+ */
+export function unresolvedEntries(
+  captured: readonly { readonly q: string; readonly unresolvedAffects: readonly string[] }[],
+): readonly string[] {
+  return captured.flatMap((c) => c.unresolvedAffects.map(
+    (entry) => `${c.q}: affects: ${entry} names no repo in this workspace — it scoped nothing`,
+  ));
 }
 
 /** What one `--supersede` did, for the caller to print. */
@@ -50,6 +155,10 @@ export interface SupersededAnswer {
   readonly supersedes: string;
   readonly answer: string;
   readonly area: string;
+  /** `affects:` entries shaped `repo:path` whose prefix names no workspace repo. */
+  readonly unresolvedAffects: readonly string[];
+  /** As `CapturedAnswer.conflict` — a reversal can contradict a THIRD fact too. */
+  readonly conflict?: RaisedConflict;
 }
 
 /**
@@ -90,6 +199,10 @@ export function captureAnswers(questionsPath: string, ctx: CaptureContext): read
   // Blocks paired with the fact they wrote, so the earlier phase documents each
   // one overtakes can be stamped once the facts file is closed (gh #104).
   const recorded: { block: QuestionBlock; fact: string }[] = [];
+  // Detected contradictions, held until the questions file is written: the raise
+  // APPENDS to that same file, so doing it inside the loop would be overwritten
+  // by the `serializeQuestions` write below (#169).
+  const clashes: Clash[] = [];
 
   // Load, append and save inside ONE workspace lock. `nextId()` is `max(id) + 1`
   // off the file, so two `answer` commands racing each other used to mint the
@@ -98,15 +211,34 @@ export function captureAnswers(questionsPath: string, ctx: CaptureContext): read
     for (const block of answered) {
       const area = block.metadata?.area ?? "unscoped";
       const truncated = factWasTruncated(block.title, block.answer);
+      // Nothing to fall back on here: a first answer binds to what was stated or
+      // to nothing, and `[]` means "no repo was named", never the run's repos.
+      const prov = answerProvenance(block, ctx.overrides, ctx.repoNames, []);
+      const text = factTextFor(block.title, block.answer);
+      // Advisory (#169). It RAISES and never refuses, so it runs before the
+      // append only to get the link onto the row being written — the answer
+      // stands either way. `conflictOf` is the one implementation and the
+      // threshold is its own constant; a second number here would be a second
+      // derivation of "these two disagree". The `text` handed to it is the FACT
+      // text, exactly what `distill.ts` builds for an answered question, so an
+      // answer that reproduces the recorded one lands on `conflictOf`'s
+      // identical-text-is-agreement rule instead of raising against itself.
+      const clash = conflictOf({ match: block.title, area, text }, store.active);
       const fact = store.append({
-        fact: factTextFor(block.title, block.answer),
+        fact: text,
         ...(truncated ? { truncated: true as const } : {}),
+        ...(clash === null ? {} : { conflicts_with: [clash.fact.id] }),
         area,
-        repos: [],
+        repos: prov.repos,
         kind: "answer",
         confidence: "stated",
-        source: { who: ctx.actor, when: ctx.at, run: ctx.run, q: block.id },
+        source: { who: ctx.actor, when: ctx.at, run: ctx.run, q: block.id, ...prov.source },
       });
+      // `area` is carried, not recomputed. It was derived a second time inside
+      // the raise as `metadata?.area ?? "unscoped"`, which disagrees with the
+      // spelling above on an EMPTY area — `"" ?? x` is `""` — so the fact said
+      // `unscoped` and the question it raised said nothing.
+      if (clash !== null) clashes.push({ block, area, factId: fact.id, hit: clash });
       doc = replaceBlock(doc, recordAnswer(block, { answered_by: ctx.actor, answered_at: ctx.at, fact: fact.id }));
       log.tryAppend({
         ts: ctx.at,
@@ -126,15 +258,80 @@ export function captureAnswers(questionsPath: string, ctx: CaptureContext): read
         cost_usd: 0,
         payload: { fact: fact.id, area: fact.area, kind: fact.kind, q: block.id },
       });
-      captured.push({ q: block.id, fact: fact.id, answer: block.answer, area });
+      captured.push({
+        q: block.id, fact: fact.id, answer: block.answer, area,
+        unresolvedAffects: prov.unresolved,
+      });
       recorded.push({ block, fact: fact.id });
     }
   });
   writeFileSync(questionsPath, serializeQuestions(doc), "utf8");
+  const raised = raiseAll(log, ctx, questionsPath, clashes);
   for (const item of recorded) {
     markSuperseded(log, ctx, questionsPath, item.block, item.fact);
   }
-  return captured;
+  // Rebuilt rather than mutated: the raise can only happen after the file is
+  // written, and the conflict is computed exactly once, inside the lock.
+  return captured.map((answer) => {
+    const conflict = raised.get(answer.q);
+    return conflict === undefined ? answer : { ...answer, conflict };
+  });
+}
+
+/** One detected contradiction, with the `area` its caller already derived. */
+interface Clash {
+  readonly block: QuestionBlock;
+  /** The fact's area — carried so it is derived once, by the caller that writes the row. */
+  readonly area: string;
+  readonly factId: string;
+  readonly hit: DuplicateHit;
+}
+
+/**
+ * Mint one §2.7 question per detected contradiction, and log one event each.
+ *
+ * AFTER the questions file is written, never before: `raiseConflictQuestion`
+ * APPENDS to that same path, and `serializeQuestions` rewrites it whole — a raise
+ * inside the capture loop would be erased by the write that follows it.
+ *
+ * Shared by both answer paths so the block, the id rule and the event are minted
+ * one way. Advisory throughout: nothing here changes an exit code, and the block
+ * it mints is `advisory: true`, so it does not stop an auto gate either.
+ */
+function raiseAll(
+  log: EventLog,
+  ctx: CaptureContext,
+  questionsPath: string,
+  clashes: readonly Clash[],
+): ReadonlyMap<string, RaisedConflict> {
+  const raised = new Map<string, RaisedConflict>();
+  for (const clash of clashes) {
+    const conflict = raiseConflictQuestion({
+      runDir: ctx.runDir,
+      questionsPath,
+      area: clash.area,
+      at: ctx.at,
+      newFactId: clash.factId,
+      oldFactId: clash.hit.fact.id,
+      oldFactText: clash.hit.fact.fact,
+      score: clash.hit.score,
+      answeredQ: clash.block.id,
+    });
+    raised.set(clash.block.id, conflict);
+    log.tryAppend({
+      ts: ctx.at, run: ctx.run, stage: null, type: "fact.conflict_raised", actor: ctx.actor, cost_usd: 0,
+      // `q` is the question ANSWERED; `raised` is the question this MINTED. Both,
+      // because they are different ids and a log carrying only the first cannot
+      // answer "which question did this raise" — the narrative said "raised as
+      // Q1" over an answered Q1 while the real block was Q2, and a reader
+      // following it concluded the raise had gone nowhere.
+      payload: {
+        fact: clash.factId, conflicts_with: clash.hit.fact.id, score: clash.hit.score,
+        q: clash.block.id, raised: conflict.q,
+      },
+    });
+  }
+  return raised;
 }
 
 /**
@@ -238,6 +435,7 @@ export function supersedeAnswer(
   const area = block.metadata.area === "" ? "unscoped" : block.metadata.area;
   const truncated = factWasTruncated(block.title, answer);
 
+  let clash: DuplicateHit | null = null;
   const result = FactsStore.update(factsPath(ctx.root), (store): SupersededAnswer => {
     const head = store.headOf(recorded);
     if (head === undefined) {
@@ -246,16 +444,45 @@ export function supersedeAnswer(
     if (isRetired(head)) {
       throw new AnswerError(`${head.id} is retired; a retired fact is not superseded`);
     }
+    // A supersession is a NEW decision and may legitimately rescope, so it takes
+    // the same precedence as a first answer — `--repo`, else the question's own
+    // `affects:` — and only falls back to inheriting what the fact it replaces
+    // bound to. Inheritance is the floor, not the rule: until fix round 1 the
+    // `affects:` half was computed here and thrown away, so a question that said
+    // which repo it was about was ignored the moment its answer was reversed.
+    const prov = answerProvenance(block, ctx.overrides, ctx.repoNames, head.repos);
+    const text = factTextFor(block.title, answer);
+    // The same advisory as the capture path, with ONE difference: a supersession
+    // NAMES the fact it replaces, and that fact is still live here (the link is
+    // written below), so it is the top hit every time. A hit on the head is the
+    // reversal itself, not a contradiction — without this exclusion every
+    // `--supersede` would mint a question asking which of the two is right.
+    //
+    // The head leaves the CANDIDATE SET; it is not filtered out of the result.
+    // `findDuplicate` returns the single best hit, so discarding a result that
+    // happened to be the head also discarded every THIRD-fact clash scoring below
+    // it — measured in review: with a live F001 above the threshold and the head
+    // F002 winning the tie, the real contradiction came back `null`. Excluding
+    // the head first means a third fact that still disagrees is still raised.
+    const hit = conflictOf(
+      { match: block.title, area, text },
+      store.active.filter((candidate) => candidate.id !== head.id),
+    );
+    clash = hit;
     const fact = store.supersede(head.id, {
-      fact: factTextFor(block.title, answer),
+      fact: text,
       ...(truncated ? { truncated: true as const } : {}),
+      ...(hit === null ? {} : { conflicts_with: [hit.fact.id] }),
       area,
-      repos: [...head.repos],
+      repos: [...prov.repos],
       kind: "answer",
       confidence: "stated",
-      source: { who: ctx.actor, when: ctx.at, run: ctx.run, q: block.id },
+      source: { who: ctx.actor, when: ctx.at, run: ctx.run, q: block.id, ...prov.source },
     });
-    return { q: block.id, fact: fact.id, supersedes: head.id, answer, area };
+    return {
+      q: block.id, fact: fact.id, supersedes: head.id, answer, area,
+      unresolvedAffects: prov.unresolved,
+    };
   });
 
   const updated = replaceBlock(doc, recordSupersession(block, answer, {
@@ -275,10 +502,15 @@ export function supersedeAnswer(
     ts: ctx.at, run: ctx.run, stage: null, type: "fact.superseded", actor: ctx.actor, cost_usd: 0,
     payload: { q: block.id, fact: result.fact, supersedes: result.supersedes, answer },
   });
+  // The raise goes through the SAME leaf the capture path uses, after the file is
+  // written for the same reason (#169).
+  const raised = raiseAll(log, ctx, questionsPath,
+    clash === null ? [] : [{ block, area: result.area, factId: result.fact, hit: clash }]);
   // A reversal overtakes the same earlier documents an answer does — more of them,
   // if anything, since by now those documents have been built on (gh #104).
   markSuperseded(log, ctx, questionsPath, block, result.fact);
-  return result;
+  const conflict = raised.get(block.id);
+  return conflict === undefined ? result : { ...result, conflict };
 }
 
 /**

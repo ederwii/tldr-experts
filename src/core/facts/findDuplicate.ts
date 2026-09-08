@@ -36,6 +36,26 @@ export interface DuplicateHit {
 }
 
 /**
+ * A `DuplicateHit.score` as a person reads it — ONE spelling, next to the
+ * arithmetic that produces it.
+ *
+ * FOUR readers, all of them (#169): `renderDistill`'s imported-claim conflict
+ * question, the `Why asked:` sentence of a raised answer conflict
+ * (`answers/raiseConflict.ts`), the `tldrx answer` operator line, and the
+ * `fact.conflict_raised` replay bullet. Two digits, because the threshold is one
+ * digit and the reader's question is "how far past 0.6 was this" — and because
+ * four spellings of `.toFixed(2)` is how a narrative and a question card start
+ * disagreeing about the same number. `renderDistill` was the fourth and kept its
+ * own spelling for one commit while this comment claimed otherwise; the claim is
+ * a test now (`test/answer-conflict.test.ts`, the one-spelling shape pin), not a
+ * promise. Money has its own formatters and is a different derivation — this one
+ * is scoped to the Jaccard score.
+ */
+export function formatJaccard(score: number): string {
+  return score.toFixed(2);
+}
+
+/**
  * The fact that already answers `question`, or null.
  * `area` must match exactly — the same words in a different area are a different question.
  */

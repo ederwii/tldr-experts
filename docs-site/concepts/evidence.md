@@ -81,6 +81,45 @@ Two small rules worth knowing, both from real refusals:
   never as a prose sentence. "No unknowns that we can see" is precisely the claim that most
   needs a source.
 
+## A decision says who made it, or says it does not
+
+An answer you record is a fact, and a fact is the artefact that gets quoted back to every
+later stage. So it carries who **decided** it, which is not the same as who typed it.
+
+```bash
+tldrx answer Q4 "B — rankings are global" --decided-by owner --repo api
+```
+
+`--decided-by owner|driver` is optional on `answer` and required on `tldrx facts add`, and the
+difference is honest rather than tidy: the same code path also runs from the answer-capture
+hook, which fires on an agent's own edit and on yours alike, so it cannot say which of the two
+answered. When nothing said, the fact says **not stated** — never *owner* — and the command
+prints that on stdout rather than leaving you to notice it later. Every close of the run, and
+the Build handoff's header, then say how many of the run's decisions name a decider and how
+many do not.
+
+`--repo` scopes the fact, so a decision about one repo stops appearing in prompts about the
+others. Without it the scope comes from the question's own `affects:` line when an entry there
+names a repo, and from nothing otherwise — an empty scope means *no repo was named*, never
+*every repo*. A `--repo` your `workspace.yml` does not declare is refused before anything is
+written.
+
+## A contradiction becomes a question, not two live facts
+
+When an answer lexically contradicts a fact already on record, the answer is still recorded —
+and tldrx raises a question asking which of the two holds, in the same file you just answered
+in, with the options *supersede the old one*, *supersede the new one*, or *write the correction*.
+The new fact also carries `conflicts_with`, so a prompt that quotes it says so.
+
+It raises; it never refuses. The check is lexical — the same word-overlap rule the no-re-ask
+hook uses — so it can miss two differently-worded answers that disagree, and it can fire on two
+that do not. Refusing on that would let a word count deadlock an unattended run. For the same
+reason the raised question is marked `advisory:` and stops nothing that runs unattended — not
+an [auto gate](/concepts/gates), not a stage waiting on answers, not a skip rule: the gate says
+how many it skipped, and every reader that LISTS questions shows this one exactly like any
+other. Nothing is retired, nothing is reconciled, and the absence of
+`conflicts_with` on a fact means *no contradiction was detected* — never *checked and agreed*.
+
 ## The same rule applies to money
 
 Every dollar `tldrx cost` prints was reported by the model provider and read off an event

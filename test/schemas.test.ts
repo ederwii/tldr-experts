@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   EFFORT_LEVELS, FILE_KINDS, LEGACY_VERSION_NOTE, isEffortLevel, validate, type FileKind,
@@ -127,6 +128,35 @@ describe("validators accept every shipped stage and workflow", () => {
     for (const file of stageFiles) {
       const md = join(STAGES_DIR, file.replace("stage.yml", "stage.md"));
       expect(await Bun.file(md).exists()).toBe(true);
+    }
+  });
+
+  test("every shipped money literal carries an [assumption] label ON the money (#170 ask 3)", () => {
+    // The marker is asserted by its EXACT TEXT, inside the contiguous comment block
+    // immediately above the key — not by a lookback window. Measured at the base: a
+    // six-line window is already GREEN for all five `stages/*/stage.yml`, because it
+    // catches the `effort:` [assumption] comments those files already carry
+    // (`stages/what/stage.yml:11` against `budget_usd:` at `:15`), and a guard that
+    // passes before the change is not a guard. Measured too: the line IMMEDIATELY
+    // above every one of the eighteen money keys is another key (`effort:` in the
+    // five stages, `depth:` in the thirteen workflows), so the label has to be a
+    // comment block written directly above the key and nowhere else.
+    const files = [
+      ...stageFiles.map((file) => join(STAGES_DIR, file)),
+      ...workflowFiles.map((file) => join(WORKFLOWS_DIR, file)),
+    ];
+    for (const file of files) {
+      const lines = readFileSync(file, "utf8").split("\n");
+      const key = lines.findIndex((l) => /^(budget_usd|default_budget_usd)\s*:/.test(l));
+      expect(key, `${file} declares a money literal`).toBeGreaterThan(0);
+      const marker = (lines[key] ?? "").startsWith("default_budget_usd")
+        ? "`default_budget_usd` [assumption]"
+        : "`budget_usd` [assumption]";
+      const block: string[] = [];
+      for (let i = key - 1; i >= 0 && (lines[i] ?? "").trimStart().startsWith("#"); i--) {
+        block.unshift(lines[i] ?? "");
+      }
+      expect(block.join("\n"), `${file} labels its money literal`).toContain(marker);
     }
   });
 });

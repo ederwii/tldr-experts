@@ -32,7 +32,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { openBlocks, parseQuestions, unreadableQuestionHeadings } from "../text/questions.ts";
+import { isAdvisory, openBlocks, parseQuestions, unreadableQuestionHeadings } from "../text/questions.ts";
 import { isHostTokens, type RunBudget } from "../budget/RunBudget.ts";
 import { epicOnlyCount, notedCount, runCheck, unverifiedCount, type CheckOutcome } from "./checks.ts";
 import { buildProgress, BUILD_PHASE } from "./buildProgress.ts";
@@ -160,10 +160,20 @@ function questionsCondition(runDir: string, phaseId: string, planned: PlannedSta
     }
   }
   const open = openQuestions(path);
+  // ADVISORY blocks do not count (#169). They are minted by `tldrx answer`'s
+  // contradiction check, which is lexical and whose false-positive rate is
+  // unmeasured — stopping an unattended run on one would be the very deadlock
+  // that check refuses to cause by refusing the answer. Skipped is not hidden:
+  // the detail names them, and the run close lists them like any other question.
+  const skipped = open.advisory.length === 0
+    ? ""
+    : ` · ${String(open.advisory.length)} advisory not counted (${open.advisory.join(", ")})`;
   return {
     id: "questions",
-    ok: open.length === 0,
-    detail: open.length === 0 ? "0 open" : `${String(open.length)} open (${open.join(", ")})`,
+    ok: open.blocking.length === 0,
+    detail: (open.blocking.length === 0
+      ? "0 open"
+      : `${String(open.blocking.length)} open (${open.blocking.join(", ")})`) + skipped,
   };
 }
 
@@ -350,14 +360,26 @@ async function boundaryCondition(input: AutoGateInput): Promise<AutoGateConditio
   return { id: "boundary", ...verdict };
 }
 
-function openQuestions(path: string): readonly string[] {
-  if (!existsSync(path)) return [];
+/**
+ * Open question ids, split into the ones that BLOCK this gate and the ones that
+ * were raised as advisory (#169).
+ *
+ * Both halves come back, because the gate has to say what it did not count: a
+ * condition reporting "0 open" over a question that exists on disk would be the
+ * quiet kind of pass this file was rewritten to stop producing (#109).
+ */
+function openQuestions(path: string): { blocking: readonly string[]; advisory: readonly string[] } {
+  if (!existsSync(path)) return { blocking: [], advisory: [] };
   try {
-    return openBlocks(parseQuestions(readFileSync(path, "utf8")).blocks).map((block) => block.id);
+    const open = openBlocks(parseQuestions(readFileSync(path, "utf8")).blocks);
+    return {
+      blocking: open.filter((block) => !isAdvisory(block)).map((block) => block.id),
+      advisory: open.filter((block) => isAdvisory(block)).map((block) => block.id),
+    };
   } catch {
     // An unparseable questions.md is not "no open questions" — it is a file nobody
     // can read, and that is exactly when a person should look at it.
-    return ["(questions.md does not parse)"];
+    return { blocking: ["(questions.md does not parse)"], advisory: [] };
   }
 }
 

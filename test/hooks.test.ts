@@ -6,6 +6,7 @@ import { FRAMEWORK_ROOT, PLUGIN_DIR } from "../src/core/paths.ts";
 import { parseHookInput } from "../src/core/hooks/passthrough.ts";
 import { parseQuestions } from "../src/core/text/questions.ts";
 import { FactsStore } from "../src/core/facts/FactsStore.ts";
+import { renderFacts } from "../src/core/facilitator/prompt.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import { makeWorkspace, FIXTURE_RUN, type TempWorkspace } from "./fixtures/tempWorkspace.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
@@ -432,6 +433,37 @@ describe("no-re-ask (PreToolUse Write|Edit)", () => {
     expect(run.stdout).toBe("");
   });
 
+  /**
+   * The other half of what `--repo` buys (#169), through the FILE rather than a
+   * literal: an answered fact written with `repos: ["api"]` is emitted by
+   * `emitFactsYaml`, parsed back by `FactsStore.load`, and only THEN filtered by
+   * `renderFacts`. Both directions, because "it appears" alone would also pass
+   * if the filter were removed.
+   */
+  test("an answered fact scoped to one repo is in that run's {{facts}} block and absent from another's", () => {
+    const path = join(workspace().root, ".tldrx", "memory", "facts.yml");
+    const store = FactsStore.load(path);
+    store.append({
+      fact: "Sessions live in Redis, one key per tenant.",
+      area: "data-model",
+      repos: ["api"],
+      kind: "answer",
+      confidence: "stated",
+      source: {
+        who: "alan", when: "2026-08-31T09:00:00Z", run: "260831-envs", q: "Q1", decided_by: "owner",
+      },
+    });
+    store.save();
+
+    // Re-read from disk: this is the round trip, not the in-memory row.
+    const written = FactsStore.load(path).facts;
+    const scoped = written.find((f) => f.fact.startsWith("Sessions live in Redis"));
+    expect(scoped?.repos).toEqual(["api"]);
+    expect(scoped?.source.decided_by).toBe("owner");
+    expect(renderFacts(written, ["api"])).toContain(scoped?.id ?? "MISSING");
+    expect(renderFacts(written, ["lab"])).not.toContain(scoped?.id ?? "MISSING");
+  });
+
   test("fails open when facts.yml cannot be read", async () => {
     writeFileSync(join(workspace().root, ".tldrx", "memory", "facts.yml"), "version: 1\nfacts: not-a-list\n", "utf8");
     const run = await hook("no-reask", {
@@ -449,6 +481,68 @@ describe("answer-capture (PostToolUse + FileChanged)", () => {
     const path = questionsPath();
     writeFileSync(path, readFileSync(path, "utf8").replace("[Answer]:\n", "[Answer]: B) Redis sorted set\n"), "utf8");
   }
+
+  /** A questions.md whose single open block carries an `affects:` key. */
+  function questionsAffecting(affects: string): string {
+    return [
+      "# Questions — 02-how — run 260828-leaderboard",
+      "",
+      "## Q9 · Where do sessions live?",
+      `<!-- id: Q9 | status: open | area: data-model | asked_by: architect | asked_at: 2026-08-28T14:02:11Z | affects: ${affects} -->`,
+      "Why asked: nothing in memory covers it [src: absent:.tldrx/memory/facts.yml]",
+      "",
+      "- A) yes",
+      "- B) no",
+      "",
+      "[Answer]: B) Redis sorted set",
+      "",
+    ].join("\n");
+  }
+
+  /**
+   * The hook's `repoNames` (#169, review M8). Removing it from
+   * `answer-capture.ts` used to leave this whole file green, while it is a real
+   * behaviour change on the framework's PRIMARY capture path: hook-written facts
+   * used to get `repos: []` always, and now take the repos the question's own
+   * `affects:` names. Read back off disk, so it is the emitted bytes.
+   */
+  test("a hook-captured answer takes the repos its affects: names", async () => {
+    const path = questionsPath();
+    writeFileSync(path, questionsAffecting("api:src/db.ts"), "utf8");
+    const run = await hook("answer-capture", {
+      hook_event_name: "FileChanged", file_path: path,
+    });
+    expect(run.code).toBe(0);
+    expect(run.stderr).toBe("");
+
+    const written = FactsStore.load(join(workspace().root, ".tldrx", "memory", "facts.yml")).facts;
+    const q9 = written.find((f) => f.source.q === "Q9");
+    expect(q9?.repos).toEqual(["api"]);
+    // The hook still says nothing about WHO — it cannot tell an agent's Write
+    // from a human's edit, so the absence stands.
+    expect(q9?.source.decided_by).toBeUndefined();
+  });
+
+  /**
+   * The hook half of review I1. `postContext` is this hook's ONLY channel to the
+   * operator, so an `affects:` entry that named a repo and got it wrong is named
+   * there — otherwise `repos: []` reads as "no repo was named" on the path that
+   * writes most of the framework's facts.
+   */
+  test("a hook-captured answer names an affects: entry that matched no repo", async () => {
+    const path = questionsPath();
+    writeFileSync(path, questionsAffecting("ghost:src/db.ts"), "utf8");
+    const run = await hook("answer-capture", {
+      hook_event_name: "FileChanged", file_path: path,
+    });
+    expect(run.code).toBe(0);
+
+    const posted = context(run) ?? "";
+    expect(posted).toContain("Q9 →");
+    expect(posted).toContain("Q9: affects: ghost:src/db.ts names no repo in this workspace");
+    expect(FactsStore.load(join(workspace().root, ".tldrx", "memory", "facts.yml")).facts
+      .find((f) => f.source.q === "Q9")?.repos).toEqual([]);
+  });
 
   test("records the answer, the fact and the event, and never blocks", async () => {
     answerQ4();

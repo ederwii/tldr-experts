@@ -134,7 +134,10 @@ export function applySplit(options: ApplyOptions): ApplyOutcome {
         scope: run.scope,
         budgetUsd: run.budget_usd,
         seed: seedsFor(run, shared),
-        triage: { split: splitRef, depends_on: run.depends_on },
+        // The number `run.budget_usd` carries is measurably a guess (#170):
+        // `triagePrompt.ts:249` tells the model as much, and `splitFile.ts:213-215`
+        // validates only "finite and > 0".
+        triage: { split: splitRef, depends_on: run.depends_on, budget_basis: "model-guess" },
         actor: options.actor,
         now: options.now,
       });

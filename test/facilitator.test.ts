@@ -215,6 +215,33 @@ describe("stopping for a human", () => {
     expect(outcome.lines.join("\n")).toContain("every question is answered");
     expect(RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.status).toBe("done");
   });
+
+  /**
+   * #169, fix round 2 — an ADVISORY block does not hold `awaiting_answer` either.
+   *
+   * `advisory: true` marks a question the FRAMEWORK raised off a LEXICAL
+   * near-match whose false-positive rate is unmeasured. The auto gate has skipped
+   * those since #169; this branch still counted them, so the very near-match that
+   * must not stop a gate could park an unattended run one door along. Both halves
+   * are asserted, because "advisory is skipped" is only worth anything beside "a
+   * normal one still holds" — the test above is that half, on the same fixture.
+   *
+   * Skipped is not hidden: the block is still `status: open` on disk afterwards,
+   * and every listing surface goes on naming it.
+   */
+  test("an ADVISORY open question does not hold awaiting_answer", async () => {
+    const ws = workspace(TWO_STAGE);
+    writeFileSync(join(ws.runDir, "01-what", "questions.md"), questionsMd("advisory"), "utf8");
+    stall(ws, "awaiting_answer");
+    fakeClaude(ws, { FAKE_CLAUDE_OUTPUTS: ALPHA_OUTPUTS });
+
+    const outcome = await next(ws);
+    expect(outcome.code).toBe(0);
+    expect(RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.status).toBe("done");
+    const onDisk = readFileSync(join(ws.runDir, "01-what", "questions.md"), "utf8");
+    expect(onDisk).toContain("status: open");
+    expect(onDisk).toContain("advisory: true");
+  });
 });
 
 describe("refusing to start", () => {
@@ -684,14 +711,17 @@ function starve(ws: FacilitatorWorkspace, phaseId: string, ceiling: number): voi
   writeFileSync(path, next, "utf8");
 }
 
-function questionsMd(state: "open" | "answered"): string {
-  const status = state === "open" ? "open" : "answered";
-  const answer = state === "open" ? "[Answer]:" : "[Answer]: A — Postgres";
+function questionsMd(state: "open" | "answered" | "advisory"): string {
+  const status = state === "answered" ? "answered" : "open";
+  const answer = state === "answered" ? "[Answer]: A — Postgres" : "[Answer]:";
+  // `advisory: true` is the optional §2.7 key `tldrx answer`'s contradiction
+  // check stamps on a question it RAISED (#169). Absent means "not advisory".
+  const extra = state === "advisory" ? " | advisory: true" : "";
   return [
     `# Questions — 01-what`,
     "",
     "## Q1 · Where does leaderboard state live?",
-    `<!-- id: Q1 | status: ${status} | area: data-model | asked_by: product | asked_at: 2026-08-28T09:00:00Z -->`,
+    `<!-- id: Q1 | status: ${status} | area: data-model | asked_by: product | asked_at: 2026-08-28T09:00:00Z${extra} -->`,
     "Why asked: no ranking store exists [src: absent:.tldrx/memory/facts.yml]",
     "",
     "- A) A new Postgres table",

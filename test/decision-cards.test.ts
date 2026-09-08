@@ -20,7 +20,7 @@
  *                        recommendation line, rather than with a manufactured one.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -30,6 +30,10 @@ import {
 import {
   decisionHeader, renderDecisionCard, renderRecommendation, DECISION_KINDS,
 } from "../src/core/ui/decisionCard.ts";
+import {
+  carriedCardLine, carriedDetailLines, type CarriedRow,
+} from "../src/core/build/carriedRows.ts";
+import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { parseQuestions, serializeQuestions } from "../src/core/text/questions.ts";
 import { runAuto, type AutoOptions } from "../src/core/facilitator/runAuto.ts";
 import { runNext } from "../src/core/facilitator/runNext.ts";
@@ -311,10 +315,133 @@ describe("a card per fallthrough kind", () => {
       "DECISION — 260830-tenancy · 01-what/what",
       "Boundary — the epic changed paths nobody scoped",
       `  ${detail}`,
-      "  widen the scope: add the path to a story's `touches:`, or cite it in a handoff, then re-run the stage",
+      "  tldrx story widen <id> <path> --note \"<why>\" — or cite the path in a handoff, then re-run the stage",
+      "  tldrx story reopen <id> --for-fix --note \"<the defect>\" — first, when the story is already `done`: "
+        + "widening finished work is refused",
       "  tldrx approve --run 260830-tenancy",
       '  tldrx reject --run 260830-tenancy --note "<why>"',
     ]);
+  });
+
+  /**
+   * The carried rows a boundary card carries (#171).
+   *
+   * HANDED in, never scraped: `cardForTriggers`'s caller computes them with
+   * `build/carriedRows.ts`, the same leaf the Build handoff and the PR body read.
+   * The card is a SECONDARY surface — an addition to a card that was already
+   * going to print, never the reason one prints — so the no-extra call still
+   * renders exactly what it rendered before.
+   */
+  /**
+   * The card's detail lines come from the LEAF's own renderer (#171, fix round 1).
+   *
+   * These are GUARDS, not proofs — they pin behaviour that is already green, which
+   * is the point: `carriedCardLine` had zero coverage, so its format could change
+   * and nothing went red. The mutations recorded in the fix-round report are what
+   * give them teeth.
+   */
+  const CARRIED_ROW: CarriedRow = {
+    rel: "04-build/fixlist/S1-1.md",
+    row: {
+      finding: {
+        n: 1, severity: "high", finding: "the token is logged",
+        where: "[src: api:platform/Auth.cs:3]", disposition: "defer-with-log",
+        detail: "", doNot: [], resolved: false, resolvedSha: null,
+      },
+      ownership: "unowned",
+      reason: "no story declares this path in the repo it names",
+    },
+  };
+
+  test("carriedCardLine renders one carried row as one line, with its fix list", () => {
+    expect(carriedCardLine(CARRIED_ROW)).toBe(
+      "carried, unowned: 1 · the token is logged [high] — no story declares this path in the repo "
+      + "it names — `04-build/fixlist/S1-1.md`",
+    );
+  });
+
+  test("carriedDetailLines carries BOTH lists — an unread story file is never left out", () => {
+    expect(carriedDetailLines({
+      rows: [CARRIED_ROW],
+      unreadable: [{ rel: "03-plan/stories/S2.md", reason: "the file does not validate as a story" }],
+    })).toEqual([
+      carriedCardLine(CARRIED_ROW),
+      "story file not read: `03-plan/stories/S2.md` — the file does not validate as a story",
+    ]);
+  });
+
+  test("carried rows handed to the boundary card land under its detail", () => {
+    const detail = "13 changed path(s), 1 outside the surface: api:platform/Auth.cs";
+    const lines = renderDecisionCard(boundaryCard(ctx(), detail, carriedDetailLines({
+      rows: [CARRIED_ROW], unreadable: [],
+    })));
+    expect(lines[2]).toBe(`  ${detail}`);
+    expect(lines[3]).toBe(`  ${carriedCardLine(CARRIED_ROW)}`);
+    expect(lines[3]).toContain("the token is logged");
+    // The advice still follows the detail, unchanged.
+    expect(lines[4]).toBe(
+      "  tldrx story widen <id> <path> --note \"<why>\" — or cite the path in a handoff, then re-run the stage",
+    );
+  });
+
+  /**
+   * The `runNext` wiring itself (#171, fix round 1).
+   *
+   * Reaching it behaviourally needs an agent gate that falls to a person with a
+   * BOUNDARY trigger — a real epic diff over a real repo — which is a whole Build
+   * run for two lines. So the wiring is pinned structurally, the way
+   * `test/dod-allowlist.test.ts` pins `build.ts`'s allowlist call: delete the
+   * argument and this goes red. It is a shape pin and it is labelled one; what it
+   * cannot do is prove the rendering, which the three tests above do.
+   */
+  test("`next`'s agent-gate card is handed the leaf's rows, not an empty list", () => {
+    const source = readFileSync(join(FRAMEWORK_ROOT, "src", "core", "facilitator", "runNext.ts"), "utf8");
+    expect(source).toContain("carriedDetailLines(");
+    expect(source).toContain("carriedReportFor(store.runDir");
+    // and it is the SAME call `cardForTriggers` receives, not a stray import
+    const call = source.slice(source.indexOf("const card = cardForTriggers("));
+    expect(call.slice(0, call.indexOf("));"))).toContain("carriedDetailLines(");
+  });
+
+  /**
+   * #171, fix round 2 — the fix list is walked only when a boundary card fires.
+   *
+   * `cardForTriggers` took the carried lines as an ARRAY, so `runNext` computed
+   * them — a directory walk plus a fix-list parse per story — before every card,
+   * on a path that previously did neither, and then handed them to the one branch
+   * in five that reads them. A thunk moves the work behind the branch without
+   * moving the judgement: the caller still owns the derivation, the card still
+   * scrapes nothing.
+   *
+   * The counter is the assertion. A test that only checked the boundary card
+   * still rendered would pass over an eager call, which is the whole defect.
+   */
+  test("only a boundary card reads the fix list — every other card leaves it unread", () => {
+    let reads = 0;
+    const carried = (): readonly string[] => {
+      reads += 1;
+      return carriedDetailLines({ rows: [CARRIED_ROW], unreadable: [] });
+    };
+    const money = { spentUsd: 1, ceilingUsd: 2 };
+
+    expect(cardForTriggers(ctx(), [{ trigger: "condition", detail: "c" }], money, carried)?.kind).toBe("gate");
+    expect(cardForTriggers(ctx(), [{ trigger: "budget-event", detail: "m" }], money, carried)?.kind)
+      .toBe("budget");
+    expect(cardForTriggers(ctx(), [], money, carried)).toBeNull();
+    expect(reads).toBe(0);
+
+    const card = cardForTriggers(ctx(), [{ trigger: "boundary", detail: "d" }], money, carried);
+    expect(card?.kind).toBe("boundary");
+    expect(reads).toBe(1);
+    expect(card?.detail).toEqual(["d", carriedCardLine(CARRIED_ROW)]);
+  });
+
+  test("no carried rows leaves the card byte-identical to the two-argument call", () => {
+    // A GUARD: both sides go through the new parameter, so it cannot catch a
+    // changed advice line. The `toEqual` above is the test that can.
+    const detail = "13 changed path(s), 1 outside the surface: api:platform/Auth.cs";
+    expect(renderDecisionCard(boundaryCard(ctx(), detail, [])))
+      .toEqual(renderDecisionCard(boundaryCard(ctx(), detail)));
   });
 
   test("gate — every other reason, carried with its reason", () => {

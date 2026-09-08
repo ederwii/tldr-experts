@@ -41,6 +41,7 @@ import {
   factsPath, loadWorkspace, type WorkspaceContext,
 } from "../../../hooks/lib/workspace.ts";
 import { FactsStore } from "../../facts/FactsStore.ts";
+import { decidedTally, describeDecidedTally } from "../../facts/decidedTally.ts";
 import { RunStore } from "../../run/RunStore.ts";
 import { renderConventions, renderFacts, stackExpertNames } from "../prompt.ts";
 import { loadExpertBundles } from "../../experts/expertBundle.ts";
@@ -97,6 +98,7 @@ import {
   type FixFinding, type FixlistOnDisk,
 } from "../../build/fixlist.ts";
 import { renderBuildHandoff, type EpicSummaryRow } from "../../build/handoff.ts";
+import { carriedReportFor, type CarriedReport } from "../../build/carriedRows.ts";
 import {
   baseResultOf, PreflightCache, redBaseRefusal, runStoryDod, type BaseParts,
 } from "../../build/dodRunner.ts";
@@ -119,7 +121,7 @@ import {
   RecurringFocus, ReviewCounters, type RoundParts,
 } from "../../build/reviewRound.ts";
 import { readReviewLedger } from "../../build/reviewLedger.ts";
-import { phaseCostToDate } from "../../build/phaseCost.ts";
+import { phaseCostToDate, storySpendToDate } from "../../build/phaseCost.ts";
 import { appendBuildRetro, buildRetroPath, gateRetroLines, storyRetroLines } from "../../build/retroLog.ts";
 import {
   clampParallel, developerCap, developerPriceDivisor, reviewerCap, round2,
@@ -2315,19 +2317,45 @@ class BuildSession {
     // and a phase-to-date number there would double-count on every re-entry.
     const cost = phaseCostToDate(
       this.ctx.runDir, this.ctx.phaseId, this.ctx.stageId, this.spent(), this.tasks,
+      // PHASE-to-date, the same scope as the `$X of $Y` it qualifies (#170): the
+      // ceilings come off `agent.spawned`, which recorded each one at the spawn,
+      // plus this invocation's turns, which are not in the log yet.
+      storySpendToDate(this.ctx.runDir, this.ctx.phaseId, this.ctx.stageId, this.tasks),
     );
+    // ONE walk for both fields, and the leaf derives its own phase list from the
+    // run dir — the executor's `ctx` carries none, and passing one from here is
+    // how the handoff and the PR body became able to see different stories.
+    const carried = this.carriedRows();
     writeFileSync(path, renderBuildHandoff({
       runId: this.ctx.runId,
       stageId: this.ctx.stageId,
       model: this.model(),
       costUsd: cost.usd,
       costNote: cost.note,
+      decidedNote: describeDecidedTally(
+        decidedTally(FactsStore.loadOrEmpty(factsPath(this.ctx.root)).facts, this.ctx.runId),
+      ),
       budgetUsd: this.ctx.budgetUsd,
       at: this.ctx.at,
       outcomes,
       epics: this.epicRows(outcomes),
       storiesRel: this.plan.implicit ? IMPLICIT_PLAN_REL : null,
+      carried: carried.rows,
+      unreadableStories: carried.unreadable,
     }), "utf8");
+  }
+
+  /**
+   * Carried findings this phase leaves owed that no story's surface covers (#171).
+   *
+   * Computed nowhere here: `carriedReportFor` walks the fix lists and the declared
+   * surfaces, and the two predicates behind it live in `build/fixlist.ts` and
+   * `build/unownedFindings.ts`. The executor stays an orchestrator — it hands
+   * over the run directory and the workspace's repo names, which is the same set
+   * `toSrcContext` gives the `[src:]` grammar, and renders whatever comes back.
+   */
+  private carriedRows(): CarriedReport {
+    return carriedReportFor(this.ctx.runDir, new Set(this.workspace.repos.keys()));
   }
 
   /**

@@ -156,8 +156,20 @@ export function distill(intentDir: string, ctx: DistillContext): DistillResult {
  * A claim contradicts a fact when they are about the same `area`, overlap at
  * Jaccard ≥ 0.6, and are not the same sentence (spec §6 / §4's re-ask rule reused).
  * Identical text is agreement, not contradiction — it is imported and left alone.
+ *
+ * The parameter is STRUCTURAL rather than `ImportedClaim` so the answer path can
+ * call it without minting one: `{match, area, text}` is everything it reads, and
+ * `ImportedClaim` satisfies it, so every existing caller compiles unchanged. The
+ * function stays HERE — one definition, and moving it is scope no issue asked for.
+ * What it can and cannot see is measured in `test/answer-conflict.test.ts`:
+ * `findDuplicate` skips a fact whose `area` differs and scores the QUESTION's
+ * title against the fact's whole text, so it catches a re-answered question in one
+ * area and CANNOT catch differently-titled answers that contradict semantically.
  */
-export function conflictOf(claim: ImportedClaim, facts: readonly Fact[]): DuplicateHit | null {
+export function conflictOf(
+  claim: { readonly match: string; readonly area: string; readonly text: string },
+  facts: readonly Fact[],
+): DuplicateHit | null {
   const hit = findDuplicate(claim.match, claim.area, facts, CONFLICT_THRESHOLD);
   if (hit === null) return null;
   return hit.fact.fact.trim() === claim.text.trim() ? null : hit;

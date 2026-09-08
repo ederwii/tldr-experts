@@ -4,7 +4,7 @@ title: Budgets
 
 # Budgets
 
-Two ideas here, and the second one surprises people.
+Three ideas here, and the second one surprises people.
 
 ## 1. Ceilings are per run, per phase, and per stage
 
@@ -57,6 +57,39 @@ would be a guess about a price. Crossing the ceiling warns; `on_host_tokens_exce
 is the explicit opt-in that makes it deny instead. Declare no token ceiling and there is
 nothing to compare against, so nothing is checked.
 
+## 3. A ceiling is not what somebody authorized
+
+`ceiling_usd` says what the run will spend. It has never said what anyone agreed to pay. That
+lived in prose — a fact, a message, a thread — and nothing read it back, so three different
+places could write a dollar ceiling and none of them answered to the decision behind it.
+
+`tldrx budget grant` writes the decision down as a number:
+
+```bash
+tldrx budget grant 20 --fact F031
+tldrx budget grant 5 --fact F031 --phase 04-build --on-exceed block
+```
+
+It **records**; it spends nothing and moves no ceiling. `--fact` is required and must name a
+live fact: a grant that cannot cite a decision is a number nobody said. `<usd>` is a total, not
+a delta.
+
+`tldrx budget raise` then measures the ceiling it is about to write against the grant, before
+anything lands — a phase grant against the phase ceiling, the run grant against the run
+ceiling. Under the default `on_grant_exceed: warn` the ceiling is written and one sentence
+names the grant, the fact and the figure; under `block` the raise is refused and `budget.yml`
+is left byte-identical.
+
+**Two different questions, two different keys.** `on_exceed` governs *spending* past a ceiling.
+`on_grant_exceed` governs *writing* one above what was authorized. A run that blocks on dollars
+has said nothing about the second, so it is never inferred from it.
+
+No grant recorded means nothing is reconciled and nothing is refused. Absence is never read as
+`$0`: every `budget.yml` written before these keys exists, and treating their silence as an
+authorization of nothing would refuse every raise on all of them. A second grant on the same
+scope replaces the first — a later decision supersedes an earlier one — and says what it
+replaced rather than changing the number quietly.
+
 ## Reading the ledger
 
 ```bash
@@ -65,10 +98,16 @@ tldrx cost --all          # every run in the workspace, totalled per economy
 tldrx run estimate        # the one command that guesses — it says so in words
 ```
 
-`tldrx cost` reads dollar figures off the run's event log and nothing else. **No token
-count is ever multiplied by a price.** Retries are never merged into the stage total — a
-stage that failed twice cost three turns, and that retry is usually the money you were
-looking for. Anything the process never saw a cost for prints as `UNMETERED`.
+`tldrx cost` reads the run's event log and nothing else. **No token count is ever multiplied
+by a price.** Retries are never merged into the stage total — a stage that failed twice cost
+three turns, and that retry is usually the money you were looking for. Anything the process
+never saw a cost for prints as `UNMETERED`.
+
+`tldrx cost --stories` changes the axis, not the source: one row per build story, with what it
+measurably cost beside the **spawn ceiling** the executor handed its spawns, and the ratio.
+Those are two different kinds of number — a charge and a cap — so they sit in separate columns
+and are never added. A story missing either side reads `not recorded` with the reason, and a
+measurement with an unmetered turn in it is named a lower bound rather than given a verdict.
 
 When the provider reports its own token split for a turn, both halves land on that turn's
 row in `run.yml` — `input_tokens` and `output_tokens`, written together or not at all,

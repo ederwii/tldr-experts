@@ -14,7 +14,7 @@ do. It names some flags and not others, on purpose.
 **For every flag — including the ones this page leaves out — see
 [Every command and flag](/reference/cli-flags).** That page is generated at build time from
 `src/cli/helpText.ts`, the same registry `--help` prints and the argv guard refuses unknown
-flags from, so it lists all 33 commands with every flag, every allowed value, every exit
+flags from, so it lists every command with every flag, every allowed value, every exit
 code and the environment variables, and it cannot fall behind the code.
 
 ## The five you will actually type
@@ -61,17 +61,19 @@ tldrx approve --note "…"    # sign the gate; the checks are re-run first
 | `tldrx run gates set <stage>:<policy> --note "…"` | The only sanctioned way to change gate policy after `run new`. |
 | `tldrx questions cards` | The run's OPEN questions as printable decision cards — context, what the docs already decide, the options. Reads only. |
 | `tldrx questions lint` | Name every question block the parser cannot see — a missed `## Qn · Title` reads as *absent*, so everything downstream reports "0 open questions" and an auto gate signs over them. `--fix` rewrites them into the grammar without changing a word. |
-| `tldrx answer <Qid> "…"` | Record an answer as a numbered fact. `--supersede` reverses one. |
+| `tldrx answer <Qid> "…"` | Record an answer as a numbered fact. `--supersede` reverses one. `--decided-by owner\|driver` records who **decided** it, as against who typed it — optional here, and absent means *not stated*, never *owner*. `--repo <name>` (repeatable) scopes the fact; without it the scope comes from the question's own `affects:`, and from nothing otherwise. An answer that contradicts a live fact is still recorded, and raises a question asking which holds. |
 | `tldrx interview` | Answer a run's open questions in the terminal. |
 | `tldrx story reopen <id> --note "…"` | Give one build story another run of attempts. `--for-fix` opens a fix round on a story already `done` — one named defect, no attempt consumed, same DoD and same reviewer. |
+| `tldrx story widen <id> <path>… --note "…"` | Add paths to a story's `touches:` — the sanctioned way past a boundary refusal. Records the paths, the note and the list before and after. Runs no agent, spends nothing, consumes no attempt, moves no cursor. Refuses a `done` story: reopen it with `--for-fix` first. |
 
 ## Money
 
 | Command | Does |
 |---|---|
-| `tldrx cost [<run>]` | What was actually charged, per attempt. `--all`, `--json`. |
-| `tldrx budget show` | What the run may still spend. |
-| `tldrx budget raise <phase> <usd>` | Move a ceiling. `--take-from <phase>`, `--note`. |
+| `tldrx cost [<run>]` | What was actually charged, per attempt. `--all`, `--json`. `--stories` breaks ONE run down by build story: what it measurably cost, the **spawn ceiling** the executor handed its spawns, and the ratio — a charge and a cap, in separate columns, never added. It changes no ceiling and spends nothing; `--all` and `--stories` are two different reports and the pair is refused. |
+| `tldrx budget show` | What the run may still spend, and the grant it answers to: the fact, each authorized scope and the policy. Silent when no grant is recorded. |
+| `tldrx budget raise <phase> <usd>` | Move a ceiling. `--take-from <phase>`, `--note`. The resulting ceiling is measured against the recorded grant before anything is written. |
+| `tldrx budget grant <usd> --fact <F>` | Record what the owner AUTHORIZED, so a ceiling has something to answer to. A **total**, not a delta; it spends nothing and moves no ceiling. `--fact` must name a live fact — an authorization that cites no decision is a number nobody said. `--phase <p>` scopes it; `--on-exceed <warn\|block>` says what a ceiling ABOVE the grant does, and is never `on_exceed`. A second grant replaces the first and says what it replaced. |
 
 ## Knowledge, output and the rest
 

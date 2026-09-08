@@ -128,6 +128,14 @@ export interface RunTriage {
   readonly split: string;
   /** SLUGS of the sibling runs this one was proposed to follow. */
   readonly depends_on: readonly string[];
+  /**
+   * What produced this run's ceiling (#170): a bare string, read as tolerantly
+   * as the rest of this reader — `RunFile.ts`'s validator is the one that
+   * enforces the closed set on write; a viewer must not refuse to show a file
+   * it can otherwise read. Null when absent, which is what every run written
+   * before this key existed means.
+   */
+  readonly budget_basis: string | null;
 }
 
 /**
@@ -208,6 +216,12 @@ export interface BudgetPhase {
   readonly economy: string | null;
   /** This phase's HOST-TOKEN allowance (#61), or null when it declares none. */
   readonly ceiling_host_tokens: number | null;
+  /**
+   * This phase's OWN authorization (#170), or null when it declares none — in
+   * which case the run's grant governs it. Read tolerantly like every other key
+   * here; null is "nobody wrote a figure", never `$0`.
+   */
+  readonly authorized_usd: number | null;
 }
 
 export interface BudgetDocument {
@@ -233,6 +247,16 @@ export interface BudgetDocument {
    * Never summed into dollars: there is no exchange rate between the two.
    */
   readonly ceiling_host_tokens: number | null;
+  /**
+   * What the owner AUTHORIZED for this run (#170), the fact that says so, and
+   * whether a ceiling above it warns or refuses. Null on every budget.yml
+   * written before these keys existed, which means "no grant recorded" — never
+   * `$0`, and never "the owner authorized nothing".
+   */
+  readonly authorized_usd: number | null;
+  readonly authorized_by: string | null;
+  /** `warn` | `block`, or null meaning `warn` — what this file did before the key. */
+  readonly on_grant_exceed: string | null;
   readonly phases: readonly BudgetPhase[];
 }
 
@@ -303,6 +327,9 @@ export function toBudgetDocument(input: unknown): BudgetDocument | null {
     economy: nullableStr(doc.economy),
     on_host_tokens_exceed: nullableStr(doc.on_host_tokens_exceed),
     ceiling_host_tokens: num(doc.ceiling_host_tokens),
+    authorized_usd: num(doc.authorized_usd),
+    authorized_by: nullableStr(doc.authorized_by),
+    on_grant_exceed: nullableStr(doc.on_grant_exceed),
     phases: array(doc.phases)
       .map(record)
       .filter((phase): phase is Record<string, unknown> => phase !== null)
@@ -312,6 +339,7 @@ export function toBudgetDocument(input: unknown): BudgetDocument | null {
         spent_usd: num(phase.spent_usd),
         economy: nullableStr(phase.economy),
         ceiling_host_tokens: num(phase.ceiling_host_tokens),
+        authorized_usd: num(phase.authorized_usd),
       })),
   };
 }
@@ -319,7 +347,11 @@ export function toBudgetDocument(input: unknown): BudgetDocument | null {
 function toTriage(input: unknown): RunTriage | null {
   const triage = record(input);
   if (triage === null) return null;
-  return { split: str(triage.split), depends_on: strings(triage.depends_on) };
+  return {
+    split: str(triage.split),
+    depends_on: strings(triage.depends_on),
+    budget_basis: nullableStr(triage.budget_basis),
+  };
 }
 
 /** Read tolerantly: a value outside the three policies is dropped, not shown. */

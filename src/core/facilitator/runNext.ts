@@ -23,6 +23,7 @@ import { approve } from "../run/gates.ts";
 import { AUTO_GATE_ACTOR, evaluateAutoGate, unreadableHeadings } from "../run/autoGate.ts";
 import { describeAgentFallthroughs, evaluateAgentGate } from "../run/agentGate.ts";
 import { cardForTriggers, type Money } from "../run/decisionCards.ts";
+import { carriedDetailLines, carriedReportFor } from "../build/carriedRows.ts";
 import { renderDecisionCard } from "../ui/decisionCard.ts";
 import { gatePolicyFor } from "../run/gatePolicy.ts";
 import type { BranchModelKind } from "../plan/branchModel.ts";
@@ -36,13 +37,14 @@ import { raiseCommand, shortBy } from "../budget/budgetView.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../hooks/lib/workspace.ts";
 import { closeRun, describeOpenQuestions, describeStateCommit } from "../run/closeRun.ts";
+import { describeDecidedTally } from "../facts/decidedTally.ts";
 import { capPayload, type EventType, type TldrxEvent } from "../events/Event.ts";
 import { LOG_DIR } from "../build/plan.ts";
 import { setProgressCeiling, setProgressReadCap, setProgressTitle } from "../ui/bus.ts";
 import { acquireLock, releaseLock } from "./Lock.ts";
 import { onInterrupt, stopInFlightRun } from "./interrupt.ts";
 import { loadStageSpec, type StageSpec } from "./stageSpec.ts";
-import { countSkipInputs, evaluateSkipIf, openQuestionIds, SkipIfError } from "./skipIf.ts";
+import { blockingQuestionIds, countSkipInputs, evaluateSkipIf, SkipIfError } from "./skipIf.ts";
 import {
   agentDir, evidencePath, expandAll, expandPatterns, missing, present, resolveMany, type PathContext,
 } from "./paths.ts";
@@ -379,7 +381,15 @@ async function advance(store: RunStore, options: NextOptions, notes: string[]): 
     }
 
     if (entry.stage.status === "awaiting_answer") {
-      const open = openQuestionIds(join(store.runDir, phaseId, "questions.md"));
+      // BLOCKING ids, not every open one (#169, fix round 2). An `advisory: true`
+      // block is a question the framework raised off an unmeasured lexical
+      // near-match; parking an unattended run on one here is the same deadlock
+      // `raiseConflict.ts` refuses to cause by refusing the answer, one door
+      // along. `isAdvisory` is the one predicate and `blockingQuestionIds` the one
+      // reader of it that counts — the same function `skip_if` and `waiting.ts`
+      // take. Skipped is not hidden: the block stays `status: open` on disk and
+      // every listing surface goes on naming it.
+      const open = blockingQuestionIds(join(store.runDir, phaseId, "questions.md"));
       if (open.length > 0) {
         return out(EXIT_AWAITING_HUMAN, [
           ...notes,
@@ -1721,6 +1731,18 @@ async function finishStage(
       // shape a host hand-composed in chat on 2026-08-30 and an owner answered in
       // seconds. Appended, never substituted: nothing that reads these lines today
       // loses a byte, and a fallthrough the card cannot shape still reports itself.
+      // The carried rows the card carries (#171) come from the one leaf every
+      // other surface reads — the Build handoff's `## Unknowns` and the `ship` PR
+      // body — so a person deciding this gate sees the same list the documents
+      // do. They are an ADDITION to a card that is already printing: this branch
+      // was reached because the gate fell to a person, and nothing here can make
+      // that happen.
+      //
+      // Handed as a THUNK (fix round 2): only `boundaryCard` reads it, and this
+      // branch draws four other kinds of card. Evaluating it eagerly walked the
+      // phase directories and parsed every fix list on a path that previously
+      // touched neither, to hand the result to a branch that was not taken. The
+      // derivation still belongs to this caller — the card scrapes nothing.
       const card = cardForTriggers(
         {
           runDir: store.runDir,
@@ -1730,6 +1752,9 @@ async function finishStage(
         },
         agent.fallthroughs,
         phaseMoney(store, phaseId),
+        () => carriedDetailLines(
+          carriedReportFor(store.runDir, new Set(loadWorkspace(options.root).repos.keys())),
+        ),
       );
       return out(EXIT_AWAITING_HUMAN, [
         ...notes,
@@ -1809,6 +1834,8 @@ async function finishStage(
     // nobody made, and the close is the last moment anyone is looking (#141).
     const asked = describeOpenQuestions(closed.openQuestions);
     if (asked !== null) closing.push(`  ${asked}`);
+    const decided = describeDecidedTally(closed.decided);
+    if (decided !== null) closing.push(`  ${decided}`);
     const said = describeStateCommit(closed.state);
     if (said !== null) closing.push(`  ${said}`);
   }

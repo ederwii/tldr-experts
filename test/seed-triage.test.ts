@@ -570,7 +570,9 @@ describe("seed apply — the gate is that you ran it", () => {
     expect(billing.run.scope).toBe("feature");
     expect(billing.run.title).toBe("Money, prices and refunds");
     expect(billing.run.budget.ceiling_usd).toBe(25);
-    expect(billing.run.triage).toEqual({ split: ".out/split.yml", depends_on: ["tenancy"] });
+    expect(billing.run.triage).toEqual({
+      split: ".out/split.yml", depends_on: ["tenancy"], budget_basis: "model-guess",
+    });
     // The shared context landed in the run's declared What inputs, with its own seed.
     const what = billing.run.phases[0]?.stages[0];
     expect(what?.inputs).toContain("docs/00-overview.md");
@@ -581,7 +583,7 @@ describe("seed apply — the gate is that you ran it", () => {
     const onDisk = parseYaml(readFileSync(join(billing.runDir, "run.yml"), "utf8"));
     expect(validateRunFile(onDisk).ok).toBe(true);
     expect((onDisk as { triage: unknown }).triage)
-      .toEqual({ split: ".out/split.yml", depends_on: ["tenancy"] });
+      .toEqual({ split: ".out/split.yml", depends_on: ["tenancy"], budget_basis: "model-guess" });
 
     // And the split is flipped, once, with what it made.
     const split = parseYaml(readFileSync(path, "utf8")) as Record<string, unknown>;
@@ -589,6 +591,27 @@ describe("seed apply — the gate is that you ran it", () => {
     expect(split.applied_at).toBe("2026-08-30T09:00:00Z");
     expect(split.created_runs).toEqual(["260830-tenancy", "260830-billing"]);
     expect(readFileSync(join(outDir(ws), "split.md"), "utf8")).toContain("## Created");
+  });
+
+  test("an applied split records that its budget was a model's guess (#170)", async () => {
+    // `triagePrompt.ts:249` tells the model in as many words that `budget_usd` is
+    // a guess (S ≈ $10, M ≈ $25, L ≈ $50), and `splitFile.ts:213-215` validates
+    // only "finite and > 0" — the number `applySplit` hands to `run new --budget`
+    // is measurably a guess, and `run.triage.budget_basis` now says so.
+    const ws = workspace();
+    const path = await proposed(ws);
+    applySplit({ root: ws.root, splitPath: path, actor: "alan", now: NOW });
+
+    const billing = RunStore.open(join(ws.root, "tldrx-work", "260830-billing"));
+    expect(billing.run.triage?.budget_basis).toBe("model-guess");
+  });
+
+  test("a run created by `run new` has no basis at all — absent means what every existing run means", () => {
+    const ws = workspace();
+    const outcome = createRun({
+      root: ws.root, slug: "plain", scope: "feature", budgetUsd: 10, actor: "alan", now: NOW,
+    });
+    expect(RunStore.open(outcome.runDir).run.triage).toBeUndefined();
   });
 
   test("an applied split is refused a second time", async () => {

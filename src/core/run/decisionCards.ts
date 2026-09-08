@@ -92,17 +92,43 @@ export interface Money {
  * The offending paths are already named in the condition's own detail, so it is
  * carried verbatim rather than scraped and re-rendered: a second parser over a
  * string the first one built is how two readings of one fact start.
+ *
+ * The first command is a PLACEHOLDER — `<id> <path>` and not a real story id and
+ * path — and that is forced, not lazy: this function holds `runId`, `phaseId`,
+ * `stageId` and one opaque detail string, so there is no story in scope to name,
+ * and scraping one out of `detail` is the second parser the paragraph above
+ * refuses. What changed in #171 is that the line names a real VERB: it used to
+ * say "add the path to a story's `touches:`", which is precisely the hand edit
+ * `cli/commands/story.ts` forbids by design.
+ *
+ * `--for-fix` gets a line of its OWN rather than a clause inside the widen line,
+ * because it is a different command and the widen line is pinned byte-for-byte.
+ * Measured (Task 4, this wave): a Build auto gate that refuses on condition 7
+ * leaves its stories `done`, and `widenStory` refuses a `done` story — "its
+ * evidence was written against the surface it DECLARED". So the advice as it
+ * stood led an operator straight into a refusal on the commonest path there is.
+ *
+ * `extra` is carried findings nobody's story owns (#171), HANDED in by the
+ * caller from `build/carriedRows.ts` — this card still scrapes nothing, and it
+ * is an ADDITION to a card that was already going to print, never the reason one
+ * prints. The default `[]` keeps every two-argument call byte-identical.
  */
-export function boundaryCard(ctx: CardContext, detail: string): DecisionCard {
+export function boundaryCard(
+  ctx: CardContext,
+  detail: string,
+  extra: readonly string[] = [],
+): DecisionCard {
   return {
     kind: "boundary",
     run: ctx.runId,
     gate: `${ctx.phaseId}/${ctx.stageId}`,
     questions: [],
     headline: "Boundary — the epic changed paths nobody scoped",
-    detail: [detail],
+    detail: [detail, ...extra],
     commands: [
-      "widen the scope: add the path to a story's `touches:`, or cite it in a handoff, then re-run the stage",
+      "tldrx story widen <id> <path> --note \"<why>\" \u2014 or cite the path in a handoff, then re-run the stage",
+      "tldrx story reopen <id> --for-fix --note \"<the defect>\" \u2014 first, when the story is already "
+        + "`done`: widening finished work is refused",
       `tldrx approve --run ${ctx.runId}`,
       `tldrx reject --run ${ctx.runId} --note "<why>"`,
     ],
@@ -143,6 +169,18 @@ export function cardForTriggers(
   ctx: CardContext,
   triggers: readonly CardTrigger[],
   money: Money | null = null,
+  /**
+   * Carried findings nobody's story owns, computed by the caller with
+   * `build/carriedRows.ts` (#171). They reach the boundary card only, and only
+   * when a boundary trigger was already going to draw one.
+   *
+   * A THUNK, not an array (#171, fix round 2). The derivation is a directory walk
+   * plus a fix-list parse per story, on a gate path that previously did neither,
+   * and four of the five branches below never look at it. Deferring the CALL
+   * moves the I/O behind the branch that uses it without moving the judgement:
+   * the caller still owns the derivation and this card still scrapes nothing.
+   */
+  carried: () => readonly string[] = () => [],
 ): DecisionCard | null {
   if (triggers.length === 0) return null;
   if (triggers.some((t) => t.trigger === "questions")) {
@@ -153,7 +191,7 @@ export function cardForTriggers(
     if (card !== null) return card;
   }
   const boundary = triggers.find((t) => t.trigger === "boundary");
-  if (boundary !== undefined) return boundaryCard(ctx, boundary.detail);
+  if (boundary !== undefined) return boundaryCard(ctx, boundary.detail, carried());
   const budget = triggers.find((t) => t.trigger === "budget-event");
   if (budget !== undefined) return budgetCard(ctx, budget.detail, money);
   return gateCard(

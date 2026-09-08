@@ -14,7 +14,7 @@ que estás intentando hacer. Nombra algunas banderas y otras no, a propósito.
 **Para todas las banderas — incluidas las que esta página deja fuera — mira
 [Todos los comandos y flags](/es/reference/cli-flags).** Esa página se genera al compilar
 desde `src/cli/helpText.ts`, el mismo registro que imprime `--help` y del que el guardián de
-argv rechaza banderas desconocidas, así que lista los 33 comandos con todas sus banderas,
+argv rechaza banderas desconocidas, así que lista todos los comandos con todas sus banderas,
 todos los valores permitidos, todos los códigos de salida y las variables de entorno, y no
 puede quedarse atrás del código.
 
@@ -62,17 +62,19 @@ tldrx approve --note "…"    # firma la compuerta; antes se vuelven a correr la
 | `tldrx run gates set <stage>:<policy> --note "…"` | La única manera sancionada de cambiar la política de compuertas después de `run new`. |
 | `tldrx questions cards` | Las preguntas ABIERTAS del run como tarjetas de decisión imprimibles: contexto, lo que los documentos ya deciden, las opciones. Solo lee. |
 | `tldrx questions lint` | Nombra cada bloque de pregunta que el parser no alcanza a ver: un `## Qn · Title` mal escrito se lee como *ausente*, así que todo lo que viene después reporta "0 preguntas abiertas" y una compuerta auto firma encima. `--fix` los reescribe a la gramática sin cambiarles una palabra. |
-| `tldrx answer <Qid> "…"` | Registra una respuesta como hecho numerado. `--supersede` revierte una. |
+| `tldrx answer <Qid> "…"` | Registra una respuesta como hecho numerado. `--supersede` revierte una. `--decided-by owner\|driver` registra quién **decidió**, que no es quien lo tecleó — opcional aquí, y su ausencia significa *not stated*, nunca *owner*. `--repo <name>` (repetible) acota el hecho; sin ella el alcance sale del propio `affects:` de la pregunta, y de nada en caso contrario. Una respuesta que contradice a un hecho vivo igual se registra, y levanta una pregunta sobre cuál vale. |
 | `tldrx interview` | Contesta en la terminal las preguntas abiertas de un run. |
 | `tldrx story reopen <id> --note "…"` | Le da a una story de Build otra tanda de intentos. `--for-fix` abre en cambio una ronda de arreglo sobre una story que ya está `done`: un defecto concreto, sin consumir intento, con el mismo DoD y el mismo revisor. |
+| `tldrx story widen <id> <path>… --note "…"` | Agrega rutas al `touches:` de una story — la forma sancionada de pasar un rechazo por límite declarado. Registra las rutas, la nota y la lista antes y después. No corre ningún agente, no gasta nada, no consume intento y no mueve el cursor. Se niega con una story `done`: reábrela antes con `--for-fix`. |
 
 ## Dinero
 
 | Comando | Qué hace |
 |---|---|
-| `tldrx cost [<run>]` | Lo que de verdad se cobró, por intento. `--all`, `--json`. |
-| `tldrx budget show` | Lo que al run le queda por gastar. |
-| `tldrx budget raise <phase> <usd>` | Mueve un techo. `--take-from <phase>`, `--note`. |
+| `tldrx cost [<run>]` | Lo que de verdad se cobró, por intento. `--all`, `--json`. `--stories` desglosa UN run por story de build: lo que costó de forma medible, el **techo de spawn** que el ejecutor le entregó a sus spawns, y la razón entre ambos — un cobro y un tope, en columnas separadas, que nunca se suman. No cambia ningún techo y no gasta nada; `--all` y `--stories` son dos reportes distintos y la combinación se rechaza. |
+| `tldrx budget show` | Lo que al run le queda por gastar, y la autorización a la que le responde: el hecho, cada alcance autorizado y la política. Calla cuando no hay ninguna registrada. |
+| `tldrx budget raise <phase> <usd>` | Mueve un techo. `--take-from <phase>`, `--note`. El techo resultante se mide contra la autorización registrada antes de que se escriba nada. |
+| `tldrx budget grant <usd> --fact <F>` | Registra lo que el dueño AUTORIZÓ, para que un techo tenga a qué responderle. Es un **total**, no un delta; no gasta nada y no mueve ningún techo. `--fact` tiene que nombrar un hecho vivo: una autorización que no cita una decisión es un número que nadie dijo. `--phase <p>` la acota; `--on-exceed <warn\|block>` dice qué pasa con un techo POR ENCIMA de lo autorizado, y nunca es `on_exceed`. Una segunda autorización reemplaza a la primera y dice qué reemplazó. |
 
 ## Conocimiento, salida y lo demás
 

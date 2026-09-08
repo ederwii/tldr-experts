@@ -235,9 +235,8 @@ function continuation(mode: DriveMode): readonly string[] {
     "Stopping is the failure this mandate exists to prevent, and \"I had a question\" is not one.",
     "Halt only on a STRICT blocker: one where no remaining turn can proceed until I answer. Before",
     "you call one strict, name the work it does NOT block — the next story, wave, stage or review —",
-    "and go do that first. Everything short of that you park as below, or decide and log; then",
-    "carry on. If you are truly blocked on every front, that is one line and a guided question, not",
-    "silence.",
+    "and go do that first. Everything short of that you park as below, or decide and log; then carry",
+    "on. If truly blocked on every front, that is one line and a guided question, never silence.",
     "",
   ];
 }
@@ -292,7 +291,8 @@ function parking(): readonly string[] {
     "",
     "An open question is never a licence to ship an unguarded write — but not shipping the write is",
     "not the same as not shipping anything. `tldrx note <run> \"…\"` records the moment;",
-    "`tldrx answer <Qid> \"…\"` is mine to type.",
+    "`tldrx answer <Qid> \"…\" --decided-by owner` is mine to type; if you ever answer on my behalf it is",
+    "`--decided-by driver`, and it is recorded as yours.",
     "",
   ];
 }

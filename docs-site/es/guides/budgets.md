@@ -86,6 +86,26 @@ en `budget.yml`, que nunca se mezcla con `ceiling_usd`; ver
 guarda quién lo subió, por cuánto y por qué. Subir un techo a media etapa es además una de
 las cosas que impide que una [compuerta agent](/es/concepts/gates) se firme sola.
 
+## Dejar por escrito lo autorizado
+
+```bash
+tldrx budget grant 20 --fact F031
+tldrx budget grant 5 --fact F031 --phase 04-build --on-exceed block
+```
+
+`grant` registra lo que el dueño autorizó, para que el techo tenga a qué responderle. No gasta
+nada y no mueve ningún techo: el `<usd>` es un **total**, al revés del delta que recibe `raise`.
+`--fact` es obligatoria y tiene que nombrar un hecho vivo, porque una autorización que no puede
+citar una decisión es un número que nadie dijo. `budget show` la vuelve a leer en una línea —el
+hecho, cada alcance y la política— y no dice nada cuando no hay ninguna, porque imprimir
+`$0.00 authorized` sería inventar justo la cifra que esa llave se niega a adivinar.
+
+Después, `raise` revisa contra ella el techo que está por escribir, antes de que se escriba
+nada. Con el valor por omisión lo escribe y avisa; con `--on-exceed block` lo rechaza y deja
+`budget.yml` idéntico byte por byte. Esa política es `on_grant_exceed`, y **no** es `on_exceed`:
+una gobierna gastar por encima de un techo y la otra escribir uno por encima de lo autorizado.
+Ver [Presupuestos](/es/concepts/budgets).
+
 ## Después
 
 ```bash
@@ -99,6 +119,16 @@ del total de la etapa, ya que el reintento suele ser justo el dinero que andabas
 Las dos economías se reportan por separado y nunca se suman; ver
 [Presupuestos](/es/concepts/budgets).
 
+```bash
+tldrx cost --stories      # por story, contra el techo de spawn que le dieron
+```
+
+`--stories` es el reporte de calibración: una fila por story de build, con lo que costó de
+forma medible, el techo de spawn que le entregó el ejecutor y la razón entre ambos. No cambia
+ningún techo y no gasta nada. Úsalo antes de argumentar que el valor por omisión de una etapa
+está mal: las cifras que vienen de fábrica dicen en sus propios comentarios que son suposiciones,
+y este es el comando que produce la evidencia con la cual reemplazarlas.
+
 `run estimate` imprime `ESTIMATE` con todas sus letras. Su mitad de entrada está medida (el
 prompt real); su mitad de salida es la mediana de los intentos pasados en esa etapa, y sin
 historia no imprime nada en lugar de inventarse un número.
@@ -107,6 +137,13 @@ historia no imprime nada en lugar de inventarse un número.
 
 Medidos con Sonnet, agosto de 2026, en un workspace real — indicativos, no una lista de
 precios.
+
+Los techos que vienen de fábrica son afirmaciones del mismo tipo, y lo dicen: cada `budget_usd`
+de un archivo de etapa y cada `default_budget_usd` de un archivo de workflow lleva un comentario
+`[assumption]` sobre el dinero mismo, que nombra qué es (una suposición acotada), qué evidencia
+existe (una story que costó 5.8 veces el techo que le dieron a su spawn) y qué la reemplazaría
+(`tldrx cost --stories`). Un run creado por `tldrx seed apply` registra lo mismo en su propio
+`run.yml`, como `triage.budget_basis: model-guess`.
 
 - una etapa What: **$1.20–1.40**
 - un entrenamiento ligero de experto sobre unos 20 archivos: **≈ $5**

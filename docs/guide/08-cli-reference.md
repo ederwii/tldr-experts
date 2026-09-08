@@ -305,6 +305,14 @@ nothing was going to answer them: a §2.7 question declares no default and no ti
 `tldrx interview --yes-to-defaults` is invoked by hand. It is a report: no exit code changes and
 no close is refused. A run is allowed to end with a question open; it may not do it quietly.
 
+**And every close says who decided (#169).** The same three closes print one more line: how many
+decisions this run recorded, split into owner, driver and not stated — `3 decision(s) recorded on
+this run: 2 owner, 0 driver, 1 not stated.` A run that recorded none prints nothing rather than a
+confident zero, and the sentence ends by saying what the third number means: a row with no
+decider says "not stated", and is never read as the owner's. The Build handoff's header carries
+the same sentence, after the cost clause. It is a count over `.tldrx/memory/facts.yml`, so it is
+a report and changes nothing.
+
 **`attend`** flips that on a run that is already open. `tldrx run attend host` hands the run
 to a host session; `tldrx run attend --none` hands it back. It runs no agent, spends nothing,
 moves no stage and touches no branch — it sets one field and appends one `run.attended` event.
@@ -443,10 +451,35 @@ runs and **never asks a model**. Exits: `0` `1` `2` `3` `5`.
 Answer one open question from the command line, recording it as a fact.
 
 ```
-tldrx answer <Qid> <text> [--supersede] [--run <id>] [--root <path>]
+tldrx answer <Qid> <text> [--supersede] [--decided-by <who>] [--repo <name>] [--run <id>] [--root <path>]
 ```
 
-Exits: `0` `1` `3`.
+Exits: `0` `1` `2` `3`. The `2` is the ambiguous-run refusal every run-scoped command
+shares: several runs are open and none was named, so it declines to choose rather than
+answer into the wrong one.
+
+### Who decided, and what it binds — `--decided-by` and `--repo`
+
+`--decided-by owner|driver` records **who decided**, as against `who`, which is only the account
+that typed it. It is optional here and required on `tldrx facts add`, and the difference is
+honest: this same code path is also driven by the answer-capture hook, which fires on an agent's
+own `Write` as well as on a human's edit and so cannot say which of the two answered. Absent means
+*not stated* — never `owner` — and the command says so on stdout rather than leaving you to notice.
+
+`--repo <name>` scopes the answered fact to one repo (repeatable), so every `{{facts}}` block
+outside it stops carrying a decision that was never about it. A name no repo in `workspace.yml`
+answers to is refused, exit `1`, before anything is written. Without it, the fact is scoped by the
+question's own `affects:` when an entry there names a repo (`api`, or `api:src/db.ts`), and by
+nothing otherwise: `repos: []` means *no repo was named*, never *every repo*.
+
+Both flags apply **only to the question id in the invocation**, and both work with `--supersede`
+too. Recording an answer sweeps every answered-but-uncaptured block in that file, including one a
+human filled in by hand beforehand, and those are recorded exactly as they were before these flags
+existed — with one exception that is reporting, not provenance: an `affects:` entry that looks like
+`repo:path` and matches no repo is named on stdout for **every** block the invocation captured,
+each line carrying its question id. The `answer-capture` hook says the same thing through the
+context it posts, because `repos: []` after a repo WAS named and got wrong is the one direction
+that must never be silent.
 
 ### Reversing a decision — `--supersede`
 
@@ -461,8 +494,10 @@ tldrx answer Q3 "Redis sorted set — the load test refuted the contention risk"
 It is only valid on an **answered** question (on an open one it exits `1` and tells you to
 answer it normally). What it does:
 
-- appends a **new fact** carrying the whole new answer, with the same `area` and `repos` and
-  ordinary provenance (`who`, `when`, `run`, `q`);
+- appends a **new fact** carrying the whole new answer, with the same `area` and ordinary
+  provenance (`who`, `when`, `run`, `q`). Its `repos` are the ones its predecessor bound to,
+  unless `--repo` or the question's own `affects:` rescopes it — a reversal is a new decision and
+  may legitimately bind somewhere else;
 - sets the old fact's `superseded_by` to the new id — and `supersedes` on the new one, so the
   §2.5 chain stays reciprocal. **The old fact's text is never edited.**
 - appends to the question block: the superseding answer and its footer. The original
@@ -695,10 +730,12 @@ with no marker is a record that does not know it is incomplete. Exits: `0` `1` `
 
 ## `tldrx story`
 
-Give one Build story another run of attempts, or open a fix round on a done one.
+Give one Build story another run of attempts, open a fix round on a done one, or widen the
+paths it declares.
 
 ```
 tldrx story reopen <id> --note <text> [--for-fix] [--run <id>] [--root <path>]
+tldrx story widen  <id> <path>… --note <text> [--run <id>] [--root <path>]
 ```
 
 `--note` is required — a reopen with no reason is not actionable. The story goes back to
@@ -736,6 +773,46 @@ closes when the story is `done` again.
 Refuses (`2`) a story that is **not** `done` (that is the plain reopen), a missing `--note`,
 and a story that already has a fix round open — the refusal names who opened it and with
 which defect.
+
+### `tldrx story widen` — the sanctioned way to grow a story's surface
+
+When a Build stage changes a path nobody scoped, the auto gate refuses and the decision card
+says so. The remedy it names is this verb — it used to say *"add the path to a story's
+`touches:`"*, which is precisely the hand edit this CLI forbids by design:
+
+```
+tldrx story widen S3 platform/Auth.cs --note "the tenancy check the story is for lives here too"
+```
+
+The paths are **positionals**, one or more, repo-relative. `--note` is required and says WHY
+the surface grew; it is recorded on one `story.touches_widened` carrying the paths and the
+list **before** and **after**, so a surface never grows silently. Nothing else in the story
+moves: the status, the acceptance criteria, the prose and the dod block come back
+byte-identical, and the `touches:` entries already there are written back exactly as their
+author wrote them.
+
+It runs no agent, spends nothing, consumes no attempt and moves no cursor. **No gate code
+knows about it**: the boundary condition re-reads `touches:` off disk at evaluation time, so
+the same run, the same branch and the same diff simply stop counting the widened path as
+outside the declared surface at the next evaluation.
+
+Widenable states are `todo`, `in_progress`, `review` and `blocked`. It refuses (`2`) a `done`
+story — its evidence was written against the surface it declared, and widening it afterwards
+would make the record say the plan declared a path it did not. That is the commonest case,
+because a Build auto gate that refuses on the boundary condition leaves its stories `done`, so
+the order is:
+
+```
+tldrx story reopen S3 --for-fix --note "the tenancy check misses the Platform path"
+tldrx story widen  S3 platform/Auth.cs --note "the tenancy check the story is for lives here too"
+```
+
+It also refuses (`2`) an unknown story id, a run with no plan at all, a story file not on disk,
+a `touches:` it cannot read, a missing `--note`, no path at all, a `..` in a path, a path named
+twice in one invocation, a path the story **already** declares, and a widening that would take
+the story over the 128-path cap. Nothing is written on any of them — the event is validated
+before the file is touched, so a refusal cannot leave a widened story behind it. An unknown
+`--run` is `3`.
 
 ## `tldrx plan`
 
@@ -778,24 +855,63 @@ nothing, because the question comes before any of that exists. Exits: `0` `1` `2
 ```
 tldrx budget show  [--run <id>] [--json]
 tldrx budget raise <phase> <usd> [--run <id>] [--take-from <phase>] [--note <text>]
+tldrx budget grant <usd> --fact <F> [--phase <p>] [--on-exceed <warn|block>] [--note <text>] [--run <id>]
 ```
 
 `--take-from <phase>` moves the money out of that phase instead of raising the run's total,
 refusing to cut a donor below what it has already spent. `--note` is recorded on the
-`budget.raised` event beside the before/after and the actor. Exits: `0` `1` `2` `3`.
+`budget.raised` event beside the before/after and the actor.
+
+`grant` records what the owner AUTHORIZED as a number in `budget.yml`, so a ceiling has
+something to answer to. `<usd>` here is a total, not a delta, and nothing is spent or moved.
+`--fact <F>` is required and must name a live fact: a grant that cannot cite a decision is a
+number nobody said. `--phase <p>` scopes the amount to one phase — the fact id is still
+recorded at run level. `--on-exceed <warn|block>` says what a ceiling above the grant does,
+and it is never `on_exceed`: one governs spending past a ceiling, the other governs writing
+one the owner forbade.
+
+`raise` then measures the ceiling it is about to write against the grant — a phase grant
+against the phase ceiling, the run grant against the run ceiling. Two exit families: a bad
+amount, an unknown phase, an unknown `--on-exceed` value or a `--fact` naming no live fact is
+a usage error (`1`, nothing written); a ceiling above the grant under `on_grant_exceed: block`
+is a gate refusal (`2`, `budget.yml` byte-identical).
+
+A second grant on the same scope REPLACES the first — a later decision supersedes an earlier
+one, and an owner may reduce as well as raise — but never in silence: the command prints
+`replaces $40.00 → $20.00` and the `budget.granted` event carries `previous_usd`. An amount of
+`0` or less is refused (`1`): absence already means "no grant recorded", and "authorized, and
+the answer is no" belongs in a fact. `--fact`, `--phase` and `--on-exceed` are `grant`'s alone —
+`show` and `raise` refuse them rather than accepting and ignoring them.
+
+`budget show` names the recorded grant on its own line — the fact, each authorized scope and
+`on_grant_exceed` — and in `--json`; it says nothing when no grant is recorded.
+Exits: `0` `1` `2` `3`.
 
 ## `tldrx cost`
 
 What the work actually cost — per attempt, per stage, per run.
 
 ```
-tldrx cost [<run>] [--run <id>] [--all] [--json] [--root <path>]
+tldrx cost [<run>] [--run <id>] [--all] [--stories] [--json] [--root <path>]
 ```
 
-Read off `agent.result` events and nothing else: every dollar printed here is one the Claude
-CLI reported. No token count is ever multiplied by a price. Attempts are never merged. Work
-this process never saw a cost for is UNMETERED, never $0.00. `--all` covers every run in the
-workspace, finished ones included, and the run argument is ignored. Exits: `0` `1` `3`.
+Read off `events.jsonl` and nothing else. Two kinds of number live in that log and they are
+never added to each other: the MEASURED dollars a metered turn reported on an `agent.result`
+line, and the SPAWN CEILINGS the executor handed `agent.spawned` — caps it computed, never
+charges — which only `--stories` prints. No token count is ever multiplied by a price.
+Attempts are never merged. Work this process never saw a cost for is UNMETERED, never $0.00.
+`--all` covers every run in the workspace, finished ones included, and the run argument is
+ignored.
+
+`--stories` changes the axis, not the source: one row per story with what it measurably cost,
+the **ceiling** its spawns were given (`agent.spawned.max_budget_usd`), and the ratio. It is a
+ceiling and not "the plan's share" — a story file carries no budget key, so no plan document
+holds a per-story dollar figure to take a share of, and the report never invents one. A story
+missing either side reads `not recorded` with the reason, never `$0.00`, and no total is
+printed over a figure that could not be formed. It changes no ceiling and spends nothing; it
+is the measurement a recalibration of those ceilings would be argued from. `--all` and
+`--stories` are two different reports and cannot be combined — the pair is refused, never
+silently resolved in favour of one. Exits: `0` `1` `3`.
 
 ## `tldrx map`
 
@@ -1167,6 +1283,16 @@ split; the reviewer findings still open, read from the run's fix lists; and the 
 handoff the run has on disk — `04-build/handoff.md` on a run that built something — verbatim
 and complete, inside a `<details>` block. It is handed to `gh` as a file, never as an argument,
 so a long body cannot overflow an argv limit.
+
+**And it names what nobody was given.** Beside `## Open findings` — the reviewer findings still
+dispositioned `fix-now` with no resolution commit behind them — the body carries
+`## Carried findings` when there are any: findings this run deliberately did NOT fix
+(`defer-with-log`) that no story's declared surface could be shown to cover, each row saying why
+it could not be attributed, plus any story file the walk could not read. The section is left out
+entirely when there is nothing to say, because an empty section under that heading would read as
+"checked, and found none" — a different claim. `ship` applies no predicate of its own here: it
+calls the same derivation the Build handoff's `## Unknowns` calls, so the PR and the handoff
+cannot hold two opinions about what "carried" or "unowned" means.
 
 When the branch exists in SEVERAL repos — the normal shape of a chained multi-repo run, whose
 epics share one integration branch — it opens one PR per repo: the same body,

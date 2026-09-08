@@ -1,7 +1,7 @@
 /**
  * What a run does on its way out: take back the epic worktrees it opened, commit
- * the state it wrote, and NAME the questions nobody answered (issues #16, #102
- * and #141).
+ * the state it wrote, NAME the questions nobody answered, and say how many of the
+ * run's decisions name a decider (issues #16, #102, #141 and #169).
  *
  * The policy has one home because it has three callers and they are three
  * different commands: `tldrx next` closing the last stage, `tldrx approve`
@@ -77,6 +77,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { cleanUpRunEpicWorktrees, commitPathsOnly, currentBranch, git, headSha } from "../build/git.ts";
+import { decidedTally, type DecidedTally } from "../facts/decidedTally.ts";
+import { FactsStore } from "../facts/FactsStore.ts";
+import { factsPath } from "../../hooks/lib/workspace.ts";
 import { PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR } from "../paths.ts";
 import { openBlocks, parseQuestions, unreadableQuestionHeadings } from "../text/questions.ts";
 import { QUESTION_PHASES } from "./questionCards.ts";
@@ -122,6 +125,12 @@ export interface RunCloseOutcome {
    * reports them, it does not refuse over them.
    */
   readonly openQuestions: readonly OpenQuestion[];
+  /**
+   * How many of THIS run's recorded facts name a decider (#169). A REPORT, on
+   * the same standing as `openQuestions` above: it changes no exit code and
+   * blocks nothing.
+   */
+  readonly decided: DecidedTally;
 }
 
 /** Which verb closed the run. It reaches the commit message and nothing else. */
@@ -139,8 +148,12 @@ export async function closeRun(
   // asked about rather than as the commit left it. Nothing here writes, so the
   // order is a readability choice, not a correctness one.
   const openQuestions = collectOpenQuestions(runDir);
+  // Read from the same file every prompt reads, before the state commit, for the
+  // same reason the questions are: the report describes the run as it was asked
+  // about. Nothing here writes.
+  const decided = decidedTally(FactsStore.loadOrEmpty(factsPath(root)).facts, runId);
   const state = await commitRunState(run, root, runDir, runId, reason);
-  return { worktreesRemoved, state, openQuestions };
+  return { worktreesRemoved, state, openQuestions, decided };
 }
 
 /**

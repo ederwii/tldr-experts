@@ -91,13 +91,17 @@ cost, so cost-per-effort is measurable rather than arguable.
 ```bash
 tldrx cost                    # this run: per attempt, per stage, per run
 tldrx cost --all              # every run in the workspace, per economy
+tldrx cost --stories          # this run: per story, against the spawn ceilings it was given
 tldrx cost --json
 ```
 
-Read off `agent.result` events and nothing else — **no token count is ever multiplied by a
-price here**. All four token counters, including both prompt-cache halves, on **every attempt
-line** as well as the stage and run totals — a stage that ran once still shows where its money
-went.
+Read off `events.jsonl` and nothing else — **no token count is ever multiplied by a price
+here**. The log holds two kinds of number and they are never added to each other: the
+MEASURED dollars a metered turn reported on an `agent.result` line, and the SPAWN CEILINGS the
+executor handed `agent.spawned`, which are caps it computed rather than charges and which only
+`--stories` prints. All four token counters, including both prompt-cache halves, on **every
+attempt line** as well as the stage and run totals — a stage that ran once still shows where
+its money went.
 
 `tldrx cost` is organised **by economy**, because two economies do not add up:
 
@@ -128,6 +132,62 @@ Three rules it will not bend:
   `~342.5k declared (host session)` — its own notation, kept apart from the four measured
   counters, because the four zeroes it used to print said "this turn used no tokens" about a
   turn that used 342,527 of them.
+
+### Per story, against the ceiling its spawn was given
+
+`tldrx cost --stories` changes the axis, not the source. One row per Build story: what it
+measurably cost, the **spawn ceiling** the executor computed and handed each of its spawns
+(`agent.spawned.max_budget_usd`), and the ratio between them. The shape, with figures chosen
+to show each column rather than taken from one run:
+
+```
+260907-leaderboard · Leaderboard — per story, against the spawn ceilings it was given
+
+  STORY  MEASURED       SPAWN CEILING  RATIO
+  S1     $2.27          $1.50          1.5x
+  S2     $0.62          $1.00          0.6x
+
+  2 stories measured $2.89 against $2.50 of spawn ceilings — 1.2x.
+```
+
+It is a **ceiling**, not "the plan's share": a story file carries no budget key at all, so no
+plan document holds a per-story dollar figure to take a share of, and the report never invents
+one. The same distinction is why the column is called SPAWN CEILING — the phase budget on a
+Build handoff header is also called a ceiling, and one word meaning two things is the failure
+this report exists to stop.
+
+Four absences it refuses to round off:
+
+- a story missing either side reads `not recorded` **with the reason**, never `$0.00`;
+- with a side missing anywhere, no total is printed — an absent figure is not summed as zero;
+- a story with an UNMETERED turn in it makes the run's measurement a **lower bound**, and the
+  footer says so instead of giving it the "inside the ceiling" verdict;
+- keyed results no Build spawn accounts for are excluded and the exclusion is **counted** —
+  `05-watch` fills the same key field with a FEATURE id, which is not a story and has no spawn
+  ceiling to be measured against.
+
+The same arithmetic rides on the Build handoff's cost line, so `tldrx cost --stories` and the
+handoff can never disagree about what a story is. It changes no ceiling and spends nothing:
+it is the measurement side, and the corpus a recalibration of those ceilings would be argued
+from. `--all` and `--stories` are two different reports and cannot be combined — the pair is
+refused (exit `1`), never silently resolved in favour of one.
+
+### The shipped numbers are labelled guesses
+
+Every `budget_usd` in `stages/*/stage.yml` and every `default_budget_usd` in `workflows/*.yml`
+carries an `[assumption]` comment on the money itself, saying what it is: a scoped guess, never
+a measurement. No calibration corpus exists in this repo, and the one measurement that does —
+a story that cost **$2.27** against the **$0.39** ceiling its spawn was given, 5.8x — runs the
+other way. The comment names `tldrx cost --stories` as the command that produces the corpus a
+recalibration would need, and says out loud that changing the number moves the ceiling of every
+workspace with no local override.
+
+A run created by `tldrx seed apply` records the same honesty in its own file:
+`triage.budget_basis: model-guess` in `run.yml` (spec §6.2), because that is measurably what
+produced the figure — the propose prompt tells the model `budget_usd` is a guess and
+`split.yml` validation accepts anything finite and above zero. The closed set is
+`model-guess | owner-grant | preset`. Absence means what every run written before the key
+means: nothing recorded — never "a person set it".
 
 ## Two economies, and why a price needs a currency
 
@@ -253,6 +313,54 @@ output says which happened: the money moved, or the **run** ceiling grew.
 Ceilings are re-read from disk before every write, so a `budget raise` that lands while a
 stage is in flight is no longer silently reverted when that stage saves.
 
+## Writing down what the owner authorized
+
+A ceiling says what the run will spend. It has never said what anybody agreed to pay — that
+lived in prose, in a fact or a thread, and nothing read it back. `tldrx budget grant` is the
+number a ceiling can be measured against:
+
+```bash
+tldrx budget grant 20 --fact F031
+tldrx budget grant 5 --fact F031 --phase 04-build --on-exceed block
+tldrx budget show          # names the grant: the fact, each scope and the policy
+```
+
+`grant` RECORDS; it does not spend and it does not move a ceiling. It writes `authorized_usd`,
+`authorized_by`, `authorized_at` and `on_grant_exceed` into `budget.yml` (or
+`phases[].authorized_usd` under `--phase`, with the fact id still at run level) and appends a
+`budget.granted` event. `<usd>` is a **total**, not a delta — the opposite of `raise`, which is
+the one place the two verbs can be confused.
+
+`--fact <F>` is required and must name a **live** fact: a grant that cannot cite a decision is
+a number nobody said, and a retired or superseded decision is one that has been taken back.
+An amount of `0` or less is refused — absence already means "no grant recorded", and
+"authorized, and the answer is no" is a sentence for `facts.yml`, not a number in an amount
+argument.
+
+`raise` then measures the ceiling it is **about to write** against the grant, before anything
+lands: a phase grant against the phase ceiling, the run grant against the run ceiling.
+
+- **`on_grant_exceed: warn`** (the default) — the ceiling is written and one sentence names the
+  grant, the fact and the figure.
+- **`on_grant_exceed: block`** — the raise is refused with exit `2` and `budget.yml` is
+  byte-identical.
+
+**`on_grant_exceed` is never `on_exceed`.** `on_exceed` governs SPENDING past a ceiling;
+`on_grant_exceed` governs WRITING one above what was authorized. A run that blocks on dollars
+has said nothing about the second, which is why it is a separate key with its own default.
+
+Absence is deliberately the lax side on every one of these keys: no grant recorded means
+nothing is reconciled and nothing is refused. Reading absence as `$0` would refuse every raise
+on every `budget.yml` already on disk. A second grant on the same scope REPLACES the first —
+a later decision supersedes an earlier one, and an owner may reduce as well as raise — but
+never in silence: the command prints `replaces $40.00 → $20.00` and the event carries
+`previous_usd`, which is `null` on a first grant rather than a `$0` nobody wrote.
+
+`--fact`, `--phase` and `--on-exceed` belong to `grant` alone: `budget show` and `budget raise`
+refuse them (exit `1`) rather than accepting and ignoring them. Recording a grant the current
+ceiling already exceeds is still recorded and refuses nothing — the money is committed, and
+there is nothing left to refuse; the command says so on stdout.
+
 ## The Plan prices its own stories
 
 `03-plan/budget.yml` is written by the Plan phase: a `per_phase_usd:` map from story id to
@@ -358,7 +466,7 @@ allows silently.
 ## Where the money is written down
 
 - `tldrx-work/<run>/events.jsonl` — `agent.spawned`, `agent.result`, `cost`, `budget.warned`,
-  `budget.blocked`, `budget.raised`
+  `budget.blocked`, `budget.raised`, `budget.granted`
 - `.tldrx/experts/<name>/training.jsonl` — one line per training run, with its cost and effort
 - `run.yml` + `budget.yml` — the rolled-up actuals, rewritten through `RunStore` on every save
 

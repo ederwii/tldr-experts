@@ -1,9 +1,97 @@
 # Changelog
 
 
-## 0.10.1 — unreleased
+## 0.11.0 — unreleased
+
+### Fixed
+
+- **An answered decision now says who decided it, and what it binds to.** `tldrx answer`
+  wrote a fact with no attribution and no repo scope, so a superseded owner call and an
+  unattended driver default read identically in `facts.yml` and in every prompt built from
+  it. `--decided-by <owner|driver>` (last one wins, like any ordinary flag) and repeatable
+  `--repo <name>` land on the fact `answer` writes — `--decided-by` outside the closed set,
+  or `--repo` naming no workspace repo, is a usage refusal (exit 1) with nothing written, and
+  `--repo` passed twice scopes once. With neither flag the fact says "not stated," never a
+  guessed owner. `Fact.decided_by` is additive on `facts.yml`; `Fact.repos` already existed
+  and is required, not additive. (#169)
+- **Two signed facts that disagree produce a question, without an agent choosing to
+  notice.** The contradiction check now runs on every `answer`, scores the
+  new fact against the live ones in the same `area`, and — on a hit — RAISES an advisory
+  question (`asked_by: tldrx`, a new `advisory:` metadata key that opts a block out of
+  every reader that COUNTS open questions — the auto gate, `next`'s `awaiting_answer`
+  branch, `skip_if` and `tldrx status` — without hiding it from the readers that LIST
+  them, `tldrx questions` among them) rather than refusing the answer. The
+  new fact keeps `conflicts_with: [<id>]` naming the fact it contradicts (additive,
+  empty-omitted, unquoted) — which one is right is left to the question it raises, nothing in
+  the mechanism decides a "loser." "Not detected" never reads as "checked and agreed" — the
+  check is lexical, and honestly cannot catch what its own transcript produced here: three
+  differently-titled answers whose contents actually disagree. The new `fact.conflict_raised`
+  event (`{fact, conflicts_with, score, q, raised}`) joins the closed `EVENT_TYPES` enum.
+  (#169)
+- **A defect in a file no story declared has a sanctioned remedy and a visible home.**
+  Reaching it used to mean a hand edit to a story's `touches:` while the boundary card
+  described exactly the verb that edit needed and the CLI forbade it. Separately, and by
+  owner decision REPORT ONLY — no new gate condition, no new refusal, no new exit code — a
+  Build finding whose file matches no story's declared surface now reaches the Build
+  handoff, the PR body and the boundary card (only when a boundary trigger already draws
+  one), named as unowned rather than silently absorbed by whichever story happened to run
+  last. (#171)
+
+- **The developer bundle carries `result_schema` too, so both halves of one handshake make the
+  same promise.** Measured on disk in a real run: `.agent/<story>/pending.json` had no
+  `result_schema` while the reviewer bundle one directory down had one. The reviewer prompt says
+  in as many words to read the envelope shape out of the bundle and never from memory; the
+  developer had nothing to read it out of, so a host guessed the shape by copying a sibling
+  story's `result.json`, and a reviewer later "corrected" it from the other file. A developer
+  bundle — the Build story's, and every single-agent stage's — now carries the
+  `{outputs, questions_asked, notes}` envelope the spawned half is handed through
+  `claude --json-schema`, plus the `cost_usd` and `session_id` a host may declare and
+  `readResult` reads back. It is DERIVED from that schema rather than retyped, so a change to
+  the envelope cannot reach the spawn without reaching the bundle. The one thing the two halves
+  do not share is how strictly the schema is read, and that is now written down instead of
+  implied: a reviewer envelope is refused on its form, a developer envelope is coerced, and
+  `--commit --check` is what reports the difference.
 
 ### Added
+
+- **`tldrx story widen <id> <path>... --note "<why>"`** — the verb the boundary card had
+  been pointing at while the CLI forbade the hand edit it described. Records
+  `story.touches_widened` (`{story, paths, note, before, after}`, joining the closed event
+  enum) and rewrites `touches:` through the same validated write every other command uses.
+  Refused (exit 2, nothing written) for a `done` story — naming `reopen --for-fix` as the
+  remedy — a `..` anywhere in a path (a substring test, not a segment one), a path already declared, an unknown story, or a plan the
+  story doesn't have; an unresolved run is exit 3 (not found), and `--for-fix` is not a flag
+  of `widen` itself and passing it is a usage refusal (exit 1). (#171)
+- **`tldrx budget grant <amount> --fact <id>`** — a ceiling that answers to a recorded
+  authorization instead of a bare number. Writes `authorized_usd` at run or phase scope, and
+  `authorized_by`/`authorized_at` always at the run level, citing the fact behind it (not
+  duplicated under a second key) — `--phase` scopes the amount, never the citation. Fires
+  `budget.granted` (`{amount_usd, fact, phase, note, ceiling_usd, previous_usd}`, joining the
+  closed event enum) — a second grant replaces the amount and the event records what it
+  replaced, `null` on the first grant; a non-positive amount is refused (exit 1, nothing
+  written), by the VALIDATOR as well as by the verb, so a hand-edited `authorized_usd: 0` —
+  which `grantFor` would otherwise read as a real $0 grant that blocks every later raise —
+  is a schema error rather than a record that quietly governs nothing. Absence is untouched:
+  no key still means no grant recorded, never `$0`. `on_grant_exceed` (default `warn`, distinct from and never confused with
+  `on_exceed`) says what a later `budget raise` past the grant does; `budget show` renders
+  the grant back and stays silent
+  when none is recorded. `--fact`/`--phase`/`--on-exceed` are refused (exit 1) on
+  `budget show` and `budget raise`, where recording a policy is not their job. All four keys
+  are additive on `budget.yml` — a file written before this change still loads and means no
+  grant. `DASHBOARD_MODEL_VERSION` is unchanged (3): `BudgetModel`/`BudgetPhaseModel` widen,
+  no existing field's meaning moved. (#170)
+- **`tldrx cost --stories`** — what a story cost against the ceiling its spawn was given,
+  one row per story, ceilings keyed off each `agent.spawned`'s `max_budget_usd` and money
+  keyed off the envelope's own metered `cost_usd`. A story with an unmetered turn among its
+  metered ones is named a lower bound, never handed the unqualified "inside the ceiling"
+  verdict; a story with no spawned ceiling is reported as absent, not as a zero; a run with
+  no story spawns says so instead of printing an empty table. The same arithmetic now
+  appends an over-ceiling clause to the Build handoff's existing cost line when the stories
+  behind it ran over. (#170)
+- **A run close, `run cancel`, `approve` and the Build handoff header all say how many of a
+  run's decisions name a decider.** One tally (`owner` / `driver` / not-stated), computed
+  once and read by all four surfaces; no sentence at all when the run recorded no facts,
+  never a confident zero. (#169)
 
 - **`workspace.yml` gains an optional `test_fast:` command — the developer iterates on it, and
   the suite runs once at the Definition of Done.** A story's ```dod block must be byte-equal to
@@ -53,24 +141,16 @@
   Nothing citable is lost in the bargain: a dropped element is by definition not a string, and a
   `[src: …]` citation is a token inside one.
 
-### Fixed
-
-- **The developer bundle carries `result_schema` too, so both halves of one handshake make the
-  same promise.** Measured on disk in a real run: `.agent/<story>/pending.json` had no
-  `result_schema` while the reviewer bundle one directory down had one. The reviewer prompt says
-  in as many words to read the envelope shape out of the bundle and never from memory; the
-  developer had nothing to read it out of, so a host guessed the shape by copying a sibling
-  story's `result.json`, and a reviewer later "corrected" it from the other file. A developer
-  bundle — the Build story's, and every single-agent stage's — now carries the
-  `{outputs, questions_asked, notes}` envelope the spawned half is handed through
-  `claude --json-schema`, plus the `cost_usd` and `session_id` a host may declare and
-  `readResult` reads back. It is DERIVED from that schema rather than retyped, so a change to
-  the envelope cannot reach the spawn without reaching the bundle. The one thing the two halves
-  do not share is how strictly the schema is read, and that is now written down instead of
-  implied: a reviewer envelope is refused on its form, a developer envelope is coerced, and
-  `--commit --check` is what reports the difference.
-
 ### Changed
+
+- **The shipped stage and workflow money literals are labelled `[assumption]`**, and
+  deliberately NOT recalibrated: `tldrx init` copies no `stages/` into `.tldrx/`, so moving
+  one moves the ceiling of every workspace that never wrote an override, and this repo holds
+  no corpus to derive a new number from. `triage.budget_basis` (closed set: `model-guess` /
+  `owner-grant` / `preset`; additive on `RunFile`'s `triage:`, absent means nothing) records
+  which of the three produced a triage's numbers — `tldrx seed apply` always writes
+  `model-guess` today. `tldrx cost --stories` is the command that would produce the corpus a
+  recalibration needs. (#170)
 
 - **The Build stage ships `parallel: 2`, so a wave runs two stories at a time out of the box.**
   `--parallel N` shipped in 0.3.1 and nothing used it: no shipped workflow and no shipped

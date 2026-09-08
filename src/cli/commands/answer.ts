@@ -20,12 +20,19 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Command } from "../Command.ts";
 import { EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
-import { boolFlag, parseArgs, stringFlag, UsageError } from "../argv.ts";
+import { boolFlag, parseArgs, repeatedFlag, stringFlag, UsageError } from "../argv.ts";
 import { workspaceRootFrom } from "../workspace.ts";
 import { fail } from "../report.ts";
 import { RunStore } from "../../core/run/RunStore.ts";
 import { isResolved, resolveRunOrExplain } from "../resolveRun.ts";
-import { captureAnswers, supersedeAnswer, writeAnswerSlot } from "../../core/answers/captureAnswers.ts";
+import {
+  captureAnswers, supersedeAnswer, unresolvedEntries, writeAnswerSlot, type AnswerOverride,
+} from "../../core/answers/captureAnswers.ts";
+import { FACT_DECIDERS, type FactDecider } from "../../core/facts/Fact.ts";
+import { formatJaccard } from "../../core/facts/findDuplicate.ts";
+import type { RaisedConflict } from "../../core/answers/raiseConflict.ts";
+import { uniqueRepos } from "../../core/answers/reposFromAffects.ts";
+import { loadWorkspace } from "../../hooks/lib/workspace.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
 import { parseQuestions, type QuestionBlock } from "../../core/text/questions.ts";
 import { readFileSync } from "node:fs";
@@ -35,11 +42,11 @@ const QUESTION_ID_RE = /^Q\d{1,6}$/;
 export const answerCommand: Command = {
   name: "answer",
   summary: "Answer an open interview question",
-  usage: "tldrx answer <Qid> <text> [--supersede] [--run <id>] [--root <path>]",
+  usage: "tldrx answer <Qid> <text> [--supersede] [--decided-by <who>] [--repo <name>] [--run <id>] [--root <path>]",
   implemented: true,
   async run(argv: readonly string[]): Promise<number> {
     try {
-      const args = parseArgs(argv, ["run", "root"]);
+      const args = parseArgs(argv, ["run", "root", "decided-by", "repo"]);
       const [qid, ...words] = args.positionals;
       if (qid === undefined || !QUESTION_ID_RE.test(qid)) {
         throw new UsageError("answer needs a question id: `tldrx answer Q4 \"the answer\"`");
@@ -48,6 +55,38 @@ export const answerCommand: Command = {
       if (text === "") throw new UsageError(`answer ${qid} needs the answer text`);
 
       const root = workspaceRootFrom(args);
+
+      // Validated BEFORE the write, both of them, because a fact scoped to a repo
+      // that does not exist is invisible to `renderFacts`'s filter forever and a
+      // decider outside the closed set is a row `validateFactsFile` would refuse
+      // on the next read. The argument is `facts add --run`'s, transplanted:
+      // asking for provenance by name and getting nothing instead is worse than
+      // not asking.
+      const decidedBy = stringFlag(args, "decided-by");
+      if (decidedBy !== undefined && !(FACT_DECIDERS as readonly string[]).includes(decidedBy)) {
+        throw new UsageError(
+          `--decided-by expects one of ${FACT_DECIDERS.join(", ")}, got '${decidedBy}'`,
+        );
+      }
+      const repoNames = new Set(loadWorkspace(root).repos.keys());
+      const wantedRepos = uniqueRepos(repeatedFlag(args, "repo"));
+      for (const repo of wantedRepos) {
+        if (!repoNames.has(repo)) {
+          // A workspace with no declared repos is its own sentence: "— it has "
+          // with nothing after it reads as a truncated message, not as an answer.
+          throw new UsageError(
+            `--repo ${repo} is not a repo in this workspace — `
+            + (repoNames.size === 0
+              ? "this workspace declares no repos"
+              : `it has ${[...repoNames].join(", ")}`),
+          );
+        }
+      }
+      const overrides = new Map<string, AnswerOverride>([[qid, {
+        ...(decidedBy === undefined ? {} : { decidedBy: decidedBy as FactDecider }),
+        ...(wantedRepos.length === 0 ? {} : { repos: wantedRepos }),
+      }]]);
+
       const wanted = stringFlag(args, "run");
       const resolved = resolveRunOrExplain("tldrx answer", root, wanted);
       if (!isResolved(resolved)) return resolved.exit;
@@ -83,10 +122,14 @@ export const answerCommand: Command = {
           run: store.runId,
           actor: currentActor(),
           at: nowRfc3339(),
+          overrides,
+          repoNames,
         });
         process.stdout.write(
           `${qid} superseded → ${done.fact} replaces ${done.supersedes} (area ${done.area}) in ${path}\n`,
         );
+        sayConflict(done.conflict);
+        sayWhatWasNotStated(decidedBy, [done]);
         return EXIT_OK;
       }
 
@@ -97,6 +140,8 @@ export const answerCommand: Command = {
         run: store.runId,
         actor: currentActor(),
         at: nowRfc3339(),
+        overrides,
+        repoNames,
       });
       const recorded = captured.find((c) => c.q === qid);
       if (recorded === undefined) {
@@ -104,12 +149,77 @@ export const answerCommand: Command = {
         return EXIT_USAGE;
       }
       process.stdout.write(`${qid} answered → ${recorded.fact} (area ${recorded.area}) in ${path}\n`);
+      for (const answer of captured) sayConflict(answer.conflict);
+      // EVERY block this invocation captured, not just `recorded` — the sweep's
+      // blocks have unresolved entries too, and they are the reader's only clue.
+      sayWhatWasNotStated(decidedBy, captured);
       return EXIT_OK;
     } catch (error) {
       return fail("answer", error);
     }
   },
 };
+
+/**
+ * Say, on stdout, what this invocation did NOT state — absent-with-reason.
+ *
+ * The reason a fact carries no decider cannot live in the row: a second field
+ * would only re-derive `decided_by !== undefined`, and could contradict it. So
+ * it is said where a person can act on it, in the same breath as the fact id.
+ *
+ * The same goes for an `affects:` entry shaped `repo:path` that matched no repo:
+ * `repos: []` after one of those would read as "no repo was named" when one WAS
+ * named and was wrong.
+ *
+ * It takes EVERY block the invocation captured, not just the one it named. A
+ * `tldrx answer` sweeps every answered-but-uncaptured block in the file, and
+ * until fix round 1 the swept ones had their unresolved entries computed and
+ * dropped — while `helpText.ts` and the guide both promised they were named.
+ * Every line carries its question id, so "which row is this about" is never
+ * inferred from position.
+ */
+function sayWhatWasNotStated(
+  decidedBy: string | undefined,
+  captured: readonly { readonly q: string; readonly unresolvedAffects: readonly string[] }[],
+): void {
+  if (decidedBy === undefined) {
+    process.stdout.write(
+      `  no decider recorded — this invocation passed no --decided-by, so the fact says `
+      + `"not stated", which is never read as "owner"\n`,
+    );
+  }
+  for (const entry of unresolvedEntries(captured)) {
+    process.stdout.write(`  ${entry}\n`);
+  }
+}
+
+/**
+ * Say, on stdout, that a contradiction was DETECTED and what was done about it (#169).
+ *
+ * The last sentence is not decoration. The check is advisory and lexical —
+ * `conflictOf` compares this question's TITLE against a live fact's whole text
+ * inside one `area`, at Jaccard ≥ 0.6 — so it catches a question answered twice,
+ * differently, in one area, and it CANNOT catch differently-titled answers that
+ * contradict semantically. Its false-positive rate is unmeasured
+ * (`test/answer-conflict.test.ts` carries the protocol for measuring one). A
+ * reader who is told "contradiction" and not told "nothing was refused" would
+ * reasonably think the command had blocked; it exits 0 either way.
+ *
+ * And "nothing was refused" is the whole of it, which took a fix round to make
+ * true: the question named here is minted `advisory: true`, so it does not stop
+ * the next auto gate either (`autoGate`'s `questions` condition skips advisory
+ * blocks). It IS listed by the run close and by `tldrx questions`, so the
+ * disagreement reaches a person — just not by halting an unattended run on a
+ * lexical near-match.
+ */
+function sayConflict(conflict: RaisedConflict | undefined): void {
+  if (conflict === undefined) return;
+  process.stdout.write(
+    `  ${conflict.fact} contradicts ${conflict.conflictsWith} `
+    + `(Jaccard ${formatJaccard(conflict.score)}) — raised as ${conflict.q}. `
+    + "The answer stands; nothing was refused.\n",
+  );
+}
 
 /** The phase questions.md that holds `qid` in `status`, with the block, or null. */
 function locateQuestion(

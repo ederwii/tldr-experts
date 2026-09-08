@@ -19,11 +19,11 @@
  * function, and the two screens cannot disagree.
  *
  * Reads exactly one file beyond the run document it is handed: the cursor
- * phase's `questions.md`, for the open block ids. No model, no network, no write.
+ * phase's `questions.md`, for the BLOCKING open block ids. No model, no network,
+ * no write.
  */
-import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { openBlocks, parseQuestions } from "../text/questions.ts";
+import { blockingQuestionIds } from "../facilitator/skipIf.ts";
 import { isAlive, readLock } from "../facilitator/Lock.ts";
 import { hasPreparedBundle } from "./prepared.ts";
 
@@ -49,7 +49,10 @@ export type WaitingKind = (typeof WAITING_KINDS)[number];
 export interface Waiting {
   readonly kind: WaitingKind;
   readonly message: string;
-  /** Open question ids in the cursor phase, when the run is waiting on answers. */
+  /**
+   * BLOCKING open question ids in the cursor phase, when the run is waiting on
+   * answers — `advisory: true` blocks are not among them (#169, fix round 2).
+   */
   readonly questions: readonly string[];
 }
 
@@ -191,7 +194,14 @@ export function waitingFor(run: WaitingRun, runDir: string): Waiting {
       questions: [],
     };
   }
-  const open = openQuestionIds(join(runDir, cursor.phase, "questions.md"));
+  // What the run is WAITING ON, so advisory blocks are not it (#169, fix round 2).
+  // This used to be a private copy of `skipIf`'s reader; it is now the shared
+  // `blockingQuestionIds`, which is the one function `runNext`'s `awaiting_answer`
+  // branch and the `skip_if` counter also go through. A block the framework raised
+  // and nothing stops for is not something a person is being asked to unblock —
+  // and it is not hidden either: the run close, `tldrx questions`, the decision
+  // cards, `replay` and the status line all go on listing it.
+  const open = blockingQuestionIds(join(runDir, cursor.phase, "questions.md"));
 
   switch (entry.stage.status) {
     case "awaiting_gate":
@@ -279,11 +289,3 @@ function cancelledMessage(cancelled: WaitingCancellation): string {
   return `run cancelled by ${by}${when}${note === "" ? "" : ` — ${note}`}`;
 }
 
-function openQuestionIds(path: string): readonly string[] {
-  if (!existsSync(path)) return [];
-  try {
-    return openBlocks(parseQuestions(readFileSync(path, "utf8")).blocks).map((b) => b.id);
-  } catch {
-    return [];
-  }
-}
