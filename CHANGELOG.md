@@ -1,6 +1,26 @@
 # Changelog
 
 
+## 0.11.1 — unreleased
+
+### Changed
+
+- **The mandate now tells the driver what to READ, because the host's own context was the
+  bill.** Measured over one week of host sessions on three real workspaces: ~$8.5k at list,
+  68 % of it Opus — and the work was not what cost it. Per-story time was a 0.6-1.35 h
+  median; the spend was 600-800-turn host sessions re-reading their whole context every
+  turn, one workspace alone at 2.5B cache-read tokens. `--tldr` already trims what the host
+  WRITES and what a sub-agent DELIVERS, and nothing anywhere told the host what to read
+  back. One bullet in the evidence discipline now does, in all four modes: a sub-agent's
+  outcome comes from its `result.json` and the ledger, never its transcript; each is briefed
+  to report its TURN in ten lines (a handoff is not a turn report — that one is a gate input
+  with its own contract, and trimming it costs the gate); and a cited file is re-opened to
+  VERIFY it at a gate, never re-read for a claim already made. It is paid for rather than
+  appended — the line budgets did not move (`MANDATE_MAX_LINES` 140, `MANDATE_TLDR_MAX_LINES`
+  165, unattended still exactly at both) because the negative-case and contradiction bullets
+  each lost a line of wrapping to the same meaning and the unattended gate's interrupt
+  paragraph lost the clause that restated "## Do not stop".
+
 ## 0.11.0 — 2026-09-08
 
 ### Fixed
