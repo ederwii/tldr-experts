@@ -170,7 +170,11 @@ describe("M7 · unmetered is not zero", () => {
     const ws = workspace();
     const store = withUnmetered(newRun(ws.root));
     const rendered = renderBudget(buildBudgetView(store.run, store.budget));
-    expect(rendered).toContain("+1 unmetered");
+    // The figure itself, not a suffix bolted onto a bare `$0.00`: with nothing
+    // metered there is no floor worth printing, so the number is replaced by the
+    // fact (`budget/spentFigure.ts`, defect 3 of the 2026-09-07 audit).
+    expect(rendered).toContain("not measured: 1 in-session task, 0 metered");
+    expect(rendered).not.toContain("spent $0.00");
     expect(rendered).toContain("LOWER BOUND");
     expect(rendered).toContain("--cost-usd");
   });
@@ -179,7 +183,10 @@ describe("M7 · unmetered is not zero", () => {
     const ws = workspace();
     const store = withUnmetered(newRun(ws.root));
     const rendered = renderStatus(buildStatus(store.run, store.budget, store.runDir));
-    expect(rendered).toContain("1 unmetered (in-session)");
+    expect(rendered).toContain("not measured: 1 in-session task, 0 metered");
+    expect(rendered).not.toContain("$0.00 spent");
+    // The sentence under it is unchanged — it says WHY; the figure says WHAT.
+    expect(rendered).toContain("LOWER BOUND");
   });
 
   test("a metered task is unchanged — no `metered:` key at all", () => {

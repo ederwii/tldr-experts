@@ -43,6 +43,15 @@ export interface StorySpend {
 export interface PhaseCost {
   readonly usd: number;
   readonly note: string | null;
+  /**
+   * Turns this phase recorded as `metered: false`, and turns that put a real
+   * figure in `usd`. ADDITIVE (defect 3, 2026-09-07 audit): the `note` above
+   * already explained WHY the total is short, and the header still printed
+   * `Cost: $0.11 of $200.00 ceiling` as the number a reader takes away.
+   * `budget/spentFigure.ts` turns these two into the figure itself.
+   */
+  readonly unmetered: number;
+  readonly metered: number;
 }
 
 /**
@@ -220,12 +229,20 @@ export function phaseCostToDate<T extends PhaseCostTurn>(
     stories.length,
   );
   const note = [bound, over].filter((part) => part !== null).join("; ") || null;
+  // Counted from the SAME `turns` array the basis sentence is built from, so the
+  // figure and the caveat can never describe two different sets of turns. Not
+  // `counted.costlessTasks`: that is the deliberately WIDER reading (it also
+  // counts a metered `$0.00`), and the figure's `≥` is a claim about turns that
+  // recorded no dollars AT ALL. The two live side by side on purpose.
+  const unmetered = turns.filter((turn) => !turn.metered).length;
+  const tally = { unmetered, metered: turns.length - unmetered };
   if (recorded === null) {
     return {
       usd: round2(invocationUsd),
       note: "this invocation only — `run.yml` could not be read for what the stage spent before it"
         + (note === null ? "" : `; ${note}`),
+      ...tally,
     };
   }
-  return { usd: round2(recorded + invocationUsd), note };
+  return { usd: round2(recorded + invocationUsd), note, ...tally };
 }

@@ -1,1 +1,1 @@
-{"cost_usd":0.1,"ended_at":"<TS>","error":null,"expert":"developer","id":"t1","input_tokens":100,"model":"sonnet","output_tokens":10,"outputs":["s1.txt"],"session_id":"fake-developer-S1","started_at":"2026-08-29T09:00:00Z","status":"done"}
+{"cost_usd":0.1,"duration_basis":"spawned","duration_ms":"<MS>","ended_at":"<TS>","error":null,"expert":"developer","id":"t1","input_tokens":100,"model":"sonnet","output_tokens":10,"outputs":["s1.txt"],"session_id":"fake-developer-S1","started_at":"2026-08-29T09:00:00Z","status":"done"}

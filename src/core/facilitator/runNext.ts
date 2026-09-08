@@ -15,6 +15,8 @@ import { rmSync } from "node:fs";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { PROJECT_WORK_DIR } from "../paths.ts";
+import { frameworkVersionSync } from "../frameworkVersion.ts";
+import { spentBasis, spentFigure, tallyOf } from "../budget/spentFigure.ts";
 import { ambiguousRunLines } from "../run/openRuns.ts";
 import { RunStore } from "../run/RunStore.ts";
 import { isAttendedByHost, isTerminal, type GateType, type RunFile, type RunPhase, type RunStage, type RunTask } from "../run/RunFile.ts";
@@ -63,7 +65,7 @@ import { validateOutputs, describeProblems } from "./validateOutputs.ts";
 import { executorFor, type ExecutorContext, type ExecutorOutcome, type StageExecutor } from "./executors/index.ts";
 import { planIsSkipped, satisfiedByImplicitPlan } from "../build/implicitPlan.ts";
 import {
-  promptPath, readResult, writeBundle, writeRaw, PendingError,
+  promptPath, readPending, readResult, writeBundle, writeRaw, PendingError,
   dispatchNotesRecord, type PendingStage,
 } from "./pending.ts";
 import { hasReviewBundle, preparedBundles, PENDING_JSON } from "../run/prepared.ts";
@@ -622,6 +624,10 @@ async function runStage(
   }
 
   // --- headless spawn -----------------------------------------------------
+  // Read once per spawn, from the same `package.json` `tldrx --version` reads
+  // (`core/frameworkVersion.ts`) — one implementation, so a run's records and the
+  // CLI can never disagree about which release this was.
+  const version = frameworkVersionSync();
   const taskId = nextTaskId(store, phaseId, stageId);
   // Tell whoever is watching what this turn is. No-op when nobody is.
   announce(store.runId, stageId, taskId, cap, maxReads);
@@ -631,6 +637,12 @@ async function runStage(
     model,
     effort,
     max_budget_usd: cap,
+    // Which tldrx spawned this turn (#183). On the SPAWN rather than only on the
+    // result because the two ends of a turn can be different binaries — an
+    // upgrade mid-run is exactly the case this field exists to make legible —
+    // and because a spawn that never produced a result is still a turn a release
+    // is answerable for.
+    tldrx_version: version,
   }, 0, stage.expert));
 
   const workspace = loadWorkspace(options.root);
@@ -664,6 +676,12 @@ async function runStage(
     // different stories and the file has to be able to tell them apart.
     stopped_by: agent.stoppedBy,
     ...tokenSplit(agent.usage.input_tokens, agent.usage.output_tokens),
+    // The span `spawnAgent` timed around the process itself, with the basis that
+    // says what it is (#184). This is the ONE path that can honestly claim to
+    // have measured the sub-agent — `started_at`/`ended_at` above are the
+    // invocation's clock and the write instant, and they always were.
+    duration_ms: agent.durationMs,
+    duration_basis: "spawned",
   });
   store.append(event(options, store.runId, stageId, "agent.result", {
     phase: phaseId,
@@ -675,6 +693,9 @@ async function runStage(
     reads: agent.reads,
     max_reads: maxReads,
     stopped_by: agent.stoppedBy,
+    tldrx_version: version,
+    duration_ms: agent.durationMs,
+    duration_basis: "spawned",
     ...(agent.metered ? {} : { metered: false }),
     usage: {
       input_tokens: agent.usage.input_tokens,
@@ -1332,6 +1353,7 @@ function recordExecutorTasks(
   spec: StageSpec,
   outcome: ExecutorOutcome,
 ): void {
+  const version = frameworkVersionSync();
   for (const task of outcome.tasks) {
     const id = nextTaskId(store, phaseId, stageId);
     // An unmetered task is a HOST turn: nothing here watched it, so `$0.00` would
@@ -1352,6 +1374,13 @@ function recordExecutorTasks(
       ended_at: nowish(options),
       outputs: task.outputs,
       ...tokenSplit(task.inputTokens, task.outputTokens),
+      // Only when the executor SPAWNED the turn and timed it. A host turn inside
+      // a Build carries no span, and no span is written for it — the row says
+      // "not recorded" rather than borrowing the invocation's clock, which is
+      // the same clock every other task in this loop is stamped with (#184).
+      ...(task.durationMs === undefined
+        ? {}
+        : { duration_ms: task.durationMs, duration_basis: "spawned" as const }),
     });
     store.append(event(options, store.runId, stageId, "agent.result", {
       phase: phaseId,
@@ -1361,6 +1390,10 @@ function recordExecutorTasks(
       model: task.model,
       effort: options.effort ?? spec.planned.effort ?? null,
       outputs: task.outputs,
+      tldrx_version: version,
+      ...(task.durationMs === undefined
+        ? {}
+        : { duration_ms: task.durationMs, duration_basis: "spawned" }),
       ...(metered ? {} : { mode: "in-session", metered: false }),
       ...(task.tokens === undefined ? {} : { tokens: task.tokens }),
     }, metered ? round2(task.costUsd) : 0));
@@ -1389,6 +1422,25 @@ async function commitStage(
     if (error instanceof PendingError) return out(EXIT_USAGE, [...notes, error.message]);
     throw error;
   }
+
+  // How long the in-session turn took, as honestly as this side can say it (#184).
+  //
+  // The framework knows exactly two instants for a host turn: the `--prepare`
+  // that wrote the bundle (`pending.prepared_at`) and the `--commit` that is
+  // running now. The span between them is what gets recorded, under the basis
+  // `prepare-to-commit` — which is NOT the sub-agent's time and is never called
+  // that. It includes the host reading the prompt, whatever it did in between,
+  // and the seconds before somebody typed the second command. It is a CEILING on
+  // the sub-agent's span the way `spent_usd` is a floor on the money.
+  //
+  // Absent rather than guessed when `pending.json` cannot be read or carries no
+  // usable stamp: a turn whose bundle is gone is a turn nobody timed, and
+  // `duration_ms` is omitted entirely so `run.yml` says "not recorded".
+  const preparedToCommitMs = preparedSpanMs(store.runDir, stageId, options);
+  const durationRow = preparedToCommitMs === null
+    ? {}
+    : { duration_ms: preparedToCommitMs, duration_basis: "prepare-to-commit" as const };
+  const version = frameworkVersionSync();
 
   // The cost of an in-session turn is DECLARED, never measured: the sub-agent ran
   // inside the host's session and was billed to it. `--cost-usd` is the host
@@ -1463,6 +1515,7 @@ async function commitStage(
       outputs: result.outputs,
       ...(willRefuseOnQuestions ? { banked_before_refusal: true } : {}),
       ...(looksLikeARepeat ? { dedupe: "none — no session id" } : {}),
+      ...durationRow,
     });
     store.append(event(options, store.runId, stageId, "agent.result", {
       phase: phaseId,
@@ -1472,6 +1525,8 @@ async function commitStage(
       effort: options.effort ?? spec.planned.effort ?? null,
       outputs: result.outputs,
       mode: "in-session",
+      tldrx_version: version,
+      ...durationRow,
       // `cost_usd` on the ENVELOPE must stay a number ≥ 0 (spec §2.9), so the fact
       // that nothing was declared lives in the payload where it can be null.
       metered: cost !== null,
@@ -2459,16 +2514,30 @@ function warnOnce(
   const pct = (phase.spent_usd / phase.ceiling_usd) * 100;
   if (pct < store.budget.warn_at_pct) return;
   if (alreadyWarned(store, phaseId)) return;
+  // What this phase's own turns put in the meter, and what they did not. The
+  // percentage above is computed from `spent_usd`, so on a phase whose turns were
+  // all in-session it is 0% of a ceiling that has really been spent against —
+  // and this warning would never fire at all. The counts do not change the
+  // threshold (that is #170's wave, not this one); they say out loud what the
+  // percentage is a percentage OF.
+  const tally = tallyOf(
+    (store.run.phases.find((p) => p.id === phaseId)?.stages ?? []).flatMap((s) => s.tasks),
+  );
   store.append(event(options, store.runId, stageId, "budget.warned", {
     phase: phaseId,
     spent_usd: phase.spent_usd,
     estimate_usd: estimate,
     ceiling_usd: phase.ceiling_usd,
     pct: Math.round(pct),
+    unmetered_tasks: tally.unmetered,
+    spent_basis: spentBasis(tally.unmetered),
   }));
   notes.push(
     `budget: phase ${phaseId} is at ${String(Math.round(pct))}% of its $${phase.ceiling_usd.toFixed(2)} ceiling ` +
-      `after this stage ($${phaseRemaining.toFixed(2)} left before it)`,
+      `after this stage ($${phaseRemaining.toFixed(2)} left before it)` +
+      (tally.unmetered === 0
+        ? ""
+        : ` — measured against ${spentFigure(tally)}, so the real share is higher`),
   );
 }
 
@@ -2507,6 +2576,32 @@ function event(
  * `next` can span minutes, so the clock is read live rather than frozen at
  * `options.at`. `options.at` remains the lock/started_at stamp.
  */
+/**
+ * `pending.json`'s `prepared_at` to now, in milliseconds — or null.
+ *
+ * Null covers every case where the answer would have to be invented: no bundle
+ * on disk (a `--commit` on a stage prepared by a tldrx that is gone, or a bundle
+ * cleaned up between the two commands), a `prepared_at` that does not parse, and
+ * a clock that ran backwards between the two commands. Each of those is "nobody
+ * timed this", and `run.yml` says so by carrying no `duration_ms` at all.
+ *
+ * `nowish(options)` rather than `options.at` for the far end, for the reason
+ * `nowish` already exists: `options.at` is the lock stamp taken on the way in and
+ * a single invocation can span minutes.
+ */
+function preparedSpanMs(runDir: string, stageId: string, options: NextOptions): number | null {
+  let preparedAt: string;
+  try {
+    preparedAt = readPending(runDir, stageId).prepared_at;
+  } catch {
+    return null;
+  }
+  const from = new Date(preparedAt).getTime();
+  const to = new Date(nowish(options)).getTime();
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return null;
+  return to - from;
+}
+
 function nowish(options: NextOptions): string {
   const now = `${new Date().toISOString().slice(0, 19)}Z`;
   return now < options.at ? options.at : now;

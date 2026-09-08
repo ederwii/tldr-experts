@@ -952,7 +952,12 @@ export function dashSpendText(run: RunModel): string {
         ? "host tokens · no ceiling declared"
         : `of ${String(ceiling)} host tokens`}</span>`;
   }
-  return `<span class="num">${dashText(dashUsd(run.spentUsd))}</span> `
+  // `run.spentFigure`, not `dashUsd(run.spentUsd)`: the model has already written
+  // the number out WITH its basis, and this row used to read `$0.00 of $3000.00`
+  // on a run that had finished 30 stories in-session. The bar beside it is still
+  // drawn from the raw figure — a lower bound is still the only fraction there
+  // is to draw, and `dashEconomyRow` under it says why it is short.
+  return `<span class="num">${dashText(run.spentFigure)}</span> `
     + `<span class="faint">of ${dashText(dashUsd(run.ceilingUsd))}</span>`;
 }
 
@@ -1843,7 +1848,11 @@ export function dashHeroSpend(run: RunModel): string {
       + `<span class="faint">${budget === null || budget.ceilingHostTokens === null
         ? "host tokens · no ceiling declared"
         : `of ${String(budget.ceilingHostTokens)} host tokens`}</span>`
-    : `<span class="now__usd">${dashText(dashUsd(run.spentUsd))}</span> `
+    // Same rule as `dashSpendText`: the hero number carries its basis. The
+    // `lower bound` chip below is not enough on its own — it hangs off
+    // `spend.basis`, which is `absent` on exactly the run that shows `$0.00`, and
+    // a chip is a thing a reader can miss while reading the number they came for.
+    : `<span class="now__usd">${dashText(run.spentFigure)}</span> `
       + `<span class="faint">of ${dashText(dashUsd(run.ceilingUsd))}</span>`;
   const marker = !bound
     ? ""

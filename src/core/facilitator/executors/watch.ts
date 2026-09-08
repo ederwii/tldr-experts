@@ -163,6 +163,8 @@ export async function watchExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
         metered: outcome.metered,
         inputTokens: outcome.usage.input_tokens,
         outputTokens: outcome.usage.output_tokens,
+        // The watcher's sub-agent span, measured around its process (#184).
+        durationMs: outcome.durationMs,
       });
       if (!outcome.ok) {
         return failed(ctx, `\`${feature.id}\`: ${outcome.error ?? "the sub-agent failed"}`, tasks);

@@ -103,6 +103,19 @@ by a price.** Retries are never merged into the stage total — a stage that fai
 three turns, and that retry is usually the money you were looking for. Anything the process
 never saw a cost for prints as `UNMETERED`.
 
+Beside the money there is now a **duration** per attempt, and it says which span it is.
+`spawned` is the sub-agent's own process, start to exit. `prepare-to-commit` is the gap
+between the `--prepare` that handed a host session its bundle and the `--commit` that
+recorded the turn — which includes whatever the host did in between, so it is a ceiling on
+the sub-agent's time and is never called the sub-agent's time. An attempt from before the
+framework recorded either reads `not recorded`, never `0s`.
+
+And wherever a spend figure appears — `run status`, `budget show`, the dashboard, a replay,
+the Build handoff — a run with unmetered turns in it reads `≥ $12.40 (7 tasks unmetered)`,
+or `not measured: 9 in-session tasks, 0 metered` when nothing at all was metered. A bare
+`$0.00` over thirty stories somebody's session paid for is arithmetically true and
+communicatively false. A run that really did meter everything keeps its plain figure.
+
 `tldrx cost --stories` changes the axis, not the source: one row per build story, with what it
 measurably cost beside the **spawn ceiling** the executor handed its spawns, and the ratio.
 Those are two different kinds of number — a charge and a cap — so they sit in separate columns

@@ -1778,6 +1778,9 @@ class BuildSession {
       metered: agent.metered,
       inputTokens: agent.usage.input_tokens,
       outputTokens: agent.usage.output_tokens,
+      // The developer sub-agent's own span, measured around its process (#184).
+      // Every task row of a parallel build otherwise shares one `started_at`.
+      durationMs: agent.durationMs,
     });
     if (agent.ok) return { cost: round2(agent.costUsd), error: null };
 
@@ -1908,6 +1911,7 @@ class BuildSession {
       const again = this.formatRetry(story, review, {
         costUsd: turn, sessionId: agent.sessionId, metered: agent.metered,
         inputTokens: agent.usage.input_tokens, outputTokens: agent.usage.output_tokens,
+        durationMs: agent.durationMs,
       });
       if (again !== null) {
         refusal = again;
@@ -1922,6 +1926,7 @@ class BuildSession {
         metered: agent.metered,
         inputTokens: agent.usage.input_tokens,
         outputTokens: agent.usage.output_tokens,
+        durationMs: agent.durationMs,
         source: "agent",
         // MEASURED: these are the arguments this loop handed the provider CLI a
         // few lines up, not a re-derivation of them.
@@ -1952,6 +1957,8 @@ class BuildSession {
       /** The provider's own split for this turn, when it reported one. */
       inputTokens?: number;
       outputTokens?: number;
+      /** The spawn's own wall clock, when this turn was spawned rather than hosted. */
+      durationMs?: number;
     },
   ): string | null {
     const id = story.planned.story.id;
@@ -1968,6 +1975,9 @@ class BuildSession {
       ...(task.tokens === undefined ? {} : { tokens: task.tokens }),
       inputTokens: task.inputTokens,
       outputTokens: task.outputTokens,
+      // Absent for a HOST review turn, which is the point: absence is "not
+      // recorded", and only a span this process timed is written down.
+      ...(task.durationMs === undefined ? {} : { durationMs: task.durationMs }),
     });
     this.ctx.emit("story.review_retried", {
       phase: this.ctx.phaseId,
@@ -2082,6 +2092,8 @@ class BuildSession {
       /** The provider's own split for this turn, when it reported one. */
       inputTokens?: number;
       outputTokens?: number;
+      /** The spawn's own wall clock, when this turn was spawned rather than hosted. */
+      durationMs?: number;
       source: "agent" | "host";
       /**
        * WHO judged this diff, or null when nothing can say (`build/reviewerProvenance.ts`).
@@ -2105,6 +2117,7 @@ class BuildSession {
       ...(task.tokens === undefined ? {} : { tokens: task.tokens }),
       inputTokens: task.inputTokens,
       outputTokens: task.outputTokens,
+      ...(task.durationMs === undefined ? {} : { durationMs: task.durationMs }),
     });
     const id = story.planned.story.id;
     // The requeue counter counts VERDICTS THAT COST AN ATTEMPT — two of the five
@@ -2397,6 +2410,8 @@ class BuildSession {
       model: this.model(),
       costUsd: cost.usd,
       costNote: cost.note,
+      unmeteredTasks: cost.unmetered,
+      meteredTasks: cost.metered,
       decidedNote: describeDecidedTally(
         decidedTally(FactsStore.loadOrEmpty(factsPath(this.ctx.root)).facts, this.ctx.runId),
       ),

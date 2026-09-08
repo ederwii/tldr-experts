@@ -2455,6 +2455,9 @@ describe("the handoff's Cost line reports the phase, not the invocation (#138)",
       expect(phaseCostToDate(empty, "04-build", "build", 0.44)).toEqual({
         usd: 0.44,
         note: "this invocation only — `run.yml` could not be read for what the stage spent before it",
+        // Nothing to count: the turns list is empty and run.yml is unreadable.
+        unmetered: 0,
+        metered: 0,
       });
       // Present and loadable, but the stage id does not resolve.
       const ws = workspace(PAID);
@@ -2463,7 +2466,8 @@ describe("the handoff's Cost line reports the phase, not the invocation (#138)",
       // And the resolving stage on that same untouched run is $0.00 with NO note:
       // a stage that has genuinely spent nothing reads differently from one whose
       // ledger is missing.
-      expect(phaseCostToDate(ws.runDir, "04-build", "build", 0)).toEqual({ usd: 0, note: null });
+      expect(phaseCostToDate(ws.runDir, "04-build", "build", 0))
+      .toEqual({ usd: 0, note: null, unmetered: 0, metered: 0 });
     } finally {
       rmSync(empty, { recursive: true, force: true });
     }
@@ -2547,8 +2551,12 @@ describe("the handoff's Cost line marks an unmetered phase as a lower bound (#13
     expect(stage?.cost_usd).toBe(0.11);
 
     const line = costLine(readFileSync(handoffPath(ws), "utf8"));
-    // The metered half is still reported, unchanged.
-    expect(line).toContain("Cost: $0.11 of $200.00 ceiling");
+    // The metered half is still reported — and now as the FLOOR it is. Before
+    // defect 3 of the 2026-09-07 audit this read `Cost: $0.11 of $200.00
+    // ceiling`, a figure indistinguishable from a stage where every turn was
+    // billed here, with the caveat parked in a parenthesis after it.
+    expect(line).toContain("Cost: ≥ $0.11 (1 task unmetered) of $200.00 ceiling");
+    expect(line).not.toContain("Cost: $0.11 of");
     // What it must no longer read as: a complete measurement.
     expect(line).toContain("1 of 2 turns produced no dollars");
     expect(line).toContain("LOWER BOUND, not a total");
@@ -2594,13 +2602,20 @@ describe("the handoff's Cost line marks an unmetered phase as a lower bound (#13
     expect(phaseCostToDate(ws.runDir, "04-build", "build", 0, [host])).toEqual({
       usd: 0,
       note: spendReason("absent", 1, 1, 1, 0, "stage"),
+      // The counts the handoff header's own figure is built from (defect 3).
+      // One host turn, nothing metered: `Cost:` reads "not measured", never $0.00.
+      unmetered: 1,
+      metered: 0,
     });
     // One host turn and one metered spawn — the fixture the measurement above ran.
     expect(phaseCostToDate(ws.runDir, "04-build", "build", 0.11, [
       host, { key: "S1", model: "sonnet", costUsd: 0.11, sessionId: null, error: null, outputs: [] },
-    ])).toEqual({ usd: 0.11, note: spendReason("absent", 2, 1, 1, 0, "stage") });
+    ])).toEqual({
+      usd: 0.11, note: spendReason("absent", 2, 1, 1, 0, "stage"), unmetered: 1, metered: 1,
+    });
     // And with no turn passed at all the line is clean, as it was before #139.
-    expect(phaseCostToDate(ws.runDir, "04-build", "build", 0)).toEqual({ usd: 0, note: null });
+    expect(phaseCostToDate(ws.runDir, "04-build", "build", 0))
+      .toEqual({ usd: 0, note: null, unmetered: 0, metered: 0 });
   });
 
   /**

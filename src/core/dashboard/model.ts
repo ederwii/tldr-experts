@@ -66,6 +66,7 @@ import { asWatcher, validateWatcher, WATCHERS_DIR, WATCHER_SIGNAL_SECTION } from
 import { parseFrontMatter } from "../schemas/frontMatter.ts";
 import { parseYaml } from "../yaml.ts";
 import { offlineHtml } from "./offlineHtml.ts";
+import { spentFigure } from "../budget/spentFigure.ts";
 
 /**
  * Bumped when a field is removed or changes meaning, never for an addition.
@@ -762,6 +763,20 @@ export interface RunModel {
   readonly attendedBy: string | null;
   /** Turns whose cost nobody declared. `spentUsd` is a lower bound when > 0. */
   readonly unmeteredTasks: number;
+  /**
+   * `spentUsd` WRITTEN OUT, with its own basis inside it: `"$12.40"`,
+   * `"≥ $12.40 (7 tasks unmetered)"`, or `"not measured: 9 in-session tasks, 0
+   * metered"` (`budget/spentFigure.ts`).
+   *
+   * Carried as a STRING rather than left to the page, for the same reason
+   * `costlessTasks` is carried rather than summed there: the renderer runs
+   * closure-free in the browser through `Function.prototype.toString()`, so a
+   * rule it re-derives is a rule it can get wrong differently from the terminal.
+   * `run status`, `budget show`, the replay and this page now print the same
+   * sentence because they all call the same function — the defect being fixed is
+   * precisely that they did not (#103's figure, not its caveat).
+   */
+  readonly spentFigure: string;
   /** Host-session tokens declared with `--tokens`. A DIFFERENT currency: never added to dollars. */
   readonly hostTokens: number;
   /**
@@ -773,6 +788,13 @@ export interface RunModel {
    * run those three can actually see — and, on a host-attended run, how little.
    */
   readonly spend: SpendModel;
+  /**
+   * Which tldrx created this run and which one wrote it last (#183), or
+   * `"not recorded"`. Two fields because the interesting case is when they
+   * differ: a run that outlived an upgrade was driven by two sets of behaviour.
+   */
+  readonly createdWith: string;
+  readonly lastWrittenBy: string;
   /**
    * When anything last happened on this run: the `ts` of the LAST line of
    * `events.jsonl`, or the file's mtime when nothing in it parses.
@@ -1171,6 +1193,20 @@ export function toRunModel(
     ceilingUsd: doc.ceiling_usd,
     attendedBy: doc.attended_by,
     unmeteredTasks,
+    // `doc.spent_usd` is null only when the budget block could not be read; a
+    // figure that does not exist gets no basis attached to it, and the page falls
+    // back to the `$?` it already printed.
+    spentFigure: doc.spent_usd === null
+      ? "$?"
+      : spentFigure({
+        usd: doc.spent_usd,
+        unmetered: unmeteredTasks,
+        metered: tasks.length - unmeteredTasks,
+      }),
+    // Which tldrx wrote the run (#183) — already resolved to "not recorded" by
+    // `RunDocument`, so the page never has to decide what an absence means.
+    createdWith: doc.created_with,
+    lastWrittenBy: doc.last_written_by,
     hostTokens,
     spend,
     lastEventAt: stale.at,

@@ -8,6 +8,7 @@
 import { openBlocks, parseQuestions } from "../text/index.ts";
 import { parseEvidence } from "../text/evidence.ts";
 import { skippedNote } from "../events/EventLog.ts";
+import { spentClause } from "../budget/spentFigure.ts";
 import { describeGateSignature } from "../run/gateAuthority.ts";
 import { formatJaccard } from "../facts/findDuplicate.ts";
 import {
@@ -27,7 +28,15 @@ export function renderReplay(loaded: LoadedRun): string {
     describe(run.title === "" ? "" : `**${run.title}**`, `scope \`${run.scope || "?"}\``,
       `workflow \`${run.workflow || "?"}\``,
       run.repos.length > 0 ? `repos ${run.repos.join(", ")}` : ""),
-    `Status: **${run.status || "unknown"}** · ${money(run.spent_usd)} spent of ${money(run.ceiling_usd)} ceiling`,
+    // The headline figure, with its basis in it (`budget/spentFigure.ts`). A
+    // replay is the stakeholder narrative, and `$0.00 spent` at the top of one
+    // whose 30 stories all ran in-session is the single most misread line the
+    // 2026-09-07 audit found.
+    `Status: **${run.status || "unknown"}** · ${spentSoFar(run, money(run.ceiling_usd))}`,
+    // Which tldrx wrote the file this narrative is built from (#183). Behaviour
+    // moved ten times in one week; a replay that cannot name a release leaves the
+    // reader inferring one from a git log the run never saw.
+    `Written by: tldrx ${run.created_with} at creation · ${run.last_written_by} at the last write`,
     describe(run.created_at === null ? "" : `Created ${run.created_at}`,
       run.updated_at === null ? "" : `updated ${run.updated_at}`),
   ];
@@ -73,6 +82,21 @@ export function renderReplay(loaded: LoadedRun): string {
 
   out.push("", "## Where it stands now", "", ...standing(loaded));
   return `${out.join("\n")}\n`;
+}
+
+/**
+ * `run.yml`'s `budget.spent_usd`, rendered with what it does NOT include.
+ *
+ * `$?` stays `$?` — a document whose budget block could not be read has no figure
+ * to qualify, and `≥ $?` would be a lower bound on nothing. Otherwise the tally
+ * comes from the task rows this same document carries, so the count and the sum
+ * describe the same turns.
+ */
+function spentSoFar(run: LoadedRun["run"], ceiling: string): string {
+  if (run.spent_usd === null) return `${money(null)} spent of ${ceiling} ceiling`;
+  const tasks = run.phases.flatMap((phase) => phase.stages).flatMap((stage) => stage.tasks);
+  const unmetered = tasks.filter((task) => !task.metered).length;
+  return spentClause({ usd: run.spent_usd, unmetered, metered: tasks.length - unmetered }, ceiling);
 }
 
 function standing(loaded: LoadedRun): readonly string[] {

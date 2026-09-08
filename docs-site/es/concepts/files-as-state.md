@@ -41,10 +41,18 @@ tldrx-work/260901-bulk-pricing/  # una carpeta por pieza de trabajo
 con su modelo, su techo, su costo real y su compuerta:
 
 ```yaml
+created_with: "<tldrx version at run new>"
+last_written_by: "<tldrx version at the last save>"
 cursor: {phase: "01-what", stage: what, task: null}
 budget: {ceiling_usd: 5.00, spent_usd: 0.00, per_agent_max_usd: 1.80}
 gates_policy: {what: human, how: auto, plan: human, build: auto, watch: human}
 ```
+
+Las dos líneas de versión dicen qué tldrx escribió el archivo: la que creó el run y la que
+lo guardó por última vez. No son el `version: 1` de más arriba, que numera el FORMATO del
+archivo. El comportamiento cambia entre releases, así que un run que no puede nombrar la
+suya te deja preguntándole al git log qué había instalado ese día. Un run escrito antes de
+que existieran se lee `not recorded`, que no es lo mismo que una adivinanza.
 
 Es el *único* punto desde donde se retoma. `tldrx run auto` no guarda nada en memoria —
 cada iteración vuelve a leer este archivo — así que matarlo a media corrida deja un run que

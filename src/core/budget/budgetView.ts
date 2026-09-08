@@ -13,6 +13,7 @@ import { isTerminal, type RunFile, type RunStage, isAttendedByHost } from "../ru
 import { economyFor, type RunBudget } from "./RunBudget.ts";
 import { remainingWork, renderRemainingWork } from "./remainingWork.ts";
 import { totalSpent, wouldExceed } from "./wouldExceed.ts";
+import { spentFigure, tallyOf, type SpentTally } from "./spentFigure.ts";
 
 export interface BudgetPhaseView {
   readonly id: string;
@@ -84,6 +85,13 @@ export interface BudgetView {
    * "$0.00 spent" after real money had gone (2026-08-29 audit, §A).
    */
   readonly unmetered_tasks: number;
+  /**
+   * Turns that DID put a figure in the sum. Additive, and the field that turns
+   * `unmetered_tasks` from a footnote into a basis: with a metered turn beside
+   * them the total is a floor worth printing (`≥ $12.40`), and with none it is
+   * not a floor at all (`not measured: 9 in-session tasks, 0 metered`).
+   */
+  readonly metered_tasks: number;
 }
 
 /**
@@ -92,6 +100,7 @@ export interface BudgetView {
  * is the stage's declared `budget_usd` and every field below is what it was.
  */
 export function buildBudgetView(run: RunFile, budget: RunBudget, runDir?: string): BudgetView {
+  const tally = runTally(run);
   const phases = budget.phases.map((phase) => {
     const runPhase = run.phases.find((p) => p.id === phase.id);
     const next = runPhase === undefined ? null : nextStageOf(runPhase.stages);
@@ -142,7 +151,8 @@ export function buildBudgetView(run: RunFile, budget: RunBudget, runDir?: string
     phases,
     blocked,
     fix_command: blocked === null ? null : raiseCommand(run.run, blocked.id, blocked.short_by_usd),
-    unmetered_tasks: countUnmetered(run),
+    unmetered_tasks: tally.unmetered,
+    metered_tasks: tally.metered,
   };
 }
 
@@ -171,12 +181,23 @@ function grantLine(view: BudgetView): readonly string[] {
   return [`authorized by ${by}: ${scopes.join(" · ")} · on_grant_exceed ${view.on_grant_exceed}`];
 }
 
-/** In-session turns nobody costed. See `BudgetView.unmetered_tasks`. */
+/**
+ * In-session turns nobody costed. See `BudgetView.unmetered_tasks`.
+ *
+ * Delegates to `spentFigure.ts`'s `tallyOf` rather than filtering here: the
+ * count that reaches a SCREEN and the count `budget.yml` records have to be the
+ * same count, and this used to be a second filter (`cost_usd === null`) beside
+ * that one (`metered === false`). Measured, the two agree on every row the
+ * validator will accept — a null cost must carry `metered: false` — which is
+ * exactly why the duplicate was invisible and worth removing anyway.
+ */
 export function countUnmetered(run: RunFile): number {
-  return run.phases
-    .flatMap((phase) => phase.stages)
-    .flatMap((stage) => stage.tasks)
-    .filter((task) => task.cost_usd === null).length;
+  return runTally(run).unmetered;
+}
+
+/** The run's whole spend tally, from its task rows. One pass, one derivation. */
+export function runTally(run: RunFile): SpentTally {
+  return tallyOf(run.phases.flatMap((phase) => phase.stages).flatMap((stage) => stage.tasks));
 }
 
 /** The one sentence every report uses for an unmetered total. */
@@ -211,8 +232,15 @@ export function renderBudget(view: BudgetView): string {
   const stageWidth = Math.max(...view.phases.map((p) => (p.next_stage ?? "—").length), 10);
   const lines = [
     `${view.run} · ${view.title}`,
-    `ceiling ${usd(view.ceiling_usd)} · spent ${usd(view.spent_usd)}` +
-      (view.unmetered_tasks === 0 ? "" : ` (+${String(view.unmetered_tasks)} unmetered)`) +
+    // `spentFigure` owns the shape of the number itself — `$12.40`, `≥ $12.40 (7
+    // tasks unmetered)`, or `not measured: 9 in-session tasks, 0 metered`. This
+    // screen used to print a bare figure with `(+N unmetered)` bolted on, which
+    // still read as "$0.00 was spent, and separately some turns happened".
+    `ceiling ${usd(view.ceiling_usd)} · spent ${spentFigure({
+      usd: view.spent_usd,
+      unmetered: view.unmetered_tasks,
+      metered: view.metered_tasks,
+    })}` +
       ` · left ${usd(view.remaining_usd)} · ` +
       `per-agent max ${usd(view.per_agent_max_usd)} · on_exceed ${view.on_exceed}`,
     ...(view.unmetered_tasks === 0 ? [] : [unmeteredNote(view.unmetered_tasks)]),

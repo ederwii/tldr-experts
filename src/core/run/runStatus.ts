@@ -8,7 +8,8 @@
  */
 import { dashDuration, dashDurationAbsence } from "./duration.ts";
 import { remaining } from "../budget/wouldExceed.ts";
-import { countUnmetered, unmeteredNote } from "../budget/budgetView.ts";
+import { runTally, unmeteredNote } from "../budget/budgetView.ts";
+import { spentClause } from "../budget/spentFigure.ts";
 import type { RunBudget } from "../budget/RunBudget.ts";
 import { renderAttempts, stageAttempts, type StageAttempts } from "./attempts.ts";
 import { buildProgress, renderBuildProgress, renderStoryCosts, BUILD_PHASE, type BuildProgress } from "./buildProgress.ts";
@@ -16,7 +17,7 @@ import { gatePolicyFor, type GatePolicy, type GatesPolicy } from "./gatePolicy.t
 import { describeGateSignature } from "./gateAuthority.ts";
 import { failureReason, waitingFor, type Waiting, type WaitingKind } from "./waiting.ts";
 import {
-  flatten, isTerminal,
+  flatten, isTerminal, recordedVersion,
   type AttendedBy, type RunFile, type RunGateAuthority, type RunGateExecutor, type RunPhase,
 } from "./RunFile.ts";
 import { operatorNotes, type OperatorNote } from "./operatorNote.ts";
@@ -107,6 +108,19 @@ export interface RunStatusView {
    * facts and only one of them is a measurement.
    */
   readonly unmetered_tasks: number;
+  /** Turns that DID put a figure in the sum — see `budgetView.BudgetView`. */
+  readonly metered_tasks: number;
+  /**
+   * Which tldrx created this run and which one wrote it last (#183), or
+   * `"not recorded"` for a run.yml from before the fields existed.
+   *
+   * On this screen because it changes what every other line on it means: the
+   * refusal wording, the reviewer's diff base and the DoD record's states have
+   * all moved between releases, and a screen that cannot say which release wrote
+   * the file leaves the reader inferring it from the workspace's git log.
+   */
+  readonly created_with: string;
+  readonly last_written_by: string;
   /** Per-attempt cost for the cursor stage, from `agent.result` events. */
   readonly attempts: StageAttempts;
   /**
@@ -147,6 +161,7 @@ export interface RunStatusView {
 
 export function buildStatus(run: RunFile, budget: RunBudget, runDir: string): RunStatusView {
   const phases = run.phases.map((phase) => progressOf(phase, budget));
+  const tally = runTally(run);
   return {
     run: run.run,
     title: run.title,
@@ -168,9 +183,15 @@ export function buildStatus(run: RunFile, budget: RunBudget, runDir: string): Ru
     gates: gateRows(run),
     // Appended, never inserted: `--json` consumers read this object by key order
     // in at least one test, and every key above keeps its position.
-    unmetered_tasks: countUnmetered(run),
+    unmetered_tasks: tally.unmetered,
     attended_by: run.attended_by ?? null,
     operator_notes: operatorNotes(runDir),
+    // APPENDED, never inserted — `test/multi-run.test.ts` pins this object's key
+    // ORDER, and a `--json` consumer that reads it positionally is a consumer a
+    // new key in the middle would break. Same rule `unmetered_tasks` followed.
+    metered_tasks: tally.metered,
+    created_with: recordedVersion(run.created_with),
+    last_written_by: recordedVersion(run.last_written_by),
   };
 }
 
@@ -257,6 +278,10 @@ export function renderStatus(view: RunStatusView, verbose = false): string {
       // Only when set, so an ordinary run's screen is byte-identical to before.
       (view.attended_by === null ? "" : ` · attended: ${view.attended_by}`),
     `cursor ${view.cursor.phase} / ${view.cursor.stage}`,
+    // Which tldrx wrote this run (#183). Both stamps on one line because the
+    // interesting case is when they DIFFER — a run that outlived an upgrade was
+    // driven by two sets of behaviour, and one version string cannot say that.
+    `tldrx   created with ${view.created_with} · last written by ${view.last_written_by}`,
     "",
   ];
   for (const phase of view.phases) {
@@ -271,9 +296,16 @@ export function renderStatus(view: RunStatusView, verbose = false): string {
   }
   lines.push(
     "",
-    `budget  $${view.budget.spent_usd.toFixed(2)} spent of $${view.budget.ceiling_usd.toFixed(2)} ceiling ` +
-      `($${view.budget.remaining_usd.toFixed(2)} left)` +
-      (view.unmetered_tasks === 0 ? "" : ` · ${String(view.unmetered_tasks)} unmetered (in-session)`),
+    // The figure itself carries its own basis (`budget/spentFigure.ts`). This
+    // line used to read `budget  $0.00 spent of $3000.00 ceiling` on a run that
+    // had finished 30 stories in-session — arithmetically true, and the exact
+    // sentence defect 3 of the 2026-09-07 audit is about.
+    `budget  ${spentClause({
+      usd: view.budget.spent_usd,
+      unmetered: view.unmetered_tasks,
+      metered: view.metered_tasks,
+    }, `$${view.budget.ceiling_usd.toFixed(2)}`)} ` +
+      `($${view.budget.remaining_usd.toFixed(2)} left)`,
   );
   if (view.unmetered_tasks > 0) lines.push(`        ${unmeteredNote(view.unmetered_tasks)}`);
   // The Build phase, story by story. Only when there is one: on a run parked in
