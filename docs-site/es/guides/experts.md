@@ -147,7 +147,12 @@ Un experto sin área no se puede entrenar, y por eso `--area` va arriba: sin ell
 `expert train` se niega y nombra el bloque que hay que agregar a `competencies.yml`.
 
 `tldrx expert recompute` vuelve a derivar cada nivel a partir de la evidencia que hay en
-disco.
+disco. `tldrx expert rescore` va un paso más atrás: vuelve a leer los propios archivos de
+conocimiento y deriva su evidencia otra vez, que es lo que quieres después de un cambio en lo
+que cuenta como evidencia. Ninguno de los dos lanza nada ni gasta nada. Una fila re-puntuada
+conserva la fecha en que se leyó su afirmación y lleva una segunda que dice cuándo se puntuó, y
+el rescore se escribe a sí mismo en el ledger del experto con costo $0 — así un nivel que subió
+gratis nunca se lee como uno que alguien pagó.
 
 ## ¿De verdad hace falta?
 

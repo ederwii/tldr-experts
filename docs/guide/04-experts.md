@@ -398,6 +398,7 @@ trained experts each, and nothing compared what the two said.
 ```bash
 tldrx expert list [--json]           # status, last_trained, areas, evidence count, levels, star chart
 tldrx expert recompute [<name>]      # recompute every level from evidence already on disk
+tldrx expert rescore [<name>]        # re-read knowledge/*.md and derive its evidence again
 tldrx expert create <name> [--area <id>] [--title <text>]
                           [--role <slug>] [--domain <slug>] [--stack <lang>]
 ```
@@ -409,6 +410,30 @@ pasted the `--print-prompt` prompt into their own session ended with `level: 0` 
 the formula computed 5. `recompute` prints one line per area — `name/area: level 0 → 5 (17
 evidence)` — is idempotent, and does **not** touch `status` or `last_trained`: it is
 arithmetic, not a training run. It spawns nothing and spends nothing.
+
+`rescore` is the other half of that, and the two are easy to confuse. `recompute` re-adds up
+the evidence rows that are already in `competencies.yml`; `rescore` **makes** the rows, by
+re-reading `knowledge/*.md` and deriving their evidence again under today's rules. Reach for it
+after a change to what counts as evidence — otherwise a workspace has to pay for readings it
+already bought. It prints one line per knowledge file, is idempotent (rows dedupe by `src`),
+and like `recompute` it spawns nothing, spends nothing and leaves `status` and `last_trained`
+alone.
+
+Rescored rows are dated by the knowledge file's own `trained_at`, or by the expert's
+`last_trained` when the file has none — never by the clock, because the formula weighs recency
+and a reading taken in August is not evidence gathered today. A file that dates itself nowhere
+is skipped with that as the reason, and so is one that no longer validates.
+
+**Two dates, because there are two facts.** `at` is when the CLAIM was read, and it is the only
+one the level formula weighs. Beside it every rescored row carries `rescored_at`, the day the
+SCORING happened — and the same run appends an `evidence.rescored` line to `training.jsonl`,
+dated when it ran, at `cost_usd: 0`, naming the level it moved and the date the rows carry. That
+record is the point: this command exists to rescue workspaces whose ledger already says
+`evidence_added: 0`, so without it every workspace it helps would be left holding two files that
+contradict each other and nothing on disk to say a free re-derivation is what settled it. A
+rescore that changes nothing writes no line, since it contradicts nothing. A row with no
+`rescored_at` is one a paid training turn earned, which is what every row meant before the field
+existed.
 
 `create` writes `.tldrx/experts/<name>/{expert.md,competencies.yml}` at status `created` with
 one area per flag given, at level 0, and **refuses to overwrite** an existing expert (exit 1).

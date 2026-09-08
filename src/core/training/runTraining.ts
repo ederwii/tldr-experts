@@ -51,6 +51,7 @@ import {
   type KnowledgeFile, type KnowledgeIssue, type KnowledgeScope, type KnowledgeShape,
 } from "./knowledgeFile.ts";
 import { knowledgeScopeFor } from "./knowledgeScope.ts";
+import { noEvidenceNote } from "./noEvidenceNote.ts";
 import { selectFiles, keywordsFor } from "./selectFiles.ts";
 import { mineRuns } from "./mineRuns.ts";
 import { codePrompt, outputPath, repairPrompt, runsPrompt, type TrainingPromptInput } from "./trainingPrompt.ts";
@@ -590,6 +591,10 @@ async function trainWithPreflight(options: TrainOptions, said: string[]): Promis
   setExpertStatus(join(dir, EXPERT_FILE), "in-use");
 
   const costUsd = sum(tasks);
+  const earnedNothing = [...softWarnings, ...written.warnings];
+  // The reasons a level did not move belong on the RECORD, not only on a
+  // terminal — the same argument the failure path accepted in 2026-08-31, owed
+  // to the pass path ever since (gh #154).
   log.append(record(options, area.id, "check.passed", 0, {
     mode: options.mode,
     evidence_added: written.added.length,
@@ -598,6 +603,7 @@ async function trainWithPreflight(options: TrainOptions, said: string[]): Promis
     level_after: written.levelAfter,
     cost_usd: costUsd,
     outputs: prompts.map((task) => task.final),
+    warnings: earnedNothing,
   }));
 
   return {
@@ -611,6 +617,7 @@ async function trainWithPreflight(options: TrainOptions, said: string[]): Promis
       ...counts.map((line) => `  ${line}`),
       `  evidence: +${String(written.added.length)} row(s), ${String(written.evidenceCount)} total`
         + (written.dropped > 0 ? ` (${String(written.dropped)} oldest dropped at the 50-row cap)` : ""),
+      ...noEvidenceNote(costUsd, written.added.length, earnedNothing),
       `  level ${String(written.levelBefore)} → ${String(written.levelAfter)} (recomputed, spec §2.6)`,
       `  status in-use · last_trained ${options.at}`,
       `  ledger: ${relative(options.root, log.path)}`,

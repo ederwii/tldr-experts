@@ -1076,10 +1076,10 @@ const ENTRIES: readonly CommandHelp[] = [
   },
   {
     name: "expert",
-    subcommands: ["list", "create", "train", "recompute", "packs"],
-    description: "List or create experts, recompute their levels, train one, or switch the stack packs on.",
+    subcommands: ["list", "create", "train", "recompute", "rescore", "packs"],
+    description: "List or create experts, recompute or rescore their levels, train one, or switch the stack packs on.",
     args: [
-      { name: "<name>", meaning: "expert create / train: the expert. expert recompute: optional — all of them by default." },
+      { name: "<name>", meaning: "expert create / train: the expert. expert recompute / rescore: optional — all of them by default." },
       { name: "<enable|disable|status>", meaning: "expert packs: turn the stack packs on or off for this workspace, or print their state." },
     ],
     flags: [
@@ -1106,6 +1106,8 @@ const ENTRIES: readonly CommandHelp[] = [
       { name: "print-prompt", arg: null, meaning: "Print the training prompt and stop. Spawns nothing and costs nothing.", sub: "train" },
       ui("train"),
       json("the results", "recompute"),
+      { name: "area", arg: "<area>", meaning: "Rescore only this area. Every area a knowledge file names, by default.", sub: "rescore" },
+      json("the results", "rescore"),
       root(),
     ],
     examples: [
@@ -1114,6 +1116,7 @@ const ENTRIES: readonly CommandHelp[] = [
       "tldrx expert train billing --area money --mode light --print-prompt",
       "tldrx expert train billing --area money --mode full --model sonnet",
       "tldrx expert recompute --json",
+      "tldrx expert rescore",
       "tldrx expert packs enable",
       "tldrx expert packs status",
     ],
@@ -1122,6 +1125,7 @@ const ENTRIES: readonly CommandHelp[] = [
       "`--max-usd` defaults to $2.00 in light mode and $3.00 in full, because full mode spawns TWO sub-agents and splits the ceiling between them. Measured full trainings cost $1.21-$1.60 end to end on a mid model.",
       "`--prepare` gets the same line and the same arithmetic: it does not spawn, but it freezes the ceiling into `pending.json` and into the prompt a host session spends against. An explicit `--model` that cannot fit is refused there too; an inherited one warns, because tldrx cannot see which model the host session will pick.",
       "An expert with no competency area cannot be trained: `expert train` refuses it and prints the `areas:` block to add to `.tldrx/experts/<name>/competencies.yml`. `create --area <id>` writes that block for you. `create` also writes the front-matter `repos:` from `.tldrx/workspace.yml` — the `## Domain` bullets are paths RELATIVE to those repos, with no repo prefix.",
+      "`recompute` and `rescore` are different remedies and neither spends money. `recompute` is arithmetic over the evidence rows already in `competencies.yml`, for a level that drifted. `rescore` RE-READS `knowledge/*.md` and derives their evidence again under today\u0027s rules — the one to reach for after a change to what counts as evidence, so a workspace does not have to buy readings it already paid for. Rescored rows are dated by the file\u0027s own `trained_at`, or by the expert\u0027s `last_trained` when it has none; never by the clock, because \u00a72.6 weighs recency. Each also carries `rescored_at` \u2014 when it was SCORED, as against `at`, when the claim was READ \u2014 and the run appends one `evidence.rescored` line to `training.jsonl` at $0.00, dated when it ran, whenever it actually moved something. Without that record a workspace whose ledger says `evidence_added: 0` would end up holding two files that contradict each other.",
       "With no `--model`, the sub-agent inherits whatever your claude CLI is set to — which can be a premium tier at premium prices. `train` now says which model it resolved and what tier that is BEFORE it spawns, and REFUSES (exit 2, nothing spent) when the per-sub-agent share cannot reach what a pass on that tier costs. Pass `--model sonnet` or an explicit `--max-usd` to proceed.",
       "`packs enable` is the one switch for the stack packs, off by default. It re-runs detection, seeds any missing `<lang>-stack` expert, gives each one whose body is still the seeded stub the shipped pack body (an edited body is kept and said so — delete the body to re-seed), writes every framework overlay detection can prove under `overlays/` with its evidence in `workspace.yml`, and names the project's `.claude/skills`. `disable` removes the overlays and touches neither bodies nor knowledge. `status` prints all of it and always exits 0; `enable` exits 1 when no repo has a detectable language. `disable` is idempotent: no workspace.yml yet means nothing to disable (exit 0, named line, same as `status`) — it exits 1 only when workspace.yml exists but is too broken to read.",
     ],

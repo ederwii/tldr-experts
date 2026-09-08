@@ -31,6 +31,9 @@ export {
 } from "./claimCheck.ts";
 export type { Confidence } from "./claimCheck.ts";
 export { knowledgeScopeFor, allExpertDomains } from "./knowledgeScope.ts";
+export { noEvidenceNote } from "./noEvidenceNote.ts";
+export { rescoreExperts, renderRescore, rescoreJson } from "./rescoreExperts.ts";
+export type { RescoreOptions, RescoredFile } from "./rescoreExperts.ts";
 
 export { selectFiles, keywordsFor, readDomains, readCommunities, contentHits, MAX_KEYWORDS, MAX_SCANNED_FILES } from "./selectFiles.ts";
 export type { FileSelection, Candidate, InlinedFile, SelectOptions } from "./selectFiles.ts";

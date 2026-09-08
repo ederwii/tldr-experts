@@ -235,6 +235,19 @@ rather than paid for, the live one runs, and the skipped share of the ceiling is
 `tldrx expert recompute <name>`. It happens when a human pasted a `--print-prompt` prompt into
 their own session: only the headless / `--commit` path ever wrote a level.
 
+**A training run says `the level did not move — $X.XX bought 0 evidence row(s)`.** Read the
+reasons printed under it; they are on the run's `training.jsonl` record too. Every one of them is
+a citation that earned no row: `outside domain` (the `## Domain` bullet and the citation do not
+overlap — check the bullet is repo-RELATIVE first), `paraphrase` (the bullet restates the line it
+cites), or `duplicate src` (that reading is already on record). The file is kept and the exit is
+0: none of those is a lie, they are ways of being worth nothing.
+
+**A ROLE expert trained `--mode full` and stayed at level 0.** That was #154, and it is fixed:
+the runs pass mines `tldrx-work/**` and the domain gate used to refuse exactly those citations,
+so every role expert earned nothing, in every workspace. Upgrade, then `tldrx expert rescore` —
+it re-reads the knowledge files you already paid for and derives their evidence again, spawning
+nothing and spending nothing. There is no need to re-run the training.
+
 **An expert trained on a lot of files still shows 3 stars.** No `kind: run` evidence row: the
 run cap is `min(level, 3)` for an area where nothing was ever executed. Where `workspace.yml`
 declares no command there is no `Bash` grant at all, and 3 is the honest ceiling in that
