@@ -47,10 +47,12 @@ disagree with your working tree at the worst possible moment.
 
 Maintainers merge internal wave branches with `scripts/merge-wave.sh`, which takes a lock on
 the shared checkout and re-runs every gate before pushing. It exits `1` dirty tree · `2` merge
-conflict · `3` red gate · `4` push failed · `5` HEAD moved during the gates · `6` gave up waiting
-for the lock · `7` the gated commit is not a fast-forward of `origin/main` — and on every one of
-them `main` is left unpushed. That script is for the maintainer's own multi-agent workflow; a
-fork's PR does not use it, and you do not need it.
+conflict, or a branch with no usable review record · `3` red gate · `4` push failed · `5` HEAD
+moved during the gates · `6` gave up waiting for the lock · `7` the gated commit is not a
+fast-forward of `origin/main` — and on every one of them `main` is left unpushed. That script is
+for the maintainer's own multi-agent workflow; a fork's PR does not use it, and you do not need
+it. The review record it asks for is `.review/<branch>.md` on the branch, carrying the verdict,
+who reviewed and the sha they read; `AGENTS.md` §2 has the shape and every way it refuses.
 
 ### The shared checkout is not yours (agents, read this one twice)
 

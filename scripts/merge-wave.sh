@@ -25,7 +25,8 @@
 #      on every path that does not push (signal, red gate, failed push), and the preamble
 #      REFUSES to start on a `main` that is ahead of origin/main, naming the commits.
 #
-# Exit codes: 1 dirty tree · 2 merge conflict · 3 red gate · 4 push failed
+# Exit codes: 1 dirty tree · 2 merge conflict, or a branch with no usable review record
+#             (#192 — both are "this branch is not mergeable as it stands") · 3 red gate · 4 push failed
 #             5 HEAD moved during the gates · 6 gave up waiting for the lock
 #             7 the gated commit is not a fast-forward of origin/main
 #             8 unpushed, ungated commits were already sitting on main
@@ -203,6 +204,65 @@ if git rev-parse --verify -q origin/main >/dev/null; then
     echo "FAIL unpushed commits already on main — nothing merged, nothing gated: ${AHEAD}(origin/main is $(git rev-parse --short origin/main)). No wave holds the lock, so nothing here finished gating those; merging on top would publish them under THIS run's summary line (#116). Re-run the wave that owns them, or 'git reset --hard origin/main' in this checkout once you know what they are."
     exit 8
   }
+fi
+# --- the review record (#192) -------------------------------------------------
+# The last invariant here that was still on the honour system. Measured over twelve
+# maintenance waves (2026-09-06 -> 2026-09-07): 4 of the 12 pre-merge reviews found a real
+# Important defect the implementer then fixed before the branch merged, and the ONE wave that
+# reviewed AFTER merging found one too — which then sat on `main` for ~2 hours, because once a
+# commit is published the only remedies are a follow-up merge or a revert and both wait for the
+# next lock window. Nothing in this path could tell a reviewed branch from an unreviewed one,
+# so the miss was silent at the time and invisible afterwards.
+#
+# A FILE on the branch, not a commit trailer: it lands in the merge commit's tree, so the
+# record survives on `main` and a later reader can still ask who reviewed what, against which
+# diff. A trailer would say a review happened and nothing about WHAT was reviewed.
+#
+# `git cat-file blob`, never `git show <ref>:<path>` — `git show` on a DIRECTORY prints a tree
+# listing and exits 0 (measured, git 2.50.1), so a `.review/<branch>.md` that was somehow a
+# directory would read as a present record (AGENTS.md §12).
+#
+# One block, one call site, deliberately: there is NO escape hatch — an env var is a hole the
+# moment it is documented, and a wave that may be waved through is the honour system again with
+# extra steps. If one is ever wanted it is a single guard on this block and nothing else.
+if BHEAD="$(git rev-parse --verify -q "$B^{commit}")"; then
+  REVIEW=".review/$B.md"
+  # Every refusal below carries the remedy: a session that trips this gate must be able to
+  # satisfy it without reading this script.
+  SHAPE="Write $REVIEW ON $B: first line 'verdict: merge' (or 'verdict: fixes required', which refuses), then 'reviewed-by: <who reviewed it>' and 'against: <sha>' naming the commit the reviewer read (currently $(git rev-parse --short "$BHEAD")). Commit it on the branch and re-run. See AGENTS.md §2."
+  REC="$(git cat-file blob "$B:$REVIEW" 2>/dev/null)" || REC=""
+  RAW_VERDICT="${REC%%$'\n'*}"
+  VERDICT="$(printf '%s' "$RAW_VERDICT" | tr -d '\r' | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/:[[:space:]]*/: /')"
+  WHO="$(printf '%s\n' "$REC" | sed -n 's/^[[:space:]]*[Rr]eviewed-[Bb]y:[[:space:]]*//p' | sed -n 1p | tr -d '\r')"
+  AGAINST="$(printf '%s\n' "$REC" | sed -n 's/^[[:space:]]*[Aa]gainst:[[:space:]]*//p' | sed -n 1p | tr -d '[:space:]')"
+  if [ -z "$REC" ]; then
+    echo "FAIL no review record: $REVIEW is not on $B (or is empty) — nothing merged. Merging is gated on a review a second agent actually did (#192). $SHAPE"; exit 2
+  fi
+  if [ "$VERDICT" != "verdict: merge" ]; then
+    echo "FAIL review verdict: $REVIEW says '$RAW_VERDICT' — only 'verdict: merge' merges, and nothing merged. Fix what the review found, have it re-reviewed, and update the record. $SHAPE"; exit 2
+  fi
+  if [ -z "$WHO" ]; then
+    echo "FAIL review record incomplete: $REVIEW has no 'reviewed-by:' line, so the record cannot say who reviewed it — nothing merged. $SHAPE"; exit 2
+  fi
+  if [ -z "$AGAINST" ]; then
+    echo "FAIL review record incomplete: $REVIEW has no 'against:' line, so the record cannot say WHICH diff was reviewed — nothing merged. $SHAPE"; exit 2
+  fi
+  if ! REVIEWED="$(git rev-parse --verify -q "$AGAINST^{commit}")"; then
+    echo "FAIL stale review record: $REVIEW names '$AGAINST', which is not a commit in this repository; $B is at $(git rev-parse --short "$BHEAD") — nothing merged. $SHAPE"; exit 2
+  fi
+  # A review names the sha the reviewer READ, and committing the record moves the branch head
+  # past exactly that sha — so "the named sha IS the head" is unsatisfiable by construction.
+  # What must not have moved is the CODE: the record's own commits are excluded, everything
+  # else is not. A rebase fails the ancestry half, which is correct — a rebased branch is a
+  # different diff, and that is the hole this gate exists to close.
+  STALE="A review of a different diff is not a review of this one. Re-review $B at $(git rev-parse --short "$BHEAD") and update 'against:' — nothing merged."
+  if ! git merge-base --is-ancestor "$REVIEWED" "$BHEAD" 2>/dev/null; then
+    echo "FAIL stale review record: $REVIEW was reviewed against $(git rev-parse --short "$REVIEWED"), which is not an ancestor of $B at $(git rev-parse --short "$BHEAD") — the branch was rebased or amended since the review. $STALE"; exit 2
+  fi
+  MOVED="$(git diff --name-only "$REVIEWED" "$BHEAD" -- ':(exclude).review' 2>/dev/null | tr '\n' ' ' | cut -c1-200)"
+  if [ -n "$MOVED" ]; then
+    echo "FAIL stale review record: $REVIEW was reviewed against $(git rev-parse --short "$REVIEWED"), but $B is at $(git rev-parse --short "$BHEAD") and the code changed in between: ${MOVED}— $STALE"; exit 2
+  fi
 fi
 PRE="$(git rev-parse HEAD)"
 git merge --no-ff "$B" -m "$M

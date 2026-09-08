@@ -33,6 +33,39 @@
   can never be read as one. A rescore that changes nothing writes no line: it contradicts
   nothing, and a ledger that grows on every idempotent re-run is one nobody reads.
 
+- **`scripts/merge-wave.sh` now refuses a branch that carries no review record (#192).** Every
+  other invariant this script protects got a mechanism — the lock (#44), the HEAD assertion, the
+  ref guard (#89), the unwind and orphan refusal (#116), the self-snapshot (#117). The pre-merge
+  review was still a paragraph, and prose loses to recency: measured over twelve maintenance
+  waves (2026-09-06 → 2026-09-07), **4 of the 12** pre-merge reviews found a real Important
+  defect the implementer then fixed before the branch merged, and the one wave that reviewed
+  *after* merging found one too — which then sat on `main` for ~2 hours, because once a commit is
+  published the only remedies are a follow-up merge or a revert and both wait for the next lock
+  window. That wave did not decide to skip the review; it simply did not remember at the moment
+  the branch was green, and nothing in the merge path could tell the difference afterwards.
+  So the record is now a FILE on the branch, `.review/<branch>.md`, asserted in the same preamble
+  block as the dirty-tree and orphan refusals: `verdict: merge` on the first line (anything else,
+  `verdict: fixes required` included, refuses), `reviewed-by:` naming who read it, and `against:`
+  naming the sha they read. A file rather than a commit trailer because it lands in the merge
+  commit's tree — `main` keeps answering "was this reviewed, by whom, against which diff" long
+  after the branch is deleted, which a trailer could not. **A stale record refuses rather than
+  warns**, and the refusal names both shas: a review of a different diff is exactly the hole the
+  honour system already allowed, and a warning would let it through. Staleness is measured as
+  "the code moved", not "the sha differs" — the named sha must be an ancestor of the branch head
+  with no path outside `.review/` changed since — because a record can only ever name the commit
+  the reviewer READ, and committing the record moves the head past exactly that sha, so a literal
+  sha-equals-head rule would be unsatisfiable by construction. A rebase does invalidate a record,
+  correctly: it is a different diff. The exit code is **2**, the family that already carries "this
+  branch is not mergeable as it stands", and every refusal prints the file path and the three
+  lines it wants, so a session that trips the gate never has to read the script to satisfy it.
+  There is **no escape hatch** — no flag, no env var — on the issue's own argument that a
+  documented one is a hole the moment it exists. Scoped to the MERGE PATH alone:
+  `scripts/release.sh` commits on `main` directly, waves nothing and names `merge-wave.sh`
+  nowhere (measured — `grep -n 'merge-wave' scripts/release.sh scripts/release-check.sh
+  docs/RELEASING.md` exits 1 with no output), so releasing is untouched and `docs/RELEASING.md`
+  needed no change. `AGENTS.md` §2 carries the rule and the `maintain` skill cites it rather
+  than restating it.
+
 ### Fixed
 
 - **The mutation check is asked of the developer, which can run it, instead of the reviewer,

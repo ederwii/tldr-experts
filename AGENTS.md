@@ -45,6 +45,30 @@ sells: measured over asserted, refused over guessed, named over silent.
   2 s), gives up with exit 6 after `MW_LOCK_WAIT_S` (default 3600 s), having merged nothing. A
   lock whose owner is dead, or older than `MW_LOCK_STALE_S`, is broken open automatically. Do
   not work around it.
+- **A branch merges only with a review record on it: `.review/<branch>.md` (#192).** A fresh
+  reviewer that did not write the code reads the branch diff BEFORE the wave, and the record is
+  where that verdict lives — a file on the branch, so it lands in the merge commit's tree and
+  `main` still answers "was this reviewed, by whom, against which diff". The shape, all three
+  lines required, verdict FIRST:
+
+  ```
+  verdict: merge            # or `verdict: fixes required`, which refuses
+  reviewed-by: <who reviewed it — agent and model>
+  against: <sha the reviewer read>
+  ```
+
+  `merge-wave.sh` refuses with **exit 2** — same family as the other "this branch is not
+  mergeable as it stands" refusal — when the file is missing or empty, when the verdict is
+  anything but `merge`, when either other line is absent, or when the record is STALE: the
+  named sha must be an ancestor of the branch head with no non-`.review/` path changed since,
+  and the refusal names both shas. A stale record refuses rather than warns, because a review
+  of a different diff is exactly the hole the honour system already allowed. There is **no
+  escape hatch** — an env var is a hole the moment it is documented. Rebasing invalidates a
+  record (it is a different diff): re-review, then update `against:`. Why it is mechanical and
+  not a paragraph: over twelve waves, pre-merge review found a real Important defect in 4 of
+  them, and the one wave that reviewed after merging left its defect on `main` for ~2 hours.
+  This gates the MERGE PATH only — `scripts/release.sh` commits on `main` directly, waves
+  nothing, and is untouched.
 - **Agents touch the shared checkout ONLY through `scripts/merge-wave.sh`.** Everything else
   happens in your own worktree
   (`git fetch origin && git worktree add <scratch>/wt-<topic> -b <branch> origin/main`). Never
