@@ -144,6 +144,8 @@ The execution path and the only resume point. Written by the facilitator alone; 
 
 ```yaml
 version: 1
+created_with: "<version at run new>"     # the tldrx that CREATED this run — NOT `version:`, which is the FORMAT's
+last_written_by: "<version at last save>" # the tldrx of the last save; the two differ on a run that outlived an upgrade
 run: 260828-leaderboard
 title: "Player leaderboard"
 scope: feature
@@ -177,7 +179,8 @@ phases:
          gate: {type: approve, status: pending, by: null, at: null, note: ""},
          tasks: [{id: t1, status: done, expert: architect, model: sonnet, cost_usd: 2.61, error: null,
                   session_id: "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", started_at: 2026-08-28T13:50:02Z,
-                  ended_at: 2026-08-28T14:29:58Z, outputs: ["02-how/contracts.md", "02-how/handoff.md"]}]}
+                  ended_at: 2026-08-28T14:29:58Z, duration_ms: 2396000, duration_basis: spawned,
+                  outputs: ["02-how/contracts.md", "02-how/handoff.md"]}]}
 ```
 
 **Status enum** (one enum, all three levels): `pending` `ready` `running` `awaiting_answer` `awaiting_gate` `blocked`
@@ -187,6 +190,7 @@ stage at `cursor`, or `done` when every phase is terminal.
 | Field | Type | Req | Meaning |
 |---|---|---|---|
 | `run` | `^\d{6}-[a-z0-9-]{1,40}$` | y | Run id = folder name |
+| `created_with` / `last_written_by` | str | n | **Additive.** WHICH tldrx wrote this run — the framework's version, from the same `package.json` `tldrx --version` reads. Emphatically NOT `version:` above, which is the FILE FORMAT's number and only ever grows. `created_with` is stamped once at `run new` / `seed apply` and never rewritten; `last_written_by` is rewritten by every save, so a run that outlived an upgrade carries both ends of the range that drove it. Both emitted only when set, so a run.yml written before they existed round-trips byte-for-byte, and every reader prints `not recorded` for the absence — never a version inferred from what happens to be installed today. They exist because behaviour moves between releases (the DoD refusal record grew `status`, the reviewer's diff base moved, a mandate check was reworded) and 23 audited runs could not be attributed to any of it |
 | `scope` / `workflow` / `repos` | slug / slug / slug[] | y | Scope asked for; workflow file used; repos in play |
 | `status` | status enum | y | Derived, recomputed on every write |
 | `cursor` | {phase, stage, task\|null} | y | **Resume pointer**: the unit `next` acts on |
@@ -210,11 +214,14 @@ stage at `cursor`, or `done` when every phase is terminal.
 | `tasks[].input_tokens` / `.output_tokens` | number ≥0 | n | **Additive.** The PROVIDER's own token split for a turn this process watched, read off the result document's `usage`. Distinct from `tokens`, which is a HOST declaration for a turn nothing here metered. Written only when BOTH sides came back strictly positive, and only together: the parse that produces them defaults a missing side to `0`, so a HALF-reported split is exactly as unverifiable as an absent one. Absent therefore means "no positive split reached the ledger" — never a zero standing in for one. Together with `cost_usd` they are what makes a dollar figure checkable against a price table instead of a number nobody can falsify |
 | `tasks[].banked_before_refusal` | `true` | n | **Additive.** This row was recorded AHEAD of a refusal on an unreadable `questions.md` — the turn ran, so its cost is in the ledger before `--commit` refuses on the way out. It is also the ONLY row a re-run's fingerprint may match against: the refusal leaves the stage `running` for the operator to fix the file and re-run, so this is the one case where the same `result.json` is expected back. It is a claim ticket for exactly ONE re-run — once matched, the row is stamped `dedupe` and stops being a candidate, because a marker left armed matched every later turn of the same shape for the life of the stage. Absent on every ordinary completed task, including one a gate reject sent back and a retry re-ran |
 | `tasks[].dedupe` | str | n | **Additive.** This row's part in the banked-turn dedupe, in the two cases the file would otherwise not explain: `none — no session id` on a row recorded as its OWN rather than matched against an earlier `banked_before_refusal` row its cost and outputs resemble, because a result with no `session_id` cannot be told apart from a second, genuinely distinct unmetered turn; and `matched by the re-run committed at <at> — the marker is spent` on a `banked_before_refusal` row whose re-run has arrived and been matched to it, which is what makes the marker single-use. Absent when neither happened. The alternative to both was to guess, and a guess here drops a turn out of the ledger |
+| `tasks[].duration_ms` / `.duration_basis` | number ≥0 / `spawned`\|`prepare-to-commit` | n | **Additive, and written together or not at all.** How long THIS ATTEMPT took, measured — never subtracted from `started_at`/`ended_at`, which are the invocation's stamp and the write instant and therefore share one value across every task of a parallel invocation. Two spans, and they are not the same quantity: `spawned` is the wall clock around the sub-agent's own process (`spawnAgent.ts`), with nothing of ours inside it; `prepare-to-commit` is the gap between a `--prepare` bundle's `prepared_at` and the `--commit` that recorded the row, which is the only span the framework can see for an in-session turn and which INCLUDES the host's own time — reading the prompt, running its sub-agent, and the seconds before somebody typed the second command. It is a ceiling on the sub-agent's span the way `spent_usd` is a floor on the money, and nothing may call it the sub-agent's time. Absent means NOT RECORDED — every row written before these keys, and every turn nothing here timed — and every reader says so rather than printing `0s` |
 | `tasks[].session_id` / `.error` | str\|null | y | Session from `claude -p --output-format json`; one-line reason when `failed` |
 
 **Validation.** Ids unique within parent; `cursor` resolves; ≤1 `running` stage (single-writer); `|spent_usd −
 Σ tasks.cost_usd| ≤ 0.01` (a `null` cost contributes 0); `started_at ≤ ended_at`; `approved` needs `by`+`at`; a `null`
-`cost_usd` needs `metered: false`; an `input_tokens`/`output_tokens`, when present, is a finite number ≥ 0, a `banked_before_refusal` is `true` and a `dedupe` is a string — each absent-or-valid, so a `run.yml` written before any of them existed still loads; every `gates_policy` value is `human\|auto\|agent` and every key names a stage in the file; a `gate.evidence`, when present, is complete and its `role`/`verdict` are §2.17 values;
+`cost_usd` needs `metered: false`; a `duration_ms`, when present, is a finite number ≥ 0 AND carries a `duration_basis`
+in the closed set — and a `duration_basis` without a `duration_ms` is a schema error, because it names the basis of
+nothing; a `created_with`/`last_written_by`, when present, is a string; an `input_tokens`/`output_tokens`, when present, is a finite number ≥ 0, a `banked_before_refusal` is `true` and a `dedupe` is a string — each absent-or-valid, so a `run.yml` written before any of them existed still loads; every `gates_policy` value is `human\|auto\|agent` and every key names a stage in the file; a `gate.evidence`, when present, is complete and its `role`/`verdict` are §2.17 values;
 a `gate.executed_by`, when present, has a `type` in `human\|agent\|auto` and no `id` when that type is `auto`; a `gate.authority`, when present, is complete, its `type`/`policy`/`source` are the values above, and `authorized_by: null` and `source: unrecorded` travel together — either without the other is a record contradicting itself;
 `attended_by`, when present, is `host` — a value the reader does not understand is a schema error, never a silent
 downgrade to "spawn anyway";
@@ -1384,6 +1391,8 @@ ceiling_usd: 25.0
 per_agent_max_usd: 3.0
 warn_at_pct: 80
 on_exceed: block
+unmetered_tasks: 7        # optional; emitted only when > 0 — turns nothing here metered
+spent_basis: lower-bound  # travels with it: `spent_usd` is a FLOOR, not a total
 phases: [{id: 01-what, ceiling_usd: 4.0, spent_usd: 1.14}, {id: 02-how, ceiling_usd: 7.0, spent_usd: 2.61},
          {id: 03-plan, ceiling_usd: 4.0, spent_usd: 0.0}, {id: 04-build, ceiling_usd: 8.0, spent_usd: 0.0},
          {id: 05-watch, ceiling_usd: 2.0, spent_usd: 0.0}]
@@ -1402,6 +1411,8 @@ phases: [{id: 01-what, ceiling_usd: 4.0, spent_usd: 1.14}, {id: 02-how, ceiling_
 | `authorized_by` | fact id | n | The LIVE fact the grant cites (`F031`). A grant that cannot name a decision is not recorded. Run-level even under `--phase`, so it MAY stand with no `authorized_usd` beside it — that is a phase-scoped grant, not a damaged file |
 | `authorized_at` | RFC3339 | n | When the grant was recorded |
 | `on_grant_exceed` | `warn\|block` | n (`warn`) | What WRITING a ceiling above the grant does. Never `on_exceed` |
+| `unmetered_tasks` | number ≥0 | n (`0`) | **Additive.** How many of this run's task rows recorded `metered: false` — the in-session turns nothing here metered. `spent_usd` above is unchanged: it is still the sum of what WAS measured, and this says how much of the work that sum cannot see, so no reader has to open `run.yml` and count rows. Rolled up from `run.yml` on every save; emitted only when `> 0`, so a fully metered run and every budget.yml written before the key are byte-identical to what they were. Measured across 23 runs on three real workspaces: 45% of 845 task rows are these, and two runs rendered `$0.00 spent` against $3,000 and $200 ceilings after 30 and 9 stories because nothing in this file said so |
+| `spent_basis` | `lower-bound\|complete` | n (`complete`) | **Additive**, and it travels with `unmetered_tasks`. `lower-bound` iff `unmetered_tasks > 0`. Derived, and written anyway: the derivation is one comparison, and the defect being fixed is that six readers each inferred it and three inferred it as "the number is the total". A file that states its own basis cannot be read two ways. A value this reader does not understand is REFUSED, never defaulted to `complete` — the same rule `economy` follows, for the same reason |
 | `phases[].{id,ceiling_usd,spent_usd}` | slug / number ≥0 | y | Per-phase ceiling and rolled-up actual |
 | `phases[].economy` | `metered-usd\|host-tokens` | n (inherit) | This phase's own economy |
 | `phases[].ceiling_host_tokens` | number ≥0 | n | This phase's host-token allowance, read only under `economy: host-tokens` |
@@ -1410,7 +1421,18 @@ phases: [{id: 01-what, ceiling_usd: 4.0, spent_usd: 1.14}, {id: 02-how, ceiling_
 **Validation.** Every phase id appears in `run.yml`; `spent_usd ≤ ceiling_usd` per phase unless `on_exceed: warn`; ≤5
 phases. An `economy` naming a value this reader does not know is REFUSED, never defaulted to dollars — a unit nothing
 here understands is not one it may quietly read as money. Absence, and an empty `economy:` key, both mean
-`metered-usd`.
+`metered-usd`. An `unmetered_tasks`, when present, is a number ≥ 0 and a `spent_basis` is one of the two words —
+each absent-or-valid, so a budget.yml written before either existed still loads and reads as `0` / `complete`, which
+is what such a file already MEANT by printing a bare figure.
+
+**No surface prints a bare `$0.00` over unmetered work.** With `unmetered_tasks > 0` every figure this run's money is
+reported in — `run status`, `budget show`, the dashboard's row and hero, `replay`, `run auto`'s per-loop lines, the
+Build handoff's `Cost:` header (and therefore the ship PR body, which embeds it), the `budget.warned` note and every
+notification payload — reads `≥ $X.XX (N tasks unmetered)`, or `not measured: N in-session tasks, 0 metered` when
+nothing at all was metered and there is no floor worth printing. One implementation (`budget/spentFigure.ts`), so the
+screens cannot word one fact several ways. A run whose every turn WAS metered keeps its plain `$X.XX`, deliberately:
+a caveat on every screen is a caveat nobody reads. The ceiling arithmetic is untouched — `spent_usd` is still what
+enforces, and making it enforce something else is a different decision.
 
 **The phase-ceiling sum runs ONCE PER ECONOMY (#61, 2026-09-01).** Σ ceilings of the `metered-usd` phases ≤
 `ceiling_usd`; Σ host-token allowances of the `host-tokens` phases ≤ `ceiling_host_tokens`. Dollars and host tokens are

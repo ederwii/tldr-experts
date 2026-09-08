@@ -166,6 +166,24 @@ export interface AgentOutcome {
   readonly reads: number;
   /** `"max_reads"` when the read cap stopped this run, else null. */
   readonly stoppedBy: string | null;
+  /**
+   * The sub-agent's turn, in milliseconds: the clock wraps `runtime.spawn` plus
+   * its immediate setup and teardown — the schema temp dir, the argv, and the
+   * reap (#184). Not a pure process time to the microsecond, and it is not
+   * claimed as one; what it excludes is everything else the invocation does,
+   * which is the part that made the two run.yml timestamps useless here.
+   *
+   * MEASURED here because here is the only place it can be. `run.yml`'s
+   * `started_at` is the invocation's stamp and `ended_at` is when the row was
+   * written, so on a parallel Build the subtraction of those two is close to the
+   * whole invocation for every task in it. This is the span of one process.
+   *
+   * `interpret()` returns `0` for it — that function is handed a process that has
+   * already finished and never saw it start, so it has nothing to report. Only
+   * `spawnAgent` fills it in, and only a value it timed itself reaches a task row
+   * as `duration_basis: "spawned"`.
+   */
+  readonly durationMs: number;
 }
 
 export function allowedTools(workspaceCommands: readonly string[]): readonly string[] {
@@ -249,6 +267,13 @@ export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
     emitAgentEvent(event, request.lane);
   };
 
+  // The clock starts before the schema temp dir and the argv, and stops when the
+  // process is reaped: what this measures is "how long did asking cost", which is
+  // the question a person timing a run is asking. `Date.now()` rather than a
+  // monotonic clock because the number is written to a file and read by people —
+  // a span that disagrees with two RFC3339 stamps by a leap second is not a
+  // problem this ledger has.
+  const startedMs = Date.now();
   const cap = request.maxReads ?? 0;
   const controller = new AbortController();
   let reads = 0;
@@ -316,12 +341,16 @@ export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
       error: readCapError(reads, cap, provider),
     }
     : { ...interpreted, reads, stoppedBy: null };
+  const timed: AgentOutcome = { ...outcome, durationMs: Math.max(0, Date.now() - startedMs) };
   // A process that died before its `result` event never emitted `done`. Say so,
   // so the view stops on a failure rather than on a frozen last frame.
   if (!outcome.ok && outcome.error !== null && !capped) {
     publish({ kind: "error", message: outcome.error });
   }
-  return outcome;
+  // The TIMED outcome, not `outcome`: a turn that failed, timed out or hit the
+  // read cap still took wall clock, and that is exactly the span an operator
+  // hunting a 43-hour run wants to see. A duration is not a reward for success.
+  return timed;
 }
 
 /**
@@ -364,6 +393,10 @@ export function interpret(
     raw: stdout,
     reads: 0,
     stoppedBy: null,
+    // Not measurable from here — see `AgentOutcome.durationMs`. `spawnAgent`
+    // overwrites it with the span it timed; a direct caller of `interpret` (only
+    // the tests) gets a `0` that nothing writes to a ledger.
+    durationMs: 0,
   };
 }
 

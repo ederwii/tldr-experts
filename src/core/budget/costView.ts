@@ -44,6 +44,7 @@ import { RunStore } from "../run/RunStore.ts";
 import { economyFor, DEFAULT_ECONOMY, type Economy, type RunBudget } from "./RunBudget.ts";
 import { loadRunBudget } from "./loadBudget.ts";
 import { overShareSentence, ratioOf, round1, sumOrNull } from "../build/planVsMeasured.ts";
+import { durationCell, durationSum } from "../run/duration.ts";
 
 export interface CostTokens {
   readonly input: number;
@@ -67,6 +68,19 @@ export interface CostAttempt {
    * folded into it.
    */
   readonly declaredTokens: number | null;
+  /**
+   * How long this attempt took, in milliseconds, and WHICH span that is —
+   * straight off the `agent.result` payload (#184). Undefined on every event
+   * written before those keys existed, which is "not recorded" and never `0`.
+   *
+   * `tldrx cost` is described as "What the work actually cost — per attempt, per
+   * stage, per run" (`cli/helpText.ts`) and printed money with no time beside it.
+   * Three unattended runs measured 34.5 h, 43.2 h and 36.8 h of active span over
+   * 168 stories, and the records could not say which phase or which sub-agent any
+   * of it went to (#184).
+   */
+  readonly durationMs?: number;
+  readonly durationBasis?: string;
 }
 
 export interface CostStage {
@@ -416,6 +430,12 @@ export function toAttempt(event: TldrxEvent): CostAttempt | null {
     // `--commit --tokens <n>` writes this onto both the task row and the
     // `agent.result` payload; it is the only token figure an unmetered turn has.
     declaredTokens: num(payload.tokens) > 0 ? num(payload.tokens) : null,
+    // Read, never derived: a duration this file computed from two timestamps
+    // would be the invocation's clock, which is exactly the number #184 says is
+    // not a per-attempt span. Absent stays absent.
+    ...(typeof payload.duration_ms === "number" && Number.isFinite(payload.duration_ms)
+      ? { durationMs: payload.duration_ms, durationBasis: str(payload.duration_basis) ?? undefined }
+      : {}),
     tokens: {
       input: num(usage?.input_tokens),
       output: num(usage?.output_tokens),
@@ -487,12 +507,18 @@ export function renderRunCost(cost: CostRun): string {
   const width = Math.max(...cost.stages.map((s) => `${s.phase}/${s.stage}`.length), "STAGE".length);
   lines.push(
     `  ${"STAGE".padEnd(width)}  ${"ECONOMY".padEnd(ECONOMY_WIDTH)}  `
-    + `${padCell("MEASURED")}  DECLARED`,
+    + `${padCell("MEASURED")}  ${durationCol("DURATION")}  DECLARED`,
   );
   for (const stage of cost.stages) {
     lines.push(
       `  ${`${stage.phase}/${stage.stage}`.padEnd(width)}  ${stage.economy.padEnd(ECONOMY_WIDTH)}  `
       + `${padCell(stage.usd === 0 && stage.unmetered ? DASH : `$${stage.usd.toFixed(2)}`)}  `
+      // The stage's sum, with the same honesty the attempts have: mixed bases are
+      // named rather than added into one figure, and attempts with no span are
+      // counted rather than treated as zero (`run/duration.ts`).
+      + `${durationCol(durationSum(stage.attempts.map(
+        (a) => ({ ms: a.durationMs, basis: a.durationBasis }),
+      )))}  `
       + `${stage.declaredTokens > 0 ? `~${bigTokens(stage.declaredTokens)} tokens (host session)` : DASH}`,
     );
     // Every attempt is expanded, not only the retried ones. Before this, a stage
@@ -502,6 +528,7 @@ export function renderRunCost(cost: CostRun): string {
       lines.push(
         `  ${" ".repeat(width)}  ${" ".repeat(ECONOMY_WIDTH)}  `
         + `${padCell(attempt.usd === null ? DASH : `$${attempt.usd.toFixed(2)}`)}  `
+        + `${durationCol(durationCell(attempt.durationMs, attempt.durationBasis))}  `
         + `${attempt.task}${attempt.model === null ? "" : ` · ${attempt.model}`}`
         + `  ${tokenColumns(attempt.tokens, attempt.declaredTokens ?? 0)}`,
       );
@@ -757,6 +784,18 @@ function num(value: unknown): number {
 
 function round(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/**
+ * The DURATION column, wide enough for the longest thing that goes in it.
+ *
+ * `"not recorded"` is 12 characters and `"1h 3m (prepare-to-commit)"` is 25, so
+ * the column is sized for the honest cases rather than for the pretty one — a
+ * width that fits only `4m 12s` would push every absence sentence out of
+ * alignment, which is how a caveat becomes something a reader skips.
+ */
+function durationCol(text: string): string {
+  return text.padEnd(26);
 }
 
 function padCell(text: string): string {

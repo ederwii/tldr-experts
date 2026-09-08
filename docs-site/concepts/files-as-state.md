@@ -39,10 +39,18 @@ tldrx-work/260901-bulk-pricing/  # one folder per piece of work
 stage with its model, ceiling, actual cost, and its gate:
 
 ```yaml
+created_with: "<tldrx version at run new>"
+last_written_by: "<tldrx version at the last save>"
 cursor: {phase: "01-what", stage: what, task: null}
 budget: {ceiling_usd: 5.00, spent_usd: 0.00, per_agent_max_usd: 1.80}
 gates_policy: {what: human, how: auto, plan: human, build: auto, watch: human}
 ```
+
+The two version lines are which tldrx wrote the file — the one that created the run, and
+the one that saved it last. They are not `version: 1` further up, which numbers the file
+FORMAT. Behaviour moves between releases, so a run that cannot name one leaves you asking
+a git log what was installed that day. A run written before these existed reads
+`not recorded`, which is a different thing from a guess.
 
 It is the *only* resume point. `tldrx run auto` holds nothing in memory — every iteration
 re-reads this file — so killing it mid-run leaves a run that `tldrx next` picks up

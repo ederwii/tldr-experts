@@ -89,3 +89,89 @@ export function parseDurationMs(text: string): number | null {
   const scale = unit === "ms" ? 1 : unit === "s" ? 1000 : unit === "m" ? 60_000 : 3_600_000;
   return Math.round(value * scale);
 }
+
+/**
+ * Where a task row's `duration_ms` came from — and therefore what it MEASURES.
+ *
+ * Two spans, and they are not the same quantity (#184). `spawned` is the wall
+ * clock around `runtime.spawn` in `spawnAgent.ts`: the sub-agent's own process,
+ * start to exit, with nothing of ours inside it. `prepare-to-commit` is the gap
+ * between the `--prepare` bundle's `prepared_at` and the instant `--commit`
+ * recorded the row — which is the only span the framework can see for an
+ * in-session turn, and it INCLUDES whatever the host did between the two
+ * commands (reading the prompt, thinking, running the sub-agent, typing).
+ *
+ * They are kept apart, and the basis is written beside every number, because
+ * averaging them would produce a figure that is neither. Nothing here may be
+ * called "the sub-agent's time" except the `spawned` one.
+ */
+export const DURATION_BASES = ["spawned", "prepare-to-commit"] as const;
+export type DurationBasis = (typeof DURATION_BASES)[number];
+
+/**
+ * `"4m 12s"`, `"12s"`, `"1h 3m"` — a measured millisecond span, for a person.
+ *
+ * The SECOND duration formatter this file holds, and deliberately so rather than
+ * a second file: `dashDuration` takes two timestamps and subtracts them, this
+ * takes a span that was already measured. They share the hours/minutes/seconds
+ * shape on purpose — a run's stage rows and its task rows must not read in two
+ * different notations — and keeping them adjacent is what makes a drift between
+ * them visible in one screenful.
+ *
+ * Sub-second spans round DOWN to `0s` rather than up: a turn that took 400 ms is
+ * a turn that took under a second, and `1s` would be a number nobody measured.
+ * Negative or non-finite input yields `""` — the caller prints its absence
+ * sentence instead, never a zero standing in for "nobody wrote it down".
+ */
+export function formatDurationMs(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  const total = Math.floor(ms / 1000);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  if (hours > 0) return `${String(hours)}h ${String(minutes)}m`;
+  if (minutes > 0) return `${String(minutes)}m ${String(seconds)}s`;
+  return `${String(seconds)}s`;
+}
+
+/**
+ * The cell `tldrx cost` prints for one attempt: `"4m 12s (spawned)"`, or the
+ * absence sentence when the row carries no span.
+ *
+ * "not recorded" and never `0s`, for the same reason `dashDurationAbsence`
+ * exists: every task row written before #184 has no `duration_ms` at all, and a
+ * zero there would say the turn was instantaneous rather than that nobody timed
+ * it. The basis rides in the same string as the number so the two cannot be
+ * separated by a column layout — a bare `4m 12s` beside an in-session row would
+ * read as the sub-agent's time, which is the one thing it is not.
+ */
+export function durationCell(ms: number | undefined, basis: string | undefined): string {
+  if (ms === undefined) return "not recorded";
+  const text = formatDurationMs(ms);
+  if (text === "") return "not recorded";
+  return basis === undefined ? text : `${text} (${basis})`;
+}
+
+/**
+ * The same for a SUM over several attempts, with the honesty the sum needs.
+ *
+ * A stage whose attempts carry two different bases has no single quantity to
+ * total, and one whose attempts carry none has nothing to total at all. Both are
+ * said in words rather than resolved into a number: `"12m 4s (spawned)"`,
+ * `"12m 4s (mixed bases: spawned + prepare-to-commit)"`, `"not recorded"`, and
+ * `"6m 0s (spawned) — 2 of 5 attempts not recorded"` when only some rows have one.
+ */
+export function durationSum(
+  rows: readonly { readonly ms?: number; readonly basis?: string }[],
+): string {
+  const timed = rows.filter((row) => typeof row.ms === "number" && Number.isFinite(row.ms) && row.ms >= 0);
+  if (timed.length === 0) return "not recorded";
+  const total = timed.reduce((sum, row) => sum + (row.ms ?? 0), 0);
+  const bases = [...new Set(timed.map((row) => row.basis ?? "unrecorded basis"))].sort();
+  const label = bases.length === 1 ? bases[0] ?? "" : `mixed bases: ${bases.join(" + ")}`;
+  const missing = rows.length - timed.length;
+  return `${formatDurationMs(total)} (${label})`
+    + (missing === 0
+      ? ""
+      : ` — ${String(missing)} of ${String(rows.length)} attempts not recorded`);
+}

@@ -25,6 +25,7 @@ import { join } from "node:path";
 import { PROJECT_WORK_DIR } from "../paths.ts";
 import { EventLog } from "../events/EventLog.ts";
 import type { TldrxEvent } from "../events/Event.ts";
+import { frameworkVersionSync } from "../frameworkVersion.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
 import { withWorkspaceLock } from "../lock/workspaceLock.ts";
 import { validateFactsFile } from "../facts/validateFactsFile.ts";
@@ -193,6 +194,17 @@ function createRunLocked(options: NewRunOptions): NewRunOutcome {
 
   const seed: RunFile = {
     version: 1,
+    // Stamped ONCE, here, and never rewritten (#183). `run new` and `seed apply`
+    // both land in this function, so both runs carry it and neither has to know
+    // it exists. `RunStore.save` maintains `last_written_by` beside it.
+    created_with: frameworkVersionSync(),
+    // Written HERE as well as by `RunStore.rollUp`, and that is not redundancy:
+    // `run new` writes run.yml through its own path, so without this line the
+    // first ordinary save would ADD a key — and a `tldrx next` that refuses a
+    // handshake out of order and touches nothing would still have changed the
+    // file (`test/handshake-sequencing.test.ts`, gh #82/#87, measured red). It is
+    // also simply true: `run new` is the tldrx that wrote this file last.
+    last_written_by: frameworkVersionSync(),
     run: runId,
     title: options.title ?? titleFromSlug(options.slug),
     scope: options.scope,
@@ -238,6 +250,11 @@ function createRunLocked(options: NewRunOptions): NewRunOutcome {
     authorized_by: null,
     authorized_at: null,
     on_grant_exceed: DEFAULT_ON_GRANT_EXCEED,
+    // A run with no turns has nothing unmetered and nothing missing from its
+    // total, so `complete` is a measurement here rather than an optimism. Both
+    // are rewritten from `run.yml` by `rollUpBudget` on the very first save.
+    unmetered_tasks: 0,
+    spent_basis: "complete",
     phases: phases.map((p) => ({
       id: p.id,
       ceiling_usd: budgetPlan.perPhase.get(p.id) ?? 0,

@@ -244,6 +244,9 @@ const SINGLE_RUN_KEYS = [
   // note`, `[]` on a run nobody has annotated. Appended, not inserted, for the
   // fourth time and the same reason.
   "operator_notes",
+  // Appended by #183 and defect 3 of the same audit — at the END, which is what
+  // this list exists to enforce.
+  "metered_tasks", "created_with", "last_written_by",
 ];
 
 describe("tldrx run status with several runs open", () => {

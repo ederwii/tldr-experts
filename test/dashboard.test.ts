@@ -128,6 +128,7 @@ describe("the dashboard model", () => {
       "runs[].budget.warnAtPct",
       "runs[].build",
       "runs[].ceilingUsd",
+      "runs[].createdWith",
       "runs[].cursor",
       "runs[].eventsError",
       "runs[].eventsSkipped",
@@ -137,6 +138,8 @@ describe("the dashboard model", () => {
       "runs[].keepWorktrees",
       "runs[].lastEventAt",
       "runs[].lastEventFrom",
+      // #183: which tldrx wrote the run, already resolved to "not recorded".
+      "runs[].lastWrittenBy",
       "runs[].nextAction.alternatives[]",
       "runs[].nextAction.command",
       "runs[].nextAction.kind",
@@ -188,6 +191,8 @@ describe("the dashboard model", () => {
       "runs[].spend.totalTasks",
       "runs[].spend.unmeteredTasks",
       "runs[].spend.zeroCostTasks",
+      // The spend figure WRITTEN OUT, with its own basis in it (defect 3).
+      "runs[].spentFigure",
       "runs[].spentUsd",
       "runs[].stagesDone",
       "runs[].stagesTotal",

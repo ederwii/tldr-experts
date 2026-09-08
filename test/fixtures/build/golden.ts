@@ -80,6 +80,7 @@
  * |---|---|---|
  * | prompts | the workspace root → `<ROOT>` (and its `realpath`, since macOS's `/var/folders` is a symlink to `/private/var/folders`), plus every commit sha → `<SHA>` (#166) | `mkdtempSync(join(tmpdir(), "tldrx-build-"))` (`workspace.ts:122`) — a fresh temp dir per invocation. Both are EXACT strings read from the machine, long and unique, so nothing incidental can match. The sha is the reviewer's diff base, which git derives from commit timestamps and so moves every run; it is replaced by the same VERIFIED rule the event normaliser uses (`scrubPrompt`). |
  * | events | the workspace root, plus every commit sha → `<SHA>` | Git shas move with commit timestamps every run. |
+ * | events and task rows | `"duration_ms": "<MS>"` (a real wall clock — different on every machine and every run) and `"tldrx_version": "<VERSION>"` (`package.json`'s version, which moves on every RELEASE; a frozen value would redden `release.sh`). Both anchored on the KEY, so their presence is still frozen and a lost key is still a red diff. |
  * | task rows | the workspace root, every commit sha, plus `"ended_at": "<TS>"` | `ended_at` is the wall clock at the moment the row was written. `started_at` is NOT normalised — measured, it is `options.at` verbatim, so it is a real assertion. |
  *
  * The sha normaliser is narrow in the sense that matters — every replacement is
@@ -526,6 +527,29 @@ function scrubDeep(value: unknown, machine: Machine): unknown {
   return value;
 }
 
+/**
+ * The two keys that CANNOT be frozen by value, blanked by key so their PRESENCE
+ * still is (#183, #184).
+ *
+ *   - `duration_ms` is a wall-clock measurement of a real process. It differs on
+ *     every machine and on every run of the same machine, and freezing a number
+ *     would make this guard a benchmark.
+ *   - `tldrx_version` is `package.json`'s version. It is deterministic on a given
+ *     checkout and moves on every RELEASE — this repo cut ten in one week — so a
+ *     frozen value would turn `scripts/release.sh` red for a reason that is not a
+ *     behaviour change.
+ *
+ * Anchored on the JSON key, exactly like `ended_at` below, so only these two
+ * fields are blanked and every other value stays a real assertion. The key
+ * itself is still in `keys=[…]` and still in the row, so a LOST key — the thing
+ * a refactor could actually break — is still a red diff.
+ */
+function scrubUnstableKeys(text: string): string {
+  return text
+    .replace(/"duration_ms":\s*-?\d+/g, '"duration_ms":"<MS>"')
+    .replace(/"tldrx_version":"[^"]*"/g, '"tldrx_version":"<VERSION>"');
+}
+
 function scrubFullShas(text: string, machine: Machine): string {
   let out = text;
   for (const sha of machine.shas) out = out.split(sha).join("<SHA>");
@@ -573,7 +597,7 @@ function eventStream(ws: BuildWorkspace, machine: Machine): string {
       `payload=${JSON.stringify(scrubbed)}`,
     ].join(" ");
   });
-  return `${scrubFullShas(scrubPaths(lines.join("\n"), machine), machine)}\n`;
+  return `${scrubUnstableKeys(scrubFullShas(scrubPaths(lines.join("\n"), machine), machine))}\n`;
 }
 
 /** `run.yml`'s task rows, one JSON object per line with sorted keys. */
@@ -593,7 +617,7 @@ function taskRows(ws: BuildWorkspace, machine: Machine): string {
   const text = scrubFullShas(scrubPaths(rows.join("\n"), machine), machine);
   // Anchored on the JSON key, so only the wall-clock field is blanked and
   // `started_at` — which is `options.at` verbatim — stays a real assertion.
-  return `${text.replace(/"ended_at":"[^"]*"/g, '"ended_at":"<TS>"')}\n`;
+  return `${scrubUnstableKeys(text.replace(/"ended_at":"[^"]*"/g, '"ended_at":"<TS>"'))}\n`;
 }
 
 // --- plumbing ----------------------------------------------------------------

@@ -18,6 +18,7 @@ import { BRANCH_MODELS, isBranchModelKind, type BranchModelKind } from "../plan/
 import {
   EVIDENCE_ROLES, EVIDENCE_VERDICTS, type EvidenceRole, type EvidenceVerdict,
 } from "../text/evidence.ts";
+import { DURATION_BASES, type DurationBasis } from "./duration.ts";
 
 /** One enum, all three levels (spec §2.2). */
 export const STAGE_STATUSES = [
@@ -253,6 +254,29 @@ export interface RunTask {
    * every `run.yml` written before this existed.
    */
   readonly dedupe?: string;
+  /**
+   * How long this ATTEMPT took, in milliseconds — measured, never subtracted
+   * from the two timestamps above (#184).
+   *
+   * `started_at` is the INVOCATION's clock (`options.at`) and `ended_at` is the
+   * instant the row was written, so on a parallel Build every task of one
+   * invocation shares one `started_at` and their `ended_at`s are the write-out
+   * order. Subtracting them yields close to the whole invocation for every task
+   * in it. Those fields keep their documented meaning — §7 forbids changing one —
+   * and this is the new one that carries a real span.
+   *
+   * ADDITIVE and optional. Absent means NOT RECORDED: every row written before
+   * this existed, and every row whose span nothing here could see. Never `0`,
+   * which would say the turn was instantaneous.
+   */
+  readonly duration_ms?: number;
+  /**
+   * WHICH span `duration_ms` is — `spawned` or `prepare-to-commit`. Written
+   * together with it, always, because the two are different quantities and a
+   * number without its basis is one a reader will average with the other.
+   * See `run/duration.ts`'s `DURATION_BASES`.
+   */
+  readonly duration_basis?: DurationBasis;
 }
 
 export interface RunStage {
@@ -372,8 +396,50 @@ export interface RunBuild {
   readonly branch_model?: BranchModelKind;
 }
 
+/**
+ * What a run says about the tldrx that wrote it, when it says nothing (#183).
+ *
+ * A constant rather than a literal at four call sites, because `run status`, the
+ * spec and two tests all have to spell the same absence — and "not recorded" is
+ * the wording `duration.ts` and `spendBasis.ts` already use for the same class of
+ * fact. An absent version is not `0.0.0` and not "unknown": it is a run written
+ * by a tldrx from before the field existed, which is a knowable thing to say.
+ */
+export const VERSION_NOT_RECORDED = "not recorded";
+
+/** `created_with` / `last_written_by`, or the absence sentence. Never invented. */
+export function recordedVersion(value: string | undefined): string {
+  return value === undefined || value === "" ? VERSION_NOT_RECORDED : value;
+}
+
 export interface RunFile {
   readonly version: number;
+  /**
+   * The tldrx that CREATED this run — `frameworkVersion()`'s answer at
+   * `run new` / `seed apply`, stamped once and never rewritten (#183).
+   *
+   * NOT `version:` above, which is the FILE FORMAT's number and only ever grows
+   * by the §7 rule. This is the framework's, and the two are next to each other
+   * on purpose: 23 real runs carried the first and none carried the second, so
+   * no run could say which release's behaviour produced it — and behaviour moved
+   * ten times in the week those runs were recorded.
+   *
+   * ADDITIVE and optional: absent on every run.yml written before it existed,
+   * and every reader prints `recordedVersion()`'s sentence for that, never a
+   * guess at what was installed that day.
+   */
+  readonly created_with?: string;
+  /**
+   * The tldrx of the LAST save — rewritten by `RunStore.rollUp` on every write.
+   *
+   * The second half of the same question, and the half that matters for a run
+   * that outlived an upgrade: a run created on 0.9.0 and finished on 0.11.0 was
+   * driven by both, and one field cannot say that. Together they bound it.
+   *
+   * ADDITIVE and optional for the same reason as `created_with`; a run that has
+   * not been saved since the field arrived carries neither.
+   */
+  readonly last_written_by?: string;
   readonly run: string;
   readonly title: string;
   readonly scope: string;
@@ -598,6 +664,14 @@ export function validateRunFile(input: unknown): ValidationResult {
   // policy it may quietly downgrade to "spawn anyway".
   if (doc.attended_by !== undefined) requireEnum(doc.attended_by, ATTENDED_BY, "attended_by", issues);
 
+  // Optional and additive (#183): absent is what every run.yml written before
+  // these existed means, and `recordedVersion` says so in words. A wrong TYPE is
+  // still an issue — a version that is not a string is a provenance claim nothing
+  // can compare against `tldrx --version`, and a file may not carry one of those.
+  for (const key of ["created_with", "last_written_by"] as const) {
+    if (doc[key] !== undefined) requireString(doc[key], key, issues);
+  }
+
   // Optional, additive: absent means "clean up at run close". Present it must be
   // a real boolean — a `keep_worktrees: "yes"` that silently read as false would
   // delete the checkouts the operator asked to keep.
@@ -726,6 +800,21 @@ export function validateRunFile(input: unknown): ValidationResult {
             if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
               issues.push({ path: `${tp}.${key}`, message: "expected a number >= 0" });
             }
+          }
+          // Additive (#184), and the two are validated as a PAIR: a span with no
+          // basis is a number a reader will mistake for the other quantity, and a
+          // basis with no span is a claim about nothing. A negative or
+          // non-finite span is not a measurement.
+          if (task.duration_ms !== undefined) {
+            if (typeof task.duration_ms !== "number" || !Number.isFinite(task.duration_ms) || task.duration_ms < 0) {
+              issues.push({ path: `${tp}.duration_ms`, message: "expected a number >= 0" });
+            }
+            requireEnum(task.duration_basis, DURATION_BASES, `${tp}.duration_basis`, issues);
+          } else if (task.duration_basis !== undefined) {
+            issues.push({
+              path: `${tp}.duration_basis`,
+              message: "a duration_basis with no duration_ms names the basis of nothing",
+            });
           }
           if (typeof task.cost_usd === "number") spentFromTasks += task.cost_usd;
           checkOrder(task.started_at, task.ended_at, tp, issues);

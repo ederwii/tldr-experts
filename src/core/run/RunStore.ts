@@ -16,6 +16,8 @@ import { noteDeprecations } from "../schemas/deprecationNotice.ts";
 import { listRunDirs } from "../../hooks/lib/workspace.ts";
 import { withWorkspaceLock, workspaceRootOfRunDir } from "../lock/workspaceLock.ts";
 import { nowRfc3339 } from "../../hooks/lib/actor.ts";
+import { frameworkVersionSync } from "../frameworkVersion.ts";
+import { spentBasis, tallyOf } from "../budget/spentFigure.ts";
 import { backupPathFor, writeAtomic } from "../fs/writeAtomic.ts";
 import { emitBudgetYaml, emitRunYaml } from "./emitRunYaml.ts";
 import {
@@ -402,6 +404,13 @@ export function rollUp(run: RunFile): RunFile {
     phases,
     budget: { ...run.budget, spent_usd: spent },
     updated_at: nowRfc3339(),
+    // Every write, not just the first (#183). `updated_at` says WHEN the run was
+    // last touched and this says by WHICH tldrx — the pair is what makes a
+    // behaviour change attributable to a release, and this repo shipped ten of
+    // them in the week the 23 audited runs were recorded. It rides here, in the
+    // one derivation `save()` runs before validating, so no command can write a
+    // run.yml without it and none of them had to learn about it.
+    last_written_by: frameworkVersionSync(),
   };
   return { ...next, status: deriveRunStatus(next) };
 }
@@ -412,8 +421,15 @@ export function rollUpBudget(budget: RunBudget, run: RunFile): RunBudget {
   for (const phase of run.phases) {
     spentByPhase.set(phase.id, round(phase.stages.reduce((sum, s) => sum + s.cost_usd, 0)));
   }
+  // Counted from the SAME rows the dollars were summed from, in the same pass
+  // over the same file, so `spent_usd` and its basis can never describe two
+  // different sets of turns. `tallyOf` is the one implementation; this is only
+  // the mirror into `budget.yml`.
+  const tally = tallyOf(run.phases.flatMap((p) => p.stages.flatMap((s) => s.tasks)));
   return {
     ...budget,
+    unmetered_tasks: tally.unmetered,
+    spent_basis: spentBasis(tally.unmetered),
     phases: budget.phases.map((p) => ({ ...p, spent_usd: spentByPhase.get(p.id) ?? p.spent_usd })),
   };
 }

@@ -16,6 +16,7 @@ import { DOD_REFUSAL_FALLBACK, dodRefused } from "./outcome.ts";
 import type { StoryOutcome } from "./outcome.ts";
 import type { CarriedRow, UnreadableStory } from "./carriedRows.ts";
 import { PLAN_STATUSES, type PlanStatus } from "../schemas/planCommon.ts";
+import { spentFigure } from "../budget/spentFigure.ts";
 
 export interface EpicSummaryRow {
   readonly id: string;
@@ -72,6 +73,18 @@ export interface BuildHandoffParts {
    * and a number that is genuinely zero must not read identically.
    */
   readonly costNote?: string | null;
+  /**
+   * Turns this phase never metered, and turns it did (`build/phaseCost.ts`).
+   *
+   * ADDITIVE and optional: absent — every caller that has not been given the
+   * counts, and every test fixture written before them — renders the plain
+   * `$X.XX` this header always rendered. Present and non-zero, the figure itself
+   * becomes `≥ $X.XX (N tasks unmetered)` or the not-measured sentence, because
+   * `costNote` beside it was not enough: it explained a number the reader had
+   * already taken at face value.
+   */
+  readonly unmeteredTasks?: number;
+  readonly meteredTasks?: number;
   /**
    * How many of this run's recorded decisions name a decider (#169) — the same
    * sentence the close prints, on the header rather than as a `## Decisions`
@@ -155,7 +168,11 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
   const lines = [
     `# Handoff — 04-build / ${parts.stageId} — run ${parts.runId}`,
     `Stage: ${parts.stageId} · Expert: developer + reviewer · Model: ${parts.model ?? "default"} · ` +
-      `Cost: $${parts.costUsd.toFixed(2)} of $${parts.budgetUsd.toFixed(2)} ceiling` +
+      `Cost: ${spentFigure({
+        usd: parts.costUsd,
+        unmetered: parts.unmeteredTasks ?? 0,
+        metered: parts.meteredTasks ?? 1,
+      })} of $${parts.budgetUsd.toFixed(2)} ceiling` +
       `${parts.costNote == null ? "" : ` (${parts.costNote})`}` +
       `${parts.decidedNote == null ? "" : ` · ${parts.decidedNote}`} · ${parts.at}`,
     "",

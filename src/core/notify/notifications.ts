@@ -16,6 +16,7 @@ import type { DecisionCard } from "../ui/decisionCard.ts";
 // The one spelling of `tldrx answer <Qid> "…" --run <id>`, shared with every decision card.
 import { answerCommand } from "../run/decisionCards.ts";
 import { NOTIFY_PAYLOAD_VERSION, exitFamily, type NotifyKind, type NotifyPayload } from "./payload.ts";
+import { spentBasis, spentFigure, type SpentTally } from "../budget/spentFigure.ts";
 
 /** What every payload shares, gathered once by the caller. */
 export interface NotifyContext {
@@ -120,13 +121,22 @@ export function gateNotification(ctx: NotifyContext, costUsd: number): NotifyPay
  *
  * There is nothing for a person to type: the loop is already running the next stage.
  */
-export function stageDoneNotification(ctx: NotifyContext, costUsd: number): NotifyPayload {
+export function stageDoneNotification(
+  ctx: NotifyContext,
+  costUsd: number,
+  unmetered = 0,
+): NotifyPayload {
+  // A stage every one of whose turns was in-session cost this loop nothing it
+  // could see, and "finished for $0.00" is the sentence that reads as thrift.
+  // `spentFigure` is the same rule every other surface uses; `unmetered` is 0 on
+  // an ordinary spawned stage, which keeps that sentence exactly as it was.
+  const figure = spentFigure({ usd: costUsd, unmetered, metered: unmetered > 0 && costUsd === 0 ? 0 : 1 });
   return {
     ...base(ctx, "stage.done"),
-    summary: `${ctx.runId} finished ${ctx.stage ?? "a stage"} for $${costUsd.toFixed(2)} and moved on. `
+    summary: `${ctx.runId} finished ${ctx.stage ?? "a stage"} for ${figure} and moved on. `
       + "No decision is waiting on you.",
     command: null,
-    detail: { cost_usd: costUsd },
+    detail: { cost_usd: costUsd, ...(unmetered === 0 ? {} : { unmetered_tasks: unmetered }) },
   };
 }
 
@@ -135,13 +145,25 @@ export function budgetNotification(
   ctx: NotifyContext,
   spentUsd: number,
   ceilingUsd: number,
+  tally: SpentTally = { usd: spentUsd, unmetered: 0, metered: 1 },
 ): NotifyPayload {
   return {
     ...base(ctx, "budget.warned"),
-    summary: `${ctx.runId} has spent $${spentUsd.toFixed(2)} of its $${ceilingUsd.toFixed(2)} ceiling. `
+    // The figure carries its basis (`budget/spentFigure.ts`). A notification is
+    // read once, on a phone, by somebody who is not going to open `budget show`
+    // — it is the LAST surface that can afford a bare `$0.00`.
+    summary: `${ctx.runId} has spent ${spentFigure(tally)} of its $${ceilingUsd.toFixed(2)} ceiling. `
       + "It has not been refused anything yet; the next stage that would cross the ceiling is.",
     command: `tldrx budget show --run ${ctx.runId}`,
-    detail: { spent_usd: spentUsd, ceiling_usd: ceilingUsd },
+    // `spent_usd` keeps its meaning and its type — a consumer parsing this
+    // number must not have to parse a sentence. The two counts beside it are
+    // additive and say what the number cannot see.
+    detail: {
+      spent_usd: spentUsd,
+      ceiling_usd: ceilingUsd,
+      unmetered_tasks: tally.unmetered,
+      spent_basis: spentBasis(tally.unmetered),
+    },
   };
 }
 
@@ -157,15 +179,22 @@ export function runEndNotification(
   exitCode: number,
   spentUsd: number,
   lastLine: string,
+  tally: SpentTally = { usd: spentUsd, unmetered: 0, metered: 1 },
 ): NotifyPayload {
   const kind: NotifyKind = exitCode === 0 ? "run.finished" : "run.failed";
   const verb = exitCode === 0 ? "finished" : "stopped";
   return {
     ...base(ctx, kind),
     summary: `${ctx.runId}: the loop ${verb} with exit ${String(exitCode)} `
-      + `(${exitFamily(exitCode)}), $${spentUsd.toFixed(2)} spent by this loop. ${lastLine}`,
+      + `(${exitFamily(exitCode)}), ${spentFigure(tally)} spent by this loop. ${lastLine}`,
     command: exitCode === 0 ? null : `tldrx run status ${ctx.runId}`,
-    detail: { exit_code: exitCode, exit_family: exitFamily(exitCode), spent_usd: spentUsd },
+    detail: {
+      exit_code: exitCode,
+      exit_family: exitFamily(exitCode),
+      spent_usd: spentUsd,
+      unmetered_tasks: tally.unmetered,
+      spent_basis: spentBasis(tally.unmetered),
+    },
   };
 }
 

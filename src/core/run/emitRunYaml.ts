@@ -116,6 +116,14 @@ function task(t: RunTask, indent: string): string {
     // existed, or one that never earned either, round-trips byte-for-byte.
     ...(t.banked_before_refusal === undefined ? [] : [`${inner}banked_before_refusal: true,`]),
     ...(t.dedupe === undefined ? [] : [`${inner}dedupe: ${yamlScalar(t.dedupe)},`]),
+    // The measured span and WHICH span it is, written together or not at all
+    // (#184). Never one without the other: a bare number would be averaged with
+    // the other basis, and a bare basis would name the basis of nothing. Absent
+    // on every row written before this existed, which stays byte-identical.
+    ...(t.duration_ms === undefined
+      ? []
+      : [`${inner}duration_ms: ${String(Math.round(t.duration_ms))}, `
+        + `duration_basis: ${yamlScalar(t.duration_basis ?? null)},`]),
     `${inner}outputs: ${inlineList(t.outputs)}}`,
   ].join("\n");
 }
@@ -151,6 +159,13 @@ export function emitRunYaml(run: RunFile): string {
     "# tldrx-work/<run>/run.yml — the execution path and the only resume point (spec §2.2).",
     "# Written by the facilitator alone. Hand-edit at your own risk: every write revalidates.",
     `version: ${run.version}`,
+    // The framework's two version stamps, right under the FORMAT's (#183) — the
+    // adjacency is the point: a reader who has been confused about which number
+    // `version:` is has the answer on the next line. Emitted only when set, so a
+    // run.yml written before they existed round-trips byte-for-byte, which is
+    // the same rule `triage`, `attended_by` and `build.branch_model` follow.
+    ...(run.created_with === undefined ? [] : [`created_with: ${yamlScalar(run.created_with)}`]),
+    ...(run.last_written_by === undefined ? [] : [`last_written_by: ${yamlScalar(run.last_written_by)}`]),
     `run: ${yamlScalar(run.run)}`,
     `title: ${yamlScalar(run.title)}`,
     `scope: ${yamlScalar(run.scope)}`,
@@ -269,6 +284,20 @@ export function emitBudgetYaml(budget: RunBudget): string {
     ...(budget.on_grant_exceed === DEFAULT_ON_GRANT_EXCEED
       ? []
       : [`on_grant_exceed: ${yamlScalar(budget.on_grant_exceed)}`]),
+    // Same rule a fifth time, and it is what makes the two keys safe: they are
+    // emitted only when there IS something unmetered, so a fully metered run and
+    // every budget.yml written before they existed are byte-identical to what
+    // they were (`test/budget-grant.test.ts` pins exactly that for the legacy
+    // file). Absent therefore means one thing and not two — `asRunBudget` reads
+    // it as `0` / `complete`, which is what such a file already MEANT by
+    // printing a bare figure — and present means the total is a floor and the
+    // file says by how many turns.
+    ...(budget.unmetered_tasks > 0
+      ? [
+        `unmetered_tasks: ${String(budget.unmetered_tasks)}`,
+        `spent_basis: ${yamlScalar(budget.spent_basis)}`,
+      ]
+      : []),
     "phases:",
   ];
   for (const phase of budget.phases) {

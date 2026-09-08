@@ -415,6 +415,24 @@ describe("the live client, and the static page that must not carry it", () => {
    * five phase rows to 5 × 21 = 105 (`"authorizedUsd":null,`) — 169 exactly, so
    * nothing else moved. No renderer function changed, and
    * `DASHBOARD_MODEL_VERSION` stays 3: additions never bump it.
+   *
+   * RE-PINNED 2026-09-07 again for #183 and defect 3 of the same audit:
+   * 121,912 → 121,982 bytes, `d35af636…` → `306d1023…`. Attributed exactly, by
+   * diffing this fixture's page rendered on `origin/main` against the same page
+   * rendered here — five opcodes, no sixth:
+   *
+   *   + 82  three additive `RunModel` fields serialised into the embedded model:
+   *         `"spentFigure":"$5.01","createdWith":"not recorded",`
+   *         `"lastWrittenBy":"not recorded",` (one run in this fixture)
+   *   − 12  `dashSpendText` and `dashHeroSpend` now read `run.spentFigure`
+   *         instead of `dashUsd(run.spentUsd)` — 6 bytes shorter each, and it
+   *         shows up in the PAGE because both functions cross into the browser
+   *         through `Function.prototype.toString()`, source and all
+   *
+   * Net +70. The rendered TEXT is unchanged on this fixture: it has no unmetered
+   * turn, so `spentFigure` is the plain `$5.01` `dashUsd` produced. That is the
+   * guard half of the change working — a fully metered run keeps its figure.
+   * `DASHBOARD_MODEL_VERSION` stays 3.
    */
   test("--static is byte-identical to the export main renders without the live layer", () => {
     const temp = makeViewsWorkspace();
@@ -428,9 +446,9 @@ describe("the live client, and the static page that must not carry it", () => {
       };
       const html = renderDashboard(model);
       expect(model.live, "the static model is not a live one").toBe(false);
-      expect(Buffer.byteLength(html, "utf8")).toBe(121_912);
+      expect(Buffer.byteLength(html, "utf8")).toBe(121_982);
       expect(createHash("sha256").update(html, "utf8").digest("hex"))
-        .toBe("d35af636fab921e8a79af4fe0361652e59183a28d4ae20e79e9c08f2e087fc23");
+        .toBe("306d1023ea1848146f346c8fb11bf9ea4cf3368bdb8cd0f9a50e8187e2788091");
     } finally {
       temp.dispose();
     }

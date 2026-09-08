@@ -59,6 +59,16 @@ export interface ExecutorTask {
    */
   readonly inputTokens?: number;
   readonly outputTokens?: number;
+  /**
+   * The sub-agent's own wall clock in milliseconds, when this executor SPAWNED
+   * one and read `AgentOutcome.durationMs` (#184).
+   *
+   * Absent for a HOST turn — nothing here watched it start, and `run.yml`'s
+   * `started_at` is the invocation's stamp, shared by every task of a parallel
+   * build. Absent is "not recorded", never zero: `runNext.recordExecutorTasks`
+   * writes `duration_ms` + `duration_basis: "spawned"` only when this is here.
+   */
+  readonly durationMs?: number;
 }
 
 export interface ExecutorContext {

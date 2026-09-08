@@ -29,6 +29,57 @@
   suggestion is one tldrx made, and quoting it back would be a record lying in the dangerous
   direction. (#178)
 
+- **A run now records which tldrx wrote it (#183).** `run.yml`'s `version: 1` is the FILE
+  FORMAT's number; nothing anywhere carried the framework's, so across 23 unattended runs on
+  three real workspaces no record could be attributed to the release that produced it — in a
+  week that shipped ten of them and moved behaviour in three (the DoD refusal record grew
+  `status`, the reviewer's diff base moved, a mandate check was reworded). `run.yml` gains
+  two additive keys beside the format's: `created_with`, stamped once at `run new` and never
+  rewritten, and `last_written_by`, rewritten by every save — so a run that outlived an
+  upgrade carries both ends of the range that drove it. `agent.spawned` and `agent.result`
+  carry `tldrx_version` for the same reason at the turn level: a spawn that never produced a
+  result is still a turn a release is answerable for. All of it reads from the one source
+  `tldrx --version` reads, so a record and the CLI cannot disagree. `run status` prints both
+  stamps; a run.yml written before the keys reads `not recorded`, which is a different fact
+  from a guess at what happened to be installed that day.
+
+- **A task row now carries a duration it actually measured, and says which span it is
+  (#184).** `started_at` is the INVOCATION's clock and `ended_at` is the instant the row was
+  written, so every task of one parallel Build shares a start and subtracting the two yields
+  close to the whole invocation for each of them — three unattended runs measured 34.5 h,
+  43.2 h and 36.8 h of span that no record could attribute to a phase or a sub-agent. Those
+  two fields keep their meaning; `duration_ms` is the new one, and it never travels without
+  `duration_basis`. `spawned` is the wall clock around the sub-agent's own process, measured
+  in `spawnAgent.ts` and written on the task row and on `agent.result`. `prepare-to-commit`
+  is the gap between a `--prepare` bundle's `prepared_at` and the `--commit` that recorded
+  the turn: the only span the framework can see for an in-session turn, and one that INCLUDES
+  the host's own time — a ceiling on the sub-agent's span the way `spent_usd` is a floor on
+  the money, and the spec says so rather than letting the number be read as the sub-agent's.
+  `tldrx cost` gains a duration column per attempt and a per-stage sum that names a mixed
+  basis instead of adding two different quantities, and counts the attempts it could not
+  time. A row from before this reads `not recorded`, never `0s`: "it took no time" and
+  "nobody timed it" are different facts and only one is a measurement.
+
+### Fixed
+
+- **No surface prints a bare `$0.00` over work nobody metered.** Measured across 23 real runs:
+  45 % of 845 task rows are in-session turns recorded `cost_usd: null, metered: false`, which
+  every sum treats as contributing nothing — the only honest arithmetic there is. Two of those
+  runs then RENDERED `spent_usd: 0.00` against $3,000 and $200 ceilings after 30 and 9
+  stories. The counting and the caveat already existed (#103, #139); what did not was a rule
+  for the FIGURE, so each screen printed `$${n.toFixed(2)}` in its own words and three printed
+  it with no caveat at all. One implementation now writes it everywhere: `≥ $12.40 (7 tasks
+  unmetered)` when some of the work was metered, and `not measured: 9 in-session tasks, 0
+  metered` when none of it was and there is no floor worth printing. `run status`, `budget
+  show`, the dashboard's row and its hero, `replay`, `run auto`'s per-loop lines, the Build
+  handoff's `Cost:` header (and so the ship PR body, which embeds it), the `budget.warned`
+  note and every notification payload all read from it. `budget.yml` gains `unmetered_tasks`
+  and `spent_basis: lower-bound | complete` so an archived file alone still tells the truth —
+  emitted only when there IS something unmetered, so a fully metered run and every budget.yml
+  written before them stay byte-identical. `spent_usd` is unchanged and still what the ceiling
+  arithmetic enforces; a run that really did meter everything keeps its plain figure, because
+  a caveat on every screen is a caveat nobody reads.
+
 ## 0.11.1 — 2026-09-08
 
 ### Changed

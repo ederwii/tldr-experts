@@ -3,6 +3,7 @@ import {
   asDocument, isRecord, requireArray, requireEnum, requireKeys, requireNumber, requireString,
   requireVersion, result, type ValidationIssue, type ValidationResult,
 } from "../schemas/validation.ts";
+import { SPENT_BASES, spentBasis, type SpentBasis } from "./spentFigure.ts";
 
 export const ON_EXCEED = ["block", "warn"] as const;
 export type OnExceed = (typeof ON_EXCEED)[number];
@@ -154,6 +155,38 @@ export interface RunBudget {
    * which is what this file did before the key existed.
    */
   readonly on_grant_exceed: OnGrantExceed;
+  /**
+   * How many of this run's task rows put NOTHING in the meter — `metered: false`,
+   * the in-session `--commit` turns (defect 3 of the 2026-09-07 audit).
+   *
+   * `spent_usd` above stays exactly what it was: the sum of what WAS measured,
+   * and therefore a lower bound. This is the number that says HOW MUCH of the
+   * work that bound cannot see, so no reader has to open `run.yml` and count
+   * rows to find out. Measured across 23 real runs: 45% of 845 task rows are
+   * these, and two runs rendered `$0.00 spent` against $3,000 and $200 ceilings
+   * because nothing in this file said so.
+   *
+   * ADDITIVE. Absent — every budget.yml written before this key — means "nobody
+   * counted", which every renderer treats as `0` ONLY because `run.yml` is
+   * always available to those renderers and is where they actually count. This
+   * file records it so an archived budget.yml alone still tells the truth.
+   */
+  readonly unmetered_tasks: number;
+  /**
+   * `lower-bound` when `unmetered_tasks > 0`, `complete` otherwise — the one word
+   * that stops a reader inferring it.
+   *
+   * Derived, and written anyway. The derivation is one comparison and this file
+   * could have left it to the reader; the whole defect being fixed here is that
+   * six different readers each inferred it differently and three inferred it as
+   * "the number is the total". A file that states its own basis cannot be read
+   * two ways. `budget/spentFigure.ts` owns the derivation, so the label and the
+   * figure can never disagree.
+   *
+   * ADDITIVE. Absent means "not recorded"; `asRunBudget` reads it as
+   * `complete` ONLY when `unmetered_tasks` is also absent or zero.
+   */
+  readonly spent_basis: SpentBasis;
   readonly phases: readonly BudgetPhase[];
 }
 
@@ -234,6 +267,17 @@ export function validateRunBudget(input: unknown): ValidationResult {
   // is declared", never "zero" and never "read `ceiling_usd` instead".
   if (doc.ceiling_host_tokens !== undefined && doc.ceiling_host_tokens !== null) {
     requireNumber(doc.ceiling_host_tokens, "ceiling_host_tokens", issues);
+  }
+  // Optional, additive: how many turns went unmetered, and the one word for what
+  // that makes `spent_usd`. Absent is a file written before they existed and is
+  // read as "0 / complete" — see `asRunBudget`. A value this reader cannot
+  // understand is refused rather than defaulted, the same rule `economy` follows:
+  // a basis nothing here knows is not one it may quietly read as `complete`.
+  if (doc.unmetered_tasks !== undefined && doc.unmetered_tasks !== null) {
+    requireNumber(doc.unmetered_tasks, "unmetered_tasks", issues);
+  }
+  if (doc.spent_basis !== undefined && doc.spent_basis !== null) {
+    requireEnum(doc.spent_basis, SPENT_BASES, "spent_basis", issues);
   }
   // Optional, additive (#170): what the owner AUTHORIZED, and the fact that says
   // so. Checked only when present and non-null — absent means "no grant
@@ -355,6 +399,13 @@ export function asRunBudget(input: unknown): RunBudget {
     authorized_by: doc.authorized_by ?? null,
     authorized_at: doc.authorized_at ?? null,
     on_grant_exceed: doc.on_grant_exceed ?? DEFAULT_ON_GRANT_EXCEED,
+    // Tolerant read of a file written before either key existed: no unmetered
+    // count, so no claim that the total is short — and `spentBasis(0)` is
+    // `complete`, which is what such a file already MEANT by printing a bare
+    // figure. `rollUpBudget` overwrites both from `run.yml` on the next save, so
+    // an old file self-corrects the first time anything touches the run.
+    unmetered_tasks: doc.unmetered_tasks ?? 0,
+    spent_basis: doc.spent_basis ?? spentBasis(doc.unmetered_tasks ?? 0),
     phases: (doc.phases ?? []).map((phase) => ({
       id: phase.id,
       ceiling_usd: phase.ceiling_usd,

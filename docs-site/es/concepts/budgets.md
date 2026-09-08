@@ -104,6 +104,21 @@ tokens por un precio.** Los reintentos jamás se funden en el total de la etapa:
 falló dos veces costó tres turnos, y ese reintento suele ser justo el dinero que andabas
 buscando. Todo aquello de lo que el proceso nunca vio un costo se imprime como `UNMETERED`.
 
+Junto al dinero ahora hay una **duración** por intento, y dice de qué lapso se trata.
+`spawned` es el proceso del propio sub-agente, de que arranca a que sale.
+`prepare-to-commit` es el hueco entre el `--prepare` que le entregó su paquete a una sesión
+anfitriona y el `--commit` que registró el turno — que incluye todo lo que la sesión hizo en
+medio, así que es un techo sobre el tiempo del sub-agente y nunca se le llama el tiempo del
+sub-agente. Un intento anterior a que el framework registrara cualquiera de los dos se lee
+`not recorded`, jamás `0s`.
+
+Y donde sea que aparezca una cifra de gasto — `run status`, `budget show`, el tablero, un
+replay, el handoff de Build — un run con turnos sin medir se lee `≥ $12.40 (7 tasks
+unmetered)`, o `not measured: 9 in-session tasks, 0 metered` cuando no se midió
+absolutamente nada. Un `$0.00` pelado sobre treinta stories que pagó la sesión de alguien es
+aritméticamente cierto y comunicativamente falso. Un run que sí midió todo conserva su cifra
+de siempre.
+
 `tldrx cost --stories` cambia el eje, no la fuente: una fila por cada story de build, con lo
 que costó de forma medible al lado del **techo de spawn** que el ejecutor le entregó a sus
 spawns, y la razón entre ambos. Son dos tipos de número distintos — un cobro y un tope —, así

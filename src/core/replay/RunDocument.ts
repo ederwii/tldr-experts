@@ -13,6 +13,10 @@
  * This module only projects an already-parsed YAML document; reading files is
  * `loadRun.ts`.
  */
+// The absence sentence, from where the two fields are declared — imported
+// rather than respelled so a reader of run.yml, `run status` and a replay all
+// see the same three words for the same missing stamp (#183).
+import { recordedVersion } from "../run/RunFile.ts";
 
 /** `gate.evidence` (spec §2.2, design §A.5), read as tolerantly as the rest. */
 export interface RunGateEvidence {
@@ -175,6 +179,14 @@ export interface RunDocument {
   readonly cursor: RunCursor | null;
   readonly ceiling_usd: number | null;
   readonly spent_usd: number | null;
+  /**
+   * `run.yml`'s two framework stamps (#183), already resolved to
+   * `"not recorded"` when the file carries neither — a replay must never print a
+   * version it inferred, and a document that leaves the decision to its renderer
+   * is one where two renderers will decide differently.
+   */
+  readonly created_with: string;
+  readonly last_written_by: string;
   /** Absent on a run `tldrx run new` created — it depends on nothing. */
   readonly triage: RunTriage | null;
   /** Null on every run nobody closed by hand, which is nearly all of them. */
@@ -288,6 +300,8 @@ export function toRunDocument(input: unknown, fallbackId: string): RunDocument |
       : { phase: str(cursor.phase), stage: str(cursor.stage), task: nullableStr(cursor.task) },
     ceiling_usd: num(budget?.ceiling_usd) ?? num(doc.budget_usd),
     spent_usd: num(budget?.spent_usd),
+    created_with: recordedVersion(nullableStr(doc.created_with) ?? undefined),
+    last_written_by: recordedVersion(nullableStr(doc.last_written_by) ?? undefined),
     triage: toTriage(doc.triage),
     cancelled: toCancellation(doc.cancelled),
     keep_worktrees: doc.keep_worktrees === true,

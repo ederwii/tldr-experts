@@ -44,7 +44,9 @@ import { ambiguousRunLines } from "../run/openRuns.ts";
 import { RunStore } from "../run/RunStore.ts";
 import { PROJECT_WORK_DIR } from "../paths.ts";
 import { AUTO_GATE_ACTOR } from "../run/autoGate.ts";
-import { flatten, isAttendedByHost } from "../run/RunFile.ts";
+import { flatten, isAttendedByHost, type RunFile } from "../run/RunFile.ts";
+import { runTally } from "../budget/budgetView.ts";
+import { spentFigure, tallyOf, type SpentTally } from "../budget/spentFigure.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
 import { cardForTriggers, questionsCard, type CardContext } from "../run/decisionCards.ts";
 import { QUESTION_PHASES } from "../run/questionCards.ts";
@@ -168,6 +170,28 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
 
   const log = EventLog.forRun(runDir);
   const startedSpent = resolution.store.run.budget.spent_usd;
+  // The task tally as this loop STARTED, so every "spent by this loop" figure
+  // below can name what its own delta cannot see (defect 3 of the 2026-09-07
+  // audit: two runs reported `$0.00 spent` after 30 and 9 stories).
+  const startedTally = runTally(resolution.store.run);
+  /**
+   * This loop's own spend as a tally — the dollars it metered, and the turns it
+   * did not, both as DELTAS against the counts it inherited.
+   *
+   * Deltas rather than the run's totals, to match `spentByLoop`: a loop resuming
+   * a run that already had 40 unmetered turns did not produce them, and saying it
+   * did would make its own contribution unreadable. Clamped at zero because a
+   * run.yml can be rewritten under a loop (`tldrx reject`, a hand edit) and a
+   * negative count is not a thing to report.
+   */
+  const loopTally = (run: RunFile, spent: number): SpentTally => {
+    const now = runTally(run);
+    return {
+      usd: spent,
+      unmetered: Math.max(0, now.unmetered - startedTally.unmetered),
+      metered: Math.max(0, now.metered - startedTally.metered),
+    };
+  };
 
   // The whole notify feature, from this loop's point of view: a declaration or nothing.
   // A workspace with no `notify:` block gets `null` here and every call below is a no-op,
@@ -216,7 +240,10 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
       if (heartbeat !== null) clearInterval(heartbeat);
       if (notifier !== null) {
         await notifier.send(
-          runEndNotification(notifyCtx(), code, spentUsd, lines[lines.length - 1] ?? ""),
+          runEndNotification(
+            notifyCtx(), code, spentUsd, lines[lines.length - 1] ?? "",
+            loopTally(RunStore.open(runDir).run, spentUsd),
+          ),
           stageIdOf(),
         );
         await notifier.drain();
@@ -253,6 +280,13 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
               notifyCtx(),
               number(payload(event, "spent_usd")),
               number(payload(event, "ceiling_usd")),
+              // From the event, not re-derived: the warning is about the phase as
+              // it was when it fired, and the run has moved since.
+              {
+                usd: number(payload(event, "spent_usd")),
+                unmetered: number(payload(event, "unmetered_tasks")),
+                metered: number(payload(event, "spent_usd")) > 0 ? 1 : 0,
+              },
             ),
             event.stage,
           );
@@ -264,7 +298,17 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
       }
       for (const event of fresh) {
         if (event.type === "stage.done") {
-          await notifier.send(stageDoneNotification(notifyCtx(), number(payload(event, "cost_usd"))), event.stage);
+          // The stage's own unmetered turns, so "finished for $0.00" cannot be
+          // sent about a stage every turn of which was billed to a host session.
+          const stage = flatten(RunStore.open(runDir).run)
+            .find((entry) => entry.stage.id === event.stage);
+          const unmetered = stage === undefined
+            ? 0
+            : stage.stage.tasks.filter((task) => task.metered === false).length;
+          await notifier.send(
+            stageDoneNotification(notifyCtx(), number(payload(event, "cost_usd")), unmetered),
+            event.stage,
+          );
         }
       }
     };
@@ -275,12 +319,13 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
       const spentByLoop = round2(store.run.budget.spent_usd - startedSpent);
 
       if (store.run.status === "done" || store.run.status === "cancelled") {
-        say(`run ${runId} is ${store.run.status} — $${spentByLoop.toFixed(2)} spent by this loop`);
+        say(`run ${runId} is ${store.run.status} — ${spentFigure(loopTally(store.run, spentByLoop))} `
+          + "spent by this loop");
         return await finish(EXIT_OK, spentByLoop);
       }
       if (options.until !== undefined && store.run.cursor.stage === options.until) {
         say(`stopped before ${store.run.cursor.phase}/${options.until} (--until) — `
-          + `$${spentByLoop.toFixed(2)} spent by this loop`);
+          + `${spentFigure(loopTally(store.run, spentByLoop))} spent by this loop`);
         return await finish(EXIT_OK, spentByLoop);
       }
       // Checked BETWEEN stages: a stage already in flight is never cut off mid-turn
@@ -310,7 +355,16 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
       // the heartbeat timer, which can fire mid-stage, and a run that appended NOTHING but a
       // notification has still made no progress — the guard below would stop seeing that.
       const fresh = readEvents(log).slice(before).filter((event) => !event.type.startsWith("notify."));
-      for (const line of stageLines(fresh, cursorBefore, outcome)) say(line);
+      // Read once per iteration, off the file the loop just wrote — the same
+      // source `notifyFresh` uses, so the line on stdout and the notification
+      // about the same stage cannot disagree about what it cost.
+      const stageTally = (stageId: string): { unmetered: number; metered: number } => {
+        const found = flatten(RunStore.open(runDir).run).find((e) => e.stage.id === stageId);
+        if (found === undefined) return { unmetered: 0, metered: 1 };
+        const counted = tallyOf(found.stage.tasks);
+        return { unmetered: counted.unmetered, metered: counted.metered };
+      };
+      for (const line of stageLines(fresh, cursorBefore, outcome, stageTally)) say(line);
       await notifyFresh(fresh);
 
       if (outcome.code !== EXIT_OK) {
@@ -459,16 +513,36 @@ function cursorContext(runDir: string, runId: string): CardContext | null {
  * The events are used rather than the cursor because ONE `next` can walk past
  * several stages: a `skip_if` that holds skips a stage and keeps going, and a line
  * naming only the cursor it started on would silently under-report the run.
+ *
+ * `tallyForStage` is how the `done $…` figure stops being a bare number. The
+ * event carries `cost_usd` and nothing else, so this function had no way to know
+ * that a stage's every turn was billed to a host session — and printed
+ * `04-build/build … done $0.00` over nine stories, on the loop's own stdout,
+ * which is the surface an operator watches. `notifyFresh` above already routes
+ * the same event through `tallyOf`/`spentFigure`; this is the other half of that
+ * fix, and it reads the same run.yml. Exported for the test that pins the two
+ * shapes without a loop around it.
  */
-function stageLines(
+export function stageLines(
   fresh: readonly TldrxEvent[],
   cursorBefore: string,
   outcome: NextOutcome,
+  tallyForStage: (stageId: string) => { unmetered: number; metered: number },
 ): readonly string[] {
   const lines: string[] = [];
-  let requested: { at: string; cost: number } | null = null;
-  let done: { at: string; cost: number } | null = null;
+  let requested: { at: string; stage: string; cost: number } | null = null;
+  let done: { at: string; stage: string; cost: number } | null = null;
   let approvedBy: string | null = null;
+  /**
+   * The event's own `cost_usd` for the dollars — it is the number this line has
+   * always printed — with the COUNTS from the run file beside it. When nothing on
+   * the stage was unmetered the two counts make `spentFigure` return exactly the
+   * `$X.XX` it returned before, so a fully metered stage's line is unchanged.
+   */
+  const figure = (row: { stage: string; cost: number }): string => {
+    const counts = tallyForStage(row.stage);
+    return spentFigure({ usd: row.cost, unmetered: counts.unmetered, metered: counts.metered });
+  };
 
   for (const event of fresh) {
     const at = `${String(payload(event, "phase") ?? "")}/${event.stage ?? ""}`;
@@ -480,13 +554,13 @@ function stageLines(
         lines.push(`${at} … failed: ${String(payload(event, "reason") ?? "")}`);
         break;
       case "gate.requested":
-        requested = { at, cost: number(payload(event, "cost_usd")) };
+        requested = { at, stage: event.stage ?? "", cost: number(payload(event, "cost_usd")) };
         break;
       case "gate.approved":
         approvedBy = String(payload(event, "by") ?? event.actor);
         break;
       case "stage.done":
-        done = { at, cost: number(payload(event, "cost_usd")) };
+        done = { at, stage: event.stage ?? "", cost: number(payload(event, "cost_usd")) };
         break;
       default:
         break;
@@ -494,13 +568,12 @@ function stageLines(
   }
 
   if (requested !== null) {
-    lines.push(approvedBy === AUTO_GATE_ACTOR
-      ? `${requested.at} … done $${requested.cost.toFixed(2)} · auto-approved`
-      : `${requested.at} … done $${requested.cost.toFixed(2)} · awaiting human gate`);
+    lines.push(`${requested.at} … done ${figure(requested)}`
+      + (approvedBy === AUTO_GATE_ACTOR ? " · auto-approved" : " · awaiting human gate"));
     return lines;
   }
   if (done !== null) {
-    lines.push(`${done.at} … done $${done.cost.toFixed(2)}`);
+    lines.push(`${done.at} … done ${figure(done)}`);
     return lines;
   }
   if (lines.length === 0) {
