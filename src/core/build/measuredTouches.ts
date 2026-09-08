@@ -38,7 +38,6 @@
  */
 import { inSurface, normalisePath } from "../run/boundary.ts";
 import { isStatePath } from "./implicitPlan.ts";
-import type { TldrxEvent } from "../events/Event.ts";
 
 /** The event both bases are written on. Wave 4's (#171), unchanged. */
 export const WIDENED_EVENT = "story.touches_widened";
@@ -75,6 +74,16 @@ export interface WideningRow {
   readonly before: number;
   readonly after: number;
   readonly note: string;
+  /**
+   * The PHYSICAL line this event occupies in `events.jsonl`, 1-based.
+   *
+   * Carried because the handoff cites it, and a `[src: …]` naming a line the
+   * event is not on is an audit record lying in the dangerous direction
+   * (AGENTS.md §7). It is counted off the raw file — a torn line is skipped but
+   * still counted, exactly as `retroLog.ts` counts the same file — so a reader
+   * following the citation lands on the row the bullet describes.
+   */
+  readonly line: number;
 }
 
 function stringList(value: unknown): readonly string[] {
@@ -82,17 +91,35 @@ function stringList(value: unknown): readonly string[] {
 }
 
 /**
- * Every widening in a run's event log, oldest first, each labelled with its basis.
+ * Every widening in a run's event log, oldest first, each labelled with its basis
+ * and carrying the line it is on.
  *
- * Total by construction: a row whose payload is missing a field is rendered with
- * what it has rather than dropped, because a widening that happened and cannot be
- * read back is the silence this record exists to break.
+ * It takes the FILE's text rather than parsed events, and that is the whole point:
+ * the line number is a property of the file, and a caller handed a parsed array
+ * could only invent one. `retroLog.ts` reads the same file the same way for the
+ * same reason — its bullets cite lines too.
+ *
+ * Total by construction: a row whose payload is missing a field is kept with what
+ * it has rather than dropped, because a widening that happened and cannot be read
+ * back is the silence this record exists to break. A torn line is skipped and
+ * still counted, so every line number after it stays true.
  */
-export function wideningRows(events: readonly TldrxEvent[]): readonly WideningRow[] {
+export function wideningRows(eventsText: string): readonly WideningRow[] {
   const rows: WideningRow[] = [];
-  for (const event of events) {
+  const lines = eventsText.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i] ?? "";
+    if (raw.trim() === "") continue;
+    let event: { type?: unknown; payload?: unknown };
+    try {
+      event = JSON.parse(raw) as typeof event;
+    } catch {
+      continue;
+    }
     if (event.type !== WIDENED_EVENT) continue;
-    const payload = event.payload;
+    const payload = (event.payload !== null && typeof event.payload === "object" && !Array.isArray(event.payload)
+      ? event.payload
+      : {}) as Record<string, unknown>;
     rows.push({
       story: typeof payload.story === "string" ? payload.story : "?",
       basis: basisOf(payload),
@@ -100,6 +127,7 @@ export function wideningRows(events: readonly TldrxEvent[]): readonly WideningRo
       before: stringList(payload.before).length,
       after: stringList(payload.after).length,
       note: typeof payload.note === "string" ? payload.note : "",
+      line: i + 1,
     });
   }
   return rows;

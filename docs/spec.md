@@ -1270,7 +1270,9 @@ this field existed is; a reader must never invent a basis it did not find, and a
 one. The measured reading is taken at the moment a story's work is final — after the DoD, at the same settle that
 records `epic_base` on `task.done` — over the SAME range the reviewer was shown (`<epic_base>...<story branch>`, §2.9's
 `task.done`), so "the story's diff" has one definition. `paths` are the changed paths no `touches:` entry covers, with
-`.tldrx/` and `tldrx-work/` state dropped from both sides first, exactly as §6's boundary condition drops them; `note`
+`.tldrx/` and `tldrx-work/` state dropped from both sides first, exactly as §6's boundary condition drops them; the
+diff is `--name-only` with no rename detection, matching every other call site, so a renamed file counts as TWO paths
+— the old one and the new one — and the count in the `note` says so honestly rather than guessing at intent; `note`
 names the count and the instrument (*"18 of 21 changed files fell outside the declared touches — measured off the
 story's own diff…"*). It is **advisory and cannot refuse**: nothing is written when the work stayed inside the
 forecast, an unreadable diff is simply no measurement, and the story's `touches:` list is NOT amended — declaring is

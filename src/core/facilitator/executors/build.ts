@@ -99,7 +99,10 @@ import {
 } from "../../build/fixlist.ts";
 import { renderBuildHandoff, type EpicSummaryRow } from "../../build/handoff.ts";
 import { measuredWidening, wideningRows, type WideningRow } from "../../build/measuredTouches.ts";
-import { EventLog } from "../../events/EventLog.ts";
+import { declaredTouchesFor } from "../../run/boundary.ts";
+
+/** The log the widening citations point at, run-relative — one spelling. */
+const EVENTS_FILE = "events.jsonl";
 import { carriedReportFor, type CarriedReport } from "../../build/carriedRows.ts";
 import {
   baseResultOf, PreflightCache, redBaseRefusal, runStoryDod, type BaseParts,
@@ -2460,7 +2463,7 @@ class BuildSession {
    */
   private wideningRows(): readonly WideningRow[] {
     try {
-      return wideningRows(EventLog.forRun(this.ctx.runDir).read());
+      return wideningRows(readFileSync(join(this.ctx.runDir, EVENTS_FILE), "utf8"));
     } catch {
       return [];
     }
@@ -2481,7 +2484,14 @@ class BuildSession {
    * (AGENTS.md §7).
    */
   private async measureSurface(story: StoryContext, epicBase: string | null): Promise<void> {
-    const declared = story.planned.story.touches;
+    // Off DISK, through the same reader `deriveSurface` walks — not the plan
+    // snapshot this invocation parsed at its start. `tldrx story widen` is
+    // allowed on an `in_progress` story, so a long headless run can have its
+    // surface declared out from under the snapshot; falling back to the snapshot
+    // only when this run has no story file at all keeps the measurement possible
+    // for a scope that has neither.
+    const declared = declaredTouchesFor(this.ctx.runDir, story.planned.story.id)
+      ?? story.planned.story.touches;
     const range = reviewDiffRange(epicBase, story.epicBranch, story.branch);
     const diff = await git(["diff", "--name-only", range], story.repoDir);
     if (!diff.ok) return;

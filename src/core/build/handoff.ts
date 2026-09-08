@@ -428,10 +428,13 @@ const NAMED_WIDENED_PATHS = 6;
 /**
  * One bullet per widening, cited to the log that holds it.
  *
- * `[src: events.jsonl:1]` is the honest citation: the record IS the event, not the
- * story file (a measured widening deliberately writes nothing to the story — the
- * declared list stays the operator's forecast, `build/measuredTouches.ts`), and
- * not the review log (which knows nothing about `touches`).
+ * `[src: events.jsonl:<line>]` is the honest citation: the record IS the event, not
+ * the story file (a measured widening deliberately writes nothing to the story —
+ * the declared list stays the operator's forecast, `build/measuredTouches.ts`),
+ * and not the review log (which knows nothing about `touches`). The LINE is the
+ * one the event is physically on, carried by `WideningRow.line`: a constant `:1`
+ * would be an audit citation pointing at a row that is not the one the bullet
+ * describes, which is a record lying in the dangerous direction.
  */
 function wideningBullets(rows: readonly WideningRow[]): readonly string[] {
   const out: string[] = [];
@@ -446,13 +449,17 @@ function wideningBullets(rows: readonly WideningRow[]): readonly string[] {
     out.push(
       `- ${opening}: +${named}${more} `
       + `(${String(row.before)} → ${String(row.after)} path(s))`
-      + `${row.note === "" ? "" : ` — ${row.note}`} [src: events.jsonl:1]`,
+      + `${row.note === "" ? "" : ` — ${row.note}`} [src: events.jsonl:${String(row.line)}]`,
     );
   }
   if (rows.length > MAX_WIDENING_BULLETS) {
+    // The closing bullet is a claim about the LOG, not about one row, so it cites
+    // the first line it could not fit — a real line, and the one a reader
+    // following it should start reading from.
+    const next = rows[MAX_WIDENING_BULLETS]?.line ?? 1;
     out.push(
       `- and ${String(rows.length - MAX_WIDENING_BULLETS)} more widening(s) this run recorded, `
-      + "not listed here [src: events.jsonl:1]",
+      + `not listed here [src: events.jsonl:${String(next)}]`,
     );
   }
   return out;

@@ -105,6 +105,13 @@ function widenings(ws: BuildWorkspace) {
   return eventsOf(ws).filter((e) => e.type === "story.touches_widened");
 }
 
+/** Events as the file holds them: one JSON object per line, in order. */
+function jsonl(rows: readonly Record<string, unknown>[]): string {
+  return rows
+    .map((row) => JSON.stringify({ ts: "2026-09-07T10:00:00Z", run: "r", stage: null, cost_usd: 0, ...row }))
+    .join("\n") + "\n";
+}
+
 function storyFront(ws: BuildWorkspace, id: string): Record<string, unknown> {
   const text = readFileSync(join(ws.planDir, "stories", `${id}.md`), "utf8");
   return parseYaml(splitFrontMatter(text).raw) as Record<string, unknown>;
@@ -183,9 +190,9 @@ describe("(c) both bases render, labelled", () => {
       runId: "260907-x", stageId: "04-build", model: null, costUsd: 0, budgetUsd: 1,
       at: "2026-09-07T09:00:00Z", outcomes: [], epics: [],
       widenings: [
-        { story: "S1", basis: "measured", paths: ["src/app/page.tsx"], before: 3, after: 4,
+        { story: "S1", basis: "measured", paths: ["src/app/page.tsx"], before: 3, after: 4, line: 7,
           note: `18 of 21 changed files fell outside the declared touches${MEASURED_NOTE_TAIL}` },
-        { story: "S2", basis: "declared", paths: ["platform/Auth.cs"], before: 2, after: 3,
+        { story: "S2", basis: "declared", paths: ["platform/Auth.cs"], before: 2, after: 3, line: 9,
           note: "the tenancy check lives here too" },
       ],
     });
@@ -204,17 +211,66 @@ describe("(d) a row written before this field existed reads as declared", () => 
     expect(basisOf({ basis: "measured" })).toBe("measured");
   });
 
-  test("a wave-4 row with no basis renders as an operator widening in replay", () => {
-    const rows = wideningRows([
+  test("a wave-4 row with no basis reads as an operator widening", () => {
+    const rows = wideningRows(jsonl([
+      { type: "run.created", actor: "alan", payload: {} },
       {
-        ts: "2026-09-07T10:00:00Z", run: "r", stage: null, type: "story.touches_widened",
-        actor: "alan", cost_usd: 0,
+        type: "story.touches_widened", actor: "alan",
         payload: { story: "S1", paths: ["a.ts"], note: "why", before: ["b.ts"], after: ["b.ts", "a.ts"] },
       },
-    ]);
+    ]));
     expect(rows).toEqual([
-      { story: "S1", basis: "declared", paths: ["a.ts"], before: 1, after: 2, note: "why" },
+      { story: "S1", basis: "declared", paths: ["a.ts"], before: 1, after: 2, note: "why", line: 2 },
     ]);
+  });
+});
+
+describe("the handoff's citation names the line the event is actually on", () => {
+  /**
+   * A `[src: …]` token is an AUDIT citation, and a record that names a line
+   * nothing is on is a record lying in the dangerous direction (AGENTS.md §7).
+   * Two widenings at DIFFERENT known lines, so a hardcoded `:1` cannot pass:
+   * the operator row is physical line 3 and the measured row is line 5.
+   */
+  const LOG = jsonl([
+    { type: "run.created", actor: "alan", payload: {} },
+    { type: "task.started", actor: "facilitator", payload: {} },
+    {
+      type: "story.touches_widened", actor: "alan",
+      payload: { story: "S1", paths: ["platform/Auth.cs"], note: "the tenancy check lives here too",
+        before: ["src/in.ts"], after: ["src/in.ts", "platform/Auth.cs"] },
+    },
+    { type: "task.done", actor: "facilitator", payload: {} },
+    {
+      type: "story.touches_widened", actor: "framework",
+      payload: { story: "S2", paths: ["src/app/page.tsx"], note: "1 of 2 changed files fell outside",
+        before: ["src/in.ts"], after: ["src/in.ts", "src/app/page.tsx"], basis: "measured" },
+    },
+  ]);
+
+  test("wideningRows carries the physical line of each event", () => {
+    expect(wideningRows(LOG).map((row) => [row.story, row.line])).toEqual([["S1", 3], ["S2", 5]]);
+  });
+
+  test("each handoff bullet cites its OWN line, not a constant", () => {
+    const rendered = renderBuildHandoff({
+      runId: "260907-x", stageId: "04-build", model: null, costUsd: 0, budgetUsd: 1,
+      at: "2026-09-07T09:00:00Z", outcomes: [], epics: [],
+      widenings: wideningRows(LOG),
+    });
+    const cited = rendered.split("\n")
+      .filter((line) => line.includes("`touches:`") || line.includes("surface"))
+      .filter((line) => line.includes("[src: events.jsonl:"));
+    expect(cited).toHaveLength(2);
+    expect(cited[0]).toContain("S1's surface was widened by a person (declared)");
+    expect(cited[0]).toContain("[src: events.jsonl:3]");
+    expect(cited[1]).toContain("S2's declared surface was under the work it did (measured)");
+    expect(cited[1]).toContain("[src: events.jsonl:5]");
+  });
+
+  test("a torn line loses itself and nothing else, and the numbering does not shift", () => {
+    const rows = wideningRows(`{"type":"run.created"}\n{not json\n${LOG.split("\n")[2] ?? ""}\n`);
+    expect(rows.map((row) => row.line)).toEqual([3]);
   });
 });
 
