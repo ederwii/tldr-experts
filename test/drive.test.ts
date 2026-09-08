@@ -658,3 +658,23 @@ describe("the can-it-fail check names its instrument, not the declared suite", (
     });
   }
 });
+
+describe("the mandate names the host's own context as the run's costliest instrument", () => {
+  // The host's OWN context is the run's dominant cost, and nothing in the mandate
+  // spoke to it: measured over one week of host sessions on three workspaces — ~$8.5k
+  // at list, 68 % of it Opus — the driver was 600-800-turn sessions re-reading their
+  // whole context every turn, one of them 2.5B cache-read tokens. `--tldr` already
+  // trims what the host WRITES; this line is the only one that tells it what to READ,
+  // so it holds in all four modes, each inside the budget it already had.
+  for (const mode of DRIVE_MODES) {
+    for (const tldr of [false, true]) {
+      const label = `${mode}${tldr ? " --tldr" : ""}`;
+      test(`${label}: names the host's context as the costliest instrument`, () => {
+        const text = renderMandate(mode, VERSION, undefined, tldr);
+        expect(text).toContain("read a sub-agent's outcome from its result file");
+        expect(text.split("\n").length)
+          .toBeLessThanOrEqual(tldr ? MANDATE_TLDR_MAX_LINES : MANDATE_MAX_LINES);
+      });
+    }
+  }
+});

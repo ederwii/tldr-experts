@@ -185,6 +185,21 @@ function roles(): readonly string[] {
   ];
 }
 
+/**
+ * The disciplines, plus the one that is about the host's OWN spending.
+ *
+ * The context rule is the newest bullet and the only one that is not about how a
+ * claim is made. Measured over one week of host sessions on three real workspaces:
+ * ~$8.5k at list, 68 % of it Opus, and the driver was not the work — per-story time
+ * was a 0.6-1.35 h median — it was 600-800-turn host sessions re-reading their whole
+ * context every turn, one workspace alone at 2.5B cache-read tokens. `--tldr` already
+ * trims what the host WRITES and what a sub-agent DELIVERS; nothing told the host what
+ * to READ. It lives here, not in a mode, because the cost does not care who is watching.
+ *
+ * It was paid for, not appended: the negative-case bullet lost a line of wrapping to
+ * the same meaning, and the unattended gate's interrupt paragraph lost the clause that
+ * restated "## Do not stop" — the budget is the point of the budget.
+ */
 function evidence(): readonly string[] {
   return [
     "## Evidence discipline",
@@ -197,9 +212,10 @@ function evidence(): readonly string[] {
     "  file, the API or the database. Your script printing \"ok\" is not proof it landed.",
     "- Ask the remote about the remote: `git ls-remote origin <ref>` for a sha, never a local",
     "  ref that may be days stale. Merged is not deployed, and green locally is not green in CI.",
-    "- State the negative case with its denominator. \"0 of 263 rows, 24 of them eligible\" beats",
-    "  \"it seems broken\".",
+    "- State the negative case with its denominator: \"0 of 263 rows, 24 of them eligible\", not \"broken\".",
     "- Check that the instrument can see the thing before you trust the number it gives you.",
+    "- Your context is the run's costliest instrument: read a sub-agent's outcome from its result file",
+    "  and the ledger, never its transcript; brief each to report in ten lines; never re-read a citation.",
     "- When something contradicts a claim you already made, correct it in place and say you were",
     "  wrong. Early and out loud is the cheap version of that.",
     "",
@@ -445,10 +461,9 @@ function gate(mode: DriveMode): readonly string[] {
       "`refuse` and `sign-with-fixlist` are real verdicts — use them. A note that signs everything",
       "is a rubber stamp the framework will believe.",
       "",
-      "Interrupt me ONLY for a STRICT blocker — a new product decision, a ceiling raise, or work",
-      "outside the declared boundary that nothing else can proceed around — and always as the",
-      "guided question above, never as a bare halt. Everything else you decide, and log.",
-      "Never push — the final merge is mine.",
+      "Interrupt me ONLY for a STRICT blocker as defined above — a new product decision, a ceiling",
+      "raise, or work outside the declared boundary — asked, never as a bare halt. Everything else",
+      "you decide, and log. Never push — the final merge is mine.",
       "",
     ];
   }
