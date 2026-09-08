@@ -93,6 +93,23 @@ import {
  * instead, which is a line on stdout and in the review log, because nothing
  * happened to git.
  *
+ * `notify.sent` and `notify.failed` were added 2026-09-07 (gh #180), with the
+ * owner-declared notify hook (§2.18). They are the only events in this set that record
+ * something happening OUTSIDE the run: one invocation of the command
+ * `.tldrx/workspace.yml` declares under `notify:`, handed one JSON payload on stdin at a
+ * moment a person is needed. `notify.sent` carries the payload's `kind`, the declared
+ * command verbatim, the child's `exit_code` and how long it took; `notify.failed` carries
+ * the `kind`, the command and a `reason` sentence — a non-zero exit with the notifier's own
+ * last line, a timeout, an executable that could not be started, a command that would need
+ * a shell.
+ *
+ * There is no third outcome, and that is the point: a notifier NEVER changes a run's
+ * outcome. Every failure above is written down and dropped, because "the owner was not
+ * told, and here is why" is a fact about the run, and "the chat tool was down so the run
+ * failed" would be the framework making a side channel load-bearing. Both carry
+ * `cost_usd: 0` — a notification spends nothing — and both are appended through
+ * `tryAppend`, so a log that refused the line does not take the run with it either.
+ *
  * `story.base_fastforwarded` was added 2026-08-31, and is the first event in this
  * set that records tldrx MOVING A REF. Design §F.2: a story branch that sits
  * behind its epic tip is fast-forwarded before a developer is dispatched onto it,
@@ -118,6 +135,7 @@ export const EVENT_TYPES = [
   "check.passed", "check.failed",
   "budget.warned", "budget.blocked", "budget.raised", "budget.granted",
   "fact.added", "fact.retired", "fact.superseded", "fact.conflict_raised", "doc.superseded",
+  "notify.sent", "notify.failed",
   "map.refreshed",
   "ticket.synced",
   "error",

@@ -148,7 +148,17 @@ export const WORKSPACE_FILE_HEADER =
   + "#\n"
   + "# Optional, per repo, and never detected — add it yourself under `commands:`:\n"
   + "#   test_fast: \"\"   # the fast subset the Build developer iterates on. NOT a\n"
-  + "#                   # Definition of Done command: the DoD re-runs `test:`.\n";
+  + "#                   # Definition of Done command: the DoD re-runs `test:`.\n"
+  + "#\n"
+  + "# Optional, once for the workspace, and never detected — the command `tldrx run auto`\n"
+  + "# tells a person through (spec \u00a72.18). One JSON payload per event on stdin; run as\n"
+  + "# argv with no shell, exactly like the commands above; a failing notifier is recorded\n"
+  + "# and never changes a run\u0027s outcome. init does not guess it: who gets woken up is\n"
+  + "# your decision.\n"
+  + "#\n"
+  + "# notify:\n"
+  + "#   command: \"bin/notify-owner\"\n"
+  + "#   events: [question.raised, gate.requested, run.failed]   # omitted = every kind\n";
 
 export function renderWorkspaceFile(document: unknown): string {
   return WORKSPACE_FILE_HEADER + stringifyYaml(document);

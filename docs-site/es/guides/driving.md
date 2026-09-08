@@ -61,6 +61,47 @@ pasarse cuando mucho por lo que le toca a una etapa.
 — la pregunta, sus opciones, la recomendación si la hubo, y el único comando que hay que
 teclear — en lugar del bloque de estado de siempre.
 
+## Avisarle a alguien: el hook de notificación
+
+`run auto` se detiene para una persona imprimiendo en **stdout**, y stdout está en una terminal
+que nadie está mirando. Por eso los runs desatendidos se abandonan a favor de los conducidos por
+una sesión — y cambiar un presupuesto medido, un modelo impuesto y stories en paralelo por un
+aviso es un mal trato.
+
+Por eso `.tldrx/workspace.yml` puede declarar **un comando** por el que el run le avisa a una
+persona:
+
+```yaml
+notify:
+  command: "bin/notify-owner"
+  events: [question.raised, gate.requested, run.failed]   # opcional; omitido = todos los tipos
+```
+
+tldrx no nombra ninguna herramienta de chat. Por dónde te llega el aviso es una decisión sobre tu
+vida, no sobre un sistema de build. Lo que el framework sí sabe es *cuándo* hace falta una persona
+y *exactamente qué hay que teclear*.
+
+El comando se parte en argv y se ejecuta directo — nunca a través de un shell, igual que cualquier
+otro comando que declara el workspace — y la carga llega por **stdin** como un solo objeto JSON
+`version: 1`: el tipo, el run, un `summary` de un párrafo escrito para leerse en la pantalla de
+bloqueo, y `command`, la línea exacta a teclear con el id del run ya adentro. Una pregunta abierta
+lleva sus opciones y su recomendación; una compuerta lleva la línea para aprobar; un run terminado
+lleva su código de salida y lo que significa esa familia de códigos.
+
+**Un notificador nunca cambia un run.** Un binario que no está, una salida distinta de cero, un
+cuelgue: cada uno queda anotado como un evento `notify.failed` con su razón, y el bucle sigue con
+el código de salida que ya tenía.
+
+```bash
+tldrx run auto --notify-every 10m --wait-answers 30m
+```
+
+`--notify-every` agrega una carga `status` periódica con lo que imprime `tldrx run status`: un
+latido, que no pide nada. `--wait-answers` es la única bandera que cambia dónde se detiene el
+bucle: en vez de salir con `4` en una pregunta abierta, espera una respuesta y **retoma si la das**,
+y sale con `4` sin cambios cuando el plazo se vence. No se gasta nada mientras espera, y el bucle
+nunca responde su propia pregunta.
+
 ## De noche, sin soltar la revisión
 
 El caso exigente: nadie está viendo, y aun así quieres una revisión adversarial. Dos

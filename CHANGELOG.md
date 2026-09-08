@@ -21,6 +21,48 @@
   each lost a line of wrapping to the same meaning and the unattended gate's interrupt
   paragraph lost the clause that restated "## Do not stop".
 
+### Added
+
+- **A run can now tell a person it needs them, without the framework naming a chat tool.**
+  `tldrx run auto` announced an open question or a gate by exiting `4` and printing a
+  decision card to stdout, and stdout is in a terminal nobody is watching — which is why
+  every run in the week of 2026-09-07 was driven in host mode instead, trading a metered
+  budget, an enforced model and parallel stories for a notification. `.tldrx/workspace.yml`
+  now takes one optional `notify:` block — a `command`, an optional `events:` list, an
+  optional `timeout_s` — and the loop hands that command one `version: 1` JSON object on
+  **stdin** at each moment a person is needed: the open question with its options, its
+  recommendation and the literal `tldrx answer <Qid> "…" --run <id>` line; a gate with the
+  literal approve line; a finished or failed run with its exit code and what that code's
+  family means; a budget warning with both numbers. The command is held to §2.1's rule
+  exactly — split to argv and run directly, never through a shell, a bare metacharacter
+  refused rather than shelled — and the payload never touches the command line, so a
+  question's own title cannot become shell syntax. Which service reaches the owner stays the
+  owner's decision: a built-in integration would be this framework deciding whose product it
+  depends on, which is the same reasoning the drive mandate has always given. `tldrx init`
+  writes the block commented out with a line saying what it is for, the way `test_fast` is
+  written — who gets woken up is not a thing to detect. Schema and payload: spec §2.18.
+  (#180)
+- **A failing notifier is written down, never a refusal.** A command that will not split, a
+  binary that is not there, a non-zero exit, a hang — each becomes a `notify.failed` event
+  carrying the reason, and the run keeps the exit code it already had; a delivered one is
+  `notify.sent` with the kind, the exit code and the duration. Both are `cost_usd: 0` and
+  both join the closed `EVENT_TYPES` enum. "The owner was not told, and here is why" is a
+  fact about the run; "the chat tool was down, so the run failed" would make a side channel
+  load-bearing. (#180)
+- **`tldrx run auto --notify-every <duration>`** sends the declared hook a periodic `status`
+  payload carrying what `tldrx run status` prints. It fires from a timer rather than between
+  iterations on purpose: the period when somebody most wants to know a run is alive is the
+  twenty minutes it is inside one stage. Off by default. (#180)
+- **`tldrx run auto --wait-answers <duration>`** polls the run's question files instead of
+  exiting `4` the moment a stage parks, and resumes if the question is answered — by a
+  person, or by whatever the notify hook reached — then exits `4` with the same lines it
+  always did, after one `question.timeout` notification, when the wait lapses. Nothing is
+  spent while it polls, and the loop never answers its own question: the answer is an
+  ordinary `tldrx answer`. Both flags take `30s`, `10m`, `2h` or a bare number of seconds
+  through one parser, and refuse anything else by name at exit `1`. Without either flag,
+  behaviour is unchanged for every existing user — a question or a gate still exits `4`, the
+  hook has simply already fired with the answer command in it. (#180)
+
 ## 0.11.0 — 2026-09-08
 
 ### Fixed

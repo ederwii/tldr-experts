@@ -7,6 +7,10 @@ import {
 // these rows, and a schema listing a status the producer cannot emit (or missing one it
 // can) is worse than no schema.
 import { PROBE_STATUSES, type ProbeStatus } from "../detect/probeCommands.ts";
+// Same rule, same reason: the kind enum is imported from the leaf that DEFINES the
+// payload, never retyped here. A schema accepting a kind nothing can emit would let an
+// owner subscribe to a notification that never arrives and never says why.
+import { NOTIFY_KINDS, type NotifyKind } from "../notify/payload.ts";
 
 export const WORKSPACE_MODES = ["single", "multi"] as const;
 export type WorkspaceMode = (typeof WORKSPACE_MODES)[number];
@@ -83,6 +87,71 @@ export interface SeedTriageSettings {
   readonly threshold_tokens?: number;
 }
 
+/**
+ * `notify:` — the one command a run may tell a person through (§2.18, gh #180).
+ *
+ * The framework names no chat tool and is not going to (`drive/mandate.ts` says why at
+ * length): every workspace's owner is reachable by something different, and a hard-coded
+ * integration would be the framework deciding whose product it depends on. What it can do
+ * is declare a SEAM — one command, run with exactly the rules §2.1 puts on every other
+ * declared command, handed one `version: 1` JSON object on stdin.
+ *
+ * Additive and absent from everything `tldrx init` writes (init emits it COMMENTED, the
+ * way `test_fast` is): a workspace without the key notifies nothing and behaves exactly
+ * as it did before this key existed.
+ *
+ * `events:` omitted means every kind. An owner who has gone to the trouble of declaring a
+ * command wants to hear about the run; a default that silently subscribed to nothing
+ * would be a configured hook that never fires and never says why.
+ */
+export interface NotifySettings {
+  /** A single argv line, like a `commands:` entry — no shell is opened for it. */
+  readonly command: string;
+  /** Which kinds to deliver. Omitted ⇒ all of `NOTIFY_KINDS`. */
+  readonly events?: readonly NotifyKind[];
+  /** Seconds before one invocation is killed. Omitted ⇒ the built-in default. */
+  readonly timeout_s?: number;
+}
+
+/**
+ * The ONE shape check for a `notify:` block, as a list of issues.
+ *
+ * Two readers, and they must not disagree — the same trap `commandProbeIssues` above was
+ * extracted for. `validateWorkspace` REFUSES a malformed block (the file is wrong and the
+ * owner should be told); `readNotifyDeclaration` (`core/notify/declaration.ts`) treats the
+ * same issues as "no hook declared", so a hand edit can never make the loop spawn
+ * something the schema would have rejected.
+ */
+export function notifyIssues(value: unknown, path: string): readonly ValidationIssue[] {
+  if (!isRecord(value)) return [{ path, message: "expected a mapping" }];
+  const issues: ValidationIssue[] = [];
+  if (typeof value.command !== "string" || value.command.trim() === "") {
+    issues.push({
+      path: `${path}.command`,
+      message: "expected a non-empty command — a `notify:` block with nothing to run is not a hook",
+    });
+  }
+  if (value.events !== undefined) {
+    if (!Array.isArray(value.events)) {
+      issues.push({ path: `${path}.events`, message: `expected a list of ${NOTIFY_KINDS.join(" | ")}` });
+    } else {
+      (value.events as unknown[]).forEach((kind, i) => {
+        if (typeof kind !== "string" || !(NOTIFY_KINDS as readonly string[]).includes(kind)) {
+          issues.push({
+            path: `${path}.events[${String(i)}]`,
+            message: `\`${String(kind)}\` is not a notify kind — the set is ${NOTIFY_KINDS.join(", ")}`,
+          });
+        }
+      });
+    }
+  }
+  const timeout = value.timeout_s;
+  if (timeout !== undefined && (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout <= 0)) {
+    issues.push({ path: `${path}.timeout_s`, message: "must be a positive number of seconds" });
+  }
+  return issues;
+}
+
 /** `stack_packs:` — the one opt-in switch for stack expert packs. Additive; absent means off. */
 export interface StackPacksSettings {
   readonly enabled: boolean;
@@ -104,6 +173,7 @@ export interface Workspace {
   readonly mcp_servers?: readonly string[];
   readonly seed_triage?: SeedTriageSettings;
   readonly stack_packs?: StackPacksSettings;
+  readonly notify?: NotifySettings;
 }
 
 export function validateWorkspace(input: unknown): ValidationResult {
@@ -154,6 +224,7 @@ export function validateWorkspace(input: unknown): ValidationResult {
       issues.push({ path: "stack_packs", message: "expected a mapping" });
     }
   }
+  if (doc.notify !== undefined) issues.push(...notifyIssues(doc.notify, "notify"));
   return result(issues, deprecations);
 }
 
