@@ -125,7 +125,9 @@ function sandbox(): Sandbox {
   // The file each branch carries. `wave-poison` is red in every gate; `wave-docs-poison`
   // is red in the docs build ALONE (#114) — the case that used to reach `main` green.
   const carries: Record<string, string> = { "wave-poison": "poison.txt", "wave-docs-poison": "docs-poison.txt" };
-  for (const branch of ["wave-a", "wave-b", "wave-poison", "wave-docs-poison"]) {
+  // `wave-unreviewed` is the one branch that deliberately carries NO review record (#192):
+  // it is what the gate is aimed at, and what every other branch here is the control for.
+  for (const branch of ["wave-a", "wave-b", "wave-poison", "wave-docs-poison", "wave-unreviewed"]) {
     run(main, "checkout", "-q", "-b", branch, "main");
     writeFileSync(join(main, carries[branch] ?? `${branch}.txt`), `${branch}\n`);
     run(main, "add", "-A");
@@ -133,8 +135,42 @@ function sandbox(): Sandbox {
     run(main, "checkout", "-q", "main");
   }
   const sb: Sandbox = { dir, main, originGit, git: (...a) => run(main, ...a) };
+  // The fixture branches are REVIEWED, because since #192 an unreviewed branch does not
+  // merge — the sandbox has to dogfood the rule for any other test here to reach a gate.
+  for (const branch of ["wave-a", "wave-b", "wave-poison", "wave-docs-poison"]) reviewRecord(sb, branch);
   open.push(sb);
   return sb;
+}
+
+/**
+ * `.review/<branch>.md`, committed ON `branch`, in the shape `merge-wave.sh` accepts (#192):
+ * a verdict on the first line, who reviewed, and the sha they read.
+ *
+ * Returns the sha the record names — the branch head BEFORE this commit, because the record
+ * can only ever name the code the reviewer saw, and committing it moves the head past that.
+ */
+function reviewRecord(
+  sb: Sandbox,
+  branch: string,
+  opts: { verdict?: string; against?: string; who?: string } = {},
+): string {
+  const back = sb.git("rev-parse", "--abbrev-ref", "HEAD");
+  sb.git("checkout", "-q", branch);
+  const against = opts.against ?? sb.git("rev-parse", "HEAD");
+  const path = join(sb.main, ".review", `${branch}.md`);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, [
+    opts.verdict ?? "verdict: merge",
+    `reviewed-by: ${opts.who ?? "fixture reviewer (mid-tier)"}`,
+    `against: ${against}`,
+    "",
+    "No findings.",
+    "",
+  ].join("\n"));
+  sb.git("add", "-A");
+  sb.git("commit", "-q", "-m", `review: ${branch}`);
+  sb.git("checkout", "-q", back);
+  return against;
 }
 
 type Result = { code: number; stdout: string; stderr: string };
@@ -758,6 +794,7 @@ describe("a conflicted merge does not wedge the checkout (#76)", () => {
     writeFileSync(join(sb.main, "contested.txt"), "the branch's version\n");
     sb.git("add", "-A");
     sb.git("commit", "-q", "-m", "wave-conflict work");
+    reviewRecord(sb, "wave-conflict");   // reviewed (#192) — this fixture is about CONFLICTS
     sb.git("checkout", "-q", "main");
     writeFileSync(join(sb.main, "contested.txt"), "main's version\n");
     sb.git("add", "-A");
@@ -1281,6 +1318,7 @@ describe("a wave survives its own script being rewritten mid-run (#117)", () => 
     writeFileSync(path, shrunk);
     sb.git("add", "-A");
     sb.git("commit", "-q", "-m", `${branch} work`);
+    reviewRecord(sb, branch);            // reviewed (#192) — this fixture is about #117
     sb.git("checkout", "-q", "main");
     return path;
   }
@@ -1352,5 +1390,158 @@ describe("a wave survives its own script being rewritten mid-run (#117)", () => 
     // `waveLogs` scans this invocation's private $TMPDIR for `mw-*`, and the snapshot
     // deliberately matches that prefix: a leaked snapshot fails HERE rather than piling up.
     expect(waveLogs(run)).toEqual([]);
+  });
+});
+
+/**
+ * #192 — the pre-merge review was the last invariant still on the honour system.
+ *
+ * Measured over twelve maintenance waves (2026-09-06 → 2026-09-07): 4 of the 12 pre-merge
+ * reviews found a real Important defect the implementer then fixed before the branch merged.
+ * The ONE wave that reviewed *after* merging found one too, and it sat on `main` for ~2 hours,
+ * because the only remedies once a commit is published are a follow-up merge or a revert and
+ * both wait for the next lock window. Nothing in the merge path could tell a reviewed branch
+ * from an unreviewed one, so the failure was silent at the time and invisible afterwards:
+ * `git log` on `main` carried no trace of whether a diff had ever been read by a second agent.
+ *
+ * The record is a FILE on the branch, `.review/<branch>.md`, so it lands in the merge commit's
+ * tree and a later reader of `main` can still ask who reviewed what, against which diff.
+ */
+describe("a branch merges only with a review record on it (#192)", () => {
+  test("no record at all: the wave refuses, exit 10, and says what to write", async () => {
+    const sb = sandbox();
+    const before = originLog(sb);
+    const run = invoke(sb, "wave-unreviewed");
+    const r = await run.done;
+    // Pre-fix, measured: code 0, "OK … pushed" — an unreviewed branch merged like any other.
+    expectExit(run, r, 10);
+    expect(r.stdout).toContain("FAIL no review record");
+    expect(r.stdout).toContain(".review/wave-unreviewed.md");
+    // The remedy travels with the refusal: nobody should have to read merge-wave.sh to obey it.
+    expect(r.stdout).toContain("verdict: merge");
+    expect(r.stdout).toContain("reviewed-by:");
+    expect(r.stdout).toContain("against:");
+    expect(originLog(sb)).toEqual(before);
+    expect(sb.git("status", "--porcelain")).toBe("");
+    expect(existsSync(lockDir(sb))).toBe(false);
+  });
+
+  test("`verdict: fixes required` refuses — the review is a verdict, not a checkbox", async () => {
+    const sb = sandbox();
+    const before = originLog(sb);
+    reviewRecord(sb, "wave-unreviewed", { verdict: "verdict: fixes required" });
+    const run = invoke(sb, "wave-unreviewed");
+    const r = await run.done;
+    expectExit(run, r, 10);
+    expect(r.stdout).toContain("FAIL review verdict");
+    expect(r.stdout).toContain("fixes required");            // quoted back, verbatim
+    expect(originLog(sb)).toEqual(before);
+  });
+
+  test("a record written against a sha the branch has moved past refuses, naming BOTH shas", async () => {
+    const sb = sandbox();
+    const before = originLog(sb);
+    const reviewed = reviewRecord(sb, "wave-unreviewed");
+    // The exact hole the honour system already allowed: a review of a different diff.
+    sb.git("checkout", "-q", "wave-unreviewed");
+    writeFileSync(join(sb.main, "after-the-review.ts"), "export const sneaked = 1;\n");
+    sb.git("add", "-A");
+    sb.git("commit", "-q", "-m", "code the reviewer never saw");
+    const head = sb.git("rev-parse", "HEAD");
+    sb.git("checkout", "-q", "main");
+
+    const run = invoke(sb, "wave-unreviewed");
+    const r = await run.done;
+    expectExit(run, r, 10);
+    expect(r.stdout).toContain("FAIL stale review record");
+    expect(r.stdout).toContain(reviewed.slice(0, 7));        // what was reviewed
+    expect(r.stdout).toContain(head.slice(0, 7));            // what would have been merged
+    expect(r.stdout).toContain("after-the-review.ts");       // and what changed in between
+    expect(originLog(sb)).toEqual(before);
+  });
+
+  test("a rebased branch is a different diff, and its record no longer holds", async () => {
+    const sb = sandbox();
+    const reviewed = reviewRecord(sb, "wave-unreviewed");
+    // `main` moves under the branch and the branch is rebased onto it — AGENTS.md §2's own
+    // instruction for that case, which rewrites the very commit the reviewer read.
+    writeFileSync(join(sb.main, "somebody-elses-work.ts"), "export const theirs = 1;\n");
+    sb.git("add", "-A");
+    sb.git("commit", "-q", "-m", "main moved while the branch waited");
+    sb.git("push", "-q", "origin", "main");
+    const before = originLog(sb);
+    sb.git("rebase", "-q", "main", "wave-unreviewed");
+    const head = sb.git("rev-parse", "wave-unreviewed");
+    expect(head).not.toBe(reviewed);
+    sb.git("checkout", "-q", "main");
+
+    const run = invoke(sb, "wave-unreviewed");
+    const r = await run.done;
+    expectExit(run, r, 10);
+    expect(r.stdout).toContain("FAIL stale review record");
+    expect(r.stdout).toContain("not an ancestor");
+    expect(r.stdout).toContain(reviewed.slice(0, 7));
+    expect(r.stdout).toContain(head.slice(0, 7));
+    expect(originLog(sb)).toEqual(before);
+  });
+
+  test("a record that cannot say WHO reviewed, or WHICH diff, is not a record", async () => {
+    const missingWho = sandbox();
+    reviewRecord(missingWho, "wave-unreviewed", { who: "" });
+    const a = invoke(missingWho, "wave-unreviewed");
+    const ra = await a.done;
+    expectExit(a, ra, 10);
+    expect(ra.stdout).toContain("FAIL review record incomplete");
+    expect(ra.stdout).toContain("reviewed-by:");
+
+    const missingSha = sandbox();
+    // A verdict with nobody and nothing behind it is the honour system with a file in it.
+    missingSha.git("checkout", "-q", "wave-unreviewed");
+    mkdirSync(join(missingSha.main, ".review"), { recursive: true });
+    writeFileSync(join(missingSha.main, ".review", "wave-unreviewed.md"),
+      "verdict: merge\nreviewed-by: a reviewer who noted no sha\n");
+    missingSha.git("add", "-A");
+    missingSha.git("commit", "-q", "-m", "review: no sha");
+    missingSha.git("checkout", "-q", "main");
+    const b = invoke(missingSha, "wave-unreviewed");
+    const rb = await b.done;
+    expectExit(b, rb, 10);
+    expect(rb.stdout).toContain("FAIL review record incomplete");
+    expect(rb.stdout).toContain("against:");
+  });
+
+  test("a valid record merges, so the gate is not simply refusing everything", async () => {
+    const sb = sandbox();
+    reviewRecord(sb, "wave-unreviewed");
+    const run = invoke(sb, "wave-unreviewed");
+    const r = await run.done;
+    expectExit(run, r, 0);
+    expect(r.stdout).toContain("pushed");
+    expect(originLog(sb)[0]).toBe("merge wave-unreviewed");
+  });
+
+  test("and the record lands on `main`, where a later reader can still ask who reviewed what", async () => {
+    const sb = sandbox();
+    const reviewed = reviewRecord(sb, "wave-unreviewed");
+    expect((await invoke(sb, "wave-unreviewed").done).code).toBe(0);
+    // Read out of the PUBLISHED history, not the working tree — the point of a file over a
+    // trailer is that the record is in the merge commit's tree on origin/main.
+    const onMain = execFileSync("git", ["--git-dir", sb.originGit, "cat-file", "blob",
+      "main:.review/wave-unreviewed.md"], { encoding: "utf8" });
+    expect(onMain).toContain("verdict: merge");
+    expect(onMain).toContain("reviewed-by:");
+    expect(onMain).toContain(reviewed);
+  });
+
+  test("the record commit itself is not what makes the record stale", async () => {
+    const sb = sandbox();
+    // A record can only ever name the sha the reviewer READ, and committing it moves the
+    // branch head past that sha — so a literal "named sha == branch head" would be
+    // unsatisfiable. What must not have changed is the CODE, and that is what is checked.
+    const reviewed = reviewRecord(sb, "wave-unreviewed");
+    expect(sb.git("rev-parse", "wave-unreviewed")).not.toBe(reviewed);
+    const run = invoke(sb, "wave-unreviewed");
+    const r = await run.done;
+    expectExit(run, r, 0);
   });
 });

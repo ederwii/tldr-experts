@@ -36,6 +36,9 @@ copy of it, and the sub-agent reads `AGENTS.md` itself as its first act.
 >
 > **Commit** with the repo's trailers, then **STOP. Do not merge.** A separate reviewer reads
 > your branch before it merges, and you will be resumed with either a fix list or `merge`.
+> On `merge`, your last commit is the review record `.review/<branch>.md` — shape and refusals
+> in `AGENTS.md` §2 — written from the reviewer's name and the sha it read, which come with the
+> resume message. Without it the wave refuses your branch and merges nothing.
 >
 > **Report, under 300 words**: what reproduced and how it was measured, the red output
 > (trimmed), the fix in a sentence, each gate's exit code, the test delta, branch and head sha,
@@ -71,5 +74,7 @@ copy of it, and the sub-agent reads `AGENTS.md` itself as its first act.
 > If a golden fixture changed bytes, that IS a behaviour change (§12): either the commit says
 > so deliberately, or it is an Important finding.
 >
-> **Report, under 200 words**: a verdict line (`merge` or `fixes required`), then the findings
-> in rank order. Do not edit any file.
+> **Report, under 200 words**: a verdict line (`merge` or `fixes required`), the sha you
+> reviewed (`git rev-parse <branch>`) and your own name/model, then the findings in rank order.
+> Those three lines become the branch's review record (`AGENTS.md` §2); the implementer commits
+> it, so do not edit any file yourself.

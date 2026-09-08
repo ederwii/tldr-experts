@@ -97,6 +97,14 @@ The reviewer reads the branch diff against `AGENTS.md` §1, §7 and §8, and rep
 The implementer is then resumed — `SendMessage` to its name from `ListAgents` — with either
 the fix list or the single word `merge`.
 
+**`merge` is not enough on its own: the verdict has to be RECORDED on the branch.**
+`.review/<branch>.md` — its required shape, and every way `scripts/merge-wave.sh` refuses over
+it (missing, `verdict: fixes required`, incomplete, or stale against a moved branch head), are
+`AGENTS.md` §2. Send the reviewer's name and the sha it read along with the word `merge`, and
+say who commits the file; a branch without a valid record is refused with **exit 10**, having
+merged nothing. Re-review after a rebase — a rebased branch is a different diff, and §2's
+staleness check says so.
+
 **Why this step is not optional.** Over twelve waves, pre-merge review found a real Important
 defect in **4 of them** — checkable from `git log`: `2a6413f` (fixing `cbd5c4b`), and the
 pre-merge fixes that landed inside `28a987e`, `674049a` and `103ff96`. The one time review ran *after* the merge, the defect it found sat on
@@ -105,8 +113,10 @@ pre-merge fixes that landed inside `28a987e`, `674049a` and `103ff96`. The one t
 ## 4. Merge and verify
 
 - `scripts/merge-wave.sh <branch> "<merge message>"` — **two arguments**, run from the shared
-  checkout only (§2). It takes a lock; a second invocation waits rather than racing. If it
-  refuses, read WHY before doing anything else.
+  checkout only (§2). It takes a lock; a second invocation waits rather than racing. Before it
+  merges anything it also refuses a branch with no valid review record from §3 (§2 again, exit
+  10) — that refusal prints the exact file and lines it wants. If it refuses, read WHY before
+  doing anything else.
 - Long waits (the lock, a CI watch, a running suite) happen in bounded foreground loops inside
   your turn. Ending the turn to "wait" strands the work — nothing wakes you.
 - CI per `AGENTS.md` §4, all of it: an UNFILTERED run list matched on `headSha` yourself
@@ -170,5 +180,5 @@ puente, se detiene y pregunta en la terminal. No pregunta nada que pueda medir.
 
 **Cómo detenerlo**: respondé "parar" a cualquier pregunta, o interrumpí la sesión. Un ciclo
 detenido no deja nada a medias en `main`: los sub-agentes tienen la instrucción de parar antes
-de mergear (todavía no es un bloqueo técnico — ver #192), y un merge wave interrumpido se
-deshace solo.
+de mergear —y desde #192 también es un bloqueo técnico, porque una rama sin registro de
+revisión no mergea—, y un merge wave interrumpido se deshace solo.
