@@ -192,3 +192,70 @@ describe("every rule the skill cites resolves to a real heading", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+/**
+ * The two facts a maintainer session gets WRONG on its own, both measured on 2026-09-07:
+ *
+ *   1. A fresh reviewer, told only that it "may run tests", ran the whole suite on its own
+ *      initiative. The full suite (4,200 tests, ~10 min) then ran THREE times in series for
+ *      one wave — implementer (§3 requires it), reviewer, and `merge-wave.sh` (by design) —
+ *      and the reviewer's run verified nothing the wave would not re-verify on the MERGED
+ *      tree. Ten minutes of pure duplication per wave, so the brief has to say the negative
+ *      out loud: targeted files, never the whole suite.
+ *   2. The review-record path is built from the branch name VERBATIM, so a slash in the
+ *      branch is a directory. `.review/<branch>.md` for `fix/x` is `.review/fix/x.md` — the
+ *      gate's first real refusal in the wild, and five minutes to read.
+ *
+ * These assert the SENTENCES, because a brief is only as good as what it actually says: an
+ * instruction the reviewer never reads cannot change what the reviewer runs.
+ */
+describe("the reviewer is told to run targeted tests, never the full suite", () => {
+  const briefs = skillFiles().find((f) => f.rel.endsWith("sub-agent-briefs.md"));
+
+  test("references/sub-agent-briefs.md exists", () => {
+    expect(briefs, ".claude/skills/maintain/references/sub-agent-briefs.md is missing").toBeDefined();
+  });
+
+  test("the reviewer brief forbids the full `bun test` in so many words", () => {
+    const text = briefs?.text ?? "";
+    expect(
+      text.includes("never the full `bun test`"),
+      "the reviewer brief does not say `never the full `bun test``, so a reviewer will run it again:\n" +
+        "the wave re-runs every gate on the merged tree (AGENTS.md §3)",
+    ).toBe(true);
+  });
+
+  test("the reviewer brief says WHICH tests to run instead", () => {
+    const text = briefs?.text ?? "";
+    expect(
+      text.includes("test files that cover the diff"),
+      "the reviewer brief forbids the full suite without naming the alternative — a bare prohibition leaves the reviewer with no instruction",
+    ).toBe(true);
+  });
+
+  test("SKILL.md §3 states the same rule once, citing the brief", () => {
+    const text = existsSync(SKILL_MD) ? readFileSync(SKILL_MD, "utf8") : "";
+    expect(
+      text.includes("never the full `bun test`"),
+      "SKILL.md does not carry the one-liner — the rule lives only in the brief, where the workflow reader never sees it",
+    ).toBe(true);
+  });
+});
+
+describe("the verbatim-branch-name rule for the review record is written down", () => {
+  test("AGENTS.md §2 says a slash in the branch name is a directory", () => {
+    const agents = readFileSync(join(FRAMEWORK_ROOT, "AGENTS.md"), "utf8");
+    expect(
+      agents.includes("a slash in the branch name is a directory"),
+      "AGENTS.md §2 — the canonical rule file — does not say it, so nowhere does",
+    ).toBe(true);
+  });
+
+  test("SKILL.md points at the verbatim branch name and cites §2 for the rest", () => {
+    const text = existsSync(SKILL_MD) ? readFileSync(SKILL_MD, "utf8") : "";
+    expect(
+      text.includes("branch name verbatim"),
+      "SKILL.md never warns that the record path takes the branch name verbatim",
+    ).toBe(true);
+  });
+});

@@ -1,16 +1,22 @@
 # Releasing tldr-experts
 
-The rule is mechanical and enforced three times: by `scripts/release.sh` (does it), by the
-Claude Code hook `scripts/release-gate-hook.sh` (denies `git tag` / `git push … vX.Y.Z` /
-`npm publish` unless `scripts/release-check.sh` passes), and by `publish.yml`, which runs
-`release-check.sh --ci` — the file checks (1–3) only, because 4 and 5 are local-path checks —
-and re-runs typecheck, tests and build as its own steps.
+The rule is mechanical and enforced at three points, each doing something the others cannot:
+`scripts/release.sh` runs the full local gate before anything is pushed; the Claude Code hook
+`scripts/release-gate-hook.sh` denies `git tag` / `git push … vX.Y.Z` / `npm publish` unless
+`scripts/release-check.sh` passes; and `publish.yml` runs `release-check.sh --ci` — the file
+checks (1–3) only, because 4 and 5 are local-path checks — plus the tag-equals-`package.json`
+check and the already-on-the-registry check. `publish.yml` does NOT re-run typecheck, tests or
+build: it REFUSES to publish unless the `ci` workflow has a successful run for the same sha,
+which is the same evidence without a third computation of it. A `cancelled` ci run (ci cancels
+a run superseded by a later push on the same ref) fails publish by name, with the remedy —
+which is also why **merges are frozen while a release is in flight**.
 
 ## What a release is
 
 A version is a **tag on main** (`vX.Y.Z`). The tag push triggers `.github/workflows/publish.yml`,
-which runs typecheck, tests, build, `release-check.sh --ci`, verifies the tag equals
-`package.json`, and publishes through npm **trusted publishing** (OIDC — no tokens, no OTP).
+which waits for the `ci` workflow to be green for that sha, then runs `release-check.sh --ci`,
+verifies the tag equals `package.json`, and publishes through npm **trusted publishing**
+(OIDC — no tokens, no OTP).
 Package name `tldr-experts`; it installs the `tldrx` and `tldr-experts` commands.
 
 ## Before cutting one — what must be true (release-check.sh)

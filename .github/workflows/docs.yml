@@ -23,6 +23,10 @@ on:
     paths:
       - "docs-site/**"
       - "CHANGELOG.md"
+      # docs-site/scripts/gen-cli.ts GENERATES reference/cli-flags.md and cli.md from the
+      # help registry, so a helpText-only change used to deploy nothing and leave the
+      # published CLI reference showing the previous surface (measured 2026-09-08).
+      - "src/cli/helpText.ts"
       - ".github/workflows/docs.yml"
       # The demo page is rendered from these on every deploy — see the note above.
       - "src/core/dashboard/**"

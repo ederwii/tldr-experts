@@ -57,6 +57,11 @@ sells: measured over asserted, refused over guessed, named over silent.
   against: <sha the reviewer read>
   ```
 
+  The path is built from the branch name VERBATIM, so
+  **a slash in the branch name is a directory**: `fix/x` wants `.review/fix/x.md`, not
+  `.review/fix-x.md` — measured on the gate's first refusal in the wild, which cost five
+  minutes to read.
+
   `merge-wave.sh` refuses with **exit 10** — its own code, because that script's exit table is
   its own namespace and `2` there is already "merge conflict"; the CLI's refusal families in
   `src/cli/exitCodes.ts` (§7) do not reach it — when the file is missing or empty, when the verdict is

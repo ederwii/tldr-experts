@@ -74,6 +74,15 @@ copy of it, and the sub-agent reads `AGENTS.md` itself as its first act.
 > If a golden fixture changed bytes, that IS a behaviour change (§12): either the commit says
 > so deliberately, or it is an Important finding.
 >
+> **What to RUN**: only the test files that cover the diff — name them from `git diff --stat`
+> and run those paths — plus `bun run typecheck`. **never the full `bun test`.** The wave
+> re-runs every gate on the MERGED tree (`AGENTS.md` §3), so a reviewer's full run verifies
+> nothing the wave will not, on a tree that is not the one being merged. Measured on one wave:
+> the 4,200-test suite ran three times in series — implementer, reviewer, wave — at ~10 min
+> each, and only the reviewer's was avoidable. If a targeted run is not enough to settle a
+> finding, that is a `PLAUSIBLE` finding naming what you would run, not a licence to run
+> everything.
+>
 > **Report, under 200 words**: a verdict line (`merge` or `fixes required`), the sha you
 > reviewed (`git rev-parse <branch>`) and your own name/model, then the findings in rank order.
 > Those three lines become the branch's review record (`AGENTS.md` §2); the implementer commits

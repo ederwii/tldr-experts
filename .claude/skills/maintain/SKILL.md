@@ -97,12 +97,17 @@ The reviewer reads the branch diff against `AGENTS.md` §1, §7 and §8, and rep
 The implementer is then resumed — `SendMessage` to its name from `ListAgents` — with either
 the fix list or the single word `merge`.
 
+The reviewer runs **only the test files that cover the diff**, plus `bun run typecheck` —
+**never the full `bun test`** (the reviewer brief says why: the wave re-runs every gate on the
+merged tree, so a reviewer's full run costs ~10 min and verifies nothing the wave will not).
+
 **`merge` is not enough on its own: the verdict has to be RECORDED on the branch.**
 `.review/<branch>.md` — its required shape, and every way `scripts/merge-wave.sh` refuses over
 it (missing, `verdict: fixes required`, incomplete, or stale against a moved branch head), are
 `AGENTS.md` §2. Send the reviewer's name and the sha it read along with the word `merge`, and
 say who commits the file; a branch without a valid record is refused with **exit 10**, having
-merged nothing. Re-review after a rebase — a rebased branch is a different diff, and §2's
+merged nothing. The path takes the **branch name verbatim**, so a slash in the branch
+is a directory: `fix/x` wants `.review/fix/x.md`, not `.review/fix-x.md` (§2). Re-review after a rebase — a rebased branch is a different diff, and §2's
 staleness check says so.
 
 **Why this step is not optional.** Over twelve waves, pre-merge review found a real Important

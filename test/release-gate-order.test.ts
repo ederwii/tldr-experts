@@ -285,3 +285,62 @@ describe("--pre-push re-states the sync check, it does not drop it", () => {
     expect(gateRuns(sb)).toEqual([]);
   });
 });
+
+/**
+ * `publish.yml` no longer re-runs the suite (owner decision, 2026-09-08). It ran typecheck,
+ * tests and build a THIRD time on a sha `ci` had already proved green — measured ~6.5 min a
+ * publish, ~14 publishes a week, ~87 min/week of runner time for an answer the repo already
+ * had. The dependency is now explicit instead: publish refuses unless the `ci` workflow has a
+ * SUCCESSFUL run for `github.sha`.
+ *
+ * The gate is queried through the REST API with `head_sha`, never `gh run list --commit`,
+ * which returns `[]` for minutes while the runs demonstrably exist (`AGENTS.md` §4). And
+ * `cancelled` is a NAMED outcome, not a silent one: `ci.yml` cancels superseded runs on a ref,
+ * so a release commit whose run lost a race must fail loudly with the remedy rather than
+ * publish on a sha nothing verified.
+ *
+ * Reads the workflow file; spawns nothing (no `test/machine-load.test.ts` row of its own).
+ */
+describe("publish.yml depends on ci instead of re-running the gates", () => {
+  const publish = readFileSync(
+    join(import.meta.dir, "..", ".github", "workflows", "publish.yml"), "utf8",
+  );
+  const steps = publish.split(/^jobs:$/m)[1] ?? "";
+
+  test("it runs no `bun test` step of its own", () => {
+    expect(
+      /^\s*-?\s*(?:run:\s*)?bun test\s*$/m.test(steps),
+      "publish.yml still runs `bun test` — a third run of the same gates on the same sha:\n" + steps,
+    ).toBe(false);
+  });
+
+  test("it runs no `bun run typecheck` and no `bun run build` step of its own", () => {
+    const again = [...steps.matchAll(/^\s*-\s*run:\s*(bun run (?:typecheck|build))\s*$/gm)]
+      .map((m) => m[1] ?? "");
+    expect(again, "publish.yml re-runs a gate ci already ran for this sha").toEqual([]);
+  });
+
+  test("it gates on a successful ci run for this exact sha", () => {
+    expect(publish, "publish.yml has no step named for the ci gate")
+      .toContain("ci must be green for this sha");
+    expect(
+      publish.includes("actions/workflows/ci.yml/runs?head_sha=${{ github.sha }}"),
+      "publish.yml does not query ci's runs by head_sha — `gh run list --commit` lies (AGENTS.md §4)",
+    ).toBe(true);
+    expect(publish, "the job cannot read the ci run without `actions: read`").toContain("actions: read");
+  });
+
+  test("a cancelled ci run is named, not treated as green", () => {
+    expect(
+      publish.includes("cancelled"),
+      "publish.yml never mentions `cancelled`, yet ci.yml cancels superseded runs — a release commit can lose that race",
+    ).toBe(true);
+  });
+
+  test("the checks that only publish can do are still there", () => {
+    expect(publish).toContain("release-check.sh --ci");
+    expect(publish).toContain("npm publish --access public");
+    expect(publish).toContain("already published");
+    expect(publish).toContain("id-token: write");
+  });
+});
