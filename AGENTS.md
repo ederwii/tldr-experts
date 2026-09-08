@@ -57,8 +57,9 @@ sells: measured over asserted, refused over guessed, named over silent.
   against: <sha the reviewer read>
   ```
 
-  `merge-wave.sh` refuses with **exit 2** — same family as the other "this branch is not
-  mergeable as it stands" refusal — when the file is missing or empty, when the verdict is
+  `merge-wave.sh` refuses with **exit 10** — its own code, because that script's exit table is
+  its own namespace and `2` there is already "merge conflict"; the CLI's refusal families in
+  `src/cli/exitCodes.ts` (§7) do not reach it — when the file is missing or empty, when the verdict is
   anything but `merge`, when either other line is absent, or when the record is STALE: the
   named sha must be an ancestor of the branch head with no non-`.review/` path changed since,
   and the refusal names both shas. A stale record refuses rather than warns, because a review

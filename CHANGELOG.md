@@ -55,8 +55,10 @@
   with no path outside `.review/` changed since — because a record can only ever name the commit
   the reviewer READ, and committing the record moves the head past exactly that sha, so a literal
   sha-equals-head rule would be unsatisfiable by construction. A rebase does invalidate a record,
-  correctly: it is a different diff. The exit code is **2**, the family that already carries "this
-  branch is not mergeable as it stands", and every refusal prints the file path and the three
+  correctly: it is a different diff. The exit code is **10**, a new one: that script's table is
+  its own namespace with one code per condition, `2` there is already "merge conflict", and the
+  CLI refusal families in `src/cli/exitCodes.ts` — where 2 IS the gate refusal — do not reach a
+  shell script that never imports them. Every refusal prints the file path and the three
   lines it wants, so a session that trips the gate never has to read the script to satisfy it.
   There is **no escape hatch** — no flag, no env var — on the issue's own argument that a
   documented one is a hole the moment it exists. Scoped to the MERGE PATH alone:

@@ -101,7 +101,7 @@ the fix list or the single word `merge`.
 `.review/<branch>.md` — its required shape, and every way `scripts/merge-wave.sh` refuses over
 it (missing, `verdict: fixes required`, incomplete, or stale against a moved branch head), are
 `AGENTS.md` §2. Send the reviewer's name and the sha it read along with the word `merge`, and
-say who commits the file; a branch without a valid record is refused with **exit 2**, having
+say who commits the file; a branch without a valid record is refused with **exit 10**, having
 merged nothing. Re-review after a rebase — a rebased branch is a different diff, and §2's
 staleness check says so.
 
@@ -115,7 +115,7 @@ pre-merge fixes that landed inside `28a987e`, `674049a` and `103ff96`. The one t
 - `scripts/merge-wave.sh <branch> "<merge message>"` — **two arguments**, run from the shared
   checkout only (§2). It takes a lock; a second invocation waits rather than racing. Before it
   merges anything it also refuses a branch with no valid review record from §3 (§2 again, exit
-  2) — that refusal prints the exact file and lines it wants. If it refuses, read WHY before
+  10) — that refusal prints the exact file and lines it wants. If it refuses, read WHY before
   doing anything else.
 - Long waits (the lock, a CI watch, a running suite) happen in bounded foreground loops inside
   your turn. Ending the turn to "wait" strands the work — nothing wakes you.

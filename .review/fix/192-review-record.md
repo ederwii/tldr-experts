@@ -7,7 +7,7 @@ against: not yet reviewed
 This file is the branch's own review record, in the shape `scripts/merge-wave.sh` now asserts
 (`AGENTS.md` §2). It is deliberately NOT mergeable as it stands: the verdict, the reviewer and
 the sha they read are the reviewer's to supply, and until they are written here the wave refuses
-this branch with exit 2 — which is the change dogfooding itself.
+this branch with exit 10 — which is the change dogfooding itself.
 
 When the review lands, the first three lines become:
 

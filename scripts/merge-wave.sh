@@ -25,12 +25,15 @@
 #      on every path that does not push (signal, red gate, failed push), and the preamble
 #      REFUSES to start on a `main` that is ahead of origin/main, naming the commits.
 #
-# Exit codes: 1 dirty tree · 2 merge conflict, or a branch with no usable review record
-#             (#192 — both are "this branch is not mergeable as it stands") · 3 red gate · 4 push failed
+# Exit codes: 1 dirty tree · 2 merge conflict · 3 red gate · 4 push failed
 #             5 HEAD moved during the gates · 6 gave up waiting for the lock
 #             7 the gated commit is not a fast-forward of origin/main
 #             8 unpushed, ungated commits were already sitting on main
 #             9 could not snapshot this script before running it
+#             10 no usable review record on the branch (#192)
+# One code per condition, deliberately: this table is its own namespace and has nothing to do
+# with `src/cli/exitCodes.ts`'s families (where 2 is a gate refusal). Here 2 is already "merge
+# conflict", so the review refusal took the next free code rather than making 2 ambiguous.
 set -u
 
 # --- run from a SNAPSHOT of this file, never from the file itself (#117) ------
@@ -236,19 +239,19 @@ if BHEAD="$(git rev-parse --verify -q "$B^{commit}")"; then
   WHO="$(printf '%s\n' "$REC" | sed -n 's/^[[:space:]]*[Rr]eviewed-[Bb]y:[[:space:]]*//p' | sed -n 1p | tr -d '\r')"
   AGAINST="$(printf '%s\n' "$REC" | sed -n 's/^[[:space:]]*[Aa]gainst:[[:space:]]*//p' | sed -n 1p | tr -d '[:space:]')"
   if [ -z "$REC" ]; then
-    echo "FAIL no review record: $REVIEW is not on $B (or is empty) — nothing merged. Merging is gated on a review a second agent actually did (#192). $SHAPE"; exit 2
+    echo "FAIL no review record: $REVIEW is not on $B (or is empty) — nothing merged. Merging is gated on a review a second agent actually did (#192). $SHAPE"; exit 10
   fi
   if [ "$VERDICT" != "verdict: merge" ]; then
-    echo "FAIL review verdict: $REVIEW says '$RAW_VERDICT' — only 'verdict: merge' merges, and nothing merged. Fix what the review found, have it re-reviewed, and update the record. $SHAPE"; exit 2
+    echo "FAIL review verdict: $REVIEW says '$RAW_VERDICT' — only 'verdict: merge' merges, and nothing merged. Fix what the review found, have it re-reviewed, and update the record. $SHAPE"; exit 10
   fi
   if [ -z "$WHO" ]; then
-    echo "FAIL review record incomplete: $REVIEW has no 'reviewed-by:' line, so the record cannot say who reviewed it — nothing merged. $SHAPE"; exit 2
+    echo "FAIL review record incomplete: $REVIEW has no 'reviewed-by:' line, so the record cannot say who reviewed it — nothing merged. $SHAPE"; exit 10
   fi
   if [ -z "$AGAINST" ]; then
-    echo "FAIL review record incomplete: $REVIEW has no 'against:' line, so the record cannot say WHICH diff was reviewed — nothing merged. $SHAPE"; exit 2
+    echo "FAIL review record incomplete: $REVIEW has no 'against:' line, so the record cannot say WHICH diff was reviewed — nothing merged. $SHAPE"; exit 10
   fi
   if ! REVIEWED="$(git rev-parse --verify -q "$AGAINST^{commit}")"; then
-    echo "FAIL stale review record: $REVIEW names '$AGAINST', which is not a commit in this repository; $B is at $(git rev-parse --short "$BHEAD") — nothing merged. $SHAPE"; exit 2
+    echo "FAIL stale review record: $REVIEW names '$AGAINST', which is not a commit in this repository; $B is at $(git rev-parse --short "$BHEAD") — nothing merged. $SHAPE"; exit 10
   fi
   # A review names the sha the reviewer READ, and committing the record moves the branch head
   # past exactly that sha — so "the named sha IS the head" is unsatisfiable by construction.
@@ -257,11 +260,11 @@ if BHEAD="$(git rev-parse --verify -q "$B^{commit}")"; then
   # different diff, and that is the hole this gate exists to close.
   STALE="A review of a different diff is not a review of this one. Re-review $B at $(git rev-parse --short "$BHEAD") and update 'against:' — nothing merged."
   if ! git merge-base --is-ancestor "$REVIEWED" "$BHEAD" 2>/dev/null; then
-    echo "FAIL stale review record: $REVIEW was reviewed against $(git rev-parse --short "$REVIEWED"), which is not an ancestor of $B at $(git rev-parse --short "$BHEAD") — the branch was rebased or amended since the review. $STALE"; exit 2
+    echo "FAIL stale review record: $REVIEW was reviewed against $(git rev-parse --short "$REVIEWED"), which is not an ancestor of $B at $(git rev-parse --short "$BHEAD") — the branch was rebased or amended since the review. $STALE"; exit 10
   fi
   MOVED="$(git diff --name-only "$REVIEWED" "$BHEAD" -- ':(exclude).review' 2>/dev/null | tr '\n' ' ' | cut -c1-200)"
   if [ -n "$MOVED" ]; then
-    echo "FAIL stale review record: $REVIEW was reviewed against $(git rev-parse --short "$REVIEWED"), but $B is at $(git rev-parse --short "$BHEAD") and the code changed in between: ${MOVED}— $STALE"; exit 2
+    echo "FAIL stale review record: $REVIEW was reviewed against $(git rev-parse --short "$REVIEWED"), but $B is at $(git rev-parse --short "$BHEAD") and the code changed in between: ${MOVED}— $STALE"; exit 10
   fi
 fi
 PRE="$(git rev-parse HEAD)"

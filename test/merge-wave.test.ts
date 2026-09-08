@@ -1408,13 +1408,13 @@ describe("a wave survives its own script being rewritten mid-run (#117)", () => 
  * tree and a later reader of `main` can still ask who reviewed what, against which diff.
  */
 describe("a branch merges only with a review record on it (#192)", () => {
-  test("no record at all: the wave refuses, exit 2, and says what to write", async () => {
+  test("no record at all: the wave refuses, exit 10, and says what to write", async () => {
     const sb = sandbox();
     const before = originLog(sb);
     const run = invoke(sb, "wave-unreviewed");
     const r = await run.done;
     // Pre-fix, measured: code 0, "OK … pushed" — an unreviewed branch merged like any other.
-    expectExit(run, r, 2);
+    expectExit(run, r, 10);
     expect(r.stdout).toContain("FAIL no review record");
     expect(r.stdout).toContain(".review/wave-unreviewed.md");
     // The remedy travels with the refusal: nobody should have to read merge-wave.sh to obey it.
@@ -1432,7 +1432,7 @@ describe("a branch merges only with a review record on it (#192)", () => {
     reviewRecord(sb, "wave-unreviewed", { verdict: "verdict: fixes required" });
     const run = invoke(sb, "wave-unreviewed");
     const r = await run.done;
-    expectExit(run, r, 2);
+    expectExit(run, r, 10);
     expect(r.stdout).toContain("FAIL review verdict");
     expect(r.stdout).toContain("fixes required");            // quoted back, verbatim
     expect(originLog(sb)).toEqual(before);
@@ -1452,7 +1452,7 @@ describe("a branch merges only with a review record on it (#192)", () => {
 
     const run = invoke(sb, "wave-unreviewed");
     const r = await run.done;
-    expectExit(run, r, 2);
+    expectExit(run, r, 10);
     expect(r.stdout).toContain("FAIL stale review record");
     expect(r.stdout).toContain(reviewed.slice(0, 7));        // what was reviewed
     expect(r.stdout).toContain(head.slice(0, 7));            // what would have been merged
@@ -1477,7 +1477,7 @@ describe("a branch merges only with a review record on it (#192)", () => {
 
     const run = invoke(sb, "wave-unreviewed");
     const r = await run.done;
-    expectExit(run, r, 2);
+    expectExit(run, r, 10);
     expect(r.stdout).toContain("FAIL stale review record");
     expect(r.stdout).toContain("not an ancestor");
     expect(r.stdout).toContain(reviewed.slice(0, 7));
@@ -1490,7 +1490,7 @@ describe("a branch merges only with a review record on it (#192)", () => {
     reviewRecord(missingWho, "wave-unreviewed", { who: "" });
     const a = invoke(missingWho, "wave-unreviewed");
     const ra = await a.done;
-    expectExit(a, ra, 2);
+    expectExit(a, ra, 10);
     expect(ra.stdout).toContain("FAIL review record incomplete");
     expect(ra.stdout).toContain("reviewed-by:");
 
@@ -1505,7 +1505,7 @@ describe("a branch merges only with a review record on it (#192)", () => {
     missingSha.git("checkout", "-q", "main");
     const b = invoke(missingSha, "wave-unreviewed");
     const rb = await b.done;
-    expectExit(b, rb, 2);
+    expectExit(b, rb, 10);
     expect(rb.stdout).toContain("FAIL review record incomplete");
     expect(rb.stdout).toContain("against:");
   });
