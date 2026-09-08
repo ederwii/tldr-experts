@@ -690,6 +690,11 @@ is yours to write and you are not the one discovering the stop.
 `tldrx init` writes the block **commented out**, with a line saying what it is for. It does not
 guess a command: who gets woken up is not a thing to detect.
 
+For the operating side of the same hook — the full `detail` table per kind, an adapter skeleton
+you can paste, a first-run checklist and what to check when nothing arrives — see
+[Operating a run unattended](https://ederwii.github.io/tldr-experts/guides/unattended-operation)
+on the documentation site.
+
 ## What none of this changes
 
 Worth stating, because the whole value of the mode is that it is additive:

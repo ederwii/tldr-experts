@@ -35,6 +35,7 @@ const sidebarEn = [
     text: "Guides",
     items: [
       { text: "Attended or unattended", link: "/guides/driving" },
+      { text: "Operating a run unattended", link: "/guides/unattended-operation" },
       { text: "Budgets and estimates", link: "/guides/budgets" },
       { text: "Experts", link: "/guides/experts" },
       { text: "FAQ for the impatient", link: "/guides/faq" },
@@ -77,6 +78,7 @@ const sidebarEs = [
     text: "Guías",
     items: [
       { text: "Atendido o desatendido", link: "/es/guides/driving" },
+      { text: "Operar un run desatendido", link: "/es/guides/unattended-operation" },
       { text: "Presupuestos y estimaciones", link: "/es/guides/budgets" },
       { text: "Expertos", link: "/es/guides/experts" },
       { text: "Preguntas frecuentes", link: "/es/guides/faq" },

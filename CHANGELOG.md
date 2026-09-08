@@ -68,6 +68,18 @@
   through one parser, and refuse anything else by name at exit `1`. Without either flag,
   behaviour is unchanged for every existing user — a question or a gate still exits `4`, the
   hook has simply already fired with the answer command in it. (#180)
+- **The docs site now explains how to OPERATE a run unattended, not just what the flags
+  are.** The notify hook shipped with its schema in the spec and a paragraph in the driving
+  guide, and neither answers the question somebody actually has at 11pm: what do I write, and
+  what do I check when nothing arrives. A new guide page (EN + ES, in both sidebars) walks the
+  whole loop — host mode versus the engine with the honest trade-off, the `notify:` block and
+  its argv rule, the nine top-level payload keys with `question.raised` and `status` shown in
+  full and a per-kind table of the other six, a dependency-free ~30-line Node adapter you can
+  paste, `--notify-every` / `--wait-answers` with what exit `4` means when a wait lapses, a
+  first-run checklist that dry-runs the adapter on a hand-made payload before any run depends
+  on it, and troubleshooting for the four ways it silently does nothing. It names no
+  messaging service and it is not going to: the adapter is the reader's, and the page says
+  why in the same words the drive mandate does. (#180)
 
 ## 0.11.0 — 2026-09-08
 
