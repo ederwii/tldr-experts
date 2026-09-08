@@ -5,6 +5,7 @@
  * `run.yml`. Nothing is inferred: a line appears because an event was logged, and
  * a stage with no events says so rather than being narrated from its status.
  */
+import { basisOf } from "../build/measuredTouches.ts";
 import { openBlocks, parseQuestions } from "../text/index.ts";
 import { parseEvidence } from "../text/evidence.ts";
 import { skippedNote } from "../events/EventLog.ts";
@@ -218,8 +219,13 @@ function bullet(item: NumberedEvent, trail: Map<string, ReviewerProvenance | nul
     // between saying who decided that or why. `bullet` ends in
     // `default: return null`, so a type with no case here is a decision that
     // happened and cannot be read back.
+    // `basis` is ADDITIVE (#185): absent means an operator DECLARED the widening,
+    // which is every row wave 4 wrote, and `measured` means the framework read it
+    // off the story's own diff. `basisOf` is the one place that read lives, so a
+    // narrative and a handoff can never label the same row differently.
     case "story.touches_widened":
       return `${prefix}story ${text(payload.story) || "?"}'s \`touches:\` WIDENED by ${actor}`
+        + ` (${basisOf(payload)})`
         + ` — +${pathList(payload.paths)}`
         + ` (${String(lengthOf(payload.before))} → ${String(lengthOf(payload.after))} path(s))`
         + `${note(payload.note)}`;

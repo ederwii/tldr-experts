@@ -83,6 +83,29 @@ tldrx story widen  S3 platform/Auth.cs --note "…"
 
 La tarjeta de decisión imprime los dos comandos, en ese orden.
 
+### Lo declarado es un pronóstico; el framework además lo mide
+
+El `touches:` de una story lo escribe el experto de Plan antes de que exista una sola línea de
+ese código. En Plan no corre ningún compilador, así que esa lista es un pronóstico — y en tres
+workspaces reales fue un pronóstico corto: una story cambió 21 archivos y 18 quedaron fuera de
+lo que había declarado, y las otras dos stories del mismo run también declararon de menos. No
+fue el error de nadie: eran los archivos que el trabajo terminó necesitando.
+
+Así que la lista declarada se queda como está y Build toma una segunda lectura. Cuando una story
+se asienta, el framework saca su diff sobre exactamente el mismo rango que vio el reviewer y, si
+algo cambió fuera de `touches:`, deja una línea en el ledger:
+
+```
+story S3's `touches:` WIDENED by framework (measured) — +src/app/page.tsx, +5 more
+  (3 → 9 path(s)) — "18 of 21 changed files fell outside the declared touches"
+```
+
+Es el mismo registro que tu `tldrx story widen`, con la base nombrada: `measured` es el framework
+leyendo un diff, `declared` es una persona diciéndolo. Nunca se niega y nunca edita tu archivo de
+story — declarar es tu verbo. Ambos tipos salen en el handoff de Build (y por lo tanto en el
+cuerpo del pull request que escribe `tldrx ship`) y en `tldrx replay`, etiquetados. Las rutas que
+quedan fuera de *las dos* lecturas son las que vale la pena mirar.
+
 ### Un hallazgo que ninguna story posee se reporta, no bloquea
 
 Un revisor puede marcar un hallazgo como *real, y no le toca arreglarlo a esta story*. Si el
