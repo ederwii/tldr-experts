@@ -1,6 +1,36 @@
 # Changelog
 
 
+## 0.13.1 — unreleased
+
+### Fixed
+
+- **A stage prompt now opens by saying what to do (#196).** On a real workspace at 0.13.0 a
+  What sub-agent was handed the whole 66,452-byte prompt and answered: *"I don't see an actual
+  request in your message — only system context, tldrx state, and template/expert file dumps."*
+  It was right. `renderParts` prepended nothing, so the document opened on `stage.md` — which is
+  a fill-in HANDOFF TEMPLATE that describes a finished document without ever saying that writing
+  it is the job. Grepping that prompt found zero occurrences of "You are", "## Produce", "your
+  task" or "write the following files", while line ~89 of it forbade "sections beyond the ones
+  listed under **Produce**" — a rule pointing at a heading that was never assembled. The agent
+  asked a question instead, wrote none of its six declared outputs, and the stage failed with
+  $0.29 spent. The prompt now leads with a generated brief: who the reader is, which stage of
+  which run, that the template below is to be FILLED, the exact path of every declared output,
+  and that a question goes in the questions file rather than back to an operator who is not
+  there. Generated from the same `outputs:` list `pending.json` records, so it cannot name a
+  path the commit will not look for.
+  Not a regression — a 2026-08-30 run of the same stage on the same model passed. What changed
+  is the ratio: the spliced citation grammar grew the stage section 5,007 B → 13,180 B and this
+  run's seed was small, so work material fell from 93% to 76% of the prompt. The instruction was
+  always missing; it had never been this outnumbered.
+- **The "N runs are open" nudge stops talking to sub-agents (#196).** It was the one
+  imperative-shaped sentence in that agent's window — `tldrx: 7 runs are open — pass a run id to
+  next/answer/approve/…` — and the agent answered it, which is the most reasonable thing it
+  could have done with what it was given. `spawnAgent` now marks every child it spawns
+  (`TLDRX_SUBAGENT=1`) and `session-start` emits nothing when it sees the marker: those lines
+  orient a human who opened a session and may be in the wrong run, and a sub-agent was handed
+  its run in its prompt. An absent marker is a human's session and behaves exactly as before.
+
 ## 0.13.0 — 2026-09-08
 
 ### Added

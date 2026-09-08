@@ -7,6 +7,14 @@ const argv = process.argv.slice(2);
 const argvLog = process.env.FAKE_CODEX_ARGV_LOG;
 if (argvLog !== undefined && argvLog !== "") appendFileSync(argvLog, `${JSON.stringify(argv)}\n`);
 
+// What the CHILD actually inherited. The spawn's env is not in argv and not in
+// the transcript, so a marker that stopped being set (gh #196) would otherwise be
+// invisible to every test. Off unless a test asks for it.
+const envLog = process.env.FAKE_CODEX_ENV_LOG;
+if (envLog !== undefined && envLog !== "") {
+  appendFileSync(envLog, `${JSON.stringify({ TLDRX_SUBAGENT: process.env.TLDRX_SUBAGENT ?? null })}\n`);
+}
+
 let prompt = "";
 for await (const chunk of process.stdin) prompt += String(chunk);
 

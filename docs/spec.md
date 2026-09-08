@@ -2497,6 +2497,7 @@ section.
 **Prompt order — most stable first.** The pieces are concatenated in exactly this order:
 
 ```
+<the stage brief — one imperative paragraph the facilitator generates, never a file>
 <stage.md, substituted, with `## Inputs`, `## Dispatch notes` and `## Previous attempt` CUT OUT>
 <expert block 1> … <expert block N>
 ## Inputs
@@ -2508,6 +2509,16 @@ section.
 ## Previous attempt
 <the retry note, and the refused outputs>
 ```
+
+**The stage brief** leads, and is the one piece with no file behind it. `stage.md` is a fill-in HANDOFF
+TEMPLATE — it describes the finished document without ever saying that writing it is the job — so a prompt that
+opened on it opened on no instruction at all. Measured on a real workspace at 0.13.0: a What sub-agent read
+66,452 bytes and answered "I don't see an actual request in your message"; it wrote none of its six declared
+outputs and the stage failed. The brief says who the reader is, which stage of which run, that the template
+below is to be FILLED, the exact path of every declared output, and that a question belongs in the questions
+file rather than in a reply to an operator who is not there. It is generated from the same `outputs:` list
+`pending.json` records, so it cannot name a path the commit will not look for. Ahead of it, nothing; behind
+it, the stability order below.
 
 This is a COST decision, not a layout one. A prompt cache keys on the longest PREFIX two calls share; a cache write
 is billed at 1.25x an input token and a cache read at 0.1x. The experts used to be emitted LAST, behind the

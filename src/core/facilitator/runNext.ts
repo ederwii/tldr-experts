@@ -48,7 +48,8 @@ import { onInterrupt, stopInFlightRun } from "./interrupt.ts";
 import { loadStageSpec, type StageSpec } from "./stageSpec.ts";
 import { blockingQuestionIds, countSkipInputs, evaluateSkipIf, SkipIfError } from "./skipIf.ts";
 import {
-  agentDir, evidencePath, expandAll, expandPatterns, missing, present, resolveMany, type PathContext,
+  agentDir, evidencePath, expandAll, expandPatterns, missing, present, resolveDeclared, resolveMany,
+  type PathContext,
 } from "./paths.ts";
 import { fenceFor, renderConventions, renderFacts, renderParts, stackExpertNames } from "./prompt.ts";
 import { applyCheckContracts } from "./checkContracts.ts";
@@ -2099,6 +2100,16 @@ export function assemblePrompt(
   const dispatchNotes = loadDispatchNotes(store.runDir, [stage.id]);
   const absentInputs = absentDeclaredInputs(store, spec, ctx);
   const parts = renderParts({
+    // The imperative, first (gh #196). Built from the same declared outputs
+    // `pending.json` records, resolved to paths that are correct FROM THE
+    // SUB-AGENT'S CWD — which is the workspace root — so "write it here" is a
+    // path it can use rather than one it has to reconstruct.
+    preamble: {
+      stage: stage.id,
+      run: store.runId,
+      outputs: expandAll(spec.planned.outputs, store.run.repos)
+        .map((declared) => relative(options.root, resolveDeclared(declared, ctx))),
+    },
     stageMd,
     absentInputs,
     dispatchNotes: dispatchNotes.body,
