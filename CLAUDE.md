@@ -18,3 +18,7 @@ Claude-specific notes only:
 - Long waits (merge-wave lock, CI watch, a running suite) happen in bounded foreground loops
   INSIDE your turn. Ending your turn to "wait for a monitor" strands the work — nothing will
   wake you.
+- Working the GitHub issue backlog (triage → implement → pre-merge review → wave → close, and
+  cutting a release) has a workflow: the `maintain` skill (`.claude/skills/maintain/SKILL.md`).
+  It cites AGENTS.md by section and never restates it; `test/maintain-skill.test.ts` enforces
+  that. Issue discipline itself stays in AGENTS.md §11.
