@@ -1948,11 +1948,19 @@ at an intention. `stage` is `<phase>/<stage>` or null. `detail` is per-kind and 
 | `run.finished` | the loop ended with exit `0` | `exit_code`, `exit_family`, `spent_usd` |
 | `run.failed` | the loop ended with any non-zero exit, refusals included | `exit_code`, `exit_family`, `spent_usd` |
 | `budget.warned` | a ceiling is close | `spent_usd`, `ceiling_usd` |
-| `status` | every `--notify-every <duration>` while the loop runs | `status_text` — what `tldrx run status` prints, verbatim |
+| `status` | every `--notify-every <duration>` while the loop runs | `status_text` — what `tldrx run status` prints, verbatim — and `waiting_on`, the blocking open question ids (`[]` when none) |
 
 The questions, their options and their recommendation are the **same card** `run auto
 --gate-agent` prints (§ "Decision cards"), so a notification and a terminal can never disagree
 about what was asked.
+
+**A heartbeat over a parked run REMINDS.** When `waiting_on` is non-empty the `status` payload
+names the open questions and its `command` is the literal `tldrx answer` line, not
+`tldrx run status`. The alternative — a heartbeat that goes on saying "nothing is waiting on
+you" while the run sits on somebody's answer — is worse than silence, because a heartbeat is
+believed; it was reproduced in review with `--notify-every` and `--wait-answers` both on.
+Parked-ness is decided by the SAME predicate `--wait-answers` polls and `next` parks on, never
+by a second opinion.
 
 **A notifier never changes a run's outcome.** Not its exit code, not its files, not a line of
 its stdout. A command that will not split, an executable that is not there, a non-zero exit, a

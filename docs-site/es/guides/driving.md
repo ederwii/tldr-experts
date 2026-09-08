@@ -97,7 +97,9 @@ tldrx run auto --notify-every 10m --wait-answers 30m
 ```
 
 `--notify-every` agrega una carga `status` periódica con lo que imprime `tldrx run status`: un
-latido, que no pide nada. `--wait-answers` es la única bandera que cambia dónde se detiene el
+latido, que no pide nada mientras el run avanza. Sobre un run **detenido** en una pregunta
+abierta dice justamente eso y repite el comando literal para responder, porque un latido que
+siguiera diciendo que nadie te está esperando sería peor que el silencio. `--wait-answers` es la única bandera que cambia dónde se detiene el
 bucle: en vez de salir con `4` en una pregunta abierta, espera una respuesta y **retoma si la das**,
 y sale con `4` sin cambios cuando el plazo se vence. No se gasta nada mientras espera, y el bucle
 nunca responde su propia pregunta.

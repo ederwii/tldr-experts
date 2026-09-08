@@ -421,7 +421,7 @@ const ENTRIES: readonly CommandHelp[] = [
       {
         name: "notify-every",
         arg: "<duration>",
-        meaning: "Send the workspace's declared notify hook a `status` payload this often while the loop runs \u2014 `30s`, `10m`, `2h`, or a bare number of seconds. Off by default, and it does nothing at all unless `.tldrx/workspace.yml` declares a `notify:` command (\u00a72.18). It is a heartbeat and never a decision: a `status` payload carries what `tldrx run status` prints and asks for nothing.",
+        meaning: "Send the workspace's declared notify hook a `status` payload this often while the loop runs \u2014 `30s`, `10m`, `2h`, or a bare number of seconds. Off by default, and it does nothing at all unless `.tldrx/workspace.yml` declares a `notify:` command (\u00a72.18). A `status` payload carries what `tldrx run status` prints. It asks for nothing while the run is moving \u2014 and when the run is PARKED on an open question it says so and repeats the literal answer command, because a heartbeat that keeps saying nothing is waiting on you while a run waits on you is worse than silence.",
         sub: "auto",
       },
       {

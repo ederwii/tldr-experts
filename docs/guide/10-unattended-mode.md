@@ -670,8 +670,11 @@ $ tldrx run auto --notify-every 10m --wait-answers 30m
 ```
 
 `--notify-every <duration>` sends a `status` payload on that interval while the loop runs, carrying
-what `tldrx run status` prints. It is a heartbeat: it asks for nothing, and it exists because the
-period when you most want to know a run is alive is the twenty minutes it is inside one stage.
+what `tldrx run status` prints. It is a heartbeat: it asks for nothing while the run is moving, and it exists
+because the period when you most want to know a run is alive is the twenty minutes it is inside
+one stage. When the run is **parked** on an open question, the heartbeat says so and repeats the
+literal answer command instead — a heartbeat that went on saying "nothing is waiting on you"
+while the run waited on you would be worse than silence, because a heartbeat is believed.
 
 `--wait-answers <duration>` is the only one that changes where the loop stops. Instead of exiting
 `4` the moment a stage parks on a question, it polls the run's question files and **resumes if you

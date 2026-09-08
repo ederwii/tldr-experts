@@ -91,7 +91,9 @@ tldrx run auto --notify-every 10m --wait-answers 30m
 ```
 
 `--notify-every` adds a periodic `status` payload carrying what `tldrx run status` prints — a
-heartbeat, asking for nothing. `--wait-answers` is the one flag that changes where the loop stops:
+heartbeat, asking for nothing while the run is moving. Over a run **parked** on an open
+question it says so and repeats the literal answer command, because a heartbeat that kept
+saying nothing is waiting on you would be worse than silence. `--wait-answers` is the one flag that changes where the loop stops:
 instead of exiting `4` at an open question it polls for an answer and **resumes if you give one**,
 then exits `4` unchanged when the wait lapses. Nothing is spent while it waits, and the loop never
 answers its own question.

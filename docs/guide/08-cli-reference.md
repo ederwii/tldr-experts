@@ -356,8 +356,9 @@ upgrades a stage's gate policy.
 `--notify-every <duration>` and `--wait-answers <duration>` are the loop's two **notify**
 flags, and both do nothing at all unless `.tldrx/workspace.yml` declares a `notify:` command
 (spec §2.18, guide 10). `--notify-every 10m` sends that command a `status` payload every ten
-minutes while the loop runs — a heartbeat carrying what `tldrx run status` prints, asking for
-nothing. `--wait-answers 30m` is the only flag that changes where the loop STOPS: instead of
+minutes while the loop runs — a heartbeat carrying what `tldrx run status` prints. It asks for
+nothing while the run is moving; over a run **parked** on an open question it says so and
+repeats the literal `tldrx answer` line instead. `--wait-answers 30m` is the only flag that changes where the loop STOPS: instead of
 exiting `4` the moment a stage parks on an open question, it polls the run's question files
 for up to thirty minutes and resumes if somebody answers. A lapsed wait exits `4` with the
 same lines it always did, after one `question.timeout` notification. Both take `30s`, `10m`,

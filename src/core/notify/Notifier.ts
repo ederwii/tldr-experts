@@ -41,6 +41,12 @@ const REASON_TAIL_MAX = 200;
 
 export class Notifier {
   private chain: Promise<void> = Promise.resolve();
+  /**
+   * Set once, where the loop returns. A `--notify-every` tick that was already in flight
+   * when the run ended would otherwise enqueue a `status` BEHIND `run.finished` — a
+   * heartbeat for a run that is over, which is the one thing a heartbeat must not be.
+   */
+  private closed = false;
 
   constructor(
     private readonly declaration: NotifyDeclaration,
@@ -68,13 +74,14 @@ export class Notifier {
     return this.chain;
   }
 
-  /** Wait for every queued send. Called once, where the loop returns. */
-  drain(): Promise<void> {
-    return this.chain;
+  /** Wait for every queued send, then accept no more. Called once, where the loop returns. */
+  async drain(): Promise<void> {
+    this.closed = true;
+    await this.chain;
   }
 
   private async run(payload: NotifyPayload, stageId: string | null): Promise<void> {
-    if (!this.wants(payload.kind)) return;
+    if (this.closed || !this.wants(payload.kind)) return;
     const command = this.declaration.command;
     const argv = splitArgv(command);
     if (argv === null) {

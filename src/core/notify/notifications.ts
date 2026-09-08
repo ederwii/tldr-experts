@@ -13,6 +13,8 @@
  * would be the wrong place to put it.
  */
 import type { DecisionCard } from "../ui/decisionCard.ts";
+// The one spelling of `tldrx answer <Qid> "…" --run <id>`, shared with every decision card.
+import { answerCommand } from "../run/decisionCards.ts";
 import { NOTIFY_PAYLOAD_VERSION, exitFamily, type NotifyKind, type NotifyPayload } from "./payload.ts";
 
 /** What every payload shares, gathered once by the caller. */
@@ -172,13 +174,44 @@ export function runEndNotification(
  *
  * `statusText` is what `tldrx run status` prints, verbatim and unabridged. A summary of a
  * summary would be this file inventing a view of the run that no command can reproduce.
+ *
+ * ## Why it has to know whether the run is parked
+ *
+ * Reproduced in review, 2026-09-07: with `--notify-every` and `--wait-answers` both on, a
+ * `question.raised` went out and then the heartbeat kept telling the same person "Nothing is
+ * waiting on you" every interval, while the run sat parked on their answer. That is false
+ * reassurance aimed at exactly the person this whole feature exists to reach — worse than
+ * silence, because a heartbeat is believed.
+ *
+ * So a heartbeat over a parked run REMINDS instead: it names the open questions, repeats the
+ * literal answer command, and lists the ids in `detail.waiting_on`. Silence was the other
+ * option and it is the weaker one — the reminder is the notification a waiting owner wants.
+ *
+ * `waitingOn` is passed IN, from the caller's `blockingQuestionIds` — the one predicate for
+ * "does this question park a run", shared with `runNext`, `skip_if` and `--wait-answers`.
+ * A second opinion about parked-ness here is exactly the drift that would put the heartbeat
+ * back out of step with the interrupt.
  */
-export function statusNotification(ctx: NotifyContext, statusText: string): NotifyPayload {
+export function statusNotification(
+  ctx: NotifyContext,
+  statusText: string,
+  waitingOn: readonly string[] = [],
+): NotifyPayload {
+  const ids = [...waitingOn];
+  const parked = ids.length > 0;
   return {
     ...base(ctx, "status"),
-    summary: `${ctx.runId} is still running at ${ctx.stage ?? "an unnamed stage"}. `
-      + "Nothing is waiting on you — this is the periodic heartbeat `--notify-every` asked for.",
-    command: `tldrx run status ${ctx.runId}`,
-    detail: { status_text: statusText },
+    summary: parked
+      ? `${ctx.runId} is parked at ${ctx.stage ?? "an unnamed stage"} waiting on YOU: `
+        + `${String(ids.length)} open question(s), ${ids.join(", ")}. Nothing is being spent `
+        + "while it waits, and it resumes the moment one is answered."
+      : `${ctx.runId} is still running at ${ctx.stage ?? "an unnamed stage"}. `
+        + "Nothing is waiting on you — this is the periodic heartbeat `--notify-every` asked for.",
+    // The literal line to type, exactly as `question.raised` spelled it — a reminder that
+    // made the reader go and find the command would be a reminder to go and look at a screen.
+    command: parked
+      ? answerCommand(ids[0] ?? "Q1", ctx.runId)
+      : `tldrx run status ${ctx.runId}`,
+    detail: { status_text: statusText, waiting_on: ids },
   };
 }

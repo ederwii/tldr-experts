@@ -404,6 +404,53 @@ describe("--notify-every", () => {
 });
 
 // ---------------------------------------------------------------------------
+// (d2) The heartbeat must not contradict the interrupt
+// ---------------------------------------------------------------------------
+
+describe("a heartbeat over a parked run says the run is parked", () => {
+  test("no `status` claims nothing is waiting, and one carries the answer command", async () => {
+    // Reviewer-reproduced, 2026-09-07: with both flags on, `question.raised` went out and
+    // then the heartbeat kept telling the same person "Nothing is waiting on you" every
+    // interval — false reassurance aimed squarely at the person the feature exists to reach.
+    const ws = workspace({ gates: { alpha: "auto", beta: "auto" } });
+    parkOnQuestions(ws);
+
+    const outcome = await auto(ws, { waitAnswersMs: 400, notifyEveryMs: 40 });
+    expect(outcome.code).toBe(4);
+
+    const status = delivered(ws).filter((p) => p.kind === "status");
+    expect(status.length).toBeGreaterThanOrEqual(1);
+    for (const beat of status) {
+      expect(String(beat.summary)).not.toContain("Nothing is waiting on you");
+    }
+    expect(status.some((beat) => beat.command === `tldrx answer Q1 "…" --run ${ws.runId}`)).toBe(true);
+    expect(status.some((beat) => String(beat.summary).includes("Q1"))).toBe(true);
+    const waiting = status.map((beat) => (beat.detail as { waiting_on?: unknown }).waiting_on);
+    expect(waiting.every((w) => Array.isArray(w) && (w as unknown[]).includes("Q1"))).toBe(true);
+  });
+
+  test("a heartbeat over a run nobody is waiting on still says so", async () => {
+    const ws = workspace({ gates: { alpha: "auto", beta: "auto" } });
+    const outcome = await auto(ws, { notifyEveryMs: 20 });
+    expect(outcome.code).toBe(0);
+    const status = delivered(ws).filter((p) => p.kind === "status");
+    expect(status.length).toBeGreaterThanOrEqual(1);
+    for (const beat of status) {
+      expect(String(beat.summary)).toContain("Nothing is waiting on you");
+      expect((beat.detail as { waiting_on?: unknown }).waiting_on).toEqual([]);
+    }
+  });
+
+  test("no `status` is enqueued after the run has ended", async () => {
+    const ws = workspace({ gates: { alpha: "auto", beta: "auto" } });
+    await auto(ws, { notifyEveryMs: 20 });
+    const kinds = delivered(ws).map((p) => p.kind);
+    const last = kinds.lastIndexOf("run.finished");
+    expect(last).toBe(kinds.length - 1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // (e) `--wait-answers`
 // ---------------------------------------------------------------------------
 

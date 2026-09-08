@@ -52,7 +52,13 @@
 - **`tldrx run auto --notify-every <duration>`** sends the declared hook a periodic `status`
   payload carrying what `tldrx run status` prints. It fires from a timer rather than between
   iterations on purpose: the period when somebody most wants to know a run is alive is the
-  twenty minutes it is inside one stage. Off by default. (#180)
+  twenty minutes it is inside one stage. Off by default. Over a run that is PARKED it
+  reminds rather than reassures — the summary names the open questions, `command` is the
+  literal `tldrx answer` line and `detail.waiting_on` carries the ids. A heartbeat that went
+  on saying "nothing is waiting on you" while the run sat on somebody's answer was
+  reproduced in review with both flags on, and it is worse than silence, because a heartbeat
+  is believed. Parked-ness comes from the same predicate `--wait-answers` polls and `next`
+  parks on, never a second opinion. (#180)
 - **`tldrx run auto --wait-answers <duration>`** polls the run's question files instead of
   exiting `4` the moment a stage parks, and resumes if the question is answered — by a
   person, or by whatever the notify hook reached — then exits `4` with the same lines it

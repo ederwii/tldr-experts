@@ -194,157 +194,169 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
         void (async () => {
           let text: string;
           try {
-            const store = RunStore.open(runDir);
-            text = renderStatus(buildStatus(store.run, store.budget, store.runDir));
-          } catch {
-            return;
-          }
-          await notifier.send(statusNotification(notifyCtx(), text), stageIdOf());
-        })();
-      }, options.notifyEveryMs);
+              const store = RunStore.open(runDir);
+              text = renderStatus(buildStatus(store.run, store.budget, store.runDir));
+            } catch {
+              return;
+            }
+            // `stillBlocking` is the SAME predicate `--wait-answers` polls and `runNext` parks
+            // on. Without it the heartbeat told a person "Nothing is waiting on you" every
+            // interval while the run sat on their answer — reproduced in review, and worse
+            // than silence, because a heartbeat is believed.
+            await notifier.send(statusNotification(notifyCtx(), text, stillBlocking(runDir)), stageIdOf());
+          })();
+        }, options.notifyEveryMs);
 
-  /**
-   * Every exit from the loop body below goes through here: the last notification, the
-   * timer stopped, every queued send awaited. A `run.finished` that the process exited
-   * before delivering would be the one notification that is worse than none.
-   */
-  const finish = async (code: number, spentUsd: number): Promise<NextOutcome> => {
-    if (heartbeat !== null) clearInterval(heartbeat);
-    if (notifier !== null) {
-      await notifier.send(
-        runEndNotification(notifyCtx(), code, spentUsd, lines[lines.length - 1] ?? ""),
-        stageIdOf(),
-      );
-      await notifier.drain();
-    }
-    return { code, lines };
-  };
-
-  /** The open questions where the run is parked, as the card `--gate-agent` would print. */
-  const openQuestions = (): DecisionCard | null => {
-    const ctx = cursorContext(runDir, runId);
-    return ctx === null ? null : questionsCard(ctx);
-  };
-
-  /**
-   * One iteration's events, translated into notifications.
-   *
-   * The branching mirrors `stageLines` below deliberately: a gate that was auto-approved
-   * is not a gate anybody was asked to sign, so it is a `stage.done`, and a stage whose
-   * gate fell to a person is `gate.requested` and NOT also a `stage.done`. Two payloads
-   * for one stage would make an owner's script announce the same money twice.
-   */
-  const notifyFresh = async (fresh: readonly TldrxEvent[]): Promise<void> => {
-    if (notifier === null) return;
-    let requested: number | null = null;
-    let autoApproved = false;
-    for (const event of fresh) {
-      if (event.type === "gate.requested") requested = number(payload(event, "cost_usd"));
-      if (event.type === "gate.approved" && String(payload(event, "by") ?? event.actor) === AUTO_GATE_ACTOR) {
-        autoApproved = true;
-      }
-      if (event.type === "budget.warned") {
+    /**
+     * Every exit from the loop body below goes through here: the last notification, the
+     * timer stopped, every queued send awaited. A `run.finished` that the process exited
+     * before delivering would be the one notification that is worse than none.
+     */
+    const finish = async (code: number, spentUsd: number): Promise<NextOutcome> => {
+      if (heartbeat !== null) clearInterval(heartbeat);
+      if (notifier !== null) {
         await notifier.send(
-          budgetNotification(
-            notifyCtx(),
-            number(payload(event, "spent_usd")),
-            number(payload(event, "ceiling_usd")),
-          ),
-          event.stage,
+          runEndNotification(notifyCtx(), code, spentUsd, lines[lines.length - 1] ?? ""),
+          stageIdOf(),
         );
+        await notifier.drain();
       }
-    }
-    if (requested !== null && !autoApproved) {
-      await notifier.send(gateNotification(notifyCtx(), requested), stageIdOf());
-      return;
-    }
-    for (const event of fresh) {
-      if (event.type === "stage.done") {
-        await notifier.send(stageDoneNotification(notifyCtx(), number(payload(event, "cost_usd"))), event.stage);
-      }
-    }
-  };
+      return { code, lines };
+    };
 
-  for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
-    const store = RunStore.open(runDir);
-    const spentByLoop = round2(store.run.budget.spent_usd - startedSpent);
+    /** The open questions where the run is parked, as the card `--gate-agent` would print. */
+    const openQuestions = (): DecisionCard | null => {
+      const ctx = cursorContext(runDir, runId);
+      return ctx === null ? null : questionsCard(ctx);
+    };
 
-    if (store.run.status === "done" || store.run.status === "cancelled") {
-      say(`run ${runId} is ${store.run.status} — $${spentByLoop.toFixed(2)} spent by this loop`);
-      return await finish(EXIT_OK, spentByLoop);
-    }
-    if (options.until !== undefined && store.run.cursor.stage === options.until) {
-      say(`stopped before ${store.run.cursor.phase}/${options.until} (--until) — `
-        + `$${spentByLoop.toFixed(2)} spent by this loop`);
-      return await finish(EXIT_OK, spentByLoop);
-    }
-    // Checked BETWEEN stages: a stage already in flight is never cut off mid-turn
-    // — that is what the per-stage ceiling and `per_agent_max_usd` are for — so
-    // the loop can overshoot by at most one stage's share, and says so.
-    if (options.maxUsd !== undefined && spentByLoop >= options.maxUsd) {
-      say(`stopped: this loop has spent $${spentByLoop.toFixed(2)} of its `
-        + `$${options.maxUsd.toFixed(2)} --max-usd ceiling`);
-      return await finish(EXIT_REFUSED, spentByLoop);
-    }
-
-    const before = countEvents(log);
-    const cursorBefore = `${store.run.cursor.phase}/${store.run.cursor.stage}`;
-    const outcome = await runNext({
-      root: options.root,
-      runId,
-      dryRun: false,
-      mode: "headless",
-      model: options.model,
-      effort: options.effort,
-      yolo: options.yolo,
-      parallel: options.parallel,
-      actor: options.actor,
-      at: options.at,
-    });
-    // `notify.*` is filtered out before anything reads this. Those lines are appended by
-    // the heartbeat timer, which can fire mid-stage, and a run that appended NOTHING but a
-    // notification has still made no progress — the guard below would stop seeing that.
-    const fresh = readEvents(log).slice(before).filter((event) => !event.type.startsWith("notify."));
-    for (const line of stageLines(fresh, cursorBefore, outcome)) say(line);
-    await notifyFresh(fresh);
-
-    if (outcome.code !== EXIT_OK) {
-      // `--wait-answers`: the ONE place the loop does something other than stop. The
-      // question has already been notified; polling here rather than exiting is what turns
-      // "answer it and start the loop again" into "answer it".
-      if (outcome.code === EXIT_AWAITING_HUMAN) {
-        const card = openQuestions();
-        if (card !== null && notifier !== null) {
-          await notifier.send(questionNotification(notifyCtx(), card), stageIdOf());
+    /**
+     * One iteration's events, translated into notifications.
+     *
+     * The branching mirrors `stageLines` below deliberately: a gate that was auto-approved
+     * is not a gate anybody was asked to sign, so it is a `stage.done`, and a stage whose
+     * gate fell to a person is `gate.requested` and NOT also a `stage.done`. Two payloads
+     * for one stage would make an owner's script announce the same money twice.
+     */
+    const notifyFresh = async (fresh: readonly TldrxEvent[]): Promise<void> => {
+      if (notifier === null) return;
+      let requested: number | null = null;
+      let autoApproved = false;
+      for (const event of fresh) {
+        if (event.type === "gate.requested") requested = number(payload(event, "cost_usd"));
+        if (event.type === "gate.approved" && String(payload(event, "by") ?? event.actor) === AUTO_GATE_ACTOR) {
+          autoApproved = true;
         }
-        if (card !== null && options.waitAnswersMs !== undefined) {
-          const waited = await waitForAnswers(runDir, options.waitAnswersMs);
-          if (waited.answered) {
+        if (event.type === "budget.warned") {
+          await notifier.send(
+            budgetNotification(
+              notifyCtx(),
+              number(payload(event, "spent_usd")),
+              number(payload(event, "ceiling_usd")),
+            ),
+            event.stage,
+          );
+        }
+      }
+      if (requested !== null && !autoApproved) {
+        await notifier.send(gateNotification(notifyCtx(), requested), stageIdOf());
+        return;
+      }
+      for (const event of fresh) {
+        if (event.type === "stage.done") {
+          await notifier.send(stageDoneNotification(notifyCtx(), number(payload(event, "cost_usd"))), event.stage);
+        }
+      }
+    };
+
+    try {
+    for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+      const store = RunStore.open(runDir);
+      const spentByLoop = round2(store.run.budget.spent_usd - startedSpent);
+
+      if (store.run.status === "done" || store.run.status === "cancelled") {
+        say(`run ${runId} is ${store.run.status} — $${spentByLoop.toFixed(2)} spent by this loop`);
+        return await finish(EXIT_OK, spentByLoop);
+      }
+      if (options.until !== undefined && store.run.cursor.stage === options.until) {
+        say(`stopped before ${store.run.cursor.phase}/${options.until} (--until) — `
+          + `$${spentByLoop.toFixed(2)} spent by this loop`);
+        return await finish(EXIT_OK, spentByLoop);
+      }
+      // Checked BETWEEN stages: a stage already in flight is never cut off mid-turn
+      // — that is what the per-stage ceiling and `per_agent_max_usd` are for — so
+      // the loop can overshoot by at most one stage's share, and says so.
+      if (options.maxUsd !== undefined && spentByLoop >= options.maxUsd) {
+        say(`stopped: this loop has spent $${spentByLoop.toFixed(2)} of its `
+          + `$${options.maxUsd.toFixed(2)} --max-usd ceiling`);
+        return await finish(EXIT_REFUSED, spentByLoop);
+      }
+
+      const before = countEvents(log);
+      const cursorBefore = `${store.run.cursor.phase}/${store.run.cursor.stage}`;
+      const outcome = await runNext({
+        root: options.root,
+        runId,
+        dryRun: false,
+        mode: "headless",
+        model: options.model,
+        effort: options.effort,
+        yolo: options.yolo,
+        parallel: options.parallel,
+        actor: options.actor,
+        at: options.at,
+      });
+      // `notify.*` is filtered out before anything reads this. Those lines are appended by
+      // the heartbeat timer, which can fire mid-stage, and a run that appended NOTHING but a
+      // notification has still made no progress — the guard below would stop seeing that.
+      const fresh = readEvents(log).slice(before).filter((event) => !event.type.startsWith("notify."));
+      for (const line of stageLines(fresh, cursorBefore, outcome)) say(line);
+      await notifyFresh(fresh);
+
+      if (outcome.code !== EXIT_OK) {
+        // `--wait-answers`: the ONE place the loop does something other than stop. The
+        // question has already been notified; polling here rather than exiting is what turns
+        // "answer it and start the loop again" into "answer it".
+        if (outcome.code === EXIT_AWAITING_HUMAN) {
+          const card = openQuestions();
+          if (card !== null && notifier !== null) {
+            await notifier.send(questionNotification(notifyCtx(), card), stageIdOf());
+          }
+          if (card !== null && options.waitAnswersMs !== undefined) {
+            const waited = await waitForAnswers(runDir, options.waitAnswersMs);
+            if (waited.answered) {
+              say(`waited ${String(Math.round(waited.ms / 1000))}s at ${cursorBefore} — `
+                + "every blocking question is answered, resuming");
+              continue;
+            }
+            if (notifier !== null) {
+              await notifier.send(questionTimeoutNotification(notifyCtx(), card, waited.ms), stageIdOf());
+            }
             say(`waited ${String(Math.round(waited.ms / 1000))}s at ${cursorBefore} — `
-              + "every blocking question is answered, resuming");
-            continue;
+              + "no answer arrived (--wait-answers)");
           }
-          if (notifier !== null) {
-            await notifier.send(questionTimeoutNotification(notifyCtx(), card, waited.ms), stageIdOf());
-          }
-          say(`waited ${String(Math.round(waited.ms / 1000))}s at ${cursorBefore} — `
-            + "no answer arrived (--wait-answers)");
         }
+        for (const line of stopLines(options, runDir, runId, outcome)) say(line);
+        return await finish(outcome.code, spentByLoop);
       }
-      for (const line of stopLines(options, runDir, runId, outcome)) say(line);
-      return await finish(outcome.code, spentByLoop);
+      // Exit 0 with nothing appended and the cursor unmoved would loop forever on a
+      // run whose files disagree with themselves. Stop and say so instead.
+      const after = RunStore.open(runDir);
+      if (fresh.length === 0 && `${after.run.cursor.phase}/${after.run.cursor.stage}` === cursorBefore) {
+        say(`stopped: ${cursorBefore} made no progress and appended no event`);
+        for (const line of outcome.lines) say(`  ${line}`);
+        return await finish(EXIT_USAGE, spentByLoop);
+      }
     }
-    // Exit 0 with nothing appended and the cursor unmoved would loop forever on a
-    // run whose files disagree with themselves. Stop and say so instead.
-    const after = RunStore.open(runDir);
-    if (fresh.length === 0 && `${after.run.cursor.phase}/${after.run.cursor.stage}` === cursorBefore) {
-      say(`stopped: ${cursorBefore} made no progress and appended no event`);
-      for (const line of outcome.lines) say(`  ${line}`);
-      return await finish(EXIT_USAGE, spentByLoop);
-    }
+    say(`stopped after ${String(MAX_ITERATIONS)} iterations — run \`tldrx run status ${runId}\``);
+    return await finish(EXIT_USAGE, round2(RunStore.open(runDir).run.budget.spent_usd - startedSpent));
+  } finally {
+    // Defense in depth. Every return above already goes through `finish`, which clears the
+    // timer and drains the queue — but an unexpected throw would otherwise leave an interval
+    // holding the event loop open and a notifier still able to fire for a loop that is gone.
+    if (heartbeat !== null) clearInterval(heartbeat);
+    if (notifier !== null) await notifier.drain();
   }
-  say(`stopped after ${String(MAX_ITERATIONS)} iterations — run \`tldrx run status ${runId}\``);
-  return await finish(EXIT_USAGE, round2(RunStore.open(runDir).run.budget.spent_usd - startedSpent));
 }
 
 /**
