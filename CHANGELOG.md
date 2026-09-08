@@ -82,6 +82,29 @@
   time. A row from before this reads `not recorded`, never `0s`: "it took no time" and
   "nobody timed it" are different facts and only one is a measurement.
 
+- **A `maintain` skill turns a session into this repo's maintainer, and the circuit it encodes
+  is the one that was measured, not the one that sounds right.** Twelve maintenance waves ran
+  over two days by hand, and three of their lessons were costing time every cycle. First,
+  issues go stale in days: one asked for a fix to sequential Build execution while `--parallel`
+  had already shipped, so the skill reproduces an issue's measurement on current `origin/main`
+  BEFORE anything is touched, and a measured refutation closes it. Second, a fresh reviewer who
+  did not write the code found a real Important defect in four of those waves, each one
+  checkable from `git log`: `2a6413f` fixed a defect review found in `cbd5c4b`, and the fixes
+  that pre-merge review forced landed inside `28a987e` (the B0 mandate reword), `674049a` (the
+  heartbeat fix) and `103ff96` (the `runAuto` $0.00 fix). The one wave that reviewed AFTER
+  merging left its defect on `main` for two hours. So review is a mandatory step BEFORE
+  `scripts/merge-wave.sh`, run by a separate sub-agent on a mid-tier model, which is where the
+  defects were actually found. Third, concurrency: at most 3 issues a
+  cycle with non-overlapping file sets and at most 2 implementers at once, because the flaky
+  tests this repo already knows about redden under machine load and a red gate you caused
+  yourself costs a full re-run to disprove. The skill is a workflow and cites `AGENTS.md` and
+  `docs/RELEASING.md` by section rather than restating them; `test/maintain-skill.test.ts`
+  holds that premise mechanically — every `tldrx` command and `scripts/*.sh` it names must
+  exist in the real surface, every `§N` it cites must resolve to a real heading, and no private
+  workspace name or chat-product name may appear anywhere in the skill tree (#191). The review
+  step itself is still prose, which is the one thing the skill cannot fix about itself — #192
+  proposes making `scripts/merge-wave.sh` refuse a branch that carries no review record.
+
 ### Fixed
 
 - **No surface prints a bare `$0.00` over work nobody metered.** Measured across 23 real runs:
