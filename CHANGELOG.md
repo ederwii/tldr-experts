@@ -1,6 +1,31 @@
 # Changelog
 
 
+## 0.13.0 — unreleased
+
+### Fixed
+
+- **The mutation check is asked of the developer, which can run it, instead of the reviewer,
+  which holds no pen.** Every stack pack's `## Checks` carried "Can each new test fail? verify:
+  change the line under test, re-run only that test's file … and confirm it goes red", and those
+  Checks are rendered verbatim into the reviewer prompt under `## Stack checks` — a hundred lines
+  above a Rule in that same prompt reading "You have no write tool." That was not a wording slip
+  in one of the two places: `REVIEWER_TOOLS` is `Read`, `Grep`, `Glob`, `Bash(git diff *)`, so the
+  role being asked held neither the pen the mutation needs nor a way to run a test. Measured over
+  a week of unattended runs on three real workspaces, hosts resolved the contradiction by hand
+  every time and nobody reported the check as unaskable — which is the worse outcome, because a
+  reviewer that cannot perform a check still answers it, from reading alone, and calls that an
+  answer. It is a producer's obligation, so it goes to the producer: the developer's contract now
+  carries it as step 5 of `## Investigate` (`MUTATION_PROOF_RULE`), naming the same instrument the
+  packs named — the one test file while iterating, the declared command once, at the Definition of
+  Done — and asking for the record it leaves. What is left in the packs is the reviewer's half,
+  and it is a read: *did the developer record, beside each new test, that it was seen to fail?* A
+  new test carrying none is a finding with a cited file. Where the record goes is the part that
+  had to be decided rather than assumed — the reviewer's allowance holds no `git log`, so a commit
+  message is a surface it cannot read, and beside the test, in the test file, is the one place
+  that is both the developer's to write and the reviewer's to cite. The developer prompt's bytes
+  change and `test/build-golden.test.ts` moves with them; the reviewer prompt's own bytes do not.
+
 ## 0.12.0 — 2026-09-08
 
 ### Added

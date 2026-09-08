@@ -17,7 +17,7 @@ import {
 } from "../src/core/experts/stackPacks.ts";
 import { renderParts, buildPrompt } from "../src/core/facilitator/prompt.ts";
 import { buildLedger } from "../src/core/facilitator/contextLedger.ts";
-import { developerTools } from "../src/core/facilitator/executors/build.ts";
+import { developerTools, REVIEWER_TOOLS } from "../src/core/facilitator/executors/build.ts";
 import { BASE_TOOLS } from "../src/core/facilitator/spawnAgent.ts";
 import { runNext } from "../src/core/facilitator/runNext.ts";
 import type { PendingStage } from "../src/core/facilitator/pending.ts";
@@ -277,6 +277,44 @@ describe("the reviewer's stack checks", () => {
     expect(text.indexOf("## Conventions")).toBeLessThan(text.indexOf(`## ${STACK_CHECKS_HEADING}`));
     expect(text.indexOf(`## ${STACK_CHECKS_HEADING}`)).toBeLessThan(text.indexOf("## The story"));
     expect(text).toContain("the project's own convention");
+  });
+});
+
+/**
+ * Who is asked to prove a test can fail (gh #182).
+ *
+ * The mutation used to be a pack Check — rendered into the reviewer prompt under
+ * `## Stack checks` and asked of a role whose whole allowance is `REVIEWER_TOOLS`,
+ * beside a Rule in that same prompt saying "you have no write tool". It is a
+ * producer's obligation: the developer writes and runs, so the developer performs it
+ * and RECORDS it where the reviewer can read it.
+ *
+ * "Where" is load-bearing and is asserted below rather than assumed: the reviewer holds
+ * no `git log`, so a commit message is not a surface it can read. The record has to land
+ * in the diff — beside the test, in the file — or the reviewer's half of this check has
+ * nothing to cite, and "a miss is a finding with a cited file" becomes unaskable again.
+ */
+describe("the mutation proof is the developer's, and the reviewer only reads it", () => {
+  test("the developer's contract asks for the mutation and for the record it leaves", () => {
+    const text = devPrompt([]);
+    expect(text).toContain("break the line it");
+    expect(text).toContain("watch it go red");
+    expect(text).toContain("beside the test");
+    // It is a step of `## Investigate`, after the tests exist and before `## Produce`.
+    expect(text.indexOf("Write the tests the test plan promised")).toBeLessThan(text.indexOf("break the line it"));
+    expect(text.indexOf("break the line it")).toBeLessThan(text.indexOf("## Produce"));
+    // One spelling, not two: a second copy is how the instrument and the rule drift.
+    expect(text.split("break the line it").length - 1).toBe(1);
+  });
+
+  test("the reviewer is never told to run the mutation — it holds no pen and no git log", () => {
+    expect(REVIEWER_TOOLS).not.toContain("Edit");
+    expect(REVIEWER_TOOLS).not.toContain("Write");
+    expect(REVIEWER_TOOLS.some((tool) => tool.includes("git log"))).toBe(false);
+    for (const text of [reviewPrompt(null), reviewPrompt("### typescript-stack\n\n- Any new `any`? verify: grep")]) {
+      expect(text).not.toContain("break the line it");
+      expect(text).not.toContain("watch it go red");
+    }
   });
 });
 
