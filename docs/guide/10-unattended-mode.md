@@ -608,6 +608,88 @@ log is opened:
 So `--gate-agent` is for the runs the framework still drives. On an attended run, the card you
 get is the one `tldrx next` appends below `gate pending: tldrx approve`.
 
+## Reaching a person: the notify hook
+
+A decision card is only useful if somebody reads it, and `--gate-agent` prints it to **stdout**.
+That is the whole reason unattended runs get abandoned for host-driven ones: the host session can
+reach you, and the loop cannot. Trading a metered budget, an enforced model and parallel stories
+for a notification is a bad trade, and it was the measured default here in the week of
+2026-09-07 — 23 of 23 runs.
+
+So `.tldrx/workspace.yml` may declare **one command** the run tells a person through:
+
+```yaml
+notify:
+  command: "bin/notify-owner"
+  events: [question.raised, gate.requested, run.failed]   # optional; omitted = every kind
+  timeout_s: 30                                           # optional
+```
+
+The framework names no chat tool and is not going to. Which service reaches you, whether it is a
+push notification, an SMS or a line in a group chat, and what it costs are decisions about your
+life, not about a build system. What tldrx knows is *when* a person is needed and *exactly what to
+type*; the command is yours.
+
+It is run the way every other declared command is (guide 02): **split to argv and executed
+directly**, never through `sh -c`, so a bare `|` or `&&` in it is refused rather than shelled —
+put a pipeline in a script and declare the script. The payload never touches the command line. It
+arrives on **stdin**, as one `version: 1` JSON object:
+
+```json
+{
+  "version": 1,
+  "kind": "question.raised",
+  "run": "260907-checkout",
+  "stage": "01-what/what",
+  "summary": "260907-checkout stopped at 01-what/what on 1 open question(s): Q1 · Should an abandoned hunt count toward the leaderboard? The run is parked until one is answered; nothing is being spent while it waits.",
+  "command": "tldrx answer Q1 \"…\" --run 260907-checkout",
+  "detail": { "questions": [ { "id": "Q1", "options": [ { "letter": "A", "text": "count them" } ], "answer_command": "tldrx answer Q1 \"…\" --run 260907-checkout" } ] }
+}
+```
+
+`summary` is one paragraph written to be read on a lock screen. `command` is the **exact line to
+type**, run id and all — the measured failure this exists to fix was never a lack of information,
+it was that acting on it meant reconstructing a command from a screen nobody was looking at. When
+there is genuinely nothing to do — a stage finished, a run finished cleanly — `command` is `null`
+rather than an invented next step.
+
+The kinds are `question.raised`, `question.timeout`, `gate.requested`, `stage.done`,
+`run.finished`, `run.failed`, `budget.warned` and `status`. The full per-kind `detail` table is in
+[spec §2.18](../spec.md).
+
+**A notifier never changes a run.** A command that will not split, a binary that is not there, a
+non-zero exit, a hang — each becomes a `notify.failed` event carrying the reason, and the loop
+carries on with the exit code it already had. "The owner was not told, and here is why" is a fact
+about the run; "the chat tool was down, so the run failed" would make a side channel load-bearing.
+A delivered one is `notify.sent`, with the kind, the exit code and the duration. Both cost `$0.00`.
+
+### The two flags
+
+```
+$ tldrx run auto --notify-every 10m --wait-answers 30m
+```
+
+`--notify-every <duration>` sends a `status` payload on that interval while the loop runs, carrying
+what `tldrx run status` prints. It is a heartbeat: it asks for nothing while the run is moving, and it exists
+because the period when you most want to know a run is alive is the twenty minutes it is inside
+one stage. When the run is **parked** on an open question, the heartbeat says so and repeats the
+literal answer command instead — a heartbeat that went on saying "nothing is waiting on you"
+while the run waited on you would be worse than silence, because a heartbeat is believed.
+
+`--wait-answers <duration>` is the only one that changes where the loop stops. Instead of exiting
+`4` the moment a stage parks on a question, it polls the run's question files and **resumes if you
+answer** — from your phone, through whatever the notify command reached, as an ordinary `tldrx
+answer`. When the wait lapses it exits `4` with the same lines it always did, after one
+`question.timeout` notification. Nothing is spent while it polls, and the loop never answers its
+own question.
+
+Without `--wait-answers`, the behaviour is unchanged for everyone: a question or a gate still exits
+`4`. The hook has simply already fired, with the answer command in it, so the outer relaunch loop
+is yours to write and you are not the one discovering the stop.
+
+`tldrx init` writes the block **commented out**, with a line saying what it is for. It does not
+guess a command: who gets woken up is not a thing to detect.
+
 ## What none of this changes
 
 Worth stating, because the whole value of the mode is that it is additive:

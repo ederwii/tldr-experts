@@ -284,6 +284,7 @@ tldrx run status   [<run>] [--json] [--verbose] [--run <id>]
 tldrx run estimate [<run>] [--json] [--run <id>]
 tldrx run auto     [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]
                           [--parallel <n>] [--yolo] [--gate-agent] [--ui <mode>] [--run <id>]
+                          [--notify-every <duration>] [--wait-answers <duration>]
 tldrx run gates set <stage>:<human|auto|agent> --note <text> [--run <id>]
 tldrx run unlock   [<run>] [--force] [--run <id>]
 tldrx run cancel   [<run>] --note <text> [--force] [--run <id>]
@@ -351,6 +352,21 @@ LOOP's spend, checked between stages. Headless only — which is why it is refus
 (exit `1`) on a run marked `attended_by: host`. `--gate-agent` prints a **decision card** at
 the stop instead of the ordinary status block (guide 03); it is rendering only and never
 upgrades a stage's gate policy.
+
+`--notify-every <duration>` and `--wait-answers <duration>` are the loop's two **notify**
+flags, and both do nothing at all unless `.tldrx/workspace.yml` declares a `notify:` command
+(spec §2.18, guide 10). `--notify-every 10m` sends that command a `status` payload every ten
+minutes while the loop runs — a heartbeat carrying what `tldrx run status` prints. It asks for
+nothing while the run is moving; over a run **parked** on an open question it says so and
+repeats the literal `tldrx answer` line instead. `--wait-answers 30m` is the only flag that changes where the loop STOPS: instead of
+exiting `4` the moment a stage parks on an open question, it polls the run's question files
+for up to thirty minutes and resumes if somebody answers. A lapsed wait exits `4` with the
+same lines it always did, after one `question.timeout` notification. Both take `30s`, `10m`,
+`2h` or a bare number of seconds; anything else is exit `1`, by name.
+
+Nothing is spent while `--wait-answers` polls, and the loop never answers its own question:
+the answer is an ordinary `tldrx answer` typed by a person, or run by whatever the notify
+command reached.
 
 `auto`'s `--model`, `--effort`, `--max-usd`, `--ui` and `--yolo` are the same flags
 [`tldrx next`](#tldrx-next) explains, passed to every stage the loop runs — so `--yolo` here

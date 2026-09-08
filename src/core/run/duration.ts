@@ -62,3 +62,30 @@ export function dashDurationAbsence(startedAt: string | null, endedAt: string | 
   return "not recorded — run.yml's two timestamps do not yield one "
     + "(unparseable, or ended_at before started_at)";
 }
+
+/**
+ * `"30m"`, `"90s"`, `"2h"`, `"45"` → milliseconds. `null` when it is not a duration.
+ *
+ * Added 2026-09-07 with `run auto --notify-every` and `--wait-answers` (gh #180), which
+ * are the first two flags in the CLI that take a SPAN rather than an instant or a count.
+ * One implementation, here, next to the other two things this file knows about durations —
+ * a second parser is exactly the drift AGENTS.md §7 refuses, and two flags on one command
+ * disagreeing about whether `5` means seconds or minutes would be an unusually cruel bug.
+ *
+ * A bare number is SECONDS: it is what `timeout_s` and every `_s` field in the schemas
+ * mean, so a reader who has seen one of those is not surprised. Zero and negatives are
+ * `null` rather than 0 — "notify me every no time" is not a request, it is a typo, and the
+ * caller refuses it by name.
+ *
+ * Not closure-free and not `dash`-prefixed: unlike the two above, this one never crosses
+ * into the browser.
+ */
+export function parseDurationMs(text: string): number | null {
+  const match = /^(\d+(?:\.\d+)?)(ms|s|m|h)?$/.exec(text.trim());
+  if (match === null) return null;
+  const value = Number(match[1]);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  const unit = match[2] ?? "s";
+  const scale = unit === "ms" ? 1 : unit === "s" ? 1000 : unit === "m" ? 60_000 : 3_600_000;
+  return Math.round(value * scale);
+}

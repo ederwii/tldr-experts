@@ -58,6 +58,46 @@ checked *between* stages, so it can overshoot by at most one stage's share.
 question, its options, the recommendation if there was one, and the single command to type
 — instead of the usual status block.
 
+## Telling somebody: the notify hook
+
+`run auto` stops for a person by printing to **stdout**, and stdout is in a terminal nobody is
+watching. That is why unattended runs get abandoned for host-driven ones — and trading a metered
+budget, an enforced model and parallel stories for a notification is a bad trade.
+
+So `.tldrx/workspace.yml` may declare **one command** the run tells a person through:
+
+```yaml
+notify:
+  command: "bin/notify-owner"
+  events: [question.raised, gate.requested, run.failed]   # optional; omitted = every kind
+```
+
+tldrx names no chat tool. Which service reaches you is a decision about your life, not about a
+build system. What the framework knows is *when* a person is needed and *exactly what to type*.
+
+The command is split to argv and run directly — never through a shell, exactly like every other
+command the workspace declares — and the payload arrives on **stdin** as one `version: 1` JSON
+object: the kind, the run, a one-paragraph `summary` written to be read on a lock screen, and
+`command`, the exact line to type with the run id already in it. An open question carries its
+options and its recommendation; a gate carries the approve line; a finished run carries its exit
+code and what that code's family means.
+
+**A notifier never changes a run.** A missing binary, a non-zero exit, a hang — each is written
+down as a `notify.failed` event with the reason, and the loop carries on with the exit code it
+already had.
+
+```bash
+tldrx run auto --notify-every 10m --wait-answers 30m
+```
+
+`--notify-every` adds a periodic `status` payload carrying what `tldrx run status` prints — a
+heartbeat, asking for nothing while the run is moving. Over a run **parked** on an open
+question it says so and repeats the literal answer command, because a heartbeat that kept
+saying nothing is waiting on you would be worse than silence. `--wait-answers` is the one flag that changes where the loop stops:
+instead of exiting `4` at an open question it polls for an answer and **resumes if you give one**,
+then exits `4` unchanged when the wait lapses. Nothing is spent while it waits, and the loop never
+answers its own question.
+
 ## Overnight, with the checking kept
 
 The demanding case: nobody is watching, and you still want an adversarial review. Two

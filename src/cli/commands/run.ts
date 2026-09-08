@@ -9,7 +9,9 @@
 import { basename } from "node:path";
 import type { Command } from "../Command.ts";
 import { EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
-import { listFlag, numberFlag, parseArgs, repeatedFlag, stringFlag, UsageError, boolFlag } from "../argv.ts";
+import {
+  listFlag, numberFlag, parseArgs, repeatedFlag, stringFlag, UsageError, boolFlag, type ParsedArgs,
+} from "../argv.ts";
 import { workspaceRootFrom } from "../workspace.ts";
 import { startUi } from "../ui.ts";
 import { effortFlag } from "../effort.ts";
@@ -26,6 +28,7 @@ import { createRun } from "../../core/run/newRun.ts";
 import { setGatePolicy } from "../../core/run/setGatePolicy.ts";
 import { RunStore } from "../../core/run/RunStore.ts";
 import { buildStatus, renderStatus } from "../../core/run/runStatus.ts";
+import { parseDurationMs } from "../../core/run/duration.ts";
 import { openRunRows, renderOpenRuns } from "../../core/run/openRuns.ts";
 import { notFound } from "../resolveRun.ts";
 import { currentActor } from "../../hooks/lib/actor.ts";
@@ -43,7 +46,28 @@ const HINT_FILE_COUNT = 10;
 const VALUE_FLAGS = [
   "title", "scope", "budget", "repos", "from", "seed", "gates", "run", "root",
   "max-usd", "until", "model", "effort", "ui", "note", "parallel", "attended-by",
+  "notify-every", "wait-answers",
 ];
+
+/**
+ * A `<duration>` flag, refused by NAME when it is not one.
+ *
+ * `parseDurationMs` returns null for "0", "-5", "soon" and "30 minutes" alike, and a loop
+ * that silently treated any of those as "off" would be a flag the operator typed and the
+ * run ignored. One parser, one refusal, both flags — see `core/run/duration.ts`.
+ */
+function durationFlag(args: ParsedArgs, name: string): number | undefined {
+  const raw = stringFlag(args, name);
+  if (raw === undefined) return undefined;
+  const ms = parseDurationMs(raw);
+  if (ms === null) {
+    throw new UsageError(
+      `--${name}: '${raw}' is not a duration — write it as \`30s\`, \`10m\`, \`2h\` or a bare `
+      + "number of seconds, and it must be greater than zero",
+    );
+  }
+  return ms;
+}
 
 export const runCommand: Command = {
   name: "run",
@@ -55,6 +79,7 @@ export const runCommand: Command = {
     "       tldrx run status [<run>] [--json] [--verbose] [--run <id>] [--root <path>]\n" +
     "       tldrx run estimate [<run>] [--json] [--run <id>] [--root <path>]\n" +
     "       tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]\n" +
+    "                      [--notify-every <duration>] [--wait-answers <duration>]\n" +
     "                  [--yolo] [--parallel <n>] [--gate-agent] [--ui scene|compact|plain|off]\n" +
     "                  [--run <id>] [--root <path>]\n" +
     "       tldrx run gates set <stage>:<human|auto|agent> --note <text> [--run <id>] [--root <path>]\n" +
@@ -273,6 +298,8 @@ async function runAutoLoop(argv: readonly string[]): Promise<number> {
         yolo: boolFlag(args, "yolo"),
         parallel: parallelFlag(args),
         gateAgent: boolFlag(args, "gate-agent"),
+        notifyEveryMs: durationFlag(args, "notify-every"),
+        waitAnswersMs: durationFlag(args, "wait-answers"),
         actor: currentActor(),
         at: nowRfc3339(),
         // Erase the view, let the stage line scroll past on stdout, repaint. A

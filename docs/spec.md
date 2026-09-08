@@ -92,6 +92,9 @@ contracts:
 stack_packs:                 # the one opt-in switch for the stack expert packs; absent = off
   enabled: true
   enabled_at: 2026-09-05T10:00:00Z
+notify:                      # optional: the ONE command a run may tell a person through (§2.18)
+  command: "bin/notify-owner"
+  events: [question.raised, gate.requested, run.failed]
 ```
 
 | Field | Type | Req | Meaning |
@@ -108,13 +111,15 @@ stack_packs:                 # the one opt-in switch for the stack expert packs;
 | `repos[].confidence` | `high\|medium\|low` | y | `low` forces an interview question at init |
 | `repos[].overlays[].{id,evidence}` | str / str | n | Framework overlays detection can PROVE from this repo's manifests (`src/core/detect/overlays.ts` is the one table of ids), each with the manifest signal that fired it. Always written, whatever the switch says: the evidence is a detection result. `stack_packs.enabled` gates only whether they are MATERIALISED under `experts/<lang>-stack/overlays/` |
 | `repos[].skills[].{name,description,path,tracked}` | str / str / rel path / bool | n | The repo's own `.claude/skills/*/SKILL.md`, named to the developer and never loaded by tldrx. `name`/`description` come from the skill's own front matter; `path` is repo-relative; `tracked: false` (nothing in `git ls-files`) ⇒ absent from story worktrees, which carry tracked files only. Always written, independent of the switch |
+| `notify.{command,events,timeout_s}` | str / kind[] / int | n | **Additive, and never detected.** The owner's own command, run at every moment `tldrx run auto` needs a person, with one `version: 1` JSON payload on stdin. Held to §2.1's command rule exactly — split to argv, no shell opened, a bare metacharacter refused — because it is run as the user like every other declared command. `events` omitted means every kind; an unknown kind is a validation error. `timeout_s` bounds one invocation. It permits nothing and gates nothing: a notifier's exit code is written as a `notify.sent` / `notify.failed` event (§2.9) and never changes the run's outcome. `tldrx init` writes it COMMENTED, never guessed. Whole schema and payload: §2.18 |
 | `stack_packs.{enabled,enabled_at}` | bool / RFC3339\|null | n | The stack packs switch (`tldrx expert packs`). Absent means off — the default. Read from the file being regenerated and carried forward across `init`, so a re-init never silently turns the packs off. `disable` writes `enabled: false` with `enabled_at: null` |
 | `contracts[].{id,title,when,then}` | `^C\d+$` / str / {repo,paths[]} / [{repo,command}] | y | Cross-repo obligation: source repo + globs ⇒ dependent commands auto-spawned at Plan time |
 | `mcp_servers[].{name,transport,status,checked_at}` | str / str / `connected\|auth_required\|failed` / RFC3339 | n | Cached parse of `claude mcp list` (slow: runs health checks) — used only to *suggest* `process.yml ticket_tool`, never to act |
 
 **Validation.** `name` unique; `path` exists, relative, inside root; enums as above; commands non-empty when non-null
 and free of `&& ; | > \`` (single argv, auditable); contract repos resolve; ≤64 repos, ≤128 contracts.
-`repos[].overlays`, `repos[].skills`, `repos[].command_probes`, `repos[].commands.test_fast` and `stack_packs` are
+`repos[].overlays`, `repos[].skills`, `repos[].command_probes`, `repos[].commands.test_fast`, `stack_packs` and
+`notify` are
 **additive**: a file written
 before they existed loads unchanged (absent ⇒ empty lists, no probes, switch off), and `version:` stays `1` — a format
 that only grows does not bump it. A `command_probes` that is present is checked: a mapping of slot to
@@ -1147,7 +1152,7 @@ Append-only audit log: the cost ledger, the `replay`/`retro` input, and — with
 `stage.skipped` `task.started` `task.done` `agent.spawned` `agent.result` `question.asked` `question.answered`
 `gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `gate.policy_changed` `story.reopened` `story.base_fastforwarded` `story.review_retried` `story.work_rescued`
 `story.touches_widened` `result.unreadable` `operator_note` `check.passed` `check.failed` `budget.warned`
-`budget.blocked` `budget.raised` `budget.granted` `fact.added` `fact.retired` `fact.superseded` `fact.conflict_raised` `doc.superseded` `map.refreshed` `ticket.synced` `error`. Closed set: an
+`budget.blocked` `budget.raised` `budget.granted` `fact.added` `fact.retired` `fact.superseded` `fact.conflict_raised` `doc.superseded` `notify.sent` `notify.failed` `map.refreshed` `ticket.synced` `error`. Closed set: an
 unknown type is a validation error.
 
 **This list is the enum, and a test says so.** It is `EVENT_TYPES` (`src/core/events/Event.ts`), in that order, and
@@ -1866,6 +1871,115 @@ citation of its own (the literal string `[src: …]` appears once, inside the it
 list item), and what it writes deliberately does **not** validate: a template that parsed clean out of the box would be a signature nobody had
 to earn. It spends nothing, spawns nothing, approves nothing and moves no cursor.
 
+### 2.18 The notify hook — `notify:` in `.tldrx/workspace.yml`, and its payload
+
+**The problem, measured.** Every run in the week of 2026-09-07 was driven in HOST mode
+(`attended_by: host`), for one reason: a host session can reach a person and the unattended
+runner cannot. `tldrx run auto`'s answer to an open question or a human gate is exit `4` and a
+decision card on **stdout**, and stdout is in a terminal nobody is watching. So the three things
+only the unattended runner has — a metered budget, an enforced model, stories running in
+parallel — were being traded away to solve a notification problem.
+
+**What the framework will not do.** Name a chat tool. The reasoning is unchanged from
+`src/core/drive/mandate.ts`: every workspace's owner is reachable by something different, and a
+built-in integration would be this framework deciding whose product it depends on.
+`.agent/<stage>/dispatch-notes.md` stays context, never configuration.
+
+**The seam.** One optional, additive block. A `workspace.yml` without it notifies nothing and
+behaves exactly as it did before the key existed — `version: 1` files only grow.
+
+```yaml
+notify:
+  command: "bin/notify-owner"          # a single argv line, like `commands:` — no shell is opened
+  events: [question.raised, gate.requested, run.failed]   # optional; omitted means every kind
+  timeout_s: 30                        # optional; one invocation's ceiling
+```
+
+`command` obeys **§2.1's rule verbatim**: it is split into argv and run directly, never through
+`sh -c`, and a bare shell metacharacter (`| & ; < > $ \` ( ) { } * ? ~ \`) is refused rather than
+shelled. A team that needs a pipeline puts it in a script and declares the script. The payload
+never touches the command line — a question's own title could otherwise become shell syntax.
+
+`events` names the kinds to deliver. Omitted means **all of them**: an owner who declared a
+command wants to hear about the run, and a default that silently subscribed to nothing would be
+a configured hook that never fires and never says why. An unknown kind is a validation error.
+
+**The payload.** One JSON object on **stdin**, `version: 1`:
+
+```json
+{
+  "version": 1,
+  "kind": "question.raised",
+  "at": "2026-09-07T18:20:04.117Z",
+  "run": "260907-checkout",
+  "root": "/Users/alan/code/checkout",
+  "stage": "01-what/what",
+  "summary": "260907-checkout stopped at 01-what/what on 1 open question(s): Q1 · Should an abandoned hunt count toward the leaderboard?. The run is parked until one is answered; nothing is being spent while it waits.",
+  "command": "tldrx answer Q1 \"…\" --run 260907-checkout",
+  "detail": {
+    "questions": [
+      {
+        "id": "Q1",
+        "title": "Should an abandoned hunt count toward the leaderboard?",
+        "why_asked": "no rule for abandoned hunts exists in memory [src: absent:.tldrx/memory/facts.yml]",
+        "options": [{ "letter": "A", "text": "count them" }, { "letter": "B", "text": "drop them" }],
+        "recommendation": { "option": "B", "why": "matches how players talk about it", "src": "01-what/handoff.md:22" },
+        "answer_command": "tldrx answer Q1 \"…\" --run 260907-checkout"
+      }
+    ]
+  }
+}
+```
+
+`summary` is one paragraph a person can act on from a lock screen. `command` is the exact line
+to type, already carrying the run id — or **null**, honestly, when there is nothing to do
+(`stage.done`, a clean `run.finished`); an invented next command would be the framework guessing
+at an intention. `stage` is `<phase>/<stage>` or null. `detail` is per-kind and always an object.
+
+**Kind enum** (closed): `question.raised` `question.timeout` `gate.requested` `stage.done`
+`run.finished` `run.failed` `budget.warned` `status`.
+
+| kind | when | `detail` |
+| --- | --- | --- |
+| `question.raised` | the loop parked on an open question | `questions[]` — id, title, `why_asked`, `options[]` as `{letter, text}`, `recommendation` or null, `answer_command` |
+| `question.timeout` | `--wait-answers` lapsed and the loop is about to exit `4` | the same `questions[]`, plus `waited_ms` |
+| `gate.requested` | a stage finished and a person must sign it | `cost_usd`, `approve_command`, `reject_command` |
+| `stage.done` | a stage finished and the loop moved on | `cost_usd` |
+| `run.finished` | the loop ended with exit `0` | `exit_code`, `exit_family`, `spent_usd` |
+| `run.failed` | the loop ended with any non-zero exit, refusals included | `exit_code`, `exit_family`, `spent_usd` |
+| `budget.warned` | a ceiling is close | `spent_usd`, `ceiling_usd` |
+| `status` | every `--notify-every <duration>` while the loop runs | `status_text` — what `tldrx run status` prints, verbatim — and `waiting_on`, the blocking open question ids (`[]` when none) |
+
+The questions, their options and their recommendation are the **same card** `run auto
+--gate-agent` prints (§ "Decision cards"), so a notification and a terminal can never disagree
+about what was asked.
+
+**A heartbeat over a parked run REMINDS.** When `waiting_on` is non-empty the `status` payload
+names the open questions and its `command` is the literal `tldrx answer` line, not
+`tldrx run status`. The alternative — a heartbeat that goes on saying "nothing is waiting on
+you" while the run sits on somebody's answer — is worse than silence, because a heartbeat is
+believed; it was reproduced in review with `--notify-every` and `--wait-answers` both on.
+Parked-ness is decided by the SAME predicate `--wait-answers` polls and `next` parks on, never
+by a second opinion.
+
+**A notifier never changes a run's outcome.** Not its exit code, not its files, not a line of
+its stdout. A command that will not split, an executable that is not there, a non-zero exit, a
+timeout — each is recorded as a `notify.failed` event carrying the reason and then dropped,
+because "the owner was not told, and here is why" is a fact about the run and "the chat tool was
+down, so the run failed" would make a side channel load-bearing. A successful invocation is
+`notify.sent` with the kind, the command, the child's exit code and its duration. Both carry
+`cost_usd: 0` — a notification spends nothing — and both are §2.9 events.
+
+**Where it fires**: `tldrx run auto`, which is the only loop that runs unattended long enough
+for anyone to need telling. A question or a gate still exits `4` exactly as before — the hook
+has simply already fired, with the answer command in it. `--notify-every <duration>` adds the
+periodic `status`; `--wait-answers <duration>` polls the question files instead of exiting at
+once, and exits `4` unchanged when it lapses.
+
+**`tldrx init` never guesses a notify command.** It writes the block **commented out** with a
+one-line explanation, the way the `test_fast` slot is written: a hook is a decision about who
+gets woken up, and the framework does not make that one.
+
 ## 3. CLI surface
 
 Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not found · `4` awaiting human · `5` agent failed.
@@ -1887,7 +2001,7 @@ Exit codes: `0` ok · `1` usage/schema error · `2` refused by a gate · `3` not
 | `tldrx cost [<run>] [--run <id>] [--all] [--stories] [--json]` | every run's `events.jsonl` (+ `run.yml` for the title) | nothing (stdout). `--stories` changes the AXIS, not the source: one row per Build story with what it measurably cost (metered `agent.result` lines keyed to it), the SPAWN CEILING the executor handed its spawns (`agent.spawned.max_budget_usd` — a cap it computed, never a charge) and the ratio. The two are separate columns and are never added to each other. A story missing either side reads `not recorded` with the reason, never `$0.00`, and no total is printed over a figure that could not be formed; a measurement with an unmetered turn in it is named a LOWER BOUND rather than given the inside-the-ceiling verdict. Keyed results no Build spawn accounts for — a Watch feature id is not a story — are excluded and the exclusion is COUNTED on stdout. It changes no ceiling and spends nothing. `--all` and `--stories` are two different reports: the pair is refused (**1**), never silently resolved in favour of one | 0,1,3 |
 | `tldrx run estimate [<run>] [--json]` | everything `next --prepare` reads, plus every run's `events.jsonl` for cache-write / cache-read / output history | nothing (stdout) | 0,1,3 |
 | `tldrx run gates set <stage>:<human\|auto\|agent> --note <text> [<run>]` | `run.yml` | `run.yml`'s §2.2 `gates_policy` and `events.jsonl` (`gate.policy_changed`, carrying actor, moment, note and old→new). The ONLY sanctioned way to move a frozen `gates_policy`; `run.yml` stays hand-edit-forbidden (§1). ONE `<stage>:<policy>` per invocation — a comma list is refused, and the entry must name its policy outright, since under `--gates` a bare stage means `human` and a signature must not rest on a default. An empty or missing `--note` is refused, as is a no-op (`human` → `human`). A run whose `run.yml` has no `gates_policy` at all gets the FULL map written, every stage explicit, with the one change applied. Gates already signed are untouched | 0,1,2,3 |
-| `tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <l>] [--parallel <n>] [--gate-agent] [--yolo]` | everything `next` reads, once per stage | everything `next` writes. Refused with **exit 1** on a run marked `attended_by: host`, before the event log is opened so nothing is written: this loop's whole job is calling `next` headless, and on such a run that is a refusal. `--gate-agent` is RENDERING ONLY (§5, "Decision cards"): when the loop stops for a person at exit 4 it prints a decision card in place of the ordinary stop block, and it never upgrades a stage's frozen `gates_policy` | 0,1,2,3,4,5 |
+| `tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <l>] [--parallel <n>] [--gate-agent] [--notify-every <duration>] [--wait-answers <duration>] [--yolo]` | everything `next` reads, once per stage, plus `.tldrx/workspace.yml`'s `notify:` block (§2.18) | everything `next` writes. Refused with **exit 1** on a run marked `attended_by: host`, before the event log is opened so nothing is written: this loop's whole job is calling `next` headless, and on such a run that is a refusal. `--gate-agent` is RENDERING ONLY (§5, "Decision cards"): when the loop stops for a person at exit 4 it prints a decision card in place of the ordinary stop block, and it never upgrades a stage's frozen `gates_policy`. With a `notify:` block declared it also INVOKES that command (§2.18) at each moment a person is needed, writing one `notify.sent` or `notify.failed` per invocation — a failing notifier never changes the exit code. `--notify-every` adds a periodic `status` payload; `--wait-answers` polls the question files instead of exiting 4 at once, and exits 4 unchanged when it lapses. Both refuse a value that is not a duration with exit 1 | 0,1,2,3,4,5 |
 | `tldrx answer <Qid> <text> [--supersede] [--decided-by <owner\|driver>] [--repo <name>]… [--run <id>]` | `questions.md`, `facts.yml`, `workspace.yml` (for the declared repo names) | `questions.md`, `facts.yml`, `events.jsonl`. `--supersede` is the only writer of `superseded_by`: valid only on an **answered** question, it appends a fact carrying the new answer, sets the old fact's `superseded_by`, appends a superseding `[Answer …]:` line plus a footer to the block, and appends `fact.added` + `fact.superseded`. Without it an answered question is refused (3); with it an **open** one is refused (1). **Both paths** then stamp the earlier-phase documents the block names and append `doc.superseded` (§2.7, *Superseding an earlier phase's document*). `--decided-by` records §2.5's `source.decided_by` and is OPTIONAL here (`facts add` requires it — this path is also the `answer-capture` hook's, which cannot say who answered); absent means "not stated", and stdout says so with the reason. `--repo` is repeatable and scopes the fact's `repos`; without it the scope comes from the question's own `affects:` (§2.7), and from nothing otherwise. Both flags apply to the question the invocation NAMED and to no other block the same call sweeps. New refusals, both **1** and both before anything is written: a `--decided-by` outside `owner\|driver`, and a `--repo` no `workspace.yml` repo answers to. A detected contradiction (§2.5) is RAISED, never refused: one extra §2.7 block, one `fact.conflict_raised`, exit unchanged | 0,1,2,3 |
 | `tldrx facts add "<text>" --area <id> --decided-by <owner\|driver> [--kind <k>] [--confidence <c>] [--repo <r>] [--run <id>]` | `facts.yml`; the open runs, only to establish which one to attribute the fact to | `facts.yml` (one appended row, through `FactsStore` under the workspace lock — load, mint the id, cap, validate, save) and, when a run was established, that run's `events.jsonl` (`fact.added`). The direct writer beside `answer`, for a fact no question asked for. `--area` and `--decided-by` are both REQUIRED: without an area no `{{facts}}` block or no-re-ask hook can scope a match, and without a decider a row that gets cited later cannot say which of the two it was. Over the §2.5 cap the text is cut, marked `truncated: true`, and the cut is named on stdout — a marker only a later reader sees is one the author never acts on. The run is provenance and is ABSENT WITH A REASON when it cannot be established: one open run is used, several are never guessed between, and either way the row is written and stdout says which happened. `--run <id>` naming a run that does not exist is REFUSED (exit 3) before the store is opened — `RunStore.resolve` answers `none` both to “no run is open” and to “that id is not here”, and writing the second as the first attributed the fact to nothing while telling the operator there was nothing to attribute it to | 0,1,3 |
 | `tldrx interview [--run <id>\|--init] [--yes-to-defaults]` | the cursor phase's `questions.md` (or `.tldrx/init-questions.md`), `run.yml`, `.tldrx/process.yml`, `workspace.yml`, `git remote get-url origin` | the same three files `answer` writes, one per answer recorded; with `--init`, also `.tldrx/process.yml` (§2.12) when a process answer settles `methodology` or `ticket_tool.kind` | 0,1,2,3 |
