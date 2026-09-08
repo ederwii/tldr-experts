@@ -23,7 +23,7 @@ conduces, así que te quedas con el criterio de esa sesión y con sus propias he
 ya puede alcanzarte porque estás hablando con ella. Lo que cedes es la medición — esos
 turnos se cobran a tu sesión, no se miden por etapa — y el paralelismo: una sesión
 anfitriona conduce un turno a la vez. Este es el modo para el que
-[`tldrx drive`](/es/guides/driving) escribe un mandato.
+[`tldrx drive`](/es/guides/driving#de-noche-sin-soltar-la-revision) escribe un mandato.
 
 **El motor — `tldrx run auto`.** Un bucle sin terminal que llama a `next` una y otra vez,
 lanzando un sub-agente medido etapa tras etapa. Obtienes un medidor de dólares por etapa, un

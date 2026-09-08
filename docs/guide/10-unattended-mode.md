@@ -116,8 +116,8 @@ tldrx run new payments --scope feature --budget 25 \
 >
 > Never push. The final merge is mine.
 
-**A stop is not free, and the mandate now says so.** Measured across the eight runs that drove the
-`aparece-v2` workspace: 26 `budget.raised` and 26 `question.answered` events, and an owner who had
+**A stop is not free, and the mandate now says so.** Measured across the eight runs that drove one
+real workspace: 26 `budget.raised` and 26 `question.answered` events, and an owner who had
 to type *"sigue con todas desatendido, no esperes por mi"* **inside** an unattended run to restart a
 session the text had correctly halted. The shipped mandate carried four instructions to stop and
 none to continue, so `tldrx drive --unattended` now leads with a **`## Do not stop`** section that
