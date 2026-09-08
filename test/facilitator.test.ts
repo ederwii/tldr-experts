@@ -397,8 +397,12 @@ describe("--dry-run", () => {
     expect(said).toContain("dry run: nothing was spawned and nothing was written");
     expect(said).toContain("would dispatch 01-what/alpha");
     // The context ledger — which is where the prompt size lives — is printed on a
-    // dry run exactly as it is on a `--prepare`.
-    expect(said).toMatch(/context \d+ B of /);
+    // dry run exactly as it is on a `--prepare`. The unit is the formatter's
+    // choice: this fixture's prompt crossed 1 KB when the imperative preamble
+    // was added (gh #196), so pinning `B` here pinned the fixture's size, not the
+    // behaviour the test is named for.
+    expect(said).toMatch(/context [\d.]+ (B|KB) of /);
+    expect(said).toContain("stage preamble ");
     expect(said).toMatch(/prompt: \d+ B/);
     // The command, verbatim enough to recognise — with the schema blob elided.
     expect(said).toContain("claude -p --output-format stream-json --verbose");

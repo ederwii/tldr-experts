@@ -321,6 +321,13 @@ function featurePrompt(ctx: ExecutorContext, feature: Feature, diffs: readonly R
     knowledgeBytes: ctx.spec.knowledgeMaxBytes,
   });
   const body = buildPrompt({
+    // The imperative, first (gh #196). One watcher card per feature, so the one
+    // declared output is this feature's own — named from the sub-agent's cwd.
+    preamble: {
+      stage: ctx.stageId,
+      run: ctx.runId,
+      outputs: [relative(ctx.root, join(ctx.runDir, watcherRelPath(feature.id)))],
+    },
     stageMd,
     values: {
       run: ctx.runId,

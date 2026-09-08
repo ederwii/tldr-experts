@@ -101,6 +101,14 @@ export function buildLedger(input: LedgerInput): ContextLedger {
   for (const part of input.parts) {
     const bytes = byteLength(part.text);
     switch (part.kind) {
+      case "preamble":
+        // Charged to `stage`: the preamble IS stage instruction material — the
+        // sentence `stage.md` never carried (gh #196) — and a new group would
+        // change `pending.json`'s shape to say something the existing one already
+        // says. It keeps its own ROW, so the ledger still prints what it cost.
+        stage += bytes;
+        rows.push({ kind: part.kind, name: part.name, bytes });
+        break;
       case "stage":
         stage += bytes;
         rows.push({ kind: part.kind, name: part.name, bytes });
@@ -262,6 +270,7 @@ function label(row: LedgerRow): string {
     case "inputs": return `input ${row.name}`;
     case "expert-body": return `expert ${row.name} body`;
     case "expert-knowledge": return `expert ${row.name} knowledge`;
+    case "preamble": return "stage preamble";
     case "dispatch-notes": return "dispatch notes";
     case "project-skills": return "project skills";
     case "previous-attempt": return "previous attempt";

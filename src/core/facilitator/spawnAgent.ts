@@ -31,6 +31,7 @@ import { emitAgentEvent } from "../ui/bus.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
 import { AgentStream, resolveCodexResultDoc, resolveResultDoc, type AgentEvent } from "./agentEvents.ts";
 import { isReadTool, readCapError, STOPPED_BY_MAX_READS } from "./readCap.ts";
+import { subagentEnv } from "./subagent.ts";
 import { ENVELOPE_SCHEMA, toEnvelope, toUsage, type AgentEnvelope, type AgentUsage, type ClaudeResultJson } from "./envelope.ts";
 
 /** The provider this file speaks to, when nobody says otherwise. */
@@ -251,6 +252,19 @@ function shellQuote(arg: string): string {
   return /^[\w.,:/@=-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", `'\\''`)}'`;
 }
 
+/**
+ * The child is TOLD it is a sub-agent (gh #196), at the one place every
+ * provider's spawn goes through.
+ *
+ * The session-start hook greets a session with "N runs are open — pass a run
+ * id"; that is advice for a human who has several runs and no prompt. A spawned
+ * sub-agent has its run in its prompt, and on a real workspace at 0.13.0 that
+ * nudge was the only imperative-shaped sentence in a What agent's window — so it
+ * answered the nudge and wrote none of its outputs. The name and the setter live
+ * in `subagent.ts` so a hook can read them without importing this module.
+ */
+export { SUBAGENT_ENV_VAR, subagentEnv } from "./subagent.ts";
+
 export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
   // Before the parser, before the argv, before a byte of prompt goes anywhere: a
   // run marked `attended_by: host` never spawns, and the one place that cannot be
@@ -294,7 +308,7 @@ export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
         ...(cap > 0 ? { signal: controller.signal } : {}),
         // Explicit, live env: the provider is resolved off PATH, and on Bun the
         // default child environment is the one captured at process start.
-        env: request.env ?? { ...process.env },
+        env: subagentEnv(request.env),
         onStdoutLine: (line) => {
           for (const event of stream.push(line)) {
             // Counted on COMPLETION, so the kill lands between tools rather than

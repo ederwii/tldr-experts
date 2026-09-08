@@ -16,6 +16,7 @@
  * knowledge — the most stable material in the document — and it was emitted LAST,
  * behind 45% of declared inputs that change at every stage. So the order is now:
  *
+ *   0. the preamble          the imperative: who the reader is, what to write, where (gh #196)
  *   1. `stage.md`            the stage's own rules; one file, per stage
  *   2. expert blocks         `expert.md` + trained knowledge; the big stable mass
  *   3. `## Inputs`           the declared inputs' content; per stage
@@ -90,7 +91,76 @@ export function isNotInlined(input: PromptInput): boolean {
   return input.totalBytes !== undefined && (input.inlinedBytes ?? 0) === 0;
 }
 
+/**
+ * What the imperative preamble needs, and nothing else: DATA the facilitator
+ * already owns (`pending.outputs`, the run id, the stage id), never a context
+ * object. One renderer, in one place — the Build developer and reviewer prompts
+ * have their own preamble (`core/build/prompts.ts`) and are a different document.
+ */
+export interface StagePreamble {
+  /** The stage id — `what`, `how`, `plan`, `watch`. */
+  readonly stage: string;
+  readonly run: string;
+  /**
+   * Every declared output, as a path the sub-agent can write VERBATIM from its
+   * cwd. A pattern (`03-plan/stories/<id>.md`) stays a pattern: that shape is
+   * exactly what the stage is being told to produce.
+   */
+  readonly outputs: readonly string[];
+}
+
+/**
+ * The first words of the prompt, and the sentence the whole part exists for:
+ * grep this to prove a spawned stage was told it was one. Tests assert THIS
+ * export rather than an English phrase they typed themselves.
+ */
+export const STAGE_PREAMBLE_MARKER = "You are the tldrx stage sub-agent";
+
+/**
+ * The imperative the sub-agent used not to get (gh #196).
+ *
+ * Measured on a real workspace at 0.13.0: a What agent was handed 66,452 bytes
+ * and answered "I don't see an actual request in your message — only system
+ * context, tldrx state, and template/expert file dumps". It was right. The first
+ * part of the prompt was `stage.md`, which is a fill-in HANDOFF TEMPLATE: it
+ * describes a finished document without ever saying that writing that document
+ * is the job. The one imperative-shaped sentence in the model's window came from
+ * the SessionStart hook, and that is the one the agent answered.
+ *
+ * So: who the reader is, which stage and run, that the template is to be FILLED,
+ * where the result goes, and that a question goes in the questions file rather
+ * than back to a human who is not there. Generated from data — no stage is named
+ * in this file — and deliberately short: it sits ahead of the largest stable
+ * block in the document, where every byte is paid at the cache-WRITE price.
+ */
+export function renderStagePreamble(preamble: StagePreamble): string {
+  const questions = preamble.outputs.find((path) => path.split("/").pop() === QUESTIONS_FILE);
+  const lines = [
+    `${STAGE_PREAMBLE_MARKER} for stage \`${preamble.stage}\` of run \`${preamble.run}\`.`,
+    "This prompt is the entire request: there is no other message to find, and no operator to reply to.",
+    "",
+    "Do this now:",
+    "",
+    "1. Fill in the template below — replace every `<…>` placeholder with real, sourced content, and keep the sections it declares.",
+    "2. Write the result to the files this stage declares, all of them, at exactly these paths:",
+    ...preamble.outputs.map((path) => `   - \`${path}\``),
+    questions === undefined
+      ? "3. Do not reply with a question. Record anything you cannot settle as an explicit unknown inside the outputs above."
+      : `3. Do not reply with a question. Record anything you cannot settle in \`${questions}\`, in the shape the template gives.`,
+  ];
+  return lines.join("\n");
+}
+
+/** The declared output a stage asks its questions in, by convention (spec §2.8). */
+const QUESTIONS_FILE = "questions.md";
+
 export interface PromptParts {
+  /**
+   * The imperative brief, emitted BEFORE `stage.md`. Absent ⇒ no part at all and
+   * a byte-identical prompt, which is what every caller that is not a stage spawn
+   * (and every older test) relies on.
+   */
+  readonly preamble?: StagePreamble;
   /** `stage.md`, verbatim. */
   readonly stageMd: string;
   readonly values: Readonly<Record<Placeholder, string>>;
@@ -166,9 +236,15 @@ export function renderParts(parts: PromptParts): readonly PromptPart[] {
     ),
     PREVIOUS_ATTEMPT_HEADING,
   );
-  const out: PromptPart[] = [
-    { kind: "stage", name: "stage.md", text: `${substituted.trimEnd()}\n` },
-  ];
+  const out: PromptPart[] = [];
+  if (parts.preamble !== undefined) {
+    out.push({
+      kind: "preamble",
+      name: "preamble",
+      text: `${renderStagePreamble(parts.preamble)}\n\n---\n`,
+    });
+  }
+  out.push({ kind: "stage", name: "stage.md", text: `${substituted.trimEnd()}\n` });
 
   for (const expert of parts.experts) {
     out.push({
@@ -223,7 +299,7 @@ export function renderParts(parts: PromptParts): readonly PromptPart[] {
 }
 
 export type PromptPartKind =
-  | "stage" | "expert-body" | "expert-knowledge" | "inputs" | "dispatch-notes" | "project-skills"
+  | "preamble" | "stage" | "expert-body" | "expert-knowledge" | "inputs" | "dispatch-notes" | "project-skills"
   | "previous-attempt";
 
 export interface PromptPart {

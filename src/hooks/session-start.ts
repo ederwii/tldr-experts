@@ -27,6 +27,7 @@ import { findWorkspaceRoot } from "./lib/workspace.ts";
 import { openQuestions, runSnapshot, type RunSnapshot } from "../core/statusline/runSnapshot.ts";
 import { openRunViews } from "./lib/runFile.ts";
 import { buildWorkspaceStatus, sessionStartLines } from "../core/status/index.ts";
+import { isSubagentEnv } from "../core/facilitator/subagent.ts";
 
 const MAX_LINES = 3;
 
@@ -37,6 +38,14 @@ const MAX_PENDING_LINES = 3;
 const MAX_OPEN_LISTED = 8;
 
 await runHook("session-start", async () => {
+  // A SPAWNED sub-agent gets nothing (gh #196). Every line this hook writes is
+  // orientation for a human who opened a session and may be in the wrong run; a
+  // sub-agent was handed its run, its stage and its outputs in its prompt. On a
+  // real workspace at 0.13.0 the "7 runs are open — pass a run id" line was the
+  // only imperative-shaped sentence in a What agent's window, and the agent
+  // answered it instead of writing its stage. `spawnAgent` sets the marker; an
+  // absent marker is a human's session and behaves exactly as before.
+  if (isSubagentEnv()) return;
   const payload = await readPayload();
   const root = findWorkspaceRoot(payload.cwd ?? process.cwd());
   if (root === null) return;

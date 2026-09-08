@@ -182,6 +182,7 @@ export const ENV_VARS: readonly (readonly [string, string])[] = [
   ["TLDRX_CLAUDE_BIN", "Which binary a Claude sub-agent spawn executes. Default `claude`, taken off `PATH`. It replaces the executable NAME only — the arguments are still Claude Code's, so whatever it points at has to speak them."],
   ["TLDRX_CODEX_BIN", "Which Codex binary the runner executes. Default `codex`, taken off `PATH`. Same late-bound wrapper use as `TLDRX_CLAUDE_BIN`."],
   ["TLDRX_UPDATE_CHECK", "`off` (also `0`, `false`, `no`, `never`) silences the new-version notice. `update_check: off` in `~/.tldrx/config.yml` does it for the machine."],
+  ["TLDRX_SUBAGENT", "Set to `1` by tldrx on every sub-agent it spawns, and read by the `session-start` hook, which stays silent for a spawned agent: the \"N runs are open\" nudge orients a human, and a sub-agent already has its run in its prompt. Not something to set by hand."],
   ["TLDRX_LEARN_SCRIPT", "Feeds `tldrx learn` a scripted sequence of keypresses instead of a terminal. For the tutorial's own tests; not part of ordinary use."],
 ];
 
