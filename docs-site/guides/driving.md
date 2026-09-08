@@ -98,6 +98,10 @@ instead of exiting `4` at an open question it polls for an answer and **resumes 
 then exits `4` unchanged when the wait lapses. Nothing is spent while it waits, and the loop never
 answers its own question.
 
+The operating half of this — the full payload per kind, an adapter skeleton you can paste,
+a first-run checklist and what to check when nothing arrives — is
+[Operating a run unattended](/guides/unattended-operation).
+
 ## Overnight, with the checking kept
 
 The demanding case: nobody is watching, and you still want an adversarial review. Two

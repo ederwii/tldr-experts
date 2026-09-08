@@ -104,6 +104,10 @@ bucle: en vez de salir con `4` en una pregunta abierta, espera una respuesta y *
 y sale con `4` sin cambios cuando el plazo se vence. No se gasta nada mientras espera, y el bucle
 nunca responde su propia pregunta.
 
+La mitad operativa de esto — la carga completa por tipo, un esqueleto de adaptador para
+pegar, una lista para la primera corrida y qué revisar cuando no llega nada — está en
+[Operar un run desatendido](/es/guides/unattended-operation).
+
 ## De noche, sin soltar la revisión
 
 El caso exigente: nadie está viendo, y aun así quieres una revisión adversarial. Dos

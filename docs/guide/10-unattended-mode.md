@@ -116,8 +116,8 @@ tldrx run new payments --scope feature --budget 25 \
 >
 > Never push. The final merge is mine.
 
-**A stop is not free, and the mandate now says so.** Measured across the eight runs that drove the
-`aparece-v2` workspace: 26 `budget.raised` and 26 `question.answered` events, and an owner who had
+**A stop is not free, and the mandate now says so.** Measured across the eight runs that drove one
+real workspace: 26 `budget.raised` and 26 `question.answered` events, and an owner who had
 to type *"sigue con todas desatendido, no esperes por mi"* **inside** an unattended run to restart a
 session the text had correctly halted. The shipped mandate carried four instructions to stop and
 none to continue, so `tldrx drive --unattended` now leads with a **`## Do not stop`** section that
@@ -689,6 +689,11 @@ is yours to write and you are not the one discovering the stop.
 
 `tldrx init` writes the block **commented out**, with a line saying what it is for. It does not
 guess a command: who gets woken up is not a thing to detect.
+
+For the operating side of the same hook — the full `detail` table per kind, an adapter skeleton
+you can paste, a first-run checklist and what to check when nothing arrives — see
+[Operating a run unattended](https://ederwii.github.io/tldr-experts/guides/unattended-operation)
+on the documentation site.
 
 ## What none of this changes
 
