@@ -1,6 +1,53 @@
 # Changelog
 
 
+## 0.13.2 — unreleased
+
+### Changed
+
+- **The pre-merge reviewer runs targeted tests, not the whole suite.** Measured over one fix
+  wave: the 4,200-test suite ran THREE times in series at ~10 min each — the implementer
+  (`AGENTS.md` §3 requires it), the reviewer, and `merge-wave.sh` (by design). Only the
+  reviewer's was avoidable, and it was avoidable because nothing had told it not to: the brief
+  said merely that it *may* run tests, so a fresh reviewer sensibly ran everything. It now says
+  the negative out loud — run only the test files that cover the diff, named from
+  `git diff --stat`, plus `bun run typecheck`, and **never** the full `bun test` — with the
+  reason attached, that the wave re-runs every gate on the MERGED tree, so the reviewer's run
+  verifies nothing the wave will not, on a tree that is not the one being merged. The rule is
+  in `.claude/skills/maintain/references/sub-agent-briefs.md`, where the reviewer reads it, and
+  stated once in the skill's §3 for the workflow reader.
+- **`AGENTS.md` §2 now says a slash in a branch name is a directory.** The review-record gate
+  (#192) builds `.review/<branch>.md` from the branch name VERBATIM, so `fix/x` wants
+  `.review/fix/x.md` — a nested directory, not `.review/fix-x.md`. Learned from the gate's
+  first refusal in the wild, which cost five minutes to read. The canonical fact lives in §2;
+  the maintain skill cites it rather than restating it.
+- **`ci` cancels a run a newer push has already superseded.** The workflow had no
+  `concurrency:` group, so every push started a run and none of them stopped. Measured over the
+  last week: 25 of 122 push-triggered runs began less than 10 minutes apart on a 5.2-minute
+  average, which is roughly an hour to two hours of runner time per week spent finishing
+  answers nobody would read. `ci.yml` now groups on `github.ref` with `cancel-in-progress`.
+  It weakens no gate: `ci` is not the release gate — `scripts/release-check.sh` runs the full
+  gates before anything is pushed and `publish.yml` re-runs them after the tag
+  (`docs/RELEASING.md`), and neither is touched here.
+- **The docs deploy now fires on `src/cli/helpText.ts`.** `docs-site/scripts/gen-cli.ts`
+  generates the site's `reference/cli-flags.md` and `cli.md` from that one registry, but the
+  workflow's `paths:` filter never listed it — so a help-registry change landed on `main`,
+  deployed nothing, and the published CLI reference kept showing the previous surface. It went
+  stale exactly that way after this week's CLI changes. The filter is otherwise unchanged, and
+  a test now pins the entry rather than trusting the next reader to notice.
+- **`publish.yml` depends on `ci`'s answer instead of recomputing it.** The release job ran
+  typecheck, tests and build as its own steps — a THIRD run of the same gates on the same sha,
+  after the local `release-check.sh --pre-push` and after `ci`. Measured: ~6.5 min a publish,
+  ~14 publishes in a week, ~87 min/week of runner time to re-derive something the repo already
+  knew. Publish now refuses unless the `ci` workflow has a `success` run for `github.sha`,
+  polled for up to 15 minutes through the REST API with `head_sha` (never `gh run list
+  --commit`, which returns `[]` for minutes while the runs exist — `AGENTS.md` §4). Nothing is
+  weakened: the same gates still run, once, and the checks only publish can do — tag equals
+  `package.json`, already-on-the-registry, `release-check.sh --ci`, OIDC trusted publishing —
+  are untouched. A `cancelled` ci run fails by name with the remedy, because the new
+  `cancel-in-progress` can supersede a release commit's run; merges stay frozen during a
+  release, as they already were.
+
 ## 0.13.1 — 2026-09-08
 
 ### Fixed

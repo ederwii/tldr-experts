@@ -347,7 +347,8 @@ path documented; `stable` = 1.0, semver from here on. The badge above shows the 
 **One command: `scripts/release.sh X.Y.Z --tag beta`.** The tag is not optional in practice: omit
 `--tag` and the script writes `alpha`, which is no longer this project's status. It is the only
 sanctioned path — a Claude Code hook denies hand-made `git tag` / `npm publish`, and `publish.yml`
-runs `release-check.sh --ci` (the file checks only) plus its own typecheck, tests and build.
+runs `release-check.sh --ci` (the file checks only) and refuses to publish unless the `ci`
+workflow is already green for that exact sha.
 Checklist and judgement calls: `docs/RELEASING.md`.
 
 MIT, © 2026 Alan Martinez — a placeholder made while scaffolding; change it freely before anything ships.

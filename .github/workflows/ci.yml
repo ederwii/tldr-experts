@@ -3,6 +3,16 @@ on:
   push:
     branches: [main]
   pull_request:
+
+# Supersede a run that a newer push on the same ref has already made irrelevant. Measured
+# 2026-09-08 over the last week: 25 of 122 push-triggered runs started less than 10 minutes
+# apart on a 5.2-minute average run, so an obsolete run kept burning a runner while its
+# replacement queued behind it. Safe because this workflow is NOT the release gate — that is
+# `scripts/release-check.sh` before the push and `publish.yml` after the tag (docs/RELEASING.md);
+# a cancelled `ci` run never stands in for either.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     runs-on: ubuntu-latest

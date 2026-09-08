@@ -10,6 +10,8 @@ on:
 permissions:
   contents: read
   id-token: write
+  # Reading the `ci` workflow's runs for this sha — the gate below. Nothing else needs it.
+  actions: read
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -24,9 +26,39 @@ jobs:
           registry-url: "https://registry.npmjs.org"
       - run: npm install -g npm@latest && npm --version
       - run: bun install --frozen-lockfile
-      - run: bun run typecheck
-      - run: bun test
-      - run: bun run build
+      # The gates ran twice already for this sha — locally, before anything was pushed
+      # (`scripts/release-check.sh --pre-push`), and in the `ci` workflow. This job used to run
+      # them a THIRD time: ~6.5 min a publish, ~14 publishes a week, ~87 min/week of runner
+      # time spent re-deriving an answer the repo already had. So publish DEPENDS on ci's
+      # answer instead of recomputing it — and refuses if that answer is not `success`.
+      #
+      # Queried through the REST API with `head_sha`, never `gh run list --commit`, which
+      # returns `[]` for minutes while the runs demonstrably exist (AGENTS.md §4).
+      #
+      # `cancelled` is named rather than swallowed: `ci.yml` cancels a run superseded by a
+      # later push on the same ref, so a release commit whose run lost that race must fail
+      # loudly here. (The house rule is that merges are frozen during a release; this is what
+      # happens when they are not.)
+      - name: ci must be green for this sha
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA="${{ github.sha }}"
+          DEADLINE=$(( $(date +%s) + 900 ))
+          SEEN="none yet"
+          while :; do
+            RUNS=$(gh api "repos/${{ github.repository }}/actions/workflows/ci.yml/runs?head_sha=${{ github.sha }}&per_page=5")
+            if [ "$(printf '%s' "$RUNS" | jq '[.workflow_runs[] | select(.conclusion == "success")] | length')" -gt 0 ]; then
+              echo "ci is green for $SHA"; exit 0
+            fi
+            SEEN=$(printf '%s' "$RUNS" | jq -r '[.workflow_runs[] | .conclusion // .status] | join(", ") | if . == "" then "none yet" else . end')
+            [ "$(date +%s)" -lt "$DEADLINE" ] || break
+            echo "ci for $SHA is '$SEEN' — waiting 30s"; sleep 30
+          done
+          echo "FAIL no successful ci run for $SHA — found: $SEEN. Nothing published."
+          echo "A 'cancelled' run means a later push superseded it (ci.yml cancels in progress)."
+          echo "Remedy: re-run the ci workflow for this sha, then re-run publish via workflow_dispatch."
+          exit 1
       - name: release check (changelog dated, README row, plugin version)
         run: bash scripts/release-check.sh --ci
       - name: version must match the tag (on tag pushes)

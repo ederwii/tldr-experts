@@ -219,3 +219,42 @@ describe("no page prints a tldrx invocation the CLI would refuse", () => {
     });
   }
 });
+
+/**
+ * Generating a page is only half of it: the deploy has to RUN. `.github/workflows/docs.yml`
+ * fires on a paths filter, and `docs-site/scripts/gen-cli.ts` reads `src/cli/helpText.ts` —
+ * a path the filter did not list. Measured this week: a change that touched only the help
+ * registry landed on `main`, deployed nothing, and the published CLI reference kept showing
+ * the previous surface. The generator's INPUTS belong in the filter alongside the pages, for
+ * the same reason CHANGELOG.md and the dashboard fixtures already are (see the file's own
+ * header note).
+ */
+describe("the docs deploy fires on the CLI reference's real inputs", () => {
+  const workflow = readFileSync(
+    join(FRAMEWORK_ROOT, ".github", "workflows", "docs.yml"), "utf8",
+  );
+  const paths = workflow.split(/^\s*paths:\s*$/m)[1]?.split(/^\s{2}\S/m)[0] ?? "";
+
+  test("docs.yml has a paths filter to check", () => {
+    expect(paths.trim().length, "no `paths:` block found in .github/workflows/docs.yml").toBeGreaterThan(0);
+  });
+
+  test("the filter lists src/cli/helpText.ts — gen-cli.ts's source", () => {
+    expect(
+      paths.includes("src/cli/helpText.ts"),
+      "docs.yml's paths filter does not list `src/cli/helpText.ts`, so a help-registry change deploys nothing and the site's generated CLI reference goes stale:\n" + paths,
+    ).toBe(true);
+  });
+
+  /**
+   * The generators themselves need no entry of their own: they live under
+   * `docs-site/scripts/`, which the existing `docs-site/**` glob already matches. This
+   * asserts that, so a future narrowing of that glob does not silently orphan them.
+   */
+  test("the generators are covered by the docs-site glob", () => {
+    expect(
+      paths.includes("docs-site/**") || paths.includes("docs-site/scripts/**"),
+      "nothing in docs.yml's paths filter matches docs-site/scripts/:\n" + paths,
+    ).toBe(true);
+  });
+});
