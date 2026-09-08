@@ -196,9 +196,17 @@ function roles(): readonly string[] {
  * trims what the host WRITES and what a sub-agent DELIVERS; nothing told the host what
  * to READ. It lives here, not in a mode, because the cost does not care who is watching.
  *
- * It was paid for, not appended: the negative-case bullet lost a line of wrapping to
- * the same meaning, and the unattended gate's interrupt paragraph lost the clause that
- * restated "## Do not stop" — the budget is the point of the budget.
+ * It is scoped so it cannot fight the rules it sits beside. The ten-line cap is on a
+ * sub-agent's TURN REPORT to the host, never on the handoff — that one is a gate input
+ * with its own contract in `reporting()`, and trimming it costs the gate. And "do not
+ * re-read" never reaches a gate: re-opening a cited file to VERIFY it is the gate check
+ * itself (`gate()`, both modes) and AGENTS.md §7 — what is forbidden is re-reading that
+ * buys no new claim.
+ *
+ * It was paid for, not appended: the negative-case and the contradiction bullets each
+ * lost a line of wrapping to the same meaning, and the unattended gate's interrupt
+ * paragraph lost the clause that restated "## Do not stop" — the budget is the point
+ * of the budget.
  */
 function evidence(): readonly string[] {
   return [
@@ -214,10 +222,10 @@ function evidence(): readonly string[] {
     "  ref that may be days stale. Merged is not deployed, and green locally is not green in CI.",
     "- State the negative case with its denominator: \"0 of 263 rows, 24 of them eligible\", not \"broken\".",
     "- Check that the instrument can see the thing before you trust the number it gives you.",
-    "- Your context is the run's costliest instrument: read a sub-agent's outcome from its result file",
-    "  and the ledger, never its transcript; brief each to report in ten lines; never re-read a citation.",
-    "- When something contradicts a claim you already made, correct it in place and say you were",
-    "  wrong. Early and out loud is the cheap version of that.",
+    "- Your context is the run's costliest instrument: read a sub-agent's outcome from its result.json",
+    "  and the ledger, never its transcript; brief each to report its TURN in ten lines (a handoff is",
+    "  not a turn report); re-open a cited file to VERIFY it at a gate, never to re-read what you cited.",
+    "- When something contradicts a claim you made, correct it in place and say you were wrong, early.",
     "",
   ];
 }

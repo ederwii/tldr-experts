@@ -12,12 +12,14 @@
   turn, one workspace alone at 2.5B cache-read tokens. `--tldr` already trims what the host
   WRITES and what a sub-agent DELIVERS, and nothing anywhere told the host what to read
   back. One bullet in the evidence discipline now does, in all four modes: a sub-agent's
-  outcome comes from its result file and the ledger, never its transcript; every sub-agent
-  is briefed to report in ten lines; a citation is not re-read. It is paid for rather than
+  outcome comes from its `result.json` and the ledger, never its transcript; each is briefed
+  to report its TURN in ten lines (a handoff is not a turn report — that one is a gate input
+  with its own contract, and trimming it costs the gate); and a cited file is re-opened to
+  VERIFY it at a gate, never re-read for a claim already made. It is paid for rather than
   appended — the line budgets did not move (`MANDATE_MAX_LINES` 140, `MANDATE_TLDR_MAX_LINES`
-  165, unattended still exactly at both) because the negative-case bullet lost a line of
-  wrapping to the same meaning and the unattended gate's interrupt paragraph lost the clause
-  that restated "## Do not stop".
+  165, unattended still exactly at both) because the negative-case and contradiction bullets
+  each lost a line of wrapping to the same meaning and the unattended gate's interrupt
+  paragraph lost the clause that restated "## Do not stop".
 
 ## 0.11.0 — 2026-09-08
 

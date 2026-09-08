@@ -671,7 +671,7 @@ describe("the mandate names the host's own context as the run's costliest instru
       const label = `${mode}${tldr ? " --tldr" : ""}`;
       test(`${label}: names the host's context as the costliest instrument`, () => {
         const text = renderMandate(mode, VERSION, undefined, tldr);
-        expect(text).toContain("read a sub-agent's outcome from its result file");
+        expect(text).toContain("read a sub-agent's outcome from its result.json");
         expect(text.split("\n").length)
           .toBeLessThanOrEqual(tldr ? MANDATE_TLDR_MAX_LINES : MANDATE_MAX_LINES);
       });
