@@ -121,6 +121,10 @@ import {
   RecurringFocus, ReviewCounters, type RoundParts,
 } from "../../build/reviewRound.ts";
 import { readReviewLedger } from "../../build/reviewLedger.ts";
+import type { ReviewerProvenance } from "../../build/reviewerProvenance.ts";
+import {
+  resolveReviewer, reviewerOverrideLine, type ReviewerResolution,
+} from "../reviewerModel.ts";
 import { phaseCostToDate, storySpendToDate } from "../../build/phaseCost.ts";
 import { appendBuildRetro, buildRetroPath, gateRetroLines, storyRetroLines } from "../../build/retroLog.ts";
 import {
@@ -440,6 +444,18 @@ class BuildSession {
    * went with their maps). ONE instance, created here and passed by reference.
    */
   private readonly counters = new ReviewCounters();
+  /**
+   * Which reviewer produced the verdict THIS invocation recorded, per story —
+   * `null` for a host review nobody declared.
+   *
+   * Held here, and only for as long as the invocation, because it is not a bound:
+   * the durable record is the log (`agent.spawned` for a spawn, the review check
+   * event for a host declaration) and `build/reviewLedger.ts` reads it back from
+   * there. This map exists so the story's own review log, written by `settle`
+   * several calls later, does not have to re-read the file it is mid-way through
+   * appending to.
+   */
+  private readonly reviewers = new Map<string, ReviewerProvenance | null>();
   /** The workspace prior every reviewer of THIS invocation is primed with (#74). */
   private readonly focus = new RecurringFocus();
   /** `buildExecutor`'s `withClaims` reads this on every exit path — including failures. */
@@ -836,6 +852,12 @@ class BuildSession {
       metered: declaredReview !== undefined,
       tokens: this.ctx.tokens ?? numberOf(envelope.tokens),
       source: "host",
+      // The HOST's own declaration and nothing else. `--model`/`--effort` on
+      // `tldrx next --commit --review` are what a host session says it judged
+      // this diff with; with neither typed, this is null and every reader says
+      // "not recorded" rather than repeating the bundle's suggestion back as a
+      // measurement of somebody else's session.
+      reviewer: this.hostDeclaredReviewer(),
     });
     await this.reviewAndSettle(story, work.dod, work.commit, 0, null, work.epicBase ?? null, review);
     // A settled handshake leaves the LOG, not the bundle: the bundle's presence
@@ -1829,19 +1851,25 @@ class BuildSession {
     // counted on disk before this line is reached a second time (gh #78).
     for (;;) {
       const cap = reviewerCap(this.capParts, this.spent(), id);
+      // Resolved ONCE per envelope round, before the event that records it — the
+      // `agent.spawned` payload is the audit trail for which model judged this
+      // diff, and it must name the argv this loop is about to pass, not the
+      // stage's pin.
+      const reviewer = this.reviewerModel(story.planned);
+      if (refusal === null) this.noteReviewerOverride(story.planned, reviewer);
       this.ctx.emit("agent.spawned", {
         phase: this.ctx.phaseId,
         story: id,
         role: "reviewer",
-        model: this.model(),
-        effort: this.ctx.effort,
+        model: reviewer.model,
+        effort: reviewer.effort,
         max_budget_usd: cap,
       }, 0, "reviewer");
 
       const agent = await spawnAgent({
         prompt: this.reviewerPrompt(story, dod, refusal, epicBase),
-        model: this.model(),
-        effort: this.ctx.effort,
+        model: reviewer.model,
+        effort: reviewer.effort,
         maxBudgetUsd: cap,
         workspaceCommands: [],
         tools: REVIEWER_TOOLS,
@@ -1895,6 +1923,9 @@ class BuildSession {
         inputTokens: agent.usage.input_tokens,
         outputTokens: agent.usage.output_tokens,
         source: "agent",
+        // MEASURED: these are the arguments this loop handed the provider CLI a
+        // few lines up, not a re-derivation of them.
+        reviewer: { model: reviewer.model, effort: reviewer.effort, basis: "spawned" },
       });
       // The story's recorded cost is every turn this review took, not just the
       // last one: a free retry costs the story no ATTEMPT, never no money.
@@ -2052,6 +2083,15 @@ class BuildSession {
       inputTokens?: number;
       outputTokens?: number;
       source: "agent" | "host";
+      /**
+       * WHO judged this diff, or null when nothing can say (`build/reviewerProvenance.ts`).
+       *
+       * Null is a real answer and the honest one for a host review whose session
+       * declared no `--model`: the bundle's recorded model is a SUGGESTION, and
+       * quoting it back as the model that produced the verdict would be a record
+       * lying in the dangerous direction.
+       */
+      reviewer: ReviewerProvenance | null;
     },
   ): void {
     this.tasks.push({
@@ -2089,6 +2129,16 @@ class BuildSession {
     // host, is deliberately absent. The spawned payload keeps its exact shape:
     // absence of the key means what it has always meant, and the ordinary path's
     // event sequence is unchanged byte for byte.
+    //
+    // The reviewer's own model rides on the event for the HOST door only, and
+    // that asymmetry is deliberate. A spawned reviewer already records its exact
+    // argv on the `agent.spawned` immediately above this line — adding the same
+    // two values here would duplicate a derivation and change the payload of the
+    // path that has always been byte-stable. A host review emits no
+    // `agent.spawned` at all, so the declaration has nowhere else to live.
+    // Absent means "not recorded", which is what every record written before
+    // this shipped means too.
+    const declared = task.source === "host" ? task.reviewer : null;
     this.ctx.emit(review.verdict === "approve" ? "check.passed" : "check.failed", {
       phase: this.ctx.phaseId,
       check: "review",
@@ -2096,8 +2146,18 @@ class BuildSession {
       verdict: review.verdict,
       attempt: story.attempt,
       ...(task.source === "host" ? { source: "host" } : {}),
+      ...(declared === null
+        ? {}
+        : {
+          ...(declared.model === null ? {} : { model: declared.model }),
+          ...(declared.effort === null ? {} : { effort: declared.effort }),
+          basis: declared.basis,
+        }),
       detail: review.summary,
     });
+    // What this invocation knows about the reviewer, for the story's own review
+    // log — which is written later, by `settle`, out of a `StoryOutcome`.
+    this.reviewers.set(id, task.reviewer);
   }
 
   // --- settling a story -----------------------------------------------------
@@ -2181,6 +2241,11 @@ class BuildSession {
       carried: parts.carried,
       conflicts: parts.conflicts ?? [],
       verdict: parts.verdict,
+      // What THIS invocation recorded about the reviewer, or null. `recordReview`
+      // is the only writer, so a story that settled without one — blocked before
+      // any reviewer ran — carries null and its log says `not recorded`, which is
+      // the truth about it.
+      reviewer: this.reviewers.get(id) ?? null,
       developerError: parts.developerError ?? null,
       reviewSummary: parts.review.summary,
       reviewFindings: parts.review.findings,
@@ -2420,6 +2485,10 @@ class BuildSession {
       carried: null,
       conflicts: [],
       verdict: status === "done" ? "approve" : "n-a",
+      // Reconstructed from the LEDGER, never from the stage's current pin: this
+      // row describes a review an earlier process ran, possibly on a stage file
+      // that has since been edited.
+      reviewer: ledger.reviewer,
       developerError: null,
       reviewSummary: "settled by an earlier `tldrx next`",
       reviewFindings: [],
@@ -2717,6 +2786,60 @@ class BuildSession {
     return this.ctx.model ?? this.ctx.spec.planned.model;
   }
 
+  /**
+   * The model and effort the REVIEWER of this story runs on.
+   *
+   * `this.model()` above is the DEVELOPER's and the stage's, and it stays the
+   * bottom layer here — so a stage file that declares neither `reviewer:` nor
+   * `reviewer_by_stakes:` resolves to exactly what this accessor returned before
+   * either key existed, which is what keeps the golden bytes still.
+   *
+   * The arithmetic is `facilitator/reviewerModel.ts` and is not repeated here:
+   * the spawned door and the `--prepare --review` bundle both call this, and a
+   * bundle whose recorded `model` disagreed with what a spawn would have used
+   * would make the handshake's whole claim false.
+   */
+  private reviewerModel(planned: PlannedStory): ReviewerResolution {
+    return resolveReviewer({
+      cliModel: this.ctx.modelFlag,
+      cliEffort: this.ctx.effortFlag,
+      stakes: planned.story.stakes ?? null,
+      byStakes: this.ctx.spec.reviewerByStakes,
+      reviewer: this.ctx.spec.reviewer,
+      stageModel: this.model(),
+      stageEffort: this.ctx.effort,
+    });
+  }
+
+  /**
+   * What a HOST session declared about the reviewer it ran, or null.
+   *
+   * `--model`/`--effort` on `tldrx next` already existed and already mean "for
+   * this invocation's sub-agent"; on `--commit --review` the turn has already
+   * happened in the host's own session, so the same two flags are read as the
+   * DECLARATION of what took it — the same reading `--cost-usd` and `--tokens`
+   * already get on that command (#68).
+   */
+  private hostDeclaredReviewer(): ReviewerProvenance | null {
+    const model = this.ctx.modelFlag;
+    const effort = this.ctx.effortFlag;
+    if (model === null && effort === null) return null;
+    return { model, effort, basis: "host-declared" };
+  }
+
+  /**
+   * Say it out loud, once, when a FILE moved the reviewer off the developer's
+   * model — and only then.
+   *
+   * A calibration that spends more money without a line in the operator's output
+   * is a bill nobody was shown. A `--model` flag raises no line: the operator
+   * typed it and both roles got it.
+   */
+  private noteReviewerOverride(planned: PlannedStory, resolution: ReviewerResolution): void {
+    const line = reviewerOverrideLine(planned.story.id, resolution, planned.story.stakes ?? null);
+    if (line !== null) this.lines.push(line);
+  }
+
   private repoCommands(repo: string): readonly string[] {
     return this.workspace.repoCommands.get(repo) ?? [];
   }
@@ -2836,6 +2959,8 @@ class BuildSession {
   }
 
   private writeReviewBundle(story: StoryContext, work: ReviewWork, refusal: string | null = null): string {
+    const reviewer = this.reviewerModel(story.planned);
+    this.noteReviewerOverride(story.planned, reviewer);
     return writeReviewBundle({
       runDir: this.ctx.runDir,
       root: this.ctx.root,
@@ -2848,8 +2973,12 @@ class BuildSession {
       epicBranch: story.epicBranch,
       worktree: story.worktree,
       attempt: story.attempt,
-      model: this.model(),
-      effort: this.ctx.effort,
+      // The REVIEWER's, not the stage's: this bundle is the brief a host session
+      // works from, so `pending.json` has to carry the model the framework would
+      // have judged this diff with — a host reading the stage's pin here would be
+      // handed a suggestion the framework itself had already overridden.
+      model: reviewer.model,
+      effort: reviewer.effort,
       budgetUsd: this.ctx.budgetUsd,
       reviewerCapUsd: reviewerCap(this.capParts, this.spent(), story.planned.story.id),
       preparedAt: this.ctx.at,

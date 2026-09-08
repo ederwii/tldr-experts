@@ -1,6 +1,34 @@
 # Changelog
 
 
+## 0.12.0 — unreleased
+
+### Added
+
+- **The reviewer can run on a different model than the developer, and every verdict now says
+  which model produced it.** Measured this week across three real workspaces and 168 Build
+  stories: `model:` and `effort:` in `stage.yml` are per STAGE, one accessor served both
+  spawns, and all 168 stories ran the same model at the same effort for the developer AND the
+  reviewer that judged its diff. Zero reviewers ran on anything stronger — so *does a stronger
+  reviewer find more* was not a question the data could answer, while hosts were already
+  answering it by hand, upgrading the reviewer on stories whose own text said they were
+  security-bearing. Three additive keys close that: `reviewer: {model?, effort?}` in
+  `stage.yml` is the reviewer role's own pin; `reviewer_by_stakes:` is the same thing keyed on
+  a story's new optional `stakes:` field (`security | money | data | correctness | routine`, a
+  closed enum the Plan agent emits and nothing infers from prose); and both resolve FIELD BY
+  FIELD under `--model`/`--effort`, which stay the operator's word. Absent everywhere ⇒ the
+  reviewer runs on the stage's own two lines, byte for byte. **No opus default ships**:
+  `stages/build/stage.yml` declares `reviewer_by_stakes: {}` and a commented example, because
+  there is no evidence yet that a stronger reviewer finds more and shipping the answer as a
+  default would spend money asserting the thing these keys exist to measure. What ships is the
+  record that makes the evidence accumulate — a spawned reviewer's arguments were always on
+  its `agent.spawned`, a host review's are now read off `--model`/`--effort` on `tldrx next
+  --commit --review` and written as `basis: host-declared`, `04-build/log/<story>.md` carries
+  a `- Reviewer:` line, and `tldrx replay` names the model on every review round. A host that
+  declared nothing reads `not recorded` rather than the bundle's suggested model: that
+  suggestion is one tldrx made, and quoting it back would be a record lying in the dangerous
+  direction. (#178)
+
 ## 0.11.1 — 2026-09-08
 
 ### Changed

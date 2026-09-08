@@ -13,6 +13,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEVELOPER_FAILED, type DodResult } from "./outcome.ts";
 import { looksLikeReviewerError } from "./review.ts";
+import { provenanceFromPayload, verdictReviewer, type ReviewerProvenance } from "./reviewerProvenance.ts";
 
 /**
  * What `events.jsonl` already says about one story, for the questions a fresh
@@ -127,6 +128,25 @@ export interface ReviewLedger {
    * handed the brief that produced the broken one.
    */
   readonly formatRefusal: string | null;
+  /**
+   * WHICH REVIEWER produced the story's last recorded verdict, or null when the
+   * log cannot say (`build/reviewerProvenance.ts`).
+   *
+   * Two sources, because there are two doors and they record it in two places. A
+   * SPAWNED reviewer's exact arguments are on its own `agent.spawned` — they
+   * always were, which is why nothing in this file needed a migration. A HOST
+   * review emits no spawn at all, so its declaration rides on the review check
+   * event itself.
+   *
+   * Null on every run recorded before `reviewer_by_stakes:` existed and on every
+   * host review whose session declared nothing — and null is the answer those
+   * runs deserve. It is never filled from the reviewer BUNDLE's `model:`, which
+   * is a suggestion the framework made, not a measurement of what judged the diff.
+   *
+   * Cleared by `story.reopened` with every other count here: a verdict from
+   * before a reopen does not describe the run of attempts starting at it.
+   */
+  readonly reviewer: ReviewerProvenance | null;
 }
 
 /** Everything the two resume paths and the requeue counter need, in one pass. */
@@ -135,7 +155,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
   const empty: ReviewLedger = {
     verdicts: 0, fixlistRounds: 0, erroredWith: null, commit: null, epicBase: null, dod: [],
     developerErroredWith: null, blockedWithNothingRun: false, reopened: null, fixRound: null,
-    formatRetries: 0, formatRefusal: null,
+    formatRetries: 0, formatRefusal: null, reviewer: null,
   };
   if (!existsSync(path)) return empty;
 
@@ -166,6 +186,12 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
   let fixRound: ReviewLedger["fixRound"] = null;
   let formatRetries = 0;
   let formatRefusal: string | null = null;
+  // The LAST reviewer spawn seen for this story, held until the verdict that
+  // spawn produced arrives — a spawn on its own is not a review record, and a
+  // round that ended in a format refusal is followed by another spawn that
+  // replaces this.
+  let spawned: ReviewerProvenance | null = null;
+  let reviewer: ReviewerProvenance | null = null;
 
   for (const line of readFileSync(path, "utf8").split("\n")) {
     if (line.trim() === "") continue;
@@ -210,6 +236,8 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
       if (payload.reason === "fix") fixRound = reopened;
       formatRetries = 0;
       formatRefusal = null;
+      spawned = null;
+      reviewer = null;
       continue;
     }
 
@@ -237,7 +265,14 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
       sawReviewer = false;
       blockedWithNothingRun = false;
     }
-    if (event.type === "agent.spawned" && payload.role === "reviewer") sawReviewer = true;
+    if (event.type === "agent.spawned" && payload.role === "reviewer") {
+      sawReviewer = true;
+      // MEASURED, and already in every log this framework has ever written: the
+      // spawn's own `model`/`effort`. A pre-#178 run recorded them too, which is
+      // why a story reviewed by an old binary reads back with its model named
+      // rather than as "not recorded".
+      spawned = provenanceFromPayload(payload, "spawned");
+    }
     if (event.type === "task.done") {
       if (typeof payload.commit === "string" && payload.commit !== "") commit = payload.commit;
       // ADDITIVE: absent on every `task.done` written before #166, and absent
@@ -301,6 +336,8 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     // exactly the same set of outcomes (#78).
     formatRetries = 0;
     formatRefusal = null;
+    // One rule, shared with `renderReplay` — see `verdictReviewer`.
+    reviewer = verdictReviewer(payload, spawned);
 
     if (reviewEventErrored(payload)) {
       erroredWith = typeof payload.detail === "string" && payload.detail.trim() !== ""
@@ -332,6 +369,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     fixRound,
     formatRetries,
     formatRefusal,
+    reviewer,
   };
 }
 

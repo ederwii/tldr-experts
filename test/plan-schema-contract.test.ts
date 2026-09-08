@@ -22,7 +22,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseYaml } from "../src/core/yaml.ts";
 import { parseFrontMatter } from "../src/core/schemas/frontMatter.ts";
-import { parseDodBlock, STORY_KEYS, validateStoryFile } from "../src/core/schemas/story.ts";
+import { parseDodBlock, STORY_KEYS, validateStory, validateStoryFile } from "../src/core/schemas/story.ts";
 import { EPIC_KEYS, validateEpicFile } from "../src/core/schemas/epic.ts";
 import { validateWaves } from "../src/core/schemas/waves.ts";
 import {
@@ -35,7 +35,7 @@ import { FRAMEWORK_ROOT, TEMPLATES_DIR } from "../src/core/paths.ts";
 import { noSpawnEnv } from "./fixtures/noSpawnPath.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 import {
-  PLAN_CONTRACT_HEADING, planContractExamples, renderPlanSchemaContract,
+  PLAN_CONTRACT_HEADING, planContractExamples, renderPlanSchemaContract, STORY_OPTIONAL_KEYS,
 } from "../src/core/plan/schemaContract.ts";
 
 // The #71 block spawns a real `bun bin/tldrx.ts` per case.
@@ -98,8 +98,25 @@ describe("the contract cannot drift from the schema", () => {
     expect(contract).toContain(examples.waves.trimEnd());
   });
 
-  test("the story example's keys ARE `STORY_KEYS`, in order", () => {
-    expect(keysOf(planContractExamples().story)).toEqual([...STORY_KEYS]);
+  test("the story example's keys ARE `STORY_KEYS` plus the optional ones, in order", () => {
+    expect(keysOf(planContractExamples().story))
+      .toEqual([...STORY_KEYS, ...STORY_OPTIONAL_KEYS]);
+  });
+
+  /**
+   * The optional half of the same pin, from the other end: a key the schema
+   * ACCEPTS but does not require still has to be in the example, or the Plan
+   * agent will never emit it — and `stakes:` exists precisely because hosts were
+   * applying it by hand for want of a field.
+   */
+  test("every optional key is optional to the SCHEMA, not merely to the example", () => {
+    const front = parseFrontMatter(planContractExamples().story).doc as Record<string, unknown>;
+    for (const key of STORY_OPTIONAL_KEYS) {
+      expect(front[key]).toBeDefined();
+      const without = { ...front };
+      delete without[key];
+      expect(validateStory(without).ok).toBe(true);
+    }
   });
 
   test("the epic example's keys ARE `EPIC_KEYS`, in order", () => {
@@ -207,8 +224,9 @@ describe("the second copy of the schema is gone, not just guarded (#48)", () => 
     expect(parsed.story).not.toBeNull();
   });
 
-  test("the GENERATED story's keys ARE `STORY_KEYS`, in order — no extra, none missing", () => {
-    expect(keysOf(planContractExamples().story)).toEqual([...STORY_KEYS]);
+  test("the GENERATED story's keys ARE `STORY_KEYS` + the optional ones — no extra, none missing", () => {
+    expect(keysOf(planContractExamples().story))
+      .toEqual([...STORY_KEYS, ...STORY_OPTIONAL_KEYS]);
   });
 
   test("the GENERATED epic validates through the same `validateEpicFile` the check runs", () => {

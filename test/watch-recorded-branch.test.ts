@@ -189,6 +189,8 @@ function fixture(plan: Readonly<Record<string, string>>, recorded: Recorded | nu
       repos: store.run.repos,
       mode: "headless",
       model: null,
+      modelFlag: null,
+      effortFlag: null,
       effort: null,
       costUsd: null,
       tokens: null,

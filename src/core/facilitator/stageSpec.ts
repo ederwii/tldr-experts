@@ -16,6 +16,7 @@ import { isRecord } from "../schemas/validation.ts";
 import {
   loadWorkflowPreset, stagePath, workflowPath, PresetError, type PlannedStage, type WorkflowPreset,
 } from "../run/workflowPreset.ts";
+import { EFFORT_LEVELS, type EffortLevel, type ReviewerOverride } from "../schemas/stage.ts";
 import { DEFAULT_KNOWLEDGE_MAX_BYTES } from "../experts/expertKnowledge.ts";
 import { DEFAULT_INPUTS_MAX_BYTES } from "./seedInputs.ts";
 import { DEFAULT_PROMPT_MAX_BYTES } from "./contextLedger.ts";
@@ -94,6 +95,21 @@ export interface StageSpec {
    * `stage.yml`, the framework's. `--parallel` overrides both. Null ⇒ 1.
    */
   readonly parallel: number | null;
+  /**
+   * `reviewer:` — the REVIEWER role's own model/effort override, or null.
+   *
+   * Read here rather than off `PlannedStage` because `workflowPreset` normalises
+   * a stage down to the fields the gates and `run new` share, and a per-ROLE pin
+   * is neither. Absent ⇒ null ⇒ the reviewer runs on the stage's own two lines,
+   * which is what every reviewer this repo has ever spawned ran on.
+   */
+  readonly reviewer: ReviewerOverride | null;
+  /**
+   * `reviewer_by_stakes:` — the same override, keyed by a story's declared
+   * `stakes:`. Empty when the stage says nothing, so a lookup on it is always
+   * safe and always misses.
+   */
+  readonly reviewerByStakes: Readonly<Record<string, ReviewerOverride>>;
   readonly dryRunAllowed: boolean;
   /** From the WORKFLOW entry (spec §2.4), not from stage.yml. */
   readonly skipIf: string | null;
@@ -131,6 +147,8 @@ function overlay(
   promptMaxBytes: number;
   maxReads: number;
   parallel: number | null;
+  reviewer: ReviewerOverride | null;
+  reviewerByStakes: Readonly<Record<string, ReviewerOverride>>;
   dryRunAllowed: boolean;
   skipIf: string | null;
   questionsMax: number | null;
@@ -157,6 +175,8 @@ function overlay(
     promptMaxBytes: byteKey(stageDoc, "prompt_max_bytes") ?? DEFAULT_PROMPT_MAX_BYTES,
     maxReads: byteKey(stageDoc, "max_reads") ?? defaultMaxReads(stageId),
     parallel: parallelKey(workflowDoc, stageId) ?? byteKey(stageDoc, "parallel"),
+    reviewer: reviewerOverride(isRecord(stageDoc) ? stageDoc.reviewer : undefined),
+    reviewerByStakes: reviewerByStakesMap(isRecord(stageDoc) ? stageDoc.reviewer_by_stakes : undefined),
     dryRunAllowed: isRecord(stageDoc) && typeof stageDoc.dry_run_allowed === "boolean"
       ? stageDoc.dry_run_allowed
       : DEFAULT_DRY_RUN_ALLOWED,
@@ -186,6 +206,39 @@ function inputSplit(
     };
   }
   return { requiredInputs: [], optionalInputs: strings(inputs), seedInputs: topLevelSeed };
+}
+
+/**
+ * One `{model?, effort?}` block off `stage.yml`, or null.
+ *
+ * TOLERANT, exactly as every other overlay key here is: `validateStage` is what
+ * refuses a malformed stage file with a message, and this reader's job is to not
+ * turn junk into a spawn argument. A `model:` that is not a string and an
+ * `effort:` outside the five levels are DROPPED — which falls back to the layer
+ * below, i.e. to what the reviewer ran on before — never passed through to
+ * `claude --effort`.
+ */
+function reviewerOverride(value: unknown): ReviewerOverride | null {
+  if (!isRecord(value)) return null;
+  const model = typeof value.model === "string" && value.model !== "" ? value.model : undefined;
+  const effort = (EFFORT_LEVELS as readonly string[]).includes(String(value.effort))
+    ? (value.effort as EffortLevel)
+    : undefined;
+  if (model === undefined && effort === undefined) return null;
+  return { ...(model === undefined ? {} : { model }), ...(effort === undefined ? {} : { effort }) };
+}
+
+/** `reviewer_by_stakes:` as a map. Keys are not filtered here — `resolveReviewer`
+ * only ever looks up a value a STORY declared, and `validateStage` is what tells
+ * an operator their key is not one of the five. */
+function reviewerByStakesMap(value: unknown): Readonly<Record<string, ReviewerOverride>> {
+  if (!isRecord(value)) return {};
+  const out: Record<string, ReviewerOverride> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    const override = reviewerOverride(entry);
+    if (override !== null) out[key] = override;
+  }
+  return out;
 }
 
 /**

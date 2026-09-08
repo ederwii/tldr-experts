@@ -20,6 +20,30 @@ model: sonnet
 # `[assumption]` — Build writes code that a DoD and a reviewer will judge. A cheap
 # turn here is not a saving: it is a `changes` verdict and a second, paid attempt.
 effort: high
+# The REVIEWER's own model and effort, per role and per story's `stakes:`.
+#
+# Both blocks are OPTIONAL and both are absent by default, which resolves to the
+# two lines above — byte-for-byte the reviewer every story in this repo's history
+# got. Measured across three real workspaces and 168 Build stories: all 168 ran
+# sonnet/high for the developer AND the reviewer, zero reviewers ran on anything
+# stronger, and no review record said which model produced its verdict. Hosts
+# were upgrading the reviewer BY HAND on stories whose own text said they were
+# security-bearing, and the framework had no way to express it.
+#
+# No opus default ships here, deliberately. There is no evidence yet that a
+# stronger reviewer finds more — that is the question this key exists to make
+# answerable, and shipping the answer as a default would spend money asserting
+# it. Opt in when your own review records say it is worth it; `tldrx replay` now
+# names the model behind every verdict.
+#
+# reviewer:
+#   model: opus
+#   effort: high
+#
+# reviewer_by_stakes:
+#   security: {model: opus, effort: high}
+#   money: {model: opus}
+reviewer_by_stakes: {}
 # `budget_usd` [assumption]: a scoped guess, never a measurement. No calibration
 # corpus exists in this repo, and the one measurement we do have runs the other
 # way — a story measured $2.27 against the $0.39 ceiling its spawn was given

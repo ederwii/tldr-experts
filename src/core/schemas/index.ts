@@ -64,7 +64,7 @@ export {
 export { noteDeprecations, resetDeprecationNotices } from "./deprecationNotice.ts";
 export type { Workspace, DetectedRepo, WorkspaceMode } from "./workspace.ts";
 export type { Run, RunPhase, RunStatus } from "./run.ts";
-export type { Stage, StageGate, GateType, EffortLevel } from "./stage.ts";
+export type { Stage, StageGate, GateType, EffortLevel, ReviewerOverride } from "./stage.ts";
 export { EFFORT_LEVELS, isEffortLevel } from "./stage.ts";
 export type { Workflow, WorkflowDepth } from "./workflow.ts";
 export type { FactsFile, Fact, FactSource } from "./facts.ts";
@@ -82,8 +82,8 @@ export { validateWaves, validateWaveOrder, asWavesFile, scheduleOf } from "./wav
 export type { Wave, WavesFile } from "./waves.ts";
 export {
   PLAN_STATUSES, STORY_ID_RE, EPIC_ID_RE, WAVE_ID_RE, EPIC_BRANCH_RE, REPO_NAME_RE,
-  MAX_WAVES, MAX_PLAN_STORIES,
+  MAX_WAVES, MAX_PLAN_STORIES, STORY_STAKES,
 } from "./planCommon.ts";
-export type { PlanStatus } from "./planCommon.ts";
+export type { PlanStatus, StoryStakes } from "./planCommon.ts";
 export { splitFrontMatter, parseFrontMatter } from "./frontMatter.ts";
 export type { FrontMatter, FrontMatterDoc } from "./frontMatter.ts";

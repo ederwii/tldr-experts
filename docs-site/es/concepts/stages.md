@@ -81,5 +81,29 @@ final. `stages/<name>/stage.md` es la plantilla de handoff que se le entrega al 
 `workflows/<scope>.yml` declara el orden. Un `.tldrx/stages/` o un `.tldrx/workflows/` en
 tu propio proyecto le ganan a los que vienen incluidos.
 
+## El revisor puede correr en otro modelo
+
+`model:` y `effort:` en un archivo de etapa fijan la etapa entera, así que el desarrollador
+de Build y el revisor que juzga su diff siempre corrieron con esos dos mismos valores. Dos
+claves opcionales permiten que el revisor sea distinto:
+
+```yaml
+reviewer: {model: opus, effort: high}      # el revisor de esta etapa, sea cual sea la story
+reviewer_by_stakes:                        # ...salvo que la STORY diga qué arriesga
+  security: {model: opus, effort: high}
+```
+
+`reviewer_by_stakes:` se indexa por el campo opcional `stakes:` de una story — uno de
+`security`, `money`, `data`, `correctness`, `routine` —, que escribe el agente de Plan y que
+nunca se infiere de la prosa. Una story que no lo declara jamás lee el mapa. `tldrx next
+--model`/`--effort` siguen ganándoles a ambas: una bandera explícita es tu palabra para esa
+invocación.
+
+Las dos claves vienen ausentes y `reviewer_by_stakes:` viene vacío, a propósito. Nada aquí
+midió todavía que un revisor más fuerte encuentre más — eso es justamente lo que estas
+claves vuelven contestable, y ahora cada veredicto registra el modelo que lo produjo, así
+que `tldrx replay` muestra `review approve for story S1 by opus · effort high (spawned)` en
+vez de dejarte adivinar qué modelo firmó.
+
 El detalle completo: [the loop](https://github.com/ederwii/tldr-experts/blob/main/docs/guide/02-the-loop.md)
 en el repo.

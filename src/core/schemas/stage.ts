@@ -3,6 +3,7 @@ import {
   asDocument, requireArray, requireEnum, requireKeys, requireNumber, requireRecord,
   requireString, result, type ValidationIssue, type ValidationResult,
 } from "./validation.ts";
+import { STORY_STAKES } from "./planCommon.ts";
 
 export const GATE_TYPES = ["human-approval", "checks-green", "none"] as const;
 export type GateType = (typeof GATE_TYPES)[number];
@@ -79,6 +80,27 @@ export interface StagePrecondition {
   readonly timeout_s?: number;
 }
 
+/**
+ * `reviewer:` and `reviewer_by_stakes.<stakes>:` — the REVIEWER role's own model
+ * and effort, for a stage that spawns more than one role.
+ *
+ * Until now `model:` and `effort:` were per STAGE, and Build's developer and its
+ * reviewer read the same two lines through one accessor. Measured across three
+ * real workspaces and 168 Build stories: every one of them ran the same model at
+ * the same effort for both roles, so nobody can say whether a stronger reviewer
+ * finds more — and hosts were upgrading the reviewer by hand on the stories whose
+ * own text said they were security-bearing.
+ *
+ * Both fields are OPTIONAL and they resolve INDEPENDENTLY: a block that names
+ * only `model:` leaves effort exactly where the layer below it had it. Absent
+ * everywhere ⇒ the stage's own `model:`/`effort:`, which is byte-for-byte the
+ * behaviour this repo shipped before the key existed.
+ */
+export interface ReviewerOverride {
+  readonly model?: string;
+  readonly effort?: EffortLevel;
+}
+
 export interface Stage {
   readonly name: string;
   readonly title: string;
@@ -91,6 +113,18 @@ export interface Stage {
   readonly effort?: EffortLevel;
   readonly budget_usd: number;
   readonly gate: StageGate;
+  /** Optional; absent means the reviewer runs on `model`/`effort` above. */
+  readonly reviewer?: ReviewerOverride;
+  /**
+   * Optional, keyed by a story's declared `stakes:` (`STORY_STAKES`). It wins
+   * over `reviewer:` for a story that declares a matching value, and a story that
+   * declares none never reads it at all.
+   *
+   * Shipped EMPTY. There is no evidence yet that a stronger reviewer finds more,
+   * and shipping a default that spends money on that belief would be asserting
+   * the very thing this key exists to measure.
+   */
+  readonly reviewer_by_stakes?: Readonly<Record<string, ReviewerOverride>>;
   readonly checks?: readonly string[];
   readonly preconditions?: readonly StagePrecondition[];
 }
@@ -147,7 +181,47 @@ export function validateStage(input: unknown): ValidationResult {
     requireEnum(gate.type, GATE_TYPES, "gate.type", issues);
   }
   validatePreconditions(doc.preconditions, issues);
+  validateReviewerOverrides(doc.reviewer, doc.reviewer_by_stakes, issues);
   return result(issues);
+}
+
+/**
+ * SHAPE only, and the same two keys twice — a `reviewer:` block and every entry
+ * of `reviewer_by_stakes:` are one type, validated by one function, so the two
+ * spellings cannot drift on what an override may say.
+ *
+ * The map's KEYS are checked against `STORY_STAKES` here rather than left to the
+ * lookup: a `reviewer_by_stakes: {secutiry: …}` that merely never matched would
+ * be a calibration the operator wrote, paid for in nothing, and never heard about
+ * again.
+ */
+function validateReviewerOverrides(
+  reviewer: unknown,
+  byStakes: unknown,
+  issues: ValidationIssue[],
+): void {
+  validateReviewerOverride(reviewer, "reviewer", issues);
+  if (byStakes === undefined || byStakes === null) return;
+  if (!requireRecord(byStakes, "reviewer_by_stakes", issues)) return;
+  for (const [key, value] of Object.entries(byStakes as Record<string, unknown>)) {
+    const base = `reviewer_by_stakes.${key}`;
+    if (!(STORY_STAKES as readonly string[]).includes(key)) {
+      issues.push({
+        path: base,
+        message: `expected one of ${STORY_STAKES.join(" | ")} — a story's \`stakes:\` value`,
+      });
+      continue;
+    }
+    validateReviewerOverride(value, base, issues);
+  }
+}
+
+function validateReviewerOverride(value: unknown, base: string, issues: ValidationIssue[]): void {
+  if (value === undefined || value === null) return;
+  if (!requireRecord(value, base, issues)) return;
+  const row = value as Record<string, unknown>;
+  if (row.model !== undefined) requireString(row.model, `${base}.model`, issues);
+  requireEnum(row.effort, EFFORT_LEVELS, `${base}.effort`, issues);
 }
 
 /**

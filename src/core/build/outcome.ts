@@ -6,6 +6,7 @@
  * codes, conflict paths, the commit sha) rather than sentences about them.
  */
 import type { PlanStatus } from "../schemas/planCommon.ts";
+import type { ReviewerProvenance } from "./reviewerProvenance.ts";
 
 /**
  * What the reviewer said — and, for `error`, that it never got to say anything.
@@ -149,6 +150,18 @@ export interface StoryOutcome {
   readonly carried: number | null;
   readonly conflicts: readonly string[];
   readonly verdict: Verdict;
+  /**
+   * WHICH REVIEWER produced `verdict` — model, effort and the basis of the claim
+   * (`build/reviewerProvenance.ts`), or null when nothing recorded it.
+   *
+   * OPTIONAL and additive: absent is what every outcome built before this field
+   * existed carries, and `renderReviewLog` renders absent and null identically,
+   * as `not recorded`. Never inferred from the stage's pin — a story whose
+   * reviewer ran on a `reviewer_by_stakes:` override and a story whose reviewer
+   * ran on the stage's own model are not the same review, and only the record
+   * can tell them apart.
+   */
+  readonly reviewer?: ReviewerProvenance | null;
   /**
    * What the DEVELOPER sub-agent died with, when it never delivered — a spawn
    * failure, a timeout, an exhausted `--max-budget-usd`. Null on every story

@@ -28,7 +28,7 @@
  */
 import {
   MAX_ITEM_CHARS, MAX_LIST_ITEMS, MAX_PLAN_STORIES, MAX_STORIES_PER_WAVE,
-  MAX_TOUCHES, MAX_WAVES, PLAN_STATUSES,
+  MAX_TOUCHES, MAX_WAVES, PLAN_STATUSES, STORY_STAKES,
 } from "../schemas/planCommon.ts";
 import { STORY_KEYS } from "../schemas/story.ts";
 import { EPIC_KEYS } from "../schemas/epic.ts";
@@ -38,7 +38,7 @@ import { EPICS_DIR, STORIES_DIR, WAVES_FILE } from "./validatePlan.ts";
 /** The H2 the facilitator splices this under, in `stage.md`. */
 export const PLAN_CONTRACT_HEADING = "Output schemas";
 
-type StoryKey = (typeof STORY_KEYS)[number];
+type StoryKey = (typeof STORY_KEYS)[number] | (typeof STORY_OPTIONAL_KEYS)[number];
 type EpicKey = (typeof EPIC_KEYS)[number];
 
 interface Field {
@@ -47,6 +47,18 @@ interface Field {
   /** What the validator enforces, in one clause. */
   readonly rule: string;
 }
+
+/**
+ * The ONE optional key of a story's front matter — declared here rather than in
+ * `STORY_KEYS`, which is the required list `requireKeys` enforces.
+ *
+ * It is in the worked example and in the rule table because a key the Plan agent
+ * is never shown is a key no plan will ever carry: the calibration it feeds
+ * (`stage.yml`'s `reviewer_by_stakes:`) was being applied BY HAND by hosts,
+ * reading the story's prose, before this field existed.
+ */
+export const STORY_OPTIONAL_KEYS = ["stakes"] as const;
+const STAKES_ENUM = STORY_STAKES.map((value) => `\`${value}\``).join(", ");
 
 /** The enum as the schema spells it. Safe outside a table cell, not inside one. */
 const STATUS_ENUM = PLAN_STATUSES.join(" | ");
@@ -116,6 +128,12 @@ const STORY_FIELDS: Readonly<Record<StoryKey, Field>> = {
   acceptance: { value: '["Top-50 ranks render from the materialised view, newest hunt first"]', rule: ITEM_RULE },
   test_plan: { value: '["Unit: rank ordering with ties, empty table, single player"]', rule: ITEM_RULE },
   evidence: { value: "[]", rule: "Build fills it; leave it empty here" },
+  stakes: {
+    value: "correctness",
+    rule: `OPTIONAL — one of ${STAKES_ENUM}, or leave the key out. What a WRONG diff costs, `
+      + "not how hard the story is. Omit it rather than guess: an absent `stakes` is read as "
+      + "not declared, and the review is calibrated exactly as it always was",
+  },
 };
 
 const EPIC_FIELDS: Readonly<Record<EpicKey, Field>> = {
@@ -170,7 +188,7 @@ function cell(text: string): string {
 
 export function planContractExamples(): PlanContractExamples {
   const story = [
-    ...frontMatter(STORY_KEYS, STORY_FIELDS),
+    ...frontMatter([...STORY_KEYS, ...STORY_OPTIONAL_KEYS], STORY_FIELDS),
     "",
     "# S1 · Materialise the leaderboard read model",
     "",
@@ -233,11 +251,18 @@ export function renderPlanSchemaContract(): string {
     "",
     `Markdown that OPENS with a block of YAML front matter: line 1 is exactly \`${FENCE}\`, the`,
     `block closes at the next line that is exactly \`${FENCE}\`, and everything after it is prose`,
-    "plus one fenced ```dod block. Exactly these keys, all required, in this order:",
+    "plus one fenced ```dod block. These keys, in this order — every one required except",
+    `\`${STORY_OPTIONAL_KEYS.join("`, `")}\`:`,
     "",
-    ...ruleTable(STORY_KEYS, STORY_FIELDS),
+    ...ruleTable([...STORY_KEYS, ...STORY_OPTIONAL_KEYS], STORY_FIELDS),
     "",
     `\`status\` is exactly one of \`${STATUS_ENUM}\` — nothing else parses.`,
+    "",
+    `\`stakes\`, when you write it, is exactly one of ${STAKES_ENUM} — an unknown value is`,
+    "REFUSED, not ignored, because a calibration that is silently dropped looks like one that",
+    "was applied. It is the machine-readable form of the sentence the review is already asked",
+    "to calibrate against; `.tldrx/stages/build/stage.yml` is where a workspace says what a",
+    "given stakes value buys, and it ships saying nothing.",
     "",
     "The ```dod block is executed by `dod-gate` before `status: done` may ever be written, so",
     "every line in it must equal a `.tldrx/workspace.yml` command VERBATIM. A story may not",

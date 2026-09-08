@@ -11,6 +11,9 @@ import { skippedNote } from "../events/EventLog.ts";
 import { describeGateSignature } from "../run/gateAuthority.ts";
 import { formatJaccard } from "../facts/findDuplicate.ts";
 import {
+  provenanceFromPayload, renderReviewerProvenance, verdictReviewer, type ReviewerProvenance,
+} from "../build/reviewerProvenance.ts";
+import {
   loadGateEvidence, loadPhaseArtefacts, runLevelEvents, stageEvents,
   type LoadedRun, type NumberedEvent,
 } from "./loadRun.ts";
@@ -42,8 +45,9 @@ export function renderReplay(loaded: LoadedRun): string {
   const runLevel = runLevelEvents(loaded);
   if (runLevel.length > 0) {
     out.push("", "## Run", "");
+    const trail = new Map<string, ReviewerProvenance | null>();
     for (const item of runLevel) {
-      const line = bullet(item);
+      const line = bullet(item, trail);
       if (line !== null) out.push(line);
     }
   }
@@ -55,8 +59,11 @@ export function renderReplay(loaded: LoadedRun): string {
       out.push("", `### ${stage.id} — ${stage.status || "unknown"}${who(stage)}`, "");
       const events = stageEvents(loaded, stage.id);
       if (events.length === 0) out.push("- _no events recorded for this stage_");
+      // Per STAGE, in file order: which reviewer spawn a story's verdict belongs
+      // to is a fact about the sequence, and the sequence is what this loop is.
+      const trail = new Map<string, ReviewerProvenance | null>();
       for (const item of events) {
-        const line = bullet(item);
+        const line = bullet(item, trail);
         if (line !== null) out.push(line);
       }
       out.push(...gateEvidenceLines(loaded, phase, stage));
@@ -117,11 +124,32 @@ function stageCost(stage: RunStage, events: readonly NumberedEvent[]): number {
   return events.reduce((total, item) => total + item.event.cost_usd, 0);
 }
 
-/** One narrative line per event, or null for the bookkeeping types. */
-function bullet(item: NumberedEvent): string | null {
+/**
+ * One narrative line per event, or null for the bookkeeping types.
+ *
+ * `trail` is the caller's per-stage record of the last reviewer SPAWN per story,
+ * folded here as the events go past. It is the only state in this renderer, and
+ * it exists because a verdict's model lives on the spawn that produced it —
+ * `verdictReviewer` owns which of the two sources answers, so this function
+ * carries no rule of its own about it.
+ */
+function bullet(item: NumberedEvent, trail: Map<string, ReviewerProvenance | null>): string | null {
   const { ts, type, actor, payload, cost_usd } = item.event;
   const q = text(payload.q);
   const prefix = `- ${ts} — `;
+  if (type === "agent.spawned" && payload.role === "reviewer") {
+    trail.set(text(payload.story), provenanceFromPayload(payload, "spawned"));
+  }
+  // A review round, which used to be readable in this narrative only when it
+  // FAILED — and never with the model that decided it. Both halves matter now
+  // that `reviewer_by_stakes:` can move a reviewer onto a different model than
+  // the developer's: "S1 approved" and "S1 approved by opus" are different
+  // sentences, and a reader comparing two runs needs the second one.
+  if ((type === "check.passed" || type === "check.failed") && payload.check === "review") {
+    return `${prefix}review ${text(payload.verdict) || "?"} for story `
+      + `${text(payload.story) || "?"} by ${renderReviewerProvenance(verdictReviewer(payload, trail.get(text(payload.story)) ?? null))}`
+      + `${note(payload.detail)}`;
+  }
 
   switch (type) {
     case "run.created": return `${prefix}run created by ${actor}`;

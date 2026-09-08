@@ -78,5 +78,28 @@ it may spend, what it may read, what it must write, what checks run at the end.
 `workflows/<scope>.yml` declares the order. A `.tldrx/stages/` or `.tldrx/workflows/` in
 your own project overrides the shipped ones.
 
+## The reviewer can run on a different model
+
+`model:` and `effort:` in a stage file pin the whole stage, so Build's developer and the
+reviewer that judges its diff have always run on the same two values. Two optional keys let
+the reviewer differ:
+
+```yaml
+reviewer: {model: opus, effort: high}      # this stage's reviewer, whatever the story is
+reviewer_by_stakes:                        # ...unless the STORY says what it risks
+  security: {model: opus, effort: high}
+```
+
+`reviewer_by_stakes:` is keyed on a story's optional `stakes:` field — one of `security`,
+`money`, `data`, `correctness`, `routine`, written by the Plan agent and never inferred from
+the prose. A story that declares none never reads the map. `tldrx next --model`/`--effort`
+still beat both: an explicit flag is your word for that invocation.
+
+Both keys ship absent and `reviewer_by_stakes:` ships empty, deliberately. Nothing here has
+measured that a stronger reviewer finds more — that is what the keys make answerable, and
+every verdict now records the model behind it, so `tldrx replay` reads
+`review approve for story S1 by opus · effort high (spawned)` rather than leaving you to
+guess which model signed.
+
 Full detail: [the loop](https://github.com/ederwii/tldr-experts/blob/main/docs/guide/02-the-loop.md)
 in the repo.

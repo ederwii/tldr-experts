@@ -18,8 +18,9 @@ import {
   type ValidationIssue, type ValidationResult,
 } from "./validation.ts";
 import {
-  EPIC_ID_RE, MAX_TOUCHES, PLAN_STATUSES, REPO_NAME_RE, STORY_ID_RE,
-  requirePattern, requireStringList, requireText, requireVersion1, type PlanStatus,
+  EPIC_ID_RE, MAX_TOUCHES, PLAN_STATUSES, REPO_NAME_RE, STORY_ID_RE, STORY_STAKES,
+  requirePattern, requireStringList, requireText, requireVersion1,
+  type PlanStatus, type StoryStakes,
 } from "./planCommon.ts";
 import { parseFrontMatter } from "./frontMatter.ts";
 import { allowlistIssue, iterationOnlyDodMessage } from "./commandAllowlist.ts";
@@ -36,6 +37,16 @@ export interface Story {
   readonly acceptance: readonly string[];
   readonly test_plan: readonly string[];
   readonly evidence: readonly string[];
+  /**
+   * OPTIONAL, and absent means the plan did not declare it — never a default,
+   * never inferred from the prose. See `STORY_STAKES`.
+   *
+   * Deliberately NOT in `STORY_KEYS`: that list is what `requireKeys` demands,
+   * and a story written before this field existed is a valid story. The one
+   * reader is `stage.yml`'s `reviewer_by_stakes:` (spec 2.3), which matches on
+   * the declared value and falls back when there is none.
+   */
+  readonly stakes?: StoryStakes;
 }
 
 export const STORY_KEYS = [
@@ -92,6 +103,11 @@ export function validateStory(input: unknown): ValidationResult {
   requireStringList(doc.acceptance, "acceptance", issues, { nonEmpty: true });
   requireStringList(doc.test_plan, "test_plan", issues, { nonEmpty: true });
   const evidence = requireStringList(doc.evidence, "evidence", issues);
+  // Optional: `requireEnum` returns early on `undefined`, and `stakes` is not in
+  // `STORY_KEYS`. An UNKNOWN value is refused rather than dropped, for the same
+  // reason an unknown `effort` is: a silently-ignored `stakes` looks like a
+  // calibration that was asked for and reads as one that was applied.
+  requireEnum(doc.stakes, STORY_STAKES, "stakes", issues);
 
   if (doc.status === "done" && Array.isArray(doc.evidence) && evidence.length === 0) {
     issues.push({
@@ -116,6 +132,9 @@ export function asStory(input: unknown): Story {
     acceptance: doc.acceptance ?? [],
     test_plan: doc.test_plan ?? [],
     evidence: doc.evidence ?? [],
+    // Omitted when the plan did not declare it: `stakes: undefined` and no key
+    // are the same absence, and neither is a value.
+    ...(doc.stakes === undefined ? {} : { stakes: doc.stakes }),
   };
 }
 
