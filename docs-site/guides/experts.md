@@ -97,6 +97,11 @@ and each one names the signal that overrides it. Your repo's own conventions win
 argued with them would be worse than no pack. The Build reviewer sees no expert bodies at all,
 so it is handed those Checks under a heading that says exactly that.
 
+A Check is written for the role it is asked of. The reviewer reads and runs nothing, so
+proving a new test can fail — break the line it covers, watch it go red — is the developer's
+obligation and lives in the developer's contract; what the reviewer is asked is whether the
+developer recorded it beside the test, which is a read it can do and cite.
+
 The body is yours the moment you touch it. `enable` only ever replaces the stub `init` seeded, or
 a pack body of its own that is a shipment behind; a body you edited is kept, and the command tells
 you which one it left alone. The overlays are the framework's: rewritten on every `enable`, and on

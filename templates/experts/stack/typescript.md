@@ -62,10 +62,9 @@ answer is the project's own convention when it has one.
   the manifest and the lockfile are both in this commit
 - Does a `switch` over a union cover every member, and break the build when a member is
   added? verify: open the union's declaration and count its members against the arms
-- Can each new test fail? verify: change the line under test, re-run only that test's file —
-  the full command declared in .tldrx/workspace.yml runs once, at the Definition of Done — and
-  confirm it goes red; and say so when the workspace leaves that slot empty rather than letting
-  the check pass
+- Did the developer record, beside each new test, that it was seen to fail — what was broken
+  and that it went red? verify: read each new test in the diff for that sentence; a new test
+  carrying none is a finding, and the test reading correctly is not a substitute for it
 - Are the typecheck and lint commands green on this change, unfiltered? verify: run the
   typecheck and lint commands declared in .tldrx/workspace.yml and read each exit code —
   and say so when the workspace leaves that slot empty rather than letting the check pass

@@ -181,6 +181,12 @@ switches on: the packs switch, and the stage's own `stack_experts`. Under `stack
 the developer was never shown a stack expert, and holding a diff to Checks that were never in the
 brief is grading against a document nobody wrote from.
 
+A Check is written for the role it is asked of, and the reviewer's whole allowance is `Read`,
+`Grep`, `Glob` and `Bash(git diff *)`. So proving a new test can fail — break the line it covers,
+watch it go red — is the developer's obligation and lives in the developer's contract, not in a
+pack; what the packs ask the reviewer is whether the developer recorded it beside the test, which
+is a read it can perform and cite.
+
 ### Project skills are not part of the switch
 
 A repo's own `.claude/skills/<name>/SKILL.md` files are detected alongside and named to the

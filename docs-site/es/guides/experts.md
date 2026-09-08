@@ -102,6 +102,11 @@ dice nada, y cada uno nombra la señal que lo anula. Las convenciones de tu repo
 que discutiera con ellas sería peor que ningún pack. El revisor de Build no ve ningún cuerpo de
 experto, así que esos Checks le llegan bajo un encabezado que dice justamente eso.
 
+Un Check está escrito para el rol al que se le hace. El revisor lee y no corre nada, así que
+probar que un test nuevo puede fallar — romper la línea que cubre y verlo ponerse en rojo — es
+obligación del desarrollador y vive en el contrato del desarrollador; al revisor se le pregunta
+si el desarrollador lo dejó anotado al lado del test, que es una lectura que sí puede hacer y citar.
+
 El cuerpo es tuyo desde el momento en que lo tocas. `enable` solo reemplaza el esbozo que sembró
 `init`, o un cuerpo de pack suyo que se quedó una entrega atrás; un cuerpo que editaste se
 conserva, y el comando te dice cuál dejó en paz. Los overlays son de la herramienta: se reescriben

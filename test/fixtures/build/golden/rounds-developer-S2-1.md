@@ -91,6 +91,13 @@ agents' work — do not implement them and do not import from files they own.
    completion test, and record the discrepancy in the handoff (the criterion text itself is
    not yours to edit).
 4. Write the tests the test plan promised, then the code that makes them pass.
+5. A test that has never failed is not evidence. For every test you add: break the line it
+   covers, re-run ONLY that test's file — narrowing a declared test command to one file is
+   that command, not a new one, and the declared command itself runs once, at the Definition
+   of Done — watch it go red, then restore the line. Record it beside the test, in the file:
+   what you broke and that it went red. The reviewer reads the diff and runs nothing, so that
+   sentence is the only evidence of it that ever reaches the review; when this repo declares
+   no test command, write that instead rather than letting the claim pass.
 
 ## Produce
 

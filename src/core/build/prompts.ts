@@ -52,6 +52,44 @@ export const VALIDATE_CRITERION_RULE: readonly string[] = [
 ];
 
 /**
+ * The producer's half of the can-it-fail check (gh #182).
+ *
+ * It used to be asked of the REVIEWER. Every stack pack's `## Checks` carried it —
+ * "change the line under test, re-run only that test's file … and confirm it goes red" —
+ * and `stackChecksSection` below renders those Checks verbatim into the reviewer prompt,
+ * above a Rule further down in that same rendered document reading "You have no write tool."
+ * That is not a wording slip in one of the two places: `REVIEWER_TOOLS`
+ * (`executors/build.ts`) is `Read`, `Grep`, `Glob`, `Bash(git diff *)`, so the role being
+ * asked held neither the pen the mutation needs nor a way to run a test. Measured across a
+ * week of unattended runs on three real workspaces, hosts resolved the contradiction by
+ * hand every time and nobody reported the check as unaskable — which is the worse outcome,
+ * because a reviewer that cannot perform a check still answers it, from reading alone.
+ *
+ * So the check goes to the role that can perform it. The developer writes and runs; it
+ * does the mutation and RECORDS it.
+ *
+ * Where it records it is not decoration. The reviewer sees the diff and the files on disk
+ * and nothing else — no `git log` is in that allowance — so a commit message is a surface
+ * it cannot read, and a record that lands anywhere else leaves the reviewer's half of this
+ * check ("a miss is a finding with a cited file") with nothing to cite. Beside the test,
+ * in the test file, is the one place that is both the developer's to write and the
+ * reviewer's to read.
+ *
+ * ONE spelling lives here. The packs no longer ask the mutation of anyone; the drive
+ * mandate's copy (`core/drive/mandate.ts`) is the HOST's calibration for a
+ * correctness-bearing story, addressed to a different reader and about its own turn.
+ */
+export const MUTATION_PROOF_RULE: readonly string[] = [
+  "A test that has never failed is not evidence. For every test you add: break the line it",
+  "covers, re-run ONLY that test's file — narrowing a declared test command to one file is",
+  "that command, not a new one, and the declared command itself runs once, at the Definition",
+  "of Done — watch it go red, then restore the line. Record it beside the test, in the file:",
+  "what you broke and that it went red. The reviewer reads the diff and runs nothing, so that",
+  "sentence is the only evidence of it that ever reaches the review; when this repo declares",
+  "no test command, write that instead rather than letting the claim pass.",
+];
+
+/**
  * The two-speed instruction, when the repo declares a `test_fast` command (2026-09-07).
  *
  * Measured on three real workspaces: the developer's only test instrument was the
@@ -66,8 +104,10 @@ export const VALIDATE_CRITERION_RULE: readonly string[] = [
  * emitted when the slot is absent — the prompt is then byte-identical to the one before
  * this existed, which `test/build-golden.test.ts` freezes.
  *
- * The can-it-fail check is NOT restated here: it already names its instrument in the
- * drive mandate and the stack expert packs, and a second spelling is how the two drift.
+ * The can-it-fail check is NOT restated here: `MUTATION_PROOF_RULE` above is the
+ * developer's one spelling of it and names the same instrument this rule does — the one
+ * test file while iterating, the declared command once, at the Definition of Done. A
+ * second spelling inside this function is how the two would come to disagree.
  */
 export function testFastRule(fast: string, full: string | null): readonly string[] {
   return [
@@ -205,6 +245,7 @@ export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
     "   deviation, and the reviewer will read it as one.",
     `3. ${VALIDATE_CRITERION_RULE.join("\n   ")}`,
     "4. Write the tests the test plan promised, then the code that makes them pass.",
+    `5. ${MUTATION_PROOF_RULE.join("\n   ")}`,
     "",
     "## Produce",
     "",

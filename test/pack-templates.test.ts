@@ -242,35 +242,53 @@ describe("framework overlays mirror the detection table one-to-one (one derivati
 });
 
 /**
- * The can-it-fail Check names its instrument (2026-09-07).
+ * The can-it-fail Check is asked of the reviewer, so it asks for a READ (gh #182).
  *
- * The Check used to say "re-run the test command declared in .tldrx/workspace.yml".
- * That command is the FULL suite by construction — a story's Definition of Done is
- * byte-equal to a `workspace.yml` command — so, measured over a week of unattended
- * runs on three real workspaces, a host paid one whole suite per mutation: five
- * mutations, five extra suites, six to ten suite runs in one story, against a suite
- * of 11,929 tests over 855 files in one of them. The question stays; the instrument
- * shrinks to the one file that covers the broken line, and the declared command keeps
- * its single run at the Definition of Done.
+ * Two dates, one Check. On 2026-09-07 the instrument shrank from the declared suite to
+ * the one test file that covers the broken line (`c7ce90f`) — measured over a week of
+ * unattended runs on three real workspaces, where a host paid one whole suite per
+ * mutation, against a suite of 11,929 tests over 855 files in one of them.
+ *
+ * That fixed the cost and left the reader wrong. A pack's `## Checks` are rendered into
+ * the reviewer prompt under `## Stack checks` and asked of the DIFF, and the reviewer's
+ * allowance is `Read`, `Grep`, `Glob`, `Bash(git diff *)` (`REVIEWER_TOOLS`) — the same
+ * prompt tells it "you have no write tool". "Change the line under test and re-run" is a
+ * write and a test run, so the role being asked could not perform it, and a reviewer that
+ * cannot run a check still answers it — from reading, which is the worse outcome.
+ *
+ * So the mutation is the PRODUCER's, and lives in the developer's contract
+ * (`build/prompts.ts` `MUTATION_PROOF_RULE`, pinned in `stack-packs-prompt.test.ts`).
+ * What is left here is the reviewer's half, and it is a read: did the developer record it?
  */
-describe("the can-it-fail Check names one test file, not the declared suite", () => {
-  const CAN_FAIL = "Can each new test fail?";
-  const INSTRUMENT = "re-run only that test's file";
-  const RETIRED = "re-run the test command declared";
+describe("the can-it-fail Check asks the reviewer for a read, not a mutation", () => {
+  const ASKS_FOR_THE_RECORD = "seen to fail";
+  /** The imperatives the retired wording aimed at a role holding no pen. */
+  const RETIRED = ["change the line under test", "re-run only that test's file", "re-run the test command declared"];
 
   for (const lang of PACK_LANGUAGES) {
-    test(`${lang}.md scopes the mutation re-run to one file`, () => {
+    test(`${lang}.md asks whether the developer recorded it, and asks for nothing it cannot do`, () => {
       const text = readFileSync(packBodyPath(lang), "utf8");
-      const check = bullets(section(text, CHECKS_HEADING)).find((item) => item.startsWith(CAN_FAIL));
-      expect(check, `${lang}.md still asks "${CAN_FAIL}"`).toBeDefined();
-      expect(check ?? "", `${lang}.md names the instrument`).toContain(INSTRUMENT);
-      expect(check ?? "", `${lang}.md places the declared command at the Definition of Done`)
-        .toContain("runs once, at the Definition of Done");
-      expect(check ?? "", `${lang}.md no longer sends the reviewer to the declared command per mutation`)
-        .not.toContain(RETIRED);
-      // The empty-slot clause survives the rewrite — a workspace declaring nothing
-      // must still be named, not quietly passed.
-      expect(check ?? "", `${lang}.md keeps the empty-slot clause`).toContain("leaves that slot empty");
+      const check = bullets(section(text, CHECKS_HEADING))
+        .find((item) => item.includes(ASKS_FOR_THE_RECORD));
+      expect(check, `${lang}.md still asks about a test "${ASKS_FOR_THE_RECORD}"`).toBeDefined();
+      // The verify: hint sends the reviewer to the one surface it holds — the diff.
+      expect(check ?? "", `${lang}.md points the reviewer at the diff`).toContain("diff");
+      for (const retired of RETIRED) {
+        expect((check ?? "").toLowerCase(), `${lang}.md no longer asks the reviewer to ${retired}`)
+          .not.toContain(retired);
+      }
+      // A missing record is a finding; answering from the test's own text is not an answer.
+      expect(check ?? "", `${lang}.md says a new test with no record is a finding`).toContain("finding");
     });
   }
+
+  test("no Check anywhere in a shipped pack body tells the reviewer to edit a file", () => {
+    const offenders: string[] = [];
+    for (const lang of PACK_LANGUAGES) {
+      for (const check of bullets(section(readFileSync(packBodyPath(lang), "utf8"), CHECKS_HEADING))) {
+        if (/\b(?:change|edit|rewrite|delete|break) the line\b/i.test(check)) offenders.push(`${lang}.md: ${check}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
 });

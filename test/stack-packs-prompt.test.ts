@@ -9,15 +9,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describeBundles, loadExpertBundles } from "../src/core/experts/expertBundle.ts";
 import {
-  CHECKS_HEADING, DEFAULTS_HEADING, overlayMarker, OVERLAYS_DIRNAME, PACK_MAX_BYTES, stackChecks,
+  checksOf, CHECKS_HEADING, DEFAULTS_HEADING, overlayMarker, OVERLAYS_DIRNAME, PACK_MAX_BYTES,
+  stackChecks,
 } from "../src/core/experts/packSections.ts";
+import { readPackBody } from "../src/core/experts/packTemplates.ts";
+import type { PackLanguage } from "../src/core/detect/overlays.ts";
 import {
   PROJECT_SKILLS_HEADING, readStackPacks, renderProjectSkills, skillsFor, untrackedSkillWarnings,
   type StackPacksState,
 } from "../src/core/experts/stackPacks.ts";
 import { renderParts, buildPrompt } from "../src/core/facilitator/prompt.ts";
 import { buildLedger } from "../src/core/facilitator/contextLedger.ts";
-import { developerTools } from "../src/core/facilitator/executors/build.ts";
+import { developerTools, REVIEWER_TOOLS } from "../src/core/facilitator/executors/build.ts";
 import { BASE_TOOLS } from "../src/core/facilitator/spawnAgent.ts";
 import { runNext } from "../src/core/facilitator/runNext.ts";
 import type { PendingStage } from "../src/core/facilitator/pending.ts";
@@ -36,6 +39,14 @@ export interface PackRootOptions {
   readonly enabled: boolean | null;
   readonly overlays?: readonly string[];
   readonly skills?: readonly { name: string; description: string; tracked: boolean }[];
+  /**
+   * Materialise the REAL shipped `templates/experts/stack/<lang>.md` as the expert's body
+   * instead of the four-line stub, so a test can put the bytes this repo actually ships
+   * through the pipeline. `init/stackPacks.ts` writes the same thing: the pack body under
+   * the expert's own front matter, which the stub also carries and `stackChecks` requires
+   * (`kind: stack`).
+   */
+  readonly realBody?: PackLanguage;
 }
 
 /** A workspace with one `lab` repo, one `typescript-stack` expert, and whatever the test asks for. */
@@ -58,11 +69,16 @@ export function packRoot(options: PackRootOptions): string {
     ...(options.enabled === null ? [] : ["stack_packs:", `  enabled: ${String(options.enabled)}`, "  enabled_at: 2026-09-05T10:00:00Z"]),
     "",
   ].join("\n"), "utf8");
-  writeFileSync(join(expert, "expert.md"), [
-    "---", "name: typescript-stack", "kind: stack", "status: created", "repos: [lab]", "---", "",
+  const frontMatter = ["---", "name: typescript-stack", "kind: stack", "status: created", "repos: [lab]", "---", ""];
+  const stub = [
     "# TypeScript", "", "Scope.", "", `## ${DEFAULTS_HEADING}`, "", "- Strict on. — overridden by: tsconfig.json", "",
     `## ${CHECKS_HEADING}`, "", "- Any new `any`? verify: grep `: any`", "",
-  ].join("\n"), "utf8");
+  ].join("\n");
+  const shipped = options.realBody === undefined ? null : readPackBody(options.realBody);
+  if (options.realBody !== undefined && shipped === null) {
+    throw new Error(`no pack body ships for ${options.realBody} — the fixture must not invent one`);
+  }
+  writeFileSync(join(expert, "expert.md"), `${frontMatter.join("\n")}${shipped ?? stub}`, "utf8");
   writeFileSync(join(expert, "competencies.yml"), "version: 1\nexpert: typescript-stack\nstatus: created\nareas: []\n", "utf8");
   for (const id of options.overlays ?? []) {
     mkdirSync(join(expert, OVERLAYS_DIRNAME), { recursive: true });
@@ -277,6 +293,89 @@ describe("the reviewer's stack checks", () => {
     expect(text.indexOf("## Conventions")).toBeLessThan(text.indexOf(`## ${STACK_CHECKS_HEADING}`));
     expect(text.indexOf(`## ${STACK_CHECKS_HEADING}`)).toBeLessThan(text.indexOf("## The story"));
     expect(text).toContain("the project's own convention");
+  });
+});
+
+/**
+ * Who is asked to prove a test can fail (gh #182).
+ *
+ * The mutation used to be a pack Check — rendered into the reviewer prompt under
+ * `## Stack checks` and asked of a role whose whole allowance is `REVIEWER_TOOLS`,
+ * beside a Rule in that same prompt saying "you have no write tool". It is a
+ * producer's obligation: the developer writes and runs, so the developer performs it
+ * and RECORDS it where the reviewer can read it.
+ *
+ * "Where" is load-bearing and is asserted below rather than assumed: the reviewer holds
+ * no `git log`, so a commit message is not a surface it can read. The record has to land
+ * in the diff — beside the test, in the file — or the reviewer's half of this check has
+ * nothing to cite, and "a miss is a finding with a cited file" becomes unaskable again.
+ */
+describe("the mutation proof is the developer's, and the reviewer only reads it", () => {
+  test("the developer's contract asks for the mutation and for the record it leaves", () => {
+    const text = devPrompt([]);
+    expect(text).toContain("break the line it");
+    expect(text).toContain("watch it go red");
+    expect(text).toContain("beside the test");
+    // It is a step of `## Investigate`, after the tests exist and before `## Produce`.
+    expect(text.indexOf("Write the tests the test plan promised")).toBeLessThan(text.indexOf("break the line it"));
+    expect(text.indexOf("break the line it")).toBeLessThan(text.indexOf("## Produce"));
+    // One spelling, not two: a second copy is how the instrument and the rule drift.
+    expect(text.split("break the line it").length - 1).toBe(1);
+  });
+
+  test("the reviewer is never told to run the mutation — it holds no pen and no git log", () => {
+    expect(REVIEWER_TOOLS).not.toContain("Edit");
+    expect(REVIEWER_TOOLS).not.toContain("Write");
+    expect(REVIEWER_TOOLS.some((tool) => tool.includes("git log"))).toBe(false);
+    for (const text of [reviewPrompt(null), reviewPrompt("### typescript-stack\n\n- Any new `any`? verify: grep")]) {
+      expect(text).not.toContain("break the line it");
+      expect(text).not.toContain("watch it go red");
+    }
+  });
+
+  /**
+   * The end-to-end leg, and the one this issue is actually about (review of 7677d4d).
+   *
+   * Everything else about the reviewer's half is proven on a proxy: `pack-templates.test.ts`
+   * reads the template off disk and never renders it, the sibling tests above render a
+   * FABRICATED checks string, and `build-golden.test.ts` never enables stack packs — which is
+   * exactly why the reviewer prompts' golden bytes did not move for this change. So the
+   * developer half is frozen by the golden and the reviewer half would have been proven by
+   * nothing: the shipped bullet could regress to the retired wording and every test stays
+   * green.
+   *
+   * This installs the REAL `templates/experts/stack/typescript.md` as the expert's body and
+   * renders the actual reviewer prompt through `stackChecks` → `buildReviewerPrompt`. It is a
+   * GUARD, not a red-first proof (AGENTS.md §1): the code it covers was already correct when
+   * it was written. Its teeth were shown by mutation in both directions — the template
+   * reverted to "change the line under test", and `stackChecksSection` made to drop its body.
+   */
+  test("the shipped typescript pack reaches the reviewer prompt: the read arrives, the mutation is gone", () => {
+    const root = packRoot({ enabled: true, realBody: "typescript" });
+    const checks = stackChecks(root, ["lab"]);
+    expect(checks, "the shipped pack yields Checks").not.toBeNull();
+    const prompt = reviewPrompt(checks);
+
+    // The section exists, named by the exported heading rather than by prose.
+    expect(prompt).toContain(`## ${STACK_CHECKS_HEADING}`);
+    // Verbatim carry: every Check the shipped template holds is in the prompt, unaltered.
+    const shippedChecks = checksOf(readPackBody("typescript") ?? "");
+    expect(shippedChecks, "the shipped body has a Checks section").not.toBe("");
+    expect(prompt).toContain(shippedChecks);
+    // …and Defaults never are — the reviewer is handed questions, not prescriptions.
+    expect(prompt).not.toContain(`## ${DEFAULTS_HEADING}`);
+    expect(prompt).not.toContain("Write to the strictest compiler settings");
+
+    // The bullet itself, both halves. Distinctive phrases, not bare English words: each is
+    // long enough that innocent prose elsewhere in the prompt cannot supply it.
+    expect(prompt).toContain("Did the developer record, beside each new test, that it was seen to fail");
+    expect(prompt).toContain("read each new test in the diff for that sentence");
+    for (const retired of ["change the line under test", "re-run only that test's file", "confirm it goes red"]) {
+      expect(prompt, `the reviewer is no longer asked to ${retired}`).not.toContain(retired);
+    }
+    // Nothing else that arrived through the pack asks this role to hold a pen either.
+    const section = prompt.slice(prompt.indexOf(`## ${STACK_CHECKS_HEADING}`), prompt.indexOf("## The story"));
+    expect(section).not.toMatch(/\b(?:change|edit|rewrite|delete|break) the line\b/i);
   });
 });
 
