@@ -19,6 +19,7 @@ import { SRC_GRAMMAR_HEADING } from "../text/srcGrammarContract.ts";
 import { parseFixFindings, type FixFinding } from "./fixlist.ts";
 import { DOD_REFUSAL_FALLBACK, dodRefused } from "./outcome.ts";
 import type { StoryOutcome, Verdict } from "./outcome.ts";
+import { renderReviewerProvenance } from "./reviewerProvenance.ts";
 
 export interface Review {
   readonly verdict: Verdict;
@@ -381,6 +382,12 @@ export function renderReviewLog(outcome: StoryOutcome): string {
     `# Review — ${outcome.id} · ${outcome.title}`,
     "",
     `- Verdict: **${outcome.verdict}**`,
+    // WHO judged it. Absent on every log written before `reviewer_by_stakes:`
+    // existed and on a host review nobody declared, and the sentence says so in
+    // words rather than leaving the reader to assume the stage's pin — which is
+    // exactly the assumption that made "did a stronger reviewer find more"
+    // unanswerable across 168 measured stories.
+    `- Reviewer: ${renderReviewerProvenance(outcome.reviewer)}`,
     `- Story status: \`${outcome.status}\``,
     `- Attempt: ${String(outcome.attempts)}`,
     `- Repo: \`${outcome.repo}\` · wave ${outcome.wave} · epic ${outcome.epic}`,

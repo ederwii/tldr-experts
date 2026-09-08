@@ -28,6 +28,29 @@ export const PLAN_STATUSES = ["todo", "in_progress", "review", "done", "blocked"
 export type PlanStatus = (typeof PLAN_STATUSES)[number];
 
 /**
+ * `stakes:` — what this story RISKS if its diff is wrong. A CLOSED enum, and
+ * absent means the plan did not declare it: nothing infers stakes from a title,
+ * a path or a word in the prose.
+ *
+ * It exists because the calibration was already being asked for and had no
+ * machine-readable form. The drive mandate tells a host to "Calibrate the review
+ * to the stakes" and the story text is the only place the stakes were ever
+ * written — measured across three real workspaces and 168 Build stories, hosts
+ * upgraded a reviewer to a stronger model BY HAND on the security-bearing ones,
+ * because the framework offered no way to say it. This is that sentence in a
+ * field: `stage.yml`'s `reviewer_by_stakes:` is the one reader that acts on it,
+ * and it acts only on what the plan DECLARED.
+ *
+ * The five are the kinds of harm a wrong diff does, not a severity ladder:
+ * `security` (a boundary), `money` (a charge or a balance), `data` (a record
+ * that cannot be re-derived), `correctness` (a wrong answer), `routine`
+ * (everything a re-run fixes). `routine` is a real declaration and is not the
+ * same as saying nothing.
+ */
+export const STORY_STAKES = ["security", "money", "data", "correctness", "routine"] as const;
+export type StoryStakes = (typeof STORY_STAKES)[number];
+
+/**
  * Caps, in the spirit of spec §0: a Plan artefact is bounded or it is a document.
  *
  * Every message that refuses a value interpolates the constant rather than

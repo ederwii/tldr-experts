@@ -597,6 +597,8 @@ function executorContext(ws: BuildWorkspace, phaseId: string, stageId: string): 
     mode: "headless",
     model: null,
     effort: null,
+    modelFlag: null,
+    effortFlag: null,
     // Nothing declared on the command line — these tests drive the executor directly.
     costUsd: null,
     tokens: null,

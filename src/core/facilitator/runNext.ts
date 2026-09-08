@@ -1188,6 +1188,8 @@ async function runExecutor(
     mode: options.mode,
     model,
     effort,
+    modelFlag: options.model ?? null,
+    effortFlag: options.effort ?? null,
     budgetUsd: stage.budget_usd,
     maxBudgetUsd: agentCap(options, store, stage),
     yolo: options.yolo,

@@ -239,6 +239,8 @@ prompt_max_bytes: 163840
 max_reads: 120
 model: sonnet
 effort: high
+reviewer: {model: opus, effort: high}
+reviewer_by_stakes: {security: {model: opus, effort: high}}
 budget_usd: 3.0
 timeout_s: 900
 dry_run_allowed: true
@@ -275,6 +277,7 @@ for files whose citations §2.6 would refuse to count.
 | `max_reads` | int ≥0 | n (120 · build 200 · watch 60) | How many `Read`/`Glob`/`Grep` calls the sub-agent may complete before it is stopped (§5, "The read cap"). `--max-reads <n>` overrides it for one invocation |
 | `preflight` | str[] | n | What the pre-start check said about the model and the ceiling this bundle freezes (§2.6.1, #96/#98). Written by `expert train --prepare` **only when there is a warning**, so a bundle nobody had an alarm for is byte-identical to the one that command has always written |
 | `effort` | `low\|medium\|high\|xhigh\|max` | n (unset) | Passed to the sub-agent as `--effort`. **Unset ⇒ the flag is not passed at all** and the CLI uses its own default |
+| `reviewer` / `reviewer_by_stakes.<stakes>` | `{model?, effort?}` | n (absent) | The REVIEWER role's own model and effort, for a stage that spawns more than one role (§5). Both optional, both resolved FIELD BY FIELD, and absent ⇒ the stage's own `model:`/`effort:` — byte-for-byte the reviewer every Build story got before these keys existed. `reviewer_by_stakes` is keyed on a story's `stakes:` (§2.13); a key outside that enum is **refused at load**, and an `effort` outside the five levels likewise. Precedence: `--model`/`--effort` > `reviewer_by_stakes[<the story's stakes>]` > `reviewer` > the stage's own |
 | `budget_usd` | number >0 | y | Stage ceiling and the sub-agent's `--max-budget-usd` share |
 | `timeout_s` / `dry_run_allowed` | int >0 / bool | n (900 / `true`) | Wall clock for sub-agent and `cmd` checks `[assumption]`; `dry_run_allowed: false` refuses `--dry-run` on this stage |
 | `inputs.required` / `.optional` | path[] | y / n | **The only files the sub-agent gets**; `{repo}` expands per repo. A declared path that resolves to NOTHING is NAMED — one `## Inputs` entry under `### Declared, but not on disk` with its own `[src: absent:<path>]` token, and one stdout line — never silently dropped (gh #131) |
@@ -330,6 +333,18 @@ becomes a measurement rather than an argument. Shipped defaults — all `[assump
 · how `high` · plan `medium` · build `high` · watch `low`, and `medium` for a training run. The rule behind them is
 that a stage which *reasons* (How, Build) buys effort and a stage which *transcribes* what an upstream pass already
 decided (Watch) does not.
+
+**`reviewer:` / `reviewer_by_stakes:` — the two lines were per STAGE, and Build has two roles.** Measured this week
+across three real workspaces and 168 Build stories: every one of them ran the same model at the same effort for the
+developer AND the reviewer, because one accessor served both spawns. Zero reviewers ran on anything stronger, and no
+review record named the model behind its verdict, so *does a stronger reviewer find more* was not a question the data
+could answer. Meanwhile hosts were upgrading the reviewer BY HAND on stories whose own text said they were
+security-bearing — a calibration the framework had no way to express. These two keys are that sentence in a file,
+and §2.13's `stakes:` is the story half of it. **The shipped `stages/build/stage.yml` declares `reviewer_by_stakes: {}`
+and no `reviewer:`**: there is no evidence yet that a stronger reviewer finds more, and shipping an opus default would
+spend money asserting the thing these keys exist to measure. What ships instead is the RECORD — every verdict now
+carries the reviewer that produced it (§5, "Which reviewer judged it"), so the corpus a decision would need starts
+accumulating from the first run.
 
 **`inputs.seed`.** A stage cannot name the run's seed documents: they differ per run. So it opts in
 (`inputs: {seed: true, …}`) and the facilitator reads the list off `run.yml` — the entries `run new --seed` added to
@@ -1579,6 +1594,7 @@ test_plan:
   - "Unit: rank ordering with ties, empty table, single player"
   - "Integration: HuntCompleted refreshes the view"
 evidence: []
+stakes: correctness
 ---
 
 # S3 · Leaderboard read model
@@ -1610,6 +1626,7 @@ Filled by Build, one bullet per proof. [src: $ npm run test → exit 0]
 | `acceptance` | str[] (≥1, ≤64) | y | What must be true for a human to accept it |
 | `test_plan` | str[] (≥1, ≤64) | y | How it will be proven, before it is written |
 | `evidence` | str[] (≤64) | y | Filled by Build. **Required non-empty when `status: done`** — done means proven, not asserted. May cite `04-build/fixlist/<id>-<n>.md` beside the review log when the story went through a fix-list round |
+| `stakes` | `security\|money\|data\|correctness\|routine` | **n** | What a WRONG diff costs — the machine-readable form of the sentence the drive mandate already asks a host to calibrate the review against. **Absent means the plan did not declare it**, never a default and never inferred from the title or the prose; an unknown value is REFUSED at the `plan` check, naming the field, because a silently-dropped calibration looks like one that was applied. Its one reader is `stage.yml`'s `reviewer_by_stakes:` (§2.3), which ships empty — so declaring `stakes:` changes nothing until a workspace says what a value buys. The ONLY optional key in this front matter |
 | ` ```dod ` block | fenced, ≥1 command | y | Each line must equal a `workspace.yml` command **verbatim**; `dod-gate` re-runs all of them from `repo` and every one must exit `0`. A command the gate REFUSES — not byte-equal to a declared one, or needing a shell — never runs, so it can never be green: it is recorded as REFUSED with the gate's own sentence and **no exit code at all**, in the event, the handoff, the review log and the retro alike (§2.8, §2.9). Editing `workspace.yml` therefore orphans every approved story that cited the old string — `tldrx plan sync-dod` is the mechanical repair, and the drift message names it. A `test_fast:` command is the one declared command a dod block may **not** name: it is the developer's iteration instrument, not the proof of a story, and the refusal names the slot so the reader is not sent looking for a command that is plainly in `workspace.yml` (§2.1). |
 
 **`touches:` may be AMENDED, and only by `tldrx story widen` (#171).** A story that turns out to have to change a path
@@ -2917,6 +2934,22 @@ one story never varies:
    unreadable review must not buy the third VERDICT. It may buy a bounded free CORRECTION, which is a different thing
    and is #78/#79 below: the round is granted on a fix list somebody can read, and on nothing else. See "the fix list"
    below.
+
+   **Which reviewer judged it.** The reviewer's `--model`/`--effort` are the stage's own until a stage file says
+   otherwise: `reviewer:` and `reviewer_by_stakes:` (§2.3) resolve field by field, `reviewer_by_stakes` keyed on the
+   STORY's `stakes:` (§2.13), and `tldrx next --model`/`--effort` beat both. The same resolution feeds the spawn AND the
+   `--prepare --review` bundle's `pending.json`, so a host in cursor mode is shown the model the framework would have
+   judged with rather than the stage's pin. Every review record then carries WHO produced the verdict, with the basis
+   named: a spawned reviewer's exact arguments are on its own `agent.spawned` (they always were); a HOST review emits no
+   spawn, so `--model`/`--effort` on `tldrx next --commit --review` are read as the host's DECLARATION and ride on the
+   review `check.passed`/`check.failed` as `model`, `effort` and `basis: "host-declared"` — additive keys, written on
+   the host path only, so the spawned path's payload is unchanged. A host review that declared nothing is **not
+   recorded**: the bundle's `model:` is a suggestion the framework made, and quoting it back as a measurement of another
+   session would be a record lying in the dangerous direction (§0). `04-build/log/<story-id>.md` carries one
+   `- Reviewer:` line and `tldrx replay` names the model on every review round, both saying `not recorded` where nothing
+   can say. **The grounding, measured this week over three real workspaces and 168 Build stories**: 168 reviewers on the
+   same model and effort as their developer, zero on anything stronger, and no verdict labelled — the two `changes`
+   verdicts of one run were traceable to sonnet reviewers only by reading that run's spawn lines by hand.
 6. **`done` requires DoD green AND `approve`**, and writes the proof into the story's own front matter: `$ <cmd> →
    exit 0` per dod command, `commit <sha>`, and the review path. A `changes` verdict sets the story `review` and
    requeues it **once**, with the review rendered under `## Previous attempt`; a second `changes` blocks it. An

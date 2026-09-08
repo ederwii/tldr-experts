@@ -78,6 +78,18 @@ export interface ExecutorContext {
    * operator gave one, else the stage's `effort:`, else null (flag omitted).
    */
   readonly effort: EffortLevel | null;
+  /**
+   * `--model` / `--effort` AS TYPED on this invocation, or null — not the
+   * resolved values above, which have already folded in `run.yml` and the stage
+   * file and so cannot say whether an operator typed anything.
+   *
+   * One reader: the reviewer's own model resolution
+   * (`facilitator/reviewerModel.ts`), where "the operator's word for this
+   * invocation" is the top layer and has to be distinguishable from "the stage's
+   * pin, which is also what the developer got".
+   */
+  readonly modelFlag: string | null;
+  readonly effortFlag: EffortLevel | null;
   /** The stage's own ceiling, as scaled into `run.yml`. */
   readonly budgetUsd: number;
   /** `min(stage share, per_agent_max_usd, --max-usd)` — what one sub-agent may spend. */

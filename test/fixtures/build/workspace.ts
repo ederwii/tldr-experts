@@ -41,6 +41,12 @@ export interface StorySpec {
    * before the field existed.
    */
   readonly evidence?: readonly string[];
+  /**
+   * `stakes:` — the story's declared risk, the key `reviewer_by_stakes:` matches
+   * on. Omitted by default, which is a story that declares none and is
+   * byte-identical to what this fixture wrote before the field existed.
+   */
+  readonly stakes?: string;
 }
 
 export interface EpicSpec {
@@ -77,6 +83,10 @@ export interface BuildWorkspaceOptions {
   readonly commands?: Readonly<Record<string, string | null>>;
   readonly budgetUsd?: number;
   readonly perAgentMaxUsd?: number;
+  /** `reviewer:` in the STAGE yaml — the reviewer role's own model/effort. */
+  readonly reviewer?: { readonly model?: string; readonly effort?: string };
+  /** `reviewer_by_stakes:` in the STAGE yaml, keyed by a story's `stakes:`. */
+  readonly reviewerByStakes?: Readonly<Record<string, { readonly model?: string; readonly effort?: string }>>;
   /**
    * `--gates <stages|all|none>` — which stages a HUMAN must sign. `"none"` makes
    * the build stage `auto`, which is the only way to exercise the auto gate's
@@ -153,7 +163,10 @@ export function makeBuildWorkspace(options: BuildWorkspaceOptions): BuildWorkspa
   write(root, ".tldrx/experts/developer/expert.md", "# Developer\n\nSmall diffs, tests first.\n");
   const scope = options.scope ?? "build-only";
   write(root, `.tldrx/workflows/${scope}.yml`, workflowYaml(scope, options.skips ?? []));
-  write(root, ".tldrx/stages/build/stage.yml", stageYaml(options.budgetUsd ?? 8, options.stackExperts ?? false));
+  write(root, ".tldrx/stages/build/stage.yml", stageYaml(options.budgetUsd ?? 8, options.stackExperts ?? false, {
+    ...(options.reviewer === undefined ? {} : { reviewer: options.reviewer }),
+    ...(options.reviewerByStakes === undefined ? {} : { reviewerByStakes: options.reviewerByStakes }),
+  }));
   write(root, ".tldrx/stages/build/stage.md", "# Build\n\n## Role\nThe wave executor runs this stage.\n");
   for (const [rel, content] of Object.entries(options.files ?? {})) write(root, rel, content);
 
@@ -286,8 +299,29 @@ stages:
 `;
 }
 
-function stageYaml(budgetUsd: number, stackExperts = false): string {
-  return `version: 1
+interface ReviewerYaml {
+  readonly reviewer?: { readonly model?: string; readonly effort?: string };
+  readonly reviewerByStakes?: Readonly<Record<string, { readonly model?: string; readonly effort?: string }>>;
+}
+
+/** `{model: opus, effort: high}` — flow style, so a caller can nest it anywhere. */
+function overrideFlow(override: { readonly model?: string; readonly effort?: string }): string {
+  const parts = [
+    ...(override.model === undefined ? [] : [`model: ${override.model}`]),
+    ...(override.effort === undefined ? [] : [`effort: ${override.effort}`]),
+  ];
+  return `{${parts.join(", ")}}`;
+}
+
+function stageYaml(budgetUsd: number, stackExperts = false, reviewer: ReviewerYaml = {}): string {
+  const blocks = [
+    ...(reviewer.reviewer === undefined ? [] : [`reviewer: ${overrideFlow(reviewer.reviewer)}`]),
+    ...(reviewer.reviewerByStakes === undefined ? [] : [
+      "reviewer_by_stakes:",
+      ...Object.entries(reviewer.reviewerByStakes).map(([k, v]) => `  ${k}: ${overrideFlow(v)}`),
+    ]),
+  ];
+  return `${blocks.length === 0 ? "" : `${blocks.join("\n")}\n`}version: 1
 id: build
 title: "Build"
 phase: 04-build
@@ -358,6 +392,7 @@ export function storyMarkdown(story: StorySpec, repo: string): string {
     "test_plan:",
     `  - "Unit: the ${story.id} file is written"`,
     `evidence: [${(story.evidence ?? []).map((e) => `"${e}"`).join(", ")}]`,
+    ...(story.stakes === undefined ? [] : [`stakes: ${story.stakes}`]),
     "---",
     "",
     `# ${story.id} · ${story.title ?? `Story ${story.id}`}`,

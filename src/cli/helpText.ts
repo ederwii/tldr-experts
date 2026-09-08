@@ -596,6 +596,7 @@ const ENTRIES: readonly CommandHelp[] = [
       "Exit 4 is the normal end of a successful stage: it ran, it wrote its outputs, and a person now has to approve.",
       "Both halves of the handshake now write `result_schema` into pending.json \u2014 the reviewer's REVIEW_SCHEMA and the developer's {outputs, questions_asked, notes} envelope plus the `cost_usd`/`session_id` a host may declare. Read the shape out of the bundle; do not reconstruct it from memory or from a sibling story.",
       "--prepare and --dry-run print the CONTEXT LEDGER: bytes per section of the prompt, the total against prompt_max_bytes, and any declared input that had to be truncated. `tldrx run estimate` prints the same ledger with a price on it.",
+      "On `--commit --review` there is no turn left to configure, so --model and --effort are read as the host's DECLARATION of what judged the diff — the same reading --cost-usd and --tokens already get on --commit — and are recorded on the verdict as basis: host-declared. Declare nothing and the record says `not recorded`: the reviewer bundle's own model is a suggestion tldrx made, and repeating it back would be quoting a suggestion as a measurement of your session. Everywhere else the two flags override the stage's model:/effort: for every sub-agent of the invocation, including a reviewer a stage.yml reviewer:/reviewer_by_stakes: block would otherwise have moved.",
     ],
   },
   {
