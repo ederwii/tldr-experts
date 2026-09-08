@@ -537,7 +537,12 @@ export async function fastForward(cwd: string, onto: string): Promise<GitResult>
 }
 
 export function diffCommand(base: string, branch: string): string {
-  return `git diff ${base}...${branch}`;
+  return `git diff ${diffRange(base, branch)}`;
+}
+
+/** The range both the reviewer's command and the measured surface are read over. */
+export function diffRange(base: string, branch: string): string {
+  return `${base}...${branch}`;
 }
 
 /**
@@ -558,7 +563,21 @@ export function diffCommand(base: string, branch: string): string {
 export function reviewDiffCommand(
   diffBase: string | null | undefined, epicBranch: string, branch: string,
 ): string {
-  return diffCommand(
+  return `git diff ${reviewDiffRange(diffBase, epicBranch, branch)}`;
+}
+
+/**
+ * The same answer as a RANGE, for the callers that run git rather than print it.
+ *
+ * Added by #185, which measures a story's changed paths against its declared
+ * `touches:`: "the story's diff" must have ONE definition, and it is this one.
+ * A second `${base}...${branch}` derivation beside it is how the measurement and
+ * the review would come to disagree about which commits are the story's.
+ */
+export function reviewDiffRange(
+  diffBase: string | null | undefined, epicBranch: string, branch: string,
+): string {
+  return diffRange(
     diffBase === undefined || diffBase === null || diffBase === "" ? epicBranch : diffBase,
     branch,
   );

@@ -28,6 +28,28 @@
   declared nothing reads `not recorded` rather than the bundle's suggested model: that
   suggestion is one tldrx made, and quoting it back would be a record lying in the dangerous
   direction. (#178)
+- **`touches` was declared and never measured, so the boundary audit was answering against a
+  forecast.** Measured on three real workspaces: one story changed 21 files and 18 of them fell
+  outside its declared `touches`, and the other two stories of the same run under-declared as
+  well — none of it a mistake anybody could point at, because the 18 were the Application-layer
+  files the work genuinely required and no compiler runs at Plan time to predict them. The
+  consequence is the part worth fixing: the check that exists to say "this epic changed something
+  no story claimed" was comparing a diff against a guess, which is the shape of check that gets
+  switched off. Build now takes the second reading, at the moment a story's work is final and the
+  answer is free: it diffs the story over exactly the range the reviewer was shown (the
+  `epic_base` recorded on `task.done` since 0.10.0 — one definition of "the story's diff", not a
+  second `git diff` derivation) and, when paths landed outside the declared list, appends ONE
+  `story.touches_widened` with `basis: "measured"` and `actor: framework`, naming the paths and
+  the count. It is the SAME event `tldrx story widen` writes, deliberately: "the surface grew" is
+  one fact, and a sibling type would make every reader ask two questions to learn it. `basis` is
+  additive and **absent means `declared`**, so every row written before it existed keeps its
+  meaning and reads unchanged. It is advisory and cannot refuse — nothing is written when the
+  work stayed inside the forecast, an unreadable diff is simply no measurement, and the story's
+  own `touches:` is never rewritten, because declaring is the operator's verb and a framework
+  that back-dated a declaration would make the plan claim it declared a path it did not. Both
+  bases render labelled in the Build handoff, in the `tldrx ship` PR body that embeds it, and in
+  `tldrx replay`, so the paths outside BOTH readings are the ones a human is pointed at.
+
 
 - **A run now records which tldrx wrote it (#183).** `run.yml`'s `version: 1` is the FILE
   FORMAT's number; nothing anywhere carried the framework's, so across 23 unattended runs on

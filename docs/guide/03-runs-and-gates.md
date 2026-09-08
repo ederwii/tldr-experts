@@ -340,6 +340,16 @@ surface at the next evaluation. A `done` story is refused — its evidence was w
 surface it declared — so a story that already finished is reopened with
 `tldrx story reopen <id> --for-fix --note "<the defect>"` first. Both commands are on the card.
 
+**And the framework takes the OTHER reading.** `touches:` is written by the Plan expert before
+the code exists — no compiler runs at plan time — so it is a forecast, and on three real
+workspaces it was a short one: one story changed 21 files with 18 outside its declared list, and
+the two sibling stories under-declared as well. So when a story settles, Build diffs it over
+exactly the range the reviewer was shown and, if anything landed outside `touches:`, appends the
+SAME `story.touches_widened` with `basis: "measured"` and `actor: framework`. Absent `basis`
+still means `declared`, so every row written by the verb above reads exactly as it did. It never
+refuses and never edits the story file — declaring stays your verb — and both bases appear,
+labelled, in the Build handoff, in the `tldrx ship` PR body and in `tldrx replay`.
+
 It never refuses on an absence: no epic branch cut yet, no repo on disk, no plan, or a run
 whose What cited no repo path at all each read as `n/a` with the reason spelled out, because
 a condition that could not measure must not pretend it measured zero. `tldrx-work/`,

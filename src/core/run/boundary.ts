@@ -185,11 +185,13 @@ export function unqualifiedCitedPaths(
   return out;
 }
 
-/** Every `<runDir>/03-plan/stories/*.md`, as `{repo, touches}`. Never throws. */
-function storyTouches(runDir: string): readonly { repo: string; touches: readonly string[] }[] {
+/** Every `<runDir>/03-plan/stories/*.md`, as `{story, repo, touches}`. Never throws. */
+function storyTouches(
+  runDir: string,
+): readonly { story: string; repo: string; touches: readonly string[] }[] {
   const dir = join(runDir, PLAN_DIR, STORIES_DIR);
   if (!existsSync(dir)) return [];
-  const out: { repo: string; touches: readonly string[] }[] = [];
+  const out: { story: string; repo: string; touches: readonly string[] }[] = [];
   let names: string[];
   try {
     names = readdirSync(dir).filter((name) => name.endsWith(".md")).sort();
@@ -200,9 +202,33 @@ function storyTouches(runDir: string): readonly { repo: string; touches: readonl
     const front = readFront(join(dir, name));
     if (front === null) continue;
     const repo = typeof front.repo === "string" ? front.repo : "";
-    out.push({ repo, touches: stringList(front.touches) });
+    const id = typeof front.id === "string" && front.id !== "" ? front.id : name.replace(/\.md$/, "");
+    out.push({ story: id, repo, touches: stringList(front.touches) });
   }
   return out;
+}
+
+/**
+ * ONE story's declared `touches:`, read OFF DISK, or null when this run has no
+ * such story file.
+ *
+ * The same walk `deriveSurface` uses, filtered — not a second reader (#185). The
+ * distinction matters at exactly one moment: `tldrx story widen` is allowed on an
+ * `in_progress` story and writes the list back to disk, so a headless run long
+ * enough for an operator to widen mid-flight would otherwise measure against the
+ * snapshot its plan was parsed into, and report a path the operator had already
+ * declared. Disk is the state (spec §1); the snapshot is a copy.
+ *
+ * A Plan-skipping scope answers from `04-build/implicit-plan.yml` instead, which
+ * is where `deriveSurface` also looks and the only place such a run declares
+ * anything.
+ */
+export function declaredTouchesFor(runDir: string, storyId: string): readonly string[] | null {
+  for (const row of storyTouches(runDir)) {
+    if (row.story === storyId) return row.touches;
+  }
+  const implicit = implicitStorySurface(runDir);
+  return implicit !== null && implicit.story === storyId ? implicit.touches : null;
 }
 
 /**

@@ -1262,6 +1262,24 @@ saying a story was amended — and it is written only when the file was really p
 all, this event included, and the event is validated BEFORE the story file is touched so a payload that would not
 validate cannot leave a widened story behind it.
 
+**`story.touches_widened` gained `basis` and a second author 2026-09-08 (#185).** Two ADDITIVE payload fields, and
+neither changes what a row already written means. `basis` is `"measured"` when the FRAMEWORK read the widening off the
+story's own diff, and **absent means `declared`** — a person said so — which is exactly what every row written before
+this field existed is; a reader must never invent a basis it did not find, and anything that is not the literal
+`"measured"` reads as `declared`. `actor` is `framework` on a measured row, beside the operator's name on a declared
+one. The measured reading is taken at the moment a story's work is final — after the DoD, at the same settle that
+records `epic_base` on `task.done` — over the SAME range the reviewer was shown (`<epic_base>...<story branch>`, §2.9's
+`task.done`), so "the story's diff" has one definition. `paths` are the changed paths no `touches:` entry covers, with
+`.tldrx/` and `tldrx-work/` state dropped from both sides first, exactly as §6's boundary condition drops them; the
+diff is `--name-only` with no rename detection, matching every other call site, so a renamed file counts as TWO paths
+— the old one and the new one — and the count in the `note` says so honestly rather than guessing at intent; `note`
+names the count and the instrument (*"18 of 21 changed files fell outside the declared touches — measured off the
+story's own diff…"*). It is **advisory and cannot refuse**: nothing is written when the work stayed inside the
+forecast, an unreadable diff is simply no measurement, and the story's `touches:` list is NOT amended — declaring is
+the operator's verb (§2.13), and a framework that back-dated a declaration would make the plan claim it declared a path
+it did not. Why the same event rather than a sibling type: "the surface grew" is one fact, and two types would make
+every reader ask two questions to learn it.
+
 **`fact.conflict_raised` was added 2026-09-07 (#169).** The `tldrx answer` path runs the lexical duplicate check
 against the live facts before it appends (§2.5), and a hit RAISES rather than refuses: the answer is recorded, the
 command exits `0`, and a §2.7 question is minted asking which of the two holds. Its payload carries `fact` (the fact
@@ -1662,6 +1680,16 @@ carrying the paths, the note and the list before and after (§2.9) — because a
 log is a plan claiming to have declared something it did not. A `done` story is refused: its `evidence` was written
 against the surface it DECLARED, and widening it afterwards would make this document say the plan declared a path it
 did not. `tldrx story reopen <id> --for-fix` is what answers that, and the refusal says so.
+
+**`touches:` is DECLARED, and the framework MEASURES it (#185).** The list is written once, by the Plan sub-agent,
+before any code exists — no compiler runs at Plan time, so nothing can compute it, and it is a forecast by
+construction. Measured on three real workspaces: one story changed 21 files and 18 of them fell outside its declared
+`touches`, and the other two stories of the same run under-declared as well, none of them by a mistake anybody could
+point at. So this document keeps the declared list exactly as it is — the plan's honest forecast, amended only by
+`tldrx story widen` — and the SECOND reading lives in the ledger beside it: at settle, Build compares the story's own
+diff against `touches:` and appends one `story.touches_widened` with `basis: "measured"` and `actor: framework` (§2.9).
+Nothing in this file changes, and no gate refuses on it: the two readings are meant to be read together, and the paths
+outside BOTH are the ones a human should look at.
 
 **Validation.** Front matter present and parseable; keys and enums as above; `id` matches the file name; `depends_on`
 free of self-reference and duplicates; every ` ```dod ` command in `workspace.yml` (skipped when there are no commands to

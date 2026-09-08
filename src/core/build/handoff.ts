@@ -17,6 +17,7 @@ import type { StoryOutcome } from "./outcome.ts";
 import type { CarriedRow, UnreadableStory } from "./carriedRows.ts";
 import { PLAN_STATUSES, type PlanStatus } from "../schemas/planCommon.ts";
 import { spentFigure } from "../budget/spentFigure.ts";
+import type { WideningRow } from "./measuredTouches.ts";
 
 export interface EpicSummaryRow {
   readonly id: string;
@@ -142,6 +143,23 @@ export interface BuildHandoffParts {
    * must not be able to fail a document.
    */
   readonly unreadableStories?: readonly UnreadableStory[];
+  /**
+   * Every widening this run recorded — an operator's `tldrx story widen` (#171)
+   * and the framework's own measurement off the story's diff (#185) — read back
+   * off `events.jsonl` by the executor and HANDED here, each row already carrying
+   * its basis.
+   *
+   * They go in `## Decisions` because that is what they are: a surface grew, and
+   * the section's job is to say what happened to the plan and who decided it. The
+   * two bases get DIFFERENT sentences rather than one sentence and a tag —
+   * "a person declared this" and "the framework measured this" are different
+   * claims, and a reader skimming for the human decisions must not have to parse
+   * a suffix to tell them apart.
+   *
+   * Absent behaves exactly as empty, and an empty list changes no byte of a
+   * document that has no widening in it.
+   */
+  readonly widenings?: readonly WideningRow[];
 }
 
 /**
@@ -383,6 +401,7 @@ function decisions(parts: BuildHandoffParts): readonly string[] {
         `[src: ${parts.epics.find((e) => e.branch === row.branch)?.rel ?? row.rel}:1]`,
     );
   }
+  rows.push(...wideningBullets(parts.widenings ?? []));
   if (anchor !== null) {
     rows.push(
       "- Nothing was pushed and no epic was merged into a default branch — the phase " +
@@ -393,6 +412,57 @@ function decisions(parts: BuildHandoffParts): readonly string[] {
     rows.push("- nothing was built, so nothing was decided [src: absent:03-plan/waves.yml]");
   }
   return rows;
+}
+
+/**
+ * At most this many widening bullets before the rest close with one summarising
+ * line — the same bound, and the same reason, as `MAX_CARRIED_BULLETS`: a
+ * REPORT-ONLY feature must never be able to fail a document through arithmetic
+ * (`validateHandoff` turns more than `MAX_BULLETS` list items into `unresolved`).
+ */
+export const MAX_WIDENING_BULLETS = 15;
+
+/** At most this many paths are NAMED in one bullet; the rest are a count. */
+const NAMED_WIDENED_PATHS = 6;
+
+/**
+ * One bullet per widening, cited to the log that holds it.
+ *
+ * `[src: events.jsonl:<line>]` is the honest citation: the record IS the event, not
+ * the story file (a measured widening deliberately writes nothing to the story —
+ * the declared list stays the operator's forecast, `build/measuredTouches.ts`),
+ * and not the review log (which knows nothing about `touches`). The LINE is the
+ * one the event is physically on, carried by `WideningRow.line`: a constant `:1`
+ * would be an audit citation pointing at a row that is not the one the bullet
+ * describes, which is a record lying in the dangerous direction.
+ */
+function wideningBullets(rows: readonly WideningRow[]): readonly string[] {
+  const out: string[] = [];
+  for (const row of rows.slice(0, MAX_WIDENING_BULLETS)) {
+    const named = row.paths.slice(0, NAMED_WIDENED_PATHS).map((path) => `\`${path}\``).join(", ");
+    const more = row.paths.length > NAMED_WIDENED_PATHS
+      ? `, +${String(row.paths.length - NAMED_WIDENED_PATHS)} more`
+      : "";
+    const opening = row.basis === "measured"
+      ? `${row.story}'s declared surface was under the work it did (measured)`
+      : `${row.story}'s surface was widened by a person (declared)`;
+    out.push(
+      `- ${opening}: +${named}${more} `
+      + `(${String(row.before)} → ${String(row.after)} path(s))`
+      + `${row.note === "" ? "" : ` — ${row.note}`} [src: events.jsonl:${String(row.line)}]`,
+    );
+  }
+  if (rows.length > MAX_WIDENING_BULLETS) {
+    // The closing bullet is a claim about the LOG, not about one row, so it cites
+    // the first line it could not fit — a real line, and the one a reader
+    // following it should start reading from.
+    const next = rows[MAX_WIDENING_BULLETS]?.line ?? 1;
+    out.push(
+      `- and ${String(rows.length - MAX_WIDENING_BULLETS)} more widening(s) this run recorded, `
+      + `not listed here [src: events.jsonl:${String(next)}]`,
+    );
+  }
+  return out;
 }
 
 /**

@@ -61,8 +61,8 @@ import {
   dispatchNotesRecord, type PendingStage,
 } from "../pending.ts";
 import {
-  addWorktree, commitsBetween, ensureBranch, fullShaOf, GitError, removeWorktree, repoDirOf,
-  reviewDiffCommand, shaReachability,
+  addWorktree, commitsBetween, ensureBranch, fullShaOf, git, GitError, removeWorktree, repoDirOf,
+  reviewDiffCommand, reviewDiffRange, shaReachability,
 } from "../../build/git.ts";
 import { BaseGateFailure, baseRefusalLines } from "../../build/preflight.ts";
 import {
@@ -98,6 +98,11 @@ import {
   type FixFinding, type FixlistOnDisk,
 } from "../../build/fixlist.ts";
 import { renderBuildHandoff, type EpicSummaryRow } from "../../build/handoff.ts";
+import { measuredWidening, wideningRows, type WideningRow } from "../../build/measuredTouches.ts";
+import { declaredTouchesFor } from "../../run/boundary.ts";
+
+/** The log the widening citations point at, run-relative — one spelling. */
+const EVENTS_FILE = "events.jsonl";
 import { carriedReportFor, type CarriedReport } from "../../build/carriedRows.ts";
 import {
   baseResultOf, PreflightCache, redBaseRefusal, runStoryDod, type BaseParts,
@@ -2285,6 +2290,12 @@ class BuildSession {
     // writing the epic's status would immediately overwrite the story's.
     if (!this.plan.implicit) this.updateEpicStatus(story.epic);
 
+    // The story's work is final for the framework: the DoD has run, the merge into
+    // the epic has happened or been refused, and the diff is on disk. This is the
+    // last moment `epic_base` still names the epic tip the story was reviewed
+    // against, which is why the measurement is taken HERE and not at the gate.
+    if (status === "done") await this.measureSurface(story, parts.epicBase ?? null);
+
     this.ctx.emit("task.done", {
       phase: this.ctx.phaseId,
       story: id,
@@ -2422,6 +2433,7 @@ class BuildSession {
       storiesRel: this.plan.implicit ? IMPLICIT_PLAN_REL : null,
       carried: carried.rows,
       unreadableStories: carried.unreadable,
+      widenings: this.wideningRows(),
     }), "utf8");
   }
 
@@ -2436,6 +2448,73 @@ class BuildSession {
    */
   private carriedRows(): CarriedReport {
     return carriedReportFor(this.ctx.runDir, new Set(this.workspace.repos.keys()));
+  }
+
+  /**
+   * Every widening this run recorded, operator-declared and framework-measured
+   * alike (#171, #185), read back off `events.jsonl` rather than remembered.
+   *
+   * Read rather than remembered for two reasons. A `tldrx story widen` happens
+   * BETWEEN invocations — it is a separate command, exactly like the gate
+   * rejections `recordGateFeedback` recovers the same way — so this process never
+   * saw it. And a measured widening from an earlier `tldrx next` belongs in a
+   * handoff that describes the PHASE, not the invocation. `wideningRows` is total
+   * and labels each row's basis; the log never throws here (`read()` is tolerant).
+   */
+  private wideningRows(): readonly WideningRow[] {
+    try {
+      return wideningRows(readFileSync(join(this.ctx.runDir, EVENTS_FILE), "utf8"));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * The reading `touches` never had: what the story ACTUALLY changed, measured off
+   * its own diff at the moment its work is final (#185).
+   *
+   * Advisory by construction — it appends one event and returns. It cannot refuse,
+   * it does not touch the story file, and every failure below is an absence rather
+   * than a throw: a story whose diff cannot be read is a story with no measurement,
+   * never a story that fails to settle. `touches` stays the operator's forecast and
+   * `story widen` stays the operator's verb; this only says what was measured.
+   *
+   * The range is `reviewDiffRange` and nothing else — the same string the
+   * reviewer's `diff:` command names — so "the story's diff" has one definition
+   * (AGENTS.md §7).
+   */
+  private async measureSurface(story: StoryContext, epicBase: string | null): Promise<void> {
+    // Off DISK, through the same reader `deriveSurface` walks — not the plan
+    // snapshot this invocation parsed at its start. `tldrx story widen` is
+    // allowed on an `in_progress` story, so a long headless run can have its
+    // surface declared out from under the snapshot; falling back to the snapshot
+    // only when this run has no story file at all keeps the measurement possible
+    // for a scope that has neither.
+    const declared = declaredTouchesFor(this.ctx.runDir, story.planned.story.id)
+      ?? story.planned.story.touches;
+    const range = reviewDiffRange(epicBase, story.epicBranch, story.branch);
+    const diff = await git(["diff", "--name-only", range], story.repoDir);
+    if (!diff.ok) return;
+    const changed = diff.stdout.split("\n").map((line) => line.trim()).filter((line) => line !== "");
+    const measured = measuredWidening(changed, declared);
+    if (measured === null) return;
+    this.ctx.emit(
+      "story.touches_widened",
+      {
+        story: story.planned.story.id,
+        paths: [...measured.paths],
+        note: measured.note,
+        before: [...measured.before],
+        after: [...measured.after],
+        // ADDITIVE, and the whole of what separates this row from an operator's:
+        // absent means `declared`, which is what every row written before this
+        // field existed is (`build/measuredTouches.ts`).
+        basis: "measured",
+      },
+      0,
+      // Not the operator and not a sub-agent: the framework read this off a diff.
+      "framework",
+    );
   }
 
   /**
