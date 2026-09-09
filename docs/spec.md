@@ -2883,6 +2883,31 @@ stages: a turn already in flight is never cut off, so the loop can overshoot by 
 because they are a handshake with a host session and a loop that stopped after every `--prepare` would be `next`
 with extra words.
 
+**The gate signer (2026-09-08, gh #198).** `gates_policy: agent` names who MAY close a gate, and until now nothing
+in the engine produced the evidence note it is closed over — the only writer was the `tldrx gate template` skeleton a
+host session fills in — so an engine-driven loop over an all-`agent` run stopped at every gate with exit `4`, at
+exactly the point a host session would have signed. It now doesn't. When a stage's checks have passed and its policy
+is `agent`, `next` (headless only) spawns **one** bounded sub-agent, role `gate-signer`, at the stage's own model and
+effort and on a quarter of the stage's per-agent ceiling, allowed to read and to write exactly one file:
+`.agent/<stage>/evidence.md`. Its prompt carries the stage's declared outputs, the seven `auto` conditions as
+measured, and the §2.8 skeleton rendered by the same function `gate template` writes — one spelling of the form.
+
+Nothing downstream changes. The note goes through the unchanged `evaluateAgentGate` → `approve` path (§2.8 unchanged,
+the validator unchanged, the fallthroughs unchanged): `verdict: sign` with every condition holding closes the gate
+under the note's own `by:`; a `refuse`, a `sign-with-fixlist`, a note that does not validate, a signer that writes
+nothing and a signer that dies are all one outcome — the gate stays pending for a person with the reason named, and
+the loop behaves exactly as it did before (exit `4`, or `--wait-gates`'s wait). There is no path from the signer to
+an approval `approve --as-agent` would not also have taken.
+
+It runs **before** the stage moves to `awaiting_gate`, so a stage the framework is still working on reports `running`
+rather than announcing a signature nobody has been asked for yet. Its turn is recorded like every other
+(`agent.spawned` / `agent.result` with `role: gate-signer`, a `run.yml` task row, a line in `tldrx cost`) and its
+spend is inside the stage's own envelope, which the gate's `budget` condition therefore sees.
+
+**No flag turns it on.** `gates_policy: agent` is already the owner's explicit, recorded decision that an agent may
+close this gate (`run gates set`, §2.9 `gate.policy_changed`); a second opt-in would mean the policy alone never does
+what it says. `--gate-agent` stays rendering-only and upgrades nothing, and no `human` gate is ever touched.
+
 **Decisions (2026-08-28).** (a) Stage artefacts are Markdown validated by hooks (human-readable handoffs); the
 sub-agent's *result envelope* is structured via `--json-schema` (`{outputs: [], questions_asked: [], notes: ""}`) so
 `next` parses deterministically. (b) Map providers: `graphify` first; when absent, `map --refresh` falls back to a

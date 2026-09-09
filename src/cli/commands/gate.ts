@@ -12,7 +12,7 @@
  * `approve --as-agent` is the one verb that signs (wave 2C); this only says what
  * the note has to contain.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, relative } from "node:path";
 import type { Command } from "../Command.ts";
 import { EXIT_GATE_REFUSED, EXIT_OK, EXIT_USAGE } from "../exitCodes.ts";
@@ -20,14 +20,11 @@ import { boolFlag, parseArgs, stringFlag } from "../argv.ts";
 import { workspaceRootFrom } from "../workspace.ts";
 import { fail } from "../report.ts";
 import { isResolved, resolveRunOrExplain } from "../resolveRun.ts";
-import { evidencePath } from "../../core/facilitator/paths.ts";
-import { resolveMany, type PathContext } from "../../core/facilitator/paths.ts";
+import { evidencePath, type PathContext } from "../../core/facilitator/paths.ts";
+import { countCitations, countDeclaredTouches } from "../../core/run/evidenceScope.ts";
 import {
   describeEvidenceTemplate, renderEvidenceTemplate, type EvidenceTemplateInput,
 } from "../../core/text/evidence.ts";
-import { listItems, parseSrcToken } from "../../core/text/handoff.ts";
-import { parseFrontMatter } from "../../core/schemas/frontMatter.ts";
-import { parseYaml } from "../../core/yaml.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
 
 const VALUE_FLAGS = ["run", "root"];
@@ -92,78 +89,5 @@ function template(argv: readonly string[]): number {
     return EXIT_OK;
   } catch (error) {
     return fail("gate template", error);
-  }
-}
-
-/**
- * How many `src` citations this stage's declared outputs carry — the `of` half of
- * `citations: {sampled, of, …}`.
- *
- * Counted with the §2.8 tokenizer over the §2.8 notion of a list item, across
- * every declared output that is a Markdown file on disk. Patterns
- * (`03-plan/stories/<id>.md`) go through `resolveMany`, so a Plan stage's `of` is
- * the citations across the stories it actually wrote rather than zero.
- */
-function countCitations(outputs: readonly string[], ctx: PathContext): number {
-  let total = 0;
-  for (const declared of outputs) {
-    if (!declared.endsWith(".md")) continue;
-    for (const hit of resolveMany(declared, ctx)) {
-      const text = readOrNull(hit.absolute);
-      if (text === null) continue;
-      for (const item of listItems(text)) {
-        total += parseSrcToken(item)?.refs.length ?? 0;
-      }
-    }
-  }
-  return total;
-}
-
-/**
- * The touched paths the plan declares, deduplicated — the set an agent gate has
- * to audit, and what `touches.audited` starts at.
- *
- * This is the DECLARED surface only. Measuring what the branch actually changed
- * against it is the `boundary` condition (design §A.4, wave 2B); this command
- * counts what there is to look at, and says so on stdout rather than pretending
- * the audit has happened.
- */
-function countDeclaredTouches(ctx: PathContext): number {
-  const paths = new Set<string>();
-  for (const hit of resolveMany("03-plan/stories/<id>.md", ctx)) {
-    const text = readOrNull(hit.absolute);
-    if (text === null) continue;
-    const doc = parseFrontMatter(text).doc;
-    for (const entry of listOf(doc, "touches")) paths.add(entry);
-  }
-  if (paths.size === 0) {
-    const text = readOrNull(resolveMany("04-build/implicit-plan.yml", ctx)[0]?.absolute ?? "");
-    if (text !== null) {
-      for (const entry of listOf(safeYaml(text), "touches")) paths.add(entry);
-    }
-  }
-  return paths.size;
-}
-
-function listOf(doc: unknown, key: string): readonly string[] {
-  if (typeof doc !== "object" || doc === null) return [];
-  const value = (doc as Record<string, unknown>)[key];
-  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
-}
-
-function safeYaml(text: string): unknown {
-  try {
-    return parseYaml(text);
-  } catch {
-    return null;
-  }
-}
-
-function readOrNull(path: string): string | null {
-  if (path === "" || !existsSync(path)) return null;
-  try {
-    return readFileSync(path, "utf8");
-  } catch {
-    return null;
   }
 }

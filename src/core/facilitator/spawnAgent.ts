@@ -136,8 +136,16 @@ export interface AgentRequest {
    * one activity line per story instead of interleaving them into one.
    */
   readonly lane?: string;
-  /** Build's reviewer is enforced by Codex's sandbox, not merely by its prompt. */
-  readonly role?: "developer" | "reviewer";
+  /**
+   * Build's reviewer is enforced by Codex's sandbox, not merely by its prompt.
+   *
+   * `gate-signer` (gh #198) is deliberately NOT `read-only` under Codex: its whole
+   * turn is one write, `.agent/<stage>/evidence.md`, so it takes the ordinary
+   * `workspace-write` sandbox and is narrowed by `tools` instead. The Codex
+   * provider pin is therefore untouched — `role === "reviewer"` is still the one
+   * value that selects the read-only sandbox.
+   */
+  readonly role?: "developer" | "reviewer" | "gate-signer";
 }
 
 export interface AgentOutcome {

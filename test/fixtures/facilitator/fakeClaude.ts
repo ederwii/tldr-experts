@@ -42,7 +42,23 @@ const promptOut = process.env.FAKE_CLAUDE_PROMPT_OUT;
 if (promptOut !== undefined && promptOut !== "") writeFileSync(promptOut, prompt, "utf8");
 
 const base = process.env.FAKE_CLAUDE_RUNDIR ?? process.cwd();
-const files = JSON.parse(process.env.FAKE_CLAUDE_OUTPUTS ?? "{}") as Record<string, string>;
+// `FAKE_CLAUDE_ALT_MATCH` + `FAKE_CLAUDE_ALT_OUTPUTS`: a SECOND canned set, written
+// instead of the first when the prompt on stdin contains the match string.
+//
+// One invocation of `tldrx next` can now spawn two different KINDS of sub-agent —
+// the stage turn, and the gate signer that writes the evidence note after it (gh
+// #198) — and both reach this one script through the same environment. Without a
+// discriminator the stage turn would write the signer's note before the signer was
+// ever asked for, which is precisely the condition the engine uses to decide
+// whether to spawn one. The prompt is the only thing that differs between the two,
+// so the prompt is what this switches on; the transcript emitter
+// (`fakeTranscript.ts`) is untouched, as AGENTS.md §8 requires.
+const altMatch = process.env.FAKE_CLAUDE_ALT_MATCH ?? "";
+const files = JSON.parse(
+  (altMatch !== "" && prompt.includes(altMatch)
+    ? process.env.FAKE_CLAUDE_ALT_OUTPUTS
+    : process.env.FAKE_CLAUDE_OUTPUTS) ?? "{}",
+) as Record<string, string>;
 const written: string[] = [];
 for (const [rel, content] of Object.entries(files)) {
   const path = join(base, rel);

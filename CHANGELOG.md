@@ -3,6 +3,36 @@
 
 ## 0.13.2 — unreleased
 
+### Added
+
+- **`run auto` now closes an `agent` gate itself, over a note it wrote and had validated (#198).**
+  `gates_policy: agent` said who MAY sign a gate; nothing in the engine produced the evidence note
+  it is signed over. The only writer was the `tldrx gate template` skeleton a host session fills
+  in at a keyboard — so moving a run's gates to `agent` changed *who is permitted to sign* without
+  changing *whether the loop could keep going*, and an unattended run over an all-`agent` run still
+  stopped at every gate with exit 4. Measured on 0.13.1 against a real workspace: the owner ran
+  `tldrx run gates set what:agent / plan:agent / watch:agent`, whose own reply promises "an agent
+  may now close it", and the loop stopped at the next gate anyway.
+  It now spawns one bounded **gate signer** when a stage's checks have passed and its policy is
+  `agent`: the stage's own model and effort, a quarter of the stage's per-agent ceiling, a tool
+  allowance that reads anything and writes exactly one file (`.agent/<stage>/evidence.md`), and a
+  prompt carrying the stage's declared outputs, the seven `auto` conditions as measured, and the
+  §2.8 skeleton rendered by the same function `gate template` writes.
+  The important half is what did NOT change: the note goes through the unchanged
+  `approve --as-agent` path, so `verdict: sign` with every condition holding closes the gate under
+  the note's own `by:`, and a `refuse`, a note that does not validate, a signer that wrote nothing
+  and a signer that died are one outcome — pending for a person, with the reason named on stdout
+  and now in the `gate.requested` notification's summary. There is no path from the signer to an
+  approval the validator would not also have taken, and no flag turns it on: an `agent` policy is
+  already the owner's recorded decision, and a second opt-in would mean the policy never did what
+  it said. `human` gates are untouched and `--gate-agent` stays rendering-only.
+  The turn is recorded like any other (`agent.spawned` / `agent.result`, `role: gate-signer`, a
+  `run.yml` task row, a row in `tldrx cost`), and it runs BEFORE the stage moves to
+  `awaiting_gate` — measured while building this, the other order made the `--wait-gates`
+  heartbeat announce "a signature is waiting on you" while the engine's own signer was still
+  mid-turn, and a person signed the gate the engine was in the middle of signing, three runs out
+  of three.
+
 ### Changed
 
 - **The pre-merge reviewer runs targeted tests, not the whole suite.** Measured over one fix

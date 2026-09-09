@@ -484,6 +484,36 @@ check), and a `gate:` naming a stage other than the one at the cursor.
 Three verdicts, not two: `sign`, `sign-with-fixlist`, `refuse`. Only `sign` could ever close a
 gate.
 
+#### When the ENGINE is driving, it writes the note itself
+
+Everything above is the host-session shape: you at the keyboard, `gate template`, your own
+reading, `approve --as-agent`. `tldrx run auto` has no keyboard, and until 0.13.1 that was a
+real hole — moving a run's gates to `agent` changed *who may sign* without changing *whether
+the loop could keep going*, so an unattended run still stopped at every one of them
+(gh #198).
+
+It no longer does. When the loop reaches a stage whose policy is `agent` and whose checks have
+passed, the engine spawns one bounded **gate signer**: the stage's own model and effort, a
+quarter of the stage's per-agent ceiling, and a tool allowance that can read anything and write
+exactly one file — `.agent/<stage>/evidence.md`. It is handed the stage's declared outputs, the
+seven conditions as measured, and the same skeleton `gate template` writes.
+
+Then nothing new happens. The note goes through the door above — the same validator, the same
+`approve` — so:
+
+| the signer's note | what the loop does |
+| --- | --- |
+| `verdict: sign`, every condition holding, every claim sourced | the gate closes under the note's own `by:`, and the loop moves to the next stage |
+| `refuse` or `sign-with-fixlist` | the gate stays pending for you, with the note's reasons on the `gate.requested` notification |
+| does not validate — a bullet with no `[src: …]`, a sample that does not add up | the same: pending, with the validation reason named |
+| never written (the signer failed, or ran out of budget) | the same: pending, and the failure is on `agent.result` |
+
+The turn is recorded like every other one — `agent.spawned` and `agent.result` with
+`role: gate-signer` — and it shows up in `tldrx cost`. There is no flag: `gates_policy: agent`
+is already your recorded decision that an agent may close this gate, and a second opt-in would
+mean the policy never did what it said. A `human` gate is never touched, and `--gate-agent`
+still only changes how a stop is printed.
+
 ### 7 · The gate
 
 Either the framework closes it on the next `tldrx next`, or you sign by hand. Both doors take

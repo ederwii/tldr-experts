@@ -262,11 +262,31 @@ Un valor que no sea una duración se rechaza con salida `1`.
   rechaza y se detiene, imprimiendo tu nota; deja que se venza y manda un `gate.timeout` y
   sale con `4`. No se gasta nada mientras consulta.
 
-  Espera UNA firma; nunca la produce. En este bucle no hay firma del motor, así que una etapa
-  con `gates_policy: agent` lo detiene exactamente igual que una `human`, y `--wait-gates`
-  espera entonces a que un agente firme esa compuerta sobre una nota de evidencia — o a que
-  la apruebes tú, que es una anulación registrada y siempre está permitida. El latido y la
-  carga `gate.requested` nombran la política, así que sabes cuál de las dos estás haciendo.
+  Espera UNA firma; nunca la produce — y para cuando está esperando, el firmante del propio
+  motor ya tuvo su turno (más abajo), así que lo que queda por esperar es una PERSONA.
+  Aprobar tú mismo una compuerta con política `agent` es una anulación registrada y siempre
+  está permitida. El latido y la carga `gate.requested` nombran la política, así que sabes
+  cuál de las dos estás haciendo.
+
+## Quién cierra una compuerta cuando conduce el motor
+
+Tres políticas, tres cosas distintas al terminar una etapa:
+
+- **`human`** — el bucle se detiene y firma una persona: `tldrx approve`, o `tldrx reject
+  --note "…"`. Con `--wait-gates` el bucle espera esa firma en vez de salir en el acto.
+- **`agent`** — el motor lanza un **firmante de compuerta** acotado y propio: el modelo y el
+  esfuerzo de la etapa, un cuarto del techo por agente de la etapa, con permiso para leer lo
+  que sea y escribir exactamente un archivo, `.agent/<stage>/evidence.md`. Esa nota pasa
+  después por el camino de siempre, `tldrx approve --as-agent` — el mismo validador por el
+  que pasa la nota de una persona. Un `verdict: sign` con todas las condiciones cumplidas y
+  cada afirmación con su `[src: …]` cierra la compuerta bajo el `by:` de la nota, y el bucle
+  sigue. Cualquier otra cosa — `refuse`, `sign-with-fixlist`, una nota que no valida, un
+  firmante que no escribió nada — deja la compuerta pendiente para ti, con las razones en la
+  carga `gate.requested`. El turno queda registrado como `agent.spawned` / `agent.result`
+  con `role: gate-signer` y aparece en `tldrx cost`. No hay bandera: `gates_policy: agent`
+  ya es tu decisión registrada de que un agente puede cerrarla.
+- **`auto`** — sin firmante y sin nota: siete condiciones medidas, y la compuerta cierra solo
+  si se cumplen las siete. Si no, cae hacia una persona con la que falló nombrada.
 
 Las dos banderas de espera pueden darse juntas — esa es la forma de un lanzamiento del todo
 desatendido: `--wait-answers 4h --wait-gates 4h`.

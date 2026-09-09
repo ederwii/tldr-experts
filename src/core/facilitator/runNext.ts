@@ -23,7 +23,9 @@ import { isAttendedByHost, isTerminal, type GateType, type RunFile, type RunPhas
 import { runChecks, runPrecondition, type PreconditionOutcome } from "../run/checks.ts";
 import { approve } from "../run/gates.ts";
 import { AUTO_GATE_ACTOR, evaluateAutoGate, unreadableHeadings } from "../run/autoGate.ts";
-import { describeAgentFallthroughs, evaluateAgentGate } from "../run/agentGate.ts";
+import {
+  describeAgentFallthroughs, evaluateAgentGate, type AgentGateInput, type AgentGateVerdict,
+} from "../run/agentGate.ts";
 import { cardForTriggers, type Money } from "../run/decisionCards.ts";
 import { carriedDetailLines, carriedReportFor } from "../build/carriedRows.ts";
 import { renderDecisionCard } from "../ui/decisionCard.ts";
@@ -60,6 +62,11 @@ import {
 import { nearbyPathsFor } from "../experts/domainRank.ts";
 import { readStackPacks, renderProjectSkills, skillsFor } from "../experts/stackPacks.ts";
 import { agentProvider, describeSpawn, providerBudgetAdvisory, spawnAgent } from "./spawnAgent.ts";
+import {
+  GATE_SIGNER_ROLE, GATE_SIGNER_SHARE, GATE_SIGNER_TOOLS,
+  gateSignerSkeleton, renderGateSignerPrompt,
+} from "./gateSigner.ts";
+import { countCitations, countDeclaredTouches } from "../run/evidenceScope.ts";
 import { withAttendedGuard } from "./attended.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
 import { validateOutputs, describeProblems } from "./validateOutputs.ts";
@@ -504,8 +511,8 @@ async function runStage(
   // --- prompt assembly ----------------------------------------------------
   const seed = seedInputsOf(spec, stage, ctx);
   const inputs = declaredInputsOf(store, spec, stage, ctx);
-  const model = options.model ?? stage.model ?? spec.planned.model;
-  const effort = options.effort ?? spec.planned.effort ?? null;
+  const model = stageModel(options, stage, spec);
+  const effort = stageEffort(options, spec);
   const cap = agentCap(options, store, stage);
   const maxReads = options.maxReads ?? spec.maxReads;
   const assembled = assemblePrompt(store, options, spec, stage, inputs, ctx, new Set(seed));
@@ -1696,18 +1703,76 @@ async function finishStage(
   const checkSummary = checks.length === 0 ? "no checks declared" : checks.map((c) => `${c.id}:${c.status}`).join(", ");
 
   // --- gate or advance -----------------------------------------------------
-  const stage = requireStage(store, phaseId, stageId);
-  const spent = round2(stage.tasks.reduce((sum, t) => sum + (t.cost_usd ?? 0), 0));
-  const unmetered = stage.tasks.filter((t) => t.cost_usd === null).length;
-  const costLine = unmetered === 0
-    ? `$${spent.toFixed(2)} of $${stage.budget_usd.toFixed(2)}`
-    : `$${spent.toFixed(2)} of $${stage.budget_usd.toFixed(2)} + ${String(unmetered)} unmetered (in-session)`;
+  // Re-derived rather than captured, because the gate signer below spends INSIDE
+  // this stage and a figure taken before its turn would under-report the stage on
+  // the one line an operator watches.
+  const spentNow = (): number => round2(
+    requireStage(store, phaseId, stageId).tasks.reduce((sum, t) => sum + (t.cost_usd ?? 0), 0),
+  );
+  const costLineNow = (): string => {
+    const s = requireStage(store, phaseId, stageId);
+    const paid = spentNow();
+    const unmetered = s.tasks.filter((t) => t.cost_usd === null).length;
+    return unmetered === 0
+      ? `$${paid.toFixed(2)} of $${s.budget_usd.toFixed(2)}`
+      : `$${paid.toFixed(2)} of $${s.budget_usd.toFixed(2)} + ${String(unmetered)} unmetered (in-session)`;
+  };
 
   // An executor may FORCE a human gate whatever the stage file says. Build does:
   // concept §9 ends it at "epic merges to main after integration tests + human
   // gate", and a stage file spelling `gate: auto` would otherwise let a run walk
   // past the one decision a person has to make.
   if ((gateOverride ?? spec.planned.gateType) === "approve") {
+    const policy = gatePolicyFor(store.run.gates_policy, stageId);
+    const notePath = evidencePath(store.runDir, stageId);
+    /**
+     * The `agent` policy's evaluator input, rebuilt on every call.
+     *
+     * Re-read from disk each time on purpose: the signer below appends a task row
+     * and writes a file between two evaluations, and a snapshot taken before its
+     * turn would judge the gate on the run as it was.
+     */
+    const agentInput = (): AgentGateInput => ({
+      root: options.root,
+      runDir: store.runDir,
+      phaseId,
+      stage: requireStage(store, phaseId, stageId),
+      planned: spec.planned,
+      budget: store.budget,
+      checks,
+      gate: `${phaseId}/${stageId}`,
+      evidencePath: notePath,
+      srcCtx: toSrcContext(loadWorkspace(options.root), store.runDir, { epicRefs: true }),
+      events: store.events.read(),
+    });
+    let agent: AgentGateVerdict | null = policy === "agent" ? await evaluateAgentGate(agentInput()) : null;
+
+    // The join gh #198 was missing. The policy already says an agent MAY close this
+    // gate; until now nothing produced the note it is closed over, so an
+    // engine-driven loop stopped at exactly the point a host session would have
+    // signed. One bounded turn writes the note, and then NOTHING below changes:
+    // the same validator, the same `approve`, the same fallthroughs.
+    //
+    // Three conditions, each doing work. `agent.ok` false — a note that already
+    // signs needs no signer. `agent.evidence === null` — there is no note at all;
+    // one that exists and holds is somebody's judgement, and re-running a signer
+    // over it would overwrite the artefact the gate rests on (the same reason
+    // `gate template` refuses without `--force`). And headless — a `--prepare` /
+    // `--commit` cycle IS a host session, which has its own signer at the keyboard
+    // and its own mandate telling it how (`core/drive/mandate.ts`).
+    //
+    // It runs BEFORE the stage is moved to `awaiting_gate`, and that ordering is
+    // load-bearing rather than incidental. Measured while building this: with the
+    // signer AFTER the transition, `gate.requested` was appended and the
+    // `--wait-gates` heartbeat began announcing "a signature is waiting on you"
+    // while the engine's own signer was still mid-turn — and in
+    // `test/notify-hook.test.ts` a person signed the gate the engine was in the
+    // middle of signing, three runs out of three. A stage the framework is still
+    // working on is `running`, and now says so.
+    if (agent !== null && !agent.ok && agent.evidence === null && options.mode === "headless") {
+      agent = await signGate(store, options, phaseId, stageId, spec, outputs, notePath, agent, agentInput);
+    }
+
     mapStage(store, phaseId, stageId, (s) => ({
       ...s,
       status: "awaiting_gate",
@@ -1716,32 +1781,18 @@ async function finishStage(
     }));
     store.append(event(options, store.runId, stageId, "gate.requested", {
       phase: phaseId,
-      cost_usd: spent,
+      cost_usd: spentNow(),
       outputs,
       checks: checks.map((c) => `${c.id}:${c.status}`),
     }));
     store.save();
     const doneLine =
-      `${phaseId}/${stageId} done — ${costLine} (${checkSummary})`;
+      `${phaseId}/${stageId} done — ${costLineNow()} (${checkSummary})`;
 
     // The gate is now REQUESTED either way. Who closes it is the policy's call.
     // An `agent` policy is the strongest of the three: all seven auto conditions,
     // no budget event in the window, AND a structured evidence note that signs.
-    const policy = gatePolicyFor(store.run.gates_policy, stageId);
-    if (policy === "agent") {
-      const agent = await evaluateAgentGate({
-        root: options.root,
-        runDir: store.runDir,
-        phaseId,
-        stage: requireStage(store, phaseId, stageId),
-        planned: spec.planned,
-        budget: store.budget,
-        checks,
-        gate: `${phaseId}/${stageId}`,
-        evidencePath: evidencePath(store.runDir, stageId),
-        srcCtx: toSrcContext(loadWorkspace(options.root), store.runDir, { epicRefs: true }),
-        events: store.events.read(),
-      });
+    if (agent !== null) {
       if (agent.ok && agent.actor !== null && agent.record !== null && agent.text !== null) {
         const provider = agentProvider();
         const executorId = provider === "codex" ? codexGateExecutorId(requireStage(store, phaseId, stageId)) : null;
@@ -1868,6 +1919,8 @@ async function finishStage(
     return out(EXIT_AWAITING_HUMAN, [...notes, doneLine, `gate pending: tldrx approve`]);
   }
 
+  // Read BEFORE the cursor advances, while the stage is still resolvable.
+  const done = costLineNow();
   mapStage(store, phaseId, stageId, (s) => ({
     ...s,
     status: "done",
@@ -1877,7 +1930,7 @@ async function finishStage(
   const moved = advanceCursor(store);
   store.append(event(options, store.runId, stageId, "stage.done", {
     phase: phaseId,
-    cost_usd: spent,
+    cost_usd: spentNow(),
     outputs,
     checks: checks.map((c) => `${c.id}:${c.status}`),
   }));
@@ -1899,7 +1952,7 @@ async function finishStage(
   }
   return out(EXIT_OK, [
     ...notes,
-    `${phaseId}/${stageId} done — ${costLine} (${checkSummary})`,
+    `${phaseId}/${stageId} done — ${done} (${checkSummary})`,
     moved === null ? `run ${store.runId} is finished` : `cursor → ${moved.phase}/${moved.stage} (ready)`,
     ...closing,
   ]);
@@ -2384,6 +2437,167 @@ function advanceCursor(store: RunStore): { phase: string; stage: string } | null
  * that spawns one (spec §5 decision (c): "v0 runs tasks sequentially"), `1/n` for
  * an executor that splits the stage — Build, between the stories of `waves.yml`.
  */
+/**
+ * The gate signer: one bounded sub-agent turn that writes the evidence note an
+ * `agent` gate is closed over (gh #198).
+ *
+ * It signs NOTHING. It writes a file, and the caller re-runs the unchanged
+ * `evaluateAgentGate` over what is on disk — so the strongest thing this function
+ * can do is put a document in front of the same validator a person's note goes
+ * through, and the weakest thing it can do is fail, which is a hold. There is no
+ * path from here to an approval that `approve --as-agent` would not also have
+ * taken.
+ *
+ * Recorded like every other turn: `agent.spawned` and `agent.result` with
+ * `role: "gate-signer"`, a `run.yml` task row with the cost, so `tldrx cost`,
+ * `tldrx replay` and the phase ledger all see it. `agent.result` is appended AFTER
+ * the re-evaluation, so its `signer_verdict` and `held` say what the engine
+ * actually concluded rather than what the turn hoped — that is the pair
+ * `run auto` reads to put the hold's reasons in the `gate.requested` payload.
+ *
+ * A signer that fails, times out or writes nothing is not a refusal and not an
+ * error the stage inherits: the note is simply absent, the verdict falls through
+ * with `evidence:` naming it, and the gate goes to a person exactly as it did
+ * before this existed. The failure is on the record (`agent.result.error`).
+ */
+async function signGate(
+  store: RunStore,
+  options: NextOptions,
+  phaseId: string,
+  stageId: string,
+  spec: StageSpec,
+  outputs: readonly string[],
+  notePath: string,
+  before: AgentGateVerdict,
+  reevaluate: () => AgentGateInput,
+): Promise<AgentGateVerdict> {
+  const stage = requireStage(store, phaseId, stageId);
+  const gate = `${phaseId}/${stageId}`;
+  const model = stageModel(options, stage, spec);
+  const effort = stageEffort(options, spec);
+  const cap = agentCap(options, store, stage, GATE_SIGNER_SHARE);
+  const ctx: PathContext = { root: options.root, runDir: store.runDir };
+  const version = frameworkVersionSync();
+  const taskId = nextTaskId(store, phaseId, stageId);
+
+  // The skeleton is generated by the function `tldrx gate template` writes with, so
+  // the form a person fills in and the form the engine hands its signer are the same
+  // bytes (AGENTS.md §7, one implementation per derivation).
+  const prompt = renderGateSignerPrompt({
+    gate,
+    run: store.runId,
+    notePath: relative(options.root, notePath),
+    outputs,
+    conditions: before.conditions.map((c) => ({ id: c.id, ok: c.ok, detail: c.detail })),
+    skeleton: gateSignerSkeleton({
+      gate,
+      by: options.actor,
+      at: nowish(options),
+      citationsOf: countCitations(outputs, ctx),
+      touchesAudited: countDeclaredTouches(ctx),
+    }),
+  });
+
+  // Not `announce`: that one reads the task number as an ATTEMPT ("attempt 2"),
+  // which is true of a re-run of the stage and false of the turn that signs its
+  // gate. Same two bus calls, a heading that says what this turn is.
+  setProgressTitle(`${stageId} · ${store.runId} · gate signer`);
+  setProgressCeiling(cap);
+  store.append(event(options, store.runId, stageId, "agent.spawned", {
+    phase: phaseId,
+    task: taskId,
+    role: GATE_SIGNER_ROLE,
+    model,
+    effort,
+    max_budget_usd: cap,
+    tldrx_version: version,
+  }, 0, GATE_SIGNER_ROLE));
+  store.save();
+
+  const agent = await spawnAgent({
+    prompt,
+    model,
+    effort,
+    maxBudgetUsd: cap,
+    // No workspace commands: `tools` replaces the allowance outright, and a signer
+    // that could run the project's build is a signer that could change what it is
+    // about to sign off on.
+    workspaceCommands: [],
+    tools: GATE_SIGNER_TOOLS,
+    role: GATE_SIGNER_ROLE,
+    yolo: options.yolo,
+    cwd: options.root,
+    timeoutMs: spec.planned.timeout_s * 1000,
+  });
+
+  recordTask(store, phaseId, stageId, {
+    id: taskId,
+    status: agent.ok ? "done" : "failed",
+    expert: null,
+    model,
+    cost_usd: agent.metered ? round2(agent.costUsd) : null,
+    ...(agent.metered ? {} : { metered: false }),
+    error: agent.error,
+    session_id: agent.sessionId,
+    started_at: nowish(options),
+    ended_at: nowish(options),
+    outputs: agent.envelope?.outputs ?? [],
+    stopped_by: agent.stoppedBy,
+    ...tokenSplit(agent.usage.input_tokens, agent.usage.output_tokens),
+    duration_ms: agent.durationMs,
+    duration_basis: "spawned",
+  });
+  store.save();
+
+  const after = await evaluateAgentGate(reevaluate());
+  store.append(event(options, store.runId, stageId, "agent.result", {
+    phase: phaseId,
+    task: taskId,
+    role: GATE_SIGNER_ROLE,
+    session_id: agent.sessionId,
+    model,
+    effort,
+    outputs: agent.envelope?.outputs ?? [],
+    // What the note the turn wrote actually says, and null when it wrote none —
+    // never a confident "refuse" for a file that is not there (AGENTS.md §7).
+    signer_verdict: after.evidence?.front?.verdict ?? null,
+    // Empty when the gate closed. Otherwise every reason it did not, in the same
+    // words `next` prints and `run auto` puts on the notification.
+    held: after.fallthroughs.map((f) => `${f.trigger}: ${f.detail}`),
+    tldrx_version: version,
+    duration_ms: agent.durationMs,
+    duration_basis: "spawned",
+    ...(agent.metered ? {} : { metered: false }),
+    usage: {
+      input_tokens: agent.usage.input_tokens,
+      output_tokens: agent.usage.output_tokens,
+      cache_creation_input_tokens: agent.usage.cache_creation_input_tokens,
+      cache_read_input_tokens: agent.usage.cache_read_input_tokens,
+    },
+    ...(agent.error === null ? {} : { error: agent.error }),
+  }, agent.metered ? round2(agent.costUsd) : 0, GATE_SIGNER_ROLE));
+  store.save();
+  return after;
+}
+
+/**
+ * The model a stage's sub-agent runs under: the invocation's `--model`, else the
+ * run file's own, else the stage spec's.
+ *
+ * Extracted so the gate signer (gh #198) can be dispatched at the SAME model the
+ * stage was, without restating the precedence. A second copy of this expression is
+ * how a `--model` override ends up applying to a stage turn and not to the turn
+ * that signs its gate.
+ */
+function stageModel(options: NextOptions, stage: RunStage, spec: StageSpec): string | null {
+  return options.model ?? stage.model ?? spec.planned.model;
+}
+
+/** The stage's effort, same precedence, same reason. */
+function stageEffort(options: NextOptions, spec: StageSpec): EffortLevel | null {
+  return options.effort ?? spec.planned.effort ?? null;
+}
+
 function agentCap(options: NextOptions, store: RunStore, stage: RunStage, share = 1): number {
   const candidates = [stage.budget_usd * share, store.budget.per_agent_max_usd];
   if (options.maxUsd !== undefined) candidates.push(options.maxUsd);
