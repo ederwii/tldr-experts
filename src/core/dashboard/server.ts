@@ -56,6 +56,23 @@ const LOOPBACK_HOSTNAMES: readonly string[] = ["127.0.0.1", "localhost", "::1"];
 export const DEBOUNCE_MS = 300;
 const POLL_MS = 500;
 /**
+ * How often `watch` mode sweeps anyway, as a backstop (#213).
+ *
+ * `fs.watch` is the fast path, not a guarantee: FSEvents drops and coalesces under
+ * queue pressure, and a dropped notification used to mean nothing fired, nothing
+ * re-armed, and nothing ever swept — the page silently stale for the life of the
+ * process. Measured on a 14-core macOS box with `fseventsd` at 98-115% CPU
+ * (`mdbulkimport` indexing): directory create/remove events that never arrived at
+ * all, 82 s and 114 s with no frame, while appends inside an already-watched
+ * directory kept arriving. So the sweep runs in BOTH modes; this is the slower
+ * cadence, because in `watch` mode it is only there to bound how long a dropped
+ * event can hide, not to be the notifier. It is the same `fingerprint` the fallback
+ * uses — one derivation — and it is idempotent with the watcher: a change the
+ * watcher already reported re-baselines the sweep in the same debounce, so one
+ * change is one reload frame whichever path saw it first.
+ */
+export const SWEEP_MS = 2_000;
+/**
  * How often the stream says what time it is (#108).
  *
  * The page's ages, and the `quiet` mark the render puts on half an hour of
@@ -89,6 +106,8 @@ export interface DashboardServerOptions {
   readonly debounceMs?: number;
   /** How often the `age` event fires. Overridable for the same reason. */
   readonly ageTickMs?: number;
+  /** The `watch`-mode backstop sweep (#213). Overridable like `debounceMs`. */
+  readonly sweepMs?: number;
   /**
    * `"auto"` (the default) uses recursive `fs.watch` where the platform has it.
    * `"poll"` forces the mtime sweep — the path Linux CI may take on its own, so
@@ -102,6 +121,15 @@ export interface DashboardServer {
   readonly url: string;
   /** "watch" when the OS told us about the change, "poll" on the fallback. */
   readonly watchMode: "watch" | "poll";
+  /**
+   * Close every `fs.watch` handle and leave the sweep running — what a dead or
+   * overwhelmed FSEvents stream leaves behind (#213).
+   *
+   * This exists because you cannot ask the OS to drop an event on demand, and a
+   * backstop nobody can starve the fast path of is a backstop nobody has tested.
+   * `test/dashboard-live.test.ts` is its only caller.
+   */
+  simulateWatcherLoss(): void;
   close(): Promise<void>;
 }
 
@@ -132,7 +160,7 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
   tail.poll();
   let shown = probe(root);
 
-  const watcher = watchWorkspace(root, debounceMs, options.watch ?? "auto", () => {
+  const watcher = watchWorkspace(root, debounceMs, options.watch ?? "auto", options.sweepMs ?? SWEEP_MS, () => {
     const change = tail.poll();
     const next = probe(root);
     // A page that would draw the same thing does not need redrawing. `null` is
@@ -161,6 +189,7 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
     port,
     url: `http://${host}:${String(port)}`,
     watchMode: watcher.mode,
+    simulateWatcherLoss: (): void => { watcher.dropWatchers(); },
     close: async (): Promise<void> => {
       clearInterval(tick);
       watcher.close();
@@ -309,6 +338,8 @@ function probe(root: string): string | null {
 
 interface Watching {
   readonly mode: "watch" | "poll";
+  /** Drop the OS watchers, keep the sweep. See `DashboardServer.simulateWatcherLoss`. */
+  dropWatchers(): void;
   close(): void;
 }
 
@@ -323,6 +354,7 @@ function watchWorkspace(
   root: string,
   debounceMs: number,
   requested: "auto" | "poll",
+  sweepMs: number,
   onChange: () => void,
 ): Watching {
   const targets = [join(root, PROJECT_FRAMEWORK_DIR), join(root, PROJECT_WORK_DIR)];
@@ -331,12 +363,17 @@ function watchWorkspace(
   let closed = false;
   let mode: "watch" | "poll" = "watch";
 
+  // What the sweep last saw. Re-taken inside every debounce, so a change the
+  // WATCHER reported is not reported a second time by the next sweep.
+  let swept = "";
+
   const fire = (): void => {
     if (closed) return;
     if (timer !== null) clearTimeout(timer);
     timer = setTimeout(() => {
       timer = null;
       arm();
+      swept = fingerprint(root, targets);
       onChange();
     }, debounceMs);
     timer.unref();
@@ -373,25 +410,27 @@ function watchWorkspace(
   if (requested === "poll" || !supportsRecursive(root)) mode = "poll";
   else arm();
 
-  let poller: ReturnType<typeof setInterval> | null = null;
-  if (mode === "poll") {
-    let previous = fingerprint(root, targets);
-    poller = setInterval(() => {
-      const next = fingerprint(root, targets);
-      if (next !== previous) {
-        previous = next;
-        fire();
-      }
-    }, POLL_MS);
-    poller.unref();
-  }
+  // The sweep runs in BOTH modes (#213): the notifier in `poll`, the backstop in
+  // `watch`. One derivation, two cadences.
+  swept = fingerprint(root, targets);
+  const poller: ReturnType<typeof setInterval> = setInterval(() => {
+    const next = fingerprint(root, targets);
+    if (next === swept) return;
+    swept = next;
+    fire();
+  }, mode === "poll" ? POLL_MS : sweepMs);
+  poller.unref();
 
   return {
     mode,
+    dropWatchers: (): void => {
+      for (const watcher of watchers.values()) watcher.close();
+      watchers.clear();
+    },
     close: (): void => {
       closed = true;
       if (timer !== null) clearTimeout(timer);
-      if (poller !== null) clearInterval(poller);
+      clearInterval(poller);
       for (const watcher of watchers.values()) watcher.close();
       watchers.clear();
     },

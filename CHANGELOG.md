@@ -28,7 +28,26 @@
   arrive AT ALL (114 s, 82 s, no frame), tracking `fseventsd` at ~100% CPU rather than load
   average, and `watchWorkspace` runs its fingerprint sweep only in poll mode, so a dropped
   FSEvents notification leaves a live dashboard silently stale for the life of the process.
-  This entry fixes the instrument; #213 is the product half.
+  This entry fixes the instrument; the bullet below is the product half.
+
+- **A live dashboard can no longer go silently stale because the OS dropped a notification
+  (#213).** `fs.watch` is the fast path, never a guarantee — FSEvents drops and coalesces
+  under queue pressure — and `watchWorkspace` armed its mtime sweep only in `poll` mode, so
+  a dropped event meant nothing fired, nothing re-armed, and nothing ever swept: the page
+  stopped updating for the life of the process and said nothing about it. Measured on a
+  14-core macOS box with `fseventsd` at 98-115% CPU while `mdbulkimport` indexed: directory
+  create and remove events that never arrived at all — 82,556 ms and 113,942 ms with no
+  frame — while appends inside an already-watched directory kept arriving throughout. Load
+  average was not the predictor; fseventsd saturation was. The sweep now runs in BOTH modes:
+  it is the notifier in `poll` at 500 ms and a backstop in `watch` at `SWEEP_MS` (2 s,
+  overridable like `debounceMs`), so a dropped notification is bounded rather than fatal, and
+  the watcher is re-armed by the sweep's own `fire()`. Same `fingerprint`, one derivation, two
+  cadences. It is idempotent with the fast path — a change the watcher reported re-baselines
+  the sweep inside the same debounce, so one change is still one reload frame. RED first:
+  `test/dashboard-live.test.ts`'s new "a change the watcher missed still reaches the page, by
+  sweep" hangs a real change off a server whose `fs.watch` handles have been closed
+  (`simulateWatcherLoss()` — you cannot ask the OS to drop an event on demand) and went red
+  before this change with no frame at all.
 
 
 ## 0.14.2 — 2026-09-09

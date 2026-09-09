@@ -124,6 +124,7 @@ const streams: Sse[] = [];
 interface OwnOptions {
   readonly debounceMs?: number;
   readonly ageTickMs?: number;
+  readonly sweepMs?: number;
   readonly watch?: "auto" | "poll";
 }
 
@@ -137,6 +138,7 @@ async function ownServer(
     port: 0,
     debounceMs: options.debounceMs ?? 20,
     ageTickMs: options.ageTickMs,
+    sweepMs: options.sweepMs,
     watch: options.watch,
   });
   servers.push(server);
@@ -324,6 +326,66 @@ describe("runs appearing and disappearing while it watches", () => {
       "the watcher died with the old work dir — the page is silently stale",
     ).not.toBeNull();
   }, spawnTestTimeout(90_000));
+});
+
+/**
+ * #213: what happens when the OS does not tell us.
+ *
+ * Measured while fixing #193 on a 14-core macOS box: with every deadline scaled,
+ * the failures that remained were all directory create/remove events that never
+ * arrived AT ALL — 113,942 ms and 82,556 ms with no frame — tracking `fseventsd`
+ * at 98-115% CPU (`mdbulkimport` indexing) rather than load average. FSEvents
+ * drops and coalesces under queue pressure, and `watchWorkspace` armed its mtime
+ * sweep only in `poll` mode, so a dropped notification meant nothing fired,
+ * nothing re-armed, and nothing ever swept: a live dashboard silently stale for
+ * the life of the process, which is the exact failure this file exists to refuse.
+ *
+ * You cannot ask macOS to drop an event on demand, so the server exposes
+ * `simulateWatcherLoss()` — it closes every `fs.watch` handle and leaves the
+ * sweep alone, which is precisely what a dead or overwhelmed FSEvents stream
+ * leaves behind. That is the seam; the assertion is the product's.
+ */
+describe("a notification the OS never delivers (#213)", () => {
+  test("a change the watcher missed still reaches the page, by sweep", async () => {
+    const { server, root } = await ownServer({ sweepMs: 150 });
+    const sse = track(await Sse.open(server.url));
+
+    // Every fs.watch handle is gone from here on: nothing will ever fire.
+    server.simulateWatcherLoss();
+
+    const fresh = join(root, "tldrx-work", "260904-unseen");
+    mkdirSync(fresh, { recursive: true });
+    writeFileSync(join(fresh, "run.yml"), "id: 260904-unseen\nstatus: open\nlevel: 1\n", "utf8");
+
+    const frame = await sse.next("reload", eventWaitMs());
+    expect(frame, "the watcher was gone and no sweep caught the change — the page is silently stale").not.toBeNull();
+    expect((JSON.parse(frame!.data) as ReloadPayload).added).toEqual(["260904-unseen"]);
+  }, spawnTestTimeout(45_000));
+
+  /**
+   * The other half: the sweep must not double-report what the watcher already
+   * told us. One change is one reload frame, whichever path saw it first.
+   *
+   * A GUARD, not a proof, and measured to be one: it passes with the fix's
+   * re-baseline removed, because `onChange`'s model-equality check already
+   * refuses to push a page that would draw the same thing. Removing BOTH does
+   * go red — but in `a write the page does not read pushes nothing`, not here.
+   * So this pins the invariant against a future change that moves the equality
+   * check; it did not prove the re-baseline. The re-baseline stays because it
+   * stops the next sweep re-probing every change the watcher already handled,
+   * which is work, not correctness.
+   */
+  test("the sweep and the watcher together still push exactly one reload per change", async () => {
+    const { server, temp } = await ownServer({ sweepMs: 150 });
+    const sse = track(await Sse.open(server.url));
+
+    appendEvent(temp.runDir, stampAt(40));
+    expect(await sse.next("reload", eventWaitMs()), "no reload for an appended event").not.toBeNull();
+    expect(
+      await sse.next("reload", eventWaitMs(1_500)),
+      "the same change was pushed twice — the sweep re-reported what the watcher had",
+    ).toBeNull();
+  }, spawnTestTimeout(45_000));
 });
 
 describe("the live client, and the static page that must not carry it", () => {
