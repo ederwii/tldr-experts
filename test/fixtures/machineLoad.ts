@@ -47,6 +47,39 @@ export function spawnTestTimeout(baseMs: number = SPAWN_TEST_BASE_MS): number {
   return Math.round(baseMs * loadFactor());
 }
 
+/**
+ * The base a wait for a PUSHED event gets on an idle machine (#193).
+ *
+ * 15 s, not the 5 s the dashboard tests hard-coded: the server debounces a write burst
+ * (`DEBOUNCE_MS` 300, 20 in the tests) and the mtime fallback sweeps every 500 ms, so the
+ * floor is tens of milliseconds and everything above it is the OS getting round to
+ * delivering an `fs.watch` notification — a property of the box, exactly like process
+ * startup. A base an order of magnitude over the mechanism's own cost is a hang catcher,
+ * not a stopwatch.
+ */
+export const EVENT_WAIT_BASE_MS = 15_000;
+
+/**
+ * How long to wait for an event the MACHINE has to deliver — an SSE frame behind a file
+ * watcher, a line on a child's stdout — scaled exactly like the per-test budget (#193).
+ *
+ * `setDefaultTimeout(spawnTestTimeout())` scaled the test's budget with load while the
+ * deadline inside the assertion stayed a literal, so load never reached the number that
+ * actually decided the result: `test/dashboard-live.test.ts` and
+ * `test/dashboard-server.test.ts` reddened on a different SSE wait every time, at
+ * 5031/5085/5408/5683/5830 ms against a fixed 5000, and at 2002-2005 ms against a fixed
+ * 2000. This is the SAME derivation — `spawnTestTimeout` with a different base, never a
+ * second scaler — so a box that gets twice the budget for starting a process also gets
+ * twice the patience for a notification from it.
+ *
+ * The caller passes a smaller base for a NEGATIVE wait ("and nothing else arrived"),
+ * where the number is how long the test is willing to sit still, not how long the machine
+ * may take.
+ */
+export function eventWaitMs(baseMs: number = EVENT_WAIT_BASE_MS): number {
+  return spawnTestTimeout(baseMs);
+}
+
 /** A performance budget, scaled to the machine. On an idle box it is `baseMs`, exactly. */
 export function perfBudgetMs(baseMs: number): number {
   return Math.round(baseMs * loadFactor());

@@ -10,7 +10,7 @@ import { dashboardCommand } from "../src/cli/commands/dashboard.ts";
 import { declaredFlags } from "../src/cli/helpText.ts";
 import { EXIT_USAGE } from "../src/cli/exitCodes.ts";
 import { makeViewsWorkspace, VIEWS_NOW, VIEWS_RUN, type TempViews } from "./fixtures/views/tempViews.ts";
-import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
+import { eventWaitMs, spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
 setDefaultTimeout(spawnTestTimeout());
 
@@ -63,7 +63,7 @@ class Sse {
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/event-stream");
     const sse = new Sse(bodyReader(response));
-    expect(await sse.next("hello", 5_000), "the stream never said hello").not.toBeNull();
+    expect(await sse.next("hello", eventWaitMs()), "the stream never said hello").not.toBeNull();
     return sse;
   }
 
@@ -124,6 +124,7 @@ const streams: Sse[] = [];
 interface OwnOptions {
   readonly debounceMs?: number;
   readonly ageTickMs?: number;
+  readonly sweepMs?: number;
   readonly watch?: "auto" | "poll";
 }
 
@@ -137,6 +138,7 @@ async function ownServer(
     port: 0,
     debounceMs: options.debounceMs ?? 20,
     ageTickMs: options.ageTickMs,
+    sweepMs: options.sweepMs,
     watch: options.watch,
   });
   servers.push(server);
@@ -213,7 +215,7 @@ describe("what the server pushes, and what it declines to push", () => {
     const sse = track(await Sse.open(server.url));
 
     appendEvent(temp.runDir, stampAt(1));
-    const frame = await sse.next("reload", 5_000);
+    const frame = await sse.next("reload", eventWaitMs());
     expect(frame, "no reload arrived for an appended event").not.toBeNull();
 
     const payload = JSON.parse(frame!.data) as ReloadPayload;
@@ -222,7 +224,7 @@ describe("what the server pushes, and what it declines to push", () => {
     expect(payload.added).toEqual([]);
     expect(payload.removed).toEqual([]);
     expect(Number.isNaN(Date.parse(payload.at))).toBe(false);
-  }, 20_000);
+  }, spawnTestTimeout(45_000));
 
   /**
    * `tldrx dashboard --static` writes into `.tldrx/cache/`, which is inside the
@@ -238,8 +240,8 @@ describe("what the server pushes, and what it declines to push", () => {
     mkdirSync(cache, { recursive: true });
     writeFileSync(join(cache, "index.html"), "<!doctype html><p>a snapshot</p>\n", "utf8");
 
-    expect(await sse.next("reload", 1_000), "a reload fired for a file nothing reads").toBeNull();
-  }, 20_000);
+    expect(await sse.next("reload", eventWaitMs(2_000)), "a reload fired for a file nothing reads").toBeNull();
+  }, spawnTestTimeout(45_000));
 
   test("the clock alone moves the page: an age tick arrives with nothing on disk changing", async () => {
     const { server } = await ownServer({ ageTickMs: 120 });
@@ -248,7 +250,7 @@ describe("what the server pushes, and what it declines to push", () => {
     const before = (await (await fetch(`${server.url}/model.json`)).json()) as {
       runs: { ageSeconds: number }[];
     };
-    const tick = await sse.next("age", 5_000);
+    const tick = await sse.next("age", eventWaitMs());
     expect(tick, "the stream never ticked, so a quiet run can never go quiet on screen").not.toBeNull();
     expect(Number.isNaN(Date.parse(tick!.data))).toBe(false);
 
@@ -258,7 +260,7 @@ describe("what the server pushes, and what it declines to push", () => {
       runs: { ageSeconds: number }[];
     };
     expect(after.runs[0]!.ageSeconds).toBeGreaterThan(before.runs[0]!.ageSeconds);
-  }, 20_000);
+  }, spawnTestTimeout(45_000));
 });
 
 describe("runs appearing and disappearing while it watches", () => {
@@ -270,13 +272,13 @@ describe("runs appearing and disappearing while it watches", () => {
     mkdirSync(fresh, { recursive: true });
     writeFileSync(join(fresh, "run.yml"), "id: 260902-arrived\nstatus: open\nlevel: 1\n", "utf8");
 
-    const frame = await sse.next("reload", 5_000);
+    const frame = await sse.next("reload", eventWaitMs());
     expect(frame, "a new run pushed no reload").not.toBeNull();
     expect((JSON.parse(frame!.data) as ReloadPayload).added).toEqual(["260902-arrived"]);
 
     const model = (await (await fetch(`${server.url}/model.json`)).json()) as { runs: { id: string }[] };
     expect(model.runs.map((run) => run.id)).toContain("260902-arrived");
-  }, 20_000);
+  }, spawnTestTimeout(45_000));
 
   test("a run deleted mid-serve is named removed, and the server keeps serving", async () => {
     const { server, root } = await ownServer();
@@ -285,10 +287,10 @@ describe("runs appearing and disappearing while it watches", () => {
     const doomed = join(root, "tldrx-work", "260902-doomed");
     mkdirSync(doomed, { recursive: true });
     writeFileSync(join(doomed, "run.yml"), "id: 260902-doomed\nstatus: open\nlevel: 1\n", "utf8");
-    expect(await sse.next("reload", 5_000)).not.toBeNull();
+    expect(await sse.next("reload", eventWaitMs())).not.toBeNull();
 
     rmSync(doomed, { recursive: true, force: true });
-    const frame = await sse.next("reload", 5_000);
+    const frame = await sse.next("reload", eventWaitMs());
     expect(frame, "a deleted run pushed no reload").not.toBeNull();
     expect((JSON.parse(frame!.data) as ReloadPayload).removed).toEqual(["260902-doomed"]);
 
@@ -296,7 +298,7 @@ describe("runs appearing and disappearing while it watches", () => {
     expect(response.status, "the server died when a run was deleted under it").toBe(200);
     const model = (await response.json()) as { runs: { id: string }[] };
     expect(model.runs.map((run) => run.id)).not.toContain("260902-doomed");
-  }, 20_000);
+  }, spawnTestTimeout(60_000));
 
   /**
    * The silent death: `tldrx-work/` removed and recreated leaves the recursive
@@ -309,21 +311,81 @@ describe("runs appearing and disappearing while it watches", () => {
     const work = join(root, "tldrx-work");
 
     rmSync(work, { recursive: true, force: true });
-    expect(await sse.next("reload", 5_000), "removing the work dir pushed no reload").not.toBeNull();
+    expect(await sse.next("reload", eventWaitMs()), "removing the work dir pushed no reload").not.toBeNull();
 
     const back = join(work, "260903-again");
     mkdirSync(back, { recursive: true });
     writeFileSync(join(back, "run.yml"), "id: 260903-again\nstatus: open\nlevel: 1\n", "utf8");
-    expect(await sse.next("reload", 5_000), "a run in the recreated work dir pushed no reload").not.toBeNull();
+    expect(await sse.next("reload", eventWaitMs()), "a run in the recreated work dir pushed no reload").not.toBeNull();
 
     // The one that actually proves the watcher was rebuilt: a write DEEP inside
     // the replacement, which no watcher on the root would ever see.
     appendEvent(back, stampAt(2));
     expect(
-      await sse.next("reload", 5_000),
+      await sse.next("reload", eventWaitMs()),
       "the watcher died with the old work dir — the page is silently stale",
     ).not.toBeNull();
-  }, 30_000);
+  }, spawnTestTimeout(90_000));
+});
+
+/**
+ * #213: what happens when the OS does not tell us.
+ *
+ * Measured while fixing #193 on a 14-core macOS box: with every deadline scaled,
+ * the failures that remained were all directory create/remove events that never
+ * arrived AT ALL — 113,942 ms and 82,556 ms with no frame — tracking `fseventsd`
+ * at 98-115% CPU (`mdbulkimport` indexing) rather than load average. FSEvents
+ * drops and coalesces under queue pressure, and `watchWorkspace` armed its mtime
+ * sweep only in `poll` mode, so a dropped notification meant nothing fired,
+ * nothing re-armed, and nothing ever swept: a live dashboard silently stale for
+ * the life of the process, which is the exact failure this file exists to refuse.
+ *
+ * You cannot ask macOS to drop an event on demand, so the server exposes
+ * `simulateWatcherLoss()` — it closes every `fs.watch` handle and leaves the
+ * sweep alone, which is precisely what a dead or overwhelmed FSEvents stream
+ * leaves behind. That is the seam; the assertion is the product's.
+ */
+describe("a notification the OS never delivers (#213)", () => {
+  test("a change the watcher missed still reaches the page, by sweep", async () => {
+    const { server, root } = await ownServer({ sweepMs: 150 });
+    const sse = track(await Sse.open(server.url));
+
+    // Every fs.watch handle is gone from here on: nothing will ever fire.
+    server.simulateWatcherLoss();
+
+    const fresh = join(root, "tldrx-work", "260904-unseen");
+    mkdirSync(fresh, { recursive: true });
+    writeFileSync(join(fresh, "run.yml"), "id: 260904-unseen\nstatus: open\nlevel: 1\n", "utf8");
+
+    const frame = await sse.next("reload", eventWaitMs());
+    expect(frame, "the watcher was gone and no sweep caught the change — the page is silently stale").not.toBeNull();
+    expect((JSON.parse(frame!.data) as ReloadPayload).added).toEqual(["260904-unseen"]);
+  }, spawnTestTimeout(45_000));
+
+  /**
+   * The other half: the sweep must not double-report what the watcher already
+   * told us. One change is one reload frame, whichever path saw it first.
+   *
+   * A GUARD, not a proof, and measured to be one: it passes with the fix's
+   * re-baseline removed, because `onChange`'s model-equality check already
+   * refuses to push a page that would draw the same thing. Removing BOTH does
+   * go red — but in `a write the page does not read pushes nothing`, not here.
+   * So this pins the invariant against a future change that moves the equality
+   * check; it did not prove the re-baseline. The re-baseline stays because it
+   * stops the next sweep re-probing every change the watcher already handled,
+   * which is work, not correctness.
+   */
+  test("the sweep and the watcher together still push exactly one reload per change", async () => {
+    const { server, temp } = await ownServer({ sweepMs: 150 });
+    const sse = track(await Sse.open(server.url));
+
+    appendEvent(temp.runDir, stampAt(40));
+    expect(await sse.next("reload", eventWaitMs()), "no reload for an appended event").not.toBeNull();
+    expect(
+      await sse.next("reload", eventWaitMs(1_500)),
+      "the same change was pushed twice — the sweep re-reported what the watcher had",
+    ).toBeNull();
+  }, spawnTestTimeout(45_000));
 });
 
 describe("the live client, and the static page that must not carry it", () => {
@@ -474,10 +536,10 @@ describe("the burst a wave writes is one reload, not twelve", () => {
     const sse = await Sse.open(sharedServer.url);
     try {
       for (let i = 0; i < 12; i++) appendEvent(shared.runDir, stampAt(20 + i));
-      expect(await sse.next("reload", 5_000)).not.toBeNull();
-      expect(await sse.next("reload", 400), "the burst was pushed more than once").toBeNull();
+      expect(await sse.next("reload", eventWaitMs())).not.toBeNull();
+      expect(await sse.next("reload", eventWaitMs(800)), "the burst was pushed more than once").toBeNull();
     } finally {
       await sse.close();
     }
-  }, 20_000);
+  }, spawnTestTimeout(45_000));
 });

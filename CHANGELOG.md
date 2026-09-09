@@ -1,6 +1,55 @@
 # Changelog
 
 
+## 0.14.3 — unreleased
+
+### Fixed
+
+- **The dashboard's live tests wait on the machine's clock, not a literal — the flake that
+  blocked four merges in two days (#193).** `test/dashboard-live.test.ts` and
+  `test/dashboard-server.test.ts` both call `setDefaultTimeout(spawnTestTimeout())`, so the
+  per-test BUDGET already scaled with load; every deadline that actually decided a result was
+  a number typed inside the assertion (`sse.next("reload", 5_000)`, `Date.now() + 2_000`), and
+  the load factor could never reach it. Each of those waits is an `fs.watch` notification
+  racing a stopwatch, so on a busy box a different SSE test reddened every time — measured
+  2026-09-09 under `load averages: 65–107` on 14 cores, five consecutive runs of the two files
+  went red 3 times, at 5084.27 / 5108.01 / 5256.49 ms against the 5000 and 2002.30 / 2002.55 /
+  2005.47 ms against the 2000. Not one failed on CONTENT: they timed out. The deadlines now go
+  through one helper, `eventWaitMs()` in `test/fixtures/machineLoad.ts`, which is
+  `spawnTestTimeout` with a 15 s base rather than a second scaler — the same derivation, so a
+  box given twice the budget to start a process is given twice the patience for a notification
+  from it — and the per-test budgets scale with it. The assertions are otherwise unchanged: the
+  fix is the instrument, not the behaviour, and `test/machine-load.test.ts` now refuses a
+  hard-coded millisecond deadline in either file so it cannot come back at somebody's merge.
+  The server's own timings are not what the 5 s bound was papering over — `DEBOUNCE_MS` is 300
+  (20 in these tests) and the mtime fallback sweeps every 500 ms, both an order of magnitude
+  under it — but the measurement did surface a second, distinct cause, filed as #213: with the
+  deadlines scaled, the failures that remain are all directory create/remove events that never
+  arrive AT ALL (114 s, 82 s, no frame), tracking `fseventsd` at ~100% CPU rather than load
+  average, and `watchWorkspace` runs its fingerprint sweep only in poll mode, so a dropped
+  FSEvents notification leaves a live dashboard silently stale for the life of the process.
+  This entry fixes the instrument; the bullet below is the product half.
+
+- **A live dashboard can no longer go silently stale because the OS dropped a notification
+  (#213).** `fs.watch` is the fast path, never a guarantee — FSEvents drops and coalesces
+  under queue pressure — and `watchWorkspace` armed its mtime sweep only in `poll` mode, so
+  a dropped event meant nothing fired, nothing re-armed, and nothing ever swept: the page
+  stopped updating for the life of the process and said nothing about it. Measured on a
+  14-core macOS box with `fseventsd` at 98-115% CPU while `mdbulkimport` indexed: directory
+  create and remove events that never arrived at all — 82,556 ms and 113,942 ms with no
+  frame — while appends inside an already-watched directory kept arriving throughout. Load
+  average was not the predictor; fseventsd saturation was. The sweep now runs in BOTH modes:
+  it is the notifier in `poll` at 500 ms and a backstop in `watch` at `SWEEP_MS` (2 s,
+  overridable like `debounceMs`), so a dropped notification is bounded rather than fatal, and
+  the watcher is re-armed by the sweep's own `fire()`. Same `fingerprint`, one derivation, two
+  cadences. It is idempotent with the fast path — a change the watcher reported re-baselines
+  the sweep inside the same debounce, so one change is still one reload frame. RED first:
+  `test/dashboard-live.test.ts`'s new "a change the watcher missed still reaches the page, by
+  sweep" hangs a real change off a server whose `fs.watch` handles have been closed
+  (`simulateWatcherLoss()` — you cannot ask the OS to drop an event on demand) and went red
+  before this change with no frame at all.
+
+
 ## 0.14.2 — 2026-09-09
 
 ### Fixed

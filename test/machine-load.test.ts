@@ -15,6 +15,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   fastestOf, spawnTestTimeout, loadFactor, perfBudgetMs, SPAWN_TEST_BASE_MS, LOAD_FACTOR_CAP,
+  eventWaitMs, EVENT_WAIT_BASE_MS,
 } from "./fixtures/machineLoad.ts";
 
 const TEST_DIR = import.meta.dir;
@@ -73,6 +74,47 @@ describe("the budgets", () => {
     process.env.TLDRX_TEST_LOAD_FACTOR = "2";
     expect(perfBudgetMs(50)).toBe(100);
   });
+});
+
+describe("a wait for a pushed event is load-aware too (#193)", () => {
+  test("the base is generous, and it scales exactly like the per-test budget", () => {
+    process.env.TLDRX_TEST_LOAD_FACTOR = "1";
+    expect(eventWaitMs()).toBe(EVENT_WAIT_BASE_MS);
+    // Three times the 5000 ms literal the dashboard tests reddened against on an IDLE box.
+    expect(EVENT_WAIT_BASE_MS).toBeGreaterThanOrEqual(15_000);
+    process.env.TLDRX_TEST_LOAD_FACTOR = "4";
+    expect(eventWaitMs()).toBe(spawnTestTimeout(EVENT_WAIT_BASE_MS));
+    expect(eventWaitMs()).toBe(EVENT_WAIT_BASE_MS * 4);
+    expect(eventWaitMs(2_000)).toBe(8_000);
+  });
+
+  /**
+   * The instrument, not the behaviour. Every one of these waits is an `fs.watch`
+   * notification racing a number, and while the number was a literal the load factor
+   * could not reach it — measured 2026-09-09 under `load averages: 65-107` on a 14-core
+   * box, `bun test test/dashboard-live.test.ts test/dashboard-server.test.ts` five times
+   * in a row: runs 1, 4 and 5 red (3, 1 and 2 failures), a different test each time, at
+   * 5084.27 / 5108.01 / 5256.49 ms against the 5000 ms literal and 2002.30 / 2002.55 /
+   * 2005.47 ms against the 2000 ms one. Timing out on the literal is the tell: not one of
+   * them failed on CONTENT.
+   *
+   * So the literal is what this forbids. Re-introducing one is the only way this flake
+   * comes back, and it comes back at somebody's merge.
+   */
+  test.each(["dashboard-live.test.ts", "dashboard-server.test.ts"])(
+    "%s passes no hard-coded millisecond deadline to a wait",
+    (file) => {
+      const source = readFileSync(join(TEST_DIR, file), "utf8");
+      expect(source).toContain('from "./fixtures/machineLoad.ts"');
+      expect(source).toContain("eventWaitMs(");
+      // `sse.next("reload", 5_000)` and friends.
+      expect([...source.matchAll(/\.next\([^)]*,\s*\d/g)].map((hit) => hit[0])).toEqual([]);
+      // `const deadline = Date.now() + 2_000;` and friends.
+      expect([...source.matchAll(/deadline\s*=\s*Date\.now\(\)\s*\+\s*\d/g)].map((h) => h[0])).toEqual([]);
+      // A per-test budget is the sum of the waits it can sit through, so it scales too.
+      expect([...source.matchAll(/\}\s*,\s*\d[\d_]*\s*\)\s*;/g)].map((hit) => hit[0])).toEqual([]);
+    },
+  );
 });
 
 describe("`fastestOf` reports the floor, which is what a stall cannot inflate", () => {
