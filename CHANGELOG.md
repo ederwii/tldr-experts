@@ -1,6 +1,36 @@
 # Changelog
 
 
+## 0.14.3 — unreleased
+
+### Fixed
+
+- **The dashboard's live tests wait on the machine's clock, not a literal — the flake that
+  blocked four merges in two days (#193).** `test/dashboard-live.test.ts` and
+  `test/dashboard-server.test.ts` both call `setDefaultTimeout(spawnTestTimeout())`, so the
+  per-test BUDGET already scaled with load; every deadline that actually decided a result was
+  a number typed inside the assertion (`sse.next("reload", 5_000)`, `Date.now() + 2_000`), and
+  the load factor could never reach it. Each of those waits is an `fs.watch` notification
+  racing a stopwatch, so on a busy box a different SSE test reddened every time — measured
+  2026-09-09 under `load averages: 65–107` on 14 cores, five consecutive runs of the two files
+  went red 3 times, at 5084.27 / 5108.01 / 5256.49 ms against the 5000 and 2002.30 / 2002.55 /
+  2005.47 ms against the 2000. Not one failed on CONTENT: they timed out. The deadlines now go
+  through one helper, `eventWaitMs()` in `test/fixtures/machineLoad.ts`, which is
+  `spawnTestTimeout` with a 15 s base rather than a second scaler — the same derivation, so a
+  box given twice the budget to start a process is given twice the patience for a notification
+  from it — and the per-test budgets scale with it. The assertions are otherwise unchanged: the
+  fix is the instrument, not the behaviour, and `test/machine-load.test.ts` now refuses a
+  hard-coded millisecond deadline in either file so it cannot come back at somebody's merge.
+  The server's own timings are not what the 5 s bound was papering over — `DEBOUNCE_MS` is 300
+  (20 in these tests) and the mtime fallback sweeps every 500 ms, both an order of magnitude
+  under it — but the measurement did surface a second, distinct cause, filed as #213: with the
+  deadlines scaled, the failures that remain are all directory create/remove events that never
+  arrive AT ALL (114 s, 82 s, no frame), tracking `fseventsd` at ~100% CPU rather than load
+  average, and `watchWorkspace` runs its fingerprint sweep only in poll mode, so a dropped
+  FSEvents notification leaves a live dashboard silently stale for the life of the process.
+  This entry fixes the instrument; #213 is the product half.
+
+
 ## 0.14.2 — 2026-09-09
 
 ### Fixed

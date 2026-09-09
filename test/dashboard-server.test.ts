@@ -7,7 +7,7 @@ import {
 } from "../src/core/dashboard/index.ts";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { makeViewsWorkspace, VIEWS_RUN, type TempViews } from "./fixtures/views/tempViews.ts";
-import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
+import { eventWaitMs, spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
 // Every test in this file spawns a REAL process — git, `bun`, the CLI. Process cost is a
 // property of the machine, not of the code, so bun's fixed 5000 ms default measures the box:
@@ -39,7 +39,7 @@ let touches = 0;
 
 /**
  * Open the stream, drain the greeting, change a file, and say whether a `reload`
- * arrived inside two seconds.
+ * arrived inside `eventWaitMs()` — the machine's budget, not a literal (#193).
  */
 async function reloadAfterTouch(target: DashboardServer, temp: TempViews): Promise<boolean> {
   const response = await fetch(`${target.url}/events`);
@@ -75,7 +75,7 @@ async function reloadAfterTouch(target: DashboardServer, temp: TempViews): Promi
     { flag: "a" },
   );
 
-  const deadline = Date.now() + 2_000;
+  const deadline = Date.now() + eventWaitMs();
   while (!seen.includes("event: reload") && Date.now() < deadline) {
     const chunk = await Promise.race([
       reader.read(),
@@ -127,7 +127,7 @@ describe("tldrx dashboard (live)", () => {
 
   test("touching a file under tldrx-work/ pushes a reload down the SSE stream", async () => {
     expect(await reloadAfterTouch(server, workspace)).toBe(true);
-  }, 10_000);
+  }, spawnTestTimeout(45_000));
 
   /**
    * Recursive `fs.watch` is not available everywhere — Linux got it late, and
@@ -135,7 +135,7 @@ describe("tldrx dashboard (live)", () => {
    * sweep. That fallback is the one CI might actually take, and an untested
    * fallback is a dashboard that quietly stops being live.
    */
-  test("the polling fallback delivers the same reload, within the same 2 s", async () => {
+  test("the polling fallback delivers the same reload, within the same budget", async () => {
     const polled = await startDashboardServer({
       root: workspace.root, port: 0, debounceMs: 20, watch: "poll",
     });
@@ -145,7 +145,7 @@ describe("tldrx dashboard (live)", () => {
     } finally {
       await polled.close();
     }
-  }, 10_000);
+  }, spawnTestTimeout(45_000));
 
   test("it answers nothing else, and refuses anything that is not a GET", async () => {
     const missing = await fetch(`${server.url}/nope`);
@@ -264,7 +264,7 @@ describe("the built CLI serves it under node", () => {
   beforeAll(async () => {
     const built = Bun.spawn(["bun", "scripts/build.ts"], { cwd: FRAMEWORK_ROOT, stdout: "pipe", stderr: "pipe" });
     expect(await built.exited).toBe(0);
-  }, 120_000);
+  }, spawnTestTimeout(120_000));
 
   test("the binary the tests below run was built from the CURRENT sources (#73)", () => {
     const artifact = statSync(DIST).mtimeMs;
@@ -285,7 +285,7 @@ describe("the built CLI serves it under node", () => {
     const reader = proc.stdout.getReader();
     const decoder = new TextDecoder();
     let out = "";
-    const deadline = Date.now() + 15_000;
+    const deadline = Date.now() + eventWaitMs();
     while (!/http:\/\/127\.0\.0\.1:\d+/.test(out) && Date.now() < deadline) {
       const chunk = await reader.read();
       if (chunk.done) break;
@@ -304,7 +304,7 @@ describe("the built CLI serves it under node", () => {
     proc.kill("SIGINT");
     expect(await proc.exited).toBe(0);
     await reader.cancel();
-  }, 60_000);
+  }, spawnTestTimeout(90_000));
 });
 
 /**

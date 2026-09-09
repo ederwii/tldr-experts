@@ -120,7 +120,13 @@ calls `Bun.build` by design). Run each without pipes and read each exit code.
 - **Known flake**: `test/merge-wave.test.ts`'s concurrency case (#115) can redden a run under
   machine load. A re-run of the SAME sha going green with nothing pushed in between is an
   acceptable pass — say so explicitly when it happens. If you can reproduce it, that issue
-  wants your evidence.
+  wants your evidence. The dashboard SSE flake (#193) had two halves: the deadline half is
+  fixed at the source — every wait in `test/dashboard-live.test.ts` /
+  `test/dashboard-server.test.ts` goes through `eventWaitMs()`, so a hard-coded millisecond
+  deadline there is a regression, not a re-run. The other half is #213 and is NOT fixed: when
+  macOS `fseventsd` is saturated (check it — `ps -A -o %cpu,comm | grep fseventsd`; ~100% while
+  `mdbulkimport` indexes), directory create/remove notifications are dropped outright and those
+  tests fail with no frame at all, at any budget. That is the box, not your branch.
 
 ## 5. CHANGELOG and docs conventions
 
