@@ -71,6 +71,7 @@ import { withAttendedGuard } from "./attended.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
 import { validateOutputs, describeProblems } from "./validateOutputs.ts";
 import { executorFor, type ExecutorContext, type ExecutorOutcome, type StageExecutor } from "./executors/index.ts";
+import { NOT_RESTORED_MARK } from "../build/foreignWork.ts";
 import { planIsSkipped, satisfiedByImplicitPlan } from "../build/implicitPlan.ts";
 import {
   promptPath, readPending, readResult, writeBundle, writeRaw, PendingError,
@@ -2903,6 +2904,20 @@ export function tokenSplit(
   return {};
 }
 
+/**
+ * One rule about ORDER, and it is the only one this function has (#164): a line
+ * saying the operator's own uncommitted work was set aside and could not be given
+ * back goes LAST, after `gate pending` and after every stage line.
+ *
+ * A stage that finished green while somebody's files are still in a stash must
+ * not have its final word be an instruction to approve a gate. The marker is
+ * `build/foreignWork.ts`'s, so the sentence and the rule that moves it cannot
+ * drift apart. Every other report is byte-identical: no line carries the marker.
+ */
 function out(code: number, lines: readonly string[], stderr: readonly string[] = []): NextOutcome {
-  return stderr.length === 0 ? { code, lines } : { code, lines, stderr };
+  const held = lines.filter((line) => line.includes(NOT_RESTORED_MARK));
+  const ordered = held.length === 0
+    ? lines
+    : [...lines.filter((line) => !line.includes(NOT_RESTORED_MARK)), ...held];
+  return stderr.length === 0 ? { code, lines: ordered } : { code, lines: ordered, stderr };
 }

@@ -360,25 +360,56 @@ mean to ship (`tldrx approve --note "…"`), or fix the stories and run the stag
 keeps its plain name on purpose — it is the unit a team merges — so instead of making collision
 impossible, adopting one is made deliberate: `tldrx next --reuse-epic`.
 
-**``[tldrx] build: repo `lab` has 3 uncommitted change(s) on `main` — refusing to cut an epic
-branch from a dirty tree``.** The next line names up to five of them. **The reason is the base
-pre-flight, not the worktree** (corrected 2026-09-06, #164): a new worktree is a fresh checkout
-and inherits nothing, but the #41 base pre-flight runs the workspace's own gate commands in the
-repo's ordinary checkout — deliberately, because that is the tree with the installed
-dependencies — so uncommitted product changes sit *inside* the measurement that decides whether
-a story's red Definition of Done is the story's fault or the base's.
+**``· app: 4 uncommitted change(s) nobody's story declares — set aside in stash a1b2c3d4e5f6 …
+and given back when this stage ends``.** Not an error. Since #164 a dirty tree does not
+stop a Build by itself: the engine classifies every uncommitted path and only refuses the ones a
+story is about to write.
 
-**Only PRODUCT dirt counts.** `tldrx-work/` and `.tldrx/` are the framework's own state, and in
-a `root_is_repo: true` workspace they live inside the product repo; counting them made the
-command refuse the files it had just written itself. The refusal prints the two literal commands
-and **stashes nothing on its own** — a framework-owned stash left behind by a crash mid-wave
-would strand your work somewhere you did not put it:
+- **`own`** — anything under `tldrx-work/`, `.tldrx/` or `.agent/`. Never dirt, never stashed,
+  never a refusal. Counting them once made the command refuse the files it had just written
+  itself.
+- **`overlapping`** — a dirty path inside a pending story's `touches:`, or a submodule. Still
+  refuses, and the message says which path and why.
+- **`foreign`** — everything else. Set aside with a **pathspec-limited** `git stash push` before
+  the epic branch is cut, recorded as `worktree.foreign_work_aside`, and popped back when the
+  stage ends (`worktree.foreign_work_restored`). Nothing is ever deleted and nothing is ever
+  force-popped.
+
+**The reason the tree has to be clean at the cut is the base pre-flight, not the worktree**
+(corrected 2026-09-06, #164): a new worktree is a fresh checkout and inherits nothing, but the
+#41 base pre-flight runs the workspace's own gate commands in the repo's ordinary checkout —
+deliberately, because that is the tree with the installed dependencies — so uncommitted product
+changes sit *inside* the measurement that decides whether a story's red Definition of Done is
+the story's fault or the base's.
+
+**``[tldrx] build: repo `lab` has 3 uncommitted change(s) on `main` that a pending story is
+about to write — refusing to cut an epic branch from a dirty tree``.** This is the refusal that
+remains. Commit those paths, or set exactly them aside — the remedy it prints is
+pathspec-limited on purpose, and the relaunch verb is the one you were using:
 
 ```bash
-git -C <repo> stash push -u -m "tldrx <run-id> foreign work"
-tldrx next
+git -C <repo> stash push -u -m "tldrx <run-id> foreign work" -- <the listed paths>
+tldrx run auto <run-id>     # or `tldrx next` if you drive the run yourself
 git -C <repo> stash pop
 ```
+
+**Never a bare `git stash push -u`.** Measured on 0.14.2, before this was fixed: an owner ran the
+remedy exactly as printed, and it swept the run's *own* untracked records under
+`tldrx-work/<run>/` into the stash — after which `tldrx next` answered
+``no run '<id>' in tldrx-work/``. Nothing was lost (`git stash pop` brings it all back), but the
+framework had made its own run disappear.
+
+**``[tldrx] build: foreign work NOT restored in app — stash a1b2c3d4e5f6 still holds notes.md:
+git -C <repo> stash pop stash@{0}``.** Your files are safe and they are still in that stash. Git
+refuses a pop that would overwrite a path the tree has changed since — it aborts whole and keeps
+the entry — so this line is always the *last* thing the stage prints, it is in the handoff's
+`## Unknowns` (and so in the PR body), and it is in the notification. The run's exit code does
+not move for it: that code answers for the run's work, not for your tree. Run the printed
+command when the path is free.
+
+**``[tldrx] build: repo `lab` is in the middle of a merge on `main` — refusing to cut an epic
+branch, and refusing to stash anything into that state``.** A half-finished merge, rebase,
+cherry-pick or bisect has no clean undo. Finish it or abort it, then start the run again.
 
 **`05-watch/watch refuses to start: run.yml records `epic/<x>` for `<feature>`, and it does not
 resolve in `<repo>``, exit 2.** The Watch stage diffs the branch this run's own Build recorded in

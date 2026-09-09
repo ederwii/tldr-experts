@@ -160,6 +160,31 @@ export interface BuildHandoffParts {
    * document that has no widening in it.
    */
   readonly widenings?: readonly WideningRow[];
+  /**
+   * Foreign work this stage set aside and could NOT give back (#164), handed here
+   * by the executor after it ran the restore — never the ones that came back,
+   * because a stash that was restored is not an unknown.
+   *
+   * It belongs in `## Unknowns` for the section's own reason: the framework moved
+   * somebody's uncommitted files and a person now has to decide what to do with
+   * the stash. It is also what carries the fact into a PR body, which is the
+   * surface an operator reads days later, on the machine that has the stash.
+   *
+   * Absent behaves exactly as empty and changes no byte of a document with no
+   * failed restore in it.
+   */
+  readonly foreignWork?: readonly ForeignWorkNote[];
+}
+
+/** One repo's failed restore, as the handoff names it. */
+export interface ForeignWorkNote {
+  readonly repo: string;
+  readonly paths: readonly string[];
+  /** The stash commit's full sha — the durable name, shortened for the line. */
+  readonly stashRef: string;
+  /** The literal command an operator retypes. Empty when the stash is gone. */
+  readonly command: string;
+  readonly detail: string;
 }
 
 /**
@@ -211,7 +236,7 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
     // listing a carried finding nobody owns, or a story file it could not read,
     // would be worse than one that said neither.
     ...(notDone.length === 0 && (parts.carried ?? []).length === 0
-      && (parts.unreadableStories ?? []).length === 0
+      && (parts.unreadableStories ?? []).length === 0 && (parts.foreignWork ?? []).length === 0
       ? [`- none — every scheduled story reached \`done\` and no carried finding is unowned `
         + `[src: absent:04-build/log]`]
       : []),
@@ -224,6 +249,11 @@ export function renderBuildHandoff(parts: BuildHandoffParts): string {
     ...(parts.unreadableStories ?? []).map((row) =>
       `- a story file could not be read, so its carried findings were not checked: ` +
       `\`${row.rel}\` — ${row.reason} [src: absent:${row.rel}]`),
+    ...(parts.foreignWork ?? []).map((row) =>
+      `- uncommitted work this stage set aside in \`${row.repo}\` was NOT restored and needs a human: ` +
+      `stash \`${row.stashRef.slice(0, 12)}\` still holds ${row.paths.join(", ")} — ${row.detail}. ` +
+      `Take it back with \`${row.command === "" ? `git -C <${row.repo}> stash list` : row.command}\` ` +
+      `[src: absent:04-build/log]`),
     "",
     "## Evidence ledger",
     "",

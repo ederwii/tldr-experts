@@ -8,7 +8,11 @@ import {
   type BranchModel, type BranchModelKind,
 } from "../plan/branchModel.ts";
 import { RunStore } from "../run/RunStore.ts";
-import { branchExists, currentBranch, dirtyPaths, partitionDirty, repoDirOf, stateDirPrefixes } from "./git.ts";
+import {
+  branchExists, currentBranch, dirtyEntries, operationInProgress, repoDirOf, stateDirPrefixes,
+} from "./git.ts";
+import { classifyDirty, namePaths, NAMED_PATHS, stashCommand, submodulePaths } from "./foreignWork.ts";
+import type { NextMode } from "../facilitator/runNext.ts";
 import type { EpicSummaryRow } from "./handoff.ts";
 import type { BuildRefusal, StoryOutcome } from "./outcome.ts";
 import type { PlannedEpic, PlannedStory } from "./plan.ts";
@@ -121,8 +125,7 @@ export async function foreignEpicRefusal(
 }
 
 /**
- * Spec §5, Build executor safety: a repo whose tree is dirty is refused BEFORE
- * anything is cut.
+ * Spec §5, Build executor safety: what a repo's dirty tree does to a Build.
  *
  * **The reason, corrected 2026-09-06 (#164).** This used to say the refusal was
  * because `git worktree add` would carry the mess forward. It would not — a new
@@ -133,53 +136,108 @@ export async function foreignEpicRefusal(
  * uncommitted product changes there are silently INSIDE the measurement that
  * decides whether a story's red DoD is the story's fault or the base's.
  *
- * PRODUCT dirt only. `tldrx-work/` and `.tldrx/` are the framework's own state,
- * and in a `root_is_repo: true` workspace they sit inside the product repo — so
- * counting them made this command refuse the files it had just written itself
- * (`run.yml`, `events.jsonl`, `.lock`, the freshly synthesised `04-build/`), and
- * made a user's uncommitted answers a precondition of Build. Product dirt still
- * refuses, by the same rule and with the same two-command fix. Two things about the
- * message DID move: the count and the path list, which no longer include framework
- * state, and the `Why:` line, which now names the pre-flight rather than the
- * worktree it used to blame.
+ * **The outcome, corrected 2026-09-09 (#164, the second half).** The measurement
+ * above is protected by the tree being clean AT THE CUT, not by the operator's
+ * work being committed. So the dirt is now classified rather than counted
+ * (`build/foreignWork.ts`), and only one of the three verdicts still refuses:
  *
- * The refusal prints the two literal commands, with this run's id in the stash
- * message, and does NOT stash anything itself: a framework-owned stash that a
- * crash mid-wave left behind would strand somebody's work in a place they did
- * not put it (the #129 shape). The operator's tree stays the operator's.
+ *   - `own` — `tldrx-work/`, `.tldrx/`, `.agent/`. Never dirt, never stashed.
+ *     Counting them made this command refuse the files it had just written itself
+ *     (`run.yml`, `events.jsonl`, `.lock`, the freshly synthesised `04-build/`)
+ *     and made a user's uncommitted answers a precondition of Build.
+ *   - `overlapping` — inside a pending story's `touches:`, or a submodule.
+ *     REFUSES, with the message below.
+ *   - `foreign` — everything else. The engine sets it aside itself.
+ *
+ * This function decides; it writes nothing. The stash is the executor's to run,
+ * because the executor is what can also give it back.
+ *
+ * A repo in the middle of a merge, a rebase, a cherry-pick or a bisect refuses
+ * outright and is never stashed: that state has no clean undo, and a framework
+ * that wrote into it would be making a mess nobody could name afterwards.
  */
+export interface DirtyPlan {
+  readonly refusal: BuildRefusal | null;
+  /** How many framework state files the check ignored — a stdout line, as before. */
+  readonly ignored: number;
+  /** One entry per repo whose foreign work the caller should set aside. */
+  readonly aside: readonly { readonly repo: string; readonly repoDir: string; readonly paths: readonly string[] }[];
+}
+
+/** Which command relaunches this run — the engine's verb, or the cursor's (#164). */
+export function relaunchCommand(mode: NextMode, runId: string): string {
+  return mode === "headless" ? `tldrx run auto ${runId}` : "tldrx next";
+}
+
 export async function dirtyRepoRefusal(
-  parts: Pick<ClaimParts, "root" | "workspace" | "runId">,
+  parts: Pick<ClaimParts, "root" | "workspace" | "runId"> & { readonly mode: NextMode },
   stories: readonly PlannedStory[],
-): Promise<{ readonly refusal: BuildRefusal | null; readonly ignored: number }> {
+): Promise<DirtyPlan> {
   const seen = new Set<string>();
+  const aside: { repo: string; repoDir: string; paths: readonly string[] }[] = [];
   let ignored = 0;
+  const refuse = (refusal: BuildRefusal): DirtyPlan => ({ refusal, ignored, aside: [] });
   for (const planned of stories) {
     const name = planned.story.repo;
     if (seen.has(name)) continue;
     seen.add(name);
     const dir = repoDirOf(parts.workspace, name);
-    const split = partitionDirty(await dirtyPaths(dir), stateDirPrefixes(parts.workspace.root, dir));
-    ignored += split.state.length;
-    const dirty = split.product;
-    if (dirty.length === 0) continue;
+    const entries = await dirtyEntries(dir);
+    // The union of what EVERY pending story of this repo declared, not just this
+    // one: the wave is what runs, and a path the third story will write is no
+    // more the framework's to move than a path the first will.
+    const touches = stories
+      .filter((row) => row.story.repo === name)
+      .flatMap((row) => [...row.story.touches]);
+    const verdict = classifyDirty({
+      entries,
+      statePrefixes: stateDirPrefixes(parts.workspace.root, dir),
+      touches,
+      submodules: await submodulePaths(dir),
+    });
+    ignored += verdict.own.length;
+    if (verdict.foreign.length === 0 && verdict.overlapping.length === 0) continue;
+
     const branch = await currentBranch(dir);
-    return { ignored, refusal: {
-      lines: [
-        `[tldrx] build: repo \`${name}\` has ${String(dirty.length)} uncommitted change(s) on ` +
-          `\`${branch}\` — refusing to cut an epic branch from a dirty tree.`,
-        `  ${dirty.slice(0, 5).join(", ")}${dirty.length > 5 ? `, +${String(dirty.length - 5)} more` : ""}`,
-        "  Why: the base pre-flight runs in this checkout, so uncommitted product changes here",
-        "  land inside the measurement that decides whether a red DoD is the story's fault.",
-        "  Commit them, or set them aside and take them back afterwards:",
-        `    git -C ${dir} stash push -u -m "tldrx ${parts.runId} foreign work"`,
-        "    tldrx next",
-        `    git -C ${dir} stash pop`,
-      ],
-      error: `repo \`${name}\` has uncommitted changes`,
-    } };
+    const busy = await operationInProgress(dir);
+    if (busy !== null) {
+      return refuse({
+        lines: [
+          `[tldrx] build: repo \`${name}\` is in the middle of ${busy} on \`${branch}\` — refusing to cut `
+            + "an epic branch, and refusing to stash anything into that state.",
+          `  ${namePaths(entries.map((entry) => entry.entry))}`,
+          `  Finish or abort ${busy} first, then run \`${relaunchCommand(parts.mode, parts.runId)}\`.`,
+        ],
+        error: `repo \`${name}\` is in the middle of ${busy}`,
+      });
+    }
+    if (verdict.overlapping.length > 0) {
+      const paths = verdict.overlapping.map((row) => row.entry.path);
+      const setAside = verdict.foreign.map((entry) => entry.path);
+      return refuse({
+        lines: [
+          `[tldrx] build: repo \`${name}\` has ${String(paths.length)} uncommitted change(s) on `
+            + `\`${branch}\` that a pending story is about to write — refusing to cut an epic branch `
+            + "from a dirty tree.",
+          `  ${namePaths(verdict.overlapping.map((row) => row.entry.entry))}`,
+          ...verdict.overlapping.slice(0, NAMED_PATHS).map((row) => `  · ${row.entry.path}: ${row.why}`),
+          "  Why: the base pre-flight runs in this checkout, so uncommitted product changes here",
+          "  land inside the measurement that decides whether a red DoD is the story's fault.",
+          "  Commit them, or set exactly these paths aside and take them back afterwards:",
+          `    ${stashCommand(dir, parts.runId, paths)}`,
+          `    ${relaunchCommand(parts.mode, parts.runId)}`,
+          `    git -C ${dir} stash pop`,
+          ...(setAside.length === 0
+            ? []
+            : [`  The other ${String(setAside.length)} change(s) here are nobody's story — `
+              + "the engine would have set those aside and given them back itself."]),
+        ],
+        error: `repo \`${name}\` has uncommitted changes a pending story declares`,
+      });
+    }
+    aside.push({ repo: name, repoDir: dir, paths: verdict.foreign.map((entry) => entry.path) });
   }
-  return { refusal: null, ignored };
+  return { refusal: null, ignored, aside };
 }
 
 export function epicRows(

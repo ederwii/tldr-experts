@@ -1202,7 +1202,7 @@ Append-only audit log: the cost ledger, the `replay`/`retro` input, and — with
 **Type enum:** `run.created` `run.closed` `run.unlocked` `run.cancelled` `run.attended` `phase.started` `phase.done` `stage.started` `stage.done` `stage.failed`
 `stage.skipped` `task.started` `task.done` `agent.spawned` `agent.result` `question.asked` `question.answered`
 `gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `gate.policy_changed` `story.reopened` `story.base_fastforwarded` `story.review_retried` `story.work_rescued`
-`story.touches_widened` `result.unreadable` `operator_note` `check.passed` `check.failed` `budget.warned`
+`story.touches_widened` `worktree.foreign_work_aside` `worktree.foreign_work_restored` `result.unreadable` `operator_note` `check.passed` `check.failed` `budget.warned`
 `budget.blocked` `budget.raised` `budget.granted` `fact.added` `fact.retired` `fact.superseded` `fact.conflict_raised` `doc.superseded` `notify.sent` `notify.failed` `map.refreshed` `ticket.synced` `error`. Closed set: an
 unknown type is a validation error.
 
@@ -1259,6 +1259,21 @@ before the worktree was pruned. Its payload carries `phase`, `story`, `repo`, `b
 the status the story settled at. It is appended ONLY when a commit was really made; a rescue that could not commit
 keeps the worktree instead and appends nothing, because nothing happened to git. See §5, "Uncommitted work is never
 pruned".
+
+**`worktree.foreign_work_aside` and `worktree.foreign_work_restored` were added 2026-09-09 (#164).** They are the
+THIRD and fourth events in the enum that record tldrx touching git on the operator's behalf, and they are the pair that
+makes a Build stop being a hostage to somebody else's uncommitted work. Measured across three real workspaces on
+0.14.2: every first engine-driven run reaching Build stopped at `04-build` with `refusing to cut an epic branch from a
+dirty tree`, over seed docs, a data export and one untracked note — none of it anything a story was going to write.
+`worktree.foreign_work_aside` carries `repo`, `paths` (capped at 40 with `paths_omitted` counting the rest — a payload
+that overflowed §2.9's 4 KiB cap would be a stash with no record of itself), `stash_ref` (the stash commit's full sha,
+the only name that survives another stash being pushed beside it) and `reason`.
+`worktree.foreign_work_restored` carries the same identity plus `restored`, and on `restored: false` the `conflicts`,
+the literal `command` an operator retypes and git's own `detail`. The pair is also the restore's MEMORY: a cursor-driven
+Build finishes its stage several `tldrx next` calls after it cut the branch, so the open stashes are read back off this
+log rather than off a field on a session. A stash is never dropped and never force-popped, and a failed restore does not
+change the run's exit code — that code answers for the run's work, not for the operator's tree. See §5, "The dirty-tree
+rule".
 
 **`story.review_retried` was added 2026-09-01 (#78, widened by #79).** It is the one event in the enum whose subject is
 something that did NOT happen: a story's attempt was not spent. A review envelope refused for its **FORMAT** is a fault
@@ -3002,6 +3017,40 @@ move the cursor would be a second facilitator.
 
 **Build executor** (`04-build`, concept §9). `waves.yml` is the schedule and a **story is the unit**; the pipeline over
 one story never varies:
+
+**The dirty-tree rule (rewritten 2026-09-09, #164).** Before anything is cut, every repo the pending stories name is
+read with `git status --porcelain` — tracked modified/staged plus untracked, the definition that has not moved — and
+each path gets one of three verdicts:
+
+| verdict | what it is | what happens |
+| --- | --- | --- |
+| `own` | any path with a `tldrx-work/`, `.tldrx/` or `.agent/` segment | **not dirt.** Never stashed, never a refusal, counted on one stdout line |
+| `overlapping` | a dirty path inside a pending story's `touches:`, or a submodule | **refuses** (exit 2), naming the path and why |
+| `foreign` | everything else | **set aside** and given back |
+
+`own` is tested first and wins outright: a story whose `touches:` reaches into `tldrx-work/` does not make the
+framework's own state stashable. A submodule is `overlapping` because its uncommitted state belongs to another
+repository and a stash in the superproject does not carry it. A repo in the middle of a **merge, rebase, cherry-pick,
+`git am`, revert or bisect** refuses outright and is never stashed into — that state has no clean undo.
+
+`foreign` work is set aside with a **pathspec-limited** `git stash push -u -m "tldrx <run> foreign work" --
+<paths>`, each path passed as `:(literal)<path>` so a name containing a space, a leading dash or a bracket is the file
+that moves and not a glob's worth of neighbours. It is recorded as `worktree.foreign_work_aside` (§2.9) BEFORE the epic
+branch is cut, and popped back when the Build stage ends — on every exit path, success or failure —
+as `worktree.foreign_work_restored`. **Nothing is ever deleted and nothing is ever force-popped**: git refuses a pop
+that would overwrite a path the tree has changed since, aborting whole and keeping the entry, and that refusal is
+recorded `restored: false` with the paths and the literal command, printed as the report's LAST line, carried into the
+handoff's `## Unknowns` (and so into a PR body), and put in the `stage.done` / `run.finished` / `run.failed`
+notification's own `summary` — no new notify kind. The run's exit code does not move for it: that code answers for the
+run's work, not for the operator's tree.
+
+Why the tree has to be clean at the cut at all is the **base pre-flight**, not the worktree: item 3 below runs the
+workspace's gate commands in the repo's own checkout, so an uncommitted product change there sits inside the
+measurement that decides whether a story's red DoD is the story's fault or the base's. The refusal's printed remedy is
+pathspec-limited for a measured reason: on 0.14.2 it printed a bare `git stash push -u`, an owner ran it exactly as
+printed, and it swept the run's own untracked records under `tldrx-work/<run>/` into the stash — after which
+`tldrx next` answered ``no run '<id>' in tldrx-work/``. The relaunch verb in that remedy is chosen by MODE:
+`tldrx run auto <run>` when the engine is driving, `tldrx next` when a person is.
 
 1. **Resolve and cut.** The story's `repo:` must be a `workspace.yml` name (a story is data, and data does not get to
    name a directory); `epic/<slug>` is ensured off that repo's `default_branch`; a worktree is opened at
