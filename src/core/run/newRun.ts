@@ -455,16 +455,44 @@ interface BudgetPlan {
 }
 
 /**
- * Per-phase ceilings are proportional to the stages' declared `budget_usd`, scaled
- * so they fit the run ceiling. Every share is floored to the cent, so the sum can
- * only come in under the ceiling — never over it, which is what §2.11 validates.
+ * The run ceiling, split into a per-STAGE figure and a per-PHASE one — and they
+ * are not the same number.
+ *
+ * **A stage's `budget_usd` is what ONE attempt costs.** It is the figure the
+ * estimate is built from, the figure `budget show` prints, and the figure a
+ * stage file's author wrote down thinking about one pass of the work.
+ *
+ * **A phase's ceiling holds every attempt its stages may take** — `attempts` ×
+ * the stage share, the same way `build/caps.ts worstCaseShares` has always sized
+ * a Build phase against `MAX_ATTEMPTS × (1 + REVIEWER_SHARE)` story shares.
+ *
+ * Before 2026-09-09 a phase was sized for exactly one attempt, so the FIRST
+ * retry of a failed stage was refused by arithmetic rather than by policy.
+ * Measured (gh #170): a `what` stage that died with $0.29 spent left the phase
+ * $18.91 of its $19.20, and `next` refused the retry — "phase 01-what has $18.91
+ * left and the stage estimate is $19.20" — because the estimate it is checked
+ * against is the whole stage and the phase had already been charged part of it.
+ * The operator's only move was to raise money for work that was already paid for
+ * once. A retry the framework grants (`attempts: 2`) and cannot afford is not a
+ * budget, it is a trap.
+ *
+ * The stage figure is therefore UNCHANGED for a given phase ceiling; what grew
+ * is the phase, and the shipped `default_budget_usd` grew with it so that the
+ * per-stage dollars an existing workspace sees stay exactly where they were.
+ *
+ * Every share is floored to the cent, so the phase ceilings can only come in
+ * under the run ceiling — never over it, which is what §2.11 validates.
  */
 export function planBudget(preset: WorkflowPreset, requested: number | undefined): BudgetPlan {
   const ceiling = requested ?? preset.defaultBudgetUsd;
   if (!(ceiling > 0)) throw new NewRunError(`--budget must be > 0, got ${String(requested)}`);
   const declared = preset.stages.reduce((sum, s) => sum + s.budget_usd, 0);
   if (declared <= 0) throw new NewRunError(`workflow '${preset.name}' declares no stage budget`);
-  const factor = ceiling / declared;
+  // Weighted by attempts: a stage allowed three of them claims three shares of
+  // the run ceiling, so raising `attempts:` on one stage does not quietly take
+  // the money out of its siblings.
+  const claimed = preset.stages.reduce((sum, s) => sum + s.attempts * s.budget_usd, 0);
+  const factor = ceiling / claimed;
 
   const perStage = new Map<string, number>();
   const perPhase = new Map<string, number>();
@@ -472,12 +500,14 @@ export function planBudget(preset: WorkflowPreset, requested: number | undefined
   for (const stage of preset.stages) {
     const share = Math.max(MIN_STAGE_BUDGET, floor2(stage.budget_usd * factor));
     perStage.set(stage.id, share);
-    perPhase.set(stage.phase, round2((perPhase.get(stage.phase) ?? 0) + share));
-    total = round2(total + share);
+    const held = round2(share * stage.attempts);
+    perPhase.set(stage.phase, round2((perPhase.get(stage.phase) ?? 0) + held));
+    total = round2(total + held);
   }
   if (total > ceiling + 1e-9) {
     throw new NewRunError(
-      `the ${preset.stages.length} stages of '${preset.name}' need at least $${total.toFixed(2)}; raise --budget above $${ceiling.toFixed(2)}`,
+      `the ${preset.stages.length} stages of '${preset.name}' need at least $${total.toFixed(2)} `
+      + `to hold their attempts; raise --budget above $${ceiling.toFixed(2)}`,
     );
   }
   const perAgentMax = Math.max(...perStage.values());

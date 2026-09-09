@@ -43,6 +43,7 @@ import type { PlannedCheck, PlannedStage } from "../src/core/run/workflowPreset.
 import type { PlannedStory } from "../src/core/build/plan.ts";
 import { clearSrcCaches } from "../src/core/text/index.ts";
 import { makeWorkspace, type TempWorkspace } from "./fixtures/tempWorkspace.ts";
+import { STAGE_TUNING_DEFAULTS } from "../src/core/schemas/stageTuning.ts";
 
 let ws: TempWorkspace | null = null;
 function workspace(): TempWorkspace {
@@ -214,7 +215,7 @@ describe("the gate re-check names the rule that fired", () => {
   function stage(outputs: readonly string[]): PlannedStage {
     return {
       id: "contracts", title: "Contracts", phase: "02-how", model: null, effort: null,
-      experts: [], budget_usd: 1, timeout_s: 60, inputs: [], outputs,
+      experts: [], budget_usd: 1, attempts: STAGE_TUNING_DEFAULTS.attempts, timeout_s: 60, inputs: [], outputs,
       sections: new Map(), gateType: "approve", checks: [CHECK], preconditions: [],
       questionsPath: null, source: "test",
     };

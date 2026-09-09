@@ -160,6 +160,18 @@ export interface RoundParts {
   readonly runDir: string;
   /** Appended to, never replaced — the executor owns the array. */
   readonly lines: string[];
+  /**
+   * The stage's `fixlist_rounds:` (`schemas/stageTuning.ts`). Absent ⇒
+   * `MAX_FIXLIST_ROUNDS`, the shipped 1 — what every call site meant before the
+   * key existed. Data, not a session: the bound belongs to the stage being run,
+   * and this function is handed it rather than reading a constant.
+   */
+  readonly fixlistRounds?: number;
+}
+
+/** `parts.fixlistRounds`, or the shipped default. One place, one decision. */
+export function fixlistRoundsOf(parts: { readonly fixlistRounds?: number }): number {
+  return parts.fixlistRounds ?? MAX_FIXLIST_ROUNDS;
 }
 
 /** `formatRetryDecision`'s input: `RoundParts` plus the envelope being judged. */
@@ -182,6 +194,8 @@ export interface ReviewerPromptParts {
   readonly refusal: string | null;
   /** `spec.stackExperts` — the second of the two switches `## Stack checks` needs. */
   readonly stackExperts: boolean;
+  /** The stage's `fixlist_rounds:`. Absent ⇒ `MAX_FIXLIST_ROUNDS`. */
+  readonly fixlistRounds?: number;
   readonly counters: ReviewCounters;
   readonly focus: RecurringFocus;
   /** Appended to, never replaced. */
@@ -235,7 +249,7 @@ export function reviewerPromptFor(parts: ReviewerPromptParts): string {
     // both doors, which is what keeps the bundle's prompt byte-identical to the
     // one a spawn would have sent.
     fixlistAvailable:
-      parts.counters.fixlistRounds(parts.runDir, parts.story.story.id) < MAX_FIXLIST_ROUNDS,
+      parts.counters.fixlistRounds(parts.runDir, parts.story.story.id) < fixlistRoundsOf(parts),
     // The active packs' checks for this story's repo (stack packs design §4.5), fed
     // straight into the reviewer's prompt. Null when the packs switch is off, which
     // renders nothing.
@@ -319,8 +333,9 @@ export function narrowFixlist(
     );
   }
   if (review.verdict !== "fixlist") return review;
+  const bound = fixlistRoundsOf(parts);
   const spent = counters.fixlistRounds(parts.runDir, storyId);
-  if (spent < MAX_FIXLIST_ROUNDS) {
+  if (spent < bound) {
     // The round is ALLOCATED here, where it is granted — not counted off the
     // ledger later. `recordReview` writes the `verdict: fixlist` event between
     // this and the artifact, so a later re-count would read this very round as
@@ -331,14 +346,14 @@ export function narrowFixlist(
   const previous = latestFixlist(parts.runDir, BUILD_PHASE, storyId);
   parts.lines.push(
     `  · ${storyId}: a SECOND fix-list round was refused — the bound is `
-    + `${String(MAX_FIXLIST_ROUNDS)} per story`
+    + `${String(bound)} per story`
     + (previous === null ? "" : ` (round ${String(previous.round)} is ${previous.rel})`)
     + ", so this review is a full one and its verdict is read as `changes`",
   );
   return {
     ...review,
     verdict: "changes",
-    summary: `a second fix-list round was refused (the bound is ${String(MAX_FIXLIST_ROUNDS)} `
+    summary: `a second fix-list round was refused (the bound is ${String(bound)} `
       + `per story): ${review.summary}`,
     findings: [
       ...review.findings,

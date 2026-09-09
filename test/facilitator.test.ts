@@ -174,7 +174,9 @@ describe("a stage that succeeds", () => {
     expect(prompt).not.toContain("{{");
     expect(prompt).toContain(ws.runId);
     expect(prompt).toContain("api, lab");
-    expect(prompt).toContain("$6.00");
+    // One attempt's ceiling, not the phase's: `alpha` declares `budget_usd: 6`
+    // against a $10 run whose stages claim two attempts each (gh #170).
+    expect(prompt).toContain("$3.00");
     expect(prompt).toContain("Done means proven.");            // {{conventions}}
     expect(prompt).toContain("# Product expert");              // the expert.md body
     expect(prompt).toContain("### `.tldrx/memory/facts.yml`"); // the input, inlined
@@ -255,7 +257,9 @@ describe("refusing to start", () => {
     expect(outcome.lines.join("\n")).toContain("refusing to start stage \"alpha\"");
 
     const blocked = events(ws).find((e) => e.type === "budget.blocked");
-    expect(blocked?.payload).toMatchObject({ phase: "01-what", estimate_usd: 6 });
+    // The estimate is ONE attempt of the stage (gh #170), and `starve` left the
+    // phase $1.00 against it.
+    expect(blocked?.payload).toMatchObject({ phase: "01-what", estimate_usd: 3 });
     // nothing was spawned, so nothing was spent
     expect(RunStore.open(ws.runDir).run.budget.spent_usd).toBe(0);
     expect(types(ws)).not.toContain("agent.spawned");
@@ -491,7 +495,7 @@ describe("in-session mode", () => {
     };
     expect(pending.stage).toBe("alpha");
     expect(pending.outputs).toEqual(["01-what/intent.md", "01-what/handoff.md"]);
-    expect(pending.max_budget_usd).toBe(6);
+    expect(pending.max_budget_usd).toBe(3);
     expect(pending.sections["01-what/intent.md"]).toEqual(["Intent", "Scope"]);
     expect(RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.status).toBe("running");
 
@@ -850,9 +854,19 @@ describe("after a failure", () => {
     expect(prompt).toContain("The previous attempt at this stage FAILED");
   });
 
+  /**
+   * The brake, on a retry the phase GENUINELY cannot afford.
+   *
+   * The phase is starved first, deliberately. Since gh #170 a phase holds
+   * `attempts` (2) of its stage, so an ordinary first retry after a $0.42 failure
+   * is affordable and is no longer refused — that was the trap, and
+   * `test/stage-defaults.test.ts` is the test that it is gone. What must still be
+   * refused is a retry with nothing left behind it, which is what this measures.
+   */
   test("a retry the phase can no longer afford is refused by the budget gate, not run", async () => {
     const ws = workspace(TWO_STAGE);
     await failAlpha(ws, "0.42");
+    starve(ws, "01-what", 1);
 
     delete process.env.FAKE_CLAUDE_IS_ERROR;
     process.env.FAKE_CLAUDE_OUTPUTS = ALPHA_OUTPUTS;

@@ -43,7 +43,7 @@ command. It never blocks and never changes an exit code.
 One budget for ALL the loaded experts together — `knowledge_max_bytes` in `stage.yml`,
 default **48 KB** — split by relevance rank, never one budget each. (A per-expert cap scales
 with a number nobody set: that is how 64 KB became 83,523 measured bytes across nine
-experts.) Declared inputs are filled first, out of `inputs_max_bytes` (96 KB), because an
+experts.) Declared inputs are filled first, out of `inputs_max_bytes` (256 KB), because an
 input the stage declared outranks reference material nobody asked for.
 
 When the budget bites, the cut lands on an H2 boundary — half a bullet is a claim with its

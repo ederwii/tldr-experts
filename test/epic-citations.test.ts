@@ -32,6 +32,7 @@ import { RunStore } from "../src/core/run/RunStore.ts";
 import { loadWorkflowPreset } from "../src/core/run/workflowPreset.ts";
 import { makeFacilitatorWorkspace, type FacilitatorWorkspace } from "./fixtures/facilitator/workspace.ts";
 import { fastestOf, perfBudgetMs, spawnTestTimeout } from "./fixtures/machineLoad.ts";
+import { STAGE_TUNING_DEFAULTS } from "../src/core/schemas/stageTuning.ts";
 
 // Every test here `git init`s a repo and the code under test spawns `git cat-file`,
 // so the budget is the load-aware one: a fixed number would measure the box (#43).
@@ -93,7 +94,7 @@ const CHECK: PlannedCheck = { id: "claim-sources", on: "gate", repo: null, comma
 function stage(outputs: readonly string[]): PlannedStage {
   return {
     id: "contracts", title: "Contracts", phase: "02-how", model: null, effort: null, experts: [],
-    budget_usd: 1, timeout_s: 60, inputs: [], outputs, sections: new Map(), gateType: "approve",
+    budget_usd: 1, attempts: STAGE_TUNING_DEFAULTS.attempts, timeout_s: 60, inputs: [], outputs, sections: new Map(), gateType: "approve",
     checks: [CHECK], preconditions: [], questionsPath: null, source: "test",
   };
 }

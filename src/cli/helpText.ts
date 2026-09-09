@@ -413,6 +413,18 @@ const ENTRIES: readonly CommandHelp[] = [
       { name: "until", arg: "<stage>", meaning: "Stop the loop before this stage rather than at the first human gate.", sub: "auto" },
       { name: "parallel", arg: "<n>", meaning: "How many stories of ONE build wave run at once. `waves.yml` already guarantees a dependency is in an earlier wave, so a wave's stories are independent by construction. Merges into the epic still happen in the wave's listed order, after every story of that wave has finished, and each sub-agent keeps its own budget share. The shipped `stages/build/stage.yml` declares `parallel: 2`, so two at a time is what a workspace overriding nothing gets; the code fallback, for a stage file that declares none, is 1. Overrides the workflow's `build: {parallel: N}` and stage.yml's `parallel:`.", sub: "auto" },
       {
+        name: "prompt-max-bytes",
+        arg: "<n>",
+        meaning: "Passed to EVERY `next` this loop makes: the ceiling on the assembled prompt, over which a stage is refused (exit 2) with the biggest sections named, before a cent is spent. Same precedence as on `tldrx next` \u2014 the flag beats the stage file. Default: the stage's prompt_max_bytes, else 400 KB.",
+        sub: "auto",
+      },
+      {
+        name: "max-reads",
+        arg: "<n>",
+        meaning: "Passed to EVERY `next` this loop makes: how many Read/Glob/Grep calls a sub-agent may complete before it is stopped mid-turn. Same precedence as on `tldrx next` \u2014 the flag beats the stage file. Default: the stage's max_reads (120; 200 on build, 60 on watch).",
+        sub: "auto",
+      },
+      {
         name: "gate-agent",
         arg: null,
         meaning: "When the loop stops for a person, print a DECISION CARD instead of the ordinary status block: the question, its options, the agent's recommendation if an evidence note carried one, and the one command to type. Rendering only \u2014 it never upgrades a stage to `gates_policy: agent`, which is frozen at `run new`.",
@@ -474,6 +486,7 @@ const ENTRIES: readonly CommandHelp[] = [
       'tldrx run gates set build:human --note "the owner wants to read every merge from here"',
       "tldrx run auto --max-usd 15 --until build",
       "tldrx run auto --parallel 3",
+      "tldrx run auto --prompt-max-bytes 500000 --max-reads 300",
       "tldrx run auto --notify-every 10m",
       "tldrx run auto --wait-answers 30m",
       "tldrx run auto --wait-answers 4h --wait-gates 4h",
@@ -554,7 +567,7 @@ const ENTRIES: readonly CommandHelp[] = [
       {
         name: "prompt-max-bytes",
         arg: "<n>",
-        meaning: "Ceiling on the ASSEMBLED PROMPT for this run. Over it the stage is refused (exit 2) with the biggest sections named — before a cent is spent, which is the difference between this and --max-usd. Default: the stage's prompt_max_bytes, else 160 KB.",
+        meaning: "Ceiling on the ASSEMBLED PROMPT for this run. Over it the stage is refused (exit 2) with the biggest sections named — before a cent is spent, which is the difference between this and --max-usd. Default: the stage's prompt_max_bytes, else 400 KB.",
       },
       {
         name: "max-reads",

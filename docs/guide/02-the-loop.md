@@ -36,9 +36,14 @@ The keys a stage may set, and what they do:
 | `experts` | required | Names a stage loads explicitly (rule 1 of three — see [4 — Experts](04-experts.md)) |
 | `stack_experts` | `true` | Also load `<language>-stack` for the run's repos |
 | `knowledge_max_bytes` | 48 KB | Trained knowledge inlined for **all** loaded experts together |
-| `inputs_max_bytes` | 96 KB | Ceiling on the content of every declared input, filled first |
-| `prompt_max_bytes` | 160 KB | Over it the stage is **refused** (exit 2) before anything spawns |
+| `inputs_max_bytes` | 256 KB | Ceiling on the content of every declared input, filled first |
+| `prompt_max_bytes` | 400 KB | Over it the stage is **refused** (exit 2) before anything spawns |
 | `max_reads` | 120 (200 build, 60 watch) | Completed `Read`/`Glob`/`Grep` calls before the sub-agent is stopped |
+| `timeout_s` | 7200 (2 h) | Wall clock for **one sub-agent turn** — never the stage, never the run |
+| `attempts` | 2 | Developer attempts one unit of the stage's work gets before it blocks. The phase ceiling is sized for this many |
+| `fixlist_rounds` | 1 | Fix-list rounds one story gets. A `fixlist` verdict spends no attempt |
+| `reviewer_share` | 0.25 | The reviewer's share of a story's price |
+| `gate_signer_share` | 0.25 | The gate signer's share of the stage ceiling, on an `agent` gate |
 | `dry_run_allowed` | `true` | `false` refuses `tldrx next --dry-run` on this stage |
 | `gate.type` | required | `approve` \| `checks` \| `auto` |
 | `checks` | none | The list that is actually enforced, re-run off disk by `tldrx approve` |

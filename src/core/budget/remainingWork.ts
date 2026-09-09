@@ -81,11 +81,12 @@ import { buildProgress, BUILD_PHASE, PLAN_DIR } from "../run/buildProgress.ts";
 import { loadPlanPrices } from "../build/plan.ts";
 import { looksLikeReviewerError } from "../build/review.ts";
 import { DEFAULT_ECONOMY, type Economy } from "./RunBudget.ts";
+import { STAGE_TUNING_DEFAULTS } from "../schemas/stageTuning.ts";
 
 /** Mirrors `build.ts`. See the module header for why, and the test that guards it. */
-export const MAX_ATTEMPTS = 2;
+export const MAX_ATTEMPTS = STAGE_TUNING_DEFAULTS.attempts;
 /** Mirrors `build.ts`. */
-export const REVIEWER_SHARE = 0.25;
+export const REVIEWER_SHARE = STAGE_TUNING_DEFAULTS.reviewerShare;
 /** Mirrors `build.ts`. */
 export const REVIEWER_FLOOR_USD = 1.00;
 
@@ -93,8 +94,12 @@ export const REVIEWER_FLOOR_USD = 1.00;
  * Mirrors `build.ts`'s `developerPriceDivisor` (gh #91). The reason for the
  * duplication, and the test that keeps it honest, are in the module header.
  */
-export function developerPriceDivisor(attempt: number): number {
-  return attempt <= 1 ? 1 + REVIEWER_SHARE : MAX_ATTEMPTS * (1 + REVIEWER_SHARE);
+export function developerPriceDivisor(
+  attempt: number,
+  attempts: number = MAX_ATTEMPTS,
+  reviewerShare: number = REVIEWER_SHARE,
+): number {
+  return attempt <= 1 ? 1 + reviewerShare : attempts * (1 + reviewerShare);
 }
 
 /** How many stories the refusal message names before it starts counting. */
@@ -182,6 +187,15 @@ export interface RemainingWorkInput {
    * of `RunStore` on purpose.
    */
   readonly attended?: boolean;
+  /**
+   * The stage's `attempts:` and `reviewer_share:` (`schemas/stageTuning.ts`),
+   * passed IN for the same reason `economy` and `attended` are: this module is
+   * on the PreToolUse hook's hot path and does not open `stage.yml` itself.
+   * Absent ⇒ the shipped defaults, which is what every caller meant before the
+   * keys existed.
+   */
+  readonly attempts?: number;
+  readonly reviewerShare?: number;
 }
 
 /**
@@ -262,6 +276,7 @@ function measure(input: RemainingWorkInput): RemainingWork {
     : loadPlanPrices(join(input.runDir, PLAN_DIR), ids).prices;
 
   const verdicts = reviewVerdictsByStory(input.runDir);
+  const attempts = input.attempts ?? MAX_ATTEMPTS;
   const caps = new CapMath(input, prices, all.length);
 
   const stories: RemainingStory[] = [];
@@ -273,7 +288,7 @@ function measure(input: RemainingWorkInput): RemainingWork {
       blocked.push(story.id);
       continue;
     }
-    const attemptsLeft = Math.max(MAX_ATTEMPTS - (verdicts.get(story.id) ?? 0), 0);
+    const attemptsLeft = Math.max(attempts - (verdicts.get(story.id) ?? 0), 0);
     if (attemptsLeft === 0) continue;
     // The developer turn of the attempt now under review is already spent: the
     // diff is on the branch and only a `changes` verdict buys another one.
@@ -281,7 +296,7 @@ function measure(input: RemainingWorkInput): RemainingWork {
     // The turns still to dispatch are the LAST `developerTurns` of the story's
     // run of attempts, so a story with one attempt behind it is priced as the
     // attempt 2 it is about to become — not as a fresh attempt 1 (gh #91).
-    const firstTurn = MAX_ATTEMPTS - developerTurns + 1;
+    const firstTurn = attempts - developerTurns + 1;
     const developerCapsUsd = Array.from(
       { length: developerTurns },
       (_unused, i) => (hostPaysDeveloper ? 0 : caps.developer(story.id, firstTurn + i)),
@@ -416,14 +431,17 @@ class CapMath {
   developer(storyId: string, attempt: number): number {
     const price = this.priceOf(storyId);
     if (price === null) return this.agentCap(1 / this.worstCaseShares());
-    return this.agentCap(this.shareOf(price / developerPriceDivisor(attempt)));
+    return this.agentCap(this.shareOf(
+      price / developerPriceDivisor(attempt, this.attempts(), this.reviewerShare()),
+    ));
   }
 
   reviewer(storyId: string): number {
     const price = this.priceOf(storyId);
+    const share = this.reviewerShare();
     const derived = price === null
-      ? this.agentCap(REVIEWER_SHARE / this.worstCaseShares())
-      : this.agentCap(this.shareOf(price * REVIEWER_SHARE / (MAX_ATTEMPTS * (1 + REVIEWER_SHARE))));
+      ? this.agentCap(share / this.worstCaseShares())
+      : this.agentCap(this.shareOf(price * share / (this.attempts() * (1 + share))));
     const floor = Math.min(
       REVIEWER_FLOOR_USD,
       Math.max(this.input.stageBudgetUsd - this.input.stageSpentUsd, 0),
@@ -441,8 +459,16 @@ class CapMath {
     return this.input.stageBudgetUsd <= 0 ? 1 : usd / this.input.stageBudgetUsd;
   }
 
+  private attempts(): number {
+    return this.input.attempts ?? MAX_ATTEMPTS;
+  }
+
+  private reviewerShare(): number {
+    return this.input.reviewerShare ?? REVIEWER_SHARE;
+  }
+
   private worstCaseShares(): number {
-    return Math.max(this.storyCount, 1) * MAX_ATTEMPTS * (1 + REVIEWER_SHARE);
+    return Math.max(this.storyCount, 1) * this.attempts() * (1 + this.reviewerShare());
   }
 
   /** `runNext.agentCap`, with the same three candidates and the same rounding. */

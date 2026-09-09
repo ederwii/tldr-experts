@@ -10,21 +10,27 @@
  * the spend end up on different attempts.
  */
 import { MAX_STORIES_PER_WAVE } from "../schemas/planCommon.ts";
+import { STAGE_TUNING_DEFAULTS } from "../schemas/stageTuning.ts";
 
 /**
  * A story gets one developer attempt, plus one more if the reviewer asks for
  * changes. A second `changes` blocks it — a third try is an operator's decision,
  * not the framework's.
+ *
+ * The DEFAULT, since 2026-09-09: a stage may say `attempts: N` and every read
+ * site below takes it from `CapParts` instead (`schemas/stageTuning.ts`).
  */
-export const MAX_ATTEMPTS = 2;
+export const MAX_ATTEMPTS = STAGE_TUNING_DEFAULTS.attempts;
 
 /**
  * `[assumption]` — the brief splits the stage budget "by story count", which is the
  * DEVELOPER's share; the reviewer needs its own and the spec never sizes one. A
  * quarter of a story's share reads a diff comfortably and cannot quietly double
  * the phase's cost.
+ *
+ * The DEFAULT: a stage may say `reviewer_share: N` (`schemas/stageTuning.ts`).
  */
-export const REVIEWER_SHARE = 0.25;
+export const REVIEWER_SHARE = STAGE_TUNING_DEFAULTS.reviewerShare;
 
 /**
  * The least a reviewer may be given, whatever the arithmetic says.
@@ -81,8 +87,12 @@ export const REVIEWER_FLOOR_USD = 1.00;
  * already opens by design, and `remainingWork` still clamps the brake's estimate
  * to the stage's own price so it can never refuse more often than it used to.
  */
-export function developerPriceDivisor(attempt: number): number {
-  return attempt <= 1 ? 1 + REVIEWER_SHARE : MAX_ATTEMPTS * (1 + REVIEWER_SHARE);
+export function developerPriceDivisor(
+  attempt: number,
+  attempts: number = MAX_ATTEMPTS,
+  reviewerShare: number = REVIEWER_SHARE,
+): number {
+  return attempt <= 1 ? 1 + reviewerShare : attempts * (1 + reviewerShare);
 }
 
 /**
@@ -121,6 +131,25 @@ export interface CapParts {
   readonly maxBudgetUsd: number;
   /** `ctx.agentCap` — the executor's own capper, passed, never re-implemented. */
   readonly agentCap: (share?: number) => number;
+  /**
+   * The stage's `attempts:` and `reviewer_share:`, RESOLVED
+   * (`schemas/stageTuning.ts`). Passed as DATA rather than read off a constant
+   * so the arithmetic here answers for the stage it is capping — the house rule
+   * an extracted function follows. Absent ⇒ the shipped defaults, which is what
+   * every call site meant before the keys existed.
+   */
+  readonly attempts?: number;
+  readonly reviewerShare?: number;
+}
+
+/** `parts.attempts`, or the default. One place, so no call site re-decides. */
+export function attemptsOf(parts: CapParts): number {
+  return parts.attempts ?? MAX_ATTEMPTS;
+}
+
+/** `parts.reviewerShare`, or the default. */
+export function reviewerShareOf(parts: CapParts): number {
+  return parts.reviewerShare ?? REVIEWER_SHARE;
 }
 
 /** The one `round2` — every other module imports this instead of redefining it. */
@@ -153,7 +182,10 @@ export function round2(n: number): number {
 export function developerCap(parts: CapParts, storyId?: string, attempt = 1): number {
   const price = priceOf(parts, storyId);
   if (price === null) return parts.agentCap(1 / worstCaseShares(parts));
-  return parts.agentCap(shareOf(parts, price / developerPriceDivisor(attempt)));
+  return parts.agentCap(shareOf(
+    parts,
+    price / developerPriceDivisor(attempt, attemptsOf(parts), reviewerShareOf(parts)),
+  ));
 }
 
 /**
@@ -167,9 +199,10 @@ export function developerCap(parts: CapParts, storyId?: string, attempt = 1): nu
  */
 export function reviewerCap(parts: CapParts, spentUsd: number, storyId?: string): number {
   const price = priceOf(parts, storyId);
+  const share = reviewerShareOf(parts);
   const derived = price === null
-    ? parts.agentCap(REVIEWER_SHARE / worstCaseShares(parts))
-    : parts.agentCap(shareOf(parts, price * REVIEWER_SHARE / (MAX_ATTEMPTS * (1 + REVIEWER_SHARE))));
+    ? parts.agentCap(share / worstCaseShares(parts))
+    : parts.agentCap(shareOf(parts, price * share / (attemptsOf(parts) * (1 + share))));
   const floor = Math.min(REVIEWER_FLOOR_USD, Math.max(parts.budgetUsd - spentUsd, 0));
   return round2(Math.min(Math.max(derived, floor), parts.maxBudgetUsd));
 }
@@ -213,5 +246,5 @@ export function shareOf(parts: CapParts, usd: number): number {
  * of every uniform cap the executor can hand out ≤ the stage ceiling.
  */
 export function worstCaseShares(parts: CapParts): number {
-  return Math.max(parts.storyCount, 1) * MAX_ATTEMPTS * (1 + REVIEWER_SHARE);
+  return Math.max(parts.storyCount, 1) * attemptsOf(parts) * (1 + reviewerShareOf(parts));
 }

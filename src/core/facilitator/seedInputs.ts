@@ -25,14 +25,13 @@
  * passes is not a budget; it is two budgets pointed away from each other.
  *
  * So the declared inputs are now filled FIRST, out of `inputs_max_bytes`
- * (§2.3, default 98304), and the experts share `knowledge_max_bytes` TOTAL
+ * (§2.3, default 262144), and the experts share `knowledge_max_bytes` TOTAL
  * between them afterwards. Anything the inputs budget still could not fit is
  * named on stdout AND on the page, with the key that would fix it — a truncated
  * input is a fact about the run, not a detail of the renderer.
  *
- * `[assumption]` — the spec sets no inline budget, and 96 KB is not measured. It
- * is the smallest round number above the 77,987 B of declared inputs the aparece
- * regression fixture carries, which is a real seed for a real run.
+ * The default the two ceilings start from is on `DEFAULT_INPUTS_MAX_BYTES`
+ * below, with the measurement that set it.
  */
 import { readFileSync, statSync } from "node:fs";
 import { resolveDeclared, type PathContext } from "./paths.ts";
@@ -40,10 +39,21 @@ import { MAX_STAGE_INPUTS } from "../run/workflowPreset.ts";
 import type { PromptInput } from "./prompt.ts";
 
 /**
- * `[assumption]` — the shared ceiling on ALL declared inputs (§2.3
- * `inputs_max_bytes`). Was 64 KB and applied to seed documents alone.
+ * The shared ceiling on ALL declared inputs (§2.3 `inputs_max_bytes`): 256 KB.
+ *
+ * Was 64 KB and applied to seed documents alone, then 96 KB across every
+ * declared input. **Measured 2026-09-07/09 across three real workspaces**: a
+ * 169 KB `facts.yml` was silently sliced down to 96 KB, and a truncated facts
+ * file is the one input where losing the tail loses the evidence a later stage
+ * cites. The truncation was NAMED, as it always is — but naming a loss the
+ * operator cannot afford is not the same as not taking it.
+ *
+ * `[assumption]` — the spec sets no inline budget, and 256 KB is not measured.
+ * It is the smallest round number above the largest declared-input set these
+ * runs have produced, and it stays below `DEFAULT_PROMPT_MAX_BYTES` so the
+ * inputs alone can never be the whole prompt.
  */
-export const DEFAULT_INPUTS_MAX_BYTES = 96 * 1024;
+export const DEFAULT_INPUTS_MAX_BYTES = 256 * 1024;
 
 /** Kept as the old name for the old number; nothing in `src/` reads it any more. */
 export const MAX_SEED_INLINE_BYTES = 64 * 1024;

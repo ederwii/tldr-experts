@@ -21,6 +21,7 @@ import { DEFAULT_KNOWLEDGE_MAX_BYTES } from "../experts/expertKnowledge.ts";
 import { DEFAULT_INPUTS_MAX_BYTES } from "./seedInputs.ts";
 import { DEFAULT_PROMPT_MAX_BYTES } from "./contextLedger.ts";
 import { defaultMaxReads } from "./readCap.ts";
+import { readStageTuning, type StageTuning } from "../schemas/stageTuning.ts";
 
 /** Spec §2.3 default when `stage.yml` is silent. */
 export const DEFAULT_STACK_EXPERTS = true;
@@ -110,6 +111,17 @@ export interface StageSpec {
    * safe and always misses.
    */
   readonly reviewerByStakes: Readonly<Record<string, ReviewerOverride>>;
+  /**
+   * `attempts`, `fixlist_rounds`, `reviewer_share`, `gate_signer_share` — the
+   * four Build calibrations, resolved (`schemas/stageTuning.ts`). Absent keys
+   * carry `STAGE_TUNING_DEFAULTS`, which is the number the code shipped before
+   * the keys existed, so a stage file that says none of them changes nothing.
+   *
+   * `attempts` is read off `planned` rather than re-parsed here: `run new`'s
+   * phase split needs the same number and `PlannedStage` is where it already
+   * lives, so there is exactly one place that turns `attempts:` into a value.
+   */
+  readonly tuning: StageTuning;
   readonly dryRunAllowed: boolean;
   /** From the WORKFLOW entry (spec §2.4), not from stage.yml. */
   readonly skipIf: string | null;
@@ -122,11 +134,13 @@ export function loadStageSpec(root: string, scope: string, stageId: string): Sta
   if (planned === undefined) {
     throw new PresetError(`stage '${stageId}' is not in workflow '${preset.name}' (${preset.source})`);
   }
+  const over = overlay(root, scope, stageId);
   return {
     planned,
     scope: preset.name,
     skips: preset.skips,
-    ...overlay(root, scope, stageId),
+    ...over,
+    tuning: { ...over.tuning, attempts: planned.attempts },
     ...inputSplit(root, stageId),
   };
 }
@@ -149,6 +163,7 @@ function overlay(
   parallel: number | null;
   reviewer: ReviewerOverride | null;
   reviewerByStakes: Readonly<Record<string, ReviewerOverride>>;
+  tuning: StageTuning;
   dryRunAllowed: boolean;
   skipIf: string | null;
   questionsMax: number | null;
@@ -177,6 +192,7 @@ function overlay(
     parallel: parallelKey(workflowDoc, stageId) ?? byteKey(stageDoc, "parallel"),
     reviewer: reviewerOverride(isRecord(stageDoc) ? stageDoc.reviewer : undefined),
     reviewerByStakes: reviewerByStakesMap(isRecord(stageDoc) ? stageDoc.reviewer_by_stakes : undefined),
+    tuning: readStageTuning(stageDoc),
     dryRunAllowed: isRecord(stageDoc) && typeof stageDoc.dry_run_allowed === "boolean"
       ? stageDoc.dry_run_allowed
       : DEFAULT_DRY_RUN_ALLOWED,

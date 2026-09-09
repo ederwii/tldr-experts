@@ -27,6 +27,7 @@ import { FactsStore } from "../src/core/facts/FactsStore.ts";
 import { classifySrc, clearSrcCaches, resolveSrc, type SrcRef } from "../src/core/text/srcToken.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../src/hooks/lib/workspace.ts";
 import { makeRunWorkspace, type TempRunWorkspace } from "./fixtures/tempRunWorkspace.ts";
+import { STAGE_TUNING_DEFAULTS } from "../src/core/schemas/stageTuning.ts";
 
 const RUN_ID = "260909-cache-freshness";
 
@@ -71,6 +72,7 @@ function stageFor(id: string, phase: string, outputs: readonly string[]): Planne
     effort: null,
     experts: [],
     budget_usd: 5,
+    attempts: STAGE_TUNING_DEFAULTS.attempts,
     timeout_s: 30,
     inputs: [],
     outputs: [...outputs],

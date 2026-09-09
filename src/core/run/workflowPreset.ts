@@ -22,13 +22,31 @@ import {
   EFFORT_LEVELS, isEffortLevel, MAX_PRECONDITIONS, PRECONDITION_TIMEOUT_S, type EffortLevel,
 } from "../schemas/stage.ts";
 import { allowlistIssue } from "../schemas/commandAllowlist.ts";
+import { readStageTuning } from "../schemas/stageTuning.ts";
 import { loadWorkspace } from "../../hooks/lib/workspace.ts";
 
 /** The five phase folders of spec §1, in order. A numeric `phase:` indexes this. */
 export const PHASE_IDS = ["01-what", "02-how", "03-plan", "04-build", "05-watch"] as const;
 
 const PHASE_SEGMENT_RE = /^0[1-5]-[a-z]+$/;
-export const DEFAULT_TIMEOUT_S = 900;
+/**
+ * Seconds ONE sub-agent turn gets — never the run, never the stage as a whole.
+ * A Build stage that dispatches six stories gets this per story spawn; a `next`
+ * that re-prepares gets a fresh one each time.
+ *
+ * **Measured 2026-09-07/09, three real workspaces, a week of unattended runs.**
+ * The old 900 s killed a `how` turn (gh #207) and two Build developer turns in
+ * one day. Opus turns on real repositories run 15-50 minutes: a quarter of an
+ * hour is under the MEDIAN of the work this framework dispatches, so the timeout
+ * was not a safety net, it was the most common way a turn ended. Two hours is
+ * set above the longest turn observed, so the next turn to hit it is genuinely
+ * stuck rather than merely large.
+ *
+ * It is a per-turn bound and nothing else guards the wall clock: `run auto`'s
+ * loop is bounded by money (`--max-usd`, the phase ceilings) and by the operator,
+ * not by this number.
+ */
+export const DEFAULT_TIMEOUT_S = 7200;
 /** Spec §2.3 validation: "≤20 inputs". Counted where inputs are DECLARED and where they are INLINED. */
 export const MAX_STAGE_INPUTS = 20;
 
@@ -68,6 +86,14 @@ export interface PlannedStage {
   readonly effort: EffortLevel | null;
   readonly experts: readonly string[];
   readonly budget_usd: number;
+  /**
+   * `attempts:` — developer attempts one unit of this stage's work gets before
+   * it blocks (§2.3). Absent ⇒ `STAGE_TUNING_DEFAULTS.attempts`. Read here
+   * because the money split needs it: a phase that can be asked for two attempts
+   * and was sized for one refuses its own retry (gh #170).
+   */
+  readonly attempts: number;
+  /** Seconds ONE sub-agent turn gets. Never the stage, never the run. */
   readonly timeout_s: number;
   readonly inputs: readonly string[];
   readonly outputs: readonly string[];
@@ -235,6 +261,10 @@ function loadStage(
     effort: normaliseEffort(overrides.effort ?? doc.effort, path),
     experts,
     budget_usd: budget,
+    // The stage's own `attempts:`, needed HERE rather than only in the
+    // facilitator's overlay because `run new`'s phase split has to size a phase
+    // for the attempts its stages may take (`newRun.planBudget`).
+    attempts: readStageTuning(doc).attempts,
     timeout_s: typeof doc.timeout_s === "number" ? doc.timeout_s : DEFAULT_TIMEOUT_S,
     inputs: normaliseInputs(doc.inputs),
     outputs,

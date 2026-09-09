@@ -107,10 +107,27 @@ export function priceFor(model: string | null): ModelPrice | null {
  * `priceFor` goes on refusing, so nothing bills a model the table cannot price.
  */
 export function contextTokensFor(model: string | null): number {
+  return knownContextTokensFor(model) ?? DEFAULT_CONTEXT_TOKENS;
+}
+
+/**
+ * The same window, but NULL when this table has no evidence for it — the
+ * absent-with-reason form of `contextTokensFor`.
+ *
+ * The two are one derivation: `contextTokensFor` is this function plus the
+ * documented fallback. They are separate entry points because their callers want
+ * opposite things from an unknown model. A caller sizing an estimate wants a
+ * number and says it assumed one. A caller PRINTING a sentence about the window
+ * does not: "44k tok, 29% of a ~200.0k window" was printed for a model whose
+ * window this table has never known, and it was wrong by 5x — the refusal it
+ * accompanied argued against itself. Nothing may quote a window this file cannot
+ * source, for the same reason `priceFor` quotes no price it cannot source.
+ */
+export function knownContextTokensFor(model: string | null): number | null {
   const priced = priceFor(model);
   if (priced !== null) return priced.contextTokens;
   if (model !== null && model.toLowerCase().includes(ONE_MILLION_MARKER)) return ONE_MILLION_TOKENS;
-  return DEFAULT_CONTEXT_TOKENS;
+  return null;
 }
 
 export function estimateTokensFromBytes(bytes: number): number {

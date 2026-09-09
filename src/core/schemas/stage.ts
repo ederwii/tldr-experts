@@ -4,6 +4,7 @@ import {
   requireString, result, type ValidationIssue, type ValidationResult,
 } from "./validation.ts";
 import { STORY_STAKES } from "./planCommon.ts";
+import { validateStageTuning } from "./stageTuning.ts";
 
 export const GATE_TYPES = ["human-approval", "checks-green", "none"] as const;
 export type GateType = (typeof GATE_TYPES)[number];
@@ -182,6 +183,10 @@ export function validateStage(input: unknown): ValidationResult {
   }
   validatePreconditions(doc.preconditions, issues);
   validateReviewerOverrides(doc.reviewer, doc.reviewer_by_stakes, issues);
+  // The four optional calibration keys (`attempts`, `fixlist_rounds`,
+  // `reviewer_share`, `gate_signer_share`). Absent is the normal case and says
+  // nothing; present and out of range is refused BY NAME, never clamped.
+  validateStageTuning(doc, issues);
   return result(issues);
 }
 

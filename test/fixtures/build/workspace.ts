@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FRAMEWORK_ROOT } from "../../../src/core/paths.ts";
 import { createRun } from "../../../src/core/run/newRun.ts";
+import { STAGE_TUNING_DEFAULTS } from "../../../src/core/schemas/stageTuning.ts";
 
 export const FAKE_BUILD_CLAUDE = join(FRAMEWORK_ROOT, "test", "fixtures", "build", "fakeClaude.ts");
 
@@ -87,6 +88,12 @@ export interface BuildWorkspaceOptions {
   readonly reviewer?: { readonly model?: string; readonly effort?: string };
   /** `reviewer_by_stakes:` in the STAGE yaml, keyed by a story's `stakes:`. */
   readonly reviewerByStakes?: Readonly<Record<string, { readonly model?: string; readonly effort?: string }>>;
+  /**
+   * `attempts:` in the STAGE yaml. Omitted ⇒ the key is ABSENT from stage.yml
+   * entirely, which is the shape every shipped stage has and the one the
+   * byte-identical golden is asserted against.
+   */
+  readonly attempts?: number;
   /**
    * `--gates <stages|all|none>` — which stages a HUMAN must sign. `"none"` makes
    * the build stage `auto`, which is the only way to exercise the auto gate's
@@ -162,10 +169,11 @@ export function makeBuildWorkspace(options: BuildWorkspaceOptions): BuildWorkspa
   write(root, ".tldrx/conventions/shared.md", "# Shared conventions\n\n- Done means proven.\n");
   write(root, ".tldrx/experts/developer/expert.md", "# Developer\n\nSmall diffs, tests first.\n");
   const scope = options.scope ?? "build-only";
-  write(root, `.tldrx/workflows/${scope}.yml`, workflowYaml(scope, options.skips ?? []));
+  write(root, `.tldrx/workflows/${scope}.yml`, workflowYaml(scope, options.skips ?? [], options.budgetUsd ?? 8));
   write(root, ".tldrx/stages/build/stage.yml", stageYaml(options.budgetUsd ?? 8, options.stackExperts ?? false, {
     ...(options.reviewer === undefined ? {} : { reviewer: options.reviewer }),
     ...(options.reviewerByStakes === undefined ? {} : { reviewerByStakes: options.reviewerByStakes }),
+    ...(options.attempts === undefined ? {} : { attempts: options.attempts }),
   }));
   write(root, ".tldrx/stages/build/stage.md", "# Build\n\n## Role\nThe wave executor runs this stage.\n");
   for (const [rel, content] of Object.entries(options.files ?? {})) write(root, rel, content);
@@ -182,7 +190,13 @@ export function makeBuildWorkspace(options: BuildWorkspaceOptions): BuildWorkspa
     root,
     slug: "build",
     scope,
-    budgetUsd: options.budgetUsd ?? 8,
+    // `budgetUsd` here is the STAGE's money, which is what every test in this
+    // family reasons about — a ceiling, a cap, a story's share. Since 2026-09-09
+    // a phase holds `attempts` of those (gh #170), so the RUN ceiling handed to
+    // `createRun` is that many times the stage figure and `planBudget` gives the
+    // stage back exactly `options.budgetUsd`. Without the multiplier every
+    // fixture's stage share would silently halve.
+    budgetUsd: (options.budgetUsd ?? 8) * (options.attempts ?? STAGE_TUNING_DEFAULTS.attempts),
     repos: [repoName],
     gates: options.gates,
     ...(options.seed === undefined ? {} : { seed: options.seed }),
@@ -269,7 +283,7 @@ export function addBuildRun(ws: BuildWorkspace, options: SecondRunOptions): {
     root: ws.root,
     slug: options.slug ?? "second",
     scope: "build-only",
-    budgetUsd: options.budgetUsd ?? 8,
+    budgetUsd: (options.budgetUsd ?? 8) * STAGE_TUNING_DEFAULTS.attempts,
     repos: [ws.repoName],
     actor: "alan",
     now: options.now ?? new Date("2026-08-30T09:00:00Z"),
@@ -287,21 +301,22 @@ export function addBuildRun(ws: BuildWorkspace, options: SecondRunOptions): {
   return { runId: outcome.runId, runDir: outcome.runDir, planDir };
 }
 
-function workflowYaml(scope: string, skips: readonly string[]): string {
+function workflowYaml(scope: string, skips: readonly string[], budgetUsd = 8): string {
   return `version: 1
 name: ${scope}
 title: "One Build stage, for the executor's tests"
 depth: minimal
-default_budget_usd: 8
+default_budget_usd: ${String(budgetUsd * STAGE_TUNING_DEFAULTS.attempts)}
 skips: [${skips.join(", ")}]
 stages:
-  - {id: build, phase: "04-build", budget_usd: 8}
+  - {id: build, phase: "04-build", budget_usd: ${String(budgetUsd)}}
 `;
 }
 
 interface ReviewerYaml {
   readonly reviewer?: { readonly model?: string; readonly effort?: string };
   readonly reviewerByStakes?: Readonly<Record<string, { readonly model?: string; readonly effort?: string }>>;
+  readonly attempts?: number;
 }
 
 /** `{model: opus, effort: high}` — flow style, so a caller can nest it anywhere. */
@@ -320,6 +335,7 @@ function stageYaml(budgetUsd: number, stackExperts = false, reviewer: ReviewerYa
       "reviewer_by_stakes:",
       ...Object.entries(reviewer.reviewerByStakes).map(([k, v]) => `  ${k}: ${overrideFlow(v)}`),
     ]),
+    ...(reviewer.attempts === undefined ? [] : [`attempts: ${String(reviewer.attempts)}`]),
   ];
   return `${blocks.length === 0 ? "" : `${blocks.join("\n")}\n`}version: 1
 id: build

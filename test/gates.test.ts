@@ -288,7 +288,10 @@ describe("an auto gate that holds", () => {
     expect(alpha?.gate.by).toBe(AUTO_GATE_ACTOR);
     expect(alpha?.gate.at).not.toBeNull();
     expect(alpha?.gate.note).toContain("questions=0 open");
-    expect(alpha?.gate.note).toContain("budget=$0.42 of $6.00 stage");
+    // $3.00 stage inside a $6.00 phase, not $6.00 of $6.00: since gh #170 the
+    // phase holds `attempts` (2) of the stage share, and the stage figure is what
+    // ONE attempt costs. The note names both, which is the point of the pair.
+    expect(alpha?.gate.note).toContain("budget=$0.42 of $3.00 stage, phase 01-what $0.42 of $6.00");
     expect(alpha?.gate.note).toContain("status=awaiting_gate");
     expect(alpha?.gate.note).toContain("claim-sources=passed");
     expect(store.run.cursor).toMatchObject({ phase: "02-how", stage: "beta" });
@@ -452,7 +455,8 @@ describe("a refused auto gate falls back to the human one", () => {
 
     const outcome = await next(ws);
     expect(outcome.code).toBe(4);
-    expect(outcome.lines.join("\n")).toContain("auto gate not taken — budget=$9.99 of $6.00 stage");
+    expect(outcome.lines.join("\n"))
+      .toContain("auto gate not taken — budget=$9.99 of $3.00 stage, phase 01-what $9.99 of $6.00");
     expect(RunStore.open(ws.runDir).run.phases[0]?.stages[0]?.gate.status).toBe("pending");
   });
 

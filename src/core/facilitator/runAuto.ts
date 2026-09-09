@@ -82,6 +82,18 @@ export interface AutoOptions {
   readonly yolo: boolean;
   /** `--parallel N`, passed through to every `next` the loop makes. */
   readonly parallel?: number;
+  /**
+   * `--prompt-max-bytes N` and `--max-reads N`, passed through to every `next`
+   * the loop makes, with the SAME precedence they have there: the flag beats the
+   * stage file (gh #208).
+   *
+   * They are passthroughs rather than loop settings, which is why they carry no
+   * arithmetic here. Before this, the only way to raise either for an unattended
+   * run was to edit `.tldrx/stages/<id>/stage.yml` — a file change, in the
+   * workspace, to get past one refusal.
+   */
+  readonly promptMaxBytes?: number;
+  readonly maxReads?: number;
   readonly actor: string;
   readonly at: string;
   /**
@@ -433,6 +445,8 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
         effort: options.effort,
         yolo: options.yolo,
         parallel: options.parallel,
+        promptMaxBytes: options.promptMaxBytes,
+        maxReads: options.maxReads,
         actor: options.actor,
         at: options.at,
       });
