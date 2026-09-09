@@ -25,7 +25,7 @@
  * inside it, and the only process spawned is that script and the fake `claude`.
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 import { validateWorkspace } from "../src/core/schemas/workspace.ts";
@@ -37,7 +37,7 @@ import { approve, reject } from "../src/core/run/gates.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import type { TldrxEvent } from "../src/core/events/Event.ts";
 import { parseYaml } from "../src/core/yaml.ts";
-import { WORKSPACE_YML } from "./fixtures/tempRunWorkspace.ts";
+import { deliveredTo, writeNotifier, workspaceYamlWithNotify } from "./fixtures/facilitator/notifier.ts";
 import {
   cannedHandoff, cannedIntent, makeFacilitatorWorkspace, type FacilitatorWorkspace, type StageOptions,
 } from "./fixtures/facilitator/workspace.ts";
@@ -88,50 +88,6 @@ const ANSWERED = QUESTIONS
   .replace("status: open", "status: answered")
   .replace("[Answer]:", "[Answer]: B\n<!-- answered_by: alan | answered_at: 2026-08-30T10:00:00Z -->");
 
-/**
- * A notifier that appends its whole stdin to `<root>/notified.jsonl`, one JSON per line,
- * and exits with `exitCode`.
- *
- * A real script on disk, executed as argv — not a shell string the framework assembled.
- * The declaration below names its absolute path, which is what an owner's own
- * `slack-say` wrapper would be.
- */
-function writeNotifier(root: string, exitCode = 0): string {
-  // Node, reached by absolute path, exactly the way the fixture's fake `claude` is: these
-  // tests put ONLY the fake bin directory on PATH, so a notifier written as a shell script
-  // calling `cat` would depend on whether the host's `sh` happens to find one. It measured
-  // differently in two tests of this very file, which is the instrument being wrong about
-  // the thing under test.
-  const impl = join(root, "notifier.js");
-  writeFileSync(
-    impl,
-    [
-      "const chunks = [];",
-      "process.stdin.on('data', (c) => chunks.push(c));",
-      "process.stdin.on('end', () => {",
-      "  require('node:fs').appendFileSync(process.argv[2], Buffer.concat(chunks).toString('utf8') + '\\n');",
-      `  process.exit(${String(exitCode)});`,
-      "});",
-      "",
-    ].join("\n"),
-    "utf8",
-  );
-  const path = join(root, "notifier.sh");
-  writeFileSync(
-    path,
-    `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(impl)} "$@"\n`,
-    "utf8",
-  );
-  chmodSync(path, 0o755);
-  return path;
-}
-
-/** `.tldrx/workspace.yml` with a `notify:` block appended to the shared fixture. */
-function workspaceYamlWithNotify(command: string, events?: readonly string[]): string {
-  const list = events === undefined ? "" : `\n  events: [${events.join(", ")}]`;
-  return `${WORKSPACE_YML}notify:\n  command: "${command}"${list}\n`;
-}
-
 interface Made extends FacilitatorWorkspace {
   readonly outbox: string;
 }
@@ -172,11 +128,7 @@ function auto(ws: Made, overrides: Partial<AutoOptions> = {}): Promise<{ code: n
 }
 
 function delivered(ws: Made): readonly Record<string, unknown>[] {
-  if (!existsSync(ws.outbox)) return [];
-  return readFileSync(ws.outbox, "utf8")
-    .split("\n")
-    .filter((line) => line.trim() !== "")
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  return deliveredTo(ws.outbox);
 }
 
 function events(ws: Made): readonly TldrxEvent[] {

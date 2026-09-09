@@ -890,6 +890,8 @@ Why asked: no ranking store exists in the map [src: absent:.tldrx/map/api/domain
 - B) Redis sorted set
 - C) other — write it below
 
+Recommended: B — the read pattern is a top-N per minute [src: api:src/leaderboard/query.ts:31]
+
 [Answer]:
 
 ## Q5 · Is per-tenant isolation required for rankings?
@@ -911,6 +913,7 @@ Why asked: Place.TenantId is nullable [src: api:src/Scavtopia.Domain/Places/Plac
 | `advisory:` (optional) | Extra metadata key; `true` marks a question the FRAMEWORK raised rather than a stage — today only `tldrx answer`'s contradiction check (§3). Every reader that COUNTS open questions skips these blocks: the auto gate's `questions` condition (which also names how many it skipped), `tldrx next`'s `awaiting_answer` branch, the `skip_if: questions<=N` counter (§2.4) and "what is this run waiting on" (`tldrx status`). Every reader that LISTS them — the run close, `tldrx questions`, the decision cards, `tldrx replay`, the status line — names them like any other open question, because declining to STOP for a question is not the same as hiding it. Absent means "not advisory" — a block written before the key existed counts exactly as it always did |
 | `Why asked:` line | Required; must end with a `[src: …]` token (§2.8) — proves the gap is real |
 | Options | 2–5 bullets `- X) text`, letters A–E in order; the last may be free text |
+| `Recommended:` line (optional) | `Recommended: <letter> — <why> [src: …]`, after the options and before the `[Answer]:` slot. The ASKER's own call, carried onto the decision card and into the `question.raised` payload. Additive: a block written before this line existed parses exactly as it always did. Grammar is strict about the two machine-readable parts — one letter `A`–`E`, and a dash before any prose — precisely so the reader can be tolerant about the rest: **a line that does not match is IGNORED, never refused**, and `tldrx questions lint` says nothing about it. The line is guidance, so a typo must cost the guidance and not the gate. When an `agent` gate's evidence note (§2.17) also carries a `recommend:` entry for the same id, **the note wins** |
 | `[Answer]:` slot | Exactly one per block, on its own line |
 | Answer footer | HTML comment written by the hook: `answered_by`, `answered_at`, `fact` |
 
@@ -1931,7 +1934,7 @@ recommend: []
 | `touches` | `{audited, outside_surface, new_areas[]}` | y | The touched-path audit |
 | `diff_vs_stories` | `matches\|diverges\|n-a` | y | `n-a` outside Build, where there is no story set to diff against |
 | `caveats` | str[] | n | What the reviewer's mandate stopped it checking. Defaults to `[]` |
-| `recommend` | `{q, option, why, src}[]` | n | A recommendation per open question, for a decision card. Defaults to `[]`; never invented |
+| `recommend` | `{q, option, why, src}[]` | n | A recommendation per open question, for a decision card. Defaults to `[]`; never invented. **This entry wins over the question block's own optional `Recommended:` line (§2.7) for the same question id — the note was written and validated against a `[src:]` context at the gate, while the block's line is the asker's proposal — and a question with neither renders no recommendation at all.** Only the `agent` policy writes a note, so an `auto` gate's cards carry the block's line or nothing |
 | H2 sections | `Read` · `Citations checked` · `Touches audited` · `Verdict` | y | In that order, each with **at least one list item** |
 
 **Every list item ends with a valid §2.8 `[src: …]` token that resolves**, checked by the **same** tokenizer, the same
@@ -2027,7 +2030,7 @@ at an intention. `stage` is `<phase>/<stage>` or null. `detail` is per-kind and 
 | --- | --- | --- |
 | `question.raised` | the loop parked on an open question | `questions[]` — id, title, `why_asked`, `options[]` as `{letter, text}`, `recommendation` or null, `answer_command` |
 | `question.timeout` | `--wait-answers` lapsed and the loop is about to exit `4` | the same `questions[]`, plus `waited_ms` |
-| `gate.requested` | a stage finished and a person must sign it | `cost_usd`, `approve_command`, `reject_command`, `gate_policy` (the stage's frozen `human`/`agent`/`auto`, absent when the run could not be read) |
+| `gate.requested` | a stage finished and a person must sign it | `cost_usd`, `approve_command`, `reject_command`, `gate_policy` (the stage's frozen `human`/`agent`/`auto`, absent when the run could not be read), and ONE of `held_by` / `signer_held` — the reason the gate is open, from whichever mechanism measured it: the auto verdict carried on the `gate.requested` EVENT for an `auto` policy, the engine signer's `agent.result` for an `agent` one. Absent when nothing looked, which is not the same as nothing found |
 | `gate.timeout` | `--wait-gates` lapsed and the loop is about to exit `4` | `approve_command`, `reject_command`, `gate_policy`, `waited_ms`, and `cost_usd` **only when this loop saw the `gate.requested` that measured it** — a loop resuming a run already parked at a gate reports no figure rather than `0` |
 | `stage.done` | a stage finished and the loop moved on | `cost_usd` |
 | `run.finished` | the loop ended with exit `0` | `exit_code`, `exit_family`, `spent_usd` |
@@ -2038,6 +2041,17 @@ at an intention. `stage` is `<phase>/<stage>` or null. `detail` is per-kind and 
 The questions, their options and their recommendation are the **same card** `run auto
 --gate-agent` prints (§ "Decision cards"), so a notification and a terminal can never disagree
 about what was asked.
+
+**Order: the questions come first, and the gate may not be sent at all (#203).** When an
+`auto` gate's ONLY failing condition is `questions`, the gate is downstream of the questions
+rather than a second ask — so `question.raised` is delivered first and `gate.requested`'s
+notification is HELD BACK. It is sent only if the gate is still pending once the questions are
+settled, or when `--wait-gates` lapses; if the loop closes the gate itself (§5, "An auto gate
+closes itself"), it is never sent. **The EVENT is appended either way** — this defers a
+notification, never an audit record. When any other condition is also failing, both go out,
+questions first. Measured 2026-09-07: an owner got "waiting at a auto gate that did not close
+by itself", with no reason and before the four question cards that were the only thing holding
+it, and answered the questions to find nothing had closed.
 
 **A heartbeat over a parked run REMINDS.** When `waiting_on` is non-empty the `status` payload
 names the open questions and its `command` is the literal `tldrx answer` line, not
@@ -2736,6 +2750,28 @@ Two of the others were tightened on 2026-08-29, both because an auto gate could 
   absence, it is carried into the **gate note** by name: a stage that auto-signs over epic-only citations says
   which branch they are on, rather than `claim-sources=passed`.
 
+**An auto gate says WHY it did not close.** The verdict is measured one statement before
+`gate.requested` is appended, and the event carries `why` (the failing conditions in the same
+words `tldrx next` prints) and `held_by` (their ids). Both keys are **additive and present only
+for an `auto` policy** — a `human` or `agent` gate has no auto verdict behind it, and
+`held_by: []` there would read as "the seven were checked and none held it", which is the
+opposite of "nothing looked". `run auto`'s notification renders `why` in its summary; the
+`gate.requested` payload carries it as `held_by` (§2.18). Measured 2026-09-07: `verdict.why`
+had existed all along and reached nothing but a stdout line nobody was watching, while the
+owner's phone said only "did not close by itself" (#203).
+
+**An auto gate closes itself when the thing holding it clears.** A gate whose policy is `auto`
+has already had the run's authority to be machine-closed; before #203 that offer expired the
+moment `next` handed the gate over, so an auto gate held by four open questions permanently
+became a `human` gate for that stage once the answers landed. While `tldrx run auto` is waiting
+under `--wait-gates`, each poll re-runs the same seven conditions off disk for an `auto` policy
+and, when every one holds, signs the gate through the **same `approve` door** `next` uses:
+checks re-run off disk, actor `auto`, note the seven-condition line, and the ordinary
+`gate.approved`. Never for `human` and never for `agent` — a policy is a statement about who may
+close a gate, and this loop is neither a person nor the engine's evidence-writing signer. A
+person's `approve` or `reject` still lands first and overrides at any time; a refusal from
+`approve` leaves the gate waiting for a person rather than reporting a close.
+
 **`agent` gates.** A gate an agent may close, and only over a check it wrote down. It is **strictly stronger** than
 an auto gate, never a cheaper one — three things must hold, not one:
 
@@ -2788,9 +2824,13 @@ a stage's frozen `gates_policy`.
 
 Four kinds, chosen in this precedence: `questions` · `boundary` · `budget` · `gate`. A `questions` card is built from
 the §2.7 parser's own blocks (id, title, the `Why asked:` line with its `src`, the lettered options) plus, per
-question, the optional `recommend: [{q, option, why, src}]` entry of the §2.17 evidence note. **A question with no
-recommendation renders without that line** — never a manufactured one, because the whole value of the line is that an
-agent stood behind it with a citation. The other three kinds render a headline, measured detail lines and the commands
+question, a recommendation from ONE of two places. **An evidence note's `recommend:` entry wins over the question
+block's own `Recommended:` line (§2.7) for the same question id — the note was written and validated against a
+`[src:]` context at the gate, while the block's line is the asker's proposal — and a question with neither renders no
+recommendation at all.** Never a manufactured one, because the whole value of the line is that somebody stood behind
+it with a citation. The second source exists because only an `agent` policy ever writes a note: measured 2026-09-07,
+four questions parked at an `auto` gate all rendered `recommendation: null`, and the stage that raised them was the
+one thing in the run that knew the trade-off (#203). The other three kinds render a headline, measured detail lines and the commands
 that settle them; `boundary` leads with widening the scope, `budget` leads with `tldrx budget show`.
 
 The frame: `DECISION — <run> · <phase>/<stage>` on its own line; a question as `<Qid> · <title>` at column 0 with its

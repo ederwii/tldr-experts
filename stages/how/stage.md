@@ -82,8 +82,11 @@ is on disk before it will advance anything. Nothing advances until this is recor
   - B) Redis sorted set
   - C) other — write it below
 
+  Recommended: B — the read pattern is a top-N per minute, which a sorted set answers without a scan [src: api:src/leaderboard/query.ts:31]
+
   [Answer]:
   ```
   All five metadata keys are required; `Why asked:` must END with a `[src: …]` token; 2–5 options lettered A–E in order; exactly one empty `[Answer]:` slot. Ids ascend. Never write `### Qn — …`, `**Answer:**`, or the answered footer — the hook writes that. `tldrx questions lint` checks the file; `--fix` converts a file already written the wrong way.
+- Write a `Recommended:` line on EVERY question, between the options and the `[Answer]:` slot: `Recommended: <letter> — <one line of why> [src: <a real citation>]`. You raised the question, so you are the one who read the trade-off — an owner answering from a phone gets your letter and your reason, or nothing. It is guidance and not a claim the run rests on: a line that does not match that shape is ignored rather than refused, so a mistyped one costs the recommendation, never the gate. Recommend an option you actually listed, and cite what made you pick it.
 - Before asking a question, grep `.tldrx/memory/facts.yml`; if the answer is there, cite `F<n>` instead of asking.
 - Write only the declared outputs; do not add sections beyond the ones listed under Produce.

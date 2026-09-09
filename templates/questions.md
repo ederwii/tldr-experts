@@ -30,6 +30,8 @@ Why asked: no ranking store exists in the map [src: absent:.tldrx/map/api/domain
 - B) Redis sorted set, rebuilt nightly
 - C) other — write it below
 
+Recommended: B — the read pattern is a top-N per minute, which a sorted set answers without a scan [src: api:src/leaderboard/query.ts:31]
+
 [Answer]:
 
 ## Q2 · <the next question, in one sentence>
@@ -38,6 +40,8 @@ Why asked: <what is blocked without it, concretely> [src: <a real citation>]
 
 - A) <option>
 - B) <option>
+
+Recommended: <letter> — <one line of why> [src: <a real citation>]
 
 [Answer]:
 
@@ -50,6 +54,13 @@ Why asked: <what is blocked without it, concretely> [src: <a real citation>]
   Why asked       one line, and it must END with a `[src: …]` token — that is what
                   proves the gap is real rather than assumed
   Options         2–5 bullets, `- A)` `- B)` … lettered in order; the last may be free text
+  Recommended     OPTIONAL, one line, after the options: `Recommended: <letter> — <why> [src: …]`.
+                  The asker's own call, and the only recommendation an `auto` gate can
+                  ever carry — an evidence note's `recommend:` exists solely for the
+                  `agent` policy, and wins when both are present. Write one on every
+                  question you raise. A line that does not match the shape is IGNORED,
+                  never refused: it is guidance, and a typo must cost the guidance
+                  rather than the gate.
   Answer slot     exactly one `[Answer]:` line, on its own line, left empty
 
   Ids ascend and are unique; a block is at most 40 lines.

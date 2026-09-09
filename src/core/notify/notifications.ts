@@ -102,12 +102,25 @@ export function questionTimeoutNotification(
 }
 
 /**
+ * `a` or `an` for the phrase that follows. One helper rather than a literal at each
+ * call site, because the article depends on the POLICY WORD and `auto` is the only
+ * vowel among the four — which is how an owner's phone read "waiting at a auto gate"
+ * for two releases (gh #203). It is a nit and it is also the first four words of the
+ * only sentence the owner reads.
+ */
+function gateArticle(policy: GatePolicy | null): string {
+  return policy === "auto" ? "an" : "a";
+}
+
+/**
  * WHICH gate is waiting, in the frozen policy's own words (gh #197, scope note).
  *
  * An owner who has just switched a stage to `gates_policy: agent` expecting the loop to
- * carry on needs to be told that it did not: there is no engine-side signing in
- * `run auto`, so an `agent` gate stops it exactly as a `human` one does and waits for
- * whoever signs. Saying only "its gate" left him to infer which tap he was doing.
+ * carry on needs to be told that it did not: `run auto` writes no evidence note, so an
+ * `agent` gate stops it exactly as a `human` one does and waits for whoever signs.
+ * Saying only "its gate" left him to infer which tap he was doing. (An `auto` gate is
+ * the one the loop does close by itself, and by the time this phrase is sent it has
+ * already failed to — see `selfCloseAutoGate` in `runAuto.ts`, gh #203.)
  *
  * The policy comes from `gatePolicyFor` — the run's own frozen map, read by the caller —
  * never from a guess about what the workflow says today.
@@ -144,11 +157,22 @@ export function gateNotification(
   // because the summary is the half that reaches a lock screen, and "an agent
   // looked at this and here is what stopped it" is the difference between a person
   // opening the run and a person opening the run to find out why.
-  const why = held.length === 0 ? "" : ` The engine's signer held it: ${held.join("; ")}.`;
+  //
+  // TWO provenances, one field. For an `agent` gate `held` is what the engine's own
+  // signer wrote down (#198); for an `auto` gate it is the auto verdict's `why`,
+  // carried on `gate.requested` since #203 — the run's own words, handed through, not
+  // re-rendered here. A second spelling of "what held this gate" is exactly the drift
+  // that left `verdict.why` on stdout and nothing on the phone.
+  const why = held.length === 0
+    ? ""
+    : policy === "auto"
+      ? ` It is held by: ${held.join("; ")}.`
+      : ` The engine's signer held it: ${held.join("; ")}.`;
   return {
     ...base(ctx, "gate.requested"),
     summary: `${ctx.runId} finished ${ctx.stage ?? "a stage"} for $${costUsd.toFixed(2)} and is waiting `
-      + `at a ${gatePhrase(policy)}.${why} Nothing runs after it until the gate is approved or rejected.`,
+      + `at ${gateArticle(policy)} ${gatePhrase(policy)}.${why} Nothing runs after it until the gate is `
+      + "approved or rejected.",
     command: approve,
     detail: {
       cost_usd: costUsd,
@@ -157,7 +181,7 @@ export function gateNotification(
       ...(policy === null ? {} : { gate_policy: policy }),
       // Absent, never `[]`, when no signer ran: an empty list would read as "the
       // signer found nothing wrong", which is the opposite of "no signer looked".
-      ...(held.length === 0 ? {} : { signer_held: held }),
+      ...(held.length === 0 ? {} : policy === "auto" ? { held_by: held } : { signer_held: held }),
     },
   };
 }

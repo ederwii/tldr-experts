@@ -9,6 +9,8 @@
  *                                     Read with the §2.7 parser. **Nothing here
  *                                     changes the questions grammar**, which is
  *                                     exact, hard-won and not worth touching.
+ *   the block's own `Recommended:`   the OPTIONAL §2.7 line the asker writes, read
+ *                                     by the same §2.7 parser (gh #203).
  *   the evidence note's `recommend:`  `{q, option, why, src}` per open question,
  *                                     from `.agent/<stage>/evidence.md` or, once
  *                                     a gate was signed, the committed copy at
@@ -231,6 +233,16 @@ export function rejectCommand(runId: string): string {
   return `tldrx reject --run ${runId} --note "<why>"`;
 }
 
+/**
+ * PRECEDENCE, stated once and referenced from spec §2.17 and §2.18 (gh #203):
+ *
+ * **An evidence note's `recommend:` entry wins over the question block's own
+ * `Recommended:` line for the same question id — the note was written and validated
+ * against a `[src:]` context at the gate, while the block's line is the asker's
+ * proposal — and a question with neither renders no recommendation at all.**
+ *
+ * The last clause is the old rule, unchanged: this card never manufactures one.
+ */
 function toQuestion(
   block: QuestionBlock,
   runId: string,
@@ -242,7 +254,11 @@ function toQuestion(
     title: block.title,
     whyAsked: block.whyAsked,
     options: block.options.map(firstLine),
-    recommendation: recommended === undefined ? null : toRecommendation(recommended),
+    recommendation: recommended !== undefined
+      ? toRecommendation(recommended)
+      : block.recommended === null
+        ? null
+        : { option: block.recommended.option, why: block.recommended.why, src: block.recommended.src },
     answerCommand: answerCommand(block.id, runId),
   };
 }

@@ -22,7 +22,7 @@ import { RunStore } from "../run/RunStore.ts";
 import { isAttendedByHost, isTerminal, type GateType, type RunFile, type RunPhase, type RunStage, type RunTask } from "../run/RunFile.ts";
 import { runChecks, runPrecondition, type PreconditionOutcome } from "../run/checks.ts";
 import { approve } from "../run/gates.ts";
-import { AUTO_GATE_ACTOR, evaluateAutoGate, unreadableHeadings } from "../run/autoGate.ts";
+import { AUTO_GATE_ACTOR, evaluateAutoGate, heldBy, unreadableHeadings } from "../run/autoGate.ts";
 import {
   describeAgentFallthroughs, evaluateAgentGate, type AgentGateInput, type AgentGateVerdict,
 } from "../run/agentGate.ts";
@@ -1779,11 +1779,39 @@ async function finishStage(
       ended_at: nowish(options),
       gate: { ...s.gate, type: "approve", status: "pending" },
     }));
+    // The auto verdict is taken HERE, one statement before the event that announces
+    // the gate, and the order is the whole of gh #203. It used to be measured a
+    // hundred lines further down, after `gate.requested` had already been appended
+    // and — on an unattended loop — already been read, turned into a notification and
+    // put on an owner's phone. `verdict.why` existed the entire time and reached
+    // nothing but stdout, so a gate held by four open questions announced itself as
+    // "did not close by itself" and named nothing.
+    //
+    // The stage is already `awaiting_gate` in memory when this runs, exactly as it
+    // was when the evaluation happened later: the `status` condition reports the same
+    // word it always did. Nothing in the evaluation reads run.yml off disk, so moving
+    // it ahead of `store.save()` measures the same run.
+    const autoVerdict = policy === "auto"
+      ? await evaluateAutoGate({
+        root: options.root,
+        runDir: store.runDir,
+        phaseId,
+        stage: requireStage(store, phaseId, stageId),
+        planned: spec.planned,
+        budget: store.budget,
+        checks,
+      })
+      : null;
     store.append(event(options, store.runId, stageId, "gate.requested", {
       phase: phaseId,
       cost_usd: spentNow(),
       outputs,
       checks: checks.map((c) => `${c.id}:${c.status}`),
+      // Additive, and present ONLY for an `auto` policy. A `human` or `agent` gate
+      // has no auto verdict behind it, and `held_by: []` there would read as "the
+      // seven conditions were checked and none of them held it" — the opposite of
+      // "nothing looked". Absent with a reason, per AGENTS.md §7.
+      ...(autoVerdict === null ? {} : { why: autoVerdict.why, held_by: heldBy(autoVerdict) }),
     }));
     store.save();
     const doneLine =
@@ -1875,16 +1903,8 @@ async function finishStage(
         ...(card === null ? [] : ["", ...renderDecisionCard(card)]),
       ]);
     }
-    if (policy === "auto") {
-      const verdict = await evaluateAutoGate({
-        root: options.root,
-        runDir: store.runDir,
-        phaseId,
-        stage: requireStage(store, phaseId, stageId),
-        planned: spec.planned,
-        budget: store.budget,
-        checks,
-      });
+    if (autoVerdict !== null) {
+      const verdict = autoVerdict;
       let why = verdict.why;
       if (verdict.ok) {
         // Through the SAME door a person uses: `approve` re-runs the checks off
