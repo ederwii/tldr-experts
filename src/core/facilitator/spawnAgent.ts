@@ -195,8 +195,48 @@ export interface AgentOutcome {
   readonly durationMs: number;
 }
 
+/**
+ * The `--allowedTools` grants for ONE declared workspace command: the exact
+ * string, and the same string with trailing arguments.
+ *
+ * Both, because the exact form alone is a permission bug measured live (gh
+ * #209): a Build developer whose only grant was `Bash(npm run test)` had every
+ * attempt to run its own Definition of Done denied with "This command requires
+ * approval to run" — `npm run test -- app/dev/__tests__/x.test.ts`, `npx jest …`
+ * — so the DoD's exit 127 was first seen by the gate, after the turn was paid
+ * for, by a developer that could not have seen it.
+ *
+ * The grammar is verified, not remembered, against
+ * https://code.claude.com/docs/en/permissions ("Configure permissions" → the
+ * wildcard table, read 2026-09-09):
+ *
+ *   - "`Bash(npm run build)` … Matches `npm run build` … Doesn't match
+ *     `npm run build --watch`" — the exact form really is exact.
+ *   - "`Bash(ls *)` … Matches `ls -la`, `ls`" and "A `*` at the end, with a
+ *     space before it, also matches the bare command", so the trailing-wildcard
+ *     form covers both and "The space before a trailing `*` is part of the rule"
+ *     (`Bash(ls *)` does NOT match `lsof`).
+ *   - "The `:*` suffix is an equivalent way to write a trailing wildcard, so
+ *     `Bash(ls:*)` matches the same commands as `Bash(ls *)`."
+ *
+ * The space form is the one written here: it is what the two grants this repo
+ * already ships use (`Bash(git add *)`, `Bash(git commit *)`,
+ * `Bash(git diff *)`), the docs call it and `:*` the same rule, and one spelling
+ * per grammar is the house rule. The exact form is kept beside it rather than
+ * dropped — it is what the docs say a bare command matches, it costs one list
+ * entry, and a provider that reads the two forms differently is then covered by
+ * both rather than by a guess about which it prefers.
+ *
+ * It does NOT widen the surface to another program: `Bash(npm run test *)`
+ * cannot match `curl`, and a compound command is a different string to the
+ * DoD's own byte-equality allowlist either way (`hooks/lib/story.ts`).
+ */
+export function bashGrantsFor(command: string): readonly string[] {
+  return [`Bash(${command})`, `Bash(${command} *)`];
+}
+
 export function allowedTools(workspaceCommands: readonly string[]): readonly string[] {
-  return [...BASE_TOOLS, ...workspaceCommands.map((command) => `Bash(${command})`)];
+  return [...BASE_TOOLS, ...workspaceCommands.flatMap((command) => bashGrantsFor(command))];
 }
 
 export function buildClaudeArgs(request: AgentRequest): readonly string[] {

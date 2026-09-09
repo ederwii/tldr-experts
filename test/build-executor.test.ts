@@ -163,9 +163,13 @@ describe("the executor registry", () => {
   });
 
   test("a developer may run its own repo's commands and commit; a reviewer may only read", () => {
+    // BOTH grant forms per declared command since gh #209 — the exact string and
+    // the trailing-wildcard one. `Bash(npm run test)` alone is exact
+    // (code.claude.com/docs/en/permissions), so a developer asked to run
+    // `npm run test -- <file>` was denied and never ran its own DoD.
     expect(developerTools(["npm run test"])).toEqual([
       "Read", "Write", "Edit", "Glob", "Grep",
-      "Bash(npm run test)", "Bash(git add *)", "Bash(git commit *)",
+      "Bash(npm run test)", "Bash(npm run test *)", "Bash(git add *)", "Bash(git commit *)",
     ]);
     expect(developerTools([]).some((tool: string) => tool.startsWith("Bash(git push"))).toBe(false);
     expect(REVIEWER_TOOLS).toEqual(["Read", "Grep", "Glob", "Bash(git diff *)"]);

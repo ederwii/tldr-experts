@@ -286,6 +286,44 @@ new numbers; `tldrx expert list` warns until you do.
 blocked with its evidence recorded (the failing command and its exit code, or the conflicting
 paths, with the merge aborted). Fix it and re-run the stage.
 
+**A story blocked with `exit 127` and "command not found" — the tests never ran.** 127 is
+`command not found`, and it means the story's worktree did not have the binary the test
+command needs. It is not a red suite: a `git worktree` is a fresh checkout of tracked files,
+so it has no `node_modules`, no `obj/`, no virtualenv, and it does not share the base tree's.
+That is also why the Build-entry pre-flight can be green over the same command minutes
+earlier — the pre-flight runs in *your* checkout, which has its dependencies installed. Since
+gh #209 the two are told apart in the record: the story's check carries `tree: "worktree"`,
+and a 127 is reported as *the test command's binary is absent in the worktree*, naming the
+missing binary when the shell named one.
+
+The fix is one line in `.tldrx/workspace.yml` — declare the repo's installer under its
+`commands:`:
+
+```yaml
+repos:
+  - name: app
+    commands:
+      install: "npm ci"        # or pnpm install --frozen-lockfile, uv sync, dotnet restore, …
+      test: "npm run test"
+```
+
+tldrx then runs it in every fresh story worktree, before the developer, and records it as its
+own check with an exit code and a duration (so you can see what it costs). If the install
+itself fails, the story blocks with what the installer printed and **no developer turn is
+paid for**.
+
+tldrx will not guess this for you. A lockfile plus a package manager is not a declaration, and
+`npm ci` chosen by the framework is a command nobody approved. Sharing your base tree's
+`node_modules` with a symlink is an option the message names and the framework does not take:
+hoisting and cache layout are per-tree facts, and a shared tree can be silently wrong.
+
+**The developer says "This command requires approval to run" and never runs the tests.** Fixed
+in gh #209 and worth recognising in old logs: the sub-agent's allowance used to carry only the
+exact declared string (`Bash(npm run test)`), and Claude Code's permission grammar makes an
+exact rule exact — `npm run test -- src/foo.test.ts` did not match it. Every declared command
+now gets both the exact grant and the trailing-argument one (`Bash(npm run test *)`), so a
+developer can run its own Definition of Done on one file while it works.
+
 **A story sits at `review` and the log says the reviewer FAILED.** That is not a request for
 changes — the reviewer never returned a verdict at all (a spawn error, a timeout, or its
 `--max-budget-usd` running out mid-read). The story's diff is already committed and merged,

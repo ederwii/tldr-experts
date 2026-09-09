@@ -414,7 +414,7 @@ repos:
     // Both repos declare `build: "true"` and `test: "true"`, so the flat set is
     // one command — and the prompt above names that same one.
     expect(granted).toBe(allowedTools(["true"]).join(","));
-    expect(granted).toBe("Read,Write,Edit,Glob,Grep,Bash(true)");
+    expect(granted).toBe("Read,Write,Edit,Glob,Grep,Bash(true),Bash(true *)");
   });
 });
 

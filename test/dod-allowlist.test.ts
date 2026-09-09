@@ -172,6 +172,11 @@ describe("#165 · a refused dod command invents no exit code", () => {
       storyId: "S1",
       repo: "app",
       worktree: dir,
+      // The two #209 fields: the repo's own checkout (read only to compare
+      // `node_modules` on a 127) and whether `install:` is declared. Neither is
+      // consulted on a REFUSAL — nothing ran, so there is no exit to read.
+      repoDir: dir,
+      installDeclared: false,
       commands: ["npm run lint"],
       workspaceCommands: new Set(["npm run test"]),
       timeoutMs: 5_000,

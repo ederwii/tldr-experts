@@ -382,24 +382,51 @@ que el aviso te devuelve:
 
 ## Lista para la primera corrida
 
-1. **Declara `test_fast`** en `.tldrx/workspace.yml`: el subconjunto rápido sobre el que
+1. **Declara `install:`** en `.tldrx/workspace.yml`, para cada repo cuyo comando de tests
+   necesite dependencias instaladas. Una historia de Build corre en un `git worktree` recién
+   creado: tiene tus archivos versionados y nada más — sin `node_modules`, sin virtualenv, sin
+   paquetes restaurados, y sin nada de tu propio checkout. tldrx corre ahí el instalador
+   declarado antes del developer y lo registra como su propio check, con código de salida y
+   duración. Sin eso, el DoD de la historia sale con `127` y la bloquea, después de haber
+   pagado un turno; el mensaje nombra el binario ausente y esta ranura, y el framework no
+   adivina ningún instalador por ti.
+
+   ```yaml
+   repos:
+     - name: app
+       commands:
+         install: "npm ci"      # pnpm install --frozen-lockfile, uv sync, dotnet restore, …
+         test: "npm run test"
+   ```
+2. **Declara `test_fast`** en `.tldrx/workspace.yml`: el subconjunto rápido sobre el que
    itera el developer de Build. No es un comando de Definition of Done; el DoD vuelve a
    correr `test:`.
-2. **Escribe el adaptador y decláralo** bajo `notify:`. Empieza con todos los tipos y
+3. **Escribe el adaptador y decláralo** bajo `notify:`. Empieza con todos los tipos y
    angosta `events:` después, cuando ya sepas cuáles quieres que de verdad te despierten.
-3. **Prueba el adaptador a mano**, antes de que ningún run dependa de él:
+4. **Prueba el adaptador a mano**, antes de que ningún run dependa de él:
 
    ```bash
    echo '{"version":1,"kind":"status","at":"2026-01-01T00:00:00Z","run":"demo","root":"'"$PWD"'","stage":null,"summary":"hello","command":null,"detail":{"status_text":"hello","waiting_on":[]}}' | bin/notify-owner
    ```
 
    Si eso no te llega, nada te va a llegar.
-4. **Lanza primero con un intervalo corto** — `--notify-every 60s` para una etapa — para
+5. **Lanza primero con un intervalo corto** — `--notify-every 60s` para una etapa — para
    enterarte de que el hook funciona mientras sigues frente al teclado. Después súbelo.
-5. **Mira `tldrx run status`** para la vista del propio run, y `tldrx replay <run>` para el
+6. **Mira `tldrx run status`** para la vista del propio run, y `tldrx replay <run>` para el
    registro de eventos como relato, `notify.sent` / `notify.failed` incluidos.
 
 ## Cuando algo no sale
+
+**Una historia bloqueada con `exit 127`, "command not found".** Los tests nunca corrieron: el
+worktree de la historia no tenía el binario. Declara `install:` (punto 1 de arriba) y tldrx
+instala ahí las dependencias antes del developer. El check que falló trae `tree: "worktree"`,
+así que se distingue del pre-vuelo de entrada a Build, que corre el mismo comando en tu propio
+checkout — donde las dependencias ya están, que es por qué puede estar verde minutos antes.
+
+**El developer dice "This command requires approval to run".** Arreglado en gh #209: cada
+comando declarado ahora se concede tanto exacto como con argumentos al final, así que un
+developer puede correr `npm run test -- un/archivo.test.ts` mientras trabaja, y no sólo el
+comando pelado.
 
 **El notificador nunca se llama.** Tres causas habituales, en el orden que cuesta menos
 revisar. La lista `events:` no nombra el tipo que esperabas: quita la clave por completo para

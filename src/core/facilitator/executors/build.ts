@@ -53,7 +53,7 @@ import {
   describeDispatchNotes, loadDispatchNotes, type DispatchNotes,
 } from "../dispatchNotes.ts";
 import { preparedBundles, reviewBundles } from "../../run/prepared.ts";
-import { spawnAgent, BASE_TOOLS } from "../spawnAgent.ts";
+import { spawnAgent, BASE_TOOLS, bashGrantsFor } from "../spawnAgent.ts";
 import { DEVELOPER_RESULT_SCHEMA } from "../envelope.ts";
 import {
   PendingError, PENDING_FILE, RAW_FILE, RESULT_FILE, readResult, readResultObject, resultPath,
@@ -116,6 +116,9 @@ import {
   commitIfDirty, EpicState, mergeIntoEpic, refreshStoryBase, rescueUncommitted, storyWorktreePath,
   unreadableTouches, type EpicWorktreeParts,
 } from "../../build/worktrees.ts";
+import {
+  installCommandFor, installFailed, installFailureReason, runWorktreeInstall, type InstallCheck,
+} from "../../build/worktreeDeps.ts";
 import {
   dirtyRepoRefusal, epicRows, foreignEpicRefusal, relaunchCommand, resolveBranchModel, type ClaimParts,
 } from "../../build/branchClaims.ts";
@@ -467,6 +470,13 @@ interface StoryContext {
    * cadence. The prompt says so; `existsSync` alone called them new files.
    */
   readonly notInWorktree: ReadonlySet<string>;
+  /**
+   * True when THIS call created the worktree, so it is a tree nothing has ever
+   * installed into (gh #209). The install runs on a fresh tree only: a reopened
+   * story's worktree already has whatever the first pass put there, and paying
+   * for `npm ci` again on every review round is a cost nobody asked for.
+   */
+  readonly freshWorktree: boolean;
 }
 
 class BuildSession {
@@ -681,6 +691,15 @@ class BuildSession {
     // `true`: a developer is about to be dispatched onto this branch, so it is
     // one of the two openings that may bring the base up to the epic tip (§F.2).
     const story = await this.openStory(planned, true);
+    // gh #209, the in-session half: the host is about to run a developer in this
+    // tree, so it gets the same install the headless path gets — and if the
+    // install fails, the story blocks HERE rather than handing a human a bundle
+    // pointing at a tree that cannot build.
+    const install = await this.installDeps(story);
+    if (install !== null && installFailed(install)) {
+      await this.block(story, installFailureReason(install, planned.story.repo), 0);
+      return await this.finish();
+    }
     const cap = developerCap(this.capParts, planned.story.id, story.attempt);
     const key = this.bundleKey(planned.story.id);
     const notes = this.dispatchNotesFor(planned.story.id);
@@ -1162,6 +1181,19 @@ class BuildSession {
       });
       this.setStoryStatus(planned, "in_progress");
     });
+
+    // (c½) gh #209: the declared `install:`, in this fresh tree, before a dollar
+    // is spent. A failed install BLOCKS — it is the story's environment, and a
+    // developer dispatched into a tree whose dependencies did not install cannot
+    // prove anything and would block on the DoD anyway, having been paid for.
+    const install = await this.installDeps(story);
+    if (install !== null && installFailed(install)) {
+      return {
+        story, cost: 0, dod: [], commit: null,
+        failure: installFailureReason(install, planned.story.repo),
+        developerError: null, before,
+      };
+    }
 
     // A developer that FAILED is a TRANSPORT outcome, not a story that could not
     // be built: the sub-agent never wrote a line, so nothing about the work has
@@ -1748,7 +1780,8 @@ class BuildSession {
     // branch (2026-08-29 audit, §B). `story/<run>/<story>` cannot collide.
     const branch = storyBranchOf(this.ctx.runId, planned.story.id);
     const worktree = this.storyWorktree(planned);
-    if (!existsSync(worktree)) {
+    const freshWorktree = !existsSync(worktree);
+    if (freshWorktree) {
       mkdirSync(join(worktree, ".."), { recursive: true });
       await addWorktree(repoDir, worktree, branch, epicBranch);
     }
@@ -1765,7 +1798,44 @@ class BuildSession {
       attempt: Math.min(this.reviewAttempts(planned.story.id) + 1, MAX_ATTEMPTS),
       previousAttempt: this.previousAttemptText(planned.story.id),
       notInWorktree: await this.unreadableTouches(planned, repoDir, branch),
+      freshWorktree,
     };
+  }
+
+  /**
+   * (c½) the declared `install:`, in the story's fresh worktree, BEFORE the
+   * developer (gh #209).
+   *
+   * Deliberately OUTSIDE the single writer: this is the one step of story setup
+   * that can take minutes (`npm ci`, `dotnet restore`), it touches only the
+   * story's own tree, and holding the executor's serial lock across it would
+   * stall every other lane's git for the duration.
+   *
+   * Returns null when there is nothing to do — no `install:` declared, or a
+   * worktree this invocation did not create. Null is not a green: the DoD's own
+   * 127 reading is what speaks for the undeclared case, and it says so.
+   */
+  private async installDeps(story: StoryContext): Promise<InstallCheck | null> {
+    if (!story.freshWorktree) return null;
+    const repo = story.planned.story.repo;
+    const command = installCommandFor(this.workspace, repo);
+    if (command === null) return null;
+    const check = await runWorktreeInstall({
+      storyId: story.planned.story.id,
+      repo,
+      worktree: story.worktree,
+      command,
+      workspaceCommands: this.workspace.commands,
+      timeoutMs: this.ctx.spec.planned.timeout_s * 1000,
+      phaseId: this.ctx.phaseId,
+      emit: (type, payload) => { this.ctx.emit(type, payload); },
+    });
+    this.lines.push(
+      `  · ${story.planned.story.id}: \`${command}\` in the story worktree — `
+      + `${check.refusedBecause === undefined ? `exit ${String(check.exitCode ?? "?")}` : "REFUSED"}, `
+      + `${String(check.durationMs)} ms`,
+    );
+    return check;
   }
 
   private async refreshStoryBase(
@@ -1881,6 +1951,8 @@ class BuildSession {
       storyId: story.planned.story.id,
       repo: story.planned.story.repo,
       worktree: story.worktree,
+      repoDir: story.repoDir,
+      installDeclared: installCommandFor(this.workspace, story.planned.story.repo) !== null,
       commands: story.planned.dod.commands,
       workspaceCommands: this.workspace.commands,
       timeoutMs: this.ctx.spec.planned.timeout_s * 1000,
@@ -3396,7 +3468,11 @@ export function developerTools(
   return [
     ...BASE_TOOLS,
     ...(options.skills === true ? ["Skill"] : []),
-    ...repoCommands.map((command) => `Bash(${command})`),
+    // Both the exact form and the trailing-wildcard form, from the ONE place
+    // that derives a Bash grant (`spawnAgent.bashGrantsFor`) — gh #209: a
+    // developer granted only `Bash(npm run test)` had `npm run test -- <file>`
+    // denied and never ran its own Definition of Done.
+    ...repoCommands.flatMap((command) => bashGrantsFor(command)),
     "Bash(git add *)",
     "Bash(git commit *)",
   ];

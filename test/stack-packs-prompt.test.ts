@@ -512,7 +512,7 @@ describe("project skills are named, never loaded (design decision 6)", () => {
     expect(developerTools(["npm test"], { skills: false })).toEqual(developerTools(["npm test"]));
     const withSkill = developerTools(["npm test"], { skills: true });
     expect(withSkill).toContain("Skill");
-    expect(withSkill.filter((tool) => !BASE_TOOLS.includes(tool) && tool !== "Skill")).toEqual(["Bash(npm test)", "Bash(git add *)", "Bash(git commit *)"]);
+    expect(withSkill.filter((tool) => !BASE_TOOLS.includes(tool) && tool !== "Skill")).toEqual(["Bash(npm test)", "Bash(npm test *)", "Bash(git add *)", "Bash(git commit *)"]);
   });
 });
 

@@ -19,6 +19,12 @@ repos:
     # Commands are DISCOVERED, never assumed. An empty value means "not found",
     # which is different from "there is none" — say which in the handoff.
     commands:
+      # The repo's own installer. tldrx runs it in every FRESH Build story
+      # worktree, before the developer, and records it as its own check with an
+      # exit code and a duration. A story worktree is a fresh checkout of tracked
+      # files — no node_modules, no virtualenv, no restored packages, and none of
+      # this checkout's — so a `test:` that needs them exits 127 without it.
+      # Left empty, tldrx installs nothing and guesses nothing (gh #209).
       install: ""
       build: ""
       test: ""

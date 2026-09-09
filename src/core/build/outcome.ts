@@ -7,6 +7,7 @@
  */
 import type { PlanStatus } from "../schemas/planCommon.ts";
 import type { ReviewerProvenance } from "./reviewerProvenance.ts";
+import { binaryAbsentReason, type AbsentBinary } from "./worktreeDeps.ts";
 
 /**
  * What the reviewer said — and, for `error`, that it never got to say anything.
@@ -57,6 +58,16 @@ export interface DodResult {
   readonly timedOut: boolean;
   /** Last meaningful line of the combined output — the operator's first clue. */
   readonly tail: string;
+  /**
+   * Present only on an exit 127 in a story worktree: what the tree was MISSING
+   * (gh #209). ADDITIVE and optional — absent means "not asked", which is every
+   * record written before this field existed and every result that is not a 127.
+   *
+   * It exists so a 127 stops being rendered as a red test. The two are opposite
+   * findings: one says the story broke the suite, the other says the suite never
+   * ran because the worktree has no `node_modules`.
+   */
+  readonly absent?: AbsentBinary | null;
 }
 
 /** True when the gate DECLINED to run this command. Absent status means it ran. */
@@ -213,6 +224,11 @@ export function dodFailureReason(result: DodResult, repo: string): string {
   if (dodRefused(result)) {
     return `\`${result.command}\` was REFUSED in repo ${repo} and never ran — `
       + `${result.refusedBecause ?? DOD_REFUSAL_FALLBACK}`;
+  }
+  // An exit 127 whose tree never had the binary is not a red test, and the
+  // sentence that says so is derived in ONE place (gh #209).
+  if (result.absent !== undefined && result.absent !== null) {
+    return binaryAbsentReason(result, repo, result.absent);
   }
   return `\`${result.command}\` exited ${String(result.exitCode ?? "?")} in repo ${repo}`
     + `${result.timedOut ? " (timed out)" : ""} — ${result.tail}`;

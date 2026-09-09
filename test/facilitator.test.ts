@@ -615,7 +615,11 @@ describe("argv construction", () => {
 
   test("the tool allowance is the file tools plus one Bash grant per workspace command", () => {
     expect(allowedTools(["npm run test", "dotnet build"])).toEqual([
-      "Read", "Write", "Edit", "Glob", "Grep", "Bash(npm run test)", "Bash(dotnet build)",
+      "Read", "Write", "Edit", "Glob", "Grep",
+      // Two grants per command since gh #209: the exact form, and the same
+      // command with trailing arguments.
+      "Bash(npm run test)", "Bash(npm run test *)",
+      "Bash(dotnet build)", "Bash(dotnet build *)",
     ]);
   });
 });
