@@ -31,7 +31,8 @@ import {
   FACT_CONFIDENCES, FACT_DECIDERS, FACT_KINDS, MAX_FACT_CHARS,
   type FactConfidence, type FactDecider, type FactKind,
 } from "../../core/facts/Fact.ts";
-import { factsPath } from "../../hooks/lib/workspace.ts";
+import { factsPath, loadWorkspace } from "../../hooks/lib/workspace.ts";
+import { isScoped, scopeRepos } from "../repoScope.ts";
 import { PROJECT_WORK_DIR } from "../../core/paths.ts";
 import { RunStore } from "../../core/run/RunStore.ts";
 import { EventLog } from "../../core/events/EventLog.ts";
@@ -71,6 +72,20 @@ export const factsCommand: Command = {
       }
 
       const root = workspaceRootFrom(args);
+      // `--repo` is checked against what `workspace.yml` declares, through the same
+      // leaf `tldrx answer --repo` refuses on (#186) — refused BEFORE the store is
+      // opened, so a typo'd repo writes nothing. It is the run check's argument
+      // pointed at scope instead of provenance: a fact scoped to a repo that does
+      // not exist is not refused later, it is silently invisible to `renderFacts`'s
+      // filter forever, and nothing anywhere says why.
+      const scoped = scopeRepos(
+        repeatedFlag(args, "repo"),
+        new Set(loadWorkspace(root).repos.keys()),
+      );
+      if (!isScoped(scoped)) {
+        process.stderr.write(`tldrx facts add: ${scoped.problem}\n`);
+        return EXIT_USAGE;
+      }
       // The run is provenance, and it is ABSENT WITH A REASON when it cannot be
       // established: `--run` names one, one open run is unambiguous, and several
       // open runs are not something to guess between.
@@ -94,7 +109,7 @@ export const factsCommand: Command = {
       const fact = FactsStore.update(factsPath(root), (store) => store.append({
         fact: text,
         area,
-        repos: [...repeatedFlag(args, "repo")],
+        repos: [...scoped.repos],
         kind,
         confidence,
         source: {

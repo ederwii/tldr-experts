@@ -862,7 +862,7 @@ const ENTRIES: readonly CommandHelp[] = [
       { name: "decided-by", arg: "<who>", meaning: "Who decided, as against who typed it. Required — a driver default is never cited as the owner's.", values: FACT_DECIDERS, sub: "add" },
       { name: "kind", arg: "<kind>", meaning: "What sort of fact this is.", values: FACT_KINDS, sub: "add" },
       { name: "confidence", arg: "<level>", meaning: "How well it is known. `measured` means you ran the check.", values: FACT_CONFIDENCES, sub: "add" },
-      { name: "repo", arg: "<name>", meaning: "Scope the fact to one repo. Repeatable.", repeatable: true, sub: "add" },
+      { name: "repo", arg: "<name>", meaning: "Scope the fact to one repo. Repeatable. A name no repo in workspace.yml answers to is refused before anything is written.", repeatable: true, sub: "add" },
       { name: "run", arg: "<id>", meaning: "Attribute it to this run. An id no run in tldrx-work/ answers to is refused (exit 3) before anything is written — asking for provenance by name and getting `run: null` instead is worse than not asking. Without it, one open run is used; with several open, the fact is still recorded and its run is left absent with a named reason on stdout, because provenance nobody can establish is written as missing, never guessed.", sub: "add" },
       root(),
     ],
