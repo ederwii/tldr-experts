@@ -55,6 +55,23 @@
   thing — an amendment moves text the changelog already carried, and cannot write a new claim
   into a shipped release. A source sha that is not a commit here is refused, not trusted.
 
+- **`tldrx facts add --repo <name>` is now checked against `workspace.yml`, through the one
+  implementation `tldrx answer --repo` already refused on (#186).** Measured on a scratch
+  workspace at `cd8721a`: `facts add "ghost repo test" --area test --decided-by driver --repo
+  ghost` exited **0** and wrote `repos: [ghost]`, while `answer Q1 "…" --repo ghost` on the same
+  workspace exited **1** with `--repo ghost is not a repo in this workspace — it has api`. The
+  mechanism was the whole story — `grep -n loadWorkspace src/cli/commands/facts.ts` exited 1:
+  that path never looked at what the workspace declares, it copied the flag onto the record. A
+  mis-scoped fact is the silent kind of wrong: nothing refuses it later, it is simply invisible
+  to every `{{facts}}` filter keyed on the real repo name, forever, and nothing anywhere says
+  why. The check is now a leaf (`src/cli/repoScope.ts`) both commands call rather than a
+  sentence copied into two files — two copies of a refusal drift, and the drift is silent
+  because each command's own test keeps passing — so `facts add` also inherits the
+  de-duplication the same flag already had on `answer` (`--repo api --repo api` scopes once).
+  Refused before the store is opened, exit **1**, `answer`'s family and `answer`'s wording,
+  including the "this workspace declares no repos" variant that keeps the sentence from
+  dangling. A test counts the sentence over `src/` and fails on the second copy.
+
 ## 0.14.0 — 2026-09-09
 
 ### Added

@@ -36,11 +36,11 @@
  * workspace lock; it starts no process either.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { factsCommand } from "../src/cli/commands/facts.ts";
 import { helpFor, subcommandsOf } from "../src/cli/helpText.ts";
-import { EXIT_NOT_FOUND } from "../src/cli/exitCodes.ts";
+import { EXIT_NOT_FOUND, EXIT_USAGE } from "../src/cli/exitCodes.ts";
 import { FactsStore } from "../src/core/facts/FactsStore.ts";
 import { MAX_FACT_CHARS, type Fact } from "../src/core/facts/Fact.ts";
 import { validateFactsFile } from "../src/core/facts/validateFactsFile.ts";
@@ -76,6 +76,20 @@ function capture(): () => string {
   }) as typeof process.stdout.write;
   return () => {
     process.stdout.write = original;
+    return buffer;
+  };
+}
+
+/** Swap stderr for a buffer; the refusals under test write there and nowhere else. */
+function captureStderr(): () => string {
+  const original = process.stderr.write.bind(process.stderr);
+  let buffer = "";
+  process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+    buffer += typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
+    return true;
+  }) as typeof process.stderr.write;
+  return () => {
+    process.stderr.write = original;
     return buffer;
   };
 }
@@ -383,5 +397,108 @@ describe("validateFactsFile — decided_by is a closed set", () => {
       path: "facts[0].source.decided_by",
       message: "expected owner, driver or absent",
     });
+  });
+});
+
+/**
+ * `--repo` is validated against `workspace.yml`, the same way `tldrx answer --repo`
+ * already was (#186).
+ *
+ * The two commands write the same field on the same record through the same store,
+ * and only one of them looked at what the workspace declares: `facts add --repo
+ * ghost` exited 0 and wrote `repos: [ghost]`, while `answer --repo ghost` exited 1
+ * and named the declared repos. A fact scoped to a repo that does not exist is not
+ * a loud failure — it is invisible to every `renderFacts` filter keyed on the real
+ * name, forever, with nothing anywhere saying why.
+ *
+ * The refusal is exit 1 (`EXIT_USAGE`, spec §3's "usage/schema error") because that
+ * is the family `answer`'s already lives in — one condition, one family (AGENTS §7).
+ */
+describe("facts add --repo is checked against workspace.yml", () => {
+  test("a repo the workspace never declared is refused, and nothing is written", async () => {
+    const ws = makeWorkspace();
+
+    const err = captureStderr();
+    const code = await factsCommand.run([
+      "add", "ghost repo test", "--area", "test", "--decided-by", "driver",
+      "--repo", "ghost", "--root", ws.root,
+    ]);
+    const text = err();
+
+    expect(code).toBe(EXIT_USAGE);
+    expect(text).toContain("tldrx facts add: --repo ghost is not a repo in this workspace — it has api, lab");
+    // Refused BEFORE the store is opened: the fixture ships an empty facts file, so
+    // "nothing was written" is "still zero facts", not "no file".
+    expect(FactsStore.load(factsFileOf(ws)).facts).toHaveLength(0);
+  });
+
+  test("the refusal names the empty case instead of dangling", async () => {
+    const ws = makeWorkspace();
+    writeFileSync(
+      join(ws.root, ".tldrx", "workspace.yml"),
+      "version: 1\nmode: multi-repo\nroot_is_repo: false\nrepos: []\n",
+      "utf8",
+    );
+
+    const err = captureStderr();
+    const code = await factsCommand.run([
+      "add", "ghost repo test", "--area", "test", "--decided-by", "driver",
+      "--repo", "api", "--root", ws.root,
+    ]);
+    const text = err();
+
+    expect(code).toBe(EXIT_USAGE);
+    expect(text).toContain(
+      "tldrx facts add: --repo api is not a repo in this workspace — this workspace declares no repos",
+    );
+  });
+
+  test("a declared repo still records, and naming it twice scopes it once", async () => {
+    const ws = makeWorkspace();
+
+    const printed = capture();
+    const code = await factsCommand.run([
+      "add", "The outbox lives in api.", "--area", "billing", "--decided-by", "owner",
+      "--repo", "api", "--repo", "api", "--root", ws.root,
+    ]);
+    printed();
+
+    expect(code).toBe(0);
+    // `uniqueRepos` is the ONE de-duplication of a fact's `repos` (`reposFromAffects.ts`),
+    // and this command producing `[api, api]` while `answer --repo api --repo api`
+    // produced `[api]` was the same scoping spelled two ways depending on its source.
+    expect(FactsStore.load(factsFileOf(ws)).facts[0]?.repos).toEqual(["api"]);
+  });
+});
+
+/**
+ * The §7 shape check: ONE implementation of "is this a declared repo?".
+ *
+ * The ask on #186 was explicitly not "copy `answer.ts:71-81` into `facts.ts`" —
+ * two copies of a refusal sentence drift, and the drift is silent because each
+ * command's own test still passes. The sentence is the observable fingerprint of
+ * the derivation, so it is counted over `src/` rather than asserted from the leaf
+ * that produced it.
+ */
+describe("the declared-repo check has one implementation", () => {
+  /** Every `.ts` under `dir`, recursively — the walk `test/source-hygiene.test.ts` uses. */
+  function sourceFiles(dir: string): string[] {
+    const found: string[] = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) found.push(...sourceFiles(path));
+      else if (entry.name.endsWith(".ts")) found.push(path);
+    }
+    return found;
+  }
+
+  test("the refusal sentence is written in exactly one file under src/", () => {
+    const srcRoot = join(import.meta.dir, "..", "src");
+    const carriers = sourceFiles(srcRoot)
+      .filter((path) => readFileSync(path, "utf8").includes("is not a repo in this workspace"))
+      .map((path) => path.slice(srcRoot.length + 1))
+      .sort();
+    expect(carriers).toEqual(["cli/repoScope.ts"]);
   });
 });

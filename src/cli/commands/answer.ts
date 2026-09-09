@@ -31,7 +31,7 @@ import {
 import { FACT_DECIDERS, type FactDecider } from "../../core/facts/Fact.ts";
 import { formatJaccard } from "../../core/facts/findDuplicate.ts";
 import type { RaisedConflict } from "../../core/answers/raiseConflict.ts";
-import { uniqueRepos } from "../../core/answers/reposFromAffects.ts";
+import { isScoped, scopeRepos } from "../repoScope.ts";
 import { loadWorkspace } from "../../hooks/lib/workspace.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
 import { parseQuestions, type QuestionBlock } from "../../core/text/questions.ts";
@@ -69,19 +69,13 @@ export const answerCommand: Command = {
         );
       }
       const repoNames = new Set(loadWorkspace(root).repos.keys());
-      const wantedRepos = uniqueRepos(repeatedFlag(args, "repo"));
-      for (const repo of wantedRepos) {
-        if (!repoNames.has(repo)) {
-          // A workspace with no declared repos is its own sentence: "— it has "
-          // with nothing after it reads as a truncated message, not as an answer.
-          throw new UsageError(
-            `--repo ${repo} is not a repo in this workspace — `
-            + (repoNames.size === 0
-              ? "this workspace declares no repos"
-              : `it has ${[...repoNames].join(", ")}`),
-          );
-        }
-      }
+      // The check and its sentence live in `repoScope.ts`, not here: `tldrx facts
+      // add` scopes the same field with the same flag and had no check at all
+      // (#186), and a second copy of a refusal drifts while both commands' own
+      // tests keep passing.
+      const scoped = scopeRepos(repeatedFlag(args, "repo"), repoNames);
+      if (!isScoped(scoped)) throw new UsageError(scoped.problem);
+      const wantedRepos = scoped.repos;
       const overrides = new Map<string, AnswerOverride>([[qid, {
         ...(decidedBy === undefined ? {} : { decidedBy: decidedBy as FactDecider }),
         ...(wantedRepos.length === 0 ? {} : { repos: wantedRepos }),
