@@ -5,6 +5,23 @@
 
 ### Fixed
 
+- **A training test no longer runs on the fixed 5000 ms default: the spawner heuristic now
+  names the training shape (#194).** `test/machine-load.test.ts` decides which files must take
+  the load-aware budget by READING each test file for one of a few literal markers, and a
+  training turn matched none of them — it spawns the agent through `spawnAgent.ts`, two imports
+  away from any `Bun.spawn` the test file itself writes. Measured on `main` at cd8721a with a
+  probe that wraps `Bun.spawn` and `node:child_process` (validated first against a file the
+  heuristic already claims, which recorded 87 spawns, so the instrument can see the thing):
+  `test/knowledge-value.test.ts` spawned **3** real `claude` children while
+  `grep -c setDefaultTimeout` on it returned **0** — bun's fixed 5000 ms, which is the false RED
+  #43 was filed about, on the box's clock rather than the assertion's. The list now also names
+  `runTraining` and `makeTrainingWorkspace`, which claims two more files (81 → 83) and adds two
+  guard rows; `knowledge-value.test.ts` takes `spawnTestTimeout()`. The non-vacuity test is
+  anchored on that file as well as on `cli.test.ts`, because deleting a marker from a proxy list
+  otherwise shrinks the row set into a SHORTER green instead of a red — a marker list that can
+  quietly stop covering something is how this hid in the first place. The list is still a proxy:
+  the same probe found 14 more spawning files it does not claim, filed with the per-file counts
+  as #201.
 - **The changelog no longer credits a release with work it did not ship, and a gate now says so
   (#200).** Measured on `main` at 0.14.0: `awk '/^## /{h=$0} /wait-gates/{print h}' CHANGELOG.md`
   put #197's `--wait-gates` and `gate.timeout` bullets under `## 0.13.0 — 2026-09-08`, while
