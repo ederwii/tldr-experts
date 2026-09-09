@@ -140,7 +140,26 @@ de alguien sería peor que el silencio, porque a un latido se le cree. Que un ru
 detenido lo decide el mismo predicado que consulta `--wait-answers` y sobre el que se detiene
 `next`, nunca una segunda opinión.
 
-### Los ocho tipos
+Un run detenido en una **compuerta** tenía exactamente el mismo agujero, y se cierra igual.
+Mientras una firma está pendiente la carga suma dos claves:
+
+```json
+"detail": {
+  "status_text": "…lo que imprime `tldrx run status`, textual…",
+  "waiting_on": [],
+  "waiting_on_gate": "01-what/what",
+  "gate_policy": "human"
+}
+```
+
+…el resumen dice que el run está esperando que una persona firme esa etapa, y `command` pasa
+a ser `tldrx approve --run <id>`. `waiting_on_gate` es una clave **hermana** de `waiting_on`,
+no un miembro de ella: un adaptador convierte cada id de `waiting_on` en `tldrx answer <id>`,
+y un id de etapa ahí lo haría armar un comando que nadie puede teclear. Las dos claves están
+**ausentes** cuando no hay compuerta pendiente, así que un adaptador escrito antes de que
+esto existiera ve la carga de siempre.
+
+### Los nueve tipos
 
 El conjunto es cerrado — un tipo que llegara de la nada sería una rama que nadie escribió —
 así que un `switch` sobre `kind` con un `default` es un adaptador completo.
@@ -149,12 +168,13 @@ así que un `switch` sobre `kind` con un `default` es un adaptador completo.
 |---|---|---|---|
 | `question.raised` | el bucle se detuvo en una pregunta abierta | la línea `tldrx answer` de la primera pregunta | `questions[]` — `id`, `title`, `why_asked`, `options[]` como `{letter, text}`, `recommendation` (`option`, `why`, `src`) o `null`, `answer_command` |
 | `question.timeout` | se venció `--wait-answers` y el bucle está por salir con `4` | la misma línea de respuesta | los mismos `questions[]`, más `waited_ms` |
-| `gate.requested` | una etapa terminó y una persona tiene que firmarla | `tldrx approve --run <id>` | `cost_usd`, `approve_command`, `reject_command` |
+| `gate.requested` | una etapa terminó y una persona tiene que firmarla | `tldrx approve --run <id>` | `cost_usd`, `approve_command`, `reject_command`, `gate_policy` |
+| `gate.timeout` | se venció `--wait-gates` y el bucle está por salir con `4` | la misma línea de aprobación | `approve_command`, `reject_command`, `gate_policy`, `waited_ms`, y `cost_usd` solo cuando este bucle es el que vio levantarse la compuerta |
 | `stage.done` | una etapa terminó y el bucle siguió | `null` — el bucle ya está corriendo la siguiente etapa | `cost_usd` |
 | `run.finished` | el bucle terminó con salida `0` | `null` | `exit_code`, `exit_family`, `spent_usd` |
 | `run.failed` | el bucle terminó con cualquier salida distinta de cero, rechazos incluidos | `tldrx run status <id>` | `exit_code`, `exit_family`, `spent_usd` |
 | `budget.warned` | un techo está cerca | `tldrx budget show --run <id>` | `spent_usd`, `ceiling_usd` |
-| `status` | cada `--notify-every <duration>` mientras el bucle corre | `tldrx run status <id>`, o la línea de respuesta cuando está detenido | `status_text` — lo que imprime `tldrx run status`, textual — y `waiting_on`, los ids de las preguntas abiertas que lo detienen (`[]` si no hay) |
+| `status` | cada `--notify-every <duration>` mientras el bucle corre | `tldrx run status <id>`, o la línea de respuesta cuando está detenido en una pregunta, o la de aprobación cuando lo está en una compuerta | `status_text` — lo que imprime `tldrx run status`, textual — `waiting_on`, los ids de las preguntas abiertas que lo detienen (`[]` si no hay), y `waiting_on_gate` + `gate_policy` solo mientras hay una compuerta pendiente |
 
 `exit_family` es el código de salida en palabras, para que un aviso en un teléfono diga
 *"refused — a budget ceiling or a gate said no"* y no *"exit 2"*. Las preguntas, sus opciones
@@ -198,6 +218,7 @@ process.stdin.on("end", async () => {
       }
       break;
     case "gate.requested":
+    case "gate.timeout":
     case "budget.warned":
     case "run.failed":
       await sendToMyChannel(`${p.run} · ${p.kind}`, p.summary, action);
@@ -217,22 +238,38 @@ responde su propia pregunta.
 ## Ponerlo a correr
 
 ```bash
-tldrx run auto 260907-checkout --notify-every 10m --wait-answers 30m
+tldrx run auto 260907-checkout --notify-every 10m --wait-answers 4h --wait-gates 4h
 ```
 
-Las dos banderas toman una **duración**: `30s`, `10m`, `2h`, o un número pelado de segundos.
+Las tres banderas toman una **duración**: `30s`, `10m`, `2h`, o un número pelado de segundos.
 Un valor que no sea una duración se rechaza con salida `1`.
 
 - **`--notify-every <duration>`** agrega la carga `status` periódica. Apagada por defecto, y
   no hace absolutamente nada si no hay un comando `notify:` declarado. Existe porque el rato
   en el que más quieres saber que un run sigue vivo son los veinte minutos que pasa dentro de
   una etapa.
-- **`--wait-answers <duration>`** es la única bandera que cambia dónde se detiene el bucle.
-  En vez de salir con `4` apenas una etapa se detiene en una pregunta abierta, consulta los
-  archivos de preguntas del run durante ese rato y **retoma solo** si alguien responde. No se
-  gasta nada mientras espera. Cuando el plazo se vence manda un `question.timeout` y entonces
+- **`--wait-answers <duration>`** cambia dónde se detiene el bucle ante una PREGUNTA. En vez
+  de salir con `4` apenas una etapa se detiene en una pregunta abierta, consulta los archivos
+  de preguntas del run durante ese rato y **retoma solo** si alguien responde. No se gasta
+  nada mientras espera. Cuando el plazo se vence manda un `question.timeout` y entonces
   **sale con `4`** con las mismas líneas de siempre: el run queda intacto, no se perdió nada,
   y `tldrx run auto` lo retoma en cuanto la pregunta esté respondida.
+- **`--wait-gates <duration>`** hace lo mismo con una COMPUERTA, la otra mitad de la salida
+  `4`. Es una bandera hermana y no un `--wait-answers` más ancho, porque las dos detenciones
+  se cierran con verbos distintos: `tldrx answer` para una, `tldrx approve` / `tldrx reject`
+  para la otra, y llamarle "respuesta" a una firma sería que el nombre de la bandera mienta
+  sobre lo que hiciste. Aprueba dentro de la ventana y el bucle sigue a la etapa siguiente;
+  rechaza y se detiene, imprimiendo tu nota; deja que se venza y manda un `gate.timeout` y
+  sale con `4`. No se gasta nada mientras consulta.
+
+  Espera UNA firma; nunca la produce. En este bucle no hay firma del motor, así que una etapa
+  con `gates_policy: agent` lo detiene exactamente igual que una `human`, y `--wait-gates`
+  espera entonces a que un agente firme esa compuerta sobre una nota de evidencia — o a que
+  la apruebes tú, que es una anulación registrada y siempre está permitida. El latido y la
+  carga `gate.requested` nombran la política, así que sabes cuál de las dos estás haciendo.
+
+Las dos banderas de espera pueden darse juntas — esa es la forma de un lanzamiento del todo
+desatendido: `--wait-answers 4h --wait-gates 4h`.
 
 La salida `4` no es una falla. Es "esperando a una persona", y con el hook declarado a esa
 persona ya se le avisó; lo que queda es tu bucle externo de relanzamiento, que te toca
@@ -291,6 +328,12 @@ lo que diga, el resultado del run no cambia.
 **Se venció `--wait-answers`.** Recibes un `question.timeout` con `waited_ms` y los mismos
 `questions[]`, y después la salida `4`. Responde la pregunta y vuelve a arrancar el bucle: no
 se perdió nada y no se gastó nada mientras esperaba.
+
+**Se venció `--wait-gates`.** Recibes un `gate.timeout` con `waited_ms`, las líneas de
+aprobar y rechazar y la política de la compuerta, y después la salida `4`. Firma o rechaza la
+compuerta y vuelve a arrancar el bucle. Si la compuerta tiene `gates_policy: agent` y
+esperabas que el run siguiera solo: no lo hará — el bucle no firma nada, y una compuerta
+`agent` dice quién PUEDE firmar, no que algo ya haya firmado.
 
 **El run se rechaza con salida `1`.** `run auto` no corre sobre un run marcado
 `attended_by: host` — un candado y un motor son alternativas, nunca capas. Devuélvele el run

@@ -653,7 +653,7 @@ it was that acting on it meant reconstructing a command from a screen nobody was
 there is genuinely nothing to do — a stage finished, a run finished cleanly — `command` is `null`
 rather than an invented next step.
 
-The kinds are `question.raised`, `question.timeout`, `gate.requested`, `stage.done`,
+The kinds are `question.raised`, `question.timeout`, `gate.requested`, `gate.timeout`, `stage.done`,
 `run.finished`, `run.failed`, `budget.warned` and `status`. The full per-kind `detail` table is in
 [spec §2.18](../spec.md).
 
@@ -663,17 +663,18 @@ carries on with the exit code it already had. "The owner was not told, and here 
 about the run; "the chat tool was down, so the run failed" would make a side channel load-bearing.
 A delivered one is `notify.sent`, with the kind, the exit code and the duration. Both cost `$0.00`.
 
-### The two flags
+### The three flags
 
 ```
-$ tldrx run auto --notify-every 10m --wait-answers 30m
+$ tldrx run auto --notify-every 10m --wait-answers 30m --wait-gates 4h
 ```
 
 `--notify-every <duration>` sends a `status` payload on that interval while the loop runs, carrying
 what `tldrx run status` prints. It is a heartbeat: it asks for nothing while the run is moving, and it exists
 because the period when you most want to know a run is alive is the twenty minutes it is inside
-one stage. When the run is **parked** on an open question, the heartbeat says so and repeats the
-literal answer command instead — a heartbeat that went on saying "nothing is waiting on you"
+one stage. When the run is **parked** — on an open question, or on a gate waiting for your signature — the
+heartbeat says so and repeats the literal command instead: the answer line, or the approve line
+with the stage that is waiting. A heartbeat that went on saying "nothing is waiting on you"
 while the run waited on you would be worse than silence, because a heartbeat is believed.
 
 `--wait-answers <duration>` is the only one that changes where the loop stops. Instead of exiting
@@ -683,9 +684,21 @@ answer`. When the wait lapses it exits `4` with the same lines it always did, af
 `question.timeout` notification. Nothing is spent while it polls, and the loop never answers its
 own question.
 
-Without `--wait-answers`, the behaviour is unchanged for everyone: a question or a gate still exits
-`4`. The hook has simply already fired, with the answer command in it, so the outer relaunch loop
-is yours to write and you are not the one discovering the stop.
+`--wait-gates <duration>` is its sibling for the other half of exit `4`. A gate and a question
+stop the loop identically and are resolved by the same person from the same chat message, but
+they are closed by different verbs — so this is a separate flag rather than a wider
+`--wait-answers`, and calling a signature an "answer" would be the flag name lying about what
+you did. Approve within the window and the loop carries on; reject and it stops, printing your
+note; let it lapse and it exits `4` with the same lines, after one `gate.timeout`.
+
+It waits FOR a signature and never produces one. There is no engine-side signing in this loop,
+so a stage on `gates_policy: agent` stops it exactly as a `human` one does — `--wait-gates`
+then waits for an agent to sign that gate over an evidence note, or for you to approve it
+yourself, which is a recorded override and is always allowed.
+
+Without the two wait flags, the behaviour is unchanged for everyone: a question or a gate still
+exits `4`. The hook has simply already fired, with the answer or approve command in it, so the
+outer relaunch loop is yours to write and you are not the one discovering the stop.
 
 `tldrx init` writes the block **commented out**, with a line saying what it is for. It does not
 guess a command: who gets woken up is not a thing to detect.

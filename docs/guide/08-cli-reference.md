@@ -285,6 +285,7 @@ tldrx run estimate [<run>] [--json] [--run <id>]
 tldrx run auto     [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]
                           [--parallel <n>] [--yolo] [--gate-agent] [--ui <mode>] [--run <id>]
                           [--notify-every <duration>] [--wait-answers <duration>]
+                          [--wait-gates <duration>]
 tldrx run gates set <stage>:<human|auto|agent> --note <text> [--run <id>]
 tldrx run unlock   [<run>] [--force] [--run <id>]
 tldrx run cancel   [<run>] --note <text> [--force] [--run <id>]
@@ -353,20 +354,29 @@ LOOP's spend, checked between stages. Headless only — which is why it is refus
 the stop instead of the ordinary status block (guide 03); it is rendering only and never
 upgrades a stage's gate policy.
 
-`--notify-every <duration>` and `--wait-answers <duration>` are the loop's two **notify**
-flags, and both do nothing at all unless `.tldrx/workspace.yml` declares a `notify:` command
+`--notify-every <duration>`, `--wait-answers <duration>` and `--wait-gates <duration>` are the
+loop's **notify** flags, and both do nothing at all unless `.tldrx/workspace.yml` declares a `notify:` command
 (spec §2.18, guide 10). `--notify-every 10m` sends that command a `status` payload every ten
 minutes while the loop runs — a heartbeat carrying what `tldrx run status` prints. It asks for
 nothing while the run is moving; over a run **parked** on an open question it says so and
-repeats the literal `tldrx answer` line instead. `--wait-answers 30m` is the only flag that changes where the loop STOPS: instead of
-exiting `4` the moment a stage parks on an open question, it polls the run's question files
-for up to thirty minutes and resumes if somebody answers. A lapsed wait exits `4` with the
-same lines it always did, after one `question.timeout` notification. Both take `30s`, `10m`,
-`2h` or a bare number of seconds; anything else is exit `1`, by name.
+repeats the literal `tldrx answer` line instead — and over a run parked on a **gate** it names
+the stage waiting for a signature and repeats the literal `tldrx approve` line.
 
-Nothing is spent while `--wait-answers` polls, and the loop never answers its own question:
-the answer is an ordinary `tldrx answer` typed by a person, or run by whatever the notify
-command reached.
+`--wait-answers 30m` and `--wait-gates 30m` are the two flags that change where the loop
+STOPS, one for each half of exit `4`. Instead of exiting the moment a stage parks on an open
+question, `--wait-answers` polls the run's question files for up to thirty minutes and resumes
+if somebody answers; `--wait-gates` polls a pending gate the same way and resumes when
+somebody signs it. A rejection stops the loop and prints the note. A lapsed wait exits `4`
+with the same lines it always did, after one `question.timeout` or `gate.timeout`
+notification. All three take `30s`, `10m`, `2h` or a bare number of seconds; anything else is
+exit `1`, by name.
+
+Nothing is spent while either flag polls, and the loop closes nothing of its own: the answer
+is an ordinary `tldrx answer` and the signature an ordinary `tldrx approve` / `tldrx reject`,
+typed by a person or run by whatever the notify command reached. `--wait-gates` waits for a
+signature and never produces one — there is no engine-side signing here, so a stage on
+`gates_policy: agent` stops the loop exactly as a `human` one does and is waited on the same
+way. Both may be given together.
 
 `auto`'s `--model`, `--effort`, `--max-usd`, `--ui` and `--yolo` are the same flags
 [`tldrx next`](#tldrx-next) explains, passed to every stage the loop runs — so `--yolo` here

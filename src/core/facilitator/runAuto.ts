@@ -53,11 +53,14 @@ import { QUESTION_PHASES } from "../run/questionCards.ts";
 import { decisionHeader, renderDecisionCard, type DecisionCard } from "../ui/decisionCard.ts";
 import { blockingQuestionIds } from "./skipIf.ts";
 import { buildStatus, renderStatus } from "../run/runStatus.ts";
+import { waitingFor } from "../run/waiting.ts";
+import { gatePolicyFor, type GatePolicy } from "../run/gatePolicy.ts";
 import { readNotifyDeclaration } from "../notify/declaration.ts";
 import { Notifier } from "../notify/Notifier.ts";
 import {
-  budgetNotification, gateNotification, questionNotification, questionTimeoutNotification,
-  runEndNotification, stageDoneNotification, statusNotification, type NotifyContext,
+  budgetNotification, gateNotification, gateTimeoutNotification, questionNotification,
+  questionTimeoutNotification, runEndNotification, stageDoneNotification, statusNotification,
+  type NotifyContext, type WaitingGate,
 } from "../notify/notifications.ts";
 import { runNext, type NextOutcome } from "./runNext.ts";
 
@@ -106,6 +109,22 @@ export interface AutoOptions {
    * loop that could ANSWER a question would be the framework answering its own questions.
    */
   readonly waitAnswersMs?: number;
+  /**
+   * `--wait-gates <duration>`, in ms: `--wait-answers`'s sibling for the OTHER half of
+   * exit 4 (gh #197). Instead of exiting the moment a stage parks on a pending gate, poll
+   * the run until somebody signs it or this lapses.
+   *
+   * A sibling rather than an overload, because the two parks are not the same thing: one
+   * is closed by `tldrx answer` and the other by `tldrx approve` / `tldrx reject`, they
+   * notify under different kinds, and calling a signature an "answer" would be the flag
+   * name lying about what a person did.
+   *
+   * It WAITS FOR a signature; it never produces one. There is no engine-side signing in
+   * this loop — an `agent` gate is one an agent MAY close, not one this loop closes — so
+   * an `agent`-policy gate is waited on exactly like a `human` one, and what it is waiting
+   * for is `tldrx approve` (with or without `--as-agent`) run somewhere else.
+   */
+  readonly waitGatesMs?: number;
   /** Called with each line as it happens, so a long loop is not silent. */
   readonly onLine?: (line: string) => void;
 }
@@ -227,7 +246,15 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
             // on. Without it the heartbeat told a person "Nothing is waiting on you" every
             // interval while the run sat on their answer — reproduced in review, and worse
             // than silence, because a heartbeat is believed.
-            await notifier.send(statusNotification(notifyCtx(), text, stillBlocking(runDir)), stageIdOf());
+            // The SAME two readers the loop itself parks on: `stillBlocking` for questions
+            // and `waitingFor` for the gate. Without the second the heartbeat told a person
+            // "Nothing is waiting on you" every interval while his signature was the only
+            // thing the run was missing (gh #197) — the identical defect this comment's
+            // first half already records, one park along.
+            await notifier.send(
+              statusNotification(notifyCtx(), text, stillBlocking(runDir), pendingGate(runDir)),
+              stageIdOf(),
+            );
           })();
         }, options.notifyEveryMs);
 
@@ -265,8 +292,8 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
      * gate fell to a person is `gate.requested` and NOT also a `stage.done`. Two payloads
      * for one stage would make an owner's script announce the same money twice.
      */
-    const notifyFresh = async (fresh: readonly TldrxEvent[]): Promise<void> => {
-      if (notifier === null) return;
+    const notifyFresh = async (fresh: readonly TldrxEvent[]): Promise<number | null> => {
+      if (notifier === null) return null;
       let requested: number | null = null;
       let autoApproved = false;
       for (const event of fresh) {
@@ -293,8 +320,8 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
         }
       }
       if (requested !== null && !autoApproved) {
-        await notifier.send(gateNotification(notifyCtx(), requested), stageIdOf());
-        return;
+        await notifier.send(gateNotification(notifyCtx(), requested, gatePolicyNow(runDir)), stageIdOf());
+        return requested;
       }
       for (const event of fresh) {
         if (event.type === "stage.done") {
@@ -311,6 +338,7 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
           );
         }
       }
+      return null;
     };
 
     try {
@@ -365,12 +393,17 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
         return { unmetered: counted.unmetered, metered: counted.metered };
       };
       for (const line of stageLines(fresh, cursorBefore, outcome, stageTally)) say(line);
-      await notifyFresh(fresh);
+      // What the gate that just fell to a person cost, when this iteration is the one that
+      // raised it. Null on a loop that RESUMED a run already parked at a gate: no
+      // `gate.requested` event was appended here, so no figure was measured, and
+      // `gate.timeout` says nothing about cost rather than saying $0.00.
+      const gateCostUsd = await notifyFresh(fresh);
 
       if (outcome.code !== EXIT_OK) {
         // `--wait-answers`: the ONE place the loop does something other than stop. The
         // question has already been notified; polling here rather than exiting is what turns
         // "answer it and start the loop again" into "answer it".
+        let rejection: string | null = null;
         if (outcome.code === EXIT_AWAITING_HUMAN) {
           const card = openQuestions();
           if (card !== null && notifier !== null) {
@@ -388,9 +421,50 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
             }
             say(`waited ${String(Math.round(waited.ms / 1000))}s at ${cursorBefore} — `
               + "no answer arrived (--wait-answers)");
+          } else if (options.waitGatesMs !== undefined) {
+            // `--wait-gates`: the same wait for the other half of exit 4 (gh #197). The gate
+            // has already been notified above, exactly as it was; this decides whether the
+            // loop gives a signature a chance to land instead of stopping on the spot. The
+            // park is read through `waitingFor` — the one derivation `tldrx run status` and
+            // the dashboard share — so this cannot form a second opinion about whether a gate
+            // is pending. The policy is REPORTED and never acted on: an `agent` gate stops
+            // this loop exactly as a `human` one does, because nothing here signs anything.
+            const gate = pendingGate(runDir);
+            if (gate !== null) {
+              const waited = await waitForGate(runDir, gate.stageId, options.waitGatesMs);
+              if (waited.resolution === "approved") {
+                say(`waited ${String(Math.round(waited.ms / 1000))}s at ${cursorBefore} — `
+                  + `the gate on ${gate.stage} is approved, resuming`);
+                continue;
+              }
+              if (waited.resolution === "rejected") {
+                // The rejection's own semantics, unchanged: `tldrx reject` has already put the
+                // stage back to `ready` with the note fed into the next prompt, and the loop
+                // stops on the exit `next` gave it. Resuming here would re-spend the stage on
+                // a decision the person who rejected it has not been shown the result of.
+                //
+                // Said AFTER the stop block rather than before it, unlike every other `waited
+                // …` line: the rejection is the stop REASON, and `run.finished`/`run.failed`
+                // carries the last line — so a note written by the person who stopped the loop
+                // reaches the phone of the person who has to act on it.
+                rejection = `waited ${String(Math.round(waited.ms / 1000))}s at ${cursorBefore} — `
+                  + `the gate on ${gate.stage} was REJECTED`
+                  + (waited.note === null ? "" : `: ${waited.note}`);
+              } else {
+                if (notifier !== null) {
+                  await notifier.send(
+                    gateTimeoutNotification(notifyCtx(), gateCostUsd, waited.ms, gate.policy),
+                    stageIdOf(),
+                  );
+                }
+                say(`waited ${String(Math.round(waited.ms / 1000))}s at ${cursorBefore} — `
+                  + "nobody signed the gate (--wait-gates)");
+              }
+            }
           }
         }
         for (const line of stopLines(options, runDir, runId, outcome)) say(line);
+        if (rejection !== null) say(rejection);
         return await finish(outcome.code, spentByLoop);
       }
       // Exit 0 with nothing appended and the cursor unmoved would loop forever on a
@@ -421,21 +495,114 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
  * `runNext` is what notices and moves the stage back to `ready`; this only decides whether
  * to give it that chance.
  *
- * The poll interval is derived rather than configurable: a quarter of the wait, capped at
- * two seconds. A knob here would be a third duration for an owner to get wrong, and the
- * thing being waited on is a human typing.
+ * The poll interval is derived rather than configurable (`pollInterval`, shared with
+ * `waitForGate`): a quarter of the wait, capped at two seconds. A knob here would be a
+ * third duration for an owner to get wrong, and the thing being waited on is a human
+ * typing.
  */
 async function waitForAnswers(
   runDir: string,
   limitMs: number,
 ): Promise<{ readonly answered: boolean; readonly ms: number }> {
   const started = Date.now();
-  const pollMs = Math.max(25, Math.min(2000, Math.floor(limitMs / 4)));
+  const pollMs = pollInterval(limitMs);
   for (;;) {
     const elapsed = Date.now() - started;
     if (stillBlocking(runDir).length === 0) return { answered: true, ms: elapsed };
     if (elapsed >= limitMs) return { answered: false, ms: elapsed };
     await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, limitMs - elapsed)));
+  }
+}
+
+/**
+ * How often either wait looks: a quarter of the wait, floored at 25 ms and capped at two
+ * seconds. ONE derivation for both flags — two waits that polled at different rates would
+ * be a knob nobody chose, and the thing being waited on is a person typing.
+ */
+function pollInterval(limitMs: number): number {
+  return Math.max(25, Math.min(2000, Math.floor(limitMs / 4)));
+}
+
+/**
+ * The gate this run is PARKED on, or null — and who its frozen policy says may sign it.
+ *
+ * Built on `waitingFor`, which is the ONE answer to "what is this run waiting on"
+ * (`run/waiting.ts`): it reads the STATUS of the stage the cursor sits on, never the gate
+ * objects, so a brand-new run whose every `gate.status` is still `pending` is not called
+ * "waiting at a gate". A second predicate here is exactly the drift that put the heartbeat
+ * out of step with the interrupt once already.
+ *
+ * The policy is read separately, through `gatePolicyFor` — the run's own frozen map — and
+ * it is REPORTED, never acted on: this loop waits the same way whoever may sign.
+ */
+function pendingGate(runDir: string): (WaitingGate & { readonly stageId: string }) | null {
+  try {
+    const store = RunStore.open(runDir);
+    if (waitingFor(store.run, store.runDir).kind !== "gate") return null;
+    const cursor = store.run.cursor;
+    return {
+      stage: `${cursor.phase}/${cursor.stage}`,
+      stageId: cursor.stage,
+      policy: gatePolicyFor(store.run.gates_policy, cursor.stage),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** The cursor stage's gate policy, or null when the run cannot be read. */
+function gatePolicyNow(runDir: string): GatePolicy | null {
+  try {
+    const store = RunStore.open(runDir);
+    return gatePolicyFor(store.run.gates_policy, store.run.cursor.stage);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Poll one stage's gate until it is signed, either way, or `limitMs` lapses.
+ *
+ * Reads and does nothing else, like `waitForAnswers` — no lock, no mutation, not one byte
+ * written and not one cent spent. The signature it is waiting for is `tldrx approve` or
+ * `tldrx reject` run by somebody else; this only decides whether the loop gives it a
+ * chance to arrive.
+ *
+ * The status is read off the STAGE'S OWN GATE rather than through `waitingFor`, because
+ * the question here is a different one: `waitingFor` answers "is a gate holding this run",
+ * which stops being true the moment either verb lands, and approve and reject then need
+ * telling apart. `gate.status` is the field both verbs write, read once, not re-derived.
+ */
+async function waitForGate(
+  runDir: string,
+  stageId: string,
+  limitMs: number,
+): Promise<{
+  readonly resolution: "approved" | "rejected" | "lapsed";
+  readonly ms: number;
+  readonly note: string | null;
+}> {
+  const started = Date.now();
+  for (;;) {
+    const elapsed = Date.now() - started;
+    const gate = gateOf(runDir, stageId);
+    if (gate !== null && gate.status === "approved") return { resolution: "approved", ms: elapsed, note: null };
+    if (gate !== null && gate.status === "rejected") {
+      return { resolution: "rejected", ms: elapsed, note: gate.note.trim() === "" ? null : gate.note.trim() };
+    }
+    if (elapsed >= limitMs) return { resolution: "lapsed", ms: elapsed, note: null };
+    const pollMs = pollInterval(limitMs);
+    await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, limitMs - elapsed)));
+  }
+}
+
+/** One stage's gate object, off disk. Null when the run or the stage cannot be read. */
+function gateOf(runDir: string, stageId: string): { readonly status: string; readonly note: string } | null {
+  try {
+    const found = flatten(RunStore.open(runDir).run).find((entry) => entry.stage.id === stageId);
+    return found === undefined ? null : { status: found.stage.gate.status, note: found.stage.gate.note };
+  } catch {
+    return null;
   }
 }
 

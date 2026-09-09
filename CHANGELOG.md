@@ -82,6 +82,44 @@
 
 ### Added
 
+- **`tldrx run auto --wait-gates <duration>` — the loop waits for a signature the way it
+  already waits for an answer (#197).** Measured on a real workspace the day the notify hook
+  first drove a run: the question loop closed itself — the hook delivered Q1, the owner
+  answered from his chat, and `run auto` printed `waited 132s … resuming` — and then the very
+  next thing the stage did was reach its human gate, where the same owner approved from the
+  same chat and the loop had already exited 4. Three human gates a feature run is three manual
+  re-launches the hook was supposed to make unnecessary. The cause was scoped, not accidental:
+  `--wait-answers` gates its whole wait on an open-question card, which is `null` when the park
+  is a gate, so the wait was never reached. `--wait-gates` is a sibling flag rather than a wider
+  `--wait-answers`, because the two parks are closed by different verbs and calling a signature
+  an "answer" would be the flag name lying about what a person did. Approved → the loop carries
+  on; rejected → it stops and prints the note, which is now its LAST line so the `run.failed`
+  payload carries it to the phone of whoever has to act on it; lapsed → exit 4 with the same
+  lines it always had, after one `gate.timeout` (new kind, `question.timeout`'s twin, carrying
+  the approve and reject lines, the gate's policy, `waited_ms`, and `cost_usd` only when this
+  loop is the one that measured it). Nothing is spent while it polls — it reads files — and
+  whether a gate is pending is read through `waitingFor`, the one derivation `tldrx run status`
+  and the dashboard already share, never a second copy. **It waits FOR a signature and never
+  produces one**: there is no engine-side signing in this loop, so a stage on
+  `gates_policy: agent` stops it exactly as a `human` one does and is waited on identically —
+  an owner who switched three gates to `agent` expecting the loop to carry on was measuring
+  who MAY sign, not that anything had. Both wait flags may be given together, and without the
+  flag a gate exits 4 on the spot exactly as before.
+- **The heartbeat stops telling a waiting owner that nothing is waiting on him at a GATE.**
+  `--notify-every`'s `status` payload learned in 0.11.1 not to say "Nothing is waiting on you"
+  over a run parked on a question — the fix that exists because a heartbeat is believed — but
+  its parked-ness came from the blocking-question predicate alone, so a run parked on a
+  signature got `waiting_on: []` and the exact sentence the fix was written to prevent. A
+  pending gate is now named in `waiting_on_gate` (`<phase>/<stage>`) beside `gate_policy`, the
+  summary says the run is waiting for a person to sign that stage, and `command` is the literal
+  `tldrx approve` line — the same spelling `gate.requested` and every decision card use, now
+  one exported helper instead of four literals. `waiting_on_gate` is a SIBLING key rather than
+  a member of `waiting_on`: an adapter maps every id in `waiting_on` to `tldrx answer <id>`,
+  and a stage id there would make it build a command nobody can type. Both keys are absent when
+  no gate is pending, so a heartbeat over a moving run is byte-identical to the one it sent
+  before. `gate.requested` now names the policy too, so an owner reading it on a phone knows
+  whether he is signing a `human` gate or overriding an `agent` one.
+
 - **`tldrx expert rescore [<name>] [--area <a>]` — score the knowledge you already paid for.**
   Its sibling `recompute` is arithmetic over the evidence rows already in `competencies.yml`;
   `rescore` RE-READS `knowledge/*.md` and derives their evidence again under today's rules. It

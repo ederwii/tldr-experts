@@ -34,12 +34,15 @@ export const NOTIFY_PAYLOAD_VERSION = 1;
  * `status` is the only one that is not an event — it is the periodic heartbeat
  * `--notify-every` asks for, and it carries what `tldrx run status` prints.
  * `question.timeout` fires only under `--wait-answers`, at the moment the wait lapses
- * and the loop goes back to exiting 4.
+ * and the loop goes back to exiting 4; `gate.timeout` is its twin under `--wait-gates`
+ * (gh #197) — a gate and a question are the same exit `4` and the same person, and the
+ * two waits are kept apart only because they are closed by different verbs.
  */
 export const NOTIFY_KINDS = [
   "question.raised",
   "question.timeout",
   "gate.requested",
+  "gate.timeout",
   "stage.done",
   "run.finished",
   "run.failed",

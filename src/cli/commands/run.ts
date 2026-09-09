@@ -46,7 +46,7 @@ const HINT_FILE_COUNT = 10;
 const VALUE_FLAGS = [
   "title", "scope", "budget", "repos", "from", "seed", "gates", "run", "root",
   "max-usd", "until", "model", "effort", "ui", "note", "parallel", "attended-by",
-  "notify-every", "wait-answers",
+  "notify-every", "wait-answers", "wait-gates",
 ];
 
 /**
@@ -54,7 +54,7 @@ const VALUE_FLAGS = [
  *
  * `parseDurationMs` returns null for "0", "-5", "soon" and "30 minutes" alike, and a loop
  * that silently treated any of those as "off" would be a flag the operator typed and the
- * run ignored. One parser, one refusal, both flags — see `core/run/duration.ts`.
+ * run ignored. One parser, one refusal, all three flags — see `core/run/duration.ts`.
  */
 function durationFlag(args: ParsedArgs, name: string): number | undefined {
   const raw = stringFlag(args, name);
@@ -80,6 +80,7 @@ export const runCommand: Command = {
     "       tldrx run estimate [<run>] [--json] [--run <id>] [--root <path>]\n" +
     "       tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]\n" +
     "                      [--notify-every <duration>] [--wait-answers <duration>]\n" +
+    "                      [--wait-gates <duration>]\n" +
     "                  [--yolo] [--parallel <n>] [--gate-agent] [--ui scene|compact|plain|off]\n" +
     "                  [--run <id>] [--root <path>]\n" +
     "       tldrx run gates set <stage>:<human|auto|agent> --note <text> [--run <id>] [--root <path>]\n" +
@@ -300,6 +301,7 @@ async function runAutoLoop(argv: readonly string[]): Promise<number> {
         gateAgent: boolFlag(args, "gate-agent"),
         notifyEveryMs: durationFlag(args, "notify-every"),
         waitAnswersMs: durationFlag(args, "wait-answers"),
+        waitGatesMs: durationFlag(args, "wait-gates"),
         actor: currentActor(),
         at: nowRfc3339(),
         // Erase the view, let the stage line scroll past on stdout, repaint. A
