@@ -1,9 +1,84 @@
 # Changelog
 
 
+## 0.14.1 — unreleased
+
+### Fixed
+
+- **The changelog no longer credits a release with work it did not ship, and a gate now says so
+  (#200).** Measured on `main` at 0.14.0: `awk '/^## /{h=$0} /wait-gates/{print h}' CHANGELOG.md`
+  put #197's `--wait-gates` and `gate.timeout` bullets under `## 0.13.0 — 2026-09-08`, while
+  `git show v0.13.0:CHANGELOG.md | grep -c wait-gates` returned **0** — the tag that section
+  names never carried the flag. They were merged in 069a73e, after v0.13.1 was cut, and shipped
+  in v0.14.0; the implementer appended them to the FIRST `### Added` in the file instead of the
+  unreleased heading, which is the whole mechanism. Two older sections had the same slip:
+  0.3.1 carried a528985's four bullets (73 lines, committed 07:06 on 2026-08-31, twenty-six
+  minutes after v0.3.1 was tagged, first shipped in v0.4.0) and 0.6.1 had lost a blank line. All three are
+  now byte-identical to their tags, and the bullets sit under the release that actually shipped
+  them — a released section is **restored**, never edited, and the two corrections that had to
+  land inside a tagged section (0.14.0 and 0.4.0) are recorded in `CHANGELOG.amendments` rather
+  than smuggled in. The v0.14.0 GitHub release notes were re-published from the corrected
+  section and now carry both moved bullets; v0.13.0's were generated at tag time from a changelog
+  that did not carry them and are already right, so they are untouched.
+- **`scripts/release-check.sh` refuses a rewritten released section.** For every dated
+  `## X.Y.Z — YYYY-MM-DD` heading whose tag is present, the section's text must equal that
+  section at `git show vX.Y.Z:CHANGELOG.md` — the one copy nobody can edit afterwards — and a
+  mismatch fails by version, quoting the first differing line and the remedy. Nothing checked
+  this before, which is why three sections drifted without anyone noticing. It runs in both
+  `--pre-push` and `--ci`, and never fails for a reason it cannot judge: a checkout that fetched
+  no tags (`publish.yml`'s does not) and a tag whose own section still said `unreleased` (v0.0.2,
+  which predates the dating convention) are skipped and COUNTED in one line, because a silent
+  skip is how a gate becomes a decoration. A deliberate correction is recorded in
+  `CHANGELOG.amendments` (`<version> <source-sha> <why>`) — a second file on purpose, since the
+  failure being caught is an append nobody meant and an append edits one file. That listing is
+  **not a licence**, which a reviewer proved by injecting an invented bullet into an amended
+  section and watching the first version of this check pass it: an amended section must still
+  contain the tag's section as an ORDERED SUBSEQUENCE (nothing deleted, nothing reworded), and
+  every line it adds must exist verbatim in `<source-sha>:CHANGELOG.md`. Both halves say the same
+  thing — an amendment moves text the changelog already carried, and cannot write a new claim
+  into a shipped release. A source sha that is not a commit here is refused, not trusted.
+
 ## 0.14.0 — 2026-09-09
 
 ### Added
+
+- **`tldrx run auto --wait-gates <duration>` — the loop waits for a signature the way it
+  already waits for an answer (#197).** Measured on a real workspace the day the notify hook
+  first drove a run: the question loop closed itself — the hook delivered Q1, the owner
+  answered from his chat, and `run auto` printed `waited 132s … resuming` — and then the very
+  next thing the stage did was reach its human gate, where the same owner approved from the
+  same chat and the loop had already exited 4. Three human gates a feature run is three manual
+  re-launches the hook was supposed to make unnecessary. The cause was scoped, not accidental:
+  `--wait-answers` gates its whole wait on an open-question card, which is `null` when the park
+  is a gate, so the wait was never reached. `--wait-gates` is a sibling flag rather than a wider
+  `--wait-answers`, because the two parks are closed by different verbs and calling a signature
+  an "answer" would be the flag name lying about what a person did. Approved → the loop carries
+  on; rejected → it stops and prints the note, which is now its LAST line so the `run.failed`
+  payload carries it to the phone of whoever has to act on it; lapsed → exit 4 with the same
+  lines it always had, after one `gate.timeout` (new kind, `question.timeout`'s twin, carrying
+  the approve and reject lines, the gate's policy, `waited_ms`, and `cost_usd` only when this
+  loop is the one that measured it). Nothing is spent while it polls — it reads files — and
+  whether a gate is pending is read through `waitingFor`, the one derivation `tldrx run status`
+  and the dashboard already share, never a second copy. **It waits FOR a signature and never
+  produces one**: there is no engine-side signing in this loop, so a stage on
+  `gates_policy: agent` stops it exactly as a `human` one does and is waited on identically —
+  an owner who switched three gates to `agent` expecting the loop to carry on was measuring
+  who MAY sign, not that anything had. Both wait flags may be given together, and without the
+  flag a gate exits 4 on the spot exactly as before.
+- **The heartbeat stops telling a waiting owner that nothing is waiting on him at a GATE.**
+  `--notify-every`'s `status` payload learned in 0.11.1 not to say "Nothing is waiting on you"
+  over a run parked on a question — the fix that exists because a heartbeat is believed — but
+  its parked-ness came from the blocking-question predicate alone, so a run parked on a
+  signature got `waiting_on: []` and the exact sentence the fix was written to prevent. A
+  pending gate is now named in `waiting_on_gate` (`<phase>/<stage>`) beside `gate_policy`, the
+  summary says the run is waiting for a person to sign that stage, and `command` is the literal
+  `tldrx approve` line — the same spelling `gate.requested` and every decision card use, now
+  one exported helper instead of four literals. `waiting_on_gate` is a SIBLING key rather than
+  a member of `waiting_on`: an adapter maps every id in `waiting_on` to `tldrx answer <id>`,
+  and a stage id there would make it build a command nobody can type. Both keys are absent when
+  no gate is pending, so a heartbeat over a moving run is byte-identical to the one it sent
+  before. `gate.requested` now names the policy too, so an owner reading it on a phone knows
+  whether he is signing a `human` gate or overriding an `agent` one.
 
 - **`run auto` now closes an `agent` gate itself, over a note it wrote and had validated (#198).**
   `gates_policy: agent` said who MAY sign a gate; nothing in the engine produced the evidence note
@@ -111,44 +186,6 @@
 ## 0.13.0 — 2026-09-08
 
 ### Added
-
-- **`tldrx run auto --wait-gates <duration>` — the loop waits for a signature the way it
-  already waits for an answer (#197).** Measured on a real workspace the day the notify hook
-  first drove a run: the question loop closed itself — the hook delivered Q1, the owner
-  answered from his chat, and `run auto` printed `waited 132s … resuming` — and then the very
-  next thing the stage did was reach its human gate, where the same owner approved from the
-  same chat and the loop had already exited 4. Three human gates a feature run is three manual
-  re-launches the hook was supposed to make unnecessary. The cause was scoped, not accidental:
-  `--wait-answers` gates its whole wait on an open-question card, which is `null` when the park
-  is a gate, so the wait was never reached. `--wait-gates` is a sibling flag rather than a wider
-  `--wait-answers`, because the two parks are closed by different verbs and calling a signature
-  an "answer" would be the flag name lying about what a person did. Approved → the loop carries
-  on; rejected → it stops and prints the note, which is now its LAST line so the `run.failed`
-  payload carries it to the phone of whoever has to act on it; lapsed → exit 4 with the same
-  lines it always had, after one `gate.timeout` (new kind, `question.timeout`'s twin, carrying
-  the approve and reject lines, the gate's policy, `waited_ms`, and `cost_usd` only when this
-  loop is the one that measured it). Nothing is spent while it polls — it reads files — and
-  whether a gate is pending is read through `waitingFor`, the one derivation `tldrx run status`
-  and the dashboard already share, never a second copy. **It waits FOR a signature and never
-  produces one**: there is no engine-side signing in this loop, so a stage on
-  `gates_policy: agent` stops it exactly as a `human` one does and is waited on identically —
-  an owner who switched three gates to `agent` expecting the loop to carry on was measuring
-  who MAY sign, not that anything had. Both wait flags may be given together, and without the
-  flag a gate exits 4 on the spot exactly as before.
-- **The heartbeat stops telling a waiting owner that nothing is waiting on him at a GATE.**
-  `--notify-every`'s `status` payload learned in 0.11.1 not to say "Nothing is waiting on you"
-  over a run parked on a question — the fix that exists because a heartbeat is believed — but
-  its parked-ness came from the blocking-question predicate alone, so a run parked on a
-  signature got `waiting_on: []` and the exact sentence the fix was written to prevent. A
-  pending gate is now named in `waiting_on_gate` (`<phase>/<stage>`) beside `gate_policy`, the
-  summary says the run is waiting for a person to sign that stage, and `command` is the literal
-  `tldrx approve` line — the same spelling `gate.requested` and every decision card use, now
-  one exported helper instead of four literals. `waiting_on_gate` is a SIBLING key rather than
-  a member of `waiting_on`: an adapter maps every id in `waiting_on` to `tldrx answer <id>`,
-  and a stage id there would make it build a command nobody can type. Both keys are absent when
-  no gate is pending, so a heartbeat over a moving run is byte-identical to the one it sent
-  before. `gate.requested` now names the policy too, so an owner reading it on a phone knows
-  whether he is signing a `human` gate or overriding an `agent` one.
 
 - **`tldrx expert rescore [<name>] [--area <a>]` — score the knowledge you already paid for.**
   Its sibling `recompute` is arithmetic over the evidence rows already in `competencies.yml`;
@@ -1487,6 +1524,7 @@
     correctly and is spliced into no prompt is the `templates/story.md` failure again (#48).
     6 red before, green after. `docs/spec.md` §2.13 and the `delivery` expert each carry one
     line pointing at the checklist.
+
 - **The landing page now sells the unattended flow it never mentioned (#128).** Measured at
   `95a39db`: `grep -c 'tldrx drive' docs-site/index.md` returned `0`, and so did its Spanish
   twin — a bare `grep drive` exited `1` on both. `tldrx drive` is the star command for handing
@@ -4073,6 +4111,79 @@ same amount after it; what changed is that the page now says how big the bound i
 
 ### Fixed
 
+- **A trainer that `cd`s no longer writes its knowledge file into a different git repo.**
+  Measured 2026-08-31 on `~/scavtopia` (five repos, ten `expert train --mode light` runs): the
+  `mcp` run was rejected with `mcp.md.partial was never written`, and the file had been written —
+  46 lines, 9,567 bytes, complete and usable — to
+  `whiteboard/.tldrx/experts/mcp/knowledge/mcp.md.partial`. The sub-agent ran
+  `cd <workspace>/whiteboard` to execute that repo's declared gate command, then wrote the
+  RELATIVE path the prompt had given it, and the path resolved against the repo it had `cd`'d
+  into. Three costs from the one bug: **$1.23 charged for work that was finished and then
+  orphaned**, a parasitic `.tldrx/` tree left inside an unrelated git repo (`git -C whiteboard
+  status` → `?? .tldrx/`), and **no repair round possible** — the missing-file branch returns
+  before the repair check, so this failure mode was unrecoverable by construction even with
+  budget left. Fixed at both ends.
+  - **Prevention: the prompt now states an ABSOLUTE output path**, workspace-root-resolved, and
+    says why — "If you `cd` into a repo to run its gate command, a relative path then resolves
+    against THAT repo … and throws the whole paid run away. That is measured, not hypothetical."
+    Both training prompts carry it, and so does the repair round's target, for the same reason.
+  - **Recovery: when the file is missing, the declared repo roots are probed** for the stray
+    relative write before "never written" is said. A file found there is moved back and validated
+    exactly as if it had landed correctly — recovery is not a pass, the same `parseKnowledgeFile`
+    still judges it, and a recovered file that fails can still be repaired because the probe runs
+    ABOVE the repair round.
+  - **The note is honest and names the mess.** `recovered: the trainer wrote to
+    whiteboard/.tldrx/… , inside the `whiteboard` repo — a relative `.tldrx/…` path resolves
+    against whatever directory it had `cd`'d into.` The empty parasitic directories are removed
+    on the way out; a directory holding anything else is **left in place and named**, with the
+    `git -C <repo> status` to run, because a tool that deletes inside a repo it was never asked
+    to touch is a worse bug than the one it is fixing. A repo carrying its own
+    `.tldrx/workspace.yml` is skipped entirely — that file may belong to a nested workspace, and
+    taking it would be theft rather than recovery.
+  - When no stray is found the verdict is unchanged and now says where it looked.
+
+- **A rejected training run records WHICH problems, not just how many.**
+  Measured 2026-08-31: `components` failed with 12 problems for $1.02, and `training.jsonl` — the
+  durable record — held only the string `"…does not validate — 12 problem(s)"`. The twelve went
+  to stdout, where five of them were printed and the rest elided as `(+7 more)`. Anyone who had
+  not captured stdout, which is anyone running this normally, could not tell why a $1.02 run
+  failed. The list is now persisted twice.
+  - **On the ledger**: `check.failed.payload` carries `problems` (the rendered per-problem
+    lines), `problems_total`, `errors`, and `task`. The list is fitted to the record's 4 KB
+    payload cap and reports `problems_omitted` when it does not fit — an append that THROWS on
+    an oversize payload would take the cost line down with the reasons, which is the opposite of
+    the point. The repair round's own `check.failed` carries what it sent back, so "what did the
+    repair actually fix" is answerable later.
+  - **In the file**: `<area>.rejected.md` now opens with a `# REJECTED` header — expert/area,
+    mode, timestamp, dollars spent, error and warning counts, and every problem, uncapped —
+    above the trainer's bytes exactly as written, separated by a rule. A quarantine with no
+    verdict (a sub-agent that died, a rollback) gets no header: there were no reasons to state
+    and inventing them would be inventing the reason.
+
+- **`## Sources` is now taught as prose with the refused shape shown.** Same batch: four of the
+  five problems the `components` report printed are one mistake four times — `L34 Sources: no
+  [src: …] token`, `L35`, `L36`, `L37`. The trainer had written the recap as a bulleted list.
+  The prompt already said "**Sources** — prose", and a writer who reads that as a style note
+  writes bullets, because bullets are what the other four sections take. The rule it collides
+  with is genuinely file-wide — `parseKnowledgeFile` requires a `[src: …]` token on EVERY list
+  item in every declared section, recap included, and an unsourced one is an error that rejects
+  the file whole. Both prompts now show the accepted prose next to the refused bullets, the same
+  move the execution-claim rule makes. Whether an unsourced recap bullet should be a warning
+  rather than an error is a real question and is deliberately NOT settled here.
+
+
+- **`tldrx expert train` already exits nonzero when a training fails.** The 2026-08-31 batch
+  report measured shell `EXIT=0` on all ten invocations, including the three that failed their
+  check — but nine of those ten ran on a build that predates this one (`dist/tldrx.js` was
+  rewritten mid-batch at 05:40Z). On the current source the code path is intact:
+  `runTraining` returns `EXIT_AGENT_FAILED` (5), `expert train` returns `outcome.code`,
+  `dispatch` returns it, and `bin/tldrx.ts` does `process.exit(await dispatch(...))`. Now pinned
+  by three tests that drive the REAL CLI as a subprocess with a fake `claude` on PATH and assert
+  the PROCESS exit code — one for a file that does not validate, one for a file that was never
+  written, one for the passing case — because "`runTraining` returns 5" and "the process exits
+  5" are two different claims. Falsified before being trusted: making `expert train` return
+  `EXIT_OK` breaks two of the three.
+
 - **`tldrx learn` — the cold-player QA round (#30).** A first-time player played all eight chapters
   and returned SHIP-with-fixlist. Everything they found is fixed or recorded:
   - **Chapter 8 no longer lies about the brake.** It said "the phase has already spent its Watch
@@ -5274,66 +5385,6 @@ none of these behaves byte-identically to the release before them.
 
 ### Fixed
 
-- **A trainer that `cd`s no longer writes its knowledge file into a different git repo.**
-  Measured 2026-08-31 on `~/scavtopia` (five repos, ten `expert train --mode light` runs): the
-  `mcp` run was rejected with `mcp.md.partial was never written`, and the file had been written —
-  46 lines, 9,567 bytes, complete and usable — to
-  `whiteboard/.tldrx/experts/mcp/knowledge/mcp.md.partial`. The sub-agent ran
-  `cd <workspace>/whiteboard` to execute that repo's declared gate command, then wrote the
-  RELATIVE path the prompt had given it, and the path resolved against the repo it had `cd`'d
-  into. Three costs from the one bug: **$1.23 charged for work that was finished and then
-  orphaned**, a parasitic `.tldrx/` tree left inside an unrelated git repo (`git -C whiteboard
-  status` → `?? .tldrx/`), and **no repair round possible** — the missing-file branch returns
-  before the repair check, so this failure mode was unrecoverable by construction even with
-  budget left. Fixed at both ends.
-  - **Prevention: the prompt now states an ABSOLUTE output path**, workspace-root-resolved, and
-    says why — "If you `cd` into a repo to run its gate command, a relative path then resolves
-    against THAT repo … and throws the whole paid run away. That is measured, not hypothetical."
-    Both training prompts carry it, and so does the repair round's target, for the same reason.
-  - **Recovery: when the file is missing, the declared repo roots are probed** for the stray
-    relative write before "never written" is said. A file found there is moved back and validated
-    exactly as if it had landed correctly — recovery is not a pass, the same `parseKnowledgeFile`
-    still judges it, and a recovered file that fails can still be repaired because the probe runs
-    ABOVE the repair round.
-  - **The note is honest and names the mess.** `recovered: the trainer wrote to
-    whiteboard/.tldrx/… , inside the `whiteboard` repo — a relative `.tldrx/…` path resolves
-    against whatever directory it had `cd`'d into.` The empty parasitic directories are removed
-    on the way out; a directory holding anything else is **left in place and named**, with the
-    `git -C <repo> status` to run, because a tool that deletes inside a repo it was never asked
-    to touch is a worse bug than the one it is fixing. A repo carrying its own
-    `.tldrx/workspace.yml` is skipped entirely — that file may belong to a nested workspace, and
-    taking it would be theft rather than recovery.
-  - When no stray is found the verdict is unchanged and now says where it looked.
-
-- **A rejected training run records WHICH problems, not just how many.**
-  Measured 2026-08-31: `components` failed with 12 problems for $1.02, and `training.jsonl` — the
-  durable record — held only the string `"…does not validate — 12 problem(s)"`. The twelve went
-  to stdout, where five of them were printed and the rest elided as `(+7 more)`. Anyone who had
-  not captured stdout, which is anyone running this normally, could not tell why a $1.02 run
-  failed. The list is now persisted twice.
-  - **On the ledger**: `check.failed.payload` carries `problems` (the rendered per-problem
-    lines), `problems_total`, `errors`, and `task`. The list is fitted to the record's 4 KB
-    payload cap and reports `problems_omitted` when it does not fit — an append that THROWS on
-    an oversize payload would take the cost line down with the reasons, which is the opposite of
-    the point. The repair round's own `check.failed` carries what it sent back, so "what did the
-    repair actually fix" is answerable later.
-  - **In the file**: `<area>.rejected.md` now opens with a `# REJECTED` header — expert/area,
-    mode, timestamp, dollars spent, error and warning counts, and every problem, uncapped —
-    above the trainer's bytes exactly as written, separated by a rule. A quarantine with no
-    verdict (a sub-agent that died, a rollback) gets no header: there were no reasons to state
-    and inventing them would be inventing the reason.
-
-- **`## Sources` is now taught as prose with the refused shape shown.** Same batch: four of the
-  five problems the `components` report printed are one mistake four times — `L34 Sources: no
-  [src: …] token`, `L35`, `L36`, `L37`. The trainer had written the recap as a bulleted list.
-  The prompt already said "**Sources** — prose", and a writer who reads that as a style note
-  writes bullets, because bullets are what the other four sections take. The rule it collides
-  with is genuinely file-wide — `parseKnowledgeFile` requires a `[src: …]` token on EVERY list
-  item in every declared section, recap included, and an unsourced one is an error that rejects
-  the file whole. Both prompts now show the accepted prose next to the refused bullets, the same
-  move the execution-claim rule makes. Whether an unsourced recap bullet should be a warning
-  rather than an error is a real question and is deliberately NOT settled here.
-
 - **A rejected knowledge file gets ONE repair round before the money is thrown away.**
   Measured 2026-08-30 on `~/scavtopia`: `tldrx expert train dotnet-stack --area dotnet --mode
   light` spent **$1.69**, the trainer wrote `knowledge/dotnet.md.partial`, and the validator
@@ -5665,19 +5716,6 @@ none of these behaves byte-identically to the release before them.
   **only** those: every other missing input is still exit 1.
 
 ### Verified, not changed
-
-- **`tldrx expert train` already exits nonzero when a training fails.** The 2026-08-31 batch
-  report measured shell `EXIT=0` on all ten invocations, including the three that failed their
-  check — but nine of those ten ran on a build that predates this one (`dist/tldrx.js` was
-  rewritten mid-batch at 05:40Z). On the current source the code path is intact:
-  `runTraining` returns `EXIT_AGENT_FAILED` (5), `expert train` returns `outcome.code`,
-  `dispatch` returns it, and `bin/tldrx.ts` does `process.exit(await dispatch(...))`. Now pinned
-  by three tests that drive the REAL CLI as a subprocess with a fake `claude` on PATH and assert
-  the PROCESS exit code — one for a file that does not validate, one for a file that was never
-  written, one for the passing case — because "`runTraining` returns 5" and "the process exits
-  5" are two different claims. Falsified before being trusted: making `expert train` return
-  `EXIT_OK` breaks two of the three.
-
 
 - **The walk already skips vendored and generated trees**, and always did: `SKIPPED_DIRS`
   in `detect/walk.ts` covers `node_modules`, `dist`, `build`, `out`, `bin`, `obj`,

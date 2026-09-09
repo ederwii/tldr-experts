@@ -1,0 +1,17 @@
+# Dated CHANGELOG sections are immutable — `scripts/release-check.sh` compares each one against
+# `git show v<version>:CHANGELOG.md` and refuses a difference. This file is the ONLY exception,
+# and it is not a licence: a line here says the diff against the tag is a MOVE, and the gate
+# verifies exactly that. The tag's section must survive as an ordered subsequence (nothing
+# deleted, nothing reworded) and every ADDED line must exist verbatim in the changelog at the
+# source sha the line names. Nothing new can be written into a shipped release through this file.
+#
+# Format: `<version> <source-sha> <why>`. Comment lines start with `#`.
+#
+# 0.14.0 and 0.4.0 gained bullets they had always earned: each was merged after the preceding tag
+# was cut and was filed under the section ABOVE the unreleased heading (0.13.0 and 0.3.1), which
+# had already shipped. Restoring those two sections to their tags meant the bullets had to land
+# where they actually shipped — and those sections are tagged too, so the correction is recorded
+# here rather than smuggled in. Source sha cfccc80 is `main` at 0.14.0, the tree the lines were
+# moved out of, so every moved line is verifiably text the changelog already carried.
+0.14.0 cfccc80 #197's two bullets (`--wait-gates`, and the heartbeat naming the gate it waits on), merged in 069a73e after v0.13.1 was cut and shipped in v0.14.0, were filed under 0.13.0 — whose tag has no `wait-gates` — and are moved here verbatim.
+0.4.0 cfccc80 a528985's four bullets (the trainer that `cd`s into a foreign repo; a rejected run recording WHICH problems; `## Sources` taught as prose; `expert train` already exiting nonzero), committed 2026-08-31 07:06 after v0.3.1 was tagged at 06:40 and first shipped in v0.4.0, were filed under 0.3.1 and are moved here verbatim.
