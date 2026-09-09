@@ -43,7 +43,7 @@ import type { TldrxEvent } from "../events/Event.ts";
 import { ambiguousRunLines } from "../run/openRuns.ts";
 import { RunStore } from "../run/RunStore.ts";
 import { PROJECT_WORK_DIR } from "../paths.ts";
-import { AUTO_GATE_ACTOR } from "../run/autoGate.ts";
+import { AUTO_GATE_ACTOR, reevaluateAutoGate } from "../run/autoGate.ts";
 import { flatten, isAttendedByHost, type RunFile } from "../run/RunFile.ts";
 import { runTally } from "../budget/budgetView.ts";
 import { spentFigure, tallyOf, type SpentTally } from "../budget/spentFigure.ts";
@@ -63,6 +63,7 @@ import {
   type NotifyContext, type WaitingGate,
 } from "../notify/notifications.ts";
 import { GATE_SIGNER_ROLE } from "./gateSigner.ts";
+import { approve } from "../run/gates.ts";
 import { runNext, type NextOutcome } from "./runNext.ts";
 
 export interface AutoOptions {
@@ -297,8 +298,8 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
      * gate fell to a person is `gate.requested` and NOT also a `stage.done`. Two payloads
      * for one stage would make an owner's script announce the same money twice.
      */
-    const notifyFresh = async (fresh: readonly TldrxEvent[]): Promise<number | null> => {
-      if (notifier === null) return null;
+    const notifyFresh = async (fresh: readonly TldrxEvent[]): Promise<FreshNotified> => {
+      if (notifier === null) return { costUsd: null, deferredGate: null };
       let requested: number | null = null;
       let autoApproved = false;
       for (const event of fresh) {
@@ -325,11 +326,20 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
         }
       }
       if (requested !== null && !autoApproved) {
-        await notifier.send(
-          gateNotification(notifyCtx(), requested, gatePolicyNow(runDir), signerHeld(fresh)),
-          stageIdOf(),
-        );
-        return requested;
+        const cost = requested;
+        const policy = gatePolicyNow(runDir);
+        const send = async (): Promise<void> => {
+          if (notifier === null) return;
+          await notifier.send(gateNotification(notifyCtx(), cost, policy, gateHeld(fresh)), stageIdOf());
+        };
+        // The ONE case that waits: an auto gate whose only failing condition is
+        // `questions` (gh #203). The questions ARE the gate — it is downstream of
+        // them, not a parallel ask — so telling an owner to sign something before
+        // telling him what to answer sends him to the wrong tap. The EVENT is on the
+        // log either way: this defers a notification, never an audit record.
+        if (onlyHeldByQuestions(fresh)) return { costUsd: cost, deferredGate: send };
+        await send();
+        return { costUsd: cost, deferredGate: null };
       }
       for (const event of fresh) {
         if (event.type === "stage.done") {
@@ -346,7 +356,7 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
           );
         }
       }
-      return null;
+      return { costUsd: null, deferredGate: null };
     };
 
     try {
@@ -405,7 +415,19 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
       // raised it. Null on a loop that RESUMED a run already parked at a gate: no
       // `gate.requested` event was appended here, so no figure was measured, and
       // `gate.timeout` says nothing about cost rather than saying $0.00.
-      const gateCostUsd = await notifyFresh(fresh);
+      const notified = await notifyFresh(fresh);
+      const gateCostUsd = notified.costUsd;
+      let deferredGate = notified.deferredGate;
+      /**
+       * Send the gate notification that was held back — once, at the first moment it
+       * is still true. Idempotent: every call after the first is a no-op, so the
+       * three places that must not miss it can each say so without coordinating.
+       */
+      const flushGate = async (): Promise<void> => {
+        const send = deferredGate;
+        deferredGate = null;
+        if (send !== null) await send();
+      };
 
       if (outcome.code !== EXIT_OK) {
         // `--wait-answers`: the ONE place the loop does something other than stop. The
@@ -420,6 +442,10 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
           if (card !== null && options.waitAnswersMs !== undefined) {
             const waited = await waitForAnswers(runDir, options.waitAnswersMs);
             if (waited.answered) {
+              // The questions are settled. If the gate they were holding is STILL
+              // pending — a second condition, or no `--wait-gates` to close it — the
+              // notification that was deferred is now the actionable one (gh #203).
+              if (pendingGate(runDir) !== null) await flushGate();
               say(`waited ${String(Math.round(waited.ms / 1000))}s at ${cursorBefore} — `
                 + "every blocking question is answered, resuming");
               continue;
@@ -435,11 +461,19 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
             // loop gives a signature a chance to land instead of stopping on the spot. The
             // park is read through `waitingFor` — the one derivation `tldrx run status` and
             // the dashboard share — so this cannot form a second opinion about whether a gate
-            // is pending. The policy is REPORTED and never acted on: an `agent` gate stops
-            // this loop exactly as a `human` one does, because nothing here signs anything.
+            // is pending. The policy is REPORTED, and acted on in exactly one direction
+            // (gh #203): an `auto` gate is re-measured on every poll and signed the moment
+            // its seven conditions hold — the authority the run already granted, kept open
+            // instead of expiring the instant `next` handed the gate over. A `human` or
+            // `agent` gate stops this loop exactly as it always did; nothing here writes an
+            // evidence note, and nothing here signs for a person.
             const gate = pendingGate(runDir);
             if (gate !== null) {
-              const waited = await waitForGate(runDir, gate.stageId, options.waitGatesMs);
+              const waited = await waitForGate(runDir, gate.stageId, options.waitGatesMs, {
+                root: options.root,
+                policy: gate.policy,
+                at: options.at,
+              });
               if (waited.resolution === "approved") {
                 say(`waited ${String(Math.round(waited.ms / 1000))}s at ${cursorBefore} — `
                   + `the gate on ${gate.stage} is approved, resuming`);
@@ -459,6 +493,10 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
                   + `the gate on ${gate.stage} was REJECTED`
                   + (waited.note === null ? "" : `: ${waited.note}`);
               } else {
+                // Lapsed: nothing closed it and nothing will. Whatever was deferred
+                // above is now the whole story, and it goes out BEFORE the timeout so
+                // the two read in the order they happened.
+                await flushGate();
                 if (notifier !== null) {
                   await notifier.send(
                     gateTimeoutNotification(notifyCtx(), gateCostUsd, waited.ms, gate.policy),
@@ -540,8 +578,9 @@ function pollInterval(limitMs: number): number {
  * "waiting at a gate". A second predicate here is exactly the drift that put the heartbeat
  * out of step with the interrupt once already.
  *
- * The policy is read separately, through `gatePolicyFor` — the run's own frozen map — and
- * it is REPORTED, never acted on: this loop waits the same way whoever may sign.
+ * The policy is read separately, through `gatePolicyFor` — the run's own frozen map. It is
+ * what `waitForGate` hands to `selfCloseAutoGate`, which acts on `auto` and on nothing else;
+ * for `human` and `agent` this loop waits the same way it always did.
  */
 function pendingGate(runDir: string): (WaitingGate & { readonly stageId: string }) | null {
   try {
@@ -585,6 +624,7 @@ async function waitForGate(
   runDir: string,
   stageId: string,
   limitMs: number,
+  gate: GateWait,
 ): Promise<{
   readonly resolution: "approved" | "rejected" | "lapsed";
   readonly ms: number;
@@ -593,14 +633,78 @@ async function waitForGate(
   const started = Date.now();
   for (;;) {
     const elapsed = Date.now() - started;
-    const gate = gateOf(runDir, stageId);
-    if (gate !== null && gate.status === "approved") return { resolution: "approved", ms: elapsed, note: null };
-    if (gate !== null && gate.status === "rejected") {
-      return { resolution: "rejected", ms: elapsed, note: gate.note.trim() === "" ? null : gate.note.trim() };
+    const found = gateOf(runDir, stageId);
+    if (found !== null && found.status === "approved") return { resolution: "approved", ms: elapsed, note: null };
+    if (found !== null && found.status === "rejected") {
+      return { resolution: "rejected", ms: elapsed, note: found.note.trim() === "" ? null : found.note.trim() };
+    }
+    // The one thing this loop DOES rather than watches (gh #203). An `auto` policy has
+    // already said the machine may close this gate; before #203 the offer expired the
+    // moment `next` handed the gate over, so an auto gate held by four open questions
+    // stayed a human gate forever once the answers landed.
+    if (found !== null && await selfCloseAutoGate(runDir, stageId, gate)) {
+      return { resolution: "approved", ms: Date.now() - started, note: null };
     }
     if (elapsed >= limitMs) return { resolution: "lapsed", ms: elapsed, note: null };
     const pollMs = pollInterval(limitMs);
     await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, limitMs - elapsed)));
+  }
+}
+
+/** What a self-close needs that is not on disk. DATA, never the loop's options object. */
+interface GateWait {
+  readonly root: string;
+  /** The run's own FROZEN policy for this stage. Only `auto` is ever self-closed. */
+  readonly policy: GatePolicy | null;
+  /** The loop's pinned clock, or undefined to take the wall clock, as `next` does. */
+  readonly at: string | undefined;
+}
+
+/**
+ * Re-run the seven conditions and, when every one holds, sign the gate.
+ *
+ * `human` and `agent` return false without measuring anything — a policy is a
+ * statement about WHO may close a gate, and this loop is not a person and is not the
+ * engine's evidence-writing signer (#198). A person's `approve` or `reject` still
+ * lands first: this only runs while the gate is provably still `pending`, and it goes
+ * through the SAME `approve` door `runNext` uses when an auto gate closes at the end
+ * of a stage — the checks are re-run off disk there, the actor is `AUTO_GATE_ACTOR`,
+ * and the note is the verdict's own seven-condition line. One implementation of
+ * "an auto gate closes", called from two places.
+ *
+ * False on any refusal, including `approve`'s own: a gate this could not close is a
+ * gate that keeps waiting for a person, never one reported as closed.
+ *
+ * It runs at the POLL cadence — `pollInterval`, a quarter of the wait capped at two
+ * seconds — and that is a decision, not an oversight. Re-measuring costs file reads
+ * and, at a Build gate only, one `git diff --name-only` per repo for condition 7: a
+ * four-hour `--wait-gates` over a Build stage is a few thousand `git diff` spawns and
+ * no money, no agent turn and nothing written. A second, slower cadence would be a
+ * duration nobody chose (the same reason `pollInterval` is derived rather than a
+ * flag), and a gate that re-measured lazily would leave an owner's answered question
+ * sitting behind a closed condition for however long that knob happened to be.
+ */
+async function selfCloseAutoGate(runDir: string, stageId: string, gate: GateWait): Promise<boolean> {
+  if (gate.policy !== "auto") return false;
+  try {
+    const store = RunStore.open(runDir);
+    const verdict = await reevaluateAutoGate({
+      root: gate.root,
+      runDir: store.runDir,
+      run: store.run,
+      budget: store.budget,
+      stageId,
+    });
+    if (verdict === null || !verdict.ok) return false;
+    const approved = await approve(store, {
+      root: gate.root,
+      actor: AUTO_GATE_ACTOR,
+      at: gate.at ?? new Date().toISOString(),
+      note: verdict.note,
+    });
+    return approved.ok;
+  } catch {
+    return false;
   }
 }
 
@@ -770,6 +874,61 @@ export function stageLines(
  * gate was already pending — and `gateNotification` says nothing rather than
  * claiming a signer looked.
  */
+/** What one iteration's notifications produced: the gate figure, and any deferral. */
+interface FreshNotified {
+  /**
+   * What the gate that just fell to a person cost, or null when this iteration raised
+   * none — a loop that RESUMED a run already parked at a gate measured no figure, and
+   * `gate.timeout` then says nothing about cost rather than saying $0.00.
+   */
+  readonly costUsd: number | null;
+  /** The gate notification held back because the questions come first (gh #203). */
+  readonly deferredGate: (() => Promise<void>) | null;
+}
+
+/**
+ * The auto verdict `runNext` recorded on `gate.requested`, off the event itself.
+ *
+ * Read, never re-derived: `next` measured the seven conditions at the moment it handed
+ * the gate over, and a loop that formed its own second opinion here could tell an
+ * owner something the run's own log denies — which is the defect this pair of readers
+ * exists to end. Absent keys mean the gate had no auto verdict behind it at all (a
+ * `human` or `agent` policy), which is not the same as one that found nothing.
+ */
+function autoGateWhy(fresh: readonly TldrxEvent[]): { readonly why: string; readonly heldBy: readonly string[] } | null {
+  for (let i = fresh.length - 1; i >= 0; i--) {
+    const event = fresh[i];
+    if (event === undefined || event.type !== "gate.requested") continue;
+    const held = payload(event, "held_by");
+    if (!Array.isArray(held)) return null;
+    return {
+      why: typeof payload(event, "why") === "string" ? String(payload(event, "why")) : "",
+      heldBy: held.filter((id): id is string => typeof id === "string"),
+    };
+  }
+  return null;
+}
+
+/** True when `questions` is the ONE condition holding an auto gate (gh #203). */
+function onlyHeldByQuestions(fresh: readonly TldrxEvent[]): boolean {
+  const verdict = autoGateWhy(fresh);
+  return verdict !== null && verdict.heldBy.length === 1 && verdict.heldBy[0] === "questions";
+}
+
+/**
+ * What held THIS gate, in one list, whichever mechanism measured it.
+ *
+ * An `agent` gate's reason comes from the engine signer's own `agent.result` (#198);
+ * an `auto` gate's comes from the verdict `runNext` put on `gate.requested` (#203).
+ * They never both exist — the signer only runs under the `agent` policy — so one
+ * field carries both and `gateNotification` renders whichever arrived.
+ */
+function gateHeld(fresh: readonly TldrxEvent[]): readonly string[] {
+  const auto = autoGateWhy(fresh);
+  if (auto !== null && auto.why.trim() !== "") return [auto.why];
+  return signerHeld(fresh);
+}
+
 function signerHeld(fresh: readonly TldrxEvent[]): readonly string[] {
   for (let i = fresh.length - 1; i >= 0; i--) {
     const event = fresh[i];

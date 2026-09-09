@@ -115,6 +115,47 @@ button per question reads `detail.questions[]`. The options arrive as `{letter, 
 rather than a rendered `A) …` line, so building buttons out of them does not mean
 re-parsing a string the framework had already parsed.
 
+`recommendation` comes from one of two places, and it is `null` when neither carried one —
+never a manufactured one. An `agent` gate's evidence note (`recommend:`) wins; otherwise the
+question block's own optional `Recommended:` line does, which the asking stage writes:
+
+```
+- A) count them
+- B) drop them
+
+Recommended: B — matches how players talk about it [src: 01-what/handoff.md:22]
+
+[Answer]:
+```
+
+That line exists because only an `agent` gate ever writes a note, so questions parked at an
+`auto` gate used to arrive with no guidance at all — while the stage that raised them was the
+one thing in the run that knew the trade-off. A `Recommended:` line the parser cannot read is
+ignored, never refused: it is guidance, so a typo costs the guidance and not the gate.
+
+### What you will see when an `auto` gate is waiting
+
+Two things changed in the order and content of what reaches you, and both are about an `auto`
+gate held only by open questions:
+
+- **The questions arrive first, and the gate may not arrive at all.** When the ONLY thing
+  holding an auto gate is its open questions, the gate is downstream of them rather than a
+  second ask — so `question.raised` is delivered first and the `gate.requested` notification
+  is held back. You get "here is what to decide", not "sign this" followed by "and here is
+  why". The `gate.requested` EVENT is still appended to the run's log either way; only the
+  notification waits.
+- **The gate closes itself once you answer.** Under `--wait-gates`, each poll re-runs the
+  seven auto conditions, and the moment every one holds the loop signs the gate through the
+  same `tldrx approve` door and carries on to the next stage. So the sequence you actually
+  see is: the questions, your answers from your phone, and then `stage.done` for the NEXT
+  stage. No approve tap at all.
+
+If something OTHER than the questions is holding the gate — an unverified citation, a stage
+over its ceiling — both notifications go out, questions first, and the gate's summary names
+the condition: *"…is waiting at an auto gate that did not close by itself — a person signs
+it. It is held by: claim-sources=1 unverified citation(s) — …"*. Before this, that sentence
+said only "did not close by itself" and named nothing.
+
 ### `status` — the heartbeat
 
 ```json
@@ -164,7 +205,7 @@ The enum is closed — a kind that arrives from nowhere is a branch nobody wrote
 |---|---|---|---|
 | `question.raised` | the loop parked on an open question | the first question's `tldrx answer` line | `questions[]` — `id`, `title`, `why_asked`, `options[]` as `{letter, text}`, `recommendation` (`option`, `why`, `src`) or `null`, `answer_command` |
 | `question.timeout` | `--wait-answers` lapsed and the loop is about to exit `4` | the same answer line | the same `questions[]`, plus `waited_ms` |
-| `gate.requested` | a stage finished and a person must sign it | `tldrx approve --run <id>` | `cost_usd`, `approve_command`, `reject_command`, `gate_policy` |
+| `gate.requested` | a stage finished and a person must sign it — **deferred, and possibly never sent, when an `auto` gate is held only by open questions** | `tldrx approve --run <id>` | `cost_usd`, `approve_command`, `reject_command`, `gate_policy`, and one of `held_by` (an `auto` gate's failing conditions) / `signer_held` (an `agent` signer's reasons) — absent when nothing looked |
 | `gate.timeout` | `--wait-gates` lapsed and the loop is about to exit `4` | the same approve line | `approve_command`, `reject_command`, `gate_policy`, `waited_ms`, and `cost_usd` only when this loop is the one that saw the gate raised |
 | `stage.done` | a stage finished and the loop moved on | `null` — the loop is already running the next stage | `cost_usd` |
 | `run.finished` | the loop ended with exit `0` | `null` | `exit_code`, `exit_family`, `spent_usd` |
@@ -257,9 +298,11 @@ that is not a duration is refused with exit `1`.
   printing your note; let it lapse and it sends one `gate.timeout` and exits `4`. Nothing is
   spent while it polls.
 
-  It waits FOR a signature and never produces one — and by the time it is waiting, the
-  engine's own signer has already had its turn (below), so what is left to wait for is a
-  PERSON. Approving an agent-policy gate yourself is a recorded override and is always
+  It waits FOR a signature and produces one only where the run already said it could: an
+  `auto` gate is re-evaluated on every poll and signed the moment its seven conditions hold
+  (below). For `human` and `agent` it produces none — and by the time it is waiting on an
+  agent gate, the engine's own signer has already had its turn (below), so what is left to
+  wait for is a PERSON. Approving an agent-policy gate yourself is a recorded override and is always
   allowed. The heartbeat and the `gate.requested` payload both name the policy, so you know
   which of the two you are doing.
 
@@ -282,7 +325,11 @@ Three policies, three different things happen when a stage finishes:
   and appears in `tldrx cost`. There is no flag: `gates_policy: agent` is already your
   recorded decision that an agent may close it.
 - **`auto`** — no signer and no note: seven measured conditions, and the gate closes only if
-  all seven hold. Otherwise it falls to a person with the failing one named.
+  all seven hold. Otherwise it falls to a person with the failing ones named, on the
+  `gate.requested` payload's `held_by` as well as on stdout. And it keeps the offer open:
+  under `--wait-gates` the seven are re-measured on every poll, so a gate held by an open
+  question closes itself as soon as the question is answered. Only `auto` — the run already
+  granted that authority — and your own `approve` or `reject` overrides it at any moment.
 
 Both wait flags may be given together — that is the shape of a fully unattended launch:
 `--wait-answers 4h --wait-gates 4h`.

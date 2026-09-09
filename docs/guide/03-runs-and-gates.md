@@ -311,6 +311,21 @@ that wrote it and raised nothing DOES — having no decision to ask for is the s
 gate is for. And a stage that was never asked to ask anything, and asks nothing, is silent
 by right.
 
+**And when it does not close, it says which of the seven held it.** The verdict is measured
+before the gate is announced, so the `gate.requested` event carries `why` — the failing
+conditions in the same words `tldrx next` prints — and `held_by`, their ids. The unattended
+loop's notification renders that in its summary, so the sentence that reaches a phone is
+"is held by: questions=2 open (Q1, Q2)" rather than "did not close by itself". Both keys are
+present only for an `auto` policy: a `human` or `agent` gate had no auto verdict behind it, and
+an empty list there would read as "checked, nothing found".
+
+**And when the thing holding it clears, it closes itself.** An auto gate held only by open
+questions used to become a `human` gate for that stage the moment `tldrx next` handed it over:
+you answered the questions and nothing signed. Under `tldrx run auto --wait-gates`, each poll
+re-runs the seven conditions and signs through the same `tldrx approve` door as soon as every
+one holds. Only for `auto` — the run already granted that authority — and your own `approve` or
+`reject` overrides it at any moment.
+
 **It cannot decide that unfinished work is worth shipping.** A Build stage whose stories are
 not all `done` falls to a human, naming the stories and their statuses. You may well approve
 it anyway — half an epic is often the right thing to merge — but that is a judgement about

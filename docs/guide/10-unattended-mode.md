@@ -617,9 +617,26 @@ Recommends B — one screen, correct for everyone [src: 01-what/handoff.md:22]
 
 It is a **pure rendering** of things that already exist. The question, its `Why asked:` line and
 its lettered options come out of `questions.md` through the §2.7 parser — the questions grammar
-is not touched. The `Recommends` line comes out of the evidence note's optional `recommend:`
-array, and **a question with no recommendation gets no line**: the value of that line is that an
-agent stood behind it with a citation, and a manufactured one is worse than none.
+is not touched. The `Recommends` line comes out of one of two places — the evidence note's
+optional `recommend:` array, or the question block's own optional `Recommended:` line, and **the
+note wins when both exist**. The second exists because only an `agent` gate ever writes a note:
+four questions parked at an `auto` gate used to render with no recommendation at all, while the
+stage that raised them was the one thing in the run that knew the trade-off. Now the asker
+writes its own, after the options and before the `[Answer]:` slot:
+
+```
+- A) infer from the invoice email domain — no new UI, wrong for resellers
+- B) ask once at first login — one screen, correct for everyone
+
+Recommended: B — one screen, correct for everyone [src: 01-what/handoff.md:22]
+
+[Answer]:
+```
+
+**A question with no recommendation still gets no line**: the value of that line is that
+somebody stood behind it with a citation, and a manufactured one is worse than none. A
+`Recommended:` line that does not match the shape is ignored rather than refused — it is
+guidance, so a typo costs the guidance and never the gate.
 
 `--gate-agent` never changes an exit code and never upgrades a stage's frozen gate policy.
 On an attended run it never spawns, because nothing on an attended run does. The full card
@@ -707,7 +724,7 @@ heartbeat says so and repeats the literal command instead: the answer line, or t
 with the stage that is waiting. A heartbeat that went on saying "nothing is waiting on you"
 while the run waited on you would be worse than silence, because a heartbeat is believed.
 
-`--wait-answers <duration>` is the only one that changes where the loop stops. Instead of exiting
+`--wait-answers <duration>` changes where the loop stops. Instead of exiting
 `4` the moment a stage parks on a question, it polls the run's question files and **resumes if you
 answer** — from your phone, through whatever the notify command reached, as an ordinary `tldrx
 answer`. When the wait lapses it exits `4` with the same lines it always did, after one
@@ -721,10 +738,19 @@ they are closed by different verbs — so this is a separate flag rather than a 
 you did. Approve within the window and the loop carries on; reject and it stops, printing your
 note; let it lapse and it exits `4` with the same lines, after one `gate.timeout`.
 
-It waits FOR a signature and never produces one. There is no engine-side signing in this loop,
-so a stage on `gates_policy: agent` stops it exactly as a `human` one does — `--wait-gates`
-then waits for an agent to sign that gate over an evidence note, or for you to approve it
-yourself, which is a recorded override and is always allowed.
+It waits FOR a signature, and produces one only where the run already said it could. A stage on
+`gates_policy: agent` stops it exactly as a `human` one does — there is no engine-side
+evidence-writing signer in this loop, so `--wait-gates` waits for an agent to sign that gate over
+an evidence note, or for you to approve it yourself, which is a recorded override and is always
+allowed.
+
+**An `auto` gate is the exception, and it is the same authority the run already granted.** While
+it waits, each poll re-runs the seven auto conditions off disk; the moment every one holds, the
+loop signs through the same `tldrx approve` door — checks re-run, actor `auto`, the
+seven-condition note — and carries on. That is what turns "answer the four questions" into a run
+that keeps going: before this, an auto gate whose only blocker was an open question quietly
+became a `human` gate for that stage, forever. Your `approve` or `reject` still lands first and
+overrides at any moment.
 
 Without the two wait flags, the behaviour is unchanged for everyone: a question or a gate still
 exits `4`. The hook has simply already fired, with the answer or approve command in it, so the

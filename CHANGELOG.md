@@ -54,6 +54,52 @@
   every line it adds must exist verbatim in `<source-sha>:CHANGELOG.md`. Both halves say the same
   thing — an amendment moves text the changelog already carried, and cannot write a new claim
   into a shipped release. A source sha that is not a commit here is refused, not trusted.
+- **An auto gate now says WHY it did not close, and the reason reaches the phone (#203).**
+  Measured on a real workspace, 0.14.0, the first `run auto --wait-answers 4h --wait-gates 4h`
+  with the notify hook: the `what` stage finished for $1.98, every declared check passed, the
+  policy was `auto`, and the owner got *"waiting at a auto gate that did not close by itself —
+  a person signs it"*. No reason. The cause was four open questions, and `evaluateAutoGate`
+  had computed exactly that sentence — into a stdout line nobody was watching, because
+  `gate.requested` was appended a hundred lines BEFORE the verdict existed. The verdict is now
+  taken one statement earlier, the event carries `why` and `held_by`, and the notification
+  renders them. Both keys are present only for an `auto` policy: on a `human` or `agent` gate
+  nothing measured the seven conditions, and `held_by: []` there would read as "checked, and
+  nothing held it".
+- **The questions are notified before the gate that is downstream of them (#203).** When the
+  ONLY failing condition is `questions`, `question.raised` goes out first and `gate.requested`'s
+  notification is held back — sent only if the gate is still pending once the questions settle,
+  or when `--wait-gates` lapses, and never at all when the loop closes the gate itself. The
+  owner used to be told to sign something before being told what the thing was, which sent him
+  to the wrong tap. The EVENT is appended either way: this defers a notification, never an
+  audit record.
+- **An `auto` gate closes itself when the thing holding it clears (#203).** `--wait-gates` used
+  to poll `gate.status` and nothing else, so an auto gate whose only blocker was an open
+  question permanently degraded into a `human` gate for that stage: the owner answered all four
+  and nothing signed. Each poll now re-runs the seven conditions off disk for an `auto` policy
+  and, when every one holds, signs through the **same `approve` door** `next` uses — checks
+  re-run off disk, actor `auto`, the seven-condition note, the ordinary `gate.approved`. Never
+  for `human` and never for `agent`; a person's `approve` or `reject` still lands first and
+  overrides at any moment, and a refusal from `approve` leaves the gate waiting rather than
+  reporting a close.
+- **"a auto gate" is now "an auto gate".** One article, on the one sentence that reaches a lock
+  screen, chosen by a helper rather than a literal because it depends on the policy word and
+  `auto` is the only vowel among the four.
+
+### Added
+
+- **A question can carry its own recommendation: `Recommended: <letter> — <why> [src: …]`
+  (#203).** Until now the only recommendation slot in the framework was the `agent` gate's
+  evidence note, which an `auto` gate never writes — so on the run above all four questions
+  rendered `recommendation: null`, while the stage that raised them was the one thing in the
+  run that knew the trade-off. The §2.7 block grammar gains one optional line, after the
+  options and before the `[Answer]:` slot, and the what/how/plan prompts and
+  `templates/questions.md` ask for one on every question with a real `[src:]`. The parse is
+  strict about the two machine-readable parts (one letter `A`–`E`, a dash before any prose) so
+  that it can be tolerant about everything else: **a line that does not match is ignored, never
+  refused** — it is guidance, so a typo costs the guidance and not the gate — and
+  `questions lint` says nothing about it. Precedence, stated once: an evidence note's
+  `recommend:` entry wins over the block's line for the same question id, and a question with
+  neither still renders no recommendation at all. Nothing manufactures one.
 
 - **`tldrx facts add --repo <name>` is now checked against `workspace.yml`, through the one
   implementation `tldrx answer --repo` already refused on (#186).** Measured on a scratch

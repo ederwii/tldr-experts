@@ -117,6 +117,49 @@ script que quiera dibujar un botón por pregunta lee `detail.questions[]`. Las o
 llegan como `{letter, text}` y no como una línea `A) …` ya formateada, así que armar botones
 con ellas no obliga a re-parsear una cadena que el framework ya había parseado.
 
+`recommendation` sale de uno de dos lugares, y es `null` cuando ninguno traía una — nunca una
+fabricada. La nota de evidencia de una compuerta `agent` (`recommend:`) gana; si no la hay,
+manda la línea opcional `Recommended:` del propio bloque de la pregunta, que escribe la etapa
+que la levantó:
+
+```
+- A) count them
+- B) drop them
+
+Recommended: B — matches how players talk about it [src: 01-what/handoff.md:22]
+
+[Answer]:
+```
+
+Esa línea existe porque solo una compuerta `agent` escribe una nota, así que las preguntas
+detenidas en una compuerta `auto` llegaban sin ninguna guía — mientras que la etapa que las
+levantó era lo único en el run que conocía el compromiso. Una línea `Recommended:` que el
+parser no puede leer se ignora, nunca se rechaza: es una guía, así que un error de tipeo
+cuesta la guía y no la compuerta.
+
+### Lo que vas a ver cuando una compuerta `auto` está esperando
+
+Cambiaron dos cosas en el orden y el contenido de lo que te llega, y las dos son sobre una
+compuerta `auto` retenida únicamente por preguntas abiertas:
+
+- **Las preguntas llegan primero, y puede que la compuerta no llegue nunca.** Cuando lo ÚNICO
+  que retiene una compuerta auto son sus preguntas abiertas, la compuerta está río abajo de
+  ellas y no es un segundo pedido — así que `question.raised` se entrega primero y el aviso de
+  `gate.requested` se retiene. Recibís "esto hay que decidir", no "firmá esto" seguido de "y
+  acá está por qué". El EVENTO `gate.requested` se anexa igual al log del run; lo único que
+  espera es el aviso.
+- **La compuerta se cierra sola cuando respondés.** Con `--wait-gates`, cada consulta vuelve a
+  correr las siete condiciones auto, y apenas se cumplen todas el bucle firma la compuerta por
+  la misma puerta `tldrx approve` y sigue a la etapa siguiente. Así que la secuencia que vas a
+  ver de verdad es: las preguntas, tus respuestas desde el teléfono, y después `stage.done` de
+  la SIGUIENTE etapa. Ningún toque de aprobar.
+
+Si lo que retiene la compuerta es OTRA cosa — una cita sin verificar, una etapa por encima de
+su techo — salen los dos avisos, primero las preguntas, y el resumen de la compuerta nombra la
+condición: *"…is waiting at an auto gate that did not close by itself — a person signs it. It
+is held by: claim-sources=1 unverified citation(s) — …"*. Antes, esa frase decía solamente
+"did not close by itself" y no nombraba nada.
+
 ### `status` — el latido
 
 ```json
@@ -168,7 +211,7 @@ así que un `switch` sobre `kind` con un `default` es un adaptador completo.
 |---|---|---|---|
 | `question.raised` | el bucle se detuvo en una pregunta abierta | la línea `tldrx answer` de la primera pregunta | `questions[]` — `id`, `title`, `why_asked`, `options[]` como `{letter, text}`, `recommendation` (`option`, `why`, `src`) o `null`, `answer_command` |
 | `question.timeout` | se venció `--wait-answers` y el bucle está por salir con `4` | la misma línea de respuesta | los mismos `questions[]`, más `waited_ms` |
-| `gate.requested` | una etapa terminó y una persona tiene que firmarla | `tldrx approve --run <id>` | `cost_usd`, `approve_command`, `reject_command`, `gate_policy` |
+| `gate.requested` | una etapa terminó y una persona tiene que firmarla — **se difiere, y puede que nunca se mande, cuando una compuerta `auto` está retenida solo por preguntas abiertas** | `tldrx approve --run <id>` | `cost_usd`, `approve_command`, `reject_command`, `gate_policy`, y uno de `held_by` (las condiciones que fallaron en una compuerta `auto`) / `signer_held` (las razones del firmante `agent`) — ausente cuando nadie miró |
 | `gate.timeout` | se venció `--wait-gates` y el bucle está por salir con `4` | la misma línea de aprobación | `approve_command`, `reject_command`, `gate_policy`, `waited_ms`, y `cost_usd` solo cuando este bucle es el que vio levantarse la compuerta |
 | `stage.done` | una etapa terminó y el bucle siguió | `null` — el bucle ya está corriendo la siguiente etapa | `cost_usd` |
 | `run.finished` | el bucle terminó con salida `0` | `null` | `exit_code`, `exit_family`, `spent_usd` |
@@ -262,8 +305,11 @@ Un valor que no sea una duración se rechaza con salida `1`.
   rechaza y se detiene, imprimiendo tu nota; deja que se venza y manda un `gate.timeout` y
   sale con `4`. No se gasta nada mientras consulta.
 
-  Espera UNA firma; nunca la produce — y para cuando está esperando, el firmante del propio
-  motor ya tuvo su turno (más abajo), así que lo que queda por esperar es una PERSONA.
+  Espera UNA firma, y solo la produce donde el run ya había dicho que podía: una compuerta
+  `auto` se vuelve a evaluar en cada consulta y se firma apenas se cumplen sus siete
+  condiciones (más abajo). Para `human` y `agent` no produce ninguna — y para cuando está
+  esperando una compuerta `agent`, el firmante del propio motor ya tuvo su turno (más abajo),
+  así que lo que queda por esperar es una PERSONA.
   Aprobar tú mismo una compuerta con política `agent` es una anulación registrada y siempre
   está permitida. El latido y la carga `gate.requested` nombran la política, así que sabes
   cuál de las dos estás haciendo.
@@ -286,7 +332,11 @@ Tres políticas, tres cosas distintas al terminar una etapa:
   con `role: gate-signer` y aparece en `tldrx cost`. No hay bandera: `gates_policy: agent`
   ya es tu decisión registrada de que un agente puede cerrarla.
 - **`auto`** — sin firmante y sin nota: siete condiciones medidas, y la compuerta cierra solo
-  si se cumplen las siete. Si no, cae hacia una persona con la que falló nombrada.
+  si se cumplen las siete. Si no, cae hacia una persona con las que fallaron nombradas, tanto
+  en `held_by` de la carga `gate.requested` como en stdout. Y la oferta sigue en pie: con
+  `--wait-gates` las siete se vuelven a medir en cada consulta, así que una compuerta retenida
+  por una pregunta abierta se cierra sola apenas se responde la pregunta. Solo `auto` — el run
+  ya concedió esa autoridad — y tu propio `approve` o `reject` la anula en cualquier momento.
 
 Las dos banderas de espera pueden darse juntas — esa es la forma de un lanzamiento del todo
 desatendido: `--wait-answers 4h --wait-gates 4h`.

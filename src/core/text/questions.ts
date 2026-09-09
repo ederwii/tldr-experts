@@ -5,7 +5,7 @@
  * its raw lines, so a hook that records one answer rewrites one metadata line and
  * appends one footer, and every other byte of the user's file survives untouched.
  */
-import { parseSrcToken, type SrcToken } from "./srcToken.ts";
+import { parseSrcToken, srcToken, withoutSrcToken, SRC_SEPARATOR, type SrcToken } from "./srcToken.ts";
 
 export const QUESTION_STATUSES = ["open", "answered", "withdrawn"] as const;
 export type QuestionStatus = (typeof QUESTION_STATUSES)[number];
@@ -58,6 +58,30 @@ export interface SupersessionFooter {
   readonly supersedes: string;
 }
 
+/**
+ * The asker's own recommendation — the OPTIONAL `Recommended:` line (gh #203).
+ *
+ * Measured 2026-09-07: a real `what` stage parked four questions at an auto gate and
+ * every card rendered `recommendation: null`, because the only slot the framework had
+ * for one was the `agent` gate's evidence note — which an `auto` gate never writes.
+ * The stage that raised the question is the one that knows the trade-off, and it had
+ * nowhere to say so.
+ *
+ * Additive in the `version: 1` sense: a block written before this line existed parses
+ * exactly as it always did, and a line this reader cannot make sense of is IGNORED,
+ * never refused. Ignoring is the right failure here and it is a decision, not laziness
+ * — the line is GUIDANCE, and a stage that mistypes it must lose the guidance rather
+ * than the gate. `validateQuestions` therefore says nothing about it either.
+ */
+export interface QuestionRecommendation {
+  /** The option the asker would take: one letter, `A`–`E`. */
+  readonly option: string;
+  /** One line of why, with the trailing `[src: …]` token taken off. */
+  readonly why: string;
+  /** The citation's payload — `01-what/handoff.md:22` — or "" when it carried none. */
+  readonly src: string;
+}
+
 export interface QuestionBlock {
   readonly id: string;
   readonly title: string;
@@ -67,6 +91,8 @@ export interface QuestionBlock {
   readonly whyAsked: string | null;
   readonly whySrc: SrcToken | null;
   readonly options: readonly QuestionOption[];
+  /** The optional `Recommended:` line, or null when absent or unreadable. */
+  readonly recommended: QuestionRecommendation | null;
   /** The `[Answer]:` capture — "" when the slot is empty. */
   readonly answer: string;
   /** Index into `lines` of the `[Answer]:` line, or -1. */
@@ -114,6 +140,16 @@ const PROSE_OPTION_RE = /^\s*-\s*(?:\*\*)?([A-E])\)(?:\*\*)?\s*(.*)$/;
 const METADATA_RE = /^<!--\s*(.*?)\s*-->$/;
 const WHY_RE = /^Why asked:\s*(.*)$/;
 const OPTION_RE = /^-\s+([A-E])\)\s*(.*)$/;
+/**
+ * `Recommended: B — one screen, correct for everyone [src: 01-what/handoff.md:22]`
+ *
+ * Strict about the two things that make it machine-readable — one letter A–E, and a
+ * dash before any prose — precisely so it can be TOLERANT about everything else. A
+ * line that does not match is not half-read: `Recommended: whichever you like` names
+ * no option, and a reader that guessed one from the first letter of a sentence would
+ * be inventing exactly the recommendation `decisionCard.ts` refuses to manufacture.
+ */
+const RECOMMENDED_RE = /^Recommended:[ \t]+([A-E])\)?[ \t]*(?:[—–-][ \t]+(.*))?$/;
 const ANSWER_RE = /^\[Answer\]:[ \t]*(\S.*)$/;
 const ANSWER_SLOT_RE = /^\[Answer\]:/;
 const FOOTER_KEYS = ["answered_by", "answered_at", "fact"] as const;
@@ -158,6 +194,7 @@ function buildBlock(startLine: number, lines: readonly string[]): QuestionBlock 
   let whyAsked: string | null = null;
   let whySrc: SrcToken | null = null;
   const options: QuestionOption[] = [];
+  let recommended: QuestionRecommendation | null = null;
   let answer = "";
   let answerIndex = -1;
   let footer: AnswerFooter | null = null;
@@ -186,6 +223,11 @@ function buildBlock(startLine: number, lines: readonly string[]): QuestionBlock 
       options.push({ letter: option[1], text: option[2] });
       continue;
     }
+    const recommendation = RECOMMENDED_RE.exec(line);
+    if (recommendation !== null && recommendation[1] !== undefined && recommended === null) {
+      recommended = toRecommendation(recommendation[1], recommendation[2] ?? "");
+      continue;
+    }
     if (ANSWER_SLOT_RE.test(line) && answerIndex === -1) {
       answerIndex = i;
       const captured = ANSWER_RE.exec(line);
@@ -194,8 +236,22 @@ function buildBlock(startLine: number, lines: readonly string[]): QuestionBlock 
   }
 
   return {
-    id, title, metadata, metadataIndex, whyAsked, whySrc, options,
+    id, title, metadata, metadataIndex, whyAsked, whySrc, options, recommended,
     answer, answerIndex, footer, startLine, lines: [...lines],
+  };
+}
+
+/**
+ * The `[src: …]` grammar is `srcToken.ts`'s and stays there: this splits the line into
+ * the sentence and the citation using that one parser, and joins the refs back with the
+ * separator `srcToken()` itself writes — never a second reading of the same bytes.
+ */
+function toRecommendation(option: string, rest: string): QuestionRecommendation {
+  const token = parseSrcToken(rest);
+  return {
+    option,
+    why: withoutSrcToken(rest).trim(),
+    src: token === null ? "" : token.refs.map((ref) => ref.raw).join(SRC_SEPARATOR),
   };
 }
 
@@ -254,6 +310,11 @@ export function renderQuestionBlock(block: QuestionBlock): string {
   if (block.whyAsked !== null) lines.push(`Why asked: ${block.whyAsked}`);
   lines.push("");
   for (const option of block.options) lines.push(`- ${option.letter}) ${option.text}`);
+  if (block.recommended !== null) {
+    const rec = block.recommended;
+    const why = rec.why.trim() === "" ? "" : ` — ${rec.why.trim()}`;
+    lines.push("", `Recommended: ${rec.option}${why}${rec.src === "" ? "" : ` ${srcToken([rec.src])}`}`);
+  }
   lines.push("");
   lines.push(block.answer === "" ? "[Answer]:" : `[Answer]: ${block.answer}`);
   if (block.footer !== null) {

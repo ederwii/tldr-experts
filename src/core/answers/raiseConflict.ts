@@ -158,6 +158,9 @@ export function raiseConflictQuestion(args: RaiseConflictArgs): RaisedConflict {
       { letter: "B", text: `${args.oldFactId} is right — supersede ${args.newFactId}` },
       { letter: "C", text: "Both are partly right — write the correction below" },
     ],
+    // The framework raised this one, so it has nothing to recommend: the whole
+    // question is which of two recorded facts a PERSON stands behind (#203).
+    recommended: null,
     answer: "",
     answerIndex: -1,
     footer: null,

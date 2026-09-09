@@ -34,11 +34,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isAdvisory, openBlocks, parseQuestions, unreadableQuestionHeadings } from "../text/questions.ts";
 import { isHostTokens, type RunBudget } from "../budget/RunBudget.ts";
-import { epicOnlyCount, notedCount, runCheck, unverifiedCount, type CheckOutcome } from "./checks.ts";
+import { epicOnlyCount, notedCount, runCheck, runChecks, unverifiedCount, type CheckOutcome } from "./checks.ts";
 import { buildProgress, BUILD_PHASE } from "./buildProgress.ts";
 import { evaluateBoundary } from "./boundary.ts";
-import type { PlannedStage } from "./workflowPreset.ts";
-import type { RunStage } from "./RunFile.ts";
+import { loadWorkflowPreset, PresetError, type PlannedStage } from "./workflowPreset.ts";
+import type { RunFile, RunStage } from "./RunFile.ts";
 
 /** The actor an auto-approved gate is recorded under, in `by:` and in the event. */
 export const AUTO_GATE_ACTOR = "auto";
@@ -87,6 +87,68 @@ export async function evaluateAutoGate(input: AutoGateInput): Promise<AutoGateVe
     note: `auto-gate: ${conditions.map(render).join("; ")}`,
     why: failed.map(render).join("; "),
   };
+}
+
+/**
+ * The ids of the conditions that did NOT hold, in evaluation order — what the
+ * `gate.requested` event carries as `held_by` (gh #203).
+ *
+ * Ids, not sentences: `why` already carries the measured sentences, and a consumer
+ * that wants to branch on WHICH condition held a gate should not have to parse
+ * English to do it. The two travel together and are derived from the one verdict, so
+ * they cannot disagree.
+ */
+export function heldBy(verdict: AutoGateVerdict): readonly string[] {
+  return verdict.conditions.filter((condition) => !condition.ok).map((condition) => condition.id);
+}
+
+/**
+ * The same seven conditions, re-measured for a gate that is ALREADY pending (gh #203).
+ *
+ * `evaluateAutoGate` is handed everything by `tldrx next`, which has just run the
+ * stage and still holds its plan and the check outcomes it took moments ago. A poller
+ * has none of that — and an `auto` gate held only by open questions used to degrade
+ * permanently into a `human` one because nothing ever asked the question again once
+ * the answers landed. This rebuilds the input off disk, exactly the way `approve`
+ * rebuilds its own: the run's frozen scope resolves the preset, and the stage's
+ * declared checks are re-run against what is on disk right now.
+ *
+ * Null — never a pass — when the preset, the phase or the stage cannot be resolved. A
+ * verdict nobody could measure is absent with a reason, and the caller keeps waiting
+ * for a person.
+ */
+export async function reevaluateAutoGate(input: {
+  readonly root: string;
+  readonly runDir: string;
+  readonly run: RunFile;
+  readonly budget: RunBudget;
+  readonly stageId: string;
+}): Promise<AutoGateVerdict | null> {
+  const phase = input.run.phases.find((entry) => entry.stages.some((stage) => stage.id === input.stageId));
+  const stage = phase?.stages.find((entry) => entry.id === input.stageId);
+  if (phase === undefined || stage === undefined) return null;
+  let planned: PlannedStage | undefined;
+  try {
+    planned = loadWorkflowPreset(input.root, input.run.scope).stages.find((entry) => entry.id === input.stageId);
+  } catch (error) {
+    if (error instanceof PresetError) return null;
+    throw error;
+  }
+  if (planned === undefined) return null;
+  const checks = await runChecks(planned.checks, {
+    root: input.root,
+    runDir: input.runDir,
+    stage: planned,
+  });
+  return await evaluateAutoGate({
+    root: input.root,
+    runDir: input.runDir,
+    phaseId: phase.id,
+    stage,
+    planned,
+    budget: input.budget,
+    checks,
+  });
 }
 
 function render(condition: AutoGateCondition): string {
