@@ -1,0 +1,13 @@
+# Dated CHANGELOG sections are immutable — `scripts/release-check.sh` compares each one against
+# `git show v<version>:CHANGELOG.md` and refuses a difference. This file is the ONLY exception,
+# and it exists for one case: a released section that was already wrong and is being restored to
+# what that release actually shipped. Every line is `<version> <why>`; a line here is a claim
+# that the diff against the tag is a CORRECTION, and it is reviewed as one.
+#
+# 0.14.0 and 0.4.0 gained bullets they had always earned: the bullets were merged after the
+# preceding tag was cut and were filed under the section above them (0.13.0 and 0.3.1), which
+# had already shipped. Restoring those two sections to their tags means the bullets had to land
+# where they actually shipped — and those two sections are tagged too, so the correction is
+# recorded here rather than smuggled in.
+0.14.0 #197's `--wait-gates`/`gate.timeout` bullets, merged in 069a73e after v0.13.1 and shipped in v0.14.0, were filed under 0.13.0 (whose tag has no `wait-gates`) — moved here verbatim.
+0.4.0 a528985's two bullets (the trainer that `cd`s, and `expert train`'s exit code), committed 2026-08-31 07:06 after v0.3.1 was tagged at 06:40 and first shipped in v0.4.0, were filed under 0.3.1 — moved here verbatim.

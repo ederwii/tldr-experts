@@ -4,7 +4,7 @@ The rule is mechanical and enforced at three points, each doing something the ot
 `scripts/release.sh` runs the full local gate before anything is pushed; the Claude Code hook
 `scripts/release-gate-hook.sh` denies `git tag` / `git push … vX.Y.Z` / `npm publish` unless
 `scripts/release-check.sh` passes; and `publish.yml` runs `release-check.sh --ci` — the file
-checks (1–3) only, because 4 and 5 are local-path checks — plus the tag-equals-`package.json`
+checks (1–3 and 6) only, because 4 and 5 are local-path checks — plus the tag-equals-`package.json`
 check and the already-on-the-registry check. `publish.yml` does NOT re-run typecheck, tests or
 build: it REFUSES to publish unless the `ci` workflow has a successful run for the same sha,
 which is the same evidence without a third computation of it. A `cancelled` ci run (ci cancels
@@ -35,6 +35,14 @@ Package name `tldr-experts`; it installs the `tldrx` and `tldr-experts` commands
 5. `bun run typecheck`, `bun test`, `bun run build` green; no `Bun.*` under `src/` outside
    `src/core/runtime/` (the grep scans `src` only). Items 4 and 5 run on the local path only —
    `--ci` skips them, and the seam check runs in no CI workflow.
+6. **Released sections are immutable**: every dated `## X.Y.Z — YYYY-MM-DD` section whose tag is
+   present must still equal that section at `git show vX.Y.Z:CHANGELOG.md`, byte for byte — the
+   check that would have caught #197's bullets being appended to 0.13.0, a section already
+   released, instead of the unreleased heading. It runs in BOTH modes and never fails on a
+   missing tag: a checkout with no tags, and a tag whose own section still said `unreleased`,
+   are skipped and counted in one line. A released section is **restored**, never edited; the
+   one exception is a correction, which is recorded in `CHANGELOG.amendments` (`<version>
+   <why>`) and reviewed as a correction — a misplaced append never touches a second file.
 
 ## The order, and why it is this order
 

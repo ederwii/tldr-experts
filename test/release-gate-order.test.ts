@@ -344,3 +344,91 @@ describe("publish.yml depends on ci instead of re-running the gates", () => {
     expect(publish).toContain("id-token: write");
   });
 });
+
+/**
+ * Released CHANGELOG sections are immutable (#200).
+ *
+ * Measured on `main` at 0.14.0: `awk '/^## /{h=$0} /wait-gates/{print h}' CHANGELOG.md` put
+ * #197's `--wait-gates` bullets under `## 0.13.0 — 2026-09-08`, a section whose tag does not
+ * contain them (`git show v0.13.0:CHANGELOG.md | grep -c wait-gates` → 0). They were merged in
+ * 069a73e, after v0.13.1 was cut, and shipped in v0.14.0 — appended to the FIRST `### Added` in
+ * the file rather than the unreleased heading. The same slip is in 0.3.1 (60 lines from a528985,
+ * which first shipped in v0.4.0) and 0.6.1 (a blank line deleted). Nothing checked, because
+ * nothing compared a dated section against the tag that named it.
+ *
+ * The gate does: for every dated heading whose tag is present, the section's text must equal
+ * that section's text at the tag. Tolerant where it must be — `--ci` runs on a shallow checkout
+ * that may carry no tags, and v0.0.2's own tag still says `unreleased` — and those skips are
+ * announced in one line rather than passed in silence. A deliberate correction is recorded in
+ * `CHANGELOG.amendments`, a second file an accidental append never touches.
+ *
+ * Runs in `--ci` mode on purpose: this check is about the file and the tags, and `--ci` is the
+ * mode that skips the toolchain block, so a red here can only be the section comparison.
+ */
+describe("a released CHANGELOG section may not be edited (#200)", () => {
+  /** release.sh leaves the sandbox with a real `v0.9.9` tag over a dated 0.9.9 section. */
+  function released(): Sandbox {
+    const sb = sandbox();
+    expect(run(sb, "release.sh", [V, "--tag", "beta"]).code).toBe(0);
+    return sb;
+  }
+
+  const changelog = (sb: Sandbox) => join(sb.main, "CHANGELOG.md");
+
+  test("untouched: the section still equals its tag, and the gate is green", () => {
+    const sb = released();
+    const r = run(sb, "release-check.sh", ["--ci"]);
+    expect(`${r.stdout}${r.stderr}`).not.toMatch(/RELEASE CHECK FAILED/);
+    expect(r.code).toBe(0);
+  });
+
+  test("a bullet appended to the released section is refused, with the version and the remedy", () => {
+    const sb = released();
+    writeFileSync(changelog(sb), `${readFileSync(changelog(sb), "utf8")}- a bullet that shipped in no release\n`);
+
+    const r = run(sb, "release-check.sh", ["--ci"]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(new RegExp(`released section '## ${V}'`));
+    expect(r.stdout).toContain(`v${V}:CHANGELOG.md`);
+    expect(r.stdout).toMatch(/a bullet that shipped in no release/);   // the first differing line
+    expect(r.stdout).toMatch(/restored, never edited/);                // the remedy
+  });
+
+  test("a deleted line is caught too — the direction that quietly unships a claim", () => {
+    const sb = released();
+    writeFileSync(changelog(sb), readFileSync(changelog(sb), "utf8").replace("- the sandbox release\n", ""));
+    const r = run(sb, "release-check.sh", ["--ci"]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(new RegExp(`released section '## ${V}'`));
+  });
+
+  test("no tag for that version: skipped out loud, never failed — `--ci` may hold no tags at all", () => {
+    const sb = released();
+    writeFileSync(changelog(sb), `${readFileSync(changelog(sb), "utf8")}- a bullet that shipped in no release\n`);
+    git(sb.main, "tag", "-d", `v${V}`);
+
+    const r = run(sb, "release-check.sh", ["--ci"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/released-section check: skipped 1/);
+  });
+
+  test("a recorded amendment is allowed, and named in the output", () => {
+    const sb = released();
+    writeFileSync(changelog(sb), `${readFileSync(changelog(sb), "utf8")}- a bullet restored to the release that shipped it\n`);
+    writeFileSync(join(sb.main, "CHANGELOG.amendments"), `${V} restored the bullet #197 misfiled\n`);
+
+    const r = run(sb, "release-check.sh", ["--ci"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(new RegExp(`amend\\w* .*${V.replace(/\./g, "\\.")}|${V.replace(/\./g, "\\.")}.*amend`));
+  });
+
+  test("an amendments file that does not name this version does not excuse it", () => {
+    const sb = released();
+    writeFileSync(changelog(sb), `${readFileSync(changelog(sb), "utf8")}- a bullet that shipped in no release\n`);
+    writeFileSync(join(sb.main, "CHANGELOG.amendments"), "0.0.1 some other correction entirely\n");
+
+    const r = run(sb, "release-check.sh", ["--ci"]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(new RegExp(`released section '## ${V}'`));
+  });
+});

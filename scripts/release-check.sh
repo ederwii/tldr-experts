@@ -12,6 +12,40 @@ PV=$(node -p "require('./plugin/.claude-plugin/plugin.json').version")
 grep -qE "^## $V — [0-9]{4}-[0-9]{2}-[0-9]{2}$" CHANGELOG.md && ok || bad "CHANGELOG.md has no dated heading '## $V — YYYY-MM-DD' (is it still 'unreleased'?)"
 grep -qE "^\| $V \| [0-9]{4}-[0-9]{2}-[0-9]{2} \| \`(alpha|beta|stable)\` \|" README.md && ok || bad "README.md release table has no dated row for $V with a status tag (alpha|beta|stable)"
 grep -qE "unreleased" <(grep -E "^## $V" CHANGELOG.md) && bad "CHANGELOG.md $V still says unreleased"
+
+# --- released sections are immutable (#200) ---------------------------------------------------
+# A dated CHANGELOG section is the record of what a tag shipped, and it was silently rewritten
+# three times before anything compared the two. #197's `--wait-gates` bullets, merged after
+# v0.13.1 was cut and shipped in v0.14.0, were appended to the FIRST `### Added` in the file —
+# 0.13.0's, already released — so the changelog claimed a flag for a tag that does not carry it
+# (`git show v0.13.0:CHANGELOG.md | grep -c wait-gates` → 0). Same slip in 0.3.1 and 0.6.1.
+# For every dated heading whose tag is present, the section must equal that section AT THE TAG,
+# which is the only copy nobody can edit afterwards. Tolerant exactly twice, and out loud both
+# times: a checkout with no tags (publish.yml's `actions/checkout` fetches none) proves nothing,
+# and a tag whose own section still says `unreleased` predates the dating convention. A
+# deliberate correction is recorded in CHANGELOG.amendments — a second file, which is the point:
+# the failure this catches is an append nobody meant, and an append never edits two files.
+changelog_section() { awk -v v="$1" '/^## /{ if ($2 == v) { p = 1; print; next } else if (p) { exit } } p { print }'; }
+amendment_for() { [ -f CHANGELOG.amendments ] && awk -v v="$1" '$1 == v && NF > 1 { found = 1 } END { exit !found }' CHANGELOG.amendments; }
+imm_skipped=0
+for ver in $(grep -oE "^## [0-9]+\.[0-9]+\.[0-9]+ — [0-9]{4}-[0-9]{2}-[0-9]{2}$" CHANGELOG.md | awk '{print $2}'); do
+  if ! git rev-parse -q --verify "refs/tags/v$ver" >/dev/null 2>&1; then imm_skipped=$((imm_skipped + 1)); continue; fi
+  was=$(git show "v$ver:CHANGELOG.md" 2>/dev/null | changelog_section "$ver")
+  case "$(printf '%s\n' "$was" | head -1)" in
+    "") imm_skipped=$((imm_skipped + 1)); continue;;
+    *unreleased*) imm_skipped=$((imm_skipped + 1)); continue;;
+  esac
+  now=$(changelog_section "$ver" < CHANGELOG.md)
+  [ "$was" = "$now" ] && continue
+  if amendment_for "$ver"; then
+    echo "released-section check: $ver differs from v$ver:CHANGELOG.md — a recorded amendment (CHANGELOG.amendments)"
+    continue
+  fi
+  first=$(diff <(printf '%s\n' "$was") <(printf '%s\n' "$now") | grep -m1 -E "^[<>] " | cut -c3- | cut -c1-100)
+  bad "CHANGELOG.md: released section '## $ver' no longer matches v$ver:CHANGELOG.md — first difference: $first  — a released section is restored, never edited: move the bullet under the unreleased heading (or, for a deliberate correction, record it in CHANGELOG.amendments)"
+done
+[ "$imm_skipped" -gt 0 ] && echo "released-section check: skipped $imm_skipped dated section(s) — no local tag for them, or the tag's own section still said 'unreleased'"
+
 if ! $CI; then
   [ -z "$(git status --porcelain)" ] && ok || bad "working tree not clean"
   [ "$(git branch --show-current)" = "main" ] && ok || bad "not on main"
