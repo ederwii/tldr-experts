@@ -14,7 +14,8 @@
  */
 import type { DecisionCard } from "../ui/decisionCard.ts";
 // The one spelling of `tldrx answer <Qid> "…" --run <id>`, shared with every decision card.
-import { answerCommand } from "../run/decisionCards.ts";
+import { answerCommand, approveCommand, rejectCommand } from "../run/decisionCards.ts";
+import type { GatePolicy } from "../run/gatePolicy.ts";
 import { NOTIFY_PAYLOAD_VERSION, exitFamily, type NotifyKind, type NotifyPayload } from "./payload.ts";
 import { spentBasis, spentFigure, type SpentTally } from "../budget/spentFigure.ts";
 
@@ -100,18 +101,89 @@ export function questionTimeoutNotification(
   };
 }
 
-/** `gate.requested` — a stage finished and a person has to sign it. */
-export function gateNotification(ctx: NotifyContext, costUsd: number): NotifyPayload {
-  const approve = `tldrx approve --run ${ctx.runId}`;
+/**
+ * WHICH gate is waiting, in the frozen policy's own words (gh #197, scope note).
+ *
+ * An owner who has just switched a stage to `gates_policy: agent` expecting the loop to
+ * carry on needs to be told that it did not: there is no engine-side signing in
+ * `run auto`, so an `agent` gate stops it exactly as a `human` one does and waits for
+ * whoever signs. Saying only "its gate" left him to infer which tap he was doing.
+ *
+ * The policy comes from `gatePolicyFor` — the run's own frozen map, read by the caller —
+ * never from a guess about what the workflow says today.
+ */
+function gatePhrase(policy: GatePolicy | null): string {
+  switch (policy) {
+    case "human":
+      return "human gate — a person signs it";
+    case "agent":
+      return "agent gate — an agent may sign it over an evidence note, or a person may approve it "
+        + "(that is a recorded override, not a workaround)";
+    case "auto":
+      return "auto gate that did not close by itself — a person signs it";
+    default:
+      return "gate";
+  }
+}
+
+/**
+ * `gate.requested` — a stage finished and a person has to sign it.
+ *
+ * `policy` is nullable rather than defaulted: a loop that could not read the run's
+ * `gates_policy` says "gate" instead of naming a policy it did not measure.
+ */
+export function gateNotification(
+  ctx: NotifyContext,
+  costUsd: number,
+  policy: GatePolicy | null = null,
+): NotifyPayload {
+  const approve = approveCommand(ctx.runId);
   return {
     ...base(ctx, "gate.requested"),
     summary: `${ctx.runId} finished ${ctx.stage ?? "a stage"} for $${costUsd.toFixed(2)} and is waiting `
-      + "for a person to sign its gate. Nothing runs after it until the gate is approved or rejected.",
+      + `at a ${gatePhrase(policy)}. Nothing runs after it until the gate is approved or rejected.`,
     command: approve,
     detail: {
       cost_usd: costUsd,
       approve_command: approve,
-      reject_command: `tldrx reject --run ${ctx.runId} --note "<why>"`,
+      reject_command: rejectCommand(ctx.runId),
+      ...(policy === null ? {} : { gate_policy: policy }),
+    },
+  };
+}
+
+/**
+ * `gate.timeout` — `--wait-gates` lapsed and the loop is about to exit 4.
+ *
+ * `question.timeout`'s twin, and a separate kind for the same reason: "you are needed"
+ * and "you were needed and the loop has stopped waiting" are two different things to
+ * read on a phone, and a script that only escalates the second can.
+ *
+ * `costUsd` is nullable and ABSENT from the detail when it is null, rather than `0`: a
+ * loop that resumed a run already parked at a gate never saw the `gate.requested` event
+ * that carries the figure, and a confident zero there would report a stage that cost
+ * money as free (AGENTS.md §7, absent-with-reason).
+ */
+export function gateTimeoutNotification(
+  ctx: NotifyContext,
+  costUsd: number | null,
+  waitedMs: number,
+  policy: GatePolicy | null = null,
+): NotifyPayload {
+  const approve = approveCommand(ctx.runId);
+  return {
+    ...base(ctx, "gate.timeout"),
+    summary: `${ctx.runId} waited ${String(Math.round(waitedMs / 1000))}s for a signature on the `
+      + `${gatePhrase(policy)} at ${ctx.stage ?? "an unnamed stage"} and none arrived, so the loop `
+      + "stopped with exit 4. Approve or reject it and start the loop again — nothing was lost and "
+      + "nothing was spent while it waited.",
+    command: approve,
+    detail: {
+      ...(costUsd === null ? {} : { cost_usd: costUsd }),
+      approve_command: approve,
+      reject_command: rejectCommand(ctx.runId),
+      ...(policy === null ? {} : { gate_policy: policy }),
+      waited_ms: waitedMs,
     },
   };
 }
@@ -199,6 +271,17 @@ export function runEndNotification(
 }
 
 /**
+ * The gate a heartbeat has to name: where it is, and who the run's frozen policy says
+ * may sign it. Both are read by the caller off `run.yml` — this file words, it never
+ * derives (gh #197).
+ */
+export interface WaitingGate {
+  /** `<phase>/<stage>`, the same spelling the payload's own `stage` field uses. */
+  readonly stage: string;
+  readonly policy: GatePolicy | null;
+}
+
+/**
  * `status` — the periodic heartbeat `--notify-every` asks for.
  *
  * `statusText` is what `tldrx run status` prints, verbatim and unabridged. A summary of a
@@ -216,6 +299,11 @@ export function runEndNotification(
  * literal answer command, and lists the ids in `detail.waiting_on`. Silence was the other
  * option and it is the weaker one — the reminder is the notification a waiting owner wants.
  *
+ * The same hole existed at a GATE and cost the same person the same evening (gh #197): a
+ * run parked on a signature got `waiting_on: []` and the identical "Nothing is waiting on
+ * you". `waitingOnGate` closes it, and it too is passed IN — from `waitingFor`, the one
+ * derivation `tldrx run status` and the dashboard already share.
+ *
  * `waitingOn` is passed IN, from the caller's `blockingQuestionIds` — the one predicate for
  * "does this question park a run", shared with `runNext`, `skip_if` and `--wait-answers`.
  * A second opinion about parked-ness here is exactly the drift that would put the heartbeat
@@ -225,22 +313,44 @@ export function statusNotification(
   ctx: NotifyContext,
   statusText: string,
   waitingOn: readonly string[] = [],
+  waitingOnGate: WaitingGate | null = null,
 ): NotifyPayload {
   const ids = [...waitingOn];
   const parked = ids.length > 0;
+  const gateSummary = waitingOnGate === null
+    ? ""
+    : `${ctx.runId} is parked at ${waitingOnGate.stage} waiting for a person to SIGN it: `
+      + `${gatePhrase(waitingOnGate.policy)}. Nothing runs after it and nothing is being spent `
+      + "while it waits."
+      + (parked ? ` It also has ${String(ids.length)} open question(s): ${ids.join(", ")}.` : "");
   return {
     ...base(ctx, "status"),
-    summary: parked
-      ? `${ctx.runId} is parked at ${ctx.stage ?? "an unnamed stage"} waiting on YOU: `
-        + `${String(ids.length)} open question(s), ${ids.join(", ")}. Nothing is being spent `
-        + "while it waits, and it resumes the moment one is answered."
-      : `${ctx.runId} is still running at ${ctx.stage ?? "an unnamed stage"}. `
-        + "Nothing is waiting on you — this is the periodic heartbeat `--notify-every` asked for.",
-    // The literal line to type, exactly as `question.raised` spelled it — a reminder that
-    // made the reader go and find the command would be a reminder to go and look at a screen.
-    command: parked
-      ? answerCommand(ids[0] ?? "Q1", ctx.runId)
-      : `tldrx run status ${ctx.runId}`,
-    detail: { status_text: statusText, waiting_on: ids },
+    summary: waitingOnGate !== null
+      ? gateSummary
+      : parked
+        ? `${ctx.runId} is parked at ${ctx.stage ?? "an unnamed stage"} waiting on YOU: `
+          + `${String(ids.length)} open question(s), ${ids.join(", ")}. Nothing is being spent `
+          + "while it waits, and it resumes the moment one is answered."
+        : `${ctx.runId} is still running at ${ctx.stage ?? "an unnamed stage"}. `
+          + "Nothing is waiting on you — this is the periodic heartbeat `--notify-every` asked for.",
+    // The literal line to type, exactly as `question.raised` and `gate.requested` spelled it
+    // — a reminder that made the reader go and find the command would be a reminder to go and
+    // look at a screen. A pending gate wins the one slot: it is the thing that has stopped
+    // the loop, and its verb is not `answer`.
+    command: waitingOnGate !== null
+      ? approveCommand(ctx.runId)
+      : parked
+        ? answerCommand(ids[0] ?? "Q1", ctx.runId)
+        : `tldrx run status ${ctx.runId}`,
+    detail: {
+      status_text: statusText,
+      waiting_on: ids,
+      // A SIBLING key, not a member of `waiting_on` (gh #197). `waiting_on` is a list of
+      // question ids and an owner's adapter maps each one to `tldrx answer <id>`; folding
+      // `01-what/alpha` into it would make that adapter build a command nobody can type.
+      // Absent — not `null` — when no gate is pending, so a heartbeat over an unparked run
+      // is byte-identical to the one it sent before this existed.
+      ...(waitingOnGate === null ? {} : { waiting_on_gate: waitingOnGate.stage, gate_policy: waitingOnGate.policy }),
+    },
   };
 }

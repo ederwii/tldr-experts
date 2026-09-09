@@ -93,16 +93,20 @@ cuelgue: cada uno queda anotado como un evento `notify.failed` con su razón, y 
 el código de salida que ya tenía.
 
 ```bash
-tldrx run auto --notify-every 10m --wait-answers 30m
+tldrx run auto --notify-every 10m --wait-answers 4h --wait-gates 4h
 ```
 
 `--notify-every` agrega una carga `status` periódica con lo que imprime `tldrx run status`: un
-latido, que no pide nada mientras el run avanza. Sobre un run **detenido** en una pregunta
-abierta dice justamente eso y repite el comando literal para responder, porque un latido que
-siguiera diciendo que nadie te está esperando sería peor que el silencio. `--wait-answers` es la única bandera que cambia dónde se detiene el
-bucle: en vez de salir con `4` en una pregunta abierta, espera una respuesta y **retoma si la das**,
-y sale con `4` sin cambios cuando el plazo se vence. No se gasta nada mientras espera, y el bucle
-nunca responde su propia pregunta.
+latido, que no pide nada mientras el run avanza. Sobre un run **detenido** —en una pregunta
+abierta, o en una **compuerta** que espera tu firma— dice justamente eso y repite el comando
+literal, porque un latido que siguiera diciendo que nadie te está esperando sería peor que el
+silencio. `--wait-answers` y `--wait-gates` son las dos banderas que cambian dónde se detiene el
+bucle, una por cada mitad de la salida `4`: en vez de salir en una pregunta abierta espera una
+respuesta y **retoma si la das**, y en vez de salir en una compuerta pendiente espera una firma y
+**retoma si alguien la firma**, deteniéndose con tu nota si la rechazas. Ambas salen con `4` sin
+cambios cuando el plazo se vence. No se gasta nada mientras esperan, y el bucle no cierra nada
+por su cuenta: nunca responde su propia pregunta ni firma su propia compuerta, tampoco con una
+política `agent`.
 
 La mitad operativa de esto — la carga completa por tipo, un esqueleto de adaptador para
 pegar, una lista para la primera corrida y qué revisar cuando no llega nada — está en

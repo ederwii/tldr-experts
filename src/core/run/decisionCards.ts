@@ -74,8 +74,8 @@ export function budgetCard(ctx: CardContext, detail: string, money: Money | null
       : [`$${money.spentUsd.toFixed(2)} spent of $${money.ceilingUsd.toFixed(2)}`, detail],
     commands: [
       `tldrx budget show --run ${ctx.runId}`,
-      `tldrx approve --run ${ctx.runId}`,
-      `tldrx reject --run ${ctx.runId} --note "<why>"`,
+      approveCommand(ctx.runId),
+      rejectCommand(ctx.runId),
     ],
   };
 }
@@ -129,8 +129,8 @@ export function boundaryCard(
       "tldrx story widen <id> <path> --note \"<why>\" \u2014 or cite the path in a handoff, then re-run the stage",
       "tldrx story reopen <id> --for-fix --note \"<the defect>\" \u2014 first, when the story is already "
         + "`done`: widening finished work is refused",
-      `tldrx approve --run ${ctx.runId}`,
-      `tldrx reject --run ${ctx.runId} --note "<why>"`,
+      approveCommand(ctx.runId),
+      rejectCommand(ctx.runId),
     ],
   };
 }
@@ -145,8 +145,8 @@ export function gateCard(ctx: CardContext, headline: string, detail: readonly st
     headline,
     detail,
     commands: [
-      `tldrx approve --run ${ctx.runId}`,
-      `tldrx reject --run ${ctx.runId} --note "<why>"`,
+      approveCommand(ctx.runId),
+      rejectCommand(ctx.runId),
     ],
   };
 }
@@ -212,6 +212,23 @@ export function cardForTriggers(
  */
 export function answerCommand(questionId: string, runId: string): string {
   return `tldrx answer ${questionId} "…" --run ${runId}`;
+}
+
+/**
+ * The two things a person types at a GATE — the same rule `answerCommand` follows.
+ *
+ * Every card here already spelled them inline, and #197 added two more callers: the
+ * `gate.requested` notification and the parked heartbeat under `--wait-gates`. A
+ * notification exists to be typed off a phone, so the line it carries and the line the
+ * terminal prints have to be the same bytes; four literals in four files are how they
+ * stop being.
+ */
+export function approveCommand(runId: string): string {
+  return `tldrx approve --run ${runId}`;
+}
+
+export function rejectCommand(runId: string): string {
+  return `tldrx reject --run ${runId} --note "<why>"`;
 }
 
 function toQuestion(

@@ -137,7 +137,25 @@ on saying "nothing is waiting on you" while the run sat on somebody's answer wou
 than silence, because a heartbeat is believed. Parked-ness is decided by the same predicate
 `--wait-answers` polls and `next` parks on, never a second opinion.
 
-### The eight kinds
+A run parked on a **gate** had exactly the same hole, and it is closed the same way. While a
+signature is pending the payload grows two keys:
+
+```json
+"detail": {
+  "status_text": "…what `tldrx run status` prints, verbatim…",
+  "waiting_on": [],
+  "waiting_on_gate": "01-what/what",
+  "gate_policy": "human"
+}
+```
+
+…the summary says the run is waiting for a person to sign that stage, and `command` becomes
+`tldrx approve --run <id>`. `waiting_on_gate` is a **sibling** of `waiting_on`, not a member
+of it: an adapter maps every id in `waiting_on` to `tldrx answer <id>`, and a stage id there
+would make it build a command nobody can type. Both keys are **absent** when no gate is
+pending, so an adapter written before this existed sees the payload it always saw.
+
+### The nine kinds
 
 The enum is closed — a kind that arrives from nowhere is a branch nobody wrote — so a
 `switch` on `kind` with a `default` is a complete adapter.
@@ -146,12 +164,13 @@ The enum is closed — a kind that arrives from nowhere is a branch nobody wrote
 |---|---|---|---|
 | `question.raised` | the loop parked on an open question | the first question's `tldrx answer` line | `questions[]` — `id`, `title`, `why_asked`, `options[]` as `{letter, text}`, `recommendation` (`option`, `why`, `src`) or `null`, `answer_command` |
 | `question.timeout` | `--wait-answers` lapsed and the loop is about to exit `4` | the same answer line | the same `questions[]`, plus `waited_ms` |
-| `gate.requested` | a stage finished and a person must sign it | `tldrx approve --run <id>` | `cost_usd`, `approve_command`, `reject_command` |
+| `gate.requested` | a stage finished and a person must sign it | `tldrx approve --run <id>` | `cost_usd`, `approve_command`, `reject_command`, `gate_policy` |
+| `gate.timeout` | `--wait-gates` lapsed and the loop is about to exit `4` | the same approve line | `approve_command`, `reject_command`, `gate_policy`, `waited_ms`, and `cost_usd` only when this loop is the one that saw the gate raised |
 | `stage.done` | a stage finished and the loop moved on | `null` — the loop is already running the next stage | `cost_usd` |
 | `run.finished` | the loop ended with exit `0` | `null` | `exit_code`, `exit_family`, `spent_usd` |
 | `run.failed` | the loop ended with any non-zero exit, refusals included | `tldrx run status <id>` | `exit_code`, `exit_family`, `spent_usd` |
 | `budget.warned` | a ceiling is close | `tldrx budget show --run <id>` | `spent_usd`, `ceiling_usd` |
-| `status` | every `--notify-every <duration>` while the loop runs | `tldrx run status <id>`, or the answer line when parked | `status_text` — what `tldrx run status` prints, verbatim — and `waiting_on`, the blocking open question ids (`[]` when none) |
+| `status` | every `--notify-every <duration>` while the loop runs | `tldrx run status <id>`, or the answer line when parked on a question, or the approve line when parked on a gate | `status_text` — what `tldrx run status` prints, verbatim — `waiting_on`, the blocking open question ids (`[]` when none), and `waiting_on_gate` + `gate_policy` only while a gate is pending |
 
 `exit_family` is the exit code in words, so a notification on a phone says *"refused — a
 budget ceiling or a gate said no"* rather than *"exit 2"*. The questions, their options and
@@ -195,6 +214,7 @@ process.stdin.on("end", async () => {
       }
       break;
     case "gate.requested":
+    case "gate.timeout":
     case "budget.warned":
     case "run.failed":
       await sendToMyChannel(`${p.run} · ${p.kind}`, p.summary, action);
@@ -214,21 +234,38 @@ question.
 ## Running it
 
 ```bash
-tldrx run auto 260907-checkout --notify-every 10m --wait-answers 30m
+tldrx run auto 260907-checkout --notify-every 10m --wait-answers 4h --wait-gates 4h
 ```
 
-Both flags take a **duration**: `30s`, `10m`, `2h`, or a bare number of seconds. A value
+All three flags take a **duration**: `30s`, `10m`, `2h`, or a bare number of seconds. A value
 that is not a duration is refused with exit `1`.
 
 - **`--notify-every <duration>`** adds the periodic `status` payload. Off by default, and it
   does nothing at all unless a `notify:` command is declared. It exists because the period
   when you most want to know a run is alive is the twenty minutes it is inside one stage.
-- **`--wait-answers <duration>`** is the only flag that changes where the loop stops.
-  Instead of exiting `4` the moment a stage parks on an open question, it polls the run's
-  question files for that long and **resumes by itself** if somebody answers. Nothing is
-  spent while it waits. When the wait lapses it sends one `question.timeout` and then
-  **exits `4`** with the same lines it always did — the run is intact, nothing was lost, and
-  `tldrx run auto` picks it up again once the question is answered.
+- **`--wait-answers <duration>`** changes where the loop stops on a QUESTION. Instead of
+  exiting `4` the moment a stage parks on one, it polls the run's question files for that
+  long and **resumes by itself** if somebody answers. Nothing is spent while it waits. When
+  the wait lapses it sends one `question.timeout` and then **exits `4`** with the same lines
+  it always did — the run is intact, nothing was lost, and `tldrx run auto` picks it up
+  again once the question is answered.
+- **`--wait-gates <duration>`** does the same for a GATE, the other half of exit `4`. It is
+  a sibling flag rather than a wider `--wait-answers` because the two parks are closed by
+  different verbs: `tldrx answer` for one, `tldrx approve` / `tldrx reject` for the other,
+  and calling a signature an "answer" would be the flag name lying about what you did.
+  Approve inside the window and the loop carries on to the next stage; reject and it stops,
+  printing your note; let it lapse and it sends one `gate.timeout` and exits `4`. Nothing is
+  spent while it polls.
+
+  It waits FOR a signature and never produces one. There is no engine-side signing in this
+  loop, so a stage on `gates_policy: agent` stops it exactly as a `human` one does, and
+  `--wait-gates` then waits for an agent to sign that gate over an evidence note — or for
+  you to approve it yourself, which is a recorded override and is always allowed. The
+  heartbeat and the `gate.requested` payload both name the policy, so you know which of the
+  two you are doing.
+
+Both wait flags may be given together — that is the shape of a fully unattended launch:
+`--wait-answers 4h --wait-gates 4h`.
 
 Exit `4` is not a failure. It is "awaiting a person", and with the hook declared the person
 has already been told; what is left is your outer relaunch loop, which is yours to write.
@@ -284,6 +321,12 @@ it says, the run's own outcome is unchanged.
 **`--wait-answers` lapsed.** You get one `question.timeout` carrying `waited_ms` and the
 same `questions[]`, and then exit `4`. Answer the question and start the loop again;
 nothing was lost and nothing was spent while it waited.
+
+**`--wait-gates` lapsed.** You get one `gate.timeout` carrying `waited_ms`, the approve and
+reject lines and the gate's policy, and then exit `4`. Sign or reject the gate and start the
+loop again. If the gate is on `gates_policy: agent` and you expected the run to carry on by
+itself: it will not — the loop signs nothing, and an `agent` gate says who MAY sign, not
+that anything has.
 
 **The run is refused with exit `1`.** `run auto` will not run on a run marked
 `attended_by: host` — a lock and an engine are alternatives, never layers. Hand the run

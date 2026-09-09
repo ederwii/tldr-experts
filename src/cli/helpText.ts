@@ -425,6 +425,12 @@ const ENTRIES: readonly CommandHelp[] = [
         sub: "auto",
       },
       {
+        name: "wait-gates",
+        arg: "<duration>",
+        meaning: "Instead of exiting 4 the moment a stage parks on a pending GATE, poll the run for this long and resume if somebody signs it. `--wait-answers`\u0027 sibling for the other half of exit 4: a gate is closed by `tldrx approve` / `tldrx reject`, not by an answer. Approved \u2192 the loop carries on; rejected \u2192 it stops and prints the note; lapsed \u2192 exit 4 with the same lines it always had, after one `gate.timeout` notification. It WAITS FOR a signature and never produces one \u2014 there is no engine-side signing in this loop, so a stage on `gates_policy: agent` is waited on exactly like a `human` one until an agent signs it over an evidence note or a person approves it. Nothing is spent while it waits. Both wait flags may be given together.",
+        sub: "auto",
+      },
+      {
         name: "wait-answers",
         arg: "<duration>",
         meaning: "Instead of exiting 4 the moment a stage parks on an open question, poll the run\u0027s question files for this long and resume if somebody answers. A lapsed wait exits 4 with the same lines it always did, after one `question.timeout` notification. Nothing is spent while it waits, and the loop never answers its own question \u2014 the answer is an ordinary `tldrx answer` run by a person.",
@@ -470,6 +476,7 @@ const ENTRIES: readonly CommandHelp[] = [
       "tldrx run auto --parallel 3",
       "tldrx run auto --notify-every 10m",
       "tldrx run auto --wait-answers 30m",
+      "tldrx run auto --wait-answers 4h --wait-gates 4h",
       "tldrx run unlock 260101-checkout --force",
       'tldrx run cancel 260101-checkout --note "superseded by the v2 spec"',
     ],

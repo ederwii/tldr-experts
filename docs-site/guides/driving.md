@@ -87,16 +87,20 @@ down as a `notify.failed` event with the reason, and the loop carries on with th
 already had.
 
 ```bash
-tldrx run auto --notify-every 10m --wait-answers 30m
+tldrx run auto --notify-every 10m --wait-answers 4h --wait-gates 4h
 ```
 
 `--notify-every` adds a periodic `status` payload carrying what `tldrx run status` prints — a
 heartbeat, asking for nothing while the run is moving. Over a run **parked** on an open
-question it says so and repeats the literal answer command, because a heartbeat that kept
-saying nothing is waiting on you would be worse than silence. `--wait-answers` is the one flag that changes where the loop stops:
-instead of exiting `4` at an open question it polls for an answer and **resumes if you give one**,
-then exits `4` unchanged when the wait lapses. Nothing is spent while it waits, and the loop never
-answers its own question.
+question — or on a **gate** waiting for your signature — it says so and repeats the literal
+command, because a heartbeat that kept saying nothing is waiting on you would be worse than
+silence. `--wait-answers` and `--wait-gates` are the two flags that change where the loop stops,
+one for each half of exit `4`: instead of exiting at an open question it polls for an answer and
+**resumes if you give one**, and instead of exiting at a pending gate it polls for a signature
+and **resumes if somebody signs**, stopping with your note if you reject. Both exit `4` unchanged
+when the wait lapses. Nothing is spent while either waits, and the loop closes nothing of its
+own — it never answers its own question and it never signs its own gate, an `agent` policy
+included.
 
 The operating half of this — the full payload per kind, an adapter skeleton you can paste,
 a first-run checklist and what to check when nothing arrives — is

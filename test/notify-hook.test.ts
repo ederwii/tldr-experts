@@ -33,6 +33,7 @@ import { NOTIFY_KINDS, NOTIFY_PAYLOAD_VERSION } from "../src/core/notify/payload
 import { readNotifyDeclaration } from "../src/core/notify/declaration.ts";
 import { runAuto, type AutoOptions } from "../src/core/facilitator/runAuto.ts";
 import { RunStore } from "../src/core/run/RunStore.ts";
+import { approve, reject } from "../src/core/run/gates.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import type { TldrxEvent } from "../src/core/events/Event.ts";
 import { parseYaml } from "../src/core/yaml.ts";
@@ -476,5 +477,171 @@ describe("--wait-answers", () => {
     const timeouts = delivered(ws).filter((p) => p.kind === "question.timeout");
     expect(timeouts.length).toBe(1);
     expect(timeouts[0]?.command).toBe(`tldrx answer Q1 "…" --run ${ws.runId}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (f) `--wait-gates` — the same wait, for the other half of exit 4 (gh #197)
+// ---------------------------------------------------------------------------
+
+/**
+ * Park the cursor stage on its GATE, the way a stage that finished under a
+ * `human` policy leaves it — without spawning, so every heartbeat a test takes
+ * fires while the run is parked rather than while a stage is running.
+ */
+function parkOnGate(ws: Made): void {
+  const store = RunStore.open(ws.runDir);
+  store.mutate((run) => ({
+    ...run,
+    phases: run.phases.map((phase, i) => (i !== 0 ? phase : {
+      ...phase,
+      stages: phase.stages.map((stage) => ({ ...stage, status: "awaiting_gate" as const })),
+    })),
+  }));
+  store.save();
+}
+
+/**
+ * Sign the gate once the LOOP is demonstrably waiting on it.
+ *
+ * Three earlier shapes of this helper raced the thing they were testing. A bare
+ * `setTimeout` signed while the stage was still running; polling `waitingFor` signed
+ * before `auto` had even started (a parked fixture is parked before the loop reads it),
+ * and both left the loop with nothing to wait for — measured, three runs of three.
+ *
+ * So the signal is the loop's OWN heartbeat: a `status` payload carrying
+ * `waiting_on_gate` is written by the notifier only while the loop is parked at a gate,
+ * which is the state under test. Every caller therefore passes `notifyEveryMs`.
+ */
+async function signWhenWaiting(ws: Made, sign: () => Promise<void> | void): Promise<void> {
+  for (let i = 0; i < 400; i++) {
+    const parked = delivered(ws).some(
+      (payload) => payload.kind === "status"
+        && (payload.detail as { waiting_on_gate?: unknown }).waiting_on_gate !== undefined,
+    );
+    if (parked) {
+      await sign();
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+/** Every task row of the run, so "nothing was spent while it waited" can be measured. */
+function taskRows(ws: Made): readonly unknown[] {
+  return RunStore.open(ws.runDir).run.phases.flatMap((phase) => phase.stages.flatMap((stage) => stage.tasks));
+}
+
+describe("--wait-gates", () => {
+  test("a signature that lands while the loop waits resumes it rather than exiting 4", async () => {
+    const ws = workspace({ gates: { alpha: "human", beta: "auto" } });
+    const signature = signWhenWaiting(ws, async () => {
+      await approve(RunStore.open(ws.runDir), {
+        root: ws.root, actor: "alan", at: "2026-09-08T09:00:00Z", note: "reads right",
+      });
+    });
+
+    const outcome = await auto(ws, { waitGatesMs: 8_000, notifyEveryMs: 40 });
+    await signature;
+    expect(outcome.code).toBe(0);
+    expect(outcome.lines.some((line) => line.includes("is approved, resuming"))).toBe(true);
+    const requested = delivered(ws).filter((p) => p.kind === "gate.requested");
+    expect(requested.length).toBe(1);
+    expect(String(requested[0]?.summary)).toContain("human gate");
+    expect((requested[0]?.detail as { gate_policy?: unknown }).gate_policy).toBe("human");
+    expect(delivered(ws).some((p) => p.kind === "gate.timeout")).toBe(false);
+    // The loop went ON to the next stage, not just past the gate.
+    expect(events(ws).some((e) => e.type === "stage.started" && e.stage === "beta")).toBe(true);
+  });
+
+  test("a lapsed wait exits 4 after one `gate.timeout`, having spent nothing", async () => {
+    const ws = workspace({ gates: { alpha: "human", beta: "auto" } });
+    parkOnGate(ws);
+    const before = taskRows(ws).length;
+
+    const outcome = await auto(ws, { waitGatesMs: 200 });
+    expect(outcome.code).toBe(4);
+    const timeouts = delivered(ws).filter((p) => p.kind === "gate.timeout");
+    expect(timeouts.length).toBe(1);
+    expect(timeouts[0]?.command).toBe(`tldrx approve --run ${ws.runId}`);
+    const detail = timeouts[0]?.detail as { waited_ms?: unknown; reject_command?: unknown };
+    expect(typeof detail.waited_ms).toBe("number");
+    expect(detail.reject_command).toBe(`tldrx reject --run ${ws.runId} --note "<why>"`);
+    expect(taskRows(ws).length).toBe(before);
+  });
+
+  test("a rejection stops the loop with the note, and is not a timeout", async () => {
+    const ws = workspace({ gates: { alpha: "human", beta: "auto" } });
+    parkOnGate(ws);
+    const refusal = signWhenWaiting(ws, () => {
+      reject(RunStore.open(ws.runDir), {
+        root: ws.root, actor: "alan", at: "2026-09-08T09:00:00Z", note: "the scope is wrong",
+      });
+    });
+
+    const outcome = await auto(ws, { waitGatesMs: 8_000, notifyEveryMs: 40 });
+    await refusal;
+    expect(outcome.code).toBe(4);
+    expect(outcome.lines.some((line) => line.includes("the scope is wrong"))).toBe(true);
+    expect(delivered(ws).some((p) => p.kind === "gate.timeout")).toBe(false);
+    const failed = delivered(ws).filter((p) => p.kind === "run.failed");
+    expect(failed.length).toBe(1);
+    expect(String(failed[0]?.summary)).toContain("the scope is wrong");
+  });
+
+  test("a heartbeat over a GATE-parked run says a signature is waiting", async () => {
+    const ws = workspace({ gates: { alpha: "human", beta: "auto" } });
+    parkOnGate(ws);
+
+    const outcome = await auto(ws, { waitGatesMs: 500, notifyEveryMs: 40 });
+    expect(outcome.code).toBe(4);
+
+    const status = delivered(ws).filter((p) => p.kind === "status");
+    expect(status.length).toBeGreaterThanOrEqual(1);
+    for (const beat of status) {
+      expect(String(beat.summary)).not.toContain("Nothing is waiting on you");
+    }
+    expect(status.some((beat) => beat.command === `tldrx approve --run ${ws.runId}`)).toBe(true);
+    expect(status.some((beat) => String(beat.summary).includes("human gate"))).toBe(true);
+    const waiting = status.map((beat) => (beat.detail as { waiting_on_gate?: unknown }).waiting_on_gate);
+    expect(waiting.every((gate) => gate === "01-what/alpha")).toBe(true);
+  });
+
+  test("an `agent`-policy gate waits the same way, and a person's plain approve resumes it", async () => {
+    // gh #197, scope note: there is no engine-side signing in `run auto` — an `agent`
+    // policy says who MAY sign, not that the loop will. So the wait is policy-agnostic,
+    // and the signature it waits for is whoever's: `tldrx approve` with no flag on an
+    // agent gate is a recorded override and is valid (`tldrx approve --help`).
+    const ws = workspace({ gates: { alpha: "agent", beta: "auto" } });
+    const signature = signWhenWaiting(ws, async () => {
+      await approve(RunStore.open(ws.runDir), {
+        root: ws.root, actor: "alan", at: "2026-09-08T09:00:00Z", note: "signed by a person over the agent policy",
+      });
+    });
+
+    const outcome = await auto(ws, { waitGatesMs: 8_000, notifyEveryMs: 40 });
+    await signature;
+    expect(outcome.code).toBe(0);
+    expect(outcome.lines.some((line) => line.includes("is approved, resuming"))).toBe(true);
+    // The heartbeat said WHICH tap the owner is doing.
+    const status = delivered(ws).filter((p) => p.kind === "status");
+    expect(status.some((beat) => String(beat.summary).includes("agent gate"))).toBe(true);
+  });
+
+  test("WITHOUT the flag a gate still exits 4 on the spot, with the lines it always had", async () => {
+    const ws = workspace({ gates: { alpha: "human", beta: "auto" } });
+    parkOnGate(ws);
+
+    const outcome = await auto(ws);
+    expect(outcome.code).toBe(4);
+    expect(outcome.lines).toContain("  gate pending: tldrx approve");
+    expect(outcome.lines).toContain("    at 01-what/alpha");
+    expect(delivered(ws).some((p) => p.kind === "gate.timeout")).toBe(false);
+    // An unparked heartbeat is untouched: no gate, no new key.
+    const clean = workspace({ gates: { alpha: "auto", beta: "auto" } });
+    expect((await auto(clean, { notifyEveryMs: 20 })).code).toBe(0);
+    for (const beat of delivered(clean).filter((p) => p.kind === "status")) {
+      expect(Object.keys(beat.detail as Record<string, unknown>)).toEqual(["status_text", "waiting_on"]);
+    }
   });
 });
