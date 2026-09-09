@@ -41,8 +41,12 @@ Package name `tldr-experts`; it installs the `tldrx` and `tldr-experts` commands
    released, instead of the unreleased heading. It runs in BOTH modes and never fails on a
    missing tag: a checkout with no tags, and a tag whose own section still said `unreleased`,
    are skipped and counted in one line. A released section is **restored**, never edited; the
-   one exception is a correction, which is recorded in `CHANGELOG.amendments` (`<version>
-   <why>`) and reviewed as a correction — a misplaced append never touches a second file.
+   one exception is a correction, recorded in `CHANGELOG.amendments` as `<version> <source-sha>
+   <why>` — a second file, which a misplaced append never touches. Being listed there is not a
+   licence: the gate still requires the tag's section to survive as an ordered subsequence
+   (nothing deleted, nothing reworded) and every added line to exist verbatim in
+   `<source-sha>:CHANGELOG.md`, so an amendment can only MOVE text the changelog already
+   carried. An unknown source sha is refused.
 
 ## The order, and why it is this order
 

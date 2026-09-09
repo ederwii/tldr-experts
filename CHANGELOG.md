@@ -12,14 +12,14 @@
   names never carried the flag. They were merged in 069a73e, after v0.13.1 was cut, and shipped
   in v0.14.0; the implementer appended them to the FIRST `### Added` in the file instead of the
   unreleased heading, which is the whole mechanism. Two older sections had the same slip:
-  0.3.1 carried a528985's two bullets (committed 07:06 on 2026-08-31, twenty-six minutes after
-  v0.3.1 was tagged, first shipped in v0.4.0) and 0.6.1 had lost a blank line. All three are
+  0.3.1 carried a528985's four bullets (73 lines, committed 07:06 on 2026-08-31, twenty-six
+  minutes after v0.3.1 was tagged, first shipped in v0.4.0) and 0.6.1 had lost a blank line. All three are
   now byte-identical to their tags, and the bullets sit under the release that actually shipped
   them — a released section is **restored**, never edited, and the two corrections that had to
   land inside a tagged section (0.14.0 and 0.4.0) are recorded in `CHANGELOG.amendments` rather
   than smuggled in. The v0.14.0 GitHub release notes were re-published from the corrected
-  section; v0.13.0's were generated at tag time from a changelog that did not carry the bullets
-  and are already right, so they are untouched.
+  section and now carry both moved bullets; v0.13.0's were generated at tag time from a changelog
+  that did not carry them and are already right, so they are untouched.
 - **`scripts/release-check.sh` refuses a rewritten released section.** For every dated
   `## X.Y.Z — YYYY-MM-DD` heading whose tag is present, the section's text must equal that
   section at `git show vX.Y.Z:CHANGELOG.md` — the one copy nobody can edit afterwards — and a
@@ -29,13 +29,18 @@
   no tags (`publish.yml`'s does not) and a tag whose own section still said `unreleased` (v0.0.2,
   which predates the dating convention) are skipped and COUNTED in one line, because a silent
   skip is how a gate becomes a decoration. A deliberate correction is recorded in
-  `CHANGELOG.amendments`; that file is the exception's audit trail, and it is a second file on
-  purpose — the failure being caught is an append nobody meant, and an append edits one file.
+  `CHANGELOG.amendments` (`<version> <source-sha> <why>`) — a second file on purpose, since the
+  failure being caught is an append nobody meant and an append edits one file. That listing is
+  **not a licence**, which a reviewer proved by injecting an invented bullet into an amended
+  section and watching the first version of this check pass it: an amended section must still
+  contain the tag's section as an ORDERED SUBSEQUENCE (nothing deleted, nothing reworded), and
+  every line it adds must exist verbatim in `<source-sha>:CHANGELOG.md`. Both halves say the same
+  thing — an amendment moves text the changelog already carried, and cannot write a new claim
+  into a shipped release. A source sha that is not a commit here is refused, not trusted.
 
 ## 0.14.0 — 2026-09-09
 
 ### Added
-
 
 - **`tldrx run auto --wait-gates <duration>` — the loop waits for a signature the way it
   already waits for an answer (#197).** Measured on a real workspace the day the notify hook
@@ -74,6 +79,7 @@
   no gate is pending, so a heartbeat over a moving run is byte-identical to the one it sent
   before. `gate.requested` now names the policy too, so an owner reading it on a phone knows
   whether he is signing a `human` gate or overriding an `agent` one.
+
 - **`run auto` now closes an `agent` gate itself, over a note it wrote and had validated (#198).**
   `gates_policy: agent` said who MAY sign a gate; nothing in the engine produced the evidence note
   it is signed over. The only writer was the `tldrx gate template` skeleton a host session fills

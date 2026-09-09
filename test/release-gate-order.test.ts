@@ -412,14 +412,62 @@ describe("a released CHANGELOG section may not be edited (#200)", () => {
     expect(r.stdout).toMatch(/released-section check: skipped 1/);
   });
 
-  test("a recorded amendment is allowed, and named in the output", () => {
+  /**
+   * An amendment is a MOVE, and the gate checks it is one. A version listed in
+   * `CHANGELOG.amendments` bought exactly two freedoms and no third: the tag's section must
+   * survive as an ordered subsequence (nothing deleted, nothing reworded), and every line the
+   * amendment ADDS must already exist, verbatim, in `<source-sha>:CHANGELOG.md`. Written after
+   * a reviewer injected an arbitrary bullet into an amended section and the gate passed it: a
+   * bare "this version is amended" line is a licence to write anything, which is the hole the
+   * whole check exists to close.
+   */
+  const amendments = (sb: Sandbox) => join(sb.main, "CHANGELOG.amendments");
+  const headSha = (sb: Sandbox) => git(sb.main, "rev-parse", "HEAD");
+
+  test("a recorded amendment is allowed when every added line existed at the source sha", () => {
     const sb = released();
-    writeFileSync(changelog(sb), `${readFileSync(changelog(sb), "utf8")}- a bullet restored to the release that shipped it\n`);
-    writeFileSync(join(sb.main, "CHANGELOG.amendments"), `${V} restored the bullet #197 misfiled\n`);
+    const sha = headSha(sb);            // its CHANGELOG carries "- the sandbox release"
+    writeFileSync(changelog(sb), `${readFileSync(changelog(sb), "utf8")}- the sandbox release\n`);
+    writeFileSync(amendments(sb), `${V} ${sha} the bullet was filed under the section above; moved here verbatim\n`);
 
     const r = run(sb, "release-check.sh", ["--ci"]);
     expect(r.code).toBe(0);
-    expect(r.stdout).toMatch(new RegExp(`amend\\w* .*${V.replace(/\./g, "\\.")}|${V.replace(/\./g, "\\.")}.*amend`));
+    expect(r.stdout).toMatch(new RegExp(`${V.replace(/\./g, "\\.")}.*amendment`));
+  });
+
+  test("an amendment is not a licence: a line that exists at no source sha is refused", () => {
+    const sb = released();
+    const sha = headSha(sb);
+    writeFileSync(changelog(sb), `${readFileSync(changelog(sb), "utf8")}- a bullet that shipped in no release\n`);
+    writeFileSync(amendments(sb), `${V} ${sha} claims to be a move\n`);
+
+    const r = run(sb, "release-check.sh", ["--ci"]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(new RegExp(`'## ${V}'`));
+    expect(r.stdout).toMatch(/a bullet that shipped in no release/);
+    expect(r.stdout).toContain(sha);
+  });
+
+  test("an amendment may not delete or reword a line the tag has", () => {
+    const sb = released();
+    const sha = headSha(sb);
+    writeFileSync(changelog(sb), readFileSync(changelog(sb), "utf8").replace("- the sandbox release\n", "- the sandbox release, reworded\n"));
+    writeFileSync(amendments(sb), `${V} ${sha} claims to be a move\n`);
+
+    const r = run(sb, "release-check.sh", ["--ci"]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(new RegExp(`'## ${V}'`));
+    expect(r.stdout).toMatch(/- the sandbox release/);
+  });
+
+  test("an amendment whose source sha is not a commit here is refused, not trusted", () => {
+    const sb = released();
+    writeFileSync(changelog(sb), `${readFileSync(changelog(sb), "utf8")}- the sandbox release\n`);
+    writeFileSync(amendments(sb), `${V} 0000000000000000000000000000000000000000 a sha nobody can read\n`);
+
+    const r = run(sb, "release-check.sh", ["--ci"]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(new RegExp(`'## ${V}'`));
   });
 
   test("an amendments file that does not name this version does not excuse it", () => {

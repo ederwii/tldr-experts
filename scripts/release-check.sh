@@ -25,8 +25,33 @@ grep -qE "unreleased" <(grep -E "^## $V" CHANGELOG.md) && bad "CHANGELOG.md $V s
 # and a tag whose own section still says `unreleased` predates the dating convention. A
 # deliberate correction is recorded in CHANGELOG.amendments — a second file, which is the point:
 # the failure this catches is an append nobody meant, and an append never edits two files.
+#
+# An amendment line is `<version> <source-sha> <why>`, and it buys exactly two freedoms, never a
+# third: the tag's section must survive as an ORDERED SUBSEQUENCE of the current one (nothing
+# deleted, nothing reworded), and every line the amendment ADDS must already exist verbatim in
+# `<source-sha>:CHANGELOG.md`. Both halves are the same claim — that this is a MOVE of text the
+# changelog already carried. Without them a listed version could say anything, measured: a
+# reviewer injected an invented bullet into an amended section and the bare "is it listed?" check
+# passed it.
 changelog_section() { awk -v v="$1" '/^## /{ if ($2 == v) { p = 1; print; next } else if (p) { exit } } p { print }'; }
-amendment_for() { [ -f CHANGELOG.amendments ] && awk -v v="$1" '$1 == v && NF > 1 { found = 1 } END { exit !found }' CHANGELOG.amendments; }
+amendment_for() { [ -f CHANGELOG.amendments ] && awk -v v="$1" '$1 == v && NF > 2 { print; exit }' CHANGELOG.amendments; }
+# Is `tag` an ordered subsequence of `now`, and is every added line present in `src`? Prints the
+# first offending line as `REMOVED <line>` / `INVENTED <line>`, and nothing at all when it holds.
+amendment_violation() {
+  awk -v tagf="$1" -v nowf="$2" -v srcf="$3" '
+    FILENAME == tagf { tag[++nt] = $0; next }
+    FILENAME == nowf { now[++nn] = $0; next }
+    FILENAME == srcf { src[$0] = 1; next }
+    END {
+      i = 1
+      for (j = 1; j <= nn; j++) {
+        if (i <= nt && now[j] == tag[i]) { i++; continue }
+        added[++na] = now[j]
+      }
+      if (i <= nt) { printf "REMOVED %s\n", tag[i]; exit }
+      for (k = 1; k <= na; k++) if (!(added[k] in src)) { printf "INVENTED %s\n", added[k]; exit }
+    }' "$1" "$2" "$3"
+}
 imm_skipped=0
 for ver in $(grep -oE "^## [0-9]+\.[0-9]+\.[0-9]+ — [0-9]{4}-[0-9]{2}-[0-9]{2}$" CHANGELOG.md | awk '{print $2}'); do
   if ! git rev-parse -q --verify "refs/tags/v$ver" >/dev/null 2>&1; then imm_skipped=$((imm_skipped + 1)); continue; fi
@@ -37,8 +62,24 @@ for ver in $(grep -oE "^## [0-9]+\.[0-9]+\.[0-9]+ — [0-9]{4}-[0-9]{2}-[0-9]{2}
   esac
   now=$(changelog_section "$ver" < CHANGELOG.md)
   [ "$was" = "$now" ] && continue
-  if amendment_for "$ver"; then
-    echo "released-section check: $ver differs from v$ver:CHANGELOG.md — a recorded amendment (CHANGELOG.amendments)"
+  amend=$(amendment_for "$ver")
+  if [ -n "$amend" ]; then
+    src_sha=$(printf '%s' "$amend" | awk '{print $2}')
+    why="CHANGELOG.amendments names $ver with source sha $src_sha"
+    if ! git rev-parse -q --verify "$src_sha^{commit}" >/dev/null 2>&1; then
+      bad "CHANGELOG.md: released section '## $ver' — $why, which is not a commit in this repository: an amendment must cite the changelog the moved lines came from"
+      continue
+    fi
+    d=$(mktemp -d) || { bad "CHANGELOG.md: released section '## $ver' — could not create a temp dir to verify the amendment"; continue; }
+    printf '%s\n' "$was" > "$d/tag"; printf '%s\n' "$now" > "$d/now"
+    git show "$src_sha:CHANGELOG.md" > "$d/src" 2>/dev/null || : > "$d/src"
+    viol=$(amendment_violation "$d/tag" "$d/now" "$d/src")
+    rm -rf "$d"
+    case "$viol" in
+      "") echo "released-section check: $ver differs from v$ver:CHANGELOG.md — a recorded amendment, verified as a move of lines present at $src_sha (CHANGELOG.amendments)"; continue;;
+      REMOVED\ *) bad "CHANGELOG.md: released section '## $ver' — $why, but the amendment DELETES or rewords a line the tag has: '$(printf '%s' "${viol#REMOVED }" | cut -c1-100)' — an amendment may only ADD; a released line is restored, never edited";;
+      INVENTED\ *) bad "CHANGELOG.md: released section '## $ver' — $why, but this added line exists nowhere in $src_sha:CHANGELOG.md: '$(printf '%s' "${viol#INVENTED }" | cut -c1-100)' — an amendment moves text the changelog already carried; it does not write new claims into a shipped release";;
+    esac
     continue
   fi
   first=$(diff <(printf '%s\n' "$was") <(printf '%s\n' "$now") | grep -m1 -E "^[<>] " | cut -c3- | cut -c1-100)
