@@ -224,6 +224,14 @@ export async function stashRefFor(cwd: string, hash: string): Promise<string> {
 
 export interface StashPop {
   readonly restored: boolean;
+  /**
+   * Did the INDEX come back as it was — a path staged at one version and modified
+   * further in the worktree, restored to both?
+   *
+   * `false` is a real, named partial success: the files are back and unstaged.
+   * `true` when `--index` took, and when there was nothing staged to lose.
+   */
+  readonly indexRestored: boolean;
   /** Paths left unmerged, when git applied part of it. Empty when it aborted whole. */
   readonly conflicts: readonly string[];
   /** The `stash@{n}` this hash was found at, for the line an operator retypes. */
@@ -245,17 +253,45 @@ export interface StashPop {
 export async function stashPop(cwd: string, hash: string): Promise<StashPop> {
   const ref = await stashRefFor(cwd, hash);
   if (ref === "") {
-    return { restored: false, conflicts: [], ref: "", detail: "the stash entry is no longer in `git stash list`" };
+    return {
+      restored: false, indexRestored: false, conflicts: [], ref: "",
+      detail: "the stash entry is no longer in `git stash list`",
+    };
   }
-  const popped = await git(["stash", "pop", ref], cwd);
-  if (popped.ok) return { restored: true, conflicts: [], ref, detail: firstLine(popped.stdout) };
+  // `--index` FIRST, because a plain pop silently throws the staging away.
+  // Measured 2026-09-09 on HEAD `A` / staged `B` / worktree `C`: a plain pop came
+  // back ` M` with `git show :f.txt` reading `A` — the staged `B` gone — where
+  // `--index` came back `MM` with `B` staged and `C` in the tree. One of the three
+  // workspaces this feature was measured on had exactly that shape (a script and a
+  // `package.json` line staged in a sub-repo), so losing it is losing real work.
+  //
+  // `--keep-index` is deliberately NOT used on the PUSH side: measured on the same
+  // repo, it leaves the staged content in the working tree (`M  f.txt`, the tree
+  // holding `B`), which is the very dirt this whole path exists to take out of the
+  // base pre-flight's measurement.
+  const withIndex = await git(["stash", "pop", "--index", ref], cwd);
+  if (withIndex.ok) return { restored: true, indexRestored: true, conflicts: [], ref, detail: firstLine(withIndex.stdout) };
+  // `--index` refuses in cases a plain pop survives (it cannot reinstate an index
+  // over a path the tree has since staged differently). Falling back is strictly
+  // better than leaving the files in the stash — and it is NAMED, never silent.
+  const plain = await git(["stash", "pop", ref], cwd);
+  if (plain.ok) {
+    return {
+      restored: true,
+      indexRestored: false,
+      conflicts: [],
+      ref,
+      detail: `${firstLine(plain.stdout)} — the index could not be reinstated (${firstLine(withIndex.stderr)})`,
+    };
+  }
   return {
     restored: false,
+    indexRestored: false,
     conflicts: await unmergedPaths(cwd),
     // Re-read: a partial apply renumbers nothing, but an operator retypes what
     // this prints, so the ref is measured at the moment the line is composed.
     ref: await stashRefFor(cwd, hash),
-    detail: firstLine(popped.stderr) || firstLine(popped.stdout) || `git stash pop exited ${String(popped.exitCode)}`,
+    detail: firstLine(plain.stderr) || firstLine(plain.stdout) || `git stash pop exited ${String(plain.exitCode)}`,
   };
 }
 

@@ -56,7 +56,7 @@
 import { isStatePath } from "./implicitPlan.ts";
 import { inSurface } from "../run/boundary.ts";
 import {
-  type DirtyEntry, operationInProgress, stashPop, stashPushPaths, submodulePaths,
+  literalPathspec, type DirtyEntry, operationInProgress, stashPop, stashPushPaths, submodulePaths,
 } from "./git.ts";
 
 /** The two event types this file's outcomes are recorded as (spec §2.9). */
@@ -174,13 +174,30 @@ export function stashMessage(runId: string): string {
 }
 
 /**
+ * A single-quoted shell word — the only quoting this file does, and it is exact.
+ *
+ * The printed remedy is a line a person RETYPES INTO A SHELL, so a path with a
+ * space, a bracket or a leading dash has to survive the shell before it can
+ * survive git. `'` inside is closed, escaped and reopened (`'\''`), which is the
+ * one form that has no escape sequences of its own to get wrong.
+ */
+export function shellQuote(word: string): string {
+  return `'${word.split("'").join(`'\\''`)}'`;
+}
+
+/**
  * The pathspec-limited `git stash push`, and the ONE place its command is spelled.
  *
- * Printed by the refusal and RUN by the engine from the same function, so the
- * remedy an operator is handed and the thing the framework does can never drift.
+ * Printed by the refusal and RUN by the engine THROUGH THE SAME `literalPathspec`,
+ * so the remedy an operator is handed and the thing the framework does cannot
+ * drift. It used to join the raw paths while the engine passed `:(literal)`, and
+ * the docstring above said otherwise — measured 2026-09-09: the printed line for a
+ * file called `[x].txt` moved the neighbouring `x.txt` instead. A promise a
+ * docstring makes and the code does not keep is worse than no promise.
  */
 export function stashCommand(repoDir: string, runId: string, paths: readonly string[]): string {
-  return `git -C ${repoDir} stash push -u -m "${stashMessage(runId)}" -- ${paths.join(" ")}`;
+  const pathspecs = paths.map((path) => shellQuote(literalPathspec(path))).join(" ");
+  return `git -C ${shellQuote(repoDir)} stash push -u -m ${shellQuote(stashMessage(runId))} -- ${pathspecs}`;
 }
 
 export interface AsideOutcome {
@@ -211,6 +228,8 @@ export async function setAsideForeignWork(
 export interface RestoreOutcome {
   readonly stash: AsideStash;
   readonly restored: boolean;
+  /** Did the staged snapshot come back too? See `stashPop`'s `--index` note. */
+  readonly indexRestored: boolean;
   /** Paths git left unmerged. Empty when it refused whole and changed nothing. */
   readonly conflicts: readonly string[];
   /** The literal line an operator retypes. Empty only when the stash is gone. */
@@ -224,6 +243,7 @@ export async function restoreForeignWork(stash: AsideStash): Promise<RestoreOutc
   return {
     stash,
     restored: popped.restored,
+    indexRestored: popped.indexRestored,
     conflicts: popped.conflicts,
     command: popped.ref === "" ? "" : `git -C ${stash.repoDir} stash pop ${popped.ref}`,
     detail: popped.detail,
@@ -324,6 +344,24 @@ export function notRestoredSummary(eventsText: string): string | null {
   return failed.size === 0 ? null : [...failed.values()].join(" ");
 }
 
+/**
+ * The line a SUCCESSFUL restore prints — one spelling, because a partial success
+ * has to read as one.
+ *
+ * `index_restored: false` is not a failure and must not be printed as one: the
+ * files are back, and what did not come back is the staging. The sentence says
+ * exactly that, and says what to do about it, because "your work is back" over a
+ * lost `git add` is the record lying in the comfortable direction.
+ */
+export function restoredLine(outcome: RestoreOutcome): string {
+  const head = `${outcome.stash.repo}: foreign work restored from stash `
+    + `${outcome.stash.hash.slice(0, 12)} (${namePaths(outcome.stash.paths)})`;
+  return outcome.indexRestored
+    ? head
+    : `${head} — the staged snapshot could NOT be reinstated, so those paths are back UNSTAGED; `
+      + "`git add` them as you had them";
+}
+
 /** Only the restores that failed — the ones every reader has to be told about. */
 export function unrestored(outcomes: readonly RestoreOutcome[]): readonly RestoreOutcome[] {
   return outcomes.filter((outcome) => !outcome.restored);
@@ -365,6 +403,9 @@ export function restoredPayload(outcome: RestoreOutcome): Readonly<Record<string
     ...(omitted > 0 ? { paths_omitted: omitted } : {}),
     stash_ref: outcome.stash.hash,
     restored: outcome.restored,
+    // Additive and always present on a restore: a partial success has to be
+    // legible without the reader knowing which release added the field.
+    index_restored: outcome.indexRestored,
     ...(outcome.restored ? {} : { conflicts: outcome.conflicts.slice(0, MAX_RECORDED_PATHS) }),
     ...(outcome.restored ? {} : { command: outcome.command }),
     ...(outcome.restored ? {} : { detail: outcome.detail }),

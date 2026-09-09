@@ -11,7 +11,9 @@ import { RunStore } from "../run/RunStore.ts";
 import {
   branchExists, currentBranch, dirtyEntries, operationInProgress, repoDirOf, stateDirPrefixes,
 } from "./git.ts";
-import { classifyDirty, namePaths, NAMED_PATHS, stashCommand, submodulePaths } from "./foreignWork.ts";
+import {
+  classifyDirty, namePaths, NAMED_PATHS, shellQuote, stashCommand, submodulePaths,
+} from "./foreignWork.ts";
 import type { NextMode } from "../facilitator/runNext.ts";
 import type { EpicSummaryRow } from "./handoff.ts";
 import type { BuildRefusal, StoryOutcome } from "./outcome.ts";
@@ -226,7 +228,7 @@ export async function dirtyRepoRefusal(
           "  Commit them, or set exactly these paths aside and take them back afterwards:",
           `    ${stashCommand(dir, parts.runId, paths)}`,
           `    ${relaunchCommand(parts.mode, parts.runId)}`,
-          `    git -C ${dir} stash pop`,
+          `    git -C ${shellQuote(dir)} stash pop`,
           ...(setAside.length === 0
             ? []
             : [`  The other ${String(setAside.length)} change(s) here are nobody's story — `

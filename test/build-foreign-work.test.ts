@@ -25,7 +25,7 @@ import { join } from "node:path";
 import { runNext, type NextOptions } from "../src/core/facilitator/runNext.ts";
 import { EventLog } from "../src/core/events/EventLog.ts";
 import {
-  classifyDirty, notRestoredSummary, pendingAsides, stashMessage,
+  classifyDirty, notRestoredSummary, pendingAsides, restoreForeignWork, stashCommand, stashMessage,
 } from "../src/core/build/foreignWork.ts";
 import { runEndNotification, stageDoneNotification } from "../src/core/notify/notifications.ts";
 import { dirtyEntries, stashPushPaths } from "../src/core/build/git.ts";
@@ -215,8 +215,11 @@ describe("(c) a path a story declares still refuses", () => {
     expect(said).toContain("refusing to cut an epic branch from a dirty tree");
     expect(said).toContain("a pending story declares this path in its `touches:`");
     // The corrected remedy: a `--` with exactly the listed path, and never a bare `-u`.
-    expect(said).toContain(`stash push -u -m "tldrx ${ws.runId} foreign work" -- src/app.ts`);
-    expect(said).not.toContain('foreign work"\n');
+    // Quoted for a SHELL and `:(literal)` for git — the same string the engine
+    // itself passes, from the same function (review round 1, Important 1).
+    expect(said).toContain(
+      `git -C '${ws.repoDir}' stash push -u -m 'tldrx ${ws.runId} foreign work' -- ':(literal)src/app.ts'`,
+    );
     // The verb is the ENGINE's, because this invocation is the engine.
     expect(said).toContain(`tldrx run auto ${ws.runId}`);
     expect(said).not.toContain("    tldrx next");
@@ -486,6 +489,142 @@ describe("the pathspec magic itself, measured against git", () => {
       expect(entries.map((entry) => entry.path).sort()).toEqual(["-dash.txt", "we ird[1].txt"]);
       expect(entries.every((entry) => entry.code === "??")).toBe(true);
       expect(entries.some((entry) => entry.path.startsWith('"'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("a refusal AFTER the stash gives the work back before it returns", () => {
+  /**
+   * The reviewer's Critical, reproduced (2026-09-09). The stash used to be taken at
+   * the FIRST door, so the second and third doors — the foreign-epic refusal and
+   * the base pre-flight — could refuse with the operator's files already in a
+   * stash, through a return path that never restored and never even printed the
+   * line saying they had been moved. Re-running refused forever, in a tree that was
+   * now missing the file.
+   *
+   * Two halves, and they are different fixes. The epic door now runs BEFORE the
+   * stash, so it can no longer strand anything: nothing is moved at all. The base
+   * pre-flight is the one refusal that must stay AFTER the stash — a pre-flight
+   * over a dirty tree is the measurement this whole guard exists to protect — so
+   * that path is the one that has to restore on its way out.
+   */
+  test("the foreign-epic refusal never reaches the stash: nothing is moved and nothing is left behind", async () => {
+    const ws = workspace(ONE_STORY);
+    writeFileSync(join(ws.repoDir, "export.csv"), "id,value\n1,2\n", "utf8");
+    // An `epic/e1` this run did not cut — the second door.
+    git(ws, ["branch", "epic/e1"]);
+
+    const outcome = await next(ws);
+    const said = outcome.lines.join("\n");
+    expect(outcome.code, said).toBe(2);
+    expect(said).toContain("did not cut it");
+    // The operator's file never moved, and there is no stash to find.
+    expect(readFileSync(join(ws.repoDir, "export.csv"), "utf8")).toBe("id,value\n1,2\n");
+    expect(git(ws, ["stash", "list"])).toBe("");
+    expect(eventsOfType(ws, "worktree.foreign_work_aside")).toHaveLength(0);
+  });
+
+  test("the base pre-flight refusal restores on its way out, and says both halves", async () => {
+    const ws = workspace({ ...ONE_STORY, testScript: `${PROBE_SCRIPT} && node -e "process.exit(1)"` });
+    writeFileSync(join(ws.repoDir, "export.csv"), "id,value\n1,2\n", "utf8");
+
+    const outcome = await next(ws);
+    const said = outcome.lines.join("\n");
+    // Exit 2, the workspace-config refusal — unchanged by any of this.
+    expect(outcome.code, said).toBe(2);
+    expect(said).toContain("already fail on the untouched base tree");
+    // The pre-flight measured a CLEAN tree, which is why the stash happens first.
+    expect(baseProbes(ws)[0]?.st).toBe("");
+    // And the refusal carries both sentences, so the operator is never told a
+    // stash was taken by silence.
+    expect(said).toContain("set aside in stash ");
+    expect(said).toContain("foreign work restored from stash ");
+    // The file is back and the stash is gone.
+    expect(readFileSync(join(ws.repoDir, "export.csv"), "utf8")).toBe("id,value\n1,2\n");
+    expect(git(ws, ["stash", "list"])).toBe("");
+    const restored = eventsOfType(ws, "worktree.foreign_work_restored");
+    expect(restored).toHaveLength(1);
+    expect(restored[0]?.restored).toBe(true);
+  });
+});
+
+describe("the PRINTED remedy is the same command the engine runs", () => {
+  /**
+   * The reviewer's Important 1, reproduced: the printed line joined RAW paths
+   * while the engine passed `:(literal)`, so the docstring's promise — "printed by
+   * the refusal and RUN by the engine from the same function" — was false, and the
+   * printed line for `[x].txt` moved `x.txt` instead.
+   */
+  test("running the printed line verbatim in a shell moves exactly the named files", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-remedy-"));
+    try {
+      const run = (args: readonly string[]) =>
+        execFileSync("git", [...args], { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      run(["init", "-q", "."]);
+      run(["config", "user.email", "t@example.com"]);
+      run(["config", "user.name", "t"]);
+      writeFileSync(join(dir, "seed"), "seed\n", "utf8");
+      run(["add", "seed"]);
+      run(["commit", "-qm", "seed"]);
+      for (const name of ["[x].txt", "x.txt", "a b.txt", "-dash.txt"]) {
+        writeFileSync(join(dir, name), `${name}\n`, "utf8");
+      }
+
+      const printed = stashCommand(dir, "260829-build", ["[x].txt", "a b.txt", "-dash.txt"]);
+      execFileSync("sh", ["-c", printed], { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+
+      // `x.txt` is the file a glob would have taken instead. It is still here.
+      expect(execFileSync("git", ["status", "--porcelain", "-z"], { cwd: dir, encoding: "utf8" }))
+        .toBe("?? x.txt\0");
+      expect(readFileSync(join(dir, "x.txt"), "utf8")).toBe("x.txt\n");
+      for (const name of ["[x].txt", "a b.txt", "-dash.txt"]) {
+        expect(existsSync(join(dir, name))).toBe(false);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("the index survives the round trip", () => {
+  /**
+   * The reviewer's Important 2, reproduced: the restore popped without `--index`,
+   * so a path that was STAGED at one version and modified further in the worktree
+   * — the shape one of the three measured workspaces actually had, a script and a
+   * `package.json` line staged in a sub-repo — came back with the staging gone.
+   * Measured: `git show :f.txt` read `A` (the commit) instead of `B` (what was
+   * staged), and `git status` read ` M` instead of `MM`.
+   */
+  test("HEAD A, staged B, worktree C comes back staged B and worktree C", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tldrx-index-"));
+    try {
+      const run = (args: readonly string[]) =>
+        execFileSync("git", [...args], { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      run(["init", "-q", "."]);
+      run(["config", "user.email", "t@example.com"]);
+      run(["config", "user.name", "t"]);
+      writeFileSync(join(dir, "f.txt"), "A\n", "utf8");
+      run(["add", "f.txt"]);
+      run(["commit", "-qm", "A"]);
+      writeFileSync(join(dir, "f.txt"), "B\n", "utf8");
+      run(["add", "f.txt"]);
+      writeFileSync(join(dir, "f.txt"), "C\n", "utf8");
+      expect(run(["status", "--porcelain"]).trim()).toBe("MM f.txt");
+
+      const pushed = await stashPushPaths(dir, "tldrx x foreign work", ["f.txt"]);
+      expect(pushed.ok).toBe(true);
+      expect(run(["status", "--porcelain"]).trim()).toBe("");
+
+      const back = await restoreForeignWork({
+        repo: "app", repoDir: dir, paths: ["f.txt"], hash: pushed.hash, message: pushed.message,
+      });
+      expect(back.restored).toBe(true);
+      expect(back.indexRestored).toBe(true);
+      expect(run(["status", "--porcelain"]).trim()).toBe("MM f.txt");
+      expect(run(["show", ":f.txt"])).toBe("B\n");
+      expect(readFileSync(join(dir, "f.txt"), "utf8")).toBe("C\n");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -1525,9 +1525,9 @@ describe("safety", () => {
     // stash message in it. PATHSPEC-LIMITED since #164: a bare `-u` swept a run's
     // own untracked records into the stash on a live 0.14.2 workspace.
     expect(text).toContain(
-      `git -C ${ws.repoDir} stash push -u -m "tldrx ${ws.runId} foreign work" -- s1.txt`,
+      `git -C '${ws.repoDir}' stash push -u -m 'tldrx ${ws.runId} foreign work' -- ':(literal)s1.txt'`,
     );
-    expect(text).toContain(`git -C ${ws.repoDir} stash pop`);
+    expect(text).toContain(`git -C '${ws.repoDir}' stash pop`);
     // And the true reason: the base pre-flight runs in THIS checkout.
     expect(text).toContain("the base pre-flight runs in this checkout");
     expect(text).not.toContain("worktree add");
@@ -1575,9 +1575,9 @@ describe("safety", () => {
     expect(text).not.toContain(PROJECT_WORK_DIR);
     expect(text).not.toContain(PROJECT_FRAMEWORK_DIR);
     expect(text).toContain(
-      `git -C ${ws.repoDir} stash push -u -m "tldrx ${ws.runId} foreign work" -- s1.txt`,
+      `git -C '${ws.repoDir}' stash push -u -m 'tldrx ${ws.runId} foreign work' -- ':(literal)s1.txt'`,
     );
-    expect(text).toContain(`git -C ${ws.repoDir} stash pop`);
+    expect(text).toContain(`git -C '${ws.repoDir}' stash pop`);
     expect(text).toContain("the base pre-flight runs in this checkout");
     expect(text).not.toContain("worktree add");
     expect(() => git(ws, ["rev-parse", "--verify", "epic/e1"])).toThrow();

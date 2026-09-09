@@ -28,6 +28,21 @@
   The run's exit code does not move for it, because that code answers for the run's work and not
   for the operator's tree.
 
+  **The stash is the LAST step before anything is cut**, and every exit from the Build executor
+  — a refusal, a failure, a green stage — gives it back before it returns. An earlier draft took
+  the stash at the first door, so the foreign-epic refusal and the base pre-flight could both
+  refuse with the operator's files already moved, through a return path that neither restored
+  them nor said they had gone: reproduced in review as exit 2, a stash on the list, the file
+  missing, nothing printed, and a re-run that refused forever.
+- **The restore reinstates the INDEX, not just the files (#164).** `git stash pop --index`, so a
+  path staged at one version and modified further in the worktree comes back both staged and
+  modified — the shape one of the three measured workspaces actually had (a script and a
+  `package.json` line staged in a sub-repo). Measured: a plain pop left `git show :f.txt` reading
+  the commit instead of what was staged. When `--index` itself refuses, the fallback is a plain
+  pop and the record says so — `index_restored: false` on the event and a sentence saying those
+  paths are back unstaged. `--keep-index` is deliberately not used on the push side: measured, it
+  leaves the staged content in the working tree, which is the dirt this path exists to remove.
+
 ### Fixed
 
 - **The dashboard's live tests wait on the machine's clock, not a literal — the flake that
@@ -83,7 +98,11 @@
   remedy is now limited to exactly the paths the refusal listed, each passed after a literal
   `--`, and the relaunch verb is chosen by MODE: `tldrx run auto <run>` when the engine is
   driving, `tldrx next` when a person is. The owner was in `run auto` and the message told him
-  to run `next`, which is the cursor verb.
+  to run `next`, which is the cursor verb. The printed line is also the SAME string the engine
+  runs, `:(literal)` pathspecs and all, shell-quoted so it survives being retyped: it used to
+  join the raw paths while the engine passed `:(literal)`, and the docstring claiming they were
+  one thing was simply false — measured, the printed line for a file called `[x].txt` moved the
+  neighbouring `x.txt`.
 - **A filename with a space, a leading dash or a bracket is the file that moves (#164).** Git
   pathspecs are globs by default, so `git stash push -u -- 'a[b].txt'` takes the neighbouring
   `ab.txt` with it — measured in a scratch repo, the tree came back empty where one file should

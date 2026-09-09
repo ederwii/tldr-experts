@@ -368,8 +368,10 @@ story is about to write.
 - **`own`** — anything under `tldrx-work/`, `.tldrx/` or `.agent/`. Never dirt, never stashed,
   never a refusal. Counting them once made the command refuse the files it had just written
   itself.
-- **`overlapping`** — a dirty path inside a pending story's `touches:`, or a submodule. Still
-  refuses, and the message says which path and why.
+- **`overlapping`** — a dirty path inside a pending story's `touches:`, a submodule, or a
+  directory of your own that merely looks like tldrx state (a `tldrx-work/` inside a repo when
+  the workspace keeps its state at the root). Still refuses, and the message says which path
+  and why — and is still never stashed.
 - **`foreign`** — everything else. Set aside with a **pathspec-limited** `git stash push` before
   the epic branch is cut, recorded as `worktree.foreign_work_aside`, and popped back when the
   stage ends (`worktree.foreign_work_restored`). Nothing is ever deleted and nothing is ever
@@ -410,6 +412,19 @@ command when the path is free.
 **``[tldrx] build: repo `lab` is in the middle of a merge on `main` — refusing to cut an epic
 branch, and refusing to stash anything into that state``.** A half-finished merge, rebase,
 cherry-pick or bisect has no clean undo. Finish it or abort it, then start the run again.
+
+**If you Ctrl-C between the set-aside and the restore, nothing is lost.** A stash is never
+deleted by tldrx, so the entry is still on `git stash list` under
+`tldrx <run-id> foreign work`, and the run's `events.jsonl` carries a
+`worktree.foreign_work_aside` naming its exact commit sha. `tldrx replay <run>` prints it. Pop
+it by hand, or run the Build stage again — the restore reads the log, so a stash the last
+invocation set aside is one the next one gives back.
+
+**``… — the staged snapshot could NOT be reinstated, so those paths are back UNSTAGED``.**
+Your files and their content are back; what could not be replayed is the `git add`. The pop is
+tried with `--index` first precisely so staging survives; when git refuses that, the fallback
+is a plain pop, which is better than leaving the work in a stash. `git add` the paths as you
+had them. The event records `index_restored: false`.
 
 **`05-watch/watch refuses to start: run.yml records `epic/<x>` for `<feature>`, and it does not
 resolve in `<repo>``, exit 2.** The Watch stage diffs the branch this run's own Build recorded in
