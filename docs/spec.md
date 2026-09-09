@@ -1186,6 +1186,15 @@ from a write), **1166 ms** cold on the gate path where all 96 blob reads are pai
 memoised per (repo, ref, path) for the process and capped at 256. The gate, `tldrx approve`, `tldrx next`'s auto gate,
 `tldrx watch` and `watch arm` opt in; they are boundaries that already spawn git.
 
+**The file-backed indexes are per CHECK, not per process.** `questions.md`, `facts.yml`, the map, the graph export and
+cited line counts are memoised so one document's forty citations read each file once — and that memo is dropped every
+time a citation context is built, which every check, gate and hook does exactly once per invocation. It has to be:
+`tldrx run auto` is ONE process for a whole run, so a per-process memo froze the question and fact ids at whatever was
+on disk when the run's FIRST citation resolved. Measured live 2026-09-09 on three workspaces (issue #206): a `how`
+stage was refused for "no such question Q2 — declared: Q1" over questions it had just written into
+`02-how/questions.md`, and another for "it has 145 live fact(s)" over a `facts.yml` holding 148 — after the turns were
+paid for. The git blob memo above is the deliberate exception: its cap bounds FORKS per process, not staleness.
+
 ### 2.9 `tldrx-work/<run>/events.jsonl`
 
 Append-only audit log: the cost ledger, the `replay`/`retro` input, and — with `run.yml`, `budget.yml` and the phase artefacts — one of the dashboard's data sources (#85).

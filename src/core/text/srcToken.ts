@@ -1504,14 +1504,36 @@ function readCapped(path: string): string {
   }
 }
 
-/** Drop every memoised index — tests that rewrite fixtures need this. */
-export function clearSrcCaches(): void {
+/**
+ * Drop every index that was READ OFF A FILE, so the next resolve sees the disk.
+ *
+ * Called once per `toSrcContext` (issue #206). The memoisation above is per
+ * PROCESS, and `tldrx run auto` is one process for a whole run: the first
+ * citation ever resolved froze `questionsCache`/`factsCache` at what was on disk
+ * then, and every later stage's `claim-sources` check judged its own outputs
+ * against that snapshot — measured live on three real workspaces, a `how` stage
+ * refused for "no such question Q2 … declared: Q1" over a `02-how/questions.md`
+ * it had already written, and another refused for "it has 145 live fact(s)" over
+ * a facts.yml holding 148. Refreshing where the CONTEXT is built keeps the
+ * memoisation that matters — one check reads facts.yml once for its forty
+ * citations — and drops the one that lies, the memory that outlives the check.
+ *
+ * `epicBlobCache` is deliberately not here: it memoises `git cat-file` over
+ * (repo, ref, path), and its `MAX_EPIC_BLOB_READS` budget is a bound on FORKS
+ * per process. Resetting that per check would relax the guard, not fix a lie.
+ */
+export function refreshSrcIndexes(): void {
   lineCountCache.clear();
   factsCache.clear();
   questionsCache.clear();
   graphCache.clear();
   mapCache.clear();
   urlCache.clear();
+}
+
+/** Drop every memoised index — tests that rewrite fixtures need this. */
+export function clearSrcCaches(): void {
+  refreshSrcIndexes();
   epicBlobCache.clear();
   epicBlobReads = 0;
 }

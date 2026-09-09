@@ -1,6 +1,29 @@
 # Changelog
 
 
+## 0.14.2 — unreleased
+
+### Fixed
+
+- **A stage's `claim-sources` check reads the disk it is judging, not a snapshot taken stages
+  ago (#206).** `src/core/text/srcToken.ts` memoises the question and fact indexes at MODULE
+  scope, keyed by run dir and workspace root, and nothing outside `test/` ever dropped them —
+  `clearSrcCaches()` had 20 call sites, all in tests. `tldrx run auto` is one Node process for a
+  whole run (`runAuto.ts`, no re-exec per stage), so the FIRST citation resolved anywhere in the
+  run froze both indexes at whatever was on disk at that instant, and every later stage's check
+  judged its own outputs against that frozen view. Measured live on three real workspaces at
+  0.14.1: a `how` stage refused with `no such question Q2 … declared: Q1` over Q2–Q4 it had
+  itself written into `02-how/questions.md` minutes earlier, and another refused with
+  `it has 145 live fact(s)` over a `facts.yml` that held 148 — the three extra facts written by
+  the owner's own answers two seconds BEFORE the stage started. Roughly $11 of paid turns thrown
+  away for ids that were real the whole time. The indexes are now refreshed inside
+  `toSrcContext` — the one place a citation context is built, and a place every caller reaches
+  exactly once per check, gate or hook invocation — so the memoisation that pays for itself (one
+  document's forty citations read `facts.yml` once) is kept and the memory that outlives the
+  check is not. The git blob memo is deliberately left per-process: its cap bounds forks, not
+  staleness. Resolution rules are unchanged; what changed is when the checker last looked.
+
+
 ## 0.14.1 — 2026-09-09
 
 ### Fixed
