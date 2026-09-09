@@ -257,12 +257,32 @@ that is not a duration is refused with exit `1`.
   printing your note; let it lapse and it sends one `gate.timeout` and exits `4`. Nothing is
   spent while it polls.
 
-  It waits FOR a signature and never produces one. There is no engine-side signing in this
-  loop, so a stage on `gates_policy: agent` stops it exactly as a `human` one does, and
-  `--wait-gates` then waits for an agent to sign that gate over an evidence note — or for
-  you to approve it yourself, which is a recorded override and is always allowed. The
-  heartbeat and the `gate.requested` payload both name the policy, so you know which of the
-  two you are doing.
+  It waits FOR a signature and never produces one — and by the time it is waiting, the
+  engine's own signer has already had its turn (below), so what is left to wait for is a
+  PERSON. Approving an agent-policy gate yourself is a recorded override and is always
+  allowed. The heartbeat and the `gate.requested` payload both name the policy, so you know
+  which of the two you are doing.
+
+## Who closes a gate under the engine
+
+Three policies, three different things happen when a stage finishes:
+
+- **`human`** — the loop stops and a person signs it: `tldrx approve`, or `tldrx reject
+  --note "…"`. With `--wait-gates` the loop waits for that signature instead of exiting on
+  the spot.
+- **`agent`** — the engine spawns one bounded **gate signer** of its own: the stage's model
+  and effort, a quarter of the stage's per-agent ceiling, allowed to read anything and to
+  write exactly one file, `.agent/<stage>/evidence.md`. That note then goes through the
+  ordinary `tldrx approve --as-agent` path — the same validator a person's note goes
+  through. `verdict: sign` with every condition holding and every claim carrying a
+  `[src: …]` closes the gate under the note's own `by:`, and the loop walks on. Anything
+  else — `refuse`, `sign-with-fixlist`, a note that does not validate, a signer that wrote
+  nothing — leaves the gate pending for you, with the reasons on the `gate.requested`
+  payload. The turn is recorded as `agent.spawned` / `agent.result` with `role: gate-signer`
+  and appears in `tldrx cost`. There is no flag: `gates_policy: agent` is already your
+  recorded decision that an agent may close it.
+- **`auto`** — no signer and no note: seven measured conditions, and the gate closes only if
+  all seven hold. Otherwise it falls to a person with the failing one named.
 
 Both wait flags may be given together — that is the shape of a fully unattended launch:
 `--wait-answers 4h --wait-gates 4h`.

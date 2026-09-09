@@ -136,18 +136,28 @@ export function gateNotification(
   ctx: NotifyContext,
   costUsd: number,
   policy: GatePolicy | null = null,
+  held: readonly string[] = [],
 ): NotifyPayload {
   const approve = approveCommand(ctx.runId);
+  // `held` is what the engine's gate signer could not sign over (gh #198), in the
+  // same words `tldrx next` prints. It goes in the SUMMARY and not only the detail
+  // because the summary is the half that reaches a lock screen, and "an agent
+  // looked at this and here is what stopped it" is the difference between a person
+  // opening the run and a person opening the run to find out why.
+  const why = held.length === 0 ? "" : ` The engine's signer held it: ${held.join("; ")}.`;
   return {
     ...base(ctx, "gate.requested"),
     summary: `${ctx.runId} finished ${ctx.stage ?? "a stage"} for $${costUsd.toFixed(2)} and is waiting `
-      + `at a ${gatePhrase(policy)}. Nothing runs after it until the gate is approved or rejected.`,
+      + `at a ${gatePhrase(policy)}.${why} Nothing runs after it until the gate is approved or rejected.`,
     command: approve,
     detail: {
       cost_usd: costUsd,
       approve_command: approve,
       reject_command: rejectCommand(ctx.runId),
       ...(policy === null ? {} : { gate_policy: policy }),
+      // Absent, never `[]`, when no signer ran: an empty list would read as "the
+      // signer found nothing wrong", which is the opposite of "no signer looked".
+      ...(held.length === 0 ? {} : { signer_held: held }),
     },
   };
 }

@@ -62,6 +62,7 @@ import {
   questionTimeoutNotification, runEndNotification, stageDoneNotification, statusNotification,
   type NotifyContext, type WaitingGate,
 } from "../notify/notifications.ts";
+import { GATE_SIGNER_ROLE } from "./gateSigner.ts";
 import { runNext, type NextOutcome } from "./runNext.ts";
 
 export interface AutoOptions {
@@ -119,10 +120,14 @@ export interface AutoOptions {
    * notify under different kinds, and calling a signature an "answer" would be the flag
    * name lying about what a person did.
    *
-   * It WAITS FOR a signature; it never produces one. There is no engine-side signing in
-   * this loop — an `agent` gate is one an agent MAY close, not one this loop closes — so
-   * an `agent`-policy gate is waited on exactly like a `human` one, and what it is waiting
-   * for is `tldrx approve` (with or without `--as-agent`) run somewhere else.
+   * It WAITS FOR a signature; it never produces one — and that stayed true when the engine
+   * gained a signer of its own (gh #198). The signing happens one level down, inside
+   * `runNext`: a gate whose policy is `agent` gets one bounded `gate-signer` turn BEFORE
+   * the loop ever sees an exit code, so a gate this flag is waiting on is by construction
+   * one the signer already held (or one whose policy is `human`). Nothing here polls for a
+   * signature it could have produced itself, and there is no second wait to reconcile:
+   * what it is waiting for is `tldrx approve` (with or without `--as-agent`) run somewhere
+   * else, by a person.
    */
   readonly waitGatesMs?: number;
   /** Called with each line as it happens, so a long loop is not silent. */
@@ -320,7 +325,10 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
         }
       }
       if (requested !== null && !autoApproved) {
-        await notifier.send(gateNotification(notifyCtx(), requested, gatePolicyNow(runDir)), stageIdOf());
+        await notifier.send(
+          gateNotification(notifyCtx(), requested, gatePolicyNow(runDir), signerHeld(fresh)),
+          stageIdOf(),
+        );
         return requested;
       }
       for (const event of fresh) {
@@ -749,6 +757,28 @@ export function stageLines(
     lines.push(`${cursorBefore} … ${outcome.lines[0] ?? "no progress"}`);
   }
   return lines;
+}
+
+/**
+ * Why the engine's gate signer did NOT close this gate, straight off the
+ * `agent.result` it recorded (gh #198).
+ *
+ * Read from the event rather than re-derived: the signer's turn already ran the
+ * evaluator and wrote down what it concluded, and a loop that formed its own
+ * second opinion here could tell an owner something the run's own log denies.
+ * Empty when no signer ran this iteration — a `human` gate, or a resumed run whose
+ * gate was already pending — and `gateNotification` says nothing rather than
+ * claiming a signer looked.
+ */
+function signerHeld(fresh: readonly TldrxEvent[]): readonly string[] {
+  for (let i = fresh.length - 1; i >= 0; i--) {
+    const event = fresh[i];
+    if (event === undefined || event.type !== "agent.result") continue;
+    if (payload(event, "role") !== GATE_SIGNER_ROLE) continue;
+    const held = payload(event, "held");
+    return Array.isArray(held) ? held.filter((line): line is string => typeof line === "string") : [];
+  }
+  return [];
 }
 
 function payload(event: TldrxEvent, key: string): unknown {
