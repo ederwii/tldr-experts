@@ -11,6 +11,7 @@ import { parseYaml } from "../../core/yaml.ts";
 import {
   PROJECT_FRAMEWORK_DIR, PROJECT_WORK_DIR, PROJECT_WORKTREES_DIR, isEpicWorktreeOf,
 } from "../../core/paths.ts";
+import { refreshSrcIndexes } from "../../core/text/srcToken.ts";
 import type { EpicRef, EpicWorktree, SrcContext } from "../../core/text/srcToken.ts";
 import { commandProbeIssues, type CommandProbeRecord } from "../../core/schemas/workspace.ts";
 import { ITERATION_ONLY_SLOT } from "../../core/schemas/commandAllowlist.ts";
@@ -273,6 +274,12 @@ export function toSrcContext(
   runDir?: string | null,
   options: SrcContextOptions = {},
 ): SrcContext {
+  // Freshness lives HERE, at the one place a context is built, because building
+  // one is what every caller does once per check/gate/hook invocation and never
+  // per citation (issue #206). See `refreshSrcIndexes` for the run that paid for
+  // this line: the indexes are memoised per process, and `run auto` is one
+  // process for every stage of a run.
+  refreshSrcIndexes();
   return {
     root: workspace.root,
     repos: workspace.repos,
