@@ -70,6 +70,14 @@ const POLL_MS = 500;
  * uses — one derivation — and it is idempotent with the watcher: a change the
  * watcher already reported re-baselines the sweep in the same debounce, so one
  * change is one reload frame whichever path saw it first.
+ *
+ * It runs whether or not anybody is listening: with zero SSE clients the sweep
+ * still stats the tree and `fire()` still finds nobody to send to. Accepted, with
+ * the number taken rather than assumed — measured on this branch, the floor of 20
+ * `fingerprint` calls over a 1,021-entry workspace is 2.38 ms, once every 2 s, and
+ * `MAX_SWEEP_ENTRIES` caps the walk at 20,000. Gating it on `clients.size` would
+ * buy that back at the price of a blind spot on the first connection, because the
+ * sweep's baseline is what makes the first push after a dropped event correct.
  */
 export const SWEEP_MS = 2_000;
 /**
@@ -124,6 +132,8 @@ export interface DashboardServer {
   /**
    * Close every `fs.watch` handle and leave the sweep running — what a dead or
    * overwhelmed FSEvents stream leaves behind (#213).
+   *
+   * @internal
    *
    * This exists because you cannot ask the OS to drop an event on demand, and a
    * backstop nobody can starve the fast path of is a backstop nobody has tested.

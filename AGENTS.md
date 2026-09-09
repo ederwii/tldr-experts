@@ -123,10 +123,11 @@ calls `Bun.build` by design). Run each without pipes and read each exit code.
   wants your evidence. The dashboard SSE flake (#193) had two halves: the deadline half is
   fixed at the source — every wait in `test/dashboard-live.test.ts` /
   `test/dashboard-server.test.ts` goes through `eventWaitMs()`, so a hard-coded millisecond
-  deadline there is a regression, not a re-run. The other half is #213 and is NOT fixed: when
-  macOS `fseventsd` is saturated (check it — `ps -A -o %cpu,comm | grep fseventsd`; ~100% while
-  `mdbulkimport` indexes), directory create/remove notifications are dropped outright and those
-  tests fail with no frame at all, at any budget. That is the box, not your branch.
+  deadline there is a regression, not a re-run. The other half was #213 — a dropped FSEvents
+  notification (macOS `fseventsd` pegged near 100% while `mdbulkimport` indexes) that nothing
+  recovered from — and it is now BOUNDED at the source too: `watchWorkspace` sweeps in watch
+  mode as well, every `SWEEP_MS` (2 s). So a dashboard test that still fails with no frame at
+  all is a real defect, not the box: file it, do not re-run it.
 
 ## 5. CHANGELOG and docs conventions
 
