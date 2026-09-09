@@ -37,10 +37,10 @@ import {
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
 
 // This file spawns: the third block runs a real training turn against the fake
-// agent on PATH. `machine-load.test.ts` cannot see that — its spawner heuristic
-// names four markers and `makeTrainingWorkspace` is not among them (gh #194) —
-// so the load-aware budget is taken here explicitly rather than left to a fixed
-// 5000 ms that measures the box.
+// agent on PATH, so the load-aware budget replaces the fixed 5000 ms that would
+// measure the box instead of the assertion. This line was taken by hand while the
+// spawner heuristic still named only four markers; since #194 it names the training
+// shape too, so `machine-load.test.ts` claims this file and checks for the line.
 setDefaultTimeout(spawnTestTimeout());
 
 const ORIGINAL_PATH = process.env.PATH ?? "";

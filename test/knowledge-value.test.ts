@@ -13,7 +13,7 @@
  * it. A rule written against invented input is a rule that has never met the
  * failure it exists for.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseYaml } from "../src/core/yaml.ts";
@@ -39,6 +39,13 @@ import {
   makeTrainingWorkspace, knowledgeMd, AREA, EXPERT, TRAIN_AT, TRAIN_NOW,
   type TrainingWorkspace, type TrainingWorkspaceOptions,
 } from "./fixtures/training/workspace.ts";
+import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
+
+// This file spawns: three of the blocks below run a real training turn against the
+// fake agent on PATH, so their cost is a property of the box, not of the assertion.
+// The load-aware budget replaces bun's fixed 5000 ms, which is the false RED #43 was
+// filed about; `machine-load.test.ts` now claims this file and checks for this line.
+setDefaultTimeout(spawnTestTimeout());
 
 const ORIGINAL_PATH = process.env.PATH ?? "";
 const FAKE_KEYS = [

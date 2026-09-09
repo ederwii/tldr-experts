@@ -108,6 +108,14 @@ describe("every file that spawns a real process takes the load-aware timeout", (
    * `makeSandbox` — `tldrx learn`'s sandbox builds a real repo and then runs the real CLI
    * against it as a subprocess, which is the same cost with a different name.
    *
+   * `runTraining` is the fifth shape, and it was missed for a while (#194): a training turn
+   * spawns the agent through `spawnAgent.ts`, so the child is as real as the CLI's, but the
+   * file that calls it names neither `node:child_process` nor `Bun.spawn` — the spawn happens
+   * two imports away. `makeTrainingWorkspace` rides along with it because that fixture is what
+   * plants the fake `claude` on PATH for the turn to find; a file that only builds the
+   * workspace and never trains is claimed too, which costs it one `setDefaultTimeout` line and
+   * costs a missed spawner a false RED on a busy box. Over-claiming is the cheap direction.
+   *
    * Read, never grepped. The first version of this list WAS a `grep -l`, and it silently
    * skipped `cli.test.ts` — one stray NUL byte at line 366 makes the file `data` to
    * file(1), and grep's `-I` drops binary files without a word. The test it hid then
@@ -117,13 +125,20 @@ describe("every file that spawns a real process takes the load-aware timeout", (
     .filter((f) => f.endsWith(".test.ts"))
     .filter((f) => {
       const source = readFileSync(join(TEST_DIR, f), "utf8");
-      return ["node:child_process", "Bun.spawn", "makeBuildWorkspace", "makeSandbox"]
-        .some((m) => source.includes(m));
+      return [
+        "node:child_process", "Bun.spawn", "makeBuildWorkspace", "makeSandbox",
+        "runTraining", "makeTrainingWorkspace",
+      ].some((m) => source.includes(m));
     });
 
   test("there are such files, so this invariant is not vacuous", () => {
     expect(spawners.length).toBeGreaterThanOrEqual(40);
     expect(spawners).toContain("cli.test.ts");
+    // Anchored on purpose: `knowledge-value.test.ts` spawns ONLY through the training
+    // fixture, so it is the file that says whether the training markers are still here.
+    // Without this line, dropping them from the list would silently shrink the `test.each`
+    // rows below to a shorter green, which is how a missing marker hides rather than fails.
+    expect(spawners).toContain("knowledge-value.test.ts");
   });
 
   test.each(spawners)("%s calls setDefaultTimeout(spawnTestTimeout(…))", (file) => {
