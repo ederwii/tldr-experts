@@ -34,7 +34,7 @@ import {
   fixQuestions, parseLooseQuestions, parseQuestions, unreadableQuestionHeadings,
 } from "../../core/text/questions.ts";
 import {
-  collectQuestionCards, countQuestionFiles, noOpenQuestions, renderQuestionCards,
+  collectQuestionCards, countQuestionFiles, noOpenQuestions, QUESTION_PHASES, renderQuestionCards,
 } from "../../core/run/questionCards.ts";
 import { currentActor, nowRfc3339 } from "../../hooks/lib/actor.ts";
 
@@ -169,10 +169,15 @@ function lint(argv: readonly string[]): number {
   }
 }
 
-/** Every `<phase>/questions.md` in the run, in phase order. */
+/**
+ * Every `<phase>/questions.md` in the run, in phase order.
+ *
+ * `QUESTION_PHASES`, not a third spelling of the five ids (#187): `lint` and `cards`
+ * have to be talking about the same files or "0 open" means two different things.
+ */
 function questionFiles(runDir: string): readonly string[] {
   const found: string[] = [];
-  for (const phase of ["01-what", "02-how", "03-plan", "04-build", "05-watch"]) {
+  for (const phase of QUESTION_PHASES) {
     const path = join(runDir, phase, "questions.md");
     if (existsSync(path)) found.push(path);
   }
