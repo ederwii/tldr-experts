@@ -22,6 +22,21 @@
   quietly stop covering something is how this hid in the first place. The list is still a proxy:
   the same probe found 14 more spawning files it does not claim, filed with the per-file counts
   as #201.
+- **The five phase ids are written out in one file now, not three, and a shape test refuses
+  the fourth (#187).** Measured on `main` at cd8721a: `PHASE_IDS`
+  (`src/core/run/workflowPreset.ts:28`) and `QUESTION_PHASES`
+  (`src/core/run/questionCards.ts:52`) were two `as const` array literals with the same five
+  ids in the same order, and `grep -rln "QUESTION_PHASES\|PHASE_IDS" test/` exited **1** —
+  nothing anywhere pinned them equal. Reading for the shape rather than the two names found a
+  THIRD: `questionFiles` in `src/cli/commands/questions.ts:175`, the list `questions lint`
+  walks, inline and unnamed — while the doc comment over `QUESTION_PHASES` claimed the list was
+  "kept in one place so the two verbs of `tldrx questions` cannot disagree", which was false of
+  the lint verb the sentence names. `workflowPreset.ts` owns the list; the other two import it,
+  so every existing consumer's import line is untouched and the `as const` tuple type survives
+  the indirection (proved with a type probe: the negative case, `99-nope` in slot five, fails
+  `tsc` with TS2322). `test/phase-ids-one-derivation.test.ts` pins it from both ends, because
+  neither end alone is enough: an identical second copy reddens the shape guard, and a copy
+  that has already drifted slips past that pattern and reddens the equality guard instead.
 - **The changelog no longer credits a release with work it did not ship, and a gate now says so
   (#200).** Measured on `main` at 0.14.0: `awk '/^## /{h=$0} /wait-gates/{print h}' CHANGELOG.md`
   put #197's `--wait-gates` and `gate.timeout` bullets under `## 0.13.0 — 2026-09-08`, while

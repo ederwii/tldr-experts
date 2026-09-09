@@ -39,17 +39,22 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { openBlocks, parseQuestions, type QuestionBlock } from "../text/questions.ts";
 import { answerCommand } from "./decisionCards.ts";
+import { PHASE_IDS } from "./workflowPreset.ts";
 import type { DecisionOption } from "../ui/decisionCard.ts";
 
 /**
  * The phases a run keeps questions in, in run order.
  *
- * The same list `questions lint` walks (`cli/commands/questions.ts`). Kept in one
- * place so the two verbs of `tldrx questions` cannot disagree about which files
- * they are talking about — a linter that reads five files and a card renderer
- * that reads four would make "0 open" mean two different things.
+ * `PHASE_IDS` (`workflowPreset.ts`) under the name the question side reads it by —
+ * not a second copy of it (#187). This comment used to say the list was "kept in one
+ * place so the two verbs of `tldrx questions` cannot disagree", and there were three
+ * places: an array literal here, `PHASE_IDS`, and an unnamed one in `questionFiles`
+ * (`cli/commands/questions.ts`) that `questions lint` walked. Now there is one, and
+ * the claim is true: a linter that reads five files and a card renderer that reads
+ * four would make "0 open" mean two different things, and the numeric `--phase 3`
+ * lookup indexing the same array would agree with neither.
  */
-export const QUESTION_PHASES = ["01-what", "02-how", "03-plan", "04-build", "05-watch"] as const;
+export const QUESTION_PHASES = PHASE_IDS;
 
 /** Printed in place of options when the file carries none. Loud on purpose. */
 export const NEEDS_OPTIONS = "NEEDS OPTIONS";
