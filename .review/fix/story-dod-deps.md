@@ -1,17 +1,35 @@
 verdict: merge
 reviewed-by: fresh reviewer sub-agent, claude-sonnet-5, dispatched by session tldr-experts-4a
-against: bbfed22
+against: ac14af2
 
-# fix/story-dod-deps — reviewed against bbfed22 (rebased onto 0.14.3, c33bc82), gh #209
+# fix/story-dod-deps — reviewed against ac14af2 (rebased onto #212 + #210, 1237d8e), gh #209
 
-Re-verified after a rebase replayed the original review (7a208cd vs base a15fbc5) onto
-c33bc82 as bbfed22, with two union conflicts: the CHANGELOG heading placement, and one import
-block in `executors/build.ts` keeping 0.14.3's `relaunchCommand` alongside this branch's
-`worktreeDeps` imports. `git diff a15fbc5..7a208cd` vs `git diff c33bc82..bbfed22`, both
-excluding CHANGELOG.md and stripped of `index`/`@@` lines, are byte-identical except that one
-import line gained `relaunchCommand` (alphabetically placed, nothing else moved, and
-`relaunchCommand` is used elsewhere in the same file at line 2889 by the other rebased-in
-branch). All findings below are unchanged from the original review.
+Second re-verification. First rebase: 7a208cd (base a15fbc5) → bbfed22 (base c33bc82, 0.14.3),
+one import-union conflict (`relaunchCommand` kept alongside `worktreeDeps` imports in
+`executors/build.ts`) — confirmed clean in the prior record revision. Second rebase: bbfed22 →
+ac14af2 (base 1237d8e, #212 watcher-card-none + #210 run-outcome-honesty landed), conflicting
+ONLY on CHANGELOG.md — verified below. `git diff c33bc82..bbfed22` vs `git diff 1237d8e..ac14af2`,
+both excluding CHANGELOG.md and stripped of `index`/`@@` lines: **byte-identical, exit 0**. So
+none of this branch's non-CHANGELOG code moved a second time; all code findings below are
+unchanged from the original review.
+
+## CHANGELOG union (this rebase's actual conflict)
+
+Upstream (origin/main at 1237d8e) landed `## 0.15.0 — unreleased` with its own `### Fixed`
+(2 bullets, #210) then `### Added` (2 bullets, #212 + #210) — the shape that would collide with
+this branch's own `### Added`/`### Fixed` pair under the same heading and produce a duplicated
+heading of one kind (the thing §7/§12 forbid). The implementer instead built ONE `### Added`
+(3 bullets: #209 install, #212 watcher-card-none, #210 run.yml outcome) and ONE `### Fixed`
+(5 bullets: #210 build-gate-delivered, #210 ship-refuses, and this branch's 3 #209 bullets) —
+confirmed by `grep -n '^## \|^### '`: exactly one heading of each kind under `## 0.15.0`.
+Content check: sorted-line diff of origin/main's 0.15.0 section against local's 0.15.0 section
+shows **zero lines present upstream and missing locally** — all 4 upstream bullet titles
+(Build-gate-delivered, ship-refuses, watcher-card-none, run.yml-outcome) survive verbatim,
+plus this branch's own 4. Dated sections (`## 0.14.3` onward) are **byte-identical** to
+origin/main (`diff` from the `## 0.14.3` heading to EOF: exit 0) — untouched, as required.
+`bash scripts/release-check.sh --ci` — **exit 0** ("release check OK for 0.14.3"; the two
+"differs from vX:CHANGELOG.md" lines are pre-existing recorded amendments unrelated to this
+branch, and one dated section was skipped for lacking a local tag — neither is new here).
 
 ## Wildcard allowlist security (the item asked to weigh most) — Minor, PLAUSIBLE, not blocking
 
@@ -40,8 +58,9 @@ it to the repo's own declared build/test commands. Recommend filing a follow-up 
 verify empirically (spawn a Claude Code session with only a wildcard grant and try a
 substitution) rather than blocking this fix on it.
 
-## Traced and CONFIRMED against the diff and worktree (re-verified at bbfed22; line numbers below
-are bbfed22's, shifted from the original 7a208cd review by the rebase — content unchanged)
+## Traced and CONFIRMED against the diff and worktree (re-verified at ac14af2; line numbers
+below are ac14af2's — unchanged from bbfed22's for `executors/build.ts` since the second
+rebase's own diff is byte-identical there; content unchanged throughout)
 
 - `installCommandFor`/`runWorktreeInstall`/`absentBinaryOf`/`binaryAbsentReason` in the new
   `worktreeDeps.ts` are wired exactly as claimed: `installDeps()` (`executors/build.ts:1818`)
@@ -70,8 +89,8 @@ are bbfed22's, shifted from the original 7a208cd review by the rebase — conten
   base-side event payload for `tree: "base"` to parity with. `preflight.yml` rows already carry
   `baseRef`/`baseSha`, which is how a reader tells them apart from the story's `events.jsonl`
   rows. Acceptable as-is; not a gap this diff created.
-- docs/spec.md edits sit inside §2.1 (line 105, the `commands.install` row) and §2.9 (now lines
-  1355-1374 post-rebase, `tree`/`absent_binary`/`check:"install"`), matching the hunt list. EN/ES
+- docs/spec.md edits sit inside §2.1 (line 108, the `commands.install` row) and §2.9 (now lines
+  1362-1381 post both rebases, `tree`/`absent_binary`/`check:"install"`), matching the hunt list. EN/ES
   `unattended-operation.md` renumber the checklist in lockstep (1→6 both files) and both guides'
   new bullets read as real translations, not machine copies.
 - `test/story-worktree-deps.test.ts`: exactly 8 new tests, hermetic (real `git worktree`, a
@@ -88,12 +107,21 @@ Original review (against 7a208cd):
   test/build-executor.test.ts test/stack-packs-prompt.test.ts test/facilitator.test.ts
   test/training.test.ts` — **352 pass, 0 fail, exit 0**.
 
-Re-verification after rebase (against bbfed22): `git diff a15fbc5..7a208cd` vs
+Re-verification after first rebase (against bbfed22): `git diff a15fbc5..7a208cd` vs
 `git diff c33bc82..bbfed22`, excluding CHANGELOG.md — byte-identical except the one
-`relaunchCommand` import-union line (confirmed above).
+`relaunchCommand` import-union line.
 - `bun run typecheck` — exit 0.
 - `bun test test/story-worktree-deps.test.ts test/build-golden.test.ts
   test/build-executor.test.ts` — **144 pass, 0 fail, exit 0**.
+
+Re-verification after second rebase (against ac14af2): `git diff c33bc82..bbfed22` vs
+`git diff 1237d8e..ac14af2`, excluding CHANGELOG.md — byte-identical, exit 0.
+- CHANGELOG union inspected (see above) — one heading per kind, no upstream bullet lost, dated
+  sections byte-identical to origin/main.
+- `bash scripts/release-check.sh --ci` — exit 0.
+- `bun run typecheck` — exit 0.
+- `bun test test/story-worktree-deps.test.ts test/build-golden.test.ts` — **12 pass, 0 fail,
+  exit 0**.
 
 No Critical or Important findings. The fix matches its own claims: `install:` now runs once
 per fresh story worktree through the same allowlist-and-argv runner as any DoD command, a 127
