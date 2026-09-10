@@ -405,6 +405,22 @@ compuerta y vuelve a arrancar el bucle. Si la compuerta tiene `gates_policy: age
 esperabas que el run siguiera solo: no lo hará — el bucle no firma nada, y una compuerta
 `agent` dice quién PUEDE firmar, no que algo ya haya firmado.
 
+**Un árbol de trabajo sucio ya no detiene el run.** La entrada de Build clasifica cada ruta sin
+commitear en vez de contarla. Todo lo que esté bajo `tldrx-work/`,
+`.tldrx/` o `.agent/` es estado propio del framework y se ignora; una ruta sucia que una
+historia pendiente declara en su `touches:`, o un submódulo, sigue rechazando con salida `2`;
+todo lo demás se **aparta** con un `git stash push` limitado por pathspec antes de cortar la
+rama del épico, y se devuelve cuando la etapa termina. Ambos momentos quedan en el log
+(`worktree.foreign_work_aside`, `worktree.foreign_work_restored`) y nada se borra ni se
+recupera a la fuerza. Si git rechaza el `pop` — porque el árbol cambió esa ruta mientras tanto
+— la ÚLTIMA línea de la etapa, la sección `## Unknowns` del handoff y la notificación
+`stage.done` / `run.finished` dicen `foreign work NOT restored`, con el stash y el comando
+literal para recuperarlo. El código de salida del run no cambia por eso.
+
+**Un repo en medio de un merge o un rebase rechaza (salida `2`).** Ese estado no tiene forma
+limpia de deshacerse, así que no se guarda nada ahí. Terminá o abortá la operación y volvé a
+arrancar el loop.
+
 **El run se rechaza con salida `1`.** `run auto` no corre sobre un run marcado
 `attended_by: host` — un candado y un motor son alternativas, nunca capas. Devuélvele el run
 al framework con `tldrx run attend --none <run>`, o condúcelo desde una sesión.

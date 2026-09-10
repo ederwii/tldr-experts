@@ -231,6 +231,12 @@ export function stageDoneNotification(
   ctx: NotifyContext,
   costUsd: number,
   unmetered = 0,
+  /**
+   * A sentence the run owes the reader whatever else happened — today, exactly
+   * one: uncommitted work this stage set aside and could not give back (#164).
+   * `null` leaves the summary byte-identical to what it has always been.
+   */
+  note: string | null = null,
 ): NotifyPayload {
   // A stage every one of whose turns was in-session cost this loop nothing it
   // could see, and "finished for $0.00" is the sentence that reads as thrift.
@@ -240,7 +246,7 @@ export function stageDoneNotification(
   return {
     ...base(ctx, "stage.done"),
     summary: `${ctx.runId} finished ${ctx.stage ?? "a stage"} for ${figure} and moved on. `
-      + "No decision is waiting on you.",
+      + (note === null ? "No decision is waiting on you." : note),
     command: null,
     detail: { cost_usd: costUsd, ...(unmetered === 0 ? {} : { unmetered_tasks: unmetered }) },
   };
@@ -286,13 +292,16 @@ export function runEndNotification(
   spentUsd: number,
   lastLine: string,
   tally: SpentTally = { usd: spentUsd, unmetered: 0, metered: 1 },
+  /** Same contract as `stageDoneNotification`'s: today only a failed restore. */
+  note: string | null = null,
 ): NotifyPayload {
   const kind: NotifyKind = exitCode === 0 ? "run.finished" : "run.failed";
   const verb = exitCode === 0 ? "finished" : "stopped";
   return {
     ...base(ctx, kind),
     summary: `${ctx.runId}: the loop ${verb} with exit ${String(exitCode)} `
-      + `(${exitFamily(exitCode)}), ${spentFigure(tally)} spent by this loop. ${lastLine}`,
+      + `(${exitFamily(exitCode)}), ${spentFigure(tally)} spent by this loop. ${lastLine}`
+      + `${note === null ? "" : ` ${note}`}`,
     command: exitCode === 0 ? null : `tldrx run status ${ctx.runId}`,
     detail: {
       exit_code: exitCode,

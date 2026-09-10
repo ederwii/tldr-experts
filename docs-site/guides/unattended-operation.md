@@ -395,6 +395,21 @@ loop again. If the gate is on `gates_policy: agent` and you expected the run to 
 itself: it will not — the loop signs nothing, and an `agent` gate says who MAY sign, not
 that anything has.
 
+**A dirty checkout no longer stops the run.** The Build entry classifies every uncommitted
+path instead of counting it. Anything under `tldrx-work/`, `.tldrx/` or `.agent/`
+is the framework's own state and is ignored; a dirty path a pending story declares in its
+`touches:`, or a submodule, still refuses with exit `2`; everything else is **set aside** in a
+pathspec-limited `git stash push` before the epic branch is cut, and popped back when the stage
+ends. Both moments are on the log (`worktree.foreign_work_aside`,
+`worktree.foreign_work_restored`) and nothing is ever deleted or force-popped. If git refuses
+the pop — because the tree changed that path meanwhile — the stage's LAST line, the handoff's
+`## Unknowns` and the `stage.done` / `run.finished` notification all say
+`foreign work NOT restored`, with the stash and the literal command to take it back. The run's
+exit code does not move for it.
+
+**A repo in the middle of a merge or rebase refuses (exit `2`).** That state has no clean undo,
+so nothing is stashed into it. Finish or abort the operation and start the loop again.
+
 **The run is refused with exit `1`.** `run auto` will not run on a run marked
 `attended_by: host` — a lock and an engine are alternatives, never layers. Hand the run
 back to the framework with `tldrx run attend --none <run>`, or drive it from a session

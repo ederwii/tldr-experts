@@ -62,11 +62,237 @@ export function repoDirOf(workspace: WorkspaceContext, name: string): string {
   return resolved;
 }
 
+/** One `git status --porcelain` record, with the path as its own exact bytes. */
+export interface DirtyEntry {
+  /** The two status letters, verbatim — `??`, ` M`, `A `, `R `. */
+  readonly code: string;
+  /** The path git named, unquoted and unescaped: what a pathspec must match. */
+  readonly path: string;
+  /** `code` + a space + `path` — the string this repo has always displayed. */
+  readonly entry: string;
+}
+
+/**
+ * Every changed path, read with `-z`.
+ *
+ * `-z` rather than the line format, and this is the whole reason the function
+ * exists (#164, wave 5): without it git QUOTES a path it considers unusual —
+ * `?? "we ird[1].txt"`, `?? "caf\303\251.md"` — and a caller that strips the
+ * quotes still holds an escaped string, not the bytes on disk. That was fine
+ * while the only consumers COUNTED and PRINTED. It stops being fine the moment a
+ * path is handed back to git as a pathspec, because the framework is then writing
+ * to somebody's uncommitted work through a name it guessed at. `-z` emits the
+ * real bytes and never quotes.
+ *
+ * A rename record is `XY <new>\0<old>\0` — two fields for one change — so the
+ * origin field is consumed and dropped here: the path a pathspec has to name is
+ * the one the file has NOW.
+ */
+export async function dirtyEntries(cwd: string): Promise<readonly DirtyEntry[]> {
+  const result = await git(["status", "--porcelain", "-z"], cwd);
+  if (!result.ok) throw new GitError(`\`git status\` failed in ${cwd}: ${firstLine(result.stderr)}`);
+  const fields = result.stdout.split("\0");
+  const out: DirtyEntry[] = [];
+  for (let i = 0; i < fields.length; i += 1) {
+    const record = fields[i] ?? "";
+    if (record === "") continue;
+    const code = record.slice(0, 2);
+    const path = record.slice(3);
+    // `R`/`C` in either column: the NEXT field is where the file came from, and
+    // it is not a path anybody may act on now.
+    if (code.startsWith("R") || code.startsWith("C") || code[1] === "R" || code[1] === "C") i += 1;
+    out.push({ code, path, entry: `${code} ${path}`.trim() });
+  }
+  return out;
+}
+
 /** Porcelain output, one entry per changed path. Empty = a clean tree. */
 export async function dirtyPaths(cwd: string): Promise<readonly string[]> {
-  const result = await git(["status", "--porcelain"], cwd);
-  if (!result.ok) throw new GitError(`\`git status\` failed in ${cwd}: ${firstLine(result.stderr)}`);
+  return (await dirtyEntries(cwd)).map((entry) => entry.entry);
+}
+
+/**
+ * A pathspec that matches EXACTLY this path and nothing else.
+ *
+ * Git pathspecs are globs by default: a file really named `we ird[1].txt` is a
+ * character class to `git stash push -- <path>`, and the file it was asked to set
+ * aside is not the file it sets aside. `:(literal)` turns the magic off for that
+ * one operand (`gitglossary(7)`), which is the only form allowed anywhere the
+ * framework writes to a tree it does not own.
+ */
+export function literalPathspec(path: string): string {
+  return `:(literal)${path}`;
+}
+
+/** Every submodule `.gitmodules` declares, as repo-relative paths. Empty when there is none. */
+export async function submodulePaths(cwd: string): Promise<ReadonlySet<string>> {
+  const result = await git(["config", "--file", ".gitmodules", "--get-regexp", "^submodule\\..*\\.path$"], cwd);
+  const paths = new Set<string>();
+  if (!result.ok) return paths;   // exit 1 = no .gitmodules, which is not a failure
+  for (const line of result.stdout.split("\n")) {
+    const at = line.indexOf(" ");
+    if (at === -1) continue;
+    const path = line.slice(at + 1).trim();
+    if (path !== "") paths.add(path);
+  }
+  return paths;
+}
+
+/**
+ * The multi-step git operation this repo is in the middle of, or null.
+ *
+ * Named rather than counted, because the caller's whole job is to say WHICH one:
+ * a tree mid-merge is not a tree anybody may stash out from under, and "there is
+ * something in progress" is not a sentence an operator can act on.
+ */
+export async function operationInProgress(cwd: string): Promise<string | null> {
+  const gitDir = await git(["rev-parse", "--git-dir"], cwd);
+  if (!gitDir.ok) return null;
+  const dir = resolve(cwd, gitDir.stdout.trim());
+  for (const [name, what] of [
+    ["MERGE_HEAD", "a merge"],
+    ["rebase-merge", "a rebase"],
+    ["rebase-apply", "a rebase or `git am`"],
+    ["CHERRY_PICK_HEAD", "a cherry-pick"],
+    ["REVERT_HEAD", "a revert"],
+    ["BISECT_LOG", "a bisect"],
+  ] as const) {
+    if (existsSync(join(dir, name))) return what;
+  }
+  return null;
+}
+
+/** Paths git currently reports as unmerged — the conflict half of a failed apply. */
+export async function unmergedPaths(cwd: string): Promise<readonly string[]> {
+  const result = await git(["diff", "--name-only", "--diff-filter=U"], cwd);
   return result.stdout.split("\n").map((line) => line.trim()).filter((line) => line !== "");
+}
+
+export interface StashPush {
+  readonly ok: boolean;
+  /** The stash commit's full sha — the durable name. `""` when nothing was pushed. */
+  readonly hash: string;
+  readonly message: string;
+  readonly detail: string;
+}
+
+/**
+ * `git stash push -u -m <message> -- <literal pathspecs>`: exactly these paths.
+ *
+ * Never a bare `-u`. Measured on a live 0.14.2 run (#164): the refusal's printed
+ * remedy said `git stash push -u -m "…"` with no pathspec, an owner ran it, and
+ * it swept the run's OWN untracked records under `tldrx-work/<run>/` into the
+ * stash — after which `tldrx next` answered `no run '<id>' in tldrx-work/`.
+ * Nothing was lost, and the framework had made its own run disappear.
+ *
+ * The hash is read from `refs/stash` immediately after the push, and it is the
+ * hash — not `stash@{0}` — that is recorded: another stash pushed in between
+ * would renumber every entry, and a restore that trusted the number would pop
+ * somebody else's work.
+ */
+export async function stashPushPaths(
+  cwd: string, message: string, paths: readonly string[],
+): Promise<StashPush> {
+  if (paths.length === 0) return { ok: false, hash: "", message, detail: "no paths to set aside" };
+  const pushed = await git(["stash", "push", "-u", "-m", message, "--", ...paths.map(literalPathspec)], cwd);
+  if (!pushed.ok) {
+    return { ok: false, hash: "", message, detail: firstLine(pushed.stderr) || firstLine(pushed.stdout) };
+  }
+  const hash = await fullShaOf(cwd, "refs/stash");
+  if (hash === "") return { ok: false, hash: "", message, detail: "`git stash push` left no refs/stash to name" };
+  return { ok: true, hash, message, detail: firstLine(pushed.stdout) };
+}
+
+/**
+ * The `stash@{n}` that IS this commit, or `""` when the stash is no longer there.
+ *
+ * Measured 2026-09-09: `git stash pop <sha>` is refused outright —
+ * `'<sha>' is not a stash reference` — so a hash cannot be popped directly, and
+ * `stash@{0}` cannot be trusted (a second stash pushed meanwhile renumbers it).
+ * Locating the index BY the hash is the only form that is both possible and
+ * correct, and it is what makes the record's `stash_ref` a durable name.
+ */
+export async function stashRefFor(cwd: string, hash: string): Promise<string> {
+  const listed = await git(["stash", "list", "--format=%H %gd"], cwd);
+  if (!listed.ok) return "";
+  for (const line of listed.stdout.split("\n")) {
+    const [sha, ref] = line.trim().split(" ");
+    if (sha === hash && ref !== undefined) return ref;
+  }
+  return "";
+}
+
+export interface StashPop {
+  readonly restored: boolean;
+  /**
+   * Did the INDEX come back as it was — a path staged at one version and modified
+   * further in the worktree, restored to both?
+   *
+   * `false` is a real, named partial success: the files are back and unstaged.
+   * `true` when `--index` took, and when there was nothing staged to lose.
+   */
+  readonly indexRestored: boolean;
+  /** Paths left unmerged, when git applied part of it. Empty when it aborted whole. */
+  readonly conflicts: readonly string[];
+  /** The `stash@{n}` this hash was found at, for the line an operator retypes. */
+  readonly ref: string;
+  readonly detail: string;
+}
+
+/**
+ * Give the stash back — and never force.
+ *
+ * `pop`, not `apply` + `drop`: on a clean apply git drops the entry itself, and
+ * on a refusal it KEEPS it (measured 2026-09-09 both ways). The refusal is
+ * atomic in the case that matters here — a path the tree has changed since
+ * produces `Your local changes … would be overwritten by merge` / `Aborting`
+ * with the tree untouched and the entry intact — so a failed restore leaves the
+ * operator's work exactly where this function found it. Nothing here checks out,
+ * resets or drops anything.
+ */
+export async function stashPop(cwd: string, hash: string): Promise<StashPop> {
+  const ref = await stashRefFor(cwd, hash);
+  if (ref === "") {
+    return {
+      restored: false, indexRestored: false, conflicts: [], ref: "",
+      detail: "the stash entry is no longer in `git stash list`",
+    };
+  }
+  // `--index` FIRST, because a plain pop silently throws the staging away.
+  // Measured 2026-09-09 on HEAD `A` / staged `B` / worktree `C`: a plain pop came
+  // back ` M` with `git show :f.txt` reading `A` — the staged `B` gone — where
+  // `--index` came back `MM` with `B` staged and `C` in the tree. One of the three
+  // workspaces this feature was measured on had exactly that shape (a script and a
+  // `package.json` line staged in a sub-repo), so losing it is losing real work.
+  //
+  // `--keep-index` is deliberately NOT used on the PUSH side: measured on the same
+  // repo, it leaves the staged content in the working tree (`M  f.txt`, the tree
+  // holding `B`), which is the very dirt this whole path exists to take out of the
+  // base pre-flight's measurement.
+  const withIndex = await git(["stash", "pop", "--index", ref], cwd);
+  if (withIndex.ok) return { restored: true, indexRestored: true, conflicts: [], ref, detail: firstLine(withIndex.stdout) };
+  // `--index` refuses in cases a plain pop survives (it cannot reinstate an index
+  // over a path the tree has since staged differently). Falling back is strictly
+  // better than leaving the files in the stash — and it is NAMED, never silent.
+  const plain = await git(["stash", "pop", ref], cwd);
+  if (plain.ok) {
+    return {
+      restored: true,
+      indexRestored: false,
+      conflicts: [],
+      ref,
+      detail: `${firstLine(plain.stdout)} — the index could not be reinstated (${firstLine(withIndex.stderr)})`,
+    };
+  }
+  return {
+    restored: false,
+    indexRestored: false,
+    conflicts: await unmergedPaths(cwd),
+    // Re-read: a partial apply renumbers nothing, but an operator retypes what
+    // this prints, so the ref is measured at the moment the line is composed.
+    ref: await stashRefFor(cwd, hash),
+    detail: firstLine(plain.stderr) || firstLine(plain.stdout) || `git stash pop exited ${String(plain.exitCode)}`,
+  };
 }
 
 /**

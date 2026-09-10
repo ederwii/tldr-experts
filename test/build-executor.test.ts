@@ -1501,9 +1501,20 @@ describe("what counts as dirt", () => {
 });
 
 describe("safety", () => {
-  test("a dirty repo is refused before anything is cut, and says what to do", async () => {
+  /**
+   * The refusal that REMAINS after #164 (2026-09-09): a dirty path a pending
+   * story is about to write.
+   *
+   * It used to be any product dirt at all, and `README.md` was the fixture for
+   * it. That is now `foreign` — nobody's story declares it — and the engine sets
+   * it aside instead (`build-foreign-work.test.ts`). What still refuses is dirt
+   * INSIDE a story's `touches:`, because setting the operator's version of that
+   * path aside would hand the developer a tree the operator did not agree to.
+   * `s1.txt` is exactly what S1 declares.
+   */
+  test("a dirty path a story declares is refused before anything is cut, and says what to do", async () => {
     const ws = workspace(TWO_WAVES);
-    writeFileSync(join(ws.repoDir, "README.md"), "# app\n\nuncommitted\n", "utf8");
+    writeFileSync(join(ws.repoDir, "s1.txt"), "the operator's own draft\n", "utf8");
 
     const outcome = await next(ws);
     expect(outcome.code).toBe(2);
@@ -1511,9 +1522,12 @@ describe("safety", () => {
     expect(text).toContain("uncommitted change(s)");
     // The literal, runnable commands — not the verb. A message that names a verb
     // makes the operator compose the command, and this one has a run-specific
-    // stash message in it.
-    expect(text).toContain(`git -C ${ws.repoDir} stash push -u -m "tldrx ${ws.runId} foreign work"`);
-    expect(text).toContain(`git -C ${ws.repoDir} stash pop`);
+    // stash message in it. PATHSPEC-LIMITED since #164: a bare `-u` swept a run's
+    // own untracked records into the stash on a live 0.14.2 workspace.
+    expect(text).toContain(
+      `git -C '${ws.repoDir}' stash push -u -m 'tldrx ${ws.runId} foreign work' -- ':(literal)s1.txt'`,
+    );
+    expect(text).toContain(`git -C '${ws.repoDir}' stash pop`);
     // And the true reason: the base pre-flight runs in THIS checkout.
     expect(text).toContain("the base pre-flight runs in this checkout");
     expect(text).not.toContain("worktree add");
@@ -1548,20 +1562,22 @@ describe("safety", () => {
     expect(git(ws, ["rev-parse", "--verify", "epic/e1"])).not.toBe("");
   }, 60_000);
 
-  test("single-repo: a product file still refuses, and the message names only it", async () => {
+  test("single-repo: a product file a story declares still refuses, and the message names only it", async () => {
     const ws = workspace({ ...TWO_WAVES, rootIsRepo: true });
-    writeFileSync(join(ws.repoDir, "README.md"), "# app\n\nuncommitted\n", "utf8");
+    writeFileSync(join(ws.repoDir, "s1.txt"), "the operator's own draft\n", "utf8");
     writeFileSync(join(ws.runDir, ".lock"), "held\n", "utf8");
 
     const outcome = await next(ws);
     expect(outcome.code).toBe(2);
     const text = outcome.lines.join("\n");
     expect(text).toContain("1 uncommitted change(s)");
-    expect(text).toContain("README.md");
+    expect(text).toContain("s1.txt");
     expect(text).not.toContain(PROJECT_WORK_DIR);
     expect(text).not.toContain(PROJECT_FRAMEWORK_DIR);
-    expect(text).toContain(`git -C ${ws.repoDir} stash push -u -m "tldrx ${ws.runId} foreign work"`);
-    expect(text).toContain(`git -C ${ws.repoDir} stash pop`);
+    expect(text).toContain(
+      `git -C '${ws.repoDir}' stash push -u -m 'tldrx ${ws.runId} foreign work' -- ':(literal)s1.txt'`,
+    );
+    expect(text).toContain(`git -C '${ws.repoDir}' stash pop`);
     expect(text).toContain("the base pre-flight runs in this checkout");
     expect(text).not.toContain("worktree add");
     expect(() => git(ws, ["rev-parse", "--verify", "epic/e1"])).toThrow();
@@ -1590,6 +1606,10 @@ describe("safety", () => {
   test("multi-repo: a repo's own `tldrx-work/` is product dirt — that shape is untouched", async () => {
     // The state lives at the workspace root and the repo is a subdirectory, so a
     // `tldrx-work/` INSIDE the repo is the human's directory, not the framework's.
+    // Still a refusal after #164, and deliberately NOT a set-aside: the one rule
+    // with no exception is that the framework never moves a path under those
+    // names, so a directory that merely looks like state is the operator's to
+    // move, not the engine's.
     const ws = workspace(TWO_WAVES);
     mkdirSync(join(ws.repoDir, PROJECT_WORK_DIR), { recursive: true });
     writeFileSync(join(ws.repoDir, PROJECT_WORK_DIR, "notes.md"), "mine\n", "utf8");

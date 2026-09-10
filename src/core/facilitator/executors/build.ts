@@ -98,6 +98,11 @@ import {
   type FixFinding, type FixlistOnDisk,
 } from "../../build/fixlist.ts";
 import { renderBuildHandoff, type EpicSummaryRow } from "../../build/handoff.ts";
+import {
+  asidePayload, FOREIGN_ASIDE_EVENT, FOREIGN_RESTORED_EVENT, namePaths, notRestoredLine, pendingAsides,
+  restoreForeignWork, restoredLine, restoredPayload, setAsideForeignWork, unrestored,
+  type AsideStash, type RestoreOutcome,
+} from "../../build/foreignWork.ts";
 import { measuredWidening, wideningRows, type WideningRow } from "../../build/measuredTouches.ts";
 import { declaredTouchesFor } from "../../run/boundary.ts";
 
@@ -112,7 +117,7 @@ import {
   unreadableTouches, type EpicWorktreeParts,
 } from "../../build/worktrees.ts";
 import {
-  dirtyRepoRefusal, epicRows, foreignEpicRefusal, resolveBranchModel, type ClaimParts,
+  dirtyRepoRefusal, epicRows, foreignEpicRefusal, relaunchCommand, resolveBranchModel, type ClaimParts,
 } from "../../build/branchClaims.ts";
 import {
   awaitingReview, bundleKeyOf, clearReviewBundle, resumableReview,
@@ -248,26 +253,55 @@ export async function buildExecutor(ctx: ExecutorContext): Promise<ExecutorOutco
           // what the next invocation would have to guess at.
           branchModel: session.branchModel.kind,
         };
+  /**
+   * EVERY exit from this executor, including the successful ones (#164, review
+   * round 1).
+   *
+   * A stage that refused at its third door, or died, still borrowed the
+   * operator's uncommitted work — and the reviewer reproduced exactly that: a
+   * refusal returned through a wrapper that only recorded claimed branches, so
+   * the stash stayed, the tree stayed short a file, and the report said nothing.
+   * There is now one wrapper, and it is this one: nothing returns from here
+   * without the borrowed tree having been handed back and the handing-back said
+   * out loud.
+   *
+   * `restoreForeignWorkAside` reads the LOG and is idempotent, so the ordinary
+   * path — where `finish()` has already restored — adds no line and costs one
+   * file read.
+   */
+  const withRestore = async (outcome: ExecutorOutcome): Promise<ExecutorOutcome> => {
+    const lines = await session.restoreForeignWorkAside();
+    return withClaims(lines.length === 0 ? outcome : { ...outcome, lines: [...outcome.lines, ...lines] });
+  };
   try {
     // `--review` names the second delegable role. It rides the SAME two doors —
     // there is one handshake, and a reviewer that needed its own would be a
     // second contract for the host to get wrong (design §B.3).
     if (ctx.mode === "prepare") {
-      return withClaims(ctx.review ? await session.prepareReviewOnly() : await session.prepare());
+      return await withRestore(ctx.review ? await session.prepareReviewOnly() : await session.prepare());
     }
     if (ctx.mode === "commit") {
-      return withClaims(ctx.review ? await session.commitReview() : await session.commit());
+      return await withRestore(ctx.review ? await session.commitReview() : await session.commit());
     }
-    return withClaims(await session.runAll());
+    return await withRestore(await session.runAll());
   } catch (error) {
     // Issue #41: the DoD step found a red command that is red on the base tree
     // too. That is a workspace-configuration fault, so it REFUSES (stage back to
     // `ready`, story untouched, attempt unspent) rather than blocking a story for
     // something no story caused. Whatever the developer already cost is still in
     // `session.tasks` and is still recorded.
-    if (error instanceof BaseGateFailure) return withClaims(refusedOnBase(session, error));
+    if (error instanceof BaseGateFailure) return await withRestore(refusedOnBase(session, error));
     if (error instanceof GitError || error instanceof PlanLoadError) {
-      return withClaims(failed(ctx, error.message, session.tasks));
+      const outcome = failed(ctx, error.message, session.tasks);
+      return await withRestore({ ...outcome, lines: [...session.reportLines, ...outcome.lines] });
+    }
+    // An error nobody here understands still leaves with the tree it borrowed put
+    // back: the throw is re-raised unchanged, and a restore that itself throws
+    // must not replace it.
+    try {
+      await session.restoreForeignWorkAside();
+    } catch {
+      // Nothing to add: the original error is the one that matters.
     }
     throw error;
   }
@@ -284,6 +318,10 @@ function refusedOnBase(session: BuildSession, error: BaseGateFailure): ExecutorO
     costUsd: session.tasks.reduce((sum, task) => sum + task.costUsd, 0),
     outputs: [],
     lines: [
+      // The session's own lines first: this refusal can happen after the stash,
+      // and a report that omits "N change(s) were set aside" is a report that
+      // moved somebody's files in silence.
+      ...session.reportLines,
       `[tldrx] build: ${who} was not blocked — its Definition of Done failed for a reason the base tree shares.`,
       ...baseRefusalLines([error.result]),
     ],
@@ -485,6 +523,22 @@ class BuildSession {
   /** stderr lines: advice for the operator, never a reason to stop. */
   private readonly advisories: string[] = [];
   /**
+   * Every foreign-work stash this invocation tried to give back (#164).
+   *
+   * Held only to compose the report — the durable record is
+   * `worktree.foreign_work_restored` on the log, and `pendingAsides` reads the
+   * open ones back from there.
+   */
+  private readonly restores: RestoreOutcome[] = [];
+  /** Stash hashes this INVOCATION has already tried to pop — see `restoreForeignWorkAside`. */
+  private readonly restoreAttempted = new Set<string>();
+  /**
+   * What `refuseOnDirtyRepos` classified as foreign, held between the door that
+   * DECIDES and the step that stashes — which are now two steps with two other
+   * refusals between them (#164, review round 1).
+   */
+  private aside: readonly { readonly repo: string; readonly repoDir: string; readonly paths: readonly string[] }[] = [];
+  /**
    * What this run measured on the untouched base tree (`build/preflight.ts`).
    *
    * Loaded lazily and once: a run resumed after a refusal must not re-pay for a
@@ -518,8 +572,14 @@ class BuildSession {
 
   /** Headless: every wave, every story, in order, then the handoff. */
   async runAll(): Promise<ExecutorOutcome> {
+    // ORDER IS LOAD-BEARING (#164, review round 1). Every refusal that can be
+    // decided WITHOUT moving the operator's files is decided first; the stash is
+    // the last step before anything is cut, and the one door that must come after
+    // it — the base pre-flight, which needs the clean tree — restores on its way
+    // out through `withRestore`.
     const refusal = await this.refuseOnDirtyRepos()
       ?? await this.refuseOnForeignEpic()
+      ?? await this.setAsideForeign()
       ?? await this.refuseOnRedBase();
     if (refusal !== null) return refusal;
     this.recordGateFeedback();
@@ -577,8 +637,14 @@ class BuildSession {
   async prepare(): Promise<ExecutorOutcome> {
     const planned = this.nextPending();
     if (planned === null) return await this.finish();
+    // ORDER IS LOAD-BEARING (#164, review round 1). Every refusal that can be
+    // decided WITHOUT moving the operator's files is decided first; the stash is
+    // the last step before anything is cut, and the one door that must come after
+    // it — the base pre-flight, which needs the clean tree — restores on its way
+    // out through `withRestore`.
     const refusal = await this.refuseOnDirtyRepos()
       ?? await this.refuseOnForeignEpic()
+      ?? await this.setAsideForeign()
       ?? await this.refuseOnRedBase();
     if (refusal !== null) return refusal;
 
@@ -713,7 +779,9 @@ class BuildSession {
   async prepareReviewOnly(): Promise<ExecutorOutcome> {
     const planned = this.nextPending();
     if (planned === null) return await this.finish();
-    const refusal = await this.refuseOnDirtyRepos() ?? await this.refuseOnForeignEpic();
+    const refusal = await this.refuseOnDirtyRepos()
+      ?? await this.refuseOnForeignEpic()
+      ?? await this.setAsideForeign();
     if (refusal !== null) return refusal;
 
     const work = this.reviewWorkFor(planned) ?? this.reviewWorkFromLedger(planned);
@@ -2369,6 +2437,11 @@ class BuildSession {
   // --- the end of the phase -------------------------------------------------
 
   private async finish(): Promise<ExecutorOutcome> {
+    // The operator's tree comes back FIRST, before the handoff is written: a
+    // restore that fails has to be nameable in `## Unknowns`, and a document that
+    // said "nothing needs a human" over a stash the framework could not give back
+    // would be the record lying in the dangerous direction (§7).
+    const restored = await this.restoreForeignWorkAside();
     // The epic worktrees are deliberately NOT removed here (issue #16, owner
     // decision 2026-09-01). They belong to the RUN, not to this stage: a later
     // Watch stage cites code that is committed on the epic branch and merged
@@ -2391,6 +2464,9 @@ class BuildSession {
           `across ${String(this.plan.waves.length)} wave(s)`,
         ...this.lines,
         `wrote ${HANDOFF_REL}`,
+        // A failed restore is moved to the very END of the report by `out()` in
+        // `runNext.ts` — after `gate pending`, which this stage always writes.
+        ...restored,
       ],
       stderr: [...this.advisories],
       error: null,
@@ -2434,6 +2510,14 @@ class BuildSession {
       carried: carried.rows,
       unreadableStories: carried.unreadable,
       widenings: this.wideningRows(),
+      // The failed restores only. A stash that came back is not an unknown.
+      foreignWork: unrestored(this.restores).map((outcome) => ({
+        repo: outcome.stash.repo,
+        paths: outcome.conflicts.length > 0 ? outcome.conflicts : outcome.stash.paths,
+        stashRef: outcome.stash.hash,
+        command: outcome.command,
+        detail: outcome.detail,
+      })),
     }), "utf8");
   }
 
@@ -2657,26 +2741,141 @@ class BuildSession {
     };
   }
 
+  /**
+   * The one refusal that happens AFTER the stash — so it is the one that has to
+   * carry this session's own lines, including the sentence saying work was set
+   * aside. `withRestore` appends the sentence saying it came back.
+   */
   private async refuseOnRedBase(): Promise<ExecutorOutcome | null> {
     const refusal = await redBaseRefusal(this.baseParts, this.pendingStories());
     return refusal === null ? null : {
       ok: false, refused: true, awaiting: false, tasks: [], costUsd: 0, outputs: [],
-      lines: refusal.lines, error: refusal.error,
+      lines: [...this.lines, ...refusal.lines], error: refusal.error,
     };
   }
 
+  /** The session's own report lines, for the exit paths that compose their own. */
+  get reportLines(): readonly string[] {
+    return this.lines;
+  }
+
+  /**
+   * The dirty-tree door (#164): refuse what a story is about to write, set the
+   * rest aside, and cut the epic branch from a clean tree either way.
+   *
+   * The stash happens HERE — before `refuseOnForeignEpic` and before the base
+   * pre-flight — because a clean tree is precisely what the pre-flight's
+   * measurement is worth anything over. It is recorded before anything else can
+   * fail: `worktree.foreign_work_aside` is appended in the same step, so a crash
+   * one line later still leaves the operator a log entry naming their stash.
+   */
   private async refuseOnDirtyRepos(): Promise<ExecutorOutcome | null> {
-    const { refusal, ignored } = await dirtyRepoRefusal(this.claimParts, this.pendingStories());
-    if (refusal !== null) {
+    const plan = await dirtyRepoRefusal(
+      { ...this.claimParts, mode: this.ctx.mode }, this.pendingStories(),
+    );
+    this.aside = plan.aside;
+    if (plan.refusal !== null) {
       return {
         ok: false, refused: true, awaiting: false, tasks: [], costUsd: 0, outputs: [],
-        lines: refusal.lines, error: refusal.error,
+        lines: plan.refusal.lines, error: plan.refusal.error,
       };
     }
-    if (ignored > 0) {
-      this.lines.push(`  · ignoring ${String(ignored)} tldrx state file(s) in the dirty-tree check`);
+    if (plan.ignored > 0) {
+      this.lines.push(`  · ignoring ${String(plan.ignored)} tldrx state file(s) in the dirty-tree check`);
     }
     return null;
+  }
+
+  /**
+   * Take the stash — and take it LAST, after every other door has passed.
+   *
+   * The order is the fix for the reviewer's Critical (2026-09-09). The stash used
+   * to be the FIRST thing Build did, so the foreign-epic refusal and the base
+   * pre-flight could both refuse with the operator's files already moved, through
+   * a return path that neither restored them nor even printed the line saying they
+   * had gone. Reproduced: exit 2, a stash on the list, the file missing from the
+   * tree, nothing said, and a re-run that refused forever.
+   *
+   * `refuseOnRedBase` is the one door that stays AFTER this, and it has to: a
+   * pre-flight measured over a dirty tree is the measurement this entire guard
+   * exists to protect. That path restores on its way out (`withRestore` in
+   * `buildExecutor` wraps every return) and carries both sentences.
+   */
+  private async setAsideForeign(): Promise<ExecutorOutcome | null> {
+    for (const row of this.aside) {
+      const reason = "uncommitted work no pending story declares in its `touches:` — set aside so the "
+        + "base pre-flight measures the tree the stories are cut from";
+      const outcome = await setAsideForeignWork(row.repo, row.repoDir, this.ctx.runId, row.paths);
+      if (outcome.stash === null) {
+        return {
+          ok: false, refused: true, awaiting: false, tasks: [], costUsd: 0, outputs: [],
+          lines: [
+            `[tldrx] build: repo \`${row.repo}\` has ${String(row.paths.length)} uncommitted change(s) that `
+              + `are nobody's story, and they could not be set aside: ${outcome.reason ?? "no reason given"}.`,
+            `  ${namePaths(row.paths)}`,
+            "  Commit them, or set them aside by hand, then run "
+              + `\`${relaunchCommand(this.ctx.mode, this.ctx.runId)}\`.`,
+          ],
+          error: `repo \`${row.repo}\` has uncommitted changes that could not be set aside`,
+        };
+      }
+      this.ctx.emit(FOREIGN_ASIDE_EVENT, asidePayload(outcome.stash, reason));
+      this.lines.push(
+        `  · ${row.repo}: ${String(row.paths.length)} uncommitted change(s) nobody's story declares — `
+        + `set aside in stash ${outcome.stash.hash.slice(0, 12)} (${namePaths(row.paths)}) and `
+        + "given back when this stage ends",
+      );
+    }
+    return null;
+  }
+
+  /**
+   * Give every stash this run opened back — the one place, on every exit path.
+   *
+   * Read off `events.jsonl` rather than off a field, because the two moments are
+   * not always in one process: a cursor-driven Build sets the work aside on the
+   * invocation that cuts the branch and finishes the stage several `tldrx next`
+   * calls later. Idempotent by construction — a stash with a `restored: true`
+   * event is not pending — so calling it twice, or on a path that set nothing
+   * aside, does nothing at all.
+   *
+   * Never forces, never drops. A pop git refuses is recorded `restored: false`
+   * with the literal command, and the run's own outcome is unchanged: the exit
+   * code answers for the run's work, not for the operator's tree.
+   */
+  async restoreForeignWorkAside(): Promise<readonly string[]> {
+    let open: readonly AsideStash[];
+    try {
+      open = pendingAsides(
+        readFileSync(join(this.ctx.runDir, EVENTS_FILE), "utf8"),
+        (repo) => {
+          try {
+            return repoDirOf(this.workspace, repo);
+          } catch {
+            return null;
+          }
+        },
+      );
+    } catch {
+      return [];
+    }
+    const lines: string[] = [];
+    for (const stash of open) {
+      // ONCE PER PROCESS. A refused pop leaves the stash pending on the log —
+      // deliberately, so a later invocation may try again when the path is free —
+      // but trying it twice inside one invocation would pop nothing and write a
+      // second identical `restored: false` event, which is a record of an attempt
+      // nobody made a decision about.
+      if (this.restoreAttempted.has(stash.hash)) continue;
+      this.restoreAttempted.add(stash.hash);
+      const outcome = await restoreForeignWork(stash);
+      this.restores.push(outcome);
+      this.ctx.emit(FOREIGN_RESTORED_EVENT, restoredPayload(outcome));
+      lines.push(outcome.restored
+        ? `  · ${restoredLine(outcome)}`
+        : `[tldrx] build: ${notRestoredLine(outcome)}`);
+    }
+    return lines;
   }
 
   private pendingStories(): readonly PlannedStory[] {

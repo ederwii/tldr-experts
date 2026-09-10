@@ -93,6 +93,33 @@ import {
  * instead, which is a line on stdout and in the review log, because nothing
  * happened to git.
  *
+ * `worktree.foreign_work_aside` and `worktree.foreign_work_restored` were added
+ * 2026-09-09 (#164), and they are the THIRD and fourth events that record tldrx
+ * touching git on the operator's behalf — the pair that makes a Build stop being
+ * a hostage to somebody else's uncommitted work. Measured across three real
+ * workspaces on 0.14.2: every first engine-driven run reaching Build stopped at
+ * `04-build` with `refusing to cut an epic branch from a dirty tree`, over seed
+ * docs, a data export and one untracked note — none of it anything a story was
+ * going to write. The engine now sets exactly those paths aside with a
+ * PATHSPEC-LIMITED stash before it cuts the epic branch, and pops that stash back
+ * when the wave ends.
+ *
+ * `worktree.foreign_work_aside` carries the `repo`, the `paths` (capped and
+ * counted, never silently truncated — `build/foreignWork.ts`), the `stash_ref`
+ * (the stash commit's full sha, which is the only name that survives another
+ * stash being pushed beside it) and the `reason` the paths were judged foreign.
+ * `worktree.foreign_work_restored` carries the same identity plus `restored`, and
+ * on `restored: false` the `conflicts`, the literal `command` an operator retypes
+ * and git's own `detail`.
+ *
+ * The pair is also the RESTORE's memory: the two moments are not always in one
+ * process (a cursor-driven Build finishes its stage several `tldrx next` calls
+ * after it cut the branch), so `pendingAsides` reads the open stashes back off
+ * this log rather than off a field on a session. A stash is never dropped and
+ * never force-popped: a restore that cannot happen is written down with
+ * `restored: false` and said out loud, and it does not change the run's exit
+ * code, which answers for the run's work and not for the operator's tree.
+ *
  * `notify.sent` and `notify.failed` were added 2026-09-07 (gh #180), with the
  * owner-declared notify hook (§2.18). They are the only events in this set that record
  * something happening OUTSIDE the run: one invocation of the command
@@ -130,6 +157,7 @@ export const EVENT_TYPES = [
   "gate.requested", "gate.approved", "gate.rejected", "gate.revoked", "gate.policy_changed",
   "story.reopened", "story.base_fastforwarded", "story.review_retried", "story.work_rescued",
   "story.touches_widened",
+  "worktree.foreign_work_aside", "worktree.foreign_work_restored",
   "result.unreadable",
   "operator_note",
   "check.passed", "check.failed",

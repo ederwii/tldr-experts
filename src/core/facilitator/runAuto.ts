@@ -37,8 +37,10 @@
  * same `questionsCard` `--gate-agent` prints, the status text from the same
  * `renderStatus` `tldrx run status` prints.
  */
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { EventLog } from "../events/EventLog.ts";
+import { notRestoredSummary } from "../build/foreignWork.ts";
 import type { TldrxEvent } from "../events/Event.ts";
 import { ambiguousRunLines } from "../run/openRuns.ts";
 import { RunStore } from "../run/RunStore.ts";
@@ -276,12 +278,30 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
           runEndNotification(
             notifyCtx(), code, spentUsd, lines[lines.length - 1] ?? "",
             loopTally(RunStore.open(runDir).run, spentUsd),
+            heldForeignWork(),
           ),
           stageIdOf(),
         );
         await notifier.drain();
       }
       return { code, lines };
+    };
+
+    /**
+     * Uncommitted work a Build stage set aside and could not give back (#164), read
+     * off this run's own log — the same sentence the terminal's last line carries.
+     *
+     * No new notify kind: it rides in the `summary` of the kinds a run-level
+     * notification already goes out under. The person reading "the stage finished"
+     * on a phone is exactly the person whose files are in that stash. `null` on
+     * every ordinary run, which leaves those summaries byte-identical.
+     */
+    const heldForeignWork = (): string | null => {
+      try {
+        return notRestoredSummary(readFileSync(join(runDir, "events.jsonl"), "utf8"));
+      } catch {
+        return null;
+      }
     };
 
     /** The open questions where the run is parked, as the card `--gate-agent` would print. */
@@ -351,7 +371,7 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
             ? 0
             : stage.stage.tasks.filter((task) => task.metered === false).length;
           await notifier.send(
-            stageDoneNotification(notifyCtx(), number(payload(event, "cost_usd")), unmetered),
+            stageDoneNotification(notifyCtx(), number(payload(event, "cost_usd")), unmetered, heldForeignWork()),
             event.stage,
           );
         }

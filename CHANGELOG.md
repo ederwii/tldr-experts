@@ -3,6 +3,46 @@
 
 ## 0.14.3 — unreleased
 
+### Changed
+
+- **A Build no longer stops because somebody else's work is uncommitted in the checkout
+  (#164).** The dirty-tree guard used to count every `git status --porcelain` entry and refuse,
+  and its only exits were "commit it" or "stash it" — neither of which an agent may take with
+  another person's files. Measured twice on two consecutive days on a Next.js workspace: 14
+  uncommitted paths, 13 untracked, none of them the run's, and nine stories waited three hours
+  for a human to grant one `git stash` at 4 a.m. Measured again across three real workspaces on
+  0.14.2: every first engine-driven run reaching Build stopped at `04-build`, over seed docs, a
+  data export and one untracked note. The dirt is now CLASSIFIED, and only one verdict still
+  refuses. `own` — anything under this workspace's own `tldrx-work/` or `.tldrx/` — is not dirt,
+  as before. `overlapping` — a dirty path inside a pending story's `touches:`, a submodule, or a
+  directory of the operator's that merely looks like tldrx state — refuses exactly as it did,
+  and names which path and why. Everything else is `foreign`: the engine sets it aside with a
+  pathspec-limited `git stash push` before it cuts the epic branch, records
+  `worktree.foreign_work_aside`, and pops it back when the stage ends, recording
+  `worktree.foreign_work_restored` — on every exit path, success or failure. A repo in the
+  middle of a merge, rebase, cherry-pick or bisect refuses outright and is never stashed into:
+  that state has no clean undo. Nothing is ever deleted and nothing is ever force-popped; a pop
+  git refuses is `restored: false` with the paths and the literal command, said as the stage's
+  LAST line, carried into the handoff's `## Unknowns` (and so into a PR body) and into the
+  `stage.done` / `run.finished` / `run.failed` notification's own summary — no new notify kind.
+  The run's exit code does not move for it, because that code answers for the run's work and not
+  for the operator's tree.
+
+  **The stash is the LAST step before anything is cut**, and every exit from the Build executor
+  — a refusal, a failure, a green stage — gives it back before it returns. An earlier draft took
+  the stash at the first door, so the foreign-epic refusal and the base pre-flight could both
+  refuse with the operator's files already moved, through a return path that neither restored
+  them nor said they had gone: reproduced in review as exit 2, a stash on the list, the file
+  missing, nothing printed, and a re-run that refused forever.
+- **The restore reinstates the INDEX, not just the files (#164).** `git stash pop --index`, so a
+  path staged at one version and modified further in the worktree comes back both staged and
+  modified — the shape one of the three measured workspaces actually had (a script and a
+  `package.json` line staged in a sub-repo). Measured: a plain pop left `git show :f.txt` reading
+  the commit instead of what was staged. When `--index` itself refuses, the fallback is a plain
+  pop and the record says so — `index_restored: false` on the event and a sentence saying those
+  paths are back unstaged. `--keep-index` is deliberately not used on the push side: measured, it
+  leaves the staged content in the working tree, which is the dirt this path exists to remove.
+
 ### Fixed
 
 - **The dashboard's live tests wait on the machine's clock, not a literal — the flake that
@@ -48,6 +88,28 @@
   sweep" hangs a real change off a server whose `fs.watch` handles have been closed
   (`simulateWatcherLoss()` — you cannot ask the OS to drop an event on demand) and went red
   before this change with no frame at all.
+- **The refusal's printed remedy no longer makes the run disappear (#164).** It printed
+  `git stash push -u -m "tldrx <run> foreign work"` with no pathspec. Measured on 0.14.2: an
+  owner ran it exactly as printed and it swept the run's OWN untracked records under
+  `tldrx-work/<run>/` into the stash, after which `tldrx next` answered
+  `no run '<id>' in tldrx-work/` and `tldrx status` said `nothing pending`. Nothing was lost —
+  `git stash pop` brings it all back — but the framework's own advice had made its own run
+  vanish, and an owner who does not know git internals reads that as the work being gone. The
+  remedy is now limited to exactly the paths the refusal listed, each passed after a literal
+  `--`, and the relaunch verb is chosen by MODE: `tldrx run auto <run>` when the engine is
+  driving, `tldrx next` when a person is. The owner was in `run auto` and the message told him
+  to run `next`, which is the cursor verb. The printed line is also the SAME string the engine
+  runs, `:(literal)` pathspecs and all, shell-quoted so it survives being retyped: it used to
+  join the raw paths while the engine passed `:(literal)`, and the docstring claiming they were
+  one thing was simply false — measured, the printed line for a file called `[x].txt` moved the
+  neighbouring `x.txt`.
+- **A filename with a space, a leading dash or a bracket is the file that moves (#164).** Git
+  pathspecs are globs by default, so `git stash push -u -- 'a[b].txt'` takes the neighbouring
+  `ab.txt` with it — measured in a scratch repo, the tree came back empty where one file should
+  have remained dirty. Every path the framework hands to git for a write is now
+  `:(literal)<path>`, and `git status` is read with `-z` so the path is the bytes on disk rather
+  than git's quoted-and-escaped rendering of them. This is the first thing tldrx does that
+  WRITES to the operator's uncommitted work, and it is the one operation with no undo.
 
 
 ## 0.14.2 — 2026-09-09
