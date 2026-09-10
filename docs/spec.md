@@ -1387,6 +1387,22 @@ time out, so a refusal can never be read as a pass. Both keys are OMITTED rather
 on a refusal, and the handoff, the review log, the retro and the dashboard all rendered it as a measurement of a
 command that never started.
 
+**A red `check: "dod"` also carries `output_path` and `output_bytes`, and its `detail` is the FAILURE excerpt
+(2026-09-09, #211).** ADDITIVE and optional; a green check and a refused one carry neither key. `detail` used to be
+the last non-empty line of the command's `stdout` followed by its `stderr` — which is the last line of `stderr`
+whenever `stderr` wrote anything, so a trailing deprecation warning displaced the entire failure report. Measured on a
+real workspace: the only sentence any record kept of a red suite was
+`sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute`, and which test failed was nowhere
+in the run. `detail` is now up to 5 failure-looking lines (`FAIL`, `Error`, `assert`, `Traceback`, `not ok`, …; the
+last 5 lines when none match), bounded at 1024 bytes — a quarter of §2.9's 4096-byte payload cap, so this event can
+never be the one whose `detail` the cap strips. `output_path` is the run-relative path of the file holding the last
+200 lines (or 16 KB, whichever is smaller) of the command's combined output —
+`04-build/log/dod-output/<story>-<n>.txt`, one file per red check, a sibling of the story logs — and `output_bytes`
+is its size on disk. The path is written BEFORE the event, so a citation is never a guess at a file that may not
+exist. `04-build/log/<story>.md` quotes the excerpt in a fenced block and cites the file `[src: <path>:1]`, the
+blocked-story reason and its handoff Finding carry the same citation, and the next developer's `## Previous attempt`
+carries the log — the one record a person reopening the story cannot re-derive, because the worktree is gone.
+
 **`task.done` carries `epic_base` (2026-09-06, #166).** ADDITIVE and optional: the FULL 40-character sha the story's
 epic branch pointed at *immediately before* the story merged into it — the base the reviewer's diff was computed from.
 Full, not abbreviated, because the record is durable and a prefix that is unambiguous today can go ambiguous as the

@@ -1957,6 +1957,7 @@ class BuildSession {
       workspaceCommands: this.workspace.commands,
       timeoutMs: this.ctx.spec.planned.timeout_s * 1000,
       phaseId: this.ctx.phaseId,
+      runDir: this.ctx.runDir,
       emit: (type, payload) => { this.ctx.emit(type, payload); },
       baseResult: (repo, command) => baseResultOf(this.baseParts, repo, command),
     });
@@ -3439,8 +3440,30 @@ class BuildSession {
       });
     }
     const path = join(this.ctx.runDir, BUILD_PHASE, LOG_DIR, `${storyId}.md`);
-    if (this.reviewAttempts(storyId) === 0 || !existsSync(path)) return "";
+    if (!this.hasPriorAttempt(storyId) || !existsSync(path)) return "";
     return readFileSync(path, "utf8").trimEnd().split("\n").map((line) => `> ${line}`).join("\n");
+  }
+
+  /**
+   * Is there an EARLIER attempt whose log this story's next developer should read?
+   *
+   * A counted verdict was the only answer until #211 — and a story that blocked on
+   * its DoD never reaches a reviewer, so the one attempt whose failure is fully
+   * recorded was the one attempt the next prompt said nothing about. The log now
+   * cites the kept output of the red command (`04-build/log/dod-output/…`), which
+   * is precisely what the next developer needs and cannot re-derive: the worktree
+   * is gone.
+   *
+   * A GREEN dod row is not a prior attempt — the story would not be dispatched
+   * again for it.
+   */
+  private hasPriorAttempt(storyId: string): boolean {
+    if (this.reviewAttempts(storyId) > 0) return true;
+    const ledger = readReviewLedger(this.ctx.runDir, storyId);
+    // `lastDodOutputPath` outlives a reopen where `dod` does not, so a story a
+    // person reopened still hands its next developer the failure that blocked it.
+    if (ledger.lastDodOutputPath !== null) return true;
+    return ledger.dod.some((row) => dodRefused(row) || row.exitCode !== 0 || row.timedOut);
   }
 
   private storyWorktree(planned: PlannedStory): string {

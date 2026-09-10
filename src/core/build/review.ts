@@ -18,7 +18,7 @@ import { isRecord } from "../schemas/validation.ts";
 import { SRC_GRAMMAR_HEADING } from "../text/srcGrammarContract.ts";
 import { parseFixFindings, type FixFinding } from "./fixlist.ts";
 import { DOD_REFUSAL_FALLBACK, dodRefused } from "./outcome.ts";
-import type { StoryOutcome, Verdict } from "./outcome.ts";
+import type { DodResult, StoryOutcome, Verdict } from "./outcome.ts";
 import { renderReviewerProvenance } from "./reviewerProvenance.ts";
 
 export interface Review {
@@ -376,6 +376,43 @@ function looksLikeSpawnError(detail: string): boolean {
     || text.startsWith("stopped after ");
 }
 
+/**
+ * One DoD row, and — for a red one — WHAT IT SAID (#211).
+ *
+ * Until this, the row was one line and that line was the last line of the
+ * command's combined output, which is the last line of stderr whenever stderr
+ * wrote anything: a trailing `DeprecationWarning` was the entire record of a red
+ * suite, and the failing test was nowhere. The excerpt is fenced (a test
+ * runner's output is not Markdown) and the whole kept tail is CITED rather than
+ * inlined — the log stays readable and the file has the other 195 lines.
+ */
+function dodLines(r: DodResult): readonly string[] {
+  // A refused command produced no exit code to print — the gate never ran it,
+  // and printing a number here made a fabricated 126 read as a measurement
+  // (#165).
+  if (dodRefused(r)) {
+    return [`- \`${r.command}\` → REFUSED, never ran — ${r.refusedBecause ?? DOD_REFUSAL_FALLBACK}`];
+  }
+  // `?? "?"` — the base side's spelling, for the row only a truncated
+  // `events.jsonl` can produce (`ran`, no exit code).
+  const head = `- \`${r.command}\` → exit ${String(r.exitCode ?? "?")}${r.timedOut ? " (timed out)" : ""}`
+    + (r.exitCode === 0 ? "" : ` — ${r.tail}`);
+  if (r.exitCode === 0 || r.outputPath === undefined) return [head];
+  const excerpt = (r.excerpt ?? r.tail).split("\n");
+  return [
+    head,
+    "",
+    "  The failing lines, from the kept output:",
+    "",
+    "  ```",
+    ...excerpt.map((line) => `  ${line}`),
+    "  ```",
+    "",
+    `  The last lines of the command's combined output — ${String(r.outputBytes ?? 0)} bytes — are kept at`,
+    `  \`${r.outputPath}\` [src: ${r.outputPath}:1]. Read that before re-running anything.`,
+  ];
+}
+
 /** `04-build/log/<story-id>.md`. Line 1 is the heading, which is what handoffs cite. */
 export function renderReviewLog(outcome: StoryOutcome): string {
   const lines = [
@@ -408,17 +445,7 @@ export function renderReviewLog(outcome: StoryOutcome): string {
             `- \`${command}\` — ran in an earlier \`tldrx next\`; its exit code is not in this ` +
             "run's event log, so it is not restated here",
           )
-      : outcome.dod.map((r) =>
-          // A refused command produced no exit code to print — the gate never
-          // ran it, and printing a number here made a fabricated 126 read as a
-          // measurement (#165).
-          dodRefused(r)
-            ? `- \`${r.command}\` → REFUSED, never ran — ${r.refusedBecause ?? DOD_REFUSAL_FALLBACK}`
-            // `?? "?"` — the base side's spelling, for the row only a
-            // truncated `events.jsonl` can produce (`ran`, no exit code).
-            : `- \`${r.command}\` → exit ${String(r.exitCode ?? "?")}${r.timedOut ? " (timed out)" : ""}`
-              + (r.exitCode === 0 ? "" : ` — ${r.tail}`),
-        )),
+      : outcome.dod.flatMap((r) => dodLines(r))),
     "",
     "## Summary",
     "",

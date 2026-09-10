@@ -55,6 +55,19 @@ export interface ReviewLedger {
   /** The DoD results of the last developer attempt that actually ran one. */
   readonly dod: readonly DodResult[];
   /**
+   * Where the last RED DoD command's kept output went (#211) — relative to the
+   * run dir — and nothing else about it.
+   *
+   * The one field here a `story.reopened` does NOT clear, deliberately. Every
+   * other value in this ledger is a COUNT or a VERDICT: things that count
+   * against the story, which is exactly what a person reopening it is saying
+   * should not. This is EVIDENCE — the last measured failure of the tree — and a
+   * reopen does not make the suite pass. The next developer's prompt cites it so
+   * the agent reads the real failure instead of re-running to rediscover it in a
+   * worktree that no longer exists.
+   */
+  readonly lastDodOutputPath: string | null;
+  /**
    * The error the LAST developer died with, when it died and nothing has run
    * since — read off the `check: "developer"` event this executor writes.
    */
@@ -154,6 +167,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
   const path = join(runDir, "events.jsonl");
   const empty: ReviewLedger = {
     verdicts: 0, fixlistRounds: 0, erroredWith: null, commit: null, epicBase: null, dod: [],
+    lastDodOutputPath: null,
     developerErroredWith: null, blockedWithNothingRun: false, reopened: null, fixRound: null,
     formatRetries: 0, formatRefusal: null, reviewer: null,
   };
@@ -182,6 +196,10 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
   // run, where the wrongly-prepared "attempt 2" left S1 with no DoD at all.
   let dod: DodResult[] = [];
   let current: DodResult[] = [];
+  // Survives `story.reopened` — see the field's docstring: it is evidence, not a
+  // count, and a reopen resets what counts against the story, not what the tree
+  // last measured.
+  let lastDodOutputPath: string | null = null;
   let reopened: ReviewLedger["reopened"] = null;
   let fixRound: ReviewLedger["fixRound"] = null;
   let formatRetries = 0;
@@ -324,8 +342,24 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
         // false, but a future `refused` payload that also carried an exit code
         // must not be able to flip it.
         timedOut: !refused && exitCode === 124,
-        tail: typeof payload.detail === "string" ? payload.detail : "",
+        // #211: `detail` is now the failure EXCERPT (possibly several lines), so
+        // both fields are recovered from it — `tail` is its first line, exactly
+        // as `failureSummaryLine` derives it, and a pre-#211 single-line detail
+        // round-trips unchanged.
+        tail: typeof payload.detail === "string" ? (payload.detail.split("\n")[0] ?? "") : "",
+        ...(typeof payload.detail === "string" && payload.detail.includes("\n")
+          ? { excerpt: payload.detail }
+          : {}),
+        ...(typeof payload.output_path === "string" && payload.output_path !== ""
+          ? {
+            outputPath: payload.output_path,
+            ...(typeof payload.output_bytes === "number" ? { outputBytes: payload.output_bytes } : {}),
+          }
+          : {}),
       });
+      if (typeof payload.output_path === "string" && payload.output_path !== "") {
+        lastDodOutputPath = payload.output_path;
+      }
       continue;
     }
     if (payload.check !== "review") continue;
@@ -363,6 +397,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
     commit,
     epicBase,
     dod: current.length > 0 ? current : dod,
+    lastDodOutputPath,
     developerErroredWith,
     blockedWithNothingRun,
     reopened,
