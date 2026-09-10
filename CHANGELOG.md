@@ -3,42 +3,20 @@
 
 ## 0.15.0 — unreleased
 
-### Fixed
-
-- **A Build gate now says what the stage DELIVERED, on every gate policy — the counting existed
-  and ran for `auto` gates alone (#210).** Measured on tldrx 0.14.2 across two real workspaces,
-  2026-09-09: two engine-driven runs reached the end, both printed `run <id> is done`, both had
-  their Build gate approved by the owner from his phone, and both delivered ZERO stories. The
-  whole of what he had to decide on was
-  `{"phase":"04-build","cost_usd":1.78,"outputs":["04-build/handoff.md"],"checks":["claim-sources:passed"]}`
-  — a dollar figure, one output and one green check. The information existed on disk at that
-  instant: the same run's `04-build/handoff.md` `## Findings` read
-  `S1 · … — blocked — … npm run test exited 127 …`. `storiesCondition` in `autoGate.ts` computed
-  exactly the missing view — `N of M done`, with the unfinished ones named — but `evaluateAutoGate`
-  is called only when `policy === "auto"`, and both of these gates were `human`, so nothing counted
-  and nothing carried it. The derivation is lifted into one leaf (`core/run/runOutcome.ts`, §7 one
-  implementation per derivation) and `gate.requested` for a Build stage now carries
-  `stories: {total, done, in_progress, review, blocked, todo}` plus `blocked_story` and
-  `blocked_reason` — the FIRST blocked story's own words, read out of the handoff's `## Findings`
-  through the parser that lives beside the renderer that wrote it. The same sentence goes in the
-  notification's **summary** and not only its detail (the argument #203 already won for `held`: the
-  summary is the half that reaches a lock screen), on the terminal line under `<phase>/<stage> done`,
-  and at the head of the decision card. All four keys are absent on a non-Build stage and on a run
-  with no plan — a `stories` block of zeroes there would say a plan was read and found empty.
-
-- **`tldrx ship` refuses a run that delivered no story instead of opening a PR over nothing
-  (#210).** It already knew: `shipBody.ts` reads the handoff's `## Findings`, keeps only the
-  bullets that say `done`, and with none of them writes ``- (nothing settled `done` in this run)``
-  — into a pull request it created anyway. That is a review request for a diff that does not
-  exist. It now refuses with exit `1` (the "nothing behind it" family, not `2`: no gate said no,
-  there is simply nothing to open a PR from), naming the counts and the first blocked story's
-  reason, and `--dry-run` is refused in the same words. A run that delivered at least one story
-  ships exactly as it did, and its PR body gains an **Outcome** header line so a reviewer reads
-  the ratio before the list. The refusal sits AFTER the no-handoff check, because the handoff is
-  the document the reason is read out of.
-
 ### Added
 
+- **`install:` is a slot the framework runs, in every fresh story worktree, before the
+  developer (#209).** It has been in `templates/workspace.yml` since the beginning and no code
+  read it: `git grep` over `src/` found zero readers outside the unrelated Claude-Code
+  installer. Now, when a repo declares one, Build runs it in the story's worktree the moment
+  that worktree is created — through the same allowlist-and-argv runner every other declared
+  command goes through, so an installer is not a privileged string — and records it as its own
+  `check: "install"` with an exit code, a `duration_ms` and `tree: "worktree"`. The duration is
+  the point as much as the exit code: this work used to be folded into the story's paid turn or
+  absent from the record entirely. An install that FAILS blocks the story with what the
+  installer printed and dispatches no developer at all — a tree whose dependencies did not
+  install cannot prove anything, and paying a turn to discover that is the cost this whole
+  change exists to stop.
 - **A watcher card can now say "there is nothing to query", and be believed (#212).** Measured
   on 0.14.2, on a real workspace: the Watch stage read a code path that sends a verification
   code and returns — no log line, no metric, no span anywhere in it. It said so correctly under
@@ -61,7 +39,6 @@
   `unobservable — <reason>` with its source, through one renderer; the Watch handoff lists the
   card under an `**unobservable**` line rather than quietly omitting it. Prose under `## Query` is still refused, in the same words as before
   — the new form is a shape a reader can recognise, not permission to describe a query.
-
 - **`run.yml` grows an additive `outcome:`, so a run can no longer read `done` over nothing
   delivered (#210).** Run STATUS is a roll-up of the execution path and nothing else — every
   stage of a run whose stories all blocked is terminal, so `deriveRunStatus` calls it `done`,
@@ -76,6 +53,70 @@
   rather than invented (§7): a `run.yml` written before the field reads `not recorded` with the
   reason in it, and a run with no Build phase — a docs-scope run — reads `n/a` with `why`, never
   a confident `0 of 0`.
+
+### Fixed
+
+- **A Build gate now says what the stage DELIVERED, on every gate policy — the counting existed
+  and ran for `auto` gates alone (#210).** Measured on tldrx 0.14.2 across two real workspaces,
+  2026-09-09: two engine-driven runs reached the end, both printed `run <id> is done`, both had
+  their Build gate approved by the owner from his phone, and both delivered ZERO stories. The
+  whole of what he had to decide on was
+  `{"phase":"04-build","cost_usd":1.78,"outputs":["04-build/handoff.md"],"checks":["claim-sources:passed"]}`
+  — a dollar figure, one output and one green check. The information existed on disk at that
+  instant: the same run's `04-build/handoff.md` `## Findings` read
+  `S1 · … — blocked — … npm run test exited 127 …`. `storiesCondition` in `autoGate.ts` computed
+  exactly the missing view — `N of M done`, with the unfinished ones named — but `evaluateAutoGate`
+  is called only when `policy === "auto"`, and both of these gates were `human`, so nothing counted
+  and nothing carried it. The derivation is lifted into one leaf (`core/run/runOutcome.ts`, §7 one
+  implementation per derivation) and `gate.requested` for a Build stage now carries
+  `stories: {total, done, in_progress, review, blocked, todo}` plus `blocked_story` and
+  `blocked_reason` — the FIRST blocked story's own words, read out of the handoff's `## Findings`
+  through the parser that lives beside the renderer that wrote it. The same sentence goes in the
+  notification's **summary** and not only its detail (the argument #203 already won for `held`: the
+  summary is the half that reaches a lock screen), on the terminal line under `<phase>/<stage> done`,
+  and at the head of the decision card. All four keys are absent on a non-Build stage and on a run
+  with no plan — a `stories` block of zeroes there would say a plan was read and found empty.
+- **`tldrx ship` refuses a run that delivered no story instead of opening a PR over nothing
+  (#210).** It already knew: `shipBody.ts` reads the handoff's `## Findings`, keeps only the
+  bullets that say `done`, and with none of them writes ``- (nothing settled `done` in this run)``
+  — into a pull request it created anyway. That is a review request for a diff that does not
+  exist. It now refuses with exit `1` (the "nothing behind it" family, not `2`: no gate said no,
+  there is simply nothing to open a PR from), naming the counts and the first blocked story's
+  reason, and `--dry-run` is refused in the same words. A run that delivered at least one story
+  ships exactly as it did, and its PR body gains an **Outcome** header line so a reviewer reads
+  the ratio before the list. The refusal sits AFTER the no-handoff check, because the handoff is
+  the document the reason is read out of.
+- **A story's Definition of Done exiting `127` is reported as an absent binary, not as a red
+  test (#209).** Measured on two real workspaces at 0.14.2: the Build-entry pre-flight recorded
+  `npm run test` → exit 0, `Ran all test suites.` in the human's checkout, and minutes later the
+  same command in the story's fresh worktree recorded `exit_code: 127`,
+  `detail: "sh: jest: command not found"`. The story blocked, verdict `n-a`, no reviewer, no
+  commit — with a full developer turn already paid for. Nothing about the story was wrong: 127
+  is `command not found`, the base tree has `node_modules` and a `git worktree` is a fresh
+  checkout of tracked files that has none. `dodRunner.ts` already documented that trap for the
+  base tree in as many words ("a pristine worktree would fail half the world's repos for want of
+  `node_modules`") while the story's tree ran under it untouched. A 127 now carries the reason
+  with it: the test command's binary is absent in the worktree, named where the shell named it,
+  with the `install:` slot given as the fix. Nothing is guessed in the process — not `npm ci`
+  from a lockfile, and not a symlink of the base tree's `node_modules`, which the message offers
+  as an option and explicitly does not take, because hoisting and cache layout are per-tree facts
+  a shared tree can be silently wrong about. Absent-with-reason, applied to an exit code.
+- **A developer may run its declared commands WITH ARGUMENTS (#209).** From the same run's
+  transcript: the developer never ran its own Definition of Done either. Every attempt —
+  `npx jest …`, `npm run test -- app/dev/__tests__/…`, three times bare — came back
+  `"This command requires approval to run"`, so the 127 above was first seen by the gate, after
+  the turn had been paid for, by an agent that could not have seen it sooner. The cause was the
+  allowance: one `Bash(<declared command>)` per command, and Claude Code's permission grammar
+  makes that rule EXACT — its own docs say `Bash(npm run build)` "Doesn't match
+  `npm run build --watch`". Every declared command now emits both that exact grant and the
+  trailing-argument one (`Bash(<command> *)`, which the docs also spell `Bash(<command>:*)`),
+  from one derivation both tool lists share. The reviewer's allowance is untouched and still
+  read-only: `Read`, `Grep`, `Glob`, `Bash(git diff *)` — already the trailing-wildcard grammar.
+- **A story's DoD check says which tree it ran in (#209).** `tree: "worktree"` on every
+  `check: "dod"` payload, and on the new install check. The pre-flight and the story ran the same
+  command and wrote the same shape of record, and nothing in either said they were different
+  trees — so a green pre-flight beside a story's 127 read as a contradiction instead of as the
+  environment gap it was. A `127` whose tail names the binary also carries `absent_binary`.
 
 
 ## 0.14.3 — 2026-09-10

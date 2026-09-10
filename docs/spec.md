@@ -105,6 +105,7 @@ notify:                      # optional: the ONE command a run may tell a person
 | `repos[].path` | rel path | y | Inside root, no `..`; `.` in single-repo mode |
 | `repos[].default_branch` / `.stack` / `.package_manager` | str / str[] / str\|null | y | Epic-branch base; detected languages (may be empty); `npm`, `nuget`, `pip`, … |
 | `repos[].commands.{build,test,lint,typecheck,run}` | str\|null | y (all keys) | Run from `path`; `null` = unavailable |
+| `repos[].commands.install` | str\|null | n | **Additive.** The command that puts this repo's dependencies in a tree. It is a declared command like any other — in the allowlist, argv-split, no shell — and it is the ONE slot Build runs by itself: it is executed in every FRESH story worktree, before the developer, and recorded as its own `check: "install"` (§2.9) with an exit code and a duration. A failed install BLOCKS the story with what it printed; the developer is never dispatched into a tree whose dependencies did not install. Left empty, tldrx installs nothing and guesses nothing — not `npm ci` from a lockfile, not a symlink of the base tree's `node_modules` — and a DoD command that then exits `127` in the worktree is reported as an environment absence naming this slot, not as a red test (gh #209). `tldrx init` writes the slot and does not probe it |
 | `repos[].commands.test_fast` | str | n | **Additive, and never detected.** The fast subset of this repo's suite — the command the Build developer ITERATES on while working. It is a declared command like any other: it is in the allowlist, the developer prompt lists it, a `cmd` src may cite it. What it is NOT is evidence — a story's ```dod block that names it is **refused at Plan time**, with a sentence naming the slot rather than the generic "not one of workspace.yml's commands", which would be false about a command this file declares. `tldrx init` never writes a value: no manifest says which subset of a suite is the fast one, and a synthesised one would be the conventional wisdom `command_probes` exists to keep out of this file — init emits the slot commented out, with a line saying what it is for. Never probed, for the same reason: nothing was declared to probe |
 | `repos[].command_probes.<slot>.{status,verified,exit_code,at,reason}` | enum / bool / int\|null / RFC3339 / str | n | What `init` MEASURED about the command in that slot: it ran each `build`/`test`/`lint`/`typecheck` command once. `status` is the field to branch on — `ok` \| `failed` \| `timed-out` \| `unspawnable` \| `not-probed` \| `skipped` — and `verified` is `status == ok`. Only `failed` is a measured red. `exit_code` is non-null ONLY for `ok`/`failed`, because only those mean a process exited: a command whose binary is missing is `unspawnable` with the system's own message, never a fabricated `127`. `reason` is REQUIRED in every case, so a non-`ok` row always says why. `not-probed` has exactly two causes, and the `reason` says which: `run` (it starts a server, so a probe of it hangs or leaves a process behind) and a command that needs a shell, which the probe does not open — it argv-splits through the same `splitArgv` the DoD gate uses. `--no-probe` writes `skipped` on every slot it would have probed; `run` keeps its own `not-probed`, and a synthesised command's reason still says it was synthesised. **One row per DECLARED slot** — every slot whose `commands:` entry is non-null gets one, `run` included, so a repo declaring all five is written with five rows; the example above is abridged to two. Records only: `commands` above is still the sole allowlist, and a red probe refuses nothing |
 | `repos[].ci` | rel path[] | n | CI definition files found |
@@ -1357,6 +1358,20 @@ amount and this log holds the sequence that produced it.
   code for a timeout, on a process that really did start), and no `refused` key;
 - the gate REFUSED it ⇒ `refused`, the gate's own sentence, and **no `exit_code` key at all**, because nothing spawned.
   `detail` carries the same sentence.
+
+**A `check: "dod"` result also carries `tree` (2026-09-09, gh #209).** `tree: "worktree"` — the story's own fresh
+checkout, which is where a story's Definition of Done runs. The Build-entry pre-flight runs the SAME command in the
+repo's checkout, which has the installed dependencies, and until this key nothing in either record said they were
+different trees: a live run recorded `npm run test` → exit 0 at the pre-flight and `exit_code: 127`,
+`detail: "sh: jest: command not found"` for the same command in the story's worktree minutes later, and the pair read
+as a contradiction rather than as the environment gap it was. A 127 whose tail names the missing binary additionally
+carries `absent_binary` (the name, or `""` when the shell named none). Both keys are additive.
+
+**`check: "install"` (2026-09-09, gh #209).** Emitted once per FRESH story worktree, for a repo that declares
+`commands.install` (§2.1), before the developer is dispatched. It carries `phase`, `check: "install"`, `story`, `repo`,
+`command`, `duration_ms`, `tree: "worktree"`, `detail`, and — by the same rule the DoD row obeys — `exit_code` when the
+command ran or `refused` when the gate declined it, never both. `duration_ms` is on the payload because the install's
+cost is the whole point: it used to be folded into the story's turn, or absent entirely.
 
 A refused command is always a `check.failed`: the pass/fail choice asks for a result that RAN, exited `0` and did not
 time out, so a refusal can never be read as a pass. Both keys are OMITTED rather than nulled, so a reader that asks
@@ -3146,9 +3161,15 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    the file exactly as they were, so a failed fast-forward needs no repair — only a line saying it did not happen.
 2. **One developer sub-agent**, cwd = that worktree, handed the story file, its epic's summary and the CONTENT of every
    path the story `touches` (≤24 files, ≤64 KB `[assumption]`, missing paths named as "this story creates it").
-   `--allowedTools` is the file tools + `Bash(<each command THAT repo declares>)` + `Bash(git add *)` +
-   `Bash(git commit *)` — narrower than the default allowance, which is every repo's commands, and wider by exactly the
-   two verbs that make a commit. Its ceiling is `min(stage budget ÷ stories, per_agent_max_usd, --max-usd)`.
+   `--allowedTools` is the file tools + TWO grants per command that repo declares — `Bash(<command>)` and
+   `Bash(<command> *)` — + `Bash(git add *)` + `Bash(git commit *)`: narrower than the default allowance, which is
+   every repo's commands, and wider by exactly the two verbs that make a commit. **Both forms, because the exact one
+   is exact** (gh #209): Claude Code's permission grammar says `Bash(npm run build)` "Doesn't match
+   `npm run build --watch`", and a trailing `*` after a space also matches the bare command (`:*` is the same rule
+   spelled differently) — so a developer granted only the exact string had every `npm run test -- <file>` denied with
+   "This command requires approval to run" and never ran its own Definition of Done. Measured live, alongside the
+   `127` above: the story's exit code was first seen by the gate, after the turn had been paid for.
+   Its ceiling is `min(stage budget ÷ stories, per_agent_max_usd, --max-usd)`.
    A developer that **FAILED** — a spawn error, a timeout, an exhausted `--max-budget-usd` — delivered nothing, and a
    turn that never ran is not an attempt: the story is put back at the status it held BEFORE the attempt (`todo`, or
    `review` when a reviewer had asked for changes), its attempt number unspent and its worktree kept, and the next
@@ -3159,6 +3180,16 @@ printed, and it swept the run's own untracked records under `tldrx-work/<run>/` 
    never been tried. A developer that RAN and produced work its DoD faulted is a different thing and still blocks.
 3. **The Definition of Done, re-run by the facilitator** in that worktree, through the same runner `dod-gate` uses. All
    commands must exit 0.
+
+   **The worktree's DEPENDENCIES are its own (2026-09-09, gh #209).** A `git worktree` is a fresh checkout of tracked
+   files: it has no `node_modules`, no `obj/`, no virtualenv, and nothing shares the base tree's. So a repo that
+   declares `commands.install` (§2.1) has it run there, once, when the worktree is created and before the developer,
+   recorded as `check: "install"` with its exit code and its `duration_ms`; a failed install blocks the story with what
+   the installer printed rather than paying for a turn that cannot prove anything. A repo that declares NO install gets
+   nothing installed and nothing guessed — and a DoD command that then exits `127` is reported as what it is: the
+   test command's binary is absent in the worktree, with the `install:` slot named as the fix. Sharing the base tree's
+   `node_modules` by symlink is named in that message as an option the framework does not take, because hoisting and
+   cache layout are per-tree facts a shared tree can silently get wrong.
 
    **A DoD is a DELTA gate, so the base tree is checked first (2026-08-31).** At Build entry — after the dirty-tree and
    foreign-epic refusals, before a story is dispatched or charged — every dod command the pending stories name is run

@@ -24,6 +24,7 @@ import {
   BaseGateFailure, baseRefusalLines, baseResultFor, commandHash, EMPTY_PREFLIGHT, loadPreflight, PREFLIGHT_REL,
   savePreflight, withResult, type BaseCommandResult, type BasePreflight,
 } from "./preflight.ts";
+import { absentBinaryOf, WORKTREE_TREE } from "./worktreeDeps.ts";
 
 /**
  * The run's base-tree measurements, loaded LAZILY and ONCE per process.
@@ -201,6 +202,15 @@ export interface DodParts {
   readonly storyId: string;
   readonly repo: string;
   readonly worktree: string;
+  /**
+   * The repo's own checkout — the tree the base pre-flight measured in. Read for
+   * ONE comparison (gh #209): whether the base has a `node_modules` this
+   * worktree does not, which is the difference between a green pre-flight and a
+   * story's 127 and the only evidence that names it.
+   */
+  readonly repoDir: string;
+  /** True when this repo declares `install:`, so it already ran here. */
+  readonly installDeclared: boolean;
   readonly commands: readonly string[];
   readonly workspaceCommands: ReadonlySet<string>;
   readonly timeoutMs: number;
@@ -219,13 +229,23 @@ export async function runStoryDod(parts: DodParts): Promise<readonly DodResult[]
     let result: DodResult;
     try {
       const outcome = await runDodCommand(command, parts.worktree, timeoutMs, parts.workspaceCommands);
-      result = {
+      const ran: DodResult = {
         command,
         status: "ran",
         exitCode: outcome.timedOut ? 124 : outcome.exitCode,
         timedOut: outcome.timedOut,
         tail: outcome.tail,
       };
+      // gh #209: an exit 127 HERE, in a tree that never had the binary, is an
+      // environment absence and must not be rendered as a red test. Asked only
+      // of a 127 — `absentBinaryOf` returns null for every other result, and
+      // absent is what every non-127 row carries.
+      const absent = absentBinaryOf(ran, {
+        worktree: parts.worktree,
+        repoDir: parts.repoDir,
+        installDeclared: parts.installDeclared,
+      });
+      result = absent === null ? ran : { ...ran, absent };
     } catch (error) {
       if (!(error instanceof DodCommandRefused)) throw error;
       // NOTHING RAN. There is no exit code, so none is written — a fabricated
@@ -241,6 +261,15 @@ export async function runStoryDod(parts: DodParts): Promise<readonly DodResult[]
       command,
       ...(dodRefused(result) ? {} : { exit_code: result.exitCode }),
       ...(dodRefused(result) ? { refused: result.refusedBecause ?? "" } : {}),
+      // WHICH TREE (gh #209). The base pre-flight runs in the repo's checkout,
+      // with its dependencies; this runs in a fresh worktree. Both wrote the same
+      // command and the same shape of check, and nothing in either record said
+      // they were different trees — so a green pre-flight beside a story's 127
+      // read as a contradiction instead of as the environment gap it was.
+      tree: WORKTREE_TREE,
+      ...(result.absent === undefined || result.absent === null
+        ? {}
+        : { absent_binary: result.absent.binary ?? "" }),
       detail: green ? "" : (result.refusedBecause ?? result.tail),
     });
     if (green) continue;
