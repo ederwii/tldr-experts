@@ -205,6 +205,7 @@ stage at `cursor`, or `done` when every phase is terminal.
 | `stages[].gate.authority` | {type: `direct\|delegated`, policy, authorized_by, source} | n | **Additive.** UNDER WHOSE AUTHORITY. `direct` is a person signing as themselves; `delegated` is an agent or the facilitator acting on a policy somebody set. `policy` is §2.2 `gates_policy` for this stage at the moment of signing. `authorized_by` is who set it and `source` says how that was established: `self`, `run.created` (frozen at `run new` by whoever opened the run), `gate.policy_changed` (the actor of the `run gates set` that last moved it), or `unrecorded` — in which case `authorized_by` is `null`. Nothing here is inferred beyond those two events; an absence is NAMED, never filled in |
 | `attended_by` | `host` | n | **Additive.** Who DRIVES the run. Absent (the default, and every run.yml written before this key) ⇒ the framework may spawn. `host` ⇒ a host session is doing the turns: `tldrx next` refuses the headless mode with exit 4 naming the `--prepare` command, every executor exposes prepare/commit only, `run auto` is refused at the CLI (exit 1), and no run path can reach `spawnAgent`. Set at creation with `run new --attended-by host` or flipped later with `run attend`; emitted only when set |
 | `triage` | {split, depends_on, budget_basis?} | n | **Additive.** Where this run came from, written by `tldrx seed apply` alone (§6.2) — `split` is the workspace-relative path of the `split.yml` that proposed it and `depends_on` names the sibling SLUGS it was proposed to follow. Absent on every run `run new` creates, and `run status` does not mention it. `budget_basis` is a further optional key inside the block: WHERE the `--budget` figure came from, one of `model-guess` \| `owner-grant` \| `preset`. `apply` writes `model-guess`, because that is measurably what produced the number — the propose prompt tells the model `budget_usd` is a guess and `split.yml` validation accepts anything finite and `> 0`. Absent means what every run.yml written before this key means: nothing recorded, never "a person set it". A value outside the closed set is a schema error, not a silent default |
+| `outcome` | {kind, why?, stories_done?, stories_total?, stories_blocked?, first_blocked?} | n | **Additive.** What the run DELIVERED, written ONCE when it closes — by `tldrx next` closing the last stage, `tldrx approve` signing the last gate, or `tldrx run cancel` (gh #210). `kind` is `delivered` (every story `done`) \| `partial` \| `nothing-delivered` (no story reached `done`) \| `n/a`, and `n/a` carries `why` — the run has no Build phase, or no plan on disk — because a docs-scope run had nothing to deliver and `stories_total: 0` there would be a confident zero about a plan that never existed. The three counts and `first_blocked` (`<story id> — <the handoff's own reason>`) are emitted only when there was a plan to count. It exists because run STATUS is a roll-up of the execution path and nothing else: every stage of a run whose stories all blocked is terminal, so the run is correctly `done` — and two real runs read `done` while delivering zero stories, with the reason sitting unread in `04-build/handoff.md`. Absent on every run.yml written before this key, and on every run still open; every reader prints `not recorded` for the first and nothing for the second, never a delivery nobody measured |
 | `gates_policy` | {stage: `human\|auto\|agent`} | n | **Who** closes each gate. Resolved from §2.4 `gates:` and `run new --gates` at creation and frozen here, so the run keeps the policy it was opened with. `tldrx run gates set <stage>:<policy> --note <text>` is the ONLY sanctioned way to move it afterwards — one stage, a required note, one `gate.policy_changed` event carrying actor, moment, note and old→new. Absent, or a stage it does not name ⇒ `human`. `agent` (§5) is the third value: every `auto` condition PLUS a §2.17 evidence note that signs |
 | `stages[].stale` | bool | n | **Additive.** `true` when an EARLIER stage's gate was revoked after this one ran (§5). Its outputs stay on disk; nothing may treat them as current. Cleared when the stage runs again; emitted only when `true` |
 | `tasks[].id` / `.status` | `^t\d+$` / enum | y | One sub-agent invocation |
@@ -225,6 +226,9 @@ nothing; a `created_with`/`last_written_by`, when present, is a string; an `inpu
 a `gate.executed_by`, when present, has a `type` in `human\|agent\|auto` and no `id` when that type is `auto`; a `gate.authority`, when present, is complete, its `type`/`policy`/`source` are the values above, and `authorized_by: null` and `source: unrecorded` travel together — either without the other is a record contradicting itself;
 `attended_by`, when present, is `host` — a value the reader does not understand is a schema error, never a silent
 downgrade to "spawn anyway";
+an `outcome`, when present, is a mapping whose `kind` is one of `delivered` \| `partial` \| `nothing-delivered` \|
+`n/a`, whose `why`/`first_blocked` are strings and whose three counts are numbers — each key checked only when it is
+there, so an `outcome:` written by a later tldrx that grew a fourth count still loads;
 a `triage.budget_basis`, when present, is one of `model-guess` \| `owner-grant` \| `preset` — checked only when the
 key is there, so a `triage:` block written before it existed still loads;
 ≤5 phases, ≤40 stages, ≤200 tasks.
@@ -2083,13 +2087,21 @@ at an intention. `stage` is `<phase>/<stage>` or null. `detail` is per-kind and 
 | --- | --- | --- |
 | `question.raised` | the loop parked on an open question | `questions[]` — id, title, `why_asked`, `options[]` as `{letter, text}`, `recommendation` or null, `answer_command` |
 | `question.timeout` | `--wait-answers` lapsed and the loop is about to exit `4` | the same `questions[]`, plus `waited_ms` |
-| `gate.requested` | a stage finished and a person must sign it | `cost_usd`, `approve_command`, `reject_command`, `gate_policy` (the stage's frozen `human`/`agent`/`auto`, absent when the run could not be read), and ONE of `held_by` / `signer_held` — the reason the gate is open, from whichever mechanism measured it: the auto verdict carried on the `gate.requested` EVENT for an `auto` policy, the engine signer's `agent.result` for an `agent` one. Absent when nothing looked, which is not the same as nothing found |
+| `gate.requested` | a stage finished and a person must sign it | `cost_usd`, `approve_command`, `reject_command`, `gate_policy` (the stage's frozen `human`/`agent`/`auto`, absent when the run could not be read), and ONE of `held_by` / `signer_held` — the reason the gate is open, from whichever mechanism measured it: the auto verdict carried on the `gate.requested` EVENT for an `auto` policy, the engine signer's `agent.result` for an `agent` one. Absent when nothing looked, which is not the same as nothing found. For a BUILD stage, also `stories` (the `{total, done, in_progress, review, blocked, todo}` counts §5 describes) and, when something is blocked, `blocked_story` + `blocked_reason` — absent on every other stage (#210) |
 | `gate.timeout` | `--wait-gates` lapsed and the loop is about to exit `4` | `approve_command`, `reject_command`, `gate_policy`, `waited_ms`, and `cost_usd` **only when this loop saw the `gate.requested` that measured it** — a loop resuming a run already parked at a gate reports no figure rather than `0` |
 | `stage.done` | a stage finished and the loop moved on | `cost_usd` |
-| `run.finished` | the loop ended with exit `0` | `exit_code`, `exit_family`, `spent_usd` |
+| `run.finished` | the loop ended with exit `0` | `exit_code`, `exit_family`, `spent_usd`, and — only when the RUN itself is over — `outcome` (`delivered` \| `partial` \| `nothing-delivered` \| `n/a` \| `not-recorded`) with `outcome_detail`, the sentence §2.2's `outcome:` renders. Absent while the run is still open: an outcome there would claim a run still running had ended without one (#210) |
 | `run.failed` | the loop ended with any non-zero exit, refusals included | `exit_code`, `exit_family`, `spent_usd` |
 | `budget.warned` | a ceiling is close | `spent_usd`, `ceiling_usd` |
 | `status` | every `--notify-every <duration>` while the loop runs | `status_text` — what `tldrx run status` prints, verbatim — `waiting_on`, the blocking open question ids (`[]` when none), and, ONLY while a gate is pending, `waiting_on_gate` (`<phase>/<stage>`) with `gate_policy` |
+
+**A summary says what the stage DELIVERED, not only what it cost.** For a Build gate the
+`summary` carries the story sentence — `It 0 of 1 stories delivered, S1 blocked (…)` — and a
+`run.finished` over a closed run carries `The run: nothing delivered: 0 of 3 stories; S1 — …`.
+Both are built by ONE renderer (`core/run/runOutcome.ts`), so the notification, the terminal
+line, the decision card, `tldrx run status`, the dashboard and the `ship` PR body cannot
+disagree about what a run delivered. Measured 2026-09-09 (#210): a summary of `$1.78` and one
+green check was the whole of what an owner had to approve two zero-delivery runs on.
 
 The questions, their options and their recommendation are the **same card** `run auto
 --gate-agent` prints (§ "Decision cards"), so a notification and a terminal can never disagree
@@ -2802,6 +2814,19 @@ Two of the others were tightened on 2026-08-29, both because an auto gate could 
   branch nothing has merged, which is the fact the reader is owed, not a reason to stop. Like an unchecked
   absence, it is carried into the **gate note** by name: a stage that auto-signs over epic-only citations says
   which branch they are on, rather than `claim-sources=passed`.
+
+**A Build gate says WHAT THE STAGE DELIVERED, on every policy.** `gate.requested` for the
+Build phase carries `stories: {total, done, in_progress, review, blocked, todo}` — counted off
+the story files, the same reader the auto gate's `stories` condition uses — plus
+`blocked_story` and `blocked_reason` for the FIRST blocked story, read out of the Build
+handoff's `## Findings` bullet verbatim. All four keys are **additive and present only for a
+Build stage with a plan on disk**: a `stories` block of zeroes on a What gate would say a plan
+was read and found empty. `run auto`'s notification puts the same sentence in its **summary**
+— "0 of 1 stories delivered, S1 blocked (…)" — because the summary is the half that reaches a
+lock screen, which is the argument #203 already won for `why`. Measured 2026-09-09 (#210): the
+counting existed and ran for `policy: auto` alone, so two `human` Build gates announced
+themselves as `cost_usd` plus one green check while every story was `blocked` or `todo`, and
+were approved from a phone.
 
 **An auto gate says WHY it did not close.** The verdict is measured one statement before
 `gate.requested` is appended, and the event carries `why` (the failing conditions in the same

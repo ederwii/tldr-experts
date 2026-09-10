@@ -3,6 +3,40 @@
 
 ## 0.15.0 — unreleased
 
+### Fixed
+
+- **A Build gate now says what the stage DELIVERED, on every gate policy — the counting existed
+  and ran for `auto` gates alone (#210).** Measured on tldrx 0.14.2 across two real workspaces,
+  2026-09-09: two engine-driven runs reached the end, both printed `run <id> is done`, both had
+  their Build gate approved by the owner from his phone, and both delivered ZERO stories. The
+  whole of what he had to decide on was
+  `{"phase":"04-build","cost_usd":1.78,"outputs":["04-build/handoff.md"],"checks":["claim-sources:passed"]}`
+  — a dollar figure, one output and one green check. The information existed on disk at that
+  instant: the same run's `04-build/handoff.md` `## Findings` read
+  `S1 · … — blocked — … npm run test exited 127 …`. `storiesCondition` in `autoGate.ts` computed
+  exactly the missing view — `N of M done`, with the unfinished ones named — but `evaluateAutoGate`
+  is called only when `policy === "auto"`, and both of these gates were `human`, so nothing counted
+  and nothing carried it. The derivation is lifted into one leaf (`core/run/runOutcome.ts`, §7 one
+  implementation per derivation) and `gate.requested` for a Build stage now carries
+  `stories: {total, done, in_progress, review, blocked, todo}` plus `blocked_story` and
+  `blocked_reason` — the FIRST blocked story's own words, read out of the handoff's `## Findings`
+  through the parser that lives beside the renderer that wrote it. The same sentence goes in the
+  notification's **summary** and not only its detail (the argument #203 already won for `held`: the
+  summary is the half that reaches a lock screen), on the terminal line under `<phase>/<stage> done`,
+  and at the head of the decision card. All four keys are absent on a non-Build stage and on a run
+  with no plan — a `stories` block of zeroes there would say a plan was read and found empty.
+
+- **`tldrx ship` refuses a run that delivered no story instead of opening a PR over nothing
+  (#210).** It already knew: `shipBody.ts` reads the handoff's `## Findings`, keeps only the
+  bullets that say `done`, and with none of them writes ``- (nothing settled `done` in this run)``
+  — into a pull request it created anyway. That is a review request for a diff that does not
+  exist. It now refuses with exit `1` (the "nothing behind it" family, not `2`: no gate said no,
+  there is simply nothing to open a PR from), naming the counts and the first blocked story's
+  reason, and `--dry-run` is refused in the same words. A run that delivered at least one story
+  ships exactly as it did, and its PR body gains an **Outcome** header line so a reviewer reads
+  the ratio before the list. The refusal sits AFTER the no-handoff check, because the handoff is
+  the document the reason is read out of.
+
 ### Added
 
 - **A watcher card can now say "there is nothing to query", and be believed (#212).** Measured
@@ -27,6 +61,21 @@
   `unobservable — <reason>` with its source, through one renderer; the Watch handoff lists the
   card under an `**unobservable**` line rather than quietly omitting it. Prose under `## Query` is still refused, in the same words as before
   — the new form is a shape a reader can recognise, not permission to describe a query.
+
+- **`run.yml` grows an additive `outcome:`, so a run can no longer read `done` over nothing
+  delivered (#210).** Run STATUS is a roll-up of the execution path and nothing else — every
+  stage of a run whose stories all blocked is terminal, so `deriveRunStatus` calls it `done`,
+  correctly, and until now that was the only word anyone got. `outcome:` is written ONCE when the
+  run closes, by all three commands that close one (`tldrx next` closing the last stage,
+  `tldrx approve` signing the last gate, and `tldrx run cancel`), and carries
+  `kind: delivered | partial | nothing-delivered | n/a` with the counts and the first blocked
+  story. It is rendered by `tldrx run status` (`status done — nothing delivered: 0 of 3 stories;
+  S1 — …`), by `tldrx status`, by the `run.finished` notification, by the dashboard model
+  (additive; `DASHBOARD_MODEL_VERSION` stays 3) and by the `ship` PR body — one renderer, six
+  surfaces, so none of them can disagree about what a run delivered. The two absences are named
+  rather than invented (§7): a `run.yml` written before the field reads `not recorded` with the
+  reason in it, and a run with no Build phase — a docs-scope run — reads `n/a` with `why`, never
+  a confident `0 of 0`.
 
 
 ## 0.14.3 — 2026-09-10

@@ -55,6 +55,8 @@ import { spendBasisOf } from "../budget/spendBasis.ts";
 import { turnTokens } from "../budget/turnTokens.ts";
 import { hasStarted, resolveDependencies, type DependencyInput, type ResolvedRun } from "../run/dependencies.ts";
 import { isMovable, waitingFor, type Waiting, type WaitingKind } from "../run/waiting.ts";
+import { isFinished } from "../run/RunFile.ts";
+import { outcomeLine, type OutcomeLine as RunOutcomeModel } from "../run/runOutcome.ts";
 import { openBlocks, parseHandoff, parseQuestions } from "../text/index.ts";
 import { renderMarkdown } from "../markdown/index.ts";
 import { PROJECT_FRAMEWORK_DIR } from "../paths.ts";
@@ -906,6 +908,18 @@ export interface RunModel {
    */
   readonly keepWorktrees: boolean;
   /**
+   * What the run DELIVERED, in the same sentence `tldrx run status` prints
+   * (gh #210) — `nothing delivered: 0 of 3 stories; S1 — npm run test exited 127`.
+   *
+   * Null while the run is OPEN. A closed run whose `run.yml` predates the field
+   * reads `not recorded` with the reason inside it, so the page never renders a
+   * missing measurement as a delivered one.
+   *
+   * ADDITIVE: `DASHBOARD_MODEL_VERSION` does not bump for a field nothing had to
+   * be removed for (§7).
+   */
+  readonly outcome: RunOutcomeModel | null;
+  /**
    * `budget.yml`, or null when there is none or it does not parse (#85).
    *
    * The ceiling `hostTokens` is judged against lives here and nowhere else, which
@@ -1232,6 +1246,10 @@ export function toRunModel(
     watch: loadWatch(loaded),
     preflight: toPreflightModel(loaded),
     keepWorktrees: doc.keep_worktrees,
+    // Rendered through the SAME derivation the terminal uses, never re-worded
+    // here: one sentence, two screens, and #210 is what a second opinion about
+    // "what did this run deliver" already cost.
+    outcome: isFinished(doc.status) ? outcomeLine(doc.outcome ?? undefined) : null,
     budget: toBudgetModel(loaded),
     notes: ledger.notes,
     budgetBlocks: ledger.blocks,

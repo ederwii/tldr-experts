@@ -16,6 +16,7 @@ import { DOD_REFUSAL_FALLBACK, dodRefused } from "./outcome.ts";
 import type { StoryOutcome } from "./outcome.ts";
 import type { CarriedRow, UnreadableStory } from "./carriedRows.ts";
 import { PLAN_STATUSES, type PlanStatus } from "../schemas/planCommon.ts";
+import { withoutSrcToken } from "../text/srcToken.ts";
 import { spentFigure } from "../budget/spentFigure.ts";
 import type { WideningRow } from "./measuredTouches.ts";
 
@@ -372,6 +373,46 @@ const FINDING_STATUS_RE = new RegExp(`—\\s+(${PLAN_STATUSES.join("|")})\\s+—
 export function findingStatus(bullet: string): PlanStatus | null {
   const found = FINDING_STATUS_RE.exec(bullet)?.[1];
   return found === undefined ? null : (found as PlanStatus);
+}
+
+/**
+ * The story id a Findings bullet opens with, or null when it opens with anything
+ * else. `finding()` writes `- <id> · <title> — …`, and the leading `- ` is
+ * present or absent depending on whether the caller went through
+ * `text/handoff.ts`'s bullet parser, so both are accepted.
+ */
+const FINDING_ID_RE = /^\s*(?:[-*]\s+)?(\S+)\s+·\s/;
+
+/** The id a Findings bullet is about, or null when it names none (gh #210). */
+export function findingId(bullet: string): string | null {
+  return FINDING_ID_RE.exec(bullet)?.[1] ?? null;
+}
+
+/**
+ * WHY a story settled at anything but `done`, read back out of the bullet that
+ * said so (gh #210).
+ *
+ * Here rather than in `run/` for the same reason `findingStatus` is: this file
+ * WRITES the sentence — `${status} — ${where}: ${reason}` — and a reader of it
+ * that lived somewhere else would go on matching the day the shape changed. The
+ * `[src: …]` citation is stripped first because it is the one part of a bullet
+ * that carries a colon of its own.
+ *
+ * `where` is `repo \`x\`, \`branch\`` and holds no colon, so the FIRST colon
+ * after the status marker opens the reason. A `done` bullet has no reason to
+ * report and this returns null for it.
+ *
+ * The citation is stripped by `withoutSrcToken` — the ONE `[src:]` grammar
+ * (`text/srcToken.ts`, §7) — and not by a regex of this file's own: a second
+ * pattern that matches the marker is exactly what `test/map-citations.test.ts`
+ * refuses, and it would go on matching the day the grammar moved.
+ */
+const FINDING_REASON_RE = new RegExp(`—\\s+(?:${PLAN_STATUSES.join("|")})\\s+—\\s+[^:]*:\\s*(\\S.*)$`);
+
+/** The reason a Findings bullet gives, or null when it gives none. */
+export function findingReason(bullet: string): string | null {
+  const found = FINDING_REASON_RE.exec(withoutSrcToken(bullet).trimEnd())?.[1];
+  return found === undefined ? null : found.trim();
 }
 
 function finding(outcome: StoryOutcome): string {

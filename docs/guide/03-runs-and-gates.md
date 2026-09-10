@@ -230,6 +230,16 @@ to the human gate and says which one and what it measured. The approval is recor
 the same path a person's is, with `by: auto` and a note carrying all seven values, so
 `tldrx run status` and `events.jsonl` read identically either way.
 
+**A Build gate says what the stage delivered, whoever signs it (#210).** The story counts are
+not the auto gate's private business: `gate.requested` for a Build stage carries
+`stories: {total, done, in_progress, review, blocked, todo}` on EVERY policy, plus
+`blocked_story` and `blocked_reason` for the first blocked one — its own words, read out of
+`04-build/handoff.md`'s `## Findings`. The terminal line, the decision card and the
+notification summary all say the same sentence: `0 of 1 stories delivered, S1 blocked (…)`.
+Measured 2026-09-09: two `human` Build gates announced themselves as a dollar figure and one
+green check while every story was `blocked` or `todo`, and were approved from a phone. The
+counting existed the whole time — it ran for `policy: auto` alone.
+
 The shipped defaults — every scope keeps at least one human gate:
 
 | Scope | what | how | plan | build | watch |

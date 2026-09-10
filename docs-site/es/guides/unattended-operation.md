@@ -160,6 +160,28 @@ condición: *"…is waiting at an auto gate that did not close by itself — a p
 is held by: claim-sources=1 unverified citation(s) — …"*. Antes, esa frase decía solamente
 "did not close by itself" y no nombraba nada.
 
+**Una compuerta de Build nombra el resultado de las historias.** La firme quien la firme —
+`human`, `agent` o `auto` — el aviso de la compuerta de Build dice qué entregó la etapa antes
+de decir cuánto costó:
+
+> *"260909-scoring finished 04-build/build for $1.78 and is waiting at a human gate — a person
+> signs it. It 0 of 3 stories delivered, S1 blocked (npm run test exited 127…), S2 not started.
+> Nothing runs after it until the gate is approved or rejected."*
+
+Los conteos y el motivo de la primera historia bloqueada viajan en el payload de
+`gate.requested` como `stories`, `blocked_story` y `blocked_reason`, así que un script puede
+enrutar con ellos. El motivo es la frase del propio handoff, nunca una paráfrasis. Dos runs
+reales se aprobaron desde el teléfono sobre un resumen que decía `$1.78` y un chequeo en verde
+mientras todas las historias estaban bloqueadas — el conteo ya existía y corría solo para las
+compuertas `auto`.
+
+**Y el final del run también lo dice.** Un run cuyo Build no entregó nada no te llega como un
+`done` a secas: `run.finished` dice *"…the loop finished with exit 0 (ok), $1.78 spent by this
+loop. The run: nothing delivered: 0 of 3 stories; S1 — npm run test exited 127."* La misma
+frase queda en `run.yml` como `outcome:`, en `tldrx run status`, en el tablero y en el cuerpo
+del PR de `tldrx ship` — y `tldrx ship` rechaza un run así en vez de abrir un PR cuya sección
+"What shipped" está vacía.
+
 ### `status` — el latido
 
 ```json

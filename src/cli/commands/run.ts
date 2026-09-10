@@ -22,6 +22,7 @@ import { ATTENDED_BY, type AttendedBy } from "../../core/run/RunFile.ts";
 import { parallelFlag } from "./next.ts";
 import { cancelRun, unlockRun } from "../../core/run/rescue.ts";
 import { closeRun, describeOpenQuestions, describeStateCommit } from "../../core/run/closeRun.ts";
+import { withRunOutcome } from "../../core/run/runOutcome.ts";
 import { describeDecidedTally } from "../../core/facts/decidedTally.ts";
 import { nowRfc3339 } from "../../hooks/lib/actor.ts";
 import { createRun } from "../../core/run/newRun.ts";
@@ -466,6 +467,12 @@ async function runCancel(argv: readonly string[]): Promise<number> {
     if (outcome.code === EXIT_OK) {
       const resolved = RunStore.resolve(root, runId ?? undefined);
       if (resolved.kind === "one") {
+        // Cancelling IS closing, so the run records what it delivered here too
+        // (#210) — a run abandoned mid-Build is exactly the one whose `outcome:`
+        // a reader needs, and a cancelled run with no field would read
+        // `not recorded` forever.
+        resolved.store.mutate((run) => withRunOutcome(run, resolved.store.runDir));
+        resolved.store.save();
         const closed = await closeRun(
           resolved.store.run, root, resolved.store.runDir, resolved.store.runId, "cancelled",
         );

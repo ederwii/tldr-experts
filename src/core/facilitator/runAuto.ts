@@ -46,7 +46,9 @@ import { ambiguousRunLines } from "../run/openRuns.ts";
 import { RunStore } from "../run/RunStore.ts";
 import { PROJECT_WORK_DIR } from "../paths.ts";
 import { AUTO_GATE_ACTOR, reevaluateAutoGate } from "../run/autoGate.ts";
-import { flatten, isAttendedByHost, type RunFile } from "../run/RunFile.ts";
+import { flatten, isAttendedByHost, isFinished, type RunFile } from "../run/RunFile.ts";
+import { BUILD_PHASE } from "../run/buildProgress.ts";
+import { outcomeLine, storiesView } from "../run/runOutcome.ts";
 import { runTally } from "../budget/budgetView.ts";
 import { spentFigure, tallyOf, type SpentTally } from "../budget/spentFigure.ts";
 import type { EffortLevel } from "../schemas/stage.ts";
@@ -274,11 +276,16 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
     const finish = async (code: number, spentUsd: number): Promise<NextOutcome> => {
       if (heartbeat !== null) clearInterval(heartbeat);
       if (notifier !== null) {
+        const run = RunStore.open(runDir).run;
         await notifier.send(
           runEndNotification(
             notifyCtx(), code, spentUsd, lines[lines.length - 1] ?? "",
-            loopTally(RunStore.open(runDir).run, spentUsd),
+            loopTally(run, spentUsd),
             heldForeignWork(),
+            // Only for a run that is actually OVER (#210). A loop that stopped
+            // with the run still open has no outcome to report, and saying
+            // `not recorded` there would be a claim about a run still running.
+            isFinished(run.status) ? outcomeLine(run.outcome) : null,
           ),
           stageIdOf(),
         );
@@ -321,9 +328,13 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
     const notifyFresh = async (fresh: readonly TldrxEvent[]): Promise<FreshNotified> => {
       if (notifier === null) return { costUsd: null, deferredGate: null };
       let requested: number | null = null;
+      let requestedPhase = "";
       let autoApproved = false;
       for (const event of fresh) {
-        if (event.type === "gate.requested") requested = number(payload(event, "cost_usd"));
+        if (event.type === "gate.requested") {
+          requested = number(payload(event, "cost_usd"));
+          requestedPhase = String(payload(event, "phase") ?? "");
+        }
         if (event.type === "gate.approved" && String(payload(event, "by") ?? event.actor) === AUTO_GATE_ACTOR) {
           autoApproved = true;
         }
@@ -348,9 +359,17 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
       if (requested !== null && !autoApproved) {
         const cost = requested;
         const policy = gatePolicyNow(runDir);
+        // The story outcomes, for a BUILD gate only (#210). Re-read off disk
+        // rather than lifted from the payload, exactly as `gatePolicyNow` on the
+        // line above is: the loop is PARKED at this gate — nothing of this run
+        // is running and nothing will write another byte until somebody signs —
+        // so disk and the event that just fired describe the same instant. The
+        // phase comes from the event, so a Plan gate (where every story is `todo`
+        // by design) is never described as having delivered nothing.
+        const stories = requestedPhase === BUILD_PHASE ? storiesView(runDir) : null;
         const send = async (): Promise<void> => {
           if (notifier === null) return;
-          await notifier.send(gateNotification(notifyCtx(), cost, policy, gateHeld(fresh)), stageIdOf());
+          await notifier.send(gateNotification(notifyCtx(), cost, policy, gateHeld(fresh), stories), stageIdOf());
         };
         // The ONE case that waits: an auto gate whose only failing condition is
         // `questions` (gh #203). The questions ARE the gate — it is downstream of

@@ -209,6 +209,21 @@ export function emitRunYaml(run: RunFile): string {
         `note: ${yamlScalar(run.cancelled.note)}}`,
     );
   }
+  // Same rule a fourth time (#210): written once, when the run closes, and
+  // absent on every run.yml that predates the key — so those stay byte-identical
+  // and read `OUTCOME_NOT_RECORDED` rather than a delivery nobody measured. The
+  // counts are omitted for `n/a`: a docs-scope run has no plan, and
+  // `stories_total: 0` there would be a confident zero about one (§7).
+  if (run.outcome !== undefined) {
+    const o = run.outcome;
+    const parts = [`kind: ${yamlScalar(o.kind)}`];
+    if (o.stories_done !== undefined) parts.push(`stories_done: ${String(o.stories_done)}`);
+    if (o.stories_total !== undefined) parts.push(`stories_total: ${String(o.stories_total)}`);
+    if (o.stories_blocked !== undefined) parts.push(`stories_blocked: ${String(o.stories_blocked)}`);
+    if (o.first_blocked !== undefined) parts.push(`first_blocked: ${yamlScalar(o.first_blocked)}`);
+    if (o.why !== undefined) parts.push(`why: ${yamlScalar(o.why)}`);
+    lines.push(`outcome: {${parts.join(", ")}}`);
+  }
   // Same rule again: emitted only when set, so a run.yml written before
   // `attended_by` existed — which is every run.yml written before 0.3.0 — round-
   // trips byte-for-byte through a save.

@@ -16,7 +16,9 @@
 // The absence sentence, from where the two fields are declared — imported
 // rather than respelled so a reader of run.yml, `run status` and a replay all
 // see the same three words for the same missing stamp (#183).
-import { recordedVersion } from "../run/RunFile.ts";
+// `RunOutcome` likewise: the shape is run.yml's (§2.2), and a second declaration
+// of it here would be free to drift from the one the emitter writes.
+import { recordedVersion, type RunOutcome } from "../run/RunFile.ts";
 
 /** `gate.evidence` (spec §2.2, design §A.5), read as tolerantly as the rest. */
 export interface RunGateEvidence {
@@ -214,6 +216,15 @@ export interface RunDocument {
   readonly attended_by: string | null;
   /** Null until a Build stage cuts or adopts an epic branch. */
   readonly build: RunBuildDocument | null;
+  /**
+   * `outcome:` — what the run DELIVERED, written when it closed (gh #210).
+   *
+   * Null on every run that is still open and on every run.yml written before the
+   * key existed. The two are told apart by the RUN's status, never by this field:
+   * a closed run with no outcome reads `not recorded`, and a live one has simply
+   * not earned one yet.
+   */
+  readonly outcome: RunOutcome | null;
   readonly phases: readonly RunPhase[];
 }
 
@@ -308,6 +319,7 @@ export function toRunDocument(input: unknown, fallbackId: string): RunDocument |
     gates_policy: toGatesPolicy(doc.gates_policy),
     attended_by: nullableStr(doc.attended_by),
     build: toBuild(doc.build),
+    outcome: toOutcome(doc.outcome),
     phases: array(doc.phases).map(toPhase).filter((phase): phase is RunPhase => phase !== null),
   };
 }
@@ -324,6 +336,29 @@ function toCancellation(input: unknown): RunCancellation | null {
 }
 
 /** Absent on every run until a Build stage cuts a branch, which is most runs. */
+/**
+ * `outcome:`, read as tolerantly as everything else here (gh #210).
+ *
+ * A `kind` this reader does not recognise is kept VERBATIM rather than dropped
+ * or coerced: a viewer built today must show a run written by a tldrx that grew
+ * a sixth kind, and silently rendering it as one of the five would be the model
+ * lying about a record it could not read.
+ */
+function toOutcome(input: unknown): RunOutcome | null {
+  const outcome = record(input);
+  if (outcome === null) return null;
+  const kind = nullableStr(outcome.kind);
+  if (kind === null || kind === "") return null;
+  return {
+    kind: kind as RunOutcome["kind"],
+    ...(nullableStr(outcome.why) === null ? {} : { why: str(outcome.why) }),
+    ...(num(outcome.stories_done) === null ? {} : { stories_done: num(outcome.stories_done) as number }),
+    ...(num(outcome.stories_total) === null ? {} : { stories_total: num(outcome.stories_total) as number }),
+    ...(num(outcome.stories_blocked) === null ? {} : { stories_blocked: num(outcome.stories_blocked) as number }),
+    ...(nullableStr(outcome.first_blocked) === null ? {} : { first_blocked: str(outcome.first_blocked) }),
+  };
+}
+
 function toBuild(input: unknown): RunBuildDocument | null {
   const build = record(input);
   if (build === null) return null;

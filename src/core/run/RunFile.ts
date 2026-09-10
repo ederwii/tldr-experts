@@ -397,6 +397,38 @@ export interface RunBuild {
 }
 
 /**
+ * How much of what the run set out to build actually landed.
+ *
+ * `n/a` is the fourth and it is not a failure: a docs-scope run has no Build
+ * stage, so no story could be delivered and a `nothing-delivered` there would be
+ * an accusation rather than a measurement.
+ */
+export const RUN_OUTCOME_KINDS = ["delivered", "partial", "nothing-delivered", "n/a"] as const;
+export type RunOutcomeKind = (typeof RUN_OUTCOME_KINDS)[number];
+
+/**
+ * `outcome:` on `run.yml` (spec §2.2) — ADDITIVE and optional.
+ *
+ * A run.yml written before this key existed has none, and every reader prints
+ * `OUTCOME_NOT_RECORDED`'s sentence for that rather than guessing at what a run
+ * from before the field delivered. `version: 1` grows (§7).
+ *
+ * The counts are absent for `n/a` for the same reason: `stories_total: 0` on a
+ * docs run is a confident zero about a plan that never existed, and `why` is the
+ * sentence that says which absence it is.
+ */
+export interface RunOutcome {
+  readonly kind: RunOutcomeKind;
+  /** Present only for `n/a`: WHICH absence this is, in words. */
+  readonly why?: string;
+  readonly stories_done?: number;
+  readonly stories_total?: number;
+  readonly stories_blocked?: number;
+  /** `S1 — <reason>`, absent when nothing was blocked. */
+  readonly first_blocked?: string;
+}
+
+/**
  * What a run says about the tldrx that wrote it, when it says nothing (#183).
  *
  * A constant rather than a literal at four call sites, because `run status`, the
@@ -406,6 +438,10 @@ export interface RunBuild {
  * by a tldrx from before the field existed, which is a knowable thing to say.
  */
 export const VERSION_NOT_RECORDED = "not recorded";
+
+/** What a run.yml from before `outcome:` existed says, and it says it in words (#210). */
+export const OUTCOME_NOT_RECORDED =
+  "not recorded — this run.yml was written before `outcome:` existed, and nothing can derive it now";
 
 /** `created_with` / `last_written_by`, or the absence sentence. Never invented. */
 export function recordedVersion(value: string | undefined): string {
@@ -491,6 +527,19 @@ export interface RunFile {
    * mean, so the intent is recorded once, where every close path can read it.
    */
   readonly keep_worktrees?: boolean;
+  /**
+   * What this run DELIVERED, written once when it closes (gh #210).
+   *
+   * ADDITIVE and optional, and the absence is a fact with a name: a run.yml
+   * written before this key existed reads `OUTCOME_NOT_RECORDED`, never
+   * `delivered` and never a zero. `version: 1` grows (§7).
+   *
+   * It is a run-level record and not a roll-up of stage statuses because those
+   * are exactly what lied: every stage of a run whose stories all blocked is
+   * terminal, so `deriveRunStatus` calls the run `done` — correctly, since the
+   * PATH finished — and nothing anywhere said the path had delivered nothing.
+   */
+  readonly outcome?: RunOutcome;
   readonly phases: readonly RunPhase[];
 }
 
@@ -635,6 +684,25 @@ export function validateRunFile(input: unknown): ValidationResult {
       requireString(doc.cancelled.note, "cancelled.note", issues);
     } else {
       issues.push({ path: "cancelled", message: "expected a mapping" });
+    }
+  }
+
+  // Optional, additive (#210): absent until a run CLOSES, and absent forever on
+  // every run.yml written before the key existed. `kind` is the only required
+  // half — the counts are omitted for `n/a`, where a zero would be a claim about
+  // a plan that never existed.
+  if (doc.outcome !== undefined) {
+    if (isRecord(doc.outcome)) {
+      requireKeys(doc.outcome, ["kind"], "outcome", issues);
+      requireEnum(doc.outcome.kind, RUN_OUTCOME_KINDS, "outcome.kind", issues);
+      for (const key of ["stories_done", "stories_total", "stories_blocked"] as const) {
+        if (doc.outcome[key] !== undefined) requireNumber(doc.outcome[key], `outcome.${key}`, issues);
+      }
+      for (const key of ["why", "first_blocked"] as const) {
+        if (doc.outcome[key] !== undefined) requireString(doc.outcome[key], `outcome.${key}`, issues);
+      }
+    } else {
+      issues.push({ path: "outcome", message: "expected a mapping" });
     }
   }
 

@@ -27,7 +27,7 @@
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { runStories, shipRun, type ShipTransport } from "../src/core/run/ship.ts";
@@ -113,8 +113,42 @@ function git(dir: string, args: readonly string[]): string {
   return execFileSync("git", [...args], { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
+/**
+ * Settle ONE `todo` story `done` (gh #210).
+ *
+ * `ship` refuses a run whose Build delivered nothing, so a fixture that leaves
+ * every story `todo` is now a run with nothing to ship — which is correct, and
+ * not what any test in this file is about. One `done` story is the shape every
+ * case here assumes: a Build that produced something, and a PR to open over it.
+ *
+ * A story a test deliberately staged at `review` or `blocked` is LEFT ALONE:
+ * that status is the premise of the case, and settling it would quietly delete
+ * the thing being asserted.
+ *
+ * `evidence:` goes in with the status, never after it: §2.6 refuses a story at
+ * `status: done` carrying none — "done means proven, not asserted".
+ */
+function settleFirstStory(ws: BuildWorkspace): void {
+  // Both shapes a plan can take: `03-plan/stories/<id>.md` when Plan ran, and
+  // `04-build/implicit-plan.yml` when the scope skipped it.
+  const dir = join(ws.runDir, "03-plan", "stories");
+  const paths = existsSync(dir)
+    ? readdirSync(dir).sort().map((name) => join(dir, name))
+    : [join(ws.runDir, "04-build", "implicit-plan.yml")];
+  for (const path of paths) {
+    if (!existsSync(path)) continue;
+    const text = readFileSync(path, "utf8");
+    if (!/^status: todo$/m.test(text)) continue;
+    writeFileSync(path, text
+      .replace(/^status: todo$/m, "status: done")
+      .replace(/^evidence: \[\]$/m, 'evidence: ["04-build/handoff.md:1"]'), "utf8");
+    return;
+  }
+}
+
 /** Give the run an epic branch (as a Build stage would) and a handoff to send. */
 function readyToShip(ws: BuildWorkspace, branches: readonly string[] = ["epic/e1"]): void {
+  settleFirstStory(ws);
   const store = RunStore.open(ws.runDir);
   store.mutate((run) => ({ ...run, build: { epic_branch: [...branches] } }));
   store.save();
@@ -515,10 +549,18 @@ describe("tldrx ship", () => {
   test("an UNSETTLED story's `touches:` excuses nothing — a plan is not a fact", async () => {
     const ws = workspace({
       ...ONE,
-      stories: [{
-        id: "S1", epic: "E1", title: "First story", status: "review",
-        touches: [".tldrx/workspace.yml"],
-      }],
+      stories: [
+        {
+          id: "S1", epic: "E1", title: "First story", status: "review",
+          touches: [".tldrx/workspace.yml"],
+        },
+        // A second story, settled `done` by `readyToShip` — the run has to have
+        // DELIVERED something for `ship` to get as far as the state refusal at
+        // all (#210), and S1 staying `review` is this test's whole premise.
+        { id: "S2", epic: "E1", title: "Second story" },
+      ],
+      epics: [{ id: "E1", stories: ["S1", "S2"], branch: "epic/e1" }],
+      waves: [["S1", "S2"]],
     });
     readyToShip(ws);
 

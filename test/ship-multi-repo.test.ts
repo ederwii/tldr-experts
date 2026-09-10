@@ -32,7 +32,7 @@
  */
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { FRAMEWORK_ROOT } from "../src/core/paths.ts";
 import { shipRun, type ShipTransport } from "../src/core/run/ship.ts";
@@ -116,8 +116,42 @@ function addRepo(ws: BuildWorkspace, name: string, defaultBranch = "main"): stri
   return dir;
 }
 
+/**
+ * Settle ONE `todo` story `done` (gh #210).
+ *
+ * `ship` refuses a run whose Build delivered nothing, so a fixture that leaves
+ * every story `todo` is now a run with nothing to ship — which is correct, and
+ * not what any test in this file is about. One `done` story is the shape every
+ * case here assumes: a Build that produced something, and a PR to open over it.
+ *
+ * A story a test deliberately staged at `review` or `blocked` is LEFT ALONE:
+ * that status is the premise of the case, and settling it would quietly delete
+ * the thing being asserted.
+ *
+ * `evidence:` goes in with the status, never after it: §2.6 refuses a story at
+ * `status: done` carrying none — "done means proven, not asserted".
+ */
+function settleFirstStory(ws: BuildWorkspace): void {
+  // Both shapes a plan can take: `03-plan/stories/<id>.md` when Plan ran, and
+  // `04-build/implicit-plan.yml` when the scope skipped it.
+  const dir = join(ws.runDir, "03-plan", "stories");
+  const paths = existsSync(dir)
+    ? readdirSync(dir).sort().map((name) => join(dir, name))
+    : [join(ws.runDir, "04-build", "implicit-plan.yml")];
+  for (const path of paths) {
+    if (!existsSync(path)) continue;
+    const text = readFileSync(path, "utf8");
+    if (!/^status: todo$/m.test(text)) continue;
+    writeFileSync(path, text
+      .replace(/^status: todo$/m, "status: done")
+      .replace(/^evidence: \[\]$/m, 'evidence: ["04-build/handoff.md:1"]'), "utf8");
+    return;
+  }
+}
+
 /** Give the run its branch and a handoff, and cut that branch in every named repo. */
 function readyToShip(ws: BuildWorkspace, dirs: readonly string[]): void {
+  settleFirstStory(ws);
   const store = RunStore.open(ws.runDir);
   store.mutate((run) => ({ ...run, build: { epic_branch: [BRANCH] } }));
   store.save();

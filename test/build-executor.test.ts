@@ -3438,6 +3438,7 @@ describe("the carried-findings leaf, and what every surface gets from it (#171, 
       const body = renderShipBody({
         runId: "260907-x", title: "t", branch: "epic/e1", handoff, handoffRel: "04-build/handoff.md",
         openFindings: [], carriedFindings: report.rows, unreadableStories: report.unreadable,
+        outcome: null,
       });
       expect(unknownsOf(handoff).join("\n")).toContain("the token is logged");
       expect(body).toContain("## Carried findings");

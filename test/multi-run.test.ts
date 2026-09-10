@@ -247,6 +247,9 @@ const SINGLE_RUN_KEYS = [
   // Appended by #183 and defect 3 of the same audit — at the END, which is what
   // this list exists to enforce.
   "metered_tasks", "created_with", "last_written_by",
+  // Appended by #210: what the run DELIVERED, null while it is still open. At
+  // the END again, for the sixth time and the same reason.
+  "outcome",
 ];
 
 describe("tldrx run status with several runs open", () => {
