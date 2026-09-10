@@ -75,7 +75,7 @@ import {
   IMPLICIT_PLAN_REL, IMPLICIT_STORY_ID, IMPLICIT_STORY_NOTE,
 } from "../../build/implicitPlan.ts";
 import { evidenceFor, updateStoryFront } from "../../build/storyFile.ts";
-import { buildDeveloperPrompt, REVIEW_SCHEMA } from "../../build/prompts.ts";
+import { buildDeveloperPrompt, REVIEW_SCHEMA, type PreviousAttemptKind } from "../../build/prompts.ts";
 import { ITERATION_ONLY_SLOT } from "../../schemas/commandAllowlist.ts";
 
 /** `testFast` as an optional prompt field: present only when the repo declares one. */
@@ -463,6 +463,8 @@ interface StoryContext {
   readonly epicBranch: string;
   readonly attempt: number;
   readonly previousAttempt: string;
+  /** WHERE `previousAttempt` came from — the header depends on it (#211). */
+  readonly previousAttemptKind: PreviousAttemptKind;
   /**
    * Touched paths the story's worktree has no copy of because they are not
    * committed at its branch — `01-what/` outputs and `run.yml` in a
@@ -1796,7 +1798,10 @@ class BuildSession {
       branch,
       epicBranch,
       attempt: Math.min(this.reviewAttempts(planned.story.id) + 1, this.attempts),
-      previousAttempt: this.previousAttemptText(planned.story.id),
+      ...(() => {
+        const previous = this.previousAttemptFor(planned.story.id);
+        return { previousAttempt: previous.text, previousAttemptKind: previous.kind };
+      })(),
       notInWorktree: await this.unreadableTouches(planned, repoDir, branch),
       freshWorktree,
     };
@@ -1957,6 +1962,7 @@ class BuildSession {
       workspaceCommands: this.workspace.commands,
       timeoutMs: this.ctx.spec.planned.timeout_s * 1000,
       phaseId: this.ctx.phaseId,
+      runDir: this.ctx.runDir,
       emit: (type, payload) => { this.ctx.emit(type, payload); },
       baseResult: (repo, command) => baseResultOf(this.baseParts, repo, command),
     });
@@ -3052,6 +3058,7 @@ class BuildSession {
       // for; the constant is the fallback for a plan built before it did.
       planNote: this.plan.implicit ? (story.planned.note ?? IMPLICIT_STORY_NOTE) : undefined,
       previousAttempt: story.previousAttempt,
+      previousAttemptKind: story.previousAttemptKind,
       notInWorktree: story.notInWorktree,
       dispatchNotes: this.dispatchNotesFor(story.planned.story.id).body,
       // This repo's skills only: the worktree carries one repo's `.claude/skills`.
@@ -3424,6 +3431,26 @@ class BuildSession {
     };
   }
 
+  /**
+   * The last attempt, rendered for the next prompt's `## Previous attempt` — and
+   * WHICH KIND of attempt it was, so the section's header is true (#211).
+   *
+   * `kind` is data, not a guess: a counted verdict makes it `review`, and a story
+   * that never reached a reviewer and blocked on its DoD makes it `dod`. The
+   * header the prompt prints is chosen from it in ONE renderer
+   * (`previousAttemptHeader`).
+   */
+  private previousAttemptFor(storyId: string): { text: string; kind: PreviousAttemptKind } {
+    return { text: this.previousAttemptText(storyId), kind: this.previousAttemptKind(storyId) };
+  }
+
+  /** `review` unless the last attempt blocked on its DoD with nothing judged. */
+  private previousAttemptKind(storyId: string): PreviousAttemptKind {
+    const outcome = this.outcomes.get(storyId);
+    if (outcome !== undefined && outcome.verdict === "changes") return "review";
+    return this.reviewAttempts(storyId) === 0 ? "dod" : "review";
+  }
+
   /** The last `changes` verdict, rendered for the next prompt's Previous attempt. */
   private previousAttemptText(storyId: string): string {
     const outcome = this.outcomes.get(storyId);
@@ -3439,8 +3466,30 @@ class BuildSession {
       });
     }
     const path = join(this.ctx.runDir, BUILD_PHASE, LOG_DIR, `${storyId}.md`);
-    if (this.reviewAttempts(storyId) === 0 || !existsSync(path)) return "";
+    if (!this.hasPriorAttempt(storyId) || !existsSync(path)) return "";
     return readFileSync(path, "utf8").trimEnd().split("\n").map((line) => `> ${line}`).join("\n");
+  }
+
+  /**
+   * Is there an EARLIER attempt whose log this story's next developer should read?
+   *
+   * A counted verdict was the only answer until #211 — and a story that blocked on
+   * its DoD never reaches a reviewer, so the one attempt whose failure is fully
+   * recorded was the one attempt the next prompt said nothing about. The log now
+   * cites the kept output of the red command (`04-build/log/dod-output/…`), which
+   * is precisely what the next developer needs and cannot re-derive: the worktree
+   * is gone.
+   *
+   * A GREEN dod row is not a prior attempt — the story would not be dispatched
+   * again for it.
+   */
+  private hasPriorAttempt(storyId: string): boolean {
+    if (this.reviewAttempts(storyId) > 0) return true;
+    const ledger = readReviewLedger(this.ctx.runDir, storyId);
+    // `lastDodOutputPath` outlives a reopen where `dod` does not, so a story a
+    // person reopened still hands its next developer the failure that blocked it.
+    if (ledger.lastDodOutputPath !== null) return true;
+    return ledger.dod.some((row) => dodRefused(row) || row.exitCode !== 0 || row.timedOut);
   }
 
   private storyWorktree(planned: PlannedStory): string {

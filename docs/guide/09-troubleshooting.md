@@ -286,6 +286,27 @@ new numbers; `tldrx expert list` warns until you do.
 blocked with its evidence recorded (the failing command and its exit code, or the conflicting
 paths, with the merge aborted). Fix it and re-run the stage.
 
+**Where is the real failure of a red DoD command?** In
+`04-build/log/dod-output/<story>-<n>.txt` — the last 200 lines (or 16 KB, whichever is
+smaller) of that command's combined output, one file per red check, written before the story's
+worktree is removed. `04-build/log/<story>.md` quotes the failure-looking lines from it in a
+fenced block under `## Definition of done` and cites the file, and `check.failed`'s `detail`
+in `events.jsonl` carries the same excerpt plus `output_path` and `output_bytes`.
+
+**These files are gitignored by default, because they may carry secrets.** They hold a command's raw
+output — an `env` dump, a token inside a connection string, a stack trace with a credential in
+it — and `tldrx-work/` is otherwise committed state, so `tldrx init`'s managed `.gitignore`
+block excludes `tldrx-work/**/04-build/log/dod-output/`. The excerpt inside
+`04-build/log/<story>.md` is the part that stays committed. If you want the tails in history,
+delete that line from the block — and read one before you share it.
+
+Until 2026-09-09 the only sentence kept anywhere was the last non-empty line of the command's
+`stdout` followed by its `stderr` — which is the last line of `stderr` whenever `stderr` wrote
+anything at all. On a real workspace that meant a whole red suite was recorded as
+`sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute`, and the
+failing test was in no record at all. If you are reading a run from before that date, the
+output was not kept and the worktree is gone: re-run the command yourself.
+
 **A story blocked with `exit 127` and "command not found" — the tests never ran.** 127 is
 `command not found`, and it means the story's worktree did not have the binary the test
 command needs. It is not a red suite: a `git worktree` is a fresh checkout of tracked files,

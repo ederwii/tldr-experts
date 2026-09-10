@@ -158,6 +158,19 @@ export interface DeveloperPromptParts {
   /** A previous reviewer's `changes` verdict, rendered under `## Previous attempt`. */
   readonly previousAttempt?: string;
   /**
+   * WHERE that block came from, so the section's header can say the true thing
+   * (#211).
+   *
+   * The header used to be unconditional — "A reviewer read your last attempt at
+   * this story and asked for changes" — and since a story that blocks on its
+   * Definition of Done now carries its log forward too, that sentence would sit
+   * above a log reading `Verdict: n-a · Reviewer: not recorded`: the prompt
+   * asserting a review that never happened. One renderer, two headers, chosen by
+   * DATA the executor already knows. Absent means `review`, which is every
+   * prompt written before this field existed.
+   */
+  readonly previousAttemptKind?: PreviousAttemptKind;
+  /**
    * The rendered body of `## Fix list` — a reviewer that SIGNED this story and
    * attached numbered findings (`build/fixlist.ts`), routed back here by
    * `tldrx next --prepare --fixlist`.
@@ -295,8 +308,7 @@ export function buildDeveloperPrompt(parts: DeveloperPromptParts): string {
     lines.push(
       "## Previous attempt",
       "",
-      "A reviewer read your last attempt at this story and asked for changes. Their review",
-      "is the primary instruction for this one; everything else in this prompt still applies.",
+      ...previousAttemptHeader(parts.previousAttemptKind ?? "review"),
       "",
       previous,
       "",
@@ -848,4 +860,28 @@ function sizeOf(abs: string): number {
   } catch {
     return 0;
   }
+}
+
+/**
+ * What the last attempt was, for the `## Previous attempt` header (#211).
+ *
+ * `review` — a reviewer judged the diff and asked for changes. `dod` — the story
+ * never reached a reviewer: its Definition of Done went red and the log carried
+ * forward is that failure and the file holding the command's output.
+ */
+export type PreviousAttemptKind = "review" | "dod";
+
+/** The two headers, in one place, chosen by data rather than by assumption. */
+function previousAttemptHeader(kind: PreviousAttemptKind): readonly string[] {
+  if (kind === "dod") {
+    return [
+      "Your last attempt blocked on its Definition of Done — the failing check and its output",
+      "are below. The DoD is the primary instruction for this one; everything else in this",
+      "prompt still applies.",
+    ];
+  }
+  return [
+    "A reviewer read your last attempt at this story and asked for changes. Their review",
+    "is the primary instruction for this one; everything else in this prompt still applies.",
+  ];
 }

@@ -56,7 +56,13 @@ export interface DodResult {
   /** The measured exit. Absent — and only ever absent — when `status` is `refused`. */
   readonly exitCode?: number;
   readonly timedOut: boolean;
-  /** Last meaningful line of the combined output — the operator's first clue. */
+  /**
+   * One line of the combined output — the operator's first clue.
+   *
+   * Since #211 it is the FAILURE-looking line (`failureSummaryLine`), not the
+   * last line of `stdout + stderr`: the old reading handed a red suite's record
+   * a trailing `DeprecationWarning` and threw the failing test away.
+   */
   readonly tail: string;
   /**
    * Present only on an exit 127 in a story worktree: what the tree was MISSING
@@ -68,6 +74,28 @@ export interface DodResult {
    * ran because the worktree has no `node_modules`.
    */
   readonly absent?: AbsentBinary | null;
+  /**
+   * Up to `DOD_EXCERPT_MAX_LINES` failure-looking lines, bounded by
+   * `DOD_DETAIL_MAX_BYTES` (#211). ADDITIVE and optional: absent on every record
+   * written before this field existed, and on a command that passed or was
+   * refused. `tail` is its first line, so a reader that has only `tail` is never
+   * wrong, only shorter.
+   */
+  readonly excerpt?: string;
+  /**
+   * Where the whole kept tail lives, relative to the run dir
+   * (`04-build/log/dod-output/<story>-<n>.txt`), and its size. Absent when the
+   * command passed, was refused, or printed nothing — never an invented path.
+   */
+  readonly outputPath?: string;
+  readonly outputBytes?: number;
+  /**
+   * 1-based line INSIDE that file where the excerpt starts, so a citation points
+   * at the failure and not at the top of a 200-line tail. Absent on a record
+   * written before this field existed; every reader falls back to 1, which is
+   * where the old citations pointed anyway.
+   */
+  readonly outputLine?: number;
 }
 
 /** True when the gate DECLINED to run this command. Absent status means it ran. */
@@ -230,8 +258,14 @@ export function dodFailureReason(result: DodResult, repo: string): string {
   if (result.absent !== undefined && result.absent !== null) {
     return binaryAbsentReason(result, repo, result.absent);
   }
+  // The kept output is CITED, not inlined: this sentence is a bullet in the
+  // handoff and a line on the executor's stdout, and the whole failure report
+  // belongs in the file the citation names (#211).
   return `\`${result.command}\` exited ${String(result.exitCode ?? "?")} in repo ${repo}`
-    + `${result.timedOut ? " (timed out)" : ""} — ${result.tail}`;
+    + `${result.timedOut ? " (timed out)" : ""} — ${result.tail}`
+    + (result.outputPath === undefined
+      ? ""
+      : ` [src: ${result.outputPath}:${String(result.outputLine ?? 1)}]`);
 }
 
 /** One line for `run status` and the executor's stdout: `S1 done`, `S2 blocked`. */

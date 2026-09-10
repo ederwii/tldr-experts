@@ -61,6 +61,19 @@ export interface CommandResult {
   readonly exitCode: number;
   readonly timedOut: boolean;
   readonly tail: string;
+  /**
+   * The combined `stdout + "\n" + stderr`, verbatim and unbounded, for a caller
+   * that means to KEEP it (#211).
+   *
+   * `tail` is a one-line summary and was, until #211, the only thing that
+   * survived a red DoD command anywhere — and because stderr is concatenated
+   * last, that one line is the last line of stderr whenever stderr wrote
+   * anything, so a trailing deprecation warning displaced the failure report.
+   * The Build DoD runner now bounds this itself (`src/core/build/dodOutput.ts`)
+   * and writes the tail beside the story log. Optional, so every other reader of
+   * this interface is unchanged.
+   */
+  readonly output?: string;
 }
 
 /**
@@ -150,7 +163,8 @@ export async function runDodCommand(
     cwd,
     timeoutMs,
   });
-  return { command, exitCode, timedOut, tail: lastMeaningfulLine(`${stdout}\n${stderr}`) };
+  const output = `${stdout}\n${stderr}`;
+  return { command, exitCode, timedOut, tail: lastMeaningfulLine(output), output };
 }
 
 /** The last non-empty line of the combined output, capped so a deny stays readable. */

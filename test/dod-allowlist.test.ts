@@ -181,6 +181,7 @@ describe("#165 · a refused dod command invents no exit code", () => {
       workspaceCommands: new Set(["npm run test"]),
       timeoutMs: 5_000,
       phaseId: "04-build",
+      runDir: dir,
       emit: (type, payload) => { events.push({ type, payload }); },
       baseResult: async () => null,
     });

@@ -16,6 +16,7 @@
 import { DodCommandRefused, runDodCommand } from "../../hooks/lib/story.ts";
 import { FALLBACK_DEFAULT_BRANCH, type WorkspaceContext } from "../../hooks/lib/workspace.ts";
 import type { EventType } from "../events/Event.ts";
+import { failureExcerpt, failureSummaryLine, writeDodOutput, type DodOutputFile } from "./dodOutput.ts";
 import { repoDirOf, shaOf } from "./git.ts";
 import { dodRefused } from "./outcome.ts";
 import type { BuildRefusal, DodResult, SerialWrite } from "./outcome.ts";
@@ -215,6 +216,11 @@ export interface DodParts {
   readonly workspaceCommands: ReadonlySet<string>;
   readonly timeoutMs: number;
   readonly phaseId: string;
+  /**
+   * The run directory — a red check's kept output is written under it (#211).
+   * DATA the executor owns and passes, never `ctx` and never the session.
+   */
+  readonly runDir: string;
   readonly emit: (type: EventType, payload: Record<string, unknown>) => void;
   readonly baseResult: (repo: string, command: string) => Promise<BaseCommandResult | null>;
 }
@@ -229,12 +235,30 @@ export async function runStoryDod(parts: DodParts): Promise<readonly DodResult[]
     let result: DodResult;
     try {
       const outcome = await runDodCommand(command, parts.worktree, timeoutMs, parts.workspaceCommands);
+      const exitCode = outcome.timedOut ? 124 : outcome.exitCode;
+      const output = outcome.output ?? "";
+      // Only a RED check's output is kept (#211). A green one has nothing anybody
+      // has ever needed at 2am, and writing a file per passing command would put
+      // megabytes of `npm test` chatter in every run dir — the record exists to
+      // answer "why did this block", and a green command blocks nothing.
+      const kept: DodOutputFile | null = exitCode === 0 && !outcome.timedOut
+        ? null
+        : writeDodOutput(parts.runDir, parts.storyId, results.length, output);
       const ran: DodResult = {
         command,
         status: "ran",
-        exitCode: outcome.timedOut ? 124 : outcome.exitCode,
+        exitCode,
         timedOut: outcome.timedOut,
-        tail: outcome.tail,
+        // #211: the failure-looking line, not the last line of stdout+stderr.
+        // `outcome.tail` is the old reading and is kept only when there is no
+        // output to choose from (a record replayed through an older seam).
+        tail: kept === null ? outcome.tail : failureSummaryLine(output),
+        ...(kept === null ? {} : {
+          excerpt: failureExcerpt(output),
+          outputPath: kept.rel,
+          outputBytes: kept.bytes,
+          outputLine: kept.line,
+        }),
       };
       // gh #209: an exit 127 HERE, in a tree that never had the binary, is an
       // environment absence and must not be rendered as a red test. Asked only
@@ -270,7 +294,17 @@ export async function runStoryDod(parts: DodParts): Promise<readonly DodResult[]
       ...(result.absent === undefined || result.absent === null
         ? {}
         : { absent_binary: result.absent.binary ?? "" }),
-      detail: green ? "" : (result.refusedBecause ?? result.tail),
+      // #211: the excerpt, bounded at `DOD_DETAIL_MAX_BYTES` so this payload can
+      // never reach the §2.9 4096-byte cap and lose its `detail` to
+      // `capPayload`'s `detail_omitted` (#160). The event that says WHY a story
+      // blocked is the one event that must never be trimmed for size — and the
+      // #209 keys above are small and fixed, so they cannot eat that headroom.
+      detail: green ? "" : (result.refusedBecause ?? result.excerpt ?? result.tail),
+      ...(result.outputPath === undefined ? {} : {
+        output_path: result.outputPath,
+        output_bytes: result.outputBytes ?? 0,
+        output_line: result.outputLine ?? 1,
+      }),
     });
     if (green) continue;
     // Issue #41, the second reader: a red command only faults the STORY if it

@@ -213,6 +213,49 @@
   trees — so a green pre-flight beside a story's 127 read as a contradiction instead of as the
   environment gap it was. A `127` whose tail names the binary also carries `absent_binary`.
 
+- **A red Definition-of-Done command's records name the FAILURE, not the last warning on
+  stderr (#211).** `check.failed`'s `detail`, `04-build/log/<story>.md` under both
+  `## Definition of done` and `## Why it is not done`, the handoff Finding and the notify
+  summary all carried ONE sentence, and that sentence was
+  `lastMeaningfulLine(stdout + "\n" + stderr)` — the last non-empty line of the two streams
+  concatenated, which is the last line of stderr whenever stderr wrote anything at all.
+  Measured on a real workspace: a story's gate script exited 1 and the only thing any record
+  kept was `sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute`.
+  Which test failed was in no record, the worktree had been deleted, and the owner could not
+  tell what broke without re-running the suite. A host had raised the same thing in prose a
+  week earlier.
+  Now: the last 200 lines (or 16 KB, whichever is smaller) of the command's combined output go
+  to `04-build/log/dod-output/<story>-<n>.txt`, one file per red check, written before the
+  worktree is removed. `check.failed` gains `output_path` and `output_bytes`, and its `detail`
+  becomes up to 5 failure-looking lines — `FAIL`, `Error`, `assert`, `Traceback`, `not ok` and
+  their siblings, the last 5 lines when none match, never the first line of stderr — bounded at
+  1024 bytes so this event, of all events, can never be the one whose `detail` §2.9's
+  4096-byte cap strips (#160). The story log quotes the excerpt in a fenced block and cites the
+  file `[src: …:1]`; the blocked-story reason and its handoff Finding carry the same citation;
+  and a story a person reopens now hands its next developer the log under `## Previous
+  attempt`, so the agent reads the real failure instead of rediscovering it in a worktree that
+  no longer exists. One heuristic in one helper (`failureExcerpt` in
+  `src/core/build/dodOutput.ts`), one path derivation (`dodOutputRel`), and a green command
+  still writes no file and emits the byte-identical event it always did. `not found` is in the
+  heuristic for a measured reason: a shell's `sh: <bin>: command not found` is the only line an
+  exit 127 has, and #209 reads the absent binary's name off `tail` — without it `absent_binary`
+  went from `dodbin` to `""` on the rebase. The citation resolves
+  through the repo's existing `lineOf()` to the line the excerpt starts on, never a constant
+  `:1`, and the heuristic reads bun's own `(fail)` summary line as well as the capitalised
+  spellings.
+  Two consequences worth stating in their own right. **The kept output may carry secrets** — it
+  is raw stdout and stderr, so an `env` dump, a token in a connection string or a stack trace
+  with a credential all land in it — and `tldrx-work/` is state this framework tells owners to
+  COMMIT. So `tldrx init`'s managed `.gitignore` block now excludes
+  `tldrx-work/**/04-build/log/dod-output/`, after the `!tldrx-work/**` re-include so it wins:
+  the tails stay on the machine that measured them, and the bounded excerpt inside
+  `04-build/log/<story>.md` is what goes into history. Delete that one line to opt in, and read
+  a tail before sharing it. And **the `## Previous attempt` header now says which kind of
+  attempt it was**: it was unconditionally "A reviewer read your last attempt … and asked for
+  changes", which over a DoD-only block would have sat above a log reading
+  `Verdict: n-a · Reviewer: not recorded` — a prompt asserting a review that never happened.
+  One renderer, two headers, chosen by data the executor already has.
+
 
 ## 0.14.3 — 2026-09-10
 

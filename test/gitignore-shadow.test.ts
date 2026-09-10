@@ -47,6 +47,14 @@ const DOTNET_RULES = "[Ll]og/\n[Ll]ogs/\n";
 const RUN = "260830-scores";
 const STORY_LOG = `tldrx-work/${RUN}/04-build/log/S1.md`;
 const PRODUCT_LOG = "Logs/build.log";
+/**
+ * A red DoD command's RAW output (#211) — up to 16 KB of whatever the command
+ * printed, which on a real repo can be an `env` dump or a connection string. The
+ * framework tells owners to COMMIT `tldrx-work/`, so this one tree has to be
+ * ignored by default; the bounded excerpt inside `04-build/log/<story>.md` is
+ * what stays committed.
+ */
+const DOD_OUTPUT = `tldrx-work/${RUN}/04-build/log/dod-output/S1-1.txt`;
 
 let root = "";
 
@@ -62,6 +70,7 @@ beforeEach(async () => {
     `tldrx-work/${RUN}/events.jsonl`,
     `tldrx-work/${RUN}/.lock`,
     `tldrx-work/${RUN}/.agent/prompt.md`,
+    DOD_OUTPUT,
     ".tldrx/memory/facts.yml",
     ".tldrx/cache/digest.json",
     ".tldrx/graphify-out/graph.json",
@@ -146,6 +155,20 @@ describe("the fix: init's managed block", () => {
     expect(body.indexOf("!tldrx-work/**")).toBeLessThan(body.indexOf("tldrx-work/*/.lock"));
   });
 
+  test("a red DoD command's raw output is ignored — it may carry secrets (#211)", async () => {
+    expect(GITIGNORE_BODY).toContain("tldrx-work/**/04-build/log/dod-output/");
+    // Real `git check-ignore`, in a real repo: exit 0 means ignored.
+    const result = await spawn(["git", "check-ignore", DOD_OUTPUT], root);
+    expect(result.exitCode).toBe(0);
+    expect(await isIgnored(DOD_OUTPUT)).toBe(true);
+    // …and it does NOT take the story log with it — that one stays committed.
+    expect(await isIgnored(STORY_LOG)).toBe(false);
+    // Order still holds: the exclusion must come after the re-includes.
+    const body = GITIGNORE_BODY.split("\n");
+    expect(body.indexOf("!tldrx-work/**"))
+      .toBeLessThan(body.indexOf("tldrx-work/**/04-build/log/dod-output/"));
+  });
+
   test("the whole state tree is committable, not just the probes", async () => {
     await spawn(["git", "add", "-A"], root);
     const tracked = (await spawn(["git", "ls-files"], root)).stdout.split("\n");
@@ -153,6 +176,7 @@ describe("the fix: init's managed block", () => {
     expect(tracked).toContain(`tldrx-work/${RUN}/run.yml`);
     expect(tracked).toContain(".tldrx/memory/facts.yml");
     expect(tracked).not.toContain(`tldrx-work/${RUN}/.lock`);
+    expect(tracked).not.toContain(DOD_OUTPUT);
     expect(tracked).not.toContain(PRODUCT_LOG);
   });
 

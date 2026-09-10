@@ -133,6 +133,27 @@ En [`CONTRIBUTING.md`](https://github.com/ederwii/tldr-experts/blob/main/CONTRIB
 está el recorrido que hace un cambio, las cuatro compuertas y lo que CI de verdad corre, las
 reglas de prueba-en-rojo-primero, y por dónde entraría un proveedor de modelo externo.
 
+## Una story se bloqueó en su DoD, ¿dónde está la falla de verdad?
+
+En `04-build/log/dod-output/<story>-<n>.txt`: las últimas 200 líneas (o 16 KB, lo que sea
+menor) de la salida combinada de ese comando, un archivo por verificación en rojo, escrito
+antes de que se elimine el worktree de la story. El log de la story,
+`04-build/log/<story>.md`, cita ese archivo y transcribe en un bloque las líneas que parecen
+la falla, y el evento `check.failed` lleva ese mismo extracto más `output_path` y
+`output_bytes`.
+
+Esos archivos están **ignorados por git de forma predeterminada**: guardan la salida cruda de un
+comando, que puede traer un volcado de `env`, un token dentro de una cadena de conexión o un
+stack trace con una credencial. El bloque de `.gitignore` que administra `tldrx init` excluye
+`tldrx-work/**/04-build/log/dod-output/`; lo que queda versionado es el extracto dentro del log
+de la story. Léelo antes de compartirlo.
+
+Antes del 2026-09-09 solo se guardaba UNA línea: la última línea no vacía de `stdout` seguido
+de `stderr`, que es la última línea de `stderr` en cuanto `stderr` escribe algo. Una simple
+advertencia de deprecación al final bastaba para desplazar el reporte completo de las
+pruebas. Los runs anteriores a esa fecha no guardaron la salida y sus worktrees ya no
+existen: vuelve a correr el comando a mano.
+
 ## Algo se está negando y no sé por qué
 
 `tldrx status` dice qué está esperando por ti e imprime el comando para cada cosa. Más allá
