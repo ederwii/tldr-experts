@@ -526,9 +526,9 @@ describe("the live client, and the static page that must not carry it", () => {
       };
       const html = renderDashboard(model);
       expect(model.live, "the static model is not a live one").toBe(false);
-      expect(Buffer.byteLength(html, "utf8")).toBe(121_997);
+      expect(Buffer.byteLength(html, "utf8")).toBe(122_007);
       expect(createHash("sha256").update(html, "utf8").digest("hex"))
-        .toBe("f18e4702dae1cf0d028a5d63d46e089bb4dff08944617eb824a860ee1f204e6c");
+        .toBe("01bf55ced1b88afca386be60b1ba01058464aafb05225fecdb1963a7f941e9a5");
     } finally {
       temp.dispose();
     }

@@ -2,6 +2,77 @@
 
 ## 0.15.0 — unreleased
 
+### Added
+
+- **Four Build calibrations became optional `stage.yml` keys: `attempts` (default 2),
+  `fixlist_rounds` (1), `reviewer_share` (0.25), `gate_signer_share` (0.25).** Each was a code
+  constant, and each is a calibration rather than an invariant — "two attempts" is the
+  framework's opinion about how many developer turns a story deserves before a human should
+  look at it, and a hardening wave over a legacy repo holds a different one. Until now the only
+  way to hold it was a fork. `parallel:` made exactly this move already and the argument is the
+  same. Absent ⇒ today's constant, byte for byte, which is what the golden proves; present and
+  out of range (`attempts` 1..5, `fixlist_rounds` 0..3, the two shares 0..1) is REFUSED by name
+  at `validateStage` rather than clamped, because a clamp lets an operator write a number, pay
+  for something else, and never be told which. One derivation
+  (`src/core/schemas/stageTuning.ts`): `caps.ts`, `budget/remainingWork.ts`, `gateSigner.ts` and
+  `build/fixlist.ts` keep the constants they always exported — the prose that justifies a number
+  lives with the code it governs — but each is now defined as its field there, so the default
+  cannot move in one file and not the other.
+- **`tldrx run auto --prompt-max-bytes <n>` and `--max-reads <n>` (#208).** Passed to every
+  `next` the loop makes, with the same precedence they have there: the flag beats the stage
+  file. Until now the only way to raise either for an *unattended* run was to edit
+  `.tldrx/stages/<id>/stage.yml` — a file change, in the workspace, to get past one refusal.
+
+- **`install:` is a slot the framework runs, in every fresh story worktree, before the
+  developer (#209).** It has been in `templates/workspace.yml` since the beginning and no code
+  read it: `git grep` over `src/` found zero readers outside the unrelated Claude-Code
+  installer. Now, when a repo declares one, Build runs it in the story's worktree the moment
+  that worktree is created — through the same allowlist-and-argv runner every other declared
+  command goes through, so an installer is not a privileged string — and records it as its own
+  `check: "install"` with an exit code, a `duration_ms` and `tree: "worktree"`. The duration is
+  the point as much as the exit code: this work used to be folded into the story's paid turn or
+  absent from the record entirely. An install that FAILS blocks the story with what the
+  installer printed and dispatches no developer at all — a tree whose dependencies did not
+  install cannot prove anything, and paying a turn to discover that is the cost this whole
+  change exists to stop.
+- **A watcher card can now say "there is nothing to query", and be believed (#212).** Measured
+  on 0.14.2, on a real workspace: the Watch stage read a code path that sends a verification
+  code and returns — no log line, no metric, no span anywhere in it. It said so correctly under
+  `## Signal`, `## Where` and `## Looks broken when`, each with an `absent:` source, and noted
+  that the only signal that exists is a customer reporting a missing code. Then it reached
+  `## Query`, wrote the same truth in prose, and the validator refused the whole card for it —
+  "`## Query` holds no fenced block — the query has to be copy-pasteable, not described". The
+  stage failed and the cost was spent on the honest answer. `Query` was the one checked section
+  with no absent form — every other section had `absent:` and it had nothing. It now accepts one line as well as a fenced block:
+  `Query: none — <reason> [src: …]`, where the reason ends with a §2.8 token read by the *same*
+  parser `claim-sources` denies a handoff bullet with, so an unsourced or unresolvable `none` is
+  refused exactly like any unsourced item. A line rather than a fence tagged `none` because the
+  `[src: …]` grammar is line-terminal: inside a fence the reason could only be sourced by a
+  second reader of that grammar, and a card has exactly one.
+  A `none` is EARNED, not asserted: it is refused unless the card's own `## Signal` cites `absent:`
+  and the reason's source is `absent:` too — found by a pre-merge reviewer's probe, where a card
+  naming a live, resolving emitting line took `Query: none` and validated, because the "only when
+  nothing is instrumented" rule lived in the stage prompt and nowhere a card had to pass.
+  `watch check`, `watch arm`'s post-merge screen and every other view print the form as
+  `unobservable — <reason>` with its source, through one renderer; the Watch handoff lists the
+  card under an `**unobservable**` line rather than quietly omitting it. Prose under `## Query` is still refused, in the same words as before
+  — the new form is a shape a reader can recognise, not permission to describe a query.
+- **`run.yml` grows an additive `outcome:`, so a run can no longer read `done` over nothing
+  delivered (#210).** Run STATUS is a roll-up of the execution path and nothing else — every
+  stage of a run whose stories all blocked is terminal, so `deriveRunStatus` calls it `done`,
+  correctly, and until now that was the only word anyone got. `outcome:` is written ONCE when the
+  run closes, by all three commands that close one (`tldrx next` closing the last stage,
+  `tldrx approve` signing the last gate, and `tldrx run cancel`), and carries
+  `kind: delivered | partial | nothing-delivered | n/a` with the counts and the first blocked
+  story. It is rendered by `tldrx run status` (`status done — nothing delivered: 0 of 3 stories;
+  S1 — …`), by `tldrx status`, by the `run.finished` notification, by the dashboard model
+  (additive; `DASHBOARD_MODEL_VERSION` stays 3) and by the `ship` PR body — one renderer, six
+  surfaces, so none of them can disagree about what a run delivered. The two absences are named
+  rather than invented (§7): a `run.yml` written before the field reads `not recorded` with the
+  reason in it, and a run with no Build phase — a docs-scope run — reads `n/a` with `why`, never
+  a confident `0 of 0`.
+
+
 ### Changed
 
 - **A stage's `timeout_s` now bounds a turn a real model can finish: 900 s → 7200 s
@@ -66,6 +137,7 @@
   `buildStageDefaults`, and it is tolerant: an unreadable workflow gives the
   shipped pair rather than throwing on a page render.
 
+
 ### Fixed
 
 - **The DoD-gate hook re-runs a story's commands on the STAGE's clock, not on a
@@ -78,83 +150,6 @@
   gate ALLOWED — "no deny decision (exit 0)". It now resolves story `timeout_s:` →
   the Build stage's → the shipped default, which is the order §2.3 and §7's
   DoD-gate row have always described.
-
-### Added
-
-- **Four Build calibrations became optional `stage.yml` keys: `attempts` (default 2),
-  `fixlist_rounds` (1), `reviewer_share` (0.25), `gate_signer_share` (0.25).** Each was a code
-  constant, and each is a calibration rather than an invariant — "two attempts" is the
-  framework's opinion about how many developer turns a story deserves before a human should
-  look at it, and a hardening wave over a legacy repo holds a different one. Until now the only
-  way to hold it was a fork. `parallel:` made exactly this move already and the argument is the
-  same. Absent ⇒ today's constant, byte for byte, which is what the golden proves; present and
-  out of range (`attempts` 1..5, `fixlist_rounds` 0..3, the two shares 0..1) is REFUSED by name
-  at `validateStage` rather than clamped, because a clamp lets an operator write a number, pay
-  for something else, and never be told which. One derivation
-  (`src/core/schemas/stageTuning.ts`): `caps.ts`, `budget/remainingWork.ts`, `gateSigner.ts` and
-  `build/fixlist.ts` keep the constants they always exported — the prose that justifies a number
-  lives with the code it governs — but each is now defined as its field there, so the default
-  cannot move in one file and not the other.
-- **`tldrx run auto --prompt-max-bytes <n>` and `--max-reads <n>` (#208).** Passed to every
-  `next` the loop makes, with the same precedence they have there: the flag beats the stage
-  file. Until now the only way to raise either for an *unattended* run was to edit
-  `.tldrx/stages/<id>/stage.yml` — a file change, in the workspace, to get past one refusal.
-
-
-## 0.15.0 — unreleased
-
-### Added
-
-- **`install:` is a slot the framework runs, in every fresh story worktree, before the
-  developer (#209).** It has been in `templates/workspace.yml` since the beginning and no code
-  read it: `git grep` over `src/` found zero readers outside the unrelated Claude-Code
-  installer. Now, when a repo declares one, Build runs it in the story's worktree the moment
-  that worktree is created — through the same allowlist-and-argv runner every other declared
-  command goes through, so an installer is not a privileged string — and records it as its own
-  `check: "install"` with an exit code, a `duration_ms` and `tree: "worktree"`. The duration is
-  the point as much as the exit code: this work used to be folded into the story's paid turn or
-  absent from the record entirely. An install that FAILS blocks the story with what the
-  installer printed and dispatches no developer at all — a tree whose dependencies did not
-  install cannot prove anything, and paying a turn to discover that is the cost this whole
-  change exists to stop.
-- **A watcher card can now say "there is nothing to query", and be believed (#212).** Measured
-  on 0.14.2, on a real workspace: the Watch stage read a code path that sends a verification
-  code and returns — no log line, no metric, no span anywhere in it. It said so correctly under
-  `## Signal`, `## Where` and `## Looks broken when`, each with an `absent:` source, and noted
-  that the only signal that exists is a customer reporting a missing code. Then it reached
-  `## Query`, wrote the same truth in prose, and the validator refused the whole card for it —
-  "`## Query` holds no fenced block — the query has to be copy-pasteable, not described". The
-  stage failed and the cost was spent on the honest answer. `Query` was the one checked section
-  with no absent form — every other section had `absent:` and it had nothing. It now accepts one line as well as a fenced block:
-  `Query: none — <reason> [src: …]`, where the reason ends with a §2.8 token read by the *same*
-  parser `claim-sources` denies a handoff bullet with, so an unsourced or unresolvable `none` is
-  refused exactly like any unsourced item. A line rather than a fence tagged `none` because the
-  `[src: …]` grammar is line-terminal: inside a fence the reason could only be sourced by a
-  second reader of that grammar, and a card has exactly one.
-  A `none` is EARNED, not asserted: it is refused unless the card's own `## Signal` cites `absent:`
-  and the reason's source is `absent:` too — found by a pre-merge reviewer's probe, where a card
-  naming a live, resolving emitting line took `Query: none` and validated, because the "only when
-  nothing is instrumented" rule lived in the stage prompt and nowhere a card had to pass.
-  `watch check`, `watch arm`'s post-merge screen and every other view print the form as
-  `unobservable — <reason>` with its source, through one renderer; the Watch handoff lists the
-  card under an `**unobservable**` line rather than quietly omitting it. Prose under `## Query` is still refused, in the same words as before
-  — the new form is a shape a reader can recognise, not permission to describe a query.
-- **`run.yml` grows an additive `outcome:`, so a run can no longer read `done` over nothing
-  delivered (#210).** Run STATUS is a roll-up of the execution path and nothing else — every
-  stage of a run whose stories all blocked is terminal, so `deriveRunStatus` calls it `done`,
-  correctly, and until now that was the only word anyone got. `outcome:` is written ONCE when the
-  run closes, by all three commands that close one (`tldrx next` closing the last stage,
-  `tldrx approve` signing the last gate, and `tldrx run cancel`), and carries
-  `kind: delivered | partial | nothing-delivered | n/a` with the counts and the first blocked
-  story. It is rendered by `tldrx run status` (`status done — nothing delivered: 0 of 3 stories;
-  S1 — …`), by `tldrx status`, by the `run.finished` notification, by the dashboard model
-  (additive; `DASHBOARD_MODEL_VERSION` stays 3) and by the `ship` PR body — one renderer, six
-  surfaces, so none of them can disagree about what a run delivered. The two absences are named
-  rather than invented (§7): a `run.yml` written before the field reads `not recorded` with the
-  reason in it, and a run with no Build phase — a docs-scope run — reads `n/a` with `why`, never
-  a confident `0 of 0`.
-
-### Fixed
 
 - **A Build gate now says what the stage DELIVERED, on every gate policy — the counting existed
   and ran for `auto` gates alone (#210).** Measured on tldrx 0.14.2 across two real workspaces,
