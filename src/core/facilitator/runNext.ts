@@ -41,6 +41,10 @@ import { raiseCommand, shortBy } from "../budget/budgetView.ts";
 import { FactsStore } from "../facts/FactsStore.ts";
 import { factsPath, loadWorkspace, toSrcContext } from "../../hooks/lib/workspace.ts";
 import { closeRun, describeOpenQuestions, describeStateCommit } from "../run/closeRun.ts";
+import { BUILD_PHASE } from "../run/buildProgress.ts";
+import {
+  deliveredPhrase, gateStoriesPayload, storiesView, withRunOutcome,
+} from "../run/runOutcome.ts";
 import { describeDecidedTally } from "../facts/decidedTally.ts";
 import { capPayload, type EventType, type TldrxEvent } from "../events/Event.ts";
 import { LOG_DIR } from "../build/plan.ts";
@@ -1803,11 +1807,20 @@ async function finishStage(
         checks,
       })
       : null;
+    // WHAT THE STAGE WAS FOR, on every policy (gh #210). Until this, the only
+    // thing that counted the stories was the auto gate's `stories` condition, so
+    // a `human` Build gate announced itself with a cost, one output and one green
+    // check — measured twice on real runs where every story was `blocked` or
+    // `todo`, and approved from a phone both times. Absent, never `{}`, for a
+    // non-Build stage or a run with no plan: a zeroed count would say a plan was
+    // read and found empty (§7).
+    const storyOutcomes = phaseId === BUILD_PHASE ? storiesView(store.runDir) : null;
     store.append(event(options, store.runId, stageId, "gate.requested", {
       phase: phaseId,
       cost_usd: spentNow(),
       outputs,
       checks: checks.map((c) => `${c.id}:${c.status}`),
+      ...(storyOutcomes === null ? {} : gateStoriesPayload(storyOutcomes)),
       // Additive, and present ONLY for an `auto` policy. A `human` or `agent` gate
       // has no auto verdict behind it, and `held_by: []` there would read as "the
       // seven conditions were checked and none of them held it" — the opposite of
@@ -1817,6 +1830,11 @@ async function finishStage(
     store.save();
     const doneLine =
       `${phaseId}/${stageId} done — ${costLineNow()} (${checkSummary})`;
+    // What the stage DELIVERED, on the terminal too and on every policy (#210).
+    // A separate line rather than a clause on `doneLine`: that line is asserted
+    // byte-for-byte in more than one test, and this one is an ADDITION to it.
+    // Empty for every non-Build stage, so those screens are unchanged.
+    const storyNote = storyOutcomes === null ? [] : [`  stories: ${deliveredPhrase(storyOutcomes)}`];
 
     // The gate is now REQUESTED either way. Who closes it is the policy's call.
     // An `agent` policy is the strongest of the three: all seven auto conditions,
@@ -1829,6 +1847,7 @@ async function finishStage(
           return out(EXIT_AWAITING_HUMAN, [
             ...notes,
             doneLine,
+            ...storyNote,
             "agent gate not taken — the evidence cannot be bound to exactly one measured Codex thread",
             "gate pending: tldrx approve",
           ]);
@@ -1849,6 +1868,7 @@ async function finishStage(
           return out(EXIT_OK, [
             ...notes,
             `${doneLine} · agent-approved by ${agent.actor}`,
+            ...storyNote,
             `  ${agent.note}`,
             `  evidence → ${approved.evidencePath ?? ""}`,
             approved.advancedTo === null
@@ -1859,6 +1879,7 @@ async function finishStage(
         return out(EXIT_AWAITING_HUMAN, [
           ...notes,
           doneLine,
+          ...storyNote,
           `agent gate not taken — approve re-ran the checks and \`${approved.failed?.id ?? "unknown"}\` `
             + `failed: ${approved.failed?.detail ?? ""}`,
           `gate pending: tldrx approve`,
@@ -1893,10 +1914,12 @@ async function finishStage(
         () => carriedDetailLines(
           carriedReportFor(store.runDir, new Set(loadWorkspace(options.root).repos.keys())),
         ),
+        storyOutcomes === null ? null : deliveredPhrase(storyOutcomes),
       );
       return out(EXIT_AWAITING_HUMAN, [
         ...notes,
         doneLine,
+        ...storyNote,
         `agent gate not taken — ${String(agent.fallthroughs.length)} reason(s), `
           + "this gate falls to a person:",
         ...describeAgentFallthroughs(agent.fallthroughs),
@@ -1921,6 +1944,7 @@ async function finishStage(
           return out(EXIT_OK, [
             ...notes,
             `${doneLine} · auto-approved`,
+            ...storyNote,
             `  ${verdict.note}`,
             approved.advancedTo === null
               ? `run ${store.runId} is finished`
@@ -1933,11 +1957,12 @@ async function finishStage(
       return out(EXIT_AWAITING_HUMAN, [
         ...notes,
         doneLine,
+        ...storyNote,
         `auto gate not taken — ${why}`,
         `gate pending: tldrx approve`,
       ]);
     }
-    return out(EXIT_AWAITING_HUMAN, [...notes, doneLine, `gate pending: tldrx approve`]);
+    return out(EXIT_AWAITING_HUMAN, [...notes, doneLine, ...storyNote, `gate pending: tldrx approve`]);
   }
 
   // Read BEFORE the cursor advances, while the stage is still resolvable.
@@ -1958,6 +1983,14 @@ async function finishStage(
   store.save();
   const closing: string[] = [];
   if (store.run.status === "done") {
+    // What this run DELIVERED, recorded before anything commits or reports it
+    // (#210). Written here rather than derived by every reader because the
+    // story files and the handoff are inside the run directory `closeRun` is
+    // about to commit and the epic worktrees it is about to remove — the run is
+    // the last moment this is measurable, and a record that says `done` over
+    // nothing delivered is a record lying in the dangerous direction (§7).
+    store.mutate((run) => withRunOutcome(run, store.runDir));
+    store.save();
     store.append(event(options, store.runId, null, "run.closed", { reason: "every stage terminal" }));
     // The run owns its epic worktrees and its own state, so the run's close is what
     // takes the one (#16) and commits the other (#102).

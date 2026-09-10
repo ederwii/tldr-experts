@@ -16,6 +16,9 @@ import type { DecisionCard } from "../ui/decisionCard.ts";
 // The one spelling of `tldrx answer <Qid> "…" --run <id>`, shared with every decision card.
 import { answerCommand, approveCommand, rejectCommand } from "../run/decisionCards.ts";
 import type { GatePolicy } from "../run/gatePolicy.ts";
+import {
+  deliveredPhrase, gateStoriesPayload, type OutcomeLine, type StoriesView,
+} from "../run/runOutcome.ts";
 import { NOTIFY_PAYLOAD_VERSION, exitFamily, type NotifyKind, type NotifyPayload } from "./payload.ts";
 import { spentBasis, spentFigure, type SpentTally } from "../budget/spentFigure.ts";
 
@@ -150,6 +153,20 @@ export function gateNotification(
   costUsd: number,
   policy: GatePolicy | null = null,
   held: readonly string[] = [],
+  /**
+   * What the stage DELIVERED, for a Build gate (gh #210). Null for every other
+   * stage and for a run with no plan, which leaves those notifications
+   * byte-identical.
+   *
+   * It is the first clause of the summary — before the money — because the money
+   * is what the two runs in #210 already said and the delivery is what they did
+   * not. Measured: a `human` Build gate's whole payload was
+   * `cost_usd: 1.78, outputs: [handoff], checks: [claim-sources:passed]` while
+   * every story was blocked or todo, and it was approved from a phone.
+   *
+   * Passed IN, never derived here: this file words, it never measures (gh #197).
+   */
+  stories: StoriesView | null = null,
 ): NotifyPayload {
   const approve = approveCommand(ctx.runId);
   // `held` is what the engine's gate signer could not sign over (gh #198), in the
@@ -168,10 +185,11 @@ export function gateNotification(
     : policy === "auto"
       ? ` It is held by: ${held.join("; ")}.`
       : ` The engine's signer held it: ${held.join("; ")}.`;
+  const delivered = stories === null ? "" : ` It ${deliveredPhrase(stories)}.`;
   return {
     ...base(ctx, "gate.requested"),
     summary: `${ctx.runId} finished ${ctx.stage ?? "a stage"} for $${costUsd.toFixed(2)} and is waiting `
-      + `at ${gateArticle(policy)} ${gatePhrase(policy)}.${why} Nothing runs after it until the gate is `
+      + `at ${gateArticle(policy)} ${gatePhrase(policy)}.${delivered}${why} Nothing runs after it until the gate is `
       + "approved or rejected.",
     command: approve,
     detail: {
@@ -179,6 +197,10 @@ export function gateNotification(
       approve_command: approve,
       reject_command: rejectCommand(ctx.runId),
       ...(policy === null ? {} : { gate_policy: policy }),
+      // The same numbers the event carries, so a `notify:` consumer never has to
+      // read events.jsonl to learn what a gate is over. Absent for a non-Build
+      // stage — a zeroed count would say a plan was read and found empty (§7).
+      ...(stories === null ? {} : gateStoriesPayload(stories)),
       // Absent, never `[]`, when no signer ran: an empty list would read as "the
       // signer found nothing wrong", which is the opposite of "no signer looked".
       ...(held.length === 0 ? {} : policy === "auto" ? { held_by: held } : { signer_held: held }),
@@ -294,13 +316,28 @@ export function runEndNotification(
   tally: SpentTally = { usd: spentUsd, unmetered: 0, metered: 1 },
   /** Same contract as `stageDoneNotification`'s: today only a failed restore. */
   note: string | null = null,
+  /**
+   * What the run DELIVERED, from `run.yml`'s `outcome:` (gh #210) — passed in by
+   * the caller, which is the only thing that knows whether the run is actually
+   * over. Null for a loop that stopped with the run still open, so a
+   * `run.failed` mid-run is byte-identical to what it was.
+   *
+   * A run that delivered nothing must not reach a phone as `finished with exit 0`
+   * and a dollar figure: that is exactly the sentence two real runs sent while
+   * every story was blocked (#210).
+   *
+   * SEVENTH and not sixth: `note` (#164) landed first and its caller passes it
+   * positionally, so a new parameter goes after it.
+   */
+  outcome: OutcomeLine | null = null,
 ): NotifyPayload {
   const kind: NotifyKind = exitCode === 0 ? "run.finished" : "run.failed";
   const verb = exitCode === 0 ? "finished" : "stopped";
+  const delivered = outcome === null ? "" : ` The run: ${outcome.text}.`;
   return {
     ...base(ctx, kind),
     summary: `${ctx.runId}: the loop ${verb} with exit ${String(exitCode)} `
-      + `(${exitFamily(exitCode)}), ${spentFigure(tally)} spent by this loop. ${lastLine}`
+      + `(${exitFamily(exitCode)}), ${spentFigure(tally)} spent by this loop.${delivered} ${lastLine}`
       + `${note === null ? "" : ` ${note}`}`,
     command: exitCode === 0 ? null : `tldrx run status ${ctx.runId}`,
     detail: {
@@ -309,6 +346,9 @@ export function runEndNotification(
       spent_usd: spentUsd,
       unmetered_tasks: tally.unmetered,
       spent_basis: spentBasis(tally.unmetered),
+      // Absent while the run is still open: `outcome: "not-recorded"` on a loop
+      // that merely stopped would claim the run had ended without one (§7).
+      ...(outcome === null ? {} : { outcome: outcome.kind, outcome_detail: outcome.text }),
     },
   };
 }

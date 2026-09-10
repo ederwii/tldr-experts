@@ -183,6 +183,30 @@ export function cardForTriggers(
    * the caller still owns the derivation and this card still scrapes nothing.
    */
   carried: () => readonly string[] = () => [],
+  /**
+   * The Build stage's story outcomes in one line, from `runOutcome.ts`'s
+   * `deliveredPhrase` (#210) — "1 of 3 stories delivered, S2 blocked (…)".
+   *
+   * It goes FIRST in the detail of whichever card is drawn, because the card is
+   * the interrupt surface and "what did this stage actually deliver" outranks
+   * every reason it fell to a person: an owner reading a card that says only
+   * `claim-sources: passed` approved two runs that delivered nothing.
+   *
+   * Null — the default, and every non-Build stage — leaves every existing card
+   * byte-identical. This file still scrapes nothing: the caller derives it.
+   */
+  stories: string | null = null,
+): DecisionCard | null {
+  const card = pickCard(ctx, triggers, money, carried);
+  if (card === null || stories === null) return card;
+  return { ...card, detail: [`stories: ${stories}`, ...card.detail] };
+}
+
+function pickCard(
+  ctx: CardContext,
+  triggers: readonly CardTrigger[],
+  money: Money | null,
+  carried: () => readonly string[],
 ): DecisionCard | null {
   if (triggers.length === 0) return null;
   if (triggers.some((t) => t.trigger === "questions")) {

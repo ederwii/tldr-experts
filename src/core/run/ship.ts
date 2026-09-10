@@ -99,7 +99,10 @@ import type { PlanStatus } from "../schemas/planCommon.ts";
 // Spec §3's table, from the file that owns it. This module used to spell the
 // three numbers itself; `EXIT_GATE_REFUSED` is the same 2 every other gate
 // refusal in the CLI exits with, and one spelling is what keeps it that way.
-import { EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_OK } from "../../cli/exitCodes.ts";
+import { EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_OK, EXIT_USAGE } from "../../cli/exitCodes.ts";
+import {
+  deliveredPhrase, deriveRunOutcome, describeRunOutcome, storiesView,
+} from "./runOutcome.ts";
 
 /** One external command, with the working directory it must run in. */
 export interface ShipTransport {
@@ -183,6 +186,47 @@ export async function shipRun(options: ShipOptions): Promise<ShipOutcome> {
         + `${store.run.phases.map((p) => p.id).join(", ")}.`,
       "  Run the stage that produces one, or open the PR by hand — this verb will not invent a body.",
     ]);
+  }
+
+  // NOTHING BEHIND THE VERB (gh #210).
+  //
+  // `ship` already knew: `shipBody.ts` reads the handoff's `## Findings`, keeps
+  // the bullets that say `done`, and when there are none writes
+  // ``- (nothing settled `done` in this run)`` — into a PR it opened anyway.
+  // Measured on two real runs whose every story was `blocked` or `todo`: a PR
+  // whose "What shipped" section says nothing shipped is a review request for a
+  // diff that does not exist.
+  //
+  // AFTER the handoff check on purpose: the handoff is the document the blocked
+  // reason is read out of, and a run with no handoff is already refused above in
+  // words this cannot improve on.
+  //
+  // Family 1 and not 2, on the issue's own reading: `EXIT_GATE_REFUSED` is "a
+  // gate said no", and no gate said anything here — there is simply nothing to
+  // open a PR from, which is `EXIT_USAGE`'s half of the §3 table. The sibling
+  // refusal above (`has cut no epic branch`) predates this reading and is left
+  // exactly as it was: this change ADDS a refusal, it does not restructure the
+  // ones already standing.
+  //
+  // A run with no plan on disk is NOT refused: nothing measured it, and refusing
+  // over an absence would be the invented negative §7 forbids.
+  const view = storiesView(store.runDir);
+  if (view !== null && view.counts.total > 0 && view.counts.done === 0) {
+    const blocked = view.firstBlocked;
+    return {
+      code: EXIT_USAGE,
+      lines: [
+        `${store.runId} delivered no story, so there is nothing to open a PR from`,
+        `  ${deliveredPhrase(view)}`,
+        ...(blocked === null
+          ? []
+          : [`  first blocked: ${blocked.id} — ${blocked.reason}`]),
+        `  \`${branch}\` carries no story this run settled \`done\` — a PR whose "What shipped" section`,
+        "  reads `(nothing settled `done` in this run)` is a review request for a diff that is not there.",
+        "  Unblock the stories (`tldrx story reopen <id> --note \"<why>\"`) and re-run Build, or open the",
+        "  PR by hand if you mean to ship the branch as it stands.",
+      ],
+    };
   }
 
   // The stories are read once, here, and travel down as DATA: the body needs the
@@ -700,6 +744,19 @@ async function openPrFor(options: ShipOptions, repo: ShipRepo, branch: string): 
  * "which branch did this run ship" is how a poller ends up watching a branch
  * nobody opened a PR from.
  */
+/**
+ * The run's delivery, as the PR header states it (#210).
+ *
+ * `deriveRunOutcome` is the same function `run.yml`'s `outcome:` is written from,
+ * so a PR body and the record it was opened over cannot disagree — and `ship` may
+ * run long before the run closes, which is exactly why it derives rather than
+ * reads the field.
+ */
+function describeShipOutcome(store: RunStore): string | null {
+  const outcome = deriveRunOutcome(store.run, store.runDir);
+  return outcome.kind === "n/a" ? null : describeRunOutcome(outcome);
+}
+
 export function pickBranch(claimed: readonly string[], wanted?: string): string | ShipOutcome {
   const asked = wanted?.trim() ?? "";
   if (asked !== "") {
@@ -874,6 +931,10 @@ function writeShipBody(
     // because it runs in a separate process, not because it has a second opinion.
     carriedFindings: carried.rows,
     unreadableStories: carried.unreadable,
+    // Derived by the ONE derivation every other surface reads (#210), not by a
+    // second count in this file. Null when there is no plan on disk: a header
+    // asserting `0 of 0` would be a claim about a plan that never existed (§7).
+    outcome: describeShipOutcome(store),
   });
   const path = join(mkdtempSync(join(tmpdir(), "tldrx-ship-")), "pr-body.md");
   writeFileSync(path, text, "utf8");

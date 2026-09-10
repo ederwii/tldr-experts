@@ -495,6 +495,13 @@ describe("the live client, and the static page that must not carry it", () => {
    * turn, so `spentFigure` is the plain `$5.01` `dashUsd` produced. That is the
    * guard half of the change working — a fully metered run keeps its figure.
    * `DASHBOARD_MODEL_VERSION` stays 3.
+   *
+   * **+15 for #210**: `,"outcome":null` — the run's delivery, embedded in the
+   * model the page carries. `null` and not a sentence because the fixture's run
+   * is still OPEN: a live run has no outcome to report and has not failed to
+   * record one. `DASHBOARD_MODEL_VERSION` still stays 3 — additions do not bump
+   * it (§7) — and the rendered TEXT is unchanged, since a null outcome draws
+   * nothing.
    */
   test("--static is byte-identical to the export main renders without the live layer", () => {
     const temp = makeViewsWorkspace();
@@ -508,9 +515,9 @@ describe("the live client, and the static page that must not carry it", () => {
       };
       const html = renderDashboard(model);
       expect(model.live, "the static model is not a live one").toBe(false);
-      expect(Buffer.byteLength(html, "utf8")).toBe(121_982);
+      expect(Buffer.byteLength(html, "utf8")).toBe(121_997);
       expect(createHash("sha256").update(html, "utf8").digest("hex"))
-        .toBe("306d1023ea1848146f346c8fb11bf9ea4cf3368bdb8cd0f9a50e8187e2788091");
+        .toBe("f18e4702dae1cf0d028a5d63d46e089bb4dff08944617eb824a860ee1f204e6c");
     } finally {
       temp.dispose();
     }

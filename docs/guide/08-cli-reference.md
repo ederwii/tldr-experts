@@ -1362,6 +1362,23 @@ event, no gate, no cursor. To mirror the plan's epics and stories to a ticket to
 `tldrx tickets sync` is the verb that does that, and it stays separate. It refuses cleanly, in
 a sentence, when there is no epic branch, no handoff, no remote, no `gh` on PATH, or when
 several epic branches leave the choice open.
+
+**It refuses a run that delivered no story** — exit `1`, the "nothing behind it" family, not
+`2`, because no gate said no: there is simply nothing to open a PR from (#210). `ship` already
+knew, and shipped anyway: the body it renders keeps only the handoff bullets that say `done`,
+and with none of them it wrote `- (nothing settled `done` in this run)` into a PR it created.
+The refusal names the counts and the first blocked story's own reason, read out of the
+handoff's `## Findings`:
+
+```
+260909-scoring delivered no story, so there is nothing to open a PR from
+  0 of 3 stories delivered, S1 blocked (npm run test exited 127…), S2 not started
+  first blocked: S1 — npm run test exited 127
+```
+
+`--dry-run` is refused in exactly the same words. A run that delivered at least one story
+ships as it always did, and its PR body now opens with an **Outcome** line —
+`partial: 1 of 3 stories delivered; S2 — …` — so a reviewer reads the ratio before the list.
 Exits: `0` `1` `2` `3`.
 
 ## `tldrx watch`

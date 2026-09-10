@@ -20,6 +20,7 @@ import type { RunFile, RunGate, RunGateEvidence, RunPhase, RunStage } from "./Ru
 import { gatePolicyFor } from "./gatePolicy.ts";
 import { attributeGate } from "./gateAuthority.ts";
 import { closeRun, type RunCloseOutcome } from "./closeRun.ts";
+import { withRunOutcome } from "./runOutcome.ts";
 
 export class GateError extends Error {}
 
@@ -166,6 +167,12 @@ export async function approve(store: RunStore, ctx: GateContext): Promise<Approv
   const runDone = store.run.status === "done";
   let closed: RunCloseOutcome | null = null;
   if (runDone) {
+    // What the run DELIVERED, on the run itself, before the close commits it
+    // (#210). The same line `tldrx next` and `tldrx run cancel` write: signing
+    // the last gate is the most ordinary way a run closes, and it was one of the
+    // two paths that let a run read `done` over zero delivered stories.
+    store.mutate((run) => withRunOutcome(run, store.runDir));
+    store.save();
     store.append(event(ctx.at, store.runId, null, "run.closed", ctx.actor, { reason: "every stage terminal" }));
     // Signing the last gate is the most ordinary way a run closes, so it is also
     // where its epic worktrees are most ordinarily taken (#16) and where its own

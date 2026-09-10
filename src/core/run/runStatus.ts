@@ -13,11 +13,14 @@ import { spentClause } from "../budget/spentFigure.ts";
 import type { RunBudget } from "../budget/RunBudget.ts";
 import { renderAttempts, stageAttempts, type StageAttempts } from "./attempts.ts";
 import { buildProgress, renderBuildProgress, renderStoryCosts, BUILD_PHASE, type BuildProgress } from "./buildProgress.ts";
+import {
+  outcomeLine, statusWithOutcome, type OutcomeLine,
+} from "./runOutcome.ts";
 import { gatePolicyFor, type GatePolicy, type GatesPolicy } from "./gatePolicy.ts";
 import { describeGateSignature } from "./gateAuthority.ts";
 import { failureReason, waitingFor, type Waiting, type WaitingKind } from "./waiting.ts";
 import {
-  flatten, isTerminal, recordedVersion,
+  flatten, isFinished, isTerminal, recordedVersion,
   type AttendedBy, type RunFile, type RunGateAuthority, type RunGateExecutor, type RunPhase,
 } from "./RunFile.ts";
 import { operatorNotes, type OperatorNote } from "./operatorNote.ts";
@@ -157,6 +160,16 @@ export interface RunStatusView {
    * replay` shows every note in place; this shows the last few.
    */
   readonly operator_notes: readonly OperatorNote[];
+  /**
+   * What this run DELIVERED (gh #210) — the sentence and the kind, from
+   * `run.yml`'s `outcome:`.
+   *
+   * NULL while the run is open, which is not the same absence as a closed run
+   * whose `outcome:` was never written: that one reads `not recorded` with the
+   * reason in it. Appended to this object, never inserted — a `--json` consumer
+   * reads it positionally in at least one test.
+   */
+  readonly outcome: OutcomeLine | null;
 }
 
 export function buildStatus(run: RunFile, budget: RunBudget, runDir: string): RunStatusView {
@@ -192,6 +205,11 @@ export function buildStatus(run: RunFile, budget: RunBudget, runDir: string): Ru
     metered_tasks: tally.metered,
     created_with: recordedVersion(run.created_with),
     last_written_by: recordedVersion(run.last_written_by),
+    // APPENDED, never inserted, for the same reason the three keys above were.
+    // Null while the run is still OPEN and only then: `outcome:` is written when
+    // a run closes, so a live run has none and "not recorded" there would claim
+    // the field was owed and missing rather than not yet due (#210, §7).
+    outcome: isFinished(run.status) ? outcomeLine(run.outcome) : null,
   };
 }
 
@@ -274,7 +292,7 @@ export function renderStatus(view: RunStatusView, verbose = false): string {
   const width = Math.max(...view.phases.map((p) => p.id.length), 7);
   const lines = [
     `${view.run} · ${view.title}`,
-    `scope ${view.scope} · workflow ${view.workflow} · repos ${view.repos.length === 0 ? "(none)" : view.repos.join(", ")} · status ${view.status}` +
+    `scope ${view.scope} · workflow ${view.workflow} · repos ${view.repos.length === 0 ? "(none)" : view.repos.join(", ")} · status ${statusWithOutcome(view.status, view.outcome)}` +
       // Only when set, so an ordinary run's screen is byte-identical to before.
       (view.attended_by === null ? "" : ` · attended: ${view.attended_by}`),
     `cursor ${view.cursor.phase} / ${view.cursor.stage}`,

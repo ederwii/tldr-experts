@@ -156,6 +156,26 @@ the condition: *"…is waiting at an auto gate that did not close by itself — 
 it. It is held by: claim-sources=1 unverified citation(s) — …"*. Before this, that sentence
 said only "did not close by itself" and named nothing.
 
+**A Build gate names the story outcomes.** Whoever signs it — `human`, `agent` or `auto` — the
+Build gate's notification says what the stage actually delivered before it says what it cost:
+
+> *"260909-scoring finished 04-build/build for $1.78 and is waiting at a human gate — a person
+> signs it. It 0 of 3 stories delivered, S1 blocked (npm run test exited 127…), S2 not started.
+> Nothing runs after it until the gate is approved or rejected."*
+
+The counts and the first blocked story's own reason ride on the `gate.requested` payload as
+`stories`, `blocked_story` and `blocked_reason`, so a script can route on them. The reason is
+the handoff's own sentence, never a paraphrase. Two real runs were approved from a phone over
+a summary that said `$1.78` and one green check while every story was blocked — the counting
+existed and ran for `auto` gates alone.
+
+**And the run's own end says it too.** A run whose Build delivered nothing does not reach you
+as a plain `done`: `run.finished` reads *"…the loop finished with exit 0 (ok), $1.78 spent by
+this loop. The run: nothing delivered: 0 of 3 stories; S1 — npm run test exited 127."* The
+same sentence is on `run.yml` as `outcome:`, in `tldrx run status`, on the dashboard and in the
+`tldrx ship` PR body — and `tldrx ship` refuses such a run outright rather than opening a PR
+whose "What shipped" section is empty.
+
 ### `status` — the heartbeat
 
 ```json

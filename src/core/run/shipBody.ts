@@ -77,6 +77,16 @@ export interface ShipBodyParts {
    * on this PR is owed the fact that something was not checked.
    */
   readonly unreadableStories: readonly UnreadableStory[];
+  /**
+   * What the run DELIVERED, in `runOutcome.ts`'s own words (#210) — "partial:
+   * 1 of 3 stories delivered; S2 — npm run test exited 127".
+   *
+   * Null only when there is no plan on disk to count, which is the one case
+   * nothing measured. It sits in the HEADER, above `## What shipped`, because a
+   * reviewer opening a PR for a run that delivered one story of three is owed
+   * the ratio before the list — the list alone reads like the whole plan.
+   */
+  readonly outcome: string | null;
 }
 
 /** `## Findings` in a handoff: one bullet per story, with its status in it. */
@@ -100,6 +110,7 @@ export function renderShipBody(parts: ShipBodyParts): string {
     "",
     `Run \`${parts.runId}\` · branch \`${parts.branch}\``,
     "",
+    ...(parts.outcome === null ? [] : [`**Outcome:** ${parts.outcome}`, ""]),
     "## What shipped",
     "",
     ...(shipped.length === 0

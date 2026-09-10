@@ -35,7 +35,8 @@ import { join } from "node:path";
 import { isAdvisory, openBlocks, parseQuestions, unreadableQuestionHeadings } from "../text/questions.ts";
 import { isHostTokens, type RunBudget } from "../budget/RunBudget.ts";
 import { epicOnlyCount, notedCount, runCheck, runChecks, unverifiedCount, type CheckOutcome } from "./checks.ts";
-import { buildProgress, BUILD_PHASE } from "./buildProgress.ts";
+import { BUILD_PHASE } from "./buildProgress.ts";
+import { storiesView } from "./runOutcome.ts";
 import { evaluateBoundary } from "./boundary.ts";
 import { loadWorkflowPreset, PresetError, type PlannedStage } from "./workflowPreset.ts";
 import type { RunFile, RunStage } from "./RunFile.ts";
@@ -389,16 +390,20 @@ const NAMED_STORIES = 8;
  */
 function storiesCondition(input: AutoGateInput): AutoGateCondition {
   if (input.phaseId !== BUILD_PHASE) return { id: "stories", ok: true, detail: "n/a (not a build stage)" };
-  const progress = buildProgress(input.runDir);
-  if (progress === null) return { id: "stories", ok: true, detail: "n/a (no plan to build)" };
+  // ONE derivation (§7). This condition used to count the stories itself, and it
+  // was the only thing in the framework that did — which is exactly why a
+  // `human` Build gate carried no counts at all and an owner approved two runs
+  // that delivered nothing (#210). The counting now lives in `runOutcome.ts`,
+  // where the gate event, the notification, `run.yml`'s `outcome:` and the ship
+  // refusal all read it too; the WORDS below are still this condition's own.
+  const view = storiesView(input.runDir);
+  if (view === null) return { id: "stories", ok: true, detail: "n/a (no plan to build)" };
 
-  const stories = progress.waves.flatMap((wave) => wave.stories);
-  const counted = `${String(progress.done)} of ${String(progress.total)} done`;
-  const unfinished = stories.filter((story) => story.status !== "done");
-  if (unfinished.length === 0) return { id: "stories", ok: true, detail: counted };
+  const counted = `${String(view.counts.done)} of ${String(view.counts.total)} done`;
+  if (view.unfinished.length === 0) return { id: "stories", ok: true, detail: counted };
 
-  const named = unfinished.slice(0, NAMED_STORIES).map((story) => `${story.id}:${story.status}`);
-  const rest = unfinished.length - named.length;
+  const named = view.unfinished.slice(0, NAMED_STORIES).map((story) => `${story.id}:${story.status}`);
+  const rest = view.unfinished.length - named.length;
   return {
     id: "stories",
     ok: false,

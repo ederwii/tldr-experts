@@ -26,7 +26,8 @@ import { questionsCard } from "../run/decisionCards.ts";
 import { renderDecisionCard } from "../ui/decisionCard.ts";
 import { isMovable } from "../run/waiting.ts";
 import { closedByMachine, describeGateSignature } from "../run/gateAuthority.ts";
-import type { RunFile } from "../run/RunFile.ts";
+import { isFinished, type RunFile } from "../run/RunFile.ts";
+import { outcomeLine, statusWithOutcome } from "../run/runOutcome.ts";
 import type { PendingItem } from "./PendingItem.ts";
 
 /** The marker on the first run a human could actually move. */
@@ -98,7 +99,15 @@ export function runItems(root: string): readonly PendingItem[] {
         + "until something genuinely needs a person",
       );
     }
-    details.push(`at ${run.cursor.phase} / ${run.cursor.stage} · run status ${run.status} · waiting: ${waiting.kind}`);
+    // The status word carries what the run DELIVERED once the run is over (#210).
+    // `tldrx status` lists a `done` run that is still open, and "run status done"
+    // over zero delivered stories is the sentence #210 was filed about. Nothing
+    // changes for a live run: `statusWithOutcome(_, null)` is the bare word.
+    const outcome = isFinished(run.status) ? outcomeLine(run.outcome) : null;
+    details.push(
+      `at ${run.cursor.phase} / ${run.cursor.stage} · run status ${statusWithOutcome(run.status, outcome)}`
+        + ` · waiting: ${waiting.kind}`,
+    );
     // "blocked by" is reserved for a run that really cannot move (#60). A started
     // run gets the same information as one sentence that does not claim it is stuck.
     if (heldBack) {

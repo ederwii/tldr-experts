@@ -147,6 +147,9 @@ describe("the dashboard model", () => {
       "runs[].nextAction.phase",
       "runs[].nextAction.stage",
       "runs[].nextAction.waitingOn",
+      // #210: what the run delivered, null while it is open — which the fixture
+      // run is, so this path has no sub-fields here.
+      "runs[].outcome",
       "runs[].path[].budgetUsd",
       "runs[].path[].costUsd",
       "runs[].path[].endedAt",
