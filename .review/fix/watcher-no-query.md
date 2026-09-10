@@ -1,6 +1,6 @@
 verdict: merge
 reviewed-by: fresh reviewer sub-agent, claude-sonnet-5, dispatched by session tldr-experts-4a
-against: e3ecffc
+against: 86b10ac
 
 ## Round 1 (7437a54 vs base 404e8f4)
 
@@ -59,3 +59,19 @@ token) rather than zero non-absent refs, both the parse-error issue and
 card is refused either way). Not worth a fix-now.
 
 No other findings. Merge.
+
+## Round 3 — re-verify after rebase (e3ecffc → 86b10ac, base 404e8f4 → c33bc82)
+
+Branch rebased onto `c33bc82` (release 0.14.3); the only conflict was `CHANGELOG.md`,
+resolved as the union — `## 0.15.0 — unreleased` now sits above the newly-dated
+`## 0.14.3 — 2026-09-10` (confirmed: heading order matches, dated section intact).
+
+`git diff 404e8f4..e3ecffc -- . ':!CHANGELOG.md'` vs
+`git diff c33bc82..86b10ac -- . ':!CHANGELOG.md'` — byte-identical (979/979 lines,
+`diff` exit 0): the rebase changed nothing but the CHANGELOG's base context.
+
+`bun run typecheck` exit 0. `bun test test/watch.test.ts test/watch-checklist.test.ts
+test/watch-cli.test.ts test/watch-arm.test.ts` — 85 pass, 0 fail, exit 0 (unchanged
+from round 2).
+
+No new findings. Merge.
