@@ -1,6 +1,6 @@
 verdict: merge
 reviewed-by: fresh reviewer sub-agent, claude-sonnet-5, dispatched by session tldr-experts-4a
-against: d4f0d9b
+against: 35f762d
 
 ## Round 1 (a15fbc5..bd13be4) — money semantics, verified clean
 
@@ -73,3 +73,33 @@ commits): 16 files, 352 insertions, 25 deletions.
   untouched
 
 No new Important/Critical findings this round. Verdict: merge.
+
+## Round 3 (rebase e1f363b..35f762d, on top of #212/#210/#209) — re-verified after rebase
+
+Branch rebased onto `e1f363b` (#212/#210/#209 landed on main); feat/fix/review commits kept a
+linear single-parent history (`7de9f41`→`e519e2e`→`5b57d4a`), with one new top commit `35f762d`
+resolving two post-rebase conflicts.
+
+- **Diff-of-diffs.** `git diff c33bc82..d4f0d9b` vs `git diff e1f363b..35f762d`, excluding
+  `CHANGELOG.md` and `test/dashboard-live.test.ts`: same 70 files touched (the only file-set
+  difference is `.review/feat/defaults-2026-09.md`, present only in the new range because the old
+  range's tip predates that commit — expected, not a rebase artifact). Per-file added/removed
+  LINE CONTENT (ignoring line-number/blob-hash reflow from unrelated upstream edits to shared
+  files, e.g. `docs/spec.md`, golden fixtures gaining #209's `tree` field) is byte-identical
+  across all 70 files — 0 mismatches. `35f762d`'s own diff touches exactly `CHANGELOG.md` and
+  `test/dashboard-live.test.ts`, nothing else (`git diff 5b57d4a..35f762d --stat`). Confirms the
+  rebase carried this branch's own changes through unaltered.
+- **(1) `test/dashboard-live.test.ts` byte pin — CONFIRMED.** At `e1f363b` (post-#210, pre this
+  branch) the pin was already `121_997` (#210's `outcome:null`). This branch's own `maxAttempts`
+  addition adds 10 bytes on top: `35f762d` re-measures the pin to `122_007` and the sha256
+  alongside it. `bun test test/dashboard-live.test.ts` → 15 pass, 0 fail.
+- **(2) CHANGELOG merge — CONFIRMED correct.** One `## 0.15.0 — unreleased` heading, one each of
+  `### Added`/`### Changed`/`### Fixed` (no duplicate heading kind). `e1f363b`'s own section had
+  8 bullets (`### Added`/`### Fixed` only); this branch's own (`d4f0d9b`) had 9 (adds
+  `### Changed`); merged section has 17 — all 17 verified present verbatim by text match, none
+  lost, none duplicated. Dated sections untouched: `bash scripts/release-check.sh --ci` → exit 0,
+  "release check OK for 0.14.3".
+
+Verification: `bun run typecheck` → exit 0; `bun test test/stage-defaults.test.ts
+test/hooks.test.ts test/build-golden.test.ts test/dashboard-live.test.ts` → 115 pass, 0 fail,
+exit 0; `release-check.sh --ci` → exit 0. No new Important/Critical findings. Verdict: merge.
