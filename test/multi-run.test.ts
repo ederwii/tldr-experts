@@ -268,7 +268,7 @@ describe("tldrx run status with several runs open", () => {
     expect(lines[2]).toContain("SPENT/CEILING");
     expect(lines[3]).toContain(ids[1] as string);
     expect(lines[3]).toContain("01-what/what");
-    expect(lines[3]).toContain("$0.00 / $25.00");
+    expect(lines[3]).toContain("$0.00 / $50.00");
     expect(lines[4]).toContain(ids[0] as string);
   });
 

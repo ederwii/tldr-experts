@@ -721,9 +721,12 @@ export function dashRunView(
   }
 
   parts.push(dashHandoffsSection(run));
-  parts.push(dashPlanSection(run, model.maxAttempts));
-  parts.push(dashStoryGrid(run, model.maxAttempts));
-  parts.push(dashStoryArcs(run, model.maxAttempts));
+  // THIS run's Build stage answers for "of N", not the workspace default on
+  // `model`: `attempts:` is a stage key, and two runs of one workspace can be on
+  // scopes that disagree about it.
+  parts.push(dashPlanSection(run, run.maxAttempts));
+  parts.push(dashStoryGrid(run, run.maxAttempts));
+  parts.push(dashStoryArcs(run, run.maxAttempts));
   parts.push(dashPreflightSection(run));
   parts.push(dashBudgetSection(run));
   parts.push(dashBudgetBlocks(run));

@@ -17,13 +17,13 @@ Both print the **context ledger** — the assembled prompt, broken down by where
 came from:
 
 ```
-context 83.7 KB of 160.0 KB (~23.8k tok, 12% of sonnet's ~200.0k window)
+context 83.7 KB of 400.0 KB (~23.8k tok, 12% of sonnet's ~200.0k window)
   stage 3.7 KB · inputs 77.3 KB · experts 2.7 KB (bodies 2.5 KB, knowledge 250 B)
   input docs/domain-design/DECISIONS-NEEDED.md 15.1 KB
   input docs/domain-design/SEED-README.md 7.6 KB
 ```
 
-Over the stage's `prompt_max_bytes` (160 KB by default) the stage is **refused** — exit
+Over the stage's `prompt_max_bytes` (400 KB by default) the stage is **refused** — exit
 `2`, before anything is spawned — naming the biggest sections and the setting that shrinks
 each. `--prompt-max-bytes <n>` overrides it for one run.
 

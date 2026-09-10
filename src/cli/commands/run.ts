@@ -47,7 +47,7 @@ const HINT_FILE_COUNT = 10;
 const VALUE_FLAGS = [
   "title", "scope", "budget", "repos", "from", "seed", "gates", "run", "root",
   "max-usd", "until", "model", "effort", "ui", "note", "parallel", "attended-by",
-  "notify-every", "wait-answers", "wait-gates",
+  "notify-every", "wait-answers", "wait-gates", "prompt-max-bytes", "max-reads",
 ];
 
 /**
@@ -81,7 +81,7 @@ export const runCommand: Command = {
     "       tldrx run estimate [<run>] [--json] [--run <id>] [--root <path>]\n" +
     "       tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]\n" +
     "                      [--notify-every <duration>] [--wait-answers <duration>]\n" +
-    "                      [--wait-gates <duration>]\n" +
+    "                      [--wait-gates <duration>] [--prompt-max-bytes <n>] [--max-reads <n>]\n" +
     "                  [--yolo] [--parallel <n>] [--gate-agent] [--ui scene|compact|plain|off]\n" +
     "                  [--run <id>] [--root <path>]\n" +
     "       tldrx run gates set <stage>:<human|auto|agent> --note <text> [--run <id>] [--root <path>]\n" +
@@ -299,6 +299,8 @@ async function runAutoLoop(argv: readonly string[]): Promise<number> {
         effort: effortFlag(args),
         yolo: boolFlag(args, "yolo"),
         parallel: parallelFlag(args),
+        promptMaxBytes: numberFlag(args, "prompt-max-bytes"),
+        maxReads: numberFlag(args, "max-reads"),
         gateAgent: boolFlag(args, "gate-agent"),
         notifyEveryMs: durationFlag(args, "notify-every"),
         waitAnswersMs: durationFlag(args, "wait-answers"),

@@ -9,14 +9,21 @@
 #   metered-usd  (the default) dollars a spawn may spend
 #   host-tokens  a host-session token allowance — not money, never a spawn cap
 # Leave it out and everything behaves as it always has. See spec §2.11.
+#
+# A stage's `budget_usd` is what ONE attempt costs. A PHASE ceiling holds every
+# attempt its stages may take — `attempts` (a stage key, default 2) x the stage
+# share — so a stage that fails once can be retried without raising money for
+# work already paid for (gh #170). That is why the phase figures below are twice
+# the stage budgets `stages/<id>/stage.yml` declares, and why `ceiling_usd` is
+# their sum rather than the sum of the stage budgets.
 version: 1
 run: "260828-example-slug"
-ceiling_usd: 25
+ceiling_usd: 50
 spent_usd: 0
 
 per_phase_usd:
-  what: 4
-  how: 6
-  plan: 4
-  build: 9
-  watch: 2
+  what: 8
+  how: 12
+  plan: 8
+  build: 18
+  watch: 4

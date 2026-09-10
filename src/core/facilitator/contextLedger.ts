@@ -23,18 +23,29 @@
  */
 import { byteLength } from "../experts/expertKnowledge.ts";
 import {
-  contextTokensFor, estimateTokensFromBytes,
+  knownContextTokensFor, estimateTokensFromBytes,
 } from "../budget/modelPrices.ts";
 import type { PromptPart, PromptPartKind } from "./prompt.ts";
 import type { TruncatedInput } from "./seedInputs.ts";
 
 /**
- * `[assumption]` — 160 KB ≈ 44k tokens, which is what the measured aparece What
- * prompt already was. It is deliberately NOT generous: it is set just above the
- * largest prompt this framework has been observed to build, so the first prompt
- * that grows past what has ever been seen stops and says so.
+ * The whole prompt's default ceiling: 400 KB, ≈ 111k tokens at the assumed 3.6
+ * bytes/token.
+ *
+ * It was 160 KB, set just above the largest prompt this framework had been
+ * observed to build at the time. **Measured 2026-09-07/09 across three real
+ * workspaces**: a `how` stage built a 202 KB prompt and was refused by it. The
+ * old number's own message said the prompt was "29% of a 200k window" while
+ * refusing it — a ceiling arguing for its own removal. Models this repo actually
+ * dispatches to carry 1M-token windows, so 160 KB was not protecting the model
+ * from anything; it was protecting a 2026-08 measurement.
+ *
+ * It is still deliberately NOT unbounded. 400 KB is above every prompt these
+ * runs have produced and well under the smallest window in `modelPrices.ts`, so
+ * the first prompt past it is still a prompt worth stopping — and the refusal
+ * still names the sections and the key that shrinks each one.
  */
-export const DEFAULT_PROMPT_MAX_BYTES = 160 * 1024;
+export const DEFAULT_PROMPT_MAX_BYTES = 400 * 1024;
 
 /** Warn at this share of the model's context window. */
 export const CONTEXT_WARN_PCT = 80;
@@ -71,9 +82,18 @@ export interface ContextLedger {
   readonly overLimit: boolean;
   readonly model: string | null;
   readonly estimatedTokens: number;
-  readonly contextTokens: number;
-  readonly contextPct: number;
-  /** True at or over `CONTEXT_WARN_PCT` of the model's window. Never a refusal. */
+  /**
+   * The model's context window in tokens, or NULL when `modelPrices.ts` has no
+   * evidence for this model's window. Null is not "200k": until 2026-09-09 the
+   * documented 200 000 default was printed as if it were this model's window,
+   * and for the 1M-window models these runs actually use it understated the
+   * window by 5x — a sentence that made a refusal look absurd. A window nobody
+   * can source is now simply not quoted.
+   */
+  readonly contextTokens: number | null;
+  /** Null exactly when `contextTokens` is. */
+  readonly contextPct: number | null;
+  /** True at or over `CONTEXT_WARN_PCT` of a KNOWN window. Never a refusal. */
   readonly contextWarns: boolean;
 }
 
@@ -153,8 +173,10 @@ export function buildLedger(input: LedgerInput): ContextLedger {
   const totalBytes = stage + inputs + expertBodies + expertKnowledge + dispatchNotes
     + projectSkills + previousAttempt;
   const estimatedTokens = estimateTokensFromBytes(totalBytes);
-  const contextTokens = contextTokensFor(input.model);
-  const contextPct = contextTokens === 0 ? 0 : (estimatedTokens / contextTokens) * 100;
+  const contextTokens = knownContextTokensFor(input.model);
+  const contextPct = contextTokens === null || contextTokens === 0
+    ? null
+    : (estimatedTokens / contextTokens) * 100;
 
   return {
     totalBytes,
@@ -177,7 +199,7 @@ export function buildLedger(input: LedgerInput): ContextLedger {
     estimatedTokens,
     contextTokens,
     contextPct,
-    contextWarns: contextPct >= CONTEXT_WARN_PCT,
+    contextWarns: contextPct !== null && contextPct >= CONTEXT_WARN_PCT,
   };
 }
 
@@ -201,8 +223,7 @@ export function renderLedger(ledger: ContextLedger, maxRows = 8): readonly strin
   const g = ledger.groups;
   const lines = [
     `context ${bytes(ledger.totalBytes)} of ${bytes(ledger.limitBytes)} `
-      + `(~${tokens(ledger.estimatedTokens)} tok, ${ledger.contextPct.toFixed(0)}% of `
-      + `${shortModel(ledger.model)}'s ~${tokens(ledger.contextTokens)} window)`,
+      + `(~${tokens(ledger.estimatedTokens)} tok${windowClause(ledger)})`,
     `  stage ${bytes(g.stage)}${g.questions === 0 ? "" : ` (questions ${bytes(g.questions)})`}`
       + ` · inputs ${bytes(g.inputs)} · experts ${bytes(g.experts)}`
       + ` (bodies ${bytes(g.expertBodies)}, knowledge ${bytes(g.expertKnowledge)})`
@@ -254,7 +275,7 @@ export function renderRefusal(ledger: ContextLedger, stageId: string): readonly 
 
 /** The stderr warning when the prompt is a large share of the model's window. */
 export function renderContextWarning(ledger: ContextLedger): readonly string[] {
-  if (!ledger.contextWarns) return [];
+  if (!ledger.contextWarns || ledger.contextTokens === null || ledger.contextPct === null) return [];
   return [
     `note: this prompt is ~${tokens(ledger.estimatedTokens)} tokens, `
     + `${ledger.contextPct.toFixed(0)}% of ${shortModel(ledger.model)}'s ~${tokens(ledger.contextTokens)}-token `
@@ -262,6 +283,19 @@ export function renderContextWarning(ledger: ContextLedger): readonly string[] {
     + "see src/core/budget/modelPrices.ts]. The sub-agent still has to fit its own reading and "
     + "its answer in what is left.",
   ];
+}
+
+/**
+ * `, 29% of sonnet[1m]'s ~1.0M window` — or nothing at all.
+ *
+ * Nothing at all is the point. `modelPrices.ts` prices no model it has never
+ * heard of, and this prints no window it has never been told; the token estimate
+ * stands on its own, which is what the reader needed anyway.
+ */
+function windowClause(ledger: ContextLedger): string {
+  if (ledger.contextTokens === null || ledger.contextPct === null) return "";
+  return `, ${ledger.contextPct.toFixed(0)}% of ${shortModel(ledger.model)}'s `
+    + `~${tokens(ledger.contextTokens)} window`;
 }
 
 function label(row: LedgerRow): string {

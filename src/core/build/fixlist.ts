@@ -34,6 +34,7 @@ import { isRecord } from "../schemas/validation.ts";
 import { describeSrcFailure, diagnoseSrcToken, parseSrcToken, srcRule } from "../text/srcToken.ts";
 import { SRC_GRAMMAR_HEADING } from "../text/srcGrammarContract.ts";
 import { canonicalSha } from "./git.ts";
+import { STAGE_TUNING_DEFAULTS } from "../schemas/stageTuning.ts";
 
 /** `04-build/fixlist/` — a sibling of `04-build/log/`, and tracked like it. */
 export const FIXLIST_DIR = "fixlist";
@@ -47,7 +48,7 @@ export const FIXLIST_DIR = "fixlist";
  * review is a full one (`approve`/`changes`) precisely because the first already
  * had its free pass.
  */
-export const MAX_FIXLIST_ROUNDS = 1;
+export const MAX_FIXLIST_ROUNDS = STAGE_TUNING_DEFAULTS.fixlistRounds;
 
 /**
  * Where a finding goes. Four, and every one of them is a DECISION somebody made

@@ -17,13 +17,13 @@ Los dos imprimen la **contabilidad del contexto**: el prompt ya armado, desglosa
 dónde salieron los bytes:
 
 ```
-context 83.7 KB of 160.0 KB (~23.8k tok, 12% of sonnet's ~200.0k window)
+context 83.7 KB of 400.0 KB (~23.8k tok, 12% of sonnet's ~200.0k window)
   stage 3.7 KB · inputs 77.3 KB · experts 2.7 KB (bodies 2.5 KB, knowledge 250 B)
   input docs/domain-design/DECISIONS-NEEDED.md 15.1 KB
   input docs/domain-design/SEED-README.md 7.6 KB
 ```
 
-Si se pasa del `prompt_max_bytes` de la etapa (160 KB por omisión), la etapa se **rechaza**
+Si se pasa del `prompt_max_bytes` de la etapa (400 KB por omisión), la etapa se **rechaza**
 — salida `2`, antes de lanzar nada — nombrando las secciones más grandes y el ajuste que
 encoge cada una. `--prompt-max-bytes <n>` lo sobreescribe para un solo run.
 

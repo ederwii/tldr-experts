@@ -18,7 +18,11 @@ depth: standard
 # given (5.8x). `tldrx cost --stories` is the command that produces the corpus a
 # recalibration would need. Changing this number moves the ceiling of every
 # workspace that never wrote a local override.
-default_budget_usd: 30
+# Since 2026-09-09 a PHASE ceiling holds `attempts` (default 2) x its stages'
+# `budget_usd`, so a stage that fails once can be retried without the operator
+# raising money for work already paid for (gh #170). This number therefore
+# doubled at the same commit: the per-STAGE dollars a run gets are unchanged.
+default_budget_usd: 60
 # gates  — who closes each stage's gate: `human` waits for `tldrx approve`,
 #           `auto` lets the facilitator close it when ALL SEVEN conditions of
 #           `evaluateAutoGate` hold (checks pass, no open question, spend within

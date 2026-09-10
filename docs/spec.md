@@ -246,15 +246,19 @@ phase: 02-how
 experts: [architect]
 stack_experts: true
 knowledge_max_bytes: 49152
-inputs_max_bytes: 98304
-prompt_max_bytes: 163840
+inputs_max_bytes: 262144
+prompt_max_bytes: 409600
 max_reads: 120
 model: sonnet
 effort: high
 reviewer: {model: opus, effort: high}
 reviewer_by_stakes: {security: {model: opus, effort: high}}
 budget_usd: 3.0
-timeout_s: 900
+timeout_s: 7200
+attempts: 2
+fixlist_rounds: 1
+reviewer_share: 0.25
+gate_signer_share: 0.25
 dry_run_allowed: true
 inputs: {required: ["01-what/intent.md", "01-what/scope.md"],
          optional: [".tldrx/map/{repo}/architecture.md", ".tldrx/memory/facts.yml"]}
@@ -284,14 +288,18 @@ row; reading twelve files is worth twelve" — which described the old formula a
 §2.6 now weighs a cross-file finding double and derives nothing from a paraphrase. Light mode's file selection is
 bounded by the expert's own `## Domain`: only files inside it are scored, read or inlined, so the run stops paying
 for files whose citations §2.6 would refuse to count.
-| `inputs_max_bytes` | int ≥0 | n (98304) | Shared ceiling on the CONTENT of every declared input, spent in declaration order and filled BEFORE the experts get anything (§5, "One budget, inputs first") |
-| `prompt_max_bytes` | int ≥0 | n (163840) | The whole prompt's ceiling. Over it the stage is **refused** (exit 2) before a sub-agent is spawned (§5, "The context ledger"). `--prompt-max-bytes <n>` overrides it for one invocation |
+| `inputs_max_bytes` | int ≥0 | n (262144) | Shared ceiling on the CONTENT of every declared input, spent in declaration order and filled BEFORE the experts get anything (§5, "One budget, inputs first") |
+| `prompt_max_bytes` | int ≥0 | n (409600) | The whole prompt's ceiling. Over it the stage is **refused** (exit 2) before a sub-agent is spawned (§5, "The context ledger"). `--prompt-max-bytes <n>` overrides it for one invocation |
 | `max_reads` | int ≥0 | n (120 · build 200 · watch 60) | How many `Read`/`Glob`/`Grep` calls the sub-agent may complete before it is stopped (§5, "The read cap"). `--max-reads <n>` overrides it for one invocation |
 | `preflight` | str[] | n | What the pre-start check said about the model and the ceiling this bundle freezes (§2.6.1, #96/#98). Written by `expert train --prepare` **only when there is a warning**, so a bundle nobody had an alarm for is byte-identical to the one that command has always written |
 | `effort` | `low\|medium\|high\|xhigh\|max` | n (unset) | Passed to the sub-agent as `--effort`. **Unset ⇒ the flag is not passed at all** and the CLI uses its own default |
 | `reviewer` / `reviewer_by_stakes.<stakes>` | `{model?, effort?}` | n (absent) | The REVIEWER role's own model and effort, for a stage that spawns more than one role (§5). Both optional, both resolved FIELD BY FIELD, and absent ⇒ the stage's own `model:`/`effort:` — byte-for-byte the reviewer every Build story got before these keys existed. `reviewer_by_stakes` is keyed on a story's `stakes:` (§2.13); a key outside that enum is **refused at load**, and an `effort` outside the five levels likewise. Precedence: `--model`/`--effort` > `reviewer_by_stakes[<the story's stakes>]` > `reviewer` > the stage's own |
 | `budget_usd` | number >0 | y | Stage ceiling and the sub-agent's `--max-budget-usd` share |
-| `timeout_s` / `dry_run_allowed` | int >0 / bool | n (900 / `true`) | Wall clock for sub-agent and `cmd` checks `[assumption]`; `dry_run_allowed: false` refuses `--dry-run` on this stage |
+| `timeout_s` / `dry_run_allowed` | int >0 / bool | n (7200 / `true`) | Wall clock for **ONE sub-agent turn** and for `cmd` checks `[assumption]` — never the stage as a whole and never the run: a Build stage that dispatches six stories gives each spawn its own `timeout_s`. Raised from 900 on 2026-09-09 against a week of unattended runs on three workspaces, where Opus turns on real repositories ran 15-50 minutes and the old clock killed a `how` turn and two Build developer turns; `dry_run_allowed: false` refuses `--dry-run` on this stage |
+| `attempts` | int 1..5 | n (2) | Developer attempts one unit of this stage's work gets before it blocks. **The phase ceiling is sized for this many** (§2.11, `planBudget`), so raising it raises what the phase holds rather than what one attempt may spend. Read by the executor, the `next` brake, `warn_at_pct`, `story reopen` and the dashboard's "attempt N of M". **Known gap:** `budget show` and the `budget-gate` hook still reserve against the shipped 2 — neither may open a `stage.yml` (a page render; a PreToolUse hook on a 50 ms budget with no stage spec in hand). For `attempts: 3` that under-reserves, which only refuses less often; for `attempts: 1` it OVER-reserves and can refuse a command the real arithmetic would allow. Filed as #214 (follow-up to #170) |
+| `fixlist_rounds` | int 0..3 | n (1) | Fix-list rounds one story gets. A `fixlist` verdict spends no attempt, so an unbounded supply is a story that never has to settle |
+| `reviewer_share` | number 0..1 | n (0.25) | The reviewer's share of a story's price (§5, "The Build ceilings"). Also the divisor the developer's per-attempt ceiling is derived with |
+| `gate_signer_share` | number 0..1 | n (0.25) | The gate signer's share of the stage ceiling, for a stage whose `gates_policy` is `agent` |
 | `inputs.required` / `.optional` | path[] | y / n | **The only files the sub-agent gets**; `{repo}` expands per repo. A declared path that resolves to NOTHING is NAMED — one `## Inputs` entry under `### Declared, but not on disk` with its own `[src: absent:<path>]` token, and one stdout line — never silently dropped (gh #131) |
 | `inputs.seed` | bool | n (`false`) | Also give this stage **the run's seed documents**, whatever `run new --seed` recorded for it in `run.yml` (§6.1) `[assumption]` |
 | `outputs[].path` / `.sections` | rel path / str[] | y | File written; H2 headings that must exist and be non-empty |
@@ -322,7 +330,7 @@ same wasted attempt) and never on `--commit`, which settles a turn that already 
 prints one operator line: `· precondition: docker compose ps → exit 0 (1.2s)`. A stage declaring none emits neither.
 
 **Its own clock (issue #20).** A precondition is killed after `timeout_s` seconds — its own if it declares one,
-otherwise **60**. It never inherits the stage's `timeout_s`, which ships at 900 and reaches 1800 on Build: a single hung
+otherwise **60**. It never inherits the stage's `timeout_s`, which ships at 7200: a single hung
 `docker info` could then hold a run for half an hour, which is the exact waste this feature exists to prevent, moved
 from the attempt to the guard in front of it. A timeout is a red precondition like any other — exit `2`, nothing spent —
 and its message names the precondition, its own timeout, and the knob that changes it.
@@ -1484,7 +1492,7 @@ phases: [{id: 01-what, ceiling_usd: 4.0, spent_usd: 1.14}, {id: 02-how, ceiling_
 |---|---|---|---|
 | `run` / `ceiling_usd` | run id / number >0 | y | Owning run; hard run ceiling |
 | `per_agent_max_usd` | number >0 | y | Passed as `--max-budget-usd` per sub-agent (Appendix A) |
-| `warn_at_pct` | int 1–99 | n (80) | Emits `budget.warned` once per phase `[assumption]` |
+| `warn_at_pct` | int 1–99 | n (80) | Emits `budget.warned` once per phase `[assumption]`. Measured against **one attempt's share** of the scope's ceiling — `ceiling ÷ attempts` (§2.3), not the ceiling — so the warning fires at the same real dollars it did before a phase started holding every attempt. Against the raw ceiling it would need roughly twice the spend on a run that never retries, i.e. arrive after the money it was warning about had gone. The REFUSAL is unaffected: `on_exceed` still answers for the whole phase, because the phase may spend all of it |
 | `on_exceed` | `block\|warn` | y | `block` ⇒ the budget-gate hook denies the spawn |
 | `economy` | `metered-usd\|host-tokens` | n (`metered-usd`) | **What the numbers here are denominated in.** Run level; a phase may override it |
 | `on_host_tokens_exceed` | `warn\|block` | n (`warn`) | What crossing a HOST-TOKEN ceiling does. `block` is the explicit opt-in |
@@ -1495,7 +1503,7 @@ phases: [{id: 01-what, ceiling_usd: 4.0, spent_usd: 1.14}, {id: 02-how, ceiling_
 | `on_grant_exceed` | `warn\|block` | n (`warn`) | What WRITING a ceiling above the grant does. Never `on_exceed` |
 | `unmetered_tasks` | number ≥0 | n (`0`) | **Additive.** How many of this run's task rows recorded `metered: false` — the in-session turns nothing here metered. `spent_usd` above is unchanged: it is still the sum of what WAS measured, and this says how much of the work that sum cannot see, so no reader has to open `run.yml` and count rows. Rolled up from `run.yml` on every save; emitted only when `> 0`, so a fully metered run and every budget.yml written before the key are byte-identical to what they were. Measured across 23 runs on three real workspaces: 45% of 845 task rows are these, and two runs rendered `$0.00 spent` against $3,000 and $200 ceilings after 30 and 9 stories because nothing in this file said so |
 | `spent_basis` | `lower-bound\|complete` | n (`complete`) | **Additive**, and it travels with `unmetered_tasks`. `lower-bound` iff `unmetered_tasks > 0`. Derived, and written anyway: the derivation is one comparison, and the defect being fixed is that six readers each inferred it and three inferred it as "the number is the total". A file that states its own basis cannot be read two ways. A value this reader does not understand is REFUSED, never defaulted to `complete` — the same rule `economy` follows, for the same reason |
-| `phases[].{id,ceiling_usd,spent_usd}` | slug / number ≥0 | y | Per-phase ceiling and rolled-up actual |
+| `phases[].{id,ceiling_usd,spent_usd}` | slug / number ≥0 | y | Per-phase ceiling and rolled-up actual. **A phase ceiling holds every attempt its stages may take**: `run new` sizes it at `attempts` (§2.3, default 2) × the stage share, while `run.yml`'s `stages[].budget_usd` stays what ONE attempt costs — the figure the brake is checked against. Before 2026-09-09 the two were the same number, so the FIRST retry of a stage that had already spent anything was refused by arithmetic rather than by policy: measured on gh #170, a `what` stage that died with $0.29 spent left $18.91 of a $19.20 phase and `next` refused the retry against a $19.20 estimate. The shipped `default_budget_usd` figures doubled at the same commit, so the per-stage dollars an existing workspace sees are unchanged |
 | `phases[].economy` | `metered-usd\|host-tokens` | n (inherit) | This phase's own economy |
 | `phases[].ceiling_host_tokens` | number ≥0 | n | This phase's host-token allowance, read only under `economy: host-tokens` |
 | `phases[].authorized_usd` | number >0 | n | This phase's OWN authorization, cited by the run-level `authorized_by`. Absent means the run's grant governs it |
@@ -2662,7 +2670,7 @@ to settle — while 70,923 B of unrequested expert knowledge went in untouched. 
 priority order:
 
 1. the **declared inputs** are filled first, in declaration order (required, then present optional, then the run's
-   seed), out of `inputs_max_bytes` (§2.3, default 98304). `seed-index.md` is exempt.
+   seed), out of `inputs_max_bytes` (§2.3, default 262144). `seed-index.md` is exempt.
 2. the **experts** then share `knowledge_max_bytes` (§2.3, default 49152) between them, split by rank and never per
    expert, with whatever one does not spend carried forward to the next.
 
@@ -2700,11 +2708,15 @@ declared input, each expert's body and knowledge, the dispatch notes, the projec
 project-skills row is `project_skills_bytes`, each reading `0 B` when that section was not emitted). The rows must SUM
 to `total_bytes`: a section counted in the total and named in no row makes the record unaddable, which is why
 `project_skills_bytes` is additive here rather than folded into another group.
-`prompt_max_bytes` (§2.3, default 163840) is a **refusal**: over it `next` exits `2` before a
+`prompt_max_bytes` (§2.3, default 409600) is a **refusal**: over it `next` exits `2` before a
 sub-agent is spawned, names the biggest sections, and prints the key or command that shrinks each one — the same
 shape as the §2.11 money gate. The model's context window is only ever a **stderr warning** at 80%, never a refusal,
 because both the window and the bytes-per-token ratio are `[assumption]` (`src/core/budget/modelPrices.ts`) and
-refusing on two stacked assumptions blocks work the framework could have done.
+refusing on two stacked assumptions blocks work the framework could have done. **A window the price table cannot
+source is not quoted at all** — the ledger line prints the token estimate and stops, with no percentage and no window
+figure. Until 2026-09-09 an unknown model fell through to the documented 200 000-token default and the line stated it
+as if it were that model's own window; on the 1M-window models these runs use it understated the window by 5x, and
+it did so inside a refusal, which is how a ceiling ends up arguing against itself.
 
 **The read cap.** `--max-budget-usd` STOPS a sub-agent after the turn it is already in (measured: $5.15 against a
 $1.50 ceiling); `--effort` changes what a turn costs but not how many there are. Neither bounds EXPLORATION, and the

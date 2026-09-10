@@ -457,6 +457,23 @@ describe("the build executor picks a reopened story back up", () => {
     expect(story(ws, "S1")).toContain("status: done");
   }, 60_000);
 
+  /**
+   * `--for-fix`'s closing sentence names the stage's `attempts:`, not the
+   * constant. It said "attempt 1 of 2" to a workspace that had written
+   * `attempts: 3` — a sentence about how many turns are left, wrong about the
+   * only number in it.
+   */
+  test("`--for-fix` says `of 3` on a stage that declares `attempts: 3`", async () => {
+    const ws = workspace({ ...ONE, attempts: 3 });
+    process.env.FAKE_BUILD_COST = "0";
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["approve"] });
+    await next(ws);
+    expect(story(ws, "S1")).toContain("status: done");
+
+    const said = reopen(ws, "S1", WHY, { forFix: true }).lines.join("\n");
+    expect(said).toContain("so the fix runs as attempt 1 of 3");
+  }, 60_000);
+
   test("headless: it runs again, as attempt 1, and can finish", async () => {
     const ws = workspace(ONE);
     const promptDir = join(ws.root, "prompts");

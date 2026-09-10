@@ -51,6 +51,7 @@ import {
   DEFAULT_ECONOMY, DEFAULT_ON_GRANT_EXCEED, DEFAULT_ON_HOST_TOKENS_EXCEED,
 } from "../budget/RunBudget.ts";
 import { MAX_ATTEMPTS } from "../budget/remainingWork.ts";
+import { buildStageDefaults } from "../run/workflowPreset.ts";
 import { spendBasisOf } from "../budget/spendBasis.ts";
 import { turnTokens } from "../budget/turnTokens.ts";
 import { hasStarted, resolveDependencies, type DependencyInput, type ResolvedRun } from "../run/dependencies.ts";
@@ -749,6 +750,20 @@ export interface RunModel {
   /** `"<phase> / <stage>"`, or null when run.yml records no cursor. */
   readonly cursor: string | null;
   /**
+   * Attempts a story of THIS run's Build stage gets before it blocks — its
+   * `stage.yml` `attempts:`, resolved through `buildStageDefaults` (ADDITIVE, so
+   * `DASHBOARD_MODEL_VERSION` does not move: §7's rule is that additions do not
+   * bump it).
+   *
+   * Per RUN rather than per workspace because the number is per STAGE and a
+   * workspace may hold runs on different scopes. The page said "attempt 2 of 2"
+   * for every story of every run, off the global constant, which was right until
+   * `attempts:` existed and is a plain lie the moment one workspace writes it.
+   * Travels as DATA for the same mechanical reason `maxLevel` does: the `dash*`
+   * functions are serialised into the page and run there closure-free.
+   */
+  readonly maxAttempts: number;
+  /**
    * METERED dollars only, and a LOWER BOUND whenever `unmeteredTasks > 0`.
    *
    * Read it with the two fields below or not at all: a host-attended run whose
@@ -994,8 +1009,10 @@ export interface DashboardModel {
   /** Highest competency level, so the renderer never has to know the constant. */
   readonly maxLevel: number;
   /**
-   * Attempts a Build story gets before it blocks (`MAX_ATTEMPTS`), so the
-   * renderer never has to know the constant either.
+   * The WORKSPACE default — `STAGE_TUNING_DEFAULTS.attempts` — kept for a reader
+   * that has no run in hand. Anything printing "attempt N of M" against a story
+   * must use that story's `RunModel.maxAttempts`, which answers for the stage
+   * that dispatched it.
    *
    * It travels as DATA for a mechanical reason, not a stylistic one: the `dash*`
    * functions are serialised into the page by `clientRenderer()` and run there
@@ -1198,6 +1215,7 @@ export function toRunModel(
     id: loaded.id,
     title: doc.title,
     scope: doc.scope,
+    maxAttempts: buildStageDefaults(loaded.root, doc.scope).attempts,
     workflow: doc.workflow,
     repos: doc.repos,
     status: doc.status,

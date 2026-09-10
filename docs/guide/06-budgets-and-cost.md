@@ -35,9 +35,9 @@ They act at different moments, and only two of them act before the money.
 ### Before the prompt is built
 
 `stage.yml` says how many bytes each part may have. The declared inputs are filled first out
-of `inputs_max_bytes` (96 KB); the loaded experts then share `knowledge_max_bytes` (48 KB)
+of `inputs_max_bytes` (256 KB); the loaded experts then share `knowledge_max_bytes` (48 KB)
 between them, split by relevance rank, never one budget each. Over `prompt_max_bytes`
-(160 KB) the stage is **refused** — exit `2`, before anything is spawned — naming the biggest
+(400 KB) the stage is **refused** — exit `2`, before anything is spawned — naming the biggest
 sections and the key or command that shrinks each. `--prompt-max-bytes <n>` overrides it for
 one run.
 
@@ -47,7 +47,7 @@ one run.
 pay for is visible before you pay for it:
 
 ```
-context 83.7 KB of 160.0 KB (~23.8k tok, 12% of sonnet's ~200.0k window)
+context 83.7 KB of 400.0 KB (~23.8k tok, 12% of sonnet's ~200.0k window)
   stage 3.7 KB · inputs 77.3 KB · experts 2.7 KB (bodies 2.5 KB, knowledge 250 B)
   input docs/domain-design/DECISIONS-NEEDED.md 15.1 KB
   input docs/domain-design/SEED-README.md 7.6 KB

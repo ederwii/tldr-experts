@@ -191,7 +191,7 @@ Each prints a line, green or red:
 
 Each gets **60 seconds**, not the stage's `timeout_s` — add `timeout_s: <n>` to one that
 legitimately needs longer. A precondition is a liveness question; letting a hung `docker info`
-borrow a Build stage's 1800 s clock is the half-hour of waste the feature exists to prevent.
+borrow a Build stage's two-hour clock is exactly the waste the feature exists to prevent.
 
 A red one stops there, exit `2`, and nothing has been spent:
 

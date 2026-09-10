@@ -67,7 +67,7 @@ import { nearbyPathsFor } from "../experts/domainRank.ts";
 import { readStackPacks, renderProjectSkills, skillsFor } from "../experts/stackPacks.ts";
 import { agentProvider, describeSpawn, providerBudgetAdvisory, spawnAgent } from "./spawnAgent.ts";
 import {
-  GATE_SIGNER_ROLE, GATE_SIGNER_SHARE, GATE_SIGNER_TOOLS,
+  GATE_SIGNER_ROLE, GATE_SIGNER_TOOLS,
   gateSignerSkeleton, renderGateSignerPrompt,
 } from "./gateSigner.ts";
 import { countCitations, countDeclaredTouches } from "../run/evidenceScope.ts";
@@ -500,7 +500,7 @@ async function runStage(
   const ctx: PathContext = { root: options.root, runDir: store.runDir };
 
   // --- budget gate (spec §5, §2.11) ---------------------------------------
-  const refused = budgetRefusal(store, options, phaseId, stageId, notes);
+  const refused = budgetRefusal(store, options, phaseId, stageId, spec, notes);
   if (refused !== null) return refused;
 
   // --- required inputs (spec §5: exit 1) ----------------------------------
@@ -962,6 +962,7 @@ function budgetRefusal(
   options: NextOptions,
   phaseId: string,
   stageId: string,
+  spec: StageSpec,
   notes: string[],
 ): NextOutcome | null {
   const stage = requireStage(store, phaseId, stageId);
@@ -978,7 +979,7 @@ function budgetRefusal(
   // stage with a plan on disk this is the sum of the caps the executor would
   // actually hand out for the stories that are left; everywhere else it is
   // `stage.budget_usd`, exactly as it always was (design §E.2).
-  const work = stageRemainingWork(store, options, phaseId, stage);
+  const work = stageRemainingWork(store, options, phaseId, stage, spec);
   const estimate = work.usd;
   // An `attended_by: host` run spawns nothing, so the dollars this brake would
   // refuse are spend that provably will not happen (issue #22, owner decision
@@ -1031,7 +1032,7 @@ function budgetRefusal(
       `See the whole picture first: \`tldrx budget show --run ${store.runId}\`.`,
     ]);
   }
-  warnOnce(store, options, phaseId, stageId, estimate, phaseRemaining, notes);
+  warnOnce(store, options, phaseId, stageId, estimate, phaseRemaining, spec.tuning.attempts, notes);
   return null;
 }
 
@@ -1047,6 +1048,7 @@ function stageRemainingWork(
   options: NextOptions,
   phaseId: string,
   stage: RunStage,
+  spec: StageSpec,
 ): RemainingWork {
   return remainingWork({
     runDir: store.runDir,
@@ -1059,6 +1061,13 @@ function stageRemainingWork(
     // Attended ⇒ the host pays the developer turns, so they are not money this
     // brake is protecting (#22 (c)).
     attended: isAttendedByHost(store.run),
+    // The stage's own calibration, so the brake and the executor divide the same
+    // price the same way. `budgetView.ts` and the `budget-gate` hook still ask
+    // with the defaults: they are read paths on a 50 ms budget with no stage spec
+    // in hand, and the difference can only make them QUOTE a larger number — the
+    // safe direction, and the one `remainingWork`'s clamp already guarantees.
+    attempts: spec.tuning.attempts,
+    reviewerShare: spec.tuning.reviewerShare,
   });
 }
 
@@ -1095,7 +1104,7 @@ async function runExecutor(
   // time. Measured on the in-session fixture: cycle 2 refused with $7.60 of $8.00.
   const started = requireStage(store, phaseId, stageId).status === "running";
   if (options.mode !== "commit" && !started) {
-    const refused = budgetRefusal(store, options, phaseId, stageId, notes);
+    const refused = budgetRefusal(store, options, phaseId, stageId, spec, notes);
     if (refused !== null) return refused;
   }
   if (options.mode !== "commit") {
@@ -2529,7 +2538,9 @@ async function signGate(
   const gate = `${phaseId}/${stageId}`;
   const model = stageModel(options, stage, spec);
   const effort = stageEffort(options, spec);
-  const cap = agentCap(options, store, stage, GATE_SIGNER_SHARE);
+  // The stage's own `gate_signer_share:` (`schemas/stageTuning.ts`), which is
+  // `GATE_SIGNER_SHARE` for every stage that does not write the key.
+  const cap = agentCap(options, store, stage, spec.tuning.gateSignerShare);
   const ctx: PathContext = { root: options.root, runDir: store.runDir };
   const version = frameworkVersionSync();
   const taskId = nextTaskId(store, phaseId, stageId);
@@ -2784,13 +2795,21 @@ function warnOnce(
   stageId: string,
   estimate: number,
   phaseRemaining: number,
+  attempts: number,
   notes: string[],
 ): void {
   const phase = store.budget.phases.find((p) => p.id === phaseId);
   if (phase === undefined || phase.ceiling_usd <= 0) return;
   // Actuals, not projections: a phase whose ceiling equals the sum of its own
   // stage budgets would otherwise warn on the very first stage, every time.
-  const pct = (phase.spent_usd / phase.ceiling_usd) * 100;
+  //
+  // And against ONE ATTEMPT'S SHARE of the ceiling, not the ceiling — the same
+  // basis `wouldExceed` measures `warns` on, and for the same reason: since gh
+  // #170 the phase HOLDS `attempts` of its stage, so 80% of the raw ceiling would
+  // need roughly twice the real spend on a run that never retries, and the
+  // warning would arrive after the money it was warning about had gone.
+  const basis = phase.ceiling_usd / Math.max(1, attempts);
+  const pct = (phase.spent_usd / basis) * 100;
   if (pct < store.budget.warn_at_pct) return;
   if (alreadyWarned(store, phaseId)) return;
   // What this phase's own turns put in the meter, and what they did not. The
@@ -2812,8 +2831,8 @@ function warnOnce(
     spent_basis: spentBasis(tally.unmetered),
   }));
   notes.push(
-    `budget: phase ${phaseId} is at ${String(Math.round(pct))}% of its $${phase.ceiling_usd.toFixed(2)} ceiling ` +
-      `after this stage ($${phaseRemaining.toFixed(2)} left before it)` +
+    `budget: phase ${phaseId} is at ${String(Math.round(pct))}% of one attempt's $${basis.toFixed(2)} share ` +
+      `of its $${phase.ceiling_usd.toFixed(2)} ceiling ($${phaseRemaining.toFixed(2)} left before this stage)` +
       (tally.unmetered === 0
         ? ""
         : ` — measured against ${spentFigure(tally)}, so the real share is higher`),

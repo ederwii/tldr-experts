@@ -32,7 +32,7 @@
  * branch when it is gone. "The worktree is kept" would be false for the blocked
  * case, which is the case this verb exists for.
  *
- * **The attempt counter resets to 1 of MAX_ATTEMPTS**, and the mechanism is the
+ * **The attempt counter resets to 1 of the stage's `attempts:`**, and the mechanism is the
  * event, not a counter written anywhere: `readReviewLedger` treats
  * `story.reopened` as a reset boundary, so the verdicts before it stop counting
  * against the reopened run of attempts. Nothing is erased to make that true —
@@ -51,7 +51,8 @@ import { ambiguousRunLines } from "./openRuns.ts";
 import { BUILD_PHASE, buildProgress, PLAN_DIR } from "./buildProgress.ts";
 import { IMPLICIT_PLAN_FILE, updateImplicitPlan } from "../build/implicitPlan.ts";
 import { StoryWriteError, updateStoryFront } from "../build/storyFile.ts";
-import { MAX_ATTEMPTS, readReviewLedger } from "../facilitator/executors/build.ts";
+import { readReviewLedger } from "../facilitator/executors/build.ts";
+import { buildStageDefaults } from "./workflowPreset.ts";
 import type { RunStage } from "./RunFile.ts";
 import { validateEvent, type TldrxEvent } from "../events/Event.ts";
 
@@ -257,6 +258,9 @@ export function reopenStory(options: ReopenOptions): ReopenOutcome {
     `  ${nextStep(store.runId, stage)}`,
   ];
 
+  // THIS run's Build stage, not the constant: a workspace that wrote
+  // `attempts: 3` must not be told its fix round is "1 of 2".
+  const attempts = buildStageDefaults(options.root, store.run.scope).attempts;
   if (forFix) {
     return {
       code: EXIT_OK,
@@ -264,7 +268,7 @@ export function reopenStory(options: ReopenOptions): ReopenOutcome {
         `reopened ${id} in ${store.runId} — \`${row.status}\` → \`${REOPENED_TO}\` (${row.wave}), as a fix round`,
         `  defect: ${options.note}`,
         "  no attempt was consumed: the verdict that closed this story stops counting against it, "
-          + `so the fix runs as attempt 1 of ${String(MAX_ATTEMPTS)}`,
+          + `so the fix runs as attempt 1 of ${String(attempts)}`,
         "  the fix must pass the same dod and the same reviewer the story passed — a fix round ends "
           + "the way the story did, or it does not end",
         "  the story's acceptance criteria are unchanged, and this verb did not touch them: it reopens "

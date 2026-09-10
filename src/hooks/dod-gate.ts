@@ -22,9 +22,8 @@ import {
   dodGateDeny, dodGateMissingBlockDeny, dodGateInternalErrorDeny, dodGateRefusedCommandDeny,
 } from "./lib/messages.ts";
 import { DodCommandRefused, readStory, runDodCommand } from "./lib/story.ts";
-
-/** Spec §2.3: `timeout_s` defaults to 900. */
-const DEFAULT_TIMEOUT_S = 900;
+import { loadRunView } from "./lib/runFile.ts";
+import { buildStageDefaults, DEFAULT_TIMEOUT_S } from "../core/run/workflowPreset.ts";
 
 let storyId = "?";
 try {
@@ -62,7 +61,20 @@ try {
   if (!existsSync(cwd)) {
     deny(dodGateInternalErrorDeny(storyId, `repo \`${repoName}\` resolves to ${cwd}, which does not exist`));
   }
-  const timeoutMs = (story.timeoutS ?? DEFAULT_TIMEOUT_S) * 1000;
+  // The clock this re-run gets, in the same order the facilitator resolves it: the
+  // STORY's own `timeout_s:` if it declared one, else the BUILD STAGE's
+  // (`buildStageDefaults`), else the shipped default. It used to be a private
+  // `const DEFAULT_TIMEOUT_S = 900` that never opened a stage file at all, so a
+  // workspace that had deliberately given its Build stage a different clock got
+  // 900 s here and something else in the turn — and this hook re-runs the very
+  // commands that turn ran. Spec §2.3 and §7 (the DoD-gate row) both say
+  // "`stage.yml timeout_s`"; this is that sentence, finally true.
+  const view = loadRunView(location.runDir);
+  const stageTimeoutS = view === null
+    ? DEFAULT_TIMEOUT_S
+    : buildStageDefaults(location.root, view.scope).timeoutS;
+  const timeoutS = story.timeoutS ?? stageTimeoutS;
+  const timeoutMs = timeoutS * 1000;
 
   for (const command of story.dodCommands) {
     let outcome;
@@ -79,7 +91,7 @@ try {
     }
     if (outcome.timedOut) {
       deny(dodGateDeny(storyId, command, repoName === "" ? "(root)" : repoName, outcome.exitCode,
-        `timed out after ${story.timeoutS ?? DEFAULT_TIMEOUT_S}s. ${outcome.tail}`));
+        `timed out after ${String(timeoutS)}s. ${outcome.tail}`));
     }
     if (outcome.exitCode !== 0) {
       deny(dodGateDeny(storyId, command, repoName === "" ? "(root)" : repoName, outcome.exitCode, outcome.tail));

@@ -22,13 +22,31 @@ import {
   EFFORT_LEVELS, isEffortLevel, MAX_PRECONDITIONS, PRECONDITION_TIMEOUT_S, type EffortLevel,
 } from "../schemas/stage.ts";
 import { allowlistIssue } from "../schemas/commandAllowlist.ts";
+import { readStageTuning, STAGE_TUNING_DEFAULTS } from "../schemas/stageTuning.ts";
 import { loadWorkspace } from "../../hooks/lib/workspace.ts";
 
 /** The five phase folders of spec §1, in order. A numeric `phase:` indexes this. */
 export const PHASE_IDS = ["01-what", "02-how", "03-plan", "04-build", "05-watch"] as const;
 
 const PHASE_SEGMENT_RE = /^0[1-5]-[a-z]+$/;
-export const DEFAULT_TIMEOUT_S = 900;
+/**
+ * Seconds ONE sub-agent turn gets — never the run, never the stage as a whole.
+ * A Build stage that dispatches six stories gets this per story spawn; a `next`
+ * that re-prepares gets a fresh one each time.
+ *
+ * **Measured 2026-09-07/09, three real workspaces, a week of unattended runs.**
+ * The old 900 s killed a `how` turn (gh #207) and two Build developer turns in
+ * one day. Opus turns on real repositories run 15-50 minutes: a quarter of an
+ * hour is under the MEDIAN of the work this framework dispatches, so the timeout
+ * was not a safety net, it was the most common way a turn ended. Two hours is
+ * set above the longest turn observed, so the next turn to hit it is genuinely
+ * stuck rather than merely large.
+ *
+ * It is a per-turn bound and nothing else guards the wall clock: `run auto`'s
+ * loop is bounded by money (`--max-usd`, the phase ceilings) and by the operator,
+ * not by this number.
+ */
+export const DEFAULT_TIMEOUT_S = 7200;
 /** Spec §2.3 validation: "≤20 inputs". Counted where inputs are DECLARED and where they are INLINED. */
 export const MAX_STAGE_INPUTS = 20;
 
@@ -68,6 +86,14 @@ export interface PlannedStage {
   readonly effort: EffortLevel | null;
   readonly experts: readonly string[];
   readonly budget_usd: number;
+  /**
+   * `attempts:` — developer attempts one unit of this stage's work gets before
+   * it blocks (§2.3). Absent ⇒ `STAGE_TUNING_DEFAULTS.attempts`. Read here
+   * because the money split needs it: a phase that can be asked for two attempts
+   * and was sized for one refuses its own retry (gh #170).
+   */
+  readonly attempts: number;
+  /** Seconds ONE sub-agent turn gets. Never the stage, never the run. */
   readonly timeout_s: number;
   readonly inputs: readonly string[];
   readonly outputs: readonly string[];
@@ -106,6 +132,41 @@ export interface WorkflowPreset {
    */
   readonly gates: GatesPolicy;
   readonly source: string;
+}
+
+/**
+ * The BUILD stage's resolved `attempts` and `timeout_s` for one scope — the
+ * answer to "how many turns does a story of this run get, and how long does each
+ * one have", asked by everything that is not the facilitator.
+ *
+ * ONE derivation, three readers with nothing else in common: the DoD-gate hook
+ * (which re-runs a story's commands and must kill them on the same clock the turn
+ * had), the dashboard model (which prints "attempt N of M" per story), and
+ * `story reopen` (which says which attempt the fix runs as). Each of them used to
+ * carry its own copy of the constant, which is how the hook ended up at 900 s
+ * while every shipped stage said 7200.
+ *
+ * **TOLERANT — it never throws.** All three callers are places a throw would be a
+ * disaster: a PreToolUse hook that fails closed, a page render, and a CLI verb's
+ * final sentence. A workflow that cannot be read, a scope with no Build stage, a
+ * `stage.yml` that is not there: each gives the SHIPPED defaults, which is what
+ * every one of these readers hard-coded before this function existed.
+ */
+export function buildStageDefaults(root: string, scope: string): {
+  readonly attempts: number;
+  readonly timeoutS: number;
+} {
+  const fallback = { attempts: STAGE_TUNING_DEFAULTS.attempts, timeoutS: DEFAULT_TIMEOUT_S };
+  try {
+    const preset = loadWorkflowPreset(root, scope);
+    // The BUILD phase's stage, by phase rather than by the id `build`: a scope may
+    // name its stage anything, and `phase:` is what spec §1 fixes.
+    const stage = preset.stages.find((s) => s.phase === PHASE_IDS[3]);
+    if (stage === undefined) return fallback;
+    return { attempts: stage.attempts, timeoutS: stage.timeout_s };
+  } catch {
+    return fallback;
+  }
 }
 
 /** A workspace's own copy wins over the framework's shipped default. */
@@ -235,6 +296,10 @@ function loadStage(
     effort: normaliseEffort(overrides.effort ?? doc.effort, path),
     experts,
     budget_usd: budget,
+    // The stage's own `attempts:`, needed HERE rather than only in the
+    // facilitator's overlay because `run new`'s phase split has to size a phase
+    // for the attempts its stages may take (`newRun.planBudget`).
+    attempts: readStageTuning(doc).attempts,
     timeout_s: typeof doc.timeout_s === "number" ? doc.timeout_s : DEFAULT_TIMEOUT_S,
     inputs: normaliseInputs(doc.inputs),
     outputs,

@@ -195,6 +195,14 @@ await runHook("budget-gate", async () => {
     return;
   }
 
+  // `remainingWork` and `wouldExceed` are asked with the SHIPPED `attempts`
+  // (2), not this stage's: neither of these is a place that may open a
+  // `stage.yml` — one is a page render, one is a PreToolUse hook on a 50 ms
+  // budget with no stage spec in hand. Two consequences, both stated rather than
+  // discovered: for `attempts: 3` the reserve quoted here is an UNDER-estimate,
+  // which only makes it refuse less often; for `attempts: 1` it is an
+  // OVER-estimate, and it can refuse a command the real arithmetic would allow.
+  // That is a known gap, filed as #214 (follow-up to #170), not an accepted design.
   const decision = wouldExceed(budget, view.cursor.phase, estimate);
   if (!decision.blocked) return;
 

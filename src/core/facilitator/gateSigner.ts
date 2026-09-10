@@ -39,6 +39,7 @@
  */
 import type { EvidenceTemplateInput } from "../text/evidence.ts";
 import { EVIDENCE_SECTIONS, GUIDANCE, renderEvidenceTemplate } from "../text/evidence.ts";
+import { STAGE_TUNING_DEFAULTS } from "../schemas/stageTuning.ts";
 
 /** `agent.spawned` / `agent.result` `role:` — the third one, beside `developer` and `reviewer`. */
 export const GATE_SIGNER_ROLE = "gate-signer";
@@ -72,7 +73,7 @@ export const GATE_SIGNER_TOOLS: readonly string[] = ["Read", "Grep", "Glob", "Ba
  * own ceiling cannot see — is the kind of invisible spend `spentFigure` exists to
  * stop.
  */
-export const GATE_SIGNER_SHARE = 0.25;
+export const GATE_SIGNER_SHARE = STAGE_TUNING_DEFAULTS.gateSignerShare;
 
 /**
  * The first words of the signer's prompt. Tests assert THIS export rather than an

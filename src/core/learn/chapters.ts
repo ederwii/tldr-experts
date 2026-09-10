@@ -47,11 +47,13 @@
  * That is why the How and What turns here write a block already `answered`,
  * carrying the fact that answered it.
  *
- * **A stage's budget is spent once.** The brake compares what the phase has LEFT
- * against the stage's WHOLE declared `budget_usd` — never against what a second
- * attempt might add — so any stage that has spent anything can no longer afford
- * itself, and is refused until `tldrx budget raise` gives it room (measured; it is
- * why chapter 5 is eight steps long and why chapter 8 has a brake to show at all).
+ * **A stage's estimate is one attempt; a phase holds `attempts` of them.** The
+ * brake compares what the phase has LEFT against the stage's WHOLE declared
+ * `budget_usd` — never against what a second attempt might add — and since
+ * 2026-09-09 the phase is sized for two of those, so a stage that failed once is
+ * retried without anybody moving money (gh #170). Chapter 8 therefore has to MOVE
+ * money out of the Watch phase to have a brake to show at all; before that fix the
+ * ordinary retry was itself the refusal, which is the trap the fix removed.
  *
  * **A host turn's cost is DECLARED, not measured.** Chapter 7 hands the feature
  * run's Watch stage to a host and commits it, and the `cost_usd` in the host's
@@ -1360,10 +1362,20 @@ const CHAPTER_8: Chapter = {
     },
     {
       narrate: [
-        "And the brake. A re-run is priced at the stage's whole declared budget, not at what a second",
-        "attempt might add — so a stage that has spent anything can no longer afford itself.",
-        "$1.89 left, $2.00 asked. A ceiling here is a refusal, not a warning, and it names the",
-        "command that would fix it.",
+        "A phase holds every attempt its stages may take — `attempts` x the stage's `budget_usd`,",
+        "which is why Watch's $2.00 stage sits inside a $4.00 phase. A stage that fails once is",
+        "therefore retried without anybody moving money; only work the phase genuinely cannot",
+        "afford is refused. So: move the money somewhere else, and watch the brake bite.",
+        "`raise` ADDS to one phase, and `--take-from` takes it out of another instead of growing",
+        "the run's total.",
+      ],
+      command: ["budget", "raise", "03-plan", "3", "--take-from", WATCH_PHASE_DIR, "--note", "moved to Plan for the tutorial"],
+    },
+    {
+      narrate: [
+        "And the brake. The Watch phase is down to $0.89 and its stage estimate is $2.00, so `next`",
+        "refuses before it spawns anything. A ceiling here is a refusal, not a warning, and it names",
+        "the command that would fix it.",
       ],
       command: ["next"],
       expectExit: [2],
@@ -1392,9 +1404,9 @@ const CHAPTER_8: Chapter = {
     // asked" while the tool prints something else is the exact lie this fix round
     // was opened for (#30 QA, 2026-09-01), so the numbers are asserted rather than
     // trusted: change a stage budget or a scripted cost and this fails loudly.
-    if (!/"remaining_usd":\s*1\.89\b/.test(events)) {
+    if (!/"remaining_usd":\s*0\.89\b/.test(events)) {
       failures.push(
-        "the `budget.blocked` event does not record $1.89 remaining, and the chapter's narration "
+        "the `budget.blocked` event does not record $0.89 remaining, and the chapter's narration "
         + "says it does — re-measure and fix the narration, or the tutorial is lying.",
       );
     }

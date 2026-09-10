@@ -51,7 +51,11 @@ reviewer_by_stakes: {}
 # recalibration would need. Changing this number moves the ceiling of every
 # workspace that never wrote a `.tldrx/stages/<id>/stage.yml` override.
 budget_usd: 9
-timeout_s: 1800
+# `timeout_s` bounds ONE developer or reviewer turn, never the stage and never
+# the run. Measured 2026-09-07/09 across three real workspaces: Opus turns on
+# real repositories run 15-50 minutes and 1800 s killed two developer turns in
+# one day. 7200 s is above the longest turn observed.
+timeout_s: 7200
 # Stories of one wave are independent by construction — `waves.yml` puts every
 # `depends_on` in an EARLIER wave (`core/plan/validatePlan.ts`, spec §5) — so the
 # serialization here was schedule, not correctness: real runs of 34-43 h wall clock

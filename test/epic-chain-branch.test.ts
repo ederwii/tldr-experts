@@ -47,6 +47,7 @@ import { EventLog } from "../src/core/events/EventLog.ts";
 import { shipRun, type ShipTransport } from "../src/core/run/ship.ts";
 import { makeBuildWorkspace, type BuildWorkspace, type BuildWorkspaceOptions } from "./fixtures/build/workspace.ts";
 import { spawnTestTimeout } from "./fixtures/machineLoad.ts";
+import { STAGE_TUNING_DEFAULTS } from "../src/core/schemas/stageTuning.ts";
 
 setDefaultTimeout(spawnTestTimeout());
 
@@ -181,7 +182,7 @@ function planWorkspace(options: BuildWorkspaceOptions): BuildWorkspace {
 function planStage(): PlannedStage {
   return {
     id: "plan", title: "Plan", phase: "03-plan",
-    model: null, effort: null, experts: [], budget_usd: 1, timeout_s: 60,
+    model: null, effort: null, experts: [], budget_usd: 1, attempts: STAGE_TUNING_DEFAULTS.attempts, timeout_s: 60,
     inputs: [], outputs: ["03-plan/waves.yml"], sections: new Map(),
     gateType: "approve", checks: [CHECK], preconditions: [],
     questionsPath: null, source: "test",

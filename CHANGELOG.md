@@ -1,9 +1,27 @@
 # Changelog
 
-
 ## 0.15.0 — unreleased
 
 ### Added
+
+- **Four Build calibrations became optional `stage.yml` keys: `attempts` (default 2),
+  `fixlist_rounds` (1), `reviewer_share` (0.25), `gate_signer_share` (0.25).** Each was a code
+  constant, and each is a calibration rather than an invariant — "two attempts" is the
+  framework's opinion about how many developer turns a story deserves before a human should
+  look at it, and a hardening wave over a legacy repo holds a different one. Until now the only
+  way to hold it was a fork. `parallel:` made exactly this move already and the argument is the
+  same. Absent ⇒ today's constant, byte for byte, which is what the golden proves; present and
+  out of range (`attempts` 1..5, `fixlist_rounds` 0..3, the two shares 0..1) is REFUSED by name
+  at `validateStage` rather than clamped, because a clamp lets an operator write a number, pay
+  for something else, and never be told which. One derivation
+  (`src/core/schemas/stageTuning.ts`): `caps.ts`, `budget/remainingWork.ts`, `gateSigner.ts` and
+  `build/fixlist.ts` keep the constants they always exported — the prose that justifies a number
+  lives with the code it governs — but each is now defined as its field there, so the default
+  cannot move in one file and not the other.
+- **`tldrx run auto --prompt-max-bytes <n>` and `--max-reads <n>` (#208).** Passed to every
+  `next` the loop makes, with the same precedence they have there: the flag beats the stage
+  file. Until now the only way to raise either for an *unattended* run was to edit
+  `.tldrx/stages/<id>/stage.yml` — a file change, in the workspace, to get past one refusal.
 
 - **`install:` is a slot the framework runs, in every fresh story worktree, before the
   developer (#209).** It has been in `templates/workspace.yml` since the beginning and no code
@@ -54,7 +72,84 @@
   reason in it, and a run with no Build phase — a docs-scope run — reads `n/a` with `why`, never
   a confident `0 of 0`.
 
+
+### Changed
+
+- **A stage's `timeout_s` now bounds a turn a real model can finish: 900 s → 7200 s
+  (#207).** It has always been a PER-TURN clock — a Build stage that dispatches six stories
+  gives each spawn its own — and 900 s was set before anyone had watched a week of unattended
+  runs. Measured 2026-09-07/09 across three real workspaces: Opus turns on real repositories
+  run 15-50 minutes, so a quarter of an hour sat under the MEDIAN of the work this framework
+  dispatches. It was not a safety net; it was the most common way a turn ended, and it killed
+  a `how` turn and two Build developer turns in a single day — each one a paid turn thrown
+  away with its output. Two hours is above the longest turn observed, so the next turn to hit
+  it is genuinely stuck rather than merely large. The shipped stage files that set the key
+  moved with it (`build` 1800, `watch` 900), and `PRECONDITION_TIMEOUT_S` is untouched at 60:
+  a precondition is a liveness question, and letting a hung `docker info` borrow a Build
+  stage's clock is exactly the waste that key exists to prevent.
+- **The context ceilings stop refusing prompts the model would have read: `prompt_max_bytes`
+  163840 → 409600, `inputs_max_bytes` 98304 → 262144.** Both were sized just above the largest
+  thing this repo had SEEN in 2026-08, which is a reasonable way to set a ceiling once and a
+  bad way to keep one. Measured on the same three workspaces: a `how` stage built a 202 KB
+  prompt and was refused by a ceiling whose own message called that prompt "29% of a 200k
+  window"; and a 169 KB `facts.yml` was sliced to 96 KB — named, as a truncation always is,
+  but naming a loss the operator cannot afford is not the same as not taking it. Neither is
+  unbounded: 400 KB is still well under the smallest window in `budget/modelPrices.ts`, so the
+  first prompt past it is still one worth stopping. `knowledge_max_bytes` is deliberately
+  unchanged at 49152 — trained knowledge is the section nobody asked for, and the one the
+  refusal tells you to cut first.
+- **The context line no longer quotes a window it cannot source.** `contextTokensFor` fell
+  back to a DOCUMENTED 200 000-token default for a model the price table has never heard of,
+  and the ledger printed that as if it were the model's own window. On the 1M-window models
+  these runs use, it understated the window by 5x — inside a refusal, which is how a ceiling
+  ends up arguing against itself. A window with no evidence behind it is now simply absent:
+  the line prints the token estimate and stops, with no percentage and no figure, the same
+  rule `priceFor` has always followed for prices. `knownContextTokensFor` is the null-returning
+  half; `contextTokensFor` is that plus the documented fallback, so there is still one table
+  and one derivation.
+- **A phase ceiling now holds every attempt its stages may take, so a retry is not refused by
+  arithmetic (#170).** `run new` sized a phase for exactly ONE attempt while the framework
+  granted two, so the first retry of a stage that had spent anything at all was refused for
+  money the run had been given. Measured: a `what` stage that died with $0.29 spent left
+  $18.91 of its $19.20 phase, and `next` refused with "phase 01-what has $18.91 left and the
+  stage estimate is $19.20" — the estimate is the whole stage, and part of it had already been
+  charged. The operator's only move was to raise money for work paid for once. `planBudget`
+  now splits the run ceiling by `attempts × budget_usd`, so the STAGE figure stays what one
+  attempt costs — the figure the brake is checked against — and the PHASE holds all of them,
+  the way `worstCaseShares` has always sized Build stories. The shipped `default_budget_usd`
+  figures and `templates/budget.yml` doubled at the same commit, so the per-stage dollars an
+  existing workspace sees are unchanged. `on_exceed` and the grant/ceiling reconciliation are
+  untouched.
+
+- **`warn_at_pct` still fires at the same real dollars.** A phase now holds every
+  attempt its stages may take, so measuring 80% against the raw ceiling would need
+  roughly twice the real spend on a run that never retries — the warning would
+  arrive after the money it was warning about had gone, which is a warning that has
+  stopped being one. `wouldExceed` measures it against **one attempt's share**
+  (`ceiling ÷ attempts`) and carries that figure as `warnBasis`. The refusal is
+  untouched: `exceeds`, `remaining` and `on_exceed` still answer for the whole
+  phase, because the phase may spend all of it. Owner decision 2026-09-09.
+- **Everything that prints "attempt N of M" reads the stage that dispatched the
+  story.** The dashboard printed it off the global constant for every story of
+  every run (`RunModel.maxAttempts` is additive, so `DASHBOARD_MODEL_VERSION` does
+  not move — §7's rule is that additions do not bump it), and `story reopen
+  --for-fix` said "attempt 1 of 2" whatever the stage declared. One resolver,
+  `buildStageDefaults`, and it is tolerant: an unreadable workflow gives the
+  shipped pair rather than throwing on a page render.
+
+
 ### Fixed
+
+- **The DoD-gate hook re-runs a story's commands on the STAGE's clock, not on a
+  private 900 s constant.** `src/hooks/dod-gate.ts` carried
+  `const DEFAULT_TIMEOUT_S = 900` with a comment citing spec §2.3, and never opened
+  a stage file — so a workspace that had deliberately given its Build stage a
+  different `timeout_s` got 900 s in the gate and something else in the turn, and
+  this hook re-runs the very commands that turn ran. Measured RED: under a stage
+  declaring `timeout_s: 2`, a `sleep 30` in a `dod` block ran to completion and the
+  gate ALLOWED — "no deny decision (exit 0)". It now resolves story `timeout_s:` →
+  the Build stage's → the shipped default, which is the order §2.3 and §7's
+  DoD-gate row have always described.
 
 - **A Build gate now says what the stage DELIVERED, on every gate policy — the counting existed
   and ran for `auto` gates alone (#210).** Measured on tldrx 0.14.2 across two real workspaces,

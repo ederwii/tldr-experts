@@ -94,7 +94,7 @@ import {
 } from "../../build/outcome.ts";
 import {
   CLAIMED_UNVERIFIED, canonicalizeResolutions, fixlistRel, fixlistRetroLines, latestFixlist, markUnverified,
-  MAX_FIXLIST_ROUNDS, openFindings, readFixlistAt, renderFixlistSection, writeFixlist,
+  openFindings, readFixlistAt, renderFixlistSection, writeFixlist,
   type FixFinding, type FixlistOnDisk,
 } from "../../build/fixlist.ts";
 import { renderBuildHandoff, type EpicSummaryRow } from "../../build/handoff.ts";
@@ -777,7 +777,7 @@ class BuildSession {
       lines: [
         ...this.lines,
         `prepared ${planned.story.id} · ${planned.story.title} — ${dir}/prompt.md ` +
-          `($${cap.toFixed(2)} ceiling, attempt ${String(story.attempt)} of ${String(MAX_ATTEMPTS)})`,
+          `($${cap.toFixed(2)} ceiling, attempt ${String(story.attempt)} of ${String(this.attempts)})`,
         `dispatch ONE sub-agent with cwd ${relative(this.ctx.root, story.worktree)}`,
         `then write {outputs, questions_asked, notes} to ${dir}/result.json and run \`tldrx next --commit\``,
       ],
@@ -865,7 +865,7 @@ class BuildSession {
       lines: [
         ...this.lines,
         `prepared the REVIEW of ${planned.story.id} · ${planned.story.title} — ${dir}/prompt.md `
-          + `(read-only, attempt ${String(story.attempt)} of ${String(MAX_ATTEMPTS)})`,
+          + `(read-only, attempt ${String(story.attempt)} of ${String(this.attempts)})`,
         `dispatch ONE read-only sub-agent with cwd ${relative(this.ctx.root, story.worktree)}`,
         `then write {verdict, summary, findings} to ${dir}/result.json `
           + "— verdict is one of approve | fixlist | changes, NOT the `sign`/`refuse` gate "
@@ -1060,7 +1060,7 @@ class BuildSession {
       await this.rereview(planned, resume);
       return;
     }
-    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+    for (let i = 0; i < this.attempts; i++) {
       await this.settleHalf(await this.buildHalf(planned));
       const outcome = this.outcomes.get(planned.story.id);
       // The developer never ran, so the story is back where it started and its
@@ -1107,7 +1107,7 @@ class BuildSession {
   /** The fan-out proper: half A concurrently, half B in the wave's listed order. */
   private async driveWaveHalves(wave: BuildWave, pending: readonly PlannedStory[]): Promise<void> {
     let queue = [...pending];
-    for (let round = 0; round < MAX_ATTEMPTS && queue.length > 0; round++) {
+    for (let round = 0; round < this.attempts && queue.length > 0; round++) {
       const halves = await this.fanOut(queue);
       // The merge order is the file's, not the finish order. Two runs of the same
       // wave must produce the same epic branch, whatever the machine was doing.
@@ -1366,7 +1366,7 @@ class BuildSession {
       return "settled";
     }
 
-    const requeue = review.verdict === "changes" && story.attempt < MAX_ATTEMPTS;
+    const requeue = review.verdict === "changes" && story.attempt < this.attempts;
     if (review.verdict === "changes") {
       await this.settle(story, requeue ? "review" : "blocked", {
         dod, commit, merged: true, carried, epicBase, verdict: "changes", review, cost,
@@ -1427,13 +1427,13 @@ class BuildSession {
   ): string {
     const id = story.planned.story.id;
     // Allocated by `narrowFixlist`, which is the only thing that may grant one.
-    const round = this.counters.fixlistRoundGranted(id) ?? MAX_FIXLIST_ROUNDS;
+    const round = this.counters.fixlistRoundGranted(id) ?? this.fixlistRounds;
     const rel = writeFixlist(this.ctx.runDir, BUILD_PHASE, {
       storyId: id,
       title: story.planned.story.title,
       round,
       attempt: story.attempt,
-      maxAttempts: MAX_ATTEMPTS,
+      maxAttempts: this.attempts,
       diff: reviewDiffCommand(epicBase, story.epicBranch, story.branch),
       commit,
       summary: review.summary,
@@ -1696,7 +1696,7 @@ class BuildSession {
     if (ledger.reopened === null) return;
     this.lines.push(
       `  · ${planned.story.id} was reopened by ${ledger.reopened.actor} (${ledger.reopened.note}) — `
-      + `the verdicts before that do not count against it, so it runs as attempt 1 of ${String(MAX_ATTEMPTS)}`,
+      + `the verdicts before that do not count against it, so it runs as attempt 1 of ${String(this.attempts)}`,
     );
   }
 
@@ -1795,7 +1795,7 @@ class BuildSession {
       worktree,
       branch,
       epicBranch,
-      attempt: Math.min(this.reviewAttempts(planned.story.id) + 1, MAX_ATTEMPTS),
+      attempt: Math.min(this.reviewAttempts(planned.story.id) + 1, this.attempts),
       previousAttempt: this.previousAttemptText(planned.story.id),
       notInWorktree: await this.unreadableTouches(planned, repoDir, branch),
       freshWorktree,
@@ -2208,6 +2208,7 @@ class BuildSession {
       dod,
       refusal,
       stackExperts: this.ctx.spec.stackExperts,
+      fixlistRounds: this.fixlistRounds,
       counters: this.counters,
       focus: this.focus,
       lines: this.lines,
@@ -3227,7 +3228,7 @@ class BuildSession {
 
   /** The ledger's runDir and the operator-line sink, for `build/reviewRound.ts`. */
   private get roundParts(): RoundParts {
-    return { runDir: this.ctx.runDir, lines: this.lines };
+    return { runDir: this.ctx.runDir, lines: this.lines, fixlistRounds: this.fixlistRounds };
   }
 
   /** The plan's prices and this stage's money, for `build/caps.ts`. */
@@ -3238,7 +3239,24 @@ class BuildSession {
       budgetUsd: this.ctx.budgetUsd,
       maxBudgetUsd: this.ctx.maxBudgetUsd,
       agentCap: this.ctx.agentCap,
+      attempts: this.attempts,
+      reviewerShare: this.ctx.spec.tuning.reviewerShare,
     };
+  }
+
+  /**
+   * Developer attempts one story of THIS stage gets — `attempts:` in its
+   * `stage.yml`, default 2 (`schemas/stageTuning.ts`). Read once, off the spec
+   * the executor was handed, so every "attempt N of M" line, every requeue and
+   * every ceiling in this file answers for the same number.
+   */
+  private get attempts(): number {
+    return this.ctx.spec.tuning.attempts;
+  }
+
+  /** `fixlist_rounds:` for this stage — a `fixlist` verdict spends no attempt. */
+  private get fixlistRounds(): number {
+    return this.ctx.spec.tuning.fixlistRounds;
   }
 
   private spent(): number {
@@ -3338,6 +3356,7 @@ class BuildSession {
       epicBranch: story.epicBranch,
       worktree: story.worktree,
       attempt: story.attempt,
+      maxAttempts: this.attempts,
       // The REVIEWER's, not the stage's: this bundle is the brief a host session
       // works from, so `pending.json` has to carry the model the framework would
       // have judged this diff with — a host reading the stage's pin here would be

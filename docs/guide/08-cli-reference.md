@@ -285,7 +285,7 @@ tldrx run estimate [<run>] [--json] [--run <id>]
 tldrx run auto     [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]
                           [--parallel <n>] [--yolo] [--gate-agent] [--ui <mode>] [--run <id>]
                           [--notify-every <duration>] [--wait-answers <duration>]
-                          [--wait-gates <duration>]
+                          [--wait-gates <duration>] [--prompt-max-bytes <n>] [--max-reads <n>]
 tldrx run gates set <stage>:<human|auto|agent> --note <text> [--run <id>]
 tldrx run unlock   [<run>] [--force] [--run <id>]
 tldrx run cancel   [<run>] --note <text> [--force] [--run <id>]
@@ -320,6 +320,11 @@ to a host session; `tldrx run attend --none` hands it back. It runs no agent, sp
 moves no stage and touches no branch — it sets one field and appends one `run.attended` event.
 A direction is required and never guessed (exit `1`), setting what is already set is a silent
 no-op, and a `done` or `cancelled` run is refused (exit `2`).
+
+**`auto`** — `--prompt-max-bytes <n>` and `--max-reads <n>` are passed to every `next` the
+loop makes, with the same precedence they have there: the flag beats the stage file. They
+exist because until then the only way to raise either for an *unattended* run was to edit
+`.tldrx/stages/<id>/stage.yml` — a file change, in the workspace, to get past one refusal.
 
 **Attended mode** (`attended_by: host` in `run.yml`) exists for one measured failure: a bare
 `tldrx next` on a Build stage runs the WHOLE remaining pipeline — every wave, every story, as
@@ -437,7 +442,7 @@ tldrx next [<run>] [--run <id>] [--dry-run] [--prepare|--commit] [--review] [--c
 | `--model <m>` | Passed through to `claude --model`. Default: the stage's own `model:` |
 | `--effort <level>` | `low` `medium` `high` `xhigh` `max`. The cost lever `--max-usd` is not |
 | `--max-usd <n>` | Stop after the turn that crosses this. A ceiling on the run, not a brake on the turn in flight |
-| `--prompt-max-bytes <n>` | Ceiling on the assembled prompt. Over it the stage is refused (exit `2`) before a cent is spent. Default: the stage's, else 160 KB |
+| `--prompt-max-bytes <n>` | Ceiling on the assembled prompt. Over it the stage is refused (exit `2`) before a cent is spent. Default: the stage's, else 400 KB |
 | `--max-reads <n>` | Completed `Read`/`Glob`/`Grep` calls before the sub-agent is stopped. Default: the stage's (120; 200 build, 60 watch) |
 | `--cost-usd <n>` | `--commit` only: what the host session's sub-agent cost. Without it the task is `cost_usd: null, metered: false` |
 | `--tokens <n>` | `--commit` only: tokens the host used, recorded beside the declared cost |

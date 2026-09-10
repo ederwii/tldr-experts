@@ -21,6 +21,7 @@ import { validateHandoff } from "../src/core/text/handoff.ts";
 import { loadWorkspace, toSrcContext } from "../src/hooks/lib/workspace.ts";
 import { clearSrcCaches } from "../src/core/text/index.ts";
 import { makeWorkspace, FIXTURE_RUN, type TempWorkspace } from "./fixtures/tempWorkspace.ts";
+import { STAGE_TUNING_DEFAULTS } from "../src/core/schemas/stageTuning.ts";
 
 let ws: TempWorkspace | null = null;
 function workspace(): TempWorkspace {
@@ -44,6 +45,7 @@ function stage(outputs: readonly string[]): PlannedStage {
     effort: null,
     experts: [],
     budget_usd: 1,
+    attempts: STAGE_TUNING_DEFAULTS.attempts,
     timeout_s: 60,
     inputs: [],
     outputs,

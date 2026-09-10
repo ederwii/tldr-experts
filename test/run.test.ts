@@ -117,7 +117,10 @@ describe("tldrx run new", () => {
     const runDir = onlyRunDir(ws.root);
     const doc = loadRun(runDir);
     expect(doc.scope).toBe("bugfix");
-    expect(doc.budget.ceiling_usd).toBe(10);
+    // The shipped `default_budget_usd`, which doubled with the phase split (gh
+    // #170): a phase holds `attempts` (2) of its stages' `budget_usd`, so the run
+    // ceiling covers two attempts and the per-STAGE dollars are what they were.
+    expect(doc.budget.ceiling_usd).toBe(20);
 
     const budget = parseYaml(readFileSync(join(runDir, "budget.yml"), "utf8")) as {
       ceiling_usd: number;
@@ -125,9 +128,11 @@ describe("tldrx run new", () => {
     };
     const sum = budget.phases.reduce((n, p) => n + p.ceiling_usd, 0);
     expect(sum).toBeLessThanOrEqual(budget.ceiling_usd + 1e-9);
-    // Proportional to the stages' declared budgets: what=4 of 25 -> 40% of $10.
-    expect(budget.phases.find((p) => p.id === "01-what")?.ceiling_usd).toBeCloseTo(1.6, 2);
-    expect(budget.phases.find((p) => p.id === "04-build")?.ceiling_usd).toBeCloseTo(3.6, 2);
+    // Proportional to the stages' declared budgets: what=4 of 25 -> 40% of $20,
+    // and a phase holds two attempts of its stage, so 40% is what the PHASE gets
+    // while the stage itself is half of it.
+    expect(budget.phases.find((p) => p.id === "01-what")?.ceiling_usd).toBeCloseTo(3.2, 2);
+    expect(budget.phases.find((p) => p.id === "04-build")?.ceiling_usd).toBeCloseTo(7.2, 2);
   });
 
   test("--budget rescales the phase ceilings", async () => {
@@ -135,7 +140,10 @@ describe("tldrx run new", () => {
     expect((await tldrx(ws.root, "run", "new", "big", "--budget", "50")).code).toBe(EXIT_OK);
     const doc = loadRun(onlyRunDir(ws.root));
     expect(doc.budget.ceiling_usd).toBe(50);
-    expect(doc.phases[0]?.stages[0]?.budget_usd).toBeCloseTo(8, 2);
+    // $50 over 25 declared dollars of stages, each claiming two attempts, is a
+    // factor of 1 — so `what` is dispatched at exactly the $4.00 its stage file
+    // declares, and its PHASE holds $8.00.
+    expect(doc.phases[0]?.stages[0]?.budget_usd).toBeCloseTo(4, 2);
   });
 
   test("--repos must name repos workspace.yml knows", async () => {
@@ -188,7 +196,7 @@ describe("tldrx run status", () => {
     expect(status.stdout).toContain("scope feature");
     expect(status.stdout).toContain("cursor 01-what / what");
     expect(status.stdout).toContain("[░░░░░] 0/1 stages");
-    expect(status.stdout).toContain("$0.00 spent of $25.00 ceiling");
+    expect(status.stdout).toContain("$0.00 spent of $50.00 ceiling");
     expect(status.stdout).toContain("tldrx next");
   });
 
@@ -206,7 +214,7 @@ describe("tldrx run status", () => {
     expect(view.run).toMatch(/-leaderboard$/);
     expect(view.phases).toHaveLength(5);
     expect(view.phases[0]).toMatchObject({ id: "01-what", done: 0, total: 1, bar: "░░░░░" });
-    expect(view.budget).toEqual({ ceiling_usd: 25, spent_usd: 0, remaining_usd: 25 });
+    expect(view.budget).toEqual({ ceiling_usd: 50, spent_usd: 0, remaining_usd: 50 });
     expect(view.waiting.kind).toBe("ready");
   });
 

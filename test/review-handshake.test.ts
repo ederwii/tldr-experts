@@ -447,6 +447,39 @@ describe("--commit --review", () => {
     expect(story(ws, "S1")).toContain("status: blocked");
   }, 60_000);
 
+  /**
+   * The `attempts:` stage key (2026-09-09). Two attempts is a DEFAULT, not an
+   * invariant: a hardening wave over a legacy repo wants a third, and until this
+   * key existed the only way to hold that opinion was a fork.
+   *
+   * The pair is the assertion. The test above drives exactly this sequence with
+   * the key ABSENT and gets `blocked`; this one writes `attempts: 3` and gets a
+   * story still owed a turn. One sequence, one difference, two outcomes.
+   */
+  test("`attempts: 3` in the stage file buys a THIRD attempt", async () => {
+    const ws = workspace({ ...ONE_STORY, attempts: 3 });
+    await stallAtReview(ws);
+    await next(ws, { mode: "prepare", at: "2026-08-29T10:05:00Z" });
+    answerReview(ws, "S1", { verdict: "changes", summary: "round one", findings: [] });
+    await next(ws, { mode: "commit", review: true, at: "2026-08-29T10:20:00Z" });
+
+    // Attempt 2: developer, then a second review that also asks for changes —
+    // the verdict that BLOCKS the story when the stage takes the default 2.
+    const again = await next(ws, { mode: "prepare", at: "2026-08-29T10:30:00Z" });
+    expect(again.lines.join("\n")).toContain("attempt 2 of 3");
+    writeFileSync(join(ws.root, ".tldrx", "worktrees", "app", `${ws.runId}-S1`, "s1.txt"), "again\n", "utf8");
+    writeFileSync(
+      join(ws.runDir, ".agent", "build", "S1", "result.json"),
+      JSON.stringify({ outputs: ["s1.txt"], questions_asked: [], notes: "", cost_usd: 0 }),
+      "utf8",
+    );
+    process.env.FAKE_BUILD_VERDICTS = JSON.stringify({ S1: ["changes"] });
+    await next(ws, { mode: "commit", at: "2026-08-29T10:40:00Z" });
+
+    // Still owed a turn, where the default would have blocked it.
+    expect(story(ws, "S1")).toContain("status: review");
+  }, 60_000);
+
   test("an envelope it cannot read is `changes`, never `approve`", async () => {
     const ws = workspace();
     await stallAtReview(ws);

@@ -92,6 +92,11 @@ export interface ReviewBundleParts {
   readonly epicBranch: string;
   readonly worktree: string;
   readonly attempt: number;
+  /**
+   * The stage's `attempts:` — what `attempt` is "of". Absent ⇒ `MAX_ATTEMPTS`,
+   * the shipped 2, which is what this recorded before the key existed.
+   */
+  readonly maxAttempts?: number;
   readonly model: string | null;
   readonly effort: EffortLevel | null;
   readonly budgetUsd: number;
@@ -166,7 +171,7 @@ export function writeReviewBundle(parts: ReviewBundleParts): string {
     diff: reviewDiffCommand(parts.work.epicBase, parts.epicBranch, parts.branch),
     commit: parts.work.commit,
     attempt: parts.attempt,
-    max_attempts: MAX_ATTEMPTS,
+    max_attempts: parts.maxAttempts ?? MAX_ATTEMPTS,
     worktree: relative(parts.root, parts.worktree),
     // A refused row hands the host `refused` and NO `exit_code`: the bundle is
     // the contract read back from the host, so an invented number here would
