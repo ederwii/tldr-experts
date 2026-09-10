@@ -139,6 +139,11 @@ story's worktree is removed. The story's own log, `04-build/log/<story>.md`, quo
 failure-looking lines in a fenced block and cites the file, and the `check.failed` event
 carries the same excerpt plus `output_path` and `output_bytes`.
 
+Those files are **gitignored by default**: they hold a command's raw output, which can carry an
+`env` dump, a token in a connection string, or a stack trace with a credential. `tldrx init`'s
+managed `.gitignore` block excludes `tldrx-work/**/04-build/log/dod-output/`; the excerpt inside
+the story log is what stays committed. Read one before you share it.
+
 Before 2026-09-09 only ONE line was kept — the last non-empty line of `stdout` followed by
 `stderr`, which is the last line of `stderr` whenever `stderr` wrote anything. A trailing
 deprecation warning was enough to displace a whole test report. Runs from before that date

@@ -236,7 +236,22 @@
   attempt`, so the agent reads the real failure instead of rediscovering it in a worktree that
   no longer exists. One heuristic in one helper (`failureExcerpt` in
   `src/core/build/dodOutput.ts`), one path derivation (`dodOutputRel`), and a green command
-  still writes no file and emits the byte-identical event it always did.
+  still writes no file and emits the byte-identical event it always did. The citation resolves
+  through the repo's existing `lineOf()` to the line the excerpt starts on, never a constant
+  `:1`, and the heuristic reads bun's own `(fail)` summary line as well as the capitalised
+  spellings.
+  Two consequences worth stating in their own right. **The kept output may carry secrets** — it
+  is raw stdout and stderr, so an `env` dump, a token in a connection string or a stack trace
+  with a credential all land in it — and `tldrx-work/` is state this framework tells owners to
+  COMMIT. So `tldrx init`'s managed `.gitignore` block now excludes
+  `tldrx-work/**/04-build/log/dod-output/`, after the `!tldrx-work/**` re-include so it wins:
+  the tails stay on the machine that measured them, and the bounded excerpt inside
+  `04-build/log/<story>.md` is what goes into history. Delete that one line to opt in, and read
+  a tail before sharing it. And **the `## Previous attempt` header now says which kind of
+  attempt it was**: it was unconditionally "A reviewer read your last attempt … and asked for
+  changes", which over a DoD-only block would have sat above a log reading
+  `Verdict: n-a · Reviewer: not recorded` — a prompt asserting a review that never happened.
+  One renderer, two headers, chosen by data the executor already has.
 
 
 ## 0.14.3 — 2026-09-10

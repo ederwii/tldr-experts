@@ -293,6 +293,13 @@ worktree is removed. `04-build/log/<story>.md` quotes the failure-looking lines 
 fenced block under `## Definition of done` and cites the file, and `check.failed`'s `detail`
 in `events.jsonl` carries the same excerpt plus `output_path` and `output_bytes`.
 
+**These files are gitignored by default, because they may carry secrets.** They hold a command's raw
+output — an `env` dump, a token inside a connection string, a stack trace with a credential in
+it — and `tldrx-work/` is otherwise committed state, so `tldrx init`'s managed `.gitignore`
+block excludes `tldrx-work/**/04-build/log/dod-output/`. The excerpt inside
+`04-build/log/<story>.md` is the part that stays committed. If you want the tails in history,
+delete that line from the block — and read one before you share it.
+
 Until 2026-09-09 the only sentence kept anywhere was the last non-empty line of the command's
 `stdout` followed by its `stderr` — which is the last line of `stderr` whenever `stderr` wrote
 anything at all. On a real workspace that meant a whole red suite was recorded as

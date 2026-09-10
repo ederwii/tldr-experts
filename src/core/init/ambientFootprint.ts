@@ -55,6 +55,15 @@ export const GITIGNORE_IGNORES = [
   // `!tldrx-work/**` re-include and it was swept into a rescue commit (gh #102).
   "tldrx-work/**/*.bak",
   ".tldrx/**/*.bak",
+  // A red Definition-of-Done command's RAW output (#211) — up to 16 KB of
+  // whatever the command printed, which on a real repo is `env` dumps, tokens in
+  // a connection string, a stack trace carrying a secret. The framework tells
+  // owners to commit `tldrx-work/`, so the default has to be that this one tree
+  // stays local. What IS committed is the bounded excerpt inside
+  // `04-build/log/<story>.md`, which the framework itself chose and a human can
+  // read before pushing. An owner who wants the tails in history deletes this
+  // line from the block.
+  "tldrx-work/**/04-build/log/dod-output/",
   // `tldrx install --claude` backs settings.json up before merging into it
   // (installClaude.ts). The backup is a full copy of a file that may hold local
   // env values, and it was the one thing the framework writes that nothing

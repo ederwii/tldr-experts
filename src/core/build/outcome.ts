@@ -88,6 +88,13 @@ export interface DodResult {
    */
   readonly outputPath?: string;
   readonly outputBytes?: number;
+  /**
+   * 1-based line INSIDE that file where the excerpt starts, so a citation points
+   * at the failure and not at the top of a 200-line tail. Absent on a record
+   * written before this field existed; every reader falls back to 1, which is
+   * where the old citations pointed anyway.
+   */
+  readonly outputLine?: number;
 }
 
 /** True when the gate DECLINED to run this command. Absent status means it ran. */
@@ -255,7 +262,9 @@ export function dodFailureReason(result: DodResult, repo: string): string {
   // belongs in the file the citation names (#211).
   return `\`${result.command}\` exited ${String(result.exitCode ?? "?")} in repo ${repo}`
     + `${result.timedOut ? " (timed out)" : ""} — ${result.tail}`
-    + (result.outputPath === undefined ? "" : ` [src: ${result.outputPath}:1]`);
+    + (result.outputPath === undefined
+      ? ""
+      : ` [src: ${result.outputPath}:${String(result.outputLine ?? 1)}]`);
 }
 
 /** One line for `run status` and the executor's stdout: `S1 done`, `S2 blocked`. */

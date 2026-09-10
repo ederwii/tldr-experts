@@ -257,6 +257,7 @@ export async function runStoryDod(parts: DodParts): Promise<readonly DodResult[]
           excerpt: failureExcerpt(output),
           outputPath: kept.rel,
           outputBytes: kept.bytes,
+          outputLine: kept.line,
         }),
       };
       // gh #209: an exit 127 HERE, in a tree that never had the binary, is an
@@ -302,6 +303,7 @@ export async function runStoryDod(parts: DodParts): Promise<readonly DodResult[]
       ...(result.outputPath === undefined ? {} : {
         output_path: result.outputPath,
         output_bytes: result.outputBytes ?? 0,
+        output_line: result.outputLine ?? 1,
       }),
     });
     if (green) continue;

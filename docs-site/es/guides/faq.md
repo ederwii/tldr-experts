@@ -142,6 +142,12 @@ antes de que se elimine el worktree de la story. El log de la story,
 la falla, y el evento `check.failed` lleva ese mismo extracto más `output_path` y
 `output_bytes`.
 
+Esos archivos están **ignorados por git de forma predeterminada**: guardan la salida cruda de un
+comando, que puede traer un volcado de `env`, un token dentro de una cadena de conexión o un
+stack trace con una credencial. El bloque de `.gitignore` que administra `tldrx init` excluye
+`tldrx-work/**/04-build/log/dod-output/`; lo que queda versionado es el extracto dentro del log
+de la story. Léelo antes de compartirlo.
+
 Antes del 2026-09-09 solo se guardaba UNA línea: la última línea no vacía de `stdout` seguido
 de `stderr`, que es la última línea de `stderr` en cuanto `stderr` escribe algo. Una simple
 advertencia de deprecación al final bastaba para desplazar el reporte completo de las

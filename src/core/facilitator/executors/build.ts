@@ -75,7 +75,7 @@ import {
   IMPLICIT_PLAN_REL, IMPLICIT_STORY_ID, IMPLICIT_STORY_NOTE,
 } from "../../build/implicitPlan.ts";
 import { evidenceFor, updateStoryFront } from "../../build/storyFile.ts";
-import { buildDeveloperPrompt, REVIEW_SCHEMA } from "../../build/prompts.ts";
+import { buildDeveloperPrompt, REVIEW_SCHEMA, type PreviousAttemptKind } from "../../build/prompts.ts";
 import { ITERATION_ONLY_SLOT } from "../../schemas/commandAllowlist.ts";
 
 /** `testFast` as an optional prompt field: present only when the repo declares one. */
@@ -463,6 +463,8 @@ interface StoryContext {
   readonly epicBranch: string;
   readonly attempt: number;
   readonly previousAttempt: string;
+  /** WHERE `previousAttempt` came from — the header depends on it (#211). */
+  readonly previousAttemptKind: PreviousAttemptKind;
   /**
    * Touched paths the story's worktree has no copy of because they are not
    * committed at its branch — `01-what/` outputs and `run.yml` in a
@@ -1796,7 +1798,10 @@ class BuildSession {
       branch,
       epicBranch,
       attempt: Math.min(this.reviewAttempts(planned.story.id) + 1, this.attempts),
-      previousAttempt: this.previousAttemptText(planned.story.id),
+      ...(() => {
+        const previous = this.previousAttemptFor(planned.story.id);
+        return { previousAttempt: previous.text, previousAttemptKind: previous.kind };
+      })(),
       notInWorktree: await this.unreadableTouches(planned, repoDir, branch),
       freshWorktree,
     };
@@ -3053,6 +3058,7 @@ class BuildSession {
       // for; the constant is the fallback for a plan built before it did.
       planNote: this.plan.implicit ? (story.planned.note ?? IMPLICIT_STORY_NOTE) : undefined,
       previousAttempt: story.previousAttempt,
+      previousAttemptKind: story.previousAttemptKind,
       notInWorktree: story.notInWorktree,
       dispatchNotes: this.dispatchNotesFor(story.planned.story.id).body,
       // This repo's skills only: the worktree carries one repo's `.claude/skills`.
@@ -3423,6 +3429,26 @@ class BuildSession {
       status: this.statusOf(planned),
       fresh: this.outcomes.get(planned.story.id),
     };
+  }
+
+  /**
+   * The last attempt, rendered for the next prompt's `## Previous attempt` — and
+   * WHICH KIND of attempt it was, so the section's header is true (#211).
+   *
+   * `kind` is data, not a guess: a counted verdict makes it `review`, and a story
+   * that never reached a reviewer and blocked on its DoD makes it `dod`. The
+   * header the prompt prints is chosen from it in ONE renderer
+   * (`previousAttemptHeader`).
+   */
+  private previousAttemptFor(storyId: string): { text: string; kind: PreviousAttemptKind } {
+    return { text: this.previousAttemptText(storyId), kind: this.previousAttemptKind(storyId) };
+  }
+
+  /** `review` unless the last attempt blocked on its DoD with nothing judged. */
+  private previousAttemptKind(storyId: string): PreviousAttemptKind {
+    const outcome = this.outcomes.get(storyId);
+    if (outcome !== undefined && outcome.verdict === "changes") return "review";
+    return this.reviewAttempts(storyId) === 0 ? "dod" : "review";
   }
 
   /** The last `changes` verdict, rendered for the next prompt's Previous attempt. */

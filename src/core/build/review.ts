@@ -409,7 +409,7 @@ function dodLines(r: DodResult): readonly string[] {
     "  ```",
     "",
     `  The last lines of the command's combined output — ${String(r.outputBytes ?? 0)} bytes — are kept at`,
-    `  \`${r.outputPath}\` [src: ${r.outputPath}:1]. Read that before re-running anything.`,
+    `  \`${r.outputPath}\` [src: ${r.outputPath}:${String(r.outputLine ?? 1)}]. Read that before re-running anything.`,
   ];
 }
 

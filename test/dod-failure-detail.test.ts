@@ -28,6 +28,7 @@ import {
   dodOutputRel, failureExcerpt, failureSummaryLine, outputTail,
 } from "../src/core/build/dodOutput.ts";
 import { dodFailureReason, type DodResult, type StoryOutcome } from "../src/core/build/outcome.ts";
+import { buildDeveloperPrompt } from "../src/core/build/prompts.ts";
 import { renderReviewLog } from "../src/core/build/review.ts";
 import { capPayload, MAX_PAYLOAD_BYTES, serializeEvent } from "../src/core/events/Event.ts";
 import { readReviewLedger } from "../src/core/facilitator/executors/build.ts";
@@ -176,11 +177,12 @@ exit 1
     const log = renderReviewLog(outcomeWith(ran.results));
     expect(log).toContain("FAIL test_x — AssertionError: expected 3, got 4");
     expect(log).toContain(dodOutputRel("S1", 0));
-    expect(log).toContain(`[src: ${dodOutputRel("S1", 0)}:1]`);
+    const at = String(ran.results[0]?.outputLine ?? 0);
+    expect(log).toContain(`[src: ${dodOutputRel("S1", 0)}:${at}]`);
     // The blocked-story reason — the handoff Finding's own sentence — cites it too.
     const reason = dodFailureReason(ran.results[0] as DodResult, "app");
     expect(reason).toContain("FAIL test_x");
-    expect(reason).toContain(`[src: ${dodOutputRel("S1", 0)}:1]`);
+    expect(reason).toContain(`[src: ${dodOutputRel("S1", 0)}:${at}]`);
     expect(reason).not.toContain("swigvarlink");
   });
 
@@ -309,6 +311,9 @@ describe("#211 · the retry prompt names the kept output", () => {
       // carry forward, so a green assertion below is about THIS prompt.
       expect(firstPrompt).not.toContain("## Previous attempt");
       expect(second).toContain("## Previous attempt");
+      // The header names the ACTUAL source: this story never reached a reviewer.
+      expect(second).toContain("Your last attempt blocked on its Definition of Done");
+      expect(second).not.toContain("A reviewer read your last attempt");
       expect(second).toContain(rel);
       expect(second).toContain("FAIL test_x — AssertionError: expected 3, got 4");
     } finally {
@@ -356,5 +361,109 @@ describe("#211 · the retry prompt names the kept output", () => {
     expect(ledger.dod[0]?.tail).toBe(WARNING);
     expect(ledger.dod[0]?.excerpt).toBeUndefined();
     expect(ledger.lastDodOutputPath).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Review round 1, item 1: the `## Previous attempt` header used to be
+ * unconditional — "A reviewer read your last attempt at this story and asked for
+ * changes" — and #211 made a DoD-only block carry its log forward, so that
+ * sentence would have sat above a log reading `Verdict: n-a · Reviewer: not
+ * recorded`. The prompt would have asserted a review that never happened.
+ */
+describe("#211 · the previous-attempt header says which kind of attempt it was", () => {
+  const REVIEW_LINE = "A reviewer read your last attempt";
+  const DOD_LINE = "Your last attempt blocked on its Definition of Done";
+
+  function devPrompt(previousAttemptKind?: "review" | "dod"): string {
+    return buildDeveloperPrompt({
+      runId: "260909-detail",
+      story: {
+        story: {
+          version: 1, id: "S1", epic: "E1", title: "First story", repo: "app", status: "todo",
+          depends_on: [], touches: ["s1.txt"], acceptance: ["it works"],
+          test_plan: ["$ npm run test -> exit 0"], evidence: [],
+        },
+        dod: { present: true, commands: ["npm run test"] },
+        text: "# S1\n",
+        path: "/nowhere/S1.md",
+        rel: "03-plan/stories/S1.md",
+        wave: "W1",
+        goal: [],
+      },
+      epic: {
+        epic: {
+          version: 1, id: "E1", title: "Epic E1", repos: ["app"],
+          stories: ["S1"], branch: "epic/e1", status: "todo",
+        },
+        text: "# E1\n",
+        path: "/nowhere/E1.md",
+        rel: "03-plan/epics/E1.md",
+      },
+      repoName: "app",
+      branch: "story/260909-detail/S1",
+      epicBranch: "epic/e1",
+      worktree: "/nowhere",
+      commands: ["npm run test"],
+      conventions: "_none_",
+      facts: "_none_",
+      experts: [],
+      budgetUsd: 4,
+      previousAttempt: "> Verdict: **n-a**",
+      ...(previousAttemptKind === undefined ? {} : { previousAttemptKind }),
+    });
+  }
+
+  test("a DoD-blocked attempt gets the DoD header, and claims no reviewer", () => {
+    const prompt = devPrompt("dod");
+    expect(prompt).toContain("## Previous attempt");
+    expect(prompt).toContain(DOD_LINE);
+    expect(prompt).not.toContain(REVIEW_LINE);
+  });
+
+  test("a reviewed attempt keeps today's header — and so does an absent kind", () => {
+    expect(devPrompt("review")).toContain(REVIEW_LINE);
+    expect(devPrompt("review")).not.toContain(DOD_LINE);
+    // Absent means `review`: every prompt written before the field existed.
+    expect(devPrompt()).toBe(devPrompt("review"));
+  });
+});
+
+/**
+ * Review round 1, item 3: the citation resolves to the line that carries the
+ * failure, not to a constant `:1` at the top of a 200-line tail.
+ */
+describe("#211 · the kept output is cited at the failing line", () => {
+  test("the citation's line is the FAIL line's own index in the file", async () => {
+    const ran = await runScript(RED_SCRIPT);
+
+    const row = ran.results[0] as DodResult;
+    const kept = readFileSync(join(ran.dir, String(row.outputPath)), "utf8");
+    const expected = kept.split("\n")
+      .findIndex((l) => l.includes("FAIL test_x — AssertionError: expected 3, got 4")) + 1;
+    expect(expected).toBeGreaterThan(1);
+    expect(row.outputLine).toBe(expected);
+    expect(dodFailureReason(row, "app")).toContain(`:${String(expected)}]`);
+    expect(renderReviewLog(outcomeWith(ran.results)))
+      .toContain(`[src: ${String(row.outputPath)}:${String(expected)}]`);
+    const failed = ran.events.find((e) => e.type === "check.failed");
+    expect(failed?.payload.output_line).toBe(expected);
+  });
+});
+
+/**
+ * Review round 1, item 4: bun's own summary line, which the heuristic missed —
+ * `(fail)` has no capital and no `Error`.
+ */
+describe("#211 · the heuristic reads bun's summary line", () => {
+  test("`(fail)` is failure-looking, and a trailing warning still does not win", () => {
+    const text = "bun test v1.3.14\n(pass) something ok\n(fail) the thing > it works\n"
+      + `1 fail\n\n${WARNING}\n`;
+    const excerpt = failureExcerpt(text);
+    expect(excerpt).toContain("(fail) the thing > it works");
+    expect(excerpt).not.toContain("swigvarlink");
+    expect(failureSummaryLine(text)).toBe("(fail) the thing > it works");
   });
 });

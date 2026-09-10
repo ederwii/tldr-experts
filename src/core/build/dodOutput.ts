@@ -32,6 +32,7 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { lineOf } from "../detect/lineOf.ts";
 import { BUILD_PHASE, LOG_DIR } from "./plan.ts";
 
 /** Lines of a red command's combined output kept on disk. */
@@ -61,7 +62,8 @@ export const DOD_OUTPUT_DIR = "dod-output";
  * false positive costs a slightly worse excerpt; a false negative costs the whole
  * point of this file.
  */
-const FAILURE_RE = /FAIL|Failed|failed|Error|error:|assert|✗|✖|not ok|Exception|Traceback|exit code/;
+const FAILURE_RE =
+  /FAIL|Failed|failed|\bfail\b|Error|error:|assert|✗|✖|not ok|Exception|Traceback|exit code/;
 
 /** `04-build/log/dod-output/<story>-<n>.txt`, relative to the run dir. ONE derivation. */
 export function dodOutputRel(storyId: string, index: number): string {
@@ -129,10 +131,17 @@ export function failureSummaryLine(output: string, max = 200): string {
   return first.length > max ? `${first.slice(0, max - 1)}…` : first;
 }
 
-/** Where a red check's kept output went, and how much of it there is. */
+/** Where a red check's kept output went, how big it is, and WHERE to look in it. */
 export interface DodOutputFile {
   readonly rel: string;
   readonly bytes: number;
+  /**
+   * 1-based line of the excerpt's FIRST line inside the kept file, so
+   * `[src: <rel>:<line>]` points at the failure rather than at the top of a
+   * 200-line tail. A constant `:1` is a citation-shaped guess, and §2.8 resolves
+   * a `file` src to the line that carries the evidence.
+   */
+  readonly line: number;
 }
 
 /**
@@ -153,7 +162,11 @@ export function writeDodOutput(
     mkdirSync(join(runDir, BUILD_PHASE, LOG_DIR, DOD_OUTPUT_DIR), { recursive: true });
     const body = `${text}\n`;
     writeFileSync(path, body, "utf8");
-    return { rel, bytes: Buffer.byteLength(body, "utf8") };
+    // Resolved against the FILE that was just written — `lineOf` is the same
+    // helper every other citation in this repo resolves through, and it falls
+    // back to 1 only when the needle is genuinely absent.
+    const first = failureExcerpt(output).split("\n")[0] ?? "";
+    return { rel, bytes: Buffer.byteLength(body, "utf8"), line: lineOf(body, first) };
   } catch {
     return null;
   }

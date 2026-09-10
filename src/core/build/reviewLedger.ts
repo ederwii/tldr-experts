@@ -354,6 +354,7 @@ export function readReviewLedger(runDir: string, storyId: string): ReviewLedger 
           ? {
             outputPath: payload.output_path,
             ...(typeof payload.output_bytes === "number" ? { outputBytes: payload.output_bytes } : {}),
+            ...(typeof payload.output_line === "number" ? { outputLine: payload.output_line } : {}),
           }
           : {}),
       });

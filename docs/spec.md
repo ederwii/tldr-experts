@@ -1401,7 +1401,16 @@ never be the one whose `detail` the cap strips. `output_path` is the run-relativ
 is its size on disk. The path is written BEFORE the event, so a citation is never a guess at a file that may not
 exist. `04-build/log/<story>.md` quotes the excerpt in a fenced block and cites the file `[src: <path>:1]`, the
 blocked-story reason and its handoff Finding carry the same citation, and the next developer's `## Previous attempt`
-carries the log — the one record a person reopening the story cannot re-derive, because the worktree is gone.
+carries the log — the one record a person reopening the story cannot re-derive, because the worktree is gone. The
+log's citation resolves to the line the excerpt starts on, not a constant `:1`.
+
+**The kept output may carry secrets, and is gitignored by default.** It is a command's RAW stdout and stderr: an `env`
+dump, a token in a connection string, a stack trace carrying a credential. §1 says `tldrx-work/` is committed state,
+so `tldrx init`'s managed `.gitignore` block excludes `tldrx-work/**/04-build/log/dod-output/` — AFTER the
+`!tldrx-work/**` re-include, so it wins — and the tails stay on the machine that measured them. What stays committed
+is the bounded excerpt inside `04-build/log/<story>.md`, which the framework chose and a human can read before
+pushing. An owner who wants the tails in history deletes that one line from the block; a reader who shares one should
+read it first.
 
 **`task.done` carries `epic_base` (2026-09-06, #166).** ADDITIVE and optional: the FULL 40-character sha the story's
 epic branch pointed at *immediately before* the story merged into it — the base the reviewer's diff was computed from.
