@@ -35,6 +35,10 @@ import { DEFAULT_INPUTS_MAX_BYTES } from "../src/core/facilitator/seedInputs.ts"
 import { DEFAULT_KNOWLEDGE_MAX_BYTES } from "../src/core/experts/expertKnowledge.ts";
 import { loadStageSpec } from "../src/core/facilitator/stageSpec.ts";
 import { planBudget } from "../src/core/run/newRun.ts";
+import { buildStageDefaults } from "../src/core/run/workflowPreset.ts";
+import { buildModel, type RunModel, type StoryModel } from "../src/core/dashboard/model.ts";
+import { dashStoryArcs } from "../src/core/dashboard/render.ts";
+import { wouldExceed } from "../src/core/budget/wouldExceed.ts";
 import {
   cannedHandoff, cannedIntent, makeFacilitatorWorkspace, type FacilitatorWorkspace, type StageOptions,
 } from "./fixtures/facilitator/workspace.ts";
@@ -68,6 +72,32 @@ const ALPHA_OUTPUTS = JSON.stringify({
   "01-what/intent.md": cannedIntent(),
   "01-what/handoff.md": cannedHandoff(),
 });
+
+/** One stage in the BUILD phase, which is the stage `buildStageDefaults` answers for. */
+const BUILD_STAGE: readonly StageOptions[] = [
+  { id: "builder", phase: "04-build", budgetUsd: 6, gate: "auto", outputs: [{ path: "04-build/handoff.md" }] },
+];
+
+/** Append a raw line to a fixture stage's `stage.yml`. */
+function writeStageKey(ws: FacilitatorWorkspace, stageId: string, line: string): void {
+  const path = join(ws.root, ".tldrx", "stages", stageId, "stage.yml");
+  writeFileSync(path, `${readFileSync(path, "utf8")}${line}\n`, "utf8");
+}
+
+/**
+ * A story the arcs card will actually print — it only renders stories that were
+ * reopened or had a review retry, so a plain one renders nothing and would make
+ * the assertion below pass over an empty string.
+ */
+const ARC_STORY = {
+  id: "S1", epic: "E1", title: "First", repo: "api", status: "review",
+  dependsOn: [], wave: "W1", attempt: 1,
+  reopens: [{
+    ts: "2026-09-09T09:00:00Z", actor: "alan", note: "again", reason: "fix",
+    fromStatus: null, verdicts: null,
+  }],
+  reviewRetries: 0,
+} as unknown as StoryModel;
 
 function workspace(stages: readonly StageOptions[] = TWO_STAGE): FacilitatorWorkspace {
   const made = makeFacilitatorWorkspace({ scope: "demo", stages, budgetUsd: 10 });
@@ -309,3 +339,80 @@ function stageDoc(extra: Record<string, unknown>): Record<string, unknown> {
     ...extra,
   };
 }
+
+describe("everything that prints `of N` reads the stage, not the constant", () => {
+  /**
+   * The dashboard printed "attempt 2 of 2" for every story of every run off the
+   * global constant. That was right until `attempts:` existed and is a plain lie
+   * the moment one workspace writes it — and the page is the screen an operator
+   * uses to decide whether a blocked story is out of turns.
+   *
+   * `maxAttempts` is ADDITIVE on `RunModel`, so `DASHBOARD_MODEL_VERSION` does not
+   * move: §7's rule is that additions do not bump it.
+   */
+  test("a run whose Build stage says `attempts: 3` renders `of 3`", () => {
+    const ws = workspace(BUILD_STAGE);
+    writeStageKey(ws, "builder", "attempts: 3");
+    const model = buildModel(ws.root, "2026-09-09T10:00:00Z");
+    const run = model.runs.find((r) => r.id === ws.runId);
+    expect(run?.maxAttempts).toBe(3);
+    // The workspace-level field is the DEFAULT and stays put — the point is that
+    // the renderer no longer reads it for a story.
+    expect(model.maxAttempts).toBe(STAGE_TUNING_DEFAULTS.attempts);
+    const page = dashStoryArcs(
+      { ...(run as RunModel), plan: { stories: [ARC_STORY] } } as unknown as RunModel,
+      run?.maxAttempts ?? 0,
+    );
+    expect(page).toContain("attempt 1 of 3");
+  });
+
+  test("with the key absent it renders the shipped 2", () => {
+    const ws = workspace(BUILD_STAGE);
+    const model = buildModel(ws.root, "2026-09-09T10:00:00Z");
+    expect(model.runs.find((r) => r.id === ws.runId)?.maxAttempts)
+      .toBe(STAGE_TUNING_DEFAULTS.attempts);
+  });
+
+  test("`buildStageDefaults` is tolerant: an unknown scope gives the shipped pair", () => {
+    const ws = workspace();
+    expect(buildStageDefaults(ws.root, "no-such-scope"))
+      .toEqual({ attempts: STAGE_TUNING_DEFAULTS.attempts, timeoutS: DEFAULT_TIMEOUT_S });
+  });
+});
+
+describe("`warn_at_pct` still fires at the same real dollars", () => {
+  /**
+   * Owner decision 2026-09-09. A phase ceiling now HOLDS `attempts` of its stage,
+   * so measuring 80% against the raw ceiling would need roughly twice the real
+   * spend on a run that never retries — the warning would arrive after the money
+   * it was warning about had gone. It is measured against one attempt's share.
+   */
+  const budget = {
+    version: 1, run: "r", ceiling_usd: 20, per_agent_max_usd: 10, warn_at_pct: 80,
+    on_exceed: "warn" as const, economy: "metered-usd" as const,
+    on_host_tokens_exceed: "warn" as const, ceiling_host_tokens: null,
+    authorized_usd: null, authorized_by: null, authorized_at: null, on_grant_exceed: null,
+    unmetered_tasks: 0, spent_basis: "complete" as const,
+    phases: [{ id: "01-what", ceiling_usd: 10, spent_usd: 0, economy: null, ceiling_host_tokens: null, authorized_usd: null }],
+  };
+
+  test("a phase sized for two attempts warns at 80% of ONE attempt's share", () => {
+    // $10 phase, two attempts ⇒ one attempt's share is $5, and 80% of it is $4.
+    expect(wouldExceed(budget as never, "01-what", 4).warns).toBe(true);
+    expect(wouldExceed(budget as never, "01-what", 3.9).warns).toBe(false);
+    expect(wouldExceed(budget as never, "01-what", 4).warnBasis).toBe(5);
+    // Against the raw ceiling the same spend is 40% and says nothing — which is
+    // the regression this exists to stop.
+    expect(wouldExceed(budget as never, "01-what", 4, 1).warns).toBe(false);
+  });
+
+  test("the REFUSAL still answers for the whole phase — only the warning moved", () => {
+    expect(wouldExceed(budget as never, "01-what", 6).exceeds).toBe(false);
+    expect(wouldExceed(budget as never, "01-what", 6).remaining).toBe(10);
+    expect(wouldExceed(budget as never, "01-what", 11).exceeds).toBe(true);
+  });
+
+  test("`attempts: 0` cannot divide the basis to nothing", () => {
+    expect(wouldExceed(budget as never, "01-what", 1, 0).warnBasis).toBe(10);
+  });
+});

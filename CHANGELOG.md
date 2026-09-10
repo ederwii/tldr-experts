@@ -50,6 +50,35 @@
   existing workspace sees are unchanged. `on_exceed` and the grant/ceiling reconciliation are
   untouched.
 
+- **`warn_at_pct` still fires at the same real dollars.** A phase now holds every
+  attempt its stages may take, so measuring 80% against the raw ceiling would need
+  roughly twice the real spend on a run that never retries — the warning would
+  arrive after the money it was warning about had gone, which is a warning that has
+  stopped being one. `wouldExceed` measures it against **one attempt's share**
+  (`ceiling ÷ attempts`) and carries that figure as `warnBasis`. The refusal is
+  untouched: `exceeds`, `remaining` and `on_exceed` still answer for the whole
+  phase, because the phase may spend all of it. Owner decision 2026-09-09.
+- **Everything that prints "attempt N of M" reads the stage that dispatched the
+  story.** The dashboard printed it off the global constant for every story of
+  every run (`RunModel.maxAttempts` is additive, so `DASHBOARD_MODEL_VERSION` does
+  not move — §7's rule is that additions do not bump it), and `story reopen
+  --for-fix` said "attempt 1 of 2" whatever the stage declared. One resolver,
+  `buildStageDefaults`, and it is tolerant: an unreadable workflow gives the
+  shipped pair rather than throwing on a page render.
+
+### Fixed
+
+- **The DoD-gate hook re-runs a story's commands on the STAGE's clock, not on a
+  private 900 s constant.** `src/hooks/dod-gate.ts` carried
+  `const DEFAULT_TIMEOUT_S = 900` with a comment citing spec §2.3, and never opened
+  a stage file — so a workspace that had deliberately given its Build stage a
+  different `timeout_s` got 900 s in the gate and something else in the turn, and
+  this hook re-runs the very commands that turn ran. Measured RED: under a stage
+  declaring `timeout_s: 2`, a `sleep 30` in a `dod` block ran to completion and the
+  gate ALLOWED — "no deny decision (exit 0)". It now resolves story `timeout_s:` →
+  the Build stage's → the shipped default, which is the order §2.3 and §7's
+  DoD-gate row have always described.
+
 ### Added
 
 - **Four Build calibrations became optional `stage.yml` keys: `attempts` (default 2),

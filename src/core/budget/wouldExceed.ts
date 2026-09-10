@@ -5,6 +5,7 @@
  * — honouring `on_exceed` — whether the budget-gate hook must deny it.
  */
 import { hostTokenCeiling, type RunBudget } from "./RunBudget.ts";
+import { STAGE_TUNING_DEFAULTS } from "../schemas/stageTuning.ts";
 
 export function totalSpent(budget: RunBudget): number {
   return budget.phases.reduce((sum, p) => sum + p.spent_usd, 0);
@@ -32,18 +33,49 @@ export interface BudgetDecision {
   readonly remaining: number;
   readonly ceiling: number;
   readonly estimate: number;
-  /** True when the spend fits but crosses `warn_at_pct` of the scope's ceiling. */
+  /**
+   * True when the spend fits but crosses `warn_at_pct` of ONE ATTEMPT'S SHARE of
+   * the scope's ceiling — `ceiling / attempts`, not the ceiling.
+   *
+   * Owner decision 2026-09-09, and it is what keeps the warning meaning what it
+   * has always meant. Since gh #170 a phase ceiling HOLDS `attempts` (default 2)
+   * of its stage, so measuring 80% against the raw ceiling would need roughly
+   * twice the real spend on a run that never retries: the warning would arrive
+   * after the money that was going to be spent had been, which is a warning that
+   * has stopped being one. Dividing by `attempts` fires it at the same real
+   * dollars as before the split.
+   *
+   * `exceeds`, `remaining` and `ceiling` are UNTOUCHED and still answer for the
+   * whole phase — the refusal is about what the phase may spend, and the phase may
+   * spend all of it. Only the advisory line moved.
+   */
   readonly warns: boolean;
+  /** The figure `warns` was measured against — `ceiling / attempts`. */
+  readonly warnBasis: number;
 }
 
-export function wouldExceed(budget: RunBudget, phaseId: string | null, estimate: number): BudgetDecision {
+/**
+ * `attempts` is the STAGE's `attempts:` (`schemas/stageTuning.ts`) and is only
+ * ever read for `warns` — see the field. Absent ⇒ the shipped default, which is
+ * what every caller meant before the key existed.
+ */
+export function wouldExceed(
+  budget: RunBudget,
+  phaseId: string | null,
+  estimate: number,
+  attempts: number = STAGE_TUNING_DEFAULTS.attempts,
+): BudgetDecision {
   const phase = phaseId === null ? undefined : budget.phases.find((p) => p.id === phaseId);
   const scope: BudgetScope = phase === undefined ? "run" : "phase";
   const ceiling = phase === undefined ? budget.ceiling_usd : phase.ceiling_usd;
   const spent = phase === undefined ? totalSpent(budget) : phase.spent_usd;
   const left = round(ceiling - spent);
   const exceeds = round(spent + estimate) > ceiling;
-  const pct = ceiling === 0 ? 100 : ((spent + estimate) / ceiling) * 100;
+  // One attempt's share. `attempts` is clamped to at least 1 rather than trusted:
+  // a 0 here would divide the basis to zero and warn on every run forever, and a
+  // reader on a hot path does not get to throw.
+  const warnBasis = round(ceiling / Math.max(1, attempts));
+  const pct = warnBasis === 0 ? 100 : ((spent + estimate) / warnBasis) * 100;
   return {
     exceeds,
     blocked: exceeds && budget.on_exceed === "block",
@@ -53,6 +85,7 @@ export function wouldExceed(budget: RunBudget, phaseId: string | null, estimate:
     ceiling,
     estimate,
     warns: !exceeds && pct >= budget.warn_at_pct,
+    warnBasis,
   };
 }
 

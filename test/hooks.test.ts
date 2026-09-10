@@ -712,6 +712,38 @@ describe("DoD-gate (PreToolUse Write|Edit)", () => {
     expect(denialText(run)).toContain("timed out after 1s");
   }, 15_000);
 
+  /**
+   * The hook's fallback clock is the BUILD STAGE's `timeout_s`, not a private
+   * constant.
+   *
+   * It had one: `const DEFAULT_TIMEOUT_S = 900`, with a comment claiming spec
+   * §2.3 — so a workspace that had deliberately given its Build stage a different
+   * clock got 900 s here and something else in the turn, and this hook re-runs the
+   * very commands that turn ran. `sleep 30` under a 2 s stage would have RUN TO
+   * COMPLETION and passed the gate before this fix.
+   *
+   * 2 s rather than the shipped 7200 for the obvious reason; what the assertion
+   * proves is WHOSE number was used, and only the stage file carries a 2.
+   */
+  test("with no `timeout_s:` on the story, the BUILD STAGE's clock is what kills it", async () => {
+    const root = workspace().root;
+    mkdirSync(join(root, ".tldrx", "stages", "build"), { recursive: true });
+    writeFileSync(
+      join(root, ".tldrx", "stages", "build", "stage.yml"),
+      readFileSync(join(FRAMEWORK_ROOT, "stages", "build", "stage.yml"), "utf8")
+        .replace(/^timeout_s: \d+$/m, "timeout_s: 2"),
+      "utf8",
+    );
+    const run = await hook("dod-gate", {
+      hook_event_name: "PreToolUse", tool_name: "Write",
+      tool_input: { file_path: storyPath(), content: story("done", ["sleep 30"]) },
+    });
+    expect(denialText(run)).toContain("timed out after 2s");
+    // 45 s so a REGRESSION reports the assertion rather than the budget: without
+    // the fix the `sleep 30` runs to completion under the old 900 s constant and
+    // the gate ALLOWS, which must read as "no deny decision", not as a hang.
+  }, 45_000);
+
   test("a command that needs a shell is refused BEFORE anything spawns", async () => {
     // Was: `sleep 30 & wait`, which forced a grandchild and proved the process
     // tree got killed. That property now lives in test/runtime.test.ts, where it

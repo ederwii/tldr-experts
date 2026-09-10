@@ -502,6 +502,17 @@ describe("the live client, and the static page that must not carry it", () => {
    * record one. `DASHBOARD_MODEL_VERSION` still stays 3 — additions do not bump
    * it (§7) — and the rendered TEXT is unchanged, since a null outcome draws
    * nothing.
+   *
+   * **+10 for the stage-tuning wave (2026-09-09)**, MEASURED as a diff of the two
+   * rendered pages and again no changed sentence: exactly two mechanical deltas,
+   * `"maxAttempts":2` in the run's serialised model, and `model.maxAttempts` ->
+   * `run.maxAttempts` on three `dashRun` lines, which cross into the page through
+   * `Function.prototype.toString()` the same way the +70 above did. `RunModel`
+   * gained `maxAttempts` — the stage's `attempts:`, so a story's "attempt N of M"
+   * answers for the stage that dispatched it rather than for a global constant.
+   * This fixture's Build stage declares no `attempts:`, so the value is the
+   * shipped 2 and every sentence on the page reads exactly as it did. ADDITIVE:
+   * `DASHBOARD_MODEL_VERSION` still stays 3.
    */
   test("--static is byte-identical to the export main renders without the live layer", () => {
     const temp = makeViewsWorkspace();

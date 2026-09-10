@@ -1032,7 +1032,7 @@ function budgetRefusal(
       `See the whole picture first: \`tldrx budget show --run ${store.runId}\`.`,
     ]);
   }
-  warnOnce(store, options, phaseId, stageId, estimate, phaseRemaining, notes);
+  warnOnce(store, options, phaseId, stageId, estimate, phaseRemaining, spec.tuning.attempts, notes);
   return null;
 }
 
@@ -2795,13 +2795,21 @@ function warnOnce(
   stageId: string,
   estimate: number,
   phaseRemaining: number,
+  attempts: number,
   notes: string[],
 ): void {
   const phase = store.budget.phases.find((p) => p.id === phaseId);
   if (phase === undefined || phase.ceiling_usd <= 0) return;
   // Actuals, not projections: a phase whose ceiling equals the sum of its own
   // stage budgets would otherwise warn on the very first stage, every time.
-  const pct = (phase.spent_usd / phase.ceiling_usd) * 100;
+  //
+  // And against ONE ATTEMPT'S SHARE of the ceiling, not the ceiling — the same
+  // basis `wouldExceed` measures `warns` on, and for the same reason: since gh
+  // #170 the phase HOLDS `attempts` of its stage, so 80% of the raw ceiling would
+  // need roughly twice the real spend on a run that never retries, and the
+  // warning would arrive after the money it was warning about had gone.
+  const basis = phase.ceiling_usd / Math.max(1, attempts);
+  const pct = (phase.spent_usd / basis) * 100;
   if (pct < store.budget.warn_at_pct) return;
   if (alreadyWarned(store, phaseId)) return;
   // What this phase's own turns put in the meter, and what they did not. The
@@ -2823,8 +2831,8 @@ function warnOnce(
     spent_basis: spentBasis(tally.unmetered),
   }));
   notes.push(
-    `budget: phase ${phaseId} is at ${String(Math.round(pct))}% of its $${phase.ceiling_usd.toFixed(2)} ceiling ` +
-      `after this stage ($${phaseRemaining.toFixed(2)} left before it)` +
+    `budget: phase ${phaseId} is at ${String(Math.round(pct))}% of one attempt's $${basis.toFixed(2)} share ` +
+      `of its $${phase.ceiling_usd.toFixed(2)} ceiling ($${phaseRemaining.toFixed(2)} left before this stage)` +
       (tally.unmetered === 0
         ? ""
         : ` — measured against ${spentFigure(tally)}, so the real share is higher`),

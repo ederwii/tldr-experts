@@ -140,6 +140,7 @@ describe("the dashboard model", () => {
       "runs[].lastEventFrom",
       // #183: which tldrx wrote the run, already resolved to "not recorded".
       "runs[].lastWrittenBy",
+      "runs[].maxAttempts",
       "runs[].nextAction.alternatives[]",
       "runs[].nextAction.command",
       "runs[].nextAction.kind",

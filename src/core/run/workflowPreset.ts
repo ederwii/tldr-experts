@@ -22,7 +22,7 @@ import {
   EFFORT_LEVELS, isEffortLevel, MAX_PRECONDITIONS, PRECONDITION_TIMEOUT_S, type EffortLevel,
 } from "../schemas/stage.ts";
 import { allowlistIssue } from "../schemas/commandAllowlist.ts";
-import { readStageTuning } from "../schemas/stageTuning.ts";
+import { readStageTuning, STAGE_TUNING_DEFAULTS } from "../schemas/stageTuning.ts";
 import { loadWorkspace } from "../../hooks/lib/workspace.ts";
 
 /** The five phase folders of spec §1, in order. A numeric `phase:` indexes this. */
@@ -132,6 +132,41 @@ export interface WorkflowPreset {
    */
   readonly gates: GatesPolicy;
   readonly source: string;
+}
+
+/**
+ * The BUILD stage's resolved `attempts` and `timeout_s` for one scope — the
+ * answer to "how many turns does a story of this run get, and how long does each
+ * one have", asked by everything that is not the facilitator.
+ *
+ * ONE derivation, three readers with nothing else in common: the DoD-gate hook
+ * (which re-runs a story's commands and must kill them on the same clock the turn
+ * had), the dashboard model (which prints "attempt N of M" per story), and
+ * `story reopen` (which says which attempt the fix runs as). Each of them used to
+ * carry its own copy of the constant, which is how the hook ended up at 900 s
+ * while every shipped stage said 7200.
+ *
+ * **TOLERANT — it never throws.** All three callers are places a throw would be a
+ * disaster: a PreToolUse hook that fails closed, a page render, and a CLI verb's
+ * final sentence. A workflow that cannot be read, a scope with no Build stage, a
+ * `stage.yml` that is not there: each gives the SHIPPED defaults, which is what
+ * every one of these readers hard-coded before this function existed.
+ */
+export function buildStageDefaults(root: string, scope: string): {
+  readonly attempts: number;
+  readonly timeoutS: number;
+} {
+  const fallback = { attempts: STAGE_TUNING_DEFAULTS.attempts, timeoutS: DEFAULT_TIMEOUT_S };
+  try {
+    const preset = loadWorkflowPreset(root, scope);
+    // The BUILD phase's stage, by phase rather than by the id `build`: a scope may
+    // name its stage anything, and `phase:` is what spec §1 fixes.
+    const stage = preset.stages.find((s) => s.phase === PHASE_IDS[3]);
+    if (stage === undefined) return fallback;
+    return { attempts: stage.attempts, timeoutS: stage.timeout_s };
+  } catch {
+    return fallback;
+  }
 }
 
 /** A workspace's own copy wins over the framework's shipped default. */
