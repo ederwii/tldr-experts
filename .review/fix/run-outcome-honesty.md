@@ -1,6 +1,24 @@
 verdict: merge
 reviewed-by: fresh reviewer sub-agent, claude-sonnet-5, dispatched by session tldr-experts-4a
-against: 66a7915
+against: 15ba017
+
+## Re-verification after rebase (15ba017, was 66a7915 on base c33bc82)
+
+Rebased onto 186afee (#212, watcher no-query). `git diff c33bc82..66a7915` vs
+`git diff 186afee..15ba017` (both excluding CHANGELOG.md) are byte-identical except three
+`docs/spec.md` hunks whose blob hashes and `@@` line offsets shift because #212 added content
+earlier in that same file — no payload `+`/`-` line differs. No code, test, or non-CHANGELOG
+doc content changed by this rebase.
+
+CHANGELOG union checked directly: one `## 0.15.0 — unreleased` heading, exactly one
+`### Fixed` (the two #210 bullets) and one `### Added` (#212's watcher bullet followed by
+#210's `outcome:` bullet) — no duplicate heading of either kind. Dated sections from
+`## 0.14.3 — 2026-09-10` down are unchanged.
+
+`bash scripts/release-check.sh --ci` → exit 0 (`release check OK for 0.14.3`; the two
+"differs" lines are pre-existing recorded CHANGELOG amendments for 0.14.0/0.4.0, not new).
+`bun run typecheck` → exit 0. `bun test test/run-outcome.test.ts test/notify-hook.test.ts` →
+38 pass, 0 fail, exit 0. No new findings; verdict and the Minor note below stand unchanged.
 
 ## Re-verification after rebase (66a7915, was 67697a3 on base 5215a37)
 
