@@ -163,6 +163,29 @@ export interface AgentOutcome {
    */
   readonly metered: boolean;
   readonly usage: AgentUsage;
+  /**
+   * Where `usage` came from (#207). Additive, and `"result"` on every turn that
+   * finished — the shape this file has always returned.
+   *
+   * MEASURED, `test/fixtures/agent/stream-json.jsonl` (`claude` 2.1.251): the
+   * stream reports TOKENS per assistant message (`message.usage`) and DOLLARS
+   * only on the final `type: "result"` line (`total_cost_usd`). A turn SIGKILLed
+   * on `timeout_s` never reaches that line, so before #207 fifteen minutes of
+   * real compute booked an all-zero `usage` — honestly labelled `metered: false`,
+   * and still throwing away token counts the provider had already streamed.
+   *
+   * `"partial-before-kill"` means: these tokens are the LAST frame the provider
+   * reported before the kill — a floor on the turn, not its total, and never a
+   * price. No USD is derived from them: this file quotes what a provider said,
+   * and a dollar figure this repo computed from tokens would be a second
+   * implementation of a derivation `budget/` already owns (AGENTS.md §7).
+   *
+   * `"absent"` means the child died without emitting one usage frame, and
+   * `unmeteredReason` says so in words rather than as a zero.
+   */
+  readonly usageBasis: "result" | "partial-before-kill" | "absent";
+  /** Why this turn has no dollars, when the reason is knowable. Else null. */
+  readonly unmeteredReason: string | null;
   readonly envelope: AgentEnvelope | null;
   /** The raw `structured_output`, for a request that passed its own `schema`. */
   readonly structured: unknown;
@@ -340,6 +363,13 @@ export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
   const controller = new AbortController();
   let reads = 0;
   let capped = false;
+  // The last usage frame the provider streamed. Kept so a turn that is KILLED
+  // still reports the tokens it had already been charged for (#207). Not summed
+  // across frames: Claude restates the conversation prefix on every assistant
+  // message (measured — five frames reading 9/9/9/8/8 input tokens against a
+  // result total of 17), so a sum would be an invented aggregate the provider
+  // never published. The last frame is a figure it did publish.
+  let streamedUsage: AgentUsage | null = null;
 
   const schemaDir = provider === "codex" ? mkdtempSync(join(tmpdir(), "tldrx-codex-schema-")) : null;
   const schemaPath = schemaDir === null ? null : join(schemaDir, "output-schema.json");
@@ -359,6 +389,17 @@ export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
         env: subagentEnv(request.env),
         onStdoutLine: (line) => {
           for (const event of stream.push(line)) {
+            // Every usage frame the provider streams, kept so a KILLED turn can
+            // still report the last one (#207). Above the read cap on purpose: a
+            // frame that arrived before the cap fired is a frame that arrived.
+            if (event.kind === "cost") {
+              streamedUsage = {
+                input_tokens: event.inputTokens,
+                output_tokens: event.outputTokens,
+                cache_creation_input_tokens: event.cacheCreationTokens,
+                cache_read_input_tokens: event.cacheReadTokens,
+              };
+            }
             // Counted on COMPLETION, so the kill lands between tools rather than
             // inside one, and a read whose result never arrived is not charged.
             //
@@ -403,7 +444,11 @@ export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
       error: readCapError(reads, cap, provider),
     }
     : { ...interpreted, reads, stoppedBy: null };
-  const timed: AgentOutcome = { ...outcome, durationMs: Math.max(0, Date.now() - startedMs) };
+  const timed: AgentOutcome = {
+    ...outcome,
+    ...partialUsage(outcome, streamedUsage),
+    durationMs: Math.max(0, Date.now() - startedMs),
+  };
   // A process that died before its `result` event never emitted `done`. Say so,
   // so the view stops on a failure rather than on a frozen last frame.
   if (!outcome.ok && outcome.error !== null && !capped) {
@@ -413,6 +458,29 @@ export async function spawnAgent(request: AgentRequest): Promise<AgentOutcome> {
   // read cap still took wall clock, and that is exactly the span an operator
   // hunting a 43-hour run wants to see. A duration is not a reward for success.
   return timed;
+}
+
+/**
+ * What a KILLED turn is allowed to say about its usage (#207).
+ *
+ * Only a turn that produced no result document is touched, which is exactly the
+ * killed one: a process that reached `type: "result"` reported its own totals and
+ * they are not second-guessed here. `metered` is untouched in both branches —
+ * tokens are not dollars, and nothing may sum this into a spend.
+ */
+function partialUsage(
+  outcome: AgentOutcome,
+  streamed: AgentUsage | null,
+): Partial<AgentOutcome> {
+  if (!outcome.timedOut) return {};
+  if (streamed === null) {
+    return { usageBasis: "absent", unmeteredReason: "killed before any usage was reported" };
+  }
+  return {
+    usage: streamed,
+    usageBasis: "partial-before-kill",
+    unmeteredReason: "killed mid-turn; the tokens above are the last frame the provider streamed",
+  };
 }
 
 /**
@@ -449,7 +517,13 @@ export function interpret(
   const ok = exitCode === 0 && !isError && !timedOut && doc !== null;
 
   return {
-    ok, exitCode, timedOut, isError, sessionId, costUsd, metered, usage, envelope,
+    ok, exitCode, timedOut, isError, sessionId, costUsd, metered, usage,
+    // `interpret` is handed a finished process and a whole buffer: whatever usage
+    // it found came off the result document. Only `spawnAgent`, which watched the
+    // stream, can say otherwise — and it overwrites both fields when it can.
+    usageBasis: "result",
+    unmeteredReason: null,
+    envelope,
     structured: doc?.structured_output ?? null, result,
     error: ok ? null : describe(exitCode, doc, stderr, timedOut, stdout, provider),
     raw: stdout,

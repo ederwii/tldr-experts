@@ -191,8 +191,25 @@ a command **byte-equal** to one in `.tldrx/workspace.yml` runs, argv-split with 
 refusal is at load rather than at run time, so a stage naming an undeclared command cannot open
 a run at all.
 
-**A declared input was truncated.** `inputs_max_bytes` ran out. The message names the file and
-its size. Either raise the key or split the seed with `tldrx seed triage`.
+**A declared input was truncated.** `inputs_max_bytes` ran out, so the sub-agent read a PREFIX
+of that file and not the file. It is on the ledger as an `input.truncated` event with all four
+numbers, `tldrx run status --verbose` lists it under the stage the run is parked on, and the
+`stage.done` / `run.failed` / `status` notifications end with one sentence naming it — *"1 input
+truncated: facts.yml 169 KB → 87 KB (cap 96 KB)."* Two remedies, and only two: **raise
+`inputs_max_bytes`** in the stage file (the whole prompt still has to fit under
+`prompt_max_bytes`, which refuses before any money), or **make the input smaller** — split the
+seed with `tldrx seed triage`, or retire what a bloated `facts.yml` no longer needs. Treat it as
+urgent on a long, high-effort stage: a design turn reasoning from half a fact ledger is the
+combination that produced a killed 15-minute turn with nothing to show for it (#207).
+
+**A stage failed with "claude timed out (killed after the stage's timeout_s)".** The child was
+SIGKILLed on the stage's clock, so it never printed its own cost line. The turn is booked
+`metered: false` — honestly, because nothing this process saw measured its dollars — and the
+`agent.result` carries `usage_basis` saying which kind of nothing you have: `partial-before-kill`
+means the tokens beside it are the last frame the provider streamed before the kill (a floor on
+the turn, never a price, and never summed into a spend), and `absent` means not one frame
+arrived, with `unmetered_reason` spelling that out. `tldrx cost` shows the basis. No dollar
+figure is invented for a killed turn in either case.
 
 **`stopped after N reads: the stage's max_reads is <cap>`.** The read cap bit. Raise
 `max_reads` in the stage file, or `--max-reads <n>` for one run. A stopped stage is a FAILED

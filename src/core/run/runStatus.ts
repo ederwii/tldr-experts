@@ -12,6 +12,7 @@ import { runTally, unmeteredNote } from "../budget/budgetView.ts";
 import { spentClause } from "../budget/spentFigure.ts";
 import type { RunBudget } from "../budget/RunBudget.ts";
 import { renderAttempts, stageAttempts, type StageAttempts } from "./attempts.ts";
+import { renderTruncations, stageTruncations, type Truncation } from "./truncations.ts";
 import { buildProgress, renderBuildProgress, renderStoryCosts, BUILD_PHASE, type BuildProgress } from "./buildProgress.ts";
 import {
   outcomeLine, statusWithOutcome, type OutcomeLine,
@@ -170,6 +171,13 @@ export interface RunStatusView {
    * reads it positionally in at least one test.
    */
   readonly outcome: OutcomeLine | null;
+  /**
+   * What the inputs budget cut for the CURSOR stage, from `input.truncated`
+   * events (#207). Empty on every run that cut nothing, so the default screen and
+   * `--json` are unchanged for them. Appended, never inserted, for the same
+   * reason `outcome` above it was.
+   */
+  readonly truncations: readonly Truncation[];
 }
 
 export function buildStatus(run: RunFile, budget: RunBudget, runDir: string): RunStatusView {
@@ -210,6 +218,8 @@ export function buildStatus(run: RunFile, budget: RunBudget, runDir: string): Ru
     // a run closes, so a live run has none and "not recorded" there would claim
     // the field was owed and missing rather than not yet due (#210, §7).
     outcome: isFinished(run.status) ? outcomeLine(run.outcome) : null,
+    // APPENDED for the same reason every key above it was (#207).
+    truncations: stageTruncations(runDir, run.cursor.stage),
   };
 }
 
@@ -346,6 +356,11 @@ export function renderStatus(view: RunStatusView, verbose = false): string {
   // matters, and `cost_usd` alone cannot tell one $2.60 try from two $1.30 ones.
   const attempts = renderAttempts(view.attempts);
   if (attempts !== null) lines.push(`${view.cursor.stage.padEnd(7)} ${attempts}`);
+  // What the cursor stage's sub-agent was NOT given (#207). Under `--verbose`
+  // only, with the rest of the detail: on the default screen a stage that read a
+  // prefix and a stage that read the file look identical, and the difference is
+  // the first thing worth knowing after a turn that failed or ran long.
+  if (verbose) lines.push(...renderTruncations(view.truncations));
   lines.push("", ...renderGates(view.gates, verbose));
   lines.push(...renderOperatorNotes(view.operator_notes));
   lines.push(`waiting ${view.waiting.message}`);

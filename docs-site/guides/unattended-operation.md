@@ -233,6 +233,13 @@ The enum is closed — a kind that arrives from nowhere is a branch nobody wrote
 | `budget.warned` | a ceiling is close | `tldrx budget show --run <id>` | `spent_usd`, `ceiling_usd` |
 | `status` | every `--notify-every <duration>` while the loop runs | `tldrx run status <id>`, or the answer line when parked on a question, or the approve line when parked on a gate | `status_text` — what `tldrx run status` prints, verbatim — `waiting_on`, the blocking open question ids (`[]` when none), and `waiting_on_gate` + `gate_policy` only while a gate is pending |
 
+**A truncated input rides in the summary, and adds no kind.** When a stage's `inputs_max_bytes`
+could not fit a declared input whole, the `stage.done`, `run.failed` and `status` summaries end
+with one extra sentence — *"1 input truncated: facts.yml 169 KB → 87 KB (cap 96 KB)."* — so the
+`switch` you already wrote keeps working, and you learn that a sub-agent read a prefix rather
+than the file while the run is still going rather than from `.agent/<stage>/prompt.md` after it
+failed.
+
 `exit_family` is the exit code in words, so a notification on a phone says *"refused — a
 budget ceiling or a gate said no"* rather than *"exit 2"*. The questions, their options and
 their recommendation are the **same card** `run auto --gate-agent` prints, so a

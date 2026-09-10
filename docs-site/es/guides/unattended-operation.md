@@ -241,6 +241,13 @@ así que un `switch` sobre `kind` con un `default` es un adaptador completo.
 | `budget.warned` | un techo está cerca | `tldrx budget show --run <id>` | `spent_usd`, `ceiling_usd` |
 | `status` | cada `--notify-every <duration>` mientras el bucle corre | `tldrx run status <id>`, o la línea de respuesta cuando está detenido en una pregunta, o la de aprobación cuando lo está en una compuerta | `status_text` — lo que imprime `tldrx run status`, textual — `waiting_on`, los ids de las preguntas abiertas que lo detienen (`[]` si no hay), y `waiting_on_gate` + `gate_policy` solo mientras hay una compuerta pendiente |
 
+**Una entrada truncada viaja en el resumen, y no agrega un tipo.** Cuando el `inputs_max_bytes`
+de una etapa no pudo entrar una entrada declarada entera, los resúmenes de `stage.done`,
+`run.failed` y `status` terminan con una oración más — *"1 input truncated: facts.yml 169 KB →
+87 KB (cap 96 KB)."* — así el `switch` que ya escribiste sigue funcionando, y te enterás de que
+un subagente leyó un prefijo y no el archivo mientras la corrida sigue viva, en vez de
+descubrirlo en `.agent/<stage>/prompt.md` después de que falló.
+
 `exit_family` es el código de salida en palabras, para que un aviso en un teléfono diga
 *"refused — a budget ceiling or a gate said no"* y no *"exit 2"*. Las preguntas, sus opciones
 y su recomendación son la **misma tarjeta** que imprime `run auto --gate-agent`, así que un

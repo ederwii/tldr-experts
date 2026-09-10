@@ -259,3 +259,35 @@ describe("the verbatim-branch-name rule for the review record is written down", 
     ).toBe(true);
   });
 });
+
+/**
+ * `against:` names the CODE head, and both documents say so (#207).
+ *
+ * Measured 2026-09-09: a record whose `against:` carried the sha of the record
+ * COMMIT was refused by `scripts/merge-wave.sh` with exit 10 — correctly, because
+ * amending that commit replaces its sha and the staleness check then compares a
+ * record against a sha that no longer exists on the branch. The rule is one
+ * sentence and it was written nowhere an agent reads before it happens: SKILL.md
+ * is what the workflow reader sees, the brief is what the reviewer is handed, and
+ * a rule in only one of the two is a rule half the readers never get.
+ *
+ * The literal "code head" is asserted rather than a paraphrase: a proxy string
+ * like "head" alone would pass on innocent prose (AGENTS.md §8).
+ */
+describe("the review record's `against:` names the CODE head, in both documents", () => {
+  test("SKILL.md §3 says it", () => {
+    const text = existsSync(SKILL_MD) ? readFileSync(SKILL_MD, "utf8") : "";
+    expect(
+      text.includes("code head"),
+      "SKILL.md never says `against:` must name the code head — the workflow reader is not told",
+    ).toBe(true);
+  });
+
+  test("the reviewer brief says it too", () => {
+    const text = skillFiles().find((f) => f.rel.endsWith("sub-agent-briefs.md"))?.text ?? "";
+    expect(
+      text.includes("code head"),
+      "the reviewer brief never says `against:` must name the code head",
+    ).toBe(true);
+  });
+});

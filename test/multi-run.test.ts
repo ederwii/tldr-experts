@@ -250,6 +250,10 @@ const SINGLE_RUN_KEYS = [
   // Appended by #210: what the run DELIVERED, null while it is still open. At
   // the END again, for the sixth time and the same reason.
   "outcome",
+  // `truncations` (#207): what the inputs budget cut for the cursor stage, `[]`
+  // on a run whose inputs all fit. Appended at the END, which is what this list
+  // exists to enforce.
+  "truncations",
 ];
 
 describe("tldrx run status with several runs open", () => {

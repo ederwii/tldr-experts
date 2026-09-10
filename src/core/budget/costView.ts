@@ -81,6 +81,18 @@ export interface CostAttempt {
    */
   readonly durationMs?: number;
   readonly durationBasis?: string;
+  /**
+   * Where this attempt's TOKENS came from, when the record says (#207).
+   * Undefined on every ordinary attempt — its tokens came off a result document —
+   * and on every event written before the key existed, which is "not recorded"
+   * and never a claim. `"partial-before-kill"` means the turn was killed on
+   * `timeout_s` and the counters beside it are the last frame the provider
+   * streamed: a floor, not a total. `"absent"` means not one frame arrived, and
+   * `unmeteredReason` says so in words.
+   */
+  readonly usageBasis?: string;
+  /** Why an unmetered attempt has no dollars, when the record says. */
+  readonly unmeteredReason?: string;
 }
 
 export interface CostStage {
@@ -436,6 +448,11 @@ export function toAttempt(event: TldrxEvent): CostAttempt | null {
     ...(typeof payload.duration_ms === "number" && Number.isFinite(payload.duration_ms)
       ? { durationMs: payload.duration_ms, durationBasis: str(payload.duration_basis) ?? undefined }
       : {}),
+    // Read, never inferred: absent stays absent, exactly as the duration above.
+    ...(str(payload.usage_basis) === null ? {} : { usageBasis: str(payload.usage_basis) as string }),
+    ...(str(payload.unmetered_reason) === null
+      ? {}
+      : { unmeteredReason: str(payload.unmetered_reason) as string }),
     tokens: {
       input: num(usage?.input_tokens),
       output: num(usage?.output_tokens),
@@ -532,6 +549,16 @@ export function renderRunCost(cost: CostRun): string {
         + `${attempt.task}${attempt.model === null ? "" : ` · ${attempt.model}`}`
         + `  ${tokenColumns(attempt.tokens, attempt.declaredTokens ?? 0)}`,
       );
+      // A killed turn's counters are not a total, and a row of numbers cannot say
+      // that. The basis goes on its own line UNDER them, in words, rather than
+      // being folded into a column a reader would sum (#207).
+      if (attempt.usageBasis !== undefined) {
+        lines.push(
+          `  ${" ".repeat(width)}  ${" ".repeat(ECONOMY_WIDTH)}  `
+          + `${padCell("")}  ${durationCol("")}  ${attempt.task} · usage ${attempt.usageBasis}`
+          + `${attempt.unmeteredReason === undefined ? "" : ` — ${attempt.unmeteredReason}`}`,
+        );
+      }
     }
   }
   if (cost.stages.length === 0) {

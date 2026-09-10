@@ -82,7 +82,10 @@ import {
   dispatchNotesRecord, type PendingStage,
 } from "./pending.ts";
 import { hasReviewBundle, preparedBundles, PENDING_JSON } from "../run/prepared.ts";
-import { capInputs, describeTruncatedInputs, inlineInputs, type InlineResult } from "./seedInputs.ts";
+import {
+  capInputs, describeTruncatedInputs, inlineInputs,
+  type InlineResult, type TruncatedInput,
+} from "./seedInputs.ts";
 import {
   buildLedger, questionsBytesOf, renderContextWarning, renderLedger, renderRefusal,
   type ContextLedger,
@@ -644,6 +647,27 @@ async function runStage(
   const taskId = nextTaskId(store, phaseId, stageId);
   // Tell whoever is watching what this turn is. No-op when nobody is.
   announce(store.runId, stageId, taskId, cap, maxReads);
+  // What the inputs budget CUT, on the ledger, before a cent is spent (#207).
+  //
+  // The sub-agent has always been told in-band (`seedInputs.ts`'s "truncated
+  // inputs:" line, which is in the prompt above). The OWNER was not: measured on
+  // a real workspace, a 168,873 B `facts.yml` reached an `effort: high` design
+  // turn as 86,571 B, that turn ran to `timeout_s` and was killed, and the only
+  // record of the cut was `.agent/<stage>/prompt.md` — a file nobody opens until
+  // after the failure. One event per cut input, at spawn, so `run status
+  // --verbose` and every notification summary can say it without re-deriving it.
+  //
+  // `cost_usd: 0` because a truncation costs nothing: this is a fact about the
+  // prompt, not a charge.
+  for (const cut of assembled.truncated) {
+    store.append(event(options, store.runId, stageId, "input.truncated", {
+      stage: stageId,
+      path: cut.path,
+      bytes: cut.totalBytes,
+      inlined_bytes: cut.inlinedBytes,
+      cap: assembled.inputsBudgetBytes,
+    }, 0, stage.expert));
+  }
   store.append(event(options, store.runId, stageId, "agent.spawned", {
     phase: phaseId,
     task: taskId,
@@ -710,6 +734,14 @@ async function runStage(
     duration_ms: agent.durationMs,
     duration_basis: "spawned",
     ...(agent.metered ? {} : { metered: false }),
+    // Additive and ABSENT on an ordinary turn, so a finished turn's record is
+    // byte-identical to the one it wrote before #207. Present only when the turn
+    // was killed: `partial-before-kill` says the tokens below are the last frame
+    // the provider streamed (a floor, never a price), `absent` says not one frame
+    // arrived — with the reason in words, which is the house rule for a value
+    // that cannot be derived (AGENTS.md §7).
+    ...(agent.usageBasis === "result" ? {} : { usage_basis: agent.usageBasis }),
+    ...(agent.unmeteredReason === null ? {} : { unmetered_reason: agent.unmeteredReason }),
     usage: {
       input_tokens: agent.usage.input_tokens,
       output_tokens: agent.usage.output_tokens,
@@ -2164,6 +2196,13 @@ export interface AssembledPrompt {
   readonly ledger: ContextLedger;
   /** Declared inputs the shared byte budget could not fit whole. */
   readonly truncatedNotes: readonly string[];
+  /**
+   * The same truncations as DATA, for the ledger (#207). The notes above are
+   * stdout prose; `input.truncated` needs the four numbers unworded.
+   */
+  readonly truncated: readonly TruncatedInput[];
+  /** The `inputs_max_bytes` in force, so the event can name the cap that cut. */
+  readonly inputsBudgetBytes: number;
   /** Declared inputs that resolve to nothing — one stdout line each (gh #131). */
   readonly absentNotes: readonly string[];
   /** The host's own context for this cycle, already read and capped. */
@@ -2264,6 +2303,8 @@ export function assemblePrompt(
     bundles,
     ledger,
     truncatedNotes: describeTruncatedInputs(inlined),
+    truncated: inlined.truncated,
+    inputsBudgetBytes: inlined.budgetBytes,
     absentNotes: describeAbsentInputs(absentInputs),
     dispatchNotes,
   };

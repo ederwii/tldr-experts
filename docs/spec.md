@@ -1215,7 +1215,7 @@ Append-only audit log: the cost ledger, the `replay`/`retro` input, and — with
 **Type enum:** `run.created` `run.closed` `run.unlocked` `run.cancelled` `run.attended` `phase.started` `phase.done` `stage.started` `stage.done` `stage.failed`
 `stage.skipped` `task.started` `task.done` `agent.spawned` `agent.result` `question.asked` `question.answered`
 `gate.requested` `gate.approved` `gate.rejected` `gate.revoked` `gate.policy_changed` `story.reopened` `story.base_fastforwarded` `story.review_retried` `story.work_rescued`
-`story.touches_widened` `worktree.foreign_work_aside` `worktree.foreign_work_restored` `result.unreadable` `operator_note` `check.passed` `check.failed` `budget.warned`
+`story.touches_widened` `worktree.foreign_work_aside` `worktree.foreign_work_restored` `result.unreadable` `input.truncated` `operator_note` `check.passed` `check.failed` `budget.warned`
 `budget.blocked` `budget.raised` `budget.granted` `fact.added` `fact.retired` `fact.superseded` `fact.conflict_raised` `doc.superseded` `notify.sent` `notify.failed` `map.refreshed` `ticket.synced` `error`. Closed set: an
 unknown type is a validation error.
 
@@ -1337,6 +1337,29 @@ forecast, an unreadable diff is simply no measurement, and the story's `touches:
 the operator's verb (§2.13), and a framework that back-dated a declaration would make the plan claim it declared a path
 it did not. Why the same event rather than a sibling type: "the surface grew" is one fact, and two types would make
 every reader ask two questions to learn it.
+
+**`input.truncated` was added 2026-09-09 (#207).** One event per declared input the stage's `inputs_max_bytes`
+budget could not fit whole, appended by the facilitator AT SPAWN — before a cent is spent — with `cost_usd: 0`,
+because a truncation is a fact about the prompt and not a charge. Payload: `stage`, `path` (the declared path, as the
+stage file spells it), `bytes` (the file on disk), `inlined_bytes` (how much reached the prompt; `0` when none of it
+did) and `cap` (the `inputs_max_bytes` in force). The sub-agent was always told in-band — §2.3's budget writes a
+"truncated inputs: …" line into the prompt itself — and that is precisely what this event exists to change: measured
+on a real workspace, a 168,873 B `facts.yml` reached an `effort: high` design turn as 86,571 B, that turn ran to its
+`timeout_s` and was killed, and the only surviving record of the cut was `.agent/<stage>/prompt.md`, a file nobody
+opens until after the failure. `tldrx run status --verbose` lists these for the stage the run is parked on, and the
+§2.18 summaries carry them in one sentence. **Absent means nothing was cut**, so a run whose inputs all fit writes a
+log byte-identical to the one it wrote before this type existed.
+
+**`agent.result` gained `usage_basis` and `unmetered_reason` 2026-09-09 (#207).** Two ADDITIVE payload fields, both
+**absent on a turn that finished** — a completed turn's record is unchanged. They appear only when the sub-agent was
+KILLED on `timeout_s`. `usage_basis: "partial-before-kill"` means the `usage` block beside it is the last token frame
+the provider streamed before the kill: a floor on what the turn consumed, never its total, and never a price —
+`metered` stays `false` and nothing may sum it. `usage_basis: "absent"` means not one frame arrived, and
+`unmetered_reason` says which in words ("killed before any usage was reported") rather than leaving a confident zero
+to be read as a measurement. **No dollar figure is ever synthesised here.** Measured against `claude` 2.1.251: the
+stream reports tokens per assistant message (`message.usage`) and dollars only on the final `type: "result"` line
+(`total_cost_usd`), which a killed process never reaches — so a USD figure for a killed turn could only be one this
+framework computed itself, and §2.11's rule is that a cost record never lies in the dangerous direction.
 
 **`fact.conflict_raised` was added 2026-09-07 (#169).** The `tldrx answer` path runs the lexical duplicate check
 against the live facts before it appends (§2.5), and a hit RAISES rather than refuses: the answer is recorded, the
@@ -2150,6 +2173,16 @@ Both are built by ONE renderer (`core/run/runOutcome.ts`), so the notification, 
 line, the decision card, `tldrx run status`, the dashboard and the `ship` PR body cannot
 disagree about what a run delivered. Measured 2026-09-09 (#210): a summary of `$1.78` and one
 green check was the whole of what an owner had to approve two zero-delivery runs on.
+
+**A truncated input rides in the summary, and adds no kind (#207).** When the stage's
+`inputs_max_bytes` cut a declared input (§2.9 `input.truncated`), the `stage.done`, `run.failed`
+and `status` summaries end with one extra sentence naming the count, the file and both ends of
+the cut — *"1 input truncated: facts.yml 169 KB → 87 KB (cap 96 KB)."* The kind enum above is
+unchanged on purpose: a truncation is a caveat on a moment already being announced, not a moment
+of its own, and a tenth kind would have to be handled by every adapter already written against
+these nine. The sentence is worded in ONE place (`src/core/run/truncations.ts`), which is the
+same place `tldrx run status --verbose` reads, so the phone and the terminal cannot quote
+different numbers. Absent — and so a byte-identical summary — when nothing was cut.
 
 The questions, their options and their recommendation are the **same card** `run auto
 --gate-agent` prints (§ "Decision cards"), so a notification and a terminal can never disagree
