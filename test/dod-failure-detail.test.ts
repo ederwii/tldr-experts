@@ -30,6 +30,7 @@ import {
 import { dodFailureReason, type DodResult, type StoryOutcome } from "../src/core/build/outcome.ts";
 import { buildDeveloperPrompt } from "../src/core/build/prompts.ts";
 import { renderReviewLog } from "../src/core/build/review.ts";
+import { notFoundBinary } from "../src/core/build/worktreeDeps.ts";
 import { capPayload, MAX_PAYLOAD_BYTES, serializeEvent } from "../src/core/events/Event.ts";
 import { readReviewLedger } from "../src/core/facilitator/executors/build.ts";
 import { runNext } from "../src/core/facilitator/runNext.ts";
@@ -78,6 +79,11 @@ async function runScript(body: string, name = "gate.sh"): Promise<Ran> {
     storyId: "S1",
     repo: "app",
     worktree: dir,
+    // #209's two: this fake worktree IS its own repo checkout, and nothing
+    // declares an `install:` — so a 127 here would be read as an ordinary red,
+    // which is what these tests are about anyway (they never exit 127).
+    repoDir: dir,
+    installDeclared: false,
     commands: [command],
     workspaceCommands: new Set([command]),
     timeoutMs: 30_000,
@@ -198,7 +204,7 @@ exit 1
     // the same key set. `test/build-golden.test.ts` is the other half of this.
     expect(passed?.payload.detail).toBe("");
     expect(Object.keys(passed?.payload ?? {}))
-      .toEqual(["phase", "check", "story", "command", "exit_code", "detail"]);
+      .toEqual(["phase", "check", "story", "command", "exit_code", "tree", "detail"]);
   });
 });
 
@@ -221,6 +227,14 @@ describe("#211 · failureExcerpt picks failure-looking lines, never the first st
   test("the excerpt is bounded even when every line matches", () => {
     const text = Array.from({ length: 5 }, () => `Error: ${"x".repeat(4000)}`).join("\n");
     expect(Buffer.byteLength(failureExcerpt(text), "utf8")).toBeLessThanOrEqual(DOD_DETAIL_MAX_BYTES);
+  });
+
+  test("a shell's `command not found` is failure-looking — gh #209 reads the binary off it", () => {
+    // The regression this pins: `absent_binary` is parsed out of `tail`, so a
+    // heuristic that could not see a 127's only line silently emptied it.
+    const text = "> app@0.0.0 test\n> dodbin\nsh: dodbin: command not found\n";
+    expect(failureSummaryLine(text)).toBe("sh: dodbin: command not found");
+    expect(notFoundBinary(failureSummaryLine(text))).toBe("dodbin");
   });
 
   test("outputTail keeps the END of a long output, bounded on both axes", () => {

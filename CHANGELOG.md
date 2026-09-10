@@ -236,7 +236,10 @@
   attempt`, so the agent reads the real failure instead of rediscovering it in a worktree that
   no longer exists. One heuristic in one helper (`failureExcerpt` in
   `src/core/build/dodOutput.ts`), one path derivation (`dodOutputRel`), and a green command
-  still writes no file and emits the byte-identical event it always did. The citation resolves
+  still writes no file and emits the byte-identical event it always did. `not found` is in the
+  heuristic for a measured reason: a shell's `sh: <bin>: command not found` is the only line an
+  exit 127 has, and #209 reads the absent binary's name off `tail` — without it `absent_binary`
+  went from `dodbin` to `""` on the rebase. The citation resolves
   through the repo's existing `lineOf()` to the line the excerpt starts on, never a constant
   `:1`, and the heuristic reads bun's own `(fail)` summary line as well as the capitalised
   spellings.

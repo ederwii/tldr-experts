@@ -61,9 +61,16 @@ export const DOD_OUTPUT_DIR = "dod-output";
  * everything except that they say one of these words when something breaks. A
  * false positive costs a slightly worse excerpt; a false negative costs the whole
  * point of this file.
+ *
+ * `not found` is here for a measured reason, not for symmetry: a shell's
+ * `sh: dodbin: command not found` is the ONE line an exit 127 has, and gh #209
+ * reads the absent binary's name out of `tail`. Without it the heuristic fell
+ * through to the last few lines, `tail` became `> app@0.0.0 test`, and
+ * `absent_binary` went from `dodbin` to `""` — the instrument unable to see the
+ * thing it is pointed at.
  */
 const FAILURE_RE =
-  /FAIL|Failed|failed|\bfail\b|Error|error:|assert|✗|✖|not ok|Exception|Traceback|exit code/;
+  /FAIL|Failed|failed|\bfail\b|Error|error:|assert|✗|✖|not ok|not found|Exception|Traceback|exit code/;
 
 /** `04-build/log/dod-output/<story>-<n>.txt`, relative to the run dir. ONE derivation. */
 export function dodOutputRel(storyId: string, index: number): string {

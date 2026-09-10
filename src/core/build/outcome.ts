@@ -74,6 +74,7 @@ export interface DodResult {
    * ran because the worktree has no `node_modules`.
    */
   readonly absent?: AbsentBinary | null;
+  /**
    * Up to `DOD_EXCERPT_MAX_LINES` failure-looking lines, bounded by
    * `DOD_DETAIL_MAX_BYTES` (#211). ADDITIVE and optional: absent on every record
    * written before this field existed, and on a command that passed or was
