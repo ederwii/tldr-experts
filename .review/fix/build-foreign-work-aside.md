@@ -1,6 +1,6 @@
 verdict: merge
 reviewed-by: fresh adversarial reviewer sub-agent, claude-opus-5, dispatched by session tldr-experts-4a
-against: 68fe1d6
+against: dbe15a1
 
 Two rounds, adversarial, against the first change in this repo that WRITES to an owner's
 uncommitted working tree. Every claim below is `measured` unless it says otherwise.
@@ -70,7 +70,7 @@ test/build-executor.test.ts test/build-golden.test.ts` exit 0 (155 pass, 0 fail 
 byte-identical). `scripts/release-check.sh --ci` was NOT run (it runs the full suite, which this
 review's brief forbids) — unverified here.
 
-## Round 3 — re-verified after the rebase onto 5215a37 (code 7af7472, dbe15a1)
+## Round 3 — re-verified after the rebase onto 5215a37 (code head dbe15a1, over 7af7472)
 
 `git diff a15fbc5..812878a` and `git diff 5215a37..dbe15a1`, both excluding `CHANGELOG.md`, are
 BYTE-IDENTICAL (`diff` exit 0) — every source and test hunk I attacked is unchanged. The only
