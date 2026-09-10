@@ -58,6 +58,7 @@ import { decisionHeader, renderDecisionCard, type DecisionCard } from "../ui/dec
 import { blockingQuestionIds } from "./skipIf.ts";
 import { buildStatus, renderStatus } from "../run/runStatus.ts";
 import { waitingFor } from "../run/waiting.ts";
+import { stageTruncations, truncationSentence } from "../run/truncations.ts";
 import { gatePolicyFor, type GatePolicy } from "../run/gatePolicy.ts";
 import { readNotifyDeclaration } from "../notify/declaration.ts";
 import { Notifier } from "../notify/Notifier.ts";
@@ -274,7 +275,9 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
             // thing the run was missing (gh #197) — the identical defect this comment's
             // first half already records, one park along.
             await notifier.send(
-              statusNotification(notifyCtx(), text, stillBlocking(runDir), pendingGate(runDir)),
+              statusNotification(
+                notifyCtx(), text, stillBlocking(runDir), pendingGate(runDir), cutInputs(stageIdOf()),
+              ),
               stageIdOf(),
             );
           })();
@@ -298,12 +301,32 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
             // with the run still open has no outcome to report, and saying
             // `not recorded` there would be a claim about a run still running.
             isFinished(run.status) ? outcomeLine(run.outcome) : null,
+            cutInputs(stageIdOf()),
           ),
           stageIdOf(),
         );
         await notifier.drain();
       }
       return { code, lines };
+    };
+
+    /**
+     * What the inputs budget cut for a stage (#207), read off this run's own
+     * `input.truncated` events and worded ONCE, in `run/truncations.ts` — the same
+     * sentence `tldrx run status --verbose` prints, so the phone and the terminal
+     * cannot quote different numbers at the same person.
+     *
+     * No new notify kind, for the reason `heldForeignWork` gives below: it rides
+     * in the `summary` of kinds every adapter already handles. `null` — and so a
+     * byte-identical summary — on every run that cut nothing.
+     */
+    const cutInputs = (stage: string | null): string | null => {
+      if (stage === null || stage === "") return null;
+      try {
+        return truncationSentence(stageTruncations(runDir, stage));
+      } catch {
+        return null;
+      }
     };
 
     /**
@@ -402,7 +425,10 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
             ? 0
             : stage.stage.tasks.filter((task) => task.metered === false).length;
           await notifier.send(
-            stageDoneNotification(notifyCtx(), number(payload(event, "cost_usd")), unmetered, heldForeignWork()),
+            stageDoneNotification(
+              notifyCtx(), number(payload(event, "cost_usd")), unmetered, heldForeignWork(),
+              cutInputs(event.stage),
+            ),
             event.stage,
           );
         }

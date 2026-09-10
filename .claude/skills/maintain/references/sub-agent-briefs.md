@@ -86,4 +86,7 @@ copy of it, and the sub-agent reads `AGENTS.md` itself as its first act.
 > **Report, under 200 words**: a verdict line (`merge` or `fixes required`), the sha you
 > reviewed (`git rev-parse <branch>`) and your own name/model, then the findings in rank order.
 > Those three lines become the branch's review record (`AGENTS.md` §2); the implementer commits
-> it, so do not edit any file yourself.
+> it, so do not edit any file yourself. The record's `against:` must name the **code head** —
+> the last commit on the branch that is not itself a `.review/` commit — never the sha of the
+> record commit, and never an amended one: amending replaces the sha and the wave's staleness
+> check then refuses the branch (measured 2026-09-09: exit 10, correctly).

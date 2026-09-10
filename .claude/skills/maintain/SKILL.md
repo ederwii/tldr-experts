@@ -107,7 +107,10 @@ it (missing, `verdict: fixes required`, incomplete, or stale against a moved bra
 `AGENTS.md` §2. Send the reviewer's name and the sha it read along with the word `merge`, and
 say who commits the file; a branch without a valid record is refused with **exit 10**, having
 merged nothing. The path takes the **branch name verbatim**, so a slash in the branch
-is a directory: `fix/x` wants `.review/fix/x.md`, not `.review/fix-x.md` (§2). Re-review after a rebase — a rebased branch is a different diff, and §2's
+is a directory: `fix/x` wants `.review/fix/x.md`, not `.review/fix-x.md` (§2). The record's
+`against:` names the **code head** — the branch's last non-`.review/` commit — never the record
+commit's own sha, and amending a record commit replaces that sha so the staleness check refuses
+(measured 2026-09-09: exit 10, correctly). Re-review after a rebase — a rebased branch is a different diff, and §2's
 staleness check says so.
 
 **Why this step is not optional.** Over twelve waves, pre-merge review found a real Important

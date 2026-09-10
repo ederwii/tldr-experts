@@ -259,6 +259,14 @@ export function stageDoneNotification(
    * `null` leaves the summary byte-identical to what it has always been.
    */
   note: string | null = null,
+  /**
+   * What the inputs budget cut for this stage (#207), already worded by
+   * `run/truncations.ts`. A caveat on a moment already being announced rather
+   * than a tenth `NotifyKind`: every adapter anyone has written already handles
+   * `stage.done`, and none of them handle a kind invented today. `null` leaves
+   * the summary byte-identical to what it has always been.
+   */
+  truncation: string | null = null,
 ): NotifyPayload {
   // A stage every one of whose turns was in-session cost this loop nothing it
   // could see, and "finished for $0.00" is the sentence that reads as thrift.
@@ -268,7 +276,8 @@ export function stageDoneNotification(
   return {
     ...base(ctx, "stage.done"),
     summary: `${ctx.runId} finished ${ctx.stage ?? "a stage"} for ${figure} and moved on. `
-      + (note === null ? "No decision is waiting on you." : note),
+      + (note === null ? "No decision is waiting on you." : note)
+      + (truncation === null ? "" : ` ${truncation}`),
     command: null,
     detail: { cost_usd: costUsd, ...(unmetered === 0 ? {} : { unmetered_tasks: unmetered }) },
   };
@@ -330,6 +339,12 @@ export function runEndNotification(
    * positionally, so a new parameter goes after it.
    */
   outcome: OutcomeLine | null = null,
+  /**
+   * Same contract as `stageDoneNotification`'s `truncation` (#207). EIGHTH, for
+   * the reason `outcome` above is seventh: every parameter already here is passed
+   * positionally by its caller, so a new one goes at the end.
+   */
+  truncation: string | null = null,
 ): NotifyPayload {
   const kind: NotifyKind = exitCode === 0 ? "run.finished" : "run.failed";
   const verb = exitCode === 0 ? "finished" : "stopped";
@@ -338,7 +353,8 @@ export function runEndNotification(
     ...base(ctx, kind),
     summary: `${ctx.runId}: the loop ${verb} with exit ${String(exitCode)} `
       + `(${exitFamily(exitCode)}), ${spentFigure(tally)} spent by this loop.${delivered} ${lastLine}`
-      + `${note === null ? "" : ` ${note}`}`,
+      + `${note === null ? "" : ` ${note}`}`
+      + `${truncation === null ? "" : ` ${truncation}`}`,
     command: exitCode === 0 ? null : `tldrx run status ${ctx.runId}`,
     detail: {
       exit_code: exitCode,
@@ -397,6 +413,8 @@ export function statusNotification(
   statusText: string,
   waitingOn: readonly string[] = [],
   waitingOnGate: WaitingGate | null = null,
+  /** Same contract as `stageDoneNotification`'s `truncation` (#207). */
+  truncation: string | null = null,
 ): NotifyPayload {
   const ids = [...waitingOn];
   const parked = ids.length > 0;
@@ -406,16 +424,17 @@ export function statusNotification(
       + `${gatePhrase(waitingOnGate.policy)}. Nothing runs after it and nothing is being spent `
       + "while it waits."
       + (parked ? ` It also has ${String(ids.length)} open question(s): ${ids.join(", ")}.` : "");
+  const tail = truncation === null ? "" : ` ${truncation}`;
   return {
     ...base(ctx, "status"),
-    summary: waitingOnGate !== null
+    summary: (waitingOnGate !== null
       ? gateSummary
       : parked
         ? `${ctx.runId} is parked at ${ctx.stage ?? "an unnamed stage"} waiting on YOU: `
           + `${String(ids.length)} open question(s), ${ids.join(", ")}. Nothing is being spent `
           + "while it waits, and it resumes the moment one is answered."
         : `${ctx.runId} is still running at ${ctx.stage ?? "an unnamed stage"}. `
-          + "Nothing is waiting on you — this is the periodic heartbeat `--notify-every` asked for.",
+          + "Nothing is waiting on you — this is the periodic heartbeat `--notify-every` asked for.") + tail,
     // The literal line to type, exactly as `question.raised` and `gate.requested` spelled it
     // — a reminder that made the reader go and find the command would be a reminder to go and
     // look at a screen. A pending gate wins the one slot: it is the thing that has stopped

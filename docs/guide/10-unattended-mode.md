@@ -704,6 +704,15 @@ The kinds are `question.raised`, `question.timeout`, `gate.requested`, `gate.tim
 `run.finished`, `run.failed`, `budget.warned` and `status`. The full per-kind `detail` table is in
 [spec §2.18](../spec.md).
 
+**A truncated input rides along, and adds no kind.** When a stage's `inputs_max_bytes` could not
+fit a declared input, the `stage.done`, `run.failed` and `status` summaries end with one extra
+sentence — *"1 input truncated: facts.yml 169 KB → 87 KB (cap 96 KB)."* It is a caveat on a
+moment already being announced rather than a moment of its own, so the nine kinds above are
+unchanged and an adapter you already wrote keeps working. It matters unattended: before this, the
+only record that a sub-agent had read half a file lived in `.agent/<stage>/prompt.md`, which
+nobody opens until after the turn it explains has already failed. Raise the key or shrink the
+input — guide 09 has both remedies.
+
 **A notifier never changes a run.** A command that will not split, a binary that is not there, a
 non-zero exit, a hang — each becomes a `notify.failed` event carrying the reason, and the loop
 carries on with the exit code it already had. "The owner was not told, and here is why" is a fact

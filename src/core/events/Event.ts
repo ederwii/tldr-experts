@@ -159,6 +159,7 @@ export const EVENT_TYPES = [
   "story.touches_widened",
   "worktree.foreign_work_aside", "worktree.foreign_work_restored",
   "result.unreadable",
+  "input.truncated",
   "operator_note",
   "check.passed", "check.failed",
   "budget.warned", "budget.blocked", "budget.raised", "budget.granted",

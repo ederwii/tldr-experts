@@ -71,7 +71,33 @@
   rather than invented (§7): a `run.yml` written before the field reads `not recorded` with the
   reason in it, and a run with no Build phase — a docs-scope run — reads `n/a` with `why`, never
   a confident `0 of 0`.
-
+- **A truncated input is now told to the OWNER, not only to the sub-agent (#207).** The inputs
+  budget has always written a "truncated inputs: …" line into the prompt itself, so the agent
+  knew; the person paying did not. Measured on a real workspace: a 168,873 B `facts.yml` reached
+  an `effort: high` design turn as 86,571 B under the 98,304-byte `inputs_max_bytes` of the day
+  (0.14.1; the default is 256 KB since #208), that
+  turn ran to its `timeout_s`, was killed, and booked nothing — and the only record that half the
+  fact ledger had been dropped lived in `.agent/how/prompt.md`, a file nobody opens until after
+  the failure it explains. The facilitator now appends one `input.truncated` event per cut input
+  AT SPAWN, carrying `stage`, `path`, `bytes`, `inlined_bytes` and `cap` — all four numbers, so a
+  reader never has to reconstruct one. `tldrx run status --verbose` lists them under the stage
+  the run is parked on, and the `stage.done` / `run.failed` / `status` notification summaries end
+  with one sentence naming them (*"1 input truncated: facts.yml 169 KB → 87 KB (cap 96 KB)."*).
+  **No tenth notify kind**: a truncation is a caveat on a moment already being announced, and a
+  new kind would have to be handled by every adapter already written against the nine. Absent
+  when nothing was cut, so an ordinary run's log and summaries are byte-identical to before.
+- **A turn killed on `timeout_s` keeps the usage the provider had already streamed (#207).**
+  Before this, fifteen minutes of real `effort: high` compute booked an all-zero `usage` block —
+  honestly labelled `metered: false`, and still throwing away token counts that had already
+  crossed the wire. `agent.result` now carries an additive `usage_basis`, present only on a
+  killed turn: `partial-before-kill` means the counters beside it are the last frame the provider
+  streamed — a floor on the turn, never its total — and `absent` means not one frame arrived,
+  with `unmetered_reason` saying so in words rather than leaving a confident zero to be read as a
+  measurement. `tldrx cost` prints the basis under the attempt. **No dollar figure is invented in
+  either case**: measured against `claude` 2.1.251, the stream reports tokens per assistant
+  message and dollars only on the final `result` line, which a killed process never reaches, so a
+  USD number here could only be one this framework computed itself. `metered` stays `false` and
+  nothing sums these tokens into a spend.
 
 ### Changed
 
@@ -136,7 +162,13 @@
   --for-fix` said "attempt 1 of 2" whatever the stage declared. One resolver,
   `buildStageDefaults`, and it is tolerant: an unreadable workflow gives the
   shipped pair rather than throwing on a page render.
-
+- **The maintain skill says which sha a review record's `against:` must name (#207).** Both
+  SKILL.md §3 and the reviewer brief now state it once: the **code head** — the branch's last
+  commit that is not itself a `.review/` commit — never the record commit's own sha, and never an
+  amended one. Measured 2026-09-09: amending a record commit replaces its sha, and
+  `scripts/merge-wave.sh` then refuses the branch with exit 10, correctly. The rule cost a wave
+  and was written down nowhere an agent reads before it happens; `test/maintain-skill.test.ts`
+  now pins the literal phrase in both documents.
 
 ### Fixed
 
