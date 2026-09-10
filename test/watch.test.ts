@@ -127,9 +127,7 @@ function card(id: string, stories: readonly string[], signal: string, status = "
     "",
     "## Query",
     "",
-    "```kql",
-    'traces | where message startswith "leaderboard.refreshed"',
-    "```",
+    QUERY_FENCE,
     "",
     "## Sources",
     "",
@@ -140,6 +138,18 @@ function card(id: string, stories: readonly string[], signal: string, status = "
 
 const LIVE_SIGNAL = "`leaderboard.refreshed` is emitted on every refresh [src: api:src/Leaderboard.cs:3]";
 const ABSENT_SIGNAL = "Nothing is emitted on refresh — add a counter [src: absent:api/src/Leaderboard.cs]";
+
+/** The fenced `## Query` every card here carries, so a test can swap it out whole. */
+const QUERY_FENCE = [
+  "```kql",
+  'traces | where message startswith "leaderboard.refreshed"',
+  "```",
+].join("\n");
+
+/** gh #212 — the absent-with-reason shape of `## Query`, on one line. */
+const QUERY_NONE =
+  "Query: none — nothing in this path emits a log line, a metric or a span"
+  + " [src: absent:api/src/Leaderboard.cs]";
 
 interface Fixture {
   readonly ws: FacilitatorWorkspace;
@@ -328,6 +338,28 @@ describe("the watch executor writes one card per shipped feature", () => {
     expect(handoff).toContain("is not observable yet");
   });
 
+  /**
+   * gh #212. A card that can say "nothing is queryable, and here is what I looked
+   * at" must not then vanish from the artefact the next reader trusts most. The
+   * Findings list says `unobservable` in its own line, sourced to the card — an
+   * omission would read as a card that simply has a query somewhere.
+   */
+  test("a card whose Query is `none` is listed as unobservable in the handoff", async () => {
+    const { ws, ctx } = fixture();
+    fakeClaude(ws, {
+      [watcherRelPath("leaderboard")]:
+        card("leaderboard", ["S1", "S2"], ABSENT_SIGNAL).replace(QUERY_FENCE, QUERY_NONE),
+    });
+
+    const outcome = await watchExecutor(ctx);
+
+    expect(outcome.ok).toBe(true);
+    const handoff = read(ws, `${WATCH_PHASE}/handoff.md`);
+    expect(handoff).toContain("**unobservable**");
+    expect(handoff).toContain("nothing in this path emits a log line, a metric or a span");
+    expect(validateHandoff(handoff, toSrcContext(loadWorkspace(ws.root), ws.runDir)).ok).toBe(true);
+  });
+
   test("the handoff satisfies the §2.8 handoff rules", async () => {
     const { ws, ctx } = fixture();
     fakeClaude(ws, { [watcherRelPath("leaderboard")]: card("leaderboard", ["S1", "S2"], LIVE_SIGNAL) });
@@ -470,7 +502,9 @@ describe("the watcher card", () => {
     expect(parsed.watcher?.status).toBe("draft");
     // The template's own Signal has an `absent:` item, so `draft` is what it earns.
     expect(parsed.decidedStatus).toBe("draft");
-    expect(queryBlock(text) ?? "").toContain("leaderboard.refreshed");
+    const query = queryBlock(text);
+    expect(query?.kind).toBe("query");
+    expect(query?.kind === "query" ? query.text : "").toContain("leaderboard.refreshed");
   });
 
   test("a missing section is named", () => {
@@ -479,11 +513,51 @@ describe("the watcher card", () => {
     expect(parsed.issues.some((i) => i.message.includes("`## Looks broken when`"))).toBe(true);
   });
 
+  /**
+   * GUARD, and it passed before gh #212 as it passes after. Prose under `## Query`
+   * is the failure #212 was filed about and it is STILL refused, in the same words:
+   * the escape hatch #212 adds is a form the reader can recognise, not permission
+   * to describe a query. The message is asserted verbatim because a card written
+   * against the old wording is what a person will be holding when they read it.
+   */
   test("`## Query` without a fenced block is refused", () => {
-    const text = card("x", ["S1"], LIVE_SIGNAL)
-      .replace("```kql\ntraces | where message startswith \"leaderboard.refreshed\"\n```", "run the usual query");
+    const text = card("x", ["S1"], LIVE_SIGNAL).replace(QUERY_FENCE, "run the usual query");
     const parsed = parseWatcherCard(text, { root: "/nowhere", repos: new Map(), commands: new Set() });
-    expect(parsed.issues.some((i) => i.message.includes("copy-pasteable"))).toBe(true);
+    expect(parsed.issues.some((i) => i.message
+      === "`## Query` holds no fenced block — the query has to be copy-pasteable, not described")).toBe(true);
+  });
+
+  /**
+   * gh #212, measured on tldrx 0.14.2. A real workspace's Watch stage (haiku,
+   * $0.17) wrote a card whose Signal, Where and Looks-broken-when all cited
+   * `absent:` correctly — the code under watch emits nothing, and the only signal
+   * that exists is a customer reporting a missing code. Then it had to fill
+   * `## Query`, wrote the truth in prose, and the stage FAILED on it. `Query` was
+   * the one checked section with no absent form; this is that form.
+   */
+  test("`Query: none — <reason> [src: …]` validates, and the card carries the reason", () => {
+    const text = card("x", ["S1"], ABSENT_SIGNAL).replace(QUERY_FENCE, QUERY_NONE);
+    const parsed = parseWatcherCard(text, { root: "/nowhere", repos: new Map(), commands: new Set() });
+
+    expect(parsed.issues.filter((i) => i.path === "Query")).toEqual([]);
+    expect(parsed.query?.kind).toBe("none");
+    expect(parsed.query?.kind === "none" ? parsed.query.reason : "")
+      .toBe("nothing in this path emits a log line, a metric or a span");
+  });
+
+  /**
+   * The reason is a claim like every other claim on a card, so it is sourced by the
+   * same parser `claim-sources` denies a handoff bullet with — one reader of the
+   * `[src: …]` grammar, not two (#80). An unsourced `none` would be the invented
+   * absence AGENTS.md §7 exists to refuse.
+   */
+  test("a `Query: none` line with no `[src: …]` is refused like any unsourced item", () => {
+    const text = card("x", ["S1"], ABSENT_SIGNAL)
+      .replace(QUERY_FENCE, "Query: none — nothing in this path emits anything");
+    const parsed = parseWatcherCard(text, { root: "/nowhere", repos: new Map(), commands: new Set() });
+
+    expect(parsed.issues.some((i) => i.path === "Query"
+      && i.message === "no `[src: …]` token — every item on a card is sourced")).toBe(true);
   });
 
   test("setWatcherStatus rewrites one line and keeps the rest byte-identical", () => {

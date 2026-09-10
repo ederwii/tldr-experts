@@ -1887,8 +1887,28 @@ sub-agent that stamps its own work `verified` changes nothing. `tldrx watch chec
 citation still resolves, and the stamped status still equals the one the Signal sources earn — which is how a card
 hand-edited to `verified`, or one whose code has moved since, is caught months after the run closed.
 
-**`Query`** must hold a fenced block; a described query is not a copy-paste query. **`Sources`** is prose — each citation
+**`Query`** holds a fenced block; a described query is not a copy-paste query. **`Sources`** is prose — each citation
 above, once, with what it establishes.
+
+**`Query` has an absent form (gh #212).** `Query` used to be the one checked section with no way to say "there is
+nothing here". A real Watch stage read a code path that emits no log line, no metric and no span, said exactly that
+under `Signal`, `Where` and `Looks broken when` with `absent:` sources — and was then refused for writing the same truth
+in prose under `## Query`. The stage failed and the cost was spent on the honest answer. So `## Query` now accepts
+EITHER the fenced block or **one line**:
+
+```
+Query: none — no log line, metric or span is emitted on this path [src: absent:api/src/Verification]
+```
+
+— that is, `Query: none — <reason> [src: …]`, where the reason ends with a §2.8 token parsed and resolved by the **same
+reader** every other item on the card meets: an unsourced `none` is a `shape` issue with the card's ordinary
+`no [src: …] token — every item on a card is sourced` message, and a token that does not resolve is a `source` issue.
+A line rather than a fence tagged `none` because the `[src: …]` grammar is line-terminal — inside a fence the reason
+could only be sourced by a second reader of that grammar, and the card has exactly one. Prose under `## Query` is
+**still** refused, in the same words as before: the absent form is a shape a reader can recognise, not permission to
+describe a query. Every surface that shows a card's query prints this form as `unobservable — <reason>` with the source
+beside it, and the Watch handoff's Findings carry an `**unobservable**` line for the card, so the absence is listed
+rather than silently missing. `status` is unchanged by it — that is `Signal`'s derivation and stays so.
 
 **A card that cites the epic NAMES the branch (gh #143).** `tldrx watch`, `watch arm` and the Watch executor resolve a
 card's `file` sources with the recorded epic refs switched on (§2.8), because the stage's whole subject is code nothing

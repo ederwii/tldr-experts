@@ -14,7 +14,9 @@
  * badge.
  */
 import { parseHandoff, type HandoffSection } from "../text/handoff.ts";
-import { resolveSrc, type SrcContext } from "../text/srcToken.ts";
+import {
+  parseSrcToken, resolveSrc, withoutSrcToken, type SrcContext, type SrcRef, type SrcToken,
+} from "../text/srcToken.ts";
 import { parseFrontMatter } from "../schemas/frontMatter.ts";
 import type { ValidationIssue } from "../schemas/validation.ts";
 import {
@@ -62,6 +64,60 @@ export interface WatcherEpicOnly extends ValidationIssue {
   readonly src: string;
 }
 
+/**
+ * The one message an unsourced item on a card gets, wherever it sits.
+ *
+ * A constant rather than two string literals because gh #212 gave `## Query` a
+ * sourced form: the bullets under the four checked sections and the `Query: none`
+ * line are the SAME rule, and a reader who has learned the sentence at one of them
+ * must not meet a second wording at the other.
+ */
+export const NO_SRC_TOKEN_ISSUE = "no `[src: …]` token — every item on a card is sourced";
+
+/** What `## Query` says when it holds prose instead of either accepted shape. */
+export const QUERY_NOT_PASTEABLE_ISSUE =
+  "`## Query` holds no fenced block — the query has to be copy-pasteable, not described";
+
+/**
+ * `## Query`, in the two shapes §2.16 allows — parsed ONCE, here (gh #212).
+ *
+ * The fenced block is the ordinary answer and is unchanged. The `none` form exists
+ * because `Query` was the one checked section with no absent form: a real Watch
+ * stage read a code path that emits no log line, metric or span, said so correctly
+ * under Signal, Where and Looks broken when with `absent:` sources, and was then
+ * refused for writing the same truth in prose under `## Query`. The stage failed
+ * and the cost was spent on the honest answer.
+ *
+ * ## Why a LINE and not a fence tagged `none`
+ *
+ * §2.8's `[src: …]` grammar is line-terminal — `parseSrcToken` reads the token a
+ * line ENDS with, and that is the rule `claim-sources` denies a handoff bullet
+ * with. Inside a fence there is no line-terminal position any existing reader
+ * inspects, so a `none`-tagged block's reason could only be sourced by a SECOND
+ * reader of the grammar — the duplication #80 refuses. The line form reuses
+ * `parseSrcToken`/`resolveSrc` unchanged, so an unsourced or unresolvable reason
+ * is refused by exactly the machinery every other claim on the card meets.
+ */
+export type WatcherQuery =
+  | {
+    readonly kind: "query";
+    /** The fence's info string (`kql`, `sql`, …), or "" when it had none. */
+    readonly lang: string;
+    /** The block's body, without its fences. */
+    readonly text: string;
+    /** 1-based line of the opening fence. */
+    readonly line: number;
+  }
+  | {
+    readonly kind: "none";
+    /** The prose half of the line — its `[src: …]` token stripped. */
+    readonly reason: string;
+    /** The token the reason cites, or null when it cited none (a refusal). */
+    readonly src: SrcToken | null;
+    /** 1-based line of the `Query: none …` line. */
+    readonly line: number;
+  };
+
 export interface WatcherCard {
   /** Null when the front matter is missing or does not validate. */
   readonly watcher: Watcher | null;
@@ -78,6 +134,14 @@ export interface WatcherCard {
   readonly absentSignals: readonly string[];
   /** The first line under `## Signal`, for the `watch list` table. */
   readonly signalLine: string | null;
+  /**
+   * `## Query`, in whichever shape it took. Null when it held neither.
+   *
+   * Carried on the card so the handoff and every card view read the SAME parse the
+   * validator read, rather than re-scanning the text with their own idea of what a
+   * query is (gh #212).
+   */
+  readonly query: WatcherQuery | null;
   readonly ok: boolean;
 }
 
@@ -148,49 +212,32 @@ export function parseWatcherCard(text: string, ctx: SrcContext, fileStem?: strin
       if (owner.malformed) {
         issues.push({ path: name, line: bullet.line, kind: "shape", message: `owner annotation — ${owner.reason}` });
       }
-      if (bullet.token === null) {
-        issues.push({ path: name, line: bullet.line, kind: "shape", message: "no `[src: …]` token — every item on a card is sourced" });
-        continue;
-      }
-      for (const error of bullet.token.errors) {
-        issues.push({ path: name, line: bullet.line, kind: "source", message: `[src: ${error.raw}] — ${error.message}` });
-      }
-      for (const ref of bullet.token.refs) {
+      checkToken(name, bullet.line, bullet.token, ctx, issues, epicOnly, (ref) => {
         if (name === WATCHER_SIGNAL_SECTION && ref.kind === "absent") absentSignals.push(ref.path);
-        const resolution = resolveSrc(ref, ctx, SRC_SECTION);
-        if (resolution.ok) {
-          // `ok`, and true of nothing merged (gh #143/#140). Named here, never
-          // pushed to `issues`: the citation is right, and a reader of the trunk
-          // still has to be told which branch to look on.
-          if (resolution.unmerged !== undefined) {
-            epicOnly.push({
-              path: name,
-              line: bullet.line,
-              src: resolution.unmerged,
-              message: `[src: ${ref.raw}] — ${resolution.message ?? "resolves on an unmerged ref"}`,
-            });
-          }
-          continue;
-        }
-        issues.push({ path: name, line: bullet.line, kind: "source", message: `[src: ${ref.raw}] — ${resolution.message ?? "unresolvable"}` });
-      }
+      });
     }
   }
 
   const query = queryBlock(text);
-  if (byName.has("Query") && query === null) {
-    issues.push({
-      path: "Query",
-      line: byName.get("Query")?.headingLine ?? 0,
-      kind: "shape",
-      message: "`## Query` holds no fenced block — the query has to be copy-pasteable, not described",
-    });
+  if (byName.has("Query")) {
+    if (query === null) {
+      issues.push({
+        path: "Query",
+        line: byName.get("Query")?.headingLine ?? 0,
+        kind: "shape",
+        message: QUERY_NOT_PASTEABLE_ISSUE,
+      });
+    } else if (query.kind === "none") {
+      // The reason is a claim like every other claim on the card, so it meets the
+      // same token check the bullets above just met — one reader, not two (#80).
+      checkToken("Query", query.line, query.src, ctx, issues, epicOnly);
+    }
   }
 
   const decidedStatus: WatcherStatus = absentSignals.length === 0 ? "verified" : "draft";
   // `ok` reads `issues` and nothing else, so `epicOnly` cannot fail a card no
   // matter how long it gets — which is the whole point of it being a second list.
-  return { watcher, issues, epicOnly, decidedStatus, absentSignals, signalLine, ok: issues.length === 0 };
+  return { watcher, issues, epicOnly, decidedStatus, absentSignals, signalLine, query, ok: issues.length === 0 };
 }
 
 /** The distinct unmerged refs a card's citations resolved on, in first-seen order. */
@@ -212,13 +259,75 @@ export function describeUnmergedRefs(card: WatcherCard): string | null {
   return `on unmerged refs: ${String(card.epicOnly.length)} (${refs})`;
 }
 
-/** The first fenced block under `## Query`, without its fences. Null when there is none. */
-export function queryBlock(text: string): string | null {
+/**
+ * One item's `[src: …]`, checked — the bullets under the four checked sections and
+ * the `Query: none` line (gh #212) both come through here.
+ *
+ * Takes DATA and pushes into the caller's lists rather than owning any: the
+ * absent-source bookkeeping is `## Signal`'s alone, so it arrives as a callback the
+ * Query branch simply does not pass.
+ */
+function checkToken(
+  path: string,
+  line: number,
+  token: SrcToken | null,
+  ctx: SrcContext,
+  issues: WatcherIssue[],
+  epicOnly: WatcherEpicOnly[],
+  onRef?: (ref: SrcRef) => void,
+): void {
+  if (token === null) {
+    issues.push({ path, line, kind: "shape", message: NO_SRC_TOKEN_ISSUE });
+    return;
+  }
+  for (const error of token.errors) {
+    issues.push({ path, line, kind: "source", message: `[src: ${error.raw}] — ${error.message}` });
+  }
+  for (const ref of token.refs) {
+    onRef?.(ref);
+    const resolution = resolveSrc(ref, ctx, SRC_SECTION);
+    if (resolution.ok) {
+      // `ok`, and true of nothing merged (gh #143/#140). Named here, never pushed
+      // to `issues`: the citation is right, and a reader of the trunk still has to
+      // be told which branch to look on.
+      if (resolution.unmerged !== undefined) {
+        epicOnly.push({
+          path,
+          line,
+          src: resolution.unmerged,
+          message: `[src: ${ref.raw}] — ${resolution.message ?? "resolves on an unmerged ref"}`,
+        });
+      }
+      continue;
+    }
+    issues.push({ path, line, kind: "source", message: `[src: ${ref.raw}] — ${resolution.message ?? "unresolvable"}` });
+  }
+}
+
+/**
+ * `Query: none — <reason> [src: …]` (gh #212).
+ *
+ * The dash is written as an em dash by everything that emits this form; a hyphen
+ * and a double hyphen are accepted because a model that has been told "one line,
+ * `none`, then why" should not fail on a keyboard.
+ */
+const QUERY_NONE_RE = /^\s*Query:\s*none\s*(?:—|–|-{1,2})\s*(\S.*)$/;
+
+/**
+ * `## Query`, parsed once — a fenced block, the `none` line, or null.
+ *
+ * Null is the prose case, and it is still a refusal: the escape hatch #212 adds is
+ * a shape a reader can recognise, not permission to describe a query.
+ */
+export function queryBlock(text: string): WatcherQuery | null {
   const lines = text.split("\n");
   let inSection = false;
   let fence: string | null = null;
+  let lang = "";
+  let fenceLine = 0;
   const body: string[] = [];
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
     if (line.startsWith("## ")) {
       if (fence !== null) break;
       inSection = line.slice(3).trim() === "Query";
@@ -226,11 +335,27 @@ export function queryBlock(text: string): string | null {
     }
     if (!inSection) continue;
     if (fence === null) {
-      const open = /^\s*(`{3,}|~{3,})/.exec(line);
-      if (open !== null && open[1] !== undefined) fence = open[1];
+      const none = QUERY_NONE_RE.exec(line);
+      if (none !== null && none[1] !== undefined) {
+        const raw = none[1];
+        return {
+          kind: "none",
+          reason: withoutSrcToken(raw).trim(),
+          src: parseSrcToken(raw),
+          line: i + 1,
+        };
+      }
+      const open = /^\s*(`{3,}|~{3,})\s*(\S*)/.exec(line);
+      if (open !== null && open[1] !== undefined) {
+        fence = open[1];
+        lang = open[2] ?? "";
+        fenceLine = i + 1;
+      }
       continue;
     }
-    if (line.trimStart().startsWith(fence)) return body.join("\n");
+    if (line.trimStart().startsWith(fence)) {
+      return { kind: "query", lang, text: body.join("\n"), line: fenceLine };
+    }
     body.push(line);
   }
   return null;

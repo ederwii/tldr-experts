@@ -62,7 +62,7 @@ import type { SrcContext } from "../text/srcToken.ts";
 import { runDeclaredCommand, type CommandRun } from "../run/checks.ts";
 import { WATCHERS_DIR, WATCH_PHASE, WATCHER_SIGNAL_SECTION } from "./Watcher.ts";
 import { itemOwner } from "./itemOwner.ts";
-import { queryBlock } from "./watcherFile.ts";
+import type { WatcherQuery } from "./watcherFile.ts";
 import { checkCard, statusOf, type CheckReport, type LoadedCard } from "./watchViews.ts";
 
 /** How long one re-run of a card's recorded command may take. */
@@ -106,13 +106,6 @@ export interface SignalItem {
   readonly printOnly: string | null;
 }
 
-/** The fenced `## Query` block, with the language its fence declared. */
-export interface CardQuery {
-  /** The fence's info string (`kql`, `sql`, …), or "" when it had none. */
-  readonly lang: string;
-  readonly body: string;
-}
-
 /** One card, ready to print. */
 export interface CardChecklist {
   readonly id: string;
@@ -129,7 +122,7 @@ export interface CardChecklist {
   readonly where: readonly string[];
   readonly baseline: readonly string[];
   readonly broken: readonly string[];
-  readonly query: CardQuery | null;
+  readonly query: WatcherQuery | null;
   /** The citation re-check — the same `checkCard` `watch check <feature>` runs. */
   readonly verdict: CheckReport;
 }
@@ -185,7 +178,7 @@ export function cardChecklist(loaded: LoadedCard, ctx: SrcContext): CardChecklis
     where: texts(sections.get("Where")),
     baseline: texts(sections.get("Healthy baseline")),
     broken: texts(sections.get("Looks broken when")),
-    query: cardQuery(loaded.text),
+    query: loaded.card.query,
     verdict: checkCard(loaded),
   };
 }
@@ -254,27 +247,6 @@ function signalItem(
     runnable: { command: cmd.command, expectExit: cmd.exitCode, repo },
     printOnly: null,
   };
-}
-
-/** The first fenced block under `## Query`, with the language its fence declared. */
-export function cardQuery(text: string): CardQuery | null {
-  const body = queryBlock(text);
-  if (body === null) return null;
-  return { lang: fenceLang(text), body };
-}
-
-function fenceLang(text: string): string {
-  let inSection = false;
-  for (const line of text.split("\n")) {
-    if (line.startsWith("## ")) {
-      inSection = line.slice(3).trim() === "Query";
-      continue;
-    }
-    if (!inSection) continue;
-    const open = /^\s*(?:`{3,}|~{3,})\s*(\S*)/.exec(line);
-    if (open !== null) return open[1] ?? "";
-  }
-  return "";
 }
 
 /**
@@ -349,15 +321,7 @@ function cardBlock(list: CardChecklist, runs: SignalRuns): readonly string[] {
   out.push(...section("Healthy baseline", list.baseline));
   out.push(...section("Looks broken when", list.broken));
 
-  if (list.query !== null) {
-    const lang = list.query.lang === "" ? "" : ` (${list.query.lang})`;
-    out.push(
-      "",
-      `  Query${lang} — print only: it runs in the console named under "Where it is read",`,
-      "  not here, so it is reproduced rather than offered.",
-    );
-    for (const line of list.query.body.split("\n")) out.push(`${SECTION_INDENT}${line}`);
-  }
+  if (list.query !== null) out.push("", ...renderCardQuery(list.query));
 
   if (list.draftBecause.length > 0) {
     out.push(
@@ -371,6 +335,32 @@ function cardBlock(list: CardChecklist, runs: SignalRuns): readonly string[] {
   if (!list.verdict.ok) out.push("", ...list.verdict.lines.map((line) => `  ${line}`));
   else out.push("", `  ${list.verdict.lines.slice(1).join("\n  ").trim()}`);
   return out;
+}
+
+/**
+ * The ONE place a card's `## Query` becomes text (gh #212).
+ *
+ * Exported because the checklist is not the only reader — `watch check`, `watch
+ * arm`'s post-merge screen and anything else that shows a card's query all print
+ * these lines, and a second renderer would be free to show the `none` form as an
+ * empty section, which reads as "nobody wrote a query" rather than "there is
+ * nothing to query, and here is what was looked at".
+ */
+export function renderCardQuery(query: WatcherQuery): readonly string[] {
+  if (query.kind === "none") {
+    const src = query.src === null ? "" : ` ${query.src.raw}`;
+    return [
+      `  Query — unobservable — ${query.reason}${src}`,
+      "  There is nothing to paste. The card cites what it looked at and found no",
+      "  instrumentation, rather than describing a query that does not exist.",
+    ];
+  }
+  const lang = query.lang === "" ? "" : ` (${query.lang})`;
+  return [
+    `  Query${lang} — print only: it runs in the console named under "Where it is read",`,
+    "  not here, so it is reproduced rather than offered.",
+    ...query.text.split("\n").map((line) => `${SECTION_INDENT}${line}`),
+  ];
 }
 
 function signalLines(list: CardChecklist, item: SignalItem, runs: SignalRuns): readonly string[] {

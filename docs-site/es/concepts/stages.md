@@ -25,6 +25,11 @@ etapa son archivos en disco, y la etapa siguiente los lee.
 | **Build** | El código. | una rama y un commit por story, más `04-build/handoff.md` |
 | **Watch** | ¿Qué se puede romper en producción, y cómo nos enteraríamos? | una tarjeta de vigilancia por cada cosa entregada |
 
+**Watch** puede volver con las manos vacías: cuando el código que vigila no emite ninguna línea
+de log, ninguna métrica y ningún span, su tarjeta escribe `Query: none — <razón> [src: …]` y todas
+las vistas lo muestran como `unobservable — <razón>` — una ausencia con fuente, no una consulta que
+nadie puede correr.
+
 **How** es la etapa que más piensa: corre en un modelo más grande y con más esfuerzo,
 porque cada componente que nombra tiene que caer en una ruta real de tu repo. **What** y
 **Plan** son más baratas a propósito.

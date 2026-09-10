@@ -48,6 +48,8 @@ interface CardOptions {
   readonly status?: string;
   readonly signals?: readonly string[];
   readonly repos?: string;
+  /** The body of `## Query`, as lines. Defaults to the fenced KQL block. */
+  readonly query?: readonly string[];
 }
 
 function card(options: CardOptions = {}): string {
@@ -81,10 +83,12 @@ function card(options: CardOptions = {}): string {
     "",
     "## Query",
     "",
-    "```kql",
-    "traces",
-    '| where message == "leaderboard.refreshed"',
-    "```",
+    ...(options.query ?? [
+      "```kql",
+      "traces",
+      '| where message == "leaderboard.refreshed"',
+      "```",
+    ]),
     "",
     "## Sources",
     "",
@@ -168,6 +172,21 @@ describe("a query is printed, never offered", () => {
 
   test("nothing about the query claims tldrx can run it", () => {
     expect(render(card())).not.toContain("tldrx watch check --execute\n    traces");
+  });
+
+  /**
+   * gh #212. `Query: none — <reason> [src: …]` is the shape a card takes when the
+   * code it watches emits nothing at all. The checklist prints the absence, in the
+   * card's own words and with the source it cites, because a reader who is shown
+   * nothing under Query cannot tell "unobservable" from "nobody wrote one".
+   */
+  test("a `none` Query prints as `unobservable — <reason>`, with its source", () => {
+    const out = render(card({
+      query: ["Query: none — no log line, metric or span is emitted [src: api:src/Leaderboard.cs:3]"],
+    }));
+    expect(out).toContain("unobservable — no log line, metric or span is emitted");
+    expect(out).toContain("[src: api:src/Leaderboard.cs:3]");
+    expect(out).not.toContain("print only");
   });
 });
 

@@ -46,7 +46,7 @@ async function tldrx(cwd: string, ...args: string[]): Promise<Run> {
 
 const SOURCE = "public void Refresh() => Log(\"leaderboard.refreshed\");\n";
 
-function card(status: string, signalSrc: string): string {
+function card(status: string, signalSrc: string, query?: readonly string[]): string {
   return [
     "---",
     "version: 1",
@@ -74,9 +74,7 @@ function card(status: string, signalSrc: string): string {
     "",
     "## Query",
     "",
-    "```kql",
-    "traces | count",
-    "```",
+    ...(query ?? ["```kql", "traces | count", "```"]),
     "",
     "## Sources",
     "",
@@ -86,7 +84,11 @@ function card(status: string, signalSrc: string): string {
 }
 
 /** A run whose Watch stage already produced one card. */
-function withCard(signalSrc = "api:src/Leaderboard.cs:1", status = "verified"): FacilitatorWorkspace {
+function withCard(
+  signalSrc = "api:src/Leaderboard.cs:1",
+  status = "verified",
+  query?: readonly string[],
+): FacilitatorWorkspace {
   const ws = makeFacilitatorWorkspace({
     scope: "demo",
     budgetUsd: 10,
@@ -96,7 +98,7 @@ function withCard(signalSrc = "api:src/Leaderboard.cs:1", status = "verified"): 
   open.push(ws);
   const path = join(ws.runDir, watcherRelPath("leaderboard"));
   mkdirSync(join(path, ".."), { recursive: true });
-  writeFileSync(path, card(status, signalSrc), "utf8");
+  writeFileSync(path, card(status, signalSrc, query), "utf8");
   return ws;
 }
 
@@ -327,6 +329,27 @@ describe("tldrx watch check — the post-merge checklist (#65)", () => {
     const run = await tldrx(ws.root, "watch", "check", "--execute");
     expect(run.code).toBe(EXIT_OK);
     expect(run.stdout).toContain("traces | count");
+    expect(run.stdout).not.toContain("ran:");
+  });
+
+  /**
+   * gh #212. The card that provoked the issue: everything about it is `absent:`,
+   * including the query. Before the fix it did not validate, so `watch check`
+   * exited 1 on a card that told the truth. Now it exits 0 and the absence is
+   * PRINTED — and `--execute` still runs nothing, because a reason is not a
+   * command any more than a query was.
+   */
+  test("a card whose Query is `none` checks clean, prints the reason, and runs nothing", async () => {
+    const ws = withCard(
+      "absent:api/src/Leaderboard.cs",
+      "draft",
+      ["Query: none — no log line, metric or span is emitted [src: api:src/Leaderboard.cs:1]"],
+    );
+
+    const run = await tldrx(ws.root, "watch", "check", "--execute");
+
+    expect(run.code).toBe(EXIT_OK);
+    expect(run.stdout).toContain("unobservable — no log line, metric or span is emitted");
     expect(run.stdout).not.toContain("ran:");
   });
 
