@@ -7,7 +7,7 @@ export type { ItemOwner } from "./itemOwner.ts";
 export type { Watcher, WatcherStatus, WatcherSectionName } from "./Watcher.ts";
 export {
   parseWatcherCard, queryBlock, setWatcherStatus, describeWatcherIssues,
-  describeUnmergedRefs, unmergedRefsOf, NO_SRC_TOKEN_ISSUE, QUERY_NOT_PASTEABLE_ISSUE,
+  describeUnmergedRefs, unmergedRefsOf, NO_SRC_TOKEN_ISSUE, QUERY_NONE_NOT_EARNED_ISSUE, QUERY_NOT_PASTEABLE_ISSUE,
 } from "./watcherFile.ts";
 export type { WatcherCard, WatcherEpicOnly, WatcherIssue, WatcherQuery } from "./watcherFile.ts";
 export { collectFeatures, featureId, PLAN_PHASE } from "./features.ts";

@@ -74,6 +74,17 @@ export interface WatcherEpicOnly extends ValidationIssue {
  */
 export const NO_SRC_TOKEN_ISSUE = "no `[src: …]` token — every item on a card is sourced";
 
+/**
+ * What a `Query: none` earns on a card that had something to query all along.
+ *
+ * A sourced `none` is not enough on its own: the source only says the reason was
+ * checked, not that the absence is real. The card's OWN `## Signal` is what earns
+ * it — that section is the card's answer to "what proves this works", and a card
+ * that names a live emitting line has a place to point a query at.
+ */
+export const QUERY_NONE_NOT_EARNED_ISSUE =
+  "`Query: none` is only for a card whose `## Signal` is itself `absent:` — this one names a real signal";
+
 /** What `## Query` says when it holds prose instead of either accepted shape. */
 export const QUERY_NOT_PASTEABLE_ISSUE =
   "`## Query` holds no fenced block — the query has to be copy-pasteable, not described";
@@ -231,6 +242,31 @@ export function parseWatcherCard(text: string, ctx: SrcContext, fileStem?: strin
       // The reason is a claim like every other claim on the card, so it meets the
       // same token check the bullets above just met — one reader, not two (#80).
       checkToken("Query", query.line, query.src, ctx, issues, epicOnly);
+      // ORDERING: `absentSignals` is filled by the `WATCHER_CHECKED_SECTIONS` loop
+      // above, which has already run for every section including `## Signal`. This
+      // branch reads that finished state, so it must stay AFTER that loop — moving
+      // it earlier would silently accept every `none`, which is the hole this
+      // check closes (#212 review).
+      //
+      // Two conditions, and both are about the same fact from opposite sides: the
+      // card must have found nothing to watch (`## Signal` is `absent:`), and the
+      // reason must cite an absence rather than a line of code that exists. A
+      // `none` sourced to real code is citing something that IS there. Without
+      // this the rule lived only in the stage prompt, which is advice a sub-agent
+      // is free to ignore — measured by a reviewer's probe, where a card with a
+      // live, resolving Signal line took `Query: none` and validated.
+      const earned = absentSignals.length > 0
+        && query.src !== null
+        && query.src.refs.length > 0
+        && query.src.refs.every((ref) => ref.kind === "absent");
+      if (!earned && query.src !== null) {
+        issues.push({
+          path: "Query",
+          line: query.line,
+          kind: "shape",
+          message: QUERY_NONE_NOT_EARNED_ISSUE,
+        });
+      }
     }
   }
 

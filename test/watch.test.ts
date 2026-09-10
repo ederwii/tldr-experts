@@ -546,6 +546,38 @@ describe("the watcher card", () => {
   });
 
   /**
+   * The reviewer's probe (#212 review). A sourced `none` is not enough: this card's
+   * `## Signal` names a real, resolvable emitting line, so SOMETHING is queryable
+   * and `none` is a shortcut. Before this the validator only asked that the none
+   * line's own token resolve, and the "only when nothing is instrumented" rule
+   * lived in the prompt — a rule a sub-agent is free to ignore.
+   */
+  test("`Query: none` on a card whose Signal is live is refused", () => {
+    const text = card("x", ["S1"], LIVE_SIGNAL)
+      .replace(QUERY_FENCE, "Query: none — nothing is queryable [src: absent:api/src/Leaderboard.cs]");
+    const parsed = parseWatcherCard(text, { root: "/nowhere", repos: new Map(), commands: new Set() });
+
+    expect(parsed.issues.some((i) => i.path === "Query" && i.message
+      === "`Query: none` is only for a card whose `## Signal` is itself `absent:` — this one names a real signal"))
+      .toBe(true);
+  });
+
+  /**
+   * The other half, and it is the same rule read from the other side: a `none`
+   * whose reason cites a line of REAL code is citing something that exists, which
+   * is what `absent:` is for. The template shows only `absent:` here.
+   */
+  test("`Query: none` sourced to a real line rather than `absent:` is refused", () => {
+    const text = card("x", ["S1"], ABSENT_SIGNAL)
+      .replace(QUERY_FENCE, "Query: none — nothing is queryable [src: api:src/Leaderboard.cs:3]");
+    const parsed = parseWatcherCard(text, { root: "/nowhere", repos: new Map(), commands: new Set() });
+
+    expect(parsed.issues.some((i) => i.path === "Query" && i.message
+      === "`Query: none` is only for a card whose `## Signal` is itself `absent:` — this one names a real signal"))
+      .toBe(true);
+  });
+
+  /**
    * The reason is a claim like every other claim on a card, so it is sourced by the
    * same parser `claim-sources` denies a handoff bullet with — one reader of the
    * `[src: …]` grammar, not two (#80). An unsourced `none` would be the invented

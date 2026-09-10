@@ -1904,7 +1904,15 @@ Query: none — no log line, metric or span is emitted on this path [src: absent
 reader** every other item on the card meets: an unsourced `none` is a `shape` issue with the card's ordinary
 `no [src: …] token — every item on a card is sourced` message, and a token that does not resolve is a `source` issue.
 A line rather than a fence tagged `none` because the `[src: …]` grammar is line-terminal — inside a fence the reason
-could only be sourced by a second reader of that grammar, and the card has exactly one. Prose under `## Query` is
+could only be sourced by a second reader of that grammar, and the card has exactly one.
+
+**A `none` has to be EARNED, and the card's own `## Signal` is what earns it.** A sourced reason only says the reason
+was checked, not that the absence is real, so the validator also requires that at least one source under `## Signal` be
+`absent:` and that every ref in the `none` line's own token be `absent:` too. A card whose Signal names a live emitting
+line has somewhere to point a query at, so its `none` is a shortcut and is refused as a `shape` issue, in these words:
+"`Query: none` is only for a card whose `## Signal` is itself `absent:` — this one names a real signal". The check reads the
+`absentSignals` the Signal section has already produced, so it necessarily runs after that section is parsed. Prose
+under `## Query` is
 **still** refused, in the same words as before: the absent form is a shape a reader can recognise, not permission to
 describe a query. Every surface that shows a card's query prints this form as `unobservable — <reason>` with the source
 beside it, and the Watch handoff's Findings carry an `**unobservable**` line for the card, so the absence is listed

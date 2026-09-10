@@ -343,7 +343,7 @@ describe("tldrx watch check — the post-merge checklist (#65)", () => {
     const ws = withCard(
       "absent:api/src/Leaderboard.cs",
       "draft",
-      ["Query: none — no log line, metric or span is emitted [src: api:src/Leaderboard.cs:1]"],
+      ["Query: none — no log line, metric or span is emitted [src: absent:api/src/Leaderboard.cs]"],
     );
 
     const run = await tldrx(ws.root, "watch", "check", "--execute");

@@ -272,10 +272,20 @@ describe("a merge fires the checklist", () => {
    */
   test("a `none` watcher arms, prints `unobservable`, and schedules nothing", async () => {
     const ws = workspace();
-    shipped(ws, ["epic/e1"], CARD.replace(
-      ["```kql", "traces", "```"].join("\n"),
-      "Query: none — no log line, metric or span is emitted [src: app:README.md:1]",
-    ));
+    shipped(ws, ["epic/e1"], CARD
+      // `none` is earned by the Signal itself being `absent:` (#212 review), so the
+      // card the poller finds here is the whole honest shape, not just a swapped Query.
+      .replace(
+        "- `leaderboard.refreshed` is written on every refresh [src: app:README.md:1]",
+        "- Nothing is emitted on refresh [src: absent:app/README.md]",
+      )
+      // An `absent:` Signal earns `draft`, and a card stamped `verified` over one is
+      // exactly what `checkCard` refuses — so the fixture stamps what it earns.
+      .replace("status: verified", "status: draft")
+      .replace(
+        ["```kql", "traces", "```"].join("\n"),
+        "Query: none — no log line, metric or span is emitted [src: absent:app/README.md]",
+      ));
     const transport = poller([MERGED]);
     const outcome = await arm(ws, transport);
 

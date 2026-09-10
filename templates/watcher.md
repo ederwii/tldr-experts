@@ -66,8 +66,10 @@ status: draft                # draft | verified — verified only when Signal ha
 >
 >     Query: none — no log line, metric or span is emitted on this path [src: absent:api/src/Leaderboard]
 >
-> Only then. An unsourced `none` is refused like any unsourced item, and prose
-> describing a query is still refused.
+> Only then, and it is checked: `none` is refused unless `## Signal` above cites
+> `absent:` and the reason's own source is `absent:` too. A card that names a real
+> signal has somewhere to point a query at. An unsourced `none` is refused like any
+> unsourced item, and prose describing a query is still refused.
 
 ```kql
 traces

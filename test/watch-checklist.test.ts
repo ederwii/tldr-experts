@@ -182,10 +182,14 @@ describe("a query is printed, never offered", () => {
    */
   test("a `none` Query prints as `unobservable — <reason>`, with its source", () => {
     const out = render(card({
-      query: ["Query: none — no log line, metric or span is emitted [src: api:src/Leaderboard.cs:3]"],
+      // `none` is earned by the card's own Signal being `absent:` — a card that
+      // names a live emitting line is refused for taking it (#212 review).
+      signals: ["- Nothing is emitted on refresh [src: absent:api/src/Leaderboard.cs]"],
+      status: "draft",
+      query: ["Query: none — no log line, metric or span is emitted [src: absent:api/src/Leaderboard.cs]"],
     }));
     expect(out).toContain("unobservable — no log line, metric or span is emitted");
-    expect(out).toContain("[src: api:src/Leaderboard.cs:3]");
+    expect(out).toContain("[src: absent:api/src/Leaderboard.cs]");
     expect(out).not.toContain("print only");
   });
 });
