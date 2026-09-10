@@ -25,6 +25,10 @@ outputs are files on disk, and the next stage reads them.
 | **Build** | The code. | a branch and a commit per story, plus `04-build/handoff.md` |
 | **Watch** | What could go wrong in production, and how would we know? | one watcher card per shipped thing |
 
+**Watch** is allowed to come back empty-handed: when the code it watched emits no log line,
+no metric and no span, its card writes `Query: none — <reason> [src: …]` and every view prints
+that as `unobservable — <reason>` — a sourced absence rather than a query nobody can run.
+
 **How** is the stage that thinks hardest — it runs on a bigger model at higher effort,
 because every component it names has to land on a real path in your repo. **What** and
 **Plan** are cheaper on purpose.

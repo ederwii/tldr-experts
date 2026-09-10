@@ -94,7 +94,11 @@ function workspace(): BuildWorkspace {
 }
 
 /** A run that Build branched and Watch wrote a card for — what `ship` ships. */
-function shipped(ws: BuildWorkspace, branches: readonly string[] = ["epic/e1"]): void {
+function shipped(
+  ws: BuildWorkspace,
+  branches: readonly string[] = ["epic/e1"],
+  cardText: string = CARD,
+): void {
   const store = RunStore.open(ws.runDir);
   store.mutate((run) => ({ ...run, build: { epic_branch: [...branches] } }));
   store.save();
@@ -104,7 +108,7 @@ function shipped(ws: BuildWorkspace, branches: readonly string[] = ["epic/e1"]):
   }
   const cardPath = join(ws.runDir, watcherRelPath("leaderboard"));
   mkdirSync(join(cardPath, ".."), { recursive: true });
-  writeFileSync(cardPath, CARD, "utf8");
+  writeFileSync(cardPath, cardText, "utf8");
 }
 
 interface Call {
@@ -256,6 +260,43 @@ describe("a merge fires the checklist", () => {
     expect(said).toContain("2026-09-01T18:04:00Z");
     expect(said).toContain("Post-merge checks");
     expect(said).toContain("leaderboard.refreshed");
+  });
+
+  /**
+   * gh #212. A watcher whose `## Query` is `none` is armed-but-unobservable: the
+   * merge is still detected and the checklist still prints, the absence is named
+   * in the card's own words, and — the part that must never change — the poller
+   * spawns nothing but `gh --version` and `gh pr view`. A query was never run and
+   * a REASON is even less runnable; this pins that the new form did not grow a
+   * scheduler on the way in.
+   */
+  test("a `none` watcher arms, prints `unobservable`, and schedules nothing", async () => {
+    const ws = workspace();
+    shipped(ws, ["epic/e1"], CARD
+      // `none` is earned by the Signal itself being `absent:` (#212 review), so the
+      // card the poller finds here is the whole honest shape, not just a swapped Query.
+      .replace(
+        "- `leaderboard.refreshed` is written on every refresh [src: app:README.md:1]",
+        "- Nothing is emitted on refresh [src: absent:app/README.md]",
+      )
+      // An `absent:` Signal earns `draft`, and a card stamped `verified` over one is
+      // exactly what `checkCard` refuses — so the fixture stamps what it earns.
+      .replace("status: verified", "status: draft")
+      .replace(
+        ["```kql", "traces", "```"].join("\n"),
+        "Query: none — no log line, metric or span is emitted [src: absent:app/README.md]",
+      ));
+    const transport = poller([MERGED]);
+    const outcome = await arm(ws, transport);
+
+    expect(outcome.code).toBe(EXIT_OK);
+    expect(outcome.merged).toBe(true);
+    expect(outcome.lines.join("\n")).toContain("unobservable — no log line, metric or span is emitted");
+    expect(transport.calls.map((call) => `${call.cmd} ${call.args.join(" ")}`)).toEqual([
+      "git rev-parse --verify --quiet refs/heads/epic/e1",
+      "gh --version",
+      "gh pr view epic/e1 --json state,mergedAt",
+    ]);
   });
 
   test("open, then merged: it sleeps ONE interval and detects on the second poll", async () => {

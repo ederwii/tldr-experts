@@ -1,6 +1,34 @@
 # Changelog
 
 
+## 0.15.0 — unreleased
+
+### Added
+
+- **A watcher card can now say "there is nothing to query", and be believed (#212).** Measured
+  on 0.14.2, on a real workspace: the Watch stage read a code path that sends a verification
+  code and returns — no log line, no metric, no span anywhere in it. It said so correctly under
+  `## Signal`, `## Where` and `## Looks broken when`, each with an `absent:` source, and noted
+  that the only signal that exists is a customer reporting a missing code. Then it reached
+  `## Query`, wrote the same truth in prose, and the validator refused the whole card for it —
+  "`## Query` holds no fenced block — the query has to be copy-pasteable, not described". The
+  stage failed and the cost was spent on the honest answer. `Query` was the one checked section
+  with no absent form — every other section had `absent:` and it had nothing. It now accepts one line as well as a fenced block:
+  `Query: none — <reason> [src: …]`, where the reason ends with a §2.8 token read by the *same*
+  parser `claim-sources` denies a handoff bullet with, so an unsourced or unresolvable `none` is
+  refused exactly like any unsourced item. A line rather than a fence tagged `none` because the
+  `[src: …]` grammar is line-terminal: inside a fence the reason could only be sourced by a
+  second reader of that grammar, and a card has exactly one.
+  A `none` is EARNED, not asserted: it is refused unless the card's own `## Signal` cites `absent:`
+  and the reason's source is `absent:` too — found by a pre-merge reviewer's probe, where a card
+  naming a live, resolving emitting line took `Query: none` and validated, because the "only when
+  nothing is instrumented" rule lived in the stage prompt and nowhere a card had to pass.
+  `watch check`, `watch arm`'s post-merge screen and every other view print the form as
+  `unobservable — <reason>` with its source, through one renderer; the Watch handoff lists the
+  card under an `**unobservable**` line rather than quietly omitting it. Prose under `## Query` is still refused, in the same words as before
+  — the new form is a shape a reader can recognise, not permission to describe a query.
+
+
 ## 0.14.3 — 2026-09-10
 
 ### Changed

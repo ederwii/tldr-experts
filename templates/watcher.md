@@ -59,6 +59,17 @@ status: draft                # draft | verified — verified only when Signal ha
 
 > Copy-paste, in the query language of the place named under Where. One fenced
 > block, run once before it is written down.
+>
+> When the code emits nothing at all — Signal and Where are themselves `absent:`
+> and you have looked — there is no console to paste into, and the honest answer
+> is one sourced line instead of the block:
+>
+>     Query: none — no log line, metric or span is emitted on this path [src: absent:api/src/Leaderboard]
+>
+> Only then, and it is checked: `none` is refused unless `## Signal` above cites
+> `absent:` and the reason's own source is `absent:` too. A card that names a real
+> signal has somewhere to point a query at. An unsourced `none` is refused like any
+> unsourced item, and prose describing a query is still refused.
 
 ```kql
 traces

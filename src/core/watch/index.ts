@@ -7,9 +7,9 @@ export type { ItemOwner } from "./itemOwner.ts";
 export type { Watcher, WatcherStatus, WatcherSectionName } from "./Watcher.ts";
 export {
   parseWatcherCard, queryBlock, setWatcherStatus, describeWatcherIssues,
-  describeUnmergedRefs, unmergedRefsOf,
+  describeUnmergedRefs, unmergedRefsOf, NO_SRC_TOKEN_ISSUE, QUERY_NONE_NOT_EARNED_ISSUE, QUERY_NOT_PASTEABLE_ISSUE,
 } from "./watcherFile.ts";
-export type { WatcherCard, WatcherEpicOnly, WatcherIssue } from "./watcherFile.ts";
+export type { WatcherCard, WatcherEpicOnly, WatcherIssue, WatcherQuery } from "./watcherFile.ts";
 export { collectFeatures, featureId, PLAN_PHASE } from "./features.ts";
 export type { Feature, DoneStory } from "./features.ts";
 export { epicDiff, renderDiffs, readRepoBases, GIT_BIN, MAX_DIFF_BYTES, WORKSPACE_YML } from "./epicDiff.ts";
@@ -24,11 +24,11 @@ export {
 } from "./watchViews.ts";
 export type { LoadedCard, CheckReport } from "./watchViews.ts";
 export {
-  cardChecklist, cardQuery, checklistOk, executeSignals, nothingToCheck, OWNER_SOURCES,
-  renderChecklist, runKey, SIGNAL_TIMEOUT_S,
+  cardChecklist, checklistOk, executeSignals, nothingToCheck, OWNER_SOURCES,
+  renderCardQuery, renderChecklist, runKey, SIGNAL_TIMEOUT_S,
 } from "./signalChecklist.ts";
 export type {
-  CardChecklist, CardQuery, OwnerSource, RunnableSignal, SignalItem, SignalRuns,
+  CardChecklist, OwnerSource, RunnableSignal, SignalItem, SignalRuns,
 } from "./signalChecklist.ts";
 export {
   armRun, DEFAULT_INTERVAL_S, DEFAULT_TIMEOUT_S, MAX_POLLS, MAX_TIMEOUT_S, MIN_INTERVAL_S,

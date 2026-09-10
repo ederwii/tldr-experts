@@ -60,17 +60,36 @@ export function renderWatchHandoff(cards: readonly WrittenCard[], ctx: HandoffCo
   return `${out.join("\n").trimEnd()}\n`;
 }
 
-/** One line per card, with the status it earned. */
+/**
+ * One line per card, with the status it earned — plus a second line for a card
+ * that says there is nothing to query (gh #212).
+ *
+ * The unobservable line is listed rather than folded into the status line because
+ * omitting it is what a reader would take as "this card has a query somewhere".
+ * It cites the CARD, which is where the reason's own `[src: …]` lives; the handoff
+ * does not restate a citation it did not take.
+ */
 function findings(cards: readonly WrittenCard[]): readonly string[] {
   if (cards.length === 0) return [none(NO_STORIES_SRC)];
-  return cards.map((written) => {
+  const lines: string[] = [];
+  for (const written of cards) {
     const signals = written.card.absentSignals.length;
     const tail = written.card.decidedStatus === "verified"
       ? "every Signal source points at built code"
       : `${String(signals)} Signal source(s) still \`absent:\``;
-    return `- \`${written.feature.id}\` (${written.feature.title}) — **${written.card.decidedStatus}**: ${tail} `
-      + `[src: ${written.path}:1]`;
-  });
+    lines.push(
+      `- \`${written.feature.id}\` (${written.feature.title}) — **${written.card.decidedStatus}**: ${tail} `
+      + `[src: ${written.path}:1]`,
+    );
+    const query = written.card.query;
+    if (query?.kind === "none") {
+      lines.push(
+        `- \`${written.feature.id}\` — **unobservable**: ${query.reason} `
+        + `[src: ${written.path}:1]`,
+      );
+    }
+  }
+  return lines;
 }
 
 function decisions(cards: readonly WrittenCard[]): readonly string[] {
