@@ -1,8 +1,38 @@
 verdict: merge
 reviewed-by: fresh reviewer sub-agent, claude-sonnet-5, dispatched by session tldr-experts-4a
-against: 67697a3
+against: 66a7915
 
-## What was checked
+## Re-verification after rebase (66a7915, was 67697a3 on base 5215a37)
+
+Branch rebased onto c33bc82 (release 0.14.3), landing on top of 404e8f4 (#164, foreign-work
+aside). `git diff 5215a37..67697a3` vs `git diff c33bc82..66a7915` (both excluding CHANGELOG.md)
+diffed against each other: the only non-identical hunks are line-number shifts from #164's
+content landing earlier in shared files, plus exactly the two named unions —
+
+1. `src/core/facilitator/runAuto.ts`: `finish()`'s `runEndNotification(...)` call gains a new
+   `heldForeignWork()` argument (line 284) ahead of the outcome-line argument.
+2. `src/core/notify/notifications.ts`: `runEndNotification` gains `note` (#164) as its 6th
+   parameter, `outcome` (#210) shifted to 7th; `summary` is now
+   `... spent by this loop.${delivered} ${lastLine}${note ? ' '+note : ''}`.
+   `test/run-outcome.test.ts` was correspondingly updated to pass `null` for `note`.
+
+Confirmed #164 not lost: `heldForeignWork()` (runAuto.ts:306) still feeds both `run.finished`
+and `run.failed` via the single `finish()` call site used for every exit code (runAuto.ts:284).
+`test/build-foreign-work.test.ts:430-438` (untouched by the rebase) still passes — it calls
+`runEndNotification(ctx, 0, 0.1, "done", undefined, note)` positionally and asserts the summary
+contains "foreign work NOT restored in app", and that omitting `note` leaves the summary
+without "foreign work". Rendered both `note` and `outcome` together (ad hoc script) and got a
+coherent sentence:
+
+> `260909-x: the loop finished with exit 0 (ok), $1.78 spent by this loop. The run: nothing`
+> `delivered: 0 of 3 stories; S1 — npm run test exited 127. run 260909-x is done foreign work`
+> `NOT restored in app — stash cccccccccccc still holds notes.md — run` `` `git -C /w/app stash pop stash@{0}` ``
+
+Ran `bun run typecheck` (exit 0) and
+`bun test test/run-outcome.test.ts test/notify-hook.test.ts test/build-foreign-work.test.ts test/build-golden.test.ts`
+→ 61 pass, 0 fail, exit 0. No new findings from the rebase; the Minor note below still stands.
+
+## What was checked (original review, against 67697a3)
 
 **Honesty of `outcome: delivered`.** Traced `deriveRunOutcome` (src/core/run/runOutcome.ts:227)
 back to `buildProgress`'s story statuses. Confirmed at the code that sets a story `done`
