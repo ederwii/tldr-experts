@@ -1,8 +1,17 @@
 verdict: merge
 reviewed-by: fresh reviewer sub-agent, claude-sonnet-5, dispatched by session tldr-experts-4a
-against: 7a208cd
+against: bbfed22
 
-# fix/story-dod-deps — reviewed against 7a208cd (base a15fbc5), gh #209
+# fix/story-dod-deps — reviewed against bbfed22 (rebased onto 0.14.3, c33bc82), gh #209
+
+Re-verified after a rebase replayed the original review (7a208cd vs base a15fbc5) onto
+c33bc82 as bbfed22, with two union conflicts: the CHANGELOG heading placement, and one import
+block in `executors/build.ts` keeping 0.14.3's `relaunchCommand` alongside this branch's
+`worktreeDeps` imports. `git diff a15fbc5..7a208cd` vs `git diff c33bc82..bbfed22`, both
+excluding CHANGELOG.md and stripped of `index`/`@@` lines, are byte-identical except that one
+import line gained `relaunchCommand` (alphabetically placed, nothing else moved, and
+`relaunchCommand` is used elsewhere in the same file at line 2889 by the other rebased-in
+branch). All findings below are unchanged from the original review.
 
 ## Wildcard allowlist security (the item asked to weigh most) — Minor, PLAUSIBLE, not blocking
 
@@ -31,11 +40,12 @@ it to the repo's own declared build/test commands. Recommend filing a follow-up 
 verify empirically (spawn a Claude Code session with only a wildcard grant and try a
 substitution) rather than blocking this fix on it.
 
-## Traced and CONFIRMED against the diff and worktree at 7a208cd
+## Traced and CONFIRMED against the diff and worktree (re-verified at bbfed22; line numbers below
+are bbfed22's, shifted from the original 7a208cd review by the rebase — content unchanged)
 
 - `installCommandFor`/`runWorktreeInstall`/`absentBinaryOf`/`binaryAbsentReason` in the new
-  `worktreeDeps.ts` are wired exactly as claimed: `installDeps()` (`executors/build.ts:1750`)
-  called from `prepare()` (:632, in-session) and `buildHalf()` (:1121, headless), both gated on
+  `worktreeDeps.ts` are wired exactly as claimed: `installDeps()` (`executors/build.ts:1818`)
+  called from `prepare()` (:698, in-session) and `buildHalf()` (:1189, headless), both gated on
   `story.freshWorktree` and both running AFTER any `this.writes.run(...)` block returns —
   outside the serial writer, as the code comment states.
 - `install:` is read via `commandRoles`, never sniffed from command text (`installCommandFor`),
@@ -60,8 +70,8 @@ substitution) rather than blocking this fix on it.
   base-side event payload for `tree: "base"` to parity with. `preflight.yml` rows already carry
   `baseRef`/`baseSha`, which is how a reader tells them apart from the story's `events.jsonl`
   rows. Acceptable as-is; not a gap this diff created.
-- docs/spec.md edits sit inside §2.1 (line 105, the `commands.install` row) and §2.9 (lines
-  1339-1358, `tree`/`absent_binary`/`check:"install"`), matching the hunt list. EN/ES
+- docs/spec.md edits sit inside §2.1 (line 105, the `commands.install` row) and §2.9 (now lines
+  1355-1374 post-rebase, `tree`/`absent_binary`/`check:"install"`), matching the hunt list. EN/ES
   `unattended-operation.md` renumber the checklist in lockstep (1→6 both files) and both guides'
   new bullets read as real translations, not machine copies.
 - `test/story-worktree-deps.test.ts`: exactly 8 new tests, hermetic (real `git worktree`, a
@@ -72,10 +82,18 @@ substitution) rather than blocking this fix on it.
 
 ## Commands run (targeted only, this worktree)
 
+Original review (against 7a208cd):
 - `bun run typecheck` — exit 0.
 - `bun test test/story-worktree-deps.test.ts test/build-golden.test.ts test/dod-allowlist.test.ts
   test/build-executor.test.ts test/stack-packs-prompt.test.ts test/facilitator.test.ts
   test/training.test.ts` — **352 pass, 0 fail, exit 0**.
+
+Re-verification after rebase (against bbfed22): `git diff a15fbc5..7a208cd` vs
+`git diff c33bc82..bbfed22`, excluding CHANGELOG.md — byte-identical except the one
+`relaunchCommand` import-union line (confirmed above).
+- `bun run typecheck` — exit 0.
+- `bun test test/story-worktree-deps.test.ts test/build-golden.test.ts
+  test/build-executor.test.ts` — **144 pass, 0 fail, exit 0**.
 
 No Critical or Important findings. The fix matches its own claims: `install:` now runs once
 per fresh story worktree through the same allowlist-and-argv runner as any DoD command, a 127
