@@ -302,7 +302,7 @@ question.
 ## Running it
 
 ```bash
-tldrx run auto 260907-checkout --notify-every 10m --wait-answers 4h --wait-gates 4h
+tldrx run auto 260907-checkout --notify-every 10m --wait-answers 4h --wait-gates 4h --retry-failed 2
 ```
 
 All three flags take a **duration**: `30s`, `10m`, `2h`, or a bare number of seconds. A value
@@ -360,6 +360,34 @@ Three policies, three different things happen when a stage finishes:
 
 Both wait flags may be given together — that is the shape of a fully unattended launch:
 `--wait-answers 4h --wait-gates 4h`.
+
+## Retrying a stage that failed
+
+`--retry-failed <n>` is the one flag here that is a COUNT, not a duration: how many times in
+a row the loop may run a **failed** stage again before it stops. `0` is the default, and it
+is what every invocation before this got — one attempt, then exit `5`.
+
+A retry is the same `tldrx next` you would have typed. The stage is on disk as `failed` with
+its reason recorded, and the next attempt's prompt is told what the last one did — which is
+why this is worth automating at all: measured on a real unattended run, a plan that failed a
+check by five characters passed on the very next attempt, with no new instruction from
+anybody.
+
+Three things bound it, and all three matter:
+
+- **It bounds exit `5` and nothing else.** A usage error (`1`), a money refusal (`2`) and an
+  awaiting-human park (`4`) are attempted once however large `n` is. Each is a decision you
+  own — a phase ceiling especially, which means *a human decides about money*, and a retry
+  would turn that sentence into a delay.
+- **Only consecutive failures count.** A stage that succeeds puts the count back to zero, so
+  a long run with one recoverable failure per phase never exhausts a small bound. What is
+  being bounded is "this run is stuck", not "this run has ever failed".
+- **A retry spends.** It is a fresh metered stage under the same phase ceiling and the same
+  `--max-usd`. When the bound is spent the loop stops on the failure's own exit `5`, and the
+  last line says the count — `3 consecutive stage failures at 03-plan/plan …` — so the
+  `run.failed` payload on your phone says the loop tried, rather than a bare `5`.
+
+The maximum is `3`; anything higher is refused by name with exit `1`.
 
 Exit `4` is not a failure. It is "awaiting a person", and with the hook declared the person
 has already been told; what is left is your outer relaunch loop, which is yours to write.

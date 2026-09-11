@@ -286,6 +286,7 @@ tldrx run auto     [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--ef
                           [--parallel <n>] [--yolo] [--gate-agent] [--ui <mode>] [--run <id>]
                           [--notify-every <duration>] [--wait-answers <duration>]
                           [--wait-gates <duration>] [--prompt-max-bytes <n>] [--max-reads <n>]
+                          [--retry-failed <n>]
 tldrx run gates set <stage>:<human|auto|agent> --note <text> [--run <id>]
 tldrx run unlock   [<run>] [--force] [--run <id>]
 tldrx run cancel   [<run>] --note <text> [--force] [--run <id>]
@@ -382,6 +383,17 @@ typed by a person or run by whatever the notify command reached. `--wait-gates` 
 signature and never produces one — there is no engine-side signing here, so a stage on
 `gates_policy: agent` stops the loop exactly as a `human` one does and is waited on the same
 way. Both may be given together.
+
+`--retry-failed <n>` is the one loop flag that is a COUNT: how many times in a row the loop
+may run a **failed** stage again before it stops. `0` is the default and is what every
+invocation before it got — one attempt, then exit `5`. A retry is the same `tldrx next` a
+person would have typed, and the next attempt's prompt is told what the last one did. It
+bounds exit `5` and nothing else: a usage error (`1`), a money refusal (`2`) and an
+awaiting-human park (`4`) are attempted once however large `n` is — a phase ceiling means *a
+human decides about money*, and a retry would make that a delay. Only CONSECUTIVE failures
+count; a stage that succeeds puts the count back to zero. A retry SPENDS, under the same phase
+ceiling and the same `--max-usd`, and when the bound is spent the loop stops on the failure's
+own exit `5` with the count as its last line. `n` outside `0..3` is exit `1`, by name.
 
 `auto`'s `--model`, `--effort`, `--max-usd`, `--ui` and `--yolo` are the same flags
 [`tldrx next`](#tldrx-next) explains, passed to every stage the loop runs — so `--yolo` here

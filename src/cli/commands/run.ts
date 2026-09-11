@@ -16,7 +16,7 @@ import { workspaceRootFrom } from "../workspace.ts";
 import { startUi } from "../ui.ts";
 import { effortFlag } from "../effort.ts";
 import { fail } from "../report.ts";
-import { runAuto } from "../../core/facilitator/runAuto.ts";
+import { runAuto, MAX_RETRY_FAILED } from "../../core/facilitator/runAuto.ts";
 import { attendRun } from "../../core/run/attend.ts";
 import { ATTENDED_BY, type AttendedBy } from "../../core/run/RunFile.ts";
 import { parallelFlag } from "./next.ts";
@@ -48,6 +48,7 @@ const VALUE_FLAGS = [
   "title", "scope", "budget", "repos", "from", "seed", "gates", "run", "root",
   "max-usd", "until", "model", "effort", "ui", "note", "parallel", "attended-by",
   "notify-every", "wait-answers", "wait-gates", "prompt-max-bytes", "max-reads",
+  "retry-failed",
 ];
 
 /**
@@ -70,6 +71,25 @@ function durationFlag(args: ParsedArgs, name: string): number | undefined {
   return ms;
 }
 
+/**
+ * `--retry-failed <n>` (gh #233), refused by name when it is not a whole number the loop
+ * will honour. The ceiling is `MAX_RETRY_FAILED`, imported rather than repeated: a cap
+ * typed in two files is a cap that disagrees with itself the first time one moves.
+ */
+function retryFailedFlag(args: ParsedArgs): number | undefined {
+  const value = numberFlag(args, "retry-failed");
+  if (value === undefined) return undefined;
+  if (!Number.isInteger(value) || value < 0 || value > MAX_RETRY_FAILED) {
+    throw new UsageError(
+      `--retry-failed must be a whole number between 0 and ${String(MAX_RETRY_FAILED)} `
+      + "(0 is the default: a failed stage stops the loop). A stage that has failed that many "
+      + "times in a row is failing for a reason another spawn will not discover, and every "
+      + "attempt is real money.",
+    );
+  }
+  return value;
+}
+
 export const runCommand: Command = {
   name: "run",
   summary: "Create, inspect or auto-run a piece of work",
@@ -82,6 +102,7 @@ export const runCommand: Command = {
     "       tldrx run auto [<run>] [--max-usd <n>] [--until <stage>] [--model <m>] [--effort <level>]\n" +
     "                      [--notify-every <duration>] [--wait-answers <duration>]\n" +
     "                      [--wait-gates <duration>] [--prompt-max-bytes <n>] [--max-reads <n>]\n" +
+    "                      [--retry-failed <n>]\n" +
     "                  [--yolo] [--parallel <n>] [--gate-agent] [--ui scene|compact|plain|off]\n" +
     "                  [--run <id>] [--root <path>]\n" +
     "       tldrx run gates set <stage>:<human|auto|agent> --note <text> [--run <id>] [--root <path>]\n" +
@@ -305,6 +326,7 @@ async function runAutoLoop(argv: readonly string[]): Promise<number> {
         notifyEveryMs: durationFlag(args, "notify-every"),
         waitAnswersMs: durationFlag(args, "wait-answers"),
         waitGatesMs: durationFlag(args, "wait-gates"),
+        retryFailedStages: retryFailedFlag(args),
         actor: currentActor(),
         at: nowRfc3339(),
         // Erase the view, let the stage line scroll past on stdout, repaint. A
