@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.16.0 — unreleased
+
+### Added
+
+- **`tldrx run auto --retry-failed <n>` — a bounded retry on a failed stage (#233).** Measured
+  on a real unattended run at 0.15.0: the loop drove itself through what → how → plan and
+  signed all three `auto` gates by itself, and still needed a person four times. Three of the
+  four were content decisions or money, which a loop must not make. The fourth was a plan that
+  failed its `plan` check by five characters over a cap — a person relaunched `run auto`, the
+  next attempt fixed the two files and passed, and nothing else happened. So the loop stopped
+  on the one failure it could have cleared, and it stopped because `run auto` returned on every
+  non-zero exit except `4`. Now `--retry-failed <n>` lets it run that stage again, at most `n`
+  times in a row. It bounds exit `5` and nothing else: a usage error (`1`), a money refusal
+  (`2`) and an awaiting-human park (`4`) are each attempted ONCE however large `n` is, because
+  a phase ceiling means *a human decides about money* and a retry would turn that sentence into
+  a delay. Only CONSECUTIVE failures count — any other outcome puts the count back to zero,
+  since what is bounded is "this run is stuck", not "this run has ever failed". A retry SPENDS:
+  it is a fresh metered stage under the same phase ceiling and the same `--max-usd`, which is
+  what stops it running up a bill. `0` is the default and a default invocation's lines are
+  byte-identical to what they were; anything outside `0..3` is refused by name with exit `1`,
+  from the one constant the loop and the flag parser share. When the bound is spent the loop
+  stops on the failure's own exit `5` and SAYS the count last — `3 consecutive stage failures
+  at 03-plan/plan …` — so the sentence that reaches a phone is what the loop tried, not a bare
+  `5`.
+
 ## 0.15.0 — 2026-09-10
 
 ### Added

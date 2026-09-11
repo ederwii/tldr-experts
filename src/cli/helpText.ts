@@ -437,6 +437,12 @@ const ENTRIES: readonly CommandHelp[] = [
         sub: "auto",
       },
       {
+        name: "retry-failed",
+        arg: "<n>",
+        meaning: "How many times in a row the loop may run a FAILED stage again before it stops. 0 \u2014 the default, and what every invocation before this got \u2014 means one attempt and then exit 5. A retry is the same `tldrx next` a person would have typed: the stage is on disk as `failed` with its reason recorded, and the next attempt is told what the last one did. It bounds EXIT 5 AND NOTHING ELSE \u2014 a usage error (1), a money refusal (2) and an awaiting-human park (4) are attempted once however large the bound, because each is a decision a person owns; a phase ceiling especially, which means \"a human decides about money\" and would otherwise become a delay. Only CONSECUTIVE failures count: a stage that succeeds puts the count back to zero. A retry SPENDS \u2014 it is a fresh metered stage under the same phase ceiling and the same --max-usd \u2014 and when the bound is spent the loop stops on the failure\u0027s own exit 5, with the count in the last line.",
+        sub: "auto",
+      },
+      {
         name: "wait-gates",
         arg: "<duration>",
         meaning: "Instead of exiting 4 the moment a stage parks on a pending GATE, poll the run for this long and resume if somebody signs it. `--wait-answers`\u0027 sibling for the other half of exit 4: a gate is closed by `tldrx approve` / `tldrx reject`, not by an answer. Approved \u2192 the loop carries on; rejected \u2192 it stops and prints the note; lapsed \u2192 exit 4 with the same lines it always had, after one `gate.timeout` notification. It WAITS FOR a signature and never produces one. A stage on `gates_policy: agent` has already had the engine\u0027s own gate signer run on it before this flag ever sees the gate (see the `gates_policy: agent` note below), so what is left to wait for here is a PERSON \u2014 the same wait a `human` gate gets. Nothing is spent while it waits. Both wait flags may be given together.",
@@ -488,6 +494,7 @@ const ENTRIES: readonly CommandHelp[] = [
       "tldrx run auto --parallel 3",
       "tldrx run auto --prompt-max-bytes 500000 --max-reads 300",
       "tldrx run auto --notify-every 10m",
+      "tldrx run auto --retry-failed 2",
       "tldrx run auto --wait-answers 30m",
       "tldrx run auto --wait-answers 4h --wait-gates 4h",
       "tldrx run unlock 260101-checkout --force",
@@ -496,7 +503,7 @@ const ENTRIES: readonly CommandHelp[] = [
     exits: [EXIT_OK, EXIT_USAGE, EXIT_GATE_REFUSED, EXIT_NOT_FOUND, EXIT_AWAITING_HUMAN, EXIT_AGENT_FAILED],
     notes: [
       "`run attend host` is a LOCK, not an engine. It sets one field, spends nothing, runs no stage and touches no branch \u2014 and from then on THE FRAMEWORK WILL NOT SPAWN on that run: every turn is a `tldrx next --prepare` / `tldrx next --commit` handshake with the session driving it, the Build reviewer included. `run attend --none` hands it back.",
-      "`run auto` is an ENGINE, not a lock. It calls `next` HEADLESS over and over, so THE FRAMEWORK spawns a metered sub-agent stage after stage, and it stops at the first thing it may not decide: a human gate or an open question (4), a stage failure (5), a phase ceiling or this loop's own --max-usd (2). It is REFUSED ON AN ATTENDED RUN (exit 1, before the event log is opened) \u2014 a lock and an engine are alternatives, never layers.",
+      "`run auto` is an ENGINE, not a lock. It calls `next` HEADLESS over and over, so THE FRAMEWORK spawns a metered sub-agent stage after stage, and it stops at the first thing it may not decide: a human gate or an open question (4), a stage failure (5) \u2014 unless `--retry-failed <n>` lets it run that stage again, bounded, up to n times in a row \u2014 a phase ceiling or this loop's own --max-usd (2). It is REFUSED ON AN ATTENDED RUN (exit 1, before the event log is opened) \u2014 a lock and an engine are alternatives, never layers.",
       "`run auto` can also TELL SOMEBODY. When `.tldrx/workspace.yml` declares a `notify:` command (\u00a72.18), the loop hands that command one `version: 1` JSON object on stdin at every moment a person is needed \u2014 an open question with its options and the literal `tldrx answer` line, a gate with the literal approve line, a finished or failed run with its exit code and family \u2014 plus a periodic `status` under `--notify-every`. The framework names no chat tool: the command is the owner\u0027s own, run as argv with no shell, and its exit code is recorded as `notify.sent` / `notify.failed` and NEVER changes the run\u0027s outcome.",
       "Under `run auto`, a stage whose `gates_policy` is `agent` gets one bounded GATE-SIGNER turn of its own. When the stage\u0027s checks have passed, the engine spawns a single sub-agent at the stage\u0027s model and effort, on a quarter of the stage\u0027s per-agent ceiling, allowed to read and to write exactly one file: `.agent/<stage>/evidence.md`. The note then goes through the UNCHANGED `approve --as-agent` path \u2014 the same validator a person\u0027s note goes through \u2014 so `verdict: sign` plus every condition holding closes the gate under the note\u0027s own `by:`, and anything else leaves it pending for a person with the reasons named. The turn is recorded like any other (`agent.spawned` / `agent.result`, `role: gate-signer`) and shows up in `tldrx cost`. There is no flag for it: `gates_policy: agent` is already the owner\u0027s recorded decision that an agent may close this gate, and `human` gates are never touched.",
       "`run status` with several runs open LISTS them and exits 0 — it is the screen you read to find the id every other command wants.",

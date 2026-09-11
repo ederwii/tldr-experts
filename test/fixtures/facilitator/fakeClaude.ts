@@ -14,7 +14,7 @@
  * a missing section, a wrong cost and a turn slow enough to interrupt, without
  * any test needing its own binary.
  */
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { claudeOutput, toolPairLines, type FakeResult, type FakeTool } from "../fakeStream.ts";
 
@@ -67,7 +67,26 @@ for (const [rel, content] of Object.entries(files)) {
   written.push(rel);
 }
 
-const isError = process.env.FAKE_CLAUDE_IS_ERROR === "1";
+// `FAKE_CLAUDE_FAIL_SEQ=1,0,1` + `FAKE_CLAUDE_FAIL_COUNTER=<path>`: whether THIS spawn
+// fails, read off its position in a fixed sequence rather than off a flag that cannot
+// change between two invocations of one script. A bounded retry is only testable against a
+// fake that can fail and then succeed (gh #233); the counter lives in a file because every
+// spawn is its own process. Past the end of the sequence, and with no sequence at all,
+// `FAKE_CLAUDE_IS_ERROR` decides exactly as it always has.
+const failSeq = (process.env.FAKE_CLAUDE_FAIL_SEQ ?? "").split(",").filter((s) => s !== "");
+const counterPath = process.env.FAKE_CLAUDE_FAIL_COUNTER;
+let seqFailure: boolean | null = null;
+if (failSeq.length > 0 && counterPath !== undefined && counterPath !== "") {
+  let seen = 0;
+  try { seen = Number(readFileSync(counterPath, "utf8").trim()); } catch { seen = 0; }
+  if (!Number.isFinite(seen) || seen < 0) seen = 0;
+  mkdirSync(dirname(counterPath), { recursive: true });
+  writeFileSync(counterPath, String(seen + 1), "utf8");
+  const at = failSeq[seen];
+  if (at !== undefined) seqFailure = at === "1";
+}
+
+const isError = seqFailure ?? process.env.FAKE_CLAUDE_IS_ERROR === "1";
 const cost = Number(process.env.FAKE_CLAUDE_COST ?? "0.42");
 const sessionId = process.env.FAKE_CLAUDE_SESSION ?? "5b354e40-8e99-4e0c-927f-dba7d1bdc0fc";
 

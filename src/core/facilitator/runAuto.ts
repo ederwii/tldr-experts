@@ -7,7 +7,8 @@
  *
  *   a human gate      exit 4   the policy says a person signs this one
  *   an open question  exit 4   the stage asked something facts.yml cannot answer
- *   a failure         exit 5   a stage failed; money is spent, nothing is retried
+ *   a failure         exit 5   a stage failed; money is spent, and nothing is retried
+ *                              unless `--retry-failed <n>` bounds a retry (gh #233)
  *   a budget refusal  exit 2   a phase ceiling, or this loop's own `--max-usd`
  *   `--until <stage>` exit 0   stop BEFORE running that stage
  *   the run finished  exit 0
@@ -148,6 +149,28 @@ export interface AutoOptions {
    * else, by a person.
    */
   readonly waitGatesMs?: number;
+  /**
+   * `--retry-failed <n>`: how many times in a row the loop may run a FAILED stage again
+   * before it stops (gh #233). Absent or `0` ⇒ what every invocation before this got — one
+   * attempt, then exit 5.
+   *
+   * It is a bound on exit 5 and on nothing else. A usage error (1), a money refusal (2),
+   * a not-found (3) and an awaiting-human park (4) are all decisions a PERSON owns, and a
+   * loop that re-ran them would either repeat a mistake or spend past a ceiling somebody
+   * set on purpose. Exit 2 especially: a phase ceiling means "a human decides about money",
+   * and retrying it would turn that sentence into a delay.
+   *
+   * Only CONSECUTIVE failures count — a stage that succeeds puts the count back to zero —
+   * because the thing being bounded is "this run is stuck", not "this run has ever failed".
+   * A retry SPENDS: it is a fresh metered stage, so the run's phase ceiling and this loop's
+   * own `--max-usd` are what stop it running up a bill, exactly as they stop the first
+   * attempt.
+   *
+   * The measurement that asked for it (2026-09-10): of four human rescues an otherwise
+   * unattended run needed, exactly one was a stage that failed a check and passed on the
+   * next attempt with no new instruction. A person typed the same command again.
+   */
+  readonly retryFailedStages?: number;
   /** Called with each line as it happens, so a long loop is not silent. */
   readonly onLine?: (line: string) => void;
 }
@@ -157,6 +180,15 @@ const EXIT_USAGE = 1;
 const EXIT_REFUSED = 2;
 const EXIT_NOT_FOUND = 3;
 const EXIT_AWAITING_HUMAN = 4;
+const EXIT_AGENT_FAILED = 5;
+
+/**
+ * The largest `--retry-failed` this loop accepts, and the one place the number lives —
+ * `tldrx run auto`'s flag parser refuses anything above it rather than forming a second
+ * opinion. Small on purpose: a stage that has failed three times in a row is failing for a
+ * reason a fourth spawn will not discover, and every attempt is real money.
+ */
+export const MAX_RETRY_FAILED = 3;
 
 /**
  * §2.2 caps a run at 40 stages, and a stage can legitimately be visited twice (a
@@ -436,6 +468,12 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
       return { costUsd: null, deferredGate: null };
     };
 
+    // Consecutive exit-5s, reset by any other outcome. Held here rather than on disk
+    // deliberately: the loop holds no state a `tldrx next` typed in another terminal would
+    // have to agree with, and a bound that survived the process would make "run it again"
+    // mean something different the second time.
+    let consecutiveFailures = 0;
+
     try {
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
       const store = RunStore.open(runDir);
@@ -508,7 +546,28 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
         if (send !== null) await send();
       };
 
+      // Any outcome that is not a stage failure ends whatever streak was running — a
+      // stage that SUCCEEDED is the evidence that this run is not stuck.
+      if (outcome.code !== EXIT_AGENT_FAILED) consecutiveFailures = 0;
+
       if (outcome.code !== EXIT_OK) {
+        // `--retry-failed`: the other place the loop does something other than stop, and
+        // the only one that SPENDS to do it. The stage is back to `failed` on disk with its
+        // reason recorded, which is exactly the state `tldrx next` retries from — so this
+        // runs the same command a person would have typed, at most `retryFailedStages`
+        // times in a row, and says what it is doing and where in the bound it is.
+        const retryBound = options.retryFailedStages ?? 0;
+        if (outcome.code === EXIT_AGENT_FAILED) {
+          consecutiveFailures += 1;
+          if (consecutiveFailures <= retryBound) {
+            // The failure's own lines first: a retry that swallowed the reason would make
+            // the transcript of a run that failed three times unreadable.
+            for (const line of outcome.lines) say(`  ${line}`);
+            say(`retrying ${cursorBefore} — failure ${String(consecutiveFailures)} of `
+              + `${String(retryBound)} retries allowed (--retry-failed ${String(retryBound)})`);
+            continue;
+          }
+        }
         // `--wait-answers`: the ONE place the loop does something other than stop. The
         // question has already been notified; polling here rather than exiting is what turns
         // "answer it and start the loop again" into "answer it".
@@ -590,6 +649,14 @@ export async function runAuto(options: AutoOptions): Promise<NextOutcome> {
         }
         for (const line of stopLines(options, runDir, runId, outcome)) say(line);
         if (rejection !== null) say(rejection);
+        // Said LAST, so it is the line `finish` hands the notify hook: a phone that reads
+        // "3 consecutive stage failures" knows the loop tried, and a bare 5 does not. Only
+        // when a bound was actually given — a default invocation's lines are unchanged.
+        if (outcome.code === EXIT_AGENT_FAILED && retryBound > 0) {
+          say(`stopped: ${String(consecutiveFailures)} consecutive stage failures at ${cursorBefore} `
+            + `— the --retry-failed ${String(retryBound)} bound is spent, and the exit code is still `
+            + "5, the failure's own");
+        }
         return await finish(outcome.code, spentByLoop);
       }
       // Exit 0 with nothing appended and the cursor unmoved would loop forever on a

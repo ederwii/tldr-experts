@@ -310,7 +310,7 @@ responde su propia pregunta.
 ## Ponerlo a correr
 
 ```bash
-tldrx run auto 260907-checkout --notify-every 10m --wait-answers 4h --wait-gates 4h
+tldrx run auto 260907-checkout --notify-every 10m --wait-answers 4h --wait-gates 4h --retry-failed 2
 ```
 
 Las tres banderas toman una **duración**: `30s`, `10m`, `2h`, o un número pelado de segundos.
@@ -369,6 +369,36 @@ Tres políticas, tres cosas distintas al terminar una etapa:
 
 Las dos banderas de espera pueden darse juntas — esa es la forma de un lanzamiento del todo
 desatendido: `--wait-answers 4h --wait-gates 4h`.
+
+## Reintentar una etapa que falló
+
+`--retry-failed <n>` es la única bandera de aquí que es una CUENTA y no una duración: cuántas
+veces seguidas el bucle puede volver a correr una etapa **fallada** antes de detenerse. `0` es
+el valor por defecto, y es lo que recibió toda invocación anterior a esto — un intento, y
+luego salida `5`.
+
+Un reintento es el mismo `tldrx next` que habrías tecleado vos. La etapa queda en disco como
+`failed` con su razón registrada, y el prompt del siguiente intento sabe qué hizo el anterior
+— que es justo por lo que vale la pena automatizarlo: medido en un run desatendido real, un
+plan que falló una verificación por cinco caracteres pasó en el intento siguiente, sin ninguna
+instrucción nueva de nadie.
+
+Tres cosas lo acotan, y las tres importan:
+
+- **Acota la salida `5` y nada más.** Un error de uso (`1`), un rechazo por dinero (`2`) y una
+  parada a la espera de una persona (`4`) se intentan una sola vez, por más grande que sea
+  `n`. Cada una es una decisión tuya — el techo de fase sobre todo, que significa *una persona
+  decide sobre el dinero*, y un reintento convertiría esa frase en una demora.
+- **Solo cuentan las fallas consecutivas.** Una etapa que sale bien vuelve la cuenta a cero,
+  así que un run largo con una falla recuperable por fase nunca agota una cota pequeña. Lo que
+  se acota es "este run está trabado", no "este run falló alguna vez".
+- **Un reintento gasta.** Es una etapa medida más, bajo el mismo techo de fase y el mismo
+  `--max-usd`. Cuando la cota se agota el bucle se detiene con la salida `5` de la falla
+  misma, y la última línea dice la cuenta — `3 consecutive stage failures at 03-plan/plan …` —
+  para que la carga `run.failed` en tu teléfono diga que el bucle lo intentó, en vez de un `5`
+  pelado.
+
+El máximo es `3`; cualquier valor mayor se rechaza por nombre con salida `1`.
 
 La salida `4` no es una falla. Es "esperando a una persona", y con el hook declarado a esa
 persona ya se le avisó; lo que queda es tu bucle externo de relanzamiento, que te toca
