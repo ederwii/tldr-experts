@@ -51,6 +51,19 @@ Any one of them failing falls back to the human gate and says which one, and wha
 measured. A citation that nothing could check does not fail the stage, but it does stop an
 auto gate — that is exactly the line a person should look at.
 
+**A refusal is written down, not only printed.** While a run waits at an `auto` gate, each
+re-measure that refuses records those same seven values in the gate's own `note:`, and names
+the conditions holding it — so `tldrx run status` answers "which of the seven" on the row and
+on the waiting line, without anybody guessing at a `tldrx approve` to find out:
+
+```
+  01-what/what   auto   approve: pending — held by claim-sources
+waiting gate on 01-what/what — held by claim-sources — `tldrx approve` or `tldrx reject --note "…"`
+```
+
+`tldrx run status --verbose` quotes the whole note, the passing conditions' values included:
+"was it the money" is a question a list of failures alone cannot answer.
+
 ### Getting past the boundary: `tldrx story widen`
 
 The seventh condition is the one you will meet most. A story had to change a path the plan

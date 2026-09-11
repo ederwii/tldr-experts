@@ -2923,6 +2923,27 @@ opposite of "nothing looked". `run auto`'s notification renders `why` in its sum
 had existed all along and reached nothing but a stdout line nobody was watching, while the
 owner's phone said only "did not close by itself" (#203).
 
+**A refused auto gate WRITES the verdict on the gate.** The note was always the designed answer
+to "which of the seven stopped it" — and until #230 it was written only by a gate that CLOSED,
+so the one record built for that question was `""` in exactly the case it exists for. Measured
+2026-09-10: a gate sat pending ~40 minutes on an unattended `run auto`, `tldrx run status` and
+`--verbose` named no condition, and the reason (`claim-sources`, one unresolvable source)
+surfaced only when a person guessed at `tldrx approve`. Now every re-measure that refuses
+records, on the gate that is still `pending`, `auto-gate refused — held by: <ids> · <all seven
+with their values>` — all seven, because a note that dropped `budget=$0.30 of $6.00` would
+answer "was it the money" with silence. It is written only while the gate is `pending` (a gate
+a person has since signed keeps THEIR words) and only when the note would CHANGE, so a
+four-hour `--wait-gates` poll writes `run.yml` once per distinct verdict. The `pending` test and
+the write are a **compare-and-set**: both happen inside one hold of the workspace lock, over a
+`run.yml` read INSIDE that hold. A check-then-act over a snapshot taken earlier ERASED a
+person's approval that landed in the window — `RunStore.save()` writes the whole snapshot and
+re-reads only `budget.yml`'s ceilings, so the gate went back to `pending`, `by`/`at` to null and
+their words were gone (reproduced with two real processes). The poll runs every two seconds
+exactly while a person is deciding; that overlap is the use case, not an edge. `tldrx run status`
+reads the ids back — one parser, `heldByNote` — and names them on the gate row
+(`approve: pending — held by claim-sources`) and on the `waiting` line; `--verbose` quotes the
+whole note. A note carrying a refusal is NOT counted as a signed one: nobody closed that gate.
+
 **An auto gate closes itself when the thing holding it clears.** A gate whose policy is `auto`
 has already had the run's authority to be machine-closed; before #203 that offer expired the
 moment `next` handed the gate over, so an auto gate held by four open questions permanently

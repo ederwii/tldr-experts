@@ -26,6 +26,7 @@ import { basename, join } from "node:path";
 import { blockingQuestionIds } from "../facilitator/skipIf.ts";
 import { isAlive, readLock } from "../facilitator/Lock.ts";
 import { hasPreparedBundle } from "./prepared.ts";
+import { heldByNote } from "./autoGate.ts";
 
 /**
  * Every kind, as a VALUE — so a reader can enumerate them.
@@ -84,6 +85,15 @@ export interface WaitingStage {
   readonly id: string;
   readonly status: string;
   readonly tasks: readonly WaitingTask[];
+  /**
+   * The stage's gate, for the WORDS a refused `auto` gate wrote on it (gh #230).
+   *
+   * Optional and nullable so both readers still satisfy this shape: `RunFile`
+   * always has a gate object, the tolerantly-read `RunDocument` may project
+   * `null`. Only `note` and `status` are named — the smallest thing that can
+   * answer "which condition is holding this gate", which is what this file is.
+   */
+  readonly gate?: { readonly status: string; readonly note: string } | null;
 }
 
 export interface WaitingPhase {
@@ -204,12 +214,22 @@ export function waitingFor(run: WaitingRun, runDir: string): Waiting {
   const open = blockingQuestionIds(join(runDir, cursor.phase, "questions.md"));
 
   switch (entry.stage.status) {
-    case "awaiting_gate":
+    case "awaiting_gate": {
+      // WHICH of the seven conditions is holding it, when the re-measure wrote one
+      // down (gh #230). Empty for a `human` gate, for an `auto` gate nothing has
+      // re-measured yet, and for a note a person wrote — and then this line is
+      // byte-identical to the one it has always printed. An `auto` gate that
+      // refuses is otherwise strictly worse than a human one: a human gate at
+      // least says the ball is yours.
+      const held = heldByNote(entry.stage.gate?.note ?? "");
       return {
         kind: "gate",
-        message: `gate on ${entry.phase.id}/${entry.stage.id} — \`tldrx approve\` or \`tldrx reject --note "…"\``,
+        message: `gate on ${entry.phase.id}/${entry.stage.id}`
+          + (held.length === 0 ? "" : ` — held by ${held.join(", ")}`)
+          + ` — \`tldrx approve\` or \`tldrx reject --note "…"\``,
         questions: open,
       };
+    }
     case "awaiting_answer":
       return {
         kind: "answer",

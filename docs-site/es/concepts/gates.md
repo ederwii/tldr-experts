@@ -55,6 +55,20 @@ Que falle cualquiera de ellas la regresa a la compuerta humana, diciendo cuál f
 midió. Una cita que nadie pudo comprobar no reprueba la etapa, pero sí detiene una
 compuerta auto: esa es justo la línea que una persona debería mirar.
 
+**Una negativa queda escrita, no solo impresa.** Mientras un run espera en una compuerta
+`auto`, cada nueva medición que se niega registra esos mismos siete valores en el propio
+`note:` de la compuerta y nombra las condiciones que la detienen — así `tldrx run status`
+responde "cuál de las siete" en la fila y en la línea de espera, sin que nadie tenga que
+adivinar un `tldrx approve` para averiguarlo:
+
+```
+  01-what/what   auto   approve: pending — held by claim-sources
+waiting gate on 01-what/what — held by claim-sources — `tldrx approve` or `tldrx reject --note "…"`
+```
+
+`tldrx run status --verbose` cita la nota completa, con los valores de las condiciones que sí
+pasaron: "¿fue el dinero?" es una pregunta que una lista de fallas por sí sola no contesta.
+
 ### Pasar el límite declarado: `tldrx story widen`
 
 La séptima condición es la que más vas a encontrarte. Una story terminó tocando una ruta que el
